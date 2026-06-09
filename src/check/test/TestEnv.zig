@@ -205,7 +205,7 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
     });
 
     // Parse the AST
-    const parse_ast = try parse.parse(gpa, &module_env.common);
+    const parse_ast = try parse.file(gpa, &module_env.common);
     errdefer parse_ast.deinit();
     parse_ast.store.emptyScratch();
 
@@ -325,7 +325,7 @@ pub fn init(module_name: []const u8, source: []const u8) Allocator.Error!TestEnv
     try module_env.common.calcLineStarts(gpa);
 
     // Parse the AST
-    const parse_ast = try parse.parse(gpa, &module_env.common);
+    const parse_ast = try parse.file(gpa, &module_env.common);
     errdefer parse_ast.deinit();
     parse_ast.store.emptyScratch();
 
@@ -415,7 +415,7 @@ pub fn countModuleNotFoundDiagnosticsAfterCanonicalization(module_name: []const 
     module_env.qualified_module_ident = module_env.display_module_name_idx;
     try module_env.common.calcLineStarts(gpa);
 
-    const parse_ast = try parse.parse(gpa, &module_env.common);
+    const parse_ast = try parse.file(gpa, &module_env.common);
     defer parse_ast.deinit();
     parse_ast.store.emptyScratch();
 

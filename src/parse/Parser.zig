@@ -38,6 +38,7 @@ scratch_idents: base.Scratch(base.Ident.Idx),
 scratch_nodes: std.ArrayList(Node.Idx),
 diagnostics: std.ArrayList(AST.Diagnostic),
 cached_malformed_node: ?Node.Idx,
+expr_kernel_scratch: ParserKernelScratch,
 
 /// init the parser from a buffer of tokens
 pub fn init(tokens: TokenizedBuffer, gpa: std.mem.Allocator) std.mem.Allocator.Error!Parser {
@@ -62,6 +63,7 @@ pub fn init(tokens: TokenizedBuffer, gpa: std.mem.Allocator) std.mem.Allocator.E
         .scratch_nodes = .empty,
         .diagnostics = .empty,
         .cached_malformed_node = null,
+        .expr_kernel_scratch = .{},
     };
 }
 
@@ -71,6 +73,7 @@ pub fn deinit(parser: *Parser) void {
     parser.scratch_nodes.deinit(parser.gpa);
     parser.scope_pending_annos.deinit(parser.gpa);
     parser.type_path_stack.deinit(parser.gpa);
+    parser.expr_kernel_scratch.deinit(parser.gpa);
 
     // diagnostics will be kept and passed to the following compiler stage
     // to be deinitialized by the caller when no longer required
@@ -89,6 +92,12 @@ pub fn expect(self: *Parser, expected: Token.Tag) error{ExpectedNotFound}!void {
         return error.ExpectedNotFound;
     }
     self.advance();
+}
+
+inline fn consumeComma(self: *Parser) bool {
+    if (self.peek() != .Comma) return false;
+    self.advance();
+    return true;
 }
 
 /// Peek at the token at the current position
@@ -191,6 +200,80 @@ fn looksLikeTypeDecl(self: *Parser) bool {
 /// The error set that methods of the Parser return
 pub const Error = std.mem.Allocator.Error;
 
+const ExprParentKind = enum(u16) {
+    statement_expr_body = 0x012d,
+    statement_decl_body = 0x7b91,
+    statement_var_body = 0x3e07,
+    statement_expect_body = 0xc5a3,
+    statement_for_expr = 0x56f9,
+    statement_for_body = 0x9a4b,
+    statement_while_cond = 0x21d6,
+    statement_while_body = 0xef35,
+    statement_crash_body = 0x6c82,
+    statement_dbg_body = 0xb04d,
+    statement_return_body = 0x18f7,
+    expr_unary = 0xd291,
+    expr_binary_rhs = 0x4b3c,
+    expr_collection_item = 0x8375,
+    expr_arrow_inner = 0x2edb,
+    expr_record_ext = 0xf61a,
+    expr_record_field = 0x705e,
+    expr_string = 0xad09,
+    expr_if = 0x39c4,
+    expr_if_then = 0xc817,
+    expr_if_else = 0x5a2e,
+    expr_match = 0x96d3,
+    expr_match_guard = 0x0f6b,
+    expr_match_body = 0xe148,
+    expr_dbg = 0x68b5,
+    expr_for_list = 0xb739,
+    expr_for_body = 0x247c,
+    expr_lambda_body = 0xdca0,
+    pattern_string = 0x43ef,
+};
+
+const PatternParentKind = enum(u16) {
+    statement_for_pattern = 0x19a4,
+    statement_destructure_pattern = 0xe03b,
+    expr_for_pattern = 0x4771,
+    expr_lambda_args = 0x8c26,
+    expr_match_pattern = 0x2fb8,
+    pattern_root = 0xb55d,
+    pattern_tag_args = 0x60e2,
+    pattern_list = 0xd914,
+    pattern_tuple = 0x0a7f,
+    pattern_record_field = 0x93c8,
+};
+
+const TypeParentKind = enum(u16) {
+    statement_type_after_anno = 0x34c9,
+    statement_type_decl_anno = 0xae12,
+    where_clause_type = 0x057d,
+    type_apply = 0xc6e0,
+    type_paren_item = 0x718b,
+    type_paren_fn_ret = 0x2d44,
+    type_zero_arg_fn_ret = 0xf93a,
+    type_record_ext = 0x8b07,
+    type_record_field = 0x105e,
+    type_tag_union_ext = 0xdb95,
+    type_tag_union_item = 0x4fa1,
+    type_fn_arg = 0x670c,
+    type_fn_ret = 0xb2f6,
+};
+
+const WhereParentKind = enum(u16) {
+    where_statement_type_anno = 0x3b6d,
+    where_statement_type_decl = 0xc028,
+};
+
+const StatementParentKind = enum(u16) {
+    statement_type_associated_statement = 0x72a9,
+};
+
+const AssociatedParentKind = enum(u16) {
+    statement_type_decl_associated = 0x4d31,
+};
+
 fn enterDeclScope(
     self: *Parser,
     kind: DeclIndex.ScopeKind,
@@ -201,8 +284,9 @@ fn enterDeclScope(
         .start = region.start,
         .end = region.end,
     });
-    if (kind == .associated) {
-        self.decl_index.setScopeOwnerTypePath(scope_idx, self.currentTypePath());
+    switch (kind) {
+        .associated => self.decl_index.setScopeOwnerTypePath(scope_idx, self.currentTypePath()),
+        else => {},
     }
     while (self.scope_pending_annos.items.len <= @intFromEnum(scope_idx)) {
         try self.scope_pending_annos.append(self.gpa, null);
@@ -392,6 +476,74 @@ fn addStatement(self: *Parser, statement: AST.Statement) Error!AST.Statement.Idx
     return try self.addStatementWithTypeDependencies(statement, DeclIndex.Span.empty());
 }
 
+inline fn addDeclStatement(
+    self: *Parser,
+    pattern: AST.Pattern.Idx,
+    body: AST.Expr.Idx,
+    region: AST.TokenizedRegion,
+) Error!AST.Statement.Idx {
+    const idx = try self.store.addStatement(.{ .decl = .{
+        .pattern = pattern,
+        .body = body,
+        .region = region,
+    } });
+    try self.recordValueDecl(idx, pattern, body, region);
+    return idx;
+}
+
+fn recordValueDecl(
+    self: *Parser,
+    statement_idx: AST.Statement.Idx,
+    pattern_idx: AST.Pattern.Idx,
+    body_idx: AST.Expr.Idx,
+    region: AST.TokenizedRegion,
+) Error!void {
+    const scope_idx = self.decl_index.currentScope() orelse return;
+    const owner_type_path = self.currentAssociatedOwnerPath();
+
+    const pattern = self.store.getPattern(pattern_idx);
+    const name_tok: ?Token.Idx = if (pattern == .ident)
+        pattern.ident.ident_tok
+    else
+        null;
+    const body = self.store.getExpr(body_idx);
+    const value_form: DeclIndex.ValueDeclForm, const value_arity: u32 = switch (body) {
+        .lambda => |lambda| .{
+            .lambda,
+            @intCast(self.store.patternSlice(lambda.args).len),
+        },
+        else => .{ .none, 0 },
+    };
+
+    var record = DeclIndex.Decl{
+        .scope = scope_idx,
+        .statement = @intFromEnum(statement_idx),
+        .kind = .value,
+        .value_form = value_form,
+        .value_arity = value_arity,
+        .name_tok = name_tok,
+        .owner_type_path = owner_type_path,
+        .pattern = @intFromEnum(pattern_idx),
+        .anno = null,
+        .region = .{ .start = region.start, .end = region.end },
+    };
+
+    if (record.name_tok) |tok| {
+        record.name_ident = self.tok_buf.resolveIdentifier(tok);
+    }
+
+    const decl_idx = try self.decl_index.addDecl(record);
+    if (self.currentPendingAnno()) |pending| {
+        if (pending.*) |anno_idx| {
+            const anno = self.decl_index.decls.items[@intFromEnum(anno_idx)];
+            if (anno.kind == .value_anno and self.tokenIdentsEqual(anno.name_tok, record.name_tok)) {
+                self.decl_index.pairAnnotation(anno_idx, decl_idx);
+            }
+        }
+        pending.* = null;
+    }
+}
+
 fn addStatementWithTypeDependencies(
     self: *Parser,
     statement: AST.Statement,
@@ -480,15 +632,14 @@ pub fn pushMalformed(self: *Parser, comptime T: type, tag: AST.Diagnostic.Tag, s
 
         return try self.store.addMalformed(T, tag, ast_region);
     } else {
-        // Return a cached malformed node to avoid creating excessive nodes when diagnostic limit is exceeded
+        // Return a cached malformed node to avoid creating excessive nodes after the diagnostic limit.
         if (self.cached_malformed_node == null) {
-            // Create a generic malformed node with a fallback diagnostic tag
-            const fallback_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
+            const malformed_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
             const nid = try self.store.nodes.append(self.gpa, .{
                 .tag = .malformed,
                 .main_token = 0,
                 .data = .{ .lhs = @intFromEnum(AST.Diagnostic.Tag.expr_unexpected_token), .rhs = 0 },
-                .region = fallback_region,
+                .region = malformed_region,
             });
             self.cached_malformed_node = nid;
         }
@@ -516,27 +667,26 @@ fn recoverMalformedTypeDeclLine(self: *Parser, start: TokenIdx) void {
 /// parse a `.roc` module
 ///
 /// the tokens are provided at Parser initialisation
-pub fn parseFile(self: *Parser) Error!void {
+pub fn runFile(self: *Parser) Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
     self.store.emptyScratch();
+
     const module_scope = try self.enterDeclScope(.module, .file, AST.TokenizedRegion.empty());
     try self.store.addFile(.{
-        .header = undefined, // overwritten below after parseHeader()
+        .header = undefined,
         .statements = AST.Statement.Span{ .span = base.DataSpan.empty() },
         .scope = module_scope,
         .region = AST.TokenizedRegion.empty(),
     });
 
-    const header = try self.parseHeader();
+    const header = try self.parseHeaderTokens();
     const scratch_top = self.store.scratchStatementTop();
 
     while (self.peek() != .EndOfFile) {
-        const current_scratch_top = self.store.scratchStatementTop();
-        const idx = try self.parseTopLevelStatement();
-        std.debug.assert(self.store.scratchStatementTop() == current_scratch_top);
-        try self.store.addScratchStatement(idx);
+        const statement = try self.runTopLevelStatement();
+        try self.store.addScratchStatement(statement);
     }
 
     const file_region = AST.TokenizedRegion{ .start = 0, .end = @intCast(self.tok_buf.tokens.len - 1) };
@@ -549,1052 +699,141 @@ pub fn parseFile(self: *Parser) Error!void {
     });
 }
 
-/// Parses the items of type T until we encounter end_token, with each item separated by a Comma token
-///
-/// Returns the ending position of the collection
-fn parseCollectionSpan(self: *Parser, comptime T: type, end_token: Token.Tag, scratch_fn: fn (*NodeStore, T) Error!void, parser: fn (*Parser) Error!T) (Allocator.Error || error{ExpectedNotFound})!void {
+/// Parse a Roc file header.
+pub fn runHeader(self: *Parser) Error!AST.Header.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    while (self.peek() != end_token and self.peek() != .EndOfFile) {
-        try scratch_fn(&self.store, try parser(self));
-        self.expect(.Comma) catch {
-            break;
-        };
-    }
-    self.expect(end_token) catch {
-        return error.ExpectedNotFound;
-    };
+    return try self.parseHeaderTokens();
 }
 
-/// Parses a module header using the following grammar:
-///
-/// provides_entry :: [LowerIdent|UpperIdent] Comma Newline*
-/// package_entry :: LowerIdent Comma "platform"? String Comma
-/// app_header :: KwApp Newline* OpenSquare provides_entry* CloseSquare OpenCurly package_entry CloseCurly
-pub fn parseHeader(self: *Parser) Error!AST.Header.Idx {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    switch (self.peek()) {
-        .KwApp => {
-            return self.parseAppHeader();
-        },
-        .KwModule => {
-            return self.parseModuleHeader();
-        },
-        // .KwPackage => {},
-        .KwHosted => {
-            return self.parseHostedHeader();
-        },
-        .KwPackage => {
-            return self.parsePackageHeader();
-        },
-        .KwPlatform => {
-            return self.parsePlatformHeader();
-        },
-        else => {
-            // No header keyword found - this is a type module
-            return try self.store.addHeader(.{ .type_module = .{
-                .region = .{ .start = 0, .end = 0 },
-            } });
-        },
-    }
-}
-
-/// parse a `.roc` platform header
-///
-/// e.g:
-/// ```roc
-/// platform
-///     requires { main! : List(Str) => {} }
-///     exposes []
-///     packages { foo: "../foo.roc" }
-///     imports []
-///     provides [main_for_host]
-pub fn parsePlatformHeader(self: *Parser) Error!AST.Header.Idx {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
+fn parseExposedItemTokens(self: *Parser) Error!AST.ExposedItem.Idx {
     const start = self.pos;
-    std.debug.assert(self.peek() == .KwPlatform);
-    self.advance(); // Advance past KwPlatform
-
-    // Get name
-    self.expect(.StringStart) catch {
-        return try self.pushMalformed(
-            AST.Header.Idx,
-            .expected_platform_name_start,
-            self.pos,
-        );
-    };
-    const name = self.pos;
-    self.expect(.StringPart) catch {
-        return try self.pushMalformed(
-            AST.Header.Idx,
-            .expected_platform_name_string,
-            self.pos,
-        );
-    };
-    self.expect(.StringEnd) catch {
-        return try self.pushMalformed(
-            AST.Header.Idx,
-            .expected_platform_name_end,
-            self.pos,
-        );
-    };
-
-    self.expect(.KwRequires) catch {
-        return try self.pushMalformed(
-            AST.Header.Idx,
-            .expected_requires,
-            self.pos,
-        );
-    };
-
-    // Parse requires entries with for-clause syntax:
-    // requires { [Model : model] for main : () -> { init : ... } }
-    const requires_start = self.pos;
-    self.expect(.OpenCurly) catch {
-        return try self.pushMalformed(
-            AST.Header.Idx,
-            .expected_requires_rigids_open_curly,
-            self.pos,
-        );
-    };
-
-    const requires_entries_top = self.store.scratchRequiresEntryTop();
-
-    // Handle backward compatibility: `requires {} { ... }` (legacy syntax)
-    // If we see CloseCurly followed by OpenCurly, skip the empty rigids block
-    // and parse from the second curly block
-    var already_consumed_close_curly = false;
-    if (self.peek() == .CloseCurly) {
-        self.advance(); // consume first '}'
-        if (self.peek() == .OpenCurly) {
-            self.advance(); // consume second '{'
-            // Continue parsing entries from the second curly block
-        } else {
-            // Empty requires {} with no second block - we already consumed the close curly
-            already_consumed_close_curly = true;
-        }
-    }
-
-    // Parse requires entries (comma-separated)
-    // Supported syntaxes:
-    // 1. Simple: requires { main : Type } - no type aliases
-    // 2. With aliases: requires { [Model : model] for main : Type }
-    while (!already_consumed_close_curly and self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
-        const entry_start = self.pos;
-
-        const type_aliases_top = self.store.scratchForClauseTypeAliasTop();
-
-        // Check if we have type aliases (starts with '[')
-        if (self.peek() == .OpenSquare) {
-            self.advance(); // consume '['
-
-            // Parse type alias mappings: [Model : model, Foo : foo]
-            while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
-                const alias_start = self.pos;
-
-                // Expect UpperIdent for alias name (e.g., "Model")
-                if (self.peek() != .UpperIdent) {
-                    self.store.clearScratchForClauseTypeAliasesFrom(type_aliases_top);
-                    self.store.clearScratchRequiresEntriesFrom(requires_entries_top);
-                    return try self.pushMalformed(
-                        AST.Header.Idx,
-                        .expected_for_clause_alias_name,
-                        self.pos,
-                    );
-                }
-                const alias_name = self.pos;
-                self.advance();
-
-                // Expect colon
-                self.expect(.OpColon) catch {
-                    self.store.clearScratchForClauseTypeAliasesFrom(type_aliases_top);
-                    self.store.clearScratchRequiresEntriesFrom(requires_entries_top);
-                    return try self.pushMalformed(
-                        AST.Header.Idx,
-                        .expected_for_clause_colon,
-                        self.pos,
-                    );
-                };
-
-                // Expect LowerIdent for rigid name (e.g., "model")
-                if (self.peek() != .LowerIdent) {
-                    self.store.clearScratchForClauseTypeAliasesFrom(type_aliases_top);
-                    self.store.clearScratchRequiresEntriesFrom(requires_entries_top);
-                    return try self.pushMalformed(
-                        AST.Header.Idx,
-                        .expected_for_clause_rigid_name,
-                        self.pos,
-                    );
-                }
-                const rigid_name = self.pos;
-                self.advance();
-
-                const alias_idx = try self.store.addForClauseTypeAlias(.{
-                    .alias_name = alias_name,
-                    .rigid_name = rigid_name,
-                    .region = .{ .start = alias_start, .end = self.pos },
-                });
-                try self.store.addScratchForClauseTypeAlias(alias_idx);
-
-                // Check for comma (more aliases) or close square
-                if (self.peek() == .Comma) {
-                    self.advance();
-                } else {
-                    break;
-                }
-            }
-
-            self.expect(.CloseSquare) catch {
-                self.store.clearScratchForClauseTypeAliasesFrom(type_aliases_top);
-                self.store.clearScratchRequiresEntriesFrom(requires_entries_top);
-                return try self.pushMalformed(
-                    AST.Header.Idx,
-                    .expected_for_clause_close_square,
-                    self.pos,
-                );
-            };
-
-            // Expect "for" keyword after type aliases
-            self.expect(.KwFor) catch {
-                self.store.clearScratchForClauseTypeAliasesFrom(type_aliases_top);
-                self.store.clearScratchRequiresEntriesFrom(requires_entries_top);
-                return try self.pushMalformed(
-                    AST.Header.Idx,
-                    .expected_for_keyword,
-                    self.pos,
-                );
-            };
-        }
-        // No type aliases - just parse entrypoint directly
-
-        const type_aliases_span = try self.store.forClauseTypeAliasSpanFrom(type_aliases_top);
-
-        // Expect entrypoint name (LowerIdent, e.g., "main")
-        if (self.peek() != .LowerIdent) {
-            self.store.clearScratchRequiresEntriesFrom(requires_entries_top);
-            return try self.pushMalformed(
-                AST.Header.Idx,
-                .expected_for_clause_entrypoint_name,
-                self.pos,
-            );
-        }
-        const entrypoint_name = self.pos;
-        self.advance();
-
-        // Expect colon before type annotation
-        self.expect(.OpColon) catch {
-            self.store.clearScratchRequiresEntriesFrom(requires_entries_top);
-            return try self.pushMalformed(
-                AST.Header.Idx,
-                .expected_for_clause_type_colon,
-                self.pos,
-            );
-        };
-
-        // Parse the type annotation
-        // Use .not_looking_for_args to properly handle function types like `I64, I64 -> I64`
-        const type_anno = try self.parseTypeAnno(.not_looking_for_args);
-
-        const entry_idx = try self.store.addRequiresEntry(.{
-            .type_aliases = type_aliases_span,
-            .entrypoint_name = entrypoint_name,
-            .type_anno = type_anno,
-            .region = .{ .start = entry_start, .end = self.pos },
-        });
-        try self.store.addScratchRequiresEntry(entry_idx);
-
-        // Check for comma (more entries) or close curly
-        if (self.peek() == .Comma) {
-            self.advance();
-        } else {
-            break;
-        }
-    }
-
-    if (!already_consumed_close_curly) {
-        self.expect(.CloseCurly) catch {
-            self.store.clearScratchRequiresEntriesFrom(requires_entries_top);
-            return try self.pushMalformed(
-                AST.Header.Idx,
-                .expected_requires_signatures_close_curly,
-                requires_start,
-            );
-        };
-    }
-
-    const requires_entries = try self.store.requiresEntrySpanFrom(requires_entries_top);
-
-    // Get exposes
-    self.expect(.KwExposes) catch {
-        return try self.pushMalformed(
-            AST.Header.Idx,
-            .expected_exposes,
-            self.pos,
-        );
-    };
-    const exposes_start = self.pos;
-    self.expect(.OpenSquare) catch {
-        return try self.pushMalformed(
-            AST.Header.Idx,
-            .expected_exposes_open_square,
-            self.pos,
-        );
-    };
-    const exposes_top = self.store.scratchExposedItemTop();
-    self.parseCollectionSpan(
-        AST.ExposedItem.Idx,
-        .CloseSquare,
-        NodeStore.addScratchExposedItem,
-        Parser.parseExposedItem,
-    ) catch |err| {
-        switch (err) {
-            error.ExpectedNotFound => {
-                self.store.clearScratchExposedItemsFrom(exposes_top);
-                return try self.pushMalformed(
-                    AST.Header.Idx,
-                    .expected_exposes_close_square,
-                    exposes_start,
-                );
-            },
-            error.OutOfMemory => return error.OutOfMemory,
-        }
-    };
-    const exposes_span = try self.store.exposedItemSpanFrom(exposes_top);
-    const exposes = try self.store.addCollection(
-        .collection_exposed,
-        .{
-            .span = exposes_span.span,
-            .region = .{ .start = exposes_start, .end = self.pos },
-        },
-    );
-
-    // Get packages
-    self.expect(.KwPackages) catch {
-        return try self.pushMalformed(
-            AST.Header.Idx,
-            .expected_packages,
-            self.pos,
-        );
-    };
-    const packages_start = self.pos;
-    const packages_top = self.store.scratchRecordFieldTop();
-    self.expect(.OpenCurly) catch {
-        return try self.pushMalformed(
-            AST.Header.Idx,
-            .expected_packages_open_curly,
-            self.pos,
-        );
-    };
-    self.parseCollectionSpan(
-        AST.RecordField.Idx,
-        .CloseCurly,
-        NodeStore.addScratchRecordField,
-        Parser.parseRecordField,
-    ) catch |err| {
-        switch (err) {
-            error.ExpectedNotFound => {
-                self.store.clearScratchRecordFieldsFrom(packages_top);
-                return try self.pushMalformed(
-                    AST.Header.Idx,
-                    .expected_packages_close_curly,
-                    self.pos,
-                );
-            },
-            error.OutOfMemory => return error.OutOfMemory,
-        }
-    };
-    const packages_span = try self.store.recordFieldSpanFrom(packages_top);
-    const packages = try self.store.addCollection(
-        .collection_packages,
-        .{
-            .span = packages_span.span,
-            .region = .{ .start = packages_start, .end = self.pos },
-        },
-    );
-
-    // Get provides
-    self.expect(.KwProvides) catch {
-        return try self.pushMalformed(
-            AST.Header.Idx,
-            .expected_provides,
-            self.pos,
-        );
-    };
-    const provides_start = self.pos;
-    self.expect(.OpenCurly) catch {
-        return try self.pushMalformed(
-            AST.Header.Idx,
-            .expected_provides_open_curly,
-            self.pos,
-        );
-    };
-    const provides_top = self.store.scratchRecordFieldTop();
-    self.parseCollectionSpan(
-        AST.RecordField.Idx,
-        .CloseCurly,
-        NodeStore.addScratchRecordField,
-        Parser.parseRecordField,
-    ) catch |err| {
-        switch (err) {
-            error.ExpectedNotFound => {
-                self.store.clearScratchRecordFieldsFrom(provides_top);
-                return try self.pushMalformed(
-                    AST.Header.Idx,
-                    .expected_provides_close_curly,
-                    provides_start,
-                );
-            },
-            error.OutOfMemory => return error.OutOfMemory,
-        }
-    };
-    const provides_span = try self.store.recordFieldSpanFrom(provides_top);
-    const provides = try self.store.addCollection(
-        .collection_record_fields,
-        .{
-            .span = provides_span.span,
-            .region = .{ .start = provides_start, .end = self.pos },
-        },
-    );
-
-    // Parse optional targets section
-    var targets: ?AST.TargetsSection.Idx = null;
-    if (self.peek() == .KwTargets) {
-        self.advance(); // Advance past 'targets'
-        targets = try self.parseTargetsSection();
-    }
-
-    return self.store.addHeader(.{ .platform = .{
-        .name = name,
-        .requires_entries = requires_entries,
-        .exposes = exposes,
-        .packages = packages,
-        .provides = provides,
-        .targets = targets,
-        .region = .{ .start = start, .end = self.pos },
-    } });
-}
-
-/// parse an `.roc` package header
-///
-/// e.g. `package [ foo ] { something: "package/path/main.roc" }`
-pub fn parsePackageHeader(self: *Parser) Error!AST.Header.Idx {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    const start = self.pos;
-
-    std.debug.assert(self.peek() == .KwPackage);
-    self.advance(); // Advance past KwApp
-
-    // Get Exposes
-    const exposes_start = self.pos;
-    self.expect(.OpenSquare) catch {
-        return try self.pushMalformed(AST.Header.Idx, .expected_provides_open_square, start);
-    };
-    const scratch_top = self.store.scratchExposedItemTop();
-    self.parseCollectionSpan(AST.ExposedItem.Idx, .CloseSquare, NodeStore.addScratchExposedItem, Parser.parseExposedItem) catch |err| {
-        switch (err) {
-            error.ExpectedNotFound => {
-                while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
-                    self.advance();
-                }
-                self.expect(.CloseSquare) catch {
-                    return try self.pushMalformed(AST.Header.Idx, .header_expected_close_square, start);
-                };
-                self.store.clearScratchExposedItemsFrom(scratch_top);
-                return try self.pushMalformed(AST.Header.Idx, .import_exposing_no_close, start);
-            },
-            error.OutOfMemory => return error.OutOfMemory,
-        }
-    };
-    const exposes_span = try self.store.exposedItemSpanFrom(scratch_top);
-    const exposes = try self.store.addCollection(.collection_exposed, .{
-        .span = exposes_span.span,
-        .region = .{
-            .start = exposes_start,
-            .end = self.pos,
-        },
-    });
-    try self.recordPackageHeaderModules(exposes_span);
-
-    // Get Packages
-    const packages_start = self.pos;
-    self.expect(.OpenCurly) catch {
-        return try self.pushMalformed(AST.Header.Idx, .expected_package_platform_open_curly, start);
-    };
-    const fields_scratch_top = self.store.scratchRecordFieldTop();
-    self.parseCollectionSpan(AST.RecordField.Idx, .CloseCurly, NodeStore.addScratchRecordField, Parser.parseRecordField) catch |err| {
-        switch (err) {
-            error.ExpectedNotFound => {
-                self.store.clearScratchRecordFieldsFrom(fields_scratch_top);
-                return try self.pushMalformed(AST.Header.Idx, .expected_package_platform_close_curly, start);
-            },
-            error.OutOfMemory => return error.OutOfMemory,
-        }
-    };
-    const packages_span = try self.store.recordFieldSpanFrom(fields_scratch_top);
-    const packages = try self.store.addCollection(.collection_packages, .{
-        .span = packages_span.span,
-        .region = .{
-            .start = packages_start,
-            .end = self.pos,
-        },
-    });
-
-    const header = AST.Header{ .package = .{
-        .exposes = exposes,
-        .packages = packages,
-        .region = .{ .start = start, .end = self.pos },
-    } };
-    const idx = try self.store.addHeader(header);
-    return idx;
-}
-
-/// Parse a Roc Hosted header
-///
-/// e.g. `hosted [foo]`
-fn parseHostedHeader(self: *Parser) Error!AST.Header.Idx {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    std.debug.assert(self.peek() == .KwHosted);
-
-    const start = self.pos;
-
-    self.advance(); // Advance past KwModule
-
-    // Get exposes
-    const exposes_start = self.pos;
-    self.expect(.OpenSquare) catch {
-        return try self.pushMalformed(AST.Header.Idx, .header_expected_open_square, self.pos);
-    };
-    const scratch_top = self.store.scratchExposedItemTop();
-    self.parseCollectionSpan(AST.ExposedItem.Idx, .CloseSquare, NodeStore.addScratchExposedItem, Parser.parseExposedItem) catch |err| {
-        switch (err) {
-            error.ExpectedNotFound => {
-                while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
-                    self.advance();
-                }
-                self.expect(.CloseSquare) catch {
-                    return try self.pushMalformed(AST.Header.Idx, .header_expected_close_square, self.pos);
-                };
-                self.store.clearScratchExposedItemsFrom(scratch_top);
-                return try self.pushMalformed(AST.Header.Idx, .import_exposing_no_close, self.pos);
-            },
-            error.OutOfMemory => return error.OutOfMemory,
-        }
-    };
-    const exposes_span = try self.store.exposedItemSpanFrom(scratch_top);
-    const exposes = try self.store.addCollection(.collection_exposed, .{
-        .span = exposes_span.span,
-        .region = .{
-            .start = exposes_start,
-            .end = self.pos,
-        },
-    });
-
-    return self.store.addHeader(.{ .hosted = .{
-        .region = .{ .start = start, .end = self.pos },
-        .exposes = exposes,
-    } });
-}
-
-/// parse a Roc module header
-///
-/// e.g. `module [foo]`
-fn parseModuleHeader(self: *Parser) Error!AST.Header.Idx {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    std.debug.assert(self.peek() == .KwModule);
-
-    const start = self.pos;
-
-    self.advance(); // Advance past KwModule
-
-    // Get exposes
-    const exposes_start = self.pos;
-    self.expect(.OpenSquare) catch {
-        return try self.pushMalformed(AST.Header.Idx, .header_expected_open_square, self.pos);
-    };
-    const scratch_top = self.store.scratchExposedItemTop();
-    self.parseCollectionSpan(AST.ExposedItem.Idx, .CloseSquare, NodeStore.addScratchExposedItem, Parser.parseExposedItem) catch |err| {
-        switch (err) {
-            error.ExpectedNotFound => {
-                while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
-                    self.advance();
-                }
-                self.expect(.CloseSquare) catch {
-                    return try self.pushMalformed(AST.Header.Idx, .header_expected_close_square, self.pos);
-                };
-                self.store.clearScratchExposedItemsFrom(scratch_top);
-                return try self.pushMalformed(AST.Header.Idx, .import_exposing_no_close, self.pos);
-            },
-            error.OutOfMemory => return error.OutOfMemory,
-        }
-    };
-    const exposes_span = try self.store.exposedItemSpanFrom(scratch_top);
-    const exposes = try self.store.addCollection(.collection_exposed, .{
-        .span = exposes_span.span,
-        .region = .{
-            .start = exposes_start,
-            .end = self.pos,
-        },
-    });
-
-    return self.store.addHeader(.{ .module = .{
-        .region = .{ .start = start, .end = self.pos },
-        .exposes = exposes,
-    } });
-}
-
-/// parse an `.roc` application header
-///
-/// e.g. `app [main!] { pf: "../some-platform.roc" }`
-pub fn parseAppHeader(self: *Parser) Error!AST.Header.Idx {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    var platform: ?AST.RecordField.Idx = null;
-    const start = self.pos;
-
-    std.debug.assert(self.peek() == .KwApp);
-    self.advance(); // Advance past KwApp
-
-    // Get provides
-    const provides_start = self.pos;
-    self.expect(.OpenSquare) catch {
-        return try self.pushMalformed(AST.Header.Idx, .expected_provides_open_square, start);
-    };
-    const scratch_top = self.store.scratchExposedItemTop();
-    self.parseCollectionSpan(AST.ExposedItem.Idx, .CloseSquare, NodeStore.addScratchExposedItem, Parser.parseExposedItem) catch |err| {
-        switch (err) {
-            error.ExpectedNotFound => {
-                while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
-                    self.advance();
-                }
-                self.expect(.CloseSquare) catch {
-                    return try self.pushMalformed(AST.Header.Idx, .header_expected_close_square, start);
-                };
-                self.store.clearScratchExposedItemsFrom(scratch_top);
-                return try self.pushMalformed(AST.Header.Idx, .import_exposing_no_close, start);
-            },
-            error.OutOfMemory => return error.OutOfMemory,
-        }
-    };
-    const provides_span = try self.store.exposedItemSpanFrom(scratch_top);
-    const provides_region = AST.TokenizedRegion{ .start = provides_start, .end = self.pos };
-    const provides = try self.store.addCollection(.collection_exposed, AST.Collection{
-        .span = provides_span.span,
-        .region = provides_region,
-    });
-
-    // Get platform and packages
-    const fields_scratch_top = self.store.scratchRecordFieldTop();
-    const packages_start = self.pos;
-    self.expect(.OpenCurly) catch {
-        return try self.pushMalformed(AST.Header.Idx, .expected_package_platform_open_curly, start);
-    };
-    var i: usize = 0;
-
-    while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
-        const entry_start = self.pos;
-        if (self.peek() != .LowerIdent) {
-            self.store.clearScratchRecordFieldsFrom(fields_scratch_top);
-            return try self.pushMalformed(AST.Header.Idx, .expected_package_or_platform_name, start);
-        }
-        const name_tok = self.pos;
-        self.advance();
-        if (self.peek() != .OpColon) {
-            self.store.clearScratchRecordFieldsFrom(fields_scratch_top);
-            return try self.pushMalformed(AST.Header.Idx, .expected_package_or_platform_colon, start);
-        }
-        self.advance();
-        if (self.peek() == .KwPlatform) {
-            if (platform != null) {
-                self.store.clearScratchRecordFieldsFrom(fields_scratch_top);
-                return try self.pushMalformed(AST.Header.Idx, .multiple_platforms, start);
-            }
-            self.advance();
-            if (self.peek() != .StringStart) {
-                self.store.clearScratchRecordFieldsFrom(fields_scratch_top);
-                return try self.pushMalformed(AST.Header.Idx, .expected_platform_string, start);
-            }
-            const value = try self.parseStringExpr();
-            const pidx = try self.store.addRecordField(.{
-                .name = name_tok,
-                .value = value,
-                .region = .{ .start = entry_start, .end = self.pos },
-            });
-            try self.store.addScratchRecordField(pidx);
-            platform = pidx;
-        } else {
-            if (self.peek() != .StringStart) {
-                self.store.clearScratchRecordFieldsFrom(fields_scratch_top);
-                return try self.pushMalformed(AST.Header.Idx, .expected_package_or_platform_string, start);
-            }
-            const value = try self.parseStringExpr();
-            try self.store.addScratchRecordField(try self.store.addRecordField(.{
-                .name = name_tok,
-                .value = value,
-                .region = .{ .start = entry_start, .end = self.pos },
-            }));
-        }
-        self.expect(.Comma) catch {
-            break;
-        };
-        i = i + 1;
-    }
-    if (self.peek() != .CloseCurly) {
-        self.store.clearScratchRecordFieldsFrom(fields_scratch_top);
-        return try self.pushMalformed(AST.Header.Idx, .expected_package_platform_close_curly, start);
-    }
-    self.advance(); // Advance past CloseCurly
-    const packages_span = try self.store.recordFieldSpanFrom(fields_scratch_top);
-    const packages = try self.store.addCollection(.collection_packages, .{
-        .span = packages_span.span,
-        .region = .{
-            .start = packages_start,
-            .end = self.pos,
-        },
-    });
-
-    if (platform) |pidx| {
-        const header = AST.Header{
-            .app = .{
-                .platform_idx = pidx,
-                .provides = provides,
-                .packages = packages,
-                .region = .{ .start = start, .end = self.pos },
-            },
-        };
-        const idx = try self.store.addHeader(header);
-        return idx;
-    }
-    return try self.pushMalformed(AST.Header.Idx, .no_platform, start);
-}
-
-/// Parses an ExposedItem, adding it to the NodeStore and returning the Idx
-pub fn parseExposedItem(self: *Parser) Error!AST.ExposedItem.Idx {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    const start = self.pos;
-    var end = start;
     switch (self.peek()) {
         .LowerIdent => {
             var as: ?TokenIdx = null;
             if (self.peekNext() == .KwAs) {
-                self.advance(); // Advance past LowerIdent
-                self.advance(); // Advance past KwAs
+                self.advance();
+                self.advance();
                 as = self.pos;
                 self.expect(.LowerIdent) catch {
                     return try self.pushMalformed(AST.ExposedItem.Idx, .expected_lower_name_after_exposed_item_as, start);
                 };
-                end = self.pos;
             } else {
-                self.advance(); // Advance past LowerIdent
+                self.advance();
             }
-            const ei = try self.store.addExposedItem(.{ .lower_ident = .{
+            return try self.store.addExposedItem(.{ .lower_ident = .{
                 .region = .{ .start = start, .end = self.pos },
                 .ident = start,
                 .as = as,
             } });
-
-            return ei;
         },
         .UpperIdent => {
             var as: ?TokenIdx = null;
-            if (self.peekNext() == .KwAs) {
-                self.advance(); // Advance past UpperIdent
-                self.advance(); // Advance past KwAs
+            const qual_result = try self.readQualificationChain();
+            self.pos = qual_result.final_token + 1;
+            const ident = qual_result.final_token;
+            if (self.peek() == .KwAs) {
+                self.advance();
                 as = self.pos;
                 self.expect(.UpperIdent) catch {
                     return try self.pushMalformed(AST.ExposedItem.Idx, .expected_upper_name_after_exposed_item_as, start);
                 };
-                end = self.pos;
-            } else if (self.peekNext() == .DotStar) {
-                self.advance(); // Advance past UpperIdent
-                self.advance(); // Advance past DotStar
+            } else if (self.peek() == .DotStar) {
+                self.advance();
                 return try self.store.addExposedItem(.{ .upper_ident_star = .{
                     .region = .{ .start = start, .end = self.pos },
-                    .ident = start,
+                    .ident = ident,
                 } });
-            } else {
-                self.advance(); // Advance past UpperIdent
             }
-            const ei = try self.store.addExposedItem(.{ .upper_ident = .{
+            return try self.store.addExposedItem(.{ .upper_ident = .{
                 .region = .{ .start = start, .end = self.pos },
-                .ident = start,
+                .ident = ident,
                 .as = as,
             } });
-
-            return ei;
         },
-        else => {
-            return try self.pushMalformed(AST.ExposedItem.Idx, .exposed_item_unexpected_token, start);
-        },
+        else => return try self.pushMalformed(AST.ExposedItem.Idx, .exposed_item_unexpected_token, start),
     }
 }
 
-/// Parses a single file item in a target list: "crt1.o" or app
-pub fn parseTargetFile(self: *Parser) Error!AST.TargetFile.Idx {
-    const trace = tracy.trace(@src());
-    defer trace.end();
+fn parseStringExprTokens(self: *Parser) Error!AST.Expr.Idx {
+    std.debug.assert(self.peek() == .StringStart);
+    return try self.runExprRoot(0);
+}
 
+fn parseRecordFieldTokens(self: *Parser) Error!AST.RecordField.Idx {
     const start = self.pos;
+    self.expect(.LowerIdent) catch {
+        return try self.pushMalformed(AST.RecordField.Idx, .expected_expr_record_field_name, start);
+    };
+    const name = start;
+    var value: ?AST.Expr.Idx = null;
+    if (self.peek() == .OpColon) {
+        self.advance();
+        value = try self.runExprRoot(0);
+    }
+    return try self.store.addRecordField(.{
+        .name = name,
+        .value = value,
+        .region = .{ .start = start, .end = self.pos },
+    });
+}
+
+fn parseTypeIdentToken(self: *Parser) Error!AST.TypeAnno.Idx {
     switch (self.peek()) {
-        .StringStart => {
-            // Parse string literal: "crt1.o"
-            self.advance(); // Advance past StringStart
-            // Capture StringPart token (the actual content)
-            var content_tok = start;
-            if (self.peek() == .StringPart) {
-                content_tok = self.pos;
-                self.advance(); // Advance past StringPart
-            }
-            // Skip any remaining parts until StringEnd
-            while (self.peek() != .StringEnd and self.peek() != .EndOfFile) {
-                self.advance();
-            }
-            if (self.peek() == .EndOfFile) {
-                return try self.pushMalformed(AST.TargetFile.Idx, .expected_target_file_string_end, start);
-            }
-            self.advance(); // Advance past StringEnd
-            return try self.store.addTargetFile(.{ .string_literal = content_tok });
-        },
-        .LowerIdent => {
-            // Parse special identifier: win_gui or other lower idents
-            self.advance(); // Advance past LowerIdent
-            return try self.store.addTargetFile(.{ .special_ident = start });
-        },
-        .KwApp => {
-            // Parse 'app' keyword as special identifier
-            self.advance(); // Advance past KwApp
-            return try self.store.addTargetFile(.{ .special_ident = start });
-        },
-        else => {
-            return try self.pushMalformed(AST.TargetFile.Idx, .expected_target_file, start);
-        },
-    }
-}
-
-/// Parses a single target entry: x64musl: ["crt1.o", "host.o", app]
-pub fn parseTargetEntry(self: *Parser) Error!AST.TargetEntry.Idx {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    const start = self.pos;
-
-    // Expect target name (lower identifier)
-    if (self.peek() != .LowerIdent) {
-        return try self.pushMalformed(AST.TargetEntry.Idx, .expected_target_name, start);
-    }
-    const target_name = self.pos;
-    self.advance(); // Advance past target name
-
-    // Expect colon
-    self.expect(.OpColon) catch {
-        return try self.pushMalformed(AST.TargetEntry.Idx, .expected_target_colon, start);
-    };
-
-    // Expect open square bracket
-    self.expect(.OpenSquare) catch {
-        return try self.pushMalformed(AST.TargetEntry.Idx, .expected_target_files_open_square, start);
-    };
-
-    // Parse file list
-    const files_top = self.store.scratchTargetFileTop();
-    self.parseCollectionSpan(AST.TargetFile.Idx, .CloseSquare, NodeStore.addScratchTargetFile, Parser.parseTargetFile) catch |err| {
-        switch (err) {
-            error.ExpectedNotFound => {
-                self.store.clearScratchTargetFilesFrom(files_top);
-                return try self.pushMalformed(AST.TargetEntry.Idx, .expected_target_files_close_square, start);
-            },
-            error.OutOfMemory => return error.OutOfMemory,
-        }
-    };
-    const files_span = try self.store.targetFileSpanFrom(files_top);
-
-    return try self.store.addTargetEntry(.{
-        .target = target_name,
-        .files = files_span,
-        .region = .{ .start = start, .end = self.pos },
-    });
-}
-
-/// Parses a target link type section: exe: { x64musl: [...], ... }
-pub fn parseTargetLinkType(self: *Parser) Error!AST.TargetLinkType.Idx {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    const start = self.pos;
-
-    // Expect open curly brace
-    self.expect(.OpenCurly) catch {
-        return try self.pushMalformed(AST.TargetLinkType.Idx, .expected_target_link_open_curly, start);
-    };
-
-    // Parse target entries
-    const entries_top = self.store.scratchTargetEntryTop();
-    self.parseCollectionSpan(AST.TargetEntry.Idx, .CloseCurly, NodeStore.addScratchTargetEntry, Parser.parseTargetEntry) catch |err| {
-        switch (err) {
-            error.ExpectedNotFound => {
-                self.store.clearScratchTargetEntriesFrom(entries_top);
-                return try self.pushMalformed(AST.TargetLinkType.Idx, .expected_target_link_close_curly, start);
-            },
-            error.OutOfMemory => return error.OutOfMemory,
-        }
-    };
-    const entries_span = try self.store.targetEntrySpanFrom(entries_top);
-
-    return try self.store.addTargetLinkType(.{
-        .entries = entries_span,
-        .region = .{ .start = start, .end = self.pos },
-    });
-}
-
-/// Parses a targets section: targets: { files: "targets/", exe: { ... } }
-pub fn parseTargetsSection(self: *Parser) Error!AST.TargetsSection.Idx {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    const start = self.pos;
-
-    // Expect colon after 'targets'
-    self.expect(.OpColon) catch {
-        return try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_colon, start);
-    };
-
-    // Expect open curly brace
-    self.expect(.OpenCurly) catch {
-        return try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_open_curly, start);
-    };
-
-    var files_path: ?TokenIdx = null;
-    var exe: ?AST.TargetLinkType.Idx = null;
-    var static_lib: ?AST.TargetLinkType.Idx = null;
-
-    // Parse fields until closing curly brace
-    while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
-        // Expect field name (lower identifier)
-        if (self.peek() != .LowerIdent) {
-            return try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_field_name, start);
-        }
-
-        const field_name_tok = self.pos; // Capture field name token before advancing
-        self.advance(); // Advance past field name
-
-        // Expect colon
-        self.expect(.OpColon) catch {
-            return try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_field_colon, start);
-        };
-
-        // Determine field type by what follows
-        switch (self.peek()) {
-            .StringStart => {
-                // Parse files path: "targets/"
-                self.advance(); // Advance past StringStart
-                // Capture StringPart token (the actual content)
-                if (self.peek() == .StringPart) {
-                    files_path = self.pos;
-                    self.advance(); // Advance past StringPart
-                }
-                // Skip any remaining parts until StringEnd
-                while (self.peek() != .StringEnd and self.peek() != .EndOfFile) {
-                    self.advance();
-                }
-                if (self.peek() == .StringEnd) {
-                    self.advance(); // Advance past StringEnd
-                }
-            },
-            .OpenCurly => {
-                // Parse link type section (exe, static_lib, shared_lib)
-                const parsed_link_type = try self.parseTargetLinkType();
-                // Get field name from source using token region
-                const region = self.tok_buf.resolve(field_name_tok);
-                const field_name = self.tok_buf.env.source[@intCast(region.start.offset)..@intCast(region.end.offset)];
-                if (std.mem.eql(u8, field_name, "exe")) {
-                    exe = parsed_link_type;
-                } else if (std.mem.eql(u8, field_name, "static_lib")) {
-                    static_lib = parsed_link_type;
-                }
-                // Unknown fields are ignored (shared_lib to be added later)
-            },
-            else => {
-                return try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_field_name, start);
-            },
-        }
-
-        // Consume optional comma
-        if (self.peek() == .Comma) {
+        .LowerIdent, .NamedUnderscore, .Underscore => {
+            const tok = self.pos;
             self.advance();
+            const region = AST.TokenizedRegion{ .start = tok, .end = self.pos };
+            return try self.store.addTypeAnno(switch (self.tok_buf.tokens.items(.tag)[tok]) {
+                .LowerIdent => .{ .ty_var = .{ .region = region, .tok = tok } },
+                .NamedUnderscore => .{ .underscore_type_var = .{ .region = region, .tok = tok } },
+                .Underscore => .{ .underscore = .{ .region = region } },
+                else => unreachable,
+            });
+        },
+        else => return self.pushMalformed(AST.TypeAnno.Idx, .invalid_type_arg, self.pos),
+    }
+}
+
+fn parseTypeHeaderTokens(self: *Parser) Error!AST.TypeHeader.Idx {
+    const start = self.pos;
+    std.debug.assert(self.peek() == .UpperIdent);
+    self.advance();
+    const open_tok = self.peek();
+    if (open_tok != .NoSpaceOpenRound and open_tok != .OpenRound) {
+        return try self.store.addTypeHeader(.{
+            .name = start,
+            .args = .{ .span = .{ .start = 0, .len = 0 } },
+            .region = .{ .start = start, .end = self.pos },
+        });
+    }
+    self.advance();
+    const scratch_top = self.store.scratchTypeAnnoTop();
+    while (self.peek() != .CloseRound and self.peek() != .EndOfFile) {
+        try self.store.addScratchTypeAnno(try self.parseTypeIdentToken());
+        if (!self.consumeComma()) {
+            break;
         }
     }
-
-    // Expect closing curly brace
-    self.expect(.CloseCurly) catch {
-        return try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_close_curly, start);
-    };
-
-    return try self.store.addTargetsSection(.{
-        .files_path = files_path,
-        .exe = exe,
-        .static_lib = static_lib,
+    if (self.peek() != .CloseRound) {
+        self.store.clearScratchTypeAnnosFrom(scratch_top);
+        return try self.pushMalformed(AST.TypeHeader.Idx, .expected_ty_anno_close_round_or_comma, start);
+    }
+    self.advance();
+    const args = try self.store.typeAnnoSpanFrom(scratch_top);
+    return try self.store.addTypeHeader(.{
+        .name = start,
+        .args = args,
         .region = .{ .start = start, .end = self.pos },
     });
 }
 
-const StatementType = enum { top_level, in_body, in_associated_block };
-
-/// Parse a top level roc statement
-///
-/// e.g. `import Foo`
-pub fn parseTopLevelStatement(self: *Parser) Error!AST.Statement.Idx {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    return try self.parseStmtByType(.top_level);
-}
-
-/// parse a in-body roc statement
-///
-/// e.g. `foo = 2 + x`
-pub fn parseStmt(self: *Parser) Error!AST.Statement.Idx {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    return try self.parseStmtByType(.in_body);
-}
-
-/// parse a roc statement
-///
-/// e.g. `import Foo`, or `foo = 2 + x`
-fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statement.Idx {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    const result = try self.parseDriver(.{ .statement = .{ .parse = statementType } });
-    return switch (result) {
-        .statement => |statement| statement,
-        else => try self.pushMalformed(AST.Statement.Idx, .statement_unexpected_token, self.pos),
-    };
-}
-
-fn parseImportStatement(self: *Parser) Error!AST.Statement.Idx {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
+fn parseImportStatementTokens(self: *Parser) Error!AST.Statement.Idx {
     const start = self.pos;
     std.debug.assert(self.peek() == .KwImport);
     self.advance();
 
-    // File import: import "filepath" as name : Str/List(U8)
     if (self.peek() == .StringStart) {
         self.advance();
         const path_tok = self.pos;
@@ -1624,9 +863,7 @@ fn parseImportStatement(self: *Parser) Error!AST.Statement.Idx {
             break :blk self.tok_buf.env.source[@intCast(range.start.offset)..@intCast(range.end.offset)];
         };
         var is_bytes = false;
-        if (std.mem.eql(u8, type_text, "Str")) {
-            // Str type, is_bytes stays false.
-        } else if (std.mem.eql(u8, type_text, "List")) {
+        if (std.mem.eql(u8, type_text, "Str")) {} else if (std.mem.eql(u8, type_text, "List")) {
             is_bytes = true;
             self.expect(.NoSpaceOpenRound) catch {
                 self.expect(.OpenRound) catch {
@@ -1636,9 +873,9 @@ fn parseImportStatement(self: *Parser) Error!AST.Statement.Idx {
             if (self.peek() != .UpperIdent) {
                 return try self.pushMalformed(AST.Statement.Idx, .file_import_invalid_type, start);
             }
-            const inner_type = blk2: {
-                const range2 = self.tok_buf.resolve(self.pos);
-                break :blk2 self.tok_buf.env.source[@intCast(range2.start.offset)..@intCast(range2.end.offset)];
+            const inner_type = blk: {
+                const range = self.tok_buf.resolve(self.pos);
+                break :blk self.tok_buf.env.source[@intCast(range.start.offset)..@intCast(range.end.offset)];
             };
             if (!std.mem.eql(u8, inner_type, "U8")) {
                 return try self.pushMalformed(AST.Statement.Idx, .file_import_invalid_type, start);
@@ -1674,7 +911,6 @@ fn parseImportStatement(self: *Parser) Error!AST.Statement.Idx {
 
     var exposes = AST.ExposedItem.Span{ .span = base.DataSpan.empty() };
     var nested_import = false;
-
     var last_upper_tok: TokenIdx = self.pos;
     const module_name_tok = self.pos;
     self.advance();
@@ -1711,19 +947,21 @@ fn parseImportStatement(self: *Parser) Error!AST.Statement.Idx {
                 return try self.pushMalformed(AST.Statement.Idx, .import_exposing_no_open, start);
             };
             const scratch_top = self.store.scratchExposedItemTop();
-            self.parseCollectionSpan(AST.ExposedItem.Idx, .CloseSquare, NodeStore.addScratchExposedItem, Parser.parseExposedItem) catch |err| {
-                switch (err) {
-                    error.ExpectedNotFound => {
-                        while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
-                            self.advance();
-                        }
-                        self.expect(.CloseSquare) catch {};
-                        self.store.clearScratchExposedItemsFrom(scratch_top);
-                        return try self.pushMalformed(AST.Statement.Idx, .import_exposing_no_close, start);
-                    },
-                    error.OutOfMemory => return error.OutOfMemory,
+            while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
+                try self.store.addScratchExposedItem(try self.parseExposedItemTokens());
+                if (!self.consumeComma()) {
+                    break;
                 }
-            };
+            }
+            if (self.peek() != .CloseSquare) {
+                while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
+                    self.advance();
+                }
+                self.expect(.CloseSquare) catch {};
+                self.store.clearScratchExposedItemsFrom(scratch_top);
+                return try self.pushMalformed(AST.Statement.Idx, .import_exposing_no_close, start);
+            }
+            self.advance();
             exposes = try self.store.exposedItemSpanFrom(scratch_top);
         }
     }
@@ -1744,90 +982,622 @@ fn parseImportStatement(self: *Parser) Error!AST.Statement.Idx {
     return statement_idx;
 }
 
+fn parseHeaderTokens(self: *Parser) Error!AST.Header.Idx {
+    return switch (self.peek()) {
+        .KwApp => self.parseAppHeaderTokens(),
+        .KwModule => self.parseModuleHeaderTokens(),
+        .KwHosted => self.parseHostedHeaderTokens(),
+        .KwPackage => self.parsePackageHeaderTokens(),
+        .KwPlatform => self.parsePlatformHeaderTokens(),
+        else => try self.store.addHeader(.{ .type_module = .{
+            .region = .{ .start = 0, .end = 0 },
+        } }),
+    };
+}
+
+const ExposedCollectionResult = union(enum) {
+    ok: struct { collection: AST.Collection.Idx, span: AST.ExposedItem.Span },
+    malformed: struct { tag: AST.Diagnostic.Tag, pos: Token.Idx },
+};
+
+fn parseExposedCollectionTokens(
+    self: *Parser,
+    open_error: AST.Diagnostic.Tag,
+    close_error: AST.Diagnostic.Tag,
+    malformed_close_error: AST.Diagnostic.Tag,
+) Error!ExposedCollectionResult {
+    const exposes_start = self.pos;
+    if (self.peek() != .OpenSquare) {
+        return .{ .malformed = .{ .tag = open_error, .pos = self.pos } };
+    }
+    const scratch_top = self.store.scratchExposedItemTop();
+    self.advance();
+
+    while (true) {
+        switch (self.peek()) {
+            .CloseSquare => {
+                self.advance();
+                const span = try self.store.exposedItemSpanFrom(scratch_top);
+                return .{ .ok = .{
+                    .collection = try self.store.addCollection(.collection_exposed, .{
+                        .span = span.span,
+                        .region = .{ .start = exposes_start, .end = self.pos },
+                    }),
+                    .span = span,
+                } };
+            },
+            .EndOfFile => {
+                self.store.clearScratchExposedItemsFrom(scratch_top);
+                return .{ .malformed = .{ .tag = close_error, .pos = self.pos } };
+            },
+            else => {
+                try self.store.addScratchExposedItem(try self.parseExposedItemTokens());
+            },
+        }
+
+        if (self.consumeComma()) {
+            continue;
+        }
+        if (self.peek() == .CloseSquare) {
+            continue;
+        }
+
+        const error_pos = self.pos;
+        while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
+            self.advance();
+        }
+        if (self.peek() == .CloseSquare) {
+            self.advance();
+            self.store.clearScratchExposedItemsFrom(scratch_top);
+            return .{ .malformed = .{ .tag = malformed_close_error, .pos = error_pos } };
+        }
+        self.store.clearScratchExposedItemsFrom(scratch_top);
+        return .{ .malformed = .{ .tag = close_error, .pos = error_pos } };
+    }
+}
+
+inline fn parseHeaderExposedCollectionTokens(
+    self: *Parser,
+    open_error: AST.Diagnostic.Tag,
+    close_error: AST.Diagnostic.Tag,
+    malformed_close_error: AST.Diagnostic.Tag,
+    missing_open_pos: Token.Idx,
+) Error!ExposedCollectionResult {
+    if (self.peek() != .OpenSquare) {
+        return .{ .malformed = .{ .tag = open_error, .pos = missing_open_pos } };
+    }
+    return try self.parseExposedCollectionTokens(open_error, close_error, malformed_close_error);
+}
+
+fn parseRecordFieldCollectionTokens(
+    self: *Parser,
+    start: Token.Idx,
+    collection_tag: Node.Tag,
+    open_error: AST.Diagnostic.Tag,
+    close_error: AST.Diagnostic.Tag,
+) Error!AST.Collection.Idx {
+    const fields_start = self.pos;
+    self.expect(.OpenCurly) catch {
+        return try self.pushMalformed(AST.Collection.Idx, open_error, start);
+    };
+    const scratch_top = self.store.scratchRecordFieldTop();
+    while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
+        try self.store.addScratchRecordField(try self.parseRecordFieldTokens());
+        if (!self.consumeComma()) {
+            break;
+        }
+    }
+    if (self.peek() != .CloseCurly) {
+        self.store.clearScratchRecordFieldsFrom(scratch_top);
+        return try self.pushMalformed(AST.Collection.Idx, close_error, start);
+    }
+    self.advance();
+    const span = try self.store.recordFieldSpanFrom(scratch_top);
+    return try self.store.addCollection(collection_tag, .{
+        .span = span.span,
+        .region = .{ .start = fields_start, .end = self.pos },
+    });
+}
+
+fn parseModuleHeaderTokens(self: *Parser) Error!AST.Header.Idx {
+    const start = self.pos;
+    std.debug.assert(self.peek() == .KwModule);
+    self.advance();
+    const exposed = switch (try self.parseHeaderExposedCollectionTokens(.header_expected_open_square, .header_expected_close_square, .import_exposing_no_close, start)) {
+        .ok => |ok| ok,
+        .malformed => |bad| return try self.pushMalformed(AST.Header.Idx, bad.tag, bad.pos),
+    };
+    return try self.store.addHeader(.{ .module = .{
+        .region = .{ .start = start, .end = self.pos },
+        .exposes = exposed.collection,
+    } });
+}
+
+fn parseHostedHeaderTokens(self: *Parser) Error!AST.Header.Idx {
+    const start = self.pos;
+    std.debug.assert(self.peek() == .KwHosted);
+    self.advance();
+    const exposed = switch (try self.parseHeaderExposedCollectionTokens(.header_expected_open_square, .header_expected_close_square, .import_exposing_no_close, start)) {
+        .ok => |ok| ok,
+        .malformed => |bad| return try self.pushMalformed(AST.Header.Idx, bad.tag, bad.pos),
+    };
+    return try self.store.addHeader(.{ .hosted = .{
+        .region = .{ .start = start, .end = self.pos },
+        .exposes = exposed.collection,
+    } });
+}
+
+fn parsePackageHeaderTokens(self: *Parser) Error!AST.Header.Idx {
+    const start = self.pos;
+    std.debug.assert(self.peek() == .KwPackage);
+    self.advance();
+
+    const exposed = switch (try self.parseHeaderExposedCollectionTokens(.expected_provides_open_square, .header_expected_close_square, .import_exposing_no_close, start)) {
+        .ok => |ok| ok,
+        .malformed => |bad| return try self.pushMalformed(AST.Header.Idx, bad.tag, bad.pos),
+    };
+    try self.recordPackageHeaderModules(exposed.span);
+    const packages = try self.parseRecordFieldCollectionTokens(
+        start,
+        .collection_packages,
+        .expected_package_platform_open_curly,
+        .expected_package_platform_close_curly,
+    );
+
+    return try self.store.addHeader(.{ .package = .{
+        .exposes = exposed.collection,
+        .packages = packages,
+        .region = .{ .start = start, .end = self.pos },
+    } });
+}
+
+fn parseAppHeaderTokens(self: *Parser) Error!AST.Header.Idx {
+    var platform: ?AST.RecordField.Idx = null;
+    const start = self.pos;
+    std.debug.assert(self.peek() == .KwApp);
+    self.advance();
+
+    const provided = switch (try self.parseHeaderExposedCollectionTokens(.expected_provides_open_square, .header_expected_close_square, .import_exposing_no_close, start)) {
+        .ok => |ok| ok,
+        .malformed => |bad| return try self.pushMalformed(AST.Header.Idx, bad.tag, bad.pos),
+    };
+
+    const packages_start = self.pos;
+    self.expect(.OpenCurly) catch {
+        return try self.pushMalformed(AST.Header.Idx, .expected_package_platform_open_curly, start);
+    };
+    const fields_scratch_top = self.store.scratchRecordFieldTop();
+    while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
+        const entry_start = self.pos;
+        if (self.peek() != .LowerIdent) {
+            self.store.clearScratchRecordFieldsFrom(fields_scratch_top);
+            return try self.pushMalformed(AST.Header.Idx, .expected_package_or_platform_name, start);
+        }
+        const name_tok = self.pos;
+        self.advance();
+        if (self.peek() != .OpColon) {
+            self.store.clearScratchRecordFieldsFrom(fields_scratch_top);
+            return try self.pushMalformed(AST.Header.Idx, .expected_package_or_platform_colon, start);
+        }
+        self.advance();
+        if (self.peek() == .KwPlatform) {
+            if (platform != null) {
+                self.store.clearScratchRecordFieldsFrom(fields_scratch_top);
+                return try self.pushMalformed(AST.Header.Idx, .multiple_platforms, start);
+            }
+            self.advance();
+            if (self.peek() != .StringStart) {
+                self.store.clearScratchRecordFieldsFrom(fields_scratch_top);
+                return try self.pushMalformed(AST.Header.Idx, .expected_platform_string, start);
+            }
+            const value = try self.parseStringExprTokens();
+            const field = try self.store.addRecordField(.{
+                .name = name_tok,
+                .value = value,
+                .region = .{ .start = entry_start, .end = self.pos },
+            });
+            try self.store.addScratchRecordField(field);
+            platform = field;
+        } else {
+            if (self.peek() != .StringStart) {
+                self.store.clearScratchRecordFieldsFrom(fields_scratch_top);
+                return try self.pushMalformed(AST.Header.Idx, .expected_package_or_platform_string, start);
+            }
+            const value = try self.parseStringExprTokens();
+            try self.store.addScratchRecordField(try self.store.addRecordField(.{
+                .name = name_tok,
+                .value = value,
+                .region = .{ .start = entry_start, .end = self.pos },
+            }));
+        }
+        if (!self.consumeComma()) {
+            break;
+        }
+    }
+    if (self.peek() != .CloseCurly) {
+        self.store.clearScratchRecordFieldsFrom(fields_scratch_top);
+        return try self.pushMalformed(AST.Header.Idx, .expected_package_platform_close_curly, start);
+    }
+    self.advance();
+
+    const packages_span = try self.store.recordFieldSpanFrom(fields_scratch_top);
+    const packages = try self.store.addCollection(.collection_packages, .{
+        .span = packages_span.span,
+        .region = .{ .start = packages_start, .end = self.pos },
+    });
+
+    if (platform) |platform_idx| {
+        return try self.store.addHeader(.{ .app = .{
+            .platform_idx = platform_idx,
+            .provides = provided.collection,
+            .packages = packages,
+            .region = .{ .start = start, .end = self.pos },
+        } });
+    }
+    return try self.pushMalformed(AST.Header.Idx, .no_platform, start);
+}
+
+const RequiresEntriesResult = union(enum) {
+    span: AST.RequiresEntry.Span,
+    malformed: AST.Diagnostic.Tag,
+};
+
+fn parseRequiresEntriesTokens(self: *Parser) Error!RequiresEntriesResult {
+    self.expect(.OpenCurly) catch {
+        return .{ .malformed = .expected_requires_rigids_open_curly };
+    };
+
+    const requires_entries_top = self.store.scratchRequiresEntryTop();
+    var already_consumed_close_curly = false;
+    if (self.peek() == .CloseCurly) {
+        self.advance();
+        if (self.peek() == .OpenCurly) {
+            self.advance();
+        } else {
+            already_consumed_close_curly = true;
+        }
+    }
+
+    while (!already_consumed_close_curly and self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
+        const entry_start = self.pos;
+        const type_aliases_top = self.store.scratchForClauseTypeAliasTop();
+
+        if (self.peek() == .OpenSquare) {
+            self.advance();
+            while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
+                const alias_start = self.pos;
+                if (self.peek() != .UpperIdent) {
+                    self.store.clearScratchForClauseTypeAliasesFrom(type_aliases_top);
+                    self.store.clearScratchRequiresEntriesFrom(requires_entries_top);
+                    return .{ .malformed = .expected_for_clause_alias_name };
+                }
+                const alias_name = self.pos;
+                self.advance();
+                self.expect(.OpColon) catch {
+                    self.store.clearScratchForClauseTypeAliasesFrom(type_aliases_top);
+                    self.store.clearScratchRequiresEntriesFrom(requires_entries_top);
+                    return .{ .malformed = .expected_for_clause_colon };
+                };
+                if (self.peek() != .LowerIdent) {
+                    self.store.clearScratchForClauseTypeAliasesFrom(type_aliases_top);
+                    self.store.clearScratchRequiresEntriesFrom(requires_entries_top);
+                    return .{ .malformed = .expected_for_clause_rigid_name };
+                }
+                const rigid_name = self.pos;
+                self.advance();
+                try self.store.addScratchForClauseTypeAlias(try self.store.addForClauseTypeAlias(.{
+                    .alias_name = alias_name,
+                    .rigid_name = rigid_name,
+                    .region = .{ .start = alias_start, .end = self.pos },
+                }));
+                if (self.peek() == .Comma) {
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
+
+            self.expect(.CloseSquare) catch {
+                self.store.clearScratchForClauseTypeAliasesFrom(type_aliases_top);
+                self.store.clearScratchRequiresEntriesFrom(requires_entries_top);
+                return .{ .malformed = .expected_for_clause_close_square };
+            };
+            self.expect(.KwFor) catch {
+                self.store.clearScratchForClauseTypeAliasesFrom(type_aliases_top);
+                self.store.clearScratchRequiresEntriesFrom(requires_entries_top);
+                return .{ .malformed = .expected_for_keyword };
+            };
+        }
+
+        const type_aliases_span = try self.store.forClauseTypeAliasSpanFrom(type_aliases_top);
+        if (self.peek() != .LowerIdent) {
+            self.store.clearScratchRequiresEntriesFrom(requires_entries_top);
+            return .{ .malformed = .expected_for_clause_entrypoint_name };
+        }
+        const entrypoint_name = self.pos;
+        self.advance();
+        self.expect(.OpColon) catch {
+            self.store.clearScratchRequiresEntriesFrom(requires_entries_top);
+            return .{ .malformed = .expected_for_clause_type_colon };
+        };
+
+        const type_anno = try self.runTypeAnno(.not_looking_for_args);
+        try self.store.addScratchRequiresEntry(try self.store.addRequiresEntry(.{
+            .type_aliases = type_aliases_span,
+            .entrypoint_name = entrypoint_name,
+            .type_anno = type_anno,
+            .region = .{ .start = entry_start, .end = self.pos },
+        }));
+
+        if (self.peek() == .Comma) {
+            self.advance();
+        } else {
+            break;
+        }
+    }
+
+    if (!already_consumed_close_curly) {
+        self.expect(.CloseCurly) catch {
+            self.store.clearScratchRequiresEntriesFrom(requires_entries_top);
+            return .{ .malformed = .expected_requires_signatures_close_curly };
+        };
+    }
+    return .{ .span = try self.store.requiresEntrySpanFrom(requires_entries_top) };
+}
+
+fn parseTargetFileTokens(self: *Parser) Error!AST.TargetFile.Idx {
+    const start = self.pos;
+    switch (self.peek()) {
+        .StringStart => {
+            self.advance();
+            var content_tok = start;
+            if (self.peek() == .StringPart) {
+                content_tok = self.pos;
+                self.advance();
+            }
+            while (self.peek() != .StringEnd and self.peek() != .EndOfFile) {
+                self.advance();
+            }
+            if (self.peek() == .EndOfFile) {
+                return try self.pushMalformed(AST.TargetFile.Idx, .expected_target_file_string_end, start);
+            }
+            self.advance();
+            return try self.store.addTargetFile(.{ .string_literal = content_tok });
+        },
+        .LowerIdent, .KwApp => {
+            self.advance();
+            return try self.store.addTargetFile(.{ .special_ident = start });
+        },
+        else => return try self.pushMalformed(AST.TargetFile.Idx, .expected_target_file, start),
+    }
+}
+
+fn parseTargetEntryTokens(self: *Parser) Error!AST.TargetEntry.Idx {
+    const start = self.pos;
+    if (self.peek() != .LowerIdent) {
+        return try self.pushMalformed(AST.TargetEntry.Idx, .expected_target_name, start);
+    }
+    const target_name = self.pos;
+    self.advance();
+    self.expect(.OpColon) catch {
+        return try self.pushMalformed(AST.TargetEntry.Idx, .expected_target_colon, start);
+    };
+    self.expect(.OpenSquare) catch {
+        return try self.pushMalformed(AST.TargetEntry.Idx, .expected_target_files_open_square, start);
+    };
+
+    const files_top = self.store.scratchTargetFileTop();
+    while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
+        try self.store.addScratchTargetFile(try self.parseTargetFileTokens());
+        if (!self.consumeComma()) {
+            break;
+        }
+    }
+    if (self.peek() != .CloseSquare) {
+        self.store.clearScratchTargetFilesFrom(files_top);
+        return try self.pushMalformed(AST.TargetEntry.Idx, .expected_target_files_close_square, start);
+    }
+    self.advance();
+    return try self.store.addTargetEntry(.{
+        .target = target_name,
+        .files = try self.store.targetFileSpanFrom(files_top),
+        .region = .{ .start = start, .end = self.pos },
+    });
+}
+
+fn parseTargetLinkTypeTokens(self: *Parser) Error!AST.TargetLinkType.Idx {
+    const start = self.pos;
+    self.expect(.OpenCurly) catch {
+        return try self.pushMalformed(AST.TargetLinkType.Idx, .expected_target_link_open_curly, start);
+    };
+    const entries_top = self.store.scratchTargetEntryTop();
+    while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
+        try self.store.addScratchTargetEntry(try self.parseTargetEntryTokens());
+        if (!self.consumeComma()) {
+            break;
+        }
+    }
+    if (self.peek() != .CloseCurly) {
+        self.store.clearScratchTargetEntriesFrom(entries_top);
+        return try self.pushMalformed(AST.TargetLinkType.Idx, .expected_target_link_close_curly, start);
+    }
+    self.advance();
+    return try self.store.addTargetLinkType(.{
+        .entries = try self.store.targetEntrySpanFrom(entries_top),
+        .region = .{ .start = start, .end = self.pos },
+    });
+}
+
+fn parseTargetsSectionTokens(self: *Parser) Error!AST.TargetsSection.Idx {
+    const start = self.pos;
+    self.expect(.OpColon) catch {
+        return try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_colon, start);
+    };
+    self.expect(.OpenCurly) catch {
+        return try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_open_curly, start);
+    };
+
+    var files_path: ?TokenIdx = null;
+    var exe: ?AST.TargetLinkType.Idx = null;
+    var static_lib: ?AST.TargetLinkType.Idx = null;
+
+    while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
+        if (self.peek() != .LowerIdent) {
+            return try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_field_name, start);
+        }
+        const field_name_tok = self.pos;
+        self.advance();
+        self.expect(.OpColon) catch {
+            return try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_field_colon, start);
+        };
+
+        switch (self.peek()) {
+            .StringStart => {
+                self.advance();
+                if (self.peek() == .StringPart) {
+                    files_path = self.pos;
+                    self.advance();
+                }
+                while (self.peek() != .StringEnd and self.peek() != .EndOfFile) {
+                    self.advance();
+                }
+                if (self.peek() == .StringEnd) {
+                    self.advance();
+                }
+            },
+            .OpenCurly => {
+                const parsed_link_type = try self.parseTargetLinkTypeTokens();
+                const region = self.tok_buf.resolve(field_name_tok);
+                const field_name = self.tok_buf.env.source[@intCast(region.start.offset)..@intCast(region.end.offset)];
+                if (std.mem.eql(u8, field_name, "exe")) {
+                    exe = parsed_link_type;
+                } else if (std.mem.eql(u8, field_name, "static_lib")) {
+                    static_lib = parsed_link_type;
+                }
+            },
+            else => return try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_field_name, start),
+        }
+
+        _ = self.consumeComma();
+    }
+
+    self.expect(.CloseCurly) catch {
+        return try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_close_curly, start);
+    };
+    return try self.store.addTargetsSection(.{
+        .files_path = files_path,
+        .exe = exe,
+        .static_lib = static_lib,
+        .region = .{ .start = start, .end = self.pos },
+    });
+}
+
+fn parsePlatformHeaderTokens(self: *Parser) Error!AST.Header.Idx {
+    const start = self.pos;
+    std.debug.assert(self.peek() == .KwPlatform);
+    self.advance();
+
+    self.expect(.StringStart) catch {
+        return try self.pushMalformed(AST.Header.Idx, .expected_platform_name_start, self.pos);
+    };
+    const name = self.pos;
+    self.expect(.StringPart) catch {
+        return try self.pushMalformed(AST.Header.Idx, .expected_platform_name_string, self.pos);
+    };
+    self.expect(.StringEnd) catch {
+        return try self.pushMalformed(AST.Header.Idx, .expected_platform_name_end, self.pos);
+    };
+
+    self.expect(.KwRequires) catch {
+        return try self.pushMalformed(AST.Header.Idx, .expected_requires, self.pos);
+    };
+    const requires_entries = switch (try self.parseRequiresEntriesTokens()) {
+        .span => |span| span,
+        .malformed => |tag| return try self.pushMalformed(AST.Header.Idx, tag, start),
+    };
+
+    self.expect(.KwExposes) catch {
+        return try self.pushMalformed(AST.Header.Idx, .expected_exposes, self.pos);
+    };
+    const exposes = switch (try self.parseHeaderExposedCollectionTokens(.expected_exposes_open_square, .expected_exposes_close_square, .expected_exposes_close_square, self.pos)) {
+        .ok => |ok| ok.collection,
+        .malformed => |bad| return try self.pushMalformed(AST.Header.Idx, bad.tag, bad.pos),
+    };
+
+    self.expect(.KwPackages) catch {
+        return try self.pushMalformed(AST.Header.Idx, .expected_packages, self.pos);
+    };
+    const packages = try self.parseRecordFieldCollectionTokens(
+        self.pos,
+        .collection_packages,
+        .expected_packages_open_curly,
+        .expected_packages_close_curly,
+    );
+
+    self.expect(.KwProvides) catch {
+        return try self.pushMalformed(AST.Header.Idx, .expected_provides, self.pos);
+    };
+    const provides = try self.parseRecordFieldCollectionTokens(
+        self.pos,
+        .collection_record_fields,
+        .expected_provides_open_curly,
+        .expected_provides_close_curly,
+    );
+
+    var targets: ?AST.TargetsSection.Idx = null;
+    if (self.peek() == .KwTargets) {
+        self.advance();
+        targets = try self.parseTargetsSectionTokens();
+    }
+
+    return try self.store.addHeader(.{ .platform = .{
+        .name = name,
+        .requires_entries = requires_entries,
+        .exposes = exposes,
+        .packages = packages,
+        .provides = provides,
+        .targets = targets,
+        .region = .{ .start = start, .end = self.pos },
+    } });
+}
+
+const StatementType = enum { top_level, in_body, in_associated_block };
+
+/// Parse a top level roc statement
+///
+/// e.g. `import Foo`
+pub fn runTopLevelStatement(self: *Parser) Error!AST.Statement.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    return try self.runStatementByType(.top_level);
+}
+
+/// parse a in-body roc statement
+///
+/// e.g. `foo = 2 + x`
+pub fn runStatement(self: *Parser) Error!AST.Statement.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    return try self.runStatementByType(.in_body);
+}
+
+/// parse a roc statement
+///
+/// e.g. `import Foo`, or `foo = 2 + x`
+fn runStatementByType(self: *Parser, statementType: StatementType) Error!AST.Statement.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    return try self.runStatementRoot(statementType);
+}
+
 fn addTopLevelUnexpectedStatement(self: *Parser) Error!AST.Statement.Idx {
     if (self.peek() == .OpArrow or self.peek() == .OpFatArrow) {
         return try self.pushMalformed(AST.Statement.Idx, .multi_arrow_needs_parens, self.pos);
     }
     return try self.pushMalformed(AST.Statement.Idx, .statement_unexpected_token, self.pos);
-}
-
-fn parseWhereConstraint(self: *Parser) Error!?AST.Collection.Idx {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    const where_start = self.pos; // Position of the where keyword
-
-    self.expect(.KwWhere) catch {
-        return null;
-    };
-
-    // Expect opening bracket [
-    self.expect(.OpenSquare) catch {
-        const diagnostic_region = AST.TokenizedRegion{ .start = where_start, .end = self.pos };
-        try self.diagnostics.append(self.gpa, .{
-            .tag = .where_expected_open_bracket,
-            .region = diagnostic_region,
-        });
-        const malformed_clause = try self.store.addMalformed(AST.WhereClause.Idx, .where_expected_open_bracket, diagnostic_region);
-        const where_clauses_top = self.store.scratchWhereClauseTop();
-        try self.store.addScratchWhereClause(malformed_clause);
-        const where_clauses = try self.store.whereClauseSpanFrom(where_clauses_top);
-        const coll_id = try self.store.addCollection(.collection_where_clause, .{
-            .region = .{ .start = where_start, .end = self.pos },
-            .span = where_clauses.span,
-        });
-        return coll_id;
-    };
-
-    const where_clauses_top = self.store.scratchWhereClauseTop();
-
-    // Parse comma-separated where clauses until we hit ]
-    while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
-        const clause = try self.parseWhereClause();
-        try self.store.addScratchWhereClause(clause);
-
-        if (self.peek() == .Comma) {
-            self.advance();
-        } else if (self.peek() != .CloseSquare) {
-            // Expected comma or closing bracket
-            break;
-        }
-    }
-
-    const where_clauses = try self.store.whereClauseSpanFrom(where_clauses_top);
-
-    // Check if the where clause is empty
-    if (where_clauses.span.len == 0) {
-        const diagnostic_region = AST.TokenizedRegion{ .start = where_start, .end = self.pos };
-        try self.diagnostics.append(self.gpa, .{
-            .tag = .where_expected_constraints,
-            .region = diagnostic_region,
-        });
-        const malformed_clause = try self.store.addMalformed(AST.WhereClause.Idx, .where_expected_constraints, diagnostic_region);
-        try self.store.addScratchWhereClause(malformed_clause);
-        const updated_where_clauses = try self.store.whereClauseSpanFrom(where_clauses_top);
-        const coll_id = try self.store.addCollection(.collection_where_clause, .{
-            .region = .{ .start = where_start, .end = self.pos },
-            .span = updated_where_clauses.span,
-        });
-        return coll_id;
-    }
-
-    // Expect closing bracket ]
-    self.expect(.CloseSquare) catch {
-        const diagnostic_region = AST.TokenizedRegion{ .start = where_start, .end = self.pos };
-        try self.diagnostics.append(self.gpa, .{
-            .tag = .where_expected_close_bracket,
-            .region = diagnostic_region,
-        });
-    };
-
-    const coll_id = try self.store.addCollection(.collection_where_clause, .{
-        .region = .{ .start = where_start, .end = self.pos },
-        .span = where_clauses.span,
-    });
-
-    return coll_id;
 }
 
 /// Whether Pattern Alternatives are allowed in the current context
@@ -1836,642 +1606,15 @@ const Alternatives = enum {
     alternatives_forbidden,
 };
 
-const PatternFrame = union(enum) {
-    root_next: struct {
-        outer_start: Token.Idx,
-        scratch_top: u32,
-        alternatives: Alternatives,
-    },
-    root_after_one: struct {
-        outer_start: Token.Idx,
-        scratch_top: u32,
-        alternatives: Alternatives,
-    },
-    parse_one: Alternatives,
-    tag_args_next: struct {
-        start: Token.Idx,
-        final_token: Token.Idx,
-        qualifiers: Token.Span,
-        scratch_top: u32,
-    },
-    tag_args_after_item: struct {
-        start: Token.Idx,
-        final_token: Token.Idx,
-        qualifiers: Token.Span,
-        scratch_top: u32,
-    },
-    list_next: struct {
-        start: Token.Idx,
-        scratch_top: u32,
-    },
-    list_after_item: struct {
-        start: Token.Idx,
-        scratch_top: u32,
-    },
-    list_finish: struct {
-        start: Token.Idx,
-        scratch_top: u32,
-    },
-    record_next: struct {
-        start: Token.Idx,
-        scratch_top: u32,
-        alternatives: Alternatives,
-    },
-    record_field_after_value: struct {
-        record_start: Token.Idx,
-        scratch_top: u32,
-        alternatives: Alternatives,
-        field_start: Token.Idx,
-        name: Token.Idx,
-    },
-    record_finish: struct {
-        start: Token.Idx,
-        scratch_top: u32,
-    },
-    tuple_next: struct {
-        start: Token.Idx,
-        scratch_top: u32,
-    },
-    tuple_after_item: struct {
-        start: Token.Idx,
-        scratch_top: u32,
-    },
-    tuple_finish: struct {
-        start: Token.Idx,
-        scratch_top: u32,
-    },
-    string_after_expr: Token.Idx,
-};
-
-/// todo -- what does this do?
-pub fn parsePattern(self: *Parser, alternatives: Alternatives) Error!AST.Pattern.Idx {
+/// Run the token parser kernel with a pattern goal and return the completed pattern.
+pub fn runPattern(self: *Parser, alternatives: Alternatives) Error!AST.Pattern.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    const outer_start = self.pos;
-    const patterns_scratch_top = self.store.scratchPatternTop();
-    errdefer self.store.clearScratchPatternsFrom(patterns_scratch_top);
-
-    var frame_allocator_state = std.heap.stackFallback(4096, self.gpa);
-    const frame_allocator = frame_allocator_state.get();
-    var frames: std.ArrayList(PatternFrame) = .empty;
-    defer frames.deinit(frame_allocator);
-
-    var last: ?AST.Pattern.Idx = null;
-    try frames.append(frame_allocator, .{ .root_next = .{
-        .outer_start = outer_start,
-        .scratch_top = patterns_scratch_top,
-        .alternatives = alternatives,
-    } });
-
-    while (frames.pop()) |frame| {
-        switch (frame) {
-            .root_next => |state| {
-                if (self.peek() == .EndOfFile) {
-                    const pattern_count = self.store.scratchPatternTop() - state.scratch_top;
-                    if (pattern_count == 0) {
-                        return try self.store.addMalformed(AST.Pattern.Idx, .pattern_unexpected_eof, .{ .start = state.outer_start, .end = self.pos });
-                    }
-                    if (pattern_count == 1) {
-                        const single_pattern = self.store.scratch_patterns.items.items[self.store.scratchPatternTop() - 1];
-                        self.store.clearScratchPatternsFrom(state.scratch_top);
-                        return try self.parseAsPattern(single_pattern);
-                    }
-                    const patterns = try self.store.patternSpanFrom(state.scratch_top);
-                    return try self.store.addPattern(.{ .alternatives = .{
-                        .region = .{ .start = state.outer_start, .end = self.pos },
-                        .patterns = patterns,
-                    } });
-                }
-                try frames.append(frame_allocator, .{ .root_after_one = .{
-                    .outer_start = state.outer_start,
-                    .scratch_top = state.scratch_top,
-                    .alternatives = state.alternatives,
-                } });
-                try frames.append(frame_allocator, .{ .parse_one = state.alternatives });
-            },
-            .root_after_one => |state| {
-                const p = last orelse unreachable;
-                last = null;
-                if (state.alternatives == .alternatives_forbidden) {
-                    self.store.clearScratchPatternsFrom(state.scratch_top);
-                    return try self.parseAsPattern(p);
-                }
-                if (self.peek() != .OpBar) {
-                    if ((self.store.scratchPatternTop() - state.scratch_top) == 0) {
-                        return try self.parseAsPattern(p);
-                    }
-                    try self.store.addScratchPattern(p);
-                    const patterns = try self.store.patternSpanFrom(state.scratch_top);
-                    return try self.store.addPattern(.{ .alternatives = .{
-                        .region = .{ .start = state.outer_start, .end = self.pos },
-                        .patterns = patterns,
-                    } });
-                }
-                try self.store.addScratchPattern(p);
-                self.advance();
-                try frames.append(frame_allocator, .{ .root_next = .{
-                    .outer_start = state.outer_start,
-                    .scratch_top = state.scratch_top,
-                    .alternatives = state.alternatives,
-                } });
-            },
-            .parse_one => |alts| {
-                const start = self.pos;
-                switch (self.peek()) {
-                    .LowerIdent => {
-                        self.advance();
-                        last = try self.store.addPattern(.{ .ident = .{
-                            .ident_tok = start,
-                            .region = .{ .start = start, .end = self.pos },
-                        } });
-                    },
-                    .KwVar => {
-                        self.advance();
-                        if (self.peek() != .LowerIdent) {
-                            return try self.pushMalformed(AST.Pattern.Idx, .var_must_have_ident, self.pos);
-                        }
-                        const ident_tok = self.pos;
-                        self.advance();
-                        last = try self.store.addPattern(.{ .var_ident = .{
-                            .ident_tok = ident_tok,
-                            .region = .{ .start = start, .end = self.pos },
-                        } });
-                    },
-                    .NamedUnderscore => {
-                        self.advance();
-                        last = try self.store.addPattern(.{ .ident = .{
-                            .ident_tok = start,
-                            .region = .{ .start = start, .end = self.pos },
-                        } });
-                    },
-                    .UpperIdent => {
-                        const qual_result = try self.parseQualificationChain();
-                        self.pos = qual_result.final_token + 1;
-
-                        if (!qual_result.is_upper) {
-                            return try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, start);
-                        }
-
-                        if (self.peek() == .NoSpaceOpenRound) {
-                            self.advance();
-                            try frames.append(frame_allocator, .{ .tag_args_next = .{
-                                .start = start,
-                                .final_token = qual_result.final_token,
-                                .qualifiers = qual_result.qualifiers,
-                                .scratch_top = self.store.scratchPatternTop(),
-                            } });
-                        } else {
-                            last = try self.store.addPattern(.{ .tag = .{
-                                .region = .{ .start = start, .end = self.pos },
-                                .args = .{ .span = .{ .start = 0, .len = 0 } },
-                                .tag_tok = qual_result.final_token,
-                                .qualifiers = qual_result.qualifiers,
-                            } });
-                        }
-                    },
-                    .StringStart => {
-                        last = try self.parseStringPattern();
-                    },
-                    .SingleQuote => {
-                        self.advance();
-                        last = try self.store.addPattern(.{ .single_quote = .{
-                            .token = start,
-                            .region = .{ .start = start, .end = self.pos },
-                        } });
-                    },
-                    .Int => {
-                        self.advance();
-                        const deprecated = NumericLiteral.deprecatedSuffixFromSource(self.tokenText(start));
-                        const literal = try self.store.addNumericLiteral(self.tokenText(start), .int);
-                        const deprecated_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
-                        try self.pushDeprecatedNumberSuffixDiagnostic(deprecated.deprecated_suffix, deprecated_region);
-
-                        if (try self.typeIdentFromDeprecatedSuffix(deprecated.deprecated_suffix)) |type_ident| {
-                            last = try self.store.addPattern(.{ .typed_int = .{
-                                .region = deprecated_region,
-                                .number_tok = start,
-                                .type_ident = type_ident,
-                                .literal = literal,
-                            } });
-                        } else if (self.peek() == .NoSpaceDotUpperIdent) {
-                            const type_token = self.pos;
-                            self.advance();
-                            const type_ident = self.tok_buf.resolveIdentifier(type_token) orelse {
-                                return try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, type_token);
-                            };
-                            last = try self.store.addPattern(.{ .typed_int = .{
-                                .region = .{ .start = start, .end = self.pos },
-                                .number_tok = start,
-                                .type_ident = type_ident,
-                                .literal = literal,
-                            } });
-                        } else {
-                            last = try self.store.addPattern(.{ .int = .{
-                                .region = deprecated_region,
-                                .number_tok = start,
-                                .literal = literal,
-                            } });
-                        }
-                    },
-                    .Float => {
-                        self.advance();
-                        const deprecated = NumericLiteral.deprecatedSuffixFromSource(self.tokenText(start));
-                        const literal = try self.store.addNumericLiteral(self.tokenText(start), .frac);
-                        const deprecated_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
-                        try self.pushDeprecatedNumberSuffixDiagnostic(deprecated.deprecated_suffix, deprecated_region);
-
-                        if (try self.typeIdentFromDeprecatedSuffix(deprecated.deprecated_suffix)) |type_ident| {
-                            last = try self.store.addPattern(.{ .typed_frac = .{
-                                .region = deprecated_region,
-                                .number_tok = start,
-                                .type_ident = type_ident,
-                                .literal = literal,
-                            } });
-                        } else if (self.peek() == .NoSpaceDotUpperIdent) {
-                            const type_token = self.pos;
-                            self.advance();
-                            const type_ident = self.tok_buf.resolveIdentifier(type_token) orelse {
-                                return try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, type_token);
-                            };
-                            last = try self.store.addPattern(.{ .typed_frac = .{
-                                .region = .{ .start = start, .end = self.pos },
-                                .number_tok = start,
-                                .type_ident = type_ident,
-                                .literal = literal,
-                            } });
-                        } else {
-                            last = try self.store.addPattern(.{ .frac = .{
-                                .region = deprecated_region,
-                                .number_tok = start,
-                                .literal = literal,
-                            } });
-                        }
-                    },
-                    .OpenSquare => {
-                        self.advance();
-                        try frames.append(frame_allocator, .{ .list_next = .{
-                            .start = start,
-                            .scratch_top = self.store.scratchPatternTop(),
-                        } });
-                    },
-                    .OpenCurly => {
-                        self.advance();
-                        try frames.append(frame_allocator, .{ .record_next = .{
-                            .start = start,
-                            .scratch_top = self.store.scratchPatternRecordFieldTop(),
-                            .alternatives = alts,
-                        } });
-                    },
-                    .DoubleDot => {
-                        var name: ?Token.Idx = null;
-                        self.advance();
-                        if (self.peek() == .KwAs) {
-                            self.advance();
-                            if (self.peek() != .LowerIdent) {
-                                return try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, start);
-                            }
-                            name = self.pos;
-                            self.advance();
-                        } else if (self.peek() == .LowerIdent) {
-                            return try self.pushMalformed(AST.Pattern.Idx, .pattern_list_rest_old_syntax, self.pos);
-                        }
-                        last = try self.store.addPattern(.{ .list_rest = .{
-                            .region = .{ .start = start, .end = self.pos },
-                            .name = name,
-                        } });
-                    },
-                    .Underscore => {
-                        self.advance();
-                        last = try self.store.addPattern(.{ .underscore = .{
-                            .region = .{ .start = start, .end = self.pos },
-                        } });
-                    },
-                    .OpenRound, .NoSpaceOpenRound => {
-                        self.advance();
-                        try frames.append(frame_allocator, .{ .tuple_next = .{
-                            .start = start,
-                            .scratch_top = self.store.scratchPatternTop(),
-                        } });
-                    },
-                    else => {
-                        return try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, self.pos);
-                    },
-                }
-            },
-            .tag_args_next => |state| {
-                if (self.peek() == .CloseRound) {
-                    self.advance();
-                    const args = try self.store.patternSpanFrom(state.scratch_top);
-                    last = try self.store.addPattern(.{ .tag = .{
-                        .region = .{ .start = state.start, .end = self.pos },
-                        .args = args,
-                        .tag_tok = state.final_token,
-                        .qualifiers = state.qualifiers,
-                    } });
-                } else if (self.peek() == .EndOfFile) {
-                    self.store.clearScratchPatternsFrom(state.scratch_top);
-                    return try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, state.start);
-                } else {
-                    try frames.append(frame_allocator, .{ .tag_args_after_item = .{
-                        .start = state.start,
-                        .final_token = state.final_token,
-                        .qualifiers = state.qualifiers,
-                        .scratch_top = state.scratch_top,
-                    } });
-                    try frames.append(frame_allocator, .{ .root_next = .{
-                        .outer_start = self.pos,
-                        .scratch_top = self.store.scratchPatternTop(),
-                        .alternatives = .alternatives_allowed,
-                    } });
-                }
-            },
-            .tag_args_after_item => |state| {
-                const item = last orelse unreachable;
-                last = null;
-                try self.store.addScratchPattern(item);
-                if (self.peek() == .Comma) {
-                    self.advance();
-                    try frames.append(frame_allocator, .{ .tag_args_next = .{
-                        .start = state.start,
-                        .final_token = state.final_token,
-                        .qualifiers = state.qualifiers,
-                        .scratch_top = state.scratch_top,
-                    } });
-                } else if (self.peek() == .CloseRound) {
-                    try frames.append(frame_allocator, .{ .tag_args_next = .{
-                        .start = state.start,
-                        .final_token = state.final_token,
-                        .qualifiers = state.qualifiers,
-                        .scratch_top = state.scratch_top,
-                    } });
-                } else {
-                    self.store.clearScratchPatternsFrom(state.scratch_top);
-                    return try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, state.start);
-                }
-            },
-            .list_next => |state| {
-                if (self.peek() == .CloseSquare) {
-                    try frames.append(frame_allocator, .{ .list_finish = .{
-                        .start = state.start,
-                        .scratch_top = state.scratch_top,
-                    } });
-                } else if (self.peek() == .EndOfFile) {
-                    self.store.clearScratchPatternsFrom(state.scratch_top);
-                    return try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, state.start);
-                } else if (self.peek() == .DoubleDot) {
-                    const rest_start = self.pos;
-                    self.advance();
-                    var rest_name: ?Token.Idx = null;
-                    if (self.peek() == .KwAs) {
-                        self.advance();
-                        if (self.peek() == .LowerIdent) {
-                            rest_name = self.pos;
-                            self.advance();
-                        }
-                    } else if (self.peek() == .LowerIdent) {
-                        rest_name = self.pos;
-                        self.advance();
-                        try self.pushDiagnostic(.pattern_list_rest_old_syntax, .{
-                            .start = rest_start,
-                            .end = self.pos,
-                        });
-                    }
-                    const rest_pattern = try self.store.addPattern(.{ .list_rest = .{
-                        .name = rest_name,
-                        .region = .{ .start = rest_start, .end = self.pos },
-                    } });
-                    try self.store.addScratchPattern(rest_pattern);
-                    if (self.peek() == .Comma) {
-                        self.advance();
-                        try frames.append(frame_allocator, .{ .list_next = .{
-                            .start = state.start,
-                            .scratch_top = state.scratch_top,
-                        } });
-                    } else {
-                        try frames.append(frame_allocator, .{ .list_finish = .{
-                            .start = state.start,
-                            .scratch_top = state.scratch_top,
-                        } });
-                    }
-                } else {
-                    try frames.append(frame_allocator, .{ .list_after_item = .{
-                        .start = state.start,
-                        .scratch_top = state.scratch_top,
-                    } });
-                    try frames.append(frame_allocator, .{ .root_next = .{
-                        .outer_start = self.pos,
-                        .scratch_top = self.store.scratchPatternTop(),
-                        .alternatives = .alternatives_allowed,
-                    } });
-                }
-            },
-            .list_after_item => |state| {
-                const item = last orelse unreachable;
-                last = null;
-                try self.store.addScratchPattern(item);
-                if (self.peek() == .Comma) {
-                    self.advance();
-                    try frames.append(frame_allocator, .{ .list_next = .{
-                        .start = state.start,
-                        .scratch_top = state.scratch_top,
-                    } });
-                } else {
-                    try frames.append(frame_allocator, .{ .list_finish = .{
-                        .start = state.start,
-                        .scratch_top = state.scratch_top,
-                    } });
-                }
-            },
-            .list_finish => |state| {
-                if (self.peek() == .CloseSquare) {
-                    self.advance();
-                } else {
-                    self.store.clearScratchPatternsFrom(state.scratch_top);
-                    return try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, state.start);
-                }
-                const patterns = try self.store.patternSpanFrom(state.scratch_top);
-                last = try self.store.addPattern(.{ .list = .{
-                    .region = .{ .start = state.start, .end = self.pos },
-                    .patterns = patterns,
-                } });
-            },
-            .record_next => |state| {
-                if (self.peek() == .CloseCurly) {
-                    try frames.append(frame_allocator, .{ .record_finish = .{ .start = state.start, .scratch_top = state.scratch_top } });
-                } else if (self.peek() == .EndOfFile) {
-                    self.store.clearScratchPatternRecordFieldsFrom(state.scratch_top);
-                    return try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, state.start);
-                } else if (self.peek() == .DoubleDot) {
-                    const field_start = self.pos;
-                    self.advance();
-                    var name: u32 = 0;
-                    if (self.peek() == .LowerIdent) {
-                        name = self.pos;
-                        self.advance();
-                    }
-                    const field = try self.store.addPatternRecordField(.{
-                        .name = name,
-                        .value = null,
-                        .rest = true,
-                        .region = .{ .start = field_start, .end = self.pos },
-                    });
-                    try self.store.addScratchPatternRecordField(field);
-                    if (self.peek() == .Comma) {
-                        self.advance();
-                        try frames.append(frame_allocator, .{ .record_next = .{
-                            .start = state.start,
-                            .scratch_top = state.scratch_top,
-                            .alternatives = state.alternatives,
-                        } });
-                    } else {
-                        try frames.append(frame_allocator, .{ .record_finish = .{ .start = state.start, .scratch_top = state.scratch_top } });
-                    }
-                } else {
-                    const field_start = self.pos;
-                    if (self.peek() != .LowerIdent) {
-                        while (self.peek() != .EndOfFile and self.peek() != .CloseCurly) {
-                            self.advance();
-                        }
-                        return try self.pushMalformed(AST.Pattern.Idx, .expected_lower_ident_pat_field_name, field_start);
-                    }
-                    const name = self.pos;
-                    self.advance();
-                    if (self.peek() == .Comma or self.peek() == .CloseCurly) {
-                        const field = try self.store.addPatternRecordField(.{
-                            .name = name,
-                            .value = null,
-                            .rest = false,
-                            .region = .{ .start = field_start, .end = self.pos },
-                        });
-                        try self.store.addScratchPatternRecordField(field);
-                        if (self.peek() == .Comma) {
-                            self.advance();
-                            try frames.append(frame_allocator, .{ .record_next = .{
-                                .start = state.start,
-                                .scratch_top = state.scratch_top,
-                                .alternatives = state.alternatives,
-                            } });
-                        } else {
-                            try frames.append(frame_allocator, .{ .record_finish = .{ .start = state.start, .scratch_top = state.scratch_top } });
-                        }
-                    } else {
-                        if (self.peek() != .OpColon) {
-                            while (self.peek() != .EndOfFile) {
-                                if (self.peek() == .CloseCurly) break;
-                                self.advance();
-                            }
-                            return try self.pushMalformed(AST.Pattern.Idx, .expected_colon_after_pat_field_name, field_start);
-                        }
-                        self.advance();
-                        try frames.append(frame_allocator, .{ .record_field_after_value = .{
-                            .record_start = state.start,
-                            .scratch_top = state.scratch_top,
-                            .alternatives = state.alternatives,
-                            .field_start = field_start,
-                            .name = name,
-                        } });
-                        try frames.append(frame_allocator, .{ .root_next = .{
-                            .outer_start = self.pos,
-                            .scratch_top = self.store.scratchPatternTop(),
-                            .alternatives = state.alternatives,
-                        } });
-                    }
-                }
-            },
-            .record_field_after_value => |state| {
-                const value = last orelse unreachable;
-                last = null;
-                const field = try self.store.addPatternRecordField(.{
-                    .name = state.name,
-                    .value = value,
-                    .rest = false,
-                    .region = .{ .start = state.field_start, .end = self.pos },
-                });
-                try self.store.addScratchPatternRecordField(field);
-                if (self.peek() == .Comma) {
-                    self.advance();
-                    try frames.append(frame_allocator, .{ .record_next = .{
-                        .start = state.record_start,
-                        .scratch_top = state.scratch_top,
-                        .alternatives = state.alternatives,
-                    } });
-                } else {
-                    try frames.append(frame_allocator, .{ .record_finish = .{ .start = state.record_start, .scratch_top = state.scratch_top } });
-                }
-            },
-            .record_finish => |state| {
-                const fields = try self.store.patternRecordFieldSpanFrom(state.scratch_top);
-                if (self.peek() != .CloseCurly) {
-                    return try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, state.start);
-                }
-                self.advance();
-                last = try self.store.addPattern(.{ .record = .{
-                    .region = .{ .start = state.start, .end = self.pos },
-                    .fields = fields,
-                } });
-            },
-            .tuple_next => |state| {
-                if (self.peek() == .CloseRound) {
-                    try frames.append(frame_allocator, .{ .tuple_finish = .{
-                        .start = state.start,
-                        .scratch_top = state.scratch_top,
-                    } });
-                } else if (self.peek() == .EndOfFile) {
-                    self.store.clearScratchPatternsFrom(state.scratch_top);
-                    return try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, state.start);
-                } else {
-                    try frames.append(frame_allocator, .{ .tuple_after_item = .{
-                        .start = state.start,
-                        .scratch_top = state.scratch_top,
-                    } });
-                    try frames.append(frame_allocator, .{ .root_next = .{
-                        .outer_start = self.pos,
-                        .scratch_top = self.store.scratchPatternTop(),
-                        .alternatives = .alternatives_allowed,
-                    } });
-                }
-            },
-            .tuple_after_item => |state| {
-                const item = last orelse unreachable;
-                last = null;
-                try self.store.addScratchPattern(item);
-                if (self.peek() == .Comma) {
-                    self.advance();
-                    try frames.append(frame_allocator, .{ .tuple_next = .{
-                        .start = state.start,
-                        .scratch_top = state.scratch_top,
-                    } });
-                } else if (self.peek() == .CloseRound) {
-                    try frames.append(frame_allocator, .{ .tuple_next = .{
-                        .start = state.start,
-                        .scratch_top = state.scratch_top,
-                    } });
-                } else {
-                    self.store.clearScratchPatternsFrom(state.scratch_top);
-                    return try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, state.start);
-                }
-            },
-            .tuple_finish => |state| {
-                if (self.peek() != .CloseRound) {
-                    self.store.clearScratchPatternsFrom(state.scratch_top);
-                    return try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, state.start);
-                }
-                self.advance();
-                const patterns = try self.store.patternSpanFrom(state.scratch_top);
-                last = try self.store.addPattern(.{ .tuple = .{
-                    .patterns = patterns,
-                    .region = .{ .start = state.start, .end = self.pos },
-                } });
-            },
-            .string_after_expr => unreachable,
-        }
-    }
-
-    return last orelse try self.store.addMalformed(AST.Pattern.Idx, .pattern_unexpected_eof, .{ .start = outer_start, .end = self.pos });
+    return try self.runPatternRoot(alternatives);
 }
 
-fn parseAsPattern(self: *Parser, pattern: AST.Pattern.Idx) Error!AST.Pattern.Idx {
+fn finishAsPattern(self: *Parser, pattern: AST.Pattern.Idx) Error!AST.Pattern.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -2493,271 +1636,183 @@ fn parseAsPattern(self: *Parser, pattern: AST.Pattern.Idx) Error!AST.Pattern.Idx
     return p;
 }
 
-/// todo
-pub fn parsePatternRecordField(self: *Parser, alternatives: Alternatives) Error!AST.PatternRecordField.Idx {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    const field_start = self.pos;
-    if (self.peek() == .DoubleDot) {
-        self.advance();
-        var name: u32 = 0;
-        if (self.peek() == .LowerIdent) {
-            name = self.pos;
-            self.advance();
-        }
-        return try self.store.addPatternRecordField(.{
-            .name = name,
-            .value = null,
-            .rest = true,
-            .region = .{ .start = field_start, .end = self.pos },
-        });
-    }
-    if (self.peek() != .LowerIdent) {
-        while (self.peek() != .EndOfFile) {
-            if (self.peek() == .CloseCurly) {
-                break;
-            }
-            self.advance();
-        }
-        return try self.pushMalformed(AST.PatternRecordField.Idx, .expected_lower_ident_pat_field_name, field_start);
-    }
-    const name = self.pos;
-    self.advance();
-    var value: ?AST.Pattern.Idx = null;
-    // With shorthand the next token is a Comma or the ending CloseCurly
-    if (self.peek() != .Comma and self.peek() != .CloseCurly) {
-        // Otherwise we should see an OpColon to introduce the value
-        if (self.peek() != .OpColon) {
-            while (self.peek() != .EndOfFile) {
-                if (self.peek() == .CloseCurly) break;
-                self.advance();
-            }
-            return try self.pushMalformed(AST.PatternRecordField.Idx, .expected_colon_after_pat_field_name, field_start);
-        }
-        self.advance();
-        const patt = try self.parsePattern(alternatives);
-        value = patt;
-    }
-
-    return try self.store.addPatternRecordField(.{
-        .name = name,
-        .value = value,
-        .rest = false,
-        .region = .{ .start = field_start, .end = self.pos },
-    });
-}
-
 const QualificationResult = struct {
     qualifiers: Token.Span,
     final_token: Token.Idx,
     is_upper: bool,
 };
 
-const ExprFrame = union(enum) {
-    parse: u8,
-    finish: struct {
-        start: Token.Idx,
-        min_bp: u8,
-        expr: AST.Expr.Idx,
-    },
-    finish_last: struct {
-        start: Token.Idx,
-        min_bp: u8,
-    },
-    after_unary: struct {
-        start: Token.Idx,
-        operator: Token.Idx,
-    },
-    expr_collection_next: struct {
-        start: Token.Idx,
-        scratch_top: u32,
-        end_token: Token.Tag,
-        result: ExprCollectionResult,
-        close_error: AST.Diagnostic.Tag,
-    },
-    expr_collection_after_item: struct {
-        start: Token.Idx,
-        scratch_top: u32,
-        end_token: Token.Tag,
-        result: ExprCollectionResult,
-        close_error: AST.Diagnostic.Tag,
-    },
-    after_apply_args: struct {
-        start: Token.Idx,
-        min_bp: u8,
-        function: AST.Expr.Idx,
-    },
-    after_method_args: struct {
-        start: Token.Idx,
-        min_bp: u8,
-        receiver: AST.Expr.Idx,
-        method_token: Token.Idx,
-    },
-    after_binary_rhs: struct {
-        start: Token.Idx,
-        min_bp: u8,
-        left: AST.Expr.Idx,
-        operator: Token.Idx,
-    },
-    arrow_after_inner: struct {
-        start: Token.Idx,
-        min_bp: u8,
-        left: AST.Expr.Idx,
-        operator: Token.Idx,
-    },
-    arrow_app_next: struct {
-        start: Token.Idx,
-        min_bp: u8,
-        left: AST.Expr.Idx,
-        operator: Token.Idx,
-        rhs: AST.Expr.Idx,
-    },
-    arrow_app_after_args: struct {
-        start: Token.Idx,
-        min_bp: u8,
-        left: AST.Expr.Idx,
-        operator: Token.Idx,
-        function: AST.Expr.Idx,
-    },
-    string_next: struct {
-        start: Token.Idx,
-        scratch_top: u32,
-        multiline: bool,
-    },
-    string_after_interp: struct {
-        start: Token.Idx,
-        scratch_top: u32,
-        multiline: bool,
-    },
-    record_ext_after_expr: struct {
-        start: Token.Idx,
-        min_bp: u8,
-    },
-    record_fields_next: struct {
-        start: Token.Idx,
-        min_bp: u8,
-        scratch_top: u32,
-        ext: ?AST.Expr.Idx,
-    },
-    record_field_after_value: struct {
-        start: Token.Idx,
-        min_bp: u8,
-        scratch_top: u32,
-        ext: ?AST.Expr.Idx,
-        field_start: Token.Idx,
-        name: Token.Idx,
-    },
-    record_finish: struct {
-        start: Token.Idx,
-        min_bp: u8,
-        scratch_top: u32,
-        ext: ?AST.Expr.Idx,
-    },
-    lambda_after_body: struct {
-        start: Token.Idx,
-        args: AST.Pattern.Span,
-    },
-    lambda_after_args: Token.Idx,
-    pattern_collection_next: struct {
-        start: Token.Idx,
-        scratch_top: u32,
-        end_token: Token.Tag,
-        alternatives: Alternatives,
-        close_error: AST.Diagnostic.Tag,
-    },
-    pattern_collection_after_item: struct {
-        start: Token.Idx,
-        scratch_top: u32,
-        end_token: Token.Tag,
-        alternatives: Alternatives,
-        close_error: AST.Diagnostic.Tag,
-    },
-    if_after_condition: Token.Idx,
-    if_after_then: struct {
-        start: Token.Idx,
-        condition: AST.Expr.Idx,
-    },
-    if_after_else: struct {
-        start: Token.Idx,
-        condition: AST.Expr.Idx,
-        then: AST.Expr.Idx,
-    },
-    match_after_expr: Token.Idx,
-    match_branch_next: struct {
-        start: Token.Idx,
-        matched: AST.Expr.Idx,
-        scratch_top: u32,
-    },
-    match_branch_after_pattern: struct {
-        match_start: Token.Idx,
-        matched: AST.Expr.Idx,
-        scratch_top: u32,
-        branch_start: Token.Idx,
-    },
-    match_branch_after_guard: struct {
-        match_start: Token.Idx,
-        matched: AST.Expr.Idx,
-        scratch_top: u32,
-        branch_start: Token.Idx,
-        pattern: AST.Pattern.Idx,
-        guard: ?AST.Expr.Idx,
-    },
-    match_branch_after_body: struct {
-        match_start: Token.Idx,
-        matched: AST.Expr.Idx,
-        scratch_top: u32,
-        branch_start: Token.Idx,
-        pattern: AST.Pattern.Idx,
-        guard: ?AST.Expr.Idx,
-    },
-    dbg_after_expr: Token.Idx,
-    for_after_pattern: Token.Idx,
-    for_after_list: struct {
-        start: Token.Idx,
-        pattern: AST.Pattern.Idx,
-    },
-    for_after_body: struct {
-        start: Token.Idx,
-        pattern: AST.Pattern.Idx,
-        list_expr: AST.Expr.Idx,
-    },
-    block_begin: Token.Idx,
-    block_next: struct {
-        start: Token.Idx,
-        scope: DeclIndex.ScopeIdx,
-        scratch_top: u32,
-        previous_type_path_visible_start: usize,
-    },
-    block_after_statement: struct {
-        start: Token.Idx,
-        scope: DeclIndex.ScopeIdx,
-        scratch_top: u32,
-        previous_type_path_visible_start: usize,
-    },
-    block_finish: struct {
-        start: Token.Idx,
-        scope: DeclIndex.ScopeIdx,
-        scratch_top: u32,
-        previous_type_path_visible_start: usize,
-    },
-    statement: StmtFrame,
-    pattern: PatternFrame,
+fn CurrentStack(comptime State: type) type {
+    return struct {
+        current: ?State = null,
+        stack: std.ArrayList(State) = .empty,
+
+        const Self = @This();
+
+        fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+            self.stack.deinit(allocator);
+        }
+
+        inline fn enter(self: *Self, allocator: std.mem.Allocator, state: State) Error!void {
+            if (self.current) |current| {
+                try self.stack.append(allocator, current);
+            }
+            self.current = state;
+        }
+
+        inline fn active(self: *Self) *State {
+            return &self.current.?;
+        }
+
+        inline fn leave(self: *Self) State {
+            const state = self.current orelse unreachable;
+            self.current = self.stack.pop();
+            return state;
+        }
+
+        fn clearRetainingCapacity(self: *Self) void {
+            self.current = null;
+            self.stack.clearRetainingCapacity();
+        }
+
+        fn isEmpty(self: *const Self) bool {
+            return self.current == null and self.stack.items.len == 0;
+        }
+
+        inline fn depth(self: *const Self) usize {
+            return self.stack.items.len + @intFromBool(self.current != null);
+        }
+    };
+}
+
+const ExprBlockStack = CurrentStack(ExprBlockState);
+const ExprBinaryRhsStack = CurrentStack(ExprAfterBinaryRhsState);
+const ExprLambdaBodyStack = CurrentStack(ExprLambdaAfterBodyState);
+const PatternRootStack = CurrentStack(PatternRootState);
+const ExprCollectionStack = CurrentStack(ExprCollectionState);
+const StatementAssociatedBlockStack = CurrentStack(StatementAssociatedBlockState);
+
+const PatternRootState = struct {
+    outer_start: Token.Idx,
+    scratch_top: u32,
+    alternatives: Alternatives,
 };
 
-const ExprCollectionResult = enum {
-    list,
-    tuple,
-    apply_args,
+const PatternTagArgsState = struct {
+    start: Token.Idx,
+    final_token: Token.Idx,
+    qualifiers: Token.Span,
+    scratch_top: u32,
 };
 
-const ExprDriverResult = union(enum) {
+const PatternListState = struct {
+    start: Token.Idx,
+    scratch_top: u32,
+};
+
+const PatternRecordState = struct {
+    start: Token.Idx,
+    scratch_top: u32,
+    alternatives: Alternatives,
+};
+
+const PatternRecordFieldState = struct {
+    record_start: Token.Idx,
+    scratch_top: u32,
+    alternatives: Alternatives,
+    field_start: Token.Idx,
+    name: Token.Idx,
+};
+
+const PatternTupleState = struct {
+    start: Token.Idx,
+    scratch_top: u32,
+};
+
+const PatternStringState = struct {
+    start: Token.Idx,
+};
+
+const StatementForExprState = struct {
+    start: Token.Idx,
+    patt: AST.Pattern.Idx,
+};
+
+const StatementForBodyState = struct {
+    start: Token.Idx,
+    patt: AST.Pattern.Idx,
     expr: AST.Expr.Idx,
-    statement: AST.Statement.Idx,
-    associated: AST.Associated,
 };
 
-const TypeDeclProgress = struct {
+const StatementWhileBodyState = struct {
+    start: Token.Idx,
+    cond: AST.Expr.Idx,
+};
+
+const StatementVarBodyState = struct {
+    start: Token.Idx,
+    name: Token.Idx,
+};
+
+const StatementDeclBodyState = struct {
+    start: Token.Idx,
+    pattern: AST.Pattern.Idx,
+};
+
+const StatementTypeAnnoState = struct {
+    start: Token.Idx,
+    name: Token.Idx,
+    is_var: bool,
+};
+
+const StatementTypeDeclAnnoState = struct {
+    start: Token.Idx,
+    header: AST.TypeHeader.Idx,
+    kind: AST.TypeDeclKind,
+    type_dependencies_start: DeclIndex.TypeDependencyMark,
+    was_collecting_type_dependencies: bool,
+    type_path: ?DeclIndex.TypePathIdx,
+};
+
+const StatementTypeAnnoAfterWhereState = struct {
+    start: Token.Idx,
+    name: Token.Idx,
+    is_var: bool,
+    anno: AST.TypeAnno.Idx,
+};
+
+const StatementTypeDeclAfterWhereState = struct {
+    start: Token.Idx,
+    header: AST.TypeHeader.Idx,
+    anno: AST.TypeAnno.Idx,
+    kind: AST.TypeDeclKind,
+    type_dependencies: DeclIndex.Span,
+    type_path: ?DeclIndex.TypePathIdx,
+};
+
+const StatementTypeDeclReadyState = struct {
+    start: Token.Idx,
+    header: AST.TypeHeader.Idx,
+    anno: AST.TypeAnno.Idx,
+    kind: AST.TypeDeclKind,
+    where_clause: ?AST.Collection.Idx,
+    type_dependencies: DeclIndex.Span,
+    type_path: ?DeclIndex.TypePathIdx,
+};
+
+const WhereState = struct {
+    start: Token.Idx,
+    scratch_top: u32,
+};
+
+const WhereClauseTypeState = struct {
+    start: Token.Idx,
+    var_tok: Token.Idx,
+    name_tok: Token.Idx,
+    args_start: Token.Idx,
+};
+
+const TypeDeclAssociatedState = struct {
     start: Token.Idx,
     header: AST.TypeHeader.Idx,
     anno: AST.TypeAnno.Idx,
@@ -2768,258 +1823,3272 @@ const TypeDeclProgress = struct {
     dot_pos: Token.Idx,
 };
 
-const StmtFrame = union(enum) {
-    parse: StatementType,
-    after_for_pattern: Token.Idx,
-    after_expect: Token.Idx,
-    after_for_expr: struct {
-        start: Token.Idx,
-        patt: AST.Pattern.Idx,
-    },
-    after_for_body: struct {
-        start: Token.Idx,
-        patt: AST.Pattern.Idx,
-        expr: AST.Expr.Idx,
-    },
-    after_while_cond: Token.Idx,
-    after_while_body: struct {
-        start: Token.Idx,
-        cond: AST.Expr.Idx,
-    },
-    after_crash: Token.Idx,
-    after_dbg: Token.Idx,
-    after_return: Token.Idx,
-    after_var_body: struct {
-        start: Token.Idx,
-        name: Token.Idx,
-    },
-    after_decl_body: struct {
-        start: Token.Idx,
-        pattern: AST.Pattern.Idx,
-    },
-    after_destructure_pattern: Token.Idx,
-    after_destructure_body: struct {
-        start: Token.Idx,
-        pattern: AST.Pattern.Idx,
-    },
-    after_final_expr: Token.Idx,
-    associated_block_begin: struct {
-        start: Token.Idx,
-        owner_type_path: ?DeclIndex.TypePathIdx,
-    },
-    associated_block_next: struct {
-        start: Token.Idx,
-        scope: DeclIndex.ScopeIdx,
-        scratch_top: u32,
-        pushed_type_path: bool,
-    },
-    associated_block_after_statement: struct {
-        start: Token.Idx,
-        scope: DeclIndex.ScopeIdx,
-        scratch_top: u32,
-        pushed_type_path: bool,
-        statement_pos: Token.Idx,
-    },
-    associated_block_finish: struct {
-        start: Token.Idx,
-        scope: DeclIndex.ScopeIdx,
-        scratch_top: u32,
-        pushed_type_path: bool,
-    },
-    type_decl_after_associated: TypeDeclProgress,
+const StatementAssociatedBlockState = struct {
+    start: Token.Idx,
+    scope: DeclIndex.ScopeIdx,
+    scratch_top: u32,
+    pushed_type_path: bool,
 };
 
-fn pushExprPatternRoot(
-    frames: *std.ArrayList(ExprFrame),
-    allocator: std.mem.Allocator,
-    outer_start: Token.Idx,
+const StatementAssociatedStatementState = struct {
+    statement_pos: Token.Idx,
+    expr_block_depth: usize,
+};
+
+const ExprState = struct {
+    start: Token.Idx = 0,
+    min_bp: u8 = 0,
+};
+
+const ExprFinishState = struct {
+    start: Token.Idx,
+    min_bp: u8,
+    expr: AST.Expr.Idx,
+};
+
+const ExprAfterUnaryState = struct {
+    start: Token.Idx,
+    min_bp: u8,
+    operator: Token.Idx,
+};
+
+const ExprCollectionResult = union(enum) {
+    list,
+    tuple,
+    apply: ExprAfterApplyArgsState,
+    method_apply: ExprAfterMethodArgsState,
+    arrow_apply: ExprArrowAppAfterArgsState,
+};
+
+const ExprCollectionState = struct {
+    start: Token.Idx,
+    min_bp: ?u8,
     scratch_top: u32,
-    alternatives: Alternatives,
-) Error!void {
-    try frames.append(allocator, .{ .pattern = .{ .root_next = .{
-        .outer_start = outer_start,
-        .scratch_top = scratch_top,
-        .alternatives = alternatives,
-    } } });
+    end_token: Token.Tag,
+    result: ExprCollectionResult,
+    close_error: AST.Diagnostic.Tag,
+};
+
+const ExprAfterApplyArgsState = struct {
+    start: Token.Idx,
+    min_bp: u8,
+    function: AST.Expr.Idx,
+};
+
+const ExprAfterMethodArgsState = struct {
+    start: Token.Idx,
+    min_bp: u8,
+    receiver: AST.Expr.Idx,
+    method_token: Token.Idx,
+};
+
+const ExprAfterBinaryRhsState = struct {
+    start: Token.Idx,
+    min_bp: u8,
+    left: AST.Expr.Idx,
+    operator: Token.Idx,
+};
+
+const ExprArrowAfterInnerState = struct {
+    start: Token.Idx,
+    min_bp: u8,
+    left: AST.Expr.Idx,
+    operator: Token.Idx,
+};
+
+const ExprArrowAppState = struct {
+    start: Token.Idx,
+    min_bp: u8,
+    left: AST.Expr.Idx,
+    operator: Token.Idx,
+    rhs: AST.Expr.Idx,
+};
+
+const ExprArrowAppAfterArgsState = struct {
+    start: Token.Idx,
+    min_bp: u8,
+    left: AST.Expr.Idx,
+    operator: Token.Idx,
+    function: AST.Expr.Idx,
+};
+
+const ExprStringState = struct {
+    start: Token.Idx,
+    min_bp: ?u8,
+    scratch_top: u32,
+    multiline: bool,
+};
+
+const ExprRecordExtState = struct {
+    start: Token.Idx,
+    min_bp: u8,
+};
+
+const ExprRecordState = struct {
+    start: Token.Idx,
+    min_bp: u8,
+    scratch_top: u32,
+    ext: ?AST.Expr.Idx,
+};
+
+const ExprRecordFieldState = struct {
+    start: Token.Idx,
+    min_bp: u8,
+    scratch_top: u32,
+    ext: ?AST.Expr.Idx,
+    field_start: Token.Idx,
+    name: Token.Idx,
+};
+
+const ExprLambdaAfterBodyState = struct {
+    start: Token.Idx,
+    min_bp: u8,
+    args: AST.Pattern.Span,
+};
+
+const ExprLambdaArgsState = struct {
+    start: Token.Idx,
+    min_bp: u8,
+    scratch_top: u32,
+};
+
+const ExprAfterExprState = struct {
+    start: Token.Idx,
+    min_bp: u8,
+};
+
+const ExprIfAfterThenState = struct {
+    start: Token.Idx,
+    min_bp: u8,
+    condition: AST.Expr.Idx,
+};
+
+const ExprIfAfterElseState = struct {
+    start: Token.Idx,
+    min_bp: u8,
+    condition: AST.Expr.Idx,
+    then: AST.Expr.Idx,
+};
+
+const ExprMatchBranchState = struct {
+    start: Token.Idx,
+    min_bp: u8,
+    matched: AST.Expr.Idx,
+    scratch_top: u32,
+};
+
+const ExprMatchBranchAfterPatternState = struct {
+    match_start: Token.Idx,
+    min_bp: u8,
+    matched: AST.Expr.Idx,
+    scratch_top: u32,
+    branch_start: Token.Idx,
+};
+
+const ExprMatchBranchAfterGuardState = struct {
+    match_start: Token.Idx,
+    min_bp: u8,
+    matched: AST.Expr.Idx,
+    scratch_top: u32,
+    branch_start: Token.Idx,
+    pattern: AST.Pattern.Idx,
+    guard: ?AST.Expr.Idx,
+};
+
+const ExprMatchBranchAfterBodyState = struct {
+    match_start: Token.Idx,
+    min_bp: u8,
+    matched: AST.Expr.Idx,
+    scratch_top: u32,
+    branch_start: Token.Idx,
+    pattern: AST.Pattern.Idx,
+    guard: ?AST.Expr.Idx,
+};
+
+const ExprForAfterListState = struct {
+    start: Token.Idx,
+    min_bp: u8,
+    pattern: AST.Pattern.Idx,
+};
+
+const ExprForAfterBodyState = struct {
+    start: Token.Idx,
+    min_bp: u8,
+    pattern: AST.Pattern.Idx,
+    list_expr: AST.Expr.Idx,
+};
+
+const ExprBlockState = struct {
+    start: Token.Idx,
+    min_bp: u8,
+    scope: DeclIndex.ScopeIdx,
+    scratch_top: u32,
+    previous_type_path_visible_start: usize,
+};
+
+const OpenSyntaxStack = struct {
+    expr_kinds: std.ArrayList(ExprParentKind) = .empty,
+    pattern_kinds: std.ArrayList(PatternParentKind) = .empty,
+    type_kinds: std.ArrayList(TypeParentKind) = .empty,
+    where_kinds: std.ArrayList(WhereParentKind) = .empty,
+    statement_kinds: std.ArrayList(StatementParentKind) = .empty,
+    associated_kinds: std.ArrayList(AssociatedParentKind) = .empty,
+    expr_after_unary: std.ArrayList(ExprAfterUnaryState) = .empty,
+    expr_arrow_after_inner: std.ArrayList(ExprArrowAfterInnerState) = .empty,
+    expr_string: std.ArrayList(ExprStringState) = .empty,
+    expr_record_ext: std.ArrayList(ExprRecordExtState) = .empty,
+    expr_record_field: std.ArrayList(ExprRecordFieldState) = .empty,
+    expr_after_expr: std.ArrayList(ExprAfterExprState) = .empty,
+    expr_if_after_then: std.ArrayList(ExprIfAfterThenState) = .empty,
+    expr_if_after_else: std.ArrayList(ExprIfAfterElseState) = .empty,
+    expr_match_after_pattern: std.ArrayList(ExprMatchBranchAfterPatternState) = .empty,
+    expr_match_after_guard: std.ArrayList(ExprMatchBranchAfterGuardState) = .empty,
+    expr_match_after_body: std.ArrayList(ExprMatchBranchAfterBodyState) = .empty,
+    expr_for_after_list: std.ArrayList(ExprForAfterListState) = .empty,
+    expr_for_after_body: std.ArrayList(ExprForAfterBodyState) = .empty,
+    expr_lambda_args: std.ArrayList(ExprLambdaArgsState) = .empty,
+    statement_token: std.ArrayList(Token.Idx) = .empty,
+    statement_decl_body: std.ArrayList(StatementDeclBodyState) = .empty,
+    statement_var_body: std.ArrayList(StatementVarBodyState) = .empty,
+    statement_for_expr: std.ArrayList(StatementForExprState) = .empty,
+    statement_for_body: std.ArrayList(StatementForBodyState) = .empty,
+    statement_while_body: std.ArrayList(StatementWhileBodyState) = .empty,
+    statement_type_anno: std.ArrayList(StatementTypeAnnoState) = .empty,
+    statement_type_decl_anno: std.ArrayList(StatementTypeDeclAnnoState) = .empty,
+    statement_type_decl_associated: std.ArrayList(TypeDeclAssociatedState) = .empty,
+    statement_type_associated_statement: std.ArrayList(StatementAssociatedStatementState) = .empty,
+    where_statement_type_anno: std.ArrayList(StatementTypeAnnoAfterWhereState) = .empty,
+    where_statement_type_decl: std.ArrayList(StatementTypeDeclAfterWhereState) = .empty,
+    where_clause_type: std.ArrayList(WhereClauseTypeState) = .empty,
+    pattern_string: std.ArrayList(PatternStringState) = .empty,
+    pattern_tag_args: std.ArrayList(PatternTagArgsState) = .empty,
+    pattern_list: std.ArrayList(PatternListState) = .empty,
+    pattern_tuple: std.ArrayList(PatternTupleState) = .empty,
+    pattern_record_field: std.ArrayList(PatternRecordFieldState) = .empty,
+    type_apply: std.ArrayList(TypeApplyState) = .empty,
+    type_paren_item: std.ArrayList(TypeParenAfterItemState) = .empty,
+    type_paren_fn_ret: std.ArrayList(TypeParenFnRetState) = .empty,
+    type_zero_arg_fn_ret: std.ArrayList(TypeZeroArgFnRetState) = .empty,
+    type_record_ext: std.ArrayList(TypeRecordExtState) = .empty,
+    type_record_field: std.ArrayList(TypeRecordFieldState) = .empty,
+    type_tag_union_ext: std.ArrayList(TypeTagUnionExtState) = .empty,
+    type_tag_union_item: std.ArrayList(TypeTagUnionItemState) = .empty,
+    type_fn_arg: std.ArrayList(TypeFnArgsState) = .empty,
+    type_fn_ret: std.ArrayList(TypeFnAfterRetState) = .empty,
+
+    fn deinit(self: *OpenSyntaxStack, allocator: std.mem.Allocator) void {
+        inline for (std.meta.fields(OpenSyntaxStack)) |field| {
+            @field(self, field.name).deinit(allocator);
+        }
+    }
+
+    inline fn payloadStack(self: *OpenSyntaxStack, comptime Payload: type) *std.ArrayList(Payload) {
+        @setEvalBranchQuota(10_000);
+        const Stack = std.ArrayList(Payload);
+        comptime var matches = 0;
+        comptime var stack_field_name: []const u8 = "";
+        inline for (std.meta.fields(OpenSyntaxStack)) |field| {
+            if (field.type == Stack) {
+                matches += 1;
+                stack_field_name = field.name;
+            }
+        }
+        if (matches == 0) {
+            @compileError("unsupported expression open syntax payload: " ++ @typeName(Payload));
+        }
+        if (matches > 1) {
+            @compileError("ambiguous expression open syntax payload: " ++ @typeName(Payload));
+        }
+        return &@field(self, stack_field_name);
+    }
+
+    inline fn peekPayload(self: *OpenSyntaxStack, comptime Payload: type) Payload {
+        const stack = self.payloadStack(Payload);
+        return stack.items[stack.items.len - 1];
+    }
+
+    inline fn pushWithKind(self: *OpenSyntaxStack, allocator: std.mem.Allocator, kind_stack: anytype, kind: anytype, comptime Payload: type, payload: Payload) Error!void {
+        const stack = self.payloadStack(Payload);
+        try stack.append(allocator, payload);
+        errdefer _ = stack.pop();
+        try kind_stack.append(allocator, kind);
+    }
+
+    inline fn pushExpr(self: *OpenSyntaxStack, allocator: std.mem.Allocator, kind: ExprParentKind, comptime Payload: type, payload: Payload) Error!void {
+        try self.pushWithKind(allocator, &self.expr_kinds, kind, Payload, payload);
+    }
+
+    inline fn pushPattern(self: *OpenSyntaxStack, allocator: std.mem.Allocator, kind: PatternParentKind, comptime Payload: type, payload: Payload) Error!void {
+        try self.pushWithKind(allocator, &self.pattern_kinds, kind, Payload, payload);
+    }
+
+    inline fn pushType(self: *OpenSyntaxStack, allocator: std.mem.Allocator, kind: TypeParentKind, comptime Payload: type, payload: Payload) Error!void {
+        try self.pushWithKind(allocator, &self.type_kinds, kind, Payload, payload);
+    }
+
+    inline fn pushWhere(self: *OpenSyntaxStack, allocator: std.mem.Allocator, kind: WhereParentKind, comptime Payload: type, payload: Payload) Error!void {
+        try self.pushWithKind(allocator, &self.where_kinds, kind, Payload, payload);
+    }
+
+    inline fn pushStatement(self: *OpenSyntaxStack, allocator: std.mem.Allocator, kind: StatementParentKind, comptime Payload: type, payload: Payload) Error!void {
+        try self.pushWithKind(allocator, &self.statement_kinds, kind, Payload, payload);
+    }
+
+    inline fn pushAssociated(self: *OpenSyntaxStack, allocator: std.mem.Allocator, kind: AssociatedParentKind, comptime Payload: type, payload: Payload) Error!void {
+        try self.pushWithKind(allocator, &self.associated_kinds, kind, Payload, payload);
+    }
+
+    inline fn pushExprMarker(self: *OpenSyntaxStack, allocator: std.mem.Allocator, kind: ExprParentKind) Error!void {
+        try self.expr_kinds.append(allocator, kind);
+    }
+
+    inline fn pushPatternMarker(self: *OpenSyntaxStack, allocator: std.mem.Allocator, kind: PatternParentKind) Error!void {
+        try self.pattern_kinds.append(allocator, kind);
+    }
+
+    inline fn peekKind(comptime Kind: type, kind_stack: *const std.ArrayList(Kind)) ?Kind {
+        if (kind_stack.items.len == 0) return null;
+        return kind_stack.items[kind_stack.items.len - 1];
+    }
+
+    inline fn peekExpr(self: *const OpenSyntaxStack) ?ExprParentKind {
+        return peekKind(ExprParentKind, &self.expr_kinds);
+    }
+
+    inline fn peekPattern(self: *const OpenSyntaxStack) ?PatternParentKind {
+        return peekKind(PatternParentKind, &self.pattern_kinds);
+    }
+
+    inline fn peekType(self: *const OpenSyntaxStack) ?TypeParentKind {
+        return peekKind(TypeParentKind, &self.type_kinds);
+    }
+
+    inline fn peekWhere(self: *const OpenSyntaxStack) ?WhereParentKind {
+        return peekKind(WhereParentKind, &self.where_kinds);
+    }
+
+    inline fn peekStatement(self: *const OpenSyntaxStack) ?StatementParentKind {
+        return peekKind(StatementParentKind, &self.statement_kinds);
+    }
+
+    inline fn peekAssociated(self: *const OpenSyntaxStack) ?AssociatedParentKind {
+        return peekKind(AssociatedParentKind, &self.associated_kinds);
+    }
+
+    inline fn popPayloadWithKind(self: *OpenSyntaxStack, comptime Kind: type, kind_stack: *std.ArrayList(Kind), expected: Kind, comptime Payload: type) Payload {
+        const kind = kind_stack.pop() orelse unreachable;
+        std.debug.assert(kind == expected);
+        return self.payloadStack(Payload).pop() orelse unreachable;
+    }
+
+    inline fn popExprPayload(self: *OpenSyntaxStack, expected: ExprParentKind, comptime Payload: type) Payload {
+        return self.popPayloadWithKind(ExprParentKind, &self.expr_kinds, expected, Payload);
+    }
+
+    inline fn popPatternPayload(self: *OpenSyntaxStack, expected: PatternParentKind, comptime Payload: type) Payload {
+        return self.popPayloadWithKind(PatternParentKind, &self.pattern_kinds, expected, Payload);
+    }
+
+    inline fn popTypePayload(self: *OpenSyntaxStack, expected: TypeParentKind, comptime Payload: type) Payload {
+        return self.popPayloadWithKind(TypeParentKind, &self.type_kinds, expected, Payload);
+    }
+
+    inline fn popWherePayload(self: *OpenSyntaxStack, expected: WhereParentKind, comptime Payload: type) Payload {
+        return self.popPayloadWithKind(WhereParentKind, &self.where_kinds, expected, Payload);
+    }
+
+    inline fn popStatementPayload(self: *OpenSyntaxStack, expected: StatementParentKind, comptime Payload: type) Payload {
+        return self.popPayloadWithKind(StatementParentKind, &self.statement_kinds, expected, Payload);
+    }
+
+    inline fn popAssociatedPayload(self: *OpenSyntaxStack, expected: AssociatedParentKind, comptime Payload: type) Payload {
+        return self.popPayloadWithKind(AssociatedParentKind, &self.associated_kinds, expected, Payload);
+    }
+
+    inline fn popMarkerWithKind(comptime Kind: type, kind_stack: *std.ArrayList(Kind), expected: Kind) void {
+        const kind = kind_stack.pop() orelse unreachable;
+        std.debug.assert(kind == expected);
+    }
+
+    inline fn popExprMarker(self: *OpenSyntaxStack, expected: ExprParentKind) void {
+        popMarkerWithKind(ExprParentKind, &self.expr_kinds, expected);
+    }
+
+    inline fn popPatternMarker(self: *OpenSyntaxStack, expected: PatternParentKind) void {
+        popMarkerWithKind(PatternParentKind, &self.pattern_kinds, expected);
+    }
+
+    fn clearRetainingCapacity(self: *OpenSyntaxStack) void {
+        inline for (std.meta.fields(OpenSyntaxStack)) |field| {
+            @field(self, field.name).clearRetainingCapacity();
+        }
+    }
+
+    fn isEmpty(self: *const OpenSyntaxStack) bool {
+        inline for (std.meta.fields(OpenSyntaxStack)) |field| {
+            if (@field(self, field.name).items.len != 0) return false;
+        }
+        return true;
+    }
+};
+
+const ParserKernelScratch = struct {
+    open_syntax: OpenSyntaxStack = .{},
+    collections: ExprCollectionStack = .{},
+    binary_rhs: ExprBinaryRhsStack = .{},
+    lambda_body: ExprLambdaBodyStack = .{},
+    blocks: ExprBlockStack = .{},
+    pattern_roots: PatternRootStack = .{},
+    associated_blocks: StatementAssociatedBlockStack = .{},
+
+    fn deinit(self: *ParserKernelScratch, allocator: std.mem.Allocator) void {
+        inline for (std.meta.fields(ParserKernelScratch)) |field| {
+            @field(self, field.name).deinit(allocator);
+        }
+    }
+
+    fn clearRetainingCapacity(self: *ParserKernelScratch) void {
+        inline for (std.meta.fields(ParserKernelScratch)) |field| {
+            @field(self, field.name).clearRetainingCapacity();
+        }
+    }
+
+    fn isEmpty(self: *const ParserKernelScratch) bool {
+        inline for (std.meta.fields(ParserKernelScratch)) |field| {
+            if (!@field(self, field.name).isEmpty()) return false;
+        }
+        return true;
+    }
+};
+
+const TypeAfterPrimaryState = struct {
+    start: Token.Idx,
+    looking_for_args: TyFnArgs,
+};
+
+const TypeApplyState = struct {
+    start: Token.Idx,
+    scratch_top: u32,
+    looking_for_args: TyFnArgs,
+};
+
+const TypeParenState = struct {
+    start: Token.Idx,
+    after_round: Token.Idx,
+    scratch_top: u32,
+    saw_comma: bool,
+    expect_close: bool,
+    looking_for_args: TyFnArgs,
+};
+
+const TypeParenAfterItemState = struct {
+    start: Token.Idx,
+    after_round: Token.Idx,
+    scratch_top: u32,
+    saw_comma: bool,
+    looking_for_args: TyFnArgs,
+};
+
+const TypeParenFnRetState = struct {
+    start: Token.Idx,
+    after_round: Token.Idx,
+    scratch_top: u32,
+    args: AST.TypeAnno.Span,
+    effectful: bool,
+    looking_for_args: TyFnArgs,
+};
+
+const TypeZeroArgFnRetState = struct {
+    start: Token.Idx,
+    after_round: Token.Idx,
+    effectful: bool,
+    args: AST.TypeAnno.Span,
+    looking_for_args: TyFnArgs,
+};
+
+const TypeRecordState = struct {
+    start: Token.Idx,
+    scratch_top: u32,
+    ext: AST.TypeAnno.RecordExt,
+    looking_for_args: TyFnArgs,
+};
+
+const TypeRecordExtState = struct {
+    start: Token.Idx,
+    scratch_top: u32,
+    looking_for_args: TyFnArgs,
+};
+
+const TypeRecordFieldState = struct {
+    record_start: Token.Idx,
+    scratch_top: u32,
+    field_start: Token.Idx,
+    name: Token.Idx,
+    ext: AST.TypeAnno.RecordExt,
+    looking_for_args: TyFnArgs,
+};
+
+const TypeTagUnionState = struct {
+    start: Token.Idx,
+    scratch_top: u32,
+    ext: AST.TypeAnno.TagUnionExt,
+    looking_for_args: TyFnArgs,
+};
+
+const TypeTagUnionExtState = struct {
+    start: Token.Idx,
+    scratch_top: u32,
+    looking_for_args: TyFnArgs,
+};
+
+const TypeTagUnionItemState = struct {
+    start: Token.Idx,
+    scratch_top: u32,
+    ext: AST.TypeAnno.TagUnionExt,
+    was_collecting: bool,
+    looking_for_args: TyFnArgs,
+};
+
+const TypeFnArgsState = struct {
+    start: Token.Idx,
+    scratch_top: u32,
+};
+
+const TypeFnAfterRetState = struct {
+    start: Token.Idx,
+    args: AST.TypeAnno.Span,
+    effectful: bool,
+};
+
+/// Parses a qualification chain (e.g., "json.Core.Utf8" -> ["json", "Core"])
+/// Returns the qualifiers and the final token
+fn readQualificationChain(self: *Parser) Error!QualificationResult {
+    std.debug.assert(self.peek() == .UpperIdent or self.peek() == .LowerIdent);
+
+    const scratch_top = self.store.scratchTokenTop();
+    var final_token = self.pos; // Capture position of the identifier
+    var is_upper = true;
+
+    const saved_pos = self.pos;
+    self.advance();
+
+    var saw_qualifier = false;
+    while (true) {
+        switch (self.peek()) {
+            .NoSpaceDotUpperIdent => {
+                saw_qualifier = true;
+                try self.store.addScratchToken(final_token);
+                final_token = self.pos;
+                is_upper = true;
+                self.advance();
+            },
+            .NoSpaceDotLowerIdent => {
+                saw_qualifier = true;
+                try self.store.addScratchToken(final_token);
+                final_token = self.pos;
+                is_upper = false;
+                self.advance();
+            },
+            else => break,
+        }
+    }
+    if (!saw_qualifier) {
+        self.pos = saved_pos;
+    }
+
+    const qualifiers = try self.store.tokenSpanFrom(scratch_top);
+
+    return QualificationResult{
+        .qualifiers = qualifiers,
+        .final_token = final_token,
+        .is_upper = is_upper,
+    };
 }
 
-fn handleExprPatternFrame(
+/// Parse a Roc expression with the lowest binding power.
+pub fn runExpr(self: *Parser) Error!AST.Expr.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    return try self.runExprBp(0);
+}
+
+/// Parse a Roc expression with a caller-provided minimum binding power.
+pub fn runExprBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    return try self.runExprRoot(min_bp);
+}
+
+const TyFnArgs = enum {
+    not_looking_for_args,
+    looking_for_args,
+    looking_for_type_arg,
+};
+
+const ExprKernelRoot = enum {
+    expr,
+    statement,
+    associated_block,
+    pattern,
+    type_anno,
+};
+
+fn ExprKernelReturn(comptime root: ExprKernelRoot) type {
+    return switch (root) {
+        .expr => AST.Expr.Idx,
+        .statement => AST.Statement.Idx,
+        .associated_block => AST.Associated,
+        .pattern => AST.Pattern.Idx,
+        .type_anno => AST.TypeAnno.Idx,
+    };
+}
+
+fn runExprRoot(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
+    return try self.runExprStatementKernel(.expr, min_bp, undefined, undefined, null, .alternatives_forbidden, undefined);
+}
+
+fn runStatementRoot(self: *Parser, statement_type: StatementType) Error!AST.Statement.Idx {
+    return try self.runExprStatementKernel(.statement, 0, statement_type, undefined, null, .alternatives_forbidden, undefined);
+}
+
+fn runAssociatedBlockRoot(self: *Parser, start: Token.Idx, owner_type_path: ?DeclIndex.TypePathIdx) Error!AST.Associated {
+    return try self.runExprStatementKernel(.associated_block, 0, .in_associated_block, start, owner_type_path, .alternatives_forbidden, undefined);
+}
+
+fn runPatternRoot(self: *Parser, alternatives: Alternatives) Error!AST.Pattern.Idx {
+    return try self.runExprStatementKernel(.pattern, 0, undefined, undefined, null, alternatives, undefined);
+}
+
+fn runTypeAnnoRoot(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAnno.Idx {
+    return try self.runExprStatementKernel(.type_anno, 0, undefined, undefined, null, .alternatives_forbidden, looking_for_args);
+}
+
+fn runExprStatementKernel(
     self: *Parser,
-    frame: PatternFrame,
-    frames: *std.ArrayList(ExprFrame),
-    allocator: std.mem.Allocator,
-    last_expr: *?AST.Expr.Idx,
-    last_pattern: *?AST.Pattern.Idx,
-) Error!void {
-    switch (frame) {
-        .root_next => |state| {
-            if (self.peek() == .EndOfFile) {
-                const pattern_count = self.store.scratchPatternTop() - state.scratch_top;
-                if (pattern_count == 0) {
-                    last_pattern.* = try self.store.addMalformed(AST.Pattern.Idx, .pattern_unexpected_eof, .{ .start = state.outer_start, .end = self.pos });
-                    return;
-                }
-                if (pattern_count == 1) {
-                    const single_pattern = self.store.scratch_patterns.items.items[self.store.scratchPatternTop() - 1];
-                    self.store.clearScratchPatternsFrom(state.scratch_top);
-                    last_pattern.* = try self.parseAsPattern(single_pattern);
-                    return;
-                }
-                const patterns = try self.store.patternSpanFrom(state.scratch_top);
-                last_pattern.* = try self.store.addPattern(.{ .alternatives = .{
-                    .region = .{ .start = state.outer_start, .end = self.pos },
-                    .patterns = patterns,
-                } });
-                return;
-            }
-            try frames.append(allocator, .{ .pattern = .{ .root_after_one = .{
-                .outer_start = state.outer_start,
-                .scratch_top = state.scratch_top,
-                .alternatives = state.alternatives,
-            } } });
-            try frames.append(allocator, .{ .pattern = .{ .parse_one = state.alternatives } });
-        },
-        .root_after_one => |state| {
-            const p = last_pattern.* orelse unreachable;
-            last_pattern.* = null;
-            if (state.alternatives == .alternatives_forbidden) {
-                self.store.clearScratchPatternsFrom(state.scratch_top);
-                last_pattern.* = try self.parseAsPattern(p);
-                return;
-            }
-            if (self.peek() != .OpBar) {
-                if ((self.store.scratchPatternTop() - state.scratch_top) == 0) {
-                    last_pattern.* = try self.parseAsPattern(p);
-                    return;
-                }
-                try self.store.addScratchPattern(p);
-                const patterns = try self.store.patternSpanFrom(state.scratch_top);
-                last_pattern.* = try self.store.addPattern(.{ .alternatives = .{
-                    .region = .{ .start = state.outer_start, .end = self.pos },
-                    .patterns = patterns,
-                } });
-                return;
-            }
-            try self.store.addScratchPattern(p);
+    comptime root: ExprKernelRoot,
+    min_bp: u8,
+    root_statement_type: StatementType,
+    associated_start: Token.Idx,
+    owner_type_path: ?DeclIndex.TypePathIdx,
+    root_pattern_alternatives: Alternatives,
+    root_type_args: TyFnArgs,
+) Error!ExprKernelReturn(root) {
+    const open_allocator = self.gpa;
+    const expr_scratch = &self.expr_kernel_scratch;
+    std.debug.assert(expr_scratch.isEmpty());
+    defer expr_scratch.clearRetainingCapacity();
+    const open_syntax = &expr_scratch.open_syntax;
+
+    const ExprLabel = enum {
+        prefix,
+        suffix,
+        complete,
+        arrow_app_next,
+        collection_next,
+        string_next,
+        record_fields_next,
+        record_finish,
+        match_branch_next,
+        block_next,
+        block_finish,
+        pattern_root_next,
+        pattern_prefix,
+        pattern_complete,
+        pattern_tag_args_next,
+        pattern_list_next,
+        pattern_list_finish,
+        pattern_record_next,
+        pattern_record_finish,
+        pattern_tuple_next,
+        pattern_tuple_finish,
+        type_prefix,
+        type_after_primary,
+        type_complete,
+        type_apply_next,
+        type_paren_next,
+        type_record_next,
+        type_record_finish,
+        type_tag_union_next,
+        type_tag_union_finish,
+        type_fn_args_next,
+        where_start,
+        where_clause_next,
+        where_after_clause,
+        where_finish,
+        where_complete,
+        statement_type_decl_finish,
+        statement_start,
+        statement_complete,
+        associated_next,
+        associated_finish,
+    };
+
+    var expr_state = ExprState{ .start = self.pos, .min_bp = if (root == .expr) min_bp else 0 };
+    var expr_finish_state: ExprFinishState = undefined;
+    const expr_collections = &expr_scratch.collections;
+    const expr_binary_rhs_stack = &expr_scratch.binary_rhs;
+    var expr_arrow_app_state: ExprArrowAppState = undefined;
+    var expr_string_state: ExprStringState = undefined;
+    var expr_record_state: ExprRecordState = undefined;
+    const expr_lambda_body_stack = &expr_scratch.lambda_body;
+    var expr_match_branch_state: ExprMatchBranchState = undefined;
+    const expr_blocks = &expr_scratch.blocks;
+    var last_expr: ?AST.Expr.Idx = null;
+    var pattern_root_state = PatternRootState{
+        .outer_start = self.pos,
+        .scratch_top = self.store.scratchPatternTop(),
+        .alternatives = if (root == .pattern) root_pattern_alternatives else .alternatives_forbidden,
+    };
+    const pattern_roots = &expr_scratch.pattern_roots;
+    var pattern_tag_args_state: PatternTagArgsState = undefined;
+    var pattern_list_state: PatternListState = undefined;
+    var pattern_record_state: PatternRecordState = undefined;
+    var pattern_tuple_state: PatternTupleState = undefined;
+    var pattern_alternatives = if (root == .pattern) root_pattern_alternatives else Alternatives.alternatives_forbidden;
+    var pattern_string_state: PatternStringState = undefined;
+    var last_pattern: ?AST.Pattern.Idx = null;
+    var statement_type = switch (root) {
+        .statement, .associated_block => root_statement_type,
+        .expr => StatementType.in_body,
+        .pattern => StatementType.in_body,
+        .type_anno => StatementType.in_body,
+    };
+    var last_statement: ?AST.Statement.Idx = null;
+    const associated_blocks = &expr_scratch.associated_blocks;
+    const type_path_stack_top = self.type_path_stack.items.len;
+    const type_path_stack_visible_start = self.type_path_stack_visible_start;
+    const collect_type_dependencies_start = self.collect_type_dependencies;
+    errdefer self.type_path_stack.shrinkRetainingCapacity(type_path_stack_top);
+    errdefer self.type_path_stack_visible_start = type_path_stack_visible_start;
+    errdefer self.collect_type_dependencies = collect_type_dependencies_start;
+    var type_args = if (root == .type_anno) root_type_args else TyFnArgs.not_looking_for_args;
+    var type_after_primary_state: TypeAfterPrimaryState = undefined;
+    var type_apply_state: TypeApplyState = undefined;
+    var type_paren_state: TypeParenState = undefined;
+    var type_record_state: TypeRecordState = undefined;
+    var type_tag_union_state: TypeTagUnionState = undefined;
+    var type_fn_args_state: TypeFnArgsState = undefined;
+    var last_type_anno: ?AST.TypeAnno.Idx = null;
+    var where_state: WhereState = undefined;
+    var last_where: ?AST.Collection.Idx = null;
+    var statement_type_decl_ready_state: StatementTypeDeclReadyState = undefined;
+    var expr_match_guard_depth: u32 = 0;
+
+    if (root == .associated_block) {
+        if (self.peek() == .OpenCurly) {
             self.advance();
-            try frames.append(allocator, .{ .pattern = .{ .root_next = .{
-                .outer_start = state.outer_start,
-                .scratch_top = state.scratch_top,
-                .alternatives = state.alternatives,
-            } } });
-        },
-        .parse_one => |alts| {
-            const start = self.pos;
-            switch (self.peek()) {
-                .LowerIdent => {
-                    self.advance();
-                    last_pattern.* = try self.store.addPattern(.{ .ident = .{
-                        .ident_tok = start,
-                        .region = .{ .start = start, .end = self.pos },
-                    } });
-                },
-                .KwVar => {
-                    self.advance();
-                    if (self.peek() != .LowerIdent) {
-                        last_pattern.* = try self.pushMalformed(AST.Pattern.Idx, .var_must_have_ident, self.pos);
-                        return;
-                    }
-                    const ident_tok = self.pos;
-                    self.advance();
-                    last_pattern.* = try self.store.addPattern(.{ .var_ident = .{
-                        .ident_tok = ident_tok,
-                        .region = .{ .start = start, .end = self.pos },
-                    } });
-                },
-                .NamedUnderscore => {
-                    self.advance();
-                    last_pattern.* = try self.store.addPattern(.{ .ident = .{
-                        .ident_tok = start,
-                        .region = .{ .start = start, .end = self.pos },
-                    } });
-                },
-                .UpperIdent => {
-                    const qual_result = try self.parseQualificationChain();
-                    self.pos = qual_result.final_token + 1;
-                    if (!qual_result.is_upper) {
-                        last_pattern.* = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, start);
-                        return;
-                    }
-                    if (self.peek() == .NoSpaceOpenRound) {
-                        self.advance();
-                        try frames.append(allocator, .{ .pattern = .{ .tag_args_next = .{
-                            .start = start,
-                            .final_token = qual_result.final_token,
-                            .qualifiers = qual_result.qualifiers,
-                            .scratch_top = self.store.scratchPatternTop(),
-                        } } });
-                    } else {
-                        last_pattern.* = try self.store.addPattern(.{ .tag = .{
-                            .region = .{ .start = start, .end = self.pos },
-                            .args = .{ .span = .{ .start = 0, .len = 0 } },
-                            .tag_tok = qual_result.final_token,
-                            .qualifiers = qual_result.qualifiers,
-                        } });
-                    }
-                },
-                .StringStart => {
-                    self.advance();
-                    try frames.append(allocator, .{ .pattern = .{ .string_after_expr = start } });
-                    try frames.append(allocator, .{ .string_next = .{
-                        .start = start,
-                        .scratch_top = self.store.scratchExprTop(),
-                        .multiline = false,
-                    } });
-                },
-                .SingleQuote => {
-                    self.advance();
-                    last_pattern.* = try self.store.addPattern(.{ .single_quote = .{
-                        .token = start,
-                        .region = .{ .start = start, .end = self.pos },
-                    } });
-                },
-                .Int => {
+        }
+
+        var pushed_type_path = false;
+        if (owner_type_path) |path| {
+            try self.type_path_stack.append(self.gpa, path);
+            pushed_type_path = true;
+        }
+
+        const assoc_scope = try self.enterDeclScope(.associated, .none, .{ .start = associated_start, .end = associated_start });
+        try associated_blocks.enter(open_allocator, .{
+            .start = associated_start,
+            .scope = assoc_scope,
+            .scratch_top = self.store.scratchStatementTop(),
+            .pushed_type_path = pushed_type_path,
+        });
+    }
+
+    expr_kernel: switch (switch (root) {
+        .expr => ExprLabel.prefix,
+        .statement => ExprLabel.statement_start,
+        .associated_block => ExprLabel.associated_next,
+        .pattern => ExprLabel.pattern_root_next,
+        .type_anno => ExprLabel.type_prefix,
+    }) {
+        .prefix => {
+            const tok = self.peek();
+            const tok_int = @intFromEnum(tok);
+
+            if (tok_int < @intFromEnum(Token.Tag.UpperIdent)) {
+                if (tok == .EndOfFile) {
+                    const start = self.pos;
+                    const expr = try self.pushMalformed(AST.Expr.Idx, .expr_unexpected_token, start);
+                    expr_finish_state = .{ .start = start, .min_bp = expr_state.min_bp, .expr = expr };
+                    continue :expr_kernel .suffix;
+                }
+                if (tok == .Int) {
+                    const start = self.pos;
                     self.advance();
                     const deprecated = NumericLiteral.deprecatedSuffixFromSource(self.tokenText(start));
                     const literal = try self.store.addNumericLiteral(self.tokenText(start), .int);
                     const deprecated_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
                     try self.pushDeprecatedNumberSuffixDiagnostic(deprecated.deprecated_suffix, deprecated_region);
-                    if (try self.typeIdentFromDeprecatedSuffix(deprecated.deprecated_suffix)) |type_ident| {
-                        last_pattern.* = try self.store.addPattern(.{ .typed_int = .{
-                            .region = deprecated_region,
-                            .number_tok = start,
+
+                    if (self.peek() == .NoSpaceDotInt) {
+                        last_expr = try self.pushMalformed(AST.Expr.Idx, .expr_dot_suffix_not_allowed, self.pos);
+                        expr_finish_state = .{ .start = start, .min_bp = expr_state.min_bp, .expr = last_expr.? };
+                        continue :expr_kernel .suffix;
+                    }
+
+                    const expr = if (try self.typeIdentFromDeprecatedSuffix(deprecated.deprecated_suffix)) |type_ident|
+                        try self.store.addExpr(.{ .typed_int = .{
+                            .token = start,
                             .type_ident = type_ident,
                             .literal = literal,
-                        } });
-                    } else if (self.peek() == .NoSpaceDotUpperIdent) {
+                            .region = deprecated_region,
+                        } })
+                    else if (self.peek() == .NoSpaceDotUpperIdent) blk: {
                         const type_token = self.pos;
                         self.advance();
                         const type_ident = self.tok_buf.resolveIdentifier(type_token) orelse {
-                            last_pattern.* = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, type_token);
-                            return;
+                            const malformed = try self.pushMalformed(AST.Expr.Idx, .expr_unexpected_token, type_token);
+                            break :blk malformed;
                         };
-                        last_pattern.* = try self.store.addPattern(.{ .typed_int = .{
-                            .region = .{ .start = start, .end = self.pos },
-                            .number_tok = start,
+                        break :blk try self.store.addExpr(.{ .typed_int = .{
+                            .token = start,
                             .type_ident = type_ident,
                             .literal = literal,
+                            .region = .{ .start = start, .end = self.pos },
                         } });
-                    } else {
-                        last_pattern.* = try self.store.addPattern(.{ .int = .{
-                            .region = deprecated_region,
-                            .number_tok = start,
+                    } else try self.store.addExpr(.{ .int = .{
+                        .token = start,
+                        .literal = literal,
+                        .region = deprecated_region,
+                    } });
+                    expr_finish_state = .{ .start = start, .min_bp = expr_state.min_bp, .expr = expr };
+                    continue :expr_kernel .suffix;
+                }
+                if (tok == .Float) {
+                    const start = self.pos;
+                    self.advance();
+                    const deprecated = NumericLiteral.deprecatedSuffixFromSource(self.tokenText(start));
+                    const literal = try self.store.addNumericLiteral(self.tokenText(start), .frac);
+                    const deprecated_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
+                    try self.pushDeprecatedNumberSuffixDiagnostic(deprecated.deprecated_suffix, deprecated_region);
+
+                    const expr = if (try self.typeIdentFromDeprecatedSuffix(deprecated.deprecated_suffix)) |type_ident|
+                        try self.store.addExpr(.{ .typed_frac = .{
+                            .token = start,
+                            .type_ident = type_ident,
                             .literal = literal,
+                            .region = deprecated_region,
+                        } })
+                    else if (self.peek() == .NoSpaceDotUpperIdent) blk: {
+                        const type_token = self.pos;
+                        self.advance();
+                        const type_ident = self.tok_buf.resolveIdentifier(type_token) orelse {
+                            const malformed = try self.pushMalformed(AST.Expr.Idx, .expr_unexpected_token, type_token);
+                            break :blk malformed;
+                        };
+                        break :blk try self.store.addExpr(.{ .typed_frac = .{
+                            .token = start,
+                            .type_ident = type_ident,
+                            .literal = literal,
+                            .region = .{ .start = start, .end = self.pos },
                         } });
+                    } else try self.store.addExpr(.{ .frac = .{
+                        .token = start,
+                        .literal = literal,
+                        .region = deprecated_region,
+                    } });
+                    expr_finish_state = .{ .start = start, .min_bp = expr_state.min_bp, .expr = expr };
+                    continue :expr_kernel .suffix;
+                }
+                if (tok == .StringStart or tok == .MultilineStringStart) {
+                    const start = self.pos;
+                    const multiline = self.peek() == .MultilineStringStart;
+                    self.advance();
+                    expr_string_state = .{
+                        .start = start,
+                        .min_bp = expr_state.min_bp,
+                        .scratch_top = self.store.scratchExprTop(),
+                        .multiline = multiline,
+                    };
+                    continue :expr_kernel .string_next;
+                }
+                if (tok == .SingleQuote) {
+                    const start = self.pos;
+                    self.advance();
+                    const expr = try self.store.addExpr(.{ .single_quote = .{
+                        .token = start,
+                        .region = .{ .start = start, .end = self.pos },
+                    } });
+                    expr_finish_state = .{ .start = start, .min_bp = expr_state.min_bp, .expr = expr };
+                    continue :expr_kernel .suffix;
+                }
+            } else if (tok_int < @intFromEnum(Token.Tag.OpPlus)) {
+                if (tok == .LowerIdent or tok == .NamedUnderscore) {
+                    const start = self.pos;
+                    self.advance();
+                    const empty_qualifiers = try self.store.tokenSpanFrom(self.store.scratchTokenTop());
+                    const expr = try self.store.addExpr(.{ .ident = .{
+                        .token = start,
+                        .qualifiers = empty_qualifiers,
+                        .region = .{ .start = start, .end = self.pos },
+                    } });
+                    expr_finish_state = .{ .start = start, .min_bp = expr_state.min_bp, .expr = expr };
+                    continue :expr_kernel .suffix;
+                }
+                if (tok == .UpperIdent) {
+                    const start = self.pos;
+                    const qual_result = try self.readQualificationChain();
+                    self.pos = qual_result.final_token + 1;
+                    const expr = if (qual_result.is_upper)
+                        try self.store.addExpr(.{ .tag = .{
+                            .token = qual_result.final_token,
+                            .qualifiers = qual_result.qualifiers,
+                            .region = .{ .start = start, .end = self.pos },
+                        } })
+                    else
+                        try self.store.addExpr(.{ .ident = .{
+                            .token = qual_result.final_token,
+                            .qualifiers = qual_result.qualifiers,
+                            .region = .{ .start = start, .end = self.pos },
+                        } });
+                    expr_finish_state = .{ .start = start, .min_bp = expr_state.min_bp, .expr = expr };
+                    continue :expr_kernel .suffix;
+                }
+                if (tok == .OpenSquare) {
+                    const start = self.pos;
+                    self.advance();
+                    try expr_collections.enter(open_allocator, .{
+                        .start = start,
+                        .min_bp = expr_state.min_bp,
+                        .scratch_top = self.store.scratchExprTop(),
+                        .end_token = .CloseSquare,
+                        .result = .list,
+                        .close_error = .expected_expr_close_square_or_comma,
+                    });
+                    continue :expr_kernel .collection_next;
+                }
+                if (tok == .NoSpaceOpenRound or tok == .OpenRound) {
+                    const start = self.pos;
+                    self.advance();
+                    try expr_collections.enter(open_allocator, .{
+                        .start = start,
+                        .min_bp = expr_state.min_bp,
+                        .scratch_top = self.store.scratchExprTop(),
+                        .end_token = .CloseRound,
+                        .result = .tuple,
+                        .close_error = .expected_expr_close_round_or_comma,
+                    });
+                    continue :expr_kernel .collection_next;
+                }
+                if (tok == .OpenCurly) {
+                    const start = self.pos;
+                    self.advance();
+
+                    if (self.peek() == .CloseCurly) {
+                        expr_record_state = .{
+                            .start = start,
+                            .min_bp = expr_state.min_bp,
+                            .scratch_top = self.store.scratchRecordFieldTop(),
+                            .ext = null,
+                        };
+                        continue :expr_kernel .record_finish;
+                    } else if (self.peek() == .DoubleDot) {
+                        self.advance();
+                        try open_syntax.pushExpr(open_allocator, .expr_record_ext, ExprRecordExtState, .{
+                            .start = start,
+                            .min_bp = expr_state.min_bp,
+                        });
+                        expr_state = .{ .start = self.pos, .min_bp = 0 };
+                        continue :expr_kernel .prefix;
+                    } else if (self.peek() == .LowerIdent and (self.peekNext() == .Comma or self.peekNext() == .OpColon)) {
+                        var is_block = false;
+                        if (self.peekNext() == .OpColon) {
+                            var lookahead_pos = self.pos + 2;
+                            var depth: u32 = 0;
+                            while (lookahead_pos < self.tok_buf.tokens.len) {
+                                const lookahead_tag = self.tok_buf.tokens.items(.tag)[lookahead_pos];
+                                switch (lookahead_tag) {
+                                    .OpenRound, .NoSpaceOpenRound, .OpenSquare, .OpenCurly => depth += 1,
+                                    .CloseRound, .CloseSquare, .CloseCurly => {
+                                        if (depth == 0) break;
+                                        depth -= 1;
+                                    },
+                                    .LowerIdent => if (depth == 0 and lookahead_pos + 1 < self.tok_buf.tokens.len and self.tok_buf.tokens.items(.tag)[lookahead_pos + 1] == .OpAssign) {
+                                        is_block = true;
+                                        break;
+                                    },
+                                    .EndOfFile => break,
+                                    else => {},
+                                }
+                                lookahead_pos += 1;
+                            }
+                        }
+                        if (is_block) {
+                            const previous_type_path_visible_start = self.type_path_stack_visible_start;
+                            self.type_path_stack_visible_start = self.type_path_stack.items.len;
+                            const block_scope = try self.enterDeclScope(.block, .none, .{ .start = start, .end = start });
+                            try expr_blocks.enter(open_allocator, .{
+                                .start = start,
+                                .min_bp = expr_state.min_bp,
+                                .scope = block_scope,
+                                .scratch_top = self.store.scratchStatementTop(),
+                                .previous_type_path_visible_start = previous_type_path_visible_start,
+                            });
+                            continue :expr_kernel .block_next;
+                        }
+                        expr_record_state = .{
+                            .start = start,
+                            .min_bp = expr_state.min_bp,
+                            .scratch_top = self.store.scratchRecordFieldTop(),
+                            .ext = null,
+                        };
+                        continue :expr_kernel .record_fields_next;
+                    } else {
+                        const previous_type_path_visible_start = self.type_path_stack_visible_start;
+                        self.type_path_stack_visible_start = self.type_path_stack.items.len;
+                        const block_scope = try self.enterDeclScope(.block, .none, .{ .start = start, .end = start });
+                        try expr_blocks.enter(open_allocator, .{
+                            .start = start,
+                            .min_bp = expr_state.min_bp,
+                            .scope = block_scope,
+                            .scratch_top = self.store.scratchStatementTop(),
+                            .previous_type_path_visible_start = previous_type_path_visible_start,
+                        });
+                        continue :expr_kernel .block_next;
+                    }
+                }
+            } else if (tok_int < @intFromEnum(Token.Tag.KwApp)) {
+                if (tok == .OpUnaryMinus or tok == .OpBang) {
+                    const start = self.pos;
+                    const operator_token = start;
+                    self.advance();
+                    try open_syntax.pushExpr(open_allocator, .expr_unary, ExprAfterUnaryState, .{ .start = start, .min_bp = expr_state.min_bp, .operator = operator_token });
+                    expr_state = .{ .start = self.pos, .min_bp = 100 };
+                    continue :expr_kernel .prefix;
+                }
+                if (tok == .OpBar) {
+                    const start = self.pos;
+                    self.advance();
+                    const lambda_args_state = ExprLambdaArgsState{
+                        .start = start,
+                        .min_bp = expr_state.min_bp,
+                        .scratch_top = self.store.scratchPatternTop(),
+                    };
+                    if (self.peek() == .OpBar) {
+                        self.advance();
+                        const args = try self.store.patternSpanFrom(lambda_args_state.scratch_top);
+                        try expr_lambda_body_stack.enter(open_allocator, .{
+                            .start = lambda_args_state.start,
+                            .min_bp = lambda_args_state.min_bp,
+                            .args = args,
+                        });
+                        try open_syntax.pushExprMarker(open_allocator, .expr_lambda_body);
+                        expr_state = .{ .start = self.pos, .min_bp = 0 };
+                        continue :expr_kernel .prefix;
+                    }
+                    try open_syntax.pushPattern(open_allocator, .expr_lambda_args, ExprLambdaArgsState, lambda_args_state);
+                    pattern_root_state = .{
+                        .outer_start = self.pos,
+                        .scratch_top = self.store.scratchPatternTop(),
+                        .alternatives = .alternatives_forbidden,
+                    };
+                    continue :expr_kernel .pattern_root_next;
+                }
+                if (tok == .TripleDot) {
+                    const start = self.pos;
+                    const expr = try self.store.addExpr(.{ .ellipsis = .{
+                        .region = .{ .start = start, .end = self.pos },
+                    } });
+                    self.advance();
+                    expr_finish_state = .{ .start = start, .min_bp = expr_state.min_bp, .expr = expr };
+                    continue :expr_kernel .suffix;
+                }
+            } else {
+                if (tok == .KwIf) {
+                    const start = self.pos;
+                    self.advance();
+                    try open_syntax.pushExpr(open_allocator, .expr_if, ExprAfterExprState, .{ .start = start, .min_bp = expr_state.min_bp });
+                    expr_state = .{ .start = self.pos, .min_bp = 0 };
+                    continue :expr_kernel .prefix;
+                }
+                if (tok == .KwMatch) {
+                    const start = self.pos;
+                    self.advance();
+                    try open_syntax.pushExpr(open_allocator, .expr_match, ExprAfterExprState, .{ .start = start, .min_bp = expr_state.min_bp });
+                    expr_state = .{ .start = self.pos, .min_bp = 0 };
+                    continue :expr_kernel .prefix;
+                }
+                if (tok == .KwDbg) {
+                    const start = self.pos;
+                    self.advance();
+                    try open_syntax.pushExpr(open_allocator, .expr_dbg, ExprAfterExprState, .{ .start = start, .min_bp = expr_state.min_bp });
+                    expr_state = .{ .start = self.pos, .min_bp = 0 };
+                    continue :expr_kernel .prefix;
+                }
+                if (tok == .KwFor) {
+                    const start = self.pos;
+                    self.advance();
+                    try open_syntax.pushPattern(open_allocator, .expr_for_pattern, ExprAfterExprState, .{
+                        .start = start,
+                        .min_bp = expr_state.min_bp,
+                    });
+                    pattern_root_state = .{
+                        .outer_start = self.pos,
+                        .scratch_top = self.store.scratchPatternTop(),
+                        .alternatives = .alternatives_forbidden,
+                    };
+                    continue :expr_kernel .pattern_root_next;
+                }
+                if (tok == .KwReturn) {
+                    const start = self.pos;
+                    const expr = try self.pushMalformed(AST.Expr.Idx, .return_outside_function, start);
+                    expr_finish_state = .{ .start = start, .min_bp = expr_state.min_bp, .expr = expr };
+                    continue :expr_kernel .suffix;
+                }
+            }
+
+            const unexpected = self.peek();
+            const expr = try self.pushMalformed(AST.Expr.Idx, .expr_unexpected_token, self.pos);
+            switch (unexpected) {
+                .Comma, .CloseRound, .CloseSquare, .CloseCurly, .CloseStringInterpolation, .StringEnd, .EndOfFile, .KwElse, .OpArrow, .OpFatArrow => {
+                    expr_finish_state = .{ .start = expr_state.start, .min_bp = expr_state.min_bp, .expr = expr };
+                },
+                .NoSpaceDotLowerIdent, .NoSpaceDotUpperIdent => {
+                    var previous_pos = if (self.pos > 0) self.pos - 1 else self.pos;
+                    while (previous_pos > 0) {
+                        switch (self.tok_buf.tokens.items(.tag)[previous_pos]) {
+                            .NoSpaceDotLowerIdent, .NoSpaceDotUpperIdent, .DotLowerIdent, .DotUpperIdent => previous_pos -= 1,
+                            else => break,
+                        }
+                    }
+                    const previous_tag = self.tok_buf.tokens.items(.tag)[previous_pos];
+                    const recovery_expr = switch (previous_tag) {
+                        .LowerIdent, .NamedUnderscore, .NoSpaceDotLowerIdent, .DotLowerIdent => blk: {
+                            const empty_qualifiers = try self.store.tokenSpanFrom(self.store.scratchTokenTop());
+                            break :blk try self.store.addExpr(.{ .ident = .{
+                                .token = previous_pos,
+                                .qualifiers = empty_qualifiers,
+                                .region = .{ .start = previous_pos, .end = previous_pos + 1 },
+                            } });
+                        },
+                        .UpperIdent, .NoSpaceDotUpperIdent, .DotUpperIdent => blk: {
+                            const empty_qualifiers = try self.store.tokenSpanFrom(self.store.scratchTokenTop());
+                            break :blk try self.store.addExpr(.{ .tag = .{
+                                .token = previous_pos,
+                                .qualifiers = empty_qualifiers,
+                                .region = .{ .start = previous_pos, .end = previous_pos + 1 },
+                            } });
+                        },
+                        else => expr,
+                    };
+                    while (self.peek() == .NoSpaceDotLowerIdent or self.peek() == .NoSpaceDotUpperIdent) {
+                        self.advance();
+                    }
+                    expr_finish_state = .{ .start = previous_pos, .min_bp = expr_state.min_bp, .expr = recovery_expr };
+                },
+                .OpAnd, .OpOr, .NoSpaceDotInt, .MalformedNoSpaceDotUnicodeIdent => {
+                    if (self.peek() == .EndOfFile) {
+                        expr_finish_state = .{ .start = expr_state.start, .min_bp = expr_state.min_bp, .expr = expr };
+                    } else {
+                        self.advance();
+                        expr_finish_state = .{ .start = expr_state.start, .min_bp = expr_state.min_bp, .expr = expr };
                     }
                 },
-                .Float => {
+                else => {
+                    expr_finish_state = .{ .start = expr_state.start, .min_bp = expr_state.min_bp, .expr = expr };
+                },
+            }
+            continue :expr_kernel .suffix;
+        },
+        .suffix => {
+            const tok = self.peek();
+            const tok_int = @intFromEnum(tok);
+
+            if (tok_int < @intFromEnum(Token.Tag.OpenRound)) {
+                if (tok == .NoSpaceDotInt or tok == .DotInt) {
+                    const elem_token = self.pos;
+                    self.advance();
+                    expr_finish_state.expr = try self.store.addExpr(.{ .tuple_access = .{
+                        .expr = expr_finish_state.expr,
+                        .elem_token = elem_token,
+                        .region = .{ .start = expr_finish_state.start, .end = self.pos },
+                    } });
+                    continue :expr_kernel .suffix;
+                }
+                if (tok == .NoSpaceDotLowerIdent or tok == .DotLowerIdent) {
+                    const s = self.pos;
+                    self.advance();
+                    const empty_qualifiers = try self.store.tokenSpanFrom(self.store.scratchTokenTop());
+                    const ident = try self.store.addExpr(.{ .ident = .{
+                        .region = .{ .start = s, .end = self.pos },
+                        .token = s,
+                        .qualifiers = empty_qualifiers,
+                    } });
+                    if (self.peek() == .NoSpaceOpenRound) {
+                        self.advance();
+                        try expr_collections.enter(open_allocator, .{
+                            .start = s,
+                            .min_bp = null,
+                            .scratch_top = self.store.scratchExprTop(),
+                            .end_token = .CloseRound,
+                            .result = .{ .method_apply = .{
+                                .start = expr_finish_state.start,
+                                .min_bp = expr_finish_state.min_bp,
+                                .receiver = expr_finish_state.expr,
+                                .method_token = s,
+                            } },
+                            .close_error = .expected_expr_apply_close_round,
+                        });
+                        continue :expr_kernel .collection_next;
+                    }
+                    expr_finish_state.expr = try self.store.addExpr(.{ .field_access = .{
+                        .region = .{ .start = expr_finish_state.start, .end = self.pos },
+                        .operator = expr_finish_state.start,
+                        .left = expr_finish_state.expr,
+                        .right = ident,
+                    } });
+                    continue :expr_kernel .suffix;
+                }
+            } else if (tok_int < @intFromEnum(Token.Tag.OpPlus)) {
+                if (tok == .NoSpaceOpenRound) {
+                    self.advance();
+                    try expr_collections.enter(open_allocator, .{
+                        .start = expr_finish_state.start,
+                        .min_bp = null,
+                        .scratch_top = self.store.scratchExprTop(),
+                        .end_token = .CloseRound,
+                        .result = .{ .apply = .{
+                            .start = expr_finish_state.start,
+                            .min_bp = expr_finish_state.min_bp,
+                            .function = expr_finish_state.expr,
+                        } },
+                        .close_error = .expected_expr_apply_close_round,
+                    });
+                    continue :expr_kernel .collection_next;
+                }
+            } else if (tok_int <= @intFromEnum(Token.Tag.OpEquals)) {
+                const bp = getTokenBPInRange(tok);
+                if (bp.left == 0) {
+                    last_expr = expr_finish_state.expr;
+                    continue :expr_kernel .complete;
+                }
+                if ((tok == .OpAnd or tok == .OpOr) and self.store.getExpr(expr_finish_state.expr) == .malformed) {
+                    last_expr = expr_finish_state.expr;
+                    continue :expr_kernel .complete;
+                }
+                if (bp.left >= expr_finish_state.min_bp) {
+                    const op_pos = self.pos;
+                    self.advance();
+                    try expr_binary_rhs_stack.enter(open_allocator, .{
+                        .start = expr_finish_state.start,
+                        .min_bp = expr_finish_state.min_bp,
+                        .left = expr_finish_state.expr,
+                        .operator = op_pos,
+                    });
+                    try open_syntax.pushExprMarker(open_allocator, .expr_binary_rhs);
+                    expr_state = .{ .start = self.pos, .min_bp = bp.right };
+                    continue :expr_kernel .prefix;
+                }
+                last_expr = expr_finish_state.expr;
+                continue :expr_kernel .complete;
+            } else if (tok_int < @intFromEnum(Token.Tag.NoSpaceOpQuestion)) {
+                // Not an expression suffix.
+            } else if (tok == .NoSpaceOpQuestion) {
+                self.advance();
+                expr_finish_state.expr = try self.store.addExpr(.{ .suffix_single_question = .{
+                    .expr = expr_finish_state.expr,
+                    .operator = expr_finish_state.start,
+                    .region = .{ .start = expr_finish_state.start, .end = self.pos },
+                } });
+                continue :expr_kernel .suffix;
+            } else if (tok_int < @intFromEnum(Token.Tag.OpArrow)) {
+                // Not an expression suffix.
+            } else if (tok_int <= @intFromEnum(Token.Tag.OpFatArrow)) {
+                if (expr_match_guard_depth != 0) {
+                    last_expr = expr_finish_state.expr;
+                    continue :expr_kernel .complete;
+                }
+                const op_pos = self.pos;
+                self.advance();
+                const first_token_tag = self.peek();
+                if (first_token_tag == .LowerIdent or first_token_tag == .UpperIdent) {
+                    const ident_start = self.pos;
+                    const qual_result = try self.readQualificationChain();
+                    self.pos = qual_result.final_token + 1;
+                    const is_tag = if (qual_result.qualifiers.span.len == 0)
+                        first_token_tag == .UpperIdent
+                    else
+                        qual_result.is_upper;
+                    const rhs = if (is_tag)
+                        try self.store.addExpr(.{ .tag = .{
+                            .region = .{ .start = ident_start, .end = self.pos },
+                            .token = qual_result.final_token,
+                            .qualifiers = qual_result.qualifiers,
+                        } })
+                    else
+                        try self.store.addExpr(.{ .ident = .{
+                            .region = .{ .start = ident_start, .end = self.pos },
+                            .token = qual_result.final_token,
+                            .qualifiers = qual_result.qualifiers,
+                        } });
+                    expr_arrow_app_state = .{
+                        .start = expr_finish_state.start,
+                        .min_bp = expr_finish_state.min_bp,
+                        .left = expr_finish_state.expr,
+                        .operator = op_pos,
+                        .rhs = rhs,
+                    };
+                    continue :expr_kernel .arrow_app_next;
+                } else if (first_token_tag == .OpenRound or first_token_tag == .NoSpaceOpenRound) {
+                    self.advance();
+                    try open_syntax.pushExpr(open_allocator, .expr_arrow_inner, ExprArrowAfterInnerState, .{
+                        .start = expr_finish_state.start,
+                        .min_bp = expr_finish_state.min_bp,
+                        .left = expr_finish_state.expr,
+                        .operator = op_pos,
+                    });
+                    expr_state = .{ .start = self.pos, .min_bp = 0 };
+                    continue :expr_kernel .prefix;
+                } else {
+                    const expr = try self.pushMalformed(AST.Expr.Idx, .expr_arrow_expects_ident, self.pos);
+                    expr_finish_state = .{ .start = expr_finish_state.start, .min_bp = expr_finish_state.min_bp, .expr = expr };
+                    continue :expr_kernel .suffix;
+                }
+            }
+
+            last_expr = expr_finish_state.expr;
+            continue :expr_kernel .complete;
+        },
+        .complete => {
+            const completed = last_expr orelse unreachable;
+            if (open_syntax.peekExpr()) |kind| {
+                switch (kind) {
+                    .expr_collection_item => {
+                        open_syntax.popExprMarker(.expr_collection_item);
+                        last_expr = null;
+                        try self.store.addScratchExpr(completed);
+                        if (self.peek() == .Comma) {
+                            self.advance();
+                        }
+                        continue :expr_kernel .collection_next;
+                    },
+                    .expr_binary_rhs => {
+                        open_syntax.popExprMarker(.expr_binary_rhs);
+                        const state = expr_binary_rhs_stack.leave();
+                        last_expr = null;
+                        const expr = try self.store.addExpr(.{ .bin_op = .{
+                            .left = state.left,
+                            .right = completed,
+                            .operator = state.operator,
+                            .region = .{ .start = state.start, .end = self.pos },
+                        } });
+                        expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
+                        continue :expr_kernel .suffix;
+                    },
+                    .expr_unary => {
+                        const state = open_syntax.popExprPayload(.expr_unary, ExprAfterUnaryState);
+                        last_expr = null;
+                        const expr = try self.store.addExpr(.{ .unary_op = .{
+                            .operator = state.operator,
+                            .expr = completed,
+                            .region = .{ .start = state.start, .end = self.pos },
+                        } });
+                        expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
+                        continue :expr_kernel .suffix;
+                    },
+                    .expr_arrow_inner => {
+                        const state = open_syntax.popExprPayload(.expr_arrow_inner, ExprArrowAfterInnerState);
+                        last_expr = null;
+                        if (self.peek() != .CloseRound) {
+                            const expr = try self.pushMalformed(AST.Expr.Idx, .expected_expr_apply_close_round, self.pos);
+                            expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
+                            continue :expr_kernel .suffix;
+                        }
+                        self.advance();
+                        expr_arrow_app_state = .{
+                            .start = state.start,
+                            .min_bp = state.min_bp,
+                            .left = state.left,
+                            .operator = state.operator,
+                            .rhs = completed,
+                        };
+                        continue :expr_kernel .arrow_app_next;
+                    },
+                    .expr_record_ext => {
+                        const state = open_syntax.popExprPayload(.expr_record_ext, ExprRecordExtState);
+                        last_expr = null;
+                        if (self.peek() != .Comma) {
+                            const expr = try self.pushMalformed(AST.Expr.Idx, .expected_expr_comma, self.pos);
+                            expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
+                            continue :expr_kernel .suffix;
+                        }
+                        self.advance();
+                        expr_record_state = .{
+                            .start = state.start,
+                            .min_bp = state.min_bp,
+                            .scratch_top = self.store.scratchRecordFieldTop(),
+                            .ext = completed,
+                        };
+                        continue :expr_kernel .record_fields_next;
+                    },
+                    .expr_record_field => {
+                        const state = open_syntax.popExprPayload(.expr_record_field, ExprRecordFieldState);
+                        last_expr = null;
+                        const field = try self.store.addRecordField(.{
+                            .name = state.name,
+                            .value = completed,
+                            .region = .{ .start = state.field_start, .end = self.pos },
+                        });
+                        try self.store.addScratchRecordField(field);
+                        expr_record_state = .{
+                            .start = state.start,
+                            .min_bp = state.min_bp,
+                            .scratch_top = state.scratch_top,
+                            .ext = state.ext,
+                        };
+                        if (self.peek() == .Comma) {
+                            self.advance();
+                            continue :expr_kernel .record_fields_next;
+                        }
+                        if (self.peek() == .CloseCurly) {
+                            continue :expr_kernel .record_finish;
+                        }
+                        continue :expr_kernel .record_fields_next;
+                    },
+                    .expr_string => {
+                        expr_string_state = open_syntax.popExprPayload(.expr_string, ExprStringState);
+                        last_expr = null;
+                        try self.store.addScratchExpr(completed);
+                        if (self.peek() != .CloseStringInterpolation) {
+                            const expr = try self.pushMalformed(AST.Expr.Idx, .string_expected_close_interpolation, expr_string_state.start);
+                            expr_finish_state = .{ .start = expr_string_state.start, .min_bp = expr_string_state.min_bp orelse 0, .expr = expr };
+                            continue :expr_kernel .suffix;
+                        }
+                        self.advance();
+                        continue :expr_kernel .string_next;
+                    },
+                    .expr_if => {
+                        const state = open_syntax.popExprPayload(.expr_if, ExprAfterExprState);
+                        last_expr = null;
+                        try open_syntax.pushExpr(open_allocator, .expr_if_then, ExprIfAfterThenState, .{
+                            .start = state.start,
+                            .min_bp = state.min_bp,
+                            .condition = completed,
+                        });
+                        expr_state = .{ .start = self.pos, .min_bp = 0 };
+                        continue :expr_kernel .prefix;
+                    },
+                    .expr_if_then => {
+                        const state = open_syntax.popExprPayload(.expr_if_then, ExprIfAfterThenState);
+                        last_expr = null;
+                        if (self.peek() == .KwElse) {
+                            self.advance();
+                            try open_syntax.pushExpr(open_allocator, .expr_if_else, ExprIfAfterElseState, .{
+                                .start = state.start,
+                                .min_bp = state.min_bp,
+                                .condition = state.condition,
+                                .then = completed,
+                            });
+                            expr_state = .{ .start = self.pos, .min_bp = 0 };
+                            continue :expr_kernel .prefix;
+                        }
+                        const expr = try self.store.addExpr(.{ .if_without_else = .{
+                            .region = .{ .start = state.start, .end = self.pos },
+                            .condition = state.condition,
+                            .then = completed,
+                        } });
+                        expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
+                        continue :expr_kernel .suffix;
+                    },
+                    .expr_if_else => {
+                        const state = open_syntax.popExprPayload(.expr_if_else, ExprIfAfterElseState);
+                        last_expr = null;
+                        const expr = try self.store.addExpr(.{ .if_then_else = .{
+                            .region = .{ .start = state.start, .end = self.pos },
+                            .condition = state.condition,
+                            .then = state.then,
+                            .@"else" = completed,
+                        } });
+                        expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
+                        continue :expr_kernel .suffix;
+                    },
+                    .expr_match => {
+                        const state = open_syntax.popExprPayload(.expr_match, ExprAfterExprState);
+                        last_expr = null;
+                        if (self.peek() == .OpenCurly) {
+                            self.advance();
+                            expr_match_branch_state = .{
+                                .start = state.start,
+                                .min_bp = state.min_bp,
+                                .matched = completed,
+                                .scratch_top = self.store.scratchMatchBranchTop(),
+                            };
+                            continue :expr_kernel .match_branch_next;
+                        }
+                        const expr = try self.pushMalformed(AST.Expr.Idx, .expected_open_curly_after_match, self.pos);
+                        expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
+                        continue :expr_kernel .suffix;
+                    },
+                    .expr_match_guard => {
+                        const state = open_syntax.popExprPayload(.expr_match_guard, ExprMatchBranchAfterGuardState);
+                        expr_match_guard_depth -= 1;
+                        last_expr = null;
+                        if (self.peek() == .OpArrow) {
+                            try self.pushDiagnostic(.match_branch_wrong_arrow, .{ .start = self.pos, .end = self.pos });
+                        }
+                        if (self.peek() == .OpFatArrow or self.peek() == .OpArrow) {
+                            self.advance();
+                        } else {
+                            try self.pushDiagnostic(.match_branch_missing_arrow, .{ .start = self.pos, .end = self.pos });
+                        }
+                        try open_syntax.pushExpr(open_allocator, .expr_match_body, ExprMatchBranchAfterBodyState, .{
+                            .match_start = state.match_start,
+                            .min_bp = state.min_bp,
+                            .matched = state.matched,
+                            .scratch_top = state.scratch_top,
+                            .branch_start = state.branch_start,
+                            .pattern = state.pattern,
+                            .guard = completed,
+                        });
+                        expr_state = .{ .start = self.pos, .min_bp = 0 };
+                        continue :expr_kernel .prefix;
+                    },
+                    .expr_match_body => {
+                        const state = open_syntax.popExprPayload(.expr_match_body, ExprMatchBranchAfterBodyState);
+                        last_expr = null;
+                        const branch = try self.store.addMatchBranch(.{
+                            .region = .{ .start = state.branch_start, .end = self.pos },
+                            .pattern = state.pattern,
+                            .body = completed,
+                            .guard = state.guard,
+                        });
+                        try self.store.addScratchMatchBranch(branch);
+                        if (self.peek() == .Comma) {
+                            self.advance();
+                        }
+                        expr_match_branch_state = .{
+                            .start = state.match_start,
+                            .min_bp = state.min_bp,
+                            .matched = state.matched,
+                            .scratch_top = state.scratch_top,
+                        };
+                        continue :expr_kernel .match_branch_next;
+                    },
+                    .expr_dbg => {
+                        const state = open_syntax.popExprPayload(.expr_dbg, ExprAfterExprState);
+                        last_expr = null;
+                        const expr = try self.store.addExpr(.{ .dbg = .{
+                            .region = .{ .start = state.start, .end = self.pos },
+                            .expr = completed,
+                        } });
+                        expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
+                        continue :expr_kernel .suffix;
+                    },
+                    .expr_for_list => {
+                        const state = open_syntax.popExprPayload(.expr_for_list, ExprForAfterListState);
+                        last_expr = null;
+                        try open_syntax.pushExpr(open_allocator, .expr_for_body, ExprForAfterBodyState, .{
+                            .start = state.start,
+                            .min_bp = state.min_bp,
+                            .pattern = state.pattern,
+                            .list_expr = completed,
+                        });
+                        expr_state = .{ .start = self.pos, .min_bp = 0 };
+                        continue :expr_kernel .prefix;
+                    },
+                    .expr_for_body => {
+                        const state = open_syntax.popExprPayload(.expr_for_body, ExprForAfterBodyState);
+                        last_expr = null;
+                        const expr = try self.store.addExpr(.{ .for_expr = .{
+                            .region = .{ .start = state.start, .end = self.pos },
+                            .patt = state.pattern,
+                            .expr = state.list_expr,
+                            .body = completed,
+                        } });
+                        expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
+                        continue :expr_kernel .suffix;
+                    },
+                    .expr_lambda_body => {
+                        open_syntax.popExprMarker(.expr_lambda_body);
+                        const state = expr_lambda_body_stack.leave();
+                        last_expr = null;
+                        const expr = try self.store.addExpr(.{ .lambda = .{
+                            .body = completed,
+                            .args = state.args,
+                            .region = .{ .start = state.start, .end = self.pos },
+                        } });
+                        expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
+                        continue :expr_kernel .suffix;
+                    },
+                    .statement_expr_body => {
+                        const start = open_syntax.popExprPayload(.statement_expr_body, Token.Idx);
+                        last_expr = null;
+                        last_statement = try self.addStatement(.{ .expr = .{
+                            .expr = completed,
+                            .region = .{ .start = start, .end = self.pos },
+                        } });
+                        continue :expr_kernel .statement_complete;
+                    },
+                    .statement_decl_body => {
+                        const state = open_syntax.popExprPayload(.statement_decl_body, StatementDeclBodyState);
+                        last_expr = null;
+                        last_statement = try self.addDeclStatement(state.pattern, completed, .{ .start = state.start, .end = self.pos });
+                        continue :expr_kernel .statement_complete;
+                    },
+                    .statement_var_body => {
+                        const state = open_syntax.popExprPayload(.statement_var_body, StatementVarBodyState);
+                        last_expr = null;
+                        last_statement = try self.addStatement(.{ .@"var" = .{
+                            .name = state.name,
+                            .body = completed,
+                            .region = .{ .start = state.start, .end = self.pos },
+                        } });
+                        continue :expr_kernel .statement_complete;
+                    },
+                    .statement_expect_body => {
+                        const start = open_syntax.popExprPayload(.statement_expect_body, Token.Idx);
+                        last_expr = null;
+                        last_statement = try self.addStatement(.{ .expect = .{
+                            .body = completed,
+                            .region = .{ .start = start, .end = self.pos },
+                        } });
+                        continue :expr_kernel .statement_complete;
+                    },
+                    .statement_for_expr => {
+                        const state = open_syntax.popExprPayload(.statement_for_expr, StatementForExprState);
+                        last_expr = null;
+                        try open_syntax.pushExpr(open_allocator, .statement_for_body, StatementForBodyState, .{
+                            .start = state.start,
+                            .patt = state.patt,
+                            .expr = completed,
+                        });
+                        expr_state = .{ .start = self.pos, .min_bp = 0 };
+                        continue :expr_kernel .prefix;
+                    },
+                    .statement_for_body => {
+                        const state = open_syntax.popExprPayload(.statement_for_body, StatementForBodyState);
+                        last_expr = null;
+                        last_statement = try self.addStatement(.{ .@"for" = .{
+                            .region = .{ .start = state.start, .end = self.pos },
+                            .patt = state.patt,
+                            .expr = state.expr,
+                            .body = completed,
+                        } });
+                        continue :expr_kernel .statement_complete;
+                    },
+                    .statement_while_cond => {
+                        const start = open_syntax.popExprPayload(.statement_while_cond, Token.Idx);
+                        last_expr = null;
+                        try open_syntax.pushExpr(open_allocator, .statement_while_body, StatementWhileBodyState, .{
+                            .start = start,
+                            .cond = completed,
+                        });
+                        expr_state = .{ .start = self.pos, .min_bp = 0 };
+                        continue :expr_kernel .prefix;
+                    },
+                    .statement_while_body => {
+                        const state = open_syntax.popExprPayload(.statement_while_body, StatementWhileBodyState);
+                        last_expr = null;
+                        last_statement = try self.addStatement(.{ .@"while" = .{
+                            .region = .{ .start = state.start, .end = self.pos },
+                            .cond = state.cond,
+                            .body = completed,
+                        } });
+                        continue :expr_kernel .statement_complete;
+                    },
+                    .statement_crash_body => {
+                        const start = open_syntax.popExprPayload(.statement_crash_body, Token.Idx);
+                        last_expr = null;
+                        last_statement = try self.addStatement(.{ .crash = .{
+                            .expr = completed,
+                            .region = .{ .start = start, .end = self.pos },
+                        } });
+                        continue :expr_kernel .statement_complete;
+                    },
+                    .statement_dbg_body => {
+                        const start = open_syntax.popExprPayload(.statement_dbg_body, Token.Idx);
+                        last_expr = null;
+                        last_statement = try self.addStatement(.{ .dbg = .{
+                            .expr = completed,
+                            .region = .{ .start = start, .end = self.pos },
+                        } });
+                        continue :expr_kernel .statement_complete;
+                    },
+                    .statement_return_body => {
+                        const start = open_syntax.popExprPayload(.statement_return_body, Token.Idx);
+                        last_expr = null;
+                        last_statement = try self.addStatement(.{ .@"return" = .{
+                            .expr = completed,
+                            .region = .{ .start = start, .end = self.pos },
+                        } });
+                        continue :expr_kernel .statement_complete;
+                    },
+                    .pattern_string => {
+                        pattern_string_state = open_syntax.popExprPayload(.pattern_string, PatternStringState);
+                        last_expr = null;
+                        last_pattern = try self.store.addPattern(.{ .string = .{
+                            .string_tok = pattern_string_state.start,
+                            .region = .{ .start = pattern_string_state.start, .end = self.pos },
+                            .expr = completed,
+                        } });
+                        continue :expr_kernel .pattern_complete;
+                    },
+                }
+            }
+            if (root == .expr) {
+                return completed;
+            }
+            if (root == .pattern) {
+                unreachable;
+            }
+            unreachable;
+        },
+        .arrow_app_next => switch (self.peek()) {
+            .NoSpaceOpenRound => {
+                self.advance();
+                try expr_collections.enter(open_allocator, .{
+                    .start = expr_arrow_app_state.operator,
+                    .min_bp = null,
+                    .scratch_top = self.store.scratchExprTop(),
+                    .end_token = .CloseRound,
+                    .result = .{ .arrow_apply = .{
+                        .start = expr_arrow_app_state.start,
+                        .min_bp = expr_arrow_app_state.min_bp,
+                        .left = expr_arrow_app_state.left,
+                        .operator = expr_arrow_app_state.operator,
+                        .function = expr_arrow_app_state.rhs,
+                    } },
+                    .close_error = .expected_expr_apply_close_round,
+                });
+                continue :expr_kernel .collection_next;
+            },
+            else => {
+                const expr = try self.store.addExpr(.{ .arrow_call = .{
+                    .region = .{ .start = expr_arrow_app_state.start, .end = self.pos },
+                    .operator = expr_arrow_app_state.operator,
+                    .left = expr_arrow_app_state.left,
+                    .right = expr_arrow_app_state.rhs,
+                } });
+                expr_finish_state = .{ .start = expr_arrow_app_state.start, .min_bp = expr_arrow_app_state.min_bp, .expr = expr };
+                continue :expr_kernel .suffix;
+            },
+        },
+        .collection_next => switch (self.peek()) {
+            .CloseRound, .CloseSquare => {
+                const active_collection = expr_collections.active();
+                if (self.peek() == active_collection.end_token) {
+                    self.advance();
+                    const state = expr_collections.leave();
+                    const span = try self.store.exprSpanFrom(state.scratch_top);
+                    switch (state.result) {
+                        .list => {
+                            const expr = try self.store.addExpr(.{ .list = .{ .items = span, .region = .{ .start = state.start, .end = self.pos } } });
+                            expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp orelse 0, .expr = expr };
+                            continue :expr_kernel .suffix;
+                        },
+                        .tuple => {
+                            const expr = try self.store.addExpr(.{ .tuple = .{ .items = span, .region = .{ .start = state.start, .end = self.pos } } });
+                            expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp orelse unreachable, .expr = expr };
+                            continue :expr_kernel .suffix;
+                        },
+                        .apply => |apply_state| {
+                            const expr = try self.store.addExpr(.{ .apply = .{
+                                .args = span,
+                                .@"fn" = apply_state.function,
+                                .region = .{ .start = apply_state.start, .end = self.pos },
+                            } });
+                            expr_finish_state = .{ .start = apply_state.start, .min_bp = apply_state.min_bp, .expr = expr };
+                            continue :expr_kernel .suffix;
+                        },
+                        .method_apply => |method_state| {
+                            const expr = try self.store.addExpr(.{ .method_call = .{
+                                .receiver = method_state.receiver,
+                                .method_token = method_state.method_token,
+                                .args = span,
+                                .region = .{ .start = method_state.start, .end = self.pos },
+                            } });
+                            expr_finish_state = .{ .start = method_state.start, .min_bp = method_state.min_bp, .expr = expr };
+                            continue :expr_kernel .suffix;
+                        },
+                        .arrow_apply => |arrow_state| {
+                            const rhs = try self.store.addExpr(.{ .apply = .{
+                                .args = span,
+                                .@"fn" = arrow_state.function,
+                                .region = .{ .start = arrow_state.operator, .end = self.pos },
+                            } });
+                            expr_arrow_app_state = .{
+                                .start = arrow_state.start,
+                                .min_bp = arrow_state.min_bp,
+                                .left = arrow_state.left,
+                                .operator = arrow_state.operator,
+                                .rhs = rhs,
+                            };
+                            continue :expr_kernel .arrow_app_next;
+                        },
+                    }
+                }
+                const state = expr_collections.leave();
+                const expr = try self.pushMalformed(AST.Expr.Idx, state.close_error, self.pos);
+                expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp orelse 0, .expr = expr };
+                continue :expr_kernel .suffix;
+            },
+            .EndOfFile => {
+                const state = expr_collections.leave();
+                self.store.clearScratchExprsFrom(state.scratch_top);
+                const expr = try self.pushMalformed(AST.Expr.Idx, state.close_error, self.pos);
+                expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp orelse 0, .expr = expr };
+                continue :expr_kernel .suffix;
+            },
+            else => {
+                try open_syntax.pushExprMarker(open_allocator, .expr_collection_item);
+                expr_state = .{ .start = self.pos, .min_bp = 0 };
+                continue :expr_kernel .prefix;
+            },
+        },
+        .string_next => switch (self.peek()) {
+            .StringPart => {
+                const part_start = self.pos;
+                self.advance();
+                const index = try self.store.addExpr(.{ .string_part = .{
+                    .token = part_start,
+                    .region = .{ .start = part_start, .end = self.pos },
+                } });
+                try self.store.addScratchExpr(index);
+                continue :expr_kernel .string_next;
+            },
+            .MalformedStringPart, .MalformedInvalidUnicodeEscapeSequence, .MalformedInvalidEscapeSequence => {
+                self.advance();
+                continue :expr_kernel .string_next;
+            },
+            .StringEnd => {
+                if (expr_string_state.multiline) {
+                    const expr = try self.pushMalformed(AST.Expr.Idx, .string_unexpected_token, self.pos);
+                    expr_finish_state = .{ .start = expr_string_state.start, .min_bp = expr_string_state.min_bp orelse 0, .expr = expr };
+                    continue :expr_kernel .suffix;
+                }
+                self.advance();
+                const parts = try self.store.exprSpanFrom(expr_string_state.scratch_top);
+                const expr = try self.store.addExpr(.{ .string = .{
+                    .token = expr_string_state.start,
+                    .parts = parts,
+                    .region = .{ .start = expr_string_state.start, .end = self.pos },
+                } });
+                if (expr_string_state.min_bp) |bp| {
+                    expr_finish_state = .{ .start = expr_string_state.start, .min_bp = bp, .expr = expr };
+                    continue :expr_kernel .suffix;
+                }
+                last_expr = expr;
+                continue :expr_kernel .complete;
+            },
+            .MultilineStringStart => {
+                if (!expr_string_state.multiline) {
+                    const expr = try self.pushMalformed(AST.Expr.Idx, .string_unexpected_token, self.pos);
+                    expr_finish_state = .{ .start = expr_string_state.start, .min_bp = expr_string_state.min_bp orelse 0, .expr = expr };
+                    continue :expr_kernel .suffix;
+                }
+                self.advance();
+                continue :expr_kernel .string_next;
+            },
+            .OpenStringInterpolation => {
+                self.advance();
+                try open_syntax.pushExpr(open_allocator, .expr_string, ExprStringState, expr_string_state);
+                expr_state = .{ .start = self.pos, .min_bp = 0 };
+                continue :expr_kernel .prefix;
+            },
+            .EndOfFile => {
+                if (!expr_string_state.multiline) {
+                    try self.pushDiagnostic(.string_unclosed, .{ .start = self.pos, .end = self.pos });
+                }
+                const parts = try self.store.exprSpanFrom(expr_string_state.scratch_top);
+                const expr = if (expr_string_state.multiline)
+                    try self.store.addExpr(.{ .multiline_string = .{
+                        .token = expr_string_state.start,
+                        .parts = parts,
+                        .region = .{ .start = expr_string_state.start, .end = self.pos },
+                    } })
+                else
+                    try self.store.addExpr(.{ .string = .{
+                        .token = expr_string_state.start,
+                        .parts = parts,
+                        .region = .{ .start = expr_string_state.start, .end = self.pos },
+                    } });
+                if (expr_string_state.min_bp) |bp| {
+                    expr_finish_state = .{ .start = expr_string_state.start, .min_bp = bp, .expr = expr };
+                    continue :expr_kernel .suffix;
+                }
+                last_expr = expr;
+                continue :expr_kernel .complete;
+            },
+            else => {
+                if (!expr_string_state.multiline) {
+                    const expr = try self.pushMalformed(AST.Expr.Idx, .string_unexpected_token, self.pos);
+                    expr_finish_state = .{ .start = expr_string_state.start, .min_bp = expr_string_state.min_bp orelse 0, .expr = expr };
+                    continue :expr_kernel .suffix;
+                }
+                const parts = try self.store.exprSpanFrom(expr_string_state.scratch_top);
+                const expr = try self.store.addExpr(.{ .multiline_string = .{
+                    .token = expr_string_state.start,
+                    .parts = parts,
+                    .region = .{ .start = expr_string_state.start, .end = self.pos },
+                } });
+                if (expr_string_state.min_bp) |bp| {
+                    expr_finish_state = .{ .start = expr_string_state.start, .min_bp = bp, .expr = expr };
+                    continue :expr_kernel .suffix;
+                }
+                last_expr = expr;
+                continue :expr_kernel .complete;
+            },
+        },
+        .record_fields_next => switch (self.peek()) {
+            .CloseCurly => continue :expr_kernel .record_finish,
+            .LowerIdent => {
+                const field_start = self.pos;
+                self.advance();
+                const name = field_start;
+                if (self.peek() == .OpColon) {
+                    self.advance();
+                    try open_syntax.pushExpr(open_allocator, .expr_record_field, ExprRecordFieldState, .{
+                        .start = expr_record_state.start,
+                        .min_bp = expr_record_state.min_bp,
+                        .scratch_top = expr_record_state.scratch_top,
+                        .ext = expr_record_state.ext,
+                        .field_start = field_start,
+                        .name = name,
+                    });
+                    expr_state = .{ .start = self.pos, .min_bp = 0 };
+                    continue :expr_kernel .prefix;
+                }
+                const field = try self.store.addRecordField(.{
+                    .name = name,
+                    .value = null,
+                    .region = .{ .start = field_start, .end = self.pos },
+                });
+                try self.store.addScratchRecordField(field);
+                if (self.peek() == .Comma) {
+                    self.advance();
+                    continue :expr_kernel .record_fields_next;
+                }
+                continue :expr_kernel .record_finish;
+            },
+            .EndOfFile => {
+                self.store.clearScratchRecordFieldsFrom(expr_record_state.scratch_top);
+                const expr = try self.pushMalformed(AST.Expr.Idx, .expected_expr_close_curly_or_comma, self.pos);
+                expr_finish_state = .{ .start = expr_record_state.start, .min_bp = expr_record_state.min_bp, .expr = expr };
+                continue :expr_kernel .suffix;
+            },
+            else => {
+                const field_start = self.pos;
+                const malformed_field = try self.pushMalformed(AST.RecordField.Idx, .expected_expr_record_field_name, field_start);
+                try self.store.addScratchRecordField(malformed_field);
+                const expr = try self.pushMalformed(AST.Expr.Idx, .expected_expr_close_curly_or_comma, self.pos);
+                expr_finish_state = .{ .start = expr_record_state.start, .min_bp = expr_record_state.min_bp, .expr = expr };
+                continue :expr_kernel .suffix;
+            },
+        },
+        .record_finish => switch (self.peek()) {
+            .CloseCurly => {
+                self.advance();
+                const fields = try self.store.recordFieldSpanFrom(expr_record_state.scratch_top);
+                const expr = try self.finishRecordExpr(expr_record_state.start, fields, expr_record_state.ext);
+                expr_finish_state = .{ .start = expr_record_state.start, .min_bp = expr_record_state.min_bp, .expr = expr };
+                continue :expr_kernel .suffix;
+            },
+            else => {
+                self.store.clearScratchRecordFieldsFrom(expr_record_state.scratch_top);
+                const expr = try self.pushMalformed(AST.Expr.Idx, .expected_expr_close_curly_or_comma, self.pos);
+                expr_finish_state = .{ .start = expr_record_state.start, .min_bp = expr_record_state.min_bp, .expr = expr };
+                continue :expr_kernel .suffix;
+            },
+        },
+        .match_branch_next => switch (self.peek()) {
+            .CloseCurly => {
+                const branches = try self.store.matchBranchSpanFrom(expr_match_branch_state.scratch_top);
+                if (branches.span.len == 0) {
+                    const expr = try self.pushMalformed(AST.Expr.Idx, .match_has_no_branches, expr_match_branch_state.start);
+                    expr_finish_state = .{ .start = expr_match_branch_state.start, .min_bp = expr_match_branch_state.min_bp, .expr = expr };
+                    continue :expr_kernel .suffix;
+                }
+                self.advance();
+                const expr = try self.store.addExpr(.{ .match = .{
+                    .region = .{ .start = expr_match_branch_state.start, .end = self.pos },
+                    .expr = expr_match_branch_state.matched,
+                    .branches = branches,
+                } });
+                expr_finish_state = .{ .start = expr_match_branch_state.start, .min_bp = expr_match_branch_state.min_bp, .expr = expr };
+                continue :expr_kernel .suffix;
+            },
+            else => {
+                if (self.peek() == .EndOfFile) {
+                    const expr = try self.pushMalformed(AST.Expr.Idx, .expected_close_curly_at_end_of_match, self.pos);
+                    expr_finish_state = .{ .start = expr_match_branch_state.start, .min_bp = expr_match_branch_state.min_bp, .expr = expr };
+                    continue :expr_kernel .suffix;
+                }
+                try open_syntax.pushPattern(open_allocator, .expr_match_pattern, ExprMatchBranchAfterPatternState, .{
+                    .match_start = expr_match_branch_state.start,
+                    .min_bp = expr_match_branch_state.min_bp,
+                    .matched = expr_match_branch_state.matched,
+                    .scratch_top = expr_match_branch_state.scratch_top,
+                    .branch_start = self.pos,
+                });
+                pattern_root_state = .{
+                    .outer_start = self.pos,
+                    .scratch_top = self.store.scratchPatternTop(),
+                    .alternatives = .alternatives_allowed,
+                };
+                continue :expr_kernel .pattern_root_next;
+            },
+        },
+        .block_next => switch (self.peek()) {
+            .CloseCurly, .EndOfFile => continue :expr_kernel .block_finish,
+            else => {
+                statement_type = .in_body;
+                continue :expr_kernel .statement_start;
+            },
+        },
+        .block_finish => switch (self.peek()) {
+            .CloseCurly, .EndOfFile => {
+                if (self.peek() == .CloseCurly) {
+                    self.advance();
+                } else {
+                    try self.pushDiagnostic(.expected_expr_close_curly, .{ .start = self.pos, .end = self.pos });
+                }
+                const state = expr_blocks.leave();
+                const block_region = AST.TokenizedRegion{ .start = state.start, .end = self.pos };
+                try self.exitDeclScope(state.scope, block_region);
+                self.type_path_stack_visible_start = state.previous_type_path_visible_start;
+                const statements = try self.store.statementSpanFrom(state.scratch_top);
+                const expr_idx = try self.store.addExpr(.{ .block = .{
+                    .statements = statements,
+                    .scope = state.scope,
+                    .region = block_region,
+                } });
+                self.decl_index.setScopeOwner(state.scope, .{ .expr = @intFromEnum(expr_idx) });
+                expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr_idx };
+                continue :expr_kernel .suffix;
+            },
+            else => unreachable,
+        },
+        .type_prefix => {
+            const tok = self.peek();
+            const tok_int = @intFromEnum(tok);
+
+            if (tok_int >= @intFromEnum(Token.Tag.UpperIdent) and tok_int < @intFromEnum(Token.Tag.OpPlus)) {
+                if (tok == .UpperIdent or tok == .LowerIdent) {
+                    const start = self.pos;
+                    const first_token_tag = self.peek();
+                    const qual_result = try self.readQualificationChain();
+                    self.pos = qual_result.final_token + 1;
+
+                    const base_anno = if (first_token_tag == .LowerIdent and qual_result.qualifiers.span.len == 0)
+                        try self.store.addTypeAnno(.{ .ty_var = .{
+                            .tok = qual_result.final_token,
+                            .region = .{ .start = qual_result.final_token, .end = self.pos },
+                        } })
+                    else blk: {
+                        const anno = try self.store.addTypeAnno(.{ .ty = .{
+                            .region = .{ .start = start, .end = self.pos },
+                            .token = qual_result.final_token,
+                            .qualifiers = qual_result.qualifiers,
+                        } });
+                        if (self.collect_type_dependencies and qual_result.is_upper) {
+                            try self.recordTypeDependencyFromQualifiedTokens(qual_result.qualifiers, qual_result.final_token);
+                        }
+                        break :blk anno;
+                    };
+
+                    const can_apply = !(first_token_tag == .LowerIdent and qual_result.qualifiers.span.len == 0);
+                    if (can_apply and self.peek() == .NoSpaceOpenRound) {
+                        self.advance();
+                        const scratch_top = self.store.scratchTypeAnnoTop();
+                        try self.store.addScratchTypeAnno(base_anno);
+                        type_apply_state = .{ .start = start, .scratch_top = scratch_top, .looking_for_args = type_args };
+                        continue :expr_kernel .type_apply_next;
+                    }
+                    last_type_anno = base_anno;
+                    type_after_primary_state = .{ .start = start, .looking_for_args = type_args };
+                    continue :expr_kernel .type_after_primary;
+                }
+                if (tok == .NamedUnderscore) {
+                    const start = self.pos;
+                    last_type_anno = try self.store.addTypeAnno(.{ .underscore_type_var = .{
+                        .tok = self.pos,
+                        .region = .{ .start = start, .end = self.pos + 1 },
+                    } });
+                    self.advance();
+                    type_after_primary_state = .{ .start = start, .looking_for_args = type_args };
+                    continue :expr_kernel .type_after_primary;
+                }
+                if (tok == .OpenRound or tok == .NoSpaceOpenRound) {
+                    const start = self.pos;
+                    self.advance();
+                    type_paren_state = .{
+                        .start = start,
+                        .after_round = self.pos,
+                        .scratch_top = self.store.scratchTypeAnnoTop(),
+                        .saw_comma = false,
+                        .expect_close = false,
+                        .looking_for_args = type_args,
+                    };
+                    continue :expr_kernel .type_paren_next;
+                }
+                if (tok == .OpenCurly) {
+                    const start = self.pos;
+                    self.advance();
+                    type_record_state = .{
+                        .start = start,
+                        .scratch_top = self.store.scratchAnnoRecordFieldTop(),
+                        .ext = .closed,
+                        .looking_for_args = type_args,
+                    };
+                    continue :expr_kernel .type_record_next;
+                }
+                if (tok == .OpenSquare) {
+                    const start = self.pos;
+                    self.advance();
+                    type_tag_union_state = .{
+                        .start = start,
+                        .scratch_top = self.store.scratchTypeAnnoTop(),
+                        .ext = .closed,
+                        .looking_for_args = type_args,
+                    };
+                    continue :expr_kernel .type_tag_union_next;
+                }
+                if (tok == .Underscore) {
+                    const start = self.pos;
+                    last_type_anno = try self.store.addTypeAnno(.{ .underscore = .{
+                        .region = .{ .start = start, .end = self.pos },
+                    } });
+                    self.advance();
+                    type_after_primary_state = .{ .start = start, .looking_for_args = type_args };
+                    continue :expr_kernel .type_after_primary;
+                }
+            }
+
+            last_type_anno = try self.pushMalformed(AST.TypeAnno.Idx, .ty_anno_unexpected_token, self.pos);
+            continue :expr_kernel .type_complete;
+        },
+        .type_after_primary => {
+            const an = last_type_anno orelse {
+                last_type_anno = try self.store.addMalformed(AST.TypeAnno.Idx, .ty_anno_unexpected_token, .{ .start = type_after_primary_state.start, .end = self.pos });
+                continue :expr_kernel .type_complete;
+            };
+
+            const curr = self.peek();
+            const next_tok = self.peekNext();
+            const two_away_tok = self.peekN(2);
+            const three_away_tok = self.peekN(3);
+            const curr_is_arrow = curr == .OpArrow or curr == .OpFatArrow;
+            const next_is_not_lower_ident = next_tok != .LowerIdent;
+            const not_followed_by_colon = two_away_tok != .OpColon;
+            const two_away_is_arrow = two_away_tok == .OpArrow or two_away_tok == .OpFatArrow;
+            const next_starts_where_clause = next_tok == .LowerIdent and
+                (two_away_tok == .NoSpaceDotLowerIdent or two_away_tok == .DotLowerIdent or
+                    two_away_tok == .NoSpaceDotUpperIdent or two_away_tok == .DotUpperIdent) and
+                three_away_tok == .OpColon;
+            const can_parse_arrow = type_after_primary_state.looking_for_args != .looking_for_args and curr_is_arrow;
+            const can_parse_comma_args = type_after_primary_state.looking_for_args == .not_looking_for_args and
+                curr == .Comma and
+                (next_is_not_lower_ident or not_followed_by_colon or two_away_is_arrow) and
+                !next_starts_where_clause and
+                next_tok != .CloseCurly and
+                next_tok != .DoubleDot and
+                next_tok != .CloseSquare;
+
+            if (can_parse_arrow or can_parse_comma_args) {
+                const scratch_top = self.store.scratchTypeAnnoTop();
+                try self.store.addScratchTypeAnno(an);
+                last_type_anno = null;
+                type_fn_args_state = .{ .start = type_after_primary_state.start, .scratch_top = scratch_top };
+                continue :expr_kernel .type_fn_args_next;
+            }
+
+            last_type_anno = an;
+            continue :expr_kernel .type_complete;
+        },
+        .type_complete => {
+            const completed = last_type_anno orelse unreachable;
+            if (open_syntax.peekType()) |kind| {
+                switch (kind) {
+                    .type_apply => {
+                        type_apply_state = open_syntax.popTypePayload(.type_apply, TypeApplyState);
+                        last_type_anno = null;
+                        try self.store.addScratchTypeAnno(completed);
+                        switch (self.peek()) {
+                            .Comma => {
+                                self.advance();
+                                continue :expr_kernel .type_apply_next;
+                            },
+                            .CloseRound => continue :expr_kernel .type_apply_next,
+                            else => {},
+                        }
+                        self.store.clearScratchTypeAnnosFrom(type_apply_state.scratch_top);
+                        last_type_anno = try self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_apply_close_round, type_apply_state.start);
+                        continue :expr_kernel .type_complete;
+                    },
+                    .type_paren_item => {
+                        const state = open_syntax.popTypePayload(.type_paren_item, TypeParenAfterItemState);
+                        last_type_anno = null;
+                        try self.store.addScratchTypeAnno(completed);
+                        type_paren_state = .{
+                            .start = state.start,
+                            .after_round = state.after_round,
+                            .scratch_top = state.scratch_top,
+                            .saw_comma = state.saw_comma or self.peek() == .Comma,
+                            .expect_close = self.peek() != .Comma,
+                            .looking_for_args = state.looking_for_args,
+                        };
+                        if (self.peek() == .Comma) {
+                            self.advance();
+                            type_paren_state.expect_close = false;
+                        }
+                        continue :expr_kernel .type_paren_next;
+                    },
+                    .type_paren_fn_ret => {
+                        const state = open_syntax.popTypePayload(.type_paren_fn_ret, TypeParenFnRetState);
+                        last_type_anno = null;
+                        if (self.peek() != .CloseRound) {
+                            self.store.clearScratchTypeAnnosFrom(state.scratch_top);
+                            last_type_anno = try self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_anno_close_round, state.start);
+                            continue :expr_kernel .type_complete;
+                        }
+                        const function = try self.store.addTypeAnno(.{ .@"fn" = .{
+                            .args = state.args,
+                            .ret = completed,
+                            .effectful = state.effectful,
+                            .region = .{ .start = state.after_round, .end = self.pos },
+                        } });
+                        self.advance();
+                        last_type_anno = try self.store.addTypeAnno(.{ .parens = .{
+                            .anno = function,
+                            .region = .{ .start = state.start, .end = self.pos },
+                        } });
+                        type_after_primary_state = .{ .start = state.start, .looking_for_args = state.looking_for_args };
+                        continue :expr_kernel .type_after_primary;
+                    },
+                    .type_zero_arg_fn_ret => {
+                        const state = open_syntax.popTypePayload(.type_zero_arg_fn_ret, TypeZeroArgFnRetState);
+                        last_type_anno = try self.store.addTypeAnno(.{ .@"fn" = .{
+                            .args = state.args,
+                            .ret = completed,
+                            .effectful = state.effectful,
+                            .region = .{ .start = state.after_round, .end = self.pos },
+                        } });
+                        type_after_primary_state = .{ .start = state.start, .looking_for_args = state.looking_for_args };
+                        continue :expr_kernel .type_after_primary;
+                    },
+                    .type_record_ext => {
+                        const state = open_syntax.popTypePayload(.type_record_ext, TypeRecordExtState);
+                        last_type_anno = null;
+                        const anno_region = self.store.typeAnnoRegion(completed);
+                        if (self.peek() == .Comma) {
+                            self.advance();
+                        } else if (self.peek() != .CloseCurly) {
+                            self.expect(.Comma) catch {};
+                        }
+                        type_record_state = .{
+                            .start = state.start,
+                            .scratch_top = state.scratch_top,
+                            .ext = .{ .named = .{ .anno = completed, .region = anno_region } },
+                            .looking_for_args = state.looking_for_args,
+                        };
+                        continue :expr_kernel .type_record_finish;
+                    },
+                    .type_record_field => {
+                        const state = open_syntax.popTypePayload(.type_record_field, TypeRecordFieldState);
+                        last_type_anno = null;
+                        const field = try self.store.addAnnoRecordField(.{
+                            .region = .{ .start = state.field_start, .end = self.pos },
+                            .name = state.name,
+                            .ty = completed,
+                        });
+                        try self.store.addScratchAnnoRecordField(field);
+                        type_record_state = .{
+                            .start = state.record_start,
+                            .scratch_top = state.scratch_top,
+                            .ext = state.ext,
+                            .looking_for_args = state.looking_for_args,
+                        };
+                        if (self.peek() == .Comma) {
+                            self.advance();
+                            continue :expr_kernel .type_record_next;
+                        }
+                        if (self.peek() == .CloseCurly) {
+                            continue :expr_kernel .type_record_finish;
+                        }
+                        continue :expr_kernel .type_record_next;
+                    },
+                    .type_tag_union_ext => {
+                        const state = open_syntax.popTypePayload(.type_tag_union_ext, TypeTagUnionExtState);
+                        last_type_anno = null;
+                        const anno_region = self.store.typeAnnoRegion(completed);
+                        if (self.peek() == .Comma) {
+                            self.advance();
+                        } else if (self.peek() != .CloseSquare) {
+                            self.expect(.Comma) catch {};
+                        }
+                        type_tag_union_state = .{
+                            .start = state.start,
+                            .scratch_top = state.scratch_top,
+                            .ext = .{ .named = .{ .anno = completed, .region = anno_region } },
+                            .looking_for_args = state.looking_for_args,
+                        };
+                        continue :expr_kernel .type_tag_union_finish;
+                    },
+                    .type_tag_union_item => {
+                        const state = open_syntax.popTypePayload(.type_tag_union_item, TypeTagUnionItemState);
+                        last_type_anno = null;
+                        self.collect_type_dependencies = state.was_collecting;
+                        if (state.was_collecting) {
+                            try self.recordTypeDependenciesFromTagAnno(completed);
+                        }
+                        try self.store.addScratchTypeAnno(completed);
+                        type_tag_union_state = .{
+                            .start = state.start,
+                            .scratch_top = state.scratch_top,
+                            .ext = state.ext,
+                            .looking_for_args = state.looking_for_args,
+                        };
+                        if (self.peek() == .Comma) {
+                            self.advance();
+                            continue :expr_kernel .type_tag_union_next;
+                        }
+                        if (self.peek() == .CloseSquare) {
+                            continue :expr_kernel .type_tag_union_finish;
+                        }
+                        continue :expr_kernel .type_tag_union_next;
+                    },
+                    .type_fn_arg => {
+                        type_fn_args_state = open_syntax.popTypePayload(.type_fn_arg, TypeFnArgsState);
+                        last_type_anno = null;
+                        try self.store.addScratchTypeAnno(completed);
+                        continue :expr_kernel .type_fn_args_next;
+                    },
+                    .type_fn_ret => {
+                        const state = open_syntax.popTypePayload(.type_fn_ret, TypeFnAfterRetState);
+                        last_type_anno = try self.store.addTypeAnno(.{ .@"fn" = .{
+                            .region = .{ .start = state.start, .end = self.pos },
+                            .args = state.args,
+                            .ret = completed,
+                            .effectful = state.effectful,
+                        } });
+                        continue :expr_kernel .type_complete;
+                    },
+                    .where_clause_type => {
+                        const state = open_syntax.popTypePayload(.where_clause_type, WhereClauseTypeState);
+                        last_type_anno = null;
+                        const method_type = self.store.getTypeAnno(completed);
+                        if (method_type == .@"fn") {
+                            const fn_type = method_type.@"fn";
+                            const args = try self.store.addCollection(.collection_ty_anno, .{
+                                .region = .{ .start = state.args_start, .end = self.pos },
+                                .span = fn_type.args.span,
+                            });
+                            try self.store.addScratchWhereClause(try self.store.addWhereClause(.{ .mod_method = .{
+                                .region = .{ .start = state.start, .end = self.pos },
+                                .name_tok = state.name_tok,
+                                .var_tok = state.var_tok,
+                                .args = args,
+                                .ret_anno = fn_type.ret,
+                            } }));
+                            continue :expr_kernel .where_after_clause;
+                        }
+
+                        const empty_args = try self.store.addCollection(.collection_ty_anno, .{
+                            .region = .{ .start = state.args_start, .end = self.pos },
+                            .span = base.DataSpan.empty(),
+                        });
+                        try self.store.addScratchWhereClause(try self.store.addWhereClause(.{ .mod_method = .{
+                            .region = .{ .start = state.start, .end = self.pos },
+                            .name_tok = state.name_tok,
+                            .var_tok = state.var_tok,
+                            .args = empty_args,
+                            .ret_anno = completed,
+                        } }));
+                        continue :expr_kernel .where_after_clause;
+                    },
+                    .statement_type_after_anno => {
+                        const state = open_syntax.popTypePayload(.statement_type_after_anno, StatementTypeAnnoState);
+                        last_type_anno = null;
+                        if (self.peek() == .KwWhere) {
+                            const where_start = self.pos;
+                            self.advance();
+                            try open_syntax.pushWhere(open_allocator, .where_statement_type_anno, StatementTypeAnnoAfterWhereState, .{
+                                .start = state.start,
+                                .name = state.name,
+                                .is_var = state.is_var,
+                                .anno = completed,
+                            });
+                            where_state = .{ .start = where_start, .scratch_top = self.store.scratchWhereClauseTop() };
+                            continue :expr_kernel .where_start;
+                        }
+                        last_statement = try self.addStatement(.{ .type_anno = .{
+                            .anno = completed,
+                            .name = state.name,
+                            .where = null,
+                            .is_var = state.is_var,
+                            .region = .{ .start = state.start, .end = self.pos },
+                        } });
+                        continue :expr_kernel .statement_complete;
+                    },
+                    .statement_type_decl_anno => {
+                        const state = open_syntax.popTypePayload(.statement_type_decl_anno, StatementTypeDeclAnnoState);
+                        last_type_anno = null;
+                        const type_dependencies = blk: {
+                            if (self.store.typeAnnoIsMalformed(completed)) {
+                                self.decl_index.clearTypeDependenciesFrom(state.type_dependencies_start);
+                                break :blk DeclIndex.Span.empty();
+                            }
+                            break :blk self.decl_index.typeDependencySpanFrom(state.type_dependencies_start);
+                        };
+                        self.collect_type_dependencies = state.was_collecting_type_dependencies;
+
+                        if (self.peek() == .KwWhere) {
+                            const where_start = self.pos;
+                            self.advance();
+                            try open_syntax.pushWhere(open_allocator, .where_statement_type_decl, StatementTypeDeclAfterWhereState, .{
+                                .start = state.start,
+                                .header = state.header,
+                                .anno = completed,
+                                .kind = state.kind,
+                                .type_dependencies = type_dependencies,
+                                .type_path = state.type_path,
+                            });
+                            where_state = .{ .start = where_start, .scratch_top = self.store.scratchWhereClauseTop() };
+                            continue :expr_kernel .where_start;
+                        }
+
+                        statement_type_decl_ready_state = .{
+                            .start = state.start,
+                            .header = state.header,
+                            .anno = completed,
+                            .kind = state.kind,
+                            .where_clause = null,
+                            .type_dependencies = type_dependencies,
+                            .type_path = state.type_path,
+                        };
+                        continue :expr_kernel .statement_type_decl_finish;
+                    },
+                }
+            }
+            if (root == .type_anno) {
+                return completed;
+            }
+            unreachable;
+        },
+        .type_apply_next => switch (self.peek()) {
+            .CloseRound => {
+                self.advance();
+                last_type_anno = try self.store.addTypeAnno(.{ .apply = .{
+                    .region = .{ .start = type_apply_state.start, .end = self.pos },
+                    .args = try self.store.typeAnnoSpanFrom(type_apply_state.scratch_top),
+                } });
+                type_after_primary_state = .{ .start = type_apply_state.start, .looking_for_args = type_apply_state.looking_for_args };
+                continue :expr_kernel .type_after_primary;
+            },
+            else => {
+                if (self.peek() == .EndOfFile) {
+                    self.store.clearScratchTypeAnnosFrom(type_apply_state.scratch_top);
+                    last_type_anno = try self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_apply_close_round, type_apply_state.start);
+                    continue :expr_kernel .type_complete;
+                }
+                try open_syntax.pushType(open_allocator, .type_apply, TypeApplyState, type_apply_state);
+                type_args = .looking_for_type_arg;
+                continue :expr_kernel .type_prefix;
+            },
+        },
+        .type_paren_next => switch (self.peek()) {
+            .OpArrow, .OpFatArrow => {
+                const args = try self.store.typeAnnoSpanFrom(type_paren_state.scratch_top);
+                const effectful = self.peek() == .OpFatArrow;
+                self.advance();
+                try open_syntax.pushType(open_allocator, .type_paren_fn_ret, TypeParenFnRetState, .{
+                    .start = type_paren_state.start,
+                    .after_round = type_paren_state.after_round,
+                    .scratch_top = type_paren_state.scratch_top,
+                    .args = args,
+                    .effectful = effectful,
+                    .looking_for_args = type_paren_state.looking_for_args,
+                });
+                type_args = .looking_for_args;
+                continue :expr_kernel .type_prefix;
+            },
+            .CloseRound => {
+                const args = try self.store.typeAnnoSpanFrom(type_paren_state.scratch_top);
+                if ((self.peekNext() == .OpArrow or self.peekNext() == .OpFatArrow) and args.span.len == 0) {
+                    self.advance();
+                    const effectful = self.peek() == .OpFatArrow;
+                    self.advance();
+                    try open_syntax.pushType(open_allocator, .type_zero_arg_fn_ret, TypeZeroArgFnRetState, .{
+                        .start = type_paren_state.start,
+                        .after_round = type_paren_state.after_round,
+                        .effectful = effectful,
+                        .args = args,
+                        .looking_for_args = type_paren_state.looking_for_args,
+                    });
+                    type_args = .looking_for_args;
+                    continue :expr_kernel .type_prefix;
+                }
+                self.advance();
+                const annos = args;
+                if (annos.span.len == 1 and !type_paren_state.saw_comma) {
+                    last_type_anno = try self.store.addTypeAnno(.{ .parens = .{
+                        .anno = self.store.typeAnnoSlice(annos)[0],
+                        .region = .{ .start = type_paren_state.start, .end = self.pos },
+                    } });
+                } else {
+                    last_type_anno = try self.store.addTypeAnno(.{ .tuple = .{
+                        .region = .{ .start = type_paren_state.start, .end = self.pos },
+                        .annos = annos,
+                    } });
+                }
+                type_after_primary_state = .{ .start = type_paren_state.start, .looking_for_args = type_paren_state.looking_for_args };
+                continue :expr_kernel .type_after_primary;
+            },
+            else => {
+                if (self.peek() == .EndOfFile or type_paren_state.expect_close) {
+                    self.store.clearScratchTypeAnnosFrom(type_paren_state.scratch_top);
+                    last_type_anno = try self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_anno_close_round, type_paren_state.start);
+                    continue :expr_kernel .type_complete;
+                }
+                try open_syntax.pushType(open_allocator, .type_paren_item, TypeParenAfterItemState, .{
+                    .start = type_paren_state.start,
+                    .after_round = type_paren_state.after_round,
+                    .scratch_top = type_paren_state.scratch_top,
+                    .saw_comma = type_paren_state.saw_comma,
+                    .looking_for_args = type_paren_state.looking_for_args,
+                });
+                type_args = .looking_for_args;
+                continue :expr_kernel .type_prefix;
+            },
+        },
+        .type_record_next => switch (self.peek()) {
+            .CloseCurly => continue :expr_kernel .type_record_finish,
+            .DoubleDot => {
+                const double_dot_start = self.pos;
+                self.advance();
+                const ext_tok = self.peek();
+                if (ext_tok == .LowerIdent or ext_tok == .NamedUnderscore) {
+                    try open_syntax.pushType(open_allocator, .type_record_ext, TypeRecordExtState, .{
+                        .start = type_record_state.start,
+                        .scratch_top = type_record_state.scratch_top,
+                        .looking_for_args = type_record_state.looking_for_args,
+                    });
+                    type_args = .looking_for_args;
+                    continue :expr_kernel .type_prefix;
+                }
+                self.expect(.Comma) catch {};
+                type_record_state.ext = .{ .open = double_dot_start };
+                continue :expr_kernel .type_record_finish;
+            },
+            .LowerIdent => {
+                const field_start = self.pos;
+                const name = self.pos;
+                self.advance();
+                if (self.peek() != .OpColon) {
+                    while (self.peek() != .CloseCurly and self.peek() != .Comma and self.peek() != .EndOfFile) {
+                        self.advance();
+                    }
+                    last_type_anno = try self.pushMalformed(AST.TypeAnno.Idx, .expected_colon_after_type_field_name, field_start);
+                    continue :expr_kernel .type_complete;
+                }
+                self.advance();
+                try open_syntax.pushType(open_allocator, .type_record_field, TypeRecordFieldState, .{
+                    .record_start = type_record_state.start,
+                    .scratch_top = type_record_state.scratch_top,
+                    .field_start = field_start,
+                    .name = name,
+                    .ext = type_record_state.ext,
+                    .looking_for_args = type_record_state.looking_for_args,
+                });
+                type_args = .not_looking_for_args;
+                continue :expr_kernel .type_prefix;
+            },
+            else => {
+                if (self.peek() == .EndOfFile) {
+                    self.store.clearScratchAnnoRecordFieldsFrom(type_record_state.scratch_top);
+                    last_type_anno = try self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_close_curly_or_comma, self.pos);
+                    continue :expr_kernel .type_complete;
+                }
+                const field_start = self.pos;
+                while (self.peek() != .CloseCurly and self.peek() != .Comma and self.peek() != .EndOfFile) {
+                    self.advance();
+                }
+                const malformed_field = try self.pushMalformed(AST.AnnoRecordField.Idx, .expected_type_field_name, field_start);
+                try self.store.addScratchAnnoRecordField(malformed_field);
+                self.store.clearScratchAnnoRecordFieldsFrom(type_record_state.scratch_top);
+                last_type_anno = try self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_close_curly_or_comma, self.pos);
+                continue :expr_kernel .type_complete;
+            },
+        },
+        .type_record_finish => switch (self.peek()) {
+            .CloseCurly => {
+                self.advance();
+                const fields = try self.store.annoRecordFieldSpanFrom(type_record_state.scratch_top);
+                last_type_anno = try self.store.addTypeAnno(.{ .record = .{
+                    .region = .{ .start = type_record_state.start, .end = self.pos },
+                    .fields = fields,
+                    .ext = type_record_state.ext,
+                } });
+                type_after_primary_state = .{ .start = type_record_state.start, .looking_for_args = type_record_state.looking_for_args };
+                continue :expr_kernel .type_after_primary;
+            },
+            else => {
+                self.store.clearScratchAnnoRecordFieldsFrom(type_record_state.scratch_top);
+                last_type_anno = try self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_close_curly_or_comma, self.pos);
+                continue :expr_kernel .type_complete;
+            },
+        },
+        .type_tag_union_next => switch (self.peek()) {
+            .CloseSquare => continue :expr_kernel .type_tag_union_finish,
+            .DoubleDot => {
+                const double_dot_pos = self.pos;
+                self.advance();
+                const ext_tok = self.peek();
+                if (ext_tok == .LowerIdent or ext_tok == .NamedUnderscore) {
+                    try open_syntax.pushType(open_allocator, .type_tag_union_ext, TypeTagUnionExtState, .{
+                        .start = type_tag_union_state.start,
+                        .scratch_top = type_tag_union_state.scratch_top,
+                        .looking_for_args = type_tag_union_state.looking_for_args,
+                    });
+                    type_args = .looking_for_args;
+                    continue :expr_kernel .type_prefix;
+                }
+                self.expect(.Comma) catch {};
+                type_tag_union_state.ext = .{ .open = double_dot_pos };
+                continue :expr_kernel .type_tag_union_finish;
+            },
+            else => {
+                if (self.peek() == .EndOfFile) {
+                    self.store.clearScratchTypeAnnosFrom(type_tag_union_state.scratch_top);
+                    last_type_anno = try self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_close_square_or_comma, self.pos);
+                    continue :expr_kernel .type_complete;
+                }
+                const was_collecting = self.collect_type_dependencies;
+                self.collect_type_dependencies = false;
+                try open_syntax.pushType(open_allocator, .type_tag_union_item, TypeTagUnionItemState, .{
+                    .start = type_tag_union_state.start,
+                    .scratch_top = type_tag_union_state.scratch_top,
+                    .ext = type_tag_union_state.ext,
+                    .was_collecting = was_collecting,
+                    .looking_for_args = type_tag_union_state.looking_for_args,
+                });
+                type_args = .looking_for_type_arg;
+                continue :expr_kernel .type_prefix;
+            },
+        },
+        .type_tag_union_finish => switch (self.peek()) {
+            .CloseSquare => {
+                self.advance();
+                const tags = try self.store.typeAnnoSpanFrom(type_tag_union_state.scratch_top);
+                last_type_anno = try self.store.addTypeAnno(.{ .tag_union = .{
+                    .region = .{ .start = type_tag_union_state.start, .end = self.pos },
+                    .ext = type_tag_union_state.ext,
+                    .tags = tags,
+                } });
+                type_after_primary_state = .{ .start = type_tag_union_state.start, .looking_for_args = type_tag_union_state.looking_for_args };
+                continue :expr_kernel .type_after_primary;
+            },
+            else => {
+                self.store.clearScratchTypeAnnosFrom(type_tag_union_state.scratch_top);
+                last_type_anno = try self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_close_square_or_comma, self.pos);
+                continue :expr_kernel .type_complete;
+            },
+        },
+        .type_fn_args_next => switch (self.peek()) {
+            .Comma => {
+                self.advance();
+                try open_syntax.pushType(open_allocator, .type_fn_arg, TypeFnArgsState, type_fn_args_state);
+                type_args = .looking_for_args;
+                continue :expr_kernel .type_prefix;
+            },
+            .OpArrow, .OpFatArrow => {
+                const args = try self.store.typeAnnoSpanFrom(type_fn_args_state.scratch_top);
+                const effectful = self.peek() == .OpFatArrow;
+                self.advance();
+                try open_syntax.pushType(open_allocator, .type_fn_ret, TypeFnAfterRetState, .{
+                    .start = type_fn_args_state.start,
+                    .args = args,
+                    .effectful = effectful,
+                });
+                type_args = .looking_for_args;
+                continue :expr_kernel .type_prefix;
+            },
+            else => {
+                self.store.clearScratchTypeAnnosFrom(type_fn_args_state.scratch_top);
+                last_type_anno = try self.pushMalformed(AST.TypeAnno.Idx, .expected_arrow, type_fn_args_state.start);
+                continue :expr_kernel .type_complete;
+            },
+        },
+        .where_start => switch (self.peek()) {
+            .OpenSquare => {
+                self.advance();
+                continue :expr_kernel .where_clause_next;
+            },
+            else => {
+                const diagnostic_region = AST.TokenizedRegion{ .start = where_state.start, .end = self.pos };
+                try self.diagnostics.append(self.gpa, .{
+                    .tag = .where_expected_open_bracket,
+                    .region = diagnostic_region,
+                });
+                const malformed_clause = try self.store.addMalformed(AST.WhereClause.Idx, .where_expected_open_bracket, diagnostic_region);
+                try self.store.addScratchWhereClause(malformed_clause);
+                const where_clauses = try self.store.whereClauseSpanFrom(where_state.scratch_top);
+                last_where = try self.store.addCollection(.collection_where_clause, .{
+                    .region = .{ .start = where_state.start, .end = self.pos },
+                    .span = where_clauses.span,
+                });
+                continue :expr_kernel .where_complete;
+            },
+        },
+        .where_clause_next => switch (self.peek()) {
+            .CloseSquare, .EndOfFile => continue :expr_kernel .where_finish,
+            else => {
+                const start = self.pos;
+                const var_tok = self.pos;
+                if (self.peek() != .LowerIdent) {
+                    try self.store.addScratchWhereClause(try self.pushMalformed(AST.WhereClause.Idx, .where_expected_var, start));
+                    continue :expr_kernel .where_after_clause;
+                }
+                self.advance();
+
+                const name_tok = self.pos;
+                switch (self.peek()) {
+                    .NoSpaceDotLowerIdent, .DotLowerIdent, .NoSpaceDotUpperIdent, .DotUpperIdent => self.advance(),
+                    else => {
+                        try self.store.addScratchWhereClause(try self.pushMalformed(AST.WhereClause.Idx, .where_expected_method_or_alias_name, start));
+                        continue :expr_kernel .where_after_clause;
+                    },
+                }
+
+                const current_token_tag = self.tok_buf.tokens.items(.tag)[name_tok];
+                if (current_token_tag == .NoSpaceDotUpperIdent or current_token_tag == .DotUpperIdent) {
+                    try self.store.addScratchWhereClause(try self.store.addWhereClause(.{ .mod_alias = .{
+                        .region = .{ .start = start, .end = self.pos },
+                        .name_tok = name_tok,
+                        .var_tok = var_tok,
+                    } }));
+                    continue :expr_kernel .where_after_clause;
+                }
+
+                if (self.peek() != .OpColon) {
+                    try self.store.addScratchWhereClause(try self.pushMalformed(AST.WhereClause.Idx, .where_expected_colon, start));
+                    continue :expr_kernel .where_after_clause;
+                }
+                self.advance();
+
+                const args_start = self.pos;
+                try open_syntax.pushType(open_allocator, .where_clause_type, WhereClauseTypeState, .{
+                    .start = start,
+                    .var_tok = var_tok,
+                    .name_tok = name_tok,
+                    .args_start = args_start,
+                });
+                type_args = .not_looking_for_args;
+                continue :expr_kernel .type_prefix;
+            },
+        },
+        .where_after_clause => switch (self.peek()) {
+            .Comma => {
+                self.advance();
+                continue :expr_kernel .where_clause_next;
+            },
+            else => continue :expr_kernel .where_finish,
+        },
+        .where_finish => {
+            const where_clauses = try self.store.whereClauseSpanFrom(where_state.scratch_top);
+            if (where_clauses.span.len == 0) {
+                const diagnostic_region = AST.TokenizedRegion{ .start = where_state.start, .end = self.pos };
+                try self.diagnostics.append(self.gpa, .{
+                    .tag = .where_expected_constraints,
+                    .region = diagnostic_region,
+                });
+                const malformed_clause = try self.store.addMalformed(AST.WhereClause.Idx, .where_expected_constraints, diagnostic_region);
+                try self.store.addScratchWhereClause(malformed_clause);
+                const updated_where_clauses = try self.store.whereClauseSpanFrom(where_state.scratch_top);
+                last_where = try self.store.addCollection(.collection_where_clause, .{
+                    .region = .{ .start = where_state.start, .end = self.pos },
+                    .span = updated_where_clauses.span,
+                });
+                continue :expr_kernel .where_complete;
+            }
+
+            if (self.peek() == .CloseSquare) {
+                self.advance();
+            } else {
+                const diagnostic_region = AST.TokenizedRegion{ .start = where_state.start, .end = self.pos };
+                try self.diagnostics.append(self.gpa, .{
+                    .tag = .where_expected_close_bracket,
+                    .region = diagnostic_region,
+                });
+            }
+
+            last_where = try self.store.addCollection(.collection_where_clause, .{
+                .region = .{ .start = where_state.start, .end = self.pos },
+                .span = where_clauses.span,
+            });
+            continue :expr_kernel .where_complete;
+        },
+        .where_complete => {
+            const completed = last_where orelse unreachable;
+            last_where = null;
+            if (open_syntax.peekWhere()) |kind| {
+                switch (kind) {
+                    .where_statement_type_anno => {
+                        const state = open_syntax.popWherePayload(.where_statement_type_anno, StatementTypeAnnoAfterWhereState);
+                        last_statement = try self.addStatement(.{ .type_anno = .{
+                            .anno = state.anno,
+                            .name = state.name,
+                            .where = completed,
+                            .is_var = state.is_var,
+                            .region = .{ .start = state.start, .end = self.pos },
+                        } });
+                        continue :expr_kernel .statement_complete;
+                    },
+                    .where_statement_type_decl => {
+                        const state = open_syntax.popWherePayload(.where_statement_type_decl, StatementTypeDeclAfterWhereState);
+                        statement_type_decl_ready_state = .{
+                            .start = state.start,
+                            .header = state.header,
+                            .anno = state.anno,
+                            .kind = state.kind,
+                            .where_clause = completed,
+                            .type_dependencies = state.type_dependencies,
+                            .type_path = state.type_path,
+                        };
+                        continue :expr_kernel .statement_type_decl_finish;
+                    },
+                }
+            }
+            unreachable;
+        },
+        .statement_type_decl_finish => {
+            const state = statement_type_decl_ready_state;
+            if (self.peek() == .Dot and self.peekN(1) == .OpenCurly) {
+                const dot_pos = self.pos;
+                self.advance();
+                self.advance();
+                const nested_associated_start = self.pos - 1;
+
+                try open_syntax.pushAssociated(open_allocator, .statement_type_decl_associated, TypeDeclAssociatedState, .{
+                    .start = state.start,
+                    .header = state.header,
+                    .anno = state.anno,
+                    .kind = state.kind,
+                    .where_clause = state.where_clause,
+                    .type_dependencies = state.type_dependencies,
+                    .type_path = state.type_path,
+                    .dot_pos = dot_pos,
+                });
+
+                var pushed_type_path = false;
+                if (state.type_path) |path| {
+                    try self.type_path_stack.append(self.gpa, path);
+                    pushed_type_path = true;
+                }
+                const assoc_scope = try self.enterDeclScope(.associated, .none, .{ .start = nested_associated_start, .end = nested_associated_start });
+                try associated_blocks.enter(open_allocator, .{
+                    .start = nested_associated_start,
+                    .scope = assoc_scope,
+                    .scratch_top = self.store.scratchStatementTop(),
+                    .pushed_type_path = pushed_type_path,
+                });
+                continue :expr_kernel .associated_next;
+            }
+
+            last_statement = try self.addTypeDeclStatement(.{ .type_decl = .{
+                .header = state.header,
+                .anno = state.anno,
+                .kind = state.kind,
+                .where = state.where_clause,
+                .associated = null,
+                .region = .{ .start = state.start, .end = self.pos },
+            } }, state.type_dependencies, state.type_path);
+            continue :expr_kernel .statement_complete;
+        },
+        .statement_start => {
+            const tok = self.peek();
+            const tok_int = @intFromEnum(tok);
+
+            if (tok == .EndOfFile) {
+                last_statement = try self.addTopLevelUnexpectedStatement();
+                continue :expr_kernel .statement_complete;
+            }
+
+            if (tok_int >= @intFromEnum(Token.Tag.UpperIdent) and tok_int < @intFromEnum(Token.Tag.OpenRound)) {
+                if (tok == .LowerIdent or tok == .NamedUnderscore) {
+                    const start = self.pos;
+                    const next_tok = self.peekNext();
+                    if (next_tok == .OpAssign) {
+                        self.advance();
+                        const patt_idx = try self.store.addPattern(.{ .ident = .{
+                            .ident_tok = start,
+                            .region = .{ .start = start, .end = self.pos },
+                        } });
+                        self.advance();
+                        try open_syntax.pushExpr(open_allocator, .statement_decl_body, StatementDeclBodyState, .{
+                            .start = start,
+                            .pattern = patt_idx,
+                        });
+                        expr_state = .{ .start = self.pos, .min_bp = 0 };
+                        continue :expr_kernel .prefix;
+                    } else if (next_tok == .OpColon) {
+                        if (tok == .LowerIdent and self.isVarIdent(start)) {
+                            last_statement = try self.pushMalformed(AST.Statement.Idx, .var_type_anno_needs_var_keyword, start);
+                            continue :expr_kernel .statement_complete;
+                        }
+                        self.advance();
+                        self.advance();
+                        try open_syntax.pushType(open_allocator, .statement_type_after_anno, StatementTypeAnnoState, .{
+                            .start = start,
+                            .name = start,
+                            .is_var = false,
+                        });
+                        type_args = .not_looking_for_args;
+                        continue :expr_kernel .type_prefix;
+                    } else if (statement_type == .top_level) {
+                        last_statement = try self.addTopLevelUnexpectedStatement();
+                        continue :expr_kernel .statement_complete;
+                    } else {
+                        try open_syntax.pushExpr(open_allocator, .statement_expr_body, Token.Idx, start);
+                        expr_state = .{ .start = start, .min_bp = 0 };
+                        continue :expr_kernel .prefix;
+                    }
+                }
+                if (tok == .Underscore) {
+                    const start = self.pos;
+                    const next_tok = self.peekNext();
+                    if (next_tok == .OpAssign) {
+                        self.advance();
+                        const patt_idx = try self.store.addPattern(.{ .underscore = .{
+                            .region = .{ .start = start, .end = self.pos },
+                        } });
+                        self.advance();
+                        try open_syntax.pushExpr(open_allocator, .statement_decl_body, StatementDeclBodyState, .{
+                            .start = start,
+                            .pattern = patt_idx,
+                        });
+                        expr_state = .{ .start = self.pos, .min_bp = 0 };
+                        continue :expr_kernel .prefix;
+                    } else if (statement_type == .top_level) {
+                        last_statement = try self.addTopLevelUnexpectedStatement();
+                        continue :expr_kernel .statement_complete;
+                    } else {
+                        try open_syntax.pushExpr(open_allocator, .statement_expr_body, Token.Idx, start);
+                        expr_state = .{ .start = start, .min_bp = 0 };
+                        continue :expr_kernel .prefix;
+                    }
+                }
+                if (tok == .UpperIdent) {
+                    const start = self.pos;
+                    const is_type_decl_context = statement_type == .top_level or
+                        statement_type == .in_associated_block or
+                        (statement_type == .in_body and self.looksLikeTypeDecl());
+                    if (!is_type_decl_context) {
+                        if (statement_type == .top_level) {
+                            last_statement = try self.addTopLevelUnexpectedStatement();
+                            continue :expr_kernel .statement_complete;
+                        }
+                        try open_syntax.pushExpr(open_allocator, .statement_expr_body, Token.Idx, start);
+                        expr_state = .{ .start = start, .min_bp = 0 };
+                        continue :expr_kernel .prefix;
+                    }
+
+                    const header = try self.parseTypeHeaderTokens();
+                    const header_node = self.store.nodes.get(@enumFromInt(@intFromEnum(header)));
+                    if (header_node.tag == .malformed) {
+                        self.recoverMalformedTypeDeclLine(start);
+                        const reason: AST.Diagnostic.Tag = @enumFromInt(header_node.data.lhs);
+                        last_statement = try self.store.addMalformed(AST.Statement.Idx, reason, .{ .start = start, .end = self.pos });
+                        continue :expr_kernel .statement_complete;
+                    }
+
+                    const type_path = blk_path: {
+                        const header_data = self.store.getTypeHeader(header) catch break :blk_path null;
+                        const name_ident = self.tok_buf.resolveIdentifier(header_data.name) orelse break :blk_path null;
+                        const scope_idx = self.decl_index.currentScope() orelse break :blk_path null;
+                        break :blk_path try self.decl_index.internTypePath(scope_idx, self.currentTypePath(), name_ident);
+                    };
+
+                    if (self.peek() != .OpColon and self.peek() != .OpColonEqual and self.peek() != .OpDoubleColon) {
+                        last_statement = try self.pushMalformed(AST.Statement.Idx, .expected_colon_after_type_annotation, self.pos);
+                        continue :expr_kernel .statement_complete;
+                    }
+                    const kind: AST.TypeDeclKind = switch (self.peek()) {
+                        .OpColonEqual => .nominal,
+                        .OpDoubleColon => .@"opaque",
+                        else => .alias,
+                    };
+                    self.advance();
+
+                    const type_dependencies_start = self.decl_index.typeDependencyTop();
+                    const was_collecting_type_dependencies = self.collect_type_dependencies;
+                    self.collect_type_dependencies = true;
+                    try open_syntax.pushType(open_allocator, .statement_type_decl_anno, StatementTypeDeclAnnoState, .{
+                        .start = start,
+                        .header = header,
+                        .kind = kind,
+                        .type_dependencies_start = type_dependencies_start,
+                        .was_collecting_type_dependencies = was_collecting_type_dependencies,
+                        .type_path = type_path,
+                    });
+                    type_args = .not_looking_for_args;
+                    continue :expr_kernel .type_prefix;
+                }
+            } else if (tok == .OpenCurly or tok == .OpenRound) {
+                const isCurly = self.peek() == .OpenCurly;
+                const start = self.pos;
+                var is_destructure = false;
+                var lookahead_pos = self.pos + 1;
+                var depth: u32 = 0;
+                while (lookahead_pos < self.tok_buf.tokens.len) {
+                    const lookahead_tok = self.tok_buf.tokens.items(.tag)[lookahead_pos];
+                    if ((isCurly and lookahead_tok == .OpenCurly) or (!isCurly and (lookahead_tok == .OpenRound or lookahead_tok == .NoSpaceOpenRound))) {
+                        depth += 1;
+                    } else if ((isCurly and lookahead_tok == .CloseCurly) or (!isCurly and lookahead_tok == .CloseRound)) {
+                        if (depth == 0) {
+                            const token_after_close = self.tok_buf.tokens.items(.tag)[lookahead_pos + 1];
+                            if (token_after_close == .OpAssign) is_destructure = true;
+                            break;
+                        }
+                        depth -= 1;
+                    } else if (lookahead_tok == .EndOfFile) break;
+                    lookahead_pos += 1;
+                }
+                if (is_destructure) {
+                    try open_syntax.pushPattern(open_allocator, .statement_destructure_pattern, Token.Idx, start);
+                    pattern_root_state = .{
+                        .outer_start = self.pos,
+                        .scratch_top = self.store.scratchPatternTop(),
+                        .alternatives = .alternatives_forbidden,
+                    };
+                    continue :expr_kernel .pattern_root_next;
+                }
+                if (statement_type == .top_level) {
+                    last_statement = try self.addTopLevelUnexpectedStatement();
+                    continue :expr_kernel .statement_complete;
+                }
+                try open_syntax.pushExpr(open_allocator, .statement_expr_body, Token.Idx, start);
+                expr_state = .{ .start = start, .min_bp = 0 };
+                continue :expr_kernel .prefix;
+            } else if (tok_int >= @intFromEnum(Token.Tag.KwApp) and tok_int <= @intFromEnum(Token.Tag.KwBreak)) {
+                if (tok == .KwVar) {
+                    const start = self.pos;
+                    if (statement_type != .in_body) {
+                        last_statement = try self.pushMalformed(AST.Statement.Idx, .var_only_allowed_in_a_body, self.pos);
+                        continue :expr_kernel .statement_complete;
+                    }
+                    self.advance();
+                    if (self.peek() != .LowerIdent) {
+                        last_statement = try self.pushMalformed(AST.Statement.Idx, .var_must_have_ident, self.pos);
+                        continue :expr_kernel .statement_complete;
+                    }
+                    const name = self.pos;
+                    self.advance();
+                    if (self.peek() == .OpColon) {
+                        self.advance();
+                        try open_syntax.pushType(open_allocator, .statement_type_after_anno, StatementTypeAnnoState, .{
+                            .start = start,
+                            .name = name,
+                            .is_var = true,
+                        });
+                        type_args = .not_looking_for_args;
+                        continue :expr_kernel .type_prefix;
+                    }
+                    self.expect(.OpAssign) catch {
+                        last_statement = try self.pushMalformed(AST.Statement.Idx, .var_expected_equals, self.pos);
+                        continue :expr_kernel .statement_complete;
+                    };
+                    try open_syntax.pushExpr(open_allocator, .statement_var_body, StatementVarBodyState, .{
+                        .start = start,
+                        .name = name,
+                    });
+                    expr_state = .{ .start = self.pos, .min_bp = 0 };
+                    continue :expr_kernel .prefix;
+                }
+                if (tok == .KwImport) {
+                    if (statement_type == .top_level) {
+                        last_statement = try self.parseImportStatementTokens();
+                    } else {
+                        last_statement = try self.pushMalformed(AST.Statement.Idx, .import_must_be_top_level, self.pos);
+                    }
+                    continue :expr_kernel .statement_complete;
+                }
+                if (tok == .KwExpect) {
+                    const start = self.pos;
+                    self.advance();
+                    try open_syntax.pushExpr(open_allocator, .statement_expect_body, Token.Idx, start);
+                    expr_state = .{ .start = self.pos, .min_bp = 0 };
+                    continue :expr_kernel .prefix;
+                }
+                if (tok == .KwFor) {
+                    const start = self.pos;
+                    self.advance();
+                    try open_syntax.pushPattern(open_allocator, .statement_for_pattern, Token.Idx, start);
+                    pattern_root_state = .{
+                        .outer_start = self.pos,
+                        .scratch_top = self.store.scratchPatternTop(),
+                        .alternatives = .alternatives_forbidden,
+                    };
+                    continue :expr_kernel .pattern_root_next;
+                }
+                if (tok == .KwWhile) {
+                    const start = self.pos;
+                    self.advance();
+                    try open_syntax.pushExpr(open_allocator, .statement_while_cond, Token.Idx, start);
+                    expr_state = .{ .start = self.pos, .min_bp = 0 };
+                    continue :expr_kernel .prefix;
+                }
+                if (tok == .KwCrash) {
+                    const start = self.pos;
+                    self.advance();
+                    try open_syntax.pushExpr(open_allocator, .statement_crash_body, Token.Idx, start);
+                    expr_state = .{ .start = self.pos, .min_bp = 0 };
+                    continue :expr_kernel .prefix;
+                }
+                if (tok == .KwDbg) {
+                    const start = self.pos;
+                    self.advance();
+                    try open_syntax.pushExpr(open_allocator, .statement_dbg_body, Token.Idx, start);
+                    expr_state = .{ .start = self.pos, .min_bp = 0 };
+                    continue :expr_kernel .prefix;
+                }
+                if (tok == .KwReturn) {
+                    const start = self.pos;
+                    self.advance();
+                    try open_syntax.pushExpr(open_allocator, .statement_return_body, Token.Idx, start);
+                    expr_state = .{ .start = self.pos, .min_bp = 0 };
+                    continue :expr_kernel .prefix;
+                }
+                if (tok == .KwBreak) {
+                    const start = self.pos;
+                    self.advance();
+                    last_statement = try self.addStatement(.{ .@"break" = .{
+                        .region = .{ .start = start, .end = self.pos },
+                    } });
+                    continue :expr_kernel .statement_complete;
+                }
+            }
+
+            if (statement_type == .top_level) {
+                last_statement = try self.addTopLevelUnexpectedStatement();
+                continue :expr_kernel .statement_complete;
+            }
+            const start = self.pos;
+            try open_syntax.pushExpr(open_allocator, .statement_expr_body, Token.Idx, start);
+            expr_state = .{ .start = start, .min_bp = 0 };
+            continue :expr_kernel .prefix;
+        },
+        .statement_complete => {
+            const completed = last_statement orelse unreachable;
+            last_statement = null;
+            if (open_syntax.peekStatement() == .statement_type_associated_statement and
+                open_syntax.peekPayload(StatementAssociatedStatementState).expr_block_depth == expr_blocks.depth())
+            {
+                const state = open_syntax.popStatementPayload(.statement_type_associated_statement, StatementAssociatedStatementState);
+                if (self.peek() == .CloseCurly or self.peek() == .EndOfFile) {
+                    const stmt = self.store.getStatement(completed);
+                    if (stmt == .expr and self.peek() == .CloseCurly) {
+                        try self.pushDiagnostic(.nominal_associated_cannot_have_final_expression, .{
+                            .start = state.statement_pos,
+                            .end = self.pos,
+                        });
+                    }
+                }
+                try self.store.addScratchStatement(completed);
+                continue :expr_kernel .associated_next;
+            }
+            if (root == .statement and expr_blocks.isEmpty() and associated_blocks.isEmpty()) {
+                return completed;
+            }
+            try self.store.addScratchStatement(completed);
+            continue :expr_kernel .block_next;
+        },
+        .associated_next => switch (self.peek()) {
+            .CloseCurly, .EndOfFile => continue :expr_kernel .associated_finish,
+            else => {
+                try open_syntax.pushStatement(open_allocator, .statement_type_associated_statement, StatementAssociatedStatementState, .{
+                    .statement_pos = self.pos,
+                    .expr_block_depth = expr_blocks.depth(),
+                });
+                statement_type = .in_associated_block;
+                continue :expr_kernel .statement_start;
+            },
+        },
+        .associated_finish => switch (self.peek()) {
+            .CloseCurly, .EndOfFile => {
+                if (self.peek() == .CloseCurly) {
+                    self.advance();
+                } else {
+                    try self.pushDiagnostic(.expected_expr_close_curly, .{ .start = self.pos, .end = self.pos });
+                }
+                const associated_state = associated_blocks.leave();
+                const assoc_region = AST.TokenizedRegion{ .start = associated_state.start, .end = self.pos };
+                try self.exitDeclScope(associated_state.scope, assoc_region);
+                if (associated_state.pushed_type_path) {
+                    _ = self.type_path_stack.pop();
+                }
+                const associated = AST.Associated{
+                    .statements = try self.store.statementSpanFrom(associated_state.scratch_top),
+                    .scope = associated_state.scope,
+                    .region = assoc_region,
+                };
+
+                if (root == .associated_block and open_syntax.peekAssociated() != .statement_type_decl_associated) {
+                    return associated;
+                }
+
+                const type_decl_state = open_syntax.popAssociatedPayload(.statement_type_decl_associated, TypeDeclAssociatedState);
+                if (type_decl_state.kind == .alias) {
+                    try self.pushDiagnostic(.type_alias_cannot_have_associated, .{
+                        .start = type_decl_state.dot_pos,
+                        .end = type_decl_state.dot_pos + 1,
+                    });
+                }
+                const statement_idx = try self.addTypeDeclStatement(.{ .type_decl = .{
+                    .header = type_decl_state.header,
+                    .anno = type_decl_state.anno,
+                    .kind = type_decl_state.kind,
+                    .where = type_decl_state.where_clause,
+                    .associated = associated,
+                    .region = .{ .start = type_decl_state.start, .end = self.pos },
+                } }, type_decl_state.type_dependencies, type_decl_state.type_path);
+                self.decl_index.setScopeOwner(associated.scope, .{ .associated_type_decl = @intFromEnum(statement_idx) });
+                last_statement = statement_idx;
+                continue :expr_kernel .statement_complete;
+            },
+            else => unreachable,
+        },
+        .pattern_root_next => switch (self.peek()) {
+            .EndOfFile => {
+                const pattern_count = self.store.scratchPatternTop() - pattern_root_state.scratch_top;
+                if (pattern_count == 0) {
+                    last_pattern = try self.store.addMalformed(AST.Pattern.Idx, .pattern_unexpected_eof, .{ .start = pattern_root_state.outer_start, .end = self.pos });
+                } else if (pattern_count == 1) {
+                    const single_pattern = self.store.scratch_patterns.items.items[self.store.scratchPatternTop() - 1];
+                    self.store.clearScratchPatternsFrom(pattern_root_state.scratch_top);
+                    last_pattern = try self.finishAsPattern(single_pattern);
+                } else {
+                    const patterns = try self.store.patternSpanFrom(pattern_root_state.scratch_top);
+                    last_pattern = try self.store.addPattern(.{ .alternatives = .{
+                        .region = .{ .start = pattern_root_state.outer_start, .end = self.pos },
+                        .patterns = patterns,
+                    } });
+                }
+                continue :expr_kernel .pattern_complete;
+            },
+            else => {
+                try pattern_roots.enter(open_allocator, pattern_root_state);
+                try open_syntax.pushPatternMarker(open_allocator, .pattern_root);
+                pattern_alternatives = pattern_root_state.alternatives;
+                continue :expr_kernel .pattern_prefix;
+            },
+        },
+        .pattern_prefix => {
+            const tok = self.peek();
+            const tok_int = @intFromEnum(tok);
+
+            if (tok_int < @intFromEnum(Token.Tag.UpperIdent)) {
+                if (tok == .Float) {
+                    const start = self.pos;
                     self.advance();
                     const deprecated = NumericLiteral.deprecatedSuffixFromSource(self.tokenText(start));
                     const literal = try self.store.addNumericLiteral(self.tokenText(start), .frac);
                     const deprecated_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
                     try self.pushDeprecatedNumberSuffixDiagnostic(deprecated.deprecated_suffix, deprecated_region);
                     if (try self.typeIdentFromDeprecatedSuffix(deprecated.deprecated_suffix)) |type_ident| {
-                        last_pattern.* = try self.store.addPattern(.{ .typed_frac = .{
+                        last_pattern = try self.store.addPattern(.{ .typed_frac = .{
                             .region = deprecated_region,
                             .number_tok = start,
                             .type_ident = type_ident,
@@ -3029,130 +5098,438 @@ fn handleExprPatternFrame(
                         const type_token = self.pos;
                         self.advance();
                         const type_ident = self.tok_buf.resolveIdentifier(type_token) orelse {
-                            last_pattern.* = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, type_token);
-                            return;
+                            last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, type_token);
+                            continue :expr_kernel .pattern_complete;
                         };
-                        last_pattern.* = try self.store.addPattern(.{ .typed_frac = .{
+                        last_pattern = try self.store.addPattern(.{ .typed_frac = .{
                             .region = .{ .start = start, .end = self.pos },
                             .number_tok = start,
                             .type_ident = type_ident,
                             .literal = literal,
                         } });
                     } else {
-                        last_pattern.* = try self.store.addPattern(.{ .frac = .{
+                        last_pattern = try self.store.addPattern(.{ .frac = .{
                             .region = deprecated_region,
                             .number_tok = start,
                             .literal = literal,
                         } });
                     }
-                },
-                .OpenSquare => {
+                    continue :expr_kernel .pattern_complete;
+                }
+                if (tok == .StringStart) {
+                    const start = self.pos;
                     self.advance();
-                    try frames.append(allocator, .{ .pattern = .{ .list_next = .{
+                    try open_syntax.pushExpr(open_allocator, .pattern_string, PatternStringState, .{ .start = start });
+                    expr_string_state = .{
                         .start = start,
-                        .scratch_top = self.store.scratchPatternTop(),
-                    } } });
-                },
-                .OpenCurly => {
+                        .min_bp = null,
+                        .scratch_top = self.store.scratchExprTop(),
+                        .multiline = false,
+                    };
+                    continue :expr_kernel .string_next;
+                }
+                if (tok == .SingleQuote) {
+                    const start = self.pos;
                     self.advance();
-                    try frames.append(allocator, .{ .pattern = .{ .record_next = .{
+                    last_pattern = try self.store.addPattern(.{ .single_quote = .{
+                        .token = start,
+                        .region = .{ .start = start, .end = self.pos },
+                    } });
+                    continue :expr_kernel .pattern_complete;
+                }
+                if (tok == .Int) {
+                    const start = self.pos;
+                    self.advance();
+                    const deprecated = NumericLiteral.deprecatedSuffixFromSource(self.tokenText(start));
+                    const literal = try self.store.addNumericLiteral(self.tokenText(start), .int);
+                    const deprecated_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
+                    try self.pushDeprecatedNumberSuffixDiagnostic(deprecated.deprecated_suffix, deprecated_region);
+                    if (try self.typeIdentFromDeprecatedSuffix(deprecated.deprecated_suffix)) |type_ident| {
+                        last_pattern = try self.store.addPattern(.{ .typed_int = .{
+                            .region = deprecated_region,
+                            .number_tok = start,
+                            .type_ident = type_ident,
+                            .literal = literal,
+                        } });
+                    } else if (self.peek() == .NoSpaceDotUpperIdent) {
+                        const type_token = self.pos;
+                        self.advance();
+                        const type_ident = self.tok_buf.resolveIdentifier(type_token) orelse {
+                            last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, type_token);
+                            continue :expr_kernel .pattern_complete;
+                        };
+                        last_pattern = try self.store.addPattern(.{ .typed_int = .{
+                            .region = .{ .start = start, .end = self.pos },
+                            .number_tok = start,
+                            .type_ident = type_ident,
+                            .literal = literal,
+                        } });
+                    } else {
+                        last_pattern = try self.store.addPattern(.{ .int = .{
+                            .region = deprecated_region,
+                            .number_tok = start,
+                            .literal = literal,
+                        } });
+                    }
+                    continue :expr_kernel .pattern_complete;
+                }
+            } else if (tok_int < @intFromEnum(Token.Tag.OpPlus)) {
+                if (tok == .UpperIdent) {
+                    const start = self.pos;
+                    const qual_result = try self.readQualificationChain();
+                    self.pos = qual_result.final_token + 1;
+                    if (!qual_result.is_upper) {
+                        last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, start);
+                        continue :expr_kernel .pattern_complete;
+                    }
+                    if (self.peek() == .NoSpaceOpenRound) {
+                        self.advance();
+                        pattern_tag_args_state = .{
+                            .start = start,
+                            .final_token = qual_result.final_token,
+                            .qualifiers = qual_result.qualifiers,
+                            .scratch_top = self.store.scratchPatternTop(),
+                        };
+                        continue :expr_kernel .pattern_tag_args_next;
+                    }
+                    last_pattern = try self.store.addPattern(.{ .tag = .{
+                        .region = .{ .start = start, .end = self.pos },
+                        .args = .{ .span = .{ .start = 0, .len = 0 } },
+                        .tag_tok = qual_result.final_token,
+                        .qualifiers = qual_result.qualifiers,
+                    } });
+                    continue :expr_kernel .pattern_complete;
+                }
+                if (tok == .LowerIdent or tok == .NamedUnderscore) {
+                    const start = self.pos;
+                    self.advance();
+                    last_pattern = try self.store.addPattern(.{ .ident = .{
+                        .ident_tok = start,
+                        .region = .{ .start = start, .end = self.pos },
+                    } });
+                    continue :expr_kernel .pattern_complete;
+                }
+                if (tok == .Underscore) {
+                    const start = self.pos;
+                    self.advance();
+                    last_pattern = try self.store.addPattern(.{ .underscore = .{
+                        .region = .{ .start = start, .end = self.pos },
+                    } });
+                    continue :expr_kernel .pattern_complete;
+                }
+                if (tok == .OpenRound or tok == .NoSpaceOpenRound) {
+                    const start = self.pos;
+                    self.advance();
+                    pattern_tuple_state = .{ .start = start, .scratch_top = self.store.scratchPatternTop() };
+                    continue :expr_kernel .pattern_tuple_next;
+                }
+                if (tok == .OpenSquare) {
+                    const start = self.pos;
+                    self.advance();
+                    pattern_list_state = .{ .start = start, .scratch_top = self.store.scratchPatternTop() };
+                    continue :expr_kernel .pattern_list_next;
+                }
+                if (tok == .OpenCurly) {
+                    const start = self.pos;
+                    self.advance();
+                    pattern_record_state = .{
                         .start = start,
                         .scratch_top = self.store.scratchPatternRecordFieldTop(),
-                        .alternatives = alts,
-                    } } });
-                },
-                .DoubleDot => {
+                        .alternatives = pattern_alternatives,
+                    };
+                    continue :expr_kernel .pattern_record_next;
+                }
+            } else if (tok_int < @intFromEnum(Token.Tag.KwApp)) {
+                if (tok == .DoubleDot) {
+                    const start = self.pos;
                     var name: ?Token.Idx = null;
                     self.advance();
                     if (self.peek() == .KwAs) {
                         self.advance();
                         if (self.peek() != .LowerIdent) {
-                            last_pattern.* = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, start);
-                            return;
+                            last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, start);
+                            continue :expr_kernel .pattern_complete;
                         }
                         name = self.pos;
                         self.advance();
                     } else if (self.peek() == .LowerIdent) {
-                        last_pattern.* = try self.pushMalformed(AST.Pattern.Idx, .pattern_list_rest_old_syntax, self.pos);
-                        return;
+                        last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_list_rest_old_syntax, self.pos);
+                        continue :expr_kernel .pattern_complete;
                     }
-                    last_pattern.* = try self.store.addPattern(.{ .list_rest = .{
+                    last_pattern = try self.store.addPattern(.{ .list_rest = .{
                         .region = .{ .start = start, .end = self.pos },
                         .name = name,
                     } });
-                },
-                .Underscore => {
+                    continue :expr_kernel .pattern_complete;
+                }
+            } else {
+                if (tok == .KwVar) {
+                    const start = self.pos;
                     self.advance();
-                    last_pattern.* = try self.store.addPattern(.{ .underscore = .{
+                    if (self.peek() != .LowerIdent) {
+                        last_pattern = try self.pushMalformed(AST.Pattern.Idx, .var_must_have_ident, self.pos);
+                        continue :expr_kernel .pattern_complete;
+                    }
+                    const ident_tok = self.pos;
+                    self.advance();
+                    last_pattern = try self.store.addPattern(.{ .var_ident = .{
+                        .ident_tok = ident_tok,
                         .region = .{ .start = start, .end = self.pos },
                     } });
-                },
-                .OpenRound, .NoSpaceOpenRound => {
-                    self.advance();
-                    try frames.append(allocator, .{ .pattern = .{ .tuple_next = .{
-                        .start = start,
-                        .scratch_top = self.store.scratchPatternTop(),
-                    } } });
-                },
-                else => {
-                    last_pattern.* = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, self.pos);
-                },
+                    continue :expr_kernel .pattern_complete;
+                }
             }
+
+            last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, self.pos);
+            continue :expr_kernel .pattern_complete;
         },
-        .tag_args_next => |state| {
-            if (self.peek() == .CloseRound) {
+        .pattern_complete => {
+            const completed = last_pattern orelse unreachable;
+            if (open_syntax.peekPattern()) |kind| {
+                switch (kind) {
+                    .expr_for_pattern => {
+                        const state = open_syntax.popPatternPayload(.expr_for_pattern, ExprAfterExprState);
+                        last_pattern = null;
+                        if (self.peek() == .KwIn) {
+                            self.advance();
+                            try open_syntax.pushExpr(open_allocator, .expr_for_list, ExprForAfterListState, .{
+                                .start = state.start,
+                                .min_bp = state.min_bp,
+                                .pattern = completed,
+                            });
+                            expr_state = .{ .start = self.pos, .min_bp = 0 };
+                            continue :expr_kernel .prefix;
+                        }
+                        const expr = try self.pushMalformed(AST.Expr.Idx, .for_expected_in, self.pos);
+                        expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
+                        continue :expr_kernel .suffix;
+                    },
+                    .expr_lambda_args => {
+                        const state = open_syntax.popPatternPayload(.expr_lambda_args, ExprLambdaArgsState);
+                        last_pattern = null;
+                        try self.store.addScratchPattern(completed);
+                        if (self.peek() == .Comma) {
+                            self.advance();
+                        }
+                        if (self.peek() == .OpBar or self.peek() == .EndOfFile) {
+                            if (self.peek() == .OpBar) {
+                                self.advance();
+                            }
+                            const args = try self.store.patternSpanFrom(state.scratch_top);
+                            try expr_lambda_body_stack.enter(open_allocator, .{
+                                .start = state.start,
+                                .min_bp = state.min_bp,
+                                .args = args,
+                            });
+                            try open_syntax.pushExprMarker(open_allocator, .expr_lambda_body);
+                            expr_state = .{ .start = self.pos, .min_bp = 0 };
+                            continue :expr_kernel .prefix;
+                        }
+                        try open_syntax.pushPattern(open_allocator, .expr_lambda_args, ExprLambdaArgsState, state);
+                        pattern_root_state = .{
+                            .outer_start = self.pos,
+                            .scratch_top = self.store.scratchPatternTop(),
+                            .alternatives = .alternatives_forbidden,
+                        };
+                        continue :expr_kernel .pattern_root_next;
+                    },
+                    .expr_match_pattern => {
+                        const state = open_syntax.popPatternPayload(.expr_match_pattern, ExprMatchBranchAfterPatternState);
+                        last_pattern = null;
+                        try open_syntax.pushExpr(open_allocator, .expr_match_guard, ExprMatchBranchAfterGuardState, .{
+                            .match_start = state.match_start,
+                            .min_bp = state.min_bp,
+                            .matched = state.matched,
+                            .scratch_top = state.scratch_top,
+                            .branch_start = state.branch_start,
+                            .pattern = completed,
+                            .guard = null,
+                        });
+                        expr_match_guard_depth += 1;
+                        if (self.peek() == .KwIf) {
+                            self.advance();
+                            expr_state = .{ .start = self.pos, .min_bp = 0 };
+                            continue :expr_kernel .prefix;
+                        }
+                        if (self.peek() == .OpArrow) {
+                            try self.pushDiagnostic(.match_branch_wrong_arrow, .{ .start = self.pos, .end = self.pos });
+                        }
+                        if (self.peek() == .OpFatArrow or self.peek() == .OpArrow) {
+                            self.advance();
+                        } else {
+                            try self.pushDiagnostic(.match_branch_missing_arrow, .{ .start = self.pos, .end = self.pos });
+                        }
+                        _ = open_syntax.popExprPayload(.expr_match_guard, ExprMatchBranchAfterGuardState);
+                        expr_match_guard_depth -= 1;
+                        try open_syntax.pushExpr(open_allocator, .expr_match_body, ExprMatchBranchAfterBodyState, .{
+                            .match_start = state.match_start,
+                            .min_bp = state.min_bp,
+                            .matched = state.matched,
+                            .scratch_top = state.scratch_top,
+                            .branch_start = state.branch_start,
+                            .pattern = completed,
+                            .guard = null,
+                        });
+                        expr_state = .{ .start = self.pos, .min_bp = 0 };
+                        continue :expr_kernel .prefix;
+                    },
+                    .statement_for_pattern => {
+                        const start = open_syntax.popPatternPayload(.statement_for_pattern, Token.Idx);
+                        last_pattern = null;
+                        if (self.peek() == .KwIn) {
+                            self.advance();
+                            try open_syntax.pushExpr(open_allocator, .statement_for_expr, StatementForExprState, .{
+                                .start = start,
+                                .patt = completed,
+                            });
+                            expr_state = .{ .start = self.pos, .min_bp = 0 };
+                            continue :expr_kernel .prefix;
+                        }
+                        last_statement = try self.pushMalformed(AST.Statement.Idx, .for_expected_in, self.pos);
+                        continue :expr_kernel .statement_complete;
+                    },
+                    .statement_destructure_pattern => {
+                        const start = open_syntax.popPatternPayload(.statement_destructure_pattern, Token.Idx);
+                        last_pattern = null;
+                        if (self.peek() == .OpAssign) {
+                            self.advance();
+                            try open_syntax.pushExpr(open_allocator, .statement_decl_body, StatementDeclBodyState, .{
+                                .start = start,
+                                .pattern = completed,
+                            });
+                            expr_state = .{ .start = self.pos, .min_bp = 0 };
+                            continue :expr_kernel .prefix;
+                        }
+                        last_statement = try self.pushMalformed(AST.Statement.Idx, .statement_unexpected_token, self.pos);
+                        continue :expr_kernel .statement_complete;
+                    },
+                    .pattern_root => {
+                        open_syntax.popPatternMarker(.pattern_root);
+                        const state = pattern_roots.leave();
+                        last_pattern = null;
+                        if (state.alternatives == .alternatives_forbidden) {
+                            self.store.clearScratchPatternsFrom(state.scratch_top);
+                            last_pattern = try self.finishAsPattern(completed);
+                            continue :expr_kernel .pattern_complete;
+                        }
+                        if (self.peek() != .OpBar) {
+                            if ((self.store.scratchPatternTop() - state.scratch_top) == 0) {
+                                last_pattern = try self.finishAsPattern(completed);
+                                continue :expr_kernel .pattern_complete;
+                            }
+                            try self.store.addScratchPattern(completed);
+                            const patterns = try self.store.patternSpanFrom(state.scratch_top);
+                            last_pattern = try self.store.addPattern(.{ .alternatives = .{
+                                .region = .{ .start = state.outer_start, .end = self.pos },
+                                .patterns = patterns,
+                            } });
+                            continue :expr_kernel .pattern_complete;
+                        }
+                        try self.store.addScratchPattern(completed);
+                        self.advance();
+                        pattern_root_state = state;
+                        continue :expr_kernel .pattern_root_next;
+                    },
+                    .pattern_tag_args => {
+                        pattern_tag_args_state = open_syntax.popPatternPayload(.pattern_tag_args, PatternTagArgsState);
+                        last_pattern = null;
+                        try self.store.addScratchPattern(completed);
+                        if (self.peek() == .Comma or self.peek() == .CloseRound) {
+                            if (self.peek() == .Comma) {
+                                self.advance();
+                            }
+                            continue :expr_kernel .pattern_tag_args_next;
+                        }
+                        self.store.clearScratchPatternsFrom(pattern_tag_args_state.scratch_top);
+                        last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, pattern_tag_args_state.start);
+                        continue :expr_kernel .pattern_complete;
+                    },
+                    .pattern_list => {
+                        pattern_list_state = open_syntax.popPatternPayload(.pattern_list, PatternListState);
+                        last_pattern = null;
+                        try self.store.addScratchPattern(completed);
+                        if (self.peek() == .Comma or self.peek() == .CloseSquare) {
+                            if (self.peek() == .Comma) {
+                                self.advance();
+                            }
+                            continue :expr_kernel .pattern_list_next;
+                        }
+                        self.store.clearScratchPatternsFrom(pattern_list_state.scratch_top);
+                        last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, pattern_list_state.start);
+                        continue :expr_kernel .pattern_complete;
+                    },
+                    .pattern_tuple => {
+                        pattern_tuple_state = open_syntax.popPatternPayload(.pattern_tuple, PatternTupleState);
+                        last_pattern = null;
+                        try self.store.addScratchPattern(completed);
+                        if (self.peek() == .Comma or self.peek() == .CloseRound) {
+                            if (self.peek() == .Comma) {
+                                self.advance();
+                            }
+                            continue :expr_kernel .pattern_tuple_next;
+                        }
+                        self.store.clearScratchPatternsFrom(pattern_tuple_state.scratch_top);
+                        last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, pattern_tuple_state.start);
+                        continue :expr_kernel .pattern_complete;
+                    },
+                    .pattern_record_field => {
+                        const state = open_syntax.popPatternPayload(.pattern_record_field, PatternRecordFieldState);
+                        last_pattern = null;
+                        const field = try self.store.addPatternRecordField(.{
+                            .name = state.name,
+                            .value = completed,
+                            .rest = false,
+                            .region = .{ .start = state.field_start, .end = self.pos },
+                        });
+                        try self.store.addScratchPatternRecordField(field);
+                        pattern_record_state = .{
+                            .start = state.record_start,
+                            .scratch_top = state.scratch_top,
+                            .alternatives = state.alternatives,
+                        };
+                        if (self.peek() == .Comma) {
+                            self.advance();
+                            continue :expr_kernel .pattern_record_next;
+                        }
+                        if (self.peek() == .CloseCurly) {
+                            continue :expr_kernel .pattern_record_finish;
+                        }
+                        continue :expr_kernel .pattern_record_next;
+                    },
+                }
+            }
+            unreachable;
+        },
+        .pattern_tag_args_next => switch (self.peek()) {
+            .CloseRound => {
                 self.advance();
-                const args = try self.store.patternSpanFrom(state.scratch_top);
-                last_pattern.* = try self.store.addPattern(.{ .tag = .{
-                    .region = .{ .start = state.start, .end = self.pos },
+                const args = try self.store.patternSpanFrom(pattern_tag_args_state.scratch_top);
+                last_pattern = try self.store.addPattern(.{ .tag = .{
+                    .region = .{ .start = pattern_tag_args_state.start, .end = self.pos },
                     .args = args,
-                    .tag_tok = state.final_token,
-                    .qualifiers = state.qualifiers,
+                    .tag_tok = pattern_tag_args_state.final_token,
+                    .qualifiers = pattern_tag_args_state.qualifiers,
                 } });
-            } else if (self.peek() == .EndOfFile) {
-                self.store.clearScratchPatternsFrom(state.scratch_top);
-                last_pattern.* = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, state.start);
-            } else {
-                try frames.append(allocator, .{ .pattern = .{ .tag_args_after_item = .{
-                    .start = state.start,
-                    .final_token = state.final_token,
-                    .qualifiers = state.qualifiers,
-                    .scratch_top = state.scratch_top,
-                } } });
-                try pushExprPatternRoot(frames, allocator, self.pos, self.store.scratchPatternTop(), .alternatives_allowed);
-            }
+                continue :expr_kernel .pattern_complete;
+            },
+            else => {
+                if (self.peek() == .EndOfFile) {
+                    self.store.clearScratchPatternsFrom(pattern_tag_args_state.scratch_top);
+                    last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, pattern_tag_args_state.start);
+                    continue :expr_kernel .pattern_complete;
+                }
+                try open_syntax.pushPattern(open_allocator, .pattern_tag_args, PatternTagArgsState, pattern_tag_args_state);
+                pattern_root_state = .{
+                    .outer_start = self.pos,
+                    .scratch_top = self.store.scratchPatternTop(),
+                    .alternatives = .alternatives_allowed,
+                };
+                continue :expr_kernel .pattern_root_next;
+            },
         },
-        .tag_args_after_item => |state| {
-            const item = last_pattern.* orelse unreachable;
-            last_pattern.* = null;
-            try self.store.addScratchPattern(item);
-            if (self.peek() == .Comma) {
-                self.advance();
-                try frames.append(allocator, .{ .pattern = .{ .tag_args_next = .{
-                    .start = state.start,
-                    .final_token = state.final_token,
-                    .qualifiers = state.qualifiers,
-                    .scratch_top = state.scratch_top,
-                } } });
-            } else if (self.peek() == .CloseRound) {
-                try frames.append(allocator, .{ .pattern = .{ .tag_args_next = .{
-                    .start = state.start,
-                    .final_token = state.final_token,
-                    .qualifiers = state.qualifiers,
-                    .scratch_top = state.scratch_top,
-                } } });
-            } else {
-                self.store.clearScratchPatternsFrom(state.scratch_top);
-                last_pattern.* = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, state.start);
-            }
-        },
-        .list_next => |state| {
-            if (self.peek() == .CloseSquare) {
-                try frames.append(allocator, .{ .pattern = .{ .list_finish = .{ .start = state.start, .scratch_top = state.scratch_top } } });
-            } else if (self.peek() == .EndOfFile) {
-                self.store.clearScratchPatternsFrom(state.scratch_top);
-                last_pattern.* = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, state.start);
-            } else if (self.peek() == .DoubleDot) {
+        .pattern_list_next => switch (self.peek()) {
+            .CloseSquare => continue :expr_kernel .pattern_list_finish,
+            .DoubleDot => {
                 const rest_start = self.pos;
                 self.advance();
                 var rest_name: ?Token.Idx = null;
@@ -3174,50 +5551,44 @@ fn handleExprPatternFrame(
                 try self.store.addScratchPattern(rest_pattern);
                 if (self.peek() == .Comma) {
                     self.advance();
-                    try frames.append(allocator, .{ .pattern = .{ .list_next = .{ .start = state.start, .scratch_top = state.scratch_top } } });
-                } else {
-                    try frames.append(allocator, .{ .pattern = .{ .list_finish = .{ .start = state.start, .scratch_top = state.scratch_top } } });
+                    continue :expr_kernel .pattern_list_next;
                 }
-            } else {
-                try frames.append(allocator, .{ .pattern = .{ .list_after_item = .{
-                    .start = state.start,
-                    .scratch_top = state.scratch_top,
-                } } });
-                try pushExprPatternRoot(frames, allocator, self.pos, self.store.scratchPatternTop(), .alternatives_allowed);
-            }
+                continue :expr_kernel .pattern_list_finish;
+            },
+            else => {
+                if (self.peek() == .EndOfFile) {
+                    self.store.clearScratchPatternsFrom(pattern_list_state.scratch_top);
+                    last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, pattern_list_state.start);
+                    continue :expr_kernel .pattern_complete;
+                }
+                try open_syntax.pushPattern(open_allocator, .pattern_list, PatternListState, pattern_list_state);
+                pattern_root_state = .{
+                    .outer_start = self.pos,
+                    .scratch_top = self.store.scratchPatternTop(),
+                    .alternatives = .alternatives_allowed,
+                };
+                continue :expr_kernel .pattern_root_next;
+            },
         },
-        .list_after_item => |state| {
-            const item = last_pattern.* orelse unreachable;
-            last_pattern.* = null;
-            try self.store.addScratchPattern(item);
-            if (self.peek() == .Comma) {
+        .pattern_list_finish => switch (self.peek()) {
+            .CloseSquare => {
                 self.advance();
-                try frames.append(allocator, .{ .pattern = .{ .list_next = .{ .start = state.start, .scratch_top = state.scratch_top } } });
-            } else {
-                try frames.append(allocator, .{ .pattern = .{ .list_finish = .{ .start = state.start, .scratch_top = state.scratch_top } } });
-            }
+                const patterns = try self.store.patternSpanFrom(pattern_list_state.scratch_top);
+                last_pattern = try self.store.addPattern(.{ .list = .{
+                    .region = .{ .start = pattern_list_state.start, .end = self.pos },
+                    .patterns = patterns,
+                } });
+                continue :expr_kernel .pattern_complete;
+            },
+            else => {
+                self.store.clearScratchPatternsFrom(pattern_list_state.scratch_top);
+                last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, pattern_list_state.start);
+                continue :expr_kernel .pattern_complete;
+            },
         },
-        .list_finish => |state| {
-            if (self.peek() == .CloseSquare) {
-                self.advance();
-            } else {
-                self.store.clearScratchPatternsFrom(state.scratch_top);
-                last_pattern.* = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, state.start);
-                return;
-            }
-            const patterns = try self.store.patternSpanFrom(state.scratch_top);
-            last_pattern.* = try self.store.addPattern(.{ .list = .{
-                .region = .{ .start = state.start, .end = self.pos },
-                .patterns = patterns,
-            } });
-        },
-        .record_next => |state| {
-            if (self.peek() == .CloseCurly) {
-                try frames.append(allocator, .{ .pattern = .{ .record_finish = .{ .start = state.start, .scratch_top = state.scratch_top } } });
-            } else if (self.peek() == .EndOfFile) {
-                self.store.clearScratchPatternRecordFieldsFrom(state.scratch_top);
-                last_pattern.* = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, state.start);
-            } else if (self.peek() == .DoubleDot) {
+        .pattern_record_next => switch (self.peek()) {
+            .CloseCurly => continue :expr_kernel .pattern_record_finish,
+            .DoubleDot => {
                 const field_start = self.pos;
                 self.advance();
                 var name: u32 = 0;
@@ -3234,23 +5605,12 @@ fn handleExprPatternFrame(
                 try self.store.addScratchPatternRecordField(field);
                 if (self.peek() == .Comma) {
                     self.advance();
-                    try frames.append(allocator, .{ .pattern = .{ .record_next = .{
-                        .start = state.start,
-                        .scratch_top = state.scratch_top,
-                        .alternatives = state.alternatives,
-                    } } });
-                } else {
-                    try frames.append(allocator, .{ .pattern = .{ .record_finish = .{ .start = state.start, .scratch_top = state.scratch_top } } });
+                    continue :expr_kernel .pattern_record_next;
                 }
-            } else {
+                continue :expr_kernel .pattern_record_finish;
+            },
+            .LowerIdent => {
                 const field_start = self.pos;
-                if (self.peek() != .LowerIdent) {
-                    while (self.peek() != .EndOfFile and self.peek() != .CloseCurly) {
-                        self.advance();
-                    }
-                    last_pattern.* = try self.pushMalformed(AST.Pattern.Idx, .expected_lower_ident_pat_field_name, field_start);
-                    return;
-                }
                 const name = self.pos;
                 self.advance();
                 if (self.peek() == .Comma or self.peek() == .CloseCurly) {
@@ -3263,2808 +5623,103 @@ fn handleExprPatternFrame(
                     try self.store.addScratchPatternRecordField(field);
                     if (self.peek() == .Comma) {
                         self.advance();
-                        try frames.append(allocator, .{ .pattern = .{ .record_next = .{
-                            .start = state.start,
-                            .scratch_top = state.scratch_top,
-                            .alternatives = state.alternatives,
-                        } } });
-                    } else {
-                        try frames.append(allocator, .{ .pattern = .{ .record_finish = .{ .start = state.start, .scratch_top = state.scratch_top } } });
+                        continue :expr_kernel .pattern_record_next;
                     }
-                } else {
-                    if (self.peek() != .OpColon) {
-                        while (self.peek() != .EndOfFile) {
-                            if (self.peek() == .CloseCurly) break;
-                            self.advance();
-                        }
-                        last_pattern.* = try self.pushMalformed(AST.Pattern.Idx, .expected_colon_after_pat_field_name, field_start);
-                        return;
+                    continue :expr_kernel .pattern_record_finish;
+                }
+                if (self.peek() != .OpColon) {
+                    while (self.peek() != .EndOfFile and self.peek() != .CloseCurly) {
+                        self.advance();
                     }
-                    self.advance();
-                    try frames.append(allocator, .{ .pattern = .{ .record_field_after_value = .{
-                        .record_start = state.start,
-                        .scratch_top = state.scratch_top,
-                        .alternatives = state.alternatives,
-                        .field_start = field_start,
-                        .name = name,
-                    } } });
-                    try pushExprPatternRoot(frames, allocator, self.pos, self.store.scratchPatternTop(), state.alternatives);
-                }
-            }
-        },
-        .record_field_after_value => |state| {
-            const value = last_pattern.* orelse unreachable;
-            last_pattern.* = null;
-            const field = try self.store.addPatternRecordField(.{
-                .name = state.name,
-                .value = value,
-                .rest = false,
-                .region = .{ .start = state.field_start, .end = self.pos },
-            });
-            try self.store.addScratchPatternRecordField(field);
-            if (self.peek() == .Comma) {
-                self.advance();
-                try frames.append(allocator, .{ .pattern = .{ .record_next = .{
-                    .start = state.record_start,
-                    .scratch_top = state.scratch_top,
-                    .alternatives = state.alternatives,
-                } } });
-            } else {
-                try frames.append(allocator, .{ .pattern = .{ .record_finish = .{ .start = state.record_start, .scratch_top = state.scratch_top } } });
-            }
-        },
-        .record_finish => |state| {
-            const fields = try self.store.patternRecordFieldSpanFrom(state.scratch_top);
-            if (self.peek() != .CloseCurly) {
-                last_pattern.* = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, state.start);
-                return;
-            }
-            self.advance();
-            last_pattern.* = try self.store.addPattern(.{ .record = .{
-                .region = .{ .start = state.start, .end = self.pos },
-                .fields = fields,
-            } });
-        },
-        .tuple_next => |state| {
-            if (self.peek() == .CloseRound) {
-                try frames.append(allocator, .{ .pattern = .{ .tuple_finish = .{ .start = state.start, .scratch_top = state.scratch_top } } });
-            } else if (self.peek() == .EndOfFile) {
-                self.store.clearScratchPatternsFrom(state.scratch_top);
-                last_pattern.* = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, state.start);
-            } else {
-                try frames.append(allocator, .{ .pattern = .{ .tuple_after_item = .{
-                    .start = state.start,
-                    .scratch_top = state.scratch_top,
-                } } });
-                try pushExprPatternRoot(frames, allocator, self.pos, self.store.scratchPatternTop(), .alternatives_allowed);
-            }
-        },
-        .tuple_after_item => |state| {
-            const item = last_pattern.* orelse unreachable;
-            last_pattern.* = null;
-            try self.store.addScratchPattern(item);
-            if (self.peek() == .Comma) {
-                self.advance();
-                try frames.append(allocator, .{ .pattern = .{ .tuple_next = .{ .start = state.start, .scratch_top = state.scratch_top } } });
-            } else if (self.peek() == .CloseRound) {
-                try frames.append(allocator, .{ .pattern = .{ .tuple_next = .{ .start = state.start, .scratch_top = state.scratch_top } } });
-            } else {
-                self.store.clearScratchPatternsFrom(state.scratch_top);
-                last_pattern.* = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, state.start);
-            }
-        },
-        .tuple_finish => |state| {
-            if (self.peek() != .CloseRound) {
-                self.store.clearScratchPatternsFrom(state.scratch_top);
-                last_pattern.* = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, state.start);
-                return;
-            }
-            self.advance();
-            const patterns = try self.store.patternSpanFrom(state.scratch_top);
-            last_pattern.* = try self.store.addPattern(.{ .tuple = .{
-                .patterns = patterns,
-                .region = .{ .start = state.start, .end = self.pos },
-            } });
-        },
-        .string_after_expr => |start| {
-            const inner = last_expr.* orelse unreachable;
-            last_expr.* = null;
-            last_pattern.* = try self.store.addPattern(.{ .string = .{
-                .string_tok = start,
-                .region = .{ .start = start, .end = self.pos },
-                .expr = inner,
-            } });
-        },
-    }
-}
-
-/// Parses a qualification chain (e.g., "json.Core.Utf8" -> ["json", "Core"])
-/// Returns the qualifiers and the final token
-fn parseQualificationChain(self: *Parser) Error!QualificationResult {
-    std.debug.assert(self.peek() == .UpperIdent or self.peek() == .LowerIdent);
-
-    const scratch_top = self.store.scratchTokenTop();
-    var final_token = self.pos; // Capture position of the identifier
-    var is_upper = true;
-
-    // Check if there's a qualification chain by looking ahead
-    const saved_pos = self.pos;
-    self.advance();
-
-    if (self.peek() == .NoSpaceDotUpperIdent or self.peek() == .NoSpaceDotLowerIdent) {
-        // There is a qualification chain, continue parsing
-        while (self.peek() == .NoSpaceDotUpperIdent or self.peek() == .NoSpaceDotLowerIdent) {
-            // Add the current token as a qualifier before moving to the next
-            try self.store.addScratchToken(final_token);
-
-            // Capture position of the dot-prefixed token
-            final_token = self.pos;
-            is_upper = (self.tok_buf.tokens.items(.tag)[final_token] == .NoSpaceDotUpperIdent);
-
-            // Move past this token
-            self.advance();
-        }
-    } else {
-        // No qualification chain, restore position
-        self.pos = saved_pos;
-    }
-
-    const qualifiers = try self.store.tokenSpanFrom(scratch_top);
-
-    return QualificationResult{
-        .qualifiers = qualifiers,
-        .final_token = final_token,
-        .is_upper = is_upper,
-    };
-}
-
-/// todo
-pub fn parseExpr(self: *Parser) Error!AST.Expr.Idx {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    return try self.parseExprWithBp(0);
-}
-
-/// todo
-pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    const result = try self.parseDriver(.{ .parse = min_bp });
-    return switch (result) {
-        .expr => |expr| expr,
-        else => try self.store.addMalformed(AST.Expr.Idx, .expr_unexpected_token, .{ .start = self.pos, .end = self.pos }),
-    };
-}
-
-fn parseDriver(self: *Parser, initial: ExprFrame) Error!ExprDriverResult {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    var frame_allocator_state = std.heap.stackFallback(8192, self.gpa);
-    const frame_allocator = frame_allocator_state.get();
-    var frames: std.ArrayList(ExprFrame) = .empty;
-    defer frames.deinit(frame_allocator);
-    const type_path_stack_top = self.type_path_stack.items.len;
-    const type_path_stack_visible_start = self.type_path_stack_visible_start;
-    errdefer self.type_path_stack.shrinkRetainingCapacity(type_path_stack_top);
-    errdefer self.type_path_stack_visible_start = type_path_stack_visible_start;
-
-    var last: ?AST.Expr.Idx = null;
-    var last_pattern: ?AST.Pattern.Idx = null;
-    var last_pattern_span: ?AST.Pattern.Span = null;
-    var last_statement: ?AST.Statement.Idx = null;
-    var last_associated: ?AST.Associated = null;
-    try frames.append(frame_allocator, initial);
-
-    while (frames.pop()) |frame| {
-        switch (frame) {
-            .parse => |frame_min_bp| {
-                const start = self.pos;
-                switch (self.peek()) {
-                    .UpperIdent => {
-                        const qual_result = try self.parseQualificationChain();
-                        self.pos = qual_result.final_token + 1;
-                        const expr = if (qual_result.is_upper)
-                            try self.store.addExpr(.{ .tag = .{
-                                .token = qual_result.final_token,
-                                .qualifiers = qual_result.qualifiers,
-                                .region = .{ .start = start, .end = self.pos },
-                            } })
-                        else
-                            try self.store.addExpr(.{ .ident = .{
-                                .token = qual_result.final_token,
-                                .qualifiers = qual_result.qualifiers,
-                                .region = .{ .start = start, .end = self.pos },
-                            } });
-                        try frames.append(frame_allocator, .{ .finish = .{ .start = start, .min_bp = frame_min_bp, .expr = expr } });
-                    },
-                    .LowerIdent, .NamedUnderscore => {
-                        self.advance();
-                        const empty_qualifiers = try self.store.tokenSpanFrom(self.store.scratchTokenTop());
-                        const expr = try self.store.addExpr(.{ .ident = .{
-                            .token = start,
-                            .qualifiers = empty_qualifiers,
-                            .region = .{ .start = start, .end = self.pos },
-                        } });
-                        try frames.append(frame_allocator, .{ .finish = .{ .start = start, .min_bp = frame_min_bp, .expr = expr } });
-                    },
-                    .Int => {
-                        self.advance();
-                        const deprecated = NumericLiteral.deprecatedSuffixFromSource(self.tokenText(start));
-                        const literal = try self.store.addNumericLiteral(self.tokenText(start), .int);
-                        const deprecated_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
-                        try self.pushDeprecatedNumberSuffixDiagnostic(deprecated.deprecated_suffix, deprecated_region);
-
-                        if (self.peek() == .NoSpaceDotInt) {
-                            last = try self.pushMalformed(AST.Expr.Idx, .expr_dot_suffix_not_allowed, self.pos);
-                            continue;
-                        }
-
-                        const expr = if (try self.typeIdentFromDeprecatedSuffix(deprecated.deprecated_suffix)) |type_ident|
-                            try self.store.addExpr(.{ .typed_int = .{
-                                .token = start,
-                                .type_ident = type_ident,
-                                .literal = literal,
-                                .region = deprecated_region,
-                            } })
-                        else if (self.peek() == .NoSpaceDotUpperIdent) blk: {
-                            const type_token = self.pos;
-                            self.advance();
-                            const type_ident = self.tok_buf.resolveIdentifier(type_token) orelse {
-                                last = try self.pushMalformed(AST.Expr.Idx, .expr_unexpected_token, type_token);
-                                continue;
-                            };
-                            break :blk try self.store.addExpr(.{ .typed_int = .{
-                                .token = start,
-                                .type_ident = type_ident,
-                                .literal = literal,
-                                .region = .{ .start = start, .end = self.pos },
-                            } });
-                        } else try self.store.addExpr(.{ .int = .{
-                            .token = start,
-                            .literal = literal,
-                            .region = deprecated_region,
-                        } });
-                        try frames.append(frame_allocator, .{ .finish = .{ .start = start, .min_bp = frame_min_bp, .expr = expr } });
-                    },
-                    .Float => {
-                        self.advance();
-                        const deprecated = NumericLiteral.deprecatedSuffixFromSource(self.tokenText(start));
-                        const literal = try self.store.addNumericLiteral(self.tokenText(start), .frac);
-                        const deprecated_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
-                        try self.pushDeprecatedNumberSuffixDiagnostic(deprecated.deprecated_suffix, deprecated_region);
-
-                        const expr = if (try self.typeIdentFromDeprecatedSuffix(deprecated.deprecated_suffix)) |type_ident|
-                            try self.store.addExpr(.{ .typed_frac = .{
-                                .token = start,
-                                .type_ident = type_ident,
-                                .literal = literal,
-                                .region = deprecated_region,
-                            } })
-                        else if (self.peek() == .NoSpaceDotUpperIdent) blk: {
-                            const type_token = self.pos;
-                            self.advance();
-                            const type_ident = self.tok_buf.resolveIdentifier(type_token) orelse {
-                                last = try self.pushMalformed(AST.Expr.Idx, .expr_unexpected_token, type_token);
-                                continue;
-                            };
-                            break :blk try self.store.addExpr(.{ .typed_frac = .{
-                                .token = start,
-                                .type_ident = type_ident,
-                                .literal = literal,
-                                .region = .{ .start = start, .end = self.pos },
-                            } });
-                        } else try self.store.addExpr(.{ .frac = .{
-                            .token = start,
-                            .literal = literal,
-                            .region = deprecated_region,
-                        } });
-                        try frames.append(frame_allocator, .{ .finish = .{ .start = start, .min_bp = frame_min_bp, .expr = expr } });
-                    },
-                    .SingleQuote => {
-                        self.advance();
-                        const expr = try self.store.addExpr(.{ .single_quote = .{
-                            .token = start,
-                            .region = .{ .start = start, .end = self.pos },
-                        } });
-                        try frames.append(frame_allocator, .{ .finish = .{ .start = start, .min_bp = frame_min_bp, .expr = expr } });
-                    },
-                    .StringStart, .MultilineStringStart => {
-                        const multiline = self.peek() == .MultilineStringStart;
-                        self.advance();
-                        try frames.append(frame_allocator, .{ .finish_last = .{ .start = start, .min_bp = frame_min_bp } });
-                        try frames.append(frame_allocator, .{ .string_next = .{
-                            .start = start,
-                            .scratch_top = self.store.scratchExprTop(),
-                            .multiline = multiline,
-                        } });
-                    },
-                    .OpenSquare => {
-                        self.advance();
-                        try frames.append(frame_allocator, .{ .finish_last = .{ .start = start, .min_bp = frame_min_bp } });
-                        try frames.append(frame_allocator, .{ .expr_collection_next = .{
-                            .start = start,
-                            .scratch_top = self.store.scratchExprTop(),
-                            .end_token = .CloseSquare,
-                            .result = .list,
-                            .close_error = .expected_expr_close_square_or_comma,
-                        } });
-                    },
-                    .NoSpaceOpenRound, .OpenRound => {
-                        self.advance();
-                        try frames.append(frame_allocator, .{ .finish_last = .{ .start = start, .min_bp = frame_min_bp } });
-                        try frames.append(frame_allocator, .{ .expr_collection_next = .{
-                            .start = start,
-                            .scratch_top = self.store.scratchExprTop(),
-                            .end_token = .CloseRound,
-                            .result = .tuple,
-                            .close_error = .expected_expr_close_round_or_comma,
-                        } });
-                    },
-                    .OpenCurly => {
-                        self.advance();
-
-                        if (self.peek() == .CloseCurly) {
-                            try frames.append(frame_allocator, .{ .record_finish = .{
-                                .start = start,
-                                .min_bp = frame_min_bp,
-                                .scratch_top = self.store.scratchRecordFieldTop(),
-                                .ext = null,
-                            } });
-                        } else if (self.peek() == .DoubleDot) {
-                            self.advance();
-                            try frames.append(frame_allocator, .{ .record_ext_after_expr = .{ .start = start, .min_bp = frame_min_bp } });
-                            try frames.append(frame_allocator, .{ .parse = 0 });
-                        } else if (self.peek() == .LowerIdent and (self.peekNext() == .Comma or self.peekNext() == .OpColon)) {
-                            var is_block = false;
-                            if (self.peekNext() == .OpColon) {
-                                var lookahead_pos = self.pos + 2;
-                                var depth: u32 = 0;
-                                while (lookahead_pos < self.tok_buf.tokens.len) {
-                                    const tok = self.tok_buf.tokens.items(.tag)[lookahead_pos];
-                                    switch (tok) {
-                                        .OpenRound, .NoSpaceOpenRound, .OpenSquare, .OpenCurly => depth += 1,
-                                        .CloseRound, .CloseSquare, .CloseCurly => {
-                                            if (depth == 0) break;
-                                            depth -= 1;
-                                        },
-                                        .LowerIdent => if (depth == 0 and lookahead_pos + 1 < self.tok_buf.tokens.len and self.tok_buf.tokens.items(.tag)[lookahead_pos + 1] == .OpAssign) {
-                                            is_block = true;
-                                            break;
-                                        },
-                                        .EndOfFile => break,
-                                        else => {},
-                                    }
-                                    lookahead_pos += 1;
-                                }
-                            }
-                            if (is_block) {
-                                try frames.append(frame_allocator, .{ .finish_last = .{ .start = start, .min_bp = frame_min_bp } });
-                                try frames.append(frame_allocator, .{ .block_begin = start });
-                            } else {
-                                try frames.append(frame_allocator, .{ .record_fields_next = .{
-                                    .start = start,
-                                    .min_bp = frame_min_bp,
-                                    .scratch_top = self.store.scratchRecordFieldTop(),
-                                    .ext = null,
-                                } });
-                            }
-                        } else {
-                            try frames.append(frame_allocator, .{ .finish_last = .{ .start = start, .min_bp = frame_min_bp } });
-                            try frames.append(frame_allocator, .{ .block_begin = start });
-                        }
-                    },
-                    .OpBar => {
-                        self.advance();
-                        try frames.append(frame_allocator, .{ .finish_last = .{ .start = start, .min_bp = frame_min_bp } });
-                        try frames.append(frame_allocator, .{ .lambda_after_args = start });
-                        try frames.append(frame_allocator, .{ .pattern_collection_next = .{
-                            .start = start,
-                            .scratch_top = self.store.scratchPatternTop(),
-                            .end_token = .OpBar,
-                            .alternatives = .alternatives_forbidden,
-                            .close_error = .expected_expr_bar,
-                        } });
-                    },
-                    .KwIf => {
-                        self.advance();
-                        try frames.append(frame_allocator, .{ .finish_last = .{ .start = start, .min_bp = frame_min_bp } });
-                        try frames.append(frame_allocator, .{ .if_after_condition = start });
-                        try frames.append(frame_allocator, .{ .parse = 0 });
-                    },
-                    .KwMatch => {
-                        self.advance();
-                        try frames.append(frame_allocator, .{ .finish_last = .{ .start = start, .min_bp = frame_min_bp } });
-                        try frames.append(frame_allocator, .{ .match_after_expr = start });
-                        try frames.append(frame_allocator, .{ .parse = 0 });
-                    },
-                    .KwDbg => {
-                        self.advance();
-                        try frames.append(frame_allocator, .{ .finish_last = .{ .start = start, .min_bp = frame_min_bp } });
-                        try frames.append(frame_allocator, .{ .dbg_after_expr = start });
-                        try frames.append(frame_allocator, .{ .parse = 0 });
-                    },
-                    .KwFor => {
-                        self.advance();
-                        try frames.append(frame_allocator, .{ .finish_last = .{ .start = start, .min_bp = frame_min_bp } });
-                        try frames.append(frame_allocator, .{ .for_after_pattern = start });
-                        try pushExprPatternRoot(&frames, frame_allocator, self.pos, self.store.scratchPatternTop(), .alternatives_forbidden);
-                    },
-                    .TripleDot => {
-                        const expr = try self.store.addExpr(.{ .ellipsis = .{
-                            .region = .{ .start = start, .end = self.pos },
-                        } });
-                        self.advance();
-                        try frames.append(frame_allocator, .{ .finish = .{ .start = start, .min_bp = frame_min_bp, .expr = expr } });
-                    },
-                    .OpUnaryMinus, .OpBang => {
-                        const operator_token = start;
-                        self.advance();
-                        try frames.append(frame_allocator, .{ .finish_last = .{ .start = start, .min_bp = frame_min_bp } });
-                        try frames.append(frame_allocator, .{ .after_unary = .{ .start = start, .operator = operator_token } });
-                        try frames.append(frame_allocator, .{ .parse = 100 });
-                    },
-                    .KwReturn => {
-                        last = try self.pushMalformed(AST.Expr.Idx, .return_outside_function, start);
-                        continue;
-                    },
-                    else => {
-                        last = try self.pushMalformed(AST.Expr.Idx, .expr_unexpected_token, start);
-                        continue;
-                    },
-                }
-            },
-            .finish => |state| {
-                var expression = state.expr;
-                last = null;
-                while (true) {
-                    switch (self.peek()) {
-                        .NoSpaceOpenRound => {
-                            self.advance();
-                            try frames.append(frame_allocator, .{ .after_apply_args = .{
-                                .start = state.start,
-                                .min_bp = state.min_bp,
-                                .function = expression,
-                            } });
-                            try frames.append(frame_allocator, .{ .expr_collection_next = .{
-                                .start = state.start,
-                                .scratch_top = self.store.scratchExprTop(),
-                                .end_token = .CloseRound,
-                                .result = .apply_args,
-                                .close_error = .expected_expr_apply_close_round,
-                            } });
-                            break;
-                        },
-                        .NoSpaceOpQuestion => {
-                            self.advance();
-                            expression = try self.store.addExpr(.{ .suffix_single_question = .{
-                                .expr = expression,
-                                .operator = state.start,
-                                .region = .{ .start = state.start, .end = self.pos },
-                            } });
-                        },
-                        .NoSpaceDotInt, .DotInt => {
-                            const elem_token = self.pos;
-                            self.advance();
-                            expression = try self.store.addExpr(.{ .tuple_access = .{
-                                .expr = expression,
-                                .elem_token = elem_token,
-                                .region = .{ .start = state.start, .end = self.pos },
-                            } });
-                        },
-                        .NoSpaceDotLowerIdent, .DotLowerIdent => {
-                            const s = self.pos;
-                            self.advance();
-                            const empty_qualifiers = try self.store.tokenSpanFrom(self.store.scratchTokenTop());
-                            const ident = try self.store.addExpr(.{ .ident = .{
-                                .region = .{ .start = s, .end = self.pos },
-                                .token = s,
-                                .qualifiers = empty_qualifiers,
-                            } });
-                            if (self.peek() == .NoSpaceOpenRound) {
-                                self.advance();
-                                try frames.append(frame_allocator, .{ .after_method_args = .{
-                                    .start = state.start,
-                                    .min_bp = state.min_bp,
-                                    .receiver = expression,
-                                    .method_token = s,
-                                } });
-                                try frames.append(frame_allocator, .{ .expr_collection_next = .{
-                                    .start = s,
-                                    .scratch_top = self.store.scratchExprTop(),
-                                    .end_token = .CloseRound,
-                                    .result = .apply_args,
-                                    .close_error = .expected_expr_apply_close_round,
-                                } });
-                                break;
-                            } else {
-                                expression = try self.store.addExpr(.{ .field_access = .{
-                                    .region = .{ .start = state.start, .end = self.pos },
-                                    .operator = state.start,
-                                    .left = expression,
-                                    .right = ident,
-                                } });
-                            }
-                        },
-                        .OpArrow => {
-                            const s = self.pos;
-                            self.advance();
-                            const first_token_tag = self.peek();
-                            if (first_token_tag == .LowerIdent or first_token_tag == .UpperIdent) {
-                                const ident_start = self.pos;
-                                const qual_result = try self.parseQualificationChain();
-                                self.pos = qual_result.final_token + 1;
-                                const is_tag = if (qual_result.qualifiers.span.len == 0)
-                                    first_token_tag == .UpperIdent
-                                else
-                                    qual_result.is_upper;
-                                const expr_node = if (is_tag)
-                                    try self.store.addExpr(.{ .tag = .{
-                                        .region = .{ .start = ident_start, .end = self.pos },
-                                        .token = qual_result.final_token,
-                                        .qualifiers = qual_result.qualifiers,
-                                    } })
-                                else
-                                    try self.store.addExpr(.{ .ident = .{
-                                        .region = .{ .start = ident_start, .end = self.pos },
-                                        .token = qual_result.final_token,
-                                        .qualifiers = qual_result.qualifiers,
-                                    } });
-                                try frames.append(frame_allocator, .{ .arrow_app_next = .{
-                                    .start = state.start,
-                                    .min_bp = state.min_bp,
-                                    .left = expression,
-                                    .operator = s,
-                                    .rhs = expr_node,
-                                } });
-                                break;
-                            } else if (first_token_tag == .OpenRound or first_token_tag == .NoSpaceOpenRound) {
-                                self.advance();
-                                try frames.append(frame_allocator, .{ .arrow_after_inner = .{
-                                    .start = state.start,
-                                    .min_bp = state.min_bp,
-                                    .left = expression,
-                                    .operator = s,
-                                } });
-                                try frames.append(frame_allocator, .{ .parse = 0 });
-                                break;
-                            } else {
-                                last = try self.pushMalformed(AST.Expr.Idx, .expr_arrow_expects_ident, self.pos);
-                                continue;
-                            }
-                        },
-                        else => {
-                            if (getTokenBP(self.peek())) |bp| {
-                                if (bp.left >= state.min_bp) {
-                                    const op_pos = self.pos;
-                                    self.advance();
-                                    try frames.append(frame_allocator, .{ .after_binary_rhs = .{
-                                        .start = state.start,
-                                        .min_bp = state.min_bp,
-                                        .left = expression,
-                                        .operator = op_pos,
-                                    } });
-                                    try frames.append(frame_allocator, .{ .parse = bp.right });
-                                    break;
-                                }
-                            }
-                            last = expression;
-                            break;
-                        },
-                    }
-                }
-            },
-            .finish_last => |state| {
-                const expr = last orelse unreachable;
-                last = null;
-                try frames.append(frame_allocator, .{ .finish = .{
-                    .start = state.start,
-                    .min_bp = state.min_bp,
-                    .expr = expr,
-                } });
-            },
-            .after_unary => |state| {
-                const operand = last orelse unreachable;
-                last = try self.store.addExpr(.{ .unary_op = .{
-                    .operator = state.operator,
-                    .expr = operand,
-                    .region = .{ .start = state.start, .end = self.pos },
-                } });
-            },
-            .expr_collection_next => |state| {
-                if (self.peek() == state.end_token) {
-                    self.advance();
-                    const span = try self.store.exprSpanFrom(state.scratch_top);
-                    switch (state.result) {
-                        .list => last = try self.store.addExpr(.{ .list = .{
-                            .items = span,
-                            .region = .{ .start = state.start, .end = self.pos },
-                        } }),
-                        .tuple => last = try self.store.addExpr(.{ .tuple = .{
-                            .items = span,
-                            .region = .{ .start = state.start, .end = self.pos },
-                        } }),
-                        .apply_args => {
-                            last = try self.store.addExpr(.{ .tuple = .{
-                                .items = span,
-                                .region = .{ .start = state.start, .end = self.pos },
-                            } });
-                        },
-                    }
-                } else if (self.peek() == .EndOfFile) {
-                    self.store.clearScratchExprsFrom(state.scratch_top);
-                    last = try self.pushMalformed(AST.Expr.Idx, state.close_error, self.pos);
-                    continue;
-                } else {
-                    try frames.append(frame_allocator, .{ .expr_collection_after_item = .{
-                        .start = state.start,
-                        .scratch_top = state.scratch_top,
-                        .end_token = state.end_token,
-                        .result = state.result,
-                        .close_error = state.close_error,
-                    } });
-                    try frames.append(frame_allocator, .{ .parse = 0 });
-                }
-            },
-            .expr_collection_after_item => |state| {
-                const item = last orelse unreachable;
-                last = null;
-                try self.store.addScratchExpr(item);
-                if (self.peek() == .Comma) {
-                    self.advance();
-                    try frames.append(frame_allocator, .{ .expr_collection_next = .{
-                        .start = state.start,
-                        .scratch_top = state.scratch_top,
-                        .end_token = state.end_token,
-                        .result = state.result,
-                        .close_error = state.close_error,
-                    } });
-                } else if (self.peek() == state.end_token) {
-                    try frames.append(frame_allocator, .{ .expr_collection_next = .{
-                        .start = state.start,
-                        .scratch_top = state.scratch_top,
-                        .end_token = state.end_token,
-                        .result = state.result,
-                        .close_error = state.close_error,
-                    } });
-                } else {
-                    self.store.clearScratchExprsFrom(state.scratch_top);
-                    if (state.result == .apply_args) {
-                        last = try self.pushMalformed(AST.Expr.Idx, state.close_error, state.start);
-                    } else {
-                        while (self.peek() != state.end_token and self.peek() != .EndOfFile) {
-                            self.advance();
-                        }
-                        last = try self.pushMalformed(AST.Expr.Idx, state.close_error, self.pos);
-                    }
-                    continue;
-                }
-            },
-            .pattern_collection_next => |state| {
-                if (self.peek() == state.end_token) {
-                    self.advance();
-                    last_pattern_span = try self.store.patternSpanFrom(state.scratch_top);
-                } else if (self.peek() == .EndOfFile) {
-                    self.store.clearScratchPatternsFrom(state.scratch_top);
-                    last = try self.pushMalformed(AST.Expr.Idx, state.close_error, self.pos);
-                    continue;
-                } else {
-                    try frames.append(frame_allocator, .{ .pattern_collection_after_item = .{
-                        .start = state.start,
-                        .scratch_top = state.scratch_top,
-                        .end_token = state.end_token,
-                        .alternatives = state.alternatives,
-                        .close_error = state.close_error,
-                    } });
-                    try pushExprPatternRoot(&frames, frame_allocator, self.pos, self.store.scratchPatternTop(), state.alternatives);
-                }
-            },
-            .pattern_collection_after_item => |state| {
-                const item = last_pattern orelse unreachable;
-                last_pattern = null;
-                try self.store.addScratchPattern(item);
-                if (self.peek() == .Comma) {
-                    self.advance();
-                    try frames.append(frame_allocator, .{ .pattern_collection_next = .{
-                        .start = state.start,
-                        .scratch_top = state.scratch_top,
-                        .end_token = state.end_token,
-                        .alternatives = state.alternatives,
-                        .close_error = state.close_error,
-                    } });
-                } else if (self.peek() == state.end_token) {
-                    try frames.append(frame_allocator, .{ .pattern_collection_next = .{
-                        .start = state.start,
-                        .scratch_top = state.scratch_top,
-                        .end_token = state.end_token,
-                        .alternatives = state.alternatives,
-                        .close_error = state.close_error,
-                    } });
-                } else {
-                    self.store.clearScratchPatternsFrom(state.scratch_top);
-                    last = try self.pushMalformed(AST.Expr.Idx, state.close_error, self.pos);
-                    continue;
-                }
-            },
-            .after_apply_args => |state| {
-                const tuple_expr = last orelse unreachable;
-                last = null;
-                const tuple = self.store.getExpr(tuple_expr);
-                const args = switch (tuple) {
-                    .tuple => |t| t.items,
-                    .malformed => {
-                        try frames.append(frame_allocator, .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = tuple_expr } });
-                        continue;
-                    },
-                    else => {
-                        last = try self.pushMalformed(AST.Expr.Idx, .expr_unexpected_token, state.start);
-                        continue;
-                    },
-                };
-                const expr = try self.store.addExpr(.{ .apply = .{
-                    .args = args,
-                    .@"fn" = state.function,
-                    .region = .{ .start = state.start, .end = self.pos },
-                } });
-                try frames.append(frame_allocator, .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr } });
-            },
-            .after_method_args => |state| {
-                const tuple_expr = last orelse unreachable;
-                last = null;
-                const tuple = self.store.getExpr(tuple_expr);
-                const args = switch (tuple) {
-                    .tuple => |t| t.items,
-                    .malformed => {
-                        try frames.append(frame_allocator, .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = tuple_expr } });
-                        continue;
-                    },
-                    else => {
-                        last = try self.pushMalformed(AST.Expr.Idx, .expr_unexpected_token, state.start);
-                        continue;
-                    },
-                };
-                const expr = try self.store.addExpr(.{ .method_call = .{
-                    .receiver = state.receiver,
-                    .method_token = state.method_token,
-                    .args = args,
-                    .region = .{ .start = state.start, .end = self.pos },
-                } });
-                try frames.append(frame_allocator, .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr } });
-            },
-            .after_binary_rhs => |state| {
-                const rhs = last orelse unreachable;
-                last = null;
-                const expr = try self.store.addExpr(.{ .bin_op = .{
-                    .left = state.left,
-                    .right = rhs,
-                    .operator = state.operator,
-                    .region = .{ .start = state.start, .end = self.pos },
-                } });
-                try frames.append(frame_allocator, .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr } });
-            },
-            .arrow_after_inner => |state| {
-                const inner = last orelse unreachable;
-                last = null;
-                if (self.peek() != .CloseRound) {
-                    last = try self.pushMalformed(AST.Expr.Idx, .expected_expr_apply_close_round, self.pos);
-                    continue;
+                    last_pattern = try self.pushMalformed(AST.Pattern.Idx, .expected_colon_after_pat_field_name, field_start);
+                    continue :expr_kernel .pattern_complete;
                 }
                 self.advance();
-                try frames.append(frame_allocator, .{ .arrow_app_next = .{
-                    .start = state.start,
-                    .min_bp = state.min_bp,
-                    .left = state.left,
-                    .operator = state.operator,
-                    .rhs = inner,
-                } });
-            },
-            .arrow_app_next => |state| {
-                if (self.peek() == .NoSpaceOpenRound) {
-                    self.advance();
-                    try frames.append(frame_allocator, .{ .arrow_app_after_args = .{
-                        .start = state.start,
-                        .min_bp = state.min_bp,
-                        .left = state.left,
-                        .operator = state.operator,
-                        .function = state.rhs,
-                    } });
-                    try frames.append(frame_allocator, .{ .expr_collection_next = .{
-                        .start = state.operator,
-                        .scratch_top = self.store.scratchExprTop(),
-                        .end_token = .CloseRound,
-                        .result = .apply_args,
-                        .close_error = .expected_expr_apply_close_round,
-                    } });
-                } else {
-                    const expr = try self.store.addExpr(.{ .arrow_call = .{
-                        .region = .{ .start = state.start, .end = self.pos },
-                        .operator = state.operator,
-                        .left = state.left,
-                        .right = state.rhs,
-                    } });
-                    try frames.append(frame_allocator, .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr } });
-                }
-            },
-            .arrow_app_after_args => |state| {
-                const tuple_expr = last orelse unreachable;
-                last = null;
-                const tuple = self.store.getExpr(tuple_expr);
-                const args = switch (tuple) {
-                    .tuple => |t| t.items,
-                    .malformed => {
-                        const expr = try self.store.addExpr(.{ .arrow_call = .{
-                            .region = .{ .start = state.start, .end = self.pos },
-                            .operator = state.operator,
-                            .left = state.left,
-                            .right = tuple_expr,
-                        } });
-                        try frames.append(frame_allocator, .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr } });
-                        continue;
-                    },
-                    else => {
-                        last = try self.pushMalformed(AST.Expr.Idx, .expr_unexpected_token, state.start);
-                        continue;
-                    },
-                };
-                const rhs = try self.store.addExpr(.{ .apply = .{
-                    .args = args,
-                    .@"fn" = state.function,
-                    .region = .{ .start = state.operator, .end = self.pos },
-                } });
-                try frames.append(frame_allocator, .{ .arrow_app_next = .{
-                    .start = state.start,
-                    .min_bp = state.min_bp,
-                    .left = state.left,
-                    .operator = state.operator,
-                    .rhs = rhs,
-                } });
-            },
-            .string_next => |state| {
-                while (self.peek() != .EndOfFile) {
-                    switch (self.peek()) {
-                        .StringEnd => {
-                            if (state.multiline) break;
-                            self.advance();
-                            const parts = try self.store.exprSpanFrom(state.scratch_top);
-                            last = try self.store.addExpr(.{ .string = .{
-                                .token = state.start,
-                                .parts = parts,
-                                .region = .{ .start = state.start, .end = self.pos },
-                            } });
-                            break;
-                        },
-                        .MultilineStringStart => {
-                            if (!state.multiline) break;
-                            self.advance();
-                        },
-                        .StringPart => {
-                            const part_start = self.pos;
-                            self.advance();
-                            const index = try self.store.addExpr(.{ .string_part = .{
-                                .token = part_start,
-                                .region = .{ .start = part_start, .end = self.pos },
-                            } });
-                            try self.store.addScratchExpr(index);
-                        },
-                        .OpenStringInterpolation => {
-                            self.advance();
-                            try frames.append(frame_allocator, .{ .string_after_interp = .{
-                                .start = state.start,
-                                .scratch_top = state.scratch_top,
-                                .multiline = state.multiline,
-                            } });
-                            try frames.append(frame_allocator, .{ .parse = 0 });
-                            break;
-                        },
-                        .MalformedStringPart => {
-                            self.advance();
-                            if (state.multiline) {
-                                try self.pushDiagnostic(.string_unexpected_token, .{
-                                    .start = self.pos,
-                                    .end = self.pos,
-                                });
-                            }
-                        },
-                        else => {
-                            if (state.multiline) {
-                                const parts = try self.store.exprSpanFrom(state.scratch_top);
-                                last = try self.store.addExpr(.{ .multiline_string = .{
-                                    .token = state.start,
-                                    .parts = parts,
-                                    .region = .{ .start = state.start, .end = self.pos },
-                                } });
-                                break;
-                            }
-                            last = try self.pushMalformed(AST.Expr.Idx, .string_unexpected_token, self.pos);
-                            continue;
-                        },
-                    }
-                    if (last != null) break;
-                }
-                if (last == null and self.peek() == .EndOfFile) {
-                    if (!state.multiline) {
-                        try self.pushDiagnostic(.string_unclosed, .{ .start = self.pos, .end = self.pos });
-                        const parts = try self.store.exprSpanFrom(state.scratch_top);
-                        last = try self.store.addExpr(.{ .string = .{
-                            .token = state.start,
-                            .parts = parts,
-                            .region = .{ .start = state.start, .end = self.pos },
-                        } });
-                    } else {
-                        const parts = try self.store.exprSpanFrom(state.scratch_top);
-                        last = try self.store.addExpr(.{ .multiline_string = .{
-                            .token = state.start,
-                            .parts = parts,
-                            .region = .{ .start = state.start, .end = self.pos },
-                        } });
-                    }
-                }
-            },
-            .string_after_interp => |state| {
-                const ex = last orelse unreachable;
-                last = null;
-                try self.store.addScratchExpr(ex);
-                if (self.peek() != .CloseStringInterpolation) {
-                    last = try self.pushMalformed(AST.Expr.Idx, .string_expected_close_interpolation, state.start);
-                    continue;
-                }
-                self.advance();
-                try frames.append(frame_allocator, .{ .string_next = .{
-                    .start = state.start,
-                    .scratch_top = state.scratch_top,
-                    .multiline = state.multiline,
-                } });
-            },
-            .record_ext_after_expr => |state| {
-                const ext_expr = last orelse unreachable;
-                last = null;
-                if (self.peek() != .Comma) {
-                    last = try self.pushMalformed(AST.Expr.Idx, .expected_expr_comma, self.pos);
-                    continue;
-                }
-                self.advance();
-                try frames.append(frame_allocator, .{ .record_fields_next = .{
-                    .start = state.start,
-                    .min_bp = state.min_bp,
-                    .scratch_top = self.store.scratchRecordFieldTop(),
-                    .ext = ext_expr,
-                } });
-            },
-            .record_fields_next => |state| {
-                if (self.peek() == .CloseCurly) {
-                    try frames.append(frame_allocator, .{ .record_finish = .{
-                        .start = state.start,
-                        .min_bp = state.min_bp,
-                        .scratch_top = state.scratch_top,
-                        .ext = state.ext,
-                    } });
-                } else if (self.peek() == .EndOfFile) {
-                    self.store.clearScratchRecordFieldsFrom(state.scratch_top);
-                    last = try self.pushMalformed(AST.Expr.Idx, .expected_expr_close_curly_or_comma, self.pos);
-                    continue;
-                } else {
-                    const field_start = self.pos;
-                    self.expect(.LowerIdent) catch {
-                        const malformed_field = try self.pushMalformed(AST.RecordField.Idx, .expected_expr_record_field_name, field_start);
-                        try self.store.addScratchRecordField(malformed_field);
-                        last = try self.pushMalformed(AST.Expr.Idx, .expected_expr_close_curly_or_comma, self.pos);
-                        continue;
-                    };
-                    const name = field_start;
-                    if (self.peek() == .OpColon) {
-                        self.advance();
-                        try frames.append(frame_allocator, .{ .record_field_after_value = .{
-                            .start = state.start,
-                            .min_bp = state.min_bp,
-                            .scratch_top = state.scratch_top,
-                            .ext = state.ext,
-                            .field_start = field_start,
-                            .name = name,
-                        } });
-                        try frames.append(frame_allocator, .{ .parse = 0 });
-                    } else {
-                        const field = try self.store.addRecordField(.{
-                            .name = name,
-                            .value = null,
-                            .region = .{ .start = field_start, .end = self.pos },
-                        });
-                        try self.store.addScratchRecordField(field);
-                        if (self.peek() == .Comma) {
-                            self.advance();
-                            try frames.append(frame_allocator, .{ .record_fields_next = .{
-                                .start = state.start,
-                                .min_bp = state.min_bp,
-                                .scratch_top = state.scratch_top,
-                                .ext = state.ext,
-                            } });
-                        } else {
-                            try frames.append(frame_allocator, .{ .record_finish = .{
-                                .start = state.start,
-                                .min_bp = state.min_bp,
-                                .scratch_top = state.scratch_top,
-                                .ext = state.ext,
-                            } });
-                        }
-                    }
-                }
-            },
-            .record_field_after_value => |state| {
-                const value = last orelse unreachable;
-                last = null;
-                const field = try self.store.addRecordField(.{
-                    .name = state.name,
-                    .value = value,
-                    .region = .{ .start = state.field_start, .end = self.pos },
+                try open_syntax.pushPattern(open_allocator, .pattern_record_field, PatternRecordFieldState, .{
+                    .record_start = pattern_record_state.start,
+                    .scratch_top = pattern_record_state.scratch_top,
+                    .alternatives = pattern_record_state.alternatives,
+                    .field_start = field_start,
+                    .name = name,
                 });
-                try self.store.addScratchRecordField(field);
-                if (self.peek() == .Comma) {
-                    self.advance();
-                    try frames.append(frame_allocator, .{ .record_fields_next = .{
-                        .start = state.start,
-                        .min_bp = state.min_bp,
-                        .scratch_top = state.scratch_top,
-                        .ext = state.ext,
-                    } });
-                } else {
-                    try frames.append(frame_allocator, .{ .record_finish = .{
-                        .start = state.start,
-                        .min_bp = state.min_bp,
-                        .scratch_top = state.scratch_top,
-                        .ext = state.ext,
-                    } });
-                }
-            },
-            .record_finish => |state| {
-                self.expect(.CloseCurly) catch {
-                    self.store.clearScratchRecordFieldsFrom(state.scratch_top);
-                    last = try self.pushMalformed(AST.Expr.Idx, .expected_expr_close_curly_or_comma, self.pos);
-                    continue;
+                pattern_root_state = .{
+                    .outer_start = self.pos,
+                    .scratch_top = self.store.scratchPatternTop(),
+                    .alternatives = pattern_record_state.alternatives,
                 };
-                const fields = try self.store.recordFieldSpanFrom(state.scratch_top);
-                const expr = try self.finishRecordExpr(state.start, fields, state.ext);
-                try frames.append(frame_allocator, .{ .finish = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr } });
-            },
-            .lambda_after_body => |state| {
-                const body = last orelse unreachable;
-                last = try self.store.addExpr(.{ .lambda = .{
-                    .body = body,
-                    .args = state.args,
-                    .region = .{ .start = state.start, .end = self.pos },
-                } });
-            },
-            .lambda_after_args => |start| {
-                const args = last_pattern_span orelse unreachable;
-                last_pattern_span = null;
-                try frames.append(frame_allocator, .{ .lambda_after_body = .{ .start = start, .args = args } });
-                try frames.append(frame_allocator, .{ .parse = 0 });
-            },
-            .if_after_condition => |start| {
-                const condition = last orelse unreachable;
-                last = null;
-                try frames.append(frame_allocator, .{ .if_after_then = .{ .start = start, .condition = condition } });
-                try frames.append(frame_allocator, .{ .parse = 0 });
-            },
-            .if_after_then => |state| {
-                const then = last orelse unreachable;
-                last = null;
-                if (self.peek() == .KwElse) {
-                    self.advance();
-                    try frames.append(frame_allocator, .{ .if_after_else = .{
-                        .start = state.start,
-                        .condition = state.condition,
-                        .then = then,
-                    } });
-                    try frames.append(frame_allocator, .{ .parse = 0 });
-                } else {
-                    last = try self.store.addExpr(.{ .if_without_else = .{
-                        .region = .{ .start = state.start, .end = self.pos },
-                        .condition = state.condition,
-                        .then = then,
-                    } });
-                }
-            },
-            .if_after_else => |state| {
-                const else_idx = last orelse unreachable;
-                last = try self.store.addExpr(.{ .if_then_else = .{
-                    .region = .{ .start = state.start, .end = self.pos },
-                    .condition = state.condition,
-                    .then = state.then,
-                    .@"else" = else_idx,
-                } });
-            },
-            .match_after_expr => |start| {
-                const e = last orelse unreachable;
-                last = null;
-                self.expect(.OpenCurly) catch {
-                    last = try self.pushMalformed(AST.Expr.Idx, .expected_open_curly_after_match, self.pos);
-                    continue;
-                };
-                try frames.append(frame_allocator, .{ .match_branch_next = .{
-                    .start = start,
-                    .matched = e,
-                    .scratch_top = self.store.scratchMatchBranchTop(),
-                } });
-            },
-            .match_branch_next => |state| {
-                if (self.peek() == .CloseCurly or self.peek() == .EndOfFile) {
-                    const branches = try self.store.matchBranchSpanFrom(state.scratch_top);
-                    if (branches.span.len == 0) {
-                        last = try self.pushMalformed(AST.Expr.Idx, .match_has_no_branches, state.start);
-                        continue;
-                    }
-                    if (self.peek() != .CloseCurly) {
-                        last = try self.pushMalformed(AST.Expr.Idx, .expected_close_curly_at_end_of_match, self.pos);
-                        continue;
-                    }
-                    self.advance();
-                    last = try self.store.addExpr(.{ .match = .{
-                        .region = .{ .start = state.start, .end = self.pos },
-                        .expr = state.matched,
-                        .branches = branches,
-                    } });
-                } else {
-                    const branch_start = self.pos;
-                    try frames.append(frame_allocator, .{ .match_branch_after_pattern = .{
-                        .match_start = state.start,
-                        .matched = state.matched,
-                        .scratch_top = state.scratch_top,
-                        .branch_start = branch_start,
-                    } });
-                    try pushExprPatternRoot(&frames, frame_allocator, self.pos, self.store.scratchPatternTop(), .alternatives_allowed);
-                }
-            },
-            .match_branch_after_pattern => |state| {
-                const pattern = last_pattern orelse unreachable;
-                last_pattern = null;
-                if (self.peek() == .KwIf) {
-                    self.advance();
-                    try frames.append(frame_allocator, .{ .match_branch_after_guard = .{
-                        .match_start = state.match_start,
-                        .matched = state.matched,
-                        .scratch_top = state.scratch_top,
-                        .branch_start = state.branch_start,
-                        .pattern = pattern,
-                        .guard = null,
-                    } });
-                    try frames.append(frame_allocator, .{ .parse = 0 });
-                } else {
-                    try frames.append(frame_allocator, .{ .match_branch_after_guard = .{
-                        .match_start = state.match_start,
-                        .matched = state.matched,
-                        .scratch_top = state.scratch_top,
-                        .branch_start = state.branch_start,
-                        .pattern = pattern,
-                        .guard = null,
-                    } });
-                }
-            },
-            .match_branch_after_guard => |state| {
-                const guard = if (state.guard == null and last != null) blk: {
-                    const g = last.?;
-                    last = null;
-                    break :blk g;
-                } else state.guard;
-                if (self.peek() == .OpFatArrow) {
-                    self.advance();
-                } else if (self.peek() == .OpArrow) {
-                    try self.pushDiagnostic(.match_branch_wrong_arrow, .{ .start = self.pos, .end = self.pos });
-                    self.advance();
-                } else {
-                    try self.pushDiagnostic(.match_branch_missing_arrow, .{ .start = self.pos, .end = self.pos });
-                }
-                try frames.append(frame_allocator, .{ .match_branch_after_body = .{
-                    .match_start = state.match_start,
-                    .matched = state.matched,
-                    .scratch_top = state.scratch_top,
-                    .branch_start = state.branch_start,
-                    .pattern = state.pattern,
-                    .guard = guard,
-                } });
-                try frames.append(frame_allocator, .{ .parse = 0 });
-            },
-            .match_branch_after_body => |state| {
-                const body = last orelse unreachable;
-                last = null;
-                const branch = try self.store.addMatchBranch(.{
-                    .region = .{ .start = state.branch_start, .end = self.pos },
-                    .pattern = state.pattern,
-                    .body = body,
-                    .guard = state.guard,
-                });
-                try self.store.addScratchMatchBranch(branch);
-                if (self.peek() == .Comma) {
-                    self.advance();
-                }
-                try frames.append(frame_allocator, .{ .match_branch_next = .{
-                    .start = state.match_start,
-                    .matched = state.matched,
-                    .scratch_top = state.scratch_top,
-                } });
-            },
-            .dbg_after_expr => |start| {
-                const e = last orelse unreachable;
-                last = try self.store.addExpr(.{ .dbg = .{
-                    .region = .{ .start = start, .end = self.pos },
-                    .expr = e,
-                } });
-            },
-            .for_after_pattern => |start| {
-                const pattern = last_pattern orelse unreachable;
-                last_pattern = null;
-                if (self.peek() != .KwIn) {
-                    last = try self.pushMalformed(AST.Expr.Idx, .for_expected_in, self.pos);
-                    continue;
-                }
-                self.advance();
-                try frames.append(frame_allocator, .{ .for_after_list = .{ .start = start, .pattern = pattern } });
-                try frames.append(frame_allocator, .{ .parse = 0 });
-            },
-            .for_after_list => |state| {
-                const list_expr = last orelse unreachable;
-                last = null;
-                try frames.append(frame_allocator, .{ .for_after_body = .{
-                    .start = state.start,
-                    .pattern = state.pattern,
-                    .list_expr = list_expr,
-                } });
-                try frames.append(frame_allocator, .{ .parse = 0 });
-            },
-            .for_after_body => |state| {
-                const body = last orelse unreachable;
-                last = try self.store.addExpr(.{ .for_expr = .{
-                    .region = .{ .start = state.start, .end = self.pos },
-                    .patt = state.pattern,
-                    .expr = state.list_expr,
-                    .body = body,
-                } });
-            },
-            .block_begin => |start| {
-                const previous_type_path_visible_start = self.type_path_stack_visible_start;
-                self.type_path_stack_visible_start = self.type_path_stack.items.len;
-                const block_scope = try self.enterDeclScope(.block, .none, .{ .start = start, .end = start });
-                try frames.append(frame_allocator, .{ .block_next = .{
-                    .start = start,
-                    .scope = block_scope,
-                    .scratch_top = self.store.scratchStatementTop(),
-                    .previous_type_path_visible_start = previous_type_path_visible_start,
-                } });
-            },
-            .block_next => |state| {
-                if (self.peek() == .CloseCurly or self.peek() == .EndOfFile) {
-                    try frames.append(frame_allocator, .{ .block_finish = .{
-                        .start = state.start,
-                        .scope = state.scope,
-                        .scratch_top = state.scratch_top,
-                        .previous_type_path_visible_start = state.previous_type_path_visible_start,
-                    } });
-                } else {
-                    try frames.append(frame_allocator, .{ .block_after_statement = .{
-                        .start = state.start,
-                        .scope = state.scope,
-                        .scratch_top = state.scratch_top,
-                        .previous_type_path_visible_start = state.previous_type_path_visible_start,
-                    } });
-                    try frames.append(frame_allocator, .{ .statement = .{ .parse = .in_body } });
-                }
-            },
-            .block_after_statement => |state| {
-                const statement = last_statement orelse unreachable;
-                last_statement = null;
-                try self.store.addScratchStatement(statement);
-                if (self.peek() == .CloseCurly or self.peek() == .EndOfFile) {
-                    try frames.append(frame_allocator, .{ .block_finish = .{
-                        .start = state.start,
-                        .scope = state.scope,
-                        .scratch_top = state.scratch_top,
-                        .previous_type_path_visible_start = state.previous_type_path_visible_start,
-                    } });
-                } else {
-                    try frames.append(frame_allocator, .{ .block_next = .{
-                        .start = state.start,
-                        .scope = state.scope,
-                        .scratch_top = state.scratch_top,
-                        .previous_type_path_visible_start = state.previous_type_path_visible_start,
-                    } });
-                }
-            },
-            .block_finish => |state| {
-                self.expect(.CloseCurly) catch {
-                    try self.pushDiagnostic(.expected_expr_close_curly, .{
-                        .start = self.pos,
-                        .end = self.pos,
-                    });
-                };
-
-                const block_region = AST.TokenizedRegion{ .start = state.start, .end = self.pos };
-                try self.exitDeclScope(state.scope, block_region);
-                self.type_path_stack_visible_start = state.previous_type_path_visible_start;
-                const statements = try self.store.statementSpanFrom(state.scratch_top);
-                const expr_idx = try self.store.addExpr(.{ .block = .{
-                    .statements = statements,
-                    .scope = state.scope,
-                    .region = block_region,
-                } });
-                self.decl_index.setScopeOwner(state.scope, .{ .expr = @intFromEnum(expr_idx) });
-                last = expr_idx;
-            },
-            .pattern => |pattern_frame| {
-                try self.handleExprPatternFrame(pattern_frame, &frames, frame_allocator, &last, &last_pattern);
-            },
-            .statement => |stmt_frame| {
-                switch (stmt_frame) {
-                    .parse => |statementType| {
-                        switch (self.peek()) {
-                            .KwImport => {
-                                if (statementType == .top_level) {
-                                    last_statement = try self.parseImportStatement();
-                                } else {
-                                    last_statement = try self.pushMalformed(AST.Statement.Idx, .import_must_be_top_level, self.pos);
-                                }
-                            },
-                            .KwExpect => {
-                                const start = self.pos;
-                                self.advance();
-                                try frames.append(frame_allocator, .{ .statement = .{ .after_expect = start } });
-                                try frames.append(frame_allocator, .{ .parse = 0 });
-                            },
-                            .KwFor => {
-                                const start = self.pos;
-                                self.advance();
-                                try frames.append(frame_allocator, .{ .statement = .{ .after_for_pattern = start } });
-                                try pushExprPatternRoot(&frames, frame_allocator, self.pos, self.store.scratchPatternTop(), .alternatives_forbidden);
-                            },
-                            .KwWhile => {
-                                const start = self.pos;
-                                self.advance();
-                                try frames.append(frame_allocator, .{ .statement = .{ .after_while_cond = start } });
-                                try frames.append(frame_allocator, .{ .parse = 0 });
-                            },
-                            .KwCrash => {
-                                const start = self.pos;
-                                self.advance();
-                                try frames.append(frame_allocator, .{ .statement = .{ .after_crash = start } });
-                                try frames.append(frame_allocator, .{ .parse = 0 });
-                            },
-                            .KwDbg => {
-                                const start = self.pos;
-                                self.advance();
-                                try frames.append(frame_allocator, .{ .statement = .{ .after_dbg = start } });
-                                try frames.append(frame_allocator, .{ .parse = 0 });
-                            },
-                            .KwReturn => {
-                                const start = self.pos;
-                                self.advance();
-                                try frames.append(frame_allocator, .{ .statement = .{ .after_return = start } });
-                                try frames.append(frame_allocator, .{ .parse = 0 });
-                            },
-                            .KwVar => {
-                                const start = self.pos;
-                                if (statementType != .in_body) {
-                                    last_statement = try self.pushMalformed(AST.Statement.Idx, .var_only_allowed_in_a_body, self.pos);
-                                    continue;
-                                }
-                                self.advance();
-                                if (self.peek() != .LowerIdent) {
-                                    last_statement = try self.pushMalformed(AST.Statement.Idx, .var_must_have_ident, self.pos);
-                                    continue;
-                                }
-                                const name = self.pos;
-                                self.advance();
-                                if (self.peek() == .OpColon) {
-                                    self.advance();
-                                    const anno = try self.parseTypeAnno(.not_looking_for_args);
-                                    last_statement = try self.addStatement(.{ .type_anno = .{
-                                        .anno = anno,
-                                        .name = name,
-                                        .where = try self.parseWhereConstraint(),
-                                        .is_var = true,
-                                        .region = .{ .start = start, .end = self.pos },
-                                    } });
-                                } else {
-                                    self.expect(.OpAssign) catch {
-                                        last_statement = try self.pushMalformed(AST.Statement.Idx, .var_expected_equals, self.pos);
-                                        continue;
-                                    };
-                                    try frames.append(frame_allocator, .{ .statement = .{ .after_var_body = .{ .start = start, .name = name } } });
-                                    try frames.append(frame_allocator, .{ .parse = 0 });
-                                }
-                            },
-                            .KwBreak => {
-                                const start = self.pos;
-                                self.advance();
-                                last_statement = try self.addStatement(.{ .@"break" = .{
-                                    .region = .{ .start = start, .end = self.pos },
-                                } });
-                            },
-                            .LowerIdent => {
-                                const start = self.pos;
-                                if (self.peekNext() == .OpAssign) {
-                                    self.advance();
-                                    const patt_idx = try self.store.addPattern(.{ .ident = .{
-                                        .ident_tok = start,
-                                        .region = .{ .start = start, .end = self.pos },
-                                    } });
-                                    self.advance();
-                                    try frames.append(frame_allocator, .{ .statement = .{ .after_decl_body = .{ .start = start, .pattern = patt_idx } } });
-                                    try frames.append(frame_allocator, .{ .parse = 0 });
-                                } else if (self.peekNext() == .OpColon) {
-                                    if (self.isVarIdent(start)) {
-                                        last_statement = try self.pushMalformed(AST.Statement.Idx, .var_type_anno_needs_var_keyword, start);
-                                        continue;
-                                    }
-                                    self.advance();
-                                    self.advance();
-                                    const anno = try self.parseTypeAnno(.not_looking_for_args);
-                                    last_statement = try self.addStatement(.{ .type_anno = .{
-                                        .anno = anno,
-                                        .name = start,
-                                        .where = try self.parseWhereConstraint(),
-                                        .is_var = false,
-                                        .region = .{ .start = start, .end = self.pos },
-                                    } });
-                                } else {
-                                    if (statementType == .top_level) {
-                                        last_statement = try self.addTopLevelUnexpectedStatement();
-                                    } else {
-                                        try frames.append(frame_allocator, .{ .statement = .{ .after_final_expr = start } });
-                                        try frames.append(frame_allocator, .{ .parse = 0 });
-                                    }
-                                }
-                            },
-                            .NamedUnderscore => {
-                                const start = self.pos;
-                                if (self.peekNext() == .OpAssign) {
-                                    self.advance();
-                                    const patt_idx = try self.store.addPattern(.{ .ident = .{
-                                        .ident_tok = start,
-                                        .region = .{ .start = start, .end = self.pos },
-                                    } });
-                                    self.advance();
-                                    try frames.append(frame_allocator, .{ .statement = .{ .after_decl_body = .{ .start = start, .pattern = patt_idx } } });
-                                    try frames.append(frame_allocator, .{ .parse = 0 });
-                                } else if (self.peekNext() == .OpColon) {
-                                    self.advance();
-                                    self.advance();
-                                    const anno = try self.parseTypeAnno(.not_looking_for_args);
-                                    last_statement = try self.addStatement(.{ .type_anno = .{
-                                        .anno = anno,
-                                        .name = start,
-                                        .where = try self.parseWhereConstraint(),
-                                        .is_var = false,
-                                        .region = .{ .start = start, .end = self.pos },
-                                    } });
-                                } else {
-                                    if (statementType == .top_level) {
-                                        last_statement = try self.addTopLevelUnexpectedStatement();
-                                    } else {
-                                        try frames.append(frame_allocator, .{ .statement = .{ .after_final_expr = start } });
-                                        try frames.append(frame_allocator, .{ .parse = 0 });
-                                    }
-                                }
-                            },
-                            .Underscore => {
-                                const start = self.pos;
-                                if (self.peekNext() == .OpAssign) {
-                                    self.advance();
-                                    const patt_idx = try self.store.addPattern(.{ .underscore = .{
-                                        .region = .{ .start = start, .end = self.pos },
-                                    } });
-                                    self.advance();
-                                    try frames.append(frame_allocator, .{ .statement = .{ .after_decl_body = .{ .start = start, .pattern = patt_idx } } });
-                                    try frames.append(frame_allocator, .{ .parse = 0 });
-                                } else {
-                                    if (statementType == .top_level) {
-                                        last_statement = try self.addTopLevelUnexpectedStatement();
-                                    } else {
-                                        try frames.append(frame_allocator, .{ .statement = .{ .after_final_expr = start } });
-                                        try frames.append(frame_allocator, .{ .parse = 0 });
-                                    }
-                                }
-                            },
-                            .UpperIdent => {
-                                const start = self.pos;
-                                const is_type_decl_context = statementType == .top_level or
-                                    statementType == .in_associated_block or
-                                    (statementType == .in_body and self.looksLikeTypeDecl());
-                                if (!is_type_decl_context) {
-                                    if (statementType == .top_level) {
-                                        last_statement = try self.addTopLevelUnexpectedStatement();
-                                    } else {
-                                        try frames.append(frame_allocator, .{ .statement = .{ .after_final_expr = start } });
-                                        try frames.append(frame_allocator, .{ .parse = 0 });
-                                    }
-                                    continue;
-                                }
-
-                                const header = try self.parseTypeHeader();
-                                const header_node = self.store.nodes.get(@enumFromInt(@intFromEnum(header)));
-                                if (header_node.tag == .malformed) {
-                                    self.recoverMalformedTypeDeclLine(start);
-                                    const reason: AST.Diagnostic.Tag = @enumFromInt(header_node.data.lhs);
-                                    last_statement = try self.store.addMalformed(AST.Statement.Idx, reason, .{ .start = start, .end = self.pos });
-                                    continue;
-                                }
-                                const type_path = blk_path: {
-                                    const header_data = self.store.getTypeHeader(header) catch break :blk_path null;
-                                    const name_ident = self.tok_buf.resolveIdentifier(header_data.name) orelse break :blk_path null;
-                                    const scope_idx = self.decl_index.currentScope() orelse break :blk_path null;
-                                    break :blk_path try self.decl_index.internTypePath(scope_idx, self.currentTypePath(), name_ident);
-                                };
-                                if (self.peek() != .OpColon and self.peek() != .OpColonEqual and self.peek() != .OpDoubleColon) {
-                                    last_statement = try self.pushMalformed(AST.Statement.Idx, .expected_colon_after_type_annotation, self.pos);
-                                    continue;
-                                }
-                                const kind: AST.TypeDeclKind = switch (self.peek()) {
-                                    .OpColonEqual => .nominal,
-                                    .OpDoubleColon => .@"opaque",
-                                    else => .alias,
-                                };
-                                self.advance();
-                                const type_dependencies_start = self.decl_index.typeDependencyTop();
-                                const was_collecting_type_dependencies = self.collect_type_dependencies;
-                                self.collect_type_dependencies = true;
-                                const anno = self.parseTypeAnno(.not_looking_for_args) catch |err| {
-                                    self.decl_index.clearTypeDependenciesFrom(type_dependencies_start);
-                                    self.collect_type_dependencies = was_collecting_type_dependencies;
-                                    return err;
-                                };
-                                const type_dependencies = blk: {
-                                    if (self.store.getTypeAnno(anno) == .malformed) {
-                                        self.decl_index.clearTypeDependenciesFrom(type_dependencies_start);
-                                        break :blk DeclIndex.Span.empty();
-                                    }
-                                    break :blk self.decl_index.typeDependencySpanFrom(type_dependencies_start);
-                                };
-                                self.collect_type_dependencies = was_collecting_type_dependencies;
-                                const where_clause = try self.parseWhereConstraint();
-
-                                if (self.peek() == .Dot and self.peekN(1) == .OpenCurly) {
-                                    const dot_pos = self.pos;
-                                    self.advance();
-                                    self.advance();
-                                    const associated_start = self.pos - 1;
-                                    try frames.append(frame_allocator, .{ .statement = .{ .type_decl_after_associated = .{
-                                        .start = start,
-                                        .header = header,
-                                        .anno = anno,
-                                        .kind = kind,
-                                        .where_clause = where_clause,
-                                        .type_dependencies = type_dependencies,
-                                        .type_path = type_path,
-                                        .dot_pos = dot_pos,
-                                    } } });
-                                    try frames.append(frame_allocator, .{ .statement = .{ .associated_block_begin = .{
-                                        .start = associated_start,
-                                        .owner_type_path = type_path,
-                                    } } });
-                                } else {
-                                    last_statement = try self.addTypeDeclStatement(.{ .type_decl = .{
-                                        .header = header,
-                                        .anno = anno,
-                                        .kind = kind,
-                                        .where = where_clause,
-                                        .associated = null,
-                                        .region = .{ .start = start, .end = self.pos },
-                                    } }, type_dependencies, type_path);
-                                }
-                            },
-                            .OpenCurly, .OpenRound => {
-                                const isCurly = self.peek() == .OpenCurly;
-                                const start = self.pos;
-                                var is_destructure = false;
-                                var lookahead_pos = self.pos + 1;
-                                var depth: u32 = 0;
-                                while (lookahead_pos < self.tok_buf.tokens.len) {
-                                    const tok = self.tok_buf.tokens.items(.tag)[lookahead_pos];
-                                    if ((isCurly and tok == .OpenCurly) or (!isCurly and (tok == .OpenRound or tok == .NoSpaceOpenRound))) {
-                                        depth += 1;
-                                    } else if ((isCurly and tok == .CloseCurly) or (!isCurly and tok == .CloseRound)) {
-                                        if (depth == 0) {
-                                            const token_after_close = self.tok_buf.tokens.items(.tag)[lookahead_pos + 1];
-                                            if (token_after_close == .OpAssign) {
-                                                is_destructure = true;
-                                            }
-                                            break;
-                                        }
-                                        depth -= 1;
-                                    } else if (tok == .EndOfFile) {
-                                        break;
-                                    }
-                                    lookahead_pos += 1;
-                                }
-                                if (is_destructure) {
-                                    try frames.append(frame_allocator, .{ .statement = .{ .after_destructure_pattern = start } });
-                                    try pushExprPatternRoot(&frames, frame_allocator, self.pos, self.store.scratchPatternTop(), .alternatives_forbidden);
-                                } else {
-                                    if (statementType == .top_level) {
-                                        last_statement = try self.addTopLevelUnexpectedStatement();
-                                    } else {
-                                        try frames.append(frame_allocator, .{ .statement = .{ .after_final_expr = start } });
-                                        try frames.append(frame_allocator, .{ .parse = 0 });
-                                    }
-                                }
-                            },
-                            else => {
-                                if (statementType == .top_level) {
-                                    last_statement = try self.addTopLevelUnexpectedStatement();
-                                } else {
-                                    try frames.append(frame_allocator, .{ .statement = .{ .after_final_expr = self.pos } });
-                                    try frames.append(frame_allocator, .{ .parse = 0 });
-                                }
-                            },
-                        }
-                    },
-                    .after_expect => |start| {
-                        const body = last orelse unreachable;
-                        last = null;
-                        last_statement = try self.addStatement(.{ .expect = .{
-                            .body = body,
-                            .region = .{ .start = start, .end = self.pos },
-                        } });
-                    },
-                    .after_for_pattern => |start| {
-                        const patt = last_pattern orelse unreachable;
-                        last_pattern = null;
-                        if (self.peek() != .KwIn) {
-                            last_statement = try self.pushMalformed(AST.Statement.Idx, .for_expected_in, self.pos);
-                        } else {
-                            self.advance();
-                            try frames.append(frame_allocator, .{ .statement = .{ .after_for_expr = .{ .start = start, .patt = patt } } });
-                            try frames.append(frame_allocator, .{ .parse = 0 });
-                        }
-                    },
-                    .after_for_expr => |state| {
-                        const expr = last orelse unreachable;
-                        last = null;
-                        try frames.append(frame_allocator, .{ .statement = .{ .after_for_body = .{
-                            .start = state.start,
-                            .patt = state.patt,
-                            .expr = expr,
-                        } } });
-                        try frames.append(frame_allocator, .{ .parse = 0 });
-                    },
-                    .after_for_body => |state| {
-                        const body = last orelse unreachable;
-                        last = null;
-                        last_statement = try self.addStatement(.{ .@"for" = .{
-                            .region = .{ .start = state.start, .end = self.pos },
-                            .patt = state.patt,
-                            .expr = state.expr,
-                            .body = body,
-                        } });
-                    },
-                    .after_while_cond => |start| {
-                        const cond = last orelse unreachable;
-                        last = null;
-                        try frames.append(frame_allocator, .{ .statement = .{ .after_while_body = .{ .start = start, .cond = cond } } });
-                        try frames.append(frame_allocator, .{ .parse = 0 });
-                    },
-                    .after_while_body => |state| {
-                        const body = last orelse unreachable;
-                        last = null;
-                        last_statement = try self.addStatement(.{ .@"while" = .{
-                            .region = .{ .start = state.start, .end = self.pos },
-                            .cond = state.cond,
-                            .body = body,
-                        } });
-                    },
-                    .after_crash => |start| {
-                        const expr = last orelse unreachable;
-                        last = null;
-                        last_statement = try self.addStatement(.{ .crash = .{
-                            .expr = expr,
-                            .region = .{ .start = start, .end = self.pos },
-                        } });
-                    },
-                    .after_dbg => |start| {
-                        const expr = last orelse unreachable;
-                        last = null;
-                        last_statement = try self.addStatement(.{ .dbg = .{
-                            .expr = expr,
-                            .region = .{ .start = start, .end = self.pos },
-                        } });
-                    },
-                    .after_return => |start| {
-                        const expr = last orelse unreachable;
-                        last = null;
-                        last_statement = try self.addStatement(.{ .@"return" = .{
-                            .expr = expr,
-                            .region = .{ .start = start, .end = self.pos },
-                        } });
-                    },
-                    .after_var_body => |state| {
-                        const body = last orelse unreachable;
-                        last = null;
-                        last_statement = try self.addStatement(.{ .@"var" = .{
-                            .name = state.name,
-                            .body = body,
-                            .region = .{ .start = state.start, .end = self.pos },
-                        } });
-                    },
-                    .after_decl_body => |state| {
-                        const body = last orelse unreachable;
-                        last = null;
-                        last_statement = try self.addStatement(.{ .decl = .{
-                            .pattern = state.pattern,
-                            .body = body,
-                            .region = .{ .start = state.start, .end = self.pos },
-                        } });
-                    },
-                    .after_destructure_pattern => |start| {
-                        const pattern = last_pattern orelse unreachable;
-                        last_pattern = null;
-                        if (self.peek() != .OpAssign) {
-                            last_statement = try self.pushMalformed(AST.Statement.Idx, .statement_unexpected_token, self.pos);
-                        } else {
-                            self.advance();
-                            try frames.append(frame_allocator, .{ .statement = .{ .after_destructure_body = .{ .start = start, .pattern = pattern } } });
-                            try frames.append(frame_allocator, .{ .parse = 0 });
-                        }
-                    },
-                    .after_destructure_body => |state| {
-                        const body = last orelse unreachable;
-                        last = null;
-                        last_statement = try self.addStatement(.{ .decl = .{
-                            .pattern = state.pattern,
-                            .body = body,
-                            .region = .{ .start = state.start, .end = self.pos },
-                        } });
-                    },
-                    .after_final_expr => |start| {
-                        const expr = last orelse unreachable;
-                        last = null;
-                        last_statement = try self.addStatement(.{ .expr = .{
-                            .expr = expr,
-                            .region = .{ .start = start, .end = self.pos },
-                        } });
-                    },
-                    .associated_block_begin => |state| {
-                        var pushed_type_path = false;
-                        if (state.owner_type_path) |path| {
-                            try self.type_path_stack.append(self.gpa, path);
-                            pushed_type_path = true;
-                        }
-                        const assoc_scope = try self.enterDeclScope(.associated, .none, .{ .start = state.start, .end = state.start });
-                        try frames.append(frame_allocator, .{ .statement = .{ .associated_block_next = .{
-                            .start = state.start,
-                            .scope = assoc_scope,
-                            .scratch_top = self.store.scratchStatementTop(),
-                            .pushed_type_path = pushed_type_path,
-                        } } });
-                    },
-                    .associated_block_next => |state| {
-                        if (self.peek() == .EndOfFile or self.peek() == .CloseCurly) {
-                            try frames.append(frame_allocator, .{ .statement = .{ .associated_block_finish = .{
-                                .start = state.start,
-                                .scope = state.scope,
-                                .scratch_top = state.scratch_top,
-                                .pushed_type_path = state.pushed_type_path,
-                            } } });
-                        } else {
-                            const statement_pos = self.pos;
-                            try frames.append(frame_allocator, .{ .statement = .{ .associated_block_after_statement = .{
-                                .start = state.start,
-                                .scope = state.scope,
-                                .scratch_top = state.scratch_top,
-                                .pushed_type_path = state.pushed_type_path,
-                                .statement_pos = statement_pos,
-                            } } });
-                            try frames.append(frame_allocator, .{ .statement = .{ .parse = .in_associated_block } });
-                        }
-                    },
-                    .associated_block_after_statement => |state| {
-                        const statement = last_statement orelse unreachable;
-                        last_statement = null;
-                        const stmt = self.store.getStatement(statement);
-                        if (stmt == .expr and self.peek() == .CloseCurly) {
-                            try self.pushDiagnostic(.nominal_associated_cannot_have_final_expression, .{
-                                .start = state.statement_pos,
-                                .end = self.pos,
-                            });
-                        }
-                        try self.store.addScratchStatement(statement);
-                        try frames.append(frame_allocator, .{ .statement = .{ .associated_block_next = .{
-                            .start = state.start,
-                            .scope = state.scope,
-                            .scratch_top = state.scratch_top,
-                            .pushed_type_path = state.pushed_type_path,
-                        } } });
-                    },
-                    .associated_block_finish => |state| {
-                        self.expect(.CloseCurly) catch {
-                            try self.pushDiagnostic(.expected_expr_close_curly, .{
-                                .start = self.pos,
-                                .end = self.pos,
-                            });
-                        };
-                        const assoc_region = AST.TokenizedRegion{ .start = state.start, .end = self.pos };
-                        try self.exitDeclScope(state.scope, assoc_region);
-                        if (state.pushed_type_path) {
-                            _ = self.type_path_stack.pop();
-                        }
-                        const statements = try self.store.statementSpanFrom(state.scratch_top);
-                        last_associated = AST.Associated{
-                            .statements = statements,
-                            .scope = state.scope,
-                            .region = assoc_region,
-                        };
-                    },
-                    .type_decl_after_associated => |state| {
-                        const assoc = last_associated orelse unreachable;
-                        last_associated = null;
-                        if (state.kind == .alias) {
-                            try self.pushDiagnostic(.type_alias_cannot_have_associated, .{
-                                .start = state.dot_pos,
-                                .end = state.dot_pos + 1,
-                            });
-                        }
-                        const statement_idx = try self.addTypeDeclStatement(.{ .type_decl = .{
-                            .header = state.header,
-                            .anno = state.anno,
-                            .kind = state.kind,
-                            .where = state.where_clause,
-                            .associated = assoc,
-                            .region = .{ .start = state.start, .end = self.pos },
-                        } }, state.type_dependencies, state.type_path);
-                        self.decl_index.setScopeOwner(assoc.scope, .{ .associated_type_decl = @intFromEnum(statement_idx) });
-                        last_statement = statement_idx;
-                    },
-                }
-            },
-        }
-    }
-
-    if (last) |expr| return .{ .expr = expr };
-    if (last_statement) |statement| return .{ .statement = statement };
-    if (last_associated) |associated| return .{ .associated = associated };
-    return .{ .expr = try self.store.addMalformed(AST.Expr.Idx, .expr_unexpected_token, .{ .start = self.pos, .end = self.pos }) };
-}
-
-/// todo
-pub fn parseRecordField(self: *Parser) Error!AST.RecordField.Idx {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    const start = self.pos;
-
-    self.expect(.LowerIdent) catch {
-        return try self.pushMalformed(AST.RecordField.Idx, .expected_expr_record_field_name, start);
-    };
-    const name = start;
-    var value: ?AST.Expr.Idx = null;
-    if (self.peek() == .OpColon) {
-        self.advance();
-        value = try self.parseExpr();
-    }
-
-    return try self.store.addRecordField(.{
-        .name = name,
-        .value = value,
-        .region = .{ .start = start, .end = self.pos },
-    });
-}
-
-/// todo
-pub fn parseBranch(self: *Parser) Error!AST.MatchBranch.Idx {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    const start = self.pos;
-    const p = try self.parsePattern(.alternatives_allowed);
-
-    // Parse optional guard: `if <expr>`
-    const guard: ?AST.Expr.Idx = if (self.peek() == .KwIf) blk: {
-        self.advance(); // consume `if`
-        break :blk try self.parseExpr();
-    } else null;
-
-    if (self.peek() == .OpFatArrow) {
-        self.advance();
-    } else if (self.peek() == .OpArrow) {
-        // Add diagnostic for wrong arrow
-        try self.pushDiagnostic(.match_branch_wrong_arrow, .{
-            .start = self.pos,
-            .end = self.pos,
-        });
-
-        self.advance();
-    } else {
-        // Add diagnostic for missing arrow
-        try self.pushDiagnostic(.match_branch_missing_arrow, .{
-            .start = self.pos,
-            .end = self.pos,
-        });
-    }
-    const b = try self.parseExpr();
-    return try self.store.addMatchBranch(.{
-        .region = .{ .start = start, .end = self.pos },
-        .pattern = p,
-        .body = b,
-        .guard = guard,
-    });
-}
-
-/// Parse a multiline string expression with optional interpolations
-pub fn parseMultiLineStringExpr(self: *Parser) Error!AST.Expr.Idx {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-    std.debug.assert(self.peek() == .MultilineStringStart);
-    const start = self.pos;
-    self.advance();
-    const scratch_top = self.store.scratchExprTop();
-    while (self.peek() != .EndOfFile) {
-        switch (self.peek()) {
-            .MultilineStringStart => {
-                self.advance();
-            },
-            .StringPart => {
-                const part_start = self.pos;
-                self.advance(); // Advance past the StringPart
-                const index = try self.store.addExpr(.{ .string_part = .{
-                    .token = part_start,
-                    .region = .{ .start = part_start, .end = self.pos },
-                } });
-                try self.store.addScratchExpr(index);
-            },
-            .OpenStringInterpolation => {
-                self.advance(); // Advance past OpenStringInterpolation
-                const ex = try self.parseExpr();
-                try self.store.addScratchExpr(ex);
-                if (self.peek() != .CloseStringInterpolation) {
-                    return try self.pushMalformed(AST.Expr.Idx, .string_expected_close_interpolation, start);
-                }
-                self.advance(); // Advance past the CloseString Interpolation
-            },
-            .MalformedStringPart => {
-                self.advance();
-                try self.pushDiagnostic(.string_unexpected_token, .{
-                    .start = self.pos,
-                    .end = self.pos,
-                });
+                continue :expr_kernel .pattern_root_next;
             },
             else => {
-                // Multi line strings just end
-                break;
-            },
-        }
-    }
-
-    const parts = try self.store.exprSpanFrom(scratch_top);
-    const expr = try self.store.addExpr(.{
-        .multiline_string = .{
-            .token = start,
-            .parts = parts,
-            .region = .{
-                .start = start,
-                .end = self.pos,
+                if (self.peek() == .EndOfFile) {
+                    self.store.clearScratchPatternRecordFieldsFrom(pattern_record_state.scratch_top);
+                    last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, pattern_record_state.start);
+                    continue :expr_kernel .pattern_complete;
+                }
+                const field_start = self.pos;
+                while (self.peek() != .EndOfFile and self.peek() != .CloseCurly) {
+                    self.advance();
+                }
+                last_pattern = try self.pushMalformed(AST.Pattern.Idx, .expected_lower_ident_pat_field_name, field_start);
+                continue :expr_kernel .pattern_complete;
             },
         },
-    });
-    return expr;
-}
-
-/// todo
-pub fn parseStringExpr(self: *Parser) Error!AST.Expr.Idx {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    std.debug.assert(self.peek() == .StringStart);
-    const start = self.pos;
-    // Start parsing string with possible interpolations
-    // e.g.:
-    // StringStart, StringPart, OpenStringInterpolation, <expr>, CloseStringInterpolation, StringPart, StringEnd
-    self.advance();
-    const scratch_top = self.store.scratchExprTop();
-    while (self.peek() != .EndOfFile) {
-        switch (self.peek()) {
-            .StringEnd => {
-                break;
-            },
-            .StringPart => {
-                const part_start = self.pos;
-                self.advance(); // Advance past the StringPart
-                const index = try self.store.addExpr(.{ .string_part = .{
-                    .token = part_start,
-                    .region = .{ .start = part_start, .end = self.pos },
-                } });
-                try self.store.addScratchExpr(index);
-            },
-            .OpenStringInterpolation => {
-                self.advance(); // Advance past OpenStringInterpolation
-                const ex = try self.parseExpr();
-                try self.store.addScratchExpr(ex);
-                if (self.peek() != .CloseStringInterpolation) {
-                    return try self.pushMalformed(AST.Expr.Idx, .string_expected_close_interpolation, start);
-                }
-                self.advance(); // Advance past the CloseString Interpolation
-            },
-            .MalformedStringPart => {
-                // Don't create a parser diagnostic - the tokenizer already created
-                // a more precise diagnostic with the exact error location
+        .pattern_record_finish => switch (self.peek()) {
+            .CloseCurly => {
+                const fields = try self.store.patternRecordFieldSpanFrom(pattern_record_state.scratch_top);
                 self.advance();
-            },
-            else => {
-                // Something is broken in the tokenizer if we get here!
-                return try self.pushMalformed(AST.Expr.Idx, .string_unexpected_token, self.pos);
-            },
-        }
-    }
-
-    self.expect(.StringEnd) catch {
-        try self.pushDiagnostic(.string_unclosed, .{
-            .start = self.pos,
-            .end = self.pos,
-        });
-    };
-
-    const parts = try self.store.exprSpanFrom(scratch_top);
-    const expr = try self.store.addExpr(.{
-        .string = .{
-            .token = start,
-            .parts = parts,
-            .region = .{
-                .start = start,
-                .end = self.pos,
-            },
-        },
-    });
-    return expr;
-}
-
-/// todo
-pub fn parseStringPattern(self: *Parser) Error!AST.Pattern.Idx {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    const start = self.pos;
-    const inner = try parseStringExpr(self);
-    const patt_idx = try self.store.addPattern(.{ .string = .{
-        .string_tok = start,
-        .region = .{ .start = start, .end = self.pos },
-        .expr = inner,
-    } });
-    return patt_idx;
-}
-
-/// todo
-pub fn parseTypeHeader(self: *Parser) Error!AST.TypeHeader.Idx {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    const start = self.pos;
-    std.debug.assert(self.peek() == .UpperIdent);
-    self.advance(); // Advance past UpperIdent
-    if (self.peek() != .NoSpaceOpenRound and self.peek() != .OpenRound) {
-        return try self.store.addTypeHeader(.{
-            .name = start,
-            .args = .{ .span = .{
-                .start = 0,
-                .len = 0,
-            } },
-            .region = .{ .start = start, .end = self.pos },
-        });
-    }
-    self.advance();
-    const scratch_top = self.store.scratchTypeAnnoTop();
-    self.parseCollectionSpan(AST.TypeAnno.Idx, .CloseRound, NodeStore.addScratchTypeAnno, Parser.parseTypeIdent) catch |err| {
-        switch (err) {
-            error.ExpectedNotFound => {
-                self.store.clearScratchTypeAnnosFrom(scratch_top);
-                return try self.pushMalformed(AST.TypeHeader.Idx, .expected_ty_anno_close_round_or_comma, start);
-            },
-            error.OutOfMemory => return error.OutOfMemory,
-        }
-    };
-    const args = try self.store.typeAnnoSpanFrom(scratch_top);
-    return try self.store.addTypeHeader(.{
-        .name = start,
-        .args = args,
-        .region = .{ .start = start, .end = self.pos },
-    });
-}
-
-fn parseTypeIdent(self: *Parser) Error!AST.TypeAnno.Idx {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    switch (self.peek()) {
-        .LowerIdent, .NamedUnderscore, .Underscore => {
-            const tok = self.pos;
-            self.advance();
-            const region = AST.TokenizedRegion{ .start = tok, .end = self.pos };
-
-            return try self.store.addTypeAnno(switch (self.tok_buf.tokens.items(.tag)[tok]) {
-                .LowerIdent => .{ .ty_var = .{ .region = region, .tok = tok } },
-                .NamedUnderscore => .{ .underscore_type_var = .{ .region = region, .tok = tok } },
-                .Underscore => .{ .underscore = .{ .region = region } },
-                else => unreachable,
-            });
-        },
-        else => {
-            return self.pushMalformed(AST.TypeAnno.Idx, .invalid_type_arg, self.pos);
-        },
-    }
-}
-
-const TyFnArgs = enum {
-    not_looking_for_args,
-    looking_for_args,
-    looking_for_type_arg,
-};
-
-const TypeAnnoFrame = union(enum) {
-    parse: TyFnArgs,
-    after_primary: struct {
-        start: Token.Idx,
-        looking_for_args: TyFnArgs,
-    },
-    apply_next: struct {
-        start: Token.Idx,
-        scratch_top: u32,
-        looking_for_args: TyFnArgs,
-    },
-    apply_after_item: struct {
-        start: Token.Idx,
-        scratch_top: u32,
-        looking_for_args: TyFnArgs,
-    },
-    paren_next: struct {
-        start: Token.Idx,
-        after_round: Token.Idx,
-        scratch_top: u32,
-        saw_comma: bool,
-        expect_close: bool,
-        looking_for_args: TyFnArgs,
-    },
-    paren_after_item: struct {
-        start: Token.Idx,
-        after_round: Token.Idx,
-        scratch_top: u32,
-        saw_comma: bool,
-        looking_for_args: TyFnArgs,
-    },
-    paren_fn_after_ret: struct {
-        start: Token.Idx,
-        after_round: Token.Idx,
-        scratch_top: u32,
-        args: AST.TypeAnno.Span,
-        effectful: bool,
-        looking_for_args: TyFnArgs,
-    },
-    zero_arg_fn_after_ret: struct {
-        start: Token.Idx,
-        after_round: Token.Idx,
-        effectful: bool,
-        args: AST.TypeAnno.Span,
-        looking_for_args: TyFnArgs,
-    },
-    record_next: struct {
-        start: Token.Idx,
-        scratch_top: u32,
-        ext: AST.TypeAnno.RecordExt,
-        looking_for_args: TyFnArgs,
-    },
-    record_after_named_ext: struct {
-        start: Token.Idx,
-        scratch_top: u32,
-        looking_for_args: TyFnArgs,
-    },
-    record_field_after_ty: struct {
-        record_start: Token.Idx,
-        scratch_top: u32,
-        field_start: Token.Idx,
-        name: Token.Idx,
-        ext: AST.TypeAnno.RecordExt,
-        looking_for_args: TyFnArgs,
-    },
-    record_finish: struct {
-        start: Token.Idx,
-        scratch_top: u32,
-        ext: AST.TypeAnno.RecordExt,
-        looking_for_args: TyFnArgs,
-    },
-    tag_union_next: struct {
-        start: Token.Idx,
-        scratch_top: u32,
-        ext: AST.TypeAnno.TagUnionExt,
-        looking_for_args: TyFnArgs,
-    },
-    tag_union_after_named_ext: struct {
-        start: Token.Idx,
-        scratch_top: u32,
-        looking_for_args: TyFnArgs,
-    },
-    tag_union_after_item: struct {
-        start: Token.Idx,
-        scratch_top: u32,
-        ext: AST.TypeAnno.TagUnionExt,
-        was_collecting: bool,
-        looking_for_args: TyFnArgs,
-    },
-    tag_union_finish: struct {
-        start: Token.Idx,
-        scratch_top: u32,
-        ext: AST.TypeAnno.TagUnionExt,
-        looking_for_args: TyFnArgs,
-    },
-    fn_args_next: struct {
-        start: Token.Idx,
-        scratch_top: u32,
-    },
-    fn_after_arg: struct {
-        start: Token.Idx,
-        scratch_top: u32,
-    },
-    fn_after_ret: struct {
-        start: Token.Idx,
-        args: AST.TypeAnno.Span,
-        effectful: bool,
-    },
-};
-
-/// Parse a type annotation, e.g. `Foo(a) : (a,Str,I64)`
-pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAnno.Idx {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    var frame_allocator_state = std.heap.stackFallback(8192, self.gpa);
-    const frame_allocator = frame_allocator_state.get();
-    var frames: std.ArrayList(TypeAnnoFrame) = .empty;
-    defer frames.deinit(frame_allocator);
-
-    var last: ?AST.TypeAnno.Idx = null;
-    try frames.append(frame_allocator, .{ .parse = looking_for_args });
-
-    while (frames.pop()) |frame| {
-        switch (frame) {
-            .parse => |mode| {
-                const start = self.pos;
-                const first_token_tag = self.peek();
-                switch (first_token_tag) {
-                    .UpperIdent, .LowerIdent => {
-                        const qual_result = try self.parseQualificationChain();
-                        self.pos = qual_result.final_token + 1;
-
-                        const base_anno = if (first_token_tag == .LowerIdent and qual_result.qualifiers.span.len == 0)
-                            try self.store.addTypeAnno(.{ .ty_var = .{
-                                .tok = qual_result.final_token,
-                                .region = .{ .start = qual_result.final_token, .end = self.pos },
-                            } })
-                        else blk: {
-                            const anno = try self.store.addTypeAnno(.{ .ty = .{
-                                .region = .{ .start = start, .end = self.pos },
-                                .token = qual_result.final_token,
-                                .qualifiers = qual_result.qualifiers,
-                            } });
-                            if (self.collect_type_dependencies and qual_result.is_upper) {
-                                try self.recordTypeDependencyFromQualifiedTokens(qual_result.qualifiers, qual_result.final_token);
-                            }
-                            break :blk anno;
-                        };
-
-                        const can_apply = !(first_token_tag == .LowerIdent and qual_result.qualifiers.span.len == 0);
-                        if (can_apply and self.peek() == .NoSpaceOpenRound) {
-                            self.advance();
-                            const scratch_top = self.store.scratchTypeAnnoTop();
-                            try self.store.addScratchTypeAnno(base_anno);
-                            try frames.append(frame_allocator, .{ .apply_next = .{ .start = start, .scratch_top = scratch_top, .looking_for_args = mode } });
-                        } else {
-                            last = base_anno;
-                            try frames.append(frame_allocator, .{ .after_primary = .{ .start = start, .looking_for_args = mode } });
-                        }
-                    },
-                    .NamedUnderscore => {
-                        last = try self.store.addTypeAnno(.{ .underscore_type_var = .{
-                            .tok = self.pos,
-                            .region = .{ .start = start, .end = self.pos + 1 },
-                        } });
-                        self.advance();
-                        try frames.append(frame_allocator, .{ .after_primary = .{ .start = start, .looking_for_args = mode } });
-                    },
-                    .NoSpaceOpenRound, .OpenRound => {
-                        self.advance();
-                        try frames.append(frame_allocator, .{ .paren_next = .{
-                            .start = start,
-                            .after_round = self.pos,
-                            .scratch_top = self.store.scratchTypeAnnoTop(),
-                            .saw_comma = false,
-                            .expect_close = false,
-                            .looking_for_args = mode,
-                        } });
-                    },
-                    .OpenCurly => {
-                        self.advance();
-                        try frames.append(frame_allocator, .{ .record_next = .{
-                            .start = start,
-                            .scratch_top = self.store.scratchAnnoRecordFieldTop(),
-                            .ext = .closed,
-                            .looking_for_args = mode,
-                        } });
-                    },
-                    .OpenSquare => {
-                        self.advance();
-                        try frames.append(frame_allocator, .{ .tag_union_next = .{
-                            .start = start,
-                            .scratch_top = self.store.scratchTypeAnnoTop(),
-                            .ext = .closed,
-                            .looking_for_args = mode,
-                        } });
-                    },
-                    .Underscore => {
-                        last = try self.store.addTypeAnno(.{ .underscore = .{
-                            .region = .{ .start = start, .end = self.pos },
-                        } });
-                        self.advance();
-                        try frames.append(frame_allocator, .{ .after_primary = .{ .start = start, .looking_for_args = mode } });
-                    },
-                    else => {
-                        last = try self.pushMalformed(AST.TypeAnno.Idx, .ty_anno_unexpected_token, self.pos);
-                        continue;
-                    },
-                }
-            },
-            .after_primary => |state| {
-                const an = last orelse {
-                    last = try self.store.addMalformed(AST.TypeAnno.Idx, .ty_anno_unexpected_token, .{ .start = state.start, .end = self.pos });
-                    continue;
-                };
-
-                const curr = self.peek();
-                const next_tok = self.peekNext();
-                const two_away_tok = self.peekN(2);
-                const three_away_tok = self.peekN(3);
-                const curr_is_arrow = curr == .OpArrow or curr == .OpFatArrow;
-                const next_is_not_lower_ident = next_tok != .LowerIdent;
-                const not_followed_by_colon = two_away_tok != .OpColon;
-                const two_away_is_arrow = two_away_tok == .OpArrow or two_away_tok == .OpFatArrow;
-                const next_starts_where_clause = next_tok == .LowerIdent and
-                    (two_away_tok == .NoSpaceDotLowerIdent or two_away_tok == .DotLowerIdent or
-                        two_away_tok == .NoSpaceDotUpperIdent or two_away_tok == .DotUpperIdent) and
-                    three_away_tok == .OpColon;
-                const can_parse_arrow = state.looking_for_args != .looking_for_args and curr_is_arrow;
-                const can_parse_comma_args = state.looking_for_args == .not_looking_for_args and
-                    curr == .Comma and
-                    (next_is_not_lower_ident or not_followed_by_colon or two_away_is_arrow) and
-                    !next_starts_where_clause and
-                    next_tok != .CloseCurly and
-                    next_tok != .DoubleDot and
-                    next_tok != .CloseSquare;
-
-                if (can_parse_arrow or can_parse_comma_args) {
-                    const scratch_top = self.store.scratchTypeAnnoTop();
-                    try self.store.addScratchTypeAnno(an);
-                    last = null;
-                    try frames.append(frame_allocator, .{ .fn_args_next = .{ .start = state.start, .scratch_top = scratch_top } });
-                } else {
-                    last = an;
-                }
-            },
-            .apply_next => |state| {
-                if (self.peek() == .CloseRound) {
-                    self.advance();
-                    last = try self.store.addTypeAnno(.{ .apply = .{
-                        .region = .{ .start = state.start, .end = self.pos },
-                        .args = try self.store.typeAnnoSpanFrom(state.scratch_top),
-                    } });
-                    try frames.append(frame_allocator, .{ .after_primary = .{ .start = state.start, .looking_for_args = state.looking_for_args } });
-                } else if (self.peek() == .EndOfFile) {
-                    self.store.clearScratchTypeAnnosFrom(state.scratch_top);
-                    last = try self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_apply_close_round, state.start);
-                    continue;
-                } else {
-                    try frames.append(frame_allocator, .{ .apply_after_item = .{
-                        .start = state.start,
-                        .scratch_top = state.scratch_top,
-                        .looking_for_args = state.looking_for_args,
-                    } });
-                    try frames.append(frame_allocator, .{ .parse = .looking_for_type_arg });
-                }
-            },
-            .apply_after_item => |state| {
-                const item = last orelse unreachable;
-                last = null;
-                try self.store.addScratchTypeAnno(item);
-                if (self.peek() == .Comma) {
-                    self.advance();
-                    try frames.append(frame_allocator, .{ .apply_next = .{
-                        .start = state.start,
-                        .scratch_top = state.scratch_top,
-                        .looking_for_args = state.looking_for_args,
-                    } });
-                } else if (self.peek() == .CloseRound) {
-                    try frames.append(frame_allocator, .{ .apply_next = .{
-                        .start = state.start,
-                        .scratch_top = state.scratch_top,
-                        .looking_for_args = state.looking_for_args,
-                    } });
-                } else {
-                    self.store.clearScratchTypeAnnosFrom(state.scratch_top);
-                    last = try self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_apply_close_round, state.start);
-                    continue;
-                }
-            },
-            .paren_next => |state| {
-                if (self.peek() == .OpArrow or self.peek() == .OpFatArrow) {
-                    const args = try self.store.typeAnnoSpanFrom(state.scratch_top);
-                    const effectful = self.peek() == .OpFatArrow;
-                    self.advance();
-                    try frames.append(frame_allocator, .{ .paren_fn_after_ret = .{
-                        .start = state.start,
-                        .after_round = state.after_round,
-                        .scratch_top = state.scratch_top,
-                        .args = args,
-                        .effectful = effectful,
-                        .looking_for_args = state.looking_for_args,
-                    } });
-                    try frames.append(frame_allocator, .{ .parse = .looking_for_args });
-                } else if (self.peek() == .CloseRound) {
-                    const args = try self.store.typeAnnoSpanFrom(state.scratch_top);
-                    if ((self.peekNext() == .OpArrow or self.peekNext() == .OpFatArrow) and args.span.len == 0) {
-                        self.advance();
-                        const effectful = self.peek() == .OpFatArrow;
-                        self.advance();
-                        try frames.append(frame_allocator, .{ .zero_arg_fn_after_ret = .{
-                            .start = state.start,
-                            .after_round = state.after_round,
-                            .effectful = effectful,
-                            .args = args,
-                            .looking_for_args = state.looking_for_args,
-                        } });
-                        try frames.append(frame_allocator, .{ .parse = .looking_for_args });
-                    } else {
-                        self.advance();
-                        const annos = args;
-                        if (annos.span.len == 1 and !state.saw_comma) {
-                            last = try self.store.addTypeAnno(.{ .parens = .{
-                                .anno = self.store.typeAnnoSlice(annos)[0],
-                                .region = .{ .start = state.start, .end = self.pos },
-                            } });
-                        } else {
-                            last = try self.store.addTypeAnno(.{ .tuple = .{
-                                .region = .{ .start = state.start, .end = self.pos },
-                                .annos = annos,
-                            } });
-                        }
-                        try frames.append(frame_allocator, .{ .after_primary = .{ .start = state.start, .looking_for_args = state.looking_for_args } });
-                    }
-                } else if (self.peek() == .EndOfFile or state.expect_close) {
-                    self.store.clearScratchTypeAnnosFrom(state.scratch_top);
-                    last = try self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_anno_close_round, state.start);
-                    continue;
-                } else {
-                    try frames.append(frame_allocator, .{ .paren_after_item = .{
-                        .start = state.start,
-                        .after_round = state.after_round,
-                        .scratch_top = state.scratch_top,
-                        .saw_comma = state.saw_comma,
-                        .looking_for_args = state.looking_for_args,
-                    } });
-                    try frames.append(frame_allocator, .{ .parse = .looking_for_args });
-                }
-            },
-            .paren_after_item => |state| {
-                const item = last orelse unreachable;
-                last = null;
-                try self.store.addScratchTypeAnno(item);
-                if (self.peek() == .Comma) {
-                    self.advance();
-                    try frames.append(frame_allocator, .{ .paren_next = .{
-                        .start = state.start,
-                        .after_round = state.after_round,
-                        .scratch_top = state.scratch_top,
-                        .saw_comma = true,
-                        .expect_close = false,
-                        .looking_for_args = state.looking_for_args,
-                    } });
-                } else {
-                    try frames.append(frame_allocator, .{ .paren_next = .{
-                        .start = state.start,
-                        .after_round = state.after_round,
-                        .scratch_top = state.scratch_top,
-                        .saw_comma = state.saw_comma,
-                        .expect_close = true,
-                        .looking_for_args = state.looking_for_args,
-                    } });
-                }
-            },
-            .paren_fn_after_ret => |state| {
-                const ret = last orelse unreachable;
-                last = null;
-                if (self.peek() != .CloseRound) {
-                    self.store.clearScratchTypeAnnosFrom(state.scratch_top);
-                    last = try self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_anno_close_round, state.start);
-                    continue;
-                }
-                const function = try self.store.addTypeAnno(.{ .@"fn" = .{
-                    .args = state.args,
-                    .ret = ret,
-                    .effectful = state.effectful,
-                    .region = .{ .start = state.after_round, .end = self.pos },
-                } });
-                self.advance();
-                last = try self.store.addTypeAnno(.{ .parens = .{
-                    .anno = function,
-                    .region = .{ .start = state.start, .end = self.pos },
-                } });
-                try frames.append(frame_allocator, .{ .after_primary = .{ .start = state.start, .looking_for_args = state.looking_for_args } });
-            },
-            .zero_arg_fn_after_ret => |state| {
-                const ret = last orelse unreachable;
-                last = try self.store.addTypeAnno(.{ .@"fn" = .{
-                    .args = state.args,
-                    .ret = ret,
-                    .effectful = state.effectful,
-                    .region = .{ .start = state.after_round, .end = self.pos },
-                } });
-                try frames.append(frame_allocator, .{ .after_primary = .{ .start = state.start, .looking_for_args = state.looking_for_args } });
-            },
-            .record_next => |state| {
-                if (self.peek() == .CloseCurly) {
-                    try frames.append(frame_allocator, .{ .record_finish = .{
-                        .start = state.start,
-                        .scratch_top = state.scratch_top,
-                        .ext = state.ext,
-                        .looking_for_args = state.looking_for_args,
-                    } });
-                } else if (self.peek() == .EndOfFile) {
-                    self.store.clearScratchAnnoRecordFieldsFrom(state.scratch_top);
-                    last = try self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_close_curly_or_comma, self.pos);
-                    continue;
-                } else if (self.peek() == .DoubleDot) {
-                    const double_dot_start = self.pos;
-                    self.advance();
-                    if (self.peek() == .LowerIdent or self.peek() == .NamedUnderscore) {
-                        try frames.append(frame_allocator, .{ .record_after_named_ext = .{
-                            .start = state.start,
-                            .scratch_top = state.scratch_top,
-                            .looking_for_args = state.looking_for_args,
-                        } });
-                        try frames.append(frame_allocator, .{ .parse = .looking_for_args });
-                    } else {
-                        self.expect(.Comma) catch {};
-                        try frames.append(frame_allocator, .{ .record_finish = .{
-                            .start = state.start,
-                            .scratch_top = state.scratch_top,
-                            .ext = .{ .open = double_dot_start },
-                            .looking_for_args = state.looking_for_args,
-                        } });
-                    }
-                } else {
-                    const field_start = self.pos;
-                    if (self.peek() != .LowerIdent) {
-                        while (self.peek() != .CloseCurly and self.peek() != .Comma and self.peek() != .EndOfFile) {
-                            self.advance();
-                        }
-                        const malformed_field = try self.pushMalformed(AST.AnnoRecordField.Idx, .expected_type_field_name, field_start);
-                        try self.store.addScratchAnnoRecordField(malformed_field);
-                        self.store.clearScratchAnnoRecordFieldsFrom(state.scratch_top);
-                        last = try self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_close_curly_or_comma, self.pos);
-                        continue;
-                    }
-                    const name = self.pos;
-                    self.advance();
-                    if (self.peek() != .OpColon) {
-                        while (self.peek() != .CloseCurly and self.peek() != .Comma and self.peek() != .EndOfFile) {
-                            self.advance();
-                        }
-                        last = try self.pushMalformed(AST.TypeAnno.Idx, .expected_colon_after_type_field_name, field_start);
-                        continue;
-                    }
-                    self.advance();
-                    try frames.append(frame_allocator, .{ .record_field_after_ty = .{
-                        .record_start = state.start,
-                        .scratch_top = state.scratch_top,
-                        .field_start = field_start,
-                        .name = name,
-                        .ext = state.ext,
-                        .looking_for_args = state.looking_for_args,
-                    } });
-                    try frames.append(frame_allocator, .{ .parse = .not_looking_for_args });
-                }
-            },
-            .record_after_named_ext => |state| {
-                const named_anno = last orelse unreachable;
-                last = null;
-                const anno_region = self.store.getTypeAnno(named_anno).to_tokenized_region();
-                self.expect(.Comma) catch {};
-                try frames.append(frame_allocator, .{ .record_finish = .{
-                    .start = state.start,
-                    .scratch_top = state.scratch_top,
-                    .ext = .{ .named = .{ .anno = named_anno, .region = anno_region } },
-                    .looking_for_args = state.looking_for_args,
-                } });
-            },
-            .record_field_after_ty => |state| {
-                const ty = last orelse unreachable;
-                last = null;
-                const field = try self.store.addAnnoRecordField(.{
-                    .region = .{ .start = state.field_start, .end = self.pos },
-                    .name = state.name,
-                    .ty = ty,
-                });
-                try self.store.addScratchAnnoRecordField(field);
-                if (self.peek() == .Comma) {
-                    self.advance();
-                    try frames.append(frame_allocator, .{ .record_next = .{
-                        .start = state.record_start,
-                        .scratch_top = state.scratch_top,
-                        .ext = state.ext,
-                        .looking_for_args = state.looking_for_args,
-                    } });
-                } else {
-                    try frames.append(frame_allocator, .{ .record_finish = .{
-                        .start = state.record_start,
-                        .scratch_top = state.scratch_top,
-                        .ext = state.ext,
-                        .looking_for_args = state.looking_for_args,
-                    } });
-                }
-            },
-            .record_finish => |state| {
-                self.expect(.CloseCurly) catch {
-                    self.store.clearScratchAnnoRecordFieldsFrom(state.scratch_top);
-                    last = try self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_close_curly_or_comma, self.pos);
-                    continue;
-                };
-                const fields = try self.store.annoRecordFieldSpanFrom(state.scratch_top);
-                last = try self.store.addTypeAnno(.{ .record = .{
-                    .region = .{ .start = state.start, .end = self.pos },
+                last_pattern = try self.store.addPattern(.{ .record = .{
+                    .region = .{ .start = pattern_record_state.start, .end = self.pos },
                     .fields = fields,
-                    .ext = state.ext,
                 } });
-                try frames.append(frame_allocator, .{ .after_primary = .{ .start = state.start, .looking_for_args = state.looking_for_args } });
+                continue :expr_kernel .pattern_complete;
             },
-            .tag_union_next => |state| {
-                if (self.peek() == .CloseSquare) {
-                    try frames.append(frame_allocator, .{ .tag_union_finish = .{
-                        .start = state.start,
-                        .scratch_top = state.scratch_top,
-                        .ext = state.ext,
-                        .looking_for_args = state.looking_for_args,
-                    } });
-                } else if (self.peek() == .EndOfFile) {
-                    self.store.clearScratchTypeAnnosFrom(state.scratch_top);
-                    last = try self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_close_square_or_comma, self.pos);
-                    continue;
-                } else if (self.peek() == .DoubleDot) {
-                    const double_dot_pos = self.pos;
-                    self.advance();
-                    if (self.peek() == .LowerIdent or self.peek() == .NamedUnderscore) {
-                        try frames.append(frame_allocator, .{ .tag_union_after_named_ext = .{
-                            .start = state.start,
-                            .scratch_top = state.scratch_top,
-                            .looking_for_args = state.looking_for_args,
-                        } });
-                        try frames.append(frame_allocator, .{ .parse = .looking_for_args });
-                    } else {
-                        self.expect(.Comma) catch {};
-                        try frames.append(frame_allocator, .{ .tag_union_finish = .{
-                            .start = state.start,
-                            .scratch_top = state.scratch_top,
-                            .ext = .{ .open = double_dot_pos },
-                            .looking_for_args = state.looking_for_args,
-                        } });
-                    }
-                } else {
-                    const was_collecting = self.collect_type_dependencies;
-                    self.collect_type_dependencies = false;
-                    try frames.append(frame_allocator, .{ .tag_union_after_item = .{
-                        .start = state.start,
-                        .scratch_top = state.scratch_top,
-                        .ext = state.ext,
-                        .was_collecting = was_collecting,
-                        .looking_for_args = state.looking_for_args,
-                    } });
-                    try frames.append(frame_allocator, .{ .parse = .looking_for_type_arg });
+            else => {
+                last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, pattern_record_state.start);
+                continue :expr_kernel .pattern_complete;
+            },
+        },
+        .pattern_tuple_next => switch (self.peek()) {
+            .CloseRound => continue :expr_kernel .pattern_tuple_finish,
+            else => {
+                if (self.peek() == .EndOfFile) {
+                    self.store.clearScratchPatternsFrom(pattern_tuple_state.scratch_top);
+                    last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, pattern_tuple_state.start);
+                    continue :expr_kernel .pattern_complete;
                 }
-            },
-            .tag_union_after_named_ext => |state| {
-                const named_anno = last orelse unreachable;
-                last = null;
-                const anno_region = self.store.getTypeAnno(named_anno).to_tokenized_region();
-                self.expect(.Comma) catch {};
-                try frames.append(frame_allocator, .{ .tag_union_finish = .{
-                    .start = state.start,
-                    .scratch_top = state.scratch_top,
-                    .ext = .{ .named = .{ .anno = named_anno, .region = anno_region } },
-                    .looking_for_args = state.looking_for_args,
-                } });
-            },
-            .tag_union_after_item => |state| {
-                const tag = last orelse unreachable;
-                last = null;
-                self.collect_type_dependencies = state.was_collecting;
-                if (state.was_collecting) {
-                    try self.recordTypeDependenciesFromTagAnno(tag);
-                }
-                try self.store.addScratchTypeAnno(tag);
-                if (self.peek() == .Comma) {
-                    self.advance();
-                    try frames.append(frame_allocator, .{ .tag_union_next = .{
-                        .start = state.start,
-                        .scratch_top = state.scratch_top,
-                        .ext = state.ext,
-                        .looking_for_args = state.looking_for_args,
-                    } });
-                } else {
-                    try frames.append(frame_allocator, .{ .tag_union_finish = .{
-                        .start = state.start,
-                        .scratch_top = state.scratch_top,
-                        .ext = state.ext,
-                        .looking_for_args = state.looking_for_args,
-                    } });
-                }
-            },
-            .tag_union_finish => |state| {
-                self.expect(.CloseSquare) catch {
-                    self.store.clearScratchTypeAnnosFrom(state.scratch_top);
-                    last = try self.pushMalformed(AST.TypeAnno.Idx, .expected_ty_close_square_or_comma, self.pos);
-                    continue;
+                try open_syntax.pushPattern(open_allocator, .pattern_tuple, PatternTupleState, pattern_tuple_state);
+                pattern_root_state = .{
+                    .outer_start = self.pos,
+                    .scratch_top = self.store.scratchPatternTop(),
+                    .alternatives = .alternatives_allowed,
                 };
-                const tags = try self.store.typeAnnoSpanFrom(state.scratch_top);
-                last = try self.store.addTypeAnno(.{ .tag_union = .{
-                    .region = .{ .start = state.start, .end = self.pos },
-                    .ext = state.ext,
-                    .tags = tags,
+                continue :expr_kernel .pattern_root_next;
+            },
+        },
+        .pattern_tuple_finish => switch (self.peek()) {
+            .CloseRound => {
+                self.advance();
+                const patterns = try self.store.patternSpanFrom(pattern_tuple_state.scratch_top);
+                last_pattern = try self.store.addPattern(.{ .tuple = .{
+                    .patterns = patterns,
+                    .region = .{ .start = pattern_tuple_state.start, .end = self.pos },
                 } });
-                try frames.append(frame_allocator, .{ .after_primary = .{ .start = state.start, .looking_for_args = state.looking_for_args } });
+                continue :expr_kernel .pattern_complete;
             },
-            .fn_args_next => |state| {
-                if (self.peek() == .Comma) {
-                    self.advance();
-                    try frames.append(frame_allocator, .{ .fn_after_arg = .{
-                        .start = state.start,
-                        .scratch_top = state.scratch_top,
-                    } });
-                    try frames.append(frame_allocator, .{ .parse = .looking_for_args });
-                } else if (self.peek() == .OpArrow or self.peek() == .OpFatArrow) {
-                    const args = try self.store.typeAnnoSpanFrom(state.scratch_top);
-                    const effectful = self.peek() == .OpFatArrow;
-                    self.advance();
-                    try frames.append(frame_allocator, .{ .fn_after_ret = .{
-                        .start = state.start,
-                        .args = args,
-                        .effectful = effectful,
-                    } });
-                    try frames.append(frame_allocator, .{ .parse = .looking_for_args });
-                } else {
-                    self.store.clearScratchTypeAnnosFrom(state.scratch_top);
-                    last = try self.pushMalformed(AST.TypeAnno.Idx, .expected_arrow, state.start);
-                    continue;
-                }
+            else => {
+                self.store.clearScratchPatternsFrom(pattern_tuple_state.scratch_top);
+                last_pattern = try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, pattern_tuple_state.start);
+                continue :expr_kernel .pattern_complete;
             },
-            .fn_after_arg => |state| {
-                const arg = last orelse unreachable;
-                last = null;
-                try self.store.addScratchTypeAnno(arg);
-                try frames.append(frame_allocator, .{ .fn_args_next = .{
-                    .start = state.start,
-                    .scratch_top = state.scratch_top,
-                } });
-            },
-            .fn_after_ret => |state| {
-                const ret = last orelse unreachable;
-                last = try self.store.addTypeAnno(.{ .@"fn" = .{
-                    .region = .{ .start = state.start, .end = self.pos },
-                    .args = state.args,
-                    .ret = ret,
-                    .effectful = state.effectful,
-                } });
-            },
-        }
+        },
     }
-
-    return last orelse try self.store.addMalformed(AST.TypeAnno.Idx, .ty_anno_unexpected_token, .{ .start = self.pos, .end = self.pos });
 }
 
-/// todo
-pub fn parseTypeAnnoInCollection(self: *Parser) Error!AST.TypeAnno.Idx {
+/// Run the token parser kernel with a type-annotation goal and return the completed type.
+pub fn runTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAnno.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    return try self.parseTypeAnno(.looking_for_type_arg);
+    return try self.runTypeAnnoRoot(looking_for_args);
 }
 
 fn recordTypeDependenciesFromTagAnno(self: *Parser, anno_idx: AST.TypeAnno.Idx) Error!void {
@@ -6080,6 +5735,20 @@ const TypeDependencyWalkItem = struct {
     anno: AST.TypeAnno.Idx,
     mode: TypeDependencyWalkMode,
 };
+
+inline fn appendTypeDependencyAnnoSlice(
+    pending_allocator: std.mem.Allocator,
+    pending: *std.ArrayList(TypeDependencyWalkItem),
+    annos: []const AST.TypeAnno.Idx,
+    first: usize,
+    mode: TypeDependencyWalkMode,
+) Error!void {
+    var i = annos.len;
+    while (i > first) {
+        i -= 1;
+        try pending.append(pending_allocator, .{ .anno = annos[i], .mode = mode });
+    }
+}
 
 fn recordTypeDependenciesFromAnnoWorklist(
     self: *Parser,
@@ -6099,12 +5768,7 @@ fn recordTypeDependenciesFromAnnoWorklist(
             .tag_payloads_only => switch (anno) {
                 .apply => |apply| {
                     const args = self.store.typeAnnoSlice(apply.args);
-                    if (args.len == 0) continue;
-                    var i = args.len;
-                    while (i > 1) {
-                        i -= 1;
-                        try pending.append(pending_allocator, .{ .anno = args[i], .mode = .all });
-                    }
+                    try appendTypeDependencyAnnoSlice(pending_allocator, &pending, args, 1, .all);
                 },
                 else => {},
             },
@@ -6117,30 +5781,18 @@ fn recordTypeDependenciesFromAnnoWorklist(
                 },
                 .apply => |apply| {
                     const args = self.store.typeAnnoSlice(apply.args);
-                    var i = args.len;
-                    while (i > 0) {
-                        i -= 1;
-                        try pending.append(pending_allocator, .{ .anno = args[i], .mode = .all });
-                    }
+                    try appendTypeDependencyAnnoSlice(pending_allocator, &pending, args, 0, .all);
                 },
                 .tag_union => |tag_union| {
                     if (tag_union.ext == .named) {
                         try pending.append(pending_allocator, .{ .anno = tag_union.ext.named.anno, .mode = .all });
                     }
                     const tags = self.store.typeAnnoSlice(tag_union.tags);
-                    var i = tags.len;
-                    while (i > 0) {
-                        i -= 1;
-                        try pending.append(pending_allocator, .{ .anno = tags[i], .mode = .tag_payloads_only });
-                    }
+                    try appendTypeDependencyAnnoSlice(pending_allocator, &pending, tags, 0, .tag_payloads_only);
                 },
                 .tuple => |tuple| {
                     const elems = self.store.typeAnnoSlice(tuple.annos);
-                    var i = elems.len;
-                    while (i > 0) {
-                        i -= 1;
-                        try pending.append(pending_allocator, .{ .anno = elems[i], .mode = .all });
-                    }
+                    try appendTypeDependencyAnnoSlice(pending_allocator, &pending, elems, 0, .all);
                 },
                 .record => |record| {
                     if (record.ext == .named) {
@@ -6157,11 +5809,7 @@ fn recordTypeDependenciesFromAnnoWorklist(
                 .@"fn" => |func| {
                     try pending.append(pending_allocator, .{ .anno = func.ret, .mode = .all });
                     const args = self.store.typeAnnoSlice(func.args);
-                    var i = args.len;
-                    while (i > 0) {
-                        i -= 1;
-                        try pending.append(pending_allocator, .{ .anno = args[i], .mode = .all });
-                    }
+                    try appendTypeDependencyAnnoSlice(pending_allocator, &pending, args, 0, .all);
                 },
                 .parens => |parens| {
                     try pending.append(pending_allocator, .{ .anno = parens.anno, .mode = .all });
@@ -6191,171 +5839,6 @@ fn recordTypeDependencyFromQualifiedTokens(
     try self.decl_index.addTypeDependencySegments(self.scratch_idents.sliceFromStart(top));
 }
 
-/// todo
-pub fn parseAnnoRecordField(self: *Parser) Error!AST.AnnoRecordField.Idx {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    const field_start = self.pos;
-    if (self.peek() != .LowerIdent) {
-        while (self.peek() != .CloseCurly and self.peek() != .Comma and self.peek() != .EndOfFile) {
-            self.advance(); // Advance until we end this field or the record
-        }
-        return try self.pushMalformed(AST.AnnoRecordField.Idx, .expected_type_field_name, field_start);
-    }
-    const name = self.pos;
-    self.advance(); // Advance past LowerIdent
-    if (self.peek() != .OpColon) {
-        while (self.peek() != .CloseCurly and self.peek() != .Comma and self.peek() != .EndOfFile) {
-            self.advance(); // Advance until we end this field or the record
-        }
-        return try self.pushMalformed(AST.AnnoRecordField.Idx, .expected_colon_after_type_field_name, field_start);
-    }
-    self.advance(); // Advance past OpColon
-    const ty = try self.parseTypeAnno(.not_looking_for_args);
-
-    return try self.store.addAnnoRecordField(.{
-        .region = .{ .start = field_start, .end = self.pos },
-        .name = name,
-        .ty = ty,
-    });
-}
-
-/// Parse a where clause
-///
-/// e.g. `a.hash : a -> U64`
-/// e.g. `a.Hasher : Type`
-pub fn parseWhereClause(self: *Parser) Error!AST.WhereClause.Idx {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    const start = self.pos;
-
-    // Expect lower identifier (type variable)
-    const var_tok = self.pos;
-    self.expect(.LowerIdent) catch {
-        return try self.pushMalformed(
-            AST.WhereClause.Idx,
-            .where_expected_var,
-            start,
-        );
-    };
-
-    // Expect dot followed by method/alias name
-    const name_tok = self.pos;
-    if (self.peek() != .NoSpaceDotLowerIdent and self.peek() != .DotLowerIdent and self.peek() != .NoSpaceDotUpperIdent and self.peek() != .DotUpperIdent) {
-        return try self.pushMalformed(
-            AST.WhereClause.Idx,
-            .where_expected_method_or_alias_name,
-            start,
-        );
-    }
-    self.advance();
-
-    // Check if this is a type alias (uppercase identifier)
-    const current_token_tag = self.tok_buf.tokens.items(.tag)[name_tok];
-    if (current_token_tag == .NoSpaceDotUpperIdent or current_token_tag == .DotUpperIdent) {
-        // Type alias case: a.TypeAlias
-        return try self.store.addWhereClause(.{ .mod_alias = .{
-            .region = .{ .start = start, .end = self.pos },
-            .name_tok = name_tok,
-            .var_tok = var_tok,
-        } });
-    }
-
-    // Expect colon
-    self.expect(.OpColon) catch {
-        return try self.pushMalformed(
-            AST.WhereClause.Idx,
-            .where_expected_colon,
-            start,
-        );
-    };
-
-    // Parse type annotation
-    const args_start = self.pos;
-    const method_type_anno = try self.parseTypeAnno(.not_looking_for_args);
-    const method_type = self.store.getTypeAnno(method_type_anno);
-
-    // Check if the type annotation is a function type
-    if (method_type == .@"fn") {
-        // Function type: extract args and return type
-        const fn_type = method_type.@"fn";
-        const args = try self.store.addCollection(
-            .collection_ty_anno,
-            .{
-                .region = .{ .start = args_start, .end = self.pos },
-                .span = fn_type.args.span,
-            },
-        );
-        return try self.store.addWhereClause(.{ .mod_method = .{
-            .region = .{ .start = start, .end = self.pos },
-            .name_tok = name_tok,
-            .var_tok = var_tok,
-            .args = args,
-            .ret_anno = fn_type.ret,
-        } });
-    } else {
-        // Non-function type: treat as zero-argument method
-        const empty_args = try self.store.addCollection(
-            .collection_ty_anno,
-            .{
-                .region = .{ .start = args_start, .end = self.pos },
-                .span = base.DataSpan.empty(),
-            },
-        );
-        return try self.store.addWhereClause(.{ .mod_method = .{
-            .region = .{ .start = start, .end = self.pos },
-            .name_tok = name_tok,
-            .var_tok = var_tok,
-            .args = empty_args,
-            .ret_anno = method_type_anno,
-        } });
-    }
-}
-
-/// Parse a block of statements.
-/// Check parseStmt to see how statements are parsed.
-/// {
-///     <stmt1>
-///     ...
-///     <stmtN>
-/// }
-pub fn parseBlock(self: *Parser, start: u32) Error!AST.Expr.Idx {
-    const previous_type_path_visible_start = self.type_path_stack_visible_start;
-    self.type_path_stack_visible_start = self.type_path_stack.items.len;
-    defer self.type_path_stack_visible_start = previous_type_path_visible_start;
-
-    const block_scope = try self.enterDeclScope(.block, .none, .{ .start = start, .end = start });
-    const scratch_top = self.store.scratchStatementTop();
-
-    while (self.peek() != .EndOfFile) {
-        const statement = try self.parseStmt();
-        try self.store.addScratchStatement(statement);
-        if (self.peek() == .CloseCurly) {
-            break;
-        }
-    }
-
-    self.expect(.CloseCurly) catch {
-        try self.pushDiagnostic(.expected_expr_close_curly, .{
-            .start = self.pos,
-            .end = self.pos,
-        });
-    };
-
-    const block_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
-    try self.exitDeclScope(block_scope, block_region);
-    const statements = try self.store.statementSpanFrom(scratch_top);
-    const expr_idx = try self.store.addExpr(.{ .block = .{
-        .statements = statements,
-        .scope = block_scope,
-        .region = block_region,
-    } });
-    self.decl_index.setScopeOwner(block_scope, .{ .expr = @intFromEnum(expr_idx) });
-    return expr_idx;
-}
-
 /// Parse a block that contains only statements, no ending expression.
 /// This is used for nominal type associated items like `Foo := [A, B].{ x = 5 }`
 /// {
@@ -6363,20 +5846,13 @@ pub fn parseBlock(self: *Parser, start: u32) Error!AST.Expr.Idx {
 ///     ...
 ///     <stmtN>
 /// }
-pub fn parseStatementOnlyBlock(self: *Parser, start: u32, owner_type_path: ?DeclIndex.TypePathIdx) Error!AST.Associated {
-    const result = try self.parseDriver(.{ .statement = .{ .associated_block_begin = .{
-        .start = start,
-        .owner_type_path = owner_type_path,
-    } } });
-    return switch (result) {
-        .associated => |associated| associated,
-        else => unreachable,
-    };
+pub fn runStatementOnlyBlock(self: *Parser, start: u32, owner_type_path: ?DeclIndex.TypePathIdx) Error!AST.Associated {
+    return try self.runAssociatedBlockRoot(start, owner_type_path);
 }
 
 fn finishRecordExpr(
     self: *Parser,
-    start: u32,
+    start: Token.Idx,
     fields: AST.RecordField.Span,
     ext: ?AST.Expr.Idx,
 ) Error!AST.Expr.Idx {
@@ -6392,7 +5868,6 @@ fn finishRecordExpr(
             self.advance();
         }
         const qualifiers = try self.store.tokenSpanFrom(token_scratch_top);
-
         const mapper = try self.store.addExpr(.{ .tag = .{
             .region = .{ .start = suffix_start, .end = self.pos },
             .token = final_token,
@@ -6413,84 +5888,73 @@ fn finishRecordExpr(
     } });
 }
 
-/// Parse a record.
-/// Check parseRecordField to see how record fields are parsed.
-/// {
-///     a,
-///     b: <expr1>,
-///     ...
-///     <recordFieldN>
-/// }
-pub fn parseRecord(self: *Parser, start: u32) Error!AST.Expr.Idx {
-    const scratch_top = self.store.scratchRecordFieldTop();
-    self.parseCollectionSpan(AST.RecordField.Idx, .CloseCurly, NodeStore.addScratchRecordField, parseRecordField) catch |err| {
-        switch (err) {
-            error.ExpectedNotFound => {
-                self.store.clearScratchRecordFieldsFrom(scratch_top);
-                return try self.pushMalformed(AST.Expr.Idx, .expected_expr_close_curly_or_comma, self.pos);
-            },
-            error.OutOfMemory => return error.OutOfMemory,
-        }
-    };
-    const fields = try self.store.recordFieldSpanFrom(scratch_top);
-
-    // Check for record builder suffix: { ... }.TypeName
-    if (self.peek() == .NoSpaceDotUpperIdent) {
-        const suffix_start = self.pos;
-        var final_token = self.pos;
-        self.advance();
-
-        // Parse any additional qualifiers (e.g., .Foo.Bar.Baz)
-        const token_scratch_top = self.store.scratchTokenTop();
-        while (self.peek() == .NoSpaceDotUpperIdent) {
-            try self.store.addScratchToken(final_token);
-            final_token = self.pos;
-            self.advance();
-        }
-        const qualifiers = try self.store.tokenSpanFrom(token_scratch_top);
-
-        const mapper = try self.store.addExpr(.{ .tag = .{
-            .region = .{ .start = suffix_start, .end = self.pos },
-            .token = final_token,
-            .qualifiers = qualifiers,
-        } });
-
-        return try self.store.addExpr(.{ .record_builder = .{
-            .mapper = mapper,
-            .fields = fields,
-            .region = .{ .start = start, .end = self.pos },
-        } });
-    }
-
-    return try self.store.addExpr(.{ .record = .{
-        .fields = fields,
-        .ext = null,
-        .region = .{ .start = start, .end = self.pos },
-    } });
-}
-
 /// Binding power of the lhs and rhs of a particular operator.
 const BinOpBp = struct { left: u8, right: u8 };
 
+inline fn isInBinOpTokenRange(tok: Token.Tag) bool {
+    const tok_int = @intFromEnum(tok);
+    return tok_int >= @intFromEnum(Token.Tag.OpPlus) and tok_int <= @intFromEnum(Token.Tag.OpEquals);
+}
+
+const no_bin_op_bp = BinOpBp{ .left = 0, .right = 0 };
+const bin_op_bp_table = blk: {
+    const start = @intFromEnum(Token.Tag.OpPlus);
+    const len = @intFromEnum(Token.Tag.OpEquals) - start + 1;
+    var table = [_]BinOpBp{no_bin_op_bp} ** len;
+    table[@intFromEnum(Token.Tag.OpStar) - start] = .{ .left = 30, .right = 31 };
+    table[@intFromEnum(Token.Tag.OpSlash) - start] = .{ .left = 28, .right = 29 };
+    table[@intFromEnum(Token.Tag.OpDoubleSlash) - start] = .{ .left = 26, .right = 27 };
+    table[@intFromEnum(Token.Tag.OpPercent) - start] = .{ .left = 24, .right = 25 };
+    table[@intFromEnum(Token.Tag.OpPlus) - start] = .{ .left = 20, .right = 21 };
+    table[@intFromEnum(Token.Tag.OpBinaryMinus) - start] = .{ .left = 20, .right = 21 };
+    table[@intFromEnum(Token.Tag.OpDoubleQuestion) - start] = .{ .left = 18, .right = 19 };
+    table[@intFromEnum(Token.Tag.OpQuestion) - start] = .{ .left = 16, .right = 17 };
+    table[@intFromEnum(Token.Tag.OpEquals) - start] = .{ .left = 15, .right = 15 };
+    table[@intFromEnum(Token.Tag.OpNotEquals) - start] = .{ .left = 13, .right = 13 };
+    table[@intFromEnum(Token.Tag.OpLessThan) - start] = .{ .left = 11, .right = 11 };
+    table[@intFromEnum(Token.Tag.OpGreaterThan) - start] = .{ .left = 9, .right = 9 };
+    table[@intFromEnum(Token.Tag.OpLessThanOrEq) - start] = .{ .left = 7, .right = 7 };
+    table[@intFromEnum(Token.Tag.OpGreaterThanOrEq) - start] = .{ .left = 5, .right = 5 };
+    table[@intFromEnum(Token.Tag.OpAnd) - start] = .{ .left = 4, .right = 3 };
+    table[@intFromEnum(Token.Tag.OpOr) - start] = .{ .left = 2, .right = 1 };
+    break :blk table;
+};
+
+inline fn getTokenBPInRange(tok: Token.Tag) BinOpBp {
+    return bin_op_bp_table[@intFromEnum(tok) - @intFromEnum(Token.Tag.OpPlus)];
+}
+
 /// Get the binding power for a Token if it's a operator token, else return null.
 fn getTokenBP(tok: Token.Tag) ?BinOpBp {
-    return switch (tok) {
-        .OpStar => .{ .left = 30, .right = 31 }, // 31 LEFT
-        .OpSlash => .{ .left = 28, .right = 29 }, // 29 LEFT
-        .OpDoubleSlash => .{ .left = 26, .right = 27 }, // 27 LEFT
-        .OpPercent => .{ .left = 24, .right = 25 }, // 25 LEFT
-        .OpPlus => .{ .left = 20, .right = 21 }, // 21 LEFT
-        .OpBinaryMinus => .{ .left = 20, .right = 21 }, // 21 LEFT
-        .OpDoubleQuestion => .{ .left = 18, .right = 19 }, // 19 LEFT
-        .OpQuestion => .{ .left = 16, .right = 17 }, // 17 LEFT
-        .OpEquals => .{ .left = 15, .right = 15 }, // 15 NOASSOC
-        .OpNotEquals => .{ .left = 13, .right = 13 }, // 13 NOASSOC
-        .OpLessThan => .{ .left = 11, .right = 11 }, // 11 NOASSOC
-        .OpGreaterThan => .{ .left = 9, .right = 9 }, // 9 NOASSOC
-        .OpLessThanOrEq => .{ .left = 7, .right = 7 }, // 7 NOASSOC
-        .OpGreaterThanOrEq => .{ .left = 5, .right = 5 }, // 5 NOASSOC
-        .OpAnd => .{ .left = 4, .right = 3 }, // 3 RIGHT
-        .OpOr => .{ .left = 2, .right = 1 }, // 1 RIGHT
-        else => null,
+    if (!isInBinOpTokenRange(tok)) return null;
+    const bp = getTokenBPInRange(tok);
+    return if (bp.left == 0) null else bp;
+}
+
+comptime {
+    for (@typeInfo(Token.Tag).@"enum".fields) |field| {
+        const tok: Token.Tag = @enumFromInt(field.value);
+        if (getTokenBP(tok) != null and !isInBinOpTokenRange(tok)) {
+            @compileError("binary operator binding-power token outside parser operator range");
+        }
+    }
+
+    const range_holes = [_]Token.Tag{
+        .OpPizza,
+        .OpAssign,
+        .OpUnaryMinus,
+        .OpBang,
+        .OpAmpersand,
+        .OpBar,
+        .OpCaret,
+        .OpBackArrow,
     };
+    for (range_holes) |tok| {
+        if (!isInBinOpTokenRange(tok)) {
+            @compileError("expected non-binary operator hole inside parser operator range");
+        }
+        if (getTokenBP(tok) != null) {
+            @compileError("operator range hole unexpectedly has binding power");
+        }
+    }
 }

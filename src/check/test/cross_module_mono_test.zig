@@ -159,7 +159,7 @@ const MonoTestEnv = struct {
         module_env.qualified_module_ident = module_env.display_module_name_idx;
         try module_env.common.calcLineStarts(gpa);
 
-        const parse_ast = try parse.parse(gpa, &module_env.common);
+        const parse_ast = try parse.file(gpa, &module_env.common);
         errdefer parse_ast.deinit();
         parse_ast.store.emptyScratch();
 
@@ -265,7 +265,7 @@ const MonoTestEnv = struct {
             .qualified_type_ident = other_qualified_ident,
         });
 
-        const parse_ast = try parse.parse(gpa, &module_env.common);
+        const parse_ast = try parse.file(gpa, &module_env.common);
         errdefer parse_ast.deinit();
         parse_ast.store.emptyScratch();
 
@@ -383,7 +383,7 @@ const MonoTestEnv = struct {
             });
         }
 
-        const parse_ast = try parse.parse(gpa, &module_env.common);
+        const parse_ast = try parse.file(gpa, &module_env.common);
         errdefer parse_ast.deinit();
         parse_ast.store.emptyScratch();
 
@@ -711,7 +711,7 @@ test "type checker catches polymorphic recursion (infinite type)" {
     module_env.qualified_module_ident = module_env.display_module_name_idx;
     try module_env.common.calcLineStarts(gpa);
 
-    const parse_ast = try parse.parse(gpa, &module_env.common);
+    const parse_ast = try parse.file(gpa, &module_env.common);
     defer parse_ast.deinit();
     parse_ast.store.emptyScratch();
 

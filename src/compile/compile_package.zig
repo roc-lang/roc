@@ -1053,7 +1053,7 @@ pub const PackageEnv = struct {
         // Parse AST and cache for reuse in doCanonicalize (avoids double parsing)
         // IMPORTANT: Use st.moduleEnv().?.common (not local env.common) so the AST's pointer
         // to CommonEnv remains valid after this function returns.
-        const parse_ast = parse.parse(self.gpa, &st.moduleEnv().?.common) catch {
+        const parse_ast = parse.file(self.gpa, &st.moduleEnv().?.common) catch {
             // If parsing fails, proceed to canonicalization to report errors
             st.phase = .Canonicalize;
             try self.enqueue(module_id);
@@ -1061,7 +1061,7 @@ pub const PackageEnv = struct {
         };
         parse_ast.store.emptyScratch();
 
-        // parse_ast is already heap-allocated by parse.parse
+        // parse_ast is already heap-allocated by parse.file
         st.cached_ast = parse_ast;
 
         const local_imports = try module_discovery.extractImportsFromDeclIndex(parse_ast, self.gpa);

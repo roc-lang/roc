@@ -89,7 +89,7 @@ fn extractFoldingRanges(allocator: std.mem.Allocator, source: []const u8) Alloca
     var module_env = try can.ModuleEnv.init(allocator, source);
     defer module_env.deinit();
 
-    const ast = try parse.parse(allocator, &module_env.common);
+    const ast = try parse.file(allocator, &module_env.common);
     defer ast.deinit();
 
     const tags = ast.tokens.tokens.items(.tag);

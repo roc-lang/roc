@@ -24,7 +24,7 @@ ar,
 ~~~
 # EXPECTED
 PARSE ERROR - fuzz_crash_030.md:8:5:8:6
-EXPECTED CLOSING BRACE - fuzz_crash_030.md:12:8:12:9
+EXPECTED CLOSING BRACE - fuzz_crash_030.md:11:3:11:4
 PARSE ERROR - fuzz_crash_030.md:12:9:12:12
 PARSE ERROR - fuzz_crash_030.md:12:12:12:13
 PARSE ERROR - fuzz_crash_030.md:12:13:12:14
@@ -51,15 +51,15 @@ This is an unexpected parsing error. Please check your syntax.
 Platform headers must have a `packages` section that lists package dependencies.
 For example:     packages { base: "../base/main.roc" }
 
-**fuzz_crash_030.md:12:8:12:9:**
+**fuzz_crash_030.md:11:3:11:4:**
 ```roc
-pkg: 77"..c", mm} #
+		{ # pen
 ```
-       ^
+		^
 
 
 **PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
+A parsing error occurred: `expected_provides`
 This is an unexpected parsing error. Please check your syntax.
 
 **fuzz_crash_030.md:12:9:12:12:**
@@ -191,9 +191,8 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(malformed-header (tag "expected_packages_close_curly"))
+	(malformed-header (tag "expected_provides"))
 	(statements
-		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))

@@ -157,7 +157,7 @@ fn computeSelectionRange(allocator: std.mem.Allocator, source: []const u8, line:
     var module_env = try can.ModuleEnv.init(allocator, source);
     defer module_env.deinit();
 
-    const ast = try parse.parse(allocator, &module_env.common);
+    const ast = try parse.file(allocator, &module_env.common);
     defer ast.deinit();
 
     // Collect all containing regions

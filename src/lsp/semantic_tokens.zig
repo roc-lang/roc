@@ -286,7 +286,7 @@ pub fn extractSemanticTokensWithImports(
     defer module_env.deinit();
 
     // Parse the source. Syntax errors are reported through the AST diagnostics.
-    const parse_ast = try parse.parse(allocator, &module_env.common);
+    const parse_ast = try parse.file(allocator, &module_env.common);
     defer parse_ast.deinit();
 
     // Initialize CIR fields

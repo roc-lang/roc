@@ -1742,7 +1742,7 @@ fn readDefaultAppSource(ctx: *CliCtx, file_path: []const u8) std.mem.Allocator.E
     env.common.source = source;
     env.module_name = module_name;
 
-    const ast = parse.parse(ctx.gpa, &env.common) catch |err| switch (err) {
+    const ast = parse.file(ctx.gpa, &env.common) catch |err| switch (err) {
         error.OutOfMemory => {
             ctx.gpa.free(source);
             return error.OutOfMemory;
@@ -2558,7 +2558,7 @@ fn extractPlatformSpecFromApp(ctx: *CliCtx, app_file_path: []const u8) (Allocato
     };
 
     // Parse the source
-    const ast = parse.parse(ctx.gpa, &env.common) catch {
+    const ast = parse.file(ctx.gpa, &env.common) catch {
         return ctx.fail(.{ .module_init_failed = .{
             .path = app_file_path,
             .err = error.OutOfMemory,
