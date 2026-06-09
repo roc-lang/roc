@@ -626,15 +626,14 @@ pub fn pushMalformed(self: *Parser, comptime T: type, tag: AST.Diagnostic.Tag, s
 
         return try self.store.addMalformed(T, tag, ast_region);
     } else {
-        // Return a cached malformed node to avoid creating excessive nodes when diagnostic limit is exceeded
+        // Return a cached malformed node to avoid creating excessive nodes after the diagnostic limit.
         if (self.cached_malformed_node == null) {
-            // Create a generic malformed node with a fallback diagnostic tag
-            const fallback_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
+            const malformed_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
             const nid = try self.store.nodes.append(self.gpa, .{
                 .tag = .malformed,
                 .main_token = 0,
                 .data = .{ .lhs = @intFromEnum(AST.Diagnostic.Tag.expr_unexpected_token), .rhs = 0 },
-                .region = fallback_region,
+                .region = malformed_region,
             });
             self.cached_malformed_node = nid;
         }
