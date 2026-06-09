@@ -50,11 +50,7 @@ pub const CompileConfig = struct {
     cpu: []const u8 = "",
     features: []const u8 = "",
     debug: bool = false, // Enable debug info generation in output
-
-    /// Check if compiling for the current machine
-    pub fn isNative(self: CompileConfig) bool {
-        return self.target == target.RocTarget.detectNative();
-    }
+    link_builtins: bool = false,
 };
 
 // Check if LLVM is available at compile time
@@ -177,6 +173,8 @@ const llvm_externs = if (llvm_available) struct {
     extern fn LLVMLinkModules2(dest: ?*anyopaque, src: ?*anyopaque) c_int;
     extern fn LLVMGetFirstFunction(module: ?*anyopaque) ?*anyopaque;
     extern fn LLVMGetNextFunction(fn_val: ?*anyopaque) ?*anyopaque;
+    extern fn LLVMGetFirstGlobal(module: ?*anyopaque) ?*anyopaque;
+    extern fn LLVMGetNextGlobal(global: ?*anyopaque) ?*anyopaque;
     extern fn LLVMGetValueName2(val: ?*anyopaque, len: *usize) [*]const u8;
     extern fn LLVMIsDeclaration(global: ?*anyopaque) c_int;
     extern fn LLVMSetLinkage(global: ?*anyopaque, linkage: c_int) void;
@@ -196,15 +194,12 @@ const llvm_externs = if (llvm_available) struct {
     extern fn LLVMRemoveStringAttributeAtIndex(fn_val: ?*anyopaque, idx: c_uint, name: [*]const u8, len: c_uint) void;
 } else struct {};
 
-/// Embedded builtin bitcode, linked into each app module so builtin calls can be
-/// inlined by the optimizer. Stubbed out when LLVM is unavailable.
+/// Embedded builtin bitcode. Stubbed out when LLVM is unavailable.
 const llvm_embedded = if (llvm_available) @import("llvm_embedded") else struct {
     pub const builtins_bc: []const u8 = "";
+    pub const builtins32_bc: []const u8 = "";
+    pub const builtins64_bc: []const u8 = "";
 };
-
-/// LLVM-C linkage value for `available_externally`: the body is available for
-/// inlining but is not emitted (the real definition comes from roc_builtins.o).
-const LLVMAvailableExternallyLinkage: c_int = 1;
 
 /// LLVM-C linkage value for `internal`: a local definition, never an exported
 /// symbol, and discarded by global DCE when unused.
@@ -284,77 +279,109 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
     externs.LLVMSetTarget(module, target_triple_z.ptr);
     std.log.debug("Target triple set successfully", .{});
 
-    // Link the builtin bitcode into the app module so the optimizer can inline
-    // builtin calls (e.g. list_append_unsafe / list_with_capacity) into the app's
-    // hot loops. After linking, every function that came from the builtins module
-    // (i.e. wasn't an app definition before the link) is marked
-    // `available_externally`: its body is available for inlining but is never
-    // emitted, so non-inlined calls are resolved from roc_builtins.o at final link
-    // and there are no duplicate symbols. The linkage must be set AFTER linking,
-    // because LLVMLinkModules2 promotes available_externally back to external when
-    // it resolves an external declaration in the destination module.
-    //
-    // Only done for native builds: the embedded builtin bitcode is compiled for the
-    // host (native) target, so linking it into a cross-compiled module would splice
-    // in wrong-architecture code. Cross builds fall back to external builtin calls
-    // resolved from the target's roc_builtins.o at final link (correct, not inlined).
-    {
-        const builtins_bc = llvm_embedded.builtins_bc;
-        if (builtins_bc.len > 0 and config.isNative()) {
-            // Record the app's own defined functions before linking.
-            var app_defs = std.StringHashMap(void).init(gpa);
-            defer {
-                var keys = app_defs.keyIterator();
-                while (keys.next()) |k| gpa.free(k.*);
-                app_defs.deinit();
-            }
-            var pre = externs.LLVMGetFirstFunction(module);
-            while (pre) |fv| : (pre = externs.LLVMGetNextFunction(fv)) {
-                if (externs.LLVMIsDeclaration(fv) != 0) continue;
-                var name_len: usize = 0;
-                const name_ptr = externs.LLVMGetValueName2(fv, &name_len);
-                const name = try gpa.dupe(u8, name_ptr[0..name_len]);
-                errdefer gpa.free(name);
-                try app_defs.put(name, {});
-            }
+    // LLVM builds link builtin bitcode before optimization and emit the used
+    // builtin definitions from the merged app object. There is no roc_builtins.o
+    // in LLVM final links, so builtin definitions remain real definitions (not
+    // available_externally). Builtin aliases and definitions are internalized
+    // after app references are resolved so LLVM and the final linker can remove
+    // unused builtin code.
+    if (config.link_builtins) {
+        const builtins_bc = switch (config.target.ptrBitWidth()) {
+            32 => llvm_embedded.builtins32_bc,
+            64 => llvm_embedded.builtins64_bc,
+            else => "",
+        };
+        if (builtins_bc.len == 0) {
+            std.log.err("No embedded builtin bitcode for {d}-bit target pointers", .{config.target.ptrBitWidth()});
+            return false;
+        }
 
-            const bc_buf = externs.LLVMCreateMemoryBufferWithMemoryRangeCopy(builtins_bc.ptr, builtins_bc.len, "roc_builtins_bc");
-            var builtins_module: ?*anyopaque = null;
-            if (externs.LLVMParseBitcode2(bc_buf, &builtins_module) == 0) {
-                externs.LLVMSetTarget(builtins_module, target_triple_z.ptr);
-                externs.LLVMSetDataLayout(builtins_module, externs.LLVMGetDataLayoutStr(module));
-                if (externs.LLVMLinkModules2(module, builtins_module) == 0) {
-                    // Resolve @export aliases (clean builtin name -> dev_wrappers.* fn)
-                    // so calls target the real function directly and can be inlined.
-                    // Then make each alias internal so the now-unused symbol is not
-                    // emitted (avoiding duplicate symbols vs roc_builtins.o).
-                    var alias = externs.LLVMGetFirstGlobalAlias(module);
-                    while (alias) |a| : (alias = externs.LLVMGetNextGlobalAlias(a)) {
-                        if (externs.LLVMAliasGetAliasee(a)) |aliasee| {
-                            externs.LLVMReplaceAllUsesWith(a, aliasee);
-                            externs.LLVMSetLinkage(a, LLVMInternalLinkage);
-                        }
-                    }
+        var app_defs = std.StringHashMap(void).init(gpa);
+        defer {
+            var keys = app_defs.keyIterator();
+            while (keys.next()) |k| gpa.free(k.*);
+            app_defs.deinit();
+        }
 
-                    var post = externs.LLVMGetFirstFunction(module);
-                    while (post) |fv| : (post = externs.LLVMGetNextFunction(fv)) {
-                        if (externs.LLVMIsDeclaration(fv) != 0) continue;
-                        var name_len: usize = 0;
-                        const name_ptr = externs.LLVMGetValueName2(fv, &name_len);
-                        if (!app_defs.contains(name_ptr[0..name_len])) {
-                            // Strip target-cpu/target-features so the inliner considers
-                            // the builtin compatible with the (feature-less) app functions.
-                            externs.LLVMRemoveStringAttributeAtIndex(fv, LLVMAttributeFunctionIndex, "target-features", "target-features".len);
-                            externs.LLVMRemoveStringAttributeAtIndex(fv, LLVMAttributeFunctionIndex, "target-cpu", "target-cpu".len);
-                            externs.LLVMSetLinkage(fv, LLVMAvailableExternallyLinkage);
-                        }
+        var pre_func = externs.LLVMGetFirstFunction(module);
+        while (pre_func) |fv| : (pre_func = externs.LLVMGetNextFunction(fv)) {
+            if (externs.LLVMIsDeclaration(fv) != 0) continue;
+            var name_len: usize = 0;
+            const name_ptr = externs.LLVMGetValueName2(fv, &name_len);
+            const name = try gpa.dupe(u8, name_ptr[0..name_len]);
+            errdefer gpa.free(name);
+            try app_defs.put(name, {});
+        }
+
+        var pre_global = externs.LLVMGetFirstGlobal(module);
+        while (pre_global) |gv| : (pre_global = externs.LLVMGetNextGlobal(gv)) {
+            if (externs.LLVMIsDeclaration(gv) != 0) continue;
+            var name_len: usize = 0;
+            const name_ptr = externs.LLVMGetValueName2(gv, &name_len);
+            const name = try gpa.dupe(u8, name_ptr[0..name_len]);
+            errdefer gpa.free(name);
+            try app_defs.put(name, {});
+        }
+
+        var pre_alias = externs.LLVMGetFirstGlobalAlias(module);
+        while (pre_alias) |av| : (pre_alias = externs.LLVMGetNextGlobalAlias(av)) {
+            var name_len: usize = 0;
+            const name_ptr = externs.LLVMGetValueName2(av, &name_len);
+            const name = try gpa.dupe(u8, name_ptr[0..name_len]);
+            errdefer gpa.free(name);
+            try app_defs.put(name, {});
+        }
+
+        const bc_buf = externs.LLVMCreateMemoryBufferWithMemoryRangeCopy(builtins_bc.ptr, builtins_bc.len, "roc_builtins_bc");
+        var builtins_module: ?*anyopaque = null;
+        if (externs.LLVMParseBitcode2(bc_buf, &builtins_module) == 0) {
+            externs.LLVMSetTarget(builtins_module, target_triple_z.ptr);
+            externs.LLVMSetDataLayout(builtins_module, externs.LLVMGetDataLayoutStr(module));
+            if (externs.LLVMLinkModules2(module, builtins_module) == 0) {
+                // Resolve @export aliases (clean builtin name -> dev_wrappers.* fn)
+                // so calls target the real function directly and can be inlined.
+                var alias = externs.LLVMGetFirstGlobalAlias(module);
+                while (alias) |a| : (alias = externs.LLVMGetNextGlobalAlias(a)) {
+                    var name_len: usize = 0;
+                    const name_ptr = externs.LLVMGetValueName2(a, &name_len);
+                    if (app_defs.contains(name_ptr[0..name_len])) continue;
+                    if (externs.LLVMAliasGetAliasee(a)) |aliasee| {
+                        externs.LLVMReplaceAllUsesWith(a, aliasee);
                     }
-                } else {
-                    std.log.warn("Failed to link builtin bitcode for inlining; builtin calls will not be inlined", .{});
+                    externs.LLVMSetLinkage(a, LLVMInternalLinkage);
+                }
+
+                var post_func = externs.LLVMGetFirstFunction(module);
+                while (post_func) |fv| : (post_func = externs.LLVMGetNextFunction(fv)) {
+                    if (externs.LLVMIsDeclaration(fv) != 0) continue;
+                    var name_len: usize = 0;
+                    const name_ptr = externs.LLVMGetValueName2(fv, &name_len);
+                    if (!app_defs.contains(name_ptr[0..name_len])) {
+                        // Strip target-cpu/target-features so the inliner considers
+                        // the builtin compatible with the app functions. The target
+                        // machine still controls CPU/features at codegen.
+                        externs.LLVMRemoveStringAttributeAtIndex(fv, LLVMAttributeFunctionIndex, "target-features", "target-features".len);
+                        externs.LLVMRemoveStringAttributeAtIndex(fv, LLVMAttributeFunctionIndex, "target-cpu", "target-cpu".len);
+                        externs.LLVMSetLinkage(fv, LLVMInternalLinkage);
+                    }
+                }
+
+                var post_global = externs.LLVMGetFirstGlobal(module);
+                while (post_global) |gv| : (post_global = externs.LLVMGetNextGlobal(gv)) {
+                    if (externs.LLVMIsDeclaration(gv) != 0) continue;
+                    var name_len: usize = 0;
+                    const name_ptr = externs.LLVMGetValueName2(gv, &name_len);
+                    if (!app_defs.contains(name_ptr[0..name_len])) {
+                        externs.LLVMSetLinkage(gv, LLVMInternalLinkage);
+                    }
                 }
             } else {
-                std.log.warn("Failed to parse builtin bitcode for inlining; builtin calls will not be inlined", .{});
+                std.log.err("Failed to link builtin bitcode into app module", .{});
+                return false;
             }
+        } else {
+            std.log.err("Failed to parse builtin bitcode", .{});
+            return false;
         }
     }
 
@@ -383,8 +410,8 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
         config.optimization.toLLVMCodeGenLevel(),
         LLVMRelocDefault,
         LLVMCodeModelDefault,
-        false, // function_sections
-        false, // data_sections
+        true, // function_sections
+        true, // data_sections
         .ZigLLVMABITypeDefault, // float_abi
         null, // abi_name
         false, // emulated_tls

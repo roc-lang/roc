@@ -2614,36 +2614,65 @@ pub fn build(b: *std.Build) void {
         },
     });
 
-    const builtins_bc_obj = b.addObject(.{
-        .name = "roc_builtins_bc",
+    const builtins64_target = b.resolveTargetQuery(.{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .musl });
+    const builtins64_bc_obj = b.addObject(.{
+        .name = "roc_builtins64_bc",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/builtins/static_lib.zig"),
-            .target = target,
+            .target = builtins64_target,
             .optimize = .ReleaseFast,
             .strip = true,
             .pic = true,
             .single_threaded = true,
         }),
     });
-    builtins_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub_bc", .{
+    builtins64_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub64_bc", .{
         .root_source_file = b.path("src/builtins/tracy_stub.zig"),
     }));
-    builtins_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io_bc", .{
+    builtins64_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io64_bc", .{
         .root_source_file = b.path("src/shim_io.zig"),
     }));
-    builtins_bc_obj.root_module.omit_frame_pointer = true;
-    builtins_bc_obj.root_module.stack_check = false;
-    builtins_bc_obj.root_module.link_libc = true;
-    builtins_bc_obj.use_llvm = true;
-    builtins_bc_obj.bundle_compiler_rt = true;
-    _ = builtins_bc_obj.getEmittedBin();
-    const builtins_bc_file = builtins_bc_obj.getEmittedLlvmBc();
+    builtins64_bc_obj.root_module.omit_frame_pointer = true;
+    builtins64_bc_obj.root_module.stack_check = false;
+    builtins64_bc_obj.root_module.link_libc = true;
+    builtins64_bc_obj.use_llvm = true;
+    builtins64_bc_obj.bundle_compiler_rt = true;
+    _ = builtins64_bc_obj.getEmittedBin();
+    const builtins64_bc_file = builtins64_bc_obj.getEmittedLlvmBc();
+
+    const builtins32_target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .freestanding, .abi = .none });
+    const builtins32_bc_obj = b.addObject(.{
+        .name = "roc_builtins32_bc",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/builtins/static_lib.zig"),
+            .target = builtins32_target,
+            .optimize = .ReleaseFast,
+            .strip = true,
+            .pic = true,
+            .single_threaded = true,
+        }),
+    });
+    builtins32_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub32_bc", .{
+        .root_source_file = b.path("src/builtins/tracy_stub.zig"),
+    }));
+    builtins32_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io32_bc", .{
+        .root_source_file = b.path("src/shim_io.zig"),
+    }));
+    builtins32_bc_obj.root_module.omit_frame_pointer = true;
+    builtins32_bc_obj.root_module.stack_check = false;
+    builtins32_bc_obj.use_llvm = true;
+    builtins32_bc_obj.bundle_compiler_rt = false;
+    _ = builtins32_bc_obj.getEmittedBin();
+    const builtins32_bc_file = builtins32_bc_obj.getEmittedLlvmBc();
 
     const llvm_embedded_files = b.addWriteFiles();
-    _ = llvm_embedded_files.addCopyFile(builtins_bc_file, "builtins.bc");
+    _ = llvm_embedded_files.addCopyFile(builtins32_bc_file, "builtins32.bc");
+    _ = llvm_embedded_files.addCopyFile(builtins64_bc_file, "builtins64.bc");
 
     const llvm_embedded_source: []const u8 =
-        \\pub const builtins_bc = @embedFile("builtins.bc");
+        \\pub const builtins32_bc = @embedFile("builtins32.bc");
+        \\pub const builtins64_bc = @embedFile("builtins64.bc");
+        \\pub const builtins_bc = builtins64_bc;
         \\
     ;
 

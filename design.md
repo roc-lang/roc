@@ -81,6 +81,34 @@ selected by LIR ARC insertion. Consumers may lazily cache code or interpreter
 execution plans for that helper, but they must not select a different helper
 from local layout data. Reference-counting policy belongs to LIR ARC insertion.
 
+## Backend Builtins
+
+Backend builtin linking is part of backend code generation, not a later repair
+step. Each backend consumes explicit builtin call symbols emitted from LIR and
+uses the representation that matches that backend.
+
+The dev object backend emits native object code directly. Its builtin calls are
+ordinary object-symbol references resolved by linking the target's
+`roc_builtins.o`. The dev backend keeps using target-specific builtin object
+files because it does not produce LLVM bitcode.
+
+The LLVM backend emits application LLVM bitcode. LLVM builds must not link
+`roc_builtins.o`. Instead, the compiler selects builtin LLVM bitcode by the
+target pointer width, links that builtin module with the application module
+before LLVM optimization, and emits the object file from the merged module.
+Roc supports only 32-bit and 64-bit target pointers here, so two builtin
+bitcode payloads are sufficient: one for 32-bit targets and one for 64-bit
+targets.
+
+Builtin definitions in the merged LLVM module are real definitions. They must
+not be marked `available_externally`, because there is no later builtin object
+file to provide non-inlined calls. After builtin call symbols are resolved,
+builtin aliases and definitions that are not application exports may be made
+internal so LLVM dead-code elimination and the final linker can remove unused
+builtin code. LLVM object emission must request function and data sections, and
+the final target linker must use section garbage collection where the target
+format supports it.
+
 The compiler does not contain a static borrow, alias-permission, lifetime,
 uniqueness, parameter-mode, or escape-summary model in this architecture.
 Automatic reference counting is intentionally simple and mechanical. Runtime

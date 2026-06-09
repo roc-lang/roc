@@ -4037,6 +4037,7 @@ fn compileLlvmAppObject(
         .cpu = llvm_cpu,
         .features = llvm_features,
         .debug = args.debug,
+        .link_builtins = true,
     };
 
     const success = try builder.compileBitcodeToObject(ctx.gpa, ctx.io.std_io, compile_config);
@@ -4114,18 +4115,6 @@ fn rocBuildWasmLlvm(
         _ = try wasm_module.addTableImportWithSymbol();
         _ = try wasm_module.addStackPointerImportWithSymbol();
 
-        const builtins_bytes = BuiltinsObjects.forTarget(.wasm32);
-        if (builtins_bytes.len > 0) {
-            var builtins_module = backend.wasm.WasmModule.preload(ctx.gpa, builtins_bytes, true) catch |err| {
-                std.log.err("Failed to preload wasm builtins: {}", .{err});
-                return err;
-            };
-            defer builtins_module.deinit();
-
-            var merge_result = try wasm_module.mergeModuleForObject(&builtins_module);
-            merge_result.deinit();
-        }
-
         const app_bytes = try appendOwnedWasmInput(ctx, &owned_inputs, app_object.object_path);
         var app_module = try preloadWasmObject(ctx, app_object.object_path, null, app_bytes);
         defer app_module.deinit();
@@ -4170,18 +4159,6 @@ fn rocBuildWasmLlvm(
 
     try wasm_module.exportGlobalSymbols();
     wasm_module.removeMemoryAndTableImports();
-
-    const builtins_bytes = BuiltinsObjects.forTarget(.wasm32);
-    if (builtins_bytes.len > 0) {
-        var builtins_module = backend.wasm.WasmModule.preload(ctx.gpa, builtins_bytes, true) catch |err| {
-            std.log.err("Failed to preload wasm builtins: {}", .{err});
-            return err;
-        };
-        defer builtins_module.deinit();
-
-        var merge_result = try wasm_module.mergeModule(&builtins_module);
-        merge_result.deinit();
-    }
 
     const app_bytes = try appendOwnedWasmInput(ctx, &owned_inputs, app_object.object_path);
     var app_module = try preloadWasmObject(ctx, app_object.object_path, null, app_bytes);
@@ -4436,17 +4413,11 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
 
         const link_inputs = try collectPlatformLinkInputs(ctx, platform_dir, targets_config, target, link_type);
 
-        const builtins_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, BuiltinsObjects.filename(target) });
-        backend.writeFileWindowsAvSafe(ctx.io.std_io, builtins_path, BuiltinsObjects.forTarget(target)) catch {
-            return error.BuiltinsExtractionFailed;
-        };
-
-        var object_files = try std.array_list.Managed([]const u8).initCapacity(ctx.arena, 5);
+        var object_files = try std.array_list.Managed([]const u8).initCapacity(ctx.arena, 4);
         try object_files.append(app_object.object_path);
         if (static_data_obj_path) |path| {
             try object_files.append(path);
         }
-        try object_files.append(builtins_path);
 
         const link_config = linker.LinkConfig{
             .target_format = linker.TargetFormat.detectFromOs(target_os),
