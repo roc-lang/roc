@@ -1481,9 +1481,7 @@ fn parseTargetsSectionTokens(self: *Parser) Error!AST.TargetsSection.Idx {
             else => return try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_field_name, start),
         }
 
-        if (self.peek() == .Comma) {
-            self.advance();
-        }
+        _ = self.consumeComma();
     }
 
     self.expect(.CloseCurly) catch {
