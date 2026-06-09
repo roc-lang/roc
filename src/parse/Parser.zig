@@ -1000,6 +1000,11 @@ const ExposedCollectionResult = union(enum) {
     malformed: struct { tag: AST.Diagnostic.Tag, pos: Token.Idx },
 };
 
+const HeaderStringResult = union(enum) {
+    ok: Token.Idx,
+    malformed: struct { tag: AST.Diagnostic.Tag, pos: Token.Idx },
+};
+
 fn parseExposedCollectionTokens(
     self: *Parser,
     open_error: AST.Diagnostic.Tag,
@@ -1067,6 +1072,25 @@ inline fn parseHeaderExposedCollectionTokens(
         return .{ .malformed = .{ .tag = open_error, .pos = missing_open_pos } };
     }
     return try self.parseExposedCollectionTokens(open_error, close_error, malformed_close_error);
+}
+
+inline fn parseHeaderStringToken(
+    self: *Parser,
+    start_error: AST.Diagnostic.Tag,
+    string_error: AST.Diagnostic.Tag,
+    end_error: AST.Diagnostic.Tag,
+) HeaderStringResult {
+    self.expect(.StringStart) catch {
+        return .{ .malformed = .{ .tag = start_error, .pos = self.pos } };
+    };
+    const string = self.pos;
+    self.expect(.StringPart) catch {
+        return .{ .malformed = .{ .tag = string_error, .pos = self.pos } };
+    };
+    self.expect(.StringEnd) catch {
+        return .{ .malformed = .{ .tag = end_error, .pos = self.pos } };
+    };
+    return .{ .ok = string };
 }
 
 fn parseRecordFieldCollectionTokens(
@@ -1497,15 +1521,13 @@ fn parsePlatformHeaderTokens(self: *Parser) Error!AST.Header.Idx {
     std.debug.assert(self.peek() == .KwPlatform);
     self.advance();
 
-    self.expect(.StringStart) catch {
-        return try self.pushMalformed(AST.Header.Idx, .expected_platform_name_start, self.pos);
-    };
-    const name = self.pos;
-    self.expect(.StringPart) catch {
-        return try self.pushMalformed(AST.Header.Idx, .expected_platform_name_string, self.pos);
-    };
-    self.expect(.StringEnd) catch {
-        return try self.pushMalformed(AST.Header.Idx, .expected_platform_name_end, self.pos);
+    const name = switch (self.parseHeaderStringToken(
+        .expected_platform_name_start,
+        .expected_platform_name_string,
+        .expected_platform_name_end,
+    )) {
+        .ok => |ok| ok,
+        .malformed => |bad| return try self.pushMalformed(AST.Header.Idx, bad.tag, bad.pos),
     };
 
     self.expect(.KwRequires) catch {
