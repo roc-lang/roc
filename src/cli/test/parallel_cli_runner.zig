@@ -2045,7 +2045,7 @@ fn customGlueZig(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *
             return customFailure(allocator, timer, "generated Zig file missing {s}", .{needle});
         }
     }
-    if (customGlueZigBoxHelperTest(io, allocator, env, timer, timeout_ms, output_dir)) |failure| return failure;
+    if (customGlueZigBoxHelperTest(io, allocator, env, timer, timeout_ms, output_dir, generated_path)) |failure| return failure;
     return null;
 }
 
@@ -2056,10 +2056,11 @@ fn customGlueZigBoxHelperTest(
     timer: *harness.Timer,
     timeout_ms: u64,
     output_dir: []const u8,
+    generated_path: []const u8,
 ) ?TestResult {
     const test_source =
         \\const std = @import("std");
-        \\const abi = @import("roc_platform_abi.zig");
+        \\const abi = @import("abi");
         \\
         \\const Env = struct {
         \\    callback_count: usize = 0,
@@ -2156,7 +2157,11 @@ fn customGlueZigBoxHelperTest(
     std.Io.Dir.cwd().writeFile(io, .{ .sub_path = test_path, .data = test_source }) catch |err|
         return customInfraFailure(allocator, timer, "failed to write generated Zig helper test: {}", .{err});
 
-    if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{ "zig", "test", test_path }, project_root_path, .{ .args = &.{} })) |failure| return failure;
+    const root_module_arg = std.fmt.allocPrint(allocator, "-Mroot={s}", .{test_path}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate Zig helper test root module arg: {}", .{err});
+    const abi_module_arg = std.fmt.allocPrint(allocator, "-Mabi={s}", .{generated_path}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate generated Zig ABI module arg: {}", .{err});
+    if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{ "zig", "test", "--dep", "abi", root_module_arg, abi_module_arg }, project_root_path, .{ .args = &.{} })) |failure| return failure;
     return null;
 }
 

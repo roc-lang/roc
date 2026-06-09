@@ -1358,12 +1358,6 @@ const Builder = struct {
         return false;
     }
 
-    fn fnDefForProcedureUse(self: *Builder, source_ty_view: ModuleView, proc: checked.ProcedureUseTemplate) Allocator.Error!Ast.FnTemplate {
-        const source_fn_ty = proc.source_fn_ty_payload orelse
-            Common.invariant("checked procedure use reached Monotype without a requested function type");
-        return try self.fnDefForProcedureUseWithType(source_ty_view, proc, source_fn_ty);
-    }
-
     fn fnDefForProcedureUseWithType(
         self: *Builder,
         source_ty_view: ModuleView,

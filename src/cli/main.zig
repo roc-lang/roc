@@ -1037,7 +1037,7 @@ fn bytesDigest(bytes: []const u8) [32]u8 {
     return hasher.finalResult();
 }
 
-fn fileContentsDigest(ctx: *CliCtx, path: []const u8) ![32]u8 {
+fn fileContentsDigest(ctx: *CliCtx, path: []const u8) CliError![32]u8 {
     const file = std.Io.Dir.cwd().openFile(ctx.io.std_io, path, .{}) catch |err| {
         return ctx.fail(.{ .file_read_failed = .{
             .path = path,
@@ -1212,7 +1212,7 @@ fn interpreterExeLinkInputsIdentity(
     target: RocTarget,
     entrypoint_names: []const []const u8,
     debug: bool,
-) ![32]u8 {
+) (Allocator.Error || CliError)![32]u8 {
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
     updateHashBytes(&hasher, "roc-run-link-inputs-v1");
     updateHashBytes(&hasher, @tagName(target));
