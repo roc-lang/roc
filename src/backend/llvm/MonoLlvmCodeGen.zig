@@ -353,6 +353,7 @@ pub const MonoLlvmCodeGen = struct {
                 entrypoint.symbol_name,
                 entrypoint.proc,
                 entrypoint.arg_layouts,
+                entrypoint.ret_layout,
             );
         }
 
@@ -459,12 +460,168 @@ pub const MonoLlvmCodeGen = struct {
         try self.finishCurrentWipFunction();
     }
 
+
+    /// Symbol-ABI entrypoint wrapper: exported under the platform's provides
+    /// symbol with the entrypoint's natural C ABI. The wrapper marshals its
+    /// C-ABI parameters into the internal argument buffer, calls the entry
+    /// proc with a null RocOps (compiled code reaches the host through extern
+    /// symbols, never through a context parameter), and returns per the ABI.
+    fn generateCAbiEntrypointWrapper(
+        self: *MonoLlvmCodeGen,
+        symbol_name: []const u8,
+        entry_proc: LirProcSpecId,
+        arg_layouts: []const layout.Idx,
+        ret_layout: layout.Idx,
+    ) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const proc_fn = self.proc_registry.get(@intFromEnum(entry_proc)) orelse return error.CompilationFailed;
+        const ptr_ty = builder.ptrType(.default) catch return error.OutOfMemory;
+
+        var arena_state = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena_state.deinit();
+        const arena = arena_state.allocator();
+
+        const lowered = layout.abi.lower(arena, self.layouts(), self.abiTarget(), arg_layouts, ret_layout, false) catch return error.OutOfMemory;
+
+        var param_types = std.ArrayList(LlvmBuilder.Type).empty;
+        defer param_types.deinit(self.allocator);
+        var attrs_wip: LlvmBuilder.FunctionAttributes.Wip = .{};
+        defer attrs_wip.deinit(builder);
+
+        var ret_ty: LlvmBuilder.Type = .void;
+        var ret_pieces: []const layout.abi.RegPiece = &.{};
+        var ret_is_indirect = false;
+        switch (lowered.ret) {
+            .none => {},
+            .indirect => {
+                const r_ty = try self.memoryLlvmTypeForLayout(builder, ret_layout);
+                try attrs_wip.addParamAttr(param_types.items.len, .{ .sret = r_ty }, builder);
+                try param_types.append(self.allocator, ptr_ty);
+                ret_is_indirect = true;
+            },
+            .registers => |pieces| {
+                ret_pieces = pieces;
+                if (pieces.len == 1) {
+                    ret_ty = try pieceLlvmType(builder, pieces[0]);
+                } else {
+                    const field_types = try arena.alloc(LlvmBuilder.Type, pieces.len);
+                    for (pieces, field_types) |piece, *t| t.* = try pieceLlvmType(builder, piece);
+                    ret_ty = builder.structType(.normal, field_types) catch return error.OutOfMemory;
+                }
+            },
+        }
+
+        for (lowered.args, arg_layouts) |placement, arg_layout| {
+            switch (placement) {
+                .none => {},
+                .indirect => {
+                    if (self.hostedIndirectArgUsesByval()) {
+                        const a_ty = try self.memoryLlvmTypeForLayout(builder, arg_layout);
+                        try attrs_wip.addParamAttr(param_types.items.len, .{ .byval = a_ty }, builder);
+                    }
+                    try param_types.append(self.allocator, ptr_ty);
+                },
+                .registers => |pieces| {
+                    for (pieces) |piece| {
+                        try param_types.append(self.allocator, try pieceLlvmType(builder, piece));
+                    }
+                },
+            }
+        }
+
+        const wrapper_ty = builder.fnType(ret_ty, param_types.items, .normal) catch return error.OutOfMemory;
+        const wrapper_name = try self.exportedFunctionName(builder, symbol_name);
+        const wrapper = builder.addFunction(wrapper_ty, wrapper_name, .default) catch return error.OutOfMemory;
+        wrapper.setLinkage(.external, builder);
+        wrapper.setAttributes(attrs_wip.finish(builder) catch return error.OutOfMemory, builder);
+        self.configureExportCallConv(wrapper, builder);
+
+        const outer_wip = self.wip;
+        const outer_roc_ops = self.roc_ops_arg;
+        defer {
+            self.wip = outer_wip;
+            self.roc_ops_arg = outer_roc_ops;
+        }
+
+        var wip = LlvmBuilder.WipFunction.init(builder, .{ .function = wrapper, .strip = true }) catch return error.OutOfMemory;
+        defer wip.deinit();
+        self.wip = &wip;
+
+        const entry = wip.block(0, "entry") catch return error.OutOfMemory;
+        wip.cursor = .{ .block = entry };
+
+        const null_ops = builder.nullValue(ptr_ty) catch return error.OutOfMemory;
+        self.roc_ops_arg = null_ops;
+
+        var param_cursor: u32 = 0;
+        const ret_slot = if (ret_is_indirect) blk: {
+            const sret_param = wip.arg(param_cursor);
+            param_cursor += 1;
+            break :blk sret_param;
+        } else try self.allocArgBuffer(&.{ret_layout}, false);
+
+        const args_buf = try self.allocArgBuffer(arg_layouts, true);
+        const offsets = try self.computeArgOffsets(arg_layouts, true);
+        defer self.allocator.free(offsets);
+
+        for (lowered.args, arg_layouts, offsets) |placement, arg_layout, offset| {
+            switch (placement) {
+                .none => {},
+                .indirect => {
+                    const src = wip.arg(param_cursor);
+                    param_cursor += 1;
+                    const size = self.layoutByteSize(arg_layout);
+                    if (size != 0) {
+                        try self.copyBytes(try self.offsetPtr(args_buf, offset), src, size, self.alignmentForLayout(arg_layout));
+                    }
+                },
+                .registers => |pieces| {
+                    const arg_align = self.alignmentForLayout(arg_layout);
+                    for (pieces) |piece| {
+                        const val = wip.arg(param_cursor);
+                        param_cursor += 1;
+                        const dst = try self.offsetPtr(args_buf, offset + piece.offset);
+                        _ = wip.store(.normal, val, dst, arg_align) catch return error.OutOfMemory;
+                    }
+                },
+            }
+        }
+
+        _ = try self.callFunctionIndex(proc_fn, &.{ null_ops, ret_slot, args_buf });
+
+        if (ret_pieces.len == 0) {
+            _ = wip.retVoid() catch return error.OutOfMemory;
+        } else {
+            const ret_align = self.alignmentForLayout(ret_layout);
+            if (ret_pieces.len == 1) {
+                const src = try self.offsetPtr(ret_slot, ret_pieces[0].offset);
+                const val = wip.load(.normal, ret_ty, src, ret_align, "") catch return error.OutOfMemory;
+                _ = wip.ret(val) catch return error.OutOfMemory;
+            } else {
+                var agg = builder.poisonValue(ret_ty) catch return error.OutOfMemory;
+                for (ret_pieces, 0..) |piece, i| {
+                    const piece_ty = try pieceLlvmType(builder, piece);
+                    const src = try self.offsetPtr(ret_slot, piece.offset);
+                    const val = wip.load(.normal, piece_ty, src, ret_align, "") catch return error.OutOfMemory;
+                    agg = wip.insertValue(agg, val, &.{@intCast(i)}, "") catch return error.OutOfMemory;
+                }
+                _ = wip.ret(agg) catch return error.OutOfMemory;
+            }
+        }
+
+        try self.finishCurrentWipFunction();
+    }
+
     fn generateEntrypointWrapper(
         self: *MonoLlvmCodeGen,
         symbol_name: []const u8,
         entry_proc: LirProcSpecId,
         arg_layouts: []const layout.Idx,
+        ret_layout: layout.Idx,
     ) Error!void {
+        if (self.host_call_mode == .extern_symbols) {
+            return self.generateCAbiEntrypointWrapper(symbol_name, entry_proc, arg_layouts, ret_layout);
+        }
         const builder = self.builder orelse return error.CompilationFailed;
         const proc_fn = self.proc_registry.get(@intFromEnum(entry_proc)) orelse return error.CompilationFailed;
         const ptr_ty = builder.ptrType(.default) catch return error.OutOfMemory;

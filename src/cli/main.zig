@@ -4322,6 +4322,9 @@ fn compileLlvmAppObject(
         .debug = args.debug,
         .link_builtins = true,
         .pic = pic,
+        // Linked LLVM output uses the symbol ABI: builtins reach the host
+        // through extern symbols, never through a RocOps parameter.
+        .host_call_extern = true,
     };
 
     const success = try builder.compileBitcodeToObject(ctx.gpa, ctx.io.std_io, compile_config);
