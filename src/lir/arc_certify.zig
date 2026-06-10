@@ -34,6 +34,8 @@ const LIR = core.LIR;
 const LirStore = core.LirStore;
 const Allocator = std.mem.Allocator;
 
+/// Errors produced while certifying: allocation failure or a violation of
+/// the ownership rules (a compiler bug in ARC insertion).
 pub const CertifyError = error{ OutOfMemory, Certification };
 
 /// Holds the first violation message for test inspection.

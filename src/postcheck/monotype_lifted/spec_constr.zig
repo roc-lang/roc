@@ -2228,15 +2228,6 @@ const Cloner = struct {
         return try self.pass.program.addPatSpan(values);
     }
 
-    fn cloneStmtSpan(self: *Cloner, span: Ast.Span(Ast.StmtId)) Common.LowerError!Ast.Span(Ast.StmtId) {
-        const source = try self.pass.allocator.dupe(Ast.StmtId, self.pass.program.stmtSpan(span));
-        defer self.pass.allocator.free(source);
-
-        const values = try self.pass.allocator.alloc(Ast.StmtId, source.len);
-        defer self.pass.allocator.free(values);
-        for (source, 0..) |stmt, index| values[index] = try self.cloneStmt(stmt);
-        return try self.pass.program.addStmtSpan(values);
-    }
 
     fn cloneFieldExprSpan(self: *Cloner, span: Ast.Span(Ast.FieldExpr)) Common.LowerError!Ast.Span(Ast.FieldExpr) {
         const source = try self.pass.allocator.dupe(Ast.FieldExpr, self.pass.program.fieldExprSpan(span));

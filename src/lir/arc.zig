@@ -2330,10 +2330,6 @@ const Inserter = struct {
         return false;
     }
 
-    fn retainSpan(self: *Inserter, span: LIR.LocalSpan, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
-        return self.retainSpanExcept(span, 0, next);
-    }
-
     fn retainSpanExcept(self: *Inserter, span: LIR.LocalSpan, skip_mask: u64, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
         var current = next;
         const locals = self.store.getLocalSpan(span);
@@ -3675,7 +3671,7 @@ test "dev lowering: mutable list reassignment releases only the replaced value" 
     try testing.expectEqual(@as(usize, 1), scenario.fixture.countRc(scenario.target, .decref));
 }
 
-fn expectDecrefBeforeStmt(f: *const ArcTest, start: LIR.CFStmtId, local: LIR.LocalId, comptime stop_tag: std.meta.Tag(LIR.CFStmt)) !void {
+fn expectDecrefBeforeStmt(f: *const ArcTest, start: LIR.CFStmtId, local: LIR.LocalId, comptime stop_tag: std.meta.Tag(LIR.CFStmt)) error{ DecrefNotBeforeStop, NonLinearPath, CyclicPath }!void {
     var cursor = start;
     var remaining: usize = f.store.cf_stmts.items.len + 1;
     while (remaining > 0) : (remaining -= 1) {
