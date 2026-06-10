@@ -2158,8 +2158,12 @@ const Inserter = struct {
                     }
                 },
                 .join => |join_stmt| {
+                    // A join body runs only via jumps to it, and the `.jump`
+                    // case enters bodies through the collected map. Entering
+                    // a body here would skip the jump site's parameter
+                    // rebinds, manufacturing next-activation uses of a
+                    // parameter this activation's value never sees.
                     try stack.append(self.store.allocator, join_stmt.remainder);
-                    try stack.append(self.store.allocator, join_stmt.body);
                 },
                 .jump => |jump_stmt| {
                     const join_bodies = self.join_bodies orelse arcInvariant("ARC liveness reached jump without collected join bodies");
@@ -2294,8 +2298,9 @@ const Inserter = struct {
                     }
                 },
                 .join => |join_stmt| {
+                    // Bodies enter via the `.jump` case only, exactly as in
+                    // `localValueUsedInPath`.
                     try stack.append(self.store.allocator, join_stmt.remainder);
-                    try stack.append(self.store.allocator, join_stmt.body);
                 },
                 .jump => |jump_stmt| {
                     const join_bodies = self.join_bodies orelse arcInvariant("ARC liveness reached jump without collected join bodies");
@@ -3603,6 +3608,57 @@ test "RC iterator join unused borrowed element has no RC statements" {
     _ = try f.addProc(&.{}, join, .i64);
     try f.run();
     try f.expectRc(elem, 0, 0, 0);
+}
+
+test "RC alias of a loop join parameter moves into the next join" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const source = try f.local(f.list_i64);
+    const state = try f.local(f.list_i64);
+    const carried = try f.local(f.list_i64);
+    const alias = try f.local(f.list_i64);
+    const next = try f.local(f.list_i64);
+    const loop_id = f.freshJoinPointId();
+    const step_id = f.freshJoinPointId();
+
+    // Loop join A(state) whose body advances the state and enters join
+    // B(carried); B's body aliases its parameter and re-initializes A's.
+    const back_jump = try f.store.addCFStmt(.{ .jump = .{ .target = loop_id } });
+    const reinitialize_state = try f.setLocal(state, alias, .initialize_join_param, back_jump);
+    const step_body = try f.assignRefLocal(alias, carried, reinitialize_state);
+
+    const step_jump = try f.store.addCFStmt(.{ .jump = .{ .target = step_id } });
+    const initialize_carried = try f.setLocal(carried, next, .initialize_join_param, step_jump);
+    const advance = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = next,
+        .op = .list_reverse,
+        .rc_effect = LIR.LowLevel.RcEffect.runtimeUniqueness(1),
+        .args = try f.span(&.{state}),
+        .next = initialize_carried,
+    } });
+    const step_join = try f.store.addCFStmt(.{ .join = .{
+        .id = step_id,
+        .params = try f.span(&.{carried}),
+        .body = step_body,
+        .remainder = advance,
+    } });
+
+    const initial_jump = try f.store.addCFStmt(.{ .jump = .{ .target = loop_id } });
+    const initialize_state = try f.setLocal(state, source, .initialize_join_param, initial_jump);
+    const remainder = try f.assignList(source, &.{}, initialize_state);
+    const loop_join = try f.store.addCFStmt(.{ .join = .{
+        .id = loop_id,
+        .params = try f.span(&.{state}),
+        .body = step_join,
+        .remainder = remainder,
+    } });
+
+    _ = try f.addProc(&.{}, loop_join, .i64);
+    try f.run();
+    // One unit circulates: state moves into the advance op, its result moves
+    // into B's parameter, and B's body moves it back into A's parameter
+    // through the alias. No retain or release belongs anywhere on the cycle.
+    try testing.expectEqual(@as(usize, 0), f.countAllRc());
 }
 
 test "RC mutable iterator accumulator replace cleans old state" {
