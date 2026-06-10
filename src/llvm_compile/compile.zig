@@ -374,6 +374,7 @@ fn emitMergedBitcodeToObjectFile(
         // Note: builtin_module is now invalid - do NOT dispose it
 
         cleanMergedBuiltinDefinitions(module, &app_defs);
+        bindings.runGlobalDCE(module);
     }
 
     var verify_error: [*:0]const u8 = undefined;

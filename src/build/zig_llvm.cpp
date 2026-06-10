@@ -50,6 +50,7 @@
 #include <llvm/Target/CodeGenCWrappers.h>
 #include <llvm/Transforms/IPO.h>
 #include <llvm/Transforms/IPO/AlwaysInliner.h>
+#include <llvm/Transforms/IPO/GlobalDCE.h>
 #include <llvm/Transforms/Instrumentation/ThreadSanitizer.h>
 #include <llvm/Transforms/Instrumentation/SanitizerCoverage.h>
 #include <llvm/Transforms/Scalar.h>
@@ -222,6 +223,19 @@ static SanitizerCoverageOptions getSanCovOptions(ZigLLVMCoverageOptions z) {
     o.TraceStores = z.TraceStores;
     o.CollectControlFlow = z.CollectControlFlow;
     return o;
+}
+
+ZIG_EXTERN_C void ZigLLVMRunGlobalDCE(LLVMModuleRef module_ref) {
+    Module &llvm_module = *unwrap(module_ref);
+
+    PipelineTuningOptions pipeline_opts;
+    PassBuilder pass_builder(nullptr, pipeline_opts, std::nullopt, nullptr);
+    ModuleAnalysisManager module_am;
+    pass_builder.registerModuleAnalyses(module_am);
+
+    ModulePassManager module_pm;
+    module_pm.addPass(GlobalDCEPass());
+    module_pm.run(llvm_module, module_am);
 }
 
 ZIG_EXTERN_C bool ZigLLVMTargetMachineEmitToFile(LLVMTargetMachineRef targ_machine_ref, LLVMModuleRef module_ref,

@@ -112,8 +112,12 @@ builtin aliases and definitions that are not application exports may be made
 internal so LLVM dead-code elimination and the final linker can remove unused
 builtin code. Before merging, the LLVM backend roots builtin exports at the
 explicit builtin declarations emitted by the application module and internalizes
-all other builtin definitions. The normal LLVM optimization pipeline then sees
-unused builtins as internal code and may delete them before object emission.
+all other builtin definitions. After merging, it resolves builtin aliases to
+their concrete definitions, internalizes the merged builtin definitions that are
+not application exports, and runs LLVM global dead-code elimination before
+object emission. This keeps unused builtin IR out of the expensive optimization
+and code-generation pipeline while preserving real definitions for builtin
+calls that the application can inline.
 LLVM object emission must request function and data sections, and the final
 target linker must use section garbage collection where the target format
 supports it.

@@ -139,6 +139,11 @@ pub const Value = opaque {
     extern fn LLVMDeleteGlobal(GlobalVar: *Value) void;
 };
 
+/// Runs LLVM global dead-code elimination on a module whose unused definitions
+/// have already been made internal.
+pub const runGlobalDCE = ZigLLVMRunGlobalDCE;
+extern fn ZigLLVMRunGlobalDCE(module: *Module) void;
+
 /// LLVM-C linkage value for `internal`: a local definition, never an exported
 /// symbol, and discarded by global DCE when unused.
 pub const internal_linkage: c_int = 8;
