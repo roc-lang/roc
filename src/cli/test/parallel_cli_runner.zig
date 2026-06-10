@@ -2299,6 +2299,30 @@ fn customGlueZigBoxHelperTest(
         \\    abi.decrefBox(ptr, &ops);
         \\    try std.testing.expectEqual(@as(usize, 0), env_value.dealloc_count);
         \\}
+        \\
+        \\test "DefaultAllocators realloc preserves data and frees old allocation" {
+        \\    var env_value = abi.RocEnv{
+        \\        .allocator = std.testing.allocator,
+        \\        .roc_io = abi.RocIo.freestanding(),
+        \\    };
+        \\    var roc_ops = abi.makeRocOps(&env_value, .{ .count = 0, .fns = &hosted_fns });
+        \\
+        \\    const alloc_ptr = abi.DefaultAllocators.rocAlloc(&roc_ops, 8, 4) orelse return error.OutOfMemory;
+        \\
+        \\    const old_bytes: [*]u8 = @ptrCast(alloc_ptr);
+        \\    old_bytes[0] = 0xaa;
+        \\    old_bytes[1] = 0xbb;
+        \\    old_bytes[7] = 0xcc;
+        \\
+        \\    const realloc_ptr = abi.DefaultAllocators.rocRealloc(&roc_ops, alloc_ptr, 16, 4) orelse return error.OutOfMemory;
+        \\
+        \\    const new_bytes: [*]u8 = @ptrCast(realloc_ptr);
+        \\    try std.testing.expectEqual(@as(u8, 0xaa), new_bytes[0]);
+        \\    try std.testing.expectEqual(@as(u8, 0xbb), new_bytes[1]);
+        \\    try std.testing.expectEqual(@as(u8, 0xcc), new_bytes[7]);
+        \\
+        \\    abi.DefaultAllocators.rocDealloc(&roc_ops, realloc_ptr, 4);
+        \\}
     ;
 
     const test_path = std.fs.path.join(allocator, &.{ output_dir, "box_helper_test.zig" }) catch |err|

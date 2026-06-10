@@ -112,6 +112,8 @@ export fn roc_realloc_raw(ptr: *anyopaque, new_size: usize, old_size: usize, ali
 // because roc_dealloc doesn't provide the length (by design for seamless slices).
 
 fn roc_alloc(_: *RocOps, length: usize, alignment_arg: usize) callconv(.c) ?*anyopaque {
+    canonical_alloc_counts[0] += 1;
+
     const alignment: u32 = @intCast(alignment_arg);
     const align_log2: std.mem.Alignment = @enumFromInt(std.math.log2_int(usize, alignment));
 
@@ -130,6 +132,8 @@ fn roc_alloc(_: *RocOps, length: usize, alignment_arg: usize) callconv(.c) ?*any
 }
 
 fn roc_dealloc(_: *RocOps, ptr: *anyopaque, alignment_arg: usize) callconv(.c) void {
+    canonical_alloc_counts[1] += 1;
+
     const alignment: u32 = @intCast(alignment_arg);
     const align_log2: std.mem.Alignment = @enumFromInt(std.math.log2_int(usize, alignment));
 
@@ -150,7 +154,9 @@ fn roc_dealloc(_: *RocOps, ptr: *anyopaque, alignment_arg: usize) callconv(.c) v
 }
 
 fn roc_realloc(_: *RocOps, ptr: *anyopaque, new_length: usize, alignment_arg: usize) callconv(.c) ?*anyopaque {
-    _ = ptr;
+    canonical_alloc_counts[0] += 1;
+    canonical_alloc_counts[1] += 1;
+
     const alignment: u32 = @intCast(alignment_arg);
     const align_log2: std.mem.Alignment = @enumFromInt(std.math.log2_int(usize, alignment));
 
@@ -164,8 +170,19 @@ fn roc_realloc(_: *RocOps, ptr: *anyopaque, new_length: usize, alignment_arg: us
     const size_ptr: *usize = @ptrCast(@alignCast(result));
     size_ptr.* = new_length;
 
-    // Return pointer past the header
-    return @ptrCast(result + header_size);
+    const old_byte_ptr: [*]u8 = @ptrCast(ptr);
+    const old_base_ptr = old_byte_ptr - header_size;
+    const old_size_ptr: *const usize = @ptrCast(@alignCast(old_base_ptr));
+    const old_size = old_size_ptr.*;
+
+    const new_user_ptr = result + header_size;
+    const copy_size = @min(old_size, new_length);
+    @memcpy(new_user_ptr[0..copy_size], old_byte_ptr[0..copy_size]);
+
+    const old_total_size = old_size + header_size;
+    wasm_allocator.rawFree(old_base_ptr[0..old_total_size], align_log2, @returnAddress());
+
+    return @ptrCast(new_user_ptr);
 }
 
 fn roc_dbg(_: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
@@ -200,6 +217,8 @@ var dummy_env: u8 = 0;
 // Store the last result for wasm_result_len()
 var last_result: RocStr = undefined;
 
+var canonical_alloc_counts: [2]usize = .{ 0, 0 };
+
 /// Main export for WASM module
 /// Returns a pointer to the result string data and its length
 export fn wasm_main() [*]const u8 {
@@ -229,4 +248,17 @@ export fn wasm_main() [*]const u8 {
 /// Get the length of the result string from the last wasm_main() call
 export fn wasm_result_len() usize {
     return last_result.len();
+}
+
+export fn wasm_reset_alloc_counts() void {
+    canonical_alloc_counts[0] = 0;
+    canonical_alloc_counts[1] = 0;
+}
+
+export fn wasm_alloc_count() usize {
+    return canonical_alloc_counts[0];
+}
+
+export fn wasm_dealloc_count() usize {
+    return canonical_alloc_counts[1];
 }
