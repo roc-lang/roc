@@ -6,7 +6,7 @@ platform ""
     targets: {
         files: "targets/",
         exe: {
-            wasm32: ["host.wasm", app],
+            wasm32: { files: ["host.wasm", app] },
         }
     }
 

@@ -276,10 +276,10 @@ pub fn createValidationReport(
                 \\    targets: {
                 \\        files: "targets/",
                 \\        exe: {
-                \\            x64linux: ["host.o", app],
-                \\            arm64linux: ["host.o", app],
-                \\            x64mac: ["host.o", app],
-                \\            arm64mac: ["host.o", app],
+                \\            x64linux: { files: ["host.o", app] },
+                \\            arm64linux: { files: ["host.o", app] },
+                \\            x64mac: { files: ["host.o", app] },
+                \\            arm64mac: { files: ["host.o", app] },
                 \\        }
                 \\    }
             );
@@ -742,7 +742,7 @@ test "validatePlatformHasTargets detects missing targets section" {
     var env = try base.CommonEnv.init(allocator, source_copy);
     defer env.deinit(allocator);
 
-    const ast = try parse.parse(allocator, &env);
+    const ast = try parse.file(allocator, &env);
     defer ast.deinit();
 
     const result = validatePlatformHasTargets(ast, "test/platform/main.roc");
@@ -770,8 +770,8 @@ test "validatePlatformHasTargets accepts platform with targets section" {
         \\    provides { main_for_host: "main" }
         \\    targets: {
         \\        exe: {
-        \\            x64linux: [app],
-        \\            arm64linux: [app],
+        \\            x64linux: { files: [app] },
+        \\            arm64linux: { files: [app] },
         \\        }
         \\    }
         \\
@@ -783,7 +783,7 @@ test "validatePlatformHasTargets accepts platform with targets section" {
     var env = try base.CommonEnv.init(allocator, source_copy);
     defer env.deinit(allocator);
 
-    const ast = try parse.parse(allocator, &env);
+    const ast = try parse.file(allocator, &env);
     defer ast.deinit();
 
     const result = validatePlatformHasTargets(ast, "test/platform/main.roc");
@@ -808,7 +808,7 @@ test "validatePlatformHasTargets skips non-platform headers" {
     var env = try base.CommonEnv.init(allocator, source_copy);
     defer env.deinit(allocator);
 
-    const ast = try parse.parse(allocator, &env);
+    const ast = try parse.file(allocator, &env);
     defer ast.deinit();
 
     const result = validatePlatformHasTargets(ast, "app/main.roc");
@@ -830,11 +830,11 @@ test "validatePlatformHasTargets accepts platform with multiple target types" {
         \\    targets: {
         \\        files: "targets/",
         \\        exe: {
-        \\            x64linux: ["host.o", app],
-        \\            arm64mac: [app],
+        \\            x64linux: { files: ["host.o", app] },
+        \\            arm64mac: { files: [app] },
         \\        },
         \\        static_lib: {
-        \\            x64mac: ["libhost.a"],
+        \\            x64mac: { files: ["libhost.a"] },
         \\        }
         \\    }
         \\
@@ -846,7 +846,7 @@ test "validatePlatformHasTargets accepts platform with multiple target types" {
     var env = try base.CommonEnv.init(allocator, source_copy);
     defer env.deinit(allocator);
 
-    const ast = try parse.parse(allocator, &env);
+    const ast = try parse.file(allocator, &env);
     defer ast.deinit();
 
     const result = validatePlatformHasTargets(ast, "test/platform/main.roc");
@@ -866,7 +866,7 @@ test "validatePlatformHasTargets accepts platform with win_gui target" {
         \\    provides { main_for_host: "main" }
         \\    targets: {
         \\        exe: {
-        \\            x64win: [win_gui],
+        \\            x64win: { files: [win_gui] },
         \\        }
         \\    }
         \\
@@ -878,7 +878,7 @@ test "validatePlatformHasTargets accepts platform with win_gui target" {
     var env = try base.CommonEnv.init(allocator, source_copy);
     defer env.deinit(allocator);
 
-    const ast = try parse.parse(allocator, &env);
+    const ast = try parse.file(allocator, &env);
     defer ast.deinit();
 
     const result = validatePlatformHasTargets(ast, "test/platform/main.roc");
@@ -899,8 +899,8 @@ test "TargetsConfig.fromAST extracts targets configuration" {
         \\    targets: {
         \\        files: "targets/",
         \\        exe: {
-        \\            x64linux: ["host.o", app],
-        \\            arm64linux: [app],
+        \\            x64linux: { files: ["host.o", app] },
+        \\            arm64linux: { files: [app] },
         \\        }
         \\    }
         \\
@@ -912,7 +912,7 @@ test "TargetsConfig.fromAST extracts targets configuration" {
     var env = try base.CommonEnv.init(allocator, source_copy);
     defer env.deinit(allocator);
 
-    const ast = try parse.parse(allocator, &env);
+    const ast = try parse.file(allocator, &env);
     defer ast.deinit();
 
     // Try to extract targets config from the AST

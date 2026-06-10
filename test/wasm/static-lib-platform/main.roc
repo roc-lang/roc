@@ -6,7 +6,7 @@ platform ""
     targets: {
         files: "../platform/targets/",
         static_lib: {
-            wasm32: ["host.wasm", app],
+            wasm32: { files: ["host.wasm", app] },
         }
     }
 

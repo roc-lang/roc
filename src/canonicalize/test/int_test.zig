@@ -542,7 +542,7 @@ test "hexadecimal integer literals" {
 
         const roc_ctx = CoreCtx.testing(gpa, gpa);
 
-        const ast = try parse.parseExpr(gpa, &env.common);
+        const ast = try parse.expr(gpa, &env.common);
         defer ast.deinit();
 
         var czer = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
@@ -605,7 +605,7 @@ test "binary integer literals" {
 
         const roc_ctx = CoreCtx.testing(gpa, gpa);
 
-        const ast = try parse.parseExpr(gpa, &env.common);
+        const ast = try parse.expr(gpa, &env.common);
         defer ast.deinit();
 
         var czer = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
@@ -668,7 +668,7 @@ test "octal integer literals" {
 
         const roc_ctx = CoreCtx.testing(gpa, gpa);
 
-        const ast = try parse.parseExpr(gpa, &env.common);
+        const ast = try parse.expr(gpa, &env.common);
         defer ast.deinit();
 
         var czer = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
@@ -731,7 +731,7 @@ test "integer literals with uppercase base prefixes" {
 
         const roc_ctx = CoreCtx.testing(gpa, gpa);
 
-        const ast = try parse.parseExpr(gpa, &env.common);
+        const ast = try parse.expr(gpa, &env.common);
         defer ast.deinit();
 
         var czer = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());

@@ -9,7 +9,7 @@ module[){..0,)
 ~~~
 # EXPECTED
 PARSE ERROR - fuzz_crash_053.md:1:8:1:9
-PARSE ERROR - fuzz_crash_053.md:2:1:2:1
+PARSE ERROR - fuzz_crash_053.md:1:9:1:10
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `exposed_item_unexpected_token`
@@ -26,11 +26,11 @@ module[){..0,)
 A parsing error occurred: `header_expected_close_square`
 This is an unexpected parsing error. Please check your syntax.
 
-**fuzz_crash_053.md:2:1:2:1:**
+**fuzz_crash_053.md:1:9:1:10:**
 ```roc
-
+module[){..0,)
 ```
-^
+        ^
 
 
 # TOKENS
