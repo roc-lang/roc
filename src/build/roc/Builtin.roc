@@ -2515,6 +2515,36 @@ Builtin :: [].{
 			compare : U8, U8 -> [LT, EQ, GT]
 			compare = |a, b| numeric_compare(a, b)
 
+			## Returns `Bool.True` if the value is evenly divisible by `2`.
+			## ```roc
+			## expect U8.is_even(4)
+			##
+			## expect !U8.is_even(5)
+			## ```
+			is_even : U8 -> Bool
+			is_even = |value| integer_is_even(0, 2, value)
+
+			## Returns `Bool.True` if the value is not evenly divisible by `2`.
+			## ```roc
+			## expect U8.is_odd(5)
+			##
+			## expect !U8.is_odd(4)
+			## ```
+			is_odd : U8 -> Bool
+			is_odd = |value| integer_is_odd(0, 2, value)
+
+			## Returns `Bool.True` if the first value is a multiple of the second.
+			## A zero divisor returns `Bool.True` only when the first value is also zero.
+			## ```roc
+			## expect U8.is_multiple_of(12, 3)
+			##
+			## expect U8.is_multiple_of(0, 0)
+			##
+			## expect !U8.is_multiple_of(5, 0)
+			## ```
+			is_multiple_of : U8, U8 -> Bool
+			is_multiple_of = |value, divisor| unsigned_is_multiple_of(0, value, divisor)
+
 			## Returns the greater of two [U8] values.
 			## ```roc
 			## expect U8.max(5, 3) == 5
@@ -2937,6 +2967,38 @@ Builtin :: [].{
 			## ```
 			compare : I8, I8 -> [LT, EQ, GT]
 			compare = |a, b| numeric_compare(a, b)
+
+			## Returns `Bool.True` if the value is evenly divisible by `2`.
+			## ```roc
+			## expect I8.is_even(4)
+			##
+			## expect !I8.is_even(5)
+			## ```
+			is_even : I8 -> Bool
+			is_even = |value| integer_is_even(0, 2, value)
+
+			## Returns `Bool.True` if the value is not evenly divisible by `2`.
+			## ```roc
+			## expect I8.is_odd(5)
+			##
+			## expect !I8.is_odd(4)
+			## ```
+			is_odd : I8 -> Bool
+			is_odd = |value| integer_is_odd(0, 2, value)
+
+			## Returns `Bool.True` if the first value is a multiple of the second.
+			## A zero divisor returns `Bool.True` only when the first value is also zero.
+			## ```roc
+			## expect I8.is_multiple_of(12, 3)
+			##
+			## expect I8.is_multiple_of(0, 0)
+			##
+			## expect !I8.is_multiple_of(5, 0)
+			##
+			## expect I8.is_multiple_of(I8.lowest, -1)
+			## ```
+			is_multiple_of : I8, I8 -> Bool
+			is_multiple_of = |value, divisor| signed_is_multiple_of(0, -1, value, divisor)
 
 			## Returns the greater of two [I8] values.
 			## ```roc
@@ -3456,6 +3518,36 @@ Builtin :: [].{
 			compare : U16, U16 -> [LT, EQ, GT]
 			compare = |a, b| numeric_compare(a, b)
 
+			## Returns `Bool.True` if the value is evenly divisible by `2`.
+			## ```roc
+			## expect U16.is_even(4)
+			##
+			## expect !U16.is_even(5)
+			## ```
+			is_even : U16 -> Bool
+			is_even = |value| integer_is_even(0, 2, value)
+
+			## Returns `Bool.True` if the value is not evenly divisible by `2`.
+			## ```roc
+			## expect U16.is_odd(5)
+			##
+			## expect !U16.is_odd(4)
+			## ```
+			is_odd : U16 -> Bool
+			is_odd = |value| integer_is_odd(0, 2, value)
+
+			## Returns `Bool.True` if the first value is a multiple of the second.
+			## A zero divisor returns `Bool.True` only when the first value is also zero.
+			## ```roc
+			## expect U16.is_multiple_of(12, 3)
+			##
+			## expect U16.is_multiple_of(0, 0)
+			##
+			## expect !U16.is_multiple_of(5, 0)
+			## ```
+			is_multiple_of : U16, U16 -> Bool
+			is_multiple_of = |value, divisor| unsigned_is_multiple_of(0, value, divisor)
+
 			## Returns the greater of two [U16] values.
 			## ```roc
 			## expect U16.max(5, 3) == 5
@@ -3916,6 +4008,38 @@ Builtin :: [].{
 			## ```
 			compare : I16, I16 -> [LT, EQ, GT]
 			compare = |a, b| numeric_compare(a, b)
+
+			## Returns `Bool.True` if the value is evenly divisible by `2`.
+			## ```roc
+			## expect I16.is_even(4)
+			##
+			## expect !I16.is_even(5)
+			## ```
+			is_even : I16 -> Bool
+			is_even = |value| integer_is_even(0, 2, value)
+
+			## Returns `Bool.True` if the value is not evenly divisible by `2`.
+			## ```roc
+			## expect I16.is_odd(5)
+			##
+			## expect !I16.is_odd(4)
+			## ```
+			is_odd : I16 -> Bool
+			is_odd = |value| integer_is_odd(0, 2, value)
+
+			## Returns `Bool.True` if the first value is a multiple of the second.
+			## A zero divisor returns `Bool.True` only when the first value is also zero.
+			## ```roc
+			## expect I16.is_multiple_of(12, 3)
+			##
+			## expect I16.is_multiple_of(0, 0)
+			##
+			## expect !I16.is_multiple_of(5, 0)
+			##
+			## expect I16.is_multiple_of(I16.lowest, -1)
+			## ```
+			is_multiple_of : I16, I16 -> Bool
+			is_multiple_of = |value, divisor| signed_is_multiple_of(0, -1, value, divisor)
 
 			## Returns the greater of two [I16] values.
 			## ```roc
@@ -4452,6 +4576,36 @@ Builtin :: [].{
 			compare : U32, U32 -> [LT, EQ, GT]
 			compare = |a, b| numeric_compare(a, b)
 
+			## Returns `Bool.True` if the value is evenly divisible by `2`.
+			## ```roc
+			## expect U32.is_even(4)
+			##
+			## expect !U32.is_even(5)
+			## ```
+			is_even : U32 -> Bool
+			is_even = |value| integer_is_even(0, 2, value)
+
+			## Returns `Bool.True` if the value is not evenly divisible by `2`.
+			## ```roc
+			## expect U32.is_odd(5)
+			##
+			## expect !U32.is_odd(4)
+			## ```
+			is_odd : U32 -> Bool
+			is_odd = |value| integer_is_odd(0, 2, value)
+
+			## Returns `Bool.True` if the first value is a multiple of the second.
+			## A zero divisor returns `Bool.True` only when the first value is also zero.
+			## ```roc
+			## expect U32.is_multiple_of(12, 3)
+			##
+			## expect U32.is_multiple_of(0, 0)
+			##
+			## expect !U32.is_multiple_of(5, 0)
+			## ```
+			is_multiple_of : U32, U32 -> Bool
+			is_multiple_of = |value, divisor| unsigned_is_multiple_of(0, value, divisor)
+
 			## Returns the greater of two [U32] values.
 			## ```roc
 			## expect U32.max(5, 3) == 5
@@ -4950,6 +5104,38 @@ Builtin :: [].{
 			## ```
 			compare : I32, I32 -> [LT, EQ, GT]
 			compare = |a, b| numeric_compare(a, b)
+
+			## Returns `Bool.True` if the value is evenly divisible by `2`.
+			## ```roc
+			## expect I32.is_even(4)
+			##
+			## expect !I32.is_even(5)
+			## ```
+			is_even : I32 -> Bool
+			is_even = |value| integer_is_even(0, 2, value)
+
+			## Returns `Bool.True` if the value is not evenly divisible by `2`.
+			## ```roc
+			## expect I32.is_odd(5)
+			##
+			## expect !I32.is_odd(4)
+			## ```
+			is_odd : I32 -> Bool
+			is_odd = |value| integer_is_odd(0, 2, value)
+
+			## Returns `Bool.True` if the first value is a multiple of the second.
+			## A zero divisor returns `Bool.True` only when the first value is also zero.
+			## ```roc
+			## expect I32.is_multiple_of(12, 3)
+			##
+			## expect I32.is_multiple_of(0, 0)
+			##
+			## expect !I32.is_multiple_of(5, 0)
+			##
+			## expect I32.is_multiple_of(I32.lowest, -1)
+			## ```
+			is_multiple_of : I32, I32 -> Bool
+			is_multiple_of = |value, divisor| signed_is_multiple_of(0, -1, value, divisor)
 
 			## Returns the greater of two [I32] values.
 			## ```roc
@@ -5506,6 +5692,36 @@ Builtin :: [].{
 			compare : U64, U64 -> [LT, EQ, GT]
 			compare = |a, b| numeric_compare(a, b)
 
+			## Returns `Bool.True` if the value is evenly divisible by `2`.
+			## ```roc
+			## expect U64.is_even(4)
+			##
+			## expect !U64.is_even(5)
+			## ```
+			is_even : U64 -> Bool
+			is_even = |value| integer_is_even(0, 2, value)
+
+			## Returns `Bool.True` if the value is not evenly divisible by `2`.
+			## ```roc
+			## expect U64.is_odd(5)
+			##
+			## expect !U64.is_odd(4)
+			## ```
+			is_odd : U64 -> Bool
+			is_odd = |value| integer_is_odd(0, 2, value)
+
+			## Returns `Bool.True` if the first value is a multiple of the second.
+			## A zero divisor returns `Bool.True` only when the first value is also zero.
+			## ```roc
+			## expect U64.is_multiple_of(12, 3)
+			##
+			## expect U64.is_multiple_of(0, 0)
+			##
+			## expect !U64.is_multiple_of(5, 0)
+			## ```
+			is_multiple_of : U64, U64 -> Bool
+			is_multiple_of = |value, divisor| unsigned_is_multiple_of(0, value, divisor)
+
 			## Returns the greater of two [U64] values.
 			## ```roc
 			## expect U64.max(5, 3) == 5
@@ -6048,6 +6264,38 @@ Builtin :: [].{
 			## ```
 			compare : I64, I64 -> [LT, EQ, GT]
 			compare = |a, b| numeric_compare(a, b)
+
+			## Returns `Bool.True` if the value is evenly divisible by `2`.
+			## ```roc
+			## expect I64.is_even(4)
+			##
+			## expect !I64.is_even(5)
+			## ```
+			is_even : I64 -> Bool
+			is_even = |value| integer_is_even(0, 2, value)
+
+			## Returns `Bool.True` if the value is not evenly divisible by `2`.
+			## ```roc
+			## expect I64.is_odd(5)
+			##
+			## expect !I64.is_odd(4)
+			## ```
+			is_odd : I64 -> Bool
+			is_odd = |value| integer_is_odd(0, 2, value)
+
+			## Returns `Bool.True` if the first value is a multiple of the second.
+			## A zero divisor returns `Bool.True` only when the first value is also zero.
+			## ```roc
+			## expect I64.is_multiple_of(12, 3)
+			##
+			## expect I64.is_multiple_of(0, 0)
+			##
+			## expect !I64.is_multiple_of(5, 0)
+			##
+			## expect I64.is_multiple_of(I64.lowest, -1)
+			## ```
+			is_multiple_of : I64, I64 -> Bool
+			is_multiple_of = |value, divisor| signed_is_multiple_of(0, -1, value, divisor)
 
 			## Returns the greater of two [I64] values.
 			## ```roc
@@ -6629,6 +6877,36 @@ Builtin :: [].{
 			## ```
 			compare : U128, U128 -> [LT, EQ, GT]
 			compare = |a, b| numeric_compare(a, b)
+
+			## Returns `Bool.True` if the value is evenly divisible by `2`.
+			## ```roc
+			## expect U128.is_even(4)
+			##
+			## expect !U128.is_even(5)
+			## ```
+			is_even : U128 -> Bool
+			is_even = |value| integer_is_even(0, 2, value)
+
+			## Returns `Bool.True` if the value is not evenly divisible by `2`.
+			## ```roc
+			## expect U128.is_odd(5)
+			##
+			## expect !U128.is_odd(4)
+			## ```
+			is_odd : U128 -> Bool
+			is_odd = |value| integer_is_odd(0, 2, value)
+
+			## Returns `Bool.True` if the first value is a multiple of the second.
+			## A zero divisor returns `Bool.True` only when the first value is also zero.
+			## ```roc
+			## expect U128.is_multiple_of(12, 3)
+			##
+			## expect U128.is_multiple_of(0, 0)
+			##
+			## expect !U128.is_multiple_of(5, 0)
+			## ```
+			is_multiple_of : U128, U128 -> Bool
+			is_multiple_of = |value, divisor| unsigned_is_multiple_of(0, value, divisor)
 
 			## Returns the greater of two [U128] values.
 			## ```roc
@@ -7216,6 +7494,38 @@ Builtin :: [].{
 			## ```
 			compare : I128, I128 -> [LT, EQ, GT]
 			compare = |a, b| numeric_compare(a, b)
+
+			## Returns `Bool.True` if the value is evenly divisible by `2`.
+			## ```roc
+			## expect I128.is_even(4)
+			##
+			## expect !I128.is_even(5)
+			## ```
+			is_even : I128 -> Bool
+			is_even = |value| integer_is_even(0, 2, value)
+
+			## Returns `Bool.True` if the value is not evenly divisible by `2`.
+			## ```roc
+			## expect I128.is_odd(5)
+			##
+			## expect !I128.is_odd(4)
+			## ```
+			is_odd : I128 -> Bool
+			is_odd = |value| integer_is_odd(0, 2, value)
+
+			## Returns `Bool.True` if the first value is a multiple of the second.
+			## A zero divisor returns `Bool.True` only when the first value is also zero.
+			## ```roc
+			## expect I128.is_multiple_of(12, 3)
+			##
+			## expect I128.is_multiple_of(0, 0)
+			##
+			## expect !I128.is_multiple_of(5, 0)
+			##
+			## expect I128.is_multiple_of(I128.lowest, -1)
+			## ```
+			is_multiple_of : I128, I128 -> Bool
+			is_multiple_of = |value, divisor| signed_is_multiple_of(0, -1, value, divisor)
 
 			## Returns the greater of two [I128] values.
 			## ```roc
@@ -9588,6 +9898,34 @@ signed_div_checked = |lowest, zero, neg_one, a, b|
 		}
 	} else {
 		Ok(a / b)
+	}
+
+integer_is_even : item, item, item -> Bool
+	where [item.is_eq : item, item -> Bool, item.rem_by : item, item -> item]
+integer_is_even = |zero, two, value| value.rem_by(two) == zero
+
+integer_is_odd : item, item, item -> Bool
+	where [item.is_eq : item, item -> Bool, item.rem_by : item, item -> item]
+integer_is_odd = |zero, two, value| value.rem_by(two) != zero
+
+unsigned_is_multiple_of : item, item, item -> Bool
+	where [item.is_eq : item, item -> Bool, item.rem_by : item, item -> item]
+unsigned_is_multiple_of = |zero, value, divisor|
+	if divisor == zero {
+		value == zero
+	} else {
+		value.rem_by(divisor) == zero
+	}
+
+signed_is_multiple_of : item, item, item, item -> Bool
+	where [item.is_eq : item, item -> Bool, item.rem_by : item, item -> item]
+signed_is_multiple_of = |zero, neg_one, value, divisor|
+	if divisor == zero {
+		value == zero
+	} else if divisor == neg_one {
+		True
+	} else {
+		value.rem_by(divisor) == zero
 	}
 
 numeric_compare : item, item -> [LT, EQ, GT]
