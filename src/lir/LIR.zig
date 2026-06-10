@@ -191,6 +191,15 @@ pub const JoinPointSpan = extern struct {
 
 /// Explicit ARC meaning of a `set_local` write. ARC insertion consumes this
 /// directly; it must not derive the meaning from control-flow shape.
+/// How an RC statement's count update must be performed. `atomic` is always
+/// sound; `single_thread` is chosen only for allocations the visibility
+/// analysis proves no host thread can ever touch, and lets the runtime use
+/// plain loads and stores.
+pub const RcAtomicity = enum(u1) {
+    atomic,
+    single_thread,
+};
+
 pub const SetLocalWriteMode = enum {
     initialize_join_result,
     replace_existing,
@@ -290,16 +299,19 @@ pub const CFStmt = union(enum) {
         value: LocalId,
         rc: layout.RcHelper,
         count: u16 = 1,
+        atomicity: RcAtomicity = .atomic,
         next: CFStmtId,
     },
     decref: struct {
         value: LocalId,
         rc: layout.RcHelper,
+        atomicity: RcAtomicity = .atomic,
         next: CFStmtId,
     },
     free: struct {
         value: LocalId,
         rc: layout.RcHelper,
+        atomicity: RcAtomicity = .atomic,
         next: CFStmtId,
     },
     switch_stmt: struct {

@@ -74,6 +74,9 @@ pub const Solution = struct {
     /// unit into the join body at every jump; their releases belong to the
     /// body, so emission must not end their lifetime from use scans alone.
     join_param: std.bit_set.DynamicBitSetUnmanaged,
+    /// Bit set => the local may hold an allocation the host can also touch,
+    /// so its RC statements need atomic count updates.
+    visible: std.bit_set.DynamicBitSetUnmanaged,
 
     pub fn deinit(self: *Solution) void {
         self.borrowed.deinit(self.allocator);
@@ -83,6 +86,7 @@ pub const Solution = struct {
         self.allocator.free(self.members);
         self.allocator.free(self.sigs);
         self.join_param.deinit(self.allocator);
+        self.visible.deinit(self.allocator);
     }
 
     pub fn isJoinParam(self: *const Solution, local: LIR.LocalId) bool {
@@ -95,6 +99,15 @@ pub const Solution = struct {
         const index = @intFromEnum(local);
         if (index >= self.leader.len) return false;
         return self.borrowed.isSet(index);
+    }
+
+    /// True when RC statements touching this local's value must use atomic
+    /// count updates: the value may hold an allocation a host thread can
+    /// also touch.
+    pub fn isVisible(self: *const Solution, local: LIR.LocalId) bool {
+        const index = @intFromEnum(local);
+        if (index >= self.leader.len) return true;
+        return self.visible.isSet(index);
     }
 
     pub fn leaderOf(self: *const Solution, local: LIR.LocalId) LIR.LocalId {
@@ -277,6 +290,9 @@ pub fn solve(
     var binding = try resolveBindings(&solver, local_count);
     errdefer binding.deinit(allocator);
 
+    var visible = try computeVisibility(allocator, store, rc_local, &solver.pinned);
+    errdefer visible.deinit(allocator);
+
     var solution = Solution{
         .allocator = allocator,
         .borrowed = binding.borrowed,
@@ -286,6 +302,7 @@ pub fn solve(
         .members = &.{},
         .sigs = solver.sigs,
         .join_param = solver.join_param,
+        .visible = visible,
     };
     solver_sigs_kept = true;
     errdefer {
@@ -293,6 +310,7 @@ pub fn solve(
         allocator.free(solution.leader);
         allocator.free(solution.sigs);
         solution.join_param.deinit(allocator);
+        solution.visible.deinit(allocator);
     }
 
     // Build flat group-member lists: every local lists at least itself;
@@ -768,13 +786,33 @@ fn lowLevelBorrowSource(
 }
 
 fn computePins(solver: *Solver, roots: []const LIR.LirProcSpecId) SolveError!void {
-    const store = solver.store;
+    fillPinnedProcs(solver.store, roots, &solver.pinned);
+}
+
+/// Computes the pinned-proc set over a freshly allocated bit set; the
+/// certifier mirrors the visibility analysis from this.
+pub fn computePinnedProcs(
+    allocator: Allocator,
+    store: *const LirStore,
+    roots: []const LIR.LirProcSpecId,
+) SolveError!std.bit_set.DynamicBitSetUnmanaged {
+    var pinned = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, store.proc_specs.items.len);
+    errdefer pinned.deinit(allocator);
+    fillPinnedProcs(store, roots, &pinned);
+    return pinned;
+}
+
+fn fillPinnedProcs(
+    store: *const LirStore,
+    roots: []const LIR.LirProcSpecId,
+    pinned: *std.bit_set.DynamicBitSetUnmanaged,
+) void {
     for (roots) |root| {
-        solver.pinned.set(@intFromEnum(root));
+        pinned.set(@intFromEnum(root));
     }
     for (store.proc_specs.items, 0..) |proc, proc_index| {
         if (proc.body == null or proc.hosted != null or proc.abi == .erased_callable) {
-            solver.pinned.set(proc_index);
+            pinned.set(proc_index);
         }
     }
     // Procs whose address escapes are callable through paths the solver
@@ -782,13 +820,262 @@ fn computePins(solver: *Solver, roots: []const LIR.LirProcSpecId) SolveError!voi
     for (store.cf_stmts.items) |stmt| {
         switch (stmt) {
             .assign_literal => |assign| switch (assign.value) {
-                .proc_ref => |proc| solver.pinned.set(@intFromEnum(proc)),
+                .proc_ref => |proc| pinned.set(@intFromEnum(proc)),
                 else => {},
             },
-            .assign_packed_erased_fn => |assign| solver.pinned.set(@intFromEnum(assign.proc)),
+            .assign_packed_erased_fn => |assign| pinned.set(@intFromEnum(assign.proc)),
             else => {},
         }
     }
+}
+
+/// Marks every local that may hold a host-visible allocation: a may-bit
+/// propagated to a fixpoint over same-value, containment, call, and
+/// low-level sharing edges, seeded from pinned procs' parameters and
+/// returns and from call shapes the solver cannot see into. RC statements
+/// on unmarked locals may update counts without atomics, because no other
+/// thread can ever hold their allocations.
+pub fn computeVisibility(
+    allocator: Allocator,
+    store: *const LirStore,
+    rc_local: []const bool,
+    pinned: *const std.bit_set.DynamicBitSetUnmanaged,
+) SolveError!std.bit_set.DynamicBitSetUnmanaged {
+    const local_count = store.locals.items.len;
+    const proc_count = store.proc_specs.items.len;
+
+    var visited = std.AutoHashMap(LIR.CFStmtId, void).init(allocator);
+    defer visited.deinit();
+    var stack = std.ArrayList(LIR.CFStmtId).empty;
+    defer stack.deinit(allocator);
+
+    var visible = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
+    errdefer visible.deinit(allocator);
+    var work = std.ArrayList(u32).empty;
+    defer work.deinit(allocator);
+
+    // Per-proc return values, for linking call results to callee returns.
+    const ret_values = try allocator.alloc(std.ArrayList(u32), proc_count);
+    defer {
+        for (ret_values) |*list| list.deinit(allocator);
+        allocator.free(ret_values);
+    }
+    @memset(ret_values, .empty);
+    for (store.proc_specs.items, 0..) |proc, proc_index| {
+        const body = proc.body orelse continue;
+        visited.clearRetainingCapacity();
+        stack.clearRetainingCapacity();
+        try stack.append(allocator, body);
+        while (stack.pop()) |current| {
+            if (visited.contains(current)) continue;
+            try visited.put(current, {});
+            switch (store.getCFStmt(current)) {
+                .ret => |ret_stmt| try ret_values[proc_index].append(allocator, @intFromEnum(ret_stmt.value)),
+                .switch_stmt => |stmt| {
+                    for (store.getCFSwitchBranches(stmt.branches)) |branch| {
+                        try stack.append(allocator, branch.body);
+                    }
+                    try stack.append(allocator, stmt.default_branch);
+                    if (stmt.continuation) |continuation| {
+                        try stack.append(allocator, continuation);
+                    }
+                },
+                .join => |stmt| {
+                    try stack.append(allocator, stmt.body);
+                    try stack.append(allocator, stmt.remainder);
+                },
+                inline .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .free => |stmt| {
+                    try stack.append(allocator, stmt.next);
+                },
+                .jump, .crash, .runtime_error, .loop_continue, .loop_break => {},
+            }
+        }
+    }
+
+    const seedLocal = struct {
+        fn go(
+            set: *std.bit_set.DynamicBitSetUnmanaged,
+            list: *std.ArrayList(u32),
+            alloc: Allocator,
+            rc: []const bool,
+            index: u32,
+        ) SolveError!void {
+            if (index >= rc.len or !rc[index]) return;
+            if (set.isSet(index)) return;
+            set.set(index);
+            try list.append(alloc, index);
+        }
+    }.go;
+
+    // Seeds: every pinned proc's parameters and returned values reach the
+    // host or a caller the solver cannot see.
+    for (store.proc_specs.items, 0..) |proc, proc_index| {
+        if (!pinned.isSet(proc_index)) continue;
+        for (store.getLocalSpan(proc.args)) |param| {
+            try seedLocal(&visible, &work, allocator, rc_local, @intFromEnum(param));
+        }
+        for (ret_values[proc_index].items) |value| {
+            try seedLocal(&visible, &work, allocator, rc_local, value);
+        }
+    }
+
+    // Same-allocation edges, collected flat: unreachable statements only add
+    // edges that widen the visible set, which is sound.
+    var edges = std.ArrayList([2]u32).empty;
+    defer edges.deinit(allocator);
+    const addEdge = struct {
+        fn go(
+            list: *std.ArrayList([2]u32),
+            alloc: Allocator,
+            rc: []const bool,
+            a: u32,
+            b: u32,
+        ) SolveError!void {
+            if (a >= rc.len or !rc[a]) return;
+            if (b >= rc.len or !rc[b]) return;
+            if (a == b) return;
+            try list.append(alloc, .{ a, b });
+            try list.append(alloc, .{ b, a });
+        }
+    }.go;
+
+    for (store.cf_stmts.items) |stmt| {
+        switch (stmt) {
+            .assign_ref => |assign| {
+                const target = @intFromEnum(assign.target);
+                switch (assign.op) {
+                    .local => |source| try addEdge(&edges, allocator, rc_local, target, @intFromEnum(source)),
+                    .list_reinterpret => |op| try addEdge(&edges, allocator, rc_local, target, @intFromEnum(op.backing_ref)),
+                    .nominal => |op| try addEdge(&edges, allocator, rc_local, target, @intFromEnum(op.backing_ref)),
+                    .field => |op| try addEdge(&edges, allocator, rc_local, target, @intFromEnum(op.source)),
+                    .tag_payload => |op| try addEdge(&edges, allocator, rc_local, target, @intFromEnum(op.source)),
+                    .tag_payload_struct => |op| try addEdge(&edges, allocator, rc_local, target, @intFromEnum(op.source)),
+                    .discriminant => {},
+                }
+            },
+            .assign_struct => |assign| {
+                for (store.getLocalSpan(assign.fields)) |field| {
+                    try addEdge(&edges, allocator, rc_local, @intFromEnum(assign.target), @intFromEnum(field));
+                }
+            },
+            .assign_list => |assign| {
+                for (store.getLocalSpan(assign.elems)) |elem| {
+                    try addEdge(&edges, allocator, rc_local, @intFromEnum(assign.target), @intFromEnum(elem));
+                }
+            },
+            .assign_tag => |assign| {
+                if (assign.payload) |payload| {
+                    try addEdge(&edges, allocator, rc_local, @intFromEnum(assign.target), @intFromEnum(payload));
+                }
+            },
+            .assign_packed_erased_fn => |assign| {
+                if (assign.capture) |capture| {
+                    try addEdge(&edges, allocator, rc_local, @intFromEnum(assign.target), @intFromEnum(capture));
+                }
+            },
+            .set_local => |assign| {
+                try addEdge(&edges, allocator, rc_local, @intFromEnum(assign.target), @intFromEnum(assign.value));
+            },
+            .assign_call => |assign| {
+                const callee = store.proc_specs.items[@intFromEnum(assign.proc)];
+                const args = store.getLocalSpan(assign.args);
+                if (callee.body == null) {
+                    // No body to flow through: everything at the boundary is
+                    // host-visible.
+                    for (args) |arg| {
+                        try seedLocal(&visible, &work, allocator, rc_local, @intFromEnum(arg));
+                    }
+                    try seedLocal(&visible, &work, allocator, rc_local, @intFromEnum(assign.target));
+                } else {
+                    const params = store.getLocalSpan(callee.args);
+                    for (args, 0..) |arg, position| {
+                        if (position >= params.len) break;
+                        try addEdge(&edges, allocator, rc_local, @intFromEnum(arg), @intFromEnum(params[position]));
+                    }
+                    for (ret_values[@intFromEnum(assign.proc)].items) |value| {
+                        try addEdge(&edges, allocator, rc_local, @intFromEnum(assign.target), value);
+                    }
+                }
+            },
+            .assign_call_erased => |assign| {
+                // The callee is unknown; the boundary is treated like a
+                // pinned signature.
+                try seedLocal(&visible, &work, allocator, rc_local, @intFromEnum(assign.closure));
+                for (store.getLocalSpan(assign.args)) |arg| {
+                    try seedLocal(&visible, &work, allocator, rc_local, @intFromEnum(arg));
+                }
+                try seedLocal(&visible, &work, allocator, rc_local, @intFromEnum(assign.target));
+            },
+            .assign_low_level => |assign| {
+                const target = @intFromEnum(assign.target);
+                if (assign.op == .erased_capture_load) {
+                    // The loaded capture shares the callable's allocation
+                    // through the executing frame, which value flow cannot
+                    // see; erased-callable procs are pinned, so the capture
+                    // is host-visible by construction.
+                    try seedLocal(&visible, &work, allocator, rc_local, target);
+                    continue;
+                }
+                const effect = assign.rc_effect;
+                const args = store.getLocalSpan(assign.args);
+                const share_mask = effect.result_aliases_consumed_args |
+                    effect.result_borrows_args |
+                    effect.retain_args |
+                    effect.result_shares_args;
+                if (share_mask != 0) {
+                    for (args, 0..) |arg, position| {
+                        if (position >= 64) break;
+                        const bit = @as(u64, 1) << @as(u6, @intCast(position));
+                        if ((share_mask & bit) == 0) continue;
+                        try addEdge(&edges, allocator, rc_local, target, @intFromEnum(arg));
+                    }
+                } else if (effect.consume_args == 0) {
+                    // The masks say nothing about this op; a refcounted
+                    // result conservatively shares every refcounted
+                    // argument's allocation.
+                    for (args) |arg| {
+                        try addEdge(&edges, allocator, rc_local, target, @intFromEnum(arg));
+                    }
+                }
+            },
+            else => {},
+        }
+    }
+
+    // Adjacency lists over the collected edges.
+    const out_lens = try allocator.alloc(u32, local_count);
+    defer allocator.free(out_lens);
+    @memset(out_lens, 0);
+    for (edges.items) |edge| out_lens[edge[0]] += 1;
+    const out_offsets = try allocator.alloc(u32, local_count);
+    defer allocator.free(out_offsets);
+    var total: u32 = 0;
+    for (out_lens, 0..) |len, index| {
+        out_offsets[index] = total;
+        total += len;
+    }
+    const out_edges = try allocator.alloc(u32, total);
+    defer allocator.free(out_edges);
+    const fill = try allocator.alloc(u32, local_count);
+    defer allocator.free(fill);
+    @memset(fill, 0);
+    for (edges.items) |edge| {
+        out_edges[out_offsets[edge[0]] + fill[edge[0]]] = edge[1];
+        fill[edge[0]] += 1;
+    }
+
+    // Propagate to a fixpoint.
+    while (work.pop()) |index| {
+        const start = out_offsets[index];
+        const len = out_lens[index];
+        for (out_edges[start .. start + len]) |neighbor| {
+            if (visible.isSet(neighbor)) continue;
+            visible.set(neighbor);
+            try work.append(allocator, neighbor);
+        }
+    }
+
+    return visible;
 }
 
 /// Tarjan strongly-connected components over the direct-call graph.

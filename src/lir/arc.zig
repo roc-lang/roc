@@ -160,7 +160,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
             else
                 variants.sigs.items[proc_index - solution.sigs.len];
         }
-        try arc_certify.certifyStoreOrPanic(store.allocator, store, layouts, .{ .sigs = all_sigs });
+        try arc_certify.certifyStoreOrPanic(store.allocator, store, layouts, .{ .sigs = all_sigs }, options.roots);
     }
 }
 
@@ -961,6 +961,7 @@ const Inserter = struct {
                     .value = rc.value,
                     .rc = rc.rc,
                     .count = rc.count,
+                    .atomicity = self.rcAtomicity(rc.value),
                     .next = next,
                 } });
             },
@@ -968,6 +969,7 @@ const Inserter = struct {
                 cloned = try self.store.addCFStmt(.{ .decref = .{
                     .value = rc.value,
                     .rc = rc.rc,
+                    .atomicity = self.rcAtomicity(rc.value),
                     .next = next,
                 } });
             },
@@ -975,6 +977,7 @@ const Inserter = struct {
                 cloned = try self.store.addCFStmt(.{ .free = .{
                     .value = rc.value,
                     .rc = rc.rc,
+                    .atomicity = self.rcAtomicity(rc.value),
                     .next = next,
                 } });
             },
@@ -2371,6 +2374,7 @@ const Inserter = struct {
             .value = local,
             .rc = rc,
             .count = 1,
+            .atomicity = self.rcAtomicity(local),
             .next = next,
         } });
     }
@@ -2381,8 +2385,16 @@ const Inserter = struct {
         return try self.store.addCFStmt(.{ .decref = .{
             .value = local,
             .rc = rc,
+            .atomicity = self.rcAtomicity(local),
             .next = next,
         } });
+    }
+
+    /// Count-update mode for RC statements on this local: plain loads and
+    /// stores when the visibility analysis proves no host thread can ever
+    /// touch the local's allocation, atomic otherwise.
+    fn rcAtomicity(self: *const Inserter, local: LIR.LocalId) LIR.RcAtomicity {
+        return if (self.solution.isVisible(local)) .atomic else .single_thread;
     }
 
     fn rcHelperForLocal(self: *const Inserter, op: layout_mod.RcOp, local: LIR.LocalId) layout_mod.RcHelper {
@@ -2539,6 +2551,7 @@ const ArcTest = struct {
     list_i64: layout_mod.Idx,
     box_str: layout_mod.Idx,
     pair_str: layout_mod.Idx,
+    pair_list: layout_mod.Idx,
     tag_str: layout_mod.Idx,
     next_join_point: u32 = 0,
 
@@ -2549,6 +2562,10 @@ const ArcTest = struct {
         const list_str = try layouts.insertList(.str);
         const list_i64 = try layouts.insertList(.i64);
         const box_str = try layouts.insertBox(.str);
+        const pair_list = try layouts.putStructFields(&[_]layout_mod.StructField{
+            .{ .index = 0, .layout = list_i64 },
+            .{ .index = 1, .layout = list_i64 },
+        });
         const pair_str = try layouts.putStructFields(&[_]layout_mod.StructField{
             .{ .index = 0, .layout = .str },
             .{ .index = 1, .layout = .str },
@@ -2564,6 +2581,7 @@ const ArcTest = struct {
             .layouts = layouts,
             .list_str = list_str,
             .list_i64 = list_i64,
+            .pair_list = pair_list,
             .box_str = box_str,
             .pair_str = pair_str,
             .tag_str = tag_str,
@@ -2784,6 +2802,21 @@ const ArcTest = struct {
             }
         }
         return count;
+    }
+
+    fn expectRcAtomicity(self: *const ArcTest, local_id: LIR.LocalId, expected: LIR.RcAtomicity) anyerror!void {
+        var seen: usize = 0;
+        for (self.store.cf_stmts.items) |stmt| {
+            const found: LIR.RcAtomicity = switch (stmt) {
+                .incref => |rc| if (rc.value == local_id) rc.atomicity else continue,
+                .decref => |rc| if (rc.value == local_id) rc.atomicity else continue,
+                .free => |rc| if (rc.value == local_id) rc.atomicity else continue,
+                else => continue,
+            };
+            seen += 1;
+            try testing.expectEqual(expected, found);
+        }
+        try testing.expect(seen > 0);
     }
 
     fn countAllRc(self: *const ArcTest) usize {
@@ -3659,6 +3692,78 @@ test "RC alias of a loop join parameter moves into the next join" {
     // into B's parameter, and B's body moves it back into A's parameter
     // through the alias. No retain or release belongs anywhere on the cycle.
     try testing.expectEqual(@as(usize, 0), f.countAllRc());
+}
+
+test "RC atomicity: confined values update counts single-threaded" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const list = try f.local(f.list_i64);
+    const pair = try f.local(f.pair_list);
+    const result = try f.local(.i64);
+
+    // list = []; pair = {list, list}; result = 1; ret result
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, 1, ret);
+    const pair_assign = try f.assignStruct(pair, &.{ list, list }, result_assign);
+    const body = try f.assignList(list, &.{}, pair_assign);
+    _ = try f.addProc(&.{}, body, .i64);
+
+    try f.run();
+    // No proc is a root and nothing reaches a host boundary, so every count
+    // update may use plain loads and stores.
+    try f.expectRcAtomicity(list, .single_thread);
+    try f.expectRcAtomicity(pair, .single_thread);
+}
+
+test "RC atomicity: root-returned values keep atomic counts" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const list = try f.local(f.list_i64);
+    const pair = try f.local(f.pair_list);
+
+    // list = []; pair = {list, list}; ret pair — the pair reaches the host
+    // through the root return, and the list is reachable from the pair.
+    const ret = try f.ret(pair);
+    const pair_assign = try f.assignStruct(pair, &.{ list, list }, ret);
+    const body = try f.assignList(list, &.{}, pair_assign);
+    const proc = try f.addProc(&.{}, body, f.pair_list);
+
+    try insert(&f.store, &f.layouts, .{ .roots = &.{proc} });
+    try f.expectRcAtomicity(list, .atomic);
+}
+
+test "RC atomicity: bodyless callee arguments keep atomic counts" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const list = try f.local(f.list_i64);
+    const alias = try f.local(f.list_i64);
+    const call_result = try f.local(.i64);
+    const result = try f.local(.i64);
+
+    const hosted = try f.store.addProcSpec(.{
+        .name = f.store.freshSyntheticSymbol(),
+        .args = try f.span(&.{}),
+        .body = null,
+        .ret_layout = .i64,
+    });
+
+    // list = []; alias = list; call hosted(list); expect(alias); ret 1 —
+    // the call's argument crosses a boundary the solver cannot see into.
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, 1, ret);
+    const use_alias = try f.expectStmt(alias, result_assign);
+    const call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = call_result,
+        .proc = hosted,
+        .args = try f.span(&.{list}),
+        .next = use_alias,
+    } });
+    const alias_assign = try f.assignRefLocal(alias, list, call);
+    const body = try f.assignList(list, &.{}, alias_assign);
+    _ = try f.addProc(&.{}, body, .i64);
+
+    try f.run();
+    try f.expectRcAtomicity(list, .atomic);
 }
 
 test "RC mutable iterator accumulator replace cleans old state" {

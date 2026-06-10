@@ -29,6 +29,7 @@ const std = @import("std");
 const core = @import("lir_core");
 const layout_mod = @import("layout");
 const arc_sig = @import("arc_sig.zig");
+const arc_solve = @import("arc_solve.zig");
 
 const LIR = core.LIR;
 const LirStore = core.LirStore;
@@ -78,6 +79,7 @@ pub fn certifyStore(
     store: *const LirStore,
     layouts: *const layout_mod.Store,
     sigs: arc_sig.SigTable,
+    roots: []const LIR.LirProcSpecId,
     diag: *Diagnostic,
 ) CertifyError!void {
     var rc_local = try allocator.alloc(bool, store.locals.items.len);
@@ -85,6 +87,8 @@ pub fn certifyStore(
     for (store.locals.items, 0..) |local, index| {
         rc_local[index] = layouts.layoutContainsRefcounted(layouts.getLayout(local.layout_idx));
     }
+
+    try certifyRcAtomicity(allocator, store, rc_local, roots, diag);
 
     var certifier = Certifier{
         .allocator = allocator,
@@ -109,14 +113,45 @@ pub fn certifyStore(
 
 /// Production wrapper: certifies and panics on violation. Callers gate this
 /// behind debug builds; release builds never run the certifier.
+/// Mirror of the host-visibility analysis: no single-thread RC statement may
+/// name a local that is flow-connected to a host-visibility seed.
+fn certifyRcAtomicity(
+    allocator: Allocator,
+    store: *const LirStore,
+    rc_local: []const bool,
+    roots: []const LIR.LirProcSpecId,
+    diag: *Diagnostic,
+) CertifyError!void {
+    var pinned = try arc_solve.computePinnedProcs(allocator, store, roots);
+    defer pinned.deinit(allocator);
+    var visible = try arc_solve.computeVisibility(allocator, store, rc_local, &pinned);
+    defer visible.deinit(allocator);
+
+    for (store.cf_stmts.items, 0..) |stmt, stmt_index| {
+        const checked: struct { value: LIR.LocalId, atomicity: LIR.RcAtomicity } = switch (stmt) {
+            .incref => |rc| .{ .value = rc.value, .atomicity = rc.atomicity },
+            .decref => |rc| .{ .value = rc.value, .atomicity = rc.atomicity },
+            .free => |rc| .{ .value = rc.value, .atomicity = rc.atomicity },
+            else => continue,
+        };
+        if (checked.atomicity == .atomic) continue;
+        const index = @intFromEnum(checked.value);
+        if (index < visible.capacity() and visible.isSet(index)) {
+            diag.set("stmt={d}: single-thread RC statement on host-visible local {d}", .{ stmt_index, index });
+            return error.Certification;
+        }
+    }
+}
+
 pub fn certifyStoreOrPanic(
     allocator: Allocator,
     store: *const LirStore,
     layouts: *const layout_mod.Store,
     sigs: arc_sig.SigTable,
+    roots: []const LIR.LirProcSpecId,
 ) Allocator.Error!void {
     var diag = Diagnostic{};
-    certifyStore(allocator, store, layouts, sigs, &diag) catch |err| switch (err) {
+    certifyStore(allocator, store, layouts, sigs, roots, &diag) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.Certification => {
             var context = FailureContext{};
@@ -1711,11 +1746,11 @@ const CertifyTest = struct {
     }
 
     fn certify(self: *CertifyTest) CertifyError!void {
-        return certifyStore(self.allocator, &self.store, &self.layouts, arc_sig.SigTable.all_owned, &self.diag);
+        return certifyStore(self.allocator, &self.store, &self.layouts, arc_sig.SigTable.all_owned, &.{}, &self.diag);
     }
 
     fn certifyWith(self: *CertifyTest, sigs: arc_sig.SigTable) CertifyError!void {
-        return certifyStore(self.allocator, &self.store, &self.layouts, sigs, &self.diag);
+        return certifyStore(self.allocator, &self.store, &self.layouts, sigs, &.{}, &self.diag);
     }
 };
 
