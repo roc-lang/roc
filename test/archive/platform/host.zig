@@ -112,6 +112,12 @@ fn hostedHostDouble(n: i64) callconv(.c) i64 {
     return n * 2;
 }
 
+// Under the symbol ABI, compiled Roc code calls hosted functions directly
+// through their platform-header symbols.
+comptime {
+    @export(&hostedHostDouble, .{ .name = "roc_host_double" });
+}
+
 // Hosted functions sorted alphabetically by Module.fn_name (trailing ! stripped).
 const hosted_function_ptrs = [_]builtins.host_abi.HostedFn{
     builtins.host_abi.hostedFn(&hostedHostDouble), // Host.double! (index 0)

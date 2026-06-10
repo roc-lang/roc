@@ -137,6 +137,10 @@ pub const MonoLlvmCodeGen = struct {
     data_layout: []const u8,
     builtin_symbol_mode: BuiltinSymbolMode = .bitcode,
     proc_symbol_mode: ProcSymbolMode = .local_index,
+    /// How generated code reaches the host: through the RocOps vtable (the
+    /// eval JIT, which passes a live RocOps at runtime) or through
+    /// linker-resolved extern symbols (all linked output).
+    host_call_mode: builtins.host_abi.HostCallMode = .vtable,
     store: *const lir.LirStore,
 
     /// Layout store for resolving composite type layouts (records, tuples).
@@ -270,9 +274,12 @@ pub const MonoLlvmCodeGen = struct {
 
     /// Initializes the backend for a relocatable object linked with target builtins.
     pub fn initForLinkedObject(allocator: Allocator, store: *const lir.LirStore, target: std.Target) MonoLlvmCodeGen {
+        // Linked objects use the symbol ABI: hosted functions are direct
+        // extern calls and no RocOps reaches compiled code from the host.
         var self = initWithTarget(allocator, store, target);
         self.builtin_symbol_mode = .native_object;
         self.proc_symbol_mode = .lir_symbol;
+        self.host_call_mode = .extern_symbols;
         return self;
     }
 
@@ -608,7 +615,7 @@ pub const MonoLlvmCodeGen = struct {
         defer self.allocator.free(arg_ptrs);
         for (params, arg_ptrs) |param, *p| p.* = self.slot(param).ptr;
         const ret_ptr = self.ret_ptr_arg orelse return error.CompilationFailed;
-        try self.emitHostedCallCAbi(hosted.dispatch_index, arg_ptrs, arg_layouts, ret_ptr, proc.ret_layout);
+        try self.emitHostedCallCAbi(hosted, arg_ptrs, arg_layouts, ret_ptr, proc.ret_layout);
         const wip = self.wip orelse return error.CompilationFailed;
         _ = wip.retVoid() catch return error.OutOfMemory;
     }
@@ -856,7 +863,7 @@ pub const MonoLlvmCodeGen = struct {
             const arg_ptrs = try self.allocator.alloc(LlvmBuilder.Value, arg_locals.len);
             defer self.allocator.free(arg_ptrs);
             for (arg_locals, arg_ptrs) |arg_local, *p| p.* = self.slot(arg_local).ptr;
-            try self.emitHostedCallCAbi(hosted.dispatch_index, arg_ptrs, arg_layouts, self.slot(target).ptr, self.localLayout(target));
+            try self.emitHostedCallCAbi(hosted, arg_ptrs, arg_layouts, self.slot(target).ptr, self.localLayout(target));
             return;
         }
 
@@ -3575,7 +3582,7 @@ pub const MonoLlvmCodeGen = struct {
     /// is written into `ret_ptr` (used directly as the sret pointer for memory-class returns).
     fn emitHostedCallCAbi(
         self: *MonoLlvmCodeGen,
-        dispatch_index: u32,
+        hosted: lir.LIR.HostedProc,
         arg_ptrs: []const LlvmBuilder.Value,
         arg_layouts: []const layout.Idx,
         ret_ptr: LlvmBuilder.Value,
@@ -3589,7 +3596,10 @@ pub const MonoLlvmCodeGen = struct {
         defer arena_state.deinit();
         const arena = arena_state.allocator();
 
-        const needs_ops = layout.abi.needsRocOps(self.layouts(), arg_layouts, ret_layout);
+        // Under the symbol ABI the host reaches its own runtime operations
+        // directly, so hosted functions never take a leading *RocOps.
+        const needs_ops = self.host_call_mode == .vtable and
+            layout.abi.needsRocOps(self.layouts(), arg_layouts, ret_layout);
         const lowered = layout.abi.lower(arena, self.layouts(), self.abiTarget(), arg_layouts, ret_layout, needs_ops) catch return error.OutOfMemory;
 
         var param_types = std.ArrayList(LlvmBuilder.Type).empty;
@@ -3654,14 +3664,21 @@ pub const MonoLlvmCodeGen = struct {
             }
         }
 
-        const table_ptr_ptr = try self.offsetPtr(self.rocOps(), self.rocOpsHostedFnsPtrOffset());
-        const table_ptr = try self.loadPointer(table_ptr_ptr);
-        const fn_ptr_ptr = try self.offsetPtr(table_ptr, dispatch_index * self.targetWordSize());
-        const fn_ptr = try self.loadPointer(fn_ptr_ptr);
-
         const fn_ty = builder.fnType(ret_ty, param_types.items, .normal) catch return error.OutOfMemory;
         const attrs = attrs_wip.finish(builder) catch return error.OutOfMemory;
-        const result = wip.call(.normal, .ccc, attrs, fn_ty, fn_ptr, call_args.items, "") catch return error.OutOfMemory;
+        const callee = switch (self.host_call_mode) {
+            .vtable => blk: {
+                const table_ptr_ptr = try self.offsetPtr(self.rocOps(), self.rocOpsHostedFnsPtrOffset());
+                const table_ptr = try self.loadPointer(table_ptr_ptr);
+                const fn_ptr_ptr = try self.offsetPtr(table_ptr, hosted.dispatch_index * self.targetWordSize());
+                break :blk try self.loadPointer(fn_ptr_ptr);
+            },
+            .extern_symbols => blk: {
+                const func = try self.declareHostSymbol(self.store.getString(hosted.symbol), fn_ty);
+                break :blk func.toValue(builder);
+            },
+        };
+        const result = wip.call(.normal, .ccc, attrs, fn_ty, callee, call_args.items, "") catch return error.OutOfMemory;
 
         // Register return: store each piece back into the result slot at its byte offset.
         if (ret_pieces.len > 0) {
@@ -3706,6 +3723,19 @@ pub const MonoLlvmCodeGen = struct {
         // object, so non-inlined calls still resolve against roc_builtins.o at link.
         const fn_name = builder.strtabString(name) catch return error.OutOfMemory;
         const func = builder.addFunction(fn_ty, fn_name, .default) catch return error.OutOfMemory;
+        try self.builtin_functions.put(name, func);
+        return func;
+    }
+
+    /// Declare (once) a host-provided function under its literal linker symbol.
+    /// Weak linkage breaks the app/host reference cycle: the symbol resolves at
+    /// the end of the link against whichever host object defines it.
+    fn declareHostSymbol(self: *MonoLlvmCodeGen, name: []const u8, fn_ty: LlvmBuilder.Type) Error!LlvmBuilder.Function.Index {
+        const builder = self.builder orelse return error.CompilationFailed;
+        if (self.builtin_functions.get(name)) |func| return func;
+        const fn_name = builder.strtabString(name) catch return error.OutOfMemory;
+        const func = builder.addFunction(fn_ty, fn_name, .default) catch return error.OutOfMemory;
+        func.setLinkage(.extern_weak, builder);
         try self.builtin_functions.put(name, func);
         return func;
     }
