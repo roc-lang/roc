@@ -3,6 +3,7 @@ platform ""
     exposes [Echo]
     packages {}
     provides { "roc_main": main_for_host! }
+    hosted { "roc_echo_line": Echo.line! }
 
 import Echo
 

@@ -3,6 +3,7 @@ platform ""
     exposes [Effect]
     packages {}
     provides { "roc_main": main_for_host! }
+    hosted { "roc_effect_things": Effect.things! }
     targets: {
         inputs: "../../fx/platform/targets/",
         arm64mac: { inputs: ["libhost.a", app] },

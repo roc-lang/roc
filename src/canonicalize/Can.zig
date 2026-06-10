@@ -3564,6 +3564,7 @@ pub fn canonicalizeFile(
             // These need to be in the exposed scope so they become exports
             // Platform provides uses curly braces { main_for_host! } so it's parsed as record fields
             try self.addPlatformProvidesItems(h.provides);
+            try self.addPlatformHostedItems(h.hosted);
             // Extract required type signatures for type checking using the new for-clause syntax
             // This stores the types in env.requires_types without creating local definitions
             // Also introduces type aliases (like Model) into the platform's top-level scope
@@ -4666,6 +4667,31 @@ fn addToExposedScope(
 }
 
 /// Add platform provides items to the exposed scope.
+/// Platform hosted maps linker symbol strings to hosted functions in the
+/// platform's exposed type modules: hosted { "roc_stdout_line": Stdout.line! }
+/// Entries are stored in declaration order, which defines hosted dispatch order.
+fn addPlatformHostedItems(
+    self: *Self,
+    hosted: AST.SymbolMapEntry.Span,
+) std.mem.Allocator.Error!void {
+    const gpa = self.env.gpa;
+
+    for (self.parse_ir.store.symbolMapEntrySlice(hosted)) |entry_idx| {
+        const entry = self.parse_ir.store.getSymbolMapEntry(entry_idx);
+        const func_ident = self.parse_ir.tokens.resolveIdentifier(entry.func) orelse continue;
+        const module_ident = if (entry.module) |module_tok|
+            self.parse_ir.tokens.resolveIdentifier(module_tok)
+        else
+            null;
+        const symbol_idx = try self.env.insertString(self.parse_ir.resolve(entry.symbol));
+        _ = try self.env.hosted_entries.append(gpa, .{
+            .module_ident = module_ident,
+            .func_ident = func_ident,
+            .symbol = symbol_idx,
+        });
+    }
+}
+
 /// Platform provides maps linker symbol strings to platform functions:
 /// provides { "roc_main": main_for_host! }
 /// The string is the literal symbol the app object exports for the host.
