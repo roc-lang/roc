@@ -2755,7 +2755,7 @@ const ArcTest = struct {
             .body = null,
             .ret_layout = ret_layout,
             .hosted = .{
-                .external_symbol_name = @enumFromInt(1),
+                .symbol = @enumFromInt(0),
                 .dispatch_index = 0,
             },
         });
