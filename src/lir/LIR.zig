@@ -214,6 +214,16 @@ pub const ProcAbi = enum {
     erased_callable,
 };
 
+/// Which tail-recursion rewrite the TRMC pass (src/lir/trmc.zig) applied to a
+/// proc. Consumed by debug output (ROC_PRINT_TRMC), test assertions, and the
+/// interpreter's debug validator (null box pointers are legal in-flight holes
+/// only inside `.trmc` procs).
+pub const TailTransform = enum(u8) {
+    none,
+    trmc,
+    tce,
+};
+
 /// Single statement/control-flow language for all lowered code.
 pub const CFStmt = union(enum) {
     assign_ref: struct {
@@ -342,6 +352,8 @@ pub const LirProcSpec = struct {
     abi: ProcAbi = .roc,
     /// Hosted call ABI metadata, when this proc is provided by the platform.
     hosted: ?HostedProc = null,
+    /// Tail-recursion rewrite applied by the TRMC pass, if any.
+    tail_transform: TailTransform = .none,
 };
 
 /// Identifier of a stored LirPattern.

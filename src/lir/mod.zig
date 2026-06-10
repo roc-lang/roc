@@ -17,6 +17,10 @@ pub const Program = core.Program;
 pub const CheckedPipeline = @import("checked_pipeline.zig");
 /// Mechanical ARC insertion over explicit LIR values and control flow.
 pub const Arc = @import("arc.zig");
+/// Tail recursion modulo constructor + plain tail-call elimination.
+pub const Trmc = @import("trmc.zig");
+/// Compact textual LIR dumps for golden tests and debug flags.
+pub const DebugPrint = @import("debug_print.zig");
 /// Shared-memory ARC-inserted LIR image for interpreter-shim execution.
 pub const LirImage = @import("lir_image.zig");
 

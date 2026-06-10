@@ -1,0 +1,911 @@
+//! Tail Recursion Modulo Constructor (TRMC) and plain tail-call elimination.
+//!
+//! Runs over the LIR after SolvedLirLower and before Arc.insert (see
+//! TRMC_PLAN.md). For each self-recursive proc it either:
+//!
+//! - applies TRMC, when at least one recursive call's result flows directly
+//!   into a constructor of the proc's (recursive tag-union) return type that
+//!   is itself returned: the proc becomes a join-point loop threading a
+//!   `hole: ptr(Ret)` (where the next child value will be written) and a
+//!   `head: ptr(Ret)` (the eventual result slot). Plain tail self-calls in
+//!   the same proc also become jumps; or
+//! - applies plain TCE, when the proc has tail self-calls but no constructor
+//!   candidates; or
+//! - leaves the proc untouched.
+//!
+//! Debug flags (zero cost when unset):
+//! - ROC_PRINT_TRMC=1: one line per transformed proc on stderr.
+//! - ROC_PRINT_IR_AFTER_TRMC=1: full IR dump of each transformed proc.
+
+const std = @import("std");
+const builtin = @import("builtin");
+const Allocator = std.mem.Allocator;
+const core = @import("lir_core");
+const layout_mod = @import("layout");
+const debug_print = @import("debug_print.zig");
+
+const LIR = core.LIR;
+const LirStore = core.LirStore;
+const LocalId = LIR.LocalId;
+const CFStmtId = LIR.CFStmtId;
+const JoinPointId = LIR.JoinPointId;
+const LowLevelOp = LIR.LowLevel;
+
+pub const ResourceError = std.mem.Allocator.Error;
+
+/// Apply TRMC/TCE to every eligible proc in the store.
+pub fn run(store: *LirStore, layouts: *layout_mod.Store) ResourceError!void {
+    const print_transforms = debugFlagEnabled("ROC_PRINT_TRMC");
+    const print_ir = debugFlagEnabled("ROC_PRINT_IR_AFTER_TRMC");
+
+    const proc_count = store.proc_specs.items.len;
+    var proc_index: usize = 0;
+    while (proc_index < proc_count) : (proc_index += 1) {
+        const proc_id: LIR.LirProcSpecId = @enumFromInt(proc_index);
+        try transformProc(store, layouts, proc_id, print_transforms, print_ir);
+    }
+}
+
+fn transformProc(
+    store: *LirStore,
+    layouts: *layout_mod.Store,
+    proc_id: LIR.LirProcSpecId,
+    print_transforms: bool,
+    print_ir: bool,
+) ResourceError!void {
+    const proc = store.getProcSpec(proc_id);
+    if (proc.body == null or proc.hosted != null or proc.abi != .roc) return;
+
+    var detection = Detection.init(store.allocator, store, layouts, proc_id);
+    defer detection.deinit();
+    try detection.detect();
+    if (detection.bail) return;
+
+    var construct_count: usize = 0;
+    var tail_count: usize = 0;
+    for (detection.candidates.items) |candidate| {
+        switch (candidate.state) {
+            .confirmed_construct => construct_count += 1,
+            .confirmed_tail => tail_count += 1,
+            else => {},
+        }
+    }
+
+    if (construct_count > 0) {
+        var transform = Transform.init(store.allocator, store, layouts, proc_id, &detection);
+        defer transform.deinit();
+        try transform.applyTrmc();
+        store.getProcSpecPtr(proc_id).tail_transform = .trmc;
+    } else if (tail_count > 0) {
+        var transform = Transform.init(store.allocator, store, layouts, proc_id, &detection);
+        defer transform.deinit();
+        try transform.applyTce();
+        store.getProcSpecPtr(proc_id).tail_transform = .tce;
+    } else {
+        return;
+    }
+
+    if (print_transforms) {
+        const transformed = store.getProcSpec(proc_id);
+        std.debug.print("{s}: proc p{d} ({d} construct sites, {d} tail calls)\n", .{
+            @tagName(transformed.tail_transform),
+            @intFromEnum(proc_id),
+            construct_count,
+            tail_count,
+        });
+    }
+    if (print_ir) {
+        dumpProc(store, layouts, proc_id);
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Detection
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// How a statement is reached: the unique incoming reference the transform can
+/// redirect to splice statements out of the graph.
+const Edge = union(enum) {
+    proc_body,
+    stmt_next: CFStmtId,
+    join_body: CFStmtId,
+    join_remainder: CFStmtId,
+    switch_branch: struct { stmt: CFStmtId, index: u16 },
+    switch_default: CFStmtId,
+    switch_continuation: CFStmtId,
+};
+
+const CandidateState = enum {
+    /// Call result tracked; no use seen yet.
+    active,
+    /// Result was heap-celled by box_box into the chain's box local.
+    boxed,
+    /// Box local placed (exactly once) into a payload struct.
+    in_struct,
+    /// Payload reached an assign_tag of the return layout (possibly followed
+    /// by alias hops).
+    tagged,
+    confirmed_construct,
+    confirmed_tail,
+    invalid,
+};
+
+const max_chain = 8;
+const max_alias_stmts = 4;
+const max_candidates = 64;
+
+const Candidate = struct {
+    state: CandidateState,
+    /// Value-flow chain: call result, box cell, payload struct, tag value,
+    /// then alias hops. `chain[chain_len - 1]` is the local currently tracked.
+    chain: [max_chain]LocalId,
+    chain_len: u8,
+    call_stmt: CFStmtId,
+    call_edge: Edge,
+    call_args: LIR.LocalSpan,
+    /// The box_box statement (rewritten to box_alloc_zeroed). Valid from .boxed.
+    box_stmt: CFStmtId,
+    /// The assign_tag target — what gets stored through the hole. Valid from .tagged.
+    head_local: LocalId,
+    /// Alias-hop statements after the tag (unlinked on the rewritten path),
+    /// with their incoming edges as recorded during the walk.
+    alias_stmts: [max_alias_stmts]CFStmtId,
+    alias_edges: [max_alias_stmts]Edge,
+    alias_len: u8,
+    /// The `ret`/`jump` terminal the rewrite overwrites. Valid when confirmed.
+    terminal_stmt: CFStmtId,
+
+    fn current(self: *const Candidate) LocalId {
+        return self.chain[self.chain_len - 1];
+    }
+
+    fn chainContains(self: *const Candidate, local: LocalId) bool {
+        for (self.chain[0..self.chain_len]) |tracked| {
+            if (tracked == local) return true;
+        }
+        return false;
+    }
+
+    fn push(self: *Candidate, local: LocalId) bool {
+        if (self.chain_len == max_chain) return false;
+        self.chain[self.chain_len] = local;
+        self.chain_len += 1;
+        return true;
+    }
+};
+
+const JoinInfo = struct {
+    params: LIR.LocalSpan,
+    body: CFStmtId,
+};
+
+const Detection = struct {
+    gpa: Allocator,
+    store: *LirStore,
+    layouts: *const layout_mod.Store,
+    proc_id: LIR.LirProcSpecId,
+    /// Whether the proc's return layout permits TRMC candidates at all.
+    eligible_trmc: bool = false,
+    /// Set when the proc exceeds a pass limit; the proc is left untouched.
+    bail: bool = false,
+    candidates: std.ArrayList(Candidate),
+    /// Every original `ret` statement (epilogue-rewritten by TRMC).
+    rets: std.ArrayList(CFStmtId),
+    joins: std.AutoHashMap(JoinPointId, JoinInfo),
+    max_join_id: u32 = 0,
+
+    fn init(gpa: Allocator, store: *LirStore, layouts: *const layout_mod.Store, proc_id: LIR.LirProcSpecId) Detection {
+        return .{
+            .gpa = gpa,
+            .store = store,
+            .layouts = layouts,
+            .proc_id = proc_id,
+            .candidates = .empty,
+            .rets = .empty,
+            .joins = std.AutoHashMap(JoinPointId, JoinInfo).init(gpa),
+        };
+    }
+
+    fn deinit(self: *Detection) void {
+        self.candidates.deinit(self.gpa);
+        self.rets.deinit(self.gpa);
+        self.joins.deinit();
+    }
+
+    fn detect(self: *Detection) ResourceError!void {
+        const proc = self.store.getProcSpec(self.proc_id);
+        const ret_layout_val = self.layouts.getLayout(proc.ret_layout);
+        self.eligible_trmc = ret_layout_val.tag == .tag_union;
+
+        try self.collectJoinsAndRets(proc.body.?);
+        try self.walkCandidates(proc.body.?);
+    }
+
+    /// First pass: record every join point (for returnsLocal chasing), every
+    /// ret statement, and the highest join id (the wrapper join uses max + 1).
+    fn collectJoinsAndRets(self: *Detection, body: CFStmtId) ResourceError!void {
+        var work = std.ArrayList(CFStmtId).empty;
+        defer work.deinit(self.gpa);
+        var visited = std.AutoHashMap(CFStmtId, void).init(self.gpa);
+        defer visited.deinit();
+
+        try work.append(self.gpa, body);
+        while (work.pop()) |stmt_id| {
+            const entry = try visited.getOrPut(stmt_id);
+            if (entry.found_existing) continue;
+
+            switch (self.store.getCFStmt(stmt_id)) {
+                .join => |s| {
+                    try self.joins.put(s.id, .{ .params = s.params, .body = s.body });
+                    self.max_join_id = @max(self.max_join_id, @intFromEnum(s.id));
+                    try work.append(self.gpa, s.body);
+                    try work.append(self.gpa, s.remainder);
+                },
+                .switch_stmt => |s| {
+                    for (self.store.getCFSwitchBranches(s.branches)) |branch| {
+                        try work.append(self.gpa, branch.body);
+                    }
+                    try work.append(self.gpa, s.default_branch);
+                    if (s.continuation) |continuation| try work.append(self.gpa, continuation);
+                },
+                .ret => try self.rets.append(self.gpa, stmt_id),
+                .jump, .crash, .runtime_error, .loop_continue, .loop_break => {},
+                inline .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .free => |s| {
+                    try work.append(self.gpa, s.next);
+                },
+            }
+        }
+    }
+
+    /// Does jumping to `target` ultimately return `local`? True when the join
+    /// has exactly `local` as its single param and its body (chasing through
+    /// same-param forwarding jumps) is `ret local`.
+    fn returnsLocal(self: *const Detection, target: JoinPointId, local: LocalId) bool {
+        var join = self.joins.get(target) orelse return false;
+        var steps: usize = 0;
+        const limit = self.joins.count() + 1;
+        while (steps < limit) : (steps += 1) {
+            const params = self.store.getLocalSpan(join.params);
+            if (params.len != 1 or params[0] != local) return false;
+            switch (self.store.getCFStmt(join.body)) {
+                .ret => |s| return s.value == local,
+                .jump => |s| join = self.joins.get(s.target) orelse return false,
+                else => return false,
+            }
+        }
+        return false;
+    }
+
+    /// Second pass: the candidate walk. One shared mutable candidate set
+    /// across all branches (matching the old Rust pass): a candidate confirmed
+    /// on one path is invalidated retroactively if any other statement uses a
+    /// chain local. Join bodies are walked before remainders so a done-join's
+    /// `ret res` is seen before any branch makes `res` a tracked alias.
+    fn walkCandidates(self: *Detection, body: CFStmtId) ResourceError!void {
+        const WorkItem = struct { stmt: CFStmtId, edge: Edge };
+        var work = std.ArrayList(WorkItem).empty;
+        defer work.deinit(self.gpa);
+        var visited = std.AutoHashMap(CFStmtId, void).init(self.gpa);
+        defer visited.deinit();
+
+        try work.append(self.gpa, .{ .stmt = body, .edge = .proc_body });
+        while (work.pop()) |item| {
+            const entry = try visited.getOrPut(item.stmt);
+            if (entry.found_existing) continue;
+
+            const stmt = self.store.getCFStmt(item.stmt);
+            try self.processStmt(item.stmt, item.edge, stmt);
+            if (self.bail) return;
+
+            switch (stmt) {
+                .join => |s| {
+                    // Pushed in reverse pop order: body is processed first.
+                    try work.append(self.gpa, .{ .stmt = s.remainder, .edge = .{ .join_remainder = item.stmt } });
+                    try work.append(self.gpa, .{ .stmt = s.body, .edge = .{ .join_body = item.stmt } });
+                },
+                .switch_stmt => |s| {
+                    if (s.continuation) |continuation| {
+                        try work.append(self.gpa, .{ .stmt = continuation, .edge = .{ .switch_continuation = item.stmt } });
+                    }
+                    try work.append(self.gpa, .{ .stmt = s.default_branch, .edge = .{ .switch_default = item.stmt } });
+                    const branches = self.store.getCFSwitchBranches(s.branches);
+                    var i = branches.len;
+                    while (i > 0) {
+                        i -= 1;
+                        try work.append(self.gpa, .{ .stmt = branches[i].body, .edge = .{ .switch_branch = .{ .stmt = item.stmt, .index = @intCast(i) } } });
+                    }
+                },
+                .jump, .ret, .crash, .runtime_error, .loop_continue, .loop_break => {},
+                inline .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .free => |s| {
+                    try work.append(self.gpa, .{ .stmt = s.next, .edge = .{ .stmt_next = item.stmt } });
+                },
+            }
+        }
+    }
+
+    fn processStmt(self: *Detection, stmt_id: CFStmtId, edge: Edge, stmt: LIR.CFStmt) ResourceError!void {
+        // Advance or invalidate every live candidate.
+        for (self.candidates.items) |*candidate| {
+            if (candidate.state == .invalid) continue;
+            if (self.blessedTransition(candidate, stmt_id, edge, stmt)) continue;
+            if (self.stmtTouchesChain(stmt, candidate)) {
+                candidate.state = .invalid;
+            }
+        }
+
+        // A self-call starts a new candidate (after the use checks above, so
+        // its arguments invalidate any candidate locals they mention).
+        if (stmt == .assign_call and stmt.assign_call.proc == self.proc_id) {
+            if (self.candidates.items.len == max_candidates) {
+                self.bail = true;
+                return;
+            }
+            var candidate = Candidate{
+                .state = .active,
+                .chain = undefined,
+                .chain_len = 0,
+                .call_stmt = stmt_id,
+                .call_edge = edge,
+                .call_args = stmt.assign_call.args,
+                .box_stmt = undefined,
+                .head_local = undefined,
+                .alias_stmts = undefined,
+                .alias_edges = undefined,
+                .alias_len = 0,
+                .terminal_stmt = undefined,
+            };
+            _ = candidate.push(stmt.assign_call.target);
+            try self.candidates.append(self.gpa, candidate);
+        }
+    }
+
+    /// Returns true when `stmt` is the unique blessed next step for this
+    /// candidate (and advances it).
+    fn blessedTransition(self: *Detection, candidate: *Candidate, stmt_id: CFStmtId, edge: Edge, stmt: LIR.CFStmt) bool {
+        switch (stmt) {
+            .assign_low_level => |s| {
+                if (candidate.state != .active) return false;
+                if (s.op != .box_box) return false;
+                const args = self.store.getLocalSpan(s.args);
+                if (args.len != 1 or args[0] != candidate.current()) return false;
+                if (!self.eligible_trmc) return false;
+                if (!self.isBoxOfRetLayout(s.target)) return false;
+                if (!candidate.push(s.target)) {
+                    candidate.state = .invalid;
+                    return true;
+                }
+                candidate.box_stmt = stmt_id;
+                candidate.state = .boxed;
+                return true;
+            },
+            .assign_struct => |s| {
+                if (candidate.state != .boxed) return false;
+                var occurrences: usize = 0;
+                for (self.store.getLocalSpan(s.fields)) |field| {
+                    if (field == candidate.current()) occurrences += 1;
+                }
+                if (occurrences == 0) return false;
+                if (occurrences > 1) {
+                    // The cell may appear in a constructor exactly once; a
+                    // duplicate would alias the hole.
+                    candidate.state = .invalid;
+                    return true;
+                }
+                if (!candidate.push(s.target)) {
+                    candidate.state = .invalid;
+                    return true;
+                }
+                candidate.state = .in_struct;
+                return true;
+            },
+            .assign_tag => |s| {
+                const payload = s.payload orelse return false;
+                // The usual shape boxes into a payload struct; accept the cell
+                // as a direct payload defensively.
+                if (candidate.state != .in_struct and candidate.state != .boxed) return false;
+                if (payload != candidate.current()) return false;
+                if (!self.isRetLayoutLocal(s.target)) {
+                    candidate.state = .invalid;
+                    return true;
+                }
+                if (!candidate.push(s.target)) {
+                    candidate.state = .invalid;
+                    return true;
+                }
+                candidate.head_local = s.target;
+                candidate.state = .tagged;
+                return true;
+            },
+            .assign_ref => |s| {
+                if (candidate.state != .tagged) return false;
+                const source = switch (s.op) {
+                    .local => |src| src,
+                    .nominal => |n| n.backing_ref,
+                    .list_reinterpret => |l| l.backing_ref,
+                    else => return false,
+                };
+                if (source != candidate.current()) return false;
+                if (candidate.alias_len == max_alias_stmts or !candidate.push(s.target)) {
+                    candidate.state = .invalid;
+                    return true;
+                }
+                candidate.alias_stmts[candidate.alias_len] = stmt_id;
+                candidate.alias_edges[candidate.alias_len] = edge;
+                candidate.alias_len += 1;
+                return true;
+            },
+            .ret => |s| {
+                if (s.value != candidate.current()) return false;
+                return self.confirmAtTerminal(candidate, stmt_id);
+            },
+            .jump => |s| {
+                if (!self.returnsLocal(s.target, candidate.current())) return false;
+                return self.confirmAtTerminal(candidate, stmt_id);
+            },
+            else => return false,
+        }
+    }
+
+    fn confirmAtTerminal(self: *Detection, candidate: *Candidate, stmt_id: CFStmtId) bool {
+        _ = self;
+        switch (candidate.state) {
+            .active => {
+                candidate.terminal_stmt = stmt_id;
+                candidate.state = .confirmed_tail;
+                return true;
+            },
+            .tagged => {
+                candidate.terminal_stmt = stmt_id;
+                candidate.state = .confirmed_construct;
+                return true;
+            },
+            // Returning a half-built chain (the bare cell or payload struct)
+            // is not a use we can rewrite.
+            .boxed, .in_struct => {
+                candidate.state = .invalid;
+                return true;
+            },
+            else => return false,
+        }
+    }
+
+    fn isBoxOfRetLayout(self: *const Detection, local: LocalId) bool {
+        const local_layout = self.layouts.getLayout(self.store.getLocal(local).layout_idx);
+        if (local_layout.tag != .box) return false;
+        const inner = self.layouts.getLayout(local_layout.getIdx());
+        const ret_layout = self.layouts.getLayout(self.store.getProcSpec(self.proc_id).ret_layout);
+        return inner.eql(ret_layout);
+    }
+
+    fn isRetLayoutLocal(self: *const Detection, local: LocalId) bool {
+        const local_layout = self.layouts.getLayout(self.store.getLocal(local).layout_idx);
+        const ret_layout = self.layouts.getLayout(self.store.getProcSpec(self.proc_id).ret_layout);
+        return local_layout.eql(ret_layout);
+    }
+
+    /// Any read of a chain local (or write over one mid-chain) outside the
+    /// blessed transitions permanently invalidates the candidate.
+    fn stmtTouchesChain(self: *const Detection, stmt: LIR.CFStmt, candidate: *const Candidate) bool {
+        const c = candidate;
+        return switch (stmt) {
+            .assign_ref => |s| switch (s.op) {
+                .local => |src| c.chainContains(src),
+                .discriminant => |d| c.chainContains(d.source),
+                .field => |f| c.chainContains(f.source),
+                .tag_payload => |t| c.chainContains(t.source),
+                .tag_payload_struct => |t| c.chainContains(t.source),
+                .list_reinterpret => |l| c.chainContains(l.backing_ref),
+                .nominal => |n| c.chainContains(n.backing_ref),
+            },
+            .assign_literal, .assign_packed_erased_fn => false,
+            .assign_call => |s| self.spanTouchesChain(s.args, c),
+            .assign_call_erased => |s| c.chainContains(s.closure) or self.spanTouchesChain(s.args, c),
+            .assign_low_level => |s| self.spanTouchesChain(s.args, c),
+            .assign_list => |s| self.spanTouchesChain(s.elems, c),
+            .assign_struct => |s| self.spanTouchesChain(s.fields, c),
+            .assign_tag => |s| if (s.payload) |payload| c.chainContains(payload) else false,
+            // Reading the value is a use; overwriting a tracked local would
+            // corrupt the chain, so treat that as disqualifying too.
+            .set_local => |s| c.chainContains(s.value) or c.chainContains(s.target),
+            .debug => |s| c.chainContains(s.message),
+            .expect => |s| c.chainContains(s.condition),
+            .incref => |s| c.chainContains(s.value),
+            .decref => |s| c.chainContains(s.value),
+            .free => |s| c.chainContains(s.value),
+            .switch_stmt => |s| c.chainContains(s.cond),
+            .ret => |s| c.chainContains(s.value),
+            .jump, .crash, .runtime_error, .loop_continue, .loop_break, .join => false,
+        };
+    }
+
+    fn spanTouchesChain(self: *const Detection, span: LIR.LocalSpan, candidate: *const Candidate) bool {
+        for (self.store.getLocalSpan(span)) |local| {
+            if (candidate.chainContains(local)) return true;
+        }
+        return false;
+    }
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Transform
+// ═══════════════════════════════════════════════════════════════════════════
+
+const Transform = struct {
+    gpa: Allocator,
+    store: *LirStore,
+    layouts: *layout_mod.Store,
+    proc_id: LIR.LirProcSpecId,
+    detection: *const Detection,
+    /// Every local created by the transform, merged into frame_locals at the end.
+    new_locals: std.ArrayList(LocalId),
+    /// Owned copy of the original proc arg locals; they become the loop join's
+    /// params while fresh locals take their place as proc args.
+    old_args: []LocalId,
+    join_id: JoinPointId,
+    hole: LocalId = undefined,
+    head: LocalId = undefined,
+
+    fn init(gpa: Allocator, store: *LirStore, layouts: *layout_mod.Store, proc_id: LIR.LirProcSpecId, detection: *const Detection) Transform {
+        return .{
+            .gpa = gpa,
+            .store = store,
+            .layouts = layouts,
+            .proc_id = proc_id,
+            .detection = detection,
+            .new_locals = .empty,
+            .old_args = &.{},
+            .join_id = @enumFromInt(detection.max_join_id + 1),
+        };
+    }
+
+    fn deinit(self: *Transform) void {
+        self.new_locals.deinit(self.gpa);
+        self.gpa.free(self.old_args);
+    }
+
+    fn addLocal(self: *Transform, layout_idx: layout_mod.Idx) ResourceError!LocalId {
+        const id = try self.store.addLocal(.{ .layout_idx = layout_idx });
+        try self.new_locals.append(self.gpa, id);
+        return id;
+    }
+
+    fn applyTrmc(self: *Transform) ResourceError!void {
+        const proc = self.store.getProcSpec(self.proc_id);
+        const ret_layout = proc.ret_layout;
+        self.old_args = try self.gpa.dupe(LocalId, self.store.getLocalSpan(proc.args));
+
+        const ptr_ret = try self.layouts.insertPtr(ret_layout);
+        self.hole = try self.addLocal(ptr_ret);
+        self.head = try self.addLocal(ptr_ret);
+        const initial = try self.addLocal(ptr_ret);
+
+        // Rewrite every original ret into the hole-fill epilogue. Confirmed
+        // site terminals (which may be rets in hand-built shapes) are excluded:
+        // they become loop-backs below.
+        for (self.detection.rets.items) |ret_stmt| {
+            if (self.isSiteTerminal(ret_stmt)) continue;
+            try self.rewriteRetEpilogue(ret_stmt, ret_layout);
+        }
+
+        for (self.detection.candidates.items) |*candidate| {
+            switch (candidate.state) {
+                .confirmed_construct => try self.rewriteConstructSite(candidate, ptr_ret),
+                .confirmed_tail => try self.rewriteTailSite(candidate),
+                else => {},
+            }
+        }
+
+        try self.installWrapper(true, initial);
+    }
+
+    fn applyTce(self: *Transform) ResourceError!void {
+        const proc = self.store.getProcSpec(self.proc_id);
+        self.old_args = try self.gpa.dupe(LocalId, self.store.getLocalSpan(proc.args));
+
+        for (self.detection.candidates.items) |*candidate| {
+            if (candidate.state == .confirmed_tail) {
+                try self.rewriteTailSite(candidate);
+            }
+        }
+        try self.installWrapper(false, undefined);
+    }
+
+    fn isSiteTerminal(self: *const Transform, stmt_id: CFStmtId) bool {
+        for (self.detection.candidates.items) |candidate| {
+            switch (candidate.state) {
+                .confirmed_construct, .confirmed_tail => {
+                    if (candidate.terminal_stmt == stmt_id) return true;
+                },
+                else => {},
+            }
+        }
+        return false;
+    }
+
+    /// `ret v` becomes: write v through the hole, load the head, return it.
+    fn rewriteRetEpilogue(self: *Transform, ret_stmt: CFStmtId, ret_layout: layout_mod.Idx) ResourceError!void {
+        const value = self.store.getCFStmt(ret_stmt).ret.value;
+
+        const final = try self.addLocal(ret_layout);
+        const st = try self.addLocal(.zst);
+        const ret_final = try self.store.addCFStmt(.{ .ret = .{ .value = final } });
+        const load = try self.store.addCFStmt(.{ .assign_low_level = .{
+            .target = final,
+            .op = .ptr_load,
+            .rc_effect = LowLevelOp.ptr_load.rcEffect(),
+            .args = try self.store.addLocalSpan(&.{self.head}),
+            .next = ret_final,
+        } });
+        const store_args = try self.store.addLocalSpan(&.{ self.hole, value });
+        self.store.getCFStmtPtr(ret_stmt).* = .{ .assign_low_level = .{
+            .target = st,
+            .op = .ptr_store,
+            .rc_effect = LowLevelOp.ptr_store.rcEffect(),
+            .args = store_args,
+            .next = load,
+        } };
+    }
+
+    fn rewriteConstructSite(self: *Transform, candidate: *const Candidate, ptr_ret: layout_mod.Idx) ResourceError!void {
+        // 1. Splice out the recursive call.
+        self.unlink(candidate.call_edge, self.nextOf(candidate.call_stmt));
+
+        // 2. The heap cell is now allocated empty (and zeroed, so its own box
+        //    fields read as null holes) instead of copying the call result in.
+        const empty_args = try self.store.addLocalSpan(&.{});
+        const cell = blk: {
+            const box_ptr = self.store.getCFStmtPtr(candidate.box_stmt);
+            box_ptr.assign_low_level.op = .box_alloc_zeroed;
+            box_ptr.assign_low_level.rc_effect = LowLevelOp.box_alloc_zeroed.rcEffect();
+            box_ptr.assign_low_level.args = empty_args;
+            break :blk box_ptr.assign_low_level.target;
+        };
+
+        // 3. Peephole: take the next hole pointer right after the allocation
+        //    so the constructor below is the cell's last use (sets up the ARC
+        //    transfer-into-constructor follow-up).
+        const next_hole = try self.addLocal(ptr_ret);
+        const cast = try self.store.addCFStmt(.{ .assign_low_level = .{
+            .target = next_hole,
+            .op = .ptr_cast,
+            .rc_effect = LowLevelOp.ptr_cast.rcEffect(),
+            .args = try self.store.addLocalSpan(&.{cell}),
+            .next = self.nextOf(candidate.box_stmt),
+        } });
+        self.setNext(candidate.box_stmt, cast);
+
+        // 4. Unlink the alias hops on this path: the store below uses the
+        //    chain head directly, and a surviving alias of the stored node
+        //    would make ARC retain it with no consumer (a leak per iteration).
+        //    Reverse order keeps each recorded predecessor edge valid.
+        var i = candidate.alias_len;
+        while (i > 0) {
+            i -= 1;
+            self.unlink(candidate.alias_edges[i], self.nextOf(candidate.alias_stmts[i]));
+        }
+
+        // 5. The terminal becomes: fill the current hole with the node value,
+        //    thread the args + new hole, and loop.
+        const st = try self.addLocal(.zst);
+        const loop_back = try self.buildLoopBack(candidate, &.{.{ .target = self.hole, .value = next_hole }});
+        const store_args = try self.store.addLocalSpan(&.{ self.hole, candidate.head_local });
+        self.store.getCFStmtPtr(candidate.terminal_stmt).* = .{ .assign_low_level = .{
+            .target = st,
+            .op = .ptr_store,
+            .rc_effect = LowLevelOp.ptr_store.rcEffect(),
+            .args = store_args,
+            .next = loop_back,
+        } };
+    }
+
+    fn rewriteTailSite(self: *Transform, candidate: *const Candidate) ResourceError!void {
+        self.unlink(candidate.call_edge, self.nextOf(candidate.call_stmt));
+        const loop_back = try self.buildLoopBack(candidate, &.{});
+        // Overwrite the terminal in place with the head of the loop-back chain
+        // (the head statement object itself becomes garbage).
+        self.store.getCFStmtPtr(candidate.terminal_stmt).* = self.store.getCFStmt(loop_back);
+    }
+
+    const ExtraParamWrite = struct { target: LocalId, value: LocalId };
+
+    /// Build `set_local param := arg` writes for each recursive-call arg (plus
+    /// extras), ending in `jump J`. Returns the chain head. Args that are
+    /// themselves param locals are copied through fresh temps first, since the
+    /// sequential writes would otherwise clobber a param another arg reads.
+    fn buildLoopBack(self: *Transform, candidate: *const Candidate, extras: []const ExtraParamWrite) ResourceError!CFStmtId {
+        const arg_view = self.store.getLocalSpan(candidate.call_args);
+        const args = try self.gpa.alloc(LocalId, arg_view.len);
+        defer self.gpa.free(args);
+        @memcpy(args, arg_view);
+
+        var copy_head: ?CFStmtId = null;
+        var copy_tail: ?CFStmtId = null;
+        for (args, 0..) |*arg, idx| {
+            if (arg.* == self.old_args[idx]) continue; // self-assign, skipped below
+            const is_param = std.mem.indexOfScalar(LocalId, self.old_args, arg.*) != null;
+            if (!is_param) continue;
+            const tmp = try self.addLocal(self.store.getLocal(arg.*).layout_idx);
+            const copy = try self.store.addCFStmt(.{ .assign_ref = .{
+                .target = tmp,
+                .op = .{ .local = arg.* },
+                .next = undefined,
+            } });
+            if (copy_tail) |tail| {
+                self.setNext(tail, copy);
+            } else {
+                copy_head = copy;
+            }
+            copy_tail = copy;
+            arg.* = tmp;
+        }
+
+        var current = try self.store.addCFStmt(.{ .jump = .{ .target = self.join_id } });
+        var i = extras.len;
+        while (i > 0) {
+            i -= 1;
+            current = try self.store.addCFStmt(.{ .set_local = .{
+                .target = extras[i].target,
+                .value = extras[i].value,
+                .mode = .initialize_join_param,
+                .next = current,
+            } });
+        }
+        var j = args.len;
+        while (j > 0) {
+            j -= 1;
+            if (args[j] == self.old_args[j]) continue; // value already in the param
+            current = try self.store.addCFStmt(.{ .set_local = .{
+                .target = self.old_args[j],
+                .value = args[j],
+                .mode = .initialize_join_param,
+                .next = current,
+            } });
+        }
+
+        if (copy_tail) |tail| {
+            self.setNext(tail, current);
+            return copy_head.?;
+        }
+        return current;
+    }
+
+    /// Wrap the (rewritten) body in the loop join and re-point the proc at
+    /// fresh argument locals; the original args become the join params.
+    fn installWrapper(self: *Transform, comptime is_trmc: bool, initial: LocalId) ResourceError!void {
+        const old_body = self.store.getProcSpec(self.proc_id).body.?;
+
+        const fresh = try self.gpa.alloc(LocalId, self.old_args.len);
+        defer self.gpa.free(fresh);
+        for (self.old_args, fresh) |old_arg, *fresh_arg| {
+            fresh_arg.* = try self.addLocal(self.store.getLocal(old_arg).layout_idx);
+        }
+
+        // Entry chain (built backward): [alloca initial;] set params; jump J.
+        var current = try self.store.addCFStmt(.{ .jump = .{ .target = self.join_id } });
+        if (is_trmc) {
+            current = try self.store.addCFStmt(.{ .set_local = .{
+                .target = self.head,
+                .value = initial,
+                .mode = .initialize_join_param,
+                .next = current,
+            } });
+            current = try self.store.addCFStmt(.{ .set_local = .{
+                .target = self.hole,
+                .value = initial,
+                .mode = .initialize_join_param,
+                .next = current,
+            } });
+        }
+        var i = self.old_args.len;
+        while (i > 0) {
+            i -= 1;
+            current = try self.store.addCFStmt(.{ .set_local = .{
+                .target = self.old_args[i],
+                .value = fresh[i],
+                .mode = .initialize_join_param,
+                .next = current,
+            } });
+        }
+        if (is_trmc) {
+            current = try self.store.addCFStmt(.{ .assign_low_level = .{
+                .target = initial,
+                .op = .ptr_alloca,
+                .rc_effect = LowLevelOp.ptr_alloca.rcEffect(),
+                .args = try self.store.addLocalSpan(&.{}),
+                .next = current,
+            } });
+        }
+
+        const param_count = self.old_args.len + if (is_trmc) @as(usize, 2) else 0;
+        const params = try self.gpa.alloc(LocalId, param_count);
+        defer self.gpa.free(params);
+        @memcpy(params[0..self.old_args.len], self.old_args);
+        if (is_trmc) {
+            params[self.old_args.len] = self.hole;
+            params[self.old_args.len + 1] = self.head;
+        }
+
+        const join_stmt = try self.store.addCFStmt(.{ .join = .{
+            .id = self.join_id,
+            .params = try self.store.addLocalSpan(params),
+            .body = old_body,
+            .remainder = current,
+        } });
+
+        const fresh_span = try self.store.addLocalSpan(fresh);
+        const frame_locals = try self.rebuildFrameLocals();
+        const proc_ptr = self.store.getProcSpecPtr(self.proc_id);
+        proc_ptr.args = fresh_span;
+        proc_ptr.body = join_stmt;
+        proc_ptr.frame_locals = frame_locals;
+    }
+
+    /// frame_locals must stay complete, unique, and sorted: the interpreter
+    /// binary-searches it for every local in the proc.
+    fn rebuildFrameLocals(self: *Transform) ResourceError!LIR.LocalSpan {
+        const old_span = self.store.getProcSpec(self.proc_id).frame_locals;
+        const old = self.store.getLocalSpan(old_span);
+        var merged = try std.ArrayList(LocalId).initCapacity(self.gpa, old.len + self.new_locals.items.len);
+        defer merged.deinit(self.gpa);
+        merged.appendSliceAssumeCapacity(old);
+        merged.appendSliceAssumeCapacity(self.new_locals.items);
+        std.mem.sort(LocalId, merged.items, {}, localIdLessThan);
+        var unique_len: usize = 0;
+        for (merged.items, 0..) |local, idx| {
+            if (idx > 0 and merged.items[unique_len - 1] == local) continue;
+            merged.items[unique_len] = local;
+            unique_len += 1;
+        }
+        return try self.store.addLocalSpan(merged.items[0..unique_len]);
+    }
+
+    fn localIdLessThan(_: void, a: LocalId, b: LocalId) bool {
+        return @intFromEnum(a) < @intFromEnum(b);
+    }
+
+    fn nextOf(self: *const Transform, stmt_id: CFStmtId) CFStmtId {
+        return switch (self.store.getCFStmt(stmt_id)) {
+            inline .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .free => |s| s.next,
+            else => unreachable,
+        };
+    }
+
+    fn setNext(self: *Transform, stmt_id: CFStmtId, next: CFStmtId) void {
+        const ptr = self.store.getCFStmtPtr(stmt_id);
+        switch (ptr.*) {
+            inline .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .free => |*s| s.next = next,
+            else => unreachable,
+        }
+    }
+
+    fn unlink(self: *Transform, edge: Edge, replacement: CFStmtId) void {
+        switch (edge) {
+            .proc_body => self.store.getProcSpecPtr(self.proc_id).body = replacement,
+            .stmt_next => |pred| self.setNext(pred, replacement),
+            .join_body => |join_stmt| self.store.getCFStmtPtr(join_stmt).join.body = replacement,
+            .join_remainder => |join_stmt| self.store.getCFStmtPtr(join_stmt).join.remainder = replacement,
+            .switch_branch => |info| {
+                const span = self.store.getCFStmt(info.stmt).switch_stmt.branches;
+                self.store.getCFSwitchBranchesMut(span)[info.index].body = replacement;
+            },
+            .switch_default => |switch_id| self.store.getCFStmtPtr(switch_id).switch_stmt.default_branch = replacement,
+            .switch_continuation => |switch_id| self.store.getCFStmtPtr(switch_id).switch_stmt.continuation = replacement,
+        }
+    }
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Debug output
+// ═══════════════════════════════════════════════════════════════════════════
+
+fn debugFlagEnabled(name: [:0]const u8) bool {
+    if (comptime builtin.target.os.tag == .freestanding or builtin.target.os.tag == .windows) return false;
+    return std.c.getenv(name.ptr) != null;
+}
+
+fn dumpProc(store: *const LirStore, layouts: *const layout_mod.Store, proc_id: LIR.LirProcSpecId) void {
+    var buffer: std.Io.Writer.Allocating = .init(store.allocator);
+    defer buffer.deinit();
+    debug_print.writeProc(store.allocator, store, layouts, proc_id, &buffer.writer) catch return;
+    std.debug.print("{s}", .{buffer.written()});
+}
