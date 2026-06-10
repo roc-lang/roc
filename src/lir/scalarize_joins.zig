@@ -39,6 +39,8 @@ const max_fields = 16;
 /// Maximum nesting rounds; deeper than this means a degenerate wrapper tower.
 const max_rounds = 16;
 
+/// Scalarizes eligible struct-typed join parameters across every proc in the
+/// store, repeating until no parameter qualifies.
 pub fn run(store: *LirStore, layouts: *const layout_mod.Store) ScalarizeError!void {
     var pass = Pass{
         .store = store,
@@ -584,6 +586,7 @@ const ScalarizeTest = struct {
     store: LirStore,
     layouts: layout_mod.Store,
     pair: layout_mod.Idx,
+    next_join_point: u32 = 0,
 
     fn init(allocator: Allocator) Allocator.Error!ScalarizeTest {
         var layouts = try layout_mod.Store.init(allocator, .u64);
@@ -603,6 +606,12 @@ const ScalarizeTest = struct {
         self.store.deinit();
         self.layouts.deinit();
     }
+
+    fn freshJoinPointId(self: *ScalarizeTest) LIR.JoinPointId {
+        const id: LIR.JoinPointId = @enumFromInt(self.next_join_point);
+        self.next_join_point += 1;
+        return id;
+    }
 };
 
 test "scalarize splits a literal-initialized struct join parameter" {
@@ -620,7 +629,7 @@ test "scalarize splits a literal-initialized struct join parameter" {
     const wrapper = try store.addLocal(.{ .layout_idx = f.pair });
     const n = try store.addLocal(.{ .layout_idx = .i64 });
     const s = try store.addLocal(.{ .layout_idx = .str });
-    const join_id: LIR.JoinPointId = @enumFromInt(0);
+    const join_id = f.freshJoinPointId();
 
     const ret = try store.addCFStmt(.{ .ret = .{ .value = n } });
     const read_s = try store.addCFStmt(.{ .assign_ref = .{
@@ -706,7 +715,7 @@ test "scalarize keeps parameters with whole-value uses" {
     const num = try store.addLocal(.{ .layout_idx = .i64 });
     const text = try store.addLocal(.{ .layout_idx = .str });
     const wrapper = try store.addLocal(.{ .layout_idx = f.pair });
-    const join_id: LIR.JoinPointId = @enumFromInt(0);
+    const join_id = f.freshJoinPointId();
 
     // The body copies the whole parameter, which must block scalarization.
     const ret_local = try store.addLocal(.{ .layout_idx = .i64 });
@@ -779,7 +788,7 @@ test "scalarize splits a parameter built directly by a struct literal" {
     const text = try store.addLocal(.{ .layout_idx = .str });
     const n = try store.addLocal(.{ .layout_idx = .i64 });
     const s = try store.addLocal(.{ .layout_idx = .str });
-    const join_id: LIR.JoinPointId = @enumFromInt(0);
+    const join_id = f.freshJoinPointId();
 
     const ret = try store.addCFStmt(.{ .ret = .{ .value = n } });
     const read_s = try store.addCFStmt(.{ .assign_ref = .{
