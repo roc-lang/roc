@@ -333,6 +333,12 @@ const BindingChange = struct {
     previous: ?Value,
 };
 
+const PendingLet = struct {
+    local: Ast.LocalId,
+    ty: Type.TypeId,
+    value: Ast.ExprId,
+};
+
 const LoopPattern = struct {
     values: []const Shape,
 };
@@ -2009,19 +2015,227 @@ const Cloner = struct {
     fn simplifyKnownMatchValue(self: *Cloner, scrutinee: Value, branches_span: Ast.Span(Ast.Branch)) Common.LowerError!?Value {
         if (scrutinee == .expr) return null;
         for (self.pass.program.branchSpan(branches_span)) |branch| {
+            const match_change_start = self.changes.items.len;
+            const matches = try self.bindPatToValue(branch.pat, scrutinee);
+            self.restore(match_change_start);
+            if (!matches) continue;
+            if (branch.guard != null) return null;
+
+            var pending_lets = std.ArrayList(PendingLet).empty;
+            defer pending_lets.deinit(self.pass.allocator);
+
             const change_start = self.changes.items.len;
-            if (try self.bindPatToValue(branch.pat, scrutinee)) {
-                if (branch.guard != null) {
-                    self.restore(change_start);
-                    return null;
-                }
-                const body = try self.cloneExprValue(branch.body);
-                self.restore(change_start);
-                return body;
+            if (try self.bindPatToMatchValue(branch.pat, scrutinee, branch.body, &pending_lets) == null) {
+                Common.invariant("known constructor match changed after reusable payload binding");
             }
+            const body = try self.cloneExprValue(branch.body);
             self.restore(change_start);
+            return try self.wrapPendingLets(body, pending_lets.items);
         }
         Common.invariant("known constructor match had no matching branch");
+    }
+
+    fn bindPatToMatchValue(
+        self: *Cloner,
+        pat_id: Ast.PatId,
+        value: Value,
+        body: Ast.ExprId,
+        pending_lets: *std.ArrayList(PendingLet),
+    ) Common.LowerError!?Value {
+        const pat = self.pass.program.pats.items[@intFromEnum(pat_id)];
+        switch (pat.data) {
+            .bind => |local| {
+                const prepared = try self.valueForMatchLocal(local, value, body, pending_lets);
+                try self.putSubst(local, prepared);
+                return prepared;
+            },
+            .wildcard => return try self.makeReusableForMatch(value, pending_lets),
+            .as => |as| {
+                const as_uses = localUseCountInExpr(self.pass.program, as.local, body);
+                const base = if (self.valueCanSubstitute(value) or as_uses == 1)
+                    value
+                else
+                    try self.makeReusableForMatch(value, pending_lets);
+                const prepared = (try self.bindPatToMatchValue(as.pattern, base, body, pending_lets)) orelse return null;
+                try self.putSubst(as.local, prepared);
+                return prepared;
+            },
+            .record => |fields_span| {
+                const record = recordFromValue(value) orelse return null;
+                const fields = self.pass.program.recordDestructSpan(fields_span);
+                const prepared_fields = try self.pass.arena.allocator().alloc(FieldValue, record.fields.len);
+                for (record.fields, 0..) |field, index| {
+                    if (recordPatField(fields, field.name)) |field_pat| {
+                        const prepared = (try self.bindPatToMatchValue(field_pat, field.value, body, pending_lets)) orelse return null;
+                        prepared_fields[index] = .{
+                            .name = field.name,
+                            .value = prepared,
+                        };
+                    } else {
+                        prepared_fields[index] = .{
+                            .name = field.name,
+                            .value = try self.makeReusableForMatch(field.value, pending_lets),
+                        };
+                    }
+                }
+                return Value{ .record = .{
+                    .ty = record.ty,
+                    .fields = prepared_fields,
+                } };
+            },
+            .tuple => |items_span| {
+                const tuple = tupleFromValue(value) orelse return null;
+                const pats = self.pass.program.patSpan(items_span);
+                if (pats.len != tuple.items.len) return null;
+                const items = try self.pass.arena.allocator().alloc(Value, tuple.items.len);
+                for (pats, tuple.items, 0..) |child_pat, child_value, index| {
+                    items[index] = (try self.bindPatToMatchValue(child_pat, child_value, body, pending_lets)) orelse return null;
+                }
+                return Value{ .tuple = .{
+                    .ty = tuple.ty,
+                    .items = items,
+                } };
+            },
+            .tag => |tag_pat| {
+                const tag = tagFromValue(value) orelse return null;
+                if (tag.name != tag_pat.name) return null;
+                const pats = self.pass.program.patSpan(tag_pat.payloads);
+                if (pats.len != tag.payloads.len) return null;
+                const payloads = try self.pass.arena.allocator().alloc(Value, tag.payloads.len);
+                for (pats, tag.payloads, 0..) |child_pat, child_value, index| {
+                    payloads[index] = (try self.bindPatToMatchValue(child_pat, child_value, body, pending_lets)) orelse return null;
+                }
+                return Value{ .tag = .{
+                    .ty = tag.ty,
+                    .name = tag.name,
+                    .payloads = payloads,
+                } };
+            },
+            .nominal => |backing_pat| {
+                const nominal = switch (value) {
+                    .nominal => |nominal| nominal,
+                    else => return null,
+                };
+                const backing = try self.pass.arena.allocator().create(Value);
+                backing.* = (try self.bindPatToMatchValue(backing_pat, nominal.backing.*, body, pending_lets)) orelse return null;
+                return Value{ .nominal = .{
+                    .ty = nominal.ty,
+                    .backing = backing,
+                } };
+            },
+            .int_lit,
+            .dec_lit,
+            .frac_f32_lit,
+            .frac_f64_lit,
+            .str_lit,
+            => return null,
+        }
+    }
+
+    fn valueForMatchLocal(
+        self: *Cloner,
+        local: Ast.LocalId,
+        value: Value,
+        body: Ast.ExprId,
+        pending_lets: *std.ArrayList(PendingLet),
+    ) Common.LowerError!Value {
+        const uses = localUseCountInExpr(self.pass.program, local, body);
+        if (self.valueCanSubstitute(value) or uses == 1) return value;
+        return try self.makeReusableForMatch(value, pending_lets);
+    }
+
+    fn makeReusableForMatch(self: *Cloner, value: Value, pending_lets: *std.ArrayList(PendingLet)) Common.LowerError!Value {
+        if (self.valueCanSubstitute(value)) return value;
+        return switch (value) {
+            .expr => |expr| blk: {
+                const ty = self.pass.program.exprs.items[@intFromEnum(expr)].ty;
+                const local = try self.pass.program.addLocal(self.pass.symbols.fresh(), ty);
+                try pending_lets.append(self.pass.allocator, .{
+                    .local = local,
+                    .ty = ty,
+                    .value = expr,
+                });
+                break :blk Value{ .expr = try self.addExpr(.{
+                    .ty = ty,
+                    .data = .{ .local = local },
+                }) };
+            },
+            .tag => |tag| blk: {
+                const payloads = try self.pass.arena.allocator().alloc(Value, tag.payloads.len);
+                for (tag.payloads, 0..) |payload, index| {
+                    payloads[index] = try self.makeReusableForMatch(payload, pending_lets);
+                }
+                break :blk Value{ .tag = .{
+                    .ty = tag.ty,
+                    .name = tag.name,
+                    .payloads = payloads,
+                } };
+            },
+            .record => |record| blk: {
+                const fields = try self.pass.arena.allocator().alloc(FieldValue, record.fields.len);
+                for (record.fields, 0..) |field, index| {
+                    fields[index] = .{
+                        .name = field.name,
+                        .value = try self.makeReusableForMatch(field.value, pending_lets),
+                    };
+                }
+                break :blk Value{ .record = .{
+                    .ty = record.ty,
+                    .fields = fields,
+                } };
+            },
+            .tuple => |tuple| blk: {
+                const items = try self.pass.arena.allocator().alloc(Value, tuple.items.len);
+                for (tuple.items, 0..) |item, index| {
+                    items[index] = try self.makeReusableForMatch(item, pending_lets);
+                }
+                break :blk Value{ .tuple = .{
+                    .ty = tuple.ty,
+                    .items = items,
+                } };
+            },
+            .nominal => |nominal| blk: {
+                const backing = try self.pass.arena.allocator().create(Value);
+                backing.* = try self.makeReusableForMatch(nominal.backing.*, pending_lets);
+                break :blk Value{ .nominal = .{
+                    .ty = nominal.ty,
+                    .backing = backing,
+                } };
+            },
+            .callable => |callable| blk: {
+                const captures = try self.pass.arena.allocator().alloc(Value, callable.captures.len);
+                for (callable.captures, 0..) |capture, index| {
+                    captures[index] = try self.makeReusableForMatch(capture, pending_lets);
+                }
+                break :blk Value{ .callable = .{
+                    .ty = callable.ty,
+                    .fn_id = callable.fn_id,
+                    .captures = captures,
+                } };
+            },
+        };
+    }
+
+    fn wrapPendingLets(self: *Cloner, body: Value, pending_lets: []const PendingLet) Common.LowerError!Value {
+        if (pending_lets.len == 0) return body;
+
+        const ty = valueType(self.pass.program, body);
+        var result = try self.materialize(body);
+        var index = pending_lets.len;
+        while (index > 0) {
+            index -= 1;
+            const pending = pending_lets[index];
+            const pat = try self.pass.program.addPat(.{
+                .ty = pending.ty,
+                .data = .{ .bind = pending.local },
+            });
+            result = try self.addExpr(.{ .ty = ty, .data = .{ .let_ = .{
+                .bind = pat,
+                .value = pending.value,
+                .rest = result,
+            } } });
+        }
+        return .{ .expr = result };
     }
 
     fn cloneCaseOfCaseValue(
@@ -2938,6 +3152,13 @@ fn fieldFromValue(value: Value, name: names.RecordFieldNameId) ?Value {
 fn fieldFromRecord(record: RecordValue, name: names.RecordFieldNameId) ?Value {
     for (record.fields) |field| {
         if (field.name == name) return field.value;
+    }
+    return null;
+}
+
+fn recordPatField(fields: []const Ast.RecordDestruct, name: names.RecordFieldNameId) ?Ast.PatId {
+    for (fields) |field| {
+        if (field.name == name) return field.pattern;
     }
     return null;
 }

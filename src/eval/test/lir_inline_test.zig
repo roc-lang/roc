@@ -820,6 +820,34 @@ test "spec constr does not duplicate opaque let-bound direct calls" {
     try std.testing.expect(!try reachableProcShape(allocator, &optimized.lowered, opaqueLetCallWorkerDuplicatesCall));
 }
 
+test "spec constr does not duplicate opaque known-match payloads" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\module [main]
+        \\
+        \\State : { n : I64 }
+        \\Step : [One(I64)]
+        \\
+        \\tick : I64 -> I64
+        \\tick = |n| n + 1
+        \\
+        \\read_twice : State -> I64
+        \\read_twice = |state|
+        \\    match One(tick(state.n)) {
+        \\        One(x) => x + x
+        \\    }
+        \\
+        \\main : I64
+        \\main = read_twice({ n: 1 })
+    ;
+
+    var optimized = try lowerModule(allocator, source, .direct_call_wrappers);
+    defer optimized.deinit(allocator);
+
+    try std.testing.expect(try reachableProcShape(allocator, &optimized.lowered, opaqueLetCallWorkerDoesNotDuplicateCall));
+    try std.testing.expect(!try reachableProcShape(allocator, &optimized.lowered, opaqueLetCallWorkerDuplicatesCall));
+}
+
 test "spec constr writes dynamically discovered workers once" {
     const allocator = std.testing.allocator;
     const source =
