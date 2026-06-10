@@ -185,7 +185,7 @@ const HostedCatalogEntry = struct {
 };
 
 /// The platform header's hosted section, resolved to the same qualified keys
-/// the per-artifact hosted tables sort by ("Module.func" with a trailing `!`
+/// the checked modules' hosted tables sort by ("Module.func" with a trailing `!`
 /// stripped). Section order defines hosted dispatch order, and each entry's
 /// string is the hosted function's linker symbol.
 const HostedSectionMap = struct {
