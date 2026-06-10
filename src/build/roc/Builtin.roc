@@ -10221,6 +10221,15 @@ Builtin :: [].{
 					Ok(f32_sqrt_unsafe(self))
 				}
 
+			## Raise an [F32] to an [F32] power. The result follows IEEE 754 behavior and may be `inf`, `-inf`, or `NaN`.
+			## ```roc
+			## expect F32.pow(2.0, 3.0).to_str() == "8"
+			##
+			## expect F32.pow(9.0, 0.5).to_str() == "3"
+			## ```
+			pow : F32, F32 -> F32
+			pow = |base, exponent| f32_pow_unsafe(base, exponent)
+
 			## Add two [F32] values. Addition is subject to IEEE 754 rounding; the
 			## result may be `inf`, `-inf`, or `NaN`.
 			## ```roc
@@ -11032,6 +11041,15 @@ Builtin :: [].{
 				} else {
 					Ok(f64_sqrt_unsafe(self))
 				}
+
+			## Raise an [F64] to an [F64] power. The result follows IEEE 754 behavior and may be `inf`, `-inf`, or `NaN`.
+			## ```roc
+			## expect F64.pow(2.0, 3.0).to_str() == "8"
+			##
+			## expect F64.pow(9.0, 0.5).to_str() == "3"
+			## ```
+			pow : F64, F64 -> F64
+			pow = |base, exponent| f64_pow_unsafe(base, exponent)
 
 			## Add two [F64] values. Addition is subject to IEEE 754 rounding; the
 			## result may be `inf`, `-inf`, or `NaN`.
@@ -12351,6 +12369,8 @@ f32_ceiling_unsafe : F32 -> F32
 
 f32_sqrt_unsafe : F32 -> F32
 
+f32_pow_unsafe : F32, F32 -> F32
+
 f64_to_i8_try_unsafe : F64 -> { success : U8, val_or_memory_garbage : I8 }
 
 f64_to_i16_try_unsafe : F64 -> { success : U8, val_or_memory_garbage : I16 }
@@ -12378,3 +12398,5 @@ f64_floor_unsafe : F64 -> F64
 f64_ceiling_unsafe : F64 -> F64
 
 f64_sqrt_unsafe : F64 -> F64
+
+f64_pow_unsafe : F64, F64 -> F64

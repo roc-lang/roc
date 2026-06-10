@@ -151,6 +151,7 @@ pub fn runWasmStrWithStats(
         env_imports.addHostFunction("roc_i128_to_str", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{.I32}, hostI128ToStr, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_u128_to_str", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{.I32}, hostU128ToStr, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_float_to_str", &[_]bytebox.ValType{ .I64, .I32, .I32 }, &[_]bytebox.ValType{.I32}, hostFloatToStr, null) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_float_pow", &[_]bytebox.ValType{ .F64, .F64, .I32 }, &[_]bytebox.ValType{.F64}, hostFloatPow, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_int_to_str", &[_]bytebox.ValType{ .I64, .I64, .I32, .I32, .I32 }, &[_]bytebox.ValType{.I32}, hostIntToStr, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_u128_to_dec", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{.I32}, hostU128ToDec, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_i128_to_dec", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{.I32}, hostI128ToDec, null) catch return error.WasmExecFailed;
@@ -524,6 +525,17 @@ fn hostFloatToStr(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]co
 
     @memcpy(buffer[buf_ptr..][0..formatted.len], formatted);
     results[0] = .{ .I32 = @intCast(formatted.len) };
+}
+
+fn hostFloatPow(_: ?*anyopaque, _: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
+    const base = params[0].F64;
+    const exponent = params[1].F64;
+    const float_width: u8 = @intCast(params[2].I32);
+    results[0] = .{ .F64 = switch (float_width) {
+        4 => @as(f64, @floatCast(std.math.pow(f32, @as(f32, @floatCast(base)), @as(f32, @floatCast(exponent))))),
+        8 => std.math.pow(f64, base, exponent),
+        else => unreachable,
+    } };
 }
 
 fn hostIntToStr(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {

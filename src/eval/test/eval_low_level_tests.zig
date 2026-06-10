@@ -117,6 +117,26 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "True" },
     },
     .{
+        .name = "low_level - F32 pow",
+        .source =
+        \\{
+        \\F32.pow(2.0, 3.0).to_str() == "8"
+        \\    and F32.pow(9.0, 0.5).to_str() == "3"
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - F64 pow",
+        .source =
+        \\{
+        \\F64.pow(2.0, 3.0).to_str() == "8"
+        \\    and F64.pow(9.0, 0.5).to_str() == "3"
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
         .name = "low_level - F32 rounding to integers",
         .source =
         \\{

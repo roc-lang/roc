@@ -1305,6 +1305,14 @@ pub fn roc_builtins_float_ceiling(val: f64, float_width: u8) callconv(.c) f64 {
     };
 }
 
+pub fn roc_builtins_float_pow(base: f64, exponent: f64, float_width: u8) callconv(.c) f64 {
+    return switch (float_width) {
+        4 => @as(f64, @floatCast(std.math.pow(f32, @as(f32, @floatCast(base)), @as(f32, @floatCast(exponent))))),
+        8 => std.math.pow(f64, base, exponent),
+        else => unreachable,
+    };
+}
+
 test "float floor and ceiling wrappers" {
     try std.testing.expectEqual(@as(f64, 3.0), roc_builtins_float_floor(3.9, 4));
     try std.testing.expectEqual(@as(f64, -4.0), roc_builtins_float_floor(-3.2, 4));
@@ -1315,6 +1323,14 @@ test "float floor and ceiling wrappers" {
     try std.testing.expectEqual(@as(f64, -4.0), roc_builtins_float_floor(-3.2, 8));
     try std.testing.expectEqual(@as(f64, 4.0), roc_builtins_float_ceiling(3.2, 8));
     try std.testing.expectEqual(@as(f64, -3.0), roc_builtins_float_ceiling(-3.2, 8));
+}
+
+test "float pow wrapper" {
+    try std.testing.expectEqual(@as(f64, 8.0), roc_builtins_float_pow(2.0, 3.0, 4));
+    try std.testing.expectEqual(@as(f64, 3.0), roc_builtins_float_pow(9.0, 0.5, 4));
+
+    try std.testing.expectEqual(@as(f64, 8.0), roc_builtins_float_pow(2.0, 3.0, 8));
+    try std.testing.expectEqual(@as(f64, 3.0), roc_builtins_float_pow(9.0, 0.5, 8));
 }
 
 test "direct float wrapper f32" {

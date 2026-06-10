@@ -1026,6 +1026,9 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
     if (env.common.findIdent("f32_sqrt_unsafe")) |ident| {
         try low_level_map.put(ident, .num_sqrt);
     }
+    if (env.common.findIdent("f32_pow_unsafe")) |ident| {
+        try low_level_map.put(ident, .num_pow);
+    }
     if (env.common.findIdent("f32_floor_unsafe")) |ident| {
         try low_level_map.put(ident, .num_floor);
     }
@@ -1105,6 +1108,9 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
     }
     if (env.common.findIdent("f64_sqrt_unsafe")) |ident| {
         try low_level_map.put(ident, .num_sqrt);
+    }
+    if (env.common.findIdent("f64_pow_unsafe")) |ident| {
+        try low_level_map.put(ident, .num_pow);
     }
     if (env.common.findIdent("f64_floor_unsafe")) |ident| {
         try low_level_map.put(ident, .num_floor);

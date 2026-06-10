@@ -217,6 +217,7 @@ pub const BuiltinFn = enum {
     float_to_str,
     float_floor,
     float_ceiling,
+    float_pow,
     int_from_str,
     dec_from_str,
     float_from_str,
@@ -315,6 +316,7 @@ pub const BuiltinFn = enum {
             .float_to_str => "roc_builtins_float_to_str",
             .float_floor => "roc_builtins_float_floor",
             .float_ceiling => "roc_builtins_float_ceiling",
+            .float_pow => "roc_builtins_float_pow",
             .int_from_str => "roc_builtins_int_from_str",
             .dec_from_str => "roc_builtins_dec_from_str",
             .float_from_str => "roc_builtins_float_from_str",
@@ -3505,6 +3507,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     self.codegen.freeFloat(src_reg);
                     return .{ .float_reg = result_reg };
                 },
+                .num_pow => {
+                    if (args.len != 2) unreachable;
+                    const lhs_loc = try self.emitValueLocal(args[0]);
+                    const rhs_loc = try self.emitValueLocal(args[1]);
+                    return self.callFloatBinaryBuiltin(
+                        lhs_loc,
+                        rhs_loc,
+                        ll.ret_layout,
+                        @intFromPtr(&dev_wrappers.roc_builtins_float_pow),
+                        .float_pow,
+                    );
+                },
                 .num_floor => {
                     if (args.len != 1) unreachable;
                     const src_loc = try self.emitValueLocal(args[0]);
@@ -3527,7 +3541,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
 
                 // Unimplemented ops
-                .num_pow,
                 .num_log,
                 .num_round,
                 .num_from_numeral,
@@ -5759,6 +5772,51 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try builder.addImmArg(float_width);
             try self.callBuiltin(&builder, fn_addr, builtin_fn);
             self.codegen.freeFloat(freg);
+
+            const result_reg = self.codegen.allocFloat() orelse unreachable;
+            if (comptime target.toCpuArch() == .aarch64) {
+                if (result_reg != .V0) {
+                    try self.codegen.emit.fmovRegReg(.double, result_reg, .V0);
+                }
+            } else {
+                if (result_reg != .XMM0) {
+                    try self.codegen.emit.movsdRegReg(result_reg, .XMM0);
+                }
+            }
+            return .{ .float_reg = result_reg };
+        }
+
+        fn callFloatBinaryBuiltin(self: *Self, lhs_loc: ValueLocation, rhs_loc: ValueLocation, ret_layout: layout.Idx, fn_addr: usize, builtin_fn: BuiltinFn) Allocator.Error!ValueLocation {
+            const lhs_reg = try self.ensureInFloatReg(lhs_loc);
+            const rhs_reg = try self.ensureInFloatReg(rhs_loc);
+            const lhs_slot = self.codegen.allocStackSlot(8);
+            const rhs_slot = self.codegen.allocStackSlot(8);
+            try self.codegen.emitStoreStackF64(lhs_slot, lhs_reg);
+            try self.codegen.emitStoreStackF64(rhs_slot, rhs_reg);
+            self.codegen.freeFloat(lhs_reg);
+            if (rhs_reg != lhs_reg) {
+                self.codegen.freeFloat(rhs_reg);
+            }
+
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            if (comptime target.toCpuArch() == .aarch64) {
+                try self.codegen.emitLoadStackF64(.V0, lhs_slot);
+                try self.codegen.emitLoadStackF64(.V1, rhs_slot);
+            } else {
+                try builder.addF64MemArg(frame_ptr, lhs_slot);
+                try builder.addF64MemArg(frame_ptr, rhs_slot);
+            }
+
+            const float_width: i64 = switch (ret_layout) {
+                .f32 => 4,
+                .f64 => 8,
+                else => std.debug.panic(
+                    "LirCodeGen invariant violated: float binary builtin received non-float return layout {s}",
+                    .{@tagName(ret_layout)},
+                ),
+            };
+            try builder.addImmArg(float_width);
+            try self.callBuiltin(&builder, fn_addr, builtin_fn);
 
             const result_reg = self.codegen.allocFloat() orelse unreachable;
             if (comptime target.toCpuArch() == .aarch64) {

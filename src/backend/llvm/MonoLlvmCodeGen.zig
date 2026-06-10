@@ -1048,6 +1048,7 @@ pub const MonoLlvmCodeGen = struct {
             .num_negate => try self.emitNumericNegate(target, arg_locals[0]),
             .num_abs => try self.emitNumericAbs(target, arg_locals[0]),
             .num_abs_diff => try self.emitNumericAbsDiff(target, arg_locals),
+            .num_pow => try self.emitNumericFloatBinaryIntrinsic(target, arg_locals, .pow),
             .num_sqrt => try self.emitNumericSqrt(target, arg_locals[0]),
             .num_floor => try self.emitNumericFloatUnaryIntrinsic(target, arg_locals[0], .floor),
             .num_ceiling => try self.emitNumericFloatUnaryIntrinsic(target, arg_locals[0], .ceil),
@@ -1832,6 +1833,23 @@ pub const MonoLlvmCodeGen = struct {
             intrinsic,
             &.{target_ty},
             &.{value},
+            "",
+        ) catch return error.OutOfMemory;
+        try self.storeScalar(self.slot(target).ptr, target_layout, result);
+    }
+
+    fn emitNumericFloatBinaryIntrinsic(self: *MonoLlvmCodeGen, target: LocalId, args: []const LocalId, intrinsic: LlvmBuilder.Intrinsic) Error!void {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const target_layout = self.localLayout(target);
+        const target_ty = self.scalarType(target_layout);
+        const lhs = try self.coerceScalar(try self.loadScalar(self.slot(args[0]).ptr, self.localLayout(args[0])), target_ty, false);
+        const rhs = try self.coerceScalar(try self.loadScalar(self.slot(args[1]).ptr, self.localLayout(args[1])), target_ty, false);
+        const result = wip.callIntrinsic(
+            .normal,
+            .none,
+            intrinsic,
+            &.{target_ty},
+            &.{ lhs, rhs },
             "",
         ) catch return error.OutOfMemory;
         try self.storeScalar(self.slot(target).ptr, target_layout, result);

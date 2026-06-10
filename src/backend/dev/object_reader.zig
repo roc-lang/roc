@@ -894,6 +894,7 @@ fn resolveBuiltinWrapper(name: []const u8) ?usize {
         .{ .name = "roc_builtins_float_to_str", .addr = @intFromPtr(&dev_wrappers.roc_builtins_float_to_str) },
         .{ .name = "roc_builtins_float_floor", .addr = @intFromPtr(&dev_wrappers.roc_builtins_float_floor) },
         .{ .name = "roc_builtins_float_ceiling", .addr = @intFromPtr(&dev_wrappers.roc_builtins_float_ceiling) },
+        .{ .name = "roc_builtins_float_pow", .addr = @intFromPtr(&dev_wrappers.roc_builtins_float_pow) },
         .{ .name = "roc_builtins_int_from_str", .addr = @intFromPtr(&dev_wrappers.roc_builtins_int_from_str) },
     };
 
@@ -1023,6 +1024,10 @@ fn getSectionName(strtab: []const u8, name_idx: u32) []const u8 {
 test "resolve float rounding wrappers" {
     try std.testing.expectEqual(@intFromPtr(&dev_wrappers.roc_builtins_float_floor), resolveBuiltinWrapper("roc_builtins_float_floor").?);
     try std.testing.expectEqual(@intFromPtr(&dev_wrappers.roc_builtins_float_ceiling), resolveBuiltinWrapper("roc_builtins_float_ceiling").?);
+}
+
+test "resolve float pow wrapper" {
+    try std.testing.expectEqual(@intFromPtr(&dev_wrappers.roc_builtins_float_pow), resolveBuiltinWrapper("roc_builtins_float_pow").?);
 }
 
 test "detect ELF magic" {

@@ -1196,6 +1196,7 @@ pub const BuiltinSymbols = struct {
     dec_to_int_try_unsafe: u32, // roc_builtins_dec_to_int_try_unsafe
     dec_to_f32: u32, // roc_builtins_dec_to_f32_try_unsafe
     float_to_str: u32, // roc_builtins_float_to_str
+    float_pow: u32, // roc_builtins_float_pow
     int_to_str: u32, // roc_builtins_int_to_str
     int_from_str: u32, // roc_builtins_int_from_str
     dec_from_str: u32, // roc_builtins_dec_from_str
@@ -1255,6 +1256,7 @@ pub const BuiltinSymbols = struct {
         .{ "roc_builtins_dec_to_int_try_unsafe", "dec_to_int_try_unsafe" },
         .{ "roc_builtins_dec_to_f32_try_unsafe", "dec_to_f32" },
         .{ "roc_builtins_float_to_str", "float_to_str" },
+        .{ "roc_builtins_float_pow", "float_pow" },
         .{ "roc_builtins_int_to_str", "int_to_str" },
         .{ "roc_builtins_int_from_str", "int_from_str" },
         .{ "roc_builtins_dec_from_str", "dec_from_str" },
@@ -5538,7 +5540,7 @@ test "BuiltinSymbols — all symbols found after merge" {
 
     // Spot check a few fields (populate returns function index = i + 1, since index 0 is the import)
     try std.testing.expectEqual(@as(u32, 1), syms.dec_mul); // function index 1 (first defined fn after import)
-    try std.testing.expectEqual(@as(u32, 21), syms.str_trim); // function index 21
+    try std.testing.expectEqual(@as(u32, 22), syms.str_trim); // function index 22
 }
 
 test "BuiltinSymbols — fails when symbol missing" {

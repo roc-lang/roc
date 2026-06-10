@@ -307,6 +307,8 @@ u128_to_str_import: ?u32 = null,
 int_to_str_import: ?u32 = null,
 /// Wasm function index for imported roc_float_to_str host function.
 float_to_str_import: ?u32 = null,
+/// Wasm function index for imported roc_float_pow host function.
+float_pow_import: ?u32 = null,
 /// Wasm function index for imported roc_str_escape_and_quote host function.
 str_escape_and_quote_import: ?u32 = null,
 /// Wasm function index for imported roc_u128_to_dec host function.
@@ -967,6 +969,12 @@ fn registerHostImports(self: *Self) Allocator.Error!void {
         &.{.i32},
     );
     self.float_to_str_import = try self.module.addImport("env", "roc_float_to_str", float_to_str_type);
+
+    const float_pow_type = try self.module.addFuncType(
+        &.{ .f64, .f64, .i32 },
+        &.{.f64},
+    );
+    self.float_pow_import = try self.module.addImport("env", "roc_float_pow", float_pow_type);
 
     const str_escape_and_quote_type = try self.module.addFuncType(
         &.{ .i32, .i32 },
@@ -8543,6 +8551,9 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         },
 
         // Float math functions (direct wasm opcodes)
+        .num_pow => {
+            try self.emitFloatPow(args, ll.ret_layout);
+        },
         .num_sqrt => {
             try self.emitProcLocal(args[0]);
             const vt = try self.resolveValType(ll.ret_layout);
@@ -8650,7 +8661,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
 
         // String operations
         // Bitwise operations
-        .num_pow, .num_log => unreachable, // Resolved by earlier lowering
+        .num_log => unreachable, // Resolved by earlier lowering
 
         .num_abs_diff => {
             // abs_diff(a, b) -> |a - b|
@@ -12484,6 +12495,31 @@ fn emitFloatToStr(self: *Self, value: ProcLocalId, is_f32: bool) Allocator.Error
     try self.emitLocalSet(len_local);
 
     try self.buildHeapRocStr(buf_ptr, len_local);
+}
+
+fn emitFloatPow(self: *Self, args: []const ProcLocalId, ret_layout: layout.Idx) Allocator.Error!void {
+    const is_f32 = switch (ret_layout) {
+        .f32 => true,
+        .f64 => false,
+        else => wasmInvariantFmt(
+            "WASM/codegen invariant violated: num_pow received non-float return layout {s}",
+            .{@tagName(ret_layout)},
+        ),
+    };
+
+    try self.emitProcLocal(args[0]);
+    if (is_f32) {
+        self.currentCode().append(self.allocator, Op.f64_promote_f32) catch return error.OutOfMemory;
+    }
+    try self.emitProcLocal(args[1]);
+    if (is_f32) {
+        self.currentCode().append(self.allocator, Op.f64_promote_f32) catch return error.OutOfMemory;
+    }
+    try self.emitI32Const(if (is_f32) 4 else 8);
+    try self.emitBuiltinCall(.float_pow, self.float_pow_import);
+    if (is_f32) {
+        self.currentCode().append(self.allocator, Op.f32_demote_f64) catch return error.OutOfMemory;
+    }
 }
 
 fn emitStrEscapeAndQuote(self: *Self, value: ProcLocalId) Allocator.Error!void {

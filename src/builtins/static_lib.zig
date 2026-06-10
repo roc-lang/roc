@@ -128,6 +128,7 @@ comptime {
     // Numeric-to-string wrappers
     @export(&dw.roc_builtins_int_to_str, .{ .name = "roc_builtins_int_to_str" });
     @export(&dw.roc_builtins_float_to_str, .{ .name = "roc_builtins_float_to_str" });
+    @export(&dw.roc_builtins_float_pow, .{ .name = "roc_builtins_float_pow" });
     // Numeric-from-string wrapper
     @export(&dw.roc_builtins_int_from_str, .{ .name = "roc_builtins_int_from_str" });
     @export(&dw.roc_builtins_dec_from_str, .{ .name = "roc_builtins_dec_from_str" });
