@@ -370,7 +370,7 @@ fn procShapeMatchesIterCollect(shape: ProcShape, wanted: IterCollectShape) bool 
             shape.switch_count == 6 and
             shape.join_count == 9 and
             shape.jump_count == 11 and
-            shape.struct_assign_count >= 10,
+            shape.struct_assign_count >= 8,
     };
 }
 

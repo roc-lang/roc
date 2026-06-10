@@ -81,10 +81,14 @@ selected by LIR ARC insertion. Consumers may lazily cache code or interpreter
 execution plans for that helper, but they must not select a different helper
 from local layout data. Reference-counting policy belongs to LIR ARC insertion.
 
-The compiler does not contain a static borrow, alias-permission, lifetime,
-uniqueness, parameter-mode, or escape-summary model in this architecture.
-Automatic reference counting is intentionally simple and mechanical. Runtime
-mutation uses `refcount == 1` to decide whether in-place mutation is allowed.
+Static ownership reasoning lives in exactly one place: LIR ARC insertion.
+ARC insertion computes a whole-program borrows-with-lifetimes solution and
+emits explicit RC statements from it (see ARC Borrow Inference). No other
+stage — checking, post-check lowering, backends, the interpreter, or LirImage —
+contains a borrow, lifetime, uniqueness, or parameter-mode model. Everything
+the solver computes is ARC-stage-local data; none of it appears in checked
+modules, LirImage, or any consumer-visible structure. Runtime mutation still
+uses `refcount == 1` to decide whether in-place mutation is allowed.
 
 Roc functions have fixed arity. Roc functions are not automatically curried.
 The compiler must not synthesize partial-application closures, curried call
@@ -1915,7 +1919,580 @@ The direct LIR builder emits ownership-neutral LIR. ARC insertion runs after
 LIR construction and emits explicit `incref`, `decref`, and `free` statements.
 Each explicit RC statement carries the concrete RC helper selected by ARC.
 Backends, the interpreter, and LirImage builders follow those statements
-mechanically.
+mechanically. The ARC algorithm is specified in ARC Borrow Inference below.
+
+### Join-Parameter Scalarization
+
+Between direct LIR lowering and ARC insertion, one normalization splits
+struct-typed join parameters into per-field parameters when the parameter is
+only ever read field-by-field and only ever initialized from single-use
+struct literals. Each jump then passes the literal's operands directly and
+the literal's build is deleted; field reads become local aliases. This is
+required for refcounted loop state: without it, every jump pays a retain on
+each refcounted field read whose wrapper dies at the jump, and ARC cannot
+turn that into a move because the wrapper's release covers all fields at
+once. After scalarization the state flows through pure alias chains that
+borrow inference resolves to moves. Parameters with any whole-value use keep
+their shape, and the pass iterates so nested wrappers dissolve.
+
+## ARC Borrow Inference
+
+ARC insertion computes a whole-program borrows-with-lifetimes solution over
+ownership-neutral LIR, then emits explicit `incref`, `decref`, and `free`
+statements from that solution. The algorithm is an adaptation of
+fully-automatic borrow inference for reference-counted pure functional
+programs to Roc's statement-only LIR, from the paper ["Fully-Automatic Type
+Inference for Borrows with
+Lifetimes"](https://theory.stanford.edu/~aiken/publications/papers/oopsla26.pdf)
+by William Brandon, Benjamin Driscoll, Frank Dai, Jonathan Ragan-Kelley, Mae
+Milano, and Alex Aiken (OOPSLA 2026), implemented in the Morphic compiler.
+
+The motivation is RC traffic. With all-owned insertion, every non-final
+occurrence of a refcounted value pays an atomic increment plus a matching
+decrement, and read-heavy programs spend a large fraction of their runtime on
+RC statements that a borrows-with-lifetimes typing proves unnecessary. Borrow
+inference deletes those statements statically. It also keeps refcounts at 1
+across read-only uses, which is what lets the runtime `refcount == 1` checks
+in list and string operations mutate in place instead of copying.
+
+The ARC stage contract does not change:
+
+- input: ownership-neutral LIR containing no RC statements
+- output: the same LIR statement language whose only ownership data is
+  explicit RC statements carrying concrete RC helpers
+- backends, the interpreter, and LirImage consume the output mechanically and
+  make no ownership decisions
+- no mode, lifetime, signature, or specialization table appears in checked
+  modules, LirImage, or any consumer-visible structure; everything the solver
+  computes is ARC-stage-local and is dropped when the stage finishes
+
+Borrow inference runs after every other post-check transformation:
+monomorphization, lifting, call-pattern specialization, lambda-set solving,
+inlining decisions, and LIR lowering are all complete before solving starts.
+This ordering is required, not incidental:
+
+- inference attaches resources to refcounted positions of committed layouts,
+  which exist only after LIR lowering commits them
+- every specializing or restructuring pass changes which values exist and how
+  calls are shaped, which invalidates an ownership solution; solving once,
+  last, means the solution is never patched after a later transformation
+- earlier specialization makes inference more precise: call-pattern
+  specialization deletes refcounted aggregate intermediates outright and
+  exposes per-position flow that one aggregate-typed parameter would hide
+
+The dependency is one-directional. Upstream stages feed borrow inference;
+the solution is consumed only by emission within the same ARC stage. No
+earlier stage may consult, anticipate, or encode ownership decisions.
+
+Borrow inference is not best-effort analysis. It is a least-fixed-point
+computation over finite lattices: deterministic, total, and independent of
+traversal order. Every mode and lifetime is the least solution of explicit
+constraints generated from LIR statement structure, committed layouts, per-op
+`RcEffect` data, and pinned ABI signatures. Every constraint system has a
+solution, because the all-owned assignment satisfies all constraints; the
+solver outputs the least one. There is no failure path and no recovery path.
+An occurrence the solver leaves owned is emitted as a move or an `incref`,
+exactly as all-owned insertion would emit it.
+
+### Vocabulary
+
+- `Resource`: one refcounted position of one local — the top-level value, or
+  one nested rc position reachable through the local's committed layout.
+- `Mode`: `borrowed` or `owned`. The mode lattice is `borrowed < owned`.
+  A borrowed resource is an alias whose occurrences emit no RC statements. An
+  owned resource is responsible for exactly one reference count: it is
+  eventually moved exactly once or decremented exactly once on every path.
+- `Lifetime`: a tree-shaped interval of one proc body recording, on each
+  control-flow path, the last point at which a value must still be live.
+  Lifetimes of values that flow through params and returns are summarized by
+  lifetime variables in proc signatures.
+- `RcSig`: the solved ownership signature of one proc — a mode for every
+  refcounted param and return position, plus the lifetime relation between
+  borrowed returns and the params they may borrow from.
+- emission: the final walk that writes RC statements into statement chains.
+  Emission consumes the solved modes and precise lifetimes; it makes no
+  decisions of its own.
+
+The paper's `dup` corresponds to LIR `incref`, its `drop` to `decref`/`free`,
+and its moves to the absence of both at a final owned occurrence.
+
+### Resources Over Layouts
+
+A local participates in inference iff its layout contains refcounted data
+(`layoutContainsRefcounted`). Each participating local owns one resource per
+rc node reachable in its committed layout:
+
+- the top-level value itself, when its layout is `str`, `list`, `list_of_zst`,
+  `box`, `box_of_zst`, or `erased_callable`
+- the element resource of a `list`
+- the payload resource of a `box`
+- one resource per refcounted field of a `struct_`
+- one resource per refcounted payload position of each `tag_union` variant
+- the captures resource of a `closure` / `erased_callable`
+
+Rc positions are interned per `layout.Idx` as a stage-local place table. The
+place graph is finite: committed layouts guard every recursive occurrence
+behind a box (layout commit performs SCC analysis and materializes back-edges
+as boxes), and a place path that re-enters a layout already on the path folds
+into the earlier place. One place under a recursive box therefore stands for
+every unrolled occurrence, which matches the typing rule below that nested
+modes are uniform through an owning rc.
+
+Nested resources carry two modes, following the paper's storage/access split:
+
+- the storage mode is the mode the containing allocation stores at that
+  position. Storage modes are equality-constrained along value flow: an
+  `owned rc (borrowed rc t)` cannot exist, because dropping the outer rc to
+  zero must be allowed to drop the inner rc. Newly created allocations store
+  owned content, so in practice storage modes solve to owned everywhere; the
+  constraint form is kept because it is what makes payload-read borrowing
+  sound.
+- the access mode records whether it is safe for a payload read at that
+  position to produce a borrow. It is solved from where the read result
+  flows, exactly like a top-level occurrence mode.
+
+Top-level resources carry one binding mode plus one occurrence mode per use
+site.
+
+### Lifetimes Over Statement Structure
+
+A program point is a position in a proc's statement structure: one step per
+statement along `next` chains, alternation at `switch_stmt` branches, and one
+region per `join` body and per `join` remainder. `jump` statements create
+flow edges between regions, including back edges for loops.
+
+A lifetime is a tree over this structure, built from:
+
+- the empty lifetime (resource never needs to be live)
+- a point (one occurrence)
+- sequential composition (ends in the bound statement vs. later in the chain)
+- alternating composition over switch branches, including one-sided forms for
+  values used in only some branches
+
+Lifetimes within one proc form a finite lattice ordered by containment, with
+a least-upper-bound operation taken pointwise over branches. Finiteness is
+bounded by the proc's statement count and branching depth, which is what
+guarantees fixpoint termination. Join regions and back edges do not get
+special lifetime constructors: constraints flow between regions through join
+parameter resources (below), and the lattice's finiteness makes iteration
+over back edges converge.
+
+Lifetimes that cross proc boundaries are not represented as trees. A proc's
+borrowed param positions carry lifetime variables; a borrowed return position
+carries a join of the param lifetime variables it may borrow from. Callers
+instantiate those variables with caller-side lifetimes at each call site.
+
+### Constraints Per Statement Form
+
+Inference lifts each proc body once, assigning fresh resource variables, and
+generates constraints per statement:
+
+- `assign_literal` (str), `assign_list`, `assign_struct`, `assign_tag` with
+  refcounted payload, `assign_packed_erased_fn`: the target's top-level
+  resource is a newly created reference count, so its binding mode is owned.
+  Operand occurrences that are stored into the new allocation must be owned
+  at that occurrence (storage constraint).
+- `assign_ref` with `.field`, `.tag_payload`, `.tag_payload_struct`: a payload
+  read. The result may be a borrow of the source. The source must be live as
+  long as the result is used (lifetime constraint), and the access mode of
+  the source's nested position bounds the result's mode: if the access mode
+  is owned, the read emits an `incref` on the result; if borrowed, it emits
+  nothing.
+- `assign_ref` with `.local`, `.list_reinterpret`, `.nominal`, and
+  `set_local`: pure flow. The use resource and binding resource are related
+  by flow constraints in both directions (see the equations below). A final
+  owned occurrence becomes a move.
+- `assign_call`: instantiate the callee's `RcSig`. A borrowed param position
+  constrains the argument to be live across the call and emits nothing. An
+  owned param position consumes the argument occurrence: a move when the
+  occurrence is final, an `incref` otherwise. A borrowed return position
+  constrains the result's lifetime to the join of the lifetimes of the
+  arguments it may borrow from; an owned return is a fresh owned resource.
+- `assign_call_erased`: the erased-callable ABI is a pinned all-owned
+  `RcSig`: refcounted args owned, captures owned by the callee, result owned.
+  Inference does not flow modes through erased callable values.
+- `assign_low_level`: constraints come from the op's `RcEffect`. Args in
+  `consume_args` are owned occurrences. Args outside `consume_args` are
+  borrowed occurrences whose lender must be live at the call. Args in
+  `retain_args` are stored by the op, so the stored value's storage
+  constraint applies. A new mask, `result_borrows_args`, names the args the
+  result may alias without owning (for example `list_get_unsafe` results
+  borrow arg 0); the result's mode is then solved like a payload read, with
+  the lifetime constraint tied to those args. Ops whose results never alias
+  a retained arg produce fresh owned results as today.
+- `join` / `jump`: each join parameter's resources get modes and lifetime
+  relations like an intra-proc signature. `set_local` with
+  `initialize_join_param` followed by `jump` is a flow edge from the
+  jump-site resource into the join-param resource. Back edges contribute the
+  same constraints; the fixpoint handles them.
+- `ret`: flow into the proc's `RcSig` return position.
+- `expect`, `debug`: borrowed reads.
+- `crash`, `runtime_error`: terminal; every live owned resource is dropped on
+  that path by emission.
+- `incref` / `decref` / `free` in the input: a compiler bug (the input
+  contract is RC-free LIR), enforced by a debug assertion.
+
+Ownership demands propagate transitively through pure same-value aliases
+(`.local`, `.list_reinterpret`, `.nominal`): a consumed alias is a consumed
+source, so the chain's single unit moves link by link to the consuming
+occurrence instead of the alias paying a retain while the source's unit is
+separately released. Payload reads do not propagate demands; borrowing the
+container is exactly the win there.
+
+The solver runs three equation groups to their least fixed points, in order,
+following the paper's Figure 8 adapted to LIR vocabulary:
+
+```text
+approximate lifetimes (escape analysis, pessimistically deep):
+  ltApprox(bind) >= if flow(bind, use) then ltApprox(use)
+
+modes:
+  access(bind) >= if flow(bind, use) then access(use)
+  access(use)  >= if flow(bind, use)
+                  and ltApprox(use) escapes scope(bind)
+                  then access(bind)
+  storage(bind) = storage(use) along flow
+  access(r) = owned for every pinned-owned position
+
+precise lifetimes (exact, given solved modes):
+  lateralFlow(bind, use) <= flow(bind, use) and use is owned
+  verticalFlow(parent, result) <= payload read of an owned position
+                                  whose result stays borrowed
+  ltPrec(a) >= if lateralFlow(a, b) or verticalFlow(a, b) then ltPrec(b)
+```
+
+Approximate lifetimes deliberately over-extend through nested rc positions so
+that escape decisions are sound before modes exist. Precise lifetimes are
+recomputed after modes are fixed and are the only lifetimes emission may use
+for placing `decref` statements; approximate lifetimes are not sound for drop
+placement and must not reach emission.
+
+### Pinned Signatures
+
+Some signatures are ABI contracts, not inference results. They are pinned
+before solving and never weakened:
+
+- root procs (`runtime_entrypoint`, `provided_export`,
+  `platform_required_binding`, `hosted_export`, `test_expect`, `repl_expr`,
+  `dev_expr`, and compile-time roots): every refcounted param owned on entry,
+  every refcounted return position owned. This is the existing host ABI rule.
+- hosted procs: every refcounted arg owned by the host, result owned. This
+  keeps the LirImage And Hosted Functions contract unchanged.
+- erased-callable procs (`ProcAbi.erased_callable`): all-owned, as above.
+- low-level ops: their `RcEffect` is the signature; it is explicit static
+  data on the op, never inferred.
+
+### Interprocedural Solving
+
+The proc call graph is derived from `assign_call` statements over
+`LirStore.getProcSpecs()`. Signatures solve in two phases:
+
+1. Parameter modes iterate globally to a fixpoint with returns treated as
+   owned: non-pinned refcounted parameter positions start borrowed and flip
+   to owned when any occurrence demands a unit under the current signatures.
+   The borrowed set only shrinks, so iteration terminates.
+2. With parameter modes final, a return becomes borrowed when every `ret`
+   in the proc returns a borrow anchored on a borrowed parameter of that
+   proc, with the parameter positions recorded as the return's lenders. A
+   final binding solve then lets callers borrow such results: a call result
+   whose lender mask names exactly one refcounted argument is borrow-capable
+   in the caller, anchored on that argument.
+
+Borrowed parameters anchor borrow groups of their own: they are live for the
+whole call by ABI, so payload reads from them borrow without the callee
+emitting any release for the group.
+
+Tail calls need one rule so that borrow inference never blocks backend
+tail-call lowering. LIR has no tail-call statement; a call is in tail
+position when the next statement returns the call result. Call-graph SCCs
+(computed once, iteratively) feed exactly this rule: a tail-position call to
+a proc in the same SCC demands ownership of its refcounted arguments, so
+emission never places a release after the call on that path. Calls that
+leave the SCC keep borrowed positions, since the caller's drops precede the
+tail call there only when the values genuinely die earlier.
+
+### RC Statement Emission
+
+Emission walks each proc once, consuming solved modes and precise lifetimes,
+and rebuilds statement chains with the same insertion machinery used today:
+
+- borrowed occurrence: no statements.
+- owned occurrence that is not the final occurrence on its path: `incref`
+  before the consuming statement. Adjacent increments of the same local
+  coalesce into the `count` field.
+- owned final occurrence: a move; no statements.
+- owned binding whose precise lifetime ends without a move: `decref` at the
+  earliest point its precise lifetime permits on each path. Early placement
+  is required, not optional: it bounds liveness growth from borrowing and
+  returns refcounts to 1 before later mutation points, preserving in-place
+  mutation in the runtime uniqueness checks.
+- owned binding that is never used: dropped immediately after creation.
+- reassignable local write (`replace_existing`): the previous resource ends
+  at the write (decremented unless moved), and the write starts a fresh
+  resource. Borrows of the previous value cannot outlive the write; the
+  scope-end constraint above forces such occurrences owned instead.
+- caller-side adaptation at calls: passing an owned final occurrence to a
+  borrowed param borrows it for the call and drops it at its precise
+  lifetime end; needing an owned result from a borrowed return position
+  emits one `incref` on the result.
+- switch branches and join regions balance drops exactly as today: a value
+  that dies in one branch and survives another is dropped on the dying
+  branch.
+
+Emission also emits `free` where it does today (intent marker for a value
+the proc fully releases); `free` keeps its current meaning of decrement plus
+deallocation with nested decrefs through the RC helper plan.
+
+RC helper selection is unchanged: each emitted statement carries the helper
+derived from the local's layout, and helper choice stays in this stage.
+
+Emission decisions ask liveness questions with on-demand forward scans over
+the ownership-neutral statement graph, the same shape the all-owned inserter
+used, with more questions per statement (early drops check each refcounted
+operand, and scans cover a binding's whole borrow group). If profiling ever
+shows ARC insertion hot in compile times, the intended remedy is one
+precomputed per-statement liveness table per proc consumed by the same
+decision points — a mechanical swap that changes no decision — not weaker
+scanning.
+
+The debug borrow certifier deliberately spends more: it re-certifies join
+bodies per distinct entry state and summarizes per statement for walk
+deduplication. Release builds compile the certifier away entirely, so only
+debug compiler builds pay, and any certifier slowness is fixed inside the
+certifier, never by weakening what it checks.
+
+### Mode Specialization
+
+A proc's solved `RcSig` is the most-borrowed signature its body admits.
+Callers can always adapt to it, but adaptation has a cost: passing an owned
+value to a borrowed param keeps a caller-side drop that a move would have
+deleted, and an owned use of a borrowed return pays an `incref`. Mode
+specialization removes that adaptation cost by emitting one proc variant per
+demanded mode vector.
+
+A demand vector assigns each refcounted param position a mode at or above
+the solved signature (pointwise more owned). Return positions are never
+demanded: a borrowed return that the caller needs owned pays one retain, and
+that retain costs the same whether it is emitted in the caller or inside an
+owned-returning variant, so no variant exists to save it. Specialization is
+a worklist keyed by `(proc, demand vector)`:
+
+1. Every proc is emitted once at its solved signature (the base variant).
+2. While emitting any proc, each `assign_call` site upgrades a borrowed
+   position to an owned demand exactly when the argument is an owned final
+   occurrence there: the upgrade turns a borrow-plus-later-drop into a move.
+3. The call site targets the `(callee, vector)` variant, creating it if new
+   and re-emitting it from the callee's ownership-neutral body under the
+   demanded vector. Inside the variant, demanded positions override the
+   solved borrowed binding to owned, and everything else solves identically.
+4. The variant table is keyed by vector content, so identical demands share
+   one variant deterministically, independent of discovery order.
+
+Variant bodies are cloned with the existing statement-cloning machinery and
+added with `LirStore.addProcSpec`. Root procs are never specialized; their
+vectors are pinned. The variant count is bounded by realized demand vectors,
+not by the theoretical vector space.
+
+A build without mode specialization is the same worklist with every demand
+vector forced to the solved `RcSig`, which yields exactly one variant per
+proc. Dev builds (`--opt=dev`) and compile-time evaluation use that
+single-variant form, because solving is the only new compile-time cost they
+accept. `--opt=speed` and `--opt=size` both enable full specialization;
+specialization clones proc bodies, but each variant carries fewer RC
+statements, and variant counts are bounded by realized demand vectors. All
+forms run the identical solver; they differ only in which demand vectors get
+a variant, so build modes can never disagree about observable program
+results — only RC statement placement and proc count differ.
+
+### In-Place Mutation Interaction
+
+Ops with `may_runtime_uniqueness_check_args` mutate in place when the
+checked argument's refcount is 1. Borrow inference helps these checks
+succeed by deleting increfs that would otherwise hold refcounts above 1
+during read phases, and early drop placement returns counts to 1 before
+mutation points.
+
+One interaction is accepted and documented rather than solved here: a borrow
+whose lifetime extends past a uniqueness-checked mutation of its lender's
+allocation forces the runtime copy path for that mutation. The solution is
+still sound and still RC-minimal under the constraint system; it is the
+constraint system itself that does not yet weigh mutation points. Extending
+the flow analysis to account for `may_runtime_uniqueness_check_args`
+positions when choosing between a borrow and an owned move is future design
+work and must be added to the equations, not patched in emission.
+
+### Debug Borrow Certifier
+
+Inference is implemented as a solver plus an independent certifier, because
+RC misplacement is memory unsafety. Debug builds re-check every emitted proc
+against the borrow typing rules:
+
+- every owned resource is moved exactly once or decremented exactly once on
+  every path, and never used after its move or drop
+- every borrowed occurrence's lender is provably live at that point: the
+  borrow's lifetime is contained in the lender's
+- every join body holds under the entry state of each jump that reaches it:
+  jump states are summarized over the names the body relies on (liveness,
+  unit counts, alias partition, and borrow anchors), and the body is
+  certified once per distinct summary, exactly as shared switch suffixes are
+  re-walked per distinct inflowing state
+- every call site satisfies the callee variant's signature, and every pinned
+  signature holds
+
+The certifier consumes only the emitted LIR and the stage-local signature
+table. A certifier failure is a compiler bug and stops compilation. Release
+builds compile the certifier away entirely, like every other debug-only
+boundary check.
+
+### Thread-Confined Reference Counts
+
+Reference counts are atomic today because the host may share a Roc value
+across threads. Roc code itself is single-threaded within one host call, so
+an allocation needs atomic count updates only if a handle to it is ever
+visible to the host: it flows into a hosted call, a root return, an erased
+or address-escaped boundary — or it originated from one, as a root
+parameter, a hosted-call result, or a payload read out of a host-visible
+container. Every other allocation is confined to one thread for its whole
+life, and its counts may use plain loads and stores.
+
+Atomicity is a property of the allocation but is chosen per RC statement,
+so every statement that can touch one allocation must agree. Agreement is
+guaranteed by construction: host visibility is a may-property propagated to
+a fixpoint over the complete value-flow graph, and two locals can only hold
+the same allocation if a chain of those same flow edges connects them, so a
+visible allocation marks every local that can hold it.
+
+The analysis is one more monotone bit per local in the ARC solver, over
+edges the solver already walks:
+
+- seeds: parameters and returns of pinned procs (roots, hosted procs,
+  erased-callable procs, procs whose address escapes)
+- pure same-value aliases, in both directions
+- containment, in both directions: aggregate and capture operands link to
+  the constructed value, and payload reads link to their source — storing a
+  visible value makes the container visible, and anything read out of a
+  visible container is visible
+- direct-call argument-to-parameter and return-to-result relations
+- low-level ops, from explicit `RcEffect` data
+
+Bidirectional containment keeps every reachable-value tree uniformly
+visible or uniformly confined, so RC helper plans carry a single atomicity
+flag rather than per-level flags.
+
+`RcEffect` gains one more explicit mask, `result_shares_args`: the result
+may contain handles into these arguments' allocations. Unit-accounting
+masks already imply sharing for many ops (`result_aliases_consumed_args`,
+`result_borrows_args`, `retain_args` all contribute edges directly), but
+unit accounting does not describe handle sharing in general: `str_split_on`
+allocates a fresh owned list whose string elements are seamless slices into
+the argument's allocation, and the byte/string conversions and
+prefix/suffix slicing ops are the same. Those ops set `result_shares_args`
+explicitly. A refcounted result of an op whose masks say nothing receives a
+conservative edge to every refcounted argument in both directions: visible
+spreads further than strictly necessary, which only keeps counts atomic
+that could have been plain, never the reverse. The mask is explicit
+primitive data, exactly like the rest of `RcEffect`; the analysis never
+guesses an op's sharing from its name or shape.
+
+Emission attaches the chosen atomicity to each `incref`, `decref`, and
+`free` statement as explicit data; backends and the interpreter follow it
+mechanically, and helper plans are selected by op, layout, and atomicity.
+The runtime builtins already contain both count-update families. Atomic is
+always sound, so the analysis only downgrades allocations it proves
+confined, and an all-atomic answer reproduces today's behavior exactly.
+
+Beyond cheaper count updates, confinement feeds the optimizer: atomic
+operations are opaque to LLVM, but plain count updates participate in its
+redundancy elimination, so residual paired increments and decrements that
+ownership solving legitimately cannot remove become foldable downstream.
+Confined data is also where `refcount == 1` in-place mutation hits most,
+and its uniqueness check gets cheaper.
+
+The debug certifier mirrors the analysis with one more rule: no
+single-thread RC statement may name a local that is flow-connected to a
+host-visibility seed.
+
+### Uniqueness Inference
+
+Ops with `may_runtime_uniqueness_check_args` branch at runtime: when the
+checked argument's count is 1 they mutate the allocation in place, and
+otherwise they copy. Borrow inference already deletes the RC traffic that
+would hold counts above 1 across read phases; uniqueness inference goes one
+step further and deletes the check itself wherever the in-place path is the
+only one reachable. The win per site is one count load and one branch, but
+the sites are the mutation points of hot loops, and removing the branch
+also lets LLVM optimize across what was an opaque control split.
+
+A checked argument's check is deletable when three conditions hold at the
+call:
+
+- the value's outermost allocation was born unique in scope: an allocation
+  statement, or the result of an op whose `RcEffect` marks its result
+  unique
+- its count is still 1 on every path from birth to the call: no surviving
+  incref, no store into an aggregate, no owned use other than the call
+  itself
+- no borrow of it is live at the call, under the same lender/holder
+  liveness rule the certifier evaluates
+
+The first two conditions are one more monotone bit per local in the ARC
+solver — born unique, destroyed by any flow edge that can add a holder —
+over the same alias and call edges the solver already walks. The third is a
+query against liveness state emission already maintains.
+
+`RcEffect` gains one more explicit mask, `result_unique`: the result's
+outermost allocation has count 1 on return. Mutating ops qualify on both of
+their paths — in place keeps an allocation whose count was already 1, and
+the copy path returns a fresh one — and so do the ops that always allocate
+their outermost result, including the slicing ops whose inner elements
+share (`result_shares_args` describes the inner sharing; uniqueness is a
+property of the outermost allocation alone). As with the other masks, an op
+without the mask contributes nothing and its results stay conservatively
+non-unique; the analysis never guesses from an op's name or shape.
+
+Interprocedurally, `RcSig` gains a unique bit on the return, solved
+alongside `ret_mode` with the same pessimistic anchoring, and the mode
+specialization demand vector gains a unique entry per owned parameter:
+a call site that proves its dying argument unique may demand a variant
+whose body elides the checks that parameter reaches. Dev and compile-time
+builds stay single-variant and keep every runtime check, exactly as they
+keep all-owned calls.
+
+Emission lowers a uniqueness-checked op whose checked argument passes all
+three conditions to the check-free entry of the builtin; helper plans are
+selected by op, layout, atomicity, and uniqueness. The runtime check is
+always sound, so the analysis only deletes checks it proves redundant, and
+an all-checked answer reproduces today's behavior exactly.
+
+The debug certifier mirrors the analysis with one more rule: at every
+check-free mutation site, the checked value's unit balance is exactly 1,
+its origin chain reaches a unique birth, and no borrow of it is live.
+
+This sharpens the interaction documented under In-Place Mutation
+Interaction: once the constraint system weighs mutation points when
+choosing between a borrow and an owned move, the choice that keeps a
+mutation check-free becomes visible to the solver rather than a lucky
+outcome of emission order.
+
+### Adoption Stages
+
+Each stage fully replaces the previous behavior when it lands; there are no
+parallel insertion paths at any point:
+
+1. Certifier first, checking the current all-owned insertion output.
+2. Intraprocedural inference: borrows for locals, payload reads, and
+   low-level ops (including `result_borrows_args`), with every proc `RcSig`
+   pinned all-owned.
+3. Interprocedural `RcSig` solving over call-graph SCCs, single variant per
+   proc.
+4. Mode specialization in optimized builds.
+5. Thread-confined reference counts: the host-visibility analysis, the
+   `result_shares_args` audit of the low-level op table, dual-mode RC
+   statements and helper plans, and the certifier rule.
+6. Uniqueness inference: the born-unique bit, the `result_unique` audit of
+   the low-level op table, the unique entries in `RcSig` and the
+   specialization demand vector, check-free helper plans, and the certifier
+   rule.
 
 ## Compile-Time Constants
 
@@ -1938,6 +2515,11 @@ checked CIR
 The compile-time evaluator is an LIR interpreter. It does not interpret
 Monotype IR, Lambda Solved IR, logical Lambda Mono expressions, or any
 source-level IR.
+
+Compile-time ARC insertion runs the same borrow-inference solver as runtime
+ARC insertion in its single-variant form: one proc per solved `RcSig`, no
+mode specialization. Compile-time evaluation pays for solving once per
+evaluated root and never for variant cloning.
 
 The LIR interpreter produces a runtime value. Checking then stores that eval
 result as checked-stage data in the checked module's `ConstStore`. `ConstStore`
@@ -2251,6 +2833,8 @@ The post-check pipeline must not contain:
   descriptors, or erased ABI decisions
 - owner discovery by method-registry intersection
 - backend reference-counting decisions
+- mode, lifetime, or RC-signature data stored in checked modules, LirImage,
+  or any structure that outlives ARC insertion
 - user-facing errors after checked module output
 - release-build checks whose only purpose is maintaining compiler invariants
 
@@ -2262,7 +2846,8 @@ The allowed replacement is explicit stage ownership:
 - Lambda Solved owns callable flow in the type graph
 - Lambda Mono owns explicit callable value representation
 - LIR lowering owns committed layouts and statement lowering
-- ARC owns reference-count insertion
+- ARC owns borrow inference, mode specialization, and reference-count
+  insertion
 - backends own only backend code generation from explicit LIR
 
 ## Debug Invariants
@@ -2288,6 +2873,8 @@ Minimum boundary checks:
 - Checked compile-time stores contain only `ConstStore` data.
 - LIR lowering receives only Lambda Solved lifted syntax plus Lambda Mono
   decisions.
+- ARC insertion receives LIR containing no RC statements.
+- ARC output passes the debug borrow certifier.
 - Backends receive only ARC-complete LIR.
 
 If a boundary check fails, the compiler stops as a compiler bug.
