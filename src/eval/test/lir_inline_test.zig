@@ -168,7 +168,7 @@ fn liftModuleAfterSpecConstr(
             .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
             .imports = import_views,
         },
-        .{ .requests = resources.checked_artifact.root_requests.runtime_requests },
+        .{ .requests = resources.checked_artifact.root_requests.requests },
     );
     var mono_owned = true;
     errdefer if (mono_owned) mono.deinit();
