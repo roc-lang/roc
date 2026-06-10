@@ -134,6 +134,38 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "[10.0, 20.0, 30.0, 40.0]" },
     },
 
+    // Cross-type reuse: a tuple and a record with the same field layouts are
+    // different types but interchangeable in one allocation, so a unique
+    // list still maps in place.
+    .{
+        .name = "allocation - List.map reuses unique list across tuple-to-record types",
+        .source =
+        \\{
+        \\    base = List.concat([(1, 2)], [(3, 4)])
+        \\    swapped = List.map(base, |(a, b)| { x: b, y: a })
+        \\    if swapped == List.concat([{ x: 2, y: 1 }], [{ x: 4, y: 3 }]) {
+        \\        "ok"
+        \\    } else {
+        \\        "bad"
+        \\    }
+        \\}
+        ,
+        // Four list literals plus two concats; the map itself contributes
+        // zero. The copy path would allocate one more and fail this ceiling.
+        .expected = .{ .allocations_at_most = .{
+            .output = "ok",
+            .max_allocations = 6,
+        } },
+    },
+
+    // Cross-type reuse with refcounted elements: ownership of each string
+    // moves out of the slot and back in inside the new record.
+    .{
+        .name = "inspect: List.map in place across tuple-to-record with strings",
+        .source = "List.map(List.concat([(\"a\", 1)], [(\"b\", 2)]), |(s, n)| { label: s, n: n })",
+        .expected = .{ .inspect_str = "[{ label: \"a\", n: 1.0 }, { label: \"b\", n: 2.0 }]" },
+    },
+
     // The list is shared (used again after the map), so map must take the
     // copy path and leave the original untouched.
     .{

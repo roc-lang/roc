@@ -249,6 +249,9 @@ const Lowerer = struct {
     fn_written: std.ArrayList(bool),
     inline_plan: SolvedInline.Plan,
     list_in_place_map: bool,
+    /// Match sites statically resolved by `foldListMapCanReuseMatch`,
+    /// recorded (Debug only) so the Lambda Mono verifier replays them.
+    folded_map_matches: std.ArrayList(Lifted.Program.FoldedMatch),
     source_symbols: std.AutoHashMap(Common.Symbol, Lifted.FnId),
     capture_types: CaptureTypeMap,
     captures: std.AutoHashMap(Lifted.LocalId, CaptureBinding),
@@ -298,6 +301,7 @@ const Lowerer = struct {
             .fn_written = .empty,
             .inline_plan = options.inline_plan,
             .list_in_place_map = options.list_in_place_map,
+            .folded_map_matches = .empty,
             .source_symbols = std.AutoHashMap(Common.Symbol, Lifted.FnId).init(allocator),
             .capture_types = CaptureTypeMap.initContext(allocator, .{}),
             .captures = std.AutoHashMap(Lifted.LocalId, CaptureBinding).init(allocator),
@@ -313,6 +317,7 @@ const Lowerer = struct {
     }
 
     fn deinit(self: *Lowerer) void {
+        self.folded_map_matches.deinit(self.allocator);
         self.loop_stack.deinit(self.allocator);
         self.allocator.free(self.local_map);
         self.const_plan_map.deinit();
@@ -338,6 +343,7 @@ const Lowerer = struct {
             .lir_result = self.result,
             .runtime_schemas = self.runtime_schemas,
         };
+        self.folded_map_matches.deinit(self.allocator);
         self.loop_stack.deinit(self.allocator);
         self.allocator.free(self.local_map);
         self.const_plan_map.deinit();
@@ -358,6 +364,7 @@ const Lowerer = struct {
         self.runtime_schemas = RuntimeSchemaStore.init(self.allocator);
         self.local_map = &.{};
         self.loop_stack = .empty;
+        self.folded_map_matches = .empty;
         return output;
     }
 
@@ -1253,7 +1260,7 @@ const Lowerer = struct {
         var clone_owned = true;
         errdefer if (clone_owned) solved_clone.deinit();
 
-        var materialized = try LambdaMonoLower.run(self.allocator, solved_clone, self.list_in_place_map);
+        var materialized = try LambdaMonoLower.run(self.allocator, solved_clone, self.folded_map_matches.items);
         clone_owned = false;
         defer materialized.deinit();
 
@@ -2175,7 +2182,7 @@ const Lowerer = struct {
         // allocator both derive from max(ptr_width, element alignment) and
         // from whether elements are refcounted (which reserves an extra
         // element-count slot for seamless slices). Both must agree or a
-        // later free would reconstruct the wrong allocation pointer.
+        // later free would compute the wrong allocation pointer.
         const target_usize = self.result.layouts.targetUsize();
         const ptr_width = target_usize.size();
         const out_alignment: u32 = @intCast(out_elem.alignment(target_usize).toByteUnits());
@@ -2356,11 +2363,14 @@ const Lowerer = struct {
         } });
     }
 
-    /// When the in-place `List.map` branch is statically impossible, lower
-    /// only the branch a constant-0 `list_map_can_reuse` selects, so the
-    /// in-place machinery never reaches LIR. The decision lives on the lifted
-    /// program because the debug Lambda Mono materializer applies the same
-    /// fold and the two must agree on which functions exist.
+    /// When the in-place `List.map` branch is statically impossible — the
+    /// optimization is disabled or the element layouts are not
+    /// interchangeable — lower only the branch a constant-0
+    /// `list_map_can_reuse` selects, so the in-place machinery never reaches
+    /// LIR. Each fold is recorded as explicit data; the debug Lambda Mono
+    /// materializer replays the recorded resolutions instead of recomputing
+    /// them (it runs before layout selection and has no layout store), so
+    /// the two derivations demand the same set of functions.
     fn foldListMapCanReuseMatch(
         self: *Lowerer,
         target: LIR.LocalId,
@@ -2368,13 +2378,19 @@ const Lowerer = struct {
         branches_span: Lifted.Span(Lifted.Branch),
         next: LIR.CFStmtId,
     ) Common.LowerError!?LIR.CFStmtId {
-        const body = self.solved.lifted.listMapCanReuseFoldedBranchBody(
-            &self.solved.lifted.names,
-            scrutinee,
-            branches_span,
-            self.list_in_place_map,
-        ) orelse return null;
-        return try self.lowerExprInto(target, body, next);
+        const match = self.solved.lifted.listMapCanReuseMatch(scrutinee, branches_span) orelse return null;
+        const args = self.solved.lifted.exprSpan(match.call_args);
+        if (self.list_in_place_map and try self.listMapLayoutsInterchangeable(args)) {
+            // Reuse is possible; the runtime uniqueness check decides.
+            return null;
+        }
+        if (builtin.mode == .Debug) {
+            try self.folded_map_matches.append(self.allocator, .{
+                .scrutinee = scrutinee,
+                .body = match.zero_branch_body,
+            });
+        }
+        return try self.lowerExprInto(target, match.zero_branch_body, next);
     }
 
     fn lowerIfInto(self: *Lowerer, target: LIR.LocalId, branches_span: Lifted.Span(Lifted.IfBranch), final_else: Lifted.ExprId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {

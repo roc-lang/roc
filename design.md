@@ -2495,15 +2495,21 @@ layouts are not interchangeable (or the optimization is off), so the
 runtime check never runs for a pair it could corrupt.
 
 The in-place branch itself is dropped before it reaches LIR whenever the
-input and output element monotypes differ or the optimization is disabled
+element layouts are not interchangeable or the optimization is disabled
 (`TargetConfig.list_in_place_map`, on for `--opt=size`/`--opt=speed`, off
-for dev, interpreter, and compile-time evaluation). That fold is decided on
-the lifted program from monotype digests rather than layouts, because the
-debug Lambda Mono materializer must reach the same answer without a layout
-store: both consult one function, so the verifier sees the same set of
-demanded functions. Element monotypes that differ but share a layout
-therefore take the copy path; identical monotypes keep both branches and
-let the runtime count decide.
+for dev, interpreter, and compile-time evaluation), so ineligible map
+specializations never carry dead in-place machinery and dev builds lower
+exactly the copy loop. The fold uses the same layout-eligibility decision
+as the primitive, so every interchangeable pair — including different
+types that share one layout — keeps the branch. The debug Lambda Mono
+materializer runs before layout selection and cannot recompute that
+decision; instead, direct lowering records each statically resolved match
+site as explicit data and the verifier replays the record, so the two
+derivations demand the same set of functions without the materializer ever
+consulting layouts. A wrong record can only misplace dead code, never a
+runtime check — the primitive's own lowering independently gates the
+runtime path — and a fold regression surfaces as a Debug stride assertion
+in the backends rather than as silent dead code.
 
 Inside the in-place loop, `list_map_extract_unsafe` moves one element's
 ownership out of the buffer and `list_map_write_unsafe` moves the

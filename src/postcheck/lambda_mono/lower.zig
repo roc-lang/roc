@@ -15,7 +15,9 @@ const Allocator = std.mem.Allocator;
 pub fn run(
     allocator: Allocator,
     solved: Solved.Program,
-    list_in_place_map: bool,
+    /// Match sites the direct lowerer statically resolved; replayed here so
+    /// both derivations demand the same set of functions.
+    folded_matches: []const Lifted.Program.FoldedMatch,
 ) Common.LowerError!Ast.Program {
     var owned = solved;
     errdefer owned.deinit();
@@ -30,7 +32,10 @@ pub fn run(
     errdefer program.deinit();
 
     var lowerer = try Lowerer.init(allocator, &owned, &program);
-    lowerer.list_in_place_map = list_in_place_map;
+    defer lowerer.folded_matches.deinit(allocator);
+    for (folded_matches) |folded| {
+        try lowerer.folded_matches.put(allocator, folded.scrutinee, folded.body);
+    }
     defer lowerer.deinit();
     try lowerer.lower();
     program.next_symbol = lowerer.symbols.next;
@@ -125,9 +130,10 @@ const Lowerer = struct {
     captures: std.AutoHashMap(Lifted.LocalId, CaptureBinding),
     symbols: Common.SymbolGen,
     erased_capture_ptr_ty: ?Type.TypeId = null,
-    /// Mirrors direct LIR lowering's in-place `List.map` branch fold so the
-    /// debug verifier sees the same set of demanded functions.
-    list_in_place_map: bool = false,
+    /// Replays the match resolutions direct LIR lowering recorded, so the
+    /// debug verifier sees the same set of demanded functions. Keyed by the
+    /// match's scrutinee expression.
+    folded_matches: std.AutoHashMapUnmanaged(Lifted.ExprId, Lifted.ExprId) = .empty,
 
     fn init(allocator: Allocator, solved: *const Solved.Program, program: *Ast.Program) Allocator.Error!Lowerer {
         const local_map = try allocator.alloc(?Ast.LocalId, solved.lifted.locals.items.len);
@@ -482,12 +488,7 @@ const Lowerer = struct {
                 .negated = eq.negated,
             } },
             .match_ => |match| blk: {
-                if (self.solved.lifted.listMapCanReuseFoldedBranchBody(
-                    &self.program.names,
-                    match.scrutinee,
-                    match.branches,
-                    self.list_in_place_map,
-                )) |folded_body| {
+                if (self.folded_matches.get(match.scrutinee)) |folded_body| {
                     break :blk .{ .block = .{
                         .statements = .empty(),
                         .final_expr = try self.lowerExpr(folded_body),
