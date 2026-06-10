@@ -17,7 +17,7 @@ const reporting = @import("reporting");
 const RocTarget = target_mod.RocTarget;
 const TargetsConfig = target_mod.TargetsConfig;
 const TargetLinkSpec = target_mod.TargetLinkSpec;
-const LinkType = target_mod.LinkType;
+const OutputKind = target_mod.OutputKind;
 const LinkItem = target_mod.LinkItem;
 const Report = reporting.Report;
 const Severity = reporting.Severity;
@@ -52,7 +52,7 @@ pub const ValidationResult = union(enum) {
     /// A file declared in targets doesn't exist
     missing_target_file: struct {
         target: RocTarget,
-        link_type: LinkType,
+        output: OutputKind,
         file_path: []const u8,
         expected_full_path: []const u8,
     },
@@ -72,7 +72,6 @@ pub const ValidationResult = union(enum) {
     unsupported_target: struct {
         platform_path: []const u8,
         requested_target: RocTarget,
-        link_type: LinkType,
         supported_targets: []const TargetLinkSpec,
     },
 
@@ -88,6 +87,16 @@ pub const ValidationResult = union(enum) {
     unsupported_glibc_cross: struct {
         target: RocTarget,
         host_os: []const u8,
+    },
+
+    /// Target cannot be built as a shared library
+    unsupported_shared_lib_target: struct {
+        target: RocTarget,
+    },
+
+    /// Target cannot produce a relocatable object merge
+    unsupported_obj_target: struct {
+        target: RocTarget,
     },
 
     /// App file doesn't have a platform
@@ -154,7 +163,7 @@ pub fn validateTargetFilesExist(
     targets_config: TargetsConfig,
     platform_dir: std.Io.Dir,
 ) Allocator.Error!ValidationResult {
-    const files_dir_path = targets_config.files_dir orelse return .{ .valid = {} };
+    const files_dir_path = targets_config.inputs_dir orelse return .{ .valid = {} };
 
     // Check if files directory exists
     var files_dir = platform_dir.openDir(std_io, files_dir_path, .{}) catch {
@@ -165,23 +174,8 @@ pub fn validateTargetFilesExist(
     };
     defer files_dir.close(std_io);
 
-    // Validate exe targets
-    for (targets_config.exe) |spec| {
-        if (try validateTargetSpec(allocator, std_io, spec, .exe, files_dir)) |result| {
-            return result;
-        }
-    }
-
-    // Validate static_lib targets
-    for (targets_config.static_lib) |spec| {
-        if (try validateTargetSpec(allocator, std_io, spec, .static_lib, files_dir)) |result| {
-            return result;
-        }
-    }
-
-    // Validate shared_lib targets
-    for (targets_config.shared_lib) |spec| {
-        if (try validateTargetSpec(allocator, std_io, spec, .shared_lib, files_dir)) |result| {
+    for (targets_config.targets) |spec| {
+        if (try validateTargetSpec(allocator, std_io, spec, files_dir)) |result| {
             return result;
         }
     }
@@ -193,9 +187,23 @@ fn validateTargetSpec(
     allocator: Allocator,
     std_io: std.Io,
     spec: TargetLinkSpec,
-    link_type: LinkType,
     files_dir: std.Io.Dir,
 ) Allocator.Error!?ValidationResult {
+    // Shared libraries are an OS loader concept; freestanding wasm32 has no
+    // dynamic loader, so a wasm32 shared_lib target can never be linked.
+    if (spec.output == .shared and spec.target == .wasm32) {
+        return .{ .unsupported_shared_lib_target = .{ .target = spec.target } };
+    }
+
+    // Relocatable object merges are linked with ld -r / wasm-ld --relocatable.
+    // The embedded linker has no relocatable mode for Mach-O or COFF.
+    if (spec.output == .obj) {
+        switch (spec.target.toOsTag()) {
+            .macos, .windows => return .{ .unsupported_obj_target = .{ .target = spec.target } },
+            else => {},
+        }
+    }
+
     // Get target subdirectory name
     const target_subdir = @tagName(spec.target);
 
@@ -216,7 +224,7 @@ fn validateTargetSpec(
             const expected_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ "targets", target_subdir });
             return .{ .missing_target_file = .{
                 .target = spec.target,
-                .link_type = link_type,
+                .output = spec.output,
                 .file_path = target_subdir,
                 .expected_full_path = expected_path,
             } };
@@ -234,7 +242,7 @@ fn validateTargetSpec(
                     const expected_path = try std.fmt.allocPrint(allocator, "{s}/{s}/{s}", .{ "targets", target_subdir, path });
                     return .{ .missing_target_file = .{
                         .target = spec.target,
-                        .link_type = link_type,
+                        .output = spec.output,
                         .file_path = path,
                         .expected_full_path = expected_path,
                     } };
@@ -274,13 +282,11 @@ pub fn createValidationReport(
 
             try report.document.addCodeBlock(
                 \\    targets: {
-                \\        files: "targets/",
-                \\        exe: {
-                \\            x64linux: { files: ["host.o", app] },
-                \\            arm64linux: { files: ["host.o", app] },
-                \\            x64mac: { files: ["host.o", app] },
-                \\            arm64mac: { files: ["host.o", app] },
-                \\        }
+                \\        inputs: "targets/",
+                \\        x64linux: { inputs: ["host.o", app] },
+                \\        arm64linux: { inputs: ["host.o", app] },
+                \\        x64mac: { inputs: ["host.o", app] },
+                \\        arm64mac: { inputs: ["host.o", app] },
                 \\    }
             );
             try report.document.addLineBreak();
@@ -391,16 +397,12 @@ pub fn createValidationReport(
             try report.document.addLineBreak();
             try report.document.addText("does not support the ");
             try report.document.addAnnotated(@tagName(info.requested_target), .emphasized);
-            try report.document.addText(" target for ");
-            try report.document.addAnnotated(@tagName(info.link_type), .emphasized);
-            try report.document.addText(" builds.");
+            try report.document.addText(" target.");
             try report.document.addLineBreak();
             try report.document.addLineBreak();
 
             if (info.supported_targets.len > 0) {
-                try report.document.addText("Supported targets for ");
-                try report.document.addAnnotated(@tagName(info.link_type), .emphasized);
-                try report.document.addText(":");
+                try report.document.addText("Supported targets:");
                 try report.document.addLineBreak();
                 for (info.supported_targets) |spec| {
                     try report.document.addText("  - ");
@@ -409,9 +411,7 @@ pub fn createValidationReport(
                 }
                 try report.document.addLineBreak();
             } else {
-                try report.document.addText("This platform has no targets configured for ");
-                try report.document.addAnnotated(@tagName(info.link_type), .emphasized);
-                try report.document.addText(" builds.");
+                try report.document.addText("This platform has no targets configured.");
                 try report.document.addLineBreak();
                 try report.document.addLineBreak();
             }
@@ -477,6 +477,46 @@ pub fn createValidationReport(
             try report.document.addAnnotated("x64musl", .emphasized);
             try report.document.addText(" or ");
             try report.document.addAnnotated("arm64musl", .emphasized);
+            try report.document.addLineBreak();
+
+            return report;
+        },
+
+        .unsupported_shared_lib_target => |info| {
+            var report = Report.init(allocator, "UNSUPPORTED SHARED LIBRARY TARGET", .runtime_error);
+
+            try report.document.addAnnotated(@tagName(info.target), .emphasized);
+            try report.document.addText(" cannot be built as a shared library.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addText("Shared libraries are loaded by an operating system's dynamic loader,");
+            try report.document.addLineBreak();
+            try report.document.addText("and this target has none. Declare it under ");
+            try report.document.addAnnotated("exe", .emphasized);
+            try report.document.addText(" or ");
+            try report.document.addAnnotated("static_lib", .emphasized);
+            try report.document.addText(" instead.");
+            try report.document.addLineBreak();
+
+            return report;
+        },
+
+        .unsupported_obj_target => |info| {
+            var report = Report.init(allocator, "UNSUPPORTED OBJECT TARGET", .runtime_error);
+
+            try report.document.addAnnotated(@tagName(info.target), .emphasized);
+            try report.document.addText(" cannot produce a merged relocatable object.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addText("Relocatable object output is currently supported for ELF and");
+            try report.document.addLineBreak();
+            try report.document.addText("wasm targets only. Declare this target with ");
+            try report.document.addAnnotated("output: Exe", .emphasized);
+            try report.document.addText(" or ");
+            try report.document.addAnnotated("output: Shared", .emphasized);
+            try report.document.addText(" instead.");
             try report.document.addLineBreak();
 
             return report;
@@ -671,7 +711,7 @@ test "createValidationReport generates correct report for missing_target_file" {
     var report = try createValidationReport(allocator, .{
         .missing_target_file = .{
             .target = .x64linux,
-            .link_type = .exe,
+            .output = .exe,
             .file_path = "host.o",
             .expected_full_path = "targets/x64linux/host.o",
         },
@@ -713,10 +753,8 @@ test "validateTargetFilesExist returns valid when no files_dir specified" {
     const allocator = std.testing.allocator;
 
     const config = TargetsConfig{
-        .files_dir = null,
-        .exe = &.{},
-        .static_lib = &.{},
-        .shared_lib = &.{},
+        .inputs_dir = null,
+        .targets = &.{},
     };
 
     const result = try validateTargetFilesExist(allocator, std.testing.io, config, std.Io.Dir.cwd());
@@ -769,10 +807,8 @@ test "validatePlatformHasTargets accepts platform with targets section" {
         \\    packages {}
         \\    provides { main_for_host: "main" }
         \\    targets: {
-        \\        exe: {
-        \\            x64linux: { files: [app] },
-        \\            arm64linux: { files: [app] },
-        \\        }
+        \\        x64linux: { inputs: [app] },
+        \\        arm64linux: { inputs: [app] },
         \\    }
         \\
     ;
@@ -820,7 +856,7 @@ test "validatePlatformHasTargets skips non-platform headers" {
 test "validatePlatformHasTargets accepts platform with multiple target types" {
     const allocator = std.testing.allocator;
 
-    // Platform with exe and static_lib targets
+    // Platform with mixed output kinds
     const source =
         \\platform ""
         \\    requires { main : {} }
@@ -828,14 +864,10 @@ test "validatePlatformHasTargets accepts platform with multiple target types" {
         \\    packages {}
         \\    provides { main_for_host: "main" }
         \\    targets: {
-        \\        files: "targets/",
-        \\        exe: {
-        \\            x64linux: { files: ["host.o", app] },
-        \\            arm64mac: { files: [app] },
-        \\        },
-        \\        static_lib: {
-        \\            x64mac: { files: ["libhost.a"] },
-        \\        }
+        \\        inputs: "targets/",
+        \\        x64linux: { inputs: ["host.o", app] },
+        \\        arm64mac: { inputs: [app] },
+        \\        x64mac: { inputs: ["libhost.a", app], output: Shared },
         \\    }
         \\
     ;
@@ -865,9 +897,7 @@ test "validatePlatformHasTargets accepts platform with win_gui target" {
         \\    packages {}
         \\    provides { main_for_host: "main" }
         \\    targets: {
-        \\        exe: {
-        \\            x64win: { files: [win_gui] },
-        \\        }
+        \\        x64win: { inputs: [win_gui] },
         \\    }
         \\
     ;
@@ -897,11 +927,9 @@ test "TargetsConfig.fromAST extracts targets configuration" {
         \\    packages {}
         \\    provides { main_for_host: "main" }
         \\    targets: {
-        \\        files: "targets/",
-        \\        exe: {
-        \\            x64linux: { files: ["host.o", app] },
-        \\            arm64linux: { files: [app] },
-        \\        }
+        \\        inputs: "targets/",
+        \\        x64linux: { inputs: ["host.o", app] },
+        \\        arm64linux: { inputs: [app] },
         \\    }
         \\
     ;
@@ -922,12 +950,12 @@ test "TargetsConfig.fromAST extracts targets configuration" {
     const config = maybe_config.?;
     defer config.deinit(allocator);
 
-    // Check files_dir
-    try std.testing.expect(config.files_dir != null);
-    try std.testing.expectEqualStrings("targets/", config.files_dir.?);
+    // Check inputs_dir
+    try std.testing.expect(config.inputs_dir != null);
+    try std.testing.expectEqualStrings("targets/", config.inputs_dir.?);
 
-    // Check exe targets
-    try std.testing.expectEqual(@as(usize, 2), config.exe.len);
+    // Check targets
+    try std.testing.expectEqual(@as(usize, 2), config.targets.len);
 }
 
 test "validateTargetFilesExist reports missing target file with valid path" {
@@ -946,14 +974,12 @@ test "validateTargetFilesExist reports missing target file with valid path" {
         .app,
     };
     const exe_specs: []const TargetLinkSpec = &.{
-        .{ .target = .x64mac, .items = items },
+        .{ .target = .x64mac, .output = .exe, .items = items },
     };
 
     const config = TargetsConfig{
-        .files_dir = "targets",
-        .exe = exe_specs,
-        .static_lib = &.{},
-        .shared_lib = &.{},
+        .inputs_dir = "targets",
+        .targets = exe_specs,
     };
 
     // This should return a missing_target_file result with a valid expected_full_path

@@ -12,17 +12,15 @@ platform ""
         render_for_host!: "render_for_host",
     }
     targets: {
-        files: "targets/",
-        exe: {
-            x64mac: { files: [app] },
-            arm64mac: { files: [app] },
-            x64musl: { files: [app] },
-            arm64musl: { files: [app] },
-            x64glibc: { files: [app] },
-            arm64glibc: { files: [app] },
-            x64win: { files: [app] },
-            arm64win: { files: [app] },
-        }
+        inputs: "targets/",
+        x64mac: { inputs: [app], output: Shared },
+        arm64mac: { inputs: [app], output: Shared },
+        x64musl: { inputs: [app], output: Shared },
+        arm64musl: { inputs: [app], output: Shared },
+        x64glibc: { inputs: [app], output: Shared },
+        arm64glibc: { inputs: [app], output: Shared },
+        x64win: { inputs: [app], output: Shared },
+        arm64win: { inputs: [app], output: Shared },
     }
 
 import Host

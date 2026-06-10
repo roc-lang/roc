@@ -22,15 +22,13 @@ platform ""
     packages {}
     provides { make_glue_for_host: "make_glue" }
     targets: {
-        files: "targets/",
-        exe: {
-            x64mac: { files: ["libhost.a", app] },
-            arm64mac: { files: ["libhost.a", app] },
-            x64musl: { files: ["crt1.o", "libhost.a", app, "libc.a"] },
-            arm64musl: { files: ["crt1.o", "libhost.a", app, "libc.a"] },
-            x64win: { files: ["host.lib", app] },
-            arm64win: { files: ["host.lib", app] },
-        }
+        inputs: "targets/",
+        x64mac: { inputs: ["libhost.a", app] },
+        arm64mac: { inputs: ["libhost.a", app] },
+        x64musl: { inputs: ["crt1.o", "libhost.a", app, "libc.a"] },
+        arm64musl: { inputs: ["crt1.o", "libhost.a", app, "libc.a"] },
+        x64win: { inputs: ["host.lib", app] },
+        arm64win: { inputs: ["host.lib", app] },
     }
 
 import Types exposing [Types]

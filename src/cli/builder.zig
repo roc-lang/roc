@@ -50,6 +50,7 @@ pub const CompileConfig = struct {
     cpu: []const u8 = "",
     features: []const u8 = "",
     debug: bool = false, // Enable debug info generation in output
+    pic: bool = false, // Position-independent code (required for shared library output)
 
     /// Check if compiling for the current machine
     pub fn isNative(self: CompileConfig) bool {
@@ -129,6 +130,7 @@ const LLVMCodeGenLevelAggressive: c_int = 3;
 
 // LLVM Relocation Models
 const LLVMRelocDefault: c_int = 0;
+const LLVMRelocPIC: c_int = 2;
 
 // LLVM Code Models
 const LLVMCodeModelDefault: c_int = 0;
@@ -265,7 +267,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
         cpu_z.ptr,
         features_z.ptr,
         config.optimization.toLLVMCodeGenLevel(),
-        LLVMRelocDefault,
+        if (config.pic) LLVMRelocPIC else LLVMRelocDefault,
         LLVMCodeModelDefault,
         false, // function_sections
         false, // data_sections

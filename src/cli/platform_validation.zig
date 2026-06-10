@@ -18,7 +18,7 @@ pub const targets_validator = @import("targets_validator.zig");
 
 const TargetsConfig = target_mod.TargetsConfig;
 const RocTarget = target_mod.RocTarget;
-const LinkType = target_mod.LinkType;
+const OutputKind = target_mod.OutputKind;
 
 const is_windows = builtin.target.os.tag == .windows;
 
@@ -167,11 +167,9 @@ fn renderMissingTargetsError(allocator: std.mem.Allocator, path: []const u8) std
     try report.document.addLineBreak();
     try report.document.addCodeBlock(
         \\    targets: {
-        \\        files: "targets/",
-        \\        exe: {
-        \\            x64linux: { files: ["host.o", app] },
-        \\            arm64linux: { files: ["host.o", app] },
-        \\        }
+        \\        inputs: "targets/",
+        \\        x64linux: { inputs: ["host.o", app] },
+        \\        arm64linux: { inputs: ["host.o", app] },
         \\    }
     );
     try report.document.addLineBreak();
@@ -190,9 +188,8 @@ fn renderMissingTargetsError(allocator: std.mem.Allocator, path: []const u8) std
 pub fn validateTargetSupported(
     config: TargetsConfig,
     target: RocTarget,
-    link_type: LinkType,
 ) ValidationError!void {
-    if (!config.supportsTarget(target, link_type)) {
+    if (!config.supportsTarget(target)) {
         return error.UnsupportedTarget;
     }
 }
@@ -202,15 +199,13 @@ pub fn validateTargetSupported(
 pub fn createUnsupportedTargetResult(
     platform_path: []const u8,
     requested_target: RocTarget,
-    link_type: LinkType,
     config: TargetsConfig,
 ) ValidationResult {
     return .{
         .unsupported_target = .{
             .platform_path = platform_path,
             .requested_target = requested_target,
-            .link_type = link_type,
-            .supported_targets = config.getSupportedTargets(link_type),
+            .supported_targets = config.getSupportedTargets(),
         },
     };
 }
@@ -256,7 +251,7 @@ pub fn validateAllTargetFilesExist(
         return .{
             .missing_files_directory = .{
                 .platform_path = platform_dir_path,
-                .files_dir = config.files_dir orelse "targets",
+                .files_dir = config.inputs_dir orelse "targets",
             },
         };
     };
@@ -266,7 +261,7 @@ pub fn validateAllTargetFilesExist(
         return .{
             .missing_files_directory = .{
                 .platform_path = platform_dir_path,
-                .files_dir = config.files_dir orelse "targets",
+                .files_dir = config.inputs_dir orelse "targets",
             },
         };
     };
@@ -282,31 +277,27 @@ const testing = std.testing;
 
 test "validateTargetSupported returns error for unsupported target" {
     const config = TargetsConfig{
-        .files_dir = "targets",
-        .exe = &.{
-            .{ .target = .x64mac, .items = &.{.app} },
-            .{ .target = .arm64mac, .items = &.{.app} },
+        .inputs_dir = "targets",
+        .targets = &.{
+            .{ .target = .x64mac, .output = .exe, .items = &.{.app} },
+            .{ .target = .arm64mac, .output = .exe, .items = &.{.app} },
         },
-        .static_lib = &.{},
-        .shared_lib = &.{},
     };
 
     // x64musl is not in the config, should error
-    const result = validateTargetSupported(config, .x64musl, .exe);
+    const result = validateTargetSupported(config, .x64musl);
     try testing.expectError(error.UnsupportedTarget, result);
 }
 
 test "validateTargetSupported succeeds for supported target" {
     const config = TargetsConfig{
-        .files_dir = "targets",
-        .exe = &.{
-            .{ .target = .x64mac, .items = &.{.app} },
-            .{ .target = .arm64mac, .items = &.{.app} },
+        .inputs_dir = "targets",
+        .targets = &.{
+            .{ .target = .x64mac, .output = .exe, .items = &.{.app} },
+            .{ .target = .arm64mac, .output = .exe, .items = &.{.app} },
         },
-        .static_lib = &.{},
-        .shared_lib = &.{},
     };
 
     // x64mac is in the config, should succeed
-    try validateTargetSupported(config, .x64mac, .exe);
+    try validateTargetSupported(config, .x64mac);
 }

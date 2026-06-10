@@ -521,17 +521,12 @@ pub const Tag = enum {
     // Target section nodes
 
     /// A targets section in a platform header
-    /// * main_token - files string token (or 0 if no files directive)
-    /// * lhs - exe TargetLinkType index (or 0 if none)
-    /// * rhs - reserved for future (static_lib, shared_lib)
+    /// * main_token - inputs string token (or 0 if no inputs directive)
+    /// * lhs - start of TargetEntry span
+    /// * rhs - length of TargetEntry span
     targets_section,
 
-    /// A target link type section (exe, static_lib, shared_lib)
-    /// * lhs - start of entries span
-    /// * rhs - length of entries span
-    target_link_type,
-
-    /// A single target entry: x64musl: { files: ["crt1.o", "host.o", app] }
+    /// A single target entry: x64musl: { inputs: ["crt1.o", "host.o", app], output: Exe }
     /// * main_token - target name identifier token
     /// * lhs - TargetConfig index
     target_entry,

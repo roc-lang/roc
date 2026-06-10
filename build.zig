@@ -39,7 +39,7 @@ const windows_cross_targets = [_]CrossTarget{
 const linux_cross_targets = musl_cross_targets ++ glibc_cross_targets;
 
 /// Test platform directories that need host libraries built
-const all_test_platform_dirs = [_][]const u8{ "str", "int", "fx", "fx-open" };
+const all_test_platform_dirs = [_][]const u8{ "str", "int", "fx", "fx-open", "dylib" };
 
 fn mustUseLlvm(target: ResolvedTarget) bool {
     return target.result.os.tag == .macos and target.result.cpu.arch == .x86_64;
@@ -2115,6 +2115,7 @@ pub fn build(b: *std.Build) void {
     const run_test_serialization_sizes_step = b.step("run-test-serialization-sizes", "Verify Serialized types have platform-independent sizes");
     const build_test_wasm_static_lib_runner_step = b.step("build-test-wasm-static-lib-runner", "Build WASM static library test runner");
     const run_test_wasm_static_lib_step = b.step("run-test-wasm-static-lib", "Run WASM static library test runner");
+    const run_test_dylib_step = b.step("run-test-dylib", "Build a Roc shared library and run it through the loader test");
     const build_coverage_tools_step = b.step("build-coverage-tools", "Build parser coverage tools");
     const run_coverage_parser_step = b.step("run-coverage-parser", "Run parser tests with kcov code coverage");
     const run_minici_step = b.step("minici", "Run a subset of CI build and test steps");
@@ -3146,6 +3147,44 @@ pub fn build(b: *std.Build) void {
         }
         run_wasm_test.step.dependOn(build_test_wasm_static_lib_runner_step);
         run_test_wasm_static_lib_step.dependOn(&run_wasm_test.step);
+    }
+
+    // Build the shared-library test fixture with `roc build` and verify it by
+    // running a separate loader executable that dlopens it and calls its C API.
+    {
+        const dylib_ext = switch (target.result.os.tag) {
+            .windows => ".dll",
+            .macos => ".dylib",
+            else => ".so",
+        };
+        const dylib_output = b.fmt("test/dylib/app{s}", .{dylib_ext});
+
+        const build_dylib_app = b.addRunArtifact(roc_exe);
+        build_dylib_app.addArgs(&.{
+            "build",
+            "test/dylib/app.roc",
+            "--opt=size",
+            b.fmt("--output={s}", .{dylib_output}),
+        });
+        build_dylib_app.step.dependOn(build_test_hosts_step);
+
+        const dylib_loader_exe = b.addExecutable(.{
+            .name = "dylib_loader",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("test/dylib/loader.zig"),
+                .target = target,
+                .optimize = optimize,
+            }),
+        });
+        configureBackend(dylib_loader_exe, target);
+
+        const install_dylib_loader = b.addInstallArtifact(dylib_loader_exe, .{});
+
+        const run_dylib_test = b.addRunArtifact(dylib_loader_exe);
+        run_dylib_test.step.dependOn(&install_dylib_loader.step);
+        run_dylib_test.addArg(dylib_output);
+        run_dylib_test.step.dependOn(&build_dylib_app.step);
+        run_test_dylib_step.dependOn(&run_dylib_test.step);
     }
 
     // Check fx platform test coverage convenience step
