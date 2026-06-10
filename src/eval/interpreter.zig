@@ -248,6 +248,10 @@ pub const Interpreter = struct {
     /// values; deeper structures are legal (TRMC builds arbitrarily long
     /// lists) but walking them would overflow the native stack.
     const max_debug_value_depth: usize = 64;
+    /// ... and stops after visiting this many heap cells in one walk: a wide
+    /// balanced tree fits entirely inside the depth cap, and re-walking it on
+    /// every assignment turns O(n) programs quadratic.
+    const max_debug_value_visits: usize = 16;
     pub const erased_callable_context_alignment: usize = builtins.erased_callable.capture_alignment;
 
     pub const ErasedCallableInterpreterContext = extern struct {
@@ -951,8 +955,11 @@ pub const Interpreter = struct {
         if (builtin.mode != .Debug) return;
         if (comptime builtin.target.os.tag == .freestanding) return;
         // Best-effort validation: stop descending into very deep structures
-        // (e.g. long TRMC-built lists), since this walk recurses natively.
+        // (e.g. long TRMC-built lists), since this walk recurses natively, and
+        // stop after a bounded number of heap cells so wide structures don't
+        // make every assignment O(structure size).
         if (path_len >= max_debug_value_depth) return;
+        if (visited.items.len >= max_debug_value_visits) return;
 
         const layout_val = self.layout_store.getLayout(layout_idx);
         switch (layout_val.tag) {
