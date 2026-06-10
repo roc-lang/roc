@@ -11,6 +11,7 @@ const check = @import("check");
 const core = @import("lir_core");
 
 const Arc = @import("arc.zig");
+const Trmc = @import("trmc.zig");
 const LIR = core.LIR;
 const LirImage = @import("lir_image.zig");
 const LirProgram = core.Program;
@@ -213,6 +214,13 @@ pub fn lowerCheckedModulesToLir(
     solved = undefined;
     errdefer lowered.deinit();
 
+    // TRMC/TCE must rewrite recursive procs before ARC insertion: it deletes
+    // calls and changes allocation sites, and ARC panics on pre-existing RC
+    // statements (see src/lir/trmc.zig). This also applies during checking
+    // finalization, where the interpreter's step budget (not its call-depth
+    // cap, which loops no longer hit) guards against non-terminating
+    // compile-time constants.
+    try Trmc.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
     try Arc.insert(&lowered.lir_result.store, &lowered.lir_result.layouts);
 
     if (roots.requests.len != 0 and lowered.lir_result.root_procs.items.len == 0) {

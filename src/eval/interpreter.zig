@@ -242,6 +242,12 @@ pub const Interpreter = struct {
     const max_call_depth: usize = 1024;
     const stack_overflow_message =
         "This Roc program overflowed its stack memory. This usually means there is very deep or infinite recursion somewhere in the code.";
+    const step_budget_message =
+        "This Roc code ran for too many steps before producing a result. This usually means there is an infinite loop or infinite recursion somewhere in the code.";
+    /// Debug value-shape validation stops descending past this many nested
+    /// values; deeper structures are legal (TRMC builds arbitrarily long
+    /// lists) but walking them would overflow the native stack.
+    const max_debug_value_depth: usize = 64;
     pub const erased_callable_context_alignment: usize = builtins.erased_callable.capture_alignment;
 
     pub const ErasedCallableInterpreterContext = extern struct {
@@ -272,6 +278,13 @@ pub const Interpreter = struct {
     /// Bound recursive function-call depth so the interpreter reports a Roc crash
     /// instead of overflowing the native stack.
     call_depth: usize = 0,
+
+    /// Statements remaining before evaluation aborts with a crash. Defaults to
+    /// effectively unlimited; compile-time finalization sets a finite budget so
+    /// comptime evaluation of a non-terminating constant cannot hang the
+    /// compiler (the call-depth cap no longer catches those once TRMC/TCE has
+    /// rewritten tail recursion into loops).
+    remaining_steps: u64 = std.math.maxInt(u64),
     /// Active proc call stack for the current evaluation.
     call_stack: std.ArrayList(LirProcSpecId),
     /// Call stack captured at the first failed exit in the current evaluation.
@@ -571,6 +584,13 @@ pub const Interpreter = struct {
 
     fn evalAllocator(self: *LirInterpreter) Allocator {
         return self.arena.allocator();
+    }
+
+    /// Cap the number of statements this interpreter will execute across all
+    /// subsequent evals. Compile-time finalization uses this as its
+    /// termination guard for non-terminating constants.
+    pub fn setStepBudget(self: *LirInterpreter, steps: u64) void {
+        self.remaining_steps = steps;
     }
 
     /// Get the crash message from the last evaluation (if any).
@@ -930,6 +950,9 @@ pub const Interpreter = struct {
     ) void {
         if (builtin.mode != .Debug) return;
         if (comptime builtin.target.os.tag == .freestanding) return;
+        // Best-effort validation: stop descending into very deep structures
+        // (e.g. long TRMC-built lists), since this walk recurses natively.
+        if (path_len >= max_debug_value_depth) return;
 
         const layout_val = self.layout_store.getLayout(layout_idx);
         switch (layout_val.tag) {
@@ -953,14 +976,20 @@ pub const Interpreter = struct {
             // point at may be a not-yet-filled hole, so there is nothing to validate.
             .ptr => return,
             .box => {
-                const data_ptr = self.readBoxedDataPointer(value) orelse self.debugValueShapePanicAt(
-                    proc_id,
-                    stmt_id,
-                    local_id,
-                    layout_idx,
-                    path_buf[0..path_len],
-                    "boxed value had null data pointer",
-                );
+                const data_ptr = self.readBoxedDataPointer(value) orelse {
+                    // Inside a TRMC-transformed proc a null box pointer is a
+                    // legal in-flight hole (zero-filled cells await their child
+                    // value); everywhere else it is a real bug.
+                    if (self.store.getProcSpec(proc_id).tail_transform == .trmc) return;
+                    self.debugValueShapePanicAt(
+                        proc_id,
+                        stmt_id,
+                        local_id,
+                        layout_idx,
+                        path_buf[0..path_len],
+                        "boxed value had null data pointer",
+                    );
+                };
 
                 const key = DebugVisitedValue{
                     .ptr = @intFromPtr(data_ptr),
@@ -1618,6 +1647,10 @@ pub const Interpreter = struct {
     ) Error!ExecOutcome {
         var current = start_stmt;
         while (true) {
+            self.remaining_steps -%= 1;
+            if (self.remaining_steps == 0) {
+                return self.triggerCrash(step_budget_message);
+            }
             const stmt = self.store.getCFStmt(current);
             switch (stmt) {
                 .assign_ref => |assign| {

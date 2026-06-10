@@ -13,7 +13,7 @@ interpreter or interpreter shim; the parent compiler lowers through checked
 modules, post-check IRs, LIR, and ARC first.
 
 ```
-checked modules → post-check IRs → LIR → ARC → Interpret
+checked modules → post-check IRs → LIR → TRMC/TCE → ARC → Interpret
 ```
 
 ### Core Modules
@@ -54,6 +54,24 @@ checked modules → post-check IRs → LIR → ARC → Interpret
 
 All RocOps interactions (alloc, dealloc, crash, expect, dbg) happen through the
 `RocOps` pointer. This keeps host integrations consistent.
+
+## Evaluation Limits
+
+- **Call-depth cap** — `LirInterpreter` crashes ("stack overflow") after 1024
+  nested Roc calls (`max_call_depth`). Tail-recursive and
+  constructor-tail-recursive functions don't hit this: the TRMC/TCE pass
+  (`src/lir/trmc.zig`) rewrites them into join-point loops before the
+  interpreter ever sees them.
+- **Step budget** — `setStepBudget()` caps total executed statements.
+  Compile-time finalization (`compile_time_finalization.zig`) sets a finite
+  budget so a non-terminating top-level constant becomes a compile-time crash
+  instead of hanging the compiler; the call-depth cap can no longer catch
+  those once TRMC/TCE has turned the recursion into a loop. Normal runtime
+  evaluation is effectively unlimited.
+- **Debug value validation** — In Debug builds, `setLocal` walks values to
+  check they match their layouts. The walk stops at
+  `max_debug_value_depth` (64) nested values, and inside TRMC-transformed
+  procs a null box pointer is accepted as a legal not-yet-filled hole.
 
 ## Host Integrations
 

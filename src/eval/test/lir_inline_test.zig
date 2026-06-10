@@ -256,7 +256,8 @@ test "call value wrapper is not inlined" {
 }
 
 test "self-recursive direct wrapper is not inlined" {
-    try expectRootTargetHasCalls(
+    const allocator = std.testing.allocator;
+    var lowered_source = try lowerModule(allocator,
         \\module [main]
         \\
         \\wrapper : U64 -> U64
@@ -265,6 +266,19 @@ test "self-recursive direct wrapper is not inlined" {
         \\main : U64
         \\main = wrapper(1)
     , .direct_call_wrappers);
+    defer lowered_source.deinit(allocator);
+
+    // The root still calls the wrapper as a separate proc (not inlined). The
+    // wrapper's own self-call is gone: the TRMC pass rewrote it into a tail
+    // jump, recorded as a TCE transform.
+    const target = try rootDirectCallTarget(allocator, &lowered_source.lowered);
+    try std.testing.expectEqual(
+        LIR.TailTransform.tce,
+        lowered_source.lowered.lir_result.store.getProcSpec(target).tail_transform,
+    );
+    const target_calls = try collectAssignCallProcs(allocator, &lowered_source.lowered, target);
+    defer allocator.free(target_calls);
+    try std.testing.expectEqual(@as(usize, 0), target_calls.len);
 }
 
 test "mutually recursive direct wrappers are not inlined" {
@@ -296,4 +310,67 @@ test "capturing direct wrapper is not inlined" {
         \\    wrapper(41)
         \\}
     , .direct_call_wrappers);
+}
+
+// ─── TRMC pass outcomes through the full pipeline ───
+
+fn expectRootTargetTailTransform(
+    source: []const u8,
+    expected: LIR.TailTransform,
+) anyerror!void {
+    const allocator = std.testing.allocator;
+    var lowered_source = try lowerModule(allocator, source, .none);
+    defer lowered_source.deinit(allocator);
+
+    const target = try rootDirectCallTarget(allocator, &lowered_source.lowered);
+    try std.testing.expectEqual(
+        expected,
+        lowered_source.lowered.lir_result.store.getProcSpec(target).tail_transform,
+    );
+}
+
+test "trmc: recursive list builder is TRMC-transformed through the pipeline" {
+    try expectRootTargetTailTransform(
+        \\module [main]
+        \\
+        \\LinkedList := [Nil, Cons(I64, LinkedList)]
+        \\
+        \\repeat : I64, I64 -> LinkedList
+        \\repeat = |value, n| if n <= 0.I64 LinkedList.Nil else LinkedList.Cons(value, repeat(value, n - 1))
+        \\
+        \\main = repeat(7.I64, 3.I64)
+    , .trmc);
+}
+
+test "trmc: accumulator recursion is TCE-transformed through the pipeline" {
+    try expectRootTargetTailTransform(
+        \\module [main]
+        \\
+        \\sum_to : I64, I64 -> I64
+        \\sum_to = |n, acc| if n == 0.I64 acc else sum_to(n - 1, acc + n)
+        \\
+        \\main = sum_to(10.I64, 0.I64)
+    , .tce);
+}
+
+test "trmc: result used before the constructor is not transformed" {
+    try expectRootTargetTailTransform(
+        \\module [main]
+        \\
+        \\LinkedList := [Nil, Cons(I64, LinkedList)]
+        \\
+        \\length_acc : LinkedList, I64 -> I64
+        \\length_acc = |list, acc| match list {
+        \\    Nil => acc
+        \\    Cons(_, rest) => length_acc(rest, acc + 1)
+        \\}
+        \\
+        \\with_lengths : I64 -> LinkedList
+        \\with_lengths = |n| if n <= 0.I64 LinkedList.Nil else {
+        \\    rest = with_lengths(n - 1)
+        \\    LinkedList.Cons(length_acc(rest, 0), rest)
+        \\}
+        \\
+        \\main = with_lengths(4.I64)
+    , .none);
 }

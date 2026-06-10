@@ -1,7 +1,7 @@
 //! Tail Recursion Modulo Constructor (TRMC) and plain tail-call elimination.
 //!
-//! Runs over the LIR after SolvedLirLower and before Arc.insert (see
-//! TRMC_PLAN.md). For each self-recursive proc it either:
+//! Runs over the LIR after SolvedLirLower and before Arc.insert. For each
+//! self-recursive proc it either:
 //!
 //! - applies TRMC, when at least one recursive call's result flows directly
 //!   into a constructor of the proc's (recursive tag-union) return type that
@@ -12,6 +12,43 @@
 //! - applies plain TCE, when the proc has tail self-calls but no constructor
 //!   candidates; or
 //! - leaves the proc untouched.
+//!
+//! Without this pass, list builders like `repeat`, `map`, and `filter` grow a
+//! stack frame per element and overflow on large inputs — a correctness
+//! issue, not just performance.
+//!
+//! ## Value holes (vs. the old Rust compiler's pointer holes)
+//!
+//! The old compiler represented a recursive union value as one tagged
+//! pointer; heap cells held payloads only, so its TRMC hole was a
+//! pointer-sized slot and a GEP expression (`UnionFieldPtrAtIndex`) computed
+//! interior field addresses. This compiler represents a recursive union as a
+//! by-value blob (payload struct + in-cell discriminant); recursion is broken
+//! only at struct-field edges, which have layout `box(Union)`, and the heap
+//! allocation in LIR is the `box_box` low-level — not the tag construction.
+//!
+//! The hole here is therefore "a pointer to where a child union VALUE lives":
+//! initially a stack slot for the result (`ptr_alloca`), afterwards the
+//! interior of a freshly allocated, zero-filled box cell
+//! (`box_alloc_zeroed`). A box's data pointer already IS the address of the
+//! child slot, so no GEP op is needed; per iteration the rewrite allocates
+//! the empty child cell, builds the node with that cell as its box field,
+//! copies the whole node through the current hole (`ptr_store`), and advances
+//! the hole to the new cell (`ptr_cast`). The base case fills the final hole
+//! and returns `ptr_load(head)`. Allocation counts and the final memory shape
+//! are identical to the untransformed code.
+//!
+//! ## ARC contract
+//!
+//! The pass must run before Arc.insert (it deletes calls and changes an
+//! allocation site, and ARC panics on pre-existing RC statements). The
+//! `ptr(T)` layout is never refcounted, so hole/head locals are invisible to
+//! ARC; the cell keeps its `box(U)` layout and ARC accounts it exactly like
+//! the `box_box` it replaced. `ptr_store` consumes its value operand
+//! (ownership moves into the structure), and the stored local is always the
+//! chain head — dead on every loop path — so no protective retain is needed.
+//! Zero-filled cells are decref-safe: in-flight box fields read as null, and
+//! the RC runtime treats null as a no-op.
 //!
 //! Debug flags (zero cost when unset):
 //! - ROC_PRINT_TRMC=1: one line per transformed proc on stderr.
@@ -324,10 +361,19 @@ const Detection = struct {
     }
 
     fn processStmt(self: *Detection, stmt_id: CFStmtId, edge: Edge, stmt: LIR.CFStmt) ResourceError!void {
-        // Advance or invalidate every live candidate.
+        // Advance or invalidate every live candidate. A statement can be the
+        // blessed next step for at most ONE candidate: when two candidates'
+        // chains meet (e.g. `Node(build(a), v, build(b))` placing two cells in
+        // one payload struct), the first claims the constructor and the others
+        // see it as an ordinary use of their tracked cell and drop out — their
+        // recursive calls remain real calls, exactly like the old Rust pass.
+        var claimed = false;
         for (self.candidates.items) |*candidate| {
             if (candidate.state == .invalid) continue;
-            if (self.blessedTransition(candidate, stmt_id, edge, stmt)) continue;
+            if (!claimed and self.blessedTransition(candidate, stmt_id, edge, stmt)) {
+                claimed = true;
+                continue;
+            }
             if (self.stmtTouchesChain(stmt, candidate)) {
                 candidate.state = .invalid;
             }
