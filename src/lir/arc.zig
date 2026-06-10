@@ -3796,14 +3796,12 @@ test "RC early drop places the release right after the last use" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
     const value = try f.local(.str);
-    const unrelated = try f.local(.i64);
     const result = try f.local(.i64);
     const ret = try f.ret(result);
     const late_call = try f.assignCall(result, &.{}, ret);
     const use_value = try f.expectStmt(value, late_call);
     const body = try f.assignStr(value, "early", use_value);
     _ = try f.addProc(&.{}, body, .i64);
-    _ = unrelated;
     try f.run();
     try f.expectRc(value, 0, 1, 0);
     // The release lands before the unrelated call, not at the return.
