@@ -3578,10 +3578,11 @@ pub const Interpreter = struct {
         self.performErasedCallableFinalDrop(data_ptr, op, count);
     }
 
-    /// Runs the erased callable's capture cleanup. The `on_drop` slot is a C
-    /// function pointer whose ABI carries no atomicity parameter, so capture
-    /// refcount updates behind it always run atomically, even when the
-    /// callable's own RC statement is single-thread (atomic is always sound).
+    /// Runs the erased callable's capture cleanup. The `on_drop` slot is
+    /// filled at closure creation, which is not an RC statement and makes no
+    /// thread-confinement claim, so capture refcount updates behind it always
+    /// run atomically, even when the callable's own RC statement is
+    /// single-thread (atomic is always sound).
     fn performErasedCallableFinalDrop(
         self: *LirInterpreter,
         data_ptr: ?[*]u8,

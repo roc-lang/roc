@@ -91,10 +91,11 @@ const RcAtomicity = lir.LIR.RcAtomicity;
 /// Identity of one compiled RC helper: the canonical layout plan plus the
 /// count-update atomicity the helper's own updates use. Atomic and
 /// single-thread helpers are compiled separately, so a helper's body never
-/// has to branch on atomicity at runtime. Helpers whose addresses cross a C
-/// function-pointer ABI (list/box teardown callbacks, erased-callable
-/// `on_drop`) always use the atomic variant, because those ABIs carry no
-/// atomicity parameter.
+/// has to branch on atomicity at runtime. The element/payload callback ABIs
+/// carry no atomicity parameter, so the statement's atomicity is baked into
+/// which helper variant a teardown callback pointer names; callbacks for
+/// runtime-checked list ops and the erased-callable `on_drop` belong to no
+/// RC statement and always use the atomic variant.
 const RcHelperVariant = struct {
     key: RcHelperKey,
     atomicity: RcAtomicity,
@@ -8222,9 +8223,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitCallRcHelperFromStackSlots(helper, ptr_slot, count_slot, roc_ops_slot);
         }
 
-        /// Materialize the address of an RC helper destined for a builtin's C
-        /// function-pointer parameter. That ABI carries no atomicity parameter,
-        /// so the helper is always the atomic variant.
+        /// Materialize the address of an RC helper destined for a
+        /// runtime-checked list op's element callback. That RC is internal to
+        /// the op, which serves both modes and makes no thread-confinement
+        /// claim, so the helper is always the atomic variant.
         fn emitBuiltinInternalOptionalRcHelperAddress(
             self: *Self,
             op: RcOp,
@@ -8376,6 +8378,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             builtin_fn: BuiltinFn,
             fn_addr: usize,
             list_plan: layout.RcListPlan,
+            atomicity: RcAtomicity,
             ptr_slot: i32,
             roc_ops_slot: i32,
         ) Allocator.Error!void {
@@ -8396,10 +8399,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitLoad(.w64, cap_reg, value_ptr_reg, 16);
 
             if (list_plan.child) |child_key| {
-                // The element callback crosses the builtin's C function-pointer
-                // ABI, which carries no atomicity parameter, so it is always
-                // the atomic variant.
-                const child = RcHelperVariant{ .key = child_key, .atomicity = .atomic };
+                // The element callback's C ABI carries no atomicity parameter,
+                // so the statement's atomicity is baked into which helper
+                // variant the pointer names. Visibility is containment-closed
+                // (design.md "Thread-Confined Reference Counts"), so a
+                // single-thread teardown covers the elements as well.
+                const child = RcHelperVariant{ .key = child_key, .atomicity = atomicity };
                 try self.emitPendingRcAddr(child, callback_reg);
                 try self.scheduleRcHelper(child);
             } else {
@@ -8445,6 +8450,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             builtin_fn: BuiltinFn,
             fn_addr: usize,
             box_plan: layout.RcBoxPlan,
+            atomicity: RcAtomicity,
             ptr_slot: i32,
             roc_ops_slot: i32,
         ) Allocator.Error!void {
@@ -8459,10 +8465,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitLoad(.w64, payload_reg, value_ptr_reg, 0);
 
             if (box_plan.child) |child_key| {
-                // The payload callback crosses the builtin's C function-pointer
-                // ABI, which carries no atomicity parameter, so it is always
-                // the atomic variant.
-                const child = RcHelperVariant{ .key = child_key, .atomicity = .atomic };
+                // The payload callback's C ABI carries no atomicity parameter,
+                // so the statement's atomicity is baked into which helper
+                // variant the pointer names (see emitBuiltinInternalRcHelperListDrop).
+                const child = RcHelperVariant{ .key = child_key, .atomicity = atomicity };
                 try self.emitPendingRcAddr(child, callback_reg);
                 try self.scheduleRcHelper(child);
             } else {
@@ -8531,9 +8537,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // The helper's own count updates use the runtime entry matching its
             // atomicity. `free` leaves deallocate without touching the count,
             // so they have no single-thread counterpart. Child helpers reached
-            // by direct call propagate the atomicity; callbacks handed to
-            // builtins stay atomic (see emitBuiltinInternalRcHelperListDrop /
-            // BoxDrop).
+            // by direct call propagate the atomicity, and so do the element and
+            // payload callbacks handed to the teardown builtins (see
+            // emitBuiltinInternalRcHelperListDrop / BoxDrop); only the erased
+            // callable's `on_drop` stays atomic because it is selected at
+            // closure creation, where no RC statement exists.
             const single_thread = helper.atomicity == .single_thread;
             switch (self.layout_store.rcHelperPlan(helper.key)) {
                 .noop => {},
@@ -8554,6 +8562,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     if (single_thread) .list_decref_with_single_thread else .list_decref_with,
                     if (single_thread) @intFromPtr(&dev_wrappers.roc_builtins_list_decref_with_single_thread) else @intFromPtr(&dev_wrappers.roc_builtins_list_decref_with),
                     list_plan,
+                    helper.atomicity,
                     ptr_slot,
                     roc_ops_slot,
                 ),
@@ -8561,6 +8570,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .list_free_with,
                     @intFromPtr(&dev_wrappers.roc_builtins_list_free_with),
                     list_plan,
+                    helper.atomicity,
                     ptr_slot,
                     roc_ops_slot,
                 ),
@@ -8572,6 +8582,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     if (single_thread) .box_decref_with_single_thread else .box_decref_with,
                     if (single_thread) @intFromPtr(&dev_wrappers.roc_builtins_box_decref_with_single_thread) else @intFromPtr(&dev_wrappers.roc_builtins_box_decref_with),
                     box_plan,
+                    helper.atomicity,
                     ptr_slot,
                     roc_ops_slot,
                 ),
@@ -8579,6 +8590,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .box_free_with,
                     @intFromPtr(&dev_wrappers.roc_builtins_box_free_with),
                     box_plan,
+                    helper.atomicity,
                     ptr_slot,
                     roc_ops_slot,
                 ),
@@ -9723,8 +9735,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     if (self.layout_store.rcHelperPlan(helper_key) == .noop) {
                         try self.codegen.emitLoadImm(on_drop_reg, 0);
                     } else {
-                        // `on_drop` is a C function pointer whose ABI carries no
-                        // atomicity parameter, so it is always the atomic variant.
+                        // `on_drop` is selected here at closure creation, which
+                        // is not an RC statement and makes no thread-confinement
+                        // claim, so it is always the atomic variant (atomic is
+                        // always sound).
                         const helper = RcHelperVariant{ .key = helper_key, .atomicity = .atomic };
                         try self.emitPendingRcAddr(helper, on_drop_reg);
                         try self.scheduleRcHelper(helper);

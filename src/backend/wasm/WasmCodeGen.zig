@@ -563,8 +563,9 @@ fn compileBuiltinInternalIncrefCallback(self: *Self, helper_key: RcHelperKey) Al
         );
     }
 
-    // Callbacks cross the C function-pointer ABI, which carries no statement
-    // atomicity; that boundary always uses the atomic helper family.
+    // These callbacks serve runtime-checked list ops, whose RC is internal to
+    // the op and makes no thread-confinement claim, so they always use the
+    // atomic helper family.
     const helper_func_idx = try self.compileBuiltinInternalRcHelper(helper_key, .atomic);
     const type_idx = try self.internFuncType(&.{ .i32, .i64, .i32 }, &.{});
     const defined = self.module.addDefinedFunction(type_idx) catch return error.OutOfMemory;
@@ -610,8 +611,9 @@ fn builtinInternalRcHelperTableIndex(self: *Self, helper_key: RcHelperKey) Alloc
     const cache_key = rcHelperCacheKey(helper_key, .atomic);
     if (self.rc_helper_table_indices.get(cache_key)) |table_idx| return table_idx;
 
-    // Table entries are handed across the C function-pointer ABI, which carries
-    // no statement atomicity; that boundary always uses the atomic helper family.
+    // Table entries serve runtime-checked list ops, whose RC is internal to
+    // the op and makes no thread-confinement claim, so they always use the
+    // atomic helper family.
     const func_idx = switch (helper_key.op) {
         .incref => try self.compileBuiltinInternalIncrefCallback(helper_key),
         .decref, .free => try self.compileBuiltinInternalRcHelper(helper_key, .atomic),
@@ -2139,9 +2141,9 @@ fn emitBuiltinInternalStrRc(self: *Self, comptime kind: RcOpKind, str_ptr_local:
 /// On wasm both count-update families lower to the same plain i32
 /// load/store sequence (linear memory here is not shared and the module does
 /// not enable the atomics feature), so the modes differ only in which helper
-/// entry they reach. Helpers crossing the C function-pointer ABI (list element
-/// callbacks, erased on_drop slots) carry no statement atomicity and are
-/// always requested as `.atomic`.
+/// entry they reach. Helpers serving runtime-checked list ops and erased
+/// on_drop slots belong to no RC statement and are always requested as
+/// `.atomic`.
 fn rcHelperCacheKey(helper_key: RcHelperKey, atomicity: RcAtomicity) u64 {
     // RcHelperKey.encode() occupies bits 0..33 (layout index + op).
     return helper_key.encode() | (@as(u64, @intFromEnum(atomicity)) << 34);
@@ -7439,9 +7441,9 @@ fn erasedCallableOnDropTableIndex(self: *Self, on_drop: LIR.ErasedCallableOnDrop
         .none => 0,
         .rc_helper => |helper_key| blk: {
             if (self.getLayoutStore().rcHelperPlan(helper_key) == .noop) break :blk 0;
-            // The on_drop slot is invoked through the C function-pointer ABI,
-            // which carries no statement atomicity; that boundary always uses
-            // the atomic helper family.
+            // The on_drop slot is filled at closure creation, which is not an
+            // RC statement and makes no thread-confinement claim, so it always
+            // uses the atomic helper family (atomic is always sound).
             const cache_key = rcHelperCacheKey(helper_key, .atomic);
             if (self.rc_helper_table_indices.get(cache_key)) |table_idx| break :blk table_idx;
             const func_idx = try self.compileBuiltinInternalRcHelper(helper_key, .atomic);

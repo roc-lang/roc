@@ -757,9 +757,12 @@ pub fn roc_builtins_list_decref_with(
 }
 
 /// Decref a list whose allocation is proven thread-confined: the list's own
-/// count update uses plain loads and stores. Element cleanup still runs through
-/// the `element_decref` C function pointer, whose ABI carries no atomicity
-/// parameter, so element-level count updates stay atomic.
+/// count update uses plain loads and stores. Element cleanup runs through the
+/// `element_decref` C function pointer, whose ABI carries no atomicity
+/// parameter; the caller passes a callback whose body already matches the
+/// single-thread statement. Visibility is containment-closed (design.md
+/// "Thread-Confined Reference Counts"), so everything reachable from a
+/// confined list is confined too.
 pub fn roc_builtins_list_decref_with_single_thread(
     list_bytes: ?[*]u8,
     list_len: usize,
@@ -784,6 +787,70 @@ pub fn roc_builtins_list_decref_with_single_thread(
     } else {
         decrefDataPtrSingleThreadC(l.getAllocationDataPtr(roc_ops), alignment, false, roc_ops);
     }
+}
+
+/// Test stand-in for a compiled single-thread string-element decref helper.
+fn strElementDecrefSingleThread(element: ?[*]u8, roc_ops: *RocOps) callconv(.c) void {
+    const elem = element orelse return;
+    const str_ptr: *RocStr = utils.alignedPtrCast(*RocStr, elem, @src());
+    str_ptr.decrefWithAtomicity(.single_thread, roc_ops);
+}
+
+test "roc_builtins_list_decref_with_single_thread frees a unique list of strings and its elements exactly once" {
+    var env = utils.TestEnv.init(std.testing.allocator);
+    defer env.deinit();
+    const ops = env.getOps();
+
+    const strs = [_]RocStr{
+        RocStr.fromSlice("first heap-allocated element, long enough", ops),
+        RocStr.fromSlice("second heap-allocated element, long enough", ops),
+    };
+    const l = RocList.fromSlice(RocStr, strs[0..], true, ops);
+    try std.testing.expectEqual(@as(usize, 3), env.getAllocationCount());
+
+    roc_builtins_list_decref_with_single_thread(
+        l.bytes,
+        l.length,
+        l.capacity_or_alloc_ptr,
+        @alignOf(RocStr),
+        @sizeOf(RocStr),
+        &strElementDecrefSingleThread,
+        ops,
+    );
+
+    try std.testing.expectEqual(@as(usize, 0), env.getAllocationCount());
+}
+
+test "roc_builtins_list_decref_with_single_thread keeps an element alive while another handle shares it" {
+    var env = utils.TestEnv.init(std.testing.allocator);
+    defer env.deinit();
+    const ops = env.getOps();
+
+    const shared = RocStr.fromSlice("shared heap-allocated element, long enough", ops);
+    // A second handle held outside the list.
+    shared.incref(1, ops);
+    const strs = [_]RocStr{shared};
+    const l = RocList.fromSlice(RocStr, strs[0..], true, ops);
+    try std.testing.expectEqual(@as(usize, 2), env.getAllocationCount());
+
+    roc_builtins_list_decref_with_single_thread(
+        l.bytes,
+        l.length,
+        l.capacity_or_alloc_ptr,
+        @alignOf(RocStr),
+        @sizeOf(RocStr),
+        &strElementDecrefSingleThread,
+        ops,
+    );
+
+    // The list allocation is gone; the string allocation survives with the
+    // outside handle holding its now-unique reference.
+    try std.testing.expectEqual(@as(usize, 1), env.getAllocationCount());
+    try std.testing.expect(shared.isUnique());
+    try std.testing.expectEqualStrings("shared heap-allocated element, long enough", shared.asSlice());
+
+    shared.decrefWithAtomicity(.single_thread, ops);
+    try std.testing.expectEqual(@as(usize, 0), env.getAllocationCount());
 }
 
 /// Wrapper: free a List(List a) where the inner lists do not themselves contain refcounted elements.
@@ -864,9 +931,10 @@ pub fn roc_builtins_box_decref_with(
 }
 
 /// Decref a boxed payload whose allocation is proven thread-confined: the box's
-/// own count update uses plain loads and stores. Payload teardown still runs
-/// through the `payload_decref` C function pointer, whose ABI carries no
-/// atomicity parameter, so payload-level count updates stay atomic.
+/// own count update uses plain loads and stores. Payload teardown runs through
+/// the `payload_decref` C function pointer, whose ABI carries no atomicity
+/// parameter; the caller passes a callback whose body already matches the
+/// single-thread statement (see roc_builtins_list_decref_with_single_thread).
 pub fn roc_builtins_box_decref_with_single_thread(
     payload_ptr: ?[*]u8,
     payload_alignment: u32,
@@ -913,8 +981,9 @@ pub fn roc_builtins_erased_callable_decref(payload_ptr: ?[*]u8, roc_ops: *RocOps
 
 /// Decref a boxed erased callable whose allocation is proven thread-confined:
 /// the callable's own count update uses plain loads and stores. The `on_drop`
-/// callback is a C function pointer whose ABI carries no atomicity parameter,
-/// so capture-level count updates behind it stay atomic.
+/// callback is selected at closure creation, which is not an RC statement and
+/// makes no thread-confinement claim, so capture-level count updates behind it
+/// stay atomic (atomic is always sound).
 pub fn roc_builtins_erased_callable_decref_single_thread(payload_ptr: ?[*]u8, roc_ops: *RocOps) callconv(.c) void {
     if (payload_ptr) |ptr| {
         if (utils.isUnique(ptr, roc_ops)) {

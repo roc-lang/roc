@@ -182,11 +182,12 @@ pub const RocList = extern struct {
         self.increfWithAtomicity(amount, elements_refcounted, .atomic, roc_ops);
     }
 
-    /// Always uses atomic count updates: the element cleanup runs through the
-    /// `dec` C function pointer, whose ABI carries no atomicity parameter, and
-    /// the allocation's own count update must agree with the element updates.
-    /// The interpreter's single-thread-capable list teardown instead iterates
-    /// elements itself (see `decrefListElements` in the LIR interpreter).
+    /// Always uses atomic count updates: this entry serves primitive-internal
+    /// RC inside runtime-checked list ops, which serve both modes and make no
+    /// thread-confinement claim. Single-thread statement teardown instead goes
+    /// through `roc_builtins_list_decref_with_single_thread` (whose caller
+    /// passes element callbacks matching the statement's atomicity) or the
+    /// interpreter's `decrefListElements`.
     pub fn decref(
         self: RocList,
         alignment: u32,

@@ -921,9 +921,9 @@ pub const MonoLlvmCodeGen = struct {
         switch (on_drop) {
             .none => try self.storePointer(on_drop_ptr, builder.nullValue(try self.ptrType()) catch return error.OutOfMemory),
             .rc_helper => |helper_key| {
-                // `on_drop` is invoked through the C function-pointer ABI,
-                // which carries no atomicity parameter, so it is always the
-                // atomic helper.
+                // `on_drop` is selected here at closure creation, which is not
+                // an RC statement and makes no thread-confinement claim, so it
+                // is always the atomic helper (atomic is always sound).
                 const helper_value = if (try self.declareRcHelper(helper_key, .atomic)) |helper_fn|
                     helper_fn.toValue(builder)
                 else
@@ -1885,6 +1885,10 @@ pub const MonoLlvmCodeGen = struct {
         return result;
     }
 
+    /// Appends element incref/decref callbacks for a runtime-checked list op.
+    /// That RC is internal to the op, which serves both modes and makes no
+    /// thread-confinement claim, so the callbacks are always the atomic
+    /// helpers.
     fn appendListElementRcArgs(
         self: *MonoLlvmCodeGen,
         call_args: *CallArgs,
@@ -2710,10 +2714,11 @@ pub const MonoLlvmCodeGen = struct {
 
     /// Emits one helper's body. The helper tree below a single RC statement
     /// shares the statement's atomicity: nested struct/tag/closure helpers are
-    /// direct calls, so they keep it, while element callbacks handed to the
-    /// runtime cross the C function-pointer ABI, which carries no atomicity
-    /// parameter, and therefore always use the atomic helpers. Free builtins
-    /// never update a count, so they have no single-thread entries.
+    /// direct calls, so they keep it, and the element/payload callbacks handed
+    /// to the teardown builtins name the helper variant matching it — the C
+    /// function-pointer ABI carries no atomicity parameter, so the atomicity
+    /// is baked into which function the pointer names. Free builtins never
+    /// update a count, so they have no single-thread entries.
     fn emitRcHelperBody(self: *MonoLlvmCodeGen, helper_key: layout.RcHelperKey, atomicity: RcAtomicity, value_ptr: LlvmBuilder.Value, count_value: ?LlvmBuilder.Value) Error!void {
         switch (self.layouts().rcHelperPlan(helper_key)) {
             .noop => {},
@@ -2724,17 +2729,17 @@ pub const MonoLlvmCodeGen = struct {
             }),
             .str_free => try self.emitRcHelperStrDrop(value_ptr, "roc_builtins_free_data_ptr"),
             .list_incref => |list_plan| try self.emitRcHelperListIncref(list_plan, value_ptr, count_value.?, atomicity),
-            .list_decref => |list_plan| try self.emitRcHelperListDrop(list_plan, value_ptr, switch (atomicity) {
+            .list_decref => |list_plan| try self.emitRcHelperListDrop(list_plan, value_ptr, atomicity, switch (atomicity) {
                 .atomic => "roc_builtins_list_decref_with",
                 .single_thread => "roc_builtins_list_decref_with_single_thread",
             }),
-            .list_free => |list_plan| try self.emitRcHelperListDrop(list_plan, value_ptr, "roc_builtins_list_free_with"),
+            .list_free => |list_plan| try self.emitRcHelperListDrop(list_plan, value_ptr, atomicity, "roc_builtins_list_free_with"),
             .box_incref => try self.emitRcHelperBoxIncref(value_ptr, count_value.?, atomicity),
-            .box_decref => |box_plan| try self.emitRcHelperBoxDrop(box_plan, value_ptr, switch (atomicity) {
+            .box_decref => |box_plan| try self.emitRcHelperBoxDrop(box_plan, value_ptr, atomicity, switch (atomicity) {
                 .atomic => "roc_builtins_box_decref_with",
                 .single_thread => "roc_builtins_box_decref_with_single_thread",
             }),
-            .box_free => |box_plan| try self.emitRcHelperBoxDrop(box_plan, value_ptr, "roc_builtins_box_free_with"),
+            .box_free => |box_plan| try self.emitRcHelperBoxDrop(box_plan, value_ptr, atomicity, "roc_builtins_box_free_with"),
             .erased_callable_incref => try self.emitRcHelperErasedCallableIncref(value_ptr, count_value.?, atomicity),
             .erased_callable_decref => try self.emitRcHelperErasedCallableDrop(value_ptr, switch (atomicity) {
                 .atomic => "roc_builtins_erased_callable_decref",
@@ -2845,13 +2850,16 @@ pub const MonoLlvmCodeGen = struct {
         );
     }
 
-    fn emitRcHelperListDrop(self: *MonoLlvmCodeGen, list_plan: layout.RcListPlan, value_ptr: LlvmBuilder.Value, builtin_name: []const u8) Error!void {
+    fn emitRcHelperListDrop(self: *MonoLlvmCodeGen, list_plan: layout.RcListPlan, value_ptr: LlvmBuilder.Value, atomicity: RcAtomicity, builtin_name: []const u8) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const fields = try self.rocListArgFields(value_ptr);
-        // The element callback crosses the C function-pointer ABI, so it is
-        // always the atomic helper.
+        // The element callback's C ABI carries no atomicity parameter, so the
+        // statement's atomicity is baked into which helper variant the pointer
+        // names. Visibility is containment-closed (design.md "Thread-Confined
+        // Reference Counts"), so a single-thread teardown covers the elements
+        // as well.
         const child_fn = if (list_plan.child) |child_key|
-            (try self.declareRcHelper(child_key, .atomic))
+            (try self.declareRcHelper(child_key, atomicity))
         else
             null;
         try self.callBuiltinVoid(
@@ -2878,13 +2886,14 @@ pub const MonoLlvmCodeGen = struct {
         );
     }
 
-    fn emitRcHelperBoxDrop(self: *MonoLlvmCodeGen, box_plan: layout.RcBoxPlan, value_ptr: LlvmBuilder.Value, builtin_name: []const u8) Error!void {
+    fn emitRcHelperBoxDrop(self: *MonoLlvmCodeGen, box_plan: layout.RcBoxPlan, value_ptr: LlvmBuilder.Value, atomicity: RcAtomicity, builtin_name: []const u8) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const payload_ptr = try self.loadPointer(value_ptr);
-        // The payload callback crosses the C function-pointer ABI, so it is
-        // always the atomic helper.
+        // The payload callback's C ABI carries no atomicity parameter, so the
+        // statement's atomicity is baked into which helper variant the pointer
+        // names (see emitRcHelperListDrop).
         const child_fn = if (box_plan.child) |child_key|
-            (try self.declareRcHelper(child_key, .atomic))
+            (try self.declareRcHelper(child_key, atomicity))
         else
             null;
         try self.callBuiltinVoid(
