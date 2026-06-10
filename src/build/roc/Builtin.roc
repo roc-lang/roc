@@ -9766,6 +9766,43 @@ Builtin :: [].{
 			lowest : F32
 			lowest = -3.40282347e38
 
+			## A quiet NaN [F32] value.
+			## ```roc
+			## expect F32.is_nan(F32.nan)
+			## ```
+			nan : F32
+			nan = F32.from_bits(2143289344)
+
+			## Positive infinity as an [F32].
+			## ```roc
+			## expect F32.is_infinite(F32.infinity)
+			##
+			## expect F32.infinity > F32.highest
+			## ```
+			infinity : F32
+			infinity = F32.from_bits(2139095040)
+
+			## Euler's number as an [F32].
+			## ```roc
+			## expect F32.to_bits(F32.e) == 1076754516
+			## ```
+			e : F32
+			e = F32.from_bits(1076754516)
+
+			## The circle constant pi as an [F32].
+			## ```roc
+			## expect F32.to_bits(F32.pi) == 1078530011
+			## ```
+			pi : F32
+			pi = F32.from_bits(1078530011)
+
+			## The circle constant tau as an [F32].
+			## ```roc
+			## expect F32.to_bits(F32.tau) == 1086918619
+			## ```
+			tau : F32
+			tau = F32.from_bits(1086918619)
+
 			## Convert an [F32] to its decimal string representation.
 			## ```roc
 			## expect F32.to_str(42.5) == "42.5"
@@ -9789,6 +9826,47 @@ Builtin :: [].{
 			## expect F32.from_bits(0).to_bits() == 0
 			## ```
 			from_bits : U32 -> F32
+
+			## Returns `Bool.True` if the value is `NaN`.
+			## ```roc
+			## expect F32.is_nan(F32.nan)
+			##
+			## expect !F32.is_nan(1.0)
+			## ```
+			is_nan : F32 -> Bool
+			is_nan = |self| self != self
+
+			## Returns `Bool.True` if the value is positive or negative infinity.
+			## ```roc
+			## expect F32.is_infinite(F32.infinity)
+			##
+			## expect F32.is_infinite(F32.negate(F32.infinity))
+			##
+			## expect !F32.is_infinite(1.0)
+			## ```
+			is_infinite : F32 -> Bool
+			is_infinite = |self|
+				if self == F32.infinity {
+					True
+				} else {
+					self == F32.negate(F32.infinity)
+				}
+
+			## Returns `Bool.True` if the value is neither `NaN` nor infinity.
+			## ```roc
+			## expect F32.is_finite(1.0)
+			##
+			## expect !F32.is_finite(F32.infinity)
+			##
+			## expect !F32.is_finite(F32.nan)
+			## ```
+			is_finite : F32 -> Bool
+			is_finite = |self|
+				if F32.is_nan(self) {
+					False
+				} else {
+					!F32.is_infinite(self)
+				}
 
 			## Returns `Bool.True` if the value is `0.0`. Both positive and
 			## negative zero return `Bool.True`.
@@ -10261,6 +10339,43 @@ Builtin :: [].{
 			lowest : F64
 			lowest = -1.7976931348623157e308
 
+			## A quiet NaN [F64] value.
+			## ```roc
+			## expect F64.is_nan(F64.nan)
+			## ```
+			nan : F64
+			nan = F64.from_bits(9221120237041090560)
+
+			## Positive infinity as an [F64].
+			## ```roc
+			## expect F64.is_infinite(F64.infinity)
+			##
+			## expect F64.infinity > F64.highest
+			## ```
+			infinity : F64
+			infinity = F64.from_bits(9218868437227405312)
+
+			## Euler's number as an [F64].
+			## ```roc
+			## expect F64.to_bits(F64.e) == 4613303445314885481
+			## ```
+			e : F64
+			e = F64.from_bits(4613303445314885481)
+
+			## The circle constant pi as an [F64].
+			## ```roc
+			## expect F64.to_bits(F64.pi) == 4614256656552045848
+			## ```
+			pi : F64
+			pi = F64.from_bits(4614256656552045848)
+
+			## The circle constant tau as an [F64].
+			## ```roc
+			## expect F64.to_bits(F64.tau) == 4618760256179416344
+			## ```
+			tau : F64
+			tau = F64.from_bits(4618760256179416344)
+
 			## Convert an [F64] to its decimal string representation.
 			## ```roc
 			## expect F64.to_str(42.5) == "42.5"
@@ -10284,6 +10399,47 @@ Builtin :: [].{
 			## expect F64.from_bits(0).to_bits() == 0
 			## ```
 			from_bits : U64 -> F64
+
+			## Returns `Bool.True` if the value is `NaN`.
+			## ```roc
+			## expect F64.is_nan(F64.nan)
+			##
+			## expect !F64.is_nan(1.0)
+			## ```
+			is_nan : F64 -> Bool
+			is_nan = |self| self != self
+
+			## Returns `Bool.True` if the value is positive or negative infinity.
+			## ```roc
+			## expect F64.is_infinite(F64.infinity)
+			##
+			## expect F64.is_infinite(F64.negate(F64.infinity))
+			##
+			## expect !F64.is_infinite(1.0)
+			## ```
+			is_infinite : F64 -> Bool
+			is_infinite = |self|
+				if self == F64.infinity {
+					True
+				} else {
+					self == F64.negate(F64.infinity)
+				}
+
+			## Returns `Bool.True` if the value is neither `NaN` nor infinity.
+			## ```roc
+			## expect F64.is_finite(1.0)
+			##
+			## expect !F64.is_finite(F64.infinity)
+			##
+			## expect !F64.is_finite(F64.nan)
+			## ```
+			is_finite : F64 -> Bool
+			is_finite = |self|
+				if F64.is_nan(self) {
+					False
+				} else {
+					!F64.is_infinite(self)
+				}
 
 			## Returns `Bool.True` if the value is `0.0`. Both positive and
 			## negative zero return `Bool.True`.

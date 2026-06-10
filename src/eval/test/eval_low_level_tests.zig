@@ -45,6 +45,56 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "True" },
     },
     .{
+        .name = "low_level - F32 constants expose expected bits",
+        .source =
+        \\{
+        \\F32.to_bits(F32.e) == 1076754516
+        \\    and F32.to_bits(F32.pi) == 1078530011
+        \\    and F32.to_bits(F32.tau) == 1086918619
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - F32 classification handles NaN infinity and finite values",
+        .source =
+        \\{
+        \\F32.is_nan(F32.nan)
+        \\    and F32.is_infinite(F32.infinity)
+        \\    and F32.is_infinite(F32.negate(F32.infinity))
+        \\    and F32.is_finite(1.0)
+        \\    and !F32.is_finite(F32.nan)
+        \\    and !F32.is_finite(F32.infinity)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - F64 constants expose expected bits",
+        .source =
+        \\{
+        \\F64.to_bits(F64.e) == 4613303445314885481
+        \\    and F64.to_bits(F64.pi) == 4614256656552045848
+        \\    and F64.to_bits(F64.tau) == 4618760256179416344
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - F64 classification handles NaN infinity and finite values",
+        .source =
+        \\{
+        \\F64.is_nan(F64.nan)
+        \\    and F64.is_infinite(F64.infinity)
+        \\    and F64.is_infinite(F64.negate(F64.infinity))
+        \\    and F64.is_finite(1.0)
+        \\    and !F64.is_finite(F64.nan)
+        \\    and !F64.is_finite(F64.infinity)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
         .name = "low_level - Str.is_empty returns True for empty string",
         .source =
         \\{
