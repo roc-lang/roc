@@ -112,9 +112,86 @@ pub const CompileOptions = struct {
     cpu: [:0]const u8 = "",
     /// LLVM feature string for target-machine code generation. Empty means LLVM's target default.
     features: [:0]const u8 = "",
+    /// Target pointer width in bits. Used to select the matching embedded
+    /// builtin bitcode payload before retargeting the merged LLVM module.
+    target_ptr_width_bits: u8,
 };
 
+fn valueName(value: *bindings.Value) []const u8 {
+    var name_len: usize = 0;
+    const name_ptr = value.getName(&name_len);
+    return name_ptr[0..name_len];
+}
+
+fn recordValueName(allocator: Allocator, defs: *std.StringHashMap(void), value: *bindings.Value) Error!void {
+    const name = valueName(value);
+    if (defs.contains(name)) return;
+
+    const owned_name = allocator.dupe(u8, name) catch return Error.OutOfMemory;
+    errdefer allocator.free(owned_name);
+    defs.put(owned_name, {}) catch return Error.OutOfMemory;
+}
+
+fn recordModuleDefinitions(allocator: Allocator, module: *bindings.Module, defs: *std.StringHashMap(void)) Error!void {
+    var func = module.getFirstFunction();
+    while (func) |value| : (func = value.getNextFunction()) {
+        if (value.isDeclaration().toBool()) continue;
+        try recordValueName(allocator, defs, value);
+    }
+
+    var global = module.getFirstGlobal();
+    while (global) |value| : (global = value.getNextGlobal()) {
+        if (value.isDeclaration().toBool()) continue;
+        try recordValueName(allocator, defs, value);
+    }
+
+    var alias = module.getFirstGlobalAlias();
+    while (alias) |value| : (alias = value.getNextGlobalAlias()) {
+        try recordValueName(allocator, defs, value);
+    }
+}
+
+fn removeFunctionTargetAttrs(func: *bindings.Value) void {
+    func.removeStringAttributeAtIndex(
+        bindings.attribute_function_index,
+        "target-features",
+        "target-features".len,
+    );
+    func.removeStringAttributeAtIndex(
+        bindings.attribute_function_index,
+        "target-cpu",
+        "target-cpu".len,
+    );
+}
+
+fn cleanMergedBuiltinDefinitions(module: *bindings.Module, app_defs: *const std.StringHashMap(void)) void {
+    var alias = module.getFirstGlobalAlias();
+    while (alias) |value| : (alias = value.getNextGlobalAlias()) {
+        if (app_defs.contains(valueName(value))) continue;
+        if (value.aliasGetAliasee()) |aliasee| {
+            value.replaceAllUsesWith(aliasee);
+        }
+        value.setLinkage(bindings.internal_linkage);
+    }
+
+    var func = module.getFirstFunction();
+    while (func) |value| : (func = value.getNextFunction()) {
+        if (value.isDeclaration().toBool()) continue;
+        if (app_defs.contains(valueName(value))) continue;
+        removeFunctionTargetAttrs(value);
+        value.setLinkage(bindings.internal_linkage);
+    }
+
+    var global = module.getFirstGlobal();
+    while (global) |value| : (global = value.getNextGlobal()) {
+        if (value.isDeclaration().toBool()) continue;
+        if (app_defs.contains(valueName(value))) continue;
+        value.setLinkage(bindings.internal_linkage);
+    }
+}
+
 fn emitMergedBitcodeToObjectFile(
+    allocator: Allocator,
     io: std.Io,
     bitcode: []const u32,
     options: CompileOptions,
@@ -191,10 +268,22 @@ fn emitMergedBitcodeToObjectFile(
     );
     defer target_machine.dispose();
 
-    // Load and merge builtin bitcode into the user module.
-    // This makes all builtin functions available.
+    var app_defs = std.StringHashMap(void).init(allocator);
+    defer {
+        var keys = app_defs.keyIterator();
+        while (keys.next()) |key| allocator.free(key.*);
+        app_defs.deinit();
+    }
+    try recordModuleDefinitions(allocator, module, &app_defs);
+
+    // Load and merge builtin bitcode into the user module. Builtin definitions
+    // remain real definitions so LLVM can inline and optimize them with the app.
     {
-        const builtin_bitcode = llvm_embedded.builtins_bc;
+        const builtin_bitcode = switch (options.target_ptr_width_bits) {
+            32 => llvm_embedded.builtins32_bc,
+            64 => llvm_embedded.builtins64_bc,
+            else => return Error.CompilationFailed,
+        };
         const builtin_mem_buf = bindings.MemoryBuffer.createMemoryBufferWithMemoryRange(
             builtin_bitcode.ptr,
             builtin_bitcode.len,
@@ -223,6 +312,8 @@ fn emitMergedBitcodeToObjectFile(
             return Error.ModuleLinkFailed;
         }
         // Note: builtin_module is now invalid - do NOT dispose it
+
+        cleanMergedBuiltinDefinitions(module, &app_defs);
     }
 
     var verify_error: [*:0]const u8 = undefined;
@@ -283,7 +374,7 @@ pub fn compileToObject(allocator: Allocator, io: std.Io, bitcode: []const u32, o
     const temp_path = createTempPath(allocator, io, ".o") catch return Error.TempFileError;
     defer allocator.free(temp_path);
 
-    try emitMergedBitcodeToObjectFile(io, bitcode, options, temp_path);
+    try emitMergedBitcodeToObjectFile(allocator, io, bitcode, options, temp_path);
 
     // Read the object file back into memory
     const object_bytes = std.Io.Dir.cwd().readFileAlloc(
@@ -326,7 +417,7 @@ pub fn compileToSharedLibrary(allocator: Allocator, io: std.Io, bitcode: []const
     pic_options.reloc_mode = .PIC;
     pic_options.use_module_target_triple = true;
 
-    try emitMergedBitcodeToObjectFile(io, bitcode, pic_options, object_path);
+    try emitMergedBitcodeToObjectFile(allocator, io, bitcode, pic_options, object_path);
 
     if (std.c.getenv("ROC_LLVM_KEEP_OBJECT")) |keep_path_z| {
         std.Io.Dir.cwd().copyFile(

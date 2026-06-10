@@ -1773,18 +1773,24 @@ pub fn devEvalBoolRoots(
     }
 }
 
-fn llvmCompileOptions(opt: LlvmTestOpt) @import("llvm_compile").CompileOptions {
+fn targetPtrWidthBits(target_usize: base.target.TargetUsize) u8 {
+    return @intCast(target_usize.size() * 8);
+}
+
+fn llvmCompileOptions(target_usize: base.target.TargetUsize, opt: LlvmTestOpt) @import("llvm_compile").CompileOptions {
     const llvm_compile = @import("llvm_compile");
     return switch (opt) {
         .size => .{
             .function_sections = false,
             .use_module_target_triple = true,
             .optimization = llvm_compile.bindings.IrOptimizationLevel.Oz,
+            .target_ptr_width_bits = targetPtrWidthBits(target_usize),
         },
         .speed => .{
             .function_sections = false,
             .use_module_target_triple = true,
             .optimization = llvm_compile.bindings.IrOptimizationLevel.O3,
+            .target_ptr_width_bits = targetPtrWidthBits(target_usize),
         },
     };
 }
@@ -1860,7 +1866,7 @@ pub fn llvmEvalBoolRoots(
         allocator,
         std.Options.debug_io,
         bitcode.bitcode,
-        llvmCompileOptions(opt),
+        llvmCompileOptions(layouts.targetUsize(), opt),
     );
     defer {
         std.Io.Dir.deleteFileAbsolute(std.Options.debug_io, std.mem.sliceTo(dylib_path, 0)) catch {};
@@ -2039,6 +2045,7 @@ pub fn llvmEvaluatorInspectedStr(allocator: Allocator, lowered: *const LoweredPr
     const dylib_path = try llvm_compile.compileToSharedLibrary(allocator, std.Options.debug_io, bitcode.bitcode, .{
         .function_sections = false,
         .use_module_target_triple = true,
+        .target_ptr_width_bits = targetPtrWidthBits(lowered.view.layouts.targetUsize()),
     });
     defer {
         std.Io.Dir.deleteFileAbsolute(std.Options.debug_io, std.mem.sliceTo(dylib_path, 0)) catch {};

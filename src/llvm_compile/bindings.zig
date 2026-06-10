@@ -92,7 +92,53 @@ pub const Module = opaque {
 
     pub const verify = LLVMVerifyModule;
     extern fn LLVMVerifyModule(M: *Module, Action: VerifierFailureAction, OutMessage: *[*:0]const u8) Bool;
+
+    pub const getFirstFunction = LLVMGetFirstFunction;
+    extern fn LLVMGetFirstFunction(M: *Module) ?*Value;
+
+    pub const getFirstGlobal = LLVMGetFirstGlobal;
+    extern fn LLVMGetFirstGlobal(M: *Module) ?*Value;
+
+    pub const getFirstGlobalAlias = LLVMGetFirstGlobalAlias;
+    extern fn LLVMGetFirstGlobalAlias(M: *Module) ?*Value;
 };
+
+/// Opaque handle to an LLVM value.
+pub const Value = opaque {
+    pub const getNextFunction = LLVMGetNextFunction;
+    extern fn LLVMGetNextFunction(FnVal: *Value) ?*Value;
+
+    pub const getNextGlobal = LLVMGetNextGlobal;
+    extern fn LLVMGetNextGlobal(Global: *Value) ?*Value;
+
+    pub const getNextGlobalAlias = LLVMGetNextGlobalAlias;
+    extern fn LLVMGetNextGlobalAlias(Alias: *Value) ?*Value;
+
+    pub const getName = LLVMGetValueName2;
+    extern fn LLVMGetValueName2(Val: *Value, Len: *usize) [*]const u8;
+
+    pub const isDeclaration = LLVMIsDeclaration;
+    extern fn LLVMIsDeclaration(Global: *Value) Bool;
+
+    pub const setLinkage = LLVMSetLinkage;
+    extern fn LLVMSetLinkage(Global: *Value, Linkage: c_int) void;
+
+    pub const aliasGetAliasee = LLVMAliasGetAliasee;
+    extern fn LLVMAliasGetAliasee(Alias: *Value) ?*Value;
+
+    pub const replaceAllUsesWith = LLVMReplaceAllUsesWith;
+    extern fn LLVMReplaceAllUsesWith(OldVal: *Value, NewVal: *Value) void;
+
+    pub const removeStringAttributeAtIndex = LLVMRemoveStringAttributeAtIndex;
+    extern fn LLVMRemoveStringAttributeAtIndex(FnVal: *Value, Idx: c_uint, Name: [*]const u8, Len: c_uint) void;
+};
+
+/// LLVM-C linkage value for `internal`: a local definition, never an exported
+/// symbol, and discarded by global DCE when unused.
+pub const internal_linkage: c_int = 8;
+
+/// LLVM-C attribute index for function-level attributes (`~0U`).
+pub const attribute_function_index: c_uint = 0xFFFFFFFF;
 
 /// Controls how LLVM reports module verifier failures.
 pub const VerifierFailureAction = enum(c_int) {
