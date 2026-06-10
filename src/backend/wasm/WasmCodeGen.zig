@@ -5649,18 +5649,6 @@ fn emitHeapAlloc(self: *Self, size_local: u32, alignment: u32) Allocator.Error!v
     WasmModule.leb128WriteU32(self.allocator, self.currentCode(), 8) catch return error.OutOfMemory;
 }
 
-/// Emit heap allocation via roc_alloc with a constant size.
-/// Leaves the raw allocated pointer on the wasm stack.
-fn emitHeapAllocConst(self: *Self, size: u32, alignment: u32) Allocator.Error!void {
-    // Store size in a temp local, then delegate to emitHeapAlloc
-    const size_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-    WasmModule.leb128WriteI32(self.allocator, self.currentCode(), @intCast(size)) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.local_set) catch return error.OutOfMemory;
-    WasmModule.leb128WriteU32(self.allocator, self.currentCode(), size_local) catch return error.OutOfMemory;
-    try self.emitHeapAlloc(size_local, alignment);
-}
-
 /// Emit heap allocation for Roc refcounted data.
 /// Leaves the Roc data pointer on the wasm stack, not the raw allocation pointer.
 fn emitHeapAllocWithRefcount(self: *Self, data_size_local: u32, element_alignment: u32, elements_refcounted: bool) Allocator.Error!void {
