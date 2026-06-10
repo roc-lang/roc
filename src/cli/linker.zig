@@ -15,6 +15,12 @@ const cli_ctx = @import("CliCtx.zig");
 const CliCtx = cli_ctx.CliCtx;
 const Io = cli_ctx.Io;
 
+/// Suppress linker warnings in release builds only. Debug builds of the
+/// compiler surface them: lld reports flags it parsed but ignored (e.g. a
+/// MachO `-r`) only as warnings, and suppressing those hides real bugs from
+/// compiler developers.
+const suppress_linker_warnings = builtin.mode != .Debug;
+
 /// The embedded LLD entrypoints are only linked into LLVM-enabled CLI builds.
 const llvm_available = if (@import("builtin").is_test) false else @import("config").llvm;
 
@@ -332,7 +338,11 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
                 try args.append("-r");
                 try args.append("-o");
                 try args.append(config.output_path);
-                try args.append("-w");
+                if (suppress_linker_warnings) {
+                    if (suppress_linker_warnings) {
+                        try args.append("-w");
+                    }
+                }
                 try args.append("-arch");
                 switch (target_arch) {
                     .aarch64 => try args.append("arm64"),
@@ -355,7 +365,9 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
             try args.append(config.output_path);
 
             // Suppress LLD warnings
-            try args.append("-w");
+            if (suppress_linker_warnings) {
+                try args.append("-w");
+            }
             // For dylibs, dead-strip roots are the exported symbols instead of the entrypoint.
             try args.append("-dead_strip");
 
@@ -417,7 +429,11 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
             if (is_relocatable) {
                 // Relocatable merge: section GC and link-mode flags don't apply.
                 try args.append("-r");
-                try args.append("-w");
+                if (suppress_linker_warnings) {
+                    if (suppress_linker_warnings) {
+                        try args.append("-w");
+                    }
+                }
                 break :blk;
             }
 
@@ -427,7 +443,9 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
             try args.append("--gc-sections");
             // TODO make the confirugable instead of using comments
             // Suppress linker warnings
-            try args.append("-w");
+            if (suppress_linker_warnings) {
+                try args.append("-w");
+            }
             // Verbose linker for debugging (uncomment as needed)
             // try args.append("--verbose");
             // try args.append("--print-map");
@@ -652,7 +670,9 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
             try args.append(config.output_path);
 
             // Suppress LLD warnings
-            try args.append("-w");
+            if (suppress_linker_warnings) {
+                try args.append("-w");
+            }
             if (!is_relocatable) {
                 try args.append("--gc-sections");
             }
