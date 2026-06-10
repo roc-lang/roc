@@ -59,6 +59,15 @@ fn lowLevelStmt(store: *LirStore, target: LocalId, op: LowLevel, args: []const L
     } });
 }
 
+/// Hand off a fresh join point id, mirroring how the real lowering allocates
+/// them from a sequential counter (see arc.zig's next_join_point). Each proc
+/// these tests build owns its own counter, so ids stay unique within a proc.
+fn freshJoinPointId(next: *u32) LIR.JoinPointId {
+    const id: LIR.JoinPointId = @enumFromInt(next.*);
+    next.* += 1;
+    return id;
+}
+
 fn runProcU64(allocator: Allocator, store: *const LirStore, layouts: *const layout.Store, proc: LIR.LirProcSpecId, runtime_env: *RuntimeHostEnv) anyerror!u64 {
     var interp = try eval.Interpreter.init(allocator, store, layouts, runtime_env.get_ops());
     defer interp.deinit();
@@ -286,7 +295,8 @@ fn buildRepeatProc(
     const p = try b.addLocal(allocator, peano.payload);
     const t = try b.addLocal(allocator, peano.u);
 
-    const join_id: LIR.JoinPointId = @enumFromInt(0);
+    var next_join: u32 = 0;
+    const join_id = freshJoinPointId(&next_join);
     const ret_res = try store.addCFStmt(.{ .ret = .{ .value = res } });
 
     // case n == 0: res = Nil; jump done
@@ -734,7 +744,8 @@ test "mixed construct and plain-tail branches both become jumps" {
     const p = try b.addLocal(allocator, peano.payload);
     const t = try b.addLocal(allocator, peano.u);
 
-    const join_id: LIR.JoinPointId = @enumFromInt(0);
+    var next_join: u32 = 0;
+    const join_id = freshJoinPointId(&next_join);
     const ret_res = try store.addCFStmt(.{ .ret = .{ .value = res } });
 
     // n == 0: res = Nil

@@ -132,7 +132,7 @@ fn transformProc(
 
     if (print_transforms) {
         const transformed = store.getProcSpec(proc_id);
-        std.debug.print("{s}: proc p{d} ({d} construct sites, {d} tail calls)\n", .{
+        debugPrint("{s}: proc p{d} ({d} construct sites, {d} tail calls)\n", .{
             @tagName(transformed.tail_transform),
             @intFromEnum(proc_id),
             construct_count,
@@ -536,18 +536,17 @@ const Detection = struct {
             },
             .ret => |s| {
                 if (s.value != candidate.current()) return false;
-                return self.confirmAtTerminal(candidate, stmt_id);
+                return confirmAtTerminal(candidate, stmt_id);
             },
             .jump => |s| {
                 if (!self.returnsLocal(s.target, candidate.current())) return false;
-                return self.confirmAtTerminal(candidate, stmt_id);
+                return confirmAtTerminal(candidate, stmt_id);
             },
             else => return false,
         }
     }
 
-    fn confirmAtTerminal(self: *Detection, candidate: *Candidate, stmt_id: CFStmtId) bool {
-        _ = self;
+    fn confirmAtTerminal(candidate: *Candidate, stmt_id: CFStmtId) bool {
         switch (candidate.state) {
             .active => {
                 candidate.terminal_stmt = stmt_id;
@@ -1038,9 +1037,20 @@ fn debugFlagEnabled(name: [:0]const u8) bool {
     return std.c.getenv(name.ptr) != null;
 }
 
+/// std.debug.print reaches stderr through std.Io.Threaded, which does not
+/// compile for freestanding wasm. The ROC_PRINT_* dumps these flags gate are
+/// dev-only and can never be active on freestanding (see debugFlagEnabled), so
+/// keep the std.debug.print call inside a comptime-false block there to avoid
+/// pulling Io.Threaded into the freestanding wasm builds.
+fn debugPrint(comptime fmt: []const u8, args: anytype) void {
+    if (comptime builtin.target.os.tag != .freestanding) {
+        std.debug.print(fmt, args);
+    }
+}
+
 fn dumpProc(store: *const LirStore, layouts: *const layout_mod.Store, proc_id: LIR.LirProcSpecId) void {
     var buffer: std.Io.Writer.Allocating = .init(store.allocator);
     defer buffer.deinit();
     debug_print.writeProc(store.allocator, store, layouts, proc_id, &buffer.writer) catch return;
-    std.debug.print("{s}", .{buffer.written()});
+    debugPrint("{s}", .{buffer.written()});
 }

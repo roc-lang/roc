@@ -9954,7 +9954,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                     self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
                     WasmModule.leb128WriteI32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
                 } else {
-                    try self.emitHeapAllocConst(elem_size, box_abi.elem_alignment);
+                    try self.emitHeapAllocWithRefcountConst(elem_size, box_abi.elem_alignment, box_abi.contains_refcounted);
                     const box_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
                     try self.emitLocalSet(box_ptr);
                     try self.emitZeroInit(box_ptr, elem_size);

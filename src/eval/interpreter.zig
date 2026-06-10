@@ -954,7 +954,7 @@ pub const Interpreter = struct {
     ) void {
         if (builtin.mode != .Debug) return;
         if (comptime builtin.target.os.tag == .freestanding) return;
-        // Best-effort validation: stop descending into very deep structures
+        // Bound the walk: stop descending into very deep structures
         // (e.g. long TRMC-built lists), since this walk recurses natively, and
         // stop after a bounded number of heap cells so wide structures don't
         // make every assignment O(structure size).
