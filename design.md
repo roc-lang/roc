@@ -1999,11 +1999,11 @@ against the borrow typing rules:
   every path, and never used after its move or drop
 - every borrowed occurrence's lender is provably live at that point: the
   borrow's lifetime is contained in the lender's
-- all jumps to a join agree on the entry state of the names the join body
-  relies on, compared as a meet: a name carrying ownership on one path and
-  unbound on another weakens to unbound and the body is re-certified under
-  the weaker assumption, while live-on-both-sides names must match exactly
-  in units, alias partition, and borrow anchors
+- every join body holds under the entry state of each jump that reaches it:
+  jump states are summarized over the names the body relies on (liveness,
+  unit counts, alias partition, and borrow anchors), and the body is
+  certified once per distinct summary, exactly as shared switch suffixes are
+  re-walked per distinct inflowing state
 - every call site satisfies the callee variant's signature, and every pinned
   signature holds
 

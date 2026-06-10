@@ -46,6 +46,18 @@ pub const Diagnostic = struct {
     context_local: ?LIR.LocalId = null,
     /// Proc containing the violation.
     context_proc: ?LIR.LirProcSpecId = null,
+    /// Lender/holder chain of the dead value at the violation.
+    chain: [8]ChainLink = undefined,
+    chain_len: usize = 0,
+
+    pub const ChainLink = struct {
+        value: u32,
+        origin: LIR.LocalId,
+        balance: i32,
+        holder: u32,
+        always_live: bool,
+        lender_count: usize,
+    };
 
     pub fn message(self: *const Diagnostic) []const u8 {
         return self.buffer[0..self.len];
@@ -108,8 +120,22 @@ pub fn certifyStoreOrPanic(
         error.OutOfMemory => return error.OutOfMemory,
         error.Certification => {
             var context = FailureContext{};
+            for (diag.chain[0..diag.chain_len]) |link| {
+                context.append("\n  value {d}: origin_local={d} balance={d} holder={d} always_live={} lenders={d}", .{
+                    link.value,
+                    @intFromEnum(link.origin),
+                    link.balance,
+                    link.holder,
+                    link.always_live,
+                    link.lender_count,
+                });
+            }
             if (diag.context_proc) |proc_id| {
-                writeFailureContext(&context, store, proc_id, diag.context_local);
+                var extra_locals: [8]LIR.LocalId = undefined;
+                for (diag.chain[0..diag.chain_len], 0..) |link, index| {
+                    extra_locals[index] = link.origin;
+                }
+                writeFailureContext(&context, store, proc_id, diag.context_local, extra_locals[0..diag.chain_len]);
             }
             std.debug.panic("ARC borrow certifier: {s}{s}", .{ diag.message(), context.text() });
         },
@@ -135,7 +161,7 @@ const FailureContext = struct {
 
 /// Writes every statement of the failing proc that mentions the implicated
 /// local, plus all join/jump structure, into the panic context buffer.
-fn writeFailureContext(context: *FailureContext, store: *const LirStore, proc_id: LIR.LirProcSpecId, local: ?LIR.LocalId) void {
+fn writeFailureContext(context: *FailureContext, store: *const LirStore, proc_id: LIR.LirProcSpecId, local: ?LIR.LocalId, extra_locals: []const LIR.LocalId) void {
     const proc = store.getProcSpec(proc_id);
     context.append("\nfailure context: proc={d}", .{@intFromEnum(proc_id)});
     if (local) |l| {
@@ -178,9 +204,12 @@ fn writeFailureContext(context: *FailureContext, store: *const LirStore, proc_id
 
     for (store.cf_stmts.items, 0..) |stmt, index| {
         if (!reachable.contains(@enumFromInt(@as(u32, @intCast(index))))) continue;
-        const mentions = if (local) |l| stmtMentionsLocal(store, stmt, l) else false;
+        var mentions = if (local) |l| stmtMentionsLocal(store, stmt, l) else false;
+        for (extra_locals) |extra| {
+            mentions = mentions or stmtMentionsLocal(store, stmt, extra);
+        }
         const structural = switch (stmt) {
-            .join, .jump => true,
+            .join, .jump, .incref, .decref, .free => true,
             else => false,
         };
         if (!mentions and !structural) continue;
@@ -366,9 +395,12 @@ const JoinRecord = struct {
     /// Jump states must agree only on these; everything else was settled
     /// before the jump.
     relevant: std.bit_set.DynamicBitSetUnmanaged,
-    /// Agreed state at every jump to this join; met with each further jump.
-    expected: ?[]LocalSummary,
-    body_scheduled: bool,
+    /// Digests of entry states the body has been scheduled under. The body
+    /// is certified once per distinct jump state, exactly as shared switch
+    /// suffixes are re-walked per distinct inflowing state.
+    scheduled: std.AutoHashMap(u64, void),
+    /// Entry summaries pending a body walk.
+    pending: std.ArrayList([]LocalSummary),
 };
 
 const MemoEntry = struct {
@@ -384,6 +416,8 @@ const WorkItem = union(enum) {
 const Segment = struct {
     cursor: LIR.CFStmtId,
     state: State,
+    /// Join whose body rebuild produced this segment, for diagnostics.
+    origin_join: ?LIR.JoinPointId = null,
 };
 
 const Certifier = struct {
@@ -415,6 +449,8 @@ const Certifier = struct {
     current_proc: LIR.LirProcSpecId = undefined,
     current_sig: arc_sig.RcSig = arc_sig.RcSig.all_owned,
     current_stmt: LIR.CFStmtId = undefined,
+    /// Join whose body the current segment certifies, for diagnostics.
+    current_origin_join: ?LIR.JoinPointId = null,
 
     fn deinit(self: *Certifier) void {
         self.values.deinit(self.allocator);
@@ -435,8 +471,10 @@ const Certifier = struct {
     fn clearRecords(self: *Certifier) void {
         var iter = self.records.valueIterator();
         while (iter.next()) |record| {
-            if (record.expected) |expected| self.allocator.free(expected);
             record.relevant.deinit(self.allocator);
+            record.scheduled.deinit();
+            for (record.pending.items) |entry| self.allocator.free(entry);
+            record.pending.deinit(self.allocator);
         }
         self.records.clearRetainingCapacity();
     }
@@ -496,40 +534,59 @@ const Certifier = struct {
 
     /// Reports whether the value is reachable-live: it carries a unit, is an
     /// ABI-borrowed parameter, sits inside a live holder, or borrows from
-    /// values that are all reachable-live.
+    /// values that are all reachable-live. A value with both a holder and
+    /// lenders is live through either path: the holder keeps the moved unit's
+    /// allocation alive, and live lenders keep the borrowed-from allocation
+    /// alive.
     fn valueIsLive(self: *const Certifier, state: *const State, value: ValueId) bool {
-        var stack_buffer: [64]ValueId = undefined;
-        var stack_len: usize = 1;
-        stack_buffer[0] = value;
-        var checked: usize = 0;
+        return self.valueIsLiveDepth(state, value, 0);
+    }
 
-        // A value with lenders is live only if every lender is live, so the
-        // walk verifies all reachable requirements rather than searching for
-        // one live anchor.
-        while (stack_len > 0) {
-            stack_len -= 1;
-            const current = stack_buffer[stack_len];
-            checked += 1;
-            if (checked > 256) return false;
-            if (current >= self.values.items.len) return false;
-            const info = self.values.items[current];
-            if (info.always_live) continue;
-            if (state.balanceOf(current) > 0) continue;
-            const holder = state.holderOf(current);
-            if (holder != no_value) {
-                if (stack_len >= stack_buffer.len) return false;
-                stack_buffer[stack_len] = holder;
-                stack_len += 1;
-                continue;
-            }
-            if (info.lenders.len == 0) return false;
-            for (info.lenders) |lender| {
-                if (stack_len >= stack_buffer.len) return false;
-                stack_buffer[stack_len] = lender;
-                stack_len += 1;
-            }
+    fn valueIsLiveDepth(self: *const Certifier, state: *const State, value: ValueId, depth: usize) bool {
+        if (depth > 64) return false;
+        if (value >= self.values.items.len) return false;
+        const info = self.values.items[value];
+        if (info.always_live) return true;
+        if (state.balanceOf(value) > 0) return true;
+        const holder = state.holderOf(value);
+        if (holder != no_value and self.valueIsLiveDepth(state, holder, depth + 1)) {
+            return true;
+        }
+        if (info.lenders.len == 0) return false;
+        for (info.lenders) |lender| {
+            if (!self.valueIsLiveDepth(state, lender, depth + 1)) return false;
         }
         return true;
+    }
+
+    /// Records the dead value's lender/holder chain in the diagnostic for
+    /// panic context.
+    fn describeValueChain(self: *Certifier, state: *const State, value: ValueId) void {
+        var cursor = value;
+        var steps: usize = 0;
+        self.diag.chain_len = 0;
+        while (steps < 8) : (steps += 1) {
+            if (cursor >= self.values.items.len) return;
+            const info = self.values.items[cursor];
+            if (self.diag.chain_len < self.diag.chain.len) {
+                self.diag.chain[self.diag.chain_len] = .{
+                    .value = cursor,
+                    .origin = info.origin,
+                    .balance = state.balanceOf(cursor),
+                    .holder = state.holderOf(cursor),
+                    .always_live = info.always_live,
+                    .lender_count = info.lenders.len,
+                };
+                self.diag.chain_len += 1;
+            }
+            const holder = state.holderOf(cursor);
+            if (holder != no_value) {
+                cursor = holder;
+                continue;
+            }
+            if (info.lenders.len == 0) return;
+            cursor = info.lenders[0];
+        }
     }
 
     fn requireLive(self: *Certifier, state: *const State, local: LIR.LocalId) CertifyError!ValueId {
@@ -543,6 +600,13 @@ const Certifier = struct {
         if (!self.valueIsLive(state, value)) {
             self.diag.context_local = local;
             self.diag.context_proc = self.current_proc;
+            self.describeValueChain(state, value);
+            if (self.current_origin_join) |join_id| {
+                return self.fail("use of dead refcounted local {d} (walking body of join {d})", .{
+                    @intFromEnum(local),
+                    @intFromEnum(join_id),
+                });
+            }
             return self.fail("use of dead refcounted local {d}", .{@intFromEnum(local)});
         }
         return value;
@@ -636,24 +700,10 @@ const Certifier = struct {
     /// ABI-borrowed) value reached through lender/holder links, for stable
     /// cross-path naming of where a borrow takes its liveness from.
     fn liveAnchorRepr(self: *const Certifier, state: *const State, value: ValueId) u32 {
-        var current = value;
-        var steps: usize = 0;
-        while (steps < 256) : (steps += 1) {
-            if (current >= self.values.items.len) return 0;
-            const info = self.values.items[current];
-            if (info.always_live or state.balanceOf(current) > 0) {
-                if (self.repr_scratch.get(current)) |repr| return repr;
-                return self.denseOf(info.origin);
-            }
-            const holder = state.holderOf(current);
-            if (holder != no_value) {
-                current = holder;
-                continue;
-            }
-            if (info.lenders.len == 0) return 0;
-            current = info.lenders[0];
-        }
-        return 0;
+        const anchor = self.liveAnchorValue(state, value);
+        if (anchor == no_value) return 0;
+        if (self.repr_scratch.get(anchor)) |repr| return repr;
+        return self.denseOf(self.values.items[anchor].origin);
     }
 
     fn summaryDigest(cursor: LIR.CFStmtId, summary: []const LocalSummary) u64 {
@@ -666,95 +716,6 @@ const Certifier = struct {
             hasher.update(std.mem.asBytes(&entry.lender_repr));
         }
         return hasher.final();
-    }
-
-    const MeetOutcome = enum {
-        equal,
-        weakened,
-        conflict,
-    };
-
-    /// Computes the meet of the join's agreed entry state with one more
-    /// jump's state, in place.
-    ///
-    /// A name live on one side and unbound on the other weakens to unbound:
-    /// the body is re-certified under the weaker assumption, so a body that
-    /// relies on the name is flagged when it reads or releases it. Names live
-    /// on both sides must agree exactly on ownership units and class, and
-    /// alias partitions are compared structurally (two names share a value on
-    /// one side iff they share on the other), because representative indices
-    /// drift when stale alias names drop out on one path.
-    fn meetSummaries(
-        self: *Certifier,
-        expected: []LocalSummary,
-        incoming: []const LocalSummary,
-        conflict_dense: *usize,
-    ) Allocator.Error!MeetOutcome {
-        if (expected.len != incoming.len) {
-            conflict_dense.* = 0;
-            return .conflict;
-        }
-
-        // Compare classes over names live on both sides, building a
-        // partition correspondence keyed by expected-side representative.
-        self.repr_scratch.clearRetainingCapacity();
-        for (expected, incoming, 0..) |left, right, dense| {
-            if (left.class == .unbound or right.class == .unbound) continue;
-            if (left.class != right.class or left.balance != right.balance) {
-                conflict_dense.* = dense;
-                return .conflict;
-            }
-            const pair = try self.repr_scratch.getOrPut(left.repr);
-            if (!pair.found_existing) {
-                pair.value_ptr.* = right.repr;
-            } else if (pair.value_ptr.* != right.repr) {
-                conflict_dense.* = dense;
-                return .conflict;
-            }
-        }
-        // Borrow anchors must correspond through the same partition map when
-        // the anchor class is live on both sides.
-        for (expected, incoming, 0..) |left, right, dense| {
-            if (left.class != .borrowed or right.class != .borrowed) continue;
-            if (self.repr_scratch.get(left.lender_repr)) |mapped| {
-                if (mapped != right.lender_repr) {
-                    conflict_dense.* = dense;
-                    return .conflict;
-                }
-            }
-        }
-
-        // Weaken one-sided names to unbound.
-        var weakened = false;
-        for (expected, incoming) |*left, right| {
-            const left_live = left.class != .unbound;
-            const right_live = right.class != .unbound;
-            if (left_live == right_live) continue;
-            if (left_live) {
-                left.* = .{ .class = .unbound, .repr = 0, .balance = 0, .lender_repr = 0 };
-            }
-            weakened = true;
-        }
-        if (!weakened) return .equal;
-
-        // Re-canonicalize representatives among the remaining live names,
-        // and drop borrows whose anchor class lost every live name.
-        self.repr_scratch.clearRetainingCapacity();
-        for (expected, 0..) |*entry, dense| {
-            if (entry.class == .unbound) continue;
-            const pair = try self.repr_scratch.getOrPut(entry.repr);
-            if (!pair.found_existing) pair.value_ptr.* = @intCast(dense);
-            entry.repr = pair.value_ptr.*;
-        }
-        for (expected) |*entry| {
-            if (entry.class != .borrowed) continue;
-            if (self.repr_scratch.get(entry.lender_repr)) |mapped| {
-                entry.lender_repr = mapped;
-            } else if (entry.lender_repr != entry.repr) {
-                entry.* = .{ .class = .unbound, .repr = 0, .balance = 0, .lender_repr = 0 };
-            }
-        }
-        return .weakened;
     }
 
     /// Rebuilds a fresh state from an agreed join-entry summary. Alias sets
@@ -1065,24 +1026,25 @@ const Certifier = struct {
         return relevant;
     }
 
-    /// Returns the first unit-carrying or ABI-borrowed value reached through
-    /// lender/holder links, or `no_value` when the chain is dead.
+    /// Returns a unit-carrying or ABI-borrowed value that keeps this value
+    /// live, reached through holder or lender links, or `no_value` when no
+    /// chain is live.
     fn liveAnchorValue(self: *const Certifier, state: *const State, value: ValueId) ValueId {
-        var current = value;
-        var steps: usize = 0;
-        while (steps < 256) : (steps += 1) {
-            if (current >= self.values.items.len) return no_value;
-            const info = self.values.items[current];
-            if (info.always_live or state.balanceOf(current) > 0) return current;
-            const holder = state.holderOf(current);
-            if (holder != no_value) {
-                current = holder;
-                continue;
-            }
-            if (info.lenders.len == 0) return no_value;
-            current = info.lenders[0];
+        return self.liveAnchorValueDepth(state, value, 0);
+    }
+
+    fn liveAnchorValueDepth(self: *const Certifier, state: *const State, value: ValueId, depth: usize) ValueId {
+        if (depth > 64) return no_value;
+        if (value >= self.values.items.len) return no_value;
+        const info = self.values.items[value];
+        if (info.always_live or state.balanceOf(value) > 0) return value;
+        const holder = state.holderOf(value);
+        if (holder != no_value) {
+            const through_holder = self.liveAnchorValueDepth(state, holder, depth + 1);
+            if (through_holder != no_value) return through_holder;
         }
-        return no_value;
+        if (info.lenders.len == 0) return no_value;
+        return self.liveAnchorValueDepth(state, info.lenders[0], depth + 1);
     }
 
     /// Builds the jump-state summary restricted to the join's relevant
@@ -1261,16 +1223,22 @@ const Certifier = struct {
 
     fn scheduleJoinBody(self: *Certifier, work: *std.ArrayList(WorkItem), join_id: LIR.JoinPointId) CertifyError!void {
         const record = self.records.getPtr(join_id) orelse return;
-        const expected = record.expected orelse return;
-        var body_state = try self.stateFromSummary(expected);
+        const entry = record.pending.pop() orelse return;
+        defer self.allocator.free(entry);
+        var body_state = try self.stateFromSummary(entry);
         errdefer body_state.deinit();
-        try work.append(self.allocator, .{ .segment = .{ .cursor = record.body, .state = body_state } });
+        try work.append(self.allocator, .{ .segment = .{
+            .cursor = record.body,
+            .state = body_state,
+            .origin_join = join_id,
+        } });
     }
 
     fn runSegment(self: *Certifier, work: *std.ArrayList(WorkItem), segment: Segment) CertifyError!void {
         var state = segment.state;
         defer state.deinit();
         var cursor = segment.cursor;
+        self.current_origin_join = segment.origin_join;
 
         while (true) {
             self.current_stmt = cursor;
@@ -1389,11 +1357,11 @@ const Certifier = struct {
                     for (self.store.getCFSwitchBranches(switch_stmt.branches)) |branch| {
                         var branch_state = try state.clone();
                         errdefer branch_state.deinit();
-                        try work.append(self.allocator, .{ .segment = .{ .cursor = branch.body, .state = branch_state } });
+                        try work.append(self.allocator, .{ .segment = .{ .cursor = branch.body, .state = branch_state, .origin_join = segment.origin_join } });
                     }
                     var default_state = try state.clone();
                     errdefer default_state.deinit();
-                    try work.append(self.allocator, .{ .segment = .{ .cursor = switch_stmt.default_branch, .state = default_state } });
+                    try work.append(self.allocator, .{ .segment = .{ .cursor = switch_stmt.default_branch, .state = default_state, .origin_join = segment.origin_join } });
                     return;
                 },
                 .join => |join_stmt| {
@@ -1407,13 +1375,9 @@ const Certifier = struct {
                             .body = join_stmt.body,
                             .params = join_stmt.params,
                             .relevant = try self.computeJoinRelevant(join_stmt.params, join_stmt.body),
-                            .expected = null,
-                            .body_scheduled = false,
+                            .scheduled = std.AutoHashMap(u64, void).init(self.allocator),
+                            .pending = .empty,
                         };
-                    }
-                    if (!record.value_ptr.body_scheduled) {
-                        record.value_ptr.body_scheduled = true;
-                        try work.append(self.allocator, .{ .join_body = join_stmt.id });
                     }
                     cursor = join_stmt.remainder;
                 },
@@ -1422,41 +1386,20 @@ const Certifier = struct {
                         return self.fail("jump to join {d} before its definition", .{@intFromEnum(jump_stmt.target)});
                     };
                     const jump_summary = try self.summarizeForJoin(&state, record, jump_stmt.target);
-                    if (record.expected) |expected| {
-                        var conflict_dense: usize = 0;
-                        switch (try self.meetSummaries(expected, jump_summary, &conflict_dense)) {
-                            .equal => {},
-                            .weakened => {
-                                // The body must hold under the weaker entry
-                                // assumption; certify it again.
-                                try work.append(self.allocator, .{ .join_body = jump_stmt.target });
-                            },
-                            .conflict => {
-                                const local = self.proc_locals.items[conflict_dense];
-                                const left = expected[conflict_dense];
-                                const right = jump_summary[conflict_dense];
-                                self.diag.context_local = local;
-                                self.diag.context_proc = self.current_proc;
-                                return self.fail(
-                                    "jumps to join {d} disagree on ownership of local {d}: " ++
-                                        "({s} repr={d} units={d} anchor={d}) vs ({s} repr={d} units={d} anchor={d})",
-                                    .{
-                                        @intFromEnum(jump_stmt.target),
-                                        @intFromEnum(local),
-                                        @tagName(left.class),
-                                        left.repr,
-                                        left.balance,
-                                        left.lender_repr,
-                                        @tagName(right.class),
-                                        right.repr,
-                                        right.balance,
-                                        right.lender_repr,
-                                    },
-                                );
-                            },
+                    const digest = summaryDigest(record.body, jump_summary);
+                    const seen_entry = try record.scheduled.getOrPut(digest);
+                    if (!seen_entry.found_existing) {
+                        if (record.scheduled.count() > 64) {
+                            self.diag.context_proc = self.current_proc;
+                            return self.fail(
+                                "entry states of join {d} diverge across jumps",
+                                .{@intFromEnum(jump_stmt.target)},
+                            );
                         }
-                    } else {
-                        record.expected = try self.allocator.dupe(LocalSummary, jump_summary);
+                        const copy = try self.allocator.dupe(LocalSummary, jump_summary);
+                        errdefer self.allocator.free(copy);
+                        try record.pending.append(self.allocator, copy);
+                        try work.append(self.allocator, .{ .join_body = jump_stmt.target });
                     }
                     return;
                 },

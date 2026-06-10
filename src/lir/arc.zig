@@ -4054,3 +4054,35 @@ test "RC interprocedural: borrowed return borrows the argument in the caller" {
     try f.expectRc(alias, 0, 0, 0);
     try f.expectRc(value, 0, 1, 0);
 }
+test "RC borrow survives the lender moving into an aggregate" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const inner = try f.local(.str);
+    const tagged = try f.local(f.tag_str);
+    const payload = try f.local(.str);
+    const alias = try f.local(.str);
+    const other = try f.local(.str);
+    const pair = try f.local(f.pair_str);
+    const call_result = try f.local(.i64);
+    const result = try f.local(.i64);
+
+    // inner = "x"; tagged = tag(inner); payload = tagged.payload;
+    // alias = payload; other = "y"; pair = {payload, other};
+    // call(pair); expect(alias); result = 1; ret result
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, 1, ret);
+    const use_alias = try f.expectStmt(alias, result_assign);
+    const consume_pair = try f.assignCall(call_result, &.{pair}, use_alias);
+    const pair_assign = try f.assignStruct(pair, &.{ payload, other }, consume_pair);
+    const other_assign = try f.assignStr(other, "y", pair_assign);
+    const alias_assign = try f.assignRefLocal(alias, payload, other_assign);
+    const payload_read = try f.assignTagPayload(payload, tagged, alias_assign);
+    const tag_assign = try f.assignTag(tagged, 1, inner, payload_read);
+    const body = try f.assignStr(inner, "x", tag_assign);
+    _ = try f.addProc(&.{}, body, .i64);
+    try f.run();
+    // The payload's retain at the read or store must keep the alias's chain
+    // live across the consuming call; the certifier validates whichever
+    // placement emission chooses.
+    try testing.expect(f.countRc(payload, .incref) >= 1);
+}
