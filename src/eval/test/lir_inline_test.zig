@@ -10,6 +10,7 @@ const helpers = eval.test_helpers;
 
 const Allocator = std.mem.Allocator;
 const LIR = lir.LIR;
+const LayoutIdx = @import("layout").Idx;
 
 const LoweredSource = struct {
     resources: helpers.ParsedResources,
@@ -71,6 +72,73 @@ fn lowerModule(
         .resources = resources,
         .lowered = lowered,
     };
+}
+
+fn mainProcArgLayouts(
+    allocator: Allocator,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+) anyerror![]LayoutIdx {
+    const proc = lowered.lir_result.store.getProcSpec(try rootProc(lowered));
+    const arg_locals = lowered.lir_result.store.getLocalSpan(proc.args);
+    const arg_layouts = try allocator.alloc(LayoutIdx, arg_locals.len);
+    errdefer allocator.free(arg_layouts);
+
+    for (arg_locals, 0..) |local_id, index| {
+        arg_layouts[index] = lowered.lir_result.store.getLocal(local_id).layout_idx;
+    }
+
+    return arg_layouts;
+}
+
+fn runLoweredWithHostEvents(
+    allocator: Allocator,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+) anyerror!eval.RuntimeHostEnv.RecordedRun {
+    var runtime_env = eval.RuntimeHostEnv.init(allocator);
+    defer runtime_env.deinit();
+
+    var interpreter = try eval.Interpreter.init(
+        allocator,
+        &lowered.lir_result.store,
+        &lowered.lir_result.layouts,
+        runtime_env.get_ops(),
+    );
+    defer interpreter.deinit();
+
+    const arg_layouts = try mainProcArgLayouts(allocator, lowered);
+    defer allocator.free(arg_layouts);
+
+    const result = interpreter.eval(.{
+        .proc_id = try rootProc(lowered),
+        .arg_layouts = arg_layouts,
+    }) catch |err| switch (err) {
+        error.Crash => return runtime_env.snapshot(allocator),
+        else => return err,
+    };
+    switch (result) {
+        .value => {},
+    }
+
+    return runtime_env.snapshot(allocator);
+}
+
+fn expectOptimizedDbgEvents(source: []const u8, expected: []const []const u8) anyerror!void {
+    const allocator = std.testing.allocator;
+
+    var optimized = try lowerModule(allocator, source, .direct_call_wrappers);
+    defer optimized.deinit(allocator);
+
+    var run = try runLoweredWithHostEvents(allocator, &optimized.lowered);
+    defer run.deinit(allocator);
+
+    try std.testing.expectEqual(eval.RuntimeHostEnv.Termination.returned, run.termination);
+    try std.testing.expectEqual(expected.len, run.events.len);
+    for (expected, run.events) |expected_event, actual_event| {
+        switch (actual_event) {
+            .dbg => |msg| try std.testing.expectEqualStrings(expected_event, msg),
+            else => return error.TestUnexpectedResult,
+        }
+    }
 }
 
 fn liftModuleAfterSpecConstr(
@@ -846,6 +914,186 @@ test "spec constr does not duplicate opaque known-match payloads" {
 
     try std.testing.expect(try reachableProcShape(allocator, &optimized.lowered, opaqueLetCallWorkerDoesNotDuplicateCall));
     try std.testing.expect(!try reachableProcShape(allocator, &optimized.lowered, opaqueLetCallWorkerDuplicatesCall));
+}
+
+test "spec constr preserves direct call argument effect order" {
+    try expectOptimizedDbgEvents(
+        \\module [main]
+        \\
+        \\State : { n : I64 }
+        \\
+        \\tap : I64 -> I64
+        \\tap = |n| {
+        \\    dbg "arg"
+        \\    n
+        \\}
+        \\
+        \\use_after : State, I64 -> I64
+        \\use_after = |state, x| {
+        \\    dbg "callee-before"
+        \\    state.n + x
+        \\}
+        \\
+        \\outer : State -> I64
+        \\outer = |state|
+        \\    use_after({ n: state.n }, tap(state.n))
+        \\
+        \\main : I64
+        \\main = outer({ n: 1 })
+    , &.{ "\"arg\"", "\"callee-before\"" });
+}
+
+test "spec constr preserves left-to-right order for multiple unsafe call args" {
+    try expectOptimizedDbgEvents(
+        \\module [main]
+        \\
+        \\State : { n : I64 }
+        \\
+        \\tap_one : I64 -> I64
+        \\tap_one = |n| {
+        \\    dbg "arg-one"
+        \\    n
+        \\}
+        \\
+        \\tap_two : I64 -> I64
+        \\tap_two = |n| {
+        \\    dbg "arg-two"
+        \\    n + 1
+        \\}
+        \\
+        \\combine_after : State, I64, I64 -> I64
+        \\combine_after = |state, x, y| {
+        \\    dbg "callee-before"
+        \\    state.n + x + y
+        \\}
+        \\
+        \\outer : State -> I64
+        \\outer = |state|
+        \\    combine_after({ n: state.n }, tap_one(state.n), tap_two(state.n))
+        \\
+        \\main : I64
+        \\main = outer({ n: 1 })
+    , &.{ "\"arg-one\"", "\"arg-two\"", "\"callee-before\"" });
+}
+
+test "spec constr preserves substituted capture order before direct call args" {
+    try expectOptimizedDbgEvents(
+        \\module [main]
+        \\
+        \\State : { n : I64 }
+        \\
+        \\tap_capture : I64 -> I64
+        \\tap_capture = |n| {
+        \\    dbg "capture"
+        \\    n
+        \\}
+        \\
+        \\tap_arg : I64 -> I64
+        \\tap_arg = |n| {
+        \\    dbg "arg"
+        \\    n
+        \\}
+        \\
+        \\outer : State, I64 -> I64
+        \\outer = |state, seed| {
+        \\    inner = |next, arg| {
+        \\        dbg "callee-before"
+        \\        seed + next.n + arg
+        \\    }
+        \\    inner({ n: seed }, tap_arg(state.n))
+        \\}
+        \\
+        \\main : I64
+        \\main = outer({ n: 1 }, tap_capture(2))
+    , &.{ "\"capture\"", "\"arg\"", "\"callee-before\"" });
+}
+
+test "spec constr preserves callable argument effect order" {
+    try expectOptimizedDbgEvents(
+        \\module [main]
+        \\
+        \\State : { n : I64 }
+        \\
+        \\tap : I64 -> I64
+        \\tap = |n| {
+        \\    dbg "arg"
+        \\    n
+        \\}
+        \\
+        \\call_it : State, (I64 -> I64) -> I64
+        \\call_it = |state, f|
+        \\    f(tap(state.n))
+        \\
+        \\outer : State -> I64
+        \\outer = |state| {
+        \\    f = |x| {
+        \\        dbg "fn-before"
+        \\        x
+        \\    }
+        \\    call_it({ n: state.n }, f)
+        \\}
+        \\
+        \\main : I64
+        \\main = outer({ n: 1 })
+    , &.{ "\"arg\"", "\"fn-before\"" });
+}
+
+test "spec constr preserves known-match single-use payload effect order" {
+    try expectOptimizedDbgEvents(
+        \\module [main]
+        \\
+        \\State : { n : I64 }
+        \\Step : [One(I64)]
+        \\
+        \\tap : I64 -> I64
+        \\tap = |n| {
+        \\    dbg "payload"
+        \\    n
+        \\}
+        \\
+        \\outer : State -> I64
+        \\outer = |state|
+        \\    match One(tap(state.n)) {
+        \\        One(x) => {
+        \\            dbg "branch-before"
+        \\            x
+        \\        }
+        \\    }
+        \\
+        \\main : I64
+        \\main = outer({ n: 1 })
+    , &.{ "\"payload\"", "\"branch-before\"" });
+}
+
+test "spec constr preserves nested known-match payload effect order" {
+    try expectOptimizedDbgEvents(
+        \\module [main]
+        \\
+        \\State : { n : I64 }
+        \\Step : [One({ item : I64 })]
+        \\
+        \\tap : I64 -> I64
+        \\tap = |n| {
+        \\    dbg "payload"
+        \\    n
+        \\}
+        \\
+        \\consume : State, Step -> I64
+        \\consume = |state, step|
+        \\    match step {
+        \\        One({ item }) => {
+        \\            dbg "branch-before"
+        \\            state.n + item
+        \\        }
+        \\    }
+        \\
+        \\outer : State -> I64
+        \\outer = |state|
+        \\    consume({ n: state.n }, One({ item: tap(state.n) }))
+        \\
+        \\main : I64
+        \\main = outer({ n: 1 })
+    , &.{ "\"payload\"", "\"branch-before\"" });
 }
 
 test "spec constr writes dynamically discovered workers once" {

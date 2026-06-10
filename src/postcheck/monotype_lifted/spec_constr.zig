@@ -1482,10 +1482,6 @@ const Cloner = struct {
         };
     }
 
-    fn canInlineSubst(self: *Cloner, local: Ast.LocalId, value: Value, body: Ast.ExprId) bool {
-        return self.valueCanSubstitute(value) or localUseCountInExpr(self.pass.program, local, body) == 1;
-    }
-
     fn callableValue(self: *Cloner, ty: Type.TypeId, fn_id: Ast.FnId) Common.LowerError!Value {
         const fn_ = self.pass.program.fns.items[@intFromEnum(fn_id)];
         const source_captures = self.pass.program.typedLocalSpan(fn_.captures);
@@ -2025,7 +2021,8 @@ const Cloner = struct {
             defer pending_lets.deinit(self.pass.allocator);
 
             const change_start = self.changes.items.len;
-            if (try self.bindPatToMatchValue(branch.pat, scrutinee, branch.body, &pending_lets) == null) {
+            const unsafe_count = self.unsafeLeafCount(scrutinee);
+            if (try self.bindPatToMatchValue(branch.pat, scrutinee, branch.body, unsafe_count, &pending_lets) == null) {
                 Common.invariant("known constructor match changed after reusable payload binding");
             }
             const body = try self.cloneExprValue(branch.body);
@@ -2040,23 +2037,25 @@ const Cloner = struct {
         pat_id: Ast.PatId,
         value: Value,
         body: Ast.ExprId,
+        unsafe_count: usize,
         pending_lets: *std.ArrayList(PendingLet),
     ) Common.LowerError!?Value {
         const pat = self.pass.program.pats.items[@intFromEnum(pat_id)];
         switch (pat.data) {
             .bind => |local| {
-                const prepared = try self.valueForMatchLocal(local, value, body, pending_lets);
+                const prepared = try self.valueForMatchLocal(local, value, body, unsafe_count, pending_lets);
                 try self.putSubst(local, prepared);
                 return prepared;
             },
             .wildcard => return try self.makeReusableForMatch(value, pending_lets),
             .as => |as| {
                 const as_uses = localUseCountInExpr(self.pass.program, as.local, body);
-                const base = if (self.valueCanSubstitute(value) or as_uses == 1)
+                const base = if (self.valueCanSubstitute(value) or
+                    (unsafe_count == 1 and as_uses == 1 and localUseBeforeEffect(self.pass.program, as.local, body)))
                     value
                 else
                     try self.makeReusableForMatch(value, pending_lets);
-                const prepared = (try self.bindPatToMatchValue(as.pattern, base, body, pending_lets)) orelse return null;
+                const prepared = (try self.bindPatToMatchValue(as.pattern, base, body, unsafe_count, pending_lets)) orelse return null;
                 try self.putSubst(as.local, prepared);
                 return prepared;
             },
@@ -2066,7 +2065,7 @@ const Cloner = struct {
                 const prepared_fields = try self.pass.arena.allocator().alloc(FieldValue, record.fields.len);
                 for (record.fields, 0..) |field, index| {
                     if (recordPatField(fields, field.name)) |field_pat| {
-                        const prepared = (try self.bindPatToMatchValue(field_pat, field.value, body, pending_lets)) orelse return null;
+                        const prepared = (try self.bindPatToMatchValue(field_pat, field.value, body, unsafe_count, pending_lets)) orelse return null;
                         prepared_fields[index] = .{
                             .name = field.name,
                             .value = prepared,
@@ -2089,7 +2088,7 @@ const Cloner = struct {
                 if (pats.len != tuple.items.len) return null;
                 const items = try self.pass.arena.allocator().alloc(Value, tuple.items.len);
                 for (pats, tuple.items, 0..) |child_pat, child_value, index| {
-                    items[index] = (try self.bindPatToMatchValue(child_pat, child_value, body, pending_lets)) orelse return null;
+                    items[index] = (try self.bindPatToMatchValue(child_pat, child_value, body, unsafe_count, pending_lets)) orelse return null;
                 }
                 return Value{ .tuple = .{
                     .ty = tuple.ty,
@@ -2103,7 +2102,7 @@ const Cloner = struct {
                 if (pats.len != tag.payloads.len) return null;
                 const payloads = try self.pass.arena.allocator().alloc(Value, tag.payloads.len);
                 for (pats, tag.payloads, 0..) |child_pat, child_value, index| {
-                    payloads[index] = (try self.bindPatToMatchValue(child_pat, child_value, body, pending_lets)) orelse return null;
+                    payloads[index] = (try self.bindPatToMatchValue(child_pat, child_value, body, unsafe_count, pending_lets)) orelse return null;
                 }
                 return Value{ .tag = .{
                     .ty = tag.ty,
@@ -2117,7 +2116,7 @@ const Cloner = struct {
                     else => return null,
                 };
                 const backing = try self.pass.arena.allocator().create(Value);
-                backing.* = (try self.bindPatToMatchValue(backing_pat, nominal.backing.*, body, pending_lets)) orelse return null;
+                backing.* = (try self.bindPatToMatchValue(backing_pat, nominal.backing.*, body, unsafe_count, pending_lets)) orelse return null;
                 return Value{ .nominal = .{
                     .ty = nominal.ty,
                     .backing = backing,
@@ -2137,11 +2136,60 @@ const Cloner = struct {
         local: Ast.LocalId,
         value: Value,
         body: Ast.ExprId,
+        unsafe_count: usize,
         pending_lets: *std.ArrayList(PendingLet),
     ) Common.LowerError!Value {
         const uses = localUseCountInExpr(self.pass.program, local, body);
-        if (self.valueCanSubstitute(value) or uses == 1) return value;
+        if (self.valueCanSubstitute(value) or
+            (unsafe_count == 1 and uses == 1 and localUseBeforeEffect(self.pass.program, local, body)))
+        {
+            return value;
+        }
         return try self.makeReusableForMatch(value, pending_lets);
+    }
+
+    fn valueForInlineLocal(
+        self: *Cloner,
+        local: Ast.LocalId,
+        value: Value,
+        body: Ast.ExprId,
+        unsafe_count: usize,
+        pending_lets: *std.ArrayList(PendingLet),
+    ) Common.LowerError!Value {
+        const uses = localUseCountInExpr(self.pass.program, local, body);
+        if (self.valueCanSubstitute(value) or
+            (unsafe_count == 1 and uses == 1 and localUseBeforeEffect(self.pass.program, local, body)))
+        {
+            return value;
+        }
+        return try self.makeReusableForMatch(value, pending_lets);
+    }
+
+    fn unsafeLeafCount(self: *Cloner, value: Value) usize {
+        return switch (value) {
+            .expr => |expr| if (self.exprCanSubstitute(expr)) 0 else 1,
+            .tag => |tag| blk: {
+                var count: usize = 0;
+                for (tag.payloads) |payload| count += self.unsafeLeafCount(payload);
+                break :blk count;
+            },
+            .record => |record| blk: {
+                var count: usize = 0;
+                for (record.fields) |field| count += self.unsafeLeafCount(field.value);
+                break :blk count;
+            },
+            .tuple => |tuple| blk: {
+                var count: usize = 0;
+                for (tuple.items) |item| count += self.unsafeLeafCount(item);
+                break :blk count;
+            },
+            .nominal => |nominal| self.unsafeLeafCount(nominal.backing.*),
+            .callable => |callable| blk: {
+                var count: usize = 0;
+                for (callable.captures) |capture| count += self.unsafeLeafCount(capture);
+                break :blk count;
+            },
+        };
     }
 
     fn makeReusableForMatch(self: *Cloner, value: Value, pending_lets: *std.ArrayList(PendingLet)) Common.LowerError!Value {
@@ -2307,33 +2355,39 @@ const Cloner = struct {
         defer self.pass.allocator.free(args);
         if (source_args.len != args.len) Common.invariant("callable call arity differed from lifted function arity");
 
-        const arg_values = try self.pass.allocator.alloc(Value, args.len);
-        defer self.pass.allocator.free(arg_values);
-        for (args, 0..) |arg_expr, index| {
-            arg_values[index] = try self.cloneExprValue(arg_expr);
-        }
-
         const source_captures = try self.pass.allocator.dupe(Ast.TypedLocal, self.pass.program.typedLocalSpan(source_fn.captures));
         defer self.pass.allocator.free(source_captures);
         if (source_captures.len != callable.captures.len) {
             Common.invariant("callable value capture count differed from lifted function capture count");
         }
 
-        for (source_captures, callable.captures) |source_capture, capture_value| {
-            if (!self.canInlineSubst(source_capture.local, capture_value, body)) {
-                return .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .call_value = .{
-                    .callee = try self.materialize(.{ .callable = callable }),
-                    .args = try self.valuesToExprSpan(arg_values),
-                } } }) };
-            }
+        var pending_lets = std.ArrayList(PendingLet).empty;
+        defer pending_lets.deinit(self.pass.allocator);
+
+        const change_start = self.changes.items.len;
+        defer self.restore(change_start);
+
+        const prepared_captures = try self.pass.allocator.alloc(Value, callable.captures.len);
+        defer self.pass.allocator.free(prepared_captures);
+        for (source_captures, callable.captures, 0..) |source_capture, capture_value, index| {
+            prepared_captures[index] = try self.makeReusableForMatch(capture_value, &pending_lets);
+            try self.putSubst(source_capture.local, prepared_captures[index]);
         }
-        for (source_args, arg_values) |source_arg, arg_value| {
-            if (!self.canInlineSubst(source_arg.local, arg_value, body)) {
-                return .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .call_value = .{
-                    .callee = try self.materialize(.{ .callable = callable }),
-                    .args = try self.valuesToExprSpan(arg_values),
-                } } }) };
-            }
+
+        const arg_values = try self.pass.allocator.alloc(Value, args.len);
+        defer self.pass.allocator.free(arg_values);
+        for (args, 0..) |arg_expr, index| {
+            arg_values[index] = try self.cloneExprValue(arg_expr);
+        }
+
+        var unsafe_count: usize = 0;
+        for (prepared_captures) |capture_value| unsafe_count += self.unsafeLeafCount(capture_value);
+        for (arg_values) |arg_value| unsafe_count += self.unsafeLeafCount(arg_value);
+
+        const prepared_args = try self.pass.allocator.alloc(Value, arg_values.len);
+        defer self.pass.allocator.free(prepared_args);
+        for (source_args, arg_values, 0..) |source_arg, arg_value, index| {
+            prepared_args[index] = try self.valueForInlineLocal(source_arg.local, arg_value, body, unsafe_count, &pending_lets);
         }
 
         try self.inline_stack.append(self.pass.allocator, callable.fn_id);
@@ -2342,17 +2396,11 @@ const Cloner = struct {
             if (popped != callable.fn_id) Common.invariant("call-pattern inline stack was corrupted");
         }
 
-        const change_start = self.changes.items.len;
-        defer self.restore(change_start);
-
-        for (source_captures, callable.captures) |source_capture, capture_value| {
-            try self.putSubst(source_capture.local, capture_value);
-        }
-        for (source_args, arg_values) |source_arg, arg_value| {
+        for (source_args, prepared_args) |source_arg, arg_value| {
             try self.putSubst(source_arg.local, arg_value);
         }
 
-        return try self.cloneExprValue(body);
+        return try self.wrapPendingLets(try self.cloneExprValue(body), pending_lets.items);
     }
 
     fn inlineDirectCallValue(
@@ -2376,26 +2424,8 @@ const Cloner = struct {
         defer self.pass.allocator.free(args);
         if (source_args.len != args.len) Common.invariant("direct call arity differed from lifted function arity");
 
-        const arg_values = try self.pass.allocator.alloc(Value, args.len);
-        defer self.pass.allocator.free(arg_values);
-        for (args, 0..) |arg_expr, index| {
-            arg_values[index] = try self.cloneExprValue(arg_expr);
-        }
-
-        for (source_args, arg_values) |source_arg, arg_value| {
-            if (!self.canInlineSubst(source_arg.local, arg_value, body)) {
-                return .{ .expr = try self.addExpr(.{ .ty = self.pass.program.exprs.items[@intFromEnum(original_expr)].ty, .data = .{ .call_proc = .{
-                    .callee = .{ .lifted = callee },
-                    .args = try self.valuesToExprSpan(arg_values),
-                } } }) };
-            }
-        }
-
-        try self.inline_stack.append(self.pass.allocator, callee);
-        defer {
-            const popped = self.inline_stack.pop() orelse Common.invariant("call-pattern inline stack underflow");
-            if (popped != callee) Common.invariant("call-pattern inline stack was corrupted");
-        }
+        var pending_lets = std.ArrayList(PendingLet).empty;
+        defer pending_lets.deinit(self.pass.allocator);
 
         const change_start = self.changes.items.len;
         defer self.restore(change_start);
@@ -2404,20 +2434,39 @@ const Cloner = struct {
         defer self.pass.allocator.free(captures);
         for (captures) |capture| {
             if (self.subst.get(capture.local)) |value| {
-                if (!self.canInlineSubst(capture.local, value, body)) {
-                    return .{ .expr = try self.addExpr(.{ .ty = self.pass.program.exprs.items[@intFromEnum(original_expr)].ty, .data = .{ .call_proc = .{
-                        .callee = .{ .lifted = callee },
-                        .args = try self.valuesToExprSpan(arg_values),
-                    } } }) };
-                }
-                try self.putSubst(capture.local, value);
+                try self.putSubst(capture.local, try self.makeReusableForMatch(value, &pending_lets));
             }
         }
-        for (source_args, arg_values) |source_arg, arg_value| {
+
+        const arg_values = try self.pass.allocator.alloc(Value, args.len);
+        defer self.pass.allocator.free(arg_values);
+        for (args, 0..) |arg_expr, index| {
+            arg_values[index] = try self.cloneExprValue(arg_expr);
+        }
+
+        var unsafe_count: usize = 0;
+        for (arg_values) |arg_value| unsafe_count += self.unsafeLeafCount(arg_value);
+        for (captures) |capture| {
+            if (self.subst.get(capture.local)) |value| unsafe_count += self.unsafeLeafCount(value);
+        }
+
+        const prepared_args = try self.pass.allocator.alloc(Value, arg_values.len);
+        defer self.pass.allocator.free(prepared_args);
+        for (source_args, arg_values, 0..) |source_arg, arg_value, index| {
+            prepared_args[index] = try self.valueForInlineLocal(source_arg.local, arg_value, body, unsafe_count, &pending_lets);
+        }
+
+        try self.inline_stack.append(self.pass.allocator, callee);
+        defer {
+            const popped = self.inline_stack.pop() orelse Common.invariant("call-pattern inline stack underflow");
+            if (popped != callee) Common.invariant("call-pattern inline stack was corrupted");
+        }
+
+        for (source_args, prepared_args) |source_arg, arg_value| {
             try self.putSubst(source_arg.local, arg_value);
         }
 
-        return try self.cloneExprValue(body);
+        return try self.wrapPendingLets(try self.cloneExprValue(body), pending_lets.items);
     }
 
     fn bindPatToValue(self: *Cloner, pat_id: Ast.PatId, value: Value) Common.LowerError!bool {
@@ -2985,6 +3034,153 @@ fn localUseCountInStmt(program: *const Ast.Program, local: Ast.LocalId, stmt_id:
         => |expr| localUseCountInExpr(program, local, expr),
         .crash => 0,
     };
+}
+
+const LocalUseScan = struct {
+    seen_effect: bool = false,
+    found_before_effect: bool = false,
+    found_after_effect: bool = false,
+};
+
+fn localUseBeforeEffect(program: *const Ast.Program, local: Ast.LocalId, expr_id: Ast.ExprId) bool {
+    var scan: LocalUseScan = .{};
+    scanLocalUseInExpr(program, local, expr_id, &scan);
+    return scan.found_before_effect and !scan.found_after_effect;
+}
+
+fn scanLocalUseInExpr(program: *const Ast.Program, local: Ast.LocalId, expr_id: Ast.ExprId, scan: *LocalUseScan) void {
+    const expr = program.exprs.items[@intFromEnum(expr_id)];
+    switch (expr.data) {
+        .local => |seen| {
+            if (seen == local) {
+                if (scan.seen_effect) {
+                    scan.found_after_effect = true;
+                } else {
+                    scan.found_before_effect = true;
+                }
+            }
+        },
+        .unit,
+        .int_lit,
+        .frac_f32_lit,
+        .frac_f64_lit,
+        .dec_lit,
+        .str_lit,
+        .fn_ref,
+        => {},
+        .crash => scan.seen_effect = true,
+        .list,
+        .tuple,
+        => |items| scanLocalUseInExprSpan(program, local, items, scan),
+        .record => |fields| {
+            for (program.fieldExprSpan(fields)) |field| scanLocalUseInExpr(program, local, field.value, scan);
+        },
+        .tag => |tag| scanLocalUseInExprSpan(program, local, tag.payloads, scan),
+        .nominal => |child| scanLocalUseInExpr(program, local, child, scan),
+        .return_ => |child| {
+            scanLocalUseInExpr(program, local, child, scan);
+            scan.seen_effect = true;
+        },
+        .dbg,
+        .expect,
+        => |child| {
+            scanLocalUseInExpr(program, local, child, scan);
+            scan.seen_effect = true;
+        },
+        .let_ => |let_| {
+            scanLocalUseInExpr(program, local, let_.value, scan);
+            scanLocalUseInExpr(program, local, let_.rest, scan);
+        },
+        .lambda,
+        .def_ref,
+        .fn_def,
+        => {},
+        .call_value => |call| {
+            scanLocalUseInExpr(program, local, call.callee, scan);
+            scanLocalUseInExprSpan(program, local, call.args, scan);
+            scan.seen_effect = true;
+        },
+        .call_proc => |call| {
+            scanLocalUseInExprSpan(program, local, call.args, scan);
+            scan.seen_effect = true;
+        },
+        .low_level => |call| {
+            scanLocalUseInExprSpan(program, local, call.args, scan);
+            scan.seen_effect = true;
+        },
+        .field_access => |field| scanLocalUseInExpr(program, local, field.receiver, scan),
+        .tuple_access => |access| scanLocalUseInExpr(program, local, access.tuple, scan),
+        .structural_eq => |eq| {
+            scanLocalUseInExpr(program, local, eq.lhs, scan);
+            scanLocalUseInExpr(program, local, eq.rhs, scan);
+            scan.seen_effect = true;
+        },
+        .match_ => |match| {
+            scanLocalUseInExpr(program, local, match.scrutinee, scan);
+            for (program.branchSpan(match.branches)) |branch| {
+                var branch_scan = scan.*;
+                if (branch.guard) |guard| scanLocalUseInExpr(program, local, guard, &branch_scan);
+                scanLocalUseInExpr(program, local, branch.body, &branch_scan);
+                scan.found_before_effect = scan.found_before_effect or branch_scan.found_before_effect;
+                scan.found_after_effect = scan.found_after_effect or branch_scan.found_after_effect;
+                scan.seen_effect = scan.seen_effect or branch_scan.seen_effect;
+            }
+        },
+        .if_ => |if_| {
+            for (program.ifBranchSpan(if_.branches)) |branch| {
+                scanLocalUseInExpr(program, local, branch.cond, scan);
+                var branch_scan = scan.*;
+                scanLocalUseInExpr(program, local, branch.body, &branch_scan);
+                scan.found_before_effect = scan.found_before_effect or branch_scan.found_before_effect;
+                scan.found_after_effect = scan.found_after_effect or branch_scan.found_after_effect;
+                scan.seen_effect = scan.seen_effect or branch_scan.seen_effect;
+            }
+            scanLocalUseInExpr(program, local, if_.final_else, scan);
+        },
+        .block => |block| {
+            for (program.stmtSpan(block.statements)) |stmt| scanLocalUseInStmt(program, local, stmt, scan);
+            scanLocalUseInExpr(program, local, block.final_expr, scan);
+        },
+        .loop_ => |loop| {
+            scanLocalUseInExprSpan(program, local, loop.initial_values, scan);
+            scanLocalUseInExpr(program, local, loop.body, scan);
+        },
+        .break_ => |maybe| {
+            if (maybe) |value| scanLocalUseInExpr(program, local, value, scan);
+            scan.seen_effect = true;
+        },
+        .continue_ => |continue_| {
+            scanLocalUseInExprSpan(program, local, continue_.values, scan);
+            scan.seen_effect = true;
+        },
+    }
+}
+
+fn scanLocalUseInExprSpan(
+    program: *const Ast.Program,
+    local: Ast.LocalId,
+    span: Ast.Span(Ast.ExprId),
+    scan: *LocalUseScan,
+) void {
+    for (program.exprSpan(span)) |expr| scanLocalUseInExpr(program, local, expr, scan);
+}
+
+fn scanLocalUseInStmt(program: *const Ast.Program, local: Ast.LocalId, stmt_id: Ast.StmtId, scan: *LocalUseScan) void {
+    switch (program.stmts.items[@intFromEnum(stmt_id)]) {
+        .let_ => |let_| scanLocalUseInExpr(program, local, let_.value, scan),
+        .expr => |expr| scanLocalUseInExpr(program, local, expr, scan),
+        .expect,
+        .dbg,
+        => |expr| {
+            scanLocalUseInExpr(program, local, expr, scan);
+            scan.seen_effect = true;
+        },
+        .return_ => |expr| {
+            scanLocalUseInExpr(program, local, expr, scan);
+            scan.seen_effect = true;
+        },
+        .crash => scan.seen_effect = true,
+    }
 }
 
 fn canReadFieldsFromExpr(program: *const Ast.Program, expr_id: Ast.ExprId) bool {
