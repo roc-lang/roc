@@ -2228,7 +2228,6 @@ const Cloner = struct {
         return try self.pass.program.addPatSpan(values);
     }
 
-
     fn cloneFieldExprSpan(self: *Cloner, span: Ast.Span(Ast.FieldExpr)) Common.LowerError!Ast.Span(Ast.FieldExpr) {
         const source = try self.pass.allocator.dupe(Ast.FieldExpr, self.pass.program.fieldExprSpan(span));
         defer self.pass.allocator.free(source);
