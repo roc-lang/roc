@@ -2709,6 +2709,33 @@ Builtin :: [].{
 			## ```
 			bitwise_not : U8 -> U8
 
+			## Count the zero bits before the first one bit, starting at the most significant bit.
+			## ```roc
+			## expect U8.count_leading_zero_bits(1) == 7
+			##
+			## expect U8.count_leading_zero_bits(0) == 8
+			## ```
+			count_leading_zero_bits : U8 -> U8
+			count_leading_zero_bits = |value| unsigned_count_leading_zero_bits(8, 0, 2, value)
+
+			## Count the zero bits after the last one bit, starting at the least significant bit.
+			## ```roc
+			## expect U8.count_trailing_zero_bits(8) == 3
+			##
+			## expect U8.count_trailing_zero_bits(0) == 8
+			## ```
+			count_trailing_zero_bits : U8 -> U8
+			count_trailing_zero_bits = |value| integer_count_trailing_zero_bits(8, 0, 2, value)
+
+			## Count the one bits in the value.
+			## ```roc
+			## expect U8.count_one_bits(0b1011) == 3
+			##
+			## expect U8.count_one_bits(0) == 0
+			## ```
+			count_one_bits : U8 -> U8
+			count_one_bits = |value| unsigned_count_one_bits(0, 2, value)
+
 			## Build a [U8] from a list of base-10 digits, most significant first.
 			## Each element of the list must be a digit in the range `0` to `9`.
 			## Returns `Err(OutOfRange)` if the resulting value does not fit in a
@@ -3196,6 +3223,33 @@ Builtin :: [].{
 			## expect I8.bitwise_not(5) == -6
 			## ```
 			bitwise_not : I8 -> I8
+
+			## Count the zero bits before the first one bit, starting at the most significant bit.
+			## ```roc
+			## expect I8.count_leading_zero_bits(-1) == 0
+			##
+			## expect I8.count_leading_zero_bits(0) == 8
+			## ```
+			count_leading_zero_bits : I8 -> U8
+			count_leading_zero_bits = |value| signed_count_leading_zero_bits(8, 0, 2, value)
+
+			## Count the zero bits after the last one bit, starting at the least significant bit.
+			## ```roc
+			## expect I8.count_trailing_zero_bits(-8) == 3
+			##
+			## expect I8.count_trailing_zero_bits(0) == 8
+			## ```
+			count_trailing_zero_bits : I8 -> U8
+			count_trailing_zero_bits = |value| integer_count_trailing_zero_bits(8, 0, 2, value)
+
+			## Count the one bits in the value.
+			## ```roc
+			## expect I8.count_one_bits(-1) == 8
+			##
+			## expect I8.count_one_bits(0) == 0
+			## ```
+			count_one_bits : I8 -> U8
+			count_one_bits = |value| signed_count_one_bits(8, 0, 2, value)
 
 			## Iterator of integers beginning with this `I8` and ending with the other `I8`.
 			## (Use [I8.until] instead to end with the other `I8` minus one.)
@@ -3711,6 +3765,33 @@ Builtin :: [].{
 			## expect U16.bitwise_not(0) == 65535
 			## ```
 			bitwise_not : U16 -> U16
+
+			## Count the zero bits before the first one bit, starting at the most significant bit.
+			## ```roc
+			## expect U16.count_leading_zero_bits(1) == 15
+			##
+			## expect U16.count_leading_zero_bits(0) == 16
+			## ```
+			count_leading_zero_bits : U16 -> U8
+			count_leading_zero_bits = |value| unsigned_count_leading_zero_bits(16, 0, 2, value)
+
+			## Count the zero bits after the last one bit, starting at the least significant bit.
+			## ```roc
+			## expect U16.count_trailing_zero_bits(8) == 3
+			##
+			## expect U16.count_trailing_zero_bits(0) == 16
+			## ```
+			count_trailing_zero_bits : U16 -> U8
+			count_trailing_zero_bits = |value| integer_count_trailing_zero_bits(16, 0, 2, value)
+
+			## Count the one bits in the value.
+			## ```roc
+			## expect U16.count_one_bits(0b1011) == 3
+			##
+			## expect U16.count_one_bits(0) == 0
+			## ```
+			count_one_bits : U16 -> U8
+			count_one_bits = |value| unsigned_count_one_bits(0, 2, value)
 
 			## Iterator of integers beginning with this `U16` and ending with the other `U16`.
 			## (Use [U16.until] instead to end with the other `U16` minus one.)
@@ -4237,6 +4318,33 @@ Builtin :: [].{
 			## expect I16.bitwise_not(5) == -6
 			## ```
 			bitwise_not : I16 -> I16
+
+			## Count the zero bits before the first one bit, starting at the most significant bit.
+			## ```roc
+			## expect I16.count_leading_zero_bits(-1) == 0
+			##
+			## expect I16.count_leading_zero_bits(0) == 16
+			## ```
+			count_leading_zero_bits : I16 -> U8
+			count_leading_zero_bits = |value| signed_count_leading_zero_bits(16, 0, 2, value)
+
+			## Count the zero bits after the last one bit, starting at the least significant bit.
+			## ```roc
+			## expect I16.count_trailing_zero_bits(-8) == 3
+			##
+			## expect I16.count_trailing_zero_bits(0) == 16
+			## ```
+			count_trailing_zero_bits : I16 -> U8
+			count_trailing_zero_bits = |value| integer_count_trailing_zero_bits(16, 0, 2, value)
+
+			## Count the one bits in the value.
+			## ```roc
+			## expect I16.count_one_bits(-1) == 16
+			##
+			## expect I16.count_one_bits(0) == 0
+			## ```
+			count_one_bits : I16 -> U8
+			count_one_bits = |value| signed_count_one_bits(16, 0, 2, value)
 
 			## Iterator of integers beginning with this `I16` and ending with the other `I16`.
 			## (Use [I16.until] instead to end with the other `I16` minus one.)
@@ -4769,6 +4877,33 @@ Builtin :: [].{
 			## expect U32.bitwise_not(0) == 4294967295
 			## ```
 			bitwise_not : U32 -> U32
+
+			## Count the zero bits before the first one bit, starting at the most significant bit.
+			## ```roc
+			## expect U32.count_leading_zero_bits(1) == 31
+			##
+			## expect U32.count_leading_zero_bits(0) == 32
+			## ```
+			count_leading_zero_bits : U32 -> U8
+			count_leading_zero_bits = |value| unsigned_count_leading_zero_bits(32, 0, 2, value)
+
+			## Count the zero bits after the last one bit, starting at the least significant bit.
+			## ```roc
+			## expect U32.count_trailing_zero_bits(8) == 3
+			##
+			## expect U32.count_trailing_zero_bits(0) == 32
+			## ```
+			count_trailing_zero_bits : U32 -> U8
+			count_trailing_zero_bits = |value| integer_count_trailing_zero_bits(32, 0, 2, value)
+
+			## Count the one bits in the value.
+			## ```roc
+			## expect U32.count_one_bits(0b1011) == 3
+			##
+			## expect U32.count_one_bits(0) == 0
+			## ```
+			count_one_bits : U32 -> U8
+			count_one_bits = |value| unsigned_count_one_bits(0, 2, value)
 
 			## Iterator of integers beginning with this `U32` and ending with the other `U32`.
 			## (Use [U32.until] instead to end with the other `U32` minus one.)
@@ -5334,6 +5469,33 @@ Builtin :: [].{
 			## ```
 			bitwise_not : I32 -> I32
 
+			## Count the zero bits before the first one bit, starting at the most significant bit.
+			## ```roc
+			## expect I32.count_leading_zero_bits(-1) == 0
+			##
+			## expect I32.count_leading_zero_bits(0) == 32
+			## ```
+			count_leading_zero_bits : I32 -> U8
+			count_leading_zero_bits = |value| signed_count_leading_zero_bits(32, 0, 2, value)
+
+			## Count the zero bits after the last one bit, starting at the least significant bit.
+			## ```roc
+			## expect I32.count_trailing_zero_bits(-8) == 3
+			##
+			## expect I32.count_trailing_zero_bits(0) == 32
+			## ```
+			count_trailing_zero_bits : I32 -> U8
+			count_trailing_zero_bits = |value| integer_count_trailing_zero_bits(32, 0, 2, value)
+
+			## Count the one bits in the value.
+			## ```roc
+			## expect I32.count_one_bits(-1) == 32
+			##
+			## expect I32.count_one_bits(0) == 0
+			## ```
+			count_one_bits : I32 -> U8
+			count_one_bits = |value| signed_count_one_bits(32, 0, 2, value)
+
 			## Iterator of integers beginning with this `I32` and ending with the other `I32`.
 			## (Use [I32.until] instead to end with the other `I32` minus one.)
 			## Returns an empty iterator if this `I32` is greater than the other.
@@ -5885,6 +6047,33 @@ Builtin :: [].{
 			## expect U64.bitwise_not(0) == 18446744073709551615
 			## ```
 			bitwise_not : U64 -> U64
+
+			## Count the zero bits before the first one bit, starting at the most significant bit.
+			## ```roc
+			## expect U64.count_leading_zero_bits(1) == 63
+			##
+			## expect U64.count_leading_zero_bits(0) == 64
+			## ```
+			count_leading_zero_bits : U64 -> U8
+			count_leading_zero_bits = |value| unsigned_count_leading_zero_bits(64, 0, 2, value)
+
+			## Count the zero bits after the last one bit, starting at the least significant bit.
+			## ```roc
+			## expect U64.count_trailing_zero_bits(8) == 3
+			##
+			## expect U64.count_trailing_zero_bits(0) == 64
+			## ```
+			count_trailing_zero_bits : U64 -> U8
+			count_trailing_zero_bits = |value| integer_count_trailing_zero_bits(64, 0, 2, value)
+
+			## Count the one bits in the value.
+			## ```roc
+			## expect U64.count_one_bits(0b1011) == 3
+			##
+			## expect U64.count_one_bits(0) == 0
+			## ```
+			count_one_bits : U64 -> U8
+			count_one_bits = |value| unsigned_count_one_bits(0, 2, value)
 
 			## Iterator of integers beginning with this `U64` and ending with the other `U64`.
 			## (Use [U64.until] instead to end with the other `U64` minus one.)
@@ -6495,6 +6684,33 @@ Builtin :: [].{
 			## ```
 			bitwise_not : I64 -> I64
 
+			## Count the zero bits before the first one bit, starting at the most significant bit.
+			## ```roc
+			## expect I64.count_leading_zero_bits(-1) == 0
+			##
+			## expect I64.count_leading_zero_bits(0) == 64
+			## ```
+			count_leading_zero_bits : I64 -> U8
+			count_leading_zero_bits = |value| signed_count_leading_zero_bits(64, 0, 2, value)
+
+			## Count the zero bits after the last one bit, starting at the least significant bit.
+			## ```roc
+			## expect I64.count_trailing_zero_bits(-8) == 3
+			##
+			## expect I64.count_trailing_zero_bits(0) == 64
+			## ```
+			count_trailing_zero_bits : I64 -> U8
+			count_trailing_zero_bits = |value| integer_count_trailing_zero_bits(64, 0, 2, value)
+
+			## Count the one bits in the value.
+			## ```roc
+			## expect I64.count_one_bits(-1) == 64
+			##
+			## expect I64.count_one_bits(0) == 0
+			## ```
+			count_one_bits : I64 -> U8
+			count_one_bits = |value| signed_count_one_bits(64, 0, 2, value)
+
 			## Iterator of integers beginning with this `I64` and ending with the other `I64`.
 			## (Use [I64.until] instead to end with the other `I64` minus one.)
 			## Returns an empty iterator if this `I64` is greater than the other.
@@ -7071,6 +7287,33 @@ Builtin :: [].{
 			## expect U128.bitwise_not(0) == 340282366920938463463374607431768211455
 			## ```
 			bitwise_not : U128 -> U128
+
+			## Count the zero bits before the first one bit, starting at the most significant bit.
+			## ```roc
+			## expect U128.count_leading_zero_bits(1) == 127
+			##
+			## expect U128.count_leading_zero_bits(0) == 128
+			## ```
+			count_leading_zero_bits : U128 -> U8
+			count_leading_zero_bits = |value| unsigned_count_leading_zero_bits(128, 0, 2, value)
+
+			## Count the zero bits after the last one bit, starting at the least significant bit.
+			## ```roc
+			## expect U128.count_trailing_zero_bits(8) == 3
+			##
+			## expect U128.count_trailing_zero_bits(0) == 128
+			## ```
+			count_trailing_zero_bits : U128 -> U8
+			count_trailing_zero_bits = |value| integer_count_trailing_zero_bits(128, 0, 2, value)
+
+			## Count the one bits in the value.
+			## ```roc
+			## expect U128.count_one_bits(0b1011) == 3
+			##
+			## expect U128.count_one_bits(0) == 0
+			## ```
+			count_one_bits : U128 -> U8
+			count_one_bits = |value| unsigned_count_one_bits(0, 2, value)
 
 			## Iterator of integers beginning with this `U128` and ending with the other `U128`.
 			## (Use [U128.until] instead to end with the other `U128` minus one.)
@@ -7726,6 +7969,33 @@ Builtin :: [].{
 			## expect I128.bitwise_not(5) == -6
 			## ```
 			bitwise_not : I128 -> I128
+
+			## Count the zero bits before the first one bit, starting at the most significant bit.
+			## ```roc
+			## expect I128.count_leading_zero_bits(-1) == 0
+			##
+			## expect I128.count_leading_zero_bits(0) == 128
+			## ```
+			count_leading_zero_bits : I128 -> U8
+			count_leading_zero_bits = |value| signed_count_leading_zero_bits(128, 0, 2, value)
+
+			## Count the zero bits after the last one bit, starting at the least significant bit.
+			## ```roc
+			## expect I128.count_trailing_zero_bits(-8) == 3
+			##
+			## expect I128.count_trailing_zero_bits(0) == 128
+			## ```
+			count_trailing_zero_bits : I128 -> U8
+			count_trailing_zero_bits = |value| integer_count_trailing_zero_bits(128, 0, 2, value)
+
+			## Count the one bits in the value.
+			## ```roc
+			## expect I128.count_one_bits(-1) == 128
+			##
+			## expect I128.count_one_bits(0) == 0
+			## ```
+			count_one_bits : I128 -> U8
+			count_one_bits = |value| signed_count_one_bits(128, 0, 2, value)
 
 			## Iterator of integers beginning with this `I128` and ending with the other `I128`.
 			## (Use [I128.until] instead to end with the other `I128` minus one.)
@@ -9898,6 +10168,79 @@ signed_div_checked = |lowest, zero, neg_one, a, b|
 		}
 	} else {
 		Ok(a / b)
+	}
+
+unsigned_count_leading_zero_bits : U8, item, item, item -> U8
+	where [item.is_eq : item, item -> Bool, item.div_by : item, item -> item]
+unsigned_count_leading_zero_bits = |width, zero, two, value| width - unsigned_bit_length(zero, two, value, 0)
+
+unsigned_bit_length : item, item, item, U8 -> U8
+	where [item.is_eq : item, item -> Bool, item.div_by : item, item -> item]
+unsigned_bit_length = |zero, two, value, count|
+	if value == zero {
+		count
+	} else {
+		unsigned_bit_length(zero, two, value / two, count + 1)
+	}
+
+signed_count_leading_zero_bits : U8, item, item, item -> U8
+	where [
+		item.is_eq : item, item -> Bool,
+		item.is_lt : item, item -> Bool,
+		item.div_by : item, item -> item,
+	]
+signed_count_leading_zero_bits = |width, zero, two, value|
+	if value < zero {
+		0
+	} else {
+		unsigned_count_leading_zero_bits(width, zero, two, value)
+	}
+
+integer_count_trailing_zero_bits : U8, item, item, item -> U8
+	where [item.is_eq : item, item -> Bool, item.div_by : item, item -> item, item.rem_by : item, item -> item]
+integer_count_trailing_zero_bits = |width, zero, two, value|
+	if value == zero {
+		width
+	} else {
+		integer_count_trailing_zero_bits_step(zero, two, value, 0)
+	}
+
+integer_count_trailing_zero_bits_step : item, item, item, U8 -> U8
+	where [item.is_eq : item, item -> Bool, item.div_by : item, item -> item, item.rem_by : item, item -> item]
+integer_count_trailing_zero_bits_step = |zero, two, value, count|
+	if value.rem_by(two) != zero {
+		count
+	} else {
+		integer_count_trailing_zero_bits_step(zero, two, value / two, count + 1)
+	}
+
+unsigned_count_one_bits : item, item, item -> U8
+	where [item.is_eq : item, item -> Bool, item.div_by : item, item -> item, item.rem_by : item, item -> item]
+unsigned_count_one_bits = |zero, two, value|
+	if value == zero {
+		0
+	} else {
+		bit = if value.rem_by(two) == zero {
+			0
+		} else {
+			1
+		}
+		bit + unsigned_count_one_bits(zero, two, value / two)
+	}
+
+signed_count_one_bits : U8, item, item, item -> U8
+	where [
+		item.is_eq : item, item -> Bool,
+		item.is_lt : item, item -> Bool,
+		item.div_by : item, item -> item,
+		item.rem_by : item, item -> item,
+		item.bitwise_not : item -> item,
+	]
+signed_count_one_bits = |width, zero, two, value|
+	if value < zero {
+		width - unsigned_count_one_bits(zero, two, value.bitwise_not())
+	} else {
+		unsigned_count_one_bits(zero, two, value)
 	}
 
 integer_is_even : item, item, item -> Bool
