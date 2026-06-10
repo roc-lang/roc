@@ -1625,6 +1625,20 @@ Each explicit RC statement carries the concrete RC helper selected by ARC.
 Backends, the interpreter, and LirImage builders follow those statements
 mechanically. The ARC algorithm is specified in ARC Borrow Inference below.
 
+### Join-Parameter Scalarization
+
+Between direct LIR lowering and ARC insertion, one normalization splits
+struct-typed join parameters into per-field parameters when the parameter is
+only ever read field-by-field and only ever initialized from single-use
+struct literals. Each jump then passes the literal's operands directly and
+the literal's build is deleted; field reads become local aliases. This is
+required for refcounted loop state: without it, every jump pays a retain on
+each refcounted field read whose wrapper dies at the jump, and ARC cannot
+turn that into a move because the wrapper's release covers all fields at
+once. After scalarization the state flows through pure alias chains that
+borrow inference resolves to moves. Parameters with any whole-value use keep
+their shape, and the pass iterates so nested wrappers dissolve.
+
 ## ARC Borrow Inference
 
 ARC insertion computes a whole-program borrows-with-lifetimes solution over
@@ -1821,6 +1835,13 @@ generates constraints per statement:
   that path by emission.
 - `incref` / `decref` / `free` in the input: a compiler bug (the input
   contract is RC-free LIR), enforced by a debug assertion.
+
+Ownership demands propagate transitively through pure same-value aliases
+(`.local`, `.list_reinterpret`, `.nominal`): a consumed alias is a consumed
+source, so the chain's single unit moves link by link to the consuming
+occurrence instead of the alias paying a retain while the source's unit is
+separately released. Payload reads do not propagate demands; borrowing the
+container is exactly the win there.
 
 The solver runs three equation groups to their least fixed points, in order,
 following the paper's Figure 8 adapted to LIR vocabulary:
@@ -2027,6 +2048,74 @@ table. A certifier failure is a compiler bug and stops compilation. Release
 builds compile the certifier away entirely, like every other debug-only
 boundary check.
 
+### Thread-Confined Reference Counts
+
+Reference counts are atomic today because the host may share a Roc value
+across threads. Roc code itself is single-threaded within one host call, so
+an allocation needs atomic count updates only if a handle to it is ever
+visible to the host: it flows into a hosted call, a root return, an erased
+or address-escaped boundary — or it originated from one, as a root
+parameter, a hosted-call result, or a payload read out of a host-visible
+container. Every other allocation is confined to one thread for its whole
+life, and its counts may use plain loads and stores.
+
+Atomicity is a property of the allocation but is chosen per RC statement,
+so every statement that can touch one allocation must agree. Agreement is
+guaranteed by construction: host visibility is a may-property propagated to
+a fixpoint over the complete value-flow graph, and two locals can only hold
+the same allocation if a chain of those same flow edges connects them, so a
+visible allocation marks every local that can hold it.
+
+The analysis is one more monotone bit per local in the ARC solver, over
+edges the solver already walks:
+
+- seeds: parameters and returns of pinned procs (roots, hosted procs,
+  erased-callable procs, procs whose address escapes)
+- pure same-value aliases, in both directions
+- containment, in both directions: aggregate and capture operands link to
+  the constructed value, and payload reads link to their source — storing a
+  visible value makes the container visible, and anything read out of a
+  visible container is visible
+- direct-call argument-to-parameter and return-to-result relations
+- low-level ops, from explicit `RcEffect` data
+
+Bidirectional containment keeps every reachable-value tree uniformly
+visible or uniformly confined, so RC helper plans carry a single atomicity
+flag rather than per-level flags.
+
+`RcEffect` gains one more explicit mask, `result_shares_args`: the result
+may contain handles into these arguments' allocations. Unit-accounting
+masks already imply sharing for many ops (`result_aliases_consumed_args`,
+`result_borrows_args`, `retain_args` all contribute edges directly), but
+unit accounting does not describe handle sharing in general: `str_split_on`
+allocates a fresh owned list whose string elements are seamless slices into
+the argument's allocation, and the byte/string conversions and
+prefix/suffix slicing ops are the same. Those ops set `result_shares_args`
+explicitly. A refcounted result of an op whose masks say nothing receives a
+conservative edge to every refcounted argument in both directions: visible
+spreads further than strictly necessary, which only keeps counts atomic
+that could have been plain, never the reverse. The mask is explicit
+primitive data, exactly like the rest of `RcEffect`; the analysis never
+guesses an op's sharing from its name or shape.
+
+Emission attaches the chosen atomicity to each `incref`, `decref`, and
+`free` statement as explicit data; backends and the interpreter follow it
+mechanically, and helper plans are selected by op, layout, and atomicity.
+The runtime builtins already contain both count-update families. Atomic is
+always sound, so the analysis only downgrades allocations it proves
+confined, and an all-atomic answer reproduces today's behavior exactly.
+
+Beyond cheaper count updates, confinement feeds the optimizer: atomic
+operations are opaque to LLVM, but plain count updates participate in its
+redundancy elimination, so residual paired increments and decrements that
+ownership solving legitimately cannot remove become foldable downstream.
+Confined data is also where `refcount == 1` in-place mutation hits most,
+and its uniqueness check gets cheaper.
+
+The debug certifier mirrors the analysis with one more rule: no
+single-thread RC statement may name a local that is flow-connected to a
+host-visibility seed.
+
 ### Adoption Stages
 
 Each stage fully replaces the previous behavior when it lands; there are no
@@ -2039,6 +2128,9 @@ parallel insertion paths at any point:
 3. Interprocedural `RcSig` solving over call-graph SCCs, single variant per
    proc.
 4. Mode specialization in optimized builds.
+5. Thread-confined reference counts: the host-visibility analysis, the
+   `result_shares_args` audit of the low-level op table, dual-mode RC
+   statements and helper plans, and the certifier rule.
 
 ## Compile-Time Constants
 
