@@ -1289,6 +1289,7 @@ pub fn roc_builtins_float_to_str(out: *RocStr, val_bits: u64, is_f32: bool, roc_
     out.* = str.floatToStrFromBits(val_bits, is_f32, roc_ops);
 }
 
+/// Return the floor of an F32 or F64 value passed as F64, preserving the requested width.
 pub fn roc_builtins_float_floor(val: f64, float_width: u8) callconv(.c) f64 {
     return switch (float_width) {
         4 => @as(f64, @floatCast(@floor(@as(f32, @floatCast(val))))),
@@ -1297,6 +1298,7 @@ pub fn roc_builtins_float_floor(val: f64, float_width: u8) callconv(.c) f64 {
     };
 }
 
+/// Return the ceiling of an F32 or F64 value passed as F64, preserving the requested width.
 pub fn roc_builtins_float_ceiling(val: f64, float_width: u8) callconv(.c) f64 {
     return switch (float_width) {
         4 => @as(f64, @floatCast(@ceil(@as(f32, @floatCast(val))))),
@@ -1305,6 +1307,7 @@ pub fn roc_builtins_float_ceiling(val: f64, float_width: u8) callconv(.c) f64 {
     };
 }
 
+/// Raise an F32 or F64 base to an exponent, with both values passed as F64.
 pub fn roc_builtins_float_pow(base: f64, exponent: f64, float_width: u8) callconv(.c) f64 {
     return switch (float_width) {
         4 => @as(f64, @floatCast(std.math.pow(f32, @as(f32, @floatCast(base)), @as(f32, @floatCast(exponent))))),
@@ -1344,26 +1347,32 @@ fn floatUnaryMath(val: f64, float_width: u8, comptime op: FloatUnaryMathOp) f64 
     };
 }
 
+/// Return the sine of an F32 or F64 value passed as F64.
 pub fn roc_builtins_float_sin(val: f64, float_width: u8) callconv(.c) f64 {
     return floatUnaryMath(val, float_width, .sin);
 }
 
+/// Return the cosine of an F32 or F64 value passed as F64.
 pub fn roc_builtins_float_cos(val: f64, float_width: u8) callconv(.c) f64 {
     return floatUnaryMath(val, float_width, .cos);
 }
 
+/// Return the tangent of an F32 or F64 value passed as F64.
 pub fn roc_builtins_float_tan(val: f64, float_width: u8) callconv(.c) f64 {
     return floatUnaryMath(val, float_width, .tan);
 }
 
+/// Return the arcsine of an F32 or F64 value passed as F64.
 pub fn roc_builtins_float_asin(val: f64, float_width: u8) callconv(.c) f64 {
     return floatUnaryMath(val, float_width, .asin);
 }
 
+/// Return the arccosine of an F32 or F64 value passed as F64.
 pub fn roc_builtins_float_acos(val: f64, float_width: u8) callconv(.c) f64 {
     return floatUnaryMath(val, float_width, .acos);
 }
 
+/// Return the arctangent of an F32 or F64 value passed as F64.
 pub fn roc_builtins_float_atan(val: f64, float_width: u8) callconv(.c) f64 {
     return floatUnaryMath(val, float_width, .atan);
 }
