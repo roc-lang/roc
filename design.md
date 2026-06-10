@@ -2116,6 +2116,68 @@ The debug certifier mirrors the analysis with one more rule: no
 single-thread RC statement may name a local that is flow-connected to a
 host-visibility seed.
 
+### Uniqueness Inference
+
+Ops with `may_runtime_uniqueness_check_args` branch at runtime: when the
+checked argument's count is 1 they mutate the allocation in place, and
+otherwise they copy. Borrow inference already deletes the RC traffic that
+would hold counts above 1 across read phases; uniqueness inference goes one
+step further and deletes the check itself wherever the in-place path is the
+only one reachable. The win per site is one count load and one branch, but
+the sites are the mutation points of hot loops, and removing the branch
+also lets LLVM optimize across what was an opaque control split.
+
+A checked argument's check is deletable when three conditions hold at the
+call:
+
+- the value's outermost allocation was born unique in scope: an allocation
+  statement, or the result of an op whose `RcEffect` marks its result
+  unique
+- its count is still 1 on every path from birth to the call: no surviving
+  incref, no store into an aggregate, no owned use other than the call
+  itself
+- no borrow of it is live at the call, under the same lender/holder
+  liveness rule the certifier evaluates
+
+The first two conditions are one more monotone bit per local in the ARC
+solver — born unique, destroyed by any flow edge that can add a holder —
+over the same alias and call edges the solver already walks. The third is a
+query against liveness state emission already maintains.
+
+`RcEffect` gains one more explicit mask, `result_unique`: the result's
+outermost allocation has count 1 on return. Mutating ops qualify on both of
+their paths — in place keeps an allocation whose count was already 1, and
+the copy path returns a fresh one — and so do the ops that always allocate
+their outermost result, including the slicing ops whose inner elements
+share (`result_shares_args` describes the inner sharing; uniqueness is a
+property of the outermost allocation alone). As with the other masks, an op
+without the mask contributes nothing and its results stay conservatively
+non-unique; the analysis never guesses from an op's name or shape.
+
+Interprocedurally, `RcSig` gains a unique bit on the return, solved
+alongside `ret_mode` with the same pessimistic anchoring, and the mode
+specialization demand vector gains a unique entry per owned parameter:
+a call site that proves its dying argument unique may demand a variant
+whose body elides the checks that parameter reaches. Dev and compile-time
+builds stay single-variant and keep every runtime check, exactly as they
+keep all-owned calls.
+
+Emission lowers a uniqueness-checked op whose checked argument passes all
+three conditions to the check-free entry of the builtin; helper plans are
+selected by op, layout, atomicity, and uniqueness. The runtime check is
+always sound, so the analysis only deletes checks it proves redundant, and
+an all-checked answer reproduces today's behavior exactly.
+
+The debug certifier mirrors the analysis with one more rule: at every
+check-free mutation site, the checked value's unit balance is exactly 1,
+its origin chain reaches a unique birth, and no borrow of it is live.
+
+This sharpens the interaction documented under In-Place Mutation
+Interaction: once the constraint system weighs mutation points when
+choosing between a borrow and an owned move, the choice that keeps a
+mutation check-free becomes visible to the solver rather than a lucky
+outcome of emission order.
+
 ### Adoption Stages
 
 Each stage fully replaces the previous behavior when it lands; there are no
@@ -2131,6 +2193,10 @@ parallel insertion paths at any point:
 5. Thread-confined reference counts: the host-visibility analysis, the
    `result_shares_args` audit of the low-level op table, dual-mode RC
    statements and helper plans, and the certifier rule.
+6. Uniqueness inference: the born-unique bit, the `result_unique` audit of
+   the low-level op table, the unique entries in `RcSig` and the
+   specialization demand vector, check-free helper plans, and the certifier
+   rule.
 
 ## Compile-Time Constants
 
