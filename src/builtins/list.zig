@@ -10,7 +10,6 @@ const UpdateMode = utils.UpdateMode;
 const TestEnv = utils.TestEnv;
 const RocOps = @import("host_abi.zig").RocOps;
 const RocStr = @import("str.zig").RocStr;
-const increfDataPtrC = utils.increfDataPtrC;
 
 /// Pointer to the bytes of a list element or similar data
 pub const Opaque = ?[*]u8;
@@ -161,7 +160,8 @@ pub const RocList = extern struct {
         }
     }
 
-    pub fn incref(self: RocList, amount: isize, elements_refcounted: bool, roc_ops: *RocOps) void {
+    /// Increments the list's refcount using the given count-update atomicity.
+    pub fn increfWithAtomicity(self: RocList, amount: isize, elements_refcounted: bool, atomicity: utils.RcAtomicity, roc_ops: *RocOps) void {
         // Seamless slices of refcounted lists need the original allocation's element
         // count recorded in the heap header. Once a non-slice list becomes shared,
         // that count must already be present because later slice teardown will read it
@@ -174,9 +174,19 @@ pub const RocList = extern struct {
                 (ptr - 2)[0] = self.length;
             }
         }
-        increfDataPtrC(self.getAllocationDataPtr(roc_ops), amount, roc_ops);
+        utils.increfDataPtr(self.getAllocationDataPtr(roc_ops), amount, atomicity, roc_ops);
     }
 
+    /// Increments the list's refcount with atomic count updates.
+    pub fn incref(self: RocList, amount: isize, elements_refcounted: bool, roc_ops: *RocOps) void {
+        self.increfWithAtomicity(amount, elements_refcounted, .atomic, roc_ops);
+    }
+
+    /// Always uses atomic count updates: the element cleanup runs through the
+    /// `dec` C function pointer, whose ABI carries no atomicity parameter, and
+    /// the allocation's own count update must agree with the element updates.
+    /// The interpreter's single-thread-capable list teardown instead iterates
+    /// elements itself (see `decrefListElements` in the LIR interpreter).
     pub fn decref(
         self: RocList,
         alignment: u32,
@@ -205,6 +215,7 @@ pub const RocList = extern struct {
             self.capacity_or_alloc_ptr,
             alignment,
             elements_refcounted,
+            .atomic,
             roc_ops,
         );
     }
@@ -391,7 +402,7 @@ pub const RocList = extern struct {
         }
 
         // Calls utils.decref directly to avoid decrementing the refcount of elements.
-        utils.decref(self.getAllocationDataPtr(roc_ops), self.capacity_or_alloc_ptr, alignment, elements_refcounted, roc_ops);
+        utils.decref(self.getAllocationDataPtr(roc_ops), self.capacity_or_alloc_ptr, alignment, elements_refcounted, .atomic, roc_ops);
 
         return result;
     }
@@ -3972,4 +3983,22 @@ test "append: stress test with cloning" {
     while (i < 10) : (i += 1) {
         defer clones[i].decref(@alignOf(u8), @sizeOf(u8), false, null, rcNone, test_env.getOps());
     }
+}
+
+test "RocList single-thread incref pairs with single-thread decref" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const list = RocList.fromSlice(u8, ([_]u8{ 1, 2, 3 })[0..], false, test_env.getOps());
+    try std.testing.expectEqual(@as(usize, 1), test_env.getAllocationCount());
+
+    list.increfWithAtomicity(1, false, .single_thread, test_env.getOps());
+    try std.testing.expect(!list.isUnique(test_env.getOps()));
+
+    utils.decref(list.getAllocationDataPtr(test_env.getOps()), list.capacity_or_alloc_ptr, @alignOf(u8), false, .single_thread, test_env.getOps());
+    try std.testing.expect(list.isUnique(test_env.getOps()));
+    try std.testing.expectEqual(@as(usize, 1), test_env.getAllocationCount());
+
+    utils.decref(list.getAllocationDataPtr(test_env.getOps()), list.capacity_or_alloc_ptr, @alignOf(u8), false, .single_thread, test_env.getOps());
+    try std.testing.expectEqual(@as(usize, 0), test_env.getAllocationCount());
 }

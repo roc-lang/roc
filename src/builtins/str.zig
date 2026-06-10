@@ -257,22 +257,40 @@ pub const RocStr = extern struct {
         return @as(?[*]u8, @ptrFromInt(alloc_ptr));
     }
 
-    pub fn incref(self: RocStr, n: usize, roc_ops: *RocOps) void {
+    /// Increments the string's refcount using the given count-update atomicity.
+    pub fn increfWithAtomicity(self: RocStr, n: usize, atomicity: utils.RcAtomicity, roc_ops: *RocOps) void {
         if (!self.isSmallStr()) {
             if (self.getAllocationPtr()) |alloc_ptr| {
                 const isizes: [*]isize = utils.alignedPtrCast([*]isize, alloc_ptr, @src());
-                utils.increfRcPtrC(@as(*isize, @ptrCast(isizes - 1)), @as(isize, @intCast(n)), roc_ops);
+                utils.increfRcPtr(@as(*isize, @ptrCast(isizes - 1)), @as(isize, @intCast(n)), atomicity, roc_ops);
             }
         }
     }
 
+    /// Increments the string's refcount with atomic count updates.
+    pub fn incref(self: RocStr, n: usize, roc_ops: *RocOps) void {
+        self.increfWithAtomicity(n, .atomic, roc_ops);
+    }
+
+    /// Decrements the string's refcount using the given count-update atomicity,
+    /// freeing the allocation when the count reaches zero.
+    pub fn decrefWithAtomicity(
+        self: RocStr,
+        atomicity: utils.RcAtomicity,
+        roc_ops: *RocOps,
+    ) void {
+        if (!self.isSmallStr()) {
+            utils.decref(self.getAllocationPtr(), self.capacity_or_alloc_ptr, RocStr.alignment, false, atomicity, roc_ops);
+        }
+    }
+
+    /// Decrements the string's refcount with atomic count updates,
+    /// freeing the allocation when the count reaches zero.
     pub fn decref(
         self: RocStr,
         roc_ops: *RocOps,
     ) void {
-        if (!self.isSmallStr()) {
-            @import("utils.zig").decref(self.getAllocationPtr(), self.capacity_or_alloc_ptr, RocStr.alignment, false, roc_ops);
-        }
+        self.decrefWithAtomicity(.atomic, roc_ops);
     }
 
     pub fn eql(self: RocStr, other: RocStr) bool {
@@ -3639,4 +3657,21 @@ test "capacity: big string" {
     defer data.decref(test_env.getOps());
 
     try std.testing.expect(data.getCapacity() >= data_bytes.len);
+}
+
+test "RocStr single-thread incref/decref pair frees on zero" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const str = RocStr.fromSlice("a string long enough to require a heap allocation", test_env.getOps());
+    try std.testing.expect(!str.isSmallStr());
+    try std.testing.expectEqual(@as(usize, 1), test_env.getAllocationCount());
+
+    str.increfWithAtomicity(2, .single_thread, test_env.getOps());
+    str.decrefWithAtomicity(.single_thread, test_env.getOps());
+    str.decrefWithAtomicity(.single_thread, test_env.getOps());
+    try std.testing.expectEqual(@as(usize, 1), test_env.getAllocationCount());
+
+    str.decrefWithAtomicity(.single_thread, test_env.getOps());
+    try std.testing.expectEqual(@as(usize, 0), test_env.getAllocationCount());
 }

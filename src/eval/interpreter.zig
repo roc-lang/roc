@@ -1760,6 +1760,7 @@ pub const Interpreter = struct {
                         inc.rc,
                         try self.getLocalChecked(frame, inc.value),
                         inc.count,
+                        inc.atomicity,
                     );
                     current = inc.next;
                 },
@@ -1783,6 +1784,7 @@ pub const Interpreter = struct {
                         dec.rc,
                         try self.getLocalChecked(frame, dec.value),
                         0,
+                        dec.atomicity,
                     );
                     current = dec.next;
                 },
@@ -1806,6 +1808,7 @@ pub const Interpreter = struct {
                         free_stmt.rc,
                         try self.getLocalChecked(frame, free_stmt.value),
                         0,
+                        free_stmt.atomicity,
                     );
                     current = free_stmt.next;
                 },
@@ -3083,15 +3086,29 @@ pub const Interpreter = struct {
     // Reference counting
 
     const RcOp = layout_mod.RcOp;
+    const RcAtomicity = builtins.utils.RcAtomicity;
+
+    fn runtimeRcAtomicity(atomicity: LIR.RcAtomicity) RcAtomicity {
+        return switch (atomicity) {
+            .atomic => .atomic,
+            .single_thread => .single_thread,
+        };
+    }
 
     fn performRawRc(self: *LirInterpreter, op: RcOp, val: Value, layout_idx: layout_mod.Idx, count: u16) void {
         trace.log("performRawRc: op={s} layout={any} val.ptr={*} count={d}", .{ @tagName(op), layout_idx, val.ptr, count });
         const helper = self.rcHelperForLayout(op, layout_idx);
-        self.performRcHelperIfNeeded(helper, val, count);
+        self.performRcHelperIfNeeded(helper, val, count, .atomic);
     }
 
-    fn performExplicitRcStmt(self: *LirInterpreter, helper: layout_mod.RcHelper, val: Value, count: u16) void {
-        self.performRcHelperRequired(helper, val, count);
+    fn performExplicitRcStmt(
+        self: *LirInterpreter,
+        helper: layout_mod.RcHelper,
+        val: Value,
+        count: u16,
+        atomicity: LIR.RcAtomicity,
+    ) void {
+        self.performRcHelperRequired(helper, val, count, runtimeRcAtomicity(atomicity));
     }
 
     fn performBuiltinInternalRc(
@@ -3181,13 +3198,13 @@ pub const Interpreter = struct {
         };
     }
 
-    fn performRcHelperIfNeeded(self: *LirInterpreter, helper: layout_mod.RcHelper, val: Value, count: u16) void {
+    fn performRcHelperIfNeeded(self: *LirInterpreter, helper: layout_mod.RcHelper, val: Value, count: u16, atomicity: RcAtomicity) void {
         const plan = self.cachedRcPlan(helper);
         if (plan == .noop) return;
-        self.performRawRcPlan(plan, val, count);
+        self.performRawRcPlan(plan, val, count, atomicity);
     }
 
-    fn performRcHelperRequired(self: *LirInterpreter, helper: layout_mod.RcHelper, val: Value, count: u16) void {
+    fn performRcHelperRequired(self: *LirInterpreter, helper: layout_mod.RcHelper, val: Value, count: u16, atomicity: RcAtomicity) void {
         const plan = self.cachedRcPlan(helper);
         if (plan == .noop) {
             self.invariantFailed(
@@ -3195,7 +3212,7 @@ pub const Interpreter = struct {
                 .{@intFromEnum(helper.layout_idx)},
             );
         }
-        self.performRawRcPlan(plan, val, count);
+        self.performRawRcPlan(plan, val, count, atomicity);
     }
 
     fn cachedStructFieldPlan(
@@ -3353,7 +3370,7 @@ pub const Interpreter = struct {
         return contains;
     }
 
-    fn performRawRcPlan(self: *LirInterpreter, rc_plan: layout_mod.RcHelperPlan, val: Value, count: u16) void {
+    fn performRawRcPlan(self: *LirInterpreter, rc_plan: layout_mod.RcHelperPlan, val: Value, count: u16, atomicity: RcAtomicity) void {
         trace.log("performRawRcPlan: plan={s} val.ptr={*}", .{ @tagName(rc_plan), val.ptr });
         const utils = builtins.utils;
         switch (rc_plan) {
@@ -3361,17 +3378,17 @@ pub const Interpreter = struct {
             .str_incref => {
                 const rs = valueToRocStr(val);
                 trace_rc.log("str_incref: bytes=0x{x} len={d} cap={d} count={d}", .{ @intFromPtr(rs.bytes), rs.length, rs.capacity_or_alloc_ptr, count });
-                rs.incref(count, &self.roc_ops);
+                rs.increfWithAtomicity(count, atomicity, &self.roc_ops);
             },
             .str_decref => {
                 const rs = valueToRocStr(val);
                 trace_rc.log("str_decref: bytes=0x{x} len={d} cap={d}", .{ @intFromPtr(rs.bytes), rs.length, rs.capacity_or_alloc_ptr });
-                rs.decref(&self.roc_ops);
+                rs.decrefWithAtomicity(atomicity, &self.roc_ops);
             },
             .str_free => {
                 const rs = valueToRocStr(val);
                 trace_rc.log("str_free: bytes=0x{x} len={d} cap={d}", .{ @intFromPtr(rs.bytes), rs.length, rs.capacity_or_alloc_ptr });
-                rs.decref(&self.roc_ops);
+                rs.decrefWithAtomicity(atomicity, &self.roc_ops);
             },
             .list_incref => |list_plan| {
                 const rl = valueToRocList(val);
@@ -3383,7 +3400,7 @@ pub const Interpreter = struct {
                     count,
                     has_child,
                 });
-                rl.incref(@intCast(count), has_child, &self.roc_ops);
+                rl.increfWithAtomicity(@intCast(count), has_child, atomicity, &self.roc_ops);
             },
             .list_decref => |list_plan| {
                 const rl = valueToRocList(val);
@@ -3396,7 +3413,7 @@ pub const Interpreter = struct {
                 // Before freeing the list, decref all child elements (mirrors RocList.decref logic)
                 if (list_plan.child) |child_key| {
                     if (rl.isUnique(&self.roc_ops)) {
-                        self.decrefListElements(rl, list_plan, child_key, count);
+                        self.decrefListElements(rl, list_plan, child_key, count, atomicity);
                     }
                 }
                 builtins.utils.decref(
@@ -3404,6 +3421,7 @@ pub const Interpreter = struct {
                     rl.capacity_or_alloc_ptr,
                     @intCast(list_plan.elem_alignment),
                     has_child,
+                    atomicity,
                     &self.roc_ops,
                 );
             },
@@ -3418,7 +3436,7 @@ pub const Interpreter = struct {
                 // Before freeing the list, decref all child elements (mirrors RocList.decref logic)
                 if (list_plan.child) |child_key| {
                     if (rl.isUnique(&self.roc_ops)) {
-                        self.decrefListElements(rl, list_plan, child_key, count);
+                        self.decrefListElements(rl, list_plan, child_key, count, atomicity);
                     }
                 }
                 builtins.utils.decref(
@@ -3426,12 +3444,13 @@ pub const Interpreter = struct {
                     rl.capacity_or_alloc_ptr,
                     @intCast(list_plan.elem_alignment),
                     has_child,
+                    atomicity,
                     &self.roc_ops,
                 );
             },
             .box_incref => {
                 const alloc_ptr = val.read(?[*]u8);
-                utils.increfDataPtrC(alloc_ptr, @intCast(count), &self.roc_ops);
+                utils.increfDataPtr(alloc_ptr, @intCast(count), atomicity, &self.roc_ops);
             },
             .box_decref => |box_plan| {
                 const alloc_ptr = val.read(?[*]u8);
@@ -3439,14 +3458,14 @@ pub const Interpreter = struct {
                 if (box_plan.child) |child_key| {
                     if (alloc_ptr != null and builtins.utils.isUnique(alloc_ptr, &self.roc_ops)) {
                         const data_ptr = self.readBoxedDataPointer(val) orelse {
-                            utils.decrefDataPtrC(alloc_ptr, @intCast(box_plan.elem_alignment), has_child, &self.roc_ops);
+                            utils.decrefDataPtr(alloc_ptr, @intCast(box_plan.elem_alignment), has_child, atomicity, &self.roc_ops);
                             return;
                         };
                         const child_val = Value{ .ptr = data_ptr };
-                        self.performRawRcPlan(self.cachedRcPlan(child_key), child_val, count);
+                        self.performRawRcPlan(self.cachedRcPlan(child_key), child_val, count, atomicity);
                     }
                 }
-                utils.decrefDataPtrC(alloc_ptr, @intCast(box_plan.elem_alignment), has_child, &self.roc_ops);
+                utils.decrefDataPtr(alloc_ptr, @intCast(box_plan.elem_alignment), has_child, atomicity, &self.roc_ops);
             },
             .box_free => |box_plan| {
                 const alloc_ptr = val.read(?[*]u8);
@@ -3458,22 +3477,23 @@ pub const Interpreter = struct {
                             return;
                         };
                         const child_val = Value{ .ptr = data_ptr };
-                        self.performRawRcPlan(self.cachedRcPlan(child_key), child_val, count);
+                        self.performRawRcPlan(self.cachedRcPlan(child_key), child_val, count, atomicity);
                     }
                 }
                 utils.freeDataPtrC(alloc_ptr, @intCast(box_plan.elem_alignment), has_child, &self.roc_ops);
             },
             .erased_callable_incref => {
                 const alloc_ptr = val.read(?[*]u8);
-                builtins.utils.increfDataPtrC(alloc_ptr, @intCast(count), &self.roc_ops);
+                builtins.utils.increfDataPtr(alloc_ptr, @intCast(count), atomicity, &self.roc_ops);
             },
             .erased_callable_decref => {
                 const alloc_ptr = val.read(?[*]u8);
                 self.performErasedCallableFinalDropIfUnique(alloc_ptr, .decref, count);
-                builtins.utils.decrefDataPtrC(
+                builtins.utils.decrefDataPtr(
                     alloc_ptr,
                     builtins.erased_callable.payload_alignment,
                     builtins.erased_callable.allocation_has_refcounted_children,
+                    atomicity,
                     &self.roc_ops,
                 );
             },
@@ -3493,7 +3513,7 @@ pub const Interpreter = struct {
                 while (i < field_count) : (i += 1) {
                     const field_plan = self.cachedStructFieldPlan(struct_plan, i) orelse continue;
                     const field_val = Value{ .ptr = val.ptr + field_plan.offset };
-                    self.performRawRcPlan(self.cachedRcPlan(field_plan.child), field_val, count);
+                    self.performRawRcPlan(self.cachedRcPlan(field_plan.child), field_val, count, atomicity);
                 }
             },
             .tag_union => |tag_plan| {
@@ -3514,12 +3534,12 @@ pub const Interpreter = struct {
                 if (disc < variant_count) {
                     if (self.cachedTagVariantPlan(tag_plan, disc)) |child_key| {
                         // Payload is always at offset 0 in the tag union.
-                        self.performRawRcPlan(self.cachedRcPlan(child_key), val, count);
+                        self.performRawRcPlan(self.cachedRcPlan(child_key), val, count, atomicity);
                     }
                 }
             },
             .closure => |child_key| {
-                self.performRawRcPlan(self.cachedRcPlan(child_key), val, count);
+                self.performRawRcPlan(self.cachedRcPlan(child_key), val, count, atomicity);
             },
         }
     }
@@ -3532,6 +3552,7 @@ pub const Interpreter = struct {
         list_plan: layout_mod.RcListPlan,
         child_key: layout_mod.RcHelperKey,
         count: u16,
+        atomicity: RcAtomicity,
     ) void {
         if (rl.getAllocationDataPtr(&self.roc_ops)) |source| {
             const elem_count = rl.getAllocationElementCount(true, &self.roc_ops);
@@ -3540,7 +3561,7 @@ pub const Interpreter = struct {
             while (i < elem_count) : (i += 1) {
                 const element_ptr = source + i * list_plan.elem_width;
                 const element_val = Value{ .ptr = element_ptr };
-                self.performRawRcPlan(child_plan, element_val, count);
+                self.performRawRcPlan(child_plan, element_val, count, atomicity);
             }
         }
     }
@@ -3556,6 +3577,10 @@ pub const Interpreter = struct {
         self.performErasedCallableFinalDrop(data_ptr, op, count);
     }
 
+    /// Runs the erased callable's capture cleanup. The `on_drop` slot is a C
+    /// function pointer whose ABI carries no atomicity parameter, so capture
+    /// refcount updates behind it always run atomically, even when the
+    /// callable's own RC statement is single-thread (atomic is always sound).
     fn performErasedCallableFinalDrop(
         self: *LirInterpreter,
         data_ptr: ?[*]u8,
