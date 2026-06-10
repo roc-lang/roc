@@ -448,7 +448,7 @@ The `output` field declares the artifact kind the target produces:
 
 - `Exe` (the default): a linked executable. For wasm32, a command module with an entry point.
 - `Shared`: a shared library (`.so`, `.dylib`, `.dll`). For wasm32, a reactor module: no entry point, with the `provides` entrypoints exported.
-- `Obj`: a single relocatable object merging the host inputs with the compiled app, for linking in another build.
+- `Archive`: a static archive (`.a`, `.lib`) containing the host inputs, the compiled app, and the builtins, for linking in another build.
 
 The platform decides what gets built; application authors never pass artifact-kind flags to `roc build`.
 

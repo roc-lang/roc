@@ -15,7 +15,7 @@ platform "foo"
         x64glibc: { inputs: [app] },
         wasm32: { inputs: ["libhost.a", app], output: Shared },
         arm64mac: { inputs: ["libhost.a", app], output: Shared },
-        x64musl: { inputs: [app], output: Obj },
+        x64musl: { inputs: [app], output: Archive },
     }
 ~~~
 # EXPECTED
@@ -68,7 +68,7 @@ platform "foo"
 		},
 		x64musl: {
 			inputs: [app],
-			output: Obj,
+			output: Archive,
 		},
 	}
 ~~~

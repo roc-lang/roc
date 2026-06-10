@@ -2185,24 +2185,26 @@ Each target name appears at most once, so target-to-output-kind is a
 function. `output:` is one of:
 
 ```text
-Exe:    linked executable binary. For wasm32, a command module (has an entry).
-Obj:    one relocatable object produced by merging the declared host inputs
-        with the app object (ld -r / wasm-ld --relocatable). Obj keeps its
-        inputs because the host must provide roc_alloc and the other runtime
-        symbols; the consumer receives a single self-contained .o and performs
-        the final link in their own build.
-Shared: shared library (.so, .dylib, .dll). For wasm32, a reactor module:
-        no entry, the provides entrypoints exported, optionally composable
-        into a component with wit-component.
+Exe:     linked executable binary. For wasm32, a command module (has an
+         entry).
+Archive: one static archive (.a, .lib) containing the declared host inputs,
+         the compiled app, and the builtins, with input archives flattened
+         in. Archive keeps its inputs because the host must provide
+         roc_alloc and the other runtime symbols; the consumer receives a
+         single self-contained archive and performs the final link in their
+         own build, which extracts members lazily by symbol reference.
+Shared:  shared library (.so, .dylib, .dll). For wasm32, a reactor module:
+         no entry, the provides entrypoints exported, optionally composable
+         into a component with wit-component.
 ```
 
 `roc run` requires the selected target's entry to be `output: Exe`; library
 and object platforms report that the output must be linked or loaded by a
 host application instead.
 
-There is no static-archive output kind. The output that static archives
-previously stood in for on wasm (a linked, loadable, no-entry module) is
-`Shared`.
+The output that static archives previously stood in for on wasm (a linked,
+loadable, no-entry module) is `Shared`, not `Archive`; `Archive` is never a
+linked module.
 
 ## Host Symbol ABI
 

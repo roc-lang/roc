@@ -89,16 +89,6 @@ pub const ValidationResult = union(enum) {
         host_os: []const u8,
     },
 
-    /// Target cannot be built as a shared library
-    unsupported_shared_lib_target: struct {
-        target: RocTarget,
-    },
-
-    /// Target cannot produce a relocatable object merge
-    unsupported_obj_target: struct {
-        target: RocTarget,
-    },
-
     /// App file doesn't have a platform
     no_platform_found: struct {
         app_path: []const u8,
@@ -189,21 +179,6 @@ fn validateTargetSpec(
     spec: TargetLinkSpec,
     files_dir: std.Io.Dir,
 ) Allocator.Error!?ValidationResult {
-    // Shared libraries are an OS loader concept; freestanding wasm32 has no
-    // dynamic loader, so a wasm32 shared_lib target can never be linked.
-    if (spec.output == .shared and spec.target == .wasm32) {
-        return .{ .unsupported_shared_lib_target = .{ .target = spec.target } };
-    }
-
-    // Relocatable object merges are linked with ld -r / wasm-ld --relocatable.
-    // The embedded linker has no relocatable mode for Mach-O or COFF.
-    if (spec.output == .obj) {
-        switch (spec.target.toOsTag()) {
-            .macos, .windows => return .{ .unsupported_obj_target = .{ .target = spec.target } },
-            else => {},
-        }
-    }
-
     // Get target subdirectory name
     const target_subdir = @tagName(spec.target);
 
@@ -477,46 +452,6 @@ pub fn createValidationReport(
             try report.document.addAnnotated("x64musl", .emphasized);
             try report.document.addText(" or ");
             try report.document.addAnnotated("arm64musl", .emphasized);
-            try report.document.addLineBreak();
-
-            return report;
-        },
-
-        .unsupported_shared_lib_target => |info| {
-            var report = Report.init(allocator, "UNSUPPORTED SHARED LIBRARY TARGET", .runtime_error);
-
-            try report.document.addAnnotated(@tagName(info.target), .emphasized);
-            try report.document.addText(" cannot be built as a shared library.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
-
-            try report.document.addText("Shared libraries are loaded by an operating system's dynamic loader,");
-            try report.document.addLineBreak();
-            try report.document.addText("and this target has none. Declare it under ");
-            try report.document.addAnnotated("exe", .emphasized);
-            try report.document.addText(" or ");
-            try report.document.addAnnotated("static_lib", .emphasized);
-            try report.document.addText(" instead.");
-            try report.document.addLineBreak();
-
-            return report;
-        },
-
-        .unsupported_obj_target => |info| {
-            var report = Report.init(allocator, "UNSUPPORTED OBJECT TARGET", .runtime_error);
-
-            try report.document.addAnnotated(@tagName(info.target), .emphasized);
-            try report.document.addText(" cannot produce a merged relocatable object.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
-
-            try report.document.addText("Relocatable object output is currently supported for ELF and");
-            try report.document.addLineBreak();
-            try report.document.addText("wasm targets only. Declare this target with ");
-            try report.document.addAnnotated("output: Exe", .emphasized);
-            try report.document.addText(" or ");
-            try report.document.addAnnotated("output: Shared", .emphasized);
-            try report.document.addText(" instead.");
             try report.document.addLineBreak();
 
             return report;

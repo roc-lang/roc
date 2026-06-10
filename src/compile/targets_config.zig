@@ -116,16 +116,17 @@ fn freeLinkSpec(allocator: Allocator, spec: TargetLinkSpec) void {
 pub const OutputKind = enum {
     /// Linked executable. For wasm32, a command module (has an entry).
     exe,
-    /// One relocatable object merging the declared host inputs with the app object.
-    obj,
+    /// A static archive (.a, .lib) of the declared host inputs and the
+    /// compiled app, with input archives flattened in.
+    archive,
     /// Shared library (.so, .dylib, .dll). For wasm32, a reactor module
     /// (no entry, the provides entrypoints exported).
     shared,
 
-    /// Parse an output kind from its header tag spelling (Exe, Obj, Shared).
+    /// Parse an output kind from its header tag spelling (Exe, Archive, Shared).
     pub fn fromTagName(name: []const u8) ?OutputKind {
         if (std.mem.eql(u8, name, "Exe")) return .exe;
-        if (std.mem.eql(u8, name, "Obj")) return .obj;
+        if (std.mem.eql(u8, name, "Archive")) return .archive;
         if (std.mem.eql(u8, name, "Shared")) return .shared;
         return null;
     }

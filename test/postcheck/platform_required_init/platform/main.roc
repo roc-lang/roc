@@ -13,14 +13,14 @@ platform ""
     }
     targets: {
         inputs: "targets/",
-        x64mac: { inputs: [app], output: Shared },
-        arm64mac: { inputs: [app], output: Shared },
-        x64musl: { inputs: [app], output: Shared },
-        arm64musl: { inputs: [app], output: Shared },
-        x64glibc: { inputs: [app], output: Shared },
-        arm64glibc: { inputs: [app], output: Shared },
-        x64win: { inputs: [app], output: Shared },
-        arm64win: { inputs: [app], output: Shared },
+        x64mac: { inputs: [app], output: Archive },
+        arm64mac: { inputs: [app], output: Archive },
+        x64musl: { inputs: [app], output: Archive },
+        arm64musl: { inputs: [app], output: Archive },
+        x64glibc: { inputs: [app], output: Archive },
+        arm64glibc: { inputs: [app], output: Archive },
+        x64win: { inputs: [app], output: Archive },
+        arm64win: { inputs: [app], output: Archive },
     }
 
 import Host

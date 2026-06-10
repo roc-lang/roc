@@ -129,9 +129,9 @@ pub fn defaultBuildOutputExtension(output: OutputKind, target: RocTarget) []cons
             .freestanding => ".wasm",
             else => "",
         },
-        .obj => switch (target.toOsTag()) {
-            .windows => ".obj",
-            else => ".o",
+        .archive => switch (target.toOsTag()) {
+            .windows => ".lib",
+            else => ".a",
         },
         .shared => switch (target.toOsTag()) {
             .windows => ".dll",
@@ -244,7 +244,7 @@ test "wasm shared module output extension is wasm" {
     try std.testing.expectEqualStrings(".wasm", defaultBuildOutputExtension(.shared, .wasm32));
 }
 
-test "object output extension follows target convention" {
-    const expected: []const u8 = if (builtin.target.os.tag == .windows) ".obj" else ".o";
-    try std.testing.expectEqualStrings(expected, defaultBuildOutputExtension(.obj, RocTarget.detectNative()));
+test "archive output extension follows target convention" {
+    const expected: []const u8 = if (builtin.target.os.tag == .windows) ".lib" else ".a";
+    try std.testing.expectEqualStrings(expected, defaultBuildOutputExtension(.archive, RocTarget.detectNative()));
 }

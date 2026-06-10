@@ -137,6 +137,12 @@ const LLVMCodeModelDefault: c_int = 0;
 
 // External C functions from zig_llvm.cpp and LLVM C API - only available when LLVM is enabled
 const llvm_externs = if (llvm_available) struct {
+    extern fn ZigLLVMWriteArchiveFlattened(
+        archive_name: [*:0]const u8,
+        file_names: [*]const [*:0]const u8,
+        file_name_count: usize,
+        archive_kind: c_int,
+    ) bool;
     extern fn ZigLLVMTargetMachineEmitToFile(
         targ_machine_ref: ?*anyopaque,
         module_ref: ?*anyopaque,
@@ -172,6 +178,45 @@ const llvm_externs = if (llvm_available) struct {
     extern fn LLVMDisposeTargetMachine(target_machine: ?*anyopaque) void;
     extern fn LLVMSetTarget(module: ?*anyopaque, triple: [*:0]const u8) void;
 } else struct {};
+
+// LLVM archive kinds (object::Archive::Kind)
+const LLVMArchiveKindGNU: c_int = 0;
+const LLVMArchiveKindDarwin: c_int = 3;
+
+/// Write a static archive containing the given input files. Inputs that are
+/// themselves archives are flattened into the output, so the result never
+/// nests archives. The archive gets a normal symbol table, so linkers can
+/// resolve members lazily.
+pub fn writeStaticArchive(
+    gpa: Allocator,
+    output_path: []const u8,
+    input_paths: []const []const u8,
+    roc_target: target.RocTarget,
+) error{ OutOfMemory, ArchiveWriteFailed, LLVMNotAvailable }!void {
+    if (comptime !llvm_available) {
+        return error.LLVMNotAvailable;
+    }
+    const externs = llvm_externs;
+
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const output_z = try arena.dupeZ(u8, output_path);
+    const names = try arena.alloc([*:0]const u8, input_paths.len);
+    for (input_paths, 0..) |path, i| {
+        names[i] = try arena.dupeZ(u8, path);
+    }
+
+    const kind: c_int = switch (roc_target.toOsTag()) {
+        .macos => LLVMArchiveKindDarwin,
+        else => LLVMArchiveKindGNU,
+    };
+
+    if (externs.ZigLLVMWriteArchiveFlattened(output_z.ptr, names.ptr, names.len, kind)) {
+        return error.ArchiveWriteFailed;
+    }
+}
 
 /// Initialize LLVM targets (must be called once before using LLVM)
 pub fn initializeLLVM() void {
