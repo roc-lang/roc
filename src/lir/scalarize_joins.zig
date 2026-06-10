@@ -9,11 +9,14 @@
 //!
 //! This pass runs after direct LIR lowering and before ARC insertion. For a
 //! join parameter that is only ever read field-by-field and only ever
-//! initialized from single-use struct literals, it replaces the parameter
+//! initialized from struct literals — either built directly into the
+//! parameter local or built into a single-use temporary that a
+//! `set_local initialize_join_param` copies in — it replaces the parameter
 //! with one parameter per field, rewrites each jump to pass the literal's
-//! operands directly (deleting the build), and rewrites each field read into
-//! a local alias. Refcounted state then flows through pure alias chains that
-//! borrow inference turns into moves, and the wrapper disappears entirely.
+//! operands directly (deleting or replacing the build), and rewrites each
+//! field read into a local alias. Refcounted state then flows through pure
+//! alias chains that borrow inference turns into moves, and the wrapper
+//! disappears entirely.
 //!
 //! The pass iterates to a fixpoint so nested wrappers dissolve layer by
 //! layer. Parameters with any whole-value use, any non-literal initializer,
@@ -66,15 +69,20 @@ pub fn run(store: *LirStore, layouts: *const layout_mod.Store) ScalarizeError!vo
 }
 
 const StructBuild = struct {
-    stmt: LIR.CFStmtId,
-    fields: LIR.LocalSpan,
-    /// Number of defining statements seen for the local; only exactly one
-    /// struct literal qualifies.
-    def_count: u32,
+    /// Every struct-literal statement defining the local. A wrapper
+    /// temporary qualifies with exactly one; a parameter built directly may
+    /// have one per jump.
+    builds: std.ArrayList(BuildSite),
     /// Uses other than being an `initialize_join_param` value.
     uses: u32,
-    /// Uses as an `initialize_join_param` value; exactly one qualifies.
+    /// Uses as an `initialize_join_param` value; a wrapper temporary
+    /// qualifies with exactly one.
     init_uses: u32,
+};
+
+const BuildSite = struct {
+    stmt: LIR.CFStmtId,
+    fields: LIR.LocalSpan,
 };
 
 const Pass = struct {
@@ -96,6 +104,9 @@ const Pass = struct {
     removed: std.AutoHashMap(LIR.CFStmtId, LIR.CFStmtId),
     visited: std.AutoHashMap(LIR.CFStmtId, void),
     stack: std.ArrayList(LIR.CFStmtId),
+    /// Field-parameter locals created this round; they join the proc's
+    /// frame locals so frame plans cover them.
+    new_locals: std.ArrayList(LIR.LocalId) = .empty,
 
     fn deinit(self: *Pass) void {
         self.use_other.deinit();
@@ -107,6 +118,7 @@ const Pass = struct {
         self.removed.deinit();
         self.visited.deinit();
         self.stack.deinit(self.allocator);
+        self.new_locals.deinit(self.allocator);
     }
 
     fn clearLists(self: *Pass) void {
@@ -114,6 +126,8 @@ const Pass = struct {
         while (reads.next()) |list| list.deinit(self.allocator);
         var writes = self.init_writes.valueIterator();
         while (writes.next()) |list| list.deinit(self.allocator);
+        var builds = self.struct_builds.valueIterator();
+        while (builds.next()) |build| build.builds.deinit(self.allocator);
     }
 
     fn resetProc(self: *Pass) void {
@@ -126,6 +140,7 @@ const Pass = struct {
         self.removed.clearRetainingCapacity();
         self.visited.clearRetainingCapacity();
         self.stack.clearRetainingCapacity();
+        self.new_locals.clearRetainingCapacity();
     }
 
     fn noteUse(self: *Pass, local: LIR.LocalId) ScalarizeError!void {
@@ -146,11 +161,10 @@ const Pass = struct {
 
     fn noteStructBuild(self: *Pass, target: LIR.LocalId, stmt: LIR.CFStmtId, fields: LIR.LocalSpan) ScalarizeError!void {
         const entry = try self.struct_builds.getOrPut(target);
-        if (entry.found_existing) {
-            entry.value_ptr.def_count += 1;
-        } else {
-            entry.value_ptr.* = .{ .stmt = stmt, .fields = fields, .def_count = 1, .uses = 0, .init_uses = 0 };
+        if (!entry.found_existing) {
+            entry.value_ptr.* = .{ .builds = .empty, .uses = 0, .init_uses = 0 };
         }
+        try entry.value_ptr.builds.append(self.allocator, .{ .stmt = stmt, .fields = fields });
     }
 
     fn scalarizeProc(self: *Pass, proc_id: LIR.LirProcSpecId, body: LIR.CFStmtId) ScalarizeError!bool {
@@ -196,8 +210,21 @@ const Pass = struct {
 
         if (changed) {
             try self.patchRemovedEdges(proc_id);
+            try self.extendFrameLocals(proc_id);
         }
         return changed;
+    }
+
+    /// Adds the new field-parameter locals to the proc's frame locals so
+    /// frame plans cover them.
+    fn extendFrameLocals(self: *Pass, proc_id: LIR.LirProcSpecId) ScalarizeError!void {
+        if (self.new_locals.items.len == 0) return;
+        const proc = self.store.getProcSpecPtr(proc_id);
+        var combined = std.ArrayList(LIR.LocalId).empty;
+        defer combined.deinit(self.allocator);
+        try combined.appendSlice(self.allocator, self.store.getLocalSpan(proc.frame_locals));
+        try combined.appendSlice(self.allocator, self.new_locals.items);
+        proc.frame_locals = try self.store.addLocalSpan(combined.items);
     }
 
     fn tryScalarize(
@@ -217,22 +244,32 @@ const Pass = struct {
         }
         if (field_count == 0 or field_count > max_fields) return false;
 
-        // The parameter must be touched only by field reads and
-        // `initialize_join_param` writes.
+        // The parameter must be touched only by field reads, direct
+        // struct-literal builds, and `initialize_join_param` writes.
         if (self.use_other.contains(param)) return false;
         if (self.write_other.contains(param)) return false;
         const reads = self.field_reads.getPtr(param) orelse return false;
-        const writes = self.init_writes.getPtr(param) orelse return false;
+        const empty_writes: []const LIR.CFStmtId = &.{};
+        const writes: []const LIR.CFStmtId = if (self.init_writes.getPtr(param)) |list| list.items else empty_writes;
+        const empty_builds: []const BuildSite = &.{};
+        const direct_builds: []const BuildSite = if (self.struct_builds.getPtr(param)) |entry| entry.builds.items else empty_builds;
+        if (writes.len == 0 and direct_builds.len == 0) return false;
 
-        // Every initializer must be a single-def, single-use struct literal
-        // with one operand per field.
-        for (writes.items) |write_stmt| {
+        // A directly-built parameter's literals each become per-field
+        // writes in place.
+        for (direct_builds) |site| {
+            if (self.store.getLocalSpan(site.fields).len != field_count) return false;
+        }
+
+        // A copied-in initializer must be a single-def, single-use struct
+        // literal with one operand per field.
+        for (writes) |write_stmt| {
             const write = self.store.getCFStmt(write_stmt).set_local;
             if (write.value == param) return false;
             const build = self.struct_builds.get(write.value) orelse return false;
-            if (build.def_count != 1 or build.uses != 0 or build.init_uses != 1) return false;
+            if (build.builds.items.len != 1 or build.uses != 0 or build.init_uses != 1) return false;
             if (self.write_other.contains(write.value)) return false;
-            if (self.store.getLocalSpan(build.fields).len != field_count) return false;
+            if (self.store.getLocalSpan(build.builds.items[0].fields).len != field_count) return false;
         }
         for (reads.items) |read_stmt| {
             const read = self.store.getCFStmt(read_stmt).assign_ref;
@@ -249,6 +286,7 @@ const Pass = struct {
             field_locals_buffer[k] = try self.store.addLocal(.{ .layout_idx = field_layout });
         }
         const field_locals = field_locals_buffer[0..field_count];
+        try self.new_locals.appendSlice(self.allocator, field_locals);
 
         // The join's parameter span gets the fields in the parameter's
         // place.
@@ -274,37 +312,59 @@ const Pass = struct {
 
         // Each jump-site write becomes one write per field, passing the
         // literal's operands directly; the literal's build is deleted.
-        for (writes.items) |write_stmt| {
+        for (writes) |write_stmt| {
             const write = self.store.getCFStmt(write_stmt).set_local;
             const build = self.struct_builds.get(write.value).?;
-            const operands = self.store.getLocalSpan(build.fields);
+            const site = build.builds.items[0];
+            const operands = self.store.getLocalSpan(site.fields);
+            try self.writeFields(write_stmt, write.next, field_locals, operands);
 
-            var next = write.next;
-            var k: usize = field_count;
-            while (k > 1) {
-                k -= 1;
-                next = try self.store.addCFStmt(.{ .set_local = .{
-                    .target = field_locals[k],
-                    .value = operands[k],
-                    .mode = .initialize_join_param,
-                    .next = next,
-                } });
-            }
-            self.store.getCFStmtPtr(write_stmt).set_local = .{
-                .target = field_locals[0],
-                .value = operands[0],
-                .mode = .initialize_join_param,
-                .next = next,
-            };
-
-            const build_next = switch (self.store.getCFStmt(build.stmt)) {
+            const build_next = switch (self.store.getCFStmt(site.stmt)) {
                 .assign_struct => |b| b.next,
                 else => unreachable,
             };
-            try self.removed.put(build.stmt, build_next);
+            try self.removed.put(site.stmt, build_next);
+        }
+
+        // Each direct build becomes per-field writes in its place.
+        for (direct_builds) |site| {
+            const operands = self.store.getLocalSpan(site.fields);
+            const build_next = switch (self.store.getCFStmt(site.stmt)) {
+                .assign_struct => |b| b.next,
+                else => unreachable,
+            };
+            try self.writeFields(site.stmt, build_next, field_locals, operands);
         }
 
         return true;
+    }
+
+    /// Replaces `stmt` with an `initialize_join_param` write of field 0 and
+    /// inserts writes for the remaining fields before `next_after`.
+    fn writeFields(
+        self: *Pass,
+        stmt: LIR.CFStmtId,
+        next_after: LIR.CFStmtId,
+        field_locals: []const LIR.LocalId,
+        operands: []const LIR.LocalId,
+    ) ScalarizeError!void {
+        var next = next_after;
+        var k: usize = field_locals.len;
+        while (k > 1) {
+            k -= 1;
+            next = try self.store.addCFStmt(.{ .set_local = .{
+                .target = field_locals[k],
+                .value = operands[k],
+                .mode = .initialize_join_param,
+                .next = next,
+            } });
+        }
+        self.store.getCFStmtPtr(stmt).* = .{ .set_local = .{
+            .target = field_locals[0],
+            .value = operands[0],
+            .mode = .initialize_join_param,
+            .next = next,
+        } };
     }
 
     /// Redirects every edge that targets a deleted build statement to that
@@ -704,4 +764,83 @@ test "scalarize keeps parameters with whole-value uses" {
     const unchanged_set = store.getCFStmt(set_state).set_local;
     try testing.expectEqual(state, unchanged_set.target);
     try testing.expectEqual(wrapper, unchanged_set.value);
+}
+
+test "scalarize splits a parameter built directly by a struct literal" {
+    var f = try ScalarizeTest.init(testing.allocator);
+    defer f.deinit();
+    const store = &f.store;
+
+    // join J(state: {i64, str}):
+    //   body: n = state.0; s = state.1; ret n
+    //   remainder: num = 1; text = "x"; state = {num, text}; jump J
+    const state = try store.addLocal(.{ .layout_idx = f.pair });
+    const num = try store.addLocal(.{ .layout_idx = .i64 });
+    const text = try store.addLocal(.{ .layout_idx = .str });
+    const n = try store.addLocal(.{ .layout_idx = .i64 });
+    const s = try store.addLocal(.{ .layout_idx = .str });
+    const join_id: LIR.JoinPointId = @enumFromInt(0);
+
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = n } });
+    const read_s = try store.addCFStmt(.{ .assign_ref = .{
+        .target = s,
+        .op = .{ .field = .{ .source = state, .field_idx = 1 } },
+        .next = ret,
+    } });
+    const read_n = try store.addCFStmt(.{ .assign_ref = .{
+        .target = n,
+        .op = .{ .field = .{ .source = state, .field_idx = 0 } },
+        .next = read_s,
+    } });
+
+    const jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const build = try store.addCFStmt(.{ .assign_struct = .{
+        .target = state,
+        .fields = try store.addLocalSpan(&.{ num, text }),
+        .next = jump,
+    } });
+    const text_assign = try store.addCFStmt(.{ .assign_literal = .{
+        .target = text,
+        .value = .{ .str_literal = try store.insertStringView("x", 0, 1) },
+        .next = build,
+    } });
+    const num_assign = try store.addCFStmt(.{ .assign_literal = .{
+        .target = num,
+        .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .i64 } },
+        .next = text_assign,
+    } });
+    const join = try store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = try store.addLocalSpan(&.{state}),
+        .body = read_n,
+        .remainder = num_assign,
+    } });
+    _ = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .args = LIR.LocalSpan.empty(),
+        .body = join,
+        .ret_layout = .i64,
+    });
+
+    try run(store, &f.layouts);
+
+    // The join now carries two parameters, the field reads are aliases of
+    // them, and the build became per-field writes feeding the jump.
+    const new_join = store.getCFStmt(join).join;
+    const params = store.getLocalSpan(new_join.params);
+    try testing.expectEqual(@as(usize, 2), params.len);
+
+    const new_read_n = store.getCFStmt(read_n).assign_ref;
+    try testing.expectEqual(params[0], new_read_n.op.local);
+    const new_read_s = store.getCFStmt(read_s).assign_ref;
+    try testing.expectEqual(params[1], new_read_s.op.local);
+
+    const first_set = store.getCFStmt(build).set_local;
+    try testing.expectEqual(params[0], first_set.target);
+    try testing.expectEqual(num, first_set.value);
+    try testing.expectEqual(LIR.SetLocalWriteMode.initialize_join_param, first_set.mode);
+    const second_set = store.getCFStmt(first_set.next).set_local;
+    try testing.expectEqual(params[1], second_set.target);
+    try testing.expectEqual(text, second_set.value);
+    try testing.expectEqual(jump, second_set.next);
 }
