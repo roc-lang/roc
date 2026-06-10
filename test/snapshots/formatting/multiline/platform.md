@@ -68,6 +68,9 @@ The module header says that `E2` is exposed, but it is not defined anywhere in t
 		^^
 You can fix this by either defining `E2` in this module, or by removing it from the list of exposed values.
 
+**INVALID HOSTED SECTION**
+The platform header maps more than one function to the linker symbol `roc_not implemented`. Each provides and hosted entry needs a distinct symbol.
+
 # TOKENS
 ~~~zig
 KwPlatform,StringStart,StringPart,StringEnd,
