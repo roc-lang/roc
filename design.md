@@ -99,10 +99,11 @@ before LLVM optimization, and emits the object file from the merged module.
 Roc supports only 32-bit and 64-bit target pointers here, so two builtin
 bitcode payload families are sufficient: one for 32-bit targets and one for
 64-bit targets. Each pointer-width family has a core payload for common
-string/list/refcount/debug roots and a full payload for decimal, parsing,
-formatting, wide-integer, and other heavier roots. The LLVM backend selects the
-core payload only when every explicit builtin declaration in the app module is
-in the core root set; otherwise it selects the full payload. These pointer-width
+string/list/refcount/debug roots plus lightweight integer parse/format roots,
+and a full payload for decimal, float parsing/formatting, wide-integer, and
+other heavier roots. The LLVM backend selects the core payload only when every
+explicit builtin declaration in the app module is in the core root set;
+otherwise it selects the full payload. These pointer-width
 payloads must contain Roc builtin definitions only; they must not bundle
 compiler-rt or other target-specific runtime code, because that would make the
 payload architecture-specific again. The payloads are built as freestanding

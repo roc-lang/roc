@@ -215,10 +215,13 @@ const core_builtin_roots = std.StaticStringMap(void).initComptime(.{
     .{ "roc__num_sub_with_overflow_i128", {} },
     .{ "roc_builtins_allocate_with_refcount", {} },
     .{ "roc_builtins_box_decref_with", {} },
+    .{ "roc_builtins_box_decref_with_single_thread", {} },
     .{ "roc_builtins_box_free_with", {} },
     .{ "roc_builtins_dbg_str", {} },
     .{ "roc_builtins_decref_data_ptr", {} },
+    .{ "roc_builtins_decref_data_ptr_single_thread", {} },
     .{ "roc_builtins_erased_callable_decref", {} },
+    .{ "roc_builtins_erased_callable_decref_single_thread", {} },
     .{ "roc_builtins_erased_callable_free", {} },
     .{ "roc_builtins_erased_callable_incref", {} },
     .{ "roc_builtins_free_data_ptr", {} },
@@ -227,16 +230,21 @@ const core_builtin_roots = std.StaticStringMap(void).initComptime(.{
     .{ "roc_builtins_i64_mod_by", {} },
     .{ "roc_builtins_i8_mod_by", {} },
     .{ "roc_builtins_incref_data_ptr", {} },
+    .{ "roc_builtins_incref_data_ptr_single_thread", {} },
+    .{ "roc_builtins_int_from_str", {} },
+    .{ "roc_builtins_int_to_str", {} },
     .{ "roc_builtins_list_append_unsafe", {} },
     .{ "roc_builtins_list_concat", {} },
     .{ "roc_builtins_list_decref_flat_list", {} },
     .{ "roc_builtins_list_decref_str", {} },
     .{ "roc_builtins_list_decref_with", {} },
+    .{ "roc_builtins_list_decref_with_single_thread", {} },
     .{ "roc_builtins_list_drop_at", {} },
     .{ "roc_builtins_list_eq", {} },
     .{ "roc_builtins_list_free_flat_list", {} },
     .{ "roc_builtins_list_free_with", {} },
     .{ "roc_builtins_list_incref", {} },
+    .{ "roc_builtins_list_incref_single_thread", {} },
     .{ "roc_builtins_list_list_eq", {} },
     .{ "roc_builtins_list_prepend", {} },
     .{ "roc_builtins_list_release_excess_capacity", {} },
@@ -301,6 +309,23 @@ fn selectBuiltinBitcode(ptr_width: u16, app_decls: *const std.StringHashMap(void
         64 => if (use_core) llvm_embedded.builtins64_core_bc else llvm_embedded.builtins64_bc,
         else => "",
     };
+}
+
+test "core builtin roots include common LLVM declarations" {
+    const common_roots = [_][]const u8{
+        "roc_builtins_int_to_str",
+        "roc_builtins_int_from_str",
+        "roc_builtins_list_incref_single_thread",
+        "roc_builtins_list_decref_with_single_thread",
+        "roc_builtins_incref_data_ptr_single_thread",
+        "roc_builtins_decref_data_ptr_single_thread",
+        "roc_builtins_box_decref_with_single_thread",
+        "roc_builtins_erased_callable_decref_single_thread",
+    };
+
+    for (common_roots) |root| {
+        try std.testing.expect(core_builtin_roots.has(root));
+    }
 }
 
 /// LLVM-C linkage value for `internal`: a local definition, never an exported
