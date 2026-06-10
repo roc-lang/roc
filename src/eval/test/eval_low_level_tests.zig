@@ -192,6 +192,53 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "True" },
     },
+    // Single float->int conversions, kept separate from the compound tests
+    // above so a regression in one conversion isn't masked by `and`
+    // short-circuiting. These pin the float-to-int wrapper ABI (the dev
+    // backend must pass the float `val` through its CallBuilder so the
+    // following integer args land in the right registers on Windows x64).
+    .{
+        .name = "low_level - F32 floor_to_i32 returns signed value",
+        .source =
+        \\F32.floor_to_i32(-3.2)
+        ,
+        .expected = .{ .inspect_str = "-4" },
+    },
+    .{
+        .name = "low_level - F32 ceiling_to_u32 returns unsigned value",
+        .source =
+        \\F32.ceiling_to_u32(3.2)
+        ,
+        .expected = .{ .inspect_str = "4" },
+    },
+    .{
+        .name = "low_level - F32 round_to_i32 returns signed value",
+        .source =
+        \\F32.round_to_i32(2.5)
+        ,
+        .expected = .{ .inspect_str = "3" },
+    },
+    .{
+        .name = "low_level - F64 floor_to_i32 returns signed value",
+        .source =
+        \\F64.floor_to_i32(-3.2)
+        ,
+        .expected = .{ .inspect_str = "-4" },
+    },
+    .{
+        .name = "low_level - F64 ceiling_to_u32 returns unsigned value",
+        .source =
+        \\F64.ceiling_to_u32(3.2)
+        ,
+        .expected = .{ .inspect_str = "4" },
+    },
+    .{
+        .name = "low_level - F64 round_to_i32 returns signed value",
+        .source =
+        \\F64.round_to_i32(2.5)
+        ,
+        .expected = .{ .inspect_str = "3" },
+    },
     .{
         .name = "low_level - Dec rounding to integers",
         .source =

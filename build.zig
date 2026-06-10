@@ -1673,6 +1673,16 @@ fn buildAndCopyTestPlatformHostLib(
         options,
     );
 
+    // The dylib platform produces a Windows DLL, and a DLL only exposes symbols
+    // that carry dllexport storage. Unlike ELF/Mach-O shared objects (which
+    // export all global symbols by default), a static host .lib linked into a
+    // DLL exports nothing unless its `export fn` API (e.g. roc_run_app) is
+    // marked dllexport. `-fdll-export-fns` emits the needed `.drectve /EXPORT:`
+    // directives that lld-link honors, without exporting bundled compiler_rt.
+    if (target.result.os.tag == .windows and std.mem.eql(u8, platform_dir, "dylib")) {
+        lib.dll_export_fns = true;
+    }
+
     // Use correct filename for target platform
     const host_filename = if (target.result.os.tag == .windows) "host.lib" else "libhost.a";
     const archive_path = b.pathJoin(&.{ "test", platform_dir, "platform/targets", target_name, host_filename });

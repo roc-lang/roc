@@ -6232,21 +6232,26 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         self.codegen.freeGeneral(parts.low);
                         self.codegen.freeGeneral(parts.high);
                     } else {
-                        // Float source (f32 or f64): all floats stored as f64 internally
+                        // Float source (f32 or f64): all floats stored as f64 internally.
+                        // The float `val` is argument position 1 (after `out`). On x86-64
+                        // it must flow through the CallBuilder so it lands in the right
+                        // register: Windows x64 shares positional slots between float and
+                        // integer args (val -> XMM1, target_bits -> R8), and only the
+                        // builder tracks that. On aarch64 (AAPCS) FP args use v0-v7
+                        // independently, so the single float arg goes in V0 directly.
                         const freg = try self.ensureInFloatReg(src_loc);
                         const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_f64_to_int_try_unsafe);
                         const base_reg = frame_ptr;
 
-                        // Position float arg before CallBuilder setup
                         if (comptime target.toCpuArch() == .aarch64) {
                             if (freg != .V0) try self.codegen.emit.fmovRegReg(.double, .V0, freg);
-                        } else {
-                            if (freg != .XMM0) try self.codegen.emit.movsdRegReg(.XMM0, freg);
                         }
 
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                         try builder.addLeaArg(base_reg, result_offset);
-                        // Float arg already in position; int args follow
+                        if (comptime target.toCpuArch() != .aarch64) {
+                            try builder.addF64RegArg(freg);
+                        }
                         try builder.addImmArg(@intCast(target_bits));
                         try builder.addImmArg(@intCast(target_is_signed));
                         try builder.addImmArg(@intCast(val_size));
@@ -6275,21 +6280,23 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         self.codegen.freeGeneral(parts.low);
                         self.codegen.freeGeneral(parts.high);
                     } else {
-                        // f64 to f32
+                        // f64 to f32. `val` is argument position 1 (after `out`); route it
+                        // through the CallBuilder on x86-64 to honor Windows x64 positional
+                        // float/int slot sharing, and place it in V0 directly on aarch64
+                        // (see the int branch above for details).
                         const freg = try self.ensureInFloatReg(src_loc);
                         const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_f64_to_f32_try_unsafe);
                         const base_reg = frame_ptr;
 
-                        // Position float arg before CallBuilder
                         if (comptime target.toCpuArch() == .aarch64) {
                             if (freg != .V0) try self.codegen.emit.fmovRegReg(.double, .V0, freg);
-                        } else {
-                            if (freg != .XMM0) try self.codegen.emit.movsdRegReg(.XMM0, freg);
                         }
 
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                         try builder.addLeaArg(base_reg, result_offset);
-                        // Float arg already in position
+                        if (comptime target.toCpuArch() != .aarch64) {
+                            try builder.addF64RegArg(freg);
+                        }
                         try builder.addImmArg(@intCast(offsets.success));
                         try builder.addImmArg(@intCast(offsets.value));
                         try self.callBuiltin(&builder, fn_addr, .f64_to_f32_try_unsafe);
