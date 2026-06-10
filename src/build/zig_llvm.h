@@ -110,8 +110,6 @@ enum ZigLLVMFloatABI {
 ZIG_EXTERN_C bool ZigLLVMTargetMachineEmitToFile(LLVMTargetMachineRef targ_machine_ref, LLVMModuleRef module_ref,
     char **error_message, const ZigLLVMEmitOptions *options);
 
-ZIG_EXTERN_C void ZigLLVMRunGlobalDCE(LLVMModuleRef module_ref);
-
 ZIG_EXTERN_C LLVMTargetMachineRef ZigLLVMCreateTargetMachine(LLVMTargetRef T, const char *Triple,
     const char *CPU, const char *Features, LLVMCodeGenOptLevel Level, LLVMRelocMode Reloc,
     LLVMCodeModel CodeModel, bool function_sections, bool data_sections, ZigLLVMFloatABI float_abi,

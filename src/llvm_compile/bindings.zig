@@ -104,9 +104,6 @@ pub const Module = opaque {
 
     pub const getNamedGlobal = LLVMGetNamedGlobal;
     extern fn LLVMGetNamedGlobal(M: *Module, Name: [*:0]const u8) ?*Value;
-
-    pub const runGlobalDCE = ZigLLVMRunGlobalDCE;
-    extern fn ZigLLVMRunGlobalDCE(M: *Module) void;
 };
 
 /// Opaque handle to an LLVM value.

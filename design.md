@@ -110,12 +110,13 @@ not be marked `available_externally`, because there is no later builtin object
 file to provide non-inlined calls. After builtin call symbols are resolved,
 builtin aliases and definitions that are not application exports may be made
 internal so LLVM dead-code elimination and the final linker can remove unused
-builtin code. Before merging, the LLVM backend roots the builtin module only at
-the explicit builtin declarations emitted by the application module, internalizes
-the rest, and runs LLVM dead-code elimination so the app module is merged with
-only the reachable builtin transitive closure. LLVM object emission must request
-function and data sections, and the final target linker must use section garbage
-collection where the target format supports it.
+builtin code. Before merging, the LLVM backend roots builtin exports at the
+explicit builtin declarations emitted by the application module and internalizes
+all other builtin definitions. The normal LLVM optimization pipeline then sees
+unused builtins as internal code and may delete them before object emission.
+LLVM object emission must request function and data sections, and the final
+target linker must use section garbage collection where the target format
+supports it.
 
 The compiler does not contain a static borrow, alias-permission, lifetime,
 uniqueness, parameter-mode, or escape-summary model in this architecture.

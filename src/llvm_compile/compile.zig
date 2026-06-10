@@ -239,8 +239,6 @@ fn pruneBuiltinModule(module: *bindings.Module, app_decls: *const std.StringHash
             value.setLinkage(bindings.internal_linkage);
         }
     }
-
-    module.runGlobalDCE();
 }
 
 fn emitMergedBitcodeToObjectFile(

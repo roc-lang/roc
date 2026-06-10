@@ -194,7 +194,6 @@ const llvm_externs = if (llvm_available) struct {
     // aren't a subset of the caller's. Strip them (the target machine still pins the
     // CPU/features at codegen) so the builtins become inlinable.
     extern fn LLVMRemoveStringAttributeAtIndex(fn_val: ?*anyopaque, idx: c_uint, name: [*]const u8, len: c_uint) void;
-    extern fn ZigLLVMRunGlobalDCE(module: ?*anyopaque) void;
 } else struct {};
 
 /// Embedded builtin bitcode. Stubbed out when LLVM is unavailable.
@@ -394,7 +393,6 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
                 }
             }
 
-            externs.ZigLLVMRunGlobalDCE(builtins_module);
             if (externs.LLVMLinkModules2(module, builtins_module) == 0) {
                 // Resolve @export aliases (clean builtin name -> dev_wrappers.* fn)
                 // so calls target the real function directly and can be inlined.
