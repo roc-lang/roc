@@ -2050,6 +2050,38 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     return .{ .float_reg = try self.ensureInFloatReg(src_loc) };
                 },
 
+                // ── Float bit reinterpretations ──
+                .f32_to_bits => {
+                    if (args.len < 1) unreachable;
+                    const src_loc = try self.emitValueLocal(args[0]);
+                    const reg = try self.materializeF32BitsInGeneralReg(src_loc);
+                    return .{ .general_reg = reg };
+                },
+                .f32_from_bits => {
+                    if (args.len < 1) unreachable;
+                    const src_loc = try self.emitValueLocal(args[0]);
+                    const bits_reg = try self.ensureInGeneralReg(src_loc);
+                    const stack_offset = self.codegen.allocStackSlot(4);
+                    try self.codegen.emitStoreStack(.w32, stack_offset, bits_reg);
+                    self.codegen.freeGeneral(bits_reg);
+                    return .{ .stack = .{ .offset = stack_offset, .size = .dword, .layout_idx = .f32 } };
+                },
+                .f64_to_bits => {
+                    if (args.len < 1) unreachable;
+                    const src_loc = try self.emitValueLocal(args[0]);
+                    const reg = try self.ensureInGeneralReg(src_loc);
+                    return .{ .general_reg = reg };
+                },
+                .f64_from_bits => {
+                    if (args.len < 1) unreachable;
+                    const src_loc = try self.emitValueLocal(args[0]);
+                    const bits_reg = try self.ensureInGeneralReg(src_loc);
+                    const stack_offset = self.codegen.allocStackSlot(8);
+                    try self.codegen.emitStoreStack(.w64, stack_offset, bits_reg);
+                    self.codegen.freeGeneral(bits_reg);
+                    return .{ .stack = .{ .offset = stack_offset, .size = .qword, .layout_idx = .f64 } };
+                },
+
                 // ── Float-to-signed-integer truncating conversions ──
                 // Saturating conversion: NaN→0, clamp to [min, max], truncate toward zero.
                 // On aarch64, FCVTZS handles all edge cases natively.

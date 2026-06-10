@@ -5,6 +5,46 @@ const TestCase = @import("parallel_runner.zig").TestCase;
 /// Public value `tests`.
 pub const tests = [_]TestCase{
     .{
+        .name = "low_level - F32.from_bits to_bits roundtrip finite",
+        .source =
+        \\{
+        \\bits = 1069547520
+        \\F32.to_bits(F32.from_bits(bits))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "1069547520" },
+    },
+    .{
+        .name = "low_level - F32.from_bits to_bits preserves quiet NaN payload",
+        .source =
+        \\{
+        \\bits = 2143289345
+        \\F32.to_bits(F32.from_bits(bits)) == bits
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - F64.from_bits to_bits roundtrip finite",
+        .source =
+        \\{
+        \\bits = 4609434218613702656
+        \\F64.to_bits(F64.from_bits(bits))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "4609434218613702656" },
+    },
+    .{
+        .name = "low_level - F64.from_bits to_bits preserves quiet NaN payload",
+        .source =
+        \\{
+        \\bits = 9221120237041090561
+        \\F64.to_bits(F64.from_bits(bits)) == bits
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
         .name = "low_level - Str.is_empty returns True for empty string",
         .source =
         \\{

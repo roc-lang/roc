@@ -99,6 +99,10 @@ pub const LowLevel = enum {
     num_floor,
     num_ceiling,
     num_to_str,
+    f32_to_bits,
+    f32_from_bits,
+    f64_to_bits,
+    f64_from_bits,
 
     // Bitwise shift operations
     num_shift_left_by,
@@ -610,6 +614,10 @@ pub const LowLevel = enum {
             .num_round,
             .num_floor,
             .num_ceiling,
+            .f32_to_bits,
+            .f32_from_bits,
+            .f64_to_bits,
+            .f64_from_bits,
             .num_shift_left_by,
             .num_shift_right_by,
             .num_shift_right_zf_by,

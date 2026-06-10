@@ -1099,6 +1099,7 @@ pub const MonoLlvmCodeGen = struct {
             .f64_from_str => try self.emitFloatFromStr(target, arg_locals[0], 8),
             .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str => try self.emitIntToStr(target, arg_locals[0]),
             .f32_to_str, .f64_to_str => try self.emitFloatToStr(target, arg_locals[0]),
+            .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits => try self.emitFloatBitCast(target, op, arg_locals[0]),
             .dec_to_str => try self.emitDecToStr(target, arg_locals[0]),
             .num_to_str => try self.emitNumToStr(target, arg_locals[0]),
             .box_box => try self.emitBoxBox(target, arg_locals[0]),
@@ -1797,6 +1798,20 @@ pub const MonoLlvmCodeGen = struct {
             builder.intValue(.i1, @intFromBool(arg_layout == .f32)) catch return error.OutOfMemory,
             self.rocOps(),
         });
+    }
+
+    fn emitFloatBitCast(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LowLevel, arg: LocalId) Error!void {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const value = try self.loadScalar(self.slot(arg).ptr, self.localLayout(arg));
+        const target_ty: LlvmBuilder.Type = switch (op) {
+            .f32_to_bits => .i32,
+            .f32_from_bits => .float,
+            .f64_to_bits => .i64,
+            .f64_from_bits => .double,
+            else => unreachable,
+        };
+        const casted = wip.cast(.bitcast, value, target_ty, "") catch return error.OutOfMemory;
+        try self.storeScalar(self.slot(target).ptr, self.localLayout(target), casted);
     }
 
     fn emitDecToStr(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {

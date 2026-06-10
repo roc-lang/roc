@@ -4044,6 +4044,26 @@ pub const Interpreter = struct {
                 const result = builtins.str.floatToStrFromBits(bits, false, &self.roc_ops);
                 break :blk self.rocStrToValue(result, ll.ret_layout);
             },
+            .f32_to_bits => blk: {
+                const val = try self.alloc(ll.ret_layout);
+                val.write(u32, @bitCast(args[0].read(f32)));
+                break :blk val;
+            },
+            .f32_from_bits => blk: {
+                const val = try self.alloc(ll.ret_layout);
+                val.write(f32, @bitCast(args[0].read(u32)));
+                break :blk val;
+            },
+            .f64_to_bits => blk: {
+                const val = try self.alloc(ll.ret_layout);
+                val.write(u64, @bitCast(args[0].read(f64)));
+                break :blk val;
+            },
+            .f64_from_bits => blk: {
+                const val = try self.alloc(ll.ret_layout);
+                val.write(f64, @bitCast(args[0].read(u64)));
+                break :blk val;
+            },
             .num_to_str => blk: {
                 // Generic num_to_str uses arg layout to determine type
                 const size = self.helper.sizeOf(arg_layout);

@@ -289,6 +289,10 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
             try low_level_map.put(ident, low_level_op);
         }
     }
+    try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.F32.to_bits", .{}, .f32_to_bits);
+    try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.F32.from_bits", .{}, .f32_from_bits);
+    try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.F64.to_bits", .{}, .f64_to_bits);
+    try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.F64.from_bits", .{}, .f64_from_bits);
 
     // Numeric comparison operations (all numeric types)
     for (numeric_types) |num_type| {

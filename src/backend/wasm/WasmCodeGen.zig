@@ -8522,6 +8522,25 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             try self.emitProcLocal(args[0]);
             self.currentCode().append(self.allocator, Op.i64_trunc_f64_u) catch return error.OutOfMemory;
         },
+        .f32_to_bits => {
+            try self.emitProcLocal(args[0]);
+            self.currentCode().append(self.allocator, Op.i32_reinterpret_f32) catch return error.OutOfMemory;
+        },
+        .f32_from_bits => {
+            try self.emitProcLocal(args[0]);
+            if (try self.procLocalValType(args[0]) == .i64) {
+                self.currentCode().append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
+            }
+            self.currentCode().append(self.allocator, Op.f32_reinterpret_i32) catch return error.OutOfMemory;
+        },
+        .f64_to_bits => {
+            try self.emitProcLocal(args[0]);
+            self.currentCode().append(self.allocator, Op.i64_reinterpret_f64) catch return error.OutOfMemory;
+        },
+        .f64_from_bits => {
+            try self.emitProcLocal(args[0]);
+            self.currentCode().append(self.allocator, Op.f64_reinterpret_i64) catch return error.OutOfMemory;
+        },
 
         // Float math functions (direct wasm opcodes)
         .num_sqrt => {

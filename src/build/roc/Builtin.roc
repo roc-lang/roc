@@ -9774,6 +9774,22 @@ Builtin :: [].{
 			## ```
 			to_str : F32 -> Str
 
+			## Return the raw IEEE 754 bit pattern of an [F32].
+			## ```roc
+			## expect F32.to_bits(F32.from_bits(1069547520)) == 1069547520
+			##
+			## expect F32.from_bits(F32.to_bits(1.5)).to_str() == "1.5"
+			## ```
+			to_bits : F32 -> U32
+
+			## Build an [F32] from a raw IEEE 754 bit pattern.
+			## ```roc
+			## expect F32.from_bits(F32.to_bits(-0.0)).to_bits() == F32.to_bits(-0.0)
+			##
+			## expect F32.from_bits(0).to_bits() == 0
+			## ```
+			from_bits : U32 -> F32
+
 			## Returns `Bool.True` if the value is `0.0`. Both positive and
 			## negative zero return `Bool.True`.
 			## ```roc
@@ -10252,6 +10268,22 @@ Builtin :: [].{
 			## expect F64.to_str(-42.5) == "-42.5"
 			## ```
 			to_str : F64 -> Str
+
+			## Return the raw IEEE 754 bit pattern of an [F64].
+			## ```roc
+			## expect F64.to_bits(F64.from_bits(4609434218613702656)) == 4609434218613702656
+			##
+			## expect F64.from_bits(F64.to_bits(1.5)).to_str() == "1.5"
+			## ```
+			to_bits : F64 -> U64
+
+			## Build an [F64] from a raw IEEE 754 bit pattern.
+			## ```roc
+			## expect F64.from_bits(F64.to_bits(-0.0)).to_bits() == F64.to_bits(-0.0)
+			##
+			## expect F64.from_bits(0).to_bits() == 0
+			## ```
+			from_bits : U64 -> F64
 
 			## Returns `Bool.True` if the value is `0.0`. Both positive and
 			## negative zero return `Bool.True`.
