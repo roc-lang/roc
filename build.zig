@@ -1641,6 +1641,9 @@ fn createTestPlatformHostLib(
     // can emit stack-protector calls to __stack_chk_fail; x86_64 macOS (LLVM)
     // needs symbols like __zig_probe_stack.
     lib.bundle_compiler_rt = testHostNeedsCompilerRt(target);
+    // Per-function/data sections so symbol-ABI links can strip unused host code.
+    lib.link_function_sections = true;
+    lib.link_data_sections = true;
 
     return lib;
 }
@@ -3380,6 +3383,23 @@ pub fn build(b: *std.Build) void {
         run_dylib_test.addArg(dylib_output);
         run_dylib_test.step.dependOn(&build_dylib_app.step);
         run_test_dylib_step.dependOn(&run_dylib_test.step);
+
+        // Unused host code (the canary function and its constant) must be
+        // dead-code-eliminated from the linked library, while the used hosted
+        // function survives.
+        const dylib_dce_check_exe = b.addExecutable(.{
+            .name = "dylib_dce_check",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("test/archive/archive_check.zig"),
+                .target = target,
+                .optimize = optimize,
+            }),
+        });
+        configureBackend(dylib_dce_check_exe, target);
+        const run_dylib_dce_check = b.addRunArtifact(dylib_dce_check_exe);
+        run_dylib_dce_check.addArgs(&.{ dylib_output, "--absent", "ROC_DCE_CANARY_BLOB_7f3a9c", "roc_host_double" });
+        run_dylib_dce_check.step.dependOn(&build_dylib_app.step);
+        run_test_dylib_step.dependOn(&run_dylib_dce_check.step);
     }
 
     // Build the static-archive test fixture with `roc build`, link a consumer
@@ -3412,6 +3432,8 @@ pub fn build(b: *std.Build) void {
         archive_consumer_exe.root_module.addObjectFile(b.path(archive_output));
         archive_consumer_exe.step.dependOn(&build_archive_app.step);
 
+        archive_consumer_exe.link_gc_sections = true;
+
         const run_archive_consumer = b.addRunArtifact(archive_consumer_exe);
         run_test_archive_step.dependOn(&run_archive_consumer.step);
 
@@ -3436,7 +3458,7 @@ pub fn build(b: *std.Build) void {
         configureBackend(archive_check_exe, target);
 
         const run_wasm_archive_check = b.addRunArtifact(archive_check_exe);
-        run_wasm_archive_check.addArgs(&.{ "test/archive/app-wasm32.a", "roc_builtins" });
+        run_wasm_archive_check.addArgs(&.{ "--archive", "test/archive/app-wasm32.a", "roc_builtins" });
         run_wasm_archive_check.step.dependOn(&build_wasm_archive_app.step);
         run_test_archive_step.dependOn(&run_wasm_archive_check.step);
     }

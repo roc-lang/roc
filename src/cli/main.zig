@@ -4766,6 +4766,9 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
                 .target_arch = target_arch,
                 .output_path = final_output_path,
                 .output_kind = linkerOutputKind(link_type),
+                // LLVM output uses the symbol ABI, so host archives resolve
+                // by symbol reference and unused host code can be stripped.
+                .lazy_platform_archives = true,
                 .object_files = object_files.items,
                 .platform_files_pre = link_inputs.platform_files_pre,
                 .platform_files_post = link_inputs.platform_files_post,

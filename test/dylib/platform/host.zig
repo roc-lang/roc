@@ -83,13 +83,13 @@ fn hostCrashed(bytes: [*]const u8, len: usize) callconv(.c) void {
 // The fixed runtime symbols every symbol-ABI host defines, plus this
 // platform's hosted functions under their header symbols.
 comptime {
-    @export(&hostAlloc, .{ .name = "roc_alloc" });
-    @export(&hostDealloc, .{ .name = "roc_dealloc" });
-    @export(&hostRealloc, .{ .name = "roc_realloc" });
-    @export(&hostDbg, .{ .name = "roc_dbg" });
-    @export(&hostExpectFailed, .{ .name = "roc_expect_failed" });
-    @export(&hostCrashed, .{ .name = "roc_crashed" });
-    @export(&hostedHostDouble, .{ .name = "roc_host_double" });
+    @export(&hostAlloc, .{ .name = "roc_alloc", .visibility = .hidden });
+    @export(&hostDealloc, .{ .name = "roc_dealloc", .visibility = .hidden });
+    @export(&hostRealloc, .{ .name = "roc_realloc", .visibility = .hidden });
+    @export(&hostDbg, .{ .name = "roc_dbg", .visibility = .hidden });
+    @export(&hostExpectFailed, .{ .name = "roc_expect_failed", .visibility = .hidden });
+    @export(&hostCrashed, .{ .name = "roc_crashed", .visibility = .hidden });
+    @export(&hostedHostDouble, .{ .name = "roc_host_double", .visibility = .hidden });
 }
 
 /// Host.double!: double a number in the host. I64 -> I64 involves no
@@ -97,6 +97,34 @@ comptime {
 /// beyond its arguments.
 fn hostedHostDouble(n: i64) callconv(.c) i64 {
     return n * 2;
+}
+
+// --- Dead-code-elimination canaries ---------------------------------------
+// A large constant and a function that uses it, exported (hidden) but never
+// referenced by the app. Symbol-ABI links must strip both from the final
+// artifact; tests scan the output for the distinctive byte pattern.
+const dce_canary_blob: [4096]u8 = blk: {
+    @setEvalBranchQuota(20000);
+    var blob: [4096]u8 = undefined;
+    const marker = "ROC_DCE_CANARY_BLOB_7f3a9c";
+    var i: usize = 0;
+    while (i < blob.len) : (i += 1) {
+        blob[i] = marker[i % marker.len];
+    }
+    break :blk blob;
+};
+
+fn hostUnusedNicheFeature(n: i64) callconv(.c) i64 {
+    // Touch every byte so the blob cannot be dropped independently.
+    var acc: i64 = n;
+    for (dce_canary_blob) |byte| {
+        acc +%= byte;
+    }
+    return acc;
+}
+
+comptime {
+    @export(&hostUnusedNicheFeature, .{ .name = "roc_host_unused_niche_feature", .visibility = .hidden });
 }
 
 // The app's entrypoint, named by `provides { "roc_main": main_for_host! }`,
