@@ -132,9 +132,9 @@ pub fn classifySystemV(store: *const Store, idx: Idx, ctx: Context) [8]Class {
                 .str => return integerAggregateSysV(size),
             }
         },
-        .box, .box_of_zst => return Class.one_integer,
+        .box, .box_of_zst, .erased_callable => return Class.one_integer,
         .list, .list_of_zst => return integerAggregateSysV(size),
-        .struct_, .tag_union, .closure, .erased_callable => {
+        .struct_, .tag_union, .closure => {
             if (size > 64) return Class.stack;
             var result: [8]Class = @splat(.none);
             classifyAggregateSysV(store, &result, 0, idx);
@@ -298,6 +298,15 @@ test "x86_64 SysV: large aggregates go to memory" {
     // A 24-byte all-integer struct -> memory.
     const three_words = try testStruct(&store, &.{ .i64, .i64, .i64 });
     try testing.expectEqual(Class.stack, classifySystemV(&store, three_words, .arg));
+}
+
+test "x86_64 SysV: erased callable is passed as a pointer" {
+    var store = try Store.init(testing.allocator, .u64);
+    defer store.deinit();
+
+    const erased_callable = try store.insertLayout(Layout.erasedCallable());
+
+    try testing.expectEqual(Class.one_integer, classifySystemV(&store, erased_callable, .arg));
 }
 
 test "x86_64 Win64: size-based classification" {

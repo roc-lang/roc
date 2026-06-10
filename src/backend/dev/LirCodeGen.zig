@@ -13845,17 +13845,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
             }
 
-            // New RocOps callback ABI: callback(ops: *RocOps, bytes: [*]const u8, len: usize).
-            const msg_len_val: i64 = @bitCast(@as(u64, msg.len));
-            try self.codegen.emitLoadImm(tmp, msg_len_val);
-
             const fn_ptr_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .X10 else .RAX;
             try self.emitLoad(.w64, fn_ptr_reg, roc_ops_reg, field_offset);
 
+            // New RocOps callback ABI: callback(ops: *RocOps, bytes: [*]const u8, len: usize).
+            const msg_len_val: i64 = @bitCast(@as(u64, msg.len));
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             try builder.addRegArg(roc_ops_reg);
             try builder.addLeaArg(base_reg, msg_slot);
-            try builder.addRegArg(tmp);
+            try builder.addImmArg(msg_len_val);
             try builder.callReg(fn_ptr_reg);
         }
 

@@ -60,6 +60,54 @@ _rocCallTrampoline:
 .global _rocCallTrampoline
 rocCallTrampoline:
 _rocCallTrampoline:
+#if defined(_WIN64)
+	push %rbp
+	mov %rsp, %rbp
+	push %rbx
+	push %rsi
+	push %rdi
+	push %r12
+	mov %rcx, %rbx
+	mov 32(%rbx), %r12
+	add $32, %r12
+	sub %r12, %rsp
+	mov 32(%rbx), %r12
+	test %r12, %r12
+	jz 2f
+	mov 24(%rbx), %rsi
+	xor %rdi, %rdi
+1:
+	mov (%rsi,%rdi,1), %rax
+	mov %rax, 32(%rsp,%rdi,1)
+	add $8, %rdi
+	cmp %r12, %rdi
+	jb 1b
+2:
+	mov 16(%rbx), %rax
+	movups 0(%rax), %xmm0
+	movups 16(%rax), %xmm1
+	movups 32(%rax), %xmm2
+	movups 48(%rax), %xmm3
+	mov 8(%rbx), %rax
+	mov 0(%rax), %rcx
+	mov 8(%rax), %rdx
+	mov 16(%rax), %r8
+	mov 24(%rax), %r9
+	call *0(%rbx)
+	mov 48(%rbx), %rcx
+	mov %rax, 0(%rcx)
+	mov %rdx, 8(%rcx)
+	mov 56(%rbx), %rcx
+	movups %xmm0, 0(%rcx)
+	movups %xmm1, 16(%rcx)
+	lea -32(%rbp), %rsp
+	pop %r12
+	pop %rdi
+	pop %rsi
+	pop %rbx
+	pop %rbp
+	ret
+#else
 	push %rbp
 	mov %rsp, %rbp
 	push %rbx
@@ -107,5 +155,6 @@ _rocCallTrampoline:
 	pop %rbx
 	pop %rbp
 	ret
+#endif
 
 #endif
