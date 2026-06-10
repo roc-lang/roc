@@ -8,8 +8,8 @@ platform ""
     exposes [Host]
     packages {}
     provides {
-        init_for_host!: "init_for_host",
-        render_for_host!: "render_for_host",
+        "roc_init_for_host": init_for_host!,
+        "roc_render_for_host": render_for_host!,
     }
     targets: {
         inputs: "targets/",

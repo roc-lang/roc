@@ -420,9 +420,9 @@ const ResultListFileStr = extern struct {
 
 // External Roc entry point
 // Follows RocCall ABI: ops, ret_ptr, then argument pointers
-// External Roc entry point - name comes from "provides { make_glue_for_host: "make_glue" }"
-// The extern symbol is "roc__" + the quoted name ("make_glue")
-extern fn roc__make_glue(
+// External Roc entry point - name comes from "provides { "roc_make_glue": make_glue_for_host }"
+// The extern symbol is "roc_" + the quoted name ("make_glue")
+extern fn roc_make_glue(
     ops: *builtins.host_abi.RocOps,
     ret_ptr: *ResultListFileStr,
     args_ptr: *RocList,
@@ -509,7 +509,7 @@ const JsonModuleTypeInfo = struct {
     hosted_functions: []const JsonHostedFunctionInfo,
 };
 
-/// Clean up result payload from roc__make_glue
+/// Clean up result payload from roc_make_glue
 fn cleanupResult(result: *ResultListFileStr, roc_ops: *builtins.host_abi.RocOps) void {
     switch (result.tag) {
         .Ok => {
@@ -859,7 +859,7 @@ fn platform_main(args: [][*:0]u8, std_io: std.Io) (Allocator.Error || error{ Mis
     // Note: Roc consumes types_list (takes ownership), so it handles cleanup
     // of all nested structures. We must NOT manually clean up after this call.
     var result: ResultListFileStr = undefined;
-    roc__make_glue(&roc_ops, &result, &types_list);
+    roc_make_glue(&roc_ops, &result, &types_list);
     defer cleanupResult(&result, &roc_ops);
 
     // Handle the result

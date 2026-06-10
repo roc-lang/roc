@@ -209,7 +209,7 @@ const hosted_function_ptrs = [_]builtins.host_abi.HostedFn{
 };
 
 // External Roc entrypoint
-extern fn roc__main(ops: *RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
+extern fn roc_main(ops: *RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
 
 // Dummy env for RocOps (not used in WASM)
 var dummy_env: u8 = 0;
@@ -239,7 +239,7 @@ export fn wasm_main() [*]const u8 {
     // Pass a valid pointer for the unit argument () - the pointer itself doesn't
     // matter for zero-sized types, but it must be non-null to indicate "call this function"
     var unit_arg: u8 = 0;
-    roc__main(&roc_ops, @ptrCast(&last_result), @ptrCast(&unit_arg));
+    roc_main(&roc_ops, @ptrCast(&last_result), @ptrCast(&unit_arg));
 
     // Return pointer to the string bytes - use asU8ptr() for SSO support
     return last_result.asU8ptr();

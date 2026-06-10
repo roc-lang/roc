@@ -154,7 +154,7 @@ fn rocCrashedFn(ops: *builtins.host_abi.RocOps, bytes: [*]const u8, len: usize) 
 // External symbols provided by the Roc runtime object file
 // Follows RocCall ABI: ops, ret_ptr, then argument pointers
 // main_for_host! takes List(Str) and returns I32
-extern fn roc__main(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
+extern fn roc_main(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
 
 // OS-specific entry point handling
 comptime {
@@ -306,7 +306,7 @@ fn platform_main(argc: c_int, argv: [*][*:0]u8) Allocator.Error!c_int {
 
     // Call the app's main_for_host! entrypoint which returns I32
     var exit_code: i32 = 0;
-    roc__main(&roc_ops, @as(*anyopaque, @ptrCast(&exit_code)), @as(*anyopaque, @ptrCast(&args)));
+    roc_main(&roc_ops, @as(*anyopaque, @ptrCast(&exit_code)), @as(*anyopaque, @ptrCast(&args)));
 
     // Note: We don't explicitly free the args list here because:
     // 1. The process is about to exit anyway

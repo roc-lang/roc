@@ -3483,7 +3483,7 @@ fn nativeEntrypointSymbolName(
         }
         unreachable;
     };
-    return try std.fmt.allocPrint(ctx.arena, "roc__{s}", .{entrypoint_name});
+    return try ctx.arena.dupe(u8, entrypoint_name);
 }
 
 const PlatformLinkInputs = struct {

@@ -18,7 +18,7 @@ platform ""
     requires {} { greet : Str -> Str }
     exposes []
     packages {}
-    provides { greet_for_host: "greet" }
+    provides { "roc_greet": greet_for_host }
     targets: {
         inputs: "targets/",
         x64glibc: { inputs: [app] },

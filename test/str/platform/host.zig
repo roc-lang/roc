@@ -105,7 +105,7 @@ fn rocCrashedFn(ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void 
 
 // External symbol provided by the Roc runtime object file
 // Follows RocCall ABI: ops, ret_ptr, then argument pointers
-extern fn roc__process_string(ops: *RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
+extern fn roc_process_string(ops: *RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
 
 // OS-specific entry point handling
 comptime {
@@ -165,7 +165,7 @@ fn platform_main() error{TestFailed}!void {
 
     // Call the Roc entrypoint - pass argument pointer for functions, null for values
     var roc_str: RocStr = undefined;
-    roc__process_string(&roc_ops, @as(*anyopaque, @ptrCast(&roc_str)), @as(*anyopaque, @ptrCast(&args)));
+    roc_process_string(&roc_ops, @as(*anyopaque, @ptrCast(&roc_str)), @as(*anyopaque, @ptrCast(&args)));
     defer roc_str.decref(&roc_ops);
 
     // Get the string as a slice and print it

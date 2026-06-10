@@ -607,7 +607,7 @@ fn rocCrashedFn(ops: *builtins.host_abi.RocOps, bytes: [*]const u8, len: usize) 
 
 // External symbols provided by the Roc runtime object file
 // Follows RocCall ABI: ops, ret_ptr, then argument pointers
-extern fn roc__main(ops: *builtins.host_abi.RocOps, ret_ptr: ?*anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
+extern fn roc_main(ops: *builtins.host_abi.RocOps, ret_ptr: ?*anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
 
 // OS-specific entry point handling
 comptime {
@@ -1440,7 +1440,7 @@ fn platform_main(test_spec: ?[]const u8, test_verbose: bool) (Allocator.Error ||
     // arg/ret positions so every backend sees valid ABI pointers.
     var dummy_ret: u8 = 0;
     var dummy_arg: u8 = 0;
-    roc__main(&roc_ops, @ptrCast(&dummy_ret), @ptrCast(&dummy_arg));
+    roc_main(&roc_ops, @ptrCast(&dummy_ret), @ptrCast(&dummy_arg));
 
     // Check test results if in test mode
     if (host_env.test_state.enabled) {

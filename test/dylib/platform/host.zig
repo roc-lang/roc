@@ -103,7 +103,7 @@ fn rocCrashedFn(ops: *builtins.host_abi.RocOps, bytes: [*]const u8, len: usize) 
 
 // The app's entrypoint, named by `provides { main_for_host!: "main" }`.
 // Follows the RocCall ABI: ops, ret_ptr, then a pointer to the argument tuple.
-extern fn roc__main(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
+extern fn roc_main(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
 
 /// Host.double! (dispatch index 0): double a number in the host.
 /// I64 -> I64 involves no refcounted values, so under the hosted C ABI it
@@ -141,6 +141,6 @@ export fn roc_run_app(n: i64) callconv(.c) i64 {
 
     var arg: i64 = n;
     var ret: i64 = undefined;
-    roc__main(&roc_ops, @ptrCast(&ret), @ptrCast(&arg));
+    roc_main(&roc_ops, @ptrCast(&ret), @ptrCast(&arg));
     return ret;
 }

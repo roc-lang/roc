@@ -2326,7 +2326,8 @@ pub fn exportGlobalSymbols(self: *Self) Allocator.Error!void {
         if (sym.kind != .function or sym.isUndefined() or sym.isLocal()) continue;
         if ((sym.flags & WasmLinking.SymFlag.VISIBILITY_HIDDEN) != 0) continue;
         const name = sym.name orelse continue;
-        // Skip roc__ symbols (handled by linkHostToAppCalls).
+        // Skip roc-internal symbols (roc__proc_*, roc__num_*); entrypoints use
+        // the literal provides symbols and are exported like any host export.
         if (std.mem.startsWith(u8, name, "roc__")) continue;
         // Avoid duplicate exports.
         var already_exported = false;

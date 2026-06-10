@@ -14,7 +14,7 @@ const RocTarget = @import("target.zig").RocTarget;
 /// Each entrypoint corresponds to a specific function the host can invoke,
 /// such as "init", "render", "update", etc.
 pub const EntryPoint = struct {
-    /// The name of the entrypoint function (without the "roc__" prefix).
+    /// The entrypoint's linker symbol (the literal provides string).
     /// This will be used to generate the exported function name.
     /// For example, "init" becomes "roc__init".
     name: []const u8,
@@ -124,9 +124,9 @@ fn addRocExportedFunction(builder: *Builder, entrypoint_fn: Builder.Function.Ind
     const roc_fn_params = [_]Builder.Type{ ptr_type, ptr_type, ptr_type };
     const roc_fn_type = try builder.fnType(.void, &roc_fn_params, .normal);
 
-    // Create function name with roc__ prefix.
-    // Add underscore prefix for macOS (required for MachO symbol names)
-    const base_name = try std.fmt.allocPrint(builder.gpa, "roc__{s}", .{name});
+    // The entrypoint symbol is the literal string from the platform's provides
+    // section. Add underscore prefix for macOS (required for MachO symbol names).
+    const base_name = try builder.gpa.dupe(u8, name);
     defer builder.gpa.free(base_name);
     const full_name = if (target.isMacOS())
         try std.fmt.allocPrint(builder.gpa, "_{s}", .{base_name})
@@ -186,7 +186,7 @@ fn addEmbeddedRocExportedFunction(
     const roc_fn_params = [_]Builder.Type{ ptr_type, ptr_type, ptr_type };
     const roc_fn_type = try builder.fnType(.void, &roc_fn_params, .normal);
 
-    const base_name = try std.fmt.allocPrint(builder.gpa, "roc__{s}", .{name});
+    const base_name = try builder.gpa.dupe(u8, name);
     defer builder.gpa.free(base_name);
     const full_name = if (target.isMacOS())
         try std.fmt.allocPrint(builder.gpa, "_{s}", .{base_name})

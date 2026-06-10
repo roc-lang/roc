@@ -1543,7 +1543,7 @@ fn customListBuiltinInlined(
         \\    requires {} { main! : () => List(I32) }
         \\    exposes []
         \\    packages {}
-        \\    provides { main_for_host!: "main" }
+        \\    provides { "roc_main": main_for_host! }
         \\    targets: {
         \\        files: "targets/",
         \\        exe: {

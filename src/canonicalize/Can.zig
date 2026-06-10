@@ -4666,22 +4666,20 @@ fn addToExposedScope(
 }
 
 /// Add platform provides items to the exposed scope.
-/// Platform provides uses curly braces { main_for_host!: "main" } so it's parsed as record fields.
-/// The string value is the FFI symbol name exported to the host (becomes roc__<symbol>).
+/// Platform provides maps linker symbol strings to platform functions:
+/// provides { "roc_main": main_for_host! }
+/// The string is the literal symbol the app object exports for the host.
 fn addPlatformProvidesItems(
     self: *Self,
-    provides: AST.Collection.Idx,
+    provides: AST.SymbolMapEntry.Span,
 ) std.mem.Allocator.Error!void {
     const gpa = self.env.gpa;
 
-    const collection = self.parse_ir.store.getCollection(provides);
-    const record_fields = self.parse_ir.store.recordFieldSlice(.{ .span = collection.span });
+    for (self.parse_ir.store.symbolMapEntrySlice(provides)) |entry_idx| {
+        const entry = self.parse_ir.store.getSymbolMapEntry(entry_idx);
 
-    for (record_fields) |field_idx| {
-        const field = self.parse_ir.store.getRecordField(field_idx);
-
-        // Get the identifier text from the field name token
-        if (self.parse_ir.tokens.resolveIdentifier(field.name)) |ident_idx| {
+        // Get the identifier from the function token
+        if (self.parse_ir.tokens.resolveIdentifier(entry.func)) |ident_idx| {
             // Add to exposed_items for permanent storage
             try self.env.addExposedById(ident_idx);
 
@@ -4689,43 +4687,21 @@ fn addPlatformProvidesItems(
             try self.exposed_idents.put(gpa, ident_idx, {});
 
             // Also track in exposed_ident_texts
-            const token_region = self.parse_ir.tokens.resolve(@intCast(field.name));
+            const token_region = self.parse_ir.tokens.resolve(@intCast(entry.func));
             const ident_text = self.parse_ir.env.source[token_region.start.offset..token_region.end.offset];
-            const region = self.parse_ir.tokenizedRegionToRegion(field.region);
+            const region = self.parse_ir.tokenizedRegionToRegion(entry.region);
             _ = try self.exposed_ident_texts.getOrPut(gpa, ident_text);
             if (self.exposed_ident_texts.getPtr(ident_text)) |ptr| {
                 ptr.* = region;
             }
 
-            // Extract FFI symbol from the string value and store as a provides entry
-            if (field.value) |value_idx| {
-                const ffi_symbol_text = blk: {
-                    const value_expr = self.parse_ir.store.getExpr(value_idx);
-                    switch (value_expr) {
-                        .string => |str_like| {
-                            const parts = self.parse_ir.store.exprSlice(str_like.parts);
-                            if (parts.len > 0) {
-                                const first_part = self.parse_ir.store.getExpr(parts[0]);
-                                switch (first_part) {
-                                    .string_part => |sp| break :blk self.parse_ir.resolve(sp.token),
-                                    else => break :blk null,
-                                }
-                            }
-                            break :blk null;
-                        },
-                        .string_part => |str_part| break :blk self.parse_ir.resolve(str_part.token),
-                        else => break :blk null,
-                    }
-                };
-
-                if (ffi_symbol_text) |ffi_text| {
-                    const ffi_string_idx = try self.env.insertString(ffi_text);
-                    _ = try self.env.provides_entries.append(gpa, .{
-                        .ident = ident_idx,
-                        .ffi_symbol = ffi_string_idx,
-                    });
-                }
-            }
+            // Store the literal linker symbol as the provides entry
+            const ffi_text = self.parse_ir.resolve(entry.symbol);
+            const ffi_string_idx = try self.env.insertString(ffi_text);
+            _ = try self.env.provides_entries.append(gpa, .{
+                .ident = ident_idx,
+                .ffi_symbol = ffi_string_idx,
+            });
         }
     }
 }

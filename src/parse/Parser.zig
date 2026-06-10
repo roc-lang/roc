@@ -1584,6 +1584,74 @@ fn parseTargetsSectionTokens(self: *Parser) Error!AST.TargetsSection.Idx {
     });
 }
 
+fn parseSymbolMapEntryTokens(self: *Parser) Error!AST.SymbolMapEntry.Idx {
+    const start = self.pos;
+    self.expect(.StringStart) catch {
+        return try self.pushMalformed(AST.SymbolMapEntry.Idx, .expected_symbol_string, start);
+    };
+    if (self.peek() != .StringPart) {
+        return try self.pushMalformed(AST.SymbolMapEntry.Idx, .expected_symbol_string, start);
+    }
+    const symbol = self.pos;
+    self.advance();
+    self.expect(.StringEnd) catch {
+        return try self.pushMalformed(AST.SymbolMapEntry.Idx, .expected_symbol_string, start);
+    };
+    self.expect(.OpColon) catch {
+        return try self.pushMalformed(AST.SymbolMapEntry.Idx, .expected_symbol_map_colon, start);
+    };
+
+    var module: ?TokenIdx = null;
+    var func: TokenIdx = undefined;
+    switch (self.peek()) {
+        .UpperIdent => {
+            module = self.pos;
+            self.advance();
+            if (self.peek() != .NoSpaceDotLowerIdent) {
+                return try self.pushMalformed(AST.SymbolMapEntry.Idx, .expected_symbol_map_function, start);
+            }
+            func = self.pos;
+            self.advance();
+        },
+        .LowerIdent => {
+            func = self.pos;
+            self.advance();
+        },
+        else => return try self.pushMalformed(AST.SymbolMapEntry.Idx, .expected_symbol_map_function, start),
+    }
+
+    return try self.store.addSymbolMapEntry(.{
+        .symbol = symbol,
+        .module = module,
+        .func = func,
+        .region = .{ .start = start, .end = self.pos },
+    });
+}
+
+fn parseSymbolMapCollectionTokens(
+    self: *Parser,
+    open_tag: AST.Diagnostic.Tag,
+    close_tag: AST.Diagnostic.Tag,
+) Error!AST.SymbolMapEntry.Span {
+    self.expect(.OpenCurly) catch {
+        _ = try self.pushMalformed(AST.SymbolMapEntry.Idx, open_tag, self.pos);
+        return .{ .span = .{ .start = 0, .len = 0 } };
+    };
+    const top = self.store.scratchSymbolMapEntryTop();
+    while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
+        try self.store.addScratchSymbolMapEntry(try self.parseSymbolMapEntryTokens());
+        if (!self.consumeComma()) {
+            break;
+        }
+    }
+    self.expect(.CloseCurly) catch {
+        self.store.clearScratchSymbolMapEntriesFrom(top);
+        _ = try self.pushMalformed(AST.SymbolMapEntry.Idx, close_tag, self.pos);
+        return .{ .span = .{ .start = 0, .len = 0 } };
+    };
+    return try self.store.symbolMapEntrySpanFrom(top);
+}
+
 fn parsePlatformHeaderTokens(self: *Parser) Error!AST.Header.Idx {
     const start = self.pos;
     std.debug.assert(self.peek() == .KwPlatform);
@@ -1629,12 +1697,19 @@ fn parsePlatformHeaderTokens(self: *Parser) Error!AST.Header.Idx {
     self.expect(.KwProvides) catch {
         return try self.pushMalformed(AST.Header.Idx, .expected_provides, self.pos);
     };
-    const provides = try self.parseRecordFieldCollectionTokens(
-        self.pos,
-        .collection_record_fields,
+    const provides = try self.parseSymbolMapCollectionTokens(
         .expected_provides_open_curly,
         .expected_provides_close_curly,
     );
+
+    var hosted: AST.SymbolMapEntry.Span = .{ .span = .{ .start = 0, .len = 0 } };
+    if (self.peek() == .KwHosted) {
+        self.advance();
+        hosted = try self.parseSymbolMapCollectionTokens(
+            .expected_hosted_open_curly,
+            .expected_hosted_close_curly,
+        );
+    }
 
     var targets: ?AST.TargetsSection.Idx = null;
     if (self.peek() == .KwTargets) {
@@ -1648,6 +1723,7 @@ fn parsePlatformHeaderTokens(self: *Parser) Error!AST.Header.Idx {
         .exposes = exposes,
         .packages = packages,
         .provides = provides,
+        .hosted = hosted,
         .targets = targets,
         .region = .{ .start = start, .end = self.pos },
     } });

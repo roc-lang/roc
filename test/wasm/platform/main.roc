@@ -2,7 +2,7 @@ platform ""
     requires {} { main! : () => Str }
     exposes [Stdout]
     packages {}
-    provides { main_for_host!: "main" }
+    provides { "roc_main": main_for_host! }
     targets: {
         inputs: "targets/",
         wasm32: { inputs: ["host.wasm", app] },

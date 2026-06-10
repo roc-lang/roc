@@ -795,7 +795,7 @@ test "fromAST captures punned wasm identifier config" {
         \\    requires { main : {} }
         \\    exposes []
         \\    packages {}
-        \\    provides { main_for_host: "main" }
+        \\    provides { "roc_main": main_for_host }
         \\    targets: {
         \\        inputs: "targets/",
         \\        wasm32: {

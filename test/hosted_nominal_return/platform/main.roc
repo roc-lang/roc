@@ -2,7 +2,7 @@ platform ""
     requires {} { main! : () => {} }
     exposes [Effect]
     packages {}
-    provides { main_for_host!: "main" }
+    provides { "roc_main": main_for_host! }
     targets: {
         inputs: "../../fx/platform/targets/",
         arm64mac: { inputs: ["libhost.a", app] },
