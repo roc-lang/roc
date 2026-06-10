@@ -200,6 +200,7 @@ pub const RcAtomicity = enum(u1) {
     single_thread,
 };
 
+/// Why a `set_local` writes its target.
 pub const SetLocalWriteMode = enum {
     initialize_join_result,
     replace_existing,

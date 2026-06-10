@@ -40,7 +40,9 @@ const RocTarget = @import("roc_target").RocTarget;
 // Utils builtin functions for memory allocation and reference counting
 const allocateWithRefcountC = builtins.utils.allocateWithRefcountC;
 const increfDataPtrC = builtins.utils.increfDataPtrC;
+const increfDataPtrSingleThreadC = builtins.utils.increfDataPtrSingleThreadC;
 const decrefDataPtrC = builtins.utils.decrefDataPtrC;
+const decrefDataPtrSingleThreadC = builtins.utils.decrefDataPtrSingleThreadC;
 const freeDataPtrC = builtins.utils.freeDataPtrC;
 
 // List builtin functions - using C-compatible wrappers to avoid ABI issues
@@ -84,6 +86,26 @@ const LocalSpan = lir.LocalSpan;
 const LayoutStore = layout.Store;
 const RcOp = layout.RcOp;
 const RcHelperKey = layout.RcHelperKey;
+const RcAtomicity = lir.LIR.RcAtomicity;
+
+/// Identity of one compiled RC helper: the canonical layout plan plus the
+/// count-update atomicity the helper's own updates use. Atomic and
+/// single-thread helpers are compiled separately, so a helper's body never
+/// has to branch on atomicity at runtime. Helpers whose addresses cross a C
+/// function-pointer ABI (list/box teardown callbacks, erased-callable
+/// `on_drop`) always use the atomic variant, because those ABIs carry no
+/// atomicity parameter.
+const RcHelperVariant = struct {
+    key: RcHelperKey,
+    atomicity: RcAtomicity,
+
+    /// Pack the variant into a stable integer for the helper caches.
+    /// `RcHelperKey.encode` occupies bits 0..33, so the atomicity bit is
+    /// placed above it.
+    fn encode(self: RcHelperVariant) u64 {
+        return (@as(u64, @intFromEnum(self.atomicity)) << 34) | self.key.encode();
+    }
+};
 
 // Control flow statement types (for two-pass compilation)
 const CFStmtId = lir.CFStmtId;
@@ -129,7 +151,9 @@ pub const BuiltinFn = enum {
     // Memory/refcounting
     allocate_with_refcount,
     incref_data_ptr,
+    incref_data_ptr_single_thread,
     decref_data_ptr,
+    decref_data_ptr_single_thread,
     free_data_ptr,
 
     // String operations
@@ -166,6 +190,7 @@ pub const BuiltinFn = enum {
     list_prepend,
     list_sublist,
     list_incref,
+    list_incref_single_thread,
     list_drop_at,
     list_replace,
     list_swap,
@@ -173,13 +198,16 @@ pub const BuiltinFn = enum {
     list_release_excess_capacity,
     list_decref_str,
     list_decref_with,
+    list_decref_with_single_thread,
     list_decref_flat_list,
     list_free_with,
     list_free_flat_list,
     box_decref_with,
+    box_decref_with_single_thread,
     box_free_with,
     erased_callable_incref,
     erased_callable_decref,
+    erased_callable_decref_single_thread,
     erased_callable_free,
 
     // Numeric operations
@@ -225,7 +253,9 @@ pub const BuiltinFn = enum {
             // Memory/refcounting
             .allocate_with_refcount => "roc_builtins_allocate_with_refcount",
             .incref_data_ptr => "roc_builtins_incref_data_ptr",
+            .incref_data_ptr_single_thread => "roc_builtins_incref_data_ptr_single_thread",
             .decref_data_ptr => "roc_builtins_decref_data_ptr",
+            .decref_data_ptr_single_thread => "roc_builtins_decref_data_ptr_single_thread",
             .free_data_ptr => "roc_builtins_free_data_ptr",
 
             // String operations
@@ -262,6 +292,7 @@ pub const BuiltinFn = enum {
             .list_prepend => "roc_builtins_list_prepend",
             .list_sublist => "roc_builtins_list_sublist",
             .list_incref => "roc_builtins_list_incref",
+            .list_incref_single_thread => "roc_builtins_list_incref_single_thread",
             .list_drop_at => "roc_builtins_list_drop_at",
             .list_replace => "roc_builtins_list_replace",
             .list_swap => "roc_builtins_list_swap",
@@ -269,13 +300,16 @@ pub const BuiltinFn = enum {
             .list_release_excess_capacity => "roc_builtins_list_release_excess_capacity",
             .list_decref_str => "roc_builtins_list_decref_str",
             .list_decref_with => "roc_builtins_list_decref_with",
+            .list_decref_with_single_thread => "roc_builtins_list_decref_with_single_thread",
             .list_decref_flat_list => "roc_builtins_list_decref_flat_list",
             .list_free_with => "roc_builtins_list_free_with",
             .list_free_flat_list => "roc_builtins_list_free_flat_list",
             .box_decref_with => "roc_builtins_box_decref_with",
+            .box_decref_with_single_thread => "roc_builtins_box_decref_with_single_thread",
             .box_free_with => "roc_builtins_box_free_with",
             .erased_callable_incref => "roc_builtins_erased_callable_incref",
             .erased_callable_decref => "roc_builtins_erased_callable_decref",
+            .erased_callable_decref_single_thread => "roc_builtins_erased_callable_decref_single_thread",
             .erased_callable_free => "roc_builtins_erased_callable_free",
 
             // Numeric operations
@@ -624,7 +658,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// iteratively from this worklist (never via recursion): a helper body
         /// references its child helpers through pending refs and schedules them
         /// here, so deeply nested layouts never grow the native call stack.
-        rc_helper_worklist: std.ArrayList(RcHelperKey),
+        rc_helper_worklist: std.ArrayList(RcHelperVariant),
         /// RC helper keys already scheduled on the current worklist drain.
         rc_helper_scheduled: std.AutoHashMap(u64, void),
         /// Pending RC-helper address literals (ADR/LEA) awaiting offset resolution.
@@ -965,7 +999,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .stmt_locations = std.AutoHashMap(u32, usize).init(allocator),
                 .proc_registry = std.AutoHashMap(u32, CompiledProc).init(allocator),
                 .compiled_rc_helpers = std.AutoHashMap(u64, usize).init(allocator),
-                .rc_helper_worklist = std.ArrayList(RcHelperKey).empty,
+                .rc_helper_worklist = std.ArrayList(RcHelperVariant).empty,
                 .rc_helper_scheduled = std.AutoHashMap(u64, void).init(allocator),
                 .pending_rc_addrs = std.ArrayList(PendingRcRef).empty,
                 .pending_rc_calls = std.ArrayList(PendingRcRef).empty,
@@ -8056,19 +8090,19 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Schedule an RC helper for compilation on the current worklist drain.
         /// No-op if it is already compiled or already scheduled.
-        fn scheduleRcHelper(self: *Self, helper_key: RcHelperKey) Allocator.Error!void {
-            const cache_key = helper_key.encode();
+        fn scheduleRcHelper(self: *Self, helper: RcHelperVariant) Allocator.Error!void {
+            const cache_key = helper.encode();
             if (self.compiled_rc_helpers.contains(cache_key)) return;
             const gop = try self.rc_helper_scheduled.getOrPut(cache_key);
             if (gop.found_existing) return;
-            try self.rc_helper_worklist.append(self.allocator, helper_key);
+            try self.rc_helper_worklist.append(self.allocator, helper);
         }
 
         /// Emit a placeholder BL/CALL to an RC helper, resolved once the helper's
         /// compiled offset is known (see resolveRcHelperPending).
-        fn emitPendingRcCall(self: *Self, helper_key: RcHelperKey) Allocator.Error!void {
+        fn emitPendingRcCall(self: *Self, helper: RcHelperVariant) Allocator.Error!void {
             const call_site = self.codegen.currentOffset();
-            try self.pending_rc_calls.append(self.allocator, .{ .instr_offset = call_site, .target_key = helper_key.encode() });
+            try self.pending_rc_calls.append(self.allocator, .{ .instr_offset = call_site, .target_key = helper.encode() });
             if (comptime target.toCpuArch() == .aarch64) {
                 try self.codegen.emit.bl(0);
             } else {
@@ -8077,7 +8111,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Emit a placeholder PC-relative address literal for an RC helper.
-        fn emitPendingRcAddr(self: *Self, helper_key: RcHelperKey, dst_reg: GeneralReg) Allocator.Error!void {
+        fn emitPendingRcAddr(self: *Self, helper: RcHelperVariant, dst_reg: GeneralReg) Allocator.Error!void {
             const current = self.codegen.currentOffset();
             if (comptime target.toCpuArch() == .aarch64) {
                 try self.codegen.emit.adr(dst_reg, 0);
@@ -8086,7 +8120,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             } else {
                 try self.codegen.emit.leaRegRipRel(dst_reg, 0);
             }
-            try self.pending_rc_addrs.append(self.allocator, .{ .instr_offset = current, .target_key = helper_key.encode() });
+            try self.pending_rc_addrs.append(self.allocator, .{ .instr_offset = current, .target_key = helper.encode() });
         }
 
         /// Move pending RC refs emitted inside a body that shifted forward by a
@@ -8109,8 +8143,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.compiling_rc_helpers = true;
             defer self.compiling_rc_helpers = false;
 
-            while (self.rc_helper_worklist.pop()) |helper_key| {
-                _ = try self.compileSingleRcHelper(helper_key);
+            while (self.rc_helper_worklist.pop()) |helper| {
+                _ = try self.compileSingleRcHelper(helper);
             }
 
             for (self.pending_rc_calls.items) |ref| {
@@ -8130,7 +8164,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         fn emitCallRcHelperFromStackSlots(
             self: *Self,
-            helper_key: RcHelperKey,
+            helper: RcHelperVariant,
             ptr_slot: i32,
             count_slot: ?i32,
             roc_ops_slot: i32,
@@ -8138,7 +8172,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const arg0 = self.getArgumentRegister(0);
             try self.emitLoad(.w64, arg0, frame_ptr, ptr_slot);
 
-            switch (helper_key.op) {
+            switch (helper.key.op) {
                 .incref => {
                     const arg1 = self.getArgumentRegister(1);
                     const arg2 = self.getArgumentRegister(2);
@@ -8151,13 +8185,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
             }
 
-            try self.emitPendingRcCall(helper_key);
-            try self.scheduleRcHelper(helper_key);
+            try self.emitPendingRcCall(helper);
+            try self.scheduleRcHelper(helper);
         }
 
         fn emitRcHelperCallAtStackOffset(
             self: *Self,
-            helper_key: RcHelperKey,
+            helper: RcHelperVariant,
             base_offset: i32,
             count: u16,
         ) Allocator.Error!void {
@@ -8174,17 +8208,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitStore(.w64, frame_ptr, roc_ops_slot, roc_ops_reg);
             self.codegen.freeGeneral(ptr_reg);
 
-            switch (helper_key.op) {
+            switch (helper.key.op) {
                 .incref => {
                     const count_slot = self.codegen.allocStackSlot(8);
                     const count_reg = try self.allocTempGeneral();
                     try self.codegen.emitLoadImm(count_reg, count);
                     try self.emitStore(.w64, frame_ptr, count_slot, count_reg);
                     self.codegen.freeGeneral(count_reg);
-                    try self.emitCallRcHelperFromStackSlots(helper_key, ptr_slot, count_slot, roc_ops_slot);
+                    try self.emitCallRcHelperFromStackSlots(helper, ptr_slot, count_slot, roc_ops_slot);
                 },
                 .decref, .free => {
-                    try self.emitCallRcHelperFromStackSlots(helper_key, ptr_slot, null, roc_ops_slot);
+                    try self.emitCallRcHelperFromStackSlots(helper, ptr_slot, null, roc_ops_slot);
                 },
             }
 
@@ -8193,54 +8227,60 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         fn emitExplicitRcHelperCallForValue(
             self: *Self,
-            helper_key: RcHelperKey,
+            helper: RcHelperVariant,
             value_loc: ValueLocation,
             count: u16,
         ) Allocator.Error!void {
-            const helper_plan = self.layout_store.rcHelperPlan(helper_key);
+            const helper_plan = self.layout_store.rcHelperPlan(helper.key);
             if (helper_plan == .noop) {
                 if (builtin.mode == .Debug) {
-                    std.debug.panic("LIR/codegen invariant violated: explicit RC statement used noop helper for layout {d}", .{@intFromEnum(helper_key.layout_idx)});
+                    std.debug.panic("LIR/codegen invariant violated: explicit RC statement used noop helper for layout {d}", .{@intFromEnum(helper.key.layout_idx)});
                 }
                 unreachable;
             }
 
-            const layout_val = self.layout_store.getLayout(helper_key.layout_idx);
+            const layout_val = self.layout_store.getLayout(helper.key.layout_idx);
             const value_size = self.layout_store.layoutSizeAlign(layout_val).size;
             if (value_size == 0) {
                 if (builtin.mode == .Debug) {
-                    std.debug.panic("LIR/codegen invariant violated: explicit RC statement used zero-sized helper layout {d}", .{@intFromEnum(helper_key.layout_idx)});
+                    std.debug.panic("LIR/codegen invariant violated: explicit RC statement used zero-sized helper layout {d}", .{@intFromEnum(helper.key.layout_idx)});
                 }
                 unreachable;
             }
 
             const base_offset = try self.ensureValueOnStackForRc(value_loc, value_size);
-            try self.emitRcHelperCallAtStackOffset(helper_key, base_offset, count);
+            try self.emitRcHelperCallAtStackOffset(helper, base_offset, count);
         }
 
         fn emitRawRcHelperCallFromPtrReg(
             self: *Self,
-            helper_key: RcHelperKey,
+            helper: RcHelperVariant,
             ptr_reg: GeneralReg,
             count_slot: ?i32,
             roc_ops_slot: i32,
         ) Allocator.Error!void {
             const ptr_slot = self.codegen.allocStackSlot(8);
             try self.emitStore(.w64, frame_ptr, ptr_slot, ptr_reg);
-            try self.emitCallRcHelperFromStackSlots(helper_key, ptr_slot, count_slot, roc_ops_slot);
+            try self.emitCallRcHelperFromStackSlots(helper, ptr_slot, count_slot, roc_ops_slot);
         }
 
+        /// Materialize the address of an RC helper destined for a builtin's C
+        /// function-pointer parameter. That ABI carries no atomicity parameter,
+        /// so the helper is always the atomic variant.
         fn emitBuiltinInternalOptionalRcHelperAddress(
             self: *Self,
             op: RcOp,
             layout_idx: layout.Idx,
         ) Allocator.Error!?GeneralReg {
-            const helper_key = RcHelperKey{ .op = op, .layout_idx = layout_idx };
-            if (self.layout_store.rcHelperPlan(helper_key) == .noop) return null;
+            const helper = RcHelperVariant{
+                .key = .{ .op = op, .layout_idx = layout_idx },
+                .atomicity = .atomic,
+            };
+            if (self.layout_store.rcHelperPlan(helper.key) == .noop) return null;
 
             const callback_reg = try self.allocTempGeneral();
-            try self.emitPendingRcAddr(helper_key, callback_reg);
-            try self.scheduleRcHelper(helper_key);
+            try self.emitPendingRcAddr(helper, callback_reg);
+            try self.scheduleRcHelper(helper);
             try self.maybeDrainRcHelpers();
             return callback_reg;
         }
@@ -8270,6 +8310,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         fn emitBuiltinInternalRcHelperStrIncref(
             self: *Self,
+            builtin_fn: BuiltinFn,
+            fn_addr: usize,
             ptr_slot: i32,
             count_slot: i32,
             roc_ops_slot: i32,
@@ -8302,7 +8344,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try builder.addRegArg(data_ptr_reg);
             try builder.addMemArg(frame_ptr, count_slot);
             try builder.addMemArg(frame_ptr, roc_ops_slot);
-            try self.callBuiltin(&builder, @intFromPtr(&increfDataPtrC), .incref_data_ptr);
+            try self.callBuiltin(&builder, fn_addr, builtin_fn);
 
             self.codegen.patchJump(skip_patch, self.codegen.currentOffset());
         }
@@ -8350,6 +8392,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         fn emitBuiltinInternalRcHelperListIncref(
             self: *Self,
+            builtin_fn: BuiltinFn,
+            fn_addr: usize,
             list_plan: layout.RcListPlan,
             ptr_slot: i32,
             count_slot: i32,
@@ -8366,7 +8410,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try builder.addMemArg(frame_ptr, count_slot);
             try builder.addImmArg(@intFromBool(list_plan.child != null));
             try builder.addMemArg(frame_ptr, roc_ops_slot);
-            try self.callBuiltin(&builder, @intFromPtr(&dev_wrappers.roc_builtins_list_incref), .list_incref);
+            try self.callBuiltin(&builder, fn_addr, builtin_fn);
         }
 
         fn emitBuiltinInternalRcHelperListDrop(
@@ -8394,8 +8438,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitLoad(.w64, cap_reg, value_ptr_reg, 16);
 
             if (list_plan.child) |child_key| {
-                try self.emitPendingRcAddr(child_key, callback_reg);
-                try self.scheduleRcHelper(child_key);
+                // The element callback crosses the builtin's C function-pointer
+                // ABI, which carries no atomicity parameter, so it is always
+                // the atomic variant.
+                const child = RcHelperVariant{ .key = child_key, .atomicity = .atomic };
+                try self.emitPendingRcAddr(child, callback_reg);
+                try self.scheduleRcHelper(child);
             } else {
                 try self.codegen.emitLoadImm(callback_reg, 0);
             }
@@ -8413,6 +8461,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         fn emitBuiltinInternalRcHelperBoxIncref(
             self: *Self,
+            builtin_fn: BuiltinFn,
+            fn_addr: usize,
             ptr_slot: i32,
             count_slot: i32,
             roc_ops_slot: i32,
@@ -8429,7 +8479,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try builder.addRegArg(payload_reg);
             try builder.addMemArg(frame_ptr, count_slot);
             try builder.addMemArg(frame_ptr, roc_ops_slot);
-            try self.callBuiltin(&builder, @intFromPtr(&increfDataPtrC), .incref_data_ptr);
+            try self.callBuiltin(&builder, fn_addr, builtin_fn);
         }
 
         fn emitBuiltinInternalRcHelperBoxDrop(
@@ -8451,8 +8501,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitLoad(.w64, payload_reg, value_ptr_reg, 0);
 
             if (box_plan.child) |child_key| {
-                try self.emitPendingRcAddr(child_key, callback_reg);
-                try self.scheduleRcHelper(child_key);
+                // The payload callback crosses the builtin's C function-pointer
+                // ABI, which carries no atomicity parameter, so it is always
+                // the atomic variant.
+                const child = RcHelperVariant{ .key = child_key, .atomicity = .atomic };
+                try self.emitPendingRcAddr(child, callback_reg);
+                try self.scheduleRcHelper(child);
             } else {
                 try self.codegen.emitLoadImm(callback_reg, 0);
             }
@@ -8467,6 +8521,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         fn emitBuiltinInternalRcHelperErasedCallableIncref(
             self: *Self,
+            builtin_fn: BuiltinFn,
+            fn_addr: usize,
             ptr_slot: i32,
             count_slot: i32,
             roc_ops_slot: i32,
@@ -8483,7 +8539,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try builder.addRegArg(payload_reg);
             try builder.addMemArg(frame_ptr, count_slot);
             try builder.addMemArg(frame_ptr, roc_ops_slot);
-            try self.callBuiltin(&builder, @intFromPtr(&dev_wrappers.roc_builtins_erased_callable_incref), .erased_callable_incref);
+            try self.callBuiltin(&builder, fn_addr, builtin_fn);
         }
 
         fn emitBuiltinInternalRcHelperErasedCallableDrop(
@@ -8509,20 +8565,36 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         fn generateBuiltinInternalRcHelperBody(
             self: *Self,
-            helper_key: RcHelperKey,
+            helper: RcHelperVariant,
             ptr_slot: i32,
             count_slot: ?i32,
             roc_ops_slot: i32,
         ) Allocator.Error!void {
-            switch (self.layout_store.rcHelperPlan(helper_key)) {
+            // The helper's own count updates use the runtime entry matching its
+            // atomicity. `free` leaves deallocate without touching the count,
+            // so they have no single-thread counterpart. Child helpers reached
+            // by direct call propagate the atomicity; callbacks handed to
+            // builtins stay atomic (see emitBuiltinInternalRcHelperListDrop /
+            // BoxDrop).
+            const single_thread = helper.atomicity == .single_thread;
+            switch (self.layout_store.rcHelperPlan(helper.key)) {
                 .noop => {},
-                .str_incref => try self.emitBuiltinInternalRcHelperStrIncref(ptr_slot, count_slot.?, roc_ops_slot),
-                .str_decref => try self.emitBuiltinInternalRcHelperStrDrop(.decref_data_ptr, @intFromPtr(&decrefDataPtrC), ptr_slot, roc_ops_slot),
+                .str_incref => if (single_thread)
+                    try self.emitBuiltinInternalRcHelperStrIncref(.incref_data_ptr_single_thread, @intFromPtr(&increfDataPtrSingleThreadC), ptr_slot, count_slot.?, roc_ops_slot)
+                else
+                    try self.emitBuiltinInternalRcHelperStrIncref(.incref_data_ptr, @intFromPtr(&increfDataPtrC), ptr_slot, count_slot.?, roc_ops_slot),
+                .str_decref => if (single_thread)
+                    try self.emitBuiltinInternalRcHelperStrDrop(.decref_data_ptr_single_thread, @intFromPtr(&decrefDataPtrSingleThreadC), ptr_slot, roc_ops_slot)
+                else
+                    try self.emitBuiltinInternalRcHelperStrDrop(.decref_data_ptr, @intFromPtr(&decrefDataPtrC), ptr_slot, roc_ops_slot),
                 .str_free => try self.emitBuiltinInternalRcHelperStrDrop(.free_data_ptr, @intFromPtr(&freeDataPtrC), ptr_slot, roc_ops_slot),
-                .list_incref => |list_plan| try self.emitBuiltinInternalRcHelperListIncref(list_plan, ptr_slot, count_slot.?, roc_ops_slot),
+                .list_incref => |list_plan| if (single_thread)
+                    try self.emitBuiltinInternalRcHelperListIncref(.list_incref_single_thread, @intFromPtr(&dev_wrappers.roc_builtins_list_incref_single_thread), list_plan, ptr_slot, count_slot.?, roc_ops_slot)
+                else
+                    try self.emitBuiltinInternalRcHelperListIncref(.list_incref, @intFromPtr(&dev_wrappers.roc_builtins_list_incref), list_plan, ptr_slot, count_slot.?, roc_ops_slot),
                 .list_decref => |list_plan| try self.emitBuiltinInternalRcHelperListDrop(
-                    .list_decref_with,
-                    @intFromPtr(&dev_wrappers.roc_builtins_list_decref_with),
+                    if (single_thread) .list_decref_with_single_thread else .list_decref_with,
+                    if (single_thread) @intFromPtr(&dev_wrappers.roc_builtins_list_decref_with_single_thread) else @intFromPtr(&dev_wrappers.roc_builtins_list_decref_with),
                     list_plan,
                     ptr_slot,
                     roc_ops_slot,
@@ -8534,10 +8606,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     ptr_slot,
                     roc_ops_slot,
                 ),
-                .box_incref => try self.emitBuiltinInternalRcHelperBoxIncref(ptr_slot, count_slot.?, roc_ops_slot),
+                .box_incref => if (single_thread)
+                    try self.emitBuiltinInternalRcHelperBoxIncref(.incref_data_ptr_single_thread, @intFromPtr(&increfDataPtrSingleThreadC), ptr_slot, count_slot.?, roc_ops_slot)
+                else
+                    try self.emitBuiltinInternalRcHelperBoxIncref(.incref_data_ptr, @intFromPtr(&increfDataPtrC), ptr_slot, count_slot.?, roc_ops_slot),
                 .box_decref => |box_plan| try self.emitBuiltinInternalRcHelperBoxDrop(
-                    .box_decref_with,
-                    @intFromPtr(&dev_wrappers.roc_builtins_box_decref_with),
+                    if (single_thread) .box_decref_with_single_thread else .box_decref_with,
+                    if (single_thread) @intFromPtr(&dev_wrappers.roc_builtins_box_decref_with_single_thread) else @intFromPtr(&dev_wrappers.roc_builtins_box_decref_with),
                     box_plan,
                     ptr_slot,
                     roc_ops_slot,
@@ -8549,10 +8624,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     ptr_slot,
                     roc_ops_slot,
                 ),
-                .erased_callable_incref => try self.emitBuiltinInternalRcHelperErasedCallableIncref(ptr_slot, count_slot.?, roc_ops_slot),
+                // An erased callable's incref is exactly a data-pointer incref
+                // of its single allocation.
+                .erased_callable_incref => if (single_thread)
+                    try self.emitBuiltinInternalRcHelperErasedCallableIncref(.incref_data_ptr_single_thread, @intFromPtr(&increfDataPtrSingleThreadC), ptr_slot, count_slot.?, roc_ops_slot)
+                else
+                    try self.emitBuiltinInternalRcHelperErasedCallableIncref(.erased_callable_incref, @intFromPtr(&dev_wrappers.roc_builtins_erased_callable_incref), ptr_slot, count_slot.?, roc_ops_slot),
                 .erased_callable_decref => try self.emitBuiltinInternalRcHelperErasedCallableDrop(
-                    .erased_callable_decref,
-                    @intFromPtr(&dev_wrappers.roc_builtins_erased_callable_decref),
+                    if (single_thread) .erased_callable_decref_single_thread else .erased_callable_decref,
+                    if (single_thread) @intFromPtr(&dev_wrappers.roc_builtins_erased_callable_decref_single_thread) else @intFromPtr(&dev_wrappers.roc_builtins_erased_callable_decref),
                     ptr_slot,
                     roc_ops_slot,
                 ),
@@ -8572,7 +8652,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                         try self.emitLoad(.w64, field_ptr_reg, frame_ptr, ptr_slot);
                         try self.emitAddPtrImmAny(field_ptr_reg, field_ptr_reg, @intCast(field_plan.offset));
-                        try self.emitRawRcHelperCallFromPtrReg(field_plan.child, field_ptr_reg, count_slot, roc_ops_slot);
+                        try self.emitRawRcHelperCallFromPtrReg(
+                            .{ .key = field_plan.child, .atomicity = helper.atomicity },
+                            field_ptr_reg,
+                            count_slot,
+                            roc_ops_slot,
+                        );
                     }
                 },
                 .tag_union => |tag_plan| {
@@ -8584,7 +8669,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             const payload_reg = try self.allocTempGeneral();
                             defer self.codegen.freeGeneral(payload_reg);
                             try self.emitLoad(.w64, payload_reg, frame_ptr, ptr_slot);
-                            try self.emitRawRcHelperCallFromPtrReg(child_key, payload_reg, count_slot, roc_ops_slot);
+                            try self.emitRawRcHelperCallFromPtrReg(
+                                .{ .key = child_key, .atomicity = helper.atomicity },
+                                payload_reg,
+                                count_slot,
+                                roc_ops_slot,
+                            );
                         }
                         return;
                     }
@@ -8626,7 +8716,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         const payload_reg = try self.allocTempGeneral();
                         defer self.codegen.freeGeneral(payload_reg);
                         try self.emitLoad(.w64, payload_reg, frame_ptr, ptr_slot);
-                        try self.emitRawRcHelperCallFromPtrReg(child_key, payload_reg, count_slot, roc_ops_slot);
+                        try self.emitRawRcHelperCallFromPtrReg(
+                            .{ .key = child_key, .atomicity = helper.atomicity },
+                            payload_reg,
+                            count_slot,
+                            roc_ops_slot,
+                        );
                         try done_patches.append(self.allocator, try self.codegen.emitJump());
                         self.codegen.patchJump(skip_patch, self.codegen.currentOffset());
                     }
@@ -8640,21 +8735,26 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const captures_reg = try self.allocTempGeneral();
                     defer self.codegen.freeGeneral(captures_reg);
                     try self.emitLoad(.w64, captures_reg, frame_ptr, ptr_slot);
-                    try self.emitRawRcHelperCallFromPtrReg(child_key, captures_reg, count_slot, roc_ops_slot);
+                    try self.emitRawRcHelperCallFromPtrReg(
+                        .{ .key = child_key, .atomicity = helper.atomicity },
+                        captures_reg,
+                        count_slot,
+                        roc_ops_slot,
+                    );
                 },
             }
         }
 
-        fn compileSingleRcHelper(self: *Self, helper_key: RcHelperKey) Allocator.Error!usize {
-            const cache_key = helper_key.encode();
+        fn compileSingleRcHelper(self: *Self, helper: RcHelperVariant) Allocator.Error!usize {
+            const cache_key = helper.encode();
             if (self.compiled_rc_helpers.get(cache_key)) |code_offset| {
                 return code_offset;
             }
 
-            const helper_plan = self.layout_store.rcHelperPlan(helper_key);
+            const helper_plan = self.layout_store.rcHelperPlan(helper.key);
             if (helper_plan == .noop) {
                 if (builtin.mode == .Debug) {
-                    std.debug.panic("attempted to compile noop RC helper for layout {d}", .{@intFromEnum(helper_key.layout_idx)});
+                    std.debug.panic("attempted to compile noop RC helper for layout {d}", .{@intFromEnum(helper.key.layout_idx)});
                 }
                 unreachable;
             }
@@ -8711,7 +8811,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.codegen.emitStoreStack(.w64, ptr_slot, ptr_arg_reg);
 
             var count_slot: ?i32 = null;
-            switch (helper_key.op) {
+            switch (helper.key.op) {
                 .incref => {
                     const count_arg_reg = self.getArgumentRegister(1);
                     const roc_ops_arg_reg = self.getArgumentRegister(2);
@@ -8731,7 +8831,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.freeGeneral(ptr_reg);
             const early_return_patch = try self.emitJumpIfEqual();
 
-            try self.generateBuiltinInternalRcHelperBody(helper_key, ptr_slot, count_slot, roc_ops_slot);
+            try self.generateBuiltinInternalRcHelperBody(helper, ptr_slot, count_slot, roc_ops_slot);
 
             const body_epilogue_offset = self.codegen.currentOffset();
             {
@@ -9665,8 +9765,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     if (self.layout_store.rcHelperPlan(helper_key) == .noop) {
                         try self.codegen.emitLoadImm(on_drop_reg, 0);
                     } else {
-                        try self.emitPendingRcAddr(helper_key, on_drop_reg);
-                        try self.scheduleRcHelper(helper_key);
+                        // `on_drop` is a C function pointer whose ABI carries no
+                        // atomicity parameter, so it is always the atomic variant.
+                        const helper = RcHelperVariant{ .key = helper_key, .atomicity = .atomic };
+                        try self.emitPendingRcAddr(helper, on_drop_reg);
+                        try self.scheduleRcHelper(helper);
                         try self.maybeDrainRcHelpers();
                     }
                 },
@@ -11519,14 +11622,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Generate code for incref operation.
         fn generateIncref(self: *Self, rc_op: anytype) Allocator.Error!ValueLocation {
             const value_loc = try self.generateRcOperandValue(rc_op.value);
-            try self.emitExplicitRcHelperCallForValue(rc_op.rc, value_loc, rc_op.count);
+            try self.emitExplicitRcHelperCallForValue(.{ .key = rc_op.rc, .atomicity = rc_op.atomicity }, value_loc, rc_op.count);
             return value_loc;
         }
 
         /// Generate code for decref operation.
         fn generateDecref(self: *Self, rc_op: anytype) Allocator.Error!ValueLocation {
             const value_loc = try self.generateRcOperandValue(rc_op.value);
-            try self.emitExplicitRcHelperCallForValue(rc_op.rc, value_loc, 1);
+            try self.emitExplicitRcHelperCallForValue(.{ .key = rc_op.rc, .atomicity = rc_op.atomicity }, value_loc, 1);
             return value_loc;
         }
 
@@ -11558,7 +11661,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Generate code for free operation.
         fn generateFree(self: *Self, rc_op: anytype) Allocator.Error!ValueLocation {
             const value_loc = try self.generateRcOperandValue(rc_op.value);
-            try self.emitExplicitRcHelperCallForValue(rc_op.rc, value_loc, 1);
+            try self.emitExplicitRcHelperCallForValue(.{ .key = rc_op.rc, .atomicity = rc_op.atomicity }, value_loc, 1);
             return value_loc;
         }
 
@@ -13365,6 +13468,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 .value = inc.value,
                                 .rc = inc.rc,
                                 .count = inc.count,
+                                .atomicity = inc.atomicity,
                             });
                             try work.append(wa, .{ .node = inc.next });
                         },
@@ -13373,6 +13477,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             _ = try self.generateDecref(.{
                                 .value = dec.value,
                                 .rc = dec.rc,
+                                .atomicity = dec.atomicity,
                             });
                             try work.append(wa, .{ .node = dec.next });
                         },
@@ -13381,6 +13486,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             _ = try self.generateFree(.{
                                 .value = free_stmt.value,
                                 .rc = free_stmt.rc,
+                                .atomicity = free_stmt.atomicity,
                             });
                             try work.append(wa, .{ .node = free_stmt.next });
                         },

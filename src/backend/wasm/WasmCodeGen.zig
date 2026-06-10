@@ -6,6 +6,8 @@
 //!
 //! RC boundary:
 //! - explicit RC lowering happens through `generateRcStmt`
+//! - each RC statement's count-update atomicity selects which compiled helper
+//!   entry it reaches (see `rcHelperCacheKey`)
 //! - builtin/runtime helper implementations may perform primitive-internal RC
 //! - ordinary wasm lowering is forbidden from inventing ownership policy
 
@@ -21,6 +23,7 @@ const LIR = lir.LIR;
 const LirStore = lir.LirStore;
 const RcHelperKey = layout.RcHelperKey;
 const RcHelperPlan = layout.RcHelperPlan;
+const RcAtomicity = LIR.RcAtomicity;
 const RcListPlan = layout.ListPlan;
 const ProcLocalId = LIR.LocalId;
 const ProcLocalSpan = LIR.LocalSpan;
@@ -552,11 +555,13 @@ fn compileBuiltinInternalIncrefCallback(self: *Self, helper_key: RcHelperKey) Al
         );
     }
 
-    const helper_func_idx = try self.compileBuiltinInternalRcHelper(helper_key);
+    // Callbacks cross the C function-pointer ABI, which carries no statement
+    // atomicity; that boundary always uses the atomic helper family.
+    const helper_func_idx = try self.compileBuiltinInternalRcHelper(helper_key, .atomic);
     const type_idx = try self.internFuncType(&.{ .i32, .i64, .i32 }, &.{});
     const defined = self.module.addDefinedFunction(type_idx) catch return error.OutOfMemory;
     const func_idx = defined.function.raw();
-    _ = try self.addOwnedLocalFunctionSymbol(defined, "roc_rc_incref_callback", helper_key.encode());
+    _ = try self.addOwnedLocalFunctionSymbol(defined, "roc_rc_incref_callback", rcHelperCacheKey(helper_key, .atomic));
 
     const saved = try self.saveState();
 
@@ -594,12 +599,14 @@ fn builtinInternalRcHelperTableIndex(self: *Self, helper_key: RcHelperKey) Alloc
     const helper_plan = self.getLayoutStore().rcHelperPlan(helper_key);
     if (helper_plan == .noop) return 0;
 
-    const cache_key = helper_key.encode();
+    const cache_key = rcHelperCacheKey(helper_key, .atomic);
     if (self.rc_helper_table_indices.get(cache_key)) |table_idx| return table_idx;
 
+    // Table entries are handed across the C function-pointer ABI, which carries
+    // no statement atomicity; that boundary always uses the atomic helper family.
     const func_idx = switch (helper_key.op) {
         .incref => try self.compileBuiltinInternalIncrefCallback(helper_key),
-        .decref, .free => try self.compileBuiltinInternalRcHelper(helper_key),
+        .decref, .free => try self.compileBuiltinInternalRcHelper(helper_key, .atomic),
     };
     const table_idx = self.module.addTableElement(func_idx) catch return error.OutOfMemory;
     try self.rc_helper_table_indices.put(cache_key, table_idx);
@@ -1348,6 +1355,7 @@ fn emitProcLocal(self: *Self, value: ProcLocalId) Allocator.Error!void {
 fn emitExplicitRcForValueLocal(
     self: *Self,
     helper_key: RcHelperKey,
+    atomicity: RcAtomicity,
     value_local: u32,
     value_vt: ValType,
     inc_count: u16,
@@ -1368,7 +1376,7 @@ fn emitExplicitRcForValueLocal(
     const ls = self.getLayoutStore();
     const l = ls.getLayout(helper_key.layout_idx);
     if (try self.isCompositeLayout(helper_key.layout_idx)) {
-        try self.emitExplicitRcHelperCallForValuePtr(helper_key, value_local, inc_count);
+        try self.emitExplicitRcHelperCallForValuePtr(helper_key, atomicity, value_local, inc_count);
         return;
     }
 
@@ -1389,7 +1397,7 @@ fn emitExplicitRcForValueLocal(
     try self.emitLocalGet(value_local);
     try self.emitStoreOpSized(.i32, @intCast(size_align.size), 0);
 
-    try self.emitExplicitRcHelperCallForValuePtr(helper_key, ptr_local, inc_count);
+    try self.emitExplicitRcHelperCallForValuePtr(helper_key, atomicity, ptr_local, inc_count);
 }
 
 fn emitRawDirectRcPlan(
@@ -1526,6 +1534,7 @@ fn emitRawDirectRcPlan(
 fn emitExplicitRcHelperCallForValuePtr(
     self: *Self,
     helper_key: RcHelperKey,
+    atomicity: RcAtomicity,
     value_ptr_local: u32,
     inc_count: u16,
 ) Allocator.Error!void {
@@ -1539,7 +1548,7 @@ fn emitExplicitRcHelperCallForValuePtr(
     }
     if (try self.emitRawDirectRcPlan(helper_key, helper_plan, normalized_value_ptr, null)) return;
 
-    const helper_func_idx = try self.compileBuiltinInternalRcHelper(helper_key);
+    const helper_func_idx = try self.compileBuiltinInternalRcHelper(helper_key, atomicity);
     try self.emitLocalGet(normalized_value_ptr);
     switch (helper_key.op) {
         .incref => {
@@ -1921,6 +1930,7 @@ fn emitBuiltinInternalListElementDecrefsIfUnique(
     is_slice_local: u32,
     elem_width: usize,
     child_key: RcHelperKey,
+    atomicity: RcAtomicity,
 ) Allocator.Error!void {
     const elem_size: u32 = @intCast(elem_width);
     if (elem_size == 0) return;
@@ -1979,7 +1989,7 @@ fn emitBuiltinInternalListElementDecrefsIfUnique(
     self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
     try self.emitLocalSet(elem_ptr_local);
 
-    try self.emitRawRcHelperCallByKey(child_key, elem_ptr_local, null);
+    try self.emitRawRcHelperCallByKey(child_key, atomicity, elem_ptr_local, null);
 
     try self.emitLocalGet(idx_local);
     self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
@@ -2025,6 +2035,7 @@ fn emitBuiltinInternalListRc(
     list_ptr_local: u32,
     list_layout_idx: layout.Idx,
     list_plan: ?layout.RcListPlan,
+    atomicity: RcAtomicity,
     inc_count: u16,
 ) Allocator.Error!void {
     const list_abi = self.builtinInternalListAbi("wasm.emitBuiltinInternalListRc.builtin_list_abi", list_layout_idx);
@@ -2040,7 +2051,7 @@ fn emitBuiltinInternalListRc(
         .decref => {
             if (list_plan) |plan| {
                 if (plan.child) |child_key| {
-                    try self.emitBuiltinInternalListElementDecrefsIfUnique(list_ptr_local, alloc_ptr_local, is_slice_local, plan.elem_width, child_key);
+                    try self.emitBuiltinInternalListElementDecrefsIfUnique(list_ptr_local, alloc_ptr_local, is_slice_local, plan.elem_width, child_key, atomicity);
                 }
             }
             try self.emitDataPtrDecref(alloc_ptr_local, list_abi.elem_align, list_abi.elements_refcounted);
@@ -2048,7 +2059,7 @@ fn emitBuiltinInternalListRc(
         .free => {
             if (list_plan) |plan| {
                 if (plan.child) |child_key| {
-                    try self.emitBuiltinInternalListElementDecrefsIfUnique(list_ptr_local, alloc_ptr_local, is_slice_local, plan.elem_width, child_key);
+                    try self.emitBuiltinInternalListElementDecrefsIfUnique(list_ptr_local, alloc_ptr_local, is_slice_local, plan.elem_width, child_key, atomicity);
                 }
             }
             try self.emitDataPtrFree(alloc_ptr_local, list_abi.elem_align, list_abi.elements_refcounted);
@@ -2114,9 +2125,24 @@ fn emitBuiltinInternalStrRc(self: *Self, comptime kind: RcOpKind, str_ptr_local:
     self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
 }
 
+/// Cache identity of a compiled RC helper. The count-update atomicity an RC
+/// statement selects is part of the identity, so a `.single_thread` statement
+/// reaches a single-thread helper entry and never shares an `.atomic` one.
+/// On wasm both count-update families lower to the same plain i32
+/// load/store sequence (linear memory here is not shared and the module does
+/// not enable the atomics feature), so the modes differ only in which helper
+/// entry they reach. Helpers crossing the C function-pointer ABI (list element
+/// callbacks, erased on_drop slots) carry no statement atomicity and are
+/// always requested as `.atomic`.
+fn rcHelperCacheKey(helper_key: RcHelperKey, atomicity: RcAtomicity) u64 {
+    // RcHelperKey.encode() occupies bits 0..33 (layout index + op).
+    return helper_key.encode() | (@as(u64, @intFromEnum(atomicity)) << 34);
+}
+
 fn emitRawRcHelperCallByKey(
     self: *Self,
     helper_key: RcHelperKey,
+    atomicity: RcAtomicity,
     value_ptr_local: u32,
     count_local: ?u32,
 ) Allocator.Error!void {
@@ -2127,7 +2153,7 @@ fn emitRawRcHelperCallByKey(
     // This is only reached while emitting a compiled helper's body, where every
     // nested child helper slot has already been reserved by the compile driver, so
     // resolve the target from the cache instead of (re-)entering compilation.
-    const helper_func_idx = self.rcHelperFuncIdx(helper_key);
+    const helper_func_idx = self.rcHelperFuncIdx(helper_key, atomicity);
     try self.emitLocalGet(value_ptr_local);
     switch (helper_key.op) {
         .incref => {
@@ -2142,12 +2168,12 @@ fn emitRawRcHelperCallByKey(
 }
 
 /// Look up a previously-reserved RC helper's global function index.
-fn rcHelperFuncIdx(self: *Self, helper_key: RcHelperKey) u32 {
-    return self.rc_helper_funcs.get(helper_key.encode()) orelse {
+fn rcHelperFuncIdx(self: *Self, helper_key: RcHelperKey, atomicity: RcAtomicity) u32 {
+    return self.rc_helper_funcs.get(rcHelperCacheKey(helper_key, atomicity)) orelse {
         if (builtin.mode == .Debug) {
             std.debug.panic(
-                "WASM/codegen invariant violated: RC helper for layout {d} op {s} was not reserved before body emission",
-                .{ @intFromEnum(helper_key.layout_idx), @tagName(helper_key.op) },
+                "WASM/codegen invariant violated: RC helper for layout {d} op {s} atomicity {s} was not reserved before body emission",
+                .{ @intFromEnum(helper_key.layout_idx), @tagName(helper_key.op), @tagName(atomicity) },
             );
         }
         unreachable;
@@ -2158,6 +2184,7 @@ fn emitBuiltinInternalBoxChildDropIfUnique(
     self: *Self,
     box_ptr_local: u32,
     child_key: RcHelperKey,
+    atomicity: RcAtomicity,
 ) Allocator.Error!void {
     const rc_val = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
 
@@ -2177,7 +2204,7 @@ fn emitBuiltinInternalBoxChildDropIfUnique(
     self.currentCode().append(self.allocator, Op.br_if) catch return error.OutOfMemory;
     WasmModule.leb128WriteU32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
 
-    try self.emitRawRcHelperCallByKey(child_key, box_ptr_local, null);
+    try self.emitRawRcHelperCallByKey(child_key, atomicity, box_ptr_local, null);
 
     self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
 }
@@ -2246,6 +2273,7 @@ fn emitErasedCallableOnDrop(
 fn generateBuiltinInternalRcHelperBody(
     self: *Self,
     helper_key: RcHelperKey,
+    atomicity: RcAtomicity,
     value_ptr_local: u32,
     count_local: ?u32,
 ) Allocator.Error!void {
@@ -2267,8 +2295,8 @@ fn generateBuiltinInternalRcHelperBody(
         .str_decref => try self.emitBuiltinInternalStrRc(.decref, value_ptr_local, 1),
         .str_free => try self.emitBuiltinInternalStrRc(.free, value_ptr_local, 1),
         .list_incref => |list_plan| try self.emitBuiltinInternalListIncrefByLocal(value_ptr_local, helper_key.layout_idx, list_plan, count_local.?),
-        .list_decref => |list_plan| try self.emitBuiltinInternalListRc(.decref, value_ptr_local, helper_key.layout_idx, list_plan, 1),
-        .list_free => |list_plan| try self.emitBuiltinInternalListRc(.free, value_ptr_local, helper_key.layout_idx, list_plan, 1),
+        .list_decref => |list_plan| try self.emitBuiltinInternalListRc(.decref, value_ptr_local, helper_key.layout_idx, list_plan, atomicity, 1),
+        .list_free => |list_plan| try self.emitBuiltinInternalListRc(.free, value_ptr_local, helper_key.layout_idx, list_plan, atomicity, 1),
         .box_incref => {
             const box_ptr_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             try self.emitLocalGet(value_ptr_local);
@@ -2282,7 +2310,7 @@ fn generateBuiltinInternalRcHelperBody(
             try self.emitLoadOp(.i32, 0);
             try self.emitLocalSet(box_ptr_local);
             if (box_plan.child) |child_key| {
-                try self.emitBuiltinInternalBoxChildDropIfUnique(box_ptr_local, child_key);
+                try self.emitBuiltinInternalBoxChildDropIfUnique(box_ptr_local, child_key, atomicity);
             }
             try self.emitDataPtrDecref(box_ptr_local, box_plan.elem_alignment, box_plan.child != null);
         },
@@ -2292,7 +2320,7 @@ fn generateBuiltinInternalRcHelperBody(
             try self.emitLoadOp(.i32, 0);
             try self.emitLocalSet(box_ptr_local);
             if (box_plan.child) |child_key| {
-                try self.emitBuiltinInternalBoxChildDropIfUnique(box_ptr_local, child_key);
+                try self.emitBuiltinInternalBoxChildDropIfUnique(box_ptr_local, child_key, atomicity);
             }
             try self.emitDataPtrFree(box_ptr_local, box_plan.elem_alignment, box_plan.child != null);
         },
@@ -2340,7 +2368,7 @@ fn generateBuiltinInternalRcHelperBody(
                     self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
                 }
                 try self.emitLocalSet(field_ptr_local);
-                try self.emitRawRcHelperCallByKey(field_plan.child, field_ptr_local, count_local);
+                try self.emitRawRcHelperCallByKey(field_plan.child, atomicity, field_ptr_local, count_local);
             }
         },
         .tag_union => |tag_plan| {
@@ -2349,7 +2377,7 @@ fn generateBuiltinInternalRcHelperBody(
 
             if (variant_count == 1) {
                 if (self.getLayoutStore().rcHelperTagUnionVariantPlan(tag_plan, 0)) |child_key| {
-                    try self.emitRawRcHelperCallByKey(child_key, value_ptr_local, count_local);
+                    try self.emitRawRcHelperCallByKey(child_key, atomicity, value_ptr_local, count_local);
                 }
                 return;
             }
@@ -2380,7 +2408,7 @@ fn generateBuiltinInternalRcHelperBody(
                 self.currentCode().append(self.allocator, Op.br_if) catch return error.OutOfMemory;
                 WasmModule.leb128WriteU32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
 
-                try self.emitRawRcHelperCallByKey(child_key, value_ptr_local, count_local);
+                try self.emitRawRcHelperCallByKey(child_key, atomicity, value_ptr_local, count_local);
 
                 self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
             }
@@ -2390,7 +2418,7 @@ fn generateBuiltinInternalRcHelperBody(
             try self.emitLocalGet(value_ptr_local);
             try self.emitLoadOp(.i32, 0);
             try self.emitLocalSet(captures_ptr_local);
-            try self.emitRawRcHelperCallByKey(child_key, captures_ptr_local, count_local);
+            try self.emitRawRcHelperCallByKey(child_key, atomicity, captures_ptr_local, count_local);
         },
     }
 }
@@ -2448,7 +2476,7 @@ fn appendRcHelperChildKeys(self: *Self, helper_plan: RcHelperPlan, out: *std.Arr
 
 /// Reserve a module function slot for an RC helper (no body emitted yet), caching
 /// its global function index. Returns the reserved index.
-fn reserveRcHelperFunc(self: *Self, helper_key: RcHelperKey) Allocator.Error!u32 {
+fn reserveRcHelperFunc(self: *Self, helper_key: RcHelperKey, atomicity: RcAtomicity) Allocator.Error!u32 {
     const helper_plan = self.getLayoutStore().rcHelperPlan(helper_key);
     if (helper_plan == .noop) {
         if (builtin.mode == .Debug) {
@@ -2463,14 +2491,16 @@ fn reserveRcHelperFunc(self: *Self, helper_key: RcHelperKey) Allocator.Error!u32
     const type_idx = try self.internFuncType(param_types, &.{});
     const defined = self.module.addDefinedFunction(type_idx) catch return error.OutOfMemory;
     const func_idx = defined.function.raw();
-    const cache_key = helper_key.encode();
+    const cache_key = rcHelperCacheKey(helper_key, atomicity);
     try self.rc_helper_funcs.put(cache_key, func_idx);
     _ = try self.addOwnedLocalFunctionSymbol(defined, "roc_rc_helper", cache_key);
     return func_idx;
 }
 
 /// Compile an RC helper function (and transitively any nested child helpers it
-/// references) without recursion.
+/// references) without recursion. The whole compiled tree shares one
+/// count-update atomicity: nested values live inside the same allocation tree
+/// the root statement names, so child helpers inherit the root's mode.
 ///
 /// Compilation has two phases. First a pre-order traversal of the helper-plan DAG
 /// reserves a module function slot for every transitively-reachable helper that
@@ -2480,8 +2510,8 @@ fn reserveRcHelperFunc(self: *Self, helper_key: RcHelperKey) Allocator.Error!u32
 /// reserved helper's body is emitted; because every child slot is already reserved,
 /// body emission resolves child references from the cache without re-entering
 /// compilation. Both phases are driven by explicit heap-backed work stacks.
-fn compileBuiltinInternalRcHelper(self: *Self, helper_key: RcHelperKey) Allocator.Error!u32 {
-    if (self.rc_helper_funcs.get(helper_key.encode())) |func_idx| {
+fn compileBuiltinInternalRcHelper(self: *Self, helper_key: RcHelperKey, atomicity: RcAtomicity) Allocator.Error!u32 {
+    if (self.rc_helper_funcs.get(rcHelperCacheKey(helper_key, atomicity))) |func_idx| {
         return func_idx;
     }
 
@@ -2498,7 +2528,7 @@ fn compileBuiltinInternalRcHelper(self: *Self, helper_key: RcHelperKey) Allocato
     var children = std.ArrayList(RcHelperKey).empty;
     defer children.deinit(wa);
 
-    const root_func_idx = try self.reserveRcHelperFunc(helper_key);
+    const root_func_idx = try self.reserveRcHelperFunc(helper_key, atomicity);
     try to_emit.append(wa, helper_key);
     try reserve_stack.append(wa, helper_key);
 
@@ -2514,8 +2544,8 @@ fn compileBuiltinInternalRcHelper(self: *Self, helper_key: RcHelperKey) Allocato
             const child_key = children.items[i];
             const child_plan = self.getLayoutStore().rcHelperPlan(child_key);
             if (!rcPlanNeedsCompiledHelper(child_plan)) continue;
-            if (self.rc_helper_funcs.contains(child_key.encode())) continue;
-            _ = try self.reserveRcHelperFunc(child_key);
+            if (self.rc_helper_funcs.contains(rcHelperCacheKey(child_key, atomicity))) continue;
+            _ = try self.reserveRcHelperFunc(child_key, atomicity);
             try to_emit.append(wa, child_key);
             try reserve_stack.append(wa, child_key);
         }
@@ -2523,7 +2553,7 @@ fn compileBuiltinInternalRcHelper(self: *Self, helper_key: RcHelperKey) Allocato
 
     // Emit each reserved helper body. Child references resolve from the cache.
     for (to_emit.items) |key| {
-        try self.emitRcHelperBody(key);
+        try self.emitRcHelperBody(key, atomicity);
     }
 
     return root_func_idx;
@@ -2531,8 +2561,8 @@ fn compileBuiltinInternalRcHelper(self: *Self, helper_key: RcHelperKey) Allocato
 
 /// Emit the body of an already-reserved RC helper function. Child helper references
 /// resolve from `rc_helper_funcs` (reserved up front), so this never recurses.
-fn emitRcHelperBody(self: *Self, helper_key: RcHelperKey) Allocator.Error!void {
-    const func_idx = self.rc_helper_funcs.get(helper_key.encode()).?;
+fn emitRcHelperBody(self: *Self, helper_key: RcHelperKey, atomicity: RcAtomicity) Allocator.Error!void {
+    const func_idx = self.rc_helper_funcs.get(rcHelperCacheKey(helper_key, atomicity)).?;
     const defined_local = self.localFunctionIndexFromGlobal(func_idx);
 
     const param_types: []const ValType = switch (helper_key.op) {
@@ -2569,7 +2599,7 @@ fn emitRcHelperBody(self: *Self, helper_key: RcHelperKey) Allocator.Error!void {
     self.currentCode().append(self.allocator, Op.br_if) catch return error.OutOfMemory;
     WasmModule.leb128WriteU32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
 
-    try self.generateBuiltinInternalRcHelperBody(helper_key, value_ptr_local, count_local);
+    try self.generateBuiltinInternalRcHelperBody(helper_key, atomicity, value_ptr_local, count_local);
 
     self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
 
@@ -6711,15 +6741,15 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
             WasmModule.leb128WriteU32(self.allocator, self.currentCode(), br_target) catch return error.OutOfMemory;
         },
         .incref => |inc| {
-            try self.generateRcStmt(inc.value, inc.rc, inc.count);
+            try self.generateRcStmt(inc.value, inc.rc, inc.atomicity, inc.count);
             try work.append(wa, .{ .node = .{ .stmt_id = inc.next, .stop = stop } });
         },
         .decref => |dec| {
-            try self.generateRcStmt(dec.value, dec.rc, 1);
+            try self.generateRcStmt(dec.value, dec.rc, dec.atomicity, 1);
             try work.append(wa, .{ .node = .{ .stmt_id = dec.next, .stop = stop } });
         },
         .free => |free_stmt| {
-            try self.generateRcStmt(free_stmt.value, free_stmt.rc, 1);
+            try self.generateRcStmt(free_stmt.value, free_stmt.rc, free_stmt.atomicity, 1);
             try work.append(wa, .{ .node = .{ .stmt_id = free_stmt.next, .stop = stop } });
         },
         .runtime_error => {
@@ -7157,12 +7187,13 @@ fn generateRcStmt(
     self: *Self,
     value: ProcLocalId,
     rc: RcHelperKey,
+    atomicity: RcAtomicity,
     inc_count: u16,
 ) Allocator.Error!void {
     try self.emitProcLocal(value);
     const value_local = self.storage.allocAnonymousLocal(try self.procLocalValType(value)) catch return error.OutOfMemory;
     try self.emitLocalSet(value_local);
-    try self.emitExplicitRcForValueLocal(rc, value_local, try self.procLocalValType(value), inc_count);
+    try self.emitExplicitRcForValueLocal(rc, atomicity, value_local, try self.procLocalValType(value), inc_count);
 }
 
 fn listElemLayout(self: *Self, list_layout_idx: layout.Idx) layout.Idx {
@@ -7399,9 +7430,12 @@ fn erasedCallableOnDropTableIndex(self: *Self, on_drop: LIR.ErasedCallableOnDrop
         .none => 0,
         .rc_helper => |helper_key| blk: {
             if (self.getLayoutStore().rcHelperPlan(helper_key) == .noop) break :blk 0;
-            const cache_key = helper_key.encode();
+            // The on_drop slot is invoked through the C function-pointer ABI,
+            // which carries no statement atomicity; that boundary always uses
+            // the atomic helper family.
+            const cache_key = rcHelperCacheKey(helper_key, .atomic);
             if (self.rc_helper_table_indices.get(cache_key)) |table_idx| break :blk table_idx;
-            const func_idx = try self.compileBuiltinInternalRcHelper(helper_key);
+            const func_idx = try self.compileBuiltinInternalRcHelper(helper_key, .atomic);
             const table_idx = self.module.addTableElement(func_idx) catch return error.OutOfMemory;
             try self.rc_helper_table_indices.put(cache_key, table_idx);
             break :blk table_idx;

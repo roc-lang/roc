@@ -27,7 +27,9 @@ pub const rcNone = utils.rcNone;
 pub const copy_fallback = list.copy_fallback;
 pub const allocateWithRefcountC = utils.allocateWithRefcountC;
 pub const increfDataPtrC = utils.increfDataPtrC;
+pub const increfDataPtrSingleThreadC = utils.increfDataPtrSingleThreadC;
 pub const decrefDataPtrC = utils.decrefDataPtrC;
+pub const decrefDataPtrSingleThreadC = utils.decrefDataPtrSingleThreadC;
 pub const freeDataPtrC = utils.freeDataPtrC;
 pub const erasedCallableIncref = erased_callable.incref;
 pub const erasedCallableDecref = erased_callable.decref;
@@ -593,6 +595,20 @@ pub fn roc_builtins_list_incref(
     list.listIncref(l, amount, elements_refcounted, roc_ops);
 }
 
+/// Wrapper: incref a list whose allocation is proven thread-confined, so the
+/// count update may use plain loads and stores.
+pub fn roc_builtins_list_incref_single_thread(
+    list_bytes: ?[*]u8,
+    list_len: usize,
+    list_cap: usize,
+    amount: isize,
+    elements_refcounted: bool,
+    roc_ops: *RocOps,
+) callconv(.c) void {
+    const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
+    l.increfWithAtomicity(amount, elements_refcounted, .single_thread, roc_ops);
+}
+
 /// Wrapper: decref a List(Str), including decref of each string element when unique
 pub fn roc_builtins_list_decref_str(list_bytes: ?[*]u8, list_len: usize, list_cap: usize, roc_ops: *RocOps) callconv(.c) void {
     const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
@@ -660,6 +676,36 @@ pub fn roc_builtins_list_decref_with(
         );
     } else {
         decrefDataPtrC(l.getAllocationDataPtr(roc_ops), alignment, false, roc_ops);
+    }
+}
+
+/// Decref a list whose allocation is proven thread-confined: the list's own
+/// count update uses plain loads and stores. Element cleanup still runs through
+/// the `element_decref` C function pointer, whose ABI carries no atomicity
+/// parameter, so element-level count updates stay atomic.
+pub fn roc_builtins_list_decref_with_single_thread(
+    list_bytes: ?[*]u8,
+    list_len: usize,
+    list_cap: usize,
+    alignment: u32,
+    element_width: usize,
+    element_decref: ?RcDropFn,
+    roc_ops: *RocOps,
+) callconv(.c) void {
+    const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
+    if (element_decref) |callback| {
+        if (l.isUnique(roc_ops)) {
+            if (l.getAllocationDataPtr(roc_ops)) |source| {
+                const count = l.getAllocationElementCount(true, roc_ops);
+                var i: usize = 0;
+                while (i < count) : (i += 1) {
+                    callback(source + i * element_width, roc_ops);
+                }
+            }
+        }
+        utils.decref(l.getAllocationDataPtr(roc_ops), l.capacity_or_alloc_ptr, alignment, true, .single_thread, roc_ops);
+    } else {
+        decrefDataPtrSingleThreadC(l.getAllocationDataPtr(roc_ops), alignment, false, roc_ops);
     }
 }
 
@@ -740,6 +786,27 @@ pub fn roc_builtins_box_decref_with(
     decrefDataPtrC(payload_ptr, payload_alignment, payload_has_refcounted_children, roc_ops);
 }
 
+/// Decref a boxed payload whose allocation is proven thread-confined: the box's
+/// own count update uses plain loads and stores. Payload teardown still runs
+/// through the `payload_decref` C function pointer, whose ABI carries no
+/// atomicity parameter, so payload-level count updates stay atomic.
+pub fn roc_builtins_box_decref_with_single_thread(
+    payload_ptr: ?[*]u8,
+    payload_alignment: u32,
+    payload_decref: ?RcDropFn,
+    roc_ops: *RocOps,
+) callconv(.c) void {
+    const payload_has_refcounted_children = payload_decref != null;
+
+    if (payload_decref) |callback| {
+        if (utils.isUnique(payload_ptr, roc_ops)) {
+            callback(payload_ptr, roc_ops);
+        }
+    }
+
+    decrefDataPtrSingleThreadC(payload_ptr, payload_alignment, payload_has_refcounted_children, roc_ops);
+}
+
 /// Free a boxed payload and optionally run payload teardown first.
 pub fn roc_builtins_box_free_with(
     payload_ptr: ?[*]u8,
@@ -767,6 +834,27 @@ pub fn roc_builtins_erased_callable_decref(payload_ptr: ?[*]u8, roc_ops: *RocOps
     erased_callable.decref(payload_ptr, roc_ops);
 }
 
+/// Decref a boxed erased callable whose allocation is proven thread-confined:
+/// the callable's own count update uses plain loads and stores. The `on_drop`
+/// callback is a C function pointer whose ABI carries no atomicity parameter,
+/// so capture-level count updates behind it stay atomic.
+pub fn roc_builtins_erased_callable_decref_single_thread(payload_ptr: ?[*]u8, roc_ops: *RocOps) callconv(.c) void {
+    if (payload_ptr) |ptr| {
+        if (utils.isUnique(ptr, roc_ops)) {
+            const payload = erased_callable.payloadPtr(ptr);
+            if (payload.on_drop) |on_drop| {
+                on_drop(erased_callable.capturePtr(ptr), roc_ops);
+            }
+        }
+    }
+    decrefDataPtrSingleThreadC(
+        payload_ptr,
+        erased_callable.payload_alignment,
+        erased_callable.allocation_has_refcounted_children,
+        roc_ops,
+    );
+}
+
 /// Free a boxed erased callable payload pointer, running the payload's
 /// `on_drop` callback unconditionally first.
 pub fn roc_builtins_erased_callable_free(payload_ptr: ?[*]u8, roc_ops: *RocOps) callconv(.c) void {
@@ -787,9 +875,19 @@ pub fn roc_builtins_incref_data_ptr(ptr: ?[*]u8, amount: isize, roc_ops: *RocOps
     increfDataPtrC(ptr, amount, roc_ops);
 }
 
+/// Re-export increfDataPtrSingleThreadC
+pub fn roc_builtins_incref_data_ptr_single_thread(ptr: ?[*]u8, amount: isize, roc_ops: *RocOps) callconv(.c) void {
+    increfDataPtrSingleThreadC(ptr, amount, roc_ops);
+}
+
 /// Re-export decrefDataPtrC
 pub fn roc_builtins_decref_data_ptr(ptr: ?[*]u8, alignment: u32, elements_refcounted: bool, roc_ops: *RocOps) callconv(.c) void {
     decrefDataPtrC(ptr, alignment, elements_refcounted, roc_ops);
+}
+
+/// Re-export decrefDataPtrSingleThreadC
+pub fn roc_builtins_decref_data_ptr_single_thread(ptr: ?[*]u8, alignment: u32, elements_refcounted: bool, roc_ops: *RocOps) callconv(.c) void {
+    decrefDataPtrSingleThreadC(ptr, alignment, elements_refcounted, roc_ops);
 }
 
 /// Re-export freeDataPtrC

@@ -143,6 +143,8 @@ fn certifyRcAtomicity(
     }
 }
 
+/// Like `certifyStore`, but panics with a rendered failure context instead
+/// of returning `error.Certification`.
 pub fn certifyStoreOrPanic(
     allocator: Allocator,
     store: *const LirStore,
