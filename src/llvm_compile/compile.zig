@@ -151,6 +151,20 @@ fn recordModuleDefinitions(allocator: Allocator, module: *bindings.Module, defs:
     }
 }
 
+fn recordModuleDeclarations(allocator: Allocator, module: *bindings.Module, decls: *std.StringHashMap(void)) Error!void {
+    var func = module.getFirstFunction();
+    while (func) |value| : (func = value.getNextFunction()) {
+        if (!value.isDeclaration().toBool()) continue;
+        try recordValueName(allocator, decls, value);
+    }
+
+    var global = module.getFirstGlobal();
+    while (global) |value| : (global = value.getNextGlobal()) {
+        if (!value.isDeclaration().toBool()) continue;
+        try recordValueName(allocator, decls, value);
+    }
+}
+
 fn removeFunctionTargetAttrs(func: *bindings.Value) void {
     func.removeStringAttributeAtIndex(
         bindings.attribute_function_index,
@@ -188,6 +202,45 @@ fn cleanMergedBuiltinDefinitions(module: *bindings.Module, app_defs: *const std.
         if (app_defs.contains(valueName(value))) continue;
         value.setLinkage(bindings.internal_linkage);
     }
+}
+
+fn removeBuiltinUsedRoots(module: *bindings.Module) void {
+    if (module.getNamedGlobal("llvm.used")) |used| {
+        used.deleteGlobal();
+    }
+    if (module.getNamedGlobal("llvm.compiler.used")) |compiler_used| {
+        compiler_used.deleteGlobal();
+    }
+}
+
+fn pruneBuiltinModule(module: *bindings.Module, app_decls: *const std.StringHashMap(void)) void {
+    removeBuiltinUsedRoots(module);
+
+    var alias = module.getFirstGlobalAlias();
+    while (alias) |value| : (alias = value.getNextGlobalAlias()) {
+        if (!app_decls.contains(valueName(value))) {
+            value.setLinkage(bindings.internal_linkage);
+        }
+    }
+
+    var func = module.getFirstFunction();
+    while (func) |value| : (func = value.getNextFunction()) {
+        if (value.isDeclaration().toBool()) continue;
+        removeFunctionTargetAttrs(value);
+        if (!app_decls.contains(valueName(value))) {
+            value.setLinkage(bindings.internal_linkage);
+        }
+    }
+
+    var global = module.getFirstGlobal();
+    while (global) |value| : (global = value.getNextGlobal()) {
+        if (value.isDeclaration().toBool()) continue;
+        if (!app_decls.contains(valueName(value))) {
+            value.setLinkage(bindings.internal_linkage);
+        }
+    }
+
+    module.runGlobalDCE();
 }
 
 fn emitMergedBitcodeToObjectFile(
@@ -276,6 +329,14 @@ fn emitMergedBitcodeToObjectFile(
     }
     try recordModuleDefinitions(allocator, module, &app_defs);
 
+    var app_decls = std.StringHashMap(void).init(allocator);
+    defer {
+        var keys = app_decls.keyIterator();
+        while (keys.next()) |key| allocator.free(key.*);
+        app_decls.deinit();
+    }
+    try recordModuleDeclarations(allocator, module, &app_decls);
+
     // Load and merge builtin bitcode into the user module. Builtin definitions
     // remain real definitions so LLVM can inline and optimize them with the app.
     {
@@ -306,6 +367,7 @@ fn emitMergedBitcodeToObjectFile(
         } else {
             builtin_module.setDataLayout(module_data_layout);
         }
+        pruneBuiltinModule(builtin_module, &app_decls);
 
         // Link builtins into user module (destroys builtin_module on success)
         if (module.link(builtin_module).toBool()) {

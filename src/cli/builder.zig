@@ -175,6 +175,8 @@ const llvm_externs = if (llvm_available) struct {
     extern fn LLVMGetNextFunction(fn_val: ?*anyopaque) ?*anyopaque;
     extern fn LLVMGetFirstGlobal(module: ?*anyopaque) ?*anyopaque;
     extern fn LLVMGetNextGlobal(global: ?*anyopaque) ?*anyopaque;
+    extern fn LLVMGetNamedGlobal(module: ?*anyopaque, name: [*:0]const u8) ?*anyopaque;
+    extern fn LLVMDeleteGlobal(global: ?*anyopaque) void;
     extern fn LLVMGetValueName2(val: ?*anyopaque, len: *usize) [*]const u8;
     extern fn LLVMIsDeclaration(global: ?*anyopaque) c_int;
     extern fn LLVMSetLinkage(global: ?*anyopaque, linkage: c_int) void;
@@ -192,6 +194,7 @@ const llvm_externs = if (llvm_available) struct {
     // aren't a subset of the caller's. Strip them (the target machine still pins the
     // CPU/features at codegen) so the builtins become inlinable.
     extern fn LLVMRemoveStringAttributeAtIndex(fn_val: ?*anyopaque, idx: c_uint, name: [*]const u8, len: c_uint) void;
+    extern fn ZigLLVMRunGlobalDCE(module: ?*anyopaque) void;
 } else struct {};
 
 /// Embedded builtin bitcode. Stubbed out when LLVM is unavailable.
@@ -303,24 +306,39 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
             app_defs.deinit();
         }
 
+        var app_decls = std.StringHashMap(void).init(gpa);
+        defer {
+            var keys = app_decls.keyIterator();
+            while (keys.next()) |k| gpa.free(k.*);
+            app_decls.deinit();
+        }
+
         var pre_func = externs.LLVMGetFirstFunction(module);
         while (pre_func) |fv| : (pre_func = externs.LLVMGetNextFunction(fv)) {
-            if (externs.LLVMIsDeclaration(fv) != 0) continue;
             var name_len: usize = 0;
             const name_ptr = externs.LLVMGetValueName2(fv, &name_len);
-            const name = try gpa.dupe(u8, name_ptr[0..name_len]);
+            const name_slice = name_ptr[0..name_len];
+            const name = try gpa.dupe(u8, name_slice);
             errdefer gpa.free(name);
-            try app_defs.put(name, {});
+            if (externs.LLVMIsDeclaration(fv) != 0) {
+                try app_decls.put(name, {});
+            } else {
+                try app_defs.put(name, {});
+            }
         }
 
         var pre_global = externs.LLVMGetFirstGlobal(module);
         while (pre_global) |gv| : (pre_global = externs.LLVMGetNextGlobal(gv)) {
-            if (externs.LLVMIsDeclaration(gv) != 0) continue;
             var name_len: usize = 0;
             const name_ptr = externs.LLVMGetValueName2(gv, &name_len);
-            const name = try gpa.dupe(u8, name_ptr[0..name_len]);
+            const name_slice = name_ptr[0..name_len];
+            const name = try gpa.dupe(u8, name_slice);
             errdefer gpa.free(name);
-            try app_defs.put(name, {});
+            if (externs.LLVMIsDeclaration(gv) != 0) {
+                try app_decls.put(name, {});
+            } else {
+                try app_defs.put(name, {});
+            }
         }
 
         var pre_alias = externs.LLVMGetFirstGlobalAlias(module);
@@ -337,6 +355,46 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
         if (externs.LLVMParseBitcode2(bc_buf, &builtins_module) == 0) {
             externs.LLVMSetTarget(builtins_module, target_triple_z.ptr);
             externs.LLVMSetDataLayout(builtins_module, externs.LLVMGetDataLayoutStr(module));
+            if (externs.LLVMGetNamedGlobal(builtins_module, "llvm.used")) |used| {
+                externs.LLVMDeleteGlobal(used);
+            }
+            if (externs.LLVMGetNamedGlobal(builtins_module, "llvm.compiler.used")) |compiler_used| {
+                externs.LLVMDeleteGlobal(compiler_used);
+            }
+
+            var builtin_alias = externs.LLVMGetFirstGlobalAlias(builtins_module);
+            while (builtin_alias) |a| : (builtin_alias = externs.LLVMGetNextGlobalAlias(a)) {
+                var name_len: usize = 0;
+                const name_ptr = externs.LLVMGetValueName2(a, &name_len);
+                if (!app_decls.contains(name_ptr[0..name_len])) {
+                    externs.LLVMSetLinkage(a, LLVMInternalLinkage);
+                }
+            }
+
+            var builtin_func = externs.LLVMGetFirstFunction(builtins_module);
+            while (builtin_func) |fv| : (builtin_func = externs.LLVMGetNextFunction(fv)) {
+                if (externs.LLVMIsDeclaration(fv) != 0) continue;
+                externs.LLVMRemoveStringAttributeAtIndex(fv, LLVMAttributeFunctionIndex, "target-features", "target-features".len);
+                externs.LLVMRemoveStringAttributeAtIndex(fv, LLVMAttributeFunctionIndex, "target-cpu", "target-cpu".len);
+
+                var name_len: usize = 0;
+                const name_ptr = externs.LLVMGetValueName2(fv, &name_len);
+                if (!app_decls.contains(name_ptr[0..name_len])) {
+                    externs.LLVMSetLinkage(fv, LLVMInternalLinkage);
+                }
+            }
+
+            var builtin_global = externs.LLVMGetFirstGlobal(builtins_module);
+            while (builtin_global) |gv| : (builtin_global = externs.LLVMGetNextGlobal(gv)) {
+                if (externs.LLVMIsDeclaration(gv) != 0) continue;
+                var name_len: usize = 0;
+                const name_ptr = externs.LLVMGetValueName2(gv, &name_len);
+                if (!app_decls.contains(name_ptr[0..name_len])) {
+                    externs.LLVMSetLinkage(gv, LLVMInternalLinkage);
+                }
+            }
+
+            externs.ZigLLVMRunGlobalDCE(builtins_module);
             if (externs.LLVMLinkModules2(module, builtins_module) == 0) {
                 // Resolve @export aliases (clean builtin name -> dev_wrappers.* fn)
                 // so calls target the real function directly and can be inlined.

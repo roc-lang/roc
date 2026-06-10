@@ -101,6 +101,12 @@ pub const Module = opaque {
 
     pub const getFirstGlobalAlias = LLVMGetFirstGlobalAlias;
     extern fn LLVMGetFirstGlobalAlias(M: *Module) ?*Value;
+
+    pub const getNamedGlobal = LLVMGetNamedGlobal;
+    extern fn LLVMGetNamedGlobal(M: *Module, Name: [*:0]const u8) ?*Value;
+
+    pub const runGlobalDCE = ZigLLVMRunGlobalDCE;
+    extern fn ZigLLVMRunGlobalDCE(M: *Module) void;
 };
 
 /// Opaque handle to an LLVM value.
@@ -131,6 +137,9 @@ pub const Value = opaque {
 
     pub const removeStringAttributeAtIndex = LLVMRemoveStringAttributeAtIndex;
     extern fn LLVMRemoveStringAttributeAtIndex(FnVal: *Value, Idx: c_uint, Name: [*]const u8, Len: c_uint) void;
+
+    pub const deleteGlobal = LLVMDeleteGlobal;
+    extern fn LLVMDeleteGlobal(GlobalVar: *Value) void;
 };
 
 /// LLVM-C linkage value for `internal`: a local definition, never an exported

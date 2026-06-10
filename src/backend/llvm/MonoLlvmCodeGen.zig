@@ -3470,6 +3470,10 @@ pub const MonoLlvmCodeGen = struct {
         return builder.arrayType(sa.size / align_bytes, elem) catch return error.OutOfMemory;
     }
 
+    fn hostedIndirectArgUsesByval(self: *const MonoLlvmCodeGen) bool {
+        return self.abiTarget() == .x86_64_sysv;
+    }
+
     /// Emit a hosted-function call using the platform C ABI: small arguments and the return
     /// travel in registers per `abi.lower`, with `*RocOps` threaded only when the signature
     /// touches Roc-managed memory. `arg_ptrs` point at each argument's value bytes; the result
@@ -3535,8 +3539,10 @@ pub const MonoLlvmCodeGen = struct {
             switch (placement) {
                 .none => {},
                 .indirect => {
-                    const a_ty = try self.memoryLlvmTypeForLayout(builder, arg_layout);
-                    try attrs_wip.addParamAttr(param_types.items.len, .{ .byval = a_ty }, builder);
+                    if (self.hostedIndirectArgUsesByval()) {
+                        const a_ty = try self.memoryLlvmTypeForLayout(builder, arg_layout);
+                        try attrs_wip.addParamAttr(param_types.items.len, .{ .byval = a_ty }, builder);
+                    }
                     try param_types.append(self.allocator, ptr_ty);
                     try call_args.append(self.allocator, arg_ptr);
                 },

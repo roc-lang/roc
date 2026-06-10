@@ -4,9 +4,8 @@
 //! A `LoweredCall` says, for the return value and each argument, whether it travels in
 //! registers (and which bytes go in which register file) or "indirect" (memory). Each
 //! consumer interprets "indirect" for its own world:
-//!   - the LLVM backend emits a pointer parameter with the `byval`/`sret` attribute and lets
-//!     LLVM's target backend apply the per-target memory convention (stack copy on System V,
-//!     by-reference on AAPCS64);
+//!   - the LLVM backend emits a pointer parameter, adding `byval` only for targets whose C
+//!     ABI passes that memory-class argument as a stack copy rather than a pointer;
 //!   - the dev backend and the interpreter's call trampoline place the bytes in the stack
 //!     argument area or pass a pointer to a copy, per the target.
 //!
