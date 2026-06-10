@@ -218,6 +218,12 @@ pub const BuiltinFn = enum {
     float_floor,
     float_ceiling,
     float_pow,
+    float_sin,
+    float_cos,
+    float_tan,
+    float_asin,
+    float_acos,
+    float_atan,
     int_from_str,
     dec_from_str,
     float_from_str,
@@ -317,6 +323,12 @@ pub const BuiltinFn = enum {
             .float_floor => "roc_builtins_float_floor",
             .float_ceiling => "roc_builtins_float_ceiling",
             .float_pow => "roc_builtins_float_pow",
+            .float_sin => "roc_builtins_float_sin",
+            .float_cos => "roc_builtins_float_cos",
+            .float_tan => "roc_builtins_float_tan",
+            .float_asin => "roc_builtins_float_asin",
+            .float_acos => "roc_builtins_float_acos",
+            .float_atan => "roc_builtins_float_atan",
             .int_from_str => "roc_builtins_int_from_str",
             .dec_from_str => "roc_builtins_dec_from_str",
             .float_from_str => "roc_builtins_float_from_str",
@@ -3519,6 +3531,23 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .float_pow,
                     );
                 },
+                .num_sin,
+                .num_cos,
+                .num_tan,
+                .num_asin,
+                .num_acos,
+                .num_atan,
+                => {
+                    if (args.len != 1) unreachable;
+                    const math_builtin = floatUnaryMathBuiltin(ll.op);
+                    const src_loc = try self.emitValueLocal(args[0]);
+                    return self.callFloatUnaryBuiltin(
+                        src_loc,
+                        ll.ret_layout,
+                        math_builtin.addr,
+                        math_builtin.func,
+                    );
+                },
                 .num_floor => {
                     if (args.len != 1) unreachable;
                     const src_loc = try self.emitValueLocal(args[0]);
@@ -5784,6 +5813,23 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
             }
             return .{ .float_reg = result_reg };
+        }
+
+        const FloatUnaryMathBuiltin = struct {
+            addr: usize,
+            func: BuiltinFn,
+        };
+
+        fn floatUnaryMathBuiltin(op: lir.LowLevel) FloatUnaryMathBuiltin {
+            return switch (op) {
+                .num_sin => .{ .addr = @intFromPtr(&dev_wrappers.roc_builtins_float_sin), .func = .float_sin },
+                .num_cos => .{ .addr = @intFromPtr(&dev_wrappers.roc_builtins_float_cos), .func = .float_cos },
+                .num_tan => .{ .addr = @intFromPtr(&dev_wrappers.roc_builtins_float_tan), .func = .float_tan },
+                .num_asin => .{ .addr = @intFromPtr(&dev_wrappers.roc_builtins_float_asin), .func = .float_asin },
+                .num_acos => .{ .addr = @intFromPtr(&dev_wrappers.roc_builtins_float_acos), .func = .float_acos },
+                .num_atan => .{ .addr = @intFromPtr(&dev_wrappers.roc_builtins_float_atan), .func = .float_atan },
+                else => unreachable,
+            };
         }
 
         fn callFloatBinaryBuiltin(self: *Self, lhs_loc: ValueLocation, rhs_loc: ValueLocation, ret_layout: layout.Idx, fn_addr: usize, builtin_fn: BuiltinFn) Allocator.Error!ValueLocation {

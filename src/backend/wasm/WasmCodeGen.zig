@@ -309,6 +309,18 @@ int_to_str_import: ?u32 = null,
 float_to_str_import: ?u32 = null,
 /// Wasm function index for imported roc_float_pow host function.
 float_pow_import: ?u32 = null,
+/// Wasm function index for imported roc_float_sin host function.
+float_sin_import: ?u32 = null,
+/// Wasm function index for imported roc_float_cos host function.
+float_cos_import: ?u32 = null,
+/// Wasm function index for imported roc_float_tan host function.
+float_tan_import: ?u32 = null,
+/// Wasm function index for imported roc_float_asin host function.
+float_asin_import: ?u32 = null,
+/// Wasm function index for imported roc_float_acos host function.
+float_acos_import: ?u32 = null,
+/// Wasm function index for imported roc_float_atan host function.
+float_atan_import: ?u32 = null,
 /// Wasm function index for imported roc_str_escape_and_quote host function.
 str_escape_and_quote_import: ?u32 = null,
 /// Wasm function index for imported roc_u128_to_dec host function.
@@ -975,6 +987,17 @@ fn registerHostImports(self: *Self) Allocator.Error!void {
         &.{.f64},
     );
     self.float_pow_import = try self.module.addImport("env", "roc_float_pow", float_pow_type);
+
+    const float_unary_type = try self.module.addFuncType(
+        &.{ .f64, .i32 },
+        &.{.f64},
+    );
+    self.float_sin_import = try self.module.addImport("env", "roc_float_sin", float_unary_type);
+    self.float_cos_import = try self.module.addImport("env", "roc_float_cos", float_unary_type);
+    self.float_tan_import = try self.module.addImport("env", "roc_float_tan", float_unary_type);
+    self.float_asin_import = try self.module.addImport("env", "roc_float_asin", float_unary_type);
+    self.float_acos_import = try self.module.addImport("env", "roc_float_acos", float_unary_type);
+    self.float_atan_import = try self.module.addImport("env", "roc_float_atan", float_unary_type);
 
     const str_escape_and_quote_type = try self.module.addFuncType(
         &.{ .i32, .i32 },
@@ -8554,6 +8577,24 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         .num_pow => {
             try self.emitFloatPow(args, ll.ret_layout);
         },
+        .num_sin => {
+            try self.emitFloatUnaryMath(args[0], ll.ret_layout, .float_sin, self.float_sin_import);
+        },
+        .num_cos => {
+            try self.emitFloatUnaryMath(args[0], ll.ret_layout, .float_cos, self.float_cos_import);
+        },
+        .num_tan => {
+            try self.emitFloatUnaryMath(args[0], ll.ret_layout, .float_tan, self.float_tan_import);
+        },
+        .num_asin => {
+            try self.emitFloatUnaryMath(args[0], ll.ret_layout, .float_asin, self.float_asin_import);
+        },
+        .num_acos => {
+            try self.emitFloatUnaryMath(args[0], ll.ret_layout, .float_acos, self.float_acos_import);
+        },
+        .num_atan => {
+            try self.emitFloatUnaryMath(args[0], ll.ret_layout, .float_atan, self.float_atan_import);
+        },
         .num_sqrt => {
             try self.emitProcLocal(args[0]);
             const vt = try self.resolveValType(ll.ret_layout);
@@ -12517,6 +12558,27 @@ fn emitFloatPow(self: *Self, args: []const ProcLocalId, ret_layout: layout.Idx) 
     }
     try self.emitI32Const(if (is_f32) 4 else 8);
     try self.emitBuiltinCall(.float_pow, self.float_pow_import);
+    if (is_f32) {
+        self.currentCode().append(self.allocator, Op.f32_demote_f64) catch return error.OutOfMemory;
+    }
+}
+
+fn emitFloatUnaryMath(self: *Self, arg: ProcLocalId, ret_layout: layout.Idx, kind: BuiltinKind, host_import: ?u32) Allocator.Error!void {
+    const is_f32 = switch (ret_layout) {
+        .f32 => true,
+        .f64 => false,
+        else => wasmInvariantFmt(
+            "WASM/codegen invariant violated: {s} received non-float return layout {s}",
+            .{ @tagName(kind), @tagName(ret_layout) },
+        ),
+    };
+
+    try self.emitProcLocal(arg);
+    if (is_f32) {
+        self.currentCode().append(self.allocator, Op.f64_promote_f32) catch return error.OutOfMemory;
+    }
+    try self.emitI32Const(if (is_f32) 4 else 8);
+    try self.emitBuiltinCall(kind, host_import);
     if (is_f32) {
         self.currentCode().append(self.allocator, Op.f32_demote_f64) catch return error.OutOfMemory;
     }

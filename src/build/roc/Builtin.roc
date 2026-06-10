@@ -10230,6 +10230,48 @@ Builtin :: [].{
 			pow : F32, F32 -> F32
 			pow = |base, exponent| f32_pow_unsafe(base, exponent)
 
+			## Return the sine of an [F32] angle in radians.
+			## ```roc
+			## expect F32.sin(0.0).to_str() == "0"
+			## ```
+			sin : F32 -> F32
+			sin = |self| f32_sin_unsafe(self)
+
+			## Return the cosine of an [F32] angle in radians.
+			## ```roc
+			## expect F32.cos(0.0).to_str() == "1"
+			## ```
+			cos : F32 -> F32
+			cos = |self| f32_cos_unsafe(self)
+
+			## Return the tangent of an [F32] angle in radians.
+			## ```roc
+			## expect F32.tan(0.0).to_str() == "0"
+			## ```
+			tan : F32 -> F32
+			tan = |self| f32_tan_unsafe(self)
+
+			## Return the arcsine of an [F32] value in radians.
+			## ```roc
+			## expect F32.asin(0.0).to_str() == "0"
+			## ```
+			asin : F32 -> F32
+			asin = |self| f32_asin_unsafe(self)
+
+			## Return the arccosine of an [F32] value in radians.
+			## ```roc
+			## expect F32.acos(1.0).to_str() == "0"
+			## ```
+			acos : F32 -> F32
+			acos = |self| f32_acos_unsafe(self)
+
+			## Return the arctangent of an [F32] value in radians.
+			## ```roc
+			## expect F32.atan(0.0).to_str() == "0"
+			## ```
+			atan : F32 -> F32
+			atan = |self| f32_atan_unsafe(self)
+
 			## Add two [F32] values. Addition is subject to IEEE 754 rounding; the
 			## result may be `inf`, `-inf`, or `NaN`.
 			## ```roc
@@ -11050,6 +11092,48 @@ Builtin :: [].{
 			## ```
 			pow : F64, F64 -> F64
 			pow = |base, exponent| f64_pow_unsafe(base, exponent)
+
+			## Return the sine of an [F64] angle in radians.
+			## ```roc
+			## expect F64.sin(0.0).to_str() == "0"
+			## ```
+			sin : F64 -> F64
+			sin = |self| f64_sin_unsafe(self)
+
+			## Return the cosine of an [F64] angle in radians.
+			## ```roc
+			## expect F64.cos(0.0).to_str() == "1"
+			## ```
+			cos : F64 -> F64
+			cos = |self| f64_cos_unsafe(self)
+
+			## Return the tangent of an [F64] angle in radians.
+			## ```roc
+			## expect F64.tan(0.0).to_str() == "0"
+			## ```
+			tan : F64 -> F64
+			tan = |self| f64_tan_unsafe(self)
+
+			## Return the arcsine of an [F64] value in radians.
+			## ```roc
+			## expect F64.asin(0.0).to_str() == "0"
+			## ```
+			asin : F64 -> F64
+			asin = |self| f64_asin_unsafe(self)
+
+			## Return the arccosine of an [F64] value in radians.
+			## ```roc
+			## expect F64.acos(1.0).to_str() == "0"
+			## ```
+			acos : F64 -> F64
+			acos = |self| f64_acos_unsafe(self)
+
+			## Return the arctangent of an [F64] value in radians.
+			## ```roc
+			## expect F64.atan(0.0).to_str() == "0"
+			## ```
+			atan : F64 -> F64
+			atan = |self| f64_atan_unsafe(self)
 
 			## Add two [F64] values. Addition is subject to IEEE 754 rounding; the
 			## result may be `inf`, `-inf`, or `NaN`.
@@ -12371,6 +12455,18 @@ f32_sqrt_unsafe : F32 -> F32
 
 f32_pow_unsafe : F32, F32 -> F32
 
+f32_sin_unsafe : F32 -> F32
+
+f32_cos_unsafe : F32 -> F32
+
+f32_tan_unsafe : F32 -> F32
+
+f32_asin_unsafe : F32 -> F32
+
+f32_acos_unsafe : F32 -> F32
+
+f32_atan_unsafe : F32 -> F32
+
 f64_to_i8_try_unsafe : F64 -> { success : U8, val_or_memory_garbage : I8 }
 
 f64_to_i16_try_unsafe : F64 -> { success : U8, val_or_memory_garbage : I16 }
@@ -12400,3 +12496,15 @@ f64_ceiling_unsafe : F64 -> F64
 f64_sqrt_unsafe : F64 -> F64
 
 f64_pow_unsafe : F64, F64 -> F64
+
+f64_sin_unsafe : F64 -> F64
+
+f64_cos_unsafe : F64 -> F64
+
+f64_tan_unsafe : F64 -> F64
+
+f64_asin_unsafe : F64 -> F64
+
+f64_acos_unsafe : F64 -> F64
+
+f64_atan_unsafe : F64 -> F64

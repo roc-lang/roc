@@ -1050,6 +1050,12 @@ pub const MonoLlvmCodeGen = struct {
             .num_abs_diff => try self.emitNumericAbsDiff(target, arg_locals),
             .num_pow => try self.emitNumericFloatBinaryIntrinsic(target, arg_locals, .pow),
             .num_sqrt => try self.emitNumericSqrt(target, arg_locals[0]),
+            .num_sin => try self.emitNumericFloatUnaryBuiltin(target, arg_locals[0], "roc_builtins_float_sin"),
+            .num_cos => try self.emitNumericFloatUnaryBuiltin(target, arg_locals[0], "roc_builtins_float_cos"),
+            .num_tan => try self.emitNumericFloatUnaryBuiltin(target, arg_locals[0], "roc_builtins_float_tan"),
+            .num_asin => try self.emitNumericFloatUnaryBuiltin(target, arg_locals[0], "roc_builtins_float_asin"),
+            .num_acos => try self.emitNumericFloatUnaryBuiltin(target, arg_locals[0], "roc_builtins_float_acos"),
+            .num_atan => try self.emitNumericFloatUnaryBuiltin(target, arg_locals[0], "roc_builtins_float_atan"),
             .num_floor => try self.emitNumericFloatUnaryIntrinsic(target, arg_locals[0], .floor),
             .num_ceiling => try self.emitNumericFloatUnaryIntrinsic(target, arg_locals[0], .ceil),
             .list_len => try self.storeIntToLayout(self.slot(target).ptr, try self.loadUsize(try self.offsetPtr(self.slot(arg_locals[0]).ptr, self.rocListLenOffset())), self.localLayout(target)),
@@ -1835,6 +1841,27 @@ pub const MonoLlvmCodeGen = struct {
             &.{value},
             "",
         ) catch return error.OutOfMemory;
+        try self.storeScalar(self.slot(target).ptr, target_layout, result);
+    }
+
+    fn emitNumericFloatUnaryBuiltin(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId, name: []const u8) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const target_layout = self.localLayout(target);
+        const value = try self.coerceScalar(try self.loadScalar(self.slot(arg).ptr, self.localLayout(arg)), .double, false);
+        const width: u8 = switch (target_layout) {
+            .f32 => 4,
+            .f64 => 8,
+            else => return error.UnsupportedLowLevel,
+        };
+        const result = try self.callBuiltin(
+            name,
+            .double,
+            &.{ .double, .i8 },
+            &.{
+                value,
+                builder.intValue(.i8, width) catch return error.OutOfMemory,
+            },
+        );
         try self.storeScalar(self.slot(target).ptr, target_layout, result);
     }
 

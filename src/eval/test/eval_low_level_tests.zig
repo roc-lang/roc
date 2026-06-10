@@ -137,6 +137,34 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "True" },
     },
     .{
+        .name = "low_level - F32 trig",
+        .source =
+        \\{
+        \\F32.sin(0.0).to_str() == "0"
+        \\    and F32.cos(0.0).to_str() == "1"
+        \\    and F32.tan(0.0).to_str() == "0"
+        \\    and F32.asin(0.0).to_str() == "0"
+        \\    and F32.acos(1.0).to_str() == "0"
+        \\    and F32.atan(0.0).to_str() == "0"
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - F64 trig",
+        .source =
+        \\{
+        \\F64.sin(0.0).to_str() == "0"
+        \\    and F64.cos(0.0).to_str() == "1"
+        \\    and F64.tan(0.0).to_str() == "0"
+        \\    and F64.asin(0.0).to_str() == "0"
+        \\    and F64.acos(1.0).to_str() == "0"
+        \\    and F64.atan(0.0).to_str() == "0"
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
         .name = "low_level - F32 rounding to integers",
         .source =
         \\{

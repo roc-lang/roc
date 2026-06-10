@@ -1313,6 +1313,61 @@ pub fn roc_builtins_float_pow(base: f64, exponent: f64, float_width: u8) callcon
     };
 }
 
+const FloatUnaryMathOp = enum {
+    sin,
+    cos,
+    tan,
+    asin,
+    acos,
+    atan,
+};
+
+fn floatUnaryMath(val: f64, float_width: u8, comptime op: FloatUnaryMathOp) f64 {
+    return switch (float_width) {
+        4 => @as(f64, @floatCast(switch (op) {
+            .sin => std.math.sin(@as(f32, @floatCast(val))),
+            .cos => std.math.cos(@as(f32, @floatCast(val))),
+            .tan => std.math.tan(@as(f32, @floatCast(val))),
+            .asin => std.math.asin(@as(f32, @floatCast(val))),
+            .acos => std.math.acos(@as(f32, @floatCast(val))),
+            .atan => std.math.atan(@as(f32, @floatCast(val))),
+        })),
+        8 => switch (op) {
+            .sin => std.math.sin(val),
+            .cos => std.math.cos(val),
+            .tan => std.math.tan(val),
+            .asin => std.math.asin(val),
+            .acos => std.math.acos(val),
+            .atan => std.math.atan(val),
+        },
+        else => unreachable,
+    };
+}
+
+pub fn roc_builtins_float_sin(val: f64, float_width: u8) callconv(.c) f64 {
+    return floatUnaryMath(val, float_width, .sin);
+}
+
+pub fn roc_builtins_float_cos(val: f64, float_width: u8) callconv(.c) f64 {
+    return floatUnaryMath(val, float_width, .cos);
+}
+
+pub fn roc_builtins_float_tan(val: f64, float_width: u8) callconv(.c) f64 {
+    return floatUnaryMath(val, float_width, .tan);
+}
+
+pub fn roc_builtins_float_asin(val: f64, float_width: u8) callconv(.c) f64 {
+    return floatUnaryMath(val, float_width, .asin);
+}
+
+pub fn roc_builtins_float_acos(val: f64, float_width: u8) callconv(.c) f64 {
+    return floatUnaryMath(val, float_width, .acos);
+}
+
+pub fn roc_builtins_float_atan(val: f64, float_width: u8) callconv(.c) f64 {
+    return floatUnaryMath(val, float_width, .atan);
+}
+
 test "float floor and ceiling wrappers" {
     try std.testing.expectEqual(@as(f64, 3.0), roc_builtins_float_floor(3.9, 4));
     try std.testing.expectEqual(@as(f64, -4.0), roc_builtins_float_floor(-3.2, 4));
@@ -1331,6 +1386,17 @@ test "float pow wrapper" {
 
     try std.testing.expectEqual(@as(f64, 8.0), roc_builtins_float_pow(2.0, 3.0, 8));
     try std.testing.expectEqual(@as(f64, 3.0), roc_builtins_float_pow(9.0, 0.5, 8));
+}
+
+test "float trig wrappers" {
+    inline for (.{ @as(u8, 4), @as(u8, 8) }) |width| {
+        try std.testing.expectEqual(@as(f64, 0.0), roc_builtins_float_sin(0.0, width));
+        try std.testing.expectEqual(@as(f64, 1.0), roc_builtins_float_cos(0.0, width));
+        try std.testing.expectEqual(@as(f64, 0.0), roc_builtins_float_tan(0.0, width));
+        try std.testing.expectEqual(@as(f64, 0.0), roc_builtins_float_asin(0.0, width));
+        try std.testing.expectEqual(@as(f64, 0.0), roc_builtins_float_acos(1.0, width));
+        try std.testing.expectEqual(@as(f64, 0.0), roc_builtins_float_atan(0.0, width));
+    }
 }
 
 test "direct float wrapper f32" {

@@ -4492,6 +4492,12 @@ pub const Interpreter = struct {
             .num_abs_diff => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .abs_diff),
             .num_pow => self.evalNumPow(args[0], args[1], ll.ret_layout, arg_layout),
             .num_sqrt => self.evalNumSqrt(args[0], ll.ret_layout, arg_layout),
+            .num_sin => self.evalNumFloatUnaryMath(args[0], ll.ret_layout, arg_layout, .sin),
+            .num_cos => self.evalNumFloatUnaryMath(args[0], ll.ret_layout, arg_layout, .cos),
+            .num_tan => self.evalNumFloatUnaryMath(args[0], ll.ret_layout, arg_layout, .tan),
+            .num_asin => self.evalNumFloatUnaryMath(args[0], ll.ret_layout, arg_layout, .asin),
+            .num_acos => self.evalNumFloatUnaryMath(args[0], ll.ret_layout, arg_layout, .acos),
+            .num_atan => self.evalNumFloatUnaryMath(args[0], ll.ret_layout, arg_layout, .atan),
             .num_log => self.evalNumLog(args[0], ll.ret_layout, arg_layout),
             .num_round => self.evalNumRound(args[0], ll.ret_layout, arg_layout),
             .num_floor => self.evalNumFloor(args[0], ll.ret_layout, arg_layout),
@@ -5333,6 +5339,46 @@ pub const Interpreter = struct {
             .signed_int, .unsigned_int => return self.invariantFailedError(
                 "LIR/interpreter invariant violated: integer num_log survived lowering for layout {d}",
                 .{@intFromEnum(arg_layout)},
+            ),
+        }
+        return val;
+    }
+
+    const FloatUnaryMathOp = enum {
+        sin,
+        cos,
+        tan,
+        asin,
+        acos,
+        atan,
+    };
+
+    fn floatUnaryMath(comptime F: type, value: F, comptime op: FloatUnaryMathOp) F {
+        return switch (op) {
+            .sin => std.math.sin(value),
+            .cos => std.math.cos(value),
+            .tan => std.math.tan(value),
+            .asin => std.math.asin(value),
+            .acos => std.math.acos(value),
+            .atan => std.math.atan(value),
+        };
+    }
+
+    fn evalNumFloatUnaryMath(self: *LirInterpreter, a: Value, ret_layout: layout_mod.Idx, arg_layout: layout_mod.Idx, comptime op: FloatUnaryMathOp) Error!Value {
+        const val = try self.alloc(ret_layout);
+        switch (try self.numericOperandKind(arg_layout)) {
+            .float => |bits| switch (bits) {
+                32 => val.write(f32, floatUnaryMath(f32, a.read(f32), op)),
+                64 => val.write(f64, floatUnaryMath(f64, a.read(f64), op)),
+                else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported float {s} width {d}", .{ @tagName(op), bits }),
+            },
+            .dec => return self.invariantFailedError(
+                "LIR/interpreter invariant violated: Dec num_{s} requires exact Dec lowering for layout {d}",
+                .{ @tagName(op), @intFromEnum(arg_layout) },
+            ),
+            .signed_int, .unsigned_int => return self.invariantFailedError(
+                "LIR/interpreter invariant violated: integer num_{s} survived lowering for layout {d}",
+                .{ @tagName(op), @intFromEnum(arg_layout) },
             ),
         }
         return val;

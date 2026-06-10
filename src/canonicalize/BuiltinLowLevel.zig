@@ -1029,6 +1029,24 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
     if (env.common.findIdent("f32_pow_unsafe")) |ident| {
         try low_level_map.put(ident, .num_pow);
     }
+    if (env.common.findIdent("f32_sin_unsafe")) |ident| {
+        try low_level_map.put(ident, .num_sin);
+    }
+    if (env.common.findIdent("f32_cos_unsafe")) |ident| {
+        try low_level_map.put(ident, .num_cos);
+    }
+    if (env.common.findIdent("f32_tan_unsafe")) |ident| {
+        try low_level_map.put(ident, .num_tan);
+    }
+    if (env.common.findIdent("f32_asin_unsafe")) |ident| {
+        try low_level_map.put(ident, .num_asin);
+    }
+    if (env.common.findIdent("f32_acos_unsafe")) |ident| {
+        try low_level_map.put(ident, .num_acos);
+    }
+    if (env.common.findIdent("f32_atan_unsafe")) |ident| {
+        try low_level_map.put(ident, .num_atan);
+    }
     if (env.common.findIdent("f32_floor_unsafe")) |ident| {
         try low_level_map.put(ident, .num_floor);
     }
@@ -1111,6 +1129,24 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
     }
     if (env.common.findIdent("f64_pow_unsafe")) |ident| {
         try low_level_map.put(ident, .num_pow);
+    }
+    if (env.common.findIdent("f64_sin_unsafe")) |ident| {
+        try low_level_map.put(ident, .num_sin);
+    }
+    if (env.common.findIdent("f64_cos_unsafe")) |ident| {
+        try low_level_map.put(ident, .num_cos);
+    }
+    if (env.common.findIdent("f64_tan_unsafe")) |ident| {
+        try low_level_map.put(ident, .num_tan);
+    }
+    if (env.common.findIdent("f64_asin_unsafe")) |ident| {
+        try low_level_map.put(ident, .num_asin);
+    }
+    if (env.common.findIdent("f64_acos_unsafe")) |ident| {
+        try low_level_map.put(ident, .num_acos);
+    }
+    if (env.common.findIdent("f64_atan_unsafe")) |ident| {
+        try low_level_map.put(ident, .num_atan);
     }
     if (env.common.findIdent("f64_floor_unsafe")) |ident| {
         try low_level_map.put(ident, .num_floor);

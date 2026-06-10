@@ -129,6 +129,12 @@ comptime {
     @export(&dw.roc_builtins_int_to_str, .{ .name = "roc_builtins_int_to_str" });
     @export(&dw.roc_builtins_float_to_str, .{ .name = "roc_builtins_float_to_str" });
     @export(&dw.roc_builtins_float_pow, .{ .name = "roc_builtins_float_pow" });
+    @export(&dw.roc_builtins_float_sin, .{ .name = "roc_builtins_float_sin" });
+    @export(&dw.roc_builtins_float_cos, .{ .name = "roc_builtins_float_cos" });
+    @export(&dw.roc_builtins_float_tan, .{ .name = "roc_builtins_float_tan" });
+    @export(&dw.roc_builtins_float_asin, .{ .name = "roc_builtins_float_asin" });
+    @export(&dw.roc_builtins_float_acos, .{ .name = "roc_builtins_float_acos" });
+    @export(&dw.roc_builtins_float_atan, .{ .name = "roc_builtins_float_atan" });
     // Numeric-from-string wrapper
     @export(&dw.roc_builtins_int_from_str, .{ .name = "roc_builtins_int_from_str" });
     @export(&dw.roc_builtins_dec_from_str, .{ .name = "roc_builtins_dec_from_str" });

@@ -152,6 +152,12 @@ pub fn runWasmStrWithStats(
         env_imports.addHostFunction("roc_u128_to_str", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{.I32}, hostU128ToStr, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_float_to_str", &[_]bytebox.ValType{ .I64, .I32, .I32 }, &[_]bytebox.ValType{.I32}, hostFloatToStr, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_float_pow", &[_]bytebox.ValType{ .F64, .F64, .I32 }, &[_]bytebox.ValType{.F64}, hostFloatPow, null) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_float_sin", &[_]bytebox.ValType{ .F64, .I32 }, &[_]bytebox.ValType{.F64}, hostFloatSin, null) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_float_cos", &[_]bytebox.ValType{ .F64, .I32 }, &[_]bytebox.ValType{.F64}, hostFloatCos, null) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_float_tan", &[_]bytebox.ValType{ .F64, .I32 }, &[_]bytebox.ValType{.F64}, hostFloatTan, null) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_float_asin", &[_]bytebox.ValType{ .F64, .I32 }, &[_]bytebox.ValType{.F64}, hostFloatAsin, null) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_float_acos", &[_]bytebox.ValType{ .F64, .I32 }, &[_]bytebox.ValType{.F64}, hostFloatAcos, null) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_float_atan", &[_]bytebox.ValType{ .F64, .I32 }, &[_]bytebox.ValType{.F64}, hostFloatAtan, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_int_to_str", &[_]bytebox.ValType{ .I64, .I64, .I32, .I32, .I32 }, &[_]bytebox.ValType{.I32}, hostIntToStr, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_u128_to_dec", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{.I32}, hostU128ToDec, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_i128_to_dec", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{.I32}, hostI128ToDec, null) catch return error.WasmExecFailed;
@@ -536,6 +542,63 @@ fn hostFloatPow(_: ?*anyopaque, _: *bytebox.ModuleInstance, params: [*]const byt
         8 => std.math.pow(f64, base, exponent),
         else => unreachable,
     } };
+}
+
+const HostFloatUnaryMathOp = enum {
+    sin,
+    cos,
+    tan,
+    asin,
+    acos,
+    atan,
+};
+
+fn hostFloatUnaryMath(params: [*]const bytebox.Val, results: [*]bytebox.Val, comptime op: HostFloatUnaryMathOp) void {
+    const val = params[0].F64;
+    const float_width: u8 = @intCast(params[1].I32);
+    results[0] = .{ .F64 = switch (float_width) {
+        4 => @as(f64, @floatCast(switch (op) {
+            .sin => std.math.sin(@as(f32, @floatCast(val))),
+            .cos => std.math.cos(@as(f32, @floatCast(val))),
+            .tan => std.math.tan(@as(f32, @floatCast(val))),
+            .asin => std.math.asin(@as(f32, @floatCast(val))),
+            .acos => std.math.acos(@as(f32, @floatCast(val))),
+            .atan => std.math.atan(@as(f32, @floatCast(val))),
+        })),
+        8 => switch (op) {
+            .sin => std.math.sin(val),
+            .cos => std.math.cos(val),
+            .tan => std.math.tan(val),
+            .asin => std.math.asin(val),
+            .acos => std.math.acos(val),
+            .atan => std.math.atan(val),
+        },
+        else => unreachable,
+    } };
+}
+
+fn hostFloatSin(_: ?*anyopaque, _: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
+    hostFloatUnaryMath(params, results, .sin);
+}
+
+fn hostFloatCos(_: ?*anyopaque, _: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
+    hostFloatUnaryMath(params, results, .cos);
+}
+
+fn hostFloatTan(_: ?*anyopaque, _: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
+    hostFloatUnaryMath(params, results, .tan);
+}
+
+fn hostFloatAsin(_: ?*anyopaque, _: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
+    hostFloatUnaryMath(params, results, .asin);
+}
+
+fn hostFloatAcos(_: ?*anyopaque, _: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
+    hostFloatUnaryMath(params, results, .acos);
+}
+
+fn hostFloatAtan(_: ?*anyopaque, _: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
+    hostFloatUnaryMath(params, results, .atan);
 }
 
 fn hostIntToStr(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
