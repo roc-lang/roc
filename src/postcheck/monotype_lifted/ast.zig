@@ -303,6 +303,93 @@ pub const Program = struct {
         return self.branches.items[span_.start..][0..span_.len];
     }
 
+    /// When a match scrutinizes the Builtin `list_map_can_reuse` wrapper and
+    /// the in-place `List.map` branch is statically impossible — the
+    /// optimization is disabled, or the input and output element monotypes
+    /// differ — returns the body of the branch a constant-0 scrutinee
+    /// selects. Direct LIR lowering and the debug Lambda Mono materializer
+    /// both consult this, so they agree on which functions exist and the
+    /// in-place branch (with the wrapper specializations it references)
+    /// never reaches LIR in that case. Returns null when the match is not
+    /// that shape or the runtime uniqueness check must decide.
+    pub fn listMapCanReuseFoldedBranchBody(
+        self: *const Program,
+        // Taken explicitly because the Lambda Mono materializer moves the
+        // name store out of the lifted program before lowering.
+        name_store: *const names.NameStore,
+        scrutinee: ExprId,
+        branches_span: Span(Branch),
+        list_in_place_map: bool,
+    ) ?ExprId {
+        const call = switch (self.exprs.items[@intFromEnum(scrutinee)].data) {
+            .call_proc => |call| call,
+            else => return null,
+        };
+        const callee = switch (call.callee) {
+            .lifted => |fn_id| fn_id,
+            .template => return null,
+        };
+        const callee_body = switch (self.fns.items[@intFromEnum(callee)].body) {
+            .roc => |body| body,
+            .hosted => return null,
+        };
+        if (!self.exprIsListMapCanReuseOp(callee_body)) return null;
+
+        fold: {
+            if (!list_in_place_map) break :fold;
+            const args = self.exprSpan(call.args);
+            if (args.len != 2) return null;
+            const in_elem = switch (self.types.get(self.unwrapNamedBacking(self.exprs.items[@intFromEnum(args[0])].ty))) {
+                .list => |elem| elem,
+                else => return null,
+            };
+            const out_elem = switch (self.types.get(self.unwrapNamedBacking(self.exprs.items[@intFromEnum(args[1])].ty))) {
+                .func => |func| func.ret,
+                else => return null,
+            };
+            const in_digest = self.types.typeDigest(name_store, in_elem);
+            const out_digest = self.types.typeDigest(name_store, out_elem);
+            // Identical element monotypes share one layout, so reuse is the
+            // runtime uniqueness check's call; keep both branches.
+            if (std.mem.eql(u8, &in_digest.bytes, &out_digest.bytes)) return null;
+            break :fold;
+        }
+
+        // The scrutinee is a constant 0: select the branch it reaches. Only
+        // guard-free integer-literal and wildcard patterns participate; any
+        // other shape keeps the full match.
+        for (self.branchSpan(branches_span)) |branch| {
+            if (branch.guard != null) return null;
+            switch (self.pats.items[@intFromEnum(branch.pat)].data) {
+                .wildcard => return branch.body,
+                .int_lit => |value| if (value.toI128() == 0) return branch.body,
+                else => return null,
+            }
+        }
+        return null;
+    }
+
+    fn exprIsListMapCanReuseOp(self: *const Program, expr_id: ExprId) bool {
+        return switch (self.exprs.items[@intFromEnum(expr_id)].data) {
+            .low_level => |ll| ll.op == .list_map_can_reuse,
+            .block => |block| block.statements.len == 0 and self.exprIsListMapCanReuseOp(block.final_expr),
+            else => false,
+        };
+    }
+
+    fn unwrapNamedBacking(self: *const Program, ty: Type.TypeId) Type.TypeId {
+        var current = ty;
+        while (true) {
+            switch (self.types.get(current)) {
+                .named => |named| {
+                    const backing = named.backing orelse return current;
+                    current = backing.ty;
+                },
+                else => return current,
+            }
+        }
+    }
+
     pub fn ifBranchSpan(self: *const Program, span_: Span(IfBranch)) []const IfBranch {
         return self.if_branches.items[span_.start..][0..span_.len];
     }

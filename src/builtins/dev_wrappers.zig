@@ -450,6 +450,12 @@ pub fn roc_builtins_list_append_unsafe(out: *RocList, list_bytes: ?[*]u8, list_l
     out.* = listAppendUnsafe(l, @constCast(element), element_width, @ptrCast(&copy_fallback));
 }
 
+/// Wrapper: listMapCanReuse
+pub fn roc_builtins_list_map_can_reuse(list_bytes: ?[*]u8, list_len: usize, list_cap: usize, roc_ops: *RocOps) callconv(.c) u8 {
+    const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
+    return @intFromBool(list.listMapCanReuse(l, roc_ops));
+}
+
 /// Wrapper: listConcat(RocList, RocList, alignment, element_width, ..., *RocOps) -> RocList.
 /// `update_modes` carries one bit per list argument (bit 0 = a, bit 1 = b); a
 /// set bit selects `.InPlace` for that argument's uniqueness check, skipping

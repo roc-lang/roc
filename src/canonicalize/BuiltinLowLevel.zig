@@ -242,6 +242,18 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
     if (env.common.findIdent("list_swap_unsafe")) |list_swap_unsafe_ident| {
         try low_level_map.put(list_swap_unsafe_ident, .list_swap);
     }
+    if (env.common.findIdent("list_map_can_reuse")) |list_map_can_reuse_ident| {
+        try low_level_map.put(list_map_can_reuse_ident, .list_map_can_reuse);
+    }
+    if (env.common.findIdent("list_map_cast_unsafe")) |list_map_cast_unsafe_ident| {
+        try low_level_map.put(list_map_cast_unsafe_ident, .list_map_cast_unsafe);
+    }
+    if (env.common.findIdent("list_map_extract_unsafe")) |list_map_extract_unsafe_ident| {
+        try low_level_map.put(list_map_extract_unsafe_ident, .list_map_extract_unsafe);
+    }
+    if (env.common.findIdent("list_map_write_unsafe")) |list_map_write_unsafe_ident| {
+        try low_level_map.put(list_map_write_unsafe_ident, .list_map_write_unsafe);
+    }
     const numeric_types = [_][]const u8{ "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec", "F32", "F64" };
     const signed_types = [_][]const u8{ "I8", "I16", "I32", "I64", "I128", "Dec", "F32", "F64" };
     // Numeric equality operations.

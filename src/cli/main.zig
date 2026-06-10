@@ -4573,6 +4573,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
         .{ .requests = root_artifact.root_requests.runtime_requests },
         .{
             .target_usize = target_usize,
+            .list_in_place_map = listInPlaceMapForOpt(args.opt),
         },
     );
     defer lowered.deinit();
@@ -4859,6 +4860,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
         .{
             .target_usize = target_usize,
             .inline_mode = postCheckInlineModeForOpt(args.opt),
+            .list_in_place_map = listInPlaceMapForOpt(args.opt),
         },
     );
     defer lowered.deinit();
@@ -5697,6 +5699,13 @@ fn postCheckInlineModeForOpt(opt: cli_args.OptLevel) lir.CheckedPipeline.InlineM
     };
 }
 
+fn listInPlaceMapForOpt(opt: cli_args.OptLevel) bool {
+    return switch (opt) {
+        .size, .speed => true,
+        .dev, .interpreter => false,
+    };
+}
+
 const CliTestRootRun = struct {
     root: check.CheckedArtifact.RootRequest,
     root_proc: lir.LirProcSpecId,
@@ -6007,6 +6016,7 @@ fn runCheckedArtifactTests(
         .{
             .target_usize = base.target.TargetUsize.native,
             .inline_mode = postCheckInlineModeForOpt(opt),
+            .list_in_place_map = listInPlaceMapForOpt(opt),
         },
     );
     defer lowered.deinit();

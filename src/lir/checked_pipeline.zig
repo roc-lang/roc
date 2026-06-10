@@ -40,6 +40,11 @@ pub const TargetConfig = struct {
     target_usize: base.target.TargetUsize = base.target.TargetUsize.native,
     checked_module_state: CheckedModuleState = .complete,
     inline_mode: InlineMode = .none,
+    /// Allow `List.map` to reuse a unique input list's allocation when the
+    /// input and output element layouts are interchangeable. Optimized builds
+    /// enable this; dev builds and compile-time evaluation leave it off so
+    /// the in-place branch is dropped during lowering.
+    list_in_place_map: bool = false,
 };
 
 /// Whether the root checked module is complete or inside checking finalization.
@@ -213,6 +218,7 @@ pub fn lowerCheckedModulesToLir(
 
     var lowered = try postcheck.SolvedLirLower.run(allocator, target.target_usize, solved, .{
         .inline_plan = inline_plan.view(),
+        .list_in_place_map = target.list_in_place_map,
     });
     solved_owned = false;
     solved = undefined;

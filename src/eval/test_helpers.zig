@@ -1214,6 +1214,10 @@ fn lowerCheckedRootWithViews(
         .{ .requests = root_module.root_requests.runtime_requests },
         .{
             .target_usize = target_usize,
+            // Match optimized builds so every backend exercises the in-place
+            // List.map path; the copy path is still covered by shared-list,
+            // slice, and layout-mismatch cases.
+            .list_in_place_map = true,
         },
     );
 

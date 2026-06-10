@@ -887,12 +887,26 @@ Builtin :: [].{
 		## ```
 		map : List(a), (a -> b) -> List(b)
 		map = |list, transform| {
-			# TODO: Optimize with in-place update when list is unique and element sizes match
-			var $new_list = List.with_capacity(list.len())
-			for item in list {
-				$new_list = list_append_unsafe($new_list, transform(item))
+			match list_map_can_reuse(list, transform) {
+				1 => {
+					len = list.len()
+					var $out = list_map_cast_unsafe(list)
+					var $index = 0
+					while $index < len {
+						item = list_map_extract_unsafe($out, $index)
+						$out = list_map_write_unsafe($out, $index, transform(item))
+						$index = $index + 1
+					}
+					$out
+				}
+				_ => {
+					var $new_list = List.with_capacity(list.len())
+					for item in list {
+						$new_list = list_append_unsafe($new_list, transform(item))
+					}
+					$new_list
+				}
 			}
-			$new_list
 		}
 
 		## This works like [List.map], except it also passes the index
@@ -9521,6 +9535,29 @@ list_replace_unsafe : List(item), U64, item -> { list : List(item), prev : item 
 
 # Implemented by the compiler, does not perform bounds checks
 list_swap_unsafe : List(item), U64, U64 -> List(item)
+
+# Implemented by the compiler. Returns 1 (otherwise 0) when List.map may reuse
+# the input list's allocation for its output: the input and output element
+# layouts are interchangeable, and at runtime the list is uniquely owned and
+# not a seamless slice. Lowered to a constant 0 when the layouts are not
+# interchangeable, which lets lowering drop the in-place branch entirely.
+# Note: success is U8 (0 = false, 1 = true) since Bool is not available at top level
+list_map_can_reuse : List(input), (input -> output) -> U8
+
+# Implemented by the compiler. Retypes a unique, non-slice list in place so
+# List.map can overwrite its elements without allocating a new list. Must only
+# be called on a list for which list_map_can_reuse returned 1.
+list_map_cast_unsafe : List(input) -> List(output)
+
+# Implemented by the compiler. Moves ownership of the element at the given
+# index out of the list's buffer; the slot keeps stale bytes until
+# list_map_write_unsafe stores its replacement. No bounds checks.
+list_map_extract_unsafe : List(output), U64 -> input
+
+# Implemented by the compiler. Stores an owned element into the slot at the
+# given index, which must have been vacated by list_map_extract_unsafe.
+# No bounds checks.
+list_map_write_unsafe : List(output), U64, output -> List(output)
 
 # Implemented by the compiler, ensures at least spare additional elements of capacity
 list_reserve : List(item), U64 -> List(item)

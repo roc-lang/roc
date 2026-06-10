@@ -15,6 +15,7 @@ const Allocator = std.mem.Allocator;
 pub fn run(
     allocator: Allocator,
     solved: Solved.Program,
+    list_in_place_map: bool,
 ) Common.LowerError!Ast.Program {
     var owned = solved;
     errdefer owned.deinit();
@@ -29,6 +30,7 @@ pub fn run(
     errdefer program.deinit();
 
     var lowerer = try Lowerer.init(allocator, &owned, &program);
+    lowerer.list_in_place_map = list_in_place_map;
     defer lowerer.deinit();
     try lowerer.lower();
     program.next_symbol = lowerer.symbols.next;
@@ -123,6 +125,9 @@ const Lowerer = struct {
     captures: std.AutoHashMap(Lifted.LocalId, CaptureBinding),
     symbols: Common.SymbolGen,
     erased_capture_ptr_ty: ?Type.TypeId = null,
+    /// Mirrors direct LIR lowering's in-place `List.map` branch fold so the
+    /// debug verifier sees the same set of demanded functions.
+    list_in_place_map: bool = false,
 
     fn init(allocator: Allocator, solved: *const Solved.Program, program: *Ast.Program) Allocator.Error!Lowerer {
         const local_map = try allocator.alloc(?Ast.LocalId, solved.lifted.locals.items.len);
@@ -476,10 +481,23 @@ const Lowerer = struct {
                 .rhs = try self.lowerExpr(eq.rhs),
                 .negated = eq.negated,
             } },
-            .match_ => |match| .{ .match_ = .{
-                .scrutinee = try self.lowerExpr(match.scrutinee),
-                .branches = try self.lowerBranchSpan(match.branches),
-            } },
+            .match_ => |match| blk: {
+                if (self.solved.lifted.listMapCanReuseFoldedBranchBody(
+                    &self.program.names,
+                    match.scrutinee,
+                    match.branches,
+                    self.list_in_place_map,
+                )) |folded_body| {
+                    break :blk .{ .block = .{
+                        .statements = .empty(),
+                        .final_expr = try self.lowerExpr(folded_body),
+                    } };
+                }
+                break :blk .{ .match_ = .{
+                    .scrutinee = try self.lowerExpr(match.scrutinee),
+                    .branches = try self.lowerBranchSpan(match.branches),
+                } };
+            },
             .if_ => |if_| .{ .if_ = .{
                 .branches = try self.lowerIfBranchSpan(if_.branches),
                 .final_else = try self.lowerExpr(if_.final_else),
