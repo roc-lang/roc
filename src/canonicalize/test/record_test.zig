@@ -26,7 +26,7 @@ test "record literal uses record_unbound" {
 
         const roc_ctx = CoreCtx.testing(gpa, gpa);
 
-        const ast = try parse.parseExpr(gpa, &env.common);
+        const ast = try parse.expr(gpa, &env.common);
         defer ast.deinit();
 
         var can = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
@@ -59,7 +59,7 @@ test "record literal uses record_unbound" {
 
         const roc_ctx = CoreCtx.testing(gpa, gpa);
 
-        const ast = try parse.parseExpr(gpa, &env.common);
+        const ast = try parse.expr(gpa, &env.common);
         defer ast.deinit();
 
         var can = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
@@ -92,7 +92,7 @@ test "record literal uses record_unbound" {
 
         const roc_ctx = CoreCtx.testing(gpa, gpa);
 
-        const ast = try parse.parseExpr(gpa, &env.common);
+        const ast = try parse.expr(gpa, &env.common);
         defer ast.deinit();
 
         var can = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
@@ -137,7 +137,7 @@ test "record_unbound basic functionality" {
 
     const roc_ctx = CoreCtx.testing(gpa, gpa);
 
-    const ast = try parse.parseExpr(gpa, &env.common);
+    const ast = try parse.expr(gpa, &env.common);
     defer ast.deinit();
 
     var can = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
@@ -183,7 +183,7 @@ test "record_unbound with multiple fields" {
     // Create record_unbound with multiple fields
     const roc_ctx = CoreCtx.testing(gpa, gpa);
 
-    const ast = try parse.parseExpr(gpa, &env.common);
+    const ast = try parse.expr(gpa, &env.common);
     defer ast.deinit();
 
     var can = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
@@ -231,7 +231,7 @@ test "record pattern destructuring" {
 
     const roc_ctx = CoreCtx.testing(gpa, gpa);
 
-    const ast = try parse.parseStatement(gpa, &env.common);
+    const ast = try parse.statement(gpa, &env.common);
     defer ast.deinit();
 
     var can = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
@@ -308,7 +308,7 @@ test "record pattern with sub-patterns" {
 
     const roc_ctx = CoreCtx.testing(gpa, gpa);
 
-    const ast = try parse.parseStatement(gpa, &env.common);
+    const ast = try parse.statement(gpa, &env.common);
     defer ast.deinit();
 
     var can = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());

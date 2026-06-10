@@ -2198,9 +2198,6 @@ pub fn build(b: *std.Build) void {
     const compiler_version_git = getCompilerVersionGit(b);
     build_options.addOption([]const u8, "compiler_version_git", compiler_version_git);
     build_options.addOption([32]u8, "compiler_artifact_hash", getCompilerArtifactHash(b, compiler_version_git));
-    // Absolute path to the compiler-owned Builtin.roc, used by the CLI to detect
-    // when a user is checking/formatting the compiler's own builtin source.
-    build_options.addOption([]const u8, "compiler_builtin_roc_path", b.path("src/build/roc/Builtin.roc").getPath(b));
     // `compiler_version` (e.g. "release-fast-abc12345") is assembled in the generated
     // build_options module so its build-mode prefix comes from @import("builtin").mode — the
     // actual optimization level of each compiled binary. The prefix can't be baked here because
@@ -3379,6 +3376,51 @@ pub fn build(b: *std.Build) void {
         );
         run_builtin_doc_test_step.dependOn(&run_builtin_doc_test.step);
     }
+
+    const lir_inline_test = b.addTest(.{
+        .name = "lir_inline_test",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/eval/test/lir_inline_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+        .filters = test_filters,
+    });
+    roc_modules.addAll(lir_inline_test);
+    lir_inline_test.root_module.addImport("compiled_builtins", compiled_builtins_module);
+    lir_inline_test.step.dependOn(&write_compiled_builtins.step);
+    try addLlvmSupportToStep(
+        b,
+        lir_inline_test,
+        target,
+        use_system_llvm,
+        user_llvm_path,
+        roc_modules,
+        llvm_codegen_module,
+        llvm_embedded_module,
+        zstd,
+    );
+    if (lir_inline_test.root_module.resolved_target.?.result.os.tag != .windows or
+        lir_inline_test.root_module.resolved_target.?.result.abi != .msvc)
+    {
+        lir_inline_test.root_module.link_libcpp = true;
+    }
+    add_tracy(b, roc_modules.build_options, lir_inline_test, target, true, flag_enable_tracy);
+    build_test_zig_step.dependOn(&lir_inline_test.step);
+
+    const run_lir_inline_test = b.addRunArtifact(lir_inline_test);
+    if (run_args.len != 0) {
+        run_lir_inline_test.addArgs(run_args);
+    }
+
+    tests_summary.addRun(&run_lir_inline_test.step);
+
+    const run_lir_inline_test_step = b.step(
+        "run-test-zig-lir-inline",
+        "Run LIR inline Zig tests",
+    );
+    run_lir_inline_test_step.dependOn(&run_lir_inline_test.step);
 
     // Add CLI test
     const enable_cli_tests = b.option(bool, "cli-tests", "Enable cli tests") orelse true;

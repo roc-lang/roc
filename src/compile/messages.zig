@@ -113,6 +113,8 @@ pub const TypeCheckTask = struct {
     imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
     /// Published checked artifacts currently available for exact-key lookup during checking finalization
     available_artifacts: []const CheckedArtifact.ImportedModuleView,
+    /// Additional checked roots requested by package-level metadata.
+    explicit_roots: []const CheckedArtifact.ExplicitRootRequestInput,
 };
 
 /// Task sent to workers - contains ALL inputs needed for the operation

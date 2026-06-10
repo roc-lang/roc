@@ -86,7 +86,7 @@ pub fn validatePlatformHeader(
         return error.ParseError;
     };
 
-    const ast = parse.parse(allocator, &env) catch {
+    const ast = parse.file(allocator, &env) catch {
         try renderParseError(allocator, platform_source_path);
         return error.ParseError;
     };
@@ -169,8 +169,8 @@ fn renderMissingTargetsError(allocator: std.mem.Allocator, path: []const u8) std
         \\    targets: {
         \\        files: "targets/",
         \\        exe: {
-        \\            x64linux: ["host.o", app],
-        \\            arm64linux: ["host.o", app],
+        \\            x64linux: { files: ["host.o", app] },
+        \\            arm64linux: { files: ["host.o", app] },
         \\        }
         \\    }
     );
