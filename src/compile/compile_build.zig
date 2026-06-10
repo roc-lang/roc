@@ -687,9 +687,7 @@ pub const BuildEnv = struct {
         var seen = std.StringHashMapUnmanaged(void){};
         defer seen.deinit(self.gpa);
 
-        try self.appendTargetConfigRootIdentNames(&names, &seen, targets_config.exe);
-        try self.appendTargetConfigRootIdentNames(&names, &seen, targets_config.static_lib);
-        try self.appendTargetConfigRootIdentNames(&names, &seen, targets_config.shared_lib);
+        try self.appendTargetConfigRootIdentNames(&names, &seen, targets_config.targets);
 
         return try names.toOwnedSlice(self.gpa);
     }
@@ -1893,7 +1891,7 @@ pub const BuildEnv = struct {
             .{
                 diagnostic.field_name,
                 @tagName(diagnostic.target),
-                @tagName(diagnostic.link_type),
+                @tagName(diagnostic.output),
                 diagnostic.ident_name,
                 diagnostic.reason.message(),
             },

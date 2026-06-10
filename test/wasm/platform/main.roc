@@ -4,10 +4,8 @@ platform ""
     packages {}
     provides { main_for_host!: "main" }
     targets: {
-        files: "targets/",
-        exe: {
-            wasm32: { files: ["host.wasm", app] },
-        }
+        inputs: "targets/",
+        wasm32: { inputs: ["host.wasm", app] },
     }
 
 import Stdout

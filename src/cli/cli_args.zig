@@ -100,7 +100,6 @@ pub const BuildArgs = struct {
     opt: OptLevel, // the optimization level (dev, interpreter, size, speed)
     target: ?[]const u8 = null, // the target to compile for (e.g., x64musl, x64glibc)
     output: ?[]const u8 = null, // the path where the output binary should be created
-    no_link: bool = false, // output object file only, skip linking with host
     debug: bool = false, // include debug information in the output binary
     allow_errors: bool = false, // allow building even if there are type errors
     verbose: bool = false, // enable verbose output including cache statistics
@@ -325,7 +324,6 @@ fn parseBuild(args: []const []const u8) CliArgs {
     var opt: OptLevel = .speed;
     var target: ?[]const u8 = null;
     var output: ?[]const u8 = null;
-    var no_link: bool = false;
     var debug: bool = false;
     var allow_errors: bool = false;
     var verbose: bool = false;
@@ -350,7 +348,6 @@ fn parseBuild(args: []const []const u8) CliArgs {
             \\      --output=<output>              The full path to the output binary, including filename. To specify directory only, specify a path that ends in a directory separator (e.g. a slash)
             \\      --opt=<opt>                    Build mode: speed (default LLVM optimized), size (LLVM optimized for binary size), dev (native dev backend), or interpreter (embedded interpreter backend)
             \\      --target=<target>              Target to compile for (e.g., x64musl, x64glibc, arm64musl). Defaults to native target with musl for static linking
-            \\      --no-link                      Output object file only, skip linking with host (useful for debugging or custom toolchains)
             \\      --debug                        Include debug information in the output binary
             \\      --allow-errors                 Allow building even if there are type errors (warnings are always allowed)
             \\      --verbose                      Enable verbose output including cache statistics
@@ -386,8 +383,6 @@ fn parseBuild(args: []const []const u8) CliArgs {
             } else {
                 return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--opt" } } };
             }
-        } else if (mem.eql(u8, arg, "--no-link")) {
-            no_link = true;
         } else if (mem.startsWith(u8, arg, "--z-bench-tokenize")) {
             if (getFlagValue(arg)) |value| {
                 z_bench_tokenize = value;
@@ -451,7 +446,7 @@ fn parseBuild(args: []const []const u8) CliArgs {
             path = arg;
         }
     }
-    return CliArgs{ .build = BuildArgs{ .path = path orelse "main.roc", .opt = opt, .target = target, .output = output, .no_link = no_link, .debug = debug, .allow_errors = allow_errors, .verbose = verbose, .no_cache = no_cache, .max_threads = max_threads, .wasm_memory = wasm_memory, .wasm_stack_size = wasm_stack_size, .z_bench_tokenize = z_bench_tokenize, .z_bench_parse = z_bench_parse, .z_dump_linker = z_dump_linker } };
+    return CliArgs{ .build = BuildArgs{ .path = path orelse "main.roc", .opt = opt, .target = target, .output = output, .debug = debug, .allow_errors = allow_errors, .verbose = verbose, .no_cache = no_cache, .max_threads = max_threads, .wasm_memory = wasm_memory, .wasm_stack_size = wasm_stack_size, .z_bench_tokenize = z_bench_tokenize, .z_bench_parse = z_bench_parse, .z_dump_linker = z_dump_linker } };
 }
 
 fn parseBundle(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator.Error!CliArgs {

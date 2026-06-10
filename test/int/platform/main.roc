@@ -10,17 +10,15 @@ platform ""
     packages {}
     provides { init_for_host: "init", update_for_host: "update", render_for_host: "render", test_mixed_args_for_host: "test_mixed_args", test_struct_arg_for_host: "test_struct_arg", test_effectful_struct_arg_for_host!: "test_effectful_struct_arg", test_simple_pure_for_host: "test_simple_pure", test_simple_effectful_for_host!: "test_simple_effectful", test_three_floats_pure_for_host: "test_three_floats_pure", test_three_floats_effectful_for_host!: "test_three_floats_effectful" }
     targets: {
-        files: "targets/",
-        exe: {
-            x64mac: { files: ["libhost.a", app] },
-            arm64mac: { files: ["libhost.a", app] },
-            x64musl: { files: ["crt1.o", "libhost.a", app, "libc.a"] },
-            arm64musl: { files: ["crt1.o", "libhost.a", app, "libc.a"] },
-            x64glibc: { files: ["Scrt1.o", "crti.o", "libhost.a", app, "crtn.o", "libc.so"] },
-            arm64glibc: { files: ["Scrt1.o", "crti.o", "libhost.a", app, "crtn.o", "libc.so"] },
-            x64win: { files: ["host.lib", app] },
-            arm64win: { files: ["host.lib", app] },
-        }
+        inputs: "targets/",
+        x64mac: { inputs: ["libhost.a", app] },
+        arm64mac: { inputs: ["libhost.a", app] },
+        x64musl: { inputs: ["crt1.o", "libhost.a", app, "libc.a"] },
+        arm64musl: { inputs: ["crt1.o", "libhost.a", app, "libc.a"] },
+        x64glibc: { inputs: ["Scrt1.o", "crti.o", "libhost.a", app, "crtn.o", "libc.so"] },
+        arm64glibc: { inputs: ["Scrt1.o", "crti.o", "libhost.a", app, "crtn.o", "libc.so"] },
+        x64win: { inputs: ["host.lib", app] },
+        arm64win: { inputs: ["host.lib", app] },
     }
 
 import Simple exposing [Simple]

@@ -2153,24 +2153,14 @@ pub const ExposedItem = union(enum) {
 
 /// A targets section in a platform header
 pub const TargetsSection = struct {
-    files_path: ?Token.Idx, // "files:" directive string literal
-    exe: ?TargetLinkType.Idx, // exe: { ... }
-    static_lib: ?TargetLinkType.Idx, // static_lib: { ... }
-    // shared_lib to be added later
+    inputs_path: ?Token.Idx, // "inputs:" directive string literal
+    entries: TargetEntry.Span, // per-target entries
     region: TokenizedRegion,
 
     pub const Idx = enum(u32) { _ };
 };
 
-/// A link type section (exe, static_lib, shared_lib)
-pub const TargetLinkType = struct {
-    entries: TargetEntry.Span,
-    region: TokenizedRegion,
-
-    pub const Idx = enum(u32) { _ };
-};
-
-/// Single target entry: x64musl: { files: ["crt1.o", "host.o", app] }
+/// Single target entry: x64musl: { inputs: ["crt1.o", "host.o", app], output: Exe }
 pub const TargetEntry = struct {
     target: Token.Idx, // LowerIdent token (e.g., x64musl, arm64mac)
     config: TargetConfig.Idx,

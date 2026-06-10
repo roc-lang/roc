@@ -538,12 +538,12 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc run test/str/app_static_24_byte_string.roc does not panic", .skip = .{ .windows = "test/str platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{"--no-cache"}, .roc_file = "test/str/app_static_24_byte_string.roc", .exit = .not_panic, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "reached unreachable code" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build creates executable from test/int/app.roc (interpreter)", .backend = .interpreter, .skip = .{ .windows = "test/int platform does not have Windows host libraries" }, .body = .{ .custom = .build_int_interpreter_creates_output } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build creates executable from test/int/app.roc (dev)", .backend = .dev, .skip = .{ .always = "TODO: dev backend compilation fails for test/int/app.roc" }, .body = .{ .custom = .noop } },
-    .{ .id = 0, .suite = .subcommands, .name = "roc build --no-link lowers platform required init consts", .body = .{ .command = .{ .args = &.{ "build", "--no-link", "--no-cache" }, .roc_file = "test/postcheck/platform_required_init/app.roc", .contains = &.{.{ .stream = .stdout, .text = "Object file generated:" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc build archive output lowers platform required init consts", .body = .{ .command = .{ .args = &.{ "build", "--no-cache" }, .roc_file = "test/postcheck/platform_required_init/app.roc", .contains = &.{.{ .stream = .stdout, .text = "Built " }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build executable runs correctly (interpreter)", .backend = .interpreter, .skip = .{ .windows = "test/int platform does not have Windows host libraries" }, .body = .{ .custom = .build_int_interpreter_output_runs } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build --opt=dev executable runs correctly for test/int/app.roc", .backend = .dev, .skip = .{ .windows = "test/int platform does not have Windows host libraries" }, .body = .{ .custom = .build_int_dev_output_runs } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build fails with file not found error", .body = .{ .command = .{ .args = &.{"build"}, .roc_file = "nonexistent_file.roc", .exit = .failure, .contains_any = &.{.{ .needles = &.{ .{ .stream = .stderr, .text = "FileNotFound" }, .{ .stream = .stderr, .text = "not found" }, .{ .stream = .stderr, .text = "NOT FOUND" }, .{ .stream = .stderr, .text = "Failed" } } }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build fails with invalid target error", .body = .{ .command = .{ .args = &.{ "build", "--target=invalid_target_name" }, .roc_file = "test/int/app.roc", .exit = .failure, .contains_any = &.{.{ .needles = &.{ .{ .stream = .stderr, .text = "Invalid target" }, .{ .stream = .stderr, .text = "invalid" } } }} } } },
-    .{ .id = 0, .suite = .subcommands, .name = "roc build wasm32 no-link succeeds for list builtins", .body = .{ .command = .{ .args = &.{ "build", "--target=wasm32", "--no-link", "--no-cache" }, .roc_file = "test/wasm/list_builtin_static_lib_app.roc", .contains = &.{.{ .stream = .stdout, .text = "Object file generated:" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "FunctionTypeMismatch" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc build wasm32 shared module succeeds for list builtins", .body = .{ .command = .{ .args = &.{ "build", "--target=wasm32", "--no-cache" }, .roc_file = "test/wasm/list_builtin_static_lib_app.roc", .contains = &.{.{ .stream = .stdout, .text = "Built " }}, .not_contains = &.{ .{ .stream = .stderr, .text = "FunctionTypeMismatch" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build glibc target gives helpful error on non-Linux", .body = .{ .custom = .build_glibc_target_non_linux_error } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test caches passing results (interpreter)", .backend = .interpreter, .body = .{ .custom = .cache_passing_results } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test caches passing results (dev)", .backend = .dev, .body = .{ .custom = .cache_passing_results } },
@@ -1521,11 +1521,11 @@ const GeneratedModuleGraphConfig = struct {
     symbols_per_file: usize,
 };
 
-/// Regression test for builtin inlining: a native `--opt=speed` build must inline
-/// list builtins (link builtins.bc) rather than leave them as opaque external calls.
-/// If the builtin symbol naming ever drifts between the codegen and the bitcode, the
-/// inlining silently stops; this catches that by asserting the emitted object has no
-/// remaining reference to `roc_builtins_list_append_unsafe` (i.e. it was inlined away).
+/// Regression test for builtin inlining: a native `--opt=speed` archive build must
+/// inline list builtins (link builtins.bc) rather than leave them as opaque external
+/// calls. If the builtin symbol naming ever drifts between the codegen and the
+/// bitcode, the inlining silently stops; this catches that by asserting the archive's
+/// app object has no remaining reference to `roc_builtins_list_append_unsafe`.
 fn customListBuiltinInlined(
     io: std.Io,
     allocator: Allocator,
@@ -1537,6 +1537,10 @@ fn customListBuiltinInlined(
         return customInfraFailure(allocator, timer, "failed to allocate platform path: {}", .{err});
     const app_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "inline_app.roc" }) catch |err|
         return customInfraFailure(allocator, timer, "failed to allocate app path: {}", .{err});
+    const archive_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "inline_app.a" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate archive path: {}", .{err});
+    const output_arg = std.fmt.allocPrint(allocator, "--output={s}", .{archive_path}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate output arg: {}", .{err});
 
     const plat_src =
         \\platform ""
@@ -1545,15 +1549,15 @@ fn customListBuiltinInlined(
         \\    packages {}
         \\    provides { main_for_host!: "main" }
         \\    targets: {
-        \\        files: "targets/",
-        \\        exe: {
-        \\            arm64mac: { files: ["libhost.a", app] },
-        \\            x64mac: { files: ["libhost.a", app] },
-        \\            arm64musl: { files: ["libhost.a", app] },
-        \\            x64musl: { files: ["libhost.a", app] },
-        \\            arm64glibc: { files: ["libhost.a", app] },
-        \\            x64glibc: { files: ["libhost.a", app] },
-        \\        }
+        \\        inputs: "targets/",
+        \\        arm64mac: { inputs: [app], output: Archive },
+        \\        x64mac: { inputs: [app], output: Archive },
+        \\        arm64musl: { inputs: [app], output: Archive },
+        \\        x64musl: { inputs: [app], output: Archive },
+        \\        arm64glibc: { inputs: [app], output: Archive },
+        \\        x64glibc: { inputs: [app], output: Archive },
+        \\        arm64win: { inputs: [app], output: Archive },
+        \\        x64win: { inputs: [app], output: Archive },
         \\    }
         \\
         \\main_for_host! : () => List(I32)
@@ -1574,23 +1578,16 @@ fn customListBuiltinInlined(
 
     const child_timeout_ms = childCommandTimeoutMs(timer, timeout_ms) orelse
         return timeoutFailure(allocator, timer, .run, "case timeout exhausted before roc build started");
-    const result = runRocInEnv(io, allocator, env, &.{ "build", "--opt=speed", "--no-link" }, app_path, .absolute, null, child_timeout_ms) catch |err|
+    const result = runRocInEnv(io, allocator, env, &.{ "build", "--opt=speed", "--no-cache", output_arg }, app_path, .absolute, null, child_timeout_ms) catch |err|
         return customInfraFailure(allocator, timer, "roc build spawn error: {}", .{err});
     if (checkCommandExpectation(allocator, result, .{ .args = &.{"build"}, .exit = .success })) |message| {
         return failureFromRun(allocator, timer, result, message);
     }
 
-    const marker = "Object file generated: ";
-    const marker_idx = std.mem.find(u8, result.stdout, marker) orelse
-        return customFailure(allocator, timer, "roc build --no-link did not report an object path", .{});
-    const after_marker = result.stdout[marker_idx + marker.len ..];
-    const newline = std.mem.findScalar(u8, after_marker, '\n') orelse after_marker.len;
-    const obj_path = std.mem.trim(u8, after_marker[0..newline], " \r\t");
-
-    const obj_bytes = std.Io.Dir.cwd().readFileAlloc(io, obj_path, allocator, .limited(64 * 1024 * 1024)) catch |err|
-        return customInfraFailure(allocator, timer, "failed to read object {s}: {}", .{ obj_path, err });
-    if (std.mem.find(u8, obj_bytes, "roc_builtins_list_append_unsafe") != null) {
-        return customFailure(allocator, timer, "list_append_unsafe was not inlined into the --opt=speed object (it still references the builtin symbol)", .{});
+    const archive_bytes = std.Io.Dir.cwd().readFileAlloc(io, archive_path, allocator, .limited(64 * 1024 * 1024)) catch |err|
+        return customInfraFailure(allocator, timer, "failed to read archive {s}: {}", .{ archive_path, err });
+    if (std.mem.find(u8, archive_bytes, "roc_builtins_list_append_unsafe") != null) {
+        return customFailure(allocator, timer, "list_append_unsafe was not inlined into the --opt=speed archive object (it still references the builtin symbol)", .{});
     }
     return null;
 }

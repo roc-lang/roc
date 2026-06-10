@@ -20,10 +20,8 @@ platform ""
     packages {}
     provides { greet_for_host: "greet" }
     targets: {
-        files: "targets/",
-        exe: {
-            x64glibc: { files: [app] },
-        }
+        inputs: "targets/",
+        x64glibc: { inputs: [app] },
     }
 
 greet_for_host : Str -> Str

@@ -51,6 +51,12 @@ pub const CompileConfig = struct {
     features: []const u8 = "",
     debug: bool = false, // Enable debug info generation in output
     link_builtins: bool = false,
+    pic: bool = false, // Position-independent code (required for shared library output)
+
+    /// Check if compiling for the current machine
+    pub fn isNative(self: CompileConfig) bool {
+        return self.target == target.RocTarget.detectNative();
+    }
 };
 
 // Check if LLVM is available at compile time
@@ -125,12 +131,19 @@ const LLVMCodeGenLevelAggressive: c_int = 3;
 
 // LLVM Relocation Models
 const LLVMRelocDefault: c_int = 0;
+const LLVMRelocPIC: c_int = 2;
 
 // LLVM Code Models
 const LLVMCodeModelDefault: c_int = 0;
 
 // External C functions from zig_llvm.cpp and LLVM C API - only available when LLVM is enabled
 const llvm_externs = if (llvm_available) struct {
+    extern fn ZigLLVMWriteArchiveFlattened(
+        archive_name: [*:0]const u8,
+        file_names: [*]const [*:0]const u8,
+        file_name_count: usize,
+        archive_kind: c_int,
+    ) bool;
     extern fn ZigLLVMTargetMachineEmitToFile(
         targ_machine_ref: ?*anyopaque,
         module_ref: ?*anyopaque,
@@ -335,6 +348,44 @@ const LLVMInternalLinkage: c_int = 8;
 /// LLVM-C attribute index for function-level attributes (`~0U`).
 const LLVMAttributeFunctionIndex: c_uint = 0xFFFFFFFF;
 
+// LLVM archive kinds (object::Archive::Kind)
+const LLVMArchiveKindGNU: c_int = 0;
+const LLVMArchiveKindDarwin: c_int = 3;
+
+/// Write a static archive containing the given input files. Inputs that are
+/// themselves archives are flattened into the output, so the result never
+/// nests archives. The archive gets a normal symbol table, so linkers can
+/// resolve members lazily.
+pub fn writeStaticArchive(
+    gpa: Allocator,
+    output_path: []const u8,
+    input_paths: []const []const u8,
+    roc_target: target.RocTarget,
+) error{ OutOfMemory, ArchiveWriteFailed, LLVMNotAvailable }!void {
+    if (comptime !llvm_available) {
+        return error.LLVMNotAvailable;
+    }
+    const externs = llvm_externs;
+
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const output_z = try arena.dupeZ(u8, output_path);
+    const names = try arena.alloc([*:0]const u8, input_paths.len);
+    for (input_paths, 0..) |path, i| {
+        names[i] = try arena.dupeZ(u8, path);
+    }
+
+    const kind: c_int = switch (roc_target.toOsTag()) {
+        .macos => LLVMArchiveKindDarwin,
+        else => LLVMArchiveKindGNU,
+    };
+
+    if (externs.ZigLLVMWriteArchiveFlattened(output_z.ptr, names.ptr, names.len, kind)) {
+        return error.ArchiveWriteFailed;
+    }
+}
 /// Initialize LLVM targets (must be called once before using LLVM)
 pub fn initializeLLVM() void {
     if (comptime !llvm_available) {
@@ -587,7 +638,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
         cpu_z.ptr,
         features_z.ptr,
         config.optimization.toLLVMCodeGenLevel(),
-        LLVMRelocDefault,
+        if (config.pic) LLVMRelocPIC else LLVMRelocDefault,
         LLVMCodeModelDefault,
         true, // function_sections
         true, // data_sections

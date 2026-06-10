@@ -88,16 +88,17 @@ pub const TargetConfigResolveReason = enum {
 /// Context for reporting an invalid identifier-backed target config field.
 pub const TargetConfigResolveDiagnostic = struct {
     target: RocTarget,
-    link_type: LinkType,
+    output: OutputKind,
     field_name: []const u8,
     ident_name: []const u8,
     reason: TargetConfigResolveReason,
 };
 
 /// Link specification for a single target.
-/// Contains the ordered list of items to link for this target.
+/// Contains the artifact kind and the ordered list of items to link for this target.
 pub const TargetLinkSpec = struct {
     target: RocTarget,
+    output: OutputKind,
     items: []const LinkItem,
     wasm: ?WasmTargetConfig = null,
 };
@@ -111,51 +112,46 @@ fn freeLinkSpec(allocator: Allocator, spec: TargetLinkSpec) void {
     allocator.free(spec.items);
 }
 
-/// Type of output binary.
-pub const LinkType = enum {
-    /// Executable binary.
+/// Kind of artifact a target entry produces.
+pub const OutputKind = enum {
+    /// Linked executable. For wasm32, a command module (has an entry).
     exe,
-    /// Static library (.a, .lib).
-    static_lib,
-    /// Shared/dynamic library (.so, .dylib, .dll).
-    shared_lib,
+    /// A static archive (.a, .lib) of the declared host inputs and the
+    /// compiled app, with input archives flattened in.
+    archive,
+    /// Shared library (.so, .dylib, .dll). For wasm32, a reactor module
+    /// (no entry, the provides entrypoints exported).
+    shared,
+
+    /// Parse an output kind from its header tag spelling (Exe, Archive, Shared).
+    pub fn fromTagName(name: []const u8) ?OutputKind {
+        if (std.mem.eql(u8, name, "Exe")) return .exe;
+        if (std.mem.eql(u8, name, "Archive")) return .archive;
+        if (std.mem.eql(u8, name, "Shared")) return .shared;
+        return null;
+    }
 };
 
 /// Complete targets configuration from a platform header.
 pub const TargetsConfig = struct {
-    /// Base directory for target-specific files (e.g., "targets/").
-    files_dir: ?[]const u8,
+    /// Base directory for target-specific input files (e.g., "targets/").
+    inputs_dir: ?[]const u8,
 
-    /// Executable target specifications (in priority order).
-    exe: []const TargetLinkSpec,
-
-    /// Static library target specifications (in priority order).
-    static_lib: []const TargetLinkSpec,
-
-    /// Shared library target specifications (in priority order).
-    shared_lib: []const TargetLinkSpec,
+    /// Per-target specifications (in priority order). Each target appears at most once.
+    targets: []const TargetLinkSpec,
 
     /// Free all owned memory. Call this when the TargetsConfig is no longer needed,
     /// but only if it was created via `fromAST()` (which dupes all strings).
     /// Do NOT call this on TargetsConfig values created with comptime/static data.
     pub fn deinit(self: TargetsConfig, allocator: Allocator) void {
-        if (self.files_dir) |fd| allocator.free(fd);
-        for (self.exe) |spec| freeLinkSpec(allocator, spec);
-        allocator.free(self.exe);
-        for (self.static_lib) |spec| freeLinkSpec(allocator, spec);
-        allocator.free(self.static_lib);
-        for (self.shared_lib) |spec| freeLinkSpec(allocator, spec);
-        allocator.free(self.shared_lib);
+        if (self.inputs_dir) |fd| allocator.free(fd);
+        for (self.targets) |spec| freeLinkSpec(allocator, spec);
+        allocator.free(self.targets);
     }
 
-    /// Get the link spec for a specific target and link type.
-    pub fn getLinkSpec(self: TargetsConfig, target: RocTarget, link_type: LinkType) ?TargetLinkSpec {
-        const specs = switch (link_type) {
-            .exe => self.exe,
-            .static_lib => self.static_lib,
-            .shared_lib => self.shared_lib,
-        };
-        for (specs) |spec| {
+    /// Get the link spec for a specific target.
+    pub fn getLinkSpec(self: TargetsConfig, target: RocTarget) ?TargetLinkSpec {
+        for (self.targets) |spec| {
             if (spec.target == target) {
                 return spec;
             }
@@ -163,17 +159,10 @@ pub const TargetsConfig = struct {
         return null;
     }
 
-    /// Get the default target for a given link type based on the current system.
+    /// Get the default target based on the current system.
     /// Returns the first target in the list that's compatible with the current host (OS and arch).
-    pub fn getDefaultTarget(self: TargetsConfig, link_type: LinkType) ?RocTarget {
-        const specs = switch (link_type) {
-            .exe => self.exe,
-            .static_lib => self.static_lib,
-            .shared_lib => self.shared_lib,
-        };
-
-        // First pass: look for exact OS and architecture match
-        for (specs) |spec| {
+    pub fn getDefaultTarget(self: TargetsConfig) ?RocTarget {
+        for (self.targets) |spec| {
             if (spec.target.isCompatibleWithHost()) {
                 return spec.target;
             }
@@ -184,16 +173,10 @@ pub const TargetsConfig = struct {
 
     /// Get the default target for commands that must execute the result on this host.
     /// This excludes build-compatible targets such as wasm32 that are not native
-    /// process executables for `roc run`.
-    pub fn getDefaultHostExecutableTarget(self: TargetsConfig, link_type: LinkType) ?RocTarget {
-        const specs = switch (link_type) {
-            .exe => self.exe,
-            .static_lib => self.static_lib,
-            .shared_lib => self.shared_lib,
-        };
-
-        for (specs) |spec| {
-            if (spec.target.isExecutableOnHost()) {
+    /// process executables for `roc run`, and targets that don't produce executables.
+    pub fn getDefaultHostExecutableTarget(self: TargetsConfig) ?RocTarget {
+        for (self.targets) |spec| {
+            if (spec.output == .exe and spec.target.isExecutableOnHost()) {
                 return spec.target;
             }
         }
@@ -201,42 +184,14 @@ pub const TargetsConfig = struct {
         return null;
     }
 
-    /// Result of finding a compatible target.
-    pub const CompatibleTarget = struct {
-        target: RocTarget,
-        link_type: LinkType,
-    };
-
-    /// Get the first compatible target across all link types.
-    /// Iterates through exe, static_lib, shared_lib in order,
-    /// returning the first target compatible with the current host.
-    pub fn getFirstCompatibleTarget(self: TargetsConfig) ?CompatibleTarget {
-        const link_types = [_]LinkType{ .exe, .static_lib, .shared_lib };
-
-        for (link_types) |lt| {
-            const specs = self.getSupportedTargets(lt);
-            for (specs) |spec| {
-                if (spec.target.isCompatibleWithHost()) {
-                    return CompatibleTarget{ .target = spec.target, .link_type = lt };
-                }
-            }
-        }
-
-        return null;
-    }
-
     /// Check if a specific target is supported.
-    pub fn supportsTarget(self: TargetsConfig, target: RocTarget, link_type: LinkType) bool {
-        return self.getLinkSpec(target, link_type) != null;
+    pub fn supportsTarget(self: TargetsConfig, target: RocTarget) bool {
+        return self.getLinkSpec(target) != null;
     }
 
-    /// Get all supported targets for a link type.
-    pub fn getSupportedTargets(self: TargetsConfig, link_type: LinkType) []const TargetLinkSpec {
-        return switch (link_type) {
-            .exe => self.exe,
-            .static_lib => self.static_lib,
-            .shared_lib => self.shared_lib,
-        };
+    /// Get all supported targets.
+    pub fn getSupportedTargets(self: TargetsConfig) []const TargetLinkSpec {
+        return self.targets;
     }
 
     pub fn resolveCheckedConstants(
@@ -245,9 +200,7 @@ pub const TargetsConfig = struct {
         checked_module: *const checked.CheckedModuleArtifact,
         diagnostic: *TargetConfigResolveDiagnostic,
     ) error{TargetConfigInvalid}!void {
-        try resolveLinkTypeCheckedConstants(allocator, checked_module, @constCast(self.exe), .exe, diagnostic);
-        try resolveLinkTypeCheckedConstants(allocator, checked_module, @constCast(self.static_lib), .static_lib, diagnostic);
-        try resolveLinkTypeCheckedConstants(allocator, checked_module, @constCast(self.shared_lib), .shared_lib, diagnostic);
+        try resolveLinkTypeCheckedConstants(allocator, checked_module, @constCast(self.targets), diagnostic);
     }
 
     /// Create a TargetsConfig from a parsed AST.
@@ -273,30 +226,20 @@ pub const TargetsConfig = struct {
         const targets_section_idx = platform.targets orelse return null;
         const targets_section = store.getTargetsSection(targets_section_idx);
 
-        // Extract files_dir from string literal token (StringPart token)
+        // Extract inputs_dir from string literal token (StringPart token)
         // Dupe the string so we own the memory
-        const files_dir: ?[]const u8 = if (targets_section.files_path) |tok_idx|
+        const inputs_dir: ?[]const u8 = if (targets_section.inputs_path) |tok_idx|
             try allocator.dupe(u8, ast.resolve(tok_idx))
         else
             null;
-        errdefer if (files_dir) |fd| allocator.free(fd);
+        errdefer if (inputs_dir) |fd| allocator.free(fd);
 
-        // Convert exe link type
-        const exe_specs = try parseLinkTypeSpecs(allocator, store, ast, targets_section.exe);
-        errdefer freeLinkTypeSpecs(allocator, exe_specs);
-
-        // Convert static_lib link type
-        const static_lib_specs = try parseLinkTypeSpecs(allocator, store, ast, targets_section.static_lib);
-        errdefer freeLinkTypeSpecs(allocator, static_lib_specs);
-
-        // shared_lib to be added later
-        const empty_specs: []const TargetLinkSpec = &.{};
+        const target_specs = try parseTargetSpecs(allocator, store, ast, targets_section.entries);
+        errdefer freeTargetSpecs(allocator, target_specs);
 
         return TargetsConfig{
-            .files_dir = files_dir,
-            .exe = exe_specs,
-            .static_lib = static_lib_specs,
-            .shared_lib = empty_specs,
+            .inputs_dir = inputs_dir,
+            .targets = target_specs,
         };
     }
 
@@ -415,7 +358,7 @@ pub const TargetsConfig = struct {
             const name = ast.resolve(entry.name);
             const value = store.getTargetConfigValue(entry.value);
 
-            if (std.mem.eql(u8, name, "files")) {
+            if (std.mem.eql(u8, name, "inputs")) {
                 switch (value) {
                     .files => |files| {
                         clearTargetFiles(allocator, link_items);
@@ -471,17 +414,40 @@ pub const TargetsConfig = struct {
         return if (has_wasm_config) wasm else null;
     }
 
-    /// Parse link specs for a single link type (exe, static_lib, shared_lib).
-    fn parseLinkTypeSpecs(
+    /// Parse the output kind from a target entry's config record.
+    /// Defaults to .exe when no output: field is present.
+    fn parseOutputKind(
+        store: *const parse.NodeStore,
+        ast: anytype,
+        config_idx: parse.AST.TargetConfig.Idx,
+    ) OutputKind {
+        const config = store.getTargetConfig(config_idx);
+        const entries = store.targetConfigEntrySlice(config.entries);
+        for (entries) |entry_idx| {
+            const entry = store.getTargetConfigEntry(entry_idx);
+            const name = ast.resolve(entry.name);
+            if (std.mem.eql(u8, name, "output")) {
+                switch (store.getTargetConfigValue(entry.value)) {
+                    .tag_literal => |tok| {
+                        if (OutputKind.fromTagName(ast.resolve(tok))) |kind| {
+                            return kind;
+                        }
+                    },
+                    else => {},
+                }
+            }
+        }
+        return .exe;
+    }
+
+    /// Parse per-target specs from the targets section entries.
+    fn parseTargetSpecs(
         allocator: Allocator,
         store: *const parse.NodeStore,
         ast: anytype,
-        link_type_idx: anytype,
+        entries: parse.AST.TargetEntry.Span,
     ) Allocator.Error![]const TargetLinkSpec {
-        const idx = link_type_idx orelse return &.{};
-
-        const link_type = store.getTargetLinkType(idx);
-        const entry_indices = store.targetEntrySlice(link_type.entries);
+        const entry_indices = store.targetEntrySlice(entries);
 
         var specs = std.array_list.Managed(TargetLinkSpec).init(allocator);
         errdefer {
@@ -509,6 +475,7 @@ pub const TargetsConfig = struct {
 
             try specs.append(.{
                 .target = target,
+                .output = parseOutputKind(store, ast, entry.config),
                 .items = try link_items.toOwnedSlice(),
                 .wasm = wasm_config,
             });
@@ -517,8 +484,8 @@ pub const TargetsConfig = struct {
         return try specs.toOwnedSlice();
     }
 
-    /// Free link type specs allocated by parseLinkTypeSpecs.
-    fn freeLinkTypeSpecs(allocator: Allocator, specs: []const TargetLinkSpec) void {
+    /// Free target specs allocated by parseTargetSpecs.
+    fn freeTargetSpecs(allocator: Allocator, specs: []const TargetLinkSpec) void {
         for (specs) |spec| freeLinkSpec(allocator, spec);
         allocator.free(specs);
     }
@@ -528,12 +495,11 @@ fn resolveLinkTypeCheckedConstants(
     allocator: Allocator,
     checked_module: *const checked.CheckedModuleArtifact,
     specs: []TargetLinkSpec,
-    link_type: LinkType,
     diagnostic: *TargetConfigResolveDiagnostic,
 ) error{TargetConfigInvalid}!void {
     for (specs) |*spec| {
         var wasm = spec.wasm orelse continue;
-        resolveWasmCheckedConstants(allocator, checked_module, spec.target, link_type, &wasm, diagnostic) catch |err| {
+        resolveWasmCheckedConstants(allocator, checked_module, spec.target, spec.output, &wasm, diagnostic) catch |err| {
             spec.wasm = wasm;
             return err;
         };
@@ -545,22 +511,22 @@ fn resolveWasmCheckedConstants(
     allocator: Allocator,
     checked_module: *const checked.CheckedModuleArtifact,
     target: RocTarget,
-    link_type: LinkType,
+    output: OutputKind,
     wasm: *WasmTargetConfig,
     diagnostic: *TargetConfigResolveDiagnostic,
 ) error{TargetConfigInvalid}!void {
-    try resolveWasmBoolField(allocator, checked_module, target, link_type, "import_memory", &wasm.import_memory, &wasm.import_memory_ident, diagnostic);
-    try resolveWasmUsizeField(allocator, checked_module, target, link_type, "minimum_memory", &wasm.minimum_memory, &wasm.minimum_memory_ident, diagnostic);
-    try resolveWasmUsizeField(allocator, checked_module, target, link_type, "maximum_memory", &wasm.maximum_memory, &wasm.maximum_memory_ident, diagnostic);
-    try resolveWasmUsizeField(allocator, checked_module, target, link_type, "initial_stack_size", &wasm.initial_stack_size, &wasm.initial_stack_size_ident, diagnostic);
-    try resolveWasmU32Field(allocator, checked_module, target, link_type, "global_base", &wasm.global_base, &wasm.global_base_ident, diagnostic);
+    try resolveWasmBoolField(allocator, checked_module, target, output, "import_memory", &wasm.import_memory, &wasm.import_memory_ident, diagnostic);
+    try resolveWasmUsizeField(allocator, checked_module, target, output, "minimum_memory", &wasm.minimum_memory, &wasm.minimum_memory_ident, diagnostic);
+    try resolveWasmUsizeField(allocator, checked_module, target, output, "maximum_memory", &wasm.maximum_memory, &wasm.maximum_memory_ident, diagnostic);
+    try resolveWasmUsizeField(allocator, checked_module, target, output, "initial_stack_size", &wasm.initial_stack_size, &wasm.initial_stack_size_ident, diagnostic);
+    try resolveWasmU32Field(allocator, checked_module, target, output, "global_base", &wasm.global_base, &wasm.global_base_ident, diagnostic);
 }
 
 fn resolveWasmBoolField(
     allocator: Allocator,
     checked_module: *const checked.CheckedModuleArtifact,
     target: RocTarget,
-    link_type: LinkType,
+    output: OutputKind,
     field_name: []const u8,
     out: *bool,
     ident_slot: *?[]const u8,
@@ -569,11 +535,11 @@ fn resolveWasmBoolField(
     const ident = ident_slot.* orelse return;
     var reason: TargetConfigResolveReason = .missing_top_level_value;
     const node = topLevelConstNode(checked_module, ident, &reason) orelse {
-        diagnostic.* = .{ .target = target, .link_type = link_type, .field_name = field_name, .ident_name = ident, .reason = reason };
+        diagnostic.* = .{ .target = target, .output = output, .field_name = field_name, .ident_name = ident, .reason = reason };
         return error.TargetConfigInvalid;
     };
     const value = constBool(checked_module, node) orelse {
-        diagnostic.* = .{ .target = target, .link_type = link_type, .field_name = field_name, .ident_name = ident, .reason = .expected_bool };
+        diagnostic.* = .{ .target = target, .output = output, .field_name = field_name, .ident_name = ident, .reason = .expected_bool };
         return error.TargetConfigInvalid;
     };
     out.* = value;
@@ -585,7 +551,7 @@ fn resolveWasmUsizeField(
     allocator: Allocator,
     checked_module: *const checked.CheckedModuleArtifact,
     target: RocTarget,
-    link_type: LinkType,
+    output: OutputKind,
     field_name: []const u8,
     out: *?usize,
     ident_slot: *?[]const u8,
@@ -594,11 +560,11 @@ fn resolveWasmUsizeField(
     const ident = ident_slot.* orelse return;
     var reason: TargetConfigResolveReason = .expected_unsigned_integer;
     const node = topLevelConstNode(checked_module, ident, &reason) orelse {
-        diagnostic.* = .{ .target = target, .link_type = link_type, .field_name = field_name, .ident_name = ident, .reason = reason };
+        diagnostic.* = .{ .target = target, .output = output, .field_name = field_name, .ident_name = ident, .reason = reason };
         return error.TargetConfigInvalid;
     };
     const value = constUnsigned(checked_module, node, &reason) orelse {
-        diagnostic.* = .{ .target = target, .link_type = link_type, .field_name = field_name, .ident_name = ident, .reason = reason };
+        diagnostic.* = .{ .target = target, .output = output, .field_name = field_name, .ident_name = ident, .reason = reason };
         return error.TargetConfigInvalid;
     };
     out.* = value;
@@ -610,7 +576,7 @@ fn resolveWasmU32Field(
     allocator: Allocator,
     checked_module: *const checked.CheckedModuleArtifact,
     target: RocTarget,
-    link_type: LinkType,
+    output: OutputKind,
     field_name: []const u8,
     out: *?u32,
     ident_slot: *?[]const u8,
@@ -619,15 +585,15 @@ fn resolveWasmU32Field(
     const ident = ident_slot.* orelse return;
     var reason: TargetConfigResolveReason = .expected_unsigned_integer;
     const node = topLevelConstNode(checked_module, ident, &reason) orelse {
-        diagnostic.* = .{ .target = target, .link_type = link_type, .field_name = field_name, .ident_name = ident, .reason = reason };
+        diagnostic.* = .{ .target = target, .output = output, .field_name = field_name, .ident_name = ident, .reason = reason };
         return error.TargetConfigInvalid;
     };
     const value = constUnsigned(checked_module, node, &reason) orelse {
-        diagnostic.* = .{ .target = target, .link_type = link_type, .field_name = field_name, .ident_name = ident, .reason = reason };
+        diagnostic.* = .{ .target = target, .output = output, .field_name = field_name, .ident_name = ident, .reason = reason };
         return error.TargetConfigInvalid;
     };
     const narrowed = std.math.cast(u32, value) orelse {
-        diagnostic.* = .{ .target = target, .link_type = link_type, .field_name = field_name, .ident_name = ident, .reason = .integer_out_of_range };
+        diagnostic.* = .{ .target = target, .output = output, .field_name = field_name, .ident_name = ident, .reason = .integer_out_of_range };
         return error.TargetConfigInvalid;
     };
     out.* = narrowed;
@@ -750,18 +716,16 @@ test "getDefaultTarget returns first compatible target" {
     // Create a config with only x64glibc (not x64musl)
     // On a Linux x64 system, both are compatible, but we only include glibc
     const config = TargetsConfig{
-        .files_dir = "targets",
-        .exe = &.{
-            .{ .target = .x64glibc, .items = &.{.app} },
+        .inputs_dir = "targets",
+        .targets = &.{
+            .{ .target = .x64glibc, .output = .exe, .items = &.{.app} },
         },
-        .static_lib = &.{},
-        .shared_lib = &.{},
     };
 
     // getDefaultTarget should return x64glibc if we're on Linux x64
     // (since both x64musl and x64glibc are compatible with Linux x64)
     if (builtin.target.os.tag == .linux and builtin.target.cpu.arch == .x86_64) {
-        const result = config.getDefaultTarget(.exe);
+        const result = config.getDefaultTarget();
         try testing.expect(result != null);
         try testing.expectEqual(RocTarget.x64glibc, result.?);
     }
@@ -769,95 +733,57 @@ test "getDefaultTarget returns first compatible target" {
 
 test "getDefaultHostExecutableTarget excludes wasm" {
     const config = TargetsConfig{
-        .files_dir = "targets",
-        .exe = &.{
-            .{ .target = .wasm32, .items = &.{.app} },
+        .inputs_dir = "targets",
+        .targets = &.{
+            .{ .target = .wasm32, .output = .exe, .items = &.{.app} },
         },
-        .static_lib = &.{},
-        .shared_lib = &.{},
     };
 
-    try testing.expectEqual(RocTarget.wasm32, config.getDefaultTarget(.exe).?);
-    try testing.expect(config.getDefaultHostExecutableTarget(.exe) == null);
+    try testing.expectEqual(RocTarget.wasm32, config.getDefaultTarget().?);
+    try testing.expect(config.getDefaultHostExecutableTarget() == null);
 }
 
-test "getFirstCompatibleTarget finds exe target first" {
+test "getDefaultHostExecutableTarget excludes non-exe outputs" {
     const config = TargetsConfig{
-        .files_dir = "targets",
-        .exe = &.{
-            .{ .target = .x64mac, .items = &.{.app} },
-            .{ .target = .arm64mac, .items = &.{.app} },
+        .inputs_dir = "targets",
+        .targets = &.{
+            .{ .target = .x64mac, .output = .shared, .items = &.{.app} },
+            .{ .target = .arm64mac, .output = .shared, .items = &.{.app} },
         },
-        .static_lib = &.{
-            .{ .target = .wasm32, .items = &.{.app} },
-        },
-        .shared_lib = &.{},
     };
 
-    // On macOS x64, should find x64mac from exe targets
-    if (builtin.target.os.tag == .macos and builtin.target.cpu.arch == .x86_64) {
-        const result = config.getFirstCompatibleTarget();
-        try testing.expect(result != null);
-        try testing.expectEqual(RocTarget.x64mac, result.?.target);
-        try testing.expectEqual(LinkType.exe, result.?.link_type);
-    }
-    // On macOS arm64, should find arm64mac from exe targets
-    if (builtin.target.os.tag == .macos and builtin.target.cpu.arch == .aarch64) {
-        const result = config.getFirstCompatibleTarget();
-        try testing.expect(result != null);
-        try testing.expectEqual(RocTarget.arm64mac, result.?.target);
-        try testing.expectEqual(LinkType.exe, result.?.link_type);
-    }
-}
-
-test "getFirstCompatibleTarget returns null when no compatible target" {
-    // Create a config with only Windows targets
-    const config = TargetsConfig{
-        .files_dir = "targets",
-        .exe = &.{
-            .{ .target = .x64win, .items = &.{.app} },
-            .{ .target = .arm64win, .items = &.{.app} },
-        },
-        .static_lib = &.{},
-        .shared_lib = &.{},
-    };
-
-    // On non-Windows systems, no compatible target should be found
-    if (builtin.target.os.tag != .windows) {
-        const result = config.getFirstCompatibleTarget();
-        try testing.expect(result == null);
-    }
+    try testing.expect(config.getDefaultHostExecutableTarget() == null);
 }
 
 test "getLinkSpec returns correct spec for supported target" {
     const config = TargetsConfig{
-        .files_dir = "targets",
-        .exe = &.{
-            .{ .target = .x64mac, .items = &.{ .{ .file_path = "libhost.a" }, .app } },
-            .{ .target = .arm64mac, .items = &.{.app} },
+        .inputs_dir = "targets",
+        .targets = &.{
+            .{ .target = .x64mac, .output = .exe, .items = &.{ .{ .file_path = "libhost.a" }, .app } },
+            .{ .target = .arm64mac, .output = .shared, .items = &.{.app} },
         },
-        .static_lib = &.{},
-        .shared_lib = &.{},
     };
 
-    const spec = config.getLinkSpec(.x64mac, .exe);
+    const spec = config.getLinkSpec(.x64mac);
     try testing.expect(spec != null);
     try testing.expectEqual(RocTarget.x64mac, spec.?.target);
+    try testing.expectEqual(OutputKind.exe, spec.?.output);
     try testing.expectEqual(@as(usize, 2), spec.?.items.len);
+
+    const shared_spec = config.getLinkSpec(.arm64mac);
+    try testing.expectEqual(OutputKind.shared, shared_spec.?.output);
 }
 
 test "getLinkSpec returns null for unsupported target" {
     const config = TargetsConfig{
-        .files_dir = "targets",
-        .exe = &.{
-            .{ .target = .x64mac, .items = &.{.app} },
+        .inputs_dir = "targets",
+        .targets = &.{
+            .{ .target = .x64mac, .output = .exe, .items = &.{.app} },
         },
-        .static_lib = &.{},
-        .shared_lib = &.{},
     };
 
     // x64musl is not in the config
-    const spec = config.getLinkSpec(.x64musl, .exe);
+    const spec = config.getLinkSpec(.x64musl);
     try testing.expect(spec == null);
 }
 
@@ -871,17 +797,16 @@ test "fromAST captures punned wasm identifier config" {
         \\    packages {}
         \\    provides { main_for_host: "main" }
         \\    targets: {
-        \\        files: "targets/",
-        \\        static_lib: {
-        \\            wasm32: {
-        \\                files: ["libhost.a", app],
-        \\                import_memory,
-        \\                minimum_memory,
-        \\                maximum_memory,
-        \\                initial_stack_size,
-        \\                global_base,
-        \\            },
-        \\        }
+        \\        inputs: "targets/",
+        \\        wasm32: {
+        \\            inputs: ["libhost.a", app],
+        \\            output: Shared,
+        \\            import_memory,
+        \\            minimum_memory,
+        \\            maximum_memory,
+        \\            initial_stack_size,
+        \\            global_base,
+        \\        },
         \\    }
         \\
         \\import_memory = True
@@ -909,8 +834,9 @@ test "fromAST captures punned wasm identifier config" {
     const config = maybe_config.?;
     defer config.deinit(allocator);
 
-    try testing.expectEqual(@as(usize, 1), config.static_lib.len);
-    const wasm = config.static_lib[0].wasm orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(usize, 1), config.targets.len);
+    try testing.expectEqual(OutputKind.shared, config.targets[0].output);
+    const wasm = config.targets[0].wasm orelse return error.TestUnexpectedResult;
     try testing.expect(wasm.hasIdentifierBackedValues());
     try testing.expectEqualStrings("import_memory", wasm.import_memory_ident.?);
     try testing.expectEqualStrings("minimum_memory", wasm.minimum_memory_ident.?);
