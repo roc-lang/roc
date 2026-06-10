@@ -142,7 +142,7 @@ const TestEnv = @This();
 /// add that module as an import to this module.
 /// IMPORTANT: This reuses the Builtin module from the imported module to ensure
 /// type variables from auto-imported types (Bool, Try, Str) are shared across modules.
-pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_name: []const u8, other_test_env: *const TestEnv) (Allocator.Error || error{TooNested})!TestEnv {
+pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_name: []const u8, other_test_env: *const TestEnv) Allocator.Error!TestEnv {
     const gpa = std.testing.allocator;
 
     const roc_ctx = CoreCtx.testing(gpa, gpa);
@@ -205,7 +205,7 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
     });
 
     // Parse the AST
-    const parse_ast = try parse.parse(gpa, &module_env.common);
+    const parse_ast = try parse.file(gpa, &module_env.common);
     errdefer parse_ast.deinit();
     parse_ast.store.emptyScratch();
 
@@ -293,7 +293,7 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
 }
 
 /// Initialize where the provided source is an entire file
-pub fn init(module_name: []const u8, source: []const u8) (Allocator.Error || error{TooNested})!TestEnv {
+pub fn init(module_name: []const u8, source: []const u8) Allocator.Error!TestEnv {
     const gpa = std.testing.allocator;
 
     const roc_ctx = CoreCtx.testing(gpa, gpa);
@@ -325,7 +325,7 @@ pub fn init(module_name: []const u8, source: []const u8) (Allocator.Error || err
     try module_env.common.calcLineStarts(gpa);
 
     // Parse the AST
-    const parse_ast = try parse.parse(gpa, &module_env.common);
+    const parse_ast = try parse.file(gpa, &module_env.common);
     errdefer parse_ast.deinit();
     parse_ast.store.emptyScratch();
 
@@ -403,7 +403,7 @@ pub fn init(module_name: []const u8, source: []const u8) (Allocator.Error || err
 }
 
 /// Canonicalize a source module without type checking and count module-not-found diagnostics.
-pub fn countModuleNotFoundDiagnosticsAfterCanonicalization(module_name: []const u8, source: []const u8) (Allocator.Error || error{TooNested})!usize {
+pub fn countModuleNotFoundDiagnosticsAfterCanonicalization(module_name: []const u8, source: []const u8) Allocator.Error!usize {
     const gpa = std.testing.allocator;
 
     var module_env = try ModuleEnv.init(gpa, source);
@@ -415,7 +415,7 @@ pub fn countModuleNotFoundDiagnosticsAfterCanonicalization(module_name: []const 
     module_env.qualified_module_ident = module_env.display_module_name_idx;
     try module_env.common.calcLineStarts(gpa);
 
-    const parse_ast = try parse.parse(gpa, &module_env.common);
+    const parse_ast = try parse.file(gpa, &module_env.common);
     defer parse_ast.deinit();
     parse_ast.store.emptyScratch();
 
@@ -454,7 +454,7 @@ pub fn countModuleNotFoundDiagnosticsAfterCanonicalization(module_name: []const 
 }
 
 /// Initialize where the provided source a single expression
-pub fn initExpr(module_name: []const u8, comptime source_expr: []const u8) (Allocator.Error || error{TooNested})!TestEnv {
+pub fn initExpr(module_name: []const u8, comptime source_expr: []const u8) Allocator.Error!TestEnv {
     const gpa = std.testing.allocator;
 
     const source_wrapper =

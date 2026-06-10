@@ -1053,7 +1053,7 @@ pub const PackageEnv = struct {
         // Parse AST and cache for reuse in doCanonicalize (avoids double parsing)
         // IMPORTANT: Use st.moduleEnv().?.common (not local env.common) so the AST's pointer
         // to CommonEnv remains valid after this function returns.
-        const parse_ast = parse.parse(self.gpa, &st.moduleEnv().?.common) catch {
+        const parse_ast = parse.file(self.gpa, &st.moduleEnv().?.common) catch {
             // If parsing fails, proceed to canonicalization to report errors
             st.phase = .Canonicalize;
             try self.enqueue(module_id);
@@ -1061,7 +1061,7 @@ pub const PackageEnv = struct {
         };
         parse_ast.store.emptyScratch();
 
-        // parse_ast is already heap-allocated by parse.parse
+        // parse_ast is already heap-allocated by parse.file
         st.cached_ast = parse_ast;
 
         const local_imports = try module_discovery.extractImportsFromDeclIndex(parse_ast, self.gpa);
@@ -1655,6 +1655,7 @@ pub const PackageEnv = struct {
         imported_envs: []const *ModuleEnv,
         imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
         available_artifacts: []const CheckedArtifact.ImportedModuleView,
+        explicit_roots: []const CheckedArtifact.ExplicitRootRequestInput,
     ) anyerror!TypeCheckOutput {
         // Load builtin indices from the binary data generated at build time
         const builtin_indices = try builtin_loading.deserializeBuiltinIndices(check_alloc, compiled_builtins.builtin_indices_bin);
@@ -1715,7 +1716,7 @@ pub const PackageEnv = struct {
             .{
                 .platform_requirement_context = null,
                 .platform_app_relation = null,
-                .explicit_roots = &.{},
+                .explicit_roots = explicit_roots,
                 .available_artifacts = available_artifacts,
                 .problem_store = &checker.problems,
             },
@@ -1875,6 +1876,7 @@ pub const PackageEnv = struct {
             imported_envs.items,
             imported_artifacts.items,
             available_artifacts,
+            &.{},
         );
         defer typecheck_output.deinit();
         if (typecheck_output.checked_artifact != null) {

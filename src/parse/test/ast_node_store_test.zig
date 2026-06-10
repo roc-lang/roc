@@ -877,10 +877,47 @@ test "NodeStore round trip - Targets" {
         };
     }
 
+    const config_value = AST.TargetConfigValue{ .int_literal = rand_token_idx(random) };
+    const config_value_idx = try store.addTargetConfigValue(config_value);
+    const retrieved_config_value = store.getTargetConfigValue(config_value_idx);
+
+    testing.expectEqualDeep(config_value, retrieved_config_value) catch |err| {
+        std.debug.print("\n\nOriginal TargetConfigValue:  {any}\n\n", .{config_value});
+        std.debug.print("Retrieved TargetConfigValue: {any}\n\n", .{retrieved_config_value});
+        return err;
+    };
+
+    const config_entry = AST.TargetConfigEntry{
+        .name = rand_token_idx(random),
+        .value = config_value_idx,
+        .region = rand_region(random),
+    };
+    const config_entry_idx = try store.addTargetConfigEntry(config_entry);
+    const retrieved_config_entry = store.getTargetConfigEntry(config_entry_idx);
+
+    testing.expectEqualDeep(config_entry, retrieved_config_entry) catch |err| {
+        std.debug.print("\n\nOriginal TargetConfigEntry:  {any}\n\n", .{config_entry});
+        std.debug.print("Retrieved TargetConfigEntry: {any}\n\n", .{retrieved_config_entry});
+        return err;
+    };
+
+    const config = AST.TargetConfig{
+        .entries = .{ .span = rand_span(random) },
+        .region = rand_region(random),
+    };
+    const config_idx = try store.addTargetConfig(config);
+    const retrieved_config = store.getTargetConfig(config_idx);
+
+    testing.expectEqualDeep(config, retrieved_config) catch |err| {
+        std.debug.print("\n\nOriginal TargetConfig:  {any}\n\n", .{config});
+        std.debug.print("Retrieved TargetConfig: {any}\n\n", .{retrieved_config});
+        return err;
+    };
+
     // Test TargetEntry round trip
     const entry = AST.TargetEntry{
         .target = rand_token_idx(random),
-        .files = .{ .span = rand_span(random) },
+        .config = config_idx,
         .region = rand_region(random),
     };
     const entry_idx = try store.addTargetEntry(entry);

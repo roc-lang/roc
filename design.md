@@ -113,6 +113,146 @@ data, ARC data, LirImage data, and test reporting. If code uses a sentinel
 as a placeholder for data that must be produced, stop and redesign the producer
 ownership and presence model.
 
+## Parser Boundary
+
+Parsing is a token-first stage. Tokenization produces the only cursor input for
+the parser, and the parser walks that token buffer directly. The parser does not
+use recursive grammar functions, and it does not keep source substrings as an
+implicit parsing cursor. Source text may be consulted only through token
+metadata, for diagnostics, literal decoding, and identifier interning.
+
+The parser is a direct token-dispatch machine. Hot parser code is organized as
+grammar kernels that walk the token buffer with local token dispatch and ordinary
+lexical control flow. The hot path must not route grammar progress through a
+central parser-state interpreter loop, even when the cases contain token
+switches, because optimized code can lower that transition pattern to a central
+indirect branch.
+
+This mirrors simdjson stage 2 more closely than a generic labeled-state switch.
+simdjson's stage-2 parser walks a precomputed structural stream with concrete
+JSON grammar labels such as object-begin, object-continue, array-value, and
+scope-end. Its depth stack stores only open JSON scope fields (`is_array`,
+tape index, element count); it does not store "run this parser state next"
+instructions. Roc parser kernels must follow the same split:
+tokenization performs linear input discovery, parser kernels inspect the
+current token directly, and parser-owned syntax state describes currently open
+Roc syntax rather than queued control flow.
+
+Zig has no arbitrary sibling `goto`, so Roc cannot literally copy simdjson's C++
+label layout. The Zig equivalent is lexical grammar loops with local token
+switches, explicit syntax-depth state for nested constructs, and direct
+fallthrough/`continue`/`break` transitions inside the kernel. Where a grammar
+transition cannot be expressed lexically without a generic context switch, the
+hot alternatives are to duplicate a small token-dispatch block or to split out a
+specialized grammar kernel whose body remains stack-safe and assembly-audited.
+Using a wide parser-context switch is not accepted for hot expression, pattern,
+statement, or type parsing unless ReleaseFast assembly proves that exact slice
+has no central indirect branch and is faster than the lexical-kernel shape.
+
+Parser chunks are not considered structurally done until ReleaseFast assembly
+has been checked for this shape: no recursive parser calls for the converted
+grammar, no instruction-driver loop, no broad parser-context dispatch ladder,
+and no unexpected indirect branch in the hot transition path. The expression
+prefix/suffix/binary-operator kernel is the first required audit target because
+it is the parse-heavy hot path.
+
+Parser conversion proceeds by grammar slices that can be assembly-audited.
+Before expanding a slice, build a tiny Zig proof of the intended dispatch shape
+and compare it with the analogous simdjson stage-2 parser shape: local token
+tests, direct branches between parser states, and explicit syntax state only
+where nested syntax requires it. After converting the real Roc slice, build the
+ReleaseFast compiler with symbols and disassemble the converted parser symbol
+directly, for example:
+
+```sh
+zig build roc -Doptimize=ReleaseFast -Dstrip=false
+xcrun llvm-objdump --macho --disassemble --dis-symname _Parser.parseExposedCollectionTokens zig-out/bin/roc
+```
+
+The audit result must be recorded before moving to the next slice. If the
+assembly shows a dense jump table, generic context dispatch loop, indirect
+branch in the hot parser transition path, or revived recursive grammar call,
+the slice is not accepted and must be reshaped before more grammar is converted.
+
+Current parser audit result:
+
+```text
+commit: 27165e02fd Fix pattern root parser instantiation
+binary: zig-out/bin/roc
+version: release-fast-27165e02
+build: zig build roc -Doptimize=ReleaseFast -Dstrip=false --summary all --color off
+```
+
+The parser entry wrappers for expression, statement, pattern, type annotation,
+and associated statement blocks all enter `runExprStatementKernel` with an
+explicit root mode. They are API wrappers, not separate recursive grammar
+kernels. Static source and symbol checks must not find `OpenSyntaxKind`,
+`ParserContext`, `TypeOpenSyntaxStack`, `runTypeAnnoDirect`,
+`parseWhereClauseTokens`, or `parseWhereConstraintTokens`.
+
+The current ReleaseFast audit disassembled these parser kernel instantiations:
+
+```text
+_Parser.runExprStatementKernel__anon_169991
+_Parser.runExprStatementKernel__anon_175153
+_Parser.runExprStatementKernel__anon_175404
+```
+
+Searching those disassemblies for indirect branch-table dispatch found no
+`br xN` instructions. Remaining indirect instructions were `blr x8` allocator
+calls in growth/copy paths, not parser-state transitions. This is the accepted
+assembly shape for the current unified parser slice.
+
+Nested Roc syntax uses explicit open-syntax state, like simdjson's open
+container depth. This state records concrete syntax currently being parsed:
+open lists, records, strings, blocks, matches, type applications, and similar
+constructs. It is not a parser instruction stream and must not store "execute
+this parser operation next" entries. When a syntactic construct closes, the
+parser inspects the parent open syntax and branches directly to that parent's
+lexical continuation inside the current grammar kernel, or returns a completed
+result to the caller when the kernel's root syntax closes.
+
+Open-syntax state is stored compactly. The hot state records syntax kind and
+indexes into syntax-specific side storage when payload is unavoidable. The
+parser must not store wide tagged unions as call records for grammar work, and
+must not push generic parser instructions just to decide what token to inspect
+next. Leaf token cases that do not open nested syntax must not push state.
+
+The parser owns a small set of result registers. Expression, pattern, type,
+statement, associated-item, header, collection, and token-span results are
+written to registers as syntax closes. The parent open syntax documents which
+register it consumes. Closing nested syntax means jumping to the parent's token
+branch, not returning through a Zig call stack and not interpreting a queued
+parser action. Leaf helpers may exist for non-grammar work such as token
+inspection, literal decoding, declaration indexing, scratch-span construction,
+and diagnostic output, but they must not parse nested Roc grammar by calling
+another grammar entrypoint.
+
+`NodeStore` is the parser's output builder. The parser may accumulate children
+in parser-owned scratch spans while a syntactic collection is open, then commit
+the final AST node when its closing token is consumed or when parser recovery
+emits a malformed node. Declaration indexing is updated from committed
+statements and headers as part of this same iterative walk, so later compiler
+stages consume explicit parser output rather than inspecting source syntax.
+
+Error recovery is part of parsing and error reporting. Recovery states are also
+iterative token states: they advance to a known delimiter, line boundary, or
+collection close token and then jump to the next documented open-syntax branch.
+Recovery may use parser-local heuristics because parsing and error reporting are
+the only compiler stages allowed to do so. Recovery must still output explicit
+malformed AST nodes and diagnostics; later stages must not recover missing
+syntax on their own.
+
+The parser implementation must not keep the old recursive-descent or
+per-subgrammar instruction-interpreter architecture. Old expression, pattern,
+statement, block, and type-annotation parser entrypoints are forbidden
+implementation details. Public package functions may continue to expose parsing
+capabilities such as parsing a whole file, header, expression, or statement, but
+inside the parser they must enter direct token dispatch with an explicit goal
+context. Static verification for this invariant is part of parser work:
+searches for the old architecture names and recursive parser entrypoint names
+must come back empty before Zig is run.
+
 Post-check names should be short and precise. Do not encode whole explanations
 into long compound type or function names. Prefer a small local vocabulary such
 as `FnSet`, `FnVariant`, `FnTemplate`, and `CaptureSlot`, then define the exact
@@ -176,6 +316,162 @@ value, runtime layout, or checked function template.
 The word `obligation` is banned in new post-check docs and code. Use the exact
 owner instead: checked dispatch plan, erased callable requirement,
 specialization queue entry, or debug assertion.
+
+## Canonicalization Stack Safety
+
+Canonicalization is allowed to be referenced by name here because it is the
+existing pre-check phase that produces CIR. This section is about the
+implementation of that phase only; it does not change the boundary that
+post-check compiler stages must consume Checked Modules rather than CIR.
+
+Canonicalization must be fully stack-safe. Traversal code in `src/canonicalize`
+must not use direct recursion, indirect recursion, or mutual recursion to walk
+source syntax. Deep source nesting must consume explicit work storage allocated
+with `std.heap.stackFallback` and then the general allocator, not the process
+call stack. Nesting limits such as maximum parenthesis depth must not be used
+to protect the implementation from recursion; the traversal shape must be
+iterative.
+
+The main expression, block, and associated-item path should be implemented as a
+direct labeled-switch kernel rather than as a generic frame pop loop. The
+public entry points can remain small wrappers such as `canonicalizeExpr` and
+`canonicalizeExprOrMalformed`, but the internal worker should look like a state
+machine:
+
+```zig
+const CanLabel = enum {
+    expr_start,
+    expr_complete,
+    seq_next,
+    block_next,
+    block_finish,
+    associated_next,
+    associated_finish,
+};
+
+fn runExprKernel(self: *Self, root: AST.Expr.Idx) Allocator.Error!?CanExprResult {
+    var fallback_state = std.heap.stackFallback(16 * 1024, self.env.gpa);
+    const scratch_allocator = fallback_state.get();
+
+    var scratch = CanKernelScratch{};
+    defer scratch.deinit(scratch_allocator);
+    errdefer scratch.cleanupActive(self);
+
+    var expr_state = ExprState{ .ast = root };
+    var last_expr: ?CanExprResult = null;
+
+    can_kernel: switch (CanLabel.expr_start) {
+        .expr_start => {
+            // Inspect expr_state, schedule child work, and jump directly.
+            continue :can_kernel .expr_complete;
+        },
+        .expr_complete => {
+            // Use last_expr as the completed child result.
+            return last_expr;
+        },
+        else => unreachable,
+    }
+}
+```
+
+Completed child results should be carried through typed return registers such
+as `last_expr`, `last_pattern`, and `last_type_anno`. Avoid a generic result
+stack for every child expression. The kernel should keep hot state in locals
+and jump directly between labels with `continue :can_kernel .label`, following
+the same performance model as the stack-safe parser.
+
+Do not replace recursion with one large tagged union that stores every possible
+continuation payload. That tends to copy the largest payload on every push and
+pop. Instead, use typed continuation stacks with compact parent-kind enums. For
+example, expression continuations can have a small parent-kind stack plus
+specialized payload stacks for the cases that need extra data:
+
+```zig
+const ExprParentKind = enum(u16) {
+    unary,
+    bin_lhs,
+    bin_rhs,
+    list_item,
+    tuple_item,
+    apply_arg,
+    method_receiver,
+    method_arg,
+    lambda_body,
+    if_condition,
+    if_then,
+    if_else,
+    match_cond,
+    match_guard,
+    match_body,
+    while_cond,
+    while_body,
+    for_list,
+    for_body,
+    block_expr_stmt,
+    block_final_expr,
+    block_decl_body,
+    block_var_body,
+    block_reassign_body,
+    block_expect_body,
+    block_return_body,
+    associated_decl_body,
+};
+```
+
+Each payload type should live in the stack that matches its shape. Hot nested
+constructs such as blocks, sequences, and associated-item groups should use a
+current-plus-spill layout: keep the active item in a local or `current` field,
+and move the previous active item to a spill stack only when entering another
+item of the same kind. This avoids repeatedly copying large block state while
+still supporting arbitrary nesting.
+
+Blocks should have an explicit `BlockState` managed by a current-plus-spill
+stack. A block state owns the statement slice, next statement index, saved
+scratch tops, saved scope flags, pending result indexes, and any block-specific
+bookkeeping needed to restore canonicalization state at block exit. Child
+continuations must not carry copies of the whole block state. When a statement
+schedules child expression work, it should push only the statement-specific
+continuation data needed to resume the current block. The `block_next` label
+advances statements one at a time, and `block_finish` performs local
+forward-reference classification, constructs the block expression, exits
+scopes, and restores saved state.
+
+Lists, tuples, calls, method calls, tags, match branches, and other repeated
+child forms should use sequence state instead of nested calls. A sequence state
+tracks the source items, the next item index, output scratch ranges, and the
+continuation to run when all items are complete. Each child result is appended
+to the sequence output as it arrives in `last_expr` or the appropriate typed
+return register.
+
+Associated items need explicit ownership boundaries. The current
+`enterAssociatedBlockState` and `exitAssociatedBlockState` responsibilities
+should remain, but the expression kernel should model associated work as active
+state rather than as cleanup hidden in pending generic frames.
+`CanKernelScratch.cleanupActive(self)` must unwind every active block scope,
+associated scope, type-variable scope, and owned alias sink on errors. Correct
+cleanup must not depend on eventually popping a particular continuation frame.
+
+Pattern and type-annotation canonicalization should use the same design. Keep
+their public entry points, but implement each traversal as a direct
+labeled-switch kernel with its own typed return register and typed continuation
+stacks. The expression kernel may call those kernels for lambda arguments, loop
+patterns, and type annotations because each call is itself nonrecursive and
+stack-safe.
+
+The recommended migration order is:
+
+1. Add the expression kernel scratch state, typed stacks, current-plus-spill
+   helpers, and active cleanup path.
+2. Port expression leaves and small one-child or two-child forms.
+3. Port sequence forms such as lists, tuples, calls, method calls, and tags.
+4. Port block handling and remove copies of whole block state from continuation
+   payloads.
+5. Port associated-item integration and verify error cleanup.
+6. Port pattern and type-annotation canonicalization kernels.
+7. Audit `src/canonicalize` for direct, indirect, and mutual recursive
+   traversal calls.
+8. Verify with focused canonicalization tests, `zig build minici`, and
+   parser/canonicalization benchmarks.
 
 ## Type Alias Invariant
 

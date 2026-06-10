@@ -67,6 +67,9 @@ pub const LinkConfig = struct {
     /// Additional linker flags
     extra_args: []const []const u8 = &.{},
 
+    /// Symbols that must remain live even under section garbage collection.
+    force_undefined_symbols: []const []const u8 = &.{},
+
     /// Whether to allow LLD to exit early on errors
     can_exit_early: bool = false,
 
@@ -77,9 +80,21 @@ pub const LinkConfig = struct {
     /// available to the WASM module at runtime. Must be a multiple of 64KB (WASM page size).
     wasm_initial_memory: usize = DEFAULT_WASM_INITIAL_MEMORY,
 
+    /// Maximum memory size for WASM targets (bytes), when the runtime contract needs one.
+    wasm_maximum_memory: ?usize = null,
+
     /// Stack size for WASM targets (bytes). This is the amount of memory reserved for the
     /// call stack within the WASM linear memory. Must be a multiple of 16 (stack alignment).
     wasm_stack_size: usize = DEFAULT_WASM_STACK_SIZE,
+
+    /// Whether the final WASM module imports `env.memory` instead of defining memory.
+    wasm_import_memory: bool = false,
+
+    /// Optional data/global base for freestanding WASM links.
+    wasm_global_base: ?u32 = null,
+
+    /// Function exports derived from explicit platform host object exports.
+    wasm_exports: []const []const u8 = &.{},
 
     /// Platform files directory (absolute path). Used to find platform-bundled sysroots.
     /// For example, if this is "/path/to/platform/targets", the linker will look for
@@ -93,6 +108,29 @@ pub const LinkConfig = struct {
     /// containing the running `roc` executable.
     scratch_dir: ?[]const u8 = null,
 };
+
+fn appendForceUndefinedSymbol(
+    ctx: *CliCtx,
+    args: *std.array_list.Managed([]const u8),
+    target_os: std.Target.Os.Tag,
+    symbol: []const u8,
+) LinkError!void {
+    switch (target_os) {
+        .macos => {
+            try args.append("-u");
+            const prefixed = std.fmt.allocPrint(ctx.arena, "_{s}", .{symbol}) catch return LinkError.OutOfMemory;
+            try args.append(prefixed);
+        },
+        .windows => {
+            const include_arg = std.fmt.allocPrint(ctx.arena, "/include:{s}", .{symbol}) catch return LinkError.OutOfMemory;
+            try args.append(include_arg);
+        },
+        else => {
+            const undefined_arg = std.fmt.allocPrint(ctx.arena, "--undefined={s}", .{symbol}) catch return LinkError.OutOfMemory;
+            try args.append(undefined_arg);
+        },
+    }
+}
 
 /// Errors that can occur during linking
 pub const LinkError = error{
@@ -280,6 +318,7 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
 
             // Suppress LLD warnings
             try args.append("-w");
+            try args.append("-dead_strip");
 
             // Add architecture flag
             try args.append("-arch");
@@ -428,6 +467,7 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
 
             // Add subsystem flag (console by default)
             try args.append("/subsystem:console");
+            try args.append("/opt:ref");
 
             // Add machine type based on target architecture
             switch (target_arch) {
@@ -486,26 +526,42 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
             // Don't look for _start or _main entry point - we export specific functions
             try args.append("--no-entry");
 
-            // Export all symbols (the Roc app exports its entrypoints)
-            try args.append("--export-all");
-
-            // Disable garbage collection to preserve host-defined exports (init, handleEvent, update)
-            // Without this, wasm-ld removes symbols that aren't referenced by the Roc app
-            try args.append("--no-gc-sections");
+            // Remove unused sections. The compiler passes explicit host-object
+            // exports below so they remain live roots.
+            try args.append("--gc-sections");
 
             // Allow undefined symbols (imports from host environment)
             try args.append("--allow-undefined");
+
+            if (config.wasm_import_memory) {
+                try args.append("--import-memory");
+            }
 
             // Set initial memory size (configurable, default 64MB)
             // Must be a multiple of 64KB (WASM page size)
             const initial_memory_str = std.fmt.allocPrint(ctx.arena, "--initial-memory={d}", .{config.wasm_initial_memory}) catch return LinkError.OutOfMemory;
             try args.append(initial_memory_str);
 
+            if (config.wasm_maximum_memory) |maximum_memory| {
+                const maximum_memory_str = std.fmt.allocPrint(ctx.arena, "--max-memory={d}", .{maximum_memory}) catch return LinkError.OutOfMemory;
+                try args.append(maximum_memory_str);
+            }
+
+            if (config.wasm_global_base) |global_base| {
+                const global_base_str = std.fmt.allocPrint(ctx.arena, "--global-base={d}", .{global_base}) catch return LinkError.OutOfMemory;
+                try args.append(global_base_str);
+            }
+
             // Set stack size (configurable, default 8MB)
             // Must be a multiple of 16 (stack alignment)
             const stack_size_str = std.fmt.allocPrint(ctx.arena, "stack-size={d}", .{config.wasm_stack_size}) catch return LinkError.OutOfMemory;
             try args.append("-z");
             try args.append(stack_size_str);
+
+            for (config.wasm_exports) |export_name| {
+                const export_arg = std.fmt.allocPrint(ctx.arena, "--export={s}", .{export_name}) catch return LinkError.OutOfMemory;
+                try args.append(export_arg);
+            }
         },
         else => {
             // Generic ELF linker
@@ -517,7 +573,12 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
 
             // Suppress LLD warnings
             try args.append("-w");
+            try args.append("--gc-sections");
         },
+    }
+
+    for (config.force_undefined_symbols) |symbol| {
+        try appendForceUndefinedSymbol(ctx, &args, target_os, symbol);
     }
 
     // For WASM targets, wrap platform files in --whole-archive to include all symbols
@@ -745,6 +806,41 @@ test "target format detection" {
     switch (detected) {
         .elf, .coff, .macho, .wasm => {},
     }
+}
+
+test "force undefined symbols use target linker spelling" {
+    var arena_instance = collections.SingleThreadArena.init(std.testing.allocator);
+    defer arena_instance.deinit();
+
+    var io = Io.create(std.testing.io);
+    var ctx = CliCtx.init(std.testing.allocator, arena_instance.allocator(), &io, .build);
+    ctx.initIo();
+    defer ctx.deinit();
+
+    const mac_config = LinkConfig{
+        .target_format = .macho,
+        .target_os = .macos,
+        .target_arch = .x86_64,
+        .output_path = "test_output",
+        .object_files = &.{"app.o"},
+        .force_undefined_symbols = &.{"roc__answer"},
+    };
+    const mac_args = try buildLinkArgs(&ctx, mac_config);
+    const mac_u_idx = findArg(mac_args.items, "-u") orelse return error.MissingForceUndefined;
+    try std.testing.expect(mac_u_idx + 1 < mac_args.items.len);
+    try std.testing.expectEqualStrings("_roc__answer", mac_args.items[mac_u_idx + 1]);
+
+    const linux_config = LinkConfig{
+        .target_format = .elf,
+        .target_abi = .musl,
+        .target_os = .linux,
+        .target_arch = .x86_64,
+        .output_path = "test_output",
+        .object_files = &.{"app.o"},
+        .force_undefined_symbols = &.{"roc__answer"},
+    };
+    const linux_args = try buildLinkArgs(&ctx, linux_config);
+    _ = findArg(linux_args.items, "--undefined=roc__answer") orelse return error.MissingForceUndefined;
 }
 
 test "macOS platform archives use scoped force_load" {

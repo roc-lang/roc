@@ -2198,9 +2198,6 @@ pub fn build(b: *std.Build) void {
     const compiler_version_git = getCompilerVersionGit(b);
     build_options.addOption([]const u8, "compiler_version_git", compiler_version_git);
     build_options.addOption([32]u8, "compiler_artifact_hash", getCompilerArtifactHash(b, compiler_version_git));
-    // Absolute path to the compiler-owned Builtin.roc, used by the CLI to detect
-    // when a user is checking/formatting the compiler's own builtin source.
-    build_options.addOption([]const u8, "compiler_builtin_roc_path", b.path("src/build/roc/Builtin.roc").getPath(b));
     // `compiler_version` (e.g. "release-fast-abc12345") is assembled in the generated
     // build_options module so its build-mode prefix comes from @import("builtin").mode — the
     // actual optimization level of each compiled binary. The prefix can't be baked here because
@@ -3081,6 +3078,28 @@ pub fn build(b: *std.Build) void {
         build_wasm_app.step.dependOn(build_test_hosts_step);
         build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_app.step);
 
+        const build_wasm_rc_cleanup_app = b.addRunArtifact(roc_exe);
+        build_wasm_rc_cleanup_app.addArgs(&.{
+            "build",
+            "test/wasm/rc_cleanup_static_lib_app.roc",
+            "--opt=dev",
+            "--target=wasm32",
+            "--output=test/wasm/rc_cleanup_static_lib_app.wasm",
+        });
+        build_wasm_rc_cleanup_app.step.dependOn(build_test_hosts_step);
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_rc_cleanup_app.step);
+
+        const build_wasm_rc_cleanup_model_list_app = b.addRunArtifact(roc_exe);
+        build_wasm_rc_cleanup_model_list_app.addArgs(&.{
+            "build",
+            "test/wasm/rc_cleanup_model_list_static_lib_app.roc",
+            "--opt=dev",
+            "--target=wasm32",
+            "--output=test/wasm/rc_cleanup_model_list_static_lib_app.wasm",
+        });
+        build_wasm_rc_cleanup_model_list_app.step.dependOn(build_test_hosts_step);
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_rc_cleanup_model_list_app.step);
+
         const wasm_test_exe = b.addExecutable(.{
             .name = "wasm_static_lib_test",
             .root_module = b.createModule(.{
@@ -3098,6 +3117,32 @@ pub fn build(b: *std.Build) void {
         const run_wasm_test = b.addRunArtifact(wasm_test_exe);
         if (run_args.len != 0) {
             run_wasm_test.addArgs(run_args);
+        } else {
+            const run_wasm_rc_cleanup_test = b.addRunArtifact(wasm_test_exe);
+            run_wasm_rc_cleanup_test.addArgs(&.{
+                "--wasm-path",
+                "test/wasm/rc_cleanup_static_lib_app.wasm",
+                "--expected",
+                "ok",
+                "--assert-alloc-balanced",
+                "--min-allocs",
+                "16",
+            });
+            run_wasm_rc_cleanup_test.step.dependOn(build_test_wasm_static_lib_runner_step);
+            run_test_wasm_static_lib_step.dependOn(&run_wasm_rc_cleanup_test.step);
+
+            const run_wasm_rc_cleanup_model_list_test = b.addRunArtifact(wasm_test_exe);
+            run_wasm_rc_cleanup_model_list_test.addArgs(&.{
+                "--wasm-path",
+                "test/wasm/rc_cleanup_model_list_static_lib_app.wasm",
+                "--expected",
+                "ok",
+                "--assert-alloc-balanced",
+                "--min-allocs",
+                "64",
+            });
+            run_wasm_rc_cleanup_model_list_test.step.dependOn(build_test_wasm_static_lib_runner_step);
+            run_test_wasm_static_lib_step.dependOn(&run_wasm_rc_cleanup_model_list_test.step);
         }
         run_wasm_test.step.dependOn(build_test_wasm_static_lib_runner_step);
         run_test_wasm_static_lib_step.dependOn(&run_wasm_test.step);

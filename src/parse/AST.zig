@@ -2170,10 +2170,10 @@ pub const TargetLinkType = struct {
     pub const Idx = enum(u32) { _ };
 };
 
-/// Single target entry: x64musl: ["crt1.o", "host.o", app]
+/// Single target entry: x64musl: { files: ["crt1.o", "host.o", app] }
 pub const TargetEntry = struct {
     target: Token.Idx, // LowerIdent token (e.g., x64musl, arm64mac)
-    files: TargetFile.Span,
+    config: TargetConfig.Idx,
     region: TokenizedRegion,
 
     pub const Idx = enum(u32) { _ };
@@ -2184,6 +2184,38 @@ pub const TargetEntry = struct {
 pub const TargetFile = union(enum) {
     string_literal: Token.Idx, // "crt1.o"
     special_ident: Token.Idx, // app, win_gui
+    malformed: struct { reason: Diagnostic.Tag, region: TokenizedRegion },
+
+    pub const Idx = enum(u32) { _ };
+    pub const Span = struct { span: base.DataSpan };
+};
+
+/// Per-target configuration inside a target entry record.
+pub const TargetConfig = struct {
+    entries: TargetConfigEntry.Span,
+    region: TokenizedRegion,
+
+    pub const Idx = enum(u32) { _ };
+};
+
+/// A single field in a target configuration record.
+pub const TargetConfigEntry = struct {
+    name: Token.Idx,
+    value: TargetConfigValue.Idx,
+    region: TokenizedRegion,
+
+    pub const Idx = enum(u32) { _ };
+    pub const Span = struct { span: base.DataSpan };
+};
+
+/// Literal or top-level identifier syntax accepted in target configuration.
+pub const TargetConfigValue = union(enum) {
+    int_literal: Token.Idx,
+    string_literal: Token.Idx,
+    tag_literal: Token.Idx,
+    ident: Token.Idx,
+    list: TargetConfigValue.Span,
+    files: TargetFile.Span,
     malformed: struct { reason: Diagnostic.Tag, region: TokenizedRegion },
 
     pub const Idx = enum(u32) { _ };

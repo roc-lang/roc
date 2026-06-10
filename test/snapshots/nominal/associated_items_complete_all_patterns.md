@@ -496,9 +496,7 @@ PARSE ERROR - associated_items_complete_all_patterns.md:49:18:49:19
 PARSE ERROR - associated_items_complete_all_patterns.md:49:19:49:20
 PARSE ERROR - associated_items_complete_all_patterns.md:49:20:49:21
 UNEXPECTED TOKEN IN EXPRESSION - associated_items_complete_all_patterns.md:51:27:51:34
-UNEXPECTED TOKEN IN EXPRESSION - associated_items_complete_all_patterns.md:51:34:51:39
-UNEXPECTED TOKEN IN EXPRESSION - associated_items_complete_all_patterns.md:51:40:51:41
-EXPRESSION IN ASSOCIATED ITEMS - associated_items_complete_all_patterns.md:51:42:51:43
+EXPRESSION IN ASSOCIATED ITEMS - associated_items_complete_all_patterns.md:51:27:51:43
 PARSE ERROR - associated_items_complete_all_patterns.md:57:1:57:2
 PARSE ERROR - associated_items_complete_all_patterns.md:58:19:58:26
 PARSE ERROR - associated_items_complete_all_patterns.md:58:26:58:31
@@ -1522,38 +1520,16 @@ Expressions can be identifiers, literals, function calls, or operators.
                           ^^^^^^^
 
 
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **.valB** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-**associated_items_complete_all_patterns.md:51:34:51:39:**
-```roc
-        valA = d2_siblings.InnerB.valB + 1
-```
-                                 ^^^^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **+** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-**associated_items_complete_all_patterns.md:51:40:51:41:**
-```roc
-        valA = d2_siblings.InnerB.valB + 1
-```
-                                       ^
-
-
 **EXPRESSION IN ASSOCIATED ITEMS**
 Associated items (such as types or methods) can only have associated types and values, not plain expressions.
 
 To fix this, remove the expression at the very end.
 
-**associated_items_complete_all_patterns.md:51:42:51:43:**
+**associated_items_complete_all_patterns.md:51:27:51:43:**
 ```roc
         valA = d2_siblings.InnerB.valB + 1
 ```
-                                         ^
+                          ^^^^^^^^^^^^^^^^
 
 
 **PARSE ERROR**
@@ -7044,10 +7020,9 @@ EndOfFile,
 				(s-decl
 					(p-ident (raw "valA"))
 					(e-ident (raw "d2_siblings")))
-				(e-malformed (reason "expr_unexpected_token"))
-				(e-malformed (reason "expr_unexpected_token"))
-				(e-malformed (reason "expr_unexpected_token"))
-				(e-int (raw "1"))))
+				(e-binop (op "+")
+					(e-ident (raw "d2_siblings"))
+					(e-int (raw "1")))))
 		(s-type-decl
 			(header (name "InnerB")
 				(args))
@@ -8314,7 +8289,7 @@ outer_trying_inner = inner_private
 
 InnerA := [N].{
 	valA = d2_siblings
-				1
+	d2_siblings + 1
 }
 
 InnerB := [O].{

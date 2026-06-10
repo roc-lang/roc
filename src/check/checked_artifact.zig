@@ -234,7 +234,31 @@ fn hashCheckingContextIdentity(identity: CheckingContextIdentity) [32]u8 {
             hasher.update(&[_]u8{0});
         }
     }
+    hashU32(&hasher, @intCast(identity.explicit_roots.len));
+    for (identity.explicit_roots) |root| {
+        hashExplicitRootRequestInput(&hasher, root);
+    }
     return hasher.finalResult();
+}
+
+fn hashExplicitRootRequestInput(
+    hasher: *std.crypto.hash.sha2.Sha256,
+    root: ExplicitRootRequestInput,
+) void {
+    hashByteSlice(hasher, @tagName(root.kind));
+    hashRootSource(hasher, root.source);
+    hashByteSlice(hasher, @tagName(root.abi));
+    hashByteSlice(hasher, @tagName(root.exposure));
+}
+
+fn hashRootSource(hasher: *std.crypto.hash.sha2.Sha256, source: RootSource) void {
+    hashByteSlice(hasher, @tagName(source));
+    switch (source) {
+        .def => |idx| hashU32(hasher, @intFromEnum(idx)),
+        .expr => |idx| hashU32(hasher, @intFromEnum(idx)),
+        .statement => |idx| hashU32(hasher, @intFromEnum(idx)),
+        .required_binding => |idx| hashU32(hasher, idx),
+    }
 }
 
 fn hashDirectImportArtifactKeys(keys: []const CheckedModuleArtifactKey) [32]u8 {
@@ -269,6 +293,7 @@ pub const CheckingContextIdentity = struct {
     imports: []ImportIdentity = &.{},
     platform_requirement_context: ?PlatformRequirementContextKey = null,
     platform_app_relation: ?PlatformAppRelationKey = null,
+    explicit_roots: []const ExplicitRootRequestInput = &.{},
 
     pub fn fromModule(
         allocator: Allocator,
@@ -276,11 +301,14 @@ pub const CheckingContextIdentity = struct {
         publish_imports: []const PublishImportArtifact,
         platform_requirement_context: ?PlatformRequirementContextKey,
         platform_app_relation: ?PlatformAppRelationKey,
+        explicit_roots: []const ExplicitRootRequestInput,
     ) Allocator.Error!CheckingContextIdentity {
         const module_env = module.moduleEnvConst();
         const imported_names = module_env.imports.imports.items.items;
         const imports = try allocator.alloc(ImportIdentity, imported_names.len);
         errdefer allocator.free(imports);
+        const roots = try allocator.dupe(ExplicitRootRequestInput, explicit_roots);
+        errdefer allocator.free(roots);
 
         for (imported_names, 0..) |str_idx, i| {
             const import_idx: CIR.Import.Idx = @enumFromInt(@as(u32, @intCast(i)));
@@ -298,10 +326,12 @@ pub const CheckingContextIdentity = struct {
             .imports = imports,
             .platform_requirement_context = platform_requirement_context,
             .platform_app_relation = platform_app_relation,
+            .explicit_roots = roots,
         };
     }
 
     pub fn deinit(self: *CheckingContextIdentity, allocator: Allocator) void {
+        allocator.free(self.explicit_roots);
         allocator.free(self.imports);
         self.* = .{};
     }
@@ -612,6 +642,7 @@ pub const RootRequestTable = struct {
         @memset(relation_blocked_exprs, null);
 
         for (explicit_roots) |root| {
+            if (!explicitRootMatchesCheckedRootKind(procedure_templates, compile_time_roots, root)) continue;
             const source_checked_type = try checkedTypeIdForRootSource(allocator, module, checked_types, root.source);
             const backing = explicitRootBackingProcedure(
                 procedure_templates,
@@ -661,6 +692,9 @@ pub const RootRequestTable = struct {
             )) {
                 continue;
             }
+            if (compileTimeRootHasRootRequest(requests.items, root)) {
+                continue;
+            }
             try appendRoot(&requests, allocator, .{
                 .module_idx = root.module_idx,
                 .kind = switch (root.kind) {
@@ -701,6 +735,20 @@ pub const RootRequestTable = struct {
         self.* = .{};
     }
 };
+
+fn explicitRootMatchesCheckedRootKind(
+    procedure_templates: *const CheckedProcedureTemplateTable,
+    compile_time_roots: *const CompileTimeRootTable,
+    root: ExplicitRootRequestInput,
+) bool {
+    if (procedureTemplateForRootSource(procedure_templates, root.source) != null) {
+        return root.kind != .compile_time_constant and root.kind != .compile_time_callable;
+    }
+
+    const root_id = compile_time_roots.lookupIdBySource(root.source) orelse return false;
+    const compile_time_root = compile_time_roots.root(root_id);
+    return compileTimeRootKindMatchesRequest(compile_time_root.kind, root.kind);
+}
 
 fn collectRuntimeRootRequests(
     allocator: Allocator,
@@ -16993,6 +17041,7 @@ pub const CheckedModuleKeyInputs = struct {
     imports: []const PublishImportArtifact = &.{},
     platform_requirement_context: ?PlatformRequirementContextKey = null,
     platform_app_relation: ?PlatformAppRelationKey = null,
+    explicit_roots: []const ExplicitRootRequestInput = &.{},
 };
 
 /// Compute the checked module cache identity for a checked typed module and the
@@ -17027,6 +17076,7 @@ pub fn checkedModuleKeyFromTypedModule(
         inputs.imports,
         inputs.platform_requirement_context,
         inputs.platform_app_relation,
+        inputs.explicit_roots,
     );
     defer checking_context_identity.deinit(allocator);
 
@@ -17077,6 +17127,7 @@ pub fn publishFromTypedModule(
         inputs.imports,
         inputs.platform_requirement_context,
         if (inputs.platform_app_relation) |relation| relation.key else null,
+        inputs.explicit_roots,
     );
     errdefer checking_context_identity.deinit(allocator);
 

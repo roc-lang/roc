@@ -531,10 +531,9 @@ pub const Tag = enum {
     /// * rhs - length of entries span
     target_link_type,
 
-    /// A single target entry: x64musl: ["crt1.o", "host.o", app]
+    /// A single target entry: x64musl: { files: ["crt1.o", "host.o", app] }
     /// * main_token - target name identifier token
-    /// * lhs - start of files span
-    /// * rhs - length of files span
+    /// * lhs - TargetConfig index
     target_entry,
 
     /// A string literal file in a target list: "crt1.o"
@@ -544,6 +543,20 @@ pub const Tag = enum {
     /// A special identifier in a target list: app, win_gui
     /// * main_token - identifier token
     target_file_ident,
+
+    /// Per-target configuration record.
+    /// * lhs - start of config entries span
+    /// * rhs - length of config entries span
+    target_config,
+
+    /// A field in a target configuration record.
+    /// * main_token - field name token
+    /// * lhs - TargetConfigValue index
+    target_config_entry,
+
+    /// Target configuration value node.
+    /// * main_token/data depend on the value variant
+    target_config_value,
 
     /// A for-clause type alias: Model : model
     /// * main_token - alias name token (UpperIdent)
