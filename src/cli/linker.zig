@@ -15,6 +15,12 @@ const cli_ctx = @import("CliCtx.zig");
 const CliCtx = cli_ctx.CliCtx;
 const Io = cli_ctx.Io;
 
+/// Suppress linker warnings in release builds only. Debug builds of the
+/// compiler surface them: lld reports flags it parsed but ignored (e.g. a
+/// MachO `-r`) only as warnings, and suppressing those hides real bugs from
+/// compiler developers.
+const suppress_linker_warnings = builtin.mode != .Debug;
+
 /// The embedded LLD entrypoints are only linked into LLVM-enabled CLI builds.
 const llvm_available = if (@import("builtin").is_test) false else @import("config").llvm;
 
@@ -30,6 +36,14 @@ pub const TargetAbi = enum {
     pub fn fromRocTarget(roc_target: RocTarget) TargetAbi {
         return if (roc_target.isStatic()) .musl else .gnu;
     }
+};
+
+/// What kind of artifact the linker produces.
+pub const OutputKind = enum {
+    /// Executable binary.
+    exe,
+    /// Shared/dynamic library (.so, .dylib, .dll).
+    shared_lib,
 };
 
 /// Default WASM initial memory: 64MB
@@ -54,6 +68,9 @@ pub const LinkConfig = struct {
 
     /// Output executable path
     output_path: []const u8,
+
+    /// Kind of artifact to produce (executable or shared library)
+    output_kind: OutputKind = .exe,
 
     /// Input object files to link
     object_files: []const []const u8,
@@ -306,18 +323,26 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
     // Use target OS if provided, otherwise fall back to host OS
     const target_os = config.target_os orelse builtin.target.os.tag;
     const target_arch = config.target_arch orelse builtin.target.cpu.arch;
+    const is_shared_lib = config.output_kind == .shared_lib;
 
     switch (target_os) {
         .macos => {
             // Add linker name for macOS
             try args.append("ld64.lld");
 
+            if (is_shared_lib) {
+                try args.append("-dylib");
+            }
+
             // Add output argument
             try args.append("-o");
             try args.append(config.output_path);
 
             // Suppress LLD warnings
-            try args.append("-w");
+            if (suppress_linker_warnings) {
+                try args.append("-w");
+            }
+            // For dylibs, dead-strip roots are the exported symbols instead of the entrypoint.
             try args.append("-dead_strip");
 
             // Add architecture flag
@@ -381,7 +406,9 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
             try args.append("--gc-sections");
             // TODO make the confirugable instead of using comments
             // Suppress linker warnings
-            try args.append("-w");
+            if (suppress_linker_warnings) {
+                try args.append("-w");
+            }
             // Verbose linker for debugging (uncomment as needed)
             // try args.append("--verbose");
             // try args.append("--print-map");
@@ -392,10 +419,21 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
 
             switch (target_abi) {
                 .musl => {
-                    // Static musl linking
-                    try args.append("-static");
+                    if (is_shared_lib) {
+                        // -static and -shared are mutually exclusive; a shared library
+                        // is inherently a dynamic artifact even on musl targets.
+                        try args.append("-shared");
+                    } else {
+                        // Static musl linking
+                        try args.append("-static");
+                    }
                 },
                 .gnu => {
+                    if (is_shared_lib) {
+                        // Shared libraries have no program interpreter; the loading
+                        // process's dynamic linker resolves them.
+                        try args.append("-shared");
+                    } else
                     // Dynamic GNU linking - dynamic linker path is handled by caller
                     // for cross-compilation. Only detect locally for native builds
                     if (config.extra_args.len == 0) {
@@ -465,8 +503,12 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
             const out_arg = try std.fmt.allocPrint(ctx.arena, "/out:{s}", .{config.output_path});
             try args.append(out_arg);
 
-            // Add subsystem flag (console by default)
-            try args.append("/subsystem:console");
+            if (is_shared_lib) {
+                try args.append("/dll");
+            } else {
+                // Add subsystem flag (console by default)
+                try args.append("/subsystem:console");
+            }
             try args.append("/opt:ref");
 
             // Add machine type based on target architecture
@@ -481,8 +523,10 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
             // produces bigger frames (e.g. std.fs PathSpace buffers ~64 KiB each) than
             // 0.15, and recursion-heavy Roc programs blow past 16 MiB before the
             // platform host's overflow handler can run. Match eval-test-runner.exe
-            // and roc.exe.
-            try args.append("/stack:67108864");
+            // and roc.exe. (The loading process owns the stack for DLLs.)
+            if (!is_shared_lib) {
+                try args.append("/stack:67108864");
+            }
 
             // These are part of the core Windows OS and are available on all Windows systems
             try args.append("/defaultlib:kernel32");
@@ -567,12 +611,18 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
             // Generic ELF linker
             try args.append("ld.lld");
 
+            if (is_shared_lib) {
+                try args.append("-shared");
+            }
+
             // Add output argument
             try args.append("-o");
             try args.append(config.output_path);
 
             // Suppress LLD warnings
-            try args.append("-w");
+            if (suppress_linker_warnings) {
+                try args.append("-w");
+            }
             try args.append("--gc-sections");
         },
     }
@@ -664,7 +714,7 @@ pub fn link(ctx: *CliCtx, config: LinkConfig) LinkError!void {
     // frame per Roc call (max_call_depth = 1024), and with Zig 0.16 frame
     // sizes 1024 frames overflows 8 MiB before the interpreter's depth check
     // can crash cleanly. Matches /stack:67108864 used for Windows above.
-    if (config.target_format == .macho) {
+    if (config.target_format == .macho and config.output_kind == .exe) {
         patchMachoStackSize(config.output_path, 64 * 1024 * 1024, ctx.io.std_io) catch |err| {
             std.log.warn("Failed to patch LC_MAIN stacksize for {s}: {}", .{ config.output_path, err });
         };

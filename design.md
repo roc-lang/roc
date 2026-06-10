@@ -2746,6 +2746,106 @@ The compiler must not infer different ownership behavior from hosted function
 names, return types, or body absence. Hosted-argument ownership is an ABI rule,
 and generated glue must document it for platform authors.
 
+## Build Outputs And The Targets Header
+
+A platform's `targets:` header section declares, per target, both the link
+inputs and the output kind the build produces. The application author never
+chooses the output kind; `roc build` produces what the platform declares for
+the selected target, and there is no `--no-link` style flag. `--target` and
+`--output` (the output path) remain per-build choices.
+
+```text
+targets: {
+    inputs: "targets/",
+    arm64mac: { inputs: ["libhost.a", app], output: Shared },
+    x64glibc: { inputs: ["libhost.a", app], output: Exe },
+    wasm32: { inputs: ["host.wasm", app], output: Shared },
+}
+```
+
+Each target name appears at most once, so target-to-output-kind is a
+function. `output:` is one of:
+
+```text
+Exe:     linked executable binary. For wasm32, a command module (has an
+         entry).
+Archive: one static archive (.a, .lib) containing the declared host inputs,
+         the compiled app, and the builtins, with input archives flattened
+         in. Archive keeps its inputs because the host must provide
+         roc_alloc and the other runtime symbols; the consumer receives a
+         single self-contained archive and performs the final link in their
+         own build, which extracts members lazily by symbol reference.
+Shared:  shared library (.so, .dylib, .dll). For wasm32, a reactor module:
+         no entry, the provides entrypoints exported, optionally composable
+         into a component with wit-component.
+```
+
+`roc run` requires the selected target's entry to be `output: Exe`; library
+and object platforms report that the output must be linked or loaded by a
+host application instead.
+
+The output that static archives previously stood in for on wasm (a linked,
+loadable, no-entry module) is `Shared`, not `Archive`; `Archive` is never a
+linked module.
+
+## Host Symbol ABI
+
+Hosts and compiled Roc code share symbols resolved at link time; there is no
+host-facing struct of function pointers. `RocOps` survives only as an
+interpreter-internal structure (the dev-build translation shim and
+compiler-internal evaluation construct one); it is not part of any host ABI,
+and glue never emits it.
+
+The platform header maps linker symbols explicitly, symbol-string first, in
+both directions:
+
+```text
+provides { "roc_main": main_for_host! }
+hosted { "roc_stdout_line": Stdout.line!, "roc_stderr_line": Stderr.line! }
+```
+
+Compiled Roc code references each hosted symbol (and the fixed runtime set:
+roc_alloc, roc_dealloc, roc_realloc, roc_dbg, roc_expect_failed, roc_crashed)
+as a weak extern and calls it directly with the natural C ABI for its types.
+Entrypoints are exported under their `provides` strings with natural C ABI
+signatures. No context pointer is threaded through compiled code: hosts that
+need per-call context (for example an arena) own its delivery out of band
+(global or thread-local state), and must establish it on every thread that
+executes Roc code — including threads that invoke stored boxed Roc closures.
+Generated glue exposes closure invocation through helpers that set and restore
+that state so the contract is enforced by signatures rather than remembered.
+
+Weak linkage exists to break the app/host reference cycle without imposing
+link order; on Windows the same cycle is broken by generating a .def file of
+the host-provided symbols, converting it to an import library, and placing it
+between the app and host objects. Missing host symbols are diagnosed before
+linking by scanning the host inputs' symbol tables, not by changing how the
+linker resolves symbols.
+
+Because the app references host symbols directly, host inputs are linked
+without whole-archive wrapping, and section GC (--gc-sections, -dead_strip,
+/opt:ref) removes host functions, host constants, and host helpers that the
+application never reaches. This dead-code elimination is a guaranteed,
+regression-tested property on every supported target, including wasm32: tests
+must verify that unused host functions, unused host constants, and helpers
+reachable only from unused host functions are absent from the final binary
+(by symbol table inspection and by content-pattern absence), and present when
+actually used.
+
+Shared-library output uses the same symbol ABI: the host objects and app
+object are linked into one library, app/host resolution happens inside that
+link, and dead-strip roots are the exported symbols. Internal `roc_*` symbols
+must be hidden in shared libraries — on ELF, default-visibility exports are
+preemptible, and two Roc-built libraries loaded into one process would
+otherwise interpose each other's runtime symbols.
+
+Interpreter execution (roc run, embedded interpreter builds, REPL,
+compile-time constants, glue evaluation) keeps the same host objects: a
+generated translation shim defines the exported entrypoints, marshals their
+natural C ABI arguments into interpreter calls, and fills the interpreter's
+internal dispatch table with the extern host symbols' addresses. Hosted
+dispatch order for that table is the `hosted` section's declaration order.
+
 ## Relationship To Cor LSS
 
 The post-check design mirrors Cor's LSS experiment after solving, adapted for

@@ -1960,38 +1960,26 @@ const Formatter = struct {
 
         var has_content = false;
 
-        // Format files: field if present
-        if (targets.files_path) |files_token| {
+        // Format inputs: directory directive if present
+        if (targets.inputs_path) |inputs_token| {
             has_content = true;
             try fmt.ensureNewline();
             fmt.curr_indent = start_indent + 1;
             try fmt.pushIndent();
-            try fmt.pushAll("files: ");
+            try fmt.pushAll("inputs: ");
             try fmt.push('"');
-            try fmt.pushTokenText(files_token);
+            try fmt.pushTokenText(inputs_token);
             try fmt.push('"');
             try fmt.push(',');
         }
 
-        // Format exe: field if present
-        if (targets.exe) |exe_idx| {
+        // Format per-target entries
+        for (fmt.ast.store.targetEntrySlice(targets.entries)) |entry_idx| {
             has_content = true;
             try fmt.ensureNewline();
             fmt.curr_indent = start_indent + 1;
             try fmt.pushIndent();
-            try fmt.pushAll("exe: ");
-            try fmt.formatTargetLinkType(exe_idx, start_indent + 1);
-            try fmt.push(',');
-        }
-
-        // Format static_lib: field if present
-        if (targets.static_lib) |static_lib_idx| {
-            has_content = true;
-            try fmt.ensureNewline();
-            fmt.curr_indent = start_indent + 1;
-            try fmt.pushIndent();
-            try fmt.pushAll("static_lib: ");
-            try fmt.formatTargetLinkType(static_lib_idx, start_indent + 1);
+            try fmt.formatTargetEntry(entry_idx);
             try fmt.push(',');
         }
 
@@ -2003,32 +1991,7 @@ const Formatter = struct {
         try fmt.push('}');
     }
 
-    /// Format a target link type (exe, static_lib, shared_lib) section
-    fn formatTargetLinkType(fmt: *Formatter, link_type_idx: AST.TargetLinkType.Idx, base_indent: u32) (Allocator.Error || error{WriteFailed})!void {
-        const link_type = fmt.ast.store.getTargetLinkType(link_type_idx);
-        const entries = fmt.ast.store.targetEntrySlice(link_type.entries);
-
-        try fmt.push('{');
-
-        for (entries, 0..) |entry_idx, i| {
-            try fmt.ensureNewline();
-            fmt.curr_indent = base_indent + 1;
-            try fmt.pushIndent();
-            try fmt.formatTargetEntry(entry_idx);
-            if (i < entries.len - 1 or entries.len > 0) {
-                try fmt.push(',');
-            }
-        }
-
-        if (entries.len > 0) {
-            try fmt.ensureNewline();
-            fmt.curr_indent = base_indent;
-            try fmt.pushIndent();
-        }
-        try fmt.push('}');
-    }
-
-    /// Format a single target entry: x64linux: { files: ["host.o", app] }
+    /// Format a single target entry: x64linux: { inputs: ["host.o", app], output: Exe }
     fn formatTargetEntry(fmt: *Formatter, entry_idx: AST.TargetEntry.Idx) (Allocator.Error || error{WriteFailed})!void {
         const entry = fmt.ast.store.getTargetEntry(entry_idx);
 
@@ -3375,11 +3338,9 @@ test "issue 8989: platform header targets section is preserved" {
         \\    packages {}
         \\    provides {}
         \\    targets: {
-        \\        files: "build/",
-        \\        exe: {
-        \\            x64linux: { files: ["host.o", app] },
-        \\            arm64linux: { files: ["host.o", app] },
-        \\        },
+        \\        inputs: "build/",
+        \\        x64linux: { inputs: ["host.o", app] },
+        \\        arm64linux: { inputs: ["host.o", app], output: Shared },
         \\    }
     ;
     const result = try moduleFmtsStable(std.testing.allocator, input, false);
