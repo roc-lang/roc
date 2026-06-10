@@ -1289,6 +1289,34 @@ pub fn roc_builtins_float_to_str(out: *RocStr, val_bits: u64, is_f32: bool, roc_
     out.* = str.floatToStrFromBits(val_bits, is_f32, roc_ops);
 }
 
+pub fn roc_builtins_float_floor(val: f64, float_width: u8) callconv(.c) f64 {
+    return switch (float_width) {
+        4 => @as(f64, @floatCast(@floor(@as(f32, @floatCast(val))))),
+        8 => @floor(val),
+        else => unreachable,
+    };
+}
+
+pub fn roc_builtins_float_ceiling(val: f64, float_width: u8) callconv(.c) f64 {
+    return switch (float_width) {
+        4 => @as(f64, @floatCast(@ceil(@as(f32, @floatCast(val))))),
+        8 => @ceil(val),
+        else => unreachable,
+    };
+}
+
+test "float floor and ceiling wrappers" {
+    try std.testing.expectEqual(@as(f64, 3.0), roc_builtins_float_floor(3.9, 4));
+    try std.testing.expectEqual(@as(f64, -4.0), roc_builtins_float_floor(-3.2, 4));
+    try std.testing.expectEqual(@as(f64, 4.0), roc_builtins_float_ceiling(3.2, 4));
+    try std.testing.expectEqual(@as(f64, -3.0), roc_builtins_float_ceiling(-3.2, 4));
+
+    try std.testing.expectEqual(@as(f64, 3.0), roc_builtins_float_floor(3.9, 8));
+    try std.testing.expectEqual(@as(f64, -4.0), roc_builtins_float_floor(-3.2, 8));
+    try std.testing.expectEqual(@as(f64, 4.0), roc_builtins_float_ceiling(3.2, 8));
+    try std.testing.expectEqual(@as(f64, -3.0), roc_builtins_float_ceiling(-3.2, 8));
+}
+
 test "direct float wrapper f32" {
     var env = utils.TestEnv.init(std.testing.allocator);
     defer env.deinit();

@@ -1049,6 +1049,8 @@ pub const MonoLlvmCodeGen = struct {
             .num_abs => try self.emitNumericAbs(target, arg_locals[0]),
             .num_abs_diff => try self.emitNumericAbsDiff(target, arg_locals),
             .num_sqrt => try self.emitNumericSqrt(target, arg_locals[0]),
+            .num_floor => try self.emitNumericFloatUnaryIntrinsic(target, arg_locals[0], .floor),
+            .num_ceiling => try self.emitNumericFloatUnaryIntrinsic(target, arg_locals[0], .ceil),
             .list_len => try self.storeIntToLayout(self.slot(target).ptr, try self.loadUsize(try self.offsetPtr(self.slot(arg_locals[0]).ptr, self.rocListLenOffset())), self.localLayout(target)),
             .list_get_unsafe => try self.emitListGetUnsafe(target, arg_locals),
             .list_with_capacity => try self.emitListWithCapacity(target, arg_locals),
@@ -1816,6 +1818,10 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn emitNumericSqrt(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
+        try self.emitNumericFloatUnaryIntrinsic(target, arg, .sqrt);
+    }
+
+    fn emitNumericFloatUnaryIntrinsic(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId, intrinsic: LlvmBuilder.Intrinsic) Error!void {
         const wip = self.wip orelse return error.CompilationFailed;
         const target_layout = self.localLayout(target);
         const target_ty = self.scalarType(target_layout);
@@ -1823,7 +1829,7 @@ pub const MonoLlvmCodeGen = struct {
         const result = wip.callIntrinsic(
             .normal,
             .none,
-            .sqrt,
+            intrinsic,
             &.{target_ty},
             &.{value},
             "",

@@ -5343,12 +5343,11 @@ pub const Interpreter = struct {
         switch (try self.numericOperandKind(arg_layout)) {
             .dec => {
                 const dec = RocDec{ .num = a.read(i128) };
-                const f = @round(dec.toF64());
-                val.write(i128, @as(i128, @intFromFloat(f)));
+                val.write(i128, RocDec.round(dec, &self.roc_ops).num);
             },
             .float => |bits| switch (bits) {
-                32 => val.write(i32, @as(i32, @intFromFloat(@round(a.read(f32))))),
-                64 => val.write(i64, @as(i64, @intFromFloat(@round(a.read(f64))))),
+                32 => val.write(f32, @round(a.read(f32))),
+                64 => val.write(f64, @round(a.read(f64))),
                 else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported float round width {d}", .{bits}),
             },
             .signed_int, .unsigned_int => return self.invariantFailedError(
@@ -5362,14 +5361,13 @@ pub const Interpreter = struct {
     fn evalNumFloor(self: *LirInterpreter, a: Value, ret_layout: layout_mod.Idx, arg_layout: layout_mod.Idx) Error!Value {
         const val = try self.alloc(ret_layout);
         switch (try self.numericOperandKind(arg_layout)) {
-            .dec => {
-                const dec = RocDec{ .num = a.read(i128) };
-                const f = @floor(dec.toF64());
-                val.write(i128, @as(i128, @intFromFloat(f)));
-            },
+            .dec => return self.invariantFailedError(
+                "LIR/interpreter invariant violated: Dec num_floor survived lowering for layout {d}",
+                .{@intFromEnum(arg_layout)},
+            ),
             .float => |bits| switch (bits) {
-                32 => val.write(i32, @as(i32, @intFromFloat(@floor(a.read(f32))))),
-                64 => val.write(i64, @as(i64, @intFromFloat(@floor(a.read(f64))))),
+                32 => val.write(f32, @floor(a.read(f32))),
+                64 => val.write(f64, @floor(a.read(f64))),
                 else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported float floor width {d}", .{bits}),
             },
             .signed_int, .unsigned_int => return self.invariantFailedError(
@@ -5383,14 +5381,13 @@ pub const Interpreter = struct {
     fn evalNumCeiling(self: *LirInterpreter, a: Value, ret_layout: layout_mod.Idx, arg_layout: layout_mod.Idx) Error!Value {
         const val = try self.alloc(ret_layout);
         switch (try self.numericOperandKind(arg_layout)) {
-            .dec => {
-                const dec = RocDec{ .num = a.read(i128) };
-                const f = @ceil(dec.toF64());
-                val.write(i128, @as(i128, @intFromFloat(f)));
-            },
+            .dec => return self.invariantFailedError(
+                "LIR/interpreter invariant violated: Dec num_ceiling survived lowering for layout {d}",
+                .{@intFromEnum(arg_layout)},
+            ),
             .float => |bits| switch (bits) {
-                32 => val.write(i32, @as(i32, @intFromFloat(@ceil(a.read(f32))))),
-                64 => val.write(i64, @as(i64, @intFromFloat(@ceil(a.read(f64))))),
+                32 => val.write(f32, @ceil(a.read(f32))),
+                64 => val.write(f64, @ceil(a.read(f64))),
                 else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported float ceiling width {d}", .{bits}),
             },
             .signed_int, .unsigned_int => return self.invariantFailedError(

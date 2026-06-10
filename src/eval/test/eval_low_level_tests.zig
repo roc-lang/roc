@@ -117,6 +117,48 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "True" },
     },
     .{
+        .name = "low_level - F32 rounding to integers",
+        .source =
+        \\{
+        \\F32.round_to_i32(3.4) == 3
+        \\    and F32.round_to_i32(-3.6) == -4
+        \\    and F32.round_to_i32(2.5) == 3
+        \\    and F32.round_to_i32(-2.5) == -3
+        \\    and F32.floor_to_i32(-3.2) == -4
+        \\    and F32.ceiling_to_u32(3.2) == 4
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - F64 rounding to integers",
+        .source =
+        \\{
+        \\F64.round_to_i32(3.4) == 3
+        \\    and F64.round_to_i32(-3.6) == -4
+        \\    and F64.round_to_i32(2.5) == 3
+        \\    and F64.round_to_i32(-2.5) == -3
+        \\    and F64.floor_to_i32(-3.2) == -4
+        \\    and F64.ceiling_to_u32(3.2) == 4
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - Dec rounding to integers",
+        .source =
+        \\{
+        \\Dec.round_to_i32(3.4) == 3
+        \\    and Dec.round_to_i32(-3.6) == -4
+        \\    and Dec.round_to_i32(2.5) == 3
+        \\    and Dec.round_to_i32(-2.5) == -3
+        \\    and Dec.floor_to_i32(-3.2) == -4
+        \\    and Dec.ceiling_to_u32(3.2) == 4
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
         .name = "low_level - Str.is_empty returns True for empty string",
         .source =
         \\{

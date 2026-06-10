@@ -9371,6 +9371,216 @@ Builtin :: [].{
 			## ```
 			abs_diff : Dec, Dec -> Dec
 
+			## Round a [Dec] to the nearest [I8]. Halfway values round away from zero. Crashes if the rounded value is out of range.
+			## ```roc
+			## expect Dec.round_to_i8(3.4) == 3
+			## ```
+			round_to_i8 : Dec -> I8
+			round_to_i8 = |self| out_of_range_or_crash(Dec.to_i8_try(dec_round_to_whole(self)))
+
+			## Round a [Dec] to the nearest [I16]. Halfway values round away from zero. Crashes if the rounded value is out of range.
+			## ```roc
+			## expect Dec.round_to_i16(3.4) == 3
+			## ```
+			round_to_i16 : Dec -> I16
+			round_to_i16 = |self| out_of_range_or_crash(Dec.to_i16_try(dec_round_to_whole(self)))
+
+			## Round a [Dec] to the nearest [I32]. Halfway values round away from zero. Crashes if the rounded value is out of range.
+			## ```roc
+			## expect Dec.round_to_i32(-3.6) == -4
+			## ```
+			round_to_i32 : Dec -> I32
+			round_to_i32 = |self| out_of_range_or_crash(Dec.to_i32_try(dec_round_to_whole(self)))
+
+			## Round a [Dec] to the nearest [I64]. Halfway values round away from zero. Crashes if the rounded value is out of range.
+			## ```roc
+			## expect Dec.round_to_i64(7.2) == 7
+			## ```
+			round_to_i64 : Dec -> I64
+			round_to_i64 = |self| out_of_range_or_crash(Dec.to_i64_try(dec_round_to_whole(self)))
+
+			## Round a [Dec] to the nearest [I128]. Halfway values round away from zero. Crashes if the rounded value is out of range.
+			## ```roc
+			## expect Dec.round_to_i128(7.2) == 7
+			## ```
+			round_to_i128 : Dec -> I128
+			round_to_i128 = |self| out_of_range_or_crash(Dec.to_i128_try(dec_round_to_whole(self)))
+
+			## Round a [Dec] to the nearest [U8]. Halfway values round away from zero. Crashes if the rounded value is out of range.
+			## ```roc
+			## expect Dec.round_to_u8(3.4) == 3
+			## ```
+			round_to_u8 : Dec -> U8
+			round_to_u8 = |self| out_of_range_or_crash(Dec.to_u8_try(dec_round_to_whole(self)))
+
+			## Round a [Dec] to the nearest [U16]. Halfway values round away from zero. Crashes if the rounded value is out of range.
+			## ```roc
+			## expect Dec.round_to_u16(3.4) == 3
+			## ```
+			round_to_u16 : Dec -> U16
+			round_to_u16 = |self| out_of_range_or_crash(Dec.to_u16_try(dec_round_to_whole(self)))
+
+			## Round a [Dec] to the nearest [U32]. Halfway values round away from zero. Crashes if the rounded value is out of range.
+			## ```roc
+			## expect Dec.round_to_u32(7.2) == 7
+			## ```
+			round_to_u32 : Dec -> U32
+			round_to_u32 = |self| out_of_range_or_crash(Dec.to_u32_try(dec_round_to_whole(self)))
+
+			## Round a [Dec] to the nearest [U64]. Halfway values round away from zero. Crashes if the rounded value is out of range.
+			## ```roc
+			## expect Dec.round_to_u64(7.2) == 7
+			## ```
+			round_to_u64 : Dec -> U64
+			round_to_u64 = |self| out_of_range_or_crash(Dec.to_u64_try(dec_round_to_whole(self)))
+
+			## Round a [Dec] to the nearest [U128]. Halfway values round away from zero. Crashes if the rounded value is out of range.
+			## ```roc
+			## expect Dec.round_to_u128(7.2) == 7
+			## ```
+			round_to_u128 : Dec -> U128
+			round_to_u128 = |self| out_of_range_or_crash(Dec.to_u128_try(dec_round_to_whole(self)))
+
+			## Round a [Dec] down to an [I8]. Crashes if the rounded value is out of range.
+			## ```roc
+			## expect Dec.floor_to_i8(-3.2) == -4
+			## ```
+			floor_to_i8 : Dec -> I8
+			floor_to_i8 = |self| out_of_range_or_crash(Dec.to_i8_try(dec_floor_to_whole(self)))
+
+			## Round a [Dec] down to an [I16]. Crashes if the rounded value is out of range.
+			## ```roc
+			## expect Dec.floor_to_i16(-3.2) == -4
+			## ```
+			floor_to_i16 : Dec -> I16
+			floor_to_i16 = |self| out_of_range_or_crash(Dec.to_i16_try(dec_floor_to_whole(self)))
+
+			## Round a [Dec] down to an [I32]. Crashes if the rounded value is out of range.
+			## ```roc
+			## expect Dec.floor_to_i32(3.8) == 3
+			## ```
+			floor_to_i32 : Dec -> I32
+			floor_to_i32 = |self| out_of_range_or_crash(Dec.to_i32_try(dec_floor_to_whole(self)))
+
+			## Round a [Dec] down to an [I64]. Crashes if the rounded value is out of range.
+			## ```roc
+			## expect Dec.floor_to_i64(3.8) == 3
+			## ```
+			floor_to_i64 : Dec -> I64
+			floor_to_i64 = |self| out_of_range_or_crash(Dec.to_i64_try(dec_floor_to_whole(self)))
+
+			## Round a [Dec] down to an [I128]. Crashes if the rounded value is out of range.
+			## ```roc
+			## expect Dec.floor_to_i128(3.8) == 3
+			## ```
+			floor_to_i128 : Dec -> I128
+			floor_to_i128 = |self| out_of_range_or_crash(Dec.to_i128_try(dec_floor_to_whole(self)))
+
+			## Round a [Dec] down to a [U8]. Crashes if the rounded value is out of range.
+			## ```roc
+			## expect Dec.floor_to_u8(3.8) == 3
+			## ```
+			floor_to_u8 : Dec -> U8
+			floor_to_u8 = |self| out_of_range_or_crash(Dec.to_u8_try(dec_floor_to_whole(self)))
+
+			## Round a [Dec] down to a [U16]. Crashes if the rounded value is out of range.
+			## ```roc
+			## expect Dec.floor_to_u16(3.8) == 3
+			## ```
+			floor_to_u16 : Dec -> U16
+			floor_to_u16 = |self| out_of_range_or_crash(Dec.to_u16_try(dec_floor_to_whole(self)))
+
+			## Round a [Dec] down to a [U32]. Crashes if the rounded value is out of range.
+			## ```roc
+			## expect Dec.floor_to_u32(3.8) == 3
+			## ```
+			floor_to_u32 : Dec -> U32
+			floor_to_u32 = |self| out_of_range_or_crash(Dec.to_u32_try(dec_floor_to_whole(self)))
+
+			## Round a [Dec] down to a [U64]. Crashes if the rounded value is out of range.
+			## ```roc
+			## expect Dec.floor_to_u64(3.8) == 3
+			## ```
+			floor_to_u64 : Dec -> U64
+			floor_to_u64 = |self| out_of_range_or_crash(Dec.to_u64_try(dec_floor_to_whole(self)))
+
+			## Round a [Dec] down to a [U128]. Crashes if the rounded value is out of range.
+			## ```roc
+			## expect Dec.floor_to_u128(3.8) == 3
+			## ```
+			floor_to_u128 : Dec -> U128
+			floor_to_u128 = |self| out_of_range_or_crash(Dec.to_u128_try(dec_floor_to_whole(self)))
+
+			## Round a [Dec] up to an [I8]. Crashes if the rounded value is out of range.
+			## ```roc
+			## expect Dec.ceiling_to_i8(-3.2) == -3
+			## ```
+			ceiling_to_i8 : Dec -> I8
+			ceiling_to_i8 = |self| out_of_range_or_crash(Dec.to_i8_try(dec_ceiling_to_whole(self)))
+
+			## Round a [Dec] up to an [I16]. Crashes if the rounded value is out of range.
+			## ```roc
+			## expect Dec.ceiling_to_i16(-3.2) == -3
+			## ```
+			ceiling_to_i16 : Dec -> I16
+			ceiling_to_i16 = |self| out_of_range_or_crash(Dec.to_i16_try(dec_ceiling_to_whole(self)))
+
+			## Round a [Dec] up to an [I32]. Crashes if the rounded value is out of range.
+			## ```roc
+			## expect Dec.ceiling_to_i32(3.2) == 4
+			## ```
+			ceiling_to_i32 : Dec -> I32
+			ceiling_to_i32 = |self| out_of_range_or_crash(Dec.to_i32_try(dec_ceiling_to_whole(self)))
+
+			## Round a [Dec] up to an [I64]. Crashes if the rounded value is out of range.
+			## ```roc
+			## expect Dec.ceiling_to_i64(3.2) == 4
+			## ```
+			ceiling_to_i64 : Dec -> I64
+			ceiling_to_i64 = |self| out_of_range_or_crash(Dec.to_i64_try(dec_ceiling_to_whole(self)))
+
+			## Round a [Dec] up to an [I128]. Crashes if the rounded value is out of range.
+			## ```roc
+			## expect Dec.ceiling_to_i128(3.2) == 4
+			## ```
+			ceiling_to_i128 : Dec -> I128
+			ceiling_to_i128 = |self| out_of_range_or_crash(Dec.to_i128_try(dec_ceiling_to_whole(self)))
+
+			## Round a [Dec] up to a [U8]. Crashes if the rounded value is out of range.
+			## ```roc
+			## expect Dec.ceiling_to_u8(3.2) == 4
+			## ```
+			ceiling_to_u8 : Dec -> U8
+			ceiling_to_u8 = |self| out_of_range_or_crash(Dec.to_u8_try(dec_ceiling_to_whole(self)))
+
+			## Round a [Dec] up to a [U16]. Crashes if the rounded value is out of range.
+			## ```roc
+			## expect Dec.ceiling_to_u16(3.2) == 4
+			## ```
+			ceiling_to_u16 : Dec -> U16
+			ceiling_to_u16 = |self| out_of_range_or_crash(Dec.to_u16_try(dec_ceiling_to_whole(self)))
+
+			## Round a [Dec] up to a [U32]. Crashes if the rounded value is out of range.
+			## ```roc
+			## expect Dec.ceiling_to_u32(3.2) == 4
+			## ```
+			ceiling_to_u32 : Dec -> U32
+			ceiling_to_u32 = |self| out_of_range_or_crash(Dec.to_u32_try(dec_ceiling_to_whole(self)))
+
+			## Round a [Dec] up to a [U64]. Crashes if the rounded value is out of range.
+			## ```roc
+			## expect Dec.ceiling_to_u64(3.2) == 4
+			## ```
+			ceiling_to_u64 : Dec -> U64
+			ceiling_to_u64 = |self| out_of_range_or_crash(Dec.to_u64_try(dec_ceiling_to_whole(self)))
+
+			## Round a [Dec] up to a [U128]. Crashes if the rounded value is out of range.
+			## ```roc
+			## expect Dec.ceiling_to_u128(3.2) == 4
+			## ```
+			ceiling_to_u128 : Dec -> U128
+			ceiling_to_u128 = |self| out_of_range_or_crash(Dec.to_u128_try(dec_ceiling_to_whole(self)))
+
 			## Build a [Dec] from a list of base-10 digits, most significant
 			## first. Each element of the list must be a digit in the range `0`
 			## to `9`. Returns `Err(OutOfRange)` if the resulting value does not
@@ -10066,6 +10276,216 @@ Builtin :: [].{
 			## ```
 			abs_diff : F32, F32 -> F32
 
+			## Round an [F32] to the nearest [I8]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F32.round_to_i8(3.4) == 3
+			## ```
+			round_to_i8 : F32 -> I8
+			round_to_i8 = |self| out_of_range_or_crash(F32.to_i8_try(f32_round_to_whole(self)))
+
+			## Round an [F32] to the nearest [I16]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F32.round_to_i16(3.4) == 3
+			## ```
+			round_to_i16 : F32 -> I16
+			round_to_i16 = |self| out_of_range_or_crash(F32.to_i16_try(f32_round_to_whole(self)))
+
+			## Round an [F32] to the nearest [I32]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F32.round_to_i32(-3.6) == -4
+			## ```
+			round_to_i32 : F32 -> I32
+			round_to_i32 = |self| out_of_range_or_crash(F32.to_i32_try(f32_round_to_whole(self)))
+
+			## Round an [F32] to the nearest [I64]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F32.round_to_i64(7.2) == 7
+			## ```
+			round_to_i64 : F32 -> I64
+			round_to_i64 = |self| out_of_range_or_crash(F32.to_i64_try(f32_round_to_whole(self)))
+
+			## Round an [F32] to the nearest [I128]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F32.round_to_i128(7.2) == 7
+			## ```
+			round_to_i128 : F32 -> I128
+			round_to_i128 = |self| out_of_range_or_crash(F32.to_i128_try(f32_round_to_whole(self)))
+
+			## Round an [F32] to the nearest [U8]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F32.round_to_u8(3.4) == 3
+			## ```
+			round_to_u8 : F32 -> U8
+			round_to_u8 = |self| out_of_range_or_crash(F32.to_u8_try(f32_round_to_whole(self)))
+
+			## Round an [F32] to the nearest [U16]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F32.round_to_u16(3.4) == 3
+			## ```
+			round_to_u16 : F32 -> U16
+			round_to_u16 = |self| out_of_range_or_crash(F32.to_u16_try(f32_round_to_whole(self)))
+
+			## Round an [F32] to the nearest [U32]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F32.round_to_u32(7.2) == 7
+			## ```
+			round_to_u32 : F32 -> U32
+			round_to_u32 = |self| out_of_range_or_crash(F32.to_u32_try(f32_round_to_whole(self)))
+
+			## Round an [F32] to the nearest [U64]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F32.round_to_u64(7.2) == 7
+			## ```
+			round_to_u64 : F32 -> U64
+			round_to_u64 = |self| out_of_range_or_crash(F32.to_u64_try(f32_round_to_whole(self)))
+
+			## Round an [F32] to the nearest [U128]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F32.round_to_u128(7.2) == 7
+			## ```
+			round_to_u128 : F32 -> U128
+			round_to_u128 = |self| out_of_range_or_crash(F32.to_u128_try(f32_round_to_whole(self)))
+
+			## Round an [F32] down to an [I8]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F32.floor_to_i8(-3.2) == -4
+			## ```
+			floor_to_i8 : F32 -> I8
+			floor_to_i8 = |self| out_of_range_or_crash(F32.to_i8_try(f32_floor_unsafe(self)))
+
+			## Round an [F32] down to an [I16]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F32.floor_to_i16(-3.2) == -4
+			## ```
+			floor_to_i16 : F32 -> I16
+			floor_to_i16 = |self| out_of_range_or_crash(F32.to_i16_try(f32_floor_unsafe(self)))
+
+			## Round an [F32] down to an [I32]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F32.floor_to_i32(3.8) == 3
+			## ```
+			floor_to_i32 : F32 -> I32
+			floor_to_i32 = |self| out_of_range_or_crash(F32.to_i32_try(f32_floor_unsafe(self)))
+
+			## Round an [F32] down to an [I64]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F32.floor_to_i64(3.8) == 3
+			## ```
+			floor_to_i64 : F32 -> I64
+			floor_to_i64 = |self| out_of_range_or_crash(F32.to_i64_try(f32_floor_unsafe(self)))
+
+			## Round an [F32] down to an [I128]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F32.floor_to_i128(3.8) == 3
+			## ```
+			floor_to_i128 : F32 -> I128
+			floor_to_i128 = |self| out_of_range_or_crash(F32.to_i128_try(f32_floor_unsafe(self)))
+
+			## Round an [F32] down to a [U8]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F32.floor_to_u8(3.8) == 3
+			## ```
+			floor_to_u8 : F32 -> U8
+			floor_to_u8 = |self| out_of_range_or_crash(F32.to_u8_try(f32_floor_unsafe(self)))
+
+			## Round an [F32] down to a [U16]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F32.floor_to_u16(3.8) == 3
+			## ```
+			floor_to_u16 : F32 -> U16
+			floor_to_u16 = |self| out_of_range_or_crash(F32.to_u16_try(f32_floor_unsafe(self)))
+
+			## Round an [F32] down to a [U32]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F32.floor_to_u32(3.8) == 3
+			## ```
+			floor_to_u32 : F32 -> U32
+			floor_to_u32 = |self| out_of_range_or_crash(F32.to_u32_try(f32_floor_unsafe(self)))
+
+			## Round an [F32] down to a [U64]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F32.floor_to_u64(3.8) == 3
+			## ```
+			floor_to_u64 : F32 -> U64
+			floor_to_u64 = |self| out_of_range_or_crash(F32.to_u64_try(f32_floor_unsafe(self)))
+
+			## Round an [F32] down to a [U128]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F32.floor_to_u128(3.8) == 3
+			## ```
+			floor_to_u128 : F32 -> U128
+			floor_to_u128 = |self| out_of_range_or_crash(F32.to_u128_try(f32_floor_unsafe(self)))
+
+			## Round an [F32] up to an [I8]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F32.ceiling_to_i8(-3.2) == -3
+			## ```
+			ceiling_to_i8 : F32 -> I8
+			ceiling_to_i8 = |self| out_of_range_or_crash(F32.to_i8_try(f32_ceiling_unsafe(self)))
+
+			## Round an [F32] up to an [I16]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F32.ceiling_to_i16(-3.2) == -3
+			## ```
+			ceiling_to_i16 : F32 -> I16
+			ceiling_to_i16 = |self| out_of_range_or_crash(F32.to_i16_try(f32_ceiling_unsafe(self)))
+
+			## Round an [F32] up to an [I32]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F32.ceiling_to_i32(3.2) == 4
+			## ```
+			ceiling_to_i32 : F32 -> I32
+			ceiling_to_i32 = |self| out_of_range_or_crash(F32.to_i32_try(f32_ceiling_unsafe(self)))
+
+			## Round an [F32] up to an [I64]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F32.ceiling_to_i64(3.2) == 4
+			## ```
+			ceiling_to_i64 : F32 -> I64
+			ceiling_to_i64 = |self| out_of_range_or_crash(F32.to_i64_try(f32_ceiling_unsafe(self)))
+
+			## Round an [F32] up to an [I128]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F32.ceiling_to_i128(3.2) == 4
+			## ```
+			ceiling_to_i128 : F32 -> I128
+			ceiling_to_i128 = |self| out_of_range_or_crash(F32.to_i128_try(f32_ceiling_unsafe(self)))
+
+			## Round an [F32] up to a [U8]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F32.ceiling_to_u8(3.2) == 4
+			## ```
+			ceiling_to_u8 : F32 -> U8
+			ceiling_to_u8 = |self| out_of_range_or_crash(F32.to_u8_try(f32_ceiling_unsafe(self)))
+
+			## Round an [F32] up to a [U16]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F32.ceiling_to_u16(3.2) == 4
+			## ```
+			ceiling_to_u16 : F32 -> U16
+			ceiling_to_u16 = |self| out_of_range_or_crash(F32.to_u16_try(f32_ceiling_unsafe(self)))
+
+			## Round an [F32] up to a [U32]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F32.ceiling_to_u32(3.2) == 4
+			## ```
+			ceiling_to_u32 : F32 -> U32
+			ceiling_to_u32 = |self| out_of_range_or_crash(F32.to_u32_try(f32_ceiling_unsafe(self)))
+
+			## Round an [F32] up to a [U64]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F32.ceiling_to_u64(3.2) == 4
+			## ```
+			ceiling_to_u64 : F32 -> U64
+			ceiling_to_u64 = |self| out_of_range_or_crash(F32.to_u64_try(f32_ceiling_unsafe(self)))
+
+			## Round an [F32] up to a [U128]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F32.ceiling_to_u128(3.2) == 4
+			## ```
+			ceiling_to_u128 : F32 -> U128
+			ceiling_to_u128 = |self| out_of_range_or_crash(F32.to_u128_try(f32_ceiling_unsafe(self)))
+
 			## Build an [F32] from a list of base-10 digits, most significant
 			## first. Each element of the list must be a digit in the range `0`
 			## to `9`. Returns `Err(OutOfRange)` if the resulting value does not
@@ -10668,6 +11088,216 @@ Builtin :: [].{
 			## ```
 			abs_diff : F64, F64 -> F64
 
+			## Round an [F64] to the nearest [I8]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F64.round_to_i8(3.4) == 3
+			## ```
+			round_to_i8 : F64 -> I8
+			round_to_i8 = |self| out_of_range_or_crash(F64.to_i8_try(f64_round_to_whole(self)))
+
+			## Round an [F64] to the nearest [I16]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F64.round_to_i16(3.4) == 3
+			## ```
+			round_to_i16 : F64 -> I16
+			round_to_i16 = |self| out_of_range_or_crash(F64.to_i16_try(f64_round_to_whole(self)))
+
+			## Round an [F64] to the nearest [I32]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F64.round_to_i32(-3.6) == -4
+			## ```
+			round_to_i32 : F64 -> I32
+			round_to_i32 = |self| out_of_range_or_crash(F64.to_i32_try(f64_round_to_whole(self)))
+
+			## Round an [F64] to the nearest [I64]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F64.round_to_i64(7.2) == 7
+			## ```
+			round_to_i64 : F64 -> I64
+			round_to_i64 = |self| out_of_range_or_crash(F64.to_i64_try(f64_round_to_whole(self)))
+
+			## Round an [F64] to the nearest [I128]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F64.round_to_i128(7.2) == 7
+			## ```
+			round_to_i128 : F64 -> I128
+			round_to_i128 = |self| out_of_range_or_crash(F64.to_i128_try(f64_round_to_whole(self)))
+
+			## Round an [F64] to the nearest [U8]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F64.round_to_u8(3.4) == 3
+			## ```
+			round_to_u8 : F64 -> U8
+			round_to_u8 = |self| out_of_range_or_crash(F64.to_u8_try(f64_round_to_whole(self)))
+
+			## Round an [F64] to the nearest [U16]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F64.round_to_u16(3.4) == 3
+			## ```
+			round_to_u16 : F64 -> U16
+			round_to_u16 = |self| out_of_range_or_crash(F64.to_u16_try(f64_round_to_whole(self)))
+
+			## Round an [F64] to the nearest [U32]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F64.round_to_u32(7.2) == 7
+			## ```
+			round_to_u32 : F64 -> U32
+			round_to_u32 = |self| out_of_range_or_crash(F64.to_u32_try(f64_round_to_whole(self)))
+
+			## Round an [F64] to the nearest [U64]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F64.round_to_u64(7.2) == 7
+			## ```
+			round_to_u64 : F64 -> U64
+			round_to_u64 = |self| out_of_range_or_crash(F64.to_u64_try(f64_round_to_whole(self)))
+
+			## Round an [F64] to the nearest [U128]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F64.round_to_u128(7.2) == 7
+			## ```
+			round_to_u128 : F64 -> U128
+			round_to_u128 = |self| out_of_range_or_crash(F64.to_u128_try(f64_round_to_whole(self)))
+
+			## Round an [F64] down to an [I8]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F64.floor_to_i8(-3.2) == -4
+			## ```
+			floor_to_i8 : F64 -> I8
+			floor_to_i8 = |self| out_of_range_or_crash(F64.to_i8_try(f64_floor_unsafe(self)))
+
+			## Round an [F64] down to an [I16]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F64.floor_to_i16(-3.2) == -4
+			## ```
+			floor_to_i16 : F64 -> I16
+			floor_to_i16 = |self| out_of_range_or_crash(F64.to_i16_try(f64_floor_unsafe(self)))
+
+			## Round an [F64] down to an [I32]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F64.floor_to_i32(3.8) == 3
+			## ```
+			floor_to_i32 : F64 -> I32
+			floor_to_i32 = |self| out_of_range_or_crash(F64.to_i32_try(f64_floor_unsafe(self)))
+
+			## Round an [F64] down to an [I64]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F64.floor_to_i64(3.8) == 3
+			## ```
+			floor_to_i64 : F64 -> I64
+			floor_to_i64 = |self| out_of_range_or_crash(F64.to_i64_try(f64_floor_unsafe(self)))
+
+			## Round an [F64] down to an [I128]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F64.floor_to_i128(3.8) == 3
+			## ```
+			floor_to_i128 : F64 -> I128
+			floor_to_i128 = |self| out_of_range_or_crash(F64.to_i128_try(f64_floor_unsafe(self)))
+
+			## Round an [F64] down to a [U8]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F64.floor_to_u8(3.8) == 3
+			## ```
+			floor_to_u8 : F64 -> U8
+			floor_to_u8 = |self| out_of_range_or_crash(F64.to_u8_try(f64_floor_unsafe(self)))
+
+			## Round an [F64] down to a [U16]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F64.floor_to_u16(3.8) == 3
+			## ```
+			floor_to_u16 : F64 -> U16
+			floor_to_u16 = |self| out_of_range_or_crash(F64.to_u16_try(f64_floor_unsafe(self)))
+
+			## Round an [F64] down to a [U32]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F64.floor_to_u32(3.8) == 3
+			## ```
+			floor_to_u32 : F64 -> U32
+			floor_to_u32 = |self| out_of_range_or_crash(F64.to_u32_try(f64_floor_unsafe(self)))
+
+			## Round an [F64] down to a [U64]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F64.floor_to_u64(3.8) == 3
+			## ```
+			floor_to_u64 : F64 -> U64
+			floor_to_u64 = |self| out_of_range_or_crash(F64.to_u64_try(f64_floor_unsafe(self)))
+
+			## Round an [F64] down to a [U128]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F64.floor_to_u128(3.8) == 3
+			## ```
+			floor_to_u128 : F64 -> U128
+			floor_to_u128 = |self| out_of_range_or_crash(F64.to_u128_try(f64_floor_unsafe(self)))
+
+			## Round an [F64] up to an [I8]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F64.ceiling_to_i8(-3.2) == -3
+			## ```
+			ceiling_to_i8 : F64 -> I8
+			ceiling_to_i8 = |self| out_of_range_or_crash(F64.to_i8_try(f64_ceiling_unsafe(self)))
+
+			## Round an [F64] up to an [I16]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F64.ceiling_to_i16(-3.2) == -3
+			## ```
+			ceiling_to_i16 : F64 -> I16
+			ceiling_to_i16 = |self| out_of_range_or_crash(F64.to_i16_try(f64_ceiling_unsafe(self)))
+
+			## Round an [F64] up to an [I32]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F64.ceiling_to_i32(3.2) == 4
+			## ```
+			ceiling_to_i32 : F64 -> I32
+			ceiling_to_i32 = |self| out_of_range_or_crash(F64.to_i32_try(f64_ceiling_unsafe(self)))
+
+			## Round an [F64] up to an [I64]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F64.ceiling_to_i64(3.2) == 4
+			## ```
+			ceiling_to_i64 : F64 -> I64
+			ceiling_to_i64 = |self| out_of_range_or_crash(F64.to_i64_try(f64_ceiling_unsafe(self)))
+
+			## Round an [F64] up to an [I128]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F64.ceiling_to_i128(3.2) == 4
+			## ```
+			ceiling_to_i128 : F64 -> I128
+			ceiling_to_i128 = |self| out_of_range_or_crash(F64.to_i128_try(f64_ceiling_unsafe(self)))
+
+			## Round an [F64] up to a [U8]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F64.ceiling_to_u8(3.2) == 4
+			## ```
+			ceiling_to_u8 : F64 -> U8
+			ceiling_to_u8 = |self| out_of_range_or_crash(F64.to_u8_try(f64_ceiling_unsafe(self)))
+
+			## Round an [F64] up to a [U16]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F64.ceiling_to_u16(3.2) == 4
+			## ```
+			ceiling_to_u16 : F64 -> U16
+			ceiling_to_u16 = |self| out_of_range_or_crash(F64.to_u16_try(f64_ceiling_unsafe(self)))
+
+			## Round an [F64] up to a [U32]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F64.ceiling_to_u32(3.2) == 4
+			## ```
+			ceiling_to_u32 : F64 -> U32
+			ceiling_to_u32 = |self| out_of_range_or_crash(F64.to_u32_try(f64_ceiling_unsafe(self)))
+
+			## Round an [F64] up to a [U64]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F64.ceiling_to_u64(3.2) == 4
+			## ```
+			ceiling_to_u64 : F64 -> U64
+			ceiling_to_u64 = |self| out_of_range_or_crash(F64.to_u64_try(f64_ceiling_unsafe(self)))
+
+			## Round an [F64] up to a [U128]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## ```roc
+			## expect F64.ceiling_to_u128(3.2) == 4
+			## ```
+			ceiling_to_u128 : F64 -> U128
+			ceiling_to_u128 = |self| out_of_range_or_crash(F64.to_u128_try(f64_ceiling_unsafe(self)))
+
 			## Build an [F64] from a list of base-10 digits, most significant
 			## first. Each element of the list must be a digit in the range `0`
 			## to `9`. Returns `Err(OutOfRange)` if the resulting value does not
@@ -11030,6 +11660,66 @@ out_of_range_try = |answer|
 	} else {
 		Err(OutOfRange)
 	}
+
+out_of_range_or_crash : Try(item, [OutOfRange]) -> item
+out_of_range_or_crash = |answer|
+	match answer {
+		Ok(value) => value
+		Err(OutOfRange) => {
+			crash "number is out of range"
+		}
+	}
+
+dec_round_to_whole : Dec -> Dec
+dec_round_to_whole = |self| {
+	truncated = Dec.div_trunc_by(self, 1.0)
+	remainder = self - truncated
+	if remainder >= 0.5 {
+		truncated + 1.0
+	} else if remainder <= -0.5 {
+		truncated - 1.0
+	} else {
+		truncated
+	}
+}
+
+dec_floor_to_whole : Dec -> Dec
+dec_floor_to_whole = |self| {
+	truncated = Dec.div_trunc_by(self, 1.0)
+	if self < truncated {
+		truncated - 1.0
+	} else {
+		truncated
+	}
+}
+
+dec_ceiling_to_whole : Dec -> Dec
+dec_ceiling_to_whole = |self| {
+	truncated = Dec.div_trunc_by(self, 1.0)
+	if self > truncated {
+		truncated + 1.0
+	} else {
+		truncated
+	}
+}
+
+f32_round_to_whole : F32 -> F32
+f32_round_to_whole = |self| {
+	if self >= 0 {
+		f32_floor_unsafe(self + 0.5)
+	} else {
+		f32_ceiling_unsafe(self - 0.5)
+	}
+}
+
+f64_round_to_whole : F64 -> F64
+f64_round_to_whole = |self| {
+	if self >= 0 {
+		f64_floor_unsafe(self + 0.5)
+	} else {
+		f64_ceiling_unsafe(self - 0.5)
+	}
+}
 
 digits_to_bytes : List(U8) -> Try(List(U8), [OutOfRange])
 digits_to_bytes = |digits|
@@ -11655,6 +12345,10 @@ f32_to_u64_try_unsafe : F32 -> { success : U8, val_or_memory_garbage : U64 }
 
 f32_to_u128_try_unsafe : F32 -> { success : U8, val_or_memory_garbage : U128 }
 
+f32_floor_unsafe : F32 -> F32
+
+f32_ceiling_unsafe : F32 -> F32
+
 f32_sqrt_unsafe : F32 -> F32
 
 f64_to_i8_try_unsafe : F64 -> { success : U8, val_or_memory_garbage : I8 }
@@ -11678,5 +12372,9 @@ f64_to_u64_try_unsafe : F64 -> { success : U8, val_or_memory_garbage : U64 }
 f64_to_u128_try_unsafe : F64 -> { success : U8, val_or_memory_garbage : U128 }
 
 f64_to_f32_try_unsafe : F64 -> { success : U8, val_or_memory_garbage : F32 }
+
+f64_floor_unsafe : F64 -> F64
+
+f64_ceiling_unsafe : F64 -> F64
 
 f64_sqrt_unsafe : F64 -> F64

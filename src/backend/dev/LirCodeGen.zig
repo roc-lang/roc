@@ -215,6 +215,8 @@ pub const BuiltinFn = enum {
     num_shr_u128,
     int_to_str,
     float_to_str,
+    float_floor,
+    float_ceiling,
     int_from_str,
     dec_from_str,
     float_from_str,
@@ -311,6 +313,8 @@ pub const BuiltinFn = enum {
             .num_shr_u128 => "roc_builtins_num_shr_u128",
             .int_to_str => "roc_builtins_int_to_str",
             .float_to_str => "roc_builtins_float_to_str",
+            .float_floor => "roc_builtins_float_floor",
+            .float_ceiling => "roc_builtins_float_ceiling",
             .int_from_str => "roc_builtins_int_from_str",
             .dec_from_str => "roc_builtins_dec_from_str",
             .float_from_str => "roc_builtins_float_from_str",
@@ -3501,13 +3505,31 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     self.codegen.freeFloat(src_reg);
                     return .{ .float_reg = result_reg };
                 },
+                .num_floor => {
+                    if (args.len != 1) unreachable;
+                    const src_loc = try self.emitValueLocal(args[0]);
+                    return self.callFloatUnaryBuiltin(
+                        src_loc,
+                        ll.ret_layout,
+                        @intFromPtr(&dev_wrappers.roc_builtins_float_floor),
+                        .float_floor,
+                    );
+                },
+                .num_ceiling => {
+                    if (args.len != 1) unreachable;
+                    const src_loc = try self.emitValueLocal(args[0]);
+                    return self.callFloatUnaryBuiltin(
+                        src_loc,
+                        ll.ret_layout,
+                        @intFromPtr(&dev_wrappers.roc_builtins_float_ceiling),
+                        .float_ceiling,
+                    );
+                },
 
                 // Unimplemented ops
                 .num_pow,
                 .num_log,
                 .num_round,
-                .num_floor,
-                .num_ceiling,
                 .num_from_numeral,
                 .compare,
                 => {
@@ -5712,6 +5734,43 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.callBuiltin(&builder, fn_addr, builtin_fn);
 
             return .{ .stack_i128 = stack_offset };
+        }
+
+        fn callFloatUnaryBuiltin(self: *Self, src_loc: ValueLocation, ret_layout: layout.Idx, fn_addr: usize, builtin_fn: BuiltinFn) Allocator.Error!ValueLocation {
+            const freg = try self.ensureInFloatReg(src_loc);
+
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            if (comptime target.toCpuArch() == .aarch64) {
+                if (freg != .V0) {
+                    try self.codegen.emit.fmovRegReg(.double, .V0, freg);
+                }
+            } else {
+                try builder.addF64RegArg(freg);
+            }
+
+            const float_width: i64 = switch (ret_layout) {
+                .f32 => 4,
+                .f64 => 8,
+                else => std.debug.panic(
+                    "LirCodeGen invariant violated: float unary builtin received non-float return layout {s}",
+                    .{@tagName(ret_layout)},
+                ),
+            };
+            try builder.addImmArg(float_width);
+            try self.callBuiltin(&builder, fn_addr, builtin_fn);
+            self.codegen.freeFloat(freg);
+
+            const result_reg = self.codegen.allocFloat() orelse unreachable;
+            if (comptime target.toCpuArch() == .aarch64) {
+                if (result_reg != .V0) {
+                    try self.codegen.emit.fmovRegReg(.double, result_reg, .V0);
+                }
+            } else {
+                if (result_reg != .XMM0) {
+                    try self.codegen.emit.movsdRegReg(result_reg, .XMM0);
+                }
+            }
+            return .{ .float_reg = result_reg };
         }
 
         // ── Integer try conversion info ──
