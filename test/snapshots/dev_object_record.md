@@ -21,10 +21,8 @@ platform ""
     packages {}
     provides { name_for_host: "name", score_for_host: "score" }
     targets: {
-        files: "targets/",
-        exe: {
-            x64glibc: { files: [app] },
-        }
+        inputs: "targets/",
+        x64glibc: { inputs: [app] },
     }
 
 name_for_host : Str

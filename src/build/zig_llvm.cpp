@@ -38,6 +38,7 @@
 #include <llvm/Object/COFFImportFile.h>
 #include <llvm/Object/COFFModuleDefinition.h>
 #include <llvm/PassRegistry.h>
+#include <llvm/BinaryFormat/Magic.h>
 #include <llvm/Support/CommandLine.h>
 #include <llvm/Support/ErrorHandling.h>
 #include <llvm/Support/FileSystem.h>
@@ -545,6 +546,65 @@ bool ZigLLVMWriteImportLibrary(const char *def_path, unsigned int coff_machine,
     return static_cast<bool>(
         object::writeImportLibrary(def->OutputFile, output_lib_path,
                                    def->Exports, machine, /* MinGW */ true));
+}
+
+// Like ZigLLVMWriteArchive, but inputs that are themselves archives are
+// flattened: their members are added to the output archive directly, so the
+// result never contains nested archives.
+bool ZigLLVMWriteArchiveFlattened(const char *archive_name, const char **file_names,
+    size_t file_name_count, ZigLLVMArchiveKind archive_kind)
+{
+    std::vector<std::unique_ptr<MemoryBuffer>> live_buffers;
+    std::vector<std::unique_ptr<object::Archive>> live_archives;
+    std::vector<NewArchiveMember> new_members;
+    for (size_t i = 0; i < file_name_count; i += 1) {
+        ErrorOr<std::unique_ptr<MemoryBuffer>> buf_or =
+            MemoryBuffer::getFile(file_names[i], /*IsText=*/false, /*RequiresNullTerminator=*/false);
+        if (!buf_or) return true;
+        std::unique_ptr<MemoryBuffer> buf = std::move(*buf_or);
+        if (identify_magic(buf->getBuffer()) == file_magic::archive) {
+            Error archive_err = Error::success();
+            auto archive = std::make_unique<object::Archive>(buf->getMemBufferRef(), archive_err);
+            if (archive_err) {
+                consumeError(std::move(archive_err));
+                return true;
+            }
+            Error iter_err = Error::success();
+            for (const object::Archive::Child &child : archive->children(iter_err)) {
+                Expected<NewArchiveMember> member =
+                    NewArchiveMember::getOldMember(child, /*Deterministic=*/true);
+                if (!member) {
+                    consumeError(member.takeError());
+                    return true;
+                }
+                // Members reference data inside buf; keep it alive until writeArchive.
+                new_members.push_back(std::move(*member));
+            }
+            if (iter_err) {
+                consumeError(std::move(iter_err));
+                return true;
+            }
+            live_archives.push_back(std::move(archive));
+            live_buffers.push_back(std::move(buf));
+        } else {
+            Expected<NewArchiveMember> member =
+                NewArchiveMember::getFile(file_names[i], /*Deterministic=*/true);
+            if (!member) {
+                consumeError(member.takeError());
+                return true;
+            }
+            new_members.push_back(std::move(*member));
+        }
+    }
+    Error err = writeArchive(archive_name, new_members,
+        SymtabWritingMode::NormalSymtab, static_cast<object::Archive::Kind>(archive_kind),
+        /*Deterministic=*/true, /*Thin=*/false, nullptr);
+
+    if (err) {
+        consumeError(std::move(err));
+        return true;
+    }
+    return false;
 }
 
 bool ZigLLVMWriteArchive(const char *archive_name, const char **file_names, size_t file_name_count,

@@ -78,6 +78,8 @@ const jobs = [_]Job{
     .{ .name = "run-test-cli", .kind = .harness },
     .{ .name = "run-test-serialization-sizes" },
     .{ .name = "run-test-wasm-static-lib" },
+    .{ .name = "run-test-dylib" },
+    .{ .name = "run-test-archive" },
     .{ .name = "run-coverage-parser" },
 };
 
