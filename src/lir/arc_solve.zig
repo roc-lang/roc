@@ -1220,9 +1220,13 @@ pub fn computeVisibility(
 /// Result of the born-unique analysis, one bit triple per local.
 pub const Uniqueness = struct {
     /// Bit set => every definition of the local binds a value whose
-    /// outermost allocation is born with count 1: a fresh aggregate or
-    /// literal assignment, a low-level op whose `RcEffect` marks its result
-    /// unique, or a direct call whose callee's signature returns unique.
+    /// outermost allocation originated at a unique birth: a fresh aggregate
+    /// or literal assignment, a low-level op whose `RcEffect` marks its
+    /// result unique, a direct call whose callee's signature returns
+    /// unique, or a pure same-value alias of a born-unique source. This is
+    /// the origin property alone, independent of the holder accounting in
+    /// `destroyed`, which keeps it stable across emission's statement
+    /// cloning so the certifier can re-derive it from the final store.
     born_unique: std.bit_set.DynamicBitSetUnmanaged,
     /// Bit set => born unique and no statement can add another holder, so
     /// the count is still 1 at the local's single consuming use.
@@ -1250,14 +1254,20 @@ pub const Uniqueness = struct {
 /// low-level argument, an owned-position direct-call argument, a return)
 /// take the value's single unit with them, so the first one preserves
 /// uniqueness and any further one destroys it; borrowed-position call
-/// arguments and erased-call arguments conservatively destroy. Pure
-/// same-value aliases do not inherit uniqueness: the alias and its source
-/// are two names for one allocation, and proving the source dead at every
-/// alias use is left to a later stage. Variant parameter seeds are not
-/// applied here: variants share parameter locals with their source proc, so
-/// emission and the certifier overlay `RcSig.unique_params` per proc.
-/// Statement iteration is flat, so unreachable statements only destroy
-/// uniqueness, which is conservative-sound.
+/// arguments and erased-call arguments conservatively destroy. A pure
+/// same-value alias (`.local`, `.list_reinterpret`, `.nominal` — not
+/// payload reads, which name interior allocations of a possibly-shared
+/// outer value) inherits uniqueness: its definition is the chain's
+/// consuming use of the source, so the source's single unit moves through
+/// to the target, and any other occurrence of the source — consuming,
+/// holder-adding, or a mere read, before or after, since the analysis is
+/// flow-insensitive — destroys the target's uniqueness (a read elsewhere
+/// forces emission to give the alias its own unit, holding the count above
+/// 1). A multi-bound alias target never inherits. Variant parameter seeds
+/// are not applied here: variants share parameter locals with their source
+/// proc, so emission and the certifier overlay `RcSig.unique_params` per
+/// proc. Statement iteration is flat, so unreachable statements only
+/// destroy uniqueness, which is conservative-sound.
 pub fn computeUniqueness(
     allocator: Allocator,
     store: *const LirStore,
@@ -1268,14 +1278,34 @@ pub fn computeUniqueness(
 
     var born = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
     errdefer born.deinit(allocator);
-    // A definition that is not a unique birth (parameters, aliases, payload
-    // reads, calls, join params) poisons the local outright.
+    // A definition that is not a unique birth or a pure same-value alias
+    // (parameters, payload reads, foreign calls, join params) poisons the
+    // local outright.
     var foreign_def = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
     defer foreign_def.deinit(allocator);
     var destroyed = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
     errdefer destroyed.deinit(allocator);
     var consumed_once = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
     defer consumed_once.deinit(allocator);
+    // Non-consuming, non-holder-adding reads (payload reads, borrowed
+    // low-level arguments, expect/debug/switch operands). They never destroy
+    // a local's own uniqueness — emission's path-sensitive facts cover the
+    // checked argument itself — but they block alias inheritance, because a
+    // source read anywhere keeps the source live past the alias definition.
+    var borrow_used = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
+    defer borrow_used.deinit(allocator);
+    var has_def = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
+    defer has_def.deinit(allocator);
+    var multi_def = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
+    defer multi_def.deinit(allocator);
+
+    // Single pure-alias source per target (`no_local` when the local is not
+    // an alias target), plus the list of distinct alias targets to settle.
+    const alias_source = try allocator.alloc(u32, local_count);
+    defer allocator.free(alias_source);
+    @memset(alias_source, no_local);
+    var alias_targets = std.ArrayList(u32).empty;
+    defer alias_targets.deinit(allocator);
 
     const Marks = struct {
         rc: []const bool,
@@ -1290,6 +1320,27 @@ pub fn computeUniqueness(
             const index = @intFromEnum(local);
             if (index >= self.rc.len or !self.rc[index]) return;
             set.set(index);
+        }
+
+        fn noteUse(self: @This(), set: *std.bit_set.DynamicBitSetUnmanaged, local: LIR.LocalId) void {
+            const index = @intFromEnum(local);
+            if (index >= self.rc.len or !self.rc[index]) return;
+            set.set(index);
+        }
+
+        fn trackDef(
+            self: @This(),
+            seen: *std.bit_set.DynamicBitSetUnmanaged,
+            multi: *std.bit_set.DynamicBitSetUnmanaged,
+            local: LIR.LocalId,
+        ) void {
+            const index = @intFromEnum(local);
+            if (index >= self.rc.len or !self.rc[index]) return;
+            if (seen.isSet(index)) {
+                multi.set(index);
+            } else {
+                seen.set(index);
+            }
         }
 
         fn consume(
@@ -1309,17 +1360,84 @@ pub fn computeUniqueness(
     };
     const marks = Marks{ .rc = rc_local };
 
+    const Alias = struct {
+        /// Records a pure same-value alias definition. The definition is the
+        /// chain's consuming use of the source; a non-refcounted or
+        /// self-referential source poisons the target, and distinct alias
+        /// definitions binding different sources never inherit.
+        fn record(
+            m: Marks,
+            alloc: Allocator,
+            sources: []u32,
+            targets: *std.ArrayList(u32),
+            foreign: *std.bit_set.DynamicBitSetUnmanaged,
+            once: *std.bit_set.DynamicBitSetUnmanaged,
+            dead: *std.bit_set.DynamicBitSetUnmanaged,
+            target: LIR.LocalId,
+            source: LIR.LocalId,
+        ) SolveError!void {
+            const target_index = @intFromEnum(target);
+            if (target_index >= m.rc.len or !m.rc[target_index]) return;
+            const source_index = @intFromEnum(source);
+            if (source_index >= m.rc.len or !m.rc[source_index] or source_index == target_index) {
+                foreign.set(target_index);
+                return;
+            }
+            m.consume(once, dead, source);
+            if (sources[target_index] == no_local) {
+                sources[target_index] = @intCast(source_index);
+                try targets.append(alloc, @intCast(target_index));
+            } else if (sources[target_index] != source_index) {
+                foreign.set(target_index);
+            }
+        }
+    };
+
     for (store.proc_specs.items) |proc| {
         for (store.getLocalSpan(proc.args)) |param| {
+            marks.trackDef(&has_def, &multi_def, param);
             marks.destroy(&foreign_def, param);
         }
     }
 
     for (store.cf_stmts.items) |stmt| {
         switch (stmt) {
-            .assign_ref => |assign| marks.destroy(&foreign_def, assign.target),
-            .assign_literal => |assign| marks.noteBirth(&born, assign.target),
+            .assign_ref => |assign| {
+                marks.trackDef(&has_def, &multi_def, assign.target);
+                switch (assign.op) {
+                    .local => |source| try Alias.record(marks, allocator, alias_source, &alias_targets, &foreign_def, &consumed_once, &destroyed, assign.target, source),
+                    .list_reinterpret => |op| try Alias.record(marks, allocator, alias_source, &alias_targets, &foreign_def, &consumed_once, &destroyed, assign.target, op.backing_ref),
+                    .nominal => |op| try Alias.record(marks, allocator, alias_source, &alias_targets, &foreign_def, &consumed_once, &destroyed, assign.target, op.backing_ref),
+                    .discriminant => |op| {
+                        marks.destroy(&foreign_def, assign.target);
+                        marks.noteUse(&borrow_used, op.source);
+                    },
+                    .field => |op| {
+                        marks.destroy(&foreign_def, assign.target);
+                        marks.noteUse(&borrow_used, op.source);
+                    },
+                    .tag_payload => |op| {
+                        marks.destroy(&foreign_def, assign.target);
+                        marks.noteUse(&borrow_used, op.source);
+                    },
+                    .tag_payload_struct => |op| {
+                        marks.destroy(&foreign_def, assign.target);
+                        marks.noteUse(&borrow_used, op.source);
+                    },
+                }
+            },
+            .assign_literal => |assign| {
+                marks.trackDef(&has_def, &multi_def, assign.target);
+                switch (assign.value) {
+                    // A big string literal is a view of static backing whose
+                    // count is the static sentinel, never 1, so it is not a
+                    // unique birth and must never take an in-place path.
+                    .str_literal => marks.destroy(&foreign_def, assign.target),
+                    else => marks.noteBirth(&born, assign.target),
+                }
+            },
             .assign_call => |assign| {
+                marks.trackDef(&has_def, &multi_def, assign.target);
                 const callee_sig = sigs.get(assign.proc);
                 if (callee_sig.ret_unique) {
                     marks.noteBirth(&born, assign.target);
@@ -1341,6 +1459,7 @@ pub fn computeUniqueness(
                 }
             },
             .assign_call_erased => |assign| {
+                marks.trackDef(&has_def, &multi_def, assign.target);
                 marks.destroy(&foreign_def, assign.target);
                 marks.destroy(&destroyed, assign.closure);
                 for (store.getLocalSpan(assign.args)) |arg| {
@@ -1348,10 +1467,12 @@ pub fn computeUniqueness(
                 }
             },
             .assign_packed_erased_fn => |assign| {
+                marks.trackDef(&has_def, &multi_def, assign.target);
                 marks.destroy(&foreign_def, assign.target);
                 if (assign.capture) |capture| marks.destroy(&destroyed, capture);
             },
             .assign_low_level => |assign| {
+                marks.trackDef(&has_def, &multi_def, assign.target);
                 if (assign.rc_effect.result_unique) {
                     marks.noteBirth(&born, assign.target);
                 } else {
@@ -1363,31 +1484,41 @@ pub fn computeUniqueness(
                         continue;
                     }
                     const bit = @as(u64, 1) << @as(u6, @intCast(position));
+                    var read_only = true;
                     if ((assign.rc_effect.consume_args & bit) != 0) {
                         marks.consume(&consumed_once, &destroyed, arg);
+                        read_only = false;
                     }
                     if ((assign.rc_effect.retain_args & bit) != 0) {
                         marks.destroy(&destroyed, arg);
+                        read_only = false;
+                    }
+                    if (read_only) {
+                        marks.noteUse(&borrow_used, arg);
                     }
                 }
             },
             .assign_list => |assign| {
+                marks.trackDef(&has_def, &multi_def, assign.target);
                 marks.noteBirth(&born, assign.target);
                 for (store.getLocalSpan(assign.elems)) |elem| {
                     marks.destroy(&destroyed, elem);
                 }
             },
             .assign_struct => |assign| {
+                marks.trackDef(&has_def, &multi_def, assign.target);
                 marks.noteBirth(&born, assign.target);
                 for (store.getLocalSpan(assign.fields)) |field| {
                     marks.destroy(&destroyed, field);
                 }
             },
             .assign_tag => |assign| {
+                marks.trackDef(&has_def, &multi_def, assign.target);
                 marks.noteBirth(&born, assign.target);
                 if (assign.payload) |payload| marks.destroy(&destroyed, payload);
             },
             .set_local => |assign| {
+                marks.trackDef(&has_def, &multi_def, assign.target);
                 marks.destroy(&foreign_def, assign.target);
                 marks.destroy(&destroyed, assign.target);
                 marks.destroy(&destroyed, assign.value);
@@ -1395,20 +1526,69 @@ pub fn computeUniqueness(
             .incref => |rc| marks.destroy(&destroyed, rc.value),
             .join => |join_stmt| {
                 for (store.getLocalSpan(join_stmt.params)) |param| {
+                    marks.trackDef(&has_def, &multi_def, param);
                     marks.destroy(&foreign_def, param);
                 }
             },
             // Returning is the value's consuming use: the unit moves to the
             // caller, which feeds the per-proc unique-return solve.
             .ret => |ret_stmt| marks.consume(&consumed_once, &destroyed, ret_stmt.value),
-            .decref, .free, .debug, .expect, .switch_stmt, .jump, .crash, .runtime_error, .loop_continue, .loop_break => {},
+            .debug => |debug_stmt| marks.noteUse(&borrow_used, debug_stmt.message),
+            .expect => |expect_stmt| marks.noteUse(&borrow_used, expect_stmt.condition),
+            .switch_stmt => |switch_stmt| marks.noteUse(&borrow_used, switch_stmt.cond),
+            .decref, .free, .jump, .crash, .runtime_error, .loop_continue, .loop_break => {},
         }
     }
 
-    // born_unique: at least one birth and no foreign definition. unique:
-    // born unique with no holder-adding occurrence anywhere.
+    // born_unique: every definition is a birth or a settled pure alias, and
+    // no foreign definition. unique: born unique with no holder-adding
+    // occurrence anywhere.
     var foreign_iter = foreign_def.iterator(.{});
     while (foreign_iter.next()) |index| born.unset(index);
+
+    // An alias target's origin derives from its source, so a birth bit set
+    // by another of its definitions must not stand on its own (the alias
+    // definition may bind a non-unique value); and a multi-bound alias
+    // target never inherits.
+    for (alias_targets.items) |target| {
+        born.unset(target);
+        if (multi_def.isSet(target)) destroyed.set(target);
+    }
+
+    // Pure-alias chains settle to a fixpoint. The scan above fixed every
+    // input (foreign poisons, holder-adding destroys, reads, multi-bound
+    // defs), so the loop's bits flip monotonically: a target's birth only
+    // turns on once its source has settled born, and destroys only
+    // accumulate down the chain. Each round either flips at least one bit
+    // or the loop stops, so the round count is bounded by two flips per
+    // alias target.
+    var alias_rounds: usize = 0;
+    while (true) : (alias_rounds += 1) {
+        if (alias_rounds > 2 * alias_targets.items.len + 1) {
+            solveInvariant("ARC alias uniqueness solving did not converge");
+        }
+        var changed = false;
+        for (alias_targets.items) |target| {
+            const source = alias_source[target];
+            if (!foreign_def.isSet(target) and !born.isSet(target) and born.isSet(source)) {
+                born.set(target);
+                changed = true;
+            }
+            // Any other occurrence of the source — a holder-adding or
+            // second consuming use (destroyed) or a mere read
+            // (borrow_used) — keeps the source live past the alias
+            // definition, so the shared allocation's count exceeds 1 at
+            // the target's consuming use.
+            if (!destroyed.isSet(target) and
+                (destroyed.isSet(source) or borrow_used.isSet(source)))
+            {
+                destroyed.set(target);
+                changed = true;
+            }
+        }
+        if (!changed) break;
+    }
+
     var unique = try born.clone(allocator);
     errdefer unique.deinit(allocator);
     var destroyed_iter = destroyed.iterator(.{});

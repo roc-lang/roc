@@ -2819,6 +2819,14 @@ const ArcTest = struct {
         } });
     }
 
+    fn assignRefReinterpret(self: *ArcTest, target: LIR.LocalId, backing: LIR.LocalId, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+        return try self.store.addCFStmt(.{ .assign_ref = .{
+            .target = target,
+            .op = .{ .list_reinterpret = .{ .backing_ref = backing } },
+            .next = next,
+        } });
+    }
+
     fn assignRefField(self: *ArcTest, target: LIR.LocalId, source: LIR.LocalId, field_idx: u16, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
         return try self.store.addCFStmt(.{ .assign_ref = .{
             .target = target,
@@ -4222,6 +4230,138 @@ test "uniqueness: without specialization the dying unique argument keeps the cal
     // cloned and the callee keeps its runtime check.
     try testing.expectEqual(base_proc_count, f.store.proc_specs.items.len);
     try testing.expectEqual(@as(u64, 0), f.uniqueArgsFor(appended));
+}
+
+test "uniqueness: pure alias of a fresh list elides the check" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const list = try f.local(f.list_i64);
+    const alias = try f.local(f.list_i64);
+    const elem = try f.local(.i64);
+    const appended = try f.local(f.list_i64);
+    const result = try f.local(.i64);
+
+    // elem = 5; list = []; alias = list; appended = checked_op(alias, elem)
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, 1, ret);
+    const append = try f.assignLowLevel(appended, &.{ alias, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), result_assign);
+    const alias_assign = try f.assignRefLocal(alias, list, append);
+    const list_assign = try f.assignList(list, &.{}, alias_assign);
+    const body = try f.assignI64(elem, 5, list_assign);
+    _ = try f.addProc(&.{}, body, .i64);
+
+    try f.run();
+    // The alias is the fresh list's single consuming use, so the list's
+    // unit moves through the chain into the op and the runtime check on
+    // argument 0 is redundant.
+    try testing.expectEqual(@as(u64, 1), f.uniqueArgsFor(appended));
+}
+
+test "uniqueness: alias whose source is read elsewhere keeps the check" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const list = try f.local(f.list_i64);
+    const alias = try f.local(f.list_i64);
+    const elem = try f.local(.i64);
+    const appended = try f.local(f.list_i64);
+    const result = try f.local(.i64);
+
+    // elem = 5; list = []; alias = list; appended = checked_op(alias, elem);
+    // expect(list) — the original is read besides the alias, so the alias
+    // must keep its own unit and the count exceeds 1 at the op.
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, 1, ret);
+    const use_list = try f.expectStmt(list, result_assign);
+    const append = try f.assignLowLevel(appended, &.{ alias, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), use_list);
+    const alias_assign = try f.assignRefLocal(alias, list, append);
+    const list_assign = try f.assignList(list, &.{}, alias_assign);
+    const body = try f.assignI64(elem, 5, list_assign);
+    _ = try f.addProc(&.{}, body, .i64);
+
+    try f.run();
+    try testing.expectEqual(@as(u64, 0), f.uniqueArgsFor(appended));
+}
+
+test "uniqueness: alias chain of two inherits the fresh birth" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const list = try f.local(f.list_i64);
+    const first_alias = try f.local(f.list_i64);
+    const second_alias = try f.local(f.list_i64);
+    const elem = try f.local(.i64);
+    const appended = try f.local(f.list_i64);
+    const result = try f.local(.i64);
+
+    // elem = 5; list = []; first = list; second = first;
+    // appended = checked_op(second, elem)
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, 1, ret);
+    const append = try f.assignLowLevel(appended, &.{ second_alias, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), result_assign);
+    const second_assign = try f.assignRefLocal(second_alias, first_alias, append);
+    const first_assign = try f.assignRefLocal(first_alias, list, second_assign);
+    const list_assign = try f.assignList(list, &.{}, first_assign);
+    const body = try f.assignI64(elem, 5, list_assign);
+    _ = try f.addProc(&.{}, body, .i64);
+
+    try f.run();
+    try testing.expectEqual(@as(u64, 1), f.uniqueArgsFor(appended));
+}
+
+test "uniqueness: list reinterpret alias inherits the fresh birth" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const list = try f.local(f.list_i64);
+    const cast = try f.local(f.list_i64);
+    const elem = try f.local(.i64);
+    const appended = try f.local(f.list_i64);
+    const result = try f.local(.i64);
+
+    // elem = 5; list = []; cast = reinterpret(list);
+    // appended = checked_op(cast, elem)
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, 1, ret);
+    const append = try f.assignLowLevel(appended, &.{ cast, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), result_assign);
+    const cast_assign = try f.assignRefReinterpret(cast, list, append);
+    const list_assign = try f.assignList(list, &.{}, cast_assign);
+    const body = try f.assignI64(elem, 5, list_assign);
+    _ = try f.addProc(&.{}, body, .i64);
+
+    try f.run();
+    try testing.expectEqual(@as(u64, 1), f.uniqueArgsFor(appended));
+}
+
+test "uniqueness: callee returning a fresh list through an alias solves a unique return" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    // Callee builds a fresh list and returns it through a pure alias, so
+    // its return solves unique.
+    const fresh = try f.local(f.list_i64);
+    const out = try f.local(f.list_i64);
+    const callee_ret = try f.ret(out);
+    const out_assign = try f.assignRefLocal(out, fresh, callee_ret);
+    const callee_body = try f.assignList(fresh, &.{}, out_assign);
+    const callee = try f.addProc(&.{}, callee_body, f.list_i64);
+
+    // Caller runs a checked op on the call result.
+    const list = try f.local(f.list_i64);
+    const elem = try f.local(.i64);
+    const appended = try f.local(f.list_i64);
+    const result = try f.local(.i64);
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, 1, ret);
+    const append = try f.assignLowLevel(appended, &.{ list, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), result_assign);
+    const elem_assign = try f.assignI64(elem, 5, append);
+    const call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = list,
+        .proc = callee,
+        .args = try f.span(&.{}),
+        .next = elem_assign,
+    } });
+    _ = try f.addProc(&.{}, call, .i64);
+
+    try f.run();
+    try testing.expectEqual(@as(u64, 1), f.uniqueArgsFor(appended));
 }
 
 test "RC mutable iterator accumulator replace cleans old state" {

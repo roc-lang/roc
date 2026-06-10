@@ -147,12 +147,13 @@ fn certifyRcAtomicity(
 /// Mirror of the born-unique analysis: every `assign_low_level` claiming a
 /// check-free unique argument must name a position the op may runtime-check
 /// and a local whose every definition is a unique birth — a fresh
-/// allocation, a direct call whose callee's signature returns unique, or a
-/// parameter the containing proc's signature seeds born-unique. The balance
-/// and borrow conditions behind the claim are enforced by the per-value
-/// certification; this rule covers the unique-origin claim. Variants share
-/// parameter locals with their source proc, so claims are checked per proc
-/// body against that proc's signature.
+/// allocation, a direct call whose callee's signature returns unique, a
+/// pure same-value alias whose source is born unique, or a parameter the
+/// containing proc's signature seeds born-unique. The balance and borrow
+/// conditions behind the claim are enforced by the per-value certification;
+/// this rule covers the unique-origin claim. Variants share parameter
+/// locals with their source proc, so claims are checked per proc body
+/// against that proc's signature.
 fn certifyUniqueArgs(
     allocator: Allocator,
     store: *const LirStore,
