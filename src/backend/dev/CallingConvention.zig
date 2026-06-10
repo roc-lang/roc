@@ -198,8 +198,10 @@ pub fn CallBuilder(comptime EmitType: type) type {
 
     const MoveStatus = enum { to_move, being_moved, moved };
 
-    // Maximum stack arguments we support (should be plenty for any real call)
-    const MAX_STACK_ARGS = 16;
+    // Maximum 8-byte stack argument slots we support. SysV memory-class
+    // aggregates occupy one slot per eightbyte, so keep this comfortably above
+    // the integer-register spill count.
+    const MAX_STACK_ARGS = 64;
 
     return struct {
         const Self = @This();
@@ -310,6 +312,23 @@ pub fn CallBuilder(comptime EmitType: type) type {
                 // Defer stack arg - will be stored after stack allocation in call()
                 std.debug.assert(self.stack_arg_count < MAX_STACK_ARGS);
                 self.stack_args[self.stack_arg_count] = .{ .from_mem = .{ .base = base_reg, .offset = offset } };
+                self.stack_arg_count += 1;
+            }
+        }
+
+        /// Add a by-value stack argument copied from memory, rounded up to
+        /// eightbyte slots. This is used for x86_64 SysV memory-class
+        /// aggregate arguments; Win64/AAPCS64 pass those aggregates by pointer.
+        pub fn addStackMemArg(self: *Self, base_reg: GeneralReg, offset: i32, size: usize) Allocator.Error!void {
+            const slot_count = (size + 7) / 8;
+            std.debug.assert(self.stack_arg_count + slot_count <= MAX_STACK_ARGS);
+            for (0..slot_count) |slot| {
+                self.stack_args[self.stack_arg_count] = .{
+                    .from_mem = .{
+                        .base = base_reg,
+                        .offset = offset + @as(i32, @intCast(slot * 8)),
+                    },
+                };
                 self.stack_arg_count += 1;
             }
         }

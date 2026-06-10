@@ -98,22 +98,36 @@ pub fn call(
         .indirect => sret = @ptrCast(ret_buf),
     }
 
+    // x86_64 passes an indirect result pointer as the first integer argument.
+    // AArch64 uses x8, which the assembly stub loads from the `sret` field.
+    if (sret) |ret_ptr| {
+        if (target_abi == .x86_64_sysv or target_abi == .x86_64_windows) {
+            if (gp_n >= max_gp) return Error.TooManyRegisters;
+            gp[gp_n] = @intFromPtr(ret_ptr);
+            gp_n += 1;
+        }
+    }
+
     // The leading *RocOps occupies the first integer register.
     if (lowered.leading_ops) {
         gp[gp_n] = @intFromPtr(roc_ops);
         gp_n += 1;
     }
 
-    for (lowered.args, arg_offsets) |placement, arg_offset| {
+    for (lowered.args, arg_offsets, arg_layouts) |placement, arg_offset, arg_layout| {
         const value = args_buf + arg_offset;
         switch (placement) {
             .none => {},
             .indirect => {
-                // Pass a pointer to the argument's bytes (the caller-owned copy lives in
-                // args_buf for the duration of the call).
-                if (gp_n >= max_gp) return Error.TooManyRegisters;
-                gp[gp_n] = @intFromPtr(value);
-                gp_n += 1;
+                if (target_abi == .x86_64_sysv) {
+                    const size = store.layoutSize(store.getLayout(arg_layout));
+                    try appendStackBytes(&stack, &stack_n, value, size);
+                } else {
+                    // AAPCS64 and Win64 pass memory-class arguments by pointer.
+                    if (gp_n >= max_gp) return Error.TooManyRegisters;
+                    gp[gp_n] = @intFromPtr(value);
+                    gp_n += 1;
+                }
             },
             .registers => |pieces| {
                 for (pieces) |piece| {
@@ -133,7 +147,6 @@ pub fn call(
             },
         }
     }
-    _ = &stack_n;
 
     var res_gp: [2]u64 = @splat(0);
     var res_sse: [2]u128 = @splat(0);
@@ -179,6 +192,16 @@ fn readUnaligned(comptime T: type, ptr: [*]const u8, size: u8) T {
 
 fn writeUnaligned(dst: [*]u8, bytes: []const u8) void {
     @memcpy(dst[0..bytes.len], bytes);
+}
+
+fn appendStackBytes(stack: *[max_stack_bytes]u8, stack_n: *usize, value: [*]const u8, size: usize) Error!void {
+    const aligned_size = std.mem.alignForward(usize, size, 8);
+    if (stack_n.* + aligned_size > max_stack_bytes) return Error.TooManyStackBytes;
+    @memcpy(stack[stack_n.* .. stack_n.* + size], value[0..size]);
+    if (aligned_size > size) {
+        @memset(stack[stack_n.* + size .. stack_n.* + aligned_size], 0);
+    }
+    stack_n.* += aligned_size;
 }
 
 fn invoke(ctl: *const Call) void {

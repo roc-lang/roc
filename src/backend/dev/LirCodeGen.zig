@@ -9769,13 +9769,21 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             if (lowered.leading_ops) try builder.addRegArg(roc_ops_reg);
 
-            for (lowered.args, arg_offsets) |placement, arg_offset| {
+            for (lowered.args, arg_offsets, 0..) |placement, arg_offset, arg_i| {
                 const slot_off = args_slot + @as(i32, @intCast(arg_offset));
                 switch (placement) {
                     .none => {},
-                    // Memory-class: pass a pointer to the argument's bytes (AAPCS64/Win64
-                    // by-reference convention).
-                    .indirect => try builder.addLeaArg(frame_ptr, slot_off),
+                    .indirect => {
+                        const runtime_layout = self.runtimeRepresentationLayoutIdx(arg_layouts[arg_i]);
+                        const size_align = self.layout_store.layoutSizeAlign(self.layout_store.getLayout(runtime_layout));
+                        if (abi_target == .x86_64_sysv) {
+                            // SysV memory-class aggregates are copied into the outgoing
+                            // stack argument area. AAPCS64 and Win64 pass a pointer.
+                            try builder.addStackMemArg(frame_ptr, slot_off, size_align.size);
+                        } else {
+                            try builder.addLeaArg(frame_ptr, slot_off);
+                        }
+                    },
                     .registers => |pieces| {
                         for (pieces) |piece| {
                             const piece_off = slot_off + @as(i32, @intCast(piece.offset));

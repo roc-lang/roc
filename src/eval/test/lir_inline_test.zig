@@ -366,7 +366,7 @@ fn procShapeMatchesIterCollect(shape: ProcShape, wanted: IterCollectShape) bool 
             shape.join_count >= 16 and
             shape.jump_count >= 20,
         .generic => shape.arg_count == 1 and
-            shape.direct_call_count == 3 and
+            shape.direct_call_count == 4 and
             shape.switch_count == 6 and
             shape.join_count == 9 and
             shape.jump_count == 11 and
