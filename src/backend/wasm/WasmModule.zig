@@ -1625,6 +1625,18 @@ pub fn mergeModuleMode(self: *Self, source: *const Self, mode: MergeMode) MergeE
                             symbol_remap[src_sym_idx] = imported.symbol.raw();
                             continue;
                         }
+                        if (std.mem.eql(u8, name, "__stack_pointer")) {
+                            self.enableStackPointer(self.stack_pointer_init);
+                            const new_sym_idx: u32 = @intCast(self.linking.symbol_table.items.len);
+                            try self.linking.symbol_table.append(gpa, .{
+                                .kind = .global,
+                                .flags = 0,
+                                .name = name,
+                                .index = 0,
+                            });
+                            symbol_remap[src_sym_idx] = new_sym_idx;
+                            continue;
+                        }
                         // PIC globals: define them as constants in the final module.
                         // __memory_base and __table_base are 0 in statically-linked modules.
                         if (std.mem.eql(u8, name, "__memory_base") or
@@ -5788,6 +5800,39 @@ test "mergeModule final link - resolves PIC globals and table symbols" {
     try std.testing.expectEqualStrings("__table_base", table_base.name.?);
     try std.testing.expectEqualStrings("__indirect_function_table", table.name.?);
     try std.testing.expectEqual(@as(u32, 0), table.index);
+}
+
+test "mergeModule final link - resolves stack pointer import to global zero" {
+    const allocator = std.testing.allocator;
+    var app = Self.init(allocator);
+    defer app.deinit();
+
+    var source = Self.init(allocator);
+    defer source.deinit();
+    const stack_symbol = try source.addStackPointerImportWithSymbol();
+
+    try source.code_bytes.append(allocator, Op.global_get);
+    try appendPaddedU32(allocator, &source.code_bytes, 99);
+    try source.reloc_code.entries.append(allocator, .{ .index = .{
+        .type_id = .global_index_leb,
+        .offset = 1,
+        .symbol_index = stack_symbol.raw(),
+    } });
+
+    var result = try app.mergeModule(&source);
+    defer result.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), app.global_imports.items.len);
+    try std.testing.expect(app.has_stack_pointer);
+
+    const stack = app.linking.symbol_table.items[result.symbol_remap[stack_symbol.raw()]];
+    try std.testing.expect(!stack.isUndefined());
+    try std.testing.expectEqual(WasmLinking.SymKind.global, stack.kind);
+    try std.testing.expectEqualStrings("__stack_pointer", stack.name.?);
+    try std.testing.expectEqual(@as(u32, 0), stack.index);
+
+    app.resolveCodeRelocations();
+    try std.testing.expectEqual(@as(u32, 0), decodePaddedU32(app.code_bytes.items[1..6]));
 }
 
 test "encodeRelocatable roundtrip - preserves data symbols and data relocations" {
