@@ -11,6 +11,7 @@ const check = @import("check");
 const core = @import("lir_core");
 
 const Arc = @import("arc.zig");
+const ScalarizeJoins = @import("scalarize_joins.zig");
 const LIR = core.LIR;
 const LirImage = @import("lir_image.zig");
 const LirProgram = core.Program;
@@ -216,6 +217,8 @@ pub fn lowerCheckedModulesToLir(
     solved_owned = false;
     solved = undefined;
     errdefer lowered.deinit();
+
+    try ScalarizeJoins.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
 
     try Arc.insert(&lowered.lir_result.store, &lowered.lir_result.layouts, .{
         .roots = lowered.lir_result.root_procs.items,

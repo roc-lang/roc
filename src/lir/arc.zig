@@ -4086,3 +4086,68 @@ test "RC borrow survives the lender moving into an aggregate" {
     // placement emission chooses.
     try testing.expect(f.countRc(payload, .incref) >= 1);
 }
+
+test "RC alias chain into a consuming call moves the unit through" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const value = try f.local(.str);
+    const alias_a = try f.local(.str);
+    const alias_b = try f.local(.str);
+    const result = try f.local(.i64);
+    const ret = try f.ret(result);
+    const call = try f.assignCall(result, &.{alias_b}, ret);
+    const alias_b_assign = try f.assignRefLocal(alias_b, alias_a, call);
+    const alias_a_assign = try f.assignRefLocal(alias_a, value, alias_b_assign);
+    const body = try f.assignStr(value, "through", alias_a_assign);
+    _ = try f.addProc(&.{}, body, .i64);
+    try f.run();
+    // The demand on the consumed alias propagates to the chain's owner, so
+    // the single unit moves link by link into the call.
+    try testing.expectEqual(@as(usize, 0), f.countAllRc());
+}
+
+test "RC alias of a parameter consumed in the body solves the parameter owned" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    // Wrapper proc: alias the parameter, consume the alias.
+    const param = try f.local(f.list_str);
+    const alias = try f.local(f.list_str);
+    const elem = try f.local(.str);
+    const appended = try f.local(f.list_str);
+    const wrapper_ret = try f.ret(appended);
+    const append = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = appended,
+        .op = .list_append_unsafe,
+        .rc_effect = LIR.LowLevel.RcEffect.consumesArgsReturningConsumedArgsRetainingArgs(1, 2),
+        .args = try f.span(&.{ alias, elem }),
+        .next = wrapper_ret,
+    } });
+    const alias_assign = try f.assignRefLocal(alias, param, append);
+    const elem_assign = try f.assignStr(elem, "x", alias_assign);
+    const wrapper = try f.addProc(&.{param}, elem_assign, f.list_str);
+
+    // Caller passes a dying list.
+    const list = try f.local(f.list_str);
+    const call_result = try f.local(f.list_str);
+    const caller_ret = try f.ret(call_result);
+    const call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = call_result,
+        .proc = wrapper,
+        .args = try f.span(&.{list}),
+        .next = caller_ret,
+    } });
+    const caller_body = try f.assignList(list, &.{}, call);
+    _ = try f.addProc(&.{}, caller_body, f.list_str);
+
+    try f.run();
+    // The alias's consumption demands the parameter, so the parameter is
+    // owned, the caller's argument moves in, the alias moves the parameter's
+    // unit into the append, and the result moves out: no RC statements on
+    // the list anywhere.
+    try f.expectRc(param, 0, 0, 0);
+    try f.expectRc(alias, 0, 0, 0);
+    try f.expectRc(list, 0, 0, 0);
+    try f.expectRc(appended, 0, 0, 0);
+    try f.expectRc(call_result, 0, 0, 0);
+}

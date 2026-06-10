@@ -140,6 +140,12 @@ const Solver = struct {
     /// Ownership demands per local. Returns never demand: a returned borrow
     /// pays one retain at the return when the signature's return is owned.
     demand: []bool,
+    /// Source local of each pure same-value alias (`.local`,
+    /// `.list_reinterpret`, `.nominal`), or `no_local`. A demand on an alias
+    /// is a demand on its source: the consuming occurrence takes the chain's
+    /// single unit, so the whole chain must be owned for the unit to move
+    /// through instead of paying a retain/release pair.
+    alias_source: []u32,
     /// Parameter position per local when the local is a proc parameter
     /// (positions >= 64 are recorded as owned-only).
     param_position: []u32,
@@ -170,6 +176,7 @@ pub fn solve(
         .scc = try allocator.alloc(u32, proc_count),
         .defs = try allocator.alloc(DefKind, local_count),
         .demand = try allocator.alloc(bool, local_count),
+        .alias_source = try allocator.alloc(u32, local_count),
         .param_position = try allocator.alloc(u32, local_count),
         .param_proc = try allocator.alloc(u32, local_count),
         .join_param = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count),
@@ -186,6 +193,7 @@ pub fn solve(
         allocator.free(solver.scc);
         allocator.free(solver.defs);
         allocator.free(solver.demand);
+        allocator.free(solver.alias_source);
         allocator.free(solver.param_position);
         allocator.free(solver.param_proc);
         if (!solver_sigs_kept) solver.join_param.deinit(allocator);
@@ -490,6 +498,7 @@ const RetTreatment = enum {
 fn collectAll(solver: *Solver, ret_treatment: RetTreatment) SolveError!void {
     @memset(solver.defs, .none);
     @memset(solver.demand, false);
+    @memset(solver.alias_source, no_local);
 
     const store = solver.store;
     for (store.proc_specs.items, 0..) |proc, proc_index| {
@@ -504,6 +513,42 @@ fn collectAll(solver: *Solver, ret_treatment: RetTreatment) SolveError!void {
             if (solver.visited.contains(current)) continue;
             try solver.visited.put(current, {});
             try collectStmt(solver, @intCast(proc_index), ret_treatment, current);
+        }
+    }
+
+    propagateAliasDemands(solver);
+}
+
+/// Records a pure same-value alias edge. A local bound more than once stops
+/// propagating (its def degrades to `.multi` and it never borrows anyway).
+fn noteAlias(solver: *Solver, target: LIR.LocalId, source: LIR.LocalId) void {
+    const index = @intFromEnum(target);
+    solver.alias_source[index] = if (solver.alias_source[index] == no_local and
+        solver.defs[index] != .multi)
+        @intFromEnum(source)
+    else
+        no_local;
+}
+
+/// Demands on aliases are demands on their sources, transitively: the chain
+/// shares one value whose single unit should move through the chain to the
+/// consuming occurrence rather than the alias paying a retain while the
+/// source's unit is separately released.
+fn propagateAliasDemands(solver: *Solver) void {
+    for (0..solver.demand.len) |start| {
+        if (!solver.demand[start]) continue;
+        var cursor: u32 = @intCast(start);
+        while (true) {
+            // A multi-bound alias names different values over time; its
+            // recorded edge is not a same-value link.
+            switch (solver.defs[cursor]) {
+                .multi => break,
+                else => {},
+            }
+            const source = solver.alias_source[cursor];
+            if (source == no_local or solver.demand[source]) break;
+            solver.demand[source] = true;
+            cursor = source;
         }
     }
 }
@@ -534,6 +579,7 @@ fn collectStmt(
                 .local => |source| {
                     if (assign.target != source) {
                         noteDef(solver.defs, assign.target, .{ .borrow_capable = @intFromEnum(source) });
+                        noteAlias(solver, assign.target, source);
                     } else {
                         noteDef(solver.defs, assign.target, .multi);
                     }
@@ -542,8 +588,14 @@ fn collectStmt(
                 .field => |op| noteDef(solver.defs, assign.target, .{ .borrow_capable = @intFromEnum(op.source) }),
                 .tag_payload => |op| noteDef(solver.defs, assign.target, .{ .borrow_capable = @intFromEnum(op.source) }),
                 .tag_payload_struct => |op| noteDef(solver.defs, assign.target, .{ .borrow_capable = @intFromEnum(op.source) }),
-                .list_reinterpret => |op| noteDef(solver.defs, assign.target, .{ .borrow_capable = @intFromEnum(op.backing_ref) }),
-                .nominal => |op| noteDef(solver.defs, assign.target, .{ .borrow_capable = @intFromEnum(op.backing_ref) }),
+                .list_reinterpret => |op| {
+                    noteDef(solver.defs, assign.target, .{ .borrow_capable = @intFromEnum(op.backing_ref) });
+                    noteAlias(solver, assign.target, op.backing_ref);
+                },
+                .nominal => |op| {
+                    noteDef(solver.defs, assign.target, .{ .borrow_capable = @intFromEnum(op.backing_ref) });
+                    noteAlias(solver, assign.target, op.backing_ref);
+                },
             }
             try solver.stack.append(allocator, assign.next);
         },

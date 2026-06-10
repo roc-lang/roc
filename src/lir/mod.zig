@@ -15,6 +15,8 @@ pub const Hosted = core.Hosted;
 pub const Program = core.Program;
 /// Public checked-module-to-LIR lowering entrypoint.
 pub const CheckedPipeline = @import("checked_pipeline.zig");
+/// Struct-typed join parameters split into per-field parameters before ARC.
+pub const ScalarizeJoins = @import("scalarize_joins.zig");
 /// ARC borrow inference and RC statement insertion over explicit LIR.
 pub const Arc = @import("arc.zig");
 /// ARC-stage per-proc ownership signatures.
@@ -71,6 +73,7 @@ test "lir tests" {
     std.testing.refAllDecls(Hosted);
     std.testing.refAllDecls(Program);
     std.testing.refAllDecls(CheckedPipeline);
+    std.testing.refAllDecls(ScalarizeJoins);
     std.testing.refAllDecls(Arc);
     std.testing.refAllDecls(ArcSig);
     std.testing.refAllDecls(ArcSolve);
