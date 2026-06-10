@@ -514,9 +514,15 @@ pub fn roc_builtins_list_drop_at(out: *RocList, list_bytes: ?[*]u8, list_len: us
     }
 }
 
-/// Wrapper: listReplace for list_set
-pub fn roc_builtins_list_replace(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, index: u64, element: ?[*]u8, element_width: usize, out_element: ?[*]u8, elements_refcounted: bool, element_incref: ?RcIncFn, element_decref: ?RcDropFn, roc_ops: *RocOps) callconv(.c) void {
+/// Wrapper: listReplace for list_set. An `.InPlace` update mode means the
+/// compiler proved the list unique, so the uniqueness-checked copy-on-write
+/// entry is bypassed in favor of listReplaceInPlace.
+pub fn roc_builtins_list_replace(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, index: u64, element: ?[*]u8, element_width: usize, out_element: ?[*]u8, elements_refcounted: bool, element_incref: ?RcIncFn, element_decref: ?RcDropFn, update_mode: utils.UpdateMode, roc_ops: *RocOps) callconv(.c) void {
     const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
+    if (update_mode == .InPlace) {
+        out.* = list.listReplaceInPlace(l, index, element, element_width, out_element, &copy_fallback);
+        return;
+    }
     if (elements_refcounted) {
         var inc_ctx = CallbackElementIncrefContext{
             .callback = element_incref orelse unreachable,
@@ -532,8 +538,9 @@ pub fn roc_builtins_list_replace(out: *RocList, list_bytes: ?[*]u8, list_len: us
     }
 }
 
-/// Wrapper: listSwap for list_swap
-pub fn roc_builtins_list_swap(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, element_width: usize, index_1: u64, index_2: u64, elements_refcounted: bool, element_incref: ?RcIncFn, element_decref: ?RcDropFn, roc_ops: *RocOps) callconv(.c) void {
+/// Wrapper: listSwap for list_swap. The update mode is forwarded to the
+/// builtin's uniqueness check; `.InPlace` skips it.
+pub fn roc_builtins_list_swap(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, element_width: usize, index_1: u64, index_2: u64, elements_refcounted: bool, element_incref: ?RcIncFn, element_decref: ?RcDropFn, update_mode: utils.UpdateMode, roc_ops: *RocOps) callconv(.c) void {
     const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
     if (elements_refcounted) {
         var inc_ctx = CallbackElementIncrefContext{
@@ -544,28 +551,30 @@ pub fn roc_builtins_list_swap(out: *RocList, list_bytes: ?[*]u8, list_len: usize
             .callback = element_decref orelse unreachable,
             .roc_ops = roc_ops,
         };
-        out.* = listSwap(l, alignment, element_width, index_1, index_2, true, @ptrCast(&inc_ctx), &callbackListElementIncref, @ptrCast(&dec_ctx), &callbackListElementDecref, .Immutable, &copy_fallback, roc_ops);
+        out.* = listSwap(l, alignment, element_width, index_1, index_2, true, @ptrCast(&inc_ctx), &callbackListElementIncref, @ptrCast(&dec_ctx), &callbackListElementDecref, update_mode, &copy_fallback, roc_ops);
     } else {
-        out.* = listSwap(l, alignment, element_width, index_1, index_2, false, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), .Immutable, &copy_fallback, roc_ops);
+        out.* = listSwap(l, alignment, element_width, index_1, index_2, false, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), update_mode, &copy_fallback, roc_ops);
     }
 }
 
-/// Wrapper: listReserve
-pub fn roc_builtins_list_reserve(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, spare: u64, element_width: usize, elements_refcounted: bool, element_incref: ?RcIncFn, roc_ops: *RocOps) callconv(.c) void {
+/// Wrapper: listReserve. The update mode is forwarded to the builtin's
+/// uniqueness check; `.InPlace` skips it.
+pub fn roc_builtins_list_reserve(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, spare: u64, element_width: usize, elements_refcounted: bool, element_incref: ?RcIncFn, update_mode: utils.UpdateMode, roc_ops: *RocOps) callconv(.c) void {
     const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
     if (elements_refcounted) {
         var inc_ctx = CallbackElementIncrefContext{
             .callback = element_incref orelse unreachable,
             .roc_ops = roc_ops,
         };
-        out.* = listReserve(l, alignment, spare, element_width, true, @ptrCast(&inc_ctx), &callbackListElementIncref, .Immutable, roc_ops);
+        out.* = listReserve(l, alignment, spare, element_width, true, @ptrCast(&inc_ctx), &callbackListElementIncref, update_mode, roc_ops);
     } else {
-        out.* = listReserve(l, alignment, spare, element_width, false, null, @ptrCast(&rcNone), .Immutable, roc_ops);
+        out.* = listReserve(l, alignment, spare, element_width, false, null, @ptrCast(&rcNone), update_mode, roc_ops);
     }
 }
 
-/// Wrapper: listReleaseExcessCapacity
-pub fn roc_builtins_list_release_excess_capacity(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, element_width: usize, elements_refcounted: bool, element_incref: ?RcIncFn, element_decref: ?RcDropFn, roc_ops: *RocOps) callconv(.c) void {
+/// Wrapper: listReleaseExcessCapacity. The update mode is forwarded to the
+/// builtin's uniqueness check; `.InPlace` skips it.
+pub fn roc_builtins_list_release_excess_capacity(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, alignment: u32, element_width: usize, elements_refcounted: bool, element_incref: ?RcIncFn, element_decref: ?RcDropFn, update_mode: utils.UpdateMode, roc_ops: *RocOps) callconv(.c) void {
     const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
     if (elements_refcounted) {
         var inc_ctx = CallbackElementIncrefContext{
@@ -576,10 +585,52 @@ pub fn roc_builtins_list_release_excess_capacity(out: *RocList, list_bytes: ?[*]
             .callback = element_decref orelse unreachable,
             .roc_ops = roc_ops,
         };
-        out.* = listReleaseExcessCapacity(l, alignment, element_width, true, @ptrCast(&inc_ctx), &callbackListElementIncref, @ptrCast(&dec_ctx), &callbackListElementDecref, .Immutable, roc_ops);
+        out.* = listReleaseExcessCapacity(l, alignment, element_width, true, @ptrCast(&inc_ctx), &callbackListElementIncref, @ptrCast(&dec_ctx), &callbackListElementDecref, update_mode, roc_ops);
     } else {
-        out.* = listReleaseExcessCapacity(l, alignment, element_width, false, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), .Immutable, roc_ops);
+        out.* = listReleaseExcessCapacity(l, alignment, element_width, false, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), update_mode, roc_ops);
     }
+}
+
+test "roc_builtins_list_replace InPlace mutates the unique allocation without a uniqueness check" {
+    var env = utils.TestEnv.init(std.testing.allocator);
+    defer env.deinit();
+
+    const data = [_]u8{ 10, 20, 30, 40 };
+    const l = RocList.fromSlice(u8, data[0..], false, env.getOps());
+    const original_bytes = l.bytes;
+
+    const new_element: u8 = 99;
+    var out_element: u8 = 0;
+    var out: RocList = undefined;
+    roc_builtins_list_replace(&out, l.bytes, l.length, l.capacity_or_alloc_ptr, @alignOf(u8), 2, @ptrCast(@constCast(&new_element)), @sizeOf(u8), @ptrCast(&out_element), false, null, null, .InPlace, env.getOps());
+    defer out.decref(@alignOf(u8), @sizeOf(u8), false, null, list.rcNone, env.getOps());
+
+    try std.testing.expectEqual(original_bytes, out.bytes);
+    try std.testing.expectEqual(@as(u8, 30), out_element);
+    const elements = out.elements(u8).?[0..out.len()];
+    try std.testing.expectEqual(@as(u8, 10), elements[0]);
+    try std.testing.expectEqual(@as(u8, 20), elements[1]);
+    try std.testing.expectEqual(@as(u8, 99), elements[2]);
+    try std.testing.expectEqual(@as(u8, 40), elements[3]);
+}
+
+test "roc_builtins_list_swap InPlace mutates the unique allocation without a uniqueness check" {
+    var env = utils.TestEnv.init(std.testing.allocator);
+    defer env.deinit();
+
+    const data = [_]u16{ 1, 2, 3 };
+    const l = RocList.fromSlice(u16, data[0..], false, env.getOps());
+    const original_bytes = l.bytes;
+
+    var out: RocList = undefined;
+    roc_builtins_list_swap(&out, l.bytes, l.length, l.capacity_or_alloc_ptr, @alignOf(u16), @sizeOf(u16), 0, 2, false, null, null, .InPlace, env.getOps());
+    defer out.decref(@alignOf(u16), @sizeOf(u16), false, null, list.rcNone, env.getOps());
+
+    try std.testing.expectEqual(original_bytes, out.bytes);
+    const elements = out.elements(u16).?[0..out.len()];
+    try std.testing.expectEqual(@as(u16, 3), elements[0]);
+    try std.testing.expectEqual(@as(u16, 2), elements[1]);
+    try std.testing.expectEqual(@as(u16, 1), elements[2]);
 }
 
 /// Wrapper: incref a list with refcounted elements.

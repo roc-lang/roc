@@ -731,7 +731,7 @@ pub const MonoLlvmCodeGen = struct {
                 try work.append(wa, .{ .node = assign.next });
             },
             .assign_low_level => |assign| {
-                try self.emitLowLevel(assign.target, assign.op, assign.args);
+                try self.emitLowLevel(assign.target, assign.op, assign.args, assign.unique_args);
                 try work.append(wa, .{ .node = assign.next });
             },
             .assign_list => |assign| {
@@ -1038,7 +1038,7 @@ pub const MonoLlvmCodeGen = struct {
         }
     }
 
-    fn emitLowLevel(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LowLevel, args: LocalSpan) Error!void {
+    fn emitLowLevel(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LowLevel, args: LocalSpan, unique_args: u64) Error!void {
         const arg_locals = self.store.getLocalSpan(args);
         switch (op) {
             .bool_not => {
@@ -1061,9 +1061,9 @@ pub const MonoLlvmCodeGen = struct {
             .list_prepend => try self.emitListPrepend(target, arg_locals),
             .list_sublist, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last => try self.emitListSublist(target, op, arg_locals),
             .list_drop_at => try self.emitListDropAt(target, arg_locals),
-            .list_set => try self.emitListSet(target, arg_locals),
-            .list_reserve => try self.emitListReserve(target, arg_locals),
-            .list_release_excess_capacity => try self.emitListReleaseExcess(target, arg_locals),
+            .list_set => try self.emitListSet(target, arg_locals, unique_args),
+            .list_reserve => try self.emitListReserve(target, arg_locals, unique_args),
+            .list_release_excess_capacity => try self.emitListReleaseExcess(target, arg_locals, unique_args),
             .list_first, .list_last => try self.emitListFirstLast(target, op, arg_locals),
             .str_is_eq => try self.emitStrBoolBuiltin(target, "roc_builtins_str_equal", arg_locals),
             .str_contains => try self.emitStrBoolBuiltin(target, "roc_builtins_str_contains", arg_locals),
@@ -1919,6 +1919,20 @@ pub const MonoLlvmCodeGen = struct {
         }
     }
 
+    /// Append a builtin wrapper's update-mode argument selected by the
+    /// statement's statically-proven-unique argument mask: `.InPlace` when bit
+    /// 0 says argument 0's runtime uniqueness check is redundant, `.Immutable`
+    /// (checked) otherwise.
+    fn appendUpdateModeArg(self: *MonoLlvmCodeGen, call_args: *CallArgs, unique_args: u64) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const mode = if ((unique_args & 1) != 0) builtins.utils.UpdateMode.InPlace else builtins.utils.UpdateMode.Immutable;
+        try call_args.append(
+            self.allocator,
+            .i8,
+            builder.intValue(.i8, @intFromEnum(mode)) catch return error.OutOfMemory,
+        );
+    }
+
     fn emitListGetUnsafe(self: *MonoLlvmCodeGen, target: LocalId, args: []const LocalId) Error!void {
         const list_layout = self.localLayout(args[0]);
         const abi = self.layouts().builtinListAbi(list_layout);
@@ -2093,7 +2107,7 @@ pub const MonoLlvmCodeGen = struct {
         try self.callBuiltinVoid("roc_builtins_list_drop_at", call_args.types.items, call_args.values.items);
     }
 
-    fn emitListSet(self: *MonoLlvmCodeGen, target: LocalId, args: []const LocalId) Error!void {
+    fn emitListSet(self: *MonoLlvmCodeGen, target: LocalId, args: []const LocalId, unique_args: u64) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const abi = self.layouts().builtinListAbi(self.localLayout(args[0]));
         var call_args = try self.rocListArgs1(args[0]);
@@ -2105,11 +2119,12 @@ pub const MonoLlvmCodeGen = struct {
         try call_args.append(self.allocator, self.ptrSizedIntType(), builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory);
         try call_args.append(self.allocator, try self.ptrType(), builder.nullValue(try self.ptrType()) catch return error.OutOfMemory);
         try self.appendListElementRcArgs(&call_args, abi, true, true);
+        try self.appendUpdateModeArg(&call_args, unique_args);
         try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
         try self.callBuiltinVoid("roc_builtins_list_replace", call_args.types.items, call_args.values.items);
     }
 
-    fn emitListReserve(self: *MonoLlvmCodeGen, target: LocalId, args: []const LocalId) Error!void {
+    fn emitListReserve(self: *MonoLlvmCodeGen, target: LocalId, args: []const LocalId, unique_args: u64) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const abi = self.layouts().builtinListAbi(self.localLayout(args[0]));
         var call_args = try self.rocListArgs1(args[0]);
@@ -2119,11 +2134,12 @@ pub const MonoLlvmCodeGen = struct {
         try call_args.append(self.allocator, .i64, try self.coerceScalar(try self.loadScalar(self.slot(args[1]).ptr, self.localLayout(args[1])), .i64, false));
         try call_args.append(self.allocator, self.ptrSizedIntType(), builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory);
         try self.appendListElementRcArgs(&call_args, abi, true, false);
+        try self.appendUpdateModeArg(&call_args, unique_args);
         try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
         try self.callBuiltinVoid("roc_builtins_list_reserve", call_args.types.items, call_args.values.items);
     }
 
-    fn emitListReleaseExcess(self: *MonoLlvmCodeGen, target: LocalId, args: []const LocalId) Error!void {
+    fn emitListReleaseExcess(self: *MonoLlvmCodeGen, target: LocalId, args: []const LocalId, unique_args: u64) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const abi = self.layouts().builtinListAbi(self.localLayout(args[0]));
         var call_args = try self.rocListArgs1(args[0]);
@@ -2132,6 +2148,7 @@ pub const MonoLlvmCodeGen = struct {
         try call_args.append(self.allocator, .i32, builder.intValue(.i32, abi.elem_alignment) catch return error.OutOfMemory);
         try call_args.append(self.allocator, self.ptrSizedIntType(), builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory);
         try self.appendListElementRcArgs(&call_args, abi, true, true);
+        try self.appendUpdateModeArg(&call_args, unique_args);
         try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
         try self.callBuiltinVoid("roc_builtins_list_release_excess_capacity", call_args.types.items, call_args.values.items);
     }

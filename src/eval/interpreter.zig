@@ -1685,6 +1685,7 @@ pub const Interpreter = struct {
                         .arg_layouts = arg_layouts,
                         .ret_layout = self.store.getLocal(assign.target).layout_idx,
                         .callable_proc = null,
+                        .unique_args = assign.unique_args,
                     }));
                     current = assign.next;
                 },
@@ -3823,7 +3824,18 @@ pub const Interpreter = struct {
         arg_layouts: []const layout_mod.Idx,
         ret_layout: layout_mod.Idx,
         callable_proc: ?LirProcSpecId = null,
+        /// The statement's statically-proven-unique argument mask; bit i set
+        /// means argument i's runtime uniqueness check is redundant and the
+        /// in-place path may be taken unconditionally.
+        unique_args: u64 = 0,
     };
+
+    /// Select the update mode for a builtin whose first argument carries the
+    /// op's runtime uniqueness check: `.InPlace` when ARC emission proved the
+    /// check redundant, `.Immutable` (checked) otherwise.
+    fn updateModeForArg0(unique_args: u64) UpdateMode {
+        return if ((unique_args & 1) != 0) .InPlace else .Immutable;
+    }
 
     fn evalLowLevel(self: *LirInterpreter, ll: LowLevelEvalInput) Error!Value {
         const args = ll.args;
@@ -4213,7 +4225,7 @@ pub const Interpreter = struct {
                     if (elems_rc) &listElementIncref else &builtins.utils.rcNone,
                     if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
                     if (elems_rc) &listElementDecref else &builtins.utils.rcNone,
-                    builtins.utils.UpdateMode.Immutable,
+                    updateModeForArg0(ll.unique_args),
                     &builtins.list.copy_fallback,
                     &self.roc_ops,
                 );
@@ -4338,21 +4350,31 @@ pub const Interpreter = struct {
                 // Aim that slot directly at the value field of the result record.
                 const value_dest_ptr: [*]u8 = @ptrCast(val.offset(value_field_off).ptr);
 
-                const result_list = builtins.list.listReplace(
-                    self.valueToRocListForLayout(args[0], arg_layout),
-                    info.alignment,
-                    args[1].read(u64),
-                    @ptrCast(args[2].ptr),
-                    info.width,
-                    elems_rc,
-                    if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
-                    if (elems_rc) &listElementIncref else &builtins.utils.rcNone,
-                    if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
-                    if (elems_rc) &listElementDecref else &builtins.utils.rcNone,
-                    value_dest_ptr,
-                    &builtins.list.copy_fallback,
-                    &self.roc_ops,
-                );
+                const result_list = if (updateModeForArg0(ll.unique_args) == .InPlace)
+                    builtins.list.listReplaceInPlace(
+                        self.valueToRocListForLayout(args[0], arg_layout),
+                        args[1].read(u64),
+                        @ptrCast(args[2].ptr),
+                        info.width,
+                        value_dest_ptr,
+                        &builtins.list.copy_fallback,
+                    )
+                else
+                    builtins.list.listReplace(
+                        self.valueToRocListForLayout(args[0], arg_layout),
+                        info.alignment,
+                        args[1].read(u64),
+                        @ptrCast(args[2].ptr),
+                        info.width,
+                        elems_rc,
+                        if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
+                        if (elems_rc) &listElementIncref else &builtins.utils.rcNone,
+                        if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
+                        if (elems_rc) &listElementDecref else &builtins.utils.rcNone,
+                        value_dest_ptr,
+                        &builtins.list.copy_fallback,
+                        &self.roc_ops,
+                    );
 
                 // Write the resulting list into the list field of the record.
                 const list_val_inner = try self.rocListToValue(result_list, list_field_layout);
@@ -4378,21 +4400,31 @@ pub const Interpreter = struct {
                 // listReplace requires a scratch slot for the old element; we discard it here
                 // because list_set returns only the new list (replace semantics return a pair).
                 const old_elem = try self.allocAlignedBytes(info.width, layout_mod.RocAlignment.fromByteUnits(@intCast(info.alignment)));
-                const result = builtins.list.listReplace(
-                    self.valueToRocListForLayout(args[0], arg_layout),
-                    info.alignment,
-                    args[1].read(u64),
-                    @ptrCast(args[2].ptr),
-                    info.width,
-                    elems_rc,
-                    if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
-                    if (elems_rc) &listElementIncref else &builtins.utils.rcNone,
-                    if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
-                    if (elems_rc) &listElementDecref else &builtins.utils.rcNone,
-                    @ptrCast(old_elem.ptr),
-                    &builtins.list.copy_fallback,
-                    &self.roc_ops,
-                );
+                const result = if (updateModeForArg0(ll.unique_args) == .InPlace)
+                    builtins.list.listReplaceInPlace(
+                        self.valueToRocListForLayout(args[0], arg_layout),
+                        args[1].read(u64),
+                        @ptrCast(args[2].ptr),
+                        info.width,
+                        @ptrCast(old_elem.ptr),
+                        &builtins.list.copy_fallback,
+                    )
+                else
+                    builtins.list.listReplace(
+                        self.valueToRocListForLayout(args[0], arg_layout),
+                        info.alignment,
+                        args[1].read(u64),
+                        @ptrCast(args[2].ptr),
+                        info.width,
+                        elems_rc,
+                        if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
+                        if (elems_rc) &listElementIncref else &builtins.utils.rcNone,
+                        if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
+                        if (elems_rc) &listElementDecref else &builtins.utils.rcNone,
+                        @ptrCast(old_elem.ptr),
+                        &builtins.list.copy_fallback,
+                        &self.roc_ops,
+                    );
                 break :blk self.rocListToValue(result, ll.ret_layout);
             },
             .list_with_capacity => blk: {
@@ -4440,7 +4472,7 @@ pub const Interpreter = struct {
                     elems_rc,
                     if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
                     if (elems_rc) &listElementIncref else &builtins.utils.rcNone,
-                    UpdateMode.Immutable,
+                    updateModeForArg0(ll.unique_args),
                     &self.roc_ops,
                 );
                 break :blk self.rocListToValue(result, ll.ret_layout);
@@ -4469,7 +4501,7 @@ pub const Interpreter = struct {
                     if (elems_rc) &listElementIncref else &builtins.utils.rcNone,
                     if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
                     if (elems_rc) &listElementDecref else &builtins.utils.rcNone,
-                    UpdateMode.Immutable,
+                    updateModeForArg0(ll.unique_args),
                     &self.roc_ops,
                 );
                 break :blk self.rocListToValue(result, ll.ret_layout);
