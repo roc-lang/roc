@@ -2164,11 +2164,11 @@ The compiler must not infer different ownership behavior from hosted function
 names, return types, or body absence. Hosted-argument ownership is an ABI rule,
 and generated glue must document it for platform authors.
 
-## Build Artifacts And The Targets Header
+## Build Outputs And The Targets Header
 
 A platform's `targets:` header section declares, per target, both the link
-inputs and the artifact kind the build produces. The application author never
-chooses the artifact kind; `roc build` produces what the platform declares for
+inputs and the output kind the build produces. The application author never
+chooses the output kind; `roc build` produces what the platform declares for
 the selected target, and there is no `--no-link` style flag. `--target` and
 `--output` (the output path) remain per-build choices.
 
@@ -2181,11 +2181,11 @@ targets: {
 }
 ```
 
-Each target name appears at most once, so target-to-artifact-kind is a
+Each target name appears at most once, so target-to-output-kind is a
 function. `output:` is one of:
 
 ```text
-Exe:    linked executable. For wasm32, a command module (has an entry).
+Exe:    linked executable binary. For wasm32, a command module (has an entry).
 Obj:    one relocatable object produced by merging the declared host inputs
         with the app object (ld -r / wasm-ld --relocatable). Obj keeps its
         inputs because the host must provide roc_alloc and the other runtime
@@ -2197,10 +2197,10 @@ Shared: shared library (.so, .dylib, .dll). For wasm32, a reactor module:
 ```
 
 `roc run` requires the selected target's entry to be `output: Exe`; library
-and object platforms report that the artifact must be linked or loaded by a
+and object platforms report that the output must be linked or loaded by a
 host application instead.
 
-There is no static-archive artifact kind. The artifact that static archives
+There is no static-archive output kind. The output that static archives
 previously stood in for on wasm (a linked, loadable, no-entry module) is
 `Shared`.
 
@@ -2229,14 +2229,14 @@ need per-call context (for example an arena) own its delivery out of band
 (global or thread-local state), and must establish it on every thread that
 executes Roc code — including threads that invoke stored boxed Roc closures.
 Generated glue exposes closure invocation through helpers that set and restore
-that state so the obligation is structural rather than remembered.
+that state so the contract is enforced by signatures rather than remembered.
 
 Weak linkage exists to break the app/host reference cycle without imposing
 link order; on Windows the same cycle is broken by generating a .def file of
 the host-provided symbols, converting it to an import library, and placing it
 between the app and host objects. Missing host symbols are diagnosed before
-linking by scanning the host inputs' symbol tables, not by changing link
-semantics.
+linking by scanning the host inputs' symbol tables, not by changing how the
+linker resolves symbols.
 
 Because the app references host symbols directly, host inputs are linked
 without whole-archive wrapping, and section GC (--gc-sections, -dead_strip,
@@ -2249,7 +2249,7 @@ reachable only from unused host functions are absent from the final binary
 actually used.
 
 Shared-library output uses the same symbol ABI: the host objects and app
-object are linked into one artifact, app/host resolution happens inside that
+object are linked into one library, app/host resolution happens inside that
 link, and dead-strip roots are the exported symbols. Internal `roc_*` symbols
 must be hidden in shared libraries — on ELF, default-visibility exports are
 preemptible, and two Roc-built libraries loaded into one process would
