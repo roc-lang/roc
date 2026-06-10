@@ -2611,7 +2611,7 @@ pub fn build(b: *std.Build) void {
         },
     });
 
-    const builtins64_target = b.resolveTargetQuery(.{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .musl });
+    const builtins64_target = b.resolveTargetQuery(.{ .cpu_arch = .wasm64, .os_tag = .freestanding, .abi = .none });
     const builtins64_bc_obj = b.addObject(.{
         .name = "roc_builtins64_bc",
         .root_module = b.createModule(.{
@@ -2631,9 +2631,9 @@ pub fn build(b: *std.Build) void {
     }));
     builtins64_bc_obj.root_module.omit_frame_pointer = true;
     builtins64_bc_obj.root_module.stack_check = false;
-    builtins64_bc_obj.root_module.link_libc = true;
+    builtins64_bc_obj.root_module.link_libc = false;
     builtins64_bc_obj.use_llvm = true;
-    builtins64_bc_obj.bundle_compiler_rt = true;
+    builtins64_bc_obj.bundle_compiler_rt = false;
     _ = builtins64_bc_obj.getEmittedBin();
     const builtins64_bc_file = builtins64_bc_obj.getEmittedLlvmBc();
 

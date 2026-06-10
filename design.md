@@ -98,7 +98,12 @@ target pointer width, links that builtin module with the application module
 before LLVM optimization, and emits the object file from the merged module.
 Roc supports only 32-bit and 64-bit target pointers here, so two builtin
 bitcode payloads are sufficient: one for 32-bit targets and one for 64-bit
-targets.
+targets. These pointer-width payloads must contain Roc builtin definitions only;
+they must not bundle compiler-rt or other target-specific runtime code, because
+that would make the payload architecture-specific again. The payloads are built
+as freestanding LLVM bitcode so compile-time OS and CPU branches cannot bake a
+native platform's syscalls, inline assembly, or runtime support into a module
+that will later be retargeted.
 
 Builtin definitions in the merged LLVM module are real definitions. They must
 not be marked `available_externally`, because there is no later builtin object
