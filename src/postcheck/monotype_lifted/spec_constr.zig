@@ -1168,7 +1168,9 @@ const Cloner = struct {
     fn initForRewrite(pass: *Pass) Cloner {
         return .{
             .pass = pass,
-            .source_fn = @enumFromInt(0),
+            // The rewrite path never builds specialization arguments, which
+            // is the only reader of `source_fn`.
+            .source_fn = undefined,
             .pattern = .{ .args = &.{} },
             .subst = std.AutoHashMap(Ast.LocalId, Value).init(pass.allocator),
             .binder_subst = std.AutoHashMap(check.CheckedModule.PatternBinderId, Value).init(pass.allocator),

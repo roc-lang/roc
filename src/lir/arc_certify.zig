@@ -410,9 +410,11 @@ const Certifier = struct {
     scan_visited: std.AutoHashMap(LIR.CFStmtId, void),
     scan_stack: std.ArrayList(LIR.CFStmtId) = .empty,
     diag: *Diagnostic,
-    current_proc: LIR.LirProcSpecId = @enumFromInt(0),
+    /// Proc and statement being certified; written by `certifyProc` and
+    /// `runSegment` before any read.
+    current_proc: LIR.LirProcSpecId = undefined,
     current_sig: arc_sig.RcSig = arc_sig.RcSig.all_owned,
-    current_stmt: LIR.CFStmtId = @enumFromInt(0),
+    current_stmt: LIR.CFStmtId = undefined,
 
     fn deinit(self: *Certifier) void {
         self.values.deinit(self.allocator);
@@ -1684,6 +1686,7 @@ const CertifyTest = struct {
     layouts: layout_mod.Store,
     pair_str: layout_mod.Idx,
     diag: Diagnostic = .{},
+    next_join_point: u32 = 0,
 
     fn init(allocator: Allocator) Allocator.Error!CertifyTest {
         var layouts = try layout_mod.Store.init(allocator, .u64);
@@ -1707,6 +1710,12 @@ const CertifyTest = struct {
 
     fn local(self: *CertifyTest, layout_idx: layout_mod.Idx) Allocator.Error!LIR.LocalId {
         return try self.store.addLocal(.{ .layout_idx = layout_idx });
+    }
+
+    fn freshJoinPointId(self: *CertifyTest) LIR.JoinPointId {
+        const id: LIR.JoinPointId = @enumFromInt(self.next_join_point);
+        self.next_join_point += 1;
+        return id;
     }
 
     fn rcHelper(op: layout_mod.RcOp, layout_idx: layout_mod.Idx) layout_mod.RcHelper {
@@ -2074,7 +2083,7 @@ test "certify flags branches that disagree at a join" {
     const cond = try f.local(.i64);
     const result = try f.local(.i64);
 
-    const join_id: LIR.JoinPointId = @enumFromInt(0);
+    const join_id = f.freshJoinPointId();
     const ret = try f.ret(result);
     const release_in_body = try f.decrefStmt(value, .str, ret);
     const result_assign = try f.assignI64(result, release_in_body);
@@ -2113,7 +2122,7 @@ test "certify accepts agreeing jumps through a join" {
     const cond = try f.local(.i64);
     const result = try f.local(.i64);
 
-    const join_id: LIR.JoinPointId = @enumFromInt(0);
+    const join_id = f.freshJoinPointId();
     const ret = try f.ret(result);
     const release_in_body = try f.decrefStmt(value, .str, ret);
     const result_assign = try f.assignI64(result, release_in_body);
