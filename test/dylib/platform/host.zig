@@ -20,16 +20,16 @@ const HostEnv = struct {
 };
 
 /// Roc allocation function with size-tracking metadata
-fn rocAllocFn(roc_alloc: *builtins.host_abi.RocAlloc, env: *anyopaque) callconv(.c) void {
-    const host: *HostEnv = @ptrCast(@alignCast(env));
+fn rocAllocFn(ops: *builtins.host_abi.RocOps, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+    const host: *HostEnv = @ptrCast(@alignCast(ops.env));
     const allocator = host.arena.allocator();
 
-    const min_alignment: usize = @max(roc_alloc.alignment, @alignOf(usize));
+    const min_alignment: usize = @max(alignment, @alignOf(usize));
     const align_enum = std.mem.Alignment.fromByteUnits(min_alignment);
 
     // Prepend size metadata so realloc can know the old size
-    const size_storage_bytes = @max(roc_alloc.alignment, @alignOf(usize));
-    const total_size = roc_alloc.length + size_storage_bytes;
+    const size_storage_bytes = @max(alignment, @alignOf(usize));
+    const total_size = length + size_storage_bytes;
 
     const base_ptr = allocator.rawAlloc(total_size, align_enum, @returnAddress()) orelse {
         @panic("Host allocation failed");
@@ -39,38 +39,39 @@ fn rocAllocFn(roc_alloc: *builtins.host_abi.RocAlloc, env: *anyopaque) callconv(
     const size_ptr: *usize = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes - @sizeOf(usize));
     size_ptr.* = total_size;
 
-    roc_alloc.answer = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes);
+    return @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes);
 }
 
 /// Roc deallocation function
-fn rocDeallocFn(roc_dealloc: *builtins.host_abi.RocDealloc, env: *anyopaque) callconv(.c) void {
-    _ = roc_dealloc;
-    _ = env;
+fn rocDeallocFn(ops: *builtins.host_abi.RocOps, ptr: *anyopaque, alignment: usize) callconv(.c) void {
+    _ = ops;
+    _ = ptr;
+    _ = alignment;
     // NoOp as our arena frees all memory at once
 }
 
 /// Roc reallocation function
-fn rocReallocFn(roc_realloc: *builtins.host_abi.RocRealloc, env: *anyopaque) callconv(.c) void {
-    const host: *HostEnv = @ptrCast(@alignCast(env));
+fn rocReallocFn(ops: *builtins.host_abi.RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+    const host: *HostEnv = @ptrCast(@alignCast(ops.env));
     const allocator = host.arena.allocator();
 
-    const min_alignment: usize = @max(roc_realloc.alignment, @alignOf(usize));
+    const min_alignment: usize = @max(alignment, @alignOf(usize));
     const align_enum = std.mem.Alignment.fromByteUnits(min_alignment);
 
-    const size_storage_bytes = @max(roc_realloc.alignment, @alignOf(usize));
+    const size_storage_bytes = @max(alignment, @alignOf(usize));
 
     // Read old size from metadata
-    const old_size_ptr: *const usize = @ptrFromInt(@intFromPtr(roc_realloc.answer) - @sizeOf(usize));
+    const old_size_ptr: *const usize = @ptrFromInt(@intFromPtr(ptr) - @sizeOf(usize));
     const old_total_size = old_size_ptr.*;
 
     // Allocate new block
-    const new_total_size = roc_realloc.new_length + size_storage_bytes;
+    const new_total_size = new_length + size_storage_bytes;
     const new_ptr = allocator.rawAlloc(new_total_size, align_enum, @returnAddress()) orelse {
         @panic("Host reallocation failed");
     };
 
     // Copy old data to new location
-    const old_base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(roc_realloc.answer) - size_storage_bytes);
+    const old_base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(ptr) - size_storage_bytes);
     const copy_size = @min(old_total_size, new_total_size);
     @memcpy(new_ptr[0..copy_size], old_base_ptr[0..copy_size]);
 
@@ -78,29 +79,26 @@ fn rocReallocFn(roc_realloc: *builtins.host_abi.RocRealloc, env: *anyopaque) cal
     const new_size_ptr: *usize = @ptrFromInt(@intFromPtr(new_ptr) + size_storage_bytes - @sizeOf(usize));
     new_size_ptr.* = new_total_size;
 
-    roc_realloc.answer = @ptrFromInt(@intFromPtr(new_ptr) + size_storage_bytes);
+    return @ptrFromInt(@intFromPtr(new_ptr) + size_storage_bytes);
 }
 
 /// Roc debug function
-fn rocDbgFn(roc_dbg: *const builtins.host_abi.RocDbg, env: *anyopaque) callconv(.c) void {
-    _ = env;
-    const message = roc_dbg.utf8_bytes[0..roc_dbg.len];
-    std.debug.print("ROC DBG: {s}\n", .{message});
+fn rocDbgFn(ops: *builtins.host_abi.RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
+    _ = ops;
+    std.debug.print("ROC DBG: {s}\n", .{bytes[0..len]});
 }
 
 /// Roc expect failed function
-fn rocExpectFailedFn(roc_expect: *const builtins.host_abi.RocExpectFailed, env: *anyopaque) callconv(.c) void {
-    _ = env;
-    const source_bytes = roc_expect.utf8_bytes[0..roc_expect.len];
-    const trimmed = std.mem.trim(u8, source_bytes, " \t\n\r");
+fn rocExpectFailedFn(ops: *builtins.host_abi.RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
+    _ = ops;
+    const trimmed = std.mem.trim(u8, bytes[0..len], " \t\n\r");
     std.debug.print("Expect failed: {s}\n", .{trimmed});
 }
 
 /// Roc crashed function
-fn rocCrashedFn(roc_crashed: *const builtins.host_abi.RocCrashed, env: *anyopaque) callconv(.c) noreturn {
-    _ = env;
-    const message = roc_crashed.utf8_bytes[0..roc_crashed.len];
-    @panic(message);
+fn rocCrashedFn(ops: *builtins.host_abi.RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
+    _ = ops;
+    @panic(bytes[0..len]);
 }
 
 // The app's entrypoint, named by `provides { main_for_host!: "main" }`.
@@ -108,9 +106,10 @@ fn rocCrashedFn(roc_crashed: *const builtins.host_abi.RocCrashed, env: *anyopaqu
 extern fn roc__main(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
 
 /// Host.double! (dispatch index 0): double a number in the host.
-fn hostedHostDouble(roc_ops: *builtins.host_abi.RocOps, ret_ptr: *i64, arg_ptr: *i64) callconv(.c) void {
-    _ = roc_ops;
-    ret_ptr.* = arg_ptr.* * 2;
+/// I64 -> I64 involves no refcounted values, so under the hosted C ABI it
+/// receives no leading *RocOps.
+fn hostedHostDouble(n: i64) callconv(.c) i64 {
+    return n * 2;
 }
 
 // Hosted functions sorted alphabetically by Module.fn_name (trailing ! stripped).
