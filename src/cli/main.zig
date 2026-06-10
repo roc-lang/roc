@@ -1268,6 +1268,72 @@ fn updateInterpreterExeAppLinkInput(
     }
 }
 
+/// Digest of the entrypoint C ABI and hosted dispatch table baked into the
+/// generated interpreter shim. Part of the interpreter executable cache key:
+/// the cached exe's marshalling code must match the program's entrypoint ABI.
+fn entrypointAbiDigest(ctx: *CliCtx, lir_image: []const u8, target: RocTarget) (Allocator.Error || CliError)![32]u8 {
+    if (lir_image.len < @sizeOf(SharedMemoryAllocator.Header) + @sizeOf(lir.LirImage.Header)) {
+        return ctx.fail(.{ .shim_generation_failed = .{ .err = error.InvalidLirImage } });
+    }
+    const image_header: *const lir.LirImage.Header = @ptrCast(@alignCast(lir_image.ptr + @sizeOf(SharedMemoryAllocator.Header)));
+    const view = lir.LirImage.viewMappedImageWithAllocator(image_header, lir_image.ptr, lir_image.len, ctx.arena) catch |err| {
+        return ctx.fail(.{ .shim_generation_failed = .{ .err = err } });
+    };
+
+    const abi_target: layout.abi.Target = switch (target.toCpuArch()) {
+        .aarch64 => .aarch64,
+        .x86_64 => if (target.toOsTag() == .windows) .x86_64_windows else .x86_64_sysv,
+        .wasm32 => .wasm32,
+        else => return ctx.fail(.{ .shim_generation_failed = .{ .err = error.UnsupportedTarget } }),
+    };
+
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    updateHashBytes(&hasher, "roc-entrypoint-abi-v1");
+
+    const hashPlacement = struct {
+        fn go(h: *std.crypto.hash.sha2.Sha256, placement: layout.abi.Placement) void {
+            switch (placement) {
+                .none => updateHashU32(h, 0),
+                .indirect => updateHashU32(h, 1),
+                .registers => |pieces| {
+                    updateHashU32(h, 2);
+                    updateHashU32(h, @intCast(pieces.len));
+                    for (pieces) |piece| {
+                        updateHashU32(h, @intFromEnum(piece.class));
+                        updateHashU32(h, piece.offset);
+                        updateHashU32(h, piece.size);
+                    }
+                },
+            }
+        }
+    }.go;
+
+    updateHashU32(&hasher, @intCast(view.platform_entrypoints.len));
+    for (view.platform_entrypoints) |entrypoint| {
+        const spec = view.store.getProcSpec(entrypoint.root_proc);
+        const arg_locals = view.store.getLocalSpan(spec.args);
+        const arg_layouts = try ctx.arena.alloc(layout.Idx, arg_locals.len);
+        for (arg_locals, 0..) |local_id, i| {
+            arg_layouts[i] = view.store.getLocal(local_id).layout_idx;
+        }
+        const lowered = layout.abi.lower(ctx.arena, &view.layouts, abi_target, arg_layouts, spec.ret_layout, false) catch return error.OutOfMemory;
+        updateHashU32(&hasher, entrypoint.ordinal);
+        hashPlacement(&hasher, lowered.ret);
+        updateHashU32(&hasher, @intCast(lowered.args.len));
+        for (lowered.args) |arg_placement| {
+            hashPlacement(&hasher, arg_placement);
+        }
+    }
+
+    for (view.store.getProcSpecs()) |spec| {
+        const hosted = spec.hosted orelse continue;
+        updateHashU32(&hasher, hosted.dispatch_index);
+        updateHashBytes(&hasher, view.store.getString(hosted.symbol));
+    }
+
+    return hasher.finalResult();
+}
+
 fn interpreterExeLinkInputsIdentity(
     ctx: *CliCtx,
     link_spec: roc_target.TargetLinkSpec,
@@ -1275,11 +1341,13 @@ fn interpreterExeLinkInputsIdentity(
     files_dir: []const u8,
     target: RocTarget,
     entrypoint_names: []const []const u8,
+    entrypoint_abi: [32]u8,
     debug: bool,
 ) (Allocator.Error || CliError)![32]u8 {
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    updateHashBytes(&hasher, "roc-run-link-inputs-v1");
+    updateHashBytes(&hasher, "roc-run-link-inputs-v2");
     updateHashBytes(&hasher, @tagName(target));
+    updateHashBytes(&hasher, &entrypoint_abi);
 
     const target_name = @tagName(target);
     for (link_spec.items) |item| {
@@ -1574,6 +1642,8 @@ fn rocRun(ctx: *CliCtx, args: cli_args.RunArgs) anyerror!void {
     const files_dir = if (targets_config) |cfg| cfg.inputs_dir orelse "targets" else "targets";
     const target_name = @tagName(selected_target);
 
+    const shm_image_for_abi = @as([*]const u8, @ptrCast(shm_handle.ptr))[0..shm_handle.size];
+    const entrypoint_abi = try entrypointAbiDigest(ctx, shm_image_for_abi, selected_target);
     const link_inputs_identity = try interpreterExeLinkInputsIdentity(
         ctx,
         validated_link_spec,
@@ -1581,6 +1651,7 @@ fn rocRun(ctx: *CliCtx, args: cli_args.RunArgs) anyerror!void {
         files_dir,
         selected_target,
         entrypoint_names,
+        entrypoint_abi,
         enable_debug,
     );
 
