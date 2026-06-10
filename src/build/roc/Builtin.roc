@@ -2636,6 +2636,32 @@ Builtin :: [].{
 			div_checked : U8, U8 -> Try(U8, [DivByZero])
 			div_checked = |a, b| unsigned_div_checked(0, a, b)
 
+			## Divide the first [U8] by the second, rounding the result toward positive infinity.
+			## Crashes if the divisor is zero or the exact result does not fit in [U8].
+			## ```roc
+			## expect U8.div_ceil_by(7, 2) == 4
+			##
+			## expect U8.div_ceil_by(8, 2) == 4
+			## ```
+			div_ceil_by : U8, U8 -> U8
+			div_ceil_by = |a, b|
+				match U8.div_ceil_checked(a, b) {
+					Ok(result) => result
+					Err(DivByZero) => {
+						crash "integer ceiling division by zero"
+					}
+				}
+
+			## Divide the first [U8] by the second, rounding the result toward positive infinity.
+			## Returns an error instead of crashing when the divisor is zero or the exact result does not fit.
+			## ```roc
+			## expect U8.div_ceil_checked(7, 2) == Ok(4)
+			##
+			## expect U8.div_ceil_checked(1, 0) == Err(DivByZero)
+			## ```
+			div_ceil_checked : U8, U8 -> Try(U8, [DivByZero])
+			div_ceil_checked = |a, b| unsigned_div_ceil_checked(0, 1, a, b)
+
 			## Divide the first [U8] by the second, truncating down (toward zero). For unsigned
 			## integers this behaves the same as [U8.div_by].
 			## ```roc
@@ -3164,6 +3190,41 @@ Builtin :: [].{
 
 			div_checked : I8, I8 -> Try(I8, [DivByZero, Overflow])
 			div_checked = |a, b| signed_div_checked(I8.lowest, 0, -1, a, b)
+
+			## Divide the first [I8] by the second, rounding the result toward positive infinity.
+			## Crashes if the divisor is zero or the exact result does not fit in [I8].
+			## ```roc
+			## expect I8.div_ceil_by(7, 2) == 4
+			##
+			## expect I8.div_ceil_by(8, 2) == 4
+			##
+			## expect I8.div_ceil_by(-7, 2) == -3
+			##
+			## expect I8.div_ceil_by(-7, -2) == 4
+			## ```
+			div_ceil_by : I8, I8 -> I8
+			div_ceil_by = |a, b|
+				match I8.div_ceil_checked(a, b) {
+					Ok(result) => result
+					Err(DivByZero) => {
+						crash "integer ceiling division by zero"
+					}
+					Err(Overflow) => {
+						crash "integer ceiling division overflowed"
+					}
+				}
+
+			## Divide the first [I8] by the second, rounding the result toward positive infinity.
+			## Returns an error instead of crashing when the divisor is zero or the exact result does not fit.
+			## ```roc
+			## expect I8.div_ceil_checked(7, 2) == Ok(4)
+			##
+			## expect I8.div_ceil_checked(1, 0) == Err(DivByZero)
+			##
+			## expect I8.div_ceil_checked(I8.lowest, -1) == Err(Overflow)
+			## ```
+			div_ceil_checked : I8, I8 -> Try(I8, [DivByZero, Overflow])
+			div_ceil_checked = |a, b| signed_div_ceil_checked(I8.lowest, I8.highest, 0, 1, -1, a, b)
 
 			## Divide the first [I8] by the second, truncating toward zero.
 			## ```roc
@@ -3733,6 +3794,32 @@ Builtin :: [].{
 			div_checked : U16, U16 -> Try(U16, [DivByZero])
 			div_checked = |a, b| unsigned_div_checked(0, a, b)
 
+			## Divide the first [U16] by the second, rounding the result toward positive infinity.
+			## Crashes if the divisor is zero or the exact result does not fit in [U16].
+			## ```roc
+			## expect U16.div_ceil_by(7, 2) == 4
+			##
+			## expect U16.div_ceil_by(8, 2) == 4
+			## ```
+			div_ceil_by : U16, U16 -> U16
+			div_ceil_by = |a, b|
+				match U16.div_ceil_checked(a, b) {
+					Ok(result) => result
+					Err(DivByZero) => {
+						crash "integer ceiling division by zero"
+					}
+				}
+
+			## Divide the first [U16] by the second, rounding the result toward positive infinity.
+			## Returns an error instead of crashing when the divisor is zero or the exact result does not fit.
+			## ```roc
+			## expect U16.div_ceil_checked(7, 2) == Ok(4)
+			##
+			## expect U16.div_ceil_checked(1, 0) == Err(DivByZero)
+			## ```
+			div_ceil_checked : U16, U16 -> Try(U16, [DivByZero])
+			div_ceil_checked = |a, b| unsigned_div_ceil_checked(0, 1, a, b)
+
 			## Divide the first [U16] by the second, truncating down (toward zero). For unsigned
 			## integers this behaves the same as [U16.div_by].
 			## ```roc
@@ -4299,6 +4386,41 @@ Builtin :: [].{
 
 			div_checked : I16, I16 -> Try(I16, [DivByZero, Overflow])
 			div_checked = |a, b| signed_div_checked(I16.lowest, 0, -1, a, b)
+
+			## Divide the first [I16] by the second, rounding the result toward positive infinity.
+			## Crashes if the divisor is zero or the exact result does not fit in [I16].
+			## ```roc
+			## expect I16.div_ceil_by(7, 2) == 4
+			##
+			## expect I16.div_ceil_by(8, 2) == 4
+			##
+			## expect I16.div_ceil_by(-7, 2) == -3
+			##
+			## expect I16.div_ceil_by(-7, -2) == 4
+			## ```
+			div_ceil_by : I16, I16 -> I16
+			div_ceil_by = |a, b|
+				match I16.div_ceil_checked(a, b) {
+					Ok(result) => result
+					Err(DivByZero) => {
+						crash "integer ceiling division by zero"
+					}
+					Err(Overflow) => {
+						crash "integer ceiling division overflowed"
+					}
+				}
+
+			## Divide the first [I16] by the second, rounding the result toward positive infinity.
+			## Returns an error instead of crashing when the divisor is zero or the exact result does not fit.
+			## ```roc
+			## expect I16.div_ceil_checked(7, 2) == Ok(4)
+			##
+			## expect I16.div_ceil_checked(1, 0) == Err(DivByZero)
+			##
+			## expect I16.div_ceil_checked(I16.lowest, -1) == Err(Overflow)
+			## ```
+			div_ceil_checked : I16, I16 -> Try(I16, [DivByZero, Overflow])
+			div_ceil_checked = |a, b| signed_div_ceil_checked(I16.lowest, I16.highest, 0, 1, -1, a, b)
 
 			## Divide the first [I16] by the second, truncating toward zero.
 			## ```roc
@@ -4884,6 +5006,32 @@ Builtin :: [].{
 
 			div_checked : U32, U32 -> Try(U32, [DivByZero])
 			div_checked = |a, b| unsigned_div_checked(0, a, b)
+
+			## Divide the first [U32] by the second, rounding the result toward positive infinity.
+			## Crashes if the divisor is zero or the exact result does not fit in [U32].
+			## ```roc
+			## expect U32.div_ceil_by(7, 2) == 4
+			##
+			## expect U32.div_ceil_by(8, 2) == 4
+			## ```
+			div_ceil_by : U32, U32 -> U32
+			div_ceil_by = |a, b|
+				match U32.div_ceil_checked(a, b) {
+					Ok(result) => result
+					Err(DivByZero) => {
+						crash "integer ceiling division by zero"
+					}
+				}
+
+			## Divide the first [U32] by the second, rounding the result toward positive infinity.
+			## Returns an error instead of crashing when the divisor is zero or the exact result does not fit.
+			## ```roc
+			## expect U32.div_ceil_checked(7, 2) == Ok(4)
+			##
+			## expect U32.div_ceil_checked(1, 0) == Err(DivByZero)
+			## ```
+			div_ceil_checked : U32, U32 -> Try(U32, [DivByZero])
+			div_ceil_checked = |a, b| unsigned_div_ceil_checked(0, 1, a, b)
 
 			## Divide the first [U32] by the second, truncating down (toward zero). For unsigned
 			## integers this behaves the same as [U32.div_by].
@@ -5490,6 +5638,41 @@ Builtin :: [].{
 			div_checked : I32, I32 -> Try(I32, [DivByZero, Overflow])
 			div_checked = |a, b| signed_div_checked(I32.lowest, 0, -1, a, b)
 
+			## Divide the first [I32] by the second, rounding the result toward positive infinity.
+			## Crashes if the divisor is zero or the exact result does not fit in [I32].
+			## ```roc
+			## expect I32.div_ceil_by(7, 2) == 4
+			##
+			## expect I32.div_ceil_by(8, 2) == 4
+			##
+			## expect I32.div_ceil_by(-7, 2) == -3
+			##
+			## expect I32.div_ceil_by(-7, -2) == 4
+			## ```
+			div_ceil_by : I32, I32 -> I32
+			div_ceil_by = |a, b|
+				match I32.div_ceil_checked(a, b) {
+					Ok(result) => result
+					Err(DivByZero) => {
+						crash "integer ceiling division by zero"
+					}
+					Err(Overflow) => {
+						crash "integer ceiling division overflowed"
+					}
+				}
+
+			## Divide the first [I32] by the second, rounding the result toward positive infinity.
+			## Returns an error instead of crashing when the divisor is zero or the exact result does not fit.
+			## ```roc
+			## expect I32.div_ceil_checked(7, 2) == Ok(4)
+			##
+			## expect I32.div_ceil_checked(1, 0) == Err(DivByZero)
+			##
+			## expect I32.div_ceil_checked(I32.lowest, -1) == Err(Overflow)
+			## ```
+			div_ceil_checked : I32, I32 -> Try(I32, [DivByZero, Overflow])
+			div_ceil_checked = |a, b| signed_div_ceil_checked(I32.lowest, I32.highest, 0, 1, -1, a, b)
+
 			## Divide the first [I32] by the second, truncating toward zero.
 			## ```roc
 			## expect I32.div_trunc_by(7, 2) == 3
@@ -6094,6 +6277,32 @@ Builtin :: [].{
 
 			div_checked : U64, U64 -> Try(U64, [DivByZero])
 			div_checked = |a, b| unsigned_div_checked(0, a, b)
+
+			## Divide the first [U64] by the second, rounding the result toward positive infinity.
+			## Crashes if the divisor is zero or the exact result does not fit in [U64].
+			## ```roc
+			## expect U64.div_ceil_by(7, 2) == 4
+			##
+			## expect U64.div_ceil_by(8, 2) == 4
+			## ```
+			div_ceil_by : U64, U64 -> U64
+			div_ceil_by = |a, b|
+				match U64.div_ceil_checked(a, b) {
+					Ok(result) => result
+					Err(DivByZero) => {
+						crash "integer ceiling division by zero"
+					}
+				}
+
+			## Divide the first [U64] by the second, rounding the result toward positive infinity.
+			## Returns an error instead of crashing when the divisor is zero or the exact result does not fit.
+			## ```roc
+			## expect U64.div_ceil_checked(7, 2) == Ok(4)
+			##
+			## expect U64.div_ceil_checked(1, 0) == Err(DivByZero)
+			## ```
+			div_ceil_checked : U64, U64 -> Try(U64, [DivByZero])
+			div_ceil_checked = |a, b| unsigned_div_ceil_checked(0, 1, a, b)
 
 			## Divide the first [U64] by the second, truncating down (toward zero). For unsigned
 			## integers this behaves the same as [U64.div_by].
@@ -6745,6 +6954,41 @@ Builtin :: [].{
 			div_checked : I64, I64 -> Try(I64, [DivByZero, Overflow])
 			div_checked = |a, b| signed_div_checked(I64.lowest, 0, -1, a, b)
 
+			## Divide the first [I64] by the second, rounding the result toward positive infinity.
+			## Crashes if the divisor is zero or the exact result does not fit in [I64].
+			## ```roc
+			## expect I64.div_ceil_by(7, 2) == 4
+			##
+			## expect I64.div_ceil_by(8, 2) == 4
+			##
+			## expect I64.div_ceil_by(-7, 2) == -3
+			##
+			## expect I64.div_ceil_by(-7, -2) == 4
+			## ```
+			div_ceil_by : I64, I64 -> I64
+			div_ceil_by = |a, b|
+				match I64.div_ceil_checked(a, b) {
+					Ok(result) => result
+					Err(DivByZero) => {
+						crash "integer ceiling division by zero"
+					}
+					Err(Overflow) => {
+						crash "integer ceiling division overflowed"
+					}
+				}
+
+			## Divide the first [I64] by the second, rounding the result toward positive infinity.
+			## Returns an error instead of crashing when the divisor is zero or the exact result does not fit.
+			## ```roc
+			## expect I64.div_ceil_checked(7, 2) == Ok(4)
+			##
+			## expect I64.div_ceil_checked(1, 0) == Err(DivByZero)
+			##
+			## expect I64.div_ceil_checked(I64.lowest, -1) == Err(Overflow)
+			## ```
+			div_ceil_checked : I64, I64 -> Try(I64, [DivByZero, Overflow])
+			div_ceil_checked = |a, b| signed_div_ceil_checked(I64.lowest, I64.highest, 0, 1, -1, a, b)
+
 			## Divide the first [I64] by the second, truncating toward zero.
 			## ```roc
 			## expect I64.div_trunc_by(7, 2) == 3
@@ -7374,6 +7618,32 @@ Builtin :: [].{
 
 			div_checked : U128, U128 -> Try(U128, [DivByZero])
 			div_checked = |a, b| unsigned_div_checked(0, a, b)
+
+			## Divide the first [U128] by the second, rounding the result toward positive infinity.
+			## Crashes if the divisor is zero or the exact result does not fit in [U128].
+			## ```roc
+			## expect U128.div_ceil_by(7, 2) == 4
+			##
+			## expect U128.div_ceil_by(8, 2) == 4
+			## ```
+			div_ceil_by : U128, U128 -> U128
+			div_ceil_by = |a, b|
+				match U128.div_ceil_checked(a, b) {
+					Ok(result) => result
+					Err(DivByZero) => {
+						crash "integer ceiling division by zero"
+					}
+				}
+
+			## Divide the first [U128] by the second, rounding the result toward positive infinity.
+			## Returns an error instead of crashing when the divisor is zero or the exact result does not fit.
+			## ```roc
+			## expect U128.div_ceil_checked(7, 2) == Ok(4)
+			##
+			## expect U128.div_ceil_checked(1, 0) == Err(DivByZero)
+			## ```
+			div_ceil_checked : U128, U128 -> Try(U128, [DivByZero])
+			div_ceil_checked = |a, b| unsigned_div_ceil_checked(0, 1, a, b)
 
 			## Divide the first [U128] by the second, truncating down (toward zero). For unsigned
 			## integers this behaves the same as [U128.div_by].
@@ -8069,6 +8339,41 @@ Builtin :: [].{
 
 			div_checked : I128, I128 -> Try(I128, [DivByZero, Overflow])
 			div_checked = |a, b| signed_div_checked(I128.lowest, 0, -1, a, b)
+
+			## Divide the first [I128] by the second, rounding the result toward positive infinity.
+			## Crashes if the divisor is zero or the exact result does not fit in [I128].
+			## ```roc
+			## expect I128.div_ceil_by(7, 2) == 4
+			##
+			## expect I128.div_ceil_by(8, 2) == 4
+			##
+			## expect I128.div_ceil_by(-7, 2) == -3
+			##
+			## expect I128.div_ceil_by(-7, -2) == 4
+			## ```
+			div_ceil_by : I128, I128 -> I128
+			div_ceil_by = |a, b|
+				match I128.div_ceil_checked(a, b) {
+					Ok(result) => result
+					Err(DivByZero) => {
+						crash "integer ceiling division by zero"
+					}
+					Err(Overflow) => {
+						crash "integer ceiling division overflowed"
+					}
+				}
+
+			## Divide the first [I128] by the second, rounding the result toward positive infinity.
+			## Returns an error instead of crashing when the divisor is zero or the exact result does not fit.
+			## ```roc
+			## expect I128.div_ceil_checked(7, 2) == Ok(4)
+			##
+			## expect I128.div_ceil_checked(1, 0) == Err(DivByZero)
+			##
+			## expect I128.div_ceil_checked(I128.lowest, -1) == Err(Overflow)
+			## ```
+			div_ceil_checked : I128, I128 -> Try(I128, [DivByZero, Overflow])
+			div_ceil_checked = |a, b| signed_div_ceil_checked(I128.lowest, I128.highest, 0, 1, -1, a, b)
 
 			## Divide the first [I128] by the second, truncating toward zero.
 			## ```roc
@@ -10391,6 +10696,64 @@ signed_div_checked = |lowest, zero, neg_one, a, b|
 	} else {
 		Ok(a / b)
 	}
+
+unsigned_div_ceil_checked : item, item, item, item -> Try(item, [DivByZero])
+	where [
+		item.is_eq : item, item -> Bool,
+		item.plus : item, item -> item,
+		item.div_by : item, item -> item,
+		item.rem_by : item, item -> item,
+	]
+unsigned_div_ceil_checked = |zero, one, a, b|
+	match unsigned_div_checked(zero, a, b) {
+		Err(DivByZero) => Err(DivByZero)
+		Ok(quotient) =>
+			if a.rem_by(b) == zero {
+				Ok(quotient)
+			} else {
+				Ok(quotient + one)
+			}
+		}
+
+signed_div_ceil_checked : item, item, item, item, item, item, item -> Try(item, [DivByZero, Overflow])
+	where [
+		item.is_eq : item, item -> Bool,
+		item.is_gt : item, item -> Bool,
+		item.is_lt : item, item -> Bool,
+		item.plus : item, item -> item,
+		item.minus : item, item -> item,
+		item.div_by : item, item -> item,
+		item.rem_by : item, item -> item,
+	]
+signed_div_ceil_checked = |lowest, highest, zero, one, neg_one, a, b|
+	match signed_div_checked(lowest, zero, neg_one, a, b) {
+		Err(DivByZero) => Err(DivByZero)
+		Err(Overflow) => Err(Overflow)
+		Ok(quotient) =>
+			if a.rem_by(b) == zero {
+				Ok(quotient)
+			} else if a > zero {
+				if b > zero {
+					match signed_add_checked(lowest, highest, zero, quotient, one) {
+						Ok(result) => Ok(result)
+						Err(Overflow) => Err(Overflow)
+					}
+				} else {
+					Ok(quotient)
+				}
+			} else if a < zero {
+				if b < zero {
+					match signed_add_checked(lowest, highest, zero, quotient, one) {
+						Ok(result) => Ok(result)
+						Err(Overflow) => Err(Overflow)
+					}
+				} else {
+					Ok(quotient)
+				}
+			} else {
+				Ok(quotient)
+			}
+		}
 
 unsigned_minus_saturated : item, item, item -> item
 	where [item.is_lt : item, item -> Bool, item.minus : item, item -> item]
