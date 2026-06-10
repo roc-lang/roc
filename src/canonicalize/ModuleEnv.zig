@@ -119,6 +119,8 @@ pub const CommonIdents = extern struct {
     is_gt: Ident.Idx,
     is_gte: Ident.Idx,
     is_eq: Ident.Idx,
+    until: Ident.Idx,
+    to: Ident.Idx,
 
     // Type/module names
     @"try": Ident.Idx,
@@ -226,6 +228,8 @@ pub const CommonIdents = extern struct {
             .is_gt = try common.insertIdent(gpa, Ident.for_text("is_gt")),
             .is_gte = try common.insertIdent(gpa, Ident.for_text("is_gte")),
             .is_eq = try common.insertIdent(gpa, Ident.for_text("is_eq")),
+            .until = try common.insertIdent(gpa, Ident.for_text("until")),
+            .to = try common.insertIdent(gpa, Ident.for_text("to")),
             .@"try" = try common.insertIdent(gpa, Ident.for_text("Try")),
             .out_of_range = try common.insertIdent(gpa, Ident.for_text("OutOfRange")),
             .builtin_module = try common.insertIdent(gpa, Ident.for_text("Builtin")),
@@ -329,6 +333,8 @@ pub const CommonIdents = extern struct {
             .is_gt = common.findIdent("is_gt") orelse unreachable,
             .is_gte = common.findIdent("is_gte") orelse unreachable,
             .is_eq = common.findIdent("is_eq") orelse unreachable,
+            .until = common.findIdent("until") orelse unreachable,
+            .to = common.findIdent("to") orelse unreachable,
             .@"try" = common.findIdent("Try") orelse unreachable,
             .out_of_range = common.findIdent("OutOfRange") orelse unreachable,
             .builtin_module = common.findIdent("Builtin") orelse unreachable,
