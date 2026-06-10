@@ -1929,6 +1929,21 @@ deallocation with nested decrefs through the RC helper plan.
 RC helper selection is unchanged: each emitted statement carries the helper
 derived from the local's layout, and helper choice stays in this stage.
 
+Emission decisions ask liveness questions with on-demand forward scans over
+the ownership-neutral statement graph, the same shape the all-owned inserter
+used, with more questions per statement (early drops check each refcounted
+operand, and scans cover a binding's whole borrow group). If profiling ever
+shows ARC insertion hot in compile times, the intended remedy is one
+precomputed per-statement liveness table per proc consumed by the same
+decision points — a mechanical swap that changes no decision — not weaker
+scanning.
+
+The debug borrow certifier deliberately spends more: it re-certifies join
+bodies per distinct entry state and summarizes per statement for walk
+deduplication. Release builds compile the certifier away entirely, so only
+debug compiler builds pay, and any certifier slowness is fixed inside the
+certifier, never by weakening what it checks.
+
 ### Mode Specialization
 
 A proc's solved `RcSig` is the most-borrowed signature its body admits.
