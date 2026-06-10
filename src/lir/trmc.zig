@@ -768,7 +768,7 @@ const Transform = struct {
         var copy_tail: ?CFStmtId = null;
         for (args, 0..) |*arg, idx| {
             if (arg.* == self.old_args[idx]) continue; // self-assign, skipped below
-            const is_param = std.mem.indexOfScalar(LocalId, self.old_args, arg.*) != null;
+            const is_param = std.mem.findScalar(LocalId, self.old_args, arg.*) != null;
             if (!is_param) continue;
             const tmp = try self.addLocal(self.store.getLocal(arg.*).layout_idx);
             const copy = try self.store.addCFStmt(.{ .assign_ref = .{

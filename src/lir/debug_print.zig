@@ -11,14 +11,18 @@ const layout_mod = @import("layout");
 const LIR = core.LIR;
 const LirStore = core.LirStore;
 
+/// Errors produced while printing: allocation for the visited set, or the
+/// writer rejecting output.
+pub const Error = std.mem.Allocator.Error || error{WriteFailed};
+
 /// Write a single proc as indented text.
 pub fn writeProc(
     gpa: std.mem.Allocator,
     store: *const LirStore,
     layouts: *const layout_mod.Store,
     proc_id: LIR.LirProcSpecId,
-    writer: anytype,
-) !void {
+    writer: *std.Io.Writer,
+) Error!void {
     const proc = store.getProcSpec(proc_id);
 
     try writer.print("proc p{d} args=[", .{@intFromEnum(proc_id)});
@@ -50,7 +54,7 @@ const Printer = struct {
     // malformed input from looping forever.
     visited: std.AutoHashMapUnmanaged(LIR.CFStmtId, void) = .{},
 
-    fn writeChainInner(self: *Printer, gpa: std.mem.Allocator, start: LIR.CFStmtId, indent: usize, writer: anytype) !void {
+    fn writeChainInner(self: *Printer, gpa: std.mem.Allocator, start: LIR.CFStmtId, indent: usize, writer: *std.Io.Writer) Error!void {
         var current = start;
         while (true) {
             const entry = try self.visited.getOrPut(gpa, current);
@@ -233,13 +237,13 @@ const Printer = struct {
         }
     }
 
-    fn writeTarget(self: *Printer, target: LIR.LocalId, indent: usize, writer: anytype) !void {
+    fn writeTarget(self: *Printer, target: LIR.LocalId, indent: usize, writer: *std.Io.Writer) Error!void {
         try writeIndent(indent, writer);
         try writeTypedLocal(self.store, self.layouts, target, writer);
         try writer.writeAll(" = ");
     }
 
-    fn writeLocals(self: *Printer, span: LIR.LocalSpan, writer: anytype) !void {
+    fn writeLocals(self: *Printer, span: LIR.LocalSpan, writer: *std.Io.Writer) Error!void {
         for (self.store.getLocalSpan(span), 0..) |local, i| {
             if (i > 0) try writer.writeAll(", ");
             try writer.print("l{d}", .{@intFromEnum(local)});
@@ -251,13 +255,13 @@ fn writeTypedLocal(
     store: *const LirStore,
     layouts: *const layout_mod.Store,
     local: LIR.LocalId,
-    writer: anytype,
-) !void {
+    writer: *std.Io.Writer,
+) Error!void {
     try writer.print("l{d}:", .{@intFromEnum(local)});
     try writeLayout(layouts, store.getLocal(local).layout_idx, writer);
 }
 
-fn writeLayout(layouts: *const layout_mod.Store, idx: layout_mod.Idx, writer: anytype) !void {
+fn writeLayout(layouts: *const layout_mod.Store, idx: layout_mod.Idx, writer: *std.Io.Writer) Error!void {
     const raw = @intFromEnum(idx);
     const sentinel_names = [_][]const u8{
         "bool", "str", "u8",   "i8",   "u16", "i16", "u32", "i32",
@@ -271,6 +275,6 @@ fn writeLayout(layouts: *const layout_mod.Store, idx: layout_mod.Idx, writer: an
     try writer.print("{s}#{d}", .{ @tagName(layouts.getLayout(idx).tag), raw });
 }
 
-fn writeIndent(indent: usize, writer: anytype) !void {
+fn writeIndent(indent: usize, writer: *std.Io.Writer) Error!void {
     for (0..indent) |_| try writer.writeAll("  ");
 }
