@@ -460,6 +460,7 @@ fn emitMergedBitcodeToObjectFile(
             builtin_module.setDataLayout(module_data_layout);
         }
         pruneBuiltinModule(builtin_module, &app_decls);
+        bindings.runGlobalDCE(builtin_module);
 
         // Link builtins into user module (destroys builtin_module on success)
         if (module.link(builtin_module).toBool()) {

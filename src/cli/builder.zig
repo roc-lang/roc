@@ -489,6 +489,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
                 }
             }
 
+            externs.ZigLLVMRunGlobalDCE(builtins_module);
             if (externs.LLVMLinkModules2(module, builtins_module) == 0) {
                 // Resolve @export aliases (clean builtin name -> dev_wrappers.* fn)
                 // so calls target the real function directly and can be inlined.
