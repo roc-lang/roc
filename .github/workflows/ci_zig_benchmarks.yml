@@ -59,6 +59,10 @@ jobs:
           mkdir -p bench-pr
           cp zig-out/bin/roc bench-pr/roc
 
+      # === SMOKE CHECK PR BENCHMARK CORPUS ===
+      - name: Smoke PR benchmark corpus
+        run: nix develop ./src/ -c ./ci/benchmarks_zig/run_benchmark_smoke.sh bench-pr/roc
+
       # === RUN BENCHMARKS ===
       - name: Run benchmarks
         run: nix develop ./src/ -c ./ci/benchmarks_zig/run_local_benchmarks.sh --main-dir bench-main --pr-dir bench-pr
