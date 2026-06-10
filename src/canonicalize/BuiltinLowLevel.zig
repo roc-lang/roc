@@ -1023,6 +1023,9 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
     if (env.common.findIdent("f32_to_u128_try_unsafe")) |ident| {
         try low_level_map.put(ident, .f32_to_u128_try_unsafe);
     }
+    if (env.common.findIdent("f32_sqrt_unsafe")) |ident| {
+        try low_level_map.put(ident, .num_sqrt);
+    }
     if (env.common.findIdent("Builtin.Num.F32.to_f64")) |ident| {
         try low_level_map.put(ident, .f32_to_f64);
     }
@@ -1093,6 +1096,9 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
     }
     if (env.common.findIdent("f64_to_f32_try_unsafe")) |ident| {
         try low_level_map.put(ident, .f64_to_f32_try_unsafe);
+    }
+    if (env.common.findIdent("f64_sqrt_unsafe")) |ident| {
+        try low_level_map.put(ident, .num_sqrt);
     }
 
     // Dec conversion functions

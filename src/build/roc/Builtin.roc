@@ -9982,6 +9982,35 @@ Builtin :: [].{
 			## ```
 			abs : F32 -> F32
 
+			## Return the square root of an [F32]. Crashes if the input is negative.
+			## ```roc
+			## expect F32.to_str(F32.sqrt(9.0)) == "3"
+			##
+			## expect F32.to_str(F32.sqrt(2.25)) == "1.5"
+			## ```
+			sqrt : F32 -> F32
+			sqrt = |self|
+				match F32.sqrt_checked(self) {
+					Ok(value) => value
+					Err(SqrtOfNegative) => {
+						crash "F32.sqrt of negative number"
+					}
+				}
+
+			## Return the square root of an [F32], or `Err(SqrtOfNegative)` if the input is negative.
+			## ```roc
+			## expect F32.sqrt_checked(9.0) == Ok(3.0)
+			##
+			## expect F32.sqrt_checked(-1.0) == Err(SqrtOfNegative)
+			## ```
+			sqrt_checked : F32 -> Try(F32, [SqrtOfNegative])
+			sqrt_checked = |self|
+				if self < 0 {
+					Err(SqrtOfNegative)
+				} else {
+					Ok(f32_sqrt_unsafe(self))
+				}
+
 			## Add two [F32] values. Addition is subject to IEEE 754 rounding; the
 			## result may be `inf`, `-inf`, or `NaN`.
 			## ```roc
@@ -10554,6 +10583,35 @@ Builtin :: [].{
 			## expect F64.abs(-3.5).to_str() == "3.5"
 			## ```
 			abs : F64 -> F64
+
+			## Return the square root of an [F64]. Crashes if the input is negative.
+			## ```roc
+			## expect F64.to_str(F64.sqrt(9.0)) == "3"
+			##
+			## expect F64.to_str(F64.sqrt(2.25)) == "1.5"
+			## ```
+			sqrt : F64 -> F64
+			sqrt = |self|
+				match F64.sqrt_checked(self) {
+					Ok(value) => value
+					Err(SqrtOfNegative) => {
+						crash "F64.sqrt of negative number"
+					}
+				}
+
+			## Return the square root of an [F64], or `Err(SqrtOfNegative)` if the input is negative.
+			## ```roc
+			## expect F64.sqrt_checked(9.0) == Ok(3.0)
+			##
+			## expect F64.sqrt_checked(-1.0) == Err(SqrtOfNegative)
+			## ```
+			sqrt_checked : F64 -> Try(F64, [SqrtOfNegative])
+			sqrt_checked = |self|
+				if self < 0 {
+					Err(SqrtOfNegative)
+				} else {
+					Ok(f64_sqrt_unsafe(self))
+				}
 
 			## Add two [F64] values. Addition is subject to IEEE 754 rounding; the
 			## result may be `inf`, `-inf`, or `NaN`.
@@ -11597,6 +11655,8 @@ f32_to_u64_try_unsafe : F32 -> { success : U8, val_or_memory_garbage : U64 }
 
 f32_to_u128_try_unsafe : F32 -> { success : U8, val_or_memory_garbage : U128 }
 
+f32_sqrt_unsafe : F32 -> F32
+
 f64_to_i8_try_unsafe : F64 -> { success : U8, val_or_memory_garbage : I8 }
 
 f64_to_i16_try_unsafe : F64 -> { success : U8, val_or_memory_garbage : I16 }
@@ -11618,3 +11678,5 @@ f64_to_u64_try_unsafe : F64 -> { success : U8, val_or_memory_garbage : U64 }
 f64_to_u128_try_unsafe : F64 -> { success : U8, val_or_memory_garbage : U128 }
 
 f64_to_f32_try_unsafe : F64 -> { success : U8, val_or_memory_garbage : F32 }
+
+f64_sqrt_unsafe : F64 -> F64

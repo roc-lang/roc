@@ -3467,9 +3467,43 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     };
                 },
 
+                .num_sqrt => {
+                    if (args.len != 1) unreachable;
+                    const src_loc = try self.emitValueLocal(args[0]);
+                    const src_reg = try self.ensureInFloatReg(src_loc);
+                    const result_reg = try self.codegen.allocFloatFor(0);
+
+                    switch (ll.ret_layout) {
+                        .f32 => {
+                            if (comptime target.toCpuArch() == .aarch64) {
+                                try self.codegen.emit.fcvtFloatFloat(.single, src_reg, .double, src_reg);
+                                try self.codegen.emit.fsqrtRegReg(.single, result_reg, src_reg);
+                                try self.codegen.emit.fcvtFloatFloat(.double, result_reg, .single, result_reg);
+                            } else {
+                                try self.codegen.emit.cvtsd2ssRegReg(src_reg, src_reg);
+                                try self.codegen.emit.sqrtssRegReg(result_reg, src_reg);
+                                try self.codegen.emit.cvtss2sdRegReg(result_reg, result_reg);
+                            }
+                        },
+                        .f64 => {
+                            if (comptime target.toCpuArch() == .aarch64) {
+                                try self.codegen.emit.fsqrtRegReg(.double, result_reg, src_reg);
+                            } else {
+                                try self.codegen.emit.sqrtsdRegReg(result_reg, src_reg);
+                            }
+                        },
+                        else => std.debug.panic(
+                            "LirCodeGen invariant violated: num_sqrt received non-float return layout {s}",
+                            .{@tagName(ll.ret_layout)},
+                        ),
+                    }
+
+                    self.codegen.freeFloat(src_reg);
+                    return .{ .float_reg = result_reg };
+                },
+
                 // Unimplemented ops
                 .num_pow,
-                .num_sqrt,
                 .num_log,
                 .num_round,
                 .num_floor,

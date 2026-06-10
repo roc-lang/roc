@@ -1048,6 +1048,7 @@ pub const MonoLlvmCodeGen = struct {
             .num_negate => try self.emitNumericNegate(target, arg_locals[0]),
             .num_abs => try self.emitNumericAbs(target, arg_locals[0]),
             .num_abs_diff => try self.emitNumericAbsDiff(target, arg_locals),
+            .num_sqrt => try self.emitNumericSqrt(target, arg_locals[0]),
             .list_len => try self.storeIntToLayout(self.slot(target).ptr, try self.loadUsize(try self.offsetPtr(self.slot(arg_locals[0]).ptr, self.rocListLenOffset())), self.localLayout(target)),
             .list_get_unsafe => try self.emitListGetUnsafe(target, arg_locals),
             .list_with_capacity => try self.emitListWithCapacity(target, arg_locals),
@@ -1812,6 +1813,22 @@ pub const MonoLlvmCodeGen = struct {
         };
         const casted = wip.cast(.bitcast, value, target_ty, "") catch return error.OutOfMemory;
         try self.storeScalar(self.slot(target).ptr, self.localLayout(target), casted);
+    }
+
+    fn emitNumericSqrt(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const target_layout = self.localLayout(target);
+        const target_ty = self.scalarType(target_layout);
+        const value = try self.coerceScalar(try self.loadScalar(self.slot(arg).ptr, self.localLayout(arg)), target_ty, false);
+        const result = wip.callIntrinsic(
+            .normal,
+            .none,
+            .sqrt,
+            &.{target_ty},
+            &.{value},
+            "",
+        ) catch return error.OutOfMemory;
+        try self.storeScalar(self.slot(target).ptr, target_layout, result);
     }
 
     fn emitDecToStr(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {

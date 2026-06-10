@@ -95,6 +95,28 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "True" },
     },
     .{
+        .name = "low_level - F32 sqrt and sqrt_checked",
+        .source =
+        \\{
+        \\F32.sqrt_checked(9.0) == Ok(3.0)
+        \\    and F32.sqrt_checked(-1.0) == Err(SqrtOfNegative)
+        \\    and F32.to_str(F32.sqrt(2.25)) == "1.5"
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - F64 sqrt and sqrt_checked",
+        .source =
+        \\{
+        \\F64.sqrt_checked(9.0) == Ok(3.0)
+        \\    and F64.sqrt_checked(-1.0) == Err(SqrtOfNegative)
+        \\    and F64.to_str(F64.sqrt(2.25)) == "1.5"
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
         .name = "low_level - Str.is_empty returns True for empty string",
         .source =
         \\{
