@@ -519,6 +519,14 @@ fn emitI32Const(self: *Self, value: i32) Allocator.Error!void {
     WasmModule.leb128WriteI32(self.allocator, self.currentCode(), value) catch return error.OutOfMemory;
 }
 
+/// Select a builtin wrapper's update-mode immediate from the statement's
+/// statically-proven-unique argument mask: `.InPlace` when the bit for
+/// `arg_index` says that argument's runtime uniqueness check is redundant,
+/// `.Immutable` (checked) otherwise.
+fn updateModeImmForArg(unique_args: u64, arg_index: u6) i32 {
+    return @intFromEnum(if ((unique_args >> arg_index) & 1 != 0) builtins.utils.UpdateMode.InPlace else builtins.utils.UpdateMode.Immutable);
+}
+
 fn loadRocListFields(self: *Self, list_ptr: u32) Allocator.Error!RocListFields {
     const fields = RocListFields{
         .bytes = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory,
@@ -6565,6 +6573,7 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
                 .op = assign.op,
                 .args = assign.args,
                 .ret_layout = self.procLocalLayoutIdx(assign.target),
+                .unique_args = assign.unique_args,
             });
             try self.bindAssignedLocal(assign.target);
             try work.append(wa, .{ .node = .{ .stmt_id = assign.next, .stop = stop } });
@@ -8678,7 +8687,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         },
 
         .list_drop_at => {
-            try self.generateLLListDropAt(args, ll.ret_layout);
+            try self.generateLLListDropAt(args, ll.ret_layout, ll.unique_args);
         },
 
         .list_replace_unsafe => {
@@ -9043,11 +9052,11 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         },
         .list_concat => {
             // list_concat(list_a, list_b) -> concatenated list
-            try self.generateLLListConcat(args, ll.ret_layout);
+            try self.generateLLListConcat(args, ll.ret_layout, ll.unique_args);
         },
         .list_reverse => {
             // list_reverse(list) -> reversed list
-            try self.generateLLListReverse(args, ll.ret_layout);
+            try self.generateLLListReverse(args, ll.ret_layout, ll.unique_args);
         },
         // list_with_capacity(capacity) -> empty list with given capacity
         .list_with_capacity => {
@@ -13176,7 +13185,7 @@ fn generateLLListPrepend(self: *Self, args: anytype, ret_layout: layout.Idx) All
 }
 
 /// Generate LowLevel list_concat: concatenate two lists.
-fn generateLLListConcat(self: *Self, args: anytype, ret_layout: layout.Idx) Allocator.Error!void {
+fn generateLLListConcat(self: *Self, args: anytype, ret_layout: layout.Idx, unique_args: u64) Allocator.Error!void {
     const list_abi = self.builtinInternalListAbi("wasm.generateLLListConcat.builtin_list_abi", ret_layout);
     const elem_size = list_abi.elem_size;
     const elem_align = list_abi.elem_align;
@@ -13244,6 +13253,10 @@ fn generateLLListConcat(self: *Self, args: anytype, ret_layout: layout.Idx) Allo
             try self.emitI32Const(@intCast(callbacks.elements_refcounted));
             try self.emitI32Const(@intCast(callbacks.incref_table_idx));
             try self.emitI32Const(@intCast(callbacks.decref_table_idx));
+            // One bit per list argument (bit 0 = a, bit 1 = b), as one wide
+            // parameter.
+            self.currentCode().append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI64(self.allocator, self.currentCode(), @intCast(unique_args & 0b11)) catch return error.OutOfMemory;
             try self.emitLocalGet(self.roc_ops_local);
             try self.emitBuiltinCall(.list_concat, null);
         },
@@ -13253,7 +13266,7 @@ fn generateLLListConcat(self: *Self, args: anytype, ret_layout: layout.Idx) Allo
 }
 
 /// Generate LowLevel list_drop_at: remove element at index, returning new list.
-fn generateLLListDropAt(self: *Self, args: anytype, ret_layout: layout.Idx) Allocator.Error!void {
+fn generateLLListDropAt(self: *Self, args: anytype, ret_layout: layout.Idx, unique_args: u64) Allocator.Error!void {
     const list_abi = self.builtinInternalListAbi("wasm.generateLLListDropAt.builtin_list_abi", ret_layout);
     const elem_size = list_abi.elem_size;
     const elem_align = list_abi.elem_align;
@@ -13291,6 +13304,7 @@ fn generateLLListDropAt(self: *Self, args: anytype, ret_layout: layout.Idx) Allo
             try self.emitI32Const(@intCast(callbacks.elements_refcounted));
             try self.emitI32Const(@intCast(callbacks.incref_table_idx));
             try self.emitI32Const(@intCast(callbacks.decref_table_idx));
+            try self.emitI32Const(updateModeImmForArg(unique_args, 0));
             try self.emitLocalGet(self.roc_ops_local);
             try self.emitBuiltinCall(.list_drop_at, null);
         },
@@ -13300,7 +13314,7 @@ fn generateLLListDropAt(self: *Self, args: anytype, ret_layout: layout.Idx) Allo
 }
 
 /// Generate LowLevel list_reverse: create new list with elements in reverse order.
-fn generateLLListReverse(self: *Self, args: anytype, ret_layout: layout.Idx) Allocator.Error!void {
+fn generateLLListReverse(self: *Self, args: anytype, ret_layout: layout.Idx, unique_args: u64) Allocator.Error!void {
     const list_abi = self.builtinInternalListAbi("wasm.generateLLListReverse.builtin_list_abi", ret_layout);
     const elem_size = list_abi.elem_size;
     if (elem_size == 0) {
@@ -13326,11 +13340,16 @@ fn generateLLListReverse(self: *Self, args: anytype, ret_layout: layout.Idx) All
         },
         .builtin_relocs => {
             const fields = try self.loadRocListFields(list_ptr);
+            const callbacks = try self.listElementCallbacks(list_abi);
 
             try self.emitFpOffset(result_offset);
             try self.emitRocListFields(fields);
-            try self.emitI32Const(@intCast(elem_size));
             try self.emitI32Const(@intCast(elem_align));
+            try self.emitI32Const(@intCast(elem_size));
+            try self.emitI32Const(@intCast(callbacks.elements_refcounted));
+            try self.emitI32Const(@intCast(callbacks.incref_table_idx));
+            try self.emitI32Const(@intCast(callbacks.decref_table_idx));
+            try self.emitI32Const(updateModeImmForArg(unique_args, 0));
             try self.emitLocalGet(self.roc_ops_local);
             try self.emitBuiltinCall(.list_reverse, null);
         },

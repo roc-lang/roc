@@ -363,15 +363,20 @@ pub const RocStr = extern struct {
         }
     }
 
+    /// An `.InPlace` update mode means the caller proved the string unique,
+    /// so the runtime uniqueness check is skipped. Small strings and seamless
+    /// slices still reallocate fresh: neither owns a growable big-string
+    /// allocation, so the structural checks are not uniqueness checks.
     pub fn reallocate(
         self: RocStr,
         new_length: usize,
+        update_mode: UpdateMode,
         roc_ops: *RocOps,
     ) RocStr {
         const element_width = 1;
         const old_capacity = self.getCapacity();
 
-        if (self.isSmallStr() or self.isSeamlessSlice() or !self.isUnique()) {
+        if (self.isSmallStr() or self.isSeamlessSlice() or !(update_mode == .InPlace or self.isUnique())) {
             return self.reallocateFresh(new_length, roc_ops);
         }
 
@@ -986,18 +991,24 @@ pub fn endsWith(string: RocStr, suffix: RocStr) callconv(.c) bool {
 ///
 /// Note: arg1 is owned and may be returned directly if arg2 is empty,
 /// or reallocated to accommodate the combined content.
+///
+/// An `.InPlace` update mode means the caller proved arg1 unique, so the
+/// runtime uniqueness check inside the reallocation is skipped. Small strings
+/// have no refcount, so the mode only affects big strings.
 pub fn strConcatC(
     arg1: RocStr,
     arg2: RocStr,
+    update_mode: UpdateMode,
     roc_ops: *RocOps,
 ) callconv(.c) RocStr {
-    return @call(.always_inline, strConcat, .{ arg1, arg2, roc_ops });
+    return @call(.always_inline, strConcat, .{ arg1, arg2, update_mode, roc_ops });
 }
 
 /// See strConcatC for ownership documentation.
 pub fn strConcat(
     arg1: RocStr,
     arg2: RocStr,
+    update_mode: UpdateMode,
     roc_ops: *RocOps,
 ) RocStr {
     // NOTE: we don't special-case the first argument being empty. That is because it is owned and
@@ -1008,7 +1019,7 @@ pub fn strConcat(
     } else {
         const combined_length = arg1.len() + arg2.len();
 
-        var result = arg1.reallocate(combined_length, roc_ops);
+        var result = arg1.reallocate(combined_length, update_mode, roc_ops);
         const src = arg2.asU8ptr()[0..arg2.len()];
         const dest = result.asU8ptrMut()[arg1.len()..combined_length];
         var i = src.len;
@@ -1503,8 +1514,12 @@ pub fn isWhitespace(codepoint: u21) bool {
 /// - Small string: creates new small string with trimmed bytes
 /// - Unique with no leading whitespace: shrinks in place (same allocation)
 /// - Otherwise: creates seamless slice pointing to trimmed region
+///
+/// An `.InPlace` update mode means the caller proved the string unique, so
+/// the big-string runtime uniqueness check is skipped.
 pub fn strTrim(
     input_string: RocStr,
+    update_mode: UpdateMode,
     roc_ops: *RocOps,
 ) callconv(.c) RocStr {
     var string = input_string;
@@ -1531,7 +1546,7 @@ pub fn strTrim(
         // Just create another small string of the correct bytes.
         // No need to decref because it is a small string.
         return RocStr.init(string.asU8ptr() + leading_bytes, new_len, roc_ops);
-    } else if (leading_bytes == 0 and string.isUnique()) {
+    } else if (leading_bytes == 0 and (update_mode == .InPlace or string.isUnique())) {
         // Big and unique with no leading bytes to remove.
         // Just take ownership and shrink the length.
         var new_string = string;
@@ -1566,8 +1581,12 @@ pub fn strTrim(
 /// - Small string: creates new small string with trimmed bytes
 /// - Unique with no leading whitespace: returns same allocation unchanged
 /// - Otherwise: creates seamless slice pointing to trimmed region
+///
+/// An `.InPlace` update mode means the caller proved the string unique, so
+/// the big-string runtime uniqueness check is skipped.
 pub fn strTrimStart(
     input_string: RocStr,
+    update_mode: UpdateMode,
     roc_ops: *RocOps,
 ) callconv(.c) RocStr {
     var string = input_string;
@@ -1593,7 +1612,7 @@ pub fn strTrimStart(
         // Just create another small string of the correct bytes.
         // No need to decref because it is a small string.
         return RocStr.init(string.asU8ptr() + leading_bytes, new_len, roc_ops);
-    } else if (leading_bytes == 0 and string.isUnique()) {
+    } else if (leading_bytes == 0 and (update_mode == .InPlace or string.isUnique())) {
         // Big and unique with no leading bytes to remove.
         // Just take ownership and shrink the length.
         var new_string = string;
@@ -1628,8 +1647,12 @@ pub fn strTrimStart(
 /// - Small string: creates new small string with trimmed bytes
 /// - Unique: shrinks length in place (same allocation)
 /// - Shared: creates seamless slice pointing to trimmed region
+///
+/// An `.InPlace` update mode means the caller proved the string unique, so
+/// the big-string runtime uniqueness check is skipped.
 pub fn strTrimEnd(
     input_string: RocStr,
+    update_mode: UpdateMode,
     roc_ops: *RocOps,
 ) callconv(.c) RocStr {
     var string = input_string;
@@ -1655,7 +1678,7 @@ pub fn strTrimEnd(
         // Just create another small string of the correct bytes.
         // No need to decref because it is a small string.
         return RocStr.init(string.asU8ptr(), new_len, roc_ops);
-    } else if (string.isUnique()) {
+    } else if (update_mode == .InPlace or string.isUnique()) {
         // Big and unique with no leading bytes to remove.
         // Just take ownership and shrink the length.
         var new_string = string;
@@ -1721,11 +1744,16 @@ fn countTrailingWhitespaceBytes(string: RocStr) usize {
 ///
 /// If the input string is unique, modifies in place and returns it.
 /// If shared, decrefs the input and allocates a new string.
+///
+/// An `.InPlace` update mode means the caller proved the string unique, so
+/// the runtime uniqueness check is skipped. Small strings always report
+/// unique, so the mode changes nothing for them.
 pub fn strWithAsciiLowercased(
     string: RocStr,
+    update_mode: UpdateMode,
     roc_ops: *RocOps,
 ) callconv(.c) RocStr {
-    var new_str = if (string.isUnique())
+    var new_str = if (update_mode == .InPlace or string.isUnique())
         string
     else blk: {
         string.decref(roc_ops);
@@ -1749,11 +1777,16 @@ pub fn strWithAsciiLowercased(
 ///
 /// If the input string is unique, modifies in place and returns it.
 /// If shared, decrefs the input and allocates a new string.
+///
+/// An `.InPlace` update mode means the caller proved the string unique, so
+/// the runtime uniqueness check is skipped. Small strings always report
+/// unique, so the mode changes nothing for them.
 pub fn strWithAsciiUppercased(
     string: RocStr,
+    update_mode: UpdateMode,
     roc_ops: *RocOps,
 ) callconv(.c) RocStr {
-    var new_str = if (string.isUnique())
+    var new_str = if (update_mode == .InPlace or string.isUnique())
         string
     else blk: {
         string.decref(roc_ops);
@@ -1839,18 +1872,23 @@ fn utf8BeginByte(byte: u8) bool {
 }
 
 /// Ensures the RocStr has at least the specified spare capacity, reallocating if necessary.
+///
+/// An `.InPlace` update mode means the caller proved the string unique, so
+/// the big-string runtime uniqueness check inside the reallocation is skipped.
 pub fn reserveC(
     string: RocStr,
     spare_u64: u64,
+    update_mode: UpdateMode,
     roc_ops: *RocOps,
 ) callconv(.c) RocStr {
-    return reserve(string, @intCast(spare_u64), roc_ops);
+    return reserve(string, @intCast(spare_u64), update_mode, roc_ops);
 }
 
-/// TODO
+/// See reserveC.
 pub fn reserve(
     string: RocStr,
     spare: usize,
+    update_mode: UpdateMode,
     roc_ops: *RocOps,
 ) RocStr {
     const old_length = string.len();
@@ -1858,7 +1896,7 @@ pub fn reserve(
     if (string.getCapacity() >= old_length + spare) {
         return string;
     } else {
-        var output = string.reallocate(old_length + spare, roc_ops);
+        var output = string.reallocate(old_length + spare, update_mode, roc_ops);
         output.setLen(old_length);
         return output;
     }
@@ -1916,16 +1954,21 @@ pub fn strAllocationPtr(
 }
 
 /// Release excess capacity
+///
+/// An `.InPlace` update mode means the caller proved the string unique, so
+/// the big-string runtime uniqueness check is skipped. Small strings have no
+/// excess capacity and return unchanged regardless of mode.
 pub fn strReleaseExcessCapacity(
-    roc_ops: *RocOps,
     string: RocStr,
+    update_mode: UpdateMode,
+    roc_ops: *RocOps,
 ) callconv(.c) RocStr {
     const old_length = string.len();
     // We use the direct list.capacity_or_alloc_ptr to make sure both that there is no extra capacity and that it isn't a seamless slice.
     if (string.isSmallStr()) {
         // SmallStr has no excess capacity.
         return string;
-    } else if (string.isUnique() and !string.isSeamlessSlice() and string.getCapacity() == old_length) {
+    } else if ((update_mode == .InPlace or string.isUnique()) and !string.isSeamlessSlice() and string.getCapacity() == old_length) {
         return string;
     } else if (old_length == 0) {
         string.decref(roc_ops);
@@ -2687,7 +2730,7 @@ test "RocStr.concat: small concat small" {
         roc_str3.decref(test_env.getOps());
     }
 
-    const result = strConcat(roc_str1, roc_str2, test_env.getOps());
+    const result = strConcat(roc_str1, roc_str2, .Immutable, test_env.getOps());
 
     defer result.decref(test_env.getOps());
 
@@ -2702,10 +2745,10 @@ test "RocStr.concat: concat result fed into concat again" {
     const first_b = RocStr.fromSliceSmall("b");
     const second = RocStr.fromSliceSmall("c");
 
-    const first = strConcat(first_a, first_b, test_env.getOps());
+    const first = strConcat(first_a, first_b, .Immutable, test_env.getOps());
     defer first.decref(test_env.getOps());
 
-    const result = strConcat(first, second, test_env.getOps());
+    const result = strConcat(first, second, .Immutable, test_env.getOps());
     defer result.decref(test_env.getOps());
 
     const expected = RocStr.fromSliceSmall("abc");
@@ -2721,7 +2764,7 @@ test "RocStr.concat: big concat overlapping seamless suffix" {
     const suffix = strDropPrefix(original, prefix, test_env.getOps());
     defer suffix.decref(test_env.getOps());
 
-    const result = strConcat(original, suffix, test_env.getOps());
+    const result = strConcat(original, suffix, .Immutable, test_env.getOps());
     defer result.decref(test_env.getOps());
 
     const expected = RocStr.init("hello wonderfulwonderful", 24, test_env.getOps());
@@ -2737,7 +2780,7 @@ test "RocStr.concat: big concat with self alias" {
     var original = RocStr.init("hello wonderful", 15, test_env.getOps());
     original.incref(1, test_env.getOps());
 
-    const result = strConcat(original, original, test_env.getOps());
+    const result = strConcat(original, original, .Immutable, test_env.getOps());
     defer result.decref(test_env.getOps());
 
     const expected = RocStr.init("hello wonderfulhello wonderful", 30, test_env.getOps());
@@ -3166,7 +3209,7 @@ test "withAsciiLowercased: small str" {
     const expected = RocStr.fromSlice("coffÉ", test_env.getOps());
     defer expected.decref(test_env.getOps());
 
-    const str_result = strWithAsciiLowercased(original, test_env.getOps());
+    const str_result = strWithAsciiLowercased(original, .Immutable, test_env.getOps());
     defer str_result.decref(test_env.getOps());
 
     try std.testing.expect(str_result.isSmallStr());
@@ -3184,7 +3227,7 @@ test "withAsciiLowercased: non small str" {
     const expected = RocStr.fromSlice("coffÉ coffÉ coffÉ coffÉ coffÉ coffÉ", test_env.getOps());
     defer expected.decref(test_env.getOps());
 
-    const str_result = strWithAsciiLowercased(original, test_env.getOps());
+    const str_result = strWithAsciiLowercased(original, .Immutable, test_env.getOps());
 
     try std.testing.expect(!str_result.isSmallStr());
     try std.testing.expect(str_result.eql(expected));
@@ -3203,7 +3246,7 @@ test "withAsciiLowercased: seamless slice" {
     const expected = RocStr.fromSlice("offÉ coffÉ coffÉ coffÉ coffÉ coffÉ", test_env.getOps());
     defer expected.decref(test_env.getOps());
 
-    const str_result = strWithAsciiLowercased(original, test_env.getOps());
+    const str_result = strWithAsciiLowercased(original, .Immutable, test_env.getOps());
 
     try std.testing.expect(!str_result.isSmallStr());
     try std.testing.expect(str_result.eql(expected));
@@ -3219,7 +3262,7 @@ test "withAsciiUppercased: small str" {
     const expected = RocStr.fromSlice("COFFé", test_env.getOps());
     defer expected.decref(test_env.getOps());
 
-    const str_result = strWithAsciiUppercased(original, test_env.getOps());
+    const str_result = strWithAsciiUppercased(original, .Immutable, test_env.getOps());
     defer str_result.decref(test_env.getOps());
 
     try std.testing.expect(str_result.isSmallStr());
@@ -3237,7 +3280,7 @@ test "withAsciiUppercased: non small str" {
     const expected = RocStr.fromSlice("COFFé COFFé COFFé COFFé COFFé COFFé", test_env.getOps());
     defer expected.decref(test_env.getOps());
 
-    const str_result = strWithAsciiUppercased(original, test_env.getOps());
+    const str_result = strWithAsciiUppercased(original, .Immutable, test_env.getOps());
 
     try std.testing.expect(!str_result.isSmallStr());
     try std.testing.expect(str_result.eql(expected));
@@ -3256,7 +3299,7 @@ test "withAsciiUppercased: seamless slice" {
     const expected = RocStr.fromSlice("OFFé COFFé COFFé COFFé COFFé COFFé", test_env.getOps());
     defer expected.decref(test_env.getOps());
 
-    const str_result = strWithAsciiUppercased(original, test_env.getOps());
+    const str_result = strWithAsciiUppercased(original, .Immutable, test_env.getOps());
 
     try std.testing.expect(!str_result.isSmallStr());
     try std.testing.expect(str_result.eql(expected));
@@ -3340,7 +3383,7 @@ test "caselessAsciiEquals: seamless slice" {
 test "strTrim: empty" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
-    const trimmedEmpty = strTrim(RocStr.empty(), test_env.getOps());
+    const trimmedEmpty = strTrim(RocStr.empty(), .Immutable, test_env.getOps());
     try std.testing.expect(trimmedEmpty.eql(RocStr.empty()));
 }
 
@@ -3354,13 +3397,13 @@ test "strTrim: null byte" {
     try std.testing.expectEqual(@as(usize, 1), original.len());
     try std.testing.expectEqual(@as(usize, SMALL_STR_MAX_LENGTH), original.getCapacity());
 
-    const original_with_capacity = reserve(original, 40, test_env.getOps());
+    const original_with_capacity = reserve(original, 40, .Immutable, test_env.getOps());
     defer original_with_capacity.decref(test_env.getOps());
 
     try std.testing.expectEqual(@as(usize, 1), original_with_capacity.len());
     try std.testing.expectEqual(@as(usize, 41), original_with_capacity.getCapacity());
 
-    const trimmed = strTrim(original.clone(test_env.getOps()), test_env.getOps());
+    const trimmed = strTrim(original.clone(test_env.getOps()), .Immutable, test_env.getOps());
     defer trimmed.decref(test_env.getOps());
 
     try std.testing.expect(original.eql(trimmed));
@@ -3373,7 +3416,7 @@ test "strTrim: blank" {
     const original_bytes = "   ";
     const original = RocStr.init(original_bytes, original_bytes.len, test_env.getOps());
 
-    const trimmed = strTrim(original, test_env.getOps());
+    const trimmed = strTrim(original, .Immutable, test_env.getOps());
     defer trimmed.decref(test_env.getOps());
 
     try std.testing.expect(trimmed.eql(RocStr.empty()));
@@ -3394,7 +3437,7 @@ test "strTrim: large to large" {
 
     try std.testing.expect(!expected.isSmallStr());
 
-    const trimmed = strTrim(original, test_env.getOps());
+    const trimmed = strTrim(original, .Immutable, test_env.getOps());
     defer trimmed.decref(test_env.getOps());
 
     try std.testing.expect(trimmed.eql(expected));
@@ -3416,7 +3459,7 @@ test "strTrim: large to small sized slice" {
     try std.testing.expect(expected.isSmallStr());
 
     try std.testing.expect(original.isUnique());
-    const trimmed = strTrim(original, test_env.getOps());
+    const trimmed = strTrim(original, .Immutable, test_env.getOps());
     defer trimmed.decref(test_env.getOps());
 
     try std.testing.expect(trimmed.eql(expected));
@@ -3439,7 +3482,7 @@ test "strTrim: small to small" {
 
     try std.testing.expect(expected.isSmallStr());
 
-    const trimmed = strTrim(original, test_env.getOps());
+    const trimmed = strTrim(original, .Immutable, test_env.getOps());
 
     try std.testing.expect(trimmed.eql(expected));
     try std.testing.expect(trimmed.isSmallStr());
@@ -3449,7 +3492,7 @@ test "strTrimStart: empty" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
 
-    const trimmedEmpty = strTrimStart(RocStr.empty(), test_env.getOps());
+    const trimmedEmpty = strTrimStart(RocStr.empty(), .Immutable, test_env.getOps());
     try std.testing.expect(trimmedEmpty.eql(RocStr.empty()));
 }
 
@@ -3461,7 +3504,7 @@ test "strTrimStart: blank" {
     const original = RocStr.init(original_bytes, original_bytes.len, test_env.getOps());
     defer original.decref(test_env.getOps());
 
-    const trimmed = strTrimStart(original, test_env.getOps());
+    const trimmed = strTrimStart(original, .Immutable, test_env.getOps());
 
     try std.testing.expect(trimmed.eql(RocStr.empty()));
 }
@@ -3482,7 +3525,7 @@ test "strTrimStart: large to large" {
 
     try std.testing.expect(!expected.isSmallStr());
 
-    const trimmed = strTrimStart(original, test_env.getOps());
+    const trimmed = strTrimStart(original, .Immutable, test_env.getOps());
 
     try std.testing.expect(trimmed.eql(expected));
 }
@@ -3503,7 +3546,7 @@ test "strTrimStart: large to small" {
 
     try std.testing.expect(expected.isSmallStr());
 
-    const trimmed = strTrimStart(original, test_env.getOps());
+    const trimmed = strTrimStart(original, .Immutable, test_env.getOps());
     defer trimmed.decref(test_env.getOps());
 
     try std.testing.expect(trimmed.eql(expected));
@@ -3526,7 +3569,7 @@ test "strTrimStart: small to small" {
 
     try std.testing.expect(expected.isSmallStr());
 
-    const trimmed = strTrimStart(original, test_env.getOps());
+    const trimmed = strTrimStart(original, .Immutable, test_env.getOps());
 
     try std.testing.expect(trimmed.eql(expected));
     try std.testing.expect(trimmed.isSmallStr());
@@ -3535,7 +3578,7 @@ test "strTrimStart: small to small" {
 test "strTrimEnd: empty" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
-    const trimmedEmpty = strTrimEnd(RocStr.empty(), test_env.getOps());
+    const trimmedEmpty = strTrimEnd(RocStr.empty(), .Immutable, test_env.getOps());
     try std.testing.expect(trimmedEmpty.eql(RocStr.empty()));
 }
 
@@ -3546,7 +3589,7 @@ test "strTrimEnd: blank" {
     const original = RocStr.init(original_bytes, original_bytes.len, test_env.getOps());
     defer original.decref(test_env.getOps());
 
-    const trimmed = strTrimEnd(original, test_env.getOps());
+    const trimmed = strTrimEnd(original, .Immutable, test_env.getOps());
 
     try std.testing.expect(trimmed.eql(RocStr.empty()));
 }
@@ -3566,7 +3609,7 @@ test "strTrimEnd: large to large" {
 
     try std.testing.expect(!expected.isSmallStr());
 
-    const trimmed = strTrimEnd(original, test_env.getOps());
+    const trimmed = strTrimEnd(original, .Immutable, test_env.getOps());
 
     try std.testing.expect(trimmed.eql(expected));
 }
@@ -3587,7 +3630,7 @@ test "strTrimEnd: large to small" {
 
     try std.testing.expect(expected.isSmallStr());
 
-    const trimmed = strTrimEnd(original, test_env.getOps());
+    const trimmed = strTrimEnd(original, .Immutable, test_env.getOps());
     defer trimmed.decref(test_env.getOps());
 
     try std.testing.expect(trimmed.eql(expected));
@@ -3610,7 +3653,7 @@ test "strTrimEnd: small to small" {
 
     try std.testing.expect(expected.isSmallStr());
 
-    const trimmed = strTrimEnd(original, test_env.getOps());
+    const trimmed = strTrimEnd(original, .Immutable, test_env.getOps());
 
     try std.testing.expect(trimmed.eql(expected));
     try std.testing.expect(trimmed.isSmallStr());
@@ -3674,4 +3717,42 @@ test "RocStr single-thread incref/decref pair frees on zero" {
 
     str.decrefWithAtomicity(.single_thread, test_env.getOps());
     try std.testing.expectEqual(@as(usize, 0), test_env.getAllocationCount());
+}
+
+test "strConcat InPlace reuses the unique big allocation without a uniqueness check" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const base = RocStr.fromSlice("a string long enough to be heap allocated", test_env.getOps());
+    try std.testing.expect(!base.isSmallStr());
+    const with_capacity = reserve(base, 16, .Immutable, test_env.getOps());
+    const original_bytes = with_capacity.bytes;
+
+    const suffix = RocStr.fromSlice("!?", test_env.getOps());
+    const result = strConcat(with_capacity, suffix, .InPlace, test_env.getOps());
+    defer result.decref(test_env.getOps());
+
+    try std.testing.expectEqual(original_bytes, result.bytes);
+    try std.testing.expect(std.mem.eql(u8, result.asSlice(), "a string long enough to be heap allocated!?"));
+}
+
+test "strConcat Immutable copies a shared big allocation" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const base = RocStr.fromSlice("a string long enough to be heap allocated", test_env.getOps());
+    try std.testing.expect(!base.isSmallStr());
+    const original_bytes = base.bytes;
+
+    // Hold a second reference so the checked path must copy.
+    base.incref(1, test_env.getOps());
+
+    const suffix = RocStr.fromSlice("!?", test_env.getOps());
+    const result = strConcat(base, suffix, .Immutable, test_env.getOps());
+    defer result.decref(test_env.getOps());
+    defer base.decref(test_env.getOps());
+
+    try std.testing.expect(result.bytes != original_bytes);
+    try std.testing.expect(std.mem.eql(u8, result.asSlice(), "a string long enough to be heap allocated!?"));
+    try std.testing.expect(std.mem.eql(u8, base.asSlice(), "a string long enough to be heap allocated"));
 }

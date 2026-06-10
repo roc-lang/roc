@@ -1057,10 +1057,10 @@ pub const MonoLlvmCodeGen = struct {
             .list_get_unsafe => try self.emitListGetUnsafe(target, arg_locals),
             .list_with_capacity => try self.emitListWithCapacity(target, arg_locals),
             .list_append_unsafe => try self.emitListAppendUnsafe(target, arg_locals),
-            .list_concat => try self.emitListConcat(target, arg_locals),
-            .list_prepend => try self.emitListPrepend(target, arg_locals),
-            .list_sublist, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last => try self.emitListSublist(target, op, arg_locals),
-            .list_drop_at => try self.emitListDropAt(target, arg_locals),
+            .list_concat => try self.emitListConcat(target, arg_locals, unique_args),
+            .list_prepend => try self.emitListPrepend(target, arg_locals, unique_args),
+            .list_sublist, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last => try self.emitListSublist(target, op, arg_locals, unique_args),
+            .list_drop_at => try self.emitListDropAt(target, arg_locals, unique_args),
             .list_set => try self.emitListSet(target, arg_locals, unique_args),
             .list_reserve => try self.emitListReserve(target, arg_locals, unique_args),
             .list_release_excess_capacity => try self.emitListReleaseExcess(target, arg_locals, unique_args),
@@ -1071,24 +1071,24 @@ pub const MonoLlvmCodeGen = struct {
             .str_ends_with => try self.emitStrBoolBuiltin(target, "roc_builtins_str_ends_with", arg_locals),
             .str_caseless_ascii_equals => try self.emitStrBoolBuiltin(target, "roc_builtins_str_caseless_ascii_equals", arg_locals),
             .str_count_utf8_bytes => try self.emitStrCountUtf8Bytes(target, arg_locals[0]),
-            .str_concat => try self.emitStrRetBuiltin(target, "roc_builtins_str_concat", arg_locals),
-            .str_trim => try self.emitStrUnaryRetBuiltin(target, "roc_builtins_str_trim", arg_locals[0]),
-            .str_trim_start => try self.emitStrUnaryRetBuiltin(target, "roc_builtins_str_trim_start", arg_locals[0]),
-            .str_trim_end => try self.emitStrUnaryRetBuiltin(target, "roc_builtins_str_trim_end", arg_locals[0]),
-            .str_with_ascii_lowercased => try self.emitStrUnaryRetBuiltin(target, "roc_builtins_str_with_ascii_lowercased", arg_locals[0]),
-            .str_with_ascii_uppercased => try self.emitStrUnaryRetBuiltin(target, "roc_builtins_str_with_ascii_uppercased", arg_locals[0]),
-            .str_drop_prefix => try self.emitStrRetBuiltin(target, "roc_builtins_str_drop_prefix", arg_locals),
-            .str_drop_suffix => try self.emitStrRetBuiltin(target, "roc_builtins_str_drop_suffix", arg_locals),
-            .str_split_on => try self.emitStrRetBuiltin(target, "roc_builtins_str_split", arg_locals),
+            .str_concat => try self.emitStrRetBuiltin(target, "roc_builtins_str_concat", arg_locals, unique_args),
+            .str_trim => try self.emitStrUnaryRetBuiltin(target, "roc_builtins_str_trim", arg_locals[0], unique_args),
+            .str_trim_start => try self.emitStrUnaryRetBuiltin(target, "roc_builtins_str_trim_start", arg_locals[0], unique_args),
+            .str_trim_end => try self.emitStrUnaryRetBuiltin(target, "roc_builtins_str_trim_end", arg_locals[0], unique_args),
+            .str_with_ascii_lowercased => try self.emitStrUnaryRetBuiltin(target, "roc_builtins_str_with_ascii_lowercased", arg_locals[0], unique_args),
+            .str_with_ascii_uppercased => try self.emitStrUnaryRetBuiltin(target, "roc_builtins_str_with_ascii_uppercased", arg_locals[0], unique_args),
+            .str_drop_prefix => try self.emitStrRetBuiltin(target, "roc_builtins_str_drop_prefix", arg_locals, null),
+            .str_drop_suffix => try self.emitStrRetBuiltin(target, "roc_builtins_str_drop_suffix", arg_locals, null),
+            .str_split_on => try self.emitStrRetBuiltin(target, "roc_builtins_str_split", arg_locals, null),
             .str_join_with => try self.emitStrJoinWith(target, arg_locals),
             .str_repeat => try self.emitStrRepeat(target, arg_locals),
             .str_with_capacity => try self.emitStrWithCapacity(target, arg_locals[0]),
-            .str_reserve => try self.emitStrReserve(target, arg_locals),
-            .str_release_excess_capacity => try self.emitStrUnaryRetBuiltin(target, "roc_builtins_str_release_excess_capacity", arg_locals[0]),
+            .str_reserve => try self.emitStrReserve(target, arg_locals, unique_args),
+            .str_release_excess_capacity => try self.emitStrUnaryRetBuiltin(target, "roc_builtins_str_release_excess_capacity", arg_locals[0], unique_args),
             .str_to_utf8 => try self.emitStrToUtf8(target, arg_locals[0]),
             .str_from_utf8_lossy => try self.emitStrFromUtf8Lossy(target, arg_locals[0]),
             .str_from_utf8 => try self.emitStrFromUtf8(target, arg_locals[0]),
-            .str_inspect => try self.emitStrUnaryRetBuiltin(target, "roc_builtins_str_escape_and_quote", arg_locals[0]),
+            .str_inspect => try self.emitStrUnaryRetBuiltin(target, "roc_builtins_str_escape_and_quote", arg_locals[0], null),
             .u8_from_str => try self.emitIntFromStr(target, arg_locals[0], 1, false),
             .i8_from_str => try self.emitIntFromStr(target, arg_locals[0], 1, true),
             .u16_from_str => try self.emitIntFromStr(target, arg_locals[0], 2, false),
@@ -1620,18 +1620,26 @@ pub const MonoLlvmCodeGen = struct {
         try self.storeBool(self.slot(target).ptr, result);
     }
 
-    fn emitStrRetBuiltin(self: *MonoLlvmCodeGen, target: LocalId, name: []const u8, args: []const LocalId) Error!void {
+    /// `unique_args` is non-null for wrappers whose first argument carries the
+    /// op's runtime uniqueness check; the update-mode argument is appended just
+    /// before roc_ops.
+    fn emitStrRetBuiltin(self: *MonoLlvmCodeGen, target: LocalId, name: []const u8, args: []const LocalId, unique_args: ?u64) Error!void {
         var call_args = try self.rocStrArgs2(args[0], args[1], true);
         defer call_args.deinit(self.allocator);
         try call_args.prepend(self.allocator, try self.ptrType(), self.slot(target).ptr);
+        if (unique_args) |mask| try self.appendUpdateModeArg(&call_args, mask);
         try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
         try self.callBuiltinVoid(name, call_args.types.items, call_args.values.items);
     }
 
-    fn emitStrUnaryRetBuiltin(self: *MonoLlvmCodeGen, target: LocalId, name: []const u8, arg: LocalId) Error!void {
+    /// `unique_args` is non-null for wrappers whose first argument carries the
+    /// op's runtime uniqueness check; the update-mode argument is appended just
+    /// before roc_ops.
+    fn emitStrUnaryRetBuiltin(self: *MonoLlvmCodeGen, target: LocalId, name: []const u8, arg: LocalId, unique_args: ?u64) Error!void {
         var call_args = try self.rocStrArgs1(arg);
         defer call_args.deinit(self.allocator);
         try call_args.prepend(self.allocator, try self.ptrType(), self.slot(target).ptr);
+        if (unique_args) |mask| try self.appendUpdateModeArg(&call_args, mask);
         try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
         try self.callBuiltinVoid(name, call_args.types.items, call_args.values.items);
     }
@@ -1672,12 +1680,13 @@ pub const MonoLlvmCodeGen = struct {
         try self.callBuiltinVoid("roc_builtins_str_with_capacity", &.{ try self.ptrType(), .i64, try self.ptrType() }, &.{ self.slot(target).ptr, cap, self.rocOps() });
     }
 
-    fn emitStrReserve(self: *MonoLlvmCodeGen, target: LocalId, args: []const LocalId) Error!void {
+    fn emitStrReserve(self: *MonoLlvmCodeGen, target: LocalId, args: []const LocalId, unique_args: u64) Error!void {
         var call_args = try self.rocStrArgs1(args[0]);
         defer call_args.deinit(self.allocator);
         const spare = try self.coerceScalar(try self.loadScalar(self.slot(args[1]).ptr, self.localLayout(args[1])), .i64, false);
         try call_args.prepend(self.allocator, try self.ptrType(), self.slot(target).ptr);
         try call_args.append(self.allocator, .i64, spare);
+        try self.appendUpdateModeArg(&call_args, unique_args);
         try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
         try self.callBuiltinVoid("roc_builtins_str_reserve", call_args.types.items, call_args.values.items);
     }
@@ -1971,7 +1980,7 @@ pub const MonoLlvmCodeGen = struct {
         try self.callBuiltinVoid("roc_builtins_list_append_unsafe", call_args.types.items, call_args.values.items);
     }
 
-    fn emitListConcat(self: *MonoLlvmCodeGen, target: LocalId, args: []const LocalId) Error!void {
+    fn emitListConcat(self: *MonoLlvmCodeGen, target: LocalId, args: []const LocalId, unique_args: u64) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const abi = self.layouts().builtinListAbi(self.localLayout(target));
         if (abi.elem_size == 0) {
@@ -1997,11 +2006,14 @@ pub const MonoLlvmCodeGen = struct {
         try call_args.append(self.allocator, .i32, builder.intValue(.i32, abi.elem_alignment) catch return error.OutOfMemory);
         try call_args.append(self.allocator, self.ptrSizedIntType(), builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory);
         try self.appendListElementRcArgs(&call_args, abi, true, true);
+        // One bit per list argument (bit 0 = lhs, bit 1 = rhs), as one 8-byte
+        // parameter so no two sub-8-byte parameters land adjacent on the stack.
+        try call_args.append(self.allocator, .i64, builder.intValue(.i64, unique_args & 0b11) catch return error.OutOfMemory);
         try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
         try self.callBuiltinVoid("roc_builtins_list_concat", call_args.types.items, call_args.values.items);
     }
 
-    fn emitListPrepend(self: *MonoLlvmCodeGen, target: LocalId, args: []const LocalId) Error!void {
+    fn emitListPrepend(self: *MonoLlvmCodeGen, target: LocalId, args: []const LocalId, unique_args: u64) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const abi = self.layouts().builtinListAbi(self.localLayout(args[0]));
         var call_args = try self.rocListArgs1(args[0]);
@@ -2011,11 +2023,12 @@ pub const MonoLlvmCodeGen = struct {
         try call_args.append(self.allocator, try self.ptrType(), self.slot(args[1]).ptr);
         try call_args.append(self.allocator, self.ptrSizedIntType(), builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory);
         try self.appendListElementRcArgs(&call_args, abi, true, false);
+        try self.appendUpdateModeArg(&call_args, unique_args);
         try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
         try self.callBuiltinVoid("roc_builtins_list_prepend", call_args.types.items, call_args.values.items);
     }
 
-    fn emitListSublist(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LowLevel, args: []const LocalId) Error!void {
+    fn emitListSublist(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LowLevel, args: []const LocalId, unique_args: u64) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const abi = self.layouts().builtinListAbi(self.localLayout(args[0]));
         const len = try self.loadUsize(try self.offsetPtr(self.slot(args[0]).ptr, self.rocListLenOffset()));
@@ -2049,6 +2062,7 @@ pub const MonoLlvmCodeGen = struct {
         try call_args.append(self.allocator, .i64, try self.coerceScalar(slice.start, .i64, false));
         try call_args.append(self.allocator, .i64, try self.coerceScalar(slice.len, .i64, false));
         try self.appendListElementRcArgs(&call_args, abi, false, true);
+        try self.appendUpdateModeArg(&call_args, unique_args);
         try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
         try self.callBuiltinVoid("roc_builtins_list_sublist", call_args.types.items, call_args.values.items);
     }
@@ -2093,7 +2107,7 @@ pub const MonoLlvmCodeGen = struct {
         }
     }
 
-    fn emitListDropAt(self: *MonoLlvmCodeGen, target: LocalId, args: []const LocalId) Error!void {
+    fn emitListDropAt(self: *MonoLlvmCodeGen, target: LocalId, args: []const LocalId, unique_args: u64) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const abi = self.layouts().builtinListAbi(self.localLayout(args[0]));
         var call_args = try self.rocListArgs1(args[0]);
@@ -2103,6 +2117,7 @@ pub const MonoLlvmCodeGen = struct {
         try call_args.append(self.allocator, self.ptrSizedIntType(), builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory);
         try call_args.append(self.allocator, .i64, try self.coerceScalar(try self.loadScalar(self.slot(args[1]).ptr, self.localLayout(args[1])), .i64, false));
         try self.appendListElementRcArgs(&call_args, abi, true, true);
+        try self.appendUpdateModeArg(&call_args, unique_args);
         try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
         try self.callBuiltinVoid("roc_builtins_list_drop_at", call_args.types.items, call_args.values.items);
     }
