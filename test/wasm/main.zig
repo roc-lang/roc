@@ -190,12 +190,17 @@ fn callWasmNoArgUsize(wasm: *const WasmInterface, handle: bytebox.FunctionHandle
 }
 
 /// Call wasm_main() and get the result string.
-fn callWasmMain(wasm: *const WasmInterface) anyerror![]const u8 {
+fn callWasmMain(wasm: *const WasmInterface, allocator: std.mem.Allocator) anyerror![]const u8 {
     // Call wasm_main() which returns a pointer to the result string
     var params_main: [0]bytebox.Val = undefined;
     var returns_main: [1]bytebox.Val = undefined;
     _ = wasm.module_instance.invoke(wasm.wasm_main_handle, &params_main, &returns_main, .{}) catch |err| {
         std.debug.print("[ERROR] Error invoking wasm_main: {}\n", .{err});
+        var backtrace = wasm.module_instance.formatBacktrace(2, allocator) catch null;
+        if (backtrace) |*bt| {
+            defer bt.deinit();
+            std.debug.print("[ERROR] WASM backtrace:\n{s}\n", .{bt.items});
+        }
         return error.WasmMainFailed;
     };
 
@@ -242,7 +247,7 @@ fn runTest(gpa: std.mem.Allocator, arena: std.mem.Allocator, io: std.Io, wasm_pa
         };
     }
 
-    const result = callWasmMain(&wasm) catch |err| {
+    const result = callWasmMain(&wasm, arena) catch |err| {
         return .{
             .name = wasm_path,
             .passed = false,

@@ -359,6 +359,7 @@ float_from_str_import: ?u32 = null,
 list_append_unsafe_import: ?u32 = null,
 list_concat_import: ?u32 = null,
 list_drop_at_import: ?u32 = null,
+list_reserve_import: ?u32 = null,
 list_reverse_import: ?u32 = null,
 /// Configurable wasm stack size in bytes (default 1MB).
 wasm_stack_bytes: u32 = 1024 * 1024,
@@ -1053,6 +1054,9 @@ fn registerHostImports(self: *Self) Allocator.Error!void {
     const list_drop_at_type = try self.module.addFuncType(&.{ .i32, .i32, .i32, .i32, .i32 }, &.{});
     self.list_drop_at_import = try self.module.addImport("env", "roc_list_drop_at", list_drop_at_type);
 
+    const list_reserve_type = try self.module.addFuncType(&.{ .i32, .i64, .i32, .i32, .i32 }, &.{});
+    self.list_reserve_import = try self.module.addImport("env", "roc_list_reserve", list_reserve_type);
+
     const list_reverse_type = try self.module.addFuncType(&.{ .i32, .i32, .i32, .i32 }, &.{});
     self.list_reverse_import = try self.module.addImport("env", "roc_list_reverse", list_reverse_type);
 
@@ -1543,7 +1547,6 @@ fn emitExplicitRcHelperCallForValuePtr(
     value_ptr_local: u32,
     inc_count: u16,
 ) Allocator.Error!void {
-    const normalized_value_ptr = try self.normalizeCompositeValuePtr(value_ptr_local, helper_key.layout_idx);
     const helper_plan = self.getLayoutStore().rcHelperPlan(helper_key);
     if (helper_plan == .noop) {
         wasmInvariantFmt(
@@ -1551,10 +1554,10 @@ fn emitExplicitRcHelperCallForValuePtr(
             .{@intFromEnum(helper_key.layout_idx)},
         );
     }
-    if (try self.emitRawDirectRcPlan(helper_key, helper_plan, normalized_value_ptr, null)) return;
+    if (try self.emitRawDirectRcPlan(helper_key, helper_plan, value_ptr_local, null)) return;
 
     const helper_func_idx = try self.compileBuiltinInternalRcHelper(helper_key);
-    try self.emitLocalGet(normalized_value_ptr);
+    try self.emitLocalGet(value_ptr_local);
     switch (helper_key.op) {
         .incref => {
             self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
@@ -1566,31 +1569,6 @@ fn emitExplicitRcHelperCallForValuePtr(
         },
     }
     try self.emitCall(helper_func_idx);
-}
-
-fn normalizeCompositeValuePtr(self: *Self, value_ptr_local: u32, layout_idx: layout.Idx) Allocator.Error!u32 {
-    if (!try self.isCompositeLayout(layout_idx)) return value_ptr_local;
-
-    const normalized = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitLocalGet(value_ptr_local);
-    try self.emitLocalSet(normalized);
-    try self.emitLocalGet(normalized);
-    self.currentCode().append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, @intFromEnum(BlockType.void)) catch return error.OutOfMemory;
-
-    const normalized_size = try self.layoutByteSize(self.runtimeRepresentationLayoutIdx(layout_idx));
-    const normalized_align = try self.layoutStorageByteAlign(layout_idx);
-    const stable_offset = try self.allocStackMemory(normalized_size, normalized_align);
-    const stable_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitFpOffset(stable_offset);
-    try self.emitLocalSet(stable_ptr);
-    try self.emitZeroInit(stable_ptr, normalized_size);
-    try self.emitLocalGet(stable_ptr);
-    try self.emitLocalSet(normalized);
-
-    self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
-    return normalized;
 }
 
 fn emitDecodeListAllocPtr(self: *Self, list_ptr_local: u32, out_alloc_ptr: u32, out_is_slice: u32) Allocator.Error!void {
@@ -7472,49 +7450,29 @@ fn erasedCallableOnDropTableIndex(self: *Self, on_drop: LIR.ErasedCallableOnDrop
 
 /// Emit a call instruction.
 fn emitCall(self: *Self, func_idx: u32) Allocator.Error!void {
-    if (self.relocatable_object) {
-        const symbol = self.function_symbols_by_index.get(func_idx) orelse {
-            wasmInvariantFmt(
-                "WASM/codegen invariant violated: relocatable direct call target {d} has no function symbol",
-                .{func_idx},
-            );
-        };
+    // Keep direct-call relocations whenever a target symbol exists so final-link
+    // DCE can trace generated call edges after surgical linking.
+    if (self.function_symbols_by_index.get(func_idx)) |symbol| {
         try self.currentBody().emitRelocatableCall(self.allocator, symbol, func_idx);
-    } else {
-        try self.currentCode().append(self.allocator, Op.call);
-        try WasmModule.leb128WriteU32(self.allocator, self.currentCode(), func_idx);
+        return;
     }
+
+    if (self.relocatable_object) {
+        wasmInvariantFmt(
+            "WASM/codegen invariant violated: relocatable direct call target {d} has no function symbol",
+            .{func_idx},
+        );
+    }
+
+    try self.currentCode().append(self.allocator, Op.call);
+    try WasmModule.leb128WriteU32(self.allocator, self.currentCode(), func_idx);
 }
 
 /// Generate call arguments (helper to avoid duplication).
 fn emitCallArgs(self: *Self, args: ProcLocalSpan) Allocator.Error!void {
     const arg_refs = self.store.getLocalSpan(args);
     for (arg_refs) |arg| {
-        const layout_idx = self.procLocalLayoutIdx(arg);
-        if (!try self.isCompositeLayout(layout_idx)) {
-            try self.emitProcLocal(arg);
-            continue;
-        }
-
         try self.emitProcLocal(arg);
-        const arg_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-        try self.emitLocalSet(arg_ptr);
-        try self.emitLocalGet(arg_ptr);
-        self.currentCode().append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
-        self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
-        self.currentCode().append(self.allocator, @intFromEnum(BlockType.void)) catch return error.OutOfMemory;
-        const stable_offset = try self.allocStackMemory(
-            try self.layoutByteSize(self.runtimeRepresentationLayoutIdx(layout_idx)),
-            try self.layoutStorageByteAlign(layout_idx),
-        );
-        const stable_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-        try self.emitFpOffset(stable_offset);
-        try self.emitLocalSet(stable_ptr);
-        try self.emitZeroInit(stable_ptr, try self.layoutByteSize(self.runtimeRepresentationLayoutIdx(layout_idx)));
-        try self.emitLocalGet(stable_ptr);
-        try self.emitLocalSet(arg_ptr);
-        self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
-        try self.emitLocalGet(arg_ptr);
     }
 }
 
@@ -13533,66 +13491,43 @@ fn generateLLListReserve(self: *Self, args: anytype, ret_layout: layout.Idx) All
     const elem_size = list_abi.elem_size;
     const elem_align = list_abi.elem_align;
 
-    // Generate list arg
     try self.emitProcLocal(args[0]);
     const list_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitLocalSet(list_ptr);
 
-    // Generate additional capacity arg (may be i64 from MonoIR; convert to i32 for wasm32)
     try self.emitProcLocal(args[1]);
-    try self.emitConversion(try self.procLocalValType(args[1]), .i32);
-    const additional = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitLocalSet(additional);
+    try self.emitConversion(try self.procLocalValType(args[1]), .i64);
+    const spare_local = self.storage.allocAnonymousLocal(.i64) catch return error.OutOfMemory;
+    try self.emitLocalSet(spare_local);
 
-    // Load list fields
-    const old_data = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitLocalGet(list_ptr);
-    self.currentCode().append(self.allocator, Op.i32_load) catch return error.OutOfMemory;
-    WasmModule.leb128WriteU32(self.allocator, self.currentCode(), 2) catch return error.OutOfMemory;
-    WasmModule.leb128WriteU32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
-    try self.emitLocalSet(old_data);
+    const result_offset = try self.allocStackMemory(12, 4);
+    switch (self.external_calls) {
+        .host_imports => {
+            const import_idx = self.list_reserve_import orelse unreachable;
+            try self.emitLocalGet(list_ptr);
+            try self.emitLocalGet(spare_local);
+            try self.emitI32Const(@intCast(elem_size));
+            try self.emitI32Const(@intCast(elem_align));
+            try self.emitFpOffset(result_offset);
+            try self.emitCall(import_idx);
+        },
+        .builtin_relocs => {
+            const fields = try self.loadRocListFields(list_ptr);
+            const callbacks = try self.listElementCallbacks(list_abi);
 
-    const old_len = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitLocalGet(list_ptr);
-    self.currentCode().append(self.allocator, Op.i32_load) catch return error.OutOfMemory;
-    WasmModule.leb128WriteU32(self.allocator, self.currentCode(), 2) catch return error.OutOfMemory;
-    WasmModule.leb128WriteU32(self.allocator, self.currentCode(), 4) catch return error.OutOfMemory;
-    try self.emitLocalSet(old_len);
-
-    // new_cap = old_len + additional
-    const new_cap = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitLocalGet(old_len);
-    try self.emitLocalGet(additional);
-    self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
-    try self.emitLocalSet(new_cap);
-
-    // Allocate new_cap * elem_size bytes
-    const total_size = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitLocalGet(new_cap);
-    self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-    WasmModule.leb128WriteI32(self.allocator, self.currentCode(), @intCast(elem_size)) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.i32_mul) catch return error.OutOfMemory;
-    try self.emitLocalSet(total_size);
-
-    try self.emitHeapAllocWithRefcount(total_size, elem_align, list_abi.elements_refcounted);
-    const new_data = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitLocalSet(new_data);
-
-    // Copy old data (old_len * elem_size bytes)
-    const copy_size = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitLocalGet(old_len);
-    self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-    WasmModule.leb128WriteI32(self.allocator, self.currentCode(), @intCast(elem_size)) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.i32_mul) catch return error.OutOfMemory;
-    try self.emitLocalSet(copy_size);
-
-    const zero4 = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-    WasmModule.leb128WriteI32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
-    try self.emitLocalSet(zero4);
-    try self.emitMemCopyLoop(new_data, zero4, old_data, copy_size);
-
-    try self.buildRocListWithCap(new_data, old_len, new_cap);
+            try self.emitFpOffset(result_offset);
+            try self.emitRocListFields(fields);
+            try self.emitI32Const(@intCast(elem_align));
+            try self.emitLocalGet(spare_local);
+            try self.emitI32Const(@intCast(elem_size));
+            try self.emitI32Const(@intCast(callbacks.elements_refcounted));
+            try self.emitI32Const(@intCast(callbacks.incref_table_idx));
+            try self.emitLocalGet(self.roc_ops_local);
+            try self.emitBuiltinCall(.list_reserve, null);
+        },
+        .unconfigured => wasmInvariantFmt("WASM/codegen invariant violated: external calls not configured before list_reserve", .{}),
+    }
+    try self.emitFpOffset(result_offset);
 }
 
 /// Generate list_release_excess_capacity: shrink list to exact length
