@@ -322,13 +322,13 @@ const FnPlan = struct {
     }
 };
 
-const BindingKey = union(enum) {
+const BindingSlot = union(enum) {
     local: Ast.LocalId,
     binder: check.CheckedModule.PatternBinderId,
 };
 
 const BindingChange = struct {
-    key: BindingKey,
+    slot: BindingSlot,
     previous: ?Value,
 };
 
@@ -2520,7 +2520,7 @@ const Cloner = struct {
     fn putSubst(self: *Cloner, local: Ast.LocalId, value: Value) Allocator.Error!void {
         const previous = self.subst.get(local);
         try self.changes.append(self.pass.allocator, .{
-            .key = .{ .local = local },
+            .slot = .{ .local = local },
             .previous = previous,
         });
         try self.subst.put(local, value);
@@ -2538,7 +2538,7 @@ const Cloner = struct {
         if (subst_binder) if (self.pass.program.locals.items[@intFromEnum(local)].binder) |binder| {
             const previous_binder = self.binder_subst.get(binder);
             try self.changes.append(self.pass.allocator, .{
-                .key = .{ .binder = binder },
+                .slot = .{ .binder = binder },
                 .previous = previous_binder,
             });
             try self.binder_subst.put(binder, value);
@@ -2550,7 +2550,7 @@ const Cloner = struct {
         while (index > start) {
             index -= 1;
             const change = self.changes.items[index];
-            switch (change.key) {
+            switch (change.slot) {
                 .local => |local| {
                     if (change.previous) |previous| {
                         self.subst.putAssumeCapacity(local, previous);

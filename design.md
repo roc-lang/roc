@@ -1882,8 +1882,8 @@ The proc call graph is derived from `assign_call` statements over
    in the caller, anchored on that argument.
 
 Borrowed parameters anchor borrow groups of their own: they are live for the
-whole call by ABI, so payload reads from them borrow without any caller-side
-lifetime obligation inside the callee.
+whole call by ABI, so payload reads from them borrow without the callee
+emitting any release for the group.
 
 Tail calls need one rule so that borrow inference never blocks backend
 tail-call lowering. LIR has no tail-call statement; a call is in tail
