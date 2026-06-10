@@ -369,7 +369,7 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 77;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 78;
 /// Count of the expression nodes in the ModuleEnv
 pub const MODULEENV_EXPR_NODE_COUNT = 53;
 /// Count of the statement nodes in the ModuleEnv
@@ -4050,6 +4050,10 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
             region = r.region;
             node.setPayload(.{ .diag_two_enums = .{ .enum1 = @intFromEnum(r.suffix), .enum2 = @intFromEnum(r.suggested) } });
         },
+        .range_op_chained => |r| {
+            node.tag = .diag_range_op_chained;
+            region = r.region;
+        },
     }
 
     const nid = @intFromEnum(try store.nodes.append(store.gpa, node));
@@ -4509,6 +4513,9 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
                 .region = store.getRegionAt(node_idx),
             } };
         },
+        .diag_range_op_chained => return CIR.Diagnostic{ .range_op_chained = .{
+            .region = store.getRegionAt(node_idx),
+        } },
         else => {
             @panic("getDiagnostic called with non-diagnostic node - this indicates a compiler bug");
         },

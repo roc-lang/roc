@@ -640,6 +640,7 @@ fn emitStatementFrame(
 /// Returns precedence level for a binary operator (higher = binds tighter)
 fn binopPrecedence(op: Expr.Binop.Op) u8 {
     return switch (op) {
+        .range_to_excluding, .range_to_including => 0,
         .@"or" => 1,
         .@"and" => 2,
         .eq, .ne => 3,
@@ -819,6 +820,8 @@ fn binopToStr(op: Expr.Binop.Op) []const u8 {
         .ne => "!=",
         .@"and" => "and",
         .@"or" => "or",
+        .range_to_excluding => "..<",
+        .range_to_including => "..=",
     };
 }
 

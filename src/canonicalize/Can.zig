@@ -10081,6 +10081,8 @@ fn runExprKernel(
                 .OpDoubleSlash => .div_trunc,
                 .OpAnd => .@"and",
                 .OpOr => .@"or",
+                .OpDoubleDotLessThan => .range_to_excluding,
+                .OpDoubleDotEquals => .range_to_including,
                 .OpCaret, .OpPizza => {
                     const feature = try self.env.insertString("unsupported operator");
                     const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
@@ -10108,6 +10110,22 @@ fn runExprKernel(
                     continue :expr_kernel_loop .dispatch;
                 },
             };
+
+            const is_range_op = op == .range_to_excluding or op == .range_to_including;
+            if (is_range_op) {
+                const ast_lhs = self.parse_ir.store.getExpr(state.bin_op.left);
+                if (ast_lhs == .bin_op) {
+                    const lhs_op_tag = self.parse_ir.tokens.tokens.get(ast_lhs.bin_op.operator).tag;
+                    if (lhs_op_tag == .OpDoubleDotLessThan or lhs_op_tag == .OpDoubleDotEquals) {
+                        const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .range_op_chained = .{
+                            .region = state.region,
+                        } });
+                        child_slots.shrinkRetainingCapacity(result_start);
+                        try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() });
+                        continue :expr_kernel_loop .dispatch;
+                    }
+                }
+            }
 
             if (op == .@"and" or op == .@"or") {
                 const bool_tag = try self.addBoolTagExpr(

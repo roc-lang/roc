@@ -8871,6 +8871,10 @@ fn checkBinopExpr(
             // The expression type is the return type of not
             _ = try self.unify(expr_var, not_ret_var, env);
         },
+        .range_to_excluding, .range_to_including => {
+            // Type-checking for ranges lands in the next commit.
+            try self.unifyWith(expr_var, .err, env);
+        },
         .@"and", .@"or" => {
             const lhs_fresh_bool = try self.freshBool(env, expr_region);
 
