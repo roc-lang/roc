@@ -242,6 +242,38 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
     if (env.common.findIdent("list_swap_unsafe")) |list_swap_unsafe_ident| {
         try low_level_map.put(list_swap_unsafe_ident, .list_swap);
     }
+    if (env.common.findIdent("Builtin.dict_pseudo_seed")) |ident| {
+        try low_level_map.put(ident, .dict_pseudo_seed);
+    }
+    if (env.common.findIdent("Builtin.hasher_finish")) |ident| {
+        try low_level_map.put(ident, .hasher_finish);
+    }
+    const hasher_primitives = [_]struct {
+        name: []const u8,
+        op: CIR.Expr.LowLevel,
+    }{
+        .{ .name = "Builtin.Hasher.write_bool", .op = .hasher_write_bool },
+        .{ .name = "Builtin.Hasher.write_u8", .op = .hasher_write_u8 },
+        .{ .name = "Builtin.Hasher.write_u16", .op = .hasher_write_u16 },
+        .{ .name = "Builtin.Hasher.write_u32", .op = .hasher_write_u32 },
+        .{ .name = "Builtin.Hasher.write_u64", .op = .hasher_write_u64 },
+        .{ .name = "Builtin.Hasher.write_u128", .op = .hasher_write_u128 },
+        .{ .name = "Builtin.Hasher.write_i8", .op = .hasher_write_i8 },
+        .{ .name = "Builtin.Hasher.write_i16", .op = .hasher_write_i16 },
+        .{ .name = "Builtin.Hasher.write_i32", .op = .hasher_write_i32 },
+        .{ .name = "Builtin.Hasher.write_i64", .op = .hasher_write_i64 },
+        .{ .name = "Builtin.Hasher.write_i128", .op = .hasher_write_i128 },
+        .{ .name = "Builtin.Hasher.write_f32", .op = .hasher_write_f32 },
+        .{ .name = "Builtin.Hasher.write_f64", .op = .hasher_write_f64 },
+        .{ .name = "Builtin.Hasher.write_dec", .op = .hasher_write_dec },
+        .{ .name = "Builtin.Hasher.write_bytes", .op = .hasher_write_bytes },
+        .{ .name = "Builtin.Hasher.write_str", .op = .hasher_write_str },
+    };
+    for (hasher_primitives) |primitive| {
+        if (env.common.findIdent(primitive.name)) |ident| {
+            try low_level_map.put(ident, primitive.op);
+        }
+    }
     const numeric_types = [_][]const u8{ "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec", "F32", "F64" };
     const signed_types = [_][]const u8{ "I8", "I16", "I32", "I64", "I128", "Dec", "F32", "F64" };
     // Numeric equality operations.

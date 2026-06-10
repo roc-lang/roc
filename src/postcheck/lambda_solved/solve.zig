@@ -872,6 +872,25 @@ const Solver = struct {
                 try self.unify(expected, args[0]);
                 try self.unify(args[1], try self.listElem(expected));
             },
+            .dict_pseudo_seed => expectLowLevelArity(op, args, 0),
+            .hasher_finish => expectLowLevelArity(op, args, 1),
+            .hasher_write_bool,
+            .hasher_write_u8,
+            .hasher_write_u16,
+            .hasher_write_u32,
+            .hasher_write_u64,
+            .hasher_write_u128,
+            .hasher_write_i8,
+            .hasher_write_i16,
+            .hasher_write_i32,
+            .hasher_write_i64,
+            .hasher_write_i128,
+            .hasher_write_f32,
+            .hasher_write_f64,
+            .hasher_write_dec,
+            .hasher_write_bytes,
+            .hasher_write_str,
+            => expectLowLevelArity(op, args, 2),
             else => {},
         }
     }
