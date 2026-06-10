@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Benchmark corpus smoke check.
+# Benchmark corpus verification.
 #
 # The comparison benchmark is allowed to skip a file when the main-branch
-# baseline is not benchmarkable. This PR-only smoke check runs the benchmark
+# baseline is not benchmarkable. This PR-only verification runs the benchmark
 # command set against one Roc binary and fails on PR crashes or unexpected
 # exits, so benchmark skips cannot hide new crashes in the branch being tested.
 
@@ -17,8 +17,8 @@ usage() {
     cat <<EOF
 Usage: $(basename "$0") <roc-binary>
 
-Run every FX benchmark command once with <roc-binary> and fail if the binary
-crashes or returns an unexpected exit code.
+Verify every FX benchmark command once with <roc-binary> and fail if the
+binary crashes or returns an unexpected exit code.
 EOF
 }
 
@@ -128,7 +128,7 @@ run_probe() {
         subcommand_suffix="_$roc_subcommand"
     fi
 
-    local probe_log="/tmp/benchmark_smoke_${filename%.roc}${subcommand_suffix}.log"
+    local probe_log="/tmp/benchmark_verify_${filename%.roc}${subcommand_suffix}.log"
 
     local -a cmd=("$ROC_BIN")
     if [ -n "$roc_subcommand" ]; then
@@ -136,7 +136,7 @@ run_probe() {
     fi
     cmd+=("$fx_file" "--no-cache")
 
-    echo "--- Smoke: $display_name ---"
+    echo "--- Verify: $display_name ---"
 
     set +e
     "${cmd[@]}" >"$probe_log" 2>&1
@@ -222,38 +222,38 @@ CHECK_BUILD_FILES=(
 )
 
 echo ""
-echo "=== Running benchmark smoke checks ==="
+echo "=== Verifying benchmark commands ==="
 
-SMOKE_FAILED=0
+VERIFY_FAILED=0
 
 for fx_file in "${FX_FILES[@]}"; do
     if ! run_probe "$fx_file" "" "0,137"; then
-        SMOKE_FAILED=1
+        VERIFY_FAILED=1
     fi
 done
 
 echo ""
-echo "=== Running roc check smoke checks ==="
+echo "=== Verifying roc check commands ==="
 for fx_file in "${CHECK_BUILD_FILES[@]}"; do
     allowed_codes=$(check_build_allowed_codes_for "$(basename "$fx_file")")
     if ! run_probe "$fx_file" "check" "$allowed_codes"; then
-        SMOKE_FAILED=1
+        VERIFY_FAILED=1
     fi
 done
 
 echo ""
-echo "=== Running roc build smoke checks ==="
+echo "=== Verifying roc build commands ==="
 for fx_file in "${CHECK_BUILD_FILES[@]}"; do
     allowed_codes=$(check_build_allowed_codes_for "$(basename "$fx_file")")
     if ! run_probe "$fx_file" "build" "$allowed_codes"; then
-        SMOKE_FAILED=1
+        VERIFY_FAILED=1
     fi
 done
 
 echo ""
-if [ "$SMOKE_FAILED" = "1" ]; then
-    echo "Benchmark smoke check failed"
+if [ "$VERIFY_FAILED" = "1" ]; then
+    echo "Benchmark verification failed"
     exit 1
 fi
 
-echo "Benchmark smoke check passed"
+echo "Benchmark verification passed"
