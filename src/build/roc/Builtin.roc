@@ -2598,6 +2598,15 @@ Builtin :: [].{
 			sub_checked : U8, U8 -> Try(U8, [Overflow])
 			sub_checked = |a, b| unsigned_sub_checked(a, b)
 
+			## Subtract the second [U8] from the first, saturating at the nearest bound on overflow.
+			## ```roc
+			## expect U8.minus_saturated(0, 1) == 0
+			##
+			## expect U8.minus_saturated(5, 3) == 2
+			## ```
+			minus_saturated : U8, U8 -> U8
+			minus_saturated = |a, b| unsigned_minus_saturated(0, a, b)
+
 			## Multiply two [U8] values.
 			## ```roc
 			## expect U8.times(4, 3) == 12
@@ -2606,6 +2615,15 @@ Builtin :: [].{
 
 			mul_checked : U8, U8 -> Try(U8, [Overflow])
 			mul_checked = |a, b| unsigned_mul_checked(U8.highest, 0, a, b)
+
+			## Multiply two [U8] values, saturating at the nearest bound on overflow.
+			## ```roc
+			## expect U8.times_saturated(U8.highest, 2) == U8.highest
+			##
+			## expect U8.times_saturated(4, 3) == 12
+			## ```
+			times_saturated : U8, U8 -> U8
+			times_saturated = |a, b| unsigned_times_saturated(U8.highest, 0, a, b)
 
 			## Divide the first [U8] by the second, discarding any remainder. Crashes if the second [U8] is zero.
 			## ```roc
@@ -3105,6 +3123,17 @@ Builtin :: [].{
 			sub_checked : I8, I8 -> Try(I8, [Overflow])
 			sub_checked = |a, b| signed_sub_checked(I8.lowest, I8.highest, 0, a, b)
 
+			## Subtract the second [I8] from the first, saturating at the nearest bound on overflow.
+			## ```roc
+			## expect I8.minus_saturated(I8.lowest, 1) == I8.lowest
+			##
+			## expect I8.minus_saturated(I8.highest, -1) == I8.highest
+			##
+			## expect I8.minus_saturated(5, 3) == 2
+			## ```
+			minus_saturated : I8, I8 -> I8
+			minus_saturated = |a, b| signed_minus_saturated(I8.lowest, I8.highest, 0, a, b)
+
 			## Multiply two [I8] values.
 			## ```roc
 			## expect I8.times(4, 3) == 12
@@ -3113,6 +3142,17 @@ Builtin :: [].{
 
 			mul_checked : I8, I8 -> Try(I8, [Overflow])
 			mul_checked = |a, b| signed_mul_checked(I8.lowest, I8.highest, 0, -1, a, b)
+
+			## Multiply two [I8] values, saturating at the nearest bound on overflow.
+			## ```roc
+			## expect I8.times_saturated(I8.highest, 2) == I8.highest
+			##
+			## expect I8.times_saturated(I8.lowest, 2) == I8.lowest
+			##
+			## expect I8.times_saturated(4, 3) == 12
+			## ```
+			times_saturated : I8, I8 -> I8
+			times_saturated = |a, b| signed_times_saturated(I8.lowest, I8.highest, 0, -1, a, b)
 
 			## Divide the first [I8] by the second, discarding any remainder. Crashes if the second [I8] is zero.
 			## ```roc
@@ -3655,6 +3695,15 @@ Builtin :: [].{
 			sub_checked : U16, U16 -> Try(U16, [Overflow])
 			sub_checked = |a, b| unsigned_sub_checked(a, b)
 
+			## Subtract the second [U16] from the first, saturating at the nearest bound on overflow.
+			## ```roc
+			## expect U16.minus_saturated(0, 1) == 0
+			##
+			## expect U16.minus_saturated(5, 3) == 2
+			## ```
+			minus_saturated : U16, U16 -> U16
+			minus_saturated = |a, b| unsigned_minus_saturated(0, a, b)
+
 			## Multiply two [U16] values.
 			## ```roc
 			## expect U16.times(4, 3) == 12
@@ -3663,6 +3712,15 @@ Builtin :: [].{
 
 			mul_checked : U16, U16 -> Try(U16, [Overflow])
 			mul_checked = |a, b| unsigned_mul_checked(U16.highest, 0, a, b)
+
+			## Multiply two [U16] values, saturating at the nearest bound on overflow.
+			## ```roc
+			## expect U16.times_saturated(U16.highest, 2) == U16.highest
+			##
+			## expect U16.times_saturated(4, 3) == 12
+			## ```
+			times_saturated : U16, U16 -> U16
+			times_saturated = |a, b| unsigned_times_saturated(U16.highest, 0, a, b)
 
 			## Divide the first [U16] by the second, discarding any remainder. Crashes if the second [U16] is zero.
 			## ```roc
@@ -4200,6 +4258,17 @@ Builtin :: [].{
 			sub_checked : I16, I16 -> Try(I16, [Overflow])
 			sub_checked = |a, b| signed_sub_checked(I16.lowest, I16.highest, 0, a, b)
 
+			## Subtract the second [I16] from the first, saturating at the nearest bound on overflow.
+			## ```roc
+			## expect I16.minus_saturated(I16.lowest, 1) == I16.lowest
+			##
+			## expect I16.minus_saturated(I16.highest, -1) == I16.highest
+			##
+			## expect I16.minus_saturated(5, 3) == 2
+			## ```
+			minus_saturated : I16, I16 -> I16
+			minus_saturated = |a, b| signed_minus_saturated(I16.lowest, I16.highest, 0, a, b)
+
 			## Multiply two [I16] values.
 			## ```roc
 			## expect I16.times(4, 3) == 12
@@ -4208,6 +4277,17 @@ Builtin :: [].{
 
 			mul_checked : I16, I16 -> Try(I16, [Overflow])
 			mul_checked = |a, b| signed_mul_checked(I16.lowest, I16.highest, 0, -1, a, b)
+
+			## Multiply two [I16] values, saturating at the nearest bound on overflow.
+			## ```roc
+			## expect I16.times_saturated(I16.highest, 2) == I16.highest
+			##
+			## expect I16.times_saturated(I16.lowest, 2) == I16.lowest
+			##
+			## expect I16.times_saturated(4, 3) == 12
+			## ```
+			times_saturated : I16, I16 -> I16
+			times_saturated = |a, b| signed_times_saturated(I16.lowest, I16.highest, 0, -1, a, b)
 
 			## Divide the first [I16] by the second, discarding any remainder. Crashes if the second [I16] is zero.
 			## ```roc
@@ -4767,6 +4847,15 @@ Builtin :: [].{
 			sub_checked : U32, U32 -> Try(U32, [Overflow])
 			sub_checked = |a, b| unsigned_sub_checked(a, b)
 
+			## Subtract the second [U32] from the first, saturating at the nearest bound on overflow.
+			## ```roc
+			## expect U32.minus_saturated(0, 1) == 0
+			##
+			## expect U32.minus_saturated(5, 3) == 2
+			## ```
+			minus_saturated : U32, U32 -> U32
+			minus_saturated = |a, b| unsigned_minus_saturated(0, a, b)
+
 			## Multiply two [U32] values.
 			## ```roc
 			## expect U32.times(4, 3) == 12
@@ -4775,6 +4864,15 @@ Builtin :: [].{
 
 			mul_checked : U32, U32 -> Try(U32, [Overflow])
 			mul_checked = |a, b| unsigned_mul_checked(U32.highest, 0, a, b)
+
+			## Multiply two [U32] values, saturating at the nearest bound on overflow.
+			## ```roc
+			## expect U32.times_saturated(U32.highest, 2) == U32.highest
+			##
+			## expect U32.times_saturated(4, 3) == 12
+			## ```
+			times_saturated : U32, U32 -> U32
+			times_saturated = |a, b| unsigned_times_saturated(U32.highest, 0, a, b)
 
 			## Divide the first [U32] by the second, discarding any remainder. Crashes if the second [U32] is zero.
 			## ```roc
@@ -5350,6 +5448,17 @@ Builtin :: [].{
 			sub_checked : I32, I32 -> Try(I32, [Overflow])
 			sub_checked = |a, b| signed_sub_checked(I32.lowest, I32.highest, 0, a, b)
 
+			## Subtract the second [I32] from the first, saturating at the nearest bound on overflow.
+			## ```roc
+			## expect I32.minus_saturated(I32.lowest, 1) == I32.lowest
+			##
+			## expect I32.minus_saturated(I32.highest, -1) == I32.highest
+			##
+			## expect I32.minus_saturated(5, 3) == 2
+			## ```
+			minus_saturated : I32, I32 -> I32
+			minus_saturated = |a, b| signed_minus_saturated(I32.lowest, I32.highest, 0, a, b)
+
 			## Multiply two [I32] values.
 			## ```roc
 			## expect I32.times(4, 3) == 12
@@ -5358,6 +5467,17 @@ Builtin :: [].{
 
 			mul_checked : I32, I32 -> Try(I32, [Overflow])
 			mul_checked = |a, b| signed_mul_checked(I32.lowest, I32.highest, 0, -1, a, b)
+
+			## Multiply two [I32] values, saturating at the nearest bound on overflow.
+			## ```roc
+			## expect I32.times_saturated(I32.highest, 2) == I32.highest
+			##
+			## expect I32.times_saturated(I32.lowest, 2) == I32.lowest
+			##
+			## expect I32.times_saturated(4, 3) == 12
+			## ```
+			times_saturated : I32, I32 -> I32
+			times_saturated = |a, b| signed_times_saturated(I32.lowest, I32.highest, 0, -1, a, b)
 
 			## Divide the first [I32] by the second, discarding any remainder. Crashes if the second [I32] is zero.
 			## ```roc
@@ -5937,6 +6057,15 @@ Builtin :: [].{
 			sub_checked : U64, U64 -> Try(U64, [Overflow])
 			sub_checked = |a, b| unsigned_sub_checked(a, b)
 
+			## Subtract the second [U64] from the first, saturating at the nearest bound on overflow.
+			## ```roc
+			## expect U64.minus_saturated(0, 1) == 0
+			##
+			## expect U64.minus_saturated(5, 3) == 2
+			## ```
+			minus_saturated : U64, U64 -> U64
+			minus_saturated = |a, b| unsigned_minus_saturated(0, a, b)
+
 			## Multiply two [U64] values.
 			## ```roc
 			## expect U64.times(4, 3) == 12
@@ -5945,6 +6074,15 @@ Builtin :: [].{
 
 			mul_checked : U64, U64 -> Try(U64, [Overflow])
 			mul_checked = |a, b| unsigned_mul_checked(U64.highest, 0, a, b)
+
+			## Multiply two [U64] values, saturating at the nearest bound on overflow.
+			## ```roc
+			## expect U64.times_saturated(U64.highest, 2) == U64.highest
+			##
+			## expect U64.times_saturated(4, 3) == 12
+			## ```
+			times_saturated : U64, U64 -> U64
+			times_saturated = |a, b| unsigned_times_saturated(U64.highest, 0, a, b)
 
 			## Divide the first [U64] by the second, discarding any remainder. Crashes if the second [U64] is zero.
 			## ```roc
@@ -6565,6 +6703,17 @@ Builtin :: [].{
 			sub_checked : I64, I64 -> Try(I64, [Overflow])
 			sub_checked = |a, b| signed_sub_checked(I64.lowest, I64.highest, 0, a, b)
 
+			## Subtract the second [I64] from the first, saturating at the nearest bound on overflow.
+			## ```roc
+			## expect I64.minus_saturated(I64.lowest, 1) == I64.lowest
+			##
+			## expect I64.minus_saturated(I64.highest, -1) == I64.highest
+			##
+			## expect I64.minus_saturated(5, 3) == 2
+			## ```
+			minus_saturated : I64, I64 -> I64
+			minus_saturated = |a, b| signed_minus_saturated(I64.lowest, I64.highest, 0, a, b)
+
 			## Multiply two [I64] values.
 			## ```roc
 			## expect I64.times(4, 3) == 12
@@ -6573,6 +6722,17 @@ Builtin :: [].{
 
 			mul_checked : I64, I64 -> Try(I64, [Overflow])
 			mul_checked = |a, b| signed_mul_checked(I64.lowest, I64.highest, 0, -1, a, b)
+
+			## Multiply two [I64] values, saturating at the nearest bound on overflow.
+			## ```roc
+			## expect I64.times_saturated(I64.highest, 2) == I64.highest
+			##
+			## expect I64.times_saturated(I64.lowest, 2) == I64.lowest
+			##
+			## expect I64.times_saturated(4, 3) == 12
+			## ```
+			times_saturated : I64, I64 -> I64
+			times_saturated = |a, b| signed_times_saturated(I64.lowest, I64.highest, 0, -1, a, b)
 
 			## Divide the first [I64] by the second, discarding any remainder. Crashes if the second [I64] is zero.
 			## ```roc
@@ -7177,6 +7337,15 @@ Builtin :: [].{
 			sub_checked : U128, U128 -> Try(U128, [Overflow])
 			sub_checked = |a, b| unsigned_sub_checked(a, b)
 
+			## Subtract the second [U128] from the first, saturating at the nearest bound on overflow.
+			## ```roc
+			## expect U128.minus_saturated(0, 1) == 0
+			##
+			## expect U128.minus_saturated(5, 3) == 2
+			## ```
+			minus_saturated : U128, U128 -> U128
+			minus_saturated = |a, b| unsigned_minus_saturated(0, a, b)
+
 			## Multiply two [U128] values.
 			## ```roc
 			## expect U128.times(4, 3) == 12
@@ -7185,6 +7354,15 @@ Builtin :: [].{
 
 			mul_checked : U128, U128 -> Try(U128, [Overflow])
 			mul_checked = |a, b| unsigned_mul_checked(U128.highest, 0, a, b)
+
+			## Multiply two [U128] values, saturating at the nearest bound on overflow.
+			## ```roc
+			## expect U128.times_saturated(U128.highest, 2) == U128.highest
+			##
+			## expect U128.times_saturated(4, 3) == 12
+			## ```
+			times_saturated : U128, U128 -> U128
+			times_saturated = |a, b| unsigned_times_saturated(U128.highest, 0, a, b)
 
 			## Divide the first [U128] by the second, discarding any remainder. Crashes if the second [U128] is zero.
 			## ```roc
@@ -7850,6 +8028,17 @@ Builtin :: [].{
 			sub_checked : I128, I128 -> Try(I128, [Overflow])
 			sub_checked = |a, b| signed_sub_checked(I128.lowest, I128.highest, 0, a, b)
 
+			## Subtract the second [I128] from the first, saturating at the nearest bound on overflow.
+			## ```roc
+			## expect I128.minus_saturated(I128.lowest, 1) == I128.lowest
+			##
+			## expect I128.minus_saturated(I128.highest, -1) == I128.highest
+			##
+			## expect I128.minus_saturated(5, 3) == 2
+			## ```
+			minus_saturated : I128, I128 -> I128
+			minus_saturated = |a, b| signed_minus_saturated(I128.lowest, I128.highest, 0, a, b)
+
 			## Multiply two [I128] values.
 			## ```roc
 			## expect I128.times(4, 3) == 12
@@ -7858,6 +8047,17 @@ Builtin :: [].{
 
 			mul_checked : I128, I128 -> Try(I128, [Overflow])
 			mul_checked = |a, b| signed_mul_checked(I128.lowest, I128.highest, 0, -1, a, b)
+
+			## Multiply two [I128] values, saturating at the nearest bound on overflow.
+			## ```roc
+			## expect I128.times_saturated(I128.highest, 2) == I128.highest
+			##
+			## expect I128.times_saturated(I128.lowest, 2) == I128.lowest
+			##
+			## expect I128.times_saturated(4, 3) == 12
+			## ```
+			times_saturated : I128, I128 -> I128
+			times_saturated = |a, b| signed_times_saturated(I128.lowest, I128.highest, 0, -1, a, b)
 
 			## Divide the first [I128] by the second, discarding any remainder. Crashes if the second [I128] is zero.
 			## ```roc
@@ -8510,11 +8710,33 @@ Builtin :: [].{
 			sub_checked : Dec, Dec -> Try(Dec, [Overflow])
 			sub_checked = |a, b| signed_sub_checked(Dec.lowest, Dec.highest, 0.0, a, b)
 
+			## Subtract the second [Dec] from the first, saturating at the nearest bound on overflow.
+			## ```roc
+			## expect Dec.minus_saturated(Dec.lowest, 1.0) == Dec.lowest
+			##
+			## expect Dec.minus_saturated(Dec.highest, -1.0) == Dec.highest
+			##
+			## expect Dec.minus_saturated(5.0, 3.5) == 1.5
+			## ```
+			minus_saturated : Dec, Dec -> Dec
+			minus_saturated = |a, b| signed_minus_saturated(Dec.lowest, Dec.highest, 0.0, a, b)
+
 			## Multiply two [Dec] values.
 			## ```roc
 			## expect Dec.times(2.5, 4.0) == 10.0
 			## ```
 			times : Dec, Dec -> Dec
+
+			## Multiply two [Dec] values, saturating at the nearest bound on overflow.
+			## ```roc
+			## expect Dec.times_saturated(Dec.highest, 2.0) == Dec.highest
+			##
+			## expect Dec.times_saturated(Dec.lowest, 2.0) == Dec.lowest
+			##
+			## expect Dec.times_saturated(2.5, 4.0) == 10.0
+			## ```
+			times_saturated : Dec, Dec -> Dec
+			times_saturated = |a, b| signed_times_saturated(Dec.lowest, Dec.highest, 0.0, -1.0, a, b)
 
 			## Divide the first [Dec] by the second. Crashes if the second [Dec]
 			## is zero.
@@ -10169,6 +10391,62 @@ signed_div_checked = |lowest, zero, neg_one, a, b|
 	} else {
 		Ok(a / b)
 	}
+
+unsigned_minus_saturated : item, item, item -> item
+	where [item.is_lt : item, item -> Bool, item.minus : item, item -> item]
+unsigned_minus_saturated = |zero, a, b|
+	if a < b {
+		zero
+	} else {
+		a - b
+	}
+
+signed_minus_saturated : item, item, item, item, item -> item
+	where [item.is_gt : item, item -> Bool, item.is_lt : item, item -> Bool, item.plus : item, item -> item, item.minus : item, item -> item]
+signed_minus_saturated = |lowest, highest, zero, a, b|
+	match signed_sub_checked(lowest, highest, zero, a, b) {
+		Ok(result) => result
+		Err(Overflow) =>
+			if b > zero {
+				lowest
+			} else {
+				highest
+			}
+		}
+
+unsigned_times_saturated : item, item, item, item -> item
+	where [item.is_eq : item, item -> Bool, item.is_gt : item, item -> Bool, item.div_by : item, item -> item, item.times : item, item -> item]
+unsigned_times_saturated = |highest, zero, a, b|
+	match unsigned_mul_checked(highest, zero, a, b) {
+		Ok(result) => result
+		Err(Overflow) => highest
+	}
+
+signed_times_saturated : item, item, item, item, item, item -> item
+	where [
+		item.is_gt : item, item -> Bool,
+		item.is_lt : item, item -> Bool,
+		item.is_eq : item, item -> Bool,
+		item.minus : item, item -> item,
+		item.times : item, item -> item,
+		item.div_trunc_by : item, item -> item,
+	]
+signed_times_saturated = |lowest, highest, zero, neg_one, a, b|
+	match signed_mul_checked(lowest, highest, zero, neg_one, a, b) {
+		Ok(result) => result
+		Err(Overflow) =>
+			if a < zero {
+				if b > zero {
+					lowest
+				} else {
+					highest
+				}
+			} else if b < zero {
+				lowest
+			} else {
+				highest
+			}
+		}
 
 unsigned_count_leading_zero_bits : U8, item, item, item -> U8
 	where [item.is_eq : item, item -> Bool, item.div_by : item, item -> item]
