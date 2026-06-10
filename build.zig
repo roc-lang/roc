@@ -4451,6 +4451,28 @@ fn addMainExe(
     builtins_obj.bundle_compiler_rt = false;
     configureBackend(builtins_obj, target);
 
+    // Extern-symbol-mode builtins object: same builtins, but host operations
+    // go through linker-resolved symbols (the symbol ABI) instead of RocOps.
+    const builtins_extern_obj = b.addObject(.{
+        .name = "roc_builtins_extern",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/builtins/extern_static_lib.zig"),
+            .target = target,
+            .optimize = optimize,
+            .strip = strip,
+            .omit_frame_pointer = omit_frame_pointer,
+            .pic = true,
+        }),
+    });
+    builtins_extern_obj.root_module.addImport("tracy", b.addModule("tracy_stub_extern", .{
+        .root_source_file = b.path("src/builtins/tracy_stub.zig"),
+    }));
+    builtins_extern_obj.root_module.addImport("shim_io", b.addModule("shim_io_extern", .{
+        .root_source_file = b.path("src/shim_io.zig"),
+    }));
+    builtins_extern_obj.bundle_compiler_rt = false;
+    configureBackend(builtins_extern_obj, target);
+
     // Create shim static library at build time - fully static without libc
     //
     // NOTE we do NOT link libC here to avoid dynamic dependency on libC
@@ -4495,6 +4517,11 @@ fn addMainExe(
     const host_builtins_filename = if (target.result.os.tag == .windows) "roc_builtins.obj" else "roc_builtins.o";
     copy_builtins.addCopyFileToSource(builtins_obj.getEmittedBin(), b.pathJoin(&.{ "src/cli", host_builtins_filename }));
     exe.step.dependOn(&copy_builtins.step);
+
+    const copy_builtins_extern = b.addUpdateSourceFiles();
+    const host_builtins_extern_filename = if (target.result.os.tag == .windows) "roc_builtins_extern.obj" else "roc_builtins_extern.o";
+    copy_builtins_extern.addCopyFileToSource(builtins_extern_obj.getEmittedBin(), b.pathJoin(&.{ "src/cli", host_builtins_extern_filename }));
+    exe.step.dependOn(&copy_builtins_extern.step);
 
     // Add tracy support (required by parse/can/check modules)
     add_tracy(b, roc_modules.build_options, shim_lib, b.graph.host, false, flag_enable_tracy);
@@ -4550,6 +4577,37 @@ fn addMainExe(
             b.pathJoin(&.{ "src/cli/targets", cross_target.name, builtins_ext }),
         );
         exe.step.dependOn(&copy_cross_builtins.step);
+
+        // Extern-symbol-mode builtins object for this target (the symbol ABI).
+        const cross_builtins_extern_obj = b.addObject(.{
+            .name = b.fmt("roc_builtins_extern_{s}", .{cross_target.name}),
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/builtins/extern_static_lib.zig"),
+                .target = cross_resolved_target,
+                .optimize = optimize,
+                .strip = strip,
+                .omit_frame_pointer = omit_frame_pointer,
+                .pic = true,
+            }),
+        });
+        cross_builtins_extern_obj.root_module.addImport("tracy", b.addModule(
+            b.fmt("tracy_stub_extern_{s}", .{cross_target.name}),
+            .{ .root_source_file = b.path("src/builtins/tracy_stub.zig") },
+        ));
+        cross_builtins_extern_obj.root_module.addImport("shim_io", b.addModule(
+            b.fmt("shim_io_extern_{s}", .{cross_target.name}),
+            .{ .root_source_file = b.path("src/shim_io.zig") },
+        ));
+        cross_builtins_extern_obj.bundle_compiler_rt = false;
+        configureBackend(cross_builtins_extern_obj, cross_resolved_target);
+
+        const builtins_extern_ext = if (cross_target.query.os_tag == .windows) "roc_builtins_extern.obj" else "roc_builtins_extern.o";
+        const copy_cross_builtins_extern = b.addUpdateSourceFiles();
+        copy_cross_builtins_extern.addCopyFileToSource(
+            cross_builtins_extern_obj.getEmittedBin(),
+            b.pathJoin(&.{ "src/cli/targets", cross_target.name, builtins_extern_ext }),
+        );
+        exe.step.dependOn(&copy_cross_builtins_extern.step);
     }
 
     const config = b.addOptions();

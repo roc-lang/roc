@@ -187,6 +187,25 @@ const BuiltinsObjects = struct {
     const x64mac = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64mac/roc_builtins.o");
     const arm64mac = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64mac/roc_builtins.o");
 
+    /// Extern-symbol-mode builtins: host operations are linker-resolved
+    /// symbols (the symbol ABI) instead of RocOps vtable calls.
+    const native_extern = if (builtin.is_test)
+        &[_]u8{}
+    else if (builtin.os.tag == .windows)
+        @embedFile("roc_builtins_extern.obj")
+    else
+        @embedFile("roc_builtins_extern.o");
+
+    const x64musl_extern = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64musl/roc_builtins_extern.o");
+    const arm64musl_extern = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64musl/roc_builtins_extern.o");
+    const x64glibc_extern = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64glibc/roc_builtins_extern.o");
+    const arm64glibc_extern = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64glibc/roc_builtins_extern.o");
+    const wasm32_extern = if (builtin.is_test) &[_]u8{} else @embedFile("targets/wasm32/roc_builtins_extern.o");
+    const x64win_extern = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64win/roc_builtins_extern.obj");
+    const arm64win_extern = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64win/roc_builtins_extern.obj");
+    const x64mac_extern = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64mac/roc_builtins_extern.o");
+    const arm64mac_extern = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64mac/roc_builtins_extern.o");
+
     /// Get the appropriate builtins object bytes for the given target
     pub fn forTarget(target: RocTarget) []const u8 {
         return switch (target) {
@@ -204,11 +223,36 @@ const BuiltinsObjects = struct {
         };
     }
 
+    /// Get the extern-symbol-mode builtins object bytes for the given target
+    pub fn forTargetExtern(target: RocTarget) []const u8 {
+        return switch (target) {
+            .x64musl => x64musl_extern,
+            .arm64musl => arm64musl_extern,
+            .x64glibc => x64glibc_extern,
+            .arm64glibc => arm64glibc_extern,
+            .wasm32 => wasm32_extern,
+            .x64win => x64win_extern,
+            .arm64win => arm64win_extern,
+            .x64mac => x64mac_extern,
+            .arm64mac => arm64mac_extern,
+            // Fallback for other targets (will use native, may not work for cross-compilation)
+            else => native_extern,
+        };
+    }
+
     /// Get the filename for builtins object on given target
     pub fn filename(target: RocTarget) []const u8 {
         return switch (target.toOsTag()) {
             .windows => "roc_builtins.obj",
             else => "roc_builtins.o",
+        };
+    }
+
+    /// Get the filename for the extern-symbol-mode builtins object on given target
+    pub fn filenameExtern(target: RocTarget) []const u8 {
+        return switch (target.toOsTag()) {
+            .windows => "roc_builtins_extern.obj",
+            else => "roc_builtins_extern.o",
         };
     }
 };
