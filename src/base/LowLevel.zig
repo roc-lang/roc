@@ -425,13 +425,30 @@ pub const LowLevel = enum {
         /// as borrowed, it emits no retain for the result and instead keeps
         /// the lender argument live across every use of the result.
         result_borrows_args: u64 = 0,
+        /// Argument positions whose allocations the result may hold handles
+        /// into even though unit accounting says nothing: the op returns a
+        /// fresh owned outer value whose interior shares the argument's
+        /// allocation (seamless slices, byte/string reinterpretations).
+        /// Host-visibility analysis links the result to these arguments in
+        /// both directions.
+        result_shares_args: u64 = 0,
+        /// The result's outermost allocation has count 1 on return. Runtime
+        /// uniqueness-checking ops qualify on both of their paths (in place
+        /// keeps an allocation whose count was already 1, the copy path
+        /// returns a fresh one), as do ops that always allocate their
+        /// outermost result — interior sharing described by
+        /// `result_shares_args` is irrelevant to the outermost count.
+        result_unique: bool = false,
 
         pub fn none() RcEffect {
             return .{};
         }
 
         pub fn allocates() RcEffect {
-            return .{ .may_allocate = true };
+            return .{
+                .may_allocate = true,
+                .result_unique = true,
+            };
         }
 
         pub fn allocatesRetainingArgs(mask: u64) RcEffect {
@@ -439,6 +456,7 @@ pub const LowLevel = enum {
                 .may_allocate = true,
                 .may_retain_or_release = mask != 0,
                 .retain_args = mask,
+                .result_unique = true,
             };
         }
 
@@ -447,6 +465,7 @@ pub const LowLevel = enum {
                 .may_allocate = true,
                 .may_retain_or_release = mask != 0,
                 .consume_args = mask,
+                .result_unique = true,
             };
         }
 
@@ -483,6 +502,7 @@ pub const LowLevel = enum {
                 .may_runtime_uniqueness_check_args = mask,
                 .consume_args = mask,
                 .result_aliases_consumed_args = mask,
+                .result_unique = true,
             };
         }
 
@@ -494,6 +514,32 @@ pub const LowLevel = enum {
                 .consume_args = runtime_mask,
                 .result_aliases_consumed_args = runtime_mask,
                 .retain_args = retain_mask,
+                .result_unique = true,
+            };
+        }
+
+        pub fn retainsOrReleasesSharingArgs(mask: u64) RcEffect {
+            return .{
+                .may_retain_or_release = true,
+                .result_shares_args = mask,
+                .result_unique = true,
+            };
+        }
+
+        pub fn allocatesSharingArgs(mask: u64) RcEffect {
+            return .{
+                .may_allocate = true,
+                .result_shares_args = mask,
+                .result_unique = true,
+            };
+        }
+
+        pub fn allocatesAndRetainsOrReleasesSharingArgs(mask: u64) RcEffect {
+            return .{
+                .may_allocate = true,
+                .may_retain_or_release = true,
+                .result_shares_args = mask,
+                .result_unique = true,
             };
         }
 
@@ -511,6 +557,7 @@ pub const LowLevel = enum {
                 .consume_args = consume_mask,
                 .result_aliases_consumed_args = consume_mask,
                 .retain_args = retain_mask,
+                .result_unique = true,
             };
         }
     };
@@ -532,9 +579,9 @@ pub const LowLevel = enum {
             .str_drop_prefix,
             .str_drop_suffix,
             .str_from_utf8,
-            => RcEffect.retainsOrReleases(),
+            => RcEffect.retainsOrReleasesSharingArgs(argMask(&.{0})),
 
-            .str_to_utf8 => RcEffect.allocatesAndRetainsOrReleases(),
+            .str_to_utf8 => RcEffect.allocatesAndRetainsOrReleasesSharingArgs(argMask(&.{0})),
 
             .list_drop_at,
             .list_sublist,
@@ -564,9 +611,10 @@ pub const LowLevel = enum {
             .list_get_unsafe,
             => RcEffect.retainsResultBorrowingArgs(argMask(&.{0})),
 
+            .str_split_on => RcEffect.allocatesSharingArgs(argMask(&.{0})),
+
             .str_repeat,
             .str_from_utf8_lossy,
-            .str_split_on,
             .str_with_capacity,
             .str_inspect,
             .u8_to_str,
