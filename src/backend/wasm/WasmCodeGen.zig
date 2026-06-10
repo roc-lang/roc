@@ -9918,6 +9918,112 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             }
         },
 
+        .ptr_alloca => {
+            // ptr_alloca: () -> Ptr(T). Reserve a zeroed shadow-stack slot for T
+            // and leave its i32 address on the stack. Target layout is ptr(T).
+            const ls = self.getLayoutStore();
+            const elem_idx = ls.getLayout(ll.ret_layout).getIdx();
+            const elem_size = try self.layoutByteSize(elem_idx);
+            const elem_align: u32 = @intCast(@max(ls.layoutSizeAlign(ls.getLayout(elem_idx)).alignment.toByteUnits(), 1));
+
+            const slot_offset = try self.allocStackMemory(@max(elem_size, 1), @max(elem_align, 4));
+            const slot_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            try self.emitFpOffset(slot_offset);
+            try self.emitLocalSet(slot_local);
+            if (elem_size > 0) {
+                try self.emitZeroInit(slot_local, elem_size);
+            }
+            try self.emitLocalGet(slot_local);
+        },
+        .box_alloc_zeroed => {
+            // box_alloc_zeroed: () -> Box(T). Heap cell with a zero-filled payload
+            // (same allocation shape as box_box; only the payload copy differs).
+            const ls = self.getLayoutStore();
+            const ret_layout = ls.getLayout(ll.ret_layout);
+
+            if (ret_layout.tag == .box_of_zst) {
+                self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                WasmModule.leb128WriteI32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
+            } else {
+                const box_abi = ls.builtinBoxAbi(ll.ret_layout);
+                const elem_size = box_abi.elem_size;
+                if (elem_size == 0) {
+                    self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                    WasmModule.leb128WriteI32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
+                } else {
+                    try self.emitHeapAllocConst(elem_size, box_abi.elem_alignment);
+                    const box_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+                    try self.emitLocalSet(box_ptr);
+                    try self.emitZeroInit(box_ptr, elem_size);
+                    try self.emitLocalGet(box_ptr);
+                }
+            }
+        },
+        .ptr_store => {
+            // ptr_store: (Ptr(T), T) -> {}. Copy sizeOf(T) bytes into *ptr.
+            // Result is unit; leave a dummy i32 0 (zst convention).
+            const value_size = try self.layoutByteSize(self.procLocalLayoutIdx(args[1]));
+            const value_vt = try self.procLocalValType(args[1]);
+
+            if (value_size == 0) {
+                _ = try self.emitProcLocal(args[0]);
+                self.currentCode().append(self.allocator, Op.drop) catch return error.OutOfMemory;
+            } else {
+                try self.emitProcLocal(args[0]);
+                const ptr_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+                try self.emitLocalSet(ptr_local);
+
+                try self.emitProcLocal(args[1]);
+                if (value_vt == .i32 and value_size > 4) {
+                    // Composite value: arg is an i32 pointer into linear memory.
+                    const src_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+                    try self.emitLocalSet(src_local);
+                    try self.emitMemCopy(ptr_local, 0, src_local, value_size);
+                } else {
+                    try self.emitStoreToMemSized(ptr_local, 0, value_vt, value_size);
+                }
+            }
+            self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
+        },
+        .ptr_load => {
+            // ptr_load: (Ptr(T)) -> T. Copy sizeOf(T) bytes out of *ptr.
+            // Same shape as erased_capture_load above.
+            const result_size = try self.layoutByteSize(ll.ret_layout);
+            const result_vt = try self.resolveValType(ll.ret_layout);
+
+            if (result_size == 0) {
+                _ = try self.emitProcLocal(args[0]);
+                self.currentCode().append(self.allocator, Op.drop) catch return error.OutOfMemory;
+                self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                WasmModule.leb128WriteI32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
+            } else {
+                try self.emitProcLocal(args[0]);
+                const src_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+                try self.emitLocalSet(src_ptr);
+
+                if (result_vt == .i32 and result_size > 4) {
+                    const ls = self.getLayoutStore();
+                    const result_align: u32 = @intCast(@max(ls.layoutSizeAlign(ls.getLayout(ll.ret_layout)).alignment.toByteUnits(), 1));
+                    const dst_offset = try self.allocStackMemory(result_size, result_align);
+                    const dst_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+                    try self.emitFpOffset(dst_offset);
+                    try self.emitLocalSet(dst_local);
+
+                    try self.emitMemCopy(dst_local, 0, src_ptr, result_size);
+                    try self.emitLocalGet(dst_local);
+                } else {
+                    try self.emitLocalGet(src_ptr);
+                    try self.emitLoadOpSized(result_vt, result_size, 0);
+                    try self.emitCanonicalizeScalarForLayout(ll.ret_layout);
+                }
+            }
+        },
+        .ptr_cast => {
+            // ptr_cast: identity bits — both sides are i32 pointers.
+            try self.emitProcLocal(args[0]);
+        },
+
         // Compare — returns Ordering enum (EQ=0, GT=1, LT=2)
         .compare => {
             try self.emitProcLocal(args[0]);

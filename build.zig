@@ -3422,6 +3422,51 @@ pub fn build(b: *std.Build) void {
     );
     run_lir_inline_test_step.dependOn(&run_lir_inline_test.step);
 
+    const trmc_lir_test = b.addTest(.{
+        .name = "trmc_lir_test",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/eval/test/trmc_lir_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+        .filters = test_filters,
+    });
+    roc_modules.addAll(trmc_lir_test);
+    trmc_lir_test.root_module.addImport("compiled_builtins", compiled_builtins_module);
+    trmc_lir_test.step.dependOn(&write_compiled_builtins.step);
+    try addLlvmSupportToStep(
+        b,
+        trmc_lir_test,
+        target,
+        use_system_llvm,
+        user_llvm_path,
+        roc_modules,
+        llvm_codegen_module,
+        llvm_embedded_module,
+        zstd,
+    );
+    if (trmc_lir_test.root_module.resolved_target.?.result.os.tag != .windows or
+        trmc_lir_test.root_module.resolved_target.?.result.abi != .msvc)
+    {
+        trmc_lir_test.root_module.link_libcpp = true;
+    }
+    add_tracy(b, roc_modules.build_options, trmc_lir_test, target, true, flag_enable_tracy);
+    build_test_zig_step.dependOn(&trmc_lir_test.step);
+
+    const run_trmc_lir_test = b.addRunArtifact(trmc_lir_test);
+    if (run_args.len != 0) {
+        run_trmc_lir_test.addArgs(run_args);
+    }
+
+    tests_summary.addRun(&run_trmc_lir_test.step);
+
+    const run_trmc_lir_test_step = b.step(
+        "run-test-zig-trmc-lir",
+        "Run TRMC LIR Zig tests",
+    );
+    run_trmc_lir_test_step.dependOn(&run_trmc_lir_test.step);
+
     // Add CLI test
     const enable_cli_tests = b.option(bool, "cli-tests", "Enable cli tests") orelse true;
     if (enable_cli_tests) {

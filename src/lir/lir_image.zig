@@ -19,7 +19,9 @@ const Program = core.Program;
 /// Public `MAGIC` declaration.
 pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 /// Public `FORMAT_VERSION` declaration.
-pub const FORMAT_VERSION: u32 = 2;
+/// v3: added LayoutTag.ptr and the TRMC LowLevel ops (ptr_alloca,
+/// box_alloc_zeroed, ptr_store, ptr_load, ptr_cast).
+pub const FORMAT_VERSION: u32 = 3;
 
 /// Public `ImageError` declaration.
 pub const ImageError = error{
