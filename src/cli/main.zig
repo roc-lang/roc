@@ -928,7 +928,8 @@ fn generatePlatformHostShim(
     cache_dir: []const u8,
     entrypoint_names: []const []const u8,
     target: RocTarget,
-    lir_image: ?[]const u8,
+    lir_image: []const u8,
+    embed_image: bool,
     debug: bool,
 ) (Allocator.Error || error{ CliError, LLVMCompilationFailed })!?[]const u8 {
     // Check if LLVM is available (this is a compile-time check)
@@ -937,50 +938,75 @@ fn generatePlatformHostShim(
         return null;
     }
 
-    const std_zig_llvm = @import("std").zig.llvm;
-    const Builder = std_zig_llvm.Builder;
-
     // Create std.Target for the target RocTarget.
-    // This is needed so the LLVM Builder generates correct pointer sizes.
     const std_target = stdTargetForLlvmBuild(ctx, target) catch |err| {
         return ctx.fail(.{ .shim_generation_failed = .{ .err = err } });
     };
     const llvm_cpu = llvmCpuNameForTarget(std_target);
     const llvm_features = try llvmFeatureStringForTarget(ctx.arena, std_target);
 
-    // Create LLVM Builder with the correct target
-    var llvm_builder = Builder.init(.{
-        .allocator = ctx.gpa,
-        .name = "roc_platform_shim",
-        .target = &std_target,
-        .triple = target.toTriple(),
-    }) catch |err| {
+    // View the LIR image to derive the entrypoint ABI, the hosted dispatch
+    // table, and the layout store the C-ABI lowering needs.
+    if (lir_image.len < @sizeOf(SharedMemoryAllocator.Header) + @sizeOf(lir.LirImage.Header)) {
+        return ctx.fail(.{ .shim_generation_failed = .{ .err = error.InvalidLirImage } });
+    }
+    const image_header: *const lir.LirImage.Header = @ptrCast(@alignCast(lir_image.ptr + @sizeOf(SharedMemoryAllocator.Header)));
+    const view = lir.LirImage.viewMappedImageWithAllocator(image_header, lir_image.ptr, lir_image.len, ctx.arena) catch |err| {
         return ctx.fail(.{ .shim_generation_failed = .{ .err = err } });
     };
-    defer llvm_builder.deinit();
 
-    // Create entrypoints array from the provided names
-    var entrypoints = try std.array_list.Managed(platform_host_shim.EntryPoint).initCapacity(ctx.arena, 8);
-
-    for (entrypoint_names, 0..) |name, idx| {
-        try entrypoints.append(.{ .name = name, .idx = @intCast(idx) });
+    if (view.platform_entrypoints.len != entrypoint_names.len) {
+        return ctx.fail(.{ .shim_generation_failed = .{ .err = error.InvalidLirImage } });
     }
 
-    // Create the complete platform shim.
-    // Note: Symbol names include platform-specific prefixes (underscore for macOS).
-    if (lir_image) |image| {
-        platform_host_shim.createEmbeddedInterpreterShim(&llvm_builder, entrypoints.items, target, image) catch |err| {
-            return ctx.fail(.{ .shim_generation_failed = .{ .err = err } });
-        };
-    } else {
-        platform_host_shim.createInterpreterShim(&llvm_builder, entrypoints.items, target) catch |err| {
-            return ctx.fail(.{ .shim_generation_failed = .{ .err = err } });
+    var shim_entrypoints = try ctx.arena.alloc(llvm_codegen.MonoLlvmCodeGen.ShimEntrypoint, view.platform_entrypoints.len);
+    for (view.platform_entrypoints) |entrypoint| {
+        const spec = view.store.getProcSpec(entrypoint.root_proc);
+        const arg_locals = view.store.getLocalSpan(spec.args);
+        const arg_layouts = try ctx.arena.alloc(layout.Idx, arg_locals.len);
+        for (arg_locals, 0..) |local_id, i| {
+            arg_layouts[i] = view.store.getLocal(local_id).layout_idx;
+        }
+        shim_entrypoints[entrypoint.ordinal] = .{
+            .symbol_name = entrypoint_names[entrypoint.ordinal],
+            .entry_index = entrypoint.ordinal,
+            .arg_layouts = arg_layouts,
+            .ret_layout = spec.ret_layout,
         };
     }
 
-    // Generate paths for temporary files
+    // Hosted dispatch table symbols, ordered by dispatch index.
+    var hosted_count: usize = 0;
+    for (view.store.getProcSpecs()) |spec| {
+        if (spec.hosted != null) hosted_count += 1;
+    }
+    const hosted_symbols = try ctx.arena.alloc([]const u8, hosted_count);
+    for (view.store.getProcSpecs()) |spec| {
+        const hosted = spec.hosted orelse continue;
+        if (hosted.dispatch_index >= hosted_symbols.len) {
+            return ctx.fail(.{ .shim_generation_failed = .{ .err = error.InvalidLirImage } });
+        }
+        hosted_symbols[hosted.dispatch_index] = view.store.getString(hosted.symbol);
+    }
+
+    var codegen = llvm_codegen.MonoLlvmCodeGen.initForLinkedObject(ctx.gpa, &view.store, std_target);
+    codegen.layout_store = &view.layouts;
+    defer codegen.deinit();
+
+    var bitcode_result = codegen.generateInterpreterShimModule(
+        "roc_platform_shim",
+        shim_entrypoints,
+        hosted_symbols,
+        if (embed_image) lir_image else null,
+    ) catch |err| {
+        return ctx.fail(.{ .shim_generation_failed = .{ .err = err } });
+    };
+    defer bitcode_result.deinit();
+
+    // The image hash covers the entrypoint ABI and hosted table exactly.
     var hash = std.hash.Crc32.init();
-    if (lir_image) |image| hash.update(image);
+    hash.update(lir_image);
+    hash.update(if (embed_image) "embed" else "dispatch");
     for (entrypoint_names) |name| {
         hash.update(name);
         hash.update(&[_]u8{0});
@@ -1007,25 +1033,13 @@ fn generatePlatformHostShim(
         return ctx.fail(.{ .shim_generation_failed = .{ .err = err } });
     };
 
-    // Generate bitcode first
-    const producer = Builder.Producer{
-        .name = "Roc Platform Host Shim Generator",
-        .version = .{ .major = 1, .minor = 0, .patch = 0 },
-    };
-
-    const bitcode = llvm_builder.toBitcode(ctx.gpa, producer) catch |err| {
-        return ctx.fail(.{ .object_compilation_failed = .{ .path = bitcode_path, .err = err } });
-    };
-    defer ctx.gpa.free(bitcode);
-
     // Write bitcode to file
     const bc_file = std.Io.Dir.cwd().createFile(ctx.io.std_io, bitcode_path, .{}) catch |err| {
         return ctx.fail(.{ .file_write_failed = .{ .path = bitcode_path, .err = err } });
     };
     defer bc_file.close(ctx.io.std_io);
 
-    // Convert u32 array to bytes for writing
-    const bytes = std.mem.sliceAsBytes(bitcode);
+    const bytes = std.mem.sliceAsBytes(bitcode_result.bitcode);
     bc_file.writeStreamingAll(ctx.io.std_io, bytes) catch |err| {
         return ctx.fail(.{ .file_write_failed = .{ .path = bitcode_path, .err = err } });
     };
@@ -1627,7 +1641,8 @@ fn rocRun(ctx: *CliCtx, args: cli_args.RunArgs) anyerror!void {
         // Generate platform host shim using the published checked-artifact entrypoints
         // Use temp dir to avoid race conditions when multiple processes run in parallel
         // Auto-enable debug when roc is built in debug mode (no explicit --debug flag for roc run)
-        const platform_shim_path = try generatePlatformHostShim(ctx, temp_dir_path, entrypoint_names, selected_target, null, enable_debug);
+        const shm_image_bytes = @as([*]const u8, @ptrCast(shm_handle.ptr))[0..shm_handle.size];
+        const platform_shim_path = try generatePlatformHostShim(ctx, temp_dir_path, entrypoint_names, selected_target, shm_image_bytes, false, enable_debug);
 
         // Link the host.a with our shim to create the interpreter executable using our linker
         // Try LLD first, then clang if LLVM is not available.
@@ -5308,6 +5323,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
         entrypoint_names,
         target,
         lir_image,
+        true,
         enable_debug,
     );
 

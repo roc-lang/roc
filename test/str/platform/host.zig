@@ -103,9 +103,60 @@ fn rocCrashedFn(ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void 
     @panic(message);
 }
 
-// External symbol provided by the Roc runtime object file
-// Follows RocCall ABI: ops, ret_ptr, then argument pointers
-extern fn roc_process_string(ops: *RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
+// The app's entrypoint, exported under its provides symbol with its natural
+// C ABI under the symbol ABI.
+extern fn roc_process_string(input: RocStr) callconv(.c) RocStr;
+
+// --- Symbol-ABI runtime exports --------------------------------------------
+// The fixed runtime symbols every symbol-ABI host defines. They delegate to
+// the same allocator the host's private RocOps uses for builtins helpers.
+var g_host_env = HostEnv{
+    .arena = .init(std.heap.page_allocator),
+};
+
+var g_roc_ops = RocOps{
+    .env = @as(*anyopaque, @ptrCast(&g_host_env)),
+    .roc_alloc = rocAllocFn,
+    .roc_dealloc = rocDeallocFn,
+    .roc_realloc = rocReallocFn,
+    .roc_dbg = rocDbgFn,
+    .roc_expect_failed = rocExpectFailedFn,
+    .roc_crashed = rocCrashedFn,
+    .hosted_fns = .{ .count = 0, .fns = undefined }, // No hosted functions in this platform
+};
+
+fn hostAlloc(length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+    return rocAllocFn(&g_roc_ops, length, alignment);
+}
+
+fn hostDealloc(ptr: *anyopaque, alignment: usize) callconv(.c) void {
+    rocDeallocFn(&g_roc_ops, ptr, alignment);
+}
+
+fn hostRealloc(ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+    return rocReallocFn(&g_roc_ops, ptr, new_length, alignment);
+}
+
+fn hostDbg(bytes: [*]const u8, len: usize) callconv(.c) void {
+    rocDbgFn(&g_roc_ops, bytes, len);
+}
+
+fn hostExpectFailed(bytes: [*]const u8, len: usize) callconv(.c) void {
+    rocExpectFailedFn(&g_roc_ops, bytes, len);
+}
+
+fn hostCrashed(bytes: [*]const u8, len: usize) callconv(.c) void {
+    rocCrashedFn(&g_roc_ops, bytes, len);
+}
+
+comptime {
+    @export(&hostAlloc, .{ .name = "roc_alloc", .visibility = .hidden });
+    @export(&hostDealloc, .{ .name = "roc_dealloc", .visibility = .hidden });
+    @export(&hostRealloc, .{ .name = "roc_realloc", .visibility = .hidden });
+    @export(&hostDbg, .{ .name = "roc_dbg", .visibility = .hidden });
+    @export(&hostExpectFailed, .{ .name = "roc_expect_failed", .visibility = .hidden });
+    @export(&hostCrashed, .{ .name = "roc_crashed", .visibility = .hidden });
+}
 
 // OS-specific entry point handling
 comptime {
@@ -136,37 +187,16 @@ fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
 /// Platform host entrypoint -- this is where the roc application starts and does platform things
 /// before the platform calls into Roc to do application-specific things.
 fn platform_main() error{TestFailed}!void {
-    var host_env = HostEnv{
-        .arena = std.heap.ArenaAllocator.init(std.heap.page_allocator),
-    };
-    defer host_env.arena.deinit(); // Clean up all allocations on exit
-
-    // Create the RocOps struct
-    var roc_ops = RocOps{
-        .env = @as(*anyopaque, @ptrCast(&host_env)),
-        .roc_alloc = rocAllocFn,
-        .roc_dealloc = rocDeallocFn,
-        .roc_realloc = rocReallocFn,
-        .roc_dbg = rocDbgFn,
-        .roc_expect_failed = rocExpectFailedFn,
-        .roc_crashed = rocCrashedFn,
-        .hosted_fns = .{ .count = 0, .fns = undefined }, // No host functions for this simple example
-    };
-
-    // Create the input string for the Roc function (if it's a function)
+    // Create the input string for the Roc function. The g_roc_ops here is the
+    // host's PRIVATE RocOps for using builtins helpers like RocStr; it is not
+    // part of the ABI.
     const input_string = "string from host";
-    var input_roc_str = RocStr.fromSlice(input_string, &roc_ops);
-    defer input_roc_str.decref(&roc_ops);
+    const input_roc_str = RocStr.fromSlice(input_string, &g_roc_ops);
+    // Ownership of the argument transfers to the entrypoint.
 
-    // Arguments struct for single string parameter - consistent with struct-based approach
-    // `extern struct` has well-defined in-memory layout matching the C ABI for the target
-    const Args = extern struct { str: RocStr };
-    var args = Args{ .str = input_roc_str };
-
-    // Call the Roc entrypoint - pass argument pointer for functions, null for values
-    var roc_str: RocStr = undefined;
-    roc_process_string(&roc_ops, @as(*anyopaque, @ptrCast(&roc_str)), @as(*anyopaque, @ptrCast(&args)));
-    defer roc_str.decref(&roc_ops);
+    // Call the Roc entrypoint with its natural C ABI.
+    var roc_str: RocStr = roc_process_string(input_roc_str);
+    defer roc_str.decref(&g_roc_ops);
 
     // Get the string as a slice and print it
     const result_slice = roc_str.asSlice();
