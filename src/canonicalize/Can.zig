@@ -384,6 +384,24 @@ const RecordField = CIR.RecordField;
 /// Struct to track fields that have been seen before during canonicalization
 const SeenRecordField = struct { ident: base.Ident.Idx, region: base.Region };
 
+const RecordBuilderMap2 = union(enum) {
+    local: Pattern.Idx,
+    external: External,
+
+    const External = struct {
+        module_idx: Import.Idx,
+        target_node_idx: u32,
+        ident_idx: Ident.Idx,
+    };
+
+    fn localPattern(self: RecordBuilderMap2) ?Pattern.Idx {
+        return switch (self) {
+            .local => |pattern_idx| pattern_idx,
+            .external => null,
+        };
+    }
+};
+
 /// Both the canonicalized expression and any free variables
 ///
 /// We keep track of the free variables as we go so we can union these
@@ -10432,15 +10450,7 @@ fn runExprKernel(
                 }
             }
 
-            const type_name_text = self.env.getIdent(state.type_name);
-            const map2_method_name = try self.insertQualifiedIdent(type_name_text, "map2");
-
-            const map2_pattern_idx: ?Pattern.Idx = switch (self.scopeLookup(.ident, map2_method_name)) {
-                .found => |found| found,
-                .not_found => null,
-            };
-
-            if (map2_pattern_idx == null) {
+            const map2_callee = (try self.resolveRecordBuilderMap2(state.type_name, state.region)) orelse {
                 child_slots.shrinkRetainingCapacity(result_start);
                 const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .record_builder_map2_not_found = .{
                     .type_name = state.type_name,
@@ -10448,15 +10458,17 @@ fn runExprKernel(
                 } });
                 try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() });
                 continue :expr_kernel_loop .dispatch;
-            }
+            };
 
-            try self.used_patterns.put(self.env.gpa, map2_pattern_idx.?, {});
+            if (map2_callee.localPattern()) |pattern_idx| {
+                try self.used_patterns.put(self.env.gpa, pattern_idx, {});
+            }
 
             const field_names = self.scratch_idents.slice(field_names_top, self.scratch_idents.top());
             const field_values = self.scratch_expr_ids.slice(field_values_top, self.scratch_expr_ids.top());
             const result_expr = try self.buildChainedMap2(
                 state.region,
-                map2_pattern_idx.?,
+                map2_callee,
                 field_names,
                 field_values,
             );
@@ -10466,8 +10478,10 @@ fn runExprKernel(
             for (captures_slice) |fv| {
                 try self.scratch_free_vars.append(fv);
             }
-            if (!self.isGloballyResolvablePattern(map2_pattern_idx.?)) {
-                try self.scratch_free_vars.append(map2_pattern_idx.?);
+            if (map2_callee.localPattern()) |pattern_idx| {
+                if (!self.isGloballyResolvablePattern(pattern_idx)) {
+                    try self.scratch_free_vars.append(pattern_idx);
+                }
             }
             const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
 
@@ -11613,12 +11627,74 @@ fn finishSingleQuestionBinop(
     return CanonicalizedExpr{ .idx = expr_idx, .free_vars = free_vars_span };
 }
 
+fn resolveRecordBuilderMap2(
+    self: *Self,
+    type_name: Ident.Idx,
+    region: Region,
+) std.mem.Allocator.Error!?RecordBuilderMap2 {
+    const map2_name = try self.env.insertIdent(base.Ident.for_text("map2"));
+    const type_name_text = self.env.getIdent(type_name);
+    const qualified_map2_name = try self.insertQualifiedIdent(type_name_text, "map2");
+
+    if (try self.scopeLookupOrPrepareTypeBinding(type_name)) |binding_location| {
+        const binding = binding_location.binding.*;
+        if (self.typePathForBinding(binding)) |owner_path| {
+            if (try self.lookupOrCreateAssocValuePattern(owner_path, map2_name, qualified_map2_name, region)) |pattern_idx| {
+                return RecordBuilderMap2{ .local = pattern_idx };
+            }
+        }
+
+        return switch (binding) {
+            .external_nominal => |external| try self.resolveRecordBuilderExternalMap2(map2_name, external),
+            else => null,
+        };
+    }
+
+    return switch (self.scopeLookup(.ident, qualified_map2_name)) {
+        .found => |pattern_idx| RecordBuilderMap2{ .local = pattern_idx },
+        .not_found => null,
+    };
+}
+
+fn resolveRecordBuilderExternalMap2(
+    self: *Self,
+    map2_name: Ident.Idx,
+    external: Scope.ExternalTypeBinding,
+) std.mem.Allocator.Error!?RecordBuilderMap2 {
+    const import_idx = external.import_idx orelse return null;
+    const imported_type = self.lookupAvailableModuleEnv(external.module_ident) orelse
+        self.lookupAvailableModuleEnv(external.original_ident) orelse
+        return null;
+    const map2_text = self.env.getIdent(map2_name);
+
+    if (imported_type.statement_idx != null) {
+        const qualified_type_text = self.env.getIdent(imported_type.qualified_type_ident);
+        const qualified_map2_name = try self.insertQualifiedIdent(qualified_type_text, map2_text);
+        const qualified_map2_text = self.env.getIdent(qualified_map2_name);
+        const imported_ident = imported_type.env.common.findIdent(qualified_map2_text) orelse return null;
+        const target_node_idx = imported_type.env.getExposedNodeIndexById(imported_ident) orelse return null;
+
+        return RecordBuilderMap2{ .external = .{
+            .module_idx = import_idx,
+            .target_node_idx = target_node_idx,
+            .ident_idx = qualified_map2_name,
+        } };
+    }
+
+    const target_node_idx = (try self.lookupImportedExposedNode(imported_type.env, map2_text)) orelse return null;
+    return RecordBuilderMap2{ .external = .{
+        .module_idx = import_idx,
+        .target_node_idx = target_node_idx,
+        .ident_idx = map2_name,
+    } };
+}
+
 /// Build chained map2 calls for record builder desugaring.
 /// For N fields, builds: T.map2(f0, T.map2(f1, ..., T.map2(f_{n-2}, f_{n-1}, |p_{n-2}, p_{n-1}| (p_{n-2}, p_{n-1}))...), |p0, tuple| { fields })
 fn buildChainedMap2(
     self: *Self,
     region: base.Region,
-    map2_pattern_idx: Pattern.Idx,
+    map2_callee: RecordBuilderMap2,
     field_names: []const Ident.Idx,
     field_values: []const Expr.Idx,
 ) std.mem.Allocator.Error!Expr.Idx {
@@ -11628,14 +11704,14 @@ fn buildChainedMap2(
     if (n == 2) {
         // Base case: T.map2(f0, f1, |p0, p1| { p0, p1 })
         const lambda_idx = try self.buildFinalRecordLambda(region, field_names);
-        return try self.buildMap2Call(region, map2_pattern_idx, field_values[0], field_values[1], lambda_idx);
+        return try self.buildMap2Call(region, map2_callee, field_values[0], field_values[1], lambda_idx);
     }
 
     // Recursive case: Build from right to left
     // Start with innermost: T.map2(f_{n-2}, f_{n-1}, |p_{n-2}, p_{n-1}| (p_{n-2}, p_{n-1}))
     var inner_expr = try self.buildInnerMap2WithTuple(
         region,
-        map2_pattern_idx,
+        map2_callee,
         field_values[n - 2],
         field_values[n - 1],
         field_names[n - 2],
@@ -11648,7 +11724,7 @@ fn buildChainedMap2(
     while (i >= 1) : (i -= 1) {
         inner_expr = try self.buildIntermediateMap2(
             region,
-            map2_pattern_idx,
+            map2_callee,
             field_values[i],
             inner_expr,
             field_names[i],
@@ -11658,22 +11734,30 @@ fn buildChainedMap2(
 
     // Final layer: T.map2(f_0, inner, |p_0, (rest...)| { all fields })
     const final_lambda_idx = try self.buildFinalLambdaWithTupleDestructure(region, field_names);
-    return try self.buildMap2Call(region, map2_pattern_idx, field_values[0], inner_expr, final_lambda_idx);
+    return try self.buildMap2Call(region, map2_callee, field_values[0], inner_expr, final_lambda_idx);
 }
 
 /// Build a map2 call: map2(arg1, arg2, lambda)
 fn buildMap2Call(
     self: *Self,
     region: base.Region,
-    map2_pattern_idx: Pattern.Idx,
+    map2_callee: RecordBuilderMap2,
     arg1: Expr.Idx,
     arg2: Expr.Idx,
     lambda: Expr.Idx,
 ) std.mem.Allocator.Error!Expr.Idx {
     // Create function lookup
-    const func_expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{
-        .pattern_idx = map2_pattern_idx,
-    } }, region);
+    const func_expr_idx = switch (map2_callee) {
+        .local => |pattern_idx| try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{
+            .pattern_idx = pattern_idx,
+        } }, region),
+        .external => |external| try self.env.addExpr(CIR.Expr{ .e_lookup_external = .{
+            .module_idx = external.module_idx,
+            .target_node_idx = external.target_node_idx,
+            .ident_idx = external.ident_idx,
+            .region = region,
+        } }, region),
+    };
 
     // Build args
     const args_start = self.env.store.scratchExprTop();
@@ -11696,7 +11780,7 @@ fn buildMap2Call(
 fn buildInnerMap2WithTuple(
     self: *Self,
     region: base.Region,
-    map2_pattern_idx: Pattern.Idx,
+    map2_callee: RecordBuilderMap2,
     arg1: Expr.Idx,
     arg2: Expr.Idx,
     name1: Ident.Idx,
@@ -11740,7 +11824,7 @@ fn buildInnerMap2WithTuple(
         .e_lambda = .{ .args = args_span, .body = tuple_body },
     }, region);
 
-    return try self.buildMap2Call(region, map2_pattern_idx, arg1, arg2, lambda_idx);
+    return try self.buildMap2Call(region, map2_callee, arg1, arg2, lambda_idx);
 }
 
 /// Build an intermediate map2 call that extends a tuple:
@@ -11748,7 +11832,7 @@ fn buildInnerMap2WithTuple(
 fn buildIntermediateMap2(
     self: *Self,
     region: base.Region,
-    map2_pattern_idx: Pattern.Idx,
+    map2_callee: RecordBuilderMap2,
     arg1: Expr.Idx,
     inner: Expr.Idx,
     new_name: Ident.Idx,
@@ -11797,7 +11881,7 @@ fn buildIntermediateMap2(
         .e_lambda = .{ .args = args_span, .body = tuple_body },
     }, region);
 
-    return try self.buildMap2Call(region, map2_pattern_idx, arg1, inner, lambda_idx);
+    return try self.buildMap2Call(region, map2_callee, arg1, inner, lambda_idx);
 }
 
 /// Build a tuple pattern for destructuring: (a, b, ...) or nested ((a, b), c)
