@@ -19,6 +19,9 @@ const WasmInterface = struct {
     module_instance: *bytebox.ModuleInstance,
     wasm_main_handle: bytebox.FunctionHandle,
     wasm_result_len_handle: bytebox.FunctionHandle,
+    wasm_reset_alloc_counts_handle: ?bytebox.FunctionHandle,
+    wasm_alloc_count_handle: ?bytebox.FunctionHandle,
+    wasm_dealloc_count_handle: ?bytebox.FunctionHandle,
     memory: *bytebox.MemoryInstance,
     env_imports: bytebox.ModuleImportPackage,
 
@@ -34,6 +37,11 @@ const TestResult = struct {
     name: []const u8,
     passed: bool,
     message: []const u8,
+};
+
+const TestOptions = struct {
+    assert_alloc_balanced: bool = false,
+    min_allocs: usize = 0,
 };
 
 /// Host import implementations for the WASM module.
@@ -103,7 +111,7 @@ const HostContext = struct {
 var global_host_context: HostContext = .{};
 
 /// Initialize WASM module from file.
-fn setupWasm(gpa: std.mem.Allocator, arena: std.mem.Allocator, io: std.Io, wasm_path: []const u8) anyerror!WasmInterface {
+fn setupWasm(gpa: std.mem.Allocator, arena: std.mem.Allocator, io: std.Io, wasm_path: []const u8, options: TestOptions) anyerror!WasmInterface {
     const wasm_data = std.Io.Dir.cwd().readFileAlloc(io, wasm_path, arena, .unlimited) catch |err| {
         std.debug.print("[ERROR] Failed to read WASM file '{s}': {}\n", .{ wasm_path, err });
         return err;
@@ -136,14 +144,49 @@ fn setupWasm(gpa: std.mem.Allocator, arena: std.mem.Allocator, io: std.Io, wasm_
     // Now that memory is available, update host context
     global_host_context.memory = module_instance.store.getMemory(0);
 
+    const reset_alloc_counts_handle: ?bytebox.FunctionHandle = if (options.assert_alloc_balanced)
+        try module_instance.getFunctionHandle("wasm_reset_alloc_counts")
+    else
+        null;
+    const alloc_count_handle: ?bytebox.FunctionHandle = if (options.assert_alloc_balanced)
+        try module_instance.getFunctionHandle("wasm_alloc_count")
+    else
+        null;
+    const dealloc_count_handle: ?bytebox.FunctionHandle = if (options.assert_alloc_balanced)
+        try module_instance.getFunctionHandle("wasm_dealloc_count")
+    else
+        null;
+
     return WasmInterface{
         .module_def = module_def,
         .module_instance = module_instance,
         .wasm_main_handle = try module_instance.getFunctionHandle("wasm_main"),
         .wasm_result_len_handle = try module_instance.getFunctionHandle("wasm_result_len"),
+        .wasm_reset_alloc_counts_handle = reset_alloc_counts_handle,
+        .wasm_alloc_count_handle = alloc_count_handle,
+        .wasm_dealloc_count_handle = dealloc_count_handle,
         .memory = module_instance.store.getMemory(0),
         .env_imports = env_imports,
     };
+}
+
+fn callWasmNoArgVoid(wasm: *const WasmInterface, handle: bytebox.FunctionHandle, name: []const u8) anyerror!void {
+    var params: [0]bytebox.Val = undefined;
+    var returns: [0]bytebox.Val = undefined;
+    _ = wasm.module_instance.invoke(handle, &params, &returns, .{}) catch |err| {
+        std.debug.print("[ERROR] Error invoking {s}: {}\n", .{ name, err });
+        return error.WasmExportFailed;
+    };
+}
+
+fn callWasmNoArgUsize(wasm: *const WasmInterface, handle: bytebox.FunctionHandle, name: []const u8) anyerror!usize {
+    var params: [0]bytebox.Val = undefined;
+    var returns: [1]bytebox.Val = undefined;
+    _ = wasm.module_instance.invoke(handle, &params, &returns, .{}) catch |err| {
+        std.debug.print("[ERROR] Error invoking {s}: {}\n", .{ name, err });
+        return error.WasmExportFailed;
+    };
+    return @intCast(returns[0].I32);
 }
 
 /// Call wasm_main() and get the result string.
@@ -179,8 +222,8 @@ fn callWasmMain(wasm: *const WasmInterface) anyerror![]const u8 {
 }
 
 /// Run a single test case.
-fn runTest(gpa: std.mem.Allocator, arena: std.mem.Allocator, io: std.Io, wasm_path: []const u8, expected_output: []const u8) TestResult {
-    var wasm = setupWasm(gpa, arena, io, wasm_path) catch |err| {
+fn runTest(gpa: std.mem.Allocator, arena: std.mem.Allocator, io: std.Io, wasm_path: []const u8, expected_output: []const u8, options: TestOptions) TestResult {
+    var wasm = setupWasm(gpa, arena, io, wasm_path, options) catch |err| {
         return .{
             .name = wasm_path,
             .passed = false,
@@ -188,6 +231,16 @@ fn runTest(gpa: std.mem.Allocator, arena: std.mem.Allocator, io: std.Io, wasm_pa
         };
     };
     defer wasm.deinit();
+
+    if (options.assert_alloc_balanced) {
+        callWasmNoArgVoid(&wasm, wasm.wasm_reset_alloc_counts_handle.?, "wasm_reset_alloc_counts") catch |err| {
+            return .{
+                .name = wasm_path,
+                .passed = false,
+                .message = std.fmt.allocPrint(arena, "Counter reset failed: {}", .{err}) catch "Counter reset failed",
+            };
+        };
+    }
 
     const result = callWasmMain(&wasm) catch |err| {
         return .{
@@ -197,19 +250,51 @@ fn runTest(gpa: std.mem.Allocator, arena: std.mem.Allocator, io: std.Io, wasm_pa
         };
     };
 
-    if (std.mem.eql(u8, result, expected_output)) {
-        return .{
-            .name = wasm_path,
-            .passed = true,
-            .message = "OK",
-        };
-    } else {
+    if (!std.mem.eql(u8, result, expected_output)) {
         return .{
             .name = wasm_path,
             .passed = false,
             .message = std.fmt.allocPrint(arena, "Expected '{s}', got '{s}'", .{ expected_output, result }) catch "Output mismatch",
         };
     }
+
+    if (options.assert_alloc_balanced) {
+        const alloc_count = callWasmNoArgUsize(&wasm, wasm.wasm_alloc_count_handle.?, "wasm_alloc_count") catch |err| {
+            return .{
+                .name = wasm_path,
+                .passed = false,
+                .message = std.fmt.allocPrint(arena, "Allocation counter read failed: {}", .{err}) catch "Allocation counter read failed",
+            };
+        };
+        const dealloc_count = callWasmNoArgUsize(&wasm, wasm.wasm_dealloc_count_handle.?, "wasm_dealloc_count") catch |err| {
+            return .{
+                .name = wasm_path,
+                .passed = false,
+                .message = std.fmt.allocPrint(arena, "Deallocation counter read failed: {}", .{err}) catch "Deallocation counter read failed",
+            };
+        };
+
+        if (alloc_count < options.min_allocs) {
+            return .{
+                .name = wasm_path,
+                .passed = false,
+                .message = std.fmt.allocPrint(arena, "Expected at least {d} allocations, got {d}", .{ options.min_allocs, alloc_count }) catch "Too few allocations",
+            };
+        }
+        if (alloc_count != dealloc_count) {
+            return .{
+                .name = wasm_path,
+                .passed = false,
+                .message = std.fmt.allocPrint(arena, "Allocation imbalance: alloc={d}, dealloc={d}", .{ alloc_count, dealloc_count }) catch "Allocation imbalance",
+            };
+        }
+    }
+
+    return .{
+        .name = wasm_path,
+        .passed = true,
+        .message = "OK",
+    };
 }
 
 pub fn main(init: std.process.Init) anyerror!void {
@@ -223,6 +308,7 @@ pub fn main(init: std.process.Init) anyerror!void {
 
     var wasm_path: []const u8 = "test/wasm/app.wasm";
     var expected_output: []const u8 = "Hello from Roc WASM!";
+    var options: TestOptions = .{};
 
     var arg_iter = try std.process.Args.Iterator.initAllocator(init.minimal.args, arena);
     defer arg_iter.deinit();
@@ -233,6 +319,8 @@ pub fn main(init: std.process.Init) anyerror!void {
             std.debug.print("Options:\n", .{});
             std.debug.print("  --wasm-path PATH     Path to the WASM file (default: test/wasm/app.wasm)\n", .{});
             std.debug.print("  --expected OUTPUT    Expected output string\n", .{});
+            std.debug.print("  --assert-alloc-balanced  Assert canonical roc_alloc and roc_dealloc counts match\n", .{});
+            std.debug.print("  --min-allocs N       Minimum canonical roc_alloc count when asserting balance\n", .{});
             std.debug.print("  --help               Display this help message\n", .{});
             return;
         } else if (std.mem.eql(u8, arg, "--wasm-path")) {
@@ -245,6 +333,17 @@ pub fn main(init: std.process.Init) anyerror!void {
                 std.debug.print("Error: --expected requires an argument\n", .{});
                 return;
             };
+        } else if (std.mem.eql(u8, arg, "--assert-alloc-balanced")) {
+            options.assert_alloc_balanced = true;
+        } else if (std.mem.eql(u8, arg, "--min-allocs")) {
+            const min_allocs_arg = arg_iter.next() orelse {
+                std.debug.print("Error: --min-allocs requires an argument\n", .{});
+                return;
+            };
+            options.min_allocs = std.fmt.parseInt(usize, min_allocs_arg, 10) catch |err| {
+                std.debug.print("Error: invalid --min-allocs value '{s}': {}\n", .{ min_allocs_arg, err });
+                return;
+            };
         }
     }
 
@@ -252,7 +351,7 @@ pub fn main(init: std.process.Init) anyerror!void {
     std.debug.print("WASM file: {s}\n", .{wasm_path});
     std.debug.print("Expected output: \"{s}\"\n\n", .{expected_output});
 
-    const result = runTest(gpa, arena, init.io, wasm_path, expected_output);
+    const result = runTest(gpa, arena, init.io, wasm_path, expected_output, options);
 
     if (result.passed) {
         std.debug.print("PASSED: {s}\n", .{result.name});
@@ -274,7 +373,7 @@ test "wasm static lib - hello world" {
     defer arena_impl.deinit();
     const arena = arena_impl.allocator();
 
-    const result = runTest(gpa, arena, std.testing.io, "test/wasm/app.wasm", "Hello from Roc WASM!");
+    const result = runTest(gpa, arena, std.testing.io, "test/wasm/app.wasm", "Hello from Roc WASM!", .{});
     if (!result.passed) {
         std.debug.print("Test failed: {s}\n", .{result.message});
     }
