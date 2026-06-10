@@ -2625,6 +2625,32 @@ Builtin :: [].{
 			times_saturated : U8, U8 -> U8
 			times_saturated = |a, b| unsigned_times_saturated(U8.highest, 0, a, b)
 
+			## Raise the first [U8] value to the power of the second.
+			## Crashes if the exact result does not fit in [U8].
+			## ```roc
+			## expect U8.pow(2, 3) == 8
+			##
+			## expect U8.pow(5, 0) == 1
+			## ```
+			pow : U8, U8 -> U8
+			pow = |base, exponent|
+				match U8.pow_checked(base, exponent) {
+					Ok(result) => result
+					Err(Overflow) => {
+						crash "integer exponentiation overflowed"
+					}
+				}
+
+			## Raise the first [U8] value to the power of the second.
+			## Returns an error instead of crashing when the exact result does not fit.
+			## ```roc
+			## expect U8.pow_checked(2, 3) == Ok(8)
+			##
+			## expect U8.pow_checked(U8.highest, 2) == Err(Overflow)
+			## ```
+			pow_checked : U8, U8 -> Try(U8, [Overflow])
+			pow_checked = |base, exponent| unsigned_pow_checked(U8.highest, 0, 1, 2, base, exponent)
+
 			## Divide the first [U8] by the second, discarding any remainder. Crashes if the second [U8] is zero.
 			## ```roc
 			## expect U8.div_by(10, 2) == 5
@@ -3179,6 +3205,39 @@ Builtin :: [].{
 			## ```
 			times_saturated : I8, I8 -> I8
 			times_saturated = |a, b| signed_times_saturated(I8.lowest, I8.highest, 0, -1, a, b)
+
+			## Raise the first [I8] value to the power of the second.
+			## Crashes if the exact result does not fit in [I8].
+			## ```roc
+			## expect I8.pow(2, 3) == 8
+			##
+			## expect I8.pow(5, 0) == 1
+			## ```
+			pow : I8, I8 -> I8
+			pow = |base, exponent|
+				match I8.pow_checked(base, exponent) {
+					Ok(result) => result
+					Err(Overflow) => {
+						crash "integer exponentiation overflowed"
+					}
+					Err(Underflow) => {
+						crash "integer exponentiation underflowed"
+					}
+				}
+
+			## Raise the first [I8] value to the power of the second.
+			## Returns an error instead of crashing when the exact result does not fit.
+			## ```roc
+			## expect I8.pow_checked(2, 3) == Ok(8)
+			##
+			## expect I8.pow_checked(I8.highest, 2) == Err(Overflow)
+			##
+			## expect I8.pow_checked(2, -1) == Err(Underflow)
+			##
+			## expect I8.pow_checked(-1, -3) == Ok(-1)
+			## ```
+			pow_checked : I8, I8 -> Try(I8, [Overflow, Underflow])
+			pow_checked = |base, exponent| signed_pow_checked(I8.lowest, I8.highest, 0, 1, 2, -1, base, exponent)
 
 			## Divide the first [I8] by the second, discarding any remainder. Crashes if the second [I8] is zero.
 			## ```roc
@@ -3783,6 +3842,32 @@ Builtin :: [].{
 			times_saturated : U16, U16 -> U16
 			times_saturated = |a, b| unsigned_times_saturated(U16.highest, 0, a, b)
 
+			## Raise the first [U16] value to the power of the second.
+			## Crashes if the exact result does not fit in [U16].
+			## ```roc
+			## expect U16.pow(2, 3) == 8
+			##
+			## expect U16.pow(5, 0) == 1
+			## ```
+			pow : U16, U16 -> U16
+			pow = |base, exponent|
+				match U16.pow_checked(base, exponent) {
+					Ok(result) => result
+					Err(Overflow) => {
+						crash "integer exponentiation overflowed"
+					}
+				}
+
+			## Raise the first [U16] value to the power of the second.
+			## Returns an error instead of crashing when the exact result does not fit.
+			## ```roc
+			## expect U16.pow_checked(2, 3) == Ok(8)
+			##
+			## expect U16.pow_checked(U16.highest, 2) == Err(Overflow)
+			## ```
+			pow_checked : U16, U16 -> Try(U16, [Overflow])
+			pow_checked = |base, exponent| unsigned_pow_checked(U16.highest, 0, 1, 2, base, exponent)
+
 			## Divide the first [U16] by the second, discarding any remainder. Crashes if the second [U16] is zero.
 			## ```roc
 			## expect U16.div_by(10, 2) == 5
@@ -4375,6 +4460,39 @@ Builtin :: [].{
 			## ```
 			times_saturated : I16, I16 -> I16
 			times_saturated = |a, b| signed_times_saturated(I16.lowest, I16.highest, 0, -1, a, b)
+
+			## Raise the first [I16] value to the power of the second.
+			## Crashes if the exact result does not fit in [I16].
+			## ```roc
+			## expect I16.pow(2, 3) == 8
+			##
+			## expect I16.pow(5, 0) == 1
+			## ```
+			pow : I16, I16 -> I16
+			pow = |base, exponent|
+				match I16.pow_checked(base, exponent) {
+					Ok(result) => result
+					Err(Overflow) => {
+						crash "integer exponentiation overflowed"
+					}
+					Err(Underflow) => {
+						crash "integer exponentiation underflowed"
+					}
+				}
+
+			## Raise the first [I16] value to the power of the second.
+			## Returns an error instead of crashing when the exact result does not fit.
+			## ```roc
+			## expect I16.pow_checked(2, 3) == Ok(8)
+			##
+			## expect I16.pow_checked(I16.highest, 2) == Err(Overflow)
+			##
+			## expect I16.pow_checked(2, -1) == Err(Underflow)
+			##
+			## expect I16.pow_checked(-1, -3) == Ok(-1)
+			## ```
+			pow_checked : I16, I16 -> Try(I16, [Overflow, Underflow])
+			pow_checked = |base, exponent| signed_pow_checked(I16.lowest, I16.highest, 0, 1, 2, -1, base, exponent)
 
 			## Divide the first [I16] by the second, discarding any remainder. Crashes if the second [I16] is zero.
 			## ```roc
@@ -4995,6 +5113,32 @@ Builtin :: [].{
 			## ```
 			times_saturated : U32, U32 -> U32
 			times_saturated = |a, b| unsigned_times_saturated(U32.highest, 0, a, b)
+
+			## Raise the first [U32] value to the power of the second.
+			## Crashes if the exact result does not fit in [U32].
+			## ```roc
+			## expect U32.pow(2, 3) == 8
+			##
+			## expect U32.pow(5, 0) == 1
+			## ```
+			pow : U32, U32 -> U32
+			pow = |base, exponent|
+				match U32.pow_checked(base, exponent) {
+					Ok(result) => result
+					Err(Overflow) => {
+						crash "integer exponentiation overflowed"
+					}
+				}
+
+			## Raise the first [U32] value to the power of the second.
+			## Returns an error instead of crashing when the exact result does not fit.
+			## ```roc
+			## expect U32.pow_checked(2, 3) == Ok(8)
+			##
+			## expect U32.pow_checked(U32.highest, 2) == Err(Overflow)
+			## ```
+			pow_checked : U32, U32 -> Try(U32, [Overflow])
+			pow_checked = |base, exponent| unsigned_pow_checked(U32.highest, 0, 1, 2, base, exponent)
 
 			## Divide the first [U32] by the second, discarding any remainder. Crashes if the second [U32] is zero.
 			## ```roc
@@ -5626,6 +5770,39 @@ Builtin :: [].{
 			## ```
 			times_saturated : I32, I32 -> I32
 			times_saturated = |a, b| signed_times_saturated(I32.lowest, I32.highest, 0, -1, a, b)
+
+			## Raise the first [I32] value to the power of the second.
+			## Crashes if the exact result does not fit in [I32].
+			## ```roc
+			## expect I32.pow(2, 3) == 8
+			##
+			## expect I32.pow(5, 0) == 1
+			## ```
+			pow : I32, I32 -> I32
+			pow = |base, exponent|
+				match I32.pow_checked(base, exponent) {
+					Ok(result) => result
+					Err(Overflow) => {
+						crash "integer exponentiation overflowed"
+					}
+					Err(Underflow) => {
+						crash "integer exponentiation underflowed"
+					}
+				}
+
+			## Raise the first [I32] value to the power of the second.
+			## Returns an error instead of crashing when the exact result does not fit.
+			## ```roc
+			## expect I32.pow_checked(2, 3) == Ok(8)
+			##
+			## expect I32.pow_checked(I32.highest, 2) == Err(Overflow)
+			##
+			## expect I32.pow_checked(2, -1) == Err(Underflow)
+			##
+			## expect I32.pow_checked(-1, -3) == Ok(-1)
+			## ```
+			pow_checked : I32, I32 -> Try(I32, [Overflow, Underflow])
+			pow_checked = |base, exponent| signed_pow_checked(I32.lowest, I32.highest, 0, 1, 2, -1, base, exponent)
 
 			## Divide the first [I32] by the second, discarding any remainder. Crashes if the second [I32] is zero.
 			## ```roc
@@ -6266,6 +6443,32 @@ Builtin :: [].{
 			## ```
 			times_saturated : U64, U64 -> U64
 			times_saturated = |a, b| unsigned_times_saturated(U64.highest, 0, a, b)
+
+			## Raise the first [U64] value to the power of the second.
+			## Crashes if the exact result does not fit in [U64].
+			## ```roc
+			## expect U64.pow(2, 3) == 8
+			##
+			## expect U64.pow(5, 0) == 1
+			## ```
+			pow : U64, U64 -> U64
+			pow = |base, exponent|
+				match U64.pow_checked(base, exponent) {
+					Ok(result) => result
+					Err(Overflow) => {
+						crash "integer exponentiation overflowed"
+					}
+				}
+
+			## Raise the first [U64] value to the power of the second.
+			## Returns an error instead of crashing when the exact result does not fit.
+			## ```roc
+			## expect U64.pow_checked(2, 3) == Ok(8)
+			##
+			## expect U64.pow_checked(U64.highest, 2) == Err(Overflow)
+			## ```
+			pow_checked : U64, U64 -> Try(U64, [Overflow])
+			pow_checked = |base, exponent| unsigned_pow_checked(U64.highest, 0, 1, 2, base, exponent)
 
 			## Divide the first [U64] by the second, discarding any remainder. Crashes if the second [U64] is zero.
 			## ```roc
@@ -6943,6 +7146,39 @@ Builtin :: [].{
 			times_saturated : I64, I64 -> I64
 			times_saturated = |a, b| signed_times_saturated(I64.lowest, I64.highest, 0, -1, a, b)
 
+			## Raise the first [I64] value to the power of the second.
+			## Crashes if the exact result does not fit in [I64].
+			## ```roc
+			## expect I64.pow(2, 3) == 8
+			##
+			## expect I64.pow(5, 0) == 1
+			## ```
+			pow : I64, I64 -> I64
+			pow = |base, exponent|
+				match I64.pow_checked(base, exponent) {
+					Ok(result) => result
+					Err(Overflow) => {
+						crash "integer exponentiation overflowed"
+					}
+					Err(Underflow) => {
+						crash "integer exponentiation underflowed"
+					}
+				}
+
+			## Raise the first [I64] value to the power of the second.
+			## Returns an error instead of crashing when the exact result does not fit.
+			## ```roc
+			## expect I64.pow_checked(2, 3) == Ok(8)
+			##
+			## expect I64.pow_checked(I64.highest, 2) == Err(Overflow)
+			##
+			## expect I64.pow_checked(2, -1) == Err(Underflow)
+			##
+			## expect I64.pow_checked(-1, -3) == Ok(-1)
+			## ```
+			pow_checked : I64, I64 -> Try(I64, [Overflow, Underflow])
+			pow_checked = |base, exponent| signed_pow_checked(I64.lowest, I64.highest, 0, 1, 2, -1, base, exponent)
+
 			## Divide the first [I64] by the second, discarding any remainder. Crashes if the second [I64] is zero.
 			## ```roc
 			## expect I64.div_by(10, 2) == 5
@@ -7607,6 +7843,32 @@ Builtin :: [].{
 			## ```
 			times_saturated : U128, U128 -> U128
 			times_saturated = |a, b| unsigned_times_saturated(U128.highest, 0, a, b)
+
+			## Raise the first [U128] value to the power of the second.
+			## Crashes if the exact result does not fit in [U128].
+			## ```roc
+			## expect U128.pow(2, 3) == 8
+			##
+			## expect U128.pow(5, 0) == 1
+			## ```
+			pow : U128, U128 -> U128
+			pow = |base, exponent|
+				match U128.pow_checked(base, exponent) {
+					Ok(result) => result
+					Err(Overflow) => {
+						crash "integer exponentiation overflowed"
+					}
+				}
+
+			## Raise the first [U128] value to the power of the second.
+			## Returns an error instead of crashing when the exact result does not fit.
+			## ```roc
+			## expect U128.pow_checked(2, 3) == Ok(8)
+			##
+			## expect U128.pow_checked(U128.highest, 2) == Err(Overflow)
+			## ```
+			pow_checked : U128, U128 -> Try(U128, [Overflow])
+			pow_checked = |base, exponent| unsigned_pow_checked(U128.highest, 0, 1, 2, base, exponent)
 
 			## Divide the first [U128] by the second, discarding any remainder. Crashes if the second [U128] is zero.
 			## ```roc
@@ -8328,6 +8590,39 @@ Builtin :: [].{
 			## ```
 			times_saturated : I128, I128 -> I128
 			times_saturated = |a, b| signed_times_saturated(I128.lowest, I128.highest, 0, -1, a, b)
+
+			## Raise the first [I128] value to the power of the second.
+			## Crashes if the exact result does not fit in [I128].
+			## ```roc
+			## expect I128.pow(2, 3) == 8
+			##
+			## expect I128.pow(5, 0) == 1
+			## ```
+			pow : I128, I128 -> I128
+			pow = |base, exponent|
+				match I128.pow_checked(base, exponent) {
+					Ok(result) => result
+					Err(Overflow) => {
+						crash "integer exponentiation overflowed"
+					}
+					Err(Underflow) => {
+						crash "integer exponentiation underflowed"
+					}
+				}
+
+			## Raise the first [I128] value to the power of the second.
+			## Returns an error instead of crashing when the exact result does not fit.
+			## ```roc
+			## expect I128.pow_checked(2, 3) == Ok(8)
+			##
+			## expect I128.pow_checked(I128.highest, 2) == Err(Overflow)
+			##
+			## expect I128.pow_checked(2, -1) == Err(Underflow)
+			##
+			## expect I128.pow_checked(-1, -3) == Ok(-1)
+			## ```
+			pow_checked : I128, I128 -> Try(I128, [Overflow, Underflow])
+			pow_checked = |base, exponent| signed_pow_checked(I128.lowest, I128.highest, 0, 1, 2, -1, base, exponent)
 
 			## Divide the first [I128] by the second, discarding any remainder. Crashes if the second [I128] is zero.
 			## ```roc
@@ -10695,6 +10990,120 @@ signed_div_checked = |lowest, zero, neg_one, a, b|
 		}
 	} else {
 		Ok(a / b)
+	}
+
+unsigned_pow_checked : item, item, item, item, item, item -> Try(item, [Overflow])
+	where [
+		item.is_eq : item, item -> Bool,
+		item.is_gt : item, item -> Bool,
+		item.div_by : item, item -> item,
+		item.rem_by : item, item -> item,
+		item.times : item, item -> item,
+	]
+unsigned_pow_checked = |highest, zero, one, two, base, exponent|
+	unsigned_pow_checked_step(highest, zero, one, two, one, base, exponent)
+
+unsigned_pow_checked_step : item, item, item, item, item, item, item -> Try(item, [Overflow])
+	where [
+		item.is_eq : item, item -> Bool,
+		item.is_gt : item, item -> Bool,
+		item.div_by : item, item -> item,
+		item.rem_by : item, item -> item,
+		item.times : item, item -> item,
+	]
+unsigned_pow_checked_step = |highest, zero, one, two, acc, base, exponent|
+	if exponent == zero {
+		Ok(acc)
+	} else {
+		next_acc = if exponent.rem_by(two) == zero {
+			Ok(acc)
+		} else {
+			unsigned_mul_checked(highest, zero, acc, base)
+		}
+
+		match next_acc {
+			Err(Overflow) => Err(Overflow)
+			Ok(updated_acc) => {
+				next_exponent = exponent / two
+				if next_exponent == zero {
+					Ok(updated_acc)
+				} else {
+					match unsigned_mul_checked(highest, zero, base, base) {
+						Err(Overflow) => Err(Overflow)
+						Ok(updated_base) => unsigned_pow_checked_step(highest, zero, one, two, updated_acc, updated_base, next_exponent)
+					}
+				}
+			}
+		}
+	}
+
+signed_pow_checked : item, item, item, item, item, item, item, item -> Try(item, [Overflow, Underflow])
+	where [
+		item.is_eq : item, item -> Bool,
+		item.is_gt : item, item -> Bool,
+		item.is_lt : item, item -> Bool,
+		item.div_trunc_by : item, item -> item,
+		item.div_by : item, item -> item,
+		item.rem_by : item, item -> item,
+		item.minus : item, item -> item,
+		item.times : item, item -> item,
+	]
+signed_pow_checked = |lowest, highest, zero, one, two, neg_one, base, exponent|
+	if exponent < zero {
+		if base == one {
+			Ok(one)
+		} else if base == neg_one {
+			if exponent.rem_by(two) == zero {
+				Ok(one)
+			} else {
+				Ok(neg_one)
+			}
+		} else {
+			Err(Underflow)
+		}
+	} else {
+		signed_pow_checked_step(lowest, highest, zero, one, two, neg_one, one, base, exponent)
+	}
+
+signed_pow_checked_step : item, item, item, item, item, item, item, item, item -> Try(item, [Overflow, Underflow])
+	where [
+		item.is_eq : item, item -> Bool,
+		item.is_gt : item, item -> Bool,
+		item.is_lt : item, item -> Bool,
+		item.div_trunc_by : item, item -> item,
+		item.div_by : item, item -> item,
+		item.rem_by : item, item -> item,
+		item.minus : item, item -> item,
+		item.times : item, item -> item,
+	]
+signed_pow_checked_step = |lowest, highest, zero, one, two, neg_one, acc, base, exponent|
+	if exponent == zero {
+		Ok(acc)
+	} else {
+		next_acc = if exponent.rem_by(two) == zero {
+			Ok(acc)
+		} else {
+			match signed_mul_checked(lowest, highest, zero, neg_one, acc, base) {
+				Ok(result) => Ok(result)
+				Err(Overflow) => Err(Overflow)
+			}
+		}
+
+		match next_acc {
+			Err(Overflow) => Err(Overflow)
+			Err(Underflow) => Err(Underflow)
+			Ok(updated_acc) => {
+				next_exponent = exponent / two
+				if next_exponent == zero {
+					Ok(updated_acc)
+				} else {
+					match signed_mul_checked(lowest, highest, zero, neg_one, base, base) {
+						Err(Overflow) => Err(Overflow)
+						Ok(updated_base) => signed_pow_checked_step(lowest, highest, zero, one, two, neg_one, updated_acc, updated_base, next_exponent)
+					}
+				}
+			}
+		}
 	}
 
 unsigned_div_ceil_checked : item, item, item, item -> Try(item, [DivByZero])
