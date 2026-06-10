@@ -29,6 +29,7 @@ const std = @import("std");
 const core = @import("lir_core");
 const layout_mod = @import("layout");
 const arc_sig = @import("arc_sig.zig");
+const arc_solve = @import("arc_solve.zig");
 
 const LIR = core.LIR;
 const LirStore = core.LirStore;
@@ -78,6 +79,7 @@ pub fn certifyStore(
     store: *const LirStore,
     layouts: *const layout_mod.Store,
     sigs: arc_sig.SigTable,
+    roots: []const LIR.LirProcSpecId,
     diag: *Diagnostic,
 ) CertifyError!void {
     var rc_local = try allocator.alloc(bool, store.locals.items.len);
@@ -85,6 +87,9 @@ pub fn certifyStore(
     for (store.locals.items, 0..) |local, index| {
         rc_local[index] = layouts.layoutContainsRefcounted(layouts.getLayout(local.layout_idx));
     }
+
+    try certifyRcAtomicity(allocator, store, rc_local, roots, diag);
+    try certifyUniqueArgs(allocator, store, rc_local, sigs, diag);
 
     var certifier = Certifier{
         .allocator = allocator,
@@ -109,14 +114,137 @@ pub fn certifyStore(
 
 /// Production wrapper: certifies and panics on violation. Callers gate this
 /// behind debug builds; release builds never run the certifier.
+/// Mirror of the host-visibility analysis: no single-thread RC statement may
+/// name a local that is flow-connected to a host-visibility seed.
+fn certifyRcAtomicity(
+    allocator: Allocator,
+    store: *const LirStore,
+    rc_local: []const bool,
+    roots: []const LIR.LirProcSpecId,
+    diag: *Diagnostic,
+) CertifyError!void {
+    var pinned = try arc_solve.computePinnedProcs(allocator, store, roots);
+    defer pinned.deinit(allocator);
+    var visible = try arc_solve.computeVisibility(allocator, store, rc_local, &pinned);
+    defer visible.deinit(allocator);
+
+    for (store.cf_stmts.items, 0..) |stmt, stmt_index| {
+        const checked: struct { value: LIR.LocalId, atomicity: LIR.RcAtomicity } = switch (stmt) {
+            .incref => |rc| .{ .value = rc.value, .atomicity = rc.atomicity },
+            .decref => |rc| .{ .value = rc.value, .atomicity = rc.atomicity },
+            .free => |rc| .{ .value = rc.value, .atomicity = rc.atomicity },
+            else => continue,
+        };
+        if (checked.atomicity == .atomic) continue;
+        const index = @intFromEnum(checked.value);
+        if (index < visible.capacity() and visible.isSet(index)) {
+            diag.set("stmt={d}: single-thread RC statement on host-visible local {d}", .{ stmt_index, index });
+            return error.Certification;
+        }
+    }
+}
+
+/// Mirror of the born-unique analysis: every `assign_low_level` claiming a
+/// check-free unique argument must name a position the op may runtime-check
+/// and a local whose every definition is a unique birth — a fresh
+/// allocation, a direct call whose callee's signature returns unique, a
+/// pure same-value alias whose source is born unique, or a parameter the
+/// containing proc's signature seeds born-unique. The balance and borrow
+/// conditions behind the claim are enforced by the per-value certification;
+/// this rule covers the unique-origin claim. Variants share parameter
+/// locals with their source proc, so claims are checked per proc body
+/// against that proc's signature.
+fn certifyUniqueArgs(
+    allocator: Allocator,
+    store: *const LirStore,
+    rc_local: []const bool,
+    sigs: arc_sig.SigTable,
+    diag: *Diagnostic,
+) CertifyError!void {
+    var uniqueness = try arc_solve.computeUniqueness(allocator, store, rc_local, sigs);
+    defer uniqueness.deinit(allocator);
+
+    var visited = std.AutoHashMap(LIR.CFStmtId, void).init(allocator);
+    defer visited.deinit();
+    var stack = std.ArrayList(LIR.CFStmtId).empty;
+    defer stack.deinit(allocator);
+
+    for (store.proc_specs.items, 0..) |proc, proc_index| {
+        const body = proc.body orelse continue;
+        const sig = sigs.get(@enumFromInt(@as(u32, @intCast(proc_index))));
+        const params = store.getLocalSpan(proc.args);
+        visited.clearRetainingCapacity();
+        stack.clearRetainingCapacity();
+        try stack.append(allocator, body);
+        while (stack.pop()) |current| {
+            if (visited.contains(current)) continue;
+            try visited.put(current, {});
+            switch (store.getCFStmt(current)) {
+                .assign_low_level => |assign| {
+                    try stack.append(allocator, assign.next);
+                    if (assign.unique_args == 0) continue;
+                    const stmt_index = @intFromEnum(current);
+                    if ((assign.unique_args & ~assign.rc_effect.may_runtime_uniqueness_check_args) != 0) {
+                        diag.set("stmt={d}: unique_args bit outside the op's runtime-checked argument mask", .{stmt_index});
+                        return error.Certification;
+                    }
+                    for (store.getLocalSpan(assign.args), 0..) |arg, position| {
+                        if (position >= 64) break;
+                        const bit = @as(u64, 1) << @as(u6, @intCast(position));
+                        if ((assign.unique_args & bit) == 0) continue;
+                        const index = @intFromEnum(arg);
+                        if (index < uniqueness.born_unique.capacity() and uniqueness.born_unique.isSet(index)) continue;
+                        if (paramSeededUnique(sig, params, arg)) continue;
+                        diag.set("stmt={d}: check-free uniqueness claim on argument {d} (local {d}) without a unique birth", .{ stmt_index, position, index });
+                        return error.Certification;
+                    }
+                },
+                .switch_stmt => |s| {
+                    for (store.getCFSwitchBranches(s.branches)) |branch| {
+                        try stack.append(allocator, branch.body);
+                    }
+                    try stack.append(allocator, s.default_branch);
+                    if (s.continuation) |continuation| {
+                        try stack.append(allocator, continuation);
+                    }
+                },
+                .join => |j| {
+                    try stack.append(allocator, j.body);
+                    try stack.append(allocator, j.remainder);
+                },
+                inline .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .free => |s| {
+                    try stack.append(allocator, s.next);
+                },
+                .ret, .jump, .crash, .runtime_error, .loop_continue, .loop_break => {},
+            }
+        }
+    }
+}
+
+/// True when the local is a parameter of the proc and the proc's signature
+/// seeds it born-unique (a mode-specialized variant whose caller proved the
+/// dying argument unique).
+fn paramSeededUnique(sig: arc_sig.RcSig, params: []const LIR.LocalId, local: LIR.LocalId) bool {
+    if (sig.unique_params == 0) return false;
+    for (params, 0..) |param, position| {
+        if (position >= 64) break;
+        if (param != local) continue;
+        return (sig.unique_params >> @as(u6, @intCast(position))) & 1 != 0;
+    }
+    return false;
+}
+
+/// Like `certifyStore`, but panics with a rendered failure context instead
+/// of returning `error.Certification`.
 pub fn certifyStoreOrPanic(
     allocator: Allocator,
     store: *const LirStore,
     layouts: *const layout_mod.Store,
     sigs: arc_sig.SigTable,
+    roots: []const LIR.LirProcSpecId,
 ) Allocator.Error!void {
     var diag = Diagnostic{};
-    certifyStore(allocator, store, layouts, sigs, &diag) catch |err| switch (err) {
+    certifyStore(allocator, store, layouts, sigs, roots, &diag) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.Certification => {
             var context = FailureContext{};
@@ -1711,11 +1839,11 @@ const CertifyTest = struct {
     }
 
     fn certify(self: *CertifyTest) CertifyError!void {
-        return certifyStore(self.allocator, &self.store, &self.layouts, arc_sig.SigTable.all_owned, &self.diag);
+        return certifyStore(self.allocator, &self.store, &self.layouts, arc_sig.SigTable.all_owned, &.{}, &self.diag);
     }
 
     fn certifyWith(self: *CertifyTest, sigs: arc_sig.SigTable) CertifyError!void {
-        return certifyStore(self.allocator, &self.store, &self.layouts, sigs, &self.diag);
+        return certifyStore(self.allocator, &self.store, &self.layouts, sigs, &.{}, &self.diag);
     }
 };
 

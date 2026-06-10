@@ -31,6 +31,17 @@ pub const RcSig = struct {
     /// For a borrowed return, bit i set means the result may borrow from
     /// argument position i. Unused when `ret_mode` is owned.
     ret_lenders: u64 = 0,
+    /// The returned value's outermost allocation has count 1 on return:
+    /// every `ret` in the proc returns a born-unique value that survives to
+    /// the return with no other holder, so the return is the value's single
+    /// consuming use. Pinned signatures never claim a unique return.
+    ret_unique: bool = false,
+    /// Bit i set means argument position i is treated as born-unique inside
+    /// the proc body: the call site proved its dying argument unique, so
+    /// runtime uniqueness checks that consume the parameter go check-free.
+    /// Only mode-specialized variants carry these bits; solved base
+    /// signatures and pinned signatures are always zero.
+    unique_params: u64 = 0,
 
     pub const all_owned: RcSig = .{};
 
@@ -68,6 +79,8 @@ test "all-owned signature reports owned for every position" {
     try std.testing.expectEqual(Mode.owned, sig.paramMode(63));
     try std.testing.expectEqual(Mode.owned, sig.paramMode(200));
     try std.testing.expectEqual(Mode.owned, sig.ret_mode);
+    try std.testing.expectEqual(false, sig.ret_unique);
+    try std.testing.expectEqual(@as(u64, 0), sig.unique_params);
 }
 
 test "borrowed param bits round-trip" {
@@ -83,4 +96,6 @@ test "empty signature table answers all-owned" {
     const sig = table.get(@enumFromInt(7));
     try std.testing.expectEqual(@as(u64, 0), sig.borrowed_params);
     try std.testing.expectEqual(Mode.owned, sig.ret_mode);
+    try std.testing.expectEqual(false, sig.ret_unique);
+    try std.testing.expectEqual(@as(u64, 0), sig.unique_params);
 }

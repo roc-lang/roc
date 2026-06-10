@@ -333,8 +333,17 @@ const Refcount = enum {
 
 const RC_TYPE: Refcount = .atomic;
 
-/// Increments reference count of an RC pointer by specified amount
-pub fn increfRcPtrC(ptr_to_refcount: *isize, amount: isize, roc_ops: *RocOps) callconv(.c) void {
+/// How a refcount update is performed. `atomic` is always sound; callers pass
+/// `single_thread` only for allocations the compiler proved no other thread
+/// can ever touch, which lets the update use plain loads and stores.
+pub const RcAtomicity = enum(u1) {
+    atomic,
+    single_thread,
+};
+
+/// Increments reference count of an RC pointer by specified amount,
+/// using the given count-update atomicity.
+pub fn increfRcPtr(ptr_to_refcount: *isize, amount: isize, atomicity: RcAtomicity, roc_ops: *RocOps) void {
     if (RC_TYPE == .none) return;
 
     // Ensure that the refcount is not whole program lifetime.
@@ -358,8 +367,8 @@ pub fn increfRcPtrC(ptr_to_refcount: *isize, amount: isize, roc_ops: *RocOps) ca
     if (!rcConstant(refcount)) {
         // Note: we assume that a refcount will never overflow.
         // As such, we do not need to cap incrementing.
-        switch (RC_TYPE) {
-            .normal => {
+        switch (atomicity) {
+            .single_thread => {
                 ptr_to_refcount.* = refcount +% amount;
             },
             .atomic => {
@@ -376,7 +385,6 @@ pub fn increfRcPtrC(ptr_to_refcount: *isize, amount: isize, roc_ops: *RocOps) ca
                     unreachable;
                 }
             },
-            .none => unreachable,
         }
         if (comptime builtin.os.tag != .freestanding) {
             DebugRefcountTracker.onIncref(@intFromPtr(ptr_to_refcount), amount);
@@ -384,13 +392,26 @@ pub fn increfRcPtrC(ptr_to_refcount: *isize, amount: isize, roc_ops: *RocOps) ca
     }
 }
 
-/// TODO
-pub fn decrefRcPtrC(
+/// Increments reference count of an RC pointer by specified amount
+pub fn increfRcPtrC(ptr_to_refcount: *isize, amount: isize, roc_ops: *RocOps) callconv(.c) void {
+    increfRcPtr(ptr_to_refcount, amount, .atomic, roc_ops);
+}
+
+/// Increments reference count of an RC pointer by specified amount, for
+/// allocations proven confined to a single thread.
+pub fn increfRcPtrSingleThreadC(ptr_to_refcount: *isize, amount: isize, roc_ops: *RocOps) callconv(.c) void {
+    increfRcPtr(ptr_to_refcount, amount, .single_thread, roc_ops);
+}
+
+/// Decrements the refcount pointed to directly by `bytes_or_null`,
+/// using the given count-update atomicity.
+pub fn decrefRcPtr(
     bytes_or_null: ?[*]isize,
     alignment: u32,
     elements_refcounted: bool,
+    atomicity: RcAtomicity,
     roc_ops: *RocOps,
-) callconv(.c) void {
+) void {
     // IMPORTANT: bytes_or_null is this case is expected to be a pointer to the refcount
     // (NOT the start of the data, or the start of the allocation)
 
@@ -400,8 +421,51 @@ pub fn decrefRcPtrC(
     return @call(
         .always_inline,
         decref_ptr_to_refcount,
-        .{ bytes, alignment, elements_refcounted, roc_ops, .decref_rc_ptr },
+        .{ bytes, alignment, elements_refcounted, atomicity, roc_ops, .decref_rc_ptr },
     );
+}
+
+/// TODO
+pub fn decrefRcPtrC(
+    bytes_or_null: ?[*]isize,
+    alignment: u32,
+    elements_refcounted: bool,
+    roc_ops: *RocOps,
+) callconv(.c) void {
+    return decrefRcPtr(bytes_or_null, alignment, elements_refcounted, .atomic, roc_ops);
+}
+
+/// Decrements the refcount pointed to directly by `bytes_or_null`, for
+/// allocations proven confined to a single thread.
+pub fn decrefRcPtrSingleThreadC(
+    bytes_or_null: ?[*]isize,
+    alignment: u32,
+    elements_refcounted: bool,
+    roc_ops: *RocOps,
+) callconv(.c) void {
+    return decrefRcPtr(bytes_or_null, alignment, elements_refcounted, .single_thread, roc_ops);
+}
+
+/// Safely decrements reference count for a potentially null pointer,
+/// using the given count-update atomicity.
+/// WARNING: This function assumes `bytes` points to 8-byte aligned data.
+/// It should NOT be used for seamless slices with non-zero start offsets,
+/// as those have misaligned bytes pointers. Use RocList.decref instead.
+pub fn decrefCheckNull(
+    bytes_or_null: ?[*]u8,
+    alignment: u32,
+    elements_refcounted: bool,
+    atomicity: RcAtomicity,
+    roc_ops: *RocOps,
+) void {
+    if (bytes_or_null) |bytes| {
+        const isizes: [*]isize = alignedPtrCast([*]isize, bytes, @src());
+        return @call(
+            .always_inline,
+            decref_ptr_to_refcount,
+            .{ isizes - 1, alignment, elements_refcounted, atomicity, roc_ops, .decref_check_null },
+        );
+    }
 }
 
 /// Safely decrements reference count for a potentially null pointer
@@ -414,25 +478,33 @@ pub fn decrefCheckNullC(
     elements_refcounted: bool,
     roc_ops: *RocOps,
 ) callconv(.c) void {
-    if (bytes_or_null) |bytes| {
-        const isizes: [*]isize = alignedPtrCast([*]isize, bytes, @src());
-        return @call(
-            .always_inline,
-            decref_ptr_to_refcount,
-            .{ isizes - 1, alignment, elements_refcounted, roc_ops, .decref_check_null },
-        );
-    }
+    return decrefCheckNull(bytes_or_null, alignment, elements_refcounted, .atomic, roc_ops);
 }
 
-/// Decrements reference count for a data pointer and frees memory if count reaches zero
-/// Handles tag bits in the pointer and extracts the reference count pointer
-/// Used for reference-counted data structures
-pub fn decrefDataPtrC(
+/// Safely decrements reference count for a potentially null pointer, for
+/// allocations proven confined to a single thread.
+/// WARNING: This function assumes `bytes` points to 8-byte aligned data.
+/// It should NOT be used for seamless slices with non-zero start offsets,
+/// as those have misaligned bytes pointers. Use RocList.decref instead.
+pub fn decrefCheckNullSingleThreadC(
     bytes_or_null: ?[*]u8,
     alignment: u32,
     elements_refcounted: bool,
     roc_ops: *RocOps,
 ) callconv(.c) void {
+    return decrefCheckNull(bytes_or_null, alignment, elements_refcounted, .single_thread, roc_ops);
+}
+
+/// Decrements reference count for a data pointer and frees memory if count
+/// reaches zero, using the given count-update atomicity.
+/// Handles tag bits in the pointer and extracts the reference count pointer.
+pub fn decrefDataPtr(
+    bytes_or_null: ?[*]u8,
+    alignment: u32,
+    elements_refcounted: bool,
+    atomicity: RcAtomicity,
+    roc_ops: *RocOps,
+) void {
     const bytes = bytes_or_null orelse return;
     const tag_mask: usize = if (@sizeOf(usize) == 8) 0b111 else 0b11;
 
@@ -443,7 +515,7 @@ pub fn decrefDataPtrC(
     if (comptime builtin.mode == .Debug) {
         if (data_ptr % @alignOf(usize) != 0) {
             var buf: [128]u8 = undefined;
-            const msg = std.fmt.bufPrint(&buf, "decrefDataPtrC: data_ptr=0x{x} not {d}-byte aligned", .{ data_ptr, @alignOf(usize) }) catch "decrefDataPtrC: alignment error";
+            const msg = std.fmt.bufPrint(&buf, "decrefDataPtr: data_ptr=0x{x} not {d}-byte aligned", .{ data_ptr, @alignOf(usize) }) catch "decrefDataPtr: alignment error";
             roc_ops.crash(msg);
             return;
         }
@@ -455,7 +527,7 @@ pub fn decrefDataPtrC(
     if (comptime builtin.mode == .Debug) {
         if (unmasked_ptr % @alignOf(isize) != 0) {
             var buf: [128]u8 = undefined;
-            const msg = std.fmt.bufPrint(&buf, "decrefDataPtrC: unmasked=0x{x} (data=0x{x}) not {d}-byte aligned", .{ unmasked_ptr, data_ptr, @alignOf(isize) }) catch "decrefDataPtrC: unmasked alignment error";
+            const msg = std.fmt.bufPrint(&buf, "decrefDataPtr: unmasked=0x{x} (data=0x{x}) not {d}-byte aligned", .{ unmasked_ptr, data_ptr, @alignOf(isize) }) catch "decrefDataPtr: unmasked alignment error";
             roc_ops.crash(msg);
             return;
         }
@@ -464,17 +536,42 @@ pub fn decrefDataPtrC(
     const isizes: [*]isize = @as([*]isize, @ptrFromInt(unmasked_ptr));
     const rc_ptr = isizes - 1;
 
-    return decrefRcPtrC(rc_ptr, alignment, elements_refcounted, roc_ops);
+    return decrefRcPtr(rc_ptr, alignment, elements_refcounted, atomicity, roc_ops);
 }
 
-/// Increments reference count for a data pointer by specified amount
+/// Decrements reference count for a data pointer and frees memory if count reaches zero
 /// Handles tag bits in the pointer and extracts the reference count pointer
 /// Used for reference-counted data structures
-pub fn increfDataPtrC(
+pub fn decrefDataPtrC(
     bytes_or_null: ?[*]u8,
-    inc_amount: isize,
+    alignment: u32,
+    elements_refcounted: bool,
     roc_ops: *RocOps,
 ) callconv(.c) void {
+    return decrefDataPtr(bytes_or_null, alignment, elements_refcounted, .atomic, roc_ops);
+}
+
+/// Decrements reference count for a data pointer and frees memory if count
+/// reaches zero, for allocations proven confined to a single thread.
+/// Handles tag bits in the pointer and extracts the reference count pointer.
+pub fn decrefDataPtrSingleThreadC(
+    bytes_or_null: ?[*]u8,
+    alignment: u32,
+    elements_refcounted: bool,
+    roc_ops: *RocOps,
+) callconv(.c) void {
+    return decrefDataPtr(bytes_or_null, alignment, elements_refcounted, .single_thread, roc_ops);
+}
+
+/// Increments reference count for a data pointer by specified amount,
+/// using the given count-update atomicity.
+/// Handles tag bits in the pointer and extracts the reference count pointer.
+pub fn increfDataPtr(
+    bytes_or_null: ?[*]u8,
+    inc_amount: isize,
+    atomicity: RcAtomicity,
+    roc_ops: *RocOps,
+) void {
     const bytes = bytes_or_null orelse return;
 
     const ptr = @intFromPtr(bytes);
@@ -488,14 +585,36 @@ pub fn increfDataPtrC(
     if (comptime builtin.mode == .Debug) {
         if (rc_addr % @alignOf(isize) != 0) {
             var buf: [128]u8 = undefined;
-            const msg = std.fmt.bufPrint(&buf, "increfDataPtrC: rc_addr=0x{x} (ptr=0x{x}, masked=0x{x}) is not {d}-byte aligned", .{ rc_addr, ptr, masked_ptr, @alignOf(isize) }) catch "increfDataPtrC: rc_addr alignment error";
+            const msg = std.fmt.bufPrint(&buf, "increfDataPtr: rc_addr=0x{x} (ptr=0x{x}, masked=0x{x}) is not {d}-byte aligned", .{ rc_addr, ptr, masked_ptr, @alignOf(isize) }) catch "increfDataPtr: rc_addr alignment error";
             roc_ops.crash(msg);
             return;
         }
     }
 
     const isizes: *isize = @as(*isize, @ptrFromInt(rc_addr));
-    return increfRcPtrC(isizes, inc_amount, roc_ops);
+    return increfRcPtr(isizes, inc_amount, atomicity, roc_ops);
+}
+
+/// Increments reference count for a data pointer by specified amount
+/// Handles tag bits in the pointer and extracts the reference count pointer
+/// Used for reference-counted data structures
+pub fn increfDataPtrC(
+    bytes_or_null: ?[*]u8,
+    inc_amount: isize,
+    roc_ops: *RocOps,
+) callconv(.c) void {
+    return increfDataPtr(bytes_or_null, inc_amount, .atomic, roc_ops);
+}
+
+/// Increments reference count for a data pointer by specified amount, for
+/// allocations proven confined to a single thread.
+/// Handles tag bits in the pointer and extracts the reference count pointer.
+pub fn increfDataPtrSingleThreadC(
+    bytes_or_null: ?[*]u8,
+    inc_amount: isize,
+    roc_ops: *RocOps,
+) callconv(.c) void {
+    return increfDataPtr(bytes_or_null, inc_amount, .single_thread, roc_ops);
 }
 
 /// Frees memory for a data pointer regardless of reference count
@@ -542,12 +661,14 @@ pub fn freeRcPtrC(
     return free_ptr_to_refcount(bytes, alignment, elements_refcounted, roc_ops);
 }
 
-/// Decrements reference count and potentially frees memory
+/// Decrements reference count and potentially frees memory,
+/// using the given count-update atomicity.
 pub fn decref(
     bytes_or_null: ?[*]u8,
     data_bytes: usize,
     alignment: u32,
     elements_refcounted: bool,
+    atomicity: RcAtomicity,
     roc_ops: *RocOps,
 ) void {
     if (data_bytes == 0) {
@@ -558,7 +679,7 @@ pub fn decref(
 
     const isizes: [*]isize = alignedPtrCast([*]isize, bytes, @src());
 
-    decref_ptr_to_refcount(isizes - 1, alignment, elements_refcounted, roc_ops, .decref_data_ptr);
+    decref_ptr_to_refcount(isizes - 1, alignment, elements_refcounted, atomicity, roc_ops, .decref_data_ptr);
 }
 
 inline fn free_ptr_to_refcount(
@@ -601,6 +722,7 @@ inline fn decref_ptr_to_refcount(
     refcount_ptr: [*]isize,
     element_alignment: u32,
     elements_refcounted: bool,
+    atomicity: RcAtomicity,
     roc_ops: *RocOps,
     comptime site: DebugRefcountTracker.Site,
 ) void {
@@ -637,8 +759,8 @@ inline fn decref_ptr_to_refcount(
     }
 
     if (!rcConstant(refcount)) {
-        switch (RC_TYPE) {
-            .normal => {
+        switch (atomicity) {
+            .single_thread => {
                 refcount_ptr[0] = refcount -% 1;
                 if (refcount == 1) {
                     free_ptr_to_refcount(refcount_ptr, alignment, elements_refcounted, roc_ops);
@@ -650,7 +772,6 @@ inline fn decref_ptr_to_refcount(
                     free_ptr_to_refcount(refcount_ptr, alignment, elements_refcounted, roc_ops);
                 }
             },
-            .none => unreachable,
         }
     }
 }
@@ -1013,7 +1134,7 @@ pub const DebugRefcountTracker = struct {
         }
     }
 
-    /// Called from increfRcPtrC
+    /// Called from increfRcPtr
     pub fn onIncref(rc_addr: usize, amount: isize) void {
         if (!active) return;
         if (findOrInsert(rc_addr)) |idx| {
@@ -1121,6 +1242,60 @@ test "increfC, static data" {
     const ptr_to_refcount: *isize = &mock_rc;
     @import("utils.zig").increfRcPtrC(ptr_to_refcount, 2, test_env.getOps());
     try std.testing.expectEqual(mock_rc, @import("utils.zig").REFCOUNT_STATIC_DATA);
+}
+
+test "increfRcPtrSingleThreadC, refcounted data" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    var mock_rc: isize = 17;
+    const ptr_to_refcount: *isize = &mock_rc;
+    @import("utils.zig").increfRcPtrSingleThreadC(ptr_to_refcount, 2, test_env.getOps());
+    try std.testing.expectEqual(mock_rc, 19);
+}
+
+test "increfRcPtrSingleThreadC, static data" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    var mock_rc: isize = @import("utils.zig").REFCOUNT_STATIC_DATA;
+    const ptr_to_refcount: *isize = &mock_rc;
+    @import("utils.zig").increfRcPtrSingleThreadC(ptr_to_refcount, 2, test_env.getOps());
+    try std.testing.expectEqual(mock_rc, @import("utils.zig").REFCOUNT_STATIC_DATA);
+}
+
+test "decrefRcPtrSingleThreadC, refcounted data" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    var mock_rc: isize = 17;
+    const ptr_to_refcount: *isize = &mock_rc;
+    @import("utils.zig").decrefRcPtrSingleThreadC(@ptrCast(ptr_to_refcount), 8, false, test_env.getOps());
+    try std.testing.expectEqual(mock_rc, 16);
+}
+
+test "single-thread incref/decref pair on a real allocation frees on zero" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const ops = test_env.getOps();
+
+    const data_ptr = allocateWithRefcount(64, 8, false, ops);
+    try std.testing.expectEqual(@as(usize, 1), test_env.getAllocationCount());
+
+    const rc_ptr: *isize = @ptrCast(alignedPtrCast([*]isize, data_ptr, @src()) - 1);
+    try std.testing.expectEqual(@as(isize, 1), rc_ptr.*);
+
+    increfRcPtr(rc_ptr, 2, .single_thread, ops);
+    try std.testing.expectEqual(@as(isize, 3), rc_ptr.*);
+
+    decrefDataPtr(data_ptr, 8, false, .single_thread, ops);
+    decrefDataPtr(data_ptr, 8, false, .single_thread, ops);
+    try std.testing.expectEqual(@as(isize, 1), rc_ptr.*);
+    try std.testing.expectEqual(@as(usize, 1), test_env.getAllocationCount());
+
+    decrefDataPtr(data_ptr, 8, false, .single_thread, ops);
+    try std.testing.expectEqual(@as(usize, 0), test_env.getAllocationCount());
 }
 
 test "decrefC, refcounted data" {
