@@ -2767,27 +2767,12 @@ pub fn whereClauseSlice(store: *const NodeStore, span: AST.WhereClause.Span) []A
 pub fn addTargetsSection(store: *NodeStore, section: AST.TargetsSection) std.mem.Allocator.Error!AST.TargetsSection.Idx {
     const node = Node{
         .tag = .targets_section,
-        .main_token = section.files_path orelse 0,
+        .main_token = section.inputs_path orelse 0,
         .data = .{
-            .lhs = try packOptionalIndex(section.exe),
-            .rhs = try packOptionalIndex(section.static_lib),
+            .lhs = section.entries.span.start,
+            .rhs = section.entries.span.len,
         },
         .region = section.region,
-    };
-    const nid = try store.nodes.append(store.gpa, node);
-    return @enumFromInt(@intFromEnum(nid));
-}
-
-/// Adds a TargetLinkType node and returns its index.
-pub fn addTargetLinkType(store: *NodeStore, link_type: AST.TargetLinkType) std.mem.Allocator.Error!AST.TargetLinkType.Idx {
-    const node = Node{
-        .tag = .target_link_type,
-        .main_token = 0,
-        .data = .{
-            .lhs = link_type.entries.span.start,
-            .rhs = link_type.entries.span.len,
-        },
-        .region = link_type.region,
     };
     const nid = try store.nodes.append(store.gpa, node);
     return @enumFromInt(@intFromEnum(nid));
@@ -3055,24 +3040,10 @@ pub fn getTargetsSection(store: *const NodeStore, idx: AST.TargetsSection.Idx) A
     const node = store.nodes.get(@enumFromInt(@intFromEnum(idx)));
     std.debug.assert(node.tag == .targets_section);
 
-    const files_path: ?Token.Idx = if (node.main_token == 0) null else node.main_token;
-    const exe = unpackOptionalIndex(AST.TargetLinkType.Idx, node.data.lhs);
-    const static_lib = unpackOptionalIndex(AST.TargetLinkType.Idx, node.data.rhs);
+    const inputs_path: ?Token.Idx = if (node.main_token == 0) null else node.main_token;
 
     return .{
-        .files_path = files_path,
-        .exe = exe,
-        .static_lib = static_lib,
-        .region = node.region,
-    };
-}
-
-/// Retrieves a TargetLinkType from a stored node.
-pub fn getTargetLinkType(store: *const NodeStore, idx: AST.TargetLinkType.Idx) AST.TargetLinkType {
-    const node = store.nodes.get(@enumFromInt(@intFromEnum(idx)));
-    std.debug.assert(node.tag == .target_link_type);
-
-    return .{
+        .inputs_path = inputs_path,
         .entries = .{ .span = .{ .start = node.data.lhs, .len = node.data.rhs } },
         .region = node.region,
     };

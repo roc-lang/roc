@@ -318,10 +318,8 @@ platform ""
     packages {}
     provides { data_for_host: "data" }
     targets: {
-        files: "targets/",
-        exe: {
-            x64glibc: { files: [app] },
-        }
+        inputs: "targets/",
+        x64glibc: { inputs: [app] },
     }
 
 data_for_host : Str

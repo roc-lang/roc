@@ -75,6 +75,7 @@ comptime {
     @export(&dw.roc_builtins_list_prepend, .{ .name = "roc_builtins_list_prepend" });
     @export(&dw.roc_builtins_list_sublist, .{ .name = "roc_builtins_list_sublist" });
     @export(&dw.roc_builtins_list_incref, .{ .name = "roc_builtins_list_incref" });
+    @export(&dw.roc_builtins_list_incref_single_thread, .{ .name = "roc_builtins_list_incref_single_thread" });
     @export(&dw.roc_builtins_list_drop_at, .{ .name = "roc_builtins_list_drop_at" });
     @export(&dw.roc_builtins_list_replace, .{ .name = "roc_builtins_list_replace" });
     @export(&dw.roc_builtins_list_swap, .{ .name = "roc_builtins_list_swap" });
@@ -83,16 +84,21 @@ comptime {
     @export(&dw.roc_builtins_list_decref_str, .{ .name = "roc_builtins_list_decref_str" });
     @export(&dw.roc_builtins_list_decref_flat_list, .{ .name = "roc_builtins_list_decref_flat_list" });
     @export(&dw.roc_builtins_list_decref_with, .{ .name = "roc_builtins_list_decref_with" });
+    @export(&dw.roc_builtins_list_decref_with_single_thread, .{ .name = "roc_builtins_list_decref_with_single_thread" });
     @export(&dw.roc_builtins_list_free_flat_list, .{ .name = "roc_builtins_list_free_flat_list" });
     @export(&dw.roc_builtins_list_free_with, .{ .name = "roc_builtins_list_free_with" });
     @export(&dw.roc_builtins_box_decref_with, .{ .name = "roc_builtins_box_decref_with" });
+    @export(&dw.roc_builtins_box_decref_with_single_thread, .{ .name = "roc_builtins_box_decref_with_single_thread" });
     @export(&dw.roc_builtins_box_free_with, .{ .name = "roc_builtins_box_free_with" });
     @export(&dw.roc_builtins_erased_callable_incref, .{ .name = "roc_builtins_erased_callable_incref" });
     @export(&dw.roc_builtins_erased_callable_decref, .{ .name = "roc_builtins_erased_callable_decref" });
+    @export(&dw.roc_builtins_erased_callable_decref_single_thread, .{ .name = "roc_builtins_erased_callable_decref_single_thread" });
     @export(&dw.roc_builtins_erased_callable_free, .{ .name = "roc_builtins_erased_callable_free" });
     @export(&dw.roc_builtins_allocate_with_refcount, .{ .name = "roc_builtins_allocate_with_refcount" });
     @export(&dw.roc_builtins_incref_data_ptr, .{ .name = "roc_builtins_incref_data_ptr" });
+    @export(&dw.roc_builtins_incref_data_ptr_single_thread, .{ .name = "roc_builtins_incref_data_ptr_single_thread" });
     @export(&dw.roc_builtins_decref_data_ptr, .{ .name = "roc_builtins_decref_data_ptr" });
+    @export(&dw.roc_builtins_decref_data_ptr_single_thread, .{ .name = "roc_builtins_decref_data_ptr_single_thread" });
     @export(&dw.roc_builtins_free_data_ptr, .{ .name = "roc_builtins_free_data_ptr" });
     @export(&dw.roc_builtins_dec_to_str, .{ .name = "roc_builtins_dec_to_str" });
     // Numeric conversion wrappers
