@@ -2429,23 +2429,28 @@ pub fn buildLirImageWithCoordinator(
     }
 
     try coord.enqueueParseTask("app", app_module_id);
-    coord.coordinatorLoop() catch |err| {
-        _ = renderCoordinatorReports(ctx, &coord, roc_file_path);
-        return err;
+
+    const counts = countReports: {
+        coord.coordinatorLoop() catch |err| {
+            _ = renderCoordinatorReports(ctx, &coord, roc_file_path);
+            return err;
+        };
+
+        if (coord.hasUserErrors()) {
+            const counts = renderCoordinatorReports(ctx, &coord, roc_file_path);
+            shm.updateHeader();
+            return sharedMemoryResult(&shm, counts, &.{}, null);
+        }
+
+        try coord.finalizeExecutableArtifacts();
+        if (coord.hasUserErrors()) {
+            const counts = renderCoordinatorReports(ctx, &coord, roc_file_path);
+            shm.updateHeader();
+            return sharedMemoryResult(&shm, counts, &.{}, null);
+        }
+
+        break :countReports renderCoordinatorReports(ctx, &coord, roc_file_path);
     };
-
-    const counts = renderCoordinatorReports(ctx, &coord, roc_file_path);
-    if (counts.errors > 0) {
-        shm.updateHeader();
-        return sharedMemoryResult(&shm, counts, &.{}, null);
-    }
-
-    try coord.finalizeExecutableArtifacts();
-    const finalized_counts = renderCoordinatorReports(ctx, &coord, roc_file_path);
-    if (finalized_counts.errors > 0) {
-        shm.updateHeader();
-        return sharedMemoryResult(&shm, finalized_counts, &.{}, null);
-    }
 
     const root_artifact = coord.executableRootCheckedArtifact();
     const imported_artifacts = try coord.collectImportedArtifactViews(ctx.gpa, root_artifact);
@@ -2486,7 +2491,7 @@ pub fn buildLirImageWithCoordinator(
     );
 
     shm.updateHeader();
-    return sharedMemoryResult(&shm, finalized_counts, entrypoint_names, checked_host_identity);
+    return sharedMemoryResult(&shm, counts, entrypoint_names, checked_host_identity);
 }
 
 /// Wrapper around buildLirImageWithCoordinator for callers that pass allow_errors.
