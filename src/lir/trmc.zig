@@ -75,11 +75,17 @@ pub fn run(store: *LirStore, layouts: *layout_mod.Store) ResourceError!void {
     const print_transforms = debugFlagEnabled("ROC_PRINT_TRMC");
     const print_ir = debugFlagEnabled("ROC_PRINT_IR_AFTER_TRMC");
 
+    // Every statement a proc's walk can reach exists before the pass runs;
+    // statements appended by earlier transforms belong to already-processed
+    // procs, so sizing the stamp array once up front is safe.
+    var scratch = try Scratch.init(store.allocator, store.cf_stmts.items.len);
+    defer scratch.deinit();
+
     const proc_count = store.proc_specs.items.len;
     var proc_index: usize = 0;
     while (proc_index < proc_count) : (proc_index += 1) {
         const proc_id: LIR.LirProcSpecId = @enumFromInt(proc_index);
-        try transformProc(store, layouts, proc_id, print_transforms, print_ir);
+        try transformProc(store, layouts, proc_id, &scratch, print_transforms, print_ir);
     }
 }
 
@@ -87,20 +93,21 @@ fn transformProc(
     store: *LirStore,
     layouts: *layout_mod.Store,
     proc_id: LIR.LirProcSpecId,
+    scratch: *Scratch,
     print_transforms: bool,
     print_ir: bool,
 ) ResourceError!void {
     const proc = store.getProcSpec(proc_id);
     if (proc.body == null or proc.hosted != null or proc.abi != .roc) return;
 
-    var detection = Detection.init(store.allocator, store, layouts, proc_id);
+    var detection = Detection.init(store, layouts, proc_id, scratch);
     defer detection.deinit();
     try detection.detect();
     if (detection.bail) return;
 
     var construct_count: usize = 0;
     var tail_count: usize = 0;
-    for (detection.candidates.items) |candidate| {
+    for (scratch.candidates.items) |candidate| {
         switch (candidate.state) {
             .confirmed_construct => construct_count += 1,
             .confirmed_tail => tail_count += 1,
@@ -108,18 +115,19 @@ fn transformProc(
         }
     }
 
+    if (construct_count == 0 and tail_count == 0) return;
+    if (builtin.mode == .Debug) detection.assertRewrittenStmtsUnshared();
+
     if (construct_count > 0) {
         var transform = Transform.init(store.allocator, store, layouts, proc_id, &detection);
         defer transform.deinit();
         try transform.applyTrmc();
         store.getProcSpecPtr(proc_id).tail_transform = .trmc;
-    } else if (tail_count > 0) {
+    } else {
         var transform = Transform.init(store.allocator, store, layouts, proc_id, &detection);
         defer transform.deinit();
         try transform.applyTce();
         store.getProcSpecPtr(proc_id).tail_transform = .tce;
-    } else {
-        return;
     }
 
     if (print_transforms) {
@@ -140,8 +148,13 @@ fn transformProc(
 // Detection
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// How a statement is reached: the unique incoming reference the transform can
-/// redirect to splice statements out of the graph.
+/// How a statement is reached: the incoming reference the transform redirects
+/// to splice statements out of the graph. Statement graphs are DAGs (lowering
+/// shares linear tails), so this is the FIRST-seen reference — splicing or
+/// repurposing a statement that has a second incoming reference would
+/// miscompile the other path, which is why the transform asserts (in Debug)
+/// that every statement it rewrites non-uniformly is singly referenced; see
+/// Scratch.stamps and assertRewrittenStmtsUnshared.
 const Edge = union(enum) {
     proc_body,
     stmt_next: CFStmtId,
@@ -216,36 +229,83 @@ const JoinInfo = struct {
     body: CFStmtId,
 };
 
-const Detection = struct {
+/// A work-stack entry for the detection walk.
+const WorkItem = struct { stmt: CFStmtId, edge: Edge };
+
+/// Per-run reusable buffers for detection: the containers that would
+/// otherwise be allocated and freed for every proc. The ArrayLists clear in
+/// O(1) via clearRetainingCapacity, and the visited marks clear by bumping
+/// `generation` — so after the high-water marks are reached, a proc's walk
+/// allocates nothing and costs one array load per statement instead of a
+/// hash probe. (A reused hashmap would be worse than no reuse for the
+/// visited set: its clearRetainingCapacity is O(capacity), which stays at
+/// the largest proc's high-water mark.)
+const Scratch = struct {
     gpa: Allocator,
+    /// Visited marks for the walk, indexed by CFStmtId. stamps[i] ==
+    /// generation means seen once this proc; generation + 1 means seen
+    /// through more than one incoming reference (consulted by
+    /// assertRewrittenStmtsUnshared).
+    stamps: []u32,
+    /// Always even; bumped by 2 in beginProc so both stamp values are fresh.
+    generation: u32 = 0,
+    work: std.ArrayList(WorkItem) = .empty,
+    candidates: std.ArrayList(Candidate) = .empty,
+    /// Every original `ret` statement of the current proc (epilogue-rewritten
+    /// by TRMC).
+    rets: std.ArrayList(CFStmtId) = .empty,
+
+    fn init(gpa: Allocator, stmt_count: usize) ResourceError!Scratch {
+        const stamps = try gpa.alloc(u32, stmt_count);
+        @memset(stamps, 0);
+        return .{ .gpa = gpa, .stamps = stamps };
+    }
+
+    fn deinit(self: *Scratch) void {
+        self.gpa.free(self.stamps);
+        self.work.deinit(self.gpa);
+        self.candidates.deinit(self.gpa);
+        self.rets.deinit(self.gpa);
+    }
+
+    fn beginProc(self: *Scratch) void {
+        self.work.clearRetainingCapacity();
+        self.candidates.clearRetainingCapacity();
+        self.rets.clearRetainingCapacity();
+        if (self.generation >= std.math.maxInt(u32) - 1) {
+            // ~2 billion procs in one run; unreachable in practice, but wrap
+            // would make stale stamps read as visited.
+            @memset(self.stamps, 0);
+            self.generation = 0;
+        }
+        self.generation += 2;
+    }
+};
+
+const Detection = struct {
     store: *LirStore,
     layouts: *const layout_mod.Store,
     proc_id: LIR.LirProcSpecId,
+    scratch: *Scratch,
     /// Whether the proc's return layout permits TRMC candidates at all.
     eligible_trmc: bool = false,
     /// Set when the proc exceeds a pass limit; the proc is left untouched.
     bail: bool = false,
-    candidates: std.ArrayList(Candidate),
-    /// Every original `ret` statement (epilogue-rewritten by TRMC).
-    rets: std.ArrayList(CFStmtId),
     joins: std.AutoHashMap(JoinPointId, JoinInfo),
     max_join_id: u32 = 0,
 
-    fn init(gpa: Allocator, store: *LirStore, layouts: *const layout_mod.Store, proc_id: LIR.LirProcSpecId) Detection {
+    fn init(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LIR.LirProcSpecId, scratch: *Scratch) Detection {
+        scratch.beginProc();
         return .{
-            .gpa = gpa,
             .store = store,
             .layouts = layouts,
             .proc_id = proc_id,
-            .candidates = .empty,
-            .rets = .empty,
-            .joins = std.AutoHashMap(JoinPointId, JoinInfo).init(gpa),
+            .scratch = scratch,
+            .joins = std.AutoHashMap(JoinPointId, JoinInfo).init(scratch.gpa),
         };
     }
 
     fn deinit(self: *Detection) void {
-        self.candidates.deinit(self.gpa);
-        self.rets.deinit(self.gpa);
         self.joins.deinit();
     }
 
@@ -254,44 +314,7 @@ const Detection = struct {
         const ret_layout_val = self.layouts.getLayout(proc.ret_layout);
         self.eligible_trmc = ret_layout_val.tag == .tag_union;
 
-        try self.collectJoinsAndRets(proc.body.?);
-        try self.walkCandidates(proc.body.?);
-    }
-
-    /// First pass: record every join point (for returnsLocal chasing), every
-    /// ret statement, and the highest join id (the wrapper join uses max + 1).
-    fn collectJoinsAndRets(self: *Detection, body: CFStmtId) ResourceError!void {
-        var work = std.ArrayList(CFStmtId).empty;
-        defer work.deinit(self.gpa);
-        var visited = std.AutoHashMap(CFStmtId, void).init(self.gpa);
-        defer visited.deinit();
-
-        try work.append(self.gpa, body);
-        while (work.pop()) |stmt_id| {
-            const entry = try visited.getOrPut(stmt_id);
-            if (entry.found_existing) continue;
-
-            switch (self.store.getCFStmt(stmt_id)) {
-                .join => |s| {
-                    try self.joins.put(s.id, .{ .params = s.params, .body = s.body });
-                    self.max_join_id = @max(self.max_join_id, @intFromEnum(s.id));
-                    try work.append(self.gpa, s.body);
-                    try work.append(self.gpa, s.remainder);
-                },
-                .switch_stmt => |s| {
-                    for (self.store.getCFSwitchBranches(s.branches)) |branch| {
-                        try work.append(self.gpa, branch.body);
-                    }
-                    try work.append(self.gpa, s.default_branch);
-                    if (s.continuation) |continuation| try work.append(self.gpa, continuation);
-                },
-                .ret => try self.rets.append(self.gpa, stmt_id),
-                .jump, .crash, .runtime_error, .loop_continue, .loop_break => {},
-                inline .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .free => |s| {
-                    try work.append(self.gpa, s.next);
-                },
-            }
-        }
+        try self.walk(proc.body.?);
     }
 
     /// Does jumping to `target` ultimately return `local`? True when the join
@@ -313,48 +336,79 @@ const Detection = struct {
         return false;
     }
 
-    /// Second pass: the candidate walk. One shared mutable candidate set
-    /// across all branches (matching the old Rust pass): a candidate confirmed
-    /// on one path is invalidated retroactively if any other statement uses a
-    /// chain local. Join bodies are walked before remainders so a done-join's
-    /// `ret res` is seen before any branch makes `res` a tracked alias.
-    fn walkCandidates(self: *Detection, body: CFStmtId) ResourceError!void {
-        const WorkItem = struct { stmt: CFStmtId, edge: Edge };
-        var work = std.ArrayList(WorkItem).empty;
-        defer work.deinit(self.gpa);
-        var visited = std.AutoHashMap(CFStmtId, void).init(self.gpa);
-        defer visited.deinit();
+    /// Single DFS over the proc body, doing two jobs per statement: record
+    /// join points / ret statements / the highest join id (the wrapper join
+    /// uses max + 1), and run the candidate walk. One shared mutable candidate
+    /// set across all branches (matching the old Rust pass): a candidate
+    /// confirmed on one path is invalidated retroactively if any other
+    /// statement uses a chain local. Join bodies are walked before remainders
+    /// so a done-join's `ret res` is seen before any branch makes `res` a
+    /// tracked alias.
+    ///
+    /// Fusing join collection with the candidate walk is sound because a jump
+    /// may only target an enclosing join point, and every enclosing join's
+    /// statement is an ancestor on every DFS path to the jump — so it is
+    /// recorded before the jump (or any returnsLocal forwarding chase through
+    /// it) is processed.
+    ///
+    /// Statement graphs are DAGs, not trees: lowering shares linear tails
+    /// (two predecessors pointing at the same `next` chain), so the visited
+    /// stamps are what guarantees each statement is processed — and each ret
+    /// epilogue-rewritten — exactly once.
+    fn walk(self: *Detection, body: CFStmtId) ResourceError!void {
+        const gpa = self.scratch.gpa;
+        const work = &self.scratch.work;
+        // No statement reachable from a proc body postdates the stamp array
+        // (transforms only append to already-processed procs), so plain
+        // indexing is in bounds.
+        const stamps = self.scratch.stamps;
+        const gen = self.scratch.generation;
 
-        try work.append(self.gpa, .{ .stmt = body, .edge = .proc_body });
+        try work.append(gpa, .{ .stmt = body, .edge = .proc_body });
         while (work.pop()) |item| {
-            const entry = try visited.getOrPut(item.stmt);
-            if (entry.found_existing) continue;
+            const stamp = &stamps[@intFromEnum(item.stmt)];
+            if (stamp.* >= gen) {
+                // Second arrival: mark the statement as multiply referenced
+                // (read back by assertRewrittenStmtsUnshared) and skip it.
+                stamp.* = gen + 1;
+                continue;
+            }
+            stamp.* = gen;
 
             const stmt = self.store.getCFStmt(item.stmt);
+            switch (stmt) {
+                .join => |s| {
+                    try self.joins.put(s.id, .{ .params = s.params, .body = s.body });
+                    self.max_join_id = @max(self.max_join_id, @intFromEnum(s.id));
+                },
+                .ret => try self.scratch.rets.append(gpa, item.stmt),
+                else => {},
+            }
+
             try self.processStmt(item.stmt, item.edge, stmt);
             if (self.bail) return;
 
             switch (stmt) {
                 .join => |s| {
                     // Pushed in reverse pop order: body is processed first.
-                    try work.append(self.gpa, .{ .stmt = s.remainder, .edge = .{ .join_remainder = item.stmt } });
-                    try work.append(self.gpa, .{ .stmt = s.body, .edge = .{ .join_body = item.stmt } });
+                    try work.append(gpa, .{ .stmt = s.remainder, .edge = .{ .join_remainder = item.stmt } });
+                    try work.append(gpa, .{ .stmt = s.body, .edge = .{ .join_body = item.stmt } });
                 },
                 .switch_stmt => |s| {
                     if (s.continuation) |continuation| {
-                        try work.append(self.gpa, .{ .stmt = continuation, .edge = .{ .switch_continuation = item.stmt } });
+                        try work.append(gpa, .{ .stmt = continuation, .edge = .{ .switch_continuation = item.stmt } });
                     }
-                    try work.append(self.gpa, .{ .stmt = s.default_branch, .edge = .{ .switch_default = item.stmt } });
+                    try work.append(gpa, .{ .stmt = s.default_branch, .edge = .{ .switch_default = item.stmt } });
                     const branches = self.store.getCFSwitchBranches(s.branches);
                     var i = branches.len;
                     while (i > 0) {
                         i -= 1;
-                        try work.append(self.gpa, .{ .stmt = branches[i].body, .edge = .{ .switch_branch = .{ .stmt = item.stmt, .index = @intCast(i) } } });
+                        try work.append(gpa, .{ .stmt = branches[i].body, .edge = .{ .switch_branch = .{ .stmt = item.stmt, .index = @intCast(i) } } });
                     }
                 },
                 .jump, .ret, .crash, .runtime_error, .loop_continue, .loop_break => {},
                 inline .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .free => |s| {
-                    try work.append(self.gpa, .{ .stmt = s.next, .edge = .{ .stmt_next = item.stmt } });
+                    try work.append(gpa, .{ .stmt = s.next, .edge = .{ .stmt_next = item.stmt } });
                 },
             }
         }
@@ -368,7 +422,7 @@ const Detection = struct {
         // see it as an ordinary use of their tracked cell and drop out — their
         // recursive calls remain real calls, exactly like the old Rust pass.
         var claimed = false;
-        for (self.candidates.items) |*candidate| {
+        for (self.scratch.candidates.items) |*candidate| {
             if (candidate.state == .invalid) continue;
             if (!claimed and self.blessedTransition(candidate, stmt_id, edge, stmt)) {
                 claimed = true;
@@ -382,7 +436,7 @@ const Detection = struct {
         // A self-call starts a new candidate (after the use checks above, so
         // its arguments invalidate any candidate locals they mention).
         if (stmt == .assign_call and stmt.assign_call.proc == self.proc_id) {
-            if (self.candidates.items.len == max_candidates) {
+            if (self.scratch.candidates.items.len == max_candidates) {
                 self.bail = true;
                 return;
             }
@@ -401,7 +455,7 @@ const Detection = struct {
                 .terminal_stmt = undefined,
             };
             _ = candidate.push(stmt.assign_call.target);
-            try self.candidates.append(self.gpa, candidate);
+            try self.scratch.candidates.append(self.scratch.gpa, candidate);
         }
     }
 
@@ -570,6 +624,41 @@ const Detection = struct {
         }
         return false;
     }
+
+    /// Debug check, run just before transforming: every statement the
+    /// transform splices out via its recorded edge (the call, alias hops) or
+    /// overwrites with path-specific semantics (the box allocation, the site
+    /// terminal) must have exactly one incoming reference — a second
+    /// predecessor would still route through the rewritten statement and
+    /// miscompile. Epilogue-rewritten rets are exempt: that rewrite is uniform
+    /// for every path reaching them. Lowering's shared tails have only ever
+    /// been observed to hold refs/rets/tags, never candidate statements, but
+    /// nothing upstream guarantees that.
+    fn assertRewrittenStmtsUnshared(self: *const Detection) void {
+        for (self.scratch.candidates.items) |candidate| {
+            switch (candidate.state) {
+                .confirmed_construct, .confirmed_tail => {},
+                else => continue,
+            }
+            self.assertUnshared(candidate.call_stmt);
+            self.assertUnshared(candidate.terminal_stmt);
+            if (candidate.state == .confirmed_construct) {
+                self.assertUnshared(candidate.box_stmt);
+                for (candidate.alias_stmts[0..candidate.alias_len]) |alias_stmt| {
+                    self.assertUnshared(alias_stmt);
+                }
+            }
+        }
+    }
+
+    fn assertUnshared(self: *const Detection, stmt_id: CFStmtId) void {
+        if (self.scratch.stamps[@intFromEnum(stmt_id)] == self.scratch.generation + 1) {
+            std.debug.panic(
+                "TRMC invariant violated: rewritten statement {d} has more than one incoming reference",
+                .{@intFromEnum(stmt_id)},
+            );
+        }
+    }
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -628,12 +717,12 @@ const Transform = struct {
         // Rewrite every original ret into the hole-fill epilogue. Confirmed
         // site terminals (which may be rets in hand-built shapes) are excluded:
         // they become loop-backs below.
-        for (self.detection.rets.items) |ret_stmt| {
+        for (self.detection.scratch.rets.items) |ret_stmt| {
             if (self.isSiteTerminal(ret_stmt)) continue;
             try self.rewriteRetEpilogue(ret_stmt, ret_layout);
         }
 
-        for (self.detection.candidates.items) |*candidate| {
+        for (self.detection.scratch.candidates.items) |*candidate| {
             switch (candidate.state) {
                 .confirmed_construct => try self.rewriteConstructSite(candidate, ptr_ret),
                 .confirmed_tail => try self.rewriteTailSite(candidate),
@@ -648,7 +737,7 @@ const Transform = struct {
         const proc = self.store.getProcSpec(self.proc_id);
         self.old_args = try self.gpa.dupe(LocalId, self.store.getLocalSpan(proc.args));
 
-        for (self.detection.candidates.items) |*candidate| {
+        for (self.detection.scratch.candidates.items) |*candidate| {
             if (candidate.state == .confirmed_tail) {
                 try self.rewriteTailSite(candidate);
             }
@@ -657,7 +746,7 @@ const Transform = struct {
     }
 
     fn isSiteTerminal(self: *const Transform, stmt_id: CFStmtId) bool {
-        for (self.detection.candidates.items) |candidate| {
+        for (self.detection.scratch.candidates.items) |candidate| {
             switch (candidate.state) {
                 .confirmed_construct, .confirmed_tail => {
                     if (candidate.terminal_stmt == stmt_id) return true;

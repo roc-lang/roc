@@ -50,8 +50,10 @@ pub fn writeProc(
 const Printer = struct {
     store: *const LirStore,
     layouts: *const layout_mod.Store,
-    // Lowered LIR statement graphs are trees; this guards debug printing of
-    // malformed input from looping forever.
+    // Lowered LIR statement graphs are DAGs — linear tails can be shared by
+    // multiple predecessors. This prints each shared tail once (later arrivals
+    // get an <<already printed>> marker) and guards malformed (cyclic) input
+    // from looping forever.
     visited: std.AutoHashMapUnmanaged(LIR.CFStmtId, void) = .{},
 
     fn writeChainInner(self: *Printer, gpa: std.mem.Allocator, start: LIR.CFStmtId, indent: usize, writer: *std.Io.Writer) Error!void {
