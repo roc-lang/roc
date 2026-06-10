@@ -2504,6 +2504,17 @@ Builtin :: [].{
 			## ```
 			is_lte : U8, U8 -> Bool
 
+			## Compare two [U8] values and return their ordering.
+			## ```roc
+			## expect U8.compare(1, 2) == LT
+			##
+			## expect U8.compare(2, 2) == EQ
+			##
+			## expect U8.compare(3, 2) == GT
+			## ```
+			compare : U8, U8 -> [LT, EQ, GT]
+			compare = |a, b| numeric_compare(a, b)
+
 			## Returns the greater of two [U8] values.
 			## ```roc
 			## expect U8.max(5, 3) == 5
@@ -2915,6 +2926,17 @@ Builtin :: [].{
 			## expect !I8.is_lte(5, 3)
 			## ```
 			is_lte : I8, I8 -> Bool
+
+			## Compare two [I8] values and return their ordering.
+			## ```roc
+			## expect I8.compare(1, 2) == LT
+			##
+			## expect I8.compare(2, 2) == EQ
+			##
+			## expect I8.compare(3, 2) == GT
+			## ```
+			compare : I8, I8 -> [LT, EQ, GT]
+			compare = |a, b| numeric_compare(a, b)
 
 			## Returns the greater of two [I8] values.
 			## ```roc
@@ -3423,6 +3445,17 @@ Builtin :: [].{
 			## ```
 			is_lte : U16, U16 -> Bool
 
+			## Compare two [U16] values and return their ordering.
+			## ```roc
+			## expect U16.compare(1, 2) == LT
+			##
+			## expect U16.compare(2, 2) == EQ
+			##
+			## expect U16.compare(3, 2) == GT
+			## ```
+			compare : U16, U16 -> [LT, EQ, GT]
+			compare = |a, b| numeric_compare(a, b)
+
 			## Returns the greater of two [U16] values.
 			## ```roc
 			## expect U16.max(5, 3) == 5
@@ -3872,6 +3905,17 @@ Builtin :: [].{
 			## expect !I16.is_lte(5, 3)
 			## ```
 			is_lte : I16, I16 -> Bool
+
+			## Compare two [I16] values and return their ordering.
+			## ```roc
+			## expect I16.compare(1, 2) == LT
+			##
+			## expect I16.compare(2, 2) == EQ
+			##
+			## expect I16.compare(3, 2) == GT
+			## ```
+			compare : I16, I16 -> [LT, EQ, GT]
+			compare = |a, b| numeric_compare(a, b)
 
 			## Returns the greater of two [I16] values.
 			## ```roc
@@ -4397,6 +4441,17 @@ Builtin :: [].{
 			## ```
 			is_lte : U32, U32 -> Bool
 
+			## Compare two [U32] values and return their ordering.
+			## ```roc
+			## expect U32.compare(1, 2) == LT
+			##
+			## expect U32.compare(2, 2) == EQ
+			##
+			## expect U32.compare(3, 2) == GT
+			## ```
+			compare : U32, U32 -> [LT, EQ, GT]
+			compare = |a, b| numeric_compare(a, b)
+
 			## Returns the greater of two [U32] values.
 			## ```roc
 			## expect U32.max(5, 3) == 5
@@ -4884,6 +4939,17 @@ Builtin :: [].{
 			## expect !I32.is_lte(5, 3)
 			## ```
 			is_lte : I32, I32 -> Bool
+
+			## Compare two [I32] values and return their ordering.
+			## ```roc
+			## expect I32.compare(1, 2) == LT
+			##
+			## expect I32.compare(2, 2) == EQ
+			##
+			## expect I32.compare(3, 2) == GT
+			## ```
+			compare : I32, I32 -> [LT, EQ, GT]
+			compare = |a, b| numeric_compare(a, b)
 
 			## Returns the greater of two [I32] values.
 			## ```roc
@@ -5429,6 +5495,17 @@ Builtin :: [].{
 			## ```
 			is_lte : U64, U64 -> Bool
 
+			## Compare two [U64] values and return their ordering.
+			## ```roc
+			## expect U64.compare(1, 2) == LT
+			##
+			## expect U64.compare(2, 2) == EQ
+			##
+			## expect U64.compare(3, 2) == GT
+			## ```
+			compare : U64, U64 -> [LT, EQ, GT]
+			compare = |a, b| numeric_compare(a, b)
+
 			## Returns the greater of two [U64] values.
 			## ```roc
 			## expect U64.max(5, 3) == 5
@@ -5960,6 +6037,17 @@ Builtin :: [].{
 			## expect !I64.is_lte(5, 3)
 			## ```
 			is_lte : I64, I64 -> Bool
+
+			## Compare two [I64] values and return their ordering.
+			## ```roc
+			## expect I64.compare(1, 2) == LT
+			##
+			## expect I64.compare(2, 2) == EQ
+			##
+			## expect I64.compare(3, 2) == GT
+			## ```
+			compare : I64, I64 -> [LT, EQ, GT]
+			compare = |a, b| numeric_compare(a, b)
 
 			## Returns the greater of two [I64] values.
 			## ```roc
@@ -6530,6 +6618,17 @@ Builtin :: [].{
 			## expect !U128.is_lte(5, 3)
 			## ```
 			is_lte : U128, U128 -> Bool
+
+			## Compare two [U128] values and return their ordering.
+			## ```roc
+			## expect U128.compare(1, 2) == LT
+			##
+			## expect U128.compare(2, 2) == EQ
+			##
+			## expect U128.compare(3, 2) == GT
+			## ```
+			compare : U128, U128 -> [LT, EQ, GT]
+			compare = |a, b| numeric_compare(a, b)
 
 			## Returns the greater of two [U128] values.
 			## ```roc
@@ -7106,6 +7205,17 @@ Builtin :: [].{
 			## expect !I128.is_lte(5, 3)
 			## ```
 			is_lte : I128, I128 -> Bool
+
+			## Compare two [I128] values and return their ordering.
+			## ```roc
+			## expect I128.compare(1, 2) == LT
+			##
+			## expect I128.compare(2, 2) == EQ
+			##
+			## expect I128.compare(3, 2) == GT
+			## ```
+			compare : I128, I128 -> [LT, EQ, GT]
+			compare = |a, b| numeric_compare(a, b)
 
 			## Returns the greater of two [I128] values.
 			## ```roc
@@ -7731,6 +7841,17 @@ Builtin :: [].{
 			## expect !Dec.is_lte(5.0, 3.0)
 			## ```
 			is_lte : Dec, Dec -> Bool
+
+			## Compare two [Dec] values and return their ordering.
+			## ```roc
+			## expect Dec.compare(1.0, 2.0) == LT
+			##
+			## expect Dec.compare(2.0, 2.0) == EQ
+			##
+			## expect Dec.compare(3.0, 2.0) == GT
+			## ```
+			compare : Dec, Dec -> [LT, EQ, GT]
+			compare = |a, b| numeric_compare(a, b)
 
 			## Returns the greater of two [Dec] values.
 			## ```roc
@@ -9467,6 +9588,17 @@ signed_div_checked = |lowest, zero, neg_one, a, b|
 		}
 	} else {
 		Ok(a / b)
+	}
+
+numeric_compare : item, item -> [LT, EQ, GT]
+	where [item.is_lt : item, item -> Bool, item.is_gt : item, item -> Bool]
+numeric_compare = |a, b|
+	if a < b {
+		LT
+	} else if a > b {
+		GT
+	} else {
+		EQ
 	}
 
 range_done : () -> Iter(item)
