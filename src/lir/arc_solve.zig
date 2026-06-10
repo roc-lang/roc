@@ -77,6 +77,10 @@ pub const Solution = struct {
     /// Bit set => the local may hold an allocation the host can also touch,
     /// so its RC statements need atomic count updates.
     visible: std.bit_set.DynamicBitSetUnmanaged,
+    /// Bit set => the local's value's outermost allocation provably has
+    /// count 1 at the local's definition and no statement can add another
+    /// holder afterward.
+    unique: std.bit_set.DynamicBitSetUnmanaged,
 
     pub fn deinit(self: *Solution) void {
         self.borrowed.deinit(self.allocator);
@@ -87,6 +91,7 @@ pub const Solution = struct {
         self.allocator.free(self.sigs);
         self.join_param.deinit(self.allocator);
         self.visible.deinit(self.allocator);
+        self.unique.deinit(self.allocator);
     }
 
     pub fn isJoinParam(self: *const Solution, local: LIR.LocalId) bool {
@@ -108,6 +113,15 @@ pub const Solution = struct {
         const index = @intFromEnum(local);
         if (index >= self.leader.len) return true;
         return self.visible.isSet(index);
+    }
+
+    /// True when the local's value was born with its outermost allocation at
+    /// count 1 and no statement can add another holder, so a runtime
+    /// uniqueness check that consumes this local's unit is redundant.
+    pub fn isUnique(self: *const Solution, local: LIR.LocalId) bool {
+        const index = @intFromEnum(local);
+        if (index >= self.leader.len) return false;
+        return self.unique.isSet(index);
     }
 
     pub fn leaderOf(self: *const Solution, local: LIR.LocalId) LIR.LocalId {
@@ -293,6 +307,12 @@ pub fn solve(
     var visible = try computeVisibility(allocator, store, rc_local, &solver.pinned);
     errdefer visible.deinit(allocator);
 
+    var uniqueness = try computeUniqueness(allocator, store, rc_local);
+    // Emission consumes only the final bit; the born-unique origin set is
+    // re-derived by the certifier.
+    uniqueness.born_unique.deinit(allocator);
+    errdefer uniqueness.unique.deinit(allocator);
+
     var solution = Solution{
         .allocator = allocator,
         .borrowed = binding.borrowed,
@@ -303,6 +323,7 @@ pub fn solve(
         .sigs = solver.sigs,
         .join_param = solver.join_param,
         .visible = visible,
+        .unique = uniqueness.unique,
     };
     solver_sigs_kept = true;
     errdefer {
@@ -311,6 +332,7 @@ pub fn solve(
         allocator.free(solution.sigs);
         solution.join_param.deinit(allocator);
         solution.visible.deinit(allocator);
+        solution.unique.deinit(allocator);
     }
 
     // Build flat group-member lists: every local lists at least itself;
@@ -1076,6 +1098,177 @@ pub fn computeVisibility(
     }
 
     return visible;
+}
+
+/// Result of the born-unique analysis, one bit pair per local.
+pub const Uniqueness = struct {
+    /// Bit set => every definition of the local binds a value whose
+    /// outermost allocation is born with count 1: a fresh aggregate or
+    /// literal assignment, or a low-level op whose `RcEffect` marks its
+    /// result unique.
+    born_unique: std.bit_set.DynamicBitSetUnmanaged,
+    /// Bit set => born unique and no statement can add another holder, so
+    /// the count is still 1 at the local's single consuming use.
+    unique: std.bit_set.DynamicBitSetUnmanaged,
+
+    /// Frees both bit sets.
+    pub fn deinit(self: *Uniqueness, allocator: Allocator) void {
+        self.born_unique.deinit(allocator);
+        self.unique.deinit(allocator);
+    }
+};
+
+/// Marks every local whose value's outermost allocation provably has count 1
+/// at the local's definition with nothing later adding a holder: born unique
+/// by a fresh allocation, destroyed by any occurrence that can create
+/// another handle to the allocation — an incref, an aggregate or capture
+/// operand, a `set_local` value or target, a second consuming use, a return,
+/// or any call argument. Pure same-value aliases do not inherit uniqueness:
+/// the alias and its source are two names for one allocation, and proving
+/// the source dead at every alias use is left to a later stage. Call results
+/// likewise stay non-unique until the interprocedural `RcSig` stage carries
+/// a unique-return bit; only op-level `RcEffect` data proves births today.
+/// Statement iteration is flat, so unreachable statements only destroy
+/// uniqueness, which is conservative-sound.
+pub fn computeUniqueness(
+    allocator: Allocator,
+    store: *const LirStore,
+    rc_local: []const bool,
+) SolveError!Uniqueness {
+    const local_count = store.locals.items.len;
+
+    var born = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
+    errdefer born.deinit(allocator);
+    // A definition that is not a unique birth (parameters, aliases, payload
+    // reads, calls, join params) poisons the local outright.
+    var foreign_def = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
+    defer foreign_def.deinit(allocator);
+    var destroyed = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
+    defer destroyed.deinit(allocator);
+    var consumed_once = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
+    defer consumed_once.deinit(allocator);
+
+    const Marks = struct {
+        rc: []const bool,
+
+        fn noteBirth(self: @This(), set: *std.bit_set.DynamicBitSetUnmanaged, local: LIR.LocalId) void {
+            const index = @intFromEnum(local);
+            if (index >= self.rc.len or !self.rc[index]) return;
+            set.set(index);
+        }
+
+        fn destroy(self: @This(), set: *std.bit_set.DynamicBitSetUnmanaged, local: LIR.LocalId) void {
+            const index = @intFromEnum(local);
+            if (index >= self.rc.len or !self.rc[index]) return;
+            set.set(index);
+        }
+
+        fn consume(
+            self: @This(),
+            once: *std.bit_set.DynamicBitSetUnmanaged,
+            dead: *std.bit_set.DynamicBitSetUnmanaged,
+            local: LIR.LocalId,
+        ) void {
+            const index = @intFromEnum(local);
+            if (index >= self.rc.len or !self.rc[index]) return;
+            if (once.isSet(index)) {
+                dead.set(index);
+            } else {
+                once.set(index);
+            }
+        }
+    };
+    const marks = Marks{ .rc = rc_local };
+
+    for (store.proc_specs.items) |proc| {
+        for (store.getLocalSpan(proc.args)) |param| {
+            marks.destroy(&foreign_def, param);
+        }
+    }
+
+    for (store.cf_stmts.items) |stmt| {
+        switch (stmt) {
+            .assign_ref => |assign| marks.destroy(&foreign_def, assign.target),
+            .assign_literal => |assign| marks.noteBirth(&born, assign.target),
+            .assign_call => |assign| {
+                marks.destroy(&foreign_def, assign.target);
+                for (store.getLocalSpan(assign.args)) |arg| {
+                    marks.destroy(&destroyed, arg);
+                }
+            },
+            .assign_call_erased => |assign| {
+                marks.destroy(&foreign_def, assign.target);
+                marks.destroy(&destroyed, assign.closure);
+                for (store.getLocalSpan(assign.args)) |arg| {
+                    marks.destroy(&destroyed, arg);
+                }
+            },
+            .assign_packed_erased_fn => |assign| {
+                marks.destroy(&foreign_def, assign.target);
+                if (assign.capture) |capture| marks.destroy(&destroyed, capture);
+            },
+            .assign_low_level => |assign| {
+                if (assign.rc_effect.result_unique) {
+                    marks.noteBirth(&born, assign.target);
+                } else {
+                    marks.destroy(&foreign_def, assign.target);
+                }
+                for (store.getLocalSpan(assign.args), 0..) |arg, position| {
+                    if (position >= 64) {
+                        marks.destroy(&destroyed, arg);
+                        continue;
+                    }
+                    const bit = @as(u64, 1) << @as(u6, @intCast(position));
+                    if ((assign.rc_effect.consume_args & bit) != 0) {
+                        marks.consume(&consumed_once, &destroyed, arg);
+                    }
+                    if ((assign.rc_effect.retain_args & bit) != 0) {
+                        marks.destroy(&destroyed, arg);
+                    }
+                }
+            },
+            .assign_list => |assign| {
+                marks.noteBirth(&born, assign.target);
+                for (store.getLocalSpan(assign.elems)) |elem| {
+                    marks.destroy(&destroyed, elem);
+                }
+            },
+            .assign_struct => |assign| {
+                marks.noteBirth(&born, assign.target);
+                for (store.getLocalSpan(assign.fields)) |field| {
+                    marks.destroy(&destroyed, field);
+                }
+            },
+            .assign_tag => |assign| {
+                marks.noteBirth(&born, assign.target);
+                if (assign.payload) |payload| marks.destroy(&destroyed, payload);
+            },
+            .set_local => |assign| {
+                marks.destroy(&foreign_def, assign.target);
+                marks.destroy(&destroyed, assign.target);
+                marks.destroy(&destroyed, assign.value);
+            },
+            .incref => |rc| marks.destroy(&destroyed, rc.value),
+            .join => |join_stmt| {
+                for (store.getLocalSpan(join_stmt.params)) |param| {
+                    marks.destroy(&foreign_def, param);
+                }
+            },
+            .ret => |ret_stmt| marks.destroy(&destroyed, ret_stmt.value),
+            .decref, .free, .debug, .expect, .switch_stmt, .jump, .crash, .runtime_error, .loop_continue, .loop_break => {},
+        }
+    }
+
+    // born_unique: at least one birth and no foreign definition. unique:
+    // born unique with no holder-adding occurrence anywhere.
+    var foreign_iter = foreign_def.iterator(.{});
+    while (foreign_iter.next()) |index| born.unset(index);
+    var unique = try born.clone(allocator);
+    errdefer unique.deinit(allocator);
+    var destroyed_iter = destroyed.iterator(.{});
+    while (destroyed_iter.next()) |index| unique.unset(index);
+
+    return .{ .born_unique = born, .unique = unique };
 }
 
 /// Tarjan strongly-connected components over the direct-call graph.

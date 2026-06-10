@@ -432,13 +432,23 @@ pub const LowLevel = enum {
         /// Host-visibility analysis links the result to these arguments in
         /// both directions.
         result_shares_args: u64 = 0,
+        /// The result's outermost allocation has count 1 on return. Runtime
+        /// uniqueness-checking ops qualify on both of their paths (in place
+        /// keeps an allocation whose count was already 1, the copy path
+        /// returns a fresh one), as do ops that always allocate their
+        /// outermost result — interior sharing described by
+        /// `result_shares_args` is irrelevant to the outermost count.
+        result_unique: bool = false,
 
         pub fn none() RcEffect {
             return .{};
         }
 
         pub fn allocates() RcEffect {
-            return .{ .may_allocate = true };
+            return .{
+                .may_allocate = true,
+                .result_unique = true,
+            };
         }
 
         pub fn allocatesRetainingArgs(mask: u64) RcEffect {
@@ -446,6 +456,7 @@ pub const LowLevel = enum {
                 .may_allocate = true,
                 .may_retain_or_release = mask != 0,
                 .retain_args = mask,
+                .result_unique = true,
             };
         }
 
@@ -454,6 +465,7 @@ pub const LowLevel = enum {
                 .may_allocate = true,
                 .may_retain_or_release = mask != 0,
                 .consume_args = mask,
+                .result_unique = true,
             };
         }
 
@@ -490,6 +502,7 @@ pub const LowLevel = enum {
                 .may_runtime_uniqueness_check_args = mask,
                 .consume_args = mask,
                 .result_aliases_consumed_args = mask,
+                .result_unique = true,
             };
         }
 
@@ -501,6 +514,7 @@ pub const LowLevel = enum {
                 .consume_args = runtime_mask,
                 .result_aliases_consumed_args = runtime_mask,
                 .retain_args = retain_mask,
+                .result_unique = true,
             };
         }
 
@@ -508,6 +522,7 @@ pub const LowLevel = enum {
             return .{
                 .may_retain_or_release = true,
                 .result_shares_args = mask,
+                .result_unique = true,
             };
         }
 
@@ -515,6 +530,7 @@ pub const LowLevel = enum {
             return .{
                 .may_allocate = true,
                 .result_shares_args = mask,
+                .result_unique = true,
             };
         }
 
@@ -523,6 +539,7 @@ pub const LowLevel = enum {
                 .may_allocate = true,
                 .may_retain_or_release = true,
                 .result_shares_args = mask,
+                .result_unique = true,
             };
         }
 
@@ -540,6 +557,7 @@ pub const LowLevel = enum {
                 .consume_args = consume_mask,
                 .result_aliases_consumed_args = consume_mask,
                 .retain_args = retain_mask,
+                .result_unique = true,
             };
         }
     };

@@ -266,6 +266,9 @@ const LinearRewriteFrame = struct {
     /// Skip the low-level retain_result incref: the result binding is
     /// borrowed and emits no RC statements.
     skip_result_retain: bool = false,
+    /// Runtime uniqueness checks this low-level statement proved redundant,
+    /// by argument position.
+    unique_args: u64 = 0,
     /// Retain the call result right after the call: the callee returns a
     /// borrow of its arguments but this binding needs its own unit.
     retain_call_result: bool = false,
@@ -585,6 +588,13 @@ const Inserter = struct {
                         assign.target,
                         path.options.loop_keep,
                     );
+                    const unique_args = self.uniqueArgsMask(
+                        assign.args,
+                        assign.rc_effect,
+                        assign.target,
+                        preserve_consumed_args,
+                        &path.owned,
+                    );
                     const target_consumed = self.maskedArgsContainLocal(assign.args, assign.rc_effect.consume_args, assign.target);
                     if (target_consumed) {
                         path.owned.unset(assign.target);
@@ -613,6 +623,7 @@ const Inserter = struct {
                         .head = current_start,
                         .transfer_mask = transfer_mask,
                         .skip_result_retain = self.isBindingBorrowed(assign.target),
+                        .unique_args = unique_args,
                         .post_release = try self.takePostReleases(&deaths),
                     });
                     path.cursor = assign.next;
@@ -899,6 +910,7 @@ const Inserter = struct {
                     .target = assign.target,
                     .op = assign.op,
                     .rc_effect = assign.rc_effect,
+                    .unique_args = frame.unique_args,
                     .args = assign.args,
                     .next = next,
                 } });
@@ -1810,6 +1822,64 @@ const Inserter = struct {
             }
         }
         return preserve;
+    }
+
+    /// Runtime uniqueness checks proven redundant at this low-level
+    /// statement, by argument position: the argument's value is unique per
+    /// the solver (born with count 1 and never given another holder), its
+    /// single ownership unit moves into this op (owned here, and not in the
+    /// preserve mask, whose positions pay a retain before the op that holds
+    /// the count above 1), and no borrow of it is live at the op. Call
+    /// results never qualify: until the interprocedural stage carries a
+    /// unique-return bit, calls conservatively destroy uniqueness. Any doubt
+    /// leaves a bit zero; the runtime check is always sound.
+    fn uniqueArgsMask(
+        self: *Inserter,
+        span: LIR.LocalSpan,
+        rc_effect: LIR.LowLevel.RcEffect,
+        target: LIR.LocalId,
+        preserve_consumed_args: u64,
+        owned: *const OwnedSet,
+    ) u64 {
+        const check_mask = rc_effect.may_runtime_uniqueness_check_args;
+        if (check_mask == 0) return 0;
+        var unique: u64 = 0;
+        const locals = self.store.getLocalSpan(span);
+        for (locals, 0..) |local, i| {
+            if (i >= 64) break;
+            const bit = argMaskBit(i);
+            if ((check_mask & bit) == 0) continue;
+            if (local == target) continue;
+            if (!self.localContainsRefcounted(local)) continue;
+            if (!self.solution.isUnique(local)) continue;
+            if ((rc_effect.consume_args & bit) == 0) continue;
+            if ((preserve_consumed_args & bit) != 0) continue;
+            if (!owned.contains(local)) continue;
+            // The preserve scan proved the argument's borrow group dead
+            // after this statement; a group member appearing as another
+            // operand of this same statement is still live at the op.
+            if (self.groupSharesOtherOperand(locals, i, local)) continue;
+            unique |= bit;
+        }
+        return unique;
+    }
+
+    /// True when another operand of the same statement belongs to this
+    /// argument's borrow group, so the group is still live at the statement
+    /// even though no later statement uses it.
+    fn groupSharesOtherOperand(
+        self: *const Inserter,
+        locals: []const LIR.LocalId,
+        position: usize,
+        local: LIR.LocalId,
+    ) bool {
+        const leader = self.solution.leaderOf(local);
+        for (locals, 0..) |other, j| {
+            if (j == position) continue;
+            if (other == local) return true;
+            if (self.solution.leaderOf(other) == leader) return true;
+        }
+        return false;
     }
 
     fn callArgOwnership(
@@ -2819,6 +2889,19 @@ const ArcTest = struct {
         try testing.expect(seen > 0);
     }
 
+    fn uniqueArgsFor(self: *const ArcTest, target: LIR.LocalId) u64 {
+        var mask: u64 = 0;
+        for (self.store.cf_stmts.items) |stmt| {
+            switch (stmt) {
+                .assign_low_level => |assign| {
+                    if (assign.target == target) mask |= assign.unique_args;
+                },
+                else => {},
+            }
+        }
+        return mask;
+    }
+
     fn countAllRc(self: *const ArcTest) usize {
         var count: usize = 0;
         for (self.store.cf_stmts.items) |stmt| {
@@ -3764,6 +3847,120 @@ test "RC atomicity: bodyless callee arguments keep atomic counts" {
 
     try f.run();
     try f.expectRcAtomicity(list, .atomic);
+}
+
+test "uniqueness: freshly built list consumed by a checked op elides the check" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const list = try f.local(f.list_i64);
+    const elem = try f.local(.i64);
+    const appended = try f.local(f.list_i64);
+    const result = try f.local(.i64);
+
+    // elem = 5; list = []; appended = checked_op(list, elem); result = 1
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, 1, ret);
+    const append = try f.assignLowLevel(appended, &.{ list, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), result_assign);
+    const list_assign = try f.assignList(list, &.{}, append);
+    const body = try f.assignI64(elem, 5, list_assign);
+    _ = try f.addProc(&.{}, body, .i64);
+
+    try f.run();
+    // The list is born unique and its single unit moves into the op, so the
+    // op's runtime count check on argument 0 is redundant.
+    try testing.expectEqual(@as(u64, 1), f.uniqueArgsFor(appended));
+}
+
+test "uniqueness: list held by a struct keeps its runtime check" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const list = try f.local(f.list_i64);
+    const pair = try f.local(f.pair_list);
+    const elem = try f.local(.i64);
+    const appended = try f.local(f.list_i64);
+    const result = try f.local(.i64);
+
+    // elem = 5; list = []; pair = {list, list}; appended = checked_op(list, elem)
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, 1, ret);
+    const append = try f.assignLowLevel(appended, &.{ list, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), result_assign);
+    const pair_assign = try f.assignStruct(pair, &.{ list, list }, append);
+    const list_assign = try f.assignList(list, &.{}, pair_assign);
+    const body = try f.assignI64(elem, 5, list_assign);
+    _ = try f.addProc(&.{}, body, .i64);
+
+    try f.run();
+    // The struct holds the list's allocation, so its count is above 1 at
+    // the op and the runtime check stays.
+    try testing.expectEqual(@as(u64, 0), f.uniqueArgsFor(appended));
+}
+
+test "uniqueness: list consumed by two checked ops keeps both checks" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const list = try f.local(f.list_i64);
+    const elem = try f.local(.i64);
+    const first = try f.local(f.list_i64);
+    const second = try f.local(f.list_i64);
+    const result = try f.local(.i64);
+
+    // elem = 5; list = []; first = checked_op(list, elem); second = checked_op(list, elem)
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, 1, ret);
+    const second_append = try f.assignLowLevel(second, &.{ list, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), result_assign);
+    const first_append = try f.assignLowLevel(first, &.{ list, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), second_append);
+    const list_assign = try f.assignList(list, &.{}, first_append);
+    const body = try f.assignI64(elem, 5, list_assign);
+    _ = try f.addProc(&.{}, body, .i64);
+
+    try f.run();
+    // Two consuming uses: the first holds the list live past the op (a
+    // retain pays for the second use), the second consumes a value whose
+    // count was held above 1.
+    try testing.expectEqual(@as(u64, 0), f.uniqueArgsFor(first));
+    try testing.expectEqual(@as(u64, 0), f.uniqueArgsFor(second));
+}
+
+test "uniqueness: parameter consumed by a checked op keeps its check" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const param = try f.local(f.list_i64);
+    const elem = try f.local(.i64);
+    const appended = try f.local(f.list_i64);
+
+    // appended = checked_op(param, elem); ret appended — the caller may
+    // still hold the argument, so the parameter is never born unique.
+    const ret = try f.ret(appended);
+    const append = try f.assignLowLevel(appended, &.{ param, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), ret);
+    const body = try f.assignI64(elem, 5, append);
+    _ = try f.addProc(&.{param}, body, f.list_i64);
+
+    try f.run();
+    try testing.expectEqual(@as(u64, 0), f.uniqueArgsFor(appended));
+}
+
+test "uniqueness: append result consumed by a checked op elides the check" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const list = try f.local(f.list_i64);
+    const elem = try f.local(.i64);
+    const first = try f.local(f.list_i64);
+    const second = try f.local(f.list_i64);
+    const result = try f.local(.i64);
+
+    // elem = 5; list = []; first = append_unsafe(list, elem);
+    // second = checked_op(first, elem) — the append's RcEffect marks its
+    // result unique, so the chained op's check is redundant.
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, 1, ret);
+    const second_append = try f.assignLowLevel(second, &.{ first, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), result_assign);
+    const first_append = try f.assignLowLevel(first, &.{ list, elem }, LIR.LowLevel.RcEffect.consumesArgsReturningConsumedArgsRetainingArgs(1, 2), second_append);
+    const list_assign = try f.assignList(list, &.{}, first_append);
+    const body = try f.assignI64(elem, 5, list_assign);
+    _ = try f.addProc(&.{}, body, .i64);
+
+    try f.run();
+    try testing.expectEqual(@as(u64, 1), f.uniqueArgsFor(second));
 }
 
 test "RC mutable iterator accumulator replace cleans old state" {

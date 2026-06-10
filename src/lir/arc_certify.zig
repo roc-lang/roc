@@ -89,6 +89,7 @@ pub fn certifyStore(
     }
 
     try certifyRcAtomicity(allocator, store, rc_local, roots, diag);
+    try certifyUniqueArgs(allocator, store, rc_local, diag);
 
     var certifier = Certifier{
         .allocator = allocator,
@@ -139,6 +140,43 @@ fn certifyRcAtomicity(
         if (index < visible.capacity() and visible.isSet(index)) {
             diag.set("stmt={d}: single-thread RC statement on host-visible local {d}", .{ stmt_index, index });
             return error.Certification;
+        }
+    }
+}
+
+/// Mirror of the born-unique analysis: every `assign_low_level` claiming a
+/// check-free unique argument must name a position the op may runtime-check
+/// and a local whose every definition is a unique birth. The balance and
+/// borrow conditions behind the claim are enforced by the per-value
+/// certification; this rule covers the unique-origin claim.
+fn certifyUniqueArgs(
+    allocator: Allocator,
+    store: *const LirStore,
+    rc_local: []const bool,
+    diag: *Diagnostic,
+) CertifyError!void {
+    var uniqueness = try arc_solve.computeUniqueness(allocator, store, rc_local);
+    defer uniqueness.deinit(allocator);
+
+    for (store.cf_stmts.items, 0..) |stmt, stmt_index| {
+        const assign = switch (stmt) {
+            .assign_low_level => |a| a,
+            else => continue,
+        };
+        if (assign.unique_args == 0) continue;
+        if ((assign.unique_args & ~assign.rc_effect.may_runtime_uniqueness_check_args) != 0) {
+            diag.set("stmt={d}: unique_args bit outside the op's runtime-checked argument mask", .{stmt_index});
+            return error.Certification;
+        }
+        for (store.getLocalSpan(assign.args), 0..) |arg, position| {
+            if (position >= 64) break;
+            const bit = @as(u64, 1) << @as(u6, @intCast(position));
+            if ((assign.unique_args & bit) == 0) continue;
+            const index = @intFromEnum(arg);
+            if (index >= uniqueness.born_unique.capacity() or !uniqueness.born_unique.isSet(index)) {
+                diag.set("stmt={d}: check-free uniqueness claim on argument {d} (local {d}) without a unique birth", .{ stmt_index, position, index });
+                return error.Certification;
+            }
         }
     }
 }

@@ -260,6 +260,14 @@ pub const CFStmt = union(enum) {
         target: LocalId,
         op: LowLevel,
         rc_effect: LowLevel.RcEffect,
+        /// Bit i set => argument i is named by the op's
+        /// `may_runtime_uniqueness_check_args` and ARC emission proved its
+        /// runtime count check redundant: the argument's value was born
+        /// unique, its single ownership unit moves into this op, and no
+        /// borrow of it is live here. Consumers may take the in-place path
+        /// without inspecting the count; the runtime check is always sound,
+        /// so a zero mask reproduces fully checked behavior.
+        unique_args: u64 = 0,
         args: LocalSpan,
         next: CFStmtId,
     },
