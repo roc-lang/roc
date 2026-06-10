@@ -16,8 +16,12 @@ pub const default_child_timeout_ms: u64 = 5 * std.time.ms_per_min;
 pub const IsolatedCacheDirs = struct {
     roc_cache_dir: []u8,
     zig_local_cache_dir: []u8,
+    /// Per-subprocess temp dir; see TestProcessDirs.temp_dir for why this must
+    /// be isolated from the shared system temp dir.
+    temp_dir: []u8,
 
     pub fn deinit(self: IsolatedCacheDirs, allocator: std.mem.Allocator) void {
+        allocator.free(self.temp_dir);
         allocator.free(self.zig_local_cache_dir);
         allocator.free(self.roc_cache_dir);
     }
@@ -27,14 +31,36 @@ pub const IsolatedCacheDirs = struct {
 pub const TestProcessDirs = struct {
     roc_cache_dir: []u8,
     zig_local_cache_dir: []u8,
+    /// Per-job temp dir, exported as TEMP/TMP/TMPDIR to the roc subprocess. Roc
+    /// derives its runtime-host scratch dir (`<temp>/roc/<version>/...`) from
+    /// these and runs a background cleanup thread that iterates and deletes
+    /// entries under it. Without per-job isolation every concurrent roc process
+    /// shares the system temp dir, so those cleanup threads race the filesystem
+    /// across processes (one deletes a dir another is writing/iterating),
+    /// producing non-deterministic access violations. See putIsolatedTempEnv.
+    temp_dir: []u8,
     work_dir: []u8,
 
     pub fn deinit(self: TestProcessDirs, allocator: std.mem.Allocator) void {
         allocator.free(self.work_dir);
+        allocator.free(self.temp_dir);
         allocator.free(self.zig_local_cache_dir);
         allocator.free(self.roc_cache_dir);
     }
 };
+
+/// Export TEMP/TMP (Windows) and TMPDIR (POSIX) so a roc subprocess writes its
+/// runtime-host scratch artifacts under `temp_dir` instead of the shared system
+/// temp dir. This keeps each concurrent roc process's temp tree disjoint, so
+/// roc's background temp-cleanup thread can never race another process's files.
+pub fn putIsolatedTempEnv(env_map: *std.process.Environ.Map, temp_dir: []const u8) anyerror!void {
+    if (builtin.os.tag == .windows) {
+        try env_map.put("TEMP", temp_dir);
+        try env_map.put("TMP", temp_dir);
+    } else {
+        try env_map.put("TMPDIR", temp_dir);
+    }
+}
 
 pub const roc_binary_path = if (@import("builtin").os.tag == .windows) ".\\zig-out\\bin\\roc.exe" else "./zig-out/bin/roc";
 
@@ -254,9 +280,14 @@ pub fn createIsolatedTestCacheDirs(io: std.Io, allocator: std.mem.Allocator) any
     defer allocator.free(zig_local_cache_rel);
     try std.Io.Dir.cwd().createDirPath(io, zig_local_cache_rel);
 
+    const temp_rel = try std.fs.path.join(allocator, &.{ cache_root_rel, "tmp" });
+    defer allocator.free(temp_rel);
+    try std.Io.Dir.cwd().createDirPath(io, temp_rel);
+
     return .{
         .roc_cache_dir = try std.fs.path.join(allocator, &.{ cwd_path, roc_cache_rel }),
         .zig_local_cache_dir = try std.fs.path.join(allocator, &.{ cwd_path, zig_local_cache_rel }),
+        .temp_dir = try std.fs.path.join(allocator, &.{ cwd_path, temp_rel }),
     };
 }
 
@@ -276,9 +307,14 @@ pub fn createIsolatedTestDirs(io: std.Io, allocator: std.mem.Allocator) anyerror
     defer allocator.free(zig_local_cache_rel);
     try std.Io.Dir.cwd().createDirPath(io, zig_local_cache_rel);
 
+    const temp_rel = try std.fs.path.join(allocator, &.{ work_dir_rel, "tmp" });
+    defer allocator.free(temp_rel);
+    try std.Io.Dir.cwd().createDirPath(io, temp_rel);
+
     return .{
         .roc_cache_dir = try std.fs.path.join(allocator, &.{ cwd_path, roc_cache_rel }),
         .zig_local_cache_dir = try std.fs.path.join(allocator, &.{ cwd_path, zig_local_cache_rel }),
+        .temp_dir = try std.fs.path.join(allocator, &.{ cwd_path, temp_rel }),
         .work_dir = try std.fs.path.join(allocator, &.{ cwd_path, work_dir_rel }),
     };
 }
@@ -332,6 +368,10 @@ pub fn buildIsolatedTestEnvMap(
         if (env_map.get("ZIG_LOCAL_CACHE_DIR") == null) {
             try env_map.put("ZIG_LOCAL_CACHE_DIR", cache_dirs.zig_local_cache_dir);
         }
+
+        // Isolate the temp dir too, so roc's background temp-cleanup thread
+        // can't race other concurrent roc processes' temp files.
+        try putIsolatedTempEnv(&env_map, cache_dirs.temp_dir);
     }
 
     return env_map;
