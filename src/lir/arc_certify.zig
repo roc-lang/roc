@@ -416,7 +416,7 @@ const WorkItem = union(enum) {
 const Segment = struct {
     cursor: LIR.CFStmtId,
     state: State,
-    /// Join whose body rebuild produced this segment, for diagnostics.
+    /// Join whose body walk produced this segment, for diagnostics.
     origin_join: ?LIR.JoinPointId = null,
 };
 
