@@ -7,7 +7,9 @@
 //! owned final occurrences move, and lifetime-ending releases land right
 //! after the last use of a binding's borrow group. Optimized builds also emit
 //! mode-specialized proc variants for call sites that can move arguments into
-//! positions the solved signature borrows. Debug builds re-check the output
+//! positions the solved signature borrows, or that prove a dying argument
+//! statically unique so the variant elides the runtime uniqueness checks
+//! that parameter reaches. Debug builds re-check the output
 //! with the borrow certifier (`arc_certify`). Backends consume explicit RC
 //! statements without doing reference-counting analysis.
 
@@ -85,6 +87,10 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
     defer owned_param_override.deinit();
     inserter.owned_param_override = &owned_param_override;
 
+    var unique_param_override = try OwnedSet.init(store.allocator, store.locals.items.len);
+    defer unique_param_override.deinit();
+    inserter.unique_param_override = &unique_param_override;
+
     var emit_index: usize = 0;
     while (true) {
         var emit_proc: LIR.LirProcSpecId = undefined;
@@ -109,10 +115,13 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         inserter.current_sig = emit_sig;
 
         // Variant parameter positions demanded owned override the solved
-        // borrowed binding for this emission only.
+        // borrowed binding for this emission only, and positions the demand
+        // vector proves unique seed the body's born-unique view.
         const solved_sig = solution.sigOf(source_proc);
         var override_locals_buffer: [64]LIR.LocalId = undefined;
         var override_count: usize = 0;
+        var unique_locals_buffer: [64]LIR.LocalId = undefined;
+        var unique_count: usize = 0;
         for (store.getLocalSpan(proc.args), 0..) |param, position| {
             if (position >= 64) break;
             if (solved_sig.paramMode(position) == .borrowed and emit_sig.paramMode(position) == .owned) {
@@ -120,9 +129,17 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
                 override_locals_buffer[override_count] = param;
                 override_count += 1;
             }
+            if ((emit_sig.unique_params >> @as(u6, @intCast(position))) & 1 != 0) {
+                unique_param_override.set(param);
+                unique_locals_buffer[unique_count] = param;
+                unique_count += 1;
+            }
         }
         defer for (override_locals_buffer[0..override_count]) |param| {
             owned_param_override.unset(param);
+        };
+        defer for (unique_locals_buffer[0..unique_count]) |param| {
+            unique_param_override.unset(param);
         };
 
         var join_bodies = JoinBodyMap.init(store.allocator);
@@ -168,6 +185,8 @@ const VariantSelector = struct {
     source: LIR.LirProcSpecId,
     borrowed_params: u64,
     ret_mode: arc_sig.Mode,
+    /// Parameter positions the demand vector seeds born-unique.
+    unique_params: u64,
 };
 
 const QueuedVariant = struct {
@@ -290,6 +309,9 @@ const Inserter = struct {
     /// Parameter locals whose borrowed solved binding is overridden to owned
     /// for the variant currently being emitted.
     owned_param_override: *OwnedSet = undefined,
+    /// Parameter locals the current variant's demand vector seeds as born
+    /// unique; consumed by `uniqueArgsMask` through `isLocalUniqueHere`.
+    unique_param_override: *OwnedSet = undefined,
     /// Ownership signature of the proc currently being rewritten.
     current_sig: arc_sig.RcSig = arc_sig.RcSig.all_owned,
     /// Scratch needle set reused by liveness-group scans.
@@ -510,7 +532,11 @@ const Inserter = struct {
                 },
                 .assign_call => |assign| {
                     const callee_sig = self.solution.sigOf(assign.proc);
-                    var arg_ownership = try self.callArgOwnership(&path.owned, callee_sig, assign.args, assign.next, assign.target, path.options.loop_keep);
+                    // Unique demands clone variants, so they exist only when
+                    // specialization is on, and never for pinned callees,
+                    // whose vectors are ABI contracts.
+                    const unique_demand = self.variants.enabled and !self.solution.isPinnedProc(assign.proc);
+                    var arg_ownership = try self.callArgOwnership(&path.owned, callee_sig, unique_demand, assign.args, assign.next, assign.target, path.options.loop_keep);
                     defer arg_ownership.deinit(self.store.allocator);
                     const call_target = try self.variantForCall(assign.proc, arg_ownership.demanded);
                     if (!self.spanUsesLocal(assign.args, assign.target)) {
@@ -538,7 +564,7 @@ const Inserter = struct {
                     path.cursor = assign.next;
                 },
                 .assign_call_erased => |assign| {
-                    var arg_ownership = try self.callArgOwnership(&path.owned, arc_sig.RcSig.all_owned, assign.args, assign.next, assign.target, path.options.loop_keep);
+                    var arg_ownership = try self.callArgOwnership(&path.owned, arc_sig.RcSig.all_owned, false, assign.args, assign.next, assign.target, path.options.loop_keep);
                     defer arg_ownership.deinit(self.store.allocator);
                     if (!self.spanUsesLocal(assign.args, assign.target) and assign.closure != assign.target) {
                         current_start = try self.releaseOldTargetIfNeeded(assign.target, &path.owned, current_start);
@@ -1374,7 +1400,9 @@ const Inserter = struct {
                     path.cursor = assign.next;
                 },
                 .assign_call => |assign| {
-                    var arg_ownership = try self.callArgOwnership(&path.owned, self.solution.sigOf(assign.proc), assign.args, assign.next, assign.target, path.loop_keep);
+                    // The demanded vector is unused on analysis paths, so
+                    // skip the unique-demand scan.
+                    var arg_ownership = try self.callArgOwnership(&path.owned, self.solution.sigOf(assign.proc), false, assign.args, assign.next, assign.target, path.loop_keep);
                     defer arg_ownership.deinit(self.store.allocator);
                     self.unsetArgs(&path.owned, arg_ownership.transfer_args.items);
                     self.addOwnedIfRc(&path.owned, assign.target);
@@ -1383,7 +1411,7 @@ const Inserter = struct {
                     path.cursor = assign.next;
                 },
                 .assign_call_erased => |assign| {
-                    var arg_ownership = try self.callArgOwnership(&path.owned, arc_sig.RcSig.all_owned, assign.args, assign.next, assign.target, path.loop_keep);
+                    var arg_ownership = try self.callArgOwnership(&path.owned, arc_sig.RcSig.all_owned, false, assign.args, assign.next, assign.target, path.loop_keep);
                     defer arg_ownership.deinit(self.store.allocator);
                     self.unsetArgs(&path.owned, arg_ownership.transfer_args.items);
                     self.addOwnedIfRc(&path.owned, assign.target);
@@ -1825,13 +1853,13 @@ const Inserter = struct {
     }
 
     /// Runtime uniqueness checks proven redundant at this low-level
-    /// statement, by argument position: the argument's value is unique per
-    /// the solver (born with count 1 and never given another holder), its
-    /// single ownership unit moves into this op (owned here, and not in the
+    /// statement, by argument position: the argument's value is unique in
+    /// the current emission view (born with count 1 — by a fresh
+    /// allocation, a direct call to a unique-returning callee, or a variant
+    /// parameter seed — and never given another holder), its single
+    /// ownership unit moves into this op (owned here, and not in the
     /// preserve mask, whose positions pay a retain before the op that holds
-    /// the count above 1), and no borrow of it is live at the op. Call
-    /// results never qualify: until the interprocedural stage carries a
-    /// unique-return bit, calls conservatively destroy uniqueness. Any doubt
+    /// the count above 1), and no borrow of it is live at the op. Any doubt
     /// leaves a bit zero; the runtime check is always sound.
     fn uniqueArgsMask(
         self: *Inserter,
@@ -1851,7 +1879,7 @@ const Inserter = struct {
             if ((check_mask & bit) == 0) continue;
             if (local == target) continue;
             if (!self.localContainsRefcounted(local)) continue;
-            if (!self.solution.isUnique(local)) continue;
+            if (!self.isLocalUniqueHere(local)) continue;
             if ((rc_effect.consume_args & bit) == 0) continue;
             if ((preserve_consumed_args & bit) != 0) continue;
             if (!owned.contains(local)) continue;
@@ -1862,6 +1890,15 @@ const Inserter = struct {
             unique |= bit;
         }
         return unique;
+    }
+
+    /// True when the local's value is statically unique in the current
+    /// emission view: solved unique, or a parameter the variant being
+    /// emitted seeds born-unique and whose body never adds another holder.
+    fn isLocalUniqueHere(self: *const Inserter, local: LIR.LocalId) bool {
+        if (self.solution.isUnique(local)) return true;
+        if (!self.unique_param_override.contains(local)) return false;
+        return !self.solution.isUniqueDestroyed(local);
     }
 
     /// True when another operand of the same statement belongs to this
@@ -1886,6 +1923,7 @@ const Inserter = struct {
         self: *Inserter,
         owned: *const OwnedSet,
         callee_sig: arc_sig.RcSig,
+        unique_demand: bool,
         span: LIR.LocalSpan,
         next: LIR.CFStmtId,
         target: LIR.LocalId,
@@ -1911,6 +1949,11 @@ const Inserter = struct {
                 const can_transfer = owned.contains(local) and !used_after_call and !transferred.contains(local);
                 if (!can_transfer) continue;
                 result.demanded.borrowed_params &= ~(@as(u64, 1) << @as(u6, @intCast(position)));
+                if (unique_demand and self.isLocalUniqueHere(local) and
+                    !self.groupSharesOtherOperand(locals, position, local))
+                {
+                    result.demanded.unique_params |= @as(u64, 1) << @as(u6, @intCast(position));
+                }
                 try result.transfer_args.append(self.store.allocator, local);
                 transferred.set(local);
                 continue;
@@ -1920,6 +1963,15 @@ const Inserter = struct {
             const can_transfer = owned.contains(local) and !used_after_call and !transferred.contains(local);
 
             if (can_transfer) {
+                // A dying argument moving into an owned position that is
+                // statically unique with no borrow live at the call demands
+                // a variant whose parameter is seeded born-unique, so
+                // checked ops it reaches in the body go check-free.
+                if (unique_demand and position < 64 and self.isLocalUniqueHere(local) and
+                    !self.groupSharesOtherOperand(locals, position, local))
+                {
+                    result.demanded.unique_params |= @as(u64, 1) << @as(u6, @intCast(position));
+                }
                 try result.transfer_args.append(self.store.allocator, local);
                 transferred.set(local);
             } else {
@@ -1939,11 +1991,12 @@ const Inserter = struct {
         demanded: arc_sig.RcSig,
     ) ResourceError!?LIR.LirProcSpecId {
         const solved = self.solution.sigOf(callee);
-        if (demanded.borrowed_params == solved.borrowed_params) return null;
+        if (demanded.borrowed_params == solved.borrowed_params and demanded.unique_params == 0) return null;
         const selector = VariantSelector{
             .source = callee,
             .borrowed_params = demanded.borrowed_params,
             .ret_mode = demanded.ret_mode,
+            .unique_params = demanded.unique_params,
         };
         const entry = try self.variants.map.getOrPut(selector);
         if (entry.found_existing) return entry.value_ptr.*;
@@ -2897,6 +2950,47 @@ const ArcTest = struct {
                     if (assign.target == target) mask |= assign.unique_args;
                 },
                 else => {},
+            }
+        }
+        return mask;
+    }
+
+    /// Like `uniqueArgsFor`, but restricted to statements reachable from one
+    /// proc's body, so a variant and its base proc (which share locals) can
+    /// be asserted separately.
+    fn uniqueArgsInProc(self: *const ArcTest, proc_id: LIR.LirProcSpecId, target: LIR.LocalId) Allocator.Error!u64 {
+        var mask: u64 = 0;
+        var visited = std.AutoHashMap(LIR.CFStmtId, void).init(self.allocator);
+        defer visited.deinit();
+        var stack = std.ArrayList(LIR.CFStmtId).empty;
+        defer stack.deinit(self.allocator);
+        const body = self.store.getProcSpec(proc_id).body orelse return 0;
+        try stack.append(self.allocator, body);
+        while (stack.pop()) |current| {
+            if (visited.contains(current)) continue;
+            try visited.put(current, {});
+            switch (self.store.getCFStmt(current)) {
+                .assign_low_level => |assign| {
+                    if (assign.target == target) mask |= assign.unique_args;
+                    try stack.append(self.allocator, assign.next);
+                },
+                .switch_stmt => |s| {
+                    for (self.store.getCFSwitchBranches(s.branches)) |branch| {
+                        try stack.append(self.allocator, branch.body);
+                    }
+                    try stack.append(self.allocator, s.default_branch);
+                    if (s.continuation) |continuation| {
+                        try stack.append(self.allocator, continuation);
+                    }
+                },
+                .join => |j| {
+                    try stack.append(self.allocator, j.body);
+                    try stack.append(self.allocator, j.remainder);
+                },
+                inline .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .free => |s| {
+                    try stack.append(self.allocator, s.next);
+                },
+                .ret, .jump, .crash, .runtime_error, .loop_continue, .loop_break => {},
             }
         }
         return mask;
@@ -3961,6 +4055,173 @@ test "uniqueness: append result consumed by a checked op elides the check" {
 
     try f.run();
     try testing.expectEqual(@as(u64, 1), f.uniqueArgsFor(second));
+}
+
+test "uniqueness: call result of a fresh-list callee elides the check" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    // Callee builds and returns a fresh list, so its return solves unique.
+    const fresh = try f.local(f.list_i64);
+    const callee_ret = try f.ret(fresh);
+    const callee_body = try f.assignList(fresh, &.{}, callee_ret);
+    const callee = try f.addProc(&.{}, callee_body, f.list_i64);
+
+    // Caller runs a checked op on the call result.
+    const list = try f.local(f.list_i64);
+    const elem = try f.local(.i64);
+    const appended = try f.local(f.list_i64);
+    const result = try f.local(.i64);
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, 1, ret);
+    const append = try f.assignLowLevel(appended, &.{ list, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), result_assign);
+    const elem_assign = try f.assignI64(elem, 5, append);
+    const call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = list,
+        .proc = callee,
+        .args = try f.span(&.{}),
+        .next = elem_assign,
+    } });
+    _ = try f.addProc(&.{}, call, .i64);
+
+    try f.run();
+    // The callee's return is born unique and the result's single unit moves
+    // into the op, so the runtime check on argument 0 is redundant.
+    try testing.expectEqual(@as(u64, 1), f.uniqueArgsFor(appended));
+}
+
+test "uniqueness: pass-through callee result keeps the caller's check" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    // Callee returns its own parameter: the caller may hold other handles
+    // to the value, so the return never solves unique.
+    const param = try f.local(f.list_i64);
+    const callee_ret = try f.ret(param);
+    const callee = try f.addProc(&.{param}, callee_ret, f.list_i64);
+
+    const list = try f.local(f.list_i64);
+    const got = try f.local(f.list_i64);
+    const elem = try f.local(.i64);
+    const appended = try f.local(f.list_i64);
+    const result = try f.local(.i64);
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, 1, ret);
+    const append = try f.assignLowLevel(appended, &.{ got, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), result_assign);
+    const elem_assign = try f.assignI64(elem, 5, append);
+    const call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = got,
+        .proc = callee,
+        .args = try f.span(&.{list}),
+        .next = elem_assign,
+    } });
+    const body = try f.assignList(list, &.{}, call);
+    _ = try f.addProc(&.{}, body, .i64);
+
+    try f.run();
+    try testing.expectEqual(@as(u64, 0), f.uniqueArgsFor(appended));
+}
+
+test "uniqueness: root callee result keeps the caller's check" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    // Same shape as the fresh-list callee above, but the callee is a root:
+    // pinned signatures never claim a unique return.
+    const fresh = try f.local(f.list_i64);
+    const callee_ret = try f.ret(fresh);
+    const callee_body = try f.assignList(fresh, &.{}, callee_ret);
+    const callee = try f.addProc(&.{}, callee_body, f.list_i64);
+
+    const list = try f.local(f.list_i64);
+    const elem = try f.local(.i64);
+    const appended = try f.local(f.list_i64);
+    const result = try f.local(.i64);
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, 1, ret);
+    const append = try f.assignLowLevel(appended, &.{ list, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), result_assign);
+    const elem_assign = try f.assignI64(elem, 5, append);
+    const call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = list,
+        .proc = callee,
+        .args = try f.span(&.{}),
+        .next = elem_assign,
+    } });
+    _ = try f.addProc(&.{}, call, .i64);
+
+    try insert(&f.store, &f.layouts, .{ .roots = &.{callee} });
+    try testing.expectEqual(@as(u64, 0), f.uniqueArgsFor(appended));
+}
+
+test "uniqueness: specialized variant elides the check on a unique dying argument" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    // Callee runs a checked op on its parameter; the parameter solves owned
+    // and the base body keeps the runtime check.
+    const param = try f.local(f.list_i64);
+    const elem = try f.local(.i64);
+    const appended = try f.local(f.list_i64);
+    const callee_ret = try f.ret(appended);
+    const append = try f.assignLowLevel(appended, &.{ param, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), callee_ret);
+    const callee_body = try f.assignI64(elem, 5, append);
+    const callee = try f.addProc(&.{param}, callee_body, f.list_i64);
+
+    // Caller passes a dying fresh list.
+    const list = try f.local(f.list_i64);
+    const got = try f.local(f.list_i64);
+    const caller_ret = try f.ret(got);
+    const call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = got,
+        .proc = callee,
+        .args = try f.span(&.{list}),
+        .next = caller_ret,
+    } });
+    const caller_body = try f.assignList(list, &.{}, call);
+    _ = try f.addProc(&.{}, caller_body, f.list_i64);
+
+    const base_proc_count = f.store.proc_specs.items.len;
+    try insert(&f.store, &f.layouts, .{ .specialize = true });
+
+    // One unique-seeded variant exists; its op runs check-free while the
+    // base proc keeps the runtime check.
+    try testing.expectEqual(base_proc_count + 1, f.store.proc_specs.items.len);
+    try testing.expectEqual(@as(u64, 0), try f.uniqueArgsInProc(callee, appended));
+    const variant: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(base_proc_count)));
+    try testing.expectEqual(@as(u64, 1), try f.uniqueArgsInProc(variant, appended));
+}
+
+test "uniqueness: without specialization the dying unique argument keeps the callee's check" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    const param = try f.local(f.list_i64);
+    const elem = try f.local(.i64);
+    const appended = try f.local(f.list_i64);
+    const callee_ret = try f.ret(appended);
+    const append = try f.assignLowLevel(appended, &.{ param, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), callee_ret);
+    const callee_body = try f.assignI64(elem, 5, append);
+    const callee = try f.addProc(&.{param}, callee_body, f.list_i64);
+
+    const list = try f.local(f.list_i64);
+    const got = try f.local(f.list_i64);
+    const caller_ret = try f.ret(got);
+    const call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = got,
+        .proc = callee,
+        .args = try f.span(&.{list}),
+        .next = caller_ret,
+    } });
+    const caller_body = try f.assignList(list, &.{}, call);
+    _ = try f.addProc(&.{}, caller_body, f.list_i64);
+
+    const base_proc_count = f.store.proc_specs.items.len;
+    try f.run();
+
+    // Single-variant emission never sees unique parameters: no variant is
+    // cloned and the callee keeps its runtime check.
+    try testing.expectEqual(base_proc_count, f.store.proc_specs.items.len);
+    try testing.expectEqual(@as(u64, 0), f.uniqueArgsFor(appended));
 }
 
 test "RC mutable iterator accumulator replace cleans old state" {

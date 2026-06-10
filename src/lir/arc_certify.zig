@@ -89,7 +89,7 @@ pub fn certifyStore(
     }
 
     try certifyRcAtomicity(allocator, store, rc_local, roots, diag);
-    try certifyUniqueArgs(allocator, store, rc_local, diag);
+    try certifyUniqueArgs(allocator, store, rc_local, sigs, diag);
 
     var certifier = Certifier{
         .allocator = allocator,
@@ -146,39 +146,91 @@ fn certifyRcAtomicity(
 
 /// Mirror of the born-unique analysis: every `assign_low_level` claiming a
 /// check-free unique argument must name a position the op may runtime-check
-/// and a local whose every definition is a unique birth. The balance and
-/// borrow conditions behind the claim are enforced by the per-value
-/// certification; this rule covers the unique-origin claim.
+/// and a local whose every definition is a unique birth — a fresh
+/// allocation, a direct call whose callee's signature returns unique, or a
+/// parameter the containing proc's signature seeds born-unique. The balance
+/// and borrow conditions behind the claim are enforced by the per-value
+/// certification; this rule covers the unique-origin claim. Variants share
+/// parameter locals with their source proc, so claims are checked per proc
+/// body against that proc's signature.
 fn certifyUniqueArgs(
     allocator: Allocator,
     store: *const LirStore,
     rc_local: []const bool,
+    sigs: arc_sig.SigTable,
     diag: *Diagnostic,
 ) CertifyError!void {
-    var uniqueness = try arc_solve.computeUniqueness(allocator, store, rc_local);
+    var uniqueness = try arc_solve.computeUniqueness(allocator, store, rc_local, sigs);
     defer uniqueness.deinit(allocator);
 
-    for (store.cf_stmts.items, 0..) |stmt, stmt_index| {
-        const assign = switch (stmt) {
-            .assign_low_level => |a| a,
-            else => continue,
-        };
-        if (assign.unique_args == 0) continue;
-        if ((assign.unique_args & ~assign.rc_effect.may_runtime_uniqueness_check_args) != 0) {
-            diag.set("stmt={d}: unique_args bit outside the op's runtime-checked argument mask", .{stmt_index});
-            return error.Certification;
-        }
-        for (store.getLocalSpan(assign.args), 0..) |arg, position| {
-            if (position >= 64) break;
-            const bit = @as(u64, 1) << @as(u6, @intCast(position));
-            if ((assign.unique_args & bit) == 0) continue;
-            const index = @intFromEnum(arg);
-            if (index >= uniqueness.born_unique.capacity() or !uniqueness.born_unique.isSet(index)) {
-                diag.set("stmt={d}: check-free uniqueness claim on argument {d} (local {d}) without a unique birth", .{ stmt_index, position, index });
-                return error.Certification;
+    var visited = std.AutoHashMap(LIR.CFStmtId, void).init(allocator);
+    defer visited.deinit();
+    var stack = std.ArrayList(LIR.CFStmtId).empty;
+    defer stack.deinit(allocator);
+
+    for (store.proc_specs.items, 0..) |proc, proc_index| {
+        const body = proc.body orelse continue;
+        const sig = sigs.get(@enumFromInt(@as(u32, @intCast(proc_index))));
+        const params = store.getLocalSpan(proc.args);
+        visited.clearRetainingCapacity();
+        stack.clearRetainingCapacity();
+        try stack.append(allocator, body);
+        while (stack.pop()) |current| {
+            if (visited.contains(current)) continue;
+            try visited.put(current, {});
+            switch (store.getCFStmt(current)) {
+                .assign_low_level => |assign| {
+                    try stack.append(allocator, assign.next);
+                    if (assign.unique_args == 0) continue;
+                    const stmt_index = @intFromEnum(current);
+                    if ((assign.unique_args & ~assign.rc_effect.may_runtime_uniqueness_check_args) != 0) {
+                        diag.set("stmt={d}: unique_args bit outside the op's runtime-checked argument mask", .{stmt_index});
+                        return error.Certification;
+                    }
+                    for (store.getLocalSpan(assign.args), 0..) |arg, position| {
+                        if (position >= 64) break;
+                        const bit = @as(u64, 1) << @as(u6, @intCast(position));
+                        if ((assign.unique_args & bit) == 0) continue;
+                        const index = @intFromEnum(arg);
+                        if (index < uniqueness.born_unique.capacity() and uniqueness.born_unique.isSet(index)) continue;
+                        if (paramSeededUnique(sig, params, arg)) continue;
+                        diag.set("stmt={d}: check-free uniqueness claim on argument {d} (local {d}) without a unique birth", .{ stmt_index, position, index });
+                        return error.Certification;
+                    }
+                },
+                .switch_stmt => |s| {
+                    for (store.getCFSwitchBranches(s.branches)) |branch| {
+                        try stack.append(allocator, branch.body);
+                    }
+                    try stack.append(allocator, s.default_branch);
+                    if (s.continuation) |continuation| {
+                        try stack.append(allocator, continuation);
+                    }
+                },
+                .join => |j| {
+                    try stack.append(allocator, j.body);
+                    try stack.append(allocator, j.remainder);
+                },
+                inline .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .free => |s| {
+                    try stack.append(allocator, s.next);
+                },
+                .ret, .jump, .crash, .runtime_error, .loop_continue, .loop_break => {},
             }
         }
     }
+}
+
+/// True when the local is a parameter of the proc and the proc's signature
+/// seeds it born-unique (a mode-specialized variant whose caller proved the
+/// dying argument unique).
+fn paramSeededUnique(sig: arc_sig.RcSig, params: []const LIR.LocalId, local: LIR.LocalId) bool {
+    if (sig.unique_params == 0) return false;
+    for (params, 0..) |param, position| {
+        if (position >= 64) break;
+        if (param != local) continue;
+        return (sig.unique_params >> @as(u6, @intCast(position))) & 1 != 0;
+    }
+    return false;
 }
 
 /// Like `certifyStore`, but panics with a rendered failure context instead

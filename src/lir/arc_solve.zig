@@ -29,7 +29,11 @@
 //! demand ownership of their arguments so emission never needs a statement
 //! after the call. Phase B then marks returns borrowed when every returned
 //! value is a borrow anchored on a borrowed parameter, and re-solves binding
-//! modes so callers may borrow such results.
+//! modes so callers may borrow such results. After signatures settle,
+//! unique returns solve to a fixpoint with the born-unique analysis: a
+//! proc's return is unique when every `ret` returns a born-unique value
+//! surviving to the return with no other holder, and a direct-call result
+//! of a unique-returning callee is itself a unique birth in its caller.
 //!
 //! Pinned signatures are ABI contracts and never solve: root procs, hosted
 //! procs, erased-callable procs, bodyless procs, and procs whose address
@@ -81,6 +85,15 @@ pub const Solution = struct {
     /// count 1 at the local's definition and no statement can add another
     /// holder afterward.
     unique: std.bit_set.DynamicBitSetUnmanaged,
+    /// Bit set => some occurrence can add another holder to the local's
+    /// value (or consume it a second time). A parameter a variant's demand
+    /// vector seeds born-unique stays unique through its body only when
+    /// this bit is clear.
+    unique_destroyed: std.bit_set.DynamicBitSetUnmanaged,
+    /// Bit set => the proc's signature is pinned by ABI (roots, hosted,
+    /// erased-callable, bodyless, and address-escaping procs). Pinned procs
+    /// are never mode-specialized.
+    pinned: std.bit_set.DynamicBitSetUnmanaged,
 
     pub fn deinit(self: *Solution) void {
         self.borrowed.deinit(self.allocator);
@@ -92,6 +105,8 @@ pub const Solution = struct {
         self.join_param.deinit(self.allocator);
         self.visible.deinit(self.allocator);
         self.unique.deinit(self.allocator);
+        self.unique_destroyed.deinit(self.allocator);
+        self.pinned.deinit(self.allocator);
     }
 
     pub fn isJoinParam(self: *const Solution, local: LIR.LocalId) bool {
@@ -122,6 +137,23 @@ pub const Solution = struct {
         const index = @intFromEnum(local);
         if (index >= self.leader.len) return false;
         return self.unique.isSet(index);
+    }
+
+    /// True when some occurrence can add another holder to the local's
+    /// value (or consume it a second time), so a born-unique seed on this
+    /// local would not survive to a consuming use.
+    pub fn isUniqueDestroyed(self: *const Solution, local: LIR.LocalId) bool {
+        const index = @intFromEnum(local);
+        if (index >= self.leader.len) return true;
+        return self.unique_destroyed.isSet(index);
+    }
+
+    /// True when the proc's signature is pinned by ABI and must never be
+    /// weakened or specialized.
+    pub fn isPinnedProc(self: *const Solution, proc: LIR.LirProcSpecId) bool {
+        const index = @intFromEnum(proc);
+        if (index >= self.pinned.capacity()) return true;
+        return self.pinned.isSet(index);
     }
 
     pub fn leaderOf(self: *const Solution, local: LIR.LocalId) LIR.LocalId {
@@ -216,7 +248,7 @@ pub fn solve(
             // Ownership of sigs moved into the Solution.
             solver.sigs = &.{};
         }
-        solver.pinned.deinit(allocator);
+        if (!solver_sigs_kept) solver.pinned.deinit(allocator);
         allocator.free(solver.scc);
         allocator.free(solver.defs);
         allocator.free(solver.demand);
@@ -307,11 +339,43 @@ pub fn solve(
     var visible = try computeVisibility(allocator, store, rc_local, &solver.pinned);
     errdefer visible.deinit(allocator);
 
-    var uniqueness = try computeUniqueness(allocator, store, rc_local);
-    // Emission consumes only the final bit; the born-unique origin set is
-    // re-derived by the certifier.
+    // Unique returns solve to a fixpoint against the born-unique analysis.
+    // `ret_unique` bits start false and only ever flip to true: a flip adds
+    // unique births at that callee's call results, and the destroy rules do
+    // not depend on `ret_unique`, so the unique set only grows. Every round
+    // either flips at least one proc or the loop stops, the final round
+    // recomputes uniqueness under the final signatures, and the round count
+    // is bounded by the longest unique-return dependency chain.
+    var uniqueness = try computeUniqueness(allocator, store, rc_local, .{ .sigs = solver.sigs });
+    {
+        errdefer uniqueness.deinit(allocator);
+        var unique_rounds: usize = 0;
+        while (true) : (unique_rounds += 1) {
+            if (unique_rounds > proc_count + 1) {
+                solveInvariant("ARC unique-return solving did not converge");
+            }
+            var changed = false;
+            for (store.proc_specs.items, 0..) |proc, proc_index| {
+                if (solver.pinned.isSet(proc_index)) continue;
+                if (solver.sigs[proc_index].ret_unique) continue;
+                const body = proc.body orelse continue;
+                if (try retAllUnique(&solver, &uniqueness.unique, body)) {
+                    solver.sigs[proc_index].ret_unique = true;
+                    changed = true;
+                }
+            }
+            if (!changed) break;
+            const next = try computeUniqueness(allocator, store, rc_local, .{ .sigs = solver.sigs });
+            uniqueness.deinit(allocator);
+            uniqueness = next;
+        }
+    }
+    // Emission consumes the final bit and the destroyed set (for variant
+    // parameter seeds); the born-unique origin set is re-derived by the
+    // certifier.
     uniqueness.born_unique.deinit(allocator);
     errdefer uniqueness.unique.deinit(allocator);
+    errdefer uniqueness.destroyed.deinit(allocator);
 
     var solution = Solution{
         .allocator = allocator,
@@ -324,6 +388,8 @@ pub fn solve(
         .join_param = solver.join_param,
         .visible = visible,
         .unique = uniqueness.unique,
+        .unique_destroyed = uniqueness.destroyed,
+        .pinned = solver.pinned,
     };
     solver_sigs_kept = true;
     errdefer {
@@ -333,6 +399,8 @@ pub fn solve(
         solution.join_param.deinit(allocator);
         solution.visible.deinit(allocator);
         solution.unique.deinit(allocator);
+        solution.unique_destroyed.deinit(allocator);
+        solution.pinned.deinit(allocator);
     }
 
     // Build flat group-member lists: every local lists at least itself;
@@ -528,6 +596,55 @@ fn retLenders(
     if (!saw_ret) return null;
     if (lenders == 0) return null;
     return lenders;
+}
+
+/// True when every `ret` in the body returns a refcounted value whose
+/// unique bit is set: born unique and surviving to the return, which is the
+/// value's single consuming use. A body without a `ret` reports false; a
+/// never-returning proc's unique-return bit is never consulted.
+fn retAllUnique(
+    solver: *Solver,
+    unique: *const std.bit_set.DynamicBitSetUnmanaged,
+    body: LIR.CFStmtId,
+) SolveError!bool {
+    const allocator = solver.allocator;
+    const store = solver.store;
+    var saw_ret = false;
+
+    solver.visited.clearRetainingCapacity();
+    solver.stack.clearRetainingCapacity();
+    try solver.stack.append(allocator, body);
+    while (solver.stack.pop()) |current| {
+        if (solver.visited.contains(current)) continue;
+        try solver.visited.put(current, {});
+        switch (store.getCFStmt(current)) {
+            .ret => |ret_stmt| {
+                saw_ret = true;
+                const value_index = @intFromEnum(ret_stmt.value);
+                if (value_index >= solver.rc_local.len or !solver.rc_local[value_index]) return false;
+                if (!unique.isSet(value_index)) return false;
+            },
+            .switch_stmt => |s| {
+                for (store.getCFSwitchBranches(s.branches)) |branch| {
+                    try solver.stack.append(allocator, branch.body);
+                }
+                try solver.stack.append(allocator, s.default_branch);
+                if (s.continuation) |continuation| {
+                    try solver.stack.append(allocator, continuation);
+                }
+            },
+            .join => |j| {
+                try solver.stack.append(allocator, j.body);
+                try solver.stack.append(allocator, j.remainder);
+            },
+            inline .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .free => |s| {
+                try solver.stack.append(allocator, s.next);
+            },
+            .jump, .crash, .runtime_error, .loop_continue, .loop_break => {},
+        }
+    }
+
+    return saw_ret;
 }
 
 const RetTreatment = enum {
@@ -1100,40 +1217,52 @@ pub fn computeVisibility(
     return visible;
 }
 
-/// Result of the born-unique analysis, one bit pair per local.
+/// Result of the born-unique analysis, one bit triple per local.
 pub const Uniqueness = struct {
     /// Bit set => every definition of the local binds a value whose
     /// outermost allocation is born with count 1: a fresh aggregate or
-    /// literal assignment, or a low-level op whose `RcEffect` marks its
-    /// result unique.
+    /// literal assignment, a low-level op whose `RcEffect` marks its result
+    /// unique, or a direct call whose callee's signature returns unique.
     born_unique: std.bit_set.DynamicBitSetUnmanaged,
     /// Bit set => born unique and no statement can add another holder, so
     /// the count is still 1 at the local's single consuming use.
     unique: std.bit_set.DynamicBitSetUnmanaged,
+    /// Bit set => some occurrence can add another holder (or consume the
+    /// value a second time). Emission consults this for parameters a
+    /// variant's demand vector seeds born-unique: the seed survives the
+    /// body only when this bit is clear.
+    destroyed: std.bit_set.DynamicBitSetUnmanaged,
 
-    /// Frees both bit sets.
+    /// Frees all three bit sets.
     pub fn deinit(self: *Uniqueness, allocator: Allocator) void {
         self.born_unique.deinit(allocator);
         self.unique.deinit(allocator);
+        self.destroyed.deinit(allocator);
     }
 };
 
 /// Marks every local whose value's outermost allocation provably has count 1
 /// at the local's definition with nothing later adding a holder: born unique
-/// by a fresh allocation, destroyed by any occurrence that can create
-/// another handle to the allocation — an incref, an aggregate or capture
-/// operand, a `set_local` value or target, a second consuming use, a return,
-/// or any call argument. Pure same-value aliases do not inherit uniqueness:
-/// the alias and its source are two names for one allocation, and proving
-/// the source dead at every alias use is left to a later stage. Call results
-/// likewise stay non-unique until the interprocedural `RcSig` stage carries
-/// a unique-return bit; only op-level `RcEffect` data proves births today.
+/// by a fresh allocation or a direct call to a unique-returning callee,
+/// destroyed by any occurrence that can create another handle to the
+/// allocation — an incref, an aggregate or capture operand, a `set_local`
+/// value or target, or a second consuming use. Consuming uses (a consumed
+/// low-level argument, an owned-position direct-call argument, a return)
+/// take the value's single unit with them, so the first one preserves
+/// uniqueness and any further one destroys it; borrowed-position call
+/// arguments and erased-call arguments conservatively destroy. Pure
+/// same-value aliases do not inherit uniqueness: the alias and its source
+/// are two names for one allocation, and proving the source dead at every
+/// alias use is left to a later stage. Variant parameter seeds are not
+/// applied here: variants share parameter locals with their source proc, so
+/// emission and the certifier overlay `RcSig.unique_params` per proc.
 /// Statement iteration is flat, so unreachable statements only destroy
 /// uniqueness, which is conservative-sound.
 pub fn computeUniqueness(
     allocator: Allocator,
     store: *const LirStore,
     rc_local: []const bool,
+    sigs: arc_sig.SigTable,
 ) SolveError!Uniqueness {
     const local_count = store.locals.items.len;
 
@@ -1144,7 +1273,7 @@ pub fn computeUniqueness(
     var foreign_def = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
     defer foreign_def.deinit(allocator);
     var destroyed = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
-    defer destroyed.deinit(allocator);
+    errdefer destroyed.deinit(allocator);
     var consumed_once = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
     defer consumed_once.deinit(allocator);
 
@@ -1191,9 +1320,24 @@ pub fn computeUniqueness(
             .assign_ref => |assign| marks.destroy(&foreign_def, assign.target),
             .assign_literal => |assign| marks.noteBirth(&born, assign.target),
             .assign_call => |assign| {
-                marks.destroy(&foreign_def, assign.target);
-                for (store.getLocalSpan(assign.args)) |arg| {
-                    marks.destroy(&destroyed, arg);
+                const callee_sig = sigs.get(assign.proc);
+                if (callee_sig.ret_unique) {
+                    marks.noteBirth(&born, assign.target);
+                } else {
+                    marks.destroy(&foreign_def, assign.target);
+                }
+                for (store.getLocalSpan(assign.args), 0..) |arg, position| {
+                    if (callee_sig.paramMode(position) == .owned) {
+                        // The callee receives the argument's single unit;
+                        // passing it is one consuming use, exactly like a
+                        // consumed low-level argument.
+                        marks.consume(&consumed_once, &destroyed, arg);
+                    } else {
+                        // A borrowed-position argument stays with the
+                        // caller while the callee reads it; conservatively
+                        // treat the call as another holder.
+                        marks.destroy(&destroyed, arg);
+                    }
                 }
             },
             .assign_call_erased => |assign| {
@@ -1254,7 +1398,9 @@ pub fn computeUniqueness(
                     marks.destroy(&foreign_def, param);
                 }
             },
-            .ret => |ret_stmt| marks.destroy(&destroyed, ret_stmt.value),
+            // Returning is the value's consuming use: the unit moves to the
+            // caller, which feeds the per-proc unique-return solve.
+            .ret => |ret_stmt| marks.consume(&consumed_once, &destroyed, ret_stmt.value),
             .decref, .free, .debug, .expect, .switch_stmt, .jump, .crash, .runtime_error, .loop_continue, .loop_break => {},
         }
     }
@@ -1268,7 +1414,7 @@ pub fn computeUniqueness(
     var destroyed_iter = destroyed.iterator(.{});
     while (destroyed_iter.next()) |index| unique.unset(index);
 
-    return .{ .born_unique = born, .unique = unique };
+    return .{ .born_unique = born, .unique = unique, .destroyed = destroyed };
 }
 
 /// Tarjan strongly-connected components over the direct-call graph.
