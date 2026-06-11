@@ -418,15 +418,47 @@ const ResultListFileStr = extern struct {
     tag: ResultTag,
 };
 
-// External Roc entry point
-// Follows RocCall ABI: ops, ret_ptr, then argument pointers
-// External Roc entry point - name comes from "provides { "roc_make_glue": make_glue_for_host }"
-// The extern symbol is "roc_" + the quoted name ("make_glue")
-extern fn roc_make_glue(
-    ops: *builtins.host_abi.RocOps,
-    ret_ptr: *ResultListFileStr,
-    args_ptr: *RocList,
-) callconv(.c) void;
+// The app's entrypoint, exported under its provides symbol with its natural
+// C ABI: make_glue_for_host takes List(Types) and returns Try(List(File), Str).
+extern fn roc_make_glue(types_list: RocList) callconv(.c) ResultListFileStr;
+
+// The host's private RocOps. The exported runtime symbols below and the
+// builtins helpers reach the host allocator through this global, set by
+// platform_main before any Roc code runs.
+var g_roc_ops: ?*builtins.host_abi.RocOps = null;
+
+fn hostAlloc(length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+    return rocAllocFn(g_roc_ops.?, length, alignment);
+}
+
+fn hostDealloc(ptr: *anyopaque, alignment: usize) callconv(.c) void {
+    rocDeallocFn(g_roc_ops.?, ptr, alignment);
+}
+
+fn hostRealloc(ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+    return rocReallocFn(g_roc_ops.?, ptr, new_length, alignment);
+}
+
+fn hostDbg(bytes: [*]const u8, len: usize) callconv(.c) void {
+    rocDbgFn(g_roc_ops.?, bytes, len);
+}
+
+fn hostExpectFailed(bytes: [*]const u8, len: usize) callconv(.c) void {
+    rocExpectFailedFn(g_roc_ops.?, bytes, len);
+}
+
+fn hostCrashed(bytes: [*]const u8, len: usize) callconv(.c) void {
+    rocCrashedFn(g_roc_ops.?, bytes, len);
+}
+
+comptime {
+    @export(&hostAlloc, .{ .name = "roc_alloc", .visibility = .hidden });
+    @export(&hostDealloc, .{ .name = "roc_dealloc", .visibility = .hidden });
+    @export(&hostRealloc, .{ .name = "roc_realloc", .visibility = .hidden });
+    @export(&hostDbg, .{ .name = "roc_dbg", .visibility = .hidden });
+    @export(&hostExpectFailed, .{ .name = "roc_expect_failed", .visibility = .hidden });
+    @export(&hostCrashed, .{ .name = "roc_crashed", .visibility = .hidden });
+}
 
 // OS-specific entry point handling
 comptime {
@@ -461,9 +493,6 @@ fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
     };
     return exit_code;
 }
-
-/// No hosted functions for glue platform
-const hosted_function_ptrs = [_]builtins.host_abi.HostedFn{};
 
 const SMALL_STRING_SIZE = @sizeOf(RocStr);
 
@@ -714,7 +743,8 @@ fn platform_main(args: [][*:0]u8, std_io: std.Io) (Allocator.Error || error{ Mis
         }
     }
 
-    // Create the RocOps struct
+    // The host's private RocOps for using builtins helpers (RocStr/RocList
+    // allocation, decref). Not part of the ABI.
     var roc_ops = builtins.host_abi.RocOps{
         .env = @as(*anyopaque, @ptrCast(&host_env)),
         .roc_alloc = rocAllocFn,
@@ -723,11 +753,9 @@ fn platform_main(args: [][*:0]u8, std_io: std.Io) (Allocator.Error || error{ Mis
         .roc_dbg = rocDbgFn,
         .roc_expect_failed = rocExpectFailedFn,
         .roc_crashed = rocCrashedFn,
-        .hosted_fns = .{
-            .count = hosted_function_ptrs.len,
-            .fns = @constCast(&hosted_function_ptrs),
-        },
+        .hosted_fns = .{ .count = 0, .fns = undefined },
     };
+    g_roc_ops = &roc_ops;
 
     const allocator = host_env.gpa.allocator();
 
@@ -849,7 +877,7 @@ fn platform_main(args: [][*:0]u8, std_io: std.Io) (Allocator.Error || error{ Mis
     };
 
     // Create a List Types with one element (the Types structure)
-    var types_list = RocList{
+    const types_list = RocList{
         .bytes = types_inner_bytes,
         .length = 1,
         .capacity_or_alloc_ptr = RocList.encodeCapacity(1),
@@ -858,8 +886,7 @@ fn platform_main(args: [][*:0]u8, std_io: std.Io) (Allocator.Error || error{ Mis
     // Call the Roc glue spec
     // Note: Roc consumes types_list (takes ownership), so it handles cleanup
     // of all nested structures. We must NOT manually clean up after this call.
-    var result: ResultListFileStr = undefined;
-    roc_make_glue(&roc_ops, &result, &types_list);
+    var result: ResultListFileStr = roc_make_glue(types_list);
     defer cleanupResult(&result, &roc_ops);
 
     // Handle the result

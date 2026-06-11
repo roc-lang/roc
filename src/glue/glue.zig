@@ -312,7 +312,7 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
     };
     defer lowered.deinit();
 
-    const glue_proc = selectGlueSpecRootProc(root_artifact, &lowered, "make_glue") orelse {
+    const glue_proc = selectGlueSpecRootProc(root_artifact, &lowered, "roc_make_glue") orelse {
         if (builtin.mode == .Debug) {
             std.debug.panic("glue invariant violated: glue spec produced no published make_glue platform root", .{});
         }
