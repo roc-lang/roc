@@ -25,6 +25,8 @@ const core_tests = [_]TestCase{
     .{ .name = "problem: int minus dec type mismatch", .source = "1.I64 - 2.0.Dec", .expected = .{ .problem = {} } },
     .{ .name = "problem: int times dec type mismatch", .source = "1.I64 * 2.0.Dec", .expected = .{ .problem = {} } },
     .{ .name = "problem: int div dec type mismatch", .source = "1.I64 / 2.0.Dec", .expected = .{ .problem = {} } },
+    .{ .name = "problem: F32.is_eq is intentionally unavailable", .source = "F32.is_eq(1.0.F32, 1.0.F32)", .expected = .{ .problem = {} } },
+    .{ .name = "problem: F64.is_eq is intentionally unavailable", .source = "F64.is_eq(1.0.F64, 1.0.F64)", .expected = .{ .problem = {} } },
     .{
         .name = "problem: annotation-only top-level value is not a runtime value",
         .source_kind = .module,
@@ -3026,6 +3028,367 @@ const core_tests = [_]TestCase{
         \\}
         ,
         .expected = .{ .inspect_str = "(Ok(255), Err(Overflow), Err(Overflow), Err(Overflow), Err(DivByZero), Ok(127), Err(Overflow), Err(Overflow), Err(Overflow), Ok(126), Err(Overflow), Err(Overflow), Err(Overflow), Err(DivByZero), Ok(-3), Ok(9223372036854775806), Err(Overflow), Err(Overflow))" },
+    },
+    .{
+        .name = "inspect: unsigned integer try arithmetic covers every width",
+        .source =
+        \\{
+        \\    check_u8 =
+        \\        U8.add_try(U8.highest, 0) == Ok(U8.highest)
+        \\        and U8.add_try(U8.highest, 1) == Err(Overflow)
+        \\        and U8.sub_try(0, 0) == Ok(0)
+        \\        and U8.sub_try(0, 1) == Err(Overflow)
+        \\        and U8.mul_try(U8.highest, 1) == Ok(U8.highest)
+        \\        and U8.mul_try(U8.highest, 2) == Err(Overflow)
+        \\        and U8.div_try(U8.highest, 1) == Ok(U8.highest)
+        \\        and U8.div_try(1, 0) == Err(DivByZero)
+        \\        and U8.pow_try(2, 3) == Ok(8)
+        \\        and U8.pow_try(U8.highest, 2) == Err(Overflow)
+        \\        and U8.div_ceil_try(7, 2) == Ok(4)
+        \\        and U8.div_ceil_try(1, 0) == Err(DivByZero)
+        \\    check_u16 =
+        \\        U16.add_try(U16.highest, 0) == Ok(U16.highest)
+        \\        and U16.add_try(U16.highest, 1) == Err(Overflow)
+        \\        and U16.sub_try(0, 0) == Ok(0)
+        \\        and U16.sub_try(0, 1) == Err(Overflow)
+        \\        and U16.mul_try(U16.highest, 1) == Ok(U16.highest)
+        \\        and U16.mul_try(U16.highest, 2) == Err(Overflow)
+        \\        and U16.div_try(U16.highest, 1) == Ok(U16.highest)
+        \\        and U16.div_try(1, 0) == Err(DivByZero)
+        \\        and U16.pow_try(2, 3) == Ok(8)
+        \\        and U16.pow_try(U16.highest, 2) == Err(Overflow)
+        \\        and U16.div_ceil_try(7, 2) == Ok(4)
+        \\        and U16.div_ceil_try(1, 0) == Err(DivByZero)
+        \\    check_u32 =
+        \\        U32.add_try(U32.highest, 0) == Ok(U32.highest)
+        \\        and U32.add_try(U32.highest, 1) == Err(Overflow)
+        \\        and U32.sub_try(0, 0) == Ok(0)
+        \\        and U32.sub_try(0, 1) == Err(Overflow)
+        \\        and U32.mul_try(U32.highest, 1) == Ok(U32.highest)
+        \\        and U32.mul_try(U32.highest, 2) == Err(Overflow)
+        \\        and U32.div_try(U32.highest, 1) == Ok(U32.highest)
+        \\        and U32.div_try(1, 0) == Err(DivByZero)
+        \\        and U32.pow_try(2, 3) == Ok(8)
+        \\        and U32.pow_try(U32.highest, 2) == Err(Overflow)
+        \\        and U32.div_ceil_try(7, 2) == Ok(4)
+        \\        and U32.div_ceil_try(1, 0) == Err(DivByZero)
+        \\    check_u64 =
+        \\        U64.add_try(U64.highest, 0) == Ok(U64.highest)
+        \\        and U64.add_try(U64.highest, 1) == Err(Overflow)
+        \\        and U64.sub_try(0, 0) == Ok(0)
+        \\        and U64.sub_try(0, 1) == Err(Overflow)
+        \\        and U64.mul_try(U64.highest, 1) == Ok(U64.highest)
+        \\        and U64.mul_try(U64.highest, 2) == Err(Overflow)
+        \\        and U64.div_try(U64.highest, 1) == Ok(U64.highest)
+        \\        and U64.div_try(1, 0) == Err(DivByZero)
+        \\        and U64.pow_try(2, 3) == Ok(8)
+        \\        and U64.pow_try(U64.highest, 2) == Err(Overflow)
+        \\        and U64.div_ceil_try(7, 2) == Ok(4)
+        \\        and U64.div_ceil_try(1, 0) == Err(DivByZero)
+        \\    check_u128 =
+        \\        U128.add_try(U128.highest, 0) == Ok(U128.highest)
+        \\        and U128.add_try(U128.highest, 1) == Err(Overflow)
+        \\        and U128.sub_try(0, 0) == Ok(0)
+        \\        and U128.sub_try(0, 1) == Err(Overflow)
+        \\        and U128.mul_try(U128.highest, 1) == Ok(U128.highest)
+        \\        and U128.mul_try(U128.highest, 2) == Err(Overflow)
+        \\        and U128.div_try(U128.highest, 1) == Ok(U128.highest)
+        \\        and U128.div_try(1, 0) == Err(DivByZero)
+        \\        and U128.pow_try(2, 3) == Ok(8)
+        \\        and U128.pow_try(U128.highest, 2) == Err(Overflow)
+        \\        and U128.div_ceil_try(7, 2) == Ok(4)
+        \\        and U128.div_ceil_try(1, 0) == Err(DivByZero)
+        \\    (check_u8, check_u16, check_u32, check_u64, check_u128)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(True, True, True, True, True)" },
+    },
+    .{
+        .name = "inspect: signed integer try arithmetic covers every width",
+        .source =
+        \\{
+        \\    i8 = (
+        \\        I8.add_try(I8.highest, -1),
+        \\        I8.add_try(I8.highest, 1),
+        \\        I8.sub_try(I8.lowest, -1),
+        \\        I8.sub_try(I8.lowest, 1),
+        \\        I8.mul_try(I8.highest, 1),
+        \\        I8.mul_try(I8.highest, 2),
+        \\        I8.mul_try(I8.lowest, -1),
+        \\        I8.div_try(I8.lowest, -1),
+        \\        I8.div_try(1, 0),
+        \\        I8.pow_try(2, 3),
+        \\        I8.pow_try(2, -1),
+        \\        I8.pow_try(I8.highest, 2),
+        \\        I8.pow_try(-1, -3),
+        \\        I8.div_ceil_try(7, 2),
+        \\        I8.div_ceil_try(-7, 2),
+        \\        I8.div_ceil_try(I8.lowest, -1),
+        \\    )
+        \\    i16 = (
+        \\        I16.add_try(I16.highest, -1),
+        \\        I16.add_try(I16.highest, 1),
+        \\        I16.sub_try(I16.lowest, -1),
+        \\        I16.sub_try(I16.lowest, 1),
+        \\        I16.mul_try(I16.highest, 1),
+        \\        I16.mul_try(I16.highest, 2),
+        \\        I16.mul_try(I16.lowest, -1),
+        \\        I16.div_try(I16.lowest, -1),
+        \\        I16.div_try(1, 0),
+        \\        I16.pow_try(2, 3),
+        \\        I16.pow_try(2, -1),
+        \\        I16.pow_try(I16.highest, 2),
+        \\        I16.pow_try(-1, -3),
+        \\        I16.div_ceil_try(7, 2),
+        \\        I16.div_ceil_try(-7, 2),
+        \\        I16.div_ceil_try(I16.lowest, -1),
+        \\    )
+        \\    i32 = (
+        \\        I32.add_try(I32.highest, -1),
+        \\        I32.add_try(I32.highest, 1),
+        \\        I32.sub_try(I32.lowest, -1),
+        \\        I32.sub_try(I32.lowest, 1),
+        \\        I32.mul_try(I32.highest, 1),
+        \\        I32.mul_try(I32.highest, 2),
+        \\        I32.mul_try(I32.lowest, -1),
+        \\        I32.div_try(I32.lowest, -1),
+        \\        I32.div_try(1, 0),
+        \\        I32.pow_try(2, 3),
+        \\        I32.pow_try(2, -1),
+        \\        I32.pow_try(I32.highest, 2),
+        \\        I32.pow_try(-1, -3),
+        \\        I32.div_ceil_try(7, 2),
+        \\        I32.div_ceil_try(-7, 2),
+        \\        I32.div_ceil_try(I32.lowest, -1),
+        \\    )
+        \\    i64 = (
+        \\        I64.add_try(I64.highest, -1),
+        \\        I64.add_try(I64.highest, 1),
+        \\        I64.sub_try(I64.lowest, -1),
+        \\        I64.sub_try(I64.lowest, 1),
+        \\        I64.mul_try(I64.highest, 1),
+        \\        I64.mul_try(I64.highest, 2),
+        \\        I64.mul_try(I64.lowest, -1),
+        \\        I64.div_try(I64.lowest, -1),
+        \\        I64.div_try(1, 0),
+        \\        I64.pow_try(2, 3),
+        \\        I64.pow_try(2, -1),
+        \\        I64.pow_try(I64.highest, 2),
+        \\        I64.pow_try(-1, -3),
+        \\        I64.div_ceil_try(7, 2),
+        \\        I64.div_ceil_try(-7, 2),
+        \\        I64.div_ceil_try(I64.lowest, -1),
+        \\    )
+        \\    i128 = (
+        \\        I128.add_try(I128.highest, -1),
+        \\        I128.add_try(I128.highest, 1),
+        \\        I128.sub_try(I128.lowest, -1),
+        \\        I128.sub_try(I128.lowest, 1),
+        \\        I128.mul_try(I128.highest, 1),
+        \\        I128.mul_try(I128.highest, 2),
+        \\        I128.mul_try(I128.lowest, -1),
+        \\        I128.div_try(I128.lowest, -1),
+        \\        I128.div_try(1, 0),
+        \\        I128.pow_try(2, 3),
+        \\        I128.pow_try(2, -1),
+        \\        I128.pow_try(I128.highest, 2),
+        \\        I128.pow_try(-1, -3),
+        \\        I128.div_ceil_try(7, 2),
+        \\        I128.div_ceil_try(-7, 2),
+        \\        I128.div_ceil_try(I128.lowest, -1),
+        \\    )
+        \\    (i8, i16, i32, i64, i128)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "((Ok(126), Err(Overflow), Ok(-127), Err(Overflow), Ok(127), Err(Overflow), Err(Overflow), Err(Overflow), Err(DivByZero), Ok(8), Err(Underflow), Err(Overflow), Ok(-1), Ok(4), Ok(-3), Err(Overflow)), (Ok(32766), Err(Overflow), Ok(-32767), Err(Overflow), Ok(32767), Err(Overflow), Err(Overflow), Err(Overflow), Err(DivByZero), Ok(8), Err(Underflow), Err(Overflow), Ok(-1), Ok(4), Ok(-3), Err(Overflow)), (Ok(2147483646), Err(Overflow), Ok(-2147483647), Err(Overflow), Ok(2147483647), Err(Overflow), Err(Overflow), Err(Overflow), Err(DivByZero), Ok(8), Err(Underflow), Err(Overflow), Ok(-1), Ok(4), Ok(-3), Err(Overflow)), (Ok(9223372036854775806), Err(Overflow), Ok(-9223372036854775807), Err(Overflow), Ok(9223372036854775807), Err(Overflow), Err(Overflow), Err(Overflow), Err(DivByZero), Ok(8), Err(Underflow), Err(Overflow), Ok(-1), Ok(4), Ok(-3), Err(Overflow)), (Ok(170141183460469231731687303715884105726), Err(Overflow), Ok(-170141183460469231731687303715884105727), Err(Overflow), Ok(170141183460469231731687303715884105727), Err(Overflow), Err(Overflow), Err(Overflow), Err(DivByZero), Ok(8), Err(Underflow), Err(Overflow), Ok(-1), Ok(4), Ok(-3), Err(Overflow)))" },
+    },
+    .{
+        .name = "inspect: try APIs unify with open error rows",
+        .source =
+        \\{
+        \\    label : Try(a, [Overflow, DivByZero, Underflow, SqrtOfNegative, ..]) -> Str
+        \\    label = |result| match result {
+        \\        Ok(_) => "ok"
+        \\        Err(Overflow) => "overflow"
+        \\        Err(DivByZero) => "div-by-zero"
+        \\        Err(Underflow) => "underflow"
+        \\        Err(SqrtOfNegative) => "sqrt-of-negative"
+        \\        Err(_) => "other"
+        \\    }
+        \\
+        \\    (
+        \\        label(U8.add_try(1, 2)),
+        \\        label(U8.add_try(U8.highest, 1)),
+        \\        label(I8.div_try(1, 0)),
+        \\        label(I8.pow_try(2, -1)),
+        \\        label(Dec.sqrt_try(-1.0)),
+        \\    )
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(\"ok\", \"overflow\", \"div-by-zero\", \"underflow\", \"sqrt-of-negative\")" },
+    },
+    .{
+        .name = "inspect: try row widening preserves ok payload",
+        .source =
+        \\{
+        \\    result : Try(I8, [Overflow])
+        \\    result = I8.mul_try(1, 2)
+        \\
+        \\    widened : Try(I8, [Overflow, Underflow])
+        \\    widened =
+        \\        match result {
+        \\            Ok(value) => Ok(value)
+        \\            Err(Overflow) => Err(Overflow)
+        \\        }
+        \\
+        \\    widened
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Ok(2)" },
+    },
+    .{
+        .name = "inspect: high arity conditional try preserves ok payload",
+        .source =
+        \\{
+        \\    step = |lowest, highest, zero, one, two, neg_one, acc, base, exponent|
+        \\        if exponent == zero {
+        \\            Ok(acc)
+        \\        } else {
+        \\            Err(Overflow)
+        \\        }
+        \\
+        \\    step(I8.lowest, I8.highest, 0.I8, 1.I8, 2.I8, -1.I8, 1.I8, 2.I8, 0.I8)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Ok(1)" },
+    },
+    .{
+        .name = "inspect: direct builtin from_numeral handles base256 digits",
+        .source =
+        \\{
+        \\    num : Bool, List(U8), List(U8), U64 -> Numeral
+        \\    num = |is_negative, digits_before_pt, digits_after_pt, digits_after_pt_count|
+        \\        Literal({
+        \\            is_negative: is_negative,
+        \\            digits_before_pt: digits_before_pt,
+        \\            digits_after_pt: digits_after_pt,
+        \\            digits_after_pt_count: digits_after_pt_count,
+        \\        })
+        \\
+        \\    invalid : Try(a, [InvalidNumeral(Str), ..]) -> Bool
+        \\    invalid = |result| match result {
+        \\        Err(InvalidNumeral(msg)) => msg == "invalid numeric literal"
+        \\        Err(_) => False
+        \\        Ok(_) => False
+        \\    }
+        \\
+        \\    u8_ok = U8.from_numeral(num(False, [42], [], 0)) == Ok(42)
+        \\    u16_leading_zero_ok = U16.from_numeral(num(False, [0, 1, 0], [], 0)) == Ok(256)
+        \\    i8_lowest_ok = I8.from_numeral(num(True, [128], [], 0)) == Ok(I8.lowest)
+        \\    u128_highest_ok = U128.from_numeral(num(False, [255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255], [], 0)) == Ok(U128.highest)
+        \\    dec_fraction_ok = Dec.from_numeral(num(False, [1], [1], 18)) == Ok(1.000000000000000001)
+        \\    f32_fraction_ok = match F32.from_numeral(num(False, [3], [125], 3)) {
+        \\        Ok(value) => F32.is_float_eq(value, 3.125)
+        \\        Err(_) => False
+        \\    }
+        \\    f64_fraction_ok = match F64.from_numeral(num(False, [2], [5], 1)) {
+        \\        Ok(value) => F64.is_float_eq(value, 2.5)
+        \\        Err(_) => False
+        \\    }
+        \\    unsigned_negative_err = invalid(U8.from_numeral(num(True, [1], [], 0)))
+        \\    unsigned_overflow_err = invalid(U8.from_numeral(num(False, [1, 0], [], 0)))
+        \\    integer_fraction_err = invalid(I8.from_numeral(num(False, [1], [1], 1)))
+        \\
+        \\    (
+        \\        u8_ok,
+        \\        u16_leading_zero_ok,
+        \\        i8_lowest_ok,
+        \\        u128_highest_ok,
+        \\        dec_fraction_ok,
+        \\        f32_fraction_ok,
+        \\        f64_fraction_ok,
+        \\        unsigned_negative_err,
+        \\        unsigned_overflow_err,
+        \\        integer_fraction_err,
+        \\    )
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(True, True, True, True, True, True, True, True, True, True)" },
+    },
+    .{
+        .name = "inspect: numeric compare covers all integer widths and Dec",
+        .source =
+        \\{
+        \\    (
+        \\        U8.compare(0, U8.highest) == LT and U8.compare(U8.highest, U8.highest) == EQ and U8.compare(U8.highest, 0) == GT,
+        \\        I8.compare(I8.lowest, 0) == LT and I8.compare(0, 0) == EQ and I8.compare(I8.highest, 0) == GT,
+        \\        U16.compare(0, U16.highest) == LT and U16.compare(U16.highest, U16.highest) == EQ and U16.compare(U16.highest, 0) == GT,
+        \\        I16.compare(I16.lowest, 0) == LT and I16.compare(0, 0) == EQ and I16.compare(I16.highest, 0) == GT,
+        \\        U32.compare(0, U32.highest) == LT and U32.compare(U32.highest, U32.highest) == EQ and U32.compare(U32.highest, 0) == GT,
+        \\        I32.compare(I32.lowest, 0) == LT and I32.compare(0, 0) == EQ and I32.compare(I32.highest, 0) == GT,
+        \\        U64.compare(0, U64.highest) == LT and U64.compare(U64.highest, U64.highest) == EQ and U64.compare(U64.highest, 0) == GT,
+        \\        I64.compare(I64.lowest, 0) == LT and I64.compare(0, 0) == EQ and I64.compare(I64.highest, 0) == GT,
+        \\        U128.compare(0, U128.highest) == LT and U128.compare(U128.highest, U128.highest) == EQ and U128.compare(U128.highest, 0) == GT,
+        \\        I128.compare(I128.lowest, 0) == LT and I128.compare(0, 0) == EQ and I128.compare(I128.highest, 0) == GT,
+        \\        Dec.compare(Dec.lowest, 0.0) == LT and Dec.compare(0.0, 0.0) == EQ and Dec.compare(Dec.highest, 0.0) == GT,
+        \\    )
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(True, True, True, True, True, True, True, True, True, True, True)" },
+    },
+    .{
+        .name = "inspect: Dec constants and math APIs are deterministic",
+        .source =
+        \\{
+        \\    within = |actual, expected| Dec.abs_diff(actual, expected) <= 0.000000000001
+        \\    half_pi = Dec.div_by(Dec.pi, 2.0)
+        \\    quarter_pi = Dec.div_by(Dec.pi, 4.0)
+        \\
+        \\    constants =
+        \\        Dec.to_str(Dec.e) == "2.718281828459045235"
+        \\        and Dec.to_str(Dec.pi) == "3.141592653589793238"
+        \\        and Dec.to_str(Dec.tau) == "6.283185307179586476"
+        \\    sqrt =
+        \\        Dec.sqrt(1.44) == 1.2
+        \\        and Dec.sqrt(0.000000000000000001) == 0.000000001
+        \\        and match Dec.sqrt_try(-1.0) {
+        \\            Ok(_) => False
+        \\            Err(SqrtOfNegative) => True
+        \\        }
+        \\    pow =
+        \\        Dec.pow(2.0, 3.0) == 8.0
+        \\        and Dec.pow(2.0, -3.0) == 0.125
+        \\        and within(Dec.pow(4.0, 0.5), 2.0)
+        \\    trig =
+        \\        within(Dec.sin(0.0), 0.0)
+        \\        and within(Dec.cos(0.0), 1.0)
+        \\        and within(Dec.sin(half_pi), 1.0)
+        \\        and within(Dec.cos(Dec.pi), -1.0)
+        \\        and within(Dec.tan(quarter_pi), 1.0)
+        \\    inverse =
+        \\        within(Dec.asin(1.0), half_pi)
+        \\        and within(Dec.acos(1.0), 0.0)
+        \\        and within(Dec.atan(1.0), quarter_pi)
+        \\
+        \\    (constants, sqrt, pow, trig, inverse)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(True, True, True, True, True)" },
+    },
+    .{
+        .name = "crash: Dec.sqrt rejects negative input",
+        .source = "Dec.sqrt(-1.0)",
+        .expected = .{ .crash = {} },
+    },
+    .{
+        .name = "crash: Dec.asin rejects values outside domain",
+        .source = "Dec.asin(2.0)",
+        .expected = .{ .crash = {} },
+    },
+    .{
+        .name = "crash: Dec.pow rejects negative base with fractional exponent",
+        .source = "Dec.pow(-2.0, 0.5)",
+        .expected = .{ .crash = {} },
     },
     .{
         .name = "inspect: numeric inclusive ranges stop at highest",

@@ -61,7 +61,11 @@ pub const tests = [_]TestCase{
         \\{
         \\F32.is_nan(F32.nan)
         \\    and !F32.is_float_eq(F32.nan, F32.nan)
+        \\    and !F32.is_float_eq(1.0, F32.nan)
         \\    and F32.is_float_eq(-0.0, 0.0)
+        \\    and F32.is_float_eq(F32.infinity, F32.infinity)
+        \\    and F32.is_float_eq(F32.negate(F32.infinity), F32.negate(F32.infinity))
+        \\    and !F32.is_float_eq(F32.infinity, F32.negate(F32.infinity))
         \\    and F32.is_infinite(F32.infinity)
         \\    and F32.is_infinite(F32.negate(F32.infinity))
         \\    and F32.is_finite(1.0)
@@ -88,7 +92,11 @@ pub const tests = [_]TestCase{
         \\{
         \\F64.is_nan(F64.nan)
         \\    and !F64.is_float_eq(F64.nan, F64.nan)
+        \\    and !F64.is_float_eq(1.0, F64.nan)
         \\    and F64.is_float_eq(-0.0, 0.0)
+        \\    and F64.is_float_eq(F64.infinity, F64.infinity)
+        \\    and F64.is_float_eq(F64.negate(F64.infinity), F64.negate(F64.infinity))
+        \\    and !F64.is_float_eq(F64.infinity, F64.negate(F64.infinity))
         \\    and F64.is_infinite(F64.infinity)
         \\    and F64.is_infinite(F64.negate(F64.infinity))
         \\    and F64.is_finite(1.0)

@@ -1656,7 +1656,7 @@ pub fn exportCeiling(comptime T: type, comptime name: []const u8) void {
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
-fn expectRocDecConstant(actual: RocDec, expected_text: []const u8) !void {
+fn expectRocDecConstant(actual: RocDec, expected_text: []const u8) error{ InvalidExpectedDecimal, TestExpectedEqual }!void {
     const expected = RocDec.fromNonemptySlice(expected_text) orelse return error.InvalidExpectedDecimal;
     try std.testing.expectEqual(expected, actual);
 
@@ -2458,6 +2458,10 @@ fn expectApproxDec(expected: RocDec, actual: RocDec, tolerance: u128) error{Test
     try std.testing.expect(diff <= tolerance);
 }
 
+fn decFromText(text: []const u8) error{InvalidExpectedDecimal}!RocDec {
+    return RocDec.fromNonemptySlice(text) orelse error.InvalidExpectedDecimal;
+}
+
 test "sqrt: 2.0 truncates to fixed-point precision" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
@@ -2468,6 +2472,14 @@ test "sqrt: 2.0 truncates to fixed-point precision" {
     try std.testing.expectEqual(expected, two.sqrt(test_env.getOps()));
 }
 
+test "sqrt: small fixed-point values stay deterministic" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    try expectRocDecConstant((try decFromText("0.000000000000000001")).sqrt(test_env.getOps()), "0.000000001");
+    try expectRocDecConstant((try decFromText("12321.0")).sqrt(test_env.getOps()), "111.0");
+}
+
 test "cordic trig identities" {
     const tolerance: u128 = 10_000;
 
@@ -2475,6 +2487,22 @@ test "cordic trig identities" {
     try expectApproxDec(RocDec.one_point_zero, (RocDec{ .num = 0 }).cos(), tolerance);
     try expectApproxDec(RocDec.one_point_zero, RocDec.half_pi.sin(), tolerance);
     try expectApproxDec(RocDec{ .num = 0 }, RocDec.half_pi.cos(), tolerance);
+}
+
+test "cordic trig range reduction and quadrant signs" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+    const tolerance: u128 = 20_000;
+    const quarter_pi = RocDec{ .num = @divTrunc(RocDec.pi.num, 4) };
+    const neg_half_pi = RocDec{ .num = -RocDec.half_pi.num };
+
+    try expectApproxDec(RocDec{ .num = 0 }, RocDec.pi.sin(), tolerance);
+    try expectApproxDec(RocDec.neg_one_point_zero, RocDec.pi.cos(), tolerance);
+    try expectApproxDec(RocDec{ .num = 0 }, RocDec.tau.sin(), tolerance);
+    try expectApproxDec(RocDec.one_point_zero, RocDec.tau.cos(), tolerance);
+    try expectApproxDec(RocDec.neg_one_point_zero, neg_half_pi.sin(), tolerance);
+    try expectApproxDec(RocDec{ .num = 0 }, neg_half_pi.cos(), tolerance);
+    try expectApproxDec(RocDec.one_point_zero, quarter_pi.tan(test_env.getOps()), tolerance);
 }
 
 test "cordic atan and inverse trig identities" {
@@ -2487,6 +2515,31 @@ test "cordic atan and inverse trig identities" {
     try expectApproxDec(RocDec{ .num = 0 }, RocDec.one_point_zero.acos(test_env.getOps()), tolerance);
 }
 
+test "cordic atan handles negative values and reciprocal reduction" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+    const tolerance: u128 = 20_000;
+    const ten = RocDec.fromU64(10);
+    const tenth = RocDec.div(RocDec.one_point_zero, ten, test_env.getOps());
+    const atan_ten = ten.atan(test_env.getOps());
+    const atan_tenth = tenth.atan(test_env.getOps());
+
+    try expectApproxDec(RocDec{ .num = -785398163397448309 }, RocDec.neg_one_point_zero.atan(test_env.getOps()), tolerance);
+    try expectApproxDec(RocDec.half_pi, RocDec.add(atan_ten, atan_tenth, test_env.getOps()), tolerance);
+}
+
+test "inverse trig maps back through trig functions" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+    const tolerance: u128 = 50_000;
+    const half = RocDec.zero_point_five;
+
+    try expectApproxDec(half, half.asin(test_env.getOps()).sin(), tolerance);
+    try expectApproxDec(half, half.acos(test_env.getOps()).cos(), tolerance);
+    try expectApproxDec(RocDec{ .num = -RocDec.half_pi.num }, RocDec.neg_one_point_zero.asin(test_env.getOps()), tolerance);
+    try expectApproxDec(RocDec.pi, RocDec.neg_one_point_zero.acos(test_env.getOps()), tolerance);
+}
+
 test "fractional pow uses deterministic fixed-point exp ln path" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
@@ -2495,4 +2548,19 @@ test "fractional pow uses deterministic fixed-point exp ln path" {
     const half = RocDec.zero_point_five;
 
     try expectApproxDec(RocDec.two_point_zero, four.pow(half, test_env.getOps()), 10_000);
+}
+
+test "pow covers integer negative and fractional exponents" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const three = RocDec.fromU64(3);
+    const nine = RocDec.fromU64(9);
+    const quarter = try decFromText("0.25");
+    const neg_three = try decFromText("-3.0");
+
+    try expectRocDecConstant(RocDec.two_point_zero.pow(try decFromText("10.0"), test_env.getOps()), "1024.0");
+    try expectRocDecConstant(RocDec.two_point_zero.pow(neg_three, test_env.getOps()), "0.125");
+    try expectApproxDec(three, nine.pow(RocDec.zero_point_five, test_env.getOps()), 10_000);
+    try expectApproxDec(RocDec.zero_point_five, quarter.pow(RocDec.zero_point_five, test_env.getOps()), 10_000);
 }

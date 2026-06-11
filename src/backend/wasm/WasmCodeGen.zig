@@ -10141,13 +10141,28 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
 
             switch (arg_vt) {
                 .i32 => {
-                    // gt_flag = (a > b) ? 1 : 0
                     const a = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
                     const b = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
                     self.currentCode().append(self.allocator, Op.local_set) catch return error.OutOfMemory;
                     WasmModule.leb128WriteU32(self.allocator, self.currentCode(), b) catch return error.OutOfMemory;
                     self.currentCode().append(self.allocator, Op.local_set) catch return error.OutOfMemory;
                     WasmModule.leb128WriteU32(self.allocator, self.currentCode(), a) catch return error.OutOfMemory;
+
+                    switch (arg_layout) {
+                        .u128, .i128, .dec => {
+                            const is_signed = arg_layout == .i128 or arg_layout == .dec;
+                            try self.emitI128CompareWithSignedness(a, b, .gt, is_signed);
+                            try self.emitI128CompareWithSignedness(a, b, .lt, is_signed);
+                            self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+                            WasmModule.leb128WriteI32(self.allocator, self.currentCode(), 2) catch return error.OutOfMemory;
+                            self.currentCode().append(self.allocator, Op.i32_mul) catch return error.OutOfMemory;
+                            self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+                            return;
+                        },
+                        else => {},
+                    }
+
+                    // gt_flag = (a > b) ? 1 : 0
                     // gt_flag
                     self.currentCode().append(self.allocator, Op.local_get) catch return error.OutOfMemory;
                     WasmModule.leb128WriteU32(self.allocator, self.currentCode(), a) catch return error.OutOfMemory;

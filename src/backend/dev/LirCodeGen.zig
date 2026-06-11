@@ -656,7 +656,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         const EmitType = @TypeOf(@as(CodeGen, undefined).emit);
         const Builder = CallingConventionMod.CallBuilder(EmitType);
         const abi_shadow_space: i32 = @intCast(EmitType.CC.SHADOW_SPACE);
-        const incoming_stack_arg_base_offset: i32 = 16 + abi_shadow_space;
+        const incoming_stack_arg_base_offset: i32 = if (arch == .aarch64 or arch == .aarch64_be)
+            abi_shadow_space
+        else
+            16 + abi_shadow_space;
         const outgoing_stack_arg_base_offset: i32 = abi_shadow_space;
         const max_arg_regs: u8 = @intCast(EmitType.CC.PARAM_REGS.len);
 
@@ -763,6 +766,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Register where RocOps pointer is saved (for calling builtins that need it)
         roc_ops_reg: ?GeneralReg = null,
+
+        /// On aarch64, deferred prologues set FP to the bottom of the full frame.
+        /// Incoming stack arguments live above that frame at FP + frame_size, so
+        /// procs that read stack-passed args reserve a callee-saved register for
+        /// that base address. This is null on x86_64.
+        aarch64_incoming_stack_arg_base_reg: ?GeneralReg = null,
 
         /// Proc currently being compiled, for debug-time invariant reporting.
         current_proc_name: ?Symbol = null,
@@ -1207,6 +1216,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.proc_debug_msg_slot = null;
             self.proc_debug_args_slot = null;
             self.codegen.callee_saved_used = 0;
+            self.aarch64_incoming_stack_arg_base_reg = null;
 
             // Initialize stack_offset to reserve space for callee-saved area
             // (same convention as compileProcSpec — positive offsets, deferred prologue)
@@ -1319,6 +1329,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 frame_builder.setCalleeSavedMask(self.codegen.callee_saved_used);
                 frame_builder.setStackSize(actual_locals);
                 _ = try frame_builder.emitPrologue(&self.codegen.emit);
+                try self.emitIncomingStackArgBaseInit(frame_builder.actual_stack_alloc);
             }
             const prologue_size = self.codegen.currentOffset() - prologue_start;
 
@@ -9117,6 +9128,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const saved_free_float = self.codegen.free_float;
             const saved_float_owners = self.codegen.float_owners;
             const saved_roc_ops_reg = self.roc_ops_reg;
+            const saved_aarch64_incoming_stack_arg_base_reg = self.aarch64_incoming_stack_arg_base_reg;
             const saved_ret_ptr_slot = self.ret_ptr_slot;
             // Reset register state for new function scope — each RC helper is a
             // separate callable with its own prologue/epilogue, so it starts with
@@ -9128,6 +9140,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.free_float = CodeGen.INITIAL_FREE_FLOAT;
             self.codegen.float_owners = [_]?u32{null} ** CodeGen.NUM_FLOAT_REGS;
             self.roc_ops_reg = null;
+            self.aarch64_incoming_stack_arg_base_reg = null;
 
             if (comptime target.toCpuArch() == .x86_64) {
                 self.codegen.stack_offset = -CodeGen.CALLEE_SAVED_AREA_SIZE;
@@ -9149,6 +9162,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.codegen.free_float = saved_free_float;
                 self.codegen.float_owners = saved_float_owners;
                 self.roc_ops_reg = saved_roc_ops_reg;
+                self.aarch64_incoming_stack_arg_base_reg = saved_aarch64_incoming_stack_arg_base_reg;
                 self.ret_ptr_slot = saved_ret_ptr_slot;
                 self.codegen.patchJump(skip_jump, self.codegen.currentOffset());
             }
@@ -9230,6 +9244,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 frame_builder.setCalleeSavedMask(self.codegen.callee_saved_used);
                 frame_builder.setStackSize(actual_locals);
                 _ = try frame_builder.emitPrologue(&self.codegen.emit);
+                try self.emitIncomingStackArgBaseInit(frame_builder.actual_stack_alloc);
                 const prologue_size = self.codegen.currentOffset() - prologue_start;
 
                 self.codegen.emit.buf.appendSlice(self.allocator, body_bytes) catch return error.OutOfMemory;
@@ -9257,6 +9272,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.free_float = saved_free_float;
             self.codegen.float_owners = saved_float_owners;
             self.roc_ops_reg = saved_roc_ops_reg;
+            self.aarch64_incoming_stack_arg_base_reg = saved_aarch64_incoming_stack_arg_base_reg;
 
             self.codegen.patchJump(skip_jump, self.codegen.currentOffset());
             return final_offset;
@@ -12140,6 +12156,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const saved_free_float = self.codegen.free_float;
             const saved_float_owners = self.codegen.float_owners;
             const saved_roc_ops_reg = self.roc_ops_reg;
+            const saved_aarch64_incoming_stack_arg_base_reg = self.aarch64_incoming_stack_arg_base_reg;
             const saved_ret_ptr_slot = self.ret_ptr_slot;
             const saved_current_proc_name = self.current_proc_name;
             const saved_current_proc_args = self.current_proc_args;
@@ -12175,6 +12192,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.free_float = CodeGen.INITIAL_FREE_FLOAT;
             self.codegen.float_owners = [_]?u32{null} ** CodeGen.NUM_FLOAT_REGS;
             self.roc_ops_reg = null;
+            self.aarch64_incoming_stack_arg_base_reg = null;
             self.current_proc_name = proc.name;
             self.current_proc_args = proc.args;
             self.current_stmt_id = null;
@@ -12241,6 +12259,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.codegen.free_float = saved_free_float;
                 self.codegen.float_owners = saved_float_owners;
                 self.roc_ops_reg = saved_roc_ops_reg;
+                self.aarch64_incoming_stack_arg_base_reg = saved_aarch64_incoming_stack_arg_base_reg;
                 self.current_proc_name = saved_current_proc_name;
                 self.current_proc_args = saved_current_proc_args;
                 self.current_stmt_id = saved_current_stmt_id;
@@ -12381,6 +12400,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 frame_builder.setCalleeSavedMask(self.codegen.callee_saved_used);
                 frame_builder.setStackSize(actual_locals);
                 _ = try frame_builder.emitPrologue(&self.codegen.emit);
+                try self.emitIncomingStackArgBaseInit(frame_builder.actual_stack_alloc);
                 const prologue_size = self.codegen.currentOffset() - prologue_start;
                 const frame_size = frame_builder.actual_stack_alloc;
 
@@ -12435,6 +12455,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.free_float = saved_free_float;
             self.codegen.float_owners = saved_float_owners;
             self.roc_ops_reg = saved_roc_ops_reg;
+            self.aarch64_incoming_stack_arg_base_reg = saved_aarch64_incoming_stack_arg_base_reg;
             self.ret_ptr_slot = saved_ret_ptr_slot;
             self.current_proc_name = saved_current_proc_name;
             self.current_proc_args = saved_current_proc_args;
@@ -13034,10 +13055,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// so the first stack arg is at [RBP+48].
         fn copyFromCallerStack(self: *Self, caller_offset: i32, local_offset: i32, num_regs: u8) Allocator.Error!void {
             const temp_reg: GeneralReg = scratch_reg;
+            const source_base = self.incomingStackArgBaseReg();
             var ri: u8 = 0;
             while (ri < num_regs) : (ri += 1) {
                 const off: i32 = @as(i32, ri) * 8;
-                try self.emitLoad(.w64, temp_reg, frame_ptr, caller_offset + off);
+                try self.emitLoad(.w64, temp_reg, source_base, caller_offset + off);
                 try self.emitStore(.w64, frame_ptr, local_offset + off, temp_reg);
             }
         }
@@ -13103,6 +13125,43 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitStore(.w64, frame_ptr, capture_stack, capture_arg_reg);
             self.codegen.freeGeneral(capture_arg_reg);
             try self.local_locations.put(localKey(capture_local), self.stackLocationForLayout(.opaque_ptr, capture_stack));
+        }
+
+        fn ensureIncomingStackArgBaseReg(self: *Self) void {
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                const reg: GeneralReg = .X21;
+                const bit = @as(u32, 1) << @intFromEnum(reg);
+                self.codegen.callee_saved_used |= bit;
+                self.codegen.callee_saved_available &= ~bit;
+                self.codegen.free_general &= ~bit;
+                self.aarch64_incoming_stack_arg_base_reg = reg;
+            }
+        }
+
+        fn incomingStackArgBaseReg(self: *Self) GeneralReg {
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                return self.aarch64_incoming_stack_arg_base_reg orelse {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic("Dev/codegen invariant violated: aarch64 stack argument base register was not reserved", .{});
+                    }
+                    unreachable;
+                };
+            } else {
+                return frame_ptr;
+            }
+        }
+
+        fn emitIncomingStackArgBaseInit(self: *Self, frame_size: u32) Allocator.Error!void {
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                if (self.aarch64_incoming_stack_arg_base_reg) |reg| {
+                    if (frame_size <= 4095) {
+                        try self.codegen.emit.addRegRegImm12(.w64, reg, frame_ptr, @intCast(frame_size));
+                    } else {
+                        try self.codegen.emit.movRegImm64(.IP0, frame_size);
+                        try self.codegen.emit.addRegRegReg(.w64, reg, frame_ptr, .IP0);
+                    }
+                }
+            }
         }
 
         fn bindProcParams(self: *Self, params: LocalSpan, initial_reg_idx: u8) Allocator.Error!void {
@@ -13198,8 +13257,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         ptr_reg = self.getArgumentRegister(reg_idx);
                         reg_idx += 1;
                     } else {
+                        self.ensureIncomingStackArgBaseReg();
                         ptr_reg = scratch_reg;
-                        try self.emitLoad(.w64, ptr_reg, frame_ptr, stack_arg_offset);
+                        try self.emitLoad(.w64, ptr_reg, self.incomingStackArgBaseReg(), stack_arg_offset);
                         stack_arg_offset += 8;
                         reg_idx = max_arg_regs;
                     }
@@ -13237,6 +13297,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.local_locations.put(localKey(local), stable_loc);
                     reg_idx += num_regs;
                 } else {
+                    self.ensureIncomingStackArgBaseReg();
                     const size: u32 = @as(u32, num_regs) * 8;
                     const stack_offset = self.codegen.allocStackSlot(@intCast(size));
                     try self.copyFromCallerStack(stack_arg_offset, stack_offset, num_regs);
@@ -13258,7 +13319,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.codegen.emit.movRegReg(.w64, roc_ops_save_reg, arg_reg);
                 }
             } else {
-                try self.emitLoad(.w64, roc_ops_save_reg, frame_ptr, stack_arg_offset);
+                self.ensureIncomingStackArgBaseReg();
+                try self.emitLoad(.w64, roc_ops_save_reg, self.incomingStackArgBaseReg(), stack_arg_offset);
             }
 
             self.roc_ops_reg = roc_ops_save_reg;
