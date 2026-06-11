@@ -13853,18 +13853,36 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
             }
 
-            // New RocOps callback ABI: callback(ops: *RocOps, bytes: [*]const u8, len: usize).
             const msg_len_val: i64 = @bitCast(@as(u64, msg.len));
             try self.codegen.emitLoadImm(tmp, msg_len_val);
 
-            const fn_ptr_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .X10 else .RAX;
-            try self.emitLoad(.w64, fn_ptr_reg, roc_ops_reg, field_offset);
+            if (self.generation_mode == .native_execution) {
+                // In-process evaluation reaches the host callbacks through the
+                // interpreter-internal RocOps vtable:
+                // callback(ops: *RocOps, bytes: [*]const u8, len: usize).
+                const fn_ptr_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .X10 else .RAX;
+                try self.emitLoad(.w64, fn_ptr_reg, roc_ops_reg, field_offset);
 
-            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-            try builder.addRegArg(roc_ops_reg);
-            try builder.addLeaArg(base_reg, msg_slot);
-            try builder.addRegArg(tmp);
-            try builder.callReg(fn_ptr_reg);
+                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                try builder.addRegArg(roc_ops_reg);
+                try builder.addLeaArg(base_reg, msg_slot);
+                try builder.addRegArg(tmp);
+                try builder.callReg(fn_ptr_reg);
+            } else {
+                // Object files call the host's fixed runtime symbol directly:
+                // symbol(bytes: [*]const u8, len: usize).
+                const symbol_name: []const u8 = if (field_offset == @offsetOf(RocOps, "roc_crashed"))
+                    "roc_crashed"
+                else if (field_offset == @offsetOf(RocOps, "roc_expect_failed"))
+                    "roc_expect_failed"
+                else
+                    "roc_dbg";
+
+                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                try builder.addLeaArg(base_reg, msg_slot);
+                try builder.addRegArg(tmp);
+                try builder.callRelocatable(symbol_name, self.allocator, &self.codegen.relocations);
+            }
         }
 
         fn emitRocDbgFromStackStr(self: *Self, str_offset: i32) Allocator.Error!void {
@@ -13948,11 +13966,22 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const body_start = self.codegen.currentOffset();
                 const relocs_before = self.codegen.relocations.items.len;
 
-                // The internal convention still threads a RocOps pointer; under
-                // the symbol ABI no host vtable exists, so it is null. The
-                // incoming sret pointer (if any) is captured into X20 inside
-                // generateEntrypointBodyCAbi before X19 is written.
-                try self.generateEntrypointBodyCAbi(entry_proc, arg_layouts, ret_layout, .X20, &incoming_stack_copies);
+                if (self.generation_mode == .native_execution) {
+                    // In-process evaluation calls the wrapper with the
+                    // interpreter-internal (ops, ret_ptr, args_ptr) convention.
+                    try self.codegen.emit.movRegReg(.w64, .X19, .X0);
+                    try self.codegen.emit.movRegReg(.w64, .X20, .X1);
+                    try self.codegen.emit.movRegReg(.w64, .X21, .X2);
+                    self.roc_ops_reg = .X19;
+                    try self.generateEntrypointProcCall(entry_proc, arg_layouts, ret_layout, .X20, .X21);
+                } else {
+                    // Object files export natural C-ABI entrypoints; the
+                    // internal convention's RocOps is null under the symbol
+                    // ABI. The incoming sret pointer (if any) is captured into
+                    // X20 inside generateEntrypointBodyCAbi before X19 is
+                    // written.
+                    try self.generateEntrypointBodyCAbi(entry_proc, arg_layouts, ret_layout, .X20, &incoming_stack_copies);
+                }
 
                 const body_epilogue_offset = self.codegen.currentOffset();
                 const actual_locals: u32 = @intCast(self.codegen.stack_offset - 16 - CodeGen.CALLEE_SAVED_AREA_SIZE);
@@ -14024,11 +14053,28 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const body_start = self.codegen.currentOffset();
                 const relocs_before = self.codegen.relocations.items.len;
 
-                // The internal convention still threads a RocOps pointer; under
-                // the symbol ABI no host vtable exists, so it is null. The
-                // incoming sret pointer (if any) is captured into RBX inside
-                // generateEntrypointBodyCAbi before R12 is written.
-                try self.generateEntrypointBodyCAbi(entry_proc, arg_layouts, ret_layout, .RBX, &incoming_stack_copies);
+                if (self.generation_mode == .native_execution) {
+                    // In-process evaluation calls the wrapper with the
+                    // interpreter-internal (ops, ret_ptr, args_ptr) convention.
+                    if (target.isWindows()) {
+                        try self.codegen.emit.movRegReg(.w64, .R12, .RCX);
+                        try self.codegen.emit.movRegReg(.w64, .RBX, .RDX);
+                        try self.codegen.emit.movRegReg(.w64, .R13, .R8);
+                    } else {
+                        try self.codegen.emit.movRegReg(.w64, .R12, .RDI);
+                        try self.codegen.emit.movRegReg(.w64, .RBX, .RSI);
+                        try self.codegen.emit.movRegReg(.w64, .R13, .RDX);
+                    }
+                    self.roc_ops_reg = .R12;
+                    try self.generateEntrypointProcCall(entry_proc, arg_layouts, ret_layout, .RBX, .R13);
+                } else {
+                    // Object files export natural C-ABI entrypoints; the
+                    // internal convention's RocOps is null under the symbol
+                    // ABI. The incoming sret pointer (if any) is captured into
+                    // RBX inside generateEntrypointBodyCAbi before R12 is
+                    // written.
+                    try self.generateEntrypointBodyCAbi(entry_proc, arg_layouts, ret_layout, .RBX, &incoming_stack_copies);
+                }
 
                 const body_epilogue_offset = self.codegen.currentOffset();
                 const actual_locals_x86: u32 = @intCast(-self.codegen.stack_offset - CodeGen.CALLEE_SAVED_AREA_SIZE);
