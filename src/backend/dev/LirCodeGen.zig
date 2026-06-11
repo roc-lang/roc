@@ -204,6 +204,7 @@ pub const BuiltinFn = enum {
     list_drop_at,
     list_replace,
     list_swap,
+    list_map_can_reuse,
     list_reserve,
     list_release_excess_capacity,
     list_decref_str,
@@ -307,6 +308,7 @@ pub const BuiltinFn = enum {
             .list_drop_at => "roc_builtins_list_drop_at",
             .list_replace => "roc_builtins_list_replace",
             .list_swap => "roc_builtins_list_swap",
+            .list_map_can_reuse => "roc_builtins_list_map_can_reuse",
             .list_reserve => "roc_builtins_list_reserve",
             .list_release_excess_capacity => "roc_builtins_list_release_excess_capacity",
             .list_decref_str => "roc_builtins_list_decref_str",
@@ -1715,6 +1717,181 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                     result_loc = try self.stabilize(result_loc);
                     return result_loc;
+                },
+                .list_map_can_reuse => {
+                    // list_map_can_reuse(list, transform) -> U8; only the list is inspected.
+                    std.debug.assert(args.len == 2);
+                    const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+                    const list_loc = try self.emitValueLocal(args[0]);
+                    const list_off = try self.ensureOnStack(list_loc, roc_list_size);
+
+                    // roc_builtins_list_map_can_reuse(bytes, len, cap, roc_ops) -> u8
+                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    try builder.addMemArg(frame_ptr, list_off);
+                    try builder.addMemArg(frame_ptr, list_off + 8);
+                    try builder.addMemArg(frame_ptr, list_off + 16);
+                    try builder.addRegArg(roc_ops_reg);
+                    try self.callBuiltin(&builder, @intFromPtr(&dev_wrappers.roc_builtins_list_map_can_reuse), .list_map_can_reuse);
+
+                    const result_reg = try self.allocTempGeneral();
+                    if (comptime target.toCpuArch() == .aarch64) {
+                        try self.codegen.emit.movRegReg(.w64, result_reg, .X0);
+                    } else {
+                        try self.codegen.emit.movRegReg(.w64, result_reg, .RAX);
+                        // x86_64 ABI: only the low byte is guaranteed valid for
+                        // bool-like returns; mask so 64-bit compares work.
+                        try self.codegen.emit.andRegImm8(result_reg, 1);
+                    }
+                    return .{ .general_reg = result_reg };
+                },
+                .list_map_cast_unsafe => {
+                    // Same bits, new element type: copy the list struct through.
+                    std.debug.assert(args.len == 1);
+                    const list_loc = try self.emitValueLocal(args[0]);
+                    const list_off = try self.ensureOnStack(list_loc, roc_list_size);
+                    const result_offset = self.codegen.allocStackSlot(roc_str_size);
+                    const tmp = try self.allocTempGeneral();
+                    var off: i32 = 0;
+                    while (off < roc_list_size) : (off += 8) {
+                        try self.emitLoad(.w64, tmp, frame_ptr, list_off + off);
+                        try self.emitStore(.w64, frame_ptr, result_offset + off, tmp);
+                    }
+                    self.codegen.freeGeneral(tmp);
+                    return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
+                },
+                .list_map_extract_unsafe => {
+                    // list_map_extract_unsafe(list, index) -> element of the input
+                    // type. The list local already carries the output element type;
+                    // lowering only emits this op when both element layouts share
+                    // one stride, so the result layout supplies both the copy size
+                    // and the stride.
+                    std.debug.assert(args.len == 2);
+                    const list_loc = try self.emitValueLocal(args[0]);
+                    const index_loc = try self.emitValueLocal(args[1]);
+
+                    const list_base: i32 = switch (list_loc) {
+                        .stack => |s| s.offset,
+                        .list_stack => |ls_info| ls_info.struct_offset,
+                        else => unreachable,
+                    };
+
+                    const ls = self.layout_store;
+                    const ret_layout_val = ls.getLayout(ll.ret_layout);
+                    const elem_size: u32 = ls.layoutSizeAlign(ret_layout_val).size;
+                    if (elem_size == 0) {
+                        return .{ .immediate_i64 = 0 };
+                    }
+                    if (builtin.mode == .Debug) {
+                        const list_layout_val = ls.getLayout(self.valueLayout(args[0]));
+                        if (list_layout_val.tag != .list or ls.layoutSizeAlign(ls.getLayout(list_layout_val.getIdx())).size != elem_size) {
+                            std.debug.panic("LIR/codegen invariant violated: list_map_extract_unsafe stride mismatch", .{});
+                        }
+                    }
+
+                    const index_reg = try self.ensureInGeneralReg(index_loc);
+                    const ptr_reg = try self.allocTempGeneral();
+                    try self.codegen.emitLoadStack(.w64, ptr_reg, list_base);
+
+                    const addr_reg = try self.allocTempGeneral();
+                    try self.codegen.emit.movRegReg(.w64, addr_reg, index_reg);
+                    self.codegen.freeGeneral(index_reg);
+                    if (elem_size != 1) {
+                        const size_reg = try self.allocTempGeneral();
+                        try self.codegen.emitLoadImm(size_reg, elem_size);
+                        try self.emitMulRegs(.w64, addr_reg, addr_reg, size_reg);
+                        self.codegen.freeGeneral(size_reg);
+                    }
+                    try self.emitAddRegs(.w64, addr_reg, addr_reg, ptr_reg);
+                    self.codegen.freeGeneral(ptr_reg);
+
+                    const elem_slot = self.codegen.allocStackSlot(@intCast(elem_size));
+                    const temp_reg = try self.allocTempGeneral();
+                    if (elem_size <= 8) {
+                        const vs = ValueSize.fromByteCount(@intCast(elem_size));
+                        try self.emitSizedLoadMem(temp_reg, addr_reg, 0, vs);
+                        try self.emitSizedStoreMem(frame_ptr, elem_slot, temp_reg, vs);
+                    } else {
+                        try self.copyChunked(temp_reg, addr_reg, 0, frame_ptr, elem_slot, elem_size);
+                    }
+                    self.codegen.freeGeneral(temp_reg);
+                    self.codegen.freeGeneral(addr_reg);
+
+                    var result_loc: ValueLocation = if (ll.ret_layout == .i128 or ll.ret_layout == .u128 or ll.ret_layout == .dec)
+                        .{ .stack_i128 = elem_slot }
+                    else if (ll.ret_layout == .str)
+                        .{ .stack_str = elem_slot }
+                    else if (ret_layout_val.tag == .list or ret_layout_val.tag == .list_of_zst)
+                        .{ .list_stack = .{
+                            .struct_offset = elem_slot,
+                            .data_offset = 0,
+                            .num_elements = 0,
+                        } }
+                    else
+                        .{ .stack = .{ .offset = elem_slot } };
+
+                    result_loc = try self.stabilize(result_loc);
+                    return result_loc;
+                },
+                .list_map_write_unsafe => {
+                    // list_map_write_unsafe(list, index, element) -> the same list,
+                    // with the owned element's bytes stored into the vacated slot.
+                    std.debug.assert(args.len == 3);
+                    const list_loc = try self.emitValueLocal(args[0]);
+                    const index_loc = try self.emitValueLocal(args[1]);
+                    const elem_loc = try self.emitValueLocal(args[2]);
+
+                    const ls = self.layout_store;
+                    const elem_size: u32 = ls.layoutSizeAlign(ls.getLayout(self.valueLayout(args[2]))).size;
+
+                    const list_off = try self.ensureOnStack(list_loc, roc_list_size);
+                    if (elem_size == 0) {
+                        const zst_result_offset = self.codegen.allocStackSlot(roc_str_size);
+                        const zst_tmp = try self.allocTempGeneral();
+                        var zst_off: i32 = 0;
+                        while (zst_off < roc_list_size) : (zst_off += 8) {
+                            try self.emitLoad(.w64, zst_tmp, frame_ptr, list_off + zst_off);
+                            try self.emitStore(.w64, frame_ptr, zst_result_offset + zst_off, zst_tmp);
+                        }
+                        self.codegen.freeGeneral(zst_tmp);
+                        return .{ .list_stack = .{ .struct_offset = zst_result_offset, .data_offset = 0, .num_elements = 0 } };
+                    }
+                    const elem_off = try self.ensureOnStack(elem_loc, elem_size);
+
+                    const index_reg = try self.ensureInGeneralReg(index_loc);
+                    const addr_reg = try self.allocTempGeneral();
+                    try self.codegen.emit.movRegReg(.w64, addr_reg, index_reg);
+                    self.codegen.freeGeneral(index_reg);
+                    if (elem_size != 1) {
+                        const size_reg = try self.allocTempGeneral();
+                        try self.codegen.emitLoadImm(size_reg, elem_size);
+                        try self.emitMulRegs(.w64, addr_reg, addr_reg, size_reg);
+                        self.codegen.freeGeneral(size_reg);
+                    }
+                    const ptr_reg = try self.allocTempGeneral();
+                    try self.codegen.emitLoadStack(.w64, ptr_reg, list_off);
+                    try self.emitAddRegs(.w64, addr_reg, addr_reg, ptr_reg);
+                    self.codegen.freeGeneral(ptr_reg);
+
+                    const temp_reg = try self.allocTempGeneral();
+                    if (elem_size <= 8) {
+                        const vs = ValueSize.fromByteCount(@intCast(elem_size));
+                        try self.emitSizedLoadMem(temp_reg, frame_ptr, elem_off, vs);
+                        try self.emitSizedStoreMem(addr_reg, 0, temp_reg, vs);
+                    } else {
+                        try self.copyChunked(temp_reg, frame_ptr, elem_off, addr_reg, 0, elem_size);
+                    }
+                    self.codegen.freeGeneral(temp_reg);
+                    self.codegen.freeGeneral(addr_reg);
+
+                    const result_offset = self.codegen.allocStackSlot(roc_str_size);
+                    const tmp = try self.allocTempGeneral();
+                    var off: i32 = 0;
+                    while (off < roc_list_size) : (off += 8) {
+                        try self.emitLoad(.w64, tmp, frame_ptr, list_off + off);
+                        try self.emitStore(.w64, frame_ptr, result_offset + off, tmp);
+                    }
+                    self.codegen.freeGeneral(tmp);
+                    return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
                 },
                 .list_concat => {
                     // list_concat(list_a, list_b) -> List

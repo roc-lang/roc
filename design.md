@@ -2528,7 +2528,55 @@ choosing between a borrow and an owned move, the choice that keeps a
 mutation check-free becomes visible to the solver rather than a lucky
 outcome of emission order.
 
-### Adoption Stages
+### In-Place List.map
+
+`List.map` may overwrite a uniquely owned input list's buffer instead of
+allocating an output list when the input and output element layouts are
+interchangeable in one allocation: same stride, same allocation alignment
+class, and the same refcounted-elements header shape. The hidden header in
+front of a list's data and the alignment handed to the allocator both
+derive from the element layout, so reusing an allocation across layouts
+that disagree on either would make a later free reconstruct the wrong
+allocation pointer.
+
+The decision has a compile-time half and a runtime half. `List.map`'s body
+in Builtin.roc matches on the `list_map_can_reuse` primitive, whose runtime
+meaning is "uniquely owned and not a seamless slice" — a slice's buffer
+points into the middle of an allocation whose header bookkeeping covers the
+whole allocation, so a unique slice still copies. At direct LIR lowering,
+where layouts exist, the primitive lowers to a constant 0 whenever the
+layouts are not interchangeable (or the optimization is off), so the
+runtime check never runs for a pair it could corrupt.
+
+The in-place branch itself is dropped before it reaches LIR whenever the
+element layouts are not interchangeable or the optimization is disabled
+(`TargetConfig.list_in_place_map`, on for `--opt=size`/`--opt=speed`, off
+for dev, interpreter, and compile-time evaluation), so ineligible map
+specializations never carry dead in-place machinery and dev builds lower
+exactly the copy loop. The fold uses the same layout-eligibility decision
+as the primitive, so every interchangeable pair — including different
+types that share one layout — keeps the branch. The debug Lambda Mono
+materializer runs before layout selection and cannot recompute that
+decision; instead, direct lowering records each statically resolved match
+site as explicit data and the verifier replays the record, so the two
+derivations demand the same set of functions without the materializer ever
+consulting layouts. A wrong record can only misplace dead code, never a
+runtime check — the primitive's own lowering independently gates the
+runtime path — and a fold regression surfaces as a Debug stride assertion
+in the backends rather than as silent dead code.
+
+Inside the in-place loop, `list_map_extract_unsafe` moves one element's
+ownership out of the buffer and `list_map_write_unsafe` moves the
+transform's result into the vacated slot. Neither performs RC work: the
+extracted element is an ordinary owned local, so ARC places its release
+according to the transform's solved convention, and the certifier checks
+the loop like any other code. Between the two ops the slot holds stale
+bytes and the buffer is typed by the output element while later slots still
+hold input elements; this window is unobservable because no cleanup path
+walks live values — `crash` is fatal and leaks by design — and the loop
+itself is the only holder of the buffer (the runtime count of 1 proved
+there were no other counted handles, and a live borrow of the list would
+have forced the copy path through an owned capture's incref).
 
 Each stage fully replaces the previous behavior when it lands; there are no
 parallel insertion paths at any point:

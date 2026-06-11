@@ -4257,6 +4257,38 @@ pub const Interpreter = struct {
                 );
                 break :blk self.rocListToValue(result, ll.ret_layout);
             },
+            .list_map_can_reuse => blk: {
+                const rl = self.valueToRocListForLayout(args[0], arg_layout);
+                const val = try self.alloc(ll.ret_layout);
+                val.write(u8, if (builtins.list.listMapCanReuse(rl, &self.roc_ops)) 1 else 0);
+                break :blk val;
+            },
+            .list_map_cast_unsafe => blk: {
+                const rl = self.valueToRocListForLayout(args[0], arg_layout);
+                break :blk self.rocListToValue(rl, ll.ret_layout);
+            },
+            .list_map_extract_unsafe => blk: {
+                // Same data movement as list_get_unsafe; ownership of the
+                // element transfers out of the buffer, which is RC metadata
+                // rather than runtime behavior.
+                const rl = self.valueToRocListForLayout(args[0], arg_layout);
+                const idx = args[1].read(u64);
+                const info = self.listElemInfo(arg_layout);
+                if (info.width == 0) break :blk try self.alloc(ll.ret_layout);
+                const elem_ptr = rl.bytes.? + @as(usize, @intCast(idx)) * info.width;
+                const val = try self.alloc(ll.ret_layout);
+                @memcpy(val.ptr[0..info.width], elem_ptr[0..info.width]);
+                break :blk val;
+            },
+            .list_map_write_unsafe => blk: {
+                const rl = self.valueToRocListForLayout(args[0], arg_layout);
+                const idx = args[1].read(u64);
+                const info = self.listElemInfo(arg_layout);
+                if (info.width == 0) break :blk self.rocListToValue(rl, ll.ret_layout);
+                const elem_ptr = rl.bytes.? + @as(usize, @intCast(idx)) * info.width;
+                @memcpy(elem_ptr[0..info.width], args[2].ptr[0..info.width]);
+                break :blk self.rocListToValue(rl, ll.ret_layout);
+            },
             .list_sublist => blk: {
                 if (args.len != 2 or ll.arg_layouts.len != 2) {
                     return self.runtimeError("list_sublist expected 2 arguments");

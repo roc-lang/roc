@@ -1485,6 +1485,17 @@ pub fn listIsUnique(
     return list.isEmpty() or list.isUnique(roc_ops);
 }
 
+/// Whether List.map may overwrite this list's elements in place: the list
+/// must uniquely own its allocation and must not be a seamless slice into a
+/// larger allocation (a slice's buffer start and header bookkeeping cover
+/// the whole underlying allocation, not just the slice window).
+pub fn listMapCanReuse(
+    list: RocList,
+    roc_ops: *RocOps,
+) callconv(.c) bool {
+    return !list.isSeamlessSlice() and list.isUnique(roc_ops);
+}
+
 /// Create independent copy for safe mutation when list is shared.
 pub fn listClone(
     list: RocList,

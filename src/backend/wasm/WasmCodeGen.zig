@@ -8720,6 +8720,169 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             }
         },
 
+        .list_map_can_reuse => {
+            // list_map_can_reuse(list, transform) -> U8: the list uniquely owns
+            // its allocation and is not a seamless slice. Wasm is
+            // single-threaded, so a plain refcount load suffices.
+            try self.emitProcLocal(args[0]);
+            const list_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            try self.emitLocalSet(list_local);
+
+            const cap_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            try self.emitLocalGet(list_local);
+            try self.emitLoadOp(.i32, 8);
+            try self.emitLocalSet(cap_local);
+
+            // Seamless slices tag the low bit of the capacity field.
+            try self.emitLocalGet(cap_local);
+            try self.emitI32Const(1);
+            self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
+            self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
+            self.currentCode().append(self.allocator, @intFromEnum(ValType.i32)) catch return error.OutOfMemory;
+            try self.emitI32Const(0);
+            self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
+            // Zero capacity has no heap refcount and counts as unique.
+            try self.emitLocalGet(cap_local);
+            try self.emitI32Const(1);
+            self.currentCode().append(self.allocator, Op.i32_shr_u) catch return error.OutOfMemory;
+            self.currentCode().append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
+            self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
+            self.currentCode().append(self.allocator, @intFromEnum(ValType.i32)) catch return error.OutOfMemory;
+            try self.emitI32Const(1);
+            self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
+            // The refcount lives one usize before the data pointer.
+            try self.emitLocalGet(list_local);
+            try self.emitLoadOp(.i32, 0);
+            try self.emitI32Const(4);
+            self.currentCode().append(self.allocator, Op.i32_sub) catch return error.OutOfMemory;
+            try self.emitLoadOp(.i32, 0);
+            try self.emitI32Const(1);
+            self.currentCode().append(self.allocator, Op.i32_eq) catch return error.OutOfMemory;
+            self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
+            self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
+        },
+
+        .list_map_cast_unsafe => {
+            // Same bits, new element type: copy the 12-byte list struct.
+            try self.emitProcLocal(args[0]);
+            const src_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            try self.emitLocalSet(src_local);
+            const dst_offset = try self.allocStackMemory(12, 4);
+            const dst_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            try self.emitFpOffset(dst_offset);
+            try self.emitLocalSet(dst_local);
+            try self.emitMemCopy(dst_local, 0, src_local, 12);
+            try self.emitLocalGet(dst_local);
+        },
+
+        .list_map_extract_unsafe => {
+            // Like list_get_unsafe, but the element layout comes from the
+            // result (input element type) while the buffer is typed with the
+            // output element type; lowering guarantees the strides match.
+            const ls = self.getLayoutStore();
+            const elem_layout_idx = ll.ret_layout;
+            const elem_size: u32 = try self.layoutStorageByteSize(elem_layout_idx);
+            const elem_is_composite = try self.isCompositeLayout(elem_layout_idx);
+            if (elem_size == 0) {
+                // ZST element: no data to read.
+                try self.emitI32Const(0);
+                return;
+            }
+
+            try self.emitProcLocal(args[0]);
+            const list_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            try self.emitLocalSet(list_local);
+
+            const index_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            try self.emitProcLocal(args[1]);
+            if (try self.procLocalValType(args[1]) == .i64) {
+                self.currentCode().append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
+            }
+            try self.emitLocalSet(index_local);
+
+            try self.emitLocalGet(list_local);
+            try self.emitLoadOp(.i32, 0);
+            try self.emitLocalGet(index_local);
+            try self.emitI32Const(@intCast(elem_size));
+            self.currentCode().append(self.allocator, Op.i32_mul) catch return error.OutOfMemory;
+            self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+
+            if (elem_is_composite) {
+                const src_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+                try self.emitLocalSet(src_local);
+
+                const elem_align: u32 = @intCast(@max(ls.layoutSizeAlign(ls.getLayout(elem_layout_idx)).alignment.toByteUnits(), 1));
+                const dst_offset = try self.allocStackMemory(elem_size, elem_align);
+                const dst_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+                try self.emitFpOffset(dst_offset);
+                try self.emitLocalSet(dst_local);
+
+                try self.emitMemCopy(dst_local, 0, src_local, elem_size);
+                try self.emitLocalGet(dst_local);
+            } else {
+                try self.emitLoadOpForLayout(elem_layout_idx, 0);
+            }
+        },
+
+        .list_map_write_unsafe => {
+            // list_map_write_unsafe(list, index, element) -> the same list,
+            // with the owned element's bytes stored into the vacated slot.
+            const elem_layout_idx = self.procLocalLayoutIdx(args[2]);
+            const elem_size: u32 = try self.layoutStorageByteSize(elem_layout_idx);
+            const elem_is_composite = try self.isCompositeLayout(elem_layout_idx);
+
+            try self.emitProcLocal(args[0]);
+            const list_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            try self.emitLocalSet(list_local);
+
+            if (elem_size == 0) {
+                // ZST element: nothing to store; pass the list through.
+                const zst_result_offset = try self.allocStackMemory(12, 4);
+                const zst_result_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+                try self.emitFpOffset(zst_result_offset);
+                try self.emitLocalSet(zst_result_local);
+                try self.emitMemCopy(zst_result_local, 0, list_local, 12);
+                try self.emitLocalGet(zst_result_local);
+                return;
+            }
+
+            const index_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            try self.emitProcLocal(args[1]);
+            if (try self.procLocalValType(args[1]) == .i64) {
+                self.currentCode().append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
+            }
+            try self.emitLocalSet(index_local);
+
+            const dst_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            try self.emitLocalGet(list_local);
+            try self.emitLoadOp(.i32, 0);
+            try self.emitLocalGet(index_local);
+            try self.emitI32Const(@intCast(elem_size));
+            self.currentCode().append(self.allocator, Op.i32_mul) catch return error.OutOfMemory;
+            self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+            try self.emitLocalSet(dst_local);
+
+            if (elem_is_composite) {
+                try self.emitProcLocal(args[2]);
+                const src_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+                try self.emitLocalSet(src_local);
+                try self.emitMemCopy(dst_local, 0, src_local, elem_size);
+            } else {
+                const elem_vt = try self.resolveValType(elem_layout_idx);
+                try self.emitLocalGet(dst_local);
+                try self.emitProcLocal(args[2]);
+                try self.emitConversion(try self.procLocalValType(args[2]), elem_vt);
+                try self.emitStoreOpSized(elem_vt, elem_size, 0);
+            }
+
+            const result_offset = try self.allocStackMemory(12, 4);
+            const result_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            try self.emitFpOffset(result_offset);
+            try self.emitLocalSet(result_local);
+            try self.emitMemCopy(result_local, 0, list_local, 12);
+            try self.emitLocalGet(result_local);
+        },
+
         // String operations
         // Bitwise operations
         .num_pow, .num_log => unreachable, // Resolved by earlier lowering
