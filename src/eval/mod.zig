@@ -112,6 +112,7 @@ test "eval tests" {
     std.testing.refAllDecls(@import("value.zig"));
     std.testing.refAllDecls(@import("interpreter_values.zig"));
     std.testing.refAllDecls(@import("interpreter.zig"));
+    std.testing.refAllDecls(@import("host_trampoline.zig"));
     std.testing.refAllDecls(@import("compile_time_finalization.zig"));
     std.testing.refAllDecls(@import("compiler_host.zig"));
     std.testing.refAllDecls(@import("const_store_writer.zig"));

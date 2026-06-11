@@ -21,12 +21,6 @@ const builtins = @import("builtins");
 
 const RocStr = builtins.str.RocStr;
 const RocOps = builtins.host_abi.RocOps;
-const RocAlloc = builtins.host_abi.RocAlloc;
-const RocDealloc = builtins.host_abi.RocDealloc;
-const RocRealloc = builtins.host_abi.RocRealloc;
-const RocDbg = builtins.host_abi.RocDbg;
-const RocExpectFailed = builtins.host_abi.RocExpectFailed;
-const RocCrashed = builtins.host_abi.RocCrashed;
 
 // Import functions from the host environment.
 const env_imports = struct {
@@ -115,39 +109,39 @@ export fn roc_realloc_raw(ptr: *anyopaque, new_size: usize, old_size: usize, ali
 
 // Canonical RocOps callback implementations.
 // These use the same size-header approach as the raw roc_alloc/dealloc exports,
-// because RocDealloc doesn't provide the length (by design for seamless slices).
+// because roc_dealloc doesn't provide the length (by design for seamless slices).
 
-fn roc_alloc(alloc_req: *RocAlloc, _: *anyopaque) callconv(.c) void {
+fn roc_alloc(_: *RocOps, length: usize, alignment_arg: usize) callconv(.c) ?*anyopaque {
     canonical_alloc_counts[0] += 1;
 
-    const alignment: u32 = @intCast(alloc_req.alignment);
+    const alignment: u32 = @intCast(alignment_arg);
     const align_log2: std.mem.Alignment = @enumFromInt(std.math.log2_int(usize, alignment));
 
     // Header size must be at least alignment to ensure returned pointer is properly aligned
     const header_size = @max(alignment, @sizeOf(usize));
-    const total_size = alloc_req.length + header_size;
+    const total_size = length + header_size;
 
-    const result = wasm_allocator.rawAlloc(total_size, align_log2, @returnAddress()) orelse @panic("WASM allocation failed");
+    const result = wasm_allocator.rawAlloc(total_size, align_log2, @returnAddress()) orelse return null;
 
     // Store the original requested size at the beginning
     const size_ptr: *usize = @ptrCast(@alignCast(result));
-    size_ptr.* = alloc_req.length;
+    size_ptr.* = length;
 
     // Return pointer past the header (properly aligned)
-    alloc_req.answer = @ptrCast(result + header_size);
+    return @ptrCast(result + header_size);
 }
 
-fn roc_dealloc(dealloc_req: *RocDealloc, _: *anyopaque) callconv(.c) void {
+fn roc_dealloc(_: *RocOps, ptr: *anyopaque, alignment_arg: usize) callconv(.c) void {
     canonical_alloc_counts[1] += 1;
 
-    const alignment: u32 = @intCast(dealloc_req.alignment);
+    const alignment: u32 = @intCast(alignment_arg);
     const align_log2: std.mem.Alignment = @enumFromInt(std.math.log2_int(usize, alignment));
 
     // Calculate header size (must match roc_alloc)
     const header_size = @max(alignment, @sizeOf(usize));
 
     // Get the base pointer (before the header we stored in roc_alloc)
-    const byte_ptr: [*]u8 = @ptrCast(dealloc_req.ptr);
+    const byte_ptr: [*]u8 = @ptrCast(ptr);
     const base_ptr = byte_ptr - header_size;
 
     // Read the original size from the header
@@ -159,54 +153,54 @@ fn roc_dealloc(dealloc_req: *RocDealloc, _: *anyopaque) callconv(.c) void {
     wasm_allocator.rawFree(base_ptr[0..total_size], align_log2, @returnAddress());
 }
 
-fn roc_realloc(realloc_req: *RocRealloc, _: *anyopaque) callconv(.c) void {
+fn roc_realloc(_: *RocOps, ptr: *anyopaque, new_length: usize, alignment_arg: usize) callconv(.c) ?*anyopaque {
     canonical_alloc_counts[0] += 1;
     canonical_alloc_counts[1] += 1;
 
-    // RocRealloc provides new_length but we need to allocate with size header
-    const alignment: u32 = @intCast(realloc_req.alignment);
+    const alignment: u32 = @intCast(alignment_arg);
     const align_log2: std.mem.Alignment = @enumFromInt(std.math.log2_int(usize, alignment));
 
     // Header size must be at least alignment
     const header_size = @max(alignment, @sizeOf(usize));
-    const total_size = realloc_req.new_length + header_size;
+    const total_size = new_length + header_size;
 
-    const result = wasm_allocator.rawAlloc(total_size, align_log2, @returnAddress()) orelse @panic("WASM reallocation failed");
+    const result = wasm_allocator.rawAlloc(total_size, align_log2, @returnAddress()) orelse return null;
 
     // Store the size at the beginning
     const size_ptr: *usize = @ptrCast(@alignCast(result));
-    size_ptr.* = realloc_req.new_length;
+    size_ptr.* = new_length;
 
-    const old_byte_ptr: [*]u8 = @ptrCast(realloc_req.answer orelse @panic("WASM realloc missing old allocation"));
+    const old_byte_ptr: [*]u8 = @ptrCast(ptr);
     const old_base_ptr = old_byte_ptr - header_size;
     const old_size_ptr: *const usize = @ptrCast(@alignCast(old_base_ptr));
     const old_size = old_size_ptr.*;
 
     const new_user_ptr = result + header_size;
-    @memcpy(new_user_ptr[0..@min(old_size, realloc_req.new_length)], old_byte_ptr[0..@min(old_size, realloc_req.new_length)]);
+    const copy_size = @min(old_size, new_length);
+    @memcpy(new_user_ptr[0..copy_size], old_byte_ptr[0..copy_size]);
 
     const old_total_size = old_size + header_size;
     wasm_allocator.rawFree(old_base_ptr[0..old_total_size], align_log2, @returnAddress());
 
-    realloc_req.answer = @ptrCast(new_user_ptr);
+    return @ptrCast(new_user_ptr);
 }
 
-fn roc_dbg(roc_dbg_arg: *const RocDbg, _: *anyopaque) callconv(.c) void {
-    env_imports.roc_dbg(roc_dbg_arg.utf8_bytes, roc_dbg_arg.len);
+fn roc_dbg(_: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
+    env_imports.roc_dbg(bytes, len);
 }
 
-fn roc_expect_failed(roc_expect: *const RocExpectFailed, _: *anyopaque) callconv(.c) void {
-    env_imports.roc_expect_failed(roc_expect.utf8_bytes, roc_expect.len);
+fn roc_expect_failed(_: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
+    env_imports.roc_expect_failed(bytes, len);
 }
 
-fn roc_crashed(crash_args: *const RocCrashed, _: *anyopaque) callconv(.c) noreturn {
-    env_imports.roc_panic(crash_args.utf8_bytes, crash_args.len);
+fn roc_crashed(_: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
+    env_imports.roc_panic(bytes, len);
 }
 
 // Hosted function: Stdout.line! (index 0)
-// Follows RocCall ABI: (ops, ret_ptr, args_ptr)
-fn hostedStdoutLine(_: *anyopaque, _: *anyopaque, args: *const extern struct { str: RocStr }) callconv(.c) void {
-    const s = args.str.asSlice();
+// Natural C signature for `Stdout.line! : Str => {}` (needsRocOps = true).
+fn hostedStdoutLine(_: *RocOps, str: RocStr) callconv(.c) void {
+    const s = str.asSlice();
     env_imports.echo(s.ptr, s.len);
 }
 

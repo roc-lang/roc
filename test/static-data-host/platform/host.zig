@@ -24,14 +24,8 @@ pub const std_options: std.Options = .{
     .allow_stack_tracing = false,
 };
 
-const RocAlloc = builtins.host_abi.RocAlloc;
-const RocCrashed = builtins.host_abi.RocCrashed;
-const RocDbg = builtins.host_abi.RocDbg;
-const RocDealloc = builtins.host_abi.RocDealloc;
-const RocExpectFailed = builtins.host_abi.RocExpectFailed;
 const RocList = builtins.list.RocList;
 const RocOps = builtins.host_abi.RocOps;
-const RocRealloc = builtins.host_abi.RocRealloc;
 const RocStr = builtins.str.RocStr;
 
 const CheckError = error{StaticDataHostCheckFailed};
@@ -395,14 +389,14 @@ fn fail(message: []const u8) CheckError {
     return CheckError.StaticDataHostCheckFailed;
 }
 
-fn rocAllocFn(roc_alloc: *RocAlloc, env: *anyopaque) callconv(.c) void {
-    const host: *HostEnv = @ptrCast(@alignCast(env));
+fn rocAllocFn(ops: *RocOps, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+    const host: *HostEnv = @ptrCast(@alignCast(ops.env));
     const allocator = host.gpa.allocator();
 
-    const min_alignment: usize = @max(roc_alloc.alignment, @alignOf(usize));
+    const min_alignment: usize = @max(alignment, @alignOf(usize));
     const align_enum = std.mem.Alignment.fromByteUnits(min_alignment);
     const size_storage_bytes = min_alignment;
-    const total_size = roc_alloc.length + size_storage_bytes;
+    const total_size = length + size_storage_bytes;
 
     const base_ptr = allocator.rawAlloc(total_size, align_enum, @returnAddress()) orelse {
         std.debug.print("host allocation failed for {d} bytes\n", .{total_size});
@@ -411,36 +405,36 @@ fn rocAllocFn(roc_alloc: *RocAlloc, env: *anyopaque) callconv(.c) void {
 
     const size_ptr: *usize = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes - @sizeOf(usize));
     size_ptr.* = total_size;
-    roc_alloc.answer = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes);
+    return @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes);
 }
 
-fn rocDeallocFn(roc_dealloc: *RocDealloc, env: *anyopaque) callconv(.c) void {
-    const host: *HostEnv = @ptrCast(@alignCast(env));
+fn rocDeallocFn(ops: *RocOps, ptr: *anyopaque, alignment: usize) callconv(.c) void {
+    const host: *HostEnv = @ptrCast(@alignCast(ops.env));
     host.dealloc_count += 1;
 
     const allocator = host.gpa.allocator();
-    const min_alignment: usize = @max(roc_dealloc.alignment, @alignOf(usize));
+    const min_alignment: usize = @max(alignment, @alignOf(usize));
     const align_enum = std.mem.Alignment.fromByteUnits(min_alignment);
     const size_storage_bytes = min_alignment;
-    const size_ptr: *const usize = @ptrFromInt(@intFromPtr(roc_dealloc.ptr) - @sizeOf(usize));
+    const size_ptr: *const usize = @ptrFromInt(@intFromPtr(ptr) - @sizeOf(usize));
     const total_size = size_ptr.*;
-    const base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(roc_dealloc.ptr) - size_storage_bytes);
+    const base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(ptr) - size_storage_bytes);
 
     allocator.rawFree(base_ptr[0..total_size], align_enum, @returnAddress());
 }
 
-fn rocReallocFn(roc_realloc: *RocRealloc, env: *anyopaque) callconv(.c) void {
-    const host: *HostEnv = @ptrCast(@alignCast(env));
+fn rocReallocFn(ops: *RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+    const host: *HostEnv = @ptrCast(@alignCast(ops.env));
     const allocator = host.gpa.allocator();
 
-    const min_alignment: usize = @max(roc_realloc.alignment, @alignOf(usize));
+    const min_alignment: usize = @max(alignment, @alignOf(usize));
     const align_enum = std.mem.Alignment.fromByteUnits(min_alignment);
     const size_storage_bytes = min_alignment;
-    const old_size_ptr: *const usize = @ptrFromInt(@intFromPtr(roc_realloc.answer) - @sizeOf(usize));
+    const old_size_ptr: *const usize = @ptrFromInt(@intFromPtr(ptr) - @sizeOf(usize));
     const old_total_size = old_size_ptr.*;
-    const old_base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(roc_realloc.answer) - size_storage_bytes);
+    const old_base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(ptr) - size_storage_bytes);
 
-    const new_total_size = roc_realloc.new_length + size_storage_bytes;
+    const new_total_size = new_length + size_storage_bytes;
     const new_ptr = allocator.rawAlloc(new_total_size, align_enum, @returnAddress()) orelse {
         std.debug.print("host reallocation failed for {d} bytes\n", .{new_total_size});
         std.process.exit(1);
@@ -450,21 +444,21 @@ fn rocReallocFn(roc_realloc: *RocRealloc, env: *anyopaque) callconv(.c) void {
 
     const new_size_ptr: *usize = @ptrFromInt(@intFromPtr(new_ptr) + size_storage_bytes - @sizeOf(usize));
     new_size_ptr.* = new_total_size;
-    roc_realloc.answer = @ptrFromInt(@intFromPtr(new_ptr) + size_storage_bytes);
+    return @ptrFromInt(@intFromPtr(new_ptr) + size_storage_bytes);
 }
 
-fn rocDbgFn(roc_dbg: *const RocDbg, env: *anyopaque) callconv(.c) void {
-    _ = env;
-    std.debug.print("ROC DBG: {s}\n", .{roc_dbg.utf8_bytes[0..roc_dbg.len]});
+fn rocDbgFn(ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
+    _ = ops;
+    std.debug.print("ROC DBG: {s}\n", .{bytes[0..len]});
 }
 
-fn rocExpectFailedFn(roc_expect: *const RocExpectFailed, env: *anyopaque) callconv(.c) void {
-    _ = env;
-    std.debug.print("ROC EXPECT FAILED: {s}\n", .{roc_expect.utf8_bytes[0..roc_expect.len]});
+fn rocExpectFailedFn(ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
+    _ = ops;
+    std.debug.print("ROC EXPECT FAILED: {s}\n", .{bytes[0..len]});
 }
 
-fn rocCrashedFn(roc_crashed: *const RocCrashed, env: *anyopaque) callconv(.c) void {
-    _ = env;
-    std.debug.print("ROC CRASHED: {s}\n", .{roc_crashed.utf8_bytes[0..roc_crashed.len]});
+fn rocCrashedFn(ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
+    _ = ops;
+    std.debug.print("ROC CRASHED: {s}\n", .{bytes[0..len]});
     std.process.exit(1);
 }

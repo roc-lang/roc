@@ -450,6 +450,12 @@ pub fn roc_builtins_list_append_unsafe(out: *RocList, list_bytes: ?[*]u8, list_l
     out.* = listAppendUnsafe(l, @constCast(element), element_width, @ptrCast(&copy_fallback));
 }
 
+/// Wrapper: listMapCanReuse
+pub fn roc_builtins_list_map_can_reuse(list_bytes: ?[*]u8, list_len: usize, list_cap: usize, roc_ops: *RocOps) callconv(.c) u8 {
+    const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
+    return @intFromBool(list.listMapCanReuse(l, roc_ops));
+}
+
 /// Wrapper: listConcat(RocList, RocList, alignment, element_width, ..., *RocOps) -> RocList.
 /// `update_modes` carries one bit per list argument (bit 0 = a, bit 1 = b); a
 /// set bit selects `.InPlace` for that argument's uniqueness check, skipping
@@ -1493,26 +1499,34 @@ fn i128ToStr(buf: []u8, val: i128) []u8 {
     return buf[0 .. 1 + digits.len];
 }
 
+fn signedIntToStr(comptime T: type, buf: []u8, val: T) []u8 {
+    return i128ToStr(buf, @as(i128, @intCast(val)));
+}
+
+fn unsignedIntToStr(comptime T: type, buf: []u8, val: T) []u8 {
+    return u128ToStr(buf, @as(u128, @intCast(val)));
+}
+
 /// Unified integer-to-string wrapper: dispatches on int_width/is_signed
 pub fn roc_builtins_int_to_str(out: *RocStr, val_low: u64, val_high: u64, int_width: u8, is_signed: bool, roc_ops: *RocOps) callconv(.c) void {
     var buf: [40]u8 = undefined;
     const result = switch (int_width) {
         1 => if (is_signed)
-            std.fmt.bufPrint(&buf, "{}", .{@as(i8, @bitCast(@as(u8, @truncate(val_low))))}) catch unreachable
+            signedIntToStr(i8, &buf, @as(i8, @bitCast(@as(u8, @truncate(val_low)))))
         else
-            std.fmt.bufPrint(&buf, "{}", .{@as(u8, @truncate(val_low))}) catch unreachable,
+            unsignedIntToStr(u8, &buf, @as(u8, @truncate(val_low))),
         2 => if (is_signed)
-            std.fmt.bufPrint(&buf, "{}", .{@as(i16, @bitCast(@as(u16, @truncate(val_low))))}) catch unreachable
+            signedIntToStr(i16, &buf, @as(i16, @bitCast(@as(u16, @truncate(val_low)))))
         else
-            std.fmt.bufPrint(&buf, "{}", .{@as(u16, @truncate(val_low))}) catch unreachable,
+            unsignedIntToStr(u16, &buf, @as(u16, @truncate(val_low))),
         4 => if (is_signed)
-            std.fmt.bufPrint(&buf, "{}", .{@as(i32, @bitCast(@as(u32, @truncate(val_low))))}) catch unreachable
+            signedIntToStr(i32, &buf, @as(i32, @bitCast(@as(u32, @truncate(val_low)))))
         else
-            std.fmt.bufPrint(&buf, "{}", .{@as(u32, @truncate(val_low))}) catch unreachable,
+            unsignedIntToStr(u32, &buf, @as(u32, @truncate(val_low))),
         8 => if (is_signed)
-            std.fmt.bufPrint(&buf, "{}", .{@as(i64, @bitCast(val_low))}) catch unreachable
+            signedIntToStr(i64, &buf, @as(i64, @bitCast(val_low)))
         else
-            std.fmt.bufPrint(&buf, "{}", .{val_low}) catch unreachable,
+            unsignedIntToStr(u64, &buf, val_low),
         16 => blk: {
             const val128: u128 = i128h.from_u64_pair(val_low, val_high);
             break :blk if (is_signed)
@@ -1527,7 +1541,7 @@ pub fn roc_builtins_int_to_str(out: *RocStr, val_low: u64, val_high: u64, int_wi
 
 /// Unified float-to-string wrapper: dispatches on is_f32.
 /// Uses Ryu's binaryToDecimal directly and formats manually to avoid
-/// pulling in std.fmt.float.formatDecimal which references isPowerOf10
+/// pulling in Zig's generic float formatter, which references isPowerOf10
 /// (u128 div/mod → __udivti3/__umodti3 compiler_rt symbols).
 pub fn roc_builtins_float_to_str(out: *RocStr, val_bits: u64, is_f32: bool, roc_ops: *RocOps) callconv(.c) void {
     out.* = str.floatToStrFromBits(val_bits, is_f32, roc_ops);

@@ -170,6 +170,7 @@ const CustomCase = enum {
     generated_graph_5_5,
     generated_graph_2_100,
     generated_graph_200_5,
+    list_builtin_inlined,
     fmt_reformats_file,
     fmt_does_not_change_file,
     fmt_stdin_formats,
@@ -193,6 +194,8 @@ const CustomCase = enum {
     glue_c_header,
     glue_c_header_compiles,
     glue_zig,
+    glue_zig_compiles,
+    glue_rust,
     glue_zig_bang_record_fields,
     glue_c_tests,
 };
@@ -448,6 +451,8 @@ const glue_cases = [_]CliCase{
     .{ .id = 0, .suite = .glue, .name = "glue command with CGlue generates expected C header", .body = .{ .custom = .glue_c_header } },
     .{ .id = 0, .suite = .glue, .name = "glue command generated C header compiles with zig cc", .body = .{ .custom = .glue_c_header_compiles } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: ZigGlue succeeds on fx platform", .body = .{ .custom = .glue_zig } },
+    .{ .id = 0, .suite = .glue, .name = "glue command generated Zig compiles with zig build-obj", .body = .{ .custom = .glue_zig_compiles } },
+    .{ .id = 0, .suite = .glue, .name = "glue regression: RustGlue succeeds on fx platform", .body = .{ .custom = .glue_rust } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: ZigGlue quotes bang record fields", .body = .{ .custom = .glue_zig_bang_record_fields } },
     .{ .id = 0, .suite = .glue, .name = "CGlue.roc expect tests pass", .body = .{ .custom = .glue_c_tests } },
 };
@@ -504,6 +509,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc check generated module graph succeeds with 5 files and 5 symbols", .body = .{ .custom = .generated_graph_5_5 } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check generated module graph handles many symbols per file", .body = .{ .custom = .generated_graph_2_100 } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check generated module graph handles many imported files", .body = .{ .custom = .generated_graph_200_5 } },
+    .{ .id = 0, .suite = .subcommands, .name = "list builtins inline in native --opt=speed build", .body = .{ .custom = .list_builtin_inlined } },
     .{ .id = 0, .suite = .subcommands, .name = "roc version outputs at least 5 chars to stdout", .body = .{ .command = .{ .args = &.{"version"}, .stdout_min_len = 5 } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc repl batch mode suppresses welcome banner", .body = .{ .command = .{ .args = &.{"repl"}, .stdin = "", .stdout_exact = "", .stderr_exact = "" } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc repl evaluates simple expression", .body = .{ .command = .{ .args = &.{"repl"}, .stdin = "1 + 1\n", .contains = &.{.{ .stream = .stdout, .text = "2" }}, .not_contains = &.{ .{ .stream = .stdout, .text = "Roc REPL" }, .{ .stream = .stdout, .text = ">" }, .{ .stream = .stdout, .text = "Goodbye" } } } } },
@@ -1347,6 +1353,7 @@ fn runCustomCase(
         .generated_graph_5_5 => customGeneratedModuleGraph(io, allocator, &env, &timer, timeout_ms, .{ .roc_file_count = 5, .symbols_per_file = 5 }),
         .generated_graph_2_100 => customGeneratedModuleGraph(io, allocator, &env, &timer, timeout_ms, .{ .roc_file_count = 2, .symbols_per_file = 100 }),
         .generated_graph_200_5 => customGeneratedModuleGraph(io, allocator, &env, &timer, timeout_ms, .{ .roc_file_count = 200, .symbols_per_file = 5 }),
+        .list_builtin_inlined => customListBuiltinInlined(io, allocator, &env, &timer, timeout_ms),
         .fmt_reformats_file => customFmtReformatsFile(io, allocator, &env, &timer, timeout_ms),
         .fmt_does_not_change_file => customFmtDoesNotChangeFile(io, allocator, &env, &timer, timeout_ms),
         .fmt_stdin_formats => customFmtStdin(io, allocator, &env, &timer, timeout_ms, false),
@@ -1370,6 +1377,8 @@ fn runCustomCase(
         .glue_c_header => customGlueCHeader(io, allocator, &env, &timer, timeout_ms),
         .glue_c_header_compiles => customGlueCHeaderCompiles(io, allocator, &env, &timer, timeout_ms),
         .glue_zig => customGlueZig(io, allocator, &env, &timer, timeout_ms),
+        .glue_zig_compiles => customGlueZigCompiles(io, allocator, &env, &timer, timeout_ms),
+        .glue_rust => customGlueRust(io, allocator, &env, &timer, timeout_ms),
         .glue_zig_bang_record_fields => customGlueZigBangRecordFields(io, allocator, &env, &timer, timeout_ms),
         .glue_c_tests => customGlueCTests(io, allocator, &env, &timer, timeout_ms),
     };
@@ -1511,6 +1520,77 @@ const GeneratedModuleGraphConfig = struct {
     roc_file_count: usize,
     symbols_per_file: usize,
 };
+
+/// Regression test for builtin inlining: a native `--opt=speed` archive build must
+/// inline list builtins (link builtins.bc) rather than leave them as opaque external
+/// calls. If the builtin symbol naming ever drifts between the codegen and the
+/// bitcode, the inlining silently stops; this catches that by asserting the archive's
+/// app object has no remaining reference to `roc_builtins_list_append_unsafe`.
+fn customListBuiltinInlined(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    const plat_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "inline_plat.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate platform path: {}", .{err});
+    const app_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "inline_app.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate app path: {}", .{err});
+    const archive_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "inline_app.a" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate archive path: {}", .{err});
+    const output_arg = std.fmt.allocPrint(allocator, "--output={s}", .{archive_path}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate output arg: {}", .{err});
+
+    const plat_src =
+        \\platform ""
+        \\    requires {} { main! : () => List(I32) }
+        \\    exposes []
+        \\    packages {}
+        \\    provides { main_for_host!: "main" }
+        \\    targets: {
+        \\        inputs: "targets/",
+        \\        arm64mac: { inputs: [app], output: Archive },
+        \\        x64mac: { inputs: [app], output: Archive },
+        \\        arm64musl: { inputs: [app], output: Archive },
+        \\        x64musl: { inputs: [app], output: Archive },
+        \\        arm64glibc: { inputs: [app], output: Archive },
+        \\        x64glibc: { inputs: [app], output: Archive },
+        \\        arm64win: { inputs: [app], output: Archive },
+        \\        x64win: { inputs: [app], output: Archive },
+        \\    }
+        \\
+        \\main_for_host! : () => List(I32)
+        \\main_for_host! = || main!()
+        \\
+    ;
+    const app_src =
+        \\app [main!] { pf: platform "./inline_plat.roc" }
+        \\
+        \\main! : () => List(I32)
+        \\main! = || [1.I32, 2, 3].map(|x| x + 1)
+        \\
+    ;
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = plat_path, .data = plat_src }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write platform: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = app_path, .data = app_src }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write app: {}", .{err});
+
+    const child_timeout_ms = childCommandTimeoutMs(timer, timeout_ms) orelse
+        return timeoutFailure(allocator, timer, .run, "case timeout exhausted before roc build started");
+    const result = runRocInEnv(io, allocator, env, &.{ "build", "--opt=speed", "--no-cache", output_arg }, app_path, .absolute, null, child_timeout_ms) catch |err|
+        return customInfraFailure(allocator, timer, "roc build spawn error: {}", .{err});
+    if (checkCommandExpectation(allocator, result, .{ .args = &.{"build"}, .exit = .success })) |message| {
+        return failureFromRun(allocator, timer, result, message);
+    }
+
+    const archive_bytes = std.Io.Dir.cwd().readFileAlloc(io, archive_path, allocator, .limited(64 * 1024 * 1024)) catch |err|
+        return customInfraFailure(allocator, timer, "failed to read archive {s}: {}", .{ archive_path, err });
+    if (std.mem.find(u8, archive_bytes, "roc_builtins_list_append_unsafe") != null) {
+        return customFailure(allocator, timer, "list_append_unsafe was not inlined into the --opt=speed archive object (it still references the builtin symbol)", .{});
+    }
+    return null;
+}
 
 fn customGeneratedModuleGraph(
     io: std.Io,
@@ -2026,6 +2106,71 @@ fn customGlueCHeaderCompiles(io: std.Io, allocator: Allocator, env: *const CaseE
     return null;
 }
 
+fn customGlueZigCompiles(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    const output_dir = createWorkSubdir(io, allocator, env, "glue-out") catch |err|
+        return customInfraFailure(allocator, timer, "failed to create glue output dir: {}", .{err});
+    if (runGlueCommandInEnv(io, allocator, env, timer, timeout_ms, "src/glue/src/ZigGlue.roc", output_dir)) |failure| return failure;
+
+    // Reference the key generated ABI types so they are semantically analyzed (the
+    // natural-signature PlatformHostedFns, the register-style RocOps, RocStr, and the
+    // HostedFunctions table). Importing the file also runs its comptime size/alignment
+    // assertions. Then compile to an object to confirm the generated Zig is well-formed.
+    // The generated ABI file name is interpolated rather than written as a literal import
+    // path so the dead-files lint does not mistake this test fixture for a real import of an
+    // untracked source file.
+    const test_zig_content = std.fmt.allocPrint(allocator,
+        \\const abi = @import("{s}");
+        \\export fn _roc_glue_abi_check() void {{
+        \\    var ops: abi.RocOps = undefined;
+        \\    var str: abi.RocStr = undefined;
+        \\    var funcs: abi.HostedFunctions = undefined;
+        \\    var hosted: abi.PlatformHostedFns = undefined;
+        \\    _ = &ops;
+        \\    _ = &str;
+        \\    _ = &funcs;
+        \\    _ = &hosted;
+        \\}}
+    , .{"roc_platform_abi.zig"}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to render test Zig source: {}", .{err});
+    const test_zig_path = std.fs.path.join(allocator, &.{ output_dir, "test_abi.zig" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate test Zig path: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = test_zig_path, .data = test_zig_content }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write test Zig file: {}", .{err});
+    const test_o_path = std.fs.path.join(allocator, &.{ output_dir, "test_abi.o" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate test object path: {}", .{err});
+    const emit_flag = std.fmt.allocPrint(allocator, "-femit-bin={s}", .{test_o_path}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate emit flag: {}", .{err});
+
+    if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{
+        "zig",
+        "build-obj",
+        test_zig_path,
+        emit_flag,
+    }, project_root_path, .{ .args = &.{} })) |failure| return failure;
+    return null;
+}
+
+fn customGlueRust(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    const output_dir = createWorkSubdir(io, allocator, env, "glue-out") catch |err|
+        return customInfraFailure(allocator, timer, "failed to create glue output dir: {}", .{err});
+    if (runGlueCommandInEnv(io, allocator, env, timer, timeout_ms, "src/glue/src/RustGlue.roc", output_dir)) |failure| return failure;
+    const generated_path = std.fs.path.join(allocator, &.{ output_dir, "roc_platform_abi.rs" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate generated Rust path: {}", .{err});
+    const generated = std.Io.Dir.cwd().readFileAlloc(io, generated_path, allocator, .limited(1024 * 1024)) catch |err|
+        return customFailure(allocator, timer, "failed to read generated Rust file: {}", .{err});
+    for ([_][]const u8{ "pub struct RocOps", "pub struct RocStr", "PlatformHostedFns" }) |needle| {
+        if (std.mem.find(u8, generated, needle) == null) {
+            return customFailure(allocator, timer, "generated Rust file missing {s}", .{needle});
+        }
+    }
+    // The old uniform-ABI argument struct must be gone (confirms RustGlue tracks the new
+    // register-style host ABI rather than the struct-by-pointer callbacks).
+    if (std.mem.find(u8, generated, "pub struct RocAlloc") != null) {
+        return customFailure(allocator, timer, "generated Rust file still defines the obsolete RocAlloc struct", .{});
+    }
+    return null;
+}
+
 fn customGlueZig(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
     const output_dir = createWorkSubdir(io, allocator, env, "glue-out") catch |err|
         return customInfraFailure(allocator, timer, "failed to create glue output dir: {}", .{err});
@@ -2071,28 +2216,28 @@ fn customGlueZigBoxHelperTest(
         \\    dealloc_alignment: usize = 0,
         \\};
         \\
-        \\fn dummyHostedFn(_: *anyopaque, _: *anyopaque, _: *anyopaque) callconv(.c) void {}
+        \\fn dummyHostedFn() callconv(.c) void {}
         \\
-        \\var hosted_fns = [_]abi.HostedFn{&dummyHostedFn};
+        \\var hosted_fns = [_]abi.HostedFn{@ptrCast(&dummyHostedFn)};
         \\
-        \\fn rocAlloc(_: *abi.RocAlloc, _: *anyopaque) callconv(.c) void {
+        \\fn rocAlloc(_: *abi.RocOps, _: usize, _: usize) callconv(.c) ?*anyopaque {
         \\    unreachable;
         \\}
         \\
-        \\fn rocDealloc(dealloc_args: *abi.RocDealloc, env_ptr: *anyopaque) callconv(.c) void {
-        \\    const env_ref: *Env = @ptrCast(@alignCast(env_ptr));
+        \\fn rocDealloc(ops: *abi.RocOps, ptr: *anyopaque, alignment: usize) callconv(.c) void {
+        \\    const env_ref: *Env = @ptrCast(@alignCast(ops.env));
         \\    env_ref.dealloc_count += 1;
-        \\    env_ref.dealloc_ptr = @intFromPtr(dealloc_args.ptr);
-        \\    env_ref.dealloc_alignment = dealloc_args.alignment;
+        \\    env_ref.dealloc_ptr = @intFromPtr(ptr);
+        \\    env_ref.dealloc_alignment = alignment;
         \\}
         \\
-        \\fn rocRealloc(_: *abi.RocRealloc, _: *anyopaque) callconv(.c) void {
+        \\fn rocRealloc(_: *abi.RocOps, _: *anyopaque, _: usize, _: usize) callconv(.c) ?*anyopaque {
         \\    unreachable;
         \\}
         \\
-        \\fn rocDbg(_: *const abi.RocDbg, _: *anyopaque) callconv(.c) void {}
-        \\fn rocExpectFailed(_: *const abi.RocExpectFailed, _: *anyopaque) callconv(.c) void {}
-        \\fn rocCrashed(_: *const abi.RocCrashed, _: *anyopaque) callconv(.c) void {}
+        \\fn rocDbg(_: *abi.RocOps, _: [*]const u8, _: usize) callconv(.c) void {}
+        \\fn rocExpectFailed(_: *abi.RocOps, _: [*]const u8, _: usize) callconv(.c) void {}
+        \\fn rocCrashed(_: *abi.RocOps, _: [*]const u8, _: usize) callconv(.c) void {}
         \\
         \\fn makeOps(env_ref: *Env) abi.RocOps {
         \\    return .{
@@ -2157,36 +2302,23 @@ fn customGlueZigBoxHelperTest(
         \\        .allocator = std.testing.allocator,
         \\        .roc_io = abi.RocIo.freestanding(),
         \\    };
+        \\    var roc_ops = abi.makeRocOps(&env_value, .{ .count = 0, .fns = &hosted_fns });
         \\
-        \\    var alloc_args = abi.RocAlloc{
-        \\        .alignment = 4,
-        \\        .length = 8,
-        \\        .answer = undefined,
-        \\    };
-        \\    abi.DefaultAllocators.rocAlloc(&alloc_args, @ptrCast(&env_value));
+        \\    const alloc_ptr = abi.DefaultAllocators.rocAlloc(&roc_ops, 8, 4) orelse return error.OutOfMemory;
         \\
-        \\    const old_bytes: [*]u8 = @ptrCast(alloc_args.answer);
+        \\    const old_bytes: [*]u8 = @ptrCast(alloc_ptr);
         \\    old_bytes[0] = 0xaa;
         \\    old_bytes[1] = 0xbb;
         \\    old_bytes[7] = 0xcc;
         \\
-        \\    var realloc_args = abi.RocRealloc{
-        \\        .alignment = 4,
-        \\        .new_length = 16,
-        \\        .answer = alloc_args.answer,
-        \\    };
-        \\    abi.DefaultAllocators.rocRealloc(&realloc_args, @ptrCast(&env_value));
+        \\    const realloc_ptr = abi.DefaultAllocators.rocRealloc(&roc_ops, alloc_ptr, 16, 4) orelse return error.OutOfMemory;
         \\
-        \\    const new_bytes: [*]u8 = @ptrCast(realloc_args.answer);
+        \\    const new_bytes: [*]u8 = @ptrCast(realloc_ptr);
         \\    try std.testing.expectEqual(@as(u8, 0xaa), new_bytes[0]);
         \\    try std.testing.expectEqual(@as(u8, 0xbb), new_bytes[1]);
         \\    try std.testing.expectEqual(@as(u8, 0xcc), new_bytes[7]);
         \\
-        \\    var dealloc_args = abi.RocDealloc{
-        \\        .alignment = 4,
-        \\        .ptr = realloc_args.answer,
-        \\    };
-        \\    abi.DefaultAllocators.rocDealloc(&dealloc_args, @ptrCast(&env_value));
+        \\    abi.DefaultAllocators.rocDealloc(&roc_ops, realloc_ptr, 4);
         \\}
     ;
 

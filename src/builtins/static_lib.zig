@@ -11,7 +11,7 @@ const shim_io = @import("shim_io");
 pub const panic = std.debug.no_panic;
 
 pub const std_options_elf_debug_info_search_paths = shim_io.elfDebugInfoSearchPaths;
-/// Minimal std.Io override for debug output; avoids pulling in the full threaded IO vtable.
+/// Minimal debug output override; avoids pulling in the full threaded IO vtable.
 pub const std_options_debug_io = shim_io.io();
 /// Disables threaded debug IO to prevent the threaded vtable from being linked into user programs.
 pub const std_options_debug_threaded_io = null;
@@ -71,6 +71,7 @@ comptime {
     @export(&dw.roc_builtins_str_from_literal, .{ .name = "roc_builtins_str_from_literal" });
     @export(&dw.roc_builtins_list_with_capacity, .{ .name = "roc_builtins_list_with_capacity" });
     @export(&dw.roc_builtins_list_append_unsafe, .{ .name = "roc_builtins_list_append_unsafe" });
+    @export(&dw.roc_builtins_list_map_can_reuse, .{ .name = "roc_builtins_list_map_can_reuse" });
     @export(&dw.roc_builtins_list_concat, .{ .name = "roc_builtins_list_concat" });
     @export(&dw.roc_builtins_list_prepend, .{ .name = "roc_builtins_list_prepend" });
     @export(&dw.roc_builtins_list_sublist, .{ .name = "roc_builtins_list_sublist" });

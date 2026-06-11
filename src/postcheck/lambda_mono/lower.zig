@@ -15,6 +15,9 @@ const Allocator = std.mem.Allocator;
 pub fn run(
     allocator: Allocator,
     solved: Solved.Program,
+    /// Match sites the direct lowerer statically resolved; replayed here so
+    /// both derivations demand the same set of functions.
+    folded_matches: []const Lifted.Program.FoldedMatch,
 ) Common.LowerError!Ast.Program {
     var owned = solved;
     errdefer owned.deinit();
@@ -31,6 +34,10 @@ pub fn run(
     errdefer program.deinit();
 
     var lowerer = try Lowerer.init(allocator, &owned, &program);
+    defer lowerer.folded_matches.deinit(allocator);
+    for (folded_matches) |folded| {
+        try lowerer.folded_matches.put(allocator, folded.scrutinee, folded.body);
+    }
     defer lowerer.deinit();
     try lowerer.lower();
     program.next_symbol = lowerer.symbols.next;
@@ -125,6 +132,10 @@ const Lowerer = struct {
     captures: std.AutoHashMap(Lifted.LocalId, CaptureBinding),
     symbols: Common.SymbolGen,
     erased_capture_ptr_ty: ?Type.TypeId = null,
+    /// Replays the match resolutions direct LIR lowering recorded, so the
+    /// debug verifier sees the same set of demanded functions. Keyed by the
+    /// match's scrutinee expression.
+    folded_matches: std.AutoHashMapUnmanaged(Lifted.ExprId, Lifted.ExprId) = .empty,
 
     fn init(allocator: Allocator, solved: *const Solved.Program, program: *Ast.Program) Allocator.Error!Lowerer {
         const local_map = try allocator.alloc(?Ast.LocalId, solved.lifted.locals.items.len);
@@ -481,10 +492,18 @@ const Lowerer = struct {
                 .rhs = try self.lowerExpr(eq.rhs),
                 .negated = eq.negated,
             } },
-            .match_ => |match| .{ .match_ = .{
-                .scrutinee = try self.lowerExpr(match.scrutinee),
-                .branches = try self.lowerBranchSpan(match.branches),
-            } },
+            .match_ => |match| blk: {
+                if (self.folded_matches.get(match.scrutinee)) |folded_body| {
+                    break :blk .{ .block = .{
+                        .statements = .empty(),
+                        .final_expr = try self.lowerExpr(folded_body),
+                    } };
+                }
+                break :blk .{ .match_ = .{
+                    .scrutinee = try self.lowerExpr(match.scrutinee),
+                    .branches = try self.lowerBranchSpan(match.branches),
+                } };
+            },
             .if_ => |if_| .{ .if_ = .{
                 .branches = try self.lowerIfBranchSpan(if_.branches),
                 .final_else = try self.lowerExpr(if_.final_else),

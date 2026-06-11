@@ -35,11 +35,11 @@ pub const EchoEnv = struct {
 /// "RC hosted call transfers unused refcounted arg to host", and the test
 /// platform host in `test/fx/platform/host.zig` which decrefs every RocStr
 /// arg). Without this decref every `echo!` call leaks one heap RocStr.
-pub fn echoHostedFn(ops_ptr: *anyopaque, _: [*]u8, roc_str: *RocStr) callconv(.c) void {
-    const ops: *host_abi.RocOps = @ptrCast(@alignCast(ops_ptr));
-    defer roc_str.decref(ops);
+pub fn echoHostedFn(ops: *host_abi.RocOps, str: RocStr) callconv(.c) void {
+    var owned = str;
+    defer owned.decref(ops);
 
-    const message = roc_str.asSlice();
+    const message = owned.asSlice();
 
     if (comptime is_wasm) {
         const js = struct {
@@ -77,10 +77,10 @@ pub fn makeDefaultRocOps(env: *EchoEnv, hosted_fns: []host_abi.HostedFn) host_ab
         const size_prefix = @sizeOf(usize);
 
         /// Allocate with a size prefix so realloc/dealloc can recover the old length.
-        fn rocAlloc(alloc_args: *host_abi.RocAlloc, _: *anyopaque) callconv(.c) void {
+        fn rocAlloc(_: *host_abi.RocOps, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
             const alloc = if (comptime is_wasm) std.heap.wasm_allocator else std.heap.smp_allocator;
-            const total = alloc_args.length + size_prefix;
-            const align_enum = std.mem.Alignment.fromByteUnits(@max(alloc_args.alignment, @alignOf(usize)));
+            const total = length + size_prefix;
+            const align_enum = std.mem.Alignment.fromByteUnits(@max(alignment, @alignOf(usize)));
             const raw = alloc.rawAlloc(total, align_enum, @returnAddress()) orelse {
                 if (comptime is_wasm) @trap() else {
                     std.debug.print("roc_alloc failed: OOM\n", .{});
@@ -89,31 +89,31 @@ pub fn makeDefaultRocOps(env: *EchoEnv, hosted_fns: []host_abi.HostedFn) host_ab
             };
             // Store the allocation length in the prefix
             const size_slot: *usize = @ptrCast(@alignCast(raw));
-            size_slot.* = alloc_args.length;
-            alloc_args.answer = @ptrCast(raw + size_prefix);
+            size_slot.* = length;
+            return @ptrCast(raw + size_prefix);
         }
 
-        fn rocDealloc(dealloc_args: *host_abi.RocDealloc, _: *anyopaque) callconv(.c) void {
+        fn rocDealloc(_: *host_abi.RocOps, ptr: *anyopaque, alignment: usize) callconv(.c) void {
             const alloc = if (comptime is_wasm) std.heap.wasm_allocator else std.heap.smp_allocator;
             // Recover the length rocAlloc stored in the prefix, then free the whole block.
-            const user_ptr: [*]u8 = @ptrCast(dealloc_args.ptr);
+            const user_ptr: [*]u8 = @ptrCast(ptr);
             const raw = user_ptr - size_prefix;
             const length = @as(*const usize, @ptrCast(@alignCast(raw))).*;
-            const align_enum = std.mem.Alignment.fromByteUnits(@max(dealloc_args.alignment, @alignOf(usize)));
+            const align_enum = std.mem.Alignment.fromByteUnits(@max(alignment, @alignOf(usize)));
             alloc.rawFree(raw[0 .. length + size_prefix], align_enum, @returnAddress());
         }
 
-        fn rocRealloc(realloc_args: *host_abi.RocRealloc, _: *anyopaque) callconv(.c) void {
+        fn rocRealloc(_: *host_abi.RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
             const alloc = if (comptime is_wasm) std.heap.wasm_allocator else std.heap.smp_allocator;
-            const align_enum = std.mem.Alignment.fromByteUnits(@max(realloc_args.alignment, @alignOf(usize)));
+            const align_enum = std.mem.Alignment.fromByteUnits(@max(alignment, @alignOf(usize)));
 
             // Read old size from prefix
-            const old_ptr: [*]u8 = @ptrCast(realloc_args.answer);
+            const old_ptr: [*]u8 = @ptrCast(ptr);
             const old_raw = old_ptr - size_prefix;
             const old_size: usize = @as(*const usize, @ptrCast(@alignCast(old_raw))).*;
 
             // Allocate new block with size prefix
-            const new_total = realloc_args.new_length + size_prefix;
+            const new_total = new_length + size_prefix;
             const new_raw = alloc.rawAlloc(new_total, align_enum, @returnAddress()) orelse {
                 if (comptime is_wasm) @trap() else {
                     std.debug.print("roc_realloc failed: OOM\n", .{});
@@ -123,11 +123,11 @@ pub fn makeDefaultRocOps(env: *EchoEnv, hosted_fns: []host_abi.HostedFn) host_ab
 
             // Write new size prefix
             const new_size_slot: *usize = @ptrCast(@alignCast(new_raw));
-            new_size_slot.* = realloc_args.new_length;
+            new_size_slot.* = new_length;
             const new_ptr = new_raw + size_prefix;
 
             // Copy old data (only up to the smaller of old/new sizes)
-            const copy_len = @min(old_size, realloc_args.new_length);
+            const copy_len = @min(old_size, new_length);
             if (copy_len > 0) {
                 @memcpy(new_ptr[0..copy_len], old_ptr[0..copy_len]);
             }
@@ -135,41 +135,41 @@ pub fn makeDefaultRocOps(env: *EchoEnv, hosted_fns: []host_abi.HostedFn) host_ab
             // Free the old block now that its contents have been copied.
             alloc.rawFree(old_raw[0 .. old_size + size_prefix], align_enum, @returnAddress());
 
-            realloc_args.answer = @ptrCast(new_ptr);
+            return @ptrCast(new_ptr);
         }
 
-        fn rocDbg(dbg_args: *const host_abi.RocDbg, env_ptr: *anyopaque) callconv(.c) void {
+        fn rocDbg(ops: *host_abi.RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
             if (comptime is_wasm) {
                 // No-op on wasm — no stderr available
             } else {
-                const echo_env: *EchoEnv = @ptrCast(@alignCast(env_ptr));
-                const msg = dbg_args.utf8_bytes[0..dbg_args.len];
+                const echo_env: *EchoEnv = @ptrCast(@alignCast(ops.env));
+                const msg = bytes[0..len];
                 const stderr_file: std.Io.File = .stderr();
                 stderr_file.writeStreamingAll(echo_env.std_io, "[dbg] ") catch {};
                 stderr_file.writeStreamingAll(echo_env.std_io, msg) catch {};
                 stderr_file.writeStreamingAll(echo_env.std_io, "\n") catch {};
             }
         }
-        fn rocExpectFailed(expect_args: *const host_abi.RocExpectFailed, env_ptr: *anyopaque) callconv(.c) void {
-            const echo_env_for_flag: *EchoEnv = @ptrCast(@alignCast(env_ptr));
+        fn rocExpectFailed(ops: *host_abi.RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
+            const echo_env_for_flag: *EchoEnv = @ptrCast(@alignCast(ops.env));
             echo_env_for_flag.inline_expect_failed = true;
             if (comptime is_wasm) {
                 // No-op on wasm — no stderr available
             } else {
-                const echo_env: *EchoEnv = @ptrCast(@alignCast(env_ptr));
-                const msg = expect_args.utf8_bytes[0..expect_args.len];
+                const echo_env: *EchoEnv = @ptrCast(@alignCast(ops.env));
+                const msg = bytes[0..len];
                 const stderr_file: std.Io.File = .stderr();
                 stderr_file.writeStreamingAll(echo_env.std_io, "Expect failed: ") catch {};
                 stderr_file.writeStreamingAll(echo_env.std_io, msg) catch {};
                 stderr_file.writeStreamingAll(echo_env.std_io, "\n") catch {};
             }
         }
-        fn rocCrashed(crash_args: *const host_abi.RocCrashed, env_ptr: *anyopaque) callconv(.c) void {
+        fn rocCrashed(ops: *host_abi.RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
             if (comptime is_wasm) {
                 @trap();
             } else {
-                const echo_env: *EchoEnv = @ptrCast(@alignCast(env_ptr));
-                const msg = crash_args.utf8_bytes[0..crash_args.len];
+                const echo_env: *EchoEnv = @ptrCast(@alignCast(ops.env));
+                const msg = bytes[0..len];
                 const stderr_file: std.Io.File = .stderr();
                 stderr_file.writeStreamingAll(echo_env.std_io, "Roc crashed: ") catch {};
                 stderr_file.writeStreamingAll(echo_env.std_io, msg) catch {};

@@ -896,15 +896,13 @@ fn generatePlatformHostShim(
     const std_zig_llvm = @import("std").zig.llvm;
     const Builder = std_zig_llvm.Builder;
 
-    // Create std.Target for the target RocTarget
-    // This is needed so the LLVM Builder generates correct pointer sizes
-    const query = std.Target.Query{
-        .cpu_arch = target.toCpuArch(),
-        .os_tag = target.toOsTag(),
-    };
-    const std_target = std.zig.system.resolveTargetQuery(ctx.io.std_io, query) catch |err| {
+    // Create std.Target for the target RocTarget.
+    // This is needed so the LLVM Builder generates correct pointer sizes.
+    const std_target = stdTargetForLlvmBuild(ctx, target) catch |err| {
         return ctx.fail(.{ .shim_generation_failed = .{ .err = err } });
     };
+    const llvm_cpu = llvmCpuNameForTarget(std_target);
+    const llvm_features = try llvmFeatureStringForTarget(ctx.arena, std_target);
 
     // Create LLVM Builder with the correct target
     var llvm_builder = Builder.init(.{
@@ -945,6 +943,9 @@ fn generatePlatformHostShim(
     }
     hash.update(target.toTriple());
     hash.update(if (debug) "debug" else "nodebug");
+    hash.update(llvm_cpu);
+    hash.update(&[_]u8{0});
+    hash.update(llvm_features);
     const content_hash = hash.final();
 
     const bitcode_filename = std.fmt.allocPrint(ctx.arena, "platform_shim_{x}.bc", .{content_hash}) catch |err| {
@@ -990,7 +991,10 @@ fn generatePlatformHostShim(
         .output_path = object_path,
         .optimization = .speed,
         .target = target,
+        .cpu = llvm_cpu,
+        .features = llvm_features,
         .debug = debug, // Use the debug flag passed from caller
+        .no_target_libcalls = noTargetLibcallsForLlvmBuild(target),
     };
 
     if (builder.compileBitcodeToObject(ctx.gpa, ctx.io.std_io, compile_config)) |success| {
@@ -4169,6 +4173,13 @@ fn stdTargetAbiForLlvmBuild(target: RocTarget) std.Target.Abi {
     };
 }
 
+fn noTargetLibcallsForLlvmBuild(target: RocTarget) bool {
+    return switch (target.toOsTag()) {
+        .macos, .windows => false,
+        else => true,
+    };
+}
+
 fn stdTargetForLlvmBuild(ctx: *CliCtx, target: RocTarget) anyerror!std.Target {
     if (target == RocTarget.detectNative()) return builtin.target;
 
@@ -4178,6 +4189,35 @@ fn stdTargetForLlvmBuild(ctx: *CliCtx, target: RocTarget) anyerror!std.Target {
         .abi = stdTargetAbiForLlvmBuild(target),
     };
     return std.zig.system.resolveTargetQuery(ctx.io.std_io, query);
+}
+
+fn llvmCpuNameForTarget(std_target: std.Target) []const u8 {
+    return std_target.cpu.model.llvm_name orelse "";
+}
+
+fn llvmFeatureStringForTarget(allocator: Allocator, std_target: std.Target) Allocator.Error![]const u8 {
+    const all_features = std_target.cpu.arch.allFeaturesList();
+    var model_features = std_target.cpu.model.features;
+    model_features.populateDependencies(all_features);
+
+    var features = std.ArrayList(u8).empty;
+    errdefer features.deinit(allocator);
+
+    for (all_features) |feature| {
+        const llvm_name = feature.llvm_name orelse continue;
+        const enabled = std_target.cpu.features.isEnabled(feature.index);
+        const model_enabled = model_features.isEnabled(feature.index);
+        if (enabled == model_enabled) continue;
+
+        if (features.items.len > 0) {
+            try features.append(allocator, ',');
+        }
+        try features.append(allocator, if (enabled) '+' else '-');
+        try features.appendSlice(allocator, llvm_name);
+    }
+
+    if (features.items.len == 0) return "";
+    return features.toOwnedSlice(allocator);
 }
 
 fn compileLlvmAppObject(
@@ -4190,6 +4230,8 @@ fn compileLlvmAppObject(
     entrypoints: []const backend.Entrypoint,
 ) anyerror!LlvmObjectPaths {
     const std_target = try stdTargetForLlvmBuild(ctx, target);
+    const llvm_cpu = llvmCpuNameForTarget(std_target);
+    const llvm_features = try llvmFeatureStringForTarget(ctx.arena, std_target);
 
     var codegen = llvm_codegen.MonoLlvmCodeGen.initForLinkedObject(
         ctx.gpa,
@@ -4220,11 +4262,17 @@ fn compileLlvmAppObject(
     // separate from exe objects in the build cache.
     const pic = link_type == .shared;
     const kind_suffix: []const u8 = if (pic) "_pic" else "";
-    const bitcode_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_llvm_{s}_{s}{s}.bc", .{ target_name, opt_name, kind_suffix });
-    const object_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_llvm_{s}_{s}{s}.o", .{ target_name, opt_name, kind_suffix });
+    var tuning_hash = std.hash.Crc32.init();
+    tuning_hash.update(llvm_cpu);
+    tuning_hash.update(&[_]u8{0});
+    tuning_hash.update(llvm_features);
+    const tuning_hash_value = tuning_hash.final();
+    const bitcode_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_llvm_{s}_{s}_{x}{s}.bc", .{ target_name, opt_name, tuning_hash_value, kind_suffix });
+    const object_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_llvm_{s}_{s}_{x}{s}.o", .{ target_name, opt_name, tuning_hash_value, kind_suffix });
     const bitcode_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, bitcode_filename });
     const object_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, object_filename });
 
+    try std.Io.Dir.cwd().createDirPath(ctx.io.std_io, build_cache_dir);
     backend.writeFileWindowsAvSafe(ctx.io.std_io, bitcode_path, std.mem.sliceAsBytes(bitcode.bitcode)) catch |err| {
         std.log.err("Failed to write LLVM bitcode {s}: {}", .{ bitcode_path, err });
         return err;
@@ -4235,8 +4283,12 @@ fn compileLlvmAppObject(
         .output_path = object_path,
         .optimization = llvmOptimizationLevel(args.opt),
         .target = target,
+        .cpu = llvm_cpu,
+        .features = llvm_features,
         .debug = args.debug,
+        .link_builtins = true,
         .pic = pic,
+        .no_target_libcalls = noTargetLibcallsForLlvmBuild(target),
     };
 
     const success = try builder.compileBitcodeToObject(ctx.gpa, ctx.io.std_io, compile_config);
@@ -4296,18 +4348,6 @@ fn writeCombinedLlvmWasmObject(
     wasm_module.addMemoryImport();
     _ = try wasm_module.addTableImportWithSymbol();
     _ = try wasm_module.addStackPointerImportWithSymbol();
-
-    const builtins_bytes = BuiltinsObjects.forTarget(.wasm32);
-    if (builtins_bytes.len > 0) {
-        var builtins_module = backend.wasm.WasmModule.preload(ctx.gpa, builtins_bytes, true) catch |err| {
-            std.log.err("Failed to preload wasm builtins: {}", .{err});
-            return err;
-        };
-        defer builtins_module.deinit();
-
-        var merge_result = try wasm_module.mergeModuleForObject(&builtins_module);
-        merge_result.deinit();
-    }
 
     const app_bytes = try appendOwnedWasmInput(ctx, owned_inputs, app_object_path);
     var app_module = try preloadWasmObject(ctx, app_object_path, null, app_bytes);
@@ -4424,18 +4464,6 @@ fn rocBuildWasmLlvm(
 
     try exportConfiguredWasmEntrypoints(&wasm_module);
     wasm_module.removeMemoryAndTableImports();
-
-    const builtins_bytes = BuiltinsObjects.forTarget(.wasm32);
-    if (builtins_bytes.len > 0) {
-        var builtins_module = backend.wasm.WasmModule.preload(ctx.gpa, builtins_bytes, true) catch |err| {
-            std.log.err("Failed to preload wasm builtins: {}", .{err});
-            return err;
-        };
-        defer builtins_module.deinit();
-
-        var merge_result = try wasm_module.mergeModule(&builtins_module);
-        merge_result.deinit();
-    }
 
     const app_bytes = try appendOwnedWasmInput(ctx, &owned_inputs, app_object.object_path);
     var app_module = try preloadWasmObject(ctx, app_object.object_path, null, app_bytes);
@@ -4627,6 +4655,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
         .{ .requests = root_artifact.root_requests.runtime_requests },
         .{
             .target_usize = target_usize,
+            .list_in_place_map = listInPlaceMapForOpt(args.opt),
         },
     );
     defer lowered.deinit();
@@ -4684,17 +4713,11 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
 
         const link_inputs = try collectPlatformLinkInputs(ctx, platform_dir, resolved_targets_config, target, link_type);
 
-        const builtins_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, BuiltinsObjects.filename(target) });
-        backend.writeFileWindowsAvSafe(ctx.io.std_io, builtins_path, BuiltinsObjects.forTarget(target)) catch {
-            return error.BuiltinsExtractionFailed;
-        };
-
-        var object_files = try std.array_list.Managed([]const u8).initCapacity(ctx.arena, 5);
+        var object_files = try std.array_list.Managed([]const u8).initCapacity(ctx.arena, 4);
         try object_files.append(app_object.object_path);
         if (static_data_obj_path) |path| {
             try object_files.append(path);
         }
-        try object_files.append(builtins_path);
 
         if (link_type == .archive) {
             try writeArchiveOutput(ctx, target, final_output_path, link_inputs, object_files.items);
@@ -4911,6 +4934,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
         .{
             .target_usize = target_usize,
             .inline_mode = postCheckInlineModeForOpt(args.opt),
+            .list_in_place_map = listInPlaceMapForOpt(args.opt),
         },
     );
     defer lowered.deinit();
@@ -5755,6 +5779,13 @@ fn postCheckInlineModeForOpt(opt: cli_args.OptLevel) lir.CheckedPipeline.InlineM
     };
 }
 
+fn listInPlaceMapForOpt(opt: cli_args.OptLevel) bool {
+    return switch (opt) {
+        .size, .speed => true,
+        .dev, .interpreter => false,
+    };
+}
+
 const CliTestRootRun = struct {
     root: check.CheckedArtifact.RootRequest,
     root_proc: lir.LirProcSpecId,
@@ -6065,6 +6096,7 @@ fn runCheckedArtifactTests(
         .{
             .target_usize = base.target.TargetUsize.native,
             .inline_mode = postCheckInlineModeForOpt(opt),
+            .list_in_place_map = listInPlaceMapForOpt(opt),
         },
     );
     defer lowered.deinit();

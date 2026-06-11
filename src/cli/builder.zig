@@ -50,7 +50,9 @@ pub const CompileConfig = struct {
     cpu: []const u8 = "",
     features: []const u8 = "",
     debug: bool = false, // Enable debug info generation in output
+    link_builtins: bool = false,
     pic: bool = false, // Position-independent code (required for shared library output)
+    no_target_libcalls: bool = false,
 
     /// Check if compiling for the current machine
     pub fn isNative(self: CompileConfig) bool {
@@ -122,6 +124,7 @@ const ZigLLVMEmitOptions = extern struct {
     llvm_ir_filename: ?[*:0]const u8,
     bitcode_filename: ?[*:0]const u8,
     coverage: ZigLLVMCoverageOptions,
+    no_target_libcalls: bool,
 };
 
 // LLVM Code Generation Optimization Levels
@@ -177,7 +180,175 @@ const llvm_externs = if (llvm_available) struct {
     extern fn LLVMDisposeModule(module: ?*anyopaque) void;
     extern fn LLVMDisposeTargetMachine(target_machine: ?*anyopaque) void;
     extern fn LLVMSetTarget(module: ?*anyopaque, triple: [*:0]const u8) void;
+    // Functions for linking builtin bitcode into the app module so the optimizer
+    // can inline builtin calls (e.g. list_append_unsafe) instead of leaving them
+    // as opaque external calls.
+    extern fn LLVMCreateMemoryBufferWithMemoryRangeCopy(data: [*]const u8, len: usize, name: [*:0]const u8) ?*anyopaque;
+    extern fn LLVMParseBitcode2(mem_buf: ?*anyopaque, out_module: *?*anyopaque) c_int;
+    extern fn LLVMLinkModules2(dest: ?*anyopaque, src: ?*anyopaque) c_int;
+    extern fn LLVMGetFirstFunction(module: ?*anyopaque) ?*anyopaque;
+    extern fn LLVMGetNextFunction(fn_val: ?*anyopaque) ?*anyopaque;
+    extern fn LLVMGetFirstGlobal(module: ?*anyopaque) ?*anyopaque;
+    extern fn LLVMGetNextGlobal(global: ?*anyopaque) ?*anyopaque;
+    extern fn LLVMGetNamedGlobal(module: ?*anyopaque, name: [*:0]const u8) ?*anyopaque;
+    extern fn LLVMDeleteGlobal(global: ?*anyopaque) void;
+    extern fn LLVMGetValueName2(val: ?*anyopaque, len: *usize) [*]const u8;
+    extern fn LLVMIsDeclaration(global: ?*anyopaque) c_int;
+    extern fn LLVMSetLinkage(global: ?*anyopaque, linkage: c_int) void;
+    extern fn LLVMGetDataLayoutStr(module: ?*anyopaque) [*:0]const u8;
+    extern fn LLVMSetDataLayout(module: ?*anyopaque, data_layout: [*:0]const u8) void;
+    // @export wrappers are GlobalAliases (clean name -> dev_wrappers.* function).
+    // The inliner runs before LLVM resolves aliases, so we resolve them ourselves
+    // (replace uses with the aliasee) before optimization so calls become direct.
+    extern fn LLVMGetFirstGlobalAlias(module: ?*anyopaque) ?*anyopaque;
+    extern fn LLVMGetNextGlobalAlias(alias: ?*anyopaque) ?*anyopaque;
+    extern fn LLVMAliasGetAliasee(alias: ?*anyopaque) ?*anyopaque;
+    extern fn LLVMReplaceAllUsesWith(old_val: ?*anyopaque, new_val: ?*anyopaque) void;
+    // The builtins were compiled with explicit target-cpu/target-features; the app
+    // functions have none, and the inliner refuses to inline a callee whose features
+    // aren't a subset of the caller's. Strip them (the target machine still pins the
+    // CPU/features at codegen) so the builtins become inlinable.
+    extern fn LLVMRemoveStringAttributeAtIndex(fn_val: ?*anyopaque, idx: c_uint, name: [*]const u8, len: c_uint) void;
+    extern fn ZigLLVMRunGlobalDCE(module: ?*anyopaque) void;
 } else struct {};
+
+/// Embedded builtin bitcode. Stubbed out when LLVM is unavailable.
+const llvm_embedded = if (llvm_available) @import("llvm_embedded") else struct {
+    pub const builtins_bc: []const u8 = "";
+    pub const builtins32_bc: []const u8 = "";
+    pub const builtins64_bc: []const u8 = "";
+    pub const builtins32_core_bc: []const u8 = "";
+    pub const builtins64_core_bc: []const u8 = "";
+};
+
+const core_builtin_roots = std.StaticStringMap(void).initComptime(.{
+    .{ "roc__num_add_with_overflow_i128", {} },
+    .{ "roc__num_mul_with_overflow_i16", {} },
+    .{ "roc__num_mul_with_overflow_i32", {} },
+    .{ "roc__num_mul_with_overflow_i64", {} },
+    .{ "roc__num_mul_with_overflow_i8", {} },
+    .{ "roc__num_sub_with_overflow_i128", {} },
+    .{ "roc_builtins_allocate_with_refcount", {} },
+    .{ "roc_builtins_box_decref_with", {} },
+    .{ "roc_builtins_box_decref_with_single_thread", {} },
+    .{ "roc_builtins_box_free_with", {} },
+    .{ "roc_builtins_dbg_str", {} },
+    .{ "roc_builtins_decref_data_ptr", {} },
+    .{ "roc_builtins_decref_data_ptr_single_thread", {} },
+    .{ "roc_builtins_erased_callable_decref", {} },
+    .{ "roc_builtins_erased_callable_decref_single_thread", {} },
+    .{ "roc_builtins_erased_callable_free", {} },
+    .{ "roc_builtins_erased_callable_incref", {} },
+    .{ "roc_builtins_free_data_ptr", {} },
+    .{ "roc_builtins_i16_mod_by", {} },
+    .{ "roc_builtins_i32_mod_by", {} },
+    .{ "roc_builtins_i64_mod_by", {} },
+    .{ "roc_builtins_i8_mod_by", {} },
+    .{ "roc_builtins_incref_data_ptr", {} },
+    .{ "roc_builtins_incref_data_ptr_single_thread", {} },
+    .{ "roc_builtins_int_from_str", {} },
+    .{ "roc_builtins_int_to_str", {} },
+    .{ "roc_builtins_list_append_unsafe", {} },
+    .{ "roc_builtins_list_concat", {} },
+    .{ "roc_builtins_list_decref_flat_list", {} },
+    .{ "roc_builtins_list_decref_str", {} },
+    .{ "roc_builtins_list_decref_with", {} },
+    .{ "roc_builtins_list_decref_with_single_thread", {} },
+    .{ "roc_builtins_list_drop_at", {} },
+    .{ "roc_builtins_list_eq", {} },
+    .{ "roc_builtins_list_free_flat_list", {} },
+    .{ "roc_builtins_list_free_with", {} },
+    .{ "roc_builtins_list_incref", {} },
+    .{ "roc_builtins_list_incref_single_thread", {} },
+    .{ "roc_builtins_list_list_eq", {} },
+    .{ "roc_builtins_list_prepend", {} },
+    .{ "roc_builtins_list_release_excess_capacity", {} },
+    .{ "roc_builtins_list_replace", {} },
+    .{ "roc_builtins_list_reserve", {} },
+    .{ "roc_builtins_list_reverse", {} },
+    .{ "roc_builtins_list_str_eq", {} },
+    .{ "roc_builtins_list_sublist", {} },
+    .{ "roc_builtins_list_swap", {} },
+    .{ "roc_builtins_list_with_capacity", {} },
+    .{ "roc_builtins_roc_crashed", {} },
+    .{ "roc_builtins_roc_expect_failed", {} },
+    .{ "roc_builtins_str_caseless_ascii_equals", {} },
+    .{ "roc_builtins_str_concat", {} },
+    .{ "roc_builtins_str_contains", {} },
+    .{ "roc_builtins_str_count_utf8_bytes", {} },
+    .{ "roc_builtins_str_drop_prefix", {} },
+    .{ "roc_builtins_str_drop_suffix", {} },
+    .{ "roc_builtins_str_ends_with", {} },
+    .{ "roc_builtins_str_equal", {} },
+    .{ "roc_builtins_str_escape_and_quote", {} },
+    .{ "roc_builtins_str_from_literal", {} },
+    .{ "roc_builtins_str_from_utf8", {} },
+    .{ "roc_builtins_str_from_utf8_lossy", {} },
+    .{ "roc_builtins_str_from_utf8_parts", {} },
+    .{ "roc_builtins_str_from_utf8_result", {} },
+    .{ "roc_builtins_str_join_with", {} },
+    .{ "roc_builtins_str_release_excess_capacity", {} },
+    .{ "roc_builtins_str_repeat", {} },
+    .{ "roc_builtins_str_reserve", {} },
+    .{ "roc_builtins_str_split", {} },
+    .{ "roc_builtins_str_starts_with", {} },
+    .{ "roc_builtins_str_to_utf8", {} },
+    .{ "roc_builtins_str_trim", {} },
+    .{ "roc_builtins_str_trim_end", {} },
+    .{ "roc_builtins_str_trim_start", {} },
+    .{ "roc_builtins_str_with_ascii_lowercased", {} },
+    .{ "roc_builtins_str_with_ascii_uppercased", {} },
+    .{ "roc_builtins_str_with_capacity", {} },
+    .{ "roc_builtins_u16_mod_by", {} },
+    .{ "roc_builtins_u32_mod_by", {} },
+    .{ "roc_builtins_u64_mod_by", {} },
+    .{ "roc_builtins_u8_mod_by", {} },
+});
+
+fn isBuiltinRoot(name: []const u8) bool {
+    return std.mem.startsWith(u8, name, "roc_builtins_") or std.mem.startsWith(u8, name, "roc__num_");
+}
+
+fn canUseCoreBuiltins(app_decls: *const std.StringHashMap(void)) bool {
+    var roots = app_decls.keyIterator();
+    while (roots.next()) |root| {
+        if (isBuiltinRoot(root.*) and !core_builtin_roots.has(root.*)) return false;
+    }
+    return true;
+}
+
+fn selectBuiltinBitcode(ptr_width: u16, app_decls: *const std.StringHashMap(void)) []const u8 {
+    const use_core = canUseCoreBuiltins(app_decls);
+    return switch (ptr_width) {
+        32 => if (use_core) llvm_embedded.builtins32_core_bc else llvm_embedded.builtins32_bc,
+        64 => if (use_core) llvm_embedded.builtins64_core_bc else llvm_embedded.builtins64_bc,
+        else => "",
+    };
+}
+
+test "core builtin roots include common LLVM declarations" {
+    const common_roots = [_][]const u8{
+        "roc_builtins_int_to_str",
+        "roc_builtins_int_from_str",
+        "roc_builtins_list_incref_single_thread",
+        "roc_builtins_list_decref_with_single_thread",
+        "roc_builtins_incref_data_ptr_single_thread",
+        "roc_builtins_decref_data_ptr_single_thread",
+        "roc_builtins_box_decref_with_single_thread",
+        "roc_builtins_erased_callable_decref_single_thread",
+    };
+
+    for (common_roots) |root| {
+        try std.testing.expect(core_builtin_roots.has(root));
+    }
+}
+
+/// LLVM-C linkage value for `internal`: a local definition, never an exported
+/// symbol, and discarded by global DCE when unused.
+const LLVMInternalLinkage: c_int = 8;
+
+/// LLVM-C attribute index for function-level attributes (`~0U`).
+const LLVMAttributeFunctionIndex: c_uint = 0xFFFFFFFF;
 
 // LLVM archive kinds (object::Archive::Kind)
 const LLVMArchiveKindGNU: c_int = 0;
@@ -217,7 +388,6 @@ pub fn writeStaticArchive(
         return error.ArchiveWriteFailed;
     }
 }
-
 /// Initialize LLVM targets (must be called once before using LLVM)
 pub fn initializeLLVM() void {
     if (comptime !llvm_available) {
@@ -289,6 +459,164 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
     externs.LLVMSetTarget(module, target_triple_z.ptr);
     std.log.debug("Target triple set successfully", .{});
 
+    // LLVM builds link builtin bitcode before optimization and emit the used
+    // builtin definitions from the merged app object. There is no roc_builtins.o
+    // in LLVM final links, so builtin definitions remain real definitions (not
+    // available_externally). Builtin aliases and definitions are internalized
+    // after app references are resolved so LLVM and the final linker can remove
+    // unused builtin code.
+    if (config.link_builtins) {
+        var app_defs = std.StringHashMap(void).init(gpa);
+        defer {
+            var keys = app_defs.keyIterator();
+            while (keys.next()) |k| gpa.free(k.*);
+            app_defs.deinit();
+        }
+
+        var app_decls = std.StringHashMap(void).init(gpa);
+        defer {
+            var keys = app_decls.keyIterator();
+            while (keys.next()) |k| gpa.free(k.*);
+            app_decls.deinit();
+        }
+
+        var pre_func = externs.LLVMGetFirstFunction(module);
+        while (pre_func) |fv| : (pre_func = externs.LLVMGetNextFunction(fv)) {
+            var name_len: usize = 0;
+            const name_ptr = externs.LLVMGetValueName2(fv, &name_len);
+            const name_slice = name_ptr[0..name_len];
+            const name = try gpa.dupe(u8, name_slice);
+            errdefer gpa.free(name);
+            if (externs.LLVMIsDeclaration(fv) != 0) {
+                try app_decls.put(name, {});
+            } else {
+                try app_defs.put(name, {});
+            }
+        }
+
+        var pre_global = externs.LLVMGetFirstGlobal(module);
+        while (pre_global) |gv| : (pre_global = externs.LLVMGetNextGlobal(gv)) {
+            var name_len: usize = 0;
+            const name_ptr = externs.LLVMGetValueName2(gv, &name_len);
+            const name_slice = name_ptr[0..name_len];
+            const name = try gpa.dupe(u8, name_slice);
+            errdefer gpa.free(name);
+            if (externs.LLVMIsDeclaration(gv) != 0) {
+                try app_decls.put(name, {});
+            } else {
+                try app_defs.put(name, {});
+            }
+        }
+
+        var pre_alias = externs.LLVMGetFirstGlobalAlias(module);
+        while (pre_alias) |av| : (pre_alias = externs.LLVMGetNextGlobalAlias(av)) {
+            var name_len: usize = 0;
+            const name_ptr = externs.LLVMGetValueName2(av, &name_len);
+            const name = try gpa.dupe(u8, name_ptr[0..name_len]);
+            errdefer gpa.free(name);
+            try app_defs.put(name, {});
+        }
+
+        const builtins_bc = selectBuiltinBitcode(config.target.ptrBitWidth(), &app_decls);
+        if (builtins_bc.len == 0) {
+            std.log.err("No embedded builtin bitcode for {d}-bit target pointers", .{config.target.ptrBitWidth()});
+            return false;
+        }
+
+        const bc_buf = externs.LLVMCreateMemoryBufferWithMemoryRangeCopy(builtins_bc.ptr, builtins_bc.len, "roc_builtins_bc");
+        var builtins_module: ?*anyopaque = null;
+        if (externs.LLVMParseBitcode2(bc_buf, &builtins_module) == 0) {
+            externs.LLVMSetTarget(builtins_module, target_triple_z.ptr);
+            externs.LLVMSetDataLayout(builtins_module, externs.LLVMGetDataLayoutStr(module));
+            if (externs.LLVMGetNamedGlobal(builtins_module, "llvm.used")) |used| {
+                externs.LLVMDeleteGlobal(used);
+            }
+            if (externs.LLVMGetNamedGlobal(builtins_module, "llvm.compiler.used")) |compiler_used| {
+                externs.LLVMDeleteGlobal(compiler_used);
+            }
+
+            var builtin_alias = externs.LLVMGetFirstGlobalAlias(builtins_module);
+            while (builtin_alias) |a| : (builtin_alias = externs.LLVMGetNextGlobalAlias(a)) {
+                var name_len: usize = 0;
+                const name_ptr = externs.LLVMGetValueName2(a, &name_len);
+                if (!app_decls.contains(name_ptr[0..name_len])) {
+                    externs.LLVMSetLinkage(a, LLVMInternalLinkage);
+                }
+            }
+
+            var builtin_func = externs.LLVMGetFirstFunction(builtins_module);
+            while (builtin_func) |fv| : (builtin_func = externs.LLVMGetNextFunction(fv)) {
+                if (externs.LLVMIsDeclaration(fv) != 0) continue;
+                externs.LLVMRemoveStringAttributeAtIndex(fv, LLVMAttributeFunctionIndex, "target-features", "target-features".len);
+                externs.LLVMRemoveStringAttributeAtIndex(fv, LLVMAttributeFunctionIndex, "target-cpu", "target-cpu".len);
+
+                var name_len: usize = 0;
+                const name_ptr = externs.LLVMGetValueName2(fv, &name_len);
+                if (!app_decls.contains(name_ptr[0..name_len])) {
+                    externs.LLVMSetLinkage(fv, LLVMInternalLinkage);
+                }
+            }
+
+            var builtin_global = externs.LLVMGetFirstGlobal(builtins_module);
+            while (builtin_global) |gv| : (builtin_global = externs.LLVMGetNextGlobal(gv)) {
+                if (externs.LLVMIsDeclaration(gv) != 0) continue;
+                var name_len: usize = 0;
+                const name_ptr = externs.LLVMGetValueName2(gv, &name_len);
+                if (!app_decls.contains(name_ptr[0..name_len])) {
+                    externs.LLVMSetLinkage(gv, LLVMInternalLinkage);
+                }
+            }
+
+            externs.ZigLLVMRunGlobalDCE(builtins_module);
+            if (externs.LLVMLinkModules2(module, builtins_module) == 0) {
+                // Resolve @export aliases (clean builtin name -> dev_wrappers.* fn)
+                // so calls target the real function directly and can be inlined.
+                var alias = externs.LLVMGetFirstGlobalAlias(module);
+                while (alias) |a| : (alias = externs.LLVMGetNextGlobalAlias(a)) {
+                    var name_len: usize = 0;
+                    const name_ptr = externs.LLVMGetValueName2(a, &name_len);
+                    if (app_defs.contains(name_ptr[0..name_len])) continue;
+                    if (externs.LLVMAliasGetAliasee(a)) |aliasee| {
+                        externs.LLVMReplaceAllUsesWith(a, aliasee);
+                    }
+                    externs.LLVMSetLinkage(a, LLVMInternalLinkage);
+                }
+
+                var post_func = externs.LLVMGetFirstFunction(module);
+                while (post_func) |fv| : (post_func = externs.LLVMGetNextFunction(fv)) {
+                    if (externs.LLVMIsDeclaration(fv) != 0) continue;
+                    var name_len: usize = 0;
+                    const name_ptr = externs.LLVMGetValueName2(fv, &name_len);
+                    if (!app_defs.contains(name_ptr[0..name_len])) {
+                        // Strip target-cpu/target-features so the inliner considers
+                        // the builtin compatible with the app functions. The target
+                        // machine still controls CPU/features at codegen.
+                        externs.LLVMRemoveStringAttributeAtIndex(fv, LLVMAttributeFunctionIndex, "target-features", "target-features".len);
+                        externs.LLVMRemoveStringAttributeAtIndex(fv, LLVMAttributeFunctionIndex, "target-cpu", "target-cpu".len);
+                        externs.LLVMSetLinkage(fv, LLVMInternalLinkage);
+                    }
+                }
+
+                var post_global = externs.LLVMGetFirstGlobal(module);
+                while (post_global) |gv| : (post_global = externs.LLVMGetNextGlobal(gv)) {
+                    if (externs.LLVMIsDeclaration(gv) != 0) continue;
+                    var name_len: usize = 0;
+                    const name_ptr = externs.LLVMGetValueName2(gv, &name_len);
+                    if (!app_defs.contains(name_ptr[0..name_len])) {
+                        externs.LLVMSetLinkage(gv, LLVMInternalLinkage);
+                    }
+                }
+                externs.ZigLLVMRunGlobalDCE(module);
+            } else {
+                std.log.err("Failed to link builtin bitcode into app module", .{});
+                return false;
+            }
+        } else {
+            std.log.err("Failed to parse builtin bitcode", .{});
+            return false;
+        }
+    }
+
     // 5. Create target
     std.log.debug("Getting LLVM target for triple: {s}", .{target_triple});
     var llvm_target: ?*anyopaque = null;
@@ -314,8 +642,8 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
         config.optimization.toLLVMCodeGenLevel(),
         if (config.pic) LLVMRelocPIC else LLVMRelocDefault,
         LLVMCodeModelDefault,
-        false, // function_sections
-        false, // data_sections
+        true, // function_sections
+        true, // data_sections
         .ZigLLVMABITypeDefault, // float_abi
         null, // abi_name
         false, // emulated_tls
@@ -353,6 +681,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
         .llvm_ir_filename = null,
         .bitcode_filename = null,
         .coverage = coverage_options,
+        .no_target_libcalls = config.no_target_libcalls,
     };
 
     const emit_result = externs.ZigLLVMTargetMachineEmitToFile(
