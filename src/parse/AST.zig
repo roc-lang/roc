@@ -662,6 +662,11 @@ pub const Diagnostic = struct {
         expected_provides_open_square,
         expected_provides_close_curly,
         expected_provides_open_curly,
+        expected_symbol_string,
+        expected_symbol_map_colon,
+        expected_symbol_map_function,
+        expected_hosted_open_curly,
+        expected_hosted_close_curly,
         expected_requires,
         expected_requires_rigids_open_curly,
         expected_requires_signatures_close_curly,
@@ -1762,7 +1767,8 @@ pub const Header = union(enum) {
         requires_entries: RequiresEntry.Span, // [Model : model] for main : () -> { ... }
         exposes: Collection.Idx,
         packages: Collection.Idx,
-        provides: Collection.Idx,
+        provides: SymbolMapEntry.Span, // provides { "roc_main": main_for_host! }
+        hosted: SymbolMapEntry.Span, // hosted { "roc_stdout_line": Stdout.line! }
         targets: ?TargetsSection.Idx, // Required for new platforms, optional during migration
         region: TokenizedRegion,
     },
@@ -1951,17 +1957,52 @@ pub const Header = union(enum) {
                 try tree.endNode(packages_begin, attrs5);
 
                 // Provides
-                const provides = ast.store.getCollection(a.provides);
-                const provides_items = ast.store.recordFieldSlice(.{ .span = provides.span });
                 const provides_begin = tree.beginNode();
                 try tree.pushStaticAtom("provides");
-                try ast.appendRegionInfoToSexprTree(env, tree, provides.region);
                 const attrs6 = tree.beginNode();
-                for (provides_items) |item_idx| {
-                    const item = ast.store.getRecordField(item_idx);
-                    try item.pushToSExprTree(gpa, env, ast, tree);
+                for (ast.store.symbolMapEntrySlice(a.provides)) |entry_idx| {
+                    const entry = ast.store.getSymbolMapEntry(entry_idx);
+                    const entry_begin = tree.beginNode();
+                    try tree.pushStaticAtom("symbol-map-entry");
+                    try tree.pushStringPair("symbol", ast.resolve(entry.symbol));
+                    if (entry.module) |module_tok| {
+                        try tree.pushStringPair("module", ast.resolve(module_tok));
+                    }
+                    try tree.pushStringPair("func", ast.resolve(entry.func));
+                    const entry_attrs = tree.beginNode();
+                    try tree.endNode(entry_begin, entry_attrs);
                 }
                 try tree.endNode(provides_begin, attrs6);
+
+                // Hosted
+                if (a.hosted.span.len > 0) {
+                    const hosted_begin = tree.beginNode();
+                    try tree.pushStaticAtom("hosted");
+                    const attrs7 = tree.beginNode();
+                    for (ast.store.symbolMapEntrySlice(a.hosted)) |entry_idx| {
+                        const entry = ast.store.getSymbolMapEntry(entry_idx);
+                        const entry_begin = tree.beginNode();
+                        try tree.pushStaticAtom("symbol-map-entry");
+                        try tree.pushStringPair("symbol", ast.resolve(entry.symbol));
+                        if (entry.module) |module_tok| {
+                            try tree.pushStringPair("module", ast.resolve(module_tok));
+                        }
+                        // Functions on nested type modules span several
+                        // tokens (Foo.Idx.get!); cover everything after the
+                        // module, stripping the leading dot.
+                        const func_text = blk: {
+                            const module_tok = entry.module orelse break :blk ast.resolve(entry.func);
+                            if (entry.func == module_tok + 1) break :blk ast.resolve(entry.func);
+                            const first = ast.tokens.resolve(module_tok + 1);
+                            const last = ast.tokens.resolve(entry.func);
+                            break :blk ast.env.source[first.start.offset + 1 .. last.end.offset];
+                        };
+                        try tree.pushStringPair("func", func_text);
+                        const entry_attrs = tree.beginNode();
+                        try tree.endNode(entry_begin, entry_attrs);
+                    }
+                    try tree.endNode(hosted_begin, attrs7);
+                }
 
                 try tree.endNode(begin, attrs);
             },
@@ -2158,6 +2199,18 @@ pub const TargetsSection = struct {
     region: TokenizedRegion,
 
     pub const Idx = enum(u32) { _ };
+};
+
+/// An entry mapping a linker symbol string to a platform function:
+/// `"roc_main": main_for_host!` (provides) or `"roc_stdout_line": Stdout.line!` (hosted)
+pub const SymbolMapEntry = struct {
+    symbol: Token.Idx, // StringPart token holding the linker symbol text
+    module: ?Token.Idx, // UpperIdent for qualified functions (e.g. Stdout); null for bare ones
+    func: Token.Idx, // LowerIdent (or NoSpaceDotLowerIdent when qualified) naming the function
+    region: TokenizedRegion,
+
+    pub const Idx = enum(u32) { _ };
+    pub const Span = struct { span: base.DataSpan };
 };
 
 /// Single target entry: x64musl: { inputs: ["crt1.o", "host.o", app], output: Exe }

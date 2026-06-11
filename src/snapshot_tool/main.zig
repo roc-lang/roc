@@ -3951,7 +3951,7 @@ fn snapshotNativeEntrypoints(
         }
 
         const entrypoint_name = snapshotProvidedEntrypointName(root_artifact, root);
-        const symbol_name = try std.fmt.allocPrint(allocator, "roc__{s}", .{entrypoint_name});
+        const symbol_name = try allocator.dupe(u8, entrypoint_name);
         var symbol_name_owned = true;
         errdefer if (symbol_name_owned) allocator.free(symbol_name);
 

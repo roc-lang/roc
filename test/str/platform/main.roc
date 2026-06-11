@@ -5,7 +5,7 @@ platform ""
     # Helper imports Core and Utils; Core imports Utils
     exposes [Helper, Core, Utils]
     packages {}
-    provides { process_string_for_host: "process_string" }
+    provides { "roc_process_string": process_string_for_host }
     targets: {
         inputs: "targets/",
         x64mac: { inputs: ["libhost.a", app] },

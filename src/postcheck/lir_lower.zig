@@ -218,19 +218,21 @@ const Lowerer = struct {
                 .body = null,
                 .ret_layout = try self.layoutOfType(fn_.ret),
                 .abi = if (self.usesErasedCallableAbi(fn_)) .erased_callable else .roc,
-                .hosted = hostedProcForFn(fn_),
+                .hosted = try self.hostedProcForFn(fn_),
             });
             self.fn_map[index] = proc_id;
         }
     }
 
-    fn hostedProcForFn(fn_: LambdaMono.Fn) ?LIR.HostedProc {
+    fn hostedProcForFn(self: *Lowerer, fn_: LambdaMono.Fn) Common.LowerError!?LIR.HostedProc {
         const source = fn_.source orelse return null;
         return switch (source.fn_def) {
             .local_hosted,
             .imported_hosted,
             => |hosted| .{
-                .external_symbol_name = hosted.external_symbol_name,
+                .symbol = try self.result.store.insertString(
+                    self.program.names.externalSymbolNameText(hosted.external_symbol_name),
+                ),
                 .dispatch_index = hosted.dispatch_index,
             },
             else => null,

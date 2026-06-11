@@ -497,7 +497,7 @@ test "platform provides entries are extracted" {
         \\    requires {} { main! : () => {} }
         \\    exposes []
         \\    packages {}
-        \\    provides { main_for_host!: "main" }
+        \\    provides { "roc_main": main_for_host! }
     ;
     var env = try ModuleEnv.init(allocator, source);
     defer env.deinit();
@@ -519,7 +519,7 @@ test "platform provides entries are extracted" {
     const ident_text = env.getIdent(entry.ident);
     const ffi_text = env.getString(entry.ffi_symbol);
     try testing.expectEqualStrings("main_for_host!", ident_text);
-    try testing.expectEqualStrings("main", ffi_text);
+    try testing.expectEqualStrings("roc_main", ffi_text);
 }
 
 test "platform provides entries with multiple entries" {
@@ -531,7 +531,7 @@ test "platform provides entries with multiple entries" {
         \\    requires {} { main! : () => {} }
         \\    exposes []
         \\    packages {}
-        \\    provides { init_for_host: "init", update_for_host: "update" }
+        \\    provides { "roc_init": init_for_host, "roc_update": update_for_host }
     ;
     var env = try ModuleEnv.init(allocator, source);
     defer env.deinit();
@@ -556,7 +556,7 @@ test "platform provides entries with multiple entries" {
     const ffi1 = env.getString(entries[1].ffi_symbol);
 
     try testing.expectEqualStrings("init_for_host", ident0);
-    try testing.expectEqualStrings("init", ffi0);
+    try testing.expectEqualStrings("roc_init", ffi0);
     try testing.expectEqualStrings("update_for_host", ident1);
-    try testing.expectEqualStrings("update", ffi1);
+    try testing.expectEqualStrings("roc_update", ffi1);
 }

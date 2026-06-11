@@ -1636,7 +1636,7 @@ generate_entrypoint_externs = |provides_list, type_table| {
 
 		$result = Str.concat(
 			$result,
-			"/// Entrypoint: ${entry.name}\npub extern fn roc__${entry.ffi_symbol}(ops: *RocOps, ret_ptr: ${ret_type}, arg_ptr: ${arg_type}) callconv(.c) void;\n\n",
+			"/// Entrypoint: ${entry.name}\npub extern fn ${entry.ffi_symbol}(ops: *RocOps, ret_ptr: ${ret_type}, arg_ptr: ${arg_type}) callconv(.c) void;\n\n",
 		)
 	}
 

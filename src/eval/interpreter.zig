@@ -2944,7 +2944,6 @@ pub const Interpreter = struct {
         }
 
         const hosted_fn = self.roc_ops.hosted_fns.fns[hosted.dispatch_index];
-        const ops_for_host = self.currentRocOps();
 
         // Call the hosted function with the platform C ABI via the fixed register-image
         // trampoline (no runtime code generation).
@@ -2954,7 +2953,6 @@ pub const Interpreter = struct {
             self.layout_store,
             arena_state.allocator(),
             @ptrCast(hosted_fn),
-            ops_for_host,
             arg_layouts,
             ret_layout,
             args_buf.ptr,

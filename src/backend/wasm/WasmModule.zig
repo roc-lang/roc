@@ -2033,8 +2033,14 @@ pub const NoLinkObjectContractError = error{
 };
 
 /// Verify that a no-link app object exposes only app definitions and wasm object ABI imports.
+/// Function imports are the wasm object encoding of undefined symbols; under
+/// the symbol ABI the app object legitimately references the platform's
+/// runtime and hosted symbols, so `env` function imports are permitted and
+/// resolve at final link (or stay imports in hostless archives).
 pub fn verifyNoLinkObjectContract(self: *const Self) NoLinkObjectContractError!void {
-    if (self.imports.items.len != 0) return error.UnexpectedFunctionImport;
+    for (self.imports.items) |imp| {
+        if (!std.mem.eql(u8, imp.module_name, "env")) return error.UnexpectedFunctionImport;
+    }
 
     for (self.global_imports.items) |imp| {
         if (!std.mem.eql(u8, imp.module_name, "env") or !isAllowedObjectAbiGlobal(imp.field_name)) {
@@ -2054,7 +2060,7 @@ pub fn verifyNoLinkObjectContract(self: *const Self) NoLinkObjectContractError!v
         if (!sym.isUndefined()) continue;
         const name = sym.resolveName(self.imports.items, self.global_imports.items, self.table_imports.items) orelse return error.UnexpectedUndefinedSymbol;
         switch (sym.kind) {
-            .function => return error.UnexpectedUndefinedFunctionSymbol,
+            .function => {},
             .global => if (!isAllowedObjectAbiGlobal(name)) return error.UnexpectedUndefinedSymbol,
             .table => if (!std.mem.eql(u8, name, "__indirect_function_table")) return error.UnexpectedUndefinedSymbol,
             .data, .section, .event => return error.UnexpectedUndefinedSymbol,
@@ -2326,7 +2332,8 @@ pub fn exportGlobalSymbols(self: *Self) Allocator.Error!void {
         if (sym.kind != .function or sym.isUndefined() or sym.isLocal()) continue;
         if ((sym.flags & WasmLinking.SymFlag.VISIBILITY_HIDDEN) != 0) continue;
         const name = sym.name orelse continue;
-        // Skip roc__ symbols (handled by linkHostToAppCalls).
+        // Skip roc-internal symbols (roc__proc_*, roc__num_*); entrypoints use
+        // the literal provides symbols and are exported like any host export.
         if (std.mem.startsWith(u8, name, "roc__")) continue;
         // Avoid duplicate exports.
         var already_exported = false;
@@ -4494,10 +4501,10 @@ test "preload — parses real Zig-compiled wasm host object" {
     // Should have relocation entries for code
     try std.testing.expect(module.reloc_code.entries.items.len > 0);
 
-    // The host imports roc__main — verify we can find it by name
+    // The host imports the app's roc_main entrypoint — verify we can find it by name
     var found_roc_main = false;
     for (module.imports.items) |imp| {
-        if (std.mem.eql(u8, imp.field_name, "roc__main")) {
+        if (std.mem.eql(u8, imp.field_name, "roc_main")) {
             found_roc_main = true;
             break;
         }
@@ -5698,7 +5705,9 @@ test "verifyNoLinkObjectContract - rejects undefined Roc builtin function symbol
         .index = 0,
     });
 
-    try std.testing.expectError(error.UnexpectedUndefinedFunctionSymbol, module.verifyNoLinkObjectContract());
+    // Undefined function symbols are the object encoding of symbol-ABI
+    // references; they are permitted.
+    try module.verifyNoLinkObjectContract();
 }
 
 test "verifyNoLinkObjectContract - rejects function imports and non-env ABI imports" {
@@ -5710,6 +5719,17 @@ test "verifyNoLinkObjectContract - rejects function imports and non-env ABI impo
 
         const type_idx = try module.addFuncType(&.{}, &.{});
         _ = try module.addFunctionImportWithSymbol("env", "roc_alloc", type_idx);
+
+        // Symbol-ABI references to platform symbols are env function imports.
+        try module.verifyNoLinkObjectContract();
+    }
+
+    {
+        var module = Self.init(allocator);
+        defer module.deinit();
+
+        const type_idx = try module.addFuncType(&.{}, &.{});
+        _ = try module.addFunctionImportWithSymbol("not_env", "roc_alloc", type_idx);
 
         try std.testing.expectError(error.UnexpectedFunctionImport, module.verifyNoLinkObjectContract());
     }

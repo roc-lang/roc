@@ -705,7 +705,7 @@ test "validatePlatformHasTargets detects missing targets section" {
         \\    requires { main : {} }
         \\    exposes []
         \\    packages {}
-        \\    provides { main_for_host: "main" }
+        \\    provides { "roc_main": main_for_host }
         \\
     ;
 
@@ -740,7 +740,7 @@ test "validatePlatformHasTargets accepts platform with targets section" {
         \\    requires { main : {} }
         \\    exposes []
         \\    packages {}
-        \\    provides { main_for_host: "main" }
+        \\    provides { "roc_main": main_for_host }
         \\    targets: {
         \\        x64linux: { inputs: [app] },
         \\        arm64linux: { inputs: [app] },
@@ -797,7 +797,7 @@ test "validatePlatformHasTargets accepts platform with multiple target types" {
         \\    requires { main : {} }
         \\    exposes []
         \\    packages {}
-        \\    provides { main_for_host: "main" }
+        \\    provides { "roc_main": main_for_host }
         \\    targets: {
         \\        inputs: "targets/",
         \\        x64linux: { inputs: ["host.o", app] },
@@ -830,7 +830,7 @@ test "validatePlatformHasTargets accepts platform with win_gui target" {
         \\    requires { main : {} }
         \\    exposes []
         \\    packages {}
-        \\    provides { main_for_host: "main" }
+        \\    provides { "roc_main": main_for_host }
         \\    targets: {
         \\        x64win: { inputs: [win_gui] },
         \\    }
@@ -860,7 +860,7 @@ test "TargetsConfig.fromAST extracts targets configuration" {
         \\    requires { main : {} }
         \\    exposes []
         \\    packages {}
-        \\    provides { main_for_host: "main" }
+        \\    provides { "roc_main": main_for_host }
         \\    targets: {
         \\        inputs: "targets/",
         \\        x64linux: { inputs: ["host.o", app] },

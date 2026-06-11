@@ -8,7 +8,7 @@ platform ""
     }
     exposes [Simple]
     packages {}
-    provides { init_for_host: "init", update_for_host: "update", render_for_host: "render", test_mixed_args_for_host: "test_mixed_args", test_struct_arg_for_host: "test_struct_arg", test_effectful_struct_arg_for_host!: "test_effectful_struct_arg", test_simple_pure_for_host: "test_simple_pure", test_simple_effectful_for_host!: "test_simple_effectful", test_three_floats_pure_for_host: "test_three_floats_pure", test_three_floats_effectful_for_host!: "test_three_floats_effectful" }
+    provides { "roc_init": init_for_host, "roc_update": update_for_host, "roc_render": render_for_host, "roc_test_mixed_args": test_mixed_args_for_host, "roc_test_struct_arg": test_struct_arg_for_host, "roc_test_effectful_struct_arg": test_effectful_struct_arg_for_host!, "roc_test_simple_pure": test_simple_pure_for_host, "roc_test_simple_effectful": test_simple_effectful_for_host!, "roc_test_three_floats_pure": test_three_floats_pure_for_host, "roc_test_three_floats_effectful": test_three_floats_effectful_for_host! }
     targets: {
         inputs: "targets/",
         x64mac: { inputs: ["libhost.a", app] },

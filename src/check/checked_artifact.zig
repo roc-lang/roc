@@ -18132,7 +18132,7 @@ test "provided primitive constant is a data export, not a runtime root" {
         \\    requires {}
         \\    exposes []
         \\    packages {}
-        \\    provides { answer_for_host: "answer" }
+        \\    provides { "roc_answer": answer_for_host }
         \\
         \\answer_for_host : I64
         \\answer_for_host = 42
@@ -18151,7 +18151,7 @@ test "provided nested record constant is a data export, not a runtime root" {
         \\    requires {}
         \\    exposes []
         \\    packages {}
-        \\    provides { profile_for_host: "profile" }
+        \\    provides { "roc_profile": profile_for_host }
         \\
         \\profile_for_host : {
         \\    user : { name : Str, scores : List(I64) },
@@ -18176,7 +18176,7 @@ test "provided nested heap constant is a data export, not a runtime root" {
         \\    requires {}
         \\    exposes []
         \\    packages {}
-        \\    provides { table_for_host: "table" }
+        \\    provides { "roc_table": table_for_host }
         \\
         \\table_for_host : List(List(Str))
         \\table_for_host = [
@@ -18199,7 +18199,7 @@ test "provided recursive nominal constant is a data export, not a runtime root" 
         \\    requires {}
         \\    exposes []
         \\    packages {}
-        \\    provides { tree_for_host: "tree" }
+        \\    provides { "roc_tree": tree_for_host }
         \\
         \\Tree := [Leaf(I64), Node(Tree, Tree)]
         \\
@@ -18226,7 +18226,7 @@ test "provided callable-containing record constant is a data export, not a runti
         \\    requires {}
         \\    exposes []
         \\    packages {}
-        \\    provides { table_for_host: "table" }
+        \\    provides { "roc_table": table_for_host }
         \\
         \\I64ToI64 : I64 -> I64
         \\
@@ -18247,7 +18247,7 @@ test "provided procedure remains a runtime root" {
         \\    requires {}
         \\    exposes []
         \\    packages {}
-        \\    provides { add_one_for_host: "add_one" }
+        \\    provides { "roc_add_one": add_one_for_host }
         \\
         \\add_one_for_host : I64 -> I64
         \\add_one_for_host = |value| value + 1

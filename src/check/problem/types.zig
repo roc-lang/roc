@@ -45,6 +45,7 @@ pub const Problem = union(enum) {
     annotation_only_value: AnnotationOnlyValue,
     hosted_unboxed_function: HostedUnboxedFunction,
     platform_def_not_found: PlatformDefNotFound,
+    platform_hosted_section: PlatformHostedSection,
     platform_alias_not_found: PlatformAliasNotFound,
     comptime_crash: ComptimeCrash,
     comptime_invalid_numeral: ComptimeInvalidNumeral,
@@ -68,7 +69,28 @@ pub const PlatformAliasNotFound = struct {
     ctx: enum { not_found, found_but_not_alias },
 };
 
-/// Error for when a platform expects an alias to be defined, but it's not there
+/// The platform's hosted section disagrees with the hosted functions its
+/// exposed type modules declare, or maps a function to an invalid linker symbol.
+pub const PlatformHostedSection = struct {
+    /// The qualified function name or linker symbol the problem is about
+    name: ExtraStringIdx,
+    reason: enum {
+        /// A hosted function is missing from the hosted section
+        function_not_in_section,
+        /// A section entry names a function that is not a hosted function
+        unknown_function,
+        /// Two section entries name the same hosted function
+        duplicate_function,
+        /// Two hosted/provides entries use the same linker symbol
+        duplicate_symbol,
+        /// The symbol is one of the fixed runtime symbols (the roc_alloc family)
+        reserved_symbol,
+        /// The symbol starts with the internal roc__ namespace prefix
+        reserved_prefix,
+    },
+};
+
+/// Error for when a platform expects a def to be defined, but it's not there
 pub const PlatformDefNotFound = struct {
     expected_def_ident: Ident.Idx,
     ctx: enum { not_found, found_but_not_exported },

@@ -262,6 +262,7 @@ fn runEchoView(
     var hosted_fn_array = [_]HostedFn{echo_platform.host_abi.hostedFn(&echo_platform.echoHostedFn)};
     var echo_env: echo_platform.EchoEnv = .{ .std_io = std_io };
     var roc_ops = echo_platform.makeDefaultRocOps(&echo_env, &hosted_fn_array);
+    echo_platform.g_roc_ops = &roc_ops;
     var cli_args_list = try echo_platform.buildCliArgs(&.{}, &roc_ops);
     var result_buf: [16]u8 align(16) = undefined;
 

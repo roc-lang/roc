@@ -688,7 +688,7 @@ inline fn free_ptr_to_refcount(
     const allocation_alignment = @max(ptr_width, element_alignment);
 
     // NOTE: we don't even check whether the refcount is "infinity" here!
-    roc_ops.roc_dealloc(roc_ops, allocation_ptr, allocation_alignment);
+    roc_ops.dealloc(allocation_ptr, allocation_alignment);
 }
 
 inline fn decref_ptr_to_refcount(
@@ -903,7 +903,7 @@ pub fn allocateWithRefcount(
     const extra_bytes = @max(required_space, element_alignment);
     const length = extra_bytes + data_bytes;
 
-    const new_bytes = @as([*]u8, @ptrCast(roc_ops.roc_alloc(roc_ops, length, alignment)));
+    const new_bytes = @as([*]u8, @ptrCast(roc_ops.tryAlloc(length, alignment)));
 
     const data_ptr = new_bytes + extra_bytes;
 
@@ -951,7 +951,7 @@ pub fn unsafeReallocate(
     // Use the same alignment calculation as allocateWithRefcount
     const allocation_alignment = @max(ptr_width, element_alignment);
 
-    const reallocated = roc_ops.roc_realloc(roc_ops, old_allocation, new_width, allocation_alignment);
+    const reallocated = roc_ops.tryRealloc(old_allocation, new_width, allocation_alignment);
 
     const new_source = @as([*]u8, @ptrCast(reallocated)) + extra_bytes;
     if (comptime builtin.os.tag != .freestanding) {

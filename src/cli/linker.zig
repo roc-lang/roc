@@ -72,6 +72,13 @@ pub const LinkConfig = struct {
     /// Kind of artifact to produce (executable or shared library)
     output_kind: OutputKind = .exe,
 
+    /// Link platform archives lazily (no whole-archive wrapping). Symbol-ABI
+    /// links resolve host code by symbol reference, so only reachable archive
+    /// members are included and section GC can strip unused host code. Links
+    /// against vtable-ABI hosts keep whole-archive wrapping, since nothing
+    /// references the host's exports by symbol.
+    lazy_platform_archives: bool = false,
+
     /// Input object files to link
     object_files: []const []const u8,
 
@@ -637,7 +644,7 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
     const is_wasm = config.target_format == .wasm;
     const is_macos = target_os == .macos;
     const is_windows = target_os == .windows;
-    if (is_wasm and config.platform_files_pre.len > 0) {
+    if (is_wasm and config.platform_files_pre.len > 0 and !config.lazy_platform_archives) {
         try args.append("--whole-archive");
     }
 
@@ -645,14 +652,18 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
     // Static platform archives need all members included so host-exported
     // functions like init, handleEvent, and update are retained.
     if (config.platform_files_pre.len > 0) {
-        if (!is_macos and !is_windows) {
+        if (!is_macos and !is_windows and !config.lazy_platform_archives) {
             // ELF targets use --whole-archive
             try args.append("--whole-archive");
         }
         for (config.platform_files_pre) |platform_file| {
-            try appendPlatformFile(ctx, &args, platform_file, is_macos, is_windows);
+            if (config.lazy_platform_archives) {
+                try args.append(platform_file);
+            } else {
+                try appendPlatformFile(ctx, &args, platform_file, is_macos, is_windows);
+            }
         }
-        if (!is_macos and !is_windows) {
+        if (!is_macos and !is_windows and !config.lazy_platform_archives) {
             try args.append("--no-whole-archive");
         }
     }
@@ -665,13 +676,17 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
     // Add platform-provided files that come after object files
     // Also use --whole-archive in case there are static libs here too
     if (config.platform_files_post.len > 0) {
-        if (!is_macos and !is_windows) {
+        if (!is_macos and !is_windows and !config.lazy_platform_archives) {
             try args.append("--whole-archive");
         }
         for (config.platform_files_post) |platform_file| {
-            try appendPlatformFile(ctx, &args, platform_file, is_macos, is_windows);
+            if (config.lazy_platform_archives) {
+                try args.append(platform_file);
+            } else {
+                try appendPlatformFile(ctx, &args, platform_file, is_macos, is_windows);
+            }
         }
-        if (!is_macos and !is_windows) {
+        if (!is_macos and !is_windows and !config.lazy_platform_archives) {
             try args.append("--no-whole-archive");
         }
     }
