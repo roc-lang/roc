@@ -360,6 +360,14 @@ pub fn roc_builtins_dbg_str(str_ptr: *const RocStr, roc_ops: *RocOps) callconv(.
     roc_ops.dbg(str_ptr.asSlice());
 }
 
+/// Fail a top-level expect whose `?` operator evaluated an Err, reporting the
+/// runtime-built message (which includes the rendered Err value). Terminates
+/// evaluation via the host's crash callback; the message carries the
+/// expect-specific wording.
+pub fn roc_builtins_expect_err_str(str_ptr: *const RocStr, roc_ops: *RocOps) callconv(.c) void {
+    roc_ops.crash(str_ptr.asSlice());
+}
+
 /// Report a failed `expect` using static message bytes owned by generated code.
 pub fn roc_builtins_roc_expect_failed(msg_bytes: [*]const u8, msg_len: usize, roc_ops: *RocOps) callconv(.c) void {
     roc_ops.expectFailed(msg_bytes[0..msg_len]);

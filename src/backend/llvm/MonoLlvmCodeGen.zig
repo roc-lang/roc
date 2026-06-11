@@ -781,6 +781,21 @@ pub const MonoLlvmCodeGen = struct {
             .jump => |jump_stmt| try self.emitJump(jump_stmt),
             .ret => |ret_stmt| try self.emitReturn(ret_stmt.value),
             .crash => |crash_stmt| try self.emitCrashBytes(self.store.getString(crash_stmt.msg)),
+            .expect_err => |expect_err_stmt| {
+                const wip = self.wip orelse return error.CompilationFailed;
+                try self.callBuiltinVoid(
+                    "roc_builtins_expect_err_str",
+                    &.{ try self.ptrType(), try self.ptrType() },
+                    &.{ self.slot(expect_err_stmt.message).ptr, self.rocOps() },
+                );
+                // Linux AArch64 eval tests handle crashes by returning to the Zig host.
+                // Longjmping through LLVM-generated frames is not reliable on that target.
+                if (self.target.cpu.arch == .aarch64 and self.target.os.tag == .linux) {
+                    _ = wip.retVoid() catch return error.OutOfMemory;
+                } else {
+                    _ = wip.@"unreachable"() catch return error.OutOfMemory;
+                }
+            },
         }
     }
 

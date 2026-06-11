@@ -486,6 +486,7 @@ const Pass = struct {
             .dbg,
             .expect,
             => |child| try self.markArgUsesInExpr(fn_id, child, changed),
+            .expect_err => |expect_err| try self.markArgUsesInExpr(fn_id, expect_err.msg, changed),
             .let_ => |let_| {
                 try self.markArgUsesInExpr(fn_id, let_.value, changed);
                 try self.markArgUsesInExpr(fn_id, let_.rest, changed);
@@ -604,6 +605,7 @@ const Pass = struct {
             .dbg,
             .expect,
             => |child| try self.collectCallPatternsInExpr(owner, child),
+            .expect_err => |expect_err| try self.collectCallPatternsInExpr(owner, expect_err.msg),
             .let_ => |let_| {
                 try self.collectCallPatternsInExpr(owner, let_.value);
                 try self.collectCallPatternsInExpr(owner, let_.rest);
@@ -821,6 +823,7 @@ const Pass = struct {
             .dbg,
             .expect,
             => |child| try self.rewriteCallsInExpr(child, done),
+            .expect_err => |expect_err| try self.rewriteCallsInExpr(expect_err.msg, done),
             .let_ => |let_| {
                 try self.rewriteCallsInExpr(let_.value, done);
                 try self.rewriteCallsInExpr(let_.rest, done);
@@ -1555,6 +1558,10 @@ const Cloner = struct {
             .return_ => |value| .{ .return_ = try self.cloneExpr(value) },
             .crash => |msg| .{ .crash = msg },
             .dbg => |child| .{ .dbg = try self.cloneExpr(child) },
+            .expect_err => |expect_err| .{ .expect_err = .{
+                .msg = try self.cloneExpr(expect_err.msg),
+                .region = expect_err.region,
+            } },
             .expect => |child| .{ .expect = try self.cloneExpr(child) },
         };
         return try self.addExpr(.{ .ty = expr.ty, .data = data });
@@ -2978,6 +2985,7 @@ fn localUseCountInExpr(program: *const Ast.Program, local: Ast.LocalId, expr_id:
         .dbg,
         .expect,
         => |child| localUseCountInExpr(program, local, child),
+        .expect_err => |expect_err| localUseCountInExpr(program, local, expect_err.msg),
         .let_ => |let_| localUseCountInExpr(program, local, let_.value) + localUseCountInExpr(program, local, let_.rest),
         .lambda,
         .def_ref,
@@ -3085,6 +3093,10 @@ fn scanLocalUseInExpr(program: *const Ast.Program, local: Ast.LocalId, expr_id: 
         .expect,
         => |child| {
             scanLocalUseInExpr(program, local, child, scan);
+            scan.seen_effect = true;
+        },
+        .expect_err => |expect_err| {
+            scanLocalUseInExpr(program, local, expect_err.msg, scan);
             scan.seen_effect = true;
         },
         .let_ => |let_| {

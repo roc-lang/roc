@@ -292,8 +292,11 @@ fn runEchoView(
         },
         error.EntrypointNotFound => {
             diag.step("interpreter.runEntrypoint", err);
-            return err;
+            return error.EntrypointNotFound;
         },
+        // expect_err statements only occur in top-level expect test roots,
+        // never in program entrypoints.
+        error.ExpectErr => unreachable,
     };
 
     if (echo_env.inline_expect_failed) return 1;

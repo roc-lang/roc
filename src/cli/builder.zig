@@ -233,6 +233,7 @@ const core_builtin_roots = std.StaticStringMap(void).initComptime(.{
     .{ "roc_builtins_box_decref_with_single_thread", {} },
     .{ "roc_builtins_box_free_with", {} },
     .{ "roc_builtins_dbg_str", {} },
+    .{ "roc_builtins_expect_err_str", {} },
     .{ "roc_builtins_decref_data_ptr", {} },
     .{ "roc_builtins_decref_data_ptr_single_thread", {} },
     .{ "roc_builtins_erased_callable_decref", {} },

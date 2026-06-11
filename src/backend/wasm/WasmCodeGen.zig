@@ -2759,6 +2759,9 @@ fn collectProcLocals(
                 try recordProcLocal(locals, debug_stmt.message);
                 try work.append(wa, debug_stmt.next);
             },
+            .expect_err => |expect_err_stmt| {
+                try recordProcLocal(locals, expect_err_stmt.message);
+            },
             .expect => |expect_stmt| {
                 try recordProcLocal(locals, expect_stmt.condition);
                 try work.append(wa, expect_stmt.next);
@@ -6873,6 +6876,10 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
 
             self.currentCode().append(self.allocator, Op.@"unreachable") catch return error.OutOfMemory;
         },
+        .expect_err => |expect_err_stmt| {
+            try self.emitRocStrCall(expect_err_stmt.message, wasm_roc_ops_crashed_offset);
+            self.currentCode().append(self.allocator, Op.@"unreachable") catch return error.OutOfMemory;
+        },
         .loop_continue => {
             if (builtin.mode == .Debug and self.loop_continue_target_depths.items.len == 0) {
                 std.debug.panic(
@@ -7017,9 +7024,15 @@ fn emitRocStaticStringCall(self: *Self, table_offset: u32, msg: []const u8) Allo
 }
 
 fn emitRocDbg(self: *Self, message: ProcLocalId) Allocator.Error!void {
+    try self.emitRocStrCall(message, wasm_roc_ops_dbg_offset);
+}
+
+/// Call a RocOps callback taking (bytes, len) with the contents of a
+/// Str-layout proc local.
+fn emitRocStrCall(self: *Self, message: ProcLocalId, ops_offset: u32) Allocator.Error!void {
     if (builtin.mode == .Debug and self.procLocalLayoutIdx(message) != .str) {
         std.debug.panic(
-            "WasmCodeGen invariant violated: debug local {d} did not have Str layout",
+            "WasmCodeGen invariant violated: message local {d} did not have Str layout",
             .{@intFromEnum(message)},
         );
     }
@@ -7045,7 +7058,7 @@ fn emitRocDbg(self: *Self, message: ProcLocalId) Allocator.Error!void {
     WasmModule.leb128WriteU32(self.allocator, self.currentCode(), 2) catch return error.OutOfMemory;
     WasmModule.leb128WriteU32(self.allocator, self.currentCode(), 4) catch return error.OutOfMemory;
 
-    try self.emitRocOpsCall(args_slot, wasm_roc_ops_dbg_offset);
+    try self.emitRocOpsCall(args_slot, ops_offset);
 }
 
 fn generateI128Literal(self: *Self, value: i128) Allocator.Error!void {
