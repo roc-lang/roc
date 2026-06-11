@@ -175,6 +175,8 @@ pub const MonoLlvmCodeGen = struct {
     debug_globals_fwd_ref: LlvmBuilder.Metadata.Optional = .none,
     current_subprogram: LlvmBuilder.Metadata.Optional = .none,
     current_debug_file: u32 = SourceLoc.no_file,
+    /// Debug type metadata per layout index, memoized per module build.
+    debug_types: std.AutoHashMap(u32, LlvmBuilder.Metadata),
 
     /// Errors reported while building LLVM IR.
     pub const Error = error{
@@ -271,6 +273,7 @@ pub const MonoLlvmCodeGen = struct {
             .compiled_joins = std.AutoHashMap(u32, void).init(allocator),
             .loop_continue_blocks = .empty,
             .loop_break_blocks = .empty,
+            .debug_types = std.AutoHashMap(u32, LlvmBuilder.Metadata).init(allocator),
         };
     }
 
@@ -293,6 +296,7 @@ pub const MonoLlvmCodeGen = struct {
 
     /// Releases backend-owned scratch maps.
     pub fn deinit(self: *MonoLlvmCodeGen) void {
+        self.debug_types.deinit();
         self.proc_registry.deinit();
         self.builtin_functions.deinit();
         self.rc_helpers.deinit();
@@ -317,6 +321,7 @@ pub const MonoLlvmCodeGen = struct {
         self.debug_globals_fwd_ref = .none;
         self.current_subprogram = .none;
         self.current_debug_file = SourceLoc.no_file;
+        self.debug_types.clearRetainingCapacity();
     }
 
     /// Generates a single eval-style module for `root_proc`.
@@ -458,6 +463,306 @@ pub const MonoLlvmCodeGen = struct {
         };
     }
 
+    /// Debug type metadata for a layout, memoized per module build. A forward
+    /// reference is registered before children are built so recursive layouts
+    /// (e.g. a tag union containing a list of itself) terminate.
+    fn debugTypeFor(self: *MonoLlvmCodeGen, builder: *LlvmBuilder, idx: layout.Idx) Error!LlvmBuilder.Metadata {
+        if (self.debug_types.get(@intFromEnum(idx))) |existing| return existing;
+        const fwd_ref = builder.debugForwardReference() catch return error.OutOfMemory;
+        try self.debug_types.put(@intFromEnum(idx), fwd_ref);
+        const resolved = try self.buildDebugType(builder, idx);
+        builder.resolveDebugForwardReference(fwd_ref, resolved);
+        try self.debug_types.put(@intFromEnum(idx), resolved);
+        return resolved;
+    }
+
+    fn debugUsizeType(self: *MonoLlvmCodeGen, builder: *LlvmBuilder) Error!LlvmBuilder.Metadata {
+        const bits: u64 = self.target.ptrBitWidth();
+        return builder.debugUnsignedType(
+            builder.metadataString(if (bits == 32) "U32" else "U64") catch return error.OutOfMemory,
+            bits,
+        ) catch return error.OutOfMemory;
+    }
+
+    /// `Str` and `List` share the same three-word runtime representation.
+    fn debugSequenceType(
+        self: *MonoLlvmCodeGen,
+        builder: *LlvmBuilder,
+        name: []const u8,
+        elem_ptr_ty: LlvmBuilder.Metadata,
+        size_bits: u64,
+        align_bits: u64,
+    ) Error!LlvmBuilder.Metadata {
+        const usize_ty = try self.debugUsizeType(builder);
+        const word_bits: u64 = self.target.ptrBitWidth();
+        const members = [_]LlvmBuilder.Metadata{
+            builder.debugMemberType(
+                builder.metadataString("bytes") catch return error.OutOfMemory,
+                null,
+                self.debug_compile_unit.unwrap(),
+                0,
+                elem_ptr_ty,
+                word_bits,
+                word_bits,
+                0,
+            ) catch return error.OutOfMemory,
+            builder.debugMemberType(
+                builder.metadataString("length") catch return error.OutOfMemory,
+                null,
+                self.debug_compile_unit.unwrap(),
+                0,
+                usize_ty,
+                word_bits,
+                word_bits,
+                word_bits,
+            ) catch return error.OutOfMemory,
+            builder.debugMemberType(
+                builder.metadataString("capacity") catch return error.OutOfMemory,
+                null,
+                self.debug_compile_unit.unwrap(),
+                0,
+                usize_ty,
+                word_bits,
+                word_bits,
+                word_bits * 2,
+            ) catch return error.OutOfMemory,
+        };
+        return builder.debugStructType(
+            builder.metadataString(name) catch return error.OutOfMemory,
+            null,
+            self.debug_compile_unit.unwrap(),
+            0,
+            null,
+            size_bits,
+            align_bits,
+            builder.metadataTuple(&members) catch return error.OutOfMemory,
+        ) catch return error.OutOfMemory;
+    }
+
+    fn buildDebugType(self: *MonoLlvmCodeGen, builder: *LlvmBuilder, idx: layout.Idx) Error!LlvmBuilder.Metadata {
+        const lay = self.layoutValue(idx);
+        const sa = self.sizeAlignOf(idx);
+        const size_bits: u64 = @as(u64, sa.size) * 8;
+        const align_bits: u64 = @as(u64, @intCast(sa.alignment.toByteUnits())) * 8;
+        const word_bits: u64 = self.target.ptrBitWidth();
+
+        switch (lay.tag) {
+            .scalar => {
+                const scalar = lay.getScalar();
+                switch (scalar.tag) {
+                    .str => {
+                        const u8_ty = builder.debugUnsignedType(
+                            builder.metadataString("U8") catch return error.OutOfMemory,
+                            8,
+                        ) catch return error.OutOfMemory;
+                        const bytes_ptr = builder.debugPointerType(
+                            null,
+                            null,
+                            null,
+                            0,
+                            u8_ty,
+                            word_bits,
+                            word_bits,
+                            0,
+                        ) catch return error.OutOfMemory;
+                        return try self.debugSequenceType(builder, "Str", bytes_ptr, size_bits, align_bits);
+                    },
+                    .int => {
+                        const precision = scalar.getInt();
+                        const name = @tagName(precision);
+                        var upper_buf: [4]u8 = undefined;
+                        const upper = std.ascii.upperString(&upper_buf, name);
+                        const bits: u64 = @as(u64, precision.size()) * 8;
+                        return switch (precision) {
+                            .i8, .i16, .i32, .i64, .i128 => builder.debugSignedType(
+                                builder.metadataString(upper) catch return error.OutOfMemory,
+                                bits,
+                            ) catch return error.OutOfMemory,
+                            .u8, .u16, .u32, .u64, .u128 => builder.debugUnsignedType(
+                                builder.metadataString(upper) catch return error.OutOfMemory,
+                                bits,
+                            ) catch return error.OutOfMemory,
+                        };
+                    },
+                    .frac => return switch (scalar.getFrac()) {
+                        .f32 => builder.debugFloatType(
+                            builder.metadataString("F32") catch return error.OutOfMemory,
+                            32,
+                        ) catch return error.OutOfMemory,
+                        .f64 => builder.debugFloatType(
+                            builder.metadataString("F64") catch return error.OutOfMemory,
+                            64,
+                        ) catch return error.OutOfMemory,
+                        .dec => builder.debugSignedType(
+                            builder.metadataString("Dec") catch return error.OutOfMemory,
+                            128,
+                        ) catch return error.OutOfMemory,
+                    },
+                    .opaque_ptr => return builder.debugPointerType(
+                        builder.metadataString("OpaquePtr") catch return error.OutOfMemory,
+                        null,
+                        null,
+                        0,
+                        null,
+                        word_bits,
+                        word_bits,
+                        0,
+                    ) catch return error.OutOfMemory,
+                }
+            },
+            .box, .box_of_zst => {
+                const elem_ty: ?LlvmBuilder.Metadata = if (lay.tag == .box)
+                    try self.debugTypeFor(builder, lay.getIdx())
+                else
+                    null;
+                return builder.debugPointerType(
+                    builder.metadataString("Box") catch return error.OutOfMemory,
+                    null,
+                    null,
+                    0,
+                    elem_ty,
+                    word_bits,
+                    word_bits,
+                    0,
+                ) catch return error.OutOfMemory;
+            },
+            .list, .list_of_zst => {
+                const elem_ty: LlvmBuilder.Metadata = if (lay.tag == .list)
+                    try self.debugTypeFor(builder, lay.getIdx())
+                else
+                    builder.debugUnsignedType(
+                        builder.metadataString("U8") catch return error.OutOfMemory,
+                        8,
+                    ) catch return error.OutOfMemory;
+                const elem_ptr = builder.debugPointerType(
+                    null,
+                    null,
+                    null,
+                    0,
+                    elem_ty,
+                    word_bits,
+                    word_bits,
+                    0,
+                ) catch return error.OutOfMemory;
+                return try self.debugSequenceType(builder, "List", elem_ptr, size_bits, align_bits);
+            },
+            .struct_ => {
+                const struct_idx = lay.getStruct().idx;
+                const data = self.layouts().getStructData(struct_idx);
+                const field_count = data.fields.count;
+                const members = try self.allocator.alloc(LlvmBuilder.Metadata, field_count);
+                defer self.allocator.free(members);
+                for (members, 0..) |*member, original_index| {
+                    const field_layout = self.layouts().getStructFieldLayoutByOriginalIndex(struct_idx, @intCast(original_index));
+                    const field_offset = self.layouts().getStructFieldOffsetByOriginalIndex(struct_idx, @intCast(original_index));
+                    const field_sa = self.sizeAlignOf(field_layout);
+                    member.* = builder.debugMemberType(
+                        builder.metadataStringFmt("f{d}", .{original_index}) catch return error.OutOfMemory,
+                        null,
+                        self.debug_compile_unit.unwrap(),
+                        0,
+                        try self.debugTypeFor(builder, field_layout),
+                        @as(u64, field_sa.size) * 8,
+                        @as(u64, @intCast(field_sa.alignment.toByteUnits())) * 8,
+                        @as(u64, field_offset) * 8,
+                    ) catch return error.OutOfMemory;
+                }
+                return builder.debugStructType(
+                    builder.metadataString("Record") catch return error.OutOfMemory,
+                    null,
+                    self.debug_compile_unit.unwrap(),
+                    0,
+                    null,
+                    size_bits,
+                    align_bits,
+                    builder.metadataTuple(members) catch return error.OutOfMemory,
+                ) catch return error.OutOfMemory;
+            },
+            .tag_union => {
+                const data = self.layouts().getTagUnionData(lay.getTagUnion().idx);
+                var members: std.ArrayList(LlvmBuilder.Metadata) = .empty;
+                defer members.deinit(self.allocator);
+                if (data.discriminant_size > 0) {
+                    const disc_bits = @as(u64, data.discriminant_size) * 8;
+                    try members.append(self.allocator, builder.debugMemberType(
+                        builder.metadataString("discriminant") catch return error.OutOfMemory,
+                        null,
+                        self.debug_compile_unit.unwrap(),
+                        0,
+                        builder.debugUnsignedType(
+                            builder.metadataString("U8") catch return error.OutOfMemory,
+                            disc_bits,
+                        ) catch return error.OutOfMemory,
+                        disc_bits,
+                        disc_bits,
+                        @as(u64, data.discriminant_offset) * 8,
+                    ) catch return error.OutOfMemory);
+                }
+                return builder.debugStructType(
+                    builder.metadataString("TagUnion") catch return error.OutOfMemory,
+                    null,
+                    self.debug_compile_unit.unwrap(),
+                    0,
+                    null,
+                    size_bits,
+                    align_bits,
+                    builder.metadataTuple(members.items) catch return error.OutOfMemory,
+                ) catch return error.OutOfMemory;
+            },
+            .closure, .erased_callable, .zst => {
+                const name = switch (lay.tag) {
+                    .closure => "Closure",
+                    .erased_callable => "ErasedCallable",
+                    else => "Unit",
+                };
+                return builder.debugStructType(
+                    builder.metadataString(name) catch return error.OutOfMemory,
+                    null,
+                    self.debug_compile_unit.unwrap(),
+                    0,
+                    null,
+                    size_bits,
+                    align_bits,
+                    null,
+                ) catch return error.OutOfMemory;
+            },
+        }
+    }
+
+    /// Emits a dbg.declare for every named local in the proc's frame so
+    /// debuggers can show Roc variables by their source names.
+    fn declareFrameLocals(self: *MonoLlvmCodeGen, proc: LirProcSpec, proc_line: u32) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const scope = self.current_subprogram.unwrap() orelse return;
+        const file = try self.debugFileFor(builder, self.current_debug_file);
+        const empty_expr = builder.debugExpression(&.{}) catch return error.OutOfMemory;
+
+        for (self.store.getLocalSpan(proc.frame_locals)) |local_id| {
+            const name = self.store.localName(local_id) orelse continue;
+            const local_slot = self.local_slots[@intFromEnum(local_id)];
+            const variable = builder.debugLocalVar(
+                builder.metadataString(name) catch return error.OutOfMemory,
+                file,
+                scope,
+                proc_line,
+                try self.debugTypeFor(builder, local_slot.layout_idx),
+            ) catch return error.OutOfMemory;
+            _ = wip.callIntrinsic(
+                .normal,
+                .none,
+                .@"dbg.declare",
+                &.{},
+                &.{
+                    (wip.debugValue(local_slot.ptr) catch return error.OutOfMemory).toValue(),
+                    variable.toValue(),
+                    empty_expr.toValue(),
+                },
+                "",
+            ) catch return error.OutOfMemory;
+        }
+    }
+
     /// Declares and compiles every procedure in dependency-index order.
     pub fn compileAllProcSpecs(self: *MonoLlvmCodeGen, procs: []const LirProcSpec) Error!void {
         for (procs, 0..) |proc, i| {
@@ -574,6 +879,7 @@ pub const MonoLlvmCodeGen = struct {
         defer self.allocator.free(self.local_slots);
         try self.allocLocalSlots();
         try self.unpackProcArgs(proc);
+        if (!builder.strip) try self.declareFrameLocals(proc, self.store.procLoc(proc_id).line);
 
         if (proc.hosted) |hosted| {
             try self.emitHostedProcBody(hosted, proc);
