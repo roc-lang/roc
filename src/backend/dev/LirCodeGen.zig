@@ -152,6 +152,8 @@ pub const LineEntry = struct {
     loc: base.SourceLoc,
 };
 
+/// How generated code will be executed, which determines how calls to
+/// builtins and other procs are encoded.
 pub const GenerationMode = enum {
     /// Code runs in-process (dev evaluator), direct function pointers are valid.
     /// The compiled code calls builtins via absolute addresses embedded in the code.

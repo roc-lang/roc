@@ -24,6 +24,7 @@ pub const ProcEntry = struct {
     loc: base.SourceLoc,
 };
 
+/// The serialized DWARF sections plus the relocations they need.
 pub const Sections = struct {
     debug_line: []u8,
     debug_abbrev: []u8,

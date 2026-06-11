@@ -7,11 +7,8 @@ const CodeSignature = @This();
 const std = @import("std");
 const Io = std.Io;
 const assert = std.debug.assert;
-const fs = std.fs;
-const log = std.log.scoped(.link);
 const macho = std.macho;
 const mem = std.mem;
-const testing = std.testing;
 const Sha256 = std.crypto.hash.sha2.Sha256;
 const Allocator = std.mem.Allocator;
 
@@ -50,7 +47,7 @@ const Blob = union(enum) {
         };
     }
 
-    fn write(self: Blob, writer: anytype) !void {
+    fn write(self: Blob, writer: *std.Io.Writer) std.Io.Writer.Error!void {
         return switch (self) {
             .code_directory => |x| x.write(writer),
             .requirements => |x| x.write(writer),
@@ -124,7 +121,7 @@ const CodeDirectory = struct {
         return @sizeOf(macho.CodeDirectory) + @as(u32, @intCast(self.ident.len + 1 + special_slots + code_slots));
     }
 
-    fn write(self: CodeDirectory, writer: anytype) !void {
+    fn write(self: CodeDirectory, writer: *std.Io.Writer) std.Io.Writer.Error!void {
         try writer.writeInt(u32, self.inner.magic, .big);
         try writer.writeInt(u32, self.inner.length, .big);
         try writer.writeInt(u32, self.inner.version, .big);
@@ -177,7 +174,7 @@ const Requirements = struct {
         return 3 * @sizeOf(u32);
     }
 
-    fn write(self: Requirements, writer: anytype) !void {
+    fn write(self: Requirements, writer: *std.Io.Writer) std.Io.Writer.Error!void {
         try writer.writeInt(u32, macho.CSMAGIC_REQUIREMENTS, .big);
         try writer.writeInt(u32, self.size(), .big);
         try writer.writeInt(u32, 0, .big);
@@ -200,7 +197,7 @@ const Entitlements = struct {
         return @as(u32, @intCast(self.inner.len)) + 2 * @sizeOf(u32);
     }
 
-    fn write(self: Entitlements, writer: anytype) !void {
+    fn write(self: Entitlements, writer: *std.Io.Writer) std.Io.Writer.Error!void {
         try writer.writeInt(u32, macho.CSMAGIC_EMBEDDED_ENTITLEMENTS, .big);
         try writer.writeInt(u32, self.size(), .big);
         try writer.writeAll(self.inner);
@@ -223,7 +220,7 @@ const Signature = struct {
         return 2 * @sizeOf(u32);
     }
 
-    fn write(self: Signature, writer: anytype) !void {
+    fn write(self: Signature, writer: *std.Io.Writer) std.Io.Writer.Error!void {
         try writer.writeInt(u32, macho.CSMAGIC_BLOBWRAPPER, .big);
         try writer.writeInt(u32, self.size(), .big);
     }
@@ -249,11 +246,7 @@ pub fn deinit(self: *CodeSignature, allocator: Allocator) void {
     }
 }
 
-pub fn addEntitlements(self: *CodeSignature, allocator: Allocator, io: Io, path: []const u8) !void {
-    const inner = try Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(std.math.maxInt(u32)));
-    self.entitlements = .{ .inner = inner };
-}
-
+/// Inputs for `writeAdhocSignature`.
 pub const WriteOpts = struct {
     file: Io.File,
     exec_seg_base: u64,
@@ -262,13 +255,20 @@ pub const WriteOpts = struct {
     dylib: bool,
 };
 
+/// Hashes the file's pages and writes the complete ad-hoc signature
+/// superblob to `writer`.
+/// Errors from hashing the file and serializing the signature.
+pub const WriteError = Allocator.Error || std.Io.Writer.Error || Io.File.ReadPositionalError || Io.File.LengthError || error{Overflow};
+
+/// Hashes the file's pages and writes the complete ad-hoc signature
+/// superblob to `writer`.
 pub fn writeAdhocSignature(
     self: *CodeSignature,
     gpa: Allocator,
     io: Io,
     opts: WriteOpts,
     writer: *std.Io.Writer,
-) !void {
+) WriteError!void {
     const tracy = trace(@src());
     defer tracy.end();
 
@@ -355,6 +355,7 @@ pub fn writeAdhocSignature(
     }
 }
 
+/// Exact byte size of the signature superblob.
 pub fn size(self: CodeSignature) u32 {
     var ssize: u32 = @sizeOf(macho.SuperBlob) + @sizeOf(macho.BlobIndex) + self.code_directory.size();
     if (self.requirements) |req| {
@@ -369,6 +370,8 @@ pub fn size(self: CodeSignature) u32 {
     return ssize;
 }
 
+/// Upper bound for the signature superblob size for a file of `file_size`
+/// bytes, aligned for LC_CODE_SIGNATURE reservation.
 pub fn estimateSize(self: CodeSignature, file_size: u64) u32 {
     var ssize: u64 = @sizeOf(macho.SuperBlob) + @sizeOf(macho.BlobIndex) + self.code_directory.size();
     // Approx code slots
@@ -390,6 +393,7 @@ pub fn estimateSize(self: CodeSignature, file_size: u64) u32 {
     return @as(u32, @intCast(mem.alignForward(u64, ssize, @sizeOf(u64))));
 }
 
+/// Resets the code directory so the signature can be rebuilt.
 pub fn clear(self: *CodeSignature, allocator: Allocator) void {
     self.code_directory.deinit(allocator);
     self.code_directory = CodeDirectory.init(self.page_size);

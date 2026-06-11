@@ -233,7 +233,7 @@ fn strtabName(bytes: []const u8, symtab: macho.symtab_command, n_strx: u32) ?[]c
     if (n_strx == 0) return null;
     const start: usize = symtab.stroff + n_strx;
     if (start >= bytes.len) return null;
-    const end = std.mem.indexOfScalarPos(u8, bytes, start, 0) orelse return null;
+    const end = std.mem.findScalarPos(u8, bytes, start, 0) orelse return null;
     if (end > symtab.stroff + symtab.strsize) return null;
     return bytes[start..end];
 }

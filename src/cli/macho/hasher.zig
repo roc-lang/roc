@@ -4,11 +4,11 @@
 
 const std = @import("std");
 const Io = std.Io;
-const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
 
 const trace = @import("tracy").trace;
 
+/// Hashes a file in fixed-size chunks concurrently, one digest per chunk.
 pub fn ParallelHasher(comptime Hasher: type) type {
     const hash_size = Hasher.digest_length;
 
@@ -16,7 +16,7 @@ pub fn ParallelHasher(comptime Hasher: type) type {
         pub fn hash(gpa: Allocator, io: Io, file: Io.File, out: [][hash_size]u8, opts: struct {
             chunk_size: u64 = 0x4000,
             max_file_size: ?u64 = null,
-        }) !void {
+        }) (Allocator.Error || Io.File.ReadPositionalError || Io.File.LengthError || error{Overflow})!void {
             const tracy = trace(@src());
             defer tracy.end();
 
