@@ -296,6 +296,7 @@ const Builder = struct {
     method_lookup_index: []MethodLookupIndexEntry = &.{},
     u64_ty: ?Type.TypeId = null,
     bool_ty: ?Type.TypeId = null,
+    source_file_ids: std.AutoHashMap(u32, u32),
 
     fn init(allocator: Allocator, modules: Common.CheckedModules, program: *Ast.Program) Builder {
         return .{
@@ -309,10 +310,22 @@ const Builder = struct {
             .nested_site_cache = std.AutoHashMap(NestedSiteAddress, names.ProcSiteId).init(allocator),
             .const_expr_cache = std.AutoHashMap(ConstExprAddress, Ast.ExprId).init(allocator),
             .inspect_defs = std.AutoHashMap(InspectDefAddress, InspectDefEntry).init(allocator),
+            .source_file_ids = std.AutoHashMap(u32, u32).init(allocator),
         };
     }
 
+    /// Source file table index for a module's view, registering the module on
+    /// first use.
+    fn fileIdFor(self: *Builder, view: ModuleView) Allocator.Error!u32 {
+        const gop = try self.source_file_ids.getOrPut(view.module_identity.module_idx);
+        if (!gop.found_existing) {
+            gop.value_ptr.* = try self.program.addSourceFile(view.module_env.module_name);
+        }
+        return gop.value_ptr.*;
+    }
+
     fn deinit(self: *Builder) void {
+        self.source_file_ids.deinit();
         self.allocator.free(self.method_lookup_index);
         self.allocator.free(self.hosted_catalog);
         self.inspect_defs.deinit();
@@ -4228,8 +4241,27 @@ const BodyContext = struct {
         };
     }
 
+    /// Resolve a checked node's source region to a `SourceLoc` in this body's
+    /// module.
+    fn sourceLocFor(self: *BodyContext, region: base.Region) Allocator.Error!base.SourceLoc {
+        const line_starts = self.view.module_env.common.getLineStartsAll();
+        if (line_starts.len == 0) return base.SourceLoc.none;
+        const offset = region.start.offset;
+        const line = base.RegionInfo.lineIdx(line_starts, offset);
+        const column = base.RegionInfo.columnIdx(line_starts, line, offset) catch
+            Common.invariant("checked node region resolved to an invalid line/column position");
+        return .{
+            .file = try self.builder.fileIdFor(self.view),
+            .line = line + 1,
+            .column = column + 1,
+        };
+    }
+
     fn lowerExpr(self: *BodyContext, expr_id: checked.CheckedExprId) Allocator.Error!Ast.ExprId {
         const expr = self.view.bodies.exprs[@intFromEnum(expr_id)];
+        const saved_loc = self.builder.program.current_loc;
+        defer self.builder.program.current_loc = saved_loc;
+        self.builder.program.current_loc = try self.sourceLocFor(expr.source_region);
         switch (expr.data) {
             .call => |call| return try self.lowerCallExpr(expr.ty, call),
             .dispatch_call => |plan| return try self.lowerDispatchExpr(expr.ty, plan),
@@ -4248,6 +4280,9 @@ const BodyContext = struct {
         ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprId {
         const expr = self.view.bodies.exprs[@intFromEnum(expr_id)];
+        const saved_loc = self.builder.program.current_loc;
+        defer self.builder.program.current_loc = saved_loc;
+        self.builder.program.current_loc = try self.sourceLocFor(expr.source_region);
         const data: Ast.ExprData = switch (expr.data) {
             .pending,
             .anno_only,
@@ -8454,6 +8489,9 @@ const BodyContext = struct {
         lowered: *LoweredStatements,
     ) Allocator.Error!bool {
         const statement = self.view.bodies.statements[@intFromEnum(statement_id)];
+        const saved_loc = self.builder.program.current_loc;
+        defer self.builder.program.current_loc = saved_loc;
+        self.builder.program.current_loc = try self.sourceLocFor(statement.source_region);
         const pattern, const expr = switch (statement.data) {
             .decl => |decl| blk: {
                 if (self.statementValueIsLocalProc(decl.expr)) return false;
@@ -9483,6 +9521,9 @@ const BodyContext = struct {
 
     fn lowerStatement(self: *BodyContext, statement_id: checked.CheckedStatementId) Allocator.Error!Ast.StmtId {
         const statement = self.view.bodies.statements[@intFromEnum(statement_id)];
+        const saved_loc = self.builder.program.current_loc;
+        defer self.builder.program.current_loc = saved_loc;
+        self.builder.program.current_loc = try self.sourceLocFor(statement.source_region);
         const stmt: Ast.Stmt = switch (statement.data) {
             .pending,
             .import_,

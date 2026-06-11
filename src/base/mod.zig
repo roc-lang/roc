@@ -8,6 +8,7 @@ pub const Region = @import("Region.zig");
 pub const StringLiteral = @import("StringLiteral.zig");
 pub const LowLevel = @import("LowLevel.zig").LowLevel;
 pub const RegionInfo = @import("RegionInfo.zig");
+pub const SourceLoc = @import("source_loc.zig").SourceLoc;
 pub const Scratch = @import("Scratch.zig").Scratch;
 pub const parallel = @import("parallel.zig");
 pub const SmallStringInterner = @import("SmallStringInterner.zig");

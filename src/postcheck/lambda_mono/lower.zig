@@ -26,6 +26,8 @@ pub fn run(
     var program = Ast.Program.init(allocator, name_store, string_literals);
     name_store = undefined;
     string_literals = undefined;
+    program.source_files = owned.lifted.source_files;
+    owned.lifted.source_files = .empty;
     errdefer program.deinit();
 
     var lowerer = try Lowerer.init(allocator, &owned, &program);
@@ -424,6 +426,9 @@ const Lowerer = struct {
         if (self.expr_map[index]) |cached| return cached;
 
         const expr = self.solved.lifted.exprs.items[index];
+        const saved_loc = self.program.current_loc;
+        defer self.program.current_loc = saved_loc;
+        self.program.current_loc = self.solved.lifted.exprLoc(expr_id);
         const ty = try self.lowerExprTy(expr_id);
         const data: Ast.ExprData = switch (expr.data) {
             .local => |local| try self.lowerLocalExpr(local, ty),
@@ -705,6 +710,9 @@ const Lowerer = struct {
     fn lowerStmt(self: *Lowerer, stmt_id: Lifted.StmtId) Allocator.Error!Ast.StmtId {
         const index = @intFromEnum(stmt_id);
         if (self.stmt_map[index]) |cached| return cached;
+        const saved_loc = self.program.current_loc;
+        defer self.program.current_loc = saved_loc;
+        self.program.current_loc = self.solved.lifted.stmtLoc(stmt_id);
         const lowered_stmt: Ast.Stmt = switch (self.solved.lifted.stmts.items[index]) {
             .let_ => |let_| .{ .let_ = .{
                 .pat = try self.lowerPat(let_.pat),

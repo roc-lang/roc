@@ -1329,3 +1329,79 @@ test "spec constr uses fully known entry shape for multiple tuple states" {
     try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, multiTupleWorkerIsFullySpecialized));
     try std.testing.expect(try reachableProcShape(allocator, &unoptimized.lowered, multiTupleWorkerIsGeneric));
 }
+
+test "LIR statements and procs carry resolved source locations" {
+    const allocator = std.testing.allocator;
+
+    const source =
+        \\module [main]
+        \\
+        \\add2 : U64 -> U64
+        \\add2 = |n| n + 2
+        \\
+        \\main : U64
+        \\main = {
+        \\    x = 40
+        \\    add2(x)
+        \\}
+    ;
+
+    var lowered_source = try lowerModule(allocator, source, .none);
+    defer lowered_source.deinit(allocator);
+
+    const store = &lowered_source.lowered.lir_result.store;
+    try std.testing.expectEqual(store.cf_stmts.items.len, store.cf_stmt_locs.items.len);
+    try std.testing.expectEqual(store.proc_specs.items.len, store.proc_locs.items.len);
+    try std.testing.expect(store.sourceFileCount() >= 1);
+
+    var located: usize = 0;
+    for (store.cf_stmt_locs.items, store.cf_stmts.items) |loc, stmt| {
+        switch (stmt) {
+            .incref, .decref, .free => try std.testing.expect(!loc.hasLocation()),
+            else => {},
+        }
+        if (loc.hasLocation()) {
+            located += 1;
+            try std.testing.expect(loc.file < store.sourceFileCount());
+            try std.testing.expect(loc.line >= 1);
+            try std.testing.expect(loc.column >= 1);
+        }
+    }
+    try std.testing.expect(located > 0);
+
+    var located_procs: usize = 0;
+    for (store.proc_locs.items) |loc| {
+        if (loc.hasLocation()) {
+            located_procs += 1;
+            try std.testing.expect(loc.file < store.sourceFileCount());
+        }
+    }
+    try std.testing.expect(located_procs > 0);
+}
+
+test "LIR statements carry source locations under optimizing inline mode" {
+    const allocator = std.testing.allocator;
+
+    const source =
+        \\module [main]
+        \\
+        \\add2 : U64 -> U64
+        \\add2 = |n| n + 2
+        \\
+        \\main : U64
+        \\main = {
+        \\    x = 40
+        \\    add2(x)
+        \\}
+    ;
+
+    var lowered_source = try lowerModule(allocator, source, .direct_call_wrappers);
+    defer lowered_source.deinit(allocator);
+
+    const store = &lowered_source.lowered.lir_result.store;
+    var located: usize = 0;
+    for (store.cf_stmt_locs.items) |loc| {
+        if (loc.hasLocation()) located += 1;
+    }
+    try std.testing.expect(located > 0);
+}

@@ -122,6 +122,7 @@ pub fn run(
     var lowerer = try Lowerer.init(allocator, target_usize, &owned, options);
     errdefer lowerer.deinit();
 
+    try lowerer.result.store.setSourceFiles(owned.lifted.source_files.items);
     try lowerer.lower();
     try lowerer.bindRoots();
     try lowerer.writeRuntimeSchemas();
@@ -600,6 +601,12 @@ const Lowerer = struct {
             },
         }
 
+        const saved_loc = self.result.store.current_loc;
+        defer self.result.store.current_loc = saved_loc;
+        self.result.store.current_loc = switch (source_fn.body) {
+            .roc => |body_id| self.solved.lifted.exprLoc(body_id),
+            .hosted => base.SourceLoc.none,
+        };
         const proc = try self.result.store.addProcSpec(.{
             .name = lirSymbol(entry.symbol),
             .args = try self.result.store.addLocalSpan(arg_locals),
@@ -1370,6 +1377,9 @@ const Lowerer = struct {
     ) Common.LowerError!LIR.CFStmtId {
         const expr_data = self.solved.lifted.exprs.items[@intFromEnum(expr_id)];
         const expr_ty = try self.lowerExprTy(expr_id);
+        const saved_loc = self.result.store.current_loc;
+        defer self.result.store.current_loc = saved_loc;
+        self.result.store.current_loc = self.solved.lifted.exprLoc(expr_id);
         return switch (expr_data.data) {
             .local => |local| try self.lowerLocalInto(target, local, expr_ty, next),
             .unit => try self.assignZst(target, next),
@@ -2321,6 +2331,9 @@ const Lowerer = struct {
     }
 
     fn lowerStmt(self: *Lowerer, stmt_id: Lifted.StmtId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+        const saved_loc = self.result.store.current_loc;
+        defer self.result.store.current_loc = saved_loc;
+        self.result.store.current_loc = self.solved.lifted.stmtLoc(stmt_id);
         return switch (self.solved.lifted.stmts.items[@intFromEnum(stmt_id)]) {
             .let_ => |let_| blk: {
                 const value = try self.addTemp(try self.lowerExprTy(let_.value));
@@ -3701,6 +3714,16 @@ fn cloneLiftedProgram(allocator: std.mem.Allocator, program: *const Lifted.Progr
     var string_literals = try cloneStringLiterals(allocator, &program.string_literals);
     errdefer deinitStringLiterals(allocator, &string_literals);
 
+    var source_files: std.ArrayList([]const u8) = .empty;
+    errdefer {
+        for (source_files.items) |file| allocator.free(file);
+        source_files.deinit(allocator);
+    }
+    try source_files.ensureTotalCapacityPrecise(allocator, program.source_files.items.len);
+    for (program.source_files.items) |file| {
+        source_files.appendAssumeCapacity(try allocator.dupe(u8, file));
+    }
+
     return .{
         .allocator = allocator,
         .names = name_store,
@@ -3723,6 +3746,10 @@ fn cloneLiftedProgram(allocator: std.mem.Allocator, program: *const Lifted.Progr
         .roots = try cloneArrayList(Lifted.Root, allocator, &program.roots),
         .layout_requests = try cloneArrayList(Lifted.LayoutRequest, allocator, &program.layout_requests),
         .runtime_schema_requests = try cloneArrayList(Lifted.RuntimeSchemaRequest, allocator, &program.runtime_schema_requests),
+        .source_files = source_files,
+        .expr_locs = try cloneArrayList(base.SourceLoc, allocator, &program.expr_locs),
+        .stmt_locs = try cloneArrayList(base.SourceLoc, allocator, &program.stmt_locs),
+        .current_loc = program.current_loc,
     };
 }
 

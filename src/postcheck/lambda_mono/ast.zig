@@ -4,6 +4,7 @@
 //! ordinary generated callable values or erased callable values.
 
 const std = @import("std");
+const base = @import("base");
 const check = @import("check");
 const can = @import("can");
 const builtins = @import("builtins");
@@ -292,6 +293,16 @@ pub const Program = struct {
     roots: std.ArrayList(Root),
     layout_requests: std.ArrayList(LayoutRequest),
     runtime_schema_requests: std.ArrayList(RuntimeSchemaRequest),
+    /// Source file table for `SourceLoc.file` indices (copied from the lifted
+    /// program; owned by this program).
+    source_files: std.ArrayList([]const u8),
+    /// Source location per expression, parallel to `exprs`.
+    expr_locs: std.ArrayList(base.SourceLoc),
+    /// Source location per statement, parallel to `stmts`.
+    stmt_locs: std.ArrayList(base.SourceLoc),
+    /// Ambient location recorded by `addExpr`/`addStmt`. Lowering sets this on
+    /// entry to each lifted node, so synthetic nodes inherit a location.
+    current_loc: base.SourceLoc,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -320,10 +331,18 @@ pub const Program = struct {
             .roots = .empty,
             .layout_requests = .empty,
             .runtime_schema_requests = .empty,
+            .source_files = .empty,
+            .expr_locs = .empty,
+            .stmt_locs = .empty,
+            .current_loc = base.SourceLoc.none,
         };
     }
 
     pub fn deinit(self: *Program) void {
+        self.stmt_locs.deinit(self.allocator);
+        self.expr_locs.deinit(self.allocator);
+        for (self.source_files.items) |file| self.allocator.free(file);
+        self.source_files.deinit(self.allocator);
         self.runtime_schema_requests.deinit(self.allocator);
         self.layout_requests.deinit(self.allocator);
         self.roots.deinit(self.allocator);
@@ -355,7 +374,18 @@ pub const Program = struct {
     pub fn addExpr(self: *Program, expr: Expr) std.mem.Allocator.Error!ExprId {
         const id: ExprId = @enumFromInt(@as(u32, @intCast(self.exprs.items.len)));
         try self.exprs.append(self.allocator, expr);
+        try self.expr_locs.append(self.allocator, self.current_loc);
         return id;
+    }
+
+    /// Source location of an expression.
+    pub fn exprLoc(self: *const Program, id: ExprId) base.SourceLoc {
+        return self.expr_locs.items[@intFromEnum(id)];
+    }
+
+    /// Source location of a statement.
+    pub fn stmtLoc(self: *const Program, id: StmtId) base.SourceLoc {
+        return self.stmt_locs.items[@intFromEnum(id)];
     }
 
     pub fn addPat(self: *Program, pat: Pat) std.mem.Allocator.Error!PatId {
@@ -367,6 +397,7 @@ pub const Program = struct {
     pub fn addStmt(self: *Program, stmt: Stmt) std.mem.Allocator.Error!StmtId {
         const id: StmtId = @enumFromInt(@as(u32, @intCast(self.stmts.items.len)));
         try self.stmts.append(self.allocator, stmt);
+        try self.stmt_locs.append(self.allocator, self.current_loc);
         return id;
     }
 

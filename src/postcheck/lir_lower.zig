@@ -107,6 +107,7 @@ pub fn run(
     var lowerer = try Lowerer.init(allocator, target_usize, &owned);
     errdefer lowerer.deinit();
 
+    try lowerer.result.store.setSourceFiles(owned.source_files.items);
     try lowerer.registerProcPlaceholders();
     try lowerer.lowerAllFns();
     try lowerer.bindRoots();
@@ -212,6 +213,10 @@ const Lowerer = struct {
                 arg_locals[i] = try self.localFor(arg.local);
             }
 
+            self.result.store.current_loc = switch (fn_.body) {
+                .roc => |body_id| self.program.exprLoc(body_id),
+                .hosted => base.SourceLoc.none,
+            };
             const proc_id = try self.result.store.addProcSpec(.{
                 .name = lirSymbol(fn_.symbol),
                 .args = try self.result.store.addLocalSpan(arg_locals),
@@ -220,6 +225,7 @@ const Lowerer = struct {
                 .abi = if (self.usesErasedCallableAbi(fn_)) .erased_callable else .roc,
                 .hosted = hostedProcForFn(fn_),
             });
+            self.result.store.current_loc = base.SourceLoc.none;
             self.fn_map[index] = proc_id;
         }
     }
@@ -664,6 +670,9 @@ const Lowerer = struct {
         next: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
         const expr_data = self.expr(expr_id);
+        const saved_loc = self.result.store.current_loc;
+        defer self.result.store.current_loc = saved_loc;
+        self.result.store.current_loc = self.program.exprLoc(expr_id);
         return switch (expr_data.data) {
             .local => |local| try self.assignLocal(target, try self.localFor(local), next),
             .unit => try self.assignZst(target, next),
@@ -1365,6 +1374,9 @@ const Lowerer = struct {
     }
 
     fn lowerStmt(self: *Lowerer, stmt_id: LambdaMono.StmtId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+        const saved_loc = self.result.store.current_loc;
+        defer self.result.store.current_loc = saved_loc;
+        self.result.store.current_loc = self.program.stmtLoc(stmt_id);
         return switch (self.program.stmts.items[@intFromEnum(stmt_id)]) {
             .let_ => |let_| blk: {
                 const value = try self.addTemp(self.expr(let_.value).ty);
