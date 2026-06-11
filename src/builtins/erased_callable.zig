@@ -33,6 +33,11 @@ pub const CallableFnPtr = ErasedCallableFn;
 /// decref/free any refcounted data contained inside the capture. It must not free
 /// the erased callable allocation; the erased callable runtime does that after
 /// this callback returns.
+///
+/// The ops argument is whatever the final release passed along. Compiled Roc
+/// code carries no RocOps under the symbol ABI and passes null here, so a
+/// host-installed callback must reach the host's RocOps through the host's
+/// own storage, never through this parameter.
 pub const OnDropFn = *const fn (?[*]u8, *RocOps) callconv(.c) void;
 
 /// Fixed header at the beginning of a boxed erased callable payload.

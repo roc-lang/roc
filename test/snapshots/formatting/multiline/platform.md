@@ -18,34 +18,35 @@ platform "pf"
 		pa2: "pa2",
 	}
 	provides {
-		pr1: "not implemented",
-		pr2: "not implemented",
+		"roc_not implemented": pr1,
+		"roc_not implemented": pr2,
 	}
 ~~~
 # EXPECTED
-EXPOSED BUT NOT DEFINED - platform.md:14:3:14:25
-EXPOSED BUT NOT DEFINED - platform.md:15:3:15:25
+EXPOSED BUT NOT DEFINED - platform.md:14:3:14:29
+EXPOSED BUT NOT DEFINED - platform.md:15:3:15:29
 EXPOSED BUT NOT DEFINED - platform.md:6:3:6:5
 EXPOSED BUT NOT DEFINED - platform.md:7:3:7:5
+INVALID HOSTED SECTION - :0:0:0:0
 # PROBLEMS
 **EXPOSED BUT NOT DEFINED**
 The module header says that `pr1` is exposed, but it is not defined anywhere in this module.
 
-**platform.md:14:3:14:25:**
+**platform.md:14:3:14:29:**
 ```roc
-		pr1: "not implemented",
+		"roc_not implemented": pr1,
 ```
-		^^^^^^^^^^^^^^^^^^^^^^
+		^^^^^^^^^^^^^^^^^^^^^^^^^^
 You can fix this by either defining `pr1` in this module, or by removing it from the list of exposed values.
 
 **EXPOSED BUT NOT DEFINED**
 The module header says that `pr2` is exposed, but it is not defined anywhere in this module.
 
-**platform.md:15:3:15:25:**
+**platform.md:15:3:15:29:**
 ```roc
-		pr2: "not implemented",
+		"roc_not implemented": pr2,
 ```
-		^^^^^^^^^^^^^^^^^^^^^^
+		^^^^^^^^^^^^^^^^^^^^^^^^^^
 You can fix this by either defining `pr2` in this module, or by removing it from the list of exposed values.
 
 **EXPOSED BUT NOT DEFINED**
@@ -68,6 +69,9 @@ The module header says that `E2` is exposed, but it is not defined anywhere in t
 		^^
 You can fix this by either defining `E2` in this module, or by removing it from the list of exposed values.
 
+**INVALID HOSTED SECTION**
+The platform header maps more than one function to the linker symbol `roc_not implemented`. Each provides and hosted entry needs a distinct symbol.
+
 # TOKENS
 ~~~zig
 KwPlatform,StringStart,StringPart,StringEnd,
@@ -83,8 +87,8 @@ LowerIdent,OpColon,StringStart,StringPart,StringEnd,Comma,
 LowerIdent,OpColon,StringStart,StringPart,StringEnd,Comma,
 CloseCurly,
 KwProvides,OpenCurly,
-LowerIdent,OpColon,StringStart,StringPart,StringEnd,Comma,
-LowerIdent,OpColon,StringStart,StringPart,StringEnd,Comma,
+StringStart,StringPart,StringEnd,OpColon,LowerIdent,Comma,
+StringStart,StringPart,StringEnd,OpColon,LowerIdent,Comma,
 CloseCurly,
 EndOfFile,
 ~~~
@@ -112,17 +116,25 @@ EndOfFile,
 				(e-string
 					(e-string-part (raw "pa2")))))
 		(provides
-			(record-field (name "pr1")
-				(e-string
-					(e-string-part (raw "not implemented"))))
-			(record-field (name "pr2")
-				(e-string
-					(e-string-part (raw "not implemented"))))))
+			(symbol-map-entry (symbol "roc_not implemented") (func "pr1"))
+			(symbol-map-entry (symbol "roc_not implemented") (func "pr2"))))
 	(statements))
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+platform "pf"
+	requires {
+		[R1 : r1, R2 : r2] for main : R1 -> R2
+	}
+	exposes [
+		E1,
+		E2,
+	]
+	packages {
+		pa1: "pa1",
+		pa2: "pa2",
+	}
+	provides { "roc_not implemented": pr1, "roc_not implemented": pr2 }
 ~~~
 # CANONICALIZE
 ~~~clojure

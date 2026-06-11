@@ -155,7 +155,7 @@ const StaticDataBuilder = struct {
             const const_node = self.constNode(data.const_ref);
             const request = self.requestedLayout(data.checked_type);
             const entrypoint_name = self.root.module.canonical_names.externalSymbolNameText(data.ffi_symbol);
-            const symbol_name = try std.fmt.allocPrint(self.allocator, "roc__{s}", .{entrypoint_name});
+            const symbol_name = try self.allocator.dupe(u8, entrypoint_name);
             errdefer self.allocator.free(symbol_name);
 
             const materialized = try self.materializeValue(const_node, request.plan, request.layout_idx);

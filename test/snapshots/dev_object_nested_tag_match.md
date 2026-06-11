@@ -27,7 +27,7 @@ platform ""
     requires {} { main : Str }
     exposes []
     packages {}
-    provides { main_for_host: "main" }
+    provides { "roc_main": main_for_host }
     targets: {
         inputs: "targets/",
         x64glibc: { inputs: [app] },
@@ -52,20 +52,20 @@ main = inspect(extract_code(Err(Exit(42))))
 ~~~
 # DEV OUTPUT
 ~~~ini
-x64mac=fa575d304941045802c8401f91c3aa06ed066a984347446615e391463dd5cde6
-x64win=a85c32d8b5921ce20f69261e1efe1cd11485e1ee3634e901a5742a36770b95fc
-x64freebsd=bde79cfbe572c39ee6c5f32a8a702c17c85ac99ca264e1cb5fa01114e0eedcfe
-x64openbsd=bde79cfbe572c39ee6c5f32a8a702c17c85ac99ca264e1cb5fa01114e0eedcfe
-x64netbsd=bde79cfbe572c39ee6c5f32a8a702c17c85ac99ca264e1cb5fa01114e0eedcfe
-x64musl=bde79cfbe572c39ee6c5f32a8a702c17c85ac99ca264e1cb5fa01114e0eedcfe
-x64glibc=bde79cfbe572c39ee6c5f32a8a702c17c85ac99ca264e1cb5fa01114e0eedcfe
-x64linux=bde79cfbe572c39ee6c5f32a8a702c17c85ac99ca264e1cb5fa01114e0eedcfe
-x64elf=bde79cfbe572c39ee6c5f32a8a702c17c85ac99ca264e1cb5fa01114e0eedcfe
-arm64mac=fbe38d08166890ab73602a28acd7aa5fffdaf3819cdc3b566cfa2def3827c591
-arm64win=beb6bac84ad3763a040f89fa3203c12c7ff7673a77dbfab2bd69fbc144b3adf0
-arm64linux=b7e0a6c0dbe57e9a378e7031c2e6ee97891991aa2b125e04cedb68f6d17a6428
-arm64musl=b7e0a6c0dbe57e9a378e7031c2e6ee97891991aa2b125e04cedb68f6d17a6428
-arm64glibc=b7e0a6c0dbe57e9a378e7031c2e6ee97891991aa2b125e04cedb68f6d17a6428
+x64mac=8010c5534b1921421d0ae08898b55b40a9542a2742f8862728e484596f04fb42
+x64win=0fb686ad250c7a686f8a8210b6e6765546ab8014a71a567a14cba78a53bc24a3
+x64freebsd=f3e710f1d5277e12b4c5c75bc245f1346cd0d42cedfe2a5a646ed490bbdae070
+x64openbsd=f3e710f1d5277e12b4c5c75bc245f1346cd0d42cedfe2a5a646ed490bbdae070
+x64netbsd=f3e710f1d5277e12b4c5c75bc245f1346cd0d42cedfe2a5a646ed490bbdae070
+x64musl=f3e710f1d5277e12b4c5c75bc245f1346cd0d42cedfe2a5a646ed490bbdae070
+x64glibc=f3e710f1d5277e12b4c5c75bc245f1346cd0d42cedfe2a5a646ed490bbdae070
+x64linux=f3e710f1d5277e12b4c5c75bc245f1346cd0d42cedfe2a5a646ed490bbdae070
+x64elf=f3e710f1d5277e12b4c5c75bc245f1346cd0d42cedfe2a5a646ed490bbdae070
+arm64mac=72fa5440705af64baffdd4917facd1c1d00dba2908fc91c5ddd0ea3ed117ae34
+arm64win=57733007b9883218cd647d37090f33331ce8379ed21d62e858c7ac6601f4e106
+arm64linux=2a7d36260ecff5d4fd05bcf6d700fabd1e3d2c68a5f4b7542aadfc4bc2ac5cfe
+arm64musl=2a7d36260ecff5d4fd05bcf6d700fabd1e3d2c68a5f4b7542aadfc4bc2ac5cfe
+arm64glibc=2a7d36260ecff5d4fd05bcf6d700fabd1e3d2c68a5f4b7542aadfc4bc2ac5cfe
 arm32linux=NOT_IMPLEMENTED
 arm32musl=NOT_IMPLEMENTED
 wasm32=NOT_IMPLEMENTED

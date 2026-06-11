@@ -3564,6 +3564,7 @@ pub fn canonicalizeFile(
             // These need to be in the exposed scope so they become exports
             // Platform provides uses curly braces { main_for_host! } so it's parsed as record fields
             try self.addPlatformProvidesItems(h.provides);
+            try self.addPlatformHostedItems(h.hosted);
             // Extract required type signatures for type checking using the new for-clause syntax
             // This stores the types in env.requires_types without creating local definitions
             // Also introduces type aliases (like Model) into the platform's top-level scope
@@ -4666,22 +4667,66 @@ fn addToExposedScope(
 }
 
 /// Add platform provides items to the exposed scope.
-/// Platform provides uses curly braces { main_for_host!: "main" } so it's parsed as record fields.
-/// The string value is the FFI symbol name exported to the host (becomes roc__<symbol>).
-fn addPlatformProvidesItems(
+/// Platform hosted maps linker symbol strings to hosted functions in the
+/// platform's exposed type modules: hosted { "roc_stdout_line": Stdout.line! }
+/// Entries are stored in declaration order, which defines hosted dispatch order.
+fn addPlatformHostedItems(
     self: *Self,
-    provides: AST.Collection.Idx,
+    hosted: AST.SymbolMapEntry.Span,
 ) std.mem.Allocator.Error!void {
     const gpa = self.env.gpa;
 
-    const collection = self.parse_ir.store.getCollection(provides);
-    const record_fields = self.parse_ir.store.recordFieldSlice(.{ .span = collection.span });
+    for (self.parse_ir.store.symbolMapEntrySlice(hosted)) |entry_idx| {
+        const entry = self.parse_ir.store.getSymbolMapEntry(entry_idx);
+        const func_ident = try self.hostedEntryFuncIdent(entry) orelse continue;
+        const module_ident = if (entry.module) |module_tok|
+            self.parse_ir.tokens.resolveIdentifier(module_tok)
+        else
+            null;
+        const symbol_idx = try self.env.insertString(self.parse_ir.resolve(entry.symbol));
+        _ = try self.env.hosted_entries.append(gpa, .{
+            .module_ident = module_ident,
+            .func_ident = func_ident,
+            .symbol = symbol_idx,
+        });
+    }
+}
 
-    for (record_fields) |field_idx| {
-        const field = self.parse_ir.store.getRecordField(field_idx);
+/// Resolve a hosted entry's function name within its module. Functions on
+/// nested type modules span several tokens (Foo.Idx.get! is the function
+/// `Idx.get!` in module `Foo`); the tokens between the module and the final
+/// function name are exactly the nested type segments, so the qualified name
+/// is their texts joined with dots.
+fn hostedEntryFuncIdent(self: *Self, entry: AST.SymbolMapEntry) std.mem.Allocator.Error!?Ident.Idx {
+    const direct = self.parse_ir.tokens.resolveIdentifier(entry.func) orelse return null;
+    const module_tok = entry.module orelse return direct;
+    if (entry.func == module_tok + 1) return direct;
 
-        // Get the identifier text from the field name token
-        if (self.parse_ir.tokens.resolveIdentifier(field.name)) |ident_idx| {
+    var text = std.ArrayList(u8).empty;
+    defer text.deinit(self.env.gpa);
+    var tok = module_tok + 1;
+    while (tok <= entry.func) : (tok += 1) {
+        const segment = self.parse_ir.tokens.resolveIdentifier(tok) orelse return null;
+        if (text.items.len != 0) try text.append(self.env.gpa, '.');
+        try text.appendSlice(self.env.gpa, self.env.getIdent(segment));
+    }
+    return try self.env.insertIdent(Ident.for_text(text.items));
+}
+
+/// Platform provides maps linker symbol strings to platform functions:
+/// provides { "roc_main": main_for_host! }
+/// The string is the literal symbol the app object exports for the host.
+fn addPlatformProvidesItems(
+    self: *Self,
+    provides: AST.SymbolMapEntry.Span,
+) std.mem.Allocator.Error!void {
+    const gpa = self.env.gpa;
+
+    for (self.parse_ir.store.symbolMapEntrySlice(provides)) |entry_idx| {
+        const entry = self.parse_ir.store.getSymbolMapEntry(entry_idx);
+
+        // Get the identifier from the function token
+        if (self.parse_ir.tokens.resolveIdentifier(entry.func)) |ident_idx| {
             // Add to exposed_items for permanent storage
             try self.env.addExposedById(ident_idx);
 
@@ -4689,43 +4734,21 @@ fn addPlatformProvidesItems(
             try self.exposed_idents.put(gpa, ident_idx, {});
 
             // Also track in exposed_ident_texts
-            const token_region = self.parse_ir.tokens.resolve(@intCast(field.name));
+            const token_region = self.parse_ir.tokens.resolve(@intCast(entry.func));
             const ident_text = self.parse_ir.env.source[token_region.start.offset..token_region.end.offset];
-            const region = self.parse_ir.tokenizedRegionToRegion(field.region);
+            const region = self.parse_ir.tokenizedRegionToRegion(entry.region);
             _ = try self.exposed_ident_texts.getOrPut(gpa, ident_text);
             if (self.exposed_ident_texts.getPtr(ident_text)) |ptr| {
                 ptr.* = region;
             }
 
-            // Extract FFI symbol from the string value and store as a provides entry
-            if (field.value) |value_idx| {
-                const ffi_symbol_text = blk: {
-                    const value_expr = self.parse_ir.store.getExpr(value_idx);
-                    switch (value_expr) {
-                        .string => |str_like| {
-                            const parts = self.parse_ir.store.exprSlice(str_like.parts);
-                            if (parts.len > 0) {
-                                const first_part = self.parse_ir.store.getExpr(parts[0]);
-                                switch (first_part) {
-                                    .string_part => |sp| break :blk self.parse_ir.resolve(sp.token),
-                                    else => break :blk null,
-                                }
-                            }
-                            break :blk null;
-                        },
-                        .string_part => |str_part| break :blk self.parse_ir.resolve(str_part.token),
-                        else => break :blk null,
-                    }
-                };
-
-                if (ffi_symbol_text) |ffi_text| {
-                    const ffi_string_idx = try self.env.insertString(ffi_text);
-                    _ = try self.env.provides_entries.append(gpa, .{
-                        .ident = ident_idx,
-                        .ffi_symbol = ffi_string_idx,
-                    });
-                }
-            }
+            // Store the literal linker symbol as the provides entry
+            const ffi_text = self.parse_ir.resolve(entry.symbol);
+            const ffi_string_idx = try self.env.insertString(ffi_text);
+            _ = try self.env.provides_entries.append(gpa, .{
+                .ident = ident_idx,
+                .ffi_symbol = ffi_string_idx,
+            });
         }
     }
 }
@@ -6126,6 +6149,23 @@ fn canonicalizeSingleQuote(
         .bytes = @bitCast(@as(u128, @intCast(codepoint))),
         .kind = .u128,
     };
+
+    // Base-256 digits of the codepoint, so the literal carries the numeral
+    // facts a custom from_numeral target reads.
+    var digit_buf: [4]u8 = undefined;
+    var digit_len: usize = 0;
+    var remaining: u32 = codepoint;
+    while (true) {
+        digit_buf[digit_len] = @intCast(remaining & 0xff);
+        digit_len += 1;
+        remaining >>= 8;
+        if (remaining == 0) break;
+    }
+    var digits: [4]u8 = undefined;
+    for (0..digit_len) |i| {
+        digits[i] = digit_buf[digit_len - 1 - i];
+    }
+
     if (comptime Idx == Expr.Idx) {
         const expr_idx = try self.env.addExpr(CIR.Expr{
             .e_num = .{
@@ -6133,12 +6173,14 @@ fn canonicalizeSingleQuote(
                 .kind = .int_unbound,
             },
         }, region);
+        try self.env.recordNumeralLiteral(ModuleEnv.nodeIdxFrom(expr_idx), digits[0..digit_len], &.{}, 0, false, false, false);
         return expr_idx;
     } else if (comptime Idx == Pattern.Idx) {
         const pat_idx = try self.env.addPattern(Pattern{ .num_literal = .{
             .value = value_content,
             .kind = .int_unbound,
         } }, region);
+        try self.env.recordNumeralLiteral(ModuleEnv.nodeIdxFrom(pat_idx), digits[0..digit_len], &.{}, 0, false, false, false);
         return pat_idx;
     } else {
         @compileError("Unsupported Idx type");
@@ -6189,6 +6231,25 @@ fn recordNumeralLiteralForExpr(
 ) std.mem.Allocator.Error!void {
     try self.env.recordNumeralLiteral(
         ModuleEnv.nodeIdxFrom(expr_idx),
+        self.parse_ir.store.numericDigitsBefore(literal),
+        self.parse_ir.store.numericDigitsAfter(literal),
+        literal.after_decimal_digit_count,
+        literal.isNegative(),
+        literal.kind == .frac,
+        literal.flags.had_decimal_point,
+    );
+}
+
+/// Record the exact base-256 digits of a parsed numeric literal against the
+/// CIR pattern node we just emitted, so literal patterns can dispatch through
+/// `from_numeral` when matched against a non-builtin number type.
+fn recordNumeralLiteralForPattern(
+    self: *Self,
+    pattern_idx: Pattern.Idx,
+    literal: NumericLiteral.Stored,
+) std.mem.Allocator.Error!void {
+    try self.env.recordNumeralLiteral(
+        ModuleEnv.nodeIdxFrom(pattern_idx),
         self.parse_ir.store.numericDigitsBefore(literal),
         self.parse_ir.store.numericDigitsAfter(literal),
         literal.after_decimal_digit_count,
@@ -14338,10 +14399,14 @@ pub fn canonicalizePattern(
                     const region = self.parse_ir.tokenizedRegionToRegion(e.region);
                     const literal = self.parse_ir.store.getNumericLiteral(e.literal);
                     last_pattern = switch (literal.compact) {
-                        .int => |value| try self.env.addPattern(Pattern{ .num_literal = .{
-                            .value = cirIntValue(value),
-                            .kind = .num_unbound,
-                        } }, region),
+                        .int => |value| blk: {
+                            const pat_idx = try self.env.addPattern(Pattern{ .num_literal = .{
+                                .value = cirIntValue(value),
+                                .kind = .num_unbound,
+                            } }, region);
+                            try self.recordNumeralLiteralForPattern(pat_idx, literal);
+                            break :blk pat_idx;
+                        },
                         else => try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } }),
                     };
                 },
@@ -14349,14 +14414,22 @@ pub fn canonicalizePattern(
                     const region = self.parse_ir.tokenizedRegionToRegion(e.region);
                     const literal = self.parse_ir.store.getNumericLiteral(e.literal);
                     last_pattern = switch (literal.compact) {
-                        .small_dec => |value| try self.env.addPattern(Pattern{ .small_dec_literal = .{
-                            .value = cirSmallDec(value),
-                            .has_suffix = false,
-                        } }, region),
-                        .dec => |value| try self.env.addPattern(Pattern{ .dec_literal = .{
-                            .value = builtins.dec.RocDec{ .num = value },
-                            .has_suffix = false,
-                        } }, region),
+                        .small_dec => |value| blk: {
+                            const pat_idx = try self.env.addPattern(Pattern{ .small_dec_literal = .{
+                                .value = cirSmallDec(value),
+                                .has_suffix = false,
+                            } }, region);
+                            try self.recordNumeralLiteralForPattern(pat_idx, literal);
+                            break :blk pat_idx;
+                        },
+                        .dec => |value| blk: {
+                            const pat_idx = try self.env.addPattern(Pattern{ .dec_literal = .{
+                                .value = builtins.dec.RocDec{ .num = value },
+                                .has_suffix = false,
+                            } }, region);
+                            try self.recordNumeralLiteralForPattern(pat_idx, literal);
+                            break :blk pat_idx;
+                        },
                         else => try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } }),
                     };
                 },
