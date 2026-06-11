@@ -799,6 +799,7 @@ pub fn parseAndCanonicalizeProgramPublishedRoots(
     return parseAndCanonicalizeProgramWithRootMode(allocator, source_kind, source, imports, false, .published_roots_only, null);
 }
 
+/// Whether publishing a program for compile-time evaluation reported problems.
 pub const ComptimePublishOutcome = enum { no_problems, comptime_problems };
 
 /// Publish a program with compile-time evaluation problems routed into the
