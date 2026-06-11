@@ -4197,6 +4197,7 @@ fn compileLlvmAppObject(
         std_target,
     );
     codegen.layout_store = &lowered.lir_result.layouts;
+    codegen.emit_debug_info = true;
     defer codegen.deinit();
 
     const llvm_entrypoints = try ctx.arena.alloc(llvm_codegen.MonoLlvmCodeGen.Entrypoint, entrypoints.len);

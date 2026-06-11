@@ -10,7 +10,9 @@
 //! letting LLVM optimize ordinary local stack traffic.
 
 const std = @import("std");
+
 const builtin = @import("builtin");
+const SourceLoc = lir.SourceLoc;
 const builtins = @import("builtins");
 const layout = @import("layout");
 const lir = @import("lir");
@@ -160,6 +162,15 @@ pub const MonoLlvmCodeGen = struct {
     loop_break_blocks: std.ArrayList(LlvmBuilder.Function.Block.Index),
     local_slots: []LocalSlot = &.{},
     string_counter: u32 = 0,
+    /// When true the module is built with DWARF debug info: a compile unit,
+    /// one subprogram per proc, and per-statement line locations from the
+    /// LIR store's source-location tables.
+    emit_debug_info: bool = false,
+    debug_compile_unit: LlvmBuilder.Metadata.Optional = .none,
+    debug_enums_fwd_ref: LlvmBuilder.Metadata.Optional = .none,
+    debug_globals_fwd_ref: LlvmBuilder.Metadata.Optional = .none,
+    current_subprogram: LlvmBuilder.Metadata.Optional = .none,
+    current_debug_file: u32 = SourceLoc.no_file,
 
     /// Errors reported while building LLVM IR.
     pub const Error = error{
@@ -297,6 +308,11 @@ pub const MonoLlvmCodeGen = struct {
         self.loop_continue_blocks.clearRetainingCapacity();
         self.loop_break_blocks.clearRetainingCapacity();
         self.string_counter = 0;
+        self.debug_compile_unit = .none;
+        self.debug_enums_fwd_ref = .none;
+        self.debug_globals_fwd_ref = .none;
+        self.current_subprogram = .none;
+        self.current_debug_file = SourceLoc.no_file;
     }
 
     /// Generates a single eval-style module for `root_proc`.
@@ -337,6 +353,8 @@ pub const MonoLlvmCodeGen = struct {
         self.builder = &builder;
         defer self.builder = null;
 
+        if (!builder.strip) try self.setupDebugInfo(&builder, module_name);
+
         const procs = self.store.getProcSpecs();
         try self.compileAllProcSpecs(procs);
         try self.compilePendingRcHelpers();
@@ -349,9 +367,90 @@ pub const MonoLlvmCodeGen = struct {
             );
         }
 
+        if (!builder.strip) {
+            const empty_tuple = builder.metadataTuple(&.{}) catch return error.OutOfMemory;
+            builder.resolveDebugForwardReference(self.debug_enums_fwd_ref.unwrap().?, empty_tuple);
+            builder.resolveDebugForwardReference(self.debug_globals_fwd_ref.unwrap().?, empty_tuple);
+        }
+
         return .{
             .bitcode = try self.serializeBuilderToBitcode(&builder),
             .allocator = self.allocator,
+        };
+    }
+
+    /// Creates the compile unit, registers it in `llvm.dbg.cu`, and sets the
+    /// module flags DWARF emission requires.
+    fn setupDebugInfo(self: *MonoLlvmCodeGen, builder: *LlvmBuilder, module_name: []const u8) Error!void {
+        const cu_file_name = if (self.store.sourceFileCount() > 0)
+            self.store.sourceFileName(0)
+        else
+            module_name;
+        const cu_file = builder.debugFile(
+            builder.metadataString(cu_file_name) catch return error.OutOfMemory,
+            builder.metadataString(".") catch return error.OutOfMemory,
+        ) catch return error.OutOfMemory;
+
+        self.debug_enums_fwd_ref = (builder.debugForwardReference() catch return error.OutOfMemory).toOptional();
+        self.debug_globals_fwd_ref = (builder.debugForwardReference() catch return error.OutOfMemory).toOptional();
+
+        const compile_unit = builder.debugCompileUnit(
+            cu_file,
+            builder.metadataString("roc") catch return error.OutOfMemory,
+            self.debug_enums_fwd_ref.unwrap().?,
+            self.debug_globals_fwd_ref.unwrap().?,
+            .{ .optimized = false },
+        ) catch return error.OutOfMemory;
+        self.debug_compile_unit = compile_unit.toOptional();
+        builder.addNamedMetadata(
+            builder.string("llvm.dbg.cu") catch return error.OutOfMemory,
+            &.{compile_unit},
+        ) catch return error.OutOfMemory;
+
+        const behavior_warning = builder.metadataConstant(
+            builder.intConst(.i32, 2) catch return error.OutOfMemory,
+        ) catch return error.OutOfMemory;
+        const behavior_max = builder.metadataConstant(
+            builder.intConst(.i32, 7) catch return error.OutOfMemory,
+        ) catch return error.OutOfMemory;
+        const debug_info_version = builder.metadataTuple(&.{
+            behavior_warning,
+            (builder.metadataString("Debug Info Version") catch return error.OutOfMemory).toMetadata(),
+            builder.metadataConstant(builder.intConst(.i32, 3) catch return error.OutOfMemory) catch return error.OutOfMemory,
+        }) catch return error.OutOfMemory;
+        const dwarf_version = builder.metadataTuple(&.{
+            behavior_max,
+            (builder.metadataString("Dwarf Version") catch return error.OutOfMemory).toMetadata(),
+            builder.metadataConstant(builder.intConst(.i32, 4) catch return error.OutOfMemory) catch return error.OutOfMemory,
+        }) catch return error.OutOfMemory;
+        builder.addNamedMetadata(
+            builder.string("llvm.module.flags") catch return error.OutOfMemory,
+            &.{ debug_info_version, dwarf_version },
+        ) catch return error.OutOfMemory;
+    }
+
+    /// DIFile metadata for one source file table entry (interned by the
+    /// builder, so repeated calls are cheap).
+    fn debugFileFor(self: *MonoLlvmCodeGen, builder: *LlvmBuilder, file: u32) Error!LlvmBuilder.Metadata {
+        const name = if (file == SourceLoc.no_file)
+            "<roc-generated>"
+        else
+            self.store.sourceFileName(file);
+        return builder.debugFile(
+            builder.metadataString(name) catch return error.OutOfMemory,
+            builder.metadataString(".") catch return error.OutOfMemory,
+        ) catch return error.OutOfMemory;
+    }
+
+    fn procDebugName(
+        self: *MonoLlvmCodeGen,
+        builder: *LlvmBuilder,
+        proc_id: LirProcSpecId,
+        proc: LirProcSpec,
+    ) Error!LlvmBuilder.Metadata.String {
+        return switch (self.proc_symbol_mode) {
+            .local_index => builder.metadataStringFmt("roc_proc_{d}", .{@intFromEnum(proc_id)}) catch return error.OutOfMemory,
+            .lir_symbol => builder.metadataStringFmt("roc__proc_{x}", .{proc.name.raw()}) catch return error.OutOfMemory,
         };
     }
 
@@ -421,7 +520,40 @@ pub const MonoLlvmCodeGen = struct {
         self.loop_continue_blocks.clearRetainingCapacity();
         self.loop_break_blocks.clearRetainingCapacity();
 
-        var wip = LlvmBuilder.WipFunction.init(builder, .{ .function = func, .strip = true }) catch return error.OutOfMemory;
+        const outer_subprogram = self.current_subprogram;
+        const outer_debug_file = self.current_debug_file;
+        defer {
+            self.current_subprogram = outer_subprogram;
+            self.current_debug_file = outer_debug_file;
+        }
+        self.current_subprogram = .none;
+        self.current_debug_file = SourceLoc.no_file;
+        if (!builder.strip) {
+            const proc_loc = self.store.procLoc(proc_id);
+            const file = try self.debugFileFor(builder, proc_loc.file);
+            const name_str = try self.procDebugName(builder, proc_id, proc);
+            const subprogram = builder.debugSubprogram(
+                file,
+                name_str,
+                name_str,
+                proc_loc.line,
+                proc_loc.line,
+                builder.debugSubroutineType(null) catch return error.OutOfMemory,
+                .{
+                    .di_flags = .{},
+                    .sp_flags = .{
+                        .Definition = true,
+                        .LocalToUnit = self.proc_symbol_mode != .lir_symbol,
+                    },
+                },
+                self.debug_compile_unit.unwrap().?,
+            ) catch return error.OutOfMemory;
+            func.setSubprogram(subprogram, builder);
+            self.current_subprogram = subprogram.toOptional();
+            self.current_debug_file = proc_loc.file;
+        }
+
+        var wip = LlvmBuilder.WipFunction.init(builder, .{ .function = func, .strip = builder.strip }) catch return error.OutOfMemory;
         defer wip.deinit();
         self.wip = &wip;
 
@@ -474,7 +606,7 @@ pub const MonoLlvmCodeGen = struct {
             self.roc_ops_arg = outer_roc_ops;
         }
 
-        var wip = LlvmBuilder.WipFunction.init(builder, .{ .function = wrapper, .strip = true }) catch return error.OutOfMemory;
+        var wip = LlvmBuilder.WipFunction.init(builder, .{ .function = wrapper, .strip = builder.strip }) catch return error.OutOfMemory;
         defer wip.deinit();
         self.wip = &wip;
 
@@ -496,6 +628,7 @@ pub const MonoLlvmCodeGen = struct {
     fn createBuilder(self: *MonoLlvmCodeGen, name: []const u8) Error!LlvmBuilder {
         return LlvmBuilder.init(.{
             .allocator = self.allocator,
+            .strip = !self.emit_debug_info,
             .name = name,
             .target = &self.target,
             .triple = self.triple,
@@ -701,6 +834,33 @@ pub const MonoLlvmCodeGen = struct {
 
     /// Processes a single statement node, queueing successors and nested-body
     /// continuations onto `work` rather than recursing.
+    /// Sets the WIP function's ambient debug location from a statement's LIR
+    /// source location. Statements with no location (or from a different file
+    /// than the subprogram, which plain subprogram scopes cannot express) get
+    /// line 0: the LLVM verifier requires a location on inlinable calls inside
+    /// functions that have debug info, and line 0 marks them compiler-generated.
+    fn setStmtDebugLocation(self: *MonoLlvmCodeGen, stmt_id: CFStmtId) void {
+        const wip = self.wip orelse return;
+        if (wip.strip) return;
+        if (self.current_subprogram.unwrap() == null) return;
+        const loc = self.store.stmtLoc(stmt_id);
+        if (loc.hasLocation() and loc.file == self.current_debug_file) {
+            wip.debug_location = .{ .location = .{
+                .line = loc.line,
+                .column = loc.column,
+                .scope = self.current_subprogram,
+                .inlined_at = .none,
+            } };
+        } else {
+            wip.debug_location = .{ .location = .{
+                .line = 0,
+                .column = 0,
+                .scope = self.current_subprogram,
+                .inlined_at = .none,
+            } };
+        }
+    }
+
     fn compileStmtNode(
         self: *MonoLlvmCodeGen,
         stmt_id: CFStmtId,
@@ -709,6 +869,7 @@ pub const MonoLlvmCodeGen = struct {
     ) Error!void {
         if (self.currentBlockHasTerminator()) return;
         const stmt = self.store.getCFStmt(stmt_id);
+        self.setStmtDebugLocation(stmt_id);
         switch (stmt) {
             .assign_ref => |assign| {
                 try self.emitAssignRef(assign.target, assign.op);

@@ -405,6 +405,9 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
             try args.append("-nostdlib");
             // Remove unused sections to reduce binary size
             try args.append("--gc-sections");
+            // Stamp a build id so stripped copies of the binary can be
+            // matched back to their debug info.
+            try args.append("--build-id");
             // TODO make the confirugable instead of using comments
             // Suppress linker warnings
             if (suppress_linker_warnings) {
@@ -511,6 +514,9 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
                 try args.append("/subsystem:console");
             }
             try args.append("/opt:ref");
+            // Roc objects carry DWARF (not CodeView); this keeps the .debug_*
+            // sections in the PE for gdb/lldb instead of dropping them.
+            try args.append("/debug:dwarf");
 
             // Add machine type based on target architecture
             switch (target_arch) {
