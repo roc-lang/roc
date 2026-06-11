@@ -1,7 +1,60 @@
 //! Type-checking tests for range expressions (`..<` / `..=`).
 //! Ranges desugar to `until`/`to` static dispatch returning Iter(num).
+//! Also tests for Iter.exclusive_range / Iter.inclusive_range constructors.
 
 const TestEnv = @import("./TestEnv.zig");
+
+// ─── Iter.exclusive_range / Iter.inclusive_range direct constructor tests ────
+
+test "exclusive_range of unannotated literals defaults to Iter(Dec)" {
+    var test_env = try TestEnv.initExpr("Test", "Iter.exclusive_range(0, 3)");
+    defer test_env.deinit();
+    try test_env.assertLastDefType("Iter(Dec)");
+}
+
+test "inclusive_range of unannotated literals defaults to Iter(Dec)" {
+    var test_env = try TestEnv.initExpr("Test", "Iter.inclusive_range(0, 3)");
+    defer test_env.deinit();
+    try test_env.assertLastDefType("Iter(Dec)");
+}
+
+test "exclusive_range annotation pins the type to Iter(U8)" {
+    const source =
+        \\r : Iter(U8)
+        \\r = Iter.exclusive_range(0, 10)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertDefType("r", "Iter(U8)");
+}
+
+test "inclusive_range annotation pins the type to Iter(U8)" {
+    const source =
+        \\r : Iter(U8)
+        \\r = Iter.inclusive_range(0, 255)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertDefType("r", "Iter(U8)");
+}
+
+test "exclusive_range over generic operands carries its where-constraints" {
+    const source =
+        \\f = |a, b| Iter.exclusive_range(a, b)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertLastDefTypeContains("is_lt");
+}
+
+test "inclusive_range over generic operands carries its where-constraints" {
+    const source =
+        \\f = |a, b| Iter.inclusive_range(a, b)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertLastDefTypeContains("is_lte");
+}
 
 test "exclusive range of unannotated literals defaults like a numeral" {
     var test_env = try TestEnv.initExpr("Test", "0..<3");

@@ -479,6 +479,66 @@ Builtin :: [].{
 				},
 		}
 
+		## Iterator over `num` values from `start` up to but not including `end`.
+		## Returns an empty iterator if `start >= end`. This is what `start..<end` desugars to.
+		exclusive_range : num, num -> Iter(num)
+			where [
+				num.is_lt : num, num -> Bool,
+				num.add_checked : num, num -> Try(num, [Overflow]),
+				num.from_numeral : Builtin.Num.Numeral -> Try(num, [InvalidNumeral(Str)]),
+			]
+		exclusive_range = |start, end| {
+			len_if_known: Unknown,
+			step: ||
+				if start < end {
+					One(
+						{
+							item: start,
+							rest: match start.add_checked(1) {
+								Ok(next) => if next < end {
+									Iter.exclusive_range(next, end)
+								} else {
+									range_done()
+								}
+								Err(Overflow) => range_done()
+							},
+						},
+					)
+				} else {
+					Done
+				},
+		}
+
+		## Iterator over `num` values from `start` up to and including `end`.
+		## Returns an empty iterator if `start > end`. This is what `start..=end` desugars to.
+		inclusive_range : num, num -> Iter(num)
+			where [
+				num.is_lte : num, num -> Bool,
+				num.add_checked : num, num -> Try(num, [Overflow]),
+				num.from_numeral : Builtin.Num.Numeral -> Try(num, [InvalidNumeral(Str)]),
+			]
+		inclusive_range = |start, end| {
+			len_if_known: Unknown,
+			step: ||
+				if start <= end {
+					One(
+						{
+							item: start,
+							rest: match start.add_checked(1) {
+								Ok(next) => if next <= end {
+									Iter.inclusive_range(next, end)
+								} else {
+									range_done()
+								}
+								Err(Overflow) => range_done()
+							},
+						},
+					)
+				} else {
+					Done
+				},
+		}
+
 		iter : Iter(item) -> Iter(item)
 		iter = |self| self
 
