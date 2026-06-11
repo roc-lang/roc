@@ -51,6 +51,7 @@ pub const CompileConfig = struct {
     features: []const u8 = "",
     debug: bool = false, // Enable debug info generation in output
     link_builtins: bool = false,
+    host_call_extern: bool = false, // Builtins reach the host via extern symbols (the symbol ABI)
     pic: bool = false, // Position-independent code (required for shared library output)
 };
 
@@ -212,6 +213,10 @@ const llvm_embedded = if (llvm_available) @import("llvm_embedded") else struct {
     pub const builtins64_bc: []const u8 = "";
     pub const builtins32_core_bc: []const u8 = "";
     pub const builtins64_core_bc: []const u8 = "";
+    pub const builtins32_extern_bc: []const u8 = "";
+    pub const builtins64_extern_bc: []const u8 = "";
+    pub const builtins32_core_extern_bc: []const u8 = "";
+    pub const builtins64_core_extern_bc: []const u8 = "";
 };
 
 const core_builtin_roots = std.StaticStringMap(void).initComptime(.{
@@ -302,8 +307,15 @@ fn canUseCoreBuiltins(app_decls: *const std.StringHashMap(void)) bool {
     return true;
 }
 
-fn selectBuiltinBitcode(ptr_width: u16, app_decls: *const std.StringHashMap(void)) []const u8 {
+fn selectBuiltinBitcode(ptr_width: u16, app_decls: *const std.StringHashMap(void), host_call_extern: bool) []const u8 {
     const use_core = canUseCoreBuiltins(app_decls);
+    if (host_call_extern) {
+        return switch (ptr_width) {
+            32 => if (use_core) llvm_embedded.builtins32_core_extern_bc else llvm_embedded.builtins32_extern_bc,
+            64 => if (use_core) llvm_embedded.builtins64_core_extern_bc else llvm_embedded.builtins64_extern_bc,
+            else => "",
+        };
+    }
     return switch (ptr_width) {
         32 => if (use_core) llvm_embedded.builtins32_core_bc else llvm_embedded.builtins32_bc,
         64 => if (use_core) llvm_embedded.builtins64_core_bc else llvm_embedded.builtins64_bc,
@@ -486,7 +498,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
             try app_defs.put(name, {});
         }
 
-        const builtins_bc = selectBuiltinBitcode(config.target.ptrBitWidth(), &app_decls);
+        const builtins_bc = selectBuiltinBitcode(config.target.ptrBitWidth(), &app_decls, config.host_call_extern);
         if (builtins_bc.len == 0) {
             std.log.err("No embedded builtin bitcode for {d}-bit target pointers", .{config.target.ptrBitWidth()});
             return false;

@@ -6,7 +6,6 @@
 
 const std = @import("std");
 const shim_io = @import("shim_io");
-const builtins = @import("builtins");
 
 pub const std_options_elf_debug_info_search_paths = shim_io.elfDebugInfoSearchPaths;
 pub const std_options_debug_io = shim_io.io();
@@ -14,16 +13,12 @@ pub const std_options_debug_threaded_io = null;
 // See `shim_io.std_options_no_stack_tracing` for why stack tracing is disabled.
 pub const std_options = shim_io.std_options_no_stack_tracing;
 
-/// Host environment - contains our arena allocator
-const HostEnv = struct {
-    arena: std.heap.ArenaAllocator,
-};
+/// Allocation state for the host's exported runtime symbols. Under the symbol
+/// ABI no context parameter reaches these functions; the host owns its
+/// delivery, here via a process-global arena.
+var host_arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
 
-/// Roc allocation function with size-tracking metadata
-fn rocAllocFn(ops: *builtins.host_abi.RocOps, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
-    const host: *HostEnv = @ptrCast(@alignCast(ops.env));
-    const allocator = host.arena.allocator();
-
+fn hostAlloc(length: usize, alignment: usize) callconv(.c) ?*anyopaque {
     const min_alignment: usize = @max(alignment, @alignOf(usize));
     const align_enum = std.mem.Alignment.fromByteUnits(min_alignment);
 
@@ -31,30 +26,23 @@ fn rocAllocFn(ops: *builtins.host_abi.RocOps, length: usize, alignment: usize) c
     const size_storage_bytes = @max(alignment, @alignOf(usize));
     const total_size = length + size_storage_bytes;
 
-    const base_ptr = allocator.rawAlloc(total_size, align_enum, @returnAddress()) orelse {
+    const base_ptr = host_arena.allocator().rawAlloc(total_size, align_enum, @returnAddress()) orelse {
         @panic("Host allocation failed");
     };
 
-    // Store total size right before the user data
     const size_ptr: *usize = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes - @sizeOf(usize));
     size_ptr.* = total_size;
 
     return @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes);
 }
 
-/// Roc deallocation function
-fn rocDeallocFn(ops: *builtins.host_abi.RocOps, ptr: *anyopaque, alignment: usize) callconv(.c) void {
-    _ = ops;
+fn hostDealloc(ptr: *anyopaque, alignment: usize) callconv(.c) void {
     _ = ptr;
     _ = alignment;
     // NoOp as our arena frees all memory at once
 }
 
-/// Roc reallocation function
-fn rocReallocFn(ops: *builtins.host_abi.RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
-    const host: *HostEnv = @ptrCast(@alignCast(ops.env));
-    const allocator = host.arena.allocator();
-
+fn hostRealloc(ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
     const min_alignment: usize = @max(alignment, @alignOf(usize));
     const align_enum = std.mem.Alignment.fromByteUnits(min_alignment);
 
@@ -64,83 +52,87 @@ fn rocReallocFn(ops: *builtins.host_abi.RocOps, ptr: *anyopaque, new_length: usi
     const old_size_ptr: *const usize = @ptrFromInt(@intFromPtr(ptr) - @sizeOf(usize));
     const old_total_size = old_size_ptr.*;
 
-    // Allocate new block
     const new_total_size = new_length + size_storage_bytes;
-    const new_ptr = allocator.rawAlloc(new_total_size, align_enum, @returnAddress()) orelse {
+    const new_ptr = host_arena.allocator().rawAlloc(new_total_size, align_enum, @returnAddress()) orelse {
         @panic("Host reallocation failed");
     };
 
-    // Copy old data to new location
     const old_base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(ptr) - size_storage_bytes);
     const copy_size = @min(old_total_size, new_total_size);
     @memcpy(new_ptr[0..copy_size], old_base_ptr[0..copy_size]);
 
-    // Store new size in metadata
     const new_size_ptr: *usize = @ptrFromInt(@intFromPtr(new_ptr) + size_storage_bytes - @sizeOf(usize));
     new_size_ptr.* = new_total_size;
 
     return @ptrFromInt(@intFromPtr(new_ptr) + size_storage_bytes);
 }
 
-/// Roc debug function
-fn rocDbgFn(ops: *builtins.host_abi.RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
-    _ = ops;
+fn hostDbg(bytes: [*]const u8, len: usize) callconv(.c) void {
     std.debug.print("ROC DBG: {s}\n", .{bytes[0..len]});
 }
 
-/// Roc expect failed function
-fn rocExpectFailedFn(ops: *builtins.host_abi.RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
-    _ = ops;
+fn hostExpectFailed(bytes: [*]const u8, len: usize) callconv(.c) void {
     const trimmed = std.mem.trim(u8, bytes[0..len], " \t\n\r");
     std.debug.print("Expect failed: {s}\n", .{trimmed});
 }
 
-/// Roc crashed function
-fn rocCrashedFn(ops: *builtins.host_abi.RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
-    _ = ops;
+fn hostCrashed(bytes: [*]const u8, len: usize) callconv(.c) void {
     @panic(bytes[0..len]);
 }
 
-// The app's entrypoint, named by `provides { main_for_host!: "main" }`.
-// Follows the RocCall ABI: ops, ret_ptr, then a pointer to the argument tuple.
-extern fn roc_main(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
+// The fixed runtime symbols every symbol-ABI host defines, plus this
+// platform's hosted functions under their header symbols.
+comptime {
+    @export(&hostAlloc, .{ .name = "roc_alloc", .visibility = .hidden });
+    @export(&hostDealloc, .{ .name = "roc_dealloc", .visibility = .hidden });
+    @export(&hostRealloc, .{ .name = "roc_realloc", .visibility = .hidden });
+    @export(&hostDbg, .{ .name = "roc_dbg", .visibility = .hidden });
+    @export(&hostExpectFailed, .{ .name = "roc_expect_failed", .visibility = .hidden });
+    @export(&hostCrashed, .{ .name = "roc_crashed", .visibility = .hidden });
+    @export(&hostedHostDouble, .{ .name = "roc_host_double", .visibility = .hidden });
+}
 
-/// Host.double! (dispatch index 0): double a number in the host.
-/// I64 -> I64 involves no refcounted values, so under the hosted C ABI it
-/// receives no leading *RocOps.
+/// Host.double!: double a number in the host. I64 -> I64 involves no
+/// refcounted values, so under the hosted C ABI it takes no parameters
+/// beyond its arguments.
 fn hostedHostDouble(n: i64) callconv(.c) i64 {
     return n * 2;
 }
 
-// Hosted functions sorted alphabetically by Module.fn_name (trailing ! stripped).
-const hosted_function_ptrs = [_]builtins.host_abi.HostedFn{
-    builtins.host_abi.hostedFn(&hostedHostDouble), // Host.double! (index 0)
+// --- Dead-code-elimination canaries
+// A large constant and a function that uses it, exported (hidden) but never
+// referenced by the app. Symbol-ABI links must strip both from the final
+// artifact; tests scan the output for the distinctive byte pattern.
+const dce_canary_blob: [4096]u8 = blk: {
+    @setEvalBranchQuota(20000);
+    var blob: [4096]u8 = undefined;
+    const marker = "ROC_DCE_CANARY_BLOB_7f3a9c";
+    var i: usize = 0;
+    while (i < blob.len) : (i += 1) {
+        blob[i] = marker[i % marker.len];
+    }
+    break :blk blob;
 };
+
+fn hostUnusedNicheFeature(n: i64) callconv(.c) i64 {
+    // Touch every byte so the blob cannot be dropped independently.
+    var acc: i64 = n;
+    for (dce_canary_blob) |byte| {
+        acc +%= byte;
+    }
+    return acc;
+}
+
+comptime {
+    @export(&hostUnusedNicheFeature, .{ .name = "roc_host_unused_niche_feature", .visibility = .hidden });
+}
+
+// The app's entrypoint, named by `provides { "roc_main": main_for_host! }`,
+// exported with its natural C ABI under the symbol ABI.
+extern fn roc_main(n: i64) callconv(.c) i64;
 
 /// The shared library's outward-facing C API: run the Roc app on `n` and
 /// return its answer.
 export fn roc_run_app(n: i64) callconv(.c) i64 {
-    var host_env = HostEnv{
-        .arena = std.heap.ArenaAllocator.init(std.heap.page_allocator),
-    };
-    defer host_env.arena.deinit();
-
-    var roc_ops = builtins.host_abi.RocOps{
-        .env = @as(*anyopaque, @ptrCast(&host_env)),
-        .roc_alloc = rocAllocFn,
-        .roc_dealloc = rocDeallocFn,
-        .roc_realloc = rocReallocFn,
-        .roc_dbg = rocDbgFn,
-        .roc_expect_failed = rocExpectFailedFn,
-        .roc_crashed = rocCrashedFn,
-        .hosted_fns = .{
-            .count = hosted_function_ptrs.len,
-            .fns = @constCast(&hosted_function_ptrs),
-        },
-    };
-
-    var arg: i64 = n;
-    var ret: i64 = undefined;
-    roc_main(&roc_ops, @ptrCast(&ret), @ptrCast(&arg));
-    return ret;
+    return roc_main(n);
 }

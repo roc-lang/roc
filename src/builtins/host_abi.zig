@@ -33,6 +33,38 @@ const tracy = @import("tracy");
 /// into its return value or longer-lived storage. If the host keeps both the call argument
 /// and a stored copy, it must incref the stored copy so each live reference has one
 /// ownership.
+/// How builtins and compiled Roc code reach the host's runtime operations.
+pub const HostCallMode = enum {
+    /// Through the RocOps vtable parameter (the interpreter, compiler-internal
+    /// evaluation, and any host that constructs a RocOps).
+    vtable,
+    /// Through linker-resolved extern symbols (compiled output). The *RocOps
+    /// parameters threaded through builtins are inert in this mode; the
+    /// methods below ignore them and call the extern symbols directly.
+    extern_symbols,
+};
+
+/// Selected by the root module (like std_options): declaring
+/// `pub const roc_host_call_mode: host_abi.HostCallMode = .extern_symbols;`
+/// at the root switches builtins to direct extern host calls.
+pub const host_call_mode: HostCallMode = if (@hasDecl(@import("root"), "roc_host_call_mode"))
+    @import("root").roc_host_call_mode
+else
+    .vtable;
+
+/// The fixed runtime symbols every host defines under the symbol ABI.
+const extern_host = struct {
+    extern fn roc_alloc(length: usize, alignment: usize) ?*anyopaque;
+    extern fn roc_dealloc(ptr: *anyopaque, alignment: usize) void;
+    extern fn roc_realloc(ptr: *anyopaque, new_length: usize, alignment: usize) ?*anyopaque;
+    extern fn roc_dbg(bytes: [*]const u8, len: usize) void;
+    extern fn roc_expect_failed(bytes: [*]const u8, len: usize) void;
+    extern fn roc_crashed(bytes: [*]const u8, len: usize) void;
+};
+
+/// Type-erased pointer to a hosted platform function stored in the
+/// interpreter-internal vtable. The interpreter's trampoline rebuilds each
+/// function's natural C ABI from its layouts before calling through this.
 pub const HostedFn = *const fn (*anyopaque, *anyopaque, *anyopaque) callconv(.c) void;
 
 /// Type-erase a concrete hosted function pointer to `HostedFn` for storage in the vtable.
@@ -106,7 +138,10 @@ pub const RocOps = extern struct {
         const trace = tracy.trace(@src());
         defer trace.end();
 
-        self.roc_crashed(self, msg.ptr, msg.len);
+        switch (comptime host_call_mode) {
+            .vtable => self.roc_crashed(self, msg.ptr, msg.len),
+            .extern_symbols => extern_host.roc_crashed(msg.ptr, msg.len),
+        }
     }
 
     /// Helper to send debug output to the host.
@@ -114,7 +149,10 @@ pub const RocOps = extern struct {
         const trace = tracy.trace(@src());
         defer trace.end();
 
-        self.roc_dbg(self, msg.ptr, msg.len);
+        switch (comptime host_call_mode) {
+            .vtable => self.roc_dbg(self, msg.ptr, msg.len),
+            .extern_symbols => extern_host.roc_dbg(msg.ptr, msg.len),
+        }
     }
 
     /// Helper to report a failed `expect` to the host.
@@ -122,20 +160,39 @@ pub const RocOps = extern struct {
         const trace = tracy.trace(@src());
         defer trace.end();
 
-        self.roc_expect_failed(self, msg.ptr, msg.len);
+        switch (comptime host_call_mode) {
+            .vtable => self.roc_expect_failed(self, msg.ptr, msg.len),
+            .extern_symbols => extern_host.roc_expect_failed(msg.ptr, msg.len),
+        }
     }
 
     pub fn alloc(self: *RocOps, alignment: usize, length: usize) *anyopaque {
         const trace = tracy.trace(@src());
         defer trace.end();
 
-        const answer = self.roc_alloc(self, length, alignment);
+        const answer = self.tryAlloc(length, alignment);
 
         if (tracy.enable_allocation) {
             tracy.alloc(@ptrCast(answer), length);
         }
 
         return answer.?;
+    }
+
+    /// Allocate, returning null on OOM exactly as the host reported it.
+    pub fn tryAlloc(self: *RocOps, length: usize, alignment: usize) ?*anyopaque {
+        return switch (comptime host_call_mode) {
+            .vtable => self.roc_alloc(self, length, alignment),
+            .extern_symbols => extern_host.roc_alloc(length, alignment),
+        };
+    }
+
+    /// Reallocate, returning null on OOM exactly as the host reported it.
+    pub fn tryRealloc(self: *RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) ?*anyopaque {
+        return switch (comptime host_call_mode) {
+            .vtable => self.roc_realloc(self, ptr, new_length, alignment),
+            .extern_symbols => extern_host.roc_realloc(ptr, new_length, alignment),
+        };
     }
 
     pub fn dealloc(self: *RocOps, ptr: *anyopaque, alignment: usize) void {
@@ -146,6 +203,9 @@ pub const RocOps = extern struct {
             tracy.free(@ptrCast(ptr));
         }
 
-        self.roc_dealloc(self, ptr, alignment);
+        switch (comptime host_call_mode) {
+            .vtable => self.roc_dealloc(self, ptr, alignment),
+            .extern_symbols => extern_host.roc_dealloc(ptr, alignment),
+        }
     }
 };
