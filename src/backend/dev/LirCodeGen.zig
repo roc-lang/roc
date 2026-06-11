@@ -13048,7 +13048,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
             }
 
-            while (pre_reg_count + 1 > max_arg_regs) {
+            // In-process evaluation appends a real RocOps as the final
+            // argument, so its plan reserves one extra register slot; the
+            // symbol ABI appends nothing. This must mirror the caller-side
+            // plan in computePassByPtrPlan exactly.
+            const ops_slots: u8 = if (self.generation_mode == .native_execution) 1 else 0;
+            while (pre_reg_count + ops_slots > max_arg_regs) {
                 var found = false;
                 var best_idx: usize = 0;
                 var best_regs: u8 = 0;
