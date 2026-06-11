@@ -151,10 +151,9 @@ fn rocCrashedFn(ops: *builtins.host_abi.RocOps, bytes: [*]const u8, len: usize) 
     std.process.exit(1);
 }
 
-// External symbols provided by the Roc runtime object file
-// Follows RocCall ABI: ops, ret_ptr, then argument pointers
-// main_for_host! takes List(Str) and returns I32
-extern fn roc_main(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
+// The app's entrypoint, exported under its provides symbol with its natural
+// C ABI: main_for_host! takes List(Str) and returns I32.
+extern fn roc_main(args: RocList) callconv(.c) i32;
 
 // OS-specific entry point handling
 comptime {
@@ -187,20 +186,26 @@ const RocStr = builtins.str.RocStr;
 const RocList = builtins.list.RocList;
 const RocOps = builtins.host_abi.RocOps;
 
-/// Hosted function: Stderr.line! (index 0 - sorted alphabetically)
-/// Follows RocCall ABI: (ops, ret_ptr, args_ptr)
-/// Returns {} and takes Str as argument
-fn hostedStderrLine(ops: *RocOps, str: RocStr) callconv(.c) void {
-    _ = ops;
-    const message = str.asSlice();
+// The host's private RocOps. Hosted functions have natural C ABIs with no ops
+// parameter, so they reach the host's allocator and std.Io through this
+// global, set by platform_main before any Roc code runs.
+var g_roc_ops: ?*RocOps = null;
+
+/// Hosted function: Stderr.line!
+/// Returns {} and takes Str as argument; ownership of the Str transfers here.
+fn hostedStderrLine(str: RocStr) callconv(.c) void {
+    const ops = g_roc_ops.?;
+    var owned = str;
+    defer owned.decref(ops);
+    const message = owned.asSlice();
     std.debug.print("{s}", .{message});
     std.debug.print("{s}", .{"\n"});
 }
 
-/// Hosted function: Stdin.line! (index 1 - sorted alphabetically)
-/// Follows RocCall ABI: (ops, ret_ptr, args_ptr)
-/// Returns Str and takes {} as argument
-fn hostedStdinLine(ops: *RocOps) callconv(.c) RocStr {
+/// Hosted function: Stdin.line!
+/// Returns Str and takes no arguments.
+fn hostedStdinLine() callconv(.c) RocStr {
+    const ops = g_roc_ops.?;
     const host: *HostEnv = @ptrCast(@alignCast(ops.env));
     // Read a line from stdin
     var buffer: [4096]u8 = undefined;
@@ -232,23 +237,59 @@ fn hostedStdinLine(ops: *RocOps) callconv(.c) RocStr {
     return RocStr.fromSlice(line, ops);
 }
 
-/// Hosted function: Stdout.line! (index 2 - sorted alphabetically)
-/// Follows RocCall ABI: (ops, ret_ptr, args_ptr)
-/// Returns {} and takes Str as argument
-fn hostedStdoutLine(ops: *RocOps, str: RocStr) callconv(.c) void {
+/// Hosted function: Stdout.line!
+/// Returns {} and takes Str as argument; ownership of the Str transfers here.
+fn hostedStdoutLine(str: RocStr) callconv(.c) void {
+    const ops = g_roc_ops.?;
+    var owned = str;
+    defer owned.decref(ops);
     const host: *HostEnv = @ptrCast(@alignCast(ops.env));
-    const message = str.asSlice();
+    const message = owned.asSlice();
     std.Io.File.stdout().writeStreamingAll(host.std_io, message) catch {};
     std.Io.File.stdout().writeStreamingAll(host.std_io, "\n") catch {};
 }
 
-/// Array of hosted function pointers, sorted alphabetically by fully-qualified name
-/// These correspond to the hosted functions defined in Stderr, Stdin, and Stdout Type Modules
-const hosted_function_ptrs = [_]builtins.host_abi.HostedFn{
-    builtins.host_abi.hostedFn(&hostedStderrLine), // Stderr.line! (index 0)
-    builtins.host_abi.hostedFn(&hostedStdinLine), // Stdin.line! (index 1)
-    builtins.host_abi.hostedFn(&hostedStdoutLine), // Stdout.line! (index 2)
-};
+// --- Symbol-ABI runtime exports --------------------------------------------
+// The fixed runtime symbols every symbol-ABI host defines, plus this
+// platform's hosted function symbols. All hidden: they are link-time plumbing
+// between the app and the host, not part of the host binary's public API.
+
+fn hostAlloc(length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+    return rocAllocFn(g_roc_ops.?, length, alignment);
+}
+
+fn hostDealloc(ptr: *anyopaque, alignment: usize) callconv(.c) void {
+    rocDeallocFn(g_roc_ops.?, ptr, alignment);
+}
+
+fn hostRealloc(ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+    return rocReallocFn(g_roc_ops.?, ptr, new_length, alignment);
+}
+
+fn hostDbg(bytes: [*]const u8, len: usize) callconv(.c) void {
+    rocDbgFn(g_roc_ops.?, bytes, len);
+}
+
+fn hostExpectFailed(bytes: [*]const u8, len: usize) callconv(.c) void {
+    rocExpectFailedFn(g_roc_ops.?, bytes, len);
+}
+
+fn hostCrashed(bytes: [*]const u8, len: usize) callconv(.c) void {
+    rocCrashedFn(g_roc_ops.?, bytes, len);
+}
+
+comptime {
+    @export(&hostedStderrLine, .{ .name = "roc_stderr_line", .visibility = .hidden });
+    @export(&hostedStdinLine, .{ .name = "roc_stdin_line", .visibility = .hidden });
+    @export(&hostedStdoutLine, .{ .name = "roc_stdout_line", .visibility = .hidden });
+
+    @export(&hostAlloc, .{ .name = "roc_alloc", .visibility = .hidden });
+    @export(&hostDealloc, .{ .name = "roc_dealloc", .visibility = .hidden });
+    @export(&hostRealloc, .{ .name = "roc_realloc", .visibility = .hidden });
+    @export(&hostDbg, .{ .name = "roc_dbg", .visibility = .hidden });
+    @export(&hostExpectFailed, .{ .name = "roc_expect_failed", .visibility = .hidden });
+    @export(&hostCrashed, .{ .name = "roc_crashed", .visibility = .hidden });
+}
 
 /// Build a RocList of RocStr from argc/argv
 fn buildArgsList(ops: *builtins.host_abi.RocOps, argc: c_int, argv: [*][*:0]u8) RocList {
@@ -286,7 +327,8 @@ fn platform_main(argc: c_int, argv: [*][*:0]u8) Allocator.Error!c_int {
         }
     }
 
-    // Create the RocOps struct
+    // The host's private RocOps for using builtins helpers (RocStr/RocList
+    // allocation, decref). Not part of the ABI.
     var roc_ops = builtins.host_abi.RocOps{
         .env = @as(*anyopaque, @ptrCast(&host_env)),
         .roc_alloc = rocAllocFn,
@@ -295,23 +337,15 @@ fn platform_main(argc: c_int, argv: [*][*:0]u8) Allocator.Error!c_int {
         .roc_dbg = rocDbgFn,
         .roc_expect_failed = rocExpectFailedFn,
         .roc_crashed = rocCrashedFn,
-        .hosted_fns = .{
-            .count = hosted_function_ptrs.len,
-            .fns = @constCast(&hosted_function_ptrs),
-        },
+        .hosted_fns = .{ .count = 0, .fns = undefined },
     };
+    g_roc_ops = &roc_ops;
 
-    // Build the args list
-    var args = buildArgsList(&roc_ops, argc, argv);
+    // Build the args list; ownership transfers to the entrypoint.
+    const args = buildArgsList(&roc_ops, argc, argv);
 
-    // Call the app's main_for_host! entrypoint which returns I32
-    var exit_code: i32 = 0;
-    roc_main(&roc_ops, @as(*anyopaque, @ptrCast(&exit_code)), @as(*anyopaque, @ptrCast(&args)));
-
-    // Note: We don't explicitly free the args list here because:
-    // 1. The process is about to exit anyway
-    // 2. Properly freeing would require a Dec function for RocStr elements
-    // The GPA leak detection is fine with this since OS will reclaim memory
+    // Call the app's main_for_host! entrypoint with its natural C ABI.
+    const exit_code: i32 = roc_main(args);
 
     return exit_code;
 }
