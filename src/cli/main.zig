@@ -5037,6 +5037,10 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
             .disable_output = false,
             .platform_files_dir = link_inputs.platform_files_dir,
             .scratch_dir = build_scratch_dir,
+            .macho_dwarf_object = if (target_os == .macos and link_type != .archive)
+                obj_path
+            else
+                null,
         };
 
         if (args.z_dump_linker) {
