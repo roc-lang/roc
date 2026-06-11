@@ -65,6 +65,7 @@ const lsp = @import("lsp");
 const ansi_term = @import("ansi_term.zig");
 
 const cli_args = @import("cli_args.zig");
+const host_symbols = @import("host_symbols.zig");
 const roc_target = @import("target.zig");
 const target_selection = @import("target_selection.zig");
 pub const targets_validator = @import("targets_validator.zig");
@@ -1741,6 +1742,8 @@ fn rocRun(ctx: *CliCtx, args: cli_args.RunArgs) anyerror!void {
         std.log.debug("Platform dir: {s}, files_dir: {s}, target: {s}", .{ platform_dir, files_dir, target_name });
 
         // Process each link item in order
+        var host_input_paths = std.ArrayList([]const u8).empty;
+
         for (validated_link_spec.items) |item| {
             switch (item) {
                 .file_path => |file_name| {
@@ -1752,6 +1755,9 @@ fn rocRun(ctx: *CliCtx, args: cli_args.RunArgs) anyerror!void {
                     };
                     std.log.debug("Adding link item: {s}", .{full_path});
                     object_files.append(full_path) catch {
+                        return error.OutOfMemory;
+                    };
+                    host_input_paths.append(ctx.arena, full_path) catch {
                         return error.OutOfMemory;
                     };
                 },
@@ -1786,6 +1792,19 @@ fn rocRun(ctx: *CliCtx, args: cli_args.RunArgs) anyerror!void {
         const platform_files_dir = std.fs.path.join(ctx.arena, &.{ platform_dir, files_dir }) catch {
             return error.OutOfMemory;
         };
+
+        // The interpreter executable's shim references the same hosted and
+        // runtime symbols compiled output would; the host inputs must define
+        // them all.
+        {
+            const view = try viewLirImageFromHandle(shm_handle, ctx.arena);
+            try verifyHostInputSymbols(
+                ctx,
+                host_input_paths.items,
+                try hostedSymbolsFromLir(ctx.arena, &view.store),
+                target_name,
+            );
+        }
 
         const link_config = linker.LinkConfig{
             .target_abi = target_abi,
@@ -3704,6 +3723,58 @@ fn selectRunPlatformTarget(
 }
 
 /// Map a target's declared output kind to the linker's output kind.
+/// Collect the deduplicated hosted linker symbols the lowered program
+/// references (only hosted functions the app actually uses have LIR procs).
+fn hostedSymbolsFromLir(arena: std.mem.Allocator, store: *const lir.LirStore) std.mem.Allocator.Error![]const []const u8 {
+    var seen = std.StringHashMap(void).init(arena);
+    var symbols = std.ArrayList([]const u8).empty;
+    for (store.getProcSpecs()) |spec| {
+        const hosted = spec.hosted orelse continue;
+        const text = store.getString(hosted.symbol);
+        const gop = try seen.getOrPut(text);
+        // Dupe into the arena: a diagnostic naming these symbols renders
+        // after the lowered program is gone.
+        if (!gop.found_existing) try symbols.append(arena, try arena.dupe(u8, text));
+    }
+    return symbols.items;
+}
+
+/// Pre-link check: the platform's host inputs must define every hosted symbol
+/// the app references plus the fixed runtime set. A missing hosted symbol
+/// would otherwise resolve weakly to null and crash at the call; a missing
+/// runtime symbol would surface as a raw linker error. Skipped when any host
+/// input is in a format the scanner does not understand, since the result
+/// would not be authoritative; the linker has the final say there.
+fn verifyHostInputSymbols(
+    ctx: *CliCtx,
+    host_input_paths: []const []const u8,
+    hosted_symbols: []const []const u8,
+    target_name: []const u8,
+) anyerror!void {
+    var needed = std.ArrayList([]const u8).empty;
+    try needed.appendSlice(ctx.arena, &host_symbols.runtime_symbols);
+    try needed.appendSlice(ctx.arena, hosted_symbols);
+
+    const result = try host_symbols.scanHostInputs(ctx.arena, ctx.io.std_io, host_input_paths, needed.items);
+    if (result.all_inputs_scanned and result.missing.len > 0) {
+        return ctx.fail(.{ .missing_host_symbols = .{
+            .symbols = result.missing,
+            .target = target_name,
+        } });
+    }
+}
+
+/// The host inputs of a link, in link order.
+fn hostInputPaths(ctx: *CliCtx, link_inputs: PlatformLinkInputs) std.mem.Allocator.Error![]const []const u8 {
+    var paths = try std.array_list.Managed([]const u8).initCapacity(
+        ctx.arena,
+        link_inputs.platform_files_pre.len + link_inputs.platform_files_post.len,
+    );
+    paths.appendSliceAssumeCapacity(link_inputs.platform_files_pre);
+    paths.appendSliceAssumeCapacity(link_inputs.platform_files_post);
+    return paths.items;
+}
+
 /// Archive outputs never reach the linker; they go through writeArchiveOutput.
 fn linkerOutputKind(output: roc_target.OutputKind) linker.OutputKind {
     return switch (output) {
@@ -4869,6 +4940,13 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
         if (link_type == .archive) {
             try writeArchiveOutput(ctx, target, final_output_path, link_inputs, object_files.items);
         } else {
+            try verifyHostInputSymbols(
+                ctx,
+                try hostInputPaths(ctx, link_inputs),
+                try hostedSymbolsFromLir(ctx.arena, &lowered.lir_result.store),
+                link_inputs.target_name,
+            );
+
             const force_undefined_symbols = try staticDataLinkRootSymbols(ctx, static_data_exports);
 
             const link_config = linker.LinkConfig{
@@ -5189,6 +5267,13 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
     if (link_type == .archive) {
         try writeArchiveOutput(ctx, target, final_output_path, link_inputs, object_files.items);
     } else {
+        try verifyHostInputSymbols(
+            ctx,
+            try hostInputPaths(ctx, link_inputs),
+            try hostedSymbolsFromLir(ctx.arena, &lowered.lir_result.store),
+            link_inputs.target_name,
+        );
+
         const force_undefined_symbols = try staticDataLinkRootSymbols(ctx, static_data_exports);
 
         const link_config = linker.LinkConfig{
