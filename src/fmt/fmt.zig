@@ -2031,9 +2031,17 @@ const Formatter = struct {
         try fmt.push('"');
         try fmt.pushAll(": ");
         if (entry.module) |module_tok| {
-            try fmt.pushTokenText(module_tok);
+            // Emit every token from the module through the function name; for
+            // functions on nested type modules (Foo.Idx.get!) the tokens in
+            // between are the nested type segments.
+            var tok = module_tok;
+            while (tok <= entry.func) : (tok += 1) {
+                if (tok != module_tok) try fmt.push('.');
+                try fmt.pushTokenText(tok);
+            }
+        } else {
+            try fmt.pushTokenText(entry.func);
         }
-        try fmt.pushTokenText(entry.func);
     }
 
     /// Format a single target entry: x64linux: { inputs: ["host.o", app], output: Exe }

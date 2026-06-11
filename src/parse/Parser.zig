@@ -1607,6 +1607,11 @@ fn parseSymbolMapEntryTokens(self: *Parser) Error!AST.SymbolMapEntry.Idx {
         .UpperIdent => {
             module = self.pos;
             self.advance();
+            // Hosted functions on nested type modules have extra uppercase
+            // segments between the module and the function: Foo.Idx.get!
+            while (self.peek() == .NoSpaceDotUpperIdent) {
+                self.advance();
+            }
             if (self.peek() != .NoSpaceDotLowerIdent) {
                 return try self.pushMalformed(AST.SymbolMapEntry.Idx, .expected_symbol_map_function, start);
             }

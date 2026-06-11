@@ -1987,7 +1987,17 @@ pub const Header = union(enum) {
                         if (entry.module) |module_tok| {
                             try tree.pushStringPair("module", ast.resolve(module_tok));
                         }
-                        try tree.pushStringPair("func", ast.resolve(entry.func));
+                        // Functions on nested type modules span several
+                        // tokens (Foo.Idx.get!); cover everything after the
+                        // module, stripping the leading dot.
+                        const func_text = blk: {
+                            const module_tok = entry.module orelse break :blk ast.resolve(entry.func);
+                            if (entry.func == module_tok + 1) break :blk ast.resolve(entry.func);
+                            const first = ast.tokens.resolve(module_tok + 1);
+                            const last = ast.tokens.resolve(entry.func);
+                            break :blk ast.env.source[first.start.offset + 1 .. last.end.offset];
+                        };
+                        try tree.pushStringPair("func", func_text);
                         const entry_attrs = tree.beginNode();
                         try tree.endNode(entry_begin, entry_attrs);
                     }
