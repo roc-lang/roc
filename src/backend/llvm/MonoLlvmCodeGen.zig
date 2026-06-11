@@ -471,8 +471,13 @@ pub const MonoLlvmCodeGen = struct {
     fn declareProcSpec(self: *MonoLlvmCodeGen, proc_id: LirProcSpecId, proc: LirProcSpec) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const ptr_ty = builder.ptrType(.default) catch return error.OutOfMemory;
+        // Erased-callable procs keep the host-facing callable convention
+        // (ops, ret, args, capture). Other procs carry no RocOps under the
+        // symbol ABI; only in-process evaluation threads a real one.
         const params: []const LlvmBuilder.Type = if (proc.abi == .erased_callable)
             &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty }
+        else if (self.host_call_mode == .extern_symbols)
+            &.{ ptr_ty, ptr_ty }
         else
             &.{ ptr_ty, ptr_ty, ptr_ty };
         const fn_ty = builder.fnType(.void, params, .normal) catch return error.OutOfMemory;
@@ -531,10 +536,21 @@ pub const MonoLlvmCodeGen = struct {
         const entry = wip.block(0, "entry") catch return error.OutOfMemory;
         wip.cursor = .{ .block = entry };
 
-        self.roc_ops_arg = wip.arg(0);
-        self.ret_ptr_arg = wip.arg(1);
-        self.args_ptr_arg = wip.arg(2);
-        self.capture_ptr_arg = if (proc.abi == .erased_callable) wip.arg(3) else null;
+        if (proc.abi != .erased_callable and self.host_call_mode == .extern_symbols) {
+            // No RocOps parameter under the symbol ABI. Builtins helper
+            // signatures still carry an ops slot, which their extern flavor
+            // ignores; feed those calls a null constant.
+            const ptr_ty = builder.ptrType(.default) catch return error.OutOfMemory;
+            self.roc_ops_arg = builder.nullValue(ptr_ty) catch return error.OutOfMemory;
+            self.ret_ptr_arg = wip.arg(0);
+            self.args_ptr_arg = wip.arg(1);
+            self.capture_ptr_arg = null;
+        } else {
+            self.roc_ops_arg = wip.arg(0);
+            self.ret_ptr_arg = wip.arg(1);
+            self.args_ptr_arg = wip.arg(2);
+            self.capture_ptr_arg = if (proc.abi == .erased_callable) wip.arg(3) else null;
+        }
         self.current_ret_layout = proc.ret_layout;
 
         self.local_slots = try self.allocator.alloc(LocalSlot, self.store.locals.items.len);
@@ -705,7 +721,7 @@ pub const MonoLlvmCodeGen = struct {
                 _ = wip.call(.normal, .ccc, .none, entry_ty, entry_fn.toValue(builder), &.{ idx_value, ops_value, ret_slot, args_buf }, "") catch return error.OutOfMemory;
             }
         } else {
-            _ = try self.callFunctionIndex(proc_fn.?, &.{ ops_value, ret_slot, args_buf });
+            _ = try self.callFunctionIndex(proc_fn.?, &.{ ret_slot, args_buf });
         }
 
         if (ret_pieces.len == 0) {
@@ -1149,7 +1165,11 @@ pub const MonoLlvmCodeGen = struct {
         const args_buf = try self.allocArgBuffer(arg_layouts, true);
         try self.packRocArgsFromLocals(args_buf, arg_locals, arg_layouts);
         const func = self.proc_registry.get(@intFromEnum(proc_id)) orelse return error.CompilationFailed;
-        _ = try self.callFunctionIndex(func, &.{ self.rocOps(), self.slot(target).ptr, args_buf });
+        if (self.host_call_mode == .extern_symbols) {
+            _ = try self.callFunctionIndex(func, &.{ self.slot(target).ptr, args_buf });
+        } else {
+            _ = try self.callFunctionIndex(func, &.{ self.rocOps(), self.slot(target).ptr, args_buf });
+        }
     }
 
     fn emitErasedCall(self: *MonoLlvmCodeGen, target: LocalId, closure: LocalId, args: LocalSpan) Error!void {
@@ -1845,8 +1865,20 @@ pub const MonoLlvmCodeGen = struct {
             return;
         }
 
-        // New RocOps callback ABI: roc_dbg(ops: *RocOps, bytes: [*]const u8, len: usize).
         const wip = self.wip orelse return error.CompilationFailed;
+        if (self.host_call_mode == .extern_symbols) {
+            // Symbol ABI: call the host's runtime symbol directly:
+            // roc_dbg(bytes: [*]const u8, len: usize).
+            const fn_ty = builder.fnType(.void, &.{ ptr_ty, self.ptrSizedIntType() }, .normal) catch return error.OutOfMemory;
+            const func = try self.declareExternSymbol("roc_dbg", fn_ty);
+            _ = wip.call(.normal, .ccc, .none, fn_ty, func.toValue(builder), &.{
+                try self.staticBytes(msg),
+                builder.intValue(self.ptrSizedIntType(), msg.len) catch return error.OutOfMemory,
+            }, "") catch return error.OutOfMemory;
+            return;
+        }
+
+        // RocOps callback ABI: roc_dbg(ops: *RocOps, bytes: [*]const u8, len: usize).
         const callback_ptr_ptr = try self.offsetPtr(self.rocOps(), self.rocOpsCallbackOffset(callback));
         const callback_ptr = try self.loadPointer(callback_ptr_ptr);
         const fn_ty = builder.fnType(.void, &.{ ptr_ty, ptr_ty, self.ptrSizedIntType() }, .normal) catch return error.OutOfMemory;

@@ -1224,14 +1224,6 @@ pub fn generateEntrypointWrapper(
     }
     const param_count: u32 = @intCast((if (lowered.ret == .indirect) @as(usize, 1) else 0) + piece_locals.items.len);
 
-    // The internal convention threads a RocOps pointer; under the symbol ABI
-    // no host vtable exists, so it is null.
-    self.roc_ops_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-    WasmModule.leb128WriteI32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.local_set) catch return error.OutOfMemory;
-    WasmModule.leb128WriteU32(self.allocator, self.currentCode(), self.roc_ops_local) catch return error.OutOfMemory;
-
     // Materialize the internal-convention argument for each entrypoint arg:
     // scalars travel as the incoming wasm value; aggregates are copied into
     // fresh stack memory and passed by pointer.
@@ -1281,7 +1273,6 @@ pub fn generateEntrypointWrapper(
         }
     }
 
-    try self.emitLocalGet(self.roc_ops_local);
     for (arg_values) |value| {
         switch (value) {
             .zst => {
@@ -6052,12 +6043,16 @@ fn registerProcSpec(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpec) 
         return;
     }
 
-    // Build parameter types: roc_ops_ptr first, then explicit proc args.
+    // Build parameter types: under the symbol ABI procs carry no RocOps;
+    // the playground/eval module flavor threads the linear-memory RocOps
+    // pointer first.
     const args = self.store.getLocalSpan(proc.args);
     var param_types: std.ArrayList(ValType) = .empty;
     defer param_types.deinit(self.allocator);
 
-    param_types.append(self.allocator, .i32) catch return error.OutOfMemory;
+    if (!self.symbol_abi) {
+        param_types.append(self.allocator, .i32) catch return error.OutOfMemory;
+    }
     for (args) |arg| {
         const vt = try self.resolveValType(self.store.getLocal(arg).layout_idx);
         param_types.append(self.allocator, vt) catch return error.OutOfMemory;
@@ -6103,8 +6098,11 @@ fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpe
     self.cf_depth = 0;
     self.in_proc = true;
 
-    // Local 0 = roc_ops_ptr parameter.
-    self.roc_ops_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    const symbol_abi_proc = self.symbol_abi and proc.abi != .erased_callable;
+    if (!symbol_abi_proc) {
+        // Local 0 = roc_ops_ptr parameter.
+        self.roc_ops_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    }
 
     const erased_ret_ptr_local: ?u32 = if (proc.abi == .erased_callable) blk: {
         const ret_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -6113,11 +6111,21 @@ fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpe
         try self.bindErasedCallableAdapterParams(args, args_ptr, capture_ptr);
         break :blk ret_ptr;
     } else blk: {
-        // Bind parameters to locals (starting at local 1 after roc_ops_ptr).
+        // Bind parameters to locals (after roc_ops_ptr when present).
         for (args) |arg| {
             const local = self.store.getLocal(arg);
             const vt = try self.resolveValType(local.layout_idx);
             _ = self.storage.allocLocal(arg, vt) catch return error.OutOfMemory;
+        }
+        if (symbol_abi_proc) {
+            // Symbol-ABI procs receive no RocOps. Builtins helper signatures
+            // still carry an ops slot, which their extern flavor ignores;
+            // feed those calls a null.
+            self.roc_ops_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
+            self.currentCode().append(self.allocator, Op.local_set) catch return error.OutOfMemory;
+            WasmModule.leb128WriteU32(self.allocator, self.currentCode(), self.roc_ops_local) catch return error.OutOfMemory;
         }
         break :blk null;
     };
@@ -6163,7 +6171,12 @@ fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpe
     }
 
     // Locals declaration (beyond function parameters).
-    const param_count: u32 = if (proc.abi == .erased_callable) 4 else @intCast(1 + args.len);
+    const param_count: u32 = if (proc.abi == .erased_callable)
+        4
+    else if (symbol_abi_proc)
+        @intCast(args.len)
+    else
+        @intCast(1 + args.len);
     try self.encodeLocalsDecl(&self.currentBody().preamble, param_count);
 
     // Prologue (if stack memory used)
@@ -7512,7 +7525,9 @@ fn generateCall(self: *Self, c: anytype) Allocator.Error!void {
         unreachable;
     };
 
-    try self.emitLocalGet(self.roc_ops_local);
+    if (!self.symbol_abi) {
+        try self.emitLocalGet(self.roc_ops_local);
+    }
     try self.emitCallArgs(c.args);
     try self.emitCall(func_idx);
 

@@ -10279,13 +10279,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const arg_infos = self.scratch_arg_infos.sliceFromStart(arg_infos_start);
             // Pass 2: Place arguments and emit call
             const initial_arg_reg_idx: u8 = if (needs_ret_ptr) 1 else 0;
-            const pbp_plan = try self.computePassByPtrPlan(arg_infos, initial_arg_reg_idx, true);
+            // Only in-process evaluation threads a RocOps to procs; symbol-ABI
+            // output carries none.
+            const emit_roc_ops = self.generation_mode == .native_execution;
+            const pbp_plan = try self.computePassByPtrPlan(arg_infos, initial_arg_reg_idx, emit_roc_ops);
             defer self.scratch_pass_by_ptr.clearFrom(pbp_plan.start);
             const stack_spill_size = try self.placeCallArguments(arg_infos, .{
                 .needs_ret_ptr = needs_ret_ptr,
                 .ret_buffer_offset = ret_buffer_offset,
                 .pass_by_ptr = pbp_plan.slice,
-                .emit_roc_ops = true,
+                .emit_roc_ops = emit_roc_ops,
             });
             if (proc.code_start == unresolved_proc_code_start) {
                 try self.emitPendingCallToProc(proc.id);
@@ -13151,13 +13154,22 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             else
                 .R12;
 
-            if (reg_idx < max_arg_regs) {
-                const arg_reg = self.getArgumentRegister(reg_idx);
-                if (arg_reg != roc_ops_save_reg) {
-                    try self.codegen.emit.movRegReg(.w64, roc_ops_save_reg, arg_reg);
+            if (self.generation_mode == .native_execution) {
+                // In-process evaluation appends a real RocOps as the final
+                // argument.
+                if (reg_idx < max_arg_regs) {
+                    const arg_reg = self.getArgumentRegister(reg_idx);
+                    if (arg_reg != roc_ops_save_reg) {
+                        try self.codegen.emit.movRegReg(.w64, roc_ops_save_reg, arg_reg);
+                    }
+                } else {
+                    try self.emitLoad(.w64, roc_ops_save_reg, frame_ptr, stack_arg_offset);
                 }
             } else {
-                try self.emitLoad(.w64, roc_ops_save_reg, frame_ptr, stack_arg_offset);
+                // Symbol-ABI procs receive no RocOps. Builtins helper
+                // signatures still carry an ops slot, which their extern
+                // flavor ignores; feed those calls a null.
+                try self.codegen.emitLoadImm(roc_ops_save_reg, 0);
             }
 
             self.roc_ops_reg = roc_ops_save_reg;
@@ -14441,14 +14453,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 break :blk self.codegen.allocStackSlot(size);
             } else 0;
 
-            const pbp_plan = try self.computePassByPtrPlan(arg_infos, if (needs_ret_ptr) 1 else 0, true);
+            const emit_roc_ops = self.generation_mode == .native_execution;
+            const pbp_plan = try self.computePassByPtrPlan(arg_infos, if (needs_ret_ptr) 1 else 0, emit_roc_ops);
             defer self.scratch_pass_by_ptr.clearFrom(pbp_plan.start);
 
             const stack_spill_size = try self.placeCallArguments(arg_infos, .{
                 .needs_ret_ptr = needs_ret_ptr,
                 .ret_buffer_offset = ret_buffer_offset,
                 .pass_by_ptr = pbp_plan.slice,
-                .emit_roc_ops = true,
+                .emit_roc_ops = emit_roc_ops,
             });
             try self.emitCallToOffset(code_offset);
 

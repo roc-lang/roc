@@ -1097,7 +1097,10 @@ fn hostNestedRecordCallable(_: *builtins.host_abi.RocOps, ret: ?[*]u8, args: ?[*
     writeI64Result(ret, x + capture.inner.base + capture.adjustment + @as(i64, @intCast(capture.inner.label.asSlice().len)));
 }
 
-fn hostNestedRecordCaptureOnDrop(capture_ptr: ?[*]u8, ops: *builtins.host_abi.RocOps) callconv(.c) void {
+fn hostNestedRecordCaptureOnDrop(capture_ptr: ?[*]u8, _: *builtins.host_abi.RocOps) callconv(.c) void {
+    // The ops argument is whatever the final release passed; app code under
+    // the symbol ABI passes null, so the host uses its own RocOps.
+    const ops = g_roc_ops.?;
     const capture = capturePtrAs(NestedRecordCapture, capture_ptr);
     capture.inner.label.decref(ops);
     boxed_host_drop_counts.nested_record_str_releases += 1;
@@ -1197,7 +1200,8 @@ fn hostTreeCallable(_: *builtins.host_abi.RocOps, ret: ?[*]u8, args: ?[*]const u
     writeI64Result(ret, readI64ToI64Arg(args) + hostTreeSum(&capture.tree));
 }
 
-fn hostTreeCaptureOnDrop(capture_ptr: ?[*]u8, ops: *builtins.host_abi.RocOps) callconv(.c) void {
+fn hostTreeCaptureOnDrop(capture_ptr: ?[*]u8, _: *builtins.host_abi.RocOps) callconv(.c) void {
+    const ops = g_roc_ops.?;
     const capture = capturePtrAs(TreeCapture, capture_ptr);
     hostTreeDropPayload(@ptrCast(&capture.tree), ops);
     boxed_host_drop_counts.recursive_tree += 1;
@@ -1225,7 +1229,8 @@ fn hostBoxedCaptureCallable(ops: *builtins.host_abi.RocOps, ret: ?[*]u8, args: ?
     writeI64Result(ret, callBoxedI64ToI64(ops, capture.inner, x) + capture.bonus);
 }
 
-fn hostBoxedCaptureOnDrop(capture_ptr: ?[*]u8, ops: *builtins.host_abi.RocOps) callconv(.c) void {
+fn hostBoxedCaptureOnDrop(capture_ptr: ?[*]u8, _: *builtins.host_abi.RocOps) callconv(.c) void {
+    const ops = g_roc_ops.?;
     const capture = capturePtrAs(BoxedCallableCapture, capture_ptr);
     builtins.erased_callable.decref(capture.inner, ops);
     boxed_host_drop_counts.boxed_capture += 1;
