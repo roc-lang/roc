@@ -48,16 +48,44 @@ NO CHANGE
 				(record-destruct (label "rest") (ident "rest")
 					(rest-pattern
 						(p-assign (ident "rest")))))))
-	(e-string
-		(e-literal (string "Hello "))
-		(e-lookup-local
-			(p-assign (ident "first_name")))
-		(e-literal (string " "))
-		(e-field-access (field "last_name")
+	(e-block
+		(s-let
+			(p-assign (ident "#interp_0"))
+			(e-lookup-local
+				(p-assign (ident "first_name"))))
+		(s-let
+			(p-assign (ident "#interp_1"))
+			(e-field-access (field "last_name")
+				(receiver
+					(e-lookup-local
+						(p-assign (ident "rest"))))))
+		(e-dispatch-call (method "from_interpolation") (constraint-fn-var 221)
 			(receiver
-				(e-lookup-local
-					(p-assign (ident "rest")))))
-		(e-literal (string ""))))
+				(e-string
+					(e-literal (string "Hello "))))
+			(args
+				(e-dispatch-call (method "prepended") (constraint-fn-var 179)
+					(receiver
+						(e-dispatch-call (method "prepended") (constraint-fn-var 121)
+							(receiver
+								(e-dispatch-call (method "iter") (constraint-fn-var 57)
+									(receiver
+										(e-empty_list))
+									(args)))
+							(args
+								(e-tuple
+									(elems
+										(e-lookup-local
+											(p-assign (ident "#interp_1")))
+										(e-string
+											(e-literal (string ""))))))))
+					(args
+						(e-tuple
+							(elems
+								(e-lookup-local
+									(p-assign (ident "#interp_0")))
+								(e-string
+									(e-literal (string " ")))))))))))
 ~~~
 # TYPES
 ~~~clojure

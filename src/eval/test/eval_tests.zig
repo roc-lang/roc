@@ -746,6 +746,42 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "Tally(17)" },
     },
     .{
+        .name = "inspect: custom from_interpolation interpolates Str into a custom type",
+        .source_kind = .module,
+        .source =
+        \\Url := [Url(Str)].{
+        \\    from_quote : List(U8) -> Try(Url, [BadQuotedBytes(Str)])
+        \\    from_quote = |bytes| Ok(Url(Str.from_utf8_lossy(bytes)))
+        \\    from_interpolation : Url, Iter((Str, Url)) -> Url
+        \\    from_interpolation = |first, rest| {
+        \\        Url.Url(rest.fold(first.inner(), |acc, (interpolated, segment)| acc.concat(interpolated).concat(segment.inner())))
+        \\    }
+        \\    inner : Url -> Str
+        \\    inner = |Url.Url(str)| str
+        \\}
+        \\
+        \\main = {
+        \\    domain = "example"
+        \\    url : Url
+        \\    url = "https://${domain}.com"
+        \\    url
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Url(\"https://example.com\")" },
+    },
+    .{
+        .name = "inspect: interpolation with adjacent and boundary interpolations",
+        .source_kind = .module,
+        .source =
+        \\main = {
+        \\    a = "one"
+        \\    b = "two"
+        \\    "${a}${b} and ${a}"
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"onetwo and one\"" },
+    },
+    .{
         .name = "custom from_quote Err is a compile-time problem",
         .source_kind = .module,
         .source =

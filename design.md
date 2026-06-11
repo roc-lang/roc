@@ -868,26 +868,53 @@ The method registry is an exact table keyed by `(MethodOwner, MethodNameId)`.
 It is not an owner-discovery mechanism. Post-check code may use it only after a
 concrete monomorphic dispatcher type has already determined the owner.
 
-### Compile-Time Numeral Conversions
+### Compile-Time Literal Conversions
 
 A numeric literal whose target type is a non-builtin nominal type converts
-through that type's `from_numeral` method. Every such conversion with a
-concrete target type is a compile-time root (`numeral_conversion`), no matter
+through that type's `from_numeral` method, and a string literal converts
+through `from_quote` (receiving the literal's post-escape UTF-8 bytes as
+`List(U8)`). Every such conversion with a concrete target type is a
+compile-time root (`numeral_conversion` / `quote_conversion`), no matter
 where the literal sits in the AST: checking finalization evaluates the raw
 dispatch call, stores its `Try` result through `ConstStore`, unwraps `Ok` into
-the literal's stored constant, and reports `Err(InvalidNumeral(msg))` as a
-checking problem carrying the implementation's message. Runtime lowering
-restores the stored constant instead of emitting a call. Conversions whose
-target type is still polymorphic (literals inside generalized functions) keep
-the dispatch call per monomorphic specialization.
+the literal's stored constant, and reports `Err(InvalidNumeral(msg))` /
+`Err(BadQuotedBytes(msg))` as a checking problem carrying the implementation's
+message. Runtime lowering restores the stored constant instead of emitting a
+call. Conversions whose target type is still polymorphic (literals inside
+generalized functions) keep the dispatch call per monomorphic specialization.
+
+Unresolved literal-origin type variables default — numerals to `Dec`, quotes
+to `Str`. Quote defaulting runs before numeric context resolution because a
+still-flex string receiver blocks the method chains that give numeric literals
+their context, and it also resolves generalized literal variables that no
+instantiation can pin, which is the same resolution monomorphic specialization
+would apply, made early enough for checking to resolve dependent dispatch.
 
 Literal patterns participate through the same machinery. A literal pattern on
-a non-builtin number type carries a synthesized checked conversion expression;
-match lowering binds the matched value and tests it against the converted
-constant, dispatching to the type's `is_eq` method when it has one and using
-structural equality otherwise — exactly mirroring `==`. Checking attaches an
-`is_eq` constraint to the pattern's type so this lowering is total. Literal
-patterns on builtin number types keep their direct literal-pattern encoding.
+a non-builtin number or string type carries a synthesized checked conversion
+expression; match lowering binds the matched value and tests it against the
+converted constant, dispatching to the type's `is_eq` method when it has one
+and using structural equality otherwise — exactly mirroring `==`. Checking
+attaches an `is_eq` constraint to the pattern's type so this lowering is
+total. Literal patterns on builtin types keep their direct literal-pattern
+encoding.
+
+### String Interpolation
+
+An interpolated string literal is canonicalization sugar. It desugars into
+ordinary CIR: the interpolated expressions bind to locals in source order,
+each literal segment stays a real string literal (so each converts through
+`from_quote`), and the result is
+`seg0.from_interpolation([].iter().prepended((interp_n, seg_n+1))...)` — the
+iterator yields each interpolated value paired with the literal segment that
+follows it. `from_interpolation : val, Iter((interpolated, val)) -> val` is an
+ordinary method: each implementing type chooses its `interpolated` type (`Str`
+chooses `Str`; a `Url`-style type can interpolate `Str` rather than itself),
+and a type that needs to validate assembled values simply does not implement
+it. The synthesized call node is recorded so checking unifies the call result
+with the receiver, pinning the literal's target type from the use site before
+string defaulting runs. No post-canonicalization stage knows interpolation
+exists.
 
 ## Shared Post-Check Model
 

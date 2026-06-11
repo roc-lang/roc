@@ -348,6 +348,16 @@ Builtin :: [].{
 			Err(_) => Err(BadQuotedBytes("the bytes were not valid UTF-8"))
 		}
 
+		## Assembles an interpolated string literal.
+		##
+		## The compiler calls this when a string literal contains interpolations:
+		## the first argument is the literal segment before the first
+		## interpolation, and the iterator yields each interpolated value paired
+		## with the literal segment that follows it.
+		from_interpolation : Str, Iter((Str, Str)) -> Str
+		from_interpolation = |first, rest|
+			rest.fold(first, |acc, (interpolated, segment)| acc.concat(interpolated).concat(segment))
+
 		## Split a string around a separator.
 		##
 		## Passing `""` for the separator is not useful;
@@ -421,6 +431,24 @@ Builtin :: [].{
 
 		iter : Iter(item) -> Iter(item)
 		iter = |self| self
+
+		## Returns an iterator that yields the given item first, followed by
+		## everything the given iterator yields.
+		##
+		## The compiler uses this to assemble the iterator it passes to a type's
+		## `from_interpolation` method when an interpolated string literal
+		## targets that type.
+		## ```roc
+		## expect Iter.fold([2, 3].iter().prepended(1), [], |acc, item| acc.append(item)) == [1, 2, 3]
+		## ```
+		prepended : Iter(item), item -> Iter(item)
+		prepended = |rest, item| {
+			len_if_known: match rest.len_if_known {
+				Known(n) => Known(n + 1)
+				Unknown => Unknown
+			},
+			step: || One({ item, rest }),
+		}
 
 		next : Iter(item) -> [One({ item : item, rest : Iter(item) }), Skip({ rest : Iter(item) }), Done]
 		next = |iterator| (iterator.step)()

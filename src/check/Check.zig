@@ -6581,6 +6581,12 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     method_call.args,
                     constraint_fn_var,
                 );
+                if (self.cir.isInterpolationCallNode(ModuleEnv.nodeIdxFrom(expr_idx))) {
+                    // The from_interpolation protocol returns the receiver's
+                    // type, so the literal's target is pinned by the result
+                    // before string defaulting runs.
+                    _ = try self.unify(expr_var, receiver_var, env);
+                }
             }
         },
         .e_dispatch_call => |method_call| {

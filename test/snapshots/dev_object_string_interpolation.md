@@ -35,7 +35,11 @@ main_for_host = <required>
 # app
 greeting = "Hello"
 name = "World"
-main = ""greeting", "name"!"
+main = {
+	cinterp_0 = greeting
+	cinterp_1 = name
+	"".from_interpolation([].iter().prepended((cinterp_1, "!")).prepended((cinterp_0, ", ")))
+}
 
 ~~~
 # DEV OUTPUT

@@ -646,6 +646,11 @@ numeral_dispatch_plans: NumeralDispatchPlan.SafeList,
 /// expression and pattern nodes. Shares `NumeralDispatchPlan`'s shape: a source
 /// node plus the constraint's target and function type vars.
 quote_dispatch_plans: NumeralDispatchPlan.SafeList,
+/// Raw node indices of the `from_interpolation` calls canonicalization
+/// synthesized while desugaring interpolated string literals. The
+/// from_interpolation protocol returns the receiver's type, and checking
+/// consumes this to unify the call result with the receiver.
+interpolation_call_nodes: collections.SafeList(u32),
 /// Scope-resolved explicit numeric suffix targets attached by canonicalization.
 numeric_suffix_types: NumericSuffixType.SafeList,
 
@@ -786,6 +791,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .numeral_literals = try NumeralLiteral.SafeList.initCapacity(gpa, 8),
         .numeral_dispatch_plans = try NumeralDispatchPlan.SafeList.initCapacity(gpa, 8),
         .quote_dispatch_plans = try NumeralDispatchPlan.SafeList.initCapacity(gpa, 8),
+        .interpolation_call_nodes = try collections.SafeList(u32).initCapacity(gpa, 4),
         .numeric_suffix_types = try NumericSuffixType.SafeList.initCapacity(gpa, 8),
     };
 }
@@ -807,6 +813,7 @@ pub fn deinit(self: *Self) void {
     self.numeral_literals.deinit(self.gpa);
     self.numeral_dispatch_plans.deinit(self.gpa);
     self.quote_dispatch_plans.deinit(self.gpa);
+    self.interpolation_call_nodes.deinit(self.gpa);
     self.numeric_suffix_types.deinit(self.gpa);
     // diagnostics are stored in the NodeStore, no need to free separately
     self.store.deinit();
@@ -848,6 +855,7 @@ pub fn deinitCachedModule(self: *Self) void {
     self.numeral_literals.deinit(self.gpa);
     self.numeral_dispatch_plans.deinit(self.gpa);
     self.quote_dispatch_plans.deinit(self.gpa);
+    self.interpolation_call_nodes.deinit(self.gpa);
     self.numeric_suffix_types.deinit(self.gpa);
 
     // If enableRuntimeInserts was called on the interner, it allocated new memory
@@ -3000,6 +3008,7 @@ pub const Serialized = extern struct {
     numeral_literals: NumeralLiteral.SafeList.Serialized,
     numeral_dispatch_plans: NumeralDispatchPlan.SafeList.Serialized,
     quote_dispatch_plans: NumeralDispatchPlan.SafeList.Serialized,
+    interpolation_call_nodes: collections.SafeList(u32).Serialized,
     numeric_suffix_types: NumericSuffixType.SafeList.Serialized,
     // Reserved space (was is_lambda_lifted and is_defunctionalized, now unused)
     _reserved_flags: [2]u8 = .{ 0, 0 },
@@ -3062,6 +3071,7 @@ pub const Serialized = extern struct {
         try self.numeral_literals.serialize(&env.numeral_literals, allocator, writer);
         try self.numeral_dispatch_plans.serialize(&env.numeral_dispatch_plans, allocator, writer);
         try self.quote_dispatch_plans.serialize(&env.quote_dispatch_plans, allocator, writer);
+        try self.interpolation_call_nodes.serialize(&env.interpolation_call_nodes, allocator, writer);
         try self.numeric_suffix_types.serialize(&env.numeric_suffix_types, allocator, writer);
 
         self._reserved_flags = .{ 0, 0 };
@@ -3115,6 +3125,7 @@ pub const Serialized = extern struct {
             .numeral_literals = self.numeral_literals.deserializeInto(base_addr),
             .numeral_dispatch_plans = self.numeral_dispatch_plans.deserializeInto(base_addr),
             .quote_dispatch_plans = self.quote_dispatch_plans.deserializeInto(base_addr),
+            .interpolation_call_nodes = self.interpolation_call_nodes.deserializeInto(base_addr),
             .numeric_suffix_types = self.numeric_suffix_types.deserializeInto(base_addr),
         };
 
@@ -3171,6 +3182,7 @@ pub const Serialized = extern struct {
             .numeral_literals = try self.numeral_literals.deserializeWithCopy(base_addr, gpa),
             .numeral_dispatch_plans = try self.numeral_dispatch_plans.deserializeWithCopy(base_addr, gpa),
             .quote_dispatch_plans = try self.quote_dispatch_plans.deserializeWithCopy(base_addr, gpa),
+            .interpolation_call_nodes = try self.interpolation_call_nodes.deserializeWithCopy(base_addr, gpa),
             .numeric_suffix_types = try self.numeric_suffix_types.deserializeWithCopy(base_addr, gpa),
         };
 
@@ -3348,6 +3360,21 @@ pub fn quoteDispatchPlanForNode(self: *const Self, node_idx: Node.Idx) ?NumeralD
         if (plan.node_idx == raw_node) return plan;
     }
     return null;
+}
+
+/// Record a `from_interpolation` call synthesized by interpolation desugaring.
+pub fn recordInterpolationCallNode(self: *Self, node_idx: Node.Idx) std.mem.Allocator.Error!void {
+    _ = try self.interpolation_call_nodes.append(self.gpa, @intFromEnum(node_idx));
+}
+
+/// Whether the node is a `from_interpolation` call synthesized by
+/// interpolation desugaring.
+pub fn isInterpolationCallNode(self: *const Self, node_idx: Node.Idx) bool {
+    const raw_node: u32 = @intFromEnum(node_idx);
+    for (self.interpolation_call_nodes.items.items) |recorded| {
+        if (recorded == raw_node) return true;
+    }
+    return false;
 }
 
 /// Record the scope-resolved type target for an explicit numeric suffix.
