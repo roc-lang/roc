@@ -227,7 +227,8 @@ echo "=== Verifying benchmark commands ==="
 VERIFY_FAILED=0
 
 for fx_file in "${FX_FILES[@]}"; do
-    if ! run_probe "$fx_file" "" "0,137"; then
+    # 2 is roc's ran-successfully-with-warnings exit code.
+    if ! run_probe "$fx_file" "" "0,2,137"; then
         VERIFY_FAILED=1
     fi
 done
