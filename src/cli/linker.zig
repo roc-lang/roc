@@ -11,6 +11,7 @@ const libc_finder = @import("libc_finder.zig");
 const stack_probe = @import("stack_probe.zig");
 const embedded_lld = @import("embedded_lld");
 const CodeSignature = @import("macho/CodeSignature.zig");
+const DwarfSplice = @import("macho/DwarfSplice.zig");
 const RocTarget = @import("roc_target").RocTarget;
 const cli_ctx = @import("CliCtx.zig");
 const CliCtx = cli_ctx.CliCtx;
@@ -125,6 +126,12 @@ pub const LinkConfig = struct {
     /// a shared filename. When null, the linker falls back to the directory
     /// containing the running `roc` executable.
     scratch_dir: ?[]const u8 = null,
+
+    /// Object file whose `__DWARF` sections get spliced into the linked
+    /// macOS executable after linking, making it self-contained for
+    /// debuggers. Also suppresses the stabs debug map and reserves load
+    /// command space for the extra segment.
+    macho_dwarf_object: ?[]const u8 = null,
 };
 
 fn appendForceUndefinedSymbol(
@@ -359,6 +366,15 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
             try args.append("macos");
             try args.append("13.0"); // minimum deployment target
             try args.append("13.0"); // SDK version
+
+            if (config.macho_dwarf_object != null) {
+                // The post-link DWARF splice adds a __DWARF load command, so
+                // reserve header space for it, and suppress the stabs debug
+                // map since the spliced DWARF replaces it.
+                try args.append("-headerpad");
+                try args.append("0x2000");
+                try args.append("-S");
+            }
 
             // Try to find a platform-provided sysroot first (for cross-compilation with bundled frameworks)
             // Falls back to Roc's bundled darwin sysroot (minimal, only has libSystem.tbd)
@@ -725,6 +741,11 @@ pub fn link(ctx: *CliCtx, config: LinkConfig) LinkError!void {
         patchMachoStackSize(config.output_path, 64 * 1024 * 1024, ctx.io.std_io) catch |err| {
             std.log.warn("Failed to patch LC_MAIN stacksize for {s}: {}", .{ config.output_path, err });
         };
+        if (config.macho_dwarf_object) |dwarf_object| {
+            DwarfSplice.spliceDwarf(ctx.gpa, ctx.io.std_io, config.output_path, dwarf_object) catch |err| {
+                std.log.warn("Failed to splice DWARF into {s}: {}", .{ config.output_path, err });
+            };
+        }
         // Patching invalidated the ad-hoc code signature ld64.lld wrote; on
         // macOS 14+ the kernel SIGKILLs (137) binaries with bad signatures,
         // so rewrite the signature in place.

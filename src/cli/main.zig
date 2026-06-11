@@ -4716,6 +4716,10 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
                 .disable_output = false,
                 .platform_files_dir = link_inputs.platform_files_dir,
                 .scratch_dir = build_cache_dir,
+                .macho_dwarf_object = if (target_os == .macos and link_type != .archive)
+                    app_object.object_path
+                else
+                    null,
             };
 
             if (args.z_dump_linker) {
