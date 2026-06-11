@@ -580,6 +580,40 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "(\"letter a\", \"other\")" },
     },
     .{
+        .name = "inspect: imported custom from_numeral converts literals in exprs and patterns",
+        .source_kind = .module,
+        .source =
+        \\import TallyMod
+        \\
+        \\force : TallyMod.Tally -> TallyMod.Tally
+        \\force = |n| n
+        \\
+        \\describe : TallyMod.Tally -> Str
+        \\describe = |tally| match tally {
+        \\    100 => "one byte"
+        \\    _ => "other"
+        \\}
+        \\
+        \\main = (describe(force(999)), describe(force(7)))
+        ,
+        .imports = &.{.{
+            .name = "TallyMod",
+            .source =
+            \\Tally := [Tally(U64)].{
+            \\    from_numeral : Numeral -> Try(Tally, [InvalidNumeral(Str)])
+            \\    from_numeral = |numeral| match numeral {
+            \\        Literal(parts) => Ok(Tally(parts.digits_before_pt.len()))
+            \\    }
+            \\    is_eq : Tally, Tally -> Bool
+            \\    is_eq = |a, b| match (a, b) {
+            \\        (Tally(x), Tally(y)) => x == y
+            \\    }
+            \\}
+            ,
+        }},
+        .expected = .{ .inspect_str = "(\"other\", \"one byte\")" },
+    },
+    .{
         .name = "custom from_numeral Err is a compile-time problem",
         .source_kind = .module,
         .source =

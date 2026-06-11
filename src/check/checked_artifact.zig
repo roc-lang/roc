@@ -3939,7 +3939,9 @@ fn appendStaticDispatchTypeRoots(
     }
 
     for (module.moduleEnvConst().numeral_dispatch_plans.items.items) |plan| {
-        if (!source_nodes.hasExpr(@enumFromInt(plan.node_idx))) continue;
+        const is_expr = source_nodes.hasExpr(@enumFromInt(plan.node_idx));
+        const is_pattern = source_nodes.hasPattern(@enumFromInt(plan.node_idx));
+        if (!is_expr and !is_pattern) continue;
         _ = try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, @enumFromInt(plan.target_var));
         _ = try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, @enumFromInt(plan.fn_var));
     }
