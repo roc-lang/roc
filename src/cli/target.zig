@@ -11,5 +11,5 @@ pub const RocTarget = @import("roc_target").RocTarget;
 pub const TargetsConfig = compile.targets_config.TargetsConfig;
 pub const TargetLinkSpec = compile.targets_config.TargetLinkSpec;
 pub const LinkItem = compile.targets_config.LinkItem;
-pub const LinkType = compile.targets_config.LinkType;
+pub const OutputKind = compile.targets_config.OutputKind;
 pub const WasmTargetConfig = compile.targets_config.WasmTargetConfig;

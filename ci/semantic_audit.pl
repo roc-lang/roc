@@ -351,9 +351,13 @@ for my $path (@postcheck_design_docs) {
         chomp $line;
         next if postcheck_jargon_allowed($path, $line);
 
+        # Vocabulary rules govern prose, not link targets.
+        my $scannable = $line;
+        $scannable =~ s/https?:\/\/\S+//g;
+
         for my $rule (@postcheck_jargon_forbidden) {
             my ($pattern, $reason) = @$rule;
-            if ($line =~ /$pattern/) {
+            if ($scannable =~ /$pattern/) {
                 push @violations, [$path, $line_no, $reason, $line];
             }
         }

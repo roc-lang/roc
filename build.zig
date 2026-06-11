@@ -39,7 +39,8 @@ const windows_cross_targets = [_]CrossTarget{
 const linux_cross_targets = musl_cross_targets ++ glibc_cross_targets;
 
 /// Test platform directories that need host libraries built
-const all_test_platform_dirs = [_][]const u8{ "str", "int", "fx", "fx-open" };
+const all_test_platform_dirs = [_][]const u8{ "str", "int", "fx", "fx-open", "dylib", "archive" };
+const glibc_test_platform_dirs = [_][]const u8{ "str", "int", "dylib", "archive" };
 
 fn mustUseLlvm(target: ResolvedTarget) bool {
     return target.result.os.tag == .macos and target.result.cpu.arch == .x86_64;
@@ -87,6 +88,35 @@ fn isNativeishOrMusl(target: ResolvedTarget) bool {
     return target.result.cpu.arch == builtin.target.cpu.arch and
         target.result.os.tag == builtin.target.os.tag and
         (target.query.isNativeAbi() or target.result.abi.isMusl());
+}
+
+const NativeSharedArchiveTarget = struct {
+    resolved: ResolvedTarget,
+    roc_name: []const u8,
+};
+
+fn nativeSharedArchiveTarget(b: *std.Build, target: ResolvedTarget) NativeSharedArchiveTarget {
+    if (target.result.os.tag == .linux) {
+        return switch (target.result.cpu.arch) {
+            .x86_64 => .{
+                .resolved = b.resolveTargetQuery(.{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .gnu }),
+                .roc_name = "x64glibc",
+            },
+            .aarch64 => .{
+                .resolved = b.resolveTargetQuery(.{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .gnu }),
+                .roc_name = "arm64glibc",
+            },
+            else => .{
+                .resolved = target,
+                .roc_name = roc_target.RocTarget.fromStdTarget(target.result).toName(),
+            },
+        };
+    }
+
+    return .{
+        .resolved = target,
+        .roc_name = roc_target.RocTarget.fromStdTarget(target.result).toName(),
+    };
 }
 
 /// Returns the optimal target query for release builds on the current host.
@@ -1999,6 +2029,28 @@ fn setupTestPlatforms(
         }
     }
 
+    // Cross-compile for glibc targets declared by test platform manifests.
+    for (glibc_cross_targets) |cross_target| {
+        const cross_resolved_target = b.resolveTargetQuery(cross_target.query);
+
+        for (glibc_test_platform_dirs) |platform_dir| {
+            if (platform_filter) |filter| {
+                if (!std.mem.eql(u8, platform_dir, filter)) continue;
+            }
+            const copy_step = buildAndCopyTestPlatformHostLib(
+                b,
+                platform_dir,
+                cross_resolved_target,
+                cross_target.name,
+                optimize,
+                roc_modules,
+                strip,
+                omit_frame_pointer,
+            );
+            clear_cache_step.dependOn(copy_step);
+        }
+    }
+
     // Cross-compile for Windows targets
     for (windows_cross_targets) |cross_target| {
         const cross_resolved_target = b.resolveTargetQuery(cross_target.query);
@@ -2115,6 +2167,8 @@ pub fn build(b: *std.Build) void {
     const run_test_serialization_sizes_step = b.step("run-test-serialization-sizes", "Verify Serialized types have platform-independent sizes");
     const build_test_wasm_static_lib_runner_step = b.step("build-test-wasm-static-lib-runner", "Build WASM static library test runner");
     const run_test_wasm_static_lib_step = b.step("run-test-wasm-static-lib", "Run WASM static library test runner");
+    const run_test_dylib_step = b.step("run-test-dylib", "Build a Roc shared library and run it through the loader test");
+    const run_test_archive_step = b.step("run-test-archive", "Build a Roc static archive, link a consumer against it, and run it");
     const build_coverage_tools_step = b.step("build-coverage-tools", "Build parser coverage tools");
     const run_coverage_parser_step = b.step("run-coverage-parser", "Run parser tests with kcov code coverage");
     const run_minici_step = b.step("minici", "Run a subset of CI build and test steps");
@@ -3078,6 +3132,28 @@ pub fn build(b: *std.Build) void {
         build_wasm_app.step.dependOn(build_test_hosts_step);
         build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_app.step);
 
+        const build_wasm_rc_cleanup_app = b.addRunArtifact(roc_exe);
+        build_wasm_rc_cleanup_app.addArgs(&.{
+            "build",
+            "test/wasm/rc_cleanup_static_lib_app.roc",
+            "--opt=dev",
+            "--target=wasm32",
+            "--output=test/wasm/rc_cleanup_static_lib_app.wasm",
+        });
+        build_wasm_rc_cleanup_app.step.dependOn(build_test_hosts_step);
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_rc_cleanup_app.step);
+
+        const build_wasm_rc_cleanup_model_list_app = b.addRunArtifact(roc_exe);
+        build_wasm_rc_cleanup_model_list_app.addArgs(&.{
+            "build",
+            "test/wasm/rc_cleanup_model_list_static_lib_app.roc",
+            "--opt=dev",
+            "--target=wasm32",
+            "--output=test/wasm/rc_cleanup_model_list_static_lib_app.wasm",
+        });
+        build_wasm_rc_cleanup_model_list_app.step.dependOn(build_test_hosts_step);
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_rc_cleanup_model_list_app.step);
+
         const wasm_test_exe = b.addExecutable(.{
             .name = "wasm_static_lib_test",
             .root_module = b.createModule(.{
@@ -3095,9 +3171,136 @@ pub fn build(b: *std.Build) void {
         const run_wasm_test = b.addRunArtifact(wasm_test_exe);
         if (run_args.len != 0) {
             run_wasm_test.addArgs(run_args);
+        } else {
+            const run_wasm_rc_cleanup_test = b.addRunArtifact(wasm_test_exe);
+            run_wasm_rc_cleanup_test.addArgs(&.{
+                "--wasm-path",
+                "test/wasm/rc_cleanup_static_lib_app.wasm",
+                "--expected",
+                "ok",
+                "--assert-alloc-balanced",
+                "--min-allocs",
+                "16",
+            });
+            run_wasm_rc_cleanup_test.step.dependOn(build_test_wasm_static_lib_runner_step);
+            run_test_wasm_static_lib_step.dependOn(&run_wasm_rc_cleanup_test.step);
+
+            const run_wasm_rc_cleanup_model_list_test = b.addRunArtifact(wasm_test_exe);
+            run_wasm_rc_cleanup_model_list_test.addArgs(&.{
+                "--wasm-path",
+                "test/wasm/rc_cleanup_model_list_static_lib_app.wasm",
+                "--expected",
+                "ok",
+                "--assert-alloc-balanced",
+                "--min-allocs",
+                "64",
+            });
+            run_wasm_rc_cleanup_model_list_test.step.dependOn(build_test_wasm_static_lib_runner_step);
+            run_test_wasm_static_lib_step.dependOn(&run_wasm_rc_cleanup_model_list_test.step);
         }
         run_wasm_test.step.dependOn(build_test_wasm_static_lib_runner_step);
         run_test_wasm_static_lib_step.dependOn(&run_wasm_test.step);
+    }
+
+    // Build the shared-library test fixture with `roc build` and verify it by
+    // running a separate loader executable that dlopens it and calls its C API.
+    {
+        const output_target = nativeSharedArchiveTarget(b, target);
+        const dylib_ext = switch (output_target.resolved.result.os.tag) {
+            .windows => ".dll",
+            .macos => ".dylib",
+            else => ".so",
+        };
+        const dylib_output = b.fmt("test/dylib/app{s}", .{dylib_ext});
+
+        const build_dylib_app = b.addRunArtifact(roc_exe);
+        build_dylib_app.addArgs(&.{
+            "build",
+            "test/dylib/app.roc",
+            "--opt=size",
+            b.fmt("--target={s}", .{output_target.roc_name}),
+            b.fmt("--output={s}", .{dylib_output}),
+        });
+        build_dylib_app.step.dependOn(build_test_hosts_step);
+
+        const dylib_loader_exe = b.addExecutable(.{
+            .name = "dylib_loader",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("test/dylib/loader.zig"),
+                .target = output_target.resolved,
+                .optimize = optimize,
+                .link_libc = true,
+            }),
+        });
+        configureBackend(dylib_loader_exe, output_target.resolved);
+
+        const install_dylib_loader = b.addInstallArtifact(dylib_loader_exe, .{});
+
+        const run_dylib_test = b.addRunArtifact(dylib_loader_exe);
+        run_dylib_test.step.dependOn(&install_dylib_loader.step);
+        run_dylib_test.addArg(dylib_output);
+        run_dylib_test.step.dependOn(&build_dylib_app.step);
+        run_test_dylib_step.dependOn(&run_dylib_test.step);
+    }
+
+    // Build the static-archive test fixture with `roc build`, link a consumer
+    // executable against the produced archive, and run it. Also build the
+    // hostless wasm32 archive and verify its contents.
+    {
+        const output_target = nativeSharedArchiveTarget(b, target);
+        const archive_ext = if (output_target.resolved.result.os.tag == .windows) ".lib" else ".a";
+        const archive_output = b.fmt("test/archive/app{s}", .{archive_ext});
+
+        const build_archive_app = b.addRunArtifact(roc_exe);
+        build_archive_app.addArgs(&.{
+            "build",
+            "test/archive/app.roc",
+            "--opt=dev",
+            b.fmt("--target={s}", .{output_target.roc_name}),
+            b.fmt("--output={s}", .{archive_output}),
+        });
+        build_archive_app.step.dependOn(build_test_hosts_step);
+
+        const archive_consumer_exe = b.addExecutable(.{
+            .name = "archive_consumer",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("test/archive/consumer.zig"),
+                .target = output_target.resolved,
+                .optimize = optimize,
+                .link_libc = true,
+            }),
+        });
+        configureBackend(archive_consumer_exe, output_target.resolved);
+        archive_consumer_exe.root_module.addObjectFile(b.path(archive_output));
+        archive_consumer_exe.step.dependOn(&build_archive_app.step);
+
+        const run_archive_consumer = b.addRunArtifact(archive_consumer_exe);
+        run_test_archive_step.dependOn(&run_archive_consumer.step);
+
+        const build_wasm_archive_app = b.addRunArtifact(roc_exe);
+        build_wasm_archive_app.addArgs(&.{
+            "build",
+            "test/archive/app.roc",
+            "--opt=dev",
+            "--target=wasm32",
+            "--output=test/archive/app-wasm32.a",
+        });
+        build_wasm_archive_app.step.dependOn(build_test_hosts_step);
+
+        const archive_check_exe = b.addExecutable(.{
+            .name = "archive_check",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("test/archive/archive_check.zig"),
+                .target = target,
+                .optimize = optimize,
+            }),
+        });
+        configureBackend(archive_check_exe, target);
+
+        const run_wasm_archive_check = b.addRunArtifact(archive_check_exe);
+        run_wasm_archive_check.addArgs(&.{ "test/archive/app-wasm32.a", "roc_builtins" });
+        run_wasm_archive_check.step.dependOn(&build_wasm_archive_app.step);
+        run_test_archive_step.dependOn(&run_wasm_archive_check.step);
     }
 
     // Check fx platform test coverage convenience step

@@ -1426,12 +1426,27 @@ fn rocRun(ctx: *CliCtx, args: cli_args.RunArgs) anyerror!void {
         if (platform_validation.validatePlatformHeader(ctx.arena, ctx.io.std_io, platform_source)) |validation| {
             targets_config = validation.config;
 
-            // Check if this is a static_lib-only platform (no exe targets)
-            if (validation.config.exe.len == 0 and validation.config.static_lib.len > 0) {
-                ctx.io.stderr().print("Error: This platform only produces static libraries.\n\n", .{}) catch {};
-                ctx.io.stderr().print("Static library platforms produce .a/.lib/.wasm files that must be\n", .{}) catch {};
-                ctx.io.stderr().print("linked by a host application. Use 'roc build' instead to produce\n", .{}) catch {};
+            // Check if this is a library- or object-only platform (no exe targets)
+            var has_exe_output = false;
+            var has_shared_output = false;
+            for (validation.config.targets) |spec| {
+                switch (spec.output) {
+                    .exe => has_exe_output = true,
+                    .shared => has_shared_output = true,
+                    .archive => {},
+                }
+            }
+            if (!has_exe_output and has_shared_output) {
+                ctx.io.stderr().print("Error: This platform only produces shared libraries.\n\n", .{}) catch {};
+                ctx.io.stderr().print("Shared library platforms produce .so/.dylib/.dll files that must be\n", .{}) catch {};
+                ctx.io.stderr().print("loaded by a host application. Use 'roc build' instead to produce\n", .{}) catch {};
                 ctx.io.stderr().print("the library artifact.\n", .{}) catch {};
+                return error.UnsupportedTarget;
+            } else if (!has_exe_output) {
+                ctx.io.stderr().print("Error: This platform only produces static archives.\n\n", .{}) catch {};
+                ctx.io.stderr().print("Archive platforms produce .a/.lib files that must be linked\n", .{}) catch {};
+                ctx.io.stderr().print("by another build. Use 'roc build' instead to produce\n", .{}) catch {};
+                ctx.io.stderr().print("the archive.\n", .{}) catch {};
                 return error.UnsupportedTarget;
             }
 
@@ -1495,7 +1510,7 @@ fn rocRun(ctx: *CliCtx, args: cli_args.RunArgs) anyerror!void {
         std.fs.path.dirname(p) orelse "."
     else
         ".";
-    const files_dir = if (targets_config) |cfg| cfg.files_dir orelse "targets" else "targets";
+    const files_dir = if (targets_config) |cfg| cfg.inputs_dir orelse "targets" else "targets";
     const target_name = @tagName(selected_target);
 
     const link_inputs_identity = try interpreterExeLinkInputsIdentity(
@@ -3492,7 +3507,6 @@ fn selectBuildPlatformTarget(
             const result = platform_validation.createUnsupportedTargetResult(
                 platform_source orelse "<unknown>",
                 target,
-                .exe,
                 targets_config,
             );
             renderValidationError(ctx.gpa, result, ctx.io.stderr());
@@ -3529,7 +3543,6 @@ fn selectRunPlatformTarget(
             const result = platform_validation.createUnsupportedTargetResult(
                 platform_source orelse "<unknown>",
                 target,
-                .exe,
                 targets_config,
             );
             renderValidationError(ctx.gpa, result, ctx.io.stderr());
@@ -3540,7 +3553,6 @@ fn selectRunPlatformTarget(
             const result = platform_validation.createUnsupportedTargetResult(
                 platform_source orelse "<unknown>",
                 native_target,
-                .exe,
                 targets_config,
             );
             renderValidationError(ctx.gpa, result, ctx.io.stderr());
@@ -3553,16 +3565,51 @@ fn selectRunPlatformTarget(
     };
 }
 
-fn rejectRequiredExecutableOutput(ctx: *CliCtx, link_type: roc_target.LinkType) error{ UnsupportedTarget, WriteFailed }!void {
+/// Map a target's declared output kind to the linker's output kind.
+/// Archive outputs never reach the linker; they go through writeArchiveOutput.
+fn linkerOutputKind(output: roc_target.OutputKind) linker.OutputKind {
+    return switch (output) {
+        .shared => .shared_lib,
+        .exe => .exe,
+        .archive => unreachable,
+    };
+}
+
+/// Write an Archive output: a static archive of the platform's pre inputs,
+/// the compiled objects, and the post inputs, with input archives flattened.
+fn writeArchiveOutput(
+    ctx: *CliCtx,
+    target: RocTarget,
+    final_output_path: []const u8,
+    link_inputs: PlatformLinkInputs,
+    object_files: []const []const u8,
+) anyerror!void {
+    var inputs = try std.array_list.Managed([]const u8).initCapacity(
+        ctx.arena,
+        link_inputs.platform_files_pre.len + object_files.len + link_inputs.platform_files_post.len,
+    );
+    inputs.appendSliceAssumeCapacity(link_inputs.platform_files_pre);
+    inputs.appendSliceAssumeCapacity(object_files);
+    inputs.appendSliceAssumeCapacity(link_inputs.platform_files_post);
+    builder.writeStaticArchive(ctx.gpa, final_output_path, inputs.items, target) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.ArchiveWriteFailed, error.LLVMNotAvailable => return ctx.fail(.{ .linker_failed = .{
+            .err = err,
+            .target = link_inputs.target_name,
+        } }),
+    };
+}
+
+fn rejectRequiredExecutableOutput(ctx: *CliCtx, link_type: roc_target.OutputKind) error{ UnsupportedTarget, WriteFailed }!void {
     const stderr = ctx.io.stderr();
     switch (link_type) {
-        .static_lib => {
-            try stderr.print("Error: The selected target only produces static libraries.\n\n", .{});
-            try stderr.print("Static library platforms produce .a/.lib/.wasm files that must be\n", .{});
-            try stderr.print("linked by a host application. Use 'roc build' instead to produce\n", .{});
-            try stderr.print("the library artifact.\n", .{});
+        .archive => {
+            try stderr.print("Error: The selected target only produces static archives.\n\n", .{});
+            try stderr.print("Archive platforms produce .a/.lib files that must be linked\n", .{});
+            try stderr.print("by another build. Use 'roc build' instead to produce\n", .{});
+            try stderr.print("the archive.\n", .{});
         },
-        .shared_lib => {
+        .shared => {
             try stderr.print("Error: The selected target only produces shared libraries.\n\n", .{});
             try stderr.print("Shared library platforms produce .so/.dylib/.dll files that must be\n", .{});
             try stderr.print("loaded by a host application. Use 'roc build' instead to produce\n", .{});
@@ -3578,16 +3625,16 @@ fn collectPlatformLinkInputs(
     platform_dir: []const u8,
     targets_config: roc_target.TargetsConfig,
     target: RocTarget,
-    link_type: roc_target.LinkType,
+    link_type: roc_target.OutputKind,
 ) (Allocator.Error || error{ CliError, MissingTargetFile })!PlatformLinkInputs {
     const target_name = @tagName(target);
-    const link_spec = targets_config.getLinkSpec(target, link_type) orelse {
+    const link_spec = targets_config.getLinkSpec(target) orelse {
         return ctx.fail(.{ .linker_failed = .{
             .err = error.UnsupportedTarget,
             .target = target_name,
         } });
     };
-    const files_dir = targets_config.files_dir orelse "targets";
+    const files_dir = targets_config.inputs_dir orelse "targets";
     var platform_files_pre = try std.array_list.Managed([]const u8).initCapacity(ctx.arena, 8);
     var platform_files_post = try std.array_list.Managed([]const u8).initCapacity(ctx.arena, 8);
     var hit_app = false;
@@ -3599,7 +3646,7 @@ fn collectPlatformLinkInputs(
                 std.Io.Dir.cwd().access(ctx.io.std_io, full_path, .{}) catch {
                     renderValidationError(ctx.gpa, .{ .missing_target_file = .{
                         .target = target,
-                        .link_type = link_type,
+                        .output = link_type,
                         .file_path = path,
                         .expected_full_path = full_path,
                     } }, ctx.io.stderr());
@@ -3924,7 +3971,7 @@ fn rocBuildWasmSurgical(
     ctx: *CliCtx,
     args: cli_args.BuildArgs,
     target: RocTarget,
-    link_type: roc_target.LinkType,
+    link_type: roc_target.OutputKind,
     final_output_path: []const u8,
     build_cache_dir: []const u8,
     platform_dir: []const u8,
@@ -3932,15 +3979,6 @@ fn rocBuildWasmSurgical(
     lowered: *const lir.CheckedPipeline.LoweredProgram,
     entrypoints: []const backend.Entrypoint,
 ) anyerror!void {
-    if (args.no_link) {
-        const obj_path = try writeDevWasmObject(ctx, build_cache_dir, lowered, entrypoints);
-
-        if (!args.suppress_build_status) {
-            try ctx.io.stdout().print("Object file generated: {s}\n", .{obj_path});
-        }
-        return;
-    }
-
     if (entrypoints.len == 0) {
         if (builtin.mode == .Debug) {
             std.debug.panic("wasm build invariant violated: no exported platform entrypoints", .{});
@@ -3949,6 +3987,15 @@ fn rocBuildWasmSurgical(
     }
 
     const link_inputs = try collectPlatformLinkInputs(ctx, platform_dir, targets_config, target, link_type);
+
+    if (link_type == .archive) {
+        // Archives package whatever inputs the platform declared (possibly
+        // just the app); no platform wasm file is required.
+        const obj_path = try writeDevWasmObject(ctx, build_cache_dir, lowered, entrypoints);
+        try writeArchiveOutput(ctx, .wasm32, final_output_path, link_inputs, &.{obj_path});
+        return;
+    }
+
     if (link_inputs.platform_files_pre.len + link_inputs.platform_files_post.len == 0) {
         try ctx.io.stderr().writeAll("Error: wasm32 builds require a relocatable wasm platform file or archive.\n");
         return error.UnsupportedTarget;
@@ -4138,6 +4185,7 @@ fn compileLlvmAppObject(
     args: cli_args.BuildArgs,
     build_cache_dir: []const u8,
     target: RocTarget,
+    link_type: roc_target.OutputKind,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
     entrypoints: []const backend.Entrypoint,
 ) anyerror!LlvmObjectPaths {
@@ -4166,8 +4214,12 @@ fn compileLlvmAppObject(
 
     const target_name = @tagName(target);
     const opt_name = @tagName(args.opt);
-    const bitcode_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_llvm_{s}_{s}.bc", .{ target_name, opt_name });
-    const object_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_llvm_{s}_{s}.o", .{ target_name, opt_name });
+    // Shared libraries need position-independent code; keep their objects
+    // separate from exe objects in the build cache.
+    const pic = link_type == .shared;
+    const kind_suffix: []const u8 = if (pic) "_pic" else "";
+    const bitcode_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_llvm_{s}_{s}{s}.bc", .{ target_name, opt_name, kind_suffix });
+    const object_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_llvm_{s}_{s}{s}.o", .{ target_name, opt_name, kind_suffix });
     const bitcode_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, bitcode_filename });
     const object_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, object_filename });
 
@@ -4182,6 +4234,7 @@ fn compileLlvmAppObject(
         .optimization = llvmOptimizationLevel(args.opt),
         .target = target,
         .debug = args.debug,
+        .pic = pic,
     };
 
     const success = try builder.compileBitcodeToObject(ctx.gpa, ctx.io.std_io, compile_config);
@@ -4279,7 +4332,7 @@ fn writeCombinedLlvmWasmObject(
 fn rocBuildWasmLlvm(
     ctx: *CliCtx,
     args: cli_args.BuildArgs,
-    link_type: roc_target.LinkType,
+    link_type: roc_target.OutputKind,
     final_output_path: []const u8,
     build_cache_dir: []const u8,
     platform_dir: []const u8,
@@ -4295,21 +4348,20 @@ fn rocBuildWasmLlvm(
         unreachable;
     }
 
-    const app_object = try compileLlvmAppObject(ctx, args, build_cache_dir, .wasm32, lowered, entrypoints);
+    const app_object = try compileLlvmAppObject(ctx, args, build_cache_dir, .wasm32, link_type, lowered, entrypoints);
 
     var owned_inputs: std.ArrayList([]u8) = .empty;
     defer freeOwnedWasmInputs(ctx, &owned_inputs);
 
-    if (args.no_link) {
-        const obj_path = try writeCombinedLlvmWasmObject(ctx, build_cache_dir, app_object.object_path, static_data_exports, args.opt, &owned_inputs);
-
-        if (!args.suppress_build_status) {
-            try ctx.io.stdout().print("Object file generated: {s}\n", .{obj_path});
-        }
+    const link_inputs = try collectPlatformLinkInputs(ctx, platform_dir, targets_config, .wasm32, link_type);
+    if (link_type == .archive) {
+        // Archives package whatever inputs the platform declared (possibly
+        // just the app); no platform wasm file is required.
+        const combined_obj = try writeCombinedLlvmWasmObject(ctx, build_cache_dir, app_object.object_path, static_data_exports, args.opt, &owned_inputs);
+        try writeArchiveOutput(ctx, .wasm32, final_output_path, link_inputs, &.{combined_obj});
         return;
     }
 
-    const link_inputs = try collectPlatformLinkInputs(ctx, platform_dir, targets_config, .wasm32, link_type);
     if (link_inputs.platform_files_pre.len + link_inputs.platform_files_post.len == 0) {
         try ctx.io.stderr().writeAll("Error: wasm32 LLVM builds require a relocatable wasm platform file or archive.\n");
         return error.UnsupportedTarget;
@@ -4484,7 +4536,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
 
     const selected = try selectBuildPlatformTarget(ctx, targets_config, platform_source, args.target);
     const target = selected.target;
-    const link_type = selected.link_type;
+    const link_type = selected.output;
 
     if (target.isDynamic() and builtin.target.os.tag != .linux) {
         renderValidationError(ctx.gpa, .{
@@ -4612,7 +4664,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
             static_data_exports,
         );
     } else {
-        const app_object = try compileLlvmAppObject(ctx, args, build_cache_dir, target, &lowered, entrypoints);
+        const app_object = try compileLlvmAppObject(ctx, args, build_cache_dir, target, link_type, &lowered, entrypoints);
 
         var static_data_obj_path: ?[]const u8 = null;
         if (static_data_exports.len > 0) {
@@ -4626,17 +4678,6 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
                 ctx.coreCtx(),
             );
             static_data_obj_path = static_obj_path;
-        }
-
-        if (args.no_link) {
-            if (!args.suppress_build_status) {
-                if (static_data_obj_path) |path| {
-                    try ctx.io.stdout().print("Object files generated:\n  app: {s}\n  static data: {s}\n", .{ app_object.object_path, path });
-                } else {
-                    try ctx.io.stdout().print("Object file generated: {s}\n", .{app_object.object_path});
-                }
-            }
-            return;
         }
 
         const link_inputs = try collectPlatformLinkInputs(ctx, platform_dir, resolved_targets_config, target, link_type);
@@ -4653,35 +4694,40 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
         }
         try object_files.append(builtins_path);
 
-        const force_undefined_symbols = try staticDataLinkRootSymbols(ctx, static_data_exports);
+        if (link_type == .archive) {
+            try writeArchiveOutput(ctx, target, final_output_path, link_inputs, object_files.items);
+        } else {
+            const force_undefined_symbols = try staticDataLinkRootSymbols(ctx, static_data_exports);
 
-        const link_config = linker.LinkConfig{
-            .target_format = linker.TargetFormat.detectFromOs(target_os),
-            .target_abi = linker.TargetAbi.fromRocTarget(target),
-            .target_os = target_os,
-            .target_arch = target_arch,
-            .output_path = final_output_path,
-            .object_files = object_files.items,
-            .platform_files_pre = link_inputs.platform_files_pre,
-            .platform_files_post = link_inputs.platform_files_post,
-            .extra_args = &.{},
-            .force_undefined_symbols = force_undefined_symbols,
-            .can_exit_early = false,
-            .disable_output = false,
-            .platform_files_dir = link_inputs.platform_files_dir,
-            .scratch_dir = build_cache_dir,
-        };
+            const link_config = linker.LinkConfig{
+                .target_format = linker.TargetFormat.detectFromOs(target_os),
+                .target_abi = linker.TargetAbi.fromRocTarget(target),
+                .target_os = target_os,
+                .target_arch = target_arch,
+                .output_path = final_output_path,
+                .output_kind = linkerOutputKind(link_type),
+                .object_files = object_files.items,
+                .platform_files_pre = link_inputs.platform_files_pre,
+                .platform_files_post = link_inputs.platform_files_post,
+                .extra_args = &.{},
+                .force_undefined_symbols = force_undefined_symbols,
+                .can_exit_early = false,
+                .disable_output = false,
+                .platform_files_dir = link_inputs.platform_files_dir,
+                .scratch_dir = build_cache_dir,
+            };
 
-        if (args.z_dump_linker) {
-            try dumpLinkerInputs(ctx, link_config);
+            if (args.z_dump_linker) {
+                try dumpLinkerInputs(ctx, link_config);
+            }
+
+            linker.link(ctx, link_config) catch |err| {
+                return ctx.fail(.{ .linker_failed = .{
+                    .err = err,
+                    .target = link_inputs.target_name,
+                } });
+            };
         }
-
-        linker.link(ctx, link_config) catch |err| {
-            return ctx.fail(.{ .linker_failed = .{
-                .err = err,
-                .target = link_inputs.target_name,
-            } });
-        };
     }
 
     const elapsed_ns = @as(u64, @intCast(std.Io.Timestamp.now(ctx.io.std_io, .real).nanoseconds - timer_start_ns));
@@ -4692,7 +4738,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
     else
         0;
 
-    if (!args.no_link and !args.suppress_build_status) {
+    if (!args.suppress_build_status) {
         const stdout = ctx.io.stdout();
         try stdout.print("Built {s} in {d:.1}ms", .{ final_output_path, elapsed_ms });
         try stdout.writeAll(" (checked-artifact LLVM backend)\n");
@@ -4777,7 +4823,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
 
     const selected = try selectBuildPlatformTarget(ctx, targets_config, platform_source, args.target);
     const target = selected.target;
-    const link_type = selected.link_type;
+    const link_type = selected.output;
 
     if (args.require_executable_output and link_type != .exe) {
         return rejectRequiredExecutableOutput(ctx, link_type);
@@ -4932,7 +4978,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
     const build_scratch_dir = createUniqueTempDir(ctx) catch |err| {
         return ctx.fail(.{ .temp_dir_failed = .{ .err = err } });
     };
-    var cleanup_build_scratch_dir = true;
+    const cleanup_build_scratch_dir = true;
     defer if (cleanup_build_scratch_dir) {
         compile.CacheCleanup.deleteTempDir(ctx.io.std_io, build_scratch_dir);
     };
@@ -4953,14 +4999,6 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
         return error.NativeCompilationFailed;
     };
 
-    if (args.no_link) {
-        cleanup_build_scratch_dir = false;
-        if (!args.suppress_build_status) {
-            try ctx.io.stdout().print("Object file generated: {s}\n", .{obj_path});
-        }
-        return;
-    }
-
     const link_inputs = try collectPlatformLinkInputs(ctx, platform_dir, resolved_targets_config, target, link_type);
 
     const builtins_path = try std.fs.path.join(ctx.arena, &.{ build_scratch_dir, BuiltinsObjects.filename(target) });
@@ -4972,35 +5010,40 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
     try object_files.append(obj_path);
     try object_files.append(builtins_path);
 
-    const force_undefined_symbols = try staticDataLinkRootSymbols(ctx, static_data_exports);
+    if (link_type == .archive) {
+        try writeArchiveOutput(ctx, target, final_output_path, link_inputs, object_files.items);
+    } else {
+        const force_undefined_symbols = try staticDataLinkRootSymbols(ctx, static_data_exports);
 
-    const link_config = linker.LinkConfig{
-        .target_format = linker.TargetFormat.detectFromOs(target_os),
-        .target_abi = linker.TargetAbi.fromRocTarget(target),
-        .target_os = target_os,
-        .target_arch = target_arch,
-        .output_path = final_output_path,
-        .object_files = object_files.items,
-        .platform_files_pre = link_inputs.platform_files_pre,
-        .platform_files_post = link_inputs.platform_files_post,
-        .extra_args = &.{},
-        .force_undefined_symbols = force_undefined_symbols,
-        .can_exit_early = false,
-        .disable_output = false,
-        .platform_files_dir = link_inputs.platform_files_dir,
-        .scratch_dir = build_scratch_dir,
-    };
+        const link_config = linker.LinkConfig{
+            .target_format = linker.TargetFormat.detectFromOs(target_os),
+            .target_abi = linker.TargetAbi.fromRocTarget(target),
+            .target_os = target_os,
+            .target_arch = target_arch,
+            .output_path = final_output_path,
+            .output_kind = linkerOutputKind(link_type),
+            .object_files = object_files.items,
+            .platform_files_pre = link_inputs.platform_files_pre,
+            .platform_files_post = link_inputs.platform_files_post,
+            .extra_args = &.{},
+            .force_undefined_symbols = force_undefined_symbols,
+            .can_exit_early = false,
+            .disable_output = false,
+            .platform_files_dir = link_inputs.platform_files_dir,
+            .scratch_dir = build_scratch_dir,
+        };
 
-    if (args.z_dump_linker) {
-        try dumpLinkerInputs(ctx, link_config);
+        if (args.z_dump_linker) {
+            try dumpLinkerInputs(ctx, link_config);
+        }
+
+        linker.link(ctx, link_config) catch |err| {
+            return ctx.fail(.{ .linker_failed = .{
+                .err = err,
+                .target = link_inputs.target_name,
+            } });
+        };
     }
-
-    linker.link(ctx, link_config) catch |err| {
-        return ctx.fail(.{ .linker_failed = .{
-            .err = err,
-            .target = link_inputs.target_name,
-        } });
-    };
 
     const elapsed_ns = @as(u64, @intCast(std.Io.Timestamp.now(ctx.io.std_io, .real).nanoseconds - timer_start_ns));
     const elapsed_ms = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000.0;
@@ -5097,7 +5140,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
 
     const selected = try selectBuildPlatformTarget(ctx, targets_config, platform_source, args.target);
     const target = selected.target;
-    const link_type = selected.link_type;
+    const link_type = selected.output;
 
     const native_target = RocTarget.detectNative();
     if (target != native_target) {
@@ -5211,42 +5254,47 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
         try object_files.append(path);
     }
 
-    var extra_args = try std.array_list.Managed([]const u8).initCapacity(ctx.arena, 8);
-    if (target.isMacOS()) {
-        try extra_args.append("-lSystem");
+    if (link_type == .archive) {
+        try writeArchiveOutput(ctx, target, final_output_path, link_inputs, object_files.items);
+    } else {
+        var extra_args = try std.array_list.Managed([]const u8).initCapacity(ctx.arena, 8);
+        if (target.isMacOS()) {
+            try extra_args.append("-lSystem");
+        }
+
+        const link_config = linker.LinkConfig{
+            .target_format = linker.TargetFormat.detectFromOs(target_os),
+            .target_abi = linker.TargetAbi.fromRocTarget(target),
+            .target_os = target_os,
+            .target_arch = target_arch,
+            .output_path = final_output_path,
+            .output_kind = linkerOutputKind(link_type),
+            .object_files = object_files.items,
+            .platform_files_pre = link_inputs.platform_files_pre,
+            .platform_files_post = link_inputs.platform_files_post,
+            .extra_args = extra_args.items,
+            .can_exit_early = false,
+            .disable_output = false,
+            .wasm_initial_memory = configuredWasmMinimumMemory(args, link_inputs.wasm),
+            .wasm_maximum_memory = if (link_inputs.wasm) |wasm| wasm.maximum_memory else null,
+            .wasm_stack_size = configuredWasmStackBytes(args, link_inputs.wasm),
+            .wasm_import_memory = if (link_inputs.wasm) |wasm| wasm.import_memory else false,
+            .wasm_global_base = if (link_inputs.wasm) |wasm| wasm.global_base else null,
+            .platform_files_dir = link_inputs.platform_files_dir,
+            .scratch_dir = build_cache_dir,
+        };
+
+        if (args.z_dump_linker) {
+            try dumpLinkerInputs(ctx, link_config);
+        }
+
+        linker.link(ctx, link_config) catch |err| {
+            return ctx.fail(.{ .linker_failed = .{
+                .err = err,
+                .target = link_inputs.target_name,
+            } });
+        };
     }
-
-    const link_config = linker.LinkConfig{
-        .target_format = linker.TargetFormat.detectFromOs(target_os),
-        .target_abi = linker.TargetAbi.fromRocTarget(target),
-        .target_os = target_os,
-        .target_arch = target_arch,
-        .output_path = final_output_path,
-        .object_files = object_files.items,
-        .platform_files_pre = link_inputs.platform_files_pre,
-        .platform_files_post = link_inputs.platform_files_post,
-        .extra_args = extra_args.items,
-        .can_exit_early = false,
-        .disable_output = false,
-        .wasm_initial_memory = configuredWasmMinimumMemory(args, link_inputs.wasm),
-        .wasm_maximum_memory = if (link_inputs.wasm) |wasm| wasm.maximum_memory else null,
-        .wasm_stack_size = configuredWasmStackBytes(args, link_inputs.wasm),
-        .wasm_import_memory = if (link_inputs.wasm) |wasm| wasm.import_memory else false,
-        .wasm_global_base = if (link_inputs.wasm) |wasm| wasm.global_base else null,
-        .platform_files_dir = link_inputs.platform_files_dir,
-        .scratch_dir = build_cache_dir,
-    };
-
-    if (args.z_dump_linker) {
-        try dumpLinkerInputs(ctx, link_config);
-    }
-
-    linker.link(ctx, link_config) catch |err| {
-        return ctx.fail(.{ .linker_failed = .{
-            .err = err,
-            .target = link_inputs.target_name,
-        } });
-    };
 
     const elapsed_ns_embed = @as(u64, @intCast(std.Io.Timestamp.now(ctx.io.std_io, .real).nanoseconds - timer_start_ns));
     const elapsed_ms = @as(f64, @floatFromInt(elapsed_ns_embed)) / 1_000_000.0;

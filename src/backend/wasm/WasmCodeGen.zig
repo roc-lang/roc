@@ -6,6 +6,8 @@
 //!
 //! RC boundary:
 //! - explicit RC lowering happens through `generateRcStmt`
+//! - each RC statement's count-update atomicity selects which compiled helper
+//!   entry it reaches (see `rcHelperCacheKey`)
 //! - builtin/runtime helper implementations may perform primitive-internal RC
 //! - ordinary wasm lowering is forbidden from inventing ownership policy
 
@@ -21,6 +23,7 @@ const LIR = lir.LIR;
 const LirStore = lir.LirStore;
 const RcHelperKey = layout.RcHelperKey;
 const RcHelperPlan = layout.RcHelperPlan;
+const RcAtomicity = LIR.RcAtomicity;
 const RcListPlan = layout.ListPlan;
 const ProcLocalId = LIR.LocalId;
 const ProcLocalSpan = LIR.LocalSpan;
@@ -165,6 +168,20 @@ const RocListElementCallbacks = struct {
     incref_table_idx: u32,
     decref_table_idx: u32,
 };
+
+const RcAllocationLayout = struct {
+    data_offset: u32,
+    allocation_alignment: u32,
+};
+
+fn rcAllocationLayout(element_alignment: u32, elements_refcounted: bool) RcAllocationLayout {
+    const ptr_width: u32 = 4;
+    const required_space: u32 = if (elements_refcounted) 2 * ptr_width else ptr_width;
+    return .{
+        .data_offset = @max(required_space, element_alignment),
+        .allocation_alignment = @max(ptr_width, element_alignment),
+    };
+}
 
 const TryUnsafeOffsets = struct {
     success: u32,
@@ -351,6 +368,7 @@ float_from_str_import: ?u32 = null,
 list_append_unsafe_import: ?u32 = null,
 list_concat_import: ?u32 = null,
 list_drop_at_import: ?u32 = null,
+list_reserve_import: ?u32 = null,
 list_reverse_import: ?u32 = null,
 /// Configurable wasm stack size in bytes (default 1MB).
 wasm_stack_bytes: u32 = 1024 * 1024,
@@ -520,6 +538,14 @@ fn emitBuiltinCall(self: *Self, kind: BuiltinKind, host_import: ?u32) Allocator.
 fn emitI32Const(self: *Self, value: i32) Allocator.Error!void {
     self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
     WasmModule.leb128WriteI32(self.allocator, self.currentCode(), value) catch return error.OutOfMemory;
+}
+
+/// Select a builtin wrapper's update-mode immediate from the statement's
+/// statically-proven-unique argument mask: `.InPlace` when the bit for
+/// `arg_index` says that argument's runtime uniqueness check is redundant,
+/// `.Immutable` (checked) otherwise.
+fn updateModeImmForArg(unique_args: u64, arg_index: u6) i32 {
+    return @intFromEnum(if ((unique_args >> arg_index) & 1 != 0) builtins.utils.UpdateMode.InPlace else builtins.utils.UpdateMode.Immutable);
 }
 
 fn loadRocListFields(self: *Self, list_ptr: u32) Allocator.Error!RocListFields {
@@ -756,11 +782,14 @@ fn compileBuiltinInternalIncrefCallback(self: *Self, helper_key: RcHelperKey) Al
         );
     }
 
-    const helper_func_idx = try self.compileBuiltinInternalRcHelper(helper_key);
+    // These callbacks serve runtime-checked list ops, whose RC is internal to
+    // the op and makes no thread-confinement claim, so they always use the
+    // atomic helper family.
+    const helper_func_idx = try self.compileBuiltinInternalRcHelper(helper_key, .atomic);
     const type_idx = try self.internFuncType(&.{ .i32, .i64, .i32 }, &.{});
     const defined = self.module.addDefinedFunction(type_idx) catch return error.OutOfMemory;
     const func_idx = defined.function.raw();
-    _ = try self.addOwnedLocalFunctionSymbol(defined, "roc_rc_incref_callback", helper_key.encode());
+    _ = try self.addOwnedLocalFunctionSymbol(defined, "roc_rc_incref_callback", rcHelperCacheKey(helper_key, .atomic));
 
     const saved = try self.saveState();
 
@@ -798,12 +827,15 @@ fn builtinInternalRcHelperTableIndex(self: *Self, helper_key: RcHelperKey) Alloc
     const helper_plan = self.getLayoutStore().rcHelperPlan(helper_key);
     if (helper_plan == .noop) return 0;
 
-    const cache_key = helper_key.encode();
+    const cache_key = rcHelperCacheKey(helper_key, .atomic);
     if (self.rc_helper_table_indices.get(cache_key)) |table_idx| return table_idx;
 
+    // Table entries serve runtime-checked list ops, whose RC is internal to
+    // the op and makes no thread-confinement claim, so they always use the
+    // atomic helper family.
     const func_idx = switch (helper_key.op) {
         .incref => try self.compileBuiltinInternalIncrefCallback(helper_key),
-        .decref, .free => try self.compileBuiltinInternalRcHelper(helper_key),
+        .decref, .free => try self.compileBuiltinInternalRcHelper(helper_key, .atomic),
     };
     const table_idx = self.module.addTableElement(func_idx) catch return error.OutOfMemory;
     try self.rc_helper_table_indices.put(cache_key, table_idx);
@@ -1243,6 +1275,9 @@ fn registerHostImports(self: *Self) Allocator.Error!void {
     const list_drop_at_type = try self.module.addFuncType(&.{ .i32, .i32, .i32, .i32, .i32 }, &.{});
     self.list_drop_at_import = try self.module.addImport("env", "roc_list_drop_at", list_drop_at_type);
 
+    const list_reserve_type = try self.module.addFuncType(&.{ .i32, .i64, .i32, .i32, .i32 }, &.{});
+    self.list_reserve_import = try self.module.addImport("env", "roc_list_reserve", list_reserve_type);
+
     const list_reverse_type = try self.module.addFuncType(&.{ .i32, .i32, .i32, .i32 }, &.{});
     self.list_reverse_import = try self.module.addImport("env", "roc_list_reverse", list_reverse_type);
 
@@ -1552,6 +1587,7 @@ fn emitProcLocal(self: *Self, value: ProcLocalId) Allocator.Error!void {
 fn emitExplicitRcForValueLocal(
     self: *Self,
     helper_key: RcHelperKey,
+    atomicity: RcAtomicity,
     value_local: u32,
     value_vt: ValType,
     inc_count: u16,
@@ -1572,7 +1608,7 @@ fn emitExplicitRcForValueLocal(
     const ls = self.getLayoutStore();
     const l = ls.getLayout(helper_key.layout_idx);
     if (try self.isCompositeLayout(helper_key.layout_idx)) {
-        try self.emitExplicitRcHelperCallForValuePtr(helper_key, value_local, inc_count);
+        try self.emitExplicitRcHelperCallForValuePtr(helper_key, atomicity, value_local, inc_count);
         return;
     }
 
@@ -1593,7 +1629,7 @@ fn emitExplicitRcForValueLocal(
     try self.emitLocalGet(value_local);
     try self.emitStoreOpSized(.i32, @intCast(size_align.size), 0);
 
-    try self.emitExplicitRcHelperCallForValuePtr(helper_key, ptr_local, inc_count);
+    try self.emitExplicitRcHelperCallForValuePtr(helper_key, atomicity, ptr_local, inc_count);
 }
 
 fn emitRawDirectRcPlan(
@@ -1730,10 +1766,10 @@ fn emitRawDirectRcPlan(
 fn emitExplicitRcHelperCallForValuePtr(
     self: *Self,
     helper_key: RcHelperKey,
+    atomicity: RcAtomicity,
     value_ptr_local: u32,
     inc_count: u16,
 ) Allocator.Error!void {
-    const normalized_value_ptr = try self.normalizeCompositeValuePtr(value_ptr_local, helper_key.layout_idx);
     const helper_plan = self.getLayoutStore().rcHelperPlan(helper_key);
     if (helper_plan == .noop) {
         wasmInvariantFmt(
@@ -1741,10 +1777,10 @@ fn emitExplicitRcHelperCallForValuePtr(
             .{@intFromEnum(helper_key.layout_idx)},
         );
     }
-    if (try self.emitRawDirectRcPlan(helper_key, helper_plan, normalized_value_ptr, null)) return;
+    if (try self.emitRawDirectRcPlan(helper_key, helper_plan, value_ptr_local, null)) return;
 
-    const helper_func_idx = try self.compileBuiltinInternalRcHelper(helper_key);
-    try self.emitLocalGet(normalized_value_ptr);
+    const helper_func_idx = try self.compileBuiltinInternalRcHelper(helper_key, atomicity);
+    try self.emitLocalGet(value_ptr_local);
     switch (helper_key.op) {
         .incref => {
             self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
@@ -1756,31 +1792,6 @@ fn emitExplicitRcHelperCallForValuePtr(
         },
     }
     try self.emitCall(helper_func_idx);
-}
-
-fn normalizeCompositeValuePtr(self: *Self, value_ptr_local: u32, layout_idx: layout.Idx) Allocator.Error!u32 {
-    if (!try self.isCompositeLayout(layout_idx)) return value_ptr_local;
-
-    const normalized = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitLocalGet(value_ptr_local);
-    try self.emitLocalSet(normalized);
-    try self.emitLocalGet(normalized);
-    self.currentCode().append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, @intFromEnum(BlockType.void)) catch return error.OutOfMemory;
-
-    const normalized_size = try self.layoutByteSize(self.runtimeRepresentationLayoutIdx(layout_idx));
-    const normalized_align = try self.layoutStorageByteAlign(layout_idx);
-    const stable_offset = try self.allocStackMemory(normalized_size, normalized_align);
-    const stable_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitFpOffset(stable_offset);
-    try self.emitLocalSet(stable_ptr);
-    try self.emitZeroInit(stable_ptr, normalized_size);
-    try self.emitLocalGet(stable_ptr);
-    try self.emitLocalSet(normalized);
-
-    self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
-    return normalized;
 }
 
 fn emitDecodeListAllocPtr(self: *Self, list_ptr_local: u32, out_alloc_ptr: u32, out_is_slice: u32) Allocator.Error!void {
@@ -2125,6 +2136,7 @@ fn emitBuiltinInternalListElementDecrefsIfUnique(
     is_slice_local: u32,
     elem_width: usize,
     child_key: RcHelperKey,
+    atomicity: RcAtomicity,
 ) Allocator.Error!void {
     const elem_size: u32 = @intCast(elem_width);
     if (elem_size == 0) return;
@@ -2183,7 +2195,7 @@ fn emitBuiltinInternalListElementDecrefsIfUnique(
     self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
     try self.emitLocalSet(elem_ptr_local);
 
-    try self.emitRawRcHelperCallByKey(child_key, elem_ptr_local, null);
+    try self.emitRawRcHelperCallByKey(child_key, atomicity, elem_ptr_local, null);
 
     try self.emitLocalGet(idx_local);
     self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
@@ -2229,6 +2241,7 @@ fn emitBuiltinInternalListRc(
     list_ptr_local: u32,
     list_layout_idx: layout.Idx,
     list_plan: ?layout.RcListPlan,
+    atomicity: RcAtomicity,
     inc_count: u16,
 ) Allocator.Error!void {
     const list_abi = self.builtinInternalListAbi("wasm.emitBuiltinInternalListRc.builtin_list_abi", list_layout_idx);
@@ -2244,7 +2257,7 @@ fn emitBuiltinInternalListRc(
         .decref => {
             if (list_plan) |plan| {
                 if (plan.child) |child_key| {
-                    try self.emitBuiltinInternalListElementDecrefsIfUnique(list_ptr_local, alloc_ptr_local, is_slice_local, plan.elem_width, child_key);
+                    try self.emitBuiltinInternalListElementDecrefsIfUnique(list_ptr_local, alloc_ptr_local, is_slice_local, plan.elem_width, child_key, atomicity);
                 }
             }
             try self.emitDataPtrDecref(alloc_ptr_local, list_abi.elem_align, list_abi.elements_refcounted);
@@ -2252,7 +2265,7 @@ fn emitBuiltinInternalListRc(
         .free => {
             if (list_plan) |plan| {
                 if (plan.child) |child_key| {
-                    try self.emitBuiltinInternalListElementDecrefsIfUnique(list_ptr_local, alloc_ptr_local, is_slice_local, plan.elem_width, child_key);
+                    try self.emitBuiltinInternalListElementDecrefsIfUnique(list_ptr_local, alloc_ptr_local, is_slice_local, plan.elem_width, child_key, atomicity);
                 }
             }
             try self.emitDataPtrFree(alloc_ptr_local, list_abi.elem_align, list_abi.elements_refcounted);
@@ -2318,9 +2331,24 @@ fn emitBuiltinInternalStrRc(self: *Self, comptime kind: RcOpKind, str_ptr_local:
     self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
 }
 
+/// Cache identity of a compiled RC helper. The count-update atomicity an RC
+/// statement selects is part of the identity, so a `.single_thread` statement
+/// reaches a single-thread helper entry and never shares an `.atomic` one.
+/// On wasm both count-update families lower to the same plain i32
+/// load/store sequence (linear memory here is not shared and the module does
+/// not enable the atomics feature), so the modes differ only in which helper
+/// entry they reach. Helpers serving runtime-checked list ops and erased
+/// on_drop slots belong to no RC statement and are always requested as
+/// `.atomic`.
+fn rcHelperCacheKey(helper_key: RcHelperKey, atomicity: RcAtomicity) u64 {
+    // RcHelperKey.encode() occupies bits 0..33 (layout index + op).
+    return helper_key.encode() | (@as(u64, @intFromEnum(atomicity)) << 34);
+}
+
 fn emitRawRcHelperCallByKey(
     self: *Self,
     helper_key: RcHelperKey,
+    atomicity: RcAtomicity,
     value_ptr_local: u32,
     count_local: ?u32,
 ) Allocator.Error!void {
@@ -2331,7 +2359,7 @@ fn emitRawRcHelperCallByKey(
     // This is only reached while emitting a compiled helper's body, where every
     // nested child helper slot has already been reserved by the compile driver, so
     // resolve the target from the cache instead of (re-)entering compilation.
-    const helper_func_idx = self.rcHelperFuncIdx(helper_key);
+    const helper_func_idx = self.rcHelperFuncIdx(helper_key, atomicity);
     try self.emitLocalGet(value_ptr_local);
     switch (helper_key.op) {
         .incref => {
@@ -2346,12 +2374,12 @@ fn emitRawRcHelperCallByKey(
 }
 
 /// Look up a previously-reserved RC helper's global function index.
-fn rcHelperFuncIdx(self: *Self, helper_key: RcHelperKey) u32 {
-    return self.rc_helper_funcs.get(helper_key.encode()) orelse {
+fn rcHelperFuncIdx(self: *Self, helper_key: RcHelperKey, atomicity: RcAtomicity) u32 {
+    return self.rc_helper_funcs.get(rcHelperCacheKey(helper_key, atomicity)) orelse {
         if (builtin.mode == .Debug) {
             std.debug.panic(
-                "WASM/codegen invariant violated: RC helper for layout {d} op {s} was not reserved before body emission",
-                .{ @intFromEnum(helper_key.layout_idx), @tagName(helper_key.op) },
+                "WASM/codegen invariant violated: RC helper for layout {d} op {s} atomicity {s} was not reserved before body emission",
+                .{ @intFromEnum(helper_key.layout_idx), @tagName(helper_key.op), @tagName(atomicity) },
             );
         }
         unreachable;
@@ -2362,6 +2390,7 @@ fn emitBuiltinInternalBoxChildDropIfUnique(
     self: *Self,
     box_ptr_local: u32,
     child_key: RcHelperKey,
+    atomicity: RcAtomicity,
 ) Allocator.Error!void {
     const rc_val = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
 
@@ -2381,7 +2410,7 @@ fn emitBuiltinInternalBoxChildDropIfUnique(
     self.currentCode().append(self.allocator, Op.br_if) catch return error.OutOfMemory;
     WasmModule.leb128WriteU32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
 
-    try self.emitRawRcHelperCallByKey(child_key, box_ptr_local, null);
+    try self.emitRawRcHelperCallByKey(child_key, atomicity, box_ptr_local, null);
 
     self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
 }
@@ -2450,6 +2479,7 @@ fn emitErasedCallableOnDrop(
 fn generateBuiltinInternalRcHelperBody(
     self: *Self,
     helper_key: RcHelperKey,
+    atomicity: RcAtomicity,
     value_ptr_local: u32,
     count_local: ?u32,
 ) Allocator.Error!void {
@@ -2471,8 +2501,8 @@ fn generateBuiltinInternalRcHelperBody(
         .str_decref => try self.emitBuiltinInternalStrRc(.decref, value_ptr_local, 1),
         .str_free => try self.emitBuiltinInternalStrRc(.free, value_ptr_local, 1),
         .list_incref => |list_plan| try self.emitBuiltinInternalListIncrefByLocal(value_ptr_local, helper_key.layout_idx, list_plan, count_local.?),
-        .list_decref => |list_plan| try self.emitBuiltinInternalListRc(.decref, value_ptr_local, helper_key.layout_idx, list_plan, 1),
-        .list_free => |list_plan| try self.emitBuiltinInternalListRc(.free, value_ptr_local, helper_key.layout_idx, list_plan, 1),
+        .list_decref => |list_plan| try self.emitBuiltinInternalListRc(.decref, value_ptr_local, helper_key.layout_idx, list_plan, atomicity, 1),
+        .list_free => |list_plan| try self.emitBuiltinInternalListRc(.free, value_ptr_local, helper_key.layout_idx, list_plan, atomicity, 1),
         .box_incref => {
             const box_ptr_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             try self.emitLocalGet(value_ptr_local);
@@ -2486,7 +2516,7 @@ fn generateBuiltinInternalRcHelperBody(
             try self.emitLoadOp(.i32, 0);
             try self.emitLocalSet(box_ptr_local);
             if (box_plan.child) |child_key| {
-                try self.emitBuiltinInternalBoxChildDropIfUnique(box_ptr_local, child_key);
+                try self.emitBuiltinInternalBoxChildDropIfUnique(box_ptr_local, child_key, atomicity);
             }
             try self.emitDataPtrDecref(box_ptr_local, box_plan.elem_alignment, box_plan.child != null);
         },
@@ -2496,7 +2526,7 @@ fn generateBuiltinInternalRcHelperBody(
             try self.emitLoadOp(.i32, 0);
             try self.emitLocalSet(box_ptr_local);
             if (box_plan.child) |child_key| {
-                try self.emitBuiltinInternalBoxChildDropIfUnique(box_ptr_local, child_key);
+                try self.emitBuiltinInternalBoxChildDropIfUnique(box_ptr_local, child_key, atomicity);
             }
             try self.emitDataPtrFree(box_ptr_local, box_plan.elem_alignment, box_plan.child != null);
         },
@@ -2544,7 +2574,7 @@ fn generateBuiltinInternalRcHelperBody(
                     self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
                 }
                 try self.emitLocalSet(field_ptr_local);
-                try self.emitRawRcHelperCallByKey(field_plan.child, field_ptr_local, count_local);
+                try self.emitRawRcHelperCallByKey(field_plan.child, atomicity, field_ptr_local, count_local);
             }
         },
         .tag_union => |tag_plan| {
@@ -2553,7 +2583,7 @@ fn generateBuiltinInternalRcHelperBody(
 
             if (variant_count == 1) {
                 if (self.getLayoutStore().rcHelperTagUnionVariantPlan(tag_plan, 0)) |child_key| {
-                    try self.emitRawRcHelperCallByKey(child_key, value_ptr_local, count_local);
+                    try self.emitRawRcHelperCallByKey(child_key, atomicity, value_ptr_local, count_local);
                 }
                 return;
             }
@@ -2584,7 +2614,7 @@ fn generateBuiltinInternalRcHelperBody(
                 self.currentCode().append(self.allocator, Op.br_if) catch return error.OutOfMemory;
                 WasmModule.leb128WriteU32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
 
-                try self.emitRawRcHelperCallByKey(child_key, value_ptr_local, count_local);
+                try self.emitRawRcHelperCallByKey(child_key, atomicity, value_ptr_local, count_local);
 
                 self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
             }
@@ -2594,7 +2624,7 @@ fn generateBuiltinInternalRcHelperBody(
             try self.emitLocalGet(value_ptr_local);
             try self.emitLoadOp(.i32, 0);
             try self.emitLocalSet(captures_ptr_local);
-            try self.emitRawRcHelperCallByKey(child_key, captures_ptr_local, count_local);
+            try self.emitRawRcHelperCallByKey(child_key, atomicity, captures_ptr_local, count_local);
         },
     }
 }
@@ -2652,7 +2682,7 @@ fn appendRcHelperChildKeys(self: *Self, helper_plan: RcHelperPlan, out: *std.Arr
 
 /// Reserve a module function slot for an RC helper (no body emitted yet), caching
 /// its global function index. Returns the reserved index.
-fn reserveRcHelperFunc(self: *Self, helper_key: RcHelperKey) Allocator.Error!u32 {
+fn reserveRcHelperFunc(self: *Self, helper_key: RcHelperKey, atomicity: RcAtomicity) Allocator.Error!u32 {
     const helper_plan = self.getLayoutStore().rcHelperPlan(helper_key);
     if (helper_plan == .noop) {
         if (builtin.mode == .Debug) {
@@ -2667,14 +2697,16 @@ fn reserveRcHelperFunc(self: *Self, helper_key: RcHelperKey) Allocator.Error!u32
     const type_idx = try self.internFuncType(param_types, &.{});
     const defined = self.module.addDefinedFunction(type_idx) catch return error.OutOfMemory;
     const func_idx = defined.function.raw();
-    const cache_key = helper_key.encode();
+    const cache_key = rcHelperCacheKey(helper_key, atomicity);
     try self.rc_helper_funcs.put(cache_key, func_idx);
     _ = try self.addOwnedLocalFunctionSymbol(defined, "roc_rc_helper", cache_key);
     return func_idx;
 }
 
 /// Compile an RC helper function (and transitively any nested child helpers it
-/// references) without recursion.
+/// references) without recursion. The whole compiled tree shares one
+/// count-update atomicity: nested values live inside the same allocation tree
+/// the root statement names, so child helpers inherit the root's mode.
 ///
 /// Compilation has two phases. First a pre-order traversal of the helper-plan DAG
 /// reserves a module function slot for every transitively-reachable helper that
@@ -2684,8 +2716,8 @@ fn reserveRcHelperFunc(self: *Self, helper_key: RcHelperKey) Allocator.Error!u32
 /// reserved helper's body is emitted; because every child slot is already reserved,
 /// body emission resolves child references from the cache without re-entering
 /// compilation. Both phases are driven by explicit heap-backed work stacks.
-fn compileBuiltinInternalRcHelper(self: *Self, helper_key: RcHelperKey) Allocator.Error!u32 {
-    if (self.rc_helper_funcs.get(helper_key.encode())) |func_idx| {
+fn compileBuiltinInternalRcHelper(self: *Self, helper_key: RcHelperKey, atomicity: RcAtomicity) Allocator.Error!u32 {
+    if (self.rc_helper_funcs.get(rcHelperCacheKey(helper_key, atomicity))) |func_idx| {
         return func_idx;
     }
 
@@ -2702,7 +2734,7 @@ fn compileBuiltinInternalRcHelper(self: *Self, helper_key: RcHelperKey) Allocato
     var children = std.ArrayList(RcHelperKey).empty;
     defer children.deinit(wa);
 
-    const root_func_idx = try self.reserveRcHelperFunc(helper_key);
+    const root_func_idx = try self.reserveRcHelperFunc(helper_key, atomicity);
     try to_emit.append(wa, helper_key);
     try reserve_stack.append(wa, helper_key);
 
@@ -2718,8 +2750,8 @@ fn compileBuiltinInternalRcHelper(self: *Self, helper_key: RcHelperKey) Allocato
             const child_key = children.items[i];
             const child_plan = self.getLayoutStore().rcHelperPlan(child_key);
             if (!rcPlanNeedsCompiledHelper(child_plan)) continue;
-            if (self.rc_helper_funcs.contains(child_key.encode())) continue;
-            _ = try self.reserveRcHelperFunc(child_key);
+            if (self.rc_helper_funcs.contains(rcHelperCacheKey(child_key, atomicity))) continue;
+            _ = try self.reserveRcHelperFunc(child_key, atomicity);
             try to_emit.append(wa, child_key);
             try reserve_stack.append(wa, child_key);
         }
@@ -2727,7 +2759,7 @@ fn compileBuiltinInternalRcHelper(self: *Self, helper_key: RcHelperKey) Allocato
 
     // Emit each reserved helper body. Child references resolve from the cache.
     for (to_emit.items) |key| {
-        try self.emitRcHelperBody(key);
+        try self.emitRcHelperBody(key, atomicity);
     }
 
     return root_func_idx;
@@ -2735,8 +2767,8 @@ fn compileBuiltinInternalRcHelper(self: *Self, helper_key: RcHelperKey) Allocato
 
 /// Emit the body of an already-reserved RC helper function. Child helper references
 /// resolve from `rc_helper_funcs` (reserved up front), so this never recurses.
-fn emitRcHelperBody(self: *Self, helper_key: RcHelperKey) Allocator.Error!void {
-    const func_idx = self.rc_helper_funcs.get(helper_key.encode()).?;
+fn emitRcHelperBody(self: *Self, helper_key: RcHelperKey, atomicity: RcAtomicity) Allocator.Error!void {
+    const func_idx = self.rc_helper_funcs.get(rcHelperCacheKey(helper_key, atomicity)).?;
     const defined_local = self.localFunctionIndexFromGlobal(func_idx);
 
     const param_types: []const ValType = switch (helper_key.op) {
@@ -2773,7 +2805,7 @@ fn emitRcHelperBody(self: *Self, helper_key: RcHelperKey) Allocator.Error!void {
     self.currentCode().append(self.allocator, Op.br_if) catch return error.OutOfMemory;
     WasmModule.leb128WriteU32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
 
-    try self.generateBuiltinInternalRcHelperBody(helper_key, value_ptr_local, count_local);
+    try self.generateBuiltinInternalRcHelperBody(helper_key, atomicity, value_ptr_local, count_local);
 
     self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
 
@@ -5815,12 +5847,10 @@ fn allocStackMemory(self: *Self, size: u32, alignment: u32) Allocator.Error!u32 
     return aligned_offset;
 }
 
-/// Emit bump allocation: allocates `size` bytes with given alignment
-/// from the heap (global 1). Leaves the allocated pointer on the wasm stack.
-/// This is a simple bump allocator that never frees — suitable for tests.
 /// Emit heap allocation via roc_alloc (erased call through RocOps).
 /// `size_local` holds the size to allocate; `alignment` is the byte alignment.
-/// Leaves the allocated pointer on the wasm stack.
+/// Leaves the raw allocated pointer on the wasm stack. Roc refcounted data
+/// allocations must use emitHeapAllocWithRefcount instead.
 fn emitHeapAlloc(self: *Self, size_local: u32, alignment: u32) Allocator.Error!void {
     // Allocate 12-byte RocAlloc struct on stack frame: {alignment: u32, length: u32, answer: u32}
     const alloc_slot = try self.allocStackMemory(12, 4);
@@ -5863,16 +5893,40 @@ fn emitHeapAlloc(self: *Self, size_local: u32, alignment: u32) Allocator.Error!v
     WasmModule.leb128WriteU32(self.allocator, self.currentCode(), 8) catch return error.OutOfMemory;
 }
 
-/// Emit heap allocation via roc_alloc with a constant size.
-/// Leaves the allocated pointer on the wasm stack.
-fn emitHeapAllocConst(self: *Self, size: u32, alignment: u32) Allocator.Error!void {
-    // Store size in a temp local, then delegate to emitHeapAlloc
-    const size_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-    WasmModule.leb128WriteI32(self.allocator, self.currentCode(), @intCast(size)) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.local_set) catch return error.OutOfMemory;
-    WasmModule.leb128WriteU32(self.allocator, self.currentCode(), size_local) catch return error.OutOfMemory;
-    try self.emitHeapAlloc(size_local, alignment);
+/// Emit heap allocation for Roc refcounted data.
+/// Leaves the Roc data pointer on the wasm stack, not the raw allocation pointer.
+fn emitHeapAllocWithRefcount(self: *Self, data_size_local: u32, element_alignment: u32, elements_refcounted: bool) Allocator.Error!void {
+    const rc_layout = rcAllocationLayout(element_alignment, elements_refcounted);
+
+    const total_size_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitLocalGet(data_size_local);
+    try self.emitI32Const(@intCast(rc_layout.data_offset));
+    self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+    try self.emitLocalSet(total_size_local);
+
+    try self.emitHeapAlloc(total_size_local, rc_layout.allocation_alignment);
+    const raw_ptr_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitLocalSet(raw_ptr_local);
+
+    try self.emitLocalGet(raw_ptr_local);
+    if (rc_layout.data_offset > 4) {
+        try self.emitI32Const(@intCast(rc_layout.data_offset - 4));
+        self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+    }
+    try self.emitI32Const(1);
+    try self.emitStoreOp(.i32, 0);
+
+    try self.emitLocalGet(raw_ptr_local);
+    try self.emitI32Const(@intCast(rc_layout.data_offset));
+    self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+}
+
+/// Emit heap allocation for Roc refcounted data with a constant data size.
+fn emitHeapAllocWithRefcountConst(self: *Self, data_size: u32, element_alignment: u32, elements_refcounted: bool) Allocator.Error!void {
+    const data_size_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitI32Const(@intCast(data_size));
+    try self.emitLocalSet(data_size_local);
+    try self.emitHeapAllocWithRefcount(data_size_local, element_alignment, elements_refcounted);
 }
 
 /// Emit i32.store to a func_body buffer: stores a local's value at memory offset 0 + field_offset.
@@ -6739,6 +6793,7 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
                 .op = assign.op,
                 .args = assign.args,
                 .ret_layout = self.procLocalLayoutIdx(assign.target),
+                .unique_args = assign.unique_args,
             });
             try self.bindAssignedLocal(assign.target);
             try work.append(wa, .{ .node = .{ .stmt_id = assign.next, .stop = stop } });
@@ -6915,15 +6970,15 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
             WasmModule.leb128WriteU32(self.allocator, self.currentCode(), br_target) catch return error.OutOfMemory;
         },
         .incref => |inc| {
-            try self.generateRcStmt(inc.value, inc.rc, inc.count);
+            try self.generateRcStmt(inc.value, inc.rc, inc.atomicity, inc.count);
             try work.append(wa, .{ .node = .{ .stmt_id = inc.next, .stop = stop } });
         },
         .decref => |dec| {
-            try self.generateRcStmt(dec.value, dec.rc, 1);
+            try self.generateRcStmt(dec.value, dec.rc, dec.atomicity, 1);
             try work.append(wa, .{ .node = .{ .stmt_id = dec.next, .stop = stop } });
         },
         .free => |free_stmt| {
-            try self.generateRcStmt(free_stmt.value, free_stmt.rc, 1);
+            try self.generateRcStmt(free_stmt.value, free_stmt.rc, free_stmt.atomicity, 1);
             try work.append(wa, .{ .node = .{ .stmt_id = free_stmt.next, .stop = stop } });
         },
         .runtime_error => {
@@ -7361,12 +7416,13 @@ fn generateRcStmt(
     self: *Self,
     value: ProcLocalId,
     rc: RcHelperKey,
+    atomicity: RcAtomicity,
     inc_count: u16,
 ) Allocator.Error!void {
     try self.emitProcLocal(value);
     const value_local = self.storage.allocAnonymousLocal(try self.procLocalValType(value)) catch return error.OutOfMemory;
     try self.emitLocalSet(value_local);
-    try self.emitExplicitRcForValueLocal(rc, value_local, try self.procLocalValType(value), inc_count);
+    try self.emitExplicitRcForValueLocal(rc, atomicity, value_local, try self.procLocalValType(value), inc_count);
 }
 
 fn listElemLayout(self: *Self, list_layout_idx: layout.Idx) layout.Idx {
@@ -7557,7 +7613,11 @@ fn generatePackedErasedFn(self: *Self, c: anytype) Allocator.Error!void {
         }
     }
     const payload_size = builtins.erased_callable.payloadSize(capture_size);
-    try self.emitHeapAllocConst(@intCast(payload_size), builtins.erased_callable.payload_alignment);
+    try self.emitHeapAllocWithRefcountConst(
+        @intCast(payload_size),
+        builtins.erased_callable.payload_alignment,
+        builtins.erased_callable.allocation_has_refcounted_children,
+    );
     const payload_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitLocalSet(payload_ptr);
 
@@ -7603,9 +7663,12 @@ fn erasedCallableOnDropTableIndex(self: *Self, on_drop: LIR.ErasedCallableOnDrop
         .none => 0,
         .rc_helper => |helper_key| blk: {
             if (self.getLayoutStore().rcHelperPlan(helper_key) == .noop) break :blk 0;
-            const cache_key = helper_key.encode();
+            // The on_drop slot is filled at closure creation, which is not an
+            // RC statement and makes no thread-confinement claim, so it always
+            // uses the atomic helper family (atomic is always sound).
+            const cache_key = rcHelperCacheKey(helper_key, .atomic);
             if (self.rc_helper_table_indices.get(cache_key)) |table_idx| break :blk table_idx;
-            const func_idx = try self.compileBuiltinInternalRcHelper(helper_key);
+            const func_idx = try self.compileBuiltinInternalRcHelper(helper_key, .atomic);
             const table_idx = self.module.addTableElement(func_idx) catch return error.OutOfMemory;
             try self.rc_helper_table_indices.put(cache_key, table_idx);
             break :blk table_idx;
@@ -7624,49 +7687,29 @@ fn erasedCallableOnDropTableIndex(self: *Self, on_drop: LIR.ErasedCallableOnDrop
 
 /// Emit a call instruction.
 fn emitCall(self: *Self, func_idx: u32) Allocator.Error!void {
-    if (self.relocatable_object) {
-        const symbol = self.function_symbols_by_index.get(func_idx) orelse {
-            wasmInvariantFmt(
-                "WASM/codegen invariant violated: relocatable direct call target {d} has no function symbol",
-                .{func_idx},
-            );
-        };
+    // Keep direct-call relocations whenever a target symbol exists so final-link
+    // DCE can trace generated call edges after surgical linking.
+    if (self.function_symbols_by_index.get(func_idx)) |symbol| {
         try self.currentBody().emitRelocatableCall(self.allocator, symbol, func_idx);
-    } else {
-        try self.currentCode().append(self.allocator, Op.call);
-        try WasmModule.leb128WriteU32(self.allocator, self.currentCode(), func_idx);
+        return;
     }
+
+    if (self.relocatable_object) {
+        wasmInvariantFmt(
+            "WASM/codegen invariant violated: relocatable direct call target {d} has no function symbol",
+            .{func_idx},
+        );
+    }
+
+    try self.currentCode().append(self.allocator, Op.call);
+    try WasmModule.leb128WriteU32(self.allocator, self.currentCode(), func_idx);
 }
 
 /// Generate call arguments (helper to avoid duplication).
 fn emitCallArgs(self: *Self, args: ProcLocalSpan) Allocator.Error!void {
     const arg_refs = self.store.getLocalSpan(args);
     for (arg_refs) |arg| {
-        const layout_idx = self.procLocalLayoutIdx(arg);
-        if (!try self.isCompositeLayout(layout_idx)) {
-            try self.emitProcLocal(arg);
-            continue;
-        }
-
         try self.emitProcLocal(arg);
-        const arg_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-        try self.emitLocalSet(arg_ptr);
-        try self.emitLocalGet(arg_ptr);
-        self.currentCode().append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
-        self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
-        self.currentCode().append(self.allocator, @intFromEnum(BlockType.void)) catch return error.OutOfMemory;
-        const stable_offset = try self.allocStackMemory(
-            try self.layoutByteSize(self.runtimeRepresentationLayoutIdx(layout_idx)),
-            try self.layoutStorageByteAlign(layout_idx),
-        );
-        const stable_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-        try self.emitFpOffset(stable_offset);
-        try self.emitLocalSet(stable_ptr);
-        try self.emitZeroInit(stable_ptr, try self.layoutByteSize(self.runtimeRepresentationLayoutIdx(layout_idx)));
-        try self.emitLocalGet(stable_ptr);
-        try self.emitLocalSet(arg_ptr);
-        self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
-        try self.emitLocalGet(arg_ptr);
     }
 }
 
@@ -8333,9 +8376,14 @@ fn generateList(self: *Self, l: anytype) Allocator.Error!void {
     // Allocate space for all elements on the heap so list literals remain valid
     // when returned from functions (callee stack frames are reclaimed on return).
     const total_data_size = elem_size * @as(u32, @intCast(elems.len));
+    const elements_refcounted = builtinInternalLayoutContainsRefcounted(
+        ls,
+        "wasm.generateList.elem_layout_refcounted",
+        l.elem_layout,
+    );
     const data_base = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     if (total_data_size > 0) {
-        try self.emitHeapAllocConst(total_data_size, elem_align);
+        try self.emitHeapAllocWithRefcountConst(total_data_size, elem_align, elements_refcounted);
         self.currentCode().append(self.allocator, Op.local_set) catch return error.OutOfMemory;
         WasmModule.leb128WriteU32(self.allocator, self.currentCode(), data_base) catch return error.OutOfMemory;
 
@@ -8870,7 +8918,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         },
 
         .list_drop_at => {
-            try self.generateLLListDropAt(args, ll.ret_layout);
+            try self.generateLLListDropAt(args, ll.ret_layout, ll.unique_args);
         },
 
         .list_replace_unsafe => {
@@ -9235,11 +9283,11 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         },
         .list_concat => {
             // list_concat(list_a, list_b) -> concatenated list
-            try self.generateLLListConcat(args, ll.ret_layout);
+            try self.generateLLListConcat(args, ll.ret_layout, ll.unique_args);
         },
         .list_reverse => {
             // list_reverse(list) -> reversed list
-            try self.generateLLListReverse(args, ll.ret_layout);
+            try self.generateLLListReverse(args, ll.ret_layout, ll.unique_args);
         },
         // list_with_capacity(capacity) -> empty list with given capacity
         .list_with_capacity => {
@@ -9251,7 +9299,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         },
         // list_reserve(list, capacity) -> list with at least that capacity
         .list_reserve => {
-            try self.generateLLListReserve(args, ll.ret_layout);
+            try self.generateLLListReserve(args, ll.ret_layout, ll.unique_args);
         },
         // list_release_excess_capacity(list) -> list with capacity = length
         .list_release_excess_capacity => {
@@ -9511,7 +9559,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             try self.emitLocalSet(total);
 
             // Allocate buffer
-            try self.emitHeapAlloc(total, 1);
+            try self.emitHeapAllocWithRefcount(total, 1, false);
             const buf = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             try self.emitLocalSet(buf);
 
@@ -9906,7 +9954,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                 } else {
                     const alignment: u32 = box_abi.elem_alignment;
 
-                    try self.emitHeapAllocConst(value_size, alignment);
+                    try self.emitHeapAllocWithRefcountConst(value_size, alignment, box_abi.contains_refcounted);
                     const box_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
                     try self.emitLocalSet(box_ptr);
 
@@ -12591,7 +12639,7 @@ fn emitIntToStr(self: *Self, value: ProcLocalId, int_width_bytes: u8, is_signed:
     }
 
     const buf_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitHeapAllocConst(48, 1);
+    try self.emitHeapAllocWithRefcountConst(48, 1, false);
     try self.emitLocalSet(buf_ptr);
 
     try self.emitLocalGet(parts.low);
@@ -12631,7 +12679,7 @@ fn emitDecToStr(self: *Self, value: ProcLocalId) Allocator.Error!void {
     }
 
     const buf_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitHeapAllocConst(48, 1);
+    try self.emitHeapAllocWithRefcountConst(48, 1, false);
     try self.emitLocalSet(buf_ptr);
 
     try self.emitLocalGet(dec_ptr);
@@ -12679,7 +12727,7 @@ fn emitFloatToStr(self: *Self, value: ProcLocalId, is_f32: bool) Allocator.Error
     }
 
     const buf_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitHeapAllocConst(400, 1);
+    try self.emitHeapAllocWithRefcountConst(400, 1, false);
     try self.emitLocalSet(buf_ptr);
 
     try self.emitLocalGet(bits_local);
@@ -12750,7 +12798,7 @@ fn emitStrToUtf8(self: *Self, str_arg: ProcLocalId) Allocator.Error!void {
         try self.emitLocalSet(sso_len);
 
         // Allocate sso_len bytes on heap via roc_alloc
-        try self.emitHeapAlloc(sso_len, 1);
+        try self.emitHeapAllocWithRefcount(sso_len, 1, false);
         const heap_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
         try self.emitLocalSet(heap_ptr);
 
@@ -13321,7 +13369,7 @@ fn generateLLListPrepend(self: *Self, args: anytype, ret_layout: layout.Idx) All
     self.currentCode().append(self.allocator, Op.i32_mul) catch return error.OutOfMemory;
     try self.emitLocalSet(total_size);
 
-    try self.emitHeapAlloc(total_size, elem_align);
+    try self.emitHeapAllocWithRefcount(total_size, elem_align, list_abi.elements_refcounted);
     const new_data = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitLocalSet(new_data);
 
@@ -13368,7 +13416,7 @@ fn generateLLListPrepend(self: *Self, args: anytype, ret_layout: layout.Idx) All
 }
 
 /// Generate LowLevel list_concat: concatenate two lists.
-fn generateLLListConcat(self: *Self, args: anytype, ret_layout: layout.Idx) Allocator.Error!void {
+fn generateLLListConcat(self: *Self, args: anytype, ret_layout: layout.Idx, unique_args: u64) Allocator.Error!void {
     const list_abi = self.builtinInternalListAbi("wasm.generateLLListConcat.builtin_list_abi", ret_layout);
     const elem_size = list_abi.elem_size;
     const elem_align = list_abi.elem_align;
@@ -13436,6 +13484,10 @@ fn generateLLListConcat(self: *Self, args: anytype, ret_layout: layout.Idx) Allo
             try self.emitI32Const(@intCast(callbacks.elements_refcounted));
             try self.emitI32Const(@intCast(callbacks.incref_table_idx));
             try self.emitI32Const(@intCast(callbacks.decref_table_idx));
+            // One bit per list argument (bit 0 = a, bit 1 = b), as one wide
+            // parameter.
+            self.currentCode().append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
+            WasmModule.leb128WriteI64(self.allocator, self.currentCode(), @intCast(unique_args & 0b11)) catch return error.OutOfMemory;
             try self.emitLocalGet(self.roc_ops_local);
             try self.emitBuiltinCall(.list_concat, null);
         },
@@ -13445,7 +13497,7 @@ fn generateLLListConcat(self: *Self, args: anytype, ret_layout: layout.Idx) Allo
 }
 
 /// Generate LowLevel list_drop_at: remove element at index, returning new list.
-fn generateLLListDropAt(self: *Self, args: anytype, ret_layout: layout.Idx) Allocator.Error!void {
+fn generateLLListDropAt(self: *Self, args: anytype, ret_layout: layout.Idx, unique_args: u64) Allocator.Error!void {
     const list_abi = self.builtinInternalListAbi("wasm.generateLLListDropAt.builtin_list_abi", ret_layout);
     const elem_size = list_abi.elem_size;
     const elem_align = list_abi.elem_align;
@@ -13483,6 +13535,7 @@ fn generateLLListDropAt(self: *Self, args: anytype, ret_layout: layout.Idx) Allo
             try self.emitI32Const(@intCast(callbacks.elements_refcounted));
             try self.emitI32Const(@intCast(callbacks.incref_table_idx));
             try self.emitI32Const(@intCast(callbacks.decref_table_idx));
+            try self.emitI32Const(updateModeImmForArg(unique_args, 0));
             try self.emitLocalGet(self.roc_ops_local);
             try self.emitBuiltinCall(.list_drop_at, null);
         },
@@ -13492,7 +13545,7 @@ fn generateLLListDropAt(self: *Self, args: anytype, ret_layout: layout.Idx) Allo
 }
 
 /// Generate LowLevel list_reverse: create new list with elements in reverse order.
-fn generateLLListReverse(self: *Self, args: anytype, ret_layout: layout.Idx) Allocator.Error!void {
+fn generateLLListReverse(self: *Self, args: anytype, ret_layout: layout.Idx, unique_args: u64) Allocator.Error!void {
     const list_abi = self.builtinInternalListAbi("wasm.generateLLListReverse.builtin_list_abi", ret_layout);
     const elem_size = list_abi.elem_size;
     if (elem_size == 0) {
@@ -13518,11 +13571,16 @@ fn generateLLListReverse(self: *Self, args: anytype, ret_layout: layout.Idx) All
         },
         .builtin_relocs => {
             const fields = try self.loadRocListFields(list_ptr);
+            const callbacks = try self.listElementCallbacks(list_abi);
 
             try self.emitFpOffset(result_offset);
             try self.emitRocListFields(fields);
-            try self.emitI32Const(@intCast(elem_size));
             try self.emitI32Const(@intCast(elem_align));
+            try self.emitI32Const(@intCast(elem_size));
+            try self.emitI32Const(@intCast(callbacks.elements_refcounted));
+            try self.emitI32Const(@intCast(callbacks.incref_table_idx));
+            try self.emitI32Const(@intCast(callbacks.decref_table_idx));
+            try self.emitI32Const(updateModeImmForArg(unique_args, 0));
             try self.emitLocalGet(self.roc_ops_local);
             try self.emitBuiltinCall(.list_reverse, null);
         },
@@ -13603,7 +13661,7 @@ fn generateLLListWithCapacity(self: *Self, args: anytype, ret_layout: layout.Idx
     self.currentCode().append(self.allocator, Op.i32_mul) catch return error.OutOfMemory;
     try self.emitLocalSet(total_size);
 
-    try self.emitHeapAlloc(total_size, elem_align);
+    try self.emitHeapAllocWithRefcount(total_size, elem_align, list_abi.elements_refcounted);
     const new_data = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitLocalSet(new_data);
 
@@ -13662,7 +13720,7 @@ fn generateLLListSet(self: *Self, args: anytype, ret_layout: layout.Idx) Allocat
     self.currentCode().append(self.allocator, Op.i32_mul) catch return error.OutOfMemory;
     try self.emitLocalSet(total_size);
 
-    try self.emitHeapAlloc(total_size, elem_align);
+    try self.emitHeapAllocWithRefcount(total_size, elem_align, list_abi.elements_refcounted);
     const new_data = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitLocalSet(new_data);
 
@@ -13697,71 +13755,49 @@ fn generateLLListSet(self: *Self, args: anytype, ret_layout: layout.Idx) Allocat
 }
 
 /// Generate list_reserve: ensure list has at least given capacity
-fn generateLLListReserve(self: *Self, args: anytype, ret_layout: layout.Idx) Allocator.Error!void {
+fn generateLLListReserve(self: *Self, args: anytype, ret_layout: layout.Idx, unique_args: u64) Allocator.Error!void {
     const list_abi = self.builtinInternalListAbi("wasm.generateLLListReserve.builtin_list_abi", ret_layout);
     const elem_size = list_abi.elem_size;
     const elem_align = list_abi.elem_align;
 
-    // Generate list arg
     try self.emitProcLocal(args[0]);
     const list_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitLocalSet(list_ptr);
 
-    // Generate additional capacity arg (may be i64 from MonoIR; convert to i32 for wasm32)
     try self.emitProcLocal(args[1]);
-    try self.emitConversion(try self.procLocalValType(args[1]), .i32);
-    const additional = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitLocalSet(additional);
+    try self.emitConversion(try self.procLocalValType(args[1]), .i64);
+    const spare_local = self.storage.allocAnonymousLocal(.i64) catch return error.OutOfMemory;
+    try self.emitLocalSet(spare_local);
 
-    // Load list fields
-    const old_data = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitLocalGet(list_ptr);
-    self.currentCode().append(self.allocator, Op.i32_load) catch return error.OutOfMemory;
-    WasmModule.leb128WriteU32(self.allocator, self.currentCode(), 2) catch return error.OutOfMemory;
-    WasmModule.leb128WriteU32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
-    try self.emitLocalSet(old_data);
+    const result_offset = try self.allocStackMemory(12, 4);
+    switch (self.external_calls) {
+        .host_imports => {
+            const import_idx = self.list_reserve_import orelse unreachable;
+            try self.emitLocalGet(list_ptr);
+            try self.emitLocalGet(spare_local);
+            try self.emitI32Const(@intCast(elem_size));
+            try self.emitI32Const(@intCast(elem_align));
+            try self.emitFpOffset(result_offset);
+            try self.emitCall(import_idx);
+        },
+        .builtin_relocs => {
+            const fields = try self.loadRocListFields(list_ptr);
+            const callbacks = try self.listElementCallbacks(list_abi);
 
-    const old_len = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitLocalGet(list_ptr);
-    self.currentCode().append(self.allocator, Op.i32_load) catch return error.OutOfMemory;
-    WasmModule.leb128WriteU32(self.allocator, self.currentCode(), 2) catch return error.OutOfMemory;
-    WasmModule.leb128WriteU32(self.allocator, self.currentCode(), 4) catch return error.OutOfMemory;
-    try self.emitLocalSet(old_len);
-
-    // new_cap = old_len + additional
-    const new_cap = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitLocalGet(old_len);
-    try self.emitLocalGet(additional);
-    self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
-    try self.emitLocalSet(new_cap);
-
-    // Allocate new_cap * elem_size bytes
-    const total_size = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitLocalGet(new_cap);
-    self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-    WasmModule.leb128WriteI32(self.allocator, self.currentCode(), @intCast(elem_size)) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.i32_mul) catch return error.OutOfMemory;
-    try self.emitLocalSet(total_size);
-
-    try self.emitHeapAlloc(total_size, elem_align);
-    const new_data = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitLocalSet(new_data);
-
-    // Copy old data (old_len * elem_size bytes)
-    const copy_size = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitLocalGet(old_len);
-    self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-    WasmModule.leb128WriteI32(self.allocator, self.currentCode(), @intCast(elem_size)) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.i32_mul) catch return error.OutOfMemory;
-    try self.emitLocalSet(copy_size);
-
-    const zero4 = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-    WasmModule.leb128WriteI32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
-    try self.emitLocalSet(zero4);
-    try self.emitMemCopyLoop(new_data, zero4, old_data, copy_size);
-
-    try self.buildRocListWithCap(new_data, old_len, new_cap);
+            try self.emitFpOffset(result_offset);
+            try self.emitRocListFields(fields);
+            try self.emitI32Const(@intCast(elem_align));
+            try self.emitLocalGet(spare_local);
+            try self.emitI32Const(@intCast(elem_size));
+            try self.emitI32Const(@intCast(callbacks.elements_refcounted));
+            try self.emitI32Const(@intCast(callbacks.incref_table_idx));
+            try self.emitI32Const(updateModeImmForArg(unique_args, 0));
+            try self.emitLocalGet(self.roc_ops_local);
+            try self.emitBuiltinCall(.list_reserve, null);
+        },
+        .unconfigured => wasmInvariantFmt("WASM/codegen invariant violated: external calls not configured before list_reserve", .{}),
+    }
+    try self.emitFpOffset(result_offset);
 }
 
 /// Generate list_release_excess_capacity: shrink list to exact length
@@ -13798,7 +13834,7 @@ fn generateLLListReleaseExcessCapacity(self: *Self, args: anytype, ret_layout: l
     self.currentCode().append(self.allocator, Op.i32_mul) catch return error.OutOfMemory;
     try self.emitLocalSet(total_size);
 
-    try self.emitHeapAlloc(total_size, elem_align);
+    try self.emitHeapAllocWithRefcount(total_size, elem_align, list_abi.elements_refcounted);
     const new_data = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitLocalSet(new_data);
 
@@ -14028,4 +14064,24 @@ fn generateLLListSplitLast(self: *Self, args: anytype, _ret_layout: layout.Idx) 
 
     // Push result pointer
     try self.emitLocalGet(result_ptr);
+}
+
+test "rcAllocationLayout matches wasm32 builtin refcount allocation layout" {
+    const expectEqual = std.testing.expectEqual;
+
+    const flat_u8 = rcAllocationLayout(1, false);
+    try expectEqual(@as(u32, 4), flat_u8.data_offset);
+    try expectEqual(@as(u32, 4), flat_u8.allocation_alignment);
+
+    const flat_aligned = rcAllocationLayout(8, false);
+    try expectEqual(@as(u32, 8), flat_aligned.data_offset);
+    try expectEqual(@as(u32, 8), flat_aligned.allocation_alignment);
+
+    const refcounted_u32 = rcAllocationLayout(4, true);
+    try expectEqual(@as(u32, 8), refcounted_u32.data_offset);
+    try expectEqual(@as(u32, 4), refcounted_u32.allocation_alignment);
+
+    const refcounted_aligned = rcAllocationLayout(16, true);
+    try expectEqual(@as(u32, 16), refcounted_aligned.data_offset);
+    try expectEqual(@as(u32, 16), refcounted_aligned.allocation_alignment);
 }

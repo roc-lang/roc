@@ -75,10 +75,8 @@ platform ""
         tree_for_host: "tree",
     }
     targets: {
-        files: "targets/",
-        exe: {
-            x64glibc: { files: [app] },
-        }
+        inputs: "targets/",
+        x64glibc: { inputs: [app] },
     }
 
 answer_for_host : I64

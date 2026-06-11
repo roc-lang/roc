@@ -11,6 +11,7 @@ const check = @import("check");
 const core = @import("lir_core");
 
 const Arc = @import("arc.zig");
+const ScalarizeJoins = @import("scalarize_joins.zig");
 const LIR = core.LIR;
 const LirImage = @import("lir_image.zig");
 const LirProgram = core.Program;
@@ -197,6 +198,10 @@ pub fn lowerCheckedModulesToLir(
     var lifted_owned = true;
     errdefer if (lifted_owned) lifted.deinit();
 
+    if (target.inline_mode != .none) {
+        try postcheck.MonotypeLifted.SpecConstr.run(allocator, &lifted);
+    }
+
     var solved = try postcheck.LambdaSolved.Solve.run(allocator, lifted);
     lifted_owned = false;
     lifted = undefined;
@@ -213,7 +218,12 @@ pub fn lowerCheckedModulesToLir(
     solved = undefined;
     errdefer lowered.deinit();
 
-    try Arc.insert(&lowered.lir_result.store, &lowered.lir_result.layouts);
+    try ScalarizeJoins.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
+
+    try Arc.insert(&lowered.lir_result.store, &lowered.lir_result.layouts, .{
+        .roots = lowered.lir_result.root_procs.items,
+        .specialize = target.inline_mode != .none,
+    });
 
     if (roots.requests.len != 0 and lowered.lir_result.root_procs.items.len == 0) {
         checkedPipelineInvariant("explicit root set produced no LIR roots");

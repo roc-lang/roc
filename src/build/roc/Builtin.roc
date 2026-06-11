@@ -527,6 +527,9 @@ Builtin :: [].{
 				One({ item, rest }) => Iter.fold(rest, step(acc, item), step)
 			}
 
+		collect : Iter(item) -> List(item)
+		collect = |iterator| List.from_iter(iterator)
+
 		## Returns an iterator that yields at most the first `n` items of this iterator.
 		## If the source has fewer than `n` items, all of them are yielded.
 		## ```roc
@@ -679,6 +682,34 @@ Builtin :: [].{
 			}
 
 			make(0)
+		}
+
+		from_iter : Iter(item) -> List(item)
+		from_iter = |iterator| {
+			cap = match iterator.len_if_known {
+				Known(n) => n
+				Unknown => 0
+			}
+
+			var $list = List.with_capacity(cap)
+			var $rest = iterator
+
+			while Bool.True {
+				match Iter.next($rest) {
+					Done => {
+						break
+					}
+					Skip({ rest }) => {
+						$rest = rest
+					}
+					One({ item, rest }) => {
+						$list = list_append_unsafe($list, item)
+						$rest = rest
+					}
+				}
+			}
+
+			$list
 		}
 
 		## Put two lists together.

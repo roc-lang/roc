@@ -24,6 +24,7 @@ const LocalId = lir.LocalId;
 const LocalSpan = lir.LocalSpan;
 const LirProcSpec = lir.LirProcSpec;
 const LirProcSpecId = lir.LirProcSpecId;
+const RcAtomicity = lir.LIR.RcAtomicity;
 const StrLiteral = lir.LIR.StrLiteral;
 
 fn getLlvmTriple(target: std.Target) []const u8 {
@@ -224,6 +225,7 @@ pub const MonoLlvmCodeGen = struct {
 
     const RcHelperEntry = struct {
         key: layout.RcHelperKey,
+        atomicity: RcAtomicity,
         function: LlvmBuilder.Function.Index,
         compiled: bool = false,
     };
@@ -729,7 +731,7 @@ pub const MonoLlvmCodeGen = struct {
                 try work.append(wa, .{ .node = assign.next });
             },
             .assign_low_level => |assign| {
-                try self.emitLowLevel(assign.target, assign.op, assign.args);
+                try self.emitLowLevel(assign.target, assign.op, assign.args, assign.unique_args);
                 try work.append(wa, .{ .node = assign.next });
             },
             .assign_list => |assign| {
@@ -760,15 +762,15 @@ pub const MonoLlvmCodeGen = struct {
                 try self.emitCrashBytes("hit a runtime error");
             },
             .incref => |inc| {
-                try self.emitRcForLocal(.incref, inc.value, inc.count);
+                try self.emitRcForLocal(.incref, inc.value, inc.count, inc.atomicity);
                 try work.append(wa, .{ .node = inc.next });
             },
             .decref => |dec| {
-                try self.emitRcForLocal(.decref, dec.value, 1);
+                try self.emitRcForLocal(.decref, dec.value, 1, dec.atomicity);
                 try work.append(wa, .{ .node = dec.next });
             },
             .free => |free_stmt| {
-                try self.emitRcForLocal(.free, free_stmt.value, 1);
+                try self.emitRcForLocal(.free, free_stmt.value, 1, free_stmt.atomicity);
                 try work.append(wa, .{ .node = free_stmt.next });
             },
             .switch_stmt => |sw| try self.emitSwitch(sw, wa, work),
@@ -919,7 +921,10 @@ pub const MonoLlvmCodeGen = struct {
         switch (on_drop) {
             .none => try self.storePointer(on_drop_ptr, builder.nullValue(try self.ptrType()) catch return error.OutOfMemory),
             .rc_helper => |helper_key| {
-                const helper_value = if (try self.declareRcHelper(helper_key)) |helper_fn|
+                // `on_drop` is selected here at closure creation, which is not
+                // an RC statement and makes no thread-confinement claim, so it
+                // is always the atomic helper (atomic is always sound).
+                const helper_value = if (try self.declareRcHelper(helper_key, .atomic)) |helper_fn|
                     helper_fn.toValue(builder)
                 else
                     builder.nullValue(try self.ptrType()) catch return error.OutOfMemory;
@@ -1033,7 +1038,7 @@ pub const MonoLlvmCodeGen = struct {
         }
     }
 
-    fn emitLowLevel(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LowLevel, args: LocalSpan) Error!void {
+    fn emitLowLevel(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LowLevel, args: LocalSpan, unique_args: u64) Error!void {
         const arg_locals = self.store.getLocalSpan(args);
         switch (op) {
             .bool_not => {
@@ -1052,13 +1057,13 @@ pub const MonoLlvmCodeGen = struct {
             .list_get_unsafe => try self.emitListGetUnsafe(target, arg_locals),
             .list_with_capacity => try self.emitListWithCapacity(target, arg_locals),
             .list_append_unsafe => try self.emitListAppendUnsafe(target, arg_locals),
-            .list_concat => try self.emitListConcat(target, arg_locals),
-            .list_prepend => try self.emitListPrepend(target, arg_locals),
-            .list_sublist, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last => try self.emitListSublist(target, op, arg_locals),
-            .list_drop_at => try self.emitListDropAt(target, arg_locals),
-            .list_set => try self.emitListSet(target, arg_locals),
-            .list_reserve => try self.emitListReserve(target, arg_locals),
-            .list_release_excess_capacity => try self.emitListReleaseExcess(target, arg_locals),
+            .list_concat => try self.emitListConcat(target, arg_locals, unique_args),
+            .list_prepend => try self.emitListPrepend(target, arg_locals, unique_args),
+            .list_sublist, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last => try self.emitListSublist(target, op, arg_locals, unique_args),
+            .list_drop_at => try self.emitListDropAt(target, arg_locals, unique_args),
+            .list_set => try self.emitListSet(target, arg_locals, unique_args),
+            .list_reserve => try self.emitListReserve(target, arg_locals, unique_args),
+            .list_release_excess_capacity => try self.emitListReleaseExcess(target, arg_locals, unique_args),
             .list_first, .list_last => try self.emitListFirstLast(target, op, arg_locals),
             .str_is_eq => try self.emitStrBoolBuiltin(target, "roc_builtins_str_equal", arg_locals),
             .str_contains => try self.emitStrBoolBuiltin(target, "roc_builtins_str_contains", arg_locals),
@@ -1066,24 +1071,24 @@ pub const MonoLlvmCodeGen = struct {
             .str_ends_with => try self.emitStrBoolBuiltin(target, "roc_builtins_str_ends_with", arg_locals),
             .str_caseless_ascii_equals => try self.emitStrBoolBuiltin(target, "roc_builtins_str_caseless_ascii_equals", arg_locals),
             .str_count_utf8_bytes => try self.emitStrCountUtf8Bytes(target, arg_locals[0]),
-            .str_concat => try self.emitStrRetBuiltin(target, "roc_builtins_str_concat", arg_locals),
-            .str_trim => try self.emitStrUnaryRetBuiltin(target, "roc_builtins_str_trim", arg_locals[0]),
-            .str_trim_start => try self.emitStrUnaryRetBuiltin(target, "roc_builtins_str_trim_start", arg_locals[0]),
-            .str_trim_end => try self.emitStrUnaryRetBuiltin(target, "roc_builtins_str_trim_end", arg_locals[0]),
-            .str_with_ascii_lowercased => try self.emitStrUnaryRetBuiltin(target, "roc_builtins_str_with_ascii_lowercased", arg_locals[0]),
-            .str_with_ascii_uppercased => try self.emitStrUnaryRetBuiltin(target, "roc_builtins_str_with_ascii_uppercased", arg_locals[0]),
-            .str_drop_prefix => try self.emitStrRetBuiltin(target, "roc_builtins_str_drop_prefix", arg_locals),
-            .str_drop_suffix => try self.emitStrRetBuiltin(target, "roc_builtins_str_drop_suffix", arg_locals),
-            .str_split_on => try self.emitStrRetBuiltin(target, "roc_builtins_str_split", arg_locals),
+            .str_concat => try self.emitStrRetBuiltin(target, "roc_builtins_str_concat", arg_locals, unique_args),
+            .str_trim => try self.emitStrUnaryRetBuiltin(target, "roc_builtins_str_trim", arg_locals[0], unique_args),
+            .str_trim_start => try self.emitStrUnaryRetBuiltin(target, "roc_builtins_str_trim_start", arg_locals[0], unique_args),
+            .str_trim_end => try self.emitStrUnaryRetBuiltin(target, "roc_builtins_str_trim_end", arg_locals[0], unique_args),
+            .str_with_ascii_lowercased => try self.emitStrUnaryRetBuiltin(target, "roc_builtins_str_with_ascii_lowercased", arg_locals[0], unique_args),
+            .str_with_ascii_uppercased => try self.emitStrUnaryRetBuiltin(target, "roc_builtins_str_with_ascii_uppercased", arg_locals[0], unique_args),
+            .str_drop_prefix => try self.emitStrRetBuiltin(target, "roc_builtins_str_drop_prefix", arg_locals, null),
+            .str_drop_suffix => try self.emitStrRetBuiltin(target, "roc_builtins_str_drop_suffix", arg_locals, null),
+            .str_split_on => try self.emitStrRetBuiltin(target, "roc_builtins_str_split", arg_locals, null),
             .str_join_with => try self.emitStrJoinWith(target, arg_locals),
             .str_repeat => try self.emitStrRepeat(target, arg_locals),
             .str_with_capacity => try self.emitStrWithCapacity(target, arg_locals[0]),
-            .str_reserve => try self.emitStrReserve(target, arg_locals),
-            .str_release_excess_capacity => try self.emitStrUnaryRetBuiltin(target, "roc_builtins_str_release_excess_capacity", arg_locals[0]),
+            .str_reserve => try self.emitStrReserve(target, arg_locals, unique_args),
+            .str_release_excess_capacity => try self.emitStrUnaryRetBuiltin(target, "roc_builtins_str_release_excess_capacity", arg_locals[0], unique_args),
             .str_to_utf8 => try self.emitStrToUtf8(target, arg_locals[0]),
             .str_from_utf8_lossy => try self.emitStrFromUtf8Lossy(target, arg_locals[0]),
             .str_from_utf8 => try self.emitStrFromUtf8(target, arg_locals[0]),
-            .str_inspect => try self.emitStrUnaryRetBuiltin(target, "roc_builtins_str_escape_and_quote", arg_locals[0]),
+            .str_inspect => try self.emitStrUnaryRetBuiltin(target, "roc_builtins_str_escape_and_quote", arg_locals[0], null),
             .u8_from_str => try self.emitIntFromStr(target, arg_locals[0], 1, false),
             .i8_from_str => try self.emitIntFromStr(target, arg_locals[0], 1, true),
             .u16_from_str => try self.emitIntFromStr(target, arg_locals[0], 2, false),
@@ -1615,18 +1620,26 @@ pub const MonoLlvmCodeGen = struct {
         try self.storeBool(self.slot(target).ptr, result);
     }
 
-    fn emitStrRetBuiltin(self: *MonoLlvmCodeGen, target: LocalId, name: []const u8, args: []const LocalId) Error!void {
+    /// `unique_args` is non-null for wrappers whose first argument carries the
+    /// op's runtime uniqueness check; the update-mode argument is appended just
+    /// before roc_ops.
+    fn emitStrRetBuiltin(self: *MonoLlvmCodeGen, target: LocalId, name: []const u8, args: []const LocalId, unique_args: ?u64) Error!void {
         var call_args = try self.rocStrArgs2(args[0], args[1], true);
         defer call_args.deinit(self.allocator);
         try call_args.prepend(self.allocator, try self.ptrType(), self.slot(target).ptr);
+        if (unique_args) |mask| try self.appendUpdateModeArg(&call_args, mask);
         try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
         try self.callBuiltinVoid(name, call_args.types.items, call_args.values.items);
     }
 
-    fn emitStrUnaryRetBuiltin(self: *MonoLlvmCodeGen, target: LocalId, name: []const u8, arg: LocalId) Error!void {
+    /// `unique_args` is non-null for wrappers whose first argument carries the
+    /// op's runtime uniqueness check; the update-mode argument is appended just
+    /// before roc_ops.
+    fn emitStrUnaryRetBuiltin(self: *MonoLlvmCodeGen, target: LocalId, name: []const u8, arg: LocalId, unique_args: ?u64) Error!void {
         var call_args = try self.rocStrArgs1(arg);
         defer call_args.deinit(self.allocator);
         try call_args.prepend(self.allocator, try self.ptrType(), self.slot(target).ptr);
+        if (unique_args) |mask| try self.appendUpdateModeArg(&call_args, mask);
         try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
         try self.callBuiltinVoid(name, call_args.types.items, call_args.values.items);
     }
@@ -1667,12 +1680,13 @@ pub const MonoLlvmCodeGen = struct {
         try self.callBuiltinVoid("roc_builtins_str_with_capacity", &.{ try self.ptrType(), .i64, try self.ptrType() }, &.{ self.slot(target).ptr, cap, self.rocOps() });
     }
 
-    fn emitStrReserve(self: *MonoLlvmCodeGen, target: LocalId, args: []const LocalId) Error!void {
+    fn emitStrReserve(self: *MonoLlvmCodeGen, target: LocalId, args: []const LocalId, unique_args: u64) Error!void {
         var call_args = try self.rocStrArgs1(args[0]);
         defer call_args.deinit(self.allocator);
         const spare = try self.coerceScalar(try self.loadScalar(self.slot(args[1]).ptr, self.localLayout(args[1])), .i64, false);
         try call_args.prepend(self.allocator, try self.ptrType(), self.slot(target).ptr);
         try call_args.append(self.allocator, .i64, spare);
+        try self.appendUpdateModeArg(&call_args, unique_args);
         try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
         try self.callBuiltinVoid("roc_builtins_str_reserve", call_args.types.items, call_args.values.items);
     }
@@ -1871,6 +1885,10 @@ pub const MonoLlvmCodeGen = struct {
         return result;
     }
 
+    /// Appends element incref/decref callbacks for a runtime-checked list op.
+    /// That RC is internal to the op, which serves both modes and makes no
+    /// thread-confinement claim, so the callbacks are always the atomic
+    /// helpers.
     fn appendListElementRcArgs(
         self: *MonoLlvmCodeGen,
         call_args: *CallArgs,
@@ -1891,7 +1909,7 @@ pub const MonoLlvmCodeGen = struct {
 
         if (needs_incref) {
             const incref_fn = if (enabled)
-                (try self.declareRcHelper(.{ .op = .incref, .layout_idx = abi.elem_layout_idx.? }))
+                (try self.declareRcHelper(.{ .op = .incref, .layout_idx = abi.elem_layout_idx.? }, .atomic))
             else
                 null;
             try call_args.append(
@@ -1903,7 +1921,7 @@ pub const MonoLlvmCodeGen = struct {
 
         if (needs_decref) {
             const decref_fn = if (enabled)
-                (try self.declareRcHelper(.{ .op = .decref, .layout_idx = abi.elem_layout_idx.? }))
+                (try self.declareRcHelper(.{ .op = .decref, .layout_idx = abi.elem_layout_idx.? }, .atomic))
             else
                 null;
             try call_args.append(
@@ -1912,6 +1930,20 @@ pub const MonoLlvmCodeGen = struct {
                 if (decref_fn) |func| func.toValue(builder) else null_ptr,
             );
         }
+    }
+
+    /// Append a builtin wrapper's update-mode argument selected by the
+    /// statement's statically-proven-unique argument mask: `.InPlace` when bit
+    /// 0 says argument 0's runtime uniqueness check is redundant, `.Immutable`
+    /// (checked) otherwise.
+    fn appendUpdateModeArg(self: *MonoLlvmCodeGen, call_args: *CallArgs, unique_args: u64) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const mode = if ((unique_args & 1) != 0) builtins.utils.UpdateMode.InPlace else builtins.utils.UpdateMode.Immutable;
+        try call_args.append(
+            self.allocator,
+            .i8,
+            builder.intValue(.i8, @intFromEnum(mode)) catch return error.OutOfMemory,
+        );
     }
 
     fn emitListGetUnsafe(self: *MonoLlvmCodeGen, target: LocalId, args: []const LocalId) Error!void {
@@ -1952,7 +1984,7 @@ pub const MonoLlvmCodeGen = struct {
         try self.callBuiltinVoid("roc_builtins_list_append_unsafe", call_args.types.items, call_args.values.items);
     }
 
-    fn emitListConcat(self: *MonoLlvmCodeGen, target: LocalId, args: []const LocalId) Error!void {
+    fn emitListConcat(self: *MonoLlvmCodeGen, target: LocalId, args: []const LocalId, unique_args: u64) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const abi = self.layouts().builtinListAbi(self.localLayout(target));
         if (abi.elem_size == 0) {
@@ -1978,11 +2010,14 @@ pub const MonoLlvmCodeGen = struct {
         try call_args.append(self.allocator, .i32, builder.intValue(.i32, abi.elem_alignment) catch return error.OutOfMemory);
         try call_args.append(self.allocator, self.ptrSizedIntType(), builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory);
         try self.appendListElementRcArgs(&call_args, abi, true, true);
+        // One bit per list argument (bit 0 = lhs, bit 1 = rhs), as one 8-byte
+        // parameter so no two sub-8-byte parameters land adjacent on the stack.
+        try call_args.append(self.allocator, .i64, builder.intValue(.i64, unique_args & 0b11) catch return error.OutOfMemory);
         try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
         try self.callBuiltinVoid("roc_builtins_list_concat", call_args.types.items, call_args.values.items);
     }
 
-    fn emitListPrepend(self: *MonoLlvmCodeGen, target: LocalId, args: []const LocalId) Error!void {
+    fn emitListPrepend(self: *MonoLlvmCodeGen, target: LocalId, args: []const LocalId, unique_args: u64) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const abi = self.layouts().builtinListAbi(self.localLayout(args[0]));
         var call_args = try self.rocListArgs1(args[0]);
@@ -1992,11 +2027,12 @@ pub const MonoLlvmCodeGen = struct {
         try call_args.append(self.allocator, try self.ptrType(), self.slot(args[1]).ptr);
         try call_args.append(self.allocator, self.ptrSizedIntType(), builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory);
         try self.appendListElementRcArgs(&call_args, abi, true, false);
+        try self.appendUpdateModeArg(&call_args, unique_args);
         try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
         try self.callBuiltinVoid("roc_builtins_list_prepend", call_args.types.items, call_args.values.items);
     }
 
-    fn emitListSublist(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LowLevel, args: []const LocalId) Error!void {
+    fn emitListSublist(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LowLevel, args: []const LocalId, unique_args: u64) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const abi = self.layouts().builtinListAbi(self.localLayout(args[0]));
         const len = try self.loadUsize(try self.offsetPtr(self.slot(args[0]).ptr, self.rocListLenOffset()));
@@ -2030,6 +2066,7 @@ pub const MonoLlvmCodeGen = struct {
         try call_args.append(self.allocator, .i64, try self.coerceScalar(slice.start, .i64, false));
         try call_args.append(self.allocator, .i64, try self.coerceScalar(slice.len, .i64, false));
         try self.appendListElementRcArgs(&call_args, abi, false, true);
+        try self.appendUpdateModeArg(&call_args, unique_args);
         try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
         try self.callBuiltinVoid("roc_builtins_list_sublist", call_args.types.items, call_args.values.items);
     }
@@ -2074,7 +2111,7 @@ pub const MonoLlvmCodeGen = struct {
         }
     }
 
-    fn emitListDropAt(self: *MonoLlvmCodeGen, target: LocalId, args: []const LocalId) Error!void {
+    fn emitListDropAt(self: *MonoLlvmCodeGen, target: LocalId, args: []const LocalId, unique_args: u64) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const abi = self.layouts().builtinListAbi(self.localLayout(args[0]));
         var call_args = try self.rocListArgs1(args[0]);
@@ -2084,11 +2121,12 @@ pub const MonoLlvmCodeGen = struct {
         try call_args.append(self.allocator, self.ptrSizedIntType(), builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory);
         try call_args.append(self.allocator, .i64, try self.coerceScalar(try self.loadScalar(self.slot(args[1]).ptr, self.localLayout(args[1])), .i64, false));
         try self.appendListElementRcArgs(&call_args, abi, true, true);
+        try self.appendUpdateModeArg(&call_args, unique_args);
         try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
         try self.callBuiltinVoid("roc_builtins_list_drop_at", call_args.types.items, call_args.values.items);
     }
 
-    fn emitListSet(self: *MonoLlvmCodeGen, target: LocalId, args: []const LocalId) Error!void {
+    fn emitListSet(self: *MonoLlvmCodeGen, target: LocalId, args: []const LocalId, unique_args: u64) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const abi = self.layouts().builtinListAbi(self.localLayout(args[0]));
         var call_args = try self.rocListArgs1(args[0]);
@@ -2100,11 +2138,12 @@ pub const MonoLlvmCodeGen = struct {
         try call_args.append(self.allocator, self.ptrSizedIntType(), builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory);
         try call_args.append(self.allocator, try self.ptrType(), builder.nullValue(try self.ptrType()) catch return error.OutOfMemory);
         try self.appendListElementRcArgs(&call_args, abi, true, true);
+        try self.appendUpdateModeArg(&call_args, unique_args);
         try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
         try self.callBuiltinVoid("roc_builtins_list_replace", call_args.types.items, call_args.values.items);
     }
 
-    fn emitListReserve(self: *MonoLlvmCodeGen, target: LocalId, args: []const LocalId) Error!void {
+    fn emitListReserve(self: *MonoLlvmCodeGen, target: LocalId, args: []const LocalId, unique_args: u64) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const abi = self.layouts().builtinListAbi(self.localLayout(args[0]));
         var call_args = try self.rocListArgs1(args[0]);
@@ -2114,11 +2153,12 @@ pub const MonoLlvmCodeGen = struct {
         try call_args.append(self.allocator, .i64, try self.coerceScalar(try self.loadScalar(self.slot(args[1]).ptr, self.localLayout(args[1])), .i64, false));
         try call_args.append(self.allocator, self.ptrSizedIntType(), builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory);
         try self.appendListElementRcArgs(&call_args, abi, true, false);
+        try self.appendUpdateModeArg(&call_args, unique_args);
         try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
         try self.callBuiltinVoid("roc_builtins_list_reserve", call_args.types.items, call_args.values.items);
     }
 
-    fn emitListReleaseExcess(self: *MonoLlvmCodeGen, target: LocalId, args: []const LocalId) Error!void {
+    fn emitListReleaseExcess(self: *MonoLlvmCodeGen, target: LocalId, args: []const LocalId, unique_args: u64) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const abi = self.layouts().builtinListAbi(self.localLayout(args[0]));
         var call_args = try self.rocListArgs1(args[0]);
@@ -2127,6 +2167,7 @@ pub const MonoLlvmCodeGen = struct {
         try call_args.append(self.allocator, .i32, builder.intValue(.i32, abi.elem_alignment) catch return error.OutOfMemory);
         try call_args.append(self.allocator, self.ptrSizedIntType(), builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory);
         try self.appendListElementRcArgs(&call_args, abi, true, true);
+        try self.appendUpdateModeArg(&call_args, unique_args);
         try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
         try self.callBuiltinVoid("roc_builtins_list_release_excess_capacity", call_args.types.items, call_args.values.items);
     }
@@ -2526,7 +2567,7 @@ pub const MonoLlvmCodeGen = struct {
         }
     }
 
-    fn emitRcForLocal(self: *MonoLlvmCodeGen, op: layout.RcOp, local: LocalId, count: u16) Error!void {
+    fn emitRcForLocal(self: *MonoLlvmCodeGen, op: layout.RcOp, local: LocalId, count: u16, atomicity: RcAtomicity) Error!void {
         const slot_v = self.slot(local);
         if (slot_v.size == 0) return;
 
@@ -2546,14 +2587,20 @@ pub const MonoLlvmCodeGen = struct {
             builder.intValue(self.ptrSizedIntType(), count) catch return error.OutOfMemory
         else
             null;
-        try self.emitRcHelperCall(helper_key, slot_v.ptr, count_value);
+        try self.emitRcHelperCall(helper_key, atomicity, slot_v.ptr, count_value);
     }
 
-    fn declareRcHelper(self: *MonoLlvmCodeGen, helper_key: layout.RcHelperKey) Error!?LlvmBuilder.Function.Index {
+    /// Backend cache key for one generated RC helper. `HelperKey.encode` packs
+    /// the op into bits 32..33, so the atomicity bit goes above it.
+    fn rcHelperCacheKey(helper_key: layout.RcHelperKey, atomicity: RcAtomicity) u64 {
+        return helper_key.encode() | (@as(u64, @intFromEnum(atomicity)) << 34);
+    }
+
+    fn declareRcHelper(self: *MonoLlvmCodeGen, helper_key: layout.RcHelperKey, atomicity: RcAtomicity) Error!?LlvmBuilder.Function.Index {
         const builder = self.builder orelse return error.CompilationFailed;
         if (self.layouts().rcHelperPlan(helper_key) == .noop) return null;
 
-        const cache_key = helper_key.encode();
+        const cache_key = rcHelperCacheKey(helper_key, atomicity);
         if (self.rc_helpers.get(cache_key)) |entry| return entry.function;
 
         const ptr_ty = try self.ptrType();
@@ -2562,14 +2609,19 @@ pub const MonoLlvmCodeGen = struct {
             .decref, .free => &.{ ptr_ty, ptr_ty },
         };
         const fn_ty = builder.fnType(.void, params, .normal) catch return error.OutOfMemory;
-        const fn_name = builder.strtabStringFmt("roc_llvm_rc_{s}_{d}", .{
+        const fn_name = builder.strtabStringFmt("roc_llvm_rc_{s}_{d}{s}", .{
             @tagName(helper_key.op),
             @intFromEnum(helper_key.layout_idx),
+            switch (atomicity) {
+                .atomic => "",
+                .single_thread => "_single_thread",
+            },
         }) catch return error.OutOfMemory;
         const func = builder.addFunction(fn_ty, fn_name, .default) catch return error.OutOfMemory;
         func.setLinkage(.internal, builder);
         try self.rc_helpers.put(cache_key, .{
             .key = helper_key,
+            .atomicity = atomicity,
             .function = func,
         });
         return func;
@@ -2577,22 +2629,22 @@ pub const MonoLlvmCodeGen = struct {
 
     fn compilePendingRcHelpers(self: *MonoLlvmCodeGen) Error!void {
         while (true) {
-            var pending_key: ?layout.RcHelperKey = null;
+            var pending: ?RcHelperEntry = null;
             var iter = self.rc_helpers.iterator();
             while (iter.next()) |entry| {
                 if (!entry.value_ptr.compiled) {
-                    pending_key = entry.value_ptr.key;
+                    pending = entry.value_ptr.*;
                     break;
                 }
             }
-            const helper_key = pending_key orelse return;
-            try self.compileRcHelper(helper_key);
+            const helper = pending orelse return;
+            try self.compileRcHelper(helper.key, helper.atomicity);
         }
     }
 
-    fn compileRcHelper(self: *MonoLlvmCodeGen, helper_key: layout.RcHelperKey) Error!void {
+    fn compileRcHelper(self: *MonoLlvmCodeGen, helper_key: layout.RcHelperKey, atomicity: RcAtomicity) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
-        const cache_key = helper_key.encode();
+        const cache_key = rcHelperCacheKey(helper_key, atomicity);
         const func = blk: {
             const entry = self.rc_helpers.getPtr(cache_key) orelse return error.CompilationFailed;
             if (entry.compiled) return;
@@ -2650,7 +2702,7 @@ pub const MonoLlvmCodeGen = struct {
         _ = wip.brCond(is_null, done, body, .else_likely) catch return error.OutOfMemory;
 
         wip.cursor = .{ .block = body };
-        try self.emitRcHelperBody(helper_key, value_ptr, count_value);
+        try self.emitRcHelperBody(helper_key, atomicity, value_ptr, count_value);
         if (!self.currentBlockHasTerminator()) {
             _ = wip.br(done) catch return error.OutOfMemory;
         }
@@ -2660,32 +2712,51 @@ pub const MonoLlvmCodeGen = struct {
         try self.finishCurrentWipFunction();
     }
 
-    fn emitRcHelperBody(self: *MonoLlvmCodeGen, helper_key: layout.RcHelperKey, value_ptr: LlvmBuilder.Value, count_value: ?LlvmBuilder.Value) Error!void {
+    /// Emits one helper's body. The helper tree below a single RC statement
+    /// shares the statement's atomicity: nested struct/tag/closure helpers are
+    /// direct calls, so they keep it, and the element/payload callbacks handed
+    /// to the teardown builtins name the helper variant matching it — the C
+    /// function-pointer ABI carries no atomicity parameter, so the atomicity
+    /// is baked into which function the pointer names. Free builtins never
+    /// update a count, so they have no single-thread entries.
+    fn emitRcHelperBody(self: *MonoLlvmCodeGen, helper_key: layout.RcHelperKey, atomicity: RcAtomicity, value_ptr: LlvmBuilder.Value, count_value: ?LlvmBuilder.Value) Error!void {
         switch (self.layouts().rcHelperPlan(helper_key)) {
             .noop => {},
-            .str_incref => try self.emitRcHelperStrIncref(value_ptr, count_value.?),
-            .str_decref => try self.emitRcHelperStrDrop(value_ptr, "roc_builtins_decref_data_ptr"),
+            .str_incref => try self.emitRcHelperStrIncref(value_ptr, count_value.?, atomicity),
+            .str_decref => try self.emitRcHelperStrDrop(value_ptr, switch (atomicity) {
+                .atomic => "roc_builtins_decref_data_ptr",
+                .single_thread => "roc_builtins_decref_data_ptr_single_thread",
+            }),
             .str_free => try self.emitRcHelperStrDrop(value_ptr, "roc_builtins_free_data_ptr"),
-            .list_incref => |list_plan| try self.emitRcHelperListIncref(list_plan, value_ptr, count_value.?),
-            .list_decref => |list_plan| try self.emitRcHelperListDrop(list_plan, value_ptr, "roc_builtins_list_decref_with"),
-            .list_free => |list_plan| try self.emitRcHelperListDrop(list_plan, value_ptr, "roc_builtins_list_free_with"),
-            .box_incref => try self.emitRcHelperBoxIncref(value_ptr, count_value.?),
-            .box_decref => |box_plan| try self.emitRcHelperBoxDrop(box_plan, value_ptr, "roc_builtins_box_decref_with"),
-            .box_free => |box_plan| try self.emitRcHelperBoxDrop(box_plan, value_ptr, "roc_builtins_box_free_with"),
-            .erased_callable_incref => try self.emitRcHelperErasedCallableIncref(value_ptr, count_value.?),
-            .erased_callable_decref => try self.emitRcHelperErasedCallableDrop(value_ptr, "roc_builtins_erased_callable_decref"),
+            .list_incref => |list_plan| try self.emitRcHelperListIncref(list_plan, value_ptr, count_value.?, atomicity),
+            .list_decref => |list_plan| try self.emitRcHelperListDrop(list_plan, value_ptr, atomicity, switch (atomicity) {
+                .atomic => "roc_builtins_list_decref_with",
+                .single_thread => "roc_builtins_list_decref_with_single_thread",
+            }),
+            .list_free => |list_plan| try self.emitRcHelperListDrop(list_plan, value_ptr, atomicity, "roc_builtins_list_free_with"),
+            .box_incref => try self.emitRcHelperBoxIncref(value_ptr, count_value.?, atomicity),
+            .box_decref => |box_plan| try self.emitRcHelperBoxDrop(box_plan, value_ptr, atomicity, switch (atomicity) {
+                .atomic => "roc_builtins_box_decref_with",
+                .single_thread => "roc_builtins_box_decref_with_single_thread",
+            }),
+            .box_free => |box_plan| try self.emitRcHelperBoxDrop(box_plan, value_ptr, atomicity, "roc_builtins_box_free_with"),
+            .erased_callable_incref => try self.emitRcHelperErasedCallableIncref(value_ptr, count_value.?, atomicity),
+            .erased_callable_decref => try self.emitRcHelperErasedCallableDrop(value_ptr, switch (atomicity) {
+                .atomic => "roc_builtins_erased_callable_decref",
+                .single_thread => "roc_builtins_erased_callable_decref_single_thread",
+            }),
             .erased_callable_free => try self.emitRcHelperErasedCallableDrop(value_ptr, "roc_builtins_erased_callable_free"),
-            .struct_ => |struct_plan| try self.emitRcHelperStruct(struct_plan, value_ptr, count_value),
-            .tag_union => |tag_plan| try self.emitRcHelperTagUnion(tag_plan, value_ptr, count_value),
+            .struct_ => |struct_plan| try self.emitRcHelperStruct(struct_plan, value_ptr, count_value, atomicity),
+            .tag_union => |tag_plan| try self.emitRcHelperTagUnion(tag_plan, value_ptr, count_value, atomicity),
             .closure => |child_key| {
                 const captures_ptr = try self.loadPointer(value_ptr);
-                try self.emitRcHelperCall(child_key, captures_ptr, if (child_key.op == .incref) count_value else null);
+                try self.emitRcHelperCall(child_key, atomicity, captures_ptr, if (child_key.op == .incref) count_value else null);
             },
         }
     }
 
-    fn emitRcHelperCall(self: *MonoLlvmCodeGen, helper_key: layout.RcHelperKey, value_ptr: LlvmBuilder.Value, count_value: ?LlvmBuilder.Value) Error!void {
-        const func = (try self.declareRcHelper(helper_key)) orelse return;
+    fn emitRcHelperCall(self: *MonoLlvmCodeGen, helper_key: layout.RcHelperKey, atomicity: RcAtomicity, value_ptr: LlvmBuilder.Value, count_value: ?LlvmBuilder.Value) Error!void {
+        const func = (try self.declareRcHelper(helper_key, atomicity)) orelse return;
         switch (helper_key.op) {
             .incref => _ = try self.callFunctionIndex(func, &.{ value_ptr, count_value.?, self.rocOps() }),
             .decref, .free => _ = try self.callFunctionIndex(func, &.{ value_ptr, self.rocOps() }),
@@ -2709,7 +2780,14 @@ pub const MonoLlvmCodeGen = struct {
         return wip.cast(.inttoptr, data_ptr, try self.ptrType(), "") catch return error.OutOfMemory;
     }
 
-    fn emitRcHelperStrIncref(self: *MonoLlvmCodeGen, value_ptr: LlvmBuilder.Value, count_value: LlvmBuilder.Value) Error!void {
+    fn increfDataPtrBuiltinName(atomicity: RcAtomicity) []const u8 {
+        return switch (atomicity) {
+            .atomic => "roc_builtins_incref_data_ptr",
+            .single_thread => "roc_builtins_incref_data_ptr_single_thread",
+        };
+    }
+
+    fn emitRcHelperStrIncref(self: *MonoLlvmCodeGen, value_ptr: LlvmBuilder.Value, count_value: LlvmBuilder.Value, atomicity: RcAtomicity) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
         const len = try self.loadUsize(try self.offsetPtr(value_ptr, self.rocStrLenOffset()));
@@ -2720,7 +2798,7 @@ pub const MonoLlvmCodeGen = struct {
 
         wip.cursor = .{ .block = heap_str };
         const data_ptr = try self.loadStrDataPtrForRc(value_ptr);
-        try self.callBuiltinVoid("roc_builtins_incref_data_ptr", &.{ try self.ptrType(), self.ptrSizedIntType(), try self.ptrType() }, &.{ data_ptr, count_value, self.rocOps() });
+        try self.callBuiltinVoid(increfDataPtrBuiltinName(atomicity), &.{ try self.ptrType(), self.ptrSizedIntType(), try self.ptrType() }, &.{ data_ptr, count_value, self.rocOps() });
         _ = wip.br(after) catch return error.OutOfMemory;
 
         wip.cursor = .{ .block = after };
@@ -2752,11 +2830,14 @@ pub const MonoLlvmCodeGen = struct {
         wip.cursor = .{ .block = after };
     }
 
-    fn emitRcHelperListIncref(self: *MonoLlvmCodeGen, list_plan: layout.RcListPlan, value_ptr: LlvmBuilder.Value, count_value: LlvmBuilder.Value) Error!void {
+    fn emitRcHelperListIncref(self: *MonoLlvmCodeGen, list_plan: layout.RcListPlan, value_ptr: LlvmBuilder.Value, count_value: LlvmBuilder.Value, atomicity: RcAtomicity) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const fields = try self.rocListArgFields(value_ptr);
         try self.callBuiltinVoid(
-            "roc_builtins_list_incref",
+            switch (atomicity) {
+                .atomic => "roc_builtins_list_incref",
+                .single_thread => "roc_builtins_list_incref_single_thread",
+            },
             &.{ try self.ptrType(), self.ptrSizedIntType(), self.ptrSizedIntType(), self.ptrSizedIntType(), .i1, try self.ptrType() },
             &.{
                 fields[0],
@@ -2769,11 +2850,16 @@ pub const MonoLlvmCodeGen = struct {
         );
     }
 
-    fn emitRcHelperListDrop(self: *MonoLlvmCodeGen, list_plan: layout.RcListPlan, value_ptr: LlvmBuilder.Value, builtin_name: []const u8) Error!void {
+    fn emitRcHelperListDrop(self: *MonoLlvmCodeGen, list_plan: layout.RcListPlan, value_ptr: LlvmBuilder.Value, atomicity: RcAtomicity, builtin_name: []const u8) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const fields = try self.rocListArgFields(value_ptr);
+        // The element callback's C ABI carries no atomicity parameter, so the
+        // statement's atomicity is baked into which helper variant the pointer
+        // names. Visibility is containment-closed (design.md "Thread-Confined
+        // Reference Counts"), so a single-thread teardown covers the elements
+        // as well.
         const child_fn = if (list_plan.child) |child_key|
-            (try self.declareRcHelper(child_key))
+            (try self.declareRcHelper(child_key, atomicity))
         else
             null;
         try self.callBuiltinVoid(
@@ -2791,20 +2877,23 @@ pub const MonoLlvmCodeGen = struct {
         );
     }
 
-    fn emitRcHelperBoxIncref(self: *MonoLlvmCodeGen, value_ptr: LlvmBuilder.Value, count_value: LlvmBuilder.Value) Error!void {
+    fn emitRcHelperBoxIncref(self: *MonoLlvmCodeGen, value_ptr: LlvmBuilder.Value, count_value: LlvmBuilder.Value, atomicity: RcAtomicity) Error!void {
         const payload_ptr = try self.loadPointer(value_ptr);
         try self.callBuiltinVoid(
-            "roc_builtins_incref_data_ptr",
+            increfDataPtrBuiltinName(atomicity),
             &.{ try self.ptrType(), self.ptrSizedIntType(), try self.ptrType() },
             &.{ payload_ptr, count_value, self.rocOps() },
         );
     }
 
-    fn emitRcHelperBoxDrop(self: *MonoLlvmCodeGen, box_plan: layout.RcBoxPlan, value_ptr: LlvmBuilder.Value, builtin_name: []const u8) Error!void {
+    fn emitRcHelperBoxDrop(self: *MonoLlvmCodeGen, box_plan: layout.RcBoxPlan, value_ptr: LlvmBuilder.Value, atomicity: RcAtomicity, builtin_name: []const u8) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const payload_ptr = try self.loadPointer(value_ptr);
+        // The payload callback's C ABI carries no atomicity parameter, so the
+        // statement's atomicity is baked into which helper variant the pointer
+        // names (see emitRcHelperListDrop).
         const child_fn = if (box_plan.child) |child_key|
-            (try self.declareRcHelper(child_key))
+            (try self.declareRcHelper(child_key, atomicity))
         else
             null;
         try self.callBuiltinVoid(
@@ -2819,10 +2908,16 @@ pub const MonoLlvmCodeGen = struct {
         );
     }
 
-    fn emitRcHelperErasedCallableIncref(self: *MonoLlvmCodeGen, value_ptr: LlvmBuilder.Value, count_value: LlvmBuilder.Value) Error!void {
+    fn emitRcHelperErasedCallableIncref(self: *MonoLlvmCodeGen, value_ptr: LlvmBuilder.Value, count_value: LlvmBuilder.Value, atomicity: RcAtomicity) Error!void {
         const payload_ptr = try self.loadPointer(value_ptr);
+        // An erased-callable incref is a plain data-pointer incref on the
+        // payload allocation, so the single-thread mode uses the data-pointer
+        // entry directly.
         try self.callBuiltinVoid(
-            "roc_builtins_erased_callable_incref",
+            switch (atomicity) {
+                .atomic => "roc_builtins_erased_callable_incref",
+                .single_thread => "roc_builtins_incref_data_ptr_single_thread",
+            },
             &.{ try self.ptrType(), self.ptrSizedIntType(), try self.ptrType() },
             &.{ payload_ptr, count_value, self.rocOps() },
         );
@@ -2837,17 +2932,17 @@ pub const MonoLlvmCodeGen = struct {
         );
     }
 
-    fn emitRcHelperStruct(self: *MonoLlvmCodeGen, struct_plan: layout.RcStructPlan, value_ptr: LlvmBuilder.Value, count_value: ?LlvmBuilder.Value) Error!void {
+    fn emitRcHelperStruct(self: *MonoLlvmCodeGen, struct_plan: layout.RcStructPlan, value_ptr: LlvmBuilder.Value, count_value: ?LlvmBuilder.Value, atomicity: RcAtomicity) Error!void {
         const field_count = self.layouts().rcHelperStructFieldCount(struct_plan);
         var i: u32 = 0;
         while (i < field_count) : (i += 1) {
             const field_plan = self.layouts().rcHelperStructFieldPlan(struct_plan, i) orelse continue;
             const field_ptr = try self.offsetPtr(value_ptr, field_plan.offset);
-            try self.emitRcHelperCall(field_plan.child, field_ptr, if (field_plan.child.op == .incref) count_value else null);
+            try self.emitRcHelperCall(field_plan.child, atomicity, field_ptr, if (field_plan.child.op == .incref) count_value else null);
         }
     }
 
-    fn emitRcHelperTagUnion(self: *MonoLlvmCodeGen, tag_plan: layout.RcTagUnionPlan, value_ptr: LlvmBuilder.Value, count_value: ?LlvmBuilder.Value) Error!void {
+    fn emitRcHelperTagUnion(self: *MonoLlvmCodeGen, tag_plan: layout.RcTagUnionPlan, value_ptr: LlvmBuilder.Value, count_value: ?LlvmBuilder.Value, atomicity: RcAtomicity) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
         const variant_count = self.layouts().rcHelperTagUnionVariantCount(tag_plan);
@@ -2855,7 +2950,7 @@ pub const MonoLlvmCodeGen = struct {
 
         if (variant_count == 1) {
             if (self.layouts().rcHelperTagUnionVariantPlan(tag_plan, 0)) |child_key| {
-                try self.emitRcHelperCall(child_key, value_ptr, if (child_key.op == .incref) count_value else null);
+                try self.emitRcHelperCall(child_key, atomicity, value_ptr, if (child_key.op == .incref) count_value else null);
             }
             return;
         }
@@ -2877,7 +2972,7 @@ pub const MonoLlvmCodeGen = struct {
             _ = wip.brCond(is_case, do_case, next_case, .none) catch return error.OutOfMemory;
 
             wip.cursor = .{ .block = do_case };
-            try self.emitRcHelperCall(child_key, value_ptr, if (child_key.op == .incref) count_value else null);
+            try self.emitRcHelperCall(child_key, atomicity, value_ptr, if (child_key.op == .incref) count_value else null);
             _ = wip.br(after) catch return error.OutOfMemory;
 
             wip.cursor = .{ .block = next_case };

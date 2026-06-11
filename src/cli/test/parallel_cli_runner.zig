@@ -532,12 +532,12 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc run test/str/app_static_24_byte_string.roc does not panic", .skip = .{ .windows = "test/str platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{"--no-cache"}, .roc_file = "test/str/app_static_24_byte_string.roc", .exit = .not_panic, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "reached unreachable code" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build creates executable from test/int/app.roc (interpreter)", .backend = .interpreter, .skip = .{ .windows = "test/int platform does not have Windows host libraries" }, .body = .{ .custom = .build_int_interpreter_creates_output } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build creates executable from test/int/app.roc (dev)", .backend = .dev, .skip = .{ .always = "TODO: dev backend compilation fails for test/int/app.roc" }, .body = .{ .custom = .noop } },
-    .{ .id = 0, .suite = .subcommands, .name = "roc build --no-link lowers platform required init consts", .body = .{ .command = .{ .args = &.{ "build", "--no-link", "--no-cache" }, .roc_file = "test/postcheck/platform_required_init/app.roc", .contains = &.{.{ .stream = .stdout, .text = "Object file generated:" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc build archive output lowers platform required init consts", .body = .{ .command = .{ .args = &.{ "build", "--no-cache" }, .roc_file = "test/postcheck/platform_required_init/app.roc", .contains = &.{.{ .stream = .stdout, .text = "Built " }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build executable runs correctly (interpreter)", .backend = .interpreter, .skip = .{ .windows = "test/int platform does not have Windows host libraries" }, .body = .{ .custom = .build_int_interpreter_output_runs } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build --opt=dev executable runs correctly for test/int/app.roc", .backend = .dev, .skip = .{ .windows = "test/int platform does not have Windows host libraries" }, .body = .{ .custom = .build_int_dev_output_runs } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build fails with file not found error", .body = .{ .command = .{ .args = &.{"build"}, .roc_file = "nonexistent_file.roc", .exit = .failure, .contains_any = &.{.{ .needles = &.{ .{ .stream = .stderr, .text = "FileNotFound" }, .{ .stream = .stderr, .text = "not found" }, .{ .stream = .stderr, .text = "NOT FOUND" }, .{ .stream = .stderr, .text = "Failed" } } }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build fails with invalid target error", .body = .{ .command = .{ .args = &.{ "build", "--target=invalid_target_name" }, .roc_file = "test/int/app.roc", .exit = .failure, .contains_any = &.{.{ .needles = &.{ .{ .stream = .stderr, .text = "Invalid target" }, .{ .stream = .stderr, .text = "invalid" } } }} } } },
-    .{ .id = 0, .suite = .subcommands, .name = "roc build wasm32 no-link succeeds for list builtins", .body = .{ .command = .{ .args = &.{ "build", "--target=wasm32", "--no-link", "--no-cache" }, .roc_file = "test/wasm/list_builtin_static_lib_app.roc", .contains = &.{.{ .stream = .stdout, .text = "Object file generated:" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "FunctionTypeMismatch" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc build wasm32 shared module succeeds for list builtins", .body = .{ .command = .{ .args = &.{ "build", "--target=wasm32", "--no-cache" }, .roc_file = "test/wasm/list_builtin_static_lib_app.roc", .contains = &.{.{ .stream = .stdout, .text = "Built " }}, .not_contains = &.{ .{ .stream = .stderr, .text = "FunctionTypeMismatch" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build glibc target gives helpful error on non-Linux", .body = .{ .custom = .build_glibc_target_non_linux_error } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test caches passing results (interpreter)", .backend = .interpreter, .body = .{ .custom = .cache_passing_results } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test caches passing results (dev)", .backend = .dev, .body = .{ .custom = .cache_passing_results } },
@@ -2150,6 +2150,43 @@ fn customGlueZigBoxHelperTest(
         \\    try std.testing.expect(!abi.isUniqueBox(ptr));
         \\    abi.decrefBox(ptr, &ops);
         \\    try std.testing.expectEqual(@as(usize, 0), env_value.dealloc_count);
+        \\}
+        \\
+        \\test "DefaultAllocators realloc preserves data and frees old allocation" {
+        \\    var env_value = abi.RocEnv{
+        \\        .allocator = std.testing.allocator,
+        \\        .roc_io = abi.RocIo.freestanding(),
+        \\    };
+        \\
+        \\    var alloc_args = abi.RocAlloc{
+        \\        .alignment = 4,
+        \\        .length = 8,
+        \\        .answer = undefined,
+        \\    };
+        \\    abi.DefaultAllocators.rocAlloc(&alloc_args, @ptrCast(&env_value));
+        \\
+        \\    const old_bytes: [*]u8 = @ptrCast(alloc_args.answer);
+        \\    old_bytes[0] = 0xaa;
+        \\    old_bytes[1] = 0xbb;
+        \\    old_bytes[7] = 0xcc;
+        \\
+        \\    var realloc_args = abi.RocRealloc{
+        \\        .alignment = 4,
+        \\        .new_length = 16,
+        \\        .answer = alloc_args.answer,
+        \\    };
+        \\    abi.DefaultAllocators.rocRealloc(&realloc_args, @ptrCast(&env_value));
+        \\
+        \\    const new_bytes: [*]u8 = @ptrCast(realloc_args.answer);
+        \\    try std.testing.expectEqual(@as(u8, 0xaa), new_bytes[0]);
+        \\    try std.testing.expectEqual(@as(u8, 0xbb), new_bytes[1]);
+        \\    try std.testing.expectEqual(@as(u8, 0xcc), new_bytes[7]);
+        \\
+        \\    var dealloc_args = abi.RocDealloc{
+        \\        .alignment = 4,
+        \\        .ptr = realloc_args.answer,
+        \\    };
+        \\    abi.DefaultAllocators.rocDealloc(&dealloc_args, @ptrCast(&env_value));
         \\}
     ;
 
