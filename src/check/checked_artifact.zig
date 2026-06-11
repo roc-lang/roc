@@ -4890,7 +4890,12 @@ pub const CheckedPatternData = union(enum) {
     },
     frac_f32_literal: f32,
     frac_f64_literal: f64,
-    str_literal: CheckedStringLiteralId,
+    str_literal: struct {
+        literal: CheckedStringLiteralId,
+        /// Synthesized `.str_from_quote` checked expression for matching this
+        /// literal against a non-builtin string type; null on the Str fast path.
+        conversion: ?CheckedExprId = null,
+    },
     underscore,
     runtime_error,
 };
@@ -5929,12 +5934,12 @@ pub const CheckedBodyStore = struct {
             const raw_node = @intFromEnum(entry.key_ptr.*);
             const checked_expr = self.source_node_map.exprAtRawNode(raw_node) orelse
                 self.numeralConversionExprAtRawNode(raw_node) orelse
-            {
-                checkedArtifactInvariant(
-                    "from_quote plan {d} points at source node {d} with no checked expression",
-                    .{ @intFromEnum(entry.value_ptr.*), raw_node },
-                );
-            };
+                {
+                    checkedArtifactInvariant(
+                        "from_quote plan {d} points at source node {d} with no checked expression",
+                        .{ @intFromEnum(entry.value_ptr.*), raw_node },
+                    );
+                };
             const data = &self.exprs[@intFromEnum(checked_expr)].data;
             switch (data.*) {
                 .str_from_quote => |quote| data.* = .{ .str_from_quote = .{
@@ -6658,6 +6663,35 @@ const CheckedBodyPayloadCopier = struct {
         return try self.string_builder.internBytes(bytes.items);
     }
 
+    /// Synthesize the `.str_from_quote` checked expression a string literal
+    /// pattern converts through when its type is a non-builtin string type,
+    /// registered in the conversion table the same way numeral patterns are.
+    fn quoteConversionExprForPattern(
+        self: *@This(),
+        pattern_idx: CIR.Pattern.Idx,
+        literal: StringLiteral.Idx,
+    ) Allocator.Error!?CheckedExprId {
+        const node = ModuleEnv.nodeIdxFrom(pattern_idx);
+        if (self.module.moduleEnvConst().quoteDispatchPlanForNode(node) == null) return null;
+        const checked_ty = self.checkedPatternTypeRoot(pattern_idx);
+        if (checkedBuiltinForLiteralTarget(self.checked_types.store.view(), checked_ty) != null) return null;
+        const id: CheckedExprId = @enumFromInt(try checkedSourceNodeIdFromLen(self.exprs.items.len));
+        try self.exprs.append(self.allocator, .{
+            .id = id,
+            .ty = checked_ty,
+            .source_region = self.module.regionAt(node),
+            .data = .{ .str_from_quote = .{
+                .plan = null,
+                .literal = try self.string_builder.intern(literal),
+            } },
+        });
+        try self.numeral_conversion_exprs.append(self.allocator, .{
+            .raw_node = @intFromEnum(node),
+            .expr = id,
+        });
+        return id;
+    }
+
     fn copyNumFromNumeralLiteral(
         self: *@This(),
         expr_idx: CIR.Expr.Idx,
@@ -6901,7 +6935,10 @@ const CheckedBodyPayloadCopier = struct {
             } },
             .frac_f32_literal => |frac| .{ .frac_f32_literal = frac.value },
             .frac_f64_literal => |frac| .{ .frac_f64_literal = frac.value },
-            .str_literal => |str| .{ .str_literal = try self.string_builder.intern(str.literal) },
+            .str_literal => |str| .{ .str_literal = .{
+                .literal = try self.string_builder.intern(str.literal),
+                .conversion = try self.quoteConversionExprForPattern(pattern_idx, str.literal),
+            } },
             .underscore => .underscore,
             .runtime_error => .runtime_error,
         };

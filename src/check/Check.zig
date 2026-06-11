@@ -2192,6 +2192,10 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
 
     // Check any accumulated constraints
     try self.checkAllConstraints(&env);
+
+    if (!skip_numeric_defaults) {
+        try self.finalizeQuoteDefaults(&env);
+    }
     try self.resolveNumericLiteralsFromContext(&env);
 
     if (!skip_numeric_defaults) {
@@ -3075,6 +3079,7 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
 
     // Check any accumulated constraints
     try self.checkAllConstraints(&env);
+    try self.finalizeQuoteDefaults(&env);
     try self.resolveNumericLiteralsFromContext(&env);
     try self.finalizeNumericDefaultsInternal(&env);
 
@@ -3145,6 +3150,7 @@ pub fn checkExprReplWithDefs(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Alloca
 
     // Check any accumulated constraints
     try self.checkAllConstraints(&env);
+    try self.finalizeQuoteDefaults(&env);
     try self.resolveNumericLiteralsFromContext(&env);
     try self.finalizeNumericDefaultsInternal(&env);
 
@@ -4637,8 +4643,12 @@ fn checkPatternHelp(
         },
         // str //
         .str_literal => {
-            const str_var = try self.freshStr(env, pattern_region);
-            _ = try self.unify(pattern_var, str_var, env);
+            // A literal pattern converts through from_quote and compares the
+            // matched value against the converted constant, so the type also
+            // needs equality.
+            const flex_var = try self.mkFlexWithFromQuoteConstraint(ModuleEnv.nodeIdxFrom(pattern_idx), pattern_region, env);
+            _ = try self.unify(pattern_var, flex_var, env);
+            try self.mkPatternLiteralEqConstraint(pattern_var, env, pattern_region);
         },
         // as //
         .as => |p| {
@@ -9504,21 +9514,74 @@ fn finalizeNumericDefaultsInternal(self: *Self, env: *Env) std.mem.Allocator.Err
         const flex = resolved.desc.content.flex;
         const constraints = self.types.sliceStaticDispatchConstraints(flex.constraints);
         var has_from_numeral = false;
+        for (constraints) |c| {
+            if (c.origin == .from_numeral) {
+                has_from_numeral = true;
+                break;
+            }
+        }
+        if (!has_from_numeral) continue;
+
+        const dec_var = try self.freshFromContent(try self.mkBuiltinNumberTypeContentFromKind(.dec, env), env, Region.zero());
+        _ = try self.unify(resolved.var_, dec_var, env);
+    }
+}
+
+/// Default every non-generalized flex var carrying a from_quote constraint to
+/// Str. This runs before numeric context resolution: a still-flex string
+/// literal blocks resolution of the method chains hanging off it (e.g.
+/// `"x".to_utf8().concat([0])`), and those chains are what give numeric
+/// literals their context.
+fn finalizeQuoteDefaults(self: *Self, env: *Env) Allocator.Error!void {
+    if (self.types.from_numeral_flex_count == 0) return;
+
+    // Lazily-built set of vars some instantiation can pin (argument-position
+    // and lambda-parameter reachable). A generalized literal var outside this
+    // set can never be pinned to anything else, so defaulting it to Str now is
+    // the same resolution monomorphic specialization would apply — done early
+    // enough for the method chains hanging off it to resolve during checking.
+    var pinnable = std.AutoHashMap(Var, void).init(self.gpa);
+    defer pinnable.deinit();
+    var collected_pinnable = false;
+
+    const num_vars: u32 = @intCast(self.types.len());
+    var i: u32 = 0;
+    while (i < num_vars) : (i += 1) {
+        const var_: types_mod.Var = @enumFromInt(i);
+        const resolved = self.types.resolveVar(var_);
+        if (resolved.desc.content != .flex) continue;
+        const flex = resolved.desc.content.flex;
+        const constraints = self.types.sliceStaticDispatchConstraints(flex.constraints);
         var has_from_quote = false;
+        var has_from_numeral = false;
         for (constraints) |c| {
             switch (c.origin) {
-                .from_numeral => has_from_numeral = true,
                 .from_quote => has_from_quote = true,
+                .from_numeral => has_from_numeral = true,
                 else => {},
             }
         }
-        if (has_from_numeral) {
-            const dec_var = try self.freshFromContent(try self.mkBuiltinNumberTypeContentFromKind(.dec, env), env, Region.zero());
-            _ = try self.unify(resolved.var_, dec_var, env);
-        } else if (has_from_quote) {
-            const default_str_var = try self.freshStr(env, Region.zero());
-            _ = try self.unify(resolved.var_, default_str_var, env);
+        // A var carrying both origins is left for the numeric default, which
+        // then reports the unsatisfiable from_quote constraint against Dec.
+        if (!has_from_quote or has_from_numeral) continue;
+
+        if (resolved.desc.rank == .generalized) {
+            if (!collected_pinnable) {
+                try self.collectPinnableVars(&pinnable);
+                collected_pinnable = true;
+            }
+            if (pinnable.contains(resolved.var_)) continue;
         }
+
+        const default_str_var = try self.freshStr(env, Region.zero());
+        _ = try self.unify(resolved.var_, default_str_var, env);
+    }
+
+    // Resolve the dispatch chains the defaults just unblocked, so numeric
+    // literals see their context before numeric defaulting runs.
+    if (env.deferred_static_dispatch_constraints.items.items.len > 0) {
+        try self.checkStaticDispatchConstraints(env, false);
+        try self.checkAllConstraints(env);
     }
 }
 

@@ -666,6 +666,46 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "\"hello!\"" },
     },
     .{
+        .name = "inspect: custom from_quote literal pattern dispatches through is_eq",
+        .source_kind = .module,
+        .source =
+        \\Tag := [Tag(List(U8))].{
+        \\    from_quote : List(U8) -> Try(Tag, [BadQuotedBytes(Str)])
+        \\    from_quote = |bytes| Ok(Tag(bytes))
+        \\    is_eq : Tag, Tag -> Bool
+        \\    is_eq = |a, b| match (a, b) {
+        \\        (Tag(x), Tag(y)) => x == y
+        \\    }
+        \\}
+        \\
+        \\force : Tag -> Tag
+        \\force = |t| t
+        \\
+        \\describe : Tag -> Str
+        \\describe = |tag| match tag {
+        \\    "yes" => "matched"
+        \\    _ => "other"
+        \\}
+        \\
+        \\main = (describe(force("yes")), describe(force("no")))
+        ,
+        .expected = .{ .inspect_str = "(\"matched\", \"other\")" },
+    },
+    .{
+        .name = "inspect: string literal patterns on Str keep working",
+        .source_kind = .module,
+        .source =
+        \\describe : Str -> Str
+        \\describe = |s| match s {
+        \\    "hello" => "greeting"
+        \\    _ => "other"
+        \\}
+        \\
+        \\main = (describe("hello"), describe("bye"))
+        ,
+        .expected = .{ .inspect_str = "(\"greeting\", \"other\")" },
+    },
+    .{
         .name = "custom from_quote Err is a compile-time problem",
         .source_kind = .module,
         .source =

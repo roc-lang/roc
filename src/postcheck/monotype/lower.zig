@@ -7764,7 +7764,10 @@ const BodyContext = struct {
                 .{ .dec_lit = dec.value },
             .frac_f32_literal => |value| .{ .frac_f32_lit = value },
             .frac_f64_literal => |value| .{ .frac_f64_lit = value },
-            .str_literal => |str| .{ .str_lit = try self.lowerStringLiteral(str) },
+            .str_literal => |str| if (str.conversion) |conversion|
+                try self.bindLiteralGuardPattern(conversion, ty)
+            else
+                .{ .str_lit = try self.lowerStringLiteral(str.literal) },
             .underscore => .wildcard,
         };
         return try self.builder.program.addPat(.{ .ty = ty, .data = data });
@@ -9811,7 +9814,10 @@ const BodyContext = struct {
                 .{ .dec_lit = dec.value },
             .frac_f32_literal => |value| .{ .frac_f32_lit = value },
             .frac_f64_literal => |value| .{ .frac_f64_lit = value },
-            .str_literal => |str| .{ .str_lit = try self.lowerStringLiteral(str) },
+            .str_literal => |str| if (str.conversion) |conversion|
+                try self.bindLiteralGuardPattern(conversion, ty)
+            else
+                .{ .str_lit = try self.lowerStringLiteral(str.literal) },
             .underscore => .wildcard,
         };
         return try self.builder.program.addPat(.{ .ty = ty, .data = data });
