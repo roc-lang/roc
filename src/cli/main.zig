@@ -1007,9 +1007,20 @@ fn generatePlatformHostShim(
     };
     defer bitcode_result.deinit();
 
-    // The image hash covers the entrypoint ABI and hosted table exactly.
+    // Name the scratch artifacts by the shim's deterministic inputs. The raw
+    // image bytes contain uninitialized struct padding from serialization, so
+    // hash the derived entrypoint ABI, the hosted table, and the image length
+    // instead of the bytes themselves.
     var hash = std.hash.Crc32.init();
-    hash.update(lir_image);
+    const abi_digest = try entrypointAbiDigest(ctx, lir_image, target);
+    hash.update(&abi_digest);
+    for (hosted_symbols) |symbol| {
+        hash.update(symbol);
+        hash.update(&[_]u8{0});
+    }
+    var image_len_bytes: [8]u8 = undefined;
+    std.mem.writeInt(u64, &image_len_bytes, lir_image.len, .little);
+    hash.update(&image_len_bytes);
     hash.update(if (embed_image) "embed" else "dispatch");
     for (entrypoint_names) |name| {
         hash.update(name);
