@@ -2236,6 +2236,17 @@ const BodyContext = struct {
     string_literals: []?Ast.StringLiteralId,
     loop_contexts: std.ArrayList(LoopContext),
     type_cell_revision: u64,
+    /// Literal sub-patterns on non-builtin number types collected while
+    /// lowering a match branch's pattern; each becomes an equality condition
+    /// on the branch comparing the bound value against the literal's
+    /// `from_numeral`-converted constant.
+    pattern_literal_guards: std.ArrayList(PatternLiteralGuard),
+
+    const PatternLiteralGuard = struct {
+        local: Ast.LocalId,
+        conversion: checked.CheckedExprId,
+        ty: Type.TypeId,
+    };
 
     const MaterializedArg = struct {
         pattern: checked.CheckedPatternId,
@@ -2286,10 +2297,12 @@ const BodyContext = struct {
             .string_literals = string_literals,
             .loop_contexts = .empty,
             .type_cell_revision = 0,
+            .pattern_literal_guards = .empty,
         };
     }
 
     fn deinit(self: *BodyContext) void {
+        self.pattern_literal_guards.deinit(self.allocator);
         self.loop_contexts.deinit(self.allocator);
         self.allocator.free(self.string_literals);
         self.type_cells.deinit();
@@ -7426,7 +7439,10 @@ const BodyContext = struct {
 
                 var checks = std.ArrayList(CollectedListPattern).empty;
                 defer checks.deinit(branch_ctx.allocator);
+                const literal_guards_start = branch_ctx.pattern_literal_guards.items.len;
                 const pat = try branch_ctx.lowerPatternAtTypeCollectingLists(pattern.pattern, scrutinee_ty, &checks);
+                const literal_guards = try branch_ctx.drainPatternLiteralGuards(literal_guards_start);
+                defer branch_ctx.allocator.free(literal_guards);
 
                 try branch_ctx.applyAlternativeBinderRemaps(pattern.binder_remaps);
 
@@ -7435,6 +7451,8 @@ const BodyContext = struct {
                     const guard_cond = try branch_ctx.lowerExpr(guard_expr);
                     body_lowered = try branch_ctx.builder.ifExpr(guard_cond, body_lowered, fallback, output_ty);
                 }
+
+                body_lowered = try branch_ctx.applyPatternLiteralGuards(literal_guards, body_lowered, fallback, output_ty);
 
                 var i = checks.items.len;
                 while (i > 0) {
@@ -7494,17 +7512,27 @@ const BodyContext = struct {
             self.allocator.free(sub_checks_per_elem);
         }
         for (sub_checks_per_elem) |*sub| sub.* = std.ArrayList(CollectedListPattern).empty;
+        const literal_guards_per_elem = try self.allocator.alloc([]PatternLiteralGuard, list.patterns.len);
+        defer {
+            for (literal_guards_per_elem) |guards| self.allocator.free(guards);
+            self.allocator.free(literal_guards_per_elem);
+        }
+        for (literal_guards_per_elem) |*guards| guards.* = &.{};
 
         for (list.patterns, 0..) |pattern_id, index| {
             const item_index = try self.listPatternItemIndex(index, list.patterns.len, list.rest, len, u64_ty);
             values[index] = try self.builder.lowLevelExpr(.list_get_unsafe, &.{ scrutinee, item_index }, elem_ty);
+            const guards_start = self.pattern_literal_guards.items.len;
             patterns[index] = try self.lowerPatternAtTypeCollectingLists(pattern_id, elem_ty, &sub_checks_per_elem[index]);
+            literal_guards_per_elem[index] = try self.drainPatternLiteralGuards(guards_start);
         }
 
         var rest_pat: ?Ast.PatId = null;
         var rest_value: ?Ast.ExprId = null;
         var rest_sub_checks = std.ArrayList(CollectedListPattern).empty;
         defer rest_sub_checks.deinit(self.allocator);
+        var rest_literal_guards: []PatternLiteralGuard = &.{};
+        defer self.allocator.free(rest_literal_guards);
         if (list.rest) |rest| {
             if (rest.pattern) |rest_pattern| {
                 const list_len = len orelse try self.builder.lowLevelExpr(.list_len, &.{scrutinee}, u64_ty);
@@ -7513,7 +7541,9 @@ const BodyContext = struct {
                 const rest_start = try self.builder.intLiteralExpr(rest.index, u64_ty);
                 const range = try self.sublistRangeExpr(rest_start, rest_len, u64_ty);
                 rest_value = try self.builder.lowLevelExpr(.list_sublist, &.{ scrutinee, range }, scrutinee_ty);
+                const guards_start = self.pattern_literal_guards.items.len;
                 rest_pat = try self.lowerPatternAtTypeCollectingLists(rest_pattern, scrutinee_ty, &rest_sub_checks);
+                rest_literal_guards = try self.drainPatternLiteralGuards(guards_start);
             }
         }
 
@@ -7530,6 +7560,7 @@ const BodyContext = struct {
                 const sub_scrut = try self.builder.localExpr(sub.local, sub.ty);
                 elem_success = try self.applyListCheck(sub_scrut, sub.ty, sub, elem_success, fallback, output_ty);
             }
+            elem_success = try self.applyPatternLiteralGuards(literal_guards_per_elem[index], elem_success, fallback, output_ty);
             success = try self.wrapPatternMatch(values[index], elem_ty, patterns[index], elem_success, fallback, output_ty);
         }
 
@@ -7542,6 +7573,7 @@ const BodyContext = struct {
                 const sub_scrut = try self.builder.localExpr(sub.local, sub.ty);
                 rest_success = try self.applyListCheck(sub_scrut, sub.ty, sub, rest_success, fallback, output_ty);
             }
+            rest_success = try self.applyPatternLiteralGuards(rest_literal_guards, rest_success, fallback, output_ty);
             success = try self.wrapPatternMatch(
                 rest_value orelse Common.invariant("list rest pattern had no lowered rest value"),
                 scrutinee_ty,
@@ -7679,9 +7711,18 @@ const BodyContext = struct {
                 break :blk .{ .bind = local };
             },
             .tuple => |items| .{ .tuple = try self.lowerPatternSpanAtTypesCollectingLists(items, self.builder.tupleItemTypes(ty), checks_out) },
-            .num_literal => |num| self.lowerNumPattern(num.value, ty),
-            .small_dec_literal => Common.invariant("small decimal pattern reached Monotype after numeric finalization"),
-            .dec_literal => |dec| .{ .dec_lit = dec.value },
+            .num_literal => |num| if (num.conversion) |conversion|
+                try self.bindLiteralGuardPattern(conversion, ty)
+            else
+                self.lowerNumPattern(num.value, ty),
+            .small_dec_literal => |dec| if (dec.conversion) |conversion|
+                try self.bindLiteralGuardPattern(conversion, ty)
+            else
+                Common.invariant("small decimal pattern reached Monotype after numeric finalization"),
+            .dec_literal => |dec| if (dec.conversion) |conversion|
+                try self.bindLiteralGuardPattern(conversion, ty)
+            else
+                .{ .dec_lit = dec.value },
             .frac_f32_literal => |value| .{ .frac_f32_lit = value },
             .frac_f64_literal => |value| .{ .frac_f64_lit = value },
             .str_literal => |str| .{ .str_lit = try self.lowerStringLiteral(str) },
@@ -8056,7 +8097,8 @@ const BodyContext = struct {
 
                 const pat = try branch_ctx.lowerPatternAtType(pattern.pattern, scrutinee_ty);
                 try branch_ctx.applyAlternativeBinderRemaps(pattern.binder_remaps);
-                const guard = if (branch.guard) |guard_expr| try branch_ctx.lowerExpr(guard_expr) else null;
+                const user_guard = if (branch.guard) |guard_expr| try branch_ctx.lowerExpr(guard_expr) else null;
+                const guard = try branch_ctx.conjoinPatternLiteralGuards(user_guard);
                 const body = try branch_ctx.lowerMatchBranchBody(branch.value, output);
                 branches[index] = .{
                     .pat = pat,
@@ -9715,9 +9757,18 @@ const BodyContext = struct {
             .record_destructure => |destructs| try self.lowerRecordPattern(destructs, ty),
             .list => Common.invariant("list pattern must be lowered to explicit list operations before Monotype output"),
             .tuple => |items| .{ .tuple = try self.lowerTuplePattern(items, ty) },
-            .num_literal => |num| self.lowerNumPattern(num.value, ty),
-            .small_dec_literal => Common.invariant("small decimal pattern reached Monotype after numeric finalization"),
-            .dec_literal => |dec| .{ .dec_lit = dec.value },
+            .num_literal => |num| if (num.conversion) |conversion|
+                try self.bindLiteralGuardPattern(conversion, ty)
+            else
+                self.lowerNumPattern(num.value, ty),
+            .small_dec_literal => |dec| if (dec.conversion) |conversion|
+                try self.bindLiteralGuardPattern(conversion, ty)
+            else
+                Common.invariant("small decimal pattern reached Monotype after numeric finalization"),
+            .dec_literal => |dec| if (dec.conversion) |conversion|
+                try self.bindLiteralGuardPattern(conversion, ty)
+            else
+                .{ .dec_lit = dec.value },
             .frac_f32_literal => |value| .{ .frac_f32_lit = value },
             .frac_f64_literal => |value| .{ .frac_f64_lit = value },
             .str_literal => |str| .{ .str_lit = try self.lowerStringLiteral(str) },
@@ -9782,6 +9833,92 @@ const BodyContext = struct {
             .underscore => true,
             else => false,
         };
+    }
+
+    /// Lower a literal pattern on a non-builtin number type to a fresh bind,
+    /// recording an equality condition for the enclosing match branch.
+    fn bindLiteralGuardPattern(
+        self: *BodyContext,
+        conversion: checked.CheckedExprId,
+        ty: Type.TypeId,
+    ) Allocator.Error!Ast.PatData {
+        const local = try self.builder.program.addLocal(self.builder.symbols.fresh(), ty);
+        try self.pattern_literal_guards.append(self.allocator, .{
+            .local = local,
+            .conversion = conversion,
+            .ty = ty,
+        });
+        return .{ .bind = local };
+    }
+
+    /// Compare a bound match value against a literal's converted constant,
+    /// dispatching to the type's `is_eq` method when it has one and falling
+    /// back to structural equality otherwise, mirroring `==`.
+    fn lowerPatternLiteralEq(self: *BodyContext, entry: PatternLiteralGuard) Allocator.Error!Ast.ExprId {
+        const scrutinee = try self.builder.localExpr(entry.local, entry.ty);
+        const expected = try self.lowerExpr(entry.conversion);
+        if (methodOwnerFromType(&self.builder.program.types, entry.ty)) |owner| {
+            if (self.builder.lookupMethodTargetByName(owner, "is_eq")) |lookup| {
+                var target_ctx = try self.methodTargetContext(lookup);
+                defer target_ctx.deinit();
+                const target_fn = target_ctx.checkedFunctionType(lookup.target.callable_ty);
+                const bool_ty = try self.builder.lowerType(lookup.view, target_fn.ret);
+                const arg_tys = [_]Type.TypeId{ entry.ty, entry.ty };
+                const callable_mono_ty = try self.methodTargetMonoTypeFromArgs(lookup, &arg_tys, bool_ty);
+                const callee = try self.methodTargetCalleeWithMono(lookup, callable_mono_ty);
+                return try self.builder.program.addExpr(.{ .ty = bool_ty, .data = .{ .call_proc = .{
+                    .callee = .{ .template = callee },
+                    .args = try self.builder.program.addExprSpan(&.{ scrutinee, expected }),
+                } } });
+            }
+        }
+        return try self.lowerEqualityExpr(entry.ty, scrutinee, expected, "is_eq", try self.builder.primitiveType(.bool));
+    }
+
+    /// Take ownership of the literal-equality conditions collected since
+    /// `start`, restoring the collection to that length.
+    fn drainPatternLiteralGuards(self: *BodyContext, start: usize) Allocator.Error![]PatternLiteralGuard {
+        const drained = try self.allocator.dupe(PatternLiteralGuard, self.pattern_literal_guards.items[start..]);
+        self.pattern_literal_guards.shrinkRetainingCapacity(start);
+        return drained;
+    }
+
+    /// Wrap a match-branch body so it only runs when every collected literal
+    /// equality holds, falling through to the branch's fallback otherwise.
+    fn applyPatternLiteralGuards(
+        self: *BodyContext,
+        guards: []const PatternLiteralGuard,
+        body: Ast.ExprId,
+        fallback: Ast.ExprId,
+        output_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        var result = body;
+        var i = guards.len;
+        while (i > 0) {
+            i -= 1;
+            const eq = try self.lowerPatternLiteralEq(guards[i]);
+            result = try self.builder.ifExpr(eq, result, fallback, output_ty);
+        }
+        return result;
+    }
+
+    /// Conjoin the branch's collected literal-equality conditions with its
+    /// (optional) user guard, literal conditions first.
+    fn conjoinPatternLiteralGuards(self: *BodyContext, user_guard: ?Ast.ExprId) Allocator.Error!?Ast.ExprId {
+        if (self.pattern_literal_guards.items.len == 0) return user_guard;
+        const bool_ty = try self.builder.primitiveType(.bool);
+        var cond = user_guard;
+        var i = self.pattern_literal_guards.items.len;
+        while (i > 0) {
+            i -= 1;
+            const eq = try self.lowerPatternLiteralEq(self.pattern_literal_guards.items[i]);
+            cond = if (cond) |inner|
+                try self.builder.ifExpr(eq, inner, try self.boolLiteral(false, bool_ty), bool_ty)
+            else
+                eq;
+        }
+        self.pattern_literal_guards.clearRetainingCapacity();
+        return cond;
     }
 
     fn lowerNumPattern(self: *BodyContext, value: can.CIR.IntValue, ty: Type.TypeId) Ast.PatData {

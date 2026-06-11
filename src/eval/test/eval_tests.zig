@@ -540,13 +540,44 @@ const core_tests = [_]TestCase{
         \\
         \\describe : Tally -> Str
         \\describe = |tally| match tally {
-        \\    100 => "three digits"
+        \\    100 => "one byte"
         \\    _ => "other"
         \\}
         \\
         \\main = (describe(force(999)), describe(force(7)))
         ,
-        .expected = .{ .inspect_str = "(\"three digits\", \"other\")" },
+        // digits_before_pt holds base-256 digits: 999 is two bytes, while 100
+        // and 7 are one byte each — so 7 converts equal to the pattern literal
+        // and 999 does not, proving the pattern compares converted values.
+        .expected = .{ .inspect_str = "(\"other\", \"one byte\")" },
+    },
+    .{
+        .name = "inspect: custom from_numeral codepoint literals convert in exprs and patterns",
+        .source_kind = .module,
+        .source =
+        \\Code := [Code(List(U8))].{
+        \\    from_numeral : Numeral -> Try(Code, [InvalidNumeral(Str)])
+        \\    from_numeral = |numeral| match numeral {
+        \\        Literal(parts) => Ok(Code(parts.digits_before_pt))
+        \\    }
+        \\    is_eq : Code, Code -> Bool
+        \\    is_eq = |a, b| match (a, b) {
+        \\        (Code(x), Code(y)) => x == y
+        \\    }
+        \\}
+        \\
+        \\force : Code -> Code
+        \\force = |n| n
+        \\
+        \\describe : Code -> Str
+        \\describe = |code| match code {
+        \\    'a' => "letter a"
+        \\    _ => "other"
+        \\}
+        \\
+        \\main = (describe(force('a')), describe(force('b')))
+        ,
+        .expected = .{ .inspect_str = "(\"letter a\", \"other\")" },
     },
     .{
         .name = "custom from_numeral Err is a compile-time problem",

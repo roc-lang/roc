@@ -868,6 +868,27 @@ The method registry is an exact table keyed by `(MethodOwner, MethodNameId)`.
 It is not an owner-discovery mechanism. Post-check code may use it only after a
 concrete monomorphic dispatcher type has already determined the owner.
 
+### Compile-Time Numeral Conversions
+
+A numeric literal whose target type is a non-builtin nominal type converts
+through that type's `from_numeral` method. Every such conversion with a
+concrete target type is a compile-time root (`numeral_conversion`), no matter
+where the literal sits in the AST: checking finalization evaluates the raw
+dispatch call, stores its `Try` result through `ConstStore`, unwraps `Ok` into
+the literal's stored constant, and reports `Err(InvalidNumeral(msg))` as a
+checking problem carrying the implementation's message. Runtime lowering
+restores the stored constant instead of emitting a call. Conversions whose
+target type is still polymorphic (literals inside generalized functions) keep
+the dispatch call per monomorphic specialization.
+
+Literal patterns participate through the same machinery. A literal pattern on
+a non-builtin number type carries a synthesized checked conversion expression;
+match lowering binds the matched value and tests it against the converted
+constant, dispatching to the type's `is_eq` method when it has one and using
+structural equality otherwise — exactly mirroring `==`. Checking attaches an
+`is_eq` constraint to the pattern's type so this lowering is total. Literal
+patterns on builtin number types keep their direct literal-pattern encoding.
+
 ## Shared Post-Check Model
 
 Every post-check IR has a typed IR store:

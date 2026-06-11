@@ -4854,14 +4854,19 @@ pub const CheckedPatternData = union(enum) {
     num_literal: struct {
         value: CIR.IntValue,
         kind: CIR.NumKind,
+        /// Synthesized `.num_from_numeral` checked expression for matching this
+        /// literal against a non-builtin number type; null on the builtin fast path.
+        conversion: ?CheckedExprId = null,
     },
     small_dec_literal: struct {
         value: CIR.SmallDecValue,
         has_suffix: bool,
+        conversion: ?CheckedExprId = null,
     },
     dec_literal: struct {
         value: builtins.dec.RocDec,
         has_suffix: bool,
+        conversion: ?CheckedExprId = null,
     },
     frac_f32_literal: f32,
     frac_f64_literal: f64,
@@ -5532,6 +5537,15 @@ pub const CheckedBodyStore = struct {
     pattern_binders: []CheckedPatternBinder = &.{},
     pattern_binder_by_pattern: []?PatternBinderId = &.{},
     source_node_map: CheckedSourceNodeMap = .{},
+    /// Synthesized `from_numeral` conversion expressions for literal patterns,
+    /// keyed by the pattern's source node. Pattern nodes already occupy their
+    /// slot in `source_node_map`, so these live in a dedicated table.
+    numeral_conversion_exprs: []const NumeralConversionExpr = &.{},
+
+    pub const NumeralConversionExpr = struct {
+        raw_node: u32,
+        expr: CheckedExprId,
+    };
 
     pub fn fromModule(
         allocator: Allocator,
@@ -5609,10 +5623,6 @@ pub const CheckedBodyStore = struct {
             }
         }
 
-        const expr_diverges = try allocator.alloc(bool, exprs.items.len);
-        errdefer allocator.free(expr_diverges);
-        @memset(expr_diverges, false);
-
         const statement_diverges = try allocator.alloc(bool, statements.items.len);
         errdefer allocator.free(statement_diverges);
         @memset(statement_diverges, false);
@@ -5620,6 +5630,9 @@ pub const CheckedBodyStore = struct {
         const pattern_binder_by_pattern = try allocator.alloc(?PatternBinderId, patterns.items.len);
         errdefer allocator.free(pattern_binder_by_pattern);
         @memset(pattern_binder_by_pattern, null);
+
+        var numeral_conversion_exprs = std.ArrayList(NumeralConversionExpr).empty;
+        errdefer numeral_conversion_exprs.deinit(allocator);
 
         var copier = CheckedBodyPayloadCopier{
             .allocator = allocator,
@@ -5630,6 +5643,8 @@ pub const CheckedBodyStore = struct {
             .pattern_binders = &pattern_binders,
             .pattern_binder_by_pattern = pattern_binder_by_pattern,
             .checked_types = checked_types,
+            .exprs = &exprs,
+            .numeral_conversion_exprs = &numeral_conversion_exprs,
         };
 
         node_idx = 0;
@@ -5647,6 +5662,12 @@ pub const CheckedBodyStore = struct {
                 statements.items[@intFromEnum(id)].data = try copier.copyStatementData(@enumFromInt(node_idx));
             }
         }
+
+        // Allocated after the copy pass because copying literal patterns may
+        // append synthesized numeral-conversion expressions.
+        const expr_diverges = try allocator.alloc(bool, exprs.items.len);
+        errdefer allocator.free(expr_diverges);
+        @memset(expr_diverges, false);
 
         try publishCheckedBodyDivergence(allocator, exprs.items, statements.items, expr_diverges, statement_diverges);
 
@@ -5691,6 +5712,7 @@ pub const CheckedBodyStore = struct {
             .pattern_binders = pattern_binder_slice,
             .pattern_binder_by_pattern = pattern_binder_by_pattern,
             .source_node_map = source_node_map,
+            .numeral_conversion_exprs = try numeral_conversion_exprs.toOwnedSlice(allocator),
         };
     }
 
@@ -5738,6 +5760,13 @@ pub const CheckedBodyStore = struct {
 
     pub fn statementIdForSource(self: *const CheckedBodyStore, statement: CIR.Statement.Idx) ?CheckedStatementId {
         return self.source_node_map.statement(statement);
+    }
+
+    pub fn numeralConversionExprAtRawNode(self: *const CheckedBodyStore, raw_node: u32) ?CheckedExprId {
+        for (self.numeral_conversion_exprs) |entry| {
+            if (entry.raw_node == raw_node) return entry.expr;
+        }
+        return null;
     }
 
     pub fn patternBinderForCheckedPattern(self: *const CheckedBodyStore, pattern: CheckedPatternId) ?PatternBinderId {
@@ -5836,7 +5865,9 @@ pub const CheckedBodyStore = struct {
         var iter = plans.numeral_by_node.iterator();
         while (iter.next()) |entry| {
             const raw_node = @intFromEnum(entry.key_ptr.*);
-            const checked_expr = self.source_node_map.exprAtRawNode(raw_node) orelse {
+            const checked_expr = self.source_node_map.exprAtRawNode(raw_node) orelse
+                self.numeralConversionExprAtRawNode(raw_node) orelse
+            {
                 checkedArtifactInvariant(
                     "from_numeral plan {d} points at source node {d} with no checked expression",
                     .{ @intFromEnum(entry.value_ptr.*), raw_node },
@@ -5939,6 +5970,7 @@ pub const CheckedBodyStore = struct {
     }
 
     pub fn deinit(self: *CheckedBodyStore, allocator: Allocator) void {
+        allocator.free(self.numeral_conversion_exprs);
         self.source_node_map.deinit(allocator);
         allocator.free(self.pattern_binder_by_pattern);
         allocator.free(self.pattern_binders);
@@ -6379,11 +6411,13 @@ const CheckedBodyPayloadCopier = struct {
     allocator: Allocator,
     module: TypedCIR.Module,
     names: *canonical.CanonicalNameStore,
-    source_node_map: *const CheckedSourceNodeMap,
+    source_node_map: *CheckedSourceNodeMap,
     string_builder: *CheckedStringLiteralBuilder,
     pattern_binders: *std.ArrayList(CheckedPatternBinder),
     pattern_binder_by_pattern: []?PatternBinderId,
     checked_types: *const CheckedTypePublication,
+    exprs: *std.ArrayList(CheckedExpr),
+    numeral_conversion_exprs: *std.ArrayList(CheckedBodyStore.NumeralConversionExpr),
 
     fn copyExprData(self: *@This(), expr_idx: CIR.Expr.Idx) Allocator.Error!CheckedExprData {
         const expr = self.module.expr(expr_idx).data;
@@ -6679,6 +6713,36 @@ const CheckedBodyPayloadCopier = struct {
         return checkedBuiltinForLiteralTarget(self.checked_types.store.view(), checked_ty);
     }
 
+    fn checkedPatternTypeRoot(self: *@This(), pattern_idx: CIR.Pattern.Idx) CheckedTypeId {
+        return self.checked_types.rootForSourceVar(self.module, self.module.patternType(pattern_idx)) orelse {
+            checkedArtifactInvariant("checked numeric pattern type root was not published", .{});
+        };
+    }
+
+    /// Synthesize the `.num_from_numeral` checked expression a literal pattern
+    /// converts through when its type is a non-builtin number type. The
+    /// expression is registered at the pattern's source node so dispatch-plan
+    /// attachment and compile-time root creation find it the same way they
+    /// find literal expressions.
+    fn numeralConversionExprForPattern(self: *@This(), pattern_idx: CIR.Pattern.Idx) Allocator.Error!?CheckedExprId {
+        const node = ModuleEnv.nodeIdxFrom(pattern_idx);
+        if (self.module.moduleEnvConst().numeralDispatchPlanForNode(node) == null) return null;
+        const checked_ty = self.checkedPatternTypeRoot(pattern_idx);
+        if (checkedBuiltinForLiteralTarget(self.checked_types.store.view(), checked_ty) != null) return null;
+        const id: CheckedExprId = @enumFromInt(try checkedSourceNodeIdFromLen(self.exprs.items.len));
+        try self.exprs.append(self.allocator, .{
+            .id = id,
+            .ty = checked_ty,
+            .source_region = self.module.regionAt(node),
+            .data = .{ .num_from_numeral = null },
+        });
+        try self.numeral_conversion_exprs.append(self.allocator, .{
+            .raw_node = @intFromEnum(node),
+            .expr = id,
+        });
+        return id;
+    }
+
     fn floatLiteralForExpr(self: *@This(), comptime Float: type, expr_idx: CIR.Expr.Idx) Allocator.Error!Float {
         const literal = self.module.moduleEnvConst().numeralLiteralForNode(ModuleEnv.nodeIdxFrom(expr_idx)) orelse {
             checkedArtifactInvariant("checked typed float literal had no parser-owned numeral facts", .{});
@@ -6719,9 +6783,21 @@ const CheckedBodyPayloadCopier = struct {
                 } else null,
             } },
             .tuple => |tuple| .{ .tuple = try self.copyPatternSpan(tuple.patterns) },
-            .num_literal => |num| .{ .num_literal = .{ .value = num.value, .kind = num.kind } },
-            .small_dec_literal => |dec| .{ .small_dec_literal = .{ .value = dec.value, .has_suffix = dec.has_suffix } },
-            .dec_literal => |dec| .{ .dec_literal = .{ .value = dec.value, .has_suffix = dec.has_suffix } },
+            .num_literal => |num| .{ .num_literal = .{
+                .value = num.value,
+                .kind = num.kind,
+                .conversion = try self.numeralConversionExprForPattern(pattern_idx),
+            } },
+            .small_dec_literal => |dec| .{ .small_dec_literal = .{
+                .value = dec.value,
+                .has_suffix = dec.has_suffix,
+                .conversion = if (dec.has_suffix) null else try self.numeralConversionExprForPattern(pattern_idx),
+            } },
+            .dec_literal => |dec| .{ .dec_literal = .{
+                .value = dec.value,
+                .has_suffix = dec.has_suffix,
+                .conversion = if (dec.has_suffix) null else try self.numeralConversionExprForPattern(pattern_idx),
+            } },
             .frac_f32_literal => |frac| .{ .frac_f32_literal = frac.value },
             .frac_f64_literal => |frac| .{ .frac_f64_literal = frac.value },
             .str_literal => |str| .{ .str_literal = try self.string_builder.intern(str.literal) },
@@ -12559,7 +12635,9 @@ pub const CompileTimeRootTable = struct {
 
         for (module_env.numeral_dispatch_plans.items.items) |numeral_plan| {
             const expr_idx: CIR.Expr.Idx = @enumFromInt(numeral_plan.node_idx);
-            const checked_expr = checked_bodies.exprIdForSource(expr_idx) orelse continue;
+            const checked_expr = checked_bodies.exprIdForSource(expr_idx) orelse
+                checked_bodies.numeralConversionExprAtRawNode(numeral_plan.node_idx) orelse
+                continue;
             switch (checked_bodies.exprs[@intFromEnum(checked_expr)].data) {
                 .num_from_numeral, .typed_num_from_numeral => {},
                 else => continue,

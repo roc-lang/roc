@@ -6126,6 +6126,23 @@ fn canonicalizeSingleQuote(
         .bytes = @bitCast(@as(u128, @intCast(codepoint))),
         .kind = .u128,
     };
+
+    // Base-256 digits of the codepoint, so the literal carries the numeral
+    // facts a custom from_numeral target reads.
+    var digit_buf: [4]u8 = undefined;
+    var digit_len: usize = 0;
+    var remaining: u32 = codepoint;
+    while (true) {
+        digit_buf[digit_len] = @intCast(remaining & 0xff);
+        digit_len += 1;
+        remaining >>= 8;
+        if (remaining == 0) break;
+    }
+    var digits: [4]u8 = undefined;
+    for (0..digit_len) |i| {
+        digits[i] = digit_buf[digit_len - 1 - i];
+    }
+
     if (comptime Idx == Expr.Idx) {
         const expr_idx = try self.env.addExpr(CIR.Expr{
             .e_num = .{
@@ -6133,12 +6150,14 @@ fn canonicalizeSingleQuote(
                 .kind = .int_unbound,
             },
         }, region);
+        try self.env.recordNumeralLiteral(ModuleEnv.nodeIdxFrom(expr_idx), digits[0..digit_len], &.{}, 0, false, false, false);
         return expr_idx;
     } else if (comptime Idx == Pattern.Idx) {
         const pat_idx = try self.env.addPattern(Pattern{ .num_literal = .{
             .value = value_content,
             .kind = .int_unbound,
         } }, region);
+        try self.env.recordNumeralLiteral(ModuleEnv.nodeIdxFrom(pat_idx), digits[0..digit_len], &.{}, 0, false, false, false);
         return pat_idx;
     } else {
         @compileError("Unsupported Idx type");
@@ -6189,6 +6208,25 @@ fn recordNumeralLiteralForExpr(
 ) std.mem.Allocator.Error!void {
     try self.env.recordNumeralLiteral(
         ModuleEnv.nodeIdxFrom(expr_idx),
+        self.parse_ir.store.numericDigitsBefore(literal),
+        self.parse_ir.store.numericDigitsAfter(literal),
+        literal.after_decimal_digit_count,
+        literal.isNegative(),
+        literal.kind == .frac,
+        literal.flags.had_decimal_point,
+    );
+}
+
+/// Record the exact base-256 digits of a parsed numeric literal against the
+/// CIR pattern node we just emitted, so literal patterns can dispatch through
+/// `from_numeral` when matched against a non-builtin number type.
+fn recordNumeralLiteralForPattern(
+    self: *Self,
+    pattern_idx: Pattern.Idx,
+    literal: NumericLiteral.Stored,
+) std.mem.Allocator.Error!void {
+    try self.env.recordNumeralLiteral(
+        ModuleEnv.nodeIdxFrom(pattern_idx),
         self.parse_ir.store.numericDigitsBefore(literal),
         self.parse_ir.store.numericDigitsAfter(literal),
         literal.after_decimal_digit_count,
@@ -14338,10 +14376,14 @@ pub fn canonicalizePattern(
                     const region = self.parse_ir.tokenizedRegionToRegion(e.region);
                     const literal = self.parse_ir.store.getNumericLiteral(e.literal);
                     last_pattern = switch (literal.compact) {
-                        .int => |value| try self.env.addPattern(Pattern{ .num_literal = .{
-                            .value = cirIntValue(value),
-                            .kind = .num_unbound,
-                        } }, region),
+                        .int => |value| blk: {
+                            const pat_idx = try self.env.addPattern(Pattern{ .num_literal = .{
+                                .value = cirIntValue(value),
+                                .kind = .num_unbound,
+                            } }, region);
+                            try self.recordNumeralLiteralForPattern(pat_idx, literal);
+                            break :blk pat_idx;
+                        },
                         else => try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } }),
                     };
                 },
@@ -14349,14 +14391,22 @@ pub fn canonicalizePattern(
                     const region = self.parse_ir.tokenizedRegionToRegion(e.region);
                     const literal = self.parse_ir.store.getNumericLiteral(e.literal);
                     last_pattern = switch (literal.compact) {
-                        .small_dec => |value| try self.env.addPattern(Pattern{ .small_dec_literal = .{
-                            .value = cirSmallDec(value),
-                            .has_suffix = false,
-                        } }, region),
-                        .dec => |value| try self.env.addPattern(Pattern{ .dec_literal = .{
-                            .value = builtins.dec.RocDec{ .num = value },
-                            .has_suffix = false,
-                        } }, region),
+                        .small_dec => |value| blk: {
+                            const pat_idx = try self.env.addPattern(Pattern{ .small_dec_literal = .{
+                                .value = cirSmallDec(value),
+                                .has_suffix = false,
+                            } }, region);
+                            try self.recordNumeralLiteralForPattern(pat_idx, literal);
+                            break :blk pat_idx;
+                        },
+                        .dec => |value| blk: {
+                            const pat_idx = try self.env.addPattern(Pattern{ .dec_literal = .{
+                                .value = builtins.dec.RocDec{ .num = value },
+                                .has_suffix = false,
+                            } }, region);
+                            try self.recordNumeralLiteralForPattern(pat_idx, literal);
+                            break :blk pat_idx;
+                        },
                         else => try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } }),
                     };
                 },

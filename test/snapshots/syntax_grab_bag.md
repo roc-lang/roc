@@ -2257,7 +2257,7 @@ expect {
 				(s-expr
 					(e-not-implemented))
 				(s-expr
-					(e-call (constraint-fn-var 2283)
+					(e-call (constraint-fn-var 2393)
 						(e-lookup-local
 							(p-assign (ident "match_time")))
 						(e-not-implemented)))
@@ -2384,7 +2384,7 @@ expect {
 					(e-if
 						(if-branches
 							(if-branch
-								(e-dispatch-call (method "is_gt") (constraint-fn-var 2949)
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 3059)
 									(receiver
 										(e-match
 											(match
@@ -2409,7 +2409,7 @@ expect {
 														(value
 															(e-num (value "12"))))))))
 									(args
-										(e-dispatch-call (method "times") (constraint-fn-var 2944)
+										(e-dispatch-call (method "times") (constraint-fn-var 3054)
 											(receiver
 												(e-num (value "5")))
 											(args
@@ -2424,18 +2424,18 @@ expect {
 										(e-if
 											(if-branches
 												(if-branch
-													(e-dispatch-call (method "is_lt") (constraint-fn-var 3057)
+													(e-dispatch-call (method "is_lt") (constraint-fn-var 3167)
 														(receiver
-															(e-dispatch-call (method "plus") (constraint-fn-var 3022)
+															(e-dispatch-call (method "plus") (constraint-fn-var 3132)
 																(receiver
 																	(e-num (value "13")))
 																(args
 																	(e-num (value "2")))))
 														(args
 															(e-num (value "5"))))
-													(e-dispatch-call (method "is_gte") (constraint-fn-var 3157)
+													(e-dispatch-call (method "is_gte") (constraint-fn-var 3267)
 														(receiver
-															(e-dispatch-call (method "minus") (constraint-fn-var 3122)
+															(e-dispatch-call (method "minus") (constraint-fn-var 3232)
 																(receiver
 																	(e-num (value "10")))
 																(args
@@ -2450,11 +2450,11 @@ expect {
 											(builtin)
 											(e-tag (name "True")))))
 								(if-else
-									(e-dispatch-call (method "is_lte") (constraint-fn-var 3267)
+									(e-dispatch-call (method "is_lte") (constraint-fn-var 3377)
 										(receiver
 											(e-num (value "12")))
 										(args
-											(e-dispatch-call (method "div_by") (constraint-fn-var 3262)
+											(e-dispatch-call (method "div_by") (constraint-fn-var 3372)
 												(receiver
 													(e-num (value "3")))
 												(args
@@ -2469,12 +2469,12 @@ expect {
 										(e-match
 											(match
 												(cond
-													(e-dispatch-call (method "next_static_dispatch_method") (constraint-fn-var 3333)
+													(e-dispatch-call (method "next_static_dispatch_method") (constraint-fn-var 3443)
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dispatch-call (method "static_dispatch_method") (constraint-fn-var 3300)
+																		(e-dispatch-call (method "static_dispatch_method") (constraint-fn-var 3410)
 																			(receiver
 																				(e-match
 																					(match
