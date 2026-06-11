@@ -601,7 +601,9 @@ pub const StaticDispatchPlanTable = struct {
         for (module_env.numeral_dispatch_plans.items.items) |numeral_plan| {
             const node: CIR.Node.Idx = @enumFromInt(numeral_plan.node_idx);
             const expr_idx: CIR.Expr.Idx = @enumFromInt(numeral_plan.node_idx);
-            const checked_expr = checked_bodies.exprIdForSource(expr_idx) orelse continue;
+            const checked_expr = checked_bodies.exprIdForSource(expr_idx) orelse
+                checked_bodies.numeralConversionExprAtRawNode(numeral_plan.node_idx) orelse
+                continue;
             switch (checked_bodies.exprs[@intFromEnum(checked_expr)].data) {
                 .num_from_numeral,
                 .typed_num_from_numeral,

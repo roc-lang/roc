@@ -4826,8 +4826,9 @@ fn checkPatternHelp(
                     };
 
                     // Create flex var with from_numeral constraint
-                    const flex_var = try self.mkFlexWithFromNumeralConstraint(null, num_literal_info, env);
+                    const flex_var = try self.mkFlexWithFromNumeralConstraint(ModuleEnv.nodeIdxFrom(pattern_idx), num_literal_info, env);
                     _ = try self.unify(pattern_var, flex_var, env);
+                    try self.mkPatternLiteralEqConstraint(pattern_var, env, pattern_region);
                 },
                 // Phase 5: For explicitly typed literals, use nominal types from Builtin
                 .u8 => try self.unifyWith(pattern_var, try self.mkNumberTypeContent(.u8, env), env),
@@ -4866,8 +4867,9 @@ fn checkPatternHelp(
                     pattern_region,
                 );
 
-                const flex_var = try self.mkFlexWithFromNumeralConstraint(null, num_literal_info, env);
+                const flex_var = try self.mkFlexWithFromNumeralConstraint(ModuleEnv.nodeIdxFrom(pattern_idx), num_literal_info, env);
                 _ = try self.unify(pattern_var, flex_var, env);
+                try self.mkPatternLiteralEqConstraint(pattern_var, env, pattern_region);
             }
         },
         .small_dec_literal => |dec| {
@@ -4884,8 +4886,9 @@ fn checkPatternHelp(
                     pattern_region,
                 );
 
-                const flex_var = try self.mkFlexWithFromNumeralConstraint(null, num_literal_info, env);
+                const flex_var = try self.mkFlexWithFromNumeralConstraint(ModuleEnv.nodeIdxFrom(pattern_idx), num_literal_info, env);
                 _ = try self.unify(pattern_var, flex_var, env);
+                try self.mkPatternLiteralEqConstraint(pattern_var, env, pattern_region);
             }
         },
         .runtime_error => {
@@ -8431,6 +8434,18 @@ fn getNominalOriginEnv(self: *Self, nominal_type: types_mod.NominalType) *const 
 
 /// Create a static dispatch fn like: `lhs, rhs -> ret` and assert the
 /// constraint to the lhs (receiver) var.
+/// Constrain a literal pattern's type to support equality, since matching the
+/// pattern compares the scrutinee against the literal's converted value.
+fn mkPatternLiteralEqConstraint(
+    self: *Self,
+    pattern_var: Var,
+    env: *Env,
+    region: Region,
+) Allocator.Error!void {
+    const ret_var = try self.freshBool(env, region);
+    try self.mkBinopConstraint(pattern_var, pattern_var, ret_var, self.cir.idents.is_eq, false, env, region, null);
+}
+
 fn mkBinopConstraint(
     self: *Self,
     lhs_var: Var,

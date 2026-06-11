@@ -72,6 +72,7 @@ const EffectfulExpect = problem_mod.EffectfulExpect;
 
 // Comptime errors
 const ComptimeCrash = problem_mod.ComptimeCrash;
+const ComptimeInvalidNumeral = problem_mod.ComptimeInvalidNumeral;
 const ComptimeExpectFailed = problem_mod.ComptimeExpectFailed;
 const ComptimeEvalError = problem_mod.ComptimeEvalError;
 
@@ -813,6 +814,7 @@ pub const ReportBuilder = struct {
                 return self.buildPlatformDefNotFound(data);
             },
             .comptime_crash => |data| return self.buildComptimeCrashReport(data),
+            .comptime_invalid_numeral => |data| return self.buildComptimeInvalidNumeralReport(data),
             .comptime_expect_failed => |data| return self.buildComptimeExpectFailedReport(data),
             .comptime_eval_error => |data| return self.buildComptimeEvalErrorReport(data),
             .invalid_numeric_literal => |data| return self.buildInvalidNumericLiteralReport(data),
@@ -3280,6 +3282,42 @@ pub const ReportBuilder = struct {
     }
 
     /// Build a report for compile-time crash
+    fn buildComptimeInvalidNumeralReport(self: *Self, data: ComptimeInvalidNumeral) Allocator.Error!Report {
+        var report = Report.init(self.gpa, "INVALID NUMBER", .runtime_error);
+        errdefer report.deinit();
+
+        const owned_message = try report.addOwnedString(
+            self.problems.getExtraString(data.message),
+        );
+
+        try D.renderSlice(&.{
+            D.bytes("The"),
+            D.bytes("from_numeral").withAnnotation(.inline_code),
+            D.bytes("implementation for this number literal's type rejected it:"),
+        }, self, &report);
+        try report.document.addLineBreak();
+
+        // Add source region highlighting
+        const region_info = self.module_env.calcRegionInfo(data.region);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        try D.renderSlice(&.{
+            D.bytes("It returned this error message:"),
+        }, self, &report);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(owned_message);
+
+        return report;
+    }
+
     fn buildComptimeCrashReport(self: *Self, data: ComptimeCrash) Allocator.Error!Report {
         var report = Report.init(self.gpa, "COMPTIME CRASH", .runtime_error);
         errdefer report.deinit();

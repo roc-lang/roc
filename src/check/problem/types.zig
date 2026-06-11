@@ -47,6 +47,7 @@ pub const Problem = union(enum) {
     platform_def_not_found: PlatformDefNotFound,
     platform_alias_not_found: PlatformAliasNotFound,
     comptime_crash: ComptimeCrash,
+    comptime_invalid_numeral: ComptimeInvalidNumeral,
     comptime_expect_failed: ComptimeExpectFailed,
     comptime_eval_error: ComptimeEvalError,
     invalid_numeric_literal: InvalidNumericLiteral,
@@ -96,6 +97,13 @@ pub const EffectfulExpect = struct {
 
 /// A crash that occurred during compile-time evaluation
 pub const ComptimeCrash = struct {
+    message: ExtraStringIdx,
+    region: base.Region,
+};
+
+/// A numeric literal that a custom `from_numeral` implementation rejected
+/// during compile-time evaluation
+pub const ComptimeInvalidNumeral = struct {
     message: ExtraStringIdx,
     region: base.Region,
 };

@@ -493,6 +493,187 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "(False, [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [1], 20)" },
     },
     .{
+        .name = "inspect: custom from_numeral literal pattern dispatches through is_eq",
+        .source_kind = .module,
+        .source =
+        \\Code := [Code(List(U8))].{
+        \\    from_numeral : Numeral -> Try(Code, [InvalidNumeral(Str)])
+        \\    from_numeral = |numeral| match numeral {
+        \\        Literal(parts) => Ok(Code(parts.digits_before_pt))
+        \\    }
+        \\    is_eq : Code, Code -> Bool
+        \\    is_eq = |a, b| match (a, b) {
+        \\        (Code(x), Code(y)) => x == y
+        \\    }
+        \\}
+        \\
+        \\force : Code -> Code
+        \\force = |n| n
+        \\
+        \\describe : Code -> Str
+        \\describe = |code| match code {
+        \\    42 => "yes"
+        \\    _ => "no"
+        \\}
+        \\
+        \\main = (describe(force(42)), describe(force(7)))
+        ,
+        .expected = .{ .inspect_str = "(\"yes\", \"no\")" },
+    },
+    .{
+        .name = "inspect: custom from_numeral literal pattern compares converted values not raw digits",
+        .source_kind = .module,
+        .source =
+        \\Tally := [Tally(U64)].{
+        \\    from_numeral : Numeral -> Try(Tally, [InvalidNumeral(Str)])
+        \\    from_numeral = |numeral| match numeral {
+        \\        Literal(parts) => Ok(Tally(parts.digits_before_pt.len()))
+        \\    }
+        \\    is_eq : Tally, Tally -> Bool
+        \\    is_eq = |a, b| match (a, b) {
+        \\        (Tally(x), Tally(y)) => x == y
+        \\    }
+        \\}
+        \\
+        \\force : Tally -> Tally
+        \\force = |n| n
+        \\
+        \\describe : Tally -> Str
+        \\describe = |tally| match tally {
+        \\    100 => "one byte"
+        \\    _ => "other"
+        \\}
+        \\
+        \\main = (describe(force(999)), describe(force(7)))
+        ,
+        // digits_before_pt holds base-256 digits: 999 is two bytes, while 100
+        // and 7 are one byte each — so 7 converts equal to the pattern literal
+        // and 999 does not, proving the pattern compares converted values.
+        .expected = .{ .inspect_str = "(\"other\", \"one byte\")" },
+    },
+    .{
+        .name = "inspect: custom from_numeral codepoint literals convert in exprs and patterns",
+        .source_kind = .module,
+        .source =
+        \\Code := [Code(List(U8))].{
+        \\    from_numeral : Numeral -> Try(Code, [InvalidNumeral(Str)])
+        \\    from_numeral = |numeral| match numeral {
+        \\        Literal(parts) => Ok(Code(parts.digits_before_pt))
+        \\    }
+        \\    is_eq : Code, Code -> Bool
+        \\    is_eq = |a, b| match (a, b) {
+        \\        (Code(x), Code(y)) => x == y
+        \\    }
+        \\}
+        \\
+        \\force : Code -> Code
+        \\force = |n| n
+        \\
+        \\describe : Code -> Str
+        \\describe = |code| match code {
+        \\    'a' => "letter a"
+        \\    _ => "other"
+        \\}
+        \\
+        \\main = (describe(force('a')), describe(force('b')))
+        ,
+        .expected = .{ .inspect_str = "(\"letter a\", \"other\")" },
+    },
+    .{
+        .name = "inspect: custom from_numeral fractional literal pattern dispatches through is_eq",
+        .source_kind = .module,
+        .source =
+        \\Scale := [Scale(U64)].{
+        \\    from_numeral : Numeral -> Try(Scale, [InvalidNumeral(Str)])
+        \\    from_numeral = |numeral| match numeral {
+        \\        Literal(parts) => Ok(Scale(parts.digits_after_pt_count))
+        \\    }
+        \\    is_eq : Scale, Scale -> Bool
+        \\    is_eq = |a, b| match (a, b) {
+        \\        (Scale(x), Scale(y)) => x == y
+        \\    }
+        \\}
+        \\
+        \\force : Scale -> Scale
+        \\force = |n| n
+        \\
+        \\describe : Scale -> Str
+        \\describe = |scale| match scale {
+        \\    2.5 => "one decimal"
+        \\    _ => "other"
+        \\}
+        \\
+        \\main = (describe(force(7.5)), describe(force(0.25)))
+        ,
+        .expected = .{ .inspect_str = "(\"one decimal\", \"other\")" },
+    },
+    .{
+        .name = "inspect: imported custom from_numeral converts literals in exprs and patterns",
+        .source_kind = .module,
+        .source =
+        \\import TallyMod
+        \\
+        \\force : TallyMod.Tally -> TallyMod.Tally
+        \\force = |n| n
+        \\
+        \\describe : TallyMod.Tally -> Str
+        \\describe = |tally| match tally {
+        \\    100 => "one byte"
+        \\    _ => "other"
+        \\}
+        \\
+        \\main = (describe(force(999)), describe(force(7)))
+        ,
+        .imports = &.{.{
+            .name = "TallyMod",
+            .source =
+            \\Tally := [Tally(U64)].{
+            \\    from_numeral : Numeral -> Try(Tally, [InvalidNumeral(Str)])
+            \\    from_numeral = |numeral| match numeral {
+            \\        Literal(parts) => Ok(Tally(parts.digits_before_pt.len()))
+            \\    }
+            \\    is_eq : Tally, Tally -> Bool
+            \\    is_eq = |a, b| match (a, b) {
+            \\        (Tally(x), Tally(y)) => x == y
+            \\    }
+            \\}
+            ,
+        }},
+        .expected = .{ .inspect_str = "(\"other\", \"one byte\")" },
+    },
+    .{
+        .name = "custom from_numeral Err is a compile-time problem",
+        .source_kind = .module,
+        .source =
+        \\Picky := [Picky].{
+        \\    from_numeral : Numeral -> Try(Picky, [InvalidNumeral(Str)])
+        \\    from_numeral = |_numeral| Err(InvalidNumeral("Picky rejects every numeral"))
+        \\}
+        \\
+        \\force : Picky -> Picky
+        \\force = |n| n
+        \\
+        \\main = force(42)
+        ,
+        .expected = .problem,
+    },
+    .{
+        .name = "custom from_numeral Err in an uncalled function is a compile-time problem",
+        .source_kind = .module,
+        .source =
+        \\Picky := [Picky].{
+        \\    from_numeral : Numeral -> Try(Picky, [InvalidNumeral(Str)])
+        \\    from_numeral = |_numeral| Err(InvalidNumeral("Picky rejects every numeral"))
+        \\}
+        \\
+        \\unused : {} -> Picky
+        \\unused = |_| 42
+        \\
+        \\main = "ok"
+        ,
+        .expected = .problem,
+    },
+    .{
         .name = "inspect: unconstrained empty list specialization remains replaceable until constrained",
         .source_kind = .module,
         .source =
