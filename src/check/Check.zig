@@ -9455,59 +9455,6 @@ fn staticDispatchConstraintAcceptsCandidate(
     return try self.probeUnifyWithoutRecordingProblems(method_var, constraint.fn_var);
 }
 
-fn listJoinWithListItemsMethodDef(
-    self: *Self,
-    original_env: *const ModuleEnv,
-    is_this_module: bool,
-    nominal_type: types_mod.NominalType,
-    constraint: StaticDispatchConstraint,
-    env: *Env,
-    region: Region,
-) Allocator.Error!?ModuleEnv.MethodBinding {
-    if (!constraint.fn_name.eql(self.cir.idents.join_with)) return null;
-    if (!nominal_type.ident.ident_idx.eql(self.cir.idents.list)) return null;
-
-    // The list-items helper only applies when the separator has already
-    // resolved to a concrete type; an unresolved separator (e.g. a string
-    // literal still carrying its from_quote constraint) would unify with the
-    // helper's list-shaped separator and wrongly win over plain join_with.
-    const constraint_fn = self.types.resolveVar(constraint.fn_var).desc.content.unwrapFunc() orelse return null;
-    const constraint_args = self.types.sliceVars(constraint_fn.args);
-    if (constraint_args.len != 2) return null;
-    switch (self.types.resolveVar(constraint_args[1]).desc.content) {
-        .flex, .rigid => return null,
-        else => {},
-    }
-
-    const join_list_with_ident = original_env.idents.join_list_with;
-    const helper_binding = original_env.lookupMethodBindingFromEnvAndDeclConst(
-        original_env,
-        nominal_type.sourceDeclOptional(),
-        join_list_with_ident,
-    ) orelse return null;
-    const helper_def_var: Var = ModuleEnv.varFrom(helper_binding.type_node_idx);
-
-    var probe = try self.beginProbe();
-    defer probe.rollback();
-
-    var probe_env = try self.env_pool.acquire();
-    defer self.env_pool.release(probe_env);
-    try probe_env.reset(env.rank());
-
-    const helper_var = if (is_this_module) blk: {
-        if (self.types.resolveVar(helper_def_var).desc.rank == .generalized) {
-            break :blk try self.instantiateVar(helper_def_var, &probe_env, .use_last_var);
-        }
-        break :blk helper_def_var;
-    } else blk: {
-        const copied_var = try self.copyVar(helper_def_var, original_env, region);
-        break :blk try self.instantiateVar(copied_var, &probe_env, .{ .explicit = region });
-    };
-
-    if (!try self.probeUnifyWithoutRecordingProblems(helper_var, constraint.fn_var)) return null;
-    return helper_binding;
-}
-
 fn probeUnifyWithoutRecordingProblems(
     self: *Self,
     expected: Var,
@@ -9891,14 +9838,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                             );
                             continue;
                         };
-                    } else (try self.listJoinWithListItemsMethodDef(
-                        original_env,
-                        is_this_module,
-                        nominal_type,
-                        constraint,
-                        env,
-                        region,
-                    )) orelse original_env.lookupMethodBindingFromEnvAndDeclConst(self.cir, nominal_type.sourceDeclOptional(), constraint.fn_name) orelse {
+                    } else original_env.lookupMethodBindingFromEnvAndDeclConst(self.cir, nominal_type.sourceDeclOptional(), constraint.fn_name) orelse {
                         // Method name doesn't exist in target module
                         try self.reportConstraintError(
                             deferred_constraint.var_,

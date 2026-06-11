@@ -1482,40 +1482,6 @@ Builtin :: [].{
 			List.sublist(list, { start: 0, len: take_len })
 		}
 
-		## Join a list of items into a single item, inserting the given separator between
-		## each pair. Works for any type that implements a `join_with` method, such as [Str].
-		## ```roc
-		## expect ["a", "b", "c"].join_with(", ") == "a, b, c"
-		##
-		## expect [].join_with(", ") == ""
-		## ```
-		join_with : List(item), item -> item
-			where [item.join_with : List(item), item -> item]
-		join_with = |list, joiner| {
-			Item : item
-			Item.join_with(list, joiner)
-		}
-
-		join_list_with : List(List(item)), List(item) -> List(item)
-		join_list_with = |list, joiner| {
-			len = List.len(list)
-
-			if len == 0 {
-				[]
-			} else {
-				var $index = 1
-				var $result = list_get_unsafe(list, 0)
-
-				while $index < len {
-					$result = List.concat($result, joiner)
-					$result = List.concat($result, list_get_unsafe(list, $index))
-					$index = $index + 1
-				}
-
-				$result
-			}
-		}
-
 		## Find the first element in a list that satisfies a given predicate, returning it wrapped in `Ok` if found, or `Err(NotFound)` if no such element exists.
 		## ```
 		## expect [1, 2, 3, 4].find_first(|x| x % 2 == 0) == Ok(2)
