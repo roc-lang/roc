@@ -5869,12 +5869,12 @@ pub const CheckedBodyStore = struct {
             const raw_node = @intFromEnum(entry.key_ptr.*);
             const checked_expr = self.source_node_map.exprAtRawNode(raw_node) orelse
                 self.numeralConversionExprAtRawNode(raw_node) orelse
-            {
-                checkedArtifactInvariant(
-                    "from_numeral plan {d} points at source node {d} with no checked expression",
-                    .{ @intFromEnum(entry.value_ptr.*), raw_node },
-                );
-            };
+                {
+                    checkedArtifactInvariant(
+                        "from_numeral plan {d} points at source node {d} with no checked expression",
+                        .{ @intFromEnum(entry.value_ptr.*), raw_node },
+                    );
+                };
             const data = &self.exprs[@intFromEnum(checked_expr)].data;
             switch (data.*) {
                 .num_from_numeral => data.* = .{ .num_from_numeral = entry.value_ptr.* },
