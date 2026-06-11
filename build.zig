@@ -3413,9 +3413,7 @@ pub fn build(b: *std.Build) void {
         build_archive_app.addArgs(&.{
             "build",
             "test/archive/app.roc",
-            // The dev backend has not switched to the symbol ABI yet; exercise
-            // the LLVM backend until it does.
-            "--opt=size",
+            "--opt=dev",
             b.fmt("--output={s}", .{archive_output}),
         });
         build_archive_app.step.dependOn(build_test_hosts_step);

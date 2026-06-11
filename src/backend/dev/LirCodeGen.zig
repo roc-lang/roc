@@ -9795,30 +9795,35 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
             }
 
-            const hosted_fns_offset: i32 = @intCast(@offsetOf(RocOps, "hosted_fns"));
-            const hosted_fns_count_offset: i32 = hosted_fns_offset + @as(i32, @intCast(@offsetOf(HostedFunctions, "count")));
-            const hosted_fns_ptr_offset: i32 = hosted_fns_offset + @as(i32, @intCast(@offsetOf(HostedFunctions, "fns")));
-            const hosted_entry_offset: i32 = @intCast(@as(usize, hosted.dispatch_index) * @sizeOf(builtins.host_abi.HostedFn));
+            // In object-file mode the call goes directly to the host's linker
+            // symbol; the interpreter-internal RocOps vtable is only used for
+            // in-process (JIT) evaluation.
+            if (self.generation_mode == .native_execution) {
+                const hosted_fns_offset: i32 = @intCast(@offsetOf(RocOps, "hosted_fns"));
+                const hosted_fns_count_offset: i32 = hosted_fns_offset + @as(i32, @intCast(@offsetOf(HostedFunctions, "count")));
+                const hosted_fns_ptr_offset: i32 = hosted_fns_offset + @as(i32, @intCast(@offsetOf(HostedFunctions, "fns")));
+                const hosted_entry_offset: i32 = @intCast(@as(usize, hosted.dispatch_index) * @sizeOf(builtins.host_abi.HostedFn));
 
-            if (builtin.mode == .Debug) {
-                const hosted_count_reg = try self.allocTempGeneral();
-                defer self.codegen.freeGeneral(hosted_count_reg);
-                try self.emitLoad(.w32, hosted_count_reg, roc_ops_reg, hosted_fns_count_offset);
-                try self.emitCmpImm(hosted_count_reg, @intCast(hosted.dispatch_index));
-                const count_ok_patch = try self.codegen.emitCondJump(condAbove());
-                const msg = try std.fmt.allocPrint(
-                    self.allocator,
-                    "Dev/codegen invariant violated: hosted call index {d} out of bounds for proc {d}",
-                    .{ hosted.dispatch_index, if (self.current_proc_name) |sym| sym.raw() else std.math.maxInt(u64) },
-                );
-                defer self.allocator.free(msg);
-                try self.emitRocCrashShared(msg);
-                try self.emitTrap();
-                self.codegen.patchJump(count_ok_patch, self.codegen.currentOffset());
+                if (builtin.mode == .Debug) {
+                    const hosted_count_reg = try self.allocTempGeneral();
+                    defer self.codegen.freeGeneral(hosted_count_reg);
+                    try self.emitLoad(.w32, hosted_count_reg, roc_ops_reg, hosted_fns_count_offset);
+                    try self.emitCmpImm(hosted_count_reg, @intCast(hosted.dispatch_index));
+                    const count_ok_patch = try self.codegen.emitCondJump(condAbove());
+                    const msg = try std.fmt.allocPrint(
+                        self.allocator,
+                        "Dev/codegen invariant violated: hosted call index {d} out of bounds for proc {d}",
+                        .{ hosted.dispatch_index, if (self.current_proc_name) |sym| sym.raw() else std.math.maxInt(u64) },
+                    );
+                    defer self.allocator.free(msg);
+                    try self.emitRocCrashShared(msg);
+                    try self.emitTrap();
+                    self.codegen.patchJump(count_ok_patch, self.codegen.currentOffset());
+                }
+
+                try self.emitLoad(.w64, hosted_table_reg, roc_ops_reg, hosted_fns_ptr_offset);
+                try self.emitLoad(.w64, hosted_target_reg, hosted_table_reg, hosted_entry_offset);
             }
-
-            try self.emitLoad(.w64, hosted_table_reg, roc_ops_reg, hosted_fns_ptr_offset);
-            try self.emitLoad(.w64, hosted_target_reg, hosted_table_reg, hosted_entry_offset);
 
             // Lower the call to the platform C ABI (shared classifier, same as the LLVM
             // backend and interpreter trampoline).
@@ -9830,8 +9835,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .x86_64_sysv;
             var arena_state = std.heap.ArenaAllocator.init(self.allocator);
             defer arena_state.deinit();
-            const needs_ops = layout.abi.needsRocOps(self.layout_store, arg_layouts, ret_layout);
-            const lowered = layout.abi.lower(arena_state.allocator(), self.layout_store, abi_target, arg_layouts, ret_layout, needs_ops) catch return error.OutOfMemory;
+            const lowered = layout.abi.lower(arena_state.allocator(), self.layout_store, abi_target, arg_layouts, ret_layout, false) catch return error.OutOfMemory;
 
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
 
@@ -9876,7 +9880,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try self.emitLeaStack(.XR, ret_slot);
             }
 
-            try builder.callReg(hosted_target_reg);
+            if (self.generation_mode == .native_execution) {
+                try builder.callReg(hosted_target_reg);
+            } else {
+                try builder.callRelocatable(self.store.getString(hosted.symbol), self.allocator, &self.codegen.relocations);
+            }
 
             // Register-class return: store each result register into the return slot.
             const hosted_ret_reg_0: GeneralReg = if (arch == .x86_64) .RAX else .X0;
@@ -9921,9 +9929,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const freg = if (index == 0) freg0 else freg1;
             if (comptime target.toCpuArch() == .aarch64) {
                 if (is_f64) {
-                    try self.codegen.emit.fstrRegMemUoff(.double, freg, frame_ptr, @intCast(dst_off));
+                    try self.codegen.emitStoreStackF64(dst_off, freg);
                 } else {
-                    try self.codegen.emit.fstrRegMemUoff(.single, freg, frame_ptr, @intCast(dst_off));
+                    try self.codegen.emitStoreStackF32(dst_off, freg);
                 }
             } else if (is_f64) {
                 try self.codegen.emit.movsdMemReg(frame_ptr, dst_off, freg);
@@ -13913,6 +13921,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             var callee_saved_mask: u32 = 0;
             var epilogue_offset: u32 = 0;
 
+            // Incoming C-ABI pieces that arrive on the caller's stack. On
+            // x86_64 they are copied in the body ([rbp + fixed offset]); on
+            // aarch64 the offset from the frame pointer depends on the final
+            // frame size, so the copies are emitted right after the prologue,
+            // once that size is known.
+            var incoming_stack_copies = std.ArrayList(EntryStackCopy).empty;
+            defer incoming_stack_copies.deinit(self.allocator);
+
             self.local_locations.clearRetainingCapacity();
             self.codegen.callee_saved_used = 0;
 
@@ -13932,13 +13948,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const body_start = self.codegen.currentOffset();
                 const relocs_before = self.codegen.relocations.items.len;
 
-                try self.codegen.emit.movRegReg(.w64, .X19, .X0);
-                try self.codegen.emit.movRegReg(.w64, .X20, .X1);
-                try self.codegen.emit.movRegReg(.w64, .X21, .X2);
-
-                self.roc_ops_reg = .X19;
-
-                try self.generateEntrypointProcCall(entry_proc, arg_layouts, ret_layout, .X20, .X21);
+                // The internal convention still threads a RocOps pointer; under
+                // the symbol ABI no host vtable exists, so it is null. The
+                // incoming sret pointer (if any) is captured into X20 inside
+                // generateEntrypointBodyCAbi before X19 is written.
+                try self.generateEntrypointBodyCAbi(entry_proc, arg_layouts, ret_layout, .X20, &incoming_stack_copies);
 
                 const body_epilogue_offset = self.codegen.currentOffset();
                 const actual_locals: u32 = @intCast(self.codegen.stack_offset - 16 - CodeGen.CALLEE_SAVED_AREA_SIZE);
@@ -13963,6 +13977,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     _ = try frame_builder.emitPrologue(&self.codegen.emit);
                     frame_size = frame_builder.actual_stack_alloc;
                 }
+                try self.emitEntryIncomingStackCopies(incoming_stack_copies.items, @intCast(frame_size));
                 const prologue_size_val = self.codegen.currentOffset() - prologue_start;
                 prologue_size = @intCast(prologue_size_val);
                 stack_alloc = actual_locals;
@@ -14009,19 +14024,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const body_start = self.codegen.currentOffset();
                 const relocs_before = self.codegen.relocations.items.len;
 
-                if (target.isWindows()) {
-                    try self.codegen.emit.movRegReg(.w64, .R12, .RCX);
-                    try self.codegen.emit.movRegReg(.w64, .RBX, .RDX);
-                    try self.codegen.emit.movRegReg(.w64, .R13, .R8);
-                } else {
-                    try self.codegen.emit.movRegReg(.w64, .R12, .RDI);
-                    try self.codegen.emit.movRegReg(.w64, .RBX, .RSI);
-                    try self.codegen.emit.movRegReg(.w64, .R13, .RDX);
-                }
-
-                self.roc_ops_reg = .R12;
-
-                try self.generateEntrypointProcCall(entry_proc, arg_layouts, ret_layout, .RBX, .R13);
+                // The internal convention still threads a RocOps pointer; under
+                // the symbol ABI no host vtable exists, so it is null. The
+                // incoming sret pointer (if any) is captured into RBX inside
+                // generateEntrypointBodyCAbi before R12 is written.
+                try self.generateEntrypointBodyCAbi(entry_proc, arg_layouts, ret_layout, .RBX, &incoming_stack_copies);
 
                 const body_epilogue_offset = self.codegen.currentOffset();
                 const actual_locals_x86: u32 = @intCast(-self.codegen.stack_offset - CodeGen.CALLEE_SAVED_AREA_SIZE);
@@ -14228,6 +14235,395 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             return self.saveCallReturnValue(ret_layout, needs_ret_ptr, ret_buffer_offset);
+        }
+
+        /// A C-ABI piece of an entrypoint argument that arrives on the
+        /// caller's stack. `incoming_slot` indexes the caller's 8-byte
+        /// outgoing argument slots.
+        const EntryStackCopy = struct {
+            dest_off: i32,
+            incoming_slot: u32,
+            kind: union(enum) {
+                /// Copy one slot's value into the destination, storing
+                /// `width` bytes (4 or 8).
+                value: u8,
+                /// The slot holds a pointer; copy this many bytes from it.
+                deref: u32,
+            },
+        };
+
+        /// A C-ABI piece of an entrypoint argument that arrives in a register.
+        const EntryRegCapture = struct {
+            dest_off: i32,
+            /// Store width in bytes (4 or 8).
+            width: u8,
+            reg_index: u16,
+            is_float: bool,
+        };
+
+        /// An indirectly-passed entrypoint argument whose pointer arrives in
+        /// a register; the pointer is spilled to `ptr_off` before any
+        /// register can be clobbered, then dereferenced.
+        const EntryIndirectCapture = struct {
+            dest_off: i32,
+            size: u32,
+            ptr_off: i32,
+        };
+
+        /// Generate the body of a natural C-ABI entrypoint wrapper: capture
+        /// the incoming C-ABI arguments into stack slots, call the compiled
+        /// proc through the internal convention with a null RocOps, and
+        /// marshal the result back out per the C ABI.
+        fn generateEntrypointBodyCAbi(
+            self: *Self,
+            entry_proc: lir.LIR.LirProcSpecId,
+            arg_layouts: []const layout.Idx,
+            ret_layout: layout.Idx,
+            sret_reg: GeneralReg,
+            incoming_stack_copies: *std.ArrayList(EntryStackCopy),
+        ) Allocator.Error!void {
+            const compiled = try self.compiledProcForId(entry_proc);
+            if (compiled.code_start == unresolved_proc_code_start) {
+                if (std.debug.runtime_safety) {
+                    std.debug.panic(
+                        "entrypoint proc {d} was not compiled before wrapper generation",
+                        .{@intFromEnum(entry_proc)},
+                    );
+                }
+                unreachable;
+            }
+
+            const abi_target: layout.abi.Target = if (comptime target.toCpuArch() == .aarch64)
+                .aarch64
+            else if (comptime roc_target.isWindows())
+                .x86_64_windows
+            else
+                .x86_64_sysv;
+            var arena_state = std.heap.ArenaAllocator.init(self.allocator);
+            defer arena_state.deinit();
+            const lowered = layout.abi.lower(arena_state.allocator(), self.layout_store, abi_target, arg_layouts, ret_layout, false) catch return error.OutOfMemory;
+
+            const int_param_regs = EmitType.CC.PARAM_REGS;
+            const float_param_regs = EmitType.CC.FLOAT_PARAM_REGS;
+            // Windows x64 shares one argument position counter between
+            // integer and float registers; SysV and AAPCS64 count separately.
+            const shared_arg_positions = comptime target.toCpuArch() == .x86_64 and roc_target.isWindows();
+
+            // Capture the sret pointer before anything else can clobber it.
+            if (lowered.ret == .indirect) {
+                if (comptime target.toCpuArch() == .aarch64) {
+                    try self.codegen.emit.movRegReg(.w64, sret_reg, .XR);
+                } else {
+                    try self.codegen.emit.movRegReg(.w64, sret_reg, int_param_regs[0]);
+                }
+            }
+
+            var int_idx: usize = if (lowered.ret == .indirect and comptime target.toCpuArch() == .x86_64) 1 else 0;
+            var float_idx: usize = 0;
+            var stack_slot: u32 = 0;
+
+            var reg_captures = std.ArrayList(EntryRegCapture).empty;
+            defer reg_captures.deinit(self.allocator);
+            var indirect_captures = std.ArrayList(EntryIndirectCapture).empty;
+            defer indirect_captures.deinit(self.allocator);
+
+            const arg_infos_start = self.scratch_arg_infos.top();
+
+            for (lowered.args, arg_layouts) |placement, arg_layout| {
+                switch (placement) {
+                    .none => {
+                        try self.scratch_arg_infos.append(.{
+                            .loc = .{ .immediate_i64 = 0 },
+                            .layout_idx = arg_layout,
+                            .num_regs = 0,
+                        });
+                        continue;
+                    },
+                    .registers => |pieces| {
+                        const slot_size = @max(self.entrypointParamSlotSize(arg_layout), 8);
+                        const slot = self.codegen.allocStackSlot(slot_size);
+                        for (pieces) |piece| {
+                            const dest_off = slot + @as(i32, @intCast(piece.offset));
+                            switch (piece.class) {
+                                .integer => {
+                                    const width: u8 = if (piece.size <= 4) 4 else 8;
+                                    const pos = int_idx;
+                                    int_idx += 1;
+                                    if (shared_arg_positions) float_idx = int_idx;
+                                    if (pos < int_param_regs.len) {
+                                        try reg_captures.append(self.allocator, .{
+                                            .dest_off = dest_off,
+                                            .width = width,
+                                            .reg_index = @intCast(pos),
+                                            .is_float = false,
+                                        });
+                                    } else {
+                                        try incoming_stack_copies.append(self.allocator, .{
+                                            .dest_off = dest_off,
+                                            .incoming_slot = stack_slot,
+                                            .kind = .{ .value = width },
+                                        });
+                                        stack_slot += 1;
+                                    }
+                                },
+                                .float => {
+                                    const width: u8 = if (piece.size == 8) 8 else 4;
+                                    const pos = if (shared_arg_positions) blk: {
+                                        const taken = int_idx;
+                                        int_idx += 1;
+                                        float_idx = int_idx;
+                                        break :blk taken;
+                                    } else blk: {
+                                        const taken = float_idx;
+                                        float_idx += 1;
+                                        break :blk taken;
+                                    };
+                                    if (pos < float_param_regs.len) {
+                                        try reg_captures.append(self.allocator, .{
+                                            .dest_off = dest_off,
+                                            .width = width,
+                                            .reg_index = @intCast(pos),
+                                            .is_float = true,
+                                        });
+                                    } else {
+                                        try incoming_stack_copies.append(self.allocator, .{
+                                            .dest_off = dest_off,
+                                            .incoming_slot = stack_slot,
+                                            .kind = .{ .value = width },
+                                        });
+                                        stack_slot += 1;
+                                    }
+                                },
+                            }
+                        }
+                        const loc = self.stackLocationForLayout(arg_layout, slot);
+                        try self.scratch_arg_infos.append(.{
+                            .loc = loc,
+                            .layout_idx = arg_layout,
+                            .num_regs = self.calcArgRegCount(loc, arg_layout),
+                        });
+                    },
+                    .indirect => {
+                        const runtime_layout = self.runtimeRepresentationLayoutIdx(arg_layout);
+                        const raw_size = self.layout_store.layoutSizeAlign(self.layout_store.getLayout(runtime_layout)).size;
+                        const slot_size = @max(self.entrypointParamSlotSize(arg_layout), std.mem.alignForward(u32, raw_size, 8));
+                        const slot = self.codegen.allocStackSlot(slot_size);
+
+                        if (abi_target == .x86_64_sysv) {
+                            // SysV memory-class aggregates arrive by value in
+                            // the caller's outgoing argument slots.
+                            const slot_count = (raw_size + 7) / 8;
+                            var k: u32 = 0;
+                            while (k < slot_count) : (k += 1) {
+                                try incoming_stack_copies.append(self.allocator, .{
+                                    .dest_off = slot + @as(i32, @intCast(k * 8)),
+                                    .incoming_slot = stack_slot,
+                                    .kind = .{ .value = 8 },
+                                });
+                                stack_slot += 1;
+                            }
+                        } else {
+                            // AAPCS64 and Win64 pass a pointer.
+                            const pos = int_idx;
+                            int_idx += 1;
+                            if (shared_arg_positions) float_idx = int_idx;
+                            if (pos < int_param_regs.len) {
+                                const ptr_off = self.codegen.allocStackSlot(8);
+                                try reg_captures.append(self.allocator, .{
+                                    .dest_off = ptr_off,
+                                    .width = 8,
+                                    .reg_index = @intCast(pos),
+                                    .is_float = false,
+                                });
+                                try indirect_captures.append(self.allocator, .{
+                                    .dest_off = slot,
+                                    .size = raw_size,
+                                    .ptr_off = ptr_off,
+                                });
+                            } else {
+                                try incoming_stack_copies.append(self.allocator, .{
+                                    .dest_off = slot,
+                                    .incoming_slot = stack_slot,
+                                    .kind = .{ .deref = raw_size },
+                                });
+                                stack_slot += 1;
+                            }
+                        }
+                        const loc = self.stackLocationForLayout(arg_layout, slot);
+                        try self.scratch_arg_infos.append(.{
+                            .loc = loc,
+                            .layout_idx = arg_layout,
+                            .num_regs = self.calcArgRegCount(loc, arg_layout),
+                        });
+                    },
+                }
+            }
+
+            // Pass 1: spill every incoming register piece. These stores must
+            // come before anything that could clobber an argument register.
+            for (reg_captures.items) |cap| {
+                if (cap.is_float) {
+                    const freg = float_param_regs[cap.reg_index];
+                    try self.emitEntryFloatStore(cap.dest_off, freg, cap.width == 8);
+                } else {
+                    const reg = int_param_regs[cap.reg_index];
+                    if (cap.width <= 4) {
+                        try self.emitStore(.w32, frame_ptr, cap.dest_off, reg);
+                    } else {
+                        try self.emitStore(.w64, frame_ptr, cap.dest_off, reg);
+                    }
+                }
+            }
+
+            // With every argument register captured, the RocOps register can
+            // be claimed; the symbol ABI has no host vtable, so it is null.
+            const null_ops_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .X19 else .R12;
+            try self.codegen.emitLoadImm(null_ops_reg, 0);
+            self.roc_ops_reg = null_ops_reg;
+
+            // Pass 2: x86_64 reads the caller's stack slots at a fixed frame
+            // offset, so its copies happen here in the body. (On aarch64 the
+            // offset depends on the final frame size; those copies are emitted
+            // by emitEntryIncomingStackCopies right after the prologue.)
+            if (comptime target.toCpuArch() == .x86_64) {
+                for (incoming_stack_copies.items) |copy| {
+                    const src_off = incoming_stack_arg_base_offset + @as(i32, @intCast(copy.incoming_slot)) * 8;
+                    switch (copy.kind) {
+                        .value => |width| {
+                            try self.emitLoad(.w64, scratch_reg, frame_ptr, src_off);
+                            if (width <= 4) {
+                                try self.emitStore(.w32, frame_ptr, copy.dest_off, scratch_reg);
+                            } else {
+                                try self.emitStore(.w64, frame_ptr, copy.dest_off, scratch_reg);
+                            }
+                        },
+                        .deref => |size| {
+                            try self.emitLoad(.w64, scratch_reg, frame_ptr, src_off);
+                            const temp_reg = try self.allocTempGeneral();
+                            try self.copyChunked(temp_reg, scratch_reg, 0, frame_ptr, copy.dest_off, size);
+                            self.codegen.freeGeneral(temp_reg);
+                        },
+                    }
+                }
+                incoming_stack_copies.clearRetainingCapacity();
+            }
+
+            // Dereference indirectly-passed arguments whose pointers were
+            // spilled in pass 1.
+            for (indirect_captures.items) |cap| {
+                if (cap.size == 0) continue;
+                const ptr_reg = try self.allocTempGeneral();
+                const temp_reg = try self.allocTempGeneral();
+                try self.emitLoad(.w64, ptr_reg, frame_ptr, cap.ptr_off);
+                try self.copyChunked(temp_reg, ptr_reg, 0, frame_ptr, cap.dest_off, cap.size);
+                self.codegen.freeGeneral(temp_reg);
+                self.codegen.freeGeneral(ptr_reg);
+            }
+
+            const arg_infos = self.scratch_arg_infos.sliceFromStart(arg_infos_start);
+            const result_loc = try self.callCompiledOffsetWithArgInfos(compiled.code_start, arg_infos, ret_layout);
+
+            switch (lowered.ret) {
+                .none => {},
+                .indirect => {
+                    if (self.getLayoutSize(ret_layout) > 0) {
+                        try self.storeResultToSavedPtr(result_loc, ret_layout, sret_reg, 1);
+                    }
+                    // Both SysV and Win64 require the sret pointer back in RAX.
+                    if (comptime target.toCpuArch() == .x86_64) {
+                        try self.codegen.emit.movRegReg(.w64, .RAX, sret_reg);
+                    }
+                },
+                .registers => |pieces| {
+                    const ret_size = self.getLayoutSize(ret_layout);
+                    const ret_slot = try self.ensureOnStack(result_loc, ret_size);
+                    var gp_i: usize = 0;
+                    var fp_i: usize = 0;
+                    for (pieces) |piece| {
+                        const src_off = ret_slot + @as(i32, @intCast(piece.offset));
+                        switch (piece.class) {
+                            .integer => {
+                                const reg: GeneralReg = if (gp_i == 0) ret_reg_0 else ret_reg_1;
+                                gp_i += 1;
+                                if (piece.size <= 4) {
+                                    try self.emitLoad(.w32, reg, frame_ptr, src_off);
+                                } else {
+                                    try self.emitLoad(.w64, reg, frame_ptr, src_off);
+                                }
+                            },
+                            .float => {
+                                try self.emitEntryFloatLoad(src_off, fp_i, piece.size == 8);
+                                fp_i += 1;
+                            },
+                        }
+                    }
+                },
+            }
+        }
+
+        /// Store an incoming float argument register into the frame.
+        fn emitEntryFloatStore(self: *Self, dest_off: i32, freg: FloatReg, is_f64: bool) Allocator.Error!void {
+            if (comptime target.toCpuArch() == .aarch64) {
+                if (is_f64) {
+                    try self.codegen.emitStoreStackF64(dest_off, freg);
+                } else {
+                    try self.codegen.emitStoreStackF32(dest_off, freg);
+                }
+            } else if (is_f64) {
+                try self.codegen.emit.movsdMemReg(frame_ptr, dest_off, freg);
+            } else {
+                try self.codegen.emit.movssMemReg(frame_ptr, dest_off, freg);
+            }
+        }
+
+        /// Load C-ABI float return piece `index` from the frame into the
+        /// float return register sequence (V0..V3 / XMM0..XMM1).
+        fn emitEntryFloatLoad(self: *Self, src_off: i32, index: usize, is_f64: bool) Allocator.Error!void {
+            if (comptime target.toCpuArch() == .aarch64) {
+                const fregs = [_]FloatReg{ .V0, .V1, .V2, .V3 };
+                const freg = fregs[index];
+                if (is_f64) {
+                    try self.codegen.emitLoadStackF64(freg, src_off);
+                } else {
+                    try self.codegen.emitLoadStackF32(freg, src_off);
+                }
+            } else {
+                const fregs = [_]FloatReg{ .XMM0, .XMM1 };
+                const freg = fregs[index];
+                if (is_f64) {
+                    try self.codegen.emit.movsdRegMem(freg, frame_ptr, src_off);
+                } else {
+                    try self.codegen.emit.movssRegMem(freg, frame_ptr, src_off);
+                }
+            }
+        }
+
+        /// Copy entrypoint argument pieces from the caller's outgoing stack
+        /// slots into the frame. Emitted right after the prologue on aarch64,
+        /// where the caller's slots sit at [fp + frame_total].
+        fn emitEntryIncomingStackCopies(self: *Self, copies: []const EntryStackCopy, frame_total: i32) Allocator.Error!void {
+            if (comptime target.toCpuArch() != .aarch64) {
+                std.debug.assert(copies.len == 0);
+                return;
+            }
+            for (copies) |copy| {
+                const src_off = frame_total + @as(i32, @intCast(copy.incoming_slot)) * 8;
+                switch (copy.kind) {
+                    .value => |width| {
+                        try self.emitLoad(.w64, .IP0, frame_ptr, src_off);
+                        if (width <= 4) {
+                            try self.emitStore(.w32, frame_ptr, copy.dest_off, .IP0);
+                        } else {
+                            try self.emitStore(.w64, frame_ptr, copy.dest_off, .IP0);
+                        }
+                    },
+                    .deref => |size| {
+                        if (size == 0) continue;
+                        try self.emitLoad(.w64, .IP1, frame_ptr, src_off);
+                        try self.copyChunked(.IP0, .IP1, 0, frame_ptr, copy.dest_off, size);
+                    },
+                }
+            }
         }
 
         fn generateEntrypointProcCall(
