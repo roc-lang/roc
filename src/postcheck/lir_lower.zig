@@ -2300,6 +2300,7 @@ const Lowerer = struct {
         }
         const program_local = self.program.locals.items[index];
         const lir_local = try self.addTemp(program_local.ty);
+        try self.result.store.setLocalName(lir_local, self.program.localName(local));
         self.local_map[index] = lir_local;
         return lir_local;
     }

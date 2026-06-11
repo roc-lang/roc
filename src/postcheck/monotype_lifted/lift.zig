@@ -57,6 +57,8 @@ pub fn run(
     owned.expr_locs = .empty;
     var stmt_locs = owned.stmt_locs;
     owned.stmt_locs = .empty;
+    var local_names = owned.local_names;
+    owned.local_names = .empty;
 
     var program = Ast.Program.init(
         allocator,
@@ -78,6 +80,7 @@ pub fn run(
         source_files,
         expr_locs,
         stmt_locs,
+        local_names,
         owned.next_symbol,
     );
     name_store = undefined;
@@ -98,6 +101,7 @@ pub fn run(
     source_files = undefined;
     expr_locs = undefined;
     stmt_locs = undefined;
+    local_names = undefined;
     program.runtime_schema_requests = runtime_schema_requests;
     runtime_schema_requests = undefined;
     errdefer program.deinit();

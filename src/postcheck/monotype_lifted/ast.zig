@@ -127,6 +127,9 @@ pub const Program = struct {
     expr_locs: std.ArrayList(base.SourceLoc),
     /// Source location per statement, parallel to `stmts`.
     stmt_locs: std.ArrayList(base.SourceLoc),
+    /// Source-level name per local, parallel to `locals` (empty for
+    /// compiler-generated temporaries; moved from Monotype).
+    local_names: std.ArrayList([]const u8),
     /// Ambient location recorded by `addExpr`/`addStmt`. Passes that add
     /// nodes set this so synthetic nodes inherit a source location.
     current_loc: base.SourceLoc,
@@ -151,6 +154,7 @@ pub const Program = struct {
         source_files: std.ArrayList([]const u8),
         expr_locs: std.ArrayList(base.SourceLoc),
         stmt_locs: std.ArrayList(base.SourceLoc),
+        local_names: std.ArrayList([]const u8),
         next_symbol: u32,
     ) Program {
         return .{
@@ -178,11 +182,16 @@ pub const Program = struct {
             .source_files = source_files,
             .expr_locs = expr_locs,
             .stmt_locs = stmt_locs,
+            .local_names = local_names,
             .current_loc = base.SourceLoc.none,
         };
     }
 
     pub fn deinit(self: *Program) void {
+        for (self.local_names.items) |name| {
+            if (name.len > 0) self.allocator.free(name);
+        }
+        self.local_names.deinit(self.allocator);
         self.stmt_locs.deinit(self.allocator);
         self.expr_locs.deinit(self.allocator);
         for (self.source_files.items) |file| self.allocator.free(file);
@@ -249,6 +258,11 @@ pub const Program = struct {
         return try self.addLocalWithBinder(symbol, ty, null);
     }
 
+    /// Source-level name of a local; empty for compiler-generated temporaries.
+    pub fn localName(self: *const Program, id: LocalId) []const u8 {
+        return self.local_names.items[@intFromEnum(id)];
+    }
+
     pub fn addLocalWithBinder(
         self: *Program,
         symbol: Common.Symbol,
@@ -257,6 +271,7 @@ pub const Program = struct {
     ) std.mem.Allocator.Error!LocalId {
         const id: LocalId = @enumFromInt(@as(u32, @intCast(self.locals.items.len)));
         try self.locals.append(self.allocator, .{ .id = id, .symbol = symbol, .ty = ty, .binder = binder });
+        try self.local_names.append(self.allocator, "");
         return id;
     }
 

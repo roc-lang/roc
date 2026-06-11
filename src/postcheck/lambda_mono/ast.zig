@@ -300,6 +300,9 @@ pub const Program = struct {
     expr_locs: std.ArrayList(base.SourceLoc),
     /// Source location per statement, parallel to `stmts`.
     stmt_locs: std.ArrayList(base.SourceLoc),
+    /// Source-level name per local, parallel to `locals` (empty for
+    /// compiler-generated temporaries; owned by this program).
+    local_names: std.ArrayList([]const u8),
     /// Ambient location recorded by `addExpr`/`addStmt`. Lowering sets this on
     /// entry to each lifted node, so synthetic nodes inherit a location.
     current_loc: base.SourceLoc,
@@ -334,11 +337,16 @@ pub const Program = struct {
             .source_files = .empty,
             .expr_locs = .empty,
             .stmt_locs = .empty,
+            .local_names = .empty,
             .current_loc = base.SourceLoc.none,
         };
     }
 
     pub fn deinit(self: *Program) void {
+        for (self.local_names.items) |name| {
+            if (name.len > 0) self.allocator.free(name);
+        }
+        self.local_names.deinit(self.allocator);
         self.stmt_locs.deinit(self.allocator);
         self.expr_locs.deinit(self.allocator);
         for (self.source_files.items) |file| self.allocator.free(file);
@@ -413,7 +421,21 @@ pub const Program = struct {
     ) std.mem.Allocator.Error!LocalId {
         const id: LocalId = @enumFromInt(@as(u32, @intCast(self.locals.items.len)));
         try self.locals.append(self.allocator, .{ .id = id, .symbol = symbol, .ty = ty, .binder = binder });
+        try self.local_names.append(self.allocator, "");
         return id;
+    }
+
+    /// Record the source-level name of a local (dupes; empty means none).
+    pub fn setLocalName(self: *Program, id: LocalId, name: []const u8) std.mem.Allocator.Error!void {
+        if (name.len == 0) return;
+        const slot = &self.local_names.items[@intFromEnum(id)];
+        if (slot.len > 0) self.allocator.free(slot.*);
+        slot.* = try self.allocator.dupe(u8, name);
+    }
+
+    /// Source-level name of a local; empty for compiler-generated temporaries.
+    pub fn localName(self: *const Program, id: LocalId) []const u8 {
+        return self.local_names.items[@intFromEnum(id)];
     }
 
     pub fn addExprSpan(self: *Program, ids: []const ExprId) std.mem.Allocator.Error!Span(ExprId) {

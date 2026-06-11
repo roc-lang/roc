@@ -1618,6 +1618,7 @@ const Builder = struct {
             const lowered_ty = try self.lowerType(fn_view, capture_ty);
             const value_expr = try fn_ctx.restoreConstNode(store_view, fn_view, capture.value, capture_ty);
             const local = try self.program.addLocalWithBinder(self.symbols.fresh(), lowered_ty, capture.binder);
+            try bindLocalName(self.program, fn_view, local, capture.binder);
             const pat = try self.program.addPat(.{ .ty = lowered_ty, .data = .{ .bind = local } });
             const previous = fn_ctx.binders.get(capture.binder);
             try fn_ctx.binders.put(capture.binder, local);
@@ -7199,6 +7200,7 @@ const BodyContext = struct {
         defer self.allocator.free(pattern_items);
         for (merge_binders, 0..) |merge, i| {
             const local = try self.builder.program.addLocalWithBinder(self.builder.symbols.fresh(), merge.ty, merge.binder);
+            try bindLocalName(self.builder.program, self.view, local, merge.binder);
             try self.binders.put(merge.binder, local);
             pattern_items[i] = try self.builder.program.addPat(.{ .ty = merge.ty, .data = .{ .bind = local } });
         }
@@ -7539,12 +7541,14 @@ const BodyContext = struct {
             .assign => |binder| {
                 if (self.binders.get(binder) == null) {
                     const local = try self.builder.program.addLocalWithBinder(self.builder.symbols.fresh(), ty, binder);
+                    try bindLocalName(self.builder.program, self.view, local, binder);
                     try self.binders.put(binder, local);
                 }
             },
             .as => |as| {
                 if (self.binders.get(as.binder) == null) {
                     const local = try self.builder.program.addLocalWithBinder(self.builder.symbols.fresh(), ty, as.binder);
+                    try bindLocalName(self.builder.program, self.view, local, as.binder);
                     try self.binders.put(as.binder, local);
                 }
                 try self.preRegisterPatternBinders(as.pattern, ty);
@@ -7622,6 +7626,7 @@ const BodyContext = struct {
             .assign => |binder| blk: {
                 const local = if (self.binders.get(binder)) |existing| existing else inner: {
                     const new_local = try self.builder.program.addLocalWithBinder(self.builder.symbols.fresh(), ty, binder);
+                    try bindLocalName(self.builder.program, self.view, new_local, binder);
                     try self.binders.put(binder, new_local);
                     break :inner new_local;
                 };
@@ -7630,6 +7635,7 @@ const BodyContext = struct {
             .as => |as| blk: {
                 const local = if (self.binders.get(as.binder)) |existing| existing else inner: {
                     const new_local = try self.builder.program.addLocalWithBinder(self.builder.symbols.fresh(), ty, as.binder);
+                    try bindLocalName(self.builder.program, self.view, new_local, as.binder);
                     try self.binders.put(as.binder, new_local);
                     break :inner new_local;
                 };
@@ -8168,6 +8174,7 @@ const BodyContext = struct {
         defer self.allocator.free(pattern_items);
         for (merge_binders, 0..) |merge, i| {
             const local = try self.builder.program.addLocalWithBinder(self.builder.symbols.fresh(), merge.ty, merge.binder);
+            try bindLocalName(self.builder.program, self.view, local, merge.binder);
             try self.binders.put(merge.binder, local);
             pattern_items[i] = try self.builder.program.addPat(.{ .ty = merge.ty, .data = .{ .bind = local } });
         }
@@ -8423,6 +8430,7 @@ const BodyContext = struct {
         if (merge_binders.len == 1) {
             const merge = merge_binders[0];
             const local = try self.builder.program.addLocalWithBinder(self.builder.symbols.fresh(), merge.ty, merge.binder);
+            try bindLocalName(self.builder.program, self.view, local, merge.binder);
             try self.binders.put(merge.binder, local);
             return try self.builder.program.addPat(.{ .ty = state_ty, .data = .{ .bind = local } });
         }
@@ -8431,6 +8439,7 @@ const BodyContext = struct {
         defer self.allocator.free(pattern_items);
         for (merge_binders, 0..) |merge, i| {
             const local = try self.builder.program.addLocalWithBinder(self.builder.symbols.fresh(), merge.ty, merge.binder);
+            try bindLocalName(self.builder.program, self.view, local, merge.binder);
             try self.binders.put(merge.binder, local);
             pattern_items[i] = try self.builder.program.addPat(.{ .ty = merge.ty, .data = .{ .bind = local } });
         }
@@ -9276,6 +9285,7 @@ const BodyContext = struct {
         if (carries.len == 0) Common.invariant("empty loop carry pattern requested");
         if (carries.len == 1) {
             const local = try self.builder.program.addLocalWithBinder(self.builder.symbols.fresh(), carries[0].ty, carries[0].binder);
+            try bindLocalName(self.builder.program, self.view, local, carries[0].binder);
             try self.binders.put(carries[0].binder, local);
             return try self.builder.program.addPat(.{ .ty = ty, .data = .{ .bind = local } });
         }
@@ -9284,6 +9294,7 @@ const BodyContext = struct {
         defer self.allocator.free(items);
         for (carries, 0..) |carry, i| {
             const local = try self.builder.program.addLocalWithBinder(self.builder.symbols.fresh(), carry.ty, carry.binder);
+            try bindLocalName(self.builder.program, self.view, local, carry.binder);
             try self.binders.put(carry.binder, local);
             items[i] = try self.builder.program.addPat(.{ .ty = carry.ty, .data = .{ .bind = local } });
         }
@@ -9678,11 +9689,13 @@ const BodyContext = struct {
             => Common.invariant("non-runtime checked pattern reached Monotype lowering"),
             .assign => |binder| blk: {
                 const local = try self.builder.program.addLocalWithBinder(self.builder.symbols.fresh(), ty, binder);
+                try bindLocalName(self.builder.program, self.view, local, binder);
                 try self.binders.put(binder, local);
                 break :blk .{ .bind = local };
             },
             .as => |as| blk: {
                 const local = try self.builder.program.addLocalWithBinder(self.builder.symbols.fresh(), ty, as.binder);
+                try bindLocalName(self.builder.program, self.view, local, as.binder);
                 try self.binders.put(as.binder, local);
                 break :blk .{ .as = .{
                     .pattern = try self.lowerPatternAtType(as.pattern, ty),
@@ -9782,6 +9795,26 @@ const BodyContext = struct {
         };
     }
 };
+
+/// Record a local's source-level name from its pattern binder. An `assign`
+/// pattern's region is exactly the identifier token's span, so the name is
+/// the source text at that region. Binders from other pattern forms (`as`)
+/// stay unnamed.
+fn bindLocalName(
+    program: *Ast.Program,
+    view: ModuleView,
+    local: Ast.LocalId,
+    binder: checked.PatternBinderId,
+) Allocator.Error!void {
+    const entry = view.bodies.pattern_binders[@intFromEnum(binder)];
+    const pattern = view.bodies.patterns[@intFromEnum(entry.pattern)];
+    if (pattern.data != .assign) return;
+    const source = view.module_env.common.source;
+    const start = pattern.source_region.start.offset;
+    const end = pattern.source_region.end.offset;
+    if (start >= end or end > source.len) return;
+    try program.setLocalName(local, source[start..end]);
+}
 
 fn moduleView(view: checked.ImportedModuleView) ModuleView {
     return .{

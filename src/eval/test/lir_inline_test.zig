@@ -1405,3 +1405,37 @@ test "LIR statements carry source locations under optimizing inline mode" {
     }
     try std.testing.expect(located > 0);
 }
+
+test "LIR locals carry source-level names" {
+    const allocator = std.testing.allocator;
+
+    const source =
+        \\module [main]
+        \\
+        \\compute : U64 -> U64
+        \\compute = |n| {
+        \\    first_part = n * 2
+        \\    second_part = first_part + 1
+        \\    second_part
+        \\}
+        \\
+        \\main : U64
+        \\main = compute(20)
+    ;
+
+    var lowered_source = try lowerModule(allocator, source, .none);
+    defer lowered_source.deinit(allocator);
+
+    const store = &lowered_source.lowered.lir_result.store;
+    try std.testing.expectEqual(store.locals.items.len, store.local_names.items.len);
+
+    var found_first = false;
+    var found_second = false;
+    for (0..store.locals.items.len) |i| {
+        const name = store.localName(@enumFromInt(i)) orelse continue;
+        if (std.mem.eql(u8, name, "first_part")) found_first = true;
+        if (std.mem.eql(u8, name, "second_part")) found_second = true;
+    }
+    try std.testing.expect(found_first);
+    try std.testing.expect(found_second);
+}

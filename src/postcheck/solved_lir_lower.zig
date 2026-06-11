@@ -3210,6 +3210,7 @@ const Lowerer = struct {
             return existing;
         }
         const lir_local = try self.addTemp(ty);
+        try self.result.store.setLocalName(lir_local, self.solved.lifted.localName(local));
         self.local_map[index] = lir_local;
         return lir_local;
     }
@@ -3749,6 +3750,20 @@ fn cloneLiftedProgram(allocator: std.mem.Allocator, program: *const Lifted.Progr
         .source_files = source_files,
         .expr_locs = try cloneArrayList(base.SourceLoc, allocator, &program.expr_locs),
         .stmt_locs = try cloneArrayList(base.SourceLoc, allocator, &program.stmt_locs),
+        .local_names = blk: {
+            var names: std.ArrayList([]const u8) = .empty;
+            errdefer {
+                for (names.items) |name| {
+                    if (name.len > 0) allocator.free(name);
+                }
+                names.deinit(allocator);
+            }
+            try names.ensureTotalCapacityPrecise(allocator, program.local_names.items.len);
+            for (program.local_names.items) |name| {
+                names.appendAssumeCapacity(if (name.len == 0) "" else try allocator.dupe(u8, name));
+            }
+            break :blk names;
+        },
         .current_loc = program.current_loc,
     };
 }

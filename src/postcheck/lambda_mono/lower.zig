@@ -870,6 +870,7 @@ const Lowerer = struct {
         if (self.local_map[index]) |existing| return existing;
         const lifted_local = self.solved.lifted.locals.items[index];
         const lowered = try self.program.addLocalWithBinder(lifted_local.symbol, ty, lifted_local.binder);
+        try self.program.setLocalName(lowered, self.solved.lifted.localName(@enumFromInt(index)));
         self.local_map[index] = lowered;
         return lowered;
     }

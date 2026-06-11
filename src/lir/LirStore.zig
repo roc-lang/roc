@@ -47,6 +47,9 @@ source_file_ends: std.ArrayList(u32),
 cf_stmt_locs: std.ArrayList(base.SourceLoc),
 /// Source location per proc, parallel to `proc_specs`.
 proc_locs: std.ArrayList(base.SourceLoc),
+/// Source-level name per local, parallel to `locals`: an index into
+/// `strings`, or `no_local_name` for compiler-generated temporaries.
+local_names: std.ArrayList(u32),
 /// Ambient location recorded by `addCFStmt`/`addProcSpec`. Lowering sets
 /// this on entry to each source node it lowers.
 current_loc: base.SourceLoc,
@@ -69,6 +72,7 @@ pub fn init(allocator: Allocator) Self {
         .source_file_ends = std.ArrayList(u32).empty,
         .cf_stmt_locs = std.ArrayList(base.SourceLoc).empty,
         .proc_locs = std.ArrayList(base.SourceLoc).empty,
+        .local_names = std.ArrayList(u32).empty,
         .current_loc = base.SourceLoc.none,
     };
 }
@@ -88,6 +92,24 @@ pub fn deinit(self: *Self) void {
     self.source_file_ends.deinit(self.allocator);
     self.cf_stmt_locs.deinit(self.allocator);
     self.proc_locs.deinit(self.allocator);
+    self.local_names.deinit(self.allocator);
+}
+
+/// Sentinel in `local_names` for locals with no source-level name.
+pub const no_local_name: u32 = std.math.maxInt(u32);
+
+/// Record the source-level name of a local (empty means none).
+pub fn setLocalName(self: *Self, id: LocalId, name: []const u8) Allocator.Error!void {
+    if (name.len == 0) return;
+    const idx = try self.insertString(name);
+    self.local_names.items[@intFromEnum(id)] = @intFromEnum(idx);
+}
+
+/// Source-level name of a local, or null for compiler-generated temporaries.
+pub fn localName(self: *const Self, id: LocalId) ?[]const u8 {
+    const raw = self.local_names.items[@intFromEnum(id)];
+    if (raw == no_local_name) return null;
+    return self.getString(@enumFromInt(raw));
 }
 
 /// Copies the source file table from a lowering stage's program.
@@ -209,6 +231,7 @@ pub fn getStringLiteralBacking(self: *const Self, literal: lir_defs.StrLiteral) 
 pub fn addLocal(self: *Self, local: Local) Allocator.Error!LocalId {
     const idx = self.locals.items.len;
     try self.locals.append(self.allocator, local);
+    try self.local_names.append(self.allocator, no_local_name);
     return @enumFromInt(@as(u32, @intCast(idx)));
 }
 
