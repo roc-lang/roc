@@ -299,9 +299,7 @@ my_concat = Str.concat
 # Complex pipeline: chaining static dispatch methods with a lambda
 format_names : List(Str) -> Str
 format_names = |names|
-	names
-		.map(|name| name.trim())
-		.join_with(", ")
+	Str.join_with(names.map(|name| name.trim()), ", ")
 		->(|joined| {
 			if joined.is_empty() "No names provided" else "Names: ${joined}"
 		})
