@@ -580,6 +580,34 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "(\"letter a\", \"other\")" },
     },
     .{
+        .name = "inspect: custom from_numeral fractional literal pattern dispatches through is_eq",
+        .source_kind = .module,
+        .source =
+        \\Scale := [Scale(U64)].{
+        \\    from_numeral : Numeral -> Try(Scale, [InvalidNumeral(Str)])
+        \\    from_numeral = |numeral| match numeral {
+        \\        Literal(parts) => Ok(Scale(parts.digits_after_pt_count))
+        \\    }
+        \\    is_eq : Scale, Scale -> Bool
+        \\    is_eq = |a, b| match (a, b) {
+        \\        (Scale(x), Scale(y)) => x == y
+        \\    }
+        \\}
+        \\
+        \\force : Scale -> Scale
+        \\force = |n| n
+        \\
+        \\describe : Scale -> Str
+        \\describe = |scale| match scale {
+        \\    2.5 => "one decimal"
+        \\    _ => "other"
+        \\}
+        \\
+        \\main = (describe(force(7.5)), describe(force(0.25)))
+        ,
+        .expected = .{ .inspect_str = "(\"one decimal\", \"other\")" },
+    },
+    .{
         .name = "inspect: imported custom from_numeral converts literals in exprs and patterns",
         .source_kind = .module,
         .source =
