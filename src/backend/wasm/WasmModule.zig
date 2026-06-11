@@ -750,12 +750,7 @@ fn resolveUndefinedFunctionSymbols(
     for (self.linking.symbol_table.items, 0..) |sym, i| {
         if (!self.isUndefinedFunctionNamed(sym, name)) continue;
         if (sym.index >= self.imports.items.len) return error.InvalidSection;
-        if (self.imports.items[sym.index].type_idx != defined_type) {
-            const it = self.func_types.items[self.imports.items[sym.index].type_idx];
-            const dt = self.func_types.items[defined_type];
-            std.log.warn("wasm symbol type mismatch: {s} (import type {d}: {any}, defined type {d}: {any})", .{ name, self.imports.items[sym.index].type_idx, it.params, defined_type, dt.params });
-            return error.FunctionTypeMismatch;
-        }
+        if (self.imports.items[sym.index].type_idx != defined_type) return error.FunctionTypeMismatch;
         if (first_match == null) first_match = @intCast(i);
     }
 

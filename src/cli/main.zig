@@ -759,7 +759,6 @@ pub fn main(init: std.process.Init) Allocator.Error!void {
             else => {
                 // All other errors: problems were already recorded/rendered by the
                 // command handlers; exit cleanly below without a stack trace.
-                std.debug.print("DEBUG swallowed err: {s}\n", .{@errorName(err)});
             },
         }
         // Exit cleanly without showing a stack trace to the user.
