@@ -750,7 +750,12 @@ fn resolveUndefinedFunctionSymbols(
     for (self.linking.symbol_table.items, 0..) |sym, i| {
         if (!self.isUndefinedFunctionNamed(sym, name)) continue;
         if (sym.index >= self.imports.items.len) return error.InvalidSection;
-        if (self.imports.items[sym.index].type_idx != defined_type) return error.FunctionTypeMismatch;
+        if (self.imports.items[sym.index].type_idx != defined_type) {
+            const it = self.func_types.items[self.imports.items[sym.index].type_idx];
+            const dt = self.func_types.items[defined_type];
+            std.log.warn("wasm symbol type mismatch: {s} (import type {d}: {any}, defined type {d}: {any})", .{ name, self.imports.items[sym.index].type_idx, it.params, defined_type, dt.params });
+            return error.FunctionTypeMismatch;
+        }
         if (first_match == null) first_match = @intCast(i);
     }
 
@@ -2033,8 +2038,14 @@ pub const NoLinkObjectContractError = error{
 };
 
 /// Verify that a no-link app object exposes only app definitions and wasm object ABI imports.
+/// Function imports are the wasm object encoding of undefined symbols; under
+/// the symbol ABI the app object legitimately references the platform's
+/// runtime and hosted symbols, so `env` function imports are permitted and
+/// resolve at final link (or stay imports in hostless archives).
 pub fn verifyNoLinkObjectContract(self: *const Self) NoLinkObjectContractError!void {
-    if (self.imports.items.len != 0) return error.UnexpectedFunctionImport;
+    for (self.imports.items) |imp| {
+        if (!std.mem.eql(u8, imp.module_name, "env")) return error.UnexpectedFunctionImport;
+    }
 
     for (self.global_imports.items) |imp| {
         if (!std.mem.eql(u8, imp.module_name, "env") or !isAllowedObjectAbiGlobal(imp.field_name)) {
@@ -2054,7 +2065,7 @@ pub fn verifyNoLinkObjectContract(self: *const Self) NoLinkObjectContractError!v
         if (!sym.isUndefined()) continue;
         const name = sym.resolveName(self.imports.items, self.global_imports.items, self.table_imports.items) orelse return error.UnexpectedUndefinedSymbol;
         switch (sym.kind) {
-            .function => return error.UnexpectedUndefinedFunctionSymbol,
+            .function => {},
             .global => if (!isAllowedObjectAbiGlobal(name)) return error.UnexpectedUndefinedSymbol,
             .table => if (!std.mem.eql(u8, name, "__indirect_function_table")) return error.UnexpectedUndefinedSymbol,
             .data, .section, .event => return error.UnexpectedUndefinedSymbol,
@@ -5699,7 +5710,9 @@ test "verifyNoLinkObjectContract - rejects undefined Roc builtin function symbol
         .index = 0,
     });
 
-    try std.testing.expectError(error.UnexpectedUndefinedFunctionSymbol, module.verifyNoLinkObjectContract());
+    // Undefined function symbols are the object encoding of symbol-ABI
+    // references; they are permitted.
+    try module.verifyNoLinkObjectContract();
 }
 
 test "verifyNoLinkObjectContract - rejects function imports and non-env ABI imports" {
@@ -5711,6 +5724,17 @@ test "verifyNoLinkObjectContract - rejects function imports and non-env ABI impo
 
         const type_idx = try module.addFuncType(&.{}, &.{});
         _ = try module.addFunctionImportWithSymbol("env", "roc_alloc", type_idx);
+
+        // Symbol-ABI references to platform symbols are env function imports.
+        try module.verifyNoLinkObjectContract();
+    }
+
+    {
+        var module = Self.init(allocator);
+        defer module.deinit();
+
+        const type_idx = try module.addFuncType(&.{}, &.{});
+        _ = try module.addFunctionImportWithSymbol("not_env", "roc_alloc", type_idx);
 
         try std.testing.expectError(error.UnexpectedFunctionImport, module.verifyNoLinkObjectContract());
     }

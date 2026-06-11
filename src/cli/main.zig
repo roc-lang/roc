@@ -759,6 +759,7 @@ pub fn main(init: std.process.Init) Allocator.Error!void {
             else => {
                 // All other errors: problems were already recorded/rendered by the
                 // command handlers; exit cleanly below without a stack trace.
+                std.debug.print("DEBUG swallowed err: {s}\n", .{@errorName(err)});
             },
         }
         // Exit cleanly without showing a stack trace to the user.
@@ -4041,27 +4042,13 @@ fn writeDevWasmObject(
     }
 
     var wasm_module = backend.wasm.WasmModule.init(ctx.gpa);
-    errdefer wasm_module.deinit();
+    // Ownership of the module moves into the codegen at initWithModule below;
+    // free it here only if we fail before that point.
+    var wasm_module_owned_here = true;
+    errdefer if (wasm_module_owned_here) wasm_module.deinit();
     wasm_module.addMemoryImport();
     const table_symbol = try wasm_module.addTableImportWithSymbol();
     const stack_pointer_symbol = try wasm_module.addStackPointerImportWithSymbol();
-
-    const builtins_bytes = BuiltinsObjects.forTarget(.wasm32);
-    if (builtins_bytes.len > 0) {
-        var builtins_module = backend.wasm.WasmModule.preload(ctx.gpa, builtins_bytes, true) catch |err| {
-            std.log.err("Failed to preload wasm builtins: {}", .{err});
-            return err;
-        };
-        defer builtins_module.deinit();
-
-        var merge_result = try wasm_module.mergeModuleForObject(&builtins_module);
-        merge_result.deinit();
-    }
-
-    const builtin_symbols = backend.wasm.BuiltinSignatures.populateForRelocs(&wasm_module) catch |err| {
-        std.log.err("Failed to locate wasm builtin symbols after object merge: {}", .{err});
-        return err;
-    };
 
     var codegen = backend.wasm.WasmCodeGen.initWithModule(
         ctx.gpa,
@@ -4069,11 +4056,35 @@ fn writeDevWasmObject(
         &lowered.lir_result.layouts,
         wasm_module,
     );
+    wasm_module_owned_here = false;
     defer codegen.deinit();
-    codegen.configureBuiltinRelocs(builtin_symbols);
     codegen.configureStackPointerReloc(stack_pointer_symbol);
     codegen.configureTableReloc(table_symbol);
     codegen.configureRelocatableObject();
+
+    // Register the symbol-ABI imports while the module has no defined
+    // functions yet; a function import added later would shift every defined
+    // function index.
+    codegen.configureSymbolAbi();
+    try codegen.registerHostedSymbolTargets(lowered.lir_result.store.getProcSpecs());
+
+    const builtins_bytes = BuiltinsObjects.forTargetExtern(.wasm32);
+    if (builtins_bytes.len > 0) {
+        var builtins_module = backend.wasm.WasmModule.preload(ctx.gpa, builtins_bytes, true) catch |err| {
+            std.log.err("Failed to preload wasm builtins: {}", .{err});
+            return err;
+        };
+        defer builtins_module.deinit();
+
+        var merge_result = try codegen.module.mergeModuleForObject(&builtins_module);
+        merge_result.deinit();
+    }
+
+    const builtin_symbols = backend.wasm.BuiltinSignatures.populateForRelocs(&codegen.module) catch |err| {
+        std.log.err("Failed to locate wasm builtin symbols after object merge: {}", .{err});
+        return err;
+    };
+    codegen.configureBuiltinRelocs(builtin_symbols);
 
     try codegen.registerIndirectCallTypes();
     try codegen.compileAllProcSpecs(lowered.lir_result.store.getProcSpecs());
@@ -4198,7 +4209,7 @@ fn rocBuildWasmSurgical(
     try exportConfiguredWasmEntrypoints(&wasm_module);
     wasm_module.removeMemoryAndTableImports();
 
-    const builtins_bytes = BuiltinsObjects.forTarget(.wasm32);
+    const builtins_bytes = BuiltinsObjects.forTargetExtern(.wasm32);
     if (builtins_bytes.len > 0) {
         var builtins_module = backend.wasm.WasmModule.preload(ctx.gpa, builtins_bytes, true) catch |err| {
             std.log.err("Failed to preload wasm builtins: {}", .{err});
@@ -4226,6 +4237,8 @@ fn rocBuildWasmSurgical(
     codegen.configureBuiltinRelocs(builtin_symbols);
 
     try codegen.registerIndirectCallTypes();
+    codegen.configureSymbolAbi();
+    try codegen.registerHostedSymbolTargets(lowered.lir_result.store.getProcSpecs());
     try codegen.compileAllProcSpecs(lowered.lir_result.store.getProcSpecs());
 
     var host_to_app_map: std.ArrayList(backend.wasm.WasmModule.HostToAppEntry) = .empty;
