@@ -975,19 +975,23 @@ fn generatePlatformHostShim(
         };
     }
 
-    // Hosted dispatch table symbols, ordered by dispatch index.
+    // Hosted dispatch table symbols, ordered by dispatch index. Multiple proc
+    // specs may share a dispatch index (specializations of the same hosted
+    // function); they all carry the same symbol.
     var hosted_count: usize = 0;
     for (view.store.getProcSpecs()) |spec| {
-        if (spec.hosted != null) hosted_count += 1;
+        const hosted = spec.hosted orelse continue;
+        hosted_count = @max(hosted_count, @as(usize, hosted.dispatch_index) + 1);
     }
     const hosted_symbols = try ctx.arena.alloc([]const u8, hosted_count);
+    for (hosted_symbols) |*symbol| symbol.* = "";
     for (view.store.getProcSpecs()) |spec| {
         const hosted = spec.hosted orelse continue;
-        if (hosted.dispatch_index >= hosted_symbols.len) {
-            return ctx.fail(.{ .shim_generation_failed = .{ .err = error.InvalidLirImage } });
-        }
         hosted_symbols[hosted.dispatch_index] = view.store.getString(hosted.symbol);
     }
+    // Hosted functions the app never references have no LIR proc spec and
+    // leave gaps; the interpreter can only dispatch through existing hosted
+    // procs, so gap entries are never called and stay null in the table.
 
     var codegen = llvm_codegen.MonoLlvmCodeGen.initForLinkedObject(ctx.gpa, &view.store, std_target);
     codegen.layout_store = &view.layouts;
@@ -1978,6 +1982,7 @@ fn rocRunDefaultApp(ctx: *CliCtx, args: cli_args.RunArgs, original_source: []con
     var hosted_fn_array = [_]echo_platform.host_abi.HostedFn{echo_platform.host_abi.hostedFn(&echo_platform.echoHostedFn)};
     var echo_env = echo_platform.EchoEnv{ .std_io = ctx.io.std_io };
     var roc_ops = echo_platform.makeDefaultRocOps(&echo_env, &hosted_fn_array);
+    echo_platform.g_roc_ops = &roc_ops;
     var cli_args_list = try echo_platform.buildCliArgs(args.app_args, &roc_ops);
 
     var result_buf: [16]u8 align(16) = undefined;
@@ -6009,6 +6014,7 @@ fn runInterpreterTestRoots(
     var hosted_fn_array = [_]echo_platform.host_abi.HostedFn{echo_platform.host_abi.hostedFn(&echo_platform.echoHostedFn)};
     var echo_env_test = echo_platform.EchoEnv{ .std_io = ctx.io.std_io };
     var roc_ops = echo_platform.makeDefaultRocOps(&echo_env_test, &hosted_fn_array);
+    echo_platform.g_roc_ops = &roc_ops;
     var interpreter = try eval.LirInterpreter.init(
         ctx.gpa,
         &lowered.lir_result.store,

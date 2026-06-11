@@ -61,12 +61,11 @@ pub const Error = error{ TooManyRegisters, TooManyStackBytes, UnsupportedArch };
 
 /// Call hosted function `target` with the platform C ABI. `args_buf` holds the arguments
 /// packed in Roc layout order (the interpreter's existing buffer); `ret_buf` receives the
-/// return value. `roc_ops` is threaded as the leading argument iff the signature needs it.
+/// return value. Hosted functions take their natural C ABI: no RocOps is passed.
 pub fn call(
     store: *const Store,
     arena: std.mem.Allocator,
     target: *const anyopaque,
-    roc_ops: *RocOps,
     arg_layouts: []const Idx,
     ret_layout: Idx,
     args_buf: [*]const u8,
@@ -81,8 +80,9 @@ pub fn call(
         else => return Error.UnsupportedArch,
     };
 
-    const needs_ops = layout.abi.needsRocOps(store, arg_layouts, ret_layout);
-    const lowered = layout.abi.lower(arena, store, target_abi, arg_layouts, ret_layout, needs_ops) catch return Error.TooManyRegisters;
+    // Hosted functions take their natural C ABI under the symbol ABI: the host
+    // reaches its own runtime operations directly, so no leading *RocOps.
+    const lowered = layout.abi.lower(arena, store, target_abi, arg_layouts, ret_layout, false) catch return Error.TooManyRegisters;
 
     var gp: [max_gp]u64 = @splat(0);
     var sse: [max_sse]u128 = @splat(0);
@@ -106,12 +106,6 @@ pub fn call(
             gp[gp_n] = @intFromPtr(ret_ptr);
             gp_n += 1;
         }
-    }
-
-    // The leading *RocOps occupies the first integer register.
-    if (lowered.leading_ops) {
-        gp[gp_n] = @intFromPtr(roc_ops);
-        gp_n += 1;
     }
 
     for (lowered.args, arg_offsets, arg_layouts) |placement, arg_offset, arg_layout| {

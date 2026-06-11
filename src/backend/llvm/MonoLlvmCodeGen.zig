@@ -375,6 +375,12 @@ pub const MonoLlvmCodeGen = struct {
         defer fn_consts.deinit(self.allocator);
         const dummy_fn_ty = builder.fnType(.void, &.{}, .normal) catch return error.OutOfMemory;
         for (hosted_symbols) |symbol| {
+            // Hosted functions the app never references leave null entries;
+            // dispatch can only reach indices that have LIR hosted procs.
+            if (symbol.len == 0) {
+                try fn_consts.append(self.allocator, builder.nullConst(ptr_ty) catch return error.OutOfMemory);
+                continue;
+            }
             const fn_name = builder.strtabString(symbol) catch return error.OutOfMemory;
             const func = builder.addFunction(dummy_fn_ty, fn_name, .default) catch return error.OutOfMemory;
             func.setLinkage(.extern_weak, &builder);
