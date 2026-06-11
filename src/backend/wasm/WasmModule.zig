@@ -4501,10 +4501,10 @@ test "preload — parses real Zig-compiled wasm host object" {
     // Should have relocation entries for code
     try std.testing.expect(module.reloc_code.entries.items.len > 0);
 
-    // The host imports roc__main — verify we can find it by name
+    // The host imports the app's roc_main entrypoint — verify we can find it by name
     var found_roc_main = false;
     for (module.imports.items) |imp| {
-        if (std.mem.eql(u8, imp.field_name, "roc__main")) {
+        if (std.mem.eql(u8, imp.field_name, "roc_main")) {
             found_roc_main = true;
             break;
         }
