@@ -2893,8 +2893,14 @@ fn checkPlatformHostedSection(self: *Self) std.mem.Allocator.Error!void {
         while (key_it.next()) |key| self.gpa.free(key.*);
         declared.deinit();
     }
-    for (self.imported_modules) |imported_env| {
-        const all_defs = imported_env.store.sliceDefs(imported_env.all_defs);
+    // Walk owner modules (direct imports plus their transitive public
+    // dependencies), since hosted functions can live in modules the platform
+    // root never imports directly. Within each module, walk global value defs,
+    // not all_defs: hosted functions declared as associated items of (possibly
+    // nested) type modules are hoisted into global_value_defs only, and the
+    // hosted dispatch catalog scans the same list.
+    for (self.owner_modules) |imported_env| {
+        const all_defs = imported_env.store.sliceDefs(imported_env.global_value_defs);
         for (all_defs) |def_idx| {
             const def = imported_env.store.getDef(def_idx);
             const expr = imported_env.store.getExpr(def.expr);

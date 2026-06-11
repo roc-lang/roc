@@ -4678,7 +4678,7 @@ fn addPlatformHostedItems(
 
     for (self.parse_ir.store.symbolMapEntrySlice(hosted)) |entry_idx| {
         const entry = self.parse_ir.store.getSymbolMapEntry(entry_idx);
-        const func_ident = self.parse_ir.tokens.resolveIdentifier(entry.func) orelse continue;
+        const func_ident = try self.hostedEntryFuncIdent(entry) orelse continue;
         const module_ident = if (entry.module) |module_tok|
             self.parse_ir.tokens.resolveIdentifier(module_tok)
         else
@@ -4690,6 +4690,27 @@ fn addPlatformHostedItems(
             .symbol = symbol_idx,
         });
     }
+}
+
+/// Resolve a hosted entry's function name within its module. Functions on
+/// nested type modules span several tokens (Foo.Idx.get! is the function
+/// `Idx.get!` in module `Foo`); the tokens between the module and the final
+/// function name are exactly the nested type segments, so the qualified name
+/// is their texts joined with dots.
+fn hostedEntryFuncIdent(self: *Self, entry: AST.SymbolMapEntry) std.mem.Allocator.Error!?Ident.Idx {
+    const direct = self.parse_ir.tokens.resolveIdentifier(entry.func) orelse return null;
+    const module_tok = entry.module orelse return direct;
+    if (entry.func == module_tok + 1) return direct;
+
+    var text = std.ArrayList(u8).empty;
+    defer text.deinit(self.env.gpa);
+    var tok = module_tok + 1;
+    while (tok <= entry.func) : (tok += 1) {
+        const segment = self.parse_ir.tokens.resolveIdentifier(tok) orelse return null;
+        if (text.items.len != 0) try text.append(self.env.gpa, '.');
+        try text.appendSlice(self.env.gpa, self.env.getIdent(segment));
+    }
+    return try self.env.insertIdent(Ident.for_text(text.items));
 }
 
 /// Platform provides maps linker symbol strings to platform functions:
