@@ -362,7 +362,10 @@ pub const MonoLlvmCodeGen = struct {
         self.builder = &builder;
         defer self.builder = null;
 
-        if (!builder.strip) try self.setupDebugInfo(&builder, module_name);
+        if (!builder.strip) {
+            try self.setupDebugInfo(&builder, module_name);
+            if (self.target.ofmt == .elf) try self.embedGdbScript(&builder);
+        }
 
         const procs = self.store.getProcSpecs();
         try self.compileAllProcSpecs(procs);
@@ -438,6 +441,42 @@ pub const MonoLlvmCodeGen = struct {
         ) catch return error.OutOfMemory;
     }
 
+    /// Inlines the gdb pretty-printer script into the binary's
+    /// .debug_gdb_scripts section (entry kind 4 = inlined Python text), so
+    /// gdb auto-loads formatters that match the compiler that built the
+    /// binary. The section is non-allocatable ("MS" flags), so it survives
+    /// --gc-sections and never gets mapped at runtime.
+    fn embedGdbScript(self: *MonoLlvmCodeGen, builder: *LlvmBuilder) Error!void {
+        const script = @embedFile("debugger/roc_gdb.py");
+        var aw: std.Io.Writer.Allocating = .init(self.allocator);
+        defer aw.deinit();
+        const w = &aw.writer;
+        w.writeAll(
+            \\.pushsection ".debug_gdb_scripts","MS",@progbits,1
+            \\.byte 4
+            \\.ascii "roc-formatters\n"
+            \\
+        ) catch return error.OutOfMemory;
+        var lines = std.mem.splitScalar(u8, script, '\n');
+        while (lines.next()) |line| {
+            w.writeAll(".ascii \"") catch return error.OutOfMemory;
+            for (line) |byte| {
+                switch (byte) {
+                    '"' => w.writeAll("\\\"") catch return error.OutOfMemory,
+                    '\\' => w.writeAll("\\\\") catch return error.OutOfMemory,
+                    else => w.writeByte(byte) catch return error.OutOfMemory,
+                }
+            }
+            w.writeAll("\\n\"\n") catch return error.OutOfMemory;
+        }
+        w.writeAll(
+            \\.byte 0
+            \\.popsection
+            \\
+        ) catch return error.OutOfMemory;
+        builder.finishModuleAsm(&aw) catch return error.OutOfMemory;
+    }
+
     /// DIFile metadata for one source file table entry (interned by the
     /// builder, so repeated calls are cheap).
     fn debugFileFor(self: *MonoLlvmCodeGen, builder: *LlvmBuilder, file: u32) Error!LlvmBuilder.Metadata {
@@ -484,12 +523,15 @@ pub const MonoLlvmCodeGen = struct {
         ) catch return error.OutOfMemory;
     }
 
-    /// `Str` and `List` share the same three-word runtime representation.
+    /// `Str` and `List` are both three words starting with a bytes pointer,
+    /// but the order of their remaining two fields differs.
     fn debugSequenceType(
         self: *MonoLlvmCodeGen,
         builder: *LlvmBuilder,
         name: []const u8,
         elem_ptr_ty: LlvmBuilder.Metadata,
+        second_field: []const u8,
+        third_field: []const u8,
         size_bits: u64,
         align_bits: u64,
     ) Error!LlvmBuilder.Metadata {
@@ -507,7 +549,7 @@ pub const MonoLlvmCodeGen = struct {
                 0,
             ) catch return error.OutOfMemory,
             builder.debugMemberType(
-                builder.metadataString("length") catch return error.OutOfMemory,
+                builder.metadataString(second_field) catch return error.OutOfMemory,
                 null,
                 self.debug_compile_unit.unwrap(),
                 0,
@@ -517,7 +559,7 @@ pub const MonoLlvmCodeGen = struct {
                 word_bits,
             ) catch return error.OutOfMemory,
             builder.debugMemberType(
-                builder.metadataString("capacity") catch return error.OutOfMemory,
+                builder.metadataString(third_field) catch return error.OutOfMemory,
                 null,
                 self.debug_compile_unit.unwrap(),
                 0,
@@ -565,7 +607,7 @@ pub const MonoLlvmCodeGen = struct {
                             word_bits,
                             0,
                         ) catch return error.OutOfMemory;
-                        return try self.debugSequenceType(builder, "Str", bytes_ptr, size_bits, align_bits);
+                        return try self.debugSequenceType(builder, "Str", bytes_ptr, "capacity_or_alloc_ptr", "length", size_bits, align_bits);
                     },
                     .int => {
                         const precision = scalar.getInt();
@@ -644,7 +686,7 @@ pub const MonoLlvmCodeGen = struct {
                     word_bits,
                     0,
                 ) catch return error.OutOfMemory;
-                return try self.debugSequenceType(builder, "List", elem_ptr, size_bits, align_bits);
+                return try self.debugSequenceType(builder, "List", elem_ptr, "length", "capacity_or_alloc_ptr", size_bits, align_bits);
             },
             .struct_ => {
                 const struct_idx = lay.getStruct().idx;
