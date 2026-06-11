@@ -36,11 +36,11 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "r"))
-		(e-dispatch-call (method "to") (constraint-fn-var 107)
-			(receiver
-				(e-num (value "1")))
-			(args
-				(e-num (value "5"))))))
+		(e-call (constraint-fn-var 196)
+			(e-lookup-external
+				(builtin))
+			(e-num (value "1"))
+			(e-num (value "5")))))
 ~~~
 # TYPES
 ~~~clojure

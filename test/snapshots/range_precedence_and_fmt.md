@@ -48,16 +48,16 @@ r = 1..<n + 1
 		(e-num (value "3")))
 	(d-let
 		(p-assign (ident "r"))
-		(e-dispatch-call (method "until") (constraint-fn-var 144)
-			(receiver
-				(e-num (value "1")))
-			(args
-				(e-dispatch-call (method "plus") (constraint-fn-var 106)
-					(receiver
-						(e-lookup-local
-							(p-assign (ident "n"))))
-					(args
-						(e-num (value "1"))))))))
+		(e-call (constraint-fn-var 233)
+			(e-lookup-external
+				(builtin))
+			(e-num (value "1"))
+			(e-dispatch-call (method "plus") (constraint-fn-var 231)
+				(receiver
+					(e-lookup-local
+						(p-assign (ident "n"))))
+				(args
+					(e-num (value "1")))))))
 ~~~
 # TYPES
 ~~~clojure

@@ -1,6 +1,6 @@
-//! Type-checking tests for range expressions (`..<` / `..=`).
-//! Ranges desugar to `until`/`to` static dispatch returning Iter(num).
-//! Also tests for Iter.exclusive_range / Iter.inclusive_range constructors.
+//! Type-checking tests for range expressions (`..<` / `..=`), which desugar in
+//! canonicalization to `Iter.exclusive_range` / `Iter.inclusive_range`
+//! constructor calls returning Iter(num); also covers those constructors directly.
 
 const TestEnv = @import("./TestEnv.zig");
 
@@ -78,13 +78,13 @@ test "annotation on the range result pins the bound type" {
     try test_env.assertDefType("r", "Iter(U8)");
 }
 
-test "range over generic operands carries an until where-constraint" {
+test "range over generic operands carries the constructor's where-constraint" {
     const source =
         \\f = |start, finish| start..<finish
     ;
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
-    try test_env.assertLastDefTypeContains("until");
+    try test_env.assertLastDefTypeContains("is_lt");
 }
 
 test "range bounds must unify with each other" {
@@ -103,8 +103,9 @@ test "range bounds must unify with each other" {
 }
 
 test "inclusive range bounds must unify with each other" {
-    // Same path as the exclusive case, but through `..=` / `to`, guarding
-    // against the two operators' error paths diverging in a future refactor.
+    // Same path as the exclusive case, but through `..=` /
+    // `Iter.inclusive_range`, guarding against the two operators' error paths
+    // diverging in a future refactor.
     const source =
         \\bad = 1..="five"
     ;
@@ -113,13 +114,15 @@ test "inclusive range bounds must unify with each other" {
     try test_env.assertFirstTypeError("TYPE MISMATCH");
 }
 
-test "range over a non-numeric nominal reports missing until method" {
+test "range over a non-numeric nominal reports a missing-constraint error" {
     const source =
         \\bad = "a"..<"z"
     ;
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
-    try test_env.assertOneTypeError("MISSING METHOD");
+    // Calibrated against the desugared `Iter.exclusive_range` call: Str does not
+    // satisfy the constructor's `is_lt` where-constraint.
+    try test_env.assertFirstTypeError("MISSING METHOD");
 }
 
 test "for loop consumes a range" {

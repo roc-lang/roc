@@ -128,62 +128,56 @@ for range syntax; to/until are untouched for now."
 
 ## Task 2: Retarget the Check range arm to the constructors (jj commit 2)
 
+**REVISED after a blocker + user decision.** The original Task 2 ("rewrite the binop in Check into an `e_type_dispatch_call`") is IMPOSSIBLE as specced: `e_type_dispatch_call` carries its dispatcher exclusively as a `type_var_alias_stmt: Statement.Idx` that must point to a canonicalization-produced `s_type_var_alias` statement (consumers at `static_dispatch_registry.zig:573` and `checked_artifact.zig:3964` unconditionally read `.s_type_var_alias.type_var_anno`), and Check can NEVER create CIR nodes (node-index ↔ type-var-index are 1:1; `preflightForTypeChecking` only reserves span room). **Decision (user): canonicalization desugars ranges directly to a plain `e_call`** of the generic constructor — the exact proven form qualified builtin calls already take (`Str.is_empty(...)` canonicalizes to `e_call { func: e_lookup_external (builtin), ... }`, verified in `test/snapshots/arrow_qualified_functions.md`). A new `CalledVia.range` variant records provenance for error messages. Consequences: the CIR `Binop.Op.range_to_excluding/range_to_including` ops and the dedicated Check arm are REMOVED (ranges are no longer binops in CIR); the chained-range diagnostic STAYS in Can (it inspects AST operator tokens, before desugar); parse/formatter are untouched (AST still has range bin_op nodes).
+
 **Files:**
-- Modify: `src/check/Check.zig` (the `.range_to_excluding, .range_to_including` arm in `checkBinopExpr`, ~line 8270; model the rewrite on the existing type-dispatch rewrite at ~line 6540-6585 which calls `replaceExprWithTypeDispatchCall`)
-- Modify: `src/check/test/range_test.zig` (the assertion that referenced `until`)
+- Modify: `src/base/mod.zig` (`CalledVia` enum ~line 62: append a `range` variant with a doc comment, like `string_interpolation`)
+- Modify: `src/canonicalize/Can.zig` (the `finish_binop` range handling ~line 9897: desugar to `e_call` instead of `e_binop`)
+- Modify: `src/canonicalize/Expression.zig` (remove `range_to_excluding`/`range_to_including` from `Binop.Op` — they're the LAST two variants, so removal is encoding-stable)
+- Modify: `src/canonicalize/RocEmitter.zig` (drop the two ops from `binopToStr` + precedence switch)
+- Modify: `src/check/Check.zig` (DELETE the `.range_to_excluding, .range_to_including` arm in `checkBinopExpr`; ranges flow through the ordinary `.e_call` path)
+- Modify: `src/canonicalize/ModuleEnv.zig` (`CommonIdents`: add `exclusive_range`/`inclusive_range` idents if Can needs interned idents to build the lookup) + `test/serialization_size_check.zig` if so
+- Modify: `src/canonicalize/test/range_test.zig` (canonicalization tests now expect `e_call`, not `e_binop`)
+- Modify: `src/check/test/range_test.zig` (recalibrate desugar-dependent assertions; fix stale header comment)
 - Regenerate: the 8 `test/snapshots/range_*.md`
 
-Context: `replaceExprWithTypeDispatchCall(store, expr_idx, type_var_alias_stmt, method_name, method_name_region, args, constraint_fn_var)` (NodeStore.zig ~1264) rewrites an expr into an `e_type_dispatch_call` — dispatch on a *type* (here `Iter`) for an associated function. `Iter`'s type statement index is already available as `self.builtin_ctx.builtin_indices.iter_type` (used by `mkIterVar` at Check.zig:1241). The new method-name idents (`exclusive_range`/`inclusive_range`) must be interned — add them to `CommonIdents` (the `until`/`to` idents added previously are the model: struct field + `insert()` + `find()` in `src/canonicalize/ModuleEnv.zig`). Type-dispatch calls resolve + lower through existing machinery (`monotype/lower.zig` `.type_dispatch_call => lowerDispatchExpr`).
+- [ ] **Step 2.1: Investigate the lookup-synthesis mechanism FIRST**
 
-- [ ] **Step 2.1: Add `exclusive_range` / `inclusive_range` idents**
+Find how Can canonicalizes a qualified builtin call like `Iter.custom(...)` / `Str.is_empty(...)` into `e_call { func: e_lookup_external, ... }`: which function resolves (type ident, member ident) → the `e_lookup_external` payload (Builtin module import idx + target node idx + member ident). `Iter` is auto-imported (`builtin_auto_imported_types`, Can.zig ~856). Can legally creates nodes, so the range desugar synthesizes the same func node programmatically. If the resolution genuinely cannot be synthesized without source tokens, STOP and report BLOCKED with specifics.
 
-In `src/canonicalize/ModuleEnv.zig` `CommonIdents`: add `exclusive_range`/`inclusive_range` fields + `insert()` (`Ident.for_text("exclusive_range")` / `"inclusive_range"`) + `find()` entries, mirroring how `until`/`to` were added. (Note: `until`/`to` idents may be removed in Task 3; leave them for now.) The serialization size check (`test/serialization_size_check.zig`) will need bumping by the 2 new idents — update it.
+- [ ] **Step 2.2: TDD — update can + check tests to describe the new desugaring**
 
-- [ ] **Step 2.2: Update the check unit test first (TDD: make it describe the new desugaring)**
+- `src/canonicalize/test/range_test.zig`: the two tests asserting `binop.op == .range_to_excluding/.range_to_including` must instead assert the canonicalized expr is an `e_call` (and, if cheap, that `called_via == .range`). The chained-range test (`1..<5..<10` → `e_runtime_error` with `range_op_chained`) stays as is.
+- `src/check/test/range_test.zig`: the test asserting `assertLastDefTypeContains("until")` for `|start, finish| start..<finish` now expects the constructor's constraints (likely `is_lt`; calibrate on the red run). Error tests (`1..<"five"` TYPE MISMATCH, `"a"..<"z"` MISSING METHOD) should still hold via the call-arg/where-constraint paths but CALIBRATE the exact titles from the red run. Fix the stale header comment (lines 1-3) to one coherent statement about desugaring to the constructors.
+Run both: `zig run .claude/zig-test-llm.zig -- run-test-zig-module-can -- --test-filter "range"` and `... run-test-zig-module-check -- --test-filter "range"` → expect FAIL (still old desugar).
 
-In `src/check/test/range_test.zig`, the test `"range over generic operands carries an until where-constraint"` asserts `assertLastDefTypeContains("until")`. After retargeting, a polymorphic `|start, finish| start..<finish` will carry the constructor's constraints instead. Update the assertion to match the new reality — determine the actual rendered type on the red run (likely contains `is_lt`/`add_checked` rather than `until`) and pin it. Keep the `Iter(Dec)` / `Iter(U8)` / for-loop tests unchanged (they should still hold).
+- [ ] **Step 2.3: Add `CalledVia.range` and desugar in Can**
 
-Run: `zig run .claude/zig-test-llm.zig -- run-test-zig-module-check -- --test-filter "range"`
-Expected: FAIL (arm still dispatches to `to`/`until`; assertion mismatch).
+Append `range` to `CalledVia` (`src/base/mod.zig:62`) with a doc comment ("This call is the result of desugaring range syntax, e.g. `1..<5` becomes `Iter.exclusive_range(1, 5)`"). In Can's `finish_binop` range handling (where `op` would be `range_to_excluding`/`range_to_including`): after the existing chained-range AST check, instead of building an `e_binop`, synthesize the func `e_lookup_external` for `Iter.exclusive_range`/`Iter.inclusive_range` (mechanism from Step 2.1), build the args span from the already-canonicalized lhs/rhs, and `addExpr` an `e_call { func, args, called_via = .range }` with the binop's region. Then remove the two ops from `Binop.Op` and fix every exhaustive switch the compiler reports (RocEmitter `binopToStr` + precedence; the Check arm — delete it entirely; anything else the compiler finds).
 
-- [ ] **Step 2.3: Retarget the arm**
+- [ ] **Step 2.4: Green the tests**
 
-Rewrite the `.range_to_excluding, .range_to_including` arm in `checkBinopExpr`:
-- Keep the range-specific validation that produces good errors: unify `lhs_var` with `rhs_var` (bounds must match) with the existing range error context; on failure set expr to `.err` and return.
-- Pick the method ident: `range_to_excluding => exclusive_range`, `range_to_including => inclusive_range`.
-- Resolve/instantiate the constructor's type via the **type-dispatch** path (model on Check.zig ~6540-6585): the dispatcher type is `Iter` (via `builtin_indices.iter_type`), args are `[lhs, rhs]`. Build the `constraint_fn_var` the same way that path does, set the expression's result var to the call's `Iter(num)` return, and rewrite the binop via `self.cir.store.replaceExprWithTypeDispatchCall(expr_idx, iter_type_stmt, method_ident, region, args_span, constraint_fn_var)`.
-- Remove the old `mkBinopConstraint`/`publishBinopDispatchExpr`-to-`to`/`until` logic and the `mkIterVar`-only path if the type-dispatch resolution now produces the `Iter(num)` result. (If you still need `mkIterVar` to shape the expected return, keep it — but the constructor's declared `-> Iter(num)` should provide it.)
-
-IMPORTANT: the exact in-scope names and the type-dispatch resolution helper must match what's actually at Check.zig:6540-6585. Read that path and the current arm carefully; adapt rather than copy verbatim. If type-dispatch resolution needs metadata the arm can't easily produce, fall back to: build the `e_type_dispatch_call` and attach a `StaticDispatchConstraint` for the method on the `Iter` dispatcher exactly as the dot-call path does.
-
-- [ ] **Step 2.4: Run check tests**
-
-Run: `zig run .claude/zig-test-llm.zig -- run-test-zig-module-check -- --test-filter "range"`
-Expected: PASS (pin the calibrated `assertLastDefTypeContains` string).
-Then: `zig run .claude/zig-test-llm.zig -- run-test-zig-module-check` → `OK`.
+`zig run .claude/zig-test-llm.zig -- run-test-zig-module-can` → OK; `... run-test-zig-module-check` → OK (pin calibrated strings). The eager-Iter property must survive: `r : Iter(U8); r = 0..<10` pins U8 (the constructor's declared `-> Iter(num)` provides it through normal call checking); `for i in 1..=5` still types.
 
 - [ ] **Step 2.5: Regenerate the 8 range snapshots**
 
-Run: `zig run .claude/zig-llm.zig -- run-snapshot-tool`
-Review: `test/snapshots/range_{exclusive,inclusive,annotated,for_loop,precedence_and_fmt,chained_error,bare_double_dot_error,missing_method_error}.md`. The CANONICALIZE section should now show an `e-type-dispatch-call` (or however type-dispatch renders) to `inclusive_range`/`exclusive_range` on `Iter`, not a dispatch to `to`/`until`. TYPES still `Iter(Dec)` / `Iter(U8)`. Confirm `jj diff --stat` shows ONLY these 8 (+ any expected) changed — no unrelated drift. If `repl/*_range_*` snapshots drift here, that means `to`/`until` were affected — they shouldn't be (still present); investigate.
+`zig run .claude/zig-llm.zig -- run-snapshot-tool`. CANONICALIZE sections now show `e-call` with `e-lookup-external` (the same shape as `Str.is_empty` calls), not `e-dispatch-call (method "until")`. TYPES unchanged (`Iter(Dec)`/`Iter(U8)`; for-loop types). Error snapshots: chained + bare-`..` unchanged; `range_missing_method_error.md` will change shape — verify it's still a comprehensible error and report what it says. `jj diff --stat`: ONLY the listed files + the 8 snapshots; NO `repl/*` drift (`to`/`until` untouched until Task 3).
 
 - [ ] **Step 2.6: Widen**
 
-Run: `zig run .claude/zig-llm.zig --`
-Run: `zig run .claude/zig-test-llm.zig -- run-test-zig`
-Run: `zig run .claude/zig-llm.zig -- run-check-snapshots`
-Expected: all green, drift only in the 8 range snapshots.
+`zig run .claude/zig-llm.zig --`, `zig run .claude/zig-test-llm.zig -- run-test-zig`, `zig run .claude/zig-llm.zig -- run-check-snapshots` → all green.
 
 - [ ] **Step 2.7: Commit**
 
 ```
-jj commit -m "Desugar ranges to Iter.exclusive_range/inclusive_range
+jj commit -m "Canonicalize ranges to Iter.exclusive_range/inclusive_range calls
 
-Retarget the range Check arm: rewrite range_to_excluding/range_to_including
-binops into a type-dispatch call on Iter to the generic range constructors,
-instead of a receiver dispatch to per-type to/until. Keeps the dedicated arm
-for range-specific bound-mismatch errors. to/until remain (now unused by
-ranges); removed next."
+Desugar range syntax in canonicalization to a plain e_call of the generic
+Iter constructors (the proven qualified-builtin-call form), with a new
+CalledVia.range recording provenance. Removes the range CIR binop ops and
+the dedicated Check arm; ranges now type-check through ordinary call
+checking, whose declared Iter(num) return preserves annotation pinning and
+for-loop integration. to/until remain (now unused by ranges); removed next."
 ```
 (+ footer.)
 

@@ -42,11 +42,11 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "r"))
-		(e-dispatch-call (method "until") (constraint-fn-var 169)
-			(receiver
-				(e-num (value "0")))
-			(args
-				(e-num (value "10"))))
+		(e-call (constraint-fn-var 258)
+			(e-lookup-external
+				(builtin))
+			(e-num (value "0"))
+			(e-num (value "10")))
 		(annotation
 			(ty-apply (name "Iter") (builtin)
 				(ty-lookup (name "U8") (builtin))))))

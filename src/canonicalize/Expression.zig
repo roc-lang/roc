@@ -650,8 +650,6 @@ pub const Expr = union(enum) {
             div_trunc, // //
             @"and", // and
             @"or", // or
-            range_to_excluding, // ..<  (exclusive range, desugars to `until`)
-            range_to_including, // ..=  (inclusive range, desugars to `to`)
         };
 
         pub fn init(op: Op, lhs: Expr.Idx, rhs: Expr.Idx) Binop {

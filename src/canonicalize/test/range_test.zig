@@ -1,35 +1,43 @@
-//! Tests for range operator (`..<` / `..=`) canonicalization into CIR binops.
+//! Tests for range operator (`..<` / `..=`) canonicalization into
+//! `Iter.exclusive_range` / `Iter.inclusive_range` constructor calls.
 
 const std = @import("std");
 const testing = std.testing;
+const base = @import("base");
 const CIR = @import("../CIR.zig");
 const TestEnv = @import("TestEnv.zig").TestEnv;
 const ModuleEnv = @import("../ModuleEnv.zig");
 
-fn getBinop(module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx) error{NotABinop}!CIR.Expr.Binop {
+fn getCall(module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx) error{NotACall}!@TypeOf(@as(CIR.Expr, undefined).e_call) {
     const expr = module_env.store.getExpr(expr_idx);
     return switch (expr) {
-        .e_binop => |binop| binop,
-        else => error.NotABinop,
+        .e_call => |call| call,
+        else => error.NotACall,
     };
 }
 
-test "canonicalize exclusive range to range_to_excluding binop" {
+test "canonicalize exclusive range to Iter.exclusive_range call" {
     var test_env = try TestEnv.init("1..<5");
     defer test_env.deinit();
 
     const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
-    const binop = try getBinop(test_env.module_env, canonical_expr.get_idx());
-    try testing.expectEqual(CIR.Expr.Binop.Op.range_to_excluding, binop.op);
+    const call = try getCall(test_env.module_env, canonical_expr.get_idx());
+    try testing.expectEqual(base.CalledVia.range, call.called_via);
+
+    const func = test_env.module_env.store.getExpr(call.func);
+    try testing.expect(func == .e_lookup_external);
 }
 
-test "canonicalize inclusive range to range_to_including binop" {
+test "canonicalize inclusive range to Iter.inclusive_range call" {
     var test_env = try TestEnv.init("1..=5");
     defer test_env.deinit();
 
     const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
-    const binop = try getBinop(test_env.module_env, canonical_expr.get_idx());
-    try testing.expectEqual(CIR.Expr.Binop.Op.range_to_including, binop.op);
+    const call = try getCall(test_env.module_env, canonical_expr.get_idx());
+    try testing.expectEqual(base.CalledVia.range, call.called_via);
+
+    const func = test_env.module_env.store.getExpr(call.func);
+    try testing.expect(func == .e_lookup_external);
 }
 
 test "chained ranges are rejected with a diagnostic" {

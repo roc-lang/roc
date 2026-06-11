@@ -6481,7 +6481,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         // function calling //
         .e_call => |call| {
             switch (call.called_via) {
-                .apply, .record_builder => blk: {
+                .apply, .record_builder, .range => blk: {
                     // First, check the function being called
                     // It could be effectful, e.g. `(mk_fn!())(arg)`
                     self.checking_call_arg = true;
@@ -6729,7 +6729,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     }
                 },
                 else => {
-                    // The canonicalizer currently only produces apply or record_builder for e_call expressions.
+                    // The canonicalizer currently only produces apply, record_builder, or range for e_call expressions.
                     // Other call types (binop, unary_op, string_interpolation) are
                     // represented as different expression types. If we hit this, there's a compiler bug.
                     std.debug.assert(false);
@@ -8870,46 +8870,6 @@ fn checkBinopExpr(
 
             // The expression type is the return type of not
             _ = try self.unify(expr_var, not_ret_var, env);
-        },
-        .range_to_excluding, .range_to_including => {
-            const method_name = switch (binop.op) {
-                .range_to_excluding => self.cir.idents.until,
-                .range_to_including => self.cir.idents.to,
-                else => unreachable,
-            };
-
-            if (try self.reportMissingNominalMethodForBinop(lhs_var, rhs_var, expr_var, method_name, env, expr_region)) {
-                return does_fx;
-            }
-
-            // Both bounds of a range must have the same type.
-            const arg_unify_result = try self.unify(lhs_var, rhs_var, env);
-            if (!arg_unify_result.isOk()) {
-                try self.unifyWith(expr_var, .err, env);
-                return does_fx;
-            }
-
-            const arg_var = rhs_var;
-
-            // The range's type is Iter(bound) — built eagerly so usage can
-            // unify against it before the bound type is concrete. This is
-            // the reason ranges are syntax rather than a method call.
-            const ret_var = try self.mkIterVar(arg_var, env, expr_region);
-
-            // Desugar: start.until(end) / start.to(end), as
-            // `bound, bound -> Iter(bound)` dispatch on the bound type.
-            try self.mkBinopConstraint(
-                arg_var,
-                arg_var,
-                ret_var,
-                method_name,
-                false,
-                env,
-                expr_region,
-                expr_idx,
-            );
-
-            _ = try self.unify(expr_var, ret_var, env);
         },
         .@"and", .@"or" => {
             const lhs_fresh_bool = try self.freshBool(env, expr_region);
