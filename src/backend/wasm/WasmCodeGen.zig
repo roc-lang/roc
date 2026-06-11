@@ -316,6 +316,22 @@ u128_mod_import: ?u32 = null,
 dec_div_import: ?u32 = null,
 /// Wasm function index for imported roc_dec_div_trunc host function.
 dec_div_trunc_import: ?u32 = null,
+/// Wasm function index for imported roc_dec_pow host function.
+dec_pow_import: ?u32 = null,
+/// Wasm function index for imported roc_dec_sqrt host function.
+dec_sqrt_import: ?u32 = null,
+/// Wasm function index for imported roc_dec_sin host function.
+dec_sin_import: ?u32 = null,
+/// Wasm function index for imported roc_dec_cos host function.
+dec_cos_import: ?u32 = null,
+/// Wasm function index for imported roc_dec_tan host function.
+dec_tan_import: ?u32 = null,
+/// Wasm function index for imported roc_dec_asin host function.
+dec_asin_import: ?u32 = null,
+/// Wasm function index for imported roc_dec_acos host function.
+dec_acos_import: ?u32 = null,
+/// Wasm function index for imported roc_dec_atan host function.
+dec_atan_import: ?u32 = null,
 /// Wasm function index for imported roc_i128_to_str host function.
 i128_to_str_import: ?u32 = null,
 /// Wasm function index for imported roc_u128_to_str host function.
@@ -982,6 +998,19 @@ fn registerHostImports(self: *Self) Allocator.Error!void {
     self.u128_mod_import = try self.module.addImport("env", "roc_u128_mod", i128_binop_type);
     self.dec_div_import = try self.module.addImport("env", "roc_dec_div", i128_binop_type);
     self.dec_div_trunc_import = try self.module.addImport("env", "roc_dec_div_trunc", i128_binop_type);
+    self.dec_pow_import = try self.module.addImport("env", "roc_dec_pow", i128_binop_type);
+
+    const dec_unary_type = try self.module.addFuncType(
+        &.{ .i32, .i32 },
+        &.{},
+    );
+    self.dec_sqrt_import = try self.module.addImport("env", "roc_dec_sqrt", dec_unary_type);
+    self.dec_sin_import = try self.module.addImport("env", "roc_dec_sin", dec_unary_type);
+    self.dec_cos_import = try self.module.addImport("env", "roc_dec_cos", dec_unary_type);
+    self.dec_tan_import = try self.module.addImport("env", "roc_dec_tan", dec_unary_type);
+    self.dec_asin_import = try self.module.addImport("env", "roc_dec_asin", dec_unary_type);
+    self.dec_acos_import = try self.module.addImport("env", "roc_dec_acos", dec_unary_type);
+    self.dec_atan_import = try self.module.addImport("env", "roc_dec_atan", dec_unary_type);
 
     const i32_mod_by_type = try self.module.addFuncType(&.{ .i32, .i32 }, &.{.i32});
     self.i32_mod_by_import = try self.module.addImport("env", "roc_i32_mod_by", i32_mod_by_type);
@@ -3971,6 +4000,32 @@ fn emitI128HostBinOp(self: *Self, lhs_local: u32, rhs_local: u32, import_idx: u3
     try self.emitCall(import_idx);
 
     // Push result pointer
+    try self.emitLocalGet(result_local);
+}
+
+fn emitDecBinaryMath(self: *Self, args: []const ProcLocalId, import_idx: u32) Allocator.Error!void {
+    try self.emitProcLocal(args[0]);
+    const lhs_local = try self.stabilizeCompositeResult(16);
+
+    try self.emitProcLocal(args[1]);
+    const rhs_local = try self.stabilizeCompositeResult(16);
+
+    try self.emitI128HostBinOp(lhs_local, rhs_local, import_idx);
+}
+
+fn emitDecUnaryMath(self: *Self, arg: ProcLocalId, import_idx: u32) Allocator.Error!void {
+    try self.emitProcLocal(arg);
+    const arg_local = try self.stabilizeCompositeResult(16);
+
+    const result_offset = try self.allocStackMemory(16, 8);
+    const result_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitFpOffset(result_offset);
+    try self.emitLocalSet(result_local);
+
+    try self.emitLocalGet(arg_local);
+    try self.emitLocalGet(result_local);
+    try self.emitCall(import_idx);
+
     try self.emitLocalGet(result_local);
 }
 
@@ -8624,35 +8679,67 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
 
         // Float math functions (direct wasm opcodes)
         .num_pow => {
-            try self.emitFloatPow(args, ll.ret_layout);
+            if (ll.ret_layout == .dec) {
+                try self.emitDecBinaryMath(args, self.dec_pow_import orelse unreachable);
+            } else {
+                try self.emitFloatPow(args, ll.ret_layout);
+            }
         },
         .num_sin => {
-            try self.emitFloatUnaryMath(args[0], ll.ret_layout, .float_sin, self.float_sin_import);
+            if (ll.ret_layout == .dec) {
+                try self.emitDecUnaryMath(args[0], self.dec_sin_import orelse unreachable);
+            } else {
+                try self.emitFloatUnaryMath(args[0], ll.ret_layout, .float_sin, self.float_sin_import);
+            }
         },
         .num_cos => {
-            try self.emitFloatUnaryMath(args[0], ll.ret_layout, .float_cos, self.float_cos_import);
+            if (ll.ret_layout == .dec) {
+                try self.emitDecUnaryMath(args[0], self.dec_cos_import orelse unreachable);
+            } else {
+                try self.emitFloatUnaryMath(args[0], ll.ret_layout, .float_cos, self.float_cos_import);
+            }
         },
         .num_tan => {
-            try self.emitFloatUnaryMath(args[0], ll.ret_layout, .float_tan, self.float_tan_import);
+            if (ll.ret_layout == .dec) {
+                try self.emitDecUnaryMath(args[0], self.dec_tan_import orelse unreachable);
+            } else {
+                try self.emitFloatUnaryMath(args[0], ll.ret_layout, .float_tan, self.float_tan_import);
+            }
         },
         .num_asin => {
-            try self.emitFloatUnaryMath(args[0], ll.ret_layout, .float_asin, self.float_asin_import);
+            if (ll.ret_layout == .dec) {
+                try self.emitDecUnaryMath(args[0], self.dec_asin_import orelse unreachable);
+            } else {
+                try self.emitFloatUnaryMath(args[0], ll.ret_layout, .float_asin, self.float_asin_import);
+            }
         },
         .num_acos => {
-            try self.emitFloatUnaryMath(args[0], ll.ret_layout, .float_acos, self.float_acos_import);
+            if (ll.ret_layout == .dec) {
+                try self.emitDecUnaryMath(args[0], self.dec_acos_import orelse unreachable);
+            } else {
+                try self.emitFloatUnaryMath(args[0], ll.ret_layout, .float_acos, self.float_acos_import);
+            }
         },
         .num_atan => {
-            try self.emitFloatUnaryMath(args[0], ll.ret_layout, .float_atan, self.float_atan_import);
+            if (ll.ret_layout == .dec) {
+                try self.emitDecUnaryMath(args[0], self.dec_atan_import orelse unreachable);
+            } else {
+                try self.emitFloatUnaryMath(args[0], ll.ret_layout, .float_atan, self.float_atan_import);
+            }
         },
         .num_sqrt => {
-            try self.emitProcLocal(args[0]);
-            const vt = try self.resolveValType(ll.ret_layout);
-            const wasm_op: u8 = switch (vt) {
-                .f32 => Op.f32_sqrt,
-                .f64 => Op.f64_sqrt,
-                .i32, .i64 => unreachable,
-            };
-            self.currentCode().append(self.allocator, wasm_op) catch return error.OutOfMemory;
+            if (ll.ret_layout == .dec) {
+                try self.emitDecUnaryMath(args[0], self.dec_sqrt_import orelse unreachable);
+            } else {
+                try self.emitProcLocal(args[0]);
+                const vt = try self.resolveValType(ll.ret_layout);
+                const wasm_op: u8 = switch (vt) {
+                    .f32 => Op.f32_sqrt,
+                    .f64 => Op.f64_sqrt,
+                    .i32, .i64 => unreachable,
+                };
+                self.currentCode().append(self.allocator, wasm_op) catch return error.OutOfMemory;
+            }
         },
         .num_floor => {
             try self.emitProcLocal(args[0]);

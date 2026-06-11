@@ -140,6 +140,14 @@ pub fn runWasmStrWithStats(
         env_imports.addHostFunction("roc_u128_mod", &[_]bytebox.ValType{ .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostU128Mod, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_dec_div", &[_]bytebox.ValType{ .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostDecDiv, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_dec_div_trunc", &[_]bytebox.ValType{ .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostDecDivTrunc, null) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_dec_pow", &[_]bytebox.ValType{ .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostDecPow, null) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_dec_sqrt", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{}, hostDecSqrt, null) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_dec_sin", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{}, hostDecSin, null) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_dec_cos", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{}, hostDecCos, null) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_dec_tan", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{}, hostDecTan, null) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_dec_asin", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{}, hostDecAsin, null) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_dec_acos", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{}, hostDecAcos, null) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_dec_atan", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{}, hostDecAtan, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_i8_mod_by", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{.I32}, hostI8ModBy, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_u8_mod_by", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{.I32}, hostU8ModBy, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_i16_mod_by", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{.I32}, hostI16ModBy, null) catch return error.WasmExecFailed;
@@ -478,6 +486,97 @@ fn hostDecDivTrunc(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]c
     const lhs = readI128FromMem(buffer, @intCast(params[0].I32));
     const rhs = readI128FromMem(buffer, @intCast(params[1].I32));
     writeI128ToMem(buffer, @intCast(params[2].I32), @divTrunc(lhs, rhs) * 1_000_000_000_000_000_000);
+}
+
+const DecUnaryMathOp = enum {
+    sqrt,
+    sin,
+    cos,
+    tan,
+    asin,
+    acos,
+    atan,
+};
+
+fn hostDecPow(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    const RocDec = builtins.dec.RocDec;
+    const buffer = module.store.getMemory(0).buffer();
+    const lhs_ptr: usize = @intCast(params[0].I32);
+    const rhs_ptr: usize = @intCast(params[1].I32);
+    const result_ptr: usize = @intCast(params[2].I32);
+    if (lhs_ptr + 16 > buffer.len or rhs_ptr + 16 > buffer.len or result_ptr + 16 > buffer.len) return;
+
+    const base = RocDec{ .num = readI128FromMem(buffer, lhs_ptr) };
+    const exponent = RocDec{ .num = readI128FromMem(buffer, rhs_ptr) };
+    if ((base.num == 0 and exponent.num < 0) or (base.num <= 0 and i128h.rem_i128(exponent.num, RocDec.one_point_zero_i128) != 0)) {
+        wasm_crash_state = .crashed;
+        return;
+    }
+
+    const result = builtins.dec.powC(base, exponent, &wasm_dec_roc_ops);
+    if (wasm_crash_state == .crashed) return;
+    writeI128ToMem(buffer, result_ptr, result);
+}
+
+fn hostDecUnaryMath(module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, comptime op: DecUnaryMathOp) void {
+    const RocDec = builtins.dec.RocDec;
+    const buffer = module.store.getMemory(0).buffer();
+    const arg_ptr: usize = @intCast(params[0].I32);
+    const result_ptr: usize = @intCast(params[1].I32);
+    if (arg_ptr + 16 > buffer.len or result_ptr + 16 > buffer.len) return;
+
+    const arg = RocDec{ .num = readI128FromMem(buffer, arg_ptr) };
+    switch (op) {
+        .sqrt => if (arg.num < 0) {
+            wasm_crash_state = .crashed;
+            return;
+        },
+        .asin, .acos => if (arg.num < RocDec.neg_one_point_zero.num or arg.num > RocDec.one_point_zero.num) {
+            wasm_crash_state = .crashed;
+            return;
+        },
+        else => {},
+    }
+
+    const result = switch (op) {
+        .sqrt => builtins.dec.sqrtC(arg, &wasm_dec_roc_ops),
+        .sin => builtins.dec.sinC(arg, &wasm_dec_roc_ops),
+        .cos => builtins.dec.cosC(arg, &wasm_dec_roc_ops),
+        .tan => builtins.dec.tanC(arg, &wasm_dec_roc_ops),
+        .asin => builtins.dec.asinC(arg, &wasm_dec_roc_ops),
+        .acos => builtins.dec.acosC(arg, &wasm_dec_roc_ops),
+        .atan => builtins.dec.atanC(arg, &wasm_dec_roc_ops),
+    };
+    if (wasm_crash_state == .crashed) return;
+    writeI128ToMem(buffer, result_ptr, result);
+}
+
+fn hostDecSqrt(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    hostDecUnaryMath(module, params, .sqrt);
+}
+
+fn hostDecSin(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    hostDecUnaryMath(module, params, .sin);
+}
+
+fn hostDecCos(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    hostDecUnaryMath(module, params, .cos);
+}
+
+fn hostDecTan(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    hostDecUnaryMath(module, params, .tan);
+}
+
+fn hostDecAsin(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    hostDecUnaryMath(module, params, .asin);
+}
+
+fn hostDecAcos(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    hostDecUnaryMath(module, params, .acos);
+}
+
+fn hostDecAtan(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    hostDecUnaryMath(module, params, .atan);
 }
 
 fn hostI128ToStr(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
@@ -1651,6 +1750,47 @@ const WasmCrashState = enum {
 var wasm_heap_ptr: u32 = 65536;
 var wasm_allocation_count: u32 = 0;
 var wasm_crash_state: WasmCrashState = .none;
+
+const WasmRocOps = builtins.host_abi.RocOps;
+const WasmRocAlloc = builtins.host_abi.RocAlloc;
+const WasmRocDealloc = builtins.host_abi.RocDealloc;
+const WasmRocRealloc = builtins.host_abi.RocRealloc;
+const WasmRocDbg = builtins.host_abi.RocDbg;
+const WasmRocExpectFailed = builtins.host_abi.RocExpectFailed;
+const WasmRocCrashed = builtins.host_abi.RocCrashed;
+
+fn wasmDecAlloc(args: *WasmRocAlloc, _: *anyopaque) callconv(.c) void {
+    args.answer = null;
+    wasm_crash_state = .crashed;
+}
+
+fn wasmDecDealloc(_: *WasmRocDealloc, _: *anyopaque) callconv(.c) void {}
+
+fn wasmDecRealloc(args: *WasmRocRealloc, _: *anyopaque) callconv(.c) void {
+    args.answer = null;
+    wasm_crash_state = .crashed;
+}
+
+fn wasmDecDbg(_: *const WasmRocDbg, _: *anyopaque) callconv(.c) void {}
+
+fn wasmDecExpectFailed(_: *const WasmRocExpectFailed, _: *anyopaque) callconv(.c) void {
+    wasm_crash_state = .crashed;
+}
+
+fn wasmDecCrashed(_: *const WasmRocCrashed, _: *anyopaque) callconv(.c) void {
+    wasm_crash_state = .crashed;
+}
+
+var wasm_dec_roc_ops = WasmRocOps{
+    .env = undefined,
+    .roc_alloc = &wasmDecAlloc,
+    .roc_dealloc = &wasmDecDealloc,
+    .roc_realloc = &wasmDecRealloc,
+    .roc_dbg = &wasmDecDbg,
+    .roc_expect_failed = &wasmDecExpectFailed,
+    .roc_crashed = &wasmDecCrashed,
+    .hosted_fns = builtins.host_abi.emptyHostedFunctions(),
+};
 
 // --- Compiler-rt intrinsics ---
 

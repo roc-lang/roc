@@ -206,20 +206,35 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
     if (env.common.findIdent("Builtin.List.len")) |list_len_ident| {
         try low_level_map.put(list_len_ident, .list_len);
     }
+    if (env.common.findIdent("u8_list_len")) |ident| {
+        try low_level_map.put(ident, .list_len);
+    }
     if (env.common.findIdent("Builtin.List.concat")) |list_concat_ident| {
         try low_level_map.put(list_concat_ident, .list_concat);
     }
     if (env.common.findIdent("Builtin.List.with_capacity")) |list_with_capacity_ident| {
         try low_level_map.put(list_with_capacity_ident, .list_with_capacity);
     }
+    if (env.common.findIdent("u8_list_with_capacity")) |ident| {
+        try low_level_map.put(ident, .list_with_capacity);
+    }
     if (env.common.findIdent("list_get_unsafe")) |list_get_unsafe_ident| {
         try low_level_map.put(list_get_unsafe_ident, .list_get_unsafe);
+    }
+    if (env.common.findIdent("u8_list_get_unsafe")) |ident| {
+        try low_level_map.put(ident, .list_get_unsafe);
     }
     if (env.common.findIdent("list_append_unsafe")) |list_append_unsafe_ident| {
         try low_level_map.put(list_append_unsafe_ident, .list_append_unsafe);
     }
+    if (env.common.findIdent("u8_list_append_unsafe")) |ident| {
+        try low_level_map.put(ident, .list_append_unsafe);
+    }
     if (env.common.findIdent("list_reserve")) |list_reserve_ident| {
         try low_level_map.put(list_reserve_ident, .list_reserve);
+    }
+    if (env.common.findIdent("u8_list_reserve")) |ident| {
+        try low_level_map.put(ident, .list_reserve);
     }
     if (env.common.findIdent("list_release_excess_capacity")) |list_release_excess_capacity_ident| {
         try low_level_map.put(list_release_excess_capacity_ident, .list_release_excess_capacity);
@@ -245,11 +260,13 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
     const numeric_types = [_][]const u8{ "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec", "F32", "F64" };
     const signed_types = [_][]const u8{ "I8", "I16", "I32", "I64", "I128", "Dec", "F32", "F64" };
     // Numeric equality operations.
-    // `num_is_eq` already lowers correctly for integers, Dec, and fractional types.
-    const eq_types = [_][]const u8{ "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec", "F32", "F64" };
+    // Float `is_eq` is deliberately not public; `is_float_eq` is the explicit IEEE 754 comparison.
+    const eq_types = [_][]const u8{ "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec" };
     for (eq_types) |num_type| {
         try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.is_eq", .{num_type}, .num_is_eq);
     }
+    try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.F32.is_float_eq", .{}, .num_is_eq);
+    try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.F64.is_float_eq", .{}, .num_is_eq);
 
     // Numeric to_str operations (all numeric types)
     // Note: Types like Dec are nested under Num in Builtin.roc, so the canonical identifier is
@@ -302,9 +319,8 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
         try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.is_lte", .{num_type}, .num_is_lte);
     }
 
-    // from_numeral (all numeric types)
-    for (numeric_types) |num_type| {
-        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.from_numeral", .{num_type}, .num_from_numeral);
+    if (env.common.findIdent("numeric_compare")) |ident| {
+        try low_level_map.put(ident, .compare);
     }
 
     // from_str (all numeric types)
@@ -1045,6 +1061,30 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
         try low_level_map.put(ident, .num_acos);
     }
     if (env.common.findIdent("f32_atan_unsafe")) |ident| {
+        try low_level_map.put(ident, .num_atan);
+    }
+    if (env.common.findIdent("dec_sqrt_unsafe")) |ident| {
+        try low_level_map.put(ident, .num_sqrt);
+    }
+    if (env.common.findIdent("dec_pow_unsafe")) |ident| {
+        try low_level_map.put(ident, .num_pow);
+    }
+    if (env.common.findIdent("dec_sin_unsafe")) |ident| {
+        try low_level_map.put(ident, .num_sin);
+    }
+    if (env.common.findIdent("dec_cos_unsafe")) |ident| {
+        try low_level_map.put(ident, .num_cos);
+    }
+    if (env.common.findIdent("dec_tan_unsafe")) |ident| {
+        try low_level_map.put(ident, .num_tan);
+    }
+    if (env.common.findIdent("dec_asin_unsafe")) |ident| {
+        try low_level_map.put(ident, .num_asin);
+    }
+    if (env.common.findIdent("dec_acos_unsafe")) |ident| {
+        try low_level_map.put(ident, .num_acos);
+    }
+    if (env.common.findIdent("dec_atan_unsafe")) |ident| {
         try low_level_map.put(ident, .num_atan);
     }
     if (env.common.findIdent("f32_floor_unsafe")) |ident| {

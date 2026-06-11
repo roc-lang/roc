@@ -63,6 +63,12 @@ pub const RocDec = extern struct {
 
     pub const one_point_zero_i128: i128 = math.pow(i128, 10, RocDec.decimal_places);
     pub const one_point_zero: RocDec = .{ .num = one_point_zero_i128 };
+    pub const neg_one_point_zero: RocDec = .{ .num = -one_point_zero_i128 };
+    pub const e: RocDec = .{ .num = 2718281828459045235 };
+    pub const pi: RocDec = .{ .num = 3141592653589793238 };
+    pub const tau: RocDec = .{ .num = 6283185307179586476 };
+    pub const half_pi: RocDec = .{ .num = 1570796326794896619 };
+    pub const ln2: RocDec = .{ .num = 693147180559945309 };
 
     pub const two_point_zero: RocDec = RocDec.add(
         RocDec.one_point_zero,
@@ -148,17 +154,17 @@ pub const RocDec = extern struct {
         // though -2^127 is itself representable.
         var before_str_length = length;
         var after_val_i128: ?i128 = null;
-        if (point_index) |pi| {
-            before_str_length = pi;
+        if (point_index) |point_idx| {
+            before_str_length = point_idx;
 
-            const after_str_len = (length - 1) - pi;
+            const after_str_len = (length - 1) - point_idx;
             if (after_str_len > decimal_places) {
                 // TODO: runtime exception for too many decimal places!
                 return null;
             }
             const diff_decimal_places = decimal_places - after_str_len;
 
-            const after_str = roc_str_slice[pi + 1 .. length];
+            const after_str = roc_str_slice[point_idx + 1 .. length];
             const after_u64 = std.fmt.parseUnsigned(u64, after_str, 10) catch null;
             if (after_u64) |f| {
                 const unsigned = i128h.mul_i128(@as(i128, @intCast(f)), i128h.pow10_i128(@intCast(diff_decimal_places)));
@@ -558,8 +564,13 @@ pub const RocDec = extern struct {
                 i128h.divTrunc_i128(exponent.num, RocDec.one_point_zero_i128),
                 roc_ops,
             );
+        } else if (base.num <= 0) {
+            roc_ops.crash("Decimal power is undefined for non-positive base and fractional exponent!");
+            unreachable;
         } else {
-            return fromF64(std.math.pow(f64, base.toF64(), exponent.toF64())).?;
+            const log_base = decLnPositive(base, roc_ops);
+            const scaled_exponent = RocDec.mul(log_base, exponent, roc_ops);
+            return decExp(scaled_exponent, roc_ops);
         }
     }
 
@@ -569,10 +580,11 @@ pub const RocDec = extern struct {
     ) RocDec {
         // sqrt(-n) is an error
         if (self.num < 0) {
-            roc_ops.crash("Square root by 0!");
+            roc_ops.crash("Decimal square root of a negative number!");
+            unreachable;
         }
 
-        return fromF64(std.math.sqrt(self.toF64())).?;
+        return decSqrtNonNegative(self);
     }
 
     pub fn mul(
@@ -677,70 +689,51 @@ pub const RocDec = extern struct {
         return RocDec{ .num = if (is_answer_negative) -unsigned_answer else unsigned_answer };
     }
 
-    fn mod2pi(self: RocDec) RocDec {
-        // This is made to be used before calling trig functions that work on the range 0 to 2*pi.
-        // It should be reasonable fast (much faster than calling @mod) and much more accurate as well.
-        // b is 2*pi as a dec. which is 6.2831853071795864769252867665590057684
-        // as dec is times 10^18 so 6283185307179586476.9252867665590057684
-        const b0: u64 = 6283185307179586476;
-        // Fraction that represents 64 bits of precision past what dec normally supports.
-        // 0.9252867665590057684 as binary to 64 places.
-        const b1: u64 = 0b1110110011011111100101111111000111001010111000100101011111110111;
-
-        // This is dec/(b0+1), but as a multiplication.
-        // So dec * (1/(b0+1)). This is way faster.
-        const dec = self.num;
-        const tmp = @as(i128, @intCast(i128h.shr(mul_u128(@abs(dec), 249757942369376157886101012127821356963).hi, 62)));
-        const q0 = if (dec < 0) -tmp else tmp;
-
-        const upper = i128h.mul_i128(q0, @as(i128, b0));
-        const mul_result = @import("num.zig").mulWithOverflow(i128, q0, @as(i128, b1));
-        const lower = mul_result.value;
-        const overflowed: u1 = @intFromBool(mul_result.has_overflowed);
-        // TODO: maybe write this out branchlessly.
-        // Currently is is probably cmovs, but could be just math?
-        const q0_sign: i128 =
-            if (q0 > 0) 1 else -1;
-        const overflowed_val: i128 = if (overflowed == 1) @as(i128, @bitCast(i128h.shl(@as(u128, @bitCast(q0_sign)), 64))) else 0;
-        const full = upper + i128h.shr_i128(lower, 64) + overflowed_val;
-
-        var out = dec - full;
-        if (out < 0) {
-            out += b0;
-        }
-
-        return RocDec{ .num = out };
+    pub fn log(self: RocDec, roc_ops: *RocOps) RocDec {
+        return decLnPositive(self, roc_ops);
     }
 
-    pub fn log(self: RocDec) RocDec {
-        return fromF64(@log(self.toF64())).?;
-    }
-
-    // I believe the output of the trig functions is always in range of Dec.
-    // If not, we probably should just make it saturate the Dec.
-    // I don't think this should crash or return errors.
     pub fn sin(self: RocDec) RocDec {
-        return fromF64(math.sin(self.mod2pi().toF64())).?;
+        return decSinCos(self).sin;
     }
 
     pub fn cos(self: RocDec) RocDec {
-        return fromF64(math.cos(self.mod2pi().toF64())).?;
+        return decSinCos(self).cos;
     }
 
-    pub fn tan(self: RocDec) RocDec {
-        return fromF64(math.tan(self.mod2pi().toF64())).?;
+    pub fn tan(self: RocDec, roc_ops: *RocOps) RocDec {
+        const pair = decSinCos(self);
+        return RocDec.div(pair.sin, pair.cos, roc_ops);
     }
 
-    pub fn asin(self: RocDec) RocDec {
-        return fromF64(math.asin(self.toF64())).?;
+    pub fn asin(self: RocDec, roc_ops: *RocOps) RocDec {
+        if (self.num > RocDec.one_point_zero.num or self.num < RocDec.neg_one_point_zero.num) {
+            roc_ops.crash("Decimal asin input is outside [-1, 1]!");
+            unreachable;
+        }
+        if (self.num == RocDec.one_point_zero.num) return RocDec.half_pi;
+        if (self.num == RocDec.neg_one_point_zero.num) return RocDec{ .num = -RocDec.half_pi.num };
+
+        const squared = RocDec.mul(self, self, roc_ops);
+        const complement = RocDec.sub(RocDec.one_point_zero, squared, roc_ops);
+        const denominator = RocDec.sqrt(complement, roc_ops);
+        return RocDec.atan(RocDec.div(self, denominator, roc_ops), roc_ops);
     }
 
-    pub fn acos(self: RocDec) RocDec {
-        return fromF64(math.acos(self.toF64())).?;
+    pub fn acos(self: RocDec, roc_ops: *RocOps) RocDec {
+        return RocDec.sub(RocDec.half_pi, RocDec.asin(self, roc_ops), roc_ops);
     }
 
-    pub fn atan(self: RocDec) RocDec {
-        return fromF64(math.atan(self.toF64())).?;
+    pub fn atan(self: RocDec, roc_ops: *RocOps) RocDec {
+        if (self.num > RocDec.one_point_zero.num) {
+            const reciprocal = RocDec.div(RocDec.one_point_zero, self, roc_ops);
+            return RocDec.sub(RocDec.half_pi, decAtanReduced(reciprocal), roc_ops);
+        }
+        if (self.num < RocDec.neg_one_point_zero.num) {
+            const reciprocal = RocDec.div(RocDec.one_point_zero, self, roc_ops);
+            return RocDec.sub(RocDec{ .num = -RocDec.half_pi.num }, decAtanReduced(reciprocal), roc_ops);
+        }
+        return decAtanReduced(self);
     }
 
     pub fn rem(
@@ -757,6 +750,268 @@ pub const RocDec = extern struct {
         return RocDec{ .num = i128h.rem_i128(self.num, other.num) };
     }
 };
+
+const dec_cordic_k = RocDec{ .num = 607252935008881256 };
+
+const dec_cordic_atan = [_]i128{
+    785398163397448309,
+    463647609000806116,
+    244978663126864154,
+    124354994546761435,
+    62418809995957348,
+    31239833430268276,
+    15623728620476830,
+    7812341060101111,
+    3906230131966971,
+    1953122516478818,
+    976562189559319,
+    488281211194898,
+    244140620149361,
+    122070311893670,
+    61035156174208,
+    30517578115526,
+    15258789061315,
+    7629394531101,
+    3814697265606,
+    1907348632810,
+    953674316405,
+    476837158203,
+    238418579101,
+    119209289550,
+    59604644775,
+    29802322387,
+    14901161193,
+    7450580596,
+    3725290298,
+    1862645149,
+    931322574,
+    465661287,
+    232830643,
+    116415321,
+    58207660,
+    29103830,
+    14551915,
+    7275957,
+    3637978,
+    1818989,
+    909494,
+    454747,
+    227373,
+    113686,
+    56843,
+    28421,
+    14210,
+    7105,
+    3552,
+    1776,
+    888,
+    444,
+    222,
+    111,
+    55,
+    27,
+    13,
+    6,
+    3,
+    1,
+    0,
+    0,
+    0,
+    0,
+};
+
+const DecSinCos = struct {
+    sin: RocDec,
+    cos: RocDec,
+};
+
+fn decSqrtNonNegative(value: RocDec) RocDec {
+    const raw: u128 = @intCast(value.num);
+    const scaled = mul_u128(raw, @as(u128, @intCast(RocDec.one_point_zero_i128)));
+    const root = intSqrtU256(scaled);
+    return RocDec{ .num = @intCast(root) };
+}
+
+fn intSqrtU256(value: U256) u128 {
+    var low: u128 = 0;
+    var high: u128 = @intCast(math.maxInt(i128));
+    var answer: u128 = 0;
+
+    while (low <= high) {
+        const mid = low + i128h.shr(high - low, 1);
+        const square = mul_u128(mid, mid);
+
+        if (u256Le(square, value)) {
+            answer = mid;
+            low = mid + 1;
+        } else if (mid == 0) {
+            break;
+        } else {
+            high = mid - 1;
+        }
+    }
+
+    return answer;
+}
+
+fn u256Le(lhs: U256, rhs: U256) bool {
+    return lhs.hi < rhs.hi or (lhs.hi == rhs.hi and lhs.lo <= rhs.lo);
+}
+
+fn decLnPositive(value: RocDec, roc_ops: *RocOps) RocDec {
+    if (value.num <= 0) {
+        roc_ops.crash("Decimal log is undefined for non-positive input!");
+        unreachable;
+    }
+
+    var reduced = value;
+    var power_of_two: i128 = 0;
+    while (reduced.num >= RocDec.two_point_zero.num) {
+        reduced = RocDec.div(reduced, RocDec.two_point_zero, roc_ops);
+        power_of_two += 1;
+    }
+    while (reduced.num < RocDec.one_point_zero.num) {
+        reduced = RocDec.mul(reduced, RocDec.two_point_zero, roc_ops);
+        power_of_two -= 1;
+    }
+
+    const numerator = RocDec.sub(reduced, RocDec.one_point_zero, roc_ops);
+    const denominator = RocDec.add(reduced, RocDec.one_point_zero, roc_ops);
+    const z = RocDec.div(numerator, denominator, roc_ops);
+    const z_squared = RocDec.mul(z, z, roc_ops);
+
+    var term = z;
+    var sum = RocDec{ .num = 0 };
+    var divisor: i128 = 1;
+    while (term.num != 0) {
+        const divisor_dec = RocDec.fromWholeInt(divisor).?;
+        const next = RocDec.div(term, divisor_dec, roc_ops);
+        if (next.num == 0) break;
+        sum = RocDec.add(sum, next, roc_ops);
+        term = RocDec.mul(term, z_squared, roc_ops);
+        divisor += 2;
+    }
+
+    var result = RocDec.mul(RocDec.two_point_zero, sum, roc_ops);
+    if (power_of_two != 0) {
+        const power_dec = RocDec.fromWholeInt(power_of_two).?;
+        const correction = RocDec.mul(power_dec, RocDec.ln2, roc_ops);
+        result = RocDec.add(result, correction, roc_ops);
+    }
+    return result;
+}
+
+fn decExp(value: RocDec, roc_ops: *RocOps) RocDec {
+    const quotient = RocDec.div(value, RocDec.ln2, roc_ops);
+    const whole_quotient = RocDec.trunc(quotient, roc_ops);
+    const exponent = whole_quotient.toWholeInt();
+    const reduced = RocDec.sub(value, RocDec.mul(whole_quotient, RocDec.ln2, roc_ops), roc_ops);
+    return decScaleByPowerOfTwo(decExpReduced(reduced, roc_ops), exponent, roc_ops);
+}
+
+fn decExpReduced(value: RocDec, roc_ops: *RocOps) RocDec {
+    var sum = RocDec.one_point_zero;
+    var term = RocDec.one_point_zero;
+    var divisor: i128 = 1;
+
+    while (true) {
+        const divisor_dec = RocDec.fromWholeInt(divisor).?;
+        const next = RocDec.div(RocDec.mul(term, value, roc_ops), divisor_dec, roc_ops);
+        if (next.num == 0) break;
+        sum = RocDec.add(sum, next, roc_ops);
+        term = next;
+        divisor += 1;
+    }
+
+    return sum;
+}
+
+fn decScaleByPowerOfTwo(value: RocDec, exponent: i128, roc_ops: *RocOps) RocDec {
+    var result = value;
+    var remaining = exponent;
+    while (remaining > 0) {
+        result = RocDec.mul(result, RocDec.two_point_zero, roc_ops);
+        remaining -= 1;
+    }
+    while (remaining < 0 and result.num != 0) {
+        result = RocDec.div(result, RocDec.two_point_zero, roc_ops);
+        remaining += 1;
+    }
+    return result;
+}
+
+fn decSinCos(value: RocDec) DecSinCos {
+    var angle = RocDec.rem(value, RocDec.tau, undefined);
+    if (angle.num > RocDec.pi.num) {
+        angle = RocDec{ .num = angle.num - RocDec.tau.num };
+    } else if (angle.num < -RocDec.pi.num) {
+        angle = RocDec{ .num = angle.num + RocDec.tau.num };
+    }
+
+    var cos_sign: i128 = 1;
+    if (angle.num > RocDec.half_pi.num) {
+        angle = RocDec{ .num = RocDec.pi.num - angle.num };
+        cos_sign = -1;
+    } else if (angle.num < -RocDec.half_pi.num) {
+        angle = RocDec{ .num = -RocDec.pi.num - angle.num };
+        cos_sign = -1;
+    }
+
+    var pair = decCordicSinCos(angle);
+    pair.cos.num *= cos_sign;
+    return pair;
+}
+
+fn decCordicSinCos(angle: RocDec) DecSinCos {
+    var x = dec_cordic_k.num;
+    var y: i128 = 0;
+    var z = angle.num;
+
+    for (dec_cordic_atan, 0..) |atan_step, i| {
+        const shift: u7 = @intCast(i);
+        const x_shift = i128h.shr_i128(x, shift);
+        const y_shift = i128h.shr_i128(y, shift);
+        if (z >= 0) {
+            x -= y_shift;
+            y += x_shift;
+            z -= atan_step;
+        } else {
+            x += y_shift;
+            y -= x_shift;
+            z += atan_step;
+        }
+    }
+
+    return .{
+        .sin = RocDec{ .num = y },
+        .cos = RocDec{ .num = x },
+    };
+}
+
+fn decAtanReduced(value: RocDec) RocDec {
+    var x = RocDec.one_point_zero.num;
+    var y = value.num;
+    var z: i128 = 0;
+
+    for (dec_cordic_atan, 0..) |atan_step, i| {
+        if (y == 0) break;
+
+        const shift: u7 = @intCast(i);
+        const x_shift = i128h.shr_i128(x, shift);
+        const y_shift = i128h.shr_i128(y, shift);
+        if (y > 0) {
+            x += y_shift;
+            y -= x_shift;
+            z += atan_step;
+        } else {
+            x -= y_shift;
+            y += x_shift;
+            z -= atan_step;
+        }
+    }
+
+    return RocDec{ .num = z };
+}
 
 fn mul_and_decimalize(a: u128, b: u128) WithOverflow(i128) {
     const answer_u256 = mul_u128(a, b);
@@ -1264,8 +1519,8 @@ pub fn divTruncC(
 }
 
 /// TODO: Document logC.
-pub fn logC(arg: RocDec) callconv(.c) i128 {
-    return @call(.always_inline, RocDec.log, .{arg}).num;
+pub fn logC(arg: RocDec, roc_ops: *RocOps) callconv(.c) i128 {
+    return @call(.always_inline, RocDec.log, .{ arg, roc_ops }).num;
 }
 
 /// TODO: Document powC.
@@ -1277,34 +1532,42 @@ pub fn powC(
     return @call(.always_inline, RocDec.pow, .{ arg1, arg2, roc_ops }).num;
 }
 
+/// TODO: Document sqrtC.
+pub fn sqrtC(
+    arg: RocDec,
+    roc_ops: *RocOps,
+) callconv(.c) i128 {
+    return @call(.always_inline, RocDec.sqrt, .{ arg, roc_ops }).num;
+}
+
 /// TODO: Document sinC.
-pub fn sinC(arg: RocDec) callconv(.c) i128 {
+pub fn sinC(arg: RocDec, _: *RocOps) callconv(.c) i128 {
     return @call(.always_inline, RocDec.sin, .{arg}).num;
 }
 
 /// TODO: Document cosC.
-pub fn cosC(arg: RocDec) callconv(.c) i128 {
+pub fn cosC(arg: RocDec, _: *RocOps) callconv(.c) i128 {
     return @call(.always_inline, RocDec.cos, .{arg}).num;
 }
 
 /// TODO: Document tanC.
-pub fn tanC(arg: RocDec) callconv(.c) i128 {
-    return @call(.always_inline, RocDec.tan, .{arg}).num;
+pub fn tanC(arg: RocDec, roc_ops: *RocOps) callconv(.c) i128 {
+    return @call(.always_inline, RocDec.tan, .{ arg, roc_ops }).num;
 }
 
 /// TODO: Document asinC.
-pub fn asinC(arg: RocDec) callconv(.c) i128 {
-    return @call(.always_inline, RocDec.asin, .{arg}).num;
+pub fn asinC(arg: RocDec, roc_ops: *RocOps) callconv(.c) i128 {
+    return @call(.always_inline, RocDec.asin, .{ arg, roc_ops }).num;
 }
 
 /// TODO: Document acosC.
-pub fn acosC(arg: RocDec) callconv(.c) i128 {
-    return @call(.always_inline, RocDec.acos, .{arg}).num;
+pub fn acosC(arg: RocDec, roc_ops: *RocOps) callconv(.c) i128 {
+    return @call(.always_inline, RocDec.acos, .{ arg, roc_ops }).num;
 }
 
 /// TODO: Document atanC.
-pub fn atanC(arg: RocDec) callconv(.c) i128 {
-    return @call(.always_inline, RocDec.atan, .{arg}).num;
+pub fn atanC(arg: RocDec, roc_ops: *RocOps) callconv(.c) i128 {
+    return @call(.always_inline, RocDec.atan, .{ arg, roc_ops }).num;
 }
 
 /// TODO: Document addOrPanicC.
@@ -1905,7 +2168,10 @@ test "div: 500 / 1000" {
 }
 
 test "log: 1" {
-    try std.testing.expectEqual(RocDec.fromU64(0), RocDec.log(RocDec.fromU64(1)));
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    try std.testing.expectEqual(RocDec.fromU64(0), RocDec.log(RocDec.fromU64(1), test_env.getOps()));
 }
 
 test "fract: 0" {
@@ -2159,4 +2425,48 @@ test "sqrt: 1.44" {
     const expected = RocDec.fromStr(roc_str_expected).?;
 
     try std.testing.expectEqual(expected, dec.sqrt(test_env.getOps()));
+}
+
+fn expectApproxDec(expected: RocDec, actual: RocDec, tolerance: u128) error{TestUnexpectedResult}!void {
+    const diff: u128 = @abs(expected.num - actual.num);
+    try std.testing.expect(diff <= tolerance);
+}
+
+test "sqrt: 2.0 truncates to fixed-point precision" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const two = RocDec.two_point_zero;
+    const expected = RocDec{ .num = 1414213562373095048 };
+
+    try std.testing.expectEqual(expected, two.sqrt(test_env.getOps()));
+}
+
+test "cordic trig identities" {
+    const tolerance: u128 = 10_000;
+
+    try expectApproxDec(RocDec{ .num = 0 }, RocDec.zero_point_five.sub(RocDec.zero_point_five, undefined).sin(), tolerance);
+    try expectApproxDec(RocDec.one_point_zero, (RocDec{ .num = 0 }).cos(), tolerance);
+    try expectApproxDec(RocDec.one_point_zero, RocDec.half_pi.sin(), tolerance);
+    try expectApproxDec(RocDec{ .num = 0 }, RocDec.half_pi.cos(), tolerance);
+}
+
+test "cordic atan and inverse trig identities" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+    const tolerance: u128 = 10_000;
+
+    try expectApproxDec(RocDec{ .num = 785398163397448309 }, RocDec.one_point_zero.atan(test_env.getOps()), tolerance);
+    try expectApproxDec(RocDec.half_pi, RocDec.one_point_zero.asin(test_env.getOps()), tolerance);
+    try expectApproxDec(RocDec{ .num = 0 }, RocDec.one_point_zero.acos(test_env.getOps()), tolerance);
+}
+
+test "fractional pow uses deterministic fixed-point exp ln path" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const four = RocDec.fromU64(4);
+    const half = RocDec.zero_point_five;
+
+    try expectApproxDec(RocDec.two_point_zero, four.pow(half, test_env.getOps()), 10_000);
 }

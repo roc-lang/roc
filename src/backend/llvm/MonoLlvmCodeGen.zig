@@ -1048,19 +1048,23 @@ pub const MonoLlvmCodeGen = struct {
             },
             .num_is_eq => try self.storeBool(self.slot(target).ptr, try self.emitValueEqual(self.slot(arg_locals[0]).ptr, self.slot(arg_locals[1]).ptr, self.localLayout(arg_locals[0]))),
             .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte => try self.emitNumericCompare(target, op, arg_locals),
+            .compare => try self.emitNumericOrderCompare(target, arg_locals),
             .num_plus, .num_minus, .num_times, .num_div_by, .num_div_trunc_by, .num_rem_by, .num_mod_by, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor => try self.emitNumericBinary(target, op, arg_locals),
             .num_bitwise_not => try self.emitNumericBitwiseNot(target, arg_locals[0]),
             .num_negate => try self.emitNumericNegate(target, arg_locals[0]),
             .num_abs => try self.emitNumericAbs(target, arg_locals[0]),
             .num_abs_diff => try self.emitNumericAbsDiff(target, arg_locals),
-            .num_pow => try self.emitNumericFloatBinaryIntrinsic(target, arg_locals, .pow),
+            .num_pow => if (self.localLayout(target) == .dec)
+                try self.emitDecPow(target, arg_locals)
+            else
+                try self.emitNumericFloatBinaryIntrinsic(target, arg_locals, .pow),
             .num_sqrt => try self.emitNumericSqrt(target, arg_locals[0]),
-            .num_sin => try self.emitNumericFloatUnaryBuiltin(target, arg_locals[0], "roc_builtins_float_sin"),
-            .num_cos => try self.emitNumericFloatUnaryBuiltin(target, arg_locals[0], "roc_builtins_float_cos"),
-            .num_tan => try self.emitNumericFloatUnaryBuiltin(target, arg_locals[0], "roc_builtins_float_tan"),
-            .num_asin => try self.emitNumericFloatUnaryBuiltin(target, arg_locals[0], "roc_builtins_float_asin"),
-            .num_acos => try self.emitNumericFloatUnaryBuiltin(target, arg_locals[0], "roc_builtins_float_acos"),
-            .num_atan => try self.emitNumericFloatUnaryBuiltin(target, arg_locals[0], "roc_builtins_float_atan"),
+            .num_sin => try self.emitNumericUnaryMath(target, arg_locals[0], "roc_builtins_float_sin", "roc_builtins_dec_sin"),
+            .num_cos => try self.emitNumericUnaryMath(target, arg_locals[0], "roc_builtins_float_cos", "roc_builtins_dec_cos"),
+            .num_tan => try self.emitNumericUnaryMath(target, arg_locals[0], "roc_builtins_float_tan", "roc_builtins_dec_tan"),
+            .num_asin => try self.emitNumericUnaryMath(target, arg_locals[0], "roc_builtins_float_asin", "roc_builtins_dec_asin"),
+            .num_acos => try self.emitNumericUnaryMath(target, arg_locals[0], "roc_builtins_float_acos", "roc_builtins_dec_acos"),
+            .num_atan => try self.emitNumericUnaryMath(target, arg_locals[0], "roc_builtins_float_atan", "roc_builtins_dec_atan"),
             .num_floor => try self.emitNumericFloatUnaryIntrinsic(target, arg_locals[0], .floor),
             .num_ceiling => try self.emitNumericFloatUnaryIntrinsic(target, arg_locals[0], .ceil),
             .list_len => try self.storeIntToLayout(self.slot(target).ptr, try self.loadUsize(try self.offsetPtr(self.slot(arg_locals[0]).ptr, self.rocListLenOffset())), self.localLayout(target)),
@@ -1151,6 +1155,22 @@ pub const MonoLlvmCodeGen = struct {
             break :blk wip.icmp(cmp_cond, lhs, rhs, "") catch return error.OutOfMemory;
         };
         try self.storeBool(self.slot(target).ptr, cond);
+    }
+
+    fn emitNumericOrderCompare(self: *MonoLlvmCodeGen, target: LocalId, args: []const LocalId) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const layout_idx = self.localLayout(args[0]);
+        const lhs = try self.loadScalar(self.slot(args[0]).ptr, layout_idx);
+        const rhs = try self.loadScalar(self.slot(args[1]).ptr, layout_idx);
+        const signed = layout_idx.isSigned();
+        const gt_cond: LlvmBuilder.Value = wip.icmp(if (signed) .sgt else .ugt, lhs, rhs, "") catch return error.OutOfMemory;
+        const lt_cond: LlvmBuilder.Value = wip.icmp(if (signed) .slt else .ult, lhs, rhs, "") catch return error.OutOfMemory;
+        const gt = wip.conv(.unsigned, gt_cond, .i8, "") catch return error.OutOfMemory;
+        const lt = wip.conv(.unsigned, lt_cond, .i8, "") catch return error.OutOfMemory;
+        const lt_tag = wip.bin(.mul, lt, builder.intValue(.i8, 2) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const tag = wip.bin(.add, gt, lt_tag, "") catch return error.OutOfMemory;
+        try self.storeIntToLayout(self.slot(target).ptr, tag, self.localLayout(target));
     }
 
     fn emitNumericBinary(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LowLevel, args: []const LocalId) Error!void {
@@ -1282,6 +1302,22 @@ pub const MonoLlvmCodeGen = struct {
                 &.{ out_low, out_high, lhs_parts.low, lhs_parts.high, rhs_parts.low, rhs_parts.high },
             );
         }
+
+        const low = wip.load(.normal, .i64, out_low, LlvmBuilder.Alignment.fromByteUnits(8), "") catch return error.OutOfMemory;
+        const high = wip.load(.normal, .i64, out_high, LlvmBuilder.Alignment.fromByteUnits(8), "") catch return error.OutOfMemory;
+        return self.combineI128Parts(low, high);
+    }
+
+    fn callDecUnaryBuiltin(self: *MonoLlvmCodeGen, name: []const u8, value: LlvmBuilder.Value) Error!LlvmBuilder.Value {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const out_low = wip.alloca(.normal, .i64, .@"1", LlvmBuilder.Alignment.fromByteUnits(8), .default, "dec_low") catch return error.OutOfMemory;
+        const out_high = wip.alloca(.normal, .i64, .@"1", LlvmBuilder.Alignment.fromByteUnits(8), .default, "dec_high") catch return error.OutOfMemory;
+        const parts = try self.splitI128Value(value);
+        try self.callBuiltinVoid(
+            name,
+            &.{ try self.ptrType(), try self.ptrType(), .i64, .i64, try self.ptrType() },
+            &.{ out_low, out_high, parts.low, parts.high, self.rocOps() },
+        );
 
         const low = wip.load(.normal, .i64, out_low, LlvmBuilder.Alignment.fromByteUnits(8), "") catch return error.OutOfMemory;
         const high = wip.load(.normal, .i64, out_high, LlvmBuilder.Alignment.fromByteUnits(8), "") catch return error.OutOfMemory;
@@ -1839,7 +1875,24 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn emitNumericSqrt(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
+        if (self.localLayout(target) == .dec) {
+            const value = try self.loadScalar(self.slot(arg).ptr, .dec);
+            const result = try self.callDecUnaryBuiltin("roc_builtins_dec_sqrt", value);
+            try self.storeScalar(self.slot(target).ptr, .dec, result);
+            return;
+        }
         try self.emitNumericFloatUnaryIntrinsic(target, arg, .sqrt);
+    }
+
+    fn emitNumericUnaryMath(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId, float_name: []const u8, dec_name: []const u8) Error!void {
+        if (self.localLayout(target) == .dec) {
+            const value = try self.loadScalar(self.slot(arg).ptr, .dec);
+            const result = try self.callDecUnaryBuiltin(dec_name, value);
+            try self.storeScalar(self.slot(target).ptr, .dec, result);
+            return;
+        }
+
+        try self.emitNumericFloatUnaryBuiltin(target, arg, float_name);
     }
 
     fn emitNumericFloatUnaryIntrinsic(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId, intrinsic: LlvmBuilder.Intrinsic) Error!void {
@@ -1894,6 +1947,13 @@ pub const MonoLlvmCodeGen = struct {
             "",
         ) catch return error.OutOfMemory;
         try self.storeScalar(self.slot(target).ptr, target_layout, result);
+    }
+
+    fn emitDecPow(self: *MonoLlvmCodeGen, target: LocalId, args: []const LocalId) Error!void {
+        const lhs = try self.loadScalar(self.slot(args[0]).ptr, .dec);
+        const rhs = try self.loadScalar(self.slot(args[1]).ptr, .dec);
+        const result = try self.callDecBinaryBuiltin("roc_builtins_dec_pow", lhs, rhs, true);
+        try self.storeScalar(self.slot(target).ptr, .dec, result);
     }
 
     fn emitDecToStr(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {

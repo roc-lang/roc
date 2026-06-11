@@ -60,6 +60,8 @@ pub const tests = [_]TestCase{
         .source =
         \\{
         \\F32.is_nan(F32.nan)
+        \\    and !F32.is_float_eq(F32.nan, F32.nan)
+        \\    and F32.is_float_eq(-0.0, 0.0)
         \\    and F32.is_infinite(F32.infinity)
         \\    and F32.is_infinite(F32.negate(F32.infinity))
         \\    and F32.is_finite(1.0)
@@ -85,6 +87,8 @@ pub const tests = [_]TestCase{
         .source =
         \\{
         \\F64.is_nan(F64.nan)
+        \\    and !F64.is_float_eq(F64.nan, F64.nan)
+        \\    and F64.is_float_eq(-0.0, 0.0)
         \\    and F64.is_infinite(F64.infinity)
         \\    and F64.is_infinite(F64.negate(F64.infinity))
         \\    and F64.is_finite(1.0)
@@ -95,22 +99,34 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "True" },
     },
     .{
-        .name = "low_level - F32 sqrt and sqrt_checked",
+        .name = "low_level - F32 sqrt and sqrt_try",
         .source =
         \\{
-        \\F32.sqrt_checked(9.0) == Ok(3.0)
-        \\    and F32.sqrt_checked(-1.0) == Err(SqrtOfNegative)
+        \\match F32.sqrt_try(9.0) {
+        \\    Ok(value) => F32.is_float_eq(value, 3.0)
+        \\    Err(_) => False
+        \\}
+        \\    and match F32.sqrt_try(-1.0) {
+        \\        Ok(_) => False
+        \\        Err(SqrtOfNegative) => True
+        \\    }
         \\    and F32.to_str(F32.sqrt(2.25)) == "1.5"
         \\}
         ,
         .expected = .{ .inspect_str = "True" },
     },
     .{
-        .name = "low_level - F64 sqrt and sqrt_checked",
+        .name = "low_level - F64 sqrt and sqrt_try",
         .source =
         \\{
-        \\F64.sqrt_checked(9.0) == Ok(3.0)
-        \\    and F64.sqrt_checked(-1.0) == Err(SqrtOfNegative)
+        \\match F64.sqrt_try(9.0) {
+        \\    Ok(value) => F64.is_float_eq(value, 3.0)
+        \\    Err(_) => False
+        \\}
+        \\    and match F64.sqrt_try(-1.0) {
+        \\        Ok(_) => False
+        \\        Err(SqrtOfNegative) => True
+        \\    }
         \\    and F64.to_str(F64.sqrt(2.25)) == "1.5"
         \\}
         ,

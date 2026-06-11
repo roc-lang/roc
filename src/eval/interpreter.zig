@@ -5274,7 +5274,7 @@ pub const Interpreter = struct {
 
     fn evalCompare(self: *LirInterpreter, a: Value, b: Value, arg_layout: layout_mod.Idx, ret_layout: layout_mod.Idx) Error!Value {
         const val = try self.alloc(ret_layout);
-        // Returns 0=LT, 1=EQ, 2=GT
+        // Runtime tag order for [LT, EQ, GT]: EQ=0, GT=1, LT=2.
         const result: u8 = switch (try self.numericOperandKind(arg_layout)) {
             .unsigned_int => |bits| switch (bits) {
                 8 => cmpOrder(u8, a.read(u8), b.read(u8)),
@@ -5384,9 +5384,11 @@ pub const Interpreter = struct {
         const val = try self.alloc(ret_layout);
         switch (try self.numericOperandKind(arg_layout)) {
             .dec => {
-                const dec = RocDec{ .num = a.read(i128) };
-                const f = @sqrt(dec.toF64());
-                val.write(i128, (RocDec{ .num = builtins.dec.fromF64C(f, &self.roc_ops) }).num);
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                const sj = crash_boundary.set();
+                if (sj != 0) return error.Crash;
+                val.write(i128, builtins.dec.sqrtC(RocDec{ .num = a.read(i128) }, &self.roc_ops));
             },
             .float => |bits| switch (bits) {
                 32 => val.write(f32, @sqrt(a.read(f32))),
@@ -5404,7 +5406,13 @@ pub const Interpreter = struct {
     fn evalNumLog(self: *LirInterpreter, a: Value, ret_layout: layout_mod.Idx, arg_layout: layout_mod.Idx) Error!Value {
         const val = try self.alloc(ret_layout);
         switch (try self.numericOperandKind(arg_layout)) {
-            .dec => val.write(i128, builtins.dec.logC(RocDec{ .num = a.read(i128) })),
+            .dec => {
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                const sj = crash_boundary.set();
+                if (sj != 0) return error.Crash;
+                val.write(i128, builtins.dec.logC(RocDec{ .num = a.read(i128) }, &self.roc_ops));
+            },
             .float => |bits| switch (bits) {
                 32 => val.write(f32, @log(a.read(f32))),
                 64 => val.write(f64, @log(a.read(f64))),
@@ -5446,10 +5454,22 @@ pub const Interpreter = struct {
                 64 => val.write(f64, floatUnaryMath(f64, a.read(f64), op)),
                 else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported float {s} width {d}", .{ @tagName(op), bits }),
             },
-            .dec => return self.invariantFailedError(
-                "LIR/interpreter invariant violated: Dec num_{s} requires exact Dec lowering for layout {d}",
-                .{ @tagName(op), @intFromEnum(arg_layout) },
-            ),
+            .dec => {
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                const sj = crash_boundary.set();
+                if (sj != 0) return error.Crash;
+                const dec = RocDec{ .num = a.read(i128) };
+                const result = switch (op) {
+                    .sin => builtins.dec.sinC(dec, &self.roc_ops),
+                    .cos => builtins.dec.cosC(dec, &self.roc_ops),
+                    .tan => builtins.dec.tanC(dec, &self.roc_ops),
+                    .asin => builtins.dec.asinC(dec, &self.roc_ops),
+                    .acos => builtins.dec.acosC(dec, &self.roc_ops),
+                    .atan => builtins.dec.atanC(dec, &self.roc_ops),
+                };
+                val.write(i128, result);
+            },
             .signed_int, .unsigned_int => return self.invariantFailedError(
                 "LIR/interpreter invariant violated: integer num_{s} survived lowering for layout {d}",
                 .{ @tagName(op), @intFromEnum(arg_layout) },
@@ -6535,9 +6555,9 @@ pub const Interpreter = struct {
     }
 
     fn cmpOrder(comptime T: type, av: T, bv: T) u8 {
-        if (av < bv) return 0; // LT
-        if (av == bv) return 1; // EQ
-        return 2; // GT
+        if (av == bv) return 0; // EQ
+        if (av > bv) return 1; // GT
+        return 2; // LT
     }
 
     fn shiftOp(comptime T: type, av: T, amount: u8, op: ShiftOp) T {

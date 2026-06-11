@@ -2604,8 +2604,8 @@ Builtin :: [].{
 			## ```
 			plus : U8, U8 -> U8
 
-			add_checked : U8, U8 -> Try(U8, [Overflow])
-			add_checked = |a, b| unsigned_add_checked(U8.highest, a, b)
+			add_try : U8, U8 -> Try(U8, [Overflow, ..])
+			add_try = |a, b| unsigned_add_try(U8.highest, a, b)
 
 			## Add two [U8] values, saturating at [U8.highest] on overflow rather than wrapping around.
 			## ```roc
@@ -2626,8 +2626,8 @@ Builtin :: [].{
 			## ```
 			minus : U8, U8 -> U8
 
-			sub_checked : U8, U8 -> Try(U8, [Overflow])
-			sub_checked = |a, b| unsigned_sub_checked(a, b)
+			sub_try : U8, U8 -> Try(U8, [Overflow, ..])
+			sub_try = |a, b| unsigned_sub_try(a, b)
 
 			## Subtract the second [U8] from the first, saturating at the nearest bound on overflow.
 			## ```roc
@@ -2644,8 +2644,8 @@ Builtin :: [].{
 			## ```
 			times : U8, U8 -> U8
 
-			mul_checked : U8, U8 -> Try(U8, [Overflow])
-			mul_checked = |a, b| unsigned_mul_checked(U8.highest, 0, a, b)
+			mul_try : U8, U8 -> Try(U8, [Overflow, ..])
+			mul_try = |a, b| unsigned_mul_try(U8.highest, 0, a, b)
 
 			## Multiply two [U8] values, saturating at the nearest bound on overflow.
 			## ```roc
@@ -2665,7 +2665,7 @@ Builtin :: [].{
 			## ```
 			pow : U8, U8 -> U8
 			pow = |base, exponent|
-				match U8.pow_checked(base, exponent) {
+				match U8.pow_try(base, exponent) {
 					Ok(result) => result
 					Err(Overflow) => {
 						crash "integer exponentiation overflowed"
@@ -2675,12 +2675,12 @@ Builtin :: [].{
 			## Raise the first [U8] value to the power of the second.
 			## Returns an error instead of crashing when the exact result does not fit.
 			## ```roc
-			## expect U8.pow_checked(2, 3) == Ok(8)
+			## expect U8.pow_try(2, 3) == Ok(8)
 			##
-			## expect U8.pow_checked(U8.highest, 2) == Err(Overflow)
+			## expect U8.pow_try(U8.highest, 2) == Err(Overflow)
 			## ```
-			pow_checked : U8, U8 -> Try(U8, [Overflow])
-			pow_checked = |base, exponent| unsigned_pow_checked(U8.highest, 0, 1, 2, base, exponent)
+			pow_try : U8, U8 -> Try(U8, [Overflow, ..])
+			pow_try = |base, exponent| unsigned_pow_try(U8.highest, 0, 1, 2, base, exponent)
 
 			## Divide the first [U8] by the second, discarding any remainder. Crashes if the second [U8] is zero.
 			## ```roc
@@ -2690,8 +2690,8 @@ Builtin :: [].{
 			## ```
 			div_by : U8, U8 -> U8
 
-			div_checked : U8, U8 -> Try(U8, [DivByZero])
-			div_checked = |a, b| unsigned_div_checked(0, a, b)
+			div_try : U8, U8 -> Try(U8, [DivByZero, ..])
+			div_try = |a, b| unsigned_div_try(0, a, b)
 
 			## Divide the first [U8] by the second, rounding the result toward positive infinity.
 			## Crashes if the divisor is zero or the exact result does not fit in [U8].
@@ -2702,7 +2702,7 @@ Builtin :: [].{
 			## ```
 			div_ceil_by : U8, U8 -> U8
 			div_ceil_by = |a, b|
-				match U8.div_ceil_checked(a, b) {
+				match U8.div_ceil_try(a, b) {
 					Ok(result) => result
 					Err(DivByZero) => {
 						crash "integer ceiling division by zero"
@@ -2712,12 +2712,12 @@ Builtin :: [].{
 			## Divide the first [U8] by the second, rounding the result toward positive infinity.
 			## Returns an error instead of crashing when the divisor is zero or the exact result does not fit.
 			## ```roc
-			## expect U8.div_ceil_checked(7, 2) == Ok(4)
+			## expect U8.div_ceil_try(7, 2) == Ok(4)
 			##
-			## expect U8.div_ceil_checked(1, 0) == Err(DivByZero)
+			## expect U8.div_ceil_try(1, 0) == Err(DivByZero)
 			## ```
-			div_ceil_checked : U8, U8 -> Try(U8, [DivByZero])
-			div_ceil_checked = |a, b| unsigned_div_ceil_checked(0, 1, a, b)
+			div_ceil_try : U8, U8 -> Try(U8, [DivByZero, ..])
+			div_ceil_try = |a, b| unsigned_div_ceil_try(0, 1, a, b)
 
 			## Divide the first [U8] by the second, truncating down (toward zero). For unsigned
 			## integers this behaves the same as [U8.div_by].
@@ -2847,7 +2847,8 @@ Builtin :: [].{
 			from_int_digits : List(U8) -> Try(U8, [OutOfRange])
 			from_int_digits = |digits| u8_from_int_digits(digits)
 
-			from_numeral : Numeral -> Try(U8, [InvalidNumeral(Str), ..])
+			from_numeral : Numeral -> Try(U8, [InvalidNumeral(Str)])
+			from_numeral = |numeral| from_numeral_with(numeral, |str| Builtin.u8_from_str(str))
 
 			## Parse a [U8] from a [Str]. Returns `Err(BadNumStr)` if the string is
 			## not a valid non-negative integer, or if the parsed value does not fit
@@ -2881,7 +2882,7 @@ Builtin :: [].{
 						One(
 							{
 								item: start,
-								rest: match U8.add_checked(start, 1) {
+								rest: match U8.add_try(start, 1) {
 									Ok(next) => if next <= end {
 										U8.to(next, end)
 									} else {
@@ -2918,7 +2919,7 @@ Builtin :: [].{
 						One(
 							{
 								item: start,
-								rest: match U8.add_checked(start, 1) {
+								rest: match U8.add_try(start, 1) {
 									Ok(next) => if next < end {
 										U8.until(next, end)
 									} else {
@@ -3177,8 +3178,8 @@ Builtin :: [].{
 			## ```
 			plus : I8, I8 -> I8
 
-			add_checked : I8, I8 -> Try(I8, [Overflow])
-			add_checked = |a, b| signed_add_checked(I8.lowest, I8.highest, 0, a, b)
+			add_try : I8, I8 -> Try(I8, [Overflow, ..])
+			add_try = |a, b| signed_add_try(I8.lowest, I8.highest, 0, a, b)
 
 			## Add two [I8] values, saturating at [I8.highest] or [I8.lowest] on overflow rather than wrapping around.
 			## ```roc
@@ -3203,8 +3204,8 @@ Builtin :: [].{
 			## ```
 			minus : I8, I8 -> I8
 
-			sub_checked : I8, I8 -> Try(I8, [Overflow])
-			sub_checked = |a, b| signed_sub_checked(I8.lowest, I8.highest, 0, a, b)
+			sub_try : I8, I8 -> Try(I8, [Overflow, ..])
+			sub_try = |a, b| signed_sub_try(I8.lowest, I8.highest, 0, a, b)
 
 			## Subtract the second [I8] from the first, saturating at the nearest bound on overflow.
 			## ```roc
@@ -3223,8 +3224,8 @@ Builtin :: [].{
 			## ```
 			times : I8, I8 -> I8
 
-			mul_checked : I8, I8 -> Try(I8, [Overflow])
-			mul_checked = |a, b| signed_mul_checked(I8.lowest, I8.highest, 0, -1, a, b)
+			mul_try : I8, I8 -> Try(I8, [Overflow, ..])
+			mul_try = |a, b| signed_mul_try(I8.lowest, I8.highest, 0, -1, a, b)
 
 			## Multiply two [I8] values, saturating at the nearest bound on overflow.
 			## ```roc
@@ -3246,7 +3247,7 @@ Builtin :: [].{
 			## ```
 			pow : I8, I8 -> I8
 			pow = |base, exponent|
-				match I8.pow_checked(base, exponent) {
+				match I8.pow_try(base, exponent) {
 					Ok(result) => result
 					Err(Overflow) => {
 						crash "integer exponentiation overflowed"
@@ -3259,16 +3260,16 @@ Builtin :: [].{
 			## Raise the first [I8] value to the power of the second.
 			## Returns an error instead of crashing when the exact result does not fit.
 			## ```roc
-			## expect I8.pow_checked(2, 3) == Ok(8)
+			## expect I8.pow_try(2, 3) == Ok(8)
 			##
-			## expect I8.pow_checked(I8.highest, 2) == Err(Overflow)
+			## expect I8.pow_try(I8.highest, 2) == Err(Overflow)
 			##
-			## expect I8.pow_checked(2, -1) == Err(Underflow)
+			## expect I8.pow_try(2, -1) == Err(Underflow)
 			##
-			## expect I8.pow_checked(-1, -3) == Ok(-1)
+			## expect I8.pow_try(-1, -3) == Ok(-1)
 			## ```
-			pow_checked : I8, I8 -> Try(I8, [Overflow, Underflow])
-			pow_checked = |base, exponent| signed_pow_checked(I8.lowest, I8.highest, 0, 1, 2, -1, base, exponent)
+			pow_try : I8, I8 -> Try(I8, [Overflow, Underflow, ..])
+			pow_try = |base, exponent| signed_pow_try(I8.lowest, I8.highest, 0, 1, 2, -1, base, exponent)
 
 			## Divide the first [I8] by the second, discarding any remainder. Crashes if the second [I8] is zero.
 			## ```roc
@@ -3278,8 +3279,8 @@ Builtin :: [].{
 			## ```
 			div_by : I8, I8 -> I8
 
-			div_checked : I8, I8 -> Try(I8, [DivByZero, Overflow])
-			div_checked = |a, b| signed_div_checked(I8.lowest, 0, -1, a, b)
+			div_try : I8, I8 -> Try(I8, [DivByZero, Overflow, ..])
+			div_try = |a, b| signed_div_try(I8.lowest, 0, -1, a, b)
 
 			## Divide the first [I8] by the second, rounding the result toward positive infinity.
 			## Crashes if the divisor is zero or the exact result does not fit in [I8].
@@ -3294,7 +3295,7 @@ Builtin :: [].{
 			## ```
 			div_ceil_by : I8, I8 -> I8
 			div_ceil_by = |a, b|
-				match I8.div_ceil_checked(a, b) {
+				match I8.div_ceil_try(a, b) {
 					Ok(result) => result
 					Err(DivByZero) => {
 						crash "integer ceiling division by zero"
@@ -3307,14 +3308,14 @@ Builtin :: [].{
 			## Divide the first [I8] by the second, rounding the result toward positive infinity.
 			## Returns an error instead of crashing when the divisor is zero or the exact result does not fit.
 			## ```roc
-			## expect I8.div_ceil_checked(7, 2) == Ok(4)
+			## expect I8.div_ceil_try(7, 2) == Ok(4)
 			##
-			## expect I8.div_ceil_checked(1, 0) == Err(DivByZero)
+			## expect I8.div_ceil_try(1, 0) == Err(DivByZero)
 			##
-			## expect I8.div_ceil_checked(I8.lowest, -1) == Err(Overflow)
+			## expect I8.div_ceil_try(I8.lowest, -1) == Err(Overflow)
 			## ```
-			div_ceil_checked : I8, I8 -> Try(I8, [DivByZero, Overflow])
-			div_ceil_checked = |a, b| signed_div_ceil_checked(I8.lowest, I8.highest, 0, 1, -1, a, b)
+			div_ceil_try : I8, I8 -> Try(I8, [DivByZero, Overflow, ..])
+			div_ceil_try = |a, b| signed_div_ceil_try(I8.lowest, I8.highest, 0, 1, -1, a, b)
 
 			## Divide the first [I8] by the second, truncating toward zero.
 			## ```roc
@@ -3464,7 +3465,7 @@ Builtin :: [].{
 						One(
 							{
 								item: start,
-								rest: match I8.add_checked(start, 1) {
+								rest: match I8.add_try(start, 1) {
 									Ok(next) => if next <= end {
 										I8.to(next, end)
 									} else {
@@ -3501,7 +3502,7 @@ Builtin :: [].{
 						One(
 							{
 								item: start,
-								rest: match I8.add_checked(start, 1) {
+								rest: match I8.add_try(start, 1) {
 									Ok(next) => if next < end {
 										I8.until(next, end)
 									} else {
@@ -3528,7 +3529,8 @@ Builtin :: [].{
 			from_int_digits : List(U8) -> Try(I8, [OutOfRange])
 			from_int_digits = |digits| i8_from_int_digits(digits)
 
-			from_numeral : Numeral -> Try(I8, [InvalidNumeral(Str), ..])
+			from_numeral : Numeral -> Try(I8, [InvalidNumeral(Str)])
+			from_numeral = |numeral| from_numeral_with(numeral, |str| Builtin.i8_from_str(str))
 
 			## Parse an [I8] from a [Str]. Returns `Err(BadNumStr)` if the string
 			## is not a valid integer, or if the parsed value does not fit in an
@@ -3821,8 +3823,8 @@ Builtin :: [].{
 			## ```
 			plus : U16, U16 -> U16
 
-			add_checked : U16, U16 -> Try(U16, [Overflow])
-			add_checked = |a, b| unsigned_add_checked(U16.highest, a, b)
+			add_try : U16, U16 -> Try(U16, [Overflow, ..])
+			add_try = |a, b| unsigned_add_try(U16.highest, a, b)
 
 			## Add two [U16] values, saturating at [U16.highest] on overflow rather than wrapping around.
 			## ```roc
@@ -3843,8 +3845,8 @@ Builtin :: [].{
 			## ```
 			minus : U16, U16 -> U16
 
-			sub_checked : U16, U16 -> Try(U16, [Overflow])
-			sub_checked = |a, b| unsigned_sub_checked(a, b)
+			sub_try : U16, U16 -> Try(U16, [Overflow, ..])
+			sub_try = |a, b| unsigned_sub_try(a, b)
 
 			## Subtract the second [U16] from the first, saturating at the nearest bound on overflow.
 			## ```roc
@@ -3861,8 +3863,8 @@ Builtin :: [].{
 			## ```
 			times : U16, U16 -> U16
 
-			mul_checked : U16, U16 -> Try(U16, [Overflow])
-			mul_checked = |a, b| unsigned_mul_checked(U16.highest, 0, a, b)
+			mul_try : U16, U16 -> Try(U16, [Overflow, ..])
+			mul_try = |a, b| unsigned_mul_try(U16.highest, 0, a, b)
 
 			## Multiply two [U16] values, saturating at the nearest bound on overflow.
 			## ```roc
@@ -3882,7 +3884,7 @@ Builtin :: [].{
 			## ```
 			pow : U16, U16 -> U16
 			pow = |base, exponent|
-				match U16.pow_checked(base, exponent) {
+				match U16.pow_try(base, exponent) {
 					Ok(result) => result
 					Err(Overflow) => {
 						crash "integer exponentiation overflowed"
@@ -3892,12 +3894,12 @@ Builtin :: [].{
 			## Raise the first [U16] value to the power of the second.
 			## Returns an error instead of crashing when the exact result does not fit.
 			## ```roc
-			## expect U16.pow_checked(2, 3) == Ok(8)
+			## expect U16.pow_try(2, 3) == Ok(8)
 			##
-			## expect U16.pow_checked(U16.highest, 2) == Err(Overflow)
+			## expect U16.pow_try(U16.highest, 2) == Err(Overflow)
 			## ```
-			pow_checked : U16, U16 -> Try(U16, [Overflow])
-			pow_checked = |base, exponent| unsigned_pow_checked(U16.highest, 0, 1, 2, base, exponent)
+			pow_try : U16, U16 -> Try(U16, [Overflow, ..])
+			pow_try = |base, exponent| unsigned_pow_try(U16.highest, 0, 1, 2, base, exponent)
 
 			## Divide the first [U16] by the second, discarding any remainder. Crashes if the second [U16] is zero.
 			## ```roc
@@ -3907,8 +3909,8 @@ Builtin :: [].{
 			## ```
 			div_by : U16, U16 -> U16
 
-			div_checked : U16, U16 -> Try(U16, [DivByZero])
-			div_checked = |a, b| unsigned_div_checked(0, a, b)
+			div_try : U16, U16 -> Try(U16, [DivByZero, ..])
+			div_try = |a, b| unsigned_div_try(0, a, b)
 
 			## Divide the first [U16] by the second, rounding the result toward positive infinity.
 			## Crashes if the divisor is zero or the exact result does not fit in [U16].
@@ -3919,7 +3921,7 @@ Builtin :: [].{
 			## ```
 			div_ceil_by : U16, U16 -> U16
 			div_ceil_by = |a, b|
-				match U16.div_ceil_checked(a, b) {
+				match U16.div_ceil_try(a, b) {
 					Ok(result) => result
 					Err(DivByZero) => {
 						crash "integer ceiling division by zero"
@@ -3929,12 +3931,12 @@ Builtin :: [].{
 			## Divide the first [U16] by the second, rounding the result toward positive infinity.
 			## Returns an error instead of crashing when the divisor is zero or the exact result does not fit.
 			## ```roc
-			## expect U16.div_ceil_checked(7, 2) == Ok(4)
+			## expect U16.div_ceil_try(7, 2) == Ok(4)
 			##
-			## expect U16.div_ceil_checked(1, 0) == Err(DivByZero)
+			## expect U16.div_ceil_try(1, 0) == Err(DivByZero)
 			## ```
-			div_ceil_checked : U16, U16 -> Try(U16, [DivByZero])
-			div_ceil_checked = |a, b| unsigned_div_ceil_checked(0, 1, a, b)
+			div_ceil_try : U16, U16 -> Try(U16, [DivByZero, ..])
+			div_ceil_try = |a, b| unsigned_div_ceil_try(0, 1, a, b)
 
 			## Divide the first [U16] by the second, truncating down (toward zero). For unsigned
 			## integers this behaves the same as [U16.div_by].
@@ -4076,7 +4078,7 @@ Builtin :: [].{
 						One(
 							{
 								item: start,
-								rest: match U16.add_checked(start, 1) {
+								rest: match U16.add_try(start, 1) {
 									Ok(next) => if next <= end {
 										U16.to(next, end)
 									} else {
@@ -4113,7 +4115,7 @@ Builtin :: [].{
 						One(
 							{
 								item: start,
-								rest: match U16.add_checked(start, 1) {
+								rest: match U16.add_try(start, 1) {
 									Ok(next) => if next < end {
 										U16.until(next, end)
 									} else {
@@ -4138,7 +4140,8 @@ Builtin :: [].{
 			from_int_digits : List(U8) -> Try(U16, [OutOfRange])
 			from_int_digits = |digits| u16_from_int_digits(digits)
 
-			from_numeral : Numeral -> Try(U16, [InvalidNumeral(Str), ..])
+			from_numeral : Numeral -> Try(U16, [InvalidNumeral(Str)])
+			from_numeral = |numeral| from_numeral_with(numeral, |str| Builtin.u16_from_str(str))
 
 			## Parse a [U16] from a [Str]. Returns `Err(BadNumStr)` if the string is
 			## not a valid non-negative integer, or if the parsed value does not fit
@@ -4432,8 +4435,8 @@ Builtin :: [].{
 			## ```
 			plus : I16, I16 -> I16
 
-			add_checked : I16, I16 -> Try(I16, [Overflow])
-			add_checked = |a, b| signed_add_checked(I16.lowest, I16.highest, 0, a, b)
+			add_try : I16, I16 -> Try(I16, [Overflow, ..])
+			add_try = |a, b| signed_add_try(I16.lowest, I16.highest, 0, a, b)
 
 			## Add two [I16] values, saturating at [I16.highest] or [I16.lowest] on overflow rather than wrapping around.
 			## ```roc
@@ -4458,8 +4461,8 @@ Builtin :: [].{
 			## ```
 			minus : I16, I16 -> I16
 
-			sub_checked : I16, I16 -> Try(I16, [Overflow])
-			sub_checked = |a, b| signed_sub_checked(I16.lowest, I16.highest, 0, a, b)
+			sub_try : I16, I16 -> Try(I16, [Overflow, ..])
+			sub_try = |a, b| signed_sub_try(I16.lowest, I16.highest, 0, a, b)
 
 			## Subtract the second [I16] from the first, saturating at the nearest bound on overflow.
 			## ```roc
@@ -4478,8 +4481,8 @@ Builtin :: [].{
 			## ```
 			times : I16, I16 -> I16
 
-			mul_checked : I16, I16 -> Try(I16, [Overflow])
-			mul_checked = |a, b| signed_mul_checked(I16.lowest, I16.highest, 0, -1, a, b)
+			mul_try : I16, I16 -> Try(I16, [Overflow, ..])
+			mul_try = |a, b| signed_mul_try(I16.lowest, I16.highest, 0, -1, a, b)
 
 			## Multiply two [I16] values, saturating at the nearest bound on overflow.
 			## ```roc
@@ -4501,7 +4504,7 @@ Builtin :: [].{
 			## ```
 			pow : I16, I16 -> I16
 			pow = |base, exponent|
-				match I16.pow_checked(base, exponent) {
+				match I16.pow_try(base, exponent) {
 					Ok(result) => result
 					Err(Overflow) => {
 						crash "integer exponentiation overflowed"
@@ -4514,16 +4517,16 @@ Builtin :: [].{
 			## Raise the first [I16] value to the power of the second.
 			## Returns an error instead of crashing when the exact result does not fit.
 			## ```roc
-			## expect I16.pow_checked(2, 3) == Ok(8)
+			## expect I16.pow_try(2, 3) == Ok(8)
 			##
-			## expect I16.pow_checked(I16.highest, 2) == Err(Overflow)
+			## expect I16.pow_try(I16.highest, 2) == Err(Overflow)
 			##
-			## expect I16.pow_checked(2, -1) == Err(Underflow)
+			## expect I16.pow_try(2, -1) == Err(Underflow)
 			##
-			## expect I16.pow_checked(-1, -3) == Ok(-1)
+			## expect I16.pow_try(-1, -3) == Ok(-1)
 			## ```
-			pow_checked : I16, I16 -> Try(I16, [Overflow, Underflow])
-			pow_checked = |base, exponent| signed_pow_checked(I16.lowest, I16.highest, 0, 1, 2, -1, base, exponent)
+			pow_try : I16, I16 -> Try(I16, [Overflow, Underflow, ..])
+			pow_try = |base, exponent| signed_pow_try(I16.lowest, I16.highest, 0, 1, 2, -1, base, exponent)
 
 			## Divide the first [I16] by the second, discarding any remainder. Crashes if the second [I16] is zero.
 			## ```roc
@@ -4533,8 +4536,8 @@ Builtin :: [].{
 			## ```
 			div_by : I16, I16 -> I16
 
-			div_checked : I16, I16 -> Try(I16, [DivByZero, Overflow])
-			div_checked = |a, b| signed_div_checked(I16.lowest, 0, -1, a, b)
+			div_try : I16, I16 -> Try(I16, [DivByZero, Overflow, ..])
+			div_try = |a, b| signed_div_try(I16.lowest, 0, -1, a, b)
 
 			## Divide the first [I16] by the second, rounding the result toward positive infinity.
 			## Crashes if the divisor is zero or the exact result does not fit in [I16].
@@ -4549,7 +4552,7 @@ Builtin :: [].{
 			## ```
 			div_ceil_by : I16, I16 -> I16
 			div_ceil_by = |a, b|
-				match I16.div_ceil_checked(a, b) {
+				match I16.div_ceil_try(a, b) {
 					Ok(result) => result
 					Err(DivByZero) => {
 						crash "integer ceiling division by zero"
@@ -4562,14 +4565,14 @@ Builtin :: [].{
 			## Divide the first [I16] by the second, rounding the result toward positive infinity.
 			## Returns an error instead of crashing when the divisor is zero or the exact result does not fit.
 			## ```roc
-			## expect I16.div_ceil_checked(7, 2) == Ok(4)
+			## expect I16.div_ceil_try(7, 2) == Ok(4)
 			##
-			## expect I16.div_ceil_checked(1, 0) == Err(DivByZero)
+			## expect I16.div_ceil_try(1, 0) == Err(DivByZero)
 			##
-			## expect I16.div_ceil_checked(I16.lowest, -1) == Err(Overflow)
+			## expect I16.div_ceil_try(I16.lowest, -1) == Err(Overflow)
 			## ```
-			div_ceil_checked : I16, I16 -> Try(I16, [DivByZero, Overflow])
-			div_ceil_checked = |a, b| signed_div_ceil_checked(I16.lowest, I16.highest, 0, 1, -1, a, b)
+			div_ceil_try : I16, I16 -> Try(I16, [DivByZero, Overflow, ..])
+			div_ceil_try = |a, b| signed_div_ceil_try(I16.lowest, I16.highest, 0, 1, -1, a, b)
 
 			## Divide the first [I16] by the second, truncating toward zero.
 			## ```roc
@@ -4719,7 +4722,7 @@ Builtin :: [].{
 						One(
 							{
 								item: start,
-								rest: match I16.add_checked(start, 1) {
+								rest: match I16.add_try(start, 1) {
 									Ok(next) => if next <= end {
 										I16.to(next, end)
 									} else {
@@ -4756,7 +4759,7 @@ Builtin :: [].{
 						One(
 							{
 								item: start,
-								rest: match I16.add_checked(start, 1) {
+								rest: match I16.add_try(start, 1) {
 									Ok(next) => if next < end {
 										I16.until(next, end)
 									} else {
@@ -4783,7 +4786,8 @@ Builtin :: [].{
 			from_int_digits : List(U8) -> Try(I16, [OutOfRange])
 			from_int_digits = |digits| i16_from_int_digits(digits)
 
-			from_numeral : Numeral -> Try(I16, [InvalidNumeral(Str), ..])
+			from_numeral : Numeral -> Try(I16, [InvalidNumeral(Str)])
+			from_numeral = |numeral| from_numeral_with(numeral, |str| Builtin.i16_from_str(str))
 
 			## Parse an [I16] from a [Str]. Returns `Err(BadNumStr)` if the string
 			## is not a valid integer, or if the parsed value does not fit in an
@@ -5093,8 +5097,8 @@ Builtin :: [].{
 			## ```
 			plus : U32, U32 -> U32
 
-			add_checked : U32, U32 -> Try(U32, [Overflow])
-			add_checked = |a, b| unsigned_add_checked(U32.highest, a, b)
+			add_try : U32, U32 -> Try(U32, [Overflow, ..])
+			add_try = |a, b| unsigned_add_try(U32.highest, a, b)
 
 			## Add two [U32] values, saturating at [U32.highest] on overflow rather than wrapping around.
 			## ```roc
@@ -5115,8 +5119,8 @@ Builtin :: [].{
 			## ```
 			minus : U32, U32 -> U32
 
-			sub_checked : U32, U32 -> Try(U32, [Overflow])
-			sub_checked = |a, b| unsigned_sub_checked(a, b)
+			sub_try : U32, U32 -> Try(U32, [Overflow, ..])
+			sub_try = |a, b| unsigned_sub_try(a, b)
 
 			## Subtract the second [U32] from the first, saturating at the nearest bound on overflow.
 			## ```roc
@@ -5133,8 +5137,8 @@ Builtin :: [].{
 			## ```
 			times : U32, U32 -> U32
 
-			mul_checked : U32, U32 -> Try(U32, [Overflow])
-			mul_checked = |a, b| unsigned_mul_checked(U32.highest, 0, a, b)
+			mul_try : U32, U32 -> Try(U32, [Overflow, ..])
+			mul_try = |a, b| unsigned_mul_try(U32.highest, 0, a, b)
 
 			## Multiply two [U32] values, saturating at the nearest bound on overflow.
 			## ```roc
@@ -5154,7 +5158,7 @@ Builtin :: [].{
 			## ```
 			pow : U32, U32 -> U32
 			pow = |base, exponent|
-				match U32.pow_checked(base, exponent) {
+				match U32.pow_try(base, exponent) {
 					Ok(result) => result
 					Err(Overflow) => {
 						crash "integer exponentiation overflowed"
@@ -5164,12 +5168,12 @@ Builtin :: [].{
 			## Raise the first [U32] value to the power of the second.
 			## Returns an error instead of crashing when the exact result does not fit.
 			## ```roc
-			## expect U32.pow_checked(2, 3) == Ok(8)
+			## expect U32.pow_try(2, 3) == Ok(8)
 			##
-			## expect U32.pow_checked(U32.highest, 2) == Err(Overflow)
+			## expect U32.pow_try(U32.highest, 2) == Err(Overflow)
 			## ```
-			pow_checked : U32, U32 -> Try(U32, [Overflow])
-			pow_checked = |base, exponent| unsigned_pow_checked(U32.highest, 0, 1, 2, base, exponent)
+			pow_try : U32, U32 -> Try(U32, [Overflow, ..])
+			pow_try = |base, exponent| unsigned_pow_try(U32.highest, 0, 1, 2, base, exponent)
 
 			## Divide the first [U32] by the second, discarding any remainder. Crashes if the second [U32] is zero.
 			## ```roc
@@ -5179,8 +5183,8 @@ Builtin :: [].{
 			## ```
 			div_by : U32, U32 -> U32
 
-			div_checked : U32, U32 -> Try(U32, [DivByZero])
-			div_checked = |a, b| unsigned_div_checked(0, a, b)
+			div_try : U32, U32 -> Try(U32, [DivByZero, ..])
+			div_try = |a, b| unsigned_div_try(0, a, b)
 
 			## Divide the first [U32] by the second, rounding the result toward positive infinity.
 			## Crashes if the divisor is zero or the exact result does not fit in [U32].
@@ -5191,7 +5195,7 @@ Builtin :: [].{
 			## ```
 			div_ceil_by : U32, U32 -> U32
 			div_ceil_by = |a, b|
-				match U32.div_ceil_checked(a, b) {
+				match U32.div_ceil_try(a, b) {
 					Ok(result) => result
 					Err(DivByZero) => {
 						crash "integer ceiling division by zero"
@@ -5201,12 +5205,12 @@ Builtin :: [].{
 			## Divide the first [U32] by the second, rounding the result toward positive infinity.
 			## Returns an error instead of crashing when the divisor is zero or the exact result does not fit.
 			## ```roc
-			## expect U32.div_ceil_checked(7, 2) == Ok(4)
+			## expect U32.div_ceil_try(7, 2) == Ok(4)
 			##
-			## expect U32.div_ceil_checked(1, 0) == Err(DivByZero)
+			## expect U32.div_ceil_try(1, 0) == Err(DivByZero)
 			## ```
-			div_ceil_checked : U32, U32 -> Try(U32, [DivByZero])
-			div_ceil_checked = |a, b| unsigned_div_ceil_checked(0, 1, a, b)
+			div_ceil_try : U32, U32 -> Try(U32, [DivByZero, ..])
+			div_ceil_try = |a, b| unsigned_div_ceil_try(0, 1, a, b)
 
 			## Divide the first [U32] by the second, truncating down (toward zero). For unsigned
 			## integers this behaves the same as [U32.div_by].
@@ -5348,7 +5352,7 @@ Builtin :: [].{
 						One(
 							{
 								item: start,
-								rest: match U32.add_checked(start, 1) {
+								rest: match U32.add_try(start, 1) {
 									Ok(next) => if next <= end {
 										U32.to(next, end)
 									} else {
@@ -5385,7 +5389,7 @@ Builtin :: [].{
 						One(
 							{
 								item: start,
-								rest: match U32.add_checked(start, 1) {
+								rest: match U32.add_try(start, 1) {
 									Ok(next) => if next < end {
 										U32.until(next, end)
 									} else {
@@ -5410,7 +5414,8 @@ Builtin :: [].{
 			from_int_digits : List(U8) -> Try(U32, [OutOfRange])
 			from_int_digits = |digits| u32_from_int_digits(digits)
 
-			from_numeral : Numeral -> Try(U32, [InvalidNumeral(Str), ..])
+			from_numeral : Numeral -> Try(U32, [InvalidNumeral(Str)])
+			from_numeral = |numeral| from_numeral_with(numeral, |str| Builtin.u32_from_str(str))
 
 			## Parse a [U32] from a [Str]. Returns `Err(BadNumStr)` if the string is
 			## not a valid non-negative integer, or if the parsed value does not fit
@@ -5742,8 +5747,8 @@ Builtin :: [].{
 			## ```
 			plus : I32, I32 -> I32
 
-			add_checked : I32, I32 -> Try(I32, [Overflow])
-			add_checked = |a, b| signed_add_checked(I32.lowest, I32.highest, 0, a, b)
+			add_try : I32, I32 -> Try(I32, [Overflow, ..])
+			add_try = |a, b| signed_add_try(I32.lowest, I32.highest, 0, a, b)
 
 			## Add two [I32] values, saturating at [I32.highest] or [I32.lowest] on overflow rather than wrapping around.
 			## ```roc
@@ -5768,8 +5773,8 @@ Builtin :: [].{
 			## ```
 			minus : I32, I32 -> I32
 
-			sub_checked : I32, I32 -> Try(I32, [Overflow])
-			sub_checked = |a, b| signed_sub_checked(I32.lowest, I32.highest, 0, a, b)
+			sub_try : I32, I32 -> Try(I32, [Overflow, ..])
+			sub_try = |a, b| signed_sub_try(I32.lowest, I32.highest, 0, a, b)
 
 			## Subtract the second [I32] from the first, saturating at the nearest bound on overflow.
 			## ```roc
@@ -5788,8 +5793,8 @@ Builtin :: [].{
 			## ```
 			times : I32, I32 -> I32
 
-			mul_checked : I32, I32 -> Try(I32, [Overflow])
-			mul_checked = |a, b| signed_mul_checked(I32.lowest, I32.highest, 0, -1, a, b)
+			mul_try : I32, I32 -> Try(I32, [Overflow, ..])
+			mul_try = |a, b| signed_mul_try(I32.lowest, I32.highest, 0, -1, a, b)
 
 			## Multiply two [I32] values, saturating at the nearest bound on overflow.
 			## ```roc
@@ -5811,7 +5816,7 @@ Builtin :: [].{
 			## ```
 			pow : I32, I32 -> I32
 			pow = |base, exponent|
-				match I32.pow_checked(base, exponent) {
+				match I32.pow_try(base, exponent) {
 					Ok(result) => result
 					Err(Overflow) => {
 						crash "integer exponentiation overflowed"
@@ -5824,16 +5829,16 @@ Builtin :: [].{
 			## Raise the first [I32] value to the power of the second.
 			## Returns an error instead of crashing when the exact result does not fit.
 			## ```roc
-			## expect I32.pow_checked(2, 3) == Ok(8)
+			## expect I32.pow_try(2, 3) == Ok(8)
 			##
-			## expect I32.pow_checked(I32.highest, 2) == Err(Overflow)
+			## expect I32.pow_try(I32.highest, 2) == Err(Overflow)
 			##
-			## expect I32.pow_checked(2, -1) == Err(Underflow)
+			## expect I32.pow_try(2, -1) == Err(Underflow)
 			##
-			## expect I32.pow_checked(-1, -3) == Ok(-1)
+			## expect I32.pow_try(-1, -3) == Ok(-1)
 			## ```
-			pow_checked : I32, I32 -> Try(I32, [Overflow, Underflow])
-			pow_checked = |base, exponent| signed_pow_checked(I32.lowest, I32.highest, 0, 1, 2, -1, base, exponent)
+			pow_try : I32, I32 -> Try(I32, [Overflow, Underflow, ..])
+			pow_try = |base, exponent| signed_pow_try(I32.lowest, I32.highest, 0, 1, 2, -1, base, exponent)
 
 			## Divide the first [I32] by the second, discarding any remainder. Crashes if the second [I32] is zero.
 			## ```roc
@@ -5843,8 +5848,8 @@ Builtin :: [].{
 			## ```
 			div_by : I32, I32 -> I32
 
-			div_checked : I32, I32 -> Try(I32, [DivByZero, Overflow])
-			div_checked = |a, b| signed_div_checked(I32.lowest, 0, -1, a, b)
+			div_try : I32, I32 -> Try(I32, [DivByZero, Overflow, ..])
+			div_try = |a, b| signed_div_try(I32.lowest, 0, -1, a, b)
 
 			## Divide the first [I32] by the second, rounding the result toward positive infinity.
 			## Crashes if the divisor is zero or the exact result does not fit in [I32].
@@ -5859,7 +5864,7 @@ Builtin :: [].{
 			## ```
 			div_ceil_by : I32, I32 -> I32
 			div_ceil_by = |a, b|
-				match I32.div_ceil_checked(a, b) {
+				match I32.div_ceil_try(a, b) {
 					Ok(result) => result
 					Err(DivByZero) => {
 						crash "integer ceiling division by zero"
@@ -5872,14 +5877,14 @@ Builtin :: [].{
 			## Divide the first [I32] by the second, rounding the result toward positive infinity.
 			## Returns an error instead of crashing when the divisor is zero or the exact result does not fit.
 			## ```roc
-			## expect I32.div_ceil_checked(7, 2) == Ok(4)
+			## expect I32.div_ceil_try(7, 2) == Ok(4)
 			##
-			## expect I32.div_ceil_checked(1, 0) == Err(DivByZero)
+			## expect I32.div_ceil_try(1, 0) == Err(DivByZero)
 			##
-			## expect I32.div_ceil_checked(I32.lowest, -1) == Err(Overflow)
+			## expect I32.div_ceil_try(I32.lowest, -1) == Err(Overflow)
 			## ```
-			div_ceil_checked : I32, I32 -> Try(I32, [DivByZero, Overflow])
-			div_ceil_checked = |a, b| signed_div_ceil_checked(I32.lowest, I32.highest, 0, 1, -1, a, b)
+			div_ceil_try : I32, I32 -> Try(I32, [DivByZero, Overflow, ..])
+			div_ceil_try = |a, b| signed_div_ceil_try(I32.lowest, I32.highest, 0, 1, -1, a, b)
 
 			## Divide the first [I32] by the second, truncating toward zero.
 			## ```roc
@@ -6029,7 +6034,7 @@ Builtin :: [].{
 						One(
 							{
 								item: start,
-								rest: match I32.add_checked(start, 1) {
+								rest: match I32.add_try(start, 1) {
 									Ok(next) => if next <= end {
 										I32.to(next, end)
 									} else {
@@ -6066,7 +6071,7 @@ Builtin :: [].{
 						One(
 							{
 								item: start,
-								rest: match I32.add_checked(start, 1) {
+								rest: match I32.add_try(start, 1) {
 									Ok(next) => if next < end {
 										I32.until(next, end)
 									} else {
@@ -6093,7 +6098,8 @@ Builtin :: [].{
 			from_int_digits : List(U8) -> Try(I32, [OutOfRange])
 			from_int_digits = |digits| i32_from_int_digits(digits)
 
-			from_numeral : Numeral -> Try(I32, [InvalidNumeral(Str), ..])
+			from_numeral : Numeral -> Try(I32, [InvalidNumeral(Str)])
+			from_numeral = |numeral| from_numeral_with(numeral, |str| Builtin.i32_from_str(str))
 
 			## Parse an [I32] from a [Str]. Returns `Err(BadNumStr)` if the string
 			## is not a valid integer, or if the parsed value does not fit in an
@@ -6423,8 +6429,8 @@ Builtin :: [].{
 			## ```
 			plus : U64, U64 -> U64
 
-			add_checked : U64, U64 -> Try(U64, [Overflow])
-			add_checked = |a, b| unsigned_add_checked(U64.highest, a, b)
+			add_try : U64, U64 -> Try(U64, [Overflow, ..])
+			add_try = |a, b| unsigned_add_try(U64.highest, a, b)
 
 			## Add two [U64] values, saturating at [U64.highest] on overflow rather than wrapping around.
 			## ```roc
@@ -6445,8 +6451,8 @@ Builtin :: [].{
 			## ```
 			minus : U64, U64 -> U64
 
-			sub_checked : U64, U64 -> Try(U64, [Overflow])
-			sub_checked = |a, b| unsigned_sub_checked(a, b)
+			sub_try : U64, U64 -> Try(U64, [Overflow, ..])
+			sub_try = |a, b| unsigned_sub_try(a, b)
 
 			## Subtract the second [U64] from the first, saturating at the nearest bound on overflow.
 			## ```roc
@@ -6463,8 +6469,8 @@ Builtin :: [].{
 			## ```
 			times : U64, U64 -> U64
 
-			mul_checked : U64, U64 -> Try(U64, [Overflow])
-			mul_checked = |a, b| unsigned_mul_checked(U64.highest, 0, a, b)
+			mul_try : U64, U64 -> Try(U64, [Overflow, ..])
+			mul_try = |a, b| unsigned_mul_try(U64.highest, 0, a, b)
 
 			## Multiply two [U64] values, saturating at the nearest bound on overflow.
 			## ```roc
@@ -6484,7 +6490,7 @@ Builtin :: [].{
 			## ```
 			pow : U64, U64 -> U64
 			pow = |base, exponent|
-				match U64.pow_checked(base, exponent) {
+				match U64.pow_try(base, exponent) {
 					Ok(result) => result
 					Err(Overflow) => {
 						crash "integer exponentiation overflowed"
@@ -6494,12 +6500,12 @@ Builtin :: [].{
 			## Raise the first [U64] value to the power of the second.
 			## Returns an error instead of crashing when the exact result does not fit.
 			## ```roc
-			## expect U64.pow_checked(2, 3) == Ok(8)
+			## expect U64.pow_try(2, 3) == Ok(8)
 			##
-			## expect U64.pow_checked(U64.highest, 2) == Err(Overflow)
+			## expect U64.pow_try(U64.highest, 2) == Err(Overflow)
 			## ```
-			pow_checked : U64, U64 -> Try(U64, [Overflow])
-			pow_checked = |base, exponent| unsigned_pow_checked(U64.highest, 0, 1, 2, base, exponent)
+			pow_try : U64, U64 -> Try(U64, [Overflow, ..])
+			pow_try = |base, exponent| unsigned_pow_try(U64.highest, 0, 1, 2, base, exponent)
 
 			## Divide the first [U64] by the second, discarding any remainder. Crashes if the second [U64] is zero.
 			## ```roc
@@ -6509,8 +6515,8 @@ Builtin :: [].{
 			## ```
 			div_by : U64, U64 -> U64
 
-			div_checked : U64, U64 -> Try(U64, [DivByZero])
-			div_checked = |a, b| unsigned_div_checked(0, a, b)
+			div_try : U64, U64 -> Try(U64, [DivByZero, ..])
+			div_try = |a, b| unsigned_div_try(0, a, b)
 
 			## Divide the first [U64] by the second, rounding the result toward positive infinity.
 			## Crashes if the divisor is zero or the exact result does not fit in [U64].
@@ -6521,7 +6527,7 @@ Builtin :: [].{
 			## ```
 			div_ceil_by : U64, U64 -> U64
 			div_ceil_by = |a, b|
-				match U64.div_ceil_checked(a, b) {
+				match U64.div_ceil_try(a, b) {
 					Ok(result) => result
 					Err(DivByZero) => {
 						crash "integer ceiling division by zero"
@@ -6531,12 +6537,12 @@ Builtin :: [].{
 			## Divide the first [U64] by the second, rounding the result toward positive infinity.
 			## Returns an error instead of crashing when the divisor is zero or the exact result does not fit.
 			## ```roc
-			## expect U64.div_ceil_checked(7, 2) == Ok(4)
+			## expect U64.div_ceil_try(7, 2) == Ok(4)
 			##
-			## expect U64.div_ceil_checked(1, 0) == Err(DivByZero)
+			## expect U64.div_ceil_try(1, 0) == Err(DivByZero)
 			## ```
-			div_ceil_checked : U64, U64 -> Try(U64, [DivByZero])
-			div_ceil_checked = |a, b| unsigned_div_ceil_checked(0, 1, a, b)
+			div_ceil_try : U64, U64 -> Try(U64, [DivByZero, ..])
+			div_ceil_try = |a, b| unsigned_div_ceil_try(0, 1, a, b)
 
 			## Divide the first [U64] by the second, truncating down (toward zero). For unsigned
 			## integers this behaves the same as [U64.div_by].
@@ -6671,7 +6677,7 @@ Builtin :: [].{
 				len_if_known: if start > end {
 					Known(0)
 				} else {
-					match U64.add_checked(end - start, 1) {
+					match U64.add_try(end - start, 1) {
 						Ok(len) => Known(len)
 						Err(Overflow) => Unknown
 					}
@@ -6681,7 +6687,7 @@ Builtin :: [].{
 						One(
 							{
 								item: start,
-								rest: match U64.add_checked(start, 1) {
+								rest: match U64.add_try(start, 1) {
 									Ok(next) => if next <= end {
 										U64.to(next, end)
 									} else {
@@ -6718,7 +6724,7 @@ Builtin :: [].{
 						One(
 							{
 								item: start,
-								rest: match U64.add_checked(start, 1) {
+								rest: match U64.add_try(start, 1) {
 									Ok(next) => if next < end {
 										U64.until(next, end)
 									} else {
@@ -6743,7 +6749,8 @@ Builtin :: [].{
 			from_int_digits : List(U8) -> Try(U64, [OutOfRange])
 			from_int_digits = |digits| u64_from_int_digits(digits)
 
-			from_numeral : Numeral -> Try(U64, [InvalidNumeral(Str), ..])
+			from_numeral : Numeral -> Try(U64, [InvalidNumeral(Str)])
+			from_numeral = |numeral| from_numeral_with(numeral, |str| Builtin.u64_from_str(str))
 
 			## Parse a [U64] from a [Str]. Returns `Err(BadNumStr)` if the string is
 			## not a valid non-negative integer, or if the parsed value does not fit
@@ -7117,8 +7124,8 @@ Builtin :: [].{
 			## ```
 			plus : I64, I64 -> I64
 
-			add_checked : I64, I64 -> Try(I64, [Overflow])
-			add_checked = |a, b| signed_add_checked(I64.lowest, I64.highest, 0, a, b)
+			add_try : I64, I64 -> Try(I64, [Overflow, ..])
+			add_try = |a, b| signed_add_try(I64.lowest, I64.highest, 0, a, b)
 
 			## Add two [I64] values, saturating at [I64.highest] or [I64.lowest] on overflow rather than wrapping around.
 			## ```roc
@@ -7143,8 +7150,8 @@ Builtin :: [].{
 			## ```
 			minus : I64, I64 -> I64
 
-			sub_checked : I64, I64 -> Try(I64, [Overflow])
-			sub_checked = |a, b| signed_sub_checked(I64.lowest, I64.highest, 0, a, b)
+			sub_try : I64, I64 -> Try(I64, [Overflow, ..])
+			sub_try = |a, b| signed_sub_try(I64.lowest, I64.highest, 0, a, b)
 
 			## Subtract the second [I64] from the first, saturating at the nearest bound on overflow.
 			## ```roc
@@ -7163,8 +7170,8 @@ Builtin :: [].{
 			## ```
 			times : I64, I64 -> I64
 
-			mul_checked : I64, I64 -> Try(I64, [Overflow])
-			mul_checked = |a, b| signed_mul_checked(I64.lowest, I64.highest, 0, -1, a, b)
+			mul_try : I64, I64 -> Try(I64, [Overflow, ..])
+			mul_try = |a, b| signed_mul_try(I64.lowest, I64.highest, 0, -1, a, b)
 
 			## Multiply two [I64] values, saturating at the nearest bound on overflow.
 			## ```roc
@@ -7186,7 +7193,7 @@ Builtin :: [].{
 			## ```
 			pow : I64, I64 -> I64
 			pow = |base, exponent|
-				match I64.pow_checked(base, exponent) {
+				match I64.pow_try(base, exponent) {
 					Ok(result) => result
 					Err(Overflow) => {
 						crash "integer exponentiation overflowed"
@@ -7199,16 +7206,16 @@ Builtin :: [].{
 			## Raise the first [I64] value to the power of the second.
 			## Returns an error instead of crashing when the exact result does not fit.
 			## ```roc
-			## expect I64.pow_checked(2, 3) == Ok(8)
+			## expect I64.pow_try(2, 3) == Ok(8)
 			##
-			## expect I64.pow_checked(I64.highest, 2) == Err(Overflow)
+			## expect I64.pow_try(I64.highest, 2) == Err(Overflow)
 			##
-			## expect I64.pow_checked(2, -1) == Err(Underflow)
+			## expect I64.pow_try(2, -1) == Err(Underflow)
 			##
-			## expect I64.pow_checked(-1, -3) == Ok(-1)
+			## expect I64.pow_try(-1, -3) == Ok(-1)
 			## ```
-			pow_checked : I64, I64 -> Try(I64, [Overflow, Underflow])
-			pow_checked = |base, exponent| signed_pow_checked(I64.lowest, I64.highest, 0, 1, 2, -1, base, exponent)
+			pow_try : I64, I64 -> Try(I64, [Overflow, Underflow, ..])
+			pow_try = |base, exponent| signed_pow_try(I64.lowest, I64.highest, 0, 1, 2, -1, base, exponent)
 
 			## Divide the first [I64] by the second, discarding any remainder. Crashes if the second [I64] is zero.
 			## ```roc
@@ -7218,8 +7225,8 @@ Builtin :: [].{
 			## ```
 			div_by : I64, I64 -> I64
 
-			div_checked : I64, I64 -> Try(I64, [DivByZero, Overflow])
-			div_checked = |a, b| signed_div_checked(I64.lowest, 0, -1, a, b)
+			div_try : I64, I64 -> Try(I64, [DivByZero, Overflow, ..])
+			div_try = |a, b| signed_div_try(I64.lowest, 0, -1, a, b)
 
 			## Divide the first [I64] by the second, rounding the result toward positive infinity.
 			## Crashes if the divisor is zero or the exact result does not fit in [I64].
@@ -7234,7 +7241,7 @@ Builtin :: [].{
 			## ```
 			div_ceil_by : I64, I64 -> I64
 			div_ceil_by = |a, b|
-				match I64.div_ceil_checked(a, b) {
+				match I64.div_ceil_try(a, b) {
 					Ok(result) => result
 					Err(DivByZero) => {
 						crash "integer ceiling division by zero"
@@ -7247,14 +7254,14 @@ Builtin :: [].{
 			## Divide the first [I64] by the second, rounding the result toward positive infinity.
 			## Returns an error instead of crashing when the divisor is zero or the exact result does not fit.
 			## ```roc
-			## expect I64.div_ceil_checked(7, 2) == Ok(4)
+			## expect I64.div_ceil_try(7, 2) == Ok(4)
 			##
-			## expect I64.div_ceil_checked(1, 0) == Err(DivByZero)
+			## expect I64.div_ceil_try(1, 0) == Err(DivByZero)
 			##
-			## expect I64.div_ceil_checked(I64.lowest, -1) == Err(Overflow)
+			## expect I64.div_ceil_try(I64.lowest, -1) == Err(Overflow)
 			## ```
-			div_ceil_checked : I64, I64 -> Try(I64, [DivByZero, Overflow])
-			div_ceil_checked = |a, b| signed_div_ceil_checked(I64.lowest, I64.highest, 0, 1, -1, a, b)
+			div_ceil_try : I64, I64 -> Try(I64, [DivByZero, Overflow, ..])
+			div_ceil_try = |a, b| signed_div_ceil_try(I64.lowest, I64.highest, 0, 1, -1, a, b)
 
 			## Divide the first [I64] by the second, truncating toward zero.
 			## ```roc
@@ -7397,8 +7404,8 @@ Builtin :: [].{
 				len_if_known: if start > end {
 					Known(0)
 				} else {
-					match I64.sub_checked(end, start) {
-						Ok(diff) => match I64.add_checked(diff, 1) {
+					match I64.sub_try(end, start) {
+						Ok(diff) => match I64.add_try(diff, 1) {
 							Ok(d1) => Known(I64.to_u64_wrap(d1))
 							Err(Overflow) => Unknown
 						}
@@ -7410,7 +7417,7 @@ Builtin :: [].{
 						One(
 							{
 								item: start,
-								rest: match I64.add_checked(start, 1) {
+								rest: match I64.add_try(start, 1) {
 									Ok(next) => if next <= end {
 										I64.to(next, end)
 									} else {
@@ -7440,7 +7447,7 @@ Builtin :: [].{
 				len_if_known: if start >= end {
 					Known(0)
 				} else {
-					match I64.sub_checked(end, start) {
+					match I64.sub_try(end, start) {
 						Ok(diff) => Known(I64.to_u64_wrap(diff))
 						Err(Overflow) => Unknown
 					}
@@ -7450,7 +7457,7 @@ Builtin :: [].{
 						One(
 							{
 								item: start,
-								rest: match I64.add_checked(start, 1) {
+								rest: match I64.add_try(start, 1) {
 									Ok(next) => if next < end {
 										I64.until(next, end)
 									} else {
@@ -7477,7 +7484,8 @@ Builtin :: [].{
 			from_int_digits : List(U8) -> Try(I64, [OutOfRange])
 			from_int_digits = |digits| i64_from_int_digits(digits)
 
-			from_numeral : Numeral -> Try(I64, [InvalidNumeral(Str), ..])
+			from_numeral : Numeral -> Try(I64, [InvalidNumeral(Str)])
+			from_numeral = |numeral| from_numeral_with(numeral, |str| Builtin.i64_from_str(str))
 
 			## Parse an [I64] from a [Str]. Returns `Err(BadNumStr)` if the string
 			## is not a valid integer, or if the parsed value does not fit in an
@@ -7823,8 +7831,8 @@ Builtin :: [].{
 			## ```
 			plus : U128, U128 -> U128
 
-			add_checked : U128, U128 -> Try(U128, [Overflow])
-			add_checked = |a, b| unsigned_add_checked(U128.highest, a, b)
+			add_try : U128, U128 -> Try(U128, [Overflow, ..])
+			add_try = |a, b| unsigned_add_try(U128.highest, a, b)
 
 			## Add two [U128] values, saturating at [U128.highest] on overflow rather than wrapping around.
 			## ```roc
@@ -7845,8 +7853,8 @@ Builtin :: [].{
 			## ```
 			minus : U128, U128 -> U128
 
-			sub_checked : U128, U128 -> Try(U128, [Overflow])
-			sub_checked = |a, b| unsigned_sub_checked(a, b)
+			sub_try : U128, U128 -> Try(U128, [Overflow, ..])
+			sub_try = |a, b| unsigned_sub_try(a, b)
 
 			## Subtract the second [U128] from the first, saturating at the nearest bound on overflow.
 			## ```roc
@@ -7863,8 +7871,8 @@ Builtin :: [].{
 			## ```
 			times : U128, U128 -> U128
 
-			mul_checked : U128, U128 -> Try(U128, [Overflow])
-			mul_checked = |a, b| unsigned_mul_checked(U128.highest, 0, a, b)
+			mul_try : U128, U128 -> Try(U128, [Overflow, ..])
+			mul_try = |a, b| unsigned_mul_try(U128.highest, 0, a, b)
 
 			## Multiply two [U128] values, saturating at the nearest bound on overflow.
 			## ```roc
@@ -7884,7 +7892,7 @@ Builtin :: [].{
 			## ```
 			pow : U128, U128 -> U128
 			pow = |base, exponent|
-				match U128.pow_checked(base, exponent) {
+				match U128.pow_try(base, exponent) {
 					Ok(result) => result
 					Err(Overflow) => {
 						crash "integer exponentiation overflowed"
@@ -7894,12 +7902,12 @@ Builtin :: [].{
 			## Raise the first [U128] value to the power of the second.
 			## Returns an error instead of crashing when the exact result does not fit.
 			## ```roc
-			## expect U128.pow_checked(2, 3) == Ok(8)
+			## expect U128.pow_try(2, 3) == Ok(8)
 			##
-			## expect U128.pow_checked(U128.highest, 2) == Err(Overflow)
+			## expect U128.pow_try(U128.highest, 2) == Err(Overflow)
 			## ```
-			pow_checked : U128, U128 -> Try(U128, [Overflow])
-			pow_checked = |base, exponent| unsigned_pow_checked(U128.highest, 0, 1, 2, base, exponent)
+			pow_try : U128, U128 -> Try(U128, [Overflow, ..])
+			pow_try = |base, exponent| unsigned_pow_try(U128.highest, 0, 1, 2, base, exponent)
 
 			## Divide the first [U128] by the second, discarding any remainder. Crashes if the second [U128] is zero.
 			## ```roc
@@ -7909,8 +7917,8 @@ Builtin :: [].{
 			## ```
 			div_by : U128, U128 -> U128
 
-			div_checked : U128, U128 -> Try(U128, [DivByZero])
-			div_checked = |a, b| unsigned_div_checked(0, a, b)
+			div_try : U128, U128 -> Try(U128, [DivByZero, ..])
+			div_try = |a, b| unsigned_div_try(0, a, b)
 
 			## Divide the first [U128] by the second, rounding the result toward positive infinity.
 			## Crashes if the divisor is zero or the exact result does not fit in [U128].
@@ -7921,7 +7929,7 @@ Builtin :: [].{
 			## ```
 			div_ceil_by : U128, U128 -> U128
 			div_ceil_by = |a, b|
-				match U128.div_ceil_checked(a, b) {
+				match U128.div_ceil_try(a, b) {
 					Ok(result) => result
 					Err(DivByZero) => {
 						crash "integer ceiling division by zero"
@@ -7931,12 +7939,12 @@ Builtin :: [].{
 			## Divide the first [U128] by the second, rounding the result toward positive infinity.
 			## Returns an error instead of crashing when the divisor is zero or the exact result does not fit.
 			## ```roc
-			## expect U128.div_ceil_checked(7, 2) == Ok(4)
+			## expect U128.div_ceil_try(7, 2) == Ok(4)
 			##
-			## expect U128.div_ceil_checked(1, 0) == Err(DivByZero)
+			## expect U128.div_ceil_try(1, 0) == Err(DivByZero)
 			## ```
-			div_ceil_checked : U128, U128 -> Try(U128, [DivByZero])
-			div_ceil_checked = |a, b| unsigned_div_ceil_checked(0, 1, a, b)
+			div_ceil_try : U128, U128 -> Try(U128, [DivByZero, ..])
+			div_ceil_try = |a, b| unsigned_div_ceil_try(0, 1, a, b)
 
 			## Divide the first [U128] by the second, truncating down (toward zero). For unsigned
 			## integers this behaves the same as [U128.div_by].
@@ -8072,7 +8080,7 @@ Builtin :: [].{
 					Known(0)
 				} else {
 					match U128.to_u64_try(end - start) {
-						Ok(diff_u64) => match U64.add_checked(diff_u64, 1) {
+						Ok(diff_u64) => match U64.add_try(diff_u64, 1) {
 							Ok(len) => Known(len)
 							Err(Overflow) => Unknown
 						}
@@ -8084,7 +8092,7 @@ Builtin :: [].{
 						One(
 							{
 								item: start,
-								rest: match U128.add_checked(start, 1) {
+								rest: match U128.add_try(start, 1) {
 									Ok(next) => if next <= end {
 										U128.to(next, end)
 									} else {
@@ -8124,7 +8132,7 @@ Builtin :: [].{
 						One(
 							{
 								item: start,
-								rest: match U128.add_checked(start, 1) {
+								rest: match U128.add_try(start, 1) {
 									Ok(next) => if next < end {
 										U128.until(next, end)
 									} else {
@@ -8150,7 +8158,8 @@ Builtin :: [].{
 			from_int_digits : List(U8) -> Try(U128, [OutOfRange])
 			from_int_digits = |digits| u128_from_int_digits(digits)
 
-			from_numeral : Numeral -> Try(U128, [InvalidNumeral(Str), ..])
+			from_numeral : Numeral -> Try(U128, [InvalidNumeral(Str)])
+			from_numeral = |numeral| from_numeral_with(numeral, |str| Builtin.u128_from_str(str))
 
 			## Parse a [U128] from a [Str]. Returns `Err(BadNumStr)` if the string is
 			## not a valid non-negative integer, or if the parsed value does not fit
@@ -8562,8 +8571,8 @@ Builtin :: [].{
 			## ```
 			plus : I128, I128 -> I128
 
-			add_checked : I128, I128 -> Try(I128, [Overflow])
-			add_checked = |a, b| signed_add_checked(I128.lowest, I128.highest, 0, a, b)
+			add_try : I128, I128 -> Try(I128, [Overflow, ..])
+			add_try = |a, b| signed_add_try(I128.lowest, I128.highest, 0, a, b)
 
 			## Add two [I128] values, saturating at [I128.highest] or [I128.lowest] on overflow rather than wrapping around.
 			## ```roc
@@ -8588,8 +8597,8 @@ Builtin :: [].{
 			## ```
 			minus : I128, I128 -> I128
 
-			sub_checked : I128, I128 -> Try(I128, [Overflow])
-			sub_checked = |a, b| signed_sub_checked(I128.lowest, I128.highest, 0, a, b)
+			sub_try : I128, I128 -> Try(I128, [Overflow, ..])
+			sub_try = |a, b| signed_sub_try(I128.lowest, I128.highest, 0, a, b)
 
 			## Subtract the second [I128] from the first, saturating at the nearest bound on overflow.
 			## ```roc
@@ -8608,8 +8617,8 @@ Builtin :: [].{
 			## ```
 			times : I128, I128 -> I128
 
-			mul_checked : I128, I128 -> Try(I128, [Overflow])
-			mul_checked = |a, b| signed_mul_checked(I128.lowest, I128.highest, 0, -1, a, b)
+			mul_try : I128, I128 -> Try(I128, [Overflow, ..])
+			mul_try = |a, b| signed_mul_try(I128.lowest, I128.highest, 0, -1, a, b)
 
 			## Multiply two [I128] values, saturating at the nearest bound on overflow.
 			## ```roc
@@ -8631,7 +8640,7 @@ Builtin :: [].{
 			## ```
 			pow : I128, I128 -> I128
 			pow = |base, exponent|
-				match I128.pow_checked(base, exponent) {
+				match I128.pow_try(base, exponent) {
 					Ok(result) => result
 					Err(Overflow) => {
 						crash "integer exponentiation overflowed"
@@ -8644,16 +8653,16 @@ Builtin :: [].{
 			## Raise the first [I128] value to the power of the second.
 			## Returns an error instead of crashing when the exact result does not fit.
 			## ```roc
-			## expect I128.pow_checked(2, 3) == Ok(8)
+			## expect I128.pow_try(2, 3) == Ok(8)
 			##
-			## expect I128.pow_checked(I128.highest, 2) == Err(Overflow)
+			## expect I128.pow_try(I128.highest, 2) == Err(Overflow)
 			##
-			## expect I128.pow_checked(2, -1) == Err(Underflow)
+			## expect I128.pow_try(2, -1) == Err(Underflow)
 			##
-			## expect I128.pow_checked(-1, -3) == Ok(-1)
+			## expect I128.pow_try(-1, -3) == Ok(-1)
 			## ```
-			pow_checked : I128, I128 -> Try(I128, [Overflow, Underflow])
-			pow_checked = |base, exponent| signed_pow_checked(I128.lowest, I128.highest, 0, 1, 2, -1, base, exponent)
+			pow_try : I128, I128 -> Try(I128, [Overflow, Underflow, ..])
+			pow_try = |base, exponent| signed_pow_try(I128.lowest, I128.highest, 0, 1, 2, -1, base, exponent)
 
 			## Divide the first [I128] by the second, discarding any remainder. Crashes if the second [I128] is zero.
 			## ```roc
@@ -8663,8 +8672,8 @@ Builtin :: [].{
 			## ```
 			div_by : I128, I128 -> I128
 
-			div_checked : I128, I128 -> Try(I128, [DivByZero, Overflow])
-			div_checked = |a, b| signed_div_checked(I128.lowest, 0, -1, a, b)
+			div_try : I128, I128 -> Try(I128, [DivByZero, Overflow, ..])
+			div_try = |a, b| signed_div_try(I128.lowest, 0, -1, a, b)
 
 			## Divide the first [I128] by the second, rounding the result toward positive infinity.
 			## Crashes if the divisor is zero or the exact result does not fit in [I128].
@@ -8679,7 +8688,7 @@ Builtin :: [].{
 			## ```
 			div_ceil_by : I128, I128 -> I128
 			div_ceil_by = |a, b|
-				match I128.div_ceil_checked(a, b) {
+				match I128.div_ceil_try(a, b) {
 					Ok(result) => result
 					Err(DivByZero) => {
 						crash "integer ceiling division by zero"
@@ -8692,14 +8701,14 @@ Builtin :: [].{
 			## Divide the first [I128] by the second, rounding the result toward positive infinity.
 			## Returns an error instead of crashing when the divisor is zero or the exact result does not fit.
 			## ```roc
-			## expect I128.div_ceil_checked(7, 2) == Ok(4)
+			## expect I128.div_ceil_try(7, 2) == Ok(4)
 			##
-			## expect I128.div_ceil_checked(1, 0) == Err(DivByZero)
+			## expect I128.div_ceil_try(1, 0) == Err(DivByZero)
 			##
-			## expect I128.div_ceil_checked(I128.lowest, -1) == Err(Overflow)
+			## expect I128.div_ceil_try(I128.lowest, -1) == Err(Overflow)
 			## ```
-			div_ceil_checked : I128, I128 -> Try(I128, [DivByZero, Overflow])
-			div_ceil_checked = |a, b| signed_div_ceil_checked(I128.lowest, I128.highest, 0, 1, -1, a, b)
+			div_ceil_try : I128, I128 -> Try(I128, [DivByZero, Overflow, ..])
+			div_ceil_try = |a, b| signed_div_ceil_try(I128.lowest, I128.highest, 0, 1, -1, a, b)
 
 			## Divide the first [I128] by the second, truncating toward zero.
 			## ```roc
@@ -8843,9 +8852,9 @@ Builtin :: [].{
 				len_if_known: if start > end {
 					Known(0)
 				} else {
-					match I128.sub_checked(end, start) {
+					match I128.sub_try(end, start) {
 						Ok(diff) => match I128.to_u64_try(diff) {
-							Ok(diff_u64) => match U64.add_checked(diff_u64, 1) {
+							Ok(diff_u64) => match U64.add_try(diff_u64, 1) {
 								Ok(len) => Known(len)
 								Err(Overflow) => Unknown
 							}
@@ -8859,7 +8868,7 @@ Builtin :: [].{
 						One(
 							{
 								item: start,
-								rest: match I128.add_checked(start, 1) {
+								rest: match I128.add_try(start, 1) {
 									Ok(next) => if next <= end {
 										I128.to(next, end)
 									} else {
@@ -8889,7 +8898,7 @@ Builtin :: [].{
 				len_if_known: if start >= end {
 					Known(0)
 				} else {
-					match I128.sub_checked(end, start) {
+					match I128.sub_try(end, start) {
 						Ok(diff) => match I128.to_u64_try(diff) {
 							Ok(len) => Known(len)
 							Err(OutOfRange) => Unknown
@@ -8902,7 +8911,7 @@ Builtin :: [].{
 						One(
 							{
 								item: start,
-								rest: match I128.add_checked(start, 1) {
+								rest: match I128.add_try(start, 1) {
 									Ok(next) => if next < end {
 										I128.until(next, end)
 									} else {
@@ -8930,7 +8939,8 @@ Builtin :: [].{
 			from_int_digits : List(U8) -> Try(I128, [OutOfRange])
 			from_int_digits = |digits| i128_from_int_digits(digits)
 
-			from_numeral : Numeral -> Try(I128, [InvalidNumeral(Str), ..])
+			from_numeral : Numeral -> Try(I128, [InvalidNumeral(Str)])
+			from_numeral = |numeral| from_numeral_with(numeral, |str| Builtin.i128_from_str(str))
 
 			## Parse an [I128] from a [Str]. Returns `Err(BadNumStr)` if the string
 			## is not a valid integer, or if the parsed value does not fit in an
@@ -9178,6 +9188,18 @@ Builtin :: [].{
 			lowest : Dec
 			lowest = -170141183460469231731.687303715884105728
 
+			## Euler's number, truncated to 18 decimal places.
+			e : Dec
+			e = 2.718281828459045235
+
+			## The circle constant pi, truncated to 18 decimal places.
+			pi : Dec
+			pi = 3.141592653589793238
+
+			## The circle constant tau, truncated to 18 decimal places.
+			tau : Dec
+			tau = 6.283185307179586476
+
 			## Convert a [Dec] to its decimal string representation.
 			## ```roc
 			## expect Dec.to_str(42.5) == "42.5"
@@ -9312,8 +9334,8 @@ Builtin :: [].{
 			## ```
 			plus : Dec, Dec -> Dec
 
-			add_checked : Dec, Dec -> Try(Dec, [Overflow])
-			add_checked = |a, b| signed_add_checked(Dec.lowest, Dec.highest, 0.0, a, b)
+			add_try : Dec, Dec -> Try(Dec, [Overflow, ..])
+			add_try = |a, b| signed_add_try(Dec.lowest, Dec.highest, 0.0, a, b)
 
 			## Add two [Dec] values, saturating at [Dec.highest] or [Dec.lowest] on overflow rather than wrapping around.
 			## ```roc
@@ -9338,8 +9360,8 @@ Builtin :: [].{
 			## ```
 			minus : Dec, Dec -> Dec
 
-			sub_checked : Dec, Dec -> Try(Dec, [Overflow])
-			sub_checked = |a, b| signed_sub_checked(Dec.lowest, Dec.highest, 0.0, a, b)
+			sub_try : Dec, Dec -> Try(Dec, [Overflow, ..])
+			sub_try = |a, b| signed_sub_try(Dec.lowest, Dec.highest, 0.0, a, b)
 
 			## Subtract the second [Dec] from the first, saturating at the nearest bound on overflow.
 			## ```roc
@@ -9368,6 +9390,53 @@ Builtin :: [].{
 			## ```
 			times_saturated : Dec, Dec -> Dec
 			times_saturated = |a, b| signed_times_saturated(Dec.lowest, Dec.highest, 0.0, -1.0, a, b)
+
+			## Raise a [Dec] to a [Dec] power.
+			pow : Dec, Dec -> Dec
+			pow = |base, exponent| dec_pow_unsafe(base, exponent)
+
+			## Return the square root of a [Dec]. Crashes if the input is negative.
+			sqrt : Dec -> Dec
+			sqrt = |self|
+				match Dec.sqrt_try(self) {
+					Ok(value) => value
+					Err(SqrtOfNegative) => {
+						crash "Dec.sqrt of negative number"
+					}
+				}
+
+			## Return the square root of a [Dec], or `Err(SqrtOfNegative)` if the input is negative.
+			sqrt_try : Dec -> Try(Dec, [SqrtOfNegative, ..])
+			sqrt_try = |self|
+				if self < 0 {
+					Err(SqrtOfNegative)
+				} else {
+					Ok(dec_sqrt_unsafe(self))
+				}
+
+			## Return the sine of a [Dec] angle in radians.
+			sin : Dec -> Dec
+			sin = |self| dec_sin_unsafe(self)
+
+			## Return the cosine of a [Dec] angle in radians.
+			cos : Dec -> Dec
+			cos = |self| dec_cos_unsafe(self)
+
+			## Return the tangent of a [Dec] angle in radians.
+			tan : Dec -> Dec
+			tan = |self| dec_tan_unsafe(self)
+
+			## Return the arcsine of a [Dec] value in radians.
+			asin : Dec -> Dec
+			asin = |self| dec_asin_unsafe(self)
+
+			## Return the arccosine of a [Dec] value in radians.
+			acos : Dec -> Dec
+			acos = |self| dec_acos_unsafe(self)
+
+			## Return the arctangent of a [Dec] value in radians.
+			atan : Dec -> Dec
+			atan = |self| dec_atan_unsafe(self)
 
 			## Divide the first [Dec] by the second. Crashes if the second [Dec]
 			## is zero.
@@ -9636,7 +9705,8 @@ Builtin :: [].{
 			from_dec_digits : (List(U8), List(U8)) -> Try(Dec, [OutOfRange])
 			from_dec_digits = |digits| dec_from_dec_digits(digits)
 
-			from_numeral : Numeral -> Try(Dec, [InvalidNumeral(Str), ..])
+			from_numeral : Numeral -> Try(Dec, [InvalidNumeral(Str)])
+			from_numeral = |numeral| from_numeral_with(numeral, |str| Builtin.dec_from_str(str))
 
 			## Parse a [Dec] from a [Str]. Returns `Err(BadNumStr)` if the
 			## string is not a valid decimal number, or if the parsed value does
@@ -9914,7 +9984,7 @@ Builtin :: [].{
 						One(
 							{
 								item: start,
-								rest: match Dec.add_checked(start, 1.0) {
+								rest: match Dec.add_try(start, 1.0) {
 									Ok(next) => if next <= end {
 										Dec.to(next, end)
 									} else {
@@ -9949,7 +10019,7 @@ Builtin :: [].{
 						One(
 							{
 								item: start,
-								rest: match Dec.add_checked(start, 1.0) {
+								rest: match Dec.add_try(start, 1.0) {
 									Ok(next) => if next < end {
 										Dec.until(next, end)
 									} else {
@@ -9994,7 +10064,7 @@ Builtin :: [].{
 			## The highest finite value representable by an [F32], which is
 			## `3.40282347e38`.
 			## ```roc
-			## expect F32.highest == 3.40282347e38
+			## expect F32.to_bits(F32.highest) == 2139095039
 			## ```
 			highest : F32
 			highest = 3.40282347e38
@@ -10002,7 +10072,7 @@ Builtin :: [].{
 			## The lowest finite value representable by an [F32], which is
 			## `-3.40282347e38`.
 			## ```roc
-			## expect F32.lowest == -3.40282347e38
+			## expect F32.to_bits(F32.lowest) == 4286578687
 			## ```
 			lowest : F32
 			lowest = -3.40282347e38
@@ -10075,7 +10145,7 @@ Builtin :: [].{
 			## expect !F32.is_nan(1.0)
 			## ```
 			is_nan : F32 -> Bool
-			is_nan = |self| self != self
+			is_nan = |self| !F32.is_float_eq(self, self)
 
 			## Returns `Bool.True` if the value is positive or negative infinity.
 			## ```roc
@@ -10087,10 +10157,10 @@ Builtin :: [].{
 			## ```
 			is_infinite : F32 -> Bool
 			is_infinite = |self|
-				if self == F32.infinity {
+				if F32.is_float_eq(self, F32.infinity) {
 					True
 				} else {
-					self == F32.negate(F32.infinity)
+					F32.is_float_eq(self, F32.negate(F32.infinity))
 				}
 
 			## Returns `Bool.True` if the value is neither `NaN` nor infinity.
@@ -10123,7 +10193,14 @@ Builtin :: [].{
 				False
 			}
 
-			is_eq : F32, F32 -> Bool
+			## Returns `Bool.True` if two [F32] values compare equal using the
+			## IEEE 754 `==` operation. `NaN` does not compare equal to itself.
+			## ```roc
+			## expect F32.is_float_eq(1.5, 1.5)
+			##
+			## expect !F32.is_float_eq(F32.nan, F32.nan)
+			## ```
+			is_float_eq : F32, F32 -> Bool
 
 			## Returns `Bool.True` if the value is less than `0.0`.
 			## ```roc
@@ -10181,9 +10258,9 @@ Builtin :: [].{
 
 			## Returns the greater of two [F32] values.
 			## ```roc
-			## expect F32.max(5, 3) == 5
+			## expect F32.is_float_eq(F32.max(5, 3), 5)
 			##
-			## expect F32.max(-3, -1) == -1
+			## expect F32.is_float_eq(F32.max(-3, -1), -1)
 			## ```
 			max : F32, F32 -> F32
 			max = |a, b|
@@ -10194,9 +10271,9 @@ Builtin :: [].{
 
 			## Returns the smaller of two [F32] values.
 			## ```roc
-			## expect F32.min(5, 3) == 3
+			## expect F32.is_float_eq(F32.min(5, 3), 3)
 			##
-			## expect F32.min(-3, -1) == -3
+			## expect F32.is_float_eq(F32.min(-3, -1), -3)
 			## ```
 			min : F32, F32 -> F32
 			min = |a, b|
@@ -10231,7 +10308,7 @@ Builtin :: [].{
 			## ```
 			sqrt : F32 -> F32
 			sqrt = |self|
-				match F32.sqrt_checked(self) {
+				match F32.sqrt_try(self) {
 					Ok(value) => value
 					Err(SqrtOfNegative) => {
 						crash "F32.sqrt of negative number"
@@ -10240,12 +10317,18 @@ Builtin :: [].{
 
 			## Return the square root of an [F32], or `Err(SqrtOfNegative)` if the input is negative.
 			## ```roc
-			## expect F32.sqrt_checked(9.0) == Ok(3.0)
+			## expect match F32.sqrt_try(9.0) {
+			##     Ok(value) => F32.is_float_eq(value, 3.0)
+			##     Err(_) => False
+			## }
 			##
-			## expect F32.sqrt_checked(-1.0) == Err(SqrtOfNegative)
+			## expect match F32.sqrt_try(-1.0) {
+			##     Ok(_) => False
+			##     Err(SqrtOfNegative) => True
+			## }
 			## ```
-			sqrt_checked : F32 -> Try(F32, [SqrtOfNegative])
-			sqrt_checked = |self|
+			sqrt_try : F32 -> Try(F32, [SqrtOfNegative, ..])
+			sqrt_try = |self|
 				if self < 0 {
 					Err(SqrtOfNegative)
 				} else {
@@ -10599,7 +10682,8 @@ Builtin :: [].{
 			from_dec_digits : (List(U8), List(U8)) -> Try(F32, [OutOfRange])
 			from_dec_digits = |digits| f32_from_dec_digits(digits)
 
-			from_numeral : Numeral -> Try(F32, [InvalidNumeral(Str), ..])
+			from_numeral : Numeral -> Try(F32, [InvalidNumeral(Str)])
+			from_numeral = |numeral| from_numeral_with(numeral, |str| Builtin.f32_from_str(str))
 
 			## Parse an [F32] from a [Str]. Returns `Err(BadNumStr)` if the
 			## string is not a valid decimal number, or if the parsed value does
@@ -10857,7 +10941,7 @@ Builtin :: [].{
 			## The highest finite value representable by an [F64], which is
 			## `1.7976931348623157e308`.
 			## ```roc
-			## expect F64.highest == 1.7976931348623157e308
+			## expect F64.to_bits(F64.highest) == 9218868437227405311
 			## ```
 			highest : F64
 			highest = 1.7976931348623157e308
@@ -10865,7 +10949,7 @@ Builtin :: [].{
 			## The lowest finite value representable by an [F64], which is
 			## `-1.7976931348623157e308`.
 			## ```roc
-			## expect F64.lowest == -1.7976931348623157e308
+			## expect F64.to_bits(F64.lowest) == 18442240474082181119
 			## ```
 			lowest : F64
 			lowest = -1.7976931348623157e308
@@ -10938,7 +11022,7 @@ Builtin :: [].{
 			## expect !F64.is_nan(1.0)
 			## ```
 			is_nan : F64 -> Bool
-			is_nan = |self| self != self
+			is_nan = |self| !F64.is_float_eq(self, self)
 
 			## Returns `Bool.True` if the value is positive or negative infinity.
 			## ```roc
@@ -10950,10 +11034,10 @@ Builtin :: [].{
 			## ```
 			is_infinite : F64 -> Bool
 			is_infinite = |self|
-				if self == F64.infinity {
+				if F64.is_float_eq(self, F64.infinity) {
 					True
 				} else {
-					self == F64.negate(F64.infinity)
+					F64.is_float_eq(self, F64.negate(F64.infinity))
 				}
 
 			## Returns `Bool.True` if the value is neither `NaN` nor infinity.
@@ -10986,7 +11070,14 @@ Builtin :: [].{
 				False
 			}
 
-			is_eq : F64, F64 -> Bool
+			## Returns `Bool.True` if two [F64] values compare equal using the
+			## IEEE 754 `==` operation. `NaN` does not compare equal to itself.
+			## ```roc
+			## expect F64.is_float_eq(1.5, 1.5)
+			##
+			## expect !F64.is_float_eq(F64.nan, F64.nan)
+			## ```
+			is_float_eq : F64, F64 -> Bool
 
 			## Returns `Bool.True` if the value is less than `0.0`.
 			## ```roc
@@ -11044,9 +11135,9 @@ Builtin :: [].{
 
 			## Returns the greater of two [F64] values.
 			## ```roc
-			## expect F64.max(5, 3) == 5
+			## expect F64.is_float_eq(F64.max(5, 3), 5)
 			##
-			## expect F64.max(-3, -1) == -1
+			## expect F64.is_float_eq(F64.max(-3, -1), -1)
 			## ```
 			max : F64, F64 -> F64
 			max = |a, b|
@@ -11057,9 +11148,9 @@ Builtin :: [].{
 
 			## Returns the smaller of two [F64] values.
 			## ```roc
-			## expect F64.min(5, 3) == 3
+			## expect F64.is_float_eq(F64.min(5, 3), 3)
 			##
-			## expect F64.min(-3, -1) == -3
+			## expect F64.is_float_eq(F64.min(-3, -1), -3)
 			## ```
 			min : F64, F64 -> F64
 			min = |a, b|
@@ -11094,7 +11185,7 @@ Builtin :: [].{
 			## ```
 			sqrt : F64 -> F64
 			sqrt = |self|
-				match F64.sqrt_checked(self) {
+				match F64.sqrt_try(self) {
 					Ok(value) => value
 					Err(SqrtOfNegative) => {
 						crash "F64.sqrt of negative number"
@@ -11103,12 +11194,18 @@ Builtin :: [].{
 
 			## Return the square root of an [F64], or `Err(SqrtOfNegative)` if the input is negative.
 			## ```roc
-			## expect F64.sqrt_checked(9.0) == Ok(3.0)
+			## expect match F64.sqrt_try(9.0) {
+			##     Ok(value) => F64.is_float_eq(value, 3.0)
+			##     Err(_) => False
+			## }
 			##
-			## expect F64.sqrt_checked(-1.0) == Err(SqrtOfNegative)
+			## expect match F64.sqrt_try(-1.0) {
+			##     Ok(_) => False
+			##     Err(SqrtOfNegative) => True
+			## }
 			## ```
-			sqrt_checked : F64 -> Try(F64, [SqrtOfNegative])
-			sqrt_checked = |self|
+			sqrt_try : F64 -> Try(F64, [SqrtOfNegative, ..])
+			sqrt_try = |self|
 				if self < 0 {
 					Err(SqrtOfNegative)
 				} else {
@@ -11462,7 +11559,8 @@ Builtin :: [].{
 			from_dec_digits : (List(U8), List(U8)) -> Try(F64, [OutOfRange])
 			from_dec_digits = |digits| f64_from_dec_digits(digits)
 
-			from_numeral : Numeral -> Try(F64, [InvalidNumeral(Str), ..])
+			from_numeral : Numeral -> Try(F64, [InvalidNumeral(Str)])
+			from_numeral = |numeral| from_numeral_with(numeral, |str| Builtin.f64_from_str(str))
 
 			## Parse an [F64] from a [Str]. Returns `Err(BadNumStr)` if the
 			## string is not a valid decimal number, or if the parsed value does
@@ -11786,6 +11884,212 @@ f64_from_int_digits = |digits| int_from_digits(digits, |str| Builtin.f64_from_st
 f64_from_dec_digits : (List(U8), List(U8)) -> Try(F64, [OutOfRange])
 f64_from_dec_digits = |digits| dec_from_digits(digits, |str| Builtin.f64_from_str(str))
 
+from_numeral_with : Num.Numeral, (Str -> Try(item, err)) -> Try(item, [InvalidNumeral(Str)])
+from_numeral_with = |numeral, parse|
+	match numeral_to_str(numeral) {
+		Err(err) => Err(err)
+		Ok(str) =>
+			match parse(str) {
+				Ok(num) => Ok(num)
+				Err(_) => Err(InvalidNumeral("invalid numeric literal"))
+			}
+		}
+
+numeral_to_str : Num.Numeral -> Try(Str, [InvalidNumeral(Str)])
+numeral_to_str = |numeral|
+	match numeral {
+		Literal({ is_negative, digits_before_pt, digits_after_pt, digits_after_pt_count }) => {
+			int_digits = base256_to_decimal_digits(digits_before_pt)
+			int_bytes = decimal_digits_to_bytes(int_digits)
+
+			frac_bytes = 
+				if digits_after_pt_count == 0 {
+					u8_list_with_capacity(0)
+				} else {
+					frac_digits = base256_to_decimal_digits(digits_after_pt)
+					frac_len = u8_list_len(frac_digits)
+					padded_frac_digits = 
+						if frac_len < digits_after_pt_count {
+							u8_concat(u8_repeat(0, digits_after_pt_count - frac_len), frac_digits)
+						} else {
+							frac_digits
+						}
+
+					u8_concat(u8_single(46), decimal_digits_to_bytes(padded_frac_digits))
+				}
+
+			sign_bytes = 
+				if is_negative {
+					u8_single(45)
+				} else {
+					u8_list_with_capacity(0)
+				}
+
+			bytes = u8_concat(sign_bytes, u8_concat(int_bytes, frac_bytes))
+			match bytes_to_str(bytes) {
+				Ok(str) => Ok(str)
+				Err(_) => Err(InvalidNumeral("invalid numeric literal"))
+			}
+		}
+	}
+
+base256_to_decimal_digits : List(U8) -> List(U8)
+base256_to_decimal_digits = |base256_digits| {
+	var $decimal_digits = u8_single(0)
+	var $index = 0
+	len = u8_list_len(base256_digits)
+
+	while $index < len {
+		$decimal_digits = decimal_digits_mul_add($decimal_digits, 256, U8.to_u16(u8_list_get_unsafe(base256_digits, $index)))
+		$index = $index + 1
+	}
+
+	trim_leading_zero_digits($decimal_digits)
+}
+
+decimal_digits_mul_add : List(U8), U16, U16 -> List(U8)
+decimal_digits_mul_add = |digits, multiplier, addend| {
+	var $carry = addend
+	var $reversed = u8_list_with_capacity(u8_list_len(digits) + 4)
+	var $index = u8_list_len(digits)
+
+	while $index > 0 {
+		$index = $index - 1
+		digit = u8_list_get_unsafe(digits, $index)
+		total = U8.to_u16(digit) * multiplier + $carry
+		$carry = total / 10
+		$reversed = u8_append($reversed, U16.to_u8_wrap(total % 10))
+	}
+
+	u8_rev(decimal_append_carry_reversed($reversed, $carry))
+}
+
+decimal_append_carry_reversed : List(U8), U16 -> List(U8)
+decimal_append_carry_reversed = |reversed, carry| {
+	var $digits = reversed
+	var $carry = carry
+
+	while $carry > 0 {
+		$digits = u8_append($digits, U16.to_u8_wrap($carry % 10))
+		$carry = $carry / 10
+	}
+
+	$digits
+}
+
+trim_leading_zero_digits : List(U8) -> List(U8)
+trim_leading_zero_digits = |digits| {
+	len = u8_list_len(digits)
+	var $index = 0
+
+	while $index + 1 < len and u8_list_get_unsafe(digits, $index) == 0 {
+		$index = $index + 1
+	}
+
+	u8_drop_first(digits, $index)
+}
+
+decimal_digits_to_bytes : List(U8) -> List(U8)
+decimal_digits_to_bytes = |digits| {
+	len = u8_list_len(digits)
+	var $bytes = u8_list_with_capacity(len)
+	var $index = 0
+
+	while $index < len {
+		$bytes = u8_append($bytes, u8_list_get_unsafe(digits, $index) + 48)
+		$index = $index + 1
+	}
+
+	$bytes
+}
+
+u8_single : U8 -> List(U8)
+u8_single = |byte| u8_append(u8_list_with_capacity(1), byte)
+
+u8_repeat : U8, U64 -> List(U8)
+u8_repeat = |byte, count| {
+	var $list = u8_list_with_capacity(count)
+	var $index = 0
+
+	while $index < count {
+		$list = u8_append($list, byte)
+		$index = $index + 1
+	}
+
+	$list
+}
+
+u8_append : List(U8), U8 -> List(U8)
+u8_append = |list, byte| u8_list_append_unsafe(u8_list_reserve(list, 1), byte)
+
+u8_concat : List(U8), List(U8) -> List(U8)
+u8_concat = |left, right| {
+	len = u8_list_len(right)
+	var $out = u8_list_reserve(left, len)
+	var $index = 0
+
+	while $index < len {
+		$out = u8_list_append_unsafe($out, u8_list_get_unsafe(right, $index))
+		$index = $index + 1
+	}
+
+	$out
+}
+
+u8_rev : List(U8) -> List(U8)
+u8_rev = |list| {
+	len = u8_list_len(list)
+	var $out = u8_list_with_capacity(len)
+	var $remaining = len
+
+	while $remaining > 0 {
+		$remaining = $remaining - 1
+		$out = u8_append($out, u8_list_get_unsafe(list, $remaining))
+	}
+
+	$out
+}
+
+u8_drop_first : List(U8), U64 -> List(U8)
+u8_drop_first = |list, count| {
+	len = u8_list_len(list)
+	var $out = u8_list_with_capacity(len - count)
+	var $index = count
+
+	while $index < len {
+		$out = u8_append($out, u8_list_get_unsafe(list, $index))
+		$index = $index + 1
+	}
+
+	$out
+}
+
+u8_list_len : List(U8) -> U64
+
+u8_list_with_capacity : U64 -> List(U8)
+
+u8_list_get_unsafe : List(U8), U64 -> U8
+
+u8_list_append_unsafe : List(U8), U8 -> List(U8)
+
+u8_list_reserve : List(U8), U64 -> List(U8)
+
+dec_sqrt_unsafe : Dec -> Dec
+
+dec_pow_unsafe : Dec, Dec -> Dec
+
+dec_sin_unsafe : Dec -> Dec
+
+dec_cos_unsafe : Dec -> Dec
+
+dec_tan_unsafe : Dec -> Dec
+
+dec_asin_unsafe : Dec -> Dec
+
+dec_acos_unsafe : Dec -> Dec
+
+dec_atan_unsafe : Dec -> Dec
+
 out_of_range_try : { success : U8, val_or_memory_garbage : item } -> Try(item, [OutOfRange])
 out_of_range_try = |answer|
 	if answer.success != 0 {
@@ -11920,27 +12224,27 @@ bytes_to_str = |bytes|
 		Err(_) => Err(OutOfRange)
 	}
 
-unsigned_add_checked : item, item, item -> Try(item, [Overflow])
+unsigned_add_try : item, item, item -> Try(item, [Overflow, ..])
 	where [item.is_gt : item, item -> Bool, item.minus : item, item -> item, item.plus : item, item -> item]
-unsigned_add_checked = |highest, a, b|
+unsigned_add_try = |highest, a, b|
 	if a > highest - b {
 		Err(Overflow)
 	} else {
 		Ok(a + b)
 	}
 
-unsigned_sub_checked : item, item -> Try(item, [Overflow])
+unsigned_sub_try : item, item -> Try(item, [Overflow, ..])
 	where [item.is_lt : item, item -> Bool, item.minus : item, item -> item]
-unsigned_sub_checked = |a, b|
+unsigned_sub_try = |a, b|
 	if a < b {
 		Err(Overflow)
 	} else {
 		Ok(a - b)
 	}
 
-unsigned_mul_checked : item, item, item, item -> Try(item, [Overflow])
+unsigned_mul_try : item, item, item, item -> Try(item, [Overflow, ..])
 	where [item.is_eq : item, item -> Bool, item.is_gt : item, item -> Bool, item.div_by : item, item -> item, item.times : item, item -> item]
-unsigned_mul_checked = |highest, zero, a, b|
+unsigned_mul_try = |highest, zero, a, b|
 	if b == zero {
 		Ok(zero)
 	} else if a > highest / b {
@@ -11949,18 +12253,18 @@ unsigned_mul_checked = |highest, zero, a, b|
 		Ok(a * b)
 	}
 
-unsigned_div_checked : item, item, item -> Try(item, [DivByZero])
+unsigned_div_try : item, item, item -> Try(item, [DivByZero, ..])
 	where [item.is_eq : item, item -> Bool, item.div_by : item, item -> item]
-unsigned_div_checked = |zero, a, b|
+unsigned_div_try = |zero, a, b|
 	if b == zero {
 		Err(DivByZero)
 	} else {
 		Ok(a / b)
 	}
 
-signed_add_checked : item, item, item, item, item -> Try(item, [Overflow])
+signed_add_try : item, item, item, item, item -> Try(item, [Overflow, ..])
 	where [item.is_gt : item, item -> Bool, item.is_lt : item, item -> Bool, item.plus : item, item -> item, item.minus : item, item -> item]
-signed_add_checked = |lowest, highest, zero, a, b|
+signed_add_try = |lowest, highest, zero, a, b|
 	if b > zero {
 		if a > highest - b {
 			Err(Overflow)
@@ -11977,9 +12281,9 @@ signed_add_checked = |lowest, highest, zero, a, b|
 		Ok(a)
 	}
 
-signed_sub_checked : item, item, item, item, item -> Try(item, [Overflow])
+signed_sub_try : item, item, item, item, item -> Try(item, [Overflow, ..])
 	where [item.is_gt : item, item -> Bool, item.is_lt : item, item -> Bool, item.plus : item, item -> item, item.minus : item, item -> item]
-signed_sub_checked = |lowest, highest, zero, a, b|
+signed_sub_try = |lowest, highest, zero, a, b|
 	if b > zero {
 		if a < lowest + b {
 			Err(Overflow)
@@ -11996,7 +12300,7 @@ signed_sub_checked = |lowest, highest, zero, a, b|
 		Ok(a)
 	}
 
-signed_mul_checked : item, item, item, item, item, item -> Try(item, [Overflow])
+signed_mul_try : item, item, item, item, item, item -> Try(item, [Overflow, ..])
 	where [
 		item.is_gt : item, item -> Bool,
 		item.is_lt : item, item -> Bool,
@@ -12005,7 +12309,7 @@ signed_mul_checked : item, item, item, item, item, item -> Try(item, [Overflow])
 		item.times : item, item -> item,
 		item.div_trunc_by : item, item -> item,
 	]
-signed_mul_checked = |lowest, highest, zero, neg_one, a, b|
+signed_mul_try = |lowest, highest, zero, neg_one, a, b|
 	if a == zero {
 		Ok(zero)
 	} else if b == zero {
@@ -12046,9 +12350,9 @@ signed_mul_checked = |lowest, highest, zero, neg_one, a, b|
 		Ok(a * b)
 	}
 
-signed_div_checked : item, item, item, item, item -> Try(item, [DivByZero, Overflow])
+signed_div_try : item, item, item, item, item -> Try(item, [DivByZero, Overflow, ..])
 	where [item.is_eq : item, item -> Bool, item.div_by : item, item -> item]
-signed_div_checked = |lowest, zero, neg_one, a, b|
+signed_div_try = |lowest, zero, neg_one, a, b|
 	if b == zero {
 		Err(DivByZero)
 	} else if a == lowest {
@@ -12061,7 +12365,7 @@ signed_div_checked = |lowest, zero, neg_one, a, b|
 		Ok(a / b)
 	}
 
-unsigned_pow_checked : item, item, item, item, item, item -> Try(item, [Overflow])
+unsigned_pow_try : item, item, item, item, item, item -> Try(item, [Overflow, ..])
 	where [
 		item.is_eq : item, item -> Bool,
 		item.is_gt : item, item -> Bool,
@@ -12069,10 +12373,10 @@ unsigned_pow_checked : item, item, item, item, item, item -> Try(item, [Overflow
 		item.rem_by : item, item -> item,
 		item.times : item, item -> item,
 	]
-unsigned_pow_checked = |highest, zero, one, two, base, exponent|
-	unsigned_pow_checked_step(highest, zero, one, two, one, base, exponent)
+unsigned_pow_try = |highest, zero, one, two, base, exponent|
+	unsigned_pow_try_step(highest, zero, one, two, one, base, exponent)
 
-unsigned_pow_checked_step : item, item, item, item, item, item, item -> Try(item, [Overflow])
+unsigned_pow_try_step : item, item, item, item, item, item, item -> Try(item, [Overflow, ..])
 	where [
 		item.is_eq : item, item -> Bool,
 		item.is_gt : item, item -> Bool,
@@ -12080,14 +12384,14 @@ unsigned_pow_checked_step : item, item, item, item, item, item, item -> Try(item
 		item.rem_by : item, item -> item,
 		item.times : item, item -> item,
 	]
-unsigned_pow_checked_step = |highest, zero, one, two, acc, base, exponent|
+unsigned_pow_try_step = |highest, zero, one, two, acc, base, exponent|
 	if exponent == zero {
 		Ok(acc)
 	} else {
 		next_acc = if exponent.rem_by(two) == zero {
 			Ok(acc)
 		} else {
-			unsigned_mul_checked(highest, zero, acc, base)
+			unsigned_mul_try(highest, zero, acc, base)
 		}
 
 		match next_acc {
@@ -12097,16 +12401,16 @@ unsigned_pow_checked_step = |highest, zero, one, two, acc, base, exponent|
 				if next_exponent == zero {
 					Ok(updated_acc)
 				} else {
-					match unsigned_mul_checked(highest, zero, base, base) {
+					match unsigned_mul_try(highest, zero, base, base) {
 						Err(Overflow) => Err(Overflow)
-						Ok(updated_base) => unsigned_pow_checked_step(highest, zero, one, two, updated_acc, updated_base, next_exponent)
+						Ok(updated_base) => unsigned_pow_try_step(highest, zero, one, two, updated_acc, updated_base, next_exponent)
 					}
 				}
 			}
 		}
 	}
 
-signed_pow_checked : item, item, item, item, item, item, item, item -> Try(item, [Overflow, Underflow])
+signed_pow_try : item, item, item, item, item, item, item, item -> Try(item, [Overflow, Underflow, ..])
 	where [
 		item.is_eq : item, item -> Bool,
 		item.is_gt : item, item -> Bool,
@@ -12117,7 +12421,7 @@ signed_pow_checked : item, item, item, item, item, item, item, item -> Try(item,
 		item.minus : item, item -> item,
 		item.times : item, item -> item,
 	]
-signed_pow_checked = |lowest, highest, zero, one, two, neg_one, base, exponent|
+signed_pow_try = |lowest, highest, zero, one, two, neg_one, base, exponent|
 	if exponent < zero {
 		if base == one {
 			Ok(one)
@@ -12131,10 +12435,10 @@ signed_pow_checked = |lowest, highest, zero, one, two, neg_one, base, exponent|
 			Err(Underflow)
 		}
 	} else {
-		signed_pow_checked_step(lowest, highest, zero, one, two, neg_one, one, base, exponent)
+		signed_pow_try_step(lowest, highest, zero, one, two, neg_one, one, base, exponent)
 	}
 
-signed_pow_checked_step : item, item, item, item, item, item, item, item, item -> Try(item, [Overflow, Underflow])
+signed_pow_try_step : item, item, item, item, item, item, item, item, item -> Try(item, [Overflow, Underflow, ..])
 	where [
 		item.is_eq : item, item -> Bool,
 		item.is_gt : item, item -> Bool,
@@ -12145,14 +12449,14 @@ signed_pow_checked_step : item, item, item, item, item, item, item, item, item -
 		item.minus : item, item -> item,
 		item.times : item, item -> item,
 	]
-signed_pow_checked_step = |lowest, highest, zero, one, two, neg_one, acc, base, exponent|
+signed_pow_try_step = |lowest, highest, zero, one, two, neg_one, acc, base, exponent|
 	if exponent == zero {
 		Ok(acc)
 	} else {
 		next_acc = if exponent.rem_by(two) == zero {
 			Ok(acc)
 		} else {
-			match signed_mul_checked(lowest, highest, zero, neg_one, acc, base) {
+			match signed_mul_try(lowest, highest, zero, neg_one, acc, base) {
 				Ok(result) => Ok(result)
 				Err(Overflow) => Err(Overflow)
 			}
@@ -12166,24 +12470,24 @@ signed_pow_checked_step = |lowest, highest, zero, one, two, neg_one, acc, base, 
 				if next_exponent == zero {
 					Ok(updated_acc)
 				} else {
-					match signed_mul_checked(lowest, highest, zero, neg_one, base, base) {
+					match signed_mul_try(lowest, highest, zero, neg_one, base, base) {
 						Err(Overflow) => Err(Overflow)
-						Ok(updated_base) => signed_pow_checked_step(lowest, highest, zero, one, two, neg_one, updated_acc, updated_base, next_exponent)
+						Ok(updated_base) => signed_pow_try_step(lowest, highest, zero, one, two, neg_one, updated_acc, updated_base, next_exponent)
 					}
 				}
 			}
 		}
 	}
 
-unsigned_div_ceil_checked : item, item, item, item -> Try(item, [DivByZero])
+unsigned_div_ceil_try : item, item, item, item -> Try(item, [DivByZero, ..])
 	where [
 		item.is_eq : item, item -> Bool,
 		item.plus : item, item -> item,
 		item.div_by : item, item -> item,
 		item.rem_by : item, item -> item,
 	]
-unsigned_div_ceil_checked = |zero, one, a, b|
-	match unsigned_div_checked(zero, a, b) {
+unsigned_div_ceil_try = |zero, one, a, b|
+	match unsigned_div_try(zero, a, b) {
 		Err(DivByZero) => Err(DivByZero)
 		Ok(quotient) =>
 			if a.rem_by(b) == zero {
@@ -12193,7 +12497,7 @@ unsigned_div_ceil_checked = |zero, one, a, b|
 			}
 		}
 
-signed_div_ceil_checked : item, item, item, item, item, item, item -> Try(item, [DivByZero, Overflow])
+signed_div_ceil_try : item, item, item, item, item, item, item -> Try(item, [DivByZero, Overflow, ..])
 	where [
 		item.is_eq : item, item -> Bool,
 		item.is_gt : item, item -> Bool,
@@ -12203,8 +12507,8 @@ signed_div_ceil_checked : item, item, item, item, item, item, item -> Try(item, 
 		item.div_by : item, item -> item,
 		item.rem_by : item, item -> item,
 	]
-signed_div_ceil_checked = |lowest, highest, zero, one, neg_one, a, b|
-	match signed_div_checked(lowest, zero, neg_one, a, b) {
+signed_div_ceil_try = |lowest, highest, zero, one, neg_one, a, b|
+	match signed_div_try(lowest, zero, neg_one, a, b) {
 		Err(DivByZero) => Err(DivByZero)
 		Err(Overflow) => Err(Overflow)
 		Ok(quotient) =>
@@ -12212,7 +12516,7 @@ signed_div_ceil_checked = |lowest, highest, zero, one, neg_one, a, b|
 				Ok(quotient)
 			} else if a > zero {
 				if b > zero {
-					match signed_add_checked(lowest, highest, zero, quotient, one) {
+					match signed_add_try(lowest, highest, zero, quotient, one) {
 						Ok(result) => Ok(result)
 						Err(Overflow) => Err(Overflow)
 					}
@@ -12221,7 +12525,7 @@ signed_div_ceil_checked = |lowest, highest, zero, one, neg_one, a, b|
 				}
 			} else if a < zero {
 				if b < zero {
-					match signed_add_checked(lowest, highest, zero, quotient, one) {
+					match signed_add_try(lowest, highest, zero, quotient, one) {
 						Ok(result) => Ok(result)
 						Err(Overflow) => Err(Overflow)
 					}
@@ -12245,7 +12549,7 @@ unsigned_minus_saturated = |zero, a, b|
 signed_minus_saturated : item, item, item, item, item -> item
 	where [item.is_gt : item, item -> Bool, item.is_lt : item, item -> Bool, item.plus : item, item -> item, item.minus : item, item -> item]
 signed_minus_saturated = |lowest, highest, zero, a, b|
-	match signed_sub_checked(lowest, highest, zero, a, b) {
+	match signed_sub_try(lowest, highest, zero, a, b) {
 		Ok(result) => result
 		Err(Overflow) =>
 			if b > zero {
@@ -12258,7 +12562,7 @@ signed_minus_saturated = |lowest, highest, zero, a, b|
 unsigned_times_saturated : item, item, item, item -> item
 	where [item.is_eq : item, item -> Bool, item.is_gt : item, item -> Bool, item.div_by : item, item -> item, item.times : item, item -> item]
 unsigned_times_saturated = |highest, zero, a, b|
-	match unsigned_mul_checked(highest, zero, a, b) {
+	match unsigned_mul_try(highest, zero, a, b) {
 		Ok(result) => result
 		Err(Overflow) => highest
 	}
@@ -12273,7 +12577,7 @@ signed_times_saturated : item, item, item, item, item, item -> item
 		item.div_trunc_by : item, item -> item,
 	]
 signed_times_saturated = |lowest, highest, zero, neg_one, a, b|
-	match signed_mul_checked(lowest, highest, zero, neg_one, a, b) {
+	match signed_mul_try(lowest, highest, zero, neg_one, a, b) {
 		Ok(result) => result
 		Err(Overflow) =>
 			if a < zero {
@@ -12391,15 +12695,6 @@ signed_is_multiple_of = |zero, neg_one, value, divisor|
 	}
 
 numeric_compare : item, item -> [LT, EQ, GT]
-	where [item.is_lt : item, item -> Bool, item.is_gt : item, item -> Bool]
-numeric_compare = |a, b|
-	if a < b {
-		LT
-	} else if a > b {
-		GT
-	} else {
-		EQ
-	}
 
 range_done : () -> Iter(item)
 range_done = || {

@@ -1387,6 +1387,62 @@ pub fn roc_builtins_dec_div_trunc(out_low: *u64, out_high: *u64, a_low: u64, a_h
     out_high.* = i128h.hi64(@as(u128, @bitCast(result)));
 }
 
+/// Dec power (decomposed)
+pub fn roc_builtins_dec_pow(out_low: *u64, out_high: *u64, a_low: u64, a_high: u64, b_low: u64, b_high: u64, roc_ops: *RocOps) callconv(.c) void {
+    const a: i128 = @bitCast(i128h.from_u64_pair(a_low, a_high));
+    const b: i128 = @bitCast(i128h.from_u64_pair(b_low, b_high));
+    const result = dec.powC(dec.RocDec{ .num = a }, dec.RocDec{ .num = b }, roc_ops);
+    out_low.* = @truncate(@as(u128, @bitCast(result)));
+    out_high.* = i128h.hi64(@as(u128, @bitCast(result)));
+}
+
+fn writeDecUnaryResult(out_low: *u64, out_high: *u64, result: i128) void {
+    out_low.* = @truncate(@as(u128, @bitCast(result)));
+    out_high.* = i128h.hi64(@as(u128, @bitCast(result)));
+}
+
+/// Dec square root (decomposed)
+pub fn roc_builtins_dec_sqrt(out_low: *u64, out_high: *u64, a_low: u64, a_high: u64, roc_ops: *RocOps) callconv(.c) void {
+    const a: i128 = @bitCast(i128h.from_u64_pair(a_low, a_high));
+    writeDecUnaryResult(out_low, out_high, dec.sqrtC(dec.RocDec{ .num = a }, roc_ops));
+}
+
+/// Dec sine (decomposed)
+pub fn roc_builtins_dec_sin(out_low: *u64, out_high: *u64, a_low: u64, a_high: u64, roc_ops: *RocOps) callconv(.c) void {
+    const a: i128 = @bitCast(i128h.from_u64_pair(a_low, a_high));
+    writeDecUnaryResult(out_low, out_high, dec.sinC(dec.RocDec{ .num = a }, roc_ops));
+}
+
+/// Dec cosine (decomposed)
+pub fn roc_builtins_dec_cos(out_low: *u64, out_high: *u64, a_low: u64, a_high: u64, roc_ops: *RocOps) callconv(.c) void {
+    const a: i128 = @bitCast(i128h.from_u64_pair(a_low, a_high));
+    writeDecUnaryResult(out_low, out_high, dec.cosC(dec.RocDec{ .num = a }, roc_ops));
+}
+
+/// Dec tangent (decomposed)
+pub fn roc_builtins_dec_tan(out_low: *u64, out_high: *u64, a_low: u64, a_high: u64, roc_ops: *RocOps) callconv(.c) void {
+    const a: i128 = @bitCast(i128h.from_u64_pair(a_low, a_high));
+    writeDecUnaryResult(out_low, out_high, dec.tanC(dec.RocDec{ .num = a }, roc_ops));
+}
+
+/// Dec arcsine (decomposed)
+pub fn roc_builtins_dec_asin(out_low: *u64, out_high: *u64, a_low: u64, a_high: u64, roc_ops: *RocOps) callconv(.c) void {
+    const a: i128 = @bitCast(i128h.from_u64_pair(a_low, a_high));
+    writeDecUnaryResult(out_low, out_high, dec.asinC(dec.RocDec{ .num = a }, roc_ops));
+}
+
+/// Dec arccosine (decomposed)
+pub fn roc_builtins_dec_acos(out_low: *u64, out_high: *u64, a_low: u64, a_high: u64, roc_ops: *RocOps) callconv(.c) void {
+    const a: i128 = @bitCast(i128h.from_u64_pair(a_low, a_high));
+    writeDecUnaryResult(out_low, out_high, dec.acosC(dec.RocDec{ .num = a }, roc_ops));
+}
+
+/// Dec arctangent (decomposed)
+pub fn roc_builtins_dec_atan(out_low: *u64, out_high: *u64, a_low: u64, a_high: u64, roc_ops: *RocOps) callconv(.c) void {
+    const a: i128 = @bitCast(i128h.from_u64_pair(a_low, a_high));
+    writeDecUnaryResult(out_low, out_high, dec.atanC(dec.RocDec{ .num = a }, roc_ops));
+}
+
 // ── i128 div/rem wrappers (decomposed) ──
 
 /// u128 div trunc (decomposed)
