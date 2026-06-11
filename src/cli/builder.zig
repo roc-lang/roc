@@ -52,6 +52,7 @@ pub const CompileConfig = struct {
     debug: bool = false, // Enable debug info generation in output
     link_builtins: bool = false,
     pic: bool = false, // Position-independent code (required for shared library output)
+    no_target_libcalls: bool = false,
 
     /// Check if compiling for the current machine
     pub fn isNative(self: CompileConfig) bool {
@@ -123,6 +124,7 @@ const ZigLLVMEmitOptions = extern struct {
     llvm_ir_filename: ?[*:0]const u8,
     bitcode_filename: ?[*:0]const u8,
     coverage: ZigLLVMCoverageOptions,
+    no_target_libcalls: bool,
 };
 
 // LLVM Code Generation Optimization Levels
@@ -679,6 +681,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
         .llvm_ir_filename = null,
         .bitcode_filename = null,
         .coverage = coverage_options,
+        .no_target_libcalls = config.no_target_libcalls,
     };
 
     const emit_result = externs.ZigLLVMTargetMachineEmitToFile(

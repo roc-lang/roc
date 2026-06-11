@@ -994,6 +994,7 @@ fn generatePlatformHostShim(
         .cpu = llvm_cpu,
         .features = llvm_features,
         .debug = debug, // Use the debug flag passed from caller
+        .no_target_libcalls = noTargetLibcallsForLlvmBuild(target),
     };
 
     if (builder.compileBitcodeToObject(ctx.gpa, ctx.io.std_io, compile_config)) |success| {
@@ -4172,6 +4173,13 @@ fn stdTargetAbiForLlvmBuild(target: RocTarget) std.Target.Abi {
     };
 }
 
+fn noTargetLibcallsForLlvmBuild(target: RocTarget) bool {
+    return switch (target.toOsTag()) {
+        .macos, .windows => false,
+        else => true,
+    };
+}
+
 fn stdTargetForLlvmBuild(ctx: *CliCtx, target: RocTarget) anyerror!std.Target {
     if (target == RocTarget.detectNative()) return builtin.target;
 
@@ -4278,6 +4286,7 @@ fn compileLlvmAppObject(
         .debug = args.debug,
         .link_builtins = true,
         .pic = pic,
+        .no_target_libcalls = noTargetLibcallsForLlvmBuild(target),
     };
 
     const success = try builder.compileBitcodeToObject(ctx.gpa, ctx.io.std_io, compile_config);

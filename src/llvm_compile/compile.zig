@@ -115,6 +115,10 @@ pub const CompileOptions = struct {
     /// Target pointer width in bits. Used to select the matching embedded
     /// builtin bitcode payload before retargeting the merged LLVM module.
     target_ptr_width_bits: u8,
+    /// Treat the target as freestanding for LLVM object emission: optimization
+    /// cannot assume target library functions, and memory intrinsics are lowered
+    /// to explicit loops before codegen.
+    no_target_libcalls: bool = false,
 };
 
 fn valueName(value: *bindings.Value) []const u8 {
@@ -522,6 +526,7 @@ fn emitMergedBitcodeToObjectFile(
         .llvm_ir_filename = null,
         .bitcode_filename = null,
         .coverage = default_coverage,
+        .no_target_libcalls = options.no_target_libcalls,
     };
 
     // Emit merged module to object file
@@ -580,6 +585,10 @@ pub fn compileToSharedLibrary(allocator: Allocator, io: std.Io, bitcode: []const
     var pic_options = options;
     pic_options.reloc_mode = .PIC;
     pic_options.use_module_target_triple = true;
+    pic_options.no_target_libcalls = switch (builtin.os.tag) {
+        .macos, .windows => false,
+        else => true,
+    };
 
     try emitMergedBitcodeToObjectFile(allocator, io, bitcode, pic_options, object_path);
 

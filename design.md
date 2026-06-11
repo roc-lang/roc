@@ -109,7 +109,11 @@ compiler-rt or other target-specific runtime code, because that would make the
 payload architecture-specific again. The payloads are built as freestanding
 LLVM bitcode so compile-time OS and CPU branches cannot bake a native
 platform's syscalls, inline assembly, or runtime support into a module that will
-later be retargeted.
+later be retargeted. LLVM object emission for targets that are not required to
+link a platform C runtime disables target-library assumptions and lowers LLVM
+memory intrinsics to explicit loops before target code generation. macOS and
+Windows keep target library calls available because their final links include
+the platform runtime libraries.
 
 Builtin definitions in the merged LLVM module are real definitions. They must
 not be marked `available_externally`, because there is no later builtin object

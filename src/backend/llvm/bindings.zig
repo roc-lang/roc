@@ -131,6 +131,7 @@ pub const TargetMachine = opaque {
         llvm_ir_filename: ?[*:0]const u8,
         bitcode_filename: ?[*:0]const u8,
         coverage: Coverage,
+        no_target_libcalls: bool,
 
         pub const LtoPhase = enum(c_int) {
             None,
@@ -554,6 +555,7 @@ pub fn compileBitcodeToObject(
         .llvm_ir_filename = null,
         .bitcode_filename = null,
         .coverage = default_coverage,
+        .no_target_libcalls = false,
     };
 
     // Emit object file
