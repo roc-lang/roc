@@ -65,6 +65,7 @@ const NominalTypeResolutionFailed = problem_mod.NominalTypeResolutionFailed;
 // Platform errors
 const PlatformAliasNotFound = problem_mod.PlatformAliasNotFound;
 const PlatformDefNotFound = problem_mod.PlatformDefNotFound;
+const PlatformHostedSection = problem_mod.PlatformHostedSection;
 const HostedUnboxedFunction = problem_mod.HostedUnboxedFunction;
 const AnnotationOnlyValue = problem_mod.AnnotationOnlyValue;
 const EffectfulTopLevel = problem_mod.EffectfulTopLevel;
@@ -809,6 +810,9 @@ pub const ReportBuilder = struct {
             },
             .platform_alias_not_found => |data| {
                 return self.buildPlatformAliasNotFound(data);
+            },
+            .platform_hosted_section => |data| {
+                return self.buildPlatformHostedSection(data);
             },
             .platform_def_not_found => |data| {
                 return self.buildPlatformDefNotFound(data);
@@ -3158,6 +3162,72 @@ pub const ReportBuilder = struct {
                     D.bytes(":").withAnnotation(.inline_code).withNoPrecedingSpace(),
                     D.bytes("),").withNoPrecedingSpace(),
                     D.bytes("not a value definition."),
+                }, self, &report);
+            },
+        }
+
+        return report;
+    }
+
+    fn buildPlatformHostedSection(self: *Self, data: PlatformHostedSection) Allocator.Error!Report {
+        var report = Report.init(self.gpa, "INVALID HOSTED SECTION", .runtime_error);
+        errdefer report.deinit();
+
+        const name = self.problems.getExtraString(data.name);
+        switch (data.reason) {
+            .function_not_in_section => {
+                try D.renderSlice(&.{
+                    D.bytes("This platform's exposed modules declare a hosted function named"),
+                    D.bytes(name).withAnnotation(.inline_code),
+                    D.bytes(",").withNoPrecedingSpace(),
+                    D.bytes("but the platform header's"),
+                    D.bytes("hosted").withAnnotation(.inline_code),
+                    D.bytes("section has no entry for it. Every hosted function needs an entry mapping a linker symbol to it."),
+                }, self, &report);
+            },
+            .unknown_function => {
+                try D.renderSlice(&.{
+                    D.bytes("The platform header's"),
+                    D.bytes("hosted").withAnnotation(.inline_code),
+                    D.bytes("section has an entry for"),
+                    D.bytes(name).withAnnotation(.inline_code),
+                    D.bytes(",").withNoPrecedingSpace(),
+                    D.bytes("but no exposed module declares a hosted function with that name."),
+                }, self, &report);
+            },
+            .duplicate_function => {
+                try D.renderSlice(&.{
+                    D.bytes("The platform header's"),
+                    D.bytes("hosted").withAnnotation(.inline_code),
+                    D.bytes("section maps the hosted function"),
+                    D.bytes(name).withAnnotation(.inline_code),
+                    D.bytes("to more than one linker symbol. Each hosted function takes exactly one entry."),
+                }, self, &report);
+            },
+            .duplicate_symbol => {
+                try D.renderSlice(&.{
+                    D.bytes("The platform header maps more than one function to the linker symbol"),
+                    D.bytes(name).withAnnotation(.inline_code),
+                    D.bytes(".").withNoPrecedingSpace(),
+                    D.bytes("Each provides and hosted entry needs a distinct symbol."),
+                }, self, &report);
+            },
+            .reserved_symbol => {
+                try D.renderSlice(&.{
+                    D.bytes("The platform header uses the linker symbol"),
+                    D.bytes(name).withAnnotation(.inline_code),
+                    D.bytes(",").withNoPrecedingSpace(),
+                    D.bytes("but that name is reserved for the Roc runtime. Pick a different symbol."),
+                }, self, &report);
+            },
+            .reserved_prefix => {
+                try D.renderSlice(&.{
+                    D.bytes("The platform header uses the linker symbol"),
+                    D.bytes(name).withAnnotation(.inline_code),
+                    D.bytes(",").withNoPrecedingSpace(),
+                    D.bytes("but the"),
+                    D.bytes("roc__").withAnnotation(.inline_code),
+                    D.bytes("prefix is reserved for symbols the Roc compiler generates internally. Pick a different symbol."),
                 }, self, &report);
             },
         }

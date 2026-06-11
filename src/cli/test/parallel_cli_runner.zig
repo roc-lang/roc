@@ -179,6 +179,7 @@ const CustomCase = enum {
     build_int_interpreter_output_runs,
     build_int_dev_output_runs,
     build_glibc_target_non_linux_error,
+    build_windows_shared_library,
     cache_passing_results,
     cache_failing_results,
     cache_invalidated_by_source_change,
@@ -502,8 +503,11 @@ const no_errors_needles = [_]OutputNeedle{
 
 const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "CLI test cache roots are distinct", .body = .{ .custom = .cli_cache_roots_distinct } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc build reports missing host symbols before linking", .body = .{ .command = .{ .args = &.{ "build", "--no-cache", "--target=x64musl" }, .roc_file = "test/missing-host-symbol/app.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "MISSING HOST SYMBOLS" }, .{ .stream = .stderr, .text = "roc_host_vanish" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check writes parse errors to stderr", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/has_parse_error.roc", .exit = .failure, .stderr_min_len = 1, .contains_any = &.{.{ .needles = &parse_error_needles }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check displays correct file path in parse error messages", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/has_parse_error.roc", .exit = .failure, .stderr_min_len = 1, .contains = &.{.{ .stream = .stderr, .text = "has_parse_error.roc" }}, .not_contains = &.{.{ .stream = .stderr, .text = "\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc check rejects invalid hosted sections", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/hosted-section-errors/platform/main.roc", .exit = .failure, .stderr_min_len = 1, .contains = &.{ .{ .stream = .stderr, .text = "INVALID HOSTED SECTION" }, .{ .stream = .stderr, .text = "Host.nonexistent" }, .{ .stream = .stderr, .text = "Host.quadruple" }, .{ .stream = .stderr, .text = "roc_alloc" }, .{ .stream = .stderr, .text = "roc__sneaky" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc check accepts a valid hosted section", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/fx/platform/main.roc", .not_contains = &.{.{ .stream = .stderr, .text = "INVALID HOSTED SECTION" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check succeeds on valid file", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/simple_success.roc", .not_contains = &.{ .{ .stream = .stderr, .text = "Failed to check" }, .{ .stream = .stderr, .text = "error" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check generated module graph succeeds with 1 file and 1 symbol", .body = .{ .custom = .generated_graph_1_1 } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check generated module graph succeeds with 5 files and 5 symbols", .body = .{ .custom = .generated_graph_5_5 } },
@@ -545,6 +549,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc build fails with invalid target error", .body = .{ .command = .{ .args = &.{ "build", "--target=invalid_target_name" }, .roc_file = "test/int/app.roc", .exit = .failure, .contains_any = &.{.{ .needles = &.{ .{ .stream = .stderr, .text = "Invalid target" }, .{ .stream = .stderr, .text = "invalid" } } }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build wasm32 shared module succeeds for list builtins", .body = .{ .command = .{ .args = &.{ "build", "--target=wasm32", "--no-cache" }, .roc_file = "test/wasm/list_builtin_static_lib_app.roc", .contains = &.{.{ .stream = .stdout, .text = "Built " }}, .not_contains = &.{ .{ .stream = .stderr, .text = "FunctionTypeMismatch" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build glibc target gives helpful error on non-Linux", .body = .{ .custom = .build_glibc_target_non_linux_error } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc build Shared output links a Windows DLL", .body = .{ .custom = .build_windows_shared_library } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test caches passing results (interpreter)", .backend = .interpreter, .body = .{ .custom = .cache_passing_results } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test caches passing results (dev)", .backend = .dev, .body = .{ .custom = .cache_passing_results } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test caches failing results (interpreter)", .backend = .interpreter, .body = .{ .custom = .cache_failing_results } },
@@ -1362,6 +1367,7 @@ fn runCustomCase(
         .build_int_interpreter_output_runs => customBuildIntOutputRuns(io, allocator, &env, &timer, timeout_ms, .interpreter),
         .build_int_dev_output_runs => customBuildIntOutputRuns(io, allocator, &env, &timer, timeout_ms, .dev),
         .build_glibc_target_non_linux_error => customGlibcTargetNonLinux(io, allocator, &env, &timer, timeout_ms),
+        .build_windows_shared_library => customWindowsSharedLibrary(io, allocator, &env, &timer, timeout_ms),
         .cache_passing_results => customCachePassingResults(io, allocator, &env, &timer, timeout_ms, spec.backend orelse .interpreter),
         .cache_failing_results => customCacheFailingResults(io, allocator, &env, &timer, timeout_ms, spec.backend orelse .interpreter),
         .cache_invalidated_by_source_change => customCacheInvalidated(io, allocator, &env, &timer, timeout_ms, spec.backend orelse .interpreter),
@@ -1547,7 +1553,7 @@ fn customListBuiltinInlined(
         \\    requires {} { main! : () => List(I32) }
         \\    exposes []
         \\    packages {}
-        \\    provides { main_for_host!: "main" }
+        \\    provides { "roc_main": main_for_host! }
         \\    targets: {
         \\        inputs: "targets/",
         \\        arm64mac: { inputs: [app], output: Archive },
@@ -1863,6 +1869,38 @@ fn customGlibcTargetNonLinux(io: std.Io, allocator: Allocator, env: *const CaseE
         .exit = .failure,
         .contains = &.{ .{ .stream = .stderr, .text = "glibc" }, .{ .stream = .stderr, .text = "musl" } },
     })) |failure| return failure;
+    return null;
+}
+
+/// Shared output on COFF: link the dylib test app and its host into one DLL.
+/// lld-link resolves the app/host symbol references in a single pass, the
+/// same as the ELF and Mach-O shared-library links. Windows-only: the link
+/// needs the native Windows SDK.
+fn customWindowsSharedLibrary(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    if (builtin.os.tag != .windows) return null;
+
+    const dll_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "app.dll" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate dll path: {}", .{err});
+    const output_arg = std.fmt.allocPrint(allocator, "--output={s}", .{dll_path}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate output arg: {}", .{err});
+
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "build", "--no-cache", output_arg },
+        .roc_file = "test/dylib/app.roc",
+        .contains = &.{.{ .stream = .stdout, .text = "Built " }},
+    })) |failure| return failure;
+
+    const dll_bytes = std.Io.Dir.cwd().readFileAlloc(io, dll_path, allocator, .limited(256 * 1024 * 1024)) catch |err|
+        return customInfraFailure(allocator, timer, "failed to read built DLL {s}: {}", .{ dll_path, err });
+
+    // The host's unused canary blob must be dead-stripped from the DLL. A
+    // presence check on the used hosted symbol's name would prove nothing
+    // here: linked PE images carry no symbol table, so internal names vanish
+    // even though the code survives; the ELF and Mach-O shared-library tests
+    // cover the positive side.
+    if (std.mem.find(u8, dll_bytes, "ROC_DCE_CANARY_BLOB_7f3a9c") != null) {
+        return customFailure(allocator, timer, "unused host canary blob was not dead-stripped from the DLL", .{});
+    }
     return null;
 }
 

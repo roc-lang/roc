@@ -74,12 +74,13 @@ pub fn main(init: std.process.Init) anyerror!void {
         return error.SymbolNotFound;
     };
 
-    // The app computes double(n) + 1 via the hosted Host.double! function.
+    // The app sums an allocated 3-element list of n, doubles it via the hosted
+    // Host.double! function, and adds one: 6n + 1.
     const answer = roc_run_app(20);
-    if (answer != 41) {
-        std.debug.print("FAILED: roc_run_app(20) returned {d}, expected 41\n", .{answer});
+    if (answer != 121) {
+        std.debug.print("FAILED: roc_run_app(20) returned {d}, expected 121\n", .{answer});
         return error.WrongAnswer;
     }
 
-    std.debug.print("SUCCESS: roc_run_app(20) == 41\n", .{});
+    std.debug.print("SUCCESS: roc_run_app(20) == 121\n", .{});
 }

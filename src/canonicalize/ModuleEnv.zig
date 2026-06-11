@@ -590,6 +590,8 @@ for_clause_aliases: ForClauseAlias.SafeList,
 /// Platform provides entries mapping Roc identifiers to FFI symbols.
 /// Populated during canonicalization for platform modules. Empty for non-platform modules.
 provides_entries: ProvidesEntry.SafeList,
+/// Platform hosted entries in header declaration order (defines dispatch order)
+hosted_entries: HostedEntry.SafeList,
 /// All builtin stmts (temporary until module imports are working)
 builtin_statements: CIR.Statement.Span,
 /// All external declarations referenced in this module
@@ -668,6 +670,23 @@ pub const ProvidesEntry = struct {
     pub const SafeList = collections.SafeList(@This());
 };
 
+/// Platform hosted entry mapping a linker symbol to a hosted function in an
+/// exposed type module. Populated during canonicalization for platform modules
+/// from the hosted clause, in declaration order (which defines hosted dispatch
+/// order). For example, `hosted { "roc_stdout_line": Stdout.line! }` creates an
+/// entry with module_ident="Stdout", func_ident="line!", and symbol pointing to
+/// the interned string "roc_stdout_line".
+pub const HostedEntry = struct {
+    /// The type module name (e.g., "Stdout"); null for unqualified functions
+    module_ident: ?Ident.Idx,
+    /// The hosted function name (e.g., "line!")
+    func_ident: Ident.Idx,
+    /// The literal linker symbol (e.g., "roc_stdout_line")
+    symbol: StringLiteral.Idx,
+
+    pub const SafeList = collections.SafeList(@This());
+};
+
 /// Required type for platform modules - maps an identifier to its expected type annotation.
 /// Used to enforce that apps provide values matching the platform's required types.
 pub const RequiredType = struct {
@@ -695,6 +714,7 @@ pub fn relocate(self: *Self, offset: isize) void {
     self.requires_types.relocate(offset);
     self.for_clause_aliases.relocate(offset);
     self.provides_entries.relocate(offset);
+    self.hosted_entries.relocate(offset);
     self.imports.relocate(offset);
     self.store.relocate(offset);
     self.method_idents.relocate(offset);
@@ -761,6 +781,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .requires_types = try RequiredType.SafeList.initCapacity(gpa, 4),
         .for_clause_aliases = try ForClauseAlias.SafeList.initCapacity(gpa, 4),
         .provides_entries = try ProvidesEntry.SafeList.initCapacity(gpa, 4),
+        .hosted_entries = try HostedEntry.SafeList.initCapacity(gpa, 4),
         .builtin_statements = .{ .span = .{ .start = 0, .len = 0 } },
         .external_decls = try CIR.ExternalDecl.SafeList.initCapacity(gpa, 16),
         .imports = CIR.Import.Store.init(),
@@ -790,6 +811,7 @@ pub fn deinit(self: *Self) void {
     self.requires_types.deinit(self.gpa);
     self.for_clause_aliases.deinit(self.gpa);
     self.provides_entries.deinit(self.gpa);
+    self.hosted_entries.deinit(self.gpa);
     self.imports.deinit(self.gpa);
     self.import_mapping.deinit();
     self.method_idents.deinit(self.gpa);
@@ -2971,6 +2993,7 @@ pub const Serialized = extern struct {
     requires_types: RequiredType.SafeList.Serialized,
     for_clause_aliases: ForClauseAlias.SafeList.Serialized,
     provides_entries: ProvidesEntry.SafeList.Serialized,
+    hosted_entries: HostedEntry.SafeList.Serialized,
     builtin_statements: CIR.Statement.Span,
     external_decls: CIR.ExternalDecl.SafeList.Serialized,
     imports: CIR.Import.Store.Serialized,
@@ -3018,6 +3041,7 @@ pub const Serialized = extern struct {
         try self.requires_types.serialize(&env.requires_types, allocator, writer);
         try self.for_clause_aliases.serialize(&env.for_clause_aliases, allocator, writer);
         try self.provides_entries.serialize(&env.provides_entries, allocator, writer);
+        try self.hosted_entries.serialize(&env.hosted_entries, allocator, writer);
         try self.external_decls.serialize(&env.external_decls, allocator, writer);
         try self.imports.serialize(&env.imports, allocator, writer);
 
@@ -3085,6 +3109,7 @@ pub const Serialized = extern struct {
             .requires_types = self.requires_types.deserializeInto(base_addr),
             .for_clause_aliases = self.for_clause_aliases.deserializeInto(base_addr),
             .provides_entries = self.provides_entries.deserializeInto(base_addr),
+            .hosted_entries = self.hosted_entries.deserializeInto(base_addr),
             .builtin_statements = self.builtin_statements,
             .external_decls = self.external_decls.deserializeInto(base_addr),
             .imports = try self.imports.deserializeInto(base_addr, gpa),
@@ -3139,6 +3164,7 @@ pub const Serialized = extern struct {
             .requires_types = self.requires_types.deserializeInto(base_addr),
             .for_clause_aliases = self.for_clause_aliases.deserializeInto(base_addr),
             .provides_entries = self.provides_entries.deserializeInto(base_addr),
+            .hosted_entries = self.hosted_entries.deserializeInto(base_addr),
             .builtin_statements = self.builtin_statements,
             .external_decls = self.external_decls.deserializeInto(base_addr),
             .imports = try self.imports.deserializeInto(base_addr, gpa),

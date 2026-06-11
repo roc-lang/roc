@@ -184,6 +184,21 @@ const HostedCatalogEntry = struct {
     def_idx: u32,
 };
 
+/// The platform header's hosted section, resolved to the same qualified keys
+/// the checked modules' hosted tables sort by ("Module.func" with a trailing `!`
+/// stripped). Section order defines hosted dispatch order, and each entry's
+/// string is the hosted function's linker symbol.
+const HostedSectionMap = struct {
+    keys: []const []const u8,
+    symbols: []const []const u8,
+
+    fn deinit(self: HostedSectionMap, allocator: Allocator) void {
+        for (self.keys) |key| allocator.free(key);
+        allocator.free(self.keys);
+        allocator.free(self.symbols);
+    }
+};
+
 const BinderMap = std.AutoHashMap(checked.PatternBinderId, Ast.LocalId);
 /// State for one checked type inside a single Monotype instantiation context.
 /// The cell owns the stage-local monotype for that checked type in this
@@ -352,7 +367,80 @@ const Builder = struct {
             entry.dispatch_index = @intCast(index);
         }
 
+        if (try self.buildHostedSectionMap()) |map| {
+            defer map.deinit(self.allocator);
+
+            // Platform checking already verified the section is total over the
+            // platform's hosted functions and duplicate-free, so every catalog
+            // entry has exactly one section position.
+            if (entries.items.len != map.keys.len) {
+                Common.invariant("platform hosted section disagrees with the hosted catalog size");
+            }
+            for (entries.items) |*entry| {
+                const pos = blk: {
+                    for (map.keys, 0..) |key, key_index| {
+                        if (std.mem.eql(u8, key, entry.order)) break :blk key_index;
+                    }
+                    Common.invariant("hosted function is missing from the platform hosted section");
+                };
+                entry.dispatch_index = @intCast(pos);
+                entry.external_symbol_name = try self.program.names.internExternalSymbolName(map.symbols[pos]);
+            }
+
+            const DispatchSort = struct {
+                pub fn lessThan(_: void, a: HostedCatalogEntry, b: HostedCatalogEntry) bool {
+                    return a.dispatch_index < b.dispatch_index;
+                }
+            };
+            std.mem.sort(HostedCatalogEntry, entries.items, {}, DispatchSort.lessThan);
+        }
+
         self.hosted_catalog = try entries.toOwnedSlice(self.allocator);
+    }
+
+    /// Find the platform module's hosted section among the checked modules and
+    /// resolve it to qualified keys + linker symbols. Returns null when no
+    /// module declares hosted entries (e.g. a platform with no hosted section,
+    /// or compiler-internal evaluation).
+    fn buildHostedSectionMap(self: *Builder) Allocator.Error!?HostedSectionMap {
+        const platform_env = blk: {
+            const root_env = moduleView(self.root_view).module_env;
+            if (root_env.hosted_entries.items.items.len != 0) break :blk root_env;
+            for (self.modules.imports) |imported| {
+                const env = moduleView(imported).module_env;
+                if (env.hosted_entries.items.items.len != 0) break :blk env;
+            }
+            for (self.modules.root.relation_modules) |relation| {
+                const env = moduleView(relation).module_env;
+                if (env.hosted_entries.items.items.len != 0) break :blk env;
+            }
+            return null;
+        };
+
+        const section = platform_env.hosted_entries.items.items;
+        var keys = try self.allocator.alloc([]const u8, section.len);
+        var key_count: usize = 0;
+        errdefer {
+            for (keys[0..key_count]) |key| self.allocator.free(key);
+            self.allocator.free(keys);
+        }
+        const symbols = try self.allocator.alloc([]const u8, section.len);
+        errdefer self.allocator.free(symbols);
+
+        for (section, 0..) |entry, index| {
+            var func_text = platform_env.getIdentText(entry.func_ident);
+            if (func_text.len > 0 and func_text[func_text.len - 1] == '!') {
+                func_text = func_text[0 .. func_text.len - 1];
+            }
+            keys[index] = if (entry.module_ident) |module_ident|
+                try std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ platform_env.getIdentText(module_ident), func_text })
+            else
+                try self.allocator.dupe(u8, func_text);
+            key_count = index + 1;
+            symbols[index] = platform_env.getString(entry.symbol);
+        }
+
+        return .{ .keys = keys, .symbols = symbols };
     }
 
     fn initMethodLookupIndex(self: *Builder) Allocator.Error!void {
