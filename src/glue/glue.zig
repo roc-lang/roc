@@ -1998,10 +1998,10 @@ fn checkedTypePayload(
     checked_type: CheckedArtifact.CheckedTypeId,
 ) CheckedArtifact.CheckedTypePayload {
     const idx = @intFromEnum(checked_type);
-    if (idx >= artifact.checked_types.payloads.len) {
+    if (idx >= artifact.checked_types.payloads.items.len) {
         glueInvariant("checked type id {d} out of bounds", .{idx});
     }
-    return artifact.checked_types.payloads[idx];
+    return artifact.checked_types.payloads.items[idx];
 }
 
 fn checkedTypeRootForScheme(
@@ -2346,7 +2346,7 @@ fn collectModuleTypeInfo(
 ) Allocator.Error!?CollectedModuleTypeInfo {
     var main_type_str: []const u8 = try gpa.dupe(u8, "");
     errdefer gpa.free(main_type_str);
-    for (artifact.checked_types.nominal_declarations) |declaration| {
+    for (artifact.checked_types.nominal_declarations.items) |declaration| {
         const type_name = TypeTable.getTypeDisplayName(artifact.canonical_names.typeNameText(declaration.nominal.type_name));
         if (std.mem.eql(u8, type_name, module_name)) {
             gpa.free(main_type_str);
