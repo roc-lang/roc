@@ -1893,13 +1893,13 @@ fn customWindowsSharedLibrary(io: std.Io, allocator: Allocator, env: *const Case
     const dll_bytes = std.Io.Dir.cwd().readFileAlloc(io, dll_path, allocator, .limited(256 * 1024 * 1024)) catch |err|
         return customInfraFailure(allocator, timer, "failed to read built DLL {s}: {}", .{ dll_path, err });
 
-    // The host's unused canary blob must be dead-stripped from the DLL, and
-    // the used hosted symbol must survive.
+    // The host's unused canary blob must be dead-stripped from the DLL. A
+    // presence check on the used hosted symbol's name would prove nothing
+    // here: linked PE images carry no symbol table, so internal names vanish
+    // even though the code survives; the ELF and Mach-O shared-library tests
+    // cover the positive side.
     if (std.mem.find(u8, dll_bytes, "ROC_DCE_CANARY_BLOB_7f3a9c") != null) {
         return customFailure(allocator, timer, "unused host canary blob was not dead-stripped from the DLL", .{});
-    }
-    if (std.mem.find(u8, dll_bytes, "roc_host_double") == null) {
-        return customFailure(allocator, timer, "used hosted symbol roc_host_double is missing from the DLL", .{});
     }
     return null;
 }
