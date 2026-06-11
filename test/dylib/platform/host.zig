@@ -99,7 +99,7 @@ fn hostedHostDouble(n: i64) callconv(.c) i64 {
     return n * 2;
 }
 
-// --- Dead-code-elimination canaries ---------------------------------------
+// --- Dead-code-elimination canaries
 // A large constant and a function that uses it, exported (hidden) but never
 // referenced by the app. Symbol-ABI links must strip both from the final
 // artifact; tests scan the output for the distinctive byte pattern.

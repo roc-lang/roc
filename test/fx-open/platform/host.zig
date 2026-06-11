@@ -249,7 +249,7 @@ fn hostedStdoutLine(str: RocStr) callconv(.c) void {
     std.Io.File.stdout().writeStreamingAll(host.std_io, "\n") catch {};
 }
 
-// --- Symbol-ABI runtime exports --------------------------------------------
+// --- Symbol-ABI runtime exports
 // The fixed runtime symbols every symbol-ABI host defines, plus this
 // platform's hosted function symbols. All hidden: they are link-time plumbing
 // between the app and the host, not part of the host binary's public API.

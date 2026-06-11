@@ -152,7 +152,7 @@ extern fn roc_test_simple_effectful(input: SimpleInput) callconv(.c) SimpleInput
 extern fn roc_test_three_floats_pure(input: ThreeFloats) callconv(.c) ThreeFloats;
 extern fn roc_test_three_floats_effectful(input: ThreeFloats) callconv(.c) ThreeFloats;
 
-// --- Symbol-ABI runtime exports --------------------------------------------
+// --- Symbol-ABI runtime exports
 var g_host_env = HostEnv{
     .arena = .init(std.heap.page_allocator),
 };

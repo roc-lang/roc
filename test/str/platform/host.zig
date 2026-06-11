@@ -107,7 +107,7 @@ fn rocCrashedFn(ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void 
 // C ABI under the symbol ABI.
 extern fn roc_process_string(input: RocStr) callconv(.c) RocStr;
 
-// --- Symbol-ABI runtime exports --------------------------------------------
+// --- Symbol-ABI runtime exports
 // The fixed runtime symbols every symbol-ABI host defines. They delegate to
 // the same allocator the host's private RocOps uses for builtins helpers.
 var g_host_env = HostEnv{

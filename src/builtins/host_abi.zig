@@ -62,6 +62,9 @@ const extern_host = struct {
     extern fn roc_crashed(bytes: [*]const u8, len: usize) void;
 };
 
+/// Type-erased pointer to a hosted platform function stored in the
+/// interpreter-internal vtable. The interpreter's trampoline rebuilds each
+/// function's natural C ABI from its layouts before calling through this.
 pub const HostedFn = *const fn (*anyopaque, *anyopaque, *anyopaque) callconv(.c) void;
 
 /// Type-erase a concrete hosted function pointer to `HostedFn` for storage in the vtable.

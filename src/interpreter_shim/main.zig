@@ -192,7 +192,7 @@ fn viewEmbeddedLirImage(image_base: *anyopaque, image_len: usize, ops: *RocOps) 
     };
 }
 
-// --- Symbol-ABI host bridge -------------------------------------------------
+// --- Symbol-ABI host bridge
 // Under the symbol ABI the host defines the runtime symbols and hosted
 // functions; nothing hands the interpreter a RocOps. The generated platform
 // shim calls roc_shim_get_ops() to obtain one built over those symbols, with
