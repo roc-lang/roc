@@ -9884,7 +9884,7 @@ const BodyContext = struct {
     }
 
     /// Wrap a match-branch body so it only runs when every collected literal
-    /// equality holds, falling through to the branch's fallback otherwise.
+    /// equality holds, jumping to the branch's miss target otherwise.
     fn applyPatternLiteralGuards(
         self: *BodyContext,
         guards: []const PatternLiteralGuard,
