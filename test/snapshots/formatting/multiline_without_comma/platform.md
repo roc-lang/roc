@@ -27,6 +27,7 @@ EXPOSED BUT NOT DEFINED - platform.md:14:3:14:29
 EXPOSED BUT NOT DEFINED - platform.md:15:3:15:29
 EXPOSED BUT NOT DEFINED - platform.md:6:3:6:5
 EXPOSED BUT NOT DEFINED - platform.md:7:3:7:5
+INVALID HOSTED SECTION - :0:0:0:0
 # PROBLEMS
 **EXPOSED BUT NOT DEFINED**
 The module header says that `pr1` is exposed, but it is not defined anywhere in this module.
