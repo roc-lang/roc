@@ -422,10 +422,11 @@ pub fn init(allocator: Allocator, store: *const LirStore, layout_store: *const L
     };
 }
 
-pub fn initWithModule(allocator: Allocator, store: *const LirStore, layout_store: *const LayoutStore, module: WasmModule) Self {
+pub fn initWithModule(allocator: Allocator, store: *const LirStore, layout_store: *const LayoutStore, module: *WasmModule) Self {
     var self = Self.init(allocator, store, layout_store);
     self.module.deinit();
-    self.module = module;
+    self.module = module.*;
+    module.* = WasmModule.init(allocator);
     return self;
 }
 
