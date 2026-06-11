@@ -2604,6 +2604,8 @@ Builtin :: [].{
 			## ```
 			plus : U8, U8 -> U8
 
+			## Add two [U8] values, returning `Err(Overflow)` instead of wrapping
+			## if the result does not fit in a [U8].
 			add_try : U8, U8 -> Try(U8, [Overflow, ..])
 			add_try = |a, b| unsigned_add_try(U8.highest, a, b)
 
@@ -2626,6 +2628,8 @@ Builtin :: [].{
 			## ```
 			minus : U8, U8 -> U8
 
+			## Subtract the second [U8] from the first, returning `Err(Overflow)`
+			## instead of wrapping if the result does not fit in a [U8].
 			sub_try : U8, U8 -> Try(U8, [Overflow, ..])
 			sub_try = |a, b| unsigned_sub_try(a, b)
 
@@ -2644,6 +2648,8 @@ Builtin :: [].{
 			## ```
 			times : U8, U8 -> U8
 
+			## Multiply two [U8] values, returning `Err(Overflow)` instead of
+			## wrapping if the result does not fit in a [U8].
 			mul_try : U8, U8 -> Try(U8, [Overflow, ..])
 			mul_try = |a, b| unsigned_mul_try(U8.highest, 0, a, b)
 
@@ -2690,6 +2696,8 @@ Builtin :: [].{
 			## ```
 			div_by : U8, U8 -> U8
 
+			## Divide the first [U8] by the second, returning `Err(DivByZero)`
+			## instead of crashing if the divisor is zero.
 			div_try : U8, U8 -> Try(U8, [DivByZero, ..])
 			div_try = |a, b| unsigned_div_try(0, a, b)
 
@@ -2847,6 +2855,9 @@ Builtin :: [].{
 			from_int_digits : List(U8) -> Try(U8, [OutOfRange])
 			from_int_digits = |digits| u8_from_int_digits(digits)
 
+			## Convert a numeric literal into a [U8]. This is the hook the
+			## compiler uses when a literal is given type [U8]; most code should
+			## parse user text with [U8.from_str] instead.
 			from_numeral : Numeral -> Try(U8, [InvalidNumeral(Str)])
 			from_numeral = |numeral| from_numeral_with(numeral, |str| Builtin.u8_from_str(str))
 
@@ -2955,20 +2966,42 @@ Builtin :: [].{
 			## expect U8.to_i8_try(200) == Err(OutOfRange)
 			## ```
 			to_i8_try : U8 -> Try(I8, [OutOfRange, ..])
+			## Convert a [U8] to an [I16]. This widening conversion preserves
+			## every [U8] value exactly.
 			to_i16 : U8 -> I16
+			## Convert a [U8] to an [I32]. This widening conversion preserves
+			## every [U8] value exactly.
 			to_i32 : U8 -> I32
+			## Convert a [U8] to an [I64]. This widening conversion preserves
+			## every [U8] value exactly.
 			to_i64 : U8 -> I64
+			## Convert a [U8] to an [I128]. This widening conversion preserves
+			## every [U8] value exactly.
 			to_i128 : U8 -> I128
 
 			# Conversions to unsigned integers (all safe widening)
+			## Convert a [U8] to a [U16]. This widening conversion preserves
+			## every [U8] value exactly.
 			to_u16 : U8 -> U16
+			## Convert a [U8] to a [U32]. This widening conversion preserves
+			## every [U8] value exactly.
 			to_u32 : U8 -> U32
+			## Convert a [U8] to a [U64]. This widening conversion preserves
+			## every [U8] value exactly.
 			to_u64 : U8 -> U64
+			## Convert a [U8] to a [U128]. This widening conversion preserves
+			## every [U8] value exactly.
 			to_u128 : U8 -> U128
 
 			# Conversions to floating point (all safe)
+			## Convert a [U8] to an [F32]. Every [U8] value is exactly
+			## representable as an [F32].
 			to_f32 : U8 -> F32
+			## Convert a [U8] to an [F64]. Every [U8] value is exactly
+			## representable as an [F64].
 			to_f64 : U8 -> F64
+			## Convert a [U8] to a [Dec]. Every [U8] value is exactly
+			## representable as a [Dec].
 			to_dec : U8 -> Dec
 
 			## Encode a U8 using a format that provides encode_u8
@@ -3178,6 +3211,8 @@ Builtin :: [].{
 			## ```
 			plus : I8, I8 -> I8
 
+			## Add two [I8] values, returning `Err(Overflow)` instead of wrapping
+			## if the result does not fit in an [I8].
 			add_try : I8, I8 -> Try(I8, [Overflow, ..])
 			add_try = |a, b| signed_add_try(I8.lowest, I8.highest, 0, a, b)
 
@@ -3204,6 +3239,8 @@ Builtin :: [].{
 			## ```
 			minus : I8, I8 -> I8
 
+			## Subtract the second [I8] from the first, returning `Err(Overflow)`
+			## instead of wrapping if the result does not fit in an [I8].
 			sub_try : I8, I8 -> Try(I8, [Overflow, ..])
 			sub_try = |a, b| signed_sub_try(I8.lowest, I8.highest, 0, a, b)
 
@@ -3224,6 +3261,8 @@ Builtin :: [].{
 			## ```
 			times : I8, I8 -> I8
 
+			## Multiply two [I8] values, returning `Err(Overflow)` instead of
+			## wrapping if the result does not fit in an [I8].
 			mul_try : I8, I8 -> Try(I8, [Overflow, ..])
 			mul_try = |a, b| signed_mul_try(I8.lowest, I8.highest, 0, -1, a, b)
 
@@ -3279,6 +3318,8 @@ Builtin :: [].{
 			## ```
 			div_by : I8, I8 -> I8
 
+			## Divide the first [I8] by the second. Returns `Err(DivByZero)` if
+			## the divisor is zero, or `Err(Overflow)` for `I8.lowest / -1`.
 			div_try : I8, I8 -> Try(I8, [DivByZero, Overflow, ..])
 			div_try = |a, b| signed_div_try(I8.lowest, 0, -1, a, b)
 
@@ -3529,6 +3570,9 @@ Builtin :: [].{
 			from_int_digits : List(U8) -> Try(I8, [OutOfRange])
 			from_int_digits = |digits| i8_from_int_digits(digits)
 
+			## Convert a numeric literal into an [I8]. This is the hook the
+			## compiler uses when a literal is given type [I8]; most code should
+			## parse user text with [I8.from_str] instead.
 			from_numeral : Numeral -> Try(I8, [InvalidNumeral(Str)])
 			from_numeral = |numeral| from_numeral_with(numeral, |str| Builtin.i8_from_str(str))
 
@@ -3545,9 +3589,17 @@ Builtin :: [].{
 			from_str : Str -> Try(I8, [BadNumStr, ..])
 
 			# Conversions to signed integers (all safe widening)
+			## Convert an [I8] to an [I16]. This widening conversion preserves
+			## every [I8] value exactly.
 			to_i16 : I8 -> I16
+			## Convert an [I8] to an [I32]. This widening conversion preserves
+			## every [I8] value exactly.
 			to_i32 : I8 -> I32
+			## Convert an [I8] to an [I64]. This widening conversion preserves
+			## every [I8] value exactly.
 			to_i64 : I8 -> I64
+			## Convert an [I8] to an [I128]. This widening conversion preserves
+			## every [I8] value exactly.
 			to_i128 : I8 -> I128
 
 			# Conversions to unsigned integers (all lossy for negative values)
@@ -3655,8 +3707,14 @@ Builtin :: [].{
 			to_u128_try : I8 -> Try(U128, [OutOfRange, ..])
 
 			# Conversions to floating point (all safe)
+			## Convert an [I8] to an [F32]. Every [I8] value is exactly
+			## representable as an [F32].
 			to_f32 : I8 -> F32
+			## Convert an [I8] to an [F64]. Every [I8] value is exactly
+			## representable as an [F64].
 			to_f64 : I8 -> F64
+			## Convert an [I8] to a [Dec]. Every [I8] value is exactly
+			## representable as a [Dec].
 			to_dec : I8 -> Dec
 
 			## Encode an I8 using a format that provides encode_i8
@@ -3823,6 +3881,8 @@ Builtin :: [].{
 			## ```
 			plus : U16, U16 -> U16
 
+			## Add two [U16] values, returning `Err(Overflow)` instead of wrapping
+			## if the result does not fit in a [U16].
 			add_try : U16, U16 -> Try(U16, [Overflow, ..])
 			add_try = |a, b| unsigned_add_try(U16.highest, a, b)
 
@@ -3845,6 +3905,8 @@ Builtin :: [].{
 			## ```
 			minus : U16, U16 -> U16
 
+			## Subtract the second [U16] from the first, returning `Err(Overflow)`
+			## instead of wrapping if the result does not fit in a [U16].
 			sub_try : U16, U16 -> Try(U16, [Overflow, ..])
 			sub_try = |a, b| unsigned_sub_try(a, b)
 
@@ -3863,6 +3925,8 @@ Builtin :: [].{
 			## ```
 			times : U16, U16 -> U16
 
+			## Multiply two [U16] values, returning `Err(Overflow)` instead of
+			## wrapping if the result does not fit in a [U16].
 			mul_try : U16, U16 -> Try(U16, [Overflow, ..])
 			mul_try = |a, b| unsigned_mul_try(U16.highest, 0, a, b)
 
@@ -3909,6 +3973,8 @@ Builtin :: [].{
 			## ```
 			div_by : U16, U16 -> U16
 
+			## Divide the first [U16] by the second, returning `Err(DivByZero)`
+			## instead of crashing if the divisor is zero.
 			div_try : U16, U16 -> Try(U16, [DivByZero, ..])
 			div_try = |a, b| unsigned_div_try(0, a, b)
 
@@ -4140,6 +4206,9 @@ Builtin :: [].{
 			from_int_digits : List(U8) -> Try(U16, [OutOfRange])
 			from_int_digits = |digits| u16_from_int_digits(digits)
 
+			## Convert a numeric literal into a [U16]. This is the hook the
+			## compiler uses when a literal is given type [U16]; most code should
+			## parse user text with [U16.from_str] instead.
 			from_numeral : Numeral -> Try(U16, [InvalidNumeral(Str)])
 			from_numeral = |numeral| from_numeral_with(numeral, |str| Builtin.u16_from_str(str))
 
@@ -4195,8 +4264,14 @@ Builtin :: [].{
 			## expect U16.to_i16_try(40000) == Err(OutOfRange)
 			## ```
 			to_i16_try : U16 -> Try(I16, [OutOfRange, ..])
+			## Convert a [U16] to an [I32]. This widening conversion preserves
+			## every [U16] value exactly.
 			to_i32 : U16 -> I32
+			## Convert a [U16] to an [I64]. This widening conversion preserves
+			## every [U16] value exactly.
 			to_i64 : U16 -> I64
+			## Convert a [U16] to an [I128]. This widening conversion preserves
+			## every [U16] value exactly.
 			to_i128 : U16 -> I128
 
 			# Conversions to unsigned integers
@@ -4220,13 +4295,25 @@ Builtin :: [].{
 			## expect U16.to_u8_try(300) == Err(OutOfRange)
 			## ```
 			to_u8_try : U16 -> Try(U8, [OutOfRange, ..])
+			## Convert a [U16] to a [U32]. This widening conversion preserves
+			## every [U16] value exactly.
 			to_u32 : U16 -> U32
+			## Convert a [U16] to a [U64]. This widening conversion preserves
+			## every [U16] value exactly.
 			to_u64 : U16 -> U64
+			## Convert a [U16] to a [U128]. This widening conversion preserves
+			## every [U16] value exactly.
 			to_u128 : U16 -> U128
 
 			# Conversions to floating point (all safe)
+			## Convert a [U16] to an [F32]. Every [U16] value is exactly
+			## representable as an [F32].
 			to_f32 : U16 -> F32
+			## Convert a [U16] to an [F64]. Every [U16] value is exactly
+			## representable as an [F64].
 			to_f64 : U16 -> F64
+			## Convert a [U16] to a [Dec]. Every [U16] value is exactly
+			## representable as a [Dec].
 			to_dec : U16 -> Dec
 
 			# Encode a U16 using a format that provides encode_u16
@@ -4435,6 +4522,8 @@ Builtin :: [].{
 			## ```
 			plus : I16, I16 -> I16
 
+			## Add two [I16] values, returning `Err(Overflow)` instead of wrapping
+			## if the result does not fit in an [I16].
 			add_try : I16, I16 -> Try(I16, [Overflow, ..])
 			add_try = |a, b| signed_add_try(I16.lowest, I16.highest, 0, a, b)
 
@@ -4461,6 +4550,8 @@ Builtin :: [].{
 			## ```
 			minus : I16, I16 -> I16
 
+			## Subtract the second [I16] from the first, returning `Err(Overflow)`
+			## instead of wrapping if the result does not fit in an [I16].
 			sub_try : I16, I16 -> Try(I16, [Overflow, ..])
 			sub_try = |a, b| signed_sub_try(I16.lowest, I16.highest, 0, a, b)
 
@@ -4481,6 +4572,8 @@ Builtin :: [].{
 			## ```
 			times : I16, I16 -> I16
 
+			## Multiply two [I16] values, returning `Err(Overflow)` instead of
+			## wrapping if the result does not fit in an [I16].
 			mul_try : I16, I16 -> Try(I16, [Overflow, ..])
 			mul_try = |a, b| signed_mul_try(I16.lowest, I16.highest, 0, -1, a, b)
 
@@ -4536,6 +4629,8 @@ Builtin :: [].{
 			## ```
 			div_by : I16, I16 -> I16
 
+			## Divide the first [I16] by the second. Returns `Err(DivByZero)` if
+			## the divisor is zero, or `Err(Overflow)` for `I16.lowest / -1`.
 			div_try : I16, I16 -> Try(I16, [DivByZero, Overflow, ..])
 			div_try = |a, b| signed_div_try(I16.lowest, 0, -1, a, b)
 
@@ -4786,6 +4881,9 @@ Builtin :: [].{
 			from_int_digits : List(U8) -> Try(I16, [OutOfRange])
 			from_int_digits = |digits| i16_from_int_digits(digits)
 
+			## Convert a numeric literal into an [I16]. This is the hook the
+			## compiler uses when a literal is given type [I16]; most code should
+			## parse user text with [I16.from_str] instead.
 			from_numeral : Numeral -> Try(I16, [InvalidNumeral(Str)])
 			from_numeral = |numeral| from_numeral_with(numeral, |str| Builtin.i16_from_str(str))
 
@@ -4822,8 +4920,14 @@ Builtin :: [].{
 			## expect I16.to_i8_try(200) == Err(OutOfRange)
 			## ```
 			to_i8_try : I16 -> Try(I8, [OutOfRange, ..])
+			## Convert an [I16] to an [I32]. This widening conversion preserves
+			## every [I16] value exactly.
 			to_i32 : I16 -> I32
+			## Convert an [I16] to an [I64]. This widening conversion preserves
+			## every [I16] value exactly.
 			to_i64 : I16 -> I64
+			## Convert an [I16] to an [I128]. This widening conversion preserves
+			## every [I16] value exactly.
 			to_i128 : I16 -> I128
 
 			# Conversions to unsigned integers (all lossy for negative values)
@@ -4930,8 +5034,14 @@ Builtin :: [].{
 			to_u128_try : I16 -> Try(U128, [OutOfRange, ..])
 
 			# Conversions to floating point (all safe)
+			## Convert an [I16] to an [F32]. Every [I16] value is exactly
+			## representable as an [F32].
 			to_f32 : I16 -> F32
+			## Convert an [I16] to an [F64]. Every [I16] value is exactly
+			## representable as an [F64].
 			to_f64 : I16 -> F64
+			## Convert an [I16] to a [Dec]. Every [I16] value is exactly
+			## representable as a [Dec].
 			to_dec : I16 -> Dec
 
 			# Encode an I16 using a format that provides encode_i16
@@ -5097,6 +5207,8 @@ Builtin :: [].{
 			## ```
 			plus : U32, U32 -> U32
 
+			## Add two [U32] values, returning `Err(Overflow)` instead of wrapping
+			## if the result does not fit in a [U32].
 			add_try : U32, U32 -> Try(U32, [Overflow, ..])
 			add_try = |a, b| unsigned_add_try(U32.highest, a, b)
 
@@ -5119,6 +5231,8 @@ Builtin :: [].{
 			## ```
 			minus : U32, U32 -> U32
 
+			## Subtract the second [U32] from the first, returning `Err(Overflow)`
+			## instead of wrapping if the result does not fit in a [U32].
 			sub_try : U32, U32 -> Try(U32, [Overflow, ..])
 			sub_try = |a, b| unsigned_sub_try(a, b)
 
@@ -5137,6 +5251,8 @@ Builtin :: [].{
 			## ```
 			times : U32, U32 -> U32
 
+			## Multiply two [U32] values, returning `Err(Overflow)` instead of
+			## wrapping if the result does not fit in a [U32].
 			mul_try : U32, U32 -> Try(U32, [Overflow, ..])
 			mul_try = |a, b| unsigned_mul_try(U32.highest, 0, a, b)
 
@@ -5183,6 +5299,8 @@ Builtin :: [].{
 			## ```
 			div_by : U32, U32 -> U32
 
+			## Divide the first [U32] by the second, returning `Err(DivByZero)`
+			## instead of crashing if the divisor is zero.
 			div_try : U32, U32 -> Try(U32, [DivByZero, ..])
 			div_try = |a, b| unsigned_div_try(0, a, b)
 
@@ -5414,6 +5532,9 @@ Builtin :: [].{
 			from_int_digits : List(U8) -> Try(U32, [OutOfRange])
 			from_int_digits = |digits| u32_from_int_digits(digits)
 
+			## Convert a numeric literal into a [U32]. This is the hook the
+			## compiler uses when a literal is given type [U32]; most code should
+			## parse user text with [U32.from_str] instead.
 			from_numeral : Numeral -> Try(U32, [InvalidNumeral(Str)])
 			from_numeral = |numeral| from_numeral_with(numeral, |str| Builtin.u32_from_str(str))
 
@@ -5489,7 +5610,11 @@ Builtin :: [].{
 			## expect U32.to_i32_try(3000000000) == Err(OutOfRange)
 			## ```
 			to_i32_try : U32 -> Try(I32, [OutOfRange, ..])
+			## Convert a [U32] to an [I64]. This widening conversion preserves
+			## every [U32] value exactly.
 			to_i64 : U32 -> I64
+			## Convert a [U32] to an [I128]. This widening conversion preserves
+			## every [U32] value exactly.
 			to_i128 : U32 -> I128
 
 			# Conversions to unsigned integers
@@ -5533,12 +5658,22 @@ Builtin :: [].{
 			## expect U32.to_u16_try(70000) == Err(OutOfRange)
 			## ```
 			to_u16_try : U32 -> Try(U16, [OutOfRange, ..])
+			## Convert a [U32] to a [U64]. This widening conversion preserves
+			## every [U32] value exactly.
 			to_u64 : U32 -> U64
+			## Convert a [U32] to a [U128]. This widening conversion preserves
+			## every [U32] value exactly.
 			to_u128 : U32 -> U128
 
 			# Conversions to floating point (all safe)
+			## Convert a [U32] to an [F32]. This conversion may round because
+			## [F32] has fewer integer precision bits than [U32].
 			to_f32 : U32 -> F32
+			## Convert a [U32] to an [F64]. Every [U32] value is exactly
+			## representable as an [F64].
 			to_f64 : U32 -> F64
+			## Convert a [U32] to a [Dec]. Every [U32] value is exactly
+			## representable as a [Dec].
 			to_dec : U32 -> Dec
 
 			# Encode a U32 using a format that provides encode_u32
@@ -5747,6 +5882,8 @@ Builtin :: [].{
 			## ```
 			plus : I32, I32 -> I32
 
+			## Add two [I32] values, returning `Err(Overflow)` instead of wrapping
+			## if the result does not fit in an [I32].
 			add_try : I32, I32 -> Try(I32, [Overflow, ..])
 			add_try = |a, b| signed_add_try(I32.lowest, I32.highest, 0, a, b)
 
@@ -5773,6 +5910,8 @@ Builtin :: [].{
 			## ```
 			minus : I32, I32 -> I32
 
+			## Subtract the second [I32] from the first, returning `Err(Overflow)`
+			## instead of wrapping if the result does not fit in an [I32].
 			sub_try : I32, I32 -> Try(I32, [Overflow, ..])
 			sub_try = |a, b| signed_sub_try(I32.lowest, I32.highest, 0, a, b)
 
@@ -5793,6 +5932,8 @@ Builtin :: [].{
 			## ```
 			times : I32, I32 -> I32
 
+			## Multiply two [I32] values, returning `Err(Overflow)` instead of
+			## wrapping if the result does not fit in an [I32].
 			mul_try : I32, I32 -> Try(I32, [Overflow, ..])
 			mul_try = |a, b| signed_mul_try(I32.lowest, I32.highest, 0, -1, a, b)
 
@@ -5848,6 +5989,8 @@ Builtin :: [].{
 			## ```
 			div_by : I32, I32 -> I32
 
+			## Divide the first [I32] by the second. Returns `Err(DivByZero)` if
+			## the divisor is zero, or `Err(Overflow)` for `I32.lowest / -1`.
 			div_try : I32, I32 -> Try(I32, [DivByZero, Overflow, ..])
 			div_try = |a, b| signed_div_try(I32.lowest, 0, -1, a, b)
 
@@ -6098,6 +6241,9 @@ Builtin :: [].{
 			from_int_digits : List(U8) -> Try(I32, [OutOfRange])
 			from_int_digits = |digits| i32_from_int_digits(digits)
 
+			## Convert a numeric literal into an [I32]. This is the hook the
+			## compiler uses when a literal is given type [I32]; most code should
+			## parse user text with [I32.from_str] instead.
 			from_numeral : Numeral -> Try(I32, [InvalidNumeral(Str)])
 			from_numeral = |numeral| from_numeral_with(numeral, |str| Builtin.i32_from_str(str))
 
@@ -6154,7 +6300,11 @@ Builtin :: [].{
 			## expect I32.to_i16_try(40000) == Err(OutOfRange)
 			## ```
 			to_i16_try : I32 -> Try(I16, [OutOfRange, ..])
+			## Convert an [I32] to an [I64]. This widening conversion preserves
+			## every [I32] value exactly.
 			to_i64 : I32 -> I64
+			## Convert an [I32] to an [I128]. This widening conversion preserves
+			## every [I32] value exactly.
 			to_i128 : I32 -> I128
 
 			# Conversions to unsigned integers (all lossy for negative values)
@@ -6260,8 +6410,14 @@ Builtin :: [].{
 			to_u128_try : I32 -> Try(U128, [OutOfRange, ..])
 
 			# Conversions to floating point (all safe)
+			## Convert an [I32] to an [F32]. This conversion may round because
+			## [F32] has fewer integer precision bits than [I32].
 			to_f32 : I32 -> F32
+			## Convert an [I32] to an [F64]. Every [I32] value is exactly
+			## representable as an [F64].
 			to_f64 : I32 -> F64
+			## Convert an [I32] to a [Dec]. Every [I32] value is exactly
+			## representable as a [Dec].
 			to_dec : I32 -> Dec
 
 			# Encode an I32 using a format that provides encode_i32
@@ -6429,6 +6585,8 @@ Builtin :: [].{
 			## ```
 			plus : U64, U64 -> U64
 
+			## Add two [U64] values, returning `Err(Overflow)` instead of wrapping
+			## if the result does not fit in a [U64].
 			add_try : U64, U64 -> Try(U64, [Overflow, ..])
 			add_try = |a, b| unsigned_add_try(U64.highest, a, b)
 
@@ -6451,6 +6609,8 @@ Builtin :: [].{
 			## ```
 			minus : U64, U64 -> U64
 
+			## Subtract the second [U64] from the first, returning `Err(Overflow)`
+			## instead of wrapping if the result does not fit in a [U64].
 			sub_try : U64, U64 -> Try(U64, [Overflow, ..])
 			sub_try = |a, b| unsigned_sub_try(a, b)
 
@@ -6469,6 +6629,8 @@ Builtin :: [].{
 			## ```
 			times : U64, U64 -> U64
 
+			## Multiply two [U64] values, returning `Err(Overflow)` instead of
+			## wrapping if the result does not fit in a [U64].
 			mul_try : U64, U64 -> Try(U64, [Overflow, ..])
 			mul_try = |a, b| unsigned_mul_try(U64.highest, 0, a, b)
 
@@ -6515,6 +6677,8 @@ Builtin :: [].{
 			## ```
 			div_by : U64, U64 -> U64
 
+			## Divide the first [U64] by the second, returning `Err(DivByZero)`
+			## instead of crashing if the divisor is zero.
 			div_try : U64, U64 -> Try(U64, [DivByZero, ..])
 			div_try = |a, b| unsigned_div_try(0, a, b)
 
@@ -6749,6 +6913,9 @@ Builtin :: [].{
 			from_int_digits : List(U8) -> Try(U64, [OutOfRange])
 			from_int_digits = |digits| u64_from_int_digits(digits)
 
+			## Convert a numeric literal into a [U64]. This is the hook the
+			## compiler uses when a literal is given type [U64]; most code should
+			## parse user text with [U64.from_str] instead.
 			from_numeral : Numeral -> Try(U64, [InvalidNumeral(Str)])
 			from_numeral = |numeral| from_numeral_with(numeral, |str| Builtin.u64_from_str(str))
 
@@ -6845,6 +7012,8 @@ Builtin :: [].{
 			## expect U64.to_i64_try(10000000000000000000) == Err(OutOfRange)
 			## ```
 			to_i64_try : U64 -> Try(I64, [OutOfRange, ..])
+			## Convert a [U64] to an [I128]. This widening conversion preserves
+			## every [U64] value exactly.
 			to_i128 : U64 -> I128
 
 			# Conversions to unsigned integers
@@ -6908,11 +7077,19 @@ Builtin :: [].{
 			## expect U64.to_u32_try(5000000000) == Err(OutOfRange)
 			## ```
 			to_u32_try : U64 -> Try(U32, [OutOfRange, ..])
+			## Convert a [U64] to a [U128]. This widening conversion preserves
+			## every [U64] value exactly.
 			to_u128 : U64 -> U128
 
 			# Conversions to floating point (all safe)
+			## Convert a [U64] to an [F32]. This conversion may round because
+			## [F32] has fewer integer precision bits than [U64].
 			to_f32 : U64 -> F32
+			## Convert a [U64] to an [F64]. This conversion may round because
+			## [F64] has fewer integer precision bits than [U64].
 			to_f64 : U64 -> F64
+			## Convert a [U64] to a [Dec]. Every [U64] value is exactly
+			## representable as a [Dec].
 			to_dec : U64 -> Dec
 
 			# Encode a U64 using a format that provides encode_u64
@@ -7124,6 +7301,8 @@ Builtin :: [].{
 			## ```
 			plus : I64, I64 -> I64
 
+			## Add two [I64] values, returning `Err(Overflow)` instead of wrapping
+			## if the result does not fit in an [I64].
 			add_try : I64, I64 -> Try(I64, [Overflow, ..])
 			add_try = |a, b| signed_add_try(I64.lowest, I64.highest, 0, a, b)
 
@@ -7150,6 +7329,8 @@ Builtin :: [].{
 			## ```
 			minus : I64, I64 -> I64
 
+			## Subtract the second [I64] from the first, returning `Err(Overflow)`
+			## instead of wrapping if the result does not fit in an [I64].
 			sub_try : I64, I64 -> Try(I64, [Overflow, ..])
 			sub_try = |a, b| signed_sub_try(I64.lowest, I64.highest, 0, a, b)
 
@@ -7170,6 +7351,8 @@ Builtin :: [].{
 			## ```
 			times : I64, I64 -> I64
 
+			## Multiply two [I64] values, returning `Err(Overflow)` instead of
+			## wrapping if the result does not fit in an [I64].
 			mul_try : I64, I64 -> Try(I64, [Overflow, ..])
 			mul_try = |a, b| signed_mul_try(I64.lowest, I64.highest, 0, -1, a, b)
 
@@ -7225,6 +7408,8 @@ Builtin :: [].{
 			## ```
 			div_by : I64, I64 -> I64
 
+			## Divide the first [I64] by the second. Returns `Err(DivByZero)` if
+			## the divisor is zero, or `Err(Overflow)` for `I64.lowest / -1`.
 			div_try : I64, I64 -> Try(I64, [DivByZero, Overflow, ..])
 			div_try = |a, b| signed_div_try(I64.lowest, 0, -1, a, b)
 
@@ -7484,6 +7669,9 @@ Builtin :: [].{
 			from_int_digits : List(U8) -> Try(I64, [OutOfRange])
 			from_int_digits = |digits| i64_from_int_digits(digits)
 
+			## Convert a numeric literal into an [I64]. This is the hook the
+			## compiler uses when a literal is given type [I64]; most code should
+			## parse user text with [I64.from_str] instead.
 			from_numeral : Numeral -> Try(I64, [InvalidNumeral(Str)])
 			from_numeral = |numeral| from_numeral_with(numeral, |str| Builtin.i64_from_str(str))
 
@@ -7559,6 +7747,8 @@ Builtin :: [].{
 			## expect I64.to_i32_try(3000000000) == Err(OutOfRange)
 			## ```
 			to_i32_try : I64 -> Try(I32, [OutOfRange, ..])
+			## Convert an [I64] to an [I128]. This widening conversion preserves
+			## every [I64] value exactly.
 			to_i128 : I64 -> I128
 
 			# Conversions to unsigned integers (all lossy for negative values)
@@ -7663,8 +7853,14 @@ Builtin :: [].{
 			to_u128_try : I64 -> Try(U128, [OutOfRange, ..])
 
 			# Conversions to floating point (all safe)
+			## Convert an [I64] to an [F32]. This conversion may round because
+			## [F32] has fewer integer precision bits than [I64].
 			to_f32 : I64 -> F32
+			## Convert an [I64] to an [F64]. This conversion may round because
+			## [F64] has fewer integer precision bits than [I64].
 			to_f64 : I64 -> F64
+			## Convert an [I64] to a [Dec]. Every [I64] value is exactly
+			## representable as a [Dec].
 			to_dec : I64 -> Dec
 
 			# Encode an I64 using a format that provides encode_i64
@@ -7831,6 +8027,8 @@ Builtin :: [].{
 			## ```
 			plus : U128, U128 -> U128
 
+			## Add two [U128] values, returning `Err(Overflow)` instead of wrapping
+			## if the result does not fit in a [U128].
 			add_try : U128, U128 -> Try(U128, [Overflow, ..])
 			add_try = |a, b| unsigned_add_try(U128.highest, a, b)
 
@@ -7853,6 +8051,8 @@ Builtin :: [].{
 			## ```
 			minus : U128, U128 -> U128
 
+			## Subtract the second [U128] from the first, returning `Err(Overflow)`
+			## instead of wrapping if the result does not fit in a [U128].
 			sub_try : U128, U128 -> Try(U128, [Overflow, ..])
 			sub_try = |a, b| unsigned_sub_try(a, b)
 
@@ -7871,6 +8071,8 @@ Builtin :: [].{
 			## ```
 			times : U128, U128 -> U128
 
+			## Multiply two [U128] values, returning `Err(Overflow)` instead of
+			## wrapping if the result does not fit in a [U128].
 			mul_try : U128, U128 -> Try(U128, [Overflow, ..])
 			mul_try = |a, b| unsigned_mul_try(U128.highest, 0, a, b)
 
@@ -7917,6 +8119,8 @@ Builtin :: [].{
 			## ```
 			div_by : U128, U128 -> U128
 
+			## Divide the first [U128] by the second, returning `Err(DivByZero)`
+			## instead of crashing if the divisor is zero.
 			div_try : U128, U128 -> Try(U128, [DivByZero, ..])
 			div_try = |a, b| unsigned_div_try(0, a, b)
 
@@ -8158,6 +8362,9 @@ Builtin :: [].{
 			from_int_digits : List(U8) -> Try(U128, [OutOfRange])
 			from_int_digits = |digits| u128_from_int_digits(digits)
 
+			## Convert a numeric literal into a [U128]. This is the hook the
+			## compiler uses when a literal is given type [U128]; most code should
+			## parse user text with [U128.from_str] instead.
 			from_numeral : Numeral -> Try(U128, [InvalidNumeral(Str)])
 			from_numeral = |numeral| from_numeral_with(numeral, |str| Builtin.u128_from_str(str))
 
@@ -8354,10 +8561,16 @@ Builtin :: [].{
 			to_u64_try : U128 -> Try(U64, [OutOfRange, ..])
 
 			# Conversions to floating point (all safe)
+			## Convert a [U128] to an [F32]. This conversion may round, and the
+			## largest [U128] values may become `inf`.
 			to_f32 : U128 -> F32
+			## Convert a [U128] to an [F64]. This conversion may round because
+			## [F64] has fewer integer precision bits than [U128].
 			to_f64 : U128 -> F64
 
 			# Conversion to Dec (can overflow)
+			## Convert a [U128] to a [Dec], returning `Err(OutOfRange)` if the
+			## integer value does not fit in [Dec]'s fixed-point range.
 			to_dec_try : U128 -> Try(Dec, [OutOfRange])
 			to_dec_try = |num| out_of_range_try(u128_to_dec_try_unsafe(num))
 
@@ -8571,6 +8784,8 @@ Builtin :: [].{
 			## ```
 			plus : I128, I128 -> I128
 
+			## Add two [I128] values, returning `Err(Overflow)` instead of wrapping
+			## if the result does not fit in an [I128].
 			add_try : I128, I128 -> Try(I128, [Overflow, ..])
 			add_try = |a, b| signed_add_try(I128.lowest, I128.highest, 0, a, b)
 
@@ -8597,6 +8812,8 @@ Builtin :: [].{
 			## ```
 			minus : I128, I128 -> I128
 
+			## Subtract the second [I128] from the first, returning `Err(Overflow)`
+			## instead of wrapping if the result does not fit in an [I128].
 			sub_try : I128, I128 -> Try(I128, [Overflow, ..])
 			sub_try = |a, b| signed_sub_try(I128.lowest, I128.highest, 0, a, b)
 
@@ -8617,6 +8834,8 @@ Builtin :: [].{
 			## ```
 			times : I128, I128 -> I128
 
+			## Multiply two [I128] values, returning `Err(Overflow)` instead of
+			## wrapping if the result does not fit in an [I128].
 			mul_try : I128, I128 -> Try(I128, [Overflow, ..])
 			mul_try = |a, b| signed_mul_try(I128.lowest, I128.highest, 0, -1, a, b)
 
@@ -8672,6 +8891,8 @@ Builtin :: [].{
 			## ```
 			div_by : I128, I128 -> I128
 
+			## Divide the first [I128] by the second. Returns `Err(DivByZero)` if
+			## the divisor is zero, or `Err(Overflow)` for `I128.lowest / -1`.
 			div_try : I128, I128 -> Try(I128, [DivByZero, Overflow, ..])
 			div_try = |a, b| signed_div_try(I128.lowest, 0, -1, a, b)
 
@@ -8939,6 +9160,9 @@ Builtin :: [].{
 			from_int_digits : List(U8) -> Try(I128, [OutOfRange])
 			from_int_digits = |digits| i128_from_int_digits(digits)
 
+			## Convert a numeric literal into an [I128]. This is the hook the
+			## compiler uses when a literal is given type [I128]; most code should
+			## parse user text with [I128.from_str] instead.
 			from_numeral : Numeral -> Try(I128, [InvalidNumeral(Str)])
 			from_numeral = |numeral| from_numeral_with(numeral, |str| Builtin.i128_from_str(str))
 
@@ -9137,11 +9361,15 @@ Builtin :: [].{
 			to_u128_try : I128 -> Try(U128, [OutOfRange, ..])
 
 			# Conversions to floating point (all safe)
+			## Convert an [I128] to an [F32]. This conversion may round because
+			## [F32] has fewer integer precision bits than [I128].
 			to_f32 : I128 -> F32
+			## Convert an [I128] to an [F64]. This conversion may round because
+			## [F64] has fewer integer precision bits than [I128].
 			to_f64 : I128 -> F64
 
 			## Convert an [I128] to a [Dec], returning `Err(OutOfRange)` if the
-			## value does not fit in a [Dec].
+			## integer value does not fit in [Dec]'s fixed-point range.
 			to_dec_try : I128 -> Try(Dec, [OutOfRange])
 			to_dec_try = |num| out_of_range_try(i128_to_dec_try_unsafe(num))
 
@@ -9172,7 +9400,8 @@ Builtin :: [].{
 			default : () -> Dec
 			default = || 0.0
 
-			## The highest value representable by a [Dec], which is
+			## The highest value representable by a [Dec]. Dec values have 18
+			## fixed fractional decimal places, so this is
 			## `170141183460469231731.687303715884105727`.
 			## ```roc
 			## expect Dec.highest == 170141183460469231731.687303715884105727
@@ -9180,7 +9409,8 @@ Builtin :: [].{
 			highest : Dec
 			highest = 170141183460469231731.687303715884105727
 
-			## The lowest value representable by a [Dec], which is
+			## The lowest value representable by a [Dec]. Dec values have 18
+			## fixed fractional decimal places, so this is
 			## `-170141183460469231731.687303715884105728`.
 			## ```roc
 			## expect Dec.lowest == -170141183460469231731.687303715884105728
@@ -9188,15 +9418,18 @@ Builtin :: [].{
 			lowest : Dec
 			lowest = -170141183460469231731.687303715884105728
 
-			## Euler's number, truncated to 18 decimal places.
+			## Euler's number as a [Dec], truncated to 18 fractional decimal
+			## places.
 			e : Dec
 			e = 2.718281828459045235
 
-			## The circle constant pi, truncated to 18 decimal places.
+			## The circle constant pi as a [Dec], truncated to 18 fractional
+			## decimal places.
 			pi : Dec
 			pi = 3.141592653589793238
 
-			## The circle constant tau, truncated to 18 decimal places.
+			## The circle constant tau as a [Dec], truncated to 18 fractional
+			## decimal places.
 			tau : Dec
 			tau = 6.283185307179586476
 
@@ -9334,6 +9567,8 @@ Builtin :: [].{
 			## ```
 			plus : Dec, Dec -> Dec
 
+			## Add two [Dec] values, returning `Err(Overflow)` instead of wrapping
+			## if the result is outside [Dec.lowest] through [Dec.highest].
 			add_try : Dec, Dec -> Try(Dec, [Overflow, ..])
 			add_try = |a, b| signed_add_try(Dec.lowest, Dec.highest, 0.0, a, b)
 
@@ -9360,6 +9595,9 @@ Builtin :: [].{
 			## ```
 			minus : Dec, Dec -> Dec
 
+			## Subtract the second [Dec] from the first, returning
+			## `Err(Overflow)` instead of wrapping if the result is outside
+			## [Dec.lowest] through [Dec.highest].
 			sub_try : Dec, Dec -> Try(Dec, [Overflow, ..])
 			sub_try = |a, b| signed_sub_try(Dec.lowest, Dec.highest, 0.0, a, b)
 
@@ -9374,7 +9612,8 @@ Builtin :: [].{
 			minus_saturated : Dec, Dec -> Dec
 			minus_saturated = |a, b| signed_minus_saturated(Dec.lowest, Dec.highest, 0.0, a, b)
 
-			## Multiply two [Dec] values.
+			## Multiply two [Dec] values. The result is limited to [Dec]'s fixed
+			## 18 fractional decimal places and crashes if it overflows.
 			## ```roc
 			## expect Dec.times(2.5, 4.0) == 10.0
 			## ```
@@ -9391,11 +9630,17 @@ Builtin :: [].{
 			times_saturated : Dec, Dec -> Dec
 			times_saturated = |a, b| signed_times_saturated(Dec.lowest, Dec.highest, 0.0, -1.0, a, b)
 
-			## Raise a [Dec] to a [Dec] power.
+			## Raise a [Dec] to a [Dec] power. Results are limited to [Dec]'s
+			## fixed 18 fractional decimal places. Fractional exponents require a
+			## positive base; non-positive bases with fractional exponents crash.
+			## Negative integer exponents divide by the positive power and crash
+			## when that division is undefined, such as `0.0` to a negative power.
 			pow : Dec, Dec -> Dec
 			pow = |base, exponent| dec_pow_unsafe(base, exponent)
 
 			## Return the square root of a [Dec]. Crashes if the input is negative.
+			## The result is truncated to [Dec]'s fixed 18 fractional decimal
+			## places.
 			sqrt : Dec -> Dec
 			sqrt = |self|
 				match Dec.sqrt_try(self) {
@@ -9405,7 +9650,9 @@ Builtin :: [].{
 					}
 				}
 
-			## Return the square root of a [Dec], or `Err(SqrtOfNegative)` if the input is negative.
+			## Return the square root of a [Dec], or `Err(SqrtOfNegative)` if the
+			## input is negative. The result is truncated to [Dec]'s fixed 18
+			## fractional decimal places.
 			sqrt_try : Dec -> Try(Dec, [SqrtOfNegative, ..])
 			sqrt_try = |self|
 				if self < 0 {
@@ -9414,32 +9661,40 @@ Builtin :: [].{
 					Ok(dec_sqrt_unsafe(self))
 				}
 
-			## Return the sine of a [Dec] angle in radians.
+			## Return the sine of a [Dec] angle in radians. This is a fixed-point
+			## approximation limited to 18 fractional decimal places.
 			sin : Dec -> Dec
 			sin = |self| dec_sin_unsafe(self)
 
-			## Return the cosine of a [Dec] angle in radians.
+			## Return the cosine of a [Dec] angle in radians. This is a
+			## fixed-point approximation limited to 18 fractional decimal places.
 			cos : Dec -> Dec
 			cos = |self| dec_cos_unsafe(self)
 
-			## Return the tangent of a [Dec] angle in radians.
+			## Return the tangent of a [Dec] angle in radians. This is computed as
+			## sine divided by cosine, so it can crash if the fixed-point cosine
+			## result is zero or the division overflows.
 			tan : Dec -> Dec
 			tan = |self| dec_tan_unsafe(self)
 
-			## Return the arcsine of a [Dec] value in radians.
+			## Return the arcsine of a [Dec] value in radians. Crashes if the
+			## input is outside `-1.0` through `1.0`.
 			asin : Dec -> Dec
 			asin = |self| dec_asin_unsafe(self)
 
-			## Return the arccosine of a [Dec] value in radians.
+			## Return the arccosine of a [Dec] value in radians. Crashes if the
+			## input is outside `-1.0` through `1.0`.
 			acos : Dec -> Dec
 			acos = |self| dec_acos_unsafe(self)
 
-			## Return the arctangent of a [Dec] value in radians.
+			## Return the arctangent of a [Dec] value in radians. This is a
+			## fixed-point approximation limited to 18 fractional decimal places.
 			atan : Dec -> Dec
 			atan = |self| dec_atan_unsafe(self)
 
 			## Divide the first [Dec] by the second. Crashes if the second [Dec]
-			## is zero.
+			## is zero or the result overflows. Results with more than 18
+			## fractional decimal places are truncated to [Dec] precision.
 			## ```roc
 			## expect Dec.div_by(10.0, 4.0) == 2.5
 			## ```
@@ -9705,6 +9960,9 @@ Builtin :: [].{
 			from_dec_digits : (List(U8), List(U8)) -> Try(Dec, [OutOfRange])
 			from_dec_digits = |digits| dec_from_dec_digits(digits)
 
+			## Convert a numeric literal into a [Dec]. This is the hook the
+			## compiler uses when a literal is given type [Dec]; most code should
+			## parse user text with [Dec.from_str] instead.
 			from_numeral : Numeral -> Try(Dec, [InvalidNumeral(Str)])
 			from_numeral = |numeral| from_numeral_with(numeral, |str| Builtin.dec_from_str(str))
 
@@ -9949,20 +10207,18 @@ Builtin :: [].{
 			# Conversions to floating point (lossy - Dec has more precision)
 
 			## Convert a [Dec] to an [F32]. This conversion is lossy because
-			## [Dec] has more precision than [F32] in its fractional range.
-			## Values outside the finite [F32] range wrap to `Infinity` or
-			## `-Infinity`.
+			## [Dec] has more decimal precision than [F32].
 			to_f32_wrap : Dec -> F32
 
 			## Convert a [Dec] to an [F32], returning `Err(OutOfRange)` if the
-			## value does not fit in the finite [F32] range. This conversion is
-			## lossy because [Dec] has more precision than [F32] in its
-			## fractional range.
+			## value does not fit in the finite [F32] range. All current [Dec]
+			## values fit in that range, though precision may still be lost.
 			to_f32_try : Dec -> Try(F32, [OutOfRange])
 			to_f32_try = |num| out_of_range_try(dec_to_f32_try_unsafe(num))
 
 			## Convert a [Dec] to an [F64]. This conversion is lossy because
-			## [Dec] has more precision than [F64] in its fractional range.
+			## [Dec] can have more decimal fractional precision than [F64] can
+			## represent exactly.
 			to_f64 : Dec -> F64
 
 			## Iterator of decimals beginning with this `Dec` and ending with the
@@ -10300,7 +10556,10 @@ Builtin :: [].{
 			## ```
 			abs : F32 -> F32
 
-			## Return the square root of an [F32]. Crashes if the input is negative.
+			## Return the square root of an [F32]. Crashes if the input is
+			## negative. `NaN` and positive infinity follow IEEE 754 behavior:
+			## `NaN` returns `NaN`, and positive infinity returns positive
+			## infinity.
 			## ```roc
 			## expect F32.to_str(F32.sqrt(9.0)) == "3"
 			##
@@ -10315,7 +10574,9 @@ Builtin :: [].{
 					}
 				}
 
-			## Return the square root of an [F32], or `Err(SqrtOfNegative)` if the input is negative.
+			## Return the square root of an [F32], or `Err(SqrtOfNegative)` if
+			## the input is negative. `NaN` and positive infinity return `Ok`
+			## with the IEEE 754 result.
 			## ```roc
 			## expect match F32.sqrt_try(9.0) {
 			##     Ok(value) => F32.is_float_eq(value, 3.0)
@@ -10335,7 +10596,9 @@ Builtin :: [].{
 					Ok(f32_sqrt_unsafe(self))
 				}
 
-			## Raise an [F32] to an [F32] power. The result follows IEEE 754 behavior and may be `inf`, `-inf`, or `NaN`.
+			## Raise an [F32] to an [F32] power. The result follows IEEE 754
+			## behavior and may be `inf`, `-inf`, or `NaN`, such as when a
+			## negative base has a non-integer exponent.
 			## ```roc
 			## expect F32.pow(2.0, 3.0).to_str() == "8"
 			##
@@ -10344,42 +10607,49 @@ Builtin :: [].{
 			pow : F32, F32 -> F32
 			pow = |base, exponent| f32_pow_unsafe(base, exponent)
 
-			## Return the sine of an [F32] angle in radians.
+			## Return the sine of an [F32] angle in radians. `NaN` and infinite
+			## inputs follow IEEE 754 behavior and return `NaN`.
 			## ```roc
 			## expect F32.sin(0.0).to_str() == "0"
 			## ```
 			sin : F32 -> F32
 			sin = |self| f32_sin_unsafe(self)
 
-			## Return the cosine of an [F32] angle in radians.
+			## Return the cosine of an [F32] angle in radians. `NaN` and infinite
+			## inputs follow IEEE 754 behavior and return `NaN`.
 			## ```roc
 			## expect F32.cos(0.0).to_str() == "1"
 			## ```
 			cos : F32 -> F32
 			cos = |self| f32_cos_unsafe(self)
 
-			## Return the tangent of an [F32] angle in radians.
+			## Return the tangent of an [F32] angle in radians. The result follows
+			## IEEE 754 behavior and may be `inf`, `-inf`, or `NaN`; `NaN` and
+			## infinite inputs return `NaN`.
 			## ```roc
 			## expect F32.tan(0.0).to_str() == "0"
 			## ```
 			tan : F32 -> F32
 			tan = |self| f32_tan_unsafe(self)
 
-			## Return the arcsine of an [F32] value in radians.
+			## Return the arcsine of an [F32] value in radians. Inputs outside
+			## `-1.0` through `1.0`, `NaN`, and infinities return `NaN`.
 			## ```roc
 			## expect F32.asin(0.0).to_str() == "0"
 			## ```
 			asin : F32 -> F32
 			asin = |self| f32_asin_unsafe(self)
 
-			## Return the arccosine of an [F32] value in radians.
+			## Return the arccosine of an [F32] value in radians. Inputs outside
+			## `-1.0` through `1.0`, `NaN`, and infinities return `NaN`.
 			## ```roc
 			## expect F32.acos(1.0).to_str() == "0"
 			## ```
 			acos : F32 -> F32
 			acos = |self| f32_acos_unsafe(self)
 
-			## Return the arctangent of an [F32] value in radians.
+			## Return the arctangent of an [F32] value in radians. `NaN` returns
+			## `NaN`; infinities follow IEEE 754 behavior.
 			## ```roc
 			## expect F32.atan(0.0).to_str() == "0"
 			## ```
@@ -10682,6 +10952,9 @@ Builtin :: [].{
 			from_dec_digits : (List(U8), List(U8)) -> Try(F32, [OutOfRange])
 			from_dec_digits = |digits| f32_from_dec_digits(digits)
 
+			## Convert a numeric literal into an [F32]. This is the hook the
+			## compiler uses when a literal is given type [F32]; most code should
+			## parse user text with [F32.from_str] instead.
 			from_numeral : Numeral -> Try(F32, [InvalidNumeral(Str)])
 			from_numeral = |numeral| from_numeral_with(numeral, |str| Builtin.f32_from_str(str))
 
@@ -11177,7 +11450,10 @@ Builtin :: [].{
 			## ```
 			abs : F64 -> F64
 
-			## Return the square root of an [F64]. Crashes if the input is negative.
+			## Return the square root of an [F64]. Crashes if the input is
+			## negative. `NaN` and positive infinity follow IEEE 754 behavior:
+			## `NaN` returns `NaN`, and positive infinity returns positive
+			## infinity.
 			## ```roc
 			## expect F64.to_str(F64.sqrt(9.0)) == "3"
 			##
@@ -11192,7 +11468,9 @@ Builtin :: [].{
 					}
 				}
 
-			## Return the square root of an [F64], or `Err(SqrtOfNegative)` if the input is negative.
+			## Return the square root of an [F64], or `Err(SqrtOfNegative)` if
+			## the input is negative. `NaN` and positive infinity return `Ok`
+			## with the IEEE 754 result.
 			## ```roc
 			## expect match F64.sqrt_try(9.0) {
 			##     Ok(value) => F64.is_float_eq(value, 3.0)
@@ -11212,7 +11490,9 @@ Builtin :: [].{
 					Ok(f64_sqrt_unsafe(self))
 				}
 
-			## Raise an [F64] to an [F64] power. The result follows IEEE 754 behavior and may be `inf`, `-inf`, or `NaN`.
+			## Raise an [F64] to an [F64] power. The result follows IEEE 754
+			## behavior and may be `inf`, `-inf`, or `NaN`, such as when a
+			## negative base has a non-integer exponent.
 			## ```roc
 			## expect F64.pow(2.0, 3.0).to_str() == "8"
 			##
@@ -11221,42 +11501,49 @@ Builtin :: [].{
 			pow : F64, F64 -> F64
 			pow = |base, exponent| f64_pow_unsafe(base, exponent)
 
-			## Return the sine of an [F64] angle in radians.
+			## Return the sine of an [F64] angle in radians. `NaN` and infinite
+			## inputs follow IEEE 754 behavior and return `NaN`.
 			## ```roc
 			## expect F64.sin(0.0).to_str() == "0"
 			## ```
 			sin : F64 -> F64
 			sin = |self| f64_sin_unsafe(self)
 
-			## Return the cosine of an [F64] angle in radians.
+			## Return the cosine of an [F64] angle in radians. `NaN` and infinite
+			## inputs follow IEEE 754 behavior and return `NaN`.
 			## ```roc
 			## expect F64.cos(0.0).to_str() == "1"
 			## ```
 			cos : F64 -> F64
 			cos = |self| f64_cos_unsafe(self)
 
-			## Return the tangent of an [F64] angle in radians.
+			## Return the tangent of an [F64] angle in radians. The result follows
+			## IEEE 754 behavior and may be `inf`, `-inf`, or `NaN`; `NaN` and
+			## infinite inputs return `NaN`.
 			## ```roc
 			## expect F64.tan(0.0).to_str() == "0"
 			## ```
 			tan : F64 -> F64
 			tan = |self| f64_tan_unsafe(self)
 
-			## Return the arcsine of an [F64] value in radians.
+			## Return the arcsine of an [F64] value in radians. Inputs outside
+			## `-1.0` through `1.0`, `NaN`, and infinities return `NaN`.
 			## ```roc
 			## expect F64.asin(0.0).to_str() == "0"
 			## ```
 			asin : F64 -> F64
 			asin = |self| f64_asin_unsafe(self)
 
-			## Return the arccosine of an [F64] value in radians.
+			## Return the arccosine of an [F64] value in radians. Inputs outside
+			## `-1.0` through `1.0`, `NaN`, and infinities return `NaN`.
 			## ```roc
 			## expect F64.acos(1.0).to_str() == "0"
 			## ```
 			acos : F64 -> F64
 			acos = |self| f64_acos_unsafe(self)
 
-			## Return the arctangent of an [F64] value in radians.
+			## Return the arctangent of an [F64] value in radians. `NaN` returns
+			## `NaN`; infinities follow IEEE 754 behavior.
 			## ```roc
 			## expect F64.atan(0.0).to_str() == "0"
 			## ```
@@ -11559,6 +11846,9 @@ Builtin :: [].{
 			from_dec_digits : (List(U8), List(U8)) -> Try(F64, [OutOfRange])
 			from_dec_digits = |digits| f64_from_dec_digits(digits)
 
+			## Convert a numeric literal into an [F64]. This is the hook the
+			## compiler uses when a literal is given type [F64]; most code should
+			## parse user text with [F64.from_str] instead.
 			from_numeral : Numeral -> Try(F64, [InvalidNumeral(Str)])
 			from_numeral = |numeral| from_numeral_with(numeral, |str| Builtin.f64_from_str(str))
 

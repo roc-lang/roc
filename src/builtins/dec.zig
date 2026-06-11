@@ -49,7 +49,11 @@ fn printI128Decimal(buf: []u8, val: i128) usize {
     return pos;
 }
 
-/// TODO: Document the RocDec struct.
+/// Roc's fixed-point decimal runtime representation.
+///
+/// `num` stores the decimal value scaled by 10^18, so `1.0` is represented as
+/// `1_000_000_000_000_000_000`. The extern layout is part of the C ABI used by
+/// generated code and builtin exports.
 pub const RocDec = extern struct {
     num: i128,
 
@@ -121,8 +125,8 @@ pub const RocDec = extern struct {
         return i128h.i128_to_f64(dec.num) / comptime @as(f64, @floatFromInt(one_point_zero_i128));
     }
 
-    // TODO: If Str.toDec eventually supports more error types, return errors here.
-    // For now, just return null which will give the default error.
+    // All parse failures currently map to null; the Roc wrapper reports that as
+    // BadNumStr.
     pub fn fromStr(roc_str: RocStr) ?RocDec {
         if (roc_str.isEmpty()) {
             return null;
@@ -164,7 +168,7 @@ pub const RocDec = extern struct {
 
             const after_str_len = (length - 1) - point_idx;
             if (after_str_len > decimal_places) {
-                // TODO: runtime exception for too many decimal places!
+                // More than 18 fractional digits cannot be represented exactly.
                 return null;
             }
             const diff_decimal_places = decimal_places - after_str_len;
@@ -184,7 +188,7 @@ pub const RocDec = extern struct {
             const signed_before: i128 = if (is_negative) -before else before;
             const mul_ans = @import("num.zig").mulWithOverflow(i128, signed_before, one_point_zero_i128);
             if (mul_ans.has_overflowed) {
-                // TODO: runtime exception for overflow!
+                // The whole-number part is outside Dec's scaled i128 range.
                 return null;
             }
             before_val_i128 = mul_ans.value;
@@ -194,7 +198,7 @@ pub const RocDec = extern struct {
             if (after_val_i128) |after| {
                 const answer = @addWithOverflow(before, after);
                 if (answer[1] == 1) {
-                    // TODO: runtime exception for overflow!
+                    // Combining whole and fractional parts exceeded Dec's range.
                     return null;
                 }
                 return .{ .num = answer[0] };
@@ -1330,7 +1334,8 @@ const expectEqualSlices = std.testing.expectEqualSlices;
 
 // exports
 
-/// TODO: Document fromStr.
+/// C ABI parse wrapper. Returns errorcode 0 with the scaled i128 on success, or
+/// errorcode 1 with value 0 for any invalid or out-of-range decimal string.
 pub fn fromStr(arg: RocStr) callconv(.c) NumParseResult(i128) {
     if (@call(.always_inline, RocDec.fromStr, .{arg})) |dec| {
         return .{ .errorcode = 0, .value = dec.num };
@@ -1339,7 +1344,7 @@ pub fn fromStr(arg: RocStr) callconv(.c) NumParseResult(i128) {
     }
 }
 
-/// TODO: Document to_str.
+/// C ABI allocator-backed string wrapper for Dec formatting.
 pub fn to_str(
     arg: RocDec,
     roc_ops: *RocOps,
@@ -1347,7 +1352,8 @@ pub fn to_str(
     return @call(.always_inline, RocDec.to_str, .{ arg, roc_ops });
 }
 
-/// TODO: Document fromF64C.
+/// C ABI conversion wrapper from f64 to Dec. Crashes through RocOps if the
+/// scaled value is outside Dec's i128 range.
 pub fn fromF64C(
     arg: f64,
     roc_ops: *RocOps,
@@ -1360,7 +1366,8 @@ pub fn fromF64C(
     }
 }
 
-/// TODO: Document fromF32C.
+/// C ABI conversion wrapper from f32 to Dec. Crashes through RocOps if the
+/// scaled value is outside Dec's i128 range.
 pub fn fromF32C(
     arg_f32: f32,
     roc_ops: *RocOps,
@@ -1374,7 +1381,7 @@ pub fn fromF32C(
     }
 }
 
-/// TODO: Document toF64.
+/// C ABI conversion wrapper from Dec to f64.
 pub fn toF64(arg: RocDec) callconv(.c) f64 {
     return @call(.always_inline, RocDec.toF64, .{arg});
 }
@@ -1421,7 +1428,8 @@ pub fn toIntTry(comptime T: type, arg: RocDec) ?T {
     return @intCast(whole_part);
 }
 
-/// TODO: Document exportFromInt.
+/// Export an integer-to-Dec conversion wrapper for type T. The generated
+/// function scales the integer by 10^18 and crashes through RocOps on overflow.
 pub fn exportFromInt(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(
@@ -1441,32 +1449,33 @@ pub fn exportFromInt(comptime T: type, comptime name: []const u8) void {
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
-/// TODO: Document fromU64C.
+/// C ABI conversion wrapper from u64 to Dec. Every u64 value fits in Dec.
 pub fn fromU64C(arg: u64) callconv(.c) i128 {
     return @call(.always_inline, RocDec.fromU64, .{arg}).toI128();
 }
 
-/// TODO: Document toI128.
+/// C ABI wrapper that returns the raw scaled i128 backing a Dec.
 pub fn toI128(arg: RocDec) callconv(.c) i128 {
     return @call(.always_inline, RocDec.toI128, .{arg});
 }
 
-/// TODO: Document fromI128.
+/// C ABI wrapper that builds a Dec from an already scaled i128.
 pub fn fromI128(arg: i128) callconv(.c) RocDec {
     return @call(.always_inline, RocDec.fromI128, .{arg});
 }
 
-/// TODO: Document eqC.
+/// C ABI equality comparison wrapper.
 pub fn eqC(arg1: RocDec, arg2: RocDec) callconv(.c) bool {
     return @call(.always_inline, RocDec.eq, .{ arg1, arg2 });
 }
 
-/// TODO: Document neqC.
+/// C ABI inequality comparison wrapper.
 pub fn neqC(arg1: RocDec, arg2: RocDec) callconv(.c) bool {
     return @call(.always_inline, RocDec.neq, .{ arg1, arg2 });
 }
 
-/// TODO: Document negateC.
+/// C ABI negation wrapper. Crashes through RocOps when negating Dec.lowest
+/// would overflow.
 pub fn negateC(
     arg: RocDec,
     roc_ops: *RocOps,
@@ -1477,7 +1486,8 @@ pub fn negateC(
     };
 }
 
-/// TODO: Document absC.
+/// C ABI absolute-value wrapper. Crashes through RocOps when abs(Dec.lowest)
+/// would overflow.
 pub fn absC(
     arg: RocDec,
     roc_ops: *RocOps,
@@ -1489,22 +1499,25 @@ pub fn absC(
     return result.num;
 }
 
-/// TODO: Document addC.
+/// C ABI checked-add wrapper. Returns a result value plus an overflow flag.
 pub fn addC(arg1: RocDec, arg2: RocDec) callconv(.c) WithOverflow(RocDec) {
     return @call(.always_inline, RocDec.addWithOverflow, .{ arg1, arg2 });
 }
 
-/// TODO: Document subC.
+/// C ABI checked-subtract wrapper. Returns a result value plus an overflow
+/// flag.
 pub fn subC(arg1: RocDec, arg2: RocDec) callconv(.c) WithOverflow(RocDec) {
     return @call(.always_inline, RocDec.subWithOverflow, .{ arg1, arg2 });
 }
 
-/// TODO: Document mulC.
+/// C ABI checked-multiply wrapper. Returns a result value plus an overflow
+/// flag.
 pub fn mulC(arg1: RocDec, arg2: RocDec) callconv(.c) WithOverflow(RocDec) {
     return @call(.always_inline, RocDec.mulWithOverflow, .{ arg1, arg2 });
 }
 
-/// TODO: Document divC.
+/// C ABI division wrapper. Crashes through RocOps on division by zero or
+/// overflow and otherwise returns the scaled i128 result.
 pub fn divC(
     arg1: RocDec,
     arg2: RocDec,
@@ -1523,12 +1536,14 @@ pub fn divTruncC(
     return @call(.always_inline, RocDec.trunc, .{ quotient, roc_ops }).num;
 }
 
-/// TODO: Document logC.
+/// C ABI natural-log wrapper. The caller must provide a positive Dec; arithmetic
+/// failures crash through RocOps.
 pub fn logC(arg: RocDec, roc_ops: *RocOps) callconv(.c) i128 {
     return @call(.always_inline, RocDec.log, .{ arg, roc_ops }).num;
 }
 
-/// TODO: Document powC.
+/// C ABI power wrapper. Domain errors, division by zero, and overflow crash
+/// through RocOps.
 pub fn powC(
     arg1: RocDec,
     arg2: RocDec,
@@ -1537,7 +1552,8 @@ pub fn powC(
     return @call(.always_inline, RocDec.pow, .{ arg1, arg2, roc_ops }).num;
 }
 
-/// TODO: Document sqrtC.
+/// C ABI square-root wrapper. Negative inputs and overflow crash through
+/// RocOps.
 pub fn sqrtC(
     arg: RocDec,
     roc_ops: *RocOps,
@@ -1545,37 +1561,40 @@ pub fn sqrtC(
     return @call(.always_inline, RocDec.sqrt, .{ arg, roc_ops }).num;
 }
 
-/// TODO: Document sinC.
+/// C ABI sine wrapper returning the scaled i128 result.
 pub fn sinC(arg: RocDec, _: *RocOps) callconv(.c) i128 {
     return @call(.always_inline, RocDec.sin, .{arg}).num;
 }
 
-/// TODO: Document cosC.
+/// C ABI cosine wrapper returning the scaled i128 result.
 pub fn cosC(arg: RocDec, _: *RocOps) callconv(.c) i128 {
     return @call(.always_inline, RocDec.cos, .{arg}).num;
 }
 
-/// TODO: Document tanC.
+/// C ABI tangent wrapper. Division by zero or overflow crashes through RocOps.
 pub fn tanC(arg: RocDec, roc_ops: *RocOps) callconv(.c) i128 {
     return @call(.always_inline, RocDec.tan, .{ arg, roc_ops }).num;
 }
 
-/// TODO: Document asinC.
+/// C ABI arcsine wrapper. Inputs outside [-1, 1] and arithmetic failures crash
+/// through RocOps.
 pub fn asinC(arg: RocDec, roc_ops: *RocOps) callconv(.c) i128 {
     return @call(.always_inline, RocDec.asin, .{ arg, roc_ops }).num;
 }
 
-/// TODO: Document acosC.
+/// C ABI arccosine wrapper. Inputs outside [-1, 1] and arithmetic failures
+/// crash through RocOps.
 pub fn acosC(arg: RocDec, roc_ops: *RocOps) callconv(.c) i128 {
     return @call(.always_inline, RocDec.acos, .{ arg, roc_ops }).num;
 }
 
-/// TODO: Document atanC.
+/// C ABI arctangent wrapper returning the scaled i128 result. Arithmetic
+/// failures crash through RocOps.
 pub fn atanC(arg: RocDec, roc_ops: *RocOps) callconv(.c) i128 {
     return @call(.always_inline, RocDec.atan, .{ arg, roc_ops }).num;
 }
 
-/// TODO: Document addOrPanicC.
+/// C ABI addition wrapper that crashes through RocOps on overflow.
 pub fn addOrPanicC(
     arg1: RocDec,
     arg2: RocDec,
@@ -1584,12 +1603,12 @@ pub fn addOrPanicC(
     return @call(.always_inline, RocDec.add, .{ arg1, arg2, roc_ops });
 }
 
-/// TODO: Document addSaturatedC.
+/// C ABI saturated-add wrapper. Overflow clamps to RocDec.min or RocDec.max.
 pub fn addSaturatedC(arg1: RocDec, arg2: RocDec) callconv(.c) RocDec {
     return @call(.always_inline, RocDec.addSaturated, .{ arg1, arg2 });
 }
 
-/// TODO: Document subOrPanicC.
+/// C ABI subtraction wrapper that crashes through RocOps on overflow.
 pub fn subOrPanicC(
     arg1: RocDec,
     arg2: RocDec,
@@ -1598,12 +1617,12 @@ pub fn subOrPanicC(
     return @call(.always_inline, RocDec.sub, .{ arg1, arg2, roc_ops });
 }
 
-/// TODO: Document subSaturatedC.
+/// C ABI saturated-subtract wrapper. Overflow clamps to RocDec.min or RocDec.max.
 pub fn subSaturatedC(arg1: RocDec, arg2: RocDec) callconv(.c) RocDec {
     return @call(.always_inline, RocDec.subSaturated, .{ arg1, arg2 });
 }
 
-/// TODO: Document mulOrPanicC.
+/// C ABI multiplication wrapper that crashes through RocOps on overflow.
 pub fn mulOrPanicC(
     arg1: RocDec,
     arg2: RocDec,
@@ -1612,12 +1631,13 @@ pub fn mulOrPanicC(
     return @call(.always_inline, RocDec.mul, .{ arg1, arg2, roc_ops });
 }
 
-/// TODO: Document mulSaturatedC.
+/// C ABI saturated-multiply wrapper. Overflow clamps to RocDec.min or RocDec.max.
 pub fn mulSaturatedC(arg1: RocDec, arg2: RocDec) callconv(.c) RocDec {
     return @call(.always_inline, RocDec.mulSaturated, .{ arg1, arg2 });
 }
 
-/// TODO: Document exportRound.
+/// Export a Dec rounding wrapper for integer return type T. The generated
+/// function rounds away from zero on half values and returns the whole part.
 pub fn exportRound(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(
@@ -1630,7 +1650,7 @@ pub fn exportRound(comptime T: type, comptime name: []const u8) void {
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
-/// TODO: Document exportFloor.
+/// Export a Dec floor wrapper for integer return type T.
 pub fn exportFloor(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(
@@ -1643,7 +1663,7 @@ pub fn exportFloor(comptime T: type, comptime name: []const u8) void {
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
-/// TODO: Document exportCeiling.
+/// Export a Dec ceiling wrapper for integer return type T.
 pub fn exportCeiling(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(
