@@ -132,9 +132,13 @@ pub fn classifySystemV(store: *const Store, idx: Idx, ctx: Context) [8]Class {
                 .str => return integerAggregateSysV(size),
             }
         },
-        .box, .box_of_zst => return Class.one_integer,
+        // An erased callable is a refcounted pointer to its boxed payload,
+        // exactly like a box. Classifying it as an aggregate would recurse
+        // forever: classifyAggregateSysV has no case for it and would route
+        // it right back here.
+        .box, .box_of_zst, .erased_callable => return Class.one_integer,
         .list, .list_of_zst => return integerAggregateSysV(size),
-        .struct_, .tag_union, .closure, .erased_callable => {
+        .struct_, .tag_union, .closure => {
             if (size > 64) return Class.stack;
             var result: [8]Class = @splat(.none);
             classifyAggregateSysV(store, &result, 0, idx);
