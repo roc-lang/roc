@@ -44,6 +44,10 @@ pub fn run(
         try builder.lowerStaticDataRequest(request);
     }
 
+    if (builder.widen_queue.items.len != 0 or builder.reconcile_queue.items.len != 0) {
+        Common.invariant("open-row work remained after Monotype lowering");
+    }
+
     program.next_symbol = builder.symbols.next;
     return program;
 }
@@ -235,6 +239,44 @@ const CheckedMonoRelation = struct {
     mono: Type.TypeId,
 };
 
+/// Deferred widening of an open-row Monotype tag union or record. A checked row
+/// member was constrained against a Monotype row that was closed by a checked row
+/// default, so the missing member must be added to the Monotype row. The request
+/// is applied only when no constraint walk holds slices into the type store.
+const WidenRequest = struct {
+    ctx: *BodyContext,
+    mono_ty: Type.TypeId,
+    member: union(enum) {
+        tag: checked.CheckedTag,
+        record_field: checked.CheckedRecordField,
+    },
+};
+
+/// Deferred re-check of a checked-type cell whose Monotype differed from a newly
+/// arriving Monotype while open-row widenings were still pending. Once pending
+/// widenings are applied, the two Monotypes are joined and the relation re-checked.
+const ReconcileRequest = struct {
+    ctx: *BodyContext,
+    checked_ty: checked.CheckedTypeId,
+    mono_ty: Type.TypeId,
+};
+
+/// A lowered procedure template specialization together with the Monotype
+/// function type its body was lowered at. A cache hit whose requested function
+/// type is a different Monotype instance joins the two so open-row widenings
+/// keep the call site and the lowered body structurally identical.
+const LoweredTemplate = struct {
+    def: Ast.DefId,
+    fn_ty: Type.TypeId,
+};
+
+/// A lowered nested function specialization together with the Monotype function
+/// type its body was lowered at.
+const LoweredNestedFn = struct {
+    nested_id: u32,
+    fn_ty: Type.TypeId,
+};
+
 const LambdaArgLet = struct {
     pat: Ast.PatId,
     value: Ast.ExprId,
@@ -287,8 +329,8 @@ const Builder = struct {
     program: *Ast.Program,
     symbols: Common.SymbolGen = .{},
     type_cache: std.AutoHashMap(CheckedTypeAddress, Type.TypeId),
-    lowered_templates: std.AutoHashMap(TemplateAddress, Ast.DefId),
-    lowered_nested_fns: std.AutoHashMap(NestedFnTemplateAddress, u32),
+    lowered_templates: std.AutoHashMap(TemplateAddress, LoweredTemplate),
+    lowered_nested_fns: std.AutoHashMap(NestedFnTemplateAddress, LoweredNestedFn),
     nested_site_cache: std.AutoHashMap(NestedSiteAddress, names.ProcSiteId),
     const_expr_cache: std.AutoHashMap(ConstExprAddress, Ast.ExprId),
     inspect_defs: std.AutoHashMap(InspectDefAddress, InspectDefEntry),
@@ -296,6 +338,21 @@ const Builder = struct {
     method_lookup_index: []MethodLookupIndexEntry = &.{},
     u64_ty: ?Type.TypeId = null,
     bool_ty: ?Type.TypeId = null,
+    /// Monotype tag unions and records whose row was closed by a checked row
+    /// default rather than by checked row evidence. Such rows may still be
+    /// widened with additional members until Monotype IR is emitted.
+    open_row_monos: std.DynamicBitSetUnmanaged = .{},
+    open_row_count: usize = 0,
+    widen_queue: std.ArrayList(WidenRequest) = .empty,
+    reconcile_queue: std.ArrayList(ReconcileRequest) = .empty,
+    /// Pairs of structurally equal open-row Monotypes that must stay equal:
+    /// widening one member of a couple propagates to the other.
+    widen_couples: std.AutoHashMap(Type.TypeId, std.ArrayList(Type.TypeId)),
+    constrain_depth: usize = 0,
+    /// Monotonic count of open-row widenings; constraint fixed-point loops
+    /// re-run until it stabilizes alongside their context cell revisions. It is
+    /// bounded by the total number of row members, so the loops converge.
+    widen_revision: u64 = 0,
 
     fn init(allocator: Allocator, modules: Common.CheckedModules, program: *Ast.Program) Builder {
         return .{
@@ -304,15 +361,24 @@ const Builder = struct {
             .root_view = checked.importedView(modules.root.module),
             .program = program,
             .type_cache = std.AutoHashMap(CheckedTypeAddress, Type.TypeId).init(allocator),
-            .lowered_templates = std.AutoHashMap(TemplateAddress, Ast.DefId).init(allocator),
-            .lowered_nested_fns = std.AutoHashMap(NestedFnTemplateAddress, u32).init(allocator),
+            .lowered_templates = std.AutoHashMap(TemplateAddress, LoweredTemplate).init(allocator),
+            .lowered_nested_fns = std.AutoHashMap(NestedFnTemplateAddress, LoweredNestedFn).init(allocator),
             .nested_site_cache = std.AutoHashMap(NestedSiteAddress, names.ProcSiteId).init(allocator),
             .const_expr_cache = std.AutoHashMap(ConstExprAddress, Ast.ExprId).init(allocator),
             .inspect_defs = std.AutoHashMap(InspectDefAddress, InspectDefEntry).init(allocator),
+            .widen_couples = std.AutoHashMap(Type.TypeId, std.ArrayList(Type.TypeId)).init(allocator),
         };
     }
 
     fn deinit(self: *Builder) void {
+        var couple_iter = self.widen_couples.valueIterator();
+        while (couple_iter.next()) |list| {
+            list.deinit(self.allocator);
+        }
+        self.widen_couples.deinit();
+        self.reconcile_queue.deinit(self.allocator);
+        self.widen_queue.deinit(self.allocator);
+        self.open_row_monos.deinit(self.allocator);
         self.allocator.free(self.method_lookup_index);
         self.allocator.free(self.hosted_catalog);
         self.inspect_defs.deinit();
@@ -807,7 +873,10 @@ const Builder = struct {
         const fn_ty_digest = self.program.types.typeDigest(&self.program.names, fn_ty);
         const address = TemplateAddress.from(template_ref, source_fn_key, fn_ty_digest);
         if (self.lowered_templates.get(address)) |existing| {
-            return existing;
+            if (existing.fn_ty != fn_ty) {
+                try self.joinOpenRowMonos(existing.fn_ty, fn_ty);
+            }
+            return existing.def;
         }
 
         const view = self.moduleForDigest(names.procTemplateModuleDigest(template_ref));
@@ -817,7 +886,7 @@ const Builder = struct {
 
         const reserved: Ast.DefId = @enumFromInt(@as(u32, @intCast(self.program.defs.items.len)));
         try self.program.defs.append(self.allocator, undefined);
-        try self.lowered_templates.put(address, reserved);
+        try self.lowered_templates.put(address, .{ .def = reserved, .fn_ty = fn_ty });
 
         switch (template.target) {
             .hosted => {
@@ -1086,6 +1155,383 @@ const Builder = struct {
             .func => |func| .{ .args = func.args, .ret = func.ret },
             else => Common.invariant(message),
         };
+    }
+
+    /// Resolve a Monotype id through named backings to the id that carries the
+    /// structural content. Open-row marks live on that id.
+    fn shapeTypeId(self: *Builder, ty: Type.TypeId) Type.TypeId {
+        var current = ty;
+        while (true) {
+            switch (self.program.types.get(current)) {
+                .named => |named| if (named.backing) |backing| {
+                    current = backing.ty;
+                    continue;
+                } else return current,
+                else => return current,
+            }
+        }
+    }
+
+    fn markOpenRowMono(self: *Builder, ty: Type.TypeId) Allocator.Error!void {
+        const index = @intFromEnum(ty);
+        if (index >= self.open_row_monos.bit_length) {
+            const grown = @max(index + 1, self.program.types.types.items.len);
+            try self.open_row_monos.resize(self.allocator, grown, false);
+        }
+        if (!self.open_row_monos.isSet(index)) {
+            self.open_row_monos.set(index);
+            self.open_row_count += 1;
+        }
+    }
+
+    fn clearOpenRowMono(self: *Builder, ty: Type.TypeId) void {
+        const index = @intFromEnum(ty);
+        if (index < self.open_row_monos.bit_length and self.open_row_monos.isSet(index)) {
+            self.open_row_monos.unset(index);
+            self.open_row_count -= 1;
+        }
+    }
+
+    fn isOpenRowMono(self: *const Builder, ty: Type.TypeId) bool {
+        const index = @intFromEnum(ty);
+        return index < self.open_row_monos.bit_length and self.open_row_monos.isSet(index);
+    }
+
+    /// Whether any open-row Monotype is reachable from this type.
+    fn typeContainsOpenRow(self: *Builder, ty: Type.TypeId) Allocator.Error!bool {
+        if (self.open_row_count == 0) return false;
+        var visited = std.AutoHashMap(Type.TypeId, void).init(self.allocator);
+        defer visited.deinit();
+        var stack = std.ArrayList(Type.TypeId).empty;
+        defer stack.deinit(self.allocator);
+        try stack.append(self.allocator, ty);
+        while (stack.pop()) |current| {
+            if (visited.contains(current)) continue;
+            try visited.put(current, {});
+            if (self.isOpenRowMono(current)) return true;
+            switch (self.program.types.get(current)) {
+                .primitive, .erased, .zst => {},
+                .list, .box => |elem| try stack.append(self.allocator, elem),
+                .tuple => |items| try stack.appendSlice(self.allocator, self.program.types.span(items)),
+                .func => |func| {
+                    try stack.appendSlice(self.allocator, self.program.types.span(func.args));
+                    try stack.append(self.allocator, func.ret);
+                },
+                .record => |fields| for (self.program.types.fieldSpan(fields)) |field| {
+                    try stack.append(self.allocator, field.ty);
+                },
+                .tag_union => |tags| for (self.program.types.tagSpan(tags)) |tag| {
+                    try stack.appendSlice(self.allocator, self.program.types.span(tag.payloads));
+                },
+                .named => |named| {
+                    try stack.appendSlice(self.allocator, self.program.types.span(named.args));
+                    if (named.backing) |backing| try stack.append(self.allocator, backing.ty);
+                },
+            }
+        }
+        return false;
+    }
+
+    fn addWidenCouple(self: *Builder, a: Type.TypeId, b: Type.TypeId) Allocator.Error!void {
+        const entry = try self.widen_couples.getOrPut(a);
+        if (!entry.found_existing) entry.value_ptr.* = .empty;
+        for (entry.value_ptr.items) |existing| {
+            if (existing == b) return;
+        }
+        try entry.value_ptr.append(self.allocator, b);
+    }
+
+    fn monoTagSpanHasName(self: *const Builder, tags: []const Type.Tag, name: names.TagNameId) bool {
+        const wanted = self.program.names.tagLabelText(name);
+        for (tags) |tag| {
+            if (Ident.textEql(wanted, self.program.names.tagLabelText(tag.name))) return true;
+        }
+        return false;
+    }
+
+    fn monoFieldSpanHasName(self: *const Builder, fields: []const Type.Field, name: names.RecordFieldNameId) bool {
+        const wanted = self.program.names.recordFieldLabelText(name);
+        for (fields) |field| {
+            if (Ident.textEql(wanted, self.program.names.recordFieldLabelText(field.name))) return true;
+        }
+        return false;
+    }
+
+    /// Insert a tag into an open-row Monotype tag union, keeping lexicographic
+    /// order, and propagate the insertion to coupled open rows.
+    fn insertTagIntoOpenRow(self: *Builder, union_ty: Type.TypeId, tag: Type.Tag) Allocator.Error!void {
+        var pending = std.ArrayList(Type.TypeId).empty;
+        defer pending.deinit(self.allocator);
+        var visited = std.AutoHashMap(Type.TypeId, void).init(self.allocator);
+        defer visited.deinit();
+        try pending.append(self.allocator, union_ty);
+        while (pending.pop()) |current| {
+            if (visited.contains(current)) continue;
+            try visited.put(current, {});
+            const existing = switch (self.program.types.get(current)) {
+                .tag_union => |tags| tags,
+                else => Common.invariant("open-row widening reached a coupled Monotype that is not a tag union"),
+            };
+            if (!self.monoTagSpanHasName(self.program.types.tagSpan(existing), tag.name)) {
+                var tags = std.ArrayList(Type.Tag).empty;
+                defer tags.deinit(self.allocator);
+                try tags.appendSlice(self.allocator, self.program.types.tagSpan(existing));
+                try tags.append(self.allocator, tag);
+                std.mem.sort(Type.Tag, tags.items, self, tagLessThan);
+                assertNoDuplicateTags(self, tags.items, "open-row widening produced duplicate tags");
+                const span = try self.program.types.addTags(tags.items);
+                self.program.types.types.items[@intFromEnum(current)] = .{ .tag_union = span };
+                self.widen_revision += 1;
+            }
+            if (self.widen_couples.get(current)) |coupled| {
+                try pending.appendSlice(self.allocator, coupled.items);
+            }
+        }
+    }
+
+    /// Insert a field into an open-row Monotype record, keeping lexicographic
+    /// order, and propagate the insertion to coupled open rows.
+    fn insertFieldIntoOpenRow(self: *Builder, record_ty: Type.TypeId, field: Type.Field) Allocator.Error!void {
+        var pending = std.ArrayList(Type.TypeId).empty;
+        defer pending.deinit(self.allocator);
+        var visited = std.AutoHashMap(Type.TypeId, void).init(self.allocator);
+        defer visited.deinit();
+        try pending.append(self.allocator, record_ty);
+        while (pending.pop()) |current| {
+            if (visited.contains(current)) continue;
+            try visited.put(current, {});
+            const existing = switch (self.program.types.get(current)) {
+                .record => |fields| fields,
+                else => Common.invariant("open-row widening reached a coupled Monotype that is not a record"),
+            };
+            if (!self.monoFieldSpanHasName(self.program.types.fieldSpan(existing), field.name)) {
+                var fields = std.ArrayList(Type.Field).empty;
+                defer fields.deinit(self.allocator);
+                try fields.appendSlice(self.allocator, self.program.types.fieldSpan(existing));
+                try fields.append(self.allocator, field);
+                std.mem.sort(Type.Field, fields.items, self, recordFieldLessThan);
+                assertNoDuplicateRecordFields(self, fields.items, "open-row widening produced duplicate record fields");
+                const span = try self.program.types.addFields(fields.items);
+                self.program.types.types.items[@intFromEnum(current)] = .{ .record = span };
+                self.widen_revision += 1;
+            }
+            if (self.widen_couples.get(current)) |coupled| {
+                try pending.appendSlice(self.allocator, coupled.items);
+            }
+        }
+    }
+
+    const JoinPair = struct {
+        left: Type.TypeId,
+        right: Type.TypeId,
+    };
+
+    /// Join two Monotypes that must denote the same type: copy row members
+    /// missing from whichever side has an open row, and couple open-row pairs so
+    /// later widenings keep both sides identical. Non-row structural differences
+    /// are left for the caller's structural-equality check to reject.
+    fn joinOpenRowMonos(self: *Builder, a: Type.TypeId, b: Type.TypeId) Allocator.Error!void {
+        if (self.open_row_count == 0) return;
+        var active = std.AutoHashMap(JoinPair, void).init(self.allocator);
+        defer active.deinit();
+        try self.joinOpenRowMonosInner(a, b, &active);
+    }
+
+    fn joinOpenRowMonosInner(
+        self: *Builder,
+        a: Type.TypeId,
+        b: Type.TypeId,
+        active: *std.AutoHashMap(JoinPair, void),
+    ) Allocator.Error!void {
+        const left = self.shapeTypeId(a);
+        const right = self.shapeTypeId(b);
+        if (left == right) return;
+        const pair = JoinPair{ .left = left, .right = right };
+        if (active.contains(pair)) return;
+        try active.put(pair, {});
+
+        switch (self.program.types.get(left)) {
+            .tag_union => switch (self.program.types.get(right)) {
+                .tag_union => try self.joinTagRows(left, right, active),
+                else => {},
+            },
+            .record => switch (self.program.types.get(right)) {
+                .record => try self.joinRecordRows(left, right, active),
+                else => {},
+            },
+            .func => |left_fn| switch (self.program.types.get(right)) {
+                .func => |right_fn| {
+                    if (left_fn.args.len != right_fn.args.len) return;
+                    const left_args = try self.allocator.dupe(Type.TypeId, self.program.types.span(left_fn.args));
+                    defer self.allocator.free(left_args);
+                    const right_args = try self.allocator.dupe(Type.TypeId, self.program.types.span(right_fn.args));
+                    defer self.allocator.free(right_args);
+                    for (left_args, right_args) |left_arg, right_arg| {
+                        try self.joinOpenRowMonosInner(left_arg, right_arg, active);
+                    }
+                    try self.joinOpenRowMonosInner(left_fn.ret, right_fn.ret, active);
+                },
+                else => {},
+            },
+            .tuple => |left_items| switch (self.program.types.get(right)) {
+                .tuple => |right_items| {
+                    if (left_items.len != right_items.len) return;
+                    const lhs = try self.allocator.dupe(Type.TypeId, self.program.types.span(left_items));
+                    defer self.allocator.free(lhs);
+                    const rhs = try self.allocator.dupe(Type.TypeId, self.program.types.span(right_items));
+                    defer self.allocator.free(rhs);
+                    for (lhs, rhs) |left_item, right_item| {
+                        try self.joinOpenRowMonosInner(left_item, right_item, active);
+                    }
+                },
+                else => {},
+            },
+            .list => |left_elem| switch (self.program.types.get(right)) {
+                .list => |right_elem| try self.joinOpenRowMonosInner(left_elem, right_elem, active),
+                else => {},
+            },
+            .box => |left_elem| switch (self.program.types.get(right)) {
+                .box => |right_elem| try self.joinOpenRowMonosInner(left_elem, right_elem, active),
+                else => {},
+            },
+            .primitive, .erased, .zst, .named => {},
+        }
+    }
+
+    fn joinTagRows(
+        self: *Builder,
+        left: Type.TypeId,
+        right: Type.TypeId,
+        active: *std.AutoHashMap(JoinPair, void),
+    ) Allocator.Error!void {
+        const left_open = self.isOpenRowMono(left);
+        const right_open = self.isOpenRowMono(right);
+
+        if (left_open or right_open) {
+            const left_tags = try self.dupeTagSpan(left);
+            defer self.allocator.free(left_tags);
+            const right_tags = try self.dupeTagSpan(right);
+            defer self.allocator.free(right_tags);
+            if (left_open) {
+                for (right_tags) |tag| {
+                    if (!self.monoTagSpanHasName(left_tags, tag.name)) {
+                        try self.insertTagIntoOpenRow(left, tag);
+                    }
+                }
+            }
+            if (right_open) {
+                for (left_tags) |tag| {
+                    if (!self.monoTagSpanHasName(right_tags, tag.name)) {
+                        try self.insertTagIntoOpenRow(right, tag);
+                    }
+                }
+            }
+            try self.addWidenCouple(left, right);
+            try self.addWidenCouple(right, left);
+        }
+
+        const left_tags = try self.dupeTagSpan(left);
+        defer self.allocator.free(left_tags);
+        const right_tags = try self.dupeTagSpan(right);
+        defer self.allocator.free(right_tags);
+        for (left_tags) |left_tag| {
+            const wanted = self.program.names.tagLabelText(left_tag.name);
+            for (right_tags) |right_tag| {
+                if (!Ident.textEql(wanted, self.program.names.tagLabelText(right_tag.name))) continue;
+                if (left_tag.payloads.len != right_tag.payloads.len) break;
+                const left_payloads = try self.allocator.dupe(Type.TypeId, self.program.types.span(left_tag.payloads));
+                defer self.allocator.free(left_payloads);
+                const right_payloads = try self.allocator.dupe(Type.TypeId, self.program.types.span(right_tag.payloads));
+                defer self.allocator.free(right_payloads);
+                for (left_payloads, right_payloads) |left_payload, right_payload| {
+                    try self.joinOpenRowMonosInner(left_payload, right_payload, active);
+                }
+                break;
+            }
+        }
+    }
+
+    fn joinRecordRows(
+        self: *Builder,
+        left: Type.TypeId,
+        right: Type.TypeId,
+        active: *std.AutoHashMap(JoinPair, void),
+    ) Allocator.Error!void {
+        const left_open = self.isOpenRowMono(left);
+        const right_open = self.isOpenRowMono(right);
+
+        if (left_open or right_open) {
+            const left_fields = try self.dupeFieldSpan(left);
+            defer self.allocator.free(left_fields);
+            const right_fields = try self.dupeFieldSpan(right);
+            defer self.allocator.free(right_fields);
+            if (left_open) {
+                for (right_fields) |field| {
+                    if (!self.monoFieldSpanHasName(left_fields, field.name)) {
+                        try self.insertFieldIntoOpenRow(left, field);
+                    }
+                }
+            }
+            if (right_open) {
+                for (left_fields) |field| {
+                    if (!self.monoFieldSpanHasName(right_fields, field.name)) {
+                        try self.insertFieldIntoOpenRow(right, field);
+                    }
+                }
+            }
+            try self.addWidenCouple(left, right);
+            try self.addWidenCouple(right, left);
+        }
+
+        const left_fields = try self.dupeFieldSpan(left);
+        defer self.allocator.free(left_fields);
+        const right_fields = try self.dupeFieldSpan(right);
+        defer self.allocator.free(right_fields);
+        for (left_fields) |left_field| {
+            const wanted = self.program.names.recordFieldLabelText(left_field.name);
+            for (right_fields) |right_field| {
+                if (!Ident.textEql(wanted, self.program.names.recordFieldLabelText(right_field.name))) continue;
+                try self.joinOpenRowMonosInner(left_field.ty, right_field.ty, active);
+                break;
+            }
+        }
+    }
+
+    fn dupeTagSpan(self: *Builder, union_ty: Type.TypeId) Allocator.Error![]Type.Tag {
+        return switch (self.program.types.get(union_ty)) {
+            .tag_union => |tags| try self.allocator.dupe(Type.Tag, self.program.types.tagSpan(tags)),
+            else => Common.invariant("open-row join expected a tag union"),
+        };
+    }
+
+    fn dupeFieldSpan(self: *Builder, record_ty: Type.TypeId) Allocator.Error![]Type.Field {
+        return switch (self.program.types.get(record_ty)) {
+            .record => |fields| try self.allocator.dupe(Type.Field, self.program.types.fieldSpan(fields)),
+            else => Common.invariant("open-row join expected a record"),
+        };
+    }
+
+    /// Apply deferred open-row work once no constraint walk holds slices into the
+    /// type store. Widenings strictly grow rows, so this converges; a reconcile
+    /// that repeatedly makes no progress is a genuine constraint conflict.
+    fn drainWidenQueue(self: *Builder) Allocator.Error!void {
+        var stalled: usize = 0;
+        while (self.widen_queue.items.len != 0 or self.reconcile_queue.items.len != 0) {
+            while (self.widen_queue.pop()) |request| {
+                try request.ctx.applyWidenRequest(request);
+            }
+            const request = self.reconcile_queue.pop() orelse continue;
+            const before = self.widen_revision;
+            const resolved = try request.ctx.reconcileCellWithMono(request.checked_ty, request.mono_ty);
+            if (resolved or self.widen_revision != before) {
+                stalled = 0;
+            } else {
+                stalled += 1;
+                if (stalled > self.reconcile_queue.items.len) {
+                    Common.invariant("checked type relation conflicted with an existing Monotype constraint after open-row widening");
+                }
+            }
+        }
     }
 
     fn tupleItemSpan(self: *Builder, ty: Type.TypeId) Type.Span {
@@ -1502,11 +1948,16 @@ const Builder = struct {
         };
         const fn_ty_digest = self.program.types.typeDigest(&self.program.names, fn_template.mono_fn_ty);
         const address = NestedFnTemplateAddress.from(nested, fn_template.source_fn_key, fn_ty_digest);
-        if (self.lowered_nested_fns.contains(address)) return;
+        if (self.lowered_nested_fns.get(address)) |existing| {
+            if (existing.fn_ty != fn_template.mono_fn_ty) {
+                try self.joinOpenRowMonos(existing.fn_ty, fn_template.mono_fn_ty);
+            }
+            return;
+        }
 
         const nested_id: u32 = @intCast(self.program.nested_defs.items.len);
         try self.program.nested_defs.append(self.allocator, undefined);
-        try self.lowered_nested_fns.put(address, nested_id);
+        try self.lowered_nested_fns.put(address, .{ .nested_id = nested_id, .fn_ty = fn_template.mono_fn_ty });
 
         var nested_ctx = try source_ctx.nestedInstantiationContext(Ast.fnTemplateDigest(fn_template, &self.program.types, &self.program.names));
         defer nested_ctx.deinit();
@@ -2448,6 +2899,18 @@ const BodyContext = struct {
         mono_ty: Type.TypeId,
         comptime conflict_message: []const u8,
     ) Allocator.Error!void {
+        self.builder.constrain_depth += 1;
+        defer self.builder.constrain_depth -= 1;
+        try self.constrainTypeToMonoInner(checked_ty, mono_ty, conflict_message);
+        if (self.builder.constrain_depth == 1) try self.builder.drainWidenQueue();
+    }
+
+    fn constrainTypeToMonoInner(
+        self: *BodyContext,
+        checked_ty: checked.CheckedTypeId,
+        mono_ty: Type.TypeId,
+        comptime conflict_message: []const u8,
+    ) Allocator.Error!void {
         const address = self.typeAddress(checked_ty);
         if (self.type_cells.get(address)) |existing| {
             if (!self.sameType(existing.ty, mono_ty)) {
@@ -2459,12 +2922,22 @@ const BodyContext = struct {
                     var entry = self.type_cells.getPtr(address) orelse Common.invariant("checked type cell disappeared while completing replaceable type");
                     entry.state = try self.cellStateFor(checked_ty, existing.ty);
                     self.type_cell_revision += 1;
+                    if (self.builder.isOpenRowMono(self.builder.shapeTypeId(mono_ty))) {
+                        try self.builder.markOpenRowMono(existing.ty);
+                    } else {
+                        self.builder.clearOpenRowMono(existing.ty);
+                    }
+                    try self.builder.joinOpenRowMonos(existing.ty, mono_ty);
                     try self.constrainTypeChildrenToMono(checked_ty, existing.ty, conflict_message);
                     return;
                 }
                 try self.constrainTypeChildrenToMono(checked_ty, mono_ty, conflict_message);
                 if (self.sameType(existing.ty, mono_ty)) return;
+                if (try self.deferOpenRowReconcile(checked_ty, existing.ty, mono_ty)) return;
                 Common.invariant(conflict_message);
+            }
+            if (existing.ty != mono_ty) {
+                try self.builder.joinOpenRowMonos(existing.ty, mono_ty);
             }
             return;
         }
@@ -2472,6 +2945,50 @@ const BodyContext = struct {
         self.type_cell_revision += 1;
 
         try self.constrainTypeChildrenToMono(checked_ty, mono_ty, conflict_message);
+    }
+
+    /// A checked type's cell and a newly arriving Monotype disagreed while
+    /// open-row work may still change either side. Defer the relation so it is
+    /// re-checked after pending widenings are applied and open rows are joined.
+    fn deferOpenRowReconcile(
+        self: *BodyContext,
+        checked_ty: checked.CheckedTypeId,
+        existing_ty: Type.TypeId,
+        mono_ty: Type.TypeId,
+    ) Allocator.Error!bool {
+        const builder = self.builder;
+        if (builder.widen_queue.items.len == 0 and builder.reconcile_queue.items.len == 0) {
+            if (!try builder.typeContainsOpenRow(existing_ty) and !try builder.typeContainsOpenRow(mono_ty)) {
+                return false;
+            }
+        }
+        try builder.reconcile_queue.append(builder.allocator, .{
+            .ctx = self,
+            .checked_ty = checked_ty,
+            .mono_ty = mono_ty,
+        });
+        return true;
+    }
+
+    /// Re-check a deferred cell relation after pending widenings were applied.
+    /// Returns true when the relation is satisfied; false re-queues it, and the
+    /// drain loop treats repeated no-progress re-queues as a genuine conflict.
+    fn reconcileCellWithMono(
+        self: *BodyContext,
+        checked_ty: checked.CheckedTypeId,
+        mono_ty: Type.TypeId,
+    ) Allocator.Error!bool {
+        const address = self.typeAddress(checked_ty);
+        const existing = self.type_cells.get(address) orelse Common.invariant("checked type cell disappeared before open-row reconciliation");
+        if (self.sameType(existing.ty, mono_ty)) return true;
+        try self.builder.joinOpenRowMonos(existing.ty, mono_ty);
+        if (self.sameType(existing.ty, mono_ty)) return true;
+        try self.builder.reconcile_queue.append(self.builder.allocator, .{
+            .ctx = self,
+            .checked_ty = checked_ty,
+            .mono_ty = mono_ty,
+        });
+        return false;
     }
 
     fn monoTypeIsEmptyTagUnion(self: *BodyContext, ty: Type.TypeId) bool {
@@ -2724,7 +3241,8 @@ const BodyContext = struct {
         comptime conflict_message: []const u8,
     ) Allocator.Error!void {
         for (fields) |field| {
-            try self.constrainTypeToMono(field.ty, self.monoRecordField(mono_ty, field.name), conflict_message);
+            const mono_field_ty = (try self.monoRecordField(mono_ty, field)) orelse continue;
+            try self.constrainTypeToMono(field.ty, mono_field_ty, conflict_message);
         }
     }
 
@@ -2735,7 +3253,7 @@ const BodyContext = struct {
         comptime conflict_message: []const u8,
     ) Allocator.Error!void {
         for (tags) |tag| {
-            const mono_args = self.monoTagArgs(mono_ty, tag.name);
+            const mono_args = (try self.monoTagArgs(mono_ty, tag)) orelse continue;
             try self.constrainTypeSpanToMono(tag.args, mono_args, conflict_message);
         }
     }
@@ -2756,6 +3274,7 @@ const BodyContext = struct {
                         },
                         else => if (try self.monoTypeContainsUninhabited(mono_ty)) {
                             self.builder.program.types.types.items[@intFromEnum(mono_ty)] = .{ .primitive = primitive };
+                            self.builder.clearOpenRowMono(mono_ty);
                             return;
                         } else Common.invariant("builtin primitive nominal was constrained to a non-primitive monotype"),
                     }
@@ -2814,16 +3333,27 @@ const BodyContext = struct {
         };
     }
 
+    /// Monotype of a record field by checked name. Returns null after queueing a
+    /// widen request when the field is missing from an open-row record.
     fn monoRecordField(
         self: *BodyContext,
         mono_ty: Type.TypeId,
-        checked_field: names.RecordFieldNameId,
-    ) Type.TypeId {
-        return switch (self.builder.shapeContent(mono_ty)) {
+        checked_field: checked.CheckedRecordField,
+    ) Allocator.Error!?Type.TypeId {
+        const shape_ty = self.builder.shapeTypeId(mono_ty);
+        return switch (self.builder.program.types.get(shape_ty)) {
             .record => |record| {
-                const wanted = self.view.names.recordFieldLabelText(checked_field);
+                const wanted = self.view.names.recordFieldLabelText(checked_field.name);
                 for (self.builder.program.types.fieldSpan(record)) |field| {
                     if (Ident.textEql(wanted, self.builder.program.names.recordFieldLabelText(field.name))) return field.ty;
+                }
+                if (self.builder.isOpenRowMono(shape_ty)) {
+                    try self.builder.widen_queue.append(self.builder.allocator, .{
+                        .ctx = self,
+                        .mono_ty = shape_ty,
+                        .member = .{ .record_field = checked_field },
+                    });
+                    return null;
                 }
                 Common.invariant("Monotype type instantiation record field was absent from concrete type");
             },
@@ -2831,23 +3361,90 @@ const BodyContext = struct {
         };
     }
 
+    /// Monotype payloads of a tag by checked name. Returns null after queueing a
+    /// widen request when the tag is missing from an open-row tag union.
     fn monoTagArgs(
         self: *BodyContext,
         mono_ty: Type.TypeId,
-        checked_tag: names.TagNameId,
-    ) []const Type.TypeId {
-        return switch (self.builder.shapeContent(mono_ty)) {
+        checked_tag: checked.CheckedTag,
+    ) Allocator.Error!?[]const Type.TypeId {
+        const shape_ty = self.builder.shapeTypeId(mono_ty);
+        return switch (self.builder.program.types.get(shape_ty)) {
             .tag_union => |tag_union| {
-                const wanted = self.view.names.tagLabelText(checked_tag);
+                const wanted = self.view.names.tagLabelText(checked_tag.name);
                 for (self.builder.program.types.tagSpan(tag_union)) |tag| {
                     if (Ident.textEql(wanted, self.builder.program.names.tagLabelText(tag.name))) {
                         return self.builder.program.types.span(tag.payloads);
                     }
                 }
+                if (self.builder.isOpenRowMono(shape_ty)) {
+                    try self.builder.widen_queue.append(self.builder.allocator, .{
+                        .ctx = self,
+                        .mono_ty = shape_ty,
+                        .member = .{ .tag = checked_tag },
+                    });
+                    return null;
+                }
                 Common.invariant("Monotype type instantiation tag was absent from concrete type");
             },
             else => Common.invariant("Monotype type instantiation expected a concrete tag-union type"),
         };
+    }
+
+    /// Apply a deferred open-row widening: add the missing checked member to the
+    /// Monotype row, or constrain its payloads when another widening already
+    /// added it.
+    fn applyWidenRequest(self: *BodyContext, request: WidenRequest) Allocator.Error!void {
+        const builder = self.builder;
+        const shape_ty = builder.shapeTypeId(request.mono_ty);
+        switch (request.member) {
+            .tag => |checked_tag| {
+                const tag_union = switch (builder.program.types.get(shape_ty)) {
+                    .tag_union => |tags| tags,
+                    else => Common.invariant("Monotype type instantiation expected a concrete tag-union type"),
+                };
+                const wanted = self.view.names.tagLabelText(checked_tag.name);
+                for (builder.program.types.tagSpan(tag_union)) |tag| {
+                    if (!Ident.textEql(wanted, builder.program.names.tagLabelText(tag.name))) continue;
+                    const payloads = try self.allocator.dupe(Type.TypeId, builder.program.types.span(tag.payloads));
+                    defer self.allocator.free(payloads);
+                    try self.constrainTypeSpanToMono(checked_tag.args, payloads, "checked tag payload conflicted with an existing Monotype constraint after open-row widening");
+                    return;
+                }
+                if (!builder.isOpenRowMono(shape_ty)) {
+                    Common.invariant("Monotype type instantiation tag was absent from concrete type");
+                }
+                const payload_tys = try self.allocator.alloc(Type.TypeId, checked_tag.args.len);
+                defer self.allocator.free(payload_tys);
+                for (checked_tag.args, 0..) |arg, index| {
+                    payload_tys[index] = try self.lowerType(arg);
+                }
+                try builder.insertTagIntoOpenRow(shape_ty, .{
+                    .name = try builder.tagName(self.view, checked_tag.name),
+                    .checked_name = checked_tag.name,
+                    .payloads = try builder.program.types.addSpan(payload_tys),
+                });
+            },
+            .record_field => |checked_field| {
+                const record = switch (builder.program.types.get(shape_ty)) {
+                    .record => |fields| fields,
+                    else => Common.invariant("Monotype type instantiation expected a concrete record type"),
+                };
+                const wanted = self.view.names.recordFieldLabelText(checked_field.name);
+                for (builder.program.types.fieldSpan(record)) |field| {
+                    if (!Ident.textEql(wanted, builder.program.names.recordFieldLabelText(field.name))) continue;
+                    try self.constrainTypeToMono(checked_field.ty, field.ty, "checked record field conflicted with an existing Monotype constraint after open-row widening");
+                    return;
+                }
+                if (!builder.isOpenRowMono(shape_ty)) {
+                    Common.invariant("Monotype type instantiation record field was absent from concrete type");
+                }
+                try builder.insertFieldIntoOpenRow(shape_ty, .{
+                    .name = try builder.recordFieldName(self.view, checked_field.name),
+                    .ty = try self.lowerType(checked_field.ty),
+                });
+            },
+        }
     }
 
     fn monoAliasBacking(types: *const Type.Store, mono_ty: Type.TypeId) ?Type.TypeId {
@@ -3401,6 +3998,12 @@ const BodyContext = struct {
             else => {
                 const lowered = try self.lowerTypePayload(checked_ty, payload);
                 self.builder.program.types.types.items[@intFromEnum(mono_ty)] = lowered;
+                switch (payload) {
+                    .flex, .rigid => |variable| if (variable.numeric_default_phase == null and variable.row_default != null) {
+                        try self.builder.markOpenRowMono(mono_ty);
+                    },
+                    else => {},
+                }
             },
         }
 
@@ -3485,7 +4088,10 @@ const BodyContext = struct {
                 .alias => |alias| current = alias.backing,
                 .empty_record => break,
                 .flex, .rigid => |variable| {
-                    if (variable.row_default == .empty_record) break;
+                    if (variable.row_default == .empty_record) {
+                        try self.builder.markOpenRowMono(mono_ty);
+                        break;
+                    }
                     Common.invariant("open non-record checked row reached Monotype record lowering");
                 },
                 .record_unbound => |tail_fields| {
@@ -3549,7 +4155,10 @@ const BodyContext = struct {
                 .alias => |alias| current = alias.backing,
                 .empty_tag_union => break,
                 .flex, .rigid => |variable| {
-                    if (variable.row_default == .empty_tag_union) break;
+                    if (variable.row_default == .empty_tag_union) {
+                        try self.builder.markOpenRowMono(mono_ty);
+                        break;
+                    }
                     Common.invariant("open non-tag-union checked row reached Monotype tag-union lowering");
                 },
                 .tag_union => |tag_union| {
@@ -4772,8 +5381,9 @@ const BodyContext = struct {
         while (true) {
             const before_self = self.type_cell_revision;
             const before_plan = plan_ctx.type_cell_revision;
+            const before_widen = self.builder.widen_revision;
             try self.constrainTargetArgsFromPlan(target_args, plan_ctx, plan_args, conflict_message);
-            if (self.type_cell_revision == before_self and plan_ctx.type_cell_revision == before_plan) return;
+            if (self.type_cell_revision == before_self and plan_ctx.type_cell_revision == before_plan and self.builder.widen_revision == before_widen) return;
         }
     }
 
@@ -5019,9 +5629,10 @@ const BodyContext = struct {
         while (true) {
             const before_self = self.type_cell_revision;
             const before_caller = caller.type_cell_revision;
+            const before_widen = self.builder.widen_revision;
             try self.constrainCallArgTypesFromCaller(formal_tys, caller, checked_args, false, conflict_message);
             try self.constrainCallArgTypesFromCaller(formal_tys, caller, checked_args, true, conflict_message);
-            if (self.type_cell_revision == before_self and caller.type_cell_revision == before_caller) return;
+            if (self.type_cell_revision == before_self and caller.type_cell_revision == before_caller and self.builder.widen_revision == before_widen) return;
         }
     }
 
@@ -5087,9 +5698,10 @@ const BodyContext = struct {
         while (true) {
             const before_self = self.type_cell_revision;
             const before_caller = caller.type_cell_revision;
+            const before_widen = self.builder.widen_revision;
             try self.constrainDispatchArgTypesFromCaller(formal_tys, caller, operands, false, conflict_message);
             try self.constrainDispatchArgTypesFromCaller(formal_tys, caller, operands, true, conflict_message);
-            if (self.type_cell_revision == before_self and caller.type_cell_revision == before_caller) return;
+            if (self.type_cell_revision == before_self and caller.type_cell_revision == before_caller and self.builder.widen_revision == before_widen) return;
         }
     }
 
@@ -5100,9 +5712,12 @@ const BodyContext = struct {
         right_ty: checked.CheckedTypeId,
         comptime conflict_message: []const u8,
     ) Allocator.Error!void {
+        self.builder.constrain_depth += 1;
+        defer self.builder.constrain_depth -= 1;
         var active = std.AutoHashMap(CheckedTypeRelation, void).init(self.allocator);
         defer active.deinit();
         try self.constrainCheckedTypeRelationsInner(left_ty, right_ctx, right_ty, conflict_message, &active);
+        if (self.builder.constrain_depth == 1) try self.builder.drainWidenQueue();
     }
 
     fn constrainCheckedTypeRelationsInner(
@@ -8886,9 +9501,10 @@ const BodyContext = struct {
         while (true) {
             const before_self = self.type_cell_revision;
             const before_caller = caller.type_cell_revision;
+            const before_widen = self.builder.widen_revision;
             try self.constrainIteratorArgTypesFromCaller(formal_tys, caller, operands, loop_iterator, false);
             try self.constrainIteratorArgTypesFromCaller(formal_tys, caller, operands, loop_iterator, true);
-            if (self.type_cell_revision == before_self and caller.type_cell_revision == before_caller) return;
+            if (self.type_cell_revision == before_self and caller.type_cell_revision == before_caller and self.builder.widen_revision == before_widen) return;
         }
     }
 
