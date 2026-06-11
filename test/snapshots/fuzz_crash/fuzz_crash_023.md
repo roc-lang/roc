@@ -275,7 +275,6 @@ UNDECLARED TYPE - fuzz_crash_023.md:201:9:201:14
 TYPE MISMATCH - fuzz_crash_023.md:70:5:70:8
 MISSING METHOD - fuzz_crash_023.md:99:3:99:8
 MISSING METHOD - fuzz_crash_023.md:101:3:101:8
-MISSING METHOD - fuzz_crash_023.md:101:11:101:16
 TYPE MISMATCH - fuzz_crash_023.md:84:2:84:2
 DECLARATION HAS NO VALUE - fuzz_crash_023.md:178:47:178:71
 TOO FEW ARGS - fuzz_crash_023.md:155:2:157:3
@@ -982,18 +981,6 @@ This **from_quote** method is being called on a value whose type doesn't have th
 		"foo" | "bar" => 200
 ```
 		^^^^^
-
-The value's type, which does not have a method named **from_quote**, is:
-
-    [Blue, Green, Red, ..]
-
-**MISSING METHOD**
-This **from_quote** method is being called on a value whose type doesn't have that method:
-**fuzz_crash_023.md:101:11:101:16:**
-```roc
-		"foo" | "bar" => 200
-```
-		        ^^^^^
 
 The value's type, which does not have a method named **from_quote**, is:
 

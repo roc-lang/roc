@@ -14,7 +14,7 @@ y = "value: ${x}"
 TYPE MISMATCH - string_interpolation_type_mismatch.md:1:1:1:1
 # PROBLEMS
 **TYPE MISMATCH**
-The `from_interpolation` method on `Builtin.Str` has an incompatible type:
+The `from_interpolation` method on `Str` has an incompatible type:
 **string_interpolation_type_mismatch.md:1:1:1:1:**
 ```roc
 x : U8

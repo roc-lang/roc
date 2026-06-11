@@ -227,7 +227,6 @@ TYPE MISMATCH - fuzz_crash_027.md:50:5:50:8
 TYPE MISMATCH - fuzz_crash_027.md:64:2:64:2
 MISSING METHOD - fuzz_crash_027.md:68:3:68:8
 MISSING METHOD - fuzz_crash_027.md:70:3:70:8
-MISSING METHOD - fuzz_crash_027.md:70:11:70:16
 TYPE MISMATCH - fuzz_crash_027.md:64:2:64:2
 TOO FEW ARGS - fuzz_crash_027.md:111:2:113:3
 TYPE MISMATCH - fuzz_crash_027.md:106:3:106:6
@@ -960,18 +959,6 @@ This **from_quote** method is being called on a value whose type doesn't have th
 		"foo" | "bar" => 20[1, 2, 3, .. as rest] # Aftet
 ```
 		^^^^^
-
-The value's type, which does not have a method named **from_quote**, is:
-
-    [Blue, Red, ..]
-
-**MISSING METHOD**
-This **from_quote** method is being called on a value whose type doesn't have that method:
-**fuzz_crash_027.md:70:11:70:16:**
-```roc
-		"foo" | "bar" => 20[1, 2, 3, .. as rest] # Aftet
-```
-		        ^^^^^
 
 The value's type, which does not have a method named **from_quote**, is:
 

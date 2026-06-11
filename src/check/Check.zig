@@ -113,6 +113,10 @@ builtin_types_copied: bool,
 ident_to_var_map: std.AutoHashMap(Ident.Idx, Var),
 /// Checker-local source-site mapping for method/equality rewrites.
 constraint_expr_by_fn_var: std.AutoHashMap(Var, CIR.Expr.Idx),
+/// Dispatcher/method pairs already reported by `reportConstraintError`, so a
+/// constraint failing in multiple passes (or reachable through several aliased
+/// type variables) is reported once.
+reported_constraint_errors: std.AutoHashMap(ReportedConstraintError, void),
 /// Static dispatch constraints created while checking an expect body.
 expect_region_by_constraint_fn_var: std.AutoHashMap(Var, Region),
 /// Region of the expect body currently being checked, if any.
@@ -442,6 +446,7 @@ fn initAssumePrepared(
         .builtin_types_copied = false,
         .ident_to_var_map = std.AutoHashMap(Ident.Idx, Var).init(gpa),
         .constraint_expr_by_fn_var = std.AutoHashMap(Var, CIR.Expr.Idx).init(gpa),
+        .reported_constraint_errors = std.AutoHashMap(ReportedConstraintError, void).init(gpa),
         .expect_region_by_constraint_fn_var = std.AutoHashMap(Var, Region).init(gpa),
         .current_expect_region = null,
         .top_level_ptrns = std.AutoHashMap(CIR.Pattern.Idx, DefProcessed).init(gpa),
@@ -534,6 +539,7 @@ pub fn deinit(self: *Self) void {
     self.import_cache.deinit(self.gpa);
     self.ident_to_var_map.deinit();
     self.constraint_expr_by_fn_var.deinit();
+    self.reported_constraint_errors.deinit();
     self.expect_region_by_constraint_fn_var.deinit();
     self.top_level_ptrns.deinit();
     self.local_processing_ptrns.deinit(self.gpa);
@@ -11045,6 +11051,11 @@ fn quoteLiteralRegionForDispatcher(self: *Self, constraint: StaticDispatchConstr
     return null;
 }
 
+const ReportedConstraintError = struct {
+    dispatcher: Var,
+    fn_name: Ident.Idx,
+};
+
 /// Report a constraint validation error
 fn reportConstraintError(
     self: *Self,
@@ -11057,6 +11068,16 @@ fn reportConstraintError(
     env: *Env,
     is_numeric_default_pass: bool,
 ) Allocator.Error!void {
+    const dedup_key = ReportedConstraintError{
+        .dispatcher = self.types.resolveVar(dispatcher_var).var_,
+        .fn_name = constraint.fn_name,
+    };
+    const dedup_entry = try self.reported_constraint_errors.getOrPut(dedup_key);
+    if (dedup_entry.found_existing) {
+        try self.markConstraintFunctionAsError(constraint, env);
+        return;
+    }
+
     const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, dispatcher_var);
     const constraint_problem = switch (kind) {
         .missing_method => |dispatcher_type| problem.Problem{ .static_dispatch = .{

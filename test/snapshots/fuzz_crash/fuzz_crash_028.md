@@ -257,7 +257,6 @@ DECLARATION HAS NO VALUE - fuzz_crash_028.md:47:1:47:21
 TYPE MISMATCH - fuzz_crash_028.md:64:2:64:2
 MISSING METHOD - fuzz_crash_028.md:68:3:68:8
 MISSING METHOD - fuzz_crash_028.md:70:3:70:8
-MISSING METHOD - fuzz_crash_028.md:70:11:70:16
 TYPE MISMATCH - fuzz_crash_028.md:64:2:64:2
 DECLARATION HAS NO VALUE - fuzz_crash_028.md:95:1:95:34
 TYPE MISMATCH - fuzz_crash_028.md:102:8:102:11
@@ -1542,18 +1541,6 @@ This **from_quote** method is being called on a value whose type doesn't have th
 		"foo" | "bar" => 20[1, 2, 3, .. as rest] # t
 ```
 		^^^^^
-
-The value's type, which does not have a method named **from_quote**, is:
-
-    [Blue, Red, ..]
-
-**MISSING METHOD**
-This **from_quote** method is being called on a value whose type doesn't have that method:
-**fuzz_crash_028.md:70:11:70:16:**
-```roc
-		"foo" | "bar" => 20[1, 2, 3, .. as rest] # t
-```
-		        ^^^^^
 
 The value's type, which does not have a method named **from_quote**, is:
 

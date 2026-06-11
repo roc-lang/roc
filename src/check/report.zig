@@ -2289,6 +2289,12 @@ pub const ReportBuilder = struct {
         types: TypePair,
         ctx: Context.MethodTypeContext,
     ) Allocator.Error!Report {
+        // Auto-imported builtin types display unqualified (e.g. "Str", not "Builtin.Str").
+        const dispatcher_display = if (self.import_mapping.get(ctx.dispatcher_name)) |display_ident|
+            display_ident
+        else
+            ctx.dispatcher_name;
+
         // Note: The unifier's actual/expected are opposite to display order.
         // We want to show "type has X" (from expected_snapshot) then "expected Y" (from actual_snapshot)
         return try self.makeMismatchReport(
@@ -2297,7 +2303,7 @@ pub const ReportBuilder = struct {
                 D.bytes("The"),
                 D.ident(ctx.method_name).withAnnotation(.inline_code),
                 D.bytes("method on"),
-                D.ident(ctx.dispatcher_name).withAnnotation(.inline_code),
+                D.ident(dispatcher_display).withAnnotation(.inline_code),
                 D.bytes("has an incompatible type:"),
             },
             &.{
