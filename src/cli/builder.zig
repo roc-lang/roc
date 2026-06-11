@@ -53,6 +53,12 @@ pub const CompileConfig = struct {
     link_builtins: bool = false,
     host_call_extern: bool = false, // Builtins reach the host via extern symbols (the symbol ABI)
     pic: bool = false, // Position-independent code (required for shared library output)
+    no_target_libcalls: bool = false,
+
+    /// Check if compiling for the current machine
+    pub fn isNative(self: CompileConfig) bool {
+        return self.target == target.RocTarget.detectNative();
+    }
 };
 
 // Check if LLVM is available at compile time
@@ -119,6 +125,7 @@ const ZigLLVMEmitOptions = extern struct {
     llvm_ir_filename: ?[*:0]const u8,
     bitcode_filename: ?[*:0]const u8,
     coverage: ZigLLVMCoverageOptions,
+    no_target_libcalls: bool,
 };
 
 // LLVM Code Generation Optimization Levels
@@ -228,10 +235,13 @@ const core_builtin_roots = std.StaticStringMap(void).initComptime(.{
     .{ "roc__num_sub_with_overflow_i128", {} },
     .{ "roc_builtins_allocate_with_refcount", {} },
     .{ "roc_builtins_box_decref_with", {} },
+    .{ "roc_builtins_box_decref_with_single_thread", {} },
     .{ "roc_builtins_box_free_with", {} },
     .{ "roc_builtins_dbg_str", {} },
     .{ "roc_builtins_decref_data_ptr", {} },
+    .{ "roc_builtins_decref_data_ptr_single_thread", {} },
     .{ "roc_builtins_erased_callable_decref", {} },
+    .{ "roc_builtins_erased_callable_decref_single_thread", {} },
     .{ "roc_builtins_erased_callable_free", {} },
     .{ "roc_builtins_erased_callable_incref", {} },
     .{ "roc_builtins_free_data_ptr", {} },
@@ -240,16 +250,21 @@ const core_builtin_roots = std.StaticStringMap(void).initComptime(.{
     .{ "roc_builtins_i64_mod_by", {} },
     .{ "roc_builtins_i8_mod_by", {} },
     .{ "roc_builtins_incref_data_ptr", {} },
+    .{ "roc_builtins_incref_data_ptr_single_thread", {} },
+    .{ "roc_builtins_int_from_str", {} },
+    .{ "roc_builtins_int_to_str", {} },
     .{ "roc_builtins_list_append_unsafe", {} },
     .{ "roc_builtins_list_concat", {} },
     .{ "roc_builtins_list_decref_flat_list", {} },
     .{ "roc_builtins_list_decref_str", {} },
     .{ "roc_builtins_list_decref_with", {} },
+    .{ "roc_builtins_list_decref_with_single_thread", {} },
     .{ "roc_builtins_list_drop_at", {} },
     .{ "roc_builtins_list_eq", {} },
     .{ "roc_builtins_list_free_flat_list", {} },
     .{ "roc_builtins_list_free_with", {} },
     .{ "roc_builtins_list_incref", {} },
+    .{ "roc_builtins_list_incref_single_thread", {} },
     .{ "roc_builtins_list_list_eq", {} },
     .{ "roc_builtins_list_prepend", {} },
     .{ "roc_builtins_list_release_excess_capacity", {} },
@@ -321,6 +336,23 @@ fn selectBuiltinBitcode(ptr_width: u16, app_decls: *const std.StringHashMap(void
         64 => if (use_core) llvm_embedded.builtins64_core_bc else llvm_embedded.builtins64_bc,
         else => "",
     };
+}
+
+test "core builtin roots include common LLVM declarations" {
+    const common_roots = [_][]const u8{
+        "roc_builtins_int_to_str",
+        "roc_builtins_int_from_str",
+        "roc_builtins_list_incref_single_thread",
+        "roc_builtins_list_decref_with_single_thread",
+        "roc_builtins_incref_data_ptr_single_thread",
+        "roc_builtins_decref_data_ptr_single_thread",
+        "roc_builtins_box_decref_with_single_thread",
+        "roc_builtins_erased_callable_decref_single_thread",
+    };
+
+    for (common_roots) |root| {
+        try std.testing.expect(core_builtin_roots.has(root));
+    }
 }
 
 /// LLVM-C linkage value for `internal`: a local definition, never an exported
@@ -662,6 +694,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
         .llvm_ir_filename = null,
         .bitcode_filename = null,
         .coverage = coverage_options,
+        .no_target_libcalls = config.no_target_libcalls,
     };
 
     const emit_result = externs.ZigLLVMTargetMachineEmitToFile(

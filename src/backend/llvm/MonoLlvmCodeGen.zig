@@ -1347,6 +1347,10 @@ pub const MonoLlvmCodeGen = struct {
             .list_sublist, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last => try self.emitListSublist(target, op, arg_locals, unique_args),
             .list_drop_at => try self.emitListDropAt(target, arg_locals, unique_args),
             .list_set => try self.emitListSet(target, arg_locals, unique_args),
+            .list_map_can_reuse => try self.emitListMapCanReuse(target, arg_locals),
+            .list_map_cast_unsafe => try self.copyBytes(self.slot(target).ptr, self.slot(arg_locals[0]).ptr, self.slot(target).size, self.slot(target).alignment),
+            .list_map_extract_unsafe => try self.emitListMapExtractUnsafe(target, arg_locals),
+            .list_map_write_unsafe => try self.emitListMapWriteUnsafe(target, arg_locals),
             .list_reserve => try self.emitListReserve(target, arg_locals, unique_args),
             .list_release_excess_capacity => try self.emitListReleaseExcess(target, arg_locals, unique_args),
             .list_first, .list_last => try self.emitListFirstLast(target, op, arg_locals),
@@ -2231,6 +2235,44 @@ pub const MonoLlvmCodeGen = struct {
         const offset = wip.bin(.mul, idx, builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
         const src = wip.gep(.inbounds, .i8, bytes, &.{offset}, "") catch return error.OutOfMemory;
         try self.copyBytes(self.slot(target).ptr, src, self.slot(target).size, self.slot(target).alignment);
+    }
+
+    fn emitListMapCanReuse(self: *MonoLlvmCodeGen, target: LocalId, args: []const LocalId) Error!void {
+        var call_args = try self.rocListArgs1(args[0]);
+        defer call_args.deinit(self.allocator);
+        try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
+        const result = try self.callBuiltin("roc_builtins_list_map_can_reuse", .i8, call_args.types.items, call_args.values.items);
+        try self.storeIntToLayout(self.slot(target).ptr, result, self.localLayout(target));
+    }
+
+    fn emitListMapExtractUnsafe(self: *MonoLlvmCodeGen, target: LocalId, args: []const LocalId) Error!void {
+        // Reads the element of the input type out of a buffer already typed
+        // as the output element type; lowering guarantees both share one
+        // stride, so the result layout supplies the stride and the copy size.
+        const elem_size = self.slot(target).size;
+        if (elem_size == 0) return;
+        const bytes = try self.loadPointer(self.slot(args[0]).ptr);
+        const idx = try self.coerceScalar(try self.loadScalar(self.slot(args[1]).ptr, self.localLayout(args[1])), self.ptrSizedIntType(), false);
+        const wip = self.wip orelse return error.CompilationFailed;
+        const builder = self.builder orelse return error.CompilationFailed;
+        const offset = wip.bin(.mul, idx, builder.intValue(self.ptrSizedIntType(), elem_size) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const src = wip.gep(.inbounds, .i8, bytes, &.{offset}, "") catch return error.OutOfMemory;
+        try self.copyBytes(self.slot(target).ptr, src, elem_size, self.slot(target).alignment);
+    }
+
+    fn emitListMapWriteUnsafe(self: *MonoLlvmCodeGen, target: LocalId, args: []const LocalId) Error!void {
+        const elem_size = self.slot(args[2]).size;
+        if (elem_size != 0) {
+            const bytes = try self.loadPointer(self.slot(args[0]).ptr);
+            const idx = try self.coerceScalar(try self.loadScalar(self.slot(args[1]).ptr, self.localLayout(args[1])), self.ptrSizedIntType(), false);
+            const wip = self.wip orelse return error.CompilationFailed;
+            const builder = self.builder orelse return error.CompilationFailed;
+            const offset = wip.bin(.mul, idx, builder.intValue(self.ptrSizedIntType(), elem_size) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+            const dst = wip.gep(.inbounds, .i8, bytes, &.{offset}, "") catch return error.OutOfMemory;
+            try self.copyBytes(dst, self.slot(args[2]).ptr, elem_size, self.slot(args[2]).alignment);
+        }
+        // The result is the same list value.
+        try self.copyBytes(self.slot(target).ptr, self.slot(args[0]).ptr, self.slot(target).size, self.slot(target).alignment);
     }
 
     fn emitListWithCapacity(self: *MonoLlvmCodeGen, target: LocalId, args: []const LocalId) Error!void {

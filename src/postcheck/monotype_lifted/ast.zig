@@ -303,6 +303,69 @@ pub const Program = struct {
         return self.branches.items[span_.start..][0..span_.len];
     }
 
+    /// The two pieces direct LIR lowering needs to consider folding away the
+    /// in-place `List.map` branch: the `list_map_can_reuse` call's arguments
+    /// (to compute layout eligibility) and the body a constant-0 scrutinee
+    /// selects.
+    pub const ListMapCanReuseMatch = struct {
+        call_args: Span(ExprId),
+        zero_branch_body: ExprId,
+    };
+
+    /// Recognizes the `List.map` reuse match: a match whose scrutinee calls
+    /// the Builtin `list_map_can_reuse` wrapper, with guard-free
+    /// integer-literal and wildcard branches. Returns null for any other
+    /// shape. Whether to fold is the caller's layout-aware decision; this
+    /// only identifies the site and the branch a constant 0 reaches.
+    pub fn listMapCanReuseMatch(
+        self: *const Program,
+        scrutinee: ExprId,
+        branches_span: Span(Branch),
+    ) ?ListMapCanReuseMatch {
+        const call = switch (self.exprs.items[@intFromEnum(scrutinee)].data) {
+            .call_proc => |call| call,
+            else => return null,
+        };
+        const callee = switch (call.callee) {
+            .lifted => |fn_id| fn_id,
+            .template => return null,
+        };
+        const callee_body = switch (self.fns.items[@intFromEnum(callee)].body) {
+            .roc => |body| body,
+            .hosted => return null,
+        };
+        if (!self.exprIsListMapCanReuseOp(callee_body)) return null;
+
+        for (self.branchSpan(branches_span)) |branch| {
+            if (branch.guard != null) return null;
+            switch (self.pats.items[@intFromEnum(branch.pat)].data) {
+                .wildcard => return .{ .call_args = call.args, .zero_branch_body = branch.body },
+                .int_lit => |value| if (value.toI128() == 0) {
+                    return .{ .call_args = call.args, .zero_branch_body = branch.body };
+                },
+                else => return null,
+            }
+        }
+        return null;
+    }
+
+    /// One match statically resolved by direct LIR lowering, recorded so the
+    /// debug Lambda Mono materializer replays the identical resolution and
+    /// the two derivations demand the same set of functions. Keyed by the
+    /// match's scrutinee expression, which belongs to exactly one match.
+    pub const FoldedMatch = struct {
+        scrutinee: ExprId,
+        body: ExprId,
+    };
+
+    fn exprIsListMapCanReuseOp(self: *const Program, expr_id: ExprId) bool {
+        return switch (self.exprs.items[@intFromEnum(expr_id)].data) {
+            .low_level => |ll| ll.op == .list_map_can_reuse,
+            .block => |block| block.statements.len == 0 and self.exprIsListMapCanReuseOp(block.final_expr),
+            else => false,
+        };
+    }
+
     pub fn ifBranchSpan(self: *const Program, span_: Span(IfBranch)) []const IfBranch {
         return self.if_branches.items[span_.start..][0..span_.len];
     }

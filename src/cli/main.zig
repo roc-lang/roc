@@ -1055,6 +1055,7 @@ fn generatePlatformHostShim(
         .cpu = llvm_cpu,
         .features = llvm_features,
         .debug = debug, // Use the debug flag passed from caller
+        .no_target_libcalls = noTargetLibcallsForLlvmBuild(target),
     };
 
     if (builder.compileBitcodeToObject(ctx.gpa, ctx.io.std_io, compile_config)) |success| {
@@ -4318,6 +4319,13 @@ fn stdTargetAbiForLlvmBuild(target: RocTarget) std.Target.Abi {
     };
 }
 
+fn noTargetLibcallsForLlvmBuild(target: RocTarget) bool {
+    return switch (target.toOsTag()) {
+        .macos, .windows => false,
+        else => true,
+    };
+}
+
 fn stdTargetForLlvmBuild(ctx: *CliCtx, target: RocTarget) anyerror!std.Target {
     if (target == RocTarget.detectNative()) return builtin.target;
 
@@ -4427,6 +4435,7 @@ fn compileLlvmAppObject(
         // Linked LLVM output uses the symbol ABI: builtins reach the host
         // through extern symbols, never through a RocOps parameter.
         .host_call_extern = true,
+        .no_target_libcalls = noTargetLibcallsForLlvmBuild(target),
     };
 
     const success = try builder.compileBitcodeToObject(ctx.gpa, ctx.io.std_io, compile_config);
@@ -4793,6 +4802,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
         .{ .requests = root_artifact.root_requests.runtime_requests },
         .{
             .target_usize = target_usize,
+            .list_in_place_map = listInPlaceMapForOpt(args.opt),
         },
     );
     defer lowered.deinit();
@@ -5070,6 +5080,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
         .{
             .target_usize = target_usize,
             .inline_mode = postCheckInlineModeForOpt(args.opt),
+            .list_in_place_map = listInPlaceMapForOpt(args.opt),
         },
     );
     defer lowered.deinit();
@@ -5914,6 +5925,13 @@ fn postCheckInlineModeForOpt(opt: cli_args.OptLevel) lir.CheckedPipeline.InlineM
     };
 }
 
+fn listInPlaceMapForOpt(opt: cli_args.OptLevel) bool {
+    return switch (opt) {
+        .size, .speed => true,
+        .dev, .interpreter => false,
+    };
+}
+
 const CliTestRootRun = struct {
     root: check.CheckedArtifact.RootRequest,
     root_proc: lir.LirProcSpecId,
@@ -6225,6 +6243,7 @@ fn runCheckedArtifactTests(
         .{
             .target_usize = base.target.TargetUsize.native,
             .inline_mode = postCheckInlineModeForOpt(opt),
+            .list_in_place_map = listInPlaceMapForOpt(opt),
         },
     );
     defer lowered.deinit();

@@ -15,6 +15,7 @@
 #pragma GCC diagnostic ignored "-Winit-list-lifetime"
 #endif
 
+#include <llvm/ADT/SmallVector.h>
 #include <llvm/Analysis/AliasAnalysis.h>
 #include <llvm/Analysis/TargetLibraryInfo.h>
 #include <llvm/Analysis/TargetTransformInfo.h>
@@ -22,6 +23,7 @@
 #include <llvm/IR/DiagnosticInfo.h>
 #include <llvm/IR/InlineAsm.h>
 #include <llvm/IR/Instructions.h>
+#include <llvm/IR/IntrinsicInst.h>
 #include <llvm/IR/LegacyPassManager.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/OptBisect.h>
@@ -58,6 +60,7 @@
 #include <llvm/Transforms/Utils.h>
 #include <llvm/Transforms/Utils/AddDiscriminators.h>
 #include <llvm/Transforms/Utils/CanonicalizeAliases.h>
+#include <llvm/Transforms/Utils/LowerMemIntrinsics.h>
 #include <llvm/Transforms/Utils/NameAnonGlobals.h>
 
 #include <lld/Common/Driver.h>
@@ -67,6 +70,7 @@
 #endif
 
 #include <new>
+#include <utility>
 
 #include <stdlib.h>
 
@@ -88,6 +92,60 @@ static OptimizationLevel toLLVMOptimizationLevel(ZigLLVMIROptimizationLevel leve
 
     llvm_unreachable("invalid LLVM IR optimization level");
 }
+
+namespace {
+struct LowerMemoryIntrinsicsPass : PassInfoMixin<LowerMemoryIntrinsicsPass> {
+    TargetIRAnalysis target_ir_analysis;
+
+    explicit LowerMemoryIntrinsicsPass(TargetIRAnalysis target_ir_analysis)
+        : target_ir_analysis(std::move(target_ir_analysis)) {}
+
+    PreservedAnalyses run(Function &function, FunctionAnalysisManager &function_am) {
+        SmallVector<Instruction *, 16> intrinsics;
+
+        for (BasicBlock &block : function) {
+            for (Instruction &instruction : block) {
+                if (isa<MemCpyInst>(&instruction) ||
+                    isa<MemMoveInst>(&instruction) ||
+                    isa<MemSetInst>(&instruction) ||
+                    isa<MemSetPatternInst>(&instruction)) {
+                    intrinsics.push_back(&instruction);
+                }
+            }
+        }
+
+        if (intrinsics.empty()) {
+            return PreservedAnalyses::all();
+        }
+
+        TargetTransformInfo tti = target_ir_analysis.run(function, function_am);
+        bool changed = false;
+
+        for (Instruction *instruction : intrinsics) {
+            if (auto *memcpy = dyn_cast<MemCpyInst>(instruction)) {
+                expandMemCpyAsLoop(memcpy, tti);
+                instruction->eraseFromParent();
+                changed = true;
+            } else if (auto *memmove = dyn_cast<MemMoveInst>(instruction)) {
+                if (expandMemMoveAsLoop(memmove, tti)) {
+                    instruction->eraseFromParent();
+                    changed = true;
+                }
+            } else if (auto *memset = dyn_cast<MemSetInst>(instruction)) {
+                expandMemSetAsLoop(memset);
+                instruction->eraseFromParent();
+                changed = true;
+            } else if (auto *memset_pattern = dyn_cast<MemSetPatternInst>(instruction)) {
+                expandMemSetPatternAsLoop(memset_pattern);
+                instruction->eraseFromParent();
+                changed = true;
+            }
+        }
+
+        return changed ? PreservedAnalyses::none() : PreservedAnalyses::all();
+    }
+};
+} // end anonymous namespace
 
 LLVMTargetMachineRef ZigLLVMCreateTargetMachine(LLVMTargetRef T, const char *Triple,
     const char *CPU, const char *Features, LLVMCodeGenOptLevel Level, LLVMRelocMode Reloc,
@@ -332,6 +390,9 @@ ZIG_EXTERN_C bool ZigLLVMTargetMachineEmitToFile(LLVMTargetMachineRef targ_machi
 
     Triple target_triple(llvm_module.getTargetTriple());
     auto tlii = std::make_unique<TargetLibraryInfoImpl>(target_triple);
+    if (options->no_target_libcalls) {
+        tlii->disableAllFunctions();
+    }
     function_am.registerPass([&] { return TargetLibraryAnalysis(*tlii); });
 
     // Initialize the AnalysisManagers
@@ -417,6 +478,27 @@ ZIG_EXTERN_C bool ZigLLVMTargetMachineEmitToFile(LLVMTargetMachineRef targ_machi
 
     // Optimization phase
     module_pm.run(llvm_module, module_am);
+
+    if (options->no_target_libcalls) {
+        FunctionPassManager lower_mem_pm;
+        lower_mem_pm.addPass(LowerMemoryIntrinsicsPass(target_machine.getTargetIRAnalysis()));
+
+        for (Function &function : llvm_module) {
+            if (!function.isDeclaration()) {
+                lower_mem_pm.run(function, function_am);
+            }
+        }
+
+        if (assertions_on) {
+            std::string verify_error;
+            raw_string_ostream verify_stream(verify_error);
+            if (verifyModule(llvm_module, &verify_stream)) {
+                verify_stream.flush();
+                *error_message = strdup(verify_error.c_str());
+                return true;
+            }
+        }
+    }
 
     // Code generation phase
     codegen_pm.run(llvm_module);

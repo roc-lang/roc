@@ -115,6 +115,10 @@ pub const CompileOptions = struct {
     /// Target pointer width in bits. Used to select the matching embedded
     /// builtin bitcode payload before retargeting the merged LLVM module.
     target_ptr_width_bits: u8,
+    /// Treat the target as freestanding for LLVM object emission: optimization
+    /// cannot assume target library functions, and memory intrinsics are lowered
+    /// to explicit loops before codegen.
+    no_target_libcalls: bool = false,
 };
 
 fn valueName(value: *bindings.Value) []const u8 {
@@ -174,10 +178,13 @@ const core_builtin_roots = std.StaticStringMap(void).initComptime(.{
     .{ "roc__num_sub_with_overflow_i128", {} },
     .{ "roc_builtins_allocate_with_refcount", {} },
     .{ "roc_builtins_box_decref_with", {} },
+    .{ "roc_builtins_box_decref_with_single_thread", {} },
     .{ "roc_builtins_box_free_with", {} },
     .{ "roc_builtins_dbg_str", {} },
     .{ "roc_builtins_decref_data_ptr", {} },
+    .{ "roc_builtins_decref_data_ptr_single_thread", {} },
     .{ "roc_builtins_erased_callable_decref", {} },
+    .{ "roc_builtins_erased_callable_decref_single_thread", {} },
     .{ "roc_builtins_erased_callable_free", {} },
     .{ "roc_builtins_erased_callable_incref", {} },
     .{ "roc_builtins_free_data_ptr", {} },
@@ -186,16 +193,21 @@ const core_builtin_roots = std.StaticStringMap(void).initComptime(.{
     .{ "roc_builtins_i64_mod_by", {} },
     .{ "roc_builtins_i8_mod_by", {} },
     .{ "roc_builtins_incref_data_ptr", {} },
+    .{ "roc_builtins_incref_data_ptr_single_thread", {} },
+    .{ "roc_builtins_int_from_str", {} },
+    .{ "roc_builtins_int_to_str", {} },
     .{ "roc_builtins_list_append_unsafe", {} },
     .{ "roc_builtins_list_concat", {} },
     .{ "roc_builtins_list_decref_flat_list", {} },
     .{ "roc_builtins_list_decref_str", {} },
     .{ "roc_builtins_list_decref_with", {} },
+    .{ "roc_builtins_list_decref_with_single_thread", {} },
     .{ "roc_builtins_list_drop_at", {} },
     .{ "roc_builtins_list_eq", {} },
     .{ "roc_builtins_list_free_flat_list", {} },
     .{ "roc_builtins_list_free_with", {} },
     .{ "roc_builtins_list_incref", {} },
+    .{ "roc_builtins_list_incref_single_thread", {} },
     .{ "roc_builtins_list_list_eq", {} },
     .{ "roc_builtins_list_prepend", {} },
     .{ "roc_builtins_list_release_excess_capacity", {} },
@@ -514,6 +526,7 @@ fn emitMergedBitcodeToObjectFile(
         .llvm_ir_filename = null,
         .bitcode_filename = null,
         .coverage = default_coverage,
+        .no_target_libcalls = options.no_target_libcalls,
     };
 
     // Emit merged module to object file
@@ -572,6 +585,10 @@ pub fn compileToSharedLibrary(allocator: Allocator, io: std.Io, bitcode: []const
     var pic_options = options;
     pic_options.reloc_mode = .PIC;
     pic_options.use_module_target_triple = true;
+    pic_options.no_target_libcalls = switch (builtin.os.tag) {
+        .macos, .windows => false,
+        else => true,
+    };
 
     try emitMergedBitcodeToObjectFile(allocator, io, bitcode, pic_options, object_path);
 

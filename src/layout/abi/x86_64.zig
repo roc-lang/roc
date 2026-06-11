@@ -304,6 +304,15 @@ test "x86_64 SysV: large aggregates go to memory" {
     try testing.expectEqual(Class.stack, classifySystemV(&store, three_words, .arg));
 }
 
+test "x86_64 SysV: erased callable is passed as a pointer" {
+    var store = try Store.init(testing.allocator, .u64);
+    defer store.deinit();
+
+    const erased_callable = try store.insertLayout(Layout.erasedCallable());
+
+    try testing.expectEqual(Class.one_integer, classifySystemV(&store, erased_callable, .arg));
+}
+
 test "x86_64 Win64: size-based classification" {
     var store = try Store.init(testing.allocator, .u64);
     defer store.deinit();

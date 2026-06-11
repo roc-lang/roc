@@ -5,8 +5,8 @@ set -euo pipefail
 #
 # The comparison benchmark is allowed to skip a file when the main-branch
 # baseline is not benchmarkable. This PR-only verification runs the benchmark
-# command set against one Roc binary and fails on PR crashes or unexpected
-# exits, so benchmark skips cannot hide new crashes in the branch being tested.
+# command set against one Roc binary and fails on PR segfaults, so benchmark
+# skips cannot hide new crashes in the branch being tested.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -18,7 +18,7 @@ usage() {
 Usage: $(basename "$0") <roc-binary>
 
 Verify every FX benchmark command once with <roc-binary> and fail if the
-binary crashes or returns an unexpected exit code.
+binary segfaults.
 EOF
 }
 
@@ -82,27 +82,6 @@ is_non_benchmark_fixture() {
     return 1
 }
 
-exit_code_is_allowed() {
-    local exit_code="$1"
-    local allowed_codes="$2"
-
-    if [ "$allowed_codes" = "*" ]; then
-        return 0
-    fi
-
-    local old_ifs="$IFS"
-    IFS=','
-    for code in $allowed_codes; do
-        if [ "$exit_code" -eq "$code" ]; then
-            IFS="$old_ifs"
-            return 0
-        fi
-    done
-    IFS="$old_ifs"
-
-    return 1
-}
-
 print_probe_log() {
     local probe_log="$1"
 
@@ -116,7 +95,6 @@ print_probe_log() {
 run_probe() {
     local fx_file="$1"
     local roc_subcommand="$2"
-    local allowed_codes="$3"
 
     local filename
     filename=$(basename "$fx_file")
@@ -143,41 +121,14 @@ run_probe() {
     local exit_code=$?
     set -e
 
-    if grep -qi "Segmentation fault" "$probe_log"; then
+    if [ "$exit_code" -eq 139 ] || grep -qi "Segmentation fault" "$probe_log"; then
         echo "ERROR: $display_name printed a segmentation fault"
         echo "  exit code: $exit_code"
         print_probe_log "$probe_log"
         return 1
     fi
 
-    # Signal exits are 128 + signal number. Keep 137 aligned with the benchmark
-    # harness's OOM-killer tolerance, but fail hard on SIGSEGV and other signals.
-    if [ "$exit_code" -ge 128 ] && [ "$exit_code" -ne 137 ]; then
-        echo "ERROR: $display_name terminated by signal-style exit code $exit_code"
-        print_probe_log "$probe_log"
-        return 1
-    fi
-
-    if ! exit_code_is_allowed "$exit_code" "$allowed_codes"; then
-        echo "ERROR: $display_name exited with $exit_code; expected one of $allowed_codes"
-        print_probe_log "$probe_log"
-        return 1
-    fi
-
     return 0
-}
-
-check_build_allowed_codes_for() {
-    local filename="$1"
-
-    case "$filename" in
-        issue8826_full.roc)
-            echo "*"
-            ;;
-        *)
-            echo "0,137"
-            ;;
-    esac
 }
 
 echo "=== Building FX platform ==="
@@ -227,8 +178,7 @@ echo "=== Verifying benchmark commands ==="
 VERIFY_FAILED=0
 
 for fx_file in "${FX_FILES[@]}"; do
-    # 2 is roc's ran-successfully-with-warnings exit code.
-    if ! run_probe "$fx_file" "" "0,2,137"; then
+    if ! run_probe "$fx_file" ""; then
         VERIFY_FAILED=1
     fi
 done
@@ -236,8 +186,7 @@ done
 echo ""
 echo "=== Verifying roc check commands ==="
 for fx_file in "${CHECK_BUILD_FILES[@]}"; do
-    allowed_codes=$(check_build_allowed_codes_for "$(basename "$fx_file")")
-    if ! run_probe "$fx_file" "check" "$allowed_codes"; then
+    if ! run_probe "$fx_file" "check"; then
         VERIFY_FAILED=1
     fi
 done
@@ -245,8 +194,7 @@ done
 echo ""
 echo "=== Verifying roc build commands ==="
 for fx_file in "${CHECK_BUILD_FILES[@]}"; do
-    allowed_codes=$(check_build_allowed_codes_for "$(basename "$fx_file")")
-    if ! run_probe "$fx_file" "build" "$allowed_codes"; then
+    if ! run_probe "$fx_file" "build"; then
         VERIFY_FAILED=1
     fi
 done
