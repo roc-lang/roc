@@ -94,7 +94,6 @@ comptime {
 }
 const bench = @import("bench.zig");
 const linker = @import("linker.zig");
-const platform_host_shim = @import("platform_host_shim.zig");
 const builder = @import("builder.zig");
 const llvm_codegen = @import("llvm_codegen");
 
