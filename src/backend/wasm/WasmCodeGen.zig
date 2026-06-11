@@ -6288,64 +6288,6 @@ fn copyProcLocalToHostedArgs(
     }
 }
 
-fn emitEntrypointArg(
-    self: *Self,
-    args_ptr_local: u32,
-    arg_layout: layout.Idx,
-    offset: u32,
-) Allocator.Error!void {
-    const runtime_layout = self.runtimeRepresentationLayoutIdx(arg_layout);
-    const size = try self.layoutStorageByteSize(runtime_layout);
-    if (size == 0) {
-        self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-        WasmModule.leb128WriteI32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
-        return;
-    }
-
-    if (try self.isCompositeLayout(arg_layout)) {
-        const arg_align = try self.layoutStorageByteAlign(runtime_layout);
-        const dst_offset = try self.allocStackMemory(size, arg_align);
-        const dst_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-        try self.emitFpOffset(dst_offset);
-        try self.emitLocalSet(dst_local);
-
-        const src_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-        try self.emitLocalGet(args_ptr_local);
-        if (offset != 0) {
-            self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-            WasmModule.leb128WriteI32(self.allocator, self.currentCode(), @intCast(offset)) catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
-        }
-        try self.emitLocalSet(src_local);
-        try self.emitMemCopy(dst_local, 0, src_local, size);
-        try self.emitLocalGet(dst_local);
-    } else {
-        try self.emitLocalGet(args_ptr_local);
-        try self.emitLoadOpForLayout(arg_layout, offset);
-    }
-}
-
-fn storeEntrypointResult(
-    self: *Self,
-    ret_ptr_local: u32,
-    ret_layout: layout.Idx,
-) Allocator.Error!void {
-    const runtime_ret_layout = self.runtimeRepresentationLayoutIdx(ret_layout);
-    const ret_size = try self.layoutStorageByteSize(runtime_ret_layout);
-    if (ret_size == 0) {
-        self.currentCode().append(self.allocator, Op.drop) catch return error.OutOfMemory;
-        return;
-    }
-
-    if (try self.isCompositeLayout(ret_layout)) {
-        const result_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-        try self.emitLocalSet(result_ptr);
-        try self.emitMemCopy(ret_ptr_local, 0, result_ptr, ret_size);
-    } else {
-        try self.emitStoreToMemSized(ret_ptr_local, 0, try self.resolveValType(ret_layout), ret_size);
-    }
-}
-
 /// Map a single ABI register piece to the wasm value type it travels in.
 fn pieceValType(piece: layout.abi.RegPiece) ValType {
     return switch (piece.class) {

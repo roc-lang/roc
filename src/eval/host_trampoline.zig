@@ -18,7 +18,6 @@ const layout = @import("layout");
 
 const Store = layout.Store;
 const Idx = layout.Idx;
-const RocOps = @import("builtins").host_abi.RocOps;
 
 /// The control block handed to the fixed assembly stub. Every Roc→host call is funneled
 /// through a single pointer argument so the stub is free to clobber all argument registers.
