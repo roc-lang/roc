@@ -9467,6 +9467,18 @@ fn listJoinWithListItemsMethodDef(
     if (!constraint.fn_name.eql(self.cir.idents.join_with)) return null;
     if (!nominal_type.ident.ident_idx.eql(self.cir.idents.list)) return null;
 
+    // The list-items helper only applies when the separator has already
+    // resolved to a concrete type; an unresolved separator (e.g. a string
+    // literal still carrying its from_quote constraint) would unify with the
+    // helper's list-shaped separator and wrongly win over plain join_with.
+    const constraint_fn = self.types.resolveVar(constraint.fn_var).desc.content.unwrapFunc() orelse return null;
+    const constraint_args = self.types.sliceVars(constraint_fn.args);
+    if (constraint_args.len != 2) return null;
+    switch (self.types.resolveVar(constraint_args[1]).desc.content) {
+        .flex, .rigid => return null,
+        else => {},
+    }
+
     const join_list_with_ident = original_env.idents.join_list_with;
     const helper_binding = original_env.lookupMethodBindingFromEnvAndDeclConst(
         original_env,
