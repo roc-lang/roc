@@ -6054,6 +6054,20 @@ fn runCompiledTestRoots(
                     .always,
                 );
             },
+            .expect_err => |failure| {
+                summary.failed += 1;
+                // Point the report's source snippet at the `?` expression
+                // whose Err failed the expect.
+                const message = try ctx.gpa.dupe(u8, failure.message);
+                errdefer ctx.gpa.free(message);
+                try results.append(ctx.gpa, .{
+                    .result = .failed,
+                    .order = run.root.order,
+                    .region = base.Region.from_raw_offsets(failure.region_start, failure.region_end),
+                    .failure_detail = message,
+                    .failure_detail_visibility = .always,
+                });
+            },
         }
     }
 }

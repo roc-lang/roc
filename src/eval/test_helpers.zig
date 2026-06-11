@@ -348,10 +348,22 @@ pub const BoolRoot = struct {
     ret_layout: LayoutIdx,
 };
 
-/// Result of evaluating a bool-returning test root: passed (bool) or crashed (message).
+/// Result of evaluating a bool-returning test root: passed (bool), crashed
+/// (message), or failed because a `?` operator evaluated an Err inside the
+/// expect (message plus the source region of the `?` expression).
 pub const BoolRootEvalResult = union(enum) {
     passed: bool,
     crashed: []const u8,
+    expect_err: ExpectErrFailure,
+};
+
+/// Failure detail for a `?` operator that evaluated an Err inside a
+/// top-level expect: the runtime-built message and the byte offsets of the
+/// `?` expression in the failing module's source.
+pub const ExpectErrFailure = struct {
+    message: []const u8,
+    region_start: u32,
+    region_end: u32,
 };
 
 /// LLVM optimization level for test compilation.
@@ -366,6 +378,7 @@ pub fn deinitBoolRootEvalResults(allocator: Allocator, results: []BoolRootEvalRe
         switch (result) {
             .passed => {},
             .crashed => |message| allocator.free(message),
+            .expect_err => |failure| allocator.free(failure.message),
         }
     }
     allocator.free(results);
@@ -1695,6 +1708,7 @@ fn deinitPartialBoolRootEvalResults(allocator: Allocator, results: []BoolRootEva
         switch (result) {
             .passed => {},
             .crashed => |message| allocator.free(message),
+            .expect_err => |failure| allocator.free(failure.message),
         }
     }
     allocator.free(results);
@@ -1709,6 +1723,9 @@ fn runExecutableBoolRoot(
 ) anyerror!BoolRootEvalResult {
     runtime_env.resetObservation();
     runtime_env.resetAllocationTracker();
+    // Dev-JIT code calls the host's own expect_err wrapper, which records the
+    // `?` region in this thread-local slot; clear any stale value first.
+    _ = builtins.dev_wrappers.takeExpectErrRegion();
 
     const arg_buffer = try zeroedEntrypointArgBufferForLayouts(allocator, layouts, root.arg_layouts);
     defer if (arg_buffer) |buf| allocator.free(buf);
@@ -1729,7 +1746,11 @@ fn runExecutableBoolRoot(
 
     const result: BoolRootEvalResult = switch (runtime_env.crashState()) {
         .did_not_crash => .{ .passed = ret_buf[0] != 0 },
-        .crashed => .{ .crashed = try copyRuntimeCrashMessage(allocator, runtime_env) },
+        .crashed => if (builtins.dev_wrappers.takeExpectErrRegion()) |region| .{ .expect_err = .{
+            .message = try copyRuntimeCrashMessage(allocator, runtime_env),
+            .region_start = region.start,
+            .region_end = region.end,
+        } } else .{ .crashed = try copyRuntimeCrashMessage(allocator, runtime_env) },
     };
     runtime_env.resetAllocationTracker();
     return result;
@@ -1805,9 +1826,11 @@ fn callLlvmBoolRoot(
     entry: *const fn (*builtins.host_abi.RocOps, [*]u8, ?*anyopaque) callconv(.c) void,
     root: BoolRoot,
     runtime_env: *RuntimeHostEnv,
+    expect_err_region: ?*[3]u32,
 ) anyerror!BoolRootEvalResult {
     runtime_env.resetObservation();
     runtime_env.resetAllocationTracker();
+    if (expect_err_region) |region| region[0] = 0;
 
     const arg_buffer = try zeroedEntrypointArgBufferForLayouts(allocator, layouts, root.arg_layouts);
     defer if (arg_buffer) |buf| allocator.free(buf);
@@ -1828,7 +1851,16 @@ fn callLlvmBoolRoot(
 
     const result: BoolRootEvalResult = switch (runtime_env.crashState()) {
         .did_not_crash => .{ .passed = ret_buf[0] != 0 },
-        .crashed => .{ .crashed = try copyRuntimeCrashMessage(allocator, runtime_env) },
+        .crashed => blk: {
+            if (expect_err_region) |region| {
+                if (region[0] != 0) break :blk .{ .expect_err = .{
+                    .message = try copyRuntimeCrashMessage(allocator, runtime_env),
+                    .region_start = region[1],
+                    .region_end = region[2],
+                } };
+            }
+            break :blk .{ .crashed = try copyRuntimeCrashMessage(allocator, runtime_env) };
+        },
     };
     runtime_env.resetAllocationTracker();
     return result;
@@ -1891,9 +1923,14 @@ pub fn llvmEvalBoolRoots(
     var result_len: usize = 0;
     errdefer deinitPartialBoolRootEvalResults(allocator, results, result_len);
 
+    // Present only when the module contains an expect_err statement; written
+    // by the generated code so the harness can point the failure report at
+    // the `?` expression.
+    const expect_err_region = lib.lookup(*[3]u32, "roc_expect_err_region");
+
     for (roots, 0..) |root, i| {
         const entry = lib.lookup(EntryFn, root.symbol_name) orelse return error.LlvmBackendUnavailable;
-        results[i] = try callLlvmBoolRoot(allocator, layouts, entry, root, &runtime_env);
+        results[i] = try callLlvmBoolRoot(allocator, layouts, entry, root, &runtime_env, expect_err_region);
         result_len += 1;
     }
 

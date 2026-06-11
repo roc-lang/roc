@@ -360,11 +360,33 @@ pub fn roc_builtins_dbg_str(str_ptr: *const RocStr, roc_ops: *RocOps) callconv(.
     roc_ops.dbg(str_ptr.asSlice());
 }
 
+/// Source region of the `?` whose Err most recently failed a top-level
+/// expect via `roc_builtins_expect_err_str`. Compiled test roots run
+/// in-process under the harness's crash boundary, so the harness reads this
+/// back after the unwind via `takeExpectErrRegion` to point its failure
+/// report at the `?` expression.
+threadlocal var last_expect_err_region: ?ExpectErrRegion = null;
+
+/// Byte offsets into the failing module's source for the `?` expression.
+pub const ExpectErrRegion = struct {
+    start: u32,
+    end: u32,
+};
+
+/// Returns and clears the region recorded by the most recent
+/// `roc_builtins_expect_err_str` call on this thread.
+pub fn takeExpectErrRegion() ?ExpectErrRegion {
+    const region = last_expect_err_region;
+    last_expect_err_region = null;
+    return region;
+}
+
 /// Fail a top-level expect whose `?` operator evaluated an Err, reporting the
-/// runtime-built message (which includes the rendered Err value). Terminates
-/// evaluation via the host's crash callback; the message carries the
-/// expect-specific wording.
-pub fn roc_builtins_expect_err_str(str_ptr: *const RocStr, roc_ops: *RocOps) callconv(.c) void {
+/// runtime-built message (which includes the rendered Err value) and the
+/// source region of the `?` expression. Terminates evaluation via the host's
+/// crash callback; the message carries the expect-specific wording.
+pub fn roc_builtins_expect_err_str(str_ptr: *const RocStr, region_start: u32, region_end: u32, roc_ops: *RocOps) callconv(.c) void {
+    last_expect_err_region = .{ .start = region_start, .end = region_end };
     roc_ops.crash(str_ptr.asSlice());
 }
 

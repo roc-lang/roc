@@ -13615,7 +13615,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                     .{@intFromEnum(expect_err_stmt.message)},
                                 ),
                             };
-                            try self.emitRocExpectErrFromStackStr(msg_offset);
+                            try self.emitRocExpectErrFromStackStr(msg_offset, expect_err_stmt.region);
                             try self.emitTrap();
                         },
 
@@ -14062,9 +14062,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.callBuiltin(&builder, @intFromPtr(&dev_wrappers.roc_builtins_dbg_str), .dbg_str);
         }
 
-        fn emitRocExpectErrFromStackStr(self: *Self, str_offset: i32) Allocator.Error!void {
+        fn emitRocExpectErrFromStackStr(self: *Self, str_offset: i32, region: base.Region) Allocator.Error!void {
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             try builder.addLeaArg(frame_ptr, str_offset);
+            try builder.addImmArg(@intCast(region.start.offset));
+            try builder.addImmArg(@intCast(region.end.offset));
             try builder.addRegArg(self.roc_ops_reg orelse unreachable);
             try self.callBuiltin(&builder, @intFromPtr(&dev_wrappers.roc_builtins_expect_err_str), .expect_err_str);
         }
