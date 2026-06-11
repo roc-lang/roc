@@ -344,8 +344,11 @@ fn lowerEvalAndFinishRoots(
             break :blk try writer.storeRoot(root, eval_result.value);
         };
 
-        if (compile_time_root.kind == .numeral_conversion) {
-            payload = try finishNumeralConversionRoot(allocator, module, problem_store, compile_time_root, payload);
+        switch (compile_time_root.kind) {
+            .numeral_conversion, .quote_conversion => {
+                payload = try finishLiteralConversionRoot(allocator, module, problem_store, compile_time_root, payload);
+            },
+            else => {},
         }
 
         module.compile_time_roots.fillPayload(root_id, payload);
@@ -354,10 +357,10 @@ fn lowerEvalAndFinishRoots(
     }
 }
 
-/// Unwrap the `Try` value a numeral-conversion root evaluated to. `Ok` payloads
-/// become the stored constant; `Err(InvalidNumeral(msg))` becomes a checking
-/// problem carrying the implementation's message.
-fn finishNumeralConversionRoot(
+/// Unwrap the `Try` value a literal-conversion root evaluated to. `Ok` payloads
+/// become the stored constant; `Err(InvalidNumeral(msg))` / `Err(BadQuotedBytes(msg))`
+/// becomes a checking problem carrying the implementation's message.
+fn finishLiteralConversionRoot(
     allocator: Allocator,
     module: *checked.CheckedModuleArtifact,
     problem_store: ?*check.problem.Store,
@@ -393,10 +396,17 @@ fn finishNumeralConversionRoot(
     if (problem_store) |store| {
         const message_idx = try store.putExtraString(message);
         const region = module.checked_bodies.expr(root.expr).source_region;
-        _ = try store.appendProblem(allocator, .{ .comptime_invalid_numeral = .{
-            .message = message_idx,
-            .region = region,
-        } });
+        switch (root.kind) {
+            .numeral_conversion => _ = try store.appendProblem(allocator, .{ .comptime_invalid_numeral = .{
+                .message = message_idx,
+                .region = region,
+            } }),
+            .quote_conversion => _ = try store.appendProblem(allocator, .{ .comptime_invalid_quote = .{
+                .message = message_idx,
+                .region = region,
+            } }),
+            else => finalizationInvariant("non literal-conversion root reported a conversion problem"),
+        }
         return error.CompileTimeProblem;
     }
     return .{ .const_node = try appendCrashConst(module, message) };
@@ -517,7 +527,7 @@ fn compileTimeRootForRequest(
 ) checked.ComptimeRootId {
     for (module.compile_time_roots.roots) |root| {
         const kind_matches = switch (request.kind) {
-            .compile_time_constant => root.kind == .constant or root.kind == .numeral_conversion,
+            .compile_time_constant => root.kind == .constant or root.kind == .numeral_conversion or root.kind == .quote_conversion,
             .compile_time_callable => root.kind == .callable_binding,
             else => finalizationInvariant("non compile-time request reached compile-time root lookup"),
         };

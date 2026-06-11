@@ -189,6 +189,7 @@ pub const CommonIdents = extern struct {
     ok: Ident.Idx,
     err: Ident.Idx,
     from_numeral: Ident.Idx,
+    from_quote: Ident.Idx,
     join_with: Ident.Idx,
     join_list_with: Ident.Idx,
     true_tag: Ident.Idx,
@@ -289,6 +290,7 @@ pub const CommonIdents = extern struct {
             .ok = try common.insertIdent(gpa, Ident.for_text("Ok")),
             .err = try common.insertIdent(gpa, Ident.for_text("Err")),
             .from_numeral = try common.insertIdent(gpa, Ident.for_text("from_numeral")),
+            .from_quote = try common.insertIdent(gpa, Ident.for_text("from_quote")),
             .join_with = try common.insertIdent(gpa, Ident.for_text("join_with")),
             .join_list_with = try common.insertIdent(gpa, Ident.for_text("join_list_with")),
             .true_tag = try common.insertIdent(gpa, Ident.for_text("True")),
@@ -392,6 +394,7 @@ pub const CommonIdents = extern struct {
             .ok = common.findIdent("Ok") orelse unreachable,
             .err = common.findIdent("Err") orelse unreachable,
             .from_numeral = common.findIdent("from_numeral") orelse unreachable,
+            .from_quote = common.findIdent("from_quote") orelse unreachable,
             .join_with = common.findIdent("join_with") orelse unreachable,
             .join_list_with = common.findIdent("join_list_with") orelse unreachable,
             .true_tag = common.findIdent("True") orelse unreachable,
@@ -639,6 +642,10 @@ numeral_digit_bytes: collections.SafeList(u8),
 numeral_literals: NumeralLiteral.SafeList,
 /// `from_numeral` dispatch plans attached by checking to source expression nodes.
 numeral_dispatch_plans: NumeralDispatchPlan.SafeList,
+/// `from_quote` dispatch plans attached by checking to source string literal
+/// expression and pattern nodes. Shares `NumeralDispatchPlan`'s shape: a source
+/// node plus the constraint's target and function type vars.
+quote_dispatch_plans: NumeralDispatchPlan.SafeList,
 /// Scope-resolved explicit numeric suffix targets attached by canonicalization.
 numeric_suffix_types: NumericSuffixType.SafeList,
 
@@ -778,6 +785,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .numeral_digit_bytes = try collections.SafeList(u8).initCapacity(gpa, 32),
         .numeral_literals = try NumeralLiteral.SafeList.initCapacity(gpa, 8),
         .numeral_dispatch_plans = try NumeralDispatchPlan.SafeList.initCapacity(gpa, 8),
+        .quote_dispatch_plans = try NumeralDispatchPlan.SafeList.initCapacity(gpa, 8),
         .numeric_suffix_types = try NumericSuffixType.SafeList.initCapacity(gpa, 8),
     };
 }
@@ -798,6 +806,7 @@ pub fn deinit(self: *Self) void {
     self.numeral_digit_bytes.deinit(self.gpa);
     self.numeral_literals.deinit(self.gpa);
     self.numeral_dispatch_plans.deinit(self.gpa);
+    self.quote_dispatch_plans.deinit(self.gpa);
     self.numeric_suffix_types.deinit(self.gpa);
     // diagnostics are stored in the NodeStore, no need to free separately
     self.store.deinit();
@@ -838,6 +847,7 @@ pub fn deinitCachedModule(self: *Self) void {
     self.numeral_digit_bytes.deinit(self.gpa);
     self.numeral_literals.deinit(self.gpa);
     self.numeral_dispatch_plans.deinit(self.gpa);
+    self.quote_dispatch_plans.deinit(self.gpa);
     self.numeric_suffix_types.deinit(self.gpa);
 
     // If enableRuntimeInserts was called on the interner, it allocated new memory
@@ -2989,6 +2999,7 @@ pub const Serialized = extern struct {
     numeral_digit_bytes: collections.SafeList(u8).Serialized,
     numeral_literals: NumeralLiteral.SafeList.Serialized,
     numeral_dispatch_plans: NumeralDispatchPlan.SafeList.Serialized,
+    quote_dispatch_plans: NumeralDispatchPlan.SafeList.Serialized,
     numeric_suffix_types: NumericSuffixType.SafeList.Serialized,
     // Reserved space (was is_lambda_lifted and is_defunctionalized, now unused)
     _reserved_flags: [2]u8 = .{ 0, 0 },
@@ -3050,6 +3061,7 @@ pub const Serialized = extern struct {
         try self.numeral_digit_bytes.serialize(&env.numeral_digit_bytes, allocator, writer);
         try self.numeral_literals.serialize(&env.numeral_literals, allocator, writer);
         try self.numeral_dispatch_plans.serialize(&env.numeral_dispatch_plans, allocator, writer);
+        try self.quote_dispatch_plans.serialize(&env.quote_dispatch_plans, allocator, writer);
         try self.numeric_suffix_types.serialize(&env.numeric_suffix_types, allocator, writer);
 
         self._reserved_flags = .{ 0, 0 };
@@ -3102,6 +3114,7 @@ pub const Serialized = extern struct {
             .numeral_digit_bytes = self.numeral_digit_bytes.deserializeInto(base_addr),
             .numeral_literals = self.numeral_literals.deserializeInto(base_addr),
             .numeral_dispatch_plans = self.numeral_dispatch_plans.deserializeInto(base_addr),
+            .quote_dispatch_plans = self.quote_dispatch_plans.deserializeInto(base_addr),
             .numeric_suffix_types = self.numeric_suffix_types.deserializeInto(base_addr),
         };
 
@@ -3157,6 +3170,7 @@ pub const Serialized = extern struct {
             .numeral_digit_bytes = try self.numeral_digit_bytes.deserializeWithCopy(base_addr, gpa),
             .numeral_literals = try self.numeral_literals.deserializeWithCopy(base_addr, gpa),
             .numeral_dispatch_plans = try self.numeral_dispatch_plans.deserializeWithCopy(base_addr, gpa),
+            .quote_dispatch_plans = try self.quote_dispatch_plans.deserializeWithCopy(base_addr, gpa),
             .numeric_suffix_types = try self.numeric_suffix_types.deserializeWithCopy(base_addr, gpa),
         };
 
@@ -3298,6 +3312,39 @@ pub fn recordNumeralDispatchPlan(
 pub fn numeralDispatchPlanForNode(self: *const Self, node_idx: Node.Idx) ?NumeralDispatchPlan {
     const raw_node: u32 = @intFromEnum(node_idx);
     for (self.numeral_dispatch_plans.items.items) |plan| {
+        if (plan.node_idx == raw_node) return plan;
+    }
+    return null;
+}
+
+/// Record the checked `from_quote` function for a string literal node.
+pub fn recordQuoteDispatchPlan(
+    self: *Self,
+    node_idx: Node.Idx,
+    target_var: TypeVar,
+    fn_var: TypeVar,
+) std.mem.Allocator.Error!void {
+    const raw_node: u32 = @intFromEnum(node_idx);
+    for (self.quote_dispatch_plans.items.items) |*plan| {
+        if (plan.node_idx != raw_node) continue;
+        plan.* = .{
+            .node_idx = raw_node,
+            .target_var = @intFromEnum(target_var),
+            .fn_var = @intFromEnum(fn_var),
+        };
+        return;
+    }
+    _ = try self.quote_dispatch_plans.append(self.gpa, .{
+        .node_idx = raw_node,
+        .target_var = @intFromEnum(target_var),
+        .fn_var = @intFromEnum(fn_var),
+    });
+}
+
+/// Return the checked `from_quote` function for a string literal node.
+pub fn quoteDispatchPlanForNode(self: *const Self, node_idx: Node.Idx) ?NumeralDispatchPlan {
+    const raw_node: u32 = @intFromEnum(node_idx);
+    for (self.quote_dispatch_plans.items.items) |plan| {
         if (plan.node_idx == raw_node) return plan;
     }
     return null;

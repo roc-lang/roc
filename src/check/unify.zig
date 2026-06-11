@@ -399,12 +399,13 @@ const Unifier = struct {
 
     // Unify flex //
 
-    /// Check if a flex var has a from_numeral constraint.
+    /// Check if a flex var has a literal-origin (from_numeral or from_quote)
+    /// constraint, which is what `from_numeral_flex_count` tracks.
     fn flexHasFromNumeral(self: *const Self, flex: Flex) bool {
         if (flex.constraints.len() == 0) return false;
         const constraints = self.types_store.sliceStaticDispatchConstraints(flex.constraints);
         for (constraints) |c| {
-            if (c.origin == .from_numeral) return true;
+            if (c.origin == .from_numeral or c.origin == .from_quote) return true;
         }
         return false;
     }

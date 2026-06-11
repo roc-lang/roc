@@ -1040,6 +1040,7 @@ const Builder = struct {
         if (variable.numeric_default_phase) |phase| {
             return switch (phase) {
                 .mono_specialization => .{ .primitive = .dec },
+                .mono_specialization_str => .{ .primitive = .str },
                 .checking_finalized => Common.invariant("checking-finalized numeric variable reached Monotype unresolved"),
             };
         }
@@ -1055,6 +1056,13 @@ const Builder = struct {
     fn typeIsDec(self: *Builder, ty: Type.TypeId) bool {
         return switch (self.shapeContent(ty)) {
             .primitive => |primitive| primitive == .dec,
+            else => false,
+        };
+    }
+
+    fn typeIsStr(self: *Builder, ty: Type.TypeId) bool {
+        return switch (self.shapeContent(ty)) {
+            .primitive => |primitive| primitive == .str,
             else => false,
         };
     }
@@ -2949,6 +2957,7 @@ const BodyContext = struct {
 
     fn checkedVariableUsesDefaultForMono(self: *BodyContext, variable: checked.CheckedTypeVariable, mono_ty: Type.TypeId) bool {
         if (variable.numeric_default_phase == .mono_specialization and self.builder.typeIsDec(mono_ty)) return true;
+        if (variable.numeric_default_phase == .mono_specialization_str and self.builder.typeIsStr(mono_ty)) return true;
         if (variable.row_default) |row_default| {
             return switch (row_default) {
                 .empty_record => switch (self.builder.shapeContent(mono_ty)) {
@@ -3254,7 +3263,7 @@ const BodyContext = struct {
     ) Allocator.Error!bool {
         return switch (operand) {
             .checked_expr => |expr_id| try self.exprHasNumericDefault(expr_id),
-            .generated_numeral => false,
+            .generated_numeral, .generated_quote => false,
         };
     }
 
@@ -4035,12 +4044,13 @@ const BodyContext = struct {
             .entry_wrapper => |wrapper_id| {
                 const wrapper = self.view.entry_wrappers.get(wrapper_id);
                 const root = self.view.compile_time_roots.root(wrapper.root);
-                if (root.kind == .numeral_conversion) {
-                    return .{
+                switch (root.kind) {
+                    .numeral_conversion, .quote_conversion => return .{
                         .args = .empty(),
                         .body = try self.lowerNumeralRootBody(wrapper.body_expr, ret_ty),
                         .ret = ret_ty,
-                    };
+                    },
+                    else => {},
                 }
                 return .{
                     .args = .empty(),
@@ -4288,6 +4298,10 @@ const BodyContext = struct {
             .typed_num_from_numeral => |plan| {
                 if (try self.restoredNumeralConst(expr_id, ty)) |restored| return restored;
                 return try self.lowerNumeralCall(expr.ty, plan, ty);
+            },
+            .str_from_quote => |quote| {
+                if (try self.restoredNumeralConst(expr_id, ty)) |restored| return restored;
+                return try self.lowerNumeralCall(expr.ty, quote.plan, ty);
             },
             .str_segment => |str| .{ .str_lit = try self.lowerStringLiteral(str) },
             .bytes_literal => |str| .{ .str_lit = try self.lowerStringLiteral(str) },
@@ -5099,7 +5113,7 @@ const BodyContext = struct {
                         );
                     }
                 },
-                .generated_numeral => {},
+                .generated_numeral, .generated_quote => {},
             }
         }
     }
@@ -5966,6 +5980,7 @@ const BodyContext = struct {
         return switch (operand) {
             .checked_expr => |expr| try self.lowerExprAtType(expr, ty),
             .generated_numeral => |literal| try self.lowerNumeralValue(literal, ty),
+            .generated_quote => |literal| try self.lowerQuoteValue(literal, ty),
         };
     }
 
@@ -6373,7 +6388,8 @@ const BodyContext = struct {
         const expr = self.view.bodies.exprs[@intFromEnum(expr_id)];
         const plan = switch (expr.data) {
             .num_from_numeral, .typed_num_from_numeral => |plan| plan,
-            else => Common.invariant("numeral conversion root did not point at a from_numeral expression"),
+            .str_from_quote => |quote| quote.plan,
+            else => Common.invariant("literal conversion root did not point at a conversion expression"),
         };
         const ok_tag = self.monoTagByText(try_ty, "Ok");
         const ok_payloads = self.builder.program.types.span(ok_tag.payloads);
@@ -6396,6 +6412,29 @@ const BodyContext = struct {
             .pending => null,
             else => Common.invariant("numeral conversion root stored a non-constant payload"),
         };
+    }
+
+    /// Materialize a string literal's bytes as the `List(U8)` argument of a
+    /// `from_quote` dispatch call.
+    fn lowerQuoteValue(
+        self: *BodyContext,
+        literal: checked.CheckedStringLiteralId,
+        ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const bytes = self.view.bodies.string_literals[@intFromEnum(literal)];
+        const data: Ast.ExprData = .{ .list = blk: {
+            const elem_ty = switch (self.builder.shapeContent(ty)) {
+                .list => |elem| elem,
+                else => Common.invariant("checked from_quote argument was not a List(U8)"),
+            };
+            const items = try self.allocator.alloc(Ast.ExprId, bytes.len);
+            defer self.allocator.free(items);
+            for (bytes, 0..) |byte, i| {
+                items[i] = try self.builder.intLiteralExpr(byte, elem_ty);
+            }
+            break :blk try self.builder.program.addExprSpan(items);
+        } };
+        return try self.builder.program.addExpr(.{ .ty = ty, .data = data });
     }
 
     fn lowerNumeralValue(
@@ -9428,6 +9467,7 @@ const BodyContext = struct {
             .typed_int,
             .typed_frac,
             .typed_num_from_numeral,
+            .str_from_quote,
             .str_segment,
             .bytes_literal,
             .lookup_local,

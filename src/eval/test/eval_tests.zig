@@ -642,6 +642,46 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "(\"other\", \"one byte\")" },
     },
     .{
+        .name = "inspect: custom from_quote receives literal bytes",
+        .source_kind = .module,
+        .source =
+        \\Tag := [Tag(List(U8))].{
+        \\    from_quote : List(U8) -> Try(Tag, [BadQuotedBytes(Str)])
+        \\    from_quote = |bytes| Ok(Tag(bytes))
+        \\}
+        \\
+        \\force : Tag -> Tag
+        \\force = |t| t
+        \\
+        \\main = force("Roc")
+        ,
+        .expected = .{ .inspect_str = "Tag([82, 111, 99])" },
+    },
+    .{
+        .name = "inspect: from_quote literal defaults to Str",
+        .source_kind = .module,
+        .source =
+        \\main = "hello".concat("!")
+        ,
+        .expected = .{ .inspect_str = "\"hello!\"" },
+    },
+    .{
+        .name = "custom from_quote Err is a compile-time problem",
+        .source_kind = .module,
+        .source =
+        \\Strict := [Strict].{
+        \\    from_quote : List(U8) -> Try(Strict, [BadQuotedBytes(Str)])
+        \\    from_quote = |_bytes| Err(BadQuotedBytes("Strict rejects every string"))
+        \\}
+        \\
+        \\force : Strict -> Strict
+        \\force = |s| s
+        \\
+        \\main = force("nope")
+        ,
+        .expected = .problem,
+    },
+    .{
         .name = "custom from_numeral Err is a compile-time problem",
         .source_kind = .module,
         .source =

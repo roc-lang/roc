@@ -19,6 +19,7 @@ const CIR = can.CIR;
 const Var = types.Var;
 const CheckedTypeId = checked_ids.CheckedTypeId;
 const CheckedExprId = checked_ids.CheckedExprId;
+const CheckedStringLiteralId = checked_ids.CheckedStringLiteralId;
 const PatternBinderId = checked_ids.PatternBinderId;
 
 /// Public `ProcedureTemplateLookup` declaration.
@@ -444,6 +445,8 @@ pub const StaticDispatchDispatcher = union(enum) {
 pub const StaticDispatchOperand = union(enum) {
     checked_expr: CheckedExprId,
     generated_numeral: ModuleEnv.NumeralLiteral,
+    /// A string literal's post-escape bytes, passed to `from_quote` as List(U8).
+    generated_quote: CheckedStringLiteralId,
 };
 
 /// Public `StaticDispatchCallPlan` declaration.
@@ -493,6 +496,7 @@ pub const StaticDispatchPlanTable = struct {
     plans: []StaticDispatchCallPlan = &.{},
     by_expr: std.AutoHashMapUnmanaged(CIR.Expr.Idx, StaticDispatchPlanId) = .{},
     numeral_by_node: std.AutoHashMapUnmanaged(CIR.Node.Idx, StaticDispatchPlanId) = .{},
+    quote_by_node: std.AutoHashMapUnmanaged(CIR.Node.Idx, StaticDispatchPlanId) = .{},
     iterator_for_plans: []IteratorForPlan = &.{},
     iterator_for_by_node: std.AutoHashMapUnmanaged(CIR.Node.Idx, IteratorForPlanId) = .{},
     template_refs: []StaticDispatchPlanId = &.{},
@@ -513,6 +517,8 @@ pub const StaticDispatchPlanTable = struct {
         errdefer by_expr.deinit(allocator);
         var numeral_by_node: std.AutoHashMapUnmanaged(CIR.Node.Idx, StaticDispatchPlanId) = .{};
         errdefer numeral_by_node.deinit(allocator);
+        var quote_by_node: std.AutoHashMapUnmanaged(CIR.Node.Idx, StaticDispatchPlanId) = .{};
+        errdefer quote_by_node.deinit(allocator);
         var iterator_for_plans = std.ArrayList(IteratorForPlan).empty;
         errdefer {
             for (iterator_for_plans.items) |plan| {
@@ -652,6 +658,43 @@ pub const StaticDispatchPlanTable = struct {
             try numeral_by_node.put(allocator, node, plan_id);
         }
 
+        for (module_env.quote_dispatch_plans.items.items) |quote_plan| {
+            const node: CIR.Node.Idx = @enumFromInt(quote_plan.node_idx);
+            const expr_idx: CIR.Expr.Idx = @enumFromInt(quote_plan.node_idx);
+            const checked_expr = checked_bodies.exprIdForSource(expr_idx) orelse
+                checked_bodies.numeralConversionExprAtRawNode(quote_plan.node_idx) orelse
+                continue;
+            const literal = switch (checked_bodies.exprs[@intFromEnum(checked_expr)].data) {
+                .str_from_quote => |quote| quote.literal,
+                // Builtin Str literals keep the direct string encoding.
+                .str, .str_segment => continue,
+                else => {
+                    if (@import("builtin").mode == .Debug) {
+                        std.debug.panic(
+                            "checked static dispatch invariant violated: quote dispatch plan {d} points at a non-string checked expression",
+                            .{quote_plan.node_idx},
+                        );
+                    }
+                    unreachable;
+                },
+            };
+            const args = try allocator.alloc(StaticDispatchOperand, 1);
+            errdefer allocator.free(args);
+            args[0] = .{ .generated_quote = literal };
+
+            const plan_id: StaticDispatchPlanId = @enumFromInt(@as(u32, @intCast(plans.items.len)));
+            try plans.append(allocator, .{
+                .expr = checked_expr,
+                .method = try names.internMethodName("from_quote"),
+                .dispatcher = .type_only,
+                .dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(quote_plan.target_var)),
+                .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(quote_plan.fn_var)),
+                .args = args,
+                .result_mode = .value,
+            });
+            try quote_by_node.put(allocator, node, plan_id);
+        }
+
         for (module_env.for_loop_dispatch_plans.items.items) |for_plan| {
             const for_node_idx: CIR.Node.Idx = @enumFromInt(for_plan.node_idx);
             const pattern_idx: CIR.Pattern.Idx = @enumFromInt(for_plan.pattern_idx);
@@ -710,6 +753,7 @@ pub const StaticDispatchPlanTable = struct {
             .plans = try plans.toOwnedSlice(allocator),
             .by_expr = by_expr,
             .numeral_by_node = numeral_by_node,
+            .quote_by_node = quote_by_node,
             .iterator_for_plans = try iterator_for_plans.toOwnedSlice(allocator),
             .iterator_for_by_node = iterator_for_by_node,
         };
@@ -721,6 +765,10 @@ pub const StaticDispatchPlanTable = struct {
 
     pub fn lookupNumeralByNode(self: *const StaticDispatchPlanTable, node: CIR.Node.Idx) ?StaticDispatchPlanId {
         return self.numeral_by_node.get(node);
+    }
+
+    pub fn lookupQuoteByNode(self: *const StaticDispatchPlanTable, node: CIR.Node.Idx) ?StaticDispatchPlanId {
+        return self.quote_by_node.get(node);
     }
 
     pub fn lookupIteratorForByNode(self: *const StaticDispatchPlanTable, node: CIR.Node.Idx) ?IteratorForPlanId {
@@ -747,6 +795,7 @@ pub const StaticDispatchPlanTable = struct {
         allocator.free(self.template_refs);
         self.by_expr.deinit(allocator);
         self.numeral_by_node.deinit(allocator);
+        self.quote_by_node.deinit(allocator);
         self.iterator_for_by_node.deinit(allocator);
         for (self.plans) |plan| allocator.free(plan.args);
         allocator.free(self.plans);

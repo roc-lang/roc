@@ -64,6 +64,7 @@ pub const EffectfulExpect = types.EffectfulExpect;
 // Comptime errors
 pub const ComptimeCrash = types.ComptimeCrash;
 pub const ComptimeInvalidNumeral = types.ComptimeInvalidNumeral;
+pub const ComptimeInvalidQuote = types.ComptimeInvalidQuote;
 pub const ComptimeExpectFailed = types.ComptimeExpectFailed;
 pub const ComptimeEvalError = types.ComptimeEvalError;
 
