@@ -15,6 +15,8 @@ pub const std_options_debug_threaded_io = static_lib.std_options_debug_threaded_
 pub const std_options = static_lib.std_options;
 
 comptime {
-    // Force analysis of static_lib.zig so its comptime export blocks run.
-    _ = static_lib;
+    // Force semantic analysis of the wrapped root so its comptime export
+    // blocks run; merely aliasing its decls above is lazy and would leave
+    // the prebuilt object empty.
+    if (static_lib != static_lib) unreachable;
 }

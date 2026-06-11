@@ -212,33 +212,27 @@ const extern_host = struct {
 extern const roc_shim_hosted_fns: [*]const builtins.host_abi.HostedFn;
 extern const roc_shim_hosted_count: usize;
 
-fn shimAlloc(ops: *RocOps, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
-    _ = ops;
+fn shimAlloc(_: *RocOps, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
     return extern_host.roc_alloc(length, alignment);
 }
 
-fn shimDealloc(ops: *RocOps, ptr: *anyopaque, alignment: usize) callconv(.c) void {
-    _ = ops;
+fn shimDealloc(_: *RocOps, ptr: *anyopaque, alignment: usize) callconv(.c) void {
     extern_host.roc_dealloc(ptr, alignment);
 }
 
-fn shimRealloc(ops: *RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
-    _ = ops;
+fn shimRealloc(_: *RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
     return extern_host.roc_realloc(ptr, new_length, alignment);
 }
 
-fn shimDbg(ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
-    _ = ops;
+fn shimDbg(_: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
     extern_host.roc_dbg(bytes, len);
 }
 
-fn shimExpectFailed(ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
-    _ = ops;
+fn shimExpectFailed(_: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
     extern_host.roc_expect_failed(bytes, len);
 }
 
-fn shimCrashed(ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
-    _ = ops;
+fn shimCrashed(_: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
     extern_host.roc_crashed(bytes, len);
 }
 
