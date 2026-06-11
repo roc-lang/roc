@@ -166,6 +166,10 @@ pub const MonoLlvmCodeGen = struct {
     /// one subprogram per proc, and per-statement line locations from the
     /// LIR store's source-location tables.
     emit_debug_info: bool = false,
+    /// DW_AT_producer for the compile unit. Carries the compiler version so
+    /// debugger formatters can detect when a binary was built by a different
+    /// roc than the formatter was written for.
+    debug_producer: []const u8 = "roc",
     debug_compile_unit: LlvmBuilder.Metadata.Optional = .none,
     debug_enums_fwd_ref: LlvmBuilder.Metadata.Optional = .none,
     debug_globals_fwd_ref: LlvmBuilder.Metadata.Optional = .none,
@@ -396,7 +400,7 @@ pub const MonoLlvmCodeGen = struct {
 
         const compile_unit = builder.debugCompileUnit(
             cu_file,
-            builder.metadataString("roc") catch return error.OutOfMemory,
+            builder.metadataString(self.debug_producer) catch return error.OutOfMemory,
             self.debug_enums_fwd_ref.unwrap().?,
             self.debug_globals_fwd_ref.unwrap().?,
             .{ .optimized = false },
