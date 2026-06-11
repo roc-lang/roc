@@ -2918,11 +2918,12 @@ Generated glue exposes closure invocation through helpers that set and restore
 that state so the contract is enforced by signatures rather than remembered.
 
 Weak linkage exists to break the app/host reference cycle without imposing
-link order; on Windows the same cycle is broken by generating a .def file of
-the host-provided symbols, converting it to an import library, and placing it
-between the app and host objects. Missing host symbols are diagnosed before
-linking by scanning the host inputs' symbol tables, not by changing how the
-linker resolves symbols.
+link order; COFF has no equivalent weak external, and needs none: the app
+object participates in the link directly while host archives are searched on
+demand, so a single pass resolves the app's references into the host and the
+host's references back into the app. Missing host symbols are diagnosed
+before linking by scanning the host inputs' symbol tables, not by changing
+how the linker resolves symbols.
 
 Because the app references host symbols directly, host inputs are linked
 without whole-archive wrapping, and section GC (--gc-sections, -dead_strip,

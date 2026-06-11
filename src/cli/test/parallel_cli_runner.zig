@@ -179,6 +179,7 @@ const CustomCase = enum {
     build_int_interpreter_output_runs,
     build_int_dev_output_runs,
     build_glibc_target_non_linux_error,
+    build_windows_shared_library,
     cache_passing_results,
     cache_failing_results,
     cache_invalidated_by_source_change,
@@ -548,6 +549,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc build fails with invalid target error", .body = .{ .command = .{ .args = &.{ "build", "--target=invalid_target_name" }, .roc_file = "test/int/app.roc", .exit = .failure, .contains_any = &.{.{ .needles = &.{ .{ .stream = .stderr, .text = "Invalid target" }, .{ .stream = .stderr, .text = "invalid" } } }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build wasm32 shared module succeeds for list builtins", .body = .{ .command = .{ .args = &.{ "build", "--target=wasm32", "--no-cache" }, .roc_file = "test/wasm/list_builtin_static_lib_app.roc", .contains = &.{.{ .stream = .stdout, .text = "Built " }}, .not_contains = &.{ .{ .stream = .stderr, .text = "FunctionTypeMismatch" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build glibc target gives helpful error on non-Linux", .body = .{ .custom = .build_glibc_target_non_linux_error } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc build Shared output links a Windows DLL", .body = .{ .custom = .build_windows_shared_library } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test caches passing results (interpreter)", .backend = .interpreter, .body = .{ .custom = .cache_passing_results } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test caches passing results (dev)", .backend = .dev, .body = .{ .custom = .cache_passing_results } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test caches failing results (interpreter)", .backend = .interpreter, .body = .{ .custom = .cache_failing_results } },
@@ -1365,6 +1367,7 @@ fn runCustomCase(
         .build_int_interpreter_output_runs => customBuildIntOutputRuns(io, allocator, &env, &timer, timeout_ms, .interpreter),
         .build_int_dev_output_runs => customBuildIntOutputRuns(io, allocator, &env, &timer, timeout_ms, .dev),
         .build_glibc_target_non_linux_error => customGlibcTargetNonLinux(io, allocator, &env, &timer, timeout_ms),
+        .build_windows_shared_library => customWindowsSharedLibrary(io, allocator, &env, &timer, timeout_ms),
         .cache_passing_results => customCachePassingResults(io, allocator, &env, &timer, timeout_ms, spec.backend orelse .interpreter),
         .cache_failing_results => customCacheFailingResults(io, allocator, &env, &timer, timeout_ms, spec.backend orelse .interpreter),
         .cache_invalidated_by_source_change => customCacheInvalidated(io, allocator, &env, &timer, timeout_ms, spec.backend orelse .interpreter),
@@ -1866,6 +1869,38 @@ fn customGlibcTargetNonLinux(io: std.Io, allocator: Allocator, env: *const CaseE
         .exit = .failure,
         .contains = &.{ .{ .stream = .stderr, .text = "glibc" }, .{ .stream = .stderr, .text = "musl" } },
     })) |failure| return failure;
+    return null;
+}
+
+/// Shared output on COFF: link the dylib test app and its host into one DLL.
+/// lld-link resolves the app/host symbol references in a single pass, the
+/// same as the ELF and Mach-O shared-library links. Windows-only: the link
+/// needs the native Windows SDK.
+fn customWindowsSharedLibrary(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    if (builtin.os.tag != .windows) return null;
+
+    const dll_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "app.dll" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate dll path: {}", .{err});
+    const output_arg = std.fmt.allocPrint(allocator, "--output={s}", .{dll_path}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate output arg: {}", .{err});
+
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "build", "--no-cache", output_arg },
+        .roc_file = "test/dylib/app.roc",
+        .contains = &.{.{ .stream = .stdout, .text = "Built " }},
+    })) |failure| return failure;
+
+    const dll_bytes = std.Io.Dir.cwd().readFileAlloc(io, dll_path, allocator, .limited(256 * 1024 * 1024)) catch |err|
+        return customInfraFailure(allocator, timer, "failed to read built DLL {s}: {}", .{ dll_path, err });
+
+    // The host's unused canary blob must be dead-stripped from the DLL, and
+    // the used hosted symbol must survive.
+    if (std.mem.find(u8, dll_bytes, "ROC_DCE_CANARY_BLOB_7f3a9c") != null) {
+        return customFailure(allocator, timer, "unused host canary blob was not dead-stripped from the DLL", .{});
+    }
+    if (std.mem.find(u8, dll_bytes, "roc_host_double") == null) {
+        return customFailure(allocator, timer, "used hosted symbol roc_host_double is missing from the DLL", .{});
+    }
     return null;
 }
 
