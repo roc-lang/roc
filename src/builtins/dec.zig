@@ -64,11 +64,11 @@ pub const RocDec = extern struct {
     pub const one_point_zero_i128: i128 = math.pow(i128, 10, RocDec.decimal_places);
     pub const one_point_zero: RocDec = .{ .num = one_point_zero_i128 };
     pub const neg_one_point_zero: RocDec = .{ .num = -one_point_zero_i128 };
-    pub const e: RocDec = .{ .num = 2718281828459045235 };
-    pub const pi: RocDec = .{ .num = 3141592653589793238 };
-    pub const tau: RocDec = .{ .num = 6283185307179586476 };
-    pub const half_pi: RocDec = .{ .num = 1570796326794896619 };
-    pub const ln2: RocDec = .{ .num = 693147180559945309 };
+    pub const e: RocDec = fromComptimeFloat(math.e);
+    pub const pi: RocDec = fromComptimeFloat(math.pi);
+    pub const tau: RocDec = fromComptimeFloat(math.tau);
+    pub const half_pi: RocDec = fromComptimeFloat(math.pi / 2.0);
+    pub const ln2: RocDec = fromComptimeFloat(math.ln2);
 
     pub const two_point_zero: RocDec = RocDec.add(
         RocDec.one_point_zero,
@@ -83,6 +83,11 @@ pub const RocDec = extern struct {
 
     pub fn fromU64(num: u64) RocDec {
         return .{ .num = i128h.mul_i128(@as(i128, num), one_point_zero_i128) };
+    }
+
+    fn fromComptimeFloat(comptime num: comptime_float) RocDec {
+        const scale: comptime_float = @floatFromInt(one_point_zero_i128);
+        return .{ .num = @intFromFloat(num * scale) };
     }
 
     /// Convert a fraction represented as numerator / 10^denominator_power to RocDec.
@@ -1649,6 +1654,27 @@ pub fn exportCeiling(comptime T: type, comptime name: []const u8) void {
         }
     }.func;
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
+}
+
+fn expectRocDecConstant(actual: RocDec, expected_text: []const u8) !void {
+    const expected = RocDec.fromNonemptySlice(expected_text) orelse return error.InvalidExpectedDecimal;
+    try std.testing.expectEqual(expected, actual);
+
+    var buf: [RocDec.max_str_length]u8 = undefined;
+    try std.testing.expectEqualStrings(expected_text, actual.format_to_buf(&buf));
+}
+
+test "math constants use fixed-point std.math values" {
+    try expectRocDecConstant(RocDec.e, "2.718281828459045235");
+    try expectRocDecConstant(RocDec.pi, "3.141592653589793238");
+    try expectRocDecConstant(RocDec.tau, "6.283185307179586476");
+    try expectRocDecConstant(RocDec.half_pi, "1.570796326794896619");
+    try expectRocDecConstant(RocDec.ln2, "0.693147180559945309");
+}
+
+test "math constants preserve exact fixed-point relationships" {
+    try std.testing.expectEqual(RocDec.pi.num * 2, RocDec.tau.num);
+    try std.testing.expectEqual(@divTrunc(RocDec.pi.num, 2), RocDec.half_pi.num);
 }
 
 test "fromU64" {
