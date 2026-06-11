@@ -1547,15 +1547,13 @@ fn customListBuiltinInlined(
         \\    packages {}
         \\    provides { "roc_main": main_for_host! }
         \\    targets: {
-        \\        files: "targets/",
-        \\        exe: {
-        \\            arm64mac: { files: ["libhost.a", app] },
-        \\            x64mac: { files: ["libhost.a", app] },
-        \\            arm64musl: { files: ["libhost.a", app] },
-        \\            x64musl: { files: ["libhost.a", app] },
-        \\            arm64glibc: { files: ["libhost.a", app] },
-        \\            x64glibc: { files: ["libhost.a", app] },
-        \\        }
+        \\        inputs: "targets/",
+        \\        arm64mac: { inputs: [app], output: Archive },
+        \\        x64mac: { inputs: [app], output: Archive },
+        \\        arm64musl: { inputs: [app], output: Archive },
+        \\        x64musl: { inputs: [app], output: Archive },
+        \\        arm64glibc: { inputs: [app], output: Archive },
+        \\        x64glibc: { inputs: [app], output: Archive },
         \\    }
         \\
         \\main_for_host! : () => List(I32)
@@ -1574,25 +1572,23 @@ fn customListBuiltinInlined(
     std.Io.Dir.cwd().writeFile(io, .{ .sub_path = app_path, .data = app_src }) catch |err|
         return customInfraFailure(allocator, timer, "failed to write app: {}", .{err});
 
+    const archive_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "inline_app.a" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate archive path: {}", .{err});
+    const output_arg = std.fmt.allocPrint(allocator, "--output={s}", .{archive_path}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate output arg: {}", .{err});
+
     const child_timeout_ms = childCommandTimeoutMs(timer, timeout_ms) orelse
         return timeoutFailure(allocator, timer, .run, "case timeout exhausted before roc build started");
-    const result = runRocInEnv(io, allocator, env, &.{ "build", "--opt=speed", "--no-link" }, app_path, .absolute, null, child_timeout_ms) catch |err|
+    const result = runRocInEnv(io, allocator, env, &.{ "build", "--opt=speed", output_arg }, app_path, .absolute, null, child_timeout_ms) catch |err|
         return customInfraFailure(allocator, timer, "roc build spawn error: {}", .{err});
     if (checkCommandExpectation(allocator, result, .{ .args = &.{"build"}, .exit = .success })) |message| {
         return failureFromRun(allocator, timer, result, message);
     }
 
-    const marker = "Object file generated: ";
-    const marker_idx = std.mem.find(u8, result.stdout, marker) orelse
-        return customFailure(allocator, timer, "roc build --no-link did not report an object path", .{});
-    const after_marker = result.stdout[marker_idx + marker.len ..];
-    const newline = std.mem.findScalar(u8, after_marker, '\n') orelse after_marker.len;
-    const obj_path = std.mem.trim(u8, after_marker[0..newline], " \r\t");
-
-    const obj_bytes = std.Io.Dir.cwd().readFileAlloc(io, obj_path, allocator, .limited(64 * 1024 * 1024)) catch |err|
-        return customInfraFailure(allocator, timer, "failed to read object {s}: {}", .{ obj_path, err });
+    const obj_bytes = std.Io.Dir.cwd().readFileAlloc(io, archive_path, allocator, .limited(64 * 1024 * 1024)) catch |err|
+        return customInfraFailure(allocator, timer, "failed to read archive {s}: {}", .{ archive_path, err });
     if (std.mem.find(u8, obj_bytes, "roc_builtins_list_append_unsafe") != null) {
-        return customFailure(allocator, timer, "list_append_unsafe was not inlined into the --opt=speed object (it still references the builtin symbol)", .{});
+        return customFailure(allocator, timer, "list_append_unsafe was not inlined into the --opt=speed archive (it still references the builtin symbol)", .{});
     }
     return null;
 }
