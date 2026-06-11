@@ -72,7 +72,7 @@
 //!
 //! starting_plants! : () => List(Plant)
 //! starting_plants! = || {
-//!     0.I64.to(15)
+//!     (0.I64..=15)
 //!         .stream()
 //!         .map(|i| random_plant!(i * 12))
 //!         .collect!()
@@ -86,7 +86,7 @@
 //!
 //! ```roc
 //! starting_plants! = || {
-//!     range_iter = 0.I64.to(15)
+//!     range_iter = 0.I64..=15
 //!
 //!     source_stream = {
 //!         len_if_known: Known(16),

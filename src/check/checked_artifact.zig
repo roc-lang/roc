@@ -4201,9 +4201,7 @@ fn isDefaultableArithmeticConstraint(
             constraint.fn_name.eql(idents.times) or
             constraint.fn_name.eql(idents.div_by) or
             constraint.fn_name.eql(idents.div_trunc_by) or
-            constraint.fn_name.eql(idents.rem_by) or
-            constraint.fn_name.eql(idents.until) or
-            constraint.fn_name.eql(idents.to),
+            constraint.fn_name.eql(idents.rem_by),
         .desugared_unaryop => constraint.fn_name.eql(idents.negate),
         .from_numeral,
         .from_quote,
