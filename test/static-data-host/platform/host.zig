@@ -89,7 +89,47 @@ extern const roc_table: Table;
 extern const roc_names: RocList;
 extern const roc_tree: Tree;
 extern const roc_boxed_add_one: ?[*]u8;
-extern fn roc_main(ops: *RocOps, ret_ptr: ?*anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
+// The app's entrypoint, exported under its provides symbol with its natural
+// C ABI: main_for_host! takes no arguments and returns {}.
+extern fn roc_main() callconv(.c) void;
+
+// The host's private RocOps. The exported runtime symbols below and the
+// builtins helpers reach the host allocator through this global, set by main
+// before any Roc code runs.
+var g_roc_ops: ?*RocOps = null;
+
+fn hostAlloc(length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+    return rocAllocFn(g_roc_ops.?, length, alignment);
+}
+
+fn hostDealloc(ptr: *anyopaque, alignment: usize) callconv(.c) void {
+    rocDeallocFn(g_roc_ops.?, ptr, alignment);
+}
+
+fn hostRealloc(ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+    return rocReallocFn(g_roc_ops.?, ptr, new_length, alignment);
+}
+
+fn hostDbg(bytes: [*]const u8, len: usize) callconv(.c) void {
+    rocDbgFn(g_roc_ops.?, bytes, len);
+}
+
+fn hostExpectFailed(bytes: [*]const u8, len: usize) callconv(.c) void {
+    rocExpectFailedFn(g_roc_ops.?, bytes, len);
+}
+
+fn hostCrashed(bytes: [*]const u8, len: usize) callconv(.c) void {
+    rocCrashedFn(g_roc_ops.?, bytes, len);
+}
+
+comptime {
+    @export(&hostAlloc, .{ .name = "roc_alloc", .visibility = .hidden });
+    @export(&hostDealloc, .{ .name = "roc_dealloc", .visibility = .hidden });
+    @export(&hostRealloc, .{ .name = "roc_realloc", .visibility = .hidden });
+    @export(&hostDbg, .{ .name = "roc_dbg", .visibility = .hidden });
+    @export(&hostExpectFailed, .{ .name = "roc_expect_failed", .visibility = .hidden });
+    @export(&hostCrashed, .{ .name = "roc_crashed", .visibility = .hidden });
+}
 
 comptime {
     @export(&main, .{ .name = "main" });
@@ -121,15 +161,14 @@ fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
         .roc_crashed = rocCrashedFn,
         .hosted_fns = builtins.host_abi.emptyHostedFunctions(),
     };
+    g_roc_ops = &roc_ops;
 
     runStaticDataChecks(&roc_ops, &host_env) catch |err| {
         std.debug.print("static data host check failed: {s}\n", .{@errorName(err)});
         return 1;
     };
 
-    var dummy_ret: u8 = 0;
-    var dummy_arg: u8 = 0;
-    roc_main(&roc_ops, @ptrCast(&dummy_ret), @ptrCast(&dummy_arg));
+    roc_main();
 
     expectEqualUsize(host_env.dealloc_count, 0, "no runtime deallocs for static data") catch return 1;
 
