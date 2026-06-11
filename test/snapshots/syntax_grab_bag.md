@@ -264,6 +264,9 @@ UNUSED VARIABLE - syntax_grab_bag.md:188:2:188:15
 UNUSED VARIABLE - syntax_grab_bag.md:189:2:189:23
 UNDECLARED TYPE - syntax_grab_bag.md:201:9:201:14
 TYPE MISMATCH - syntax_grab_bag.md:70:5:70:8
+MISSING METHOD - syntax_grab_bag.md:99:3:99:8
+MISSING METHOD - syntax_grab_bag.md:101:3:101:8
+MISSING METHOD - syntax_grab_bag.md:101:11:101:16
 TYPE MISMATCH - syntax_grab_bag.md:84:2:84:2
 TOO FEW ARGS - syntax_grab_bag.md:155:2:157:3
 TYPE MISMATCH - syntax_grab_bag.md:167:3:167:3
@@ -853,8 +856,44 @@ It is:
 
 But I need this to be a `Bool` value.
 
+**MISSING METHOD**
+This **from_quote** method is being called on a value whose type doesn't have that method:
+**syntax_grab_bag.md:99:3:99:8:**
+```roc
+		"foo" => # After arrow comment
+```
+		^^^^^
+
+The value's type, which does not have a method named **from_quote**, is:
+
+    [Blue, Green, Red, ..]
+
+**MISSING METHOD**
+This **from_quote** method is being called on a value whose type doesn't have that method:
+**syntax_grab_bag.md:101:3:101:8:**
+```roc
+		"foo" | "bar" => 200
+```
+		^^^^^
+
+The value's type, which does not have a method named **from_quote**, is:
+
+    [Blue, Green, Red, ..]
+
+**MISSING METHOD**
+This **from_quote** method is being called on a value whose type doesn't have that method:
+**syntax_grab_bag.md:101:11:101:16:**
+```roc
+		"foo" | "bar" => 200
+```
+		        ^^^^^
+
+The value's type, which does not have a method named **from_quote**, is:
+
+    [Blue, Green, Red, ..]
+
 **TYPE MISMATCH**
-The fourth branch of this `match` does not match the previous ones:
+The sixth branch of this `match` does not match the previous ones:
 **syntax_grab_bag.md:84:2:**
 ```roc
 	match a {
@@ -913,11 +952,15 @@ The fourth branch of this `match` does not match the previous ones:
 		TwoArgs("hello", Some("world")) => 1000
 	}
 ```
-  ^^^^^
+  ^^^^^^^^^^^^^^^^^^^^^
 
-This fourth branch is trying to match:
+This sixth branch is trying to match:
 
-    Str
+    List(d)
+      where [
+        d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]),
+        d.is_eq : d, d -> Bool,
+      ]
 
 But the expression between the `match` parenthesis has the type:
 
@@ -2257,7 +2300,7 @@ expect {
 				(s-expr
 					(e-not-implemented))
 				(s-expr
-					(e-call (constraint-fn-var 2393)
+					(e-call (constraint-fn-var 2490)
 						(e-lookup-local
 							(p-assign (ident "match_time")))
 						(e-not-implemented)))
@@ -2384,7 +2427,7 @@ expect {
 					(e-if
 						(if-branches
 							(if-branch
-								(e-dispatch-call (method "is_gt") (constraint-fn-var 3059)
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 3222)
 									(receiver
 										(e-match
 											(match
@@ -2409,7 +2452,7 @@ expect {
 														(value
 															(e-num (value "12"))))))))
 									(args
-										(e-dispatch-call (method "times") (constraint-fn-var 3054)
+										(e-dispatch-call (method "times") (constraint-fn-var 3217)
 											(receiver
 												(e-num (value "5")))
 											(args
@@ -2424,18 +2467,18 @@ expect {
 										(e-if
 											(if-branches
 												(if-branch
-													(e-dispatch-call (method "is_lt") (constraint-fn-var 3167)
+													(e-dispatch-call (method "is_lt") (constraint-fn-var 3330)
 														(receiver
-															(e-dispatch-call (method "plus") (constraint-fn-var 3132)
+															(e-dispatch-call (method "plus") (constraint-fn-var 3295)
 																(receiver
 																	(e-num (value "13")))
 																(args
 																	(e-num (value "2")))))
 														(args
 															(e-num (value "5"))))
-													(e-dispatch-call (method "is_gte") (constraint-fn-var 3267)
+													(e-dispatch-call (method "is_gte") (constraint-fn-var 3430)
 														(receiver
-															(e-dispatch-call (method "minus") (constraint-fn-var 3232)
+															(e-dispatch-call (method "minus") (constraint-fn-var 3395)
 																(receiver
 																	(e-num (value "10")))
 																(args
@@ -2450,11 +2493,11 @@ expect {
 											(builtin)
 											(e-tag (name "True")))))
 								(if-else
-									(e-dispatch-call (method "is_lte") (constraint-fn-var 3377)
+									(e-dispatch-call (method "is_lte") (constraint-fn-var 3540)
 										(receiver
 											(e-num (value "12")))
 										(args
-											(e-dispatch-call (method "div_by") (constraint-fn-var 3372)
+											(e-dispatch-call (method "div_by") (constraint-fn-var 3535)
 												(receiver
 													(e-num (value "3")))
 												(args
@@ -2469,12 +2512,12 @@ expect {
 										(e-match
 											(match
 												(cond
-													(e-dispatch-call (method "next_static_dispatch_method") (constraint-fn-var 3443)
+													(e-dispatch-call (method "next_static_dispatch_method") (constraint-fn-var 3606)
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dispatch-call (method "static_dispatch_method") (constraint-fn-var 3410)
+																		(e-dispatch-call (method "static_dispatch_method") (constraint-fn-var 3573)
 																			(receiver
 																				(e-match
 																					(match

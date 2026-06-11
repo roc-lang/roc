@@ -255,6 +255,9 @@ EXPOSED BUT NOT DEFINED - fuzz_crash_028.md:2:6:2:11
 DECLARATION HAS NO VALUE - fuzz_crash_028.md:28:1:31:2
 DECLARATION HAS NO VALUE - fuzz_crash_028.md:47:1:47:21
 TYPE MISMATCH - fuzz_crash_028.md:64:2:64:2
+MISSING METHOD - fuzz_crash_028.md:68:3:68:8
+MISSING METHOD - fuzz_crash_028.md:70:3:70:8
+MISSING METHOD - fuzz_crash_028.md:70:11:70:16
 TYPE MISMATCH - fuzz_crash_028.md:64:2:64:2
 DECLARATION HAS NO VALUE - fuzz_crash_028.md:95:1:95:34
 TYPE MISMATCH - fuzz_crash_028.md:102:8:102:11
@@ -1520,8 +1523,44 @@ But in the first pattern, `lue` is:
 
 A name shared across `|` patterns in the same `match` branch must have one compatible type.
 
+**MISSING METHOD**
+This **from_quote** method is being called on a value whose type doesn't have that method:
+**fuzz_crash_028.md:68:3:68:8:**
+```roc
+		"foo" => # ent
+```
+		^^^^^
+
+The value's type, which does not have a method named **from_quote**, is:
+
+    [Blue, Red, ..]
+
+**MISSING METHOD**
+This **from_quote** method is being called on a value whose type doesn't have that method:
+**fuzz_crash_028.md:70:3:70:8:**
+```roc
+		"foo" | "bar" => 20[1, 2, 3, .. as rest] # t
+```
+		^^^^^
+
+The value's type, which does not have a method named **from_quote**, is:
+
+    [Blue, Red, ..]
+
+**MISSING METHOD**
+This **from_quote** method is being called on a value whose type doesn't have that method:
+**fuzz_crash_028.md:70:11:70:16:**
+```roc
+		"foo" | "bar" => 20[1, 2, 3, .. as rest] # t
+```
+		        ^^^^^
+
+The value's type, which does not have a method named **from_quote**, is:
+
+    [Blue, Red, ..]
+
 **TYPE MISMATCH**
-The third branch of this `match` does not match the previous ones:
+The fifth branch of this `match` does not match the previous ones:
 **fuzz_crash_028.md:64:2:**
 ```roc
 	match a {lue | Red => {
@@ -1552,11 +1591,15 @@ ar: 2,
 		Ok(123) => 12
 	}
 ```
-  ^^^^^
+                     ^^^^^^^^^^^^^^^^^^^^^
 
-This third branch is trying to match:
+This fifth branch is trying to match:
 
-    Str
+    List(d)
+      where [
+        d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]),
+        d.is_eq : d, d -> Bool,
+      ]
 
 But the expression between the `match` parenthesis has the type:
 
@@ -2688,7 +2731,7 @@ expect {
 				(s-expr
 					(e-not-implemented))
 				(s-expr
-					(e-call (constraint-fn-var 1965)
+					(e-call (constraint-fn-var 2032)
 						(e-lookup-local
 							(p-assign (ident "match_time")))
 						(e-not-implemented)))
@@ -2725,7 +2768,7 @@ expect {
 					(p-assign (ident "n"))
 					(e-runtime-error (tag "ident_not_in_scope"))
 					(e-block
-						(e-dispatch-call (method "plus") (constraint-fn-var 2142)
+						(e-dispatch-call (method "plus") (constraint-fn-var 2245)
 							(receiver
 								(e-call
 									(e-runtime-error (tag "ident_not_in_scope"))
@@ -2808,7 +2851,7 @@ expect {
 					(e-if
 						(if-branches
 							(if-branch
-								(e-dispatch-call (method "is_gt") (constraint-fn-var 2562)
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 2695)
 									(receiver
 										(e-match
 											(match
@@ -2833,7 +2876,7 @@ expect {
 														(value
 															(e-num (value "12"))))))))
 									(args
-										(e-dispatch-call (method "times") (constraint-fn-var 2557)
+										(e-dispatch-call (method "times") (constraint-fn-var 2690)
 											(receiver
 												(e-num (value "5")))
 											(args
@@ -2848,18 +2891,18 @@ expect {
 										(e-if
 											(if-branches
 												(if-branch
-													(e-dispatch-call (method "is_lt") (constraint-fn-var 2670)
+													(e-dispatch-call (method "is_lt") (constraint-fn-var 2803)
 														(receiver
-															(e-dispatch-call (method "plus") (constraint-fn-var 2635)
+															(e-dispatch-call (method "plus") (constraint-fn-var 2768)
 																(receiver
 																	(e-num (value "13")))
 																(args
 																	(e-num (value "2")))))
 														(args
 															(e-num (value "5"))))
-													(e-dispatch-call (method "is_gte") (constraint-fn-var 2770)
+													(e-dispatch-call (method "is_gte") (constraint-fn-var 2903)
 														(receiver
-															(e-dispatch-call (method "minus") (constraint-fn-var 2735)
+															(e-dispatch-call (method "minus") (constraint-fn-var 2868)
 																(receiver
 																	(e-num (value "10")))
 																(args
@@ -2874,11 +2917,11 @@ expect {
 											(builtin)
 											(e-tag (name "True")))))
 								(if-else
-									(e-dispatch-call (method "is_lte") (constraint-fn-var 2880)
+									(e-dispatch-call (method "is_lte") (constraint-fn-var 3013)
 										(receiver
 											(e-num (value "12")))
 										(args
-											(e-dispatch-call (method "div_by") (constraint-fn-var 2875)
+											(e-dispatch-call (method "div_by") (constraint-fn-var 3008)
 												(receiver
 													(e-num (value "3")))
 												(args
@@ -2893,12 +2936,12 @@ expect {
 										(e-match
 											(match
 												(cond
-													(e-dispatch-call (method "ned") (constraint-fn-var 2946)
+													(e-dispatch-call (method "ned") (constraint-fn-var 3079)
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dispatch-call (method "od") (constraint-fn-var 2913)
+																		(e-dispatch-call (method "od") (constraint-fn-var 3046)
 																			(receiver
 																				(e-match
 																					(match

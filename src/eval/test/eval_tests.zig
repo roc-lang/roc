@@ -706,6 +706,46 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "(\"greeting\", \"other\")" },
     },
     .{
+        .name = "inspect: string literal type suffix pins custom from_quote target",
+        .source_kind = .module,
+        .source =
+        \\Tag := [Tag(List(U8))].{
+        \\    from_quote : List(U8) -> Try(Tag, [BadQuotedBytes(Str)])
+        \\    from_quote = |bytes| Ok(Tag(bytes))
+        \\}
+        \\
+        \\main = "Roc".Tag
+        ,
+        .expected = .{ .inspect_str = "Tag([82, 111, 99])" },
+    },
+    .{
+        .name = "inspect: string literal Str type suffix",
+        .source_kind = .module,
+        .source =
+        \\main = "hello".Str
+        ,
+        .expected = .{ .inspect_str = "\"hello\"" },
+    },
+    .{
+        .name = "inspect: multiline string literal type suffix on its own line",
+        .source_kind = .module,
+        .source =
+        \\Tally := [Tally(U64)].{
+        \\    from_quote : List(U8) -> Try(Tally, [BadQuotedBytes(Str)])
+        \\    from_quote = |bytes| Ok(Tally(bytes.len()))
+        \\}
+        \\
+        \\main = {
+        \\    value =
+        \\        \\line one
+        \\        \\line two
+        \\        .Tally
+        \\    value
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Tally(17)" },
+    },
+    .{
         .name = "custom from_quote Err is a compile-time problem",
         .source_kind = .module,
         .source =

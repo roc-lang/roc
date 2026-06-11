@@ -192,10 +192,11 @@ TOO FEW ARGS - fuzz_crash_019.md:17:3:18:4
 DECLARATION HAS NO VALUE - fuzz_crash_019.md:22:1:23:2
 DECLARATION HAS NO VALUE - fuzz_crash_019.md:37:1:37:9
 MISSING METHOD - fuzz_crash_019.md:39:2:39:3
+MISSING METHOD - fuzz_crash_019.md:58:6:58:11
 TYPE MISMATCH - fuzz_crash_019.md:52:2:52:2
 DECLARATION HAS NO VALUE - fuzz_crash_019.md:74:1:74:22
 TOO FEW ARGS - fuzz_crash_019.md:84:2:86:3
-TYPE MISMATCH - fuzz_crash_019.md:86:11:86:17
+MISSING METHOD - fuzz_crash_019.md:86:11:86:17
 TYPE MISMATCH - fuzz_crash_019.md:77:11:77:14
 TYPE MISMATCH - fuzz_crash_019.md:98:4:104:3
 TYPE MISMATCH - fuzz_crash_019.md:105:2:105:54
@@ -930,8 +931,20 @@ The value's type, which does not have a method named **from_numeral**, is:
 
     {}
 
+**MISSING METHOD**
+This **from_quote** method is being called on a value whose type doesn't have that method:
+**fuzz_crash_019.md:58:6:58:11:**
+```roc
+			1	"for" => 20[1, ] # t
+```
+			 	^^^^^
+
+The value's type, which does not have a method named **from_quote**, is:
+
+    [Blue, ..]
+
 **TYPE MISMATCH**
-The fourth branch of this `match` does not match the previous ones:
+The fifth branch of this `match` does not match the previous ones:
 **fuzz_crash_019.md:52:2:**
 ```roc
 	match a {lue  {
@@ -953,11 +966,15 @@ The fourth branch of this `match` does not match the previous ones:
 		Ok(123) => 12
 	}
 ```
-     ^^^^^
+                ^^^^^
 
-This fourth branch is trying to match:
+This fifth branch is trying to match:
 
-    Str
+    List(f)
+      where [
+        f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)]),
+        f.is_eq : f, f -> Bool,
+      ]
 
 But the expression between the `match` parenthesis has the type:
 
@@ -991,20 +1008,17 @@ The `me` function has the type:
 
 Are there any missing commas?
 
-**TYPE MISMATCH**
-This expression produces a value, but it's not being used:
+**MISSING METHOD**
+This **from_quote** method is being called on a value whose type doesn't have that method:
 **fuzz_crash_019.md:86:11:86:17:**
 ```roc
 	)crash ke"Unr!" #)
 ```
 	         ^^^^^^
 
-It has the type:
+The value's type, which does not have a method named **from_quote**, is:
 
-    Str
-
-Since this expression is used as a statement, it must evaluate to `{}`.
-If you don't need the value, you can ignore it with `_ =`.
+    {}
 
 **TYPE MISMATCH**
 This number is being used where a non-number type is needed:
@@ -1040,10 +1054,11 @@ This expression produces a value, but it's not being used:
 
 It has the type:
 
-    (f, Str, Error, [O, ..], (Error, Error), List(j))
+    (f, j, Error, [O, ..], (Error, Error), List(k))
       where [
         f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)]),
-        j.from_numeral : Numeral -> Try(j, [InvalidNumeral(Str)]),
+        j.from_quote : List(U8) -> Try(j, [BadQuotedBytes(Str)]),
+        k.from_numeral : Numeral -> Try(k, [InvalidNumeral(Str)]),
       ]
 
 Since this expression is used as a statement, it must evaluate to `{}`.
@@ -1905,7 +1920,7 @@ expect {
 				(s-expr
 					(e-not-implemented))
 				(s-expr
-					(e-call (constraint-fn-var 1403)
+					(e-call (constraint-fn-var 1432)
 						(e-lookup-local
 							(p-assign (ident "me")))
 						(e-not-implemented)))
@@ -1945,7 +1960,7 @@ expect {
 									(e-lookup-local
 										(p-assign (ident "er")))
 									(e-literal (string "")))))
-						(e-dispatch-call (method "plus") (constraint-fn-var 1588)
+						(e-dispatch-call (method "plus") (constraint-fn-var 1628)
 							(receiver
 								(e-runtime-error (tag "ident_not_in_scope")))
 							(args
@@ -2009,7 +2024,7 @@ expect {
 					(e-if
 						(if-branches
 							(if-branch
-								(e-dispatch-call (method "is_gt") (constraint-fn-var 1971)
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 2041)
 									(receiver
 										(e-match
 											(match
@@ -2043,18 +2058,18 @@ expect {
 										(e-if
 											(if-branches
 												(if-branch
-													(e-dispatch-call (method "is_lt") (constraint-fn-var 2079)
+													(e-dispatch-call (method "is_lt") (constraint-fn-var 2149)
 														(receiver
-															(e-dispatch-call (method "plus") (constraint-fn-var 2044)
+															(e-dispatch-call (method "plus") (constraint-fn-var 2114)
 																(receiver
 																	(e-num (value "13")))
 																(args
 																	(e-num (value "2")))))
 														(args
 															(e-num (value "5"))))
-													(e-dispatch-call (method "is_gte") (constraint-fn-var 2179)
+													(e-dispatch-call (method "is_gte") (constraint-fn-var 2249)
 														(receiver
-															(e-dispatch-call (method "minus") (constraint-fn-var 2144)
+															(e-dispatch-call (method "minus") (constraint-fn-var 2214)
 																(receiver
 																	(e-num (value "10")))
 																(args
@@ -2069,7 +2084,7 @@ expect {
 											(builtin)
 											(e-tag (name "True")))))
 								(if-else
-									(e-dispatch-call (method "is_lte") (constraint-fn-var 2257)
+									(e-dispatch-call (method "is_lte") (constraint-fn-var 2327)
 										(receiver
 											(e-num (value "12")))
 										(args
@@ -2083,12 +2098,12 @@ expect {
 										(e-match
 											(match
 												(cond
-													(e-dispatch-call (method "ned") (constraint-fn-var 2324)
+													(e-dispatch-call (method "ned") (constraint-fn-var 2394)
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dispatch-call (method "od") (constraint-fn-var 2291)
+																		(e-dispatch-call (method "od") (constraint-fn-var 2361)
 																			(receiver
 																				(e-match
 																					(match

@@ -876,6 +876,26 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) std.mem.Allocator.Error!AST.Ex
             node.data.lhs = e.parts.span.start;
             node.data.rhs = e.parts.span.len;
         },
+        .typed_string => |e| {
+            node.tag = .typed_string;
+            node.region = e.region;
+            node.main_token = e.token;
+            node.data.lhs = @bitCast(e.type_ident);
+            const parts_data_idx = store.extra_data.items.len;
+            try store.extra_data.append(store.gpa, e.parts.span.start);
+            try store.extra_data.append(store.gpa, e.parts.span.len);
+            node.data.rhs = @as(u32, @intCast(parts_data_idx));
+        },
+        .typed_multiline_string => |e| {
+            node.tag = .typed_multiline_string;
+            node.region = e.region;
+            node.main_token = e.token;
+            node.data.lhs = @bitCast(e.type_ident);
+            const parts_data_idx = store.extra_data.items.len;
+            try store.extra_data.append(store.gpa, e.parts.span.start);
+            try store.extra_data.append(store.gpa, e.parts.span.len);
+            node.data.rhs = @as(u32, @intCast(parts_data_idx));
+        },
         .list => |l| {
             node.tag = .list;
             node.region = l.region;
@@ -1880,6 +1900,30 @@ pub fn getExpr(store: *const NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
                 .parts = .{ .span = base.DataSpan{
                     .start = node.data.lhs,
                     .len = node.data.rhs,
+                } },
+                .region = node.region,
+            } };
+        },
+        .typed_string => {
+            const parts_data_idx = node.data.rhs;
+            return .{ .typed_string = .{
+                .token = node.main_token,
+                .type_ident = @bitCast(node.data.lhs),
+                .parts = .{ .span = .{
+                    .start = store.extra_data.items[parts_data_idx],
+                    .len = store.extra_data.items[parts_data_idx + 1],
+                } },
+                .region = node.region,
+            } };
+        },
+        .typed_multiline_string => {
+            const parts_data_idx = node.data.rhs;
+            return .{ .typed_multiline_string = .{
+                .token = node.main_token,
+                .type_ident = @bitCast(node.data.lhs),
+                .parts = .{ .span = .{
+                    .start = store.extra_data.items[parts_data_idx],
+                    .len = store.extra_data.items[parts_data_idx + 1],
                 } },
                 .region = node.region,
             } };

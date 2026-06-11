@@ -1862,6 +1862,10 @@ pub const ReportBuilder = struct {
         if (data.origin == .from_numeral) {
             return self.buildNumberUsedAsNonNumber(data);
         }
+        // Special case: string literal being used where a non-string type is expected
+        if (data.origin == .from_quote) {
+            return self.buildStringUsedAsNonString(data);
+        }
 
         var report = Report.init(self.gpa, "MISSING METHOD", .runtime_error);
         errdefer report.deinit();
@@ -2078,6 +2082,44 @@ pub const ReportBuilder = struct {
             D.bytes("Hint:").withAnnotation(.emphasized),
             D.bytes("You can replace this static dispatch call with an ordinary function call, or force the type variable to become more concrete—for example, by adding a type annotation that narrows its type to something that actually has methods."),
         }, self, &report);
+
+        return report;
+    }
+
+    /// Build a report for when a string literal is used where a non-string type is expected
+    fn buildStringUsedAsNonString(
+        self: *Self,
+        data: DispatcherDoesNotImplMethod,
+    ) Allocator.Error!Report {
+        var report = Report.init(self.gpa, "TYPE MISMATCH", .runtime_error);
+        errdefer report.deinit();
+
+        const snapshot_str = try report.addOwnedString(self.getFormattedString(data.dispatcher_snapshot));
+
+        const literal_region = data.quote_region orelse
+            (if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.dispatcher_var)))) |r| r.* else Region.zero());
+        const region_info = self.module_env.calcRegionInfo(literal_region);
+
+        try D.renderSlice(&.{
+            D.bytes("This string literal is being used where a non-string type is needed:"),
+        }, self, &report);
+        try report.document.addLineBreak();
+
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        try D.renderSlice(&.{
+            D.bytes("The type was determined to be:"),
+        }, self, &report);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(snapshot_str);
 
         return report;
     }

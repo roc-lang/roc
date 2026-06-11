@@ -5353,6 +5353,10 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 // A plain literal converts to its target type through from_quote,
                 // defaulting to Str if nothing pins it.
                 const flex_var = try self.mkFlexWithFromQuoteConstraint(ModuleEnv.nodeIdxFrom(expr_idx), expr_region, env);
+                if (self.cir.numericSuffixTypeForNode(ModuleEnv.nodeIdxFrom(expr_idx)) != null) {
+                    // Explicit type suffix, e.g. `"foo".MyType`.
+                    try self.unifyTypedLiteralWithExplicitType(flex_var, expr_idx, expr_region, env);
+                }
                 _ = try self.unify(expr_var, flex_var, env);
             }
         },
@@ -11021,6 +11025,20 @@ fn markConstraintFunctionAsError(self: *Self, constraint: StaticDispatchConstrai
     _ = try self.unify(resolved_func.ret, err_var, env);
 }
 
+/// Find the source region of the string literal whose from_quote constraint
+/// resolved into `dispatcher_var`, for error reporting. The constraint itself
+/// carries no region, but the literal's dispatch plan records its source node.
+fn quoteLiteralRegionForDispatcher(self: *Self, constraint: StaticDispatchConstraint, dispatcher_var: Var) ?Region {
+    if (constraint.origin != .from_quote) return null;
+    const resolved_dispatcher = self.types.resolveVar(dispatcher_var).var_;
+    for (self.cir.quote_dispatch_plans.items.items) |plan| {
+        const target: Var = @enumFromInt(plan.target_var);
+        if (self.types.resolveVar(target).var_ != resolved_dispatcher) continue;
+        return self.cir.store.getNodeRegion(@enumFromInt(plan.node_idx));
+    }
+    return null;
+}
+
 /// Report a constraint validation error
 fn reportConstraintError(
     self: *Self,
@@ -11044,6 +11062,7 @@ fn reportConstraintError(
                 .method_name = constraint.fn_name,
                 .origin = constraint.origin,
                 .num_literal = constraint.num_literal,
+                .quote_region = self.quoteLiteralRegionForDispatcher(constraint, dispatcher_var),
                 .defaulted_from_numeric_literal = is_numeric_default_pass,
             },
         } },

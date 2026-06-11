@@ -115,7 +115,7 @@ main! = |_| processNested([])
 		(e-lambda
 			(args
 				(p-underscore))
-			(e-call (constraint-fn-var 95)
+			(e-call (constraint-fn-var 151)
 				(e-lookup-local
 					(p-assign (ident "processNested")))
 				(e-empty_list)))))

@@ -1260,7 +1260,7 @@ is_named_color = |str| {
 			(e-block
 				(s-let
 					(p-assign (ident "colors"))
-					(e-call (constraint-fn-var 1680)
+					(e-call (constraint-fn-var 1710)
 						(e-lookup-external
 							(builtin))
 						(e-list
@@ -1271,7 +1271,7 @@ is_named_color = |str| {
 									(e-literal (string "AntiqueWhite")))
 								(e-string
 									(e-literal (string "Aqua")))))))
-				(e-dispatch-call (method "contains") (constraint-fn-var 1701)
+				(e-dispatch-call (method "contains") (constraint-fn-var 1711)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "colors"))))
@@ -1297,9 +1297,9 @@ is_named_color = |str| {
 	(s-expect
 		(e-method-eq (negated "false")
 			(lhs
-				(e-dispatch-call (method "to_str") (constraint-fn-var 2054)
+				(e-dispatch-call (method "to_str") (constraint-fn-var 2044)
 					(receiver
-						(e-call (constraint-fn-var 1843)
+						(e-call (constraint-fn-var 1833)
 							(e-lookup-local
 								(p-assign (ident "rgb")))
 							(e-num (value "124"))
@@ -1328,9 +1328,9 @@ is_named_color = |str| {
 	(s-expect
 		(e-method-eq (negated "false")
 			(lhs
-				(e-dispatch-call (method "map_ok") (constraint-fn-var 2496)
+				(e-dispatch-call (method "map_ok") (constraint-fn-var 2552)
 					(receiver
-						(e-call (constraint-fn-var 2495)
+						(e-call (constraint-fn-var 2515)
 							(e-lookup-local
 								(p-assign (ident "hex")))
 							(e-string
@@ -1353,7 +1353,7 @@ is_named_color = |str| {
 		(patt (type "Str -> Try(Color, [InvalidHex(Str)])"))
 		(patt (type "Color -> Str"))
 		(patt (type "Str -> Try(Color, [UnknownColor(Str)])"))
-		(patt (type "Str -> Bool")))
+		(patt (type "a -> Bool where [a.from_quote : List(U8) -> Try(a, [BadQuotedBytes(Str)]), a.is_eq : a, a -> Bool]")))
 	(type_decls
 		(nominal (type "Color")
 			(ty-header (name "Color"))))
@@ -1363,5 +1363,5 @@ is_named_color = |str| {
 		(expr (type "Str -> Try(Color, [InvalidHex(Str)])"))
 		(expr (type "Color -> Str"))
 		(expr (type "Str -> Try(Color, [UnknownColor(Str)])"))
-		(expr (type "Str -> Bool"))))
+		(expr (type "a -> Bool where [a.from_quote : List(U8) -> Try(a, [BadQuotedBytes(Str)]), a.is_eq : a, a -> Bool]"))))
 ~~~

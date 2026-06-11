@@ -380,6 +380,14 @@ pub const Tag = enum {
     /// * lhs - LHS DESCRIPTION
     /// * rhs - RHS DESCRIPTION
     multiline_string,
+    /// A string literal with an explicit type suffix, e.g. `"foo".MyType`
+    /// * lhs - type identifier (Ident.Idx bits)
+    /// * rhs - extra_data index holding [parts.span.start, parts.span.len]
+    typed_string,
+    /// A multiline string literal with an explicit type suffix
+    /// * lhs - type identifier (Ident.Idx bits)
+    /// * rhs - extra_data index holding [parts.span.start, parts.span.len]
+    typed_multiline_string,
     /// DESCRIPTION
     /// Example: EXAMPLE
     /// * lhs - LHS DESCRIPTION

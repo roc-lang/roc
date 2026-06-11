@@ -12,39 +12,19 @@ type=expr
 ]
 ~~~
 # EXPECTED
-TYPE MISMATCH - can_list_multiline_mismatch.md:2:5:2:7
-TYPE MISMATCH - can_list_multiline_mismatch.md:4:5:4:8
+TYPE MISMATCH - can_list_multiline_mismatch.md:3:5:3:18
 # PROBLEMS
 **TYPE MISMATCH**
-This number is being used where a non-number type is needed:
-**can_list_multiline_mismatch.md:2:5:2:7:**
-```roc
-    42,
-```
-    ^^
-
-The type was determined to be non-numeric here:
+This string literal is being used where a non-string type is needed:
 **can_list_multiline_mismatch.md:3:5:3:18:**
 ```roc
     "hello world",
 ```
     ^^^^^^^^^^^^^
 
-Other code expects this to have the type:
+The type was determined to be:
 
-    Str
-
-**TYPE MISMATCH**
-This number is being used where a non-number type is needed:
-**can_list_multiline_mismatch.md:4:5:4:8:**
-```roc
-    100
-```
-    ^^^
-
-Other code expects this to have the type:
-
-    Str
+    Dec
 
 # TOKENS
 ~~~zig
@@ -82,5 +62,5 @@ EndOfFile,
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "List(Str)"))
+(expr (type "List(Dec)"))
 ~~~

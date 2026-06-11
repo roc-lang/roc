@@ -95,11 +95,11 @@ This number is being used where a non-number type is needed:
 		^
 
 The type was determined to be non-numeric here:
-**multiline_string_complex.md:37:7:37:9:**
+**multiline_string_complex.md:1:1:1:1:**
 ```roc
-		0 - \\
+package
 ```
-		    ^^
+^
 
 Other code expects this to have the type:
 
@@ -296,7 +296,34 @@ With multiple lines
 				(p-assign (ident "value2")))))
 	(d-let
 		(p-assign (ident "value5"))
-		(e-runtime-error (tag "erroneous_value_expr")))
+		(e-record
+			(fields
+				(field (name "a")
+					(e-string
+						(e-literal (string "Multiline"))))
+				(field (name "b")
+					(e-tuple
+						(elems
+							(e-string
+								(e-literal (string "Multiline")))
+							(e-string
+								(e-literal (string "Multiline"))))))
+				(field (name "c")
+					(e-list
+						(elems
+							(e-string
+								(e-literal (string "multiline"))))))
+				(field (name "d")
+					(e-dispatch-call (method "minus") (constraint-fn-var 283)
+						(receiver
+							(e-num (value "0")))
+						(args
+							(e-string))))
+				(field (name "e")
+					(e-dispatch-call (method "not") (constraint-fn-var 298)
+						(receiver
+							(e-string))
+						(args))))))
 	(d-let
 		(p-assign (ident "x"))
 		(e-block

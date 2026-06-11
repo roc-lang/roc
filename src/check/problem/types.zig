@@ -282,6 +282,8 @@ pub const DispatcherDoesNotImplMethod = struct {
     origin: types_mod.StaticDispatchConstraint.Origin,
     /// Optional numeric literal info for from_numeral constraints
     num_literal: ?types_mod.NumeralInfo = null,
+    /// Source region of the string literal for from_quote constraints
+    quote_region: ?base.Region = null,
     /// True when the dispatcher was a numeric literal that was defaulted to Dec
     /// because no type annotation was given. Used to add explanatory text in errors.
     defaulted_from_numeric_literal: bool = false,

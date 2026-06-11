@@ -8095,6 +8095,32 @@ fn runExprKernel(
                         }
                     }
                 },
+                .typed_string => |e| {
+                    const parts = self.parse_ir.store.exprSlice(e.parts);
+                    var interpolation_count: usize = 0;
+                    for (parts) |part| {
+                        if (self.parse_ir.store.getExpr(part) != .string_part) {
+                            interpolation_count += 1;
+                        }
+                    }
+
+                    try stacks.pushFinishString(frame_allocator, .{
+                        .parts = e.parts,
+                        .region = self.parse_ir.tokenizedRegionToRegion(e.region),
+                        .free_vars_start = self.scratch_free_vars.top(),
+                        .interpolation_count = interpolation_count,
+                        .is_multiline = false,
+                        .type_ident = e.type_ident,
+                    });
+
+                    var i = parts.len;
+                    while (i > 0) {
+                        i -= 1;
+                        if (self.parse_ir.store.getExpr(parts[i]) != .string_part) {
+                            try stacks.pushParse(frame_allocator, .{ .idx = parts[i], .target = .scratch });
+                        }
+                    }
+                },
                 .multiline_string => |e| {
                     const parts = self.parse_ir.store.exprSlice(e.parts);
                     var interpolation_count: usize = 0;
@@ -8110,6 +8136,32 @@ fn runExprKernel(
                         .free_vars_start = self.scratch_free_vars.top(),
                         .interpolation_count = interpolation_count,
                         .is_multiline = true,
+                    });
+
+                    var i = parts.len;
+                    while (i > 0) {
+                        i -= 1;
+                        if (self.parse_ir.store.getExpr(parts[i]) != .string_part) {
+                            try stacks.pushParse(frame_allocator, .{ .idx = parts[i], .target = .scratch });
+                        }
+                    }
+                },
+                .typed_multiline_string => |e| {
+                    const parts = self.parse_ir.store.exprSlice(e.parts);
+                    var interpolation_count: usize = 0;
+                    for (parts) |part| {
+                        if (self.parse_ir.store.getExpr(part) != .string_part) {
+                            interpolation_count += 1;
+                        }
+                    }
+
+                    try stacks.pushFinishString(frame_allocator, .{
+                        .parts = e.parts,
+                        .region = self.parse_ir.tokenizedRegionToRegion(e.region),
+                        .free_vars_start = self.scratch_free_vars.top(),
+                        .interpolation_count = interpolation_count,
+                        .is_multiline = true,
+                        .type_ident = e.type_ident,
                     });
 
                     var i = parts.len;
@@ -9757,6 +9809,9 @@ fn runExprKernel(
             const expr_idx = try self.env.addExpr(Expr{ .e_str = .{
                 .span = can_str_span,
             } }, state.region);
+            if (state.type_ident) |type_ident| {
+                try self.recordTypedNumericSuffix(expr_idx, type_ident);
+            }
 
             const free_vars_span = self.scratch_free_vars.spanFrom(state.free_vars_start);
             child_slots.shrinkRetainingCapacity(result_start);
@@ -13182,6 +13237,9 @@ const ExprFinishStringWork = struct {
     free_vars_start: u32,
     interpolation_count: usize,
     is_multiline: bool,
+    /// Explicit type suffix (e.g. `"foo".MyType`), recorded against the
+    /// finished string expression for the type checker.
+    type_ident: ?Ident.Idx = null,
 };
 
 const ExprFinishListWork = struct {
