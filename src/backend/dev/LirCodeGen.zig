@@ -748,7 +748,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// debug crash sites in a proc keeps the frame from growing linearly
         /// with the number of debug asserts. Lazily allocated on first use.
         proc_debug_msg_slot: ?i32 = null,
-        proc_debug_args_slot: ?i32 = null,
 
         /// Counter for unique temporary local IDs.
         /// Starts at 0x8000_0000 to avoid collision with real local variables.
@@ -1171,7 +1170,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // Clear any leftover state from compileAllProcSpecs
             self.local_locations.clearRetainingCapacity();
             self.proc_debug_msg_slot = null;
-            self.proc_debug_args_slot = null;
             self.codegen.callee_saved_used = 0;
 
             // Initialize stack_offset to reserve space for callee-saved area
@@ -9771,31 +9769,30 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const ret_size = self.getLayoutSize(ret_layout);
             const ret_slot = self.codegen.allocStackSlot(if (ret_size == 0) 8 else ret_size);
 
+            const arg_offsets = try self.allocator.alloc(u32, arg_layouts.len);
+            defer self.allocator.free(arg_offsets);
             var total_args_size: u32 = 0;
-            for (arg_layouts) |arg_layout| {
+            for (arg_layouts, arg_offsets) |arg_layout, *arg_offset| {
                 const runtime_layout = self.runtimeRepresentationLayoutIdx(arg_layout);
                 const size_align = self.layout_store.layoutSizeAlign(self.layout_store.getLayout(runtime_layout));
                 total_args_size = std.mem.alignForward(u32, total_args_size, @intCast(@max(size_align.alignment.toByteUnits(), 1)));
+                arg_offset.* = total_args_size;
                 total_args_size += size_align.size;
             }
 
-            const args_slot = self.codegen.allocStackSlot(if (total_args_size == 0) 8 else total_args_size);
+            // Pad by 8 bytes so register pieces loaded as full 64-bit words from the tail
+            // argument never read past the slot.
+            const args_slot = self.codegen.allocStackSlot(total_args_size + 8);
 
             const hosted_target_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .X10 else .RAX;
             const hosted_table_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .X11 else .R11;
 
-            var offset: u32 = 0;
-            for (args, arg_layouts) |arg_loc_raw, arg_layout| {
+            for (args, arg_layouts, arg_offsets) |arg_loc_raw, arg_layout, arg_offset| {
                 const runtime_layout = self.runtimeRepresentationLayoutIdx(arg_layout);
                 const size_align = self.layout_store.layoutSizeAlign(self.layout_store.getLayout(runtime_layout));
-                const arg_size = size_align.size;
-                const arg_align: u32 = @intCast(size_align.alignment.toByteUnits());
-
-                offset = std.mem.alignForward(u32, offset, arg_align);
-                if (arg_size > 0) {
-                    try self.copyBytesToStackOffset(args_slot + @as(i32, @intCast(offset)), arg_loc_raw, arg_size);
+                if (size_align.size > 0) {
+                    try self.copyBytesToStackOffset(args_slot + @as(i32, @intCast(arg_offset)), arg_loc_raw, size_align.size);
                 }
-                offset += arg_size;
             }
 
             const hosted_fns_offset: i32 = @intCast(@offsetOf(RocOps, "hosted_fns"));
@@ -9823,17 +9820,116 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitLoad(.w64, hosted_table_reg, roc_ops_reg, hosted_fns_ptr_offset);
             try self.emitLoad(.w64, hosted_target_reg, hosted_table_reg, hosted_entry_offset);
 
+            // Lower the call to the platform C ABI (shared classifier, same as the LLVM
+            // backend and interpreter trampoline).
+            const abi_target: layout.abi.Target = if (comptime target.toCpuArch() == .aarch64)
+                .aarch64
+            else if (comptime roc_target.isWindows())
+                .x86_64_windows
+            else
+                .x86_64_sysv;
+            var arena_state = std.heap.ArenaAllocator.init(self.allocator);
+            defer arena_state.deinit();
+            const needs_ops = layout.abi.needsRocOps(self.layout_store, arg_layouts, ret_layout);
+            const lowered = layout.abi.lower(arena_state.allocator(), self.layout_store, abi_target, arg_layouts, ret_layout, needs_ops) catch return error.OutOfMemory;
+
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-            try builder.addRegArg(roc_ops_reg);
-            try builder.addLeaArg(frame_ptr, ret_slot);
-            try builder.addLeaArg(frame_ptr, args_slot);
+
+            // sret: on x86 the indirect-result pointer is the first integer argument; on
+            // aarch64 it is the dedicated x8 register, set just before the call.
+            const aarch64_sret = lowered.ret == .indirect and comptime target.toCpuArch() == .aarch64;
+            if (lowered.ret == .indirect and comptime target.toCpuArch() != .aarch64) {
+                try builder.setReturnByPointer(ret_slot);
+            }
+
+            if (lowered.leading_ops) try builder.addRegArg(roc_ops_reg);
+
+            for (lowered.args, arg_offsets, 0..) |placement, arg_offset, arg_i| {
+                const slot_off = args_slot + @as(i32, @intCast(arg_offset));
+                switch (placement) {
+                    .none => {},
+                    .indirect => {
+                        const runtime_layout = self.runtimeRepresentationLayoutIdx(arg_layouts[arg_i]);
+                        const size_align = self.layout_store.layoutSizeAlign(self.layout_store.getLayout(runtime_layout));
+                        if (abi_target == .x86_64_sysv) {
+                            // SysV memory-class aggregates are copied into the outgoing
+                            // stack argument area. AAPCS64 and Win64 pass a pointer.
+                            try builder.addStackMemArg(frame_ptr, slot_off, size_align.size);
+                        } else {
+                            try builder.addLeaArg(frame_ptr, slot_off);
+                        }
+                    },
+                    .registers => |pieces| {
+                        for (pieces) |piece| {
+                            const piece_off = slot_off + @as(i32, @intCast(piece.offset));
+                            switch (piece.class) {
+                                .integer => try builder.addMemArg(frame_ptr, piece_off),
+                                .float => try builder.addFloatMemArg(frame_ptr, piece_off, piece.size == 8),
+                            }
+                        }
+                    },
+                }
+            }
+
+            if (aarch64_sret) {
+                // AAPCS64 passes the indirect-result pointer in x8 (named XR here).
+                try self.emitLeaStack(.XR, ret_slot);
+            }
+
             try builder.callReg(hosted_target_reg);
+
+            // Register-class return: store each result register into the return slot.
+            const hosted_ret_reg_0: GeneralReg = if (arch == .x86_64) .RAX else .X0;
+            const hosted_ret_reg_1: GeneralReg = if (arch == .x86_64) .RDX else .X1;
+            switch (lowered.ret) {
+                .none, .indirect => {},
+                .registers => |pieces| {
+                    var gp_i: usize = 0;
+                    var sse_i: usize = 0;
+                    for (pieces) |piece| {
+                        const dst_off = ret_slot + @as(i32, @intCast(piece.offset));
+                        switch (piece.class) {
+                            .integer => {
+                                const reg = if (gp_i == 0) hosted_ret_reg_0 else hosted_ret_reg_1;
+                                if (piece.size <= 4) {
+                                    try self.emitStore(.w32, frame_ptr, dst_off, reg);
+                                } else {
+                                    try self.emitStore(.w64, frame_ptr, dst_off, reg);
+                                }
+                                gp_i += 1;
+                            },
+                            .float => {
+                                try self.emitHostedFloatResultStore(dst_off, sse_i, piece.size == 8);
+                                sse_i += 1;
+                            },
+                        }
+                    }
+                },
+            }
 
             if (ret_size == 0) {
                 return .{ .immediate_i64 = 0 };
             }
 
             return self.stackLocationForLayout(ret_layout, ret_slot);
+        }
+
+        /// Store hosted-call float result register `index` (0 or 1) into the return slot.
+        fn emitHostedFloatResultStore(self: *Self, dst_off: i32, index: usize, is_f64: bool) Allocator.Error!void {
+            const freg0: FloatReg = if (arch == .x86_64) .XMM0 else .V0;
+            const freg1: FloatReg = if (arch == .x86_64) .XMM1 else .V1;
+            const freg = if (index == 0) freg0 else freg1;
+            if (comptime target.toCpuArch() == .aarch64) {
+                if (is_f64) {
+                    try self.codegen.emit.fstrRegMemUoff(.double, freg, frame_ptr, @intCast(dst_off));
+                } else {
+                    try self.codegen.emit.fstrRegMemUoff(.single, freg, frame_ptr, @intCast(dst_off));
+                }
+            } else if (is_f64) {
+                try self.codegen.emit.movsdMemReg(frame_ptr, dst_off, freg);
+            } else {
+                try self.codegen.emit.movssMemReg(frame_ptr, dst_off, freg);
+            }
         }
 
         /// Copy a value location to a stack slot.
@@ -11767,7 +11863,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const saved_current_proc_args = self.current_proc_args;
             const saved_current_stmt_id = self.current_stmt_id;
             const saved_proc_debug_msg_slot = self.proc_debug_msg_slot;
-            const saved_proc_debug_args_slot = self.proc_debug_args_slot;
             var saved_local_locations = self.local_locations.clone() catch return error.OutOfMemory;
             defer saved_local_locations.deinit();
             var saved_join_points = self.join_points.clone() catch return error.OutOfMemory;
@@ -11789,7 +11884,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.local_locations.clearRetainingCapacity();
             self.clearFunctionControlFlowState();
             self.proc_debug_msg_slot = null;
-            self.proc_debug_args_slot = null;
             self.codegen.callee_saved_used = 0;
             self.codegen.callee_saved_available = CodeGen.CALLEE_SAVED_GENERAL_MASK;
             self.codegen.free_general = CodeGen.INITIAL_FREE_GENERAL;
@@ -11867,7 +11961,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.current_proc_args = saved_current_proc_args;
                 self.current_stmt_id = saved_current_stmt_id;
                 self.proc_debug_msg_slot = saved_proc_debug_msg_slot;
-                self.proc_debug_args_slot = saved_proc_debug_args_slot;
                 // Restore the saved maps by swapping them back into place. This
                 // cannot allocate (so it is safe in an errdefer that cannot
                 // propagate errors): the mutated maps end up in the saved_*
@@ -12062,7 +12155,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.current_proc_args = saved_current_proc_args;
             self.current_stmt_id = saved_current_stmt_id;
             self.proc_debug_msg_slot = saved_proc_debug_msg_slot;
-            self.proc_debug_args_slot = saved_proc_debug_args_slot;
             self.local_locations.deinit();
             self.local_locations = saved_local_locations.clone() catch return error.OutOfMemory;
             self.join_points.deinit();
@@ -13732,12 +13824,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.proc_debug_msg_slot = slot;
                 break :blk slot;
             } else self.codegen.allocStackSlot(effective_size);
-            const args_slot = if (can_share) blk: {
-                if (self.proc_debug_args_slot) |existing| break :blk existing;
-                const slot = self.codegen.allocStackSlot(16);
-                self.proc_debug_args_slot = slot;
-                break :blk slot;
-            } else self.codegen.allocStackSlot(16);
 
             const base_reg = frame_ptr;
             const tmp = try self.allocTempGeneral();
@@ -13759,28 +13845,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
             }
 
-            try self.emitLeaStack(tmp, msg_slot);
-            if (comptime target.toCpuArch() == .aarch64) {
-                try self.codegen.emit.strRegMemSoff(.w64, tmp, base_reg, args_slot);
-            } else {
-                try self.codegen.emit.movMemReg(.w64, base_reg, args_slot, tmp);
-            }
-
-            const msg_len_val: i64 = @bitCast(@as(u64, msg.len));
-            if (comptime target.toCpuArch() == .aarch64) {
-                try self.codegen.emitLoadImm(tmp, msg_len_val);
-                try self.codegen.emit.strRegMemSoff(.w64, tmp, base_reg, args_slot + 8);
-            } else {
-                try self.codegen.emit.movRegImm64(tmp, @bitCast(@as(u64, msg.len)));
-                try self.codegen.emit.movMemReg(.w64, base_reg, args_slot + 8, tmp);
-            }
-
             const fn_ptr_reg: GeneralReg = if (comptime target.toCpuArch() == .aarch64) .X10 else .RAX;
             try self.emitLoad(.w64, fn_ptr_reg, roc_ops_reg, field_offset);
 
+            // New RocOps callback ABI: callback(ops: *RocOps, bytes: [*]const u8, len: usize).
+            const msg_len_val: i64 = @bitCast(@as(u64, msg.len));
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-            try builder.addLeaArg(base_reg, args_slot);
-            try builder.addMemArg(roc_ops_reg, 0);
+            try builder.addRegArg(roc_ops_reg);
+            try builder.addLeaArg(base_reg, msg_slot);
+            try builder.addImmArg(msg_len_val);
             try builder.callReg(fn_ptr_reg);
         }
 
@@ -14288,55 +14361,55 @@ const TestRocOps = struct {
         return @max(alignment, @alignOf(usize));
     }
 
-    fn rocAlloc(args: *builtins.host_abi.RocAlloc, env: *anyopaque) callconv(.c) void {
-        const self: *TestRocOps = @ptrCast(@alignCast(env));
-        const align_enum = std.mem.Alignment.fromByteUnits(args.alignment);
-        const meta = metaBytes(args.alignment);
-        const total = args.length + meta;
+    fn rocAlloc(ops: *RocOps, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+        const self: *TestRocOps = @ptrCast(@alignCast(ops.env));
+        const align_enum = std.mem.Alignment.fromByteUnits(alignment);
+        const meta = metaBytes(alignment);
+        const total = length + meta;
         const alloc_base = self.allocator.rawAlloc(total, align_enum, @returnAddress()) orelse
             @panic("TestRocOps alloc failed");
         const size_ptr: *usize = @ptrFromInt(@intFromPtr(alloc_base) + meta - @sizeOf(usize));
         size_ptr.* = total;
-        args.answer = @ptrFromInt(@intFromPtr(alloc_base) + meta);
+        return @ptrFromInt(@intFromPtr(alloc_base) + meta);
     }
 
-    fn rocDealloc(args: *builtins.host_abi.RocDealloc, env: *anyopaque) callconv(.c) void {
-        const self: *TestRocOps = @ptrCast(@alignCast(env));
-        const meta = metaBytes(args.alignment);
-        const total_ptr: *const usize = @ptrFromInt(@intFromPtr(args.ptr) - @sizeOf(usize));
+    fn rocDealloc(ops: *RocOps, ptr: *anyopaque, alignment: usize) callconv(.c) void {
+        const self: *TestRocOps = @ptrCast(@alignCast(ops.env));
+        const meta = metaBytes(alignment);
+        const total_ptr: *const usize = @ptrFromInt(@intFromPtr(ptr) - @sizeOf(usize));
         const total = total_ptr.*;
-        const alloc_base: [*]u8 = @ptrFromInt(@intFromPtr(args.ptr) - meta);
-        const align_enum = std.mem.Alignment.fromByteUnits(args.alignment);
+        const alloc_base: [*]u8 = @ptrFromInt(@intFromPtr(ptr) - meta);
+        const align_enum = std.mem.Alignment.fromByteUnits(alignment);
         self.allocator.rawFree(alloc_base[0..total], align_enum, @returnAddress());
     }
 
-    fn rocRealloc(args: *builtins.host_abi.RocRealloc, env: *anyopaque) callconv(.c) void {
-        const self: *TestRocOps = @ptrCast(@alignCast(env));
-        const meta = metaBytes(args.alignment);
-        const old_total_ptr: *const usize = @ptrFromInt(@intFromPtr(args.answer) - @sizeOf(usize));
+    fn rocRealloc(ops: *RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+        const self: *TestRocOps = @ptrCast(@alignCast(ops.env));
+        const meta = metaBytes(alignment);
+        const old_total_ptr: *const usize = @ptrFromInt(@intFromPtr(ptr) - @sizeOf(usize));
         const old_total = old_total_ptr.*;
-        const old_base: [*]u8 = @ptrFromInt(@intFromPtr(args.answer) - meta);
-        const new_total = args.new_length + meta;
-        const align_enum = std.mem.Alignment.fromByteUnits(args.alignment);
+        const old_base: [*]u8 = @ptrFromInt(@intFromPtr(ptr) - meta);
+        const new_total = new_length + meta;
+        const align_enum = std.mem.Alignment.fromByteUnits(alignment);
         const new_base = self.allocator.rawAlloc(new_total, align_enum, @returnAddress()) orelse
             @panic("TestRocOps realloc failed");
         @memcpy(new_base[0..@min(old_total, new_total)], old_base[0..@min(old_total, new_total)]);
         self.allocator.rawFree(old_base[0..old_total], align_enum, @returnAddress());
         const new_total_ptr: *usize = @ptrFromInt(@intFromPtr(new_base) + meta - @sizeOf(usize));
         new_total_ptr.* = new_total;
-        args.answer = @ptrFromInt(@intFromPtr(new_base) + meta);
+        return @ptrFromInt(@intFromPtr(new_base) + meta);
     }
 
-    fn rocDbg(_: *const builtins.host_abi.RocDbg, _: *anyopaque) callconv(.c) void {
+    fn rocDbg(_: *RocOps, _: [*]const u8, _: usize) callconv(.c) void {
         @panic("unexpected dbg in TestRocOps");
     }
 
-    fn rocExpectFailed(_: *const builtins.host_abi.RocExpectFailed, _: *anyopaque) callconv(.c) void {
+    fn rocExpectFailed(_: *RocOps, _: [*]const u8, _: usize) callconv(.c) void {
         @panic("unexpected expect failure in TestRocOps");
     }
 
-    fn rocCrashed(args: *const builtins.host_abi.RocCrashed, _: *anyopaque) callconv(.c) void {
-        std.debug.panic("roc crashed: {s}", .{args.utf8_bytes[0..args.len]});
+    fn rocCrashed(_: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
+        std.debug.panic("roc crashed: {s}", .{bytes[0..len]});
     }
 };
 

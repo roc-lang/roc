@@ -3,7 +3,6 @@
 //! Lists use copy-on-write semantics to minimize allocations when shared across contexts.
 //! Seamless slice optimization reduces memory overhead for substring operations.
 const std = @import("std");
-const builtin = @import("builtin");
 
 const utils = @import("utils.zig");
 const UpdateMode = utils.UpdateMode;
@@ -111,20 +110,11 @@ pub const RocList = extern struct {
     // The pointer is to just after the refcount.
     // For big lists, it just returns their bytes pointer.
     // For seamless slices, it returns the pointer stored in capacity_or_alloc_ptr.
-    pub fn getAllocationDataPtr(self: RocList, roc_ops: *RocOps) ?[*]u8 {
+    pub fn getAllocationDataPtr(self: RocList, _: *RocOps) ?[*]u8 {
         const list_alloc_ptr = @intFromPtr(self.bytes);
         const slice_alloc_ptr = decodeSliceAllocationPtr(self.capacity_or_alloc_ptr);
         const slice_mask = self.seamlessSliceMask();
         const alloc_ptr = (list_alloc_ptr & ~slice_mask) | (slice_alloc_ptr & slice_mask);
-
-        // Verify the computed allocation pointer is properly aligned
-        if (comptime builtin.mode == .Debug) {
-            if (alloc_ptr != 0 and alloc_ptr % @alignOf(usize) != 0) {
-                var buf: [256]u8 = undefined;
-                const msg = std.fmt.bufPrint(&buf, "getAllocationDataPtr: misaligned ptr=0x{x} (bytes=0x{x}, cap_or_alloc=0x{x}, is_slice={})", .{ alloc_ptr, list_alloc_ptr, self.capacity_or_alloc_ptr, self.isSeamlessSlice() }) catch "getAllocationDataPtr: misaligned ptr";
-                roc_ops.crash(msg);
-            }
-        }
 
         return @as(?[*]u8, @ptrFromInt(alloc_ptr));
     }
@@ -243,9 +233,6 @@ pub const RocList = extern struct {
             const ptr: [*]usize = utils.alignedPtrCast([*]usize, non_null_ptr, @src());
             return (ptr - 1)[0];
         } else {
-            var buf: [128]u8 = undefined;
-            const msg = std.fmt.bufPrint(&buf, "RocList.refcount: getAllocationDataPtr returned null (capacity={}, is_slice={})", .{ self.getCapacity(), self.isSeamlessSlice() }) catch "RocList.refcount: getAllocationDataPtr returned null";
-            roc_ops.crash(msg);
             unreachable;
         }
     }
@@ -1001,27 +988,6 @@ pub fn listSublist(
             const slice_alloc_ptr = list.capacity_or_alloc_ptr;
             const slice_mask = list.seamlessSliceMask();
             const alloc_ptr = (list_alloc_ptr & ~slice_mask) | (slice_alloc_ptr & slice_mask);
-
-            // Verify the encoded pointer will decode correctly
-            if (comptime builtin.mode == .Debug) {
-                const test_decode = RocList.decodeSliceAllocationPtr(alloc_ptr);
-                const original_ptr = if (list.isSeamlessSlice())
-                    RocList.decodeSliceAllocationPtr(slice_alloc_ptr)
-                else
-                    @intFromPtr(source_ptr);
-                if (test_decode != original_ptr) {
-                    var buf: [128]u8 = undefined;
-                    const msg = std.fmt.bufPrint(&buf, "listSublist: encoding error (test_decode=0x{x}, original_ptr=0x{x})", .{ test_decode, original_ptr }) catch "listSublist: encoding error";
-                    roc_ops.crash(msg);
-                }
-
-                // Verify alignment of the original allocation pointer
-                if (original_ptr % @alignOf(usize) != 0) {
-                    var buf: [128]u8 = undefined;
-                    const msg = std.fmt.bufPrint(&buf, "listSublist: misaligned original ptr=0x{x} (alignment={d})", .{ original_ptr, @alignOf(usize) }) catch "listSublist: misaligned original ptr";
-                    roc_ops.crash(msg);
-                }
-            }
 
             return RocList{
                 .bytes = source_ptr + start * element_width,

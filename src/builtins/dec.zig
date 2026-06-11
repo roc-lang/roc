@@ -159,7 +159,7 @@ pub const RocDec = extern struct {
             const diff_decimal_places = decimal_places - after_str_len;
 
             const after_str = roc_str_slice[pi + 1 .. length];
-            const after_u64 = std.fmt.parseUnsigned(u64, after_str, 10) catch null;
+            const after_u64 = @import("num.zig").parseUnsignedDecimal(u64, after_str);
             if (after_u64) |f| {
                 const unsigned = i128h.mul_i128(@as(i128, @intCast(f)), i128h.pow10_i128(@intCast(diff_decimal_places)));
                 after_val_i128 = if (is_negative) -unsigned else unsigned;
@@ -169,7 +169,7 @@ pub const RocDec = extern struct {
         const before_str = roc_str_slice[initial_index..before_str_length];
         var before_val_i128: ?i128 = null;
         if (before_str.len > 0) {
-            const before = std.fmt.parseUnsigned(i128, before_str, 10) catch return null;
+            const before = @import("num.zig").parseUnsignedDecimal(i128, before_str) orelse return null;
             const signed_before: i128 = if (is_negative) -before else before;
             const mul_ans = @import("num.zig").mulWithOverflow(i128, signed_before, one_point_zero_i128);
             if (mul_ans.has_overflowed) {

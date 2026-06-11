@@ -217,6 +217,7 @@ const emit_options = bindings.TargetMachine.EmitOptions{
     .llvm_ir_filename = null,    // set to emit LLVM IR text
     .bitcode_filename = null,    // set to emit bitcode
     .coverage = .{...},          // coverage options
+    .no_target_libcalls = false,  // true for freestanding/no-libc targets
 };
 
 // Emit object code

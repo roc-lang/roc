@@ -198,8 +198,10 @@ pub fn CallBuilder(comptime EmitType: type) type {
 
     const MoveStatus = enum { to_move, being_moved, moved };
 
-    // Maximum stack arguments we support (should be plenty for any real call)
-    const MAX_STACK_ARGS = 16;
+    // Maximum 8-byte stack argument slots we support. SysV memory-class
+    // aggregates occupy one slot per eightbyte, so keep this comfortably above
+    // the integer-register spill count.
+    const MAX_STACK_ARGS = 64;
 
     return struct {
         const Self = @This();
@@ -314,6 +316,23 @@ pub fn CallBuilder(comptime EmitType: type) type {
             }
         }
 
+        /// Add a by-value stack argument copied from memory, rounded up to
+        /// eightbyte slots. This is used for x86_64 SysV memory-class
+        /// aggregate arguments; Win64/AAPCS64 pass those aggregates by pointer.
+        pub fn addStackMemArg(self: *Self, base_reg: GeneralReg, offset: i32, size: usize) Allocator.Error!void {
+            const slot_count = (size + 7) / 8;
+            std.debug.assert(self.stack_arg_count + slot_count <= MAX_STACK_ARGS);
+            for (0..slot_count) |slot| {
+                self.stack_args[self.stack_arg_count] = .{
+                    .from_mem = .{
+                        .base = base_reg,
+                        .offset = offset + @as(i32, @intCast(slot * 8)),
+                    },
+                };
+                self.stack_arg_count += 1;
+            }
+        }
+
         /// Add immediate value argument
         pub fn addImmArg(self: *Self, value: i64) Allocator.Error!void {
             if (self.int_arg_index < CC_EMIT.PARAM_REGS.len) {
@@ -374,11 +393,17 @@ pub fn CallBuilder(comptime EmitType: type) type {
                     @panic("TODO: stack float args not yet implemented for Windows CallBuilder");
                 }
             } else {
-                // System V: separate float register pool
+                // System V / AAPCS64: separate float register pool
                 if (self.float_arg_index < CC_EMIT.FLOAT_PARAM_REGS.len) {
                     const dst = CC_EMIT.FLOAT_PARAM_REGS[self.float_arg_index];
                     if (dst != src_reg) {
-                        if (is_f64) {
+                        if (comptime @hasDecl(EmitType, "fmovRegReg")) {
+                            if (is_f64) {
+                                try self.emit.fmovRegReg(.double, dst, src_reg);
+                            } else {
+                                try self.emit.fmovRegReg(.single, dst, src_reg);
+                            }
+                        } else if (is_f64) {
                             try self.emit.movsdRegReg(dst, src_reg);
                         } else {
                             try self.emit.movssRegReg(dst, src_reg);
@@ -386,7 +411,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
                     }
                     self.float_arg_index += 1;
                 } else {
-                    // Float args beyond XMM7 go on stack
+                    // Float args beyond the register pool go on stack
                     // TODO: Implement stack float args for System V CallBuilder.
                     @panic("TODO: stack float args not yet implemented for System V CallBuilder");
                 }
@@ -410,31 +435,36 @@ pub fn CallBuilder(comptime EmitType: type) type {
             if (comptime is_windows) {
                 // Windows: float args use same position as int args
                 if (self.int_arg_index < CC_EMIT.FLOAT_PARAM_REGS.len) {
-                    const dst = CC_EMIT.FLOAT_PARAM_REGS[self.int_arg_index];
-                    if (is_f64) {
-                        try self.emit.movsdRegMem(dst, base_reg, offset);
-                    } else {
-                        try self.emit.movssRegMem(dst, base_reg, offset);
-                    }
+                    try self.emitFloatLoad(CC_EMIT.FLOAT_PARAM_REGS[self.int_arg_index], base_reg, offset, is_f64);
                     self.int_arg_index += 1;
                 } else {
                     // TODO: Implement stack float args for Windows CallBuilder.
                     @panic("TODO: stack float args not yet implemented for Windows CallBuilder");
                 }
             } else {
-                // System V: separate float register pool
+                // System V / AAPCS64: separate float register pool
                 if (self.float_arg_index < CC_EMIT.FLOAT_PARAM_REGS.len) {
-                    const dst = CC_EMIT.FLOAT_PARAM_REGS[self.float_arg_index];
-                    if (is_f64) {
-                        try self.emit.movsdRegMem(dst, base_reg, offset);
-                    } else {
-                        try self.emit.movssRegMem(dst, base_reg, offset);
-                    }
+                    try self.emitFloatLoad(CC_EMIT.FLOAT_PARAM_REGS[self.float_arg_index], base_reg, offset, is_f64);
                     self.float_arg_index += 1;
                 } else {
                     // TODO: Implement stack float args for System V CallBuilder.
                     @panic("TODO: stack float args not yet implemented for System V CallBuilder");
                 }
+            }
+        }
+
+        /// Load a float from memory into a float register, dispatching to the target's emit.
+        fn emitFloatLoad(self: *Self, dst: FloatReg, base_reg: GeneralReg, offset: i32, is_f64: bool) Allocator.Error!void {
+            if (comptime @hasDecl(EmitType, "fldrRegMemUoff")) {
+                if (is_f64) {
+                    try self.emit.fldrRegMemUoff(.double, dst, base_reg, @intCast(offset));
+                } else {
+                    try self.emit.fldrRegMemUoff(.single, dst, base_reg, @intCast(offset));
+                }
+            } else if (is_f64) {
+                try self.emit.movsdRegMem(dst, base_reg, offset);
+            } else {
+                try self.emit.movssRegMem(dst, base_reg, offset);
             }
         }
 
