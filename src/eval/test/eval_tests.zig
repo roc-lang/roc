@@ -493,6 +493,94 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "(False, [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [1], 20)" },
     },
     .{
+        .name = "inspect: custom from_numeral literal pattern dispatches through is_eq",
+        .source_kind = .module,
+        .source =
+        \\Code := [Code(List(U8))].{
+        \\    from_numeral : Numeral -> Try(Code, [InvalidNumeral(Str)])
+        \\    from_numeral = |numeral| match numeral {
+        \\        Literal(parts) => Ok(Code(parts.digits_before_pt))
+        \\    }
+        \\    is_eq : Code, Code -> Bool
+        \\    is_eq = |a, b| match (a, b) {
+        \\        (Code(x), Code(y)) => x == y
+        \\    }
+        \\}
+        \\
+        \\force : Code -> Code
+        \\force = |n| n
+        \\
+        \\describe : Code -> Str
+        \\describe = |code| match code {
+        \\    42 => "yes"
+        \\    _ => "no"
+        \\}
+        \\
+        \\main = (describe(force(42)), describe(force(7)))
+        ,
+        .expected = .{ .inspect_str = "(\"yes\", \"no\")" },
+    },
+    .{
+        .name = "inspect: custom from_numeral literal pattern compares converted values not raw digits",
+        .source_kind = .module,
+        .source =
+        \\Tally := [Tally(U64)].{
+        \\    from_numeral : Numeral -> Try(Tally, [InvalidNumeral(Str)])
+        \\    from_numeral = |numeral| match numeral {
+        \\        Literal(parts) => Ok(Tally(parts.digits_before_pt.len()))
+        \\    }
+        \\    is_eq : Tally, Tally -> Bool
+        \\    is_eq = |a, b| match (a, b) {
+        \\        (Tally(x), Tally(y)) => x == y
+        \\    }
+        \\}
+        \\
+        \\force : Tally -> Tally
+        \\force = |n| n
+        \\
+        \\describe : Tally -> Str
+        \\describe = |tally| match tally {
+        \\    100 => "three digits"
+        \\    _ => "other"
+        \\}
+        \\
+        \\main = (describe(force(999)), describe(force(7)))
+        ,
+        .expected = .{ .inspect_str = "(\"three digits\", \"other\")" },
+    },
+    .{
+        .name = "custom from_numeral Err is a compile-time problem",
+        .source_kind = .module,
+        .source =
+        \\Picky := [Picky].{
+        \\    from_numeral : Numeral -> Try(Picky, [InvalidNumeral(Str)])
+        \\    from_numeral = |_numeral| Err(InvalidNumeral("Picky rejects every numeral"))
+        \\}
+        \\
+        \\force : Picky -> Picky
+        \\force = |n| n
+        \\
+        \\main = force(42)
+        ,
+        .expected = .problem,
+    },
+    .{
+        .name = "custom from_numeral Err in an uncalled function is a compile-time problem",
+        .source_kind = .module,
+        .source =
+        \\Picky := [Picky].{
+        \\    from_numeral : Numeral -> Try(Picky, [InvalidNumeral(Str)])
+        \\    from_numeral = |_numeral| Err(InvalidNumeral("Picky rejects every numeral"))
+        \\}
+        \\
+        \\unused : {} -> Picky
+        \\unused = |_| 42
+        \\
+        \\main = "ok"
+        ,
+        .expected = .problem,
+    },
+    .{
         .name = "inspect: unconstrained empty list specialization remains replaceable until constrained",
         .source_kind = .module,
         .source =

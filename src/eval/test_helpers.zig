@@ -799,9 +799,45 @@ pub fn parseAndCanonicalizeProgramPublishedRoots(
     return parseAndCanonicalizeProgramWithRootMode(allocator, source_kind, source, imports, false, .published_roots_only, null);
 }
 
+pub const ComptimePublishOutcome = enum { no_problems, comptime_problems };
+
+/// Publish a program with compile-time evaluation problems routed into the
+/// checker's problem store, reporting whether any were found. The runtime eval
+/// pipeline intentionally publishes without a problem store so that crashes
+/// reachable from compile-time roots still compile and crash at runtime; this
+/// entry point exists for tests that assert on the compile-time diagnostics
+/// instead.
+pub fn publishProgramForComptimeProblems(
+    allocator: Allocator,
+    source_kind: SourceKind,
+    source: []const u8,
+    imports: []const ModuleSource,
+) anyerror!ComptimePublishOutcome {
+    const resources = parseAndCanonicalizeProgramWithRootModeReporting(
+        allocator,
+        source_kind,
+        source,
+        imports,
+        false,
+        .published_roots_only,
+        null,
+        .report_comptime_problems,
+    ) catch |err| switch (err) {
+        error.CompileTimeProblem => return .comptime_problems,
+        else => return err,
+    };
+    cleanupParseAndCanonical(allocator, resources);
+    return .no_problems;
+}
+
 const PublishedRootMode = union(enum) {
     eval_root: bool,
     published_roots_only,
+};
+
+const ComptimeProblemReporting = enum {
+    ignore_comptime_problems,
+    report_comptime_problems,
 };
 
 fn problemBlocksCheckedArtifact(problem: check.problem.Problem) bool {
@@ -826,6 +862,28 @@ fn parseAndCanonicalizeProgramWithRootMode(
     inspect_wrap: bool,
     root_mode: PublishedRootMode,
     pre_published_builtin: ?PrePublishedBuiltin,
+) anyerror!ParsedResources {
+    return parseAndCanonicalizeProgramWithRootModeReporting(
+        allocator,
+        source_kind,
+        source,
+        imports,
+        inspect_wrap,
+        root_mode,
+        pre_published_builtin,
+        .ignore_comptime_problems,
+    );
+}
+
+fn parseAndCanonicalizeProgramWithRootModeReporting(
+    allocator: Allocator,
+    source_kind: SourceKind,
+    source: []const u8,
+    imports: []const ModuleSource,
+    inspect_wrap: bool,
+    root_mode: PublishedRootMode,
+    pre_published_builtin: ?PrePublishedBuiltin,
+    problem_reporting: ComptimeProblemReporting,
 ) anyerror!ParsedResources {
     const builtin_indices: CIR.BuiltinIndices = if (pre_published_builtin) |ppb|
         ppb.indices
@@ -995,6 +1053,10 @@ fn parseAndCanonicalizeProgramWithRootMode(
             .imports = publish_imports,
             .explicit_roots = explicit_roots,
             .compile_time_finalizer = CompileTimeFinalization.finalizer(),
+            .problem_store = switch (problem_reporting) {
+                .ignore_comptime_problems => null,
+                .report_comptime_problems => &main_checked.checker.problems,
+            },
         },
     );
     errdefer checked_artifact.deinit(allocator);

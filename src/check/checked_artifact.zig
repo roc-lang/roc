@@ -698,7 +698,7 @@ pub const RootRequestTable = struct {
             try appendRoot(&requests, allocator, .{
                 .module_idx = root.module_idx,
                 .kind = switch (root.kind) {
-                    .constant => .compile_time_constant,
+                    .constant, .numeral_conversion => .compile_time_constant,
                     .callable_binding => .compile_time_callable,
                     .expect => .test_expect,
                 },
@@ -706,7 +706,7 @@ pub const RootRequestTable = struct {
                 .checked_type = entryWrapperForRoot(entry_wrappers, root.id).checked_fn_root,
                 .abi = switch (root.kind) {
                     .expect => .test_expect,
-                    .constant, .callable_binding => .compile_time,
+                    .constant, .callable_binding, .numeral_conversion => .compile_time,
                 },
                 .exposure = .private,
                 .procedure_template = templateForEntryWrapperRoot(entry_wrappers, root.id),
@@ -894,6 +894,7 @@ fn compileTimeRootKindMatchesRequest(
         .constant => request_kind == .compile_time_constant,
         .callable_binding => request_kind == .compile_time_callable,
         .expect => request_kind == .test_expect,
+        .numeral_conversion => request_kind == .compile_time_constant,
     };
 }
 
@@ -950,6 +951,7 @@ fn compileTimeRootDependsOnUnboundPlatformRequirement(
     return switch (root.kind) {
         .constant,
         .callable_binding,
+        .numeral_conversion,
         => exprDependsOnUnboundPlatformRequirement(
             checked_bodies,
             resolved_value_refs,
@@ -9281,7 +9283,7 @@ pub const CheckedProcedureTemplateTable = struct {
                 .nested_proc_sites = .{},
                 .target = switch (root.kind) {
                     .expect => .entry,
-                    .constant, .callable_binding => .comptime_only,
+                    .constant, .callable_binding, .numeral_conversion => .comptime_only,
                 },
             });
         }
@@ -12481,6 +12483,11 @@ pub const CompileTimeRootKind = enum {
     constant,
     callable_binding,
     expect,
+    /// A `from_numeral` conversion of a numeric literal whose target is a
+    /// non-builtin nominal type. The root body evaluates the dispatch call's
+    /// `Try` result; finalization unwraps `Ok` into the stored constant and
+    /// reports `Err(InvalidNumeral(..))` as a checking problem.
+    numeral_conversion,
 };
 
 /// Public `CompileTimeRootPayload` declaration.
@@ -12550,6 +12557,29 @@ pub const CompileTimeRootTable = struct {
             });
         }
 
+        for (module_env.numeral_dispatch_plans.items.items) |numeral_plan| {
+            const expr_idx: CIR.Expr.Idx = @enumFromInt(numeral_plan.node_idx);
+            const checked_expr = checked_bodies.exprIdForSource(expr_idx) orelse continue;
+            switch (checked_bodies.exprs[@intFromEnum(checked_expr)].data) {
+                .num_from_numeral, .typed_num_from_numeral => {},
+                else => continue,
+            }
+            const fn_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(numeral_plan.fn_var));
+            const try_ty = switch (checked_types.store.payloads.items[@intFromEnum(fn_ty)]) {
+                .function => |function| function.ret,
+                else => checkedArtifactInvariant("from_numeral dispatch plan type was not a function", .{}),
+            };
+            try appendCompileTimeRoot(&roots, allocator, .{
+                .module_idx = module.moduleIndex(),
+                .kind = .numeral_conversion,
+                .source = .{ .expr = expr_idx },
+                .pattern = null,
+                .expr = checked_expr,
+                .checked_type = try_ty,
+                .payload = .pending,
+            });
+        }
+
         return .{ .roots = try roots.toOwnedSlice(allocator) };
     }
 
@@ -12563,6 +12593,13 @@ pub const CompileTimeRootTable = struct {
     pub fn lookupIdBySource(self: *const CompileTimeRootTable, source: RootSource) ?ComptimeRootId {
         for (self.roots) |entry| {
             if (rootSourceMatches(entry.source, source)) return entry.id;
+        }
+        return null;
+    }
+
+    pub fn lookupNumeralRootByExpr(self: *const CompileTimeRootTable, expr: CheckedExprId) ?CompileTimeRoot {
+        for (self.roots) |entry| {
+            if (entry.kind == .numeral_conversion and entry.expr == expr) return entry;
         }
         return null;
     }
@@ -12630,6 +12667,10 @@ fn verifyCompileTimeRootPayloadMatchesKind(kind: CompileTimeRootKind, payload: C
         },
         .expect => switch (payload) {
             .expect => true,
+            else => false,
+        },
+        .numeral_conversion => switch (payload) {
+            .const_node => true,
             else => false,
         },
     };
@@ -15268,7 +15309,7 @@ pub const CheckedModuleArtifact = struct {
             std.debug.assert(@intFromEnum(root.expr) < self.checked_bodies.exprs.len);
             if (root.pattern) |pattern| std.debug.assert(@intFromEnum(pattern) < self.checked_bodies.patterns.len);
             switch (root.kind) {
-                .constant, .callable_binding => switch (root.payload) {
+                .constant, .callable_binding, .numeral_conversion => switch (root.payload) {
                     .pending => {},
                     else => verifyCompileTimeRootPayloadMatchesKind(root.kind, root.payload),
                 },

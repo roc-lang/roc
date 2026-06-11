@@ -4021,6 +4021,14 @@ const BodyContext = struct {
             },
             .entry_wrapper => |wrapper_id| {
                 const wrapper = self.view.entry_wrappers.get(wrapper_id);
+                const root = self.view.compile_time_roots.root(wrapper.root);
+                if (root.kind == .numeral_conversion) {
+                    return .{
+                        .args = .empty(),
+                        .body = try self.lowerNumeralRootBody(wrapper.body_expr, ret_ty),
+                        .ret = ret_ty,
+                    };
+                }
                 return .{
                     .args = .empty(),
                     .body = try self.lowerExprAtType(wrapper.body_expr, ret_ty),
@@ -4259,9 +4267,15 @@ const BodyContext = struct {
             .frac_f64 => |frac| .{ .frac_f64_lit = frac.value },
             .dec => |dec| .{ .dec_lit = dec.value },
             .dec_small => Common.invariant("small decimal literal reached Monotype after numeric finalization"),
-            .num_from_numeral => |plan| return try self.lowerNumeralCall(expr.ty, plan, ty),
+            .num_from_numeral => |plan| {
+                if (try self.restoredNumeralConst(expr_id, ty)) |restored| return restored;
+                return try self.lowerNumeralCall(expr.ty, plan, ty);
+            },
             .typed_frac => Common.invariant("typed fractional integer literal reached Monotype after numeric finalization"),
-            .typed_num_from_numeral => |plan| return try self.lowerNumeralCall(expr.ty, plan, ty),
+            .typed_num_from_numeral => |plan| {
+                if (try self.restoredNumeralConst(expr_id, ty)) |restored| return restored;
+                return try self.lowerNumeralCall(expr.ty, plan, ty);
+            },
             .str_segment => |str| .{ .str_lit = try self.lowerStringLiteral(str) },
             .bytes_literal => |str| .{ .str_lit = try self.lowerStringLiteral(str) },
             .empty_list => .{ .list = .empty() },
@@ -6290,6 +6304,21 @@ const BodyContext = struct {
         maybe_plan: ?static_dispatch.StaticDispatchPlanId,
         target_ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprId {
+        const result = try self.lowerNumeralCallRaw(checked_ret_ty, maybe_plan, target_ty);
+        return try self.unwrapNumeralResult(result.call, result.try_ty, target_ty);
+    }
+
+    const NumeralCall = struct {
+        call: Ast.ExprId,
+        try_ty: Type.TypeId,
+    };
+
+    fn lowerNumeralCallRaw(
+        self: *BodyContext,
+        checked_ret_ty: checked.CheckedTypeId,
+        maybe_plan: ?static_dispatch.StaticDispatchPlanId,
+        target_ty: Type.TypeId,
+    ) Allocator.Error!NumeralCall {
         const plan_id = maybe_plan orelse Common.invariant("checked from_numeral expression reached Monotype without a dispatch plan");
         const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
         if (plan.result_mode != .value) Common.invariant("checked from_numeral plan had a non-value result mode");
@@ -6320,7 +6349,40 @@ const BodyContext = struct {
             .ty = fn_data.ret,
             .data = try self.lowerResolvedDispatch(plan, resolved, target_mono_ty, self),
         });
-        return try self.unwrapNumeralResult(call_expr, fn_data.ret, target_ty);
+        return .{ .call = call_expr, .try_ty = fn_data.ret };
+    }
+
+    fn lowerNumeralRootBody(
+        self: *BodyContext,
+        expr_id: checked.CheckedExprId,
+        try_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const expr = self.view.bodies.exprs[@intFromEnum(expr_id)];
+        const plan = switch (expr.data) {
+            .num_from_numeral, .typed_num_from_numeral => |plan| plan,
+            else => Common.invariant("numeral conversion root did not point at a from_numeral expression"),
+        };
+        const ok_tag = self.monoTagByText(try_ty, "Ok");
+        const ok_payloads = self.builder.program.types.span(ok_tag.payloads);
+        if (ok_payloads.len != 1) Common.invariant("numeral conversion root Try.Ok did not carry one payload");
+        const result = try self.lowerNumeralCallRaw(expr.ty, plan, ok_payloads[0]);
+        if (!self.sameType(result.try_ty, try_ty)) {
+            Common.invariant("numeral conversion root type differed from the from_numeral result type");
+        }
+        return result.call;
+    }
+
+    fn restoredNumeralConst(
+        self: *BodyContext,
+        expr_id: checked.CheckedExprId,
+        ty: Type.TypeId,
+    ) Allocator.Error!?Ast.ExprId {
+        const root = self.view.compile_time_roots.lookupNumeralRootByExpr(expr_id) orelse return null;
+        return switch (root.payload) {
+            .const_node => |node| try self.restoreConstNodeAtType(self.view, self.view, node, ty),
+            .pending => null,
+            else => Common.invariant("numeral conversion root stored a non-constant payload"),
+        };
     }
 
     fn lowerNumeralValue(
