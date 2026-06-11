@@ -2755,7 +2755,7 @@ const ArcTest = struct {
             .body = null,
             .ret_layout = ret_layout,
             .hosted = .{
-                .symbol = @enumFromInt(0),
+                .symbol = try self.store.insertString("roc_test_hosted"),
                 .dispatch_index = 0,
             },
         });
