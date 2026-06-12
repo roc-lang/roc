@@ -701,10 +701,10 @@ const InstGraph = struct {
 
     /// A named type met a structurally different type. Aliases are transparent
     /// downstream, so an alias relates through its backing without merging
-    /// roots. A nominal becomes the canonical node for both sides: the other
-    /// side's structure moves to a fresh node that unifies with the nominal's
-    /// backing, so every Monotype view of either side carries the named
-    /// wrapper, exactly as later stages expect.
+    /// roots. A nominal becomes the single node both sides resolve to: the
+    /// other side's structure moves to a fresh node that unifies with the
+    /// nominal's backing, so every Monotype view of either side carries the
+    /// named wrapper, exactly as later stages expect.
     fn unifyThroughBacking(
         self: *InstGraph,
         named_node: NodeId,
@@ -1030,10 +1030,16 @@ const InstGraph = struct {
     fn importMono(self: *InstGraph, ty: Type.TypeId) Allocator.Error!NodeId {
         if (self.mono_nodes.get(ty)) |existing| return existing;
         const node = try self.newNode(.{ .unresolved = .{} });
-        // One-way memo: the import is a snapshot of a finished Monotype, never
-        // a view of this graph. Registering it as a view would let refreshes
-        // rewrite another specialization's final type in place.
         try self.mono_nodes.put(ty, node);
+        // An imported Monotype becomes a refreshable view of its node, so
+        // every holder of the id observes the solved type, unless it belongs
+        // to the builder-global cache: those serve many specializations as
+        // finished snapshots and stay as they are.
+        if (!self.builder.frozen_monos.contains(ty)) {
+            const entry = try self.node_monos.getOrPut(node);
+            if (!entry.found_existing) entry.value_ptr.* = .empty;
+            try entry.value_ptr.append(self.allocator, ty);
+        }
 
         const types = &self.builder.program.types;
         const imported: InstNode = switch (types.get(ty)) {
@@ -1234,8 +1240,12 @@ const Builder = struct {
     program: *Ast.Program,
     symbols: Common.SymbolGen = .{},
     type_cache: std.AutoHashMap(CheckedTypeAddress, Type.TypeId),
-    lowered_templates: std.AutoHashMap(TemplateFamilyKey, std.ArrayList(LoweredTemplate)),
-    lowered_nested_fns: std.AutoHashMap(NestedFnFamilyKey, std.ArrayList(LoweredNestedFn)),
+    /// Monotypes owned by the builder-global type cache. They serve many
+    /// specializations as finished snapshots, so specialization graphs never
+    /// register refreshable views of them.
+    frozen_monos: std.AutoHashMap(Type.TypeId, void),
+    lowered_templates: std.AutoHashMap(TemplateFamily, std.ArrayList(LoweredTemplate)),
+    lowered_nested_fns: std.AutoHashMap(NestedFnFamily, std.ArrayList(LoweredNestedFn)),
     nested_site_cache: std.AutoHashMap(NestedSiteAddress, names.ProcSiteId),
     const_expr_cache: std.AutoHashMap(ConstExprAddress, Ast.ExprId),
     inspect_defs: std.AutoHashMap(InspectDefAddress, InspectDefEntry),
@@ -1256,8 +1266,9 @@ const Builder = struct {
             .root_view = checked.importedView(modules.root.module),
             .program = program,
             .type_cache = std.AutoHashMap(CheckedTypeAddress, Type.TypeId).init(allocator),
-            .lowered_templates = std.AutoHashMap(TemplateFamilyKey, std.ArrayList(LoweredTemplate)).init(allocator),
-            .lowered_nested_fns = std.AutoHashMap(NestedFnFamilyKey, std.ArrayList(LoweredNestedFn)).init(allocator),
+            .frozen_monos = std.AutoHashMap(Type.TypeId, void).init(allocator),
+            .lowered_templates = std.AutoHashMap(TemplateFamily, std.ArrayList(LoweredTemplate)).init(allocator),
+            .lowered_nested_fns = std.AutoHashMap(NestedFnFamily, std.ArrayList(LoweredNestedFn)).init(allocator),
             .nested_site_cache = std.AutoHashMap(NestedSiteAddress, names.ProcSiteId).init(allocator),
             .const_expr_cache = std.AutoHashMap(ConstExprAddress, Ast.ExprId).init(allocator),
             .inspect_defs = std.AutoHashMap(InspectDefAddress, InspectDefEntry).init(allocator),
@@ -1280,6 +1291,7 @@ const Builder = struct {
             list.deinit(self.allocator);
         }
         self.lowered_templates.deinit();
+        self.frozen_monos.deinit();
         self.type_cache.deinit();
     }
 
@@ -1863,7 +1875,7 @@ const Builder = struct {
         fn_ty: Type.TypeId,
         requester: ?*InstGraph,
     ) Allocator.Error!Ast.DefId {
-        const family = TemplateFamilyKey.from(template_ref, source_fn_key);
+        const family = TemplateFamily.from(template_ref, source_fn_key);
         const family_entry = try self.lowered_templates.getOrPut(family);
         if (!family_entry.found_existing) family_entry.value_ptr.* = .empty;
         const fn_ty_digest = self.program.types.typeDigest(&self.program.names, fn_ty);
@@ -1923,7 +1935,11 @@ const Builder = struct {
         }
         try body_ctx.constrainTypeToMono(template.checked_fn_root, fn_ty);
 
-        const lowered = try body_ctx.lowerTemplateBody(template_ref, template, fn_ty);
+        // The requested function type is a finished snapshot; the body lowers
+        // at this specialization's own view of the root so later evidence
+        // (nominal wrappers, refined slots) reaches every body type.
+        const live_fn_ty = try graph.monoFor(try body_ctx.instNode(template.checked_fn_root));
+        const lowered = try body_ctx.lowerTemplateBody(template_ref, template, live_fn_ty);
         self.program.defs.items[@intFromEnum(reserved)] = .{
             .symbol = symbol,
             .fn_def = fn_template,
@@ -2031,6 +2047,7 @@ const Builder = struct {
 
         const reserved = try self.program.types.add(.zst);
         try self.type_cache.put(address, reserved);
+        try self.frozen_monos.put(reserved, {});
         const lowered = try self.lowerTypePayload(view, checked_ty, view.types.payloads[raw]);
         self.program.types.types.items[@intFromEnum(reserved)] = lowered;
         return reserved;
@@ -2638,7 +2655,7 @@ const Builder = struct {
             .nested => |nested| nested,
             else => Common.invariant("local procedure specialization did not have a nested function identity"),
         };
-        const family = NestedFnFamilyKey.from(nested, fn_template.source_fn_key);
+        const family = NestedFnFamily.from(nested, fn_template.source_fn_key);
         const family_entry = try self.lowered_nested_fns.getOrPut(family);
         if (!family_entry.found_existing) family_entry.value_ptr.* = .empty;
         const fn_ty_digest = self.program.types.typeDigest(&self.program.names, fn_template.mono_fn_ty);
@@ -2661,7 +2678,8 @@ const Builder = struct {
 
         try request.ctx.constrainTypeToMono(fn_template.source_fn_ty, fn_template.mono_fn_ty);
 
-        const lowered = try request.ctx.lowerNestedFunction(request.expr_id, fn_template.mono_fn_ty);
+        const live_fn_ty = try request.ctx.graph.monoFor(try request.ctx.instNode(fn_template.source_fn_ty));
+        const lowered = try request.ctx.lowerNestedFunction(request.expr_id, live_fn_ty);
         self.program.nested_defs.items[nested_id] = .{
             .symbol = self.symbols.fresh(),
             .fn_def = fn_template,
@@ -4629,6 +4647,10 @@ const BodyContext = struct {
         if (self.currentLocalBindingForResolvedValue(ref_id)) |binding| {
             const local_id = binding.local;
             const local_ty = self.builder.program.locals.items[@intFromEnum(local_id)].ty;
+            // The local's Monotype is the bridge to the binder's node in the
+            // context that bound it; importing it reconnects this context's
+            // instantiation to that node before the use type is related.
+            try self.constrainTypeToMono(checkedBinderType(self.view, binding.binder), local_ty);
             try self.constrainTypeToMono(checkedBinderType(self.view, binding.binder), ty);
             try self.constrainTypeToMono(checked_ty, ty);
             if (!self.sameType(ty, local_ty)) {
@@ -9147,13 +9169,13 @@ fn checkedTypeAddress(view: ModuleView, checked_ty: checked.CheckedTypeId) Check
     };
 }
 
-const TemplateFamilyKey = struct {
+const TemplateFamily = struct {
     module_bytes: [32]u8,
     proc_base: u32,
     template: u32,
     source_fn_key_bytes: [32]u8,
 
-    fn from(template: names.ProcTemplate, source_fn_key: names.TypeDigest) TemplateFamilyKey {
+    fn from(template: names.ProcTemplate, source_fn_key: names.TypeDigest) TemplateFamily {
         return .{
             .module_bytes = names.procTemplateModuleDigest(template).bytes,
             .proc_base = @intFromEnum(template.proc_base),
@@ -9183,7 +9205,7 @@ const NestedSiteAddress = struct {
     }
 };
 
-const NestedFnFamilyKey = struct {
+const NestedFnFamily = struct {
     module_bytes: [32]u8,
     owner_proc_base: u32,
     owner_template: u32,
@@ -9191,7 +9213,7 @@ const NestedFnFamilyKey = struct {
     context_fn_key_bytes: [32]u8,
     source_fn_key_bytes: [32]u8,
 
-    fn from(nested: Ast.NestedFn, source_fn_key: names.TypeDigest) NestedFnFamilyKey {
+    fn from(nested: Ast.NestedFn, source_fn_key: names.TypeDigest) NestedFnFamily {
         return .{
             .module_bytes = names.procTemplateModuleDigest(nested.owner).bytes,
             .owner_proc_base = @intFromEnum(nested.owner.proc_base),
