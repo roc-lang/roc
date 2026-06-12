@@ -5087,10 +5087,16 @@ const BodyContext = struct {
         return try self.builder.program.addExprSpan(lowered);
     }
 
+    const PreLoweredOperand = struct {
+        index: usize,
+        expr: Ast.ExprId,
+    };
+
     fn lowerDispatchOperandsAtTypes(
         self: *BodyContext,
         operands: []const static_dispatch.StaticDispatchOperand,
         tys: []const Type.TypeId,
+        pre_lowered: ?PreLoweredOperand,
     ) Allocator.Error!Ast.Span(Ast.ExprId) {
         if (operands.len != tys.len) Common.invariant("dispatch argument arity differs from concrete function type");
         const stable_tys = try self.allocator.dupe(Type.TypeId, tys);
@@ -5098,6 +5104,12 @@ const BodyContext = struct {
         const lowered = try self.allocator.alloc(Ast.ExprId, operands.len);
         defer self.allocator.free(lowered);
         for (operands, stable_tys, 0..) |operand, ty, i| {
+            if (pre_lowered) |pre| {
+                if (pre.index == i) {
+                    lowered[i] = pre.expr;
+                    continue;
+                }
+            }
             lowered[i] = try self.lowerDispatchOperandAtType(operand, ty);
         }
         return try self.builder.program.addExprSpan(lowered);
@@ -5419,9 +5431,25 @@ const BodyContext = struct {
         const plan_ret_ty = plan_fn_data.ret;
 
         const dispatcher_ty = try self.dispatcherMonoType(plan, plan_arg_tys);
+        // A dispatcher slot fed only by another method dispatch stays
+        // unresolved until that operand's target resolves. Lowering the
+        // dispatcher operand first supplies the receiver's solved type; the
+        // lowered expression is reused as the call argument.
+        var pre_lowered: ?PreLoweredOperand = null;
+        if (methodOwnerFromType(&self.builder.program.types, dispatcher_ty) == null) {
+            switch (plan.dispatcher) {
+                .arg => |index| {
+                    pre_lowered = .{
+                        .index = index,
+                        .expr = try self.lowerDispatchOperandAtType(plan.args[index], plan_arg_tys[index]),
+                    };
+                },
+                .type_only => {},
+            }
+        }
         const lookup = self.dispatchTarget(plan, dispatcher_ty, plan_arg_tys);
         if (lookup == null) {
-            return try self.lowerStructuralEquality(plan, callable_mono_ty, plan_ret_ty, self);
+            return try self.lowerStructuralEquality(plan, callable_mono_ty, plan_ret_ty, self, pre_lowered);
         }
         const resolved = lookup.?;
         const target_mono_ty = try self.methodTargetMonoTypeFromPlan(resolved, &call_ctx, plan.callable_ty, expected_ret_ty);
@@ -5436,7 +5464,7 @@ const BodyContext = struct {
         }
         const call_expr = try self.builder.program.addExpr(.{
             .ty = fn_data.ret,
-            .data = try self.lowerResolvedDispatch(plan, resolved, target_mono_ty, self),
+            .data = try self.lowerResolvedDispatch(plan, resolved, target_mono_ty, self, pre_lowered),
         });
         return try self.applyDispatchResultMode(plan.result_mode, call_expr, fn_data.ret);
     }
@@ -5505,7 +5533,7 @@ const BodyContext = struct {
         const fn_data = self.builder.functionShape(target_mono_ty, "checked from_numeral target had a non-function type");
         const call_expr = try self.builder.program.addExpr(.{
             .ty = fn_data.ret,
-            .data = try self.lowerResolvedDispatch(plan, resolved, target_mono_ty, self),
+            .data = try self.lowerResolvedDispatch(plan, resolved, target_mono_ty, self, null),
         });
         return .{ .call = call_expr, .try_ty = fn_data.ret };
     }
@@ -5711,6 +5739,13 @@ const BodyContext = struct {
         const plan_ret_ty = plan_fn_data.ret;
         const dispatcher_ty = try self.dispatcherMonoType(plan, plan_arg_tys);
 
+        // The dispatcher may not be solved yet when this runs for argument
+        // evidence; the target then resolves when the expression itself
+        // lowers, and the plan's return carries the evidence for now.
+        if (methodOwnerFromType(&self.builder.program.types, dispatcher_ty) == null) {
+            try self.constrainTypeToMono(checked_ret_ty, plan_ret_ty);
+            return plan_ret_ty;
+        }
         const resolved = self.dispatchTarget(plan, dispatcher_ty, plan_arg_tys) orelse {
             try self.constrainTypeToMono(checked_ret_ty, plan_ret_ty);
             return plan_ret_ty;
@@ -5877,9 +5912,10 @@ const BodyContext = struct {
         lookup: MethodLookup,
         callable_mono_ty: Type.TypeId,
         arg_ctx: *BodyContext,
+        pre_lowered: ?PreLoweredOperand,
     ) Allocator.Error!Ast.ExprData {
         const fn_data = self.builder.functionShape(callable_mono_ty, "checked dispatch target had a non-function type");
-        const args = try arg_ctx.lowerDispatchOperandsAtTypes(plan.args, self.builder.program.types.span(fn_data.args));
+        const args = try arg_ctx.lowerDispatchOperandsAtTypes(plan.args, self.builder.program.types.span(fn_data.args), pre_lowered);
         return .{ .call_proc = .{
             .callee = .{ .template = try self.methodTargetCalleeWithMono(lookup, callable_mono_ty) },
             .args = args,
@@ -5892,6 +5928,7 @@ const BodyContext = struct {
         callable_mono_ty: Type.TypeId,
         ret_ty: Type.TypeId,
         arg_ctx: *BodyContext,
+        pre_lowered: ?PreLoweredOperand,
     ) Allocator.Error!Ast.ExprId {
         return switch (plan.result_mode) {
             .equality => |eq| if (eq.structural_allowed) blk: {
@@ -5900,8 +5937,14 @@ const BodyContext = struct {
                 const arg_tys = try self.allocator.dupe(Type.TypeId, self.builder.program.types.span(fn_data.args));
                 defer self.allocator.free(arg_tys);
                 if (arg_tys.len != 2) Common.invariant("structural equality callable type must have two operands");
-                const lhs = try arg_ctx.lowerDispatchOperandAtType(plan.args[0], arg_tys[0]);
-                const rhs = try arg_ctx.lowerDispatchOperandAtType(plan.args[1], arg_tys[1]);
+                const lhs = if (pre_lowered != null and pre_lowered.?.index == 0)
+                    pre_lowered.?.expr
+                else
+                    try arg_ctx.lowerDispatchOperandAtType(plan.args[0], arg_tys[0]);
+                const rhs = if (pre_lowered != null and pre_lowered.?.index == 1)
+                    pre_lowered.?.expr
+                else
+                    try arg_ctx.lowerDispatchOperandAtType(plan.args[1], arg_tys[1]);
                 var result = try self.lowerEqualityExpr(arg_tys[0], lhs, rhs, self.view.names.methodNameText(plan.method), ret_ty);
                 if (eq.negated) {
                     result = try self.builder.lowLevelExpr(.bool_not, &.{result}, ret_ty);
