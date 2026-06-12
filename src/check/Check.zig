@@ -11279,6 +11279,8 @@ fn reportRecursiveStaticDispatchIfNeeded(
     deferred_len_before: usize,
     env: *Env,
 ) Allocator.Error!bool {
+    if (constraint.origin != .where_clause) return false;
+
     const dispatcher_resolved = self.types.resolveVar(dispatcher_var).var_;
     const items = env.deferred_static_dispatch_constraints.items.items;
     var deferred_index = deferred_len_before;
