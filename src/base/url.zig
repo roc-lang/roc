@@ -104,6 +104,8 @@ fn makeUrlId(url: []const u8, start: usize, end: usize) error{InvalidUrl}!UrlId 
     };
 }
 
+/// Parse a package URL's path into its trailing content hash, optional
+/// MAJOR.MINOR.PATCH version segment, and url id span.
 pub fn parseUrlPath(url: []const u8) error{ InvalidUrl, InvalidVersion, NoHashInUrl }!ParsedUrl {
     const url_id_start = schemeContentStart(url) orelse return error.InvalidUrl;
     const last_slash = std.mem.findLast(u8, url, "/") orelse return error.NoHashInUrl;

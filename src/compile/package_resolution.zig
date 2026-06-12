@@ -1466,7 +1466,13 @@ pub const CtxFetcher = struct {
         };
     }
 
-    fn writeSidecar(self: *CtxFetcher, allocator: Allocator, sidecar_path: []const u8, scanned: FetchedPackage, expanded_bytes: u64) !void {
+    fn writeSidecar(
+        self: *CtxFetcher,
+        allocator: Allocator,
+        sidecar_path: []const u8,
+        scanned: FetchedPackage,
+        expanded_bytes: u64,
+    ) (Allocator.Error || error{WriteFailed} || CoreCtx.WriteError || CoreCtx.RenameError)!void {
         const deps = try allocator.alloc(Sidecar.SidecarDep, scanned.deps.len);
         for (deps, scanned.deps) |*dep, source| {
             dep.* = .{ .alias = source.alias, .spec = source.spec, .is_platform = source.is_platform };

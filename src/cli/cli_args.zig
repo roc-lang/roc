@@ -320,8 +320,8 @@ fn parseCheck(args: []const []const u8) CliArgs {
             \\      --verbose      Enable verbose output including cache statistics
             \\  -j, --jobs=<N>     Max worker threads for parallel compilation (default: auto-detect CPU count)
             ++ "\n" ++ resolve_limit_help ++ "\n" ++
-            \\  -h, --help         Print help
-            \\
+                \\  -h, --help         Print help
+                \\
             };
         } else if (mem.startsWith(u8, arg, "--max-package-mb") or mem.startsWith(u8, arg, "--max-transitive-mb")) {
             switch (parseResolveLimitFlag(arg, &resolve_limits)) {

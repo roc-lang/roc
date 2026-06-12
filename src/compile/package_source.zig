@@ -1,13 +1,18 @@
+//! Source URL identity for packages downloaded from URLs: the full URL plus
+//! the span of its url id (the part identifying the package across versions).
+
 const std = @import("std");
 const base = @import("base");
 
 const Allocator = std.mem.Allocator;
 
+/// A borrowed view of a package's source URL and the span of its url id.
 pub const UrlSourceView = struct {
     url: []const u8,
     url_id: base.url.UrlId,
 };
 
+/// An owned copy of a package's source URL and the span of its url id.
 pub const UrlSource = struct {
     url: []u8,
     url_id: base.url.UrlId,

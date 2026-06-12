@@ -1805,10 +1805,6 @@ pub const BuildEnv = struct {
         try self.sink.emitReport("workspace", "root", rep);
     }
 
-    fn emitWorkspaceError(self: *BuildEnv, msg: []const u8) Allocator.Error!void {
-        try self.emitWorkspaceReport("Invalid package dependency", msg);
-    }
-
     fn resolvePlatformTargetConfigConstants(self: *BuildEnv) Allocator.Error!void {
         const semantic = self.getPlatformSemanticData() orelse return;
         const checked_module = semantic.checked_artifact orelse return;
