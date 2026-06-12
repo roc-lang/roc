@@ -1175,6 +1175,21 @@ const Formatter = struct {
                 }
                 try fmt.push('"');
             },
+            .typed_string => |s| {
+                try fmt.push('"');
+                for (fmt.ast.store.exprSlice(s.parts)) |idx| {
+                    const e = fmt.ast.store.getExpr(idx);
+                    switch (e) {
+                        .string_part => |str| {
+                            try fmt.pushTokenText(str.token);
+                        },
+                        else => try fmt.formatStringInterpolation(idx),
+                    }
+                }
+                try fmt.push('"');
+                try fmt.push('.');
+                try fmt.pushAll(fmt.ast.env.getIdent(s.type_ident));
+            },
             .multiline_string => |s| {
                 if (!fmt.has_newline) {
                     fmt.curr_indent += 1;
@@ -1202,6 +1217,40 @@ const Formatter = struct {
                         },
                     }
                 }
+                fmt.has_multiline_string = true;
+            },
+            .typed_multiline_string => |s| {
+                if (!fmt.has_newline) {
+                    fmt.curr_indent += 1;
+                }
+                var add_newline = false;
+                try fmt.pushAll("\\\\");
+                for (fmt.ast.store.exprSlice(s.parts)) |idx| {
+                    const e = fmt.ast.store.getExpr(idx);
+                    switch (e) {
+                        .string_part => |str| {
+                            if (add_newline) {
+                                // Comments could be located before the MultilineStringStart token, not the StringPart token
+                                try fmt.flushCommentsBeforeDiscard(str.region.start - 1);
+                                try fmt.ensureNewline();
+                                try fmt.pushIndent();
+                                try fmt.pushAll("\\\\");
+                            }
+
+                            add_newline = true;
+                            try fmt.pushTokenText(str.token);
+                        },
+                        else => {
+                            add_newline = false;
+                            try fmt.formatStringInterpolation(idx);
+                        },
+                    }
+                }
+                // The type suffix lives on its own line after the string body.
+                try fmt.ensureNewline();
+                try fmt.pushIndent();
+                try fmt.push('.');
+                try fmt.pushAll(fmt.ast.env.getIdent(s.type_ident));
                 fmt.has_multiline_string = true;
             },
             .single_quote => |s| {

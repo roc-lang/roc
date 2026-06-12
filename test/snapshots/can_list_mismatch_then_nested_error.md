@@ -9,8 +9,8 @@ type=expr
 ~~~
 # EXPECTED
 TYPE MISMATCH - can_list_mismatch_then_nested_error.md:1:2:1:3
-TYPE MISMATCH - can_list_mismatch_then_nested_error.md:1:15:1:16
-TYPE MISMATCH - can_list_mismatch_then_nested_error.md:1:14:1:26
+TYPE MISMATCH - can_list_mismatch_then_nested_error.md:1:5:1:12
+TYPE MISMATCH - can_list_mismatch_then_nested_error.md:1:18:1:25
 # PROBLEMS
 **TYPE MISMATCH**
 This number is being used where a non-number type is needed:
@@ -21,54 +21,47 @@ This number is being used where a non-number type is needed:
  ^
 
 The type was determined to be non-numeric here:
-**can_list_mismatch_then_nested_error.md:1:5:1:12:**
-```roc
-[1, "hello", [3, "world"]]
-```
-    ^^^^^^^
-
-Other code expects this to have the type:
-
-    Str
-
-**TYPE MISMATCH**
-This number is being used where a non-number type is needed:
-**can_list_mismatch_then_nested_error.md:1:15:1:16:**
-```roc
-[1, "hello", [3, "world"]]
-```
-              ^
-
-The type was determined to be non-numeric here:
-**can_list_mismatch_then_nested_error.md:1:18:1:25:**
-```roc
-[1, "hello", [3, "world"]]
-```
-                 ^^^^^^^
-
-Other code expects this to have the type:
-
-    Str
-
-**TYPE MISMATCH**
-The second and third elements in this list have incompatible types:
 **can_list_mismatch_then_nested_error.md:1:14:1:26:**
 ```roc
 [1, "hello", [3, "world"]]
 ```
              ^^^^^^^^^^^^
 
-The second element has this type:
+Other code expects this to have the type:
 
-    Str
+    List(a)
+      where [
+        a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
+        a.from_quote : List(U8) -> Try(a, [BadQuotedBytes(Str)]),
+      ]
 
-However, the third element has this type:
+**TYPE MISMATCH**
+This string literal is being used where a non-string type is needed:
+**can_list_mismatch_then_nested_error.md:1:5:1:12:**
+```roc
+[1, "hello", [3, "world"]]
+```
+    ^^^^^^^
 
-    List(Str)
+The type was determined to be:
 
-All elements in a list must have compatible types.
-__Note:__ You can wrap each element in a tag to make them compatible.
-To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
+    List(a)
+      where [
+        a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
+        a.from_quote : List(U8) -> Try(a, [BadQuotedBytes(Str)]),
+      ]
+
+**TYPE MISMATCH**
+This string literal is being used where a non-string type is needed:
+**can_list_mismatch_then_nested_error.md:1:18:1:25:**
+```roc
+[1, "hello", [3, "world"]]
+```
+                 ^^^^^^^
+
+The type was determined to be:
+
+    Dec
 
 # TOKENS
 ~~~zig
@@ -105,5 +98,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "List(Error)"))
+(expr (type "List(List(Dec))"))
 ~~~

@@ -299,6 +299,7 @@ const Builder = struct {
     method_lookup_index: []MethodLookupIndexEntry = &.{},
     u64_ty: ?Type.TypeId = null,
     bool_ty: ?Type.TypeId = null,
+    source_file_ids: std.AutoHashMap(u32, u32),
     constrain_depth: usize = 0,
     /// The specialization graph currently being lowered. Template body
     /// requests made anywhere inside that specialization defer to its end,
@@ -318,10 +319,22 @@ const Builder = struct {
             .nested_site_cache = std.AutoHashMap(NestedSiteAddress, names.ProcSiteId).init(allocator),
             .const_expr_cache = std.AutoHashMap(ConstExprAddress, Ast.ExprId).init(allocator),
             .inspect_defs = std.AutoHashMap(InspectDefAddress, InspectDefEntry).init(allocator),
+            .source_file_ids = std.AutoHashMap(u32, u32).init(allocator),
         };
     }
 
+    /// Source file table index for a module's view, registering the module on
+    /// first use.
+    fn fileIdFor(self: *Builder, view: ModuleView) Allocator.Error!u32 {
+        const gop = try self.source_file_ids.getOrPut(view.module_identity.module_idx);
+        if (!gop.found_existing) {
+            gop.value_ptr.* = try self.program.addSourceFile(view.module_env.module_name);
+        }
+        return gop.value_ptr.*;
+    }
+
     fn deinit(self: *Builder) void {
+        self.source_file_ids.deinit();
         self.allocator.free(self.method_lookup_index);
         self.allocator.free(self.hosted_catalog);
         self.inspect_defs.deinit();
@@ -1212,6 +1225,7 @@ const Builder = struct {
         if (variable.numeric_default_phase) |phase| {
             return switch (phase) {
                 .mono_specialization => .{ .primitive = .dec },
+                .mono_specialization_str => .{ .primitive = .str },
                 .checking_finalized => Common.invariant("checking-finalized numeric variable reached Monotype unresolved"),
             };
         }
@@ -1888,6 +1902,7 @@ const Builder = struct {
             const lowered_ty = try self.lowerType(fn_view, capture_ty);
             const value_expr = try fn_ctx.restoreConstNode(store_view, fn_view, capture.value, capture_ty);
             const local = try self.program.addLocalWithBinder(self.symbols.fresh(), lowered_ty, capture.binder);
+            try bindLocalName(self.program, fn_view, local, capture.binder);
             const pat = try self.program.addPat(.{ .ty = lowered_ty, .data = .{ .bind = local } });
             const previous = fn_ctx.binders.get(capture.binder);
             try fn_ctx.binders.put(capture.binder, local);
@@ -2943,12 +2958,13 @@ const BodyContext = struct {
             .entry_wrapper => |wrapper_id| {
                 const wrapper = self.view.entry_wrappers.get(wrapper_id);
                 const root = self.view.compile_time_roots.root(wrapper.root);
-                if (root.kind == .numeral_conversion) {
-                    return .{
+                switch (root.kind) {
+                    .numeral_conversion, .quote_conversion => return .{
                         .args = .empty(),
                         .body = try self.lowerNumeralRootBody(wrapper.body_expr, ret_ty),
                         .ret = ret_ty,
-                    };
+                    },
+                    else => {},
                 }
                 return .{
                     .args = .empty(),
@@ -3100,8 +3116,27 @@ const BodyContext = struct {
         };
     }
 
+    /// Resolve a checked node's source region to a `SourceLoc` in this body's
+    /// module.
+    fn sourceLocFor(self: *BodyContext, region: base.Region) Allocator.Error!base.SourceLoc {
+        const line_starts = self.view.module_env.common.getLineStartsAll();
+        if (line_starts.len == 0) return base.SourceLoc.none;
+        const offset = region.start.offset;
+        const line = base.RegionInfo.lineIdx(line_starts, offset);
+        const column = base.RegionInfo.columnIdx(line_starts, line, offset) catch
+            Common.invariant("checked node region resolved to an invalid line/column position");
+        return .{
+            .file = try self.builder.fileIdFor(self.view),
+            .line = line + 1,
+            .column = column + 1,
+        };
+    }
+
     fn lowerExpr(self: *BodyContext, expr_id: checked.CheckedExprId) Allocator.Error!Ast.ExprId {
         const expr = self.view.bodies.exprs[@intFromEnum(expr_id)];
+        const saved_loc = self.builder.program.current_loc;
+        defer self.builder.program.current_loc = saved_loc;
+        self.builder.program.current_loc = try self.sourceLocFor(expr.source_region);
         switch (expr.data) {
             .call => |call| return try self.lowerCallExpr(expr.ty, call),
             .dispatch_call => |plan| return try self.lowerDispatchExpr(expr.ty, plan),
@@ -3120,6 +3155,9 @@ const BodyContext = struct {
         ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprId {
         const expr = self.view.bodies.exprs[@intFromEnum(expr_id)];
+        const saved_loc = self.builder.program.current_loc;
+        defer self.builder.program.current_loc = saved_loc;
+        self.builder.program.current_loc = try self.sourceLocFor(expr.source_region);
         const data: Ast.ExprData = switch (expr.data) {
             .pending,
             .anno_only,
@@ -3139,6 +3177,10 @@ const BodyContext = struct {
             .typed_num_from_numeral => |plan| {
                 if (try self.restoredNumeralConst(expr_id, ty)) |restored| return restored;
                 return try self.lowerNumeralCall(expr.ty, plan, ty);
+            },
+            .str_from_quote => |quote| {
+                if (try self.restoredNumeralConst(expr_id, ty)) |restored| return restored;
+                return try self.lowerNumeralCall(expr.ty, quote.plan, ty);
             },
             .str_segment => |str| .{ .str_lit = try self.lowerStringLiteral(str) },
             .bytes_literal => |str| .{ .str_lit = try self.lowerStringLiteral(str) },
@@ -3470,7 +3512,7 @@ const BodyContext = struct {
                     try self.graph.unify(formal_node, try self.graph.importMono(evidence_ty));
                 }
             },
-            .generated_numeral => {},
+            .generated_numeral, .generated_quote => {},
         }
     }
 
@@ -4179,6 +4221,7 @@ const BodyContext = struct {
         return switch (operand) {
             .checked_expr => |expr| try self.lowerExprAtType(expr, ty),
             .generated_numeral => |literal| try self.lowerNumeralValue(literal, ty),
+            .generated_quote => |literal| try self.lowerQuoteValue(literal, ty),
         };
     }
 
@@ -4504,7 +4547,7 @@ const BodyContext = struct {
                 .type_only => {},
             }
         }
-        const lookup = self.dispatchTarget(plan, dispatcher_ty, plan_arg_tys);
+        const lookup = self.dispatchTarget(plan, dispatcher_ty);
         if (lookup == null) {
             return try self.lowerStructuralEquality(plan, callable_mono_ty, plan_ret_ty, self, pre_lowered);
         }
@@ -4578,7 +4621,7 @@ const BodyContext = struct {
         const try_ty = plan_fn_data.ret;
 
         const dispatcher_ty = try self.dispatcherMonoType(plan, plan_arg_tys);
-        const resolved = self.dispatchTarget(plan, dispatcher_ty, plan_arg_tys) orelse
+        const resolved = self.dispatchTarget(plan, dispatcher_ty) orelse
             Common.invariant("checked from_numeral dispatch unexpectedly resolved to structural equality");
 
         const target_mono_ty = try self.methodTargetMonoTypeFromPlan(resolved, &call_ctx, plan.callable_ty, try_ty);
@@ -4603,7 +4646,8 @@ const BodyContext = struct {
         const expr = self.view.bodies.exprs[@intFromEnum(expr_id)];
         const plan = switch (expr.data) {
             .num_from_numeral, .typed_num_from_numeral => |plan| plan,
-            else => Common.invariant("numeral conversion root did not point at a from_numeral expression"),
+            .str_from_quote => |quote| quote.plan,
+            else => Common.invariant("literal conversion root did not point at a conversion expression"),
         };
         const ok_tag = self.monoTagByText(try_ty, "Ok");
         const ok_payloads = self.builder.program.types.span(ok_tag.payloads);
@@ -4626,6 +4670,29 @@ const BodyContext = struct {
             .pending => null,
             else => Common.invariant("numeral conversion root stored a non-constant payload"),
         };
+    }
+
+    /// Materialize a string literal's bytes as the `List(U8)` argument of a
+    /// `from_quote` dispatch call.
+    fn lowerQuoteValue(
+        self: *BodyContext,
+        literal: checked.CheckedStringLiteralId,
+        ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const bytes = self.view.bodies.string_literals[@intFromEnum(literal)];
+        const data: Ast.ExprData = .{ .list = blk: {
+            const elem_ty = switch (self.builder.shapeContent(ty)) {
+                .list => |elem| elem,
+                else => Common.invariant("checked from_quote argument was not a List(U8)"),
+            };
+            const items = try self.allocator.alloc(Ast.ExprId, bytes.len);
+            defer self.allocator.free(items);
+            for (bytes, 0..) |byte, i| {
+                items[i] = try self.builder.intLiteralExpr(byte, elem_ty);
+            }
+            break :blk try self.builder.program.addExprSpan(items);
+        } };
+        return try self.builder.program.addExpr(.{ .ty = ty, .data = data });
     }
 
     fn lowerNumeralValue(
@@ -4803,7 +4870,7 @@ const BodyContext = struct {
             try self.constrainTypeToMono(checked_ret_ty, plan_ret_ty);
             return plan_ret_ty;
         }
-        const resolved = self.dispatchTarget(plan, dispatcher_ty, plan_arg_tys) orelse {
+        const resolved = self.dispatchTarget(plan, dispatcher_ty) orelse {
             try self.constrainTypeToMono(checked_ret_ty, plan_ret_ty);
             return plan_ret_ty;
         };
@@ -4835,53 +4902,17 @@ const BodyContext = struct {
         self: *BodyContext,
         plan: static_dispatch.StaticDispatchCallPlan,
         dispatcher_ty: Type.TypeId,
-        arg_tys: []const Type.TypeId,
     ) ?MethodLookup {
         const owner = methodOwnerFromType(&self.builder.program.types, dispatcher_ty) orelse {
             if (plan.result_mode == .equality and plan.result_mode.equality.structural_allowed) return null;
             Common.invariant("dispatch plan had no method owner and no structural equality permission");
         };
 
-        if (self.listJoinWithListItemsTarget(owner, plan, dispatcher_ty, arg_tys)) |target| {
-            return target;
-        }
-
         const lookup = self.builder.lookupMethodTarget(owner, self.view, plan.method) orelse {
             if (plan.result_mode == .equality and plan.result_mode.equality.structural_allowed) return null;
             Common.invariant("checked method registry is missing resolved dispatch target");
         };
         return lookup;
-    }
-
-    fn listJoinWithListItemsTarget(
-        self: *BodyContext,
-        owner: static_dispatch.MethodOwner,
-        plan: static_dispatch.StaticDispatchCallPlan,
-        dispatcher_ty: Type.TypeId,
-        arg_tys: []const Type.TypeId,
-    ) ?MethodLookup {
-        switch (owner) {
-            .builtin => |builtin| if (builtin != .list) return null,
-            .source_decl, .nominal => return null,
-        }
-        if (!std.mem.eql(u8, self.view.names.methodNameText(plan.method), "join_with")) return null;
-        if (!self.dispatchArgsAreListJoinWithListItems(dispatcher_ty, arg_tys)) return null;
-
-        return self.builder.lookupMethodTargetByName(owner, "join_list_with") orelse
-            Common.invariant("checked method registry is missing List.join_list_with dispatch target");
-    }
-
-    fn dispatchArgsAreListJoinWithListItems(
-        self: *BodyContext,
-        dispatcher_ty: Type.TypeId,
-        arg_tys: []const Type.TypeId,
-    ) bool {
-        if (arg_tys.len != 2) return false;
-        if (!self.sameType(arg_tys[1], dispatcher_ty)) return false;
-        return switch (self.builder.program.types.get(arg_tys[0])) {
-            .list => |elem| self.sameType(elem, dispatcher_ty),
-            else => false,
-        };
     }
 
     fn methodTargetContext(
@@ -5387,6 +5418,7 @@ const BodyContext = struct {
         defer self.allocator.free(pattern_items);
         for (merge_binders, 0..) |merge, i| {
             const local = try self.builder.program.addLocalWithBinder(self.builder.symbols.fresh(), merge.ty, merge.binder);
+            try bindLocalName(self.builder.program, self.view, local, merge.binder);
             try self.binders.put(merge.binder, local);
             pattern_items[i] = try self.builder.program.addPat(.{ .ty = merge.ty, .data = .{ .bind = local } });
         }
@@ -5746,12 +5778,14 @@ const BodyContext = struct {
             .assign => |binder| {
                 if (self.binders.get(binder) == null) {
                     const local = try self.builder.program.addLocalWithBinder(self.builder.symbols.fresh(), ty, binder);
+                    try bindLocalName(self.builder.program, self.view, local, binder);
                     try self.binders.put(binder, local);
                 }
             },
             .as => |as| {
                 if (self.binders.get(as.binder) == null) {
                     const local = try self.builder.program.addLocalWithBinder(self.builder.symbols.fresh(), ty, as.binder);
+                    try bindLocalName(self.builder.program, self.view, local, as.binder);
                     try self.binders.put(as.binder, local);
                 }
                 try self.preRegisterPatternBinders(as.pattern, ty);
@@ -5829,6 +5863,7 @@ const BodyContext = struct {
             .assign => |binder| blk: {
                 const local = if (self.binders.get(binder)) |existing| existing else inner: {
                     const new_local = try self.builder.program.addLocalWithBinder(self.builder.symbols.fresh(), ty, binder);
+                    try bindLocalName(self.builder.program, self.view, new_local, binder);
                     try self.binders.put(binder, new_local);
                     break :inner new_local;
                 };
@@ -5837,6 +5872,7 @@ const BodyContext = struct {
             .as => |as| blk: {
                 const local = if (self.binders.get(as.binder)) |existing| existing else inner: {
                     const new_local = try self.builder.program.addLocalWithBinder(self.builder.symbols.fresh(), ty, as.binder);
+                    try bindLocalName(self.builder.program, self.view, new_local, as.binder);
                     try self.binders.put(as.binder, new_local);
                     break :inner new_local;
                 };
@@ -5873,7 +5909,10 @@ const BodyContext = struct {
                 .{ .dec_lit = dec.value },
             .frac_f32_literal => |value| .{ .frac_f32_lit = value },
             .frac_f64_literal => |value| .{ .frac_f64_lit = value },
-            .str_literal => |str| .{ .str_lit = try self.lowerStringLiteral(str) },
+            .str_literal => |str| if (str.conversion) |conversion|
+                try self.bindLiteralGuardPattern(conversion, ty)
+            else
+                .{ .str_lit = try self.lowerStringLiteral(str.literal) },
             .underscore => .wildcard,
         };
         return try self.builder.program.addPat(.{ .ty = ty, .data = data });
@@ -6385,6 +6424,7 @@ const BodyContext = struct {
         defer self.allocator.free(pattern_items);
         for (merge_binders, 0..) |merge, i| {
             const local = try self.builder.program.addLocalWithBinder(self.builder.symbols.fresh(), merge.ty, merge.binder);
+            try bindLocalName(self.builder.program, self.view, local, merge.binder);
             try self.binders.put(merge.binder, local);
             pattern_items[i] = try self.builder.program.addPat(.{ .ty = merge.ty, .data = .{ .bind = local } });
         }
@@ -6640,6 +6680,7 @@ const BodyContext = struct {
         if (merge_binders.len == 1) {
             const merge = merge_binders[0];
             const local = try self.builder.program.addLocalWithBinder(self.builder.symbols.fresh(), merge.ty, merge.binder);
+            try bindLocalName(self.builder.program, self.view, local, merge.binder);
             try self.binders.put(merge.binder, local);
             return try self.builder.program.addPat(.{ .ty = state_ty, .data = .{ .bind = local } });
         }
@@ -6648,6 +6689,7 @@ const BodyContext = struct {
         defer self.allocator.free(pattern_items);
         for (merge_binders, 0..) |merge, i| {
             const local = try self.builder.program.addLocalWithBinder(self.builder.symbols.fresh(), merge.ty, merge.binder);
+            try bindLocalName(self.builder.program, self.view, local, merge.binder);
             try self.binders.put(merge.binder, local);
             pattern_items[i] = try self.builder.program.addPat(.{ .ty = merge.ty, .data = .{ .bind = local } });
         }
@@ -6706,6 +6748,9 @@ const BodyContext = struct {
         lowered: *LoweredStatements,
     ) Allocator.Error!bool {
         const statement = self.view.bodies.statements[@intFromEnum(statement_id)];
+        const saved_loc = self.builder.program.current_loc;
+        defer self.builder.program.current_loc = saved_loc;
+        self.builder.program.current_loc = try self.sourceLocFor(statement.source_region);
         const pattern, const expr = switch (statement.data) {
             .decl => |decl| blk: {
                 if (self.statementValueIsLocalProc(decl.expr)) return false;
@@ -7426,6 +7471,7 @@ const BodyContext = struct {
         if (carries.len == 0) Common.invariant("empty loop carry pattern requested");
         if (carries.len == 1) {
             const local = try self.builder.program.addLocalWithBinder(self.builder.symbols.fresh(), carries[0].ty, carries[0].binder);
+            try bindLocalName(self.builder.program, self.view, local, carries[0].binder);
             try self.binders.put(carries[0].binder, local);
             return try self.builder.program.addPat(.{ .ty = ty, .data = .{ .bind = local } });
         }
@@ -7434,6 +7480,7 @@ const BodyContext = struct {
         defer self.allocator.free(items);
         for (carries, 0..) |carry, i| {
             const local = try self.builder.program.addLocalWithBinder(self.builder.symbols.fresh(), carry.ty, carry.binder);
+            try bindLocalName(self.builder.program, self.view, local, carry.binder);
             try self.binders.put(carry.binder, local);
             items[i] = try self.builder.program.addPat(.{ .ty = carry.ty, .data = .{ .bind = local } });
         }
@@ -7513,6 +7560,7 @@ const BodyContext = struct {
             .typed_int,
             .typed_frac,
             .typed_num_from_numeral,
+            .str_from_quote,
             .str_segment,
             .bytes_literal,
             .lookup_local,
@@ -7672,6 +7720,9 @@ const BodyContext = struct {
 
     fn lowerStatement(self: *BodyContext, statement_id: checked.CheckedStatementId) Allocator.Error!Ast.StmtId {
         const statement = self.view.bodies.statements[@intFromEnum(statement_id)];
+        const saved_loc = self.builder.program.current_loc;
+        defer self.builder.program.current_loc = saved_loc;
+        self.builder.program.current_loc = try self.sourceLocFor(statement.source_region);
         const stmt: Ast.Stmt = switch (statement.data) {
             .pending,
             .import_,
@@ -7826,11 +7877,13 @@ const BodyContext = struct {
             => Common.invariant("non-runtime checked pattern reached Monotype lowering"),
             .assign => |binder| blk: {
                 const local = try self.builder.program.addLocalWithBinder(self.builder.symbols.fresh(), ty, binder);
+                try bindLocalName(self.builder.program, self.view, local, binder);
                 try self.binders.put(binder, local);
                 break :blk .{ .bind = local };
             },
             .as => |as| blk: {
                 const local = try self.builder.program.addLocalWithBinder(self.builder.symbols.fresh(), ty, as.binder);
+                try bindLocalName(self.builder.program, self.view, local, as.binder);
                 try self.binders.put(as.binder, local);
                 break :blk .{ .as = .{
                     .pattern = try self.lowerPatternAtType(as.pattern, ty),
@@ -7856,7 +7909,10 @@ const BodyContext = struct {
                 .{ .dec_lit = dec.value },
             .frac_f32_literal => |value| .{ .frac_f32_lit = value },
             .frac_f64_literal => |value| .{ .frac_f64_lit = value },
-            .str_literal => |str| .{ .str_lit = try self.lowerStringLiteral(str) },
+            .str_literal => |str| if (str.conversion) |conversion|
+                try self.bindLiteralGuardPattern(conversion, ty)
+            else
+                .{ .str_lit = try self.lowerStringLiteral(str.literal) },
             .underscore => .wildcard,
         };
         return try self.builder.program.addPat(.{ .ty = ty, .data = data });
@@ -8025,6 +8081,26 @@ const BodyContext = struct {
         };
     }
 };
+
+/// Record a local's source-level name from its pattern binder. An `assign`
+/// pattern's region is exactly the identifier token's span, so the name is
+/// the source text at that region. Binders from other pattern forms (`as`)
+/// stay unnamed.
+fn bindLocalName(
+    program: *Ast.Program,
+    view: ModuleView,
+    local: Ast.LocalId,
+    binder: checked.PatternBinderId,
+) Allocator.Error!void {
+    const entry = view.bodies.pattern_binders[@intFromEnum(binder)];
+    const pattern = view.bodies.patterns[@intFromEnum(entry.pattern)];
+    if (pattern.data != .assign) return;
+    const source = view.module_env.common.source;
+    const start = pattern.source_region.start.offset;
+    const end = pattern.source_region.end.offset;
+    if (start >= end or end > source.len) return;
+    try program.setLocalName(local, source[start..end]);
+}
 
 fn moduleView(view: checked.ImportedModuleView) ModuleView {
     return .{

@@ -4470,6 +4470,8 @@ fn compileLlvmAppObject(
         std_target,
     );
     codegen.layout_store = &lowered.lir_result.layouts;
+    codegen.emit_debug_info = true;
+    codegen.debug_producer = "roc " ++ build_options.compiler_version;
     defer codegen.deinit();
 
     const llvm_entrypoints = try ctx.arena.alloc(llvm_codegen.MonoLlvmCodeGen.Entrypoint, entrypoints.len);
@@ -4982,6 +4984,10 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
                 .disable_output = false,
                 .platform_files_dir = link_inputs.platform_files_dir,
                 .scratch_dir = build_cache_dir,
+                .macho_dwarf_object = if (target_os == .macos and link_type != .archive)
+                    app_object.object_path
+                else
+                    null,
             };
 
             if (args.z_dump_linker) {
@@ -5309,6 +5315,10 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
             .disable_output = false,
             .platform_files_dir = link_inputs.platform_files_dir,
             .scratch_dir = build_scratch_dir,
+            .macho_dwarf_object = if (target_os == .macos and link_type != .archive)
+                obj_path
+            else
+                null,
         };
 
         if (args.z_dump_linker) {

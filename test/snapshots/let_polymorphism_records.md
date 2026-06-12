@@ -59,21 +59,9 @@ main = |_| {
 }
 ~~~
 # EXPECTED
-TYPE MISMATCH - let_polymorphism_records.md:34:47:34:49
 TYPE MISMATCH - let_polymorphism_records.md:48:6:48:17
+TYPE MISMATCH - let_polymorphism_records.md:8:7:8:14
 # PROBLEMS
-**TYPE MISMATCH**
-This number is being used where a non-number type is needed:
-**let_polymorphism_records.md:34:47:34:49:**
-```roc
-updated_mismatch = update_data(str_container, 99)
-```
-                                              ^^
-
-Other code expects this to have the type:
-
-    Str
-
 **TYPE MISMATCH**
 I'm having trouble with this bool operation:
 **let_polymorphism_records.md:48:6:48:17:**
@@ -87,6 +75,18 @@ Both sides of `and` must be `Bool` values, but the right side is:
     { data: a, ..b }, a -> { data: a, ..b }
 
 __Note:__ Roc does not have "truthiness". You must convert values to bools yourself.
+
+**TYPE MISMATCH**
+This string literal is being used where a non-string type is needed:
+**let_polymorphism_records.md:8:7:8:14:**
+```roc
+str = "hello"
+```
+      ^^^^^^^
+
+The type was determined to be:
+
+    Dec
 
 # TOKENS
 ~~~zig
@@ -289,21 +289,21 @@ NO CHANGE
 						(e-num (value "1")))))))
 	(d-let
 		(p-assign (ident "int_container"))
-		(e-call (constraint-fn-var 225)
+		(e-call (constraint-fn-var 235)
 			(e-lookup-local
 				(p-assign (ident "make_container")))
 			(e-lookup-local
 				(p-assign (ident "num")))))
 	(d-let
 		(p-assign (ident "str_container"))
-		(e-call (constraint-fn-var 233)
+		(e-call (constraint-fn-var 243)
 			(e-lookup-local
 				(p-assign (ident "make_container")))
 			(e-lookup-local
 				(p-assign (ident "str")))))
 	(d-let
 		(p-assign (ident "list_container"))
-		(e-call (constraint-fn-var 241)
+		(e-call (constraint-fn-var 251)
 			(e-lookup-local
 				(p-assign (ident "make_container")))
 			(e-lookup-local
@@ -324,7 +324,7 @@ NO CHANGE
 							(p-assign (ident "new_value"))))))))
 	(d-let
 		(p-assign (ident "updated_int"))
-		(e-call (constraint-fn-var 278)
+		(e-call (constraint-fn-var 288)
 			(e-lookup-local
 				(p-assign (ident "update_data")))
 			(e-lookup-local
@@ -332,7 +332,7 @@ NO CHANGE
 			(e-num (value "100"))))
 	(d-let
 		(p-assign (ident "updated_str"))
-		(e-call (constraint-fn-var 290)
+		(e-call (constraint-fn-var 310)
 			(e-lookup-local
 				(p-assign (ident "update_data")))
 			(e-lookup-local
@@ -341,7 +341,7 @@ NO CHANGE
 				(e-literal (string "world")))))
 	(d-let
 		(p-assign (ident "updated_mismatch"))
-		(e-call (constraint-fn-var 326)
+		(e-call (constraint-fn-var 346)
 			(e-lookup-local
 				(p-assign (ident "update_data")))
 			(e-lookup-local
@@ -359,20 +359,20 @@ NO CHANGE
 							(p-assign (ident "x"))))))))
 	(d-let
 		(p-assign (ident "int_record"))
-		(e-call (constraint-fn-var 362)
+		(e-call (constraint-fn-var 381)
 			(e-lookup-local
 				(p-assign (ident "identity_record")))
 			(e-num (value "42"))))
 	(d-let
 		(p-assign (ident "str_record"))
-		(e-call (constraint-fn-var 372)
+		(e-call (constraint-fn-var 401)
 			(e-lookup-local
 				(p-assign (ident "identity_record")))
 			(e-string
 				(e-literal (string "test")))))
 	(d-let
 		(p-assign (ident "list_record"))
-		(e-call (constraint-fn-var 468)
+		(e-call (constraint-fn-var 497)
 			(e-lookup-local
 				(p-assign (ident "identity_record")))
 			(e-list
@@ -388,7 +388,7 @@ NO CHANGE
 			(e-block
 				(s-expr
 					(e-runtime-error (tag "erroneous_value_expr")))
-				(e-dispatch-call (method "plus") (constraint-fn-var 514)
+				(e-dispatch-call (method "plus") (constraint-fn-var 543)
 					(receiver
 						(e-field-access (field "count")
 							(receiver
@@ -406,17 +406,17 @@ NO CHANGE
 	(defs
 		(patt (type "Dec"))
 		(patt (type "Dec"))
-		(patt (type "Str"))
+		(patt (type "Dec"))
 		(patt (type "List(_a)"))
 		(patt (type "List(Dec)"))
 		(patt (type "a -> { count: b, data: a } where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
 		(patt (type "{ count: Dec, data: Dec }"))
-		(patt (type "{ count: Dec, data: Str }"))
+		(patt (type "{ count: Dec, data: Dec }"))
 		(patt (type "{ count: Dec, data: List(_a) }"))
 		(patt (type "{ data: a, ..b }, a -> { data: a, ..b }"))
 		(patt (type "{ count: Dec, data: Dec }"))
-		(patt (type "{ count: Dec, data: Str }"))
-		(patt (type "{ count: Dec, data: Str }"))
+		(patt (type "{ count: Dec, data: Dec }"))
+		(patt (type "{ count: Dec, data: Dec }"))
 		(patt (type "a -> { value: a }"))
 		(patt (type "{ value: Dec }"))
 		(patt (type "{ value: Str }"))
@@ -425,17 +425,17 @@ NO CHANGE
 	(expressions
 		(expr (type "Dec"))
 		(expr (type "Dec"))
-		(expr (type "Str"))
+		(expr (type "Dec"))
 		(expr (type "List(_a)"))
 		(expr (type "List(Dec)"))
 		(expr (type "a -> { count: b, data: a } where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))
 		(expr (type "{ count: Dec, data: Dec }"))
-		(expr (type "{ count: Dec, data: Str }"))
+		(expr (type "{ count: Dec, data: Dec }"))
 		(expr (type "{ count: Dec, data: List(_a) }"))
 		(expr (type "{ data: a, ..b }, a -> { data: a, ..b }"))
 		(expr (type "{ count: Dec, data: Dec }"))
-		(expr (type "{ count: Dec, data: Str }"))
-		(expr (type "{ count: Dec, data: Str }"))
+		(expr (type "{ count: Dec, data: Dec }"))
+		(expr (type "{ count: Dec, data: Dec }"))
 		(expr (type "a -> { value: a }"))
 		(expr (type "{ value: Dec }"))
 		(expr (type "{ value: Str }"))

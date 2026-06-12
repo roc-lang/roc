@@ -189,8 +189,7 @@ pub const CommonIdents = extern struct {
     ok: Ident.Idx,
     err: Ident.Idx,
     from_numeral: Ident.Idx,
-    join_with: Ident.Idx,
-    join_list_with: Ident.Idx,
+    from_quote: Ident.Idx,
     true_tag: Ident.Idx,
     false_tag: Ident.Idx,
     // from_utf8 result fields
@@ -289,8 +288,7 @@ pub const CommonIdents = extern struct {
             .ok = try common.insertIdent(gpa, Ident.for_text("Ok")),
             .err = try common.insertIdent(gpa, Ident.for_text("Err")),
             .from_numeral = try common.insertIdent(gpa, Ident.for_text("from_numeral")),
-            .join_with = try common.insertIdent(gpa, Ident.for_text("join_with")),
-            .join_list_with = try common.insertIdent(gpa, Ident.for_text("join_list_with")),
+            .from_quote = try common.insertIdent(gpa, Ident.for_text("from_quote")),
             .true_tag = try common.insertIdent(gpa, Ident.for_text("True")),
             .false_tag = try common.insertIdent(gpa, Ident.for_text("False")),
             // from_utf8 result fields
@@ -392,8 +390,7 @@ pub const CommonIdents = extern struct {
             .ok = common.findIdent("Ok") orelse unreachable,
             .err = common.findIdent("Err") orelse unreachable,
             .from_numeral = common.findIdent("from_numeral") orelse unreachable,
-            .join_with = common.findIdent("join_with") orelse unreachable,
-            .join_list_with = common.findIdent("join_list_with") orelse unreachable,
+            .from_quote = common.findIdent("from_quote") orelse unreachable,
             .true_tag = common.findIdent("True") orelse unreachable,
             .false_tag = common.findIdent("False") orelse unreachable,
             // from_utf8 result fields
@@ -641,6 +638,15 @@ numeral_digit_bytes: collections.SafeList(u8),
 numeral_literals: NumeralLiteral.SafeList,
 /// `from_numeral` dispatch plans attached by checking to source expression nodes.
 numeral_dispatch_plans: NumeralDispatchPlan.SafeList,
+/// `from_quote` dispatch plans attached by checking to source string literal
+/// expression and pattern nodes. Shares `NumeralDispatchPlan`'s shape: a source
+/// node plus the constraint's target and function type vars.
+quote_dispatch_plans: NumeralDispatchPlan.SafeList,
+/// Raw node indices of the `from_interpolation` calls canonicalization
+/// synthesized while desugaring interpolated string literals. The
+/// from_interpolation protocol returns the receiver's type, and checking
+/// consumes this to unify the call result with the receiver.
+interpolation_call_nodes: collections.SafeList(u32),
 /// Scope-resolved explicit numeric suffix targets attached by canonicalization.
 numeric_suffix_types: NumericSuffixType.SafeList,
 
@@ -799,6 +805,8 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .numeral_digit_bytes = try collections.SafeList(u8).initCapacity(gpa, 32),
         .numeral_literals = try NumeralLiteral.SafeList.initCapacity(gpa, 8),
         .numeral_dispatch_plans = try NumeralDispatchPlan.SafeList.initCapacity(gpa, 8),
+        .quote_dispatch_plans = try NumeralDispatchPlan.SafeList.initCapacity(gpa, 8),
+        .interpolation_call_nodes = try collections.SafeList(u32).initCapacity(gpa, 4),
         .numeric_suffix_types = try NumericSuffixType.SafeList.initCapacity(gpa, 8),
     };
 }
@@ -820,6 +828,8 @@ pub fn deinit(self: *Self) void {
     self.numeral_digit_bytes.deinit(self.gpa);
     self.numeral_literals.deinit(self.gpa);
     self.numeral_dispatch_plans.deinit(self.gpa);
+    self.quote_dispatch_plans.deinit(self.gpa);
+    self.interpolation_call_nodes.deinit(self.gpa);
     self.numeric_suffix_types.deinit(self.gpa);
     // diagnostics are stored in the NodeStore, no need to free separately
     self.store.deinit();
@@ -860,6 +870,8 @@ pub fn deinitCachedModule(self: *Self) void {
     self.numeral_digit_bytes.deinit(self.gpa);
     self.numeral_literals.deinit(self.gpa);
     self.numeral_dispatch_plans.deinit(self.gpa);
+    self.quote_dispatch_plans.deinit(self.gpa);
+    self.interpolation_call_nodes.deinit(self.gpa);
     self.numeric_suffix_types.deinit(self.gpa);
 
     // If enableRuntimeInserts was called on the interner, it allocated new memory
@@ -3012,6 +3024,8 @@ pub const Serialized = extern struct {
     numeral_digit_bytes: collections.SafeList(u8).Serialized,
     numeral_literals: NumeralLiteral.SafeList.Serialized,
     numeral_dispatch_plans: NumeralDispatchPlan.SafeList.Serialized,
+    quote_dispatch_plans: NumeralDispatchPlan.SafeList.Serialized,
+    interpolation_call_nodes: collections.SafeList(u32).Serialized,
     numeric_suffix_types: NumericSuffixType.SafeList.Serialized,
     // Reserved space (was is_lambda_lifted and is_defunctionalized, now unused)
     _reserved_flags: [2]u8 = .{ 0, 0 },
@@ -3074,6 +3088,8 @@ pub const Serialized = extern struct {
         try self.numeral_digit_bytes.serialize(&env.numeral_digit_bytes, allocator, writer);
         try self.numeral_literals.serialize(&env.numeral_literals, allocator, writer);
         try self.numeral_dispatch_plans.serialize(&env.numeral_dispatch_plans, allocator, writer);
+        try self.quote_dispatch_plans.serialize(&env.quote_dispatch_plans, allocator, writer);
+        try self.interpolation_call_nodes.serialize(&env.interpolation_call_nodes, allocator, writer);
         try self.numeric_suffix_types.serialize(&env.numeric_suffix_types, allocator, writer);
 
         self._reserved_flags = .{ 0, 0 };
@@ -3127,6 +3143,8 @@ pub const Serialized = extern struct {
             .numeral_digit_bytes = self.numeral_digit_bytes.deserializeInto(base_addr),
             .numeral_literals = self.numeral_literals.deserializeInto(base_addr),
             .numeral_dispatch_plans = self.numeral_dispatch_plans.deserializeInto(base_addr),
+            .quote_dispatch_plans = self.quote_dispatch_plans.deserializeInto(base_addr),
+            .interpolation_call_nodes = self.interpolation_call_nodes.deserializeInto(base_addr),
             .numeric_suffix_types = self.numeric_suffix_types.deserializeInto(base_addr),
         };
 
@@ -3183,6 +3201,8 @@ pub const Serialized = extern struct {
             .numeral_digit_bytes = try self.numeral_digit_bytes.deserializeWithCopy(base_addr, gpa),
             .numeral_literals = try self.numeral_literals.deserializeWithCopy(base_addr, gpa),
             .numeral_dispatch_plans = try self.numeral_dispatch_plans.deserializeWithCopy(base_addr, gpa),
+            .quote_dispatch_plans = try self.quote_dispatch_plans.deserializeWithCopy(base_addr, gpa),
+            .interpolation_call_nodes = try self.interpolation_call_nodes.deserializeWithCopy(base_addr, gpa),
             .numeric_suffix_types = try self.numeric_suffix_types.deserializeWithCopy(base_addr, gpa),
         };
 
@@ -3327,6 +3347,155 @@ pub fn numeralDispatchPlanForNode(self: *const Self, node_idx: Node.Idx) ?Numera
         if (plan.node_idx == raw_node) return plan;
     }
     return null;
+}
+
+/// Record the checked `from_quote` function for a string literal node.
+pub fn recordQuoteDispatchPlan(
+    self: *Self,
+    node_idx: Node.Idx,
+    target_var: TypeVar,
+    fn_var: TypeVar,
+) std.mem.Allocator.Error!void {
+    const raw_node: u32 = @intFromEnum(node_idx);
+    for (self.quote_dispatch_plans.items.items) |*plan| {
+        if (plan.node_idx != raw_node) continue;
+        plan.* = .{
+            .node_idx = raw_node,
+            .target_var = @intFromEnum(target_var),
+            .fn_var = @intFromEnum(fn_var),
+        };
+        return;
+    }
+    _ = try self.quote_dispatch_plans.append(self.gpa, .{
+        .node_idx = raw_node,
+        .target_var = @intFromEnum(target_var),
+        .fn_var = @intFromEnum(fn_var),
+    });
+}
+
+/// Return the checked `from_quote` function for a string literal node.
+pub fn quoteDispatchPlanForNode(self: *const Self, node_idx: Node.Idx) ?NumeralDispatchPlan {
+    const raw_node: u32 = @intFromEnum(node_idx);
+    for (self.quote_dispatch_plans.items.items) |plan| {
+        if (plan.node_idx == raw_node) return plan;
+    }
+    return null;
+}
+
+/// Record a `from_interpolation` call synthesized by interpolation desugaring.
+pub fn recordInterpolationCallNode(self: *Self, node_idx: Node.Idx) std.mem.Allocator.Error!void {
+    _ = try self.interpolation_call_nodes.append(self.gpa, @intFromEnum(node_idx));
+}
+
+/// Whether the node is a `from_interpolation` call synthesized by
+/// interpolation desugaring.
+pub fn isInterpolationCallNode(self: *const Self, node_idx: Node.Idx) bool {
+    const raw_node: u32 = @intFromEnum(node_idx);
+    for (self.interpolation_call_nodes.items.items) |recorded| {
+        if (recorded == raw_node) return true;
+    }
+    return false;
+}
+
+/// Whether the expression is a desugared interpolation dispatch call whose
+/// result type resolved to builtin `Str`. Such a call can be published as a
+/// plain ordered segment list — equivalent to `Str.from_interpolation` —
+/// instead of dispatching through the synthetic iterator chain.
+pub fn isStrInterpolationCall(self: *const Self, expr_idx: CIR.Expr.Idx) bool {
+    if (!self.isInterpolationCallNode(nodeIdxFrom(expr_idx))) return false;
+    switch (self.store.getExpr(expr_idx)) {
+        .e_dispatch_call => {},
+        else => return false,
+    }
+    var current = varFrom(expr_idx);
+    while (true) {
+        const resolved = self.types.resolveVar(current);
+        switch (resolved.desc.content) {
+            .alias => |alias| current = self.types.getAliasBackingVar(alias),
+            .structure => |flat| return switch (flat) {
+                .nominal_type => |nominal| nominal.originIsBuiltin() and
+                    (nominal.ident.ident_idx.eql(self.idents.str) or
+                        nominal.ident.ident_idx.eql(self.idents.builtin_str)),
+                else => false,
+            },
+            else => return false,
+        }
+    }
+}
+
+/// One `(interpolation, following-segment)` pair from the synthetic
+/// `prepended` chain of a desugared interpolated string.
+pub const InterpolationPair = struct {
+    interpolation: CIR.Expr.Idx,
+    segment: CIR.Expr.Idx,
+};
+
+/// Iterator yielding a desugared interpolated string's
+/// `(interpolation, following-segment)` pairs in source order.
+pub const InterpolationPairIterator = struct {
+    env: *const Self,
+    current: CIR.Expr.Idx,
+
+    /// Next pair in source order, or null once the terminal `[].iter()`
+    /// call is reached.
+    pub fn next(self: *InterpolationPairIterator) ?InterpolationPair {
+        const call = switch (self.env.store.getExpr(self.current)) {
+            .e_dispatch_call => |call| call,
+            else => {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic("module env invariant violated: interpolation chain expression is not a dispatch call", .{});
+                }
+                unreachable;
+            },
+        };
+        const args = self.env.store.sliceExpr(call.args);
+        if (args.len == 0) return null;
+        if (args.len != 1) {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("module env invariant violated: interpolation chain call has {d} arguments", .{args.len});
+            }
+            unreachable;
+        }
+        const elems = switch (self.env.store.getExpr(args[0])) {
+            .e_tuple => |tuple| self.env.store.sliceExpr(tuple.elems),
+            else => {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic("module env invariant violated: interpolation chain argument is not a pair", .{});
+                }
+                unreachable;
+            },
+        };
+        if (elems.len != 2) {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("module env invariant violated: interpolation pair has {d} elements", .{elems.len});
+            }
+            unreachable;
+        }
+        self.current = call.receiver;
+        return .{ .interpolation = elems[0], .segment = elems[1] };
+    }
+};
+
+/// Iterate the `(interpolation, following-segment)` pairs of a desugared
+/// interpolation dispatch call in source order.
+pub fn interpolationPairs(self: *const Self, call_expr_idx: CIR.Expr.Idx) InterpolationPairIterator {
+    const call = switch (self.store.getExpr(call_expr_idx)) {
+        .e_dispatch_call => |call| call,
+        else => {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("module env invariant violated: interpolation call expression is not a dispatch call", .{});
+            }
+            unreachable;
+        },
+    };
+    const args = self.store.sliceExpr(call.args);
+    if (args.len != 1) {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("module env invariant violated: interpolation call has {d} arguments", .{args.len});
+        }
+        unreachable;
+    }
+    return .{ .env = self, .current = args[0] };
 }
 
 /// Record the scope-resolved type target for an explicit numeric suffix.

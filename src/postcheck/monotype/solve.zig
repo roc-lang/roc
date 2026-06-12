@@ -907,6 +907,7 @@ pub const InstGraph = struct {
             .unresolved => |variable| blk: {
                 if (variable.numeric_default_phase) |phase| switch (phase) {
                     .mono_specialization => break :blk .{ .primitive = .dec },
+                    .mono_specialization_str => break :blk .{ .primitive = .str },
                     .checking_finalized => Common.invariant("checking-finalized numeric variable reached Monotype unresolved"),
                 };
                 if (variable.row_default) |row_default| switch (row_default) {

@@ -26,10 +26,12 @@ expect result == result
 
 The type is:
 
-    [Err(Str), Ok(Str), Transform(a -> a), Validate(b -> Bool), ..]
+    [Err(a), Ok(b), Transform(c -> c), Validate(d -> Bool), ..]
       where [
-        b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
-        b.is_gt : b, b -> Bool,
+        a.from_quote : List(U8) -> Try(a, [BadQuotedBytes(Str)]),
+        b.from_quote : List(U8) -> Try(b, [BadQuotedBytes(Str)]),
+        d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]),
+        d.is_gt : d, d -> Bool,
       ]
 
 This tag union does not support equality because these tags have payload types that don't support **is_eq**:
@@ -152,7 +154,7 @@ expect result == result
 				(e-lambda
 					(args
 						(p-assign (ident "n")))
-					(e-dispatch-call (method "is_gt") (constraint-fn-var 91)
+					(e-dispatch-call (method "is_gt") (constraint-fn-var 101)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "n"))))
