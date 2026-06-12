@@ -36,12 +36,25 @@ const BuiltinAdapterKind = enum {
     str_with_capacity,
     str_reserve,
     str_release_excess_capacity,
+    str_to_utf8,
+    str_from_utf8_lossy,
+    str_from_utf8,
     str_split_on,
     str_join_with,
+    str_is_eq,
+    str_inspect,
     list_len,
     list_is_empty,
+    list_iter,
+    list_from_iter,
+    list_with_capacity,
+    list_reserve,
+    list_release_excess_capacity,
+    list_sort_with,
+    list_is_eq,
     list_first,
     list_get,
+    list_subscript,
     list_append,
     list_prepend,
     list_concat,
@@ -63,6 +76,9 @@ const BuiltinAdapterKind = enum {
     list_repeat,
     list_map_with_index,
     list_fold,
+    list_fold_with_index,
+    list_fold_until,
+    list_fold_with_index_until,
     list_fold_rev,
     list_count_if,
     list_find_first,
@@ -74,7 +90,9 @@ const BuiltinAdapterKind = enum {
     list_take_last,
     list_drop_first,
     list_drop_last,
+    list_drop_at,
     list_swap,
+    list_for_each_bang,
     list_split_at,
     list_split_on,
     list_split_if,
@@ -87,23 +105,39 @@ const BuiltinAdapterKind = enum {
     list_min,
     list_max,
     iter_next,
+    iter_custom,
+    iter_iter,
     iter_map,
     iter_keep_if,
     iter_drop_if,
     iter_fold,
     iter_size_hint,
     iter_collect,
+    iter_stream,
     iter_take_first,
     iter_drop_first,
+    iter_take_last,
+    iter_drop_last,
+    stream_from_iter,
+    stream_map,
+    stream_map_bang,
+    stream_next_bang,
+    stream_size_hint,
+    stream_collect_bang,
     try_is_ok,
     try_is_err,
     try_ok_or,
     try_err_or,
     try_map_ok,
     try_map_err,
+    try_map_ok_bang,
+    try_map_err_bang,
+    try_is_eq,
     box_box,
     box_unbox,
+    bool_is_eq,
     dict_empty,
+    dict_is_eq,
     dict_single,
     dict_len,
     dict_is_empty,
@@ -125,6 +159,7 @@ const BuiltinAdapterKind = enum {
     dict_update,
     dict_from_list,
     set_empty,
+    set_is_eq,
     set_single,
     set_len,
     set_is_empty,
@@ -139,6 +174,8 @@ const BuiltinAdapterKind = enum {
     set_difference,
     set_map,
     set_from_list,
+    numeral_is_negative,
+    utf8_problem_is_eq,
 };
 
 const BuiltinAdapter = struct {
@@ -171,6 +208,7 @@ const NumericAdapterKind = enum {
     sub_checked,
     mul_checked,
     div_checked,
+    plus_saturated,
     rem_by,
     mod_by,
     abs_diff,
@@ -183,7 +221,10 @@ const NumericAdapterKind = enum {
     bitwise_not,
     from_int_digits,
     from_dec_digits,
+    from_numeral,
     from_str,
+    to,
+    until,
 };
 
 const NumericAdapterFamily = enum {
@@ -191,6 +232,7 @@ const NumericAdapterFamily = enum {
     signed_or_float,
     integer,
     float,
+    decimal,
 };
 
 const NumericAdapter = struct {
@@ -199,8 +241,21 @@ const NumericAdapter = struct {
     family: NumericAdapterFamily,
 };
 
+const NumericConversionMode = enum {
+    direct,
+    try_result,
+};
+
+const NumericConversionAdapter = struct {
+    source: Type,
+    name: []const u8,
+    result: Type,
+    mode: NumericConversionMode,
+};
+
 const builtin_adapters = [_]BuiltinAdapter{
     .{ .owner = "Bool", .name = "not", .kind = .bool_not },
+    .{ .owner = "Bool", .name = "is_eq", .kind = .bool_is_eq },
     .{ .owner = "Str", .name = "is_empty", .kind = .str_is_empty },
     .{ .owner = "Str", .name = "concat", .kind = .str_concat },
     .{ .owner = "Str", .name = "contains", .kind = .str_contains },
@@ -220,12 +275,25 @@ const builtin_adapters = [_]BuiltinAdapter{
     .{ .owner = "Str", .name = "with_capacity", .kind = .str_with_capacity },
     .{ .owner = "Str", .name = "reserve", .kind = .str_reserve },
     .{ .owner = "Str", .name = "release_excess_capacity", .kind = .str_release_excess_capacity },
+    .{ .owner = "Str", .name = "to_utf8", .kind = .str_to_utf8 },
+    .{ .owner = "Str", .name = "from_utf8_lossy", .kind = .str_from_utf8_lossy },
+    .{ .owner = "Str", .name = "from_utf8", .kind = .str_from_utf8 },
     .{ .owner = "Str", .name = "split_on", .kind = .str_split_on },
     .{ .owner = "Str", .name = "join_with", .kind = .str_join_with },
+    .{ .owner = "Str", .name = "is_eq", .kind = .str_is_eq },
+    .{ .owner = "Str", .name = "inspect", .kind = .str_inspect },
     .{ .owner = "List", .name = "len", .kind = .list_len },
     .{ .owner = "List", .name = "is_empty", .kind = .list_is_empty },
+    .{ .owner = "List", .name = "iter", .kind = .list_iter },
+    .{ .owner = "List", .name = "from_iter", .kind = .list_from_iter },
+    .{ .owner = "List", .name = "with_capacity", .kind = .list_with_capacity },
+    .{ .owner = "List", .name = "reserve", .kind = .list_reserve },
+    .{ .owner = "List", .name = "release_excess_capacity", .kind = .list_release_excess_capacity },
+    .{ .owner = "List", .name = "sort_with", .kind = .list_sort_with },
+    .{ .owner = "List", .name = "is_eq", .kind = .list_is_eq },
     .{ .owner = "List", .name = "first", .kind = .list_first },
     .{ .owner = "List", .name = "get", .kind = .list_get },
+    .{ .owner = "List", .name = "subscript", .kind = .list_subscript },
     .{ .owner = "List", .name = "append", .kind = .list_append },
     .{ .owner = "List", .name = "prepend", .kind = .list_prepend },
     .{ .owner = "List", .name = "concat", .kind = .list_concat },
@@ -247,6 +315,9 @@ const builtin_adapters = [_]BuiltinAdapter{
     .{ .owner = "List", .name = "repeat", .kind = .list_repeat },
     .{ .owner = "List", .name = "map_with_index", .kind = .list_map_with_index },
     .{ .owner = "List", .name = "fold", .kind = .list_fold },
+    .{ .owner = "List", .name = "fold_with_index", .kind = .list_fold_with_index },
+    .{ .owner = "List", .name = "fold_until", .kind = .list_fold_until },
+    .{ .owner = "List", .name = "fold_with_index_until", .kind = .list_fold_with_index_until },
     .{ .owner = "List", .name = "fold_rev", .kind = .list_fold_rev },
     .{ .owner = "List", .name = "count_if", .kind = .list_count_if },
     .{ .owner = "List", .name = "find_first", .kind = .list_find_first },
@@ -258,7 +329,9 @@ const builtin_adapters = [_]BuiltinAdapter{
     .{ .owner = "List", .name = "take_last", .kind = .list_take_last },
     .{ .owner = "List", .name = "drop_first", .kind = .list_drop_first },
     .{ .owner = "List", .name = "drop_last", .kind = .list_drop_last },
+    .{ .owner = "List", .name = "drop_at", .kind = .list_drop_at },
     .{ .owner = "List", .name = "swap", .kind = .list_swap },
+    .{ .owner = "List", .name = "for_each!", .kind = .list_for_each_bang },
     .{ .owner = "List", .name = "split_at", .kind = .list_split_at },
     .{ .owner = "List", .name = "split_on", .kind = .list_split_on },
     .{ .owner = "List", .name = "split_if", .kind = .list_split_if },
@@ -271,23 +344,38 @@ const builtin_adapters = [_]BuiltinAdapter{
     .{ .owner = "List", .name = "min", .kind = .list_min },
     .{ .owner = "List", .name = "max", .kind = .list_max },
     .{ .owner = "Iter", .name = "next", .kind = .iter_next },
+    .{ .owner = "Iter", .name = "custom", .kind = .iter_custom },
+    .{ .owner = "Iter", .name = "iter", .kind = .iter_iter },
     .{ .owner = "Iter", .name = "map", .kind = .iter_map },
     .{ .owner = "Iter", .name = "keep_if", .kind = .iter_keep_if },
     .{ .owner = "Iter", .name = "drop_if", .kind = .iter_drop_if },
     .{ .owner = "Iter", .name = "fold", .kind = .iter_fold },
     .{ .owner = "Iter", .name = "size_hint", .kind = .iter_size_hint },
     .{ .owner = "Iter", .name = "collect", .kind = .iter_collect },
+    .{ .owner = "Iter", .name = "stream", .kind = .iter_stream },
     .{ .owner = "Iter", .name = "take_first", .kind = .iter_take_first },
     .{ .owner = "Iter", .name = "drop_first", .kind = .iter_drop_first },
+    .{ .owner = "Iter", .name = "take_last", .kind = .iter_take_last },
+    .{ .owner = "Iter", .name = "drop_last", .kind = .iter_drop_last },
+    .{ .owner = "Stream", .name = "from_iter", .kind = .stream_from_iter },
+    .{ .owner = "Stream", .name = "map", .kind = .stream_map },
+    .{ .owner = "Stream", .name = "map!", .kind = .stream_map_bang },
+    .{ .owner = "Stream", .name = "next!", .kind = .stream_next_bang },
+    .{ .owner = "Stream", .name = "size_hint", .kind = .stream_size_hint },
+    .{ .owner = "Stream", .name = "collect!", .kind = .stream_collect_bang },
     .{ .owner = "Try", .name = "is_ok", .kind = .try_is_ok },
     .{ .owner = "Try", .name = "is_err", .kind = .try_is_err },
     .{ .owner = "Try", .name = "ok_or", .kind = .try_ok_or },
     .{ .owner = "Try", .name = "err_or", .kind = .try_err_or },
     .{ .owner = "Try", .name = "map_ok", .kind = .try_map_ok },
     .{ .owner = "Try", .name = "map_err", .kind = .try_map_err },
+    .{ .owner = "Try", .name = "map_ok!", .kind = .try_map_ok_bang },
+    .{ .owner = "Try", .name = "map_err!", .kind = .try_map_err_bang },
+    .{ .owner = "Try", .name = "is_eq", .kind = .try_is_eq },
     .{ .owner = "Box", .name = "box", .kind = .box_box },
     .{ .owner = "Box", .name = "unbox", .kind = .box_unbox },
     .{ .owner = "Dict", .name = "empty", .kind = .dict_empty },
+    .{ .owner = "Dict", .name = "is_eq", .kind = .dict_is_eq },
     .{ .owner = "Dict", .name = "single", .kind = .dict_single },
     .{ .owner = "Dict", .name = "len", .kind = .dict_len },
     .{ .owner = "Dict", .name = "is_empty", .kind = .dict_is_empty },
@@ -309,6 +397,7 @@ const builtin_adapters = [_]BuiltinAdapter{
     .{ .owner = "Dict", .name = "update", .kind = .dict_update },
     .{ .owner = "Dict", .name = "from_list", .kind = .dict_from_list },
     .{ .owner = "Set", .name = "empty", .kind = .set_empty },
+    .{ .owner = "Set", .name = "is_eq", .kind = .set_is_eq },
     .{ .owner = "Set", .name = "single", .kind = .set_single },
     .{ .owner = "Set", .name = "len", .kind = .set_len },
     .{ .owner = "Set", .name = "is_empty", .kind = .set_is_empty },
@@ -323,6 +412,8 @@ const builtin_adapters = [_]BuiltinAdapter{
     .{ .owner = "Set", .name = "difference", .kind = .set_difference },
     .{ .owner = "Set", .name = "map", .kind = .set_map },
     .{ .owner = "Set", .name = "from_list", .kind = .set_from_list },
+    .{ .owner = "Numeral", .name = "is_negative", .kind = .numeral_is_negative },
+    .{ .owner = "Utf8Problem", .name = "is_eq", .kind = .utf8_problem_is_eq },
 };
 
 const numeric_adapters = [_]NumericAdapter{
@@ -349,6 +440,7 @@ const numeric_adapters = [_]NumericAdapter{
     .{ .name = "sub_checked", .kind = .sub_checked, .family = .integer },
     .{ .name = "mul_checked", .kind = .mul_checked, .family = .integer },
     .{ .name = "div_checked", .kind = .div_checked, .family = .integer },
+    .{ .name = "plus_saturated", .kind = .plus_saturated, .family = .integer },
     .{ .name = "rem_by", .kind = .rem_by, .family = .all },
     .{ .name = "mod_by", .kind = .mod_by, .family = .integer },
     .{ .name = "abs_diff", .kind = .abs_diff, .family = .all },
@@ -361,13 +453,81 @@ const numeric_adapters = [_]NumericAdapter{
     .{ .name = "bitwise_not", .kind = .bitwise_not, .family = .integer },
     .{ .name = "from_int_digits", .kind = .from_int_digits, .family = .all },
     .{ .name = "from_dec_digits", .kind = .from_dec_digits, .family = .float },
+    .{ .name = "from_numeral", .kind = .from_numeral, .family = .all },
     .{ .name = "from_str", .kind = .from_str, .family = .all },
+    .{ .name = "to", .kind = .to, .family = .integer },
+    .{ .name = "until", .kind = .until, .family = .integer },
+    .{ .name = "add_checked", .kind = .add_checked, .family = .decimal },
+    .{ .name = "sub_checked", .kind = .sub_checked, .family = .decimal },
+    .{ .name = "plus_saturated", .kind = .plus_saturated, .family = .decimal },
+    .{ .name = "from_dec_digits", .kind = .from_dec_digits, .family = .decimal },
+    .{ .name = "to", .kind = .to, .family = .decimal },
+    .{ .name = "until", .kind = .until, .family = .decimal },
 };
 
-const number_owner_names = [_][]const u8{ "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "F32", "F64" };
-const signed_or_float_number_owner_names = [_][]const u8{ "I8", "I16", "I32", "I64", "I128", "F32", "F64" };
+const number_owner_names = [_][]const u8{ "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec", "F32", "F64" };
+const signed_or_float_number_owner_names = [_][]const u8{ "I8", "I16", "I32", "I64", "I128", "Dec", "F32", "F64" };
 const integer_owner_names = [_][]const u8{ "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128" };
 const float_owner_names = [_][]const u8{ "F32", "F64" };
+const decimal_owner_names = [_][]const u8{"Dec"};
+
+const max_numeric_conversion_adapters = 384;
+
+const NumericConversionAdapterInventory = struct {
+    items: [max_numeric_conversion_adapters]NumericConversionAdapter,
+    len: usize,
+};
+
+const numeric_conversion_adapter_inventory = buildNumericConversionAdapters();
+const numeric_conversion_adapters = numeric_conversion_adapter_inventory.items[0..numeric_conversion_adapter_inventory.len];
+
+const ParsedNumericConversion = struct {
+    result: Type,
+    mode: NumericConversionMode,
+};
+
+fn buildNumericConversionAdapters() NumericConversionAdapterInventory {
+    @setEvalBranchQuota(5_000_000);
+
+    var result: NumericConversionAdapterInventory = .{ .items = undefined, .len = 0 };
+    for (BuiltinSurface.functions) |function| {
+        const source = typeFromNumberOwner(function.owner) orelse continue;
+        if (!isNumericConversionName(function.name)) continue;
+        const parsed = parseNumericConversionSignature(function.signature) orelse continue;
+
+        if (result.len >= result.items.len) @compileError("numeric conversion builtin adapter inventory exceeded capacity");
+        result.items[result.len] = .{
+            .source = source,
+            .name = function.name,
+            .result = parsed.result,
+            .mode = parsed.mode,
+        };
+        result.len += 1;
+    }
+    return result;
+}
+
+fn isNumericConversionName(name: []const u8) bool {
+    if (!std.mem.startsWith(u8, name, "to_")) return false;
+    if (std.mem.eql(u8, name, "to_str")) return false;
+    return true;
+}
+
+fn parseNumericConversionSignature(signature: []const u8) ?ParsedNumericConversion {
+    const arrow = std.mem.indexOf(u8, signature, "->") orelse return null;
+    var rest = trimLeft(signature[arrow + "->".len ..]);
+
+    const mode: NumericConversionMode = if (std.mem.startsWith(u8, rest, "Try(")) mode: {
+        rest = trimLeft(rest["Try(".len..]);
+        break :mode .try_result;
+    } else .direct;
+
+    const result_name_end = builtinIdentifierEnd(rest, 0);
+    if (result_name_end == 0) return null;
+    const result_type = typeFromBuiltinName(rest[0..result_name_end]) orelse return null;
+
+    return .{ .result = result_type, .mode = mode };
+}
 
 comptime {
     BuiltinSurface.require("List", "iter");
@@ -389,8 +549,67 @@ comptime {
             .float => for (float_owner_names) |owner| {
                 BuiltinSurface.require(owner, adapter.name);
             },
+            .decimal => for (decimal_owner_names) |owner| {
+                BuiltinSurface.require(owner, adapter.name);
+            },
         }
     }
+    for (numeric_conversion_adapters) |adapter| {
+        BuiltinSurface.require(numberOwner(adapter.source), adapter.name);
+    }
+    requireCoveredBuiltinSurface();
+}
+
+fn requireCoveredBuiltinSurface() void {
+    @setEvalBranchQuota(5_000_000);
+
+    for (BuiltinSurface.functions) |function| {
+        if (isGeneratedBuiltinFunction(function) or isUnsupportedBuiltinFunction(function)) continue;
+        @compileError("typecheck fuzzer builtin surface is missing " ++ function.owner ++ "." ++ function.name);
+    }
+}
+
+fn isGeneratedBuiltinFunction(function: BuiltinSurface.Function) bool {
+    for (builtin_adapters) |adapter| {
+        if (std.mem.eql(u8, function.owner, adapter.owner) and std.mem.eql(u8, function.name, adapter.name)) {
+            return true;
+        }
+    }
+
+    for (numeric_adapters) |adapter| {
+        if (!std.mem.eql(u8, function.name, adapter.name)) continue;
+        switch (adapter.family) {
+            .all => if (ownerIn(function.owner, &number_owner_names)) return true,
+            .signed_or_float => if (ownerIn(function.owner, &signed_or_float_number_owner_names)) return true,
+            .integer => if (ownerIn(function.owner, &integer_owner_names)) return true,
+            .float => if (ownerIn(function.owner, &float_owner_names)) return true,
+            .decimal => if (ownerIn(function.owner, &decimal_owner_names)) return true,
+        }
+    }
+
+    for (numeric_conversion_adapters) |adapter| {
+        if (std.mem.eql(u8, function.owner, numberOwner(adapter.source)) and std.mem.eql(u8, function.name, adapter.name)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+fn isUnsupportedBuiltinFunction(function: BuiltinSurface.Function) bool {
+    if (std.mem.eql(u8, function.owner, "Builtin")) return true;
+
+    if (std.mem.endsWith(u8, function.name, "!")) return true;
+    if (std.mem.eql(u8, function.name, "encode")) return true;
+    if (std.mem.eql(u8, function.name, "decode")) return true;
+    return false;
+}
+
+fn ownerIn(owner: []const u8, owners: []const []const u8) bool {
+    for (owners) |candidate| {
+        if (std.mem.eql(u8, owner, candidate)) return true;
+    }
+    return false;
 }
 
 const Type = enum {
@@ -468,6 +687,7 @@ const Type = enum {
     i64,
     u128,
     i128,
+    dec,
     f32,
     f64,
 
@@ -619,7 +839,7 @@ const Type = enum {
 
     fn isNumber(self: Type) bool {
         return switch (self) {
-            .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64 => true,
+            .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .f32, .f64 => true,
             else => false,
         };
     }
@@ -783,6 +1003,8 @@ const Expr = union(enum) {
     type_name: Type,
     bool_literal,
     string_literal,
+    utf8_bytes_literal,
+    numeral_literal,
     integer_literal,
     small_number_literal: Type,
 };
@@ -946,12 +1168,12 @@ pub fn generateModule(self: *Self) std.mem.Allocator.Error!void {
     try self.generateFunction(.set_u64);
     try self.generateFunction(.set_str);
 
-    const builtin_count = self.reader.intRangeAtMost(u8, 4, 20);
+    const builtin_count = self.reader.intRangeAtMost(u8, 12, 36);
     for (0..builtin_count) |_| {
         try self.generateBuiltinAssociatedFunction();
     }
 
-    const extra_count = self.reader.intRangeAtMost(u8, 8, 36);
+    const extra_count = self.reader.intRangeAtMost(u8, 12, 48);
     for (0..extra_count) |_| {
         try self.generateFunction(self.chooseType());
     }
@@ -1198,7 +1420,13 @@ fn generateFunction(self: *Self, typ: Type) std.mem.Allocator.Error!void {
 }
 
 fn generateBuiltinAssociatedFunction(self: *Self) std.mem.Allocator.Error!void {
-    const adapter_index = self.reader.intRangeLessThan(usize, 0, builtin_adapters.len + numeric_adapters.len);
+    const adapter_index = self.reader.intRangeLessThan(usize, 0, builtin_adapters.len + numeric_adapters.len + numeric_conversion_adapters.len);
+    if (adapter_index >= builtin_adapters.len + numeric_adapters.len) {
+        const conversion_adapter = numeric_conversion_adapters[adapter_index - builtin_adapters.len - numeric_adapters.len];
+        const name_id = self.name_counter;
+        self.name_counter += 1;
+        return self.generateNumericConversionBuiltinFunction(name_id, conversion_adapter);
+    }
     if (adapter_index >= builtin_adapters.len) {
         const numeric_adapter = numeric_adapters[adapter_index - builtin_adapters.len];
         const name_id = self.name_counter;
@@ -1212,6 +1440,7 @@ fn generateBuiltinAssociatedFunction(self: *Self) std.mem.Allocator.Error!void {
 
     switch (adapter.kind) {
         .bool_not => try self.generateBoolNotBuiltinFunction(name_id),
+        .bool_is_eq => try self.generateBoolIsEqBuiltinFunction(name_id),
         .str_is_empty => try self.generateStrUnaryBuiltinFunction(name_id, "is_empty", .bool),
         .str_concat => try self.generateStrBinaryBuiltinFunction(name_id, "concat", .str),
         .str_contains => try self.generateStrBinaryBuiltinFunction(name_id, "contains", .bool),
@@ -1231,12 +1460,25 @@ fn generateBuiltinAssociatedFunction(self: *Self) std.mem.Allocator.Error!void {
         .str_with_capacity => try self.generateStrWithCapacityBuiltinFunction(name_id),
         .str_reserve => try self.generateStrReserveBuiltinFunction(name_id),
         .str_release_excess_capacity => try self.generateStrUnaryBuiltinFunction(name_id, "release_excess_capacity", .str),
+        .str_to_utf8 => try self.generateStrToUtf8BuiltinFunction(name_id),
+        .str_from_utf8_lossy => try self.generateStrFromUtf8LossyBuiltinFunction(name_id),
+        .str_from_utf8 => try self.generateStrFromUtf8BuiltinFunction(name_id),
         .str_split_on => try self.generateStrBinaryBuiltinFunction(name_id, "split_on", .list_str),
         .str_join_with => try self.generateStrJoinWithBuiltinFunction(name_id),
+        .str_is_eq => try self.generateStrIsEqBuiltinFunction(name_id),
+        .str_inspect => try self.generateStrInspectBuiltinFunction(name_id),
         .list_len => try self.generateListLenFunction(name_id, self.chooseListType()),
         .list_is_empty => try self.generateListIsEmptyBuiltinFunction(name_id, self.chooseListType()),
+        .list_iter => try self.generateListIterBuiltinFunction(name_id),
+        .list_from_iter => try self.generateListFromIterBuiltinFunction(name_id),
+        .list_with_capacity => try self.generateListWithCapacityBuiltinFunction(name_id),
+        .list_reserve => try self.generateListReserveBuiltinFunction(name_id, self.chooseListType()),
+        .list_release_excess_capacity => try self.generateListReleaseExcessCapacityBuiltinFunction(name_id, self.chooseListType()),
+        .list_sort_with => try self.generateListSortWithBuiltinFunction(name_id),
+        .list_is_eq => try self.generateListIsEqBuiltinFunction(name_id, self.chooseEquatableListType()),
         .list_first => try self.generateListFirstFunction(name_id, self.chooseListType()),
         .list_get => try self.generateListGetFunction(name_id, self.chooseListType()),
+        .list_subscript => try self.generateListSubscriptFunction(name_id, self.chooseListType()),
         .list_append => try self.generateListAppendFunction(name_id, self.chooseListType()),
         .list_prepend => try self.generateListPrependFunction(name_id, self.chooseListType()),
         .list_concat => try self.generateListConcatFunction(name_id, self.chooseListType()),
@@ -1258,6 +1500,9 @@ fn generateBuiltinAssociatedFunction(self: *Self) std.mem.Allocator.Error!void {
         .list_repeat => try self.generateListRepeatBuiltinFunction(name_id, self.chooseListType()),
         .list_map_with_index => try self.generateListMapWithIndexFunction(name_id, self.chooseListType()),
         .list_fold => try self.generateListFoldFunction(name_id, self.chooseListType()),
+        .list_fold_with_index => try self.generateListFoldWithIndexFunction(name_id, self.chooseListType()),
+        .list_fold_until => try self.generateListFoldUntilFunction(name_id),
+        .list_fold_with_index_until => try self.generateListFoldWithIndexUntilFunction(name_id),
         .list_fold_rev => try self.generateListFoldRevFunction(name_id, self.chooseListType()),
         .list_count_if => try self.generateListCountIfFunction(name_id, self.chooseListType()),
         .list_find_first => try self.generateListFindElementBuiltinFunction(name_id, self.chooseListType(), "find_first"),
@@ -1269,7 +1514,9 @@ fn generateBuiltinAssociatedFunction(self: *Self) std.mem.Allocator.Error!void {
         .list_take_last => try self.generateListTakeDropBuiltinFunction(name_id, self.chooseListType(), "take_last"),
         .list_drop_first => try self.generateListTakeDropBuiltinFunction(name_id, self.chooseListType(), "drop_first"),
         .list_drop_last => try self.generateListTakeDropBuiltinFunction(name_id, self.chooseListType(), "drop_last"),
+        .list_drop_at => try self.generateListTakeDropBuiltinFunction(name_id, self.chooseListType(), "drop_at"),
         .list_swap => try self.generateListSwapFunction(name_id, self.chooseListType()),
+        .list_for_each_bang => try self.generateListForEachBangBuiltinFunction(name_id),
         .list_split_at => try self.generateListSplitAtBuiltinFunction(name_id),
         .list_split_on => try self.generateListSplitOnBuiltinFunction(name_id),
         .list_split_if => try self.generateListSplitIfBuiltinFunction(name_id),
@@ -1282,23 +1529,38 @@ fn generateBuiltinAssociatedFunction(self: *Self) std.mem.Allocator.Error!void {
         .list_min => try self.generateListMinMaxBuiltinFunction(name_id, "min"),
         .list_max => try self.generateListMinMaxBuiltinFunction(name_id, "max"),
         .iter_next => try self.generateIterNextBuiltinFunction(name_id),
+        .iter_custom => try self.generateIterCustomBuiltinFunction(name_id),
+        .iter_iter => try self.generateIterIterBuiltinFunction(name_id),
         .iter_map => try self.generateIterTransformCollectBuiltinFunction(name_id, "map"),
         .iter_keep_if => try self.generateIterPredicateCollectBuiltinFunction(name_id, "keep_if"),
         .iter_drop_if => try self.generateIterPredicateCollectBuiltinFunction(name_id, "drop_if"),
         .iter_fold => try self.generateIterFoldBuiltinFunction(name_id),
         .iter_size_hint => try self.generateIterSizeHintBuiltinFunction(name_id),
         .iter_collect => try self.generateIterCollectBuiltinFunction(name_id),
+        .iter_stream => try self.generateIterStreamBuiltinFunction(name_id),
         .iter_take_first => try self.generateIterTakeDropCollectBuiltinFunction(name_id, "take_first"),
         .iter_drop_first => try self.generateIterTakeDropCollectBuiltinFunction(name_id, "drop_first"),
+        .iter_take_last => try self.generateIterTakeDropCollectBuiltinFunction(name_id, "take_last"),
+        .iter_drop_last => try self.generateIterTakeDropCollectBuiltinFunction(name_id, "drop_last"),
+        .stream_from_iter => try self.generateStreamFromIterBuiltinFunction(name_id),
+        .stream_map => try self.generateStreamMapBuiltinFunction(name_id),
+        .stream_map_bang => try self.generateStreamMapBangBuiltinFunction(name_id),
+        .stream_next_bang => try self.generateStreamNextBangBuiltinFunction(name_id),
+        .stream_size_hint => try self.generateStreamSizeHintBuiltinFunction(name_id),
+        .stream_collect_bang => try self.generateStreamCollectBangBuiltinFunction(name_id),
         .try_is_ok => try self.generateTryPredicateBuiltinFunction(name_id, self.chooseTryType(), "is_ok"),
         .try_is_err => try self.generateTryPredicateBuiltinFunction(name_id, self.chooseTryType(), "is_err"),
         .try_ok_or => try self.generateTryOkOrBuiltinFunction(name_id, self.chooseTryType()),
         .try_err_or => try self.generateTryErrOrBuiltinFunction(name_id, self.chooseTryType()),
         .try_map_ok => try self.generateTryMapOkErrBuiltinFunction(name_id, self.chooseTryType(), "map_ok"),
         .try_map_err => try self.generateTryMapOkErrBuiltinFunction(name_id, self.chooseTryType(), "map_err"),
+        .try_map_ok_bang => try self.generateTryMapOkErrBangBuiltinFunction(name_id, self.chooseTryType(), "map_ok!"),
+        .try_map_err_bang => try self.generateTryMapOkErrBangBuiltinFunction(name_id, self.chooseTryType(), "map_err!"),
+        .try_is_eq => try self.generateTryIsEqBuiltinFunction(name_id, self.chooseTryType()),
         .box_box => try self.generateBoxBoxBuiltinFunction(name_id, self.chooseBoxType()),
         .box_unbox => try self.generateBoxUnboxFunction(name_id, self.chooseBoxType()),
         .dict_empty => try self.generateDictEmptyBuiltinFunction(name_id, self.chooseDictType()),
+        .dict_is_eq => try self.generateDictIsEqBuiltinFunction(name_id, self.chooseDictType()),
         .dict_single => try self.generateDictSingleBuiltinFunction(name_id, self.chooseDictType()),
         .dict_len => try self.generateDictLenFunction(name_id, self.chooseDictType()),
         .dict_is_empty => try self.generateDictIsEmptyFunction(name_id, self.chooseDictType()),
@@ -1320,6 +1582,7 @@ fn generateBuiltinAssociatedFunction(self: *Self) std.mem.Allocator.Error!void {
         .dict_update => try self.generateDictUpdateFunction(name_id, self.chooseDictType()),
         .dict_from_list => try self.generateDictFromListBuiltinFunction(name_id, self.chooseDictType()),
         .set_empty => try self.generateSetEmptyBuiltinFunction(name_id, self.chooseSetType()),
+        .set_is_eq => try self.generateSetIsEqBuiltinFunction(name_id, self.chooseSetType()),
         .set_single => try self.generateSetSingleBuiltinFunction(name_id, self.chooseSetType()),
         .set_len => try self.generateSetLenFunction(name_id, self.chooseSetType()),
         .set_is_empty => try self.generateSetIsEmptyFunction(name_id, self.chooseSetType()),
@@ -1334,6 +1597,8 @@ fn generateBuiltinAssociatedFunction(self: *Self) std.mem.Allocator.Error!void {
         .set_difference => try self.generateSetDifferenceFunction(name_id, self.chooseSetType()),
         .set_map => try self.generateSetMapFunction(name_id, self.chooseSetType()),
         .set_from_list => try self.generateSetFromListBuiltinFunction(name_id, self.chooseSetType()),
+        .numeral_is_negative => try self.generateNumeralIsNegativeBuiltinFunction(name_id),
+        .utf8_problem_is_eq => try self.generateUtf8ProblemIsEqBuiltinFunction(name_id),
     }
 }
 
@@ -1343,6 +1608,7 @@ fn generateNumericBuiltinAssociatedFunction(self: *Self, name_id: u32, adapter: 
         .signed_or_float => self.chooseSignedOrFloatNumberType(),
         .integer => self.chooseIntegerType(),
         .float => self.chooseFloatType(),
+        .decimal => .dec,
     };
 
     switch (adapter.kind) {
@@ -1351,7 +1617,7 @@ fn generateNumericBuiltinAssociatedFunction(self: *Self, name_id: u32, adapter: 
         .is_zero => try self.generateNumericUnaryBuiltinFunction(name_id, typ, "is_zero", .bool),
         .is_negative => try self.generateNumericUnaryBuiltinFunction(name_id, typ, "is_negative", .bool),
         .is_positive => try self.generateNumericUnaryBuiltinFunction(name_id, typ, "is_positive", .bool),
-        .is_eq => try self.generateNumericBinaryBuiltinFunction(name_id, typ, "is_eq", .bool),
+        .is_eq => try self.generateNumericAssociatedBinaryBuiltinFunction(name_id, typ, "is_eq", .bool),
         .is_gt => try self.generateNumericBinaryBuiltinFunction(name_id, typ, "is_gt", .bool),
         .is_gte => try self.generateNumericBinaryBuiltinFunction(name_id, typ, "is_gte", .bool),
         .is_lt => try self.generateNumericBinaryBuiltinFunction(name_id, typ, "is_lt", .bool),
@@ -1369,6 +1635,7 @@ fn generateNumericBuiltinAssociatedFunction(self: *Self, name_id: u32, adapter: 
         .sub_checked => try self.generateNumericCheckedBinaryBuiltinFunction(name_id, typ, "sub_checked"),
         .mul_checked => try self.generateNumericCheckedBinaryBuiltinFunction(name_id, typ, "mul_checked"),
         .div_checked => try self.generateNumericCheckedBinaryBuiltinFunction(name_id, typ, "div_checked"),
+        .plus_saturated => try self.generateNumericBinaryBuiltinFunction(name_id, typ, "plus_saturated", typ),
         .rem_by => try self.generateNumericBinaryBuiltinFunction(name_id, typ, "rem_by", typ),
         .mod_by => try self.generateNumericBinaryBuiltinFunction(name_id, typ, "mod_by", typ),
         .abs_diff => try self.generateNumericBinaryBuiltinFunction(name_id, typ, "abs_diff", absDiffReturnType(typ)),
@@ -1381,7 +1648,10 @@ fn generateNumericBuiltinAssociatedFunction(self: *Self, name_id: u32, adapter: 
         .bitwise_not => try self.generateNumericUnaryBuiltinFunction(name_id, typ, "bitwise_not", typ),
         .from_int_digits => try self.generateNumericFromIntDigitsBuiltinFunction(name_id, typ),
         .from_dec_digits => try self.generateNumericFromDecDigitsBuiltinFunction(name_id, typ),
+        .from_numeral => try self.generateNumericFromNumeralBuiltinFunction(name_id, typ),
         .from_str => try self.generateNumericFromStrBuiltinFunction(name_id, typ),
+        .to => try self.generateNumericRangeBuiltinFunction(name_id, typ, "to"),
+        .until => try self.generateNumericRangeBuiltinFunction(name_id, typ, "until"),
     }
 }
 
@@ -1413,6 +1683,15 @@ fn generateNumericBinaryBuiltinFunction(self: *Self, name_id: u32, typ: Type, me
     try self.write("\n    }\n");
 }
 
+fn generateNumericAssociatedBinaryBuiltinFunction(self: *Self, name_id: u32, typ: Type, method: []const u8, return_type: Type) std.mem.Allocator.Error!void {
+    std.debug.assert(typ.isNumber());
+
+    try self.writeTypedLocalFunctionStart(name_id, "number", typ, return_type);
+    try self.write("        ");
+    try self.writeQualifiedCall(numberOwner(typ), method, &.{ .{ .raw = "number" }, .{ .small_number_literal = typ } });
+    try self.write("\n    }\n");
+}
+
 fn generateNumericCheckedBinaryBuiltinFunction(self: *Self, name_id: u32, typ: Type, method: []const u8) std.mem.Allocator.Error!void {
     std.debug.assert(typ.isNumber() and !typ.isFloat());
 
@@ -1425,6 +1704,31 @@ fn generateNumericCheckedBinaryBuiltinFunction(self: *Self, name_id: u32, typ: T
     try self.write("\n        ");
     try self.writeAssociatedOrMethodCall(numberOwner(typ), .{ .raw = "number" }, method, &.{.{ .small_number_literal = typ }});
     try self.write("\n    }\n");
+}
+
+fn generateNumericConversionBuiltinFunction(self: *Self, name_id: u32, adapter: NumericConversionAdapter) std.mem.Allocator.Error!void {
+    std.debug.assert(adapter.source.isNumber());
+    std.debug.assert(adapter.result.isNumber());
+
+    switch (adapter.mode) {
+        .direct => {
+            try self.writeTypedLocalFunctionStart(name_id, "number", adapter.source, adapter.result);
+            try self.write("        ");
+            try self.writeAssociatedOrMethodCall(numberOwner(adapter.source), .{ .raw = "number" }, adapter.name, &.{});
+            try self.write("\n    }\n");
+        },
+        .try_result => {
+            try self.writeTrySignature(name_id, adapter.result);
+            try self.writeFunctionHeader(name_id);
+            try self.write("|_| {\n        number : ");
+            try self.writeType(adapter.source);
+            try self.write("\n        number = ");
+            try self.writeSmallNumberLiteral(adapter.source);
+            try self.write("\n        ");
+            try self.writeAssociatedOrMethodCall(numberOwner(adapter.source), .{ .raw = "number" }, adapter.name, &.{});
+            try self.write("\n    }\n");
+        },
+    }
 }
 
 fn generateNumericShiftBuiltinFunction(self: *Self, name_id: u32, typ: Type, method: []const u8) std.mem.Allocator.Error!void {
@@ -1447,12 +1751,22 @@ fn generateNumericFromIntDigitsBuiltinFunction(self: *Self, name_id: u32, typ: T
 }
 
 fn generateNumericFromDecDigitsBuiltinFunction(self: *Self, name_id: u32, typ: Type) std.mem.Allocator.Error!void {
-    std.debug.assert(typ.isFloat());
+    std.debug.assert(typ.isFloat() or typ == .dec);
 
     try self.writeNumericTrySignature(name_id, typ);
     try self.writeFunctionHeader(name_id);
     try self.write("|_| ");
     try self.writeQualifiedCall(numberOwner(typ), "from_dec_digits", &.{.{ .raw = "([1, 2], [3])" }});
+    try self.write("\n");
+}
+
+fn generateNumericFromNumeralBuiltinFunction(self: *Self, name_id: u32, typ: Type) std.mem.Allocator.Error!void {
+    std.debug.assert(typ.isNumber());
+
+    try self.writeNumericTrySignature(name_id, typ);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| ");
+    try self.writeQualifiedCall(numberOwner(typ), "from_numeral", &.{.{ .numeral_literal = {} }});
     try self.write("\n");
 }
 
@@ -1466,11 +1780,29 @@ fn generateNumericFromStrBuiltinFunction(self: *Self, name_id: u32, typ: Type) s
     try self.write("\n");
 }
 
+fn generateNumericRangeBuiltinFunction(self: *Self, name_id: u32, typ: Type, method: []const u8) std.mem.Allocator.Error!void {
+    std.debug.assert(typ.isNumber() and !typ.isFloat());
+
+    try self.writeNumberIterFunctionSignature(name_id, typ);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| ");
+    try self.writeAssociatedOrMethodCall(numberOwner(typ), .{ .small_number_literal = typ }, method, &.{.{ .small_number_literal = typ }});
+    try self.write("\n");
+}
+
 fn generateBoolNotBuiltinFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
     try self.writeFunctionSignature(name_id, "Main", .bool);
     try self.writeFunctionHeader(name_id);
     try self.write("|_| ");
     try self.writeCall("Bool.not", &.{.{ .bool_literal = {} }});
+    try self.write("\n");
+}
+
+fn generateBoolIsEqBuiltinFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFunctionSignature(name_id, "Main", .bool);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| ");
+    try self.writeCall("Bool.is_eq", &.{ .{ .bool_literal = {} }, .{ .bool_literal = {} } });
     try self.write("\n");
 }
 
@@ -1522,6 +1854,55 @@ fn generateStrJoinWithBuiltinFunction(self: *Self, name_id: u32) std.mem.Allocat
     try self.write("\n");
 }
 
+fn generateStrIsEqBuiltinFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFunctionSignature(name_id, "Main", .bool);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| ");
+    try self.writeCall("Str.is_eq", &.{ .{ .string_literal = {} }, .{ .string_literal = {} } });
+    try self.write("\n");
+}
+
+fn generateStrToUtf8BuiltinFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeRawFunctionSignature(name_id, "Main", "List(U8)");
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| ");
+    try self.writeAssociatedOrMethodCall("Str", .{ .string_literal = {} }, "to_utf8", &.{});
+    try self.write("\n");
+}
+
+fn generateStrFromUtf8LossyBuiltinFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFunctionSignature(name_id, "Main", .str);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| ");
+    try self.writeCall("Str.from_utf8_lossy", &.{.{ .utf8_bytes_literal = {} }});
+    try self.write("\n");
+}
+
+fn generateStrFromUtf8BuiltinFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeTrySignature(name_id, .str);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| ");
+    try self.writeCall("Str.from_utf8", &.{.{ .utf8_bytes_literal = {} }});
+    try self.write("\n");
+}
+
+fn generateStrInspectBuiltinFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    const typ = switch (self.reader.intRangeAtMost(u8, 0, 4)) {
+        0 => Type.main,
+        1 => Type.bool,
+        2 => Type.str,
+        3 => Type.u64,
+        4 => Type.list_u64,
+        else => unreachable,
+    };
+
+    try self.writeFunctionSignature(name_id, "Main", .str);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| ");
+    try self.writeCall("Str.inspect", &.{.{ .literal = typ }});
+    try self.write("\n");
+}
+
 fn generateListIsEmptyBuiltinFunction(self: *Self, name_id: u32, typ: Type) std.mem.Allocator.Error!void {
     std.debug.assert(typ.isList());
 
@@ -1566,6 +1947,29 @@ fn generateTryMapOkErrBuiltinFunction(self: *Self, name_id: u32, typ: Type, meth
     try self.writeTypedLocalFunctionStart(name_id, "fallible", typ, typ);
     try self.write("        ");
     try self.writeAssociatedOrMethodCall("Try", .{ .raw = "fallible" }, method, &.{.{ .raw = "|value| value" }});
+    try self.write("\n    }\n");
+}
+
+fn generateTryMapOkErrBangBuiltinFunction(self: *Self, name_id: u32, typ: Type, method: []const u8) std.mem.Allocator.Error!void {
+    std.debug.assert(typ.isTry());
+
+    try self.writeRawEffectfulFunctionSignature(name_id, "Main", tryTypeName(typ));
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| {\n        fallible : ");
+    try self.writeType(typ);
+    try self.write("\n        fallible = ");
+    try self.writeLiteral(typ);
+    try self.write("\n        Try.");
+    try self.writeCall(method, &.{ .{ .raw = "fallible" }, .{ .raw = "|value| value" } });
+    try self.write("\n    }\n");
+}
+
+fn generateTryIsEqBuiltinFunction(self: *Self, name_id: u32, typ: Type) std.mem.Allocator.Error!void {
+    std.debug.assert(typ.isTry());
+
+    try self.writeTypedLocalFunctionStart(name_id, "fallible", typ, .bool);
+    try self.write("        ");
+    try self.writeCall("Try.is_eq", &.{ .{ .raw = "fallible" }, .{ .literal = typ } });
     try self.write("\n    }\n");
 }
 
@@ -1759,6 +2163,58 @@ fn generateListLenFunction(self: *Self, name_id: u32, typ: Type) std.mem.Allocat
     try self.write(".len()\n");
 }
 
+fn generateListIterBuiltinFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeRawFunctionSignature(name_id, "Main", "Iter(U64)");
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| ");
+    try self.writeAssociatedOrMethodCall("List", .{ .literal = .list_u64 }, "iter", &.{});
+    try self.write("\n");
+}
+
+fn generateListFromIterBuiltinFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFunctionSignature(name_id, "Main", .list_u64);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| List.from_iter(");
+    try self.writeListU64Iter();
+    try self.write(")\n");
+}
+
+fn generateListWithCapacityBuiltinFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFunctionSignature(name_id, "Main", .list_u64);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| ");
+    try self.writeCall("List.with_capacity", &.{.{ .integer_literal = {} }});
+    try self.write("\n");
+}
+
+fn generateListReserveBuiltinFunction(self: *Self, name_id: u32, typ: Type) std.mem.Allocator.Error!void {
+    std.debug.assert(typ.isList());
+
+    try self.writeFunctionSignature(name_id, "Main", typ);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| ");
+    try self.writeAssociatedOrMethodCall("List", .{ .literal = typ }, "reserve", &.{.{ .integer_literal = {} }});
+    try self.write("\n");
+}
+
+fn generateListReleaseExcessCapacityBuiltinFunction(self: *Self, name_id: u32, typ: Type) std.mem.Allocator.Error!void {
+    std.debug.assert(typ.isList());
+
+    try self.writeFunctionSignature(name_id, "Main", typ);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| ");
+    try self.writeAssociatedOrMethodCall("List", .{ .literal = typ }, "release_excess_capacity", &.{});
+    try self.write("\n");
+}
+
+fn generateListSortWithBuiltinFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFunctionSignature(name_id, "Main", .list_u64);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| List.sort_with(");
+    try self.writeLiteral(.list_u64);
+    try self.write(", |left, right| if left < right LT else if left == right EQ else GT)\n");
+}
+
 fn generateListMatchFunction(self: *Self, name_id: u32, typ: Type) std.mem.Allocator.Error!void {
     std.debug.assert(typ.isList());
 
@@ -1789,6 +2245,25 @@ fn generateListFirstFunction(self: *Self, name_id: u32, typ: Type) std.mem.Alloc
 }
 
 fn generateListGetFunction(self: *Self, name_id: u32, typ: Type) std.mem.Allocator.Error!void {
+    try self.generateListIndexLookupFunction(name_id, typ, "get");
+}
+
+fn generateListSubscriptFunction(self: *Self, name_id: u32, typ: Type) std.mem.Allocator.Error!void {
+    std.debug.assert(typ.isList());
+
+    const elem_type = typ.listElement();
+    const index = self.reader.intRangeAtMost(u8, 0, 4);
+    try self.writeFunctionSignature(name_id, "Main", elem_type);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| match List.subscript(");
+    try self.writeLiteral(typ);
+    try self.output.print(self.allocator, ", {d})", .{index});
+    try self.write(" {\n        Ok(value) => value\n        Err(_) => ");
+    try self.writeLiteral(elem_type);
+    try self.write("\n    }\n");
+}
+
+fn generateListIndexLookupFunction(self: *Self, name_id: u32, typ: Type, method: []const u8) std.mem.Allocator.Error!void {
     std.debug.assert(typ.isList());
 
     const elem_type = typ.listElement();
@@ -1797,13 +2272,17 @@ fn generateListGetFunction(self: *Self, name_id: u32, typ: Type) std.mem.Allocat
     try self.writeFunctionHeader(name_id);
     try self.write("|_| match ");
     if (self.reader.boolean()) {
-        try self.write("List.get(");
+        try self.write("List.");
+        try self.write(method);
+        try self.write("(");
         try self.writeLiteral(typ);
         try self.output.print(self.allocator, ", {d}", .{index});
         try self.write(")");
     } else {
         try self.writeLiteral(typ);
-        try self.output.print(self.allocator, ".get({d})", .{index});
+        try self.write(".");
+        try self.write(method);
+        try self.output.print(self.allocator, "({d})", .{index});
     }
     try self.write(" {\n        Ok(value) => value\n        Err(_) => ");
     try self.writeLiteral(elem_type);
@@ -1921,6 +2400,16 @@ fn generateListCompareBuiltinFunction(self: *Self, name_id: u32, typ: Type, meth
     try self.writeFunctionHeader(name_id);
     try self.write("|_| ");
     try self.writeAssociatedOrMethodCall("List", .{ .literal = typ }, method, &.{.{ .literal = typ }});
+    try self.write("\n");
+}
+
+fn generateListIsEqBuiltinFunction(self: *Self, name_id: u32, typ: Type) std.mem.Allocator.Error!void {
+    std.debug.assert(typ.isList());
+
+    try self.writeFunctionSignature(name_id, "Main", .bool);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| ");
+    try self.writeCall("List.is_eq", &.{ .{ .literal = typ }, .{ .literal = typ } });
     try self.write("\n");
 }
 
@@ -2055,6 +2544,41 @@ fn generateListFoldFunction(self: *Self, name_id: u32, typ: Type) std.mem.Alloca
     try self.write(")\n");
 }
 
+fn generateListFoldWithIndexFunction(self: *Self, name_id: u32, typ: Type) std.mem.Allocator.Error!void {
+    std.debug.assert(typ.isList());
+
+    const elem_type = typ.listElement();
+    try self.writeFunctionSignature(name_id, "Main", elem_type);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| List.fold_with_index(");
+    try self.writeLiteral(typ);
+    try self.write(", ");
+    try self.writeLiteral(elem_type);
+    try self.write(", |acc, _item, _index| ");
+    if (self.reader.boolean()) {
+        try self.write("acc");
+    } else {
+        try self.writeLiteral(elem_type);
+    }
+    try self.write(")\n");
+}
+
+fn generateListFoldUntilFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFunctionSignature(name_id, "Main", .u64);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| List.fold_until(");
+    try self.writeLiteral(.list_u64);
+    try self.write(", 0, |acc, item| if item > 50 Break(acc) else Continue(acc + item))\n");
+}
+
+fn generateListFoldWithIndexUntilFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFunctionSignature(name_id, "Main", .u64);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| List.fold_with_index_until(");
+    try self.writeLiteral(.list_u64);
+    try self.write(", 0, |acc, item, index| if index > 50 Break(acc) else Continue(acc + item + index))\n");
+}
+
 fn generateListFoldRevFunction(self: *Self, name_id: u32, typ: Type) std.mem.Allocator.Error!void {
     std.debug.assert(typ.isList());
 
@@ -2157,6 +2681,14 @@ fn generateListSwapFunction(self: *Self, name_id: u32, typ: Type) std.mem.Alloca
     try self.output.print(self.allocator, ", {d}, {d})\n", .{ first, second });
 }
 
+fn generateListForEachBangBuiltinFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeRawEffectfulFunctionSignature(name_id, "Main", "{}");
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| List.for_each!(");
+    try self.writeLiteral(.list_u64);
+    try self.write(", |_item| {})\n");
+}
+
 fn generateListSplitAtBuiltinFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
     const index = self.reader.intRangeAtMost(u8, 0, 4);
     try self.write("    value");
@@ -2249,6 +2781,20 @@ fn generateIterNextBuiltinFunction(self: *Self, name_id: u32) std.mem.Allocator.
     try self.write(") {\n        One(record) => record.item\n        Skip(_) => 0\n        Done => 0\n    }\n");
 }
 
+fn generateIterCustomBuiltinFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeRawFunctionSignature(name_id, "Main", "Iter(U64)");
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| Iter.custom(0, Known(4), |state| if state < 4 Ok((state, state + 1)) else Err(NoMore))\n");
+}
+
+fn generateIterIterBuiltinFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeRawFunctionSignature(name_id, "Main", "Iter(U64)");
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| ");
+    try self.writeAssociatedOrMethodCall("Iter", .{ .raw = "List.iter([1, 2, 3])" }, "iter", &.{});
+    try self.write("\n");
+}
+
 fn generateIterTransformCollectBuiltinFunction(self: *Self, name_id: u32, method: []const u8) std.mem.Allocator.Error!void {
     try self.writeFunctionSignature(name_id, "Main", .list_u64);
     try self.writeFunctionHeader(name_id);
@@ -2293,6 +2839,14 @@ fn generateIterCollectBuiltinFunction(self: *Self, name_id: u32) std.mem.Allocat
     try self.write(")\n");
 }
 
+fn generateIterStreamBuiltinFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeRawFunctionSignature(name_id, "Main", "Stream(U64)");
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| Iter.stream(");
+    try self.writeListU64Iter();
+    try self.write(")\n");
+}
+
 fn generateIterTakeDropCollectBuiltinFunction(self: *Self, name_id: u32, method: []const u8) std.mem.Allocator.Error!void {
     try self.writeFunctionSignature(name_id, "Main", .list_u64);
     try self.writeFunctionHeader(name_id);
@@ -2302,6 +2856,54 @@ fn generateIterTakeDropCollectBuiltinFunction(self: *Self, name_id: u32, method:
     try self.writeListU64Iter();
     try self.write(", ");
     try self.writeIntegerLiteral();
+    try self.write("))\n");
+}
+
+fn generateStreamFromIterBuiltinFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeRawFunctionSignature(name_id, "Main", "Stream(U64)");
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| Stream.from_iter(");
+    try self.writeListU64Iter();
+    try self.write(")\n");
+}
+
+fn generateStreamMapBuiltinFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeRawFunctionSignature(name_id, "Main", "Stream(U64)");
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| Stream.map(Stream.from_iter(");
+    try self.writeListU64Iter();
+    try self.write("), |item| item + 1)\n");
+}
+
+fn generateStreamMapBangBuiltinFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeRawEffectfulFunctionSignature(name_id, "Main", "Stream(U64)");
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| Stream.map!(Stream.from_iter(");
+    try self.writeListU64Iter();
+    try self.write("), |item| item + 1)\n");
+}
+
+fn generateStreamNextBangBuiltinFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeRawEffectfulFunctionSignature(name_id, "Main", "U64");
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| match Stream.next!(Stream.from_iter(");
+    try self.writeListU64Iter();
+    try self.write(")) {\n        One(record) => record.item\n        Skip(_) => 0\n        Done => 0\n    }\n");
+}
+
+fn generateStreamSizeHintBuiltinFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFunctionSignature(name_id, "Main", .u64);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| match Stream.size_hint(Stream.from_iter(");
+    try self.writeListU64Iter();
+    try self.write(")) {\n        Known(len) => len\n        Unknown => 0\n    }\n");
+}
+
+fn generateStreamCollectBangBuiltinFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeRawEffectfulFunctionSignature(name_id, "Main", "List(U64)");
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| Stream.collect!(Stream.from_iter(");
+    try self.writeListU64Iter();
     try self.write("))\n");
 }
 
@@ -2888,6 +3490,15 @@ fn generateDictEmptyBuiltinFunction(self: *Self, name_id: u32, typ: Type) std.me
     try self.write("\n");
 }
 
+fn generateDictIsEqBuiltinFunction(self: *Self, name_id: u32, typ: Type) std.mem.Allocator.Error!void {
+    std.debug.assert(typ.isDict());
+
+    try self.writeDictLocalFunctionStart(name_id, typ, .bool);
+    try self.write("        ");
+    try self.writeCall("Dict.is_eq", &.{ .{ .raw = "dict" }, .{ .literal = typ } });
+    try self.write("\n    }\n");
+}
+
 fn generateDictSingleBuiltinFunction(self: *Self, name_id: u32, typ: Type) std.mem.Allocator.Error!void {
     std.debug.assert(typ.isDict());
 
@@ -3232,6 +3843,15 @@ fn generateSetEmptyBuiltinFunction(self: *Self, name_id: u32, typ: Type) std.mem
     try self.write("\n");
 }
 
+fn generateSetIsEqBuiltinFunction(self: *Self, name_id: u32, typ: Type) std.mem.Allocator.Error!void {
+    std.debug.assert(typ.isSet());
+
+    try self.writeSetLocalFunctionStart(name_id, typ, .bool);
+    try self.write("        ");
+    try self.writeCall("Set.is_eq", &.{ .{ .raw = "set" }, .{ .literal = typ } });
+    try self.write("\n    }\n");
+}
+
 fn generateSetSingleBuiltinFunction(self: *Self, name_id: u32, typ: Type) std.mem.Allocator.Error!void {
     std.debug.assert(typ.isSet());
 
@@ -3430,6 +4050,22 @@ fn generateSetFromListBuiltinFunction(self: *Self, name_id: u32, typ: Type) std.
     try self.write("\n");
 }
 
+fn generateNumeralIsNegativeBuiltinFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFunctionSignature(name_id, "Main", .bool);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| ");
+    try self.writeCall("Numeral.is_negative", &.{.{ .numeral_literal = {} }});
+    try self.write("\n");
+}
+
+fn generateUtf8ProblemIsEqBuiltinFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFunctionSignature(name_id, "Main", .bool);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| ");
+    try self.writeCall("Str.Utf8Problem.is_eq", &.{ .{ .raw = "InvalidStartByte" }, .{ .raw = "UnexpectedEndOfSequence" } });
+    try self.write("\n");
+}
+
 fn writeSetLocalFunctionStart(self: *Self, name_id: u32, typ: Type, return_type: Type) std.mem.Allocator.Error!void {
     std.debug.assert(typ.isSet());
 
@@ -3446,6 +4082,36 @@ fn writeFunctionSignature(self: *Self, name_id: u32, arg_type: []const u8, retur
     try self.write("\n");
 }
 
+fn writeRawFunctionSignature(self: *Self, name_id: u32, arg_type: []const u8, return_type: []const u8) std.mem.Allocator.Error!void {
+    try self.write("    value");
+    try self.output.print(self.allocator, "{d}", .{name_id});
+    try self.write(" : ");
+    try self.write(arg_type);
+    try self.write(" -> ");
+    try self.write(return_type);
+    try self.write("\n");
+}
+
+fn writeRawEffectfulFunctionSignature(self: *Self, name_id: u32, arg_type: []const u8, return_type: []const u8) std.mem.Allocator.Error!void {
+    try self.write("    value");
+    try self.output.print(self.allocator, "{d}", .{name_id});
+    try self.write(" : ");
+    try self.write(arg_type);
+    try self.write(" => ");
+    try self.write(return_type);
+    try self.write("\n");
+}
+
+fn writeNumberIterFunctionSignature(self: *Self, name_id: u32, typ: Type) std.mem.Allocator.Error!void {
+    std.debug.assert(typ.isNumber());
+
+    try self.write("    value");
+    try self.output.print(self.allocator, "{d}", .{name_id});
+    try self.write(" : Main -> Iter(");
+    try self.write(numberOwner(typ));
+    try self.write(")\n");
+}
+
 fn writeFunctionHeader(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
     try self.write("    value");
     try self.output.print(self.allocator, "{d}", .{name_id});
@@ -3455,25 +4121,25 @@ fn writeFunctionHeader(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
 fn writeListTrySignature(self: *Self, name_id: u32, typ: Type) std.mem.Allocator.Error!void {
     std.debug.assert(typ.isList());
 
-    try self.write("    value");
-    try self.output.print(self.allocator, "{d}", .{name_id});
-    try self.write(" : Main -> Try(");
-    try self.writeType(typ);
-    try self.write(", _)\n");
+    try self.writeTrySignature(name_id, typ);
 }
 
 fn writeNumericTrySignature(self: *Self, name_id: u32, typ: Type) std.mem.Allocator.Error!void {
     std.debug.assert(typ.isNumber());
 
+    try self.writeTrySignature(name_id, typ);
+}
+
+fn writeTrySignature(self: *Self, name_id: u32, ok_type: Type) std.mem.Allocator.Error!void {
     try self.write("    value");
     try self.output.print(self.allocator, "{d}", .{name_id});
     try self.write(" : Main -> Try(");
-    try self.writeType(typ);
+    try self.writeType(ok_type);
     try self.write(", _)\n");
 }
 
 fn chooseType(self: *Self) Type {
-    return switch (self.reader.intRangeAtMost(u8, 0, 76)) {
+    return switch (self.reader.intRangeAtMost(u8, 0, 77)) {
         0 => .main,
         1 => .tree,
         2 => .my_num,
@@ -3551,6 +4217,7 @@ fn chooseType(self: *Self) Type {
         74 => .f32,
         75 => .f64,
         76 => .record_str_u64,
+        77 => .dec,
         else => unreachable,
     };
 }
@@ -3579,7 +4246,7 @@ fn chooseEquatableListType(self: *Self) Type {
 }
 
 fn chooseNumberType(self: *Self) Type {
-    return switch (self.reader.intRangeAtMost(u8, 0, 11)) {
+    return switch (self.reader.intRangeAtMost(u8, 0, 12)) {
         0 => .u8,
         1 => .i8,
         2 => .u16,
@@ -3590,21 +4257,23 @@ fn chooseNumberType(self: *Self) Type {
         7 => .i64,
         8 => .u128,
         9 => .i128,
-        10 => .f32,
-        11 => .f64,
+        10 => .dec,
+        11 => .f32,
+        12 => .f64,
         else => unreachable,
     };
 }
 
 fn chooseSignedOrFloatNumberType(self: *Self) Type {
-    return switch (self.reader.intRangeAtMost(u8, 0, 6)) {
+    return switch (self.reader.intRangeAtMost(u8, 0, 7)) {
         0 => .i8,
         1 => .i16,
         2 => .i32,
         3 => .i64,
         4 => .i128,
-        5 => .f32,
-        6 => .f64,
+        5 => .dec,
+        6 => .f32,
+        7 => .f64,
         else => unreachable,
     };
 }
@@ -3635,6 +4304,16 @@ fn chooseTryType(self: *Self) Type {
         1 => .try_str_bool,
         2 => .try_u64_str,
         3 => .try_list_u64_str,
+        else => unreachable,
+    };
+}
+
+fn tryTypeName(typ: Type) []const u8 {
+    return switch (typ) {
+        .try_bool_str => "Try(Bool, Str)",
+        .try_str_bool => "Try(Str, Bool)",
+        .try_u64_str => "Try(U64, Str)",
+        .try_list_u64_str => "Try(List(U64), Str)",
         else => unreachable,
     };
 }
@@ -3671,10 +4350,52 @@ fn numberOwner(typ: Type) []const u8 {
         .i64 => "I64",
         .u128 => "U128",
         .i128 => "I128",
+        .dec => "Dec",
         .f32 => "F32",
         .f64 => "F64",
         else => unreachable,
     };
+}
+
+fn typeFromNumberOwner(owner: []const u8) ?Type {
+    const typ = typeFromBuiltinName(owner) orelse return null;
+    return if (typ.isNumber()) typ else null;
+}
+
+fn typeFromBuiltinName(name: []const u8) ?Type {
+    if (std.mem.eql(u8, name, "U8")) return .u8;
+    if (std.mem.eql(u8, name, "I8")) return .i8;
+    if (std.mem.eql(u8, name, "U16")) return .u16;
+    if (std.mem.eql(u8, name, "I16")) return .i16;
+    if (std.mem.eql(u8, name, "U32")) return .u32;
+    if (std.mem.eql(u8, name, "I32")) return .i32;
+    if (std.mem.eql(u8, name, "U64")) return .u64;
+    if (std.mem.eql(u8, name, "I64")) return .i64;
+    if (std.mem.eql(u8, name, "U128")) return .u128;
+    if (std.mem.eql(u8, name, "I128")) return .i128;
+    if (std.mem.eql(u8, name, "Dec")) return .dec;
+    if (std.mem.eql(u8, name, "F32")) return .f32;
+    if (std.mem.eql(u8, name, "F64")) return .f64;
+    return null;
+}
+
+fn trimLeft(bytes: []const u8) []const u8 {
+    var index: usize = 0;
+    while (index < bytes.len and (bytes[index] == ' ' or bytes[index] == '\t')) : (index += 1) {}
+    return bytes[index..];
+}
+
+fn builtinIdentifierEnd(bytes: []const u8, start: usize) usize {
+    var index = start;
+    while (index < bytes.len and isBuiltinIdentifierChar(bytes[index])) : (index += 1) {}
+    return index;
+}
+
+fn isBuiltinIdentifierChar(byte: u8) bool {
+    return (byte >= 'a' and byte <= 'z') or
+        (byte >= 'A' and byte <= 'Z') or
+        std.ascii.isDigit(byte) or
+        byte == '_';
 }
 
 fn absDiffReturnType(typ: Type) Type {
@@ -3684,6 +4405,7 @@ fn absDiffReturnType(typ: Type) Type {
         .u32, .i32 => .u32,
         .u64, .i64 => .u64,
         .u128, .i128 => .u128,
+        .dec => .dec,
         .f32 => .f32,
         .f64 => .f64,
         else => unreachable,
@@ -3789,6 +4511,7 @@ fn writeType(self: *Self, typ: Type) std.mem.Allocator.Error!void {
         .i64 => "I64",
         .u128 => "U128",
         .i128 => "I128",
+        .dec => "Dec",
         .f32 => "F32",
         .f64 => "F64",
     });
@@ -3863,7 +4586,7 @@ fn writeLiteral(self: *Self, typ: Type) std.mem.Allocator.Error!void {
         .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128 => {
             try self.writeIntegerLiteral();
         },
-        .f32, .f64 => {
+        .dec, .f32, .f64 => {
             const whole = self.reader.intRangeAtMost(u8, 0, 100);
             const frac = self.reader.intRangeAtMost(u8, 0, 99);
             try self.output.print(self.allocator, "{d}.{d}", .{ whole, frac });
@@ -4166,7 +4889,7 @@ fn writeIntegerLiteral(self: *Self) std.mem.Allocator.Error!void {
 }
 
 fn writeSmallNumberLiteral(self: *Self, typ: Type) std.mem.Allocator.Error!void {
-    if (typ.isFloat()) {
+    if (typ.isFloat() or typ == .dec) {
         const whole = self.reader.intRangeAtMost(u8, 0, 10);
         const frac = self.reader.intRangeAtMost(u8, 0, 9);
         try self.output.print(self.allocator, "{d}.{d}", .{ whole, frac });
@@ -4186,6 +4909,28 @@ fn writeStringLiteral(self: *Self) std.mem.Allocator.Error!void {
     try self.write("\"");
 }
 
+fn writeUtf8BytesLiteral(self: *Self) std.mem.Allocator.Error!void {
+    try self.write(switch (self.reader.intRangeAtMost(u8, 0, 3)) {
+        0 => "[]",
+        1 => "[82, 111, 99]",
+        2 => "[240, 159, 144, 166]",
+        3 => "[255]",
+        else => unreachable,
+    });
+}
+
+fn writeNumeralLiteral(self: *Self) std.mem.Allocator.Error!void {
+    try self.write("Literal({ is_negative: ");
+    try self.writeBoolLiteral();
+    try self.write(", digits_before_pt: ");
+    try self.writeUtf8BytesLiteral();
+    try self.write(", digits_after_pt: ");
+    try self.writeUtf8BytesLiteral();
+    try self.write(", digits_after_pt_count: ");
+    try self.writeIntegerLiteral();
+    try self.write(" })");
+}
+
 fn writeExpr(self: *Self, expr: Expr) std.mem.Allocator.Error!void {
     switch (expr) {
         .raw => |text| try self.write(text),
@@ -4193,6 +4938,8 @@ fn writeExpr(self: *Self, expr: Expr) std.mem.Allocator.Error!void {
         .type_name => |typ| try self.writeType(typ),
         .bool_literal => try self.writeBoolLiteral(),
         .string_literal => try self.writeStringLiteral(),
+        .utf8_bytes_literal => try self.writeUtf8BytesLiteral(),
+        .numeral_literal => try self.writeNumeralLiteral(),
         .integer_literal => try self.writeIntegerLiteral(),
         .small_number_literal => |typ| try self.writeSmallNumberLiteral(typ),
     }

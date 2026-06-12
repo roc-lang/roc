@@ -73,8 +73,6 @@ fn parseFunctions() Parsed {
         while (owner_count > 0 and std.mem.eql(u8, trimmed, "}") and indent <= owners[owner_count - 1].indent) {
             owner_count -= 1;
         }
-        if (std.mem.eql(u8, trimmed, "}")) continue;
-
         if (pending_owner) |owner| {
             if (std.mem.startsWith(u8, trimmed, "].{") or std.mem.startsWith(u8, trimmed, "}.{")) {
                 if (owner_count >= owners.len) @compileError("Builtin.roc associated block nesting exceeded parser capacity");
@@ -83,7 +81,14 @@ fn parseFunctions() Parsed {
                 pending_owner = null;
                 continue;
             }
+            if (std.mem.eql(u8, trimmed, "}") and indent <= owner.indent) {
+                pending_owner = null;
+                continue;
+            }
+            continue;
         }
+
+        if (std.mem.eql(u8, trimmed, "}")) continue;
 
         if (associatedOwnerStart(trimmed)) |name| {
             const owner: Owner = .{ .name = name, .indent = indent };
