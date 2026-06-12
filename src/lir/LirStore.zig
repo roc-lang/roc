@@ -24,6 +24,7 @@ const LirPattern = lir_defs.LirPattern;
 const LirPatternId = lir_defs.LirPatternId;
 const LirPatternSpan = lir_defs.LirPatternSpan;
 
+/// Source-level name to use when presenting a specialized LIR proc in debug output.
 pub const ProcDebugName = union(enum) {
     none,
     string: base.StringLiteral.Idx,

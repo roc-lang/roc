@@ -1,3 +1,8 @@
+//! Freestanding Linux runtime for the build-only default app platform.
+//!
+//! This provides raw syscall-based stdout/stderr, allocation, crash reporting,
+//! and stack-overflow signal handling without linking libc.
+
 const std = @import("std");
 const builtin = @import("builtin");
 const linux = std.os.linux;
