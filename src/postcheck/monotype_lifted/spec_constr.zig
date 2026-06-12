@@ -2792,15 +2792,17 @@ const Cloner = struct {
             Common.invariant("callable value capture count differed from lifted function capture count");
         }
 
-        const captures = try self.pass.allocator.alloc(Ast.TypedLocal, callable.captures.len);
+        // Reuse the source function's capture local ids rather than allocating
+        // fresh ones. Captures are carried implicitly by the lambda type, not
+        // passed as call arguments, so a leftover direct call to the
+        // un-specialized recursive callee still references the SOURCE capture
+        // locals. If the specialized function bound fresh capture locals, that
+        // implicit reference would point at a local never defined in the
+        // specialized body, surfacing as an unbound local in the lowered LIR.
+        // Args still get fresh locals below: they are always explicit and fully
+        // remapped through the subst map, so they carry no implicit references.
+        const captures = try self.pass.allocator.dupe(Ast.TypedLocal, source_captures);
         defer self.pass.allocator.free(captures);
-        for (source_captures, 0..) |source_capture, index| {
-            const local = try self.pass.program.addLocal(self.pass.symbols.fresh(), source_capture.ty);
-            captures[index] = .{
-                .local = local,
-                .ty = source_capture.ty,
-            };
-        }
         const captures_span = try self.pass.program.addTypedLocalSpan(captures);
 
         const source_args = try self.pass.allocator.dupe(Ast.TypedLocal, self.pass.program.typedLocalSpan(source_fn.args));

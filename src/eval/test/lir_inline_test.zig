@@ -373,11 +373,10 @@ const IterCollectShape = enum {
 
 fn procShapeMatchesIterCollect(shape: ProcShape, wanted: IterCollectShape) bool {
     // Fingerprints of the `Iter.collect` -> `List.from_iter` worker over a range
-    // (an Unknown-length iterator). `from_iter` branches on `len_if_known`, so its
-    // unoptimized (generic) worker contains both the Known and Unknown loops; spec
-    // constr selects the single live arm, leaving a leaner specialized worker. A
-    // range carries no length, so the specialized worker takes 2 args (a Known
-    // length would thread a third).
+    // (an Unknown-length iterator). `from_iter` is a single growth-safe append
+    // loop; spec constr specializes it for the concrete element type, leaving a
+    // richer worker. A range carries no length, so the specialized worker takes
+    // 2 args (a Known length would thread a third).
     return switch (wanted) {
         .specialized => shape.arg_count == 2 and
             shape.direct_call_count >= 10 and
@@ -385,10 +384,10 @@ fn procShapeMatchesIterCollect(shape: ProcShape, wanted: IterCollectShape) bool 
             shape.join_count >= 16 and
             shape.jump_count >= 20,
         .generic => shape.arg_count == 1 and
-            shape.direct_call_count == 6 and
-            shape.switch_count == 10 and
-            shape.join_count == 15 and
-            shape.jump_count == 22 and
+            shape.direct_call_count == 4 and
+            shape.switch_count == 6 and
+            shape.join_count == 9 and
+            shape.jump_count == 11 and
             shape.struct_assign_count >= 8,
     };
 }
@@ -947,6 +946,26 @@ test "plant iter pipeline specializes collect worker after inlining" {
         \\main : List(Plant)
         \\main = starting_plants()
     );
+}
+
+test "known-length List.iter collect specializes without unbound locals" {
+    // Regression: collecting a Known-length iterator (List.iter) under
+    // optimization specializes a recursive capturing worker (List.iter's `make`
+    // step). The specializer must reuse the source capture local ids; otherwise
+    // a leftover direct call to the un-specialized worker references an unbound
+    // capture local, which the ARC borrow certifier rejects. (Also exercises the
+    // ARC use-after-realloc fix, since main's rewrite emits an owned variant.)
+    const allocator = std.testing.allocator;
+    var optimized = try lowerModule(allocator,
+        \\module [main]
+        \\
+        \\main : List(I64)
+        \\main =
+        \\    Iter.collect(
+        \\        Iter.map(List.iter([1.I64, 2, 3]), |i| i * 12),
+        \\    )
+    , .direct_call_wrappers);
+    defer optimized.deinit(allocator);
 }
 
 test "direct iter collect worker specializes constructor recursive call" {
