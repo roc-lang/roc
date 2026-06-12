@@ -419,6 +419,7 @@ fn emitExprFrame(
             try frames.append(allocator, .{ .expr = dbg.expr });
             try frames.append(allocator, .{ .write = "dbg " });
         },
+        .e_expect_err => try self.write("<expect_err>"),
         .e_expect => |expect| {
             try frames.append(allocator, .{ .expr = expect.body });
             try frames.append(allocator, .{ .write = "expect " });

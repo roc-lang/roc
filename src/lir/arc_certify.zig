@@ -215,7 +215,7 @@ fn certifyUniqueArgs(
                 inline .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .free => |s| {
                     try stack.append(allocator, s.next);
                 },
-                .ret, .jump, .crash, .runtime_error, .loop_continue, .loop_break => {},
+                .ret, .jump, .crash, .expect_err, .runtime_error, .loop_continue, .loop_break => {},
             }
         }
     }
@@ -312,7 +312,7 @@ fn writeFailureContext(context: *FailureContext, store: *const LirStore, proc_id
             if (reachable.contains(current)) continue;
             reachable.put(current, {}) catch return;
             switch (store.getCFStmt(current)) {
-                .runtime_error, .loop_continue, .loop_break, .jump, .ret, .crash => {},
+                .runtime_error, .loop_continue, .loop_break, .jump, .ret, .crash, .expect_err => {},
                 .switch_stmt => |s| {
                     for (store.getCFSwitchBranches(s.branches)) |branch| {
                         walk.append(store.allocator, branch.body) catch return;
@@ -381,6 +381,7 @@ fn stmtMentionsLocal(store: *const LirStore, stmt: LIR.CFStmt, needle: LIR.Local
         .assign_tag => |a| a.target == needle or (a.payload != null and a.payload.? == needle),
         .set_local => |a| a.target == needle or a.value == needle,
         .debug => |d| d.message == needle,
+        .expect_err => |e| e.message == needle,
         .expect => |e| e.condition == needle,
         .incref => |rc| rc.value == needle,
         .decref => |rc| rc.value == needle,
@@ -977,6 +978,7 @@ const Certifier = struct {
                     try self.noteProcLocal(debug_stmt.message);
                     try stack.append(self.allocator, debug_stmt.next);
                 },
+                .expect_err => |expect_err_stmt| try self.noteProcLocal(expect_err_stmt.message),
                 .expect => |expect_stmt| {
                     try self.noteProcLocal(expect_stmt.condition);
                     try stack.append(self.allocator, expect_stmt.next);
@@ -1080,6 +1082,9 @@ const Certifier = struct {
                 .debug => |debug_stmt| {
                     if (debug_stmt.message == needle) return true;
                     try self.scan_stack.append(self.allocator, debug_stmt.next);
+                },
+                .expect_err => |expect_err_stmt| {
+                    if (expect_err_stmt.message == needle) return true;
                 },
                 .expect => |expect_stmt| {
                     if (expect_stmt.condition == needle) return true;
@@ -1543,6 +1548,15 @@ const Certifier = struct {
                     return;
                 },
                 .crash => {
+                    try self.checkLeaks(&state);
+                    return;
+                },
+                .expect_err => |expect_err_stmt| {
+                    // The failure report consumes the message's unit.
+                    if (self.isRc(expect_err_stmt.message)) {
+                        const value = try self.requireLive(&state, expect_err_stmt.message);
+                        try self.consumeUnit(&state, value, expect_err_stmt.message);
+                    }
                     try self.checkLeaks(&state);
                     return;
                 },

@@ -5040,6 +5040,10 @@ const BodyContext = struct {
             .ellipsis => .{ .crash = try self.builder.program.addStringLiteral("not implemented") },
             .crash => |msg| .{ .crash = try self.lowerStringLiteral(msg) },
             .dbg => |child| .{ .dbg = try self.lowerDbgMessage(child) },
+            .expect_err => |expect_err| .{ .expect_err = .{
+                .msg = try self.lowerExpectErrMessage(expect_err.expr, expect_err.snippet),
+                .region = expr.source_region,
+            } },
             .expect => |child| .{ .expect = try self.lowerExpr(child) },
             .return_ => |ret| .{ .return_ = try self.lowerExpr(ret.expr) },
             .for_ => |for_| try self.lowerIteratorFor(for_, ty, &.{}),
@@ -5054,6 +5058,33 @@ const BodyContext = struct {
         const value_ty = self.builder.program.exprs.items[@intFromEnum(value)].ty;
         const str_ty = try self.builder.primitiveType(.str);
         return try self.builder.inspectCall(value, value_ty, str_ty);
+    }
+
+    fn lowerExpectErrMessage(
+        self: *BodyContext,
+        child: checked.CheckedExprId,
+        snippet: checked.CheckedStringLiteralId,
+    ) Allocator.Error!Ast.ExprId {
+        const value = try self.lowerExpr(child);
+        const value_ty = self.builder.program.exprs.items[@intFromEnum(value)].ty;
+        const str_ty = try self.builder.primitiveType(.str);
+        const rendered = try self.builder.inspectCall(value, value_ty, str_ty);
+
+        const snippet_index = @intFromEnum(snippet);
+        if (snippet_index >= self.view.bodies.string_literals.len) {
+            Common.invariant("checked string literal id outside checked body string store");
+        }
+        const snippet_text = self.view.bodies.string_literals[snippet_index];
+        const prefix_text = try std.fmt.allocPrint(
+            self.builder.allocator,
+            "The `?` operator in `{s}` evaluated an `Err` inside an `expect`. The value was: Err(",
+            .{snippet_text},
+        );
+        defer self.builder.allocator.free(prefix_text);
+        const prefix = try self.builder.stringExpr(prefix_text, str_ty);
+        const with_value = try self.builder.concatExpr(prefix, rendered, str_ty);
+        const suffix = try self.builder.stringExpr(")", str_ty);
+        return try self.builder.concatExpr(with_value, suffix, str_ty);
     }
 
     fn lowerStr(self: *BodyContext, segments: []const checked.CheckedExprId) Allocator.Error!Ast.ExprData {
@@ -10107,6 +10138,7 @@ const BodyContext = struct {
             .dbg,
             .expect,
             => |child| try self.collectReassignedBindersInExpr(child, out),
+            .expect_err => |expect_err| try self.collectReassignedBindersInExpr(expect_err.expr, out),
             .field_access => |field| try self.collectReassignedBindersInExpr(field.receiver, out),
             .structural_eq => |eq| {
                 try self.collectReassignedBindersInExpr(eq.lhs, out);

@@ -119,6 +119,9 @@ fn reportEvalError(ops: *RocOps, interpreter: *const eval.LirInterpreter, err: e
         error.RuntimeError => interpreter.getRuntimeErrorMessage() orelse "Roc runtime error",
         error.DivisionByZero => interpreter.getRuntimeErrorMessage() orelse "Division by zero",
         error.Crash => return,
+        // expect_err statements only occur in top-level expect test roots,
+        // never in platform entrypoints.
+        error.ExpectErr => unreachable,
     };
     ops.crash(message);
 }

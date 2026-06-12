@@ -206,7 +206,7 @@ const Pass = struct {
                 inline .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .free => |s| {
                     try self.stack.append(self.allocator, s.next);
                 },
-                .jump, .ret, .crash, .runtime_error, .loop_continue, .loop_break => {},
+                .jump, .ret, .crash, .expect_err, .runtime_error, .loop_continue, .loop_break => {},
             }
         }
 
@@ -408,7 +408,7 @@ const Pass = struct {
                     s.next = self.resolveRemoved(s.next);
                     try self.stack.append(self.allocator, s.next);
                 },
-                .jump, .ret, .crash, .runtime_error, .loop_continue, .loop_break => {},
+                .jump, .ret, .crash, .expect_err, .runtime_error, .loop_continue, .loop_break => {},
             }
         }
     }
@@ -454,7 +454,7 @@ const Pass = struct {
                 inline .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .free => |a| {
                     try self.stack.append(self.allocator, a.next);
                 },
-                .jump, .ret, .crash, .runtime_error, .loop_continue, .loop_break => {},
+                .jump, .ret, .crash, .expect_err, .runtime_error, .loop_continue, .loop_break => {},
             }
         }
 
@@ -539,6 +539,7 @@ const Pass = struct {
                     try self.noteUse(s.message);
                     try self.stack.append(self.allocator, s.next);
                 },
+                .expect_err => |s| try self.noteUse(s.message),
                 .expect => |s| {
                     try self.noteUse(s.condition);
                     try self.stack.append(self.allocator, s.next);
