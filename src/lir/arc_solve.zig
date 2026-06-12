@@ -589,7 +589,7 @@ fn retLenders(
             inline .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .free => |s| {
                 try solver.stack.append(allocator, s.next);
             },
-            .jump, .crash, .runtime_error, .loop_continue, .loop_break => {},
+            .jump, .crash, .expect_err, .runtime_error, .loop_continue, .loop_break => {},
         }
     }
 
@@ -640,7 +640,7 @@ fn retAllUnique(
             inline .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .free => |s| {
                 try solver.stack.append(allocator, s.next);
             },
-            .jump, .crash, .runtime_error, .loop_continue, .loop_break => {},
+            .jump, .crash, .expect_err, .runtime_error, .loop_continue, .loop_break => {},
         }
     }
 
@@ -849,6 +849,8 @@ fn collectStmt(
             try solver.stack.append(allocator, assign.next);
         },
         .debug => |debug_stmt| try solver.stack.append(allocator, debug_stmt.next),
+        // The failure report takes ownership of the message.
+        .expect_err => |expect_err_stmt| noteDemand(solver, expect_err_stmt.message),
         .expect => |expect_stmt| try solver.stack.append(allocator, expect_stmt.next),
         .incref => |rc| try solver.stack.append(allocator, rc.next),
         .decref => |rc| try solver.stack.append(allocator, rc.next),
@@ -1026,7 +1028,7 @@ pub fn computeVisibility(
                 inline .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .free => |stmt| {
                     try stack.append(allocator, stmt.next);
                 },
-                .jump, .crash, .runtime_error, .loop_continue, .loop_break => {},
+                .jump, .crash, .expect_err, .runtime_error, .loop_continue, .loop_break => {},
             }
         }
     }
@@ -1534,6 +1536,8 @@ pub fn computeUniqueness(
             // caller, which feeds the per-proc unique-return solve.
             .ret => |ret_stmt| marks.consume(&consumed_once, &destroyed, ret_stmt.value),
             .debug => |debug_stmt| marks.noteUse(&borrow_used, debug_stmt.message),
+            // The failure report is the message's consuming use.
+            .expect_err => |expect_err_stmt| marks.consume(&consumed_once, &destroyed, expect_err_stmt.message),
             .expect => |expect_stmt| marks.noteUse(&borrow_used, expect_stmt.condition),
             .switch_stmt => |switch_stmt| marks.noteUse(&borrow_used, switch_stmt.cond),
             .decref, .free, .jump, .crash, .runtime_error, .loop_continue, .loop_break => {},
@@ -1635,7 +1639,7 @@ fn computeSccs(solver: *Solver) SolveError!void {
                 inline .assign_ref, .assign_literal, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .free => |s| {
                     try solver.stack.append(allocator, s.next);
                 },
-                .jump, .ret, .crash, .runtime_error, .loop_continue, .loop_break => {},
+                .jump, .ret, .crash, .expect_err, .runtime_error, .loop_continue, .loop_break => {},
             }
         }
     }

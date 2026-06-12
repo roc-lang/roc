@@ -1991,6 +1991,59 @@ const Formatter = struct {
         try fmt.push('}');
     }
 
+    /// Format a symbol map section: { "roc_main": main_for_host!, ... }
+    fn formatSymbolMapSection(fmt: *Formatter, span: AST.SymbolMapEntry.Span, base_indent: u32) (Allocator.Error || error{WriteFailed})!void {
+        const entries = fmt.ast.store.symbolMapEntrySlice(span);
+        if (entries.len == 0) {
+            try fmt.pushAll("{}");
+            return;
+        }
+        if (entries.len <= 2) {
+            try fmt.pushAll("{ ");
+            for (entries, 0..) |entry_idx, i| {
+                if (i > 0) {
+                    try fmt.pushAll(", ");
+                }
+                try fmt.formatSymbolMapEntry(entry_idx);
+            }
+            try fmt.pushAll(" }");
+            return;
+        }
+        try fmt.push('{');
+        for (entries) |entry_idx| {
+            try fmt.ensureNewline();
+            fmt.curr_indent = base_indent + 1;
+            try fmt.pushIndent();
+            try fmt.formatSymbolMapEntry(entry_idx);
+            try fmt.push(',');
+        }
+        try fmt.ensureNewline();
+        fmt.curr_indent = base_indent;
+        try fmt.pushIndent();
+        try fmt.push('}');
+    }
+
+    /// Format a single symbol map entry: "roc_stdout_line": Stdout.line!
+    fn formatSymbolMapEntry(fmt: *Formatter, entry_idx: AST.SymbolMapEntry.Idx) (Allocator.Error || error{WriteFailed})!void {
+        const entry = fmt.ast.store.getSymbolMapEntry(entry_idx);
+        try fmt.push('"');
+        try fmt.pushTokenText(entry.symbol);
+        try fmt.push('"');
+        try fmt.pushAll(": ");
+        if (entry.module) |module_tok| {
+            // Emit every token from the module through the function name; for
+            // functions on nested type modules (Foo.Idx.get!) the tokens in
+            // between are the nested type segments.
+            var tok = module_tok;
+            while (tok <= entry.func) : (tok += 1) {
+                if (tok != module_tok) try fmt.push('.');
+                try fmt.pushTokenText(tok);
+            }
+        } else {
+            try fmt.pushTokenText(entry.func);
+        }
+    }
+
     /// Format a single target entry: x64linux: { inputs: ["host.o", app], output: Exe }
     fn formatTargetEntry(fmt: *Formatter, entry_idx: AST.TargetEntry.Idx) (Allocator.Error || error{WriteFailed})!void {
         const entry = fmt.ast.store.getTargetEntry(entry_idx);
@@ -2383,25 +2436,19 @@ const Formatter = struct {
                 fmt.curr_indent = start_indent + 1;
                 try fmt.pushIndent();
 
-                try fmt.pushAll("provides");
-                const provides = fmt.ast.store.getCollection(p.provides);
-                if (try fmt.flushCommentsBefore(provides.region.start)) {
-                    fmt.curr_indent += 1;
+                try fmt.pushAll("provides ");
+                try fmt.formatSymbolMapSection(p.provides, start_indent + 1);
+
+                if (p.hosted.span.len > 0) {
+                    try fmt.ensureNewline();
+                    fmt.curr_indent = start_indent + 1;
                     try fmt.pushIndent();
-                } else {
-                    try fmt.push(' ');
+                    try fmt.pushAll("hosted ");
+                    try fmt.formatSymbolMapSection(p.hosted, start_indent + 1);
                 }
-                try fmt.formatCollection(
-                    provides.region,
-                    .curly,
-                    AST.RecordField.Idx,
-                    fmt.ast.store.recordFieldSlice(.{ .span = provides.span }),
-                    Formatter.formatRecordField,
-                );
 
                 // Format targets section if present
                 if (p.targets) |targets_idx| {
-                    try fmt.flushCommentsBeforeDiscard(provides.region.end);
                     try fmt.ensureNewline();
                     fmt.curr_indent = start_indent + 1;
                     try fmt.pushIndent();
@@ -3167,7 +3214,7 @@ const Formatter = struct {
                             return true;
                         }
 
-                        return fmt.collectionWillBeMultiline(AST.RecordField.Idx, p.provides);
+                        return p.provides.span.len > 2 or p.hosted.span.len > 0;
                     },
                     else => return false,
                 }

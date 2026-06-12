@@ -25,7 +25,7 @@ platform ""
     requires {} { main : Str }
     exposes []
     packages {}
-    provides { main_for_host: "main" }
+    provides { "roc_main": main_for_host }
     targets: {
         inputs: "targets/",
         x64glibc: { inputs: [app] },

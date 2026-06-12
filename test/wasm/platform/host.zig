@@ -20,7 +20,6 @@ const std = @import("std");
 const builtins = @import("builtins");
 
 const RocStr = builtins.str.RocStr;
-const RocOps = builtins.host_abi.RocOps;
 
 // Import functions from the host environment.
 const env_imports = struct {
@@ -28,6 +27,8 @@ const env_imports = struct {
     extern "env" fn roc_dbg(ptr: [*]const u8, len: usize) void;
     extern "env" fn roc_expect_failed(ptr: [*]const u8, len: usize) void;
     extern "env" fn echo(ptr: [*]const u8, len: usize) void;
+    extern "env" fn roc_unused_host_canary_7f3a9c(value: i64) void;
+    extern "env" fn roc_dead_private_helper_canary_41d2cb(value: i64) void;
 };
 
 // Use Zig's standard WASM allocator for proper memory management
@@ -107,11 +108,11 @@ export fn roc_realloc_raw(ptr: *anyopaque, new_size: usize, old_size: usize, ali
     return @ptrCast(new_user_ptr);
 }
 
-// Canonical RocOps callback implementations.
+// Symbol-ABI runtime exports.
 // These use the same size-header approach as the raw roc_alloc/dealloc exports,
 // because roc_dealloc doesn't provide the length (by design for seamless slices).
 
-fn roc_alloc(_: *RocOps, length: usize, alignment_arg: usize) callconv(.c) ?*anyopaque {
+export fn roc_alloc(length: usize, alignment_arg: usize) callconv(.c) ?*anyopaque {
     canonical_alloc_counts[0] += 1;
 
     const alignment: u32 = @intCast(alignment_arg);
@@ -131,7 +132,7 @@ fn roc_alloc(_: *RocOps, length: usize, alignment_arg: usize) callconv(.c) ?*any
     return @ptrCast(result + header_size);
 }
 
-fn roc_dealloc(_: *RocOps, ptr: *anyopaque, alignment_arg: usize) callconv(.c) void {
+export fn roc_dealloc(ptr: *anyopaque, alignment_arg: usize) callconv(.c) void {
     canonical_alloc_counts[1] += 1;
 
     const alignment: u32 = @intCast(alignment_arg);
@@ -153,7 +154,7 @@ fn roc_dealloc(_: *RocOps, ptr: *anyopaque, alignment_arg: usize) callconv(.c) v
     wasm_allocator.rawFree(base_ptr[0..total_size], align_log2, @returnAddress());
 }
 
-fn roc_realloc(_: *RocOps, ptr: *anyopaque, new_length: usize, alignment_arg: usize) callconv(.c) ?*anyopaque {
+export fn roc_realloc(ptr: *anyopaque, new_length: usize, alignment_arg: usize) callconv(.c) ?*anyopaque {
     canonical_alloc_counts[0] += 1;
     canonical_alloc_counts[1] += 1;
 
@@ -185,34 +186,67 @@ fn roc_realloc(_: *RocOps, ptr: *anyopaque, new_length: usize, alignment_arg: us
     return @ptrCast(new_user_ptr);
 }
 
-fn roc_dbg(_: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
+export fn roc_dbg(bytes: [*]const u8, len: usize) callconv(.c) void {
     env_imports.roc_dbg(bytes, len);
 }
 
-fn roc_expect_failed(_: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
+export fn roc_expect_failed(bytes: [*]const u8, len: usize) callconv(.c) void {
     env_imports.roc_expect_failed(bytes, len);
 }
 
-fn roc_crashed(_: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
+export fn roc_crashed(bytes: [*]const u8, len: usize) callconv(.c) void {
     env_imports.roc_panic(bytes, len);
 }
 
-// Hosted function: Stdout.line! (index 0)
-// Natural C signature for `Stdout.line! : Str => {}` (needsRocOps = true).
-fn hostedStdoutLine(_: *RocOps, str: RocStr) callconv(.c) void {
+// Hosted function: Stdout.line!
+// Natural C signature for `Stdout.line! : Str => {}`; ownership of the Str
+// transfers here, and the bytes are echoed before it is freed at module
+// teardown (this host never frees individual strings).
+export fn roc_stdout_line(str: RocStr) callconv(.c) void {
+    @call(.never_inline, sharedPrivateHelper, .{});
     const s = str.asSlice();
     env_imports.echo(s.ptr, s.len);
 }
 
-const hosted_function_ptrs = [_]builtins.host_abi.HostedFn{
-    builtins.host_abi.hostedFn(&hostedStdoutLine), // Stdout.line! (index 0)
-};
+fn canaryBlob(comptime marker: []const u8) [4096]u8 {
+    @setEvalBranchQuota(20000);
+    var blob: [4096]u8 = undefined;
+    var i: usize = 0;
+    while (i < blob.len) : (i += 1) {
+        blob[i] = marker[i % marker.len];
+    }
+    return blob;
+}
 
-// External Roc entrypoint
-extern fn roc__main(ops: *RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
+const wasm_dead_hosted_canary_blob = canaryBlob("ROC_DCE_WASM_DEAD_HOSTED_BLOB_0ac91d");
+const wasm_dead_helper_canary_blob = canaryBlob("ROC_DCE_WASM_DEAD_HELPER_BLOB_f25a77");
+const wasm_shared_canary_blob = canaryBlob("ROC_DCE_WASM_SHARED_BLOB_31e82f");
 
-// Dummy env for RocOps (not used in WASM)
-var dummy_env: u8 = 0;
+fn sharedPrivateHelper() void {
+    std.mem.doNotOptimizeAway(&wasm_shared_canary_blob);
+}
+
+fn deadOnlyPrivateHelper(n: i64) i64 {
+    std.mem.doNotOptimizeAway(&wasm_dead_helper_canary_blob);
+    env_imports.roc_dead_private_helper_canary_41d2cb(n);
+    return n + 1;
+}
+
+fn hostedUnusedNicheFeature(n: i64) callconv(.c) i64 {
+    std.mem.doNotOptimizeAway(&wasm_dead_hosted_canary_blob);
+    env_imports.roc_unused_host_canary_7f3a9c(n);
+    const dead_value = @call(.never_inline, deadOnlyPrivateHelper, .{n});
+    @call(.never_inline, sharedPrivateHelper, .{});
+    return dead_value + 1;
+}
+
+comptime {
+    @export(&hostedUnusedNicheFeature, .{ .name = "roc_stdout_unused_niche_feature", .visibility = .hidden });
+}
+
+// The app's entrypoint, exported under its provides symbol with its natural
+// C ABI: main_for_host! takes no arguments and returns Str.
+extern fn roc_main() callconv(.c) RocStr;
 
 // Store the last result for wasm_result_len()
 var last_result: RocStr = undefined;
@@ -222,24 +256,7 @@ var canonical_alloc_counts: [2]usize = .{ 0, 0 };
 /// Main export for WASM module
 /// Returns a pointer to the result string data and its length
 export fn wasm_main() [*]const u8 {
-    var roc_ops = RocOps{
-        .env = @ptrCast(&dummy_env),
-        .roc_alloc = roc_alloc,
-        .roc_dealloc = roc_dealloc,
-        .roc_realloc = roc_realloc,
-        .roc_dbg = roc_dbg,
-        .roc_expect_failed = roc_expect_failed,
-        .roc_crashed = roc_crashed,
-        .hosted_fns = .{
-            .count = hosted_function_ptrs.len,
-            .fns = @constCast(&hosted_function_ptrs),
-        },
-    };
-
-    // Pass a valid pointer for the unit argument () - the pointer itself doesn't
-    // matter for zero-sized types, but it must be non-null to indicate "call this function"
-    var unit_arg: u8 = 0;
-    roc__main(&roc_ops, @ptrCast(&last_result), @ptrCast(&unit_arg));
+    last_result = roc_main();
 
     // Return pointer to the string bytes - use asU8ptr() for SSO support
     return last_result.asU8ptr();

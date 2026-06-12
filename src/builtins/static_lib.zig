@@ -66,6 +66,7 @@ comptime {
     @export(&dw.roc_builtins_str_from_utf8_parts, .{ .name = "roc_builtins_str_from_utf8_parts" });
     @export(&dw.roc_builtins_str_escape_and_quote, .{ .name = "roc_builtins_str_escape_and_quote" });
     @export(&dw.roc_builtins_dbg_str, .{ .name = "roc_builtins_dbg_str" });
+    @export(&dw.roc_builtins_expect_err_str, .{ .name = "roc_builtins_expect_err_str" });
     @export(&dw.roc_builtins_roc_expect_failed, .{ .name = "roc_builtins_roc_expect_failed" });
     @export(&dw.roc_builtins_roc_crashed, .{ .name = "roc_builtins_roc_crashed" });
     @export(&dw.roc_builtins_str_from_literal, .{ .name = "roc_builtins_str_from_literal" });

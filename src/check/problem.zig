@@ -56,6 +56,7 @@ pub const NominalTypeResolutionFailed = types.NominalTypeResolutionFailed;
 // Platform errors
 pub const PlatformAliasNotFound = types.PlatformAliasNotFound;
 pub const PlatformDefNotFound = types.PlatformDefNotFound;
+pub const PlatformHostedSection = types.PlatformHostedSection;
 pub const HostedUnboxedFunction = types.HostedUnboxedFunction;
 pub const AnnotationOnlyValue = types.AnnotationOnlyValue;
 pub const EffectfulTopLevel = types.EffectfulTopLevel;
@@ -63,6 +64,7 @@ pub const EffectfulExpect = types.EffectfulExpect;
 
 // Comptime errors
 pub const ComptimeCrash = types.ComptimeCrash;
+pub const ComptimeInvalidNumeral = types.ComptimeInvalidNumeral;
 pub const ComptimeExpectFailed = types.ComptimeExpectFailed;
 pub const ComptimeEvalError = types.ComptimeEvalError;
 

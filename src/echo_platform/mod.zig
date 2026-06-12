@@ -29,13 +29,19 @@ pub const EchoEnv = struct {
     inline_expect_failed: bool = false,
 };
 
+/// The RocOps the echo platform's hosted functions use for refcounting and
+/// reaching the EchoEnv. Hosted functions have natural C ABIs with no ops
+/// parameter, so the runner stores its RocOps here before running any Roc code.
+pub var g_roc_ops: ?*host_abi.RocOps = null;
+
 /// Echo host function: reads a RocStr arg and prints it + newline to stdout.
 /// Ownership of `roc_str` transfers to this host function — the RC insertion
 /// pass emits zero RC ops for hosted-call args (see test in `src/lir/arc.zig`
 /// "RC hosted call transfers unused refcounted arg to host", and the test
 /// platform host in `test/fx/platform/host.zig` which decrefs every RocStr
 /// arg). Without this decref every `echo!` call leaks one heap RocStr.
-pub fn echoHostedFn(ops: *host_abi.RocOps, str: RocStr) callconv(.c) void {
+pub fn echoHostedFn(str: RocStr) callconv(.c) void {
+    const ops = g_roc_ops.?;
     var owned = str;
     defer owned.decref(ops);
 

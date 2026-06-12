@@ -188,6 +188,21 @@ const HostedCatalogEntry = struct {
     def_idx: u32,
 };
 
+/// The platform header's hosted section, resolved to the same qualified keys
+/// the checked modules' hosted tables sort by ("Module.func" with a trailing `!`
+/// stripped). Section order defines hosted dispatch order, and each entry's
+/// string is the hosted function's linker symbol.
+const HostedSectionMap = struct {
+    keys: []const []const u8,
+    symbols: []const []const u8,
+
+    fn deinit(self: HostedSectionMap, allocator: Allocator) void {
+        for (self.keys) |key| allocator.free(key);
+        allocator.free(self.keys);
+        allocator.free(self.symbols);
+    }
+};
+
 const BinderMap = std.AutoHashMap(checked.PatternBinderId, Ast.LocalId);
 /// State for one checked type inside a single Monotype instantiation context.
 /// The cell owns the stage-local monotype for that checked type in this
@@ -1322,7 +1337,80 @@ const Builder = struct {
             entry.dispatch_index = @intCast(index);
         }
 
+        if (try self.buildHostedSectionMap()) |map| {
+            defer map.deinit(self.allocator);
+
+            // Platform checking already verified the section is total over the
+            // platform's hosted functions and duplicate-free, so every catalog
+            // entry has exactly one section position.
+            if (entries.items.len != map.keys.len) {
+                Common.invariant("platform hosted section disagrees with the hosted catalog size");
+            }
+            for (entries.items) |*entry| {
+                const pos = blk: {
+                    for (map.keys, 0..) |key, key_index| {
+                        if (std.mem.eql(u8, key, entry.order)) break :blk key_index;
+                    }
+                    Common.invariant("hosted function is missing from the platform hosted section");
+                };
+                entry.dispatch_index = @intCast(pos);
+                entry.external_symbol_name = try self.program.names.internExternalSymbolName(map.symbols[pos]);
+            }
+
+            const DispatchSort = struct {
+                pub fn lessThan(_: void, a: HostedCatalogEntry, b: HostedCatalogEntry) bool {
+                    return a.dispatch_index < b.dispatch_index;
+                }
+            };
+            std.mem.sort(HostedCatalogEntry, entries.items, {}, DispatchSort.lessThan);
+        }
+
         self.hosted_catalog = try entries.toOwnedSlice(self.allocator);
+    }
+
+    /// Find the platform module's hosted section among the checked modules and
+    /// resolve it to qualified keys + linker symbols. Returns null when no
+    /// module declares hosted entries (e.g. a platform with no hosted section,
+    /// or compiler-internal evaluation).
+    fn buildHostedSectionMap(self: *Builder) Allocator.Error!?HostedSectionMap {
+        const platform_env = blk: {
+            const root_env = moduleView(self.root_view).module_env;
+            if (root_env.hosted_entries.items.items.len != 0) break :blk root_env;
+            for (self.modules.imports) |imported| {
+                const env = moduleView(imported).module_env;
+                if (env.hosted_entries.items.items.len != 0) break :blk env;
+            }
+            for (self.modules.root.relation_modules) |relation| {
+                const env = moduleView(relation).module_env;
+                if (env.hosted_entries.items.items.len != 0) break :blk env;
+            }
+            return null;
+        };
+
+        const section = platform_env.hosted_entries.items.items;
+        var keys = try self.allocator.alloc([]const u8, section.len);
+        var key_count: usize = 0;
+        errdefer {
+            for (keys[0..key_count]) |key| self.allocator.free(key);
+            self.allocator.free(keys);
+        }
+        const symbols = try self.allocator.alloc([]const u8, section.len);
+        errdefer self.allocator.free(symbols);
+
+        for (section, 0..) |entry, index| {
+            var func_text = platform_env.getIdentText(entry.func_ident);
+            if (func_text.len > 0 and func_text[func_text.len - 1] == '!') {
+                func_text = func_text[0 .. func_text.len - 1];
+            }
+            keys[index] = if (entry.module_ident) |module_ident|
+                try std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ platform_env.getIdentText(module_ident), func_text })
+            else
+                try self.allocator.dupe(u8, func_text);
+            key_count = index + 1;
+            symbols[index] = platform_env.getString(entry.symbol);
+        }
+
+        return .{ .keys = keys, .symbols = symbols };
     }
 
     fn initMethodLookupIndex(self: *Builder) Allocator.Error!void {
@@ -3625,6 +3713,17 @@ const BodyContext = struct {
     node_map: std.AutoHashMap(CheckedTypeAddress, NodeId),
     string_literals: []?Ast.StringLiteralId,
     loop_contexts: std.ArrayList(LoopContext),
+    /// Literal sub-patterns on non-builtin number types collected while
+    /// lowering a match branch's pattern; each becomes an equality condition
+    /// on the branch comparing the bound value against the literal's
+    /// `from_numeral`-converted constant.
+    pattern_literal_guards: std.ArrayList(PatternLiteralGuard),
+
+    const PatternLiteralGuard = struct {
+        local: Ast.LocalId,
+        conversion: checked.CheckedExprId,
+        ty: Type.TypeId,
+    };
 
     const MaterializedArg = struct {
         pattern: checked.CheckedPatternId,
@@ -3676,10 +3775,12 @@ const BodyContext = struct {
             .node_map = std.AutoHashMap(CheckedTypeAddress, NodeId).init(allocator),
             .string_literals = string_literals,
             .loop_contexts = .empty,
+            .pattern_literal_guards = .empty,
         };
     }
 
     fn deinit(self: *BodyContext) void {
+        self.pattern_literal_guards.deinit(self.allocator);
         self.loop_contexts.deinit(self.allocator);
         self.allocator.free(self.string_literals);
         self.node_map.deinit();
@@ -4031,6 +4132,14 @@ const BodyContext = struct {
             },
             .entry_wrapper => |wrapper_id| {
                 const wrapper = self.view.entry_wrappers.get(wrapper_id);
+                const root = self.view.compile_time_roots.root(wrapper.root);
+                if (root.kind == .numeral_conversion) {
+                    return .{
+                        .args = .empty(),
+                        .body = try self.lowerNumeralRootBody(wrapper.body_expr, ret_ty),
+                        .ret = ret_ty,
+                    };
+                }
                 return .{
                     .args = .empty(),
                     .body = try self.lowerExprAtType(wrapper.body_expr, ret_ty),
@@ -4269,9 +4378,15 @@ const BodyContext = struct {
             .frac_f64 => |frac| .{ .frac_f64_lit = frac.value },
             .dec => |dec| .{ .dec_lit = dec.value },
             .dec_small => Common.invariant("small decimal literal reached Monotype after numeric finalization"),
-            .num_from_numeral => |plan| return try self.lowerNumeralCall(expr.ty, plan, ty),
+            .num_from_numeral => |plan| {
+                if (try self.restoredNumeralConst(expr_id, ty)) |restored| return restored;
+                return try self.lowerNumeralCall(expr.ty, plan, ty);
+            },
             .typed_frac => Common.invariant("typed fractional integer literal reached Monotype after numeric finalization"),
-            .typed_num_from_numeral => |plan| return try self.lowerNumeralCall(expr.ty, plan, ty),
+            .typed_num_from_numeral => |plan| {
+                if (try self.restoredNumeralConst(expr_id, ty)) |restored| return restored;
+                return try self.lowerNumeralCall(expr.ty, plan, ty);
+            },
             .str_segment => |str| .{ .str_lit = try self.lowerStringLiteral(str) },
             .bytes_literal => |str| .{ .str_lit = try self.lowerStringLiteral(str) },
             .empty_list => .{ .list = .empty() },
@@ -4326,6 +4441,10 @@ const BodyContext = struct {
             .ellipsis => .{ .crash = try self.builder.program.addStringLiteral("not implemented") },
             .crash => |msg| .{ .crash = try self.lowerStringLiteral(msg) },
             .dbg => |child| .{ .dbg = try self.lowerDbgMessage(child) },
+            .expect_err => |expect_err| .{ .expect_err = .{
+                .msg = try self.lowerExpectErrMessage(expect_err.expr, expect_err.snippet),
+                .region = expr.source_region,
+            } },
             .expect => |child| .{ .expect = try self.lowerExpr(child) },
             .return_ => |ret| .{ .return_ = try self.lowerExpr(ret.expr) },
             .for_ => |for_| try self.lowerIteratorFor(for_, ty, &.{}),
@@ -4340,6 +4459,33 @@ const BodyContext = struct {
         const value_ty = self.builder.program.exprs.items[@intFromEnum(value)].ty;
         const str_ty = try self.builder.primitiveType(.str);
         return try self.builder.inspectCall(value, value_ty, str_ty);
+    }
+
+    fn lowerExpectErrMessage(
+        self: *BodyContext,
+        child: checked.CheckedExprId,
+        snippet: checked.CheckedStringLiteralId,
+    ) Allocator.Error!Ast.ExprId {
+        const value = try self.lowerExpr(child);
+        const value_ty = self.builder.program.exprs.items[@intFromEnum(value)].ty;
+        const str_ty = try self.builder.primitiveType(.str);
+        const rendered = try self.builder.inspectCall(value, value_ty, str_ty);
+
+        const snippet_index = @intFromEnum(snippet);
+        if (snippet_index >= self.view.bodies.string_literals.len) {
+            Common.invariant("checked string literal id outside checked body string store");
+        }
+        const snippet_text = self.view.bodies.string_literals[snippet_index];
+        const prefix_text = try std.fmt.allocPrint(
+            self.builder.allocator,
+            "The `?` operator in `{s}` evaluated an `Err` inside an `expect`. The value was: Err(",
+            .{snippet_text},
+        );
+        defer self.builder.allocator.free(prefix_text);
+        const prefix = try self.builder.stringExpr(prefix_text, str_ty);
+        const with_value = try self.builder.concatExpr(prefix, rendered, str_ty);
+        const suffix = try self.builder.stringExpr(")", str_ty);
+        return try self.builder.concatExpr(with_value, suffix, str_ty);
     }
 
     fn lowerStr(self: *BodyContext, segments: []const checked.CheckedExprId) Allocator.Error!Ast.ExprData {
@@ -5624,6 +5770,21 @@ const BodyContext = struct {
         maybe_plan: ?static_dispatch.StaticDispatchPlanId,
         target_ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprId {
+        const result = try self.lowerNumeralCallRaw(checked_ret_ty, maybe_plan, target_ty);
+        return try self.unwrapNumeralResult(result.call, result.try_ty, target_ty);
+    }
+
+    const NumeralCall = struct {
+        call: Ast.ExprId,
+        try_ty: Type.TypeId,
+    };
+
+    fn lowerNumeralCallRaw(
+        self: *BodyContext,
+        checked_ret_ty: checked.CheckedTypeId,
+        maybe_plan: ?static_dispatch.StaticDispatchPlanId,
+        target_ty: Type.TypeId,
+    ) Allocator.Error!NumeralCall {
         const plan_id = maybe_plan orelse Common.invariant("checked from_numeral expression reached Monotype without a dispatch plan");
         const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
         if (plan.result_mode != .value) Common.invariant("checked from_numeral plan had a non-value result mode");
@@ -5654,7 +5815,40 @@ const BodyContext = struct {
             .ty = fn_data.ret,
             .data = try self.lowerResolvedDispatch(plan, resolved, target_mono_ty, self),
         });
-        return try self.unwrapNumeralResult(call_expr, fn_data.ret, target_ty);
+        return .{ .call = call_expr, .try_ty = fn_data.ret };
+    }
+
+    fn lowerNumeralRootBody(
+        self: *BodyContext,
+        expr_id: checked.CheckedExprId,
+        try_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const expr = self.view.bodies.exprs[@intFromEnum(expr_id)];
+        const plan = switch (expr.data) {
+            .num_from_numeral, .typed_num_from_numeral => |plan| plan,
+            else => Common.invariant("numeral conversion root did not point at a from_numeral expression"),
+        };
+        const ok_tag = self.monoTagByText(try_ty, "Ok");
+        const ok_payloads = self.builder.program.types.span(ok_tag.payloads);
+        if (ok_payloads.len != 1) Common.invariant("numeral conversion root Try.Ok did not carry one payload");
+        const result = try self.lowerNumeralCallRaw(expr.ty, plan, ok_payloads[0]);
+        if (!self.sameType(result.try_ty, try_ty)) {
+            Common.invariant("numeral conversion root type differed from the from_numeral result type");
+        }
+        return result.call;
+    }
+
+    fn restoredNumeralConst(
+        self: *BodyContext,
+        expr_id: checked.CheckedExprId,
+        ty: Type.TypeId,
+    ) Allocator.Error!?Ast.ExprId {
+        const root = self.view.compile_time_roots.lookupNumeralRootByExpr(expr_id) orelse return null;
+        return switch (root.payload) {
+            .const_node => |node| try self.restoreConstNodeAtType(self.view, self.view, node, ty),
+            .pending => null,
+            else => Common.invariant("numeral conversion root stored a non-constant payload"),
+        };
     }
 
     fn lowerNumeralValue(
@@ -6606,7 +6800,10 @@ const BodyContext = struct {
 
                 var checks = std.ArrayList(CollectedListPattern).empty;
                 defer checks.deinit(branch_ctx.allocator);
+                const literal_guards_start = branch_ctx.pattern_literal_guards.items.len;
                 const pat = try branch_ctx.lowerPatternAtTypeCollectingLists(pattern.pattern, scrutinee_ty, &checks);
+                const literal_guards = try branch_ctx.drainPatternLiteralGuards(literal_guards_start);
+                defer branch_ctx.allocator.free(literal_guards);
 
                 try branch_ctx.applyAlternativeBinderRemaps(pattern.binder_remaps);
 
@@ -6615,6 +6812,8 @@ const BodyContext = struct {
                     const guard_cond = try branch_ctx.lowerExpr(guard_expr);
                     body_lowered = try branch_ctx.builder.ifExpr(guard_cond, body_lowered, fallback, output_ty);
                 }
+
+                body_lowered = try branch_ctx.applyPatternLiteralGuards(literal_guards, body_lowered, fallback, output_ty);
 
                 var i = checks.items.len;
                 while (i > 0) {
@@ -6674,17 +6873,27 @@ const BodyContext = struct {
             self.allocator.free(sub_checks_per_elem);
         }
         for (sub_checks_per_elem) |*sub| sub.* = std.ArrayList(CollectedListPattern).empty;
+        const literal_guards_per_elem = try self.allocator.alloc([]PatternLiteralGuard, list.patterns.len);
+        defer {
+            for (literal_guards_per_elem) |guards| self.allocator.free(guards);
+            self.allocator.free(literal_guards_per_elem);
+        }
+        for (literal_guards_per_elem) |*guards| guards.* = &.{};
 
         for (list.patterns, 0..) |pattern_id, index| {
             const item_index = try self.listPatternItemIndex(index, list.patterns.len, list.rest, len, u64_ty);
             values[index] = try self.builder.lowLevelExpr(.list_get_unsafe, &.{ scrutinee, item_index }, elem_ty);
+            const guards_start = self.pattern_literal_guards.items.len;
             patterns[index] = try self.lowerPatternAtTypeCollectingLists(pattern_id, elem_ty, &sub_checks_per_elem[index]);
+            literal_guards_per_elem[index] = try self.drainPatternLiteralGuards(guards_start);
         }
 
         var rest_pat: ?Ast.PatId = null;
         var rest_value: ?Ast.ExprId = null;
         var rest_sub_checks = std.ArrayList(CollectedListPattern).empty;
         defer rest_sub_checks.deinit(self.allocator);
+        var rest_literal_guards: []PatternLiteralGuard = &.{};
+        defer self.allocator.free(rest_literal_guards);
         if (list.rest) |rest| {
             if (rest.pattern) |rest_pattern| {
                 const list_len = len orelse try self.builder.lowLevelExpr(.list_len, &.{scrutinee}, u64_ty);
@@ -6693,7 +6902,9 @@ const BodyContext = struct {
                 const rest_start = try self.builder.intLiteralExpr(rest.index, u64_ty);
                 const range = try self.sublistRangeExpr(rest_start, rest_len, u64_ty);
                 rest_value = try self.builder.lowLevelExpr(.list_sublist, &.{ scrutinee, range }, scrutinee_ty);
+                const guards_start = self.pattern_literal_guards.items.len;
                 rest_pat = try self.lowerPatternAtTypeCollectingLists(rest_pattern, scrutinee_ty, &rest_sub_checks);
+                rest_literal_guards = try self.drainPatternLiteralGuards(guards_start);
             }
         }
 
@@ -6710,6 +6921,7 @@ const BodyContext = struct {
                 const sub_scrut = try self.builder.localExpr(sub.local, sub.ty);
                 elem_success = try self.applyListCheck(sub_scrut, sub.ty, sub, elem_success, fallback, output_ty);
             }
+            elem_success = try self.applyPatternLiteralGuards(literal_guards_per_elem[index], elem_success, fallback, output_ty);
             success = try self.wrapPatternMatch(values[index], elem_ty, patterns[index], elem_success, fallback, output_ty);
         }
 
@@ -6722,6 +6934,7 @@ const BodyContext = struct {
                 const sub_scrut = try self.builder.localExpr(sub.local, sub.ty);
                 rest_success = try self.applyListCheck(sub_scrut, sub.ty, sub, rest_success, fallback, output_ty);
             }
+            rest_success = try self.applyPatternLiteralGuards(rest_literal_guards, rest_success, fallback, output_ty);
             success = try self.wrapPatternMatch(
                 rest_value orelse Common.invariant("list rest pattern had no lowered rest value"),
                 scrutinee_ty,
@@ -6859,9 +7072,18 @@ const BodyContext = struct {
                 break :blk .{ .bind = local };
             },
             .tuple => |items| .{ .tuple = try self.lowerPatternSpanAtTypesCollectingLists(items, self.builder.tupleItemTypes(ty), checks_out) },
-            .num_literal => |num| self.lowerNumPattern(num.value, ty),
-            .small_dec_literal => Common.invariant("small decimal pattern reached Monotype after numeric finalization"),
-            .dec_literal => |dec| .{ .dec_lit = dec.value },
+            .num_literal => |num| if (num.conversion) |conversion|
+                try self.bindLiteralGuardPattern(conversion, ty)
+            else
+                self.lowerNumPattern(num.value, ty),
+            .small_dec_literal => |dec| if (dec.conversion) |conversion|
+                try self.bindLiteralGuardPattern(conversion, ty)
+            else
+                Common.invariant("small decimal pattern reached Monotype after numeric finalization"),
+            .dec_literal => |dec| if (dec.conversion) |conversion|
+                try self.bindLiteralGuardPattern(conversion, ty)
+            else
+                .{ .dec_lit = dec.value },
             .frac_f32_literal => |value| .{ .frac_f32_lit = value },
             .frac_f64_literal => |value| .{ .frac_f64_lit = value },
             .str_literal => |str| .{ .str_lit = try self.lowerStringLiteral(str) },
@@ -7236,7 +7458,8 @@ const BodyContext = struct {
 
                 const pat = try branch_ctx.lowerPatternAtType(pattern.pattern, scrutinee_ty);
                 try branch_ctx.applyAlternativeBinderRemaps(pattern.binder_remaps);
-                const guard = if (branch.guard) |guard_expr| try branch_ctx.lowerExpr(guard_expr) else null;
+                const user_guard = if (branch.guard) |guard_expr| try branch_ctx.lowerExpr(guard_expr) else null;
+                const guard = try branch_ctx.conjoinPatternLiteralGuards(user_guard);
                 const body = try branch_ctx.lowerMatchBranchBody(branch.value, output);
                 branches[index] = .{
                     .pat = pat,
@@ -8474,6 +8697,7 @@ const BodyContext = struct {
             .dbg,
             .expect,
             => |child| try self.collectReassignedBindersInExpr(child, out),
+            .expect_err => |expect_err| try self.collectReassignedBindersInExpr(expect_err.expr, out),
             .field_access => |field| try self.collectReassignedBindersInExpr(field.receiver, out),
             .structural_eq => |eq| {
                 try self.collectReassignedBindersInExpr(eq.lhs, out);
@@ -8828,9 +9052,18 @@ const BodyContext = struct {
             .record_destructure => |destructs| try self.lowerRecordPattern(destructs, ty),
             .list => Common.invariant("list pattern must be lowered to explicit list operations before Monotype output"),
             .tuple => |items| .{ .tuple = try self.lowerTuplePattern(items, ty) },
-            .num_literal => |num| self.lowerNumPattern(num.value, ty),
-            .small_dec_literal => Common.invariant("small decimal pattern reached Monotype after numeric finalization"),
-            .dec_literal => |dec| .{ .dec_lit = dec.value },
+            .num_literal => |num| if (num.conversion) |conversion|
+                try self.bindLiteralGuardPattern(conversion, ty)
+            else
+                self.lowerNumPattern(num.value, ty),
+            .small_dec_literal => |dec| if (dec.conversion) |conversion|
+                try self.bindLiteralGuardPattern(conversion, ty)
+            else
+                Common.invariant("small decimal pattern reached Monotype after numeric finalization"),
+            .dec_literal => |dec| if (dec.conversion) |conversion|
+                try self.bindLiteralGuardPattern(conversion, ty)
+            else
+                .{ .dec_lit = dec.value },
             .frac_f32_literal => |value| .{ .frac_f32_lit = value },
             .frac_f64_literal => |value| .{ .frac_f64_lit = value },
             .str_literal => |str| .{ .str_lit = try self.lowerStringLiteral(str) },
@@ -8895,6 +9128,92 @@ const BodyContext = struct {
             .underscore => true,
             else => false,
         };
+    }
+
+    /// Lower a literal pattern on a non-builtin number type to a fresh bind,
+    /// recording an equality condition for the enclosing match branch.
+    fn bindLiteralGuardPattern(
+        self: *BodyContext,
+        conversion: checked.CheckedExprId,
+        ty: Type.TypeId,
+    ) Allocator.Error!Ast.PatData {
+        const local = try self.builder.program.addLocal(self.builder.symbols.fresh(), ty);
+        try self.pattern_literal_guards.append(self.allocator, .{
+            .local = local,
+            .conversion = conversion,
+            .ty = ty,
+        });
+        return .{ .bind = local };
+    }
+
+    /// Compare a bound match value against a literal's converted constant,
+    /// dispatching to the type's `is_eq` method when it has one and falling
+    /// back to structural equality otherwise, mirroring `==`.
+    fn lowerPatternLiteralEq(self: *BodyContext, entry: PatternLiteralGuard) Allocator.Error!Ast.ExprId {
+        const scrutinee = try self.builder.localExpr(entry.local, entry.ty);
+        const expected = try self.lowerExpr(entry.conversion);
+        if (methodOwnerFromType(&self.builder.program.types, entry.ty)) |owner| {
+            if (self.builder.lookupMethodTargetByName(owner, "is_eq")) |lookup| {
+                var target_ctx = try self.methodTargetContext(lookup);
+                defer target_ctx.deinit();
+                const target_fn = target_ctx.checkedFunctionType(lookup.target.callable_ty);
+                const bool_ty = try self.builder.lowerType(lookup.view, target_fn.ret);
+                const arg_tys = [_]Type.TypeId{ entry.ty, entry.ty };
+                const callable_mono_ty = try self.methodTargetMonoTypeFromArgs(lookup, &arg_tys, bool_ty);
+                const callee = try self.methodTargetCalleeWithMono(lookup, callable_mono_ty);
+                return try self.builder.program.addExpr(.{ .ty = bool_ty, .data = .{ .call_proc = .{
+                    .callee = .{ .template = callee },
+                    .args = try self.builder.program.addExprSpan(&.{ scrutinee, expected }),
+                } } });
+            }
+        }
+        return try self.lowerEqualityExpr(entry.ty, scrutinee, expected, "is_eq", try self.builder.primitiveType(.bool));
+    }
+
+    /// Take ownership of the literal-equality conditions collected since
+    /// `start`, restoring the collection to that length.
+    fn drainPatternLiteralGuards(self: *BodyContext, start: usize) Allocator.Error![]PatternLiteralGuard {
+        const drained = try self.allocator.dupe(PatternLiteralGuard, self.pattern_literal_guards.items[start..]);
+        self.pattern_literal_guards.shrinkRetainingCapacity(start);
+        return drained;
+    }
+
+    /// Wrap a match-branch body so it only runs when every collected literal
+    /// equality holds, jumping to the branch's miss target otherwise.
+    fn applyPatternLiteralGuards(
+        self: *BodyContext,
+        guards: []const PatternLiteralGuard,
+        body: Ast.ExprId,
+        fallback: Ast.ExprId,
+        output_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        var result = body;
+        var i = guards.len;
+        while (i > 0) {
+            i -= 1;
+            const eq = try self.lowerPatternLiteralEq(guards[i]);
+            result = try self.builder.ifExpr(eq, result, fallback, output_ty);
+        }
+        return result;
+    }
+
+    /// Conjoin the branch's collected literal-equality conditions with its
+    /// (optional) user guard, literal conditions first.
+    fn conjoinPatternLiteralGuards(self: *BodyContext, user_guard: ?Ast.ExprId) Allocator.Error!?Ast.ExprId {
+        if (self.pattern_literal_guards.items.len == 0) return user_guard;
+        const bool_ty = try self.builder.primitiveType(.bool);
+        var cond = user_guard;
+        var i = self.pattern_literal_guards.items.len;
+        while (i > 0) {
+            i -= 1;
+            const eq = try self.lowerPatternLiteralEq(self.pattern_literal_guards.items[i]);
+            cond = if (cond) |inner|
+                try self.builder.ifExpr(eq, inner, try self.boolLiteral(false, bool_ty), bool_ty)
+            else
+                eq;
+        }
+        self.pattern_literal_guards.clearRetainingCapacity();
+        return cond;
     }
 
     fn lowerNumPattern(self: *BodyContext, value: can.CIR.IntValue, ty: Type.TypeId) Ast.PatData {

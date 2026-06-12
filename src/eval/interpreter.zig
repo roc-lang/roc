@@ -90,6 +90,8 @@ const InterpreterRocEnv = struct {
     crash_message: ?[]const u8 = null,
     runtime_error_message: ?[]const u8 = null,
     expect_message: ?[]const u8 = null,
+    expect_err_message: ?[]const u8 = null,
+    expect_err_region: ?base.Region = null,
     jmp_buf: JmpBuf = undefined,
     active_jmp_buf: ?*JmpBuf = null,
     caller_roc_ops: *RocOps,
@@ -104,6 +106,7 @@ const InterpreterRocEnv = struct {
     fn deinit(self: *InterpreterRocEnv) void {
         if (self.crash_message) |msg| self.allocator.free(msg);
         if (self.expect_message) |msg| self.allocator.free(msg);
+        if (self.expect_err_message) |msg| self.allocator.free(msg);
     }
 
     /// Reset the static buffer — call once at the start of a full evaluation.
@@ -114,6 +117,9 @@ const InterpreterRocEnv = struct {
         self.runtime_error_message = null;
         if (self.expect_message) |msg| self.allocator.free(msg);
         self.expect_message = null;
+        if (self.expect_err_message) |msg| self.allocator.free(msg);
+        self.expect_err_message = null;
+        self.expect_err_region = null;
     }
 
     /// Reset just the crash state before calling a builtin that might crash.
@@ -280,6 +286,7 @@ pub const Interpreter = struct {
         RuntimeError,
         DivisionByZero,
         Crash,
+        ExpectErr,
     };
 
     const CrashBoundary = struct {
@@ -576,6 +583,18 @@ pub const Interpreter = struct {
 
     pub fn getExpectMessage(self: *const LirInterpreter) ?[]const u8 {
         return self.roc_env.expect_message;
+    }
+
+    /// The failure message from a `?` operator that evaluated an Err inside a
+    /// top-level expect, if the last evaluation failed that way.
+    /// Owned by the interpreter and valid until the next eval or deinit.
+    pub fn getExpectErrMessage(self: *const LirInterpreter) ?[]const u8 {
+        return self.roc_env.expect_err_message;
+    }
+
+    /// The source region of the `?` whose Err failed the expect.
+    pub fn getExpectErrRegion(self: *const LirInterpreter) ?base.Region {
+        return self.roc_env.expect_err_region;
     }
 
     pub fn getFailedCallStack(self: *const LirInterpreter) []const LirProcSpecId {
@@ -1361,6 +1380,7 @@ pub const Interpreter = struct {
                 .jump,
                 .ret,
                 .crash,
+                .expect_err,
                 .loop_continue,
                 .loop_break,
                 => break,
@@ -1848,6 +1868,16 @@ pub const Interpreter = struct {
                 },
                 .ret => |ret_stmt| return .{ .returned = ret_stmt.value },
                 .crash => |crash_stmt| return self.triggerCrash(self.store.getString(crash_stmt.msg)),
+                .expect_err => |expect_err_stmt| {
+                    const message_value = try self.getLocalChecked(frame, expect_err_stmt.message);
+                    const message = self.readRocStr(message_value);
+                    if (self.roc_env.expect_err_message) |old| self.roc_env.allocator.free(old);
+                    self.roc_env.expect_err_message = self.roc_env.allocator.dupe(u8, message) catch null;
+                    self.roc_env.expect_err_region = expect_err_stmt.region;
+                    // The statement consumes the message's ownership unit.
+                    self.dropValue(message_value, self.store.getLocal(expect_err_stmt.message).layout_idx);
+                    return error.ExpectErr;
+                },
             }
         }
     }
@@ -2102,6 +2132,12 @@ pub const Interpreter = struct {
                     debugPrint("    {d}: crash msg={d}\n", .{
                         @intFromEnum(stmt_id),
                         @intFromEnum(crash.msg),
+                    });
+                },
+                .expect_err => |expect_err_stmt| {
+                    debugPrint("    {d}: expect_err message={d}\n", .{
+                        @intFromEnum(stmt_id),
+                        @intFromEnum(expect_err_stmt.message),
                     });
                 },
             }
@@ -2418,6 +2454,9 @@ pub const Interpreter = struct {
             error.RuntimeError => ops.crash("LIR/interpreter erased callable trampoline hit runtime error"),
             error.DivisionByZero => ops.crash("LIR/interpreter erased callable trampoline hit division by zero"),
             error.Crash => ops.crash("LIR/interpreter erased callable trampoline hit Roc crash"),
+            // expect_err statements only occur in top-level expect test
+            // roots, never in callable bodies.
+            error.ExpectErr => unreachable,
         };
     }
 
@@ -2944,7 +2983,6 @@ pub const Interpreter = struct {
         }
 
         const hosted_fn = self.roc_ops.hosted_fns.fns[hosted.dispatch_index];
-        const ops_for_host = self.currentRocOps();
 
         // Call the hosted function with the platform C ABI via the fixed register-image
         // trampoline (no runtime code generation).
@@ -2954,7 +2992,6 @@ pub const Interpreter = struct {
             self.layout_store,
             arena_state.allocator(),
             @ptrCast(hosted_fn),
-            ops_for_host,
             arg_layouts,
             ret_layout,
             args_buf.ptr,

@@ -589,7 +589,6 @@ pub const LowLevel = enum {
 
             .list_drop_at,
             .list_sublist,
-            .list_prepend,
             .list_drop_first,
             .list_drop_last,
             .list_take_first,
@@ -600,6 +599,8 @@ pub const LowLevel = enum {
             .list_split_first,
             .list_split_last,
             => RcEffect.runtimeUniqueness(argMask(&.{0})),
+
+            .list_prepend => RcEffect.runtimeUniquenessRetainingArgs(argMask(&.{0}), argMask(&.{1})),
 
             .list_append_unsafe => RcEffect.consumesArgsReturningConsumedArgsRetainingArgs(argMask(&.{0}), argMask(&.{1})),
 
@@ -620,10 +621,11 @@ pub const LowLevel = enum {
             // `list_map_extract_unsafe`, mirroring `list_append_unsafe`.
             .list_map_write_unsafe => RcEffect.consumesArgsReturningConsumedArgsRetainingArgs(argMask(&.{0}), argMask(&.{2})),
 
+            .list_swap => RcEffect.runtimeUniqueness(argMask(&.{0})),
+
             .list_set,
             .list_replace_unsafe,
-            .list_swap,
-            => RcEffect.runtimeUniqueness(argMask(&.{0})),
+            => RcEffect.runtimeUniquenessRetainingArgs(argMask(&.{0}), argMask(&.{2})),
 
             .list_concat => RcEffect.runtimeUniqueness(argMask(&.{ 0, 1 })),
 

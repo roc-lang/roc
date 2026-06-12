@@ -607,7 +607,7 @@ fn rocCrashedFn(ops: *builtins.host_abi.RocOps, bytes: [*]const u8, len: usize) 
 
 // External symbols provided by the Roc runtime object file
 // Follows RocCall ABI: ops, ret_ptr, then argument pointers
-extern fn roc__main(ops: *builtins.host_abi.RocOps, ret_ptr: ?*anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
+extern fn roc_main() callconv(.c) void;
 
 // OS-specific entry point handling
 comptime {
@@ -683,7 +683,8 @@ const RocStr = builtins.str.RocStr;
 /// Hosted function: Stderr.line! (index 0 - sorted alphabetically)
 /// Follows RocCall ABI: (ops, ret_ptr, args_ptr)
 /// Returns {} and takes Str as argument
-fn hostedStderrLine(ops: *builtins.host_abi.RocOps, str: RocStr) callconv(.c) void {
+fn hostedStderrLine(str: RocStr) callconv(.c) void {
+    const ops = g_roc_ops.?;
     const message = str.asSlice();
     defer str.decref(ops);
 
@@ -761,7 +762,8 @@ fn hostedStderrLine(ops: *builtins.host_abi.RocOps, str: RocStr) callconv(.c) vo
 /// Hosted function: Stdin.line! (index 1 - sorted alphabetically)
 /// Follows RocCall ABI: (ops, ret_ptr, args_ptr)
 /// Returns Str and takes {} as argument
-fn hostedStdinLine(ops: *builtins.host_abi.RocOps) callconv(.c) RocStr {
+fn hostedStdinLine() callconv(.c) RocStr {
+    const ops = g_roc_ops.?;
     const host: *HostEnv = @ptrCast(@alignCast(ops.env));
 
     // Test mode: consume next stdin_input entry from spec
@@ -844,7 +846,8 @@ fn hostedStdinLine(ops: *builtins.host_abi.RocOps) callconv(.c) RocStr {
 /// Hosted function: Stdout.line! (index 2 - sorted alphabetically)
 /// Follows RocCall ABI: (ops, ret_ptr, args_ptr)
 /// Returns {} and takes Str as argument
-fn hostedStdoutLine(ops: *builtins.host_abi.RocOps, str: RocStr) callconv(.c) void {
+fn hostedStdoutLine(str: RocStr) callconv(.c) void {
+    const ops = g_roc_ops.?;
     const message = str.asSlice();
     defer str.decref(ops);
 
@@ -927,7 +930,8 @@ const BuilderArgs = extern struct {
     value: RocStr,
 };
 
-fn hostedBuilderPrintValue(ops: *builtins.host_abi.RocOps, builder: BuilderArgs) callconv(.c) void {
+fn hostedBuilderPrintValue(builder: BuilderArgs) callconv(.c) void {
+    const ops = g_roc_ops.?;
     const value_slice = builder.value.asSlice();
 
     // Format the output messages
@@ -937,17 +941,17 @@ fn hostedBuilderPrintValue(ops: *builtins.host_abi.RocOps, builder: BuilderArgs)
     // Use hostedStdoutLine to respect test mode tracking
     // Create temporary RocStr instances for each line
     const line1 = RocStr.fromSlice("SUCCESS: Builder.print_value! called via static dispatch!", ops);
-    hostedStdoutLine(ops, line1);
+    hostedStdoutLine(line1);
 
     var line2_buf: [256]u8 = undefined;
     const line2_str = std.fmt.bufPrint(&line2_buf, "  value: {s}", .{value_slice}) catch "  value: ?";
     const line2 = RocStr.fromSlice(line2_str, ops);
-    hostedStdoutLine(ops, line2);
+    hostedStdoutLine(line2);
 
     var line3_buf: [256]u8 = undefined;
     const line3_str = std.fmt.bufPrint(&line3_buf, "  count: {s}", .{count_str}) catch "  count: ?";
     const line3 = RocStr.fromSlice(line3_str, ops);
-    hostedStdoutLine(ops, line3);
+    hostedStdoutLine(line3);
 }
 
 /// Hosted function: Host.get_greeting! (index 5 - sorted alphabetically)
@@ -955,7 +959,8 @@ fn hostedBuilderPrintValue(ops: *builtins.host_abi.RocOps, builder: BuilderArgs)
 /// Takes Host { name: Str } as first argument, returns Str
 const HostRecord = extern struct { name: RocStr };
 
-fn hostedHostGetGreeting(ops: *builtins.host_abi.RocOps, host: HostRecord) callconv(.c) RocStr {
+fn hostedHostGetGreeting(host: HostRecord) callconv(.c) RocStr {
+    const ops = g_roc_ops.?;
     const name_slice = host.name.asSlice();
     defer host.name.decref(ops);
 
@@ -1072,7 +1077,8 @@ fn hostAddCaptureOnDrop(_: ?[*]u8, _: *builtins.host_abi.RocOps) callconv(.c) vo
     boxed_host_drop_counts.primitive += 1;
 }
 
-fn hostedHostBoxedAdd(ops: *builtins.host_abi.RocOps, amount: i64) callconv(.c) ?[*]u8 {
+fn hostedHostBoxedAdd(amount: i64) callconv(.c) ?[*]u8 {
+    const ops = g_roc_ops.?;
     var ret: ?[*]u8 = null;
     writeErasedCallable(
         AddCapture,
@@ -1091,14 +1097,18 @@ fn hostNestedRecordCallable(_: *builtins.host_abi.RocOps, ret: ?[*]u8, args: ?[*
     writeI64Result(ret, x + capture.inner.base + capture.adjustment + @as(i64, @intCast(capture.inner.label.asSlice().len)));
 }
 
-fn hostNestedRecordCaptureOnDrop(capture_ptr: ?[*]u8, ops: *builtins.host_abi.RocOps) callconv(.c) void {
+fn hostNestedRecordCaptureOnDrop(capture_ptr: ?[*]u8, _: *builtins.host_abi.RocOps) callconv(.c) void {
+    // The ops argument is whatever the final release passed; app code under
+    // the symbol ABI passes null, so the host uses its own RocOps.
+    const ops = g_roc_ops.?;
     const capture = capturePtrAs(NestedRecordCapture, capture_ptr);
     capture.inner.label.decref(ops);
     boxed_host_drop_counts.nested_record_str_releases += 1;
     boxed_host_drop_counts.nested_record += 1;
 }
 
-fn hostedHostBoxedNestedRecord(ops: *builtins.host_abi.RocOps, label: RocStr) callconv(.c) ?[*]u8 {
+fn hostedHostBoxedNestedRecord(label: RocStr) callconv(.c) ?[*]u8 {
+    const ops = g_roc_ops.?;
     const capture_label = label;
     capture_label.incref(1, ops);
     defer label.decref(ops);
@@ -1190,13 +1200,15 @@ fn hostTreeCallable(_: *builtins.host_abi.RocOps, ret: ?[*]u8, args: ?[*]const u
     writeI64Result(ret, readI64ToI64Arg(args) + hostTreeSum(&capture.tree));
 }
 
-fn hostTreeCaptureOnDrop(capture_ptr: ?[*]u8, ops: *builtins.host_abi.RocOps) callconv(.c) void {
+fn hostTreeCaptureOnDrop(capture_ptr: ?[*]u8, _: *builtins.host_abi.RocOps) callconv(.c) void {
+    const ops = g_roc_ops.?;
     const capture = capturePtrAs(TreeCapture, capture_ptr);
     hostTreeDropPayload(@ptrCast(&capture.tree), ops);
     boxed_host_drop_counts.recursive_tree += 1;
 }
 
-fn hostedHostBoxedRecursiveTree(ops: *builtins.host_abi.RocOps, tree: HostTree) callconv(.c) ?[*]u8 {
+fn hostedHostBoxedRecursiveTree(tree: HostTree) callconv(.c) ?[*]u8 {
+    const ops = g_roc_ops.?;
     var tree_local = tree;
     defer hostTreeDropPayloadWithoutReport(@ptrCast(&tree_local), ops);
     var ret: ?[*]u8 = null;
@@ -1217,13 +1229,15 @@ fn hostBoxedCaptureCallable(ops: *builtins.host_abi.RocOps, ret: ?[*]u8, args: ?
     writeI64Result(ret, callBoxedI64ToI64(ops, capture.inner, x) + capture.bonus);
 }
 
-fn hostBoxedCaptureOnDrop(capture_ptr: ?[*]u8, ops: *builtins.host_abi.RocOps) callconv(.c) void {
+fn hostBoxedCaptureOnDrop(capture_ptr: ?[*]u8, _: *builtins.host_abi.RocOps) callconv(.c) void {
+    const ops = g_roc_ops.?;
     const capture = capturePtrAs(BoxedCallableCapture, capture_ptr);
     builtins.erased_callable.decref(capture.inner, ops);
     boxed_host_drop_counts.boxed_capture += 1;
 }
 
-fn hostedHostBoxedWithBoxedCapture(ops: *builtins.host_abi.RocOps, inner: ?[*]u8, bonus: i64) callconv(.c) ?[*]u8 {
+fn hostedHostBoxedWithBoxedCapture(inner: ?[*]u8, bonus: i64) callconv(.c) ?[*]u8 {
+    const ops = g_roc_ops.?;
     if (inner) |inner_ptr| {
         builtins.erased_callable.incref(inner_ptr, 1, ops);
     } else {
@@ -1247,7 +1261,8 @@ fn hostedHostBoxedWithBoxedCapture(ops: *builtins.host_abi.RocOps, inner: ?[*]u8
     return ret;
 }
 
-fn hostedHostCallBoxed(ops: *builtins.host_abi.RocOps, boxed: ?[*]u8, value: i64) callconv(.c) i64 {
+fn hostedHostCallBoxed(boxed: ?[*]u8, value: i64) callconv(.c) i64 {
+    const ops = g_roc_ops.?;
     defer builtins.erased_callable.decref(boxed, ops);
     return callBoxedI64ToI64(ops, boxed, value);
 }
@@ -1260,7 +1275,8 @@ fn hostedHostReleaseStoredBoxed() callconv(.c) void {
     }
 }
 
-fn hostedHostRoundtripBoxed(ops: *builtins.host_abi.RocOps, boxed: ?[*]u8) callconv(.c) ?[*]u8 {
+fn hostedHostRoundtripBoxed(boxed: ?[*]u8) callconv(.c) ?[*]u8 {
+    const ops = g_roc_ops.?;
     if (boxed) |b| {
         builtins.erased_callable.incref(b, 1, ops);
         builtins.erased_callable.decref(b, ops);
@@ -1268,7 +1284,8 @@ fn hostedHostRoundtripBoxed(ops: *builtins.host_abi.RocOps, boxed: ?[*]u8) callc
     return boxed;
 }
 
-fn hostedHostStoreBoxed(ops: *builtins.host_abi.RocOps, boxed: ?[*]u8) callconv(.c) void {
+fn hostedHostStoreBoxed(boxed: ?[*]u8) callconv(.c) void {
+    const ops = g_roc_ops.?;
     if (stored_boxed_callable) |prev| {
         builtins.erased_callable.decref(prev, ops);
         stored_boxed_callable = null;
@@ -1287,7 +1304,8 @@ fn hostedHostStoredBoxedCall(value: i64) callconv(.c) i64 {
     return callBoxedI64ToI64(ops, stored_boxed_callable, value);
 }
 
-fn hostedHostBoxedDropReport(ops: *builtins.host_abi.RocOps) callconv(.c) RocStr {
+fn hostedHostBoxedDropReport() callconv(.c) RocStr {
+    const ops = g_roc_ops.?;
     var buf: [256]u8 = undefined;
     const report = std.fmt.bufPrint(
         &buf,
@@ -1313,26 +1331,57 @@ fn hostedHostResetBoxedDropReport() callconv(.c) void {
     boxed_host_drop_counts = .{};
 }
 
-/// Array of hosted function pointers, sorted alphabetically by fully-qualified name
-/// These correspond to the hosted functions defined in Stderr, Stdin, Stdout, Builder, and Host Type Modules
-const hosted_function_ptrs = [_]builtins.host_abi.HostedFn{
-    builtins.host_abi.hostedFn(&hostedBuilderPrintValue), // Builder.print_value! (index 0)
-    builtins.host_abi.hostedFn(&hostedHostBoxedAdd), // Host.boxed_add! (index 1)
-    builtins.host_abi.hostedFn(&hostedHostBoxedDropReport), // Host.boxed_drop_report! (index 2)
-    builtins.host_abi.hostedFn(&hostedHostBoxedNestedRecord), // Host.boxed_nested_record! (index 3)
-    builtins.host_abi.hostedFn(&hostedHostBoxedRecursiveTree), // Host.boxed_recursive_tree! (index 4)
-    builtins.host_abi.hostedFn(&hostedHostBoxedWithBoxedCapture), // Host.boxed_with_boxed_capture! (index 5)
-    builtins.host_abi.hostedFn(&hostedHostCallBoxed), // Host.call_boxed! (index 6)
-    builtins.host_abi.hostedFn(&hostedHostGetGreeting), // Host.get_greeting! (index 7)
-    builtins.host_abi.hostedFn(&hostedHostReleaseStoredBoxed), // Host.release_stored_boxed! (index 8)
-    builtins.host_abi.hostedFn(&hostedHostResetBoxedDropReport), // Host.reset_boxed_drop_report! (index 9)
-    builtins.host_abi.hostedFn(&hostedHostRoundtripBoxed), // Host.roundtrip_boxed! (index 10)
-    builtins.host_abi.hostedFn(&hostedHostStoreBoxed), // Host.store_boxed! (index 11)
-    builtins.host_abi.hostedFn(&hostedHostStoredBoxedCall), // Host.stored_boxed_call! (index 12)
-    builtins.host_abi.hostedFn(&hostedStderrLine), // Stderr.line! (index 13)
-    builtins.host_abi.hostedFn(&hostedStdinLine), // Stdin.line! (index 14)
-    builtins.host_abi.hostedFn(&hostedStdoutLine), // Stdout.line! (index 15)
-};
+// The platform's hosted functions, exported under their header symbols, plus
+// the fixed runtime symbols every symbol-ABI host defines.
+comptime {
+    @export(&hostedBuilderPrintValue, .{ .name = "roc_builder_print_value", .visibility = .hidden });
+    @export(&hostedHostBoxedAdd, .{ .name = "roc_host_boxed_add", .visibility = .hidden });
+    @export(&hostedHostBoxedDropReport, .{ .name = "roc_host_boxed_drop_report", .visibility = .hidden });
+    @export(&hostedHostBoxedNestedRecord, .{ .name = "roc_host_boxed_nested_record", .visibility = .hidden });
+    @export(&hostedHostBoxedRecursiveTree, .{ .name = "roc_host_boxed_recursive_tree", .visibility = .hidden });
+    @export(&hostedHostBoxedWithBoxedCapture, .{ .name = "roc_host_boxed_with_boxed_capture", .visibility = .hidden });
+    @export(&hostedHostCallBoxed, .{ .name = "roc_host_call_boxed", .visibility = .hidden });
+    @export(&hostedHostGetGreeting, .{ .name = "roc_host_get_greeting", .visibility = .hidden });
+    @export(&hostedHostReleaseStoredBoxed, .{ .name = "roc_host_release_stored_boxed", .visibility = .hidden });
+    @export(&hostedHostResetBoxedDropReport, .{ .name = "roc_host_reset_boxed_drop_report", .visibility = .hidden });
+    @export(&hostedHostRoundtripBoxed, .{ .name = "roc_host_roundtrip_boxed", .visibility = .hidden });
+    @export(&hostedHostStoreBoxed, .{ .name = "roc_host_store_boxed", .visibility = .hidden });
+    @export(&hostedHostStoredBoxedCall, .{ .name = "roc_host_stored_boxed_call", .visibility = .hidden });
+    @export(&hostedStderrLine, .{ .name = "roc_stderr_line", .visibility = .hidden });
+    @export(&hostedStdinLine, .{ .name = "roc_stdin_line", .visibility = .hidden });
+    @export(&hostedStdoutLine, .{ .name = "roc_stdout_line", .visibility = .hidden });
+
+    @export(&hostAlloc, .{ .name = "roc_alloc", .visibility = .hidden });
+    @export(&hostDealloc, .{ .name = "roc_dealloc", .visibility = .hidden });
+    @export(&hostRealloc, .{ .name = "roc_realloc", .visibility = .hidden });
+    @export(&hostDbg, .{ .name = "roc_dbg", .visibility = .hidden });
+    @export(&hostExpectFailed, .{ .name = "roc_expect_failed", .visibility = .hidden });
+    @export(&hostCrashed, .{ .name = "roc_crashed", .visibility = .hidden });
+}
+
+fn hostAlloc(length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+    return rocAllocFn(g_roc_ops.?, length, alignment);
+}
+
+fn hostDealloc(ptr: *anyopaque, alignment: usize) callconv(.c) void {
+    rocDeallocFn(g_roc_ops.?, ptr, alignment);
+}
+
+fn hostRealloc(ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+    return rocReallocFn(g_roc_ops.?, ptr, new_length, alignment);
+}
+
+fn hostDbg(bytes: [*]const u8, len: usize) callconv(.c) void {
+    rocDbgFn(g_roc_ops.?, bytes, len);
+}
+
+fn hostExpectFailed(bytes: [*]const u8, len: usize) callconv(.c) void {
+    rocExpectFailedFn(g_roc_ops.?, bytes, len);
+}
+
+fn hostCrashed(bytes: [*]const u8, len: usize) callconv(.c) void {
+    rocCrashedFn(g_roc_ops.?, bytes, len);
+}
 
 /// Platform host entrypoint
 fn platform_main(test_spec: ?[]const u8, test_verbose: bool) (Allocator.Error || error{InvalidSpecFormat})!c_int {
@@ -1419,7 +1468,8 @@ fn platform_main(test_spec: ?[]const u8, test_verbose: bool) (Allocator.Error ||
         }
     }
 
-    // Create the RocOps struct
+    // The host-private RocOps used by builtins helpers (RocStr etc.) and the
+    // exported runtime symbols; not part of the ABI.
     var roc_ops = builtins.host_abi.RocOps{
         .env = @as(*anyopaque, @ptrCast(&host_env)),
         .roc_alloc = rocAllocFn,
@@ -1428,19 +1478,13 @@ fn platform_main(test_spec: ?[]const u8, test_verbose: bool) (Allocator.Error ||
         .roc_dbg = rocDbgFn,
         .roc_expect_failed = rocExpectFailedFn,
         .roc_crashed = rocCrashedFn,
-        .hosted_fns = .{
-            .count = hosted_function_ptrs.len,
-            .fns = @constCast(&hosted_function_ptrs),
-        },
+        .hosted_fns = .{ .count = 0, .fns = undefined },
     };
 
     g_roc_ops = &roc_ops;
 
-    // Call the app's main! entrypoint with concrete storage even for ZST
-    // arg/ret positions so every backend sees valid ABI pointers.
-    var dummy_ret: u8 = 0;
-    var dummy_arg: u8 = 0;
-    roc__main(&roc_ops, @ptrCast(&dummy_ret), @ptrCast(&dummy_arg));
+    // Call the app's main! entrypoint with its natural C ABI.
+    roc_main();
 
     // Check test results if in test mode
     if (host_env.test_state.enabled) {

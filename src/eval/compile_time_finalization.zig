@@ -319,7 +319,7 @@ fn lowerEvalAndFinishRoots(
     for (lowered.lir_result.const_roots.items) |root| {
         const root_id = compileTimeRootForRequest(module, root.request);
         const compile_time_root = module.compile_time_roots.root(root_id);
-        const payload: checked.CompileTimeRootPayload = blk: {
+        var payload: checked.CompileTimeRootPayload = blk: {
             if (root.request.kind == .compile_time_constant and problem_store == null) {
                 const eval_result = interpreter.eval(.{
                     .proc_id = root.proc,
@@ -334,6 +334,9 @@ fn lowerEvalAndFinishRoots(
                         const message = interpreter.getCrashMessage() orelse host.crash_message orelse "Roc crashed";
                         break :blk .{ .const_node = try appendCrashConst(module, message) };
                     },
+                    // expect_err statements only occur in top-level expect
+                    // test roots, never in compile-time constant roots.
+                    error.ExpectErr => unreachable,
                 };
                 defer interpreter.dropValue(eval_result.value, root.ret_layout);
                 break :blk try writer.storeRoot(root, eval_result.value);
@@ -344,10 +347,84 @@ fn lowerEvalAndFinishRoots(
             break :blk try writer.storeRoot(root, eval_result.value);
         };
 
+        if (compile_time_root.kind == .numeral_conversion) {
+            payload = try finishNumeralConversionRoot(allocator, module, problem_store, compile_time_root, payload);
+        }
+
         module.compile_time_roots.fillPayload(root_id, payload);
         finishConstRoot(module, compile_time_root, payload);
         state.markDone(root_id);
     }
+}
+
+/// Unwrap the `Try` value a numeral-conversion root evaluated to. `Ok` payloads
+/// become the stored constant; `Err(InvalidNumeral(msg))` becomes a checking
+/// problem carrying the implementation's message.
+fn finishNumeralConversionRoot(
+    allocator: Allocator,
+    module: *checked.CheckedModuleArtifact,
+    problem_store: ?*check.problem.Store,
+    root: checked.CompileTimeRoot,
+    payload: checked.CompileTimeRootPayload,
+) anyerror!checked.CompileTimeRootPayload {
+    const try_node = switch (payload) {
+        .const_node => |node| node,
+        else => finalizationInvariant("numeral conversion root did not store a constant"),
+    };
+    switch (module.const_store.get(try_node)) {
+        // The from_numeral implementation itself crashed; that crash was
+        // already stored (and reported when a problem store exists).
+        .crash => return payload,
+        else => {},
+    }
+    const try_tag = constTagValue(module, try_node);
+    if (constTagNameIs(try_tag.tag_name, "Ok")) {
+        if (try_tag.payloads.len != 1) finalizationInvariant("numeral conversion Ok did not carry one payload");
+        return .{ .const_node = try_tag.payloads[0] };
+    }
+    if (!constTagNameIs(try_tag.tag_name, "Err")) {
+        finalizationInvariant("numeral conversion result was neither Ok nor Err");
+    }
+    if (try_tag.payloads.len != 1) finalizationInvariant("numeral conversion Err did not carry one payload");
+    const err_tag = constTagValue(module, try_tag.payloads[0]);
+    if (err_tag.payloads.len != 1) finalizationInvariant("numeral conversion error tag did not carry one payload");
+    const message_str = switch (module.const_store.get(err_tag.payloads[0])) {
+        .str => |str| str,
+        else => finalizationInvariant("numeral conversion error payload was not a string"),
+    };
+    const message = module.const_store.strBytes(message_str);
+    if (problem_store) |store| {
+        const message_idx = try store.putExtraString(message);
+        const region = module.checked_bodies.expr(root.expr).source_region;
+        _ = try store.appendProblem(allocator, .{ .comptime_invalid_numeral = .{
+            .message = message_idx,
+            .region = region,
+        } });
+        return error.CompileTimeProblem;
+    }
+    return .{ .const_node = try appendCrashConst(module, message) };
+}
+
+fn constTagValue(
+    module: *const checked.CheckedModuleArtifact,
+    node: checked.ConstNodeId,
+) @FieldType(checked.ConstValue, "tag") {
+    var current = node;
+    while (true) {
+        switch (module.const_store.get(current)) {
+            .nominal => |nominal| current = nominal.backing,
+            .tag => |tag| return tag,
+            else => finalizationInvariant("numeral conversion constant was not a tag value"),
+        }
+    }
+}
+
+fn constTagNameIs(name: []const u8, expected: []const u8) bool {
+    if (name.len != expected.len) return false;
+    for (name, expected) |actual, wanted| {
+        if (actual != wanted) return false;
+    }
+    return true;
 }
 
 fn appendCrashConst(
@@ -379,6 +456,7 @@ fn evalCompileTimeRoot(
         error.RuntimeError => finalizationInvariant("compile-time root produced a runtime error"),
         error.DivisionByZero => try reportCompileTimeCrash(allocator, problem_store, module, root, interpreter.getRuntimeErrorMessage() orelse "Division by zero"),
         error.Crash => try reportCompileTimeCrash(allocator, problem_store, module, root, interpreter.getCrashMessage() orelse "Roc crashed"),
+        error.ExpectErr => finalizationInvariant("compile-time root reached an expect_err statement"),
     };
 }
 
@@ -441,14 +519,13 @@ fn compileTimeRootForRequest(
     module: *const checked.CheckedModuleArtifact,
     request: checked.RootRequest,
 ) checked.ComptimeRootId {
-    const expected_kind: checked.CompileTimeRootKind = switch (request.kind) {
-        .compile_time_constant => .constant,
-        .compile_time_callable => .callable_binding,
-        else => finalizationInvariant("non compile-time request reached compile-time root lookup"),
-    };
-
     for (module.compile_time_roots.roots) |root| {
-        if (root.kind == expected_kind and rootSourceEql(root.source, request.source)) return root.id;
+        const kind_matches = switch (request.kind) {
+            .compile_time_constant => root.kind == .constant or root.kind == .numeral_conversion,
+            .compile_time_callable => root.kind == .callable_binding,
+            else => finalizationInvariant("non compile-time request reached compile-time root lookup"),
+        };
+        if (kind_matches and rootSourceEql(root.source, request.source)) return root.id;
     }
 
     finalizationInvariant("compile-time root request did not match a checked root");

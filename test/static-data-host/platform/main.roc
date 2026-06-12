@@ -29,18 +29,18 @@ platform ""
     exposes []
     packages {}
     provides {
-        main_for_host!: "main",
-        answer_for_host: "answer",
-        flag_for_host: "flag",
-        flags_for_host: "flags",
-        table_for_host: "table",
-        names_for_host: "names",
-        tree_for_host: "tree",
-        boxed_add_one_for_host: "boxed_add_one",
-        literal_long_for_host: "literal_long",
-        assembled_strings_for_host: "assembled_strings",
-        intermediate_final_for_host: "intermediate_final",
-        static_slices_for_host: "static_slices",
+        "roc_main": main_for_host!,
+        "roc_answer": answer_for_host,
+        "roc_flag": flag_for_host,
+        "roc_flags": flags_for_host,
+        "roc_table": table_for_host,
+        "roc_names": names_for_host,
+        "roc_tree": tree_for_host,
+        "roc_boxed_add_one": boxed_add_one_for_host,
+        "roc_literal_long": literal_long_for_host,
+        "roc_assembled_strings": assembled_strings_for_host,
+        "roc_intermediate_final": intermediate_final_for_host,
+        "roc_static_slices": static_slices_for_host,
     }
     targets: {
         inputs: "targets/",

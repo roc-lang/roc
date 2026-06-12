@@ -491,17 +491,19 @@ const Lowerer = struct {
         self.fn_written.items[@intFromEnum(fn_id)] = true;
     }
 
-    fn hostedProcForSource(source: ?Mono.FnTemplate) ?LIR.HostedProc {
+    fn hostedProcForSource(self: *Lowerer, source: ?Mono.FnTemplate) Common.LowerError!?LIR.HostedProc {
         const template = source orelse return null;
-        return hostedProcForTemplate(template);
+        return try self.hostedProcForTemplate(template);
     }
 
-    fn hostedProcForTemplate(source: Mono.FnTemplate) ?LIR.HostedProc {
+    fn hostedProcForTemplate(self: *Lowerer, source: Mono.FnTemplate) Common.LowerError!?LIR.HostedProc {
         return switch (source.fn_def) {
             .local_hosted,
             .imported_hosted,
             => |hosted| .{
-                .external_symbol_name = hosted.external_symbol_name,
+                .symbol = try self.result.store.insertString(
+                    self.solved.lifted.names.externalSymbolNameText(hosted.external_symbol_name),
+                ),
                 .dispatch_index = hosted.dispatch_index,
             },
             else => null,
@@ -620,7 +622,7 @@ const Lowerer = struct {
             .body = null,
             .ret_layout = try self.layoutOfType(entry.ret),
             .abi = if (spec.abi == .erased) .erased_callable else .roc,
-            .hosted = hostedProcForSource(source_fn.source),
+            .hosted = try self.hostedProcForSource(source_fn.source),
         });
         entry.proc = proc;
         self.fn_entries.items[index] = entry;
@@ -1450,6 +1452,14 @@ const Lowerer = struct {
                 const message = try self.addTemp(try self.lowerExprTy(child));
                 const debug_stmt = try self.result.store.addCFStmt(.{ .debug = .{ .message = message, .next = after_dbg } });
                 break :blk try self.lowerExprInto(message, child, debug_stmt);
+            },
+            .expect_err => |expect_err| blk: {
+                const message = try self.addTemp(try self.lowerExprTy(expect_err.msg));
+                const expect_err_stmt = try self.result.store.addCFStmt(.{ .expect_err = .{
+                    .message = message,
+                    .region = expect_err.region,
+                } });
+                break :blk try self.lowerExprInto(message, expect_err.msg, expect_err_stmt);
             },
             .expect => |child| try self.lowerExpectExprInto(target, child, next),
         };

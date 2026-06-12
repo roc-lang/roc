@@ -113,18 +113,93 @@ fn rocCrashedFn(ops: *builtins.host_abi.RocOps, bytes: [*]const u8, len: usize) 
 // Box is opaque to the host - just a pointer-sized value
 const Box = usize;
 
-// External symbols provided by the Roc runtime object file
-// Follows RocCall ABI: ops, ret_ptr, then argument pointers
-extern fn roc__init(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
-extern fn roc__update(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
-extern fn roc__render(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
-extern fn roc__test_mixed_args(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
-extern fn roc__test_struct_arg(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
-extern fn roc__test_effectful_struct_arg(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
-extern fn roc__test_simple_pure(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
-extern fn roc__test_simple_effectful(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
-extern fn roc__test_three_floats_pure(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
-extern fn roc__test_three_floats_effectful(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
+// Roc value layouts at the boundary (record fields sorted by alignment
+// descending, then name; same convention the old args buffers used).
+const MixedResult = extern struct { value: i64, flag: bool };
+const FrameInput = extern struct {
+    frame_count: u64,
+    mouse_wheel: f32,
+    mouse_x: f32,
+    mouse_y: f32,
+    mouse_left: bool,
+    mouse_middle: bool,
+    mouse_right: bool,
+};
+const SimpleInput = extern struct {
+    number: u64,
+    flag: bool,
+};
+const ThreeFloats = extern struct {
+    aaa: f32,
+    bbb: f32,
+    ccc: f32,
+};
+/// Simple(Model) is opaque to the host; large enough for any app model and
+/// pointer-aligned (it contains a Str).
+const RenderResult = extern struct { opaque_bytes: [8]u64 };
+
+// The app's entrypoints, exported under their provides symbols with their
+// natural C ABIs. Entrypoint arguments are passed in source order; record
+// values keep their alignment-sorted field layout.
+extern fn roc_init() callconv(.c) Box;
+extern fn roc_update(boxed_model: Box, delta: i64) callconv(.c) Box;
+extern fn roc_render(boxed_model: Box) callconv(.c) RenderResult;
+extern fn roc_test_mixed_args(flag: bool, value: i64) callconv(.c) MixedResult;
+extern fn roc_test_struct_arg(input: FrameInput) callconv(.c) FrameInput;
+extern fn roc_test_effectful_struct_arg(input: FrameInput) callconv(.c) FrameInput;
+extern fn roc_test_simple_pure(input: SimpleInput) callconv(.c) SimpleInput;
+extern fn roc_test_simple_effectful(input: SimpleInput) callconv(.c) SimpleInput;
+extern fn roc_test_three_floats_pure(input: ThreeFloats) callconv(.c) ThreeFloats;
+extern fn roc_test_three_floats_effectful(input: ThreeFloats) callconv(.c) ThreeFloats;
+
+// --- Symbol-ABI runtime exports
+var g_host_env = HostEnv{
+    .arena = .init(std.heap.page_allocator),
+};
+
+var g_roc_ops = builtins.host_abi.RocOps{
+    .env = @as(*anyopaque, @ptrCast(&g_host_env)),
+    .roc_alloc = rocAllocFn,
+    .roc_dealloc = rocDeallocFn,
+    .roc_realloc = rocReallocFn,
+    .roc_dbg = rocDbgFn,
+    .roc_expect_failed = rocExpectFailedFn,
+    .roc_crashed = rocCrashedFn,
+    .hosted_fns = .{ .count = 0, .fns = undefined },
+};
+
+fn hostAlloc(length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+    return rocAllocFn(&g_roc_ops, length, alignment);
+}
+
+fn hostDealloc(ptr: *anyopaque, alignment: usize) callconv(.c) void {
+    rocDeallocFn(&g_roc_ops, ptr, alignment);
+}
+
+fn hostRealloc(ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+    return rocReallocFn(&g_roc_ops, ptr, new_length, alignment);
+}
+
+fn hostDbg(bytes: [*]const u8, len: usize) callconv(.c) void {
+    rocDbgFn(&g_roc_ops, bytes, len);
+}
+
+fn hostExpectFailed(bytes: [*]const u8, len: usize) callconv(.c) void {
+    rocExpectFailedFn(&g_roc_ops, bytes, len);
+}
+
+fn hostCrashed(bytes: [*]const u8, len: usize) callconv(.c) void {
+    rocCrashedFn(&g_roc_ops, bytes, len);
+}
+
+comptime {
+    @export(&hostAlloc, .{ .name = "roc_alloc", .visibility = .hidden });
+    @export(&hostDealloc, .{ .name = "roc_dealloc", .visibility = .hidden });
+    @export(&hostRealloc, .{ .name = "roc_realloc", .visibility = .hidden });
+    @export(&hostDbg, .{ .name = "roc_dbg", .visibility = .hidden });
+    @export(&hostExpectFailed, .{ .name = "roc_expect_failed", .visibility = .hidden });
+    @export(&hostCrashed, .{ .name = "roc_crashed", .visibility = .hidden });
+}
 
 // OS-specific entry point handling
 comptime {
@@ -151,30 +226,11 @@ fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
 
 /// Platform host entrypoint -- tests Box(model) across the host boundary
 fn platform_main() void {
-    var host_env = HostEnv{
-        .arena = std.heap.ArenaAllocator.init(std.heap.page_allocator),
-    };
-    defer host_env.arena.deinit(); // Clean up all allocations on exit
-
-    // Create the RocOps struct
-    var roc_ops = builtins.host_abi.RocOps{
-        .env = @as(*anyopaque, @ptrCast(&host_env)),
-        .roc_alloc = rocAllocFn,
-        .roc_dealloc = rocDeallocFn,
-        .roc_realloc = rocReallocFn,
-        .roc_dbg = rocDbgFn,
-        .roc_expect_failed = rocExpectFailedFn,
-        .roc_crashed = rocCrashedFn,
-        .hosted_fns = .{ .count = 0, .fns = undefined },
-    };
-
     var success_count: u32 = 0;
 
     // Test 1: init returns Box(model)
     print("\n=== Test 1: init returns Box(model) ===\n", .{});
-    var boxed_model: Box = undefined;
-    var empty_input: u8 = 0;
-    roc__init(&roc_ops, @as(*anyopaque, @ptrCast(&boxed_model)), @as(*anyopaque, @ptrCast(&empty_input)));
+    const boxed_model = roc_init();
     print("init returned Box: 0x{x}\n", .{boxed_model});
     print("\x1b[32mSUCCESS\x1b[0m: init completed!\n", .{});
     success_count += 1;
@@ -182,10 +238,7 @@ fn platform_main() void {
     // Test 2: update takes (Box(model), I64), returns Box(model)
     // Note: update calls Box.unbox which CONSUMES the input Box, so we can't reuse boxed_model after this
     print("\n=== Test 2: update(Box(model), 42) -> Box(model) ===\n", .{});
-    const UpdateArgs = extern struct { boxed_model: Box, delta: i64 };
-    var update_args = UpdateArgs{ .boxed_model = boxed_model, .delta = 42 };
-    var updated_model: Box = undefined;
-    roc__update(&roc_ops, @as(*anyopaque, @ptrCast(&updated_model)), @as(*anyopaque, @ptrCast(&update_args)));
+    const updated_model = roc_update(boxed_model, 42);
     print("update returned new Box: 0x{x}\n", .{updated_model});
     print("\x1b[32mSUCCESS\x1b[0m: update completed!\n", .{});
     success_count += 1;
@@ -194,9 +247,8 @@ fn platform_main() void {
     // Simple(Model) is a tag union, so it has a discriminant + payload
     // Note: render calls Box.unbox which CONSUMES the input Box
     print("\n=== Test 3: render(Box(model)) -> Simple(Model) ===\n", .{});
-    // Use aligned buffer - Simple(Model) contains Str which requires pointer alignment
-    var render_result: [64]u8 align(@alignOf(usize)) = undefined;
-    roc__render(&roc_ops, @as(*anyopaque, @ptrCast(&render_result)), @as(*anyopaque, @ptrCast(&updated_model)));
+    const render_result = roc_render(updated_model);
+    _ = render_result;
     print("render completed without crash\n", .{});
     print("\x1b[32mSUCCESS\x1b[0m: render returned Simple(Model)!\n", .{});
     success_count += 1;
@@ -204,10 +256,9 @@ fn platform_main() void {
     // Test 4: init again to get a fresh Box, then render it
     // This tests that we can create and consume multiple Boxes
     print("\n=== Test 4: init + render (fresh Box) ===\n", .{});
-    var fresh_model: Box = undefined;
-    roc__init(&roc_ops, @as(*anyopaque, @ptrCast(&fresh_model)), @as(*anyopaque, @ptrCast(&empty_input)));
-    var final_result: [64]u8 align(@alignOf(usize)) = undefined;
-    roc__render(&roc_ops, @as(*anyopaque, @ptrCast(&final_result)), @as(*anyopaque, @ptrCast(&fresh_model)));
+    const fresh_model = roc_init();
+    const final_result = roc_render(fresh_model);
+    _ = final_result;
     print("render completed without crash\n", .{});
     print("\x1b[32mSUCCESS\x1b[0m: fresh init + render worked!\n", .{});
     success_count += 1;
@@ -220,15 +271,10 @@ fn platform_main() void {
 
     // Arguments struct must match Roc's sorted layout: I64 (8-byte alignment) before Bool (1-byte alignment)
     // Even though the Roc function signature is (Bool, I64), the memory layout is sorted by alignment.
-    const MixedArgs = extern struct { value: i64, flag: bool };
-    var mixed_args = MixedArgs{ .value = 12345, .flag = true };
+    const MixedArgs = struct { value: i64, flag: bool };
+    const mixed_args = MixedArgs{ .value = 12345, .flag = true };
 
-    // Result struct: (Bool, I64) tuple - laid out by Roc's tuple layout rules
-    // Since tuples are sorted by alignment, the layout is: I64 at offset 0, Bool at offset 8
-    const MixedResult = extern struct { value: i64, flag: bool };
-    var mixed_result: MixedResult = undefined;
-
-    roc__test_mixed_args(&roc_ops, @as(*anyopaque, @ptrCast(&mixed_result)), @as(*anyopaque, @ptrCast(&mixed_args)));
+    const mixed_result = roc_test_mixed_args(mixed_args.flag, mixed_args.value);
 
     // Verify the values came through correctly
     print("Input: flag={}, value={}\n", .{ mixed_args.flag, mixed_args.value });
@@ -258,18 +304,7 @@ fn platform_main() void {
     // Total size: 24 bytes
     print("\n=== Test 6: test_struct_arg(FrameInput) -> FrameInput (issue 8991 full test) ===\n", .{});
 
-    // FrameInput struct must match Roc's sorted record layout
-    const FrameInput = extern struct {
-        frame_count: u64, // U64, 8-byte alignment - first by alignment
-        mouse_wheel: f32, // F32, 4-byte alignment - first alphabetically among F32s
-        mouse_x: f32, // F32, 4-byte alignment
-        mouse_y: f32, // F32, 4-byte alignment
-        mouse_left: bool, // Bool, 1-byte alignment - first alphabetically among Bools
-        mouse_middle: bool, // Bool, 1-byte alignment
-        mouse_right: bool, // Bool, 1-byte alignment
-    };
-
-    var frame_input = FrameInput{
+    const frame_input = FrameInput{
         .frame_count = 123456789,
         .mouse_wheel = 0.5,
         .mouse_x = 100.25,
@@ -279,9 +314,7 @@ fn platform_main() void {
         .mouse_right = true,
     };
 
-    var frame_output: FrameInput = undefined;
-
-    roc__test_struct_arg(&roc_ops, @as(*anyopaque, @ptrCast(&frame_output)), @as(*anyopaque, @ptrCast(&frame_input)));
+    const frame_output = roc_test_struct_arg(frame_input);
 
     // Verify all field values came through correctly
     {
@@ -334,7 +367,7 @@ fn platform_main() void {
     print("\n=== Test 7: EFFECTFUL test_struct_arg!(FrameInput) -> FrameInput (issue 8991 effectful) ===\n", .{});
 
     // Use same input values as test 6
-    var effectful_frame_input = FrameInput{
+    const effectful_frame_input = FrameInput{
         .frame_count = 123456789,
         .mouse_wheel = 0.5,
         .mouse_x = 100.25,
@@ -344,9 +377,7 @@ fn platform_main() void {
         .mouse_right = true,
     };
 
-    var effectful_frame_output: FrameInput = undefined;
-
-    roc__test_effectful_struct_arg(&roc_ops, @as(*anyopaque, @ptrCast(&effectful_frame_output)), @as(*anyopaque, @ptrCast(&effectful_frame_input)));
+    const effectful_frame_output = roc_test_effectful_struct_arg(effectful_frame_input);
 
     {
         var b1: [32]u8 = undefined;
@@ -394,16 +425,10 @@ fn platform_main() void {
 
     // Test 8 & 9: Simple 2-field struct tests to isolate the issue
     // SimpleInput layout: number (U64) at offset 0, flag (Bool) at offset 8
-    const SimpleInput = extern struct {
-        number: u64, // U64, 8-byte alignment - first
-        flag: bool, // Bool, 1-byte alignment - second
-    };
-
     // Test 8: Pure function with SimpleInput
     print("\n=== Test 8: PURE test_simple_pure(SimpleInput) -> SimpleInput ===\n", .{});
-    var simple_pure_input = SimpleInput{ .number = 42, .flag = true };
-    var simple_pure_output: SimpleInput = undefined;
-    roc__test_simple_pure(&roc_ops, @as(*anyopaque, @ptrCast(&simple_pure_output)), @as(*anyopaque, @ptrCast(&simple_pure_input)));
+    const simple_pure_input = SimpleInput{ .number = 42, .flag = true };
+    const simple_pure_output = roc_test_simple_pure(simple_pure_input);
     print("Input:  number={}, flag={}\n", .{ simple_pure_input.number, simple_pure_input.flag });
     print("Output: number={}, flag={}\n", .{ simple_pure_output.number, simple_pure_output.flag });
     if (simple_pure_output.number == simple_pure_input.number and simple_pure_output.flag == simple_pure_input.flag) {
@@ -415,9 +440,8 @@ fn platform_main() void {
 
     // Test 9: Effectful function with SimpleInput
     print("\n=== Test 9: EFFECTFUL test_simple_effectful!(SimpleInput) -> SimpleInput ===\n", .{});
-    var simple_eff_input = SimpleInput{ .number = 42, .flag = true };
-    var simple_eff_output: SimpleInput = undefined;
-    roc__test_simple_effectful(&roc_ops, @as(*anyopaque, @ptrCast(&simple_eff_output)), @as(*anyopaque, @ptrCast(&simple_eff_input)));
+    const simple_eff_input = SimpleInput{ .number = 42, .flag = true };
+    const simple_eff_output = roc_test_simple_effectful(simple_eff_input);
     print("Input:  number={}, flag={}\n", .{ simple_eff_input.number, simple_eff_input.flag });
     print("Output: number={}, flag={}\n", .{ simple_eff_output.number, simple_eff_output.flag });
     if (simple_eff_output.number == simple_eff_input.number and simple_eff_output.flag == simple_eff_input.flag) {
@@ -429,17 +453,10 @@ fn platform_main() void {
 
     // Test 10 & 11: Three floats with same alignment to test alphabetical sorting
     // ThreeFloats layout: aaa (F32) at offset 0, bbb (F32) at offset 4, ccc (F32) at offset 8
-    const ThreeFloats = extern struct {
-        aaa: f32,
-        bbb: f32,
-        ccc: f32,
-    };
-
     // Test 10: Pure function with ThreeFloats
     print("\n=== Test 10: PURE test_three_floats_pure(ThreeFloats) -> ThreeFloats ===\n", .{});
-    var three_pure_input = ThreeFloats{ .aaa = 1.0, .bbb = 2.0, .ccc = 3.0 };
-    var three_pure_output: ThreeFloats = undefined;
-    roc__test_three_floats_pure(&roc_ops, @as(*anyopaque, @ptrCast(&three_pure_output)), @as(*anyopaque, @ptrCast(&three_pure_input)));
+    const three_pure_input = ThreeFloats{ .aaa = 1.0, .bbb = 2.0, .ccc = 3.0 };
+    const three_pure_output = roc_test_three_floats_pure(three_pure_input);
     {
         var b1: [32]u8 = undefined;
         var b2: [32]u8 = undefined;
@@ -459,9 +476,8 @@ fn platform_main() void {
 
     // Test 11: Effectful function with ThreeFloats
     print("\n=== Test 11: EFFECTFUL test_three_floats_effectful!(ThreeFloats) -> ThreeFloats ===\n", .{});
-    var three_eff_input = ThreeFloats{ .aaa = 1.0, .bbb = 2.0, .ccc = 3.0 };
-    var three_eff_output: ThreeFloats = undefined;
-    roc__test_three_floats_effectful(&roc_ops, @as(*anyopaque, @ptrCast(&three_eff_output)), @as(*anyopaque, @ptrCast(&three_eff_input)));
+    const three_eff_input = ThreeFloats{ .aaa = 1.0, .bbb = 2.0, .ccc = 3.0 };
+    const three_eff_output = roc_test_three_floats_effectful(three_eff_input);
     {
         var b1: [32]u8 = undefined;
         var b2: [32]u8 = undefined;

@@ -2145,6 +2145,8 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
 
     try self.reportPolymorphicTopLevelValues();
 
+    try self.checkPlatformHostedSection();
+
     // Two coordinated ambiguity sweeps share a `reported` set keyed by resolved
     // dispatcher var so a receiver caught per-instantiation is not also reported
     // by the def-site sweep. The per-instantiation sweep runs first because it
@@ -2868,6 +2870,157 @@ fn varsHaveUnresolvedStaticDispatchConstraints(
         if (try self.varHasUnresolvedStaticDispatchConstraints(var_, visited)) return true;
     }
     return false;
+}
+
+/// Validate a platform module's hosted section against the hosted functions
+/// its imported type modules declare: every hosted function must appear
+/// exactly once, every entry must name a real hosted function, linker symbols
+/// must be unique across the hosted and provides sections, and the fixed
+/// runtime symbols plus the internal roc__ namespace are reserved.
+///
+/// Applications never pay for this: it only runs for platform modules.
+fn checkPlatformHostedSection(self: *Self) std.mem.Allocator.Error!void {
+    if (self.cir.module_kind != .platform) return;
+
+    const section = self.cir.hosted_entries.items.items;
+
+    // Qualified names of every hosted function declared by imported modules,
+    // built the same way the hosted dispatch catalog builds its keys:
+    // "Module.func" with a trailing `!` stripped.
+    var declared = std.StringHashMap(void).init(self.gpa);
+    defer {
+        var key_it = declared.keyIterator();
+        while (key_it.next()) |key| self.gpa.free(key.*);
+        declared.deinit();
+    }
+    // Walk owner modules (direct imports plus their transitive public
+    // dependencies), since hosted functions can live in modules the platform
+    // root never imports directly. Within each module, walk global value defs,
+    // not all_defs: hosted functions declared as associated items of (possibly
+    // nested) type modules are hoisted into global_value_defs only, and the
+    // hosted dispatch catalog scans the same list.
+    for (self.owner_modules) |imported_env| {
+        const all_defs = imported_env.store.sliceDefs(imported_env.global_value_defs);
+        for (all_defs) |def_idx| {
+            const def = imported_env.store.getDef(def_idx);
+            const expr = imported_env.store.getExpr(def.expr);
+            if (expr != .e_hosted_lambda) continue;
+
+            var module_name = imported_env.module_name;
+            if (Ident.textEndsWith(module_name, ".roc")) {
+                module_name = module_name[0 .. module_name.len - 4];
+            }
+            var func_name = imported_env.getIdent(expr.e_hosted_lambda.symbol_name);
+            if (Ident.textEndsWith(func_name, "!")) {
+                func_name = func_name[0 .. func_name.len - 1];
+            }
+            const key = try std.fmt.allocPrint(self.gpa, "{s}.{s}", .{ module_name, func_name });
+            const gop = try declared.getOrPut(key);
+            if (gop.found_existing) self.gpa.free(key);
+        }
+    }
+
+    // Walk the section: resolve each entry, detect duplicate functions and
+    // duplicate/reserved symbols (provides symbols share the namespace).
+    var mapped = std.StringHashMap(void).init(self.gpa);
+    defer {
+        var key_it = mapped.keyIterator();
+        while (key_it.next()) |key| self.gpa.free(key.*);
+        mapped.deinit();
+    }
+    var symbols = std.StringHashMap(void).init(self.gpa);
+    defer symbols.deinit();
+    for (self.cir.provides_entries.items.items) |provides_entry| {
+        const symbol_text = self.cir.getString(provides_entry.ffi_symbol);
+        try self.checkHostSymbol(symbol_text, &symbols);
+    }
+
+    for (section) |entry| {
+        var func_name = self.cir.getIdent(entry.func_ident);
+        if (Ident.textEndsWith(func_name, "!")) {
+            func_name = func_name[0 .. func_name.len - 1];
+        }
+        const key = if (entry.module_ident) |module_ident|
+            try std.fmt.allocPrint(self.gpa, "{s}.{s}", .{ self.cir.getIdent(module_ident), func_name })
+        else
+            try self.gpa.dupe(u8, func_name);
+
+        if (!declared.contains(key)) {
+            const name_idx = try self.problems.putExtraString(key);
+            _ = try self.problems.appendProblem(self.gpa, .{ .platform_hosted_section = .{
+                .name = name_idx,
+                .reason = .unknown_function,
+            } });
+        }
+
+        const gop = try mapped.getOrPut(key);
+        if (gop.found_existing) {
+            const name_idx = try self.problems.putExtraString(key);
+            _ = try self.problems.appendProblem(self.gpa, .{ .platform_hosted_section = .{
+                .name = name_idx,
+                .reason = .duplicate_function,
+            } });
+            self.gpa.free(key);
+        }
+
+        const symbol_text = self.cir.getString(entry.symbol);
+        try self.checkHostSymbol(symbol_text, &symbols);
+    }
+
+    // Every declared hosted function needs exactly one section entry.
+    var declared_it = declared.keyIterator();
+    while (declared_it.next()) |key| {
+        if (mapped.contains(key.*)) continue;
+        const name_idx = try self.problems.putExtraString(key.*);
+        _ = try self.problems.appendProblem(self.gpa, .{ .platform_hosted_section = .{
+            .name = name_idx,
+            .reason = .function_not_in_section,
+        } });
+    }
+}
+
+/// The fixed runtime symbols every host defines; platform headers may not
+/// reuse them for provides or hosted entries.
+const reserved_host_symbols = [_][]const u8{
+    "roc_alloc",
+    "roc_dealloc",
+    "roc_realloc",
+    "roc_dbg",
+    "roc_expect_failed",
+    "roc_crashed",
+};
+
+fn checkHostSymbol(
+    self: *Self,
+    symbol_text: []const u8,
+    symbols: *std.StringHashMap(void),
+) std.mem.Allocator.Error!void {
+    for (reserved_host_symbols) |reserved| {
+        if (Ident.textEql(symbol_text, reserved)) {
+            const name_idx = try self.problems.putExtraString(symbol_text);
+            _ = try self.problems.appendProblem(self.gpa, .{ .platform_hosted_section = .{
+                .name = name_idx,
+                .reason = .reserved_symbol,
+            } });
+            return;
+        }
+    }
+    if (Ident.textStartsWith(symbol_text, "roc__")) {
+        const name_idx = try self.problems.putExtraString(symbol_text);
+        _ = try self.problems.appendProblem(self.gpa, .{ .platform_hosted_section = .{
+            .name = name_idx,
+            .reason = .reserved_prefix,
+        } });
+        return;
+    }
+    const gop = try symbols.getOrPut(symbol_text);
+    if (gop.found_existing) {
+        const name_idx = try self.problems.putExtraString(symbol_text);
+        _ = try self.problems.appendProblem(self.gpa, .{ .platform_hosted_section = .{
+            .name = name_idx,
+            .reason = .duplicate_symbol,
+        } });
+    }
 }
 
 /// Process the requires_types annotations for platform modules, like:
@@ -4826,8 +4979,9 @@ fn checkPatternHelp(
                     };
 
                     // Create flex var with from_numeral constraint
-                    const flex_var = try self.mkFlexWithFromNumeralConstraint(null, num_literal_info, env);
+                    const flex_var = try self.mkFlexWithFromNumeralConstraint(ModuleEnv.nodeIdxFrom(pattern_idx), num_literal_info, env);
                     _ = try self.unify(pattern_var, flex_var, env);
+                    try self.mkPatternLiteralEqConstraint(pattern_var, env, pattern_region);
                 },
                 // Phase 5: For explicitly typed literals, use nominal types from Builtin
                 .u8 => try self.unifyWith(pattern_var, try self.mkNumberTypeContent(.u8, env), env),
@@ -4866,8 +5020,9 @@ fn checkPatternHelp(
                     pattern_region,
                 );
 
-                const flex_var = try self.mkFlexWithFromNumeralConstraint(null, num_literal_info, env);
+                const flex_var = try self.mkFlexWithFromNumeralConstraint(ModuleEnv.nodeIdxFrom(pattern_idx), num_literal_info, env);
                 _ = try self.unify(pattern_var, flex_var, env);
+                try self.mkPatternLiteralEqConstraint(pattern_var, env, pattern_region);
             }
         },
         .small_dec_literal => |dec| {
@@ -4884,8 +5039,9 @@ fn checkPatternHelp(
                     pattern_region,
                 );
 
-                const flex_var = try self.mkFlexWithFromNumeralConstraint(null, num_literal_info, env);
+                const flex_var = try self.mkFlexWithFromNumeralConstraint(ModuleEnv.nodeIdxFrom(pattern_idx), num_literal_info, env);
                 _ = try self.unify(pattern_var, flex_var, env);
+                try self.mkPatternLiteralEqConstraint(pattern_var, env, pattern_region);
             }
         },
         .runtime_error => {
@@ -6598,6 +6754,12 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         .e_crash => {
             try self.unifyWith(expr_var, .{ .flex = Flex.init() }, env);
         },
+        .e_expect_err => |expect_err| {
+            // The Err payload is consumed at runtime when the enclosing expect
+            // fails; this expression itself never returns, so its type is free.
+            _ = try self.checkExpr(expect_err.expr, env, Expected.none());
+            try self.unifyWith(expr_var, .{ .flex = Flex.init() }, env);
+        },
         .e_dbg => |dbg| {
             // dbg evaluates its inner expression but returns {} (like expect)
             _ = try self.checkExpr(dbg.expr, env, Expected.none());
@@ -7221,6 +7383,7 @@ fn exprAlwaysCrashes(self: *const Self, expr_idx: CIR.Expr.Idx) bool {
     return switch (self.cir.store.getExpr(expr_idx)) {
         .e_crash,
         .e_ellipsis,
+        .e_expect_err,
         => true,
         .e_block => |block| self.exprAlwaysCrashes(block.final_expr),
         else => false,
@@ -8431,6 +8594,18 @@ fn getNominalOriginEnv(self: *Self, nominal_type: types_mod.NominalType) *const 
 
 /// Create a static dispatch fn like: `lhs, rhs -> ret` and assert the
 /// constraint to the lhs (receiver) var.
+/// Constrain a literal pattern's type to support equality, since matching the
+/// pattern compares the scrutinee against the literal's converted value.
+fn mkPatternLiteralEqConstraint(
+    self: *Self,
+    pattern_var: Var,
+    env: *Env,
+    region: Region,
+) Allocator.Error!void {
+    const ret_var = try self.freshBool(env, region);
+    try self.mkBinopConstraint(pattern_var, pattern_var, ret_var, self.cir.idents.is_eq, false, env, region, null);
+}
+
 fn mkBinopConstraint(
     self: *Self,
     lhs_var: Var,
