@@ -2545,6 +2545,9 @@ const BodyContext = struct {
     /// graph. Separate per context so re-instantiating a generic signature at
     /// another call site creates fresh nodes.
     node_map: std.AutoHashMap(CheckedTypeAddress, NodeId),
+    /// Innermost-last stack of nominal-instance instantiation scopes; see
+    /// instNominalBackingNode.
+    decl_scopes: std.ArrayList(*std.AutoHashMap(CheckedTypeAddress, NodeId)) = .empty,
     string_literals: []?Ast.StringLiteralId,
     loop_contexts: std.ArrayList(LoopContext),
     /// Literal sub-patterns on non-builtin number types collected while
@@ -2617,6 +2620,7 @@ const BodyContext = struct {
         self.pattern_literal_guards.deinit(self.allocator);
         self.loop_contexts.deinit(self.allocator);
         self.allocator.free(self.string_literals);
+        self.decl_scopes.deinit(self.allocator);
         self.node_map.deinit();
         self.local_proc_contexts.deinit();
         self.binders.deinit();
@@ -2732,12 +2736,29 @@ const BodyContext = struct {
             else => {},
         }
         const address = self.typeAddress(checked_ty);
-        if (self.node_map.get(address)) |existing| return existing;
+        if (self.scopedNode(address)) |existing| return existing;
         const placeholder = try self.graph.newNode(.{ .unresolved = .{} });
-        try self.node_map.put(address, placeholder);
+        try self.putScopedNode(address, placeholder);
         const built = try self.instNodeContent(checked_ty);
         try self.graph.unify(placeholder, built);
         return placeholder;
+    }
+
+    fn scopedNode(self: *BodyContext, address: CheckedTypeAddress) ?NodeId {
+        var index = self.decl_scopes.items.len;
+        while (index > 0) {
+            index -= 1;
+            if (self.decl_scopes.items[index].get(address)) |existing| return existing;
+        }
+        return self.node_map.get(address);
+    }
+
+    fn putScopedNode(self: *BodyContext, address: CheckedTypeAddress, node: NodeId) Allocator.Error!void {
+        if (self.decl_scopes.items.len != 0) {
+            try self.decl_scopes.items[self.decl_scopes.items.len - 1].put(address, node);
+            return;
+        }
+        try self.node_map.put(address, node);
     }
 
     fn instNodeSlice(self: *BodyContext, checked_tys: []const checked.CheckedTypeId) Allocator.Error![]NodeId {
@@ -2839,24 +2860,14 @@ const BodyContext = struct {
         }
 
         const args = try self.instNodeSlice(nominal.args);
-        // Declaration formals share their checked roots with every occurrence
-        // inside the backing template, so unifying each formal with the named
-        // argument instantiates the backing at the right types.
-        if (self.nominalInstantiationSource(nominal)) |source| {
-            if (source.declaration.formal_args.len != args.len) {
-                Common.invariant("checked nominal declaration arity differed from nominal type use");
-            }
-            for (source.declaration.formal_args, args) |formal, arg| {
-                try self.graph.unify(try self.instNode(self.checkedTypeInCurrentView(source.view, formal)), arg);
-            }
-        }
-        const backing: ?InstBacking = switch (nominal.representation) {
+        const backing_node: ?NodeId = switch (nominal.representation) {
             .opaque_without_backing => null,
-            else => .{
-                .node = try self.instNode(self.nominalBackingRoot(nominal)),
-                .use = if (nominal.is_opaque) .runtime_layout_only else .inspectable,
-            },
+            else => try self.instNominalBackingNode(nominal, args),
         };
+        const backing: ?InstBacking = if (backing_node) |node| .{
+            .node = node,
+            .use = if (nominal.is_opaque) .runtime_layout_only else .inspectable,
+        } else null;
         return try self.graph.newNode(.{ .named = .{
             .named_type = .{ .module = self.builder.declaredModuleForNominal(self.view, nominal), .ty = checked_ty },
             .def = try self.builder.typeDef(self.view, nominal.origin_module, nominal.name, nominal.source_decl),
@@ -2865,6 +2876,32 @@ const BodyContext = struct {
             .args = args,
             .backing = backing,
         } });
+    }
+
+    /// Instantiate a nominal instance's backing. A local declaration's
+    /// formals and backing share one set of checked roots across every
+    /// instance of the nominal, so the backing instantiates inside a fresh
+    /// scope seeded with this instance's argument nodes: two instances of the
+    /// same nominal at different arguments stay independent, and the
+    /// recursive uses inside the backing resolve through the scope chain.
+    fn instNominalBackingNode(
+        self: *BodyContext,
+        nominal: checked.CheckedNominalType,
+        args: []NodeId,
+    ) Allocator.Error!NodeId {
+        const source = self.nominalInstantiationSource(nominal) orelse
+            return try self.instNode(self.nominalBackingRoot(nominal));
+        if (source.declaration.formal_args.len != args.len) {
+            Common.invariant("checked nominal declaration arity differed from nominal type use");
+        }
+        var scope = std.AutoHashMap(CheckedTypeAddress, NodeId).init(self.allocator);
+        defer scope.deinit();
+        for (source.declaration.formal_args, args) |formal, arg| {
+            try scope.put(self.typeAddress(self.checkedTypeInCurrentView(source.view, formal)), arg);
+        }
+        try self.decl_scopes.append(self.allocator, &scope);
+        defer _ = self.decl_scopes.pop();
+        return try self.instNode(self.nominalBackingRoot(nominal));
     }
 
     const NominalInstantiationSource = struct {
