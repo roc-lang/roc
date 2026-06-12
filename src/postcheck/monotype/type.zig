@@ -231,6 +231,15 @@ pub const Store = struct {
                 writeBytes(hasher, @tagName(primitive));
             },
             .named => |named| {
+                // Aliases are transparent: their digest is their backing's.
+                if (named.kind == .alias) {
+                    const backing = named.backing orelse {
+                        writeBytes(hasher, "alias-without-backing");
+                        return;
+                    };
+                    self.writeTypeDigest(name_store, hasher, backing.ty, visiting);
+                    return;
+                }
                 writeBytes(hasher, "named");
                 hasher.update(&named.named_type.module.bytes);
                 writeBytes(hasher, name_store.moduleNameText(named.def.module_name));

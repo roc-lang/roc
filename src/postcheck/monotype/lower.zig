@@ -1050,10 +1050,9 @@ const InstGraph = struct {
             .tag_union => |tags| blk: {
                 const span = types.tagSpan(tags);
                 // An empty tag union in a finished Monotype records a slot no
-                // value reached: either genuinely uninhabited or an unresolved
-                // variable that was defaulted at materialization. Either way,
-                // concrete evidence in this specialization supersedes it, so it
-                // imports as an unresolved node rather than as a closed row.
+                // value reached: either genuinely uninhabited or a variable
+                // defaulted at materialization. Local evidence supersedes it,
+                // so it imports as an unresolved node rather than a closed row.
                 if (span.len == 0) break :blk .{ .unresolved = .{ .row_default = .empty_tag_union } };
                 const inst_tags = try self.arena().alloc(InstTag, span.len);
                 for (span, 0..) |tag, index| {
@@ -1236,6 +1235,10 @@ const Builder = struct {
     program: *Ast.Program,
     symbols: Common.SymbolGen = .{},
     type_cache: std.AutoHashMap(CheckedTypeAddress, Type.TypeId),
+    /// Monotypes owned by the builder-global type cache. They are lowered
+    /// without body evidence, so empty tag unions inside them are unresolved
+    /// slots rather than solved uninhabited types.
+    unsolved_monos: std.AutoHashMap(Type.TypeId, void),
     lowered_templates: std.AutoHashMap(TemplateFamily, std.ArrayList(LoweredTemplate)),
     lowered_nested_fns: std.AutoHashMap(NestedFnFamily, std.ArrayList(LoweredNestedFn)),
     nested_site_cache: std.AutoHashMap(NestedSiteAddress, names.ProcSiteId),
@@ -1258,6 +1261,7 @@ const Builder = struct {
             .root_view = checked.importedView(modules.root.module),
             .program = program,
             .type_cache = std.AutoHashMap(CheckedTypeAddress, Type.TypeId).init(allocator),
+            .unsolved_monos = std.AutoHashMap(Type.TypeId, void).init(allocator),
             .lowered_templates = std.AutoHashMap(TemplateFamily, std.ArrayList(LoweredTemplate)).init(allocator),
             .lowered_nested_fns = std.AutoHashMap(NestedFnFamily, std.ArrayList(LoweredNestedFn)).init(allocator),
             .nested_site_cache = std.AutoHashMap(NestedSiteAddress, names.ProcSiteId).init(allocator),
@@ -1282,6 +1286,7 @@ const Builder = struct {
             list.deinit(self.allocator);
         }
         self.lowered_templates.deinit();
+        self.unsolved_monos.deinit();
         self.type_cache.deinit();
     }
 
@@ -1760,8 +1765,8 @@ const Builder = struct {
                     view.types.rootKey(source_fn_ty),
                     mono_fn_ty,
                 );
-                try self.lowerFnTemplateDef(view, fn_template);
-                break :blk try self.program.addExpr(.{ .ty = mono_fn_ty, .data = .{ .fn_def = fn_template } });
+                const lowered_template = try self.lowerFnTemplateDef(view, fn_template);
+                break :blk try self.program.addExpr(.{ .ty = lowered_template.mono_fn_ty, .data = .{ .fn_def = lowered_template } });
             },
             .callable_eval_template => |template_id| try self.lowerCallableEvalBindingValue(view, template_id, mono_fn_ty),
         };
@@ -1927,12 +1932,34 @@ const Builder = struct {
 
         // The requested function type is a finished snapshot; the body lowers
         // at this specialization's own view of the root so later evidence
-        // (nominal wrappers, refined slots) reaches every body type.
+        // (nominal wrappers, refined slots) reaches every body type. The
+        // definition records that view too: for deferred requests the two are
+        // structurally identical, and for root requests, whose types come from
+        // the builder-global cache without body evidence, the body's view is
+        // the solved one.
         const live_fn_ty = try graph.monoFor(try body_ctx.instNode(template.checked_fn_root));
         const lowered = try body_ctx.lowerTemplateBody(template_ref, template, live_fn_ty);
+        // The definition records the body's solved view of the root type.
+        // Deferred call sites embed the requested type, which digests
+        // identically because digests are alias-transparent and a solved
+        // requester determines every interface slot; root-class call sites
+        // adopt this recorded template directly.
+        var def_template = fn_template;
+        def_template.mono_fn_ty = live_fn_ty;
+        // The body may have refined slots the request left unresolved (empty
+        // tag unions). Flow the solved view back into the requester's Monotype
+        // so call sites embedding the requested id digest identically to this
+        // definition.
+        if (requester) |requester_graph| {
+            try requester_graph.unify(
+                try requester_graph.importMono(fn_ty),
+                try requester_graph.importMono(live_fn_ty),
+            );
+            try requester_graph.drainDirty();
+        }
         self.program.defs.items[@intFromEnum(reserved)] = .{
             .symbol = symbol,
-            .fn_def = fn_template,
+            .fn_def = def_template,
             .args = lowered.args,
             .body = .{ .roc = lowered.body },
             .ret = lowered.ret,
@@ -2037,6 +2064,7 @@ const Builder = struct {
 
         const reserved = try self.program.types.add(.zst);
         try self.type_cache.put(address, reserved);
+        try self.unsolved_monos.put(reserved, {});
         const lowered = try self.lowerTypePayload(view, checked_ty, view.types.payloads[raw]);
         self.program.types.types.items[@intFromEnum(reserved)] = lowered;
         return reserved;
@@ -2502,11 +2530,16 @@ const Builder = struct {
                 break :blk self.fnDefForProcedureBindingBody(app_view, binding.body, binding_source, app_view.types.rootKey(binding_source), mono_fn_ty);
             },
         };
-        try self.lowerFnTemplateDef(source_ty_view, fn_template);
-        return fn_template;
+        return try self.lowerFnTemplateDef(source_ty_view, fn_template);
     }
 
-    fn lowerFnTemplateDef(self: *Builder, source_ty_view: ModuleView, fn_template: Ast.FnTemplate) Allocator.Error!void {
+    /// Lower (or defer) a procedure template body and return the template the
+    /// call site should embed. Inside a specialization the request defers and
+    /// the requester's types agree with the body by construction. Outside one
+    /// (root and wrapper paths, whose types come from the builder-global cache
+    /// without body evidence), the body lowers now and the call site embeds
+    /// the definition's recorded template so both share the solved type.
+    fn lowerFnTemplateDef(self: *Builder, source_ty_view: ModuleView, fn_template: Ast.FnTemplate) Allocator.Error!Ast.FnTemplate {
         const template_ref = switch (fn_template.fn_def) {
             .local_template,
             .imported_template,
@@ -2515,24 +2548,31 @@ const Builder = struct {
             .local_hosted,
             .imported_hosted,
             => |hosted| hosted.template,
-            .nested => return,
+            .nested => return fn_template,
         };
-        if (self.active_graph) |graph| {
-            try graph.deferred_templates.append(self.allocator, .{
-                .template_ref = template_ref,
-                .view = source_ty_view,
-                .source_fn_ty = fn_template.source_fn_ty,
-                .source_fn_key = fn_template.source_fn_key,
-                .fn_ty = fn_template.mono_fn_ty,
-            });
-            return;
+        // Deferral exists so a requester's solved types key the request; a
+        // request typed by an unsolved builder-global Monotype gains nothing
+        // from waiting and its call site must embed the definition's solved
+        // template instead.
+        if (!self.unsolved_monos.contains(fn_template.mono_fn_ty)) {
+            if (self.active_graph) |graph| {
+                try graph.deferred_templates.append(self.allocator, .{
+                    .template_ref = template_ref,
+                    .view = source_ty_view,
+                    .source_fn_ty = fn_template.source_fn_ty,
+                    .source_fn_key = fn_template.source_fn_key,
+                    .fn_ty = fn_template.mono_fn_ty,
+                });
+                return fn_template;
+            }
         }
-        _ = try self.lowerTemplateWithMono(template_ref, source_ty_view, fn_template.source_fn_ty, fn_template.source_fn_key, fn_template.mono_fn_ty);
+        const def = try self.lowerTemplateWithMono(template_ref, source_ty_view, fn_template.source_fn_ty, fn_template.source_fn_key, fn_template.mono_fn_ty);
+        return self.program.defs.items[@intFromEnum(def)].fn_def orelse fn_template;
     }
 
-    fn lowerRestoredConstFnTemplate(self: *Builder, type_view: ModuleView, fn_template: Ast.FnTemplate) Allocator.Error!void {
+    fn lowerRestoredConstFnTemplate(self: *Builder, type_view: ModuleView, fn_template: Ast.FnTemplate) Allocator.Error!Ast.FnTemplate {
         switch (fn_template.fn_def) {
-            .nested => blk: {
+            .nested => {
                 const fn_view = self.moduleForConstFnDef(fn_template.fn_def);
                 const graph = try InstGraph.create(self.allocator, self);
                 defer graph.destroy();
@@ -2543,9 +2583,9 @@ const Builder = struct {
                 defer fn_ctx.deinit();
                 try self.lowerNestedFnFromContext(&fn_ctx, checkedLambdaExprIdForConstFn(fn_view, fn_template.fn_def), fn_template);
                 try self.drainSpecRequests(graph);
-                break :blk;
+                return fn_template;
             },
-            else => try self.lowerFnTemplateDef(type_view, fn_template),
+            else => return try self.lowerFnTemplateDef(type_view, fn_template),
         }
     }
 
@@ -2747,8 +2787,8 @@ const Builder = struct {
         const fn_value = store_view.const_store.fns.items[raw];
         const template = try self.constFnTemplateToMono(fn_value, ty);
         if (fn_value.captures.len == 0) {
-            try self.lowerRestoredConstFnTemplate(type_view, template);
-            return try self.program.addExpr(.{ .ty = ty, .data = .{ .fn_def = template } });
+            const lowered_template = try self.lowerRestoredConstFnTemplate(type_view, template);
+            return try self.program.addExpr(.{ .ty = lowered_template.mono_fn_ty, .data = .{ .fn_def = lowered_template } });
         }
 
         const fn_view = self.moduleForConstFnDef(fn_value.fn_def);
