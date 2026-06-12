@@ -27,6 +27,7 @@ pub const applyRelocations = relocation_mod.applyRelocations;
 pub const SymbolResolver = relocation_mod.SymbolResolver;
 pub const ValueStorage = @import("ValueStorage.zig");
 pub const ObjectWriter = @import("ObjectWriter.zig");
+pub const Dwarf = @import("Dwarf.zig");
 
 /// Executable memory for running generated code. Uses OS-specific APIs not available on freestanding.
 pub const ExecutableMemory = if (builtin.os.tag == .freestanding)

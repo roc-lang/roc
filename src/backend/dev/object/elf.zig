@@ -46,6 +46,7 @@ const ELF = struct {
     const STT_NOTYPE = 0;
     const STT_OBJECT = 1;
     const STT_FUNC = 2;
+    const STT_SECTION = 3;
 
     // Special section indices
     const SHN_UNDEF = 0;
@@ -162,6 +163,13 @@ pub const ElfWriter = struct {
     text_relocs: std.ArrayList(TextReloc),
     rodata_relocs: std.ArrayList(TextReloc),
 
+    // DWARF debug sections plus their text-relative address relocations.
+    debug_line: std.ArrayList(u8),
+    debug_abbrev: std.ArrayList(u8),
+    debug_info: std.ArrayList(u8),
+    debug_line_relocs: std.ArrayList(DebugReloc),
+    debug_info_relocs: std.ArrayList(DebugReloc),
+
     // String tables
     strtab: std.ArrayList(u8),
     shstrtab: std.ArrayList(u8),
@@ -170,6 +178,13 @@ pub const ElfWriter = struct {
         offset: u64, // Offset in .text where relocation applies
         symbol_idx: u32, // Index into symbol table
         reloc_type: u32, // Architecture-specific relocation type
+        addend: i64,
+    };
+
+    const DebugReloc = struct {
+        /// Offset of the 8-byte address field within its debug section.
+        offset: u64,
+        /// Offset from the start of the text section.
         addend: i64,
     };
 
@@ -188,6 +203,11 @@ pub const ElfWriter = struct {
             .symbols = .empty,
             .text_relocs = .empty,
             .rodata_relocs = .empty,
+            .debug_line = .empty,
+            .debug_abbrev = .empty,
+            .debug_info = .empty,
+            .debug_line_relocs = .empty,
+            .debug_info_relocs = .empty,
             .strtab = .empty,
             .shstrtab = .empty,
         };
@@ -206,6 +226,11 @@ pub const ElfWriter = struct {
         self.symbols.deinit(self.allocator);
         self.text_relocs.deinit(self.allocator);
         self.rodata_relocs.deinit(self.allocator);
+        self.debug_line.deinit(self.allocator);
+        self.debug_abbrev.deinit(self.allocator);
+        self.debug_info.deinit(self.allocator);
+        self.debug_line_relocs.deinit(self.allocator);
+        self.debug_info_relocs.deinit(self.allocator);
         self.strtab.deinit(self.allocator);
         self.shstrtab.deinit(self.allocator);
     }
@@ -220,6 +245,33 @@ pub const ElfWriter = struct {
     pub fn setRodata(self: *Self, rodata: []const u8) Allocator.Error!void {
         self.rodata.clearRetainingCapacity();
         try self.rodata.appendSlice(self.allocator, rodata);
+    }
+
+    /// Set the DWARF debug section contents. Relocation addends are offsets
+    /// from the start of the text section; each relocated field is 8 bytes.
+    pub fn setDebugSections(
+        self: *Self,
+        debug_line: []const u8,
+        debug_abbrev: []const u8,
+        debug_info: []const u8,
+        line_relocs: []const @import("mod.zig").DebugReloc,
+        info_relocs: []const @import("mod.zig").DebugReloc,
+    ) Allocator.Error!void {
+        try self.debug_line.appendSlice(self.allocator, debug_line);
+        try self.debug_abbrev.appendSlice(self.allocator, debug_abbrev);
+        try self.debug_info.appendSlice(self.allocator, debug_info);
+        for (line_relocs) |rel| {
+            try self.debug_line_relocs.append(self.allocator, .{
+                .offset = rel.section_offset,
+                .addend = @intCast(rel.addend),
+            });
+        }
+        for (info_relocs) |rel| {
+            try self.debug_info_relocs.append(self.allocator, .{
+                .offset = rel.section_offset,
+                .addend = @intCast(rel.addend),
+            });
+        }
     }
 
     /// Allocate space in the rodata section for a constant value.
@@ -345,7 +397,9 @@ pub const ElfWriter = struct {
         const SHIDX_SYMTAB = 5;
         const SHIDX_STRTAB = 6;
         const SHIDX_SHSTRTAB = 7;
-        const NUM_SECTIONS = 8;
+        const SHIDX_DEBUG_LINE = 8;
+        const SHIDX_DEBUG_INFO = 10;
+        const NUM_SECTIONS = 13;
 
         // Add section names to shstrtab
         const shname_text = try self.addString(&self.shstrtab, ".text");
@@ -355,6 +409,11 @@ pub const ElfWriter = struct {
         const shname_symtab = try self.addString(&self.shstrtab, ".symtab");
         const shname_strtab = try self.addString(&self.shstrtab, ".strtab");
         const shname_shstrtab = try self.addString(&self.shstrtab, ".shstrtab");
+        const shname_debug_line = try self.addString(&self.shstrtab, ".debug_line");
+        const shname_debug_abbrev = try self.addString(&self.shstrtab, ".debug_abbrev");
+        const shname_debug_info = try self.addString(&self.shstrtab, ".debug_info");
+        const shname_rela_debug_line = try self.addString(&self.shstrtab, ".rela.debug_line");
+        const shname_rela_debug_info = try self.addString(&self.shstrtab, ".rela.debug_info");
 
         // Build symbol table
         var symtab: std.ArrayList(u8) = .empty;
@@ -363,8 +422,20 @@ pub const ElfWriter = struct {
         // First symbol is always null
         try symtab.appendSlice(self.allocator, &std.mem.zeroes([24]u8));
 
+        // Section symbol for .text (index 1), used by debug relocations.
+        const text_section_sym = Elf64_Sym{
+            .st_name = 0,
+            .st_info = (ELF.STB_LOCAL << 4) | ELF.STT_SECTION,
+            .st_other = 0,
+            .st_shndx = SHIDX_TEXT,
+            .st_value = 0,
+            .st_size = 0,
+        };
+        try symtab.appendSlice(self.allocator, std.mem.asBytes(&text_section_sym));
+        const TEXT_SECTION_SYM_IDX: u64 = 1;
+
         // Count local symbols (for sh_info)
-        var num_locals: u32 = 1; // Start at 1 for null symbol
+        var num_locals: u32 = 2; // Null symbol plus the .text section symbol
 
         // Add symbols
         for (self.symbols.items) |sym| {
@@ -405,8 +476,8 @@ pub const ElfWriter = struct {
         defer rela_text.deinit(self.allocator);
 
         for (self.text_relocs.items) |rel| {
-            // Symbol index is +1 because of null symbol at index 0
-            const r_info: u64 = (@as(u64, rel.symbol_idx + 1) << 32) | rel.reloc_type;
+            // Symbol index is +2: null symbol plus the .text section symbol
+            const r_info: u64 = (@as(u64, rel.symbol_idx + 2) << 32) | rel.reloc_type;
 
             const elf_rela = Elf64_Rela{
                 .r_offset = rel.offset,
@@ -421,8 +492,8 @@ pub const ElfWriter = struct {
         defer rela_rodata.deinit(self.allocator);
 
         for (self.rodata_relocs.items) |rel| {
-            // Symbol index is +1 because of null symbol at index 0
-            const r_info: u64 = (@as(u64, rel.symbol_idx + 1) << 32) | rel.reloc_type;
+            // Symbol index is +2: null symbol plus the .text section symbol
+            const r_info: u64 = (@as(u64, rel.symbol_idx + 2) << 32) | rel.reloc_type;
 
             const elf_rela = Elf64_Rela{
                 .r_offset = rel.offset,
@@ -431,6 +502,31 @@ pub const ElfWriter = struct {
             };
 
             try rela_rodata.appendSlice(self.allocator, std.mem.asBytes(&elf_rela));
+        }
+
+        const abs64_reloc_type: u32 = switch (self.arch) {
+            .x86_64 => ELF.R_X86_64_64,
+            .aarch64 => ELF.R_AARCH64_ABS64,
+        };
+        var rela_debug_line: std.ArrayList(u8) = .empty;
+        defer rela_debug_line.deinit(self.allocator);
+        for (self.debug_line_relocs.items) |rel| {
+            const elf_rela = Elf64_Rela{
+                .r_offset = rel.offset,
+                .r_info = (TEXT_SECTION_SYM_IDX << 32) | abs64_reloc_type,
+                .r_addend = rel.addend,
+            };
+            try rela_debug_line.appendSlice(self.allocator, std.mem.asBytes(&elf_rela));
+        }
+        var rela_debug_info: std.ArrayList(u8) = .empty;
+        defer rela_debug_info.deinit(self.allocator);
+        for (self.debug_info_relocs.items) |rel| {
+            const elf_rela = Elf64_Rela{
+                .r_offset = rel.offset,
+                .r_info = (TEXT_SECTION_SYM_IDX << 32) | abs64_reloc_type,
+                .r_addend = rel.addend,
+            };
+            try rela_debug_info.appendSlice(self.allocator, std.mem.asBytes(&elf_rela));
         }
 
         // Calculate offsets
@@ -460,6 +556,17 @@ pub const ElfWriter = struct {
 
         const shstrtab_offset = offset;
         offset = shstrtab_offset + self.shstrtab.items.len;
+
+        const debug_line_offset = offset;
+        offset = debug_line_offset + self.debug_line.items.len;
+        const debug_abbrev_offset = offset;
+        offset = debug_abbrev_offset + self.debug_abbrev.items.len;
+        const debug_info_offset = offset;
+        offset = debug_info_offset + self.debug_info.items.len;
+        const rela_debug_line_offset = alignUp(offset, 8);
+        offset = rela_debug_line_offset + rela_debug_line.items.len;
+        const rela_debug_info_offset = alignUp(offset, 8);
+        offset = rela_debug_info_offset + rela_debug_info.items.len;
 
         const shdr_offset = alignUp(offset, 8);
 
@@ -514,6 +621,15 @@ pub const ElfWriter = struct {
 
         // shstrtab
         try output.appendSlice(self.allocator, self.shstrtab.items);
+
+        // Debug sections
+        try output.appendSlice(self.allocator, self.debug_line.items);
+        try output.appendSlice(self.allocator, self.debug_abbrev.items);
+        try output.appendSlice(self.allocator, self.debug_info.items);
+        try self.padTo(output, rela_debug_line_offset);
+        try output.appendSlice(self.allocator, rela_debug_line.items);
+        try self.padTo(output, rela_debug_info_offset);
+        try output.appendSlice(self.allocator, rela_debug_info.items);
 
         // Pad to section headers
         try self.padTo(output, shdr_offset);
@@ -626,6 +742,81 @@ pub const ElfWriter = struct {
             .sh_entsize = 0,
         };
         try output.appendSlice(self.allocator, std.mem.asBytes(&shdr_shstrtab));
+
+        // 8: .debug_line
+        const shdr_debug_line = Elf64_Shdr{
+            .sh_name = shname_debug_line,
+            .sh_type = ELF.SHT_PROGBITS,
+            .sh_flags = 0,
+            .sh_addr = 0,
+            .sh_offset = debug_line_offset,
+            .sh_size = self.debug_line.items.len,
+            .sh_link = 0,
+            .sh_info = 0,
+            .sh_addralign = 1,
+            .sh_entsize = 0,
+        };
+        try output.appendSlice(self.allocator, std.mem.asBytes(&shdr_debug_line));
+
+        // 9: .debug_abbrev
+        const shdr_debug_abbrev = Elf64_Shdr{
+            .sh_name = shname_debug_abbrev,
+            .sh_type = ELF.SHT_PROGBITS,
+            .sh_flags = 0,
+            .sh_addr = 0,
+            .sh_offset = debug_abbrev_offset,
+            .sh_size = self.debug_abbrev.items.len,
+            .sh_link = 0,
+            .sh_info = 0,
+            .sh_addralign = 1,
+            .sh_entsize = 0,
+        };
+        try output.appendSlice(self.allocator, std.mem.asBytes(&shdr_debug_abbrev));
+
+        // 10: .debug_info
+        const shdr_debug_info = Elf64_Shdr{
+            .sh_name = shname_debug_info,
+            .sh_type = ELF.SHT_PROGBITS,
+            .sh_flags = 0,
+            .sh_addr = 0,
+            .sh_offset = debug_info_offset,
+            .sh_size = self.debug_info.items.len,
+            .sh_link = 0,
+            .sh_info = 0,
+            .sh_addralign = 1,
+            .sh_entsize = 0,
+        };
+        try output.appendSlice(self.allocator, std.mem.asBytes(&shdr_debug_info));
+
+        // 11: .rela.debug_line
+        const shdr_rela_debug_line = Elf64_Shdr{
+            .sh_name = shname_rela_debug_line,
+            .sh_type = ELF.SHT_RELA,
+            .sh_flags = ELF.SHF_INFO_LINK,
+            .sh_addr = 0,
+            .sh_offset = rela_debug_line_offset,
+            .sh_size = rela_debug_line.items.len,
+            .sh_link = SHIDX_SYMTAB,
+            .sh_info = SHIDX_DEBUG_LINE,
+            .sh_addralign = 8,
+            .sh_entsize = @sizeOf(Elf64_Rela),
+        };
+        try output.appendSlice(self.allocator, std.mem.asBytes(&shdr_rela_debug_line));
+
+        // 12: .rela.debug_info
+        const shdr_rela_debug_info = Elf64_Shdr{
+            .sh_name = shname_rela_debug_info,
+            .sh_type = ELF.SHT_RELA,
+            .sh_flags = ELF.SHF_INFO_LINK,
+            .sh_addr = 0,
+            .sh_offset = rela_debug_info_offset,
+            .sh_size = rela_debug_info.items.len,
+            .sh_link = SHIDX_SYMTAB,
+            .sh_info = SHIDX_DEBUG_INFO,
+            .sh_addralign = 8,
+            .sh_entsize = @sizeOf(Elf64_Rela),
+        };
+        try output.appendSlice(self.allocator, std.mem.asBytes(&shdr_rela_debug_info));
     }
 
     fn padTo(self: *Self, output: *std.ArrayList(u8), target: u64) Allocator.Error!void {
