@@ -2667,7 +2667,10 @@ const Builder = struct {
         const nested_ctx = try self.allocator.create(BodyContext);
         errdefer self.allocator.destroy(nested_ctx);
         nested_ctx.* = try source_ctx.nestedInstantiationContext(Ast.fnTemplateDigest(fn_template, &self.program.types, &self.program.names));
-        try source_ctx.graph.deferred_nested.append(self.allocator, .{
+        // Nested functions share the requester's graph, and an inferred local
+        // procedure's body pins signature variables (its own evidence) that
+        // the requester's remaining body relies on, so the body lowers now.
+        try self.lowerDeferredNestedFn(.{
             .ctx = nested_ctx,
             .expr_id = expr_id,
             .fn_template = fn_template,
