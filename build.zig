@@ -4425,6 +4425,8 @@ pub fn build(b: *std.Build) void {
             target,
             optimize,
             roc_modules,
+            compiled_builtins_module,
+            write_compiled_builtins,
             flag_enable_tracy,
             name,
         );
@@ -4461,6 +4463,8 @@ fn add_fuzz_target(
     target: ResolvedTarget,
     optimize: OptimizeMode,
     roc_modules: modules.RocModules,
+    compiled_builtins_module: *std.Build.Module,
+    write_compiled_builtins: *Step.WriteFile,
     tracy: ?[]const u8,
     name: []const u8,
 ) void {
@@ -4486,6 +4490,8 @@ fn add_fuzz_target(
     }
 
     roc_modules.addAll(fuzz_obj);
+    fuzz_obj.root_module.addImport("compiled_builtins", compiled_builtins_module);
+    fuzz_obj.step.dependOn(&write_compiled_builtins.step);
     add_tracy(b, roc_modules.build_options, fuzz_obj, target, false, tracy);
 
     const name_exe = b.fmt("fuzz-{s}", .{name});
