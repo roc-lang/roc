@@ -119,224 +119,193 @@ fn collectExprDependencies(
     dependencies: *std.AutoHashMapUnmanaged(base.Ident.Idx, void),
     allocator: std.mem.Allocator,
 ) std.mem.Allocator.Error!void {
-    const expr = cir.store.getExpr(expr_idx);
+    var stack_allocator_state = std.heap.stackFallback(4096, allocator);
+    const stack_allocator = stack_allocator_state.get();
+    var pending: std.ArrayList(CIR.Expr.Idx) = .empty;
+    defer pending.deinit(stack_allocator);
 
-    switch (expr) {
-        .e_lookup_local => |lookup| {
-            // This is a variable reference - add to dependencies
-            const pattern = cir.store.getPattern(lookup.pattern_idx);
-            if (pattern == .assign) {
-                try dependencies.put(allocator, pattern.assign.ident, {});
-            }
-        },
-
-        .e_call => |call| {
-            // Recurse into function and arguments
-            try collectExprDependencies(cir, call.func, dependencies, allocator);
-            for (cir.store.sliceExpr(call.args)) |arg_idx| {
-                try collectExprDependencies(cir, arg_idx, dependencies, allocator);
-            }
-        },
-
-        .e_lambda => |lambda| {
-            // Recurse into lambda body
-            // Note: Lambda parameters are collected here but filtered out later in buildDependencyGraph()
-            // when converting idents to def indices (they won't be in the ident_to_def map)
-            try collectExprDependencies(cir, lambda.body, dependencies, allocator);
-        },
-
-        .e_closure => |closure| {
-            // Recurse into the lambda expression
-            try collectExprDependencies(cir, closure.lambda_idx, dependencies, allocator);
-        },
-
-        .e_if => |if_expr| {
-            for (cir.store.sliceIfBranches(if_expr.branches)) |branch_idx| {
-                const branch = cir.store.getIfBranch(branch_idx);
-                try collectExprDependencies(cir, branch.cond, dependencies, allocator);
-                try collectExprDependencies(cir, branch.body, dependencies, allocator);
-            }
-            try collectExprDependencies(cir, if_expr.final_else, dependencies, allocator);
-        },
-
-        .e_match => |match_expr| {
-            try collectExprDependencies(cir, match_expr.cond, dependencies, allocator);
-            for (cir.store.sliceMatchBranches(match_expr.branches)) |branch_idx| {
-                const branch = cir.store.getMatchBranch(branch_idx);
-                try collectExprDependencies(cir, branch.value, dependencies, allocator);
-                if (branch.guard) |guard_idx| {
-                    try collectExprDependencies(cir, guard_idx, dependencies, allocator);
+    try pending.append(stack_allocator, expr_idx);
+    while (pending.pop()) |current_idx| {
+        const expr = cir.store.getExpr(current_idx);
+        switch (expr) {
+            .e_lookup_local => |lookup| {
+                const pattern = cir.store.getPattern(lookup.pattern_idx);
+                if (pattern == .assign) {
+                    try dependencies.put(allocator, pattern.assign.ident, {});
                 }
-            }
-        },
-
-        .e_list => |list| {
-            for (cir.store.sliceExpr(list.elems)) |elem_idx| {
-                try collectExprDependencies(cir, elem_idx, dependencies, allocator);
-            }
-        },
-
-        .e_record => |record| {
-            for (cir.store.sliceRecordFields(record.fields)) |field_idx| {
-                const field = cir.store.getRecordField(field_idx);
-                try collectExprDependencies(cir, field.value, dependencies, allocator);
-            }
-            // Handle record update syntax: { ..base, field: value }
-            if (record.ext) |ext_idx| {
-                try collectExprDependencies(cir, ext_idx, dependencies, allocator);
-            }
-        },
-
-        .e_field_access => |access| {
-            try collectExprDependencies(cir, access.receiver, dependencies, allocator);
-        },
-
-        .e_method_call => |call| {
-            try collectExprDependencies(cir, call.receiver, dependencies, allocator);
-            for (cir.store.sliceExpr(call.args)) |arg_idx| {
-                try collectExprDependencies(cir, arg_idx, dependencies, allocator);
-            }
-        },
-        .e_dispatch_call => |call| {
-            try collectExprDependencies(cir, call.receiver, dependencies, allocator);
-            for (cir.store.sliceExpr(call.args)) |arg_idx| {
-                try collectExprDependencies(cir, arg_idx, dependencies, allocator);
-            }
-        },
-
-        .e_structural_eq => |eq| {
-            try collectExprDependencies(cir, eq.lhs, dependencies, allocator);
-            try collectExprDependencies(cir, eq.rhs, dependencies, allocator);
-        },
-        .e_method_eq => |eq| {
-            try collectExprDependencies(cir, eq.lhs, dependencies, allocator);
-            try collectExprDependencies(cir, eq.rhs, dependencies, allocator);
-        },
-
-        .e_type_method_call => |call| {
-            for (cir.store.sliceExpr(call.args)) |arg_idx| {
-                try collectExprDependencies(cir, arg_idx, dependencies, allocator);
-            }
-        },
-        .e_type_dispatch_call => |call| {
-            for (cir.store.sliceExpr(call.args)) |arg_idx| {
-                try collectExprDependencies(cir, arg_idx, dependencies, allocator);
-            }
-        },
-
-        .e_tuple_access => |tuple_access| {
-            try collectExprDependencies(cir, tuple_access.tuple, dependencies, allocator);
-        },
-
-        .e_tuple => |tuple| {
-            for (cir.store.sliceExpr(tuple.elems)) |elem_idx| {
-                try collectExprDependencies(cir, elem_idx, dependencies, allocator);
-            }
-        },
-
-        .e_binop => |binop| {
-            try collectExprDependencies(cir, binop.lhs, dependencies, allocator);
-            try collectExprDependencies(cir, binop.rhs, dependencies, allocator);
-        },
-
-        .e_unary_minus => |unop| {
-            try collectExprDependencies(cir, unop.expr, dependencies, allocator);
-        },
-
-        .e_unary_not => |unop| {
-            try collectExprDependencies(cir, unop.expr, dependencies, allocator);
-        },
-
-        .e_block => |block| {
-            // Recurse into the block's statements
-            for (cir.store.sliceStatements(block.stmts)) |stmt_idx| {
-                const stmt = cir.store.getStatement(stmt_idx);
-                switch (stmt) {
-                    .s_decl => |decl| {
-                        try collectExprDependencies(cir, decl.expr, dependencies, allocator);
-                    },
-                    .s_var => |var_stmt| {
-                        try collectExprDependencies(cir, var_stmt.expr, dependencies, allocator);
-                    },
-                    .s_reassign => |reassign| {
-                        try collectExprDependencies(cir, reassign.expr, dependencies, allocator);
-                    },
-                    .s_dbg => |dbg| {
-                        try collectExprDependencies(cir, dbg.expr, dependencies, allocator);
-                    },
-                    .s_expr => |expr_stmt| {
-                        try collectExprDependencies(cir, expr_stmt.expr, dependencies, allocator);
-                    },
-                    .s_expect => |expect| {
-                        try collectExprDependencies(cir, expect.body, dependencies, allocator);
-                    },
-                    .s_for => |for_stmt| {
-                        try collectExprDependencies(cir, for_stmt.expr, dependencies, allocator);
-                    },
-                    .s_while => |while_stmt| {
-                        try collectExprDependencies(cir, while_stmt.cond, dependencies, allocator);
-                        try collectExprDependencies(cir, while_stmt.body, dependencies, allocator);
-                    },
-                    .s_return => |ret| {
-                        try collectExprDependencies(cir, ret.expr, dependencies, allocator);
-                    },
-                    .s_import, .s_alias_decl, .s_nominal_decl, .s_type_anno, .s_type_var_alias, .s_crash, .s_runtime_error, .s_break => {},
+            },
+            .e_call => |call| {
+                for (cir.store.sliceExpr(call.args)) |arg_idx| {
+                    try pending.append(stack_allocator, arg_idx);
                 }
-            }
-            // Recurse into the final expression
-            try collectExprDependencies(cir, block.final_expr, dependencies, allocator);
-        },
-
-        .e_tag => |tag| {
-            for (cir.store.sliceExpr(tag.args)) |arg_idx| {
-                try collectExprDependencies(cir, arg_idx, dependencies, allocator);
-            }
-        },
-
-        .e_nominal => |nominal| {
-            try collectExprDependencies(cir, nominal.backing_expr, dependencies, allocator);
-        },
-
-        // Literals and hosted lambdas have no dependencies
-        .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_num_from_numeral, .e_typed_int, .e_typed_frac, .e_typed_num_from_numeral, .e_str, .e_str_segment, .e_bytes_literal, .e_empty_list, .e_empty_record, .e_zero_argument_tag, .e_ellipsis, .e_anno_only, .e_hosted_lambda => {},
-
-        .e_run_low_level => |run_ll| {
-            for (cir.store.sliceExpr(run_ll.args)) |arg_idx| {
-                try collectExprDependencies(cir, arg_idx, dependencies, allocator);
-            }
-        },
-
-        // External lookups reference other modules - skip for now
-        .e_lookup_external => {},
-
-        // Required lookups reference app-provided values - skip for dependency analysis
-        .e_lookup_required => {},
-
-        .e_nominal_external => |nominal| {
-            try collectExprDependencies(cir, nominal.backing_expr, dependencies, allocator);
-        },
-
-        // Crash has a string literal message (no dependencies)
-        .e_crash => {},
-
-        .e_dbg => |dbg| {
-            try collectExprDependencies(cir, dbg.expr, dependencies, allocator);
-        },
-
-        .e_expect => |expect| {
-            try collectExprDependencies(cir, expect.body, dependencies, allocator);
-        },
-
-        .e_return => |ret| {
-            try collectExprDependencies(cir, ret.expr, dependencies, allocator);
-        },
-
-        .e_for => |for_expr| {
-            try collectExprDependencies(cir, for_expr.expr, dependencies, allocator);
-            try collectExprDependencies(cir, for_expr.body, dependencies, allocator);
-        },
-
-        .e_runtime_error => {},
+                try pending.append(stack_allocator, call.func);
+            },
+            .e_lambda => |lambda| {
+                try pending.append(stack_allocator, lambda.body);
+            },
+            .e_closure => |closure| {
+                try pending.append(stack_allocator, closure.lambda_idx);
+            },
+            .e_if => |if_expr| {
+                try pending.append(stack_allocator, if_expr.final_else);
+                for (cir.store.sliceIfBranches(if_expr.branches)) |branch_idx| {
+                    const branch = cir.store.getIfBranch(branch_idx);
+                    try pending.append(stack_allocator, branch.body);
+                    try pending.append(stack_allocator, branch.cond);
+                }
+            },
+            .e_match => |match_expr| {
+                for (cir.store.sliceMatchBranches(match_expr.branches)) |branch_idx| {
+                    const branch = cir.store.getMatchBranch(branch_idx);
+                    if (branch.guard) |guard_idx| {
+                        try pending.append(stack_allocator, guard_idx);
+                    }
+                    try pending.append(stack_allocator, branch.value);
+                }
+                try pending.append(stack_allocator, match_expr.cond);
+            },
+            .e_list => |list| {
+                for (cir.store.sliceExpr(list.elems)) |elem_idx| {
+                    try pending.append(stack_allocator, elem_idx);
+                }
+            },
+            .e_record => |record| {
+                if (record.ext) |ext_idx| {
+                    try pending.append(stack_allocator, ext_idx);
+                }
+                for (cir.store.sliceRecordFields(record.fields)) |field_idx| {
+                    const field = cir.store.getRecordField(field_idx);
+                    try pending.append(stack_allocator, field.value);
+                }
+            },
+            .e_field_access => |access| {
+                try pending.append(stack_allocator, access.receiver);
+            },
+            .e_method_call => |call| {
+                for (cir.store.sliceExpr(call.args)) |arg_idx| {
+                    try pending.append(stack_allocator, arg_idx);
+                }
+                try pending.append(stack_allocator, call.receiver);
+            },
+            .e_dispatch_call => |call| {
+                for (cir.store.sliceExpr(call.args)) |arg_idx| {
+                    try pending.append(stack_allocator, arg_idx);
+                }
+                try pending.append(stack_allocator, call.receiver);
+            },
+            .e_structural_eq => |eq| {
+                try pending.append(stack_allocator, eq.rhs);
+                try pending.append(stack_allocator, eq.lhs);
+            },
+            .e_method_eq => |eq| {
+                try pending.append(stack_allocator, eq.rhs);
+                try pending.append(stack_allocator, eq.lhs);
+            },
+            .e_type_method_call => |call| {
+                for (cir.store.sliceExpr(call.args)) |arg_idx| {
+                    try pending.append(stack_allocator, arg_idx);
+                }
+            },
+            .e_type_dispatch_call => |call| {
+                for (cir.store.sliceExpr(call.args)) |arg_idx| {
+                    try pending.append(stack_allocator, arg_idx);
+                }
+            },
+            .e_tuple_access => |tuple_access| {
+                try pending.append(stack_allocator, tuple_access.tuple);
+            },
+            .e_tuple => |tuple| {
+                for (cir.store.sliceExpr(tuple.elems)) |elem_idx| {
+                    try pending.append(stack_allocator, elem_idx);
+                }
+            },
+            .e_binop => |binop| {
+                try pending.append(stack_allocator, binop.rhs);
+                try pending.append(stack_allocator, binop.lhs);
+            },
+            .e_unary_minus => |unop| {
+                try pending.append(stack_allocator, unop.expr);
+            },
+            .e_unary_not => |unop| {
+                try pending.append(stack_allocator, unop.expr);
+            },
+            .e_block => |block| {
+                try pending.append(stack_allocator, block.final_expr);
+                for (cir.store.sliceStatements(block.stmts)) |stmt_idx| {
+                    const stmt = cir.store.getStatement(stmt_idx);
+                    switch (stmt) {
+                        .s_decl => |decl| try pending.append(stack_allocator, decl.expr),
+                        .s_var => |var_stmt| try pending.append(stack_allocator, var_stmt.expr),
+                        .s_reassign => |reassign| try pending.append(stack_allocator, reassign.expr),
+                        .s_dbg => |dbg| try pending.append(stack_allocator, dbg.expr),
+                        .s_expr => |expr_stmt| try pending.append(stack_allocator, expr_stmt.expr),
+                        .s_expect => |expect| try pending.append(stack_allocator, expect.body),
+                        .s_for => |for_stmt| try pending.append(stack_allocator, for_stmt.expr),
+                        .s_while => |while_stmt| {
+                            try pending.append(stack_allocator, while_stmt.body);
+                            try pending.append(stack_allocator, while_stmt.cond);
+                        },
+                        .s_return => |ret| try pending.append(stack_allocator, ret.expr),
+                        .s_import, .s_alias_decl, .s_nominal_decl, .s_type_anno, .s_type_var_alias, .s_crash, .s_runtime_error, .s_break => {},
+                    }
+                }
+            },
+            .e_tag => |tag| {
+                for (cir.store.sliceExpr(tag.args)) |arg_idx| {
+                    try pending.append(stack_allocator, arg_idx);
+                }
+            },
+            .e_nominal => |nominal| {
+                try pending.append(stack_allocator, nominal.backing_expr);
+            },
+            .e_run_low_level => |run_ll| {
+                for (cir.store.sliceExpr(run_ll.args)) |arg_idx| {
+                    try pending.append(stack_allocator, arg_idx);
+                }
+            },
+            .e_nominal_external => |nominal| {
+                try pending.append(stack_allocator, nominal.backing_expr);
+            },
+            .e_dbg => |dbg| {
+                try pending.append(stack_allocator, dbg.expr);
+            },
+            .e_expect_err => |expect_err| {
+                try pending.append(stack_allocator, expect_err.expr);
+            },
+            .e_expect => |expect| {
+                try pending.append(stack_allocator, expect.body);
+            },
+            .e_return => |ret| {
+                try pending.append(stack_allocator, ret.expr);
+            },
+            .e_for => |for_expr| {
+                try pending.append(stack_allocator, for_expr.body);
+                try pending.append(stack_allocator, for_expr.expr);
+            },
+            .e_num,
+            .e_frac_f32,
+            .e_frac_f64,
+            .e_dec,
+            .e_dec_small,
+            .e_num_from_numeral,
+            .e_typed_int,
+            .e_typed_frac,
+            .e_typed_num_from_numeral,
+            .e_str,
+            .e_str_segment,
+            .e_bytes_literal,
+            .e_empty_list,
+            .e_empty_record,
+            .e_zero_argument_tag,
+            .e_ellipsis,
+            .e_anno_only,
+            .e_hosted_lambda,
+            .e_lookup_external,
+            .e_lookup_required,
+            .e_crash,
+            .e_runtime_error,
+            => {},
+        }
     }
 }
 
@@ -565,12 +534,7 @@ const TarjanState = struct {
         self.sccs.deinit(self.allocator);
     }
 
-    fn strongConnect(
-        self: *TarjanState,
-        graph: *const DependencyGraph,
-        v: CIR.Def.Idx,
-    ) std.mem.Allocator.Error!void {
-        // Set the depth index for v
+    fn beginNode(self: *TarjanState, v: CIR.Def.Idx) std.mem.Allocator.Error!void {
         try self.indices.put(self.allocator, v, self.index);
         try self.lowlinks.put(self.allocator, v, self.index);
         try self.visited.put(self.allocator, v, {});
@@ -578,55 +542,99 @@ const TarjanState = struct {
 
         try self.stack.append(self.allocator, v);
         try self.on_stack.put(self.allocator, v, {});
+    }
 
-        // Consider successors of v
-        const dependencies = graph.getDependencies(v);
-        for (dependencies) |w| {
-            if (!self.visited.contains(w)) {
-                // Successor w has not yet been visited; recurse on it
-                try self.strongConnect(graph, w);
-                const v_lowlink = self.lowlinks.get(v).?;
-                const w_lowlink = self.lowlinks.get(w).?;
-                try self.lowlinks.put(self.allocator, v, @min(v_lowlink, w_lowlink));
-            } else if (self.on_stack.contains(w)) {
-                // Successor w is on stack, hence in the current SCC
-                const v_lowlink = self.lowlinks.get(v).?;
-                const w_index = self.indices.get(w).?;
-                try self.lowlinks.put(self.allocator, v, @min(v_lowlink, w_index));
-            }
-        }
-
-        // If v is a root node, pop the stack and create an SCC
+    fn finishNode(
+        self: *TarjanState,
+        graph: *const DependencyGraph,
+        v: CIR.Def.Idx,
+    ) std.mem.Allocator.Error!void {
         const v_lowlink = self.lowlinks.get(v).?;
         const v_index = self.indices.get(v).?;
-        if (v_lowlink == v_index) {
-            var scc_defs: std.ArrayList(CIR.Def.Idx) = .empty;
+        if (v_lowlink != v_index) return;
 
-            while (true) {
-                const w = self.stack.pop() orelse unreachable; // Stack should not be empty
-                std.debug.assert(self.on_stack.remove(w));
-                try scc_defs.append(self.allocator, w);
+        var scc_defs: std.ArrayList(CIR.Def.Idx) = .empty;
 
-                if (@intFromEnum(w) == @intFromEnum(v)) break;
+        while (true) {
+            const w = self.stack.pop() orelse unreachable; // Stack should not be empty
+            std.debug.assert(self.on_stack.remove(w));
+            try scc_defs.append(self.allocator, w);
+
+            if (@intFromEnum(w) == @intFromEnum(v)) break;
+        }
+
+        // Check if this SCC is recursive
+        const is_recursive = scc_defs.items.len > 1 or blk: {
+            // Check for self-loop
+            if (scc_defs.items.len == 1) {
+                const node = scc_defs.items[0];
+                const deps = graph.getDependencies(node);
+                for (deps) |dep| {
+                    if (@intFromEnum(dep) == @intFromEnum(node)) break :blk true;
+                }
+            }
+            break :blk false;
+        };
+
+        try self.sccs.append(self.allocator, .{
+            .defs = try scc_defs.toOwnedSlice(self.allocator),
+            .is_recursive = is_recursive,
+        });
+    }
+
+    fn strongConnect(
+        self: *TarjanState,
+        graph: *const DependencyGraph,
+        v: CIR.Def.Idx,
+    ) std.mem.Allocator.Error!void {
+        const DfsFrame = struct {
+            node: CIR.Def.Idx,
+            next_dependency: usize,
+        };
+
+        var stack_allocator_state = std.heap.stackFallback(4096, self.allocator);
+        const stack_allocator = stack_allocator_state.get();
+        var dfs_stack: std.ArrayList(DfsFrame) = .empty;
+        defer dfs_stack.deinit(stack_allocator);
+
+        try self.beginNode(v);
+        try dfs_stack.append(stack_allocator, .{
+            .node = v,
+            .next_dependency = 0,
+        });
+
+        while (dfs_stack.items.len > 0) {
+            const top = &dfs_stack.items[dfs_stack.items.len - 1];
+            const dependencies = graph.getDependencies(top.node);
+
+            if (top.next_dependency < dependencies.len) {
+                const w = dependencies[top.next_dependency];
+                top.next_dependency += 1;
+
+                if (!self.visited.contains(w)) {
+                    try self.beginNode(w);
+                    try dfs_stack.append(stack_allocator, .{
+                        .node = w,
+                        .next_dependency = 0,
+                    });
+                } else if (self.on_stack.contains(w)) {
+                    const v_lowlink = self.lowlinks.get(top.node).?;
+                    const w_index = self.indices.get(w).?;
+                    try self.lowlinks.put(self.allocator, top.node, @min(v_lowlink, w_index));
+                }
+                continue;
             }
 
-            // Check if this SCC is recursive
-            const is_recursive = scc_defs.items.len > 1 or blk: {
-                // Check for self-loop
-                if (scc_defs.items.len == 1) {
-                    const node = scc_defs.items[0];
-                    const deps = graph.getDependencies(node);
-                    for (deps) |dep| {
-                        if (@intFromEnum(dep) == @intFromEnum(node)) break :blk true;
-                    }
-                }
-                break :blk false;
-            };
+            const finished = top.node;
+            try self.finishNode(graph, finished);
+            _ = dfs_stack.pop() orelse unreachable;
 
-            try self.sccs.append(self.allocator, .{
-                .defs = try scc_defs.toOwnedSlice(self.allocator),
-                .is_recursive = is_recursive,
-            });
+            if (dfs_stack.items.len > 0) {
+                const parent = dfs_stack.items[dfs_stack.items.len - 1].node;
+                const parent_lowlink = self.lowlinks.get(parent).?;
+                const finished_lowlink = self.lowlinks.get(finished).?;
+                try self.lowlinks.put(self.allocator, parent, @min(parent_lowlink, finished_lowlink));
+            }
         }
     }
 };

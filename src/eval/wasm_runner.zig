@@ -127,12 +127,12 @@ pub fn runWasmStrWithStats(
         env_imports.addHostFunction("__multi3", &[_]bytebox.ValType{ .I32, .I64, .I64, .I64, .I64 }, &[_]bytebox.ValType{}, hostMulti3, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("__muloti4", &[_]bytebox.ValType{ .I32, .I64, .I64, .I64, .I64, .I32 }, &[_]bytebox.ValType{}, hostMuloti4, null) catch return error.WasmExecFailed;
 
-        env_imports.addHostFunction("roc_alloc", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{}, hostRocAlloc, null) catch return error.WasmExecFailed;
-        env_imports.addHostFunction("roc_dealloc", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{}, hostRocDealloc, null) catch return error.WasmExecFailed;
-        env_imports.addHostFunction("roc_realloc", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{}, hostRocRealloc, null) catch return error.WasmExecFailed;
-        env_imports.addHostFunction("roc_dbg", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{}, hostRocDbg, null) catch return error.WasmExecFailed;
-        env_imports.addHostFunction("roc_expect_failed", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{}, hostRocExpectFailed, null) catch return error.WasmExecFailed;
-        env_imports.addHostFunction("roc_crashed", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{}, hostRocCrashed, null) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_alloc", &[_]bytebox.ValType{ .I32, .I32, .I32 }, &[_]bytebox.ValType{.I32}, hostRocAlloc, null) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_dealloc", &[_]bytebox.ValType{ .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostRocDealloc, null) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_realloc", &[_]bytebox.ValType{ .I32, .I32, .I32, .I32 }, &[_]bytebox.ValType{.I32}, hostRocRealloc, null) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_dbg", &[_]bytebox.ValType{ .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostRocDbg, null) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_expect_failed", &[_]bytebox.ValType{ .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostRocExpectFailed, null) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_crashed", &[_]bytebox.ValType{ .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostRocCrashed, null) catch return error.WasmExecFailed;
 
         env_imports.addHostFunction("roc_i128_div_s", &[_]bytebox.ValType{ .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostI128DivS, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_i128_mod_s", &[_]bytebox.ValType{ .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostI128ModS, null) catch return error.WasmExecFailed;
@@ -200,6 +200,7 @@ pub fn runWasmStrWithStats(
         env_imports.addHostFunction("roc_list_append_unsafe", &[_]bytebox.ValType{ .I32, .I32, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostListAppendUnsafe, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_list_concat", &[_]bytebox.ValType{ .I32, .I32, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostListConcat, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_list_drop_at", &[_]bytebox.ValType{ .I32, .I32, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostListDropAt, null) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_list_reserve", &[_]bytebox.ValType{ .I32, .I64, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostListReserve, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_list_reverse", &[_]bytebox.ValType{ .I32, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostListReverse, null) catch return error.WasmExecFailed;
 
         const imports = [_]bytebox.ModuleImportPackage{env_imports};
@@ -837,26 +838,25 @@ fn allocWasmData(buffer: []u8, alignment: u32, length: usize) u32 {
     return data_ptr;
 }
 
-fn hostRocAlloc(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+// RocOps callbacks follow the platform C ABI: a leading *RocOps (the i32 pointer to the
+// RocOps struct in linear memory, unused here) followed by the natural arguments, with the
+// result returned directly rather than written back into an args struct.
+
+fn hostRocAlloc(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
     const buffer = module.store.getMemory(0).buffer();
-    const args_ptr: u32 = @bitCast(params[0].I32);
-    if (args_ptr + 12 > buffer.len) return;
-    const alignment: u32 = @bitCast(buffer[args_ptr..][0..4].*);
-    const length: u32 = @bitCast(buffer[args_ptr + 4 ..][0..4].*);
+    const length: u32 = @bitCast(params[1].I32);
+    const alignment: u32 = @bitCast(params[2].I32);
     const data_ptr = allocWasmData(buffer, alignment, length);
-    const answer_bytes: [4]u8 = @bitCast(data_ptr);
-    @memcpy(buffer[args_ptr + 8 ..][0..4], &answer_bytes);
+    results[0] = .{ .I32 = @bitCast(data_ptr) };
 }
 
 fn hostRocDealloc(_: ?*anyopaque, _: *bytebox.ModuleInstance, _: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {}
 
-fn hostRocRealloc(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+fn hostRocRealloc(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
     const buffer = module.store.getMemory(0).buffer();
-    const args_ptr: u32 = @bitCast(params[0].I32);
-    if (args_ptr + 12 > buffer.len) return;
-    const alignment: u32 = @bitCast(buffer[args_ptr..][0..4].*);
-    const new_length: u32 = @bitCast(buffer[args_ptr + 4 ..][0..4].*);
-    const old_data_ptr: u32 = @bitCast(buffer[args_ptr + 8 ..][0..4].*);
+    const old_data_ptr: u32 = @bitCast(params[1].I32);
+    const new_length: u32 = @bitCast(params[2].I32);
+    const alignment: u32 = @bitCast(params[3].I32);
     const old_length: usize = if (old_data_ptr >= 8 and old_data_ptr <= buffer.len)
         readIntLittle(u32, buffer, old_data_ptr - 8)
     else
@@ -866,35 +866,28 @@ fn hostRocRealloc(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]co
     if (copy_len > 0 and old_data_ptr + copy_len <= buffer.len and data_ptr + copy_len <= buffer.len) {
         @memcpy(buffer[data_ptr..][0..copy_len], buffer[old_data_ptr..][0..copy_len]);
     }
-    const answer_bytes: [4]u8 = @bitCast(data_ptr);
-    @memcpy(buffer[args_ptr + 8 ..][0..4], &answer_bytes);
+    results[0] = .{ .I32 = @bitCast(data_ptr) };
 }
 
 fn hostRocDbg(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
     const buffer = module.store.getMemory(0).buffer();
-    const args_ptr: u32 = @bitCast(params[0].I32);
-    if (args_ptr + 8 > buffer.len) return;
-    const msg_ptr: u32 = @bitCast(buffer[args_ptr..][0..4].*);
-    const msg_len: u32 = @bitCast(buffer[args_ptr + 4 ..][0..4].*);
+    const msg_ptr: u32 = @bitCast(params[1].I32);
+    const msg_len: u32 = @bitCast(params[2].I32);
     if (msg_ptr + msg_len > buffer.len) return;
 }
 
 fn hostRocExpectFailed(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
     const buffer = module.store.getMemory(0).buffer();
-    const args_ptr: u32 = @bitCast(params[0].I32);
-    if (args_ptr + 8 > buffer.len) return;
-    const msg_ptr: u32 = @bitCast(buffer[args_ptr..][0..4].*);
-    const msg_len: u32 = @bitCast(buffer[args_ptr + 4 ..][0..4].*);
+    const msg_ptr: u32 = @bitCast(params[1].I32);
+    const msg_len: u32 = @bitCast(params[2].I32);
     if (msg_ptr + msg_len > buffer.len) return;
     wasm_crash_state = .crashed;
 }
 
 fn hostRocCrashed(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
     const buffer = module.store.getMemory(0).buffer();
-    const args_ptr: u32 = @bitCast(params[0].I32);
-    if (args_ptr + 8 > buffer.len) return;
-    const msg_ptr: u32 = @bitCast(buffer[args_ptr..][0..4].*);
-    const msg_len: u32 = @bitCast(buffer[args_ptr + 4 ..][0..4].*);
+    const msg_ptr: u32 = @bitCast(params[1].I32);
+    const msg_len: u32 = @bitCast(params[2].I32);
     if (msg_ptr + msg_len > buffer.len) return;
     wasm_crash_state = .crashed;
 }
@@ -1341,6 +1334,44 @@ fn hostListDropAt(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]co
     writeIntLittle(u32, buffer, result_ptr, @intCast(new_data));
     writeIntLittle(u32, buffer, result_ptr + 4, @intCast(new_len));
     writeIntLittle(u32, buffer, result_ptr + 8, encodeWasmListCapacity(new_len));
+}
+
+fn hostListReserve(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    const buffer = module.store.getMemory(0).buffer();
+    const list_ptr: usize = @intCast(params[0].I32);
+    const spare: usize = @intCast(params[1].I64);
+    const elem_width: usize = @intCast(params[2].I32);
+    const alignment: u32 = @bitCast(params[3].I32);
+    const result_ptr: usize = @intCast(params[4].I32);
+
+    const data_ptr: usize = @intCast(readIntLittle(u32, buffer, list_ptr));
+    const len: usize = @intCast(readIntLittle(u32, buffer, list_ptr + 4));
+    const encoded_cap: usize = @intCast(readIntLittle(u32, buffer, list_ptr + 8));
+    const desired_cap = len + spare;
+
+    if (elem_width == 0) {
+        writeIntLittle(u32, buffer, result_ptr, @intCast(data_ptr));
+        writeIntLittle(u32, buffer, result_ptr + 4, @intCast(len));
+        writeIntLittle(u32, buffer, result_ptr + 8, encodeWasmListCapacity(desired_cap));
+        return;
+    }
+
+    const cap = decodeWasmListCapacity(encoded_cap);
+    if ((encoded_cap & 1) == 0 and cap >= desired_cap) {
+        writeIntLittle(u32, buffer, result_ptr, @intCast(data_ptr));
+        writeIntLittle(u32, buffer, result_ptr + 4, @intCast(len));
+        writeIntLittle(u32, buffer, result_ptr + 8, @intCast(encoded_cap));
+        return;
+    }
+
+    const new_data = allocWasmData(buffer, alignment, desired_cap * elem_width);
+    if (len != 0 and data_ptr != 0) {
+        @memcpy(buffer[new_data..][0 .. len * elem_width], buffer[data_ptr..][0 .. len * elem_width]);
+    }
+
+    writeIntLittle(u32, buffer, result_ptr, @intCast(new_data));
+    writeIntLittle(u32, buffer, result_ptr + 4, @intCast(len));
+    writeIntLittle(u32, buffer, result_ptr + 8, encodeWasmListCapacity(desired_cap));
 }
 
 fn hostListReverse(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {

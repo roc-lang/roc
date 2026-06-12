@@ -191,6 +191,16 @@ pub const JoinPointSpan = extern struct {
 
 /// Explicit ARC meaning of a `set_local` write. ARC insertion consumes this
 /// directly; it must not derive the meaning from control-flow shape.
+/// How an RC statement's count update must be performed. `atomic` is always
+/// sound; `single_thread` is chosen only for allocations the visibility
+/// analysis proves no host thread can ever touch, and lets the runtime use
+/// plain loads and stores.
+pub const RcAtomicity = enum(u1) {
+    atomic,
+    single_thread,
+};
+
+/// Why a `set_local` writes its target.
 pub const SetLocalWriteMode = enum {
     initialize_join_result,
     replace_existing,
@@ -250,6 +260,14 @@ pub const CFStmt = union(enum) {
         target: LocalId,
         op: LowLevel,
         rc_effect: LowLevel.RcEffect,
+        /// Bit i set => argument i is named by the op's
+        /// `may_runtime_uniqueness_check_args` and ARC emission proved its
+        /// runtime count check redundant: the argument's value was born
+        /// unique, its single ownership unit moves into this op, and no
+        /// borrow of it is live here. Consumers may take the in-place path
+        /// without inspecting the count; the runtime check is always sound,
+        /// so a zero mask reproduces fully checked behavior.
+        unique_args: u64 = 0,
         args: LocalSpan,
         next: CFStmtId,
     },
@@ -284,22 +302,33 @@ pub const CFStmt = union(enum) {
         condition: LocalId,
         next: CFStmtId,
     },
+    /// The Err arm of a `?` operator used directly inside a top-level expect.
+    /// Fails the enclosing expect with the runtime-built message (which
+    /// includes the rendered Err value). This is terminal.
+    expect_err: struct {
+        message: LocalId,
+        /// Source region of the `?` expression, for failure reporting.
+        region: base.Region,
+    },
     /// Compiler-generated impossible execution path. This is terminal.
     runtime_error: void,
     incref: struct {
         value: LocalId,
         rc: layout.RcHelper,
         count: u16 = 1,
+        atomicity: RcAtomicity = .atomic,
         next: CFStmtId,
     },
     decref: struct {
         value: LocalId,
         rc: layout.RcHelper,
+        atomicity: RcAtomicity = .atomic,
         next: CFStmtId,
     },
     free: struct {
         value: LocalId,
         rc: layout.RcHelper,
+        atomicity: RcAtomicity = .atomic,
         next: CFStmtId,
     },
     switch_stmt: struct {

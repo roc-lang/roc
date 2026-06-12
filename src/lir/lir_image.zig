@@ -19,7 +19,7 @@ const Program = core.Program;
 /// Public `MAGIC` declaration.
 pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 /// Public `FORMAT_VERSION` declaration.
-pub const FORMAT_VERSION: u32 = 2;
+pub const FORMAT_VERSION: u32 = 4;
 
 /// Public `ImageError` declaration.
 pub const ImageError = error{
@@ -78,6 +78,11 @@ pub const LirStoreImage = extern struct {
     proc_specs: ArrayRef,
     strings: StringLiteralStoreImage,
     next_synthetic_symbol: u64,
+    source_file_bytes: ArrayRef,
+    source_file_ends: ArrayRef,
+    cf_stmt_locs: ArrayRef,
+    proc_locs: ArrayRef,
+    local_names: ArrayRef,
 
     fn fromStore(base_ptr: [*]align(1) const u8, image_size: usize, store: *const LirStore) ImageError!LirStoreImage {
         return .{
@@ -89,6 +94,11 @@ pub const LirStoreImage = extern struct {
             .proc_specs = try arrayRef(base_ptr, image_size, store.proc_specs.items),
             .strings = try StringLiteralStoreImage.fromStore(base_ptr, image_size, &store.strings),
             .next_synthetic_symbol = store.next_synthetic_symbol,
+            .source_file_bytes = try arrayRef(base_ptr, image_size, store.source_file_bytes.items),
+            .source_file_ends = try arrayRef(base_ptr, image_size, store.source_file_ends.items),
+            .cf_stmt_locs = try arrayRef(base_ptr, image_size, store.cf_stmt_locs.items),
+            .proc_locs = try arrayRef(base_ptr, image_size, store.proc_locs.items),
+            .local_names = try arrayRef(base_ptr, image_size, store.local_names.items),
         };
     }
 
@@ -105,6 +115,12 @@ pub const LirStoreImage = extern struct {
             .next_synthetic_symbol = self.next_synthetic_symbol,
             .patterns = std.ArrayList(LIR.LirPattern).empty,
             .pattern_ids = std.ArrayList(LIR.LirPatternId).empty,
+            .source_file_bytes = try arrayListFromRef(u8, base_ptr, image_size, self.source_file_bytes),
+            .source_file_ends = try arrayListFromRef(u32, base_ptr, image_size, self.source_file_ends),
+            .cf_stmt_locs = try arrayListFromRef(base.SourceLoc, base_ptr, image_size, self.cf_stmt_locs),
+            .proc_locs = try arrayListFromRef(base.SourceLoc, base_ptr, image_size, self.proc_locs),
+            .local_names = try arrayListFromRef(u32, base_ptr, image_size, self.local_names),
+            .current_loc = base.SourceLoc.none,
         };
     }
 };

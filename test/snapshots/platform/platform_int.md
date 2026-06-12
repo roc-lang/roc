@@ -11,22 +11,22 @@ platform ""
     }
     exposes []
     packages {}
-    provides { multiplyInts: "multiplyInts" }
+    provides { "roc_multiplyInts": multiplyInts }
 
 multiplyInts : I64, I64 -> I64
 ~~~
 # EXPECTED
-EXPOSED BUT NOT DEFINED - platform_int.md:7:16:7:44
+EXPOSED BUT NOT DEFINED - platform_int.md:7:16:7:48
 DECLARATION HAS NO VALUE - platform_int.md:9:1:9:31
 # PROBLEMS
 **EXPOSED BUT NOT DEFINED**
 The module header says that `multiplyInts` is exposed, but it is not defined anywhere in this module.
 
-**platform_int.md:7:16:7:44:**
+**platform_int.md:7:16:7:48:**
 ```roc
-    provides { multiplyInts: "multiplyInts" }
+    provides { "roc_multiplyInts": multiplyInts }
 ```
-               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 You can fix this by either defining `multiplyInts` in this module, or by removing it from the list of exposed values.
 
 **DECLARATION HAS NO VALUE**
@@ -48,7 +48,7 @@ LowerIdent,OpColon,UpperIdent,Comma,UpperIdent,OpArrow,UpperIdent,
 CloseCurly,
 KwExposes,OpenSquare,CloseSquare,
 KwPackages,OpenCurly,CloseCurly,
-KwProvides,OpenCurly,LowerIdent,OpColon,StringStart,StringPart,StringEnd,CloseCurly,
+KwProvides,OpenCurly,StringStart,StringPart,StringEnd,OpColon,LowerIdent,CloseCurly,
 LowerIdent,OpColon,UpperIdent,Comma,UpperIdent,OpArrow,UpperIdent,
 EndOfFile,
 ~~~
@@ -67,9 +67,7 @@ EndOfFile,
 		(exposes)
 		(packages)
 		(provides
-			(record-field (name "multiplyInts")
-				(e-string
-					(e-string-part (raw "multiplyInts"))))))
+			(symbol-map-entry (symbol "roc_multiplyInts") (func "multiplyInts"))))
 	(statements
 		(s-type-anno (name "multiplyInts")
 			(ty-fn
@@ -85,7 +83,7 @@ platform ""
 	}
 	exposes []
 	packages {}
-	provides { multiplyInts: "multiplyInts" }
+	provides { "roc_multiplyInts": multiplyInts }
 
 multiplyInts : I64, I64 -> I64
 ~~~

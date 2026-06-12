@@ -2,7 +2,8 @@ platform ""
     requires {} { main! : List(Str) => Try({}, [Exit(I8), ..]) }
     exposes [Echo]
     packages {}
-    provides { main_for_host!: "main" }
+    provides { "roc_main": main_for_host! }
+    hosted { "roc_echo_line": Echo.line! }
 
 import Echo
 

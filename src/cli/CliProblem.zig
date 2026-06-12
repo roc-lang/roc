@@ -133,6 +133,12 @@ pub const CliProblem = union(enum) {
         target: []const u8,
     },
 
+    /// The platform's host inputs do not define symbols the app references
+    missing_host_symbols: struct {
+        symbols: []const []const u8,
+        target: []const u8,
+    },
+
     /// Object compilation failed
     object_compilation_failed: struct {
         path: []const u8,
@@ -233,6 +239,7 @@ pub const CliProblem = union(enum) {
             .unsupported_opt_level,
             .compilation_failed,
             .linker_failed,
+            .missing_host_symbols,
             => .fatal,
 
             // Runtime errors - operation failed
@@ -290,6 +297,7 @@ pub const CliProblem = union(enum) {
             .unsupported_opt_level => |info| try createUnsupportedOptLevelReport(allocator, info),
             .compilation_failed => |info| try createCompilationFailedReport(allocator, info),
             .linker_failed => |info| try createLinkerFailedReport(allocator, info),
+            .missing_host_symbols => |info| try createMissingHostSymbolsReport(allocator, info),
             .object_compilation_failed => |info| try createObjectCompilationFailedReport(allocator, info),
             .shim_generation_failed => |info| try createShimGenerationFailedReport(allocator, info),
             .invalid_url => |info| try createInvalidUrlReport(allocator, info),
@@ -621,6 +629,29 @@ fn createCompilationFailedReport(allocator: Allocator, info: anytype) Allocator.
     try report.document.addText("Found ");
     try report.document.addAnnotated(count_str, .error_highlight);
     try report.document.addText(" error(s). See above for details.");
+
+    return report;
+}
+
+fn createMissingHostSymbolsReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    var report = Report.init(allocator, "MISSING HOST SYMBOLS", .fatal);
+
+    try report.document.addText("The platform's host inputs for target ");
+    try report.document.addAnnotated(info.target, .emphasized);
+    try report.document.addText(" do not define these symbols the application references:");
+    try report.document.addLineBreak();
+    for (info.symbols) |symbol| {
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(symbol, .emphasized);
+    }
+    try report.document.addLineBreak();
+    try report.document.addLineBreak();
+    try report.document.addText("Every linker symbol named in the platform header's ");
+    try report.document.addAnnotated("hosted", .emphasized);
+    try report.document.addText(" section, plus the fixed runtime set (roc_alloc, roc_dealloc, roc_realloc, roc_dbg, roc_expect_failed, roc_crashed), must be defined by the host inputs listed in the platform's ");
+    try report.document.addAnnotated("targets", .emphasized);
+    try report.document.addText(" section.");
 
     return report;
 }

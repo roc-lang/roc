@@ -312,7 +312,7 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
     };
     defer lowered.deinit();
 
-    const glue_proc = selectGlueSpecRootProc(root_artifact, &lowered, "make_glue") orelse {
+    const glue_proc = selectGlueSpecRootProc(root_artifact, &lowered, "roc_make_glue") orelse {
         if (builtin.mode == .Debug) {
             std.debug.panic("glue invariant violated: glue spec produced no published make_glue platform root", .{});
         }
@@ -661,7 +661,7 @@ fn parsePlatformHeader(gpa: Allocator, platform_path: []const u8, std_io: std.Io
     env.common.calcLineStarts(gpa) catch return error.OutOfMemory;
 
     // Parse the source code
-    var parse_ast = parse.parse(gpa, &env.common) catch return error.ParseFailed;
+    var parse_ast = parse.file(gpa, &env.common) catch return error.ParseFailed;
     defer parse_ast.deinit();
 
     // Get the file header
@@ -1998,10 +1998,10 @@ fn checkedTypePayload(
     checked_type: CheckedArtifact.CheckedTypeId,
 ) CheckedArtifact.CheckedTypePayload {
     const idx = @intFromEnum(checked_type);
-    if (idx >= artifact.checked_types.payloads.len) {
+    if (idx >= artifact.checked_types.payloads.items.len) {
         glueInvariant("checked type id {d} out of bounds", .{idx});
     }
-    return artifact.checked_types.payloads[idx];
+    return artifact.checked_types.payloads.items[idx];
 }
 
 fn checkedTypeRootForScheme(
@@ -2346,7 +2346,7 @@ fn collectModuleTypeInfo(
 ) Allocator.Error!?CollectedModuleTypeInfo {
     var main_type_str: []const u8 = try gpa.dupe(u8, "");
     errdefer gpa.free(main_type_str);
-    for (artifact.checked_types.nominal_declarations) |declaration| {
+    for (artifact.checked_types.nominal_declarations.items) |declaration| {
         const type_name = TypeTable.getTypeDisplayName(artifact.canonical_names.typeNameText(declaration.nominal.type_name));
         if (std.mem.eql(u8, type_name, module_name)) {
             gpa.free(main_type_str);

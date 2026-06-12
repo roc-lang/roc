@@ -10,10 +10,18 @@ const build_options = @import("build_options");
 const libc_finder = @import("libc_finder.zig");
 const stack_probe = @import("stack_probe.zig");
 const embedded_lld = @import("embedded_lld");
+const CodeSignature = @import("macho/CodeSignature.zig");
+const DwarfSplice = @import("macho/DwarfSplice.zig");
 const RocTarget = @import("roc_target").RocTarget;
 const cli_ctx = @import("CliCtx.zig");
 const CliCtx = cli_ctx.CliCtx;
 const Io = cli_ctx.Io;
+
+/// Suppress linker warnings in release builds only. Debug builds of the
+/// compiler surface them: lld reports flags it parsed but ignored (e.g. a
+/// MachO `-r`) only as warnings, and suppressing those hides real bugs from
+/// compiler developers.
+const suppress_linker_warnings = builtin.mode != .Debug;
 
 /// The embedded LLD entrypoints are only linked into LLVM-enabled CLI builds.
 const llvm_available = if (@import("builtin").is_test) false else @import("config").llvm;
@@ -30,6 +38,14 @@ pub const TargetAbi = enum {
     pub fn fromRocTarget(roc_target: RocTarget) TargetAbi {
         return if (roc_target.isStatic()) .musl else .gnu;
     }
+};
+
+/// What kind of artifact the linker produces.
+pub const OutputKind = enum {
+    /// Executable binary.
+    exe,
+    /// Shared/dynamic library (.so, .dylib, .dll).
+    shared_lib,
 };
 
 /// Default WASM initial memory: 64MB
@@ -55,6 +71,16 @@ pub const LinkConfig = struct {
     /// Output executable path
     output_path: []const u8,
 
+    /// Kind of artifact to produce (executable or shared library)
+    output_kind: OutputKind = .exe,
+
+    /// Link platform archives lazily (no whole-archive wrapping). Symbol-ABI
+    /// links resolve host code by symbol reference, so only reachable archive
+    /// members are included and section GC can strip unused host code. Links
+    /// against vtable-ABI hosts keep whole-archive wrapping, since nothing
+    /// references the host's exports by symbol.
+    lazy_platform_archives: bool = false,
+
     /// Input object files to link
     object_files: []const []const u8,
 
@@ -67,6 +93,9 @@ pub const LinkConfig = struct {
     /// Additional linker flags
     extra_args: []const []const u8 = &.{},
 
+    /// Symbols that must remain live even under section garbage collection.
+    force_undefined_symbols: []const []const u8 = &.{},
+
     /// Whether to allow LLD to exit early on errors
     can_exit_early: bool = false,
 
@@ -77,9 +106,21 @@ pub const LinkConfig = struct {
     /// available to the WASM module at runtime. Must be a multiple of 64KB (WASM page size).
     wasm_initial_memory: usize = DEFAULT_WASM_INITIAL_MEMORY,
 
+    /// Maximum memory size for WASM targets (bytes), when the runtime contract needs one.
+    wasm_maximum_memory: ?usize = null,
+
     /// Stack size for WASM targets (bytes). This is the amount of memory reserved for the
     /// call stack within the WASM linear memory. Must be a multiple of 16 (stack alignment).
     wasm_stack_size: usize = DEFAULT_WASM_STACK_SIZE,
+
+    /// Whether the final WASM module imports `env.memory` instead of defining memory.
+    wasm_import_memory: bool = false,
+
+    /// Optional data/global base for freestanding WASM links.
+    wasm_global_base: ?u32 = null,
+
+    /// Function exports derived from explicit platform host object exports.
+    wasm_exports: []const []const u8 = &.{},
 
     /// Platform files directory (absolute path). Used to find platform-bundled sysroots.
     /// For example, if this is "/path/to/platform/targets", the linker will look for
@@ -92,7 +133,36 @@ pub const LinkConfig = struct {
     /// a shared filename. When null, the linker falls back to the directory
     /// containing the running `roc` executable.
     scratch_dir: ?[]const u8 = null,
+
+    /// Object file whose `__DWARF` sections get spliced into the linked
+    /// macOS executable after linking, making it self-contained for
+    /// debuggers. Also suppresses the stabs debug map and reserves load
+    /// command space for the extra segment.
+    macho_dwarf_object: ?[]const u8 = null,
 };
+
+fn appendForceUndefinedSymbol(
+    ctx: *CliCtx,
+    args: *std.array_list.Managed([]const u8),
+    target_os: std.Target.Os.Tag,
+    symbol: []const u8,
+) LinkError!void {
+    switch (target_os) {
+        .macos => {
+            try args.append("-u");
+            const prefixed = std.fmt.allocPrint(ctx.arena, "_{s}", .{symbol}) catch return LinkError.OutOfMemory;
+            try args.append(prefixed);
+        },
+        .windows => {
+            const include_arg = std.fmt.allocPrint(ctx.arena, "/include:{s}", .{symbol}) catch return LinkError.OutOfMemory;
+            try args.append(include_arg);
+        },
+        else => {
+            const undefined_arg = std.fmt.allocPrint(ctx.arena, "--undefined={s}", .{symbol}) catch return LinkError.OutOfMemory;
+            try args.append(undefined_arg);
+        },
+    }
+}
 
 /// Errors that can occur during linking
 pub const LinkError = error{
@@ -268,18 +338,27 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
     // Use target OS if provided, otherwise fall back to host OS
     const target_os = config.target_os orelse builtin.target.os.tag;
     const target_arch = config.target_arch orelse builtin.target.cpu.arch;
+    const is_shared_lib = config.output_kind == .shared_lib;
 
     switch (target_os) {
         .macos => {
             // Add linker name for macOS
             try args.append("ld64.lld");
 
+            if (is_shared_lib) {
+                try args.append("-dylib");
+            }
+
             // Add output argument
             try args.append("-o");
             try args.append(config.output_path);
 
             // Suppress LLD warnings
-            try args.append("-w");
+            if (suppress_linker_warnings) {
+                try args.append("-w");
+            }
+            // For dylibs, dead-strip roots are the exported symbols instead of the entrypoint.
+            try args.append("-dead_strip");
 
             // Add architecture flag
             try args.append("-arch");
@@ -294,6 +373,15 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
             try args.append("macos");
             try args.append("13.0"); // minimum deployment target
             try args.append("13.0"); // SDK version
+
+            if (config.macho_dwarf_object != null) {
+                // The post-link DWARF splice adds a __DWARF load command, so
+                // reserve header space for it, and suppress the stabs debug
+                // map since the spliced DWARF replaces it.
+                try args.append("-headerpad");
+                try args.append("0x2000");
+                try args.append("-S");
+            }
 
             // Try to find a platform-provided sysroot first (for cross-compilation with bundled frameworks)
             // Falls back to Roc's bundled darwin sysroot (minimal, only has libSystem.tbd)
@@ -340,9 +428,14 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
             try args.append("-nostdlib");
             // Remove unused sections to reduce binary size
             try args.append("--gc-sections");
+            // Stamp a build id so stripped copies of the binary can be
+            // matched back to their debug info.
+            try args.append("--build-id");
             // TODO make the confirugable instead of using comments
             // Suppress linker warnings
-            try args.append("-w");
+            if (suppress_linker_warnings) {
+                try args.append("-w");
+            }
             // Verbose linker for debugging (uncomment as needed)
             // try args.append("--verbose");
             // try args.append("--print-map");
@@ -353,10 +446,21 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
 
             switch (target_abi) {
                 .musl => {
-                    // Static musl linking
-                    try args.append("-static");
+                    if (is_shared_lib) {
+                        // -static and -shared are mutually exclusive; a shared library
+                        // is inherently a dynamic artifact even on musl targets.
+                        try args.append("-shared");
+                    } else {
+                        // Static musl linking
+                        try args.append("-static");
+                    }
                 },
                 .gnu => {
+                    if (is_shared_lib) {
+                        // Shared libraries have no program interpreter; the loading
+                        // process's dynamic linker resolves them.
+                        try args.append("-shared");
+                    } else
                     // Dynamic GNU linking - dynamic linker path is handled by caller
                     // for cross-compilation. Only detect locally for native builds
                     if (config.extra_args.len == 0) {
@@ -426,8 +530,16 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
             const out_arg = try std.fmt.allocPrint(ctx.arena, "/out:{s}", .{config.output_path});
             try args.append(out_arg);
 
-            // Add subsystem flag (console by default)
-            try args.append("/subsystem:console");
+            if (is_shared_lib) {
+                try args.append("/dll");
+            } else {
+                // Add subsystem flag (console by default)
+                try args.append("/subsystem:console");
+            }
+            try args.append("/opt:ref");
+            // Roc objects carry DWARF (not CodeView); this keeps the .debug_*
+            // sections in the PE for gdb/lldb instead of dropping them.
+            try args.append("/debug:dwarf");
 
             // Add machine type based on target architecture
             switch (target_arch) {
@@ -441,8 +553,10 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
             // produces bigger frames (e.g. std.fs PathSpace buffers ~64 KiB each) than
             // 0.15, and recursion-heavy Roc programs blow past 16 MiB before the
             // platform host's overflow handler can run. Match eval-test-runner.exe
-            // and roc.exe.
-            try args.append("/stack:67108864");
+            // and roc.exe. (The loading process owns the stack for DLLs.)
+            if (!is_shared_lib) {
+                try args.append("/stack:67108864");
+            }
 
             // These are part of the core Windows OS and are available on all Windows systems
             try args.append("/defaultlib:kernel32");
@@ -486,38 +600,65 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
             // Don't look for _start or _main entry point - we export specific functions
             try args.append("--no-entry");
 
-            // Export all symbols (the Roc app exports its entrypoints)
-            try args.append("--export-all");
-
-            // Disable garbage collection to preserve host-defined exports (init, handleEvent, update)
-            // Without this, wasm-ld removes symbols that aren't referenced by the Roc app
-            try args.append("--no-gc-sections");
+            // Remove unused sections. The compiler passes explicit host-object
+            // exports below so they remain live roots.
+            try args.append("--gc-sections");
 
             // Allow undefined symbols (imports from host environment)
             try args.append("--allow-undefined");
+
+            if (config.wasm_import_memory) {
+                try args.append("--import-memory");
+            }
 
             // Set initial memory size (configurable, default 64MB)
             // Must be a multiple of 64KB (WASM page size)
             const initial_memory_str = std.fmt.allocPrint(ctx.arena, "--initial-memory={d}", .{config.wasm_initial_memory}) catch return LinkError.OutOfMemory;
             try args.append(initial_memory_str);
 
+            if (config.wasm_maximum_memory) |maximum_memory| {
+                const maximum_memory_str = std.fmt.allocPrint(ctx.arena, "--max-memory={d}", .{maximum_memory}) catch return LinkError.OutOfMemory;
+                try args.append(maximum_memory_str);
+            }
+
+            if (config.wasm_global_base) |global_base| {
+                const global_base_str = std.fmt.allocPrint(ctx.arena, "--global-base={d}", .{global_base}) catch return LinkError.OutOfMemory;
+                try args.append(global_base_str);
+            }
+
             // Set stack size (configurable, default 8MB)
             // Must be a multiple of 16 (stack alignment)
             const stack_size_str = std.fmt.allocPrint(ctx.arena, "stack-size={d}", .{config.wasm_stack_size}) catch return LinkError.OutOfMemory;
             try args.append("-z");
             try args.append(stack_size_str);
+
+            for (config.wasm_exports) |export_name| {
+                const export_arg = std.fmt.allocPrint(ctx.arena, "--export={s}", .{export_name}) catch return LinkError.OutOfMemory;
+                try args.append(export_arg);
+            }
         },
         else => {
             // Generic ELF linker
             try args.append("ld.lld");
+
+            if (is_shared_lib) {
+                try args.append("-shared");
+            }
 
             // Add output argument
             try args.append("-o");
             try args.append(config.output_path);
 
             // Suppress LLD warnings
-            try args.append("-w");
+            if (suppress_linker_warnings) {
+                try args.append("-w");
+            }
+            try args.append("--gc-sections");
         },
+    }
+
+    for (config.force_undefined_symbols) |symbol| {
+        try appendForceUndefinedSymbol(ctx, &args, target_os, symbol);
     }
 
     // For WASM targets, wrap platform files in --whole-archive to include all symbols
@@ -526,7 +667,7 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
     const is_wasm = config.target_format == .wasm;
     const is_macos = target_os == .macos;
     const is_windows = target_os == .windows;
-    if (is_wasm and config.platform_files_pre.len > 0) {
+    if (is_wasm and config.platform_files_pre.len > 0 and !config.lazy_platform_archives) {
         try args.append("--whole-archive");
     }
 
@@ -534,14 +675,18 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
     // Static platform archives need all members included so host-exported
     // functions like init, handleEvent, and update are retained.
     if (config.platform_files_pre.len > 0) {
-        if (!is_macos and !is_windows) {
+        if (!is_macos and !is_windows and !config.lazy_platform_archives) {
             // ELF targets use --whole-archive
             try args.append("--whole-archive");
         }
         for (config.platform_files_pre) |platform_file| {
-            try appendPlatformFile(ctx, &args, platform_file, is_macos, is_windows);
+            if (config.lazy_platform_archives) {
+                try args.append(platform_file);
+            } else {
+                try appendPlatformFile(ctx, &args, platform_file, is_macos, is_windows);
+            }
         }
-        if (!is_macos and !is_windows) {
+        if (!is_macos and !is_windows and !config.lazy_platform_archives) {
             try args.append("--no-whole-archive");
         }
     }
@@ -554,13 +699,17 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
     // Add platform-provided files that come after object files
     // Also use --whole-archive in case there are static libs here too
     if (config.platform_files_post.len > 0) {
-        if (!is_macos and !is_windows) {
+        if (!is_macos and !is_windows and !config.lazy_platform_archives) {
             try args.append("--whole-archive");
         }
         for (config.platform_files_post) |platform_file| {
-            try appendPlatformFile(ctx, &args, platform_file, is_macos, is_windows);
+            if (config.lazy_platform_archives) {
+                try args.append(platform_file);
+            } else {
+                try appendPlatformFile(ctx, &args, platform_file, is_macos, is_windows);
+            }
         }
-        if (!is_macos and !is_windows) {
+        if (!is_macos and !is_windows and !config.lazy_platform_archives) {
             try args.append("--no-whole-archive");
         }
     }
@@ -603,13 +752,18 @@ pub fn link(ctx: *CliCtx, config: LinkConfig) LinkError!void {
     // frame per Roc call (max_call_depth = 1024), and with Zig 0.16 frame
     // sizes 1024 frames overflows 8 MiB before the interpreter's depth check
     // can crash cleanly. Matches /stack:67108864 used for Windows above.
-    if (config.target_format == .macho) {
+    if (config.target_format == .macho and config.output_kind == .exe) {
         patchMachoStackSize(config.output_path, 64 * 1024 * 1024, ctx.io.std_io) catch |err| {
             std.log.warn("Failed to patch LC_MAIN stacksize for {s}: {}", .{ config.output_path, err });
         };
+        if (config.macho_dwarf_object) |dwarf_object| {
+            DwarfSplice.spliceDwarf(ctx.gpa, ctx.io.std_io, config.output_path, dwarf_object) catch |err| {
+                std.log.warn("Failed to splice DWARF into {s}: {}", .{ config.output_path, err });
+            };
+        }
         // Patching invalidated the ad-hoc code signature ld64.lld wrote; on
         // macOS 14+ the kernel SIGKILLs (137) binaries with bad signatures,
-        // so re-sign ad-hoc via /usr/bin/codesign.
+        // so rewrite the signature in place.
         resignMachoAdHoc(ctx, config.output_path) catch |err| {
             std.log.warn("Failed to re-sign {s} after stacksize patch: {}", .{ config.output_path, err });
         };
@@ -646,15 +800,100 @@ fn patchMachoStackSize(path: []const u8, stacksize: u64, io: std.Io) anyerror!vo
     // No LC_MAIN — leave as-is (e.g. dylibs or unusual layouts).
 }
 
+/// Rewrite a Mach-O binary's ad-hoc code signature in place. The signature
+/// blob is the last content in the file, recorded by LC_CODE_SIGNATURE; we
+/// recompute the page hashes over everything before it and write a fresh
+/// linker-style ad-hoc signature into that extent.
 fn resignMachoAdHoc(ctx: *CliCtx, path: []const u8) anyerror!void {
-    const result = try std.process.run(ctx.arena, ctx.io.std_io, .{
-        .argv = &.{ "/usr/bin/codesign", "--force", "--sign", "-", path },
-    });
-    defer ctx.arena.free(result.stdout);
-    defer ctx.arena.free(result.stderr);
-    switch (result.term) {
-        .exited => |code| if (code != 0) return error.CodesignFailed,
-        else => return error.CodesignFailed,
+    const io = ctx.io.std_io;
+    const gpa = ctx.gpa;
+
+    var file = try std.Io.Dir.cwd().openFile(io, path, .{ .mode = .read_write });
+    defer file.close(io);
+
+    var header: macho.mach_header_64 = undefined;
+    const header_n = try file.readPositionalAll(io, std.mem.asBytes(&header), 0);
+    if (header_n != @sizeOf(macho.mach_header_64)) return error.UnexpectedEof;
+    if (header.magic != macho.MH_MAGIC_64) return error.NotMacho64;
+
+    const cmds_buf = try ctx.arena.alignedAlloc(u8, .of(macho.segment_command_64), header.sizeofcmds);
+    const cmds_n = try file.readPositionalAll(io, cmds_buf, @sizeOf(macho.mach_header_64));
+    if (cmds_n != header.sizeofcmds) return error.UnexpectedEof;
+
+    var cs_cmd: ?*align(8) macho.linkedit_data_command = null;
+    var text_seg: ?*align(8) macho.segment_command_64 = null;
+    var linkedit_seg: ?*align(8) macho.segment_command_64 = null;
+
+    var offset: usize = 0;
+    var i: u32 = 0;
+    while (i < header.ncmds) : (i += 1) {
+        if (offset + @sizeOf(macho.load_command) > cmds_buf.len) return error.UnexpectedEof;
+        const lc: *align(8) macho.load_command = @ptrCast(@alignCast(cmds_buf.ptr + offset));
+        switch (lc.cmd) {
+            .CODE_SIGNATURE => cs_cmd = @ptrCast(lc),
+            .SEGMENT_64 => {
+                const seg: *align(8) macho.segment_command_64 = @ptrCast(lc);
+                if (std.mem.eql(u8, seg.segName(), "__TEXT")) {
+                    text_seg = seg;
+                } else if (std.mem.eql(u8, seg.segName(), "__LINKEDIT")) {
+                    linkedit_seg = seg;
+                }
+            },
+            else => {},
+        }
+        offset += lc.cmdsize;
+    }
+
+    // No LC_CODE_SIGNATURE means the linker did not sign this binary (ld64.lld
+    // only ad-hoc signs arm64 by default), so patching invalidated nothing and
+    // the kernel does not require a signature.
+    const cs = cs_cmd orelse return;
+    const text = text_seg orelse return error.MissingTextSegment;
+    const linkedit = linkedit_seg orelse return error.MissingLinkeditSegment;
+
+    const page_size: u16 = if (header.cputype == macho.CPU_TYPE_ARM64) 0x4000 else 0x1000;
+    const ident = std.fs.path.basename(path);
+
+    // The signature hashes every page before LC_CODE_SIGNATURE's dataoff,
+    // including page 0 with the load commands. Its exact size is known up
+    // front (one CodeDirectory blob, no special slots), so any load command
+    // growth must be written back before hashing.
+    const hash_size = std.crypto.hash.sha2.Sha256.digest_length;
+    const total_pages = std.mem.alignForward(usize, cs.dataoff, page_size) / page_size;
+    const exact_size = @sizeOf(macho.SuperBlob) + @sizeOf(macho.BlobIndex) +
+        @sizeOf(macho.CodeDirectory) + ident.len + 1 + total_pages * hash_size;
+
+    if (exact_size > cs.datasize) {
+        const grow = exact_size - cs.datasize;
+        cs.datasize = @intCast(exact_size);
+        linkedit.filesize += grow;
+        linkedit.vmsize = std.mem.alignForward(u64, linkedit.filesize, page_size);
+        try file.writePositionalAll(io, cmds_buf, @sizeOf(macho.mach_header_64));
+    }
+
+    var code_sig = CodeSignature.init(page_size);
+    defer code_sig.deinit(gpa);
+    code_sig.code_directory.ident = ident;
+
+    var sig_bytes: std.Io.Writer.Allocating = .init(gpa);
+    defer sig_bytes.deinit();
+    try code_sig.writeAdhocSignature(gpa, io, .{
+        .file = file,
+        .exec_seg_base = text.fileoff,
+        .exec_seg_limit = text.filesize,
+        .file_size = cs.dataoff,
+        .dylib = header.filetype == macho.MH_DYLIB,
+    }, &sig_bytes.writer);
+
+    const sig = sig_bytes.written();
+    std.debug.assert(sig.len == exact_size);
+    try file.writePositionalAll(io, sig, cs.dataoff);
+    if (sig.len < cs.datasize) {
+        // Zero the slack so stale signature bytes cannot survive within the
+        // load command's extent.
+        const slack = try ctx.arena.alloc(u8, cs.datasize - sig.len);
+        @memset(slack, 0);
+        try file.writePositionalAll(io, slack, cs.dataoff + sig.len);
     }
 }
 
@@ -745,6 +984,41 @@ test "target format detection" {
     switch (detected) {
         .elf, .coff, .macho, .wasm => {},
     }
+}
+
+test "force undefined symbols use target linker spelling" {
+    var arena_instance = collections.SingleThreadArena.init(std.testing.allocator);
+    defer arena_instance.deinit();
+
+    var io = Io.create(std.testing.io);
+    var ctx = CliCtx.init(std.testing.allocator, arena_instance.allocator(), &io, .build);
+    ctx.initIo();
+    defer ctx.deinit();
+
+    const mac_config = LinkConfig{
+        .target_format = .macho,
+        .target_os = .macos,
+        .target_arch = .x86_64,
+        .output_path = "test_output",
+        .object_files = &.{"app.o"},
+        .force_undefined_symbols = &.{"roc__answer"},
+    };
+    const mac_args = try buildLinkArgs(&ctx, mac_config);
+    const mac_u_idx = findArg(mac_args.items, "-u") orelse return error.MissingForceUndefined;
+    try std.testing.expect(mac_u_idx + 1 < mac_args.items.len);
+    try std.testing.expectEqualStrings("_roc__answer", mac_args.items[mac_u_idx + 1]);
+
+    const linux_config = LinkConfig{
+        .target_format = .elf,
+        .target_abi = .musl,
+        .target_os = .linux,
+        .target_arch = .x86_64,
+        .output_path = "test_output",
+        .object_files = &.{"app.o"},
+        .force_undefined_symbols = &.{"roc__answer"},
+    };
+    const linux_args = try buildLinkArgs(&ctx, linux_config);
+    _ = findArg(linux_args.items, "--undefined=roc__answer") orelse return error.MissingForceUndefined;
 }
 
 test "macOS platform archives use scoped force_load" {

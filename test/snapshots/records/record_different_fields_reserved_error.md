@@ -27,14 +27,12 @@ IMPORT MUST BE TOP LEVEL - record_different_fields_reserved_error.md:5:5:5:11
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:5:11:5:12
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:5:26:5:27
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:6:5:6:8
-UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:6:8:6:9
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:6:19:6:20
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:7:5:7:7
-UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:7:7:7:8
 UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_reserved_error.md:7:19:7:20
 DECLARATION HAS NO VALUE - record_different_fields_reserved_error.md:3:5:3:12
-TYPE MISMATCH - record_different_fields_reserved_error.md:4:13:4:29
-TYPE MISMATCH - record_different_fields_reserved_error.md:5:13:5:26
+MISSING METHOD - record_different_fields_reserved_error.md:4:13:4:29
+MISSING METHOD - record_different_fields_reserved_error.md:5:13:5:26
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **:** is not expected in an expression.
@@ -169,17 +167,6 @@ Expressions can be identifiers, literals, function calls, or operators.
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
-The token **:** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-**record_different_fields_reserved_error.md:6:8:6:9:**
-```roc
-    and: Bool.true,
-```
-       ^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
 The token **,** is not expected in an expression.
 Expressions can be identifiers, literals, function calls, or operators.
 
@@ -199,17 +186,6 @@ Expressions can be identifiers, literals, function calls, or operators.
     or: Bool.false,
 ```
     ^^
-
-
-**UNEXPECTED TOKEN IN EXPRESSION**
-The token **:** is not expected in an expression.
-Expressions can be identifiers, literals, function calls, or operators.
-
-**record_different_fields_reserved_error.md:7:7:7:8:**
-```roc
-    or: Bool.false,
-```
-      ^
 
 
 **UNEXPECTED TOKEN IN EXPRESSION**
@@ -234,35 +210,29 @@ This declaration has a type annotation but no implementation.
 
 Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
 
-**TYPE MISMATCH**
-This expression produces a value, but it's not being used:
+**MISSING METHOD**
+This **from_quote** method is being called on a value whose type doesn't have that method:
 **record_different_fields_reserved_error.md:4:13:4:29:**
 ```roc
     expect: "test assertion",
 ```
             ^^^^^^^^^^^^^^^^
 
-It has the type:
+The value's type, which does not have a method named **from_quote**, is:
 
-    Str
+    {}
 
-Since this expression is used as a statement, it must evaluate to `{}`.
-If you don't need the value, you can ignore it with `_ =`.
-
-**TYPE MISMATCH**
-This expression produces a value, but it's not being used:
+**MISSING METHOD**
+This **from_quote** method is being called on a value whose type doesn't have that method:
 **record_different_fields_reserved_error.md:5:13:5:26:**
 ```roc
     import: "module load",
 ```
             ^^^^^^^^^^^^^
 
-It has the type:
+The value's type, which does not have a method named **from_quote**, is:
 
-    Str
-
-Since this expression is used as a statement, it must evaluate to `{}`.
-If you don't need the value, you can ignore it with `_ =`.
+    {}
 
 # TOKENS
 ~~~zig
@@ -301,9 +271,7 @@ EndOfFile,
 			(e-string-part (raw "module load")))
 		(e-malformed (reason "expr_unexpected_token"))
 		(e-malformed (reason "expr_unexpected_token"))
-		(e-malformed (reason "expr_unexpected_token"))
 		(e-ident (raw "Bool.true"))
-		(e-malformed (reason "expr_unexpected_token"))
 		(e-malformed (reason "expr_unexpected_token"))
 		(e-malformed (reason "expr_unexpected_token"))
 		(e-ident (raw "Bool.false"))
@@ -321,9 +289,9 @@ EndOfFile,
 	
 			"module load"
 	
-			Bool.true
+		Bool.true
 	
-			Bool.false
+		Bool.false
 	
 }
 ~~~
@@ -360,11 +328,7 @@ EndOfFile,
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr
-		(e-runtime-error (tag "expr_not_canonicalized")))
-	(s-expr
 		(e-runtime-error (tag "nested_value_not_found")))
-	(s-expr
-		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr

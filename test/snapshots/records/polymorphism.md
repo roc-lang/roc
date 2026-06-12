@@ -26,10 +26,12 @@ This **to_str** method is being called on a value whose type doesn't have that m
 
 The value's type, which does not have a method named **to_str**, is:
 
-    { pair1: { first: a, second: Str }, pair2: { first: Str, second: b }, pair3: { first: [True, ..], second: [False, ..] } }
+    { pair1: { first: a, second: b }, pair2: { first: c, second: d }, pair3: { first: [True, ..], second: [False, ..] } }
       where [
         a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-        b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
+        b.from_quote : List(U8) -> Try(b, [BadQuotedBytes(Str)]),
+        c.from_quote : List(U8) -> Try(c, [BadQuotedBytes(Str)]),
+        d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]),
       ]
 
 # TOKENS
@@ -115,7 +117,7 @@ EndOfFile,
 							(p-assign (ident "y"))))))))
 	(s-let
 		(p-assign (ident "pair1"))
-		(e-call (constraint-fn-var 86)
+		(e-call (constraint-fn-var 96)
 			(e-lookup-local
 				(p-assign (ident "make_pair")))
 			(e-num (value "1"))
@@ -123,7 +125,7 @@ EndOfFile,
 				(e-literal (string "a")))))
 	(s-let
 		(p-assign (ident "pair2"))
-		(e-call (constraint-fn-var 127)
+		(e-call (constraint-fn-var 147)
 			(e-lookup-local
 				(p-assign (ident "make_pair")))
 			(e-string
@@ -131,12 +133,12 @@ EndOfFile,
 			(e-num (value "42"))))
 	(s-let
 		(p-assign (ident "pair3"))
-		(e-call (constraint-fn-var 134)
+		(e-call (constraint-fn-var 154)
 			(e-lookup-local
 				(p-assign (ident "make_pair")))
 			(e-tag (name "True"))
 			(e-tag (name "False"))))
-	(e-dispatch-call (method "to_str") (constraint-fn-var 136)
+	(e-dispatch-call (method "to_str") (constraint-fn-var 156)
 		(receiver
 			(e-record
 				(fields

@@ -2,71 +2,73 @@
 //! programs must not depend on libc or on Zig's standard library, it's important that
 //! none of these operations depend on any Zig types like slices or Allocator.
 //!
-//! All Roc functions that are exposed to the host return `void` and take a `*RocOps`
-//! followed by the address of the return type (which the Roc function will write into)
-//! and varargs (all pointers) to arguments to pass into the Roc function.
+//! Roc calls the host using the platform C ABI. Every host operation — the memory and
+//! diagnostic callbacks in `RocOps`, and each platform-provided hosted function — takes a
+//! leading `*RocOps` argument (the host's operation table, through which the host can reach
+//! its own `env` context) and then its remaining arguments and return value in whatever
+//! registers/memory the target's C ABI prescribes for their types.
 //!
-//! This design makes Roc's ABI very simple; the calling convention is just "Ops pointer,
-//! return pointer, args pointers".
+//! Hosted functions are exposed to the host with their natural C signatures (see
+//! `src/layout/abi`), so small arguments and returns travel in registers exactly as a
+//! hand-written C function would. A hosted function receives the leading `*RocOps` only when
+//! its argument or return layouts require Roc memory management; otherwise it is a bare C
+//! call.
 
 const tracy = @import("tracy");
 
-/// todo: describe RocCall
-pub const RocCall = fn (
-    /// Function pointers that the Roc program uses, e.g. alloc, dealloc, etc.
-    *RocOps,
-    /// The Roc function will write its returned value into this address.
-    ///
-    /// (If the Roc function returns a zero-sized type like `{}`, it will
-    /// not write anything into this address.)
-    ///
-    /// The host must ensure that this address points to enough memory for the
-    /// Roc function to write its entire return value into the address.
-    *anyopaque,
-    /// A pointer to a Roc tuple containing the arguments to pass into the Roc function.
-    ///
-    /// For a zig host use an `extern struct` for well-defined in-memory layout matching the C ABI for the target
-    *anyopaque,
-) callconv(.c) void;
+/// A type-erased pointer to a platform-provided hosted function.
+///
+/// Each hosted function will have its own natural C signature, determined by its Roc argument
+/// and return types under the target C ABI, so there is no single concrete function-pointer
+/// type for all of them. They are stored type-erased in `HostedFunctions` and cast back to
+/// their concrete signature at the Roc call site (which knows the types).
+///
+/// (For now, hosted functions are still invoked through the uniform `(ops, ret_ptr, args_ptr)`
+/// shape until the per-signature C-ABI call path lands; the erased pointer type below keeps
+/// that working. The interpreter will bridge to the natural C ABI via a fixed assembly
+/// register-image trampoline, and the compiled backends will emit direct C-ABI calls.)
+///
+/// Roc transfers ownership of refcounted arguments to hosted functions. A host function must
+/// decref each owned refcounted argument when it is done with it, or transfer that ownership
+/// into its return value or longer-lived storage. If the host keeps both the call argument
+/// and a stored copy, it must incref the stored copy so each live reference has one
+/// ownership.
+/// How builtins and compiled Roc code reach the host's runtime operations.
+pub const HostCallMode = enum {
+    /// Through the RocOps vtable parameter (the interpreter, compiler-internal
+    /// evaluation, and any host that constructs a RocOps).
+    vtable,
+    /// Through linker-resolved extern symbols (compiled output). The *RocOps
+    /// parameters threaded through builtins are inert in this mode; the
+    /// methods below ignore them and call the extern symbols directly.
+    extern_symbols,
+};
 
-/// The operations (in the form of function pointers) that a running Roc program
-/// needs the host to provide.
-///
-/// This is used in both calls from actual hosts as well as evaluation of constants
-/// inside the Roc compiler itself.
-/// Function pointer type for hosted functions provided by the platform.
-/// All hosted functions follow the RocCall ABI: (ops, ret_ptr, args_ptr).
-///
-/// Roc transfers ownership of refcounted arguments to hosted functions. A host
-/// function must decref each owned refcounted argument when it is done with it,
-/// or transfer that ownership into its return value or longer-lived storage. If
-/// the host keeps both the call argument and a stored copy, it must incref the
-/// stored copy so each live reference has one ownership.
-///
-/// The first parameter is `*anyopaque` instead of `*RocOps` to break a type-level
-/// dependency loop (HostedFn -> *RocOps -> HostedFunctions -> [*]HostedFn).
-/// Callers should cast the opaque pointer to `*RocOps` as needed.
-/// Use `hostedFn` to type-erase a concrete hosted function pointer.
+/// Selected by the root module (like std_options): declaring
+/// `pub const roc_host_call_mode: host_abi.HostCallMode = .extern_symbols;`
+/// at the root switches builtins to direct extern host calls.
+pub const host_call_mode: HostCallMode = if (@hasDecl(@import("root"), "roc_host_call_mode"))
+    @import("root").roc_host_call_mode
+else
+    .vtable;
+
+/// The fixed runtime symbols every host defines under the symbol ABI.
+const extern_host = struct {
+    extern fn roc_alloc(length: usize, alignment: usize) ?*anyopaque;
+    extern fn roc_dealloc(ptr: *anyopaque, alignment: usize) void;
+    extern fn roc_realloc(ptr: *anyopaque, new_length: usize, alignment: usize) ?*anyopaque;
+    extern fn roc_dbg(bytes: [*]const u8, len: usize) void;
+    extern fn roc_expect_failed(bytes: [*]const u8, len: usize) void;
+    extern fn roc_crashed(bytes: [*]const u8, len: usize) void;
+};
+
+/// Type-erased pointer to a hosted platform function stored in the
+/// interpreter-internal vtable. The interpreter's trampoline rebuilds each
+/// function's natural C ABI from its layouts before calling through this.
 pub const HostedFn = *const fn (*anyopaque, *anyopaque, *anyopaque) callconv(.c) void;
 
-/// Type-erase a hosted function pointer to `HostedFn`.
-///
-/// Hosted functions are typically written with concrete parameter types for clarity
-/// (e.g. `*RocOps`, `*RocStr`, `[*]u8`), but must be stored as `HostedFn` which
-/// uses `*anyopaque` for all parameters. This helper performs that cast.
+/// Type-erase a concrete hosted function pointer to `HostedFn` for storage in the vtable.
 pub fn hostedFn(func: anytype) HostedFn {
-    const T = @TypeOf(func);
-    const info = @typeInfo(T);
-    if (info == .pointer) {
-        const child = @typeInfo(info.pointer.child);
-        if (child == .@"fn") {
-            const f = child.@"fn";
-            if (f.params.len != 3)
-                @compileError("hostedFn: function must take exactly 3 parameters (ops, ret_ptr, args_ptr)");
-            if (f.return_type != void)
-                @compileError("hostedFn: function must return void");
-        }
-    }
     return @ptrCast(func);
 }
 
@@ -98,80 +100,99 @@ pub fn emptyHostedFunctions() HostedFunctions {
 /// Operations that the host provides to Roc code, including memory management,
 /// panic handling, and platform-specific effects.
 pub const RocOps = extern struct {
-    /// The host provides this pointer, and Roc passes it to each of the following
-    /// function pointers as a second argument. This lets the host do things like use
-    /// arena allocators for allocation and deallocation (by putting the arena in here).
-    /// The pointer can be to absolutely anything the host likes, or null if unused.
+    /// The host's own context pointer. Roc never interprets it; the host's callbacks reach it
+    /// through their leading `*RocOps` argument (`ops.env`) to find things like an arena
+    /// allocator. May be null if the host has no context.
     env: *anyopaque,
-    /// Similar to  _aligned_malloc - https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/aligned-malloc
-    roc_alloc: *const fn (*RocAlloc, *anyopaque) callconv(.c) void,
-    /// Similar to  _aligned_free - https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/aligned-free
-    roc_dealloc: *const fn (*RocDealloc, *anyopaque) callconv(.c) void,
-    /// Similar to  _aligned_realloc - https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/aligned-realloc
-    roc_realloc: *const fn (*RocRealloc, *anyopaque) callconv(.c) void,
-    /// Called when the Roc program has called `dbg` on something.
-    roc_dbg: *const fn (*const RocDbg, *anyopaque) callconv(.c) void,
-    /// Called when the Roc program has run an `expect` which failed.
-    roc_expect_failed: *const fn (*const RocExpectFailed, *anyopaque) callconv(.c) void,
-    /// Called when the Roc program crashes, e.g. due to integer overflow.
-    /// The host should handle this gracefully and stop execution of the Roc program.
-    roc_crashed: *const fn (*const RocCrashed, *anyopaque) callconv(.c) void,
+    /// Allocate `length` bytes aligned to `alignment`, returning the allocation (or null on
+    /// OOM — see below). Similar to `_aligned_malloc`.
+    ///
+    /// A host that cannot provide a non-null pointer (e.g. due to OOM) must not return a real
+    /// pointer; a platform host aborts, while the compiler-internal host returns `null` so the
+    /// surrounding interpreter can turn it into a Roc crash. (`null` and a real pointer share
+    /// the same representation, so codegen and platform hosts that always succeed are
+    /// unaffected.)
+    roc_alloc: *const fn (*RocOps, usize, usize) callconv(.c) ?*anyopaque,
+    /// Free the allocation at `ptr` that had alignment `alignment`. Similar to `_aligned_free`.
+    /// (The length is not provided, because seamless slices make it unknown at runtime.)
+    roc_dealloc: *const fn (*RocOps, *anyopaque, usize) callconv(.c) void,
+    /// Reallocate `ptr` to `new_length` bytes aligned to `alignment`, returning the new
+    /// allocation (or null on OOM, as for `roc_alloc`). Similar to `_aligned_realloc`.
+    roc_realloc: *const fn (*RocOps, *anyopaque, usize, usize) callconv(.c) ?*anyopaque,
+    /// Called when the Roc program runs `dbg`, with the UTF-8 message bytes and length.
+    /// The bytes are non-null but not guaranteed to be null-terminated.
+    roc_dbg: *const fn (*RocOps, [*]const u8, usize) callconv(.c) void,
+    /// Called when an inline `expect` fails, with the UTF-8 message bytes and length.
+    roc_expect_failed: *const fn (*RocOps, [*]const u8, usize) callconv(.c) void,
+    /// Called when the Roc program crashes (e.g. integer overflow), with the UTF-8 message
+    /// bytes and length. The host must stop execution of the Roc program and not return to it
+    /// (a platform host aborts; the compiler-internal host longjmps out), so it never returns
+    /// to Roc — but the type stays `void` since a longjmp-based host is not statically noreturn.
+    roc_crashed: *const fn (*RocOps, [*]const u8, usize) callconv(.c) void,
     /// Hosted functions provided by the platform (sorted alphabetically by name).
     /// These are effectful operations like I/O that the platform provides to Type Modules.
     hosted_fns: HostedFunctions,
 
-    /// Helper function to crash the Roc program, returns control to the host.
+    /// Helper to crash the Roc program. The host does not return control to Roc.
     pub fn crash(self: *RocOps, msg: []const u8) void {
         const trace = tracy.trace(@src());
         defer trace.end();
 
-        const roc_crashed_args = RocCrashed{
-            .utf8_bytes = @constCast(msg.ptr),
-            .len = msg.len,
-        };
-        self.roc_crashed(&roc_crashed_args, self.env);
+        switch (comptime host_call_mode) {
+            .vtable => self.roc_crashed(self, msg.ptr, msg.len),
+            .extern_symbols => extern_host.roc_crashed(msg.ptr, msg.len),
+        }
     }
 
-    /// Helper function to send debug output to the host.
+    /// Helper to send debug output to the host.
     pub fn dbg(self: *RocOps, msg: []const u8) void {
         const trace = tracy.trace(@src());
         defer trace.end();
 
-        const roc_dbg_args = RocDbg{
-            .utf8_bytes = @constCast(msg.ptr),
-            .len = msg.len,
-        };
-        self.roc_dbg(&roc_dbg_args, self.env);
+        switch (comptime host_call_mode) {
+            .vtable => self.roc_dbg(self, msg.ptr, msg.len),
+            .extern_symbols => extern_host.roc_dbg(msg.ptr, msg.len),
+        }
     }
 
-    /// Helper function to report a failed `expect` to the host.
+    /// Helper to report a failed `expect` to the host.
     pub fn expectFailed(self: *RocOps, msg: []const u8) void {
         const trace = tracy.trace(@src());
         defer trace.end();
 
-        const roc_expect_failed_args = RocExpectFailed{
-            .utf8_bytes = @constCast(msg.ptr),
-            .len = msg.len,
-        };
-        self.roc_expect_failed(&roc_expect_failed_args, self.env);
+        switch (comptime host_call_mode) {
+            .vtable => self.roc_expect_failed(self, msg.ptr, msg.len),
+            .extern_symbols => extern_host.roc_expect_failed(msg.ptr, msg.len),
+        }
     }
 
     pub fn alloc(self: *RocOps, alignment: usize, length: usize) *anyopaque {
         const trace = tracy.trace(@src());
         defer trace.end();
 
-        var roc_alloc_args = RocAlloc{
-            .alignment = alignment,
-            .length = length,
-            .answer = self.env,
-        };
-        self.roc_alloc(&roc_alloc_args, self.env);
+        const answer = self.tryAlloc(length, alignment);
 
         if (tracy.enable_allocation) {
-            tracy.alloc(@ptrCast(roc_alloc_args.answer), length);
+            tracy.alloc(@ptrCast(answer), length);
         }
 
-        return roc_alloc_args.answer.?;
+        return answer.?;
+    }
+
+    /// Allocate, returning null on OOM exactly as the host reported it.
+    pub fn tryAlloc(self: *RocOps, length: usize, alignment: usize) ?*anyopaque {
+        return switch (comptime host_call_mode) {
+            .vtable => self.roc_alloc(self, length, alignment),
+            .extern_symbols => extern_host.roc_alloc(length, alignment),
+        };
+    }
+
+    /// Reallocate, returning null on OOM exactly as the host reported it.
+    pub fn tryRealloc(self: *RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) ?*anyopaque {
+        return switch (comptime host_call_mode) {
+            .vtable => self.roc_realloc(self, ptr, new_length, alignment),
+            .extern_symbols => extern_host.roc_realloc(ptr, new_length, alignment),
+        };
     }
 
     pub fn dealloc(self: *RocOps, ptr: *anyopaque, alignment: usize) void {
@@ -182,80 +203,9 @@ pub const RocOps = extern struct {
             tracy.free(@ptrCast(ptr));
         }
 
-        var roc_dealloc_args = RocDealloc{
-            .alignment = alignment,
-            .ptr = ptr,
-        };
-        self.roc_dealloc(&roc_dealloc_args, self.env);
+        switch (comptime host_call_mode) {
+            .vtable => self.roc_dealloc(self, ptr, alignment),
+            .extern_symbols => extern_host.roc_dealloc(ptr, alignment),
+        }
     }
-};
-
-/// When RocOps.roc_alloc gets called, it will be passed one of these.
-/// That function should write the address to the allocated memory into `ret`.
-/// If it cannot provide a non-null pointer (e.g. due to OOM), it
-/// must not return, and must instead do something along the lines
-/// of roc_crashed.
-pub const RocAlloc = extern struct {
-    alignment: usize,
-    length: usize,
-    /// On success the host writes the allocated pointer here. A host that cannot
-    /// provide a non-null pointer (e.g. due to OOM) must not return normally; a
-    /// platform host aborts, while the compiler-internal host signals failure by
-    /// writing `null` so the surrounding interpreter can turn it into a Roc crash
-    /// (`null` and a real pointer share the same representation, so codegen and
-    /// platform hosts that always succeed are unaffected).
-    answer: ?*anyopaque,
-};
-
-/// When RocOps.roc_dealloc gets called, it will be passed one of these.
-/// (The length of the allocation cannot be provided, because it is
-/// not always known at runtime due to the way seamless slices work.)
-pub const RocDealloc = extern struct {
-    alignment: usize,
-    ptr: *anyopaque,
-};
-
-/// When RocOps.roc_realloc gets called, it will be passed one of these.
-/// On entry `answer` holds the existing allocation; the host writes the
-/// reallocated pointer back into it. A host that cannot provide a non-null
-/// pointer (e.g. due to OOM) must not return normally; a platform host aborts,
-/// while the compiler-internal host writes `null` so the surrounding interpreter
-/// can turn it into a Roc crash. See `RocAlloc.answer`.
-pub const RocRealloc = extern struct {
-    alignment: usize,
-    new_length: usize,
-    answer: ?*anyopaque,
-};
-
-/// The UTF-8 string message the host receives when a Roc program crashes
-/// (e.g. due to integer overflow).
-///
-/// The pointer to the UTF-8 bytes is guaranteed to be non-null,
-/// but it is *not* guaranteed to be null-terminated.
-pub const RocCrashed = extern struct {
-    utf8_bytes: [*]u8,
-    len: usize,
-};
-
-/// The information the host receives when a Roc program runs a `dbg`.
-///
-/// The pointer to the UTF-8 bytes is guaranteed to be non-null,
-/// but it is *not* guaranteed to be null-terminated.
-pub const RocDbg = extern struct {
-    // TODO make this be structured instead of just a string, so that
-    // the host can format things more nicely (e.g. syntax highlighting).
-    utf8_bytes: [*]u8,
-    len: usize,
-};
-
-/// The information the host receives when a Roc program runs an inline `expect`
-/// which fails.
-///
-/// The pointer to the UTF-8 bytes is guaranteed to be non-null,
-/// but it is *not* guaranteed to be null-terminated.
-pub const RocExpectFailed = extern struct {
-    // TODO make this be structured instead of just a string, so that
-    // the host can format things more nicely (e.g. syntax highlighting).
-    utf8_bytes: [*]u8,
-    len: usize,
 };

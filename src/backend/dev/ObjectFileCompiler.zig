@@ -21,6 +21,7 @@ const CoreCtx = @import("ctx").CoreCtx;
 const LirStore = lir.LirStore;
 const LirProcSpec = lir.LirProcSpec;
 const RocTarget = @import("roc_target").RocTarget;
+const Dwarf = @import("Dwarf.zig");
 
 const ObjectWriter = @import("ObjectWriter.zig");
 const LirCodeGenMod = @import("LirCodeGen.zig");
@@ -229,6 +230,9 @@ fn compileWithCodeGen(
         owned_proc_symbol_names.deinit(allocator);
     }
 
+    var dwarf_procs = std.ArrayList(Dwarf.ProcEntry).empty;
+    defer dwarf_procs.deinit(allocator);
+
     for (static_data_exports) |data_export| {
         try appendStaticDataExport(allocator, data_export, &rodata, &rodata_relocations, &static_data_symbols);
     }
@@ -270,6 +274,12 @@ fn compileWithCodeGen(
             .callee_saved_mask = proc_symbol.callee_saved_mask,
             .epilogue_offset = proc_symbol.epilogue_offset,
             .uses_frame_pointer = proc_symbol.uses_frame_pointer,
+        }) catch return CompilationError.OutOfMemory;
+        dwarf_procs.append(allocator, .{
+            .name = symbol_name,
+            .code_start = proc_symbol.code_start,
+            .code_size = proc_symbol.code_end - proc_symbol.code_start,
+            .loc = lir_store.procLoc(proc_id),
         }) catch return CompilationError.OutOfMemory;
     }
     for (static_data_symbols.items) |sym| {
@@ -385,11 +395,30 @@ fn compileWithCodeGen(
         }
     }
 
+    // Build DWARF debug sections from the line entries recorded during
+    // code generation.
+    const source_file_names = allocator.alloc([]const u8, lir_store.sourceFileCount()) catch {
+        return CompilationError.OutOfMemory;
+    };
+    defer allocator.free(source_file_names);
+    for (source_file_names, 0..) |*name, i| {
+        name.* = lir_store.sourceFileName(@intCast(i));
+    }
+    var dwarf_sections = Dwarf.build(
+        allocator,
+        "roc dev",
+        source_file_names,
+        codegen.getLineEntries(),
+        dwarf_procs.items,
+        code.len,
+    ) catch return CompilationError.OutOfMemory;
+    defer dwarf_sections.deinit(allocator);
+
     // Generate object file
     var output = std.ArrayList(u8).empty;
     errdefer output.deinit(allocator);
 
-    ObjectWriter.generateObjectFile(
+    ObjectWriter.generateObjectFileWithDebug(
         allocator,
         target,
         code,
@@ -397,6 +426,13 @@ fn compileWithCodeGen(
         symbols.items,
         relocations,
         rodata_relocations.items,
+        .{
+            .line = dwarf_sections.debug_line,
+            .abbrev = dwarf_sections.debug_abbrev,
+            .info = dwarf_sections.debug_info,
+            .line_relocs = dwarf_sections.line_relocs,
+            .info_relocs = dwarf_sections.info_relocs,
+        },
         &output,
     ) catch |err| switch (err) {
         error.OutOfMemory => return CompilationError.OutOfMemory,

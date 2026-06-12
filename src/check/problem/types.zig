@@ -45,8 +45,11 @@ pub const Problem = union(enum) {
     annotation_only_value: AnnotationOnlyValue,
     hosted_unboxed_function: HostedUnboxedFunction,
     platform_def_not_found: PlatformDefNotFound,
+    platform_hosted_section: PlatformHostedSection,
     platform_alias_not_found: PlatformAliasNotFound,
     comptime_crash: ComptimeCrash,
+    comptime_invalid_numeral: ComptimeInvalidNumeral,
+    comptime_invalid_quote: ComptimeInvalidQuote,
     comptime_expect_failed: ComptimeExpectFailed,
     comptime_eval_error: ComptimeEvalError,
     invalid_numeric_literal: InvalidNumericLiteral,
@@ -66,7 +69,28 @@ pub const PlatformAliasNotFound = struct {
     ctx: enum { not_found, found_but_not_alias },
 };
 
-/// Error for when a platform expects an alias to be defined, but it's not there
+/// The platform's hosted section disagrees with the hosted functions its
+/// exposed type modules declare, or maps a function to an invalid linker symbol.
+pub const PlatformHostedSection = struct {
+    /// The qualified function name or linker symbol the problem is about
+    name: ExtraStringIdx,
+    reason: enum {
+        /// A hosted function is missing from the hosted section
+        function_not_in_section,
+        /// A section entry names a function that is not a hosted function
+        unknown_function,
+        /// Two section entries name the same hosted function
+        duplicate_function,
+        /// Two hosted/provides entries use the same linker symbol
+        duplicate_symbol,
+        /// The symbol is one of the fixed runtime symbols (the roc_alloc family)
+        reserved_symbol,
+        /// The symbol starts with the internal roc__ namespace prefix
+        reserved_prefix,
+    },
+};
+
+/// Error for when a platform expects a def to be defined, but it's not there
 pub const PlatformDefNotFound = struct {
     expected_def_ident: Ident.Idx,
     ctx: enum { not_found, found_but_not_exported },
@@ -96,6 +120,20 @@ pub const EffectfulExpect = struct {
 
 /// A crash that occurred during compile-time evaluation
 pub const ComptimeCrash = struct {
+    message: ExtraStringIdx,
+    region: base.Region,
+};
+
+/// A numeric literal that a custom `from_numeral` implementation rejected
+/// during compile-time evaluation
+pub const ComptimeInvalidNumeral = struct {
+    message: ExtraStringIdx,
+    region: base.Region,
+};
+
+/// A string literal that a custom `from_quote` implementation rejected
+/// during compile-time evaluation
+pub const ComptimeInvalidQuote = struct {
     message: ExtraStringIdx,
     region: base.Region,
 };
@@ -266,6 +304,8 @@ pub const DispatcherDoesNotImplMethod = struct {
     origin: types_mod.StaticDispatchConstraint.Origin,
     /// Optional numeric literal info for from_numeral constraints
     num_literal: ?types_mod.NumeralInfo = null,
+    /// Source region of the string literal for from_quote constraints
+    quote_region: ?base.Region = null,
     /// True when the dispatcher was a numeric literal that was defaulted to Dec
     /// because no type annotation was given. Used to add explanatory text in errors.
     defaulted_from_numeric_literal: bool = false,

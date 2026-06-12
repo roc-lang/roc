@@ -11,22 +11,22 @@ platform ""
     }
     exposes []
     packages {}
-    provides { processString: "processString" }
+    provides { "roc_processString": processString }
 
 processString : Str -> Str
 ~~~
 # EXPECTED
-EXPOSED BUT NOT DEFINED - platform_str.md:7:16:7:46
+EXPOSED BUT NOT DEFINED - platform_str.md:7:16:7:50
 DECLARATION HAS NO VALUE - platform_str.md:9:1:9:27
 # PROBLEMS
 **EXPOSED BUT NOT DEFINED**
 The module header says that `processString` is exposed, but it is not defined anywhere in this module.
 
-**platform_str.md:7:16:7:46:**
+**platform_str.md:7:16:7:50:**
 ```roc
-    provides { processString: "processString" }
+    provides { "roc_processString": processString }
 ```
-               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 You can fix this by either defining `processString` in this module, or by removing it from the list of exposed values.
 
 **DECLARATION HAS NO VALUE**
@@ -48,7 +48,7 @@ LowerIdent,OpColon,UpperIdent,OpArrow,UpperIdent,
 CloseCurly,
 KwExposes,OpenSquare,CloseSquare,
 KwPackages,OpenCurly,CloseCurly,
-KwProvides,OpenCurly,LowerIdent,OpColon,StringStart,StringPart,StringEnd,CloseCurly,
+KwProvides,OpenCurly,StringStart,StringPart,StringEnd,OpColon,LowerIdent,CloseCurly,
 LowerIdent,OpColon,UpperIdent,OpArrow,UpperIdent,
 EndOfFile,
 ~~~
@@ -66,9 +66,7 @@ EndOfFile,
 		(exposes)
 		(packages)
 		(provides
-			(record-field (name "processString")
-				(e-string
-					(e-string-part (raw "processString"))))))
+			(symbol-map-entry (symbol "roc_processString") (func "processString"))))
 	(statements
 		(s-type-anno (name "processString")
 			(ty-fn
@@ -83,7 +81,7 @@ platform ""
 	}
 	exposes []
 	packages {}
-	provides { processString: "processString" }
+	provides { "roc_processString": processString }
 
 processString : Str -> Str
 ~~~

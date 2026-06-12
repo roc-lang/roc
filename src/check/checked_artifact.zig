@@ -234,7 +234,31 @@ fn hashCheckingContextIdentity(identity: CheckingContextIdentity) [32]u8 {
             hasher.update(&[_]u8{0});
         }
     }
+    hashU32(&hasher, @intCast(identity.explicit_roots.len));
+    for (identity.explicit_roots) |root| {
+        hashExplicitRootRequestInput(&hasher, root);
+    }
     return hasher.finalResult();
+}
+
+fn hashExplicitRootRequestInput(
+    hasher: *std.crypto.hash.sha2.Sha256,
+    root: ExplicitRootRequestInput,
+) void {
+    hashByteSlice(hasher, @tagName(root.kind));
+    hashRootSource(hasher, root.source);
+    hashByteSlice(hasher, @tagName(root.abi));
+    hashByteSlice(hasher, @tagName(root.exposure));
+}
+
+fn hashRootSource(hasher: *std.crypto.hash.sha2.Sha256, source: RootSource) void {
+    hashByteSlice(hasher, @tagName(source));
+    switch (source) {
+        .def => |idx| hashU32(hasher, @intFromEnum(idx)),
+        .expr => |idx| hashU32(hasher, @intFromEnum(idx)),
+        .statement => |idx| hashU32(hasher, @intFromEnum(idx)),
+        .required_binding => |idx| hashU32(hasher, idx),
+    }
 }
 
 fn hashDirectImportArtifactKeys(keys: []const CheckedModuleArtifactKey) [32]u8 {
@@ -269,6 +293,7 @@ pub const CheckingContextIdentity = struct {
     imports: []ImportIdentity = &.{},
     platform_requirement_context: ?PlatformRequirementContextKey = null,
     platform_app_relation: ?PlatformAppRelationKey = null,
+    explicit_roots: []const ExplicitRootRequestInput = &.{},
 
     pub fn fromModule(
         allocator: Allocator,
@@ -276,11 +301,14 @@ pub const CheckingContextIdentity = struct {
         publish_imports: []const PublishImportArtifact,
         platform_requirement_context: ?PlatformRequirementContextKey,
         platform_app_relation: ?PlatformAppRelationKey,
+        explicit_roots: []const ExplicitRootRequestInput,
     ) Allocator.Error!CheckingContextIdentity {
         const module_env = module.moduleEnvConst();
         const imported_names = module_env.imports.imports.items.items;
         const imports = try allocator.alloc(ImportIdentity, imported_names.len);
         errdefer allocator.free(imports);
+        const roots = try allocator.dupe(ExplicitRootRequestInput, explicit_roots);
+        errdefer allocator.free(roots);
 
         for (imported_names, 0..) |str_idx, i| {
             const import_idx: CIR.Import.Idx = @enumFromInt(@as(u32, @intCast(i)));
@@ -298,10 +326,12 @@ pub const CheckingContextIdentity = struct {
             .imports = imports,
             .platform_requirement_context = platform_requirement_context,
             .platform_app_relation = platform_app_relation,
+            .explicit_roots = roots,
         };
     }
 
     pub fn deinit(self: *CheckingContextIdentity, allocator: Allocator) void {
+        allocator.free(self.explicit_roots);
         allocator.free(self.imports);
         self.* = .{};
     }
@@ -612,6 +642,7 @@ pub const RootRequestTable = struct {
         @memset(relation_blocked_exprs, null);
 
         for (explicit_roots) |root| {
+            if (!explicitRootMatchesCheckedRootKind(procedure_templates, compile_time_roots, root)) continue;
             const source_checked_type = try checkedTypeIdForRootSource(allocator, module, checked_types, root.source);
             const backing = explicitRootBackingProcedure(
                 procedure_templates,
@@ -661,10 +692,13 @@ pub const RootRequestTable = struct {
             )) {
                 continue;
             }
+            if (compileTimeRootHasRootRequest(requests.items, root)) {
+                continue;
+            }
             try appendRoot(&requests, allocator, .{
                 .module_idx = root.module_idx,
                 .kind = switch (root.kind) {
-                    .constant => .compile_time_constant,
+                    .constant, .numeral_conversion, .quote_conversion => .compile_time_constant,
                     .callable_binding => .compile_time_callable,
                     .expect => .test_expect,
                 },
@@ -672,7 +706,7 @@ pub const RootRequestTable = struct {
                 .checked_type = entryWrapperForRoot(entry_wrappers, root.id).checked_fn_root,
                 .abi = switch (root.kind) {
                     .expect => .test_expect,
-                    .constant, .callable_binding => .compile_time,
+                    .constant, .callable_binding, .numeral_conversion, .quote_conversion => .compile_time,
                 },
                 .exposure = .private,
                 .procedure_template = templateForEntryWrapperRoot(entry_wrappers, root.id),
@@ -701,6 +735,20 @@ pub const RootRequestTable = struct {
         self.* = .{};
     }
 };
+
+fn explicitRootMatchesCheckedRootKind(
+    procedure_templates: *const CheckedProcedureTemplateTable,
+    compile_time_roots: *const CompileTimeRootTable,
+    root: ExplicitRootRequestInput,
+) bool {
+    if (procedureTemplateForRootSource(procedure_templates, root.source) != null) {
+        return root.kind != .compile_time_constant and root.kind != .compile_time_callable;
+    }
+
+    const root_id = compile_time_roots.lookupIdBySource(root.source) orelse return false;
+    const compile_time_root = compile_time_roots.root(root_id);
+    return compileTimeRootKindMatchesRequest(compile_time_root.kind, root.kind);
+}
 
 fn collectRuntimeRootRequests(
     allocator: Allocator,
@@ -752,10 +800,10 @@ fn checkedTypeIsConcreteCompileTimeRootInner(
     defer _ = active.remove(root);
 
     const index = @intFromEnum(root);
-    if (index >= checked_types.payloads.len) {
+    if (index >= checked_types.payloads.items.len) {
         checkedArtifactInvariant("compile-time root checked type id is out of range", .{});
     }
-    return switch (checked_types.payloads[index]) {
+    return switch (checked_types.payloads.items[index]) {
         .pending => checkedArtifactInvariant("compile-time root checked type was pending", .{}),
         .flex,
         .rigid,
@@ -846,6 +894,7 @@ fn compileTimeRootKindMatchesRequest(
         .constant => request_kind == .compile_time_constant,
         .callable_binding => request_kind == .compile_time_callable,
         .expect => request_kind == .test_expect,
+        .numeral_conversion, .quote_conversion => request_kind == .compile_time_constant,
     };
 }
 
@@ -902,6 +951,8 @@ fn compileTimeRootDependsOnUnboundPlatformRequirement(
     return switch (root.kind) {
         .constant,
         .callable_binding,
+        .numeral_conversion,
+        .quote_conversion,
         => exprDependsOnUnboundPlatformRequirement(
             checked_bodies,
             resolved_value_refs,
@@ -978,6 +1029,7 @@ fn exprDependsOnUnboundPlatformRequirement(
         .dbg,
         .expect,
         => |child| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, child, relation_blocked_exprs),
+        .expect_err => |expect_err| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, expect_err.expr, relation_blocked_exprs),
         .field_access => |access| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, access.receiver, relation_blocked_exprs),
         .structural_eq => |eq| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, eq.lhs, relation_blocked_exprs) or
             exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, eq.rhs, relation_blocked_exprs),
@@ -996,6 +1048,7 @@ fn exprDependsOnUnboundPlatformRequirement(
         .typed_int,
         .typed_frac,
         .typed_num_from_numeral,
+        .str_from_quote,
         .str_segment,
         .bytes_literal,
         .empty_list,
@@ -1388,7 +1441,11 @@ pub const CheckedStaticDispatchConstraint = struct {
 /// Public `NumericDefaultPhase` declaration.
 pub const NumericDefaultPhase = enum {
     checking_finalized,
+    /// Defaults to Dec when still unresolved at monomorphic specialization.
     mono_specialization,
+    /// Defaults to Str when still unresolved at monomorphic specialization
+    /// (string literals carrying a from_quote constraint).
+    mono_specialization_str,
 };
 
 /// Public `RowDefault` declaration.
@@ -1925,10 +1982,10 @@ const CheckedTypePublication = struct {
 
 /// Public `CheckedTypeStore` declaration.
 pub const CheckedTypeStore = struct {
-    roots: []CheckedTypeRoot = &.{},
-    schemes: []CheckedTypeScheme = &.{},
-    payloads: []CheckedTypePayload = &.{},
-    nominal_declarations: []CheckedNominalDeclaration = &.{},
+    roots: std.ArrayList(CheckedTypeRoot) = .empty,
+    schemes: std.ArrayList(CheckedTypeScheme) = .empty,
+    payloads: std.ArrayList(CheckedTypePayload) = .empty,
+    nominal_declarations: std.ArrayList(CheckedNominalDeclaration) = .empty,
 
     pub fn fromModule(
         allocator: Allocator,
@@ -2061,10 +2118,10 @@ pub const CheckedTypeStore = struct {
 
         return .{
             .store = .{
-                .roots = try roots.toOwnedSlice(allocator),
-                .schemes = try schemes.toOwnedSlice(allocator),
-                .payloads = try payloads.toOwnedSlice(allocator),
-                .nominal_declarations = try nominal_declarations.toOwnedSlice(allocator),
+                .roots = roots,
+                .schemes = schemes,
+                .payloads = payloads,
+                .nominal_declarations = nominal_declarations,
             },
             .source_type_roots = source_type_roots,
         };
@@ -2072,22 +2129,22 @@ pub const CheckedTypeStore = struct {
 
     pub fn view(self: *const CheckedTypeStore) CheckedTypeStoreView {
         return .{
-            .roots = self.roots,
-            .schemes = self.schemes,
-            .payloads = self.payloads,
-            .nominal_declarations = self.nominal_declarations,
+            .roots = self.roots.items,
+            .schemes = self.schemes.items,
+            .payloads = self.payloads.items,
+            .nominal_declarations = self.nominal_declarations.items,
         };
     }
 
     pub fn rootForKey(self: *const CheckedTypeStore, key: canonical.CanonicalTypeKey) ?CheckedTypeId {
-        for (self.roots) |root| {
+        for (self.roots.items) |root| {
             if (std.meta.eql(root.key.bytes, key.bytes)) return root.id;
         }
         return null;
     }
 
     pub fn schemeForKey(self: *const CheckedTypeStore, key: canonical.CanonicalTypeSchemeKey) ?CheckedTypeScheme {
-        for (self.schemes) |scheme| {
+        for (self.schemes.items) |scheme| {
             if (std.meta.eql(scheme.key.bytes, key.bytes)) return scheme;
         }
         return null;
@@ -2104,31 +2161,23 @@ pub const CheckedTypeStore = struct {
         const key = syntheticFunctionTypeKey(self, finalized_kind, args, ret);
         if (self.rootForKey(key)) |existing| return existing;
 
-        const id: CheckedTypeId = @enumFromInt(@as(u32, @intCast(self.roots.len)));
+        const id: CheckedTypeId = @enumFromInt(@as(u32, @intCast(self.roots.items.len)));
+        try self.roots.ensureUnusedCapacity(allocator, 1);
+        try self.payloads.ensureUnusedCapacity(allocator, 1);
         const owned_args = try allocator.dupe(CheckedTypeId, args);
-        errdefer allocator.free(owned_args);
 
-        const old_roots = self.roots;
-        const new_roots = try allocator.alloc(CheckedTypeRoot, old_roots.len + 1);
-        @memcpy(new_roots[0..old_roots.len], old_roots);
-        new_roots[old_roots.len] = .{ .id = id, .key = key };
-        errdefer allocator.free(new_roots);
-
-        const old_payloads = self.payloads;
-        const new_payloads = try allocator.alloc(CheckedTypePayload, old_payloads.len + 1);
-        @memcpy(new_payloads[0..old_payloads.len], old_payloads);
-        new_payloads[old_payloads.len] = .{ .function = .{
+        self.roots.appendAssumeCapacity(.{ .id = id, .key = key });
+        self.payloads.appendAssumeCapacity(.{ .function = .{
             .kind = finalized_kind,
             .args = owned_args,
             .ret = ret,
             .needs_instantiation = false,
-        } };
-        errdefer allocator.free(new_payloads);
-
-        allocator.free(old_roots);
-        allocator.free(old_payloads);
-        self.roots = new_roots;
-        self.payloads = new_payloads;
+        } });
+        errdefer {
+            var removed = self.payloads.pop().?;
+            deinitCheckedTypePayload(allocator, &removed);
+            _ = self.roots.pop();
+        }
 
         try self.ensureSyntheticSchemeForRoot(allocator, id, key);
         return id;
@@ -2144,35 +2193,25 @@ pub const CheckedTypeStore = struct {
         var payload_owned = true;
         errdefer if (payload_owned) deinitCheckedTypePayload(allocator, &owned_payload);
 
-        const key = try checkedTypePayloadKey(allocator, names, self.roots, self.payloads, owned_payload);
+        const key = try checkedTypePayloadKey(allocator, names, self.payloads.items, owned_payload);
         if (self.rootForKey(key)) |existing| {
             deinitCheckedTypePayload(allocator, &owned_payload);
             payload_owned = false;
             return existing;
         }
 
-        const id: CheckedTypeId = @enumFromInt(@as(u32, @intCast(self.roots.len)));
+        const id: CheckedTypeId = @enumFromInt(@as(u32, @intCast(self.roots.items.len)));
+        try self.roots.ensureUnusedCapacity(allocator, 1);
+        try self.payloads.ensureUnusedCapacity(allocator, 1);
 
-        const old_roots = self.roots;
-        const new_roots = try allocator.alloc(CheckedTypeRoot, old_roots.len + 1);
-        @memcpy(new_roots[0..old_roots.len], old_roots);
-        new_roots[old_roots.len] = .{ .id = id, .key = key };
-        errdefer allocator.free(new_roots);
-
-        const old_payloads = self.payloads;
-        const new_payloads = try allocator.alloc(CheckedTypePayload, old_payloads.len + 1);
-        @memcpy(new_payloads[0..old_payloads.len], old_payloads);
-        new_payloads[old_payloads.len] = owned_payload;
+        self.roots.appendAssumeCapacity(.{ .id = id, .key = key });
+        self.payloads.appendAssumeCapacity(owned_payload);
         payload_owned = false;
         errdefer {
-            deinitCheckedTypePayload(allocator, &new_payloads[old_payloads.len]);
-            allocator.free(new_payloads);
+            var removed = self.payloads.pop().?;
+            deinitCheckedTypePayload(allocator, &removed);
+            _ = self.roots.pop();
         }
-
-        allocator.free(old_roots);
-        allocator.free(old_payloads);
-        self.roots = new_roots;
-        self.payloads = new_payloads;
 
         try self.ensureSyntheticSchemeForRoot(allocator, id, key);
         return id;
@@ -2187,24 +2226,12 @@ pub const CheckedTypeStore = struct {
     ) Allocator.Error!CheckedTypeId {
         if (self.rootForKey(key)) |existing| return existing;
 
-        const id: CheckedTypeId = @enumFromInt(@as(u32, @intCast(self.roots.len)));
+        const id: CheckedTypeId = @enumFromInt(@as(u32, @intCast(self.roots.items.len)));
+        try self.roots.ensureUnusedCapacity(allocator, 1);
+        try self.payloads.ensureUnusedCapacity(allocator, 1);
 
-        const old_roots = self.roots;
-        const new_roots = try allocator.alloc(CheckedTypeRoot, old_roots.len + 1);
-        @memcpy(new_roots[0..old_roots.len], old_roots);
-        new_roots[old_roots.len] = .{ .id = id, .key = key };
-        errdefer allocator.free(new_roots);
-
-        const old_payloads = self.payloads;
-        const new_payloads = try allocator.alloc(CheckedTypePayload, old_payloads.len + 1);
-        @memcpy(new_payloads[0..old_payloads.len], old_payloads);
-        new_payloads[old_payloads.len] = .pending;
-        errdefer allocator.free(new_payloads);
-
-        allocator.free(old_roots);
-        allocator.free(old_payloads);
-        self.roots = new_roots;
-        self.payloads = new_payloads;
+        self.roots.appendAssumeCapacity(.{ .id = id, .key = key });
+        self.payloads.appendAssumeCapacity(.pending);
 
         return id;
     }
@@ -2217,27 +2244,27 @@ pub const CheckedTypeStore = struct {
         payload: CheckedTypePayload,
     ) Allocator.Error!void {
         const index: usize = @intFromEnum(root);
-        if (index >= self.payloads.len) {
+        if (index >= self.payloads.items.len) {
             checkedArtifactInvariant("synthetic checked type fill referenced a missing root", .{});
         }
-        switch (self.payloads[index]) {
+        switch (self.payloads.items[index]) {
             .pending => {},
             else => checkedArtifactInvariant("synthetic checked type fill referenced an already-filled root", .{}),
         }
 
-        self.payloads[index] = payload;
+        self.payloads.items[index] = payload;
         errdefer {
-            deinitCheckedTypePayload(allocator, &self.payloads[index]);
-            self.payloads[index] = .pending;
+            deinitCheckedTypePayload(allocator, &self.payloads.items[index]);
+            self.payloads.items[index] = .pending;
         }
-        try self.ensureSyntheticSchemeForRoot(allocator, root, self.roots[index].key);
+        try self.ensureSyntheticSchemeForRoot(allocator, root, self.roots.items[index].key);
     }
 
     pub fn nominalDeclaration(
         self: *const CheckedTypeStore,
         nominal: canonical.NominalTypeKey,
     ) ?CheckedNominalDeclaration {
-        for (self.nominal_declarations) |declaration| {
+        for (self.nominal_declarations.items) |declaration| {
             if (canonicalNominalTypeKeyEql(declaration.nominal, nominal)) return declaration;
         }
         return null;
@@ -2280,7 +2307,7 @@ pub const CheckedTypeStore = struct {
         allocator: Allocator,
         root: CheckedTypeId,
     ) Allocator.Error!canonical.CanonicalTypeSchemeKey {
-        const key = self.roots[@intFromEnum(root)].key;
+        const key = self.roots.items[@intFromEnum(root)].key;
         const scheme_key = syntheticSchemeKeyForType(key);
         try self.ensureSyntheticSchemeForRoot(allocator, root, key);
         return scheme_key;
@@ -2295,26 +2322,21 @@ pub const CheckedTypeStore = struct {
         const scheme_key = syntheticSchemeKeyForType(key);
         if (self.schemeForKey(scheme_key) != null) return;
 
-        const old = self.schemes;
-        const next = try allocator.alloc(CheckedTypeScheme, old.len + 1);
-        @memcpy(next[0..old.len], old);
-        next[old.len] = .{
-            .id = @enumFromInt(@as(u32, @intCast(old.len))),
+        try self.schemes.append(allocator, .{
+            .id = @enumFromInt(@as(u32, @intCast(self.schemes.items.len))),
             .key = scheme_key,
             .root = root,
             .generalized_vars = &.{},
-        };
-        allocator.free(old);
-        self.schemes = next;
+        });
     }
 
     pub fn deinit(self: *CheckedTypeStore, allocator: Allocator) void {
-        for (self.payloads) |*payload| deinitCheckedTypePayload(allocator, payload);
-        for (self.schemes) |scheme| allocator.free(scheme.generalized_vars);
-        allocator.free(self.nominal_declarations);
-        allocator.free(self.payloads);
-        allocator.free(self.schemes);
-        allocator.free(self.roots);
+        for (self.payloads.items) |*payload| deinitCheckedTypePayload(allocator, payload);
+        for (self.schemes.items) |scheme| allocator.free(scheme.generalized_vars);
+        self.nominal_declarations.deinit(allocator);
+        self.payloads.deinit(allocator);
+        self.schemes.deinit(allocator);
+        self.roots.deinit(allocator);
         self.* = .{};
     }
 
@@ -2333,11 +2355,11 @@ pub const CheckedTypeStore = struct {
         if (active.get(source)) |existing| return existing;
 
         const source_index: usize = @intFromEnum(source);
-        if (source_index >= self.payloads.len or source_index >= self.roots.len) {
+        if (source_index >= self.payloads.items.len or source_index >= self.roots.items.len) {
             checkedArtifactInvariant("checked type substitution referenced a missing source root {} with {} payloads and {} roots", .{
                 source_index,
-                self.payloads.len,
-                self.roots.len,
+                self.payloads.items.len,
+                self.roots.items.len,
             });
         }
 
@@ -2345,16 +2367,16 @@ pub const CheckedTypeStore = struct {
         if (self.rootForKey(key)) |existing| return existing;
 
         const target = try self.reserveSyntheticTypeRoot(allocator, key);
-        errdefer deinitCheckedTypePayload(allocator, &self.payloads[@intFromEnum(target)]);
+        errdefer deinitCheckedTypePayload(allocator, &self.payloads.items[@intFromEnum(target)]);
         try active.put(source, target);
         errdefer _ = active.remove(source);
 
-        const source_payload = self.payloads[source_index];
-        if (source_payload == .function and @intFromEnum(source_payload.function.ret) >= self.payloads.len) {
+        const source_payload = self.payloads.items[source_index];
+        if (source_payload == .function and @intFromEnum(source_payload.function.ret) >= self.payloads.items.len) {
             checkedArtifactInvariant("checked type substitution reached function root {} with missing ret {} and {} payloads", .{
                 source_index,
                 @intFromEnum(source_payload.function.ret),
-                self.payloads.len,
+                self.payloads.items.len,
             });
         }
         const payload = try self.cloneCheckedTypePayloadSubstituting(
@@ -2568,14 +2590,14 @@ pub const CheckedTypeStore = struct {
         active: *std.AutoHashMap(CheckedTypeId, void),
     ) Allocator.Error!bool {
         const index: usize = @intFromEnum(root);
-        if (index >= self.payloads.len) {
+        if (index >= self.payloads.items.len) {
             checkedArtifactInvariant("checked type identity scan referenced a missing payload", .{});
         }
         if (active.contains(root)) return false;
         try active.put(root, {});
         defer _ = active.remove(root);
 
-        return switch (self.payloads[index]) {
+        return switch (self.payloads.items[index]) {
             .pending,
             .flex,
             .rigid,
@@ -3233,7 +3255,7 @@ fn appendExplicitCheckedTypePayload(
     var payload_owned = true;
     errdefer if (payload_owned) deinitCheckedTypePayload(allocator, &owned_payload);
 
-    const key = try checkedTypePayloadKey(allocator, names, roots.items, payloads.items, owned_payload);
+    const key = try checkedTypePayloadKey(allocator, names, payloads.items, owned_payload);
     if (findCheckedTypeRoot(roots.items, key)) |existing| {
         deinitCheckedTypePayload(allocator, &owned_payload);
         payload_owned = false;
@@ -3264,7 +3286,7 @@ fn appendNominalDeclarationRootPayload(
         else => checkedArtifactInvariant("nominal declaration root payload was not nominal", .{}),
     };
 
-    const key = try checkedTypePayloadKey(allocator, names, roots.items, payloads.items, owned_payload);
+    const key = try checkedTypePayloadKey(allocator, names, payloads.items, owned_payload);
     if (findCheckedTypeRoot(roots.items, key)) |existing| {
         const index: usize = @intFromEnum(existing);
         if (index >= payloads.items.len) {
@@ -3307,17 +3329,10 @@ fn appendNominalDeclarationRootPayload(
 fn checkedTypePayloadKey(
     allocator: Allocator,
     names: *const canonical.CanonicalNameStore,
-    roots: []const CheckedTypeRoot,
     payloads: []const CheckedTypePayload,
     payload: CheckedTypePayload,
 ) Allocator.Error!canonical.CanonicalTypeKey {
-    const store = CheckedTypeStore{
-        .roots = @constCast(roots),
-        .payloads = @constCast(payloads),
-        .schemes = &.{},
-        .nominal_declarations = &.{},
-    };
-    var builder = SubstitutedCheckedTypeKeyBuilder.init(allocator, names, &store, &.{}, &.{});
+    var builder = SubstitutedCheckedTypeKeyBuilder.init(allocator, names, payloads, &.{}, &.{});
     defer builder.deinit();
     try builder.writePayload(payload);
     return .{ .bytes = builder.hasher.finalResult() };
@@ -3381,7 +3396,7 @@ fn substitutedCheckedTypeKey(
         checkedArtifactInvariant("checked type substitution key arity mismatch", .{});
     }
 
-    var builder = SubstitutedCheckedTypeKeyBuilder.init(allocator, names, store, formals, actuals);
+    var builder = SubstitutedCheckedTypeKeyBuilder.init(allocator, names, store.payloads.items, formals, actuals);
     defer builder.deinit();
     try builder.writeType(source);
     return .{ .bytes = builder.hasher.finalResult() };
@@ -3390,7 +3405,7 @@ fn substitutedCheckedTypeKey(
 const SubstitutedCheckedTypeKeyBuilder = struct {
     allocator: Allocator,
     names: *const canonical.CanonicalNameStore,
-    store: *const CheckedTypeStore,
+    payloads: []const CheckedTypePayload,
     formals: []const CheckedTypeId,
     actuals: []const CheckedTypeId,
     hasher: std.crypto.hash.sha2.Sha256,
@@ -3410,14 +3425,14 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
     fn init(
         allocator: Allocator,
         names: *const canonical.CanonicalNameStore,
-        store: *const CheckedTypeStore,
+        payloads: []const CheckedTypePayload,
         formals: []const CheckedTypeId,
         actuals: []const CheckedTypeId,
     ) SubstitutedCheckedTypeKeyBuilder {
         return .{
             .allocator = allocator,
             .names = names,
-            .store = store,
+            .payloads = payloads,
             .formals = formals,
             .actuals = actuals,
             .hasher = std.crypto.hash.sha2.Sha256.init(.{}),
@@ -3441,11 +3456,11 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
     fn writeType(self: *SubstitutedCheckedTypeKeyBuilder, source: CheckedTypeId) Allocator.Error!void {
         const id = self.substitutedRoot(source);
         const raw: usize = @intFromEnum(id);
-        if (raw >= self.store.payloads.len) {
+        if (raw >= self.payloads.len) {
             checkedArtifactInvariant("checked type substitution key referenced a missing payload", .{});
         }
 
-        switch (self.store.payloads[raw]) {
+        switch (self.payloads[raw]) {
             .flex => |flex| return try self.writeIdentityVariable(id, "flex", flex.name, flex.constraints),
             .rigid => |rigid| return try self.writeIdentityVariable(id, "rigid", rigid.name, rigid.constraints),
             else => {},
@@ -3459,7 +3474,7 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
 
         const slot: u32 = @intCast(self.active.count());
         try self.active.put(id, slot);
-        try self.writePayload(self.store.payloads[raw]);
+        try self.writePayload(self.payloads[raw]);
         _ = self.active.remove(id);
     }
 
@@ -3564,10 +3579,10 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
             if (seen.contains(tail_id)) break;
             try seen.put(tail_id, {});
             const raw: usize = @intFromEnum(tail_id);
-            if (raw >= self.store.payloads.len) {
+            if (raw >= self.payloads.len) {
                 checkedArtifactInvariant("checked type substitution key row normalization referenced missing record tail", .{});
             }
-            switch (self.store.payloads[raw]) {
+            switch (self.payloads[raw]) {
                 .empty_record => {
                     tail = null;
                     break;
@@ -3617,10 +3632,10 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
             if (seen.contains(tail_id)) break;
             try seen.put(tail_id, {});
             const raw: usize = @intFromEnum(tail_id);
-            if (raw >= self.store.payloads.len) {
+            if (raw >= self.payloads.len) {
                 checkedArtifactInvariant("checked type substitution key row normalization referenced missing record tail", .{});
             }
-            switch (self.store.payloads[raw]) {
+            switch (self.payloads[raw]) {
                 .empty_record => {
                     tail = null;
                     break;
@@ -3689,10 +3704,10 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
             if (seen.contains(tail_id)) break;
             try seen.put(tail_id, {});
             const raw: usize = @intFromEnum(tail_id);
-            if (raw >= self.store.payloads.len) {
+            if (raw >= self.payloads.len) {
                 checkedArtifactInvariant("checked type substitution key row normalization referenced missing tag tail", .{});
             }
-            switch (self.store.payloads[raw]) {
+            switch (self.payloads[raw]) {
                 .empty_tag_union => {
                     tail = null;
                     break;
@@ -3754,14 +3769,14 @@ const SubstitutedCheckedTypeKeyBuilder = struct {
     ) Allocator.Error!bool {
         const id = self.substitutedRoot(source);
         const raw: usize = @intFromEnum(id);
-        if (raw >= self.store.payloads.len) {
+        if (raw >= self.payloads.len) {
             checkedArtifactInvariant("checked type substitution key identity scan referenced missing payload", .{});
         }
         if (active.contains(id)) return false;
         try active.put(id, {});
         defer _ = active.remove(id);
 
-        return switch (self.store.payloads[raw]) {
+        return switch (self.payloads[raw]) {
             .pending,
             .flex,
             .rigid,
@@ -3931,7 +3946,17 @@ fn appendStaticDispatchTypeRoots(
     }
 
     for (module.moduleEnvConst().numeral_dispatch_plans.items.items) |plan| {
-        if (!source_nodes.hasExpr(@enumFromInt(plan.node_idx))) continue;
+        const is_expr = source_nodes.hasExpr(@enumFromInt(plan.node_idx));
+        const is_pattern = source_nodes.hasPattern(@enumFromInt(plan.node_idx));
+        if (!is_expr and !is_pattern) continue;
+        _ = try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, @enumFromInt(plan.target_var));
+        _ = try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, @enumFromInt(plan.fn_var));
+    }
+
+    for (module.moduleEnvConst().quote_dispatch_plans.items.items) |plan| {
+        const is_expr = source_nodes.hasExpr(@enumFromInt(plan.node_idx));
+        const is_pattern = source_nodes.hasPattern(@enumFromInt(plan.node_idx));
+        if (!is_expr and !is_pattern) continue;
         _ = try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, @enumFromInt(plan.target_var));
         _ = try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, @enumFromInt(plan.fn_var));
     }
@@ -3949,9 +3974,9 @@ fn syntheticFunctionTypeKey(
     hashByteSlice(&hasher, @tagName(finalized_kind));
     hashU32(&hasher, @intCast(args.len));
     for (args) |arg| {
-        hasher.update(&store.roots[@intFromEnum(arg)].key.bytes);
+        hasher.update(&store.roots.items[@intFromEnum(arg)].key.bytes);
     }
-    hasher.update(&store.roots[@intFromEnum(ret)].key.bytes);
+    hasher.update(&store.roots.items[@intFromEnum(ret)].key.bytes);
     return .{ .bytes = hasher.finalResult() };
 }
 
@@ -4131,10 +4156,13 @@ fn numericDefaultPhaseForConstraints(
     constraints_range: types.StaticDispatchConstraint.SafeList.Range,
 ) ?NumericDefaultPhase {
     const constraints = module.typeStoreConst().sliceStaticDispatchConstraints(constraints_range);
+    var has_from_quote = false;
     for (constraints) |constraint| {
         if (constraint.origin == .from_numeral) return .mono_specialization;
+        if (constraint.origin == .from_quote) has_from_quote = true;
         if (isDefaultableArithmeticConstraint(module, constraint)) return .mono_specialization;
     }
+    if (has_from_quote) return .mono_specialization_str;
     return null;
 }
 
@@ -4152,6 +4180,7 @@ fn isDefaultableArithmeticConstraint(
             constraint.fn_name.eql(idents.rem_by),
         .desugared_unaryop => constraint.fn_name.eql(idents.negate),
         .from_numeral,
+        .from_quote,
         .method_call,
         .where_clause,
         => false,
@@ -4735,7 +4764,7 @@ pub const CheckedPatternBinder = struct {
 };
 
 /// Public `CheckedStringLiteralId` declaration.
-pub const CheckedStringLiteralId = enum(u32) { _ };
+pub const CheckedStringLiteralId = checked_ids.CheckedStringLiteralId;
 
 /// Public `CheckedRecordExprField` declaration.
 pub const CheckedRecordExprField = struct {
@@ -4846,18 +4875,28 @@ pub const CheckedPatternData = union(enum) {
     num_literal: struct {
         value: CIR.IntValue,
         kind: CIR.NumKind,
+        /// Synthesized `.num_from_numeral` checked expression for matching this
+        /// literal against a non-builtin number type; null on the builtin fast path.
+        conversion: ?CheckedExprId = null,
     },
     small_dec_literal: struct {
         value: CIR.SmallDecValue,
         has_suffix: bool,
+        conversion: ?CheckedExprId = null,
     },
     dec_literal: struct {
         value: builtins.dec.RocDec,
         has_suffix: bool,
+        conversion: ?CheckedExprId = null,
     },
     frac_f32_literal: f32,
     frac_f64_literal: f64,
-    str_literal: CheckedStringLiteralId,
+    str_literal: struct {
+        literal: CheckedStringLiteralId,
+        /// Synthesized `.str_from_quote` checked expression for matching this
+        /// literal against a non-builtin string type; null on the Str fast path.
+        conversion: ?CheckedExprId = null,
+    },
     underscore,
     runtime_error,
 };
@@ -4895,6 +4934,13 @@ pub const CheckedExprData = union(enum) {
         type_name: canonical.TypeNameId,
     },
     typed_num_from_numeral: ?StaticDispatchPlanId,
+    /// A string literal whose target is a non-builtin nominal type, converted
+    /// through the type's `from_quote` method. `literal` holds the complete
+    /// post-escape UTF-8 bytes.
+    str_from_quote: struct {
+        plan: ?StaticDispatchPlanId,
+        literal: CheckedStringLiteralId,
+    },
     str_segment: CheckedStringLiteralId,
     str: []const CheckedExprId,
     bytes_literal: CheckedStringLiteralId,
@@ -4979,6 +5025,11 @@ pub const CheckedExprData = union(enum) {
     runtime_error,
     crash: CheckedStringLiteralId,
     dbg: CheckedExprId,
+    expect_err: struct {
+        expr: CheckedExprId,
+        /// Source text of the `?` expression, for the failure message.
+        snippet: CheckedStringLiteralId,
+    },
     expect: CheckedExprId,
     ellipsis,
     anno_only,
@@ -5331,7 +5382,18 @@ const CheckedSourceNodes = struct {
             },
             .e_dispatch_call => |call| {
                 try self.markExpr(call.receiver, work);
-                try self.markExprSpan(module, call.args, work);
+                if (module.moduleEnvConst().isStrInterpolationCall(expr_idx)) {
+                    // A Str-typed interpolation publishes as a plain segment
+                    // list; the synthetic iterator chain stays out of the
+                    // artifact, so only the pair payloads are reachable.
+                    var pairs = module.moduleEnvConst().interpolationPairs(expr_idx);
+                    while (pairs.next()) |pair| {
+                        try self.markExpr(pair.interpolation, work);
+                        try self.markExpr(pair.segment, work);
+                    }
+                } else {
+                    try self.markExprSpan(module, call.args, work);
+                }
             },
             .e_structural_eq => |eq| {
                 try self.markExpr(eq.lhs, work);
@@ -5351,6 +5413,7 @@ const CheckedSourceNodes = struct {
             },
             .e_tuple_access => |access| try self.markExpr(access.tuple, work),
             .e_dbg => |dbg| try self.markExpr(dbg.expr, work),
+            .e_expect_err => |expect_err| try self.markExpr(expect_err.expr, work),
             .e_expect => |expect| try self.markExpr(expect.body, work),
             .e_return => |ret| {
                 try self.markExpr(ret.expr, work);
@@ -5524,6 +5587,15 @@ pub const CheckedBodyStore = struct {
     pattern_binders: []CheckedPatternBinder = &.{},
     pattern_binder_by_pattern: []?PatternBinderId = &.{},
     source_node_map: CheckedSourceNodeMap = .{},
+    /// Synthesized `from_numeral` conversion expressions for literal patterns,
+    /// keyed by the pattern's source node. Pattern nodes already occupy their
+    /// slot in `source_node_map`, so these live in a dedicated table.
+    numeral_conversion_exprs: []const NumeralConversionExpr = &.{},
+
+    pub const NumeralConversionExpr = struct {
+        raw_node: u32,
+        expr: CheckedExprId,
+    };
 
     pub fn fromModule(
         allocator: Allocator,
@@ -5601,10 +5673,6 @@ pub const CheckedBodyStore = struct {
             }
         }
 
-        const expr_diverges = try allocator.alloc(bool, exprs.items.len);
-        errdefer allocator.free(expr_diverges);
-        @memset(expr_diverges, false);
-
         const statement_diverges = try allocator.alloc(bool, statements.items.len);
         errdefer allocator.free(statement_diverges);
         @memset(statement_diverges, false);
@@ -5612,6 +5680,9 @@ pub const CheckedBodyStore = struct {
         const pattern_binder_by_pattern = try allocator.alloc(?PatternBinderId, patterns.items.len);
         errdefer allocator.free(pattern_binder_by_pattern);
         @memset(pattern_binder_by_pattern, null);
+
+        var numeral_conversion_exprs = std.ArrayList(NumeralConversionExpr).empty;
+        errdefer numeral_conversion_exprs.deinit(allocator);
 
         var copier = CheckedBodyPayloadCopier{
             .allocator = allocator,
@@ -5622,6 +5693,8 @@ pub const CheckedBodyStore = struct {
             .pattern_binders = &pattern_binders,
             .pattern_binder_by_pattern = pattern_binder_by_pattern,
             .checked_types = checked_types,
+            .exprs = &exprs,
+            .numeral_conversion_exprs = &numeral_conversion_exprs,
         };
 
         node_idx = 0;
@@ -5639,6 +5712,12 @@ pub const CheckedBodyStore = struct {
                 statements.items[@intFromEnum(id)].data = try copier.copyStatementData(@enumFromInt(node_idx));
             }
         }
+
+        // Allocated after the copy pass because copying literal patterns may
+        // append synthesized numeral-conversion expressions.
+        const expr_diverges = try allocator.alloc(bool, exprs.items.len);
+        errdefer allocator.free(expr_diverges);
+        @memset(expr_diverges, false);
 
         try publishCheckedBodyDivergence(allocator, exprs.items, statements.items, expr_diverges, statement_diverges);
 
@@ -5683,6 +5762,7 @@ pub const CheckedBodyStore = struct {
             .pattern_binders = pattern_binder_slice,
             .pattern_binder_by_pattern = pattern_binder_by_pattern,
             .source_node_map = source_node_map,
+            .numeral_conversion_exprs = try numeral_conversion_exprs.toOwnedSlice(allocator),
         };
     }
 
@@ -5730,6 +5810,13 @@ pub const CheckedBodyStore = struct {
 
     pub fn statementIdForSource(self: *const CheckedBodyStore, statement: CIR.Statement.Idx) ?CheckedStatementId {
         return self.source_node_map.statement(statement);
+    }
+
+    pub fn numeralConversionExprAtRawNode(self: *const CheckedBodyStore, raw_node: u32) ?CheckedExprId {
+        for (self.numeral_conversion_exprs) |entry| {
+            if (entry.raw_node == raw_node) return entry.expr;
+        }
+        return null;
     }
 
     pub fn patternBinderForCheckedPattern(self: *const CheckedBodyStore, pattern: CheckedPatternId) ?PatternBinderId {
@@ -5828,12 +5915,14 @@ pub const CheckedBodyStore = struct {
         var iter = plans.numeral_by_node.iterator();
         while (iter.next()) |entry| {
             const raw_node = @intFromEnum(entry.key_ptr.*);
-            const checked_expr = self.source_node_map.exprAtRawNode(raw_node) orelse {
-                checkedArtifactInvariant(
-                    "from_numeral plan {d} points at source node {d} with no checked expression",
-                    .{ @intFromEnum(entry.value_ptr.*), raw_node },
-                );
-            };
+            const checked_expr = self.source_node_map.exprAtRawNode(raw_node) orelse
+                self.numeralConversionExprAtRawNode(raw_node) orelse
+                {
+                    checkedArtifactInvariant(
+                        "from_numeral plan {d} points at source node {d} with no checked expression",
+                        .{ @intFromEnum(entry.value_ptr.*), raw_node },
+                    );
+                };
             const data = &self.exprs[@intFromEnum(checked_expr)].data;
             switch (data.*) {
                 .num_from_numeral => data.* = .{ .num_from_numeral = entry.value_ptr.* },
@@ -5848,6 +5937,36 @@ pub const CheckedBodyStore = struct {
                 => {},
                 else => checkedArtifactInvariant(
                     "from_numeral plan {d} points at non-numeral checked expression {d}",
+                    .{ @intFromEnum(entry.value_ptr.*), @intFromEnum(checked_expr) },
+                ),
+            }
+        }
+    }
+
+    pub fn attachQuotePlans(
+        self: *CheckedBodyStore,
+        plans: *const static_dispatch.StaticDispatchPlanTable,
+    ) void {
+        var iter = plans.quote_by_node.iterator();
+        while (iter.next()) |entry| {
+            const raw_node = @intFromEnum(entry.key_ptr.*);
+            const checked_expr = self.source_node_map.exprAtRawNode(raw_node) orelse
+                self.numeralConversionExprAtRawNode(raw_node) orelse
+                {
+                    checkedArtifactInvariant(
+                        "from_quote plan {d} points at source node {d} with no checked expression",
+                        .{ @intFromEnum(entry.value_ptr.*), raw_node },
+                    );
+                };
+            const data = &self.exprs[@intFromEnum(checked_expr)].data;
+            switch (data.*) {
+                .str_from_quote => |quote| data.* = .{ .str_from_quote = .{
+                    .plan = entry.value_ptr.*,
+                    .literal = quote.literal,
+                } },
+                .str, .str_segment => {},
+                else => checkedArtifactInvariant(
+                    "from_quote plan {d} points at non-string checked expression {d}",
                     .{ @intFromEnum(entry.value_ptr.*), @intFromEnum(checked_expr) },
                 ),
             }
@@ -5931,6 +6050,7 @@ pub const CheckedBodyStore = struct {
     }
 
     pub fn deinit(self: *CheckedBodyStore, allocator: Allocator) void {
+        allocator.free(self.numeral_conversion_exprs);
         self.source_node_map.deinit(allocator);
         allocator.free(self.pattern_binder_by_pattern);
         allocator.free(self.pattern_binders);
@@ -6092,6 +6212,7 @@ fn checkedExprDataDiverges(
         .dbg,
         .expect,
         => |child| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, child, expr_states, statement_states),
+        .expect_err => true,
         .field_access => |field| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, field.receiver, expr_states, statement_states),
         .structural_eq => |eq| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, eq.lhs, expr_states, statement_states) or
             checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, eq.rhs, expr_states, statement_states),
@@ -6109,6 +6230,7 @@ fn checkedExprDataDiverges(
         .typed_int,
         .typed_frac,
         .typed_num_from_numeral,
+        .str_from_quote,
         .str_segment,
         .bytes_literal,
         .lookup_local,
@@ -6351,6 +6473,14 @@ const CheckedStringLiteralBuilder = struct {
         return id;
     }
 
+    fn internBytes(self: *CheckedStringLiteralBuilder, bytes: []const u8) Allocator.Error!CheckedStringLiteralId {
+        const id: CheckedStringLiteralId = @enumFromInt(@as(u32, @intCast(self.strings.items.len)));
+        const owned = try self.allocator.dupe(u8, bytes);
+        errdefer self.allocator.free(owned);
+        try self.strings.append(self.allocator, owned);
+        return id;
+    }
+
     fn toOwnedSlice(self: *CheckedStringLiteralBuilder) Allocator.Error![]const []const u8 {
         return try self.strings.toOwnedSlice(self.allocator);
     }
@@ -6371,11 +6501,13 @@ const CheckedBodyPayloadCopier = struct {
     allocator: Allocator,
     module: TypedCIR.Module,
     names: *canonical.CanonicalNameStore,
-    source_node_map: *const CheckedSourceNodeMap,
+    source_node_map: *CheckedSourceNodeMap,
     string_builder: *CheckedStringLiteralBuilder,
     pattern_binders: *std.ArrayList(CheckedPatternBinder),
     pattern_binder_by_pattern: []?PatternBinderId,
     checked_types: *const CheckedTypePublication,
+    exprs: *std.ArrayList(CheckedExpr),
+    numeral_conversion_exprs: *std.ArrayList(CheckedBodyStore.NumeralConversionExpr),
 
     fn copyExprData(self: *@This(), expr_idx: CIR.Expr.Idx) Allocator.Error!CheckedExprData {
         const expr = self.module.expr(expr_idx).data;
@@ -6390,7 +6522,7 @@ const CheckedBodyPayloadCopier = struct {
             .e_typed_frac => |typed| try self.copyTypedFracLiteral(expr_idx, typed.value, typed.type_name),
             .e_typed_num_from_numeral => try self.copyTypedNumFromNumeralLiteral(expr_idx),
             .e_str_segment => |str| .{ .str_segment = try self.string_builder.intern(str.literal) },
-            .e_str => |str| .{ .str = try self.copyExprSpan(str.span) },
+            .e_str => |str| try self.copyStrExpr(expr_idx, str.span),
             .e_bytes_literal => |bytes| .{ .bytes_literal = try self.string_builder.intern(bytes.literal) },
             .e_lookup_local => |lookup| .{ .lookup_local = .{
                 .pattern = self.checkedPattern(lookup.pattern_idx),
@@ -6468,7 +6600,12 @@ const CheckedBodyPayloadCopier = struct {
                 "ordinary method call reached artifact publication after checking; expected explicit static-dispatch plan",
                 .{},
             ),
-            .e_dispatch_call => .{ .dispatch_call = null },
+            .e_dispatch_call => blk: {
+                if (self.module.moduleEnvConst().isStrInterpolationCall(expr_idx)) {
+                    break :blk .{ .str = try self.copyStrInterpolationSegments(expr_idx) };
+                }
+                break :blk .{ .dispatch_call = null };
+            },
             .e_structural_eq => |eq| .{ .structural_eq = .{
                 .lhs = self.checkedExpr(eq.lhs),
                 .rhs = self.checkedExpr(eq.rhs),
@@ -6487,6 +6624,10 @@ const CheckedBodyPayloadCopier = struct {
             .e_runtime_error => .runtime_error,
             .e_crash => |crash| .{ .crash = try self.string_builder.intern(crash.msg) },
             .e_dbg => |dbg| .{ .dbg = self.checkedExpr(dbg.expr) },
+            .e_expect_err => |expect_err| .{ .expect_err = .{
+                .expr = self.checkedExpr(expect_err.expr),
+                .snippet = try self.string_builder.intern(expect_err.snippet),
+            } },
             .e_expect => |expect| .{ .expect = self.checkedExpr(expect.body) },
             .e_ellipsis => .ellipsis,
             .e_anno_only => .anno_only,
@@ -6513,6 +6654,93 @@ const CheckedBodyPayloadCopier = struct {
                 .args = try self.copyExprSpan(run.args),
             } },
         };
+    }
+
+    /// Publish a Str-typed interpolation dispatch call as its ordered
+    /// segment list: the receiver literal, then each interpolation and the
+    /// literal segment that follows it. Lowering turns this into direct
+    /// string concatenation, so the synthetic iterator chain never reaches
+    /// code generation.
+    fn copyStrInterpolationSegments(self: *@This(), expr_idx: CIR.Expr.Idx) Allocator.Error![]const CheckedExprId {
+        const env = self.module.moduleEnvConst();
+        var segments = std.ArrayList(CheckedExprId).empty;
+        errdefer segments.deinit(self.allocator);
+
+        const call = switch (self.module.expr(expr_idx).data) {
+            .e_dispatch_call => |call| call,
+            else => checkedArtifactInvariant("interpolation segment publication reached a non-dispatch expression", .{}),
+        };
+        try segments.append(self.allocator, self.checkedExpr(call.receiver));
+        var pairs = env.interpolationPairs(expr_idx);
+        while (pairs.next()) |pair| {
+            try segments.append(self.allocator, self.checkedExpr(pair.interpolation));
+            try segments.append(self.allocator, self.checkedExpr(pair.segment));
+        }
+        return try segments.toOwnedSlice(self.allocator);
+    }
+
+    fn copyStrExpr(self: *@This(), expr_idx: CIR.Expr.Idx, span: CIR.Expr.Span) Allocator.Error!CheckedExprData {
+        // A literal whose checked type is a non-builtin nominal converts through
+        // from_quote; checking recorded a dispatch plan for it.
+        if (self.module.moduleEnvConst().quoteDispatchPlanForNode(ModuleEnv.nodeIdxFrom(expr_idx)) != null and
+            self.checkedBuiltinForExpr(expr_idx) == null)
+        {
+            return .{ .str_from_quote = .{
+                .plan = null,
+                .literal = try self.internQuoteBytes(span),
+            } };
+        }
+        return .{ .str = try self.copyExprSpan(span) };
+    }
+
+    /// Intern the complete post-escape bytes of a literal-only string,
+    /// concatenating its segments.
+    fn internQuoteBytes(self: *@This(), span: CIR.Expr.Span) Allocator.Error!CheckedStringLiteralId {
+        const segments = self.module.sliceExpr(span);
+        if (segments.len == 1) {
+            switch (self.module.expr(segments[0]).data) {
+                .e_str_segment => |seg| return try self.string_builder.intern(seg.literal),
+                else => {},
+            }
+        }
+        var bytes = std.ArrayList(u8).empty;
+        defer bytes.deinit(self.allocator);
+        for (segments) |seg_idx| {
+            switch (self.module.expr(seg_idx).data) {
+                .e_str_segment => |seg| try bytes.appendSlice(self.allocator, self.module.getString(seg.literal)),
+                else => checkedArtifactInvariant("from_quote literal contained an interpolation segment", .{}),
+            }
+        }
+        return try self.string_builder.internBytes(bytes.items);
+    }
+
+    /// Synthesize the `.str_from_quote` checked expression a string literal
+    /// pattern converts through when its type is a non-builtin string type,
+    /// registered in the conversion table the same way numeral patterns are.
+    fn quoteConversionExprForPattern(
+        self: *@This(),
+        pattern_idx: CIR.Pattern.Idx,
+        literal: StringLiteral.Idx,
+    ) Allocator.Error!?CheckedExprId {
+        const node = ModuleEnv.nodeIdxFrom(pattern_idx);
+        if (self.module.moduleEnvConst().quoteDispatchPlanForNode(node) == null) return null;
+        const checked_ty = self.checkedPatternTypeRoot(pattern_idx);
+        if (checkedBuiltinForLiteralTarget(self.checked_types.store.view(), checked_ty) != null) return null;
+        const id: CheckedExprId = @enumFromInt(try checkedSourceNodeIdFromLen(self.exprs.items.len));
+        try self.exprs.append(self.allocator, .{
+            .id = id,
+            .ty = checked_ty,
+            .source_region = self.module.regionAt(node),
+            .data = .{ .str_from_quote = .{
+                .plan = null,
+                .literal = try self.string_builder.intern(literal),
+            } },
+        });
+        try self.numeral_conversion_exprs.append(self.allocator, .{
+            .raw_node = @intFromEnum(node),
+            .expr = id,
+        });
+        return id;
     }
 
     fn copyNumFromNumeralLiteral(
@@ -6671,6 +6899,36 @@ const CheckedBodyPayloadCopier = struct {
         return checkedBuiltinForLiteralTarget(self.checked_types.store.view(), checked_ty);
     }
 
+    fn checkedPatternTypeRoot(self: *@This(), pattern_idx: CIR.Pattern.Idx) CheckedTypeId {
+        return self.checked_types.rootForSourceVar(self.module, self.module.patternType(pattern_idx)) orelse {
+            checkedArtifactInvariant("checked numeric pattern type root was not published", .{});
+        };
+    }
+
+    /// Synthesize the `.num_from_numeral` checked expression a literal pattern
+    /// converts through when its type is a non-builtin number type. The
+    /// expression is registered at the pattern's source node so dispatch-plan
+    /// attachment and compile-time root creation find it the same way they
+    /// find literal expressions.
+    fn numeralConversionExprForPattern(self: *@This(), pattern_idx: CIR.Pattern.Idx) Allocator.Error!?CheckedExprId {
+        const node = ModuleEnv.nodeIdxFrom(pattern_idx);
+        if (self.module.moduleEnvConst().numeralDispatchPlanForNode(node) == null) return null;
+        const checked_ty = self.checkedPatternTypeRoot(pattern_idx);
+        if (checkedBuiltinForLiteralTarget(self.checked_types.store.view(), checked_ty) != null) return null;
+        const id: CheckedExprId = @enumFromInt(try checkedSourceNodeIdFromLen(self.exprs.items.len));
+        try self.exprs.append(self.allocator, .{
+            .id = id,
+            .ty = checked_ty,
+            .source_region = self.module.regionAt(node),
+            .data = .{ .num_from_numeral = null },
+        });
+        try self.numeral_conversion_exprs.append(self.allocator, .{
+            .raw_node = @intFromEnum(node),
+            .expr = id,
+        });
+        return id;
+    }
+
     fn floatLiteralForExpr(self: *@This(), comptime Float: type, expr_idx: CIR.Expr.Idx) Allocator.Error!Float {
         const literal = self.module.moduleEnvConst().numeralLiteralForNode(ModuleEnv.nodeIdxFrom(expr_idx)) orelse {
             checkedArtifactInvariant("checked typed float literal had no parser-owned numeral facts", .{});
@@ -6711,12 +6969,27 @@ const CheckedBodyPayloadCopier = struct {
                 } else null,
             } },
             .tuple => |tuple| .{ .tuple = try self.copyPatternSpan(tuple.patterns) },
-            .num_literal => |num| .{ .num_literal = .{ .value = num.value, .kind = num.kind } },
-            .small_dec_literal => |dec| .{ .small_dec_literal = .{ .value = dec.value, .has_suffix = dec.has_suffix } },
-            .dec_literal => |dec| .{ .dec_literal = .{ .value = dec.value, .has_suffix = dec.has_suffix } },
+            .num_literal => |num| .{ .num_literal = .{
+                .value = num.value,
+                .kind = num.kind,
+                .conversion = try self.numeralConversionExprForPattern(pattern_idx),
+            } },
+            .small_dec_literal => |dec| .{ .small_dec_literal = .{
+                .value = dec.value,
+                .has_suffix = dec.has_suffix,
+                .conversion = if (dec.has_suffix) null else try self.numeralConversionExprForPattern(pattern_idx),
+            } },
+            .dec_literal => |dec| .{ .dec_literal = .{
+                .value = dec.value,
+                .has_suffix = dec.has_suffix,
+                .conversion = if (dec.has_suffix) null else try self.numeralConversionExprForPattern(pattern_idx),
+            } },
             .frac_f32_literal => |frac| .{ .frac_f32_literal = frac.value },
             .frac_f64_literal => |frac| .{ .frac_f64_literal = frac.value },
-            .str_literal => |str| .{ .str_literal = try self.string_builder.intern(str.literal) },
+            .str_literal => |str| .{ .str_literal = .{
+                .literal = try self.string_builder.intern(str.literal),
+                .conversion = try self.quoteConversionExprForPattern(pattern_idx, str.literal),
+            } },
             .underscore => .underscore,
             .runtime_error => .runtime_error,
         };
@@ -7265,6 +7538,7 @@ fn checkedBuiltinForLiteralTarget(view: CheckedTypeStoreView, root: CheckedTypeI
 fn checkedBuiltinForDefaultedNumericVariable(variable: CheckedTypeVariable) ?CheckedBuiltinNominal {
     return switch (variable.numeric_default_phase orelse return null) {
         .mono_specialization => .dec,
+        .mono_specialization_str => .str,
         .checking_finalized => checkedArtifactInvariant("checking-finalized numeric variable reached checked literal publication", .{}),
     };
 }
@@ -7405,6 +7679,7 @@ fn deinitCheckedExprData(allocator: Allocator, data: *CheckedExprData) void {
         .typed_int,
         .typed_frac,
         .typed_num_from_numeral,
+        .str_from_quote,
         .str_segment,
         .bytes_literal,
         .lookup_local,
@@ -7421,6 +7696,7 @@ fn deinitCheckedExprData(allocator: Allocator, data: *CheckedExprData) void {
         .runtime_error,
         .crash,
         .dbg,
+        .expect_err,
         .expect,
         .ellipsis,
         .anno_only,
@@ -8774,6 +9050,11 @@ const CheckedTemplateRefCollector = struct {
                 try self.dispatch_refs.append(self.allocator, id);
                 try self.collectStaticDispatchPlanArgs(id);
             },
+            .str_from_quote => |quote| {
+                const id = quote.plan orelse checkedArtifactInvariant("checked from_quote expression reached template closure collection without a dispatch plan", .{});
+                try self.dispatch_refs.append(self.allocator, id);
+                try self.collectStaticDispatchPlanArgs(id);
+            },
             .str,
             .list,
             .tuple,
@@ -8830,6 +9111,7 @@ const CheckedTemplateRefCollector = struct {
             },
             .tuple_access => |access| try self.collectExpr(access.tuple),
             .dbg => |child| try self.collectExpr(child),
+            .expect_err => |expect_err| try self.collectExpr(expect_err.expr),
             .expect => |child| try self.collectExpr(child),
             .return_ => |ret| {
                 try self.collectExpr(ret.expr);
@@ -8881,7 +9163,7 @@ const CheckedTemplateRefCollector = struct {
         const plan = self.static_dispatch_plans.plans[raw];
         for (plan.args) |arg| switch (arg) {
             .checked_expr => |expr| try self.collectExpr(expr),
-            .generated_numeral => {},
+            .generated_numeral, .generated_quote => {},
         };
     }
 
@@ -9248,7 +9530,7 @@ pub const CheckedProcedureTemplateTable = struct {
                 &.{},
                 root.checked_type,
             );
-            const checked_fn_scheme = syntheticSchemeKeyForType(checked_types.roots[@intFromEnum(checked_fn_root)].key);
+            const checked_fn_scheme = syntheticSchemeKeyForType(checked_types.roots.items[@intFromEnum(checked_fn_root)].key);
             const proc_base = try names.internProcBase(.{
                 .module_name = module_name,
                 .export_name = null,
@@ -9275,7 +9557,7 @@ pub const CheckedProcedureTemplateTable = struct {
                 .nested_proc_sites = .{},
                 .target = switch (root.kind) {
                     .expect => .entry,
-                    .constant, .callable_binding => .comptime_only,
+                    .constant, .callable_binding, .numeral_conversion, .quote_conversion => .comptime_only,
                 },
             });
         }
@@ -9467,6 +9749,7 @@ const NestedProcSiteBuilder = struct {
             .unary_minus => |child| try self.scanExpr(child, owner, false),
             .unary_not => |child| try self.scanExpr(child, owner, false),
             .dbg => |child| try self.scanExpr(child, owner, false),
+            .expect_err => |expect_err| try self.scanExpr(expect_err.expr, owner, false),
             .expect => |child| try self.scanExpr(child, owner, false),
             .return_ => |ret| {
                 try self.scanExpr(ret.expr, owner, false);
@@ -9481,6 +9764,7 @@ const NestedProcSiteBuilder = struct {
             .num_from_numeral,
             .typed_num_from_numeral,
             => |plan_id| try self.scanStaticDispatchPlanArgs(plan_id orelse checkedArtifactInvariant("checked from_numeral expression reached nested procedure site collection without a dispatch plan", .{}), owner),
+            .str_from_quote => |quote| try self.scanStaticDispatchPlanArgs(quote.plan orelse checkedArtifactInvariant("checked from_quote expression reached nested procedure site collection without a dispatch plan", .{}), owner),
             .structural_eq => |eq| {
                 try self.scanExpr(eq.lhs, owner, false);
                 try self.scanExpr(eq.rhs, owner, false);
@@ -9536,7 +9820,7 @@ const NestedProcSiteBuilder = struct {
         const plan = self.static_dispatch_plans.plans[raw];
         for (plan.args) |arg| switch (arg) {
             .checked_expr => |expr| try self.scanExpr(expr, owner, false),
-            .generated_numeral => {},
+            .generated_numeral, .generated_quote => {},
         };
     }
 
@@ -10079,7 +10363,7 @@ pub const PlatformRequirementRelationTable = struct {
                 input,
                 declaration,
             );
-            const payload_key = checked_types.store.roots[@intFromEnum(payload)].key;
+            const payload_key = checked_types.store.roots.items[@intFromEnum(payload)].key;
 
             rows[i] = .{
                 .id = input.id,
@@ -10846,8 +11130,8 @@ const PlatformRequirementTypeCompatibilityChecker = struct {
         if (expected_nominal.is_opaque) return true;
         if (try self.compatible(expected_nominal.backing, actual_nominal.backing)) return true;
         return canonicalTypeKeyEql(
-            self.store.roots[@intFromEnum(expected)].key,
-            self.store.roots[@intFromEnum(actual)].key,
+            self.store.roots.items[@intFromEnum(expected)].key,
+            self.store.roots.items[@intFromEnum(actual)].key,
         );
     }
 
@@ -11014,10 +11298,10 @@ const PlatformRequirementTypeCompatibilityChecker = struct {
 
     fn payload(self: *const PlatformRequirementTypeCompatibilityChecker, root: CheckedTypeId) CheckedTypePayload {
         const index: usize = @intFromEnum(root);
-        if (index >= self.store.payloads.len) {
+        if (index >= self.store.payloads.items.len) {
             checkedArtifactInvariant("platform requirement type compatibility referenced missing checked type payload", .{});
         }
-        return self.store.payloads[index];
+        return self.store.payloads.items[index];
     }
 };
 
@@ -11697,10 +11981,10 @@ const PlatformAppRelationTypeResolver = struct {
 
     fn payload(self: *const PlatformAppRelationTypeResolver, root: CheckedTypeId) CheckedTypePayload {
         const index: usize = @intFromEnum(root);
-        if (index >= self.store.payloads.len) {
+        if (index >= self.store.payloads.items.len) {
             checkedArtifactInvariant("platform/app relation referenced missing checked type payload", .{});
         }
-        return self.store.payloads[index];
+        return self.store.payloads.items[index];
     }
 };
 
@@ -11740,10 +12024,10 @@ fn writeCheckedType(
     defer _ = active.remove(root);
 
     const index: usize = @intFromEnum(root);
-    if (index >= artifact.checked_types.payloads.len) {
+    if (index >= artifact.checked_types.payloads.items.len) {
         checkedArtifactInvariant("checked type formatter referenced a missing payload", .{});
     }
-    switch (artifact.checked_types.payloads[index]) {
+    switch (artifact.checked_types.payloads.items[index]) {
         .pending => checkedArtifactInvariant("checked type formatter reached pending payload", .{}),
         .flex => |flex| try writeCheckedTypeVar(allocator, flex, buf),
         .rigid => |rigid| try writeCheckedTypeVar(allocator, rigid, buf),
@@ -11848,7 +12132,7 @@ fn writeCheckedTagUnionType(
             try buf.append(allocator, ')');
         }
     }
-    const has_ext = switch (artifact.checked_types.payloads[@intFromEnum(ext)]) {
+    const has_ext = switch (artifact.checked_types.payloads.items[@intFromEnum(ext)]) {
         .empty_tag_union => false,
         else => true,
     };
@@ -12117,10 +12401,10 @@ pub const ModuleInterfaceCapabilities = struct {
         var seen_nominals = std.AutoHashMap(NominalCapabilitySeenKey, void).init(allocator);
         defer seen_nominals.deinit();
 
-        const published_payload_count = checked_types.payloads.len;
+        const published_payload_count = checked_types.payloads.items.len;
         var i: usize = 0;
         while (i < published_payload_count) : (i += 1) {
-            const payload = checked_types.payloads[i];
+            const payload = checked_types.payloads.items[i];
             const nominal = switch (payload) {
                 .nominal => |nominal| nominal,
                 else => continue,
@@ -12128,7 +12412,7 @@ pub const ModuleInterfaceCapabilities = struct {
             if (nominal.builtin != null) continue;
             if (nominal.origin_module != current_module) continue;
 
-            const source_key = checked_types.roots[i].key;
+            const source_key = checked_types.roots.items[i].key;
             const nominal_key = canonical.NominalTypeKey{
                 .module_name = nominal.origin_module,
                 .type_name = nominal.name,
@@ -12158,7 +12442,7 @@ pub const ModuleInterfaceCapabilities = struct {
             try boxed_payload_templates.append(allocator, .{
                 .id = capability_id,
                 .nominal = nominal_key,
-                .source_ty_payload = checked_types.roots[i].id,
+                .source_ty_payload = checked_types.roots.items[i].id,
                 .source_ty = source_key,
                 .backing_ty = backing_ty,
                 .backing_ty_key = checkedTypeKeyForId(checked_types, backing_ty),
@@ -12178,7 +12462,7 @@ pub const ModuleInterfaceCapabilities = struct {
                 try opaque_atomic_proofs.append(allocator, .{
                     .id = id,
                     .nominal = nominal_key,
-                    .source_ty_payload = checked_types.roots[i].id,
+                    .source_ty_payload = checked_types.roots.items[i].id,
                     .source_ty = source_key,
                     .instantiated_args = owned_args,
                 });
@@ -12186,7 +12470,7 @@ pub const ModuleInterfaceCapabilities = struct {
                 break :blk id;
             };
 
-            const published_payload = &checked_types.payloads[i];
+            const published_payload = &checked_types.payloads.items[i];
             switch (published_payload.*) {
                 .nominal => |*published_nominal| {
                     published_nominal.representation = .{ .local_box_payload_capability = .{
@@ -12339,10 +12623,10 @@ fn checkedTypeKeyForId(
     id: CheckedTypeId,
 ) canonical.CanonicalTypeKey {
     const index: usize = @intFromEnum(id);
-    if (index >= checked_types.roots.len) {
+    if (index >= checked_types.roots.items.len) {
         checkedArtifactInvariant("checked type key lookup referenced a missing root", .{});
     }
-    return checked_types.roots[index].key;
+    return checked_types.roots.items[index].key;
 }
 
 fn checkedTypeKeysForIds(
@@ -12375,14 +12659,14 @@ fn checkedTypeHasNoReachableCallableSlotsInner(
     active: *std.AutoHashMap(CheckedTypeId, void),
 ) Allocator.Error!bool {
     const index: usize = @intFromEnum(root);
-    if (index >= checked_types.payloads.len) {
+    if (index >= checked_types.payloads.items.len) {
         checkedArtifactInvariant("callable-slot proof referenced a missing checked type", .{});
     }
     if (active.contains(root)) return true;
     try active.put(root, {});
     defer _ = active.remove(root);
 
-    return switch (checked_types.payloads[index]) {
+    return switch (checked_types.payloads.items[index]) {
         .pending => checkedArtifactInvariant("callable-slot proof reached pending checked type", .{}),
         .flex,
         .rigid,
@@ -12475,6 +12759,15 @@ pub const CompileTimeRootKind = enum {
     constant,
     callable_binding,
     expect,
+    /// A `from_numeral` conversion of a numeric literal whose target is a
+    /// non-builtin nominal type. The root body evaluates the dispatch call's
+    /// `Try` result; finalization unwraps `Ok` into the stored constant and
+    /// reports `Err(InvalidNumeral(..))` as a checking problem.
+    numeral_conversion,
+    /// A `from_quote` conversion of a string literal whose target is a
+    /// non-builtin nominal type; works exactly like `numeral_conversion` with
+    /// `Err(BadQuotedBytes(..))` reported as the checking problem.
+    quote_conversion,
 };
 
 /// Public `CompileTimeRootPayload` declaration.
@@ -12544,6 +12837,56 @@ pub const CompileTimeRootTable = struct {
             });
         }
 
+        for (module_env.numeral_dispatch_plans.items.items) |numeral_plan| {
+            const expr_idx: CIR.Expr.Idx = @enumFromInt(numeral_plan.node_idx);
+            const checked_expr = checked_bodies.exprIdForSource(expr_idx) orelse
+                checked_bodies.numeralConversionExprAtRawNode(numeral_plan.node_idx) orelse
+                continue;
+            switch (checked_bodies.exprs[@intFromEnum(checked_expr)].data) {
+                .num_from_numeral, .typed_num_from_numeral => {},
+                else => continue,
+            }
+            const fn_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(numeral_plan.fn_var));
+            const try_ty = switch (checked_types.store.payloads.items[@intFromEnum(fn_ty)]) {
+                .function => |function| function.ret,
+                else => checkedArtifactInvariant("from_numeral dispatch plan type was not a function", .{}),
+            };
+            try appendCompileTimeRoot(&roots, allocator, .{
+                .module_idx = module.moduleIndex(),
+                .kind = .numeral_conversion,
+                .source = .{ .expr = expr_idx },
+                .pattern = null,
+                .expr = checked_expr,
+                .checked_type = try_ty,
+                .payload = .pending,
+            });
+        }
+
+        for (module_env.quote_dispatch_plans.items.items) |quote_plan| {
+            const expr_idx: CIR.Expr.Idx = @enumFromInt(quote_plan.node_idx);
+            const checked_expr = checked_bodies.exprIdForSource(expr_idx) orelse
+                checked_bodies.numeralConversionExprAtRawNode(quote_plan.node_idx) orelse
+                continue;
+            switch (checked_bodies.exprs[@intFromEnum(checked_expr)].data) {
+                .str_from_quote => {},
+                else => continue,
+            }
+            const fn_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(quote_plan.fn_var));
+            const try_ty = switch (checked_types.store.payloads.items[@intFromEnum(fn_ty)]) {
+                .function => |function| function.ret,
+                else => checkedArtifactInvariant("from_quote dispatch plan type was not a function", .{}),
+            };
+            try appendCompileTimeRoot(&roots, allocator, .{
+                .module_idx = module.moduleIndex(),
+                .kind = .quote_conversion,
+                .source = .{ .expr = expr_idx },
+                .pattern = null,
+                .expr = checked_expr,
+                .checked_type = try_ty,
+                .payload = .pending,
+            });
+        }
+
         return .{ .roots = try roots.toOwnedSlice(allocator) };
     }
 
@@ -12557,6 +12900,18 @@ pub const CompileTimeRootTable = struct {
     pub fn lookupIdBySource(self: *const CompileTimeRootTable, source: RootSource) ?ComptimeRootId {
         for (self.roots) |entry| {
             if (rootSourceMatches(entry.source, source)) return entry.id;
+        }
+        return null;
+    }
+
+    /// Look up the literal-conversion (from_numeral or from_quote) root whose
+    /// body is the given checked expression.
+    pub fn lookupNumeralRootByExpr(self: *const CompileTimeRootTable, expr: CheckedExprId) ?CompileTimeRoot {
+        for (self.roots) |entry| {
+            switch (entry.kind) {
+                .numeral_conversion, .quote_conversion => if (entry.expr == expr) return entry,
+                else => {},
+            }
         }
         return null;
     }
@@ -12624,6 +12979,10 @@ fn verifyCompileTimeRootPayloadMatchesKind(kind: CompileTimeRootKind, payload: C
         },
         .expect => switch (payload) {
             .expect => true,
+            else => false,
+        },
+        .numeral_conversion, .quote_conversion => switch (payload) {
+            .const_node => true,
             else => false,
         },
     };
@@ -13289,14 +13648,14 @@ fn appendPublicApiTypeDependencies(
     type_owner_keys: *ArtifactKeyAccumulator,
 ) Allocator.Error!void {
     const index: usize = @intFromEnum(root);
-    if (index >= checked_types.payloads.len) {
+    if (index >= checked_types.payloads.items.len) {
         checkedArtifactInvariant("public API dependency scan referenced a missing checked type payload", .{});
     }
     if (active.contains(root)) return;
     try active.put(root, {});
     defer _ = active.remove(root);
 
-    switch (checked_types.payloads[index]) {
+    switch (checked_types.payloads.items[index]) {
         .pending => checkedArtifactInvariant("public API dependency scan reached pending checked type payload", .{}),
         .empty_record, .empty_tag_union => {},
         .flex => |flex| try appendPublicApiConstraintDependencies(
@@ -15210,12 +15569,12 @@ pub const CheckedModuleArtifact = struct {
         if (builtin.mode != .Debug) return;
 
         std.debug.assert(self.module_identity.module_idx != std.math.maxInt(u32));
-        std.debug.assert(self.checked_types.roots.len == self.checked_types.payloads.len);
+        std.debug.assert(self.checked_types.roots.items.len == self.checked_types.payloads.items.len);
         std.debug.assert(self.checked_bodies.expr_diverges.len == self.checked_bodies.exprs.len);
         std.debug.assert(self.checked_bodies.statement_diverges.len == self.checked_bodies.statements.len);
         verifyRootRequestSubsets(self.root_requests);
 
-        for (self.checked_types.payloads, 0..) |payload, i| {
+        for (self.checked_types.payloads.items, 0..) |payload, i| {
             switch (payload) {
                 .pending => std.debug.panic("checked artifact invariant violated: checked type payload {d} was not filled before compile-time lowering", .{i}),
                 else => {},
@@ -15224,7 +15583,7 @@ pub const CheckedModuleArtifact = struct {
 
         for (self.checked_bodies.exprs, 0..) |expr, i| {
             std.debug.assert(@intFromEnum(expr.id) == i);
-            std.debug.assert(@intFromEnum(expr.ty) < self.checked_types.roots.len);
+            std.debug.assert(@intFromEnum(expr.ty) < self.checked_types.roots.items.len);
             verifyCheckedExprDataComplete(expr.data);
         }
 
@@ -15236,13 +15595,13 @@ pub const CheckedModuleArtifact = struct {
             std.debug.assert(root.expr == body.body_expr);
             std.debug.assert(root.checked_type == body.checked_type);
             std.debug.assert(@intFromEnum(body.body_expr) < self.checked_bodies.exprs.len);
-            std.debug.assert(@intFromEnum(body.checked_type) < self.checked_types.roots.len);
+            std.debug.assert(@intFromEnum(body.checked_type) < self.checked_types.roots.items.len);
         }
 
         for (self.root_requests.requests, 0..) |request, i| {
             std.debug.assert(request.order == i);
             std.debug.assert(request.module_idx == self.module_identity.module_idx);
-            std.debug.assert(@intFromEnum(request.checked_type) < self.checked_types.roots.len);
+            std.debug.assert(@intFromEnum(request.checked_type) < self.checked_types.roots.items.len);
             if (request.abi == .compile_time) {
                 const template_ref = request.procedure_template orelse {
                     std.debug.panic("checked artifact invariant violated: compile-time root has no private wrapper template", .{});
@@ -15262,7 +15621,7 @@ pub const CheckedModuleArtifact = struct {
             std.debug.assert(@intFromEnum(root.expr) < self.checked_bodies.exprs.len);
             if (root.pattern) |pattern| std.debug.assert(@intFromEnum(pattern) < self.checked_bodies.patterns.len);
             switch (root.kind) {
-                .constant, .callable_binding => switch (root.payload) {
+                .constant, .callable_binding, .numeral_conversion, .quote_conversion => switch (root.payload) {
                     .pending => {},
                     else => verifyCompileTimeRootPayloadMatchesKind(root.kind, root.payload),
                 },
@@ -15285,7 +15644,7 @@ pub const CheckedModuleArtifact = struct {
         for (self.root_requests.requests, 0..) |request, i| {
             std.debug.assert(request.order == i);
             std.debug.assert(request.module_idx == self.module_identity.module_idx);
-            std.debug.assert(@intFromEnum(request.checked_type) < self.checked_types.roots.len);
+            std.debug.assert(@intFromEnum(request.checked_type) < self.checked_types.roots.items.len);
             if (request.kind == .test_expect or
                 request.kind == .compile_time_constant or
                 request.kind == .compile_time_callable)
@@ -15332,10 +15691,10 @@ pub const CheckedModuleArtifact = struct {
             std.debug.assert(proc.module_idx == self.module_identity.module_idx);
         }
 
-        for (self.checked_types.roots, 0..) |root, i| {
+        for (self.checked_types.roots.items, 0..) |root, i| {
             std.debug.assert(@intFromEnum(root.id) == i);
-            std.debug.assert(self.checked_types.payloads.len == self.checked_types.roots.len);
-            switch (self.checked_types.payloads[i]) {
+            std.debug.assert(self.checked_types.payloads.items.len == self.checked_types.roots.items.len);
+            switch (self.checked_types.payloads.items[i]) {
                 .pending => std.debug.panic("checked artifact invariant violated: checked type payload {d} was not filled", .{i}),
                 else => {},
             }
@@ -15343,13 +15702,13 @@ pub const CheckedModuleArtifact = struct {
 
         for (self.checked_bodies.exprs, 0..) |expr, i| {
             std.debug.assert(@intFromEnum(expr.id) == i);
-            std.debug.assert(@intFromEnum(expr.ty) < self.checked_types.roots.len);
+            std.debug.assert(@intFromEnum(expr.ty) < self.checked_types.roots.items.len);
             verifyCheckedExprDataComplete(expr.data);
         }
 
         for (self.checked_bodies.patterns, 0..) |pattern, i| {
             std.debug.assert(@intFromEnum(pattern.id) == i);
-            std.debug.assert(@intFromEnum(pattern.ty) < self.checked_types.roots.len);
+            std.debug.assert(@intFromEnum(pattern.ty) < self.checked_types.roots.items.len);
             verifyCheckedPatternDataComplete(pattern.data);
         }
 
@@ -15375,12 +15734,12 @@ pub const CheckedModuleArtifact = struct {
             std.debug.assert(root.expr == body.body_expr);
             std.debug.assert(root.checked_type == body.checked_type);
             std.debug.assert(@intFromEnum(body.body_expr) < self.checked_bodies.exprs.len);
-            std.debug.assert(@intFromEnum(body.checked_type) < self.checked_types.roots.len);
+            std.debug.assert(@intFromEnum(body.checked_type) < self.checked_types.roots.items.len);
         }
 
         for (self.checked_procedure_templates.templates, 0..) |template, i| {
             std.debug.assert(@intFromEnum(template.template_id) == i);
-            std.debug.assert(@intFromEnum(template.checked_fn_root) < self.checked_types.roots.len);
+            std.debug.assert(@intFromEnum(template.checked_fn_root) < self.checked_types.roots.items.len);
             _ = self.checked_types.schemeForKey(template.checked_fn_scheme) orelse {
                 std.debug.panic("checked artifact invariant violated: checked procedure template references missing type scheme", .{});
             };
@@ -15401,7 +15760,7 @@ pub const CheckedModuleArtifact = struct {
                 .entry_wrapper => |wrapper_id| {
                     const wrapper = self.entry_wrappers.get(wrapper_id);
                     std.debug.assert(@intFromEnum(wrapper.body_expr) < self.checked_bodies.exprs.len);
-                    std.debug.assert(@intFromEnum(wrapper.checked_fn_root) < self.checked_types.roots.len);
+                    std.debug.assert(@intFromEnum(wrapper.checked_fn_root) < self.checked_types.roots.items.len);
                     std.debug.assert(wrapper.checked_fn_root == template.checked_fn_root);
                     std.debug.assert(wrapper.template.template == template.template_id);
                     std.debug.assert(wrapper.template.proc_base == template.proc_base);
@@ -15442,12 +15801,12 @@ pub const CheckedModuleArtifact = struct {
             }
             for (exported.template_closure.checked_type_roots) |type_ref| {
                 if (closureArtifactRefIsLocal(self, type_ref.artifact)) {
-                    std.debug.assert(@intFromEnum(type_ref.ty) < self.checked_types.roots.len);
+                    std.debug.assert(@intFromEnum(type_ref.ty) < self.checked_types.roots.items.len);
                 }
             }
             for (exported.template_closure.checked_type_schemes) |scheme_ref| {
                 if (closureArtifactRefIsLocal(self, scheme_ref.artifact)) {
-                    std.debug.assert(@intFromEnum(scheme_ref.scheme) < self.checked_types.schemes.len);
+                    std.debug.assert(@intFromEnum(scheme_ref.scheme) < self.checked_types.schemes.items.len);
                 }
             }
         }
@@ -15499,12 +15858,12 @@ pub const CheckedModuleArtifact = struct {
             }
             for (exported.template_closure.checked_type_roots) |type_ref| {
                 if (closureArtifactRefIsLocal(self, type_ref.artifact)) {
-                    std.debug.assert(@intFromEnum(type_ref.ty) < self.checked_types.roots.len);
+                    std.debug.assert(@intFromEnum(type_ref.ty) < self.checked_types.roots.items.len);
                 }
             }
             for (exported.template_closure.checked_type_schemes) |scheme_ref| {
                 if (closureArtifactRefIsLocal(self, scheme_ref.artifact)) {
-                    std.debug.assert(@intFromEnum(scheme_ref.scheme) < self.checked_types.schemes.len);
+                    std.debug.assert(@intFromEnum(scheme_ref.scheme) < self.checked_types.schemes.items.len);
                 }
             }
             for (exported.template_closure.checked_const_bodies) |body_ref| {
@@ -15531,13 +15890,13 @@ pub const CheckedModuleArtifact = struct {
             };
             std.debug.assert(declaration.requires_idx == relation.requires_idx);
             const payload_index = @intFromEnum(relation.requested_source_ty_payload);
-            if (payload_index >= self.checked_types.roots.len) {
+            if (payload_index >= self.checked_types.roots.items.len) {
                 std.debug.panic(
                     "checked artifact invariant violated: platform requirement relation {d} requested payload is out of range",
                     .{i},
                 );
             }
-            if (!canonicalTypeKeyEql(self.checked_types.roots[payload_index].key, relation.requested_source_ty)) {
+            if (!canonicalTypeKeyEql(self.checked_types.roots.items[payload_index].key, relation.requested_source_ty)) {
                 std.debug.panic(
                     "checked artifact invariant violated: platform requirement relation {d} requested payload key disagrees with relation key",
                     .{i},
@@ -15582,7 +15941,7 @@ pub const CheckedModuleArtifact = struct {
             const root = self.compile_time_roots.root(template.root);
             std.debug.assert(root.kind == .callable_binding);
             std.debug.assert(root.pattern != null and root.pattern.? == template.pattern);
-            std.debug.assert(@intFromEnum(template.checked_fn_root) < self.checked_types.roots.len);
+            std.debug.assert(@intFromEnum(template.checked_fn_root) < self.checked_types.roots.items.len);
             _ = self.checked_types.schemeForKey(template.source_scheme) orelse {
                 std.debug.panic("checked artifact invariant violated: callable eval template references missing type scheme", .{});
             };
@@ -15644,7 +16003,7 @@ pub const CheckedModuleArtifact = struct {
                 .procedure => |procedure| {
                     std.debug.assert(procedure.source_name == metadata.source_name);
                     std.debug.assert(procedure.ffi_symbol == metadata.ffi_symbol);
-                    std.debug.assert(@intFromEnum(procedure.checked_type) < self.checked_types.roots.len);
+                    std.debug.assert(@intFromEnum(procedure.checked_type) < self.checked_types.roots.items.len);
                     const top_level = self.top_level_values.lookupByDef(procedure.def) orelse {
                         std.debug.panic("checked artifact invariant violated: provided procedure export references missing top-level value", .{});
                     };
@@ -15659,7 +16018,7 @@ pub const CheckedModuleArtifact = struct {
                 .data => |data| {
                     std.debug.assert(data.source_name == metadata.source_name);
                     std.debug.assert(data.ffi_symbol == metadata.ffi_symbol);
-                    std.debug.assert(@intFromEnum(data.checked_type) < self.checked_types.roots.len);
+                    std.debug.assert(@intFromEnum(data.checked_type) < self.checked_types.roots.items.len);
                     const top_level = self.top_level_values.lookupByDef(data.def) orelse {
                         std.debug.panic("checked artifact invariant violated: provided data export references missing top-level value", .{});
                     };
@@ -16993,6 +17352,7 @@ pub const CheckedModuleKeyInputs = struct {
     imports: []const PublishImportArtifact = &.{},
     platform_requirement_context: ?PlatformRequirementContextKey = null,
     platform_app_relation: ?PlatformAppRelationKey = null,
+    explicit_roots: []const ExplicitRootRequestInput = &.{},
 };
 
 /// Compute the checked module cache identity for a checked typed module and the
@@ -17027,6 +17387,7 @@ pub fn checkedModuleKeyFromTypedModule(
         inputs.imports,
         inputs.platform_requirement_context,
         inputs.platform_app_relation,
+        inputs.explicit_roots,
     );
     defer checking_context_identity.deinit(allocator);
 
@@ -17077,6 +17438,7 @@ pub fn publishFromTypedModule(
         inputs.imports,
         inputs.platform_requirement_context,
         if (inputs.platform_app_relation) |relation| relation.key else null,
+        inputs.explicit_roots,
     );
     errdefer checking_context_identity.deinit(allocator);
 
@@ -17144,6 +17506,7 @@ pub fn publishFromTypedModule(
     errdefer static_dispatch_plans.deinit(allocator);
     checked_bodies.attachStaticDispatchPlans(&static_dispatch_plans);
     checked_bodies.attachNumeralPlans(&static_dispatch_plans);
+    checked_bodies.attachQuotePlans(&static_dispatch_plans);
     checked_bodies.attachIteratorForPlans(&static_dispatch_plans);
 
     var hosted_procs = try HostedProcTable.fromModule(allocator, module, global_value_defs, &canonical_names, &checked_procedure_templates);
@@ -17823,7 +18186,7 @@ test "provided primitive constant is a data export, not a runtime root" {
         \\    requires {}
         \\    exposes []
         \\    packages {}
-        \\    provides { answer_for_host: "answer" }
+        \\    provides { "roc_answer": answer_for_host }
         \\
         \\answer_for_host : I64
         \\answer_for_host = 42
@@ -17842,7 +18205,7 @@ test "provided nested record constant is a data export, not a runtime root" {
         \\    requires {}
         \\    exposes []
         \\    packages {}
-        \\    provides { profile_for_host: "profile" }
+        \\    provides { "roc_profile": profile_for_host }
         \\
         \\profile_for_host : {
         \\    user : { name : Str, scores : List(I64) },
@@ -17867,7 +18230,7 @@ test "provided nested heap constant is a data export, not a runtime root" {
         \\    requires {}
         \\    exposes []
         \\    packages {}
-        \\    provides { table_for_host: "table" }
+        \\    provides { "roc_table": table_for_host }
         \\
         \\table_for_host : List(List(Str))
         \\table_for_host = [
@@ -17890,7 +18253,7 @@ test "provided recursive nominal constant is a data export, not a runtime root" 
         \\    requires {}
         \\    exposes []
         \\    packages {}
-        \\    provides { tree_for_host: "tree" }
+        \\    provides { "roc_tree": tree_for_host }
         \\
         \\Tree := [Leaf(I64), Node(Tree, Tree)]
         \\
@@ -17917,7 +18280,7 @@ test "provided callable-containing record constant is a data export, not a runti
         \\    requires {}
         \\    exposes []
         \\    packages {}
-        \\    provides { table_for_host: "table" }
+        \\    provides { "roc_table": table_for_host }
         \\
         \\I64ToI64 : I64 -> I64
         \\
@@ -17938,7 +18301,7 @@ test "provided procedure remains a runtime root" {
         \\    requires {}
         \\    exposes []
         \\    packages {}
-        \\    provides { add_one_for_host: "add_one" }
+        \\    provides { "roc_add_one": add_one_for_host }
         \\
         \\add_one_for_host : I64 -> I64
         \\add_one_for_host = |value| value + 1
