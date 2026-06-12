@@ -603,7 +603,7 @@ pub fn compileToSharedLibrary(allocator: Allocator, io: std.Io, bitcode: []const
         ) catch {};
     }
 
-    try linkSharedLibrary(allocator, object_path, shared_lib_path);
+    try linkSharedLibrary(allocator, io, object_path, shared_lib_path);
 
     if (std.c.getenv("ROC_LLVM_KEEP_DYLIB")) |keep_path_z| {
         std.Io.Dir.cwd().copyFile(
@@ -620,6 +620,7 @@ pub fn compileToSharedLibrary(allocator: Allocator, io: std.Io, bitcode: []const
 
 fn linkSharedLibrary(
     allocator: Allocator,
+    io: std.Io,
     object_path: [:0]const u8,
     shared_lib_path: [:0]const u8,
 ) Error!void {
@@ -629,6 +630,12 @@ fn linkSharedLibrary(
 
     var args: std.ArrayList([]const u8) = .empty;
     defer args.deinit(allocator);
+
+    var stack_probe_path: ?[:0]const u8 = null;
+    defer if (stack_probe_path) |path| {
+        std.Io.Dir.cwd().deleteFile(io, std.mem.sliceTo(path, 0)) catch {};
+        allocator.free(path);
+    };
 
     switch (builtin.os.tag) {
         .macos => {
@@ -680,6 +687,19 @@ fn linkSharedLibrary(
                 else => return Error.LinkFailed,
             });
             try args.append(allocator, std.mem.sliceTo(object_path, 0));
+            // LLVM emits ___chkstk_ms stack probes for functions with large
+            // frames; no Windows system library defines it, so link the same
+            // generated probe object the roc CLI linker uses.
+            if (builtin.cpu.arch == .x86_64) {
+                const probe_obj = embedded_lld.stack_probe.generateStackProbeObject(arena) catch return Error.OutOfMemory;
+                const probe_path = createTempPath(allocator, io, ".obj") catch return Error.TempFileError;
+                stack_probe_path = probe_path;
+                std.Io.Dir.cwd().writeFile(io, .{
+                    .sub_path = std.mem.sliceTo(probe_path, 0),
+                    .data = probe_obj,
+                }) catch return Error.TempFileError;
+                try args.append(allocator, std.mem.sliceTo(probe_path, 0));
+            }
             try args.append(allocator, "/defaultlib:kernel32");
             try args.append(allocator, "/defaultlib:ntdll");
             try args.append(allocator, "/defaultlib:msvcrt");
