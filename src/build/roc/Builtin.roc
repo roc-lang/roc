@@ -333,20 +333,15 @@ Builtin :: [].{
 		## ```
 		from_utf8 : List(U8) -> Try(Str, [BadUtf8({ problem : Str.Utf8Problem, index : U64 }), ..])
 
-		## Converts the UTF-8 bytes of a string literal to a [Str].
+		## Converts a string literal to a [Str].
 		##
 		## The compiler calls this when a string literal's type is [Str], passing
-		## the literal's bytes after escape processing. It can also be called
-		## directly, in which case invalid UTF-8 returns `Err`.
+		## the literal's contents after escape processing.
 		## ```roc
-		## expect Str.from_quote([82, 111, 99]) == Ok("Roc")
-		## expect Str.from_quote([255]).is_err()
+		## expect Str.from_quote("Roc") == Ok("Roc")
 		## ```
-		from_quote : List(U8) -> Try(Str, [BadQuotedBytes(Str)])
-		from_quote = |bytes| match Str.from_utf8(bytes) {
-			Ok(str) => Ok(str)
-			Err(_) => Err(BadQuotedBytes("the bytes were not valid UTF-8"))
-		}
+		from_quote : Str -> Try(Str, [BadQuotedBytes(Str)])
+		from_quote = |str| Ok(str)
 
 		## Assembles an interpolated string literal.
 		##

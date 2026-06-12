@@ -7189,27 +7189,17 @@ const BodyContext = struct {
         };
     }
 
-    /// Materialize a string literal's bytes as the `List(U8)` argument of a
-    /// `from_quote` dispatch call.
+    /// Materialize a string literal as the `Str` argument of a `from_quote`
+    /// dispatch call.
     fn lowerQuoteValue(
         self: *BodyContext,
         literal: checked.CheckedStringLiteralId,
         ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprId {
-        const bytes = self.view.bodies.string_literals[@intFromEnum(literal)];
-        const data: Ast.ExprData = .{ .list = blk: {
-            const elem_ty = switch (self.builder.shapeContent(ty)) {
-                .list => |elem| elem,
-                else => Common.invariant("checked from_quote argument was not a List(U8)"),
-            };
-            const items = try self.allocator.alloc(Ast.ExprId, bytes.len);
-            defer self.allocator.free(items);
-            for (bytes, 0..) |byte, i| {
-                items[i] = try self.builder.intLiteralExpr(byte, elem_ty);
-            }
-            break :blk try self.builder.program.addExprSpan(items);
-        } };
-        return try self.builder.program.addExpr(.{ .ty = ty, .data = data });
+        return try self.builder.program.addExpr(.{
+            .ty = ty,
+            .data = .{ .str_lit = try self.lowerStringLiteral(literal) },
+        });
     }
 
     fn lowerNumeralValue(

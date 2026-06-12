@@ -1632,8 +1632,8 @@ fn mkFlexWithFromNumeralConstraint(
 }
 
 /// Create a flex variable with a from_quote constraint for string literals.
-/// The constraint's function type is `List(U8) -> Try(a, [BadQuotedBytes(Str)])`,
-/// where the bytes are the literal's UTF-8 content after escape processing.
+/// The constraint's function type is `Str -> Try(a, [BadQuotedBytes(Str)])`,
+/// where the Str is the literal's content after escape processing.
 fn mkFlexWithFromQuoteConstraint(
     self: *Self,
     source_node: ?CIR.Node.Idx,
@@ -1649,9 +1649,8 @@ fn mkFlexWithFromQuoteConstraint(
     const flex_rank = env.rank();
     const flex_var = try self.freshFromContentAtRank(.{ .flex = Flex.init() }, env, region, flex_rank);
 
-    // Create the argument type: List(U8)
-    const u8_var = try self.freshFromContent(try self.mkNumberTypeContent(.u8, env), env, region);
-    const arg_var = try self.freshFromContent(try self.mkListContent(u8_var, env), env, region);
+    // Create the argument type: Str
+    const arg_var = try self.freshStr(env, region);
 
     // Create the error type: [BadQuotedBytes(Str)] (closed tag union)
     const str_var = self.str_var;

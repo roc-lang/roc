@@ -872,8 +872,8 @@ concrete monomorphic dispatcher type has already determined the owner.
 
 A numeric literal whose target type is a non-builtin nominal type converts
 through that type's `from_numeral` method, and a string literal converts
-through `from_quote` (receiving the literal's post-escape UTF-8 bytes as
-`List(U8)`). Every such conversion with a concrete target type is a
+through `from_quote` (receiving the literal's post-escape contents as `Str`).
+Every such conversion with a concrete target type is a
 compile-time root (`numeral_conversion` / `quote_conversion`), no matter
 where the literal sits in the AST: checking finalization evaluates the raw
 dispatch call, stores its `Try` result through `ConstStore`, unwraps `Ok` into

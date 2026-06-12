@@ -445,7 +445,7 @@ pub const StaticDispatchDispatcher = union(enum) {
 pub const StaticDispatchOperand = union(enum) {
     checked_expr: CheckedExprId,
     generated_numeral: ModuleEnv.NumeralLiteral,
-    /// A string literal's post-escape bytes, passed to `from_quote` as List(U8).
+    /// A string literal's post-escape contents, passed to `from_quote` as Str.
     generated_quote: CheckedStringLiteralId,
 };
 

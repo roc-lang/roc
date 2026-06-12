@@ -4952,7 +4952,7 @@ pub const CheckedExprData = union(enum) {
     typed_num_from_numeral: ?StaticDispatchPlanId,
     /// A string literal whose target is a non-builtin nominal type, converted
     /// through the type's `from_quote` method. `literal` holds the complete
-    /// post-escape UTF-8 bytes.
+    /// post-escape string contents.
     str_from_quote: struct {
         plan: ?StaticDispatchPlanId,
         literal: CheckedStringLiteralId,
@@ -6678,7 +6678,7 @@ const CheckedBodyPayloadCopier = struct {
         return .{ .str = try self.copyExprSpan(span) };
     }
 
-    /// Intern the complete post-escape bytes of a literal-only string,
+    /// Intern the complete post-escape contents of a literal-only string,
     /// concatenating its segments.
     fn internQuoteBytes(self: *@This(), span: CIR.Expr.Span) Allocator.Error!CheckedStringLiteralId {
         const segments = self.module.sliceExpr(span);
