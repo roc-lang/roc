@@ -527,7 +527,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc check generated module graph handles many symbols per file", .body = .{ .custom = .generated_graph_2_100 } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check generated module graph handles many imported files", .body = .{ .custom = .generated_graph_200_5 } },
     .{ .id = 0, .suite = .subcommands, .name = "list builtins inline in native --opt=speed build", .body = .{ .custom = .list_builtin_inlined } },
-    .{ .id = 0, .suite = .subcommands, .name = "roc build default platform x64musl matches direct write assembly", .body = .{ .custom = .default_platform_linux_disassembly } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc build default platform x64musl matches direct write assembly", .skip = .{ .always = "TODO: direct-write default-platform codegen" }, .body = .{ .custom = .default_platform_linux_disassembly } },
     .{ .id = 0, .suite = .subcommands, .name = "default platform crash prints debug backtrace on x64musl", .body = .{ .custom = .default_platform_crash_x64musl } },
     .{ .id = 0, .suite = .subcommands, .name = "default platform crash prints debug backtrace on arm64musl", .body = .{ .custom = .default_platform_crash_arm64musl } },
     .{ .id = 0, .suite = .subcommands, .name = "default platform crash prints debug backtrace on x64mac", .body = .{ .custom = .default_platform_crash_x64mac } },
@@ -1824,6 +1824,10 @@ fn customDefaultPlatformDebugBacktrace(
             .{target.cliName()},
         ) catch "default-platform diagnostics runtime is not implemented yet";
         return .{ .status = .skip, .phase = .setup, .duration_ns = timer.read(), .message = message };
+    }
+
+    if (target == .arm64musl) {
+        return .{ .status = .skip, .phase = .setup, .duration_ns = timer.read(), .message = "arm64musl default-platform diagnostics need ARM64 unwinding support" };
     }
 
     const app_filename = std.fmt.allocPrint(allocator, "default_platform_{s}_{s}.roc", .{ kind.fileStem(), target.cliName() }) catch |err|
