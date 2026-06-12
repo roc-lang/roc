@@ -1272,6 +1272,7 @@ test "download URL validation" {
         const parsed = try download.validateUrl(url);
         try testing.expectEqualStrings(expected_hash, parsed.hash);
         try testing.expectEqual(download.Version.none, parsed.version);
+        try testing.expectEqualStrings("example.com/path/to", parsed.urlId(url));
     }
 
     // Valid localhost IPv4 URL
@@ -1280,6 +1281,7 @@ test "download URL validation" {
         const parsed = try download.validateUrl(url);
         try testing.expectEqualStrings(expected_hash, parsed.hash);
         try testing.expectEqual(download.Version.none, parsed.version);
+        try testing.expectEqualStrings("127.0.0.1:8000", parsed.urlId(url));
     }
 
     // Valid localhost IPv6 URL with port
@@ -1288,6 +1290,7 @@ test "download URL validation" {
         const parsed = try download.validateUrl(url);
         try testing.expectEqualStrings(expected_hash, parsed.hash);
         try testing.expectEqual(download.Version.none, parsed.version);
+        try testing.expectEqualStrings("[::1]:8000", parsed.urlId(url));
     }
 
     // Valid localhost IPv6 URL without port
@@ -1296,6 +1299,7 @@ test "download URL validation" {
         const parsed = try download.validateUrl(url);
         try testing.expectEqualStrings(expected_hash, parsed.hash);
         try testing.expectEqual(download.Version.none, parsed.version);
+        try testing.expectEqualStrings("[::1]", parsed.urlId(url));
     }
 
     // Valid: localhost hostname (will be resolved and verified during download)
@@ -1304,6 +1308,7 @@ test "download URL validation" {
         const parsed = try download.validateUrl(url);
         try testing.expectEqualStrings(expected_hash, parsed.hash);
         try testing.expectEqual(download.Version.none, parsed.version);
+        try testing.expectEqualStrings("localhost:8000", parsed.urlId(url));
     }
 
     // Invalid: HTTP (not localhost IP)
@@ -1326,6 +1331,7 @@ test "download URL validation" {
         const parsed = try download.validateUrl(url);
         try testing.expectEqualStrings("4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf", parsed.hash);
         try testing.expectEqual(download.Version.none, parsed.version);
+        try testing.expectEqualStrings("example.com", parsed.urlId(url));
     }
 
     // Valid: hash with .tar.zst extension
@@ -1334,6 +1340,7 @@ test "download URL validation" {
         const parsed = try download.validateUrl(url);
         try testing.expectEqualStrings("4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf", parsed.hash);
         try testing.expectEqual(download.Version.none, parsed.version);
+        try testing.expectEqualStrings("example.com", parsed.urlId(url));
     }
 
     // Valid: optional version component immediately before the hash
@@ -1342,6 +1349,7 @@ test "download URL validation" {
         const parsed = try download.validateUrl(url);
         try testing.expectEqualStrings(expected_hash, parsed.hash);
         try testing.expectEqual(download.Version{ .major = 1, .minor = 2, .patch = 3 }, parsed.version);
+        try testing.expectEqualStrings("example.com/packages", parsed.urlId(url));
     }
 }
 

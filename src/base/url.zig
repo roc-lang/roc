@@ -2,6 +2,17 @@
 
 const std = @import("std");
 
+/// Compact slice coordinates for a package URL id inside a full URL.
+pub const UrlId = struct {
+    start: u32,
+    len: u32,
+
+    pub fn slice(self: UrlId, url: []const u8) []const u8 {
+        const start: usize = self.start;
+        return url[start..][0..self.len];
+    }
+};
+
 /// Checks if a URL is safe. Used for platform specification.
 ///
 /// Allows:
@@ -41,4 +52,11 @@ test "isSafeUrl" {
     try testing.expect(!isSafeUrl("./relative/path"));
     try testing.expect(!isSafeUrl("/absolute/path"));
     try testing.expect(!isSafeUrl("platform.roc"));
+}
+
+test "UrlId returns slice from full URL" {
+    const url = "https://example.com/foo/bar/1.2.3/hash";
+    const id = UrlId{ .start = 8, .len = 19 };
+
+    try std.testing.expectEqualStrings("example.com/foo/bar", id.slice(url));
 }

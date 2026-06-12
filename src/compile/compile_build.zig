@@ -38,6 +38,7 @@ const ModuleTimingInfo = compile_package.TimingInfo;
 const ImportResolver = compile_package.ImportResolver;
 const ScheduleHook = compile_package.ScheduleHook;
 const CacheManager = @import("cache_manager.zig").CacheManager;
+const package_source = @import("package_source.zig");
 
 // Actor model components
 const coordinator_mod = @import("coordinator.zig");
@@ -567,7 +568,10 @@ pub const BuildEnv = struct {
             if (comptime trace_build) {
                 std.debug.print("[BUILD]   Package: {s} root_dir={s} kind={}\n", .{ entry.key_ptr.*, pkg.root_dir, pkg.kind });
             }
-            const coord_pkg = try coord.ensurePackage(entry.key_ptr.*, pkg.root_dir);
+            const coord_pkg = if (pkg.url) |url|
+                try coord.ensurePackageWithUrl(entry.key_ptr.*, pkg.root_dir, url.view())
+            else
+                try coord.ensurePackage(entry.key_ptr.*, pkg.root_dir);
 
             // Copy shorthands to coordinator package
             // Only copy shorthands that map to real packages, not module-as-package entries
@@ -1004,11 +1008,20 @@ pub const BuildEnv = struct {
         kind: PackageKind,
         root_file: []u8,
         root_dir: []u8,
+        url: ?package_source.UrlSource = null,
         shorthands: std.StringHashMapUnmanaged(PackageRef) = .{},
         provides_entries: std.ArrayListUnmanaged(ProvidesEntry) = .empty,
         targets_config: ?targets_config_mod.TargetsConfig = null,
 
+        fn urlId(self: *const Package) ?[]const u8 {
+            if (self.url) |url| {
+                return url.urlId();
+            }
+            return null;
+        }
+
         fn deinit(self: *Package, gpa: Allocator) void {
+            if (self.url) |*url| url.deinit(gpa);
             if (self.targets_config) |tc| tc.deinit(gpa);
             for (self.provides_entries.items) |entry| {
                 freeConstSlice(gpa, entry.roc_ident);
@@ -1032,7 +1045,9 @@ pub const BuildEnv = struct {
         kind: PackageKind,
         platform_alias: ?[]u8 = null,
         platform_path: ?[]u8 = null,
+        platform_url: ?package_source.UrlSource = null,
         shorthands: std.StringHashMapUnmanaged([]const u8) = .{},
+        package_urls: std.StringHashMapUnmanaged(package_source.UrlSource) = .{},
         /// Platform-exposed modules (e.g., Stdout, Stderr) that apps can import
         exposes: std.ArrayListUnmanaged([]const u8) = .empty,
         /// Platform provides entries (roc_ident -> ffi_symbol mapping)
@@ -1044,12 +1059,19 @@ pub const BuildEnv = struct {
             if (self.targets_config) |tc| tc.deinit(gpa);
             if (self.platform_alias) |a| freeSlice(gpa, a);
             if (self.platform_path) |p| freeSlice(gpa, p);
+            if (self.platform_url) |*url| url.deinit(gpa);
             var it = self.shorthands.iterator();
             while (it.next()) |e| {
                 freeConstSlice(gpa, e.key_ptr.*);
                 freeConstSlice(gpa, e.value_ptr.*);
             }
             self.shorthands.deinit(gpa);
+            var url_it = self.package_urls.iterator();
+            while (url_it.next()) |e| {
+                freeConstSlice(gpa, e.key_ptr.*);
+                e.value_ptr.deinit(gpa);
+            }
+            self.package_urls.deinit(gpa);
             for (self.exposes.items) |e| {
                 freeConstSlice(gpa, e);
             }
@@ -1061,6 +1083,48 @@ pub const BuildEnv = struct {
             self.provides_entries.deinit(gpa);
         }
     };
+
+    fn removeHeaderPackageUrl(self: *BuildEnv, info: *HeaderInfo, key: []const u8) void {
+        if (info.package_urls.fetchRemove(key)) |entry| {
+            freeConstSlice(self.gpa, entry.key);
+            var url = entry.value;
+            url.deinit(self.gpa);
+        }
+    }
+
+    fn putHeaderShorthand(
+        self: *BuildEnv,
+        info: *HeaderInfo,
+        key: []const u8,
+        path: []const u8,
+        package_url: ?package_source.UrlSource,
+    ) BuildError!void {
+        var owned_url = package_url;
+        var path_transferred = false;
+        errdefer {
+            if (!path_transferred) freeConstSlice(self.gpa, path);
+            if (owned_url) |*url| url.deinit(self.gpa);
+        }
+
+        if (info.shorthands.fetchRemove(key)) |entry| {
+            self.gpa.free(entry.key);
+            self.gpa.free(entry.value);
+        }
+        self.removeHeaderPackageUrl(info, key);
+
+        const key_owned = try self.gpa.dupe(u8, key);
+        errdefer self.gpa.free(key_owned);
+
+        try info.shorthands.put(self.gpa, key_owned, path);
+        path_transferred = true;
+
+        if (owned_url) |url| {
+            const url_key = try self.gpa.dupe(u8, key);
+            errdefer self.gpa.free(url_key);
+            try info.package_urls.put(self.gpa, url_key, url);
+            owned_url = null;
+        }
+    }
 
     fn detectPackageCycle(self: *BuildEnv, from_pkg: []const u8, to_pkg: []const u8) Allocator.Error!bool {
         // Simple DFS walk on shorthand edges to detect if to_pkg reaches from_pkg
@@ -1177,16 +1241,21 @@ pub const BuildEnv = struct {
 
                 // Check if this is a URL - if so, resolve it to a cached local path
                 const plat_path = if (base.url.isSafeUrl(plat_rel)) blk: {
-                    const cached_path = try self.resolveUrlPackage(plat_rel);
-                    break :blk cached_path;
+                    const resolved = try self.resolveUrlPackage(plat_rel);
+                    errdefer self.gpa.free(resolved.source_path);
+                    info.platform_url = try package_source.UrlSource.init(self.gpa, .{
+                        .url = plat_rel,
+                        .url_id = resolved.url_id,
+                    });
+                    break :blk resolved.source_path;
                 } else blk: {
                     const header_dir = std.fs.path.dirname(file_abs) orelse ".";
                     const abs_path = try PathUtils.makeAbsolute(self.gpa, header_dir, plat_rel);
                     break :blk abs_path;
                 };
 
-                info.platform_alias = try self.gpa.dupe(u8, alias);
                 info.platform_path = @constCast(plat_path);
+                info.platform_alias = try self.gpa.dupe(u8, alias);
 
                 // Add platform directory to workspace roots so that imports within the platform
                 // can be resolved. This is needed for both URL packages (cached paths) and
@@ -1209,13 +1278,20 @@ pub const BuildEnv = struct {
                     defer self.gpa.free(relp);
 
                     // Check if this is a URL - if so, resolve it to a cached local path
+                    var package_url: ?package_source.UrlSource = null;
+                    errdefer if (package_url) |*url| url.deinit(self.gpa);
                     const v = if (base.url.isSafeUrl(relp)) blk: {
-                        const cached_path = try self.resolveUrlPackage(relp);
+                        const resolved = try self.resolveUrlPackage(relp);
+                        errdefer self.gpa.free(resolved.source_path);
+                        package_url = try package_source.UrlSource.init(self.gpa, .{
+                            .url = relp,
+                            .url_id = resolved.url_id,
+                        });
                         // Add cache directory to workspace roots for URL packages
-                        if (std.fs.path.dirname(cached_path)) |cache_pkg_dir| {
+                        if (std.fs.path.dirname(resolved.source_path)) |cache_pkg_dir| {
                             try self.addWorkspaceRoot(cache_pkg_dir);
                         }
-                        break :blk cached_path;
+                        break :blk resolved.source_path;
                     } else blk: {
                         const header_dir2 = std.fs.path.dirname(file_abs) orelse ".";
                         const abs_path = try PathUtils.makeAbsolute(self.gpa, header_dir2, relp);
@@ -1226,12 +1302,9 @@ pub const BuildEnv = struct {
                         break :blk abs_path;
                     };
 
-                    // TODO: actually handle duplicate keys
-                    if (info.shorthands.fetchRemove(k)) |e| {
-                        self.gpa.free(e.key);
-                        self.gpa.free(e.value);
-                    }
-                    try info.shorthands.put(self.gpa, try self.gpa.dupe(u8, k), v);
+                    const owned_package_url = package_url;
+                    package_url = null;
+                    try self.putHeaderShorthand(&info, k, v, owned_package_url);
                 }
             },
             .package => |p| {
@@ -1249,13 +1322,20 @@ pub const BuildEnv = struct {
                     defer self.gpa.free(relp);
 
                     // Check if this is a URL - if so, resolve it to a cached local path
+                    var package_url: ?package_source.UrlSource = null;
+                    errdefer if (package_url) |*url| url.deinit(self.gpa);
                     const v = if (base.url.isSafeUrl(relp)) blk: {
-                        const cached_path = try self.resolveUrlPackage(relp);
+                        const resolved = try self.resolveUrlPackage(relp);
+                        errdefer self.gpa.free(resolved.source_path);
+                        package_url = try package_source.UrlSource.init(self.gpa, .{
+                            .url = relp,
+                            .url_id = resolved.url_id,
+                        });
                         // Add cache directory to workspace roots for URL packages
-                        if (std.fs.path.dirname(cached_path)) |cache_pkg_dir| {
+                        if (std.fs.path.dirname(resolved.source_path)) |cache_pkg_dir| {
                             try self.addWorkspaceRoot(cache_pkg_dir);
                         }
-                        break :blk cached_path;
+                        break :blk resolved.source_path;
                     } else blk: {
                         const header_dir2 = std.fs.path.dirname(file_abs) orelse ".";
                         const abs_path = try PathUtils.makeAbsolute(self.gpa, header_dir2, relp);
@@ -1267,12 +1347,9 @@ pub const BuildEnv = struct {
                         break :blk abs_path;
                     };
 
-                    // TODO: actually handle duplicate keys
-                    if (info.shorthands.fetchRemove(k)) |e| {
-                        self.gpa.free(e.key);
-                        self.gpa.free(e.value);
-                    }
-                    try info.shorthands.put(self.gpa, try self.gpa.dupe(u8, k), v);
+                    const owned_package_url = package_url;
+                    package_url = null;
+                    try self.putHeaderShorthand(&info, k, v, owned_package_url);
                 }
             },
             .platform => |p| {
@@ -1290,13 +1367,20 @@ pub const BuildEnv = struct {
                     defer self.gpa.free(relp);
 
                     // Check if this is a URL - if so, resolve it to a cached local path
+                    var package_url: ?package_source.UrlSource = null;
+                    errdefer if (package_url) |*url| url.deinit(self.gpa);
                     const v = if (base.url.isSafeUrl(relp)) blk: {
-                        const cached_path = try self.resolveUrlPackage(relp);
+                        const resolved = try self.resolveUrlPackage(relp);
+                        errdefer self.gpa.free(resolved.source_path);
+                        package_url = try package_source.UrlSource.init(self.gpa, .{
+                            .url = relp,
+                            .url_id = resolved.url_id,
+                        });
                         // Add cache directory to workspace roots for URL packages
-                        if (std.fs.path.dirname(cached_path)) |cache_pkg_dir| {
+                        if (std.fs.path.dirname(resolved.source_path)) |cache_pkg_dir| {
                             try self.addWorkspaceRoot(cache_pkg_dir);
                         }
-                        break :blk cached_path;
+                        break :blk resolved.source_path;
                     } else blk: {
                         const header_dir2 = std.fs.path.dirname(file_abs) orelse ".";
                         const abs_path = try PathUtils.makeAbsolute(self.gpa, header_dir2, relp);
@@ -1308,12 +1392,9 @@ pub const BuildEnv = struct {
                         break :blk abs_path;
                     };
 
-                    // TODO: actually handle duplicate keys
-                    if (info.shorthands.fetchRemove(k)) |e| {
-                        self.gpa.free(e.key);
-                        self.gpa.free(e.value);
-                    }
-                    try info.shorthands.put(self.gpa, try self.gpa.dupe(u8, k), v);
+                    const owned_package_url = package_url;
+                    package_url = null;
+                    try self.putHeaderShorthand(&info, k, v, owned_package_url);
                 }
 
                 // Extract platform-exposed modules (e.g., Stdout, Stderr)
@@ -1454,9 +1535,14 @@ pub const BuildEnv = struct {
         return error.NoCacheDir;
     }
 
+    const ResolvedUrlPackage = struct {
+        source_path: []const u8,
+        url_id: base.url.UrlId,
+    };
+
     /// Resolve a URL package by downloading and caching it.
     /// Returns the local path to the cached package's main.roc or platform.roc file.
-    fn resolveUrlPackage(self: *BuildEnv, url: []const u8) BuildError![]const u8 {
+    fn resolveUrlPackage(self: *BuildEnv, url: []const u8) BuildError!ResolvedUrlPackage {
         if (comptime is_freestanding)
             return error.DownloadFailed;
         const download = unbundle.download;
@@ -1547,7 +1633,10 @@ pub const BuildEnv = struct {
             return error.NoPackageSource;
         }
         self.gpa.free(package_dir_path);
-        return source_path;
+        return .{
+            .source_path = source_path,
+            .url_id = parsed_url.url_id,
+        };
     }
 
     fn dottedToPath(self: *BuildEnv, root_dir: []const u8, dotted: []const u8) (Allocator.Error || error{PathOutsideWorkspace})![]const u8 {
@@ -1579,33 +1668,55 @@ pub const BuildEnv = struct {
         return canon;
     }
 
-    fn ensurePackage(self: *BuildEnv, name: []const u8, kind: PackageKind, root_file_abs: []const u8) (Allocator.Error || error{PathOutsideWorkspace})!void {
-        if (self.packages.contains(name)) return;
+    fn ensurePackage(
+        self: *BuildEnv,
+        name: []const u8,
+        kind: PackageKind,
+        root_file_abs: []const u8,
+        url: ?package_source.UrlSourceView,
+    ) (Allocator.Error || error{PathOutsideWorkspace})!void {
+        if (self.packages.getPtr(name)) |pkg| {
+            if (pkg.url == null) {
+                if (url) |url_view| {
+                    pkg.url = try package_source.UrlSource.init(self.gpa, url_view);
+                }
+            }
+            return;
+        }
 
         const dir_raw = std.fs.path.dirname(root_file_abs) orelse ".";
         const dir = try std.fs.path.resolve(self.gpa, &.{dir_raw});
         const name_owned = try self.gpa.dupe(u8, name);
         const key_owned = try self.gpa.dupe(u8, name);
         const file_owned = try std.fs.path.resolve(self.gpa, &.{root_file_abs});
+        var package_inserted = false;
+        errdefer if (!package_inserted) {
+            self.gpa.free(dir);
+            self.gpa.free(name_owned);
+            self.gpa.free(key_owned);
+            self.gpa.free(file_owned);
+        };
         // If this is the app package, allow arbitrary root file path (no sandbox). Otherwise enforce sandbox.
 
         // Sandbox check: app is exempt; package/platform must be within workspace roots
         if (!std.mem.eql(u8, name, "app")) {
             if (!PathUtils.isWithinRoot(file_owned, self.workspace_roots.items)) {
-                self.gpa.free(dir);
-                self.gpa.free(name_owned);
-                self.gpa.free(key_owned);
-                self.gpa.free(file_owned);
                 return error.PathOutsideWorkspace;
             }
         }
+
+        var package_url = if (url) |url_view| try package_source.UrlSource.init(self.gpa, url_view) else null;
+        errdefer if (package_url) |*url_source| url_source.deinit(self.gpa);
 
         try self.packages.put(self.gpa, key_owned, .{
             .name = name_owned,
             .kind = kind,
             .root_file = file_owned,
             .root_dir = dir,
+            .url = package_url,
         });
+        package_inserted = true;
+        package_url = null;
     }
 
     fn putPackageShorthand(self: *BuildEnv, pack: *Package, alias: []const u8, target_name: []const u8, root_file: []const u8) Allocator.Error![]const u8 {
@@ -1708,11 +1819,16 @@ pub const BuildEnv = struct {
             if (pack.kind != .app) return error.Internal;
 
             const p_path = info.platform_path.?;
+            var platform_url = if (info.platform_url) |*url| url.view() else null;
 
-            const abs = if (base.url.isSafeUrl(p_path))
-                try self.resolveUrlPackage(p_path)
-            else
-                try self.makeAbsolute(p_path);
+            const abs = if (base.url.isSafeUrl(p_path)) blk: {
+                const resolved = try self.resolveUrlPackage(p_path);
+                platform_url = .{
+                    .url = p_path,
+                    .url_id = resolved.url_id,
+                };
+                break :blk resolved.source_path;
+            } else try self.makeAbsolute(p_path);
             defer self.gpa.free(abs);
 
             var child_info = try self.parseHeaderDeps(abs);
@@ -1723,7 +1839,7 @@ pub const BuildEnv = struct {
                 return error.InvalidDependency;
             }
 
-            try self.ensurePackage(alias, .platform, abs);
+            try self.ensurePackage(alias, .platform, abs, platform_url);
 
             // Transfer provides entries and targets_config from parsed header to platform package
             if (self.packages.getPtr(alias)) |plat_pkg| {
@@ -1758,7 +1874,7 @@ pub const BuildEnv = struct {
                 // Register this module as a package
                 // Only allocate if package doesn't exist (ensurePackage makes its own copy)
                 if (!self.packages.contains(module_name)) {
-                    try self.ensurePackage(module_name, .module, module_path);
+                    try self.ensurePackage(module_name, .module, module_path, null);
                 }
 
                 // Re-fetch pack pointer since ensurePackage may have caused HashMap reallocation
@@ -1783,11 +1899,16 @@ pub const BuildEnv = struct {
         while (it.next()) |e| {
             const alias = e.key_ptr.*;
             const path = e.value_ptr.*;
+            var package_url = if (info.package_urls.get(alias)) |*url| url.view() else null;
 
-            const abs = if (base.url.isSafeUrl(path))
-                try self.resolveUrlPackage(path)
-            else
-                try self.makeAbsolute(path);
+            const abs = if (base.url.isSafeUrl(path)) blk: {
+                const resolved = try self.resolveUrlPackage(path);
+                package_url = .{
+                    .url = path,
+                    .url_id = resolved.url_id,
+                };
+                break :blk resolved.source_path;
+            } else try self.makeAbsolute(path);
             defer self.gpa.free(abs);
 
             var child_info = try self.parseHeaderDeps(abs);
@@ -1812,7 +1933,7 @@ pub const BuildEnv = struct {
                 return error.InvalidDependency;
             }
 
-            try self.ensurePackage(alias, child_info.kind, abs);
+            try self.ensurePackage(alias, child_info.kind, abs, package_url);
 
             // Transfer provides entries from parsed header to platform package
             if (child_info.kind == .platform) {

@@ -45,6 +45,7 @@ const parse = @import("parse");
 const tracy = @import("tracy");
 const ctx_mod = @import("ctx");
 const compile = @import("compile");
+const package_source = compile.package_source;
 const can = @import("can");
 const check = @import("check");
 const bundle = @import("bundle");
@@ -2543,6 +2544,7 @@ pub fn buildLirImageWithCoordinator(
     try validatePlatformSpec(ctx, header_info.platform_spec);
 
     // Resolve the platform spec to a local main.roc path (handles URL fetch).
+    var platform_url: ?package_source.UrlSourceView = null;
     const platform_main_path: ?[]const u8 = if (std.mem.startsWith(u8, header_info.platform_spec, "./") or std.mem.startsWith(u8, header_info.platform_spec, "../"))
         try std.fs.path.join(ctx.arena, &[_][]const u8{ app_dir, header_info.platform_spec })
     else if (base.url.isSafeUrl(header_info.platform_spec)) blk: {
@@ -2550,6 +2552,7 @@ pub fn buildLirImageWithCoordinator(
             error.CliError => break :blk null,
             error.OutOfMemory => return error.OutOfMemory,
         };
+        platform_url = platform_paths.url;
         break :blk platform_paths.platform_source_path;
     } else null;
 
@@ -2589,7 +2592,7 @@ pub fn buildLirImageWithCoordinator(
 
     if (platform_dir) |pf_dir| {
         if (platform_main_path) |pmp| {
-            try coord.registerPlatformPackage(app_pkg, pf_dir, pmp, header_info.platform_qualifier);
+            try coord.registerPlatformPackageWithUrl(app_pkg, pf_dir, pmp, header_info.platform_qualifier, platform_url);
         } else if (header_info.platform_qualifier) |qual| {
             // URL platform that failed to resolve — keep the shorthand wired so
             // downstream code reports a clean error rather than a missing-import.
@@ -2603,15 +2606,17 @@ pub fn buildLirImageWithCoordinator(
 
     // Resolve and register non-platform packages (URL-aware path).
     for (header_info.non_platform_packages) |entry| {
+        var package_url: ?package_source.UrlSourceView = null;
         const pkg_abs_path = if (base.url.isSafeUrl(entry.spec)) blk: {
-            const cached = resolveUrlBundle(ctx, entry.spec) catch |err| switch (err) {
+            const resolved = resolveUrlBundle(ctx, entry.spec) catch |err| switch (err) {
                 error.CliError => return error.CliError,
                 error.OutOfMemory => return error.OutOfMemory,
             };
-            break :blk try ctx.arena.dupe(u8, cached);
+            package_url = resolved.url;
+            break :blk try ctx.arena.dupe(u8, resolved.source_path);
         } else try std.fs.path.join(ctx.arena, &.{ app_dir, entry.spec });
         const pkg_dir = std.fs.path.dirname(pkg_abs_path) orelse ".";
-        _ = try coord.registerInlinePackage(entry.shorthand, pkg_dir, app_pkg, entry.shorthand);
+        _ = try coord.registerInlinePackageWithUrl(entry.shorthand, pkg_dir, app_pkg, entry.shorthand, package_url);
     }
 
     try coord.enqueueParseTask("app", app_module_id);
@@ -2684,6 +2689,7 @@ pub fn setupSharedMemoryWithCoordinator(ctx: *CliCtx, roc_file_path: []const u8,
 /// Platform resolution result containing the platform source path
 pub const PlatformPaths = struct {
     platform_source_path: ?[]const u8, // Optional - may not exist for some platforms
+    url: ?package_source.UrlSourceView = null,
 };
 
 /// Resolve platform specification from a Roc file to find both host library and platform source.
@@ -2894,10 +2900,15 @@ fn getEnvVar(allocator: std.mem.Allocator, key: []const u8) std.mem.Allocator.Er
     return try allocator.dupe(u8, value[0..len]);
 }
 
+const ResolvedUrlBundle = struct {
+    source_path: []const u8,
+    url: package_source.UrlSourceView,
+};
+
 /// Resolve a URL bundle (platform or package) by downloading and caching it.
 /// The URL must point to a .tar.zst bundle with a base58-encoded BLAKE3 hash filename.
 /// Returns the path to `main.roc` inside the cache directory.
-fn resolveUrlBundle(ctx: *CliCtx, url: []const u8) (CliError || error{OutOfMemory})![]const u8 {
+fn resolveUrlBundle(ctx: *CliCtx, url: []const u8) (CliError || error{OutOfMemory})!ResolvedUrlBundle {
     const download = unbundle.download;
 
     // 1. Validate URL and extract hash
@@ -2970,14 +2981,23 @@ fn resolveUrlBundle(ctx: *CliCtx, url: []const u8) (CliError || error{OutOfMemor
         } });
     };
 
-    return platform_source_path;
+    return .{
+        .source_path = platform_source_path,
+        .url = .{
+            .url = url,
+            .url_id = parsed_url.url_id,
+        },
+    };
 }
 
 /// Resolve a URL platform specification by downloading and caching the bundle.
 /// The URL must point to a .tar.zst bundle with a base58-encoded BLAKE3 hash filename.
 fn resolveUrlPlatform(ctx: *CliCtx, url: []const u8) (CliError || error{OutOfMemory})!PlatformPaths {
-    const source_path = try resolveUrlBundle(ctx, url);
-    return PlatformPaths{ .platform_source_path = source_path };
+    const resolved = try resolveUrlBundle(ctx, url);
+    return PlatformPaths{
+        .platform_source_path = resolved.source_path,
+        .url = resolved.url,
+    };
 }
 
 /// Extract the embedded roc_shim library to the specified path for the given target.

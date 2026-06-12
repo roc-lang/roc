@@ -4,6 +4,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
+const base = @import("base");
 const unbundle = @import("unbundle.zig");
 const localhost = @import("localhost.zig");
 
@@ -89,6 +90,11 @@ pub const Version = struct {
 pub const ParsedUrl = struct {
     hash: []const u8,
     version: Version,
+    url_id: base.url.UrlId,
+
+    pub fn urlId(self: ParsedUrl, url: []const u8) []const u8 {
+        return self.url_id.slice(url);
+    }
 };
 
 fn parseVersionPart(part: []const u8) ?u32 {
@@ -116,8 +122,30 @@ fn parseVersionComponent(component: []const u8) ?Version {
     };
 }
 
-pub fn parseUrlPath(url: []const u8) error{NoHashInUrl}!ParsedUrl {
+fn schemeContentStart(url: []const u8) ?usize {
+    const scheme_marker = std.mem.indexOf(u8, url, "://") orelse return null;
+    return scheme_marker + 3;
+}
+
+fn makeUrlId(url: []const u8, start: usize, end: usize) error{InvalidUrl}!base.url.UrlId {
+    var trimmed_end = end;
+    while (trimmed_end > start and url[trimmed_end - 1] == '/') {
+        trimmed_end -= 1;
+    }
+
+    if (trimmed_end <= start) return error.InvalidUrl;
+
+    return .{
+        .start = std.math.cast(u32, start) orelse return error.InvalidUrl,
+        .len = std.math.cast(u32, trimmed_end - start) orelse return error.InvalidUrl,
+    };
+}
+
+pub fn parseUrlPath(url: []const u8) error{ InvalidUrl, NoHashInUrl }!ParsedUrl {
+    const url_id_start = schemeContentStart(url) orelse return error.InvalidUrl;
     const last_slash = std.mem.findLast(u8, url, "/") orelse return error.NoHashInUrl;
+    if (last_slash < url_id_start) return error.NoHashInUrl;
+
     const hash_part = url[last_slash + 1 ..];
 
     const hash = if (std.mem.endsWith(u8, hash_part, ".tar.zst"))
@@ -130,15 +158,66 @@ pub fn parseUrlPath(url: []const u8) error{NoHashInUrl}!ParsedUrl {
     }
 
     const before_hash = url[0..last_slash];
-    const version = if (std.mem.findLast(u8, before_hash, "/")) |version_slash|
-        parseVersionComponent(before_hash[version_slash + 1 ..]) orelse Version.none
+    const version_parse = if (std.mem.findLast(u8, before_hash, "/")) |version_slash|
+        if (version_slash >= url_id_start) parseVersionComponent(before_hash[version_slash + 1 ..]) else null
     else
-        Version.none;
+        null;
+    const version = version_parse orelse Version.none;
+    const url_id_end = if (version_parse != null)
+        std.mem.findLast(u8, before_hash, "/").?
+    else
+        last_slash;
+
+    const url_id = makeUrlId(url, url_id_start, url_id_end) catch return error.InvalidUrl;
 
     return .{
         .hash = hash,
         .version = version,
+        .url_id = url_id,
     };
+}
+
+test "parseUrlPath extracts url id" {
+    {
+        const url = "https://example.com/foo/bar/1.2.3/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst";
+        const parsed = try parseUrlPath(url);
+
+        try std.testing.expectEqualStrings("example.com/foo/bar", parsed.urlId(url));
+    }
+
+    {
+        const url = "https://example.com/foo/bar/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst";
+        const parsed = try parseUrlPath(url);
+
+        try std.testing.expectEqualStrings("example.com/foo/bar", parsed.urlId(url));
+    }
+
+    {
+        const url = "http://127.0.0.1:8000/1.2.3/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst";
+        const parsed = try parseUrlPath(url);
+
+        try std.testing.expectEqualStrings("127.0.0.1:8000", parsed.urlId(url));
+    }
+
+    {
+        const url = "https://example.com/foo/1.2.x/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst";
+        const parsed = try parseUrlPath(url);
+
+        try std.testing.expectEqualStrings("example.com/foo/1.2.x", parsed.urlId(url));
+    }
+
+    {
+        const url = "https://example.com/0.0.0/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst";
+        const parsed = try parseUrlPath(url);
+
+        try std.testing.expectEqualStrings("example.com", parsed.urlId(url));
+        try std.testing.expectEqual(Version.none, parsed.version);
+    }
+}
+
+test "parseUrlPath rejects URLs without a hash path segment" {
+    try std.testing.expectError(error.NoHashInUrl, parseUrlPath("https://example.com"));
+    try std.testing.expectError(error.NoHashInUrl, parseUrlPath("https://example.com/"));
 }
 
 /// Parse URL and validate it meets our security requirements.

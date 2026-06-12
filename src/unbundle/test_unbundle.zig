@@ -371,6 +371,7 @@ test "download URL validation parses optional version component" {
         try testing.expectEqual(@as(u32, 2), parsed.version.minor);
         try testing.expectEqual(@as(u32, 3), parsed.version.patch);
         try testing.expect(parsed.version.isPresent());
+        try testing.expectEqualStrings("example.com/packages", parsed.urlId(url));
     }
 
     {
@@ -380,6 +381,7 @@ test "download URL validation parses optional version component" {
         try testing.expectEqualStrings(expected_hash, parsed.hash);
         try testing.expectEqual(download.Version.none, parsed.version);
         try testing.expect(!parsed.version.isPresent());
+        try testing.expectEqualStrings("example.com/packages", parsed.urlId(url));
     }
 }
 
@@ -400,6 +402,7 @@ test "download URL validation only recognizes strict version components" {
         try testing.expectEqualStrings(expected_hash, parsed.hash);
         try testing.expectEqual(download.Version.none, parsed.version);
         try testing.expect(!parsed.version.isPresent());
+        try testing.expectEqualStrings(url[8 .. url.len - "/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst".len], parsed.urlId(url));
     }
 }
 

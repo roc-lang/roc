@@ -30,6 +30,7 @@ pub fn validateUrl(url: []const u8) DownloadError!ParsedUrl {
     }
 
     return unbundle_mod.download.parseUrlPath(url) catch |err| switch (err) {
+        error.InvalidUrl => error.InvalidUrl,
         error.NoHashInUrl => error.NoHashInUrl,
     };
 }
