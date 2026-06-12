@@ -788,6 +788,24 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "Ok(Url(\"https://example.com\"))" },
     },
     .{
+        .name = "problem: nested Try interpolation does not recursively satisfy forwarding",
+        .source_kind = .module,
+        .source =
+        \\Url := [Url(Str)].{
+        \\    from_interpolation : Str, Iter((Str, Str)) -> Try(Url, [InvalidUrl])
+        \\    from_interpolation = |first, rest| Ok(Url.Url(rest.fold(first, |acc, (interpolated, segment)| acc.concat(interpolated).concat(segment))))
+        \\}
+        \\
+        \\main = {
+        \\    domain = "example"
+        \\    url : Try(Try(Url, [InvalidUrl]), [Outer])
+        \\    url = "https://${domain}.com"
+        \\    url
+        \\}
+        ,
+        .expected = .{ .problem = {} },
+    },
+    .{
         .name = "inspect: suffixed interpolation accepts custom return type",
         .source_kind = .module,
         .source =

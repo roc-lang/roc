@@ -10196,6 +10196,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         continue;
                     };
 
+                    const deferred_len_before = env.deferred_static_dispatch_constraints.items.items.len;
                     const fn_result = try self.unifyInContext(method_var, constraint.fn_var, env, .{
                         .method_type = .{
                             .constraint_var = deferred_constraint.var_,
@@ -10215,6 +10216,13 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                             try self.unifyWith(arg, .err, env);
                         }
                         try self.unifyWith(deferred_constraint.var_, .err, env);
+                        try self.unifyWith(constraint_fn.ret, .err, env);
+                    } else if (try self.reportRecursiveStaticDispatchIfNeeded(
+                        deferred_constraint.var_,
+                        constraint,
+                        deferred_len_before,
+                        env,
+                    )) {
                         try self.unifyWith(constraint_fn.ret, .err, env);
                     } else {
                         try self.reportEffectfulDispatchInExpect(constraint);
@@ -10377,6 +10385,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         continue;
                     };
 
+                    const deferred_len_before = env.deferred_static_dispatch_constraints.items.items.len;
                     const fn_result = try self.unifyInContext(method_var, constraint.fn_var, env, .{
                         .method_type = .{
                             .constraint_var = deferred_constraint.var_,
@@ -10390,6 +10399,13 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                             try self.unifyWith(arg, .err, env);
                         }
                         try self.unifyWith(deferred_constraint.var_, .err, env);
+                        try self.unifyWith(constraint_fn.ret, .err, env);
+                    } else if (try self.reportRecursiveStaticDispatchIfNeeded(
+                        deferred_constraint.var_,
+                        constraint,
+                        deferred_len_before,
+                        env,
+                    )) {
                         try self.unifyWith(constraint_fn.ret, .err, env);
                     } else {
                         try self.reportEffectfulDispatchInExpect(constraint);
@@ -11255,6 +11271,58 @@ const ReportedConstraintError = struct {
     dispatcher: Var,
     fn_name: Ident.Idx,
 };
+
+fn reportRecursiveStaticDispatchIfNeeded(
+    self: *Self,
+    dispatcher_var: Var,
+    constraint: StaticDispatchConstraint,
+    deferred_len_before: usize,
+    env: *Env,
+) Allocator.Error!bool {
+    const dispatcher_resolved = self.types.resolveVar(dispatcher_var).var_;
+    const items = env.deferred_static_dispatch_constraints.items.items;
+    var deferred_index = deferred_len_before;
+    while (deferred_index < items.len) : (deferred_index += 1) {
+        const deferred = items[deferred_index];
+        if (self.types.resolveVar(deferred.var_).var_ != dispatcher_resolved) continue;
+
+        const new_constraints = self.types.sliceStaticDispatchConstraints(deferred.constraints);
+        for (new_constraints) |new_constraint| {
+            if (new_constraint.origin != .where_clause) continue;
+            if (!new_constraint.fn_name.eql(constraint.fn_name)) continue;
+            if (!try self.staticDispatchConstraintFunctionsCanUnify(
+                constraint.fn_var,
+                new_constraint.fn_var,
+            )) {
+                continue;
+            }
+
+            const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, dispatcher_var);
+            _ = try self.problems.appendProblem(self.cir.gpa, .{ .static_dispatch = .{
+                .recursive_dispatch = .{
+                    .dispatcher_snapshot = snapshot,
+                    .fn_var = constraint.fn_var,
+                    .method_name = constraint.fn_name,
+                },
+            } });
+
+            try self.markConstraintFunctionAsError(constraint, env);
+            try self.markConstraintFunctionAsError(new_constraint, env);
+            return true;
+        }
+    }
+    return false;
+}
+
+fn staticDispatchConstraintFunctionsCanUnify(
+    self: *Self,
+    left: Var,
+    right: Var,
+) Allocator.Error!bool {
+    var probe = try self.beginProbe();
+    defer probe.rollback();
+    return try self.probeUnifyWithoutRecordingProblems(left, right);
+}
 
 /// Report a constraint validation error
 fn reportConstraintError(

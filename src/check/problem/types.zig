@@ -254,6 +254,7 @@ pub const StaticDispatch = union(enum) {
     dispatcher_does_not_impl_method: DispatcherDoesNotImplMethod,
     type_does_not_support_equality: TypeDoesNotSupportEquality,
     unresolved_dispatcher: UnresolvedDispatcher,
+    recursive_dispatch: RecursiveDispatch,
 };
 
 /// Error when a static dispatch method is called on a receiver whose type is an
@@ -320,6 +321,14 @@ pub const TypeDoesNotSupportEquality = struct {
     dispatcher_var: Var,
     dispatcher_snapshot: SnapshotContentIdx,
     fn_var: Var,
+};
+
+/// Error when satisfying a static-dispatch constraint immediately requires the
+/// same static-dispatch constraint again on the same dispatcher type.
+pub const RecursiveDispatch = struct {
+    dispatcher_snapshot: SnapshotContentIdx,
+    fn_var: Var,
+    method_name: Ident.Idx,
 };
 
 // nominal type errors //
