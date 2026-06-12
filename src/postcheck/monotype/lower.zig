@@ -783,10 +783,10 @@ const InstGraph = struct {
         var ext = self.find(row.ext);
         while (true) {
             if (seen.contains(ext)) {
-                // A cyclic extension chain contributes no further row evidence:
-                // every tag on the cycle is already collected, so the chain
-                // terminates as a closed row.
-                ext = try self.newNode(.empty_tag_union);
+                // A cyclic extension chain contributes no further tags — every
+                // tag on the cycle is already collected — but the row remains
+                // extensible, so the chain terminates open.
+                ext = try self.newNode(.{ .unresolved = .{ .row_default = .empty_tag_union } });
                 break;
             }
             try seen.put(ext, {});
@@ -824,10 +824,10 @@ const InstGraph = struct {
         var ext = self.find(row.ext);
         while (true) {
             if (seen.contains(ext)) {
-                // A cyclic extension chain contributes no further row evidence:
-                // every field on the cycle is already collected, so the chain
-                // terminates as a closed row.
-                ext = try self.newNode(.empty_record);
+                // A cyclic extension chain contributes no further fields —
+                // every field on the cycle is already collected — but the row
+                // remains extensible, so the chain terminates open.
+                ext = try self.newNode(.{ .unresolved = .{ .row_default = .empty_record } });
                 break;
             }
             try seen.put(ext, {});
@@ -1055,9 +1055,14 @@ const InstGraph = struct {
                         .payloads = try self.importMonoSlice(types.span(tag.payloads)),
                     };
                 }
+                // A materialized row does not record whether its checked row
+                // was open; rows narrowed per use position may gain tags from
+                // the callee's own checked data, so imports stay extensible
+                // and the requester observes any widening through the
+                // post-lowering unification of request and definition types.
                 break :blk .{ .tag_union = .{
                     .tags = inst_tags,
-                    .ext = try self.newNode(.empty_tag_union),
+                    .ext = try self.newNode(.{ .unresolved = .{ .row_default = .empty_tag_union } }),
                 } };
             },
             .record => |fields| blk: {
@@ -1072,7 +1077,7 @@ const InstGraph = struct {
                 }
                 break :blk .{ .record = .{
                     .fields = inst_fields,
-                    .ext = try self.newNode(.empty_record),
+                    .ext = try self.newNode(.{ .unresolved = .{ .row_default = .empty_record } }),
                 } };
             },
             .named => |named| .{ .named = .{
@@ -1099,6 +1104,19 @@ const InstGraph = struct {
             out[index] = try self.importMono(ty);
         }
         return out;
+    }
+
+    /// Register an existing Monotype as a view of a node, so the node's
+    /// evidence refills that id in place.
+    fn addMonoView(self: *InstGraph, node: NodeId, ty: Type.TypeId) Allocator.Error!void {
+        const root = self.find(node);
+        try self.mono_nodes.put(ty, root);
+        const entry = try self.node_monos.getOrPut(root);
+        if (!entry.found_existing) entry.value_ptr.* = .empty;
+        for (entry.value_ptr.items) |existing| {
+            if (existing == ty) return;
+        }
+        try entry.value_ptr.append(self.allocator, ty);
     }
 
     /// Materialize the Monotype view of a node, reserving the id first so
@@ -1885,7 +1903,16 @@ const Builder = struct {
         const fn_template = self.fnDefForTemplate(view, template_ref, source_fn_ty, source_fn_key, fn_ty);
 
         const reserved: Ast.DefId = @enumFromInt(@as(u32, @intCast(self.program.defs.items.len)));
-        try self.program.defs.append(self.allocator, undefined);
+        // The definition fills once its body lowers; a recursive request that
+        // reuses this entry meanwhile reads the requested template, which is
+        // the same specialization by construction.
+        try self.program.defs.append(self.allocator, .{
+            .symbol = symbol,
+            .fn_def = fn_template,
+            .args = Ast.Span(Ast.TypedLocal).empty(),
+            .body = .hosted,
+            .ret = self.functionShape(fn_ty, "procedure template root type was not a function").ret,
+        });
         try family_entry.value_ptr.append(self.allocator, .{ .def = reserved, .fn_ty = fn_ty });
 
         switch (template.target) {
@@ -1923,14 +1950,17 @@ const Builder = struct {
         }
         try body_ctx.constrainTypeToMono(template.checked_fn_root, fn_ty);
 
-        // The requested function type is a finished snapshot; the body lowers
-        // at this specialization's own view of the root so later evidence
-        // (nominal wrappers, refined slots) reaches every body type. The
-        // definition records that view too: for deferred requests the two are
-        // structurally identical, and for root requests, whose types come from
-        // the builder-global cache without body evidence, the body's view is
-        // the solved one.
-        const live_fn_ty = try graph.monoFor(try body_ctx.instNode(template.checked_fn_root));
+        // The requested function type becomes a view of this specialization's
+        // root: every later stage compares call-site and definition types for
+        // exact equality, so body evidence that refines the root (rows the
+        // request narrowed, slots only the body pins) must reach the
+        // requester's id in place. Builder-global types stay snapshots; they
+        // serve many specializations.
+        const root_node = try body_ctx.instNode(template.checked_fn_root);
+        if (!self.unsolved_monos.contains(fn_ty)) {
+            try graph.addMonoView(root_node, fn_ty);
+        }
+        const live_fn_ty = try graph.monoFor(root_node);
         const lowered = try body_ctx.lowerTemplateBody(template_ref, template, live_fn_ty);
         // The definition records the body's solved view of the root type.
         // Deferred call sites embed the requested type, which digests
@@ -3638,6 +3668,14 @@ const BodyContext = struct {
     /// checked identity so every occurrence of the same checked root resolves
     /// to the same node within this instantiation context.
     fn instNode(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!NodeId {
+        // A checked empty tag union carries no identity worth sharing: it
+        // records that nothing reaches a slot, and the slot yields to sibling
+        // descriptions. One checked id serves many unrelated slots, so each
+        // occurrence instantiates independently.
+        switch (checkedPayload(self.view, checked_ty)) {
+            .empty_tag_union => return try self.graph.newNode(.{ .unresolved = .{ .row_default = .empty_tag_union } }),
+            else => {},
+        }
         const address = self.typeAddress(checked_ty);
         if (self.node_map.get(address)) |existing| return existing;
         const placeholder = try self.graph.newNode(.{ .unresolved = .{} });
@@ -3663,7 +3701,12 @@ const BodyContext = struct {
                 .row_default = variable.row_default,
             } }),
             .empty_record => try self.graph.newNode(.empty_record),
-            .empty_tag_union => try self.graph.newNode(.empty_tag_union),
+            // A checked empty tag union records that no value reaches the
+            // slot. Sibling descriptions of the same slot may still carry
+            // tags (which are then unreachable), so the slot yields to them
+            // and defaults to the empty union only when nothing else claims
+            // it.
+            .empty_tag_union => try self.graph.newNode(.{ .unresolved = .{ .row_default = .empty_tag_union } }),
             .alias => |alias| try self.graph.newNode(.{ .named = .{
                 .named_type = .{ .module = self.builder.declaredModuleForAlias(self.view, alias), .ty = checked_ty },
                 .def = try self.builder.typeDef(self.view, alias.origin_module, alias.name, alias.source_decl),
@@ -3885,7 +3928,8 @@ const BodyContext = struct {
 
     fn lowerStrInspectIntrinsic(self: *BodyContext, fn_ty: Type.TypeId, ret_ty: Type.TypeId) Allocator.Error!LoweredTemplateBody {
         const fn_data = self.builder.functionShape(fn_ty, "Str.inspect intrinsic had a non-function type");
-        const arg_tys = self.builder.program.types.span(fn_data.args);
+        const arg_tys = try self.allocator.dupe(Type.TypeId, self.builder.program.types.span(fn_data.args));
+        defer self.allocator.free(arg_tys);
         if (arg_tys.len != 1) Common.invariant("Str.inspect intrinsic requires exactly one argument");
 
         const arg_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), arg_tys[0]);
@@ -3901,7 +3945,8 @@ const BodyContext = struct {
 
     fn lowerLambdaTemplate(self: *BodyContext, lambda: anytype, fn_ty: Type.TypeId) Allocator.Error!LoweredTemplateBody {
         const fn_data = self.builder.functionShape(fn_ty, "lambda template had a non-function type");
-        const arg_tys = self.builder.program.types.span(fn_data.args);
+        const arg_tys = try self.allocator.dupe(Type.TypeId, self.builder.program.types.span(fn_data.args));
+        defer self.allocator.free(arg_tys);
         if (arg_tys.len != lambda.args.len) Common.invariant("lambda template arity differs from concrete function type");
 
         const lowered = try self.lowerLambdaArgsAndBody(lambda.args, arg_tys, lambda.body, fn_data.ret);
@@ -5357,7 +5402,8 @@ const BodyContext = struct {
         try lambda_ctx.constrainTypeToMono(nested.source_fn_ty, nested.mono_fn_ty);
 
         const fn_data = self.builder.functionShape(nested.mono_fn_ty, "nested lambda had a non-function type");
-        const arg_tys = self.builder.program.types.span(fn_data.args);
+        const arg_tys = try self.allocator.dupe(Type.TypeId, self.builder.program.types.span(fn_data.args));
+        defer self.allocator.free(arg_tys);
         if (arg_tys.len != lambda.args.len) Common.invariant("nested lambda arity differs from concrete function type");
 
         const lowered = try lambda_ctx.lowerLambdaArgsAndBody(lambda.args, arg_tys, lambda.body, fn_data.ret);
