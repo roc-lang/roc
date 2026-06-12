@@ -1462,7 +1462,7 @@ pub const BuildEnv = struct {
         const download = unbundle.download;
 
         // Validate URL and extract hash
-        const base58_hash = download.validateUrl(url) catch |err| switch (err) {
+        const parsed_url = download.validateUrl(url) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             else => {
                 if (comptime !is_freestanding) {
@@ -1471,6 +1471,7 @@ pub const BuildEnv = struct {
                 return error.InvalidUrl;
             },
         };
+        const base58_hash = parsed_url.hash;
 
         // Get cache directory
         const cache_dir_path = self.getRocCacheDir(self.gpa) catch |err| switch (err) {

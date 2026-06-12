@@ -2901,12 +2901,13 @@ fn resolveUrlBundle(ctx: *CliCtx, url: []const u8) (CliError || error{OutOfMemor
     const download = unbundle.download;
 
     // 1. Validate URL and extract hash
-    const base58_hash = download.validateUrl(url) catch {
+    const parsed_url = download.validateUrl(url) catch {
         return ctx.fail(.{ .invalid_url = .{
             .url = url,
             .reason = "Invalid URL format or missing hash. URLs must end with a base58-encoded BLAKE3 hash filename (e.g., '<hash>.tar.zst').",
         } });
     };
+    const base58_hash = parsed_url.hash;
 
     // 2. Get cache directory
     const cache_dir_path = getRocCacheDir(ctx.arena) catch {

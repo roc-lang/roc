@@ -70,9 +70,80 @@ pub const DownloadError = error{
     FileError,
 } || unbundle.UnbundleError || std.mem.Allocator.Error;
 
+pub const Version = struct {
+    major: u32,
+    minor: u32,
+    patch: u32,
+
+    pub const none: Version = .{
+        .major = 0,
+        .minor = 0,
+        .patch = 0,
+    };
+
+    pub fn isPresent(self: Version) bool {
+        return self.major != 0 or self.minor != 0 or self.patch != 0;
+    }
+};
+
+pub const ParsedUrl = struct {
+    hash: []const u8,
+    version: Version,
+};
+
+fn parseVersionPart(part: []const u8) ?u32 {
+    if (part.len == 0) return null;
+
+    for (part) |char| {
+        if (!std.ascii.isDigit(char)) return null;
+    }
+
+    return std.fmt.parseInt(u32, part, 10) catch null;
+}
+
+fn parseVersionComponent(component: []const u8) ?Version {
+    var parts = std.mem.splitScalar(u8, component, '.');
+
+    const major_part = parts.next() orelse return null;
+    const minor_part = parts.next() orelse return null;
+    const patch_part = parts.next() orelse return null;
+    if (parts.next() != null) return null;
+
+    return .{
+        .major = parseVersionPart(major_part) orelse return null,
+        .minor = parseVersionPart(minor_part) orelse return null,
+        .patch = parseVersionPart(patch_part) orelse return null,
+    };
+}
+
+pub fn parseUrlPath(url: []const u8) error{NoHashInUrl}!ParsedUrl {
+    const last_slash = std.mem.findLast(u8, url, "/") orelse return error.NoHashInUrl;
+    const hash_part = url[last_slash + 1 ..];
+
+    const hash = if (std.mem.endsWith(u8, hash_part, ".tar.zst"))
+        hash_part[0 .. hash_part.len - 8]
+    else
+        hash_part;
+
+    if (hash.len == 0) {
+        return error.NoHashInUrl;
+    }
+
+    const before_hash = url[0..last_slash];
+    const version = if (std.mem.findLast(u8, before_hash, "/")) |version_slash|
+        parseVersionComponent(before_hash[version_slash + 1 ..]) orelse Version.none
+    else
+        Version.none;
+
+    return .{
+        .hash = hash,
+        .version = version,
+    };
+}
+
 /// Parse URL and validate it meets our security requirements.
-/// Returns the hash from the URL if valid.
-pub fn validateUrl(url: []const u8) DownloadError![]const u8 {
+/// Returns the parsed hash and optional version from the URL if valid.
+pub fn validateUrl(url: []const u8) DownloadError!ParsedUrl {
     // Check for https:// prefix
     if (std.mem.startsWith(u8, url, "https://")) {
         // This is fine, extract hash from last segment
@@ -86,27 +157,14 @@ pub fn validateUrl(url: []const u8) DownloadError![]const u8 {
         return error.InvalidUrl;
     }
 
-    // Extract the last path segment (should be the hash)
-    const last_slash = std.mem.findLast(u8, url, "/") orelse return error.NoHashInUrl;
-    const hash_part = url[last_slash + 1 ..];
-
-    // Remove .tar.zst extension if present
-    const hash = if (std.mem.endsWith(u8, hash_part, ".tar.zst"))
-        hash_part[0 .. hash_part.len - 8]
-    else
-        hash_part;
-
-    if (hash.len == 0) {
-        return error.NoHashInUrl;
-    }
-
-    return hash;
+    return parseUrlPath(url);
 }
 
 /// Download and extract a bundled tar.zst file from a URL.
 ///
 /// The URL must:
 /// - Start with "https://" or "http://127.0.0.1"
+/// - Optionally have a MAJOR.MINOR.PATCH path segment before the hash
 /// - Have the base58-encoded blake3 hash as the last path segment
 /// - Point to a tar.zst file created with `roc bundle`
 ///
@@ -122,7 +180,8 @@ pub fn downloadAndExtract(
     defer extract_dir.close(io);
 
     // Validate URL and extract hash
-    const base58_hash = try validateUrl(url);
+    const parsed_url = try validateUrl(url);
+    const base58_hash = parsed_url.hash;
 
     // Validate the hash before starting any I/O
     const expected_hash = (try unbundle.validateBase58Hash(base58_hash)) orelse {
@@ -261,7 +320,8 @@ pub fn downloadAndExtractToBuffer(
     url: []const u8,
 ) DownloadError!unbundle.BufferExtractWriter {
     // Validate URL and extract hash
-    const base58_hash = try validateUrl(url);
+    const parsed_url = try validateUrl(url);
+    const base58_hash = parsed_url.hash;
 
     // Validate the hash before starting any I/O
     const expected_hash = (try unbundle.validateBase58Hash(base58_hash)) orelse {

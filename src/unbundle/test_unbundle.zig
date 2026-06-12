@@ -359,6 +359,50 @@ test "ErrorContext population" {
 
 const download = @import("download.zig");
 
+test "download URL validation parses optional version component" {
+    const expected_hash = "4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf";
+
+    {
+        const url = "https://example.com/packages/1.2.3/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst";
+        const parsed = try download.validateUrl(url);
+
+        try testing.expectEqualStrings(expected_hash, parsed.hash);
+        try testing.expectEqual(@as(u32, 1), parsed.version.major);
+        try testing.expectEqual(@as(u32, 2), parsed.version.minor);
+        try testing.expectEqual(@as(u32, 3), parsed.version.patch);
+        try testing.expect(parsed.version.isPresent());
+    }
+
+    {
+        const url = "https://example.com/packages/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst";
+        const parsed = try download.validateUrl(url);
+
+        try testing.expectEqualStrings(expected_hash, parsed.hash);
+        try testing.expectEqual(download.Version.none, parsed.version);
+        try testing.expect(!parsed.version.isPresent());
+    }
+}
+
+test "download URL validation only recognizes strict version components" {
+    const expected_hash = "4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf";
+    const urls = [_][]const u8{
+        "https://example.com/packages/v1.2.3/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst",
+        "https://example.com/packages/1.2/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst",
+        "https://example.com/packages/1.2.3.4/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst",
+        "https://example.com/packages/1.2.x/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst",
+        "https://example.com/packages/-1.2.3/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst",
+        "https://example.com/packages/1.2.4294967296/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst",
+    };
+
+    for (urls) |url| {
+        const parsed = try download.validateUrl(url);
+
+        try testing.expectEqualStrings(expected_hash, parsed.hash);
+        try testing.expectEqual(download.Version.none, parsed.version);
+        try testing.expect(!parsed.version.isPresent());
+    }
+}
+
 test "downloadAndExtract with bad archive returns error without crash" {
     const io = testing.io;
 

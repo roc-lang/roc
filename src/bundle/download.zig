@@ -11,6 +11,9 @@ const localhost = unbundle_mod.localhost;
 // Network constants
 const SERVER_HEADER_BUFFER_SIZE: usize = 16 * 1024;
 
+pub const Version = unbundle_mod.download.Version;
+pub const ParsedUrl = unbundle_mod.download.ParsedUrl;
+
 /// Errors that can occur during the download operation.
 pub const DownloadError = error{
     InvalidUrl,
@@ -20,33 +23,22 @@ pub const DownloadError = error{
 } || localhost.Error || bundle.UnbundleError || std.mem.Allocator.Error;
 
 /// Parse URL and validate it meets our security requirements.
-/// Returns the hash from the URL if valid.
-pub fn validateUrl(url: []const u8) DownloadError![]const u8 {
+/// Returns the parsed hash and optional version from the URL if valid.
+pub fn validateUrl(url: []const u8) DownloadError!ParsedUrl {
     if (!base.url.isSafeUrl(url)) {
         return error.InvalidUrl;
     }
 
-    // Extract the last path segment (should be the hash)
-    const last_slash = std.mem.findLast(u8, url, "/") orelse return error.NoHashInUrl;
-    const hash_part = url[last_slash + 1 ..];
-
-    // Remove .tar.zst extension if present
-    const hash = if (std.mem.endsWith(u8, hash_part, ".tar.zst"))
-        hash_part[0 .. hash_part.len - 8]
-    else
-        hash_part;
-
-    if (hash.len == 0) {
-        return error.NoHashInUrl;
-    }
-
-    return hash;
+    return unbundle_mod.download.parseUrlPath(url) catch |err| switch (err) {
+        error.NoHashInUrl => error.NoHashInUrl,
+    };
 }
 
 /// Download and extract a bundled tar.zst file from a URL.
 ///
 /// The URL must:
 /// - Start with "https://" or "http://127.0.0.1"
+/// - Optionally have a MAJOR.MINOR.PATCH path segment before the hash
 /// - Have the base58-encoded blake3 hash as the last path segment
 /// - Point to a tar.zst file created with `roc bundle`
 pub fn download(
@@ -56,7 +48,8 @@ pub fn download(
     extract_dir: std.Io.Dir,
 ) DownloadError!void {
     // Validate URL and extract hash
-    const base58_hash = try validateUrl(url);
+    const parsed_url = try validateUrl(url);
+    const base58_hash = parsed_url.hash;
 
     // Validate the hash before starting any I/O
     const expected_hash = (try bundle.validateBase58Hash(base58_hash)) orelse {

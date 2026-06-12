@@ -1269,36 +1269,41 @@ test "download URL validation" {
     // Valid HTTPS URLs
     {
         const url = "https://example.com/path/to/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst";
-        const hash = try download.validateUrl(url);
-        try testing.expectEqualStrings(expected_hash, hash);
+        const parsed = try download.validateUrl(url);
+        try testing.expectEqualStrings(expected_hash, parsed.hash);
+        try testing.expectEqual(download.Version.none, parsed.version);
     }
 
     // Valid localhost IPv4 URL
     {
         const url = "http://127.0.0.1:8000/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst";
-        const hash = try download.validateUrl(url);
-        try testing.expectEqualStrings(expected_hash, hash);
+        const parsed = try download.validateUrl(url);
+        try testing.expectEqualStrings(expected_hash, parsed.hash);
+        try testing.expectEqual(download.Version.none, parsed.version);
     }
 
     // Valid localhost IPv6 URL with port
     {
         const url = "http://[::1]:8000/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst";
-        const hash = try download.validateUrl(url);
-        try testing.expectEqualStrings(expected_hash, hash);
+        const parsed = try download.validateUrl(url);
+        try testing.expectEqualStrings(expected_hash, parsed.hash);
+        try testing.expectEqual(download.Version.none, parsed.version);
     }
 
     // Valid localhost IPv6 URL without port
     {
         const url = "http://[::1]/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst";
-        const hash = try download.validateUrl(url);
-        try testing.expectEqualStrings(expected_hash, hash);
+        const parsed = try download.validateUrl(url);
+        try testing.expectEqualStrings(expected_hash, parsed.hash);
+        try testing.expectEqual(download.Version.none, parsed.version);
     }
 
     // Valid: localhost hostname (will be resolved and verified during download)
     {
         const url = "http://localhost:8000/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst";
-        const hash = try download.validateUrl(url);
-        try testing.expectEqualStrings(expected_hash, hash);
+        const parsed = try download.validateUrl(url);
+        try testing.expectEqualStrings(expected_hash, parsed.hash);
+        try testing.expectEqual(download.Version.none, parsed.version);
     }
 
     // Invalid: HTTP (not localhost IP)
@@ -1318,15 +1323,25 @@ test "download URL validation" {
     // Valid: hash without .tar.zst extension
     {
         const url = "https://example.com/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf";
-        const hash = try download.validateUrl(url);
-        try testing.expectEqualStrings("4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf", hash);
+        const parsed = try download.validateUrl(url);
+        try testing.expectEqualStrings("4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf", parsed.hash);
+        try testing.expectEqual(download.Version.none, parsed.version);
     }
 
     // Valid: hash with .tar.zst extension
     {
         const url = "https://example.com/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst";
-        const hash = try download.validateUrl(url);
-        try testing.expectEqualStrings("4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf", hash);
+        const parsed = try download.validateUrl(url);
+        try testing.expectEqualStrings("4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf", parsed.hash);
+        try testing.expectEqual(download.Version.none, parsed.version);
+    }
+
+    // Valid: optional version component immediately before the hash
+    {
+        const url = "https://example.com/packages/1.2.3/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst";
+        const parsed = try download.validateUrl(url);
+        try testing.expectEqualStrings(expected_hash, parsed.hash);
+        try testing.expectEqual(download.Version{ .major = 1, .minor = 2, .patch = 3 }, parsed.version);
     }
 }
 
