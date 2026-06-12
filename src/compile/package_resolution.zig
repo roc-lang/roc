@@ -279,7 +279,7 @@ const Edge = struct {
     };
 
     const InvalidSpec = enum {
-        unparseable_url,
+        unparsable_url,
         insecure_url,
         reserved_version,
     };
@@ -508,7 +508,7 @@ pub const Resolver = struct {
                             .is_platform = dep.is_platform,
                             .target = .{ .invalid = switch (err) {
                                 error.InvalidVersion => .reserved_version,
-                                else => .unparseable_url,
+                                else => .unparsable_url,
                             } },
                         });
                         continue;
@@ -850,7 +850,7 @@ pub const Resolver = struct {
                                 "The lowest publishable package version is 0.0.1.",
                             .{ owner, edge.spec },
                         ),
-                        .unparseable_url => try self.addDiagnostic(
+                        .unparsable_url => try self.addDiagnostic(
                             "INVALID PACKAGE URL",
                             "{s} depends on this URL, which could not be parsed as a package URL:\n\n    {s}",
                             .{ owner, edge.spec },
