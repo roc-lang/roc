@@ -4652,11 +4652,8 @@ pub const MonoLlvmCodeGen = struct {
         hosted: lir.LIR.HostedProc,
         arg_ptrs: []const LlvmBuilder.Value,
         arg_layouts: []const layout.Idx,
-        ret_ptr: LlvmBuilder.Value,
         ret_layout: layout.Idx,
     ) Error!bool {
-        _ = ret_ptr;
-
         if (self.host_call_mode != .extern_symbols) return false;
         if (!std.mem.eql(u8, self.store.getString(hosted.symbol), "roc_default_echo_line")) return false;
 
@@ -4837,7 +4834,7 @@ pub const MonoLlvmCodeGen = struct {
         ret_ptr: LlvmBuilder.Value,
         ret_layout: layout.Idx,
     ) Error!void {
-        if (try self.emitDefaultPlatformHostedCall(hosted, arg_ptrs, arg_layouts, ret_ptr, ret_layout)) {
+        if (try self.emitDefaultPlatformHostedCall(hosted, arg_ptrs, arg_layouts, ret_layout)) {
             return;
         }
 

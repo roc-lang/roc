@@ -267,8 +267,7 @@ const DefaultPlatformRuntimeObjects = struct {
         };
     }
 
-    pub fn filename(target: RocTarget) []const u8 {
-        _ = target;
+    pub fn filename() []const u8 {
         return "roc_default_platform.o";
     }
 };
@@ -3855,7 +3854,7 @@ fn verifyHostInputSymbols(
 
 fn writeDefaultPlatformRuntimeObject(ctx: *CliCtx, build_cache_dir: []const u8, target: RocTarget) anyerror!?[]const u8 {
     const bytes = DefaultPlatformRuntimeObjects.forTarget(target) orelse return null;
-    const runtime_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, DefaultPlatformRuntimeObjects.filename(target) });
+    const runtime_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, DefaultPlatformRuntimeObjects.filename() });
     backend.writeFileWindowsAvSafe(ctx.io.std_io, runtime_path, bytes) catch |err| {
         std.log.err("Failed to write default platform runtime object {s}: {}", .{ runtime_path, err });
         return err;
