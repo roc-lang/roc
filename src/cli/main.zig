@@ -4559,6 +4559,7 @@ fn compileLlvmAppObject(
     codegen.emit_debug_info = true;
     codegen.enable_default_platform_runtime = enable_default_platform_runtime;
     codegen.enable_default_platform_hosted_calls = enable_default_platform_hosted_calls;
+    codegen.enable_default_platform_diagnostics = enable_default_platform_hosted_calls;
     codegen.debug_producer = "roc " ++ build_options.compiler_version;
     defer codegen.deinit();
 

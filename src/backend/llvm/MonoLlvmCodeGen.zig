@@ -176,6 +176,9 @@ pub const MonoLlvmCodeGen = struct {
     /// Synthetic default-platform apps lower the default echo host call to
     /// direct platform writes instead of calling an external host function.
     enable_default_platform_hosted_calls: bool = false,
+    /// Synthetic default-platform apps preserve source proc names and local
+    /// debug locations for crash and stack-overflow diagnostics.
+    enable_default_platform_diagnostics: bool = false,
     /// DW_AT_producer for the compile unit. Carries the compiler version so
     /// debugger formatters can detect when a binary was built by a different
     /// roc than the formatter was written for.
@@ -682,8 +685,10 @@ pub const MonoLlvmCodeGen = struct {
         proc_id: LirProcSpecId,
         proc: LirProcSpec,
     ) Error!LlvmBuilder.Metadata.String {
-        if (self.store.procDebugName(proc_id)) |name| {
-            return builder.metadataString(name) catch return error.OutOfMemory;
+        if (self.enable_default_platform_diagnostics) {
+            if (self.store.procDebugName(proc_id)) |name| {
+                return builder.metadataString(name) catch return error.OutOfMemory;
+            }
         }
         return try self.procSymbolDebugName(builder, proc_id, proc);
     }
@@ -978,13 +983,15 @@ pub const MonoLlvmCodeGen = struct {
         const file = try self.debugFileFor(builder, self.current_debug_file);
         const empty_expr = builder.debugExpression(&.{}) catch return error.OutOfMemory;
         const previous_debug_location = wip.debug_location;
+        if (self.enable_default_platform_diagnostics) {
+            wip.debug_location = .{ .location = .{
+                .line = proc_line,
+                .column = if (proc_line == 0) 0 else 1,
+                .scope = scope.toOptional(),
+                .inlined_at = .none,
+            } };
+        }
         defer wip.debug_location = previous_debug_location;
-        wip.debug_location = .{ .location = .{
-            .line = proc_line,
-            .column = if (proc_line == 0) 0 else 1,
-            .scope = scope.toOptional(),
-            .inlined_at = .none,
-        } };
 
         for (self.store.getLocalSpan(proc.frame_locals)) |local_id| {
             const name = self.store.localName(local_id) orelse continue;
