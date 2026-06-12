@@ -39,6 +39,7 @@ const ImportResolver = compile_package.ImportResolver;
 const ScheduleHook = compile_package.ScheduleHook;
 const CacheManager = @import("cache_manager.zig").CacheManager;
 const package_source = @import("package_source.zig");
+const package_resolution = @import("package_resolution.zig");
 
 // Actor model components
 const coordinator_mod = @import("coordinator.zig");
@@ -180,6 +181,9 @@ pub const BuildEnv = struct {
 
     /// Compiler role to assign to the root module of this build.
     root_module_role: ModuleEnv.ModuleRole = .user,
+
+    /// Size limits applied during package version resolution.
+    resolution_config: package_resolution.Config = .{},
 
     // Builtin modules (Bool, Try, Str) shared across all packages (heap-allocated to prevent moves)
     builtin_modules: *BuiltinModules,
@@ -526,9 +530,10 @@ pub const BuildEnv = struct {
             }
         }
 
-        // Populate package graph (for apps and packages with dependencies)
+        // Resolve the full dependency graph (downloads plus version solving),
+        // then materialize the resolved packages and their shorthands.
         if (header_info.kind == .app or header_info.kind == .package) {
-            try self.populatePackageShorthands(pkg_name, &header_info);
+            try self.resolveAndMaterialize(pkg_name);
         }
 
         self.discovered_pkg_name = pkg_name;
@@ -1049,9 +1054,7 @@ pub const BuildEnv = struct {
         kind: PackageKind,
         platform_alias: ?[]u8 = null,
         platform_path: ?[]u8 = null,
-        platform_url: ?package_source.UrlSource = null,
         shorthands: std.StringHashMapUnmanaged([]const u8) = .{},
-        package_urls: std.StringHashMapUnmanaged(package_source.UrlSource) = .{},
         /// Platform-exposed modules (e.g., Stdout, Stderr) that apps can import
         exposes: std.ArrayListUnmanaged([]const u8) = .empty,
         /// Platform provides entries (roc_ident -> ffi_symbol mapping)
@@ -1063,19 +1066,12 @@ pub const BuildEnv = struct {
             if (self.targets_config) |tc| tc.deinit(gpa);
             if (self.platform_alias) |a| freeSlice(gpa, a);
             if (self.platform_path) |p| freeSlice(gpa, p);
-            if (self.platform_url) |*url| url.deinit(gpa);
             var it = self.shorthands.iterator();
             while (it.next()) |e| {
                 freeConstSlice(gpa, e.key_ptr.*);
                 freeConstSlice(gpa, e.value_ptr.*);
             }
             self.shorthands.deinit(gpa);
-            var url_it = self.package_urls.iterator();
-            while (url_it.next()) |e| {
-                freeConstSlice(gpa, e.key_ptr.*);
-                e.value_ptr.deinit(gpa);
-            }
-            self.package_urls.deinit(gpa);
             for (self.exposes.items) |e| {
                 freeConstSlice(gpa, e);
             }
@@ -1088,76 +1084,25 @@ pub const BuildEnv = struct {
         }
     };
 
-    fn removeHeaderPackageUrl(self: *BuildEnv, info: *HeaderInfo, key: []const u8) void {
-        if (info.package_urls.fetchRemove(key)) |entry| {
-            freeConstSlice(self.gpa, entry.key);
-            var url = entry.value;
-            url.deinit(self.gpa);
-        }
-    }
-
     fn putHeaderShorthand(
         self: *BuildEnv,
         info: *HeaderInfo,
         key: []const u8,
         path: []const u8,
-        package_url: ?package_source.UrlSource,
     ) BuildError!void {
-        var owned_url = package_url;
         var path_transferred = false;
-        errdefer {
-            if (!path_transferred) freeConstSlice(self.gpa, path);
-            if (owned_url) |*url| url.deinit(self.gpa);
-        }
+        errdefer if (!path_transferred) freeConstSlice(self.gpa, path);
 
         if (info.shorthands.fetchRemove(key)) |entry| {
             self.gpa.free(entry.key);
             self.gpa.free(entry.value);
         }
-        self.removeHeaderPackageUrl(info, key);
 
         const key_owned = try self.gpa.dupe(u8, key);
         errdefer self.gpa.free(key_owned);
 
         try info.shorthands.put(self.gpa, key_owned, path);
         path_transferred = true;
-
-        if (owned_url) |url| {
-            const url_key = try self.gpa.dupe(u8, key);
-            errdefer self.gpa.free(url_key);
-            try info.package_urls.put(self.gpa, url_key, url);
-            owned_url = null;
-        }
-    }
-
-    fn detectPackageCycle(self: *BuildEnv, from_pkg: []const u8, to_pkg: []const u8) Allocator.Error!bool {
-        // Simple DFS walk on shorthand edges to detect if to_pkg reaches from_pkg
-        if (std.mem.eql(u8, from_pkg, to_pkg)) return true;
-
-        var stack = std.ArrayList([]const u8).empty;
-        defer stack.deinit(self.gpa);
-        try stack.append(self.gpa, to_pkg);
-
-        var visited = std.StringHashMapUnmanaged(void){};
-        defer visited.deinit(self.gpa);
-
-        while (stack.items.len > 0) {
-            const idx = stack.items.len - 1;
-            const cur = stack.items[idx];
-            stack.items.len = idx;
-            if (visited.contains(cur)) continue;
-            try visited.put(self.gpa, cur, {});
-
-            if (std.mem.eql(u8, cur, from_pkg)) return true;
-
-            const pkg = self.packages.get(cur) orelse continue;
-            var it = pkg.shorthands.iterator();
-            while (it.next()) |e| {
-                const next = e.value_ptr.name;
-                try stack.append(self.gpa, next);
-            }
-        }
-        return false;
     }
 
     fn parseHeaderDeps(self: *BuildEnv, file_path: []const u8) BuildError!HeaderInfo {
@@ -1243,30 +1188,24 @@ pub const BuildEnv = struct {
                 const plat_rel = try self.stringFromExpr(ast, value_expr);
                 defer self.gpa.free(plat_rel);
 
-                // Check if this is a URL - if so, resolve it to a cached local path
+                // URL specs are resolved (downloaded and version-solved) by
+                // package resolution; keep them verbatim here.
                 const plat_path = if (base.url.isSafeUrl(plat_rel)) blk: {
-                    const resolved = try self.resolveUrlPackage(plat_rel);
-                    errdefer self.gpa.free(resolved.source_path);
-                    info.platform_url = try package_source.UrlSource.init(self.gpa, .{
-                        .url = plat_rel,
-                        .url_id = resolved.url_id,
-                    });
-                    break :blk resolved.source_path;
+                    break :blk try self.gpa.dupe(u8, plat_rel);
                 } else blk: {
                     const header_dir = std.fs.path.dirname(file_abs) orelse ".";
                     const abs_path = try PathUtils.makeAbsolute(self.gpa, header_dir, plat_rel);
+                    // Add the platform directory to workspace roots so that
+                    // imports within the platform can be resolved, even when
+                    // it lives outside the app directory (e.g. ../platform).
+                    if (std.fs.path.dirname(abs_path)) |plat_dir| {
+                        try self.addWorkspaceRoot(plat_dir);
+                    }
                     break :blk abs_path;
                 };
 
                 info.platform_path = @constCast(plat_path);
                 info.platform_alias = try self.gpa.dupe(u8, alias);
-
-                // Add platform directory to workspace roots so that imports within the platform
-                // can be resolved. This is needed for both URL packages (cached paths) and
-                // relative paths that may point outside the app directory (e.g., ../platform/main.roc)
-                if (std.fs.path.dirname(plat_path)) |plat_dir| {
-                    try self.addWorkspaceRoot(plat_dir);
-                }
 
                 // Packages map
                 const coll = ast.store.getCollection(a.packages);
@@ -1281,21 +1220,10 @@ pub const BuildEnv = struct {
                     const relp = try self.stringFromExpr(ast, rf.value.?);
                     defer self.gpa.free(relp);
 
-                    // Check if this is a URL - if so, resolve it to a cached local path
-                    var package_url: ?package_source.UrlSource = null;
-                    errdefer if (package_url) |*url| url.deinit(self.gpa);
+                    // URL specs are resolved by package resolution; keep them
+                    // verbatim here.
                     const v = if (base.url.isSafeUrl(relp)) blk: {
-                        const resolved = try self.resolveUrlPackage(relp);
-                        errdefer self.gpa.free(resolved.source_path);
-                        package_url = try package_source.UrlSource.init(self.gpa, .{
-                            .url = relp,
-                            .url_id = resolved.url_id,
-                        });
-                        // Add cache directory to workspace roots for URL packages
-                        if (std.fs.path.dirname(resolved.source_path)) |cache_pkg_dir| {
-                            try self.addWorkspaceRoot(cache_pkg_dir);
-                        }
-                        break :blk resolved.source_path;
+                        break :blk try self.gpa.dupe(u8, relp);
                     } else blk: {
                         const header_dir2 = std.fs.path.dirname(file_abs) orelse ".";
                         const abs_path = try PathUtils.makeAbsolute(self.gpa, header_dir2, relp);
@@ -1306,9 +1234,7 @@ pub const BuildEnv = struct {
                         break :blk abs_path;
                     };
 
-                    const owned_package_url = package_url;
-                    package_url = null;
-                    try self.putHeaderShorthand(&info, k, v, owned_package_url);
+                    try self.putHeaderShorthand(&info, k, v);
                 }
             },
             .package => |p| {
@@ -1325,21 +1251,10 @@ pub const BuildEnv = struct {
                     const relp = try self.stringFromExpr(ast, rf.value.?);
                     defer self.gpa.free(relp);
 
-                    // Check if this is a URL - if so, resolve it to a cached local path
-                    var package_url: ?package_source.UrlSource = null;
-                    errdefer if (package_url) |*url| url.deinit(self.gpa);
+                    // URL specs are resolved by package resolution; keep them
+                    // verbatim here.
                     const v = if (base.url.isSafeUrl(relp)) blk: {
-                        const resolved = try self.resolveUrlPackage(relp);
-                        errdefer self.gpa.free(resolved.source_path);
-                        package_url = try package_source.UrlSource.init(self.gpa, .{
-                            .url = relp,
-                            .url_id = resolved.url_id,
-                        });
-                        // Add cache directory to workspace roots for URL packages
-                        if (std.fs.path.dirname(resolved.source_path)) |cache_pkg_dir| {
-                            try self.addWorkspaceRoot(cache_pkg_dir);
-                        }
-                        break :blk resolved.source_path;
+                        break :blk try self.gpa.dupe(u8, relp);
                     } else blk: {
                         const header_dir2 = std.fs.path.dirname(file_abs) orelse ".";
                         const abs_path = try PathUtils.makeAbsolute(self.gpa, header_dir2, relp);
@@ -1351,9 +1266,7 @@ pub const BuildEnv = struct {
                         break :blk abs_path;
                     };
 
-                    const owned_package_url = package_url;
-                    package_url = null;
-                    try self.putHeaderShorthand(&info, k, v, owned_package_url);
+                    try self.putHeaderShorthand(&info, k, v);
                 }
             },
             .platform => |p| {
@@ -1370,21 +1283,10 @@ pub const BuildEnv = struct {
                     const relp = try self.stringFromExpr(ast, rf.value.?);
                     defer self.gpa.free(relp);
 
-                    // Check if this is a URL - if so, resolve it to a cached local path
-                    var package_url: ?package_source.UrlSource = null;
-                    errdefer if (package_url) |*url| url.deinit(self.gpa);
+                    // URL specs are resolved by package resolution; keep them
+                    // verbatim here.
                     const v = if (base.url.isSafeUrl(relp)) blk: {
-                        const resolved = try self.resolveUrlPackage(relp);
-                        errdefer self.gpa.free(resolved.source_path);
-                        package_url = try package_source.UrlSource.init(self.gpa, .{
-                            .url = relp,
-                            .url_id = resolved.url_id,
-                        });
-                        // Add cache directory to workspace roots for URL packages
-                        if (std.fs.path.dirname(resolved.source_path)) |cache_pkg_dir| {
-                            try self.addWorkspaceRoot(cache_pkg_dir);
-                        }
-                        break :blk resolved.source_path;
+                        break :blk try self.gpa.dupe(u8, relp);
                     } else blk: {
                         const header_dir2 = std.fs.path.dirname(file_abs) orelse ".";
                         const abs_path = try PathUtils.makeAbsolute(self.gpa, header_dir2, relp);
@@ -1396,9 +1298,7 @@ pub const BuildEnv = struct {
                         break :blk abs_path;
                     };
 
-                    const owned_package_url = package_url;
-                    package_url = null;
-                    try self.putHeaderShorthand(&info, k, v, owned_package_url);
+                    try self.putHeaderShorthand(&info, k, v);
                 }
 
                 // Extract platform-exposed modules (e.g., Stdout, Stderr)
@@ -1537,110 +1437,6 @@ pub const BuildEnv = struct {
         }
 
         return error.NoCacheDir;
-    }
-
-    const ResolvedUrlPackage = struct {
-        source_path: []const u8,
-        url_id: base.url.UrlId,
-    };
-
-    /// Resolve a URL package by downloading and caching it.
-    /// Returns the local path to the cached package's main.roc or platform.roc file.
-    fn resolveUrlPackage(self: *BuildEnv, url: []const u8) BuildError!ResolvedUrlPackage {
-        if (comptime is_freestanding)
-            return error.DownloadFailed;
-        const download = unbundle.download;
-
-        // Validate URL and extract hash
-        const parsed_url = download.validateUrl(url) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            else => {
-                if (comptime !is_freestanding) {
-                    std.log.err("Invalid package URL: {s} ({})", .{ url, err });
-                }
-                return error.InvalidUrl;
-            },
-        };
-        const base58_hash = parsed_url.hash;
-
-        // Get cache directory
-        const cache_dir_path = self.getRocCacheDir(self.gpa) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            else => {
-                if (comptime !is_freestanding) {
-                    std.log.err("Could not determine cache directory", .{});
-                }
-                return error.NoCacheDir;
-            },
-        };
-        defer self.gpa.free(cache_dir_path);
-
-        const package_dir_path = try std.fs.path.join(self.gpa, &.{ cache_dir_path, base58_hash });
-        errdefer self.gpa.free(package_dir_path);
-
-        // Check if already cached
-        const already_cached = self.filesystem.fileExists(package_dir_path);
-
-        if (!already_cached) {
-            // Not cached - need to download
-            if (comptime !is_freestanding) {
-                std.log.info("Downloading package from {s}...", .{url});
-            }
-
-            // Create cache directory structure
-            self.filesystem.makePath(cache_dir_path) catch |make_err| switch (make_err) {
-                error.OutOfMemory => return error.OutOfMemory,
-                else => {
-                    std.log.err("Failed to create cache directory: {}", .{make_err});
-                    return error.FileError;
-                },
-            };
-
-            // Create package directory
-            self.filesystem.createDir(package_dir_path) catch |make_err| switch (make_err) {
-                error.IoError => {}, // May be PathAlreadyExists from race condition
-                error.OutOfMemory => return error.OutOfMemory,
-                else => {
-                    if (comptime !is_freestanding) {
-                        std.log.err("Failed to create package directory: {}", .{make_err});
-                    }
-                    return error.FileError;
-                },
-            };
-
-            // Download and extract via io vtable (path-based, no Dir handle needed)
-            _ = self.filesystem.fetchUrl(self.gpa, url, package_dir_path, null) catch |fetch_err| {
-                self.filesystem.deleteTree(package_dir_path) catch {};
-                switch (fetch_err) {
-                    error.OutOfMemory => return error.OutOfMemory,
-                    else => {
-                        std.log.err("Failed to download package: {} (url: {s})", .{ fetch_err, url });
-                        return error.DownloadFailed;
-                    },
-                }
-            };
-
-            if (comptime !is_freestanding) {
-                std.log.info("Package cached at {s}", .{package_dir_path});
-            }
-        }
-
-        // Packages must have a main.roc entry point
-        const source_path = std.fs.path.join(self.gpa, &.{ package_dir_path, "main.roc" }) catch {
-            return error.OutOfMemory;
-        };
-        if (!self.filesystem.fileExists(source_path)) {
-            self.gpa.free(source_path);
-            if (comptime !is_freestanding) {
-                std.log.err("No main.roc found in package at {s}", .{package_dir_path});
-            }
-            return error.NoPackageSource;
-        }
-        self.gpa.free(package_dir_path);
-        return .{
-            .source_path = source_path,
-            .url_id = parsed_url.url_id,
-        };
     }
 
     fn dottedToPath(self: *BuildEnv, root_dir: []const u8, dotted: []const u8) (Allocator.Error || error{PathOutsideWorkspace})![]const u8 {
@@ -1815,38 +1611,96 @@ pub const BuildEnv = struct {
         }
     }
 
-    fn populatePackageShorthands(self: *BuildEnv, pkg_name: []const u8, info: *HeaderInfo) BuildError!void {
-        var pack = self.packages.getPtr(pkg_name).?;
+    /// Run global package version resolution from the discovered root, then
+    /// materialize the resolved graph: create a BuildEnv package per resolved
+    /// package (named by its unique identity - full URL or absolute path),
+    /// wire every package's shorthand aliases to the packages its specs
+    /// resolved to, and transfer platform metadata.
+    fn resolveAndMaterialize(self: *BuildEnv, root_pkg_name: []const u8) BuildError!void {
+        const root_abs = self.discovered_root_abs orelse return error.Internal;
 
-        // App-specific platform dependency
-        if (info.platform_alias) |alias| {
-            if (pack.kind != .app) return error.Internal;
+        // Without a cache directory, resolution still works for graphs with
+        // no URL dependencies; URL specs report a download failure.
+        const cache_dir: ?[]const u8 = self.getRocCacheDir(self.gpa) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => null,
+        };
+        defer if (cache_dir) |dir| self.gpa.free(dir);
 
-            const p_path = info.platform_path.?;
-            var platform_url = if (info.platform_url) |*url| url.view() else null;
+        var ctx_fetcher = package_resolution.CtxFetcher{
+            .fs = self.filesystem,
+            .gpa = self.gpa,
+            .cache_packages_dir = cache_dir,
+        };
+        var resolver = package_resolution.Resolver.init(self.gpa, ctx_fetcher.fetcher(), self.resolution_config);
+        defer resolver.deinit();
 
-            const abs = if (base.url.isSafeUrl(p_path)) blk: {
-                const resolved = try self.resolveUrlPackage(p_path);
-                platform_url = .{
-                    .url = p_path,
-                    .url_id = resolved.url_id,
-                };
-                break :blk resolved.source_path;
-            } else try self.makeAbsolute(p_path);
-            defer self.gpa.free(abs);
+        var resolved = resolver.resolve(root_abs) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.ResolutionFailed => {
+                for (resolver.diagnostics.items) |diagnostic| {
+                    try self.emitWorkspaceReport(diagnostic.title, diagnostic.message);
+                }
+                // Build the sink order so the reports above are drainable:
+                // the build aborts here, so nothing else will order them.
+                try self.sink.buildOrder(&[_][]const u8{"workspace"}, &[_][]const u8{"root"}, &[_]u32{0});
+                self.sink.tryEmit();
+                return error.InvalidDependency;
+            },
+        };
+        defer resolved.deinit();
 
-            var child_info = try self.parseHeaderDeps(abs);
+        try self.materializeResolved(root_pkg_name, &resolved);
+    }
+
+    fn materializeResolved(self: *BuildEnv, root_pkg_name: []const u8, resolved: *const package_resolution.Resolved) BuildError!void {
+        const resolved_packages = resolved.packages;
+
+        // Workspace roots must include every resolved package directory
+        // before the sandbox checks in ensurePackage run.
+        for (resolved_packages[1..]) |package| {
+            try self.addWorkspaceRoot(package.root_dir);
+        }
+
+        const names = try self.gpa.alloc([]const u8, resolved_packages.len);
+        defer self.gpa.free(names);
+        names[0] = root_pkg_name;
+        for (resolved_packages[1..], 1..) |package, i| {
+            names[i] = package.identity;
+        }
+
+        for (resolved_packages[1..], 1..) |package, i| {
+            const kind: PackageKind = switch (package.kind) {
+                .app => .app,
+                .package => .package,
+                .platform => .platform,
+                .module => .module,
+            };
+            const url_view: ?package_source.UrlSourceView = if (package.url) |url| .{
+                .url = url.url,
+                .url_id = url.url_id,
+            } else null;
+            try self.ensurePackage(names[i], kind, package.root_file, url_view);
+        }
+
+        // Wire every package's shorthand aliases.
+        for (resolved_packages, 0..) |package, i| {
+            for (package.deps) |dep| {
+                const pack = self.packages.getPtr(names[i]) orelse return error.Internal;
+                _ = try self.putPackageShorthand(pack, dep.alias, names[dep.target], resolved_packages[dep.target].root_file);
+            }
+        }
+
+        // Transfer provides entries and targets config from platform headers,
+        // and register the root app platform's exposed modules.
+        for (resolved_packages, 0..) |package, i| {
+            if (i == package_resolution.Resolved.root_index) continue;
+            if (package.kind != .platform) continue;
+
+            var child_info = try self.parseHeaderDeps(package.root_file);
             defer child_info.deinit(self.gpa);
 
-            if (child_info.kind != .platform) {
-                try self.emitWorkspaceError("Only apps may depend on platforms.");
-                return error.InvalidDependency;
-            }
-
-            try self.ensurePackage(alias, .platform, abs, platform_url);
-
-            // Transfer provides entries and targets_config from parsed header to platform package
-            if (self.packages.getPtr(alias)) |plat_pkg| {
+            if (self.packages.getPtr(names[i])) |plat_pkg| {
                 if (plat_pkg.provides_entries.items.len == 0) {
                     plat_pkg.provides_entries = child_info.provides_entries;
                     child_info.provides_entries = .empty; // Prevent double-free in deinit
@@ -1857,103 +1711,52 @@ pub const BuildEnv = struct {
                 }
             }
 
-            // Re-fetch pack pointer since ensurePackage may have caused HashMap reallocation
-            pack = self.packages.getPtr(pkg_name).?;
-
-            const dep_name = try self.putPackageShorthand(pack, alias, alias, abs);
-            try self.populatePackageShorthands(dep_name, &child_info);
-
-            // Register platform-exposed modules as packages so apps can import them
-            // This is necessary for URL platforms where the platform directory is in a cache
-            const platform_dir = std.fs.path.dirname(abs) orelse ".";
-
-            for (child_info.exposes.items) |module_name| {
-                // Create path to the module file (e.g., Stdout.roc)
-                const module_filename = try std.fmt.allocPrint(self.gpa, "{s}.roc", .{module_name});
-                defer self.gpa.free(module_filename);
-
-                const module_path = try std.fs.path.join(self.gpa, &.{ platform_dir, module_filename });
-                defer self.gpa.free(module_path);
-
-                // Register this module as a package
-                // Only allocate if package doesn't exist (ensurePackage makes its own copy)
-                if (!self.packages.contains(module_name)) {
-                    try self.ensurePackage(module_name, .module, module_path, null);
-                }
-
-                // Re-fetch pack pointer since ensurePackage may have caused HashMap reallocation
-                pack = self.packages.getPtr(pkg_name).?;
-
-                // Also add to app's shorthands so imports resolve correctly
-                _ = try self.putPackageShorthand(pack, module_name, module_name, module_path);
-
-                // Add to pending list - will be registered after schedulers are created
-                // Use the QUALIFIED name (e.g., "pf.Stdout") because that's how imports are tracked
-                const qualified_name = try std.fmt.allocPrint(self.gpa, "{s}.{s}", .{ alias, module_name });
-                try self.pending_known_modules.append(.{
-                    .target_package = try self.gpa.dupe(u8, pkg_name),
-                    .qualified_name = qualified_name,
-                    .import_name = try self.gpa.dupe(u8, qualified_name),
-                });
+            // Find the root's platform alias for this package (if any).
+            for (resolved_packages[package_resolution.Resolved.root_index].deps) |root_dep| {
+                if (!root_dep.is_platform) continue;
+                if (root_dep.target != i) continue;
+                try self.registerPlatformExposes(root_pkg_name, root_dep.alias, package.root_dir, &child_info);
             }
         }
+    }
 
-        // Common package dependencies
-        var it = info.shorthands.iterator();
-        while (it.next()) |e| {
-            const alias = e.key_ptr.*;
-            const path = e.value_ptr.*;
-            var package_url = if (info.package_urls.get(alias)) |*url| url.view() else null;
+    /// Register a platform's exposed modules (e.g. Stdout, Stderr) as
+    /// importable modules on the root app. This is necessary for URL
+    /// platforms, whose directories live in the cache.
+    fn registerPlatformExposes(
+        self: *BuildEnv,
+        root_pkg_name: []const u8,
+        platform_alias: []const u8,
+        platform_dir: []const u8,
+        child_info: *const HeaderInfo,
+    ) BuildError!void {
+        for (child_info.exposes.items) |module_name| {
+            // Create path to the module file (e.g., Stdout.roc)
+            const module_filename = try std.fmt.allocPrint(self.gpa, "{s}.roc", .{module_name});
+            defer self.gpa.free(module_filename);
 
-            const abs = if (base.url.isSafeUrl(path)) blk: {
-                const resolved = try self.resolveUrlPackage(path);
-                package_url = .{
-                    .url = path,
-                    .url_id = resolved.url_id,
-                };
-                break :blk resolved.source_path;
-            } else try self.makeAbsolute(path);
-            defer self.gpa.free(abs);
+            const module_path = try std.fs.path.join(self.gpa, &.{ platform_dir, module_filename });
+            defer self.gpa.free(module_path);
 
-            var child_info = try self.parseHeaderDeps(abs);
-            defer child_info.deinit(self.gpa);
-
-            if (child_info.kind == .app) {
-                try self.emitWorkspaceError("Packages may not depend on apps.");
-                return error.InvalidDependency;
-            }
-            if (child_info.kind == .platform and pack.kind != .app) {
-                try self.emitWorkspaceError("Only apps may depend on platforms.");
-                return error.InvalidDependency;
+            // Register this module as a package
+            // Only allocate if package doesn't exist (ensurePackage makes its own copy)
+            if (!self.packages.contains(module_name)) {
+                try self.ensurePackage(module_name, .module, module_path, null);
             }
 
-            // Detect package-level cycles: if alias already on the path, report cycle
-            if (try self.detectPackageCycle(pkg_name, alias)) {
-                // Build a more descriptive cycle message using source-level identifiers (aliases)
-                // Do not include file paths here (cycle messages should show source identities).
-                const msg = try std.fmt.allocPrint(self.gpa, "Package-level cycle detected involving aliases: {s} ... {s}", .{ pkg_name, alias });
-                defer self.gpa.free(msg);
-                try self.emitWorkspaceError(msg);
-                return error.InvalidDependency;
-            }
+            const pack = self.packages.getPtr(root_pkg_name) orelse return error.Internal;
 
-            try self.ensurePackage(alias, child_info.kind, abs, package_url);
+            // Also add to app's shorthands so imports resolve correctly
+            _ = try self.putPackageShorthand(pack, module_name, module_name, module_path);
 
-            // Transfer provides entries from parsed header to platform package
-            if (child_info.kind == .platform) {
-                if (self.packages.getPtr(alias)) |plat_pkg| {
-                    if (plat_pkg.provides_entries.items.len == 0) {
-                        plat_pkg.provides_entries = child_info.provides_entries;
-                        child_info.provides_entries = .empty; // Prevent double-free in deinit
-                    }
-                }
-            }
-
-            // Re-fetch pack pointer since ensurePackage may have caused HashMap reallocation
-            pack = self.packages.getPtr(pkg_name).?;
-
-            const dep_name = try self.putPackageShorthand(pack, alias, alias, abs);
-            try self.populatePackageShorthands(dep_name, &child_info);
+            // Add to pending list - will be registered after schedulers are created
+            // Use the QUALIFIED name (e.g., "pf.Stdout") because that's how imports are tracked
+            const qualified_name = try std.fmt.allocPrint(self.gpa, "{s}.{s}", .{ platform_alias, module_name });
+            try self.pending_known_modules.append(.{
+                .target_package = try self.gpa.dupe(u8, root_pkg_name),
+                .qualified_name = qualified_name,
+                .import_name = try self.gpa.dupe(u8, qualified_name),
+            });
         }
     }
 
@@ -2230,6 +2033,21 @@ pub const BuildEnv = struct {
     ///
     /// IMPORTANT: This reads from schedulers, not the coordinator, because
     /// transferCoordinatorResults() moves env ownership to schedulers.
+    /// The alias the root package uses for `pkg_name`, if any. Packages are
+    /// named internally by their unique identity (full URL or absolute path);
+    /// user-facing output like docs should show the root's alias instead.
+    pub fn rootAliasForPackage(self: *BuildEnv, pkg_name: []const u8) ?[]const u8 {
+        const root_name = self.discovered_pkg_name orelse return null;
+        const root_pkg = self.packages.getPtr(root_name) orelse return null;
+        var it = root_pkg.shorthands.iterator();
+        while (it.next()) |entry| {
+            if (std.mem.eql(u8, entry.value_ptr.name, pkg_name)) {
+                return entry.key_ptr.*;
+            }
+        }
+        return null;
+    }
+
     pub fn getCompiledModules(self: *BuildEnv, allocator: Allocator) Allocator.Error![]CompiledModuleInfo {
         // Assert we have a coordinator (build was called)
         std.debug.assert(self.coordinator != null);

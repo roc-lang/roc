@@ -60,16 +60,6 @@ main_for_host = main
 (package-docs
   (name "test-app")
   (module
-    (name "app")
-    (package "app")
-    (kind app)
-    (entry
-      (name "main")
-      (kind value)
-      (type (type-ref (name "Str")))
-    )
-  )
-  (module
     (name "Geometry")
     (package "app")
     (kind type_module)
@@ -114,6 +104,16 @@ main_for_host = main
         (type (fn (type-ref (name "U64")) (type-ref (name "Str"))))
         (doc "Show a number as a string.")
       )
+    )
+  )
+  (module
+    (name "app")
+    (package "app")
+    (kind app)
+    (entry
+      (name "main")
+      (kind value)
+      (type (type-ref (name "Str")))
     )
   )
   (module

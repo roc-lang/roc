@@ -73,6 +73,43 @@ pub const OptLevel = enum {
     }
 };
 
+/// Package download size limits for commands that resolve dependencies.
+/// Values are in megabytes; 0 means unlimited; null uses the default.
+pub const ResolveLimitArgs = struct {
+    max_package_mb: ?u32 = null, // per-package decompressed size limit (default 10)
+    max_transitive_mb: ?u32 = null, // per-direct-dependency transitive size limit (default 100)
+};
+
+const ResolveLimitParse = union(enum) {
+    not_matched,
+    ok,
+    problem: ArgProblem,
+};
+
+fn parseResolveLimitFlag(arg: []const u8, limits: *ResolveLimitArgs) ResolveLimitParse {
+    const flags = .{
+        .{ "--max-package-mb", &limits.max_package_mb },
+        .{ "--max-transitive-mb", &limits.max_transitive_mb },
+    };
+    inline for (flags) |flag| {
+        if (mem.startsWith(u8, arg, flag[0])) {
+            if (getFlagValue(arg)) |value| {
+                flag[1].* = std.fmt.parseInt(u32, value, 10) catch {
+                    return .{ .problem = ArgProblem{ .invalid_flag_value = .{ .flag = flag[0], .value = value, .valid_options = "size in MB (0 for unlimited)" } } };
+                };
+                return .ok;
+            }
+            return .{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = flag[0] } } };
+        }
+    }
+    return .not_matched;
+}
+
+const resolve_limit_help =
+    \\      --max-package-mb=<N>     Per-package decompressed size limit in MB (default: 10, 0 for unlimited)
+    \\      --max-transitive-mb=<N>  Combined size limit in MB for each direct dependency's transitive packages (default: 100, 0 for unlimited)
+;
+
 /// Arguments for the default `roc` command
 pub const RunArgs = struct {
     path: []const u8, // the path of the roc file to be executed
@@ -82,6 +119,7 @@ pub const RunArgs = struct {
     no_cache: bool = false, // bypass the executable cache
     allow_errors: bool = false, // allow execution even if there are type errors
     max_threads: ?usize = null, // max worker threads (null = auto, 1 = single-threaded)
+    resolve_limits: ResolveLimitArgs = .{}, // package download size limits
 };
 
 /// Arguments for `roc check`
@@ -92,6 +130,7 @@ pub const CheckArgs = struct {
     no_cache: bool = false, // disable cache
     verbose: bool = false, // enable verbose output
     max_threads: ?usize = null, // max worker threads (null = auto, 1 = single-threaded)
+    resolve_limits: ResolveLimitArgs = .{}, // package download size limits
 };
 
 /// Arguments for `roc build`
@@ -114,6 +153,7 @@ pub const BuildArgs = struct {
     warning_count_out: ?*usize = null, // optionally receive the total warning count
     require_executable_output: bool = false, // reject static/shared library targets
     suppress_build_status: bool = false, // suppress "Built..." output (used by roc run)
+    resolve_limits: ResolveLimitArgs = .{}, // package download size limits
 };
 
 /// Arguments for `roc test`
@@ -124,6 +164,7 @@ pub const TestArgs = struct {
     verbose: bool = false, // enable verbose output showing individual test results
     no_cache: bool = false, // disable compilation caching, force re-run all tests
     max_threads: ?usize = null, // max worker threads (null = auto, 1 = single-threaded)
+    resolve_limits: ResolveLimitArgs = .{}, // package download size limits
 };
 
 /// Arguments for `roc format`
@@ -154,6 +195,7 @@ pub const DocsArgs = struct {
     no_cache: bool = false, // disable cache
     verbose: bool = false, // enable verbose output
     serve: bool = false, // start an HTTP server after generating docs
+    resolve_limits: ResolveLimitArgs = .{}, // package download size limits
 };
 
 /// Arguments for `roc experimental-lsp`
@@ -259,6 +301,7 @@ fn parseCheck(args: []const []const u8) CliArgs {
     var no_cache: bool = false;
     var verbose: bool = false;
     var max_threads: ?usize = null;
+    var resolve_limits: ResolveLimitArgs = .{};
 
     for (args) |arg| {
         if (isHelpFlag(arg)) {
@@ -276,9 +319,15 @@ fn parseCheck(args: []const []const u8) CliArgs {
             \\      --no-cache     Disable caching
             \\      --verbose      Enable verbose output including cache statistics
             \\  -j, --jobs=<N>     Max worker threads for parallel compilation (default: auto-detect CPU count)
+            ++ "\n" ++ resolve_limit_help ++ "\n" ++
             \\  -h, --help         Print help
             \\
             };
+        } else if (mem.startsWith(u8, arg, "--max-package-mb") or mem.startsWith(u8, arg, "--max-transitive-mb")) {
+            switch (parseResolveLimitFlag(arg, &resolve_limits)) {
+                .problem => |problem| return CliArgs{ .problem = problem },
+                else => {},
+            }
         } else if (mem.startsWith(u8, arg, "--main")) {
             if (getFlagValue(arg)) |value| {
                 main = value;
@@ -316,7 +365,7 @@ fn parseCheck(args: []const []const u8) CliArgs {
         }
     }
 
-    return CliArgs{ .check = CheckArgs{ .path = path orelse "main.roc", .main = main, .time = time, .no_cache = no_cache, .verbose = verbose, .max_threads = max_threads } };
+    return CliArgs{ .check = CheckArgs{ .path = path orelse "main.roc", .main = main, .time = time, .no_cache = no_cache, .verbose = verbose, .max_threads = max_threads, .resolve_limits = resolve_limits } };
 }
 
 fn parseBuild(args: []const []const u8) CliArgs {
@@ -334,6 +383,7 @@ fn parseBuild(args: []const []const u8) CliArgs {
     var z_bench_tokenize: ?[]const u8 = null;
     var z_bench_parse: ?[]const u8 = null;
     var z_dump_linker: bool = false;
+    var resolve_limits: ResolveLimitArgs = .{};
     for (args) |arg| {
         if (isHelpFlag(arg)) {
             return CliArgs{ .help =
@@ -361,6 +411,11 @@ fn parseBuild(args: []const []const u8) CliArgs {
             \\      -h, --help                     Print help
             \\
             };
+        } else if (mem.startsWith(u8, arg, "--max-package-mb") or mem.startsWith(u8, arg, "--max-transitive-mb")) {
+            switch (parseResolveLimitFlag(arg, &resolve_limits)) {
+                .problem => |problem| return CliArgs{ .problem = problem },
+                else => {},
+            }
         } else if (mem.startsWith(u8, arg, "--target")) {
             if (getFlagValue(arg)) |value| {
                 target = value;
@@ -446,7 +501,7 @@ fn parseBuild(args: []const []const u8) CliArgs {
             path = arg;
         }
     }
-    return CliArgs{ .build = BuildArgs{ .path = path orelse "main.roc", .opt = opt, .target = target, .output = output, .debug = debug, .allow_errors = allow_errors, .verbose = verbose, .no_cache = no_cache, .max_threads = max_threads, .wasm_memory = wasm_memory, .wasm_stack_size = wasm_stack_size, .z_bench_tokenize = z_bench_tokenize, .z_bench_parse = z_bench_parse, .z_dump_linker = z_dump_linker } };
+    return CliArgs{ .build = BuildArgs{ .path = path orelse "main.roc", .opt = opt, .target = target, .output = output, .debug = debug, .allow_errors = allow_errors, .verbose = verbose, .no_cache = no_cache, .max_threads = max_threads, .wasm_memory = wasm_memory, .wasm_stack_size = wasm_stack_size, .z_bench_tokenize = z_bench_tokenize, .z_bench_parse = z_bench_parse, .z_dump_linker = z_dump_linker, .resolve_limits = resolve_limits } };
 }
 
 fn parseBundle(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator.Error!CliArgs {
@@ -624,6 +679,7 @@ fn parseTest(args: []const []const u8) CliArgs {
     var verbose: bool = false;
     var no_cache: bool = false;
     var max_threads: ?usize = null;
+    var resolve_limits: ResolveLimitArgs = .{};
     for (args) |arg| {
         if (isHelpFlag(arg)) {
             return CliArgs{ .help =
@@ -643,6 +699,11 @@ fn parseTest(args: []const []const u8) CliArgs {
             \\  -h, --help                          Print help
             \\
             };
+        } else if (mem.startsWith(u8, arg, "--max-package-mb") or mem.startsWith(u8, arg, "--max-transitive-mb")) {
+            switch (parseResolveLimitFlag(arg, &resolve_limits)) {
+                .problem => |problem| return CliArgs{ .problem = problem },
+                else => {},
+            }
         } else if (mem.startsWith(u8, arg, "--main")) {
             if (getFlagValue(arg)) |value| {
                 main = value;
@@ -687,7 +748,7 @@ fn parseTest(args: []const []const u8) CliArgs {
             path = arg;
         }
     }
-    return CliArgs{ .test_cmd = TestArgs{ .path = path orelse "main.roc", .opt = opt, .main = main, .verbose = verbose, .no_cache = no_cache, .max_threads = max_threads } };
+    return CliArgs{ .test_cmd = TestArgs{ .path = path orelse "main.roc", .opt = opt, .main = main, .verbose = verbose, .no_cache = no_cache, .max_threads = max_threads, .resolve_limits = resolve_limits } };
 }
 
 fn parseRepl(args: []const []const u8) CliArgs {
@@ -855,6 +916,7 @@ fn parseDocs(args: []const []const u8) CliArgs {
     var no_cache: bool = false;
     var verbose: bool = false;
     var serve: bool = false;
+    var resolve_limits: ResolveLimitArgs = .{};
 
     for (args) |arg| {
         if (isHelpFlag(arg)) {
@@ -876,6 +938,11 @@ fn parseDocs(args: []const []const u8) CliArgs {
             \\  -h, --help           Print help
             \\
             };
+        } else if (mem.startsWith(u8, arg, "--max-package-mb") or mem.startsWith(u8, arg, "--max-transitive-mb")) {
+            switch (parseResolveLimitFlag(arg, &resolve_limits)) {
+                .problem => |problem| return CliArgs{ .problem = problem },
+                else => {},
+            }
         } else if (mem.startsWith(u8, arg, "--main")) {
             if (getFlagValue(arg)) |value| {
                 main = value;
@@ -904,7 +971,7 @@ fn parseDocs(args: []const []const u8) CliArgs {
         }
     }
 
-    return CliArgs{ .docs = DocsArgs{ .path = path orelse "main.roc", .main = main, .output = output orelse "generated-docs", .time = time, .no_cache = no_cache, .verbose = verbose, .serve = serve } };
+    return CliArgs{ .docs = DocsArgs{ .path = path orelse "main.roc", .main = main, .output = output orelse "generated-docs", .time = time, .no_cache = no_cache, .verbose = verbose, .serve = serve, .resolve_limits = resolve_limits } };
 }
 
 fn parseExperimentalLsp(args: []const []const u8) CliArgs {
@@ -956,6 +1023,7 @@ fn parseRun(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator.Er
     var no_cache: bool = false;
     var allow_errors: bool = false;
     var max_threads: ?usize = null;
+    var resolve_limits: ResolveLimitArgs = .{};
     var app_args = try std.array_list.Managed([]const u8).initCapacity(alloc, 16);
     var past_double_dash = false;
 
@@ -976,6 +1044,11 @@ fn parseRun(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator.Er
             // We need to free the paths here because we aren't returning the .run variant
             app_args.deinit();
             return CliArgs{ .help = main_help };
+        } else if (mem.startsWith(u8, arg, "--max-package-mb") or mem.startsWith(u8, arg, "--max-transitive-mb")) {
+            switch (parseResolveLimitFlag(arg, &resolve_limits)) {
+                .problem => |problem| return CliArgs{ .problem = problem },
+                else => {},
+            }
         } else if (mem.eql(u8, arg, "-v") or mem.eql(u8, arg, "--version")) {
             // We need to free the paths here because we aren't returning the .format variant
             app_args.deinit();
@@ -1032,7 +1105,7 @@ fn parseRun(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator.Er
             }
         }
     }
-    return CliArgs{ .run = RunArgs{ .path = path orelse "main.roc", .opt = opt, .target = target, .app_args = try app_args.toOwnedSlice(), .no_cache = no_cache, .allow_errors = allow_errors, .max_threads = max_threads } };
+    return CliArgs{ .run = RunArgs{ .path = path orelse "main.roc", .opt = opt, .target = target, .app_args = try app_args.toOwnedSlice(), .no_cache = no_cache, .allow_errors = allow_errors, .max_threads = max_threads, .resolve_limits = resolve_limits } };
 }
 
 fn isHelpFlag(arg: []const u8) bool {

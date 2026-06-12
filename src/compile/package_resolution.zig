@@ -179,6 +179,14 @@ pub const Resolved = struct {
 pub const Sidecar = struct {
     format: u32,
     kind: []const u8,
+    /// Decompressed size of the bundle's tar stream, recorded at extraction
+    /// time. The per-package size limit is enforced against this on warm
+    /// cache reads too, so having a package cached never changes whether it
+    /// is accepted.
+    expanded_bytes: u64,
+    /// Combined size of the extracted files, which drives the transitive
+    /// tally. Derivable from the extracted bundle alone, so cache deletion
+    /// can never change the tally.
     content_bytes: u64,
     deps: []const SidecarDep,
 
@@ -1184,15 +1192,17 @@ pub fn scanHeaderSource(
             } else {
                 return error.HeaderParseFailed;
             }
-            try appendPackagesCollection(allocator, ast, a.packages, &deps);
+            // The packages collection includes the platform field, which is
+            // already recorded above as the platform edge.
+            try appendPackagesCollection(allocator, ast, a.packages, a.platform_idx, &deps);
             break :blk .app;
         },
         .package => |p| blk: {
-            try appendPackagesCollection(allocator, ast, p.packages, &deps);
+            try appendPackagesCollection(allocator, ast, p.packages, null, &deps);
             break :blk .package;
         },
         .platform => |p| blk: {
-            try appendPackagesCollection(allocator, ast, p.packages, &deps);
+            try appendPackagesCollection(allocator, ast, p.packages, null, &deps);
             break :blk .platform;
         },
         .module, .hosted, .type_module, .default_app => .module,
@@ -1212,11 +1222,15 @@ fn appendPackagesCollection(
     allocator: Allocator,
     ast: *parse.AST,
     packages: parse.AST.Collection.Idx,
+    skip_field: ?parse.AST.RecordField.Idx,
     deps: *std.ArrayListUnmanaged(ScannedDep),
 ) error{ OutOfMemory, HeaderParseFailed }!void {
     const coll = ast.store.getCollection(packages);
     const fields = ast.store.recordFieldSlice(.{ .span = coll.span });
     for (fields) |idx| {
+        if (skip_field) |skip| {
+            if (idx == skip) continue;
+        }
         const field = ast.store.getRecordField(idx);
         const value_expr = field.value orelse continue;
         const spec = (try stringFromExpr(allocator, ast, value_expr)) orelse return error.HeaderParseFailed;
@@ -1274,14 +1288,20 @@ pub const CtxFetcher = struct {
         const root_file = try std.fs.path.join(allocator, &.{ package_dir, "main.roc" });
 
         // Warm path: a sidecar means the bundle was fully extracted and
-        // scanned before.
+        // scanned before. The size limit applies to cached bundles too, so
+        // having a package cached never changes whether it is accepted.
         if (self.fs.fileExists(sidecar_path)) {
-            if (self.readSidecar(allocator, sidecar_path, package_dir, root_file)) |fetched| {
-                return fetched;
+            if (self.readSidecar(allocator, sidecar_path, package_dir, root_file)) |cached| {
+                if (max_expanded_bytes) |max| {
+                    if (cached.expanded_bytes > max) return error.ExpandedSizeLimitExceeded;
+                }
+                return cached.fetched;
             }
             // Unreadable or outdated sidecar: regenerate it from the
             // extracted bundle below.
         }
+
+        var expanded_bytes: ?u64 = null;
 
         if (!self.fs.fileExists(root_file)) {
             if (!self.fs.fileExists(package_dir)) {
@@ -1293,7 +1313,7 @@ pub const CtxFetcher = struct {
                     error.OutOfMemory => return error.OutOfMemory,
                     else => return error.DownloadFailed,
                 };
-                _ = self.fs.fetchUrl(self.gpa, url, package_dir, max_expanded_bytes) catch |err| {
+                expanded_bytes = self.fs.fetchUrl(self.gpa, url, package_dir, max_expanded_bytes) catch |err| {
                     self.fs.deleteTree(package_dir) catch {};
                     return switch (err) {
                         error.OutOfMemory => error.OutOfMemory,
@@ -1315,7 +1335,14 @@ pub const CtxFetcher = struct {
         var scanned = try scanHeaderSource(allocator, self.gpa, root_file, src);
         scanned.content_bytes = try self.measureContentBytes(allocator, package_dir, hash);
 
-        self.writeSidecar(allocator, sidecar_path, scanned) catch |err| switch (err) {
+        // When the bundle was already extracted but had no sidecar, the tar
+        // stream size is gone; the content size is the derivable equivalent.
+        const recorded_expanded = expanded_bytes orelse scanned.content_bytes;
+        if (max_expanded_bytes) |max| {
+            if (recorded_expanded > max) return error.ExpandedSizeLimitExceeded;
+        }
+
+        self.writeSidecar(allocator, sidecar_path, scanned, recorded_expanded) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             // A missing sidecar only costs a rescan next build.
             else => {},
@@ -1350,7 +1377,12 @@ pub const CtxFetcher = struct {
         return total;
     }
 
-    fn readSidecar(self: *CtxFetcher, allocator: Allocator, sidecar_path: []const u8, package_dir: []const u8, root_file: []const u8) ?FetchedPackage {
+    const CachedPackage = struct {
+        fetched: FetchedPackage,
+        expanded_bytes: u64,
+    };
+
+    fn readSidecar(self: *CtxFetcher, allocator: Allocator, sidecar_path: []const u8, package_dir: []const u8, root_file: []const u8) ?CachedPackage {
         const bytes = self.fs.readFile(sidecar_path, allocator) catch return null;
         const parsed = std.json.parseFromSlice(Sidecar, self.gpa, bytes, .{}) catch return null;
         defer parsed.deinit();
@@ -1368,15 +1400,18 @@ pub const CtxFetcher = struct {
         }
 
         return .{
-            .kind = kind,
-            .root_file = root_file,
-            .root_dir = allocator.dupe(u8, package_dir) catch return null,
-            .content_bytes = parsed.value.content_bytes,
-            .deps = deps,
+            .fetched = .{
+                .kind = kind,
+                .root_file = root_file,
+                .root_dir = allocator.dupe(u8, package_dir) catch return null,
+                .content_bytes = parsed.value.content_bytes,
+                .deps = deps,
+            },
+            .expanded_bytes = parsed.value.expanded_bytes,
         };
     }
 
-    fn writeSidecar(self: *CtxFetcher, allocator: Allocator, sidecar_path: []const u8, scanned: FetchedPackage) !void {
+    fn writeSidecar(self: *CtxFetcher, allocator: Allocator, sidecar_path: []const u8, scanned: FetchedPackage, expanded_bytes: u64) !void {
         const deps = try allocator.alloc(Sidecar.SidecarDep, scanned.deps.len);
         for (deps, scanned.deps) |*dep, source| {
             dep.* = .{ .alias = source.alias, .spec = source.spec, .is_platform = source.is_platform };
@@ -1384,6 +1419,7 @@ pub const CtxFetcher = struct {
         const sidecar = Sidecar{
             .format = Sidecar.current_format,
             .kind = @tagName(scanned.kind),
+            .expanded_bytes = expanded_bytes,
             .content_bytes = scanned.content_bytes,
             .deps = deps,
         };

@@ -222,8 +222,9 @@ fn downloadToFile(
             error.PathAlreadyExists => continue, // Retry with new random suffix
             else => return error.FileError,
         };
+        var file_closed = false;
         errdefer {
-            file.close(io);
+            if (!file_closed) file.close(io);
             dir.deleteFile(io, filename) catch {};
         }
 
@@ -246,6 +247,7 @@ fn downloadToFile(
 
         // Close file after fetch completes
         file.close(io);
+        file_closed = true;
 
         // Check for successful response
         if (fetch_result.status != .ok) {
