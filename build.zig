@@ -4783,9 +4783,9 @@ fn addMainExe(
         );
         exe.step.dependOn(&copy_cross_builtins_extern.step);
 
-        if (std.mem.eql(u8, cross_target.name, "x64musl")) {
+        if (std.mem.eql(u8, cross_target.name, "x64musl") or std.mem.eql(u8, cross_target.name, "arm64musl")) {
             const default_platform_runtime_obj = b.addObject(.{
-                .name = "roc_default_platform_x64musl",
+                .name = b.fmt("roc_default_platform_{s}", .{cross_target.name}),
                 .root_module = b.createModule(.{
                     .root_source_file = b.path("src/default_platform/linux_runtime.zig"),
                     .target = cross_resolved_target,

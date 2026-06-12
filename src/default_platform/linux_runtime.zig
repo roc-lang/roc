@@ -159,12 +159,21 @@ fn signalHandler(sig: linux.SIG, _: *const linux.siginfo_t, ctx: ?*anyopaque) ca
         writeLiteral(stderr_fd, "\n\n");
     }
 
-    if (builtin.cpu.arch == .x86_64) {
-        if (ctx) |context_ptr| {
-            const context: *const X86_64UContext = @ptrCast(@alignCast(context_ptr));
-            const rip: usize = @bitCast(context.mcontext.gregs[REG_RIP]);
-            const rbp: usize = @bitCast(context.mcontext.gregs[REG_RBP]);
-            printBacktrace(rip, rbp);
+    if (ctx) |context_ptr| {
+        switch (builtin.cpu.arch) {
+            .x86_64 => {
+                const context: *const X86_64UContext = @ptrCast(@alignCast(context_ptr));
+                const rip: usize = @bitCast(context.mcontext.gregs[REG_RIP]);
+                const rbp: usize = @bitCast(context.mcontext.gregs[REG_RBP]);
+                printBacktrace(rip, rbp);
+            },
+            .aarch64 => {
+                const context: *const Aarch64UContext = @ptrCast(@alignCast(context_ptr));
+                const pc: usize = @intCast(context.mcontext.pc);
+                const fp: usize = @intCast(context.mcontext.regs[29]);
+                printBacktrace(pc, fp);
+            },
+            else => {},
         }
     }
 
@@ -186,6 +195,23 @@ const X86_64UContext = extern struct {
     stack: linux.stack_t,
     mcontext: X86_64MContext,
     sigmask: linux.sigset_t,
+};
+
+const Aarch64MContext = extern struct {
+    fault_address: u64,
+    regs: [31]u64,
+    sp: u64,
+    pc: u64,
+    pstate: u64,
+    reserved: [4096]u8 align(16),
+};
+
+const Aarch64UContext = extern struct {
+    flags: u64,
+    link: ?*anyopaque,
+    stack: linux.stack_t,
+    sigmask: linux.sigset_t,
+    mcontext: Aarch64MContext,
 };
 
 const Frame = extern struct {

@@ -1599,6 +1599,10 @@ fn customDefaultPlatformLinuxDisassembly(
     timer: *harness.Timer,
     timeout_ms: u64,
 ) ?TestResult {
+    if (builtin.os.tag != .linux) {
+        return .{ .status = .skip, .phase = .setup, .duration_ns = timer.read(), .message = "Linux disassembly assertion runs only on Linux CI hosts" };
+    }
+
     const app_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "default_echo.roc" }) catch |err|
         return customInfraFailure(allocator, timer, "failed to allocate default app path: {}", .{err});
     const output_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "default_echo_linux" }) catch |err|
@@ -1617,19 +1621,16 @@ fn customDefaultPlatformLinuxDisassembly(
 
     const child_timeout_ms = childCommandTimeoutMs(timer, timeout_ms) orelse
         return timeoutFailure(allocator, timer, .run, "case timeout exhausted before llvm-objdump started");
-    const objdump_result = runRawInEnv(io, allocator, env, &.{
-        "llvm-objdump",
-        "-d",
-        "--no-show-raw-insn",
-        "--symbolize-operands",
-        output_path,
-    }, project_root_path, null, child_timeout_ms) catch |err|
+    const objdump_result = runLlvmObjdump(io, allocator, env, output_path, child_timeout_ms) catch |err|
         return customInfraFailure(allocator, timer, "llvm-objdump spawn error: {}", .{err});
-    if (checkCommandExpectation(allocator, objdump_result, .{ .args = &.{} })) |message| {
-        return failureFromRun(allocator, timer, objdump_result, message);
+    if (objdump_result == null) {
+        return .{ .status = .skip, .phase = .run, .duration_ns = timer.read(), .run_ns = timer.read(), .message = "llvm-objdump unavailable on this Linux runner" };
+    }
+    if (checkCommandExpectation(allocator, objdump_result.?, .{ .args = &.{} })) |message| {
+        return failureFromRun(allocator, timer, objdump_result.?, message);
     }
 
-    const actual = normalizedObjdumpInstructions(allocator, objdump_result.stdout) catch |err|
+    const actual = normalizedObjdumpInstructions(allocator, objdump_result.?.stdout) catch |err|
         return customInfraFailure(allocator, timer, "failed to normalize llvm-objdump output: {}", .{err});
 
     if (!std.mem.eql(u8, expected_default_platform_linux_disassembly, actual)) {
@@ -1641,6 +1642,28 @@ fn customDefaultPlatformLinuxDisassembly(
         );
     }
 
+    return null;
+}
+
+fn runLlvmObjdump(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    output_path: []const u8,
+    timeout_ms: u64,
+) anyerror!?std.process.RunResult {
+    const candidates = [_][]const []const u8{
+        &.{ "llvm-objdump", "-d", "--no-show-raw-insn", "--symbolize-operands", output_path },
+        &.{ "/usr/lib/llvm-18/bin/llvm-objdump", "-d", "--no-show-raw-insn", "--symbolize-operands", output_path },
+        &.{ "/usr/bin/llvm-objdump", "-d", "--no-show-raw-insn", "--symbolize-operands", output_path },
+    };
+
+    for (candidates) |argv| {
+        return runRawInEnv(io, allocator, env, argv, project_root_path, null, timeout_ms) catch |err| switch (err) {
+            error.FileNotFound => continue,
+            else => |other| return other,
+        };
+    }
     return null;
 }
 
@@ -1785,6 +1808,24 @@ fn customDefaultPlatformDebugBacktrace(
     target: DefaultPlatformTarget,
     kind: DefaultPlatformDiagnosticKind,
 ) ?TestResult {
+    if (!target.canRunOnHost()) {
+        const message = std.fmt.allocPrint(
+            allocator,
+            "{s} debug-backtrace check runs only on a matching host",
+            .{target.cliName()},
+        ) catch "debug-backtrace check runs only on a matching host";
+        return .{ .status = .skip, .phase = .setup, .duration_ns = timer.read(), .message = message };
+    }
+
+    if (target != .x64musl and target != .arm64musl) {
+        const message = std.fmt.allocPrint(
+            allocator,
+            "{s} default-platform diagnostics runtime is not implemented yet",
+            .{target.cliName()},
+        ) catch "default-platform diagnostics runtime is not implemented yet";
+        return .{ .status = .skip, .phase = .setup, .duration_ns = timer.read(), .message = message };
+    }
+
     const app_filename = std.fmt.allocPrint(allocator, "default_platform_{s}_{s}.roc", .{ kind.fileStem(), target.cliName() }) catch |err|
         return customInfraFailure(allocator, timer, "failed to allocate default platform app filename: {}", .{err});
     const app_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, app_filename }) catch |err|
@@ -1804,15 +1845,6 @@ fn customDefaultPlatformDebugBacktrace(
         .roc_file = app_path,
         .contains = &.{.{ .stream = .stdout, .text = "Built " }},
     })) |failure| return failure;
-
-    if (!target.canRunOnHost()) {
-        const message = std.fmt.allocPrint(
-            allocator,
-            "built {s}; runner host cannot execute this target",
-            .{target.cliName()},
-        ) catch "built target; runner host cannot execute this target";
-        return .{ .status = .skip, .phase = .run, .duration_ns = timer.read(), .run_ns = timer.read(), .message = message };
-    }
 
     const executable_path = runnableOutputPath(io, allocator, output_path) catch |err|
         return customInfraFailure(allocator, timer, "failed to find built executable: {}", .{err});

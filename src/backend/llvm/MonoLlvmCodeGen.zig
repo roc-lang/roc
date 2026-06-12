@@ -1416,7 +1416,10 @@ pub const MonoLlvmCodeGen = struct {
         arg_layouts: []const layout.Idx,
         ret_layout: layout.Idx,
     ) Error!void {
-        if (self.target.cpu.arch != .x86_64) return error.CompilationFailed;
+        switch (self.target.cpu.arch) {
+            .x86_64, .aarch64 => {},
+            else => return error.CompilationFailed,
+        }
 
         const builder = self.builder orelse return error.CompilationFailed;
         const proc_fn = self.proc_registry.get(@intFromEnum(entry_proc)) orelse return error.CompilationFailed;
@@ -4794,8 +4797,22 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn emitLinuxWriteStdout(self: *MonoLlvmCodeGen, ptr: LlvmBuilder.Value, len: LlvmBuilder.Value) Error!void {
-        if (self.target.cpu.arch != .x86_64) return error.CompilationFailed;
+        switch (self.target.cpu.arch) {
+            .x86_64 => try self.emitX86_64LinuxWriteStdout(ptr, len),
+            .aarch64 => try self.emitAarch64LinuxWriteStdout(ptr, len),
+            else => return error.CompilationFailed,
+        }
+    }
 
+    fn emitLinuxExitSyscall(self: *MonoLlvmCodeGen, code: LlvmBuilder.Value) Error!void {
+        switch (self.target.cpu.arch) {
+            .x86_64 => try self.emitX86_64LinuxExitSyscall(code),
+            .aarch64 => try self.emitAarch64LinuxExitSyscall(code),
+            else => return error.CompilationFailed,
+        }
+    }
+
+    fn emitX86_64LinuxWriteStdout(self: *MonoLlvmCodeGen, ptr: LlvmBuilder.Value, len: LlvmBuilder.Value) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
         const usize_ty = self.ptrSizedIntType();
@@ -4817,9 +4834,29 @@ pub const MonoLlvmCodeGen = struct {
         ) catch return error.OutOfMemory;
     }
 
-    fn emitLinuxExitSyscall(self: *MonoLlvmCodeGen, code: LlvmBuilder.Value) Error!void {
-        if (self.target.cpu.arch != .x86_64) return error.CompilationFailed;
+    fn emitAarch64LinuxWriteStdout(self: *MonoLlvmCodeGen, ptr: LlvmBuilder.Value, len: LlvmBuilder.Value) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const usize_ty = self.ptrSizedIntType();
+        const fn_ty = builder.fnType(usize_ty, &.{ usize_ty, usize_ty, try self.ptrType(), usize_ty }, .normal) catch return error.OutOfMemory;
 
+        _ = wip.callAsm(
+            .none,
+            fn_ty,
+            .{ .sideeffect = true },
+            builder.string("svc #0") catch return error.OutOfMemory,
+            builder.string("={x0},{x8},{x0},{x1},{x2},~{memory}") catch return error.OutOfMemory,
+            &.{
+                builder.intValue(usize_ty, 64) catch return error.OutOfMemory,
+                builder.intValue(usize_ty, 1) catch return error.OutOfMemory,
+                ptr,
+                len,
+            },
+            "",
+        ) catch return error.OutOfMemory;
+    }
+
+    fn emitX86_64LinuxExitSyscall(self: *MonoLlvmCodeGen, code: LlvmBuilder.Value) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
         const usize_ty = self.ptrSizedIntType();
@@ -4833,6 +4870,27 @@ pub const MonoLlvmCodeGen = struct {
             builder.string("{rax},{rdi},~{rcx},~{r11},~{memory}") catch return error.OutOfMemory,
             &.{
                 builder.intValue(usize_ty, 60) catch return error.OutOfMemory,
+                code,
+            },
+            "",
+        ) catch return error.OutOfMemory;
+        _ = wip.@"unreachable"() catch return error.OutOfMemory;
+    }
+
+    fn emitAarch64LinuxExitSyscall(self: *MonoLlvmCodeGen, code: LlvmBuilder.Value) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const usize_ty = self.ptrSizedIntType();
+        const fn_ty = builder.fnType(.void, &.{ usize_ty, usize_ty }, .normal) catch return error.OutOfMemory;
+
+        _ = wip.callAsm(
+            .none,
+            fn_ty,
+            .{ .sideeffect = true },
+            builder.string("svc #0") catch return error.OutOfMemory,
+            builder.string("{x8},{x0},~{memory}") catch return error.OutOfMemory,
+            &.{
+                builder.intValue(usize_ty, 94) catch return error.OutOfMemory,
                 code,
             },
             "",

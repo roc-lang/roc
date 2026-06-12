@@ -259,10 +259,12 @@ const BuiltinsObjects = struct {
 
 const DefaultPlatformRuntimeObjects = struct {
     const x64musl = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64musl/roc_default_platform.o");
+    const arm64musl = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64musl/roc_default_platform.o");
 
     pub fn forTarget(target: RocTarget) ?[]const u8 {
         return switch (target) {
             .x64musl => x64musl,
+            .arm64musl => arm64musl,
             else => null,
         };
     }
