@@ -322,6 +322,910 @@ const InspectDefEntry = union(enum) {
     }
 };
 
+/// Identity of a node in a specialization's instantiation graph.
+const NodeId = enum(u32) { _ };
+
+/// Tag variant inside an instantiation-graph row. Names are program NameStore
+/// ids translated at instantiation so rows from different checked modules
+/// compare uniformly.
+const InstTag = struct {
+    name: names.TagNameId,
+    checked_name: names.TagNameId,
+    payloads: []NodeId,
+};
+
+/// Record field inside an instantiation-graph row.
+const InstField = struct {
+    name: names.RecordFieldNameId,
+    ty: NodeId,
+};
+
+/// Defaulting evidence carried by an unresolved instantiation-graph node until
+/// unification resolves it or materialization applies the default.
+const InstVariable = struct {
+    numeric_default_phase: ?checked.NumericDefaultPhase = null,
+    row_default: ?checked.RowDefault = null,
+};
+
+/// Backing of a named instantiation-graph node.
+const InstBacking = struct {
+    node: NodeId,
+    use: Type.BackingUse,
+};
+
+/// Named (alias/nominal/opaque) instantiation-graph node.
+const InstNamed = struct {
+    named_type: Type.NamedType,
+    def: Type.TypeDef,
+    kind: Type.NamedKind,
+    builtin_owner: ?static_dispatch.BuiltinOwner,
+    args: []NodeId,
+    backing: ?InstBacking,
+};
+
+/// Content of an instantiation-graph node. Rows carry explicit extension
+/// links; `redirect` is the union-find edge.
+const InstNode = union(enum) {
+    redirect: NodeId,
+    unresolved: InstVariable,
+    primitive: Type.Primitive,
+    list: NodeId,
+    box: NodeId,
+    tuple: []NodeId,
+    func: struct {
+        args: []NodeId,
+        ret: NodeId,
+    },
+    tag_union: struct {
+        tags: []InstTag,
+        ext: NodeId,
+    },
+    record: struct {
+        fields: []InstField,
+        ext: NodeId,
+    },
+    empty_tag_union,
+    empty_record,
+    named: InstNamed,
+    erased: names.TypeDigest,
+    zst,
+};
+
+const NodePair = struct {
+    left: NodeId,
+    right: NodeId,
+};
+
+/// Per-specialization type solver. Checked types instantiate into union-find
+/// nodes with explicit row extension links; constraints unify nodes
+/// order-independently; Monotypes are materialized views of solved nodes and
+/// are refilled in place when their node gains evidence. Cross-specialization
+/// edges import final Monotypes as closed structure, so a specialization that
+/// tries to exceed its requested type is a unification conflict, not a silent
+/// divergence.
+const InstGraph = struct {
+    allocator: Allocator,
+    builder: *Builder,
+    arena_impl: std.heap.ArenaAllocator,
+    nodes: std.ArrayList(InstNode),
+    /// Materialized Monotype views per node root. The same root may have
+    /// several views when roots with existing views are merged; all views of a
+    /// root hold identical content.
+    node_monos: std.AutoHashMap(NodeId, std.ArrayList(Type.TypeId)),
+    /// Reverse view links, also the import memo: a Monotype already connected
+    /// to this graph unifies with its node instead of being copied.
+    mono_nodes: std.AutoHashMap(Type.TypeId, NodeId),
+    /// Roots whose Monotype views need their content refilled. Drained when no
+    /// constraint walk holds slices into the type store.
+    dirty: std.ArrayList(NodeId),
+    /// Row nodes by the extension node they currently chain through. A change
+    /// to an extension changes the flattened view of every row above it, so
+    /// dirty marks propagate through these back references.
+    row_parents: std.AutoHashMap(NodeId, std.ArrayList(NodeId)),
+
+    fn create(allocator: Allocator, builder: *Builder) Allocator.Error!*InstGraph {
+        const graph = try allocator.create(InstGraph);
+        graph.* = .{
+            .allocator = allocator,
+            .builder = builder,
+            .arena_impl = std.heap.ArenaAllocator.init(allocator),
+            .nodes = .empty,
+            .node_monos = std.AutoHashMap(NodeId, std.ArrayList(Type.TypeId)).init(allocator),
+            .mono_nodes = std.AutoHashMap(Type.TypeId, NodeId).init(allocator),
+            .dirty = .empty,
+            .row_parents = std.AutoHashMap(NodeId, std.ArrayList(NodeId)).init(allocator),
+        };
+        return graph;
+    }
+
+    fn destroy(self: *InstGraph) void {
+        const allocator = self.allocator;
+        var views = self.node_monos.valueIterator();
+        while (views.next()) |list| {
+            list.deinit(allocator);
+        }
+        self.node_monos.deinit();
+        var parents = self.row_parents.valueIterator();
+        while (parents.next()) |list| {
+            list.deinit(allocator);
+        }
+        self.row_parents.deinit();
+        self.mono_nodes.deinit();
+        self.dirty.deinit(allocator);
+        self.nodes.deinit(allocator);
+        self.arena_impl.deinit();
+        allocator.destroy(self);
+    }
+
+    fn arena(self: *InstGraph) Allocator {
+        return self.arena_impl.allocator();
+    }
+
+    fn newNode(self: *InstGraph, node_content: InstNode) Allocator.Error!NodeId {
+        const id: NodeId = @enumFromInt(@as(u32, @intCast(self.nodes.items.len)));
+        try self.nodes.append(self.allocator, node_content);
+        try self.registerRowParent(id, node_content);
+        return id;
+    }
+
+    fn registerRowParent(self: *InstGraph, row: NodeId, node_content: InstNode) Allocator.Error!void {
+        const ext = switch (node_content) {
+            .tag_union => |tag_union| tag_union.ext,
+            .record => |record| record.ext,
+            else => return,
+        };
+        const entry = try self.row_parents.getOrPut(self.find(ext));
+        if (!entry.found_existing) entry.value_ptr.* = .empty;
+        try entry.value_ptr.append(self.allocator, row);
+    }
+
+    fn find(self: *InstGraph, id: NodeId) NodeId {
+        var current = id;
+        while (true) {
+            switch (self.nodes.items[@intFromEnum(current)]) {
+                .redirect => |next| current = next,
+                else => break,
+            }
+        }
+        // Path compression: repoint every redirect on the chain at the root.
+        var walk = id;
+        while (walk != current) {
+            const next = switch (self.nodes.items[@intFromEnum(walk)]) {
+                .redirect => |next| next,
+                else => unreachable,
+            };
+            self.nodes.items[@intFromEnum(walk)] = .{ .redirect = current };
+            walk = next;
+        }
+        return current;
+    }
+
+    fn content(self: *InstGraph, id: NodeId) InstNode {
+        return self.nodes.items[@intFromEnum(self.find(id))];
+    }
+
+    /// Queue the views of a changed root and of every row whose flattened view
+    /// chains through it for a content refill.
+    fn markDirty(self: *InstGraph, changed: NodeId) Allocator.Error!void {
+        var pending = std.ArrayList(NodeId).empty;
+        defer pending.deinit(self.allocator);
+        var visited = std.AutoHashMap(NodeId, void).init(self.allocator);
+        defer visited.deinit();
+        try pending.append(self.allocator, changed);
+        while (pending.pop()) |raw| {
+            const root = self.find(raw);
+            if (visited.contains(root)) continue;
+            try visited.put(root, {});
+            if (self.node_monos.contains(root)) {
+                try self.dirty.append(self.allocator, root);
+            }
+            if (self.row_parents.get(root)) |parents| {
+                try pending.appendSlice(self.allocator, parents.items);
+            }
+            if (self.row_parents.get(raw)) |parents| {
+                if (raw != root) try pending.appendSlice(self.allocator, parents.items);
+            }
+        }
+    }
+
+    /// Redirect `loser` into `winner`, moving Monotype views and row back
+    /// references across, and queueing affected views for a content refill.
+    fn union_(self: *InstGraph, raw_winner: NodeId, raw_loser: NodeId) Allocator.Error!void {
+        const winner = self.find(raw_winner);
+        const loser = self.find(raw_loser);
+        if (winner == loser) return;
+        self.nodes.items[@intFromEnum(loser)] = .{ .redirect = winner };
+        if (self.node_monos.fetchRemove(loser)) |moved| {
+            var moved_list = moved.value;
+            const entry = try self.node_monos.getOrPut(winner);
+            if (!entry.found_existing) entry.value_ptr.* = .empty;
+            try entry.value_ptr.appendSlice(self.allocator, moved_list.items);
+            for (moved_list.items) |ty| {
+                try self.mono_nodes.put(ty, winner);
+            }
+            moved_list.deinit(self.allocator);
+        }
+        if (self.row_parents.fetchRemove(loser)) |moved| {
+            var moved_list = moved.value;
+            const entry = try self.row_parents.getOrPut(winner);
+            if (!entry.found_existing) entry.value_ptr.* = .empty;
+            try entry.value_ptr.appendSlice(self.allocator, moved_list.items);
+            moved_list.deinit(self.allocator);
+        }
+        try self.markDirty(winner);
+    }
+
+    /// Replace a root's content in place and queue affected views for refill.
+    fn setContent(self: *InstGraph, root: NodeId, new_content: InstNode) Allocator.Error!void {
+        self.nodes.items[@intFromEnum(root)] = new_content;
+        try self.registerRowParent(root, new_content);
+        try self.markDirty(root);
+    }
+
+    fn unify(self: *InstGraph, a: NodeId, b: NodeId) Allocator.Error!void {
+        var pending = std.ArrayList(NodePair).empty;
+        defer pending.deinit(self.allocator);
+        var related = std.AutoHashMap(NodePair, void).init(self.allocator);
+        defer related.deinit();
+        try pending.append(self.allocator, .{ .left = a, .right = b });
+        while (pending.pop()) |pair| {
+            try self.unifyRoots(pair.left, pair.right, &pending, &related);
+        }
+    }
+
+    fn unifyRoots(
+        self: *InstGraph,
+        raw_left: NodeId,
+        raw_right: NodeId,
+        pending: *std.ArrayList(NodePair),
+        related: *std.AutoHashMap(NodePair, void),
+    ) Allocator.Error!void {
+        const left = self.find(raw_left);
+        const right = self.find(raw_right);
+        if (left == right) return;
+        const pair = NodePair{ .left = left, .right = right };
+        if (related.contains(pair)) return;
+        try related.put(pair, {});
+
+        const left_content = self.nodes.items[@intFromEnum(left)];
+        const right_content = self.nodes.items[@intFromEnum(right)];
+
+        switch (left_content) {
+            .redirect => unreachable,
+            .unresolved => |left_var| switch (right_content) {
+                .unresolved => |right_var| {
+                    try self.setContent(right, .{ .unresolved = mergeVariables(left_var, right_var) });
+                    try self.union_(right, left);
+                },
+                else => try self.union_(right, left),
+            },
+            else => switch (right_content) {
+                .unresolved => try self.union_(left, right),
+                else => try self.unifyConcrete(left, left_content, right, right_content, pending),
+            },
+        }
+    }
+
+    fn mergeVariables(a: InstVariable, b: InstVariable) InstVariable {
+        return .{
+            .numeric_default_phase = a.numeric_default_phase orelse b.numeric_default_phase,
+            .row_default = a.row_default orelse b.row_default,
+        };
+    }
+
+    fn unifyConcrete(
+        self: *InstGraph,
+        left: NodeId,
+        left_content: InstNode,
+        right: NodeId,
+        right_content: InstNode,
+        pending: *std.ArrayList(NodePair),
+    ) Allocator.Error!void {
+        switch (left_content) {
+            .redirect, .unresolved => unreachable,
+            .primitive => |left_prim| switch (right_content) {
+                .primitive => |right_prim| {
+                    if (left_prim != right_prim) Common.invariant("instantiation unified two different primitive types");
+                    try self.union_(left, right);
+                },
+                .named => try self.unifyThroughBacking(right, right_content, left, pending),
+                else => Common.invariant("instantiation unified a primitive type with a non-primitive type"),
+            },
+            .list => |left_elem| switch (right_content) {
+                .list => |right_elem| {
+                    try pending.append(self.allocator, .{ .left = left_elem, .right = right_elem });
+                    try self.union_(left, right);
+                },
+                .named => try self.unifyThroughBacking(right, right_content, left, pending),
+                else => Common.invariant("instantiation unified a List with a non-List type"),
+            },
+            .box => |left_elem| switch (right_content) {
+                .box => |right_elem| {
+                    try pending.append(self.allocator, .{ .left = left_elem, .right = right_elem });
+                    try self.union_(left, right);
+                },
+                .named => try self.unifyThroughBacking(right, right_content, left, pending),
+                else => Common.invariant("instantiation unified a Box with a non-Box type"),
+            },
+            .tuple => |left_items| switch (right_content) {
+                .tuple => |right_items| {
+                    if (left_items.len != right_items.len) Common.invariant("instantiation unified tuples of different arity");
+                    for (left_items, right_items) |left_item, right_item| {
+                        try pending.append(self.allocator, .{ .left = left_item, .right = right_item });
+                    }
+                    try self.union_(left, right);
+                },
+                .named => try self.unifyThroughBacking(right, right_content, left, pending),
+                else => Common.invariant("instantiation unified a tuple with a non-tuple type"),
+            },
+            .func => |left_fn| switch (right_content) {
+                .func => |right_fn| {
+                    if (left_fn.args.len != right_fn.args.len) Common.invariant("instantiation unified functions of different arity");
+                    for (left_fn.args, right_fn.args) |left_arg, right_arg| {
+                        try pending.append(self.allocator, .{ .left = left_arg, .right = right_arg });
+                    }
+                    try pending.append(self.allocator, .{ .left = left_fn.ret, .right = right_fn.ret });
+                    try self.union_(left, right);
+                },
+                .named => try self.unifyThroughBacking(right, right_content, left, pending),
+                else => Common.invariant("instantiation unified a function with a non-function type"),
+            },
+            .tag_union => switch (right_content) {
+                .tag_union => try self.unifyTagRows(left, right, pending),
+                .empty_tag_union => try self.unifyRowWithEmpty(left, right, .tag_union),
+                .named => try self.unifyThroughBacking(right, right_content, left, pending),
+                else => Common.invariant("instantiation unified a tag union with a non-tag-union type"),
+            },
+            .empty_tag_union => switch (right_content) {
+                .empty_tag_union => try self.union_(left, right),
+                .tag_union => try self.unifyRowWithEmpty(right, left, .tag_union),
+                .named => try self.unifyThroughBacking(right, right_content, left, pending),
+                else => Common.invariant("instantiation unified an empty tag union with an incompatible type"),
+            },
+            .record => switch (right_content) {
+                .record => try self.unifyRecordRows(left, right, pending),
+                .empty_record => try self.unifyRowWithEmpty(left, right, .record),
+                .named => try self.unifyThroughBacking(right, right_content, left, pending),
+                else => Common.invariant("instantiation unified a record with a non-record type"),
+            },
+            .empty_record => switch (right_content) {
+                .empty_record => try self.union_(left, right),
+                .record => try self.unifyRowWithEmpty(right, left, .record),
+                .named => try self.unifyThroughBacking(right, right_content, left, pending),
+                else => Common.invariant("instantiation unified an empty record with an incompatible type"),
+            },
+            .named => |left_named| switch (right_content) {
+                .named => |right_named| {
+                    if (std.meta.eql(left_named.def, right_named.def) and left_named.args.len == right_named.args.len) {
+                        for (left_named.args, right_named.args) |left_arg, right_arg| {
+                            try pending.append(self.allocator, .{ .left = left_arg, .right = right_arg });
+                        }
+                        if (left_named.backing) |left_backing| {
+                            if (right_named.backing) |right_backing| {
+                                try pending.append(self.allocator, .{ .left = left_backing.node, .right = right_backing.node });
+                            }
+                        }
+                        try self.union_(left, right);
+                        return;
+                    }
+                    try self.unifyThroughBacking(left, left_content, right, pending);
+                },
+                else => try self.unifyThroughBacking(left, left_content, right, pending),
+            },
+            .erased => |left_digest| switch (right_content) {
+                .erased => |right_digest| {
+                    if (!std.mem.eql(u8, left_digest.bytes[0..], right_digest.bytes[0..])) {
+                        Common.invariant("instantiation unified two different erased types");
+                    }
+                    try self.union_(left, right);
+                },
+                .named => try self.unifyThroughBacking(right, right_content, left, pending),
+                else => Common.invariant("instantiation unified an erased type with an incompatible type"),
+            },
+            .zst => switch (right_content) {
+                .zst => try self.union_(left, right),
+                .named => try self.unifyThroughBacking(right, right_content, left, pending),
+                else => Common.invariant("instantiation unified a zero-sized type with an incompatible type"),
+            },
+        }
+    }
+
+    /// A named type met a structurally different type: relate through the named
+    /// type's backing without merging the roots, so the named wrapper survives
+    /// on its own node while both sides share structural evidence.
+    fn unifyThroughBacking(
+        self: *InstGraph,
+        named_node: NodeId,
+        named_content: InstNode,
+        other: NodeId,
+        pending: *std.ArrayList(NodePair),
+    ) Allocator.Error!void {
+        _ = named_node;
+        const named = switch (named_content) {
+            .named => |named| named,
+            else => unreachable,
+        };
+        const backing = named.backing orelse
+            Common.invariant("instantiation unified an opaque type without backing against a structural type");
+        try pending.append(self.allocator, .{ .left = backing.node, .right = other });
+    }
+
+    const RowKind = enum {
+        tag_union,
+        record,
+    };
+
+    /// A row with a head met an empty row: the head must be empty too, and the
+    /// row's extension must also be empty.
+    fn unifyRowWithEmpty(self: *InstGraph, row: NodeId, empty: NodeId, kind: RowKind) Allocator.Error!void {
+        switch (kind) {
+            .tag_union => {
+                const flat = try self.flattenTagRow(row);
+                if (flat.tags.len != 0) Common.invariant("instantiation unified a non-empty tag union with an empty tag union");
+                try self.unify(flat.ext, empty);
+                try self.setContent(row, .empty_tag_union);
+                try self.union_(empty, row);
+            },
+            .record => {
+                const flat = try self.flattenRecordRow(row);
+                if (flat.fields.len != 0) Common.invariant("instantiation unified a non-empty record with an empty record");
+                try self.unify(flat.ext, empty);
+                try self.setContent(row, .empty_record);
+                try self.union_(empty, row);
+            },
+        }
+    }
+
+    const FlatTagRow = struct {
+        tags: []InstTag,
+        ext: NodeId,
+    };
+
+    const FlatRecordRow = struct {
+        fields: []InstField,
+        ext: NodeId,
+    };
+
+    /// Chase a tag row's extension chain and rewrite the root to a single
+    /// flattened row. The returned extension is unresolved (open), an empty tag
+    /// union (closed), or compressed out.
+    fn flattenTagRow(self: *InstGraph, raw_root: NodeId) Allocator.Error!FlatTagRow {
+        const root = self.find(raw_root);
+        const row = switch (self.nodes.items[@intFromEnum(root)]) {
+            .tag_union => |row| row,
+            else => Common.invariant("instantiation flattened a non-tag-union row"),
+        };
+        var tags = std.ArrayList(InstTag).empty;
+        defer tags.deinit(self.allocator);
+        try tags.appendSlice(self.allocator, row.tags);
+
+        var seen = std.AutoHashMap(NodeId, void).init(self.allocator);
+        defer seen.deinit();
+        try seen.put(root, {});
+
+        var ext = self.find(row.ext);
+        while (true) {
+            if (seen.contains(ext)) break;
+            try seen.put(ext, {});
+            switch (self.nodes.items[@intFromEnum(ext)]) {
+                .tag_union => |tail| {
+                    try tags.appendSlice(self.allocator, tail.tags);
+                    ext = self.find(tail.ext);
+                },
+                .unresolved, .empty_tag_union => break,
+                else => Common.invariant("instantiation tag row extended into a non-tag-union type"),
+            }
+        }
+
+        const flat_tags = try self.arena().dupe(InstTag, tags.items);
+        const flattened: InstNode = .{ .tag_union = .{ .tags = flat_tags, .ext = ext } };
+        self.nodes.items[@intFromEnum(root)] = flattened;
+        try self.registerRowParent(root, flattened);
+        return .{ .tags = flat_tags, .ext = ext };
+    }
+
+    fn flattenRecordRow(self: *InstGraph, raw_root: NodeId) Allocator.Error!FlatRecordRow {
+        const root = self.find(raw_root);
+        const row = switch (self.nodes.items[@intFromEnum(root)]) {
+            .record => |row| row,
+            else => Common.invariant("instantiation flattened a non-record row"),
+        };
+        var fields = std.ArrayList(InstField).empty;
+        defer fields.deinit(self.allocator);
+        try fields.appendSlice(self.allocator, row.fields);
+
+        var seen = std.AutoHashMap(NodeId, void).init(self.allocator);
+        defer seen.deinit();
+        try seen.put(root, {});
+
+        var ext = self.find(row.ext);
+        while (true) {
+            if (seen.contains(ext)) break;
+            try seen.put(ext, {});
+            switch (self.nodes.items[@intFromEnum(ext)]) {
+                .record => |tail| {
+                    try fields.appendSlice(self.allocator, tail.fields);
+                    ext = self.find(tail.ext);
+                },
+                .unresolved, .empty_record => break,
+                else => Common.invariant("instantiation record row extended into a non-record type"),
+            }
+        }
+
+        const flat_fields = try self.arena().dupe(InstField, fields.items);
+        const flattened: InstNode = .{ .record = .{ .fields = flat_fields, .ext = ext } };
+        self.nodes.items[@intFromEnum(root)] = flattened;
+        try self.registerRowParent(root, flattened);
+        return .{ .fields = flat_fields, .ext = ext };
+    }
+
+    fn tagLabelText(self: *InstGraph, name: names.TagNameId) []const u8 {
+        return self.builder.program.names.tagLabelText(name);
+    }
+
+    fn fieldLabelText(self: *InstGraph, name: names.RecordFieldNameId) []const u8 {
+        return self.builder.program.names.recordFieldLabelText(name);
+    }
+
+    fn unifyTagRows(self: *InstGraph, left: NodeId, right: NodeId, pending: *std.ArrayList(NodePair)) Allocator.Error!void {
+        const flat_left = try self.flattenTagRow(left);
+        const flat_right = try self.flattenTagRow(right);
+
+        var merged = std.ArrayList(InstTag).empty;
+        defer merged.deinit(self.allocator);
+        var only_left = std.ArrayList(InstTag).empty;
+        defer only_left.deinit(self.allocator);
+        var only_right = std.ArrayList(InstTag).empty;
+        defer only_right.deinit(self.allocator);
+
+        for (flat_left.tags) |left_tag| {
+            const wanted = self.tagLabelText(left_tag.name);
+            var shared = false;
+            for (flat_right.tags) |right_tag| {
+                if (!Ident.textEql(wanted, self.tagLabelText(right_tag.name))) continue;
+                if (left_tag.payloads.len != right_tag.payloads.len) {
+                    Common.invariant("instantiation unified one tag at two different payload arities");
+                }
+                for (left_tag.payloads, right_tag.payloads) |left_payload, right_payload| {
+                    try pending.append(self.allocator, .{ .left = left_payload, .right = right_payload });
+                }
+                shared = true;
+                break;
+            }
+            try merged.append(self.allocator, left_tag);
+            if (!shared) try only_left.append(self.allocator, left_tag);
+        }
+        for (flat_right.tags) |right_tag| {
+            const wanted = self.tagLabelText(right_tag.name);
+            var shared = false;
+            for (flat_left.tags) |left_tag| {
+                if (Ident.textEql(wanted, self.tagLabelText(left_tag.name))) {
+                    shared = true;
+                    break;
+                }
+            }
+            if (!shared) {
+                try merged.append(self.allocator, right_tag);
+                try only_right.append(self.allocator, right_tag);
+            }
+        }
+
+        var merged_ext = flat_left.ext;
+        if (only_left.items.len == 0 and only_right.items.len == 0) {
+            try pending.append(self.allocator, .{ .left = flat_left.ext, .right = flat_right.ext });
+        } else if (only_left.items.len == 0) {
+            // Left lacks tags: its extension absorbs the right-only tags.
+            const right_rest = try self.newNode(.{ .tag_union = .{
+                .tags = try self.arena().dupe(InstTag, only_right.items),
+                .ext = flat_right.ext,
+            } });
+            try pending.append(self.allocator, .{ .left = flat_left.ext, .right = right_rest });
+            merged_ext = flat_right.ext;
+        } else if (only_right.items.len == 0) {
+            const left_rest = try self.newNode(.{ .tag_union = .{
+                .tags = try self.arena().dupe(InstTag, only_left.items),
+                .ext = flat_left.ext,
+            } });
+            try pending.append(self.allocator, .{ .left = flat_right.ext, .right = left_rest });
+            merged_ext = flat_left.ext;
+        } else {
+            const new_ext = try self.newNode(.{ .unresolved = .{ .row_default = .empty_tag_union } });
+            const left_rest = try self.newNode(.{ .tag_union = .{
+                .tags = try self.arena().dupe(InstTag, only_left.items),
+                .ext = new_ext,
+            } });
+            const right_rest = try self.newNode(.{ .tag_union = .{
+                .tags = try self.arena().dupe(InstTag, only_right.items),
+                .ext = new_ext,
+            } });
+            try pending.append(self.allocator, .{ .left = flat_left.ext, .right = right_rest });
+            try pending.append(self.allocator, .{ .left = flat_right.ext, .right = left_rest });
+            merged_ext = new_ext;
+        }
+
+        try self.setContent(left, .{ .tag_union = .{
+            .tags = try self.arena().dupe(InstTag, merged.items),
+            .ext = merged_ext,
+        } });
+        try self.union_(left, right);
+    }
+
+    fn unifyRecordRows(self: *InstGraph, left: NodeId, right: NodeId, pending: *std.ArrayList(NodePair)) Allocator.Error!void {
+        const flat_left = try self.flattenRecordRow(left);
+        const flat_right = try self.flattenRecordRow(right);
+
+        var merged = std.ArrayList(InstField).empty;
+        defer merged.deinit(self.allocator);
+        var only_left = std.ArrayList(InstField).empty;
+        defer only_left.deinit(self.allocator);
+        var only_right = std.ArrayList(InstField).empty;
+        defer only_right.deinit(self.allocator);
+
+        for (flat_left.fields) |left_field| {
+            const wanted = self.fieldLabelText(left_field.name);
+            var shared = false;
+            for (flat_right.fields) |right_field| {
+                if (!Ident.textEql(wanted, self.fieldLabelText(right_field.name))) continue;
+                try pending.append(self.allocator, .{ .left = left_field.ty, .right = right_field.ty });
+                shared = true;
+                break;
+            }
+            try merged.append(self.allocator, left_field);
+            if (!shared) try only_left.append(self.allocator, left_field);
+        }
+        for (flat_right.fields) |right_field| {
+            const wanted = self.fieldLabelText(right_field.name);
+            var shared = false;
+            for (flat_left.fields) |left_field| {
+                if (Ident.textEql(wanted, self.fieldLabelText(left_field.name))) {
+                    shared = true;
+                    break;
+                }
+            }
+            if (!shared) {
+                try merged.append(self.allocator, right_field);
+                try only_right.append(self.allocator, right_field);
+            }
+        }
+
+        var merged_ext = flat_left.ext;
+        if (only_left.items.len == 0 and only_right.items.len == 0) {
+            try pending.append(self.allocator, .{ .left = flat_left.ext, .right = flat_right.ext });
+        } else if (only_left.items.len == 0) {
+            const right_rest = try self.newNode(.{ .record = .{
+                .fields = try self.arena().dupe(InstField, only_right.items),
+                .ext = flat_right.ext,
+            } });
+            try pending.append(self.allocator, .{ .left = flat_left.ext, .right = right_rest });
+            merged_ext = flat_right.ext;
+        } else if (only_right.items.len == 0) {
+            const left_rest = try self.newNode(.{ .record = .{
+                .fields = try self.arena().dupe(InstField, only_left.items),
+                .ext = flat_left.ext,
+            } });
+            try pending.append(self.allocator, .{ .left = flat_right.ext, .right = left_rest });
+            merged_ext = flat_left.ext;
+        } else {
+            const new_ext = try self.newNode(.{ .unresolved = .{ .row_default = .empty_record } });
+            const left_rest = try self.newNode(.{ .record = .{
+                .fields = try self.arena().dupe(InstField, only_left.items),
+                .ext = new_ext,
+            } });
+            const right_rest = try self.newNode(.{ .record = .{
+                .fields = try self.arena().dupe(InstField, only_right.items),
+                .ext = new_ext,
+            } });
+            try pending.append(self.allocator, .{ .left = flat_left.ext, .right = right_rest });
+            try pending.append(self.allocator, .{ .left = flat_right.ext, .right = left_rest });
+            merged_ext = new_ext;
+        }
+
+        try self.setContent(left, .{ .record = .{
+            .fields = try self.arena().dupe(InstField, merged.items),
+            .ext = merged_ext,
+        } });
+        try self.union_(left, right);
+    }
+
+    /// Import a Monotype into the graph. A Monotype already linked to a node
+    /// reconnects to it; an unlinked one copies in as closed structure, so a
+    /// later attempt to widen it is a unification conflict rather than a silent
+    /// mutation of another specialization's final type.
+    fn importMono(self: *InstGraph, ty: Type.TypeId) Allocator.Error!NodeId {
+        if (self.mono_nodes.get(ty)) |existing| return existing;
+        const node = try self.newNode(.{ .unresolved = .{} });
+        try self.mono_nodes.put(ty, node);
+        const entry = try self.node_monos.getOrPut(node);
+        if (!entry.found_existing) entry.value_ptr.* = .empty;
+        try entry.value_ptr.append(self.allocator, ty);
+
+        const types = &self.builder.program.types;
+        const imported: InstNode = switch (types.get(ty)) {
+            .primitive => |primitive| .{ .primitive = primitive },
+            .list => |elem| .{ .list = try self.importMono(elem) },
+            .box => |elem| .{ .box = try self.importMono(elem) },
+            .tuple => |items| .{ .tuple = try self.importMonoSlice(types.span(items)) },
+            .func => |func| .{ .func = .{
+                .args = try self.importMonoSlice(types.span(func.args)),
+                .ret = try self.importMono(func.ret),
+            } },
+            .tag_union => |tags| blk: {
+                const span = types.tagSpan(tags);
+                if (span.len == 0) break :blk .empty_tag_union;
+                const inst_tags = try self.arena().alloc(InstTag, span.len);
+                for (span, 0..) |tag, index| {
+                    inst_tags[index] = .{
+                        .name = tag.name,
+                        .checked_name = tag.checked_name,
+                        .payloads = try self.importMonoSlice(types.span(tag.payloads)),
+                    };
+                }
+                break :blk .{ .tag_union = .{
+                    .tags = inst_tags,
+                    .ext = try self.newNode(.empty_tag_union),
+                } };
+            },
+            .record => |fields| blk: {
+                const span = types.fieldSpan(fields);
+                if (span.len == 0) break :blk .empty_record;
+                const inst_fields = try self.arena().alloc(InstField, span.len);
+                for (span, 0..) |field, index| {
+                    inst_fields[index] = .{
+                        .name = field.name,
+                        .ty = try self.importMono(field.ty),
+                    };
+                }
+                break :blk .{ .record = .{
+                    .fields = inst_fields,
+                    .ext = try self.newNode(.empty_record),
+                } };
+            },
+            .named => |named| .{ .named = .{
+                .named_type = named.named_type,
+                .def = named.def,
+                .kind = named.kind,
+                .builtin_owner = named.builtin_owner,
+                .args = try self.importMonoSlice(types.span(named.args)),
+                .backing = if (named.backing) |backing| .{
+                    .node = try self.importMono(backing.ty),
+                    .use = backing.use,
+                } else null,
+            } },
+            .erased => |digest| .{ .erased = digest },
+            .zst => .zst,
+        };
+        self.nodes.items[@intFromEnum(node)] = imported;
+        return node;
+    }
+
+    fn importMonoSlice(self: *InstGraph, tys: []const Type.TypeId) Allocator.Error![]NodeId {
+        const out = try self.arena().alloc(NodeId, tys.len);
+        for (tys, 0..) |ty, index| {
+            out[index] = try self.importMono(ty);
+        }
+        return out;
+    }
+
+    /// Materialize the Monotype view of a node, reserving the id first so
+    /// recursive types tie their own knot.
+    fn monoFor(self: *InstGraph, node: NodeId) Allocator.Error!Type.TypeId {
+        const root = self.find(node);
+        if (self.node_monos.get(root)) |views| {
+            if (views.items.len != 0) return views.items[0];
+        }
+        const ty = try self.builder.program.types.add(.zst);
+        const entry = try self.node_monos.getOrPut(root);
+        if (!entry.found_existing) entry.value_ptr.* = .empty;
+        try entry.value_ptr.append(self.allocator, ty);
+        try self.mono_nodes.put(ty, root);
+        try self.fillMono(root, ty);
+        return ty;
+    }
+
+    /// Write a node's current content into one of its Monotype views.
+    fn fillMono(self: *InstGraph, raw_root: NodeId, ty: Type.TypeId) Allocator.Error!void {
+        const root = self.find(raw_root);
+        const types = &self.builder.program.types;
+        const filled: Type.Content = switch (self.nodes.items[@intFromEnum(root)]) {
+            .redirect => unreachable,
+            .unresolved => |variable| blk: {
+                if (variable.numeric_default_phase) |phase| switch (phase) {
+                    .mono_specialization => break :blk .{ .primitive = .dec },
+                    .checking_finalized => Common.invariant("checking-finalized numeric variable reached Monotype unresolved"),
+                };
+                if (variable.row_default) |row_default| switch (row_default) {
+                    .empty_record => break :blk .{ .record = Type.Span.empty() },
+                    .empty_tag_union => break :blk .{ .tag_union = Type.Span.empty() },
+                };
+                break :blk .{ .tag_union = Type.Span.empty() };
+            },
+            .primitive => |primitive| .{ .primitive = primitive },
+            .list => |elem| .{ .list = try self.monoFor(elem) },
+            .box => |elem| .{ .box = try self.monoFor(elem) },
+            .tuple => |items| .{ .tuple = try self.monoSpan(items) },
+            .func => |func| .{ .func = .{
+                .args = try self.monoSpan(func.args),
+                .ret = try self.monoFor(func.ret),
+            } },
+            .empty_tag_union => .{ .tag_union = Type.Span.empty() },
+            .empty_record => .{ .record = Type.Span.empty() },
+            .tag_union => blk: {
+                const flat = try self.flattenTagRow(root);
+                var tags = std.ArrayList(Type.Tag).empty;
+                defer tags.deinit(self.allocator);
+                try tags.ensureTotalCapacity(self.allocator, flat.tags.len);
+                for (flat.tags) |tag| {
+                    tags.appendAssumeCapacity(.{
+                        .name = tag.name,
+                        .checked_name = tag.checked_name,
+                        .payloads = .empty(),
+                    });
+                }
+                for (flat.tags, tags.items) |tag, *out| {
+                    out.payloads = try types.addSpan(try self.monoSlice(tag.payloads));
+                }
+                std.mem.sort(Type.Tag, tags.items, self.builder, tagLessThan);
+                assertNoDuplicateTags(self.builder, tags.items, "instantiation produced a tag row with duplicate tags");
+                break :blk .{ .tag_union = try types.addTags(tags.items) };
+            },
+            .record => blk: {
+                const flat = try self.flattenRecordRow(root);
+                var fields = std.ArrayList(Type.Field).empty;
+                defer fields.deinit(self.allocator);
+                try fields.ensureTotalCapacity(self.allocator, flat.fields.len);
+                for (flat.fields) |field| {
+                    fields.appendAssumeCapacity(.{
+                        .name = field.name,
+                        .ty = try self.monoFor(field.ty),
+                    });
+                }
+                std.mem.sort(Type.Field, fields.items, self.builder, recordFieldLessThan);
+                assertNoDuplicateRecordFields(self.builder, fields.items, "instantiation produced a record row with duplicate fields");
+                break :blk .{ .record = try types.addFields(fields.items) };
+            },
+            .named => |named| .{ .named = .{
+                .named_type = named.named_type,
+                .def = named.def,
+                .kind = named.kind,
+                .builtin_owner = named.builtin_owner,
+                .args = try types.addSpan(try self.monoSlice(named.args)),
+                .backing = if (named.backing) |backing| .{
+                    .ty = try self.monoFor(backing.node),
+                    .use = backing.use,
+                } else null,
+            } },
+            .erased => |digest| .{ .erased = digest },
+            .zst => .zst,
+        };
+        types.types.items[@intFromEnum(ty)] = filled;
+    }
+
+    fn monoSlice(self: *InstGraph, nodes_slice: []const NodeId) Allocator.Error![]Type.TypeId {
+        const out = try self.arena().alloc(Type.TypeId, nodes_slice.len);
+        for (nodes_slice, 0..) |node, index| {
+            out[index] = try self.monoFor(node);
+        }
+        return out;
+    }
+
+    fn monoSpan(self: *InstGraph, nodes_slice: []const NodeId) Allocator.Error!Type.Span {
+        return try self.builder.program.types.addSpan(try self.monoSlice(nodes_slice));
+    }
+
+    /// Refill the Monotype views of every node that changed since the last
+    /// drain. Run only when no constraint walk holds slices into the type
+    /// store.
+    fn drainDirty(self: *InstGraph) Allocator.Error!void {
+        while (self.dirty.pop()) |raw_root| {
+            const root = self.find(raw_root);
+            const views = self.node_monos.get(root) orelse continue;
+            for (views.items) |ty| {
+                try self.fillMono(root, ty);
+            }
+        }
+    }
+};
+
 const Builder = struct {
     allocator: Allocator,
     modules: Common.CheckedModules,
@@ -840,7 +1744,9 @@ const Builder = struct {
             wrapper_fn_ty,
         );
 
-        var body_ctx = try BodyContext.init(self.allocator, self, view, wrapper.template);
+        const graph = try InstGraph.create(self.allocator, self);
+        defer graph.destroy();
+        var body_ctx = try BodyContext.init(self.allocator, self, view, wrapper.template, graph);
         defer body_ctx.deinit();
         const root_fn_key = Ast.fnTemplateDigest(wrapper_template, &self.program.types, &self.program.names);
         body_ctx.owner_context_fn_key = root_fn_key;
@@ -908,7 +1814,9 @@ const Builder = struct {
             => {},
         }
 
-        var body_ctx = try BodyContext.init(self.allocator, self, view, template_ref);
+        const graph = try InstGraph.create(self.allocator, self);
+        defer graph.destroy();
+        var body_ctx = try BodyContext.init(self.allocator, self, view, template_ref, graph);
         const root_fn_key = Ast.fnTemplateDigest(fn_template, &self.program.types, &self.program.names);
         body_ctx.owner_context_fn_key = root_fn_key;
         body_ctx.current_fn_key = root_fn_key;
@@ -1566,12 +2474,31 @@ const Builder = struct {
         nominal: checked.CheckedNominalType,
         mono_args: []const Type.TypeId,
     ) Allocator.Error!Type.TypeId {
+        const graph = try InstGraph.create(self.allocator, self);
+        defer graph.destroy();
         var ctx = try BodyContext.init(self.allocator, self, view, .{
             .proc_base = undefined, // type-only context; type lowering does not read the owner template
             .template = undefined, // type-only context; type lowering does not read the owner template
-        });
+        }, graph);
         defer ctx.deinit();
-        try ctx.constrainNominalInstantiationArgs(nominal, mono_args);
+        if (nominal.args.len != mono_args.len) {
+            Common.invariant("checked nominal type argument arity differed from monotype named argument arity");
+        }
+        for (nominal.args, mono_args) |checked_arg, mono_arg| {
+            try ctx.constrainTypeToMono(checked_arg, mono_arg, "checked nominal type argument conflicted with an existing Monotype constraint");
+        }
+        if (ctx.nominalInstantiationSource(nominal)) |source| {
+            if (source.declaration.formal_args.len != mono_args.len) {
+                Common.invariant("checked nominal declaration arity differed from nominal type use");
+            }
+            for (source.declaration.formal_args, mono_args) |formal, mono_arg| {
+                try ctx.constrainTypeToMono(
+                    ctx.checkedTypeInCurrentView(source.view, formal),
+                    mono_arg,
+                    "checked nominal instantiation formal type conflicted with an existing Monotype constraint",
+                );
+            }
+        }
         return try ctx.lowerType(ctx.nominalBackingRoot(nominal));
     }
 
@@ -1870,7 +2797,9 @@ const Builder = struct {
         switch (fn_template.fn_def) {
             .nested => blk: {
                 const fn_view = self.moduleForConstFnDef(fn_template.fn_def);
-                var fn_ctx = try BodyContext.init(self.allocator, self, fn_view, ownerTemplateForConstFnDef(fn_template.fn_def));
+                const graph = try InstGraph.create(self.allocator, self);
+                defer graph.destroy();
+                var fn_ctx = try BodyContext.init(self.allocator, self, fn_view, ownerTemplateForConstFnDef(fn_template.fn_def), graph);
                 defer fn_ctx.deinit();
                 try self.lowerNestedFnFromContext(&fn_ctx, checkedLambdaExprIdForConstFn(fn_view, fn_template.fn_def), fn_template);
                 break :blk;
@@ -2023,7 +2952,9 @@ const Builder = struct {
         }
 
         const fn_view = self.moduleForConstFnDef(fn_value.fn_def);
-        var fn_ctx = try BodyContext.init(self.allocator, self, fn_view, ownerTemplateForConstFnDef(fn_value.fn_def));
+        const graph = try InstGraph.create(self.allocator, self);
+        defer graph.destroy();
+        var fn_ctx = try BodyContext.init(self.allocator, self, fn_view, ownerTemplateForConstFnDef(fn_value.fn_def), graph);
         defer fn_ctx.deinit();
 
         const lambda_expr_id = checkedLambdaExprIdForConstFn(fn_view, fn_value.fn_def);
@@ -2370,7 +3301,9 @@ const Builder = struct {
         };
         const template = procedure.template;
 
-        var target_ctx = try BodyContext.init(self.allocator, self, lookup.view, template);
+        const graph = try InstGraph.create(self.allocator, self);
+        defer graph.destroy();
+        var target_ctx = try BodyContext.init(self.allocator, self, lookup.view, template, graph);
         defer target_ctx.deinit();
         const callable_mono_ty = try target_ctx.instantiateTargetCallTypeFromMonoArgs(lookup.target.callable_ty, &.{value_ty}, str_ty);
         _ = try self.lowerTemplateWithMono(
@@ -2683,10 +3616,15 @@ const BodyContext = struct {
     current_fn_key: names.TypeDigest,
     binders: BinderMap,
     local_proc_contexts: std.AutoHashMap(checked.PatternBinderId, names.TypeDigest),
-    type_cells: std.AutoHashMap(CheckedTypeAddress, TypeCell),
+    /// This specialization's type solver, shared by every instantiation
+    /// context created while lowering the same specialization.
+    graph: *InstGraph,
+    /// Instantiation cache: checked types this context already cloned into the
+    /// graph. Separate per context so re-instantiating a generic signature at
+    /// another call site creates fresh nodes.
+    node_map: std.AutoHashMap(CheckedTypeAddress, NodeId),
     string_literals: []?Ast.StringLiteralId,
     loop_contexts: std.ArrayList(LoopContext),
-    type_cell_revision: u64,
 
     const MaterializedArg = struct {
         pattern: checked.CheckedPatternId,
@@ -2720,6 +3658,7 @@ const BodyContext = struct {
         builder: *Builder,
         view: ModuleView,
         owner_template: names.ProcTemplate,
+        graph: *InstGraph,
     ) Allocator.Error!BodyContext {
         const string_literals = try allocator.alloc(?Ast.StringLiteralId, view.bodies.string_literals.len);
         errdefer allocator.free(string_literals);
@@ -2733,17 +3672,17 @@ const BodyContext = struct {
             .current_fn_key = .{},
             .binders = BinderMap.init(allocator),
             .local_proc_contexts = std.AutoHashMap(checked.PatternBinderId, names.TypeDigest).init(allocator),
-            .type_cells = std.AutoHashMap(CheckedTypeAddress, TypeCell).init(allocator),
+            .graph = graph,
+            .node_map = std.AutoHashMap(CheckedTypeAddress, NodeId).init(allocator),
             .string_literals = string_literals,
             .loop_contexts = .empty,
-            .type_cell_revision = 0,
         };
     }
 
     fn deinit(self: *BodyContext) void {
         self.loop_contexts.deinit(self.allocator);
         self.allocator.free(self.string_literals);
-        self.type_cells.deinit();
+        self.node_map.deinit();
         self.local_proc_contexts.deinit();
         self.binders.deinit();
     }
@@ -2761,7 +3700,7 @@ const BodyContext = struct {
         current_fn_key: names.TypeDigest,
         copy_type_cells: bool,
     ) Allocator.Error!BodyContext {
-        var child = try BodyContext.init(self.allocator, self.builder, self.view, self.owner_template);
+        var child = try BodyContext.init(self.allocator, self.builder, self.view, self.owner_template, self.graph);
         errdefer child.deinit();
         child.owner_context_fn_key = self.owner_context_fn_key;
         child.current_fn_key = current_fn_key;
@@ -2777,11 +3716,10 @@ const BodyContext = struct {
         }
 
         if (copy_type_cells) {
-            var type_iter = self.type_cells.iterator();
-            while (type_iter.next()) |entry| {
-                try child.type_cells.put(entry.key_ptr.*, entry.value_ptr.*);
+            var node_iter = self.node_map.iterator();
+            while (node_iter.next()) |entry| {
+                try child.node_map.put(entry.key_ptr.*, entry.value_ptr.*);
             }
-            child.type_cell_revision = self.type_cell_revision;
         }
 
         try child.loop_contexts.appendSlice(child.allocator, self.loop_contexts.items);
@@ -2789,662 +3727,39 @@ const BodyContext = struct {
         return child;
     }
 
-    fn checkedTypeCanLower(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!bool {
-        var active = std.AutoHashMap(checked.CheckedTypeId, void).init(self.allocator);
-        defer active.deinit();
-        return try self.checkedTypeCanLowerInner(checked_ty, &active);
-    }
-
-    fn checkedTypeHasConcreteShape(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!bool {
-        var active = std.AutoHashMap(checked.CheckedTypeId, void).init(self.allocator);
-        defer active.deinit();
-        return try self.checkedTypeHasConcreteShapeInner(checked_ty, &active);
-    }
-
-    fn checkedTypeHasFixedShape(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!bool {
-        var active = std.AutoHashMap(checked.CheckedTypeId, void).init(self.allocator);
-        defer active.deinit();
-        return try self.checkedTypeHasFixedShapeInner(checked_ty, &active);
-    }
-
-    fn checkedTypeSliceCanLower(
-        self: *BodyContext,
-        checked_tys: []const checked.CheckedTypeId,
-        active: *std.AutoHashMap(checked.CheckedTypeId, void),
-    ) Allocator.Error!bool {
-        for (checked_tys) |checked_ty| {
-            if (!try self.checkedTypeCanLowerInner(checked_ty, active)) return false;
-        }
-        return true;
-    }
-
-    fn checkedTypeCanLowerInner(
-        self: *BodyContext,
-        checked_ty: checked.CheckedTypeId,
-        active: *std.AutoHashMap(checked.CheckedTypeId, void),
-    ) Allocator.Error!bool {
-        if (self.type_cells.contains(self.typeAddress(checked_ty))) return true;
-        if (active.contains(checked_ty)) return true;
-        try active.put(checked_ty, {});
-        defer _ = active.remove(checked_ty);
-
-        return switch (checkedPayload(self.view, checked_ty)) {
-            .pending => Common.invariant("pending checked type reached concrete type availability check"),
-            .flex,
-            .rigid,
-            => true,
-            .empty_record,
-            .empty_tag_union,
-            => true,
-            .alias => |alias| blk: {
-                if (!try self.checkedTypeSliceCanLower(alias.args, active)) break :blk false;
-                break :blk try self.checkedTypeCanLowerInner(alias.backing, active);
-            },
-            .record_unbound => |fields| try self.checkedRecordFieldsCanLower(fields, active),
-            .record => |record| blk: {
-                if (!try self.checkedRecordFieldsCanLower(record.fields, active)) break :blk false;
-                break :blk try self.checkedTypeCanLowerInner(record.ext, active);
-            },
-            .tuple => |items| try self.checkedTypeSliceCanLower(items, active),
-            .function => |function| blk: {
-                if (!try self.checkedTypeSliceCanLower(function.args, active)) break :blk false;
-                break :blk try self.checkedTypeCanLowerInner(function.ret, active);
-            },
-            .tag_union => |tag_union| blk: {
-                if (!try self.checkedTagsCanLower(tag_union.tags, active)) break :blk false;
-                break :blk try self.checkedTypeCanLowerInner(tag_union.ext, active);
-            },
-            .nominal => |nominal| blk: {
-                if (!try self.checkedTypeSliceCanLower(nominal.args, active)) break :blk false;
-                switch (nominal.representation) {
-                    .builtin => |builtin| switch (checked.builtinRuntimeEncoding(builtin)) {
-                        .primitive,
-                        .list,
-                        .box,
-                        => break :blk true,
-                        .bool_tag_union => break :blk try self.checkedTypeCanLowerInner(nominal.backing, active),
-                    },
-                    .opaque_without_backing => break :blk true,
-                    else => break :blk try self.checkedTypeCanLowerInner(nominal.backing, active),
-                }
-            },
-        };
-    }
-
-    fn checkedRecordFieldsCanLower(
-        self: *BodyContext,
-        fields: []const checked.CheckedRecordField,
-        active: *std.AutoHashMap(checked.CheckedTypeId, void),
-    ) Allocator.Error!bool {
-        for (fields) |field| {
-            if (!try self.checkedTypeCanLowerInner(field.ty, active)) return false;
-        }
-        return true;
-    }
-
-    fn checkedTagsCanLower(
-        self: *BodyContext,
-        tags: []const checked.CheckedTag,
-        active: *std.AutoHashMap(checked.CheckedTypeId, void),
-    ) Allocator.Error!bool {
-        for (tags) |tag| {
-            if (!try self.checkedTypeSliceCanLower(tag.args, active)) return false;
-        }
-        return true;
-    }
-
+    /// Constrain a checked type to a Monotype: instantiate the checked type
+    /// into the graph and unify with the (linked or imported) Monotype node.
+    /// Pending view refills drain once the outermost constraint returns.
     fn constrainTypeToMono(
         self: *BodyContext,
         checked_ty: checked.CheckedTypeId,
         mono_ty: Type.TypeId,
         comptime conflict_message: []const u8,
     ) Allocator.Error!void {
+        _ = conflict_message;
         self.builder.constrain_depth += 1;
         defer self.builder.constrain_depth -= 1;
-        try self.constrainTypeToMonoInner(checked_ty, mono_ty, conflict_message);
-        if (self.builder.constrain_depth == 1) try self.builder.drainWidenQueue();
+        try self.graph.unify(try self.instNode(checked_ty), try self.graph.importMono(mono_ty));
+        if (self.builder.constrain_depth == 1) try self.graph.drainDirty();
     }
 
-    fn constrainTypeToMonoInner(
+    /// Constrain two checked types from (possibly different) instantiation
+    /// contexts of the same specialization to denote one type.
+    fn constrainCheckedTypeRelations(
         self: *BodyContext,
-        checked_ty: checked.CheckedTypeId,
-        mono_ty: Type.TypeId,
+        left_ty: checked.CheckedTypeId,
+        right_ctx: *BodyContext,
+        right_ty: checked.CheckedTypeId,
         comptime conflict_message: []const u8,
     ) Allocator.Error!void {
-        const address = self.typeAddress(checked_ty);
-        if (self.type_cells.get(address)) |existing| {
-            if (!self.sameType(existing.ty, mono_ty)) {
-                if (existing.state == .defaulted and self.monoTypeIsEmptyTagUnion(mono_ty)) {
-                    return;
-                }
-                if (existing.state == .uninhabited or existing.state == .defaulted) {
-                    self.builder.program.types.types.items[@intFromEnum(existing.ty)] = self.builder.program.types.get(mono_ty);
-                    var entry = self.type_cells.getPtr(address) orelse Common.invariant("checked type cell disappeared while completing replaceable type");
-                    entry.state = try self.cellStateFor(checked_ty, existing.ty);
-                    self.type_cell_revision += 1;
-                    if (self.builder.isOpenRowMono(self.builder.shapeTypeId(mono_ty))) {
-                        try self.builder.markOpenRowMono(existing.ty);
-                    } else {
-                        self.builder.clearOpenRowMono(existing.ty);
-                    }
-                    try self.builder.joinOpenRowMonos(existing.ty, mono_ty);
-                    try self.constrainTypeChildrenToMono(checked_ty, existing.ty, conflict_message);
-                    return;
-                }
-                try self.constrainTypeChildrenToMono(checked_ty, mono_ty, conflict_message);
-                if (self.sameType(existing.ty, mono_ty)) return;
-                if (try self.deferOpenRowReconcile(checked_ty, existing.ty, mono_ty)) return;
-                Common.invariant(conflict_message);
-            }
-            if (existing.ty != mono_ty) {
-                try self.builder.joinOpenRowMonos(existing.ty, mono_ty);
-            }
-            return;
+        _ = conflict_message;
+        if (self.graph != right_ctx.graph) {
+            Common.invariant("checked type relation crossed specialization graphs");
         }
-        try self.type_cells.put(address, .{ .ty = mono_ty, .state = try self.cellStateFor(checked_ty, mono_ty) });
-        self.type_cell_revision += 1;
-
-        try self.constrainTypeChildrenToMono(checked_ty, mono_ty, conflict_message);
-    }
-
-    /// A checked type's cell and a newly arriving Monotype disagreed while
-    /// open-row work may still change either side. Defer the relation so it is
-    /// re-checked after pending widenings are applied and open rows are joined.
-    fn deferOpenRowReconcile(
-        self: *BodyContext,
-        checked_ty: checked.CheckedTypeId,
-        existing_ty: Type.TypeId,
-        mono_ty: Type.TypeId,
-    ) Allocator.Error!bool {
-        const builder = self.builder;
-        if (builder.widen_queue.items.len == 0 and builder.reconcile_queue.items.len == 0) {
-            if (!try builder.typeContainsOpenRow(existing_ty) and !try builder.typeContainsOpenRow(mono_ty)) {
-                return false;
-            }
-        }
-        try builder.reconcile_queue.append(builder.allocator, .{
-            .ctx = self,
-            .checked_ty = checked_ty,
-            .mono_ty = mono_ty,
-        });
-        return true;
-    }
-
-    /// Re-check a deferred cell relation after pending widenings were applied.
-    /// Returns true when the relation is satisfied; false re-queues it, and the
-    /// drain loop treats repeated no-progress re-queues as a genuine conflict.
-    fn reconcileCellWithMono(
-        self: *BodyContext,
-        checked_ty: checked.CheckedTypeId,
-        mono_ty: Type.TypeId,
-    ) Allocator.Error!bool {
-        const address = self.typeAddress(checked_ty);
-        const existing = self.type_cells.get(address) orelse Common.invariant("checked type cell disappeared before open-row reconciliation");
-        if (self.sameType(existing.ty, mono_ty)) return true;
-        try self.builder.joinOpenRowMonos(existing.ty, mono_ty);
-        if (self.sameType(existing.ty, mono_ty)) return true;
-        try self.builder.reconcile_queue.append(self.builder.allocator, .{
-            .ctx = self,
-            .checked_ty = checked_ty,
-            .mono_ty = mono_ty,
-        });
-        return false;
-    }
-
-    fn monoTypeIsEmptyTagUnion(self: *BodyContext, ty: Type.TypeId) bool {
-        return switch (self.builder.shapeContent(ty)) {
-            .tag_union => |tags| self.builder.program.types.tagSpan(tags).len == 0,
-            else => false,
-        };
-    }
-
-    fn constrainTypeChildrenToMono(
-        self: *BodyContext,
-        checked_ty: checked.CheckedTypeId,
-        mono_ty: Type.TypeId,
-        comptime conflict_message: []const u8,
-    ) Allocator.Error!void {
-        const checked_payload = checkedPayload(self.view, checked_ty);
-        switch (checked_payload) {
-            .pending => Common.invariant("pending checked type reached Monotype type instantiation"),
-            .flex,
-            .rigid,
-            .empty_record,
-            .empty_tag_union,
-            => return,
-            .alias => |alias| {
-                if (monoAliasArgs(&self.builder.program.types, mono_ty)) |args| {
-                    try self.constrainTypeSpanToMono(alias.args, args, conflict_message);
-                }
-                try self.constrainTypeToMono(alias.backing, monoAliasBacking(&self.builder.program.types, mono_ty) orelse mono_ty, conflict_message);
-            },
-            .record_unbound => |fields| try self.constrainRecordFieldsToMono(fields, mono_ty, conflict_message),
-            .record => |record| try self.constrainRecordFieldsToMono(record.fields, mono_ty, conflict_message),
-            .tuple => |items| try self.constrainTypeSpanToMono(items, self.monoTupleItems(mono_ty), conflict_message),
-            .nominal => |nominal| try self.constrainNominalToMono(nominal, mono_ty, conflict_message),
-            .function => |function| {
-                switch (self.builder.shapeContent(mono_ty)) {
-                    .func => |mono_fn| {
-                        try self.constrainTypeSpanToMono(function.args, self.builder.program.types.span(mono_fn.args), conflict_message);
-                        try self.constrainTypeToMono(function.ret, mono_fn.ret, conflict_message);
-                    },
-                    else => Common.invariant("Monotype type instantiation expected a concrete function type"),
-                }
-            },
-            .tag_union => |tag_union| try self.constrainTagsToMono(tag_union.tags, mono_ty, conflict_message),
-        }
-    }
-
-    fn checkedTypeHasConcreteShapeSlice(
-        self: *BodyContext,
-        checked_tys: []const checked.CheckedTypeId,
-        active: *std.AutoHashMap(checked.CheckedTypeId, void),
-    ) Allocator.Error!bool {
-        for (checked_tys) |checked_ty| {
-            if (!try self.checkedTypeHasConcreteShapeInner(checked_ty, active)) return false;
-        }
-        return true;
-    }
-
-    fn checkedTypeHasConcreteShapeInner(
-        self: *BodyContext,
-        checked_ty: checked.CheckedTypeId,
-        active: *std.AutoHashMap(checked.CheckedTypeId, void),
-    ) Allocator.Error!bool {
-        const payload = checkedPayload(self.view, checked_ty);
-        if (self.type_cells.get(self.typeAddress(checked_ty))) |cell| {
-            switch (payload) {
-                .flex,
-                .rigid,
-                => return cell.hasConcreteShape(),
-                else => if (!cell.hasConcreteShape()) return false,
-            }
-        }
-        if (active.contains(checked_ty)) return true;
-        try active.put(checked_ty, {});
-        defer _ = active.remove(checked_ty);
-
-        return switch (payload) {
-            .pending => Common.invariant("pending checked type reached concrete type availability check"),
-            .flex => |variable| variable.numeric_default_phase != null or variable.row_default != null,
-            .rigid => |variable| variable.numeric_default_phase != null or variable.row_default != null,
-            .empty_record,
-            .empty_tag_union,
-            => true,
-            .alias => |alias| blk: {
-                if (!try self.checkedTypeHasConcreteShapeSlice(alias.args, active)) break :blk false;
-                break :blk try self.checkedTypeHasConcreteShapeInner(alias.backing, active);
-            },
-            .record_unbound => |fields| try self.checkedRecordFieldsHaveConcreteShape(fields, active),
-            .record => |record| blk: {
-                if (!try self.checkedRecordFieldsHaveConcreteShape(record.fields, active)) break :blk false;
-                break :blk try self.checkedTypeHasConcreteShapeInner(record.ext, active);
-            },
-            .tuple => |items| try self.checkedTypeHasConcreteShapeSlice(items, active),
-            .function => |function| blk: {
-                if (!try self.checkedTypeHasConcreteShapeSlice(function.args, active)) break :blk false;
-                break :blk try self.checkedTypeHasConcreteShapeInner(function.ret, active);
-            },
-            .tag_union => |tag_union| blk: {
-                if (!try self.checkedTagsHaveConcreteShape(tag_union.tags, active)) break :blk false;
-                break :blk try self.checkedTypeHasConcreteShapeInner(tag_union.ext, active);
-            },
-            .nominal => |nominal| blk: {
-                if (!try self.checkedTypeHasConcreteShapeSlice(nominal.args, active)) break :blk false;
-                switch (nominal.representation) {
-                    .builtin => |builtin| switch (checked.builtinRuntimeEncoding(builtin)) {
-                        .primitive,
-                        .list,
-                        .box,
-                        => break :blk true,
-                        .bool_tag_union => break :blk try self.checkedTypeHasConcreteShapeInner(nominal.backing, active),
-                    },
-                    .opaque_without_backing => break :blk true,
-                    else => break :blk try self.checkedTypeHasConcreteShapeInner(nominal.backing, active),
-                }
-            },
-        };
-    }
-
-    fn checkedRecordFieldsHaveConcreteShape(
-        self: *BodyContext,
-        fields: []const checked.CheckedRecordField,
-        active: *std.AutoHashMap(checked.CheckedTypeId, void),
-    ) Allocator.Error!bool {
-        for (fields) |field| {
-            if (!try self.checkedTypeHasConcreteShapeInner(field.ty, active)) return false;
-        }
-        return true;
-    }
-
-    fn checkedTagsHaveConcreteShape(
-        self: *BodyContext,
-        tags: []const checked.CheckedTag,
-        active: *std.AutoHashMap(checked.CheckedTypeId, void),
-    ) Allocator.Error!bool {
-        for (tags) |tag| {
-            if (!try self.checkedTypeHasConcreteShapeSlice(tag.args, active)) return false;
-        }
-        return true;
-    }
-
-    fn checkedTypeHasFixedShapeSlice(
-        self: *BodyContext,
-        checked_tys: []const checked.CheckedTypeId,
-        active: *std.AutoHashMap(checked.CheckedTypeId, void),
-    ) Allocator.Error!bool {
-        for (checked_tys) |checked_ty| {
-            if (!try self.checkedTypeHasFixedShapeInner(checked_ty, active)) return false;
-        }
-        return true;
-    }
-
-    fn checkedTypeHasFixedShapeInner(
-        self: *BodyContext,
-        checked_ty: checked.CheckedTypeId,
-        active: *std.AutoHashMap(checked.CheckedTypeId, void),
-    ) Allocator.Error!bool {
-        const payload = checkedPayload(self.view, checked_ty);
-        if (self.type_cells.get(self.typeAddress(checked_ty))) |cell| {
-            switch (payload) {
-                .flex,
-                .rigid,
-                => return cell.hasFixedShape(),
-                else => if (!cell.hasFixedShape()) return false,
-            }
-        }
-        if (active.contains(checked_ty)) return true;
-        try active.put(checked_ty, {});
-        defer _ = active.remove(checked_ty);
-
-        return switch (payload) {
-            .pending => Common.invariant("pending checked type reached fixed type availability check"),
-            .flex,
-            .rigid,
-            => false,
-            .empty_record,
-            .empty_tag_union,
-            => true,
-            .alias => |alias| blk: {
-                if (!try self.checkedTypeHasFixedShapeSlice(alias.args, active)) break :blk false;
-                break :blk try self.checkedTypeHasFixedShapeInner(alias.backing, active);
-            },
-            .record_unbound => |fields| try self.checkedRecordFieldsHaveFixedShape(fields, active),
-            .record => |record| blk: {
-                if (!try self.checkedRecordFieldsHaveFixedShape(record.fields, active)) break :blk false;
-                break :blk try self.checkedTypeHasFixedShapeInner(record.ext, active);
-            },
-            .tuple => |items| try self.checkedTypeHasFixedShapeSlice(items, active),
-            .function => |function| blk: {
-                if (!try self.checkedTypeHasFixedShapeSlice(function.args, active)) break :blk false;
-                break :blk try self.checkedTypeHasFixedShapeInner(function.ret, active);
-            },
-            .tag_union => |tag_union| blk: {
-                if (!try self.checkedTagsHaveFixedShape(tag_union.tags, active)) break :blk false;
-                break :blk try self.checkedTypeHasFixedShapeInner(tag_union.ext, active);
-            },
-            .nominal => |nominal| blk: {
-                if (!try self.checkedTypeHasFixedShapeSlice(nominal.args, active)) break :blk false;
-                switch (nominal.representation) {
-                    .builtin => |builtin| switch (checked.builtinRuntimeEncoding(builtin)) {
-                        .primitive,
-                        .list,
-                        .box,
-                        => break :blk true,
-                        .bool_tag_union => break :blk try self.checkedTypeHasFixedShapeInner(nominal.backing, active),
-                    },
-                    .opaque_without_backing => break :blk true,
-                    else => break :blk try self.checkedTypeHasFixedShapeInner(nominal.backing, active),
-                }
-            },
-        };
-    }
-
-    fn checkedRecordFieldsHaveFixedShape(
-        self: *BodyContext,
-        fields: []const checked.CheckedRecordField,
-        active: *std.AutoHashMap(checked.CheckedTypeId, void),
-    ) Allocator.Error!bool {
-        for (fields) |field| {
-            if (!try self.checkedTypeHasFixedShapeInner(field.ty, active)) return false;
-        }
-        return true;
-    }
-
-    fn checkedTagsHaveFixedShape(
-        self: *BodyContext,
-        tags: []const checked.CheckedTag,
-        active: *std.AutoHashMap(checked.CheckedTypeId, void),
-    ) Allocator.Error!bool {
-        for (tags) |tag| {
-            if (!try self.checkedTypeHasFixedShapeSlice(tag.args, active)) return false;
-        }
-        return true;
-    }
-
-    fn constrainTypeSpanToMono(
-        self: *BodyContext,
-        checked_tys: []const checked.CheckedTypeId,
-        mono_tys: []const Type.TypeId,
-        comptime conflict_message: []const u8,
-    ) Allocator.Error!void {
-        if (checked_tys.len != mono_tys.len) Common.invariant("Monotype type instantiation arity mismatch");
-        for (checked_tys, mono_tys) |checked_ty, mono_ty| {
-            try self.constrainTypeToMono(checked_ty, mono_ty, conflict_message);
-        }
-    }
-
-    fn constrainRecordFieldsToMono(
-        self: *BodyContext,
-        fields: []const checked.CheckedRecordField,
-        mono_ty: Type.TypeId,
-        comptime conflict_message: []const u8,
-    ) Allocator.Error!void {
-        for (fields) |field| {
-            const mono_field_ty = (try self.monoRecordField(mono_ty, field)) orelse continue;
-            try self.constrainTypeToMono(field.ty, mono_field_ty, conflict_message);
-        }
-    }
-
-    fn constrainTagsToMono(
-        self: *BodyContext,
-        tags: []const checked.CheckedTag,
-        mono_ty: Type.TypeId,
-        comptime conflict_message: []const u8,
-    ) Allocator.Error!void {
-        for (tags) |tag| {
-            const mono_args = (try self.monoTagArgs(mono_ty, tag)) orelse continue;
-            try self.constrainTypeSpanToMono(tag.args, mono_args, conflict_message);
-        }
-    }
-
-    fn constrainNominalToMono(
-        self: *BodyContext,
-        nominal: checked.CheckedNominalType,
-        mono_ty: Type.TypeId,
-        comptime conflict_message: []const u8,
-    ) Allocator.Error!void {
-        switch (nominal.representation) {
-            .builtin => |builtin| switch (checked.builtinRuntimeEncoding(builtin)) {
-                .primitive => |primitive| {
-                    switch (self.builder.shapeContent(mono_ty)) {
-                        .primitive => |mono_primitive| {
-                            if (mono_primitive != primitive) Common.invariant(conflict_message);
-                            return;
-                        },
-                        else => if (try self.monoTypeContainsUninhabited(mono_ty)) {
-                            self.builder.program.types.types.items[@intFromEnum(mono_ty)] = .{ .primitive = primitive };
-                            self.builder.clearOpenRowMono(mono_ty);
-                            return;
-                        } else Common.invariant("builtin primitive nominal was constrained to a non-primitive monotype"),
-                    }
-                },
-                .bool_tag_union => {
-                    try self.constrainTypeToMono(nominal.backing, self.builder.namedBackingType(mono_ty) orelse mono_ty, conflict_message);
-                    return;
-                },
-                .list => {
-                    if (nominal.args.len != 1) Common.invariant("Monotype type instantiation List arity mismatch");
-                    const elem_ty = switch (self.builder.shapeContent(mono_ty)) {
-                        .list => |elem| elem,
-                        else => Common.invariant("builtin List nominal was constrained to a non-list monotype"),
-                    };
-                    try self.constrainTypeToMono(nominal.args[0], elem_ty, conflict_message);
-                    return;
-                },
-                .box => {
-                    if (nominal.args.len != 1) Common.invariant("Monotype type instantiation Box arity mismatch");
-                    const elem_ty = switch (self.builder.shapeContent(mono_ty)) {
-                        .box => |elem| elem,
-                        else => Common.invariant("builtin Box nominal was constrained to a non-box monotype"),
-                    };
-                    try self.constrainTypeToMono(nominal.args[0], elem_ty, conflict_message);
-                    return;
-                },
-            },
-            else => {},
-        }
-
-        switch (self.builder.program.types.get(mono_ty)) {
-            .named => |named| try self.constrainTypeSpanToMono(nominal.args, self.builder.program.types.span(named.args), conflict_message),
-            .primitive,
-            .tag_union,
-            .record,
-            .tuple,
-            .func,
-            .list,
-            .box,
-            .erased,
-            .zst,
-            => {
-                if (nominal.is_opaque or nominal.representation == .opaque_without_backing) {
-                    if (nominal.args.len != 0) Common.invariant("Monotype type instantiation expected a concrete nominal type with arguments");
-                    return;
-                }
-                try self.constrainTypeToMono(nominal.backing, mono_ty, conflict_message);
-            },
-        }
-    }
-
-    fn monoTupleItems(self: *BodyContext, mono_ty: Type.TypeId) []const Type.TypeId {
-        return switch (self.builder.shapeContent(mono_ty)) {
-            .tuple => |items| self.builder.program.types.span(items),
-            else => Common.invariant("Monotype type instantiation expected a concrete tuple type"),
-        };
-    }
-
-    /// Monotype of a record field by checked name. Returns null after queueing a
-    /// widen request when the field is missing from an open-row record.
-    fn monoRecordField(
-        self: *BodyContext,
-        mono_ty: Type.TypeId,
-        checked_field: checked.CheckedRecordField,
-    ) Allocator.Error!?Type.TypeId {
-        const shape_ty = self.builder.shapeTypeId(mono_ty);
-        return switch (self.builder.program.types.get(shape_ty)) {
-            .record => |record| {
-                const wanted = self.view.names.recordFieldLabelText(checked_field.name);
-                for (self.builder.program.types.fieldSpan(record)) |field| {
-                    if (Ident.textEql(wanted, self.builder.program.names.recordFieldLabelText(field.name))) return field.ty;
-                }
-                if (self.builder.isOpenRowMono(shape_ty)) {
-                    try self.builder.widen_queue.append(self.builder.allocator, .{
-                        .ctx = self,
-                        .mono_ty = shape_ty,
-                        .member = .{ .record_field = checked_field },
-                    });
-                    return null;
-                }
-                Common.invariant("Monotype type instantiation record field was absent from concrete type");
-            },
-            else => Common.invariant("Monotype type instantiation expected a concrete record type"),
-        };
-    }
-
-    /// Monotype payloads of a tag by checked name. Returns null after queueing a
-    /// widen request when the tag is missing from an open-row tag union.
-    fn monoTagArgs(
-        self: *BodyContext,
-        mono_ty: Type.TypeId,
-        checked_tag: checked.CheckedTag,
-    ) Allocator.Error!?[]const Type.TypeId {
-        const shape_ty = self.builder.shapeTypeId(mono_ty);
-        return switch (self.builder.program.types.get(shape_ty)) {
-            .tag_union => |tag_union| {
-                const wanted = self.view.names.tagLabelText(checked_tag.name);
-                for (self.builder.program.types.tagSpan(tag_union)) |tag| {
-                    if (Ident.textEql(wanted, self.builder.program.names.tagLabelText(tag.name))) {
-                        return self.builder.program.types.span(tag.payloads);
-                    }
-                }
-                if (self.builder.isOpenRowMono(shape_ty)) {
-                    try self.builder.widen_queue.append(self.builder.allocator, .{
-                        .ctx = self,
-                        .mono_ty = shape_ty,
-                        .member = .{ .tag = checked_tag },
-                    });
-                    return null;
-                }
-                Common.invariant("Monotype type instantiation tag was absent from concrete type");
-            },
-            else => Common.invariant("Monotype type instantiation expected a concrete tag-union type"),
-        };
-    }
-
-    /// Apply a deferred open-row widening: add the missing checked member to the
-    /// Monotype row, or constrain its payloads when another widening already
-    /// added it.
-    fn applyWidenRequest(self: *BodyContext, request: WidenRequest) Allocator.Error!void {
-        const builder = self.builder;
-        const shape_ty = builder.shapeTypeId(request.mono_ty);
-        switch (request.member) {
-            .tag => |checked_tag| {
-                const tag_union = switch (builder.program.types.get(shape_ty)) {
-                    .tag_union => |tags| tags,
-                    else => Common.invariant("Monotype type instantiation expected a concrete tag-union type"),
-                };
-                const wanted = self.view.names.tagLabelText(checked_tag.name);
-                for (builder.program.types.tagSpan(tag_union)) |tag| {
-                    if (!Ident.textEql(wanted, builder.program.names.tagLabelText(tag.name))) continue;
-                    const payloads = try self.allocator.dupe(Type.TypeId, builder.program.types.span(tag.payloads));
-                    defer self.allocator.free(payloads);
-                    try self.constrainTypeSpanToMono(checked_tag.args, payloads, "checked tag payload conflicted with an existing Monotype constraint after open-row widening");
-                    return;
-                }
-                if (!builder.isOpenRowMono(shape_ty)) {
-                    Common.invariant("Monotype type instantiation tag was absent from concrete type");
-                }
-                const payload_tys = try self.allocator.alloc(Type.TypeId, checked_tag.args.len);
-                defer self.allocator.free(payload_tys);
-                for (checked_tag.args, 0..) |arg, index| {
-                    payload_tys[index] = try self.lowerType(arg);
-                }
-                try builder.insertTagIntoOpenRow(shape_ty, .{
-                    .name = try builder.tagName(self.view, checked_tag.name),
-                    .checked_name = checked_tag.name,
-                    .payloads = try builder.program.types.addSpan(payload_tys),
-                });
-            },
-            .record_field => |checked_field| {
-                const record = switch (builder.program.types.get(shape_ty)) {
-                    .record => |fields| fields,
-                    else => Common.invariant("Monotype type instantiation expected a concrete record type"),
-                };
-                const wanted = self.view.names.recordFieldLabelText(checked_field.name);
-                for (builder.program.types.fieldSpan(record)) |field| {
-                    if (!Ident.textEql(wanted, builder.program.names.recordFieldLabelText(field.name))) continue;
-                    try self.constrainTypeToMono(checked_field.ty, field.ty, "checked record field conflicted with an existing Monotype constraint after open-row widening");
-                    return;
-                }
-                if (!builder.isOpenRowMono(shape_ty)) {
-                    Common.invariant("Monotype type instantiation record field was absent from concrete type");
-                }
-                try builder.insertFieldIntoOpenRow(shape_ty, .{
-                    .name = try builder.recordFieldName(self.view, checked_field.name),
-                    .ty = try self.lowerType(checked_field.ty),
-                });
-            },
-        }
+        self.builder.constrain_depth += 1;
+        defer self.builder.constrain_depth -= 1;
+        try self.graph.unify(try self.instNode(left_ty), try right_ctx.instNode(right_ty));
+        if (self.builder.constrain_depth == 1) try self.graph.drainDirty();
     }
 
     fn monoAliasBacking(types: *const Type.Store, mono_ty: Type.TypeId) ?Type.TypeId {
@@ -3479,839 +3794,157 @@ const BodyContext = struct {
         try self.constrainTypeToMono(checked_ty, mono_ty, "checked type conflicted with an existing Monotype constraint");
     }
 
-    fn cellStateFor(self: *BodyContext, checked_ty: checked.CheckedTypeId, mono_ty: Type.TypeId) Allocator.Error!TypeCellState {
-        const payload = checkedPayload(self.view, checked_ty);
-        if (try self.checkedTypeUsesDefaultForMono(checked_ty, mono_ty)) return .defaulted;
-        if (checkedTypePayloadIsOpenVariable(payload) and try self.monoTypeContainsUninhabited(mono_ty)) return .uninhabited;
-        return .lowered;
-    }
-
-    fn checkedTypeUsesDefaultForMono(self: *BodyContext, checked_ty: checked.CheckedTypeId, mono_ty: Type.TypeId) Allocator.Error!bool {
-        var active = std.AutoHashMap(CheckedMonoRelation, void).init(self.allocator);
-        defer active.deinit();
-        return try self.checkedTypeUsesDefaultForMonoInner(checked_ty, mono_ty, &active);
-    }
-
-    fn checkedTypeUsesDefaultForMonoInner(
-        self: *BodyContext,
-        checked_ty: checked.CheckedTypeId,
-        mono_ty: Type.TypeId,
-        active: *std.AutoHashMap(CheckedMonoRelation, void),
-    ) Allocator.Error!bool {
-        const relation = CheckedMonoRelation{
-            .checked = self.typeAddress(checked_ty),
-            .mono = mono_ty,
-        };
-        if (active.contains(relation)) return false;
-        try active.put(relation, {});
-        defer _ = active.remove(relation);
-
-        return switch (checkedPayload(self.view, checked_ty)) {
-            .pending => Common.invariant("pending checked type reached default-derived monotype detection"),
-            .flex, .rigid => |variable| self.checkedVariableUsesDefaultForMono(variable, mono_ty),
-            .empty_record,
-            .empty_tag_union,
-            => false,
-            .alias => |alias| (try self.checkedTypeSliceUsesDefaultForMono(alias.args, monoAliasArgs(&self.builder.program.types, mono_ty) orelse &.{}, active)) or
-                try self.checkedTypeUsesDefaultForMonoInner(alias.backing, monoAliasBacking(&self.builder.program.types, mono_ty) orelse mono_ty, active),
-            .record_unbound => |fields| try self.checkedRecordFieldsUseDefaultForMono(fields, mono_ty, active),
-            .record => |record| try self.checkedRecordRowUsesDefaultForMono(record.fields, record.ext, mono_ty, active),
-            .tuple => |items| try self.checkedTypeSliceUsesDefaultForMono(items, self.monoTupleItems(mono_ty), active),
-            .function => |function| blk: {
-                switch (self.builder.shapeContent(mono_ty)) {
-                    .func => |mono_fn| {
-                        if (try self.checkedTypeSliceUsesDefaultForMono(function.args, self.builder.program.types.span(mono_fn.args), active)) break :blk true;
-                        break :blk try self.checkedTypeUsesDefaultForMonoInner(function.ret, mono_fn.ret, active);
-                    },
-                    else => break :blk false,
-                }
-            },
-            .tag_union => |tag_union| try self.checkedTagRowUsesDefaultForMono(tag_union.tags, tag_union.ext, mono_ty, active),
-            .nominal => |nominal| try self.checkedNominalUsesDefaultForMono(nominal, mono_ty, active),
-        };
-    }
-
-    fn checkedVariableUsesDefaultForMono(self: *BodyContext, variable: checked.CheckedTypeVariable, mono_ty: Type.TypeId) bool {
-        if (variable.numeric_default_phase == .mono_specialization and self.builder.typeIsDec(mono_ty)) return true;
-        if (variable.row_default) |row_default| {
-            return switch (row_default) {
-                .empty_record => switch (self.builder.shapeContent(mono_ty)) {
-                    .record => |fields| self.builder.program.types.fieldSpan(fields).len == 0,
-                    else => false,
-                },
-                .empty_tag_union => switch (self.builder.shapeContent(mono_ty)) {
-                    .tag_union => |tags| self.builder.program.types.tagSpan(tags).len == 0,
-                    else => false,
-                },
-            };
-        }
-        return false;
-    }
-
-    fn checkedTypeSliceUsesDefaultForMono(
-        self: *BodyContext,
-        checked_tys: []const checked.CheckedTypeId,
-        mono_tys: []const Type.TypeId,
-        active: *std.AutoHashMap(CheckedMonoRelation, void),
-    ) Allocator.Error!bool {
-        if (checked_tys.len != mono_tys.len) return false;
-        for (checked_tys, mono_tys) |checked_ty, mono_ty| {
-            if (try self.checkedTypeUsesDefaultForMonoInner(checked_ty, mono_ty, active)) return true;
-        }
-        return false;
-    }
-
-    fn checkedRecordFieldsUseDefaultForMono(
-        self: *BodyContext,
-        checked_fields: []const checked.CheckedRecordField,
-        mono_ty: Type.TypeId,
-        active: *std.AutoHashMap(CheckedMonoRelation, void),
-    ) Allocator.Error!bool {
-        const mono_fields = switch (self.builder.shapeContent(mono_ty)) {
-            .record => |fields| self.builder.program.types.fieldSpan(fields),
-            else => return false,
-        };
-        for (checked_fields) |field| {
-            const mono_field = self.monoRecordFieldByCheckedName(mono_fields, field.name) orelse return false;
-            if (try self.checkedTypeUsesDefaultForMonoInner(field.ty, mono_field.ty, active)) return true;
-        }
-        return false;
-    }
-
-    fn checkedRecordRowUsesDefaultForMono(
-        self: *BodyContext,
-        head: []const checked.CheckedRecordField,
-        ext: checked.CheckedTypeId,
-        mono_ty: Type.TypeId,
-        active: *std.AutoHashMap(CheckedMonoRelation, void),
-    ) Allocator.Error!bool {
-        const mono_fields = switch (self.builder.shapeContent(mono_ty)) {
-            .record => |fields| self.builder.program.types.fieldSpan(fields),
-            else => return false,
-        };
-
-        var expected_count: usize = 0;
-        var defaulted_row = false;
-        var payload_default = false;
-
-        try self.recordFieldsDefaultState(head, mono_fields, &expected_count, &payload_default, active);
-
-        var seen = std.AutoHashMap(checked.CheckedTypeId, void).init(self.allocator);
-        defer seen.deinit();
-
-        var current = ext;
-        while (true) {
-            if (seen.contains(current)) break;
-            try seen.put(current, {});
-
-            switch (checkedPayload(self.view, current)) {
-                .alias => |alias| current = alias.backing,
-                .empty_record => break,
-                .flex, .rigid => |variable| {
-                    if (variable.row_default == .empty_record) {
-                        defaulted_row = true;
-                        break;
-                    }
-                    break;
-                },
-                .record_unbound => |tail_fields| {
-                    try self.recordFieldsDefaultState(tail_fields, mono_fields, &expected_count, &payload_default, active);
-                    break;
-                },
-                .record => |record| {
-                    try self.recordFieldsDefaultState(record.fields, mono_fields, &expected_count, &payload_default, active);
-                    current = record.ext;
-                },
-                else => break,
-            }
-        }
-
-        return payload_default or (defaulted_row and expected_count == mono_fields.len);
-    }
-
-    fn recordFieldsDefaultState(
-        self: *BodyContext,
-        checked_fields: []const checked.CheckedRecordField,
-        mono_fields: []const Type.Field,
-        expected_count: *usize,
-        payload_default: *bool,
-        active: *std.AutoHashMap(CheckedMonoRelation, void),
-    ) Allocator.Error!void {
-        for (checked_fields) |field| {
-            expected_count.* += 1;
-            const mono_field = self.monoRecordFieldByCheckedName(mono_fields, field.name) orelse continue;
-            if (try self.checkedTypeUsesDefaultForMonoInner(field.ty, mono_field.ty, active)) payload_default.* = true;
-        }
-    }
-
-    fn checkedTagRowUsesDefaultForMono(
-        self: *BodyContext,
-        head: []const checked.CheckedTag,
-        ext: checked.CheckedTypeId,
-        mono_ty: Type.TypeId,
-        active: *std.AutoHashMap(CheckedMonoRelation, void),
-    ) Allocator.Error!bool {
-        const mono_tags = switch (self.builder.shapeContent(mono_ty)) {
-            .tag_union => |tags| self.builder.program.types.tagSpan(tags),
-            else => return false,
-        };
-
-        var expected_count: usize = 0;
-        var defaulted_row = false;
-        var payload_default = false;
-
-        try self.tagsDefaultState(head, mono_tags, &expected_count, &payload_default, active);
-
-        var seen = std.AutoHashMap(checked.CheckedTypeId, void).init(self.allocator);
-        defer seen.deinit();
-
-        var current = ext;
-        while (true) {
-            if (seen.contains(current)) break;
-            try seen.put(current, {});
-
-            switch (checkedPayload(self.view, current)) {
-                .alias => |alias| current = alias.backing,
-                .empty_tag_union => break,
-                .flex, .rigid => |variable| {
-                    if (variable.row_default == .empty_tag_union) {
-                        defaulted_row = true;
-                        break;
-                    }
-                    break;
-                },
-                .tag_union => |tag_union| {
-                    try self.tagsDefaultState(tag_union.tags, mono_tags, &expected_count, &payload_default, active);
-                    current = tag_union.ext;
-                },
-                else => break,
-            }
-        }
-
-        return payload_default or (defaulted_row and expected_count == mono_tags.len);
-    }
-
-    fn tagsDefaultState(
-        self: *BodyContext,
-        checked_tags: []const checked.CheckedTag,
-        mono_tags: []const Type.Tag,
-        expected_count: *usize,
-        payload_default: *bool,
-        active: *std.AutoHashMap(CheckedMonoRelation, void),
-    ) Allocator.Error!void {
-        for (checked_tags) |tag| {
-            expected_count.* += 1;
-            const mono_tag = self.monoTagByCheckedName(mono_tags, tag.name) orelse continue;
-            const payload_tys = self.builder.program.types.span(mono_tag.payloads);
-            if (try self.checkedTypeSliceUsesDefaultForMono(tag.args, payload_tys, active)) payload_default.* = true;
-        }
-    }
-
-    fn checkedNominalUsesDefaultForMono(
-        self: *BodyContext,
-        nominal: checked.CheckedNominalType,
-        mono_ty: Type.TypeId,
-        active: *std.AutoHashMap(CheckedMonoRelation, void),
-    ) Allocator.Error!bool {
-        switch (nominal.representation) {
-            .builtin => |builtin| switch (checked.builtinRuntimeEncoding(builtin)) {
-                .primitive => return false,
-                .list => {
-                    const item = switch (self.builder.shapeContent(mono_ty)) {
-                        .list => |item| item,
-                        else => return false,
-                    };
-                    return nominal.args.len == 1 and try self.checkedTypeUsesDefaultForMonoInner(nominal.args[0], item, active);
-                },
-                .box => {
-                    const item = switch (self.builder.shapeContent(mono_ty)) {
-                        .box => |item| item,
-                        else => return false,
-                    };
-                    return nominal.args.len == 1 and try self.checkedTypeUsesDefaultForMonoInner(nominal.args[0], item, active);
-                },
-                .bool_tag_union => {},
-            },
-            else => {},
-        }
-
-        if (try self.checkedNamedArgsUseDefaultForMono(nominal.args, mono_ty, active)) return true;
-        return switch (nominal.representation) {
-            .opaque_without_backing => false,
-            else => try self.checkedTypeUsesDefaultForMonoInner(nominal.backing, self.builder.namedBackingType(mono_ty) orelse mono_ty, active),
-        };
-    }
-
-    fn checkedNamedArgsUseDefaultForMono(
-        self: *BodyContext,
-        checked_args: []const checked.CheckedTypeId,
-        mono_ty: Type.TypeId,
-        active: *std.AutoHashMap(CheckedMonoRelation, void),
-    ) Allocator.Error!bool {
-        const mono_args = monoNamedArgs(&self.builder.program.types, mono_ty) orelse return false;
-        return try self.checkedTypeSliceUsesDefaultForMono(checked_args, mono_args, active);
-    }
-
-    fn monoRecordFieldByCheckedName(self: *BodyContext, mono_fields: []const Type.Field, checked_name: names.RecordFieldNameId) ?Type.Field {
-        const wanted = self.view.names.recordFieldLabelText(checked_name);
-        for (mono_fields) |field| {
-            if (Ident.textEql(wanted, self.builder.program.names.recordFieldLabelText(field.name))) return field;
-        }
-        return null;
-    }
-
-    fn monoTagByCheckedName(self: *BodyContext, mono_tags: []const Type.Tag, checked_name: names.TagNameId) ?Type.Tag {
-        const wanted = self.view.names.tagLabelText(checked_name);
-        for (mono_tags) |tag| {
-            if (Ident.textEql(wanted, self.builder.program.names.tagLabelText(tag.name))) return tag;
-        }
-        return null;
-    }
-
-    fn monoTypeContainsUninhabited(self: *BodyContext, ty: Type.TypeId) Allocator.Error!bool {
-        var active = std.AutoHashMap(Type.TypeId, void).init(self.allocator);
-        defer active.deinit();
-        return try self.monoTypeContainsUninhabitedInner(ty, &active);
-    }
-
-    fn monoTypeContainsUninhabitedInner(
-        self: *BodyContext,
-        ty: Type.TypeId,
-        active: *std.AutoHashMap(Type.TypeId, void),
-    ) Allocator.Error!bool {
-        if (active.contains(ty)) return false;
-        try active.put(ty, {});
-        defer _ = active.remove(ty);
-
-        return switch (self.builder.program.types.get(ty)) {
-            .tag_union => |tags| blk: {
-                const tag_slice = self.builder.program.types.tagSpan(tags);
-                if (tag_slice.len == 0) break :blk true;
-                for (tag_slice) |tag| {
-                    if (try self.monoTypeSpanContainsUninhabited(self.builder.program.types.span(tag.payloads), active)) break :blk true;
-                }
-                break :blk false;
-            },
-            .named => |named| blk: {
-                if (try self.monoTypeSpanContainsUninhabited(self.builder.program.types.span(named.args), active)) break :blk true;
-                if (named.backing) |backing| {
-                    if (try self.monoTypeContainsUninhabitedInner(backing.ty, active)) break :blk true;
-                }
-                break :blk false;
-            },
-            .record => |fields| blk: {
-                for (self.builder.program.types.fieldSpan(fields)) |field| {
-                    if (try self.monoTypeContainsUninhabitedInner(field.ty, active)) break :blk true;
-                }
-                break :blk false;
-            },
-            .tuple => |items| try self.monoTypeSpanContainsUninhabited(self.builder.program.types.span(items), active),
-            .list => |item| try self.monoTypeContainsUninhabitedInner(item, active),
-            .box => |item| try self.monoTypeContainsUninhabitedInner(item, active),
-            .func => |func| try self.monoTypeSpanContainsUninhabited(self.builder.program.types.span(func.args), active) or
-                try self.monoTypeContainsUninhabitedInner(func.ret, active),
-            .primitive,
-            .erased,
-            .zst,
-            => false,
-        };
-    }
-
-    fn monoTypeSpanContainsUninhabited(
-        self: *BodyContext,
-        tys: []const Type.TypeId,
-        active: *std.AutoHashMap(Type.TypeId, void),
-    ) Allocator.Error!bool {
-        for (tys) |ty| {
-            if (try self.monoTypeContainsUninhabitedInner(ty, active)) return true;
-        }
-        return false;
-    }
-
-    fn exprHasNumericDefault(self: *BodyContext, expr_id: checked.CheckedExprId) Allocator.Error!bool {
-        return try self.checkedTypeHasNumericDefault(self.view.bodies.exprs[@intFromEnum(expr_id)].ty);
-    }
-
-    fn dispatchOperandHasNumericDefault(
-        self: *BodyContext,
-        operand: static_dispatch.StaticDispatchOperand,
-    ) Allocator.Error!bool {
-        return switch (operand) {
-            .checked_expr => |expr_id| try self.exprHasNumericDefault(expr_id),
-            .generated_numeral => false,
-        };
-    }
-
-    fn checkedTypeHasNumericDefault(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!bool {
-        var active = std.AutoHashMap(checked.CheckedTypeId, void).init(self.allocator);
-        defer active.deinit();
-        return try self.typeHasNumericDefault(checked_ty, &active);
-    }
-
-    fn typeSpanHasNumericDefault(
-        self: *BodyContext,
-        checked_tys: []const checked.CheckedTypeId,
-        active: *std.AutoHashMap(checked.CheckedTypeId, void),
-    ) Allocator.Error!bool {
-        for (checked_tys) |checked_ty| {
-            if (try self.typeHasNumericDefault(checked_ty, active)) return true;
-        }
-        return false;
-    }
-
-    fn recordFieldsHaveNumericDefault(
-        self: *BodyContext,
-        fields: []const checked.CheckedRecordField,
-        active: *std.AutoHashMap(checked.CheckedTypeId, void),
-    ) Allocator.Error!bool {
-        for (fields) |field| {
-            if (try self.typeHasNumericDefault(field.ty, active)) return true;
-        }
-        return false;
-    }
-
-    fn tagsHaveNumericDefault(
-        self: *BodyContext,
-        tags: []const checked.CheckedTag,
-        active: *std.AutoHashMap(checked.CheckedTypeId, void),
-    ) Allocator.Error!bool {
-        for (tags) |tag| {
-            if (try self.typeSpanHasNumericDefault(tag.args, active)) return true;
-        }
-        return false;
-    }
-
-    fn typeHasNumericDefault(
-        self: *BodyContext,
-        checked_ty: checked.CheckedTypeId,
-        active: *std.AutoHashMap(checked.CheckedTypeId, void),
-    ) Allocator.Error!bool {
-        const payload = checkedPayload(self.view, checked_ty);
-        if (self.type_cells.get(self.typeAddress(checked_ty))) |cell| {
-            switch (payload) {
-                .flex,
-                .rigid,
-                => return cell.hasNumericDefault(),
-                else => {},
-            }
-        }
-        if (active.contains(checked_ty)) return false;
-        try active.put(checked_ty, {});
-        defer _ = active.remove(checked_ty);
-
-        return switch (payload) {
-            .pending => Common.invariant("pending checked type reached numeric default detection"),
-            .flex => |variable| variable.numeric_default_phase != null,
-            .rigid => |variable| variable.numeric_default_phase != null,
-            .empty_record,
-            .empty_tag_union,
-            => false,
-            .alias => |alias| (try self.typeSpanHasNumericDefault(alias.args, active)) or
-                try self.typeHasNumericDefault(alias.backing, active),
-            .record_unbound => |fields| try self.recordFieldsHaveNumericDefault(fields, active),
-            .record => |record| (try self.recordFieldsHaveNumericDefault(record.fields, active)) or
-                try self.typeHasNumericDefault(record.ext, active),
-            .tuple => |items| try self.typeSpanHasNumericDefault(items, active),
-            .function => |function| (try self.typeSpanHasNumericDefault(function.args, active)) or
-                try self.typeHasNumericDefault(function.ret, active),
-            .tag_union => |tag_union| (try self.tagsHaveNumericDefault(tag_union.tags, active)) or
-                try self.typeHasNumericDefault(tag_union.ext, active),
-            .nominal => |nominal| (try self.typeSpanHasNumericDefault(nominal.args, active)) or
-                switch (nominal.representation) {
-                    .builtin => |builtin| switch (checked.builtinRuntimeEncoding(builtin)) {
-                        .primitive,
-                        .list,
-                        .box,
-                        => false,
-                        .bool_tag_union => try self.typeHasNumericDefault(nominal.backing, active),
-                    },
-                    .opaque_without_backing => false,
-                    else => try self.typeHasNumericDefault(nominal.backing, active),
-                },
-        };
-    }
-
     fn typeAddress(self: *BodyContext, checked_ty: checked.CheckedTypeId) CheckedTypeAddress {
         return checkedTypeAddress(self.view, checked_ty);
     }
 
     fn reserveType(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!Type.TypeId {
-        const address = self.typeAddress(checked_ty);
-        if (self.type_cells.get(address)) |existing| {
-            return existing.ty;
-        }
-        const reserved = try self.builder.program.types.add(.zst);
-        try self.type_cells.put(address, .{ .ty = reserved, .state = .reserved });
-        self.type_cell_revision += 1;
-        return reserved;
+        return try self.lowerType(checked_ty);
     }
 
     fn lowerType(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!Type.TypeId {
+        return try self.graph.monoFor(try self.instNode(checked_ty));
+    }
+
+    /// Instantiate a checked type into this specialization's graph, caching by
+    /// checked identity so every occurrence of the same checked root resolves
+    /// to the same node within this instantiation context.
+    fn instNode(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!NodeId {
         const address = self.typeAddress(checked_ty);
-        if (self.type_cells.get(address)) |cell| {
-            switch (cell.state) {
-                .reserved => try self.finishType(checked_ty, cell.ty, address),
-                .uninhabited,
-                .defaulted,
-                .lowering,
-                .lowered,
-                => {},
-            }
-            return cell.ty;
+        if (self.node_map.get(address)) |existing| return existing;
+        const placeholder = try self.graph.newNode(.{ .unresolved = .{} });
+        try self.node_map.put(address, placeholder);
+        const built = try self.instNodeContent(checked_ty);
+        try self.graph.unify(placeholder, built);
+        return placeholder;
+    }
+
+    fn instNodeSlice(self: *BodyContext, checked_tys: []const checked.CheckedTypeId) Allocator.Error![]NodeId {
+        const out = try self.graph.arena().alloc(NodeId, checked_tys.len);
+        for (checked_tys, 0..) |checked_ty, index| {
+            out[index] = try self.instNode(checked_ty);
         }
-
-        const reserved = try self.reserveType(checked_ty);
-        try self.finishType(checked_ty, reserved, address);
-        return reserved;
+        return out;
     }
 
-    fn finishType(
-        self: *BodyContext,
-        checked_ty: checked.CheckedTypeId,
-        mono_ty: Type.TypeId,
-        address: CheckedTypeAddress,
-    ) Allocator.Error!void {
-        {
-            const cell = self.type_cells.getPtr(address) orelse Common.invariant("checked type finished without a monotype cell");
-            if (cell.ty != mono_ty) Common.invariant("checked type cell changed while lowering monotype");
-            switch (cell.state) {
-                .lowering,
-                .uninhabited,
-                .defaulted,
-                .lowered,
-                => return,
-                .reserved => {},
-            }
-            cell.state = .lowering;
-            self.type_cell_revision += 1;
-        }
-
-        const payload = checkedPayload(self.view, checked_ty);
-        switch (payload) {
-            .function => |function| try self.fillFunctionType(mono_ty, function),
-            .tuple => |items| try self.fillTupleType(mono_ty, items),
-            .record_unbound => |fields| try self.fillRecordType(mono_ty, fields),
-            .record => |record| try self.fillRecordRowType(mono_ty, record.fields, record.ext),
-            .tag_union => |tag_union| try self.fillTagUnionRowType(mono_ty, tag_union.tags, tag_union.ext),
-            .alias => |alias| try self.fillAliasType(checked_ty, mono_ty, alias),
-            .nominal => |nominal| try self.fillNominalType(checked_ty, mono_ty, nominal),
-            else => {
-                const lowered = try self.lowerTypePayload(checked_ty, payload);
-                self.builder.program.types.types.items[@intFromEnum(mono_ty)] = lowered;
-                switch (payload) {
-                    .flex, .rigid => |variable| if (variable.numeric_default_phase == null and variable.row_default != null) {
-                        try self.builder.markOpenRowMono(mono_ty);
-                    },
-                    else => {},
-                }
-            },
-        }
-
-        const cell = self.type_cells.getPtr(address) orelse Common.invariant("checked type finished without a monotype cell");
-        if (cell.ty != mono_ty) Common.invariant("checked type cell changed while lowering monotype");
-        if (cell.state != .lowering) Common.invariant("checked type cell state changed while lowering monotype");
-        cell.state = try self.cellStateFor(checked_ty, mono_ty);
-        self.type_cell_revision += 1;
-    }
-
-    fn fillFunctionType(
-        self: *BodyContext,
-        mono_ty: Type.TypeId,
-        function: checked.CheckedFunctionType,
-    ) Allocator.Error!void {
-        const args = try self.reserveTypeSlice(function.args);
-        defer self.allocator.free(args);
-        const ret = try self.reserveType(function.ret);
-        const args_span = try self.builder.program.types.addSpan(args);
-        self.builder.program.types.types.items[@intFromEnum(mono_ty)] = .{ .func = .{
-            .args = args_span,
-            .ret = ret,
-        } };
-        try self.finishTypeSlice(function.args);
-        _ = try self.lowerType(function.ret);
-    }
-
-    fn fillTupleType(
-        self: *BodyContext,
-        mono_ty: Type.TypeId,
-        items: []const checked.CheckedTypeId,
-    ) Allocator.Error!void {
-        const reserved_items = try self.reserveTypeSlice(items);
-        defer self.allocator.free(reserved_items);
-        const tuple_items = try self.builder.program.types.addSpan(reserved_items);
-        self.builder.program.types.types.items[@intFromEnum(mono_ty)] = .{
-            .tuple = tuple_items,
-        };
-        try self.finishTypeSlice(items);
-    }
-
-    fn fillRecordType(
-        self: *BodyContext,
-        mono_ty: Type.TypeId,
-        fields: []const checked.CheckedRecordField,
-    ) Allocator.Error!void {
-        var lowered = std.ArrayList(Type.Field).empty;
-        defer lowered.deinit(self.allocator);
-        var checked_fields = std.ArrayList(checked.CheckedTypeId).empty;
-        defer checked_fields.deinit(self.allocator);
-        try self.appendReservedRecordFields(&lowered, &checked_fields, fields);
-        std.mem.sort(Type.Field, lowered.items, self.builder, recordFieldLessThan);
-        const record_fields = try self.builder.program.types.addFields(lowered.items);
-        self.builder.program.types.types.items[@intFromEnum(mono_ty)] = .{
-            .record = record_fields,
-        };
-        try self.finishTypeList(checked_fields.items);
-    }
-
-    fn fillRecordRowType(
-        self: *BodyContext,
-        mono_ty: Type.TypeId,
-        head: []const checked.CheckedRecordField,
-        ext: checked.CheckedTypeId,
-    ) Allocator.Error!void {
-        var fields = std.ArrayList(Type.Field).empty;
-        defer fields.deinit(self.allocator);
-        var checked_fields = std.ArrayList(checked.CheckedTypeId).empty;
-        defer checked_fields.deinit(self.allocator);
-        try self.appendReservedRecordFields(&fields, &checked_fields, head);
-
-        var seen = std.AutoHashMap(checked.CheckedTypeId, void).init(self.allocator);
-        defer seen.deinit();
-
-        var current = ext;
-        while (true) {
-            if (seen.contains(current)) break;
-            try seen.put(current, {});
-
-            const payload = checkedPayload(self.view, current);
-            switch (payload) {
-                .alias => |alias| current = alias.backing,
-                .empty_record => break,
-                .flex, .rigid => |variable| {
-                    if (variable.row_default == .empty_record) {
-                        try self.builder.markOpenRowMono(mono_ty);
-                        break;
-                    }
-                    Common.invariant("open non-record checked row reached Monotype record lowering");
+    fn instNodeContent(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!NodeId {
+        return switch (checkedPayload(self.view, checked_ty)) {
+            .pending => Common.invariant("pending checked type reached Monotype instantiation"),
+            .flex, .rigid => |variable| try self.graph.newNode(.{ .unresolved = .{
+                .numeric_default_phase = variable.numeric_default_phase,
+                .row_default = variable.row_default,
+            } }),
+            .empty_record => try self.graph.newNode(.empty_record),
+            .empty_tag_union => try self.graph.newNode(.empty_tag_union),
+            .alias => |alias| try self.graph.newNode(.{ .named = .{
+                .named_type = .{ .module = self.builder.declaredModuleForAlias(self.view, alias), .ty = checked_ty },
+                .def = try self.builder.typeDef(self.view, alias.origin_module, alias.name, alias.source_decl),
+                .kind = .alias,
+                .builtin_owner = null,
+                .args = try self.instNodeSlice(alias.args),
+                .backing = .{
+                    .node = try self.instNode(alias.backing),
+                    .use = .inspectable,
                 },
-                .record_unbound => |tail_fields| {
-                    try self.appendReservedRecordFields(&fields, &checked_fields, tail_fields);
-                    break;
-                },
-                .record => |record| {
-                    try self.appendReservedRecordFields(&fields, &checked_fields, record.fields);
-                    current = record.ext;
-                },
-                else => Common.invariant("open or non-record checked row reached Monotype record lowering"),
-            }
-        }
-
-        std.mem.sort(Type.Field, fields.items, self.builder, recordFieldLessThan);
-        assertNoDuplicateRecordFields(self.builder, fields.items, "checked record row had duplicate fields at Monotype lowering");
-        const record_fields = try self.builder.program.types.addFields(fields.items);
-        self.builder.program.types.types.items[@intFromEnum(mono_ty)] = .{
-            .record = record_fields,
+            } }),
+            .record_unbound => |fields| try self.graph.newNode(.{ .record = .{
+                .fields = try self.instFields(fields),
+                .ext = try self.graph.newNode(.empty_record),
+            } }),
+            .record => |record| try self.graph.newNode(.{ .record = .{
+                .fields = try self.instFields(record.fields),
+                .ext = try self.instNode(record.ext),
+            } }),
+            .tuple => |items| try self.graph.newNode(.{ .tuple = try self.instNodeSlice(items) }),
+            .function => |function| try self.graph.newNode(.{ .func = .{
+                .args = try self.instNodeSlice(function.args),
+                .ret = try self.instNode(function.ret),
+            } }),
+            .tag_union => |tag_union| try self.graph.newNode(.{ .tag_union = .{
+                .tags = try self.instTags(tag_union.tags),
+                .ext = try self.instNode(tag_union.ext),
+            } }),
+            .nominal => |nominal| try self.instNominalNode(checked_ty, nominal),
         };
-        try self.finishTypeList(checked_fields.items);
     }
 
-    fn appendReservedRecordFields(
-        self: *BodyContext,
-        out: *std.ArrayList(Type.Field),
-        checked_fields: *std.ArrayList(checked.CheckedTypeId),
-        fields: []const checked.CheckedRecordField,
-    ) Allocator.Error!void {
-        for (fields) |field| {
-            try out.append(self.allocator, .{
+    fn instFields(self: *BodyContext, fields: []const checked.CheckedRecordField) Allocator.Error![]InstField {
+        const out = try self.graph.arena().alloc(InstField, fields.len);
+        for (fields, 0..) |field, index| {
+            out[index] = .{
                 .name = try self.builder.recordFieldName(self.view, field.name),
-                .ty = try self.reserveType(field.ty),
-            });
-            try checked_fields.append(self.allocator, field.ty);
+                .ty = try self.instNode(field.ty),
+            };
         }
+        return out;
     }
 
-    fn fillTagUnionRowType(
-        self: *BodyContext,
-        mono_ty: Type.TypeId,
-        head: []const checked.CheckedTag,
-        ext: checked.CheckedTypeId,
-    ) Allocator.Error!void {
-        var tags = std.ArrayList(Type.Tag).empty;
-        defer tags.deinit(self.allocator);
-        var checked_payloads = std.ArrayList(checked.CheckedTypeId).empty;
-        defer checked_payloads.deinit(self.allocator);
-        try self.appendReservedTags(&tags, &checked_payloads, head);
-
-        var seen = std.AutoHashMap(checked.CheckedTypeId, void).init(self.allocator);
-        defer seen.deinit();
-
-        var current = ext;
-        while (true) {
-            if (seen.contains(current)) break;
-            try seen.put(current, {});
-
-            const payload = checkedPayload(self.view, current);
-            switch (payload) {
-                .alias => |alias| current = alias.backing,
-                .empty_tag_union => break,
-                .flex, .rigid => |variable| {
-                    if (variable.row_default == .empty_tag_union) {
-                        try self.builder.markOpenRowMono(mono_ty);
-                        break;
-                    }
-                    Common.invariant("open non-tag-union checked row reached Monotype tag-union lowering");
-                },
-                .tag_union => |tag_union| {
-                    try self.appendReservedTags(&tags, &checked_payloads, tag_union.tags);
-                    current = tag_union.ext;
-                },
-                else => Common.invariant("open or non-tag-union checked row reached Monotype tag-union lowering"),
-            }
-        }
-
-        std.mem.sort(Type.Tag, tags.items, self.builder, tagLessThan);
-        assertNoDuplicateTags(self.builder, tags.items, "checked tag-union row had duplicate tags at Monotype lowering");
-        const tag_span = try self.builder.program.types.addTags(tags.items);
-        self.builder.program.types.types.items[@intFromEnum(mono_ty)] = .{
-            .tag_union = tag_span,
-        };
-        try self.finishTypeList(checked_payloads.items);
-    }
-
-    fn appendReservedTags(
-        self: *BodyContext,
-        out: *std.ArrayList(Type.Tag),
-        checked_payloads: *std.ArrayList(checked.CheckedTypeId),
-        tags: []const checked.CheckedTag,
-    ) Allocator.Error!void {
-        for (tags) |tag| {
-            const payloads = try self.reserveTypeSlice(tag.args);
-            defer self.allocator.free(payloads);
-            try out.append(self.allocator, .{
+    fn instTags(self: *BodyContext, tags: []const checked.CheckedTag) Allocator.Error![]InstTag {
+        const out = try self.graph.arena().alloc(InstTag, tags.len);
+        for (tags, 0..) |tag, index| {
+            out[index] = .{
                 .name = try self.builder.tagName(self.view, tag.name),
                 .checked_name = tag.name,
-                .payloads = try self.builder.program.types.addSpan(payloads),
-            });
-            try checked_payloads.appendSlice(self.allocator, tag.args);
+                .payloads = try self.instNodeSlice(tag.args),
+            };
         }
+        return out;
     }
 
-    fn fillAliasType(
+    fn instNominalNode(
         self: *BodyContext,
         checked_ty: checked.CheckedTypeId,
-        mono_ty: Type.TypeId,
-        alias: checked.CheckedAliasType,
-    ) Allocator.Error!void {
-        const args = try self.reserveTypeSlice(alias.args);
-        defer self.allocator.free(args);
-        const backing = try self.reserveType(alias.backing);
-        const def = try self.builder.typeDef(self.view, alias.origin_module, alias.name, alias.source_decl);
-        const args_span = try self.builder.program.types.addSpan(args);
-        self.builder.program.types.types.items[@intFromEnum(mono_ty)] = .{ .named = .{
-            .named_type = .{ .module = self.builder.declaredModuleForAlias(self.view, alias), .ty = checked_ty },
-            .def = def,
-            .kind = .alias,
-            .args = args_span,
-            .backing = .{
-                .ty = backing,
-                .use = .inspectable,
-            },
-        } };
-        try self.finishTypeSlice(alias.args);
-        _ = try self.lowerType(alias.backing);
-    }
-
-    fn fillNominalType(
-        self: *BodyContext,
-        checked_ty: checked.CheckedTypeId,
-        mono_ty: Type.TypeId,
         nominal: checked.CheckedNominalType,
-    ) Allocator.Error!void {
+    ) Allocator.Error!NodeId {
         switch (nominal.representation) {
             .builtin => |builtin| switch (checked.builtinRuntimeEncoding(builtin)) {
-                .primitive => |primitive| {
-                    self.builder.program.types.types.items[@intFromEnum(mono_ty)] = .{ .primitive = primitive };
-                    return;
-                },
+                .primitive => |primitive| return try self.graph.newNode(.{ .primitive = primitive }),
                 .bool_tag_union => {},
                 .list => {
                     if (nominal.args.len != 1) Common.invariant("checked List nominal must have exactly one type argument");
-                    const elem_ty = try self.reserveType(nominal.args[0]);
-                    self.builder.program.types.types.items[@intFromEnum(mono_ty)] = .{ .list = elem_ty };
-                    try self.finishTypeSlice(nominal.args);
-                    return;
+                    return try self.graph.newNode(.{ .list = try self.instNode(nominal.args[0]) });
                 },
                 .box => {
                     if (nominal.args.len != 1) Common.invariant("checked Box nominal must have exactly one type argument");
-                    const elem_ty = try self.reserveType(nominal.args[0]);
-                    self.builder.program.types.types.items[@intFromEnum(mono_ty)] = .{ .box = elem_ty };
-                    try self.finishTypeSlice(nominal.args);
-                    return;
+                    return try self.graph.newNode(.{ .box = try self.instNode(nominal.args[0]) });
                 },
             },
             else => {},
         }
 
-        const args = try self.reserveTypeSlice(nominal.args);
-        defer self.allocator.free(args);
-        try self.constrainNominalInstantiationArgs(nominal, args);
-        const backing_use: Type.BackingUse = if (nominal.is_opaque) .runtime_layout_only else .inspectable;
-        const backing: ?Type.NamedBacking = switch (nominal.representation) {
+        const args = try self.instNodeSlice(nominal.args);
+        // Declaration formals share their checked roots with every occurrence
+        // inside the backing template, so unifying each formal with the named
+        // argument instantiates the backing at the right types.
+        if (self.nominalInstantiationSource(nominal)) |source| {
+            if (source.declaration.formal_args.len != args.len) {
+                Common.invariant("checked nominal declaration arity differed from nominal type use");
+            }
+            for (source.declaration.formal_args, args) |formal, arg| {
+                try self.graph.unify(try self.instNode(self.checkedTypeInCurrentView(source.view, formal)), arg);
+            }
+        }
+        const backing: ?InstBacking = switch (nominal.representation) {
             .opaque_without_backing => null,
             else => .{
-                .ty = try self.reserveType(self.nominalBackingRoot(nominal)),
-                .use = backing_use,
+                .node = try self.instNode(self.nominalBackingRoot(nominal)),
+                .use = if (nominal.is_opaque) .runtime_layout_only else .inspectable,
             },
         };
-        const def = try self.builder.typeDef(self.view, nominal.origin_module, nominal.name, nominal.source_decl);
-        const args_span = try self.builder.program.types.addSpan(args);
-        self.builder.program.types.types.items[@intFromEnum(mono_ty)] = .{ .named = .{
+        return try self.graph.newNode(.{ .named = .{
             .named_type = .{ .module = self.builder.declaredModuleForNominal(self.view, nominal), .ty = checked_ty },
-            .def = def,
+            .def = try self.builder.typeDef(self.view, nominal.origin_module, nominal.name, nominal.source_decl),
             .kind = if (nominal.is_opaque) .@"opaque" else .nominal,
             .builtin_owner = builtinOwner(nominal.builtin),
-            .args = args_span,
+            .args = args,
             .backing = backing,
-        } };
-        try self.finishTypeSlice(nominal.args);
-        switch (nominal.representation) {
-            .opaque_without_backing => {},
-            else => _ = try self.lowerType(self.nominalBackingRoot(nominal)),
-        }
+        } });
     }
 
     const NominalInstantiationSource = struct {
         view: ModuleView,
         declaration: checked.CheckedNominalDeclaration,
     };
-
-    fn constrainNominalInstantiationArgs(
-        self: *BodyContext,
-        nominal: checked.CheckedNominalType,
-        mono_args: []const Type.TypeId,
-    ) Allocator.Error!void {
-        if (nominal.args.len != mono_args.len) {
-            Common.invariant("checked nominal type argument arity differed from monotype named argument arity");
-        }
-        try self.constrainTypeSpanToMono(
-            nominal.args,
-            mono_args,
-            "checked nominal type argument conflicted with an existing Monotype constraint",
-        );
-
-        const source = self.nominalInstantiationSource(nominal) orelse return;
-        if (source.declaration.formal_args.len != mono_args.len) {
-            Common.invariant("checked nominal declaration arity differed from nominal type use");
-        }
-        for (source.declaration.formal_args, mono_args) |formal, mono_arg| {
-            const current_formal = self.checkedTypeInCurrentView(source.view, formal);
-            try self.constrainTypeToMono(
-                current_formal,
-                mono_arg,
-                "checked nominal instantiation formal type conflicted with an existing Monotype constraint",
-            );
-        }
-    }
 
     fn nominalInstantiationSource(
         self: *BodyContext,
@@ -4359,238 +3992,6 @@ const BodyContext = struct {
         if (moduleBytesEqual(source_view.key.bytes, self.view.key.bytes)) return source_ty;
         return self.view.types.rootForKey(source_view.types.rootKey(source_ty)) orelse
             Common.invariant("imported nominal declaration formal was not projected into the current checked type store");
-    }
-
-    fn reserveTypeSlice(
-        self: *BodyContext,
-        checked_tys: []const checked.CheckedTypeId,
-    ) Allocator.Error![]Type.TypeId {
-        const out = try self.allocator.alloc(Type.TypeId, checked_tys.len);
-        errdefer self.allocator.free(out);
-        for (checked_tys, 0..) |checked_ty, i| {
-            out[i] = try self.reserveType(checked_ty);
-        }
-        return out;
-    }
-
-    fn finishTypeSlice(
-        self: *BodyContext,
-        checked_tys: []const checked.CheckedTypeId,
-    ) Allocator.Error!void {
-        for (checked_tys) |checked_ty| {
-            _ = try self.lowerType(checked_ty);
-        }
-    }
-
-    fn finishTypeList(
-        self: *BodyContext,
-        checked_tys: []const checked.CheckedTypeId,
-    ) Allocator.Error!void {
-        for (checked_tys) |checked_ty| {
-            _ = try self.lowerType(checked_ty);
-        }
-    }
-
-    fn lowerTypePayload(
-        self: *BodyContext,
-        checked_ty: checked.CheckedTypeId,
-        payload: checked.CheckedTypePayload,
-    ) Allocator.Error!Type.Content {
-        return switch (payload) {
-            .pending => Common.invariant("pending checked type reached instantiated Monotype lowering"),
-            .flex => |variable| Builder.lowerCheckedTypeVariable(variable),
-            .rigid => |variable| Builder.lowerCheckedTypeVariable(variable),
-            .empty_record => .{ .record = .empty() },
-            .empty_tag_union => .{ .tag_union = .empty() },
-            .record_unbound => |fields| try self.lowerRecordFields(fields),
-            .record => |record| try self.lowerRecordRow(record.fields, record.ext),
-            .tuple => |items| blk: {
-                const lowered = try self.lowerTypeSlice(items);
-                defer self.allocator.free(lowered);
-                break :blk .{ .tuple = try self.builder.program.types.addSpan(lowered) };
-            },
-            .tag_union => |tag_union| try self.lowerTagUnionRow(tag_union.tags, tag_union.ext),
-            .function => |fn_ty| blk: {
-                const args = try self.lowerTypeSlice(fn_ty.args);
-                defer self.allocator.free(args);
-                break :blk .{ .func = .{
-                    .args = try self.builder.program.types.addSpan(args),
-                    .ret = try self.lowerType(fn_ty.ret),
-                } };
-            },
-            .alias => |alias| blk: {
-                const args = try self.lowerTypeSlice(alias.args);
-                defer self.allocator.free(args);
-                break :blk .{ .named = .{
-                    .named_type = .{ .module = self.builder.declaredModuleForAlias(self.view, alias), .ty = checked_ty },
-                    .def = try self.builder.typeDef(self.view, alias.origin_module, alias.name, alias.source_decl),
-                    .kind = .alias,
-                    .args = try self.builder.program.types.addSpan(args),
-                    .backing = .{
-                        .ty = try self.lowerType(alias.backing),
-                        .use = .inspectable,
-                    },
-                } };
-            },
-            .nominal => |nominal| blk: {
-                switch (nominal.representation) {
-                    .builtin => |builtin| switch (checked.builtinRuntimeEncoding(builtin)) {
-                        .primitive => |primitive| break :blk .{ .primitive = primitive },
-                        .bool_tag_union => {},
-                        .list => {
-                            if (nominal.args.len != 1) Common.invariant("checked List nominal must have exactly one type argument");
-                            break :blk .{ .list = try self.lowerType(nominal.args[0]) };
-                        },
-                        .box => {
-                            if (nominal.args.len != 1) Common.invariant("checked Box nominal must have exactly one type argument");
-                            break :blk .{ .box = try self.lowerType(nominal.args[0]) };
-                        },
-                    },
-                    else => {},
-                }
-
-                const args = try self.lowerTypeSlice(nominal.args);
-                defer self.allocator.free(args);
-                const backing_use: Type.BackingUse = if (nominal.is_opaque) .runtime_layout_only else .inspectable;
-                break :blk .{ .named = .{
-                    .named_type = .{ .module = self.builder.declaredModuleForNominal(self.view, nominal), .ty = checked_ty },
-                    .def = try self.builder.typeDef(self.view, nominal.origin_module, nominal.name, nominal.source_decl),
-                    .kind = if (nominal.is_opaque) .@"opaque" else .nominal,
-                    .builtin_owner = builtinOwner(nominal.builtin),
-                    .args = try self.builder.program.types.addSpan(args),
-                    .backing = switch (nominal.representation) {
-                        .opaque_without_backing => null,
-                        else => .{
-                            .ty = try self.lowerType(nominal.backing),
-                            .use = backing_use,
-                        },
-                    },
-                } };
-            },
-        };
-    }
-
-    fn lowerTypeSlice(self: *BodyContext, checked_tys: []const checked.CheckedTypeId) Allocator.Error![]Type.TypeId {
-        const out = try self.allocator.alloc(Type.TypeId, checked_tys.len);
-        errdefer self.allocator.free(out);
-        for (checked_tys, 0..) |ty, i| {
-            out[i] = try self.lowerType(ty);
-        }
-        return out;
-    }
-
-    fn lowerRecordFields(self: *BodyContext, fields: []const checked.CheckedRecordField) Allocator.Error!Type.Content {
-        var lowered = std.ArrayList(Type.Field).empty;
-        defer lowered.deinit(self.allocator);
-        try self.appendRecordFields(&lowered, fields);
-        return .{ .record = try self.builder.program.types.addFields(lowered.items) };
-    }
-
-    fn lowerRecordRow(
-        self: *BodyContext,
-        head: []const checked.CheckedRecordField,
-        ext: checked.CheckedTypeId,
-    ) Allocator.Error!Type.Content {
-        var fields = std.ArrayList(Type.Field).empty;
-        defer fields.deinit(self.allocator);
-        try self.appendRecordFields(&fields, head);
-
-        var seen = std.AutoHashMap(checked.CheckedTypeId, void).init(self.allocator);
-        defer seen.deinit();
-
-        var current = ext;
-        while (true) {
-            if (seen.contains(current)) break;
-            try seen.put(current, {});
-
-            switch (checkedPayload(self.view, current)) {
-                .alias => |alias| current = alias.backing,
-                .empty_record => break,
-                .flex, .rigid => |variable| {
-                    if (variable.row_default == .empty_record) break;
-                    Common.invariant("open non-record checked row reached instantiated Monotype record lowering");
-                },
-                .record_unbound => |tail_fields| {
-                    try self.appendRecordFields(&fields, tail_fields);
-                    break;
-                },
-                .record => |record| {
-                    try self.appendRecordFields(&fields, record.fields);
-                    current = record.ext;
-                },
-                else => Common.invariant("open or non-record checked row reached instantiated Monotype record lowering"),
-            }
-        }
-
-        std.mem.sort(Type.Field, fields.items, self.builder, recordFieldLessThan);
-        assertNoDuplicateRecordFields(self.builder, fields.items, "checked record row had duplicate fields at instantiated Monotype lowering");
-        return .{ .record = try self.builder.program.types.addFields(fields.items) };
-    }
-
-    fn appendRecordFields(
-        self: *BodyContext,
-        out: *std.ArrayList(Type.Field),
-        fields: []const checked.CheckedRecordField,
-    ) Allocator.Error!void {
-        for (fields) |field| {
-            try out.append(self.allocator, .{
-                .name = try self.builder.recordFieldName(self.view, field.name),
-                .ty = try self.lowerType(field.ty),
-            });
-        }
-    }
-
-    fn lowerTagUnionRow(
-        self: *BodyContext,
-        head: []const checked.CheckedTag,
-        ext: checked.CheckedTypeId,
-    ) Allocator.Error!Type.Content {
-        var tags = std.ArrayList(Type.Tag).empty;
-        defer tags.deinit(self.allocator);
-        try self.appendTags(&tags, head);
-
-        var seen = std.AutoHashMap(checked.CheckedTypeId, void).init(self.allocator);
-        defer seen.deinit();
-
-        var current = ext;
-        while (true) {
-            if (seen.contains(current)) break;
-            try seen.put(current, {});
-
-            switch (checkedPayload(self.view, current)) {
-                .alias => |alias| current = alias.backing,
-                .empty_tag_union => break,
-                .flex, .rigid => |variable| {
-                    if (variable.row_default == .empty_tag_union) break;
-                    Common.invariant("open non-tag checked row reached instantiated Monotype tag-union lowering");
-                },
-                .tag_union => |tag_union| {
-                    try self.appendTags(&tags, tag_union.tags);
-                    current = tag_union.ext;
-                },
-                else => Common.invariant("open or non-tag checked row reached instantiated Monotype tag-union lowering"),
-            }
-        }
-
-        std.mem.sort(Type.Tag, tags.items, self.builder, tagLessThan);
-        assertNoDuplicateTags(self.builder, tags.items, "checked tag row had duplicate tags at instantiated Monotype lowering");
-        return .{ .tag_union = try self.builder.program.types.addTags(tags.items) };
-    }
-
-    fn appendTags(
-        self: *BodyContext,
-        out: *std.ArrayList(Type.Tag),
-        tags: []const checked.CheckedTag,
-    ) Allocator.Error!void {
-        for (tags) |tag| {
-            const payloads = try self.lowerTypeSlice(tag.args);
-            defer self.allocator.free(payloads);
-            try out.append(self.allocator, .{
-                .name = try self.builder.tagName(self.view, tag.name),
-                .checked_name = tag.name,
-                .payloads = try self.builder.program.types.addSpan(payloads),
-            });
-        }
     }
 
     fn lowerTemplateBody(
@@ -4989,7 +4390,7 @@ const BodyContext = struct {
         if (try self.lowerCallThatCannotReachCallee(checked_ret_ty, call)) |lowered| return lowered;
 
         if (call.direct_target) |target| {
-            var call_ctx = try BodyContext.init(self.allocator, self.builder, self.view, self.owner_template);
+            var call_ctx = try BodyContext.init(self.allocator, self.builder, self.view, self.owner_template, self.graph);
             defer call_ctx.deinit();
             call_ctx.owner_context_fn_key = self.owner_context_fn_key;
             call_ctx.current_fn_key = self.current_fn_key;
@@ -5010,7 +4411,7 @@ const BodyContext = struct {
         }
 
         const fn_ty = (try self.indirectCalleeMonoType(call.func)) orelse fn_ty: {
-            var call_ctx = try BodyContext.init(self.allocator, self.builder, self.view, self.owner_template);
+            var call_ctx = try BodyContext.init(self.allocator, self.builder, self.view, self.owner_template, self.graph);
             defer call_ctx.deinit();
             call_ctx.owner_context_fn_key = self.owner_context_fn_key;
             call_ctx.current_fn_key = self.current_fn_key;
@@ -5089,9 +4490,6 @@ const BodyContext = struct {
         checked_ret_ty: checked.CheckedTypeId,
         operand: checked.CheckedExprId,
     ) Allocator.Error!LoweredCall {
-        if (!try self.checkedTypeCanLower(checked_ret_ty)) {
-            Common.invariant("divergent call result type was not concrete");
-        }
         const ret_ty = try self.lowerType(checked_ret_ty);
         return .{
             .ret_ty = ret_ty,
@@ -5121,52 +4519,17 @@ const BodyContext = struct {
         if (function.args.len != checked_args.len) {
             Common.invariant("checked direct call arity differs from its function type");
         }
-
-        const return_available_before_args =
-            expected_ret_ty != null or
-            caller.type_cells.contains(caller.typeAddress(checked_ret_ty)) or
-            try self.checkedTypeHasFixedShape(function.ret) or
-            try caller.checkedTypeHasFixedShape(checked_ret_ty);
-        const early_ret_ty = if (return_available_before_args)
-            try self.callReturnTypeFromCaller(
-                function.ret,
-                caller,
-                checked_ret_ty,
-                expected_ret_ty,
-                "checked direct call return type conflicted with an existing Monotype constraint",
-                "checked direct call result type conflicted with an existing Monotype constraint",
-            )
-        else
-            null;
-
-        try self.constrainCallArgTypesFromCallerToFixedPoint(function.args, caller, checked_args, "checked direct call argument type conflicted with an existing Monotype constraint");
-
-        const ret_ty = early_ret_ty orelse try self.callReturnTypeFromCaller(
-            function.ret,
-            caller,
-            checked_ret_ty,
-            expected_ret_ty,
-            "checked direct call return type conflicted with an existing Monotype constraint",
-            "checked direct call result type conflicted with an existing Monotype constraint",
-        );
-
-        try self.constrainCallArgTypesFromCallerToFixedPoint(function.args, caller, checked_args, "checked direct call argument type conflicted with an existing Monotype constraint");
-
-        const arg_tys = try self.allocator.alloc(Type.TypeId, function.args.len);
-        defer self.allocator.free(arg_tys);
-        for (function.args, 0..) |arg_ty, i| {
-            if (!try self.checkedTypeCanLower(arg_ty)) {
-                Common.invariant("checked direct call argument type was not concrete after call-site cell");
-            }
-            arg_tys[i] = try self.lowerType(arg_ty);
+        const fn_node = try self.instNode(source_fn_ty);
+        for (function.args, checked_args) |formal_ty, checked_arg| {
+            const arg_ty = caller.view.bodies.exprs[@intFromEnum(checked_arg)].ty;
+            try self.graph.unify(try self.instNode(formal_ty), try caller.instNode(arg_ty));
         }
-
-        const mono_fn_ty = try self.builder.program.types.add(.{ .func = .{
-            .args = try self.builder.program.types.addSpan(arg_tys),
-            .ret = ret_ty,
-        } });
-        try self.constrainTypeToMono(source_fn_ty, mono_fn_ty, "checked direct call function type conflicted with an existing Monotype constraint");
-        return mono_fn_ty;
+        try self.graph.unify(try self.instNode(function.ret), try caller.instNode(checked_ret_ty));
+        if (expected_ret_ty) |expected| {
+            try self.graph.unify(try self.instNode(function.ret), try self.graph.importMono(expected));
+        }
+        try self.graph.drainDirty();
+        return try self.graph.monoFor(fn_node);
     }
 
     fn instantiateDispatchPlanCallTypeFromCaller(
@@ -5181,48 +4544,31 @@ const BodyContext = struct {
         if (function.args.len != operands.len) {
             Common.invariant("checked dispatch plan arity differs from its function type");
         }
-
-        const return_available_before_args =
-            expected_ret_ty != null or
-            caller.type_cells.contains(caller.typeAddress(checked_ret_ty)) or
-            try self.checkedTypeHasFixedShape(function.ret) or
-            try caller.checkedTypeHasFixedShape(checked_ret_ty);
-        const early_ret_ty = if (return_available_before_args)
-            try self.dispatchReturnTypeFromCaller(
-                function.ret,
-                caller,
-                checked_ret_ty,
-                expected_ret_ty,
-            )
-        else
-            null;
-
-        try self.constrainDispatchArgTypesFromCallerToFixedPoint(function.args, caller, operands, "checked dispatch plan argument type conflicted with an existing Monotype constraint");
-
-        const ret_ty = early_ret_ty orelse try self.dispatchReturnTypeFromCaller(
-            function.ret,
-            caller,
-            checked_ret_ty,
-            expected_ret_ty,
-        );
-
-        try self.constrainDispatchArgTypesFromCallerToFixedPoint(function.args, caller, operands, "checked dispatch plan argument type conflicted with an existing Monotype constraint");
-
-        const arg_tys = try self.allocator.alloc(Type.TypeId, function.args.len);
-        defer self.allocator.free(arg_tys);
-        for (function.args, 0..) |arg_ty, i| {
-            if (!try self.checkedTypeCanLower(arg_ty)) {
-                Common.invariant("checked dispatch plan argument type was not concrete after call-site cell");
-            }
-            arg_tys[i] = try self.lowerType(arg_ty);
+        const fn_node = try self.instNode(source_fn_ty);
+        for (function.args, operands) |formal_ty, operand| {
+            try self.relateFormalToOperand(formal_ty, caller, operand);
         }
+        try self.graph.unify(try self.instNode(function.ret), try caller.instNode(checked_ret_ty));
+        if (expected_ret_ty) |expected| {
+            try self.graph.unify(try self.instNode(function.ret), try self.graph.importMono(expected));
+        }
+        try self.graph.drainDirty();
+        return try self.graph.monoFor(fn_node);
+    }
 
-        const mono_fn_ty = try self.builder.program.types.add(.{ .func = .{
-            .args = try self.builder.program.types.addSpan(arg_tys),
-            .ret = ret_ty,
-        } });
-        try self.constrainTypeToMono(source_fn_ty, mono_fn_ty, "checked dispatch plan function type conflicted with an existing Monotype constraint");
-        return mono_fn_ty;
+    fn relateFormalToOperand(
+        self: *BodyContext,
+        formal_ty: checked.CheckedTypeId,
+        caller: *BodyContext,
+        operand: static_dispatch.StaticDispatchOperand,
+    ) Allocator.Error!void {
+        switch (operand) {
+            .checked_expr => |checked_arg| {
+                const arg_ty = caller.view.bodies.exprs[@intFromEnum(checked_arg)].ty;
+                try self.graph.unify(try self.instNode(formal_ty), try caller.instNode(arg_ty));
+            },
+            .generated_numeral => {},
+        }
     }
 
     fn instantiateNumeralPlanCallType(
@@ -5237,92 +4583,15 @@ const BodyContext = struct {
         if (function.args.len != operands.len) {
             Common.invariant("checked from_numeral plan arity differs from its function type");
         }
-
-        try self.constrainTypeToMono(checked_ret_ty, target_ty, "checked from_numeral result type conflicted with an existing Monotype constraint");
-        try caller.constrainTypeToMono(checked_ret_ty, target_ty, "checked from_numeral result type conflicted with an existing Monotype constraint");
-        try self.constrainDispatchArgTypesFromCallerToFixedPoint(function.args, caller, operands, "checked from_numeral argument type conflicted with an existing Monotype constraint");
-
-        const ret_ty = if (try self.checkedTypeCanLower(function.ret))
-            try self.lowerType(function.ret)
-        else
-            Common.invariant("checked from_numeral return type was not concrete after result cell");
-
-        const arg_tys = try self.allocator.alloc(Type.TypeId, function.args.len);
-        defer self.allocator.free(arg_tys);
-        for (function.args, 0..) |arg_ty, i| {
-            if (!try self.checkedTypeCanLower(arg_ty)) {
-                Common.invariant("checked from_numeral argument type was not concrete after call-site cell");
-            }
-            arg_tys[i] = try self.lowerType(arg_ty);
+        const fn_node = try self.instNode(source_fn_ty);
+        const target_node = try self.graph.importMono(target_ty);
+        try self.graph.unify(try caller.instNode(checked_ret_ty), target_node);
+        try self.graph.unify(try self.instNode(function.ret), target_node);
+        for (function.args, operands) |formal_ty, operand| {
+            try self.relateFormalToOperand(formal_ty, caller, operand);
         }
-
-        const mono_fn_ty = try self.builder.program.types.add(.{ .func = .{
-            .args = try self.builder.program.types.addSpan(arg_tys),
-            .ret = ret_ty,
-        } });
-        try self.constrainTypeToMono(source_fn_ty, mono_fn_ty, "checked from_numeral function type conflicted with an existing Monotype constraint");
-        return mono_fn_ty;
-    }
-
-    fn callReturnTypeFromCaller(
-        self: *BodyContext,
-        function_ret: checked.CheckedTypeId,
-        caller: *BodyContext,
-        checked_ret_ty: checked.CheckedTypeId,
-        expected_ret_ty: ?Type.TypeId,
-        comptime return_conflict: []const u8,
-        comptime result_conflict: []const u8,
-    ) Allocator.Error!Type.TypeId {
-        try self.constrainCheckedTypeRelations(function_ret, caller, checked_ret_ty, return_conflict);
-
-        if (expected_ret_ty) |ret_ty| {
-            try self.constrainTypeToMono(function_ret, ret_ty, return_conflict);
-            try caller.constrainTypeToMono(checked_ret_ty, ret_ty, result_conflict);
-            return ret_ty;
-        }
-
-        if (caller.type_cells.get(caller.typeAddress(checked_ret_ty))) |caller_ret_cell| {
-            try self.constrainTypeToMono(function_ret, caller_ret_cell.ty, return_conflict);
-            return caller_ret_cell.ty;
-        }
-
-        if (try self.checkedTypeHasFixedShape(function_ret)) {
-            const callee_ret_ty = try self.lowerType(function_ret);
-            try caller.constrainTypeToMono(checked_ret_ty, callee_ret_ty, result_conflict);
-            return callee_ret_ty;
-        }
-
-        if (try caller.checkedTypeHasFixedShape(checked_ret_ty)) {
-            const caller_ret_ty = try caller.lowerType(checked_ret_ty);
-            try self.constrainTypeToMono(function_ret, caller_ret_ty, return_conflict);
-            return caller_ret_ty;
-        }
-
-        if (try self.checkedTypeHasConcreteShape(function_ret)) {
-            const callee_ret_ty = try self.lowerType(function_ret);
-            try caller.constrainTypeToMono(checked_ret_ty, callee_ret_ty, result_conflict);
-            return callee_ret_ty;
-        }
-
-        if (try caller.checkedTypeHasConcreteShape(checked_ret_ty)) {
-            const caller_ret_ty = try caller.lowerType(checked_ret_ty);
-            try self.constrainTypeToMono(function_ret, caller_ret_ty, return_conflict);
-            return caller_ret_ty;
-        }
-
-        if (try self.checkedTypeCanLower(function_ret)) {
-            const callee_ret_ty = try self.lowerType(function_ret);
-            try caller.constrainTypeToMono(checked_ret_ty, callee_ret_ty, result_conflict);
-            return callee_ret_ty;
-        }
-
-        if (try caller.checkedTypeCanLower(checked_ret_ty)) {
-            const caller_ret_ty = try caller.lowerType(checked_ret_ty);
-            try self.constrainTypeToMono(function_ret, caller_ret_ty, return_conflict);
-            return caller_ret_ty;
-        }
-
-        Common.invariant("checked call return type was not concrete after call-site cell");
+        try self.graph.drainDirty();
+        return try self.graph.monoFor(fn_node);
     }
 
     fn instantiateTargetFromPlan(
@@ -5337,218 +4606,13 @@ const BodyContext = struct {
         if (function.args.len != plan_function.args.len) {
             Common.invariant("checked dispatch target arity differed from its dispatch plan");
         }
-
-        try self.constrainTargetArgsFromPlanToFixedPoint(function.args, plan_ctx, plan_function.args, "checked dispatch target argument type conflicted with an existing Monotype constraint");
-
-        const inferred_ret_ty = if (expected_ret_ty == null)
-            try self.inferCurrentTemplateReturnTypeFromArgs(function)
-        else
-            null;
-        const ret_ty = try self.targetReturnTypeFromPlan(
-            function.ret,
-            plan_ctx,
-            plan_function.ret,
-            expected_ret_ty orelse inferred_ret_ty,
-            "checked dispatch target return type conflicted with an existing Monotype constraint",
-        );
-
-        try self.constrainTargetArgsFromPlanToFixedPoint(function.args, plan_ctx, plan_function.args, "checked dispatch target argument type conflicted with an existing Monotype constraint");
-
-        const arg_tys = try self.allocator.alloc(Type.TypeId, function.args.len);
-        defer self.allocator.free(arg_tys);
-        for (function.args, 0..) |arg_ty, i| {
-            if (!try self.checkedTypeCanLower(arg_ty)) {
-                Common.invariant("checked dispatch target argument type was not concrete after call-site cell");
-            }
-            arg_tys[i] = try self.lowerType(arg_ty);
-        }
-
-        const mono_fn_ty = try self.builder.program.types.add(.{ .func = .{
-            .args = try self.builder.program.types.addSpan(arg_tys),
-            .ret = ret_ty,
-        } });
-        try self.constrainTypeToMono(source_fn_ty, mono_fn_ty, "checked dispatch target function type conflicted with an existing Monotype constraint");
-        return mono_fn_ty;
-    }
-
-    fn constrainTargetArgsFromPlanToFixedPoint(
-        self: *BodyContext,
-        target_args: []const checked.CheckedTypeId,
-        plan_ctx: *BodyContext,
-        plan_args: []const checked.CheckedTypeId,
-        comptime conflict_message: []const u8,
-    ) Allocator.Error!void {
-        while (true) {
-            const before_self = self.type_cell_revision;
-            const before_plan = plan_ctx.type_cell_revision;
-            const before_widen = self.builder.widen_revision;
-            try self.constrainTargetArgsFromPlan(target_args, plan_ctx, plan_args, conflict_message);
-            if (self.type_cell_revision == before_self and plan_ctx.type_cell_revision == before_plan and self.builder.widen_revision == before_widen) return;
-        }
-    }
-
-    fn constrainTargetArgsFromPlan(
-        self: *BodyContext,
-        target_args: []const checked.CheckedTypeId,
-        plan_ctx: *BodyContext,
-        plan_args: []const checked.CheckedTypeId,
-        comptime conflict_message: []const u8,
-    ) Allocator.Error!void {
-        if (target_args.len != plan_args.len) Common.invariant("checked dispatch target arity differed from its dispatch plan");
-        for (target_args, plan_args) |target_arg, plan_arg| {
-            try self.constrainCheckedTypeRelations(target_arg, plan_ctx, plan_arg, conflict_message);
-
-            if (try self.checkedTypeHasFixedShape(target_arg)) {
-                const target_mono_ty = try self.lowerType(target_arg);
-                try plan_ctx.constrainTypeToMono(plan_arg, target_mono_ty, conflict_message);
-                continue;
-            }
-
-            if (try plan_ctx.checkedTypeHasFixedShape(plan_arg)) {
-                const plan_mono_ty = try plan_ctx.lowerType(plan_arg);
-                try self.constrainTypeToMono(target_arg, plan_mono_ty, conflict_message);
-                continue;
-            }
-
-            if (self.type_cells.get(self.typeAddress(target_arg))) |target_cell| {
-                try plan_ctx.constrainTypeToMono(plan_arg, target_cell.ty, conflict_message);
-                continue;
-            }
-
-            if (plan_ctx.type_cells.get(plan_ctx.typeAddress(plan_arg))) |plan_cell| {
-                try self.constrainTypeToMono(target_arg, plan_cell.ty, conflict_message);
-                continue;
-            }
-
-            if (try self.checkedTypeHasConcreteShape(target_arg)) {
-                const target_mono_ty = try self.lowerType(target_arg);
-                try plan_ctx.constrainTypeToMono(plan_arg, target_mono_ty, conflict_message);
-                continue;
-            }
-
-            if (try plan_ctx.checkedTypeHasConcreteShape(plan_arg)) {
-                const plan_mono_ty = try plan_ctx.lowerType(plan_arg);
-                try self.constrainTypeToMono(target_arg, plan_mono_ty, conflict_message);
-                continue;
-            }
-        }
-    }
-
-    fn targetReturnTypeFromPlan(
-        self: *BodyContext,
-        target_ret: checked.CheckedTypeId,
-        plan_ctx: *BodyContext,
-        plan_ret: checked.CheckedTypeId,
-        expected_ret_ty: ?Type.TypeId,
-        comptime conflict_message: []const u8,
-    ) Allocator.Error!Type.TypeId {
-        if (expected_ret_ty) |ret_ty| {
-            try self.constrainTypeToMono(target_ret, ret_ty, conflict_message);
-            try plan_ctx.constrainTypeToMono(plan_ret, ret_ty, conflict_message);
-            try self.constrainCheckedTypeRelations(target_ret, plan_ctx, plan_ret, conflict_message);
-            return ret_ty;
-        }
-
-        try self.constrainCheckedTypeRelations(target_ret, plan_ctx, plan_ret, conflict_message);
-
-        if (try self.checkedTypeHasFixedShape(target_ret)) {
-            const target_mono_ty = try self.lowerType(target_ret);
-            try plan_ctx.constrainTypeToMono(plan_ret, target_mono_ty, conflict_message);
-            return target_mono_ty;
-        }
-
-        if (try plan_ctx.checkedTypeHasFixedShape(plan_ret)) {
-            const plan_mono_ty = try plan_ctx.lowerType(plan_ret);
-            try self.constrainTypeToMono(target_ret, plan_mono_ty, conflict_message);
-            return plan_mono_ty;
-        }
-
-        if (self.type_cells.get(self.typeAddress(target_ret))) |target_cell| {
-            try plan_ctx.constrainTypeToMono(plan_ret, target_cell.ty, conflict_message);
-            return target_cell.ty;
-        }
-
-        if (plan_ctx.type_cells.get(plan_ctx.typeAddress(plan_ret))) |plan_cell| {
-            try self.constrainTypeToMono(target_ret, plan_cell.ty, conflict_message);
-            return plan_cell.ty;
-        }
-
-        if (try self.checkedTypeHasConcreteShape(target_ret)) {
-            const target_mono_ty = try self.lowerType(target_ret);
-            try plan_ctx.constrainTypeToMono(plan_ret, target_mono_ty, conflict_message);
-            return target_mono_ty;
-        }
-
-        if (try plan_ctx.checkedTypeHasConcreteShape(plan_ret)) {
-            const plan_mono_ty = try plan_ctx.lowerType(plan_ret);
-            try self.constrainTypeToMono(target_ret, plan_mono_ty, conflict_message);
-            return plan_mono_ty;
-        }
-
-        if (try self.checkedTypeCanLower(target_ret)) {
-            const target_mono_ty = try self.lowerType(target_ret);
-            try plan_ctx.constrainTypeToMono(plan_ret, target_mono_ty, conflict_message);
-            return target_mono_ty;
-        }
-
-        if (try plan_ctx.checkedTypeCanLower(plan_ret)) {
-            const plan_mono_ty = try plan_ctx.lowerType(plan_ret);
-            try self.constrainTypeToMono(target_ret, plan_mono_ty, conflict_message);
-            return plan_mono_ty;
-        }
-
-        Common.invariant("checked dispatch target return type was not concrete after plan cell");
-    }
-
-    fn dispatchReturnTypeFromCaller(
-        self: *BodyContext,
-        function_ret: checked.CheckedTypeId,
-        caller: *BodyContext,
-        checked_ret_ty: checked.CheckedTypeId,
-        expected_ret_ty: ?Type.TypeId,
-    ) Allocator.Error!Type.TypeId {
+        const fn_node = try self.instNode(source_fn_ty);
+        try self.graph.unify(fn_node, try plan_ctx.instNode(plan_fn_ty));
         if (expected_ret_ty) |expected| {
-            try self.constrainTypeToMono(function_ret, expected, "checked dispatch plan return type conflicted with an existing Monotype constraint");
-            try caller.constrainTypeToMono(checked_ret_ty, expected, "checked dispatch result type conflicted with an existing Monotype constraint");
-            return expected;
+            try self.graph.unify(try self.instNode(function.ret), try self.graph.importMono(expected));
         }
-
-        if (caller.type_cells.get(caller.typeAddress(checked_ret_ty))) |caller_ret_cell| {
-            try self.constrainTypeToMono(function_ret, caller_ret_cell.ty, "checked dispatch plan return type conflicted with an existing Monotype constraint");
-            return caller_ret_cell.ty;
-        }
-
-        if (try self.checkedTypeHasFixedShape(function_ret)) {
-            const ret_ty = try self.lowerType(function_ret);
-            try caller.constrainTypeToMono(checked_ret_ty, ret_ty, "checked dispatch result type conflicted with an existing Monotype constraint");
-            return ret_ty;
-        }
-
-        if (try caller.checkedTypeHasFixedShape(checked_ret_ty)) {
-            const ret_ty = try caller.lowerType(checked_ret_ty);
-            try self.constrainTypeToMono(function_ret, ret_ty, "checked dispatch plan return type conflicted with an existing Monotype constraint");
-            return ret_ty;
-        }
-
-        if (try self.checkedTypeHasConcreteShape(function_ret)) {
-            const ret_ty = try self.lowerType(function_ret);
-            try caller.constrainTypeToMono(checked_ret_ty, ret_ty, "checked dispatch result type conflicted with an existing Monotype constraint");
-            return ret_ty;
-        }
-
-        if (try caller.checkedTypeHasConcreteShape(checked_ret_ty)) {
-            const ret_ty = try caller.lowerType(checked_ret_ty);
-            try self.constrainTypeToMono(function_ret, ret_ty, "checked dispatch plan return type conflicted with an existing Monotype constraint");
-            return ret_ty;
-        }
-
-        if (try self.checkedTypeCanLower(function_ret)) {
-            const ret_ty = try self.lowerType(function_ret);
-            try caller.constrainTypeToMono(checked_ret_ty, ret_ty, "checked dispatch result type conflicted with an existing Monotype constraint");
-            return ret_ty;
-        }
-
-        Common.invariant("checked dispatch plan return type was not concrete after call-site cell");
+        try self.graph.drainDirty();
+        return try self.graph.monoFor(fn_node);
     }
 
     fn instantiateTargetCallTypeFromMonoArgs(
@@ -5561,328 +4625,13 @@ const BodyContext = struct {
         if (function.args.len != arg_tys.len) {
             Common.invariant("checked synthetic dispatch target arity differs from its function type");
         }
-
-        try self.constrainTypeSpanToMono(function.args, arg_tys, "checked synthetic dispatch target argument type conflicted with an existing Monotype constraint");
-        try self.constrainTypeToMono(function.ret, ret_ty, "checked synthetic dispatch target return type conflicted with an existing Monotype constraint");
-
-        const mono_fn_ty = try self.builder.program.types.add(.{ .func = .{
-            .args = try self.builder.program.types.addSpan(arg_tys),
-            .ret = ret_ty,
-        } });
-        try self.constrainTypeToMono(source_fn_ty, mono_fn_ty, "checked synthetic dispatch target function type conflicted with an existing Monotype constraint");
-        return mono_fn_ty;
-    }
-
-    fn constrainCallArgTypesFromCaller(
-        self: *BodyContext,
-        formal_tys: []const checked.CheckedTypeId,
-        caller: *BodyContext,
-        checked_args: []const checked.CheckedExprId,
-        comptime numeric_literals: bool,
-        comptime conflict_message: []const u8,
-    ) Allocator.Error!void {
-        for (formal_tys, checked_args) |formal_ty, checked_arg| {
-            if ((try caller.exprHasNumericDefault(checked_arg)) != numeric_literals) continue;
-            if (numeric_literals and try self.checkedTypeHasFixedShape(formal_ty)) continue;
-            const actual_ty = caller.view.bodies.exprs[@intFromEnum(checked_arg)].ty;
-            try self.constrainCheckedTypeRelations(
-                formal_ty,
-                caller,
-                actual_ty,
-                conflict_message,
-            );
-
-            if (try self.checkedTypeHasFixedShape(formal_ty)) {
-                const formal_mono_ty = try self.lowerType(formal_ty);
-                try caller.constrainTypeToMono(actual_ty, formal_mono_ty, conflict_message);
-                continue;
-            }
-
-            if (try caller.checkedTypeHasFixedShape(actual_ty)) {
-                const actual_mono_ty = try caller.lowerType(actual_ty);
-                try self.constrainTypeToMono(formal_ty, actual_mono_ty, conflict_message);
-                continue;
-            }
-
-            if (try caller.callArgumentMonoType(checked_arg, try self.expectedMonoForFormal(formal_ty), numeric_literals)) |actual_mono_ty| {
-                try self.constrainTypeToMono(
-                    formal_ty,
-                    actual_mono_ty,
-                    conflict_message,
-                );
-                try caller.constrainTypeToMono(
-                    actual_ty,
-                    actual_mono_ty,
-                    conflict_message,
-                );
-            }
+        const fn_node = try self.instNode(source_fn_ty);
+        for (function.args, arg_tys) |formal_ty, arg_ty| {
+            try self.graph.unify(try self.instNode(formal_ty), try self.graph.importMono(arg_ty));
         }
-    }
-
-    fn constrainCallArgTypesFromCallerToFixedPoint(
-        self: *BodyContext,
-        formal_tys: []const checked.CheckedTypeId,
-        caller: *BodyContext,
-        checked_args: []const checked.CheckedExprId,
-        comptime conflict_message: []const u8,
-    ) Allocator.Error!void {
-        while (true) {
-            const before_self = self.type_cell_revision;
-            const before_caller = caller.type_cell_revision;
-            const before_widen = self.builder.widen_revision;
-            try self.constrainCallArgTypesFromCaller(formal_tys, caller, checked_args, false, conflict_message);
-            try self.constrainCallArgTypesFromCaller(formal_tys, caller, checked_args, true, conflict_message);
-            if (self.type_cell_revision == before_self and caller.type_cell_revision == before_caller and self.builder.widen_revision == before_widen) return;
-        }
-    }
-
-    fn constrainDispatchArgTypesFromCaller(
-        self: *BodyContext,
-        formal_tys: []const checked.CheckedTypeId,
-        caller: *BodyContext,
-        operands: []const static_dispatch.StaticDispatchOperand,
-        comptime numeric_literals: bool,
-        comptime conflict_message: []const u8,
-    ) Allocator.Error!void {
-        for (formal_tys, operands) |formal_ty, operand| {
-            const has_numeric_default = try caller.dispatchOperandHasNumericDefault(operand);
-            if (has_numeric_default != numeric_literals) continue;
-            if (numeric_literals and try self.checkedTypeHasFixedShape(formal_ty)) continue;
-            switch (operand) {
-                .checked_expr => |checked_arg| {
-                    const actual_ty = caller.view.bodies.exprs[@intFromEnum(checked_arg)].ty;
-                    try self.constrainCheckedTypeRelations(
-                        formal_ty,
-                        caller,
-                        actual_ty,
-                        conflict_message,
-                    );
-
-                    if (try self.checkedTypeHasFixedShape(formal_ty)) {
-                        const formal_mono_ty = try self.lowerType(formal_ty);
-                        try caller.constrainTypeToMono(actual_ty, formal_mono_ty, conflict_message);
-                        continue;
-                    }
-
-                    if (try caller.checkedTypeHasFixedShape(actual_ty)) {
-                        const actual_mono_ty = try caller.lowerType(actual_ty);
-                        try self.constrainTypeToMono(formal_ty, actual_mono_ty, conflict_message);
-                        continue;
-                    }
-
-                    if (try caller.callArgumentMonoType(checked_arg, try self.expectedMonoForFormal(formal_ty), numeric_literals)) |actual_mono_ty| {
-                        try self.constrainTypeToMono(
-                            formal_ty,
-                            actual_mono_ty,
-                            conflict_message,
-                        );
-                        try caller.constrainTypeToMono(
-                            actual_ty,
-                            actual_mono_ty,
-                            conflict_message,
-                        );
-                    }
-                },
-                .generated_numeral => {},
-            }
-        }
-    }
-
-    fn constrainDispatchArgTypesFromCallerToFixedPoint(
-        self: *BodyContext,
-        formal_tys: []const checked.CheckedTypeId,
-        caller: *BodyContext,
-        operands: []const static_dispatch.StaticDispatchOperand,
-        comptime conflict_message: []const u8,
-    ) Allocator.Error!void {
-        while (true) {
-            const before_self = self.type_cell_revision;
-            const before_caller = caller.type_cell_revision;
-            const before_widen = self.builder.widen_revision;
-            try self.constrainDispatchArgTypesFromCaller(formal_tys, caller, operands, false, conflict_message);
-            try self.constrainDispatchArgTypesFromCaller(formal_tys, caller, operands, true, conflict_message);
-            if (self.type_cell_revision == before_self and caller.type_cell_revision == before_caller and self.builder.widen_revision == before_widen) return;
-        }
-    }
-
-    fn constrainCheckedTypeRelations(
-        self: *BodyContext,
-        left_ty: checked.CheckedTypeId,
-        right_ctx: *BodyContext,
-        right_ty: checked.CheckedTypeId,
-        comptime conflict_message: []const u8,
-    ) Allocator.Error!void {
-        self.builder.constrain_depth += 1;
-        defer self.builder.constrain_depth -= 1;
-        var active = std.AutoHashMap(CheckedTypeRelation, void).init(self.allocator);
-        defer active.deinit();
-        try self.constrainCheckedTypeRelationsInner(left_ty, right_ctx, right_ty, conflict_message, &active);
-        if (self.builder.constrain_depth == 1) try self.builder.drainWidenQueue();
-    }
-
-    fn constrainCheckedTypeRelationsInner(
-        self: *BodyContext,
-        left_ty: checked.CheckedTypeId,
-        right_ctx: *BodyContext,
-        right_ty: checked.CheckedTypeId,
-        comptime conflict_message: []const u8,
-        active: *std.AutoHashMap(CheckedTypeRelation, void),
-    ) Allocator.Error!void {
-        const relation = CheckedTypeRelation{
-            .left = self.typeAddress(left_ty),
-            .right = right_ctx.typeAddress(right_ty),
-        };
-        if (active.contains(relation)) return;
-        try active.put(relation, {});
-        defer _ = active.remove(relation);
-
-        if (self.type_cells.get(relation.left)) |left_cell| {
-            const left_fixed = try self.checkedTypeHasFixedShape(left_ty);
-            if (left_fixed) {
-                try right_ctx.constrainTypeToMono(right_ty, left_cell.ty, conflict_message);
-            }
-        }
-        if (right_ctx.type_cells.get(relation.right)) |right_cell| {
-            const right_fixed = try right_ctx.checkedTypeHasFixedShape(right_ty);
-            if (right_fixed) {
-                try self.constrainTypeToMono(left_ty, right_cell.ty, conflict_message);
-            }
-        }
-
-        const left_payload = checkedPayload(self.view, left_ty);
-        const right_payload = checkedPayload(right_ctx.view, right_ty);
-        switch (left_payload) {
-            .function => |left_fn| switch (right_payload) {
-                .function => |right_fn| {
-                    if (left_fn.args.len != right_fn.args.len) return;
-                    for (left_fn.args, right_fn.args) |left_arg, right_arg| {
-                        try self.constrainCheckedTypeRelationsInner(left_arg, right_ctx, right_arg, conflict_message, active);
-                    }
-                    try self.constrainCheckedTypeRelationsInner(left_fn.ret, right_ctx, right_fn.ret, conflict_message, active);
-                },
-                else => {},
-            },
-            .tuple => |left_items| switch (right_payload) {
-                .tuple => |right_items| {
-                    if (left_items.len != right_items.len) return;
-                    for (left_items, right_items) |left_item, right_item| {
-                        try self.constrainCheckedTypeRelationsInner(left_item, right_ctx, right_item, conflict_message, active);
-                    }
-                },
-                else => {},
-            },
-            .nominal => |left_nominal| switch (right_payload) {
-                .nominal => |right_nominal| {
-                    if (left_nominal.args.len != right_nominal.args.len) return;
-                    for (left_nominal.args, right_nominal.args) |left_arg, right_arg| {
-                        try self.constrainCheckedTypeRelationsInner(left_arg, right_ctx, right_arg, conflict_message, active);
-                    }
-                },
-                else => {},
-            },
-            .alias => |left_alias| switch (right_payload) {
-                .alias => |right_alias| {
-                    if (left_alias.args.len != right_alias.args.len) return;
-                    for (left_alias.args, right_alias.args) |left_arg, right_arg| {
-                        try self.constrainCheckedTypeRelationsInner(left_arg, right_ctx, right_arg, conflict_message, active);
-                    }
-                    try self.constrainCheckedTypeRelationsInner(left_alias.backing, right_ctx, right_alias.backing, conflict_message, active);
-                },
-                else => {},
-            },
-            .record_unbound => |left_fields| switch (right_payload) {
-                .record_unbound => |right_fields| try self.constrainCheckedRecordRelations(right_ctx, left_fields, right_fields, conflict_message, active),
-                .record => |right_record| try self.constrainCheckedRecordRelations(right_ctx, left_fields, right_record.fields, conflict_message, active),
-                else => {},
-            },
-            .record => |left_record| switch (right_payload) {
-                .record_unbound => |right_fields| try self.constrainCheckedRecordRelations(right_ctx, left_record.fields, right_fields, conflict_message, active),
-                .record => |right_record| {
-                    try self.constrainCheckedRecordRelations(right_ctx, left_record.fields, right_record.fields, conflict_message, active);
-                    try self.constrainCheckedTypeRelationsInner(left_record.ext, right_ctx, right_record.ext, conflict_message, active);
-                },
-                else => {},
-            },
-            .tag_union => |left_union| switch (right_payload) {
-                .tag_union => |right_union| {
-                    try self.constrainCheckedTagRelations(right_ctx, left_union.tags, right_union.tags, conflict_message, active);
-                    try self.constrainCheckedTypeRelationsInner(left_union.ext, right_ctx, right_union.ext, conflict_message, active);
-                },
-                else => {},
-            },
-            .flex,
-            .rigid,
-            .empty_record,
-            .empty_tag_union,
-            .pending,
-            => {},
-        }
-    }
-
-    fn constrainCheckedRecordRelations(
-        self: *BodyContext,
-        right_ctx: *BodyContext,
-        left_fields: []const checked.CheckedRecordField,
-        right_fields: []const checked.CheckedRecordField,
-        comptime conflict_message: []const u8,
-        active: *std.AutoHashMap(CheckedTypeRelation, void),
-    ) Allocator.Error!void {
-        for (left_fields) |left_field| {
-            const right_field = self.findCheckedRecordField(right_ctx, right_fields, left_field.name) orelse return;
-            try self.constrainCheckedTypeRelationsInner(left_field.ty, right_ctx, right_field.ty, conflict_message, active);
-        }
-    }
-
-    fn findCheckedRecordField(
-        self: *BodyContext,
-        right_ctx: *BodyContext,
-        right_fields: []const checked.CheckedRecordField,
-        left_name: names.RecordFieldNameId,
-    ) ?checked.CheckedRecordField {
-        const wanted = self.view.names.recordFieldLabelText(left_name);
-        for (right_fields) |right_field| {
-            if (Ident.textEql(wanted, right_ctx.view.names.recordFieldLabelText(right_field.name))) return right_field;
-        }
-        return null;
-    }
-
-    fn constrainCheckedTagRelations(
-        self: *BodyContext,
-        right_ctx: *BodyContext,
-        left_tags: []const checked.CheckedTag,
-        right_tags: []const checked.CheckedTag,
-        comptime conflict_message: []const u8,
-        active: *std.AutoHashMap(CheckedTypeRelation, void),
-    ) Allocator.Error!void {
-        for (left_tags) |left_tag| {
-            const right_tag = self.findCheckedTag(right_ctx, right_tags, left_tag.name) orelse return;
-            if (left_tag.args.len != right_tag.args.len) return;
-            for (left_tag.args, right_tag.args) |left_arg, right_arg| {
-                try self.constrainCheckedTypeRelationsInner(left_arg, right_ctx, right_arg, conflict_message, active);
-            }
-        }
-    }
-
-    fn findCheckedTag(
-        self: *BodyContext,
-        right_ctx: *BodyContext,
-        right_tags: []const checked.CheckedTag,
-        left_name: names.TagNameId,
-    ) ?checked.CheckedTag {
-        const wanted = self.view.names.tagLabelText(left_name);
-        for (right_tags) |right_tag| {
-            if (Ident.textEql(wanted, right_ctx.view.names.tagLabelText(right_tag.name))) return right_tag;
-        }
-        return null;
-    }
-
-    fn expectedMonoForFormal(self: *BodyContext, formal_ty: checked.CheckedTypeId) Allocator.Error!?Type.TypeId {
-        if (self.type_cells.get(self.typeAddress(formal_ty))) |cell| {
-            if (cell.hasFixedShape()) return cell.ty;
-            return null;
-        }
-        if (try self.checkedTypeHasFixedShape(formal_ty)) return try self.lowerType(formal_ty);
-        return null;
+        try self.graph.unify(try self.instNode(function.ret), try self.graph.importMono(ret_ty));
+        try self.graph.drainDirty();
+        return try self.graph.monoFor(fn_node);
     }
 
     fn callArgumentMonoType(
@@ -5891,39 +4640,13 @@ const BodyContext = struct {
         expected_ty: ?Type.TypeId,
         allow_defaulted_type: bool,
     ) Allocator.Error!?Type.TypeId {
+        _ = allow_defaulted_type;
         const expr = self.view.bodies.exprs[@intFromEnum(checked_arg)];
-        return switch (expr.data) {
-            .call => |call| if (expected_ty != null) try self.callResultMonoType(expr.ty, call, expected_ty) else null,
-            .dispatch_call => |plan| try self.dispatchResultMonoType(expr.ty, plan, expected_ty),
-            .type_dispatch_call => |plan| try self.dispatchResultMonoType(expr.ty, plan, expected_ty),
-            .method_eq => |plan| try self.dispatchResultMonoType(expr.ty, plan, expected_ty),
-            .lookup_local => |lookup| try self.lookupArgumentMonoType(expr.ty, lookup.resolved, expected_ty, allow_defaulted_type),
-            .lookup_external => |resolved| try self.lookupArgumentMonoType(expr.ty, resolved, expected_ty, allow_defaulted_type),
-            .lookup_required => |resolved| try self.lookupArgumentMonoType(expr.ty, resolved, expected_ty, allow_defaulted_type),
-            .field_access => |field| try self.fieldAccessMonoType(field.receiver, field.field_name),
-            .lambda,
-            .closure,
-            => if (expected_ty) |ty| ty else if (try self.checkedTypeHasFixedShape(expr.ty) or
-                (allow_defaulted_type and try self.checkedTypeHasConcreteShape(expr.ty)))
-                try self.lowerType(expr.ty)
-            else
-                null,
-            else => if (expected_ty) |ty| blk: {
-                try self.constrainTypeToMono(expr.ty, ty, "checked call argument expected type conflicted with an existing Monotype constraint");
-                break :blk ty;
-            } else if (try self.checkedTypeHasFixedShape(expr.ty) or
-                (allow_defaulted_type and try self.checkedTypeHasConcreteShape(expr.ty)))
-                try self.lowerType(expr.ty)
-            else
-                null,
-        };
-    }
-
-    fn constrainedMonoType(self: *BodyContext, checked_ty: checked.CheckedTypeId) ?Type.TypeId {
-        if (self.type_cells.get(self.typeAddress(checked_ty))) |cell| {
-            if (cell.hasConcreteShape()) return cell.ty;
+        if (expected_ty) |ty| {
+            try self.constrainTypeToMono(expr.ty, ty, "checked call argument expected type conflicted with an existing Monotype constraint");
+            return ty;
         }
-        return null;
+        return try self.lowerType(expr.ty);
     }
 
     fn lookupExprMonoType(
@@ -5953,15 +4676,16 @@ const BodyContext = struct {
         expected_ty: ?Type.TypeId,
         allow_defaulted_type: bool,
     ) Allocator.Error!?Type.TypeId {
+        _ = allow_defaulted_type;
         if (maybe_ref) |ref_id| {
             if (self.currentLocalForResolvedValue(ref_id)) |local_id| {
                 const local_ty = self.builder.program.locals.items[@intFromEnum(local_id)].ty;
+                try self.constrainTypeToMono(checked_ty, local_ty, "checked local lookup type conflicted with an existing Monotype constraint");
                 if (expected_ty) |expected| {
                     if (!self.sameType(expected, local_ty)) {
                         Common.invariant("checked local lookup argument type differed from its expected monotype");
                     }
                 }
-                try self.constrainTypeToMono(checked_ty, local_ty, "checked local lookup type conflicted with an existing Monotype constraint");
                 return local_ty;
             }
         }
@@ -5970,14 +4694,7 @@ const BodyContext = struct {
             try self.constrainTypeToMono(checked_ty, ty, "checked call argument expected type conflicted with an existing Monotype constraint");
             return ty;
         }
-
-        if (self.constrainedMonoType(checked_ty)) |constrained_ty| return constrained_ty;
-        if (try self.checkedTypeHasFixedShape(checked_ty) or
-            (allow_defaulted_type and try self.checkedTypeHasConcreteShape(checked_ty)))
-        {
-            return try self.lowerType(checked_ty);
-        }
-        return null;
+        return try self.lowerType(checked_ty);
     }
 
     fn fieldAccessMonoType(
@@ -6012,7 +4729,7 @@ const BodyContext = struct {
                 return ret_ty;
             }
 
-            var call_ctx = try BodyContext.init(self.allocator, self.builder, self.view, self.owner_template);
+            var call_ctx = try BodyContext.init(self.allocator, self.builder, self.view, self.owner_template, self.graph);
             defer call_ctx.deinit();
             call_ctx.owner_context_fn_key = self.owner_context_fn_key;
             call_ctx.current_fn_key = self.current_fn_key;
@@ -6021,7 +4738,7 @@ const BodyContext = struct {
             return call_ctx.functionReturnType(mono_fn_ty);
         }
 
-        var call_ctx = try BodyContext.init(self.allocator, self.builder, self.view, self.owner_template);
+        var call_ctx = try BodyContext.init(self.allocator, self.builder, self.view, self.owner_template, self.graph);
         defer call_ctx.deinit();
         call_ctx.owner_context_fn_key = self.owner_context_fn_key;
         call_ctx.current_fn_key = self.current_fn_key;
@@ -6296,7 +5013,9 @@ const BodyContext = struct {
             wrapper_fn_ty,
         );
 
-        var body_ctx = try BodyContext.init(self.allocator, self.builder, store_view, eval.entry_template);
+        const graph = try InstGraph.create(self.allocator, self.builder);
+        defer graph.destroy();
+        var body_ctx = try BodyContext.init(self.allocator, self.builder, store_view, eval.entry_template, graph);
         defer body_ctx.deinit();
         const root_fn_key = Ast.fnTemplateDigest(wrapper_template, &self.builder.program.types, &self.builder.program.names);
         body_ctx.owner_context_fn_key = root_fn_key;
@@ -6850,7 +5569,7 @@ const BodyContext = struct {
         const plan_id = maybe_plan orelse Common.invariant("checked dispatch expression reached Monotype without a dispatch plan");
         const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
 
-        var call_ctx = try BodyContext.init(self.allocator, self.builder, self.view, self.owner_template);
+        var call_ctx = try BodyContext.init(self.allocator, self.builder, self.view, self.owner_template, self.graph);
         defer call_ctx.deinit();
         call_ctx.owner_context_fn_key = self.owner_context_fn_key;
         call_ctx.current_fn_key = self.current_fn_key;
@@ -6909,7 +5628,7 @@ const BodyContext = struct {
         const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
         if (plan.result_mode != .value) Common.invariant("checked from_numeral plan had a non-value result mode");
 
-        var call_ctx = try BodyContext.init(self.allocator, self.builder, self.view, self.owner_template);
+        var call_ctx = try BodyContext.init(self.allocator, self.builder, self.view, self.owner_template, self.graph);
         defer call_ctx.deinit();
         call_ctx.owner_context_fn_key = self.owner_context_fn_key;
         call_ctx.current_fn_key = self.current_fn_key;
@@ -7094,7 +5813,7 @@ const BodyContext = struct {
         const plan_id = maybe_plan orelse Common.invariant("checked dispatch expression reached Monotype without a dispatch plan");
         const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
 
-        var call_ctx = try BodyContext.init(self.allocator, self.builder, self.view, self.owner_template);
+        var call_ctx = try BodyContext.init(self.allocator, self.builder, self.view, self.owner_template, self.graph);
         defer call_ctx.deinit();
         call_ctx.owner_context_fn_key = self.owner_context_fn_key;
         call_ctx.current_fn_key = self.current_fn_key;
@@ -7198,7 +5917,7 @@ const BodyContext = struct {
                 break :blk self.owner_template;
             },
         };
-        return BodyContext.init(self.allocator, self.builder, lookup.view, owner_template);
+        return BodyContext.init(self.allocator, self.builder, lookup.view, owner_template, self.graph);
     }
 
     fn requireLocalMethodTargetInCurrentView(self: *BodyContext, lookup: MethodLookup) void {
@@ -7334,105 +6053,13 @@ const BodyContext = struct {
     fn structuralEqualityOperandType(self: *BodyContext, eq: anytype) Allocator.Error!Type.TypeId {
         const lhs_checked_ty = self.view.bodies.exprs[@intFromEnum(eq.lhs)].ty;
         const rhs_checked_ty = self.view.bodies.exprs[@intFromEnum(eq.rhs)].ty;
-        const conflict_message = "checked structural equality operand type conflicted with an existing Monotype constraint";
-
-        try self.constrainCheckedTypeRelations(lhs_checked_ty, self, rhs_checked_ty, conflict_message);
-
-        if (try self.structuralEqualityExprResultType(eq.lhs, null)) |lhs_ty| {
-            return try self.constrainStructuralEqualityOperandType(lhs_ty, eq.rhs, rhs_checked_ty, conflict_message);
-        }
-        if (try self.structuralEqualityExprResultType(eq.rhs, null)) |rhs_ty| {
-            return try self.constrainStructuralEqualityOperandType(rhs_ty, eq.lhs, lhs_checked_ty, conflict_message);
-        }
-
-        if (self.constrainedMonoType(lhs_checked_ty)) |lhs_ty| {
-            try self.constrainTypeToMono(rhs_checked_ty, lhs_ty, conflict_message);
-            return lhs_ty;
-        }
-        if (self.constrainedMonoType(rhs_checked_ty)) |rhs_ty| {
-            try self.constrainTypeToMono(lhs_checked_ty, rhs_ty, conflict_message);
-            return rhs_ty;
-        }
-
-        if (try self.checkedTypeHasFixedShape(lhs_checked_ty)) {
-            const lhs_ty = try self.lowerType(lhs_checked_ty);
-            try self.constrainTypeToMono(rhs_checked_ty, lhs_ty, conflict_message);
-            return lhs_ty;
-        }
-        if (try self.checkedTypeHasFixedShape(rhs_checked_ty)) {
-            const rhs_ty = try self.lowerType(rhs_checked_ty);
-            try self.constrainTypeToMono(lhs_checked_ty, rhs_ty, conflict_message);
-            return rhs_ty;
-        }
-
-        if (try self.checkedTypeHasConcreteShape(lhs_checked_ty)) {
-            const lhs_ty = try self.lowerType(lhs_checked_ty);
-            try self.constrainTypeToMono(rhs_checked_ty, lhs_ty, conflict_message);
-            return lhs_ty;
-        }
-        if (try self.checkedTypeHasConcreteShape(rhs_checked_ty)) {
-            const rhs_ty = try self.lowerType(rhs_checked_ty);
-            try self.constrainTypeToMono(lhs_checked_ty, rhs_ty, conflict_message);
-            return rhs_ty;
-        }
-
-        if (try self.checkedTypeCanLower(lhs_checked_ty)) {
-            const lhs_ty = try self.lowerType(lhs_checked_ty);
-            try self.constrainTypeToMono(rhs_checked_ty, lhs_ty, conflict_message);
-            return lhs_ty;
-        }
-        if (try self.checkedTypeCanLower(rhs_checked_ty)) {
-            const rhs_ty = try self.lowerType(rhs_checked_ty);
-            try self.constrainTypeToMono(lhs_checked_ty, rhs_ty, conflict_message);
-            return rhs_ty;
-        }
-
-        Common.invariant("checked structural equality operand type was not concrete after equality relation instantiation");
-    }
-
-    /// Resolves the Monotype an equality operand evaluates to, when that operand is a
-    /// result-producing expression (call, dispatch, lookup, field access). The shared
-    /// equality operand type is taken from this result so an open tag literal on the other
-    /// side cannot narrow it. Returns null for any other expression shape (e.g. a tag
-    /// literal): the caller then falls through to the concrete-shape ladder in
-    /// structuralEqualityOperandType, so this must not fall back to lowerType itself.
-    fn structuralEqualityExprResultType(
-        self: *BodyContext,
-        expr_id: checked.CheckedExprId,
-        expected_ty: ?Type.TypeId,
-    ) Allocator.Error!?Type.TypeId {
-        const expr = self.view.bodies.exprs[@intFromEnum(expr_id)];
-        return switch (expr.data) {
-            .call => |call| try self.callResultMonoType(expr.ty, call, expected_ty),
-            .dispatch_call => |plan| try self.dispatchResultMonoType(expr.ty, plan, expected_ty),
-            .type_dispatch_call => |plan| try self.dispatchResultMonoType(expr.ty, plan, expected_ty),
-            .method_eq => |plan| try self.dispatchResultMonoType(expr.ty, plan, expected_ty),
-            .lookup_local => |lookup| try self.lookupArgumentMonoType(expr.ty, lookup.resolved, expected_ty, false),
-            .lookup_external => |resolved| try self.lookupArgumentMonoType(expr.ty, resolved, expected_ty, false),
-            .lookup_required => |resolved| try self.lookupArgumentMonoType(expr.ty, resolved, expected_ty, false),
-            .field_access => |field| blk: {
-                if (expected_ty) |ty| {
-                    try self.constrainTypeToMono(expr.ty, ty, "checked field access expected type conflicted with an existing Monotype constraint");
-                    break :blk ty;
-                }
-                break :blk try self.fieldAccessMonoType(field.receiver, field.field_name);
-            },
-            else => null,
-        };
-    }
-
-    fn constrainStructuralEqualityOperandType(
-        self: *BodyContext,
-        operand_ty: Type.TypeId,
-        other_expr_id: checked.CheckedExprId,
-        other_checked_ty: checked.CheckedTypeId,
-        comptime conflict_message: []const u8,
-    ) Allocator.Error!Type.TypeId {
-        try self.constrainTypeToMono(other_checked_ty, operand_ty, conflict_message);
-        if (try self.structuralEqualityExprResultType(other_expr_id, operand_ty)) |other_ty| {
-            if (!self.sameType(operand_ty, other_ty)) Common.invariant(conflict_message);
-        }
-        return operand_ty;
+        try self.constrainCheckedTypeRelations(
+            lhs_checked_ty,
+            self,
+            rhs_checked_ty,
+            "checked structural equality operand type conflicted with an existing Monotype constraint",
+        );
+        return try self.lowerType(lhs_checked_ty);
     }
 
     fn lowerEqualityExpr(
@@ -9352,7 +7979,7 @@ const BodyContext = struct {
     ) Allocator.Error!Ast.ExprId {
         if (plan.dispatcher_arg_index >= plan.args.len) Common.invariant("iterator dispatch plan dispatcher argument index was outside the argument span");
 
-        var call_ctx = try BodyContext.init(self.allocator, self.builder, self.view, self.owner_template);
+        var call_ctx = try BodyContext.init(self.allocator, self.builder, self.view, self.owner_template, self.graph);
         defer call_ctx.deinit();
         call_ctx.owner_context_fn_key = self.owner_context_fn_key;
         call_ctx.current_fn_key = self.current_fn_key;
@@ -9419,93 +8046,25 @@ const BodyContext = struct {
         if (function.args.len != operands.len) {
             Common.invariant("checked iterator dispatch target arity differs from its function type");
         }
-
-        if (expected_ret_ty) |expected| {
-            try self.constrainTypeToMono(function.ret, expected, "checked iterator dispatch plan return type conflicted with an existing Monotype constraint");
-        }
-        try self.constrainIteratorArgTypesFromCallerToFixedPoint(function.args, caller, operands, loop_iterator);
-
-        const arg_tys = try self.allocator.alloc(Type.TypeId, function.args.len);
-        defer self.allocator.free(arg_tys);
-        for (function.args, 0..) |arg_ty, i| {
-            if (!try self.checkedTypeCanLower(arg_ty)) {
-                Common.invariant("checked iterator dispatch target argument type was not concrete after call-site cell");
-            }
-            arg_tys[i] = try self.lowerType(arg_ty);
-        }
-
-        const ret_ty = try self.lowerType(function.ret);
-        if (expected_ret_ty) |expected| {
-            if (!self.sameType(ret_ty, expected)) {
-                Common.invariant("checked iterator dispatch plan return type differed from the iterator-for result type");
-            }
-        }
-
-        const mono_fn_ty = try self.builder.program.types.add(.{ .func = .{
-            .args = try self.builder.program.types.addSpan(arg_tys),
-            .ret = ret_ty,
-        } });
-        try self.constrainTypeToMono(source_fn_ty, mono_fn_ty, "checked iterator dispatch target function type conflicted with an existing Monotype constraint");
-        return mono_fn_ty;
-    }
-
-    fn constrainIteratorArgTypesFromCaller(
-        self: *BodyContext,
-        formal_tys: []const checked.CheckedTypeId,
-        caller: *BodyContext,
-        operands: []const static_dispatch.IteratorDispatchOperand,
-        loop_iterator: ?Ast.TypedLocal,
-        comptime numeric_literals: bool,
-    ) Allocator.Error!void {
-        for (formal_tys, operands) |formal_ty, operand| {
-            const is_numeric_literal = switch (operand) {
-                .checked_expr => |expr| try caller.exprHasNumericDefault(expr),
-                .loop_iterator_state => false,
-            };
-            if (is_numeric_literal != numeric_literals) continue;
-            if (numeric_literals and try self.checkedTypeHasFixedShape(formal_ty)) continue;
+        const fn_node = try self.instNode(source_fn_ty);
+        for (function.args, operands) |formal_ty, operand| {
+            const formal_node = try self.instNode(formal_ty);
             switch (operand) {
-                .checked_expr => |expr| try self.constrainCheckedTypeRelations(
-                    formal_ty,
-                    caller,
-                    caller.view.bodies.exprs[@intFromEnum(expr)].ty,
-                    "checked iterator dispatch target argument type conflicted with an existing Monotype constraint",
-                ),
-                .loop_iterator_state => {},
-            }
-            if (try caller.iteratorOperandMonoType(operand, loop_iterator, try self.expectedMonoForFormal(formal_ty))) |actual_mono_ty| {
-                try self.constrainTypeToMono(
-                    formal_ty,
-                    actual_mono_ty,
-                    "checked iterator dispatch target argument type conflicted with an existing Monotype constraint",
-                );
-                switch (operand) {
-                    .checked_expr => |expr| try caller.constrainTypeToMono(
-                        caller.view.bodies.exprs[@intFromEnum(expr)].ty,
-                        actual_mono_ty,
-                        "checked iterator dispatch target argument type conflicted with an existing Monotype constraint",
-                    ),
-                    .loop_iterator_state => {},
-                }
+                .checked_expr => |checked_arg| {
+                    const arg_ty = caller.view.bodies.exprs[@intFromEnum(checked_arg)].ty;
+                    try self.graph.unify(formal_node, try caller.instNode(arg_ty));
+                },
+                .loop_iterator_state => {
+                    const iterator = loop_iterator orelse Common.invariant("iterator .next dispatch reached Monotype without a loop iterator local");
+                    try self.graph.unify(formal_node, try self.graph.importMono(iterator.ty));
+                },
             }
         }
-    }
-
-    fn constrainIteratorArgTypesFromCallerToFixedPoint(
-        self: *BodyContext,
-        formal_tys: []const checked.CheckedTypeId,
-        caller: *BodyContext,
-        operands: []const static_dispatch.IteratorDispatchOperand,
-        loop_iterator: ?Ast.TypedLocal,
-    ) Allocator.Error!void {
-        while (true) {
-            const before_self = self.type_cell_revision;
-            const before_caller = caller.type_cell_revision;
-            const before_widen = self.builder.widen_revision;
-            try self.constrainIteratorArgTypesFromCaller(formal_tys, caller, operands, loop_iterator, false);
-            try self.constrainIteratorArgTypesFromCaller(formal_tys, caller, operands, loop_iterator, true);
-            if (self.type_cell_revision == before_self and caller.type_cell_revision == before_caller and self.builder.widen_revision == before_widen) return;
+        if (expected_ret_ty) |expected| {
+            try self.graph.unify(try self.instNode(function.ret), try self.graph.importMono(expected));
         }
+        try self.graph.drainDirty();
+        return try self.graph.monoFor(fn_node);
     }
 
     fn iteratorOperandMonoType(
