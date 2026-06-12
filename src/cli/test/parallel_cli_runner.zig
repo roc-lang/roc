@@ -1653,9 +1653,9 @@ fn normalizedObjdumpInstructions(allocator: Allocator, objdump_stdout: []const u
         const line = std.mem.trim(u8, raw_line, " \t\r");
         if (line.len == 0 or !isHexDigit(line[0])) continue;
 
-        const colon = std.mem.indexOfScalar(u8, line, ':') orelse continue;
+        const colon = std.mem.findScalar(u8, line, ':') orelse continue;
         var instruction = std.mem.trim(u8, line[colon + 1 ..], " \t\r");
-        if (std.mem.indexOfScalar(u8, instruction, '#')) |comment| {
+        if (std.mem.findScalar(u8, instruction, '#')) |comment| {
             instruction = std.mem.trim(u8, instruction[0..comment], " \t\r");
         }
         if (instruction.len == 0) continue;
@@ -1678,7 +1678,7 @@ fn appendCanonicalInstruction(allocator: Allocator, result: *std.ArrayListUnmana
         first = false;
     }
 
-    if (std.mem.startsWith(u8, canonical.items, "leaq ") and std.mem.indexOf(u8, canonical.items, "(%rip), %rsi") != null) {
+    if (std.mem.startsWith(u8, canonical.items, "leaq ") and std.mem.find(u8, canonical.items, "(%rip), %rsi") != null) {
         try result.appendSlice(allocator, "leaq msg(%rip), %rsi\n");
         return;
     }

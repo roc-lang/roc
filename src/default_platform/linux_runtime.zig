@@ -10,7 +10,6 @@ const linux = std.os.linux;
 pub const panic = std.debug.no_panic;
 
 const stderr_fd: i32 = 2;
-const stdout_fd: i32 = 1;
 const ansi_function_name = "\x1b[94m";
 const ansi_reset = "\x1b[0m";
 const page_size: usize = 4096;
@@ -334,17 +333,6 @@ fn writeUnsigned(fd: i32, value: anytype) void {
         n /= 10;
     }
     writeAll(fd, buf[index..]);
-}
-
-fn writeHex(fd: i32, value: usize) void {
-    const digits = "0123456789abcdef";
-    var buf: [@sizeOf(usize) * 2]u8 = undefined;
-    var shift: usize = @bitSizeOf(usize);
-    for (&buf) |*slot| {
-        shift -= 4;
-        slot.* = digits[(value >> @intCast(shift)) & 0xf];
-    }
-    writeAll(fd, &buf);
 }
 
 fn exitFailure() noreturn {
