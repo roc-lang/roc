@@ -1314,6 +1314,11 @@ pub fn generateModule(self: *Self) std.mem.Allocator.Error!void {
     try self.generateFunction(.set_u64);
     try self.generateFunction(.set_str);
 
+    const loop_count = self.reader.intRangeAtMost(u8, 1, 4);
+    for (0..loop_count) |_| {
+        try self.generateForLoopFunction();
+    }
+
     const builtin_count = self.reader.intRangeAtMost(u8, 12, 36);
     for (0..builtin_count) |_| {
         try self.generateBuiltinAssociatedFunction();
@@ -1346,7 +1351,7 @@ fn generateFunction(self: *Self, typ: Type) std.mem.Allocator.Error!void {
     const max_style: u8 = if (typ == .my_num)
         8
     else if (typ.isSupport())
-        8
+        9
     else if (typ.isHolder())
         9
     else if (typ.isBuilder())
@@ -1364,13 +1369,15 @@ fn generateFunction(self: *Self, typ: Type) std.mem.Allocator.Error!void {
     else if (typ.isRecord())
         if (typ == .record_str_u64) 8 else 7
     else if (typ.isList())
-        22
+        23
     else if (typ.isFunction())
         5
     else if (typ.isTuple())
         6
     else if (typ.isTry())
         7
+    else if (typ == .u64)
+        8
     else if (typ.isNumber())
         7
     else if (typ == .str)
@@ -1503,11 +1510,15 @@ fn generateFunction(self: *Self, typ: Type) std.mem.Allocator.Error!void {
             try self.generateRecordBuilderFunction(name_id)
         else if (typ.isList())
             try self.generateListGetFunction(name_id, typ)
+        else if (typ == .u64)
+            try self.generateU64RangeForLoopFunction(name_id)
         else if (typ == .my_num)
             try self.generateWherePlusFunction(name_id, typ)
         else
             unreachable,
-        9 => if (typ.isDict())
+        9 => if (typ.isSupport())
+            try self.generateSupportForLoopFunction(name_id)
+        else if (typ.isDict())
             try self.generateDictGetFunction(name_id, typ)
         else if (typ.isSet())
             try self.generateSetToListFunction(name_id, typ)
@@ -1571,6 +1582,19 @@ fn generateFunction(self: *Self, typ: Type) std.mem.Allocator.Error!void {
             try self.generateListCountIfFunction(name_id, typ),
         21 => try self.generateListSublistFunction(name_id, typ),
         22 => try self.generateListSwapFunction(name_id, typ),
+        23 => try self.generateListForLoopFunction(name_id, typ),
+        else => unreachable,
+    }
+}
+
+fn generateForLoopFunction(self: *Self) std.mem.Allocator.Error!void {
+    const name_id = self.name_counter;
+    self.name_counter += 1;
+
+    switch (self.reader.intRangeAtMost(u8, 0, 2)) {
+        0 => try self.generateListForLoopFunction(name_id, self.chooseListType()),
+        1 => try self.generateU64RangeForLoopFunction(name_id),
+        2 => try self.generateSupportForLoopFunction(name_id),
         else => unreachable,
     }
 }
@@ -1972,6 +1996,40 @@ fn generateNumericRangeBuiltinFunction(self: *Self, name_id: u32, typ: Type, met
     try self.write("\n");
 }
 
+fn generateU64RangeForLoopFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    if (self.reader.boolean()) {
+        try self.writeFunctionSignature(name_id, "Main", .u64);
+        try self.writeFunctionHeader(name_id);
+        try self.write("|_| {\n");
+        try self.writeMutableLocalDeclaration("total", .{ .raw = "0" });
+        try self.writeForInPrefix("item");
+        try self.writeU64RangeIterator();
+        try self.writeForInBodyStart();
+        try self.writeMutableLocalAssignmentStart("total");
+        try self.writeMutableLocalReference("total");
+        try self.write(" + item\n");
+        try self.writeForInBodyEnd();
+        try self.write("        ");
+        try self.writeMutableLocalReference("total");
+        try self.write("\n    }\n");
+    } else {
+        try self.writeFunctionSignature(name_id, "Main", .list_u64);
+        try self.writeFunctionHeader(name_id);
+        try self.write("|_| {\n");
+        try self.writeMutableLocalDeclaration("items", .{ .raw = "[]" });
+        try self.writeForInPrefix("item");
+        try self.writeU64RangeIterator();
+        try self.writeForInBodyStart();
+        try self.writeMutableLocalAssignmentStart("items");
+        try self.writeMutableLocalReference("items");
+        try self.write(".append(item)\n");
+        try self.writeForInBodyEnd();
+        try self.write("        ");
+        try self.writeMutableLocalReference("items");
+        try self.write("\n    }\n");
+    }
+}
+
 fn generateBoolNotBuiltinFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
     try self.writeFunctionSignature(name_id, "Main", .bool);
     try self.writeFunctionHeader(name_id);
@@ -2307,6 +2365,23 @@ fn generateSupportTryFunction(self: *Self, name_id: u32) std.mem.Allocator.Error
     try self.write("|_| match Support.maybe(");
     try self.writeLiteral(.support);
     try self.write(") {\n        Ok(count) => count\n        Err(_) => 0\n    }\n");
+}
+
+fn generateSupportForLoopFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFunctionSignature(name_id, "Main", .u64);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| {\n");
+    try self.writeMutableLocalDeclaration("total", .{ .raw = "0" });
+    try self.writeForInPrefix("item");
+    try self.writeSupportListLiteral();
+    try self.writeForInBodyStart();
+    try self.writeMutableLocalAssignmentStart("total");
+    try self.writeMutableLocalReference("total");
+    try self.write(" + Support.count(item)\n");
+    try self.writeForInBodyEnd();
+    try self.write("        ");
+    try self.writeMutableLocalReference("total");
+    try self.write("\n    }\n");
 }
 
 fn generateRecordFieldFunction(self: *Self, name_id: u32, typ: Type) std.mem.Allocator.Error!void {
@@ -2931,6 +3006,25 @@ fn generateListSwapFunction(self: *Self, name_id: u32, typ: Type) std.mem.Alloca
     try self.output.print(self.allocator, ", {d}, {d})\n", .{ first, second });
 }
 
+fn generateListForLoopFunction(self: *Self, name_id: u32, typ: Type) std.mem.Allocator.Error!void {
+    std.debug.assert(typ.isList());
+
+    try self.writeFunctionSignature(name_id, "Main", typ);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| {\n");
+    try self.writeMutableLocalDeclaration("items", .{ .raw = "[]" });
+    try self.writeForInPrefix("item");
+    try self.writeNonEmptyListLiteral(typ.listElement());
+    try self.writeForInBodyStart();
+    try self.writeMutableLocalAssignmentStart("items");
+    try self.writeMutableLocalReference("items");
+    try self.write(".append(item)\n");
+    try self.writeForInBodyEnd();
+    try self.write("        ");
+    try self.writeMutableLocalReference("items");
+    try self.write("\n    }\n");
+}
+
 fn generateListForEachBangBuiltinFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
     try self.writeRawEffectfulFunctionSignature(name_id, "Main", "{}");
     try self.writeFunctionHeader(name_id);
@@ -3173,6 +3267,10 @@ fn generateStreamCollectBangBuiltinFunction(self: *Self, name_id: u32) std.mem.A
 
 fn writeListU64Iter(self: *Self) std.mem.Allocator.Error!void {
     try self.writeCall("List.iter", &.{.{ .literal = .list_u64 }});
+}
+
+fn writeU64RangeIterator(self: *Self) std.mem.Allocator.Error!void {
+    try self.writeCall("U64.to", &.{ .{ .small_number_literal = .u64 }, .{ .small_number_literal = .u64 } });
 }
 
 fn generateTupleDestructureFunction(self: *Self, name_id: u32, typ: Type) std.mem.Allocator.Error!void {
@@ -4999,8 +5097,16 @@ fn writeListMap2Body(self: *Self, elem_type: Type) std.mem.Allocator.Error!void 
 }
 
 fn writeListLiteral(self: *Self, elem_type: Type) std.mem.Allocator.Error!void {
+    try self.writeListLiteralRange(elem_type, 0, 4);
+}
+
+fn writeNonEmptyListLiteral(self: *Self, elem_type: Type) std.mem.Allocator.Error!void {
+    try self.writeListLiteralRange(elem_type, 1, 4);
+}
+
+fn writeListLiteralRange(self: *Self, elem_type: Type, min_len: u8, max_len: u8) std.mem.Allocator.Error!void {
     try self.write("[");
-    const len = self.reader.intRangeAtMost(u8, 0, 4);
+    const len = self.reader.intRangeAtMost(u8, min_len, max_len);
     for (0..len) |i| {
         if (i > 0) try self.write(", ");
         try self.writeLiteral(elem_type);
@@ -5030,6 +5136,16 @@ fn writeSupportLiteral(self: *Self) std.mem.Allocator.Error!void {
         2 => try self.writeCall("Support.from_pair", &.{.{ .literal = .tuple_str_u64 }}),
         else => unreachable,
     }
+}
+
+fn writeSupportListLiteral(self: *Self) std.mem.Allocator.Error!void {
+    try self.write("[");
+    const len = self.reader.intRangeAtMost(u8, 1, 4);
+    for (0..len) |i| {
+        if (i > 0) try self.write(", ");
+        try self.writeSupportLiteral();
+    }
+    try self.write("]");
 }
 
 fn writeTreeLiteral(self: *Self) std.mem.Allocator.Error!void {
@@ -5224,6 +5340,39 @@ fn writeNumeralLiteral(self: *Self) std.mem.Allocator.Error!void {
     try self.write(", digits_after_pt_count: ");
     try self.writeIntegerLiteral();
     try self.write(" })");
+}
+
+fn writeMutableLocalDeclaration(self: *Self, name: []const u8, initializer: Expr) std.mem.Allocator.Error!void {
+    try self.write("        var $");
+    try self.write(name);
+    try self.write(" = ");
+    try self.writeExpr(initializer);
+    try self.write("\n");
+}
+
+fn writeMutableLocalAssignmentStart(self: *Self, name: []const u8) std.mem.Allocator.Error!void {
+    try self.write("            $");
+    try self.write(name);
+    try self.write(" = ");
+}
+
+fn writeMutableLocalReference(self: *Self, name: []const u8) std.mem.Allocator.Error!void {
+    try self.write("$");
+    try self.write(name);
+}
+
+fn writeForInPrefix(self: *Self, item_name: []const u8) std.mem.Allocator.Error!void {
+    try self.write("        for ");
+    try self.write(item_name);
+    try self.write(" in ");
+}
+
+fn writeForInBodyStart(self: *Self) std.mem.Allocator.Error!void {
+    try self.write(" {\n");
+}
+
+fn writeForInBodyEnd(self: *Self) std.mem.Allocator.Error!void {
+    try self.write("        }\n");
 }
 
 fn writeExpr(self: *Self, expr: Expr) std.mem.Allocator.Error!void {
