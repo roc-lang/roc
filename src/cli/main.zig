@@ -2465,6 +2465,9 @@ fn reportCliInterpreterError(ops: *echo_platform.host_abi.RocOps, interpreter: *
         error.RuntimeError => interpreter.getRuntimeErrorMessage() orelse "Roc runtime error",
         error.DivisionByZero => interpreter.getRuntimeErrorMessage() orelse "Division by zero",
         error.Crash => return,
+        // expect_err statements only occur in top-level expect test roots,
+        // never in program entrypoints.
+        error.ExpectErr => unreachable,
     };
     ops.crash(message);
 }
@@ -6120,6 +6123,8 @@ fn interpreterTestFailureMessage(
         error.RuntimeError => interpreter.getRuntimeErrorMessage() orelse "Roc runtime error",
         error.DivisionByZero => interpreter.getRuntimeErrorMessage() orelse "Division by zero",
         error.Crash => interpreter.getCrashMessage() orelse "Test crashed",
+        error.ExpectErr => interpreter.getExpectErrMessage() orelse
+            "The `?` operator evaluated an `Err` inside an `expect`",
     };
     return try allocator.dupe(u8, message);
 }
@@ -6168,14 +6173,21 @@ fn runInterpreterTestRoots(
             .ret_layout = run.ret_layout,
         }) catch |err| {
             summary.failed += 1;
-            try appendFailedCliTestResult(
-                ctx,
-                results,
-                run,
-                .failed,
-                try interpreterTestFailureMessage(ctx.gpa, &interpreter, err),
-                .always,
-            );
+            // When a `?` operator failed the expect, point the report's
+            // source snippet at the `?` itself.
+            const failure_region = switch (err) {
+                error.ExpectErr => interpreter.getExpectErrRegion() orelse run.region,
+                else => run.region,
+            };
+            const message = try interpreterTestFailureMessage(ctx.gpa, &interpreter, err);
+            errdefer ctx.gpa.free(message);
+            try results.append(ctx.gpa, .{
+                .result = .failed,
+                .order = run.root.order,
+                .region = failure_region,
+                .failure_detail = message,
+                .failure_detail_visibility = .always,
+            });
             continue;
         };
 
@@ -6304,6 +6316,20 @@ fn runCompiledTestRoots(
                     try ctx.gpa.dupe(u8, message),
                     .always,
                 );
+            },
+            .expect_err => |failure| {
+                summary.failed += 1;
+                // Point the report's source snippet at the `?` expression
+                // whose Err failed the expect.
+                const message = try ctx.gpa.dupe(u8, failure.message);
+                errdefer ctx.gpa.free(message);
+                try results.append(ctx.gpa, .{
+                    .result = .failed,
+                    .order = run.root.order,
+                    .region = base.Region.from_raw_offsets(failure.region_start, failure.region_end),
+                    .failure_detail = message,
+                    .failure_detail_visibility = .always,
+                });
             },
         }
     }

@@ -1463,6 +1463,14 @@ const Lowerer = struct {
                 const debug_stmt = try self.result.store.addCFStmt(.{ .debug = .{ .message = message, .next = after_dbg } });
                 break :blk try self.lowerExprInto(message, child, debug_stmt);
             },
+            .expect_err => |expect_err| blk: {
+                const message = try self.addTemp(try self.lowerExprTy(expect_err.msg));
+                const expect_err_stmt = try self.result.store.addCFStmt(.{ .expect_err = .{
+                    .message = message,
+                    .region = expect_err.region,
+                } });
+                break :blk try self.lowerExprInto(message, expect_err.msg, expect_err_stmt);
+            },
             .expect => |child| try self.lowerExpectExprInto(target, child, next),
         };
     }

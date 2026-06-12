@@ -249,6 +249,7 @@ fn collectAssignCallProcs(
             .jump,
             .ret,
             .crash,
+            .expect_err,
             => {},
         }
     }
@@ -346,6 +347,7 @@ fn collectProcShape(
             .loop_break,
             .ret,
             .crash,
+            .expect_err,
             => {},
         }
     }
@@ -465,6 +467,7 @@ fn markReachableLiftedExpr(
         .dbg,
         .expect,
         => |child| markReachableLiftedExpr(program, child, reachable),
+        .expect_err => |expect_err| markReachableLiftedExpr(program, expect_err.msg, reachable),
         .let_ => |let_| {
             markReachableLiftedExpr(program, let_.value, reachable);
             markReachableLiftedExpr(program, let_.rest, reachable);

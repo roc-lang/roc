@@ -6754,6 +6754,12 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         .e_crash => {
             try self.unifyWith(expr_var, .{ .flex = Flex.init() }, env);
         },
+        .e_expect_err => |expect_err| {
+            // The Err payload is consumed at runtime when the enclosing expect
+            // fails; this expression itself never returns, so its type is free.
+            _ = try self.checkExpr(expect_err.expr, env, Expected.none());
+            try self.unifyWith(expr_var, .{ .flex = Flex.init() }, env);
+        },
         .e_dbg => |dbg| {
             // dbg evaluates its inner expression but returns {} (like expect)
             _ = try self.checkExpr(dbg.expr, env, Expected.none());
@@ -7377,6 +7383,7 @@ fn exprAlwaysCrashes(self: *const Self, expr_idx: CIR.Expr.Idx) bool {
     return switch (self.cir.store.getExpr(expr_idx)) {
         .e_crash,
         .e_ellipsis,
+        .e_expect_err,
         => true,
         .e_block => |block| self.exprAlwaysCrashes(block.final_expr),
         else => false,

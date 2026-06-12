@@ -334,6 +334,9 @@ fn lowerEvalAndFinishRoots(
                         const message = interpreter.getCrashMessage() orelse host.crash_message orelse "Roc crashed";
                         break :blk .{ .const_node = try appendCrashConst(module, message) };
                     },
+                    // expect_err statements only occur in top-level expect
+                    // test roots, never in compile-time constant roots.
+                    error.ExpectErr => unreachable,
                 };
                 defer interpreter.dropValue(eval_result.value, root.ret_layout);
                 break :blk try writer.storeRoot(root, eval_result.value);
@@ -453,6 +456,7 @@ fn evalCompileTimeRoot(
         error.RuntimeError => finalizationInvariant("compile-time root produced a runtime error"),
         error.DivisionByZero => try reportCompileTimeCrash(allocator, problem_store, module, root, interpreter.getRuntimeErrorMessage() orelse "Division by zero"),
         error.Crash => try reportCompileTimeCrash(allocator, problem_store, module, root, interpreter.getCrashMessage() orelse "Roc crashed"),
+        error.ExpectErr => finalizationInvariant("compile-time root reached an expect_err statement"),
     };
 }
 

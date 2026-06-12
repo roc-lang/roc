@@ -1028,6 +1028,7 @@ fn exprDependsOnUnboundPlatformRequirement(
         .dbg,
         .expect,
         => |child| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, child, relation_blocked_exprs),
+        .expect_err => |expect_err| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, expect_err.expr, relation_blocked_exprs),
         .field_access => |access| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, access.receiver, relation_blocked_exprs),
         .structural_eq => |eq| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, eq.lhs, relation_blocked_exprs) or
             exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, eq.rhs, relation_blocked_exprs),
@@ -4994,6 +4995,11 @@ pub const CheckedExprData = union(enum) {
     runtime_error,
     crash: CheckedStringLiteralId,
     dbg: CheckedExprId,
+    expect_err: struct {
+        expr: CheckedExprId,
+        /// Source text of the `?` expression, for the failure message.
+        snippet: CheckedStringLiteralId,
+    },
     expect: CheckedExprId,
     ellipsis,
     anno_only,
@@ -5366,6 +5372,7 @@ const CheckedSourceNodes = struct {
             },
             .e_tuple_access => |access| try self.markExpr(access.tuple, work),
             .e_dbg => |dbg| try self.markExpr(dbg.expr, work),
+            .e_expect_err => |expect_err| try self.markExpr(expect_err.expr, work),
             .e_expect => |expect| try self.markExpr(expect.body, work),
             .e_return => |ret| {
                 try self.markExpr(ret.expr, work);
@@ -6134,6 +6141,7 @@ fn checkedExprDataDiverges(
         .dbg,
         .expect,
         => |child| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, child, expr_states, statement_states),
+        .expect_err => true,
         .field_access => |field| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, field.receiver, expr_states, statement_states),
         .structural_eq => |eq| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, eq.lhs, expr_states, statement_states) or
             checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, eq.rhs, expr_states, statement_states),
@@ -6531,6 +6539,10 @@ const CheckedBodyPayloadCopier = struct {
             .e_runtime_error => .runtime_error,
             .e_crash => |crash| .{ .crash = try self.string_builder.intern(crash.msg) },
             .e_dbg => |dbg| .{ .dbg = self.checkedExpr(dbg.expr) },
+            .e_expect_err => |expect_err| .{ .expect_err = .{
+                .expr = self.checkedExpr(expect_err.expr),
+                .snippet = try self.string_builder.intern(expect_err.snippet),
+            } },
             .e_expect => |expect| .{ .expect = self.checkedExpr(expect.body) },
             .e_ellipsis => .ellipsis,
             .e_anno_only => .anno_only,
@@ -7507,6 +7519,7 @@ fn deinitCheckedExprData(allocator: Allocator, data: *CheckedExprData) void {
         .runtime_error,
         .crash,
         .dbg,
+        .expect_err,
         .expect,
         .ellipsis,
         .anno_only,
@@ -8916,6 +8929,7 @@ const CheckedTemplateRefCollector = struct {
             },
             .tuple_access => |access| try self.collectExpr(access.tuple),
             .dbg => |child| try self.collectExpr(child),
+            .expect_err => |expect_err| try self.collectExpr(expect_err.expr),
             .expect => |child| try self.collectExpr(child),
             .return_ => |ret| {
                 try self.collectExpr(ret.expr);
@@ -9553,6 +9567,7 @@ const NestedProcSiteBuilder = struct {
             .unary_minus => |child| try self.scanExpr(child, owner, false),
             .unary_not => |child| try self.scanExpr(child, owner, false),
             .dbg => |child| try self.scanExpr(child, owner, false),
+            .expect_err => |expect_err| try self.scanExpr(expect_err.expr, owner, false),
             .expect => |child| try self.scanExpr(child, owner, false),
             .return_ => |ret| {
                 try self.scanExpr(ret.expr, owner, false);

@@ -302,6 +302,14 @@ pub const CFStmt = union(enum) {
         condition: LocalId,
         next: CFStmtId,
     },
+    /// The Err arm of a `?` operator used directly inside a top-level expect.
+    /// Fails the enclosing expect with the runtime-built message (which
+    /// includes the rendered Err value). This is terminal.
+    expect_err: struct {
+        message: LocalId,
+        /// Source region of the `?` expression, for failure reporting.
+        region: base.Region,
+    },
     /// Compiler-generated impossible execution path. This is terminal.
     runtime_error: void,
     incref: struct {

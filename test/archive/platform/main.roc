@@ -5,7 +5,10 @@ platform ""
     exposes [Host]
     packages {}
     provides { "roc_main": main_for_host! }
-    hosted { "roc_host_double": Host.double! }
+    hosted {
+        "roc_host_double": Host.double!,
+        "roc_host_unused_niche_feature": Host.unused_niche_feature!,
+    }
     targets: {
         inputs: "targets/",
         x64mac: { inputs: ["libhost.a", app], output: Archive },

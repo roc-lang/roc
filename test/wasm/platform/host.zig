@@ -27,6 +27,8 @@ const env_imports = struct {
     extern "env" fn roc_dbg(ptr: [*]const u8, len: usize) void;
     extern "env" fn roc_expect_failed(ptr: [*]const u8, len: usize) void;
     extern "env" fn echo(ptr: [*]const u8, len: usize) void;
+    extern "env" fn roc_unused_host_canary_7f3a9c(value: i64) void;
+    extern "env" fn roc_dead_private_helper_canary_41d2cb(value: i64) void;
 };
 
 // Use Zig's standard WASM allocator for proper memory management
@@ -201,8 +203,45 @@ export fn roc_crashed(bytes: [*]const u8, len: usize) callconv(.c) void {
 // transfers here, and the bytes are echoed before it is freed at module
 // teardown (this host never frees individual strings).
 export fn roc_stdout_line(str: RocStr) callconv(.c) void {
+    @call(.never_inline, sharedPrivateHelper, .{});
     const s = str.asSlice();
     env_imports.echo(s.ptr, s.len);
+}
+
+fn canaryBlob(comptime marker: []const u8) [4096]u8 {
+    @setEvalBranchQuota(20000);
+    var blob: [4096]u8 = undefined;
+    var i: usize = 0;
+    while (i < blob.len) : (i += 1) {
+        blob[i] = marker[i % marker.len];
+    }
+    return blob;
+}
+
+const wasm_dead_hosted_canary_blob = canaryBlob("ROC_DCE_WASM_DEAD_HOSTED_BLOB_0ac91d");
+const wasm_dead_helper_canary_blob = canaryBlob("ROC_DCE_WASM_DEAD_HELPER_BLOB_f25a77");
+const wasm_shared_canary_blob = canaryBlob("ROC_DCE_WASM_SHARED_BLOB_31e82f");
+
+fn sharedPrivateHelper() void {
+    std.mem.doNotOptimizeAway(&wasm_shared_canary_blob);
+}
+
+fn deadOnlyPrivateHelper(n: i64) i64 {
+    std.mem.doNotOptimizeAway(&wasm_dead_helper_canary_blob);
+    env_imports.roc_dead_private_helper_canary_41d2cb(n);
+    return n + 1;
+}
+
+fn hostedUnusedNicheFeature(n: i64) callconv(.c) i64 {
+    std.mem.doNotOptimizeAway(&wasm_dead_hosted_canary_blob);
+    env_imports.roc_unused_host_canary_7f3a9c(n);
+    const dead_value = @call(.never_inline, deadOnlyPrivateHelper, .{n});
+    @call(.never_inline, sharedPrivateHelper, .{});
+    return dead_value + 1;
+}
+
+comptime {
+    @export(&hostedUnusedNicheFeature, .{ .name = "roc_stdout_unused_niche_feature", .visibility = .hidden });
 }
 
 // The app's entrypoint, exported under its provides symbol with its natural

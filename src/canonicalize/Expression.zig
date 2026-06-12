@@ -438,6 +438,18 @@ pub const Expr = union(enum) {
     e_dbg: struct {
         expr: Expr.Idx,
     },
+    /// The Err arm of a `?` operator used directly inside a top-level `expect`.
+    /// Consumes the Err payload and fails the enclosing `expect` at runtime,
+    /// reporting the payload value. This expression never returns.
+    ///
+    /// ```roc
+    /// expect Str.to_u64("abc")? == 5
+    /// ```
+    e_expect_err: struct {
+        expr: Expr.Idx,
+        /// Source text of the `?` expression, for the failure message.
+        snippet: StringLiteral.Idx,
+    },
     /// An expect expression that performs a runtime assertion.
     /// This expression evaluates to empty record {} but can fail at runtime.
     /// Used for both top-level tests and inline assertions.
@@ -1430,6 +1442,18 @@ pub const Expr = union(enum) {
                 try tree.pushStaticAtom("e-dbg");
                 const region = ir.store.getExprRegion(expr_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const attrs = tree.beginNode();
+
+                try ir.store.getExpr(e.expr).pushToSExprTree(ir, tree, e.expr);
+
+                try tree.endNode(begin, attrs);
+            },
+            .e_expect_err => |e| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-expect-err");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                try tree.pushStringPair("snippet", ir.getString(e.snippet));
                 const attrs = tree.beginNode();
 
                 try ir.store.getExpr(e.expr).pushToSExprTree(ir, tree, e.expr);

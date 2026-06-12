@@ -2137,6 +2137,8 @@ pub fn eliminateDeadCode(self: *Self, called_fns: []const bool) Allocator.Error!
         }
     }
 
+    try self.eliminateDeadData(live_flags, fn_index_min, fn_count);
+
     // --- 3. Replace dead defined-function bodies with dummies ---
     var buffer: std.ArrayList(u8) = .empty;
     defer buffer.deinit(gpa);
@@ -2180,6 +2182,80 @@ pub fn eliminateDeadCode(self: *Self, called_fns: []const bool) Allocator.Error!
 
     // Update import_fn_count to reflect removals.
     self.import_fn_count -= eliminated_import_count;
+}
+
+fn eliminateDeadData(self: *Self, live_flags: []const bool, fn_index_min: u32, fn_count: u32) Allocator.Error!void {
+    const gpa = self.allocator;
+    if (self.data_segments.items.len == 0) return;
+
+    const live_segments = try gpa.alloc(bool, self.data_segments.items.len);
+    defer gpa.free(live_segments);
+    @memset(live_segments, false);
+
+    // Seed data liveness from relocations inside live function bodies.
+    for (live_flags, 0..) |is_live, fi| {
+        if (!is_live) continue;
+        if (fi < fn_index_min or fi >= fn_count) continue;
+
+        const offset_index = fi - fn_index_min;
+        const code_start = self.function_offsets.items[offset_index];
+        const code_end: u32 = if (offset_index + 1 < self.function_offsets.items.len)
+            self.function_offsets.items[offset_index + 1]
+        else
+            @intCast(self.code_bytes.items.len);
+
+        for (self.reloc_code.entries.items) |entry| {
+            if (!relocationOffsetInRange(entry, code_start, code_end)) continue;
+            _ = self.markRelocationDataTarget(live_segments, entry);
+        }
+    }
+
+    // Follow data-to-data references until all transitively live segments are marked.
+    var changed = true;
+    while (changed) {
+        changed = false;
+        for (self.reloc_data.entries.items) |entry| {
+            const source_segment = relocationDataSegment(entry);
+            std.debug.assert(source_segment < live_segments.len);
+            if (!live_segments[source_segment]) continue;
+
+            if (self.markRelocationDataTarget(live_segments, entry)) changed = true;
+        }
+    }
+
+    var write_idx: usize = 0;
+    for (self.data_segments.items, 0..) |segment, i| {
+        if (live_segments[i]) {
+            self.data_segments.items[write_idx] = segment;
+            write_idx += 1;
+        } else {
+            gpa.free(segment.data);
+        }
+    }
+    self.data_segments.items.len = write_idx;
+}
+
+fn relocationOffsetInRange(entry: WasmLinking.RelocationEntry, code_start: u32, code_end: u32) bool {
+    const offset = entry.getOffset();
+    return offset > code_start and offset < code_end;
+}
+
+fn relocationDataSegment(entry: WasmLinking.RelocationEntry) u32 {
+    return switch (entry) {
+        .index => |idx| idx.data_segment_index,
+        .offset => |off| off.data_segment_index,
+    };
+}
+
+fn markRelocationDataTarget(self: *const Self, live_segments: []bool, entry: WasmLinking.RelocationEntry) bool {
+    const symbol_index = entry.getSymbolIndex();
+    std.debug.assert(symbol_index < self.linking.symbol_table.items.len);
+    const sym = self.linking.symbol_table.items[symbol_index];
+    if (sym.kind != .data or sym.isUndefined()) return false;
+    std.debug.assert(sym.index < live_segments.len);
+    const was_live = live_segments[sym.index];
+    live_segments[sym.index] = true;
+    return !was_live;
 }
 
 /// Trace the call graph starting from called functions, exports, init funcs,
