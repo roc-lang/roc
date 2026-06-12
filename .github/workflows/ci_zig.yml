@@ -90,6 +90,29 @@ jobs:
           # Just the do super fast check step for now.
           zig build -Dno-bin -Dfuzz -Dtracy=./tracy
 
+      - name: Run typecheck fuzz seed
+        env:
+          ROC_FUZZ_SEED: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          python3 - <<'PY'
+          import base64
+          import hashlib
+          import os
+          import pathlib
+
+          seed = os.environ["ROC_FUZZ_SEED"]
+          data = bytearray()
+          for index in range(8):
+              data.extend(hashlib.sha256(f"{seed}:{index}".encode()).digest())
+
+          path = pathlib.Path("/tmp/roc-typecheck-fuzz-input")
+          path.write_bytes(data)
+
+          print(f"typecheck fuzz seed: {seed}")
+          print(f"typecheck fuzz input base64: {base64.b64encode(data).decode()}")
+          PY
+          zig build run-repro-typecheck -- /tmp/roc-typecheck-fuzz-input
+
   exec-bench-checks:
     needs: check-once
     runs-on: ubuntu-24.04
