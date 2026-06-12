@@ -107,13 +107,12 @@ pub const tests = [_]TestCase{
         .known_bug = true,
     },
     .{
-        .name = "bughunt B022: ellipsis expression is rejected before publication",
+        .name = "bughunt B022: ellipsis expression crashes when reached",
         .source_kind = .module,
         .source =
         \\main = ...
         ,
-        .expected = .{ .problem = {} },
-        .known_bug = true,
+        .expected = .{ .crash = {} },
     },
     .{
         .name = "bughunt B024: nested closure captures enclosing lambda parameter",
@@ -640,5 +639,49 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "(True, True)" },
         .known_bug = true,
+    },
+    .{
+        .name = "bughunt B102: recursive Monotype record lowering keeps field span stable",
+        .source_kind = .module,
+        .source =
+        \\Leaf : {
+        \\    v01 : I64, v02 : I64, v03 : I64, v04 : I64,
+        \\    v05 : I64, v06 : I64, v07 : I64, v08 : I64,
+        \\    v09 : I64, v10 : I64, v11 : I64, v12 : I64,
+        \\    v13 : I64, v14 : I64, v15 : I64, v16 : I64,
+        \\}
+        \\
+        \\Outer : {
+        \\    f01 : Leaf, f02 : Leaf, f03 : Leaf, f04 : Leaf,
+        \\    f05 : Leaf, f06 : Leaf, f07 : Leaf, f08 : Leaf,
+        \\    f09 : Leaf, f10 : Leaf, f11 : Leaf, f12 : Leaf,
+        \\    f13 : Leaf, f14 : Leaf, f15 : Leaf, f16 : Leaf,
+        \\    f17 : Leaf, f18 : Leaf, f19 : Leaf, f20 : Leaf,
+        \\    f21 : Leaf, f22 : Leaf, f23 : Leaf, f24 : Leaf,
+        \\}
+        \\
+        \\leaf : I64 -> Leaf
+        \\leaf = |n| {
+        \\    v01: n, v02: n, v03: n, v04: n,
+        \\    v05: n, v06: n, v07: n, v08: n,
+        \\    v09: n, v10: n, v11: n, v12: n,
+        \\    v13: n, v14: n, v15: n, v16: n,
+        \\}
+        \\
+        \\main : I64
+        \\main = {
+        \\    r : Outer
+        \\    r = {
+        \\        f01: leaf(1.I64), f02: leaf(2.I64), f03: leaf(3.I64), f04: leaf(4.I64),
+        \\        f05: leaf(5.I64), f06: leaf(6.I64), f07: leaf(7.I64), f08: leaf(8.I64),
+        \\        f09: leaf(9.I64), f10: leaf(10.I64), f11: leaf(11.I64), f12: leaf(12.I64),
+        \\        f13: leaf(13.I64), f14: leaf(14.I64), f15: leaf(15.I64), f16: leaf(16.I64),
+        \\        f17: leaf(17.I64), f18: leaf(18.I64), f19: leaf(19.I64), f20: leaf(20.I64),
+        \\        f21: leaf(21.I64), f22: leaf(22.I64), f23: leaf(23.I64), f24: leaf(24.I64),
+        \\    }
+        \\    r.f24.v16
+        \\}
+        ,
+        .expected = .{ .inspect_str = "24" },
     },
 };

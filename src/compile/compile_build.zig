@@ -29,7 +29,7 @@ const Mode = compile_package.Mode;
 const Allocator = std.mem.Allocator;
 
 /// The set of errors that can occur during a build (including `roc check`).
-pub const BuildError = Allocator.Error || std.Thread.SpawnError || error{ TooNested, ExpectedPlatformString, ExpectedString, FileNotFound, InvalidNullByteInPath, PathOutsideWorkspace, UnsupportedHeader, Internal, DownloadFailed, FileError, InvalidUrl, NoCacheDir, NoPackageSource, UnsupportedBuiltinAnnotationOnly, BuiltinLowLevelAnnotationMustBeFunction, LowLevelOperationsNotFound, InvalidDependency };
+pub const BuildError = Allocator.Error || std.Thread.SpawnError || error{ ExpectedPlatformString, ExpectedString, FileNotFound, InvalidNullByteInPath, PathOutsideWorkspace, UnsupportedHeader, Internal, DownloadFailed, FileError, InvalidUrl, NoCacheDir, NoPackageSource, UnsupportedBuiltinAnnotationOnly, BuiltinLowLevelAnnotationMustBeFunction, LowLevelOperationsNotFound, InvalidDependency };
 
 const ModuleEnv = can.ModuleEnv;
 const PackageEnv = compile_package.PackageEnv;
@@ -603,6 +603,11 @@ pub const BuildEnv = struct {
         const module_name = PackageEnv.moduleNameFromPath(pkg_root_file);
         const root_id = try coord_pkg.ensureModule(self.gpa, module_name, pkg_root_file);
         coord_pkg.modules.items[root_id].module_role = self.root_module_role;
+        if (self.packages.get(pkg_name)) |queued_root_pkg| {
+            if (queued_root_pkg.kind == .platform) {
+                coord_pkg.modules.items[root_id].explicit_root_ident_names = try self.targetConfigRootIdentNames(queued_root_pkg.targets_config);
+            }
+        }
         coord_pkg.modules.items[root_id].depth = 0;
         coord_pkg.root_module_id = root_id;
         coord_pkg.remaining_modules += 1;
@@ -626,6 +631,7 @@ pub const BuildEnv = struct {
                     const plat_module_name = PackageEnv.moduleNameFromPath(pf_pkg.root_file);
                     const plat_root_id = try platform_coord_pkg.ensureModule(self.gpa, plat_module_name, pf_pkg.root_file);
                     if (platform_coord_pkg.modules.items[plat_root_id].phase == .Parse) {
+                        platform_coord_pkg.modules.items[plat_root_id].explicit_root_ident_names = try self.targetConfigRootIdentNames(pf_pkg.targets_config);
                         platform_coord_pkg.modules.items[plat_root_id].depth = 1;
                         platform_coord_pkg.root_module_id = plat_root_id;
                         platform_coord_pkg.remaining_modules += 1;
@@ -657,12 +663,65 @@ pub const BuildEnv = struct {
         // Transfer results back to PackageEnv before platform validation and emission.
         try self.transferCoordinatorResults();
 
+        try self.resolvePlatformTargetConfigConstants();
+
         // Deterministic emission
         try self.emitDeterministic();
 
         if (comptime trace_build) {
             std.debug.print("[BUILD] compileDiscovered complete\n", .{});
         }
+    }
+
+    fn targetConfigRootIdentNames(
+        self: *BuildEnv,
+        maybe_targets_config: ?targets_config_mod.TargetsConfig,
+    ) Allocator.Error![]const []const u8 {
+        var names = std.ArrayList([]const u8).empty;
+        errdefer {
+            for (names.items) |name| self.gpa.free(name);
+            names.deinit(self.gpa);
+        }
+
+        const targets_config = maybe_targets_config orelse return try names.toOwnedSlice(self.gpa);
+        var seen = std.StringHashMapUnmanaged(void){};
+        defer seen.deinit(self.gpa);
+
+        try self.appendTargetConfigRootIdentNames(&names, &seen, targets_config.targets);
+
+        return try names.toOwnedSlice(self.gpa);
+    }
+
+    fn appendTargetConfigRootIdentNames(
+        self: *BuildEnv,
+        names: *std.ArrayList([]const u8),
+        seen: *std.StringHashMapUnmanaged(void),
+        specs: []const targets_config_mod.TargetLinkSpec,
+    ) Allocator.Error!void {
+        for (specs) |spec| {
+            const wasm = spec.wasm orelse continue;
+            try self.appendTargetConfigRootIdentName(names, seen, wasm.import_memory_ident);
+            try self.appendTargetConfigRootIdentName(names, seen, wasm.minimum_memory_ident);
+            try self.appendTargetConfigRootIdentName(names, seen, wasm.maximum_memory_ident);
+            try self.appendTargetConfigRootIdentName(names, seen, wasm.initial_stack_size_ident);
+            try self.appendTargetConfigRootIdentName(names, seen, wasm.global_base_ident);
+        }
+    }
+
+    fn appendTargetConfigRootIdentName(
+        self: *BuildEnv,
+        names: *std.ArrayList([]const u8),
+        seen: *std.StringHashMapUnmanaged(void),
+        maybe_ident: ?[]const u8,
+    ) Allocator.Error!void {
+        const ident = maybe_ident orelse return;
+        const entry = try seen.getOrPut(self.gpa, ident);
+        if (entry.found_existing) return;
+        entry.value_ptr.* = {};
+        errdefer _ = seen.remove(ident);
+        const owned = try self.gpa.dupe(u8, ident);
+        errdefer self.gpa.free(owned);
+        try names.append(self.gpa, owned);
     }
 
     /// Transfer compilation results from Coordinator to PackageEnv.
@@ -929,7 +988,7 @@ pub const BuildEnv = struct {
     const PackageKind = enum { app, package, platform, module, hosted, type_module, default_app };
 
     /// A mapping from a Roc identifier to an FFI symbol name, extracted from
-    /// a platform's `provides { roc_ident: "ffi_symbol" }` clause.
+    /// a platform's `provides { "roc_ffi_symbol": roc_ident }` clause.
     pub const ProvidesEntry = struct {
         roc_ident: []const u8,
         ffi_symbol: []const u8,
@@ -1071,7 +1130,7 @@ pub const BuildEnv = struct {
 
         try env.common.calcLineStarts(self.gpa);
 
-        const ast = try parse.parse(self.gpa, &env.common);
+        const ast = try parse.file(self.gpa, &env.common);
         defer ast.deinit();
 
         // Check for parse errors - if any exist, we cannot proceed
@@ -1273,30 +1332,11 @@ pub const BuildEnv = struct {
                     try info.exposes.append(self.gpa, try self.gpa.dupe(u8, item_name));
                 }
 
-                // Extract provides entries (roc_ident -> ffi_symbol mapping)
-                const provides_coll = ast.store.getCollection(p.provides);
-                const provides_fields = ast.store.recordFieldSlice(.{ .span = provides_coll.span });
-                for (provides_fields) |field_idx| {
-                    const field = ast.store.getRecordField(field_idx);
-                    const roc_ident = ast.resolve(field.name);
-                    const ffi_symbol = if (field.value) |value_idx| blk: {
-                        const value_expr = ast.store.getExpr(value_idx);
-                        switch (value_expr) {
-                            .string => |str_like| {
-                                const parts = ast.store.exprSlice(str_like.parts);
-                                if (parts.len > 0) {
-                                    const first_part = ast.store.getExpr(parts[0]);
-                                    switch (first_part) {
-                                        .string_part => |sp| break :blk ast.resolve(sp.token),
-                                        else => continue,
-                                    }
-                                }
-                                continue;
-                            },
-                            .string_part => |str_part| break :blk ast.resolve(str_part.token),
-                            else => continue,
-                        }
-                    } else continue;
+                // Extract provides entries (roc_ident -> linker symbol mapping)
+                for (ast.store.symbolMapEntrySlice(p.provides)) |entry_idx| {
+                    const entry = ast.store.getSymbolMapEntry(entry_idx);
+                    const roc_ident = ast.resolve(entry.func);
+                    const ffi_symbol = ast.resolve(entry.symbol);
                     try info.provides_entries.append(self.gpa, .{
                         .roc_ident = try self.gpa.dupe(u8, roc_ident),
                         .ffi_symbol = try self.gpa.dupe(u8, ffi_symbol),
@@ -1791,13 +1831,54 @@ pub const BuildEnv = struct {
         }
     }
 
-    fn emitWorkspaceError(self: *BuildEnv, msg: []const u8) Allocator.Error!void {
-        var rep = Report.init(self.gpa, "Invalid package dependency", .runtime_error);
+    fn emitWorkspaceReport(self: *BuildEnv, title: []const u8, msg: []const u8) Allocator.Error!void {
+        var rep = Report.init(self.gpa, title, .runtime_error);
         const owned = try rep.addOwnedString(msg);
         try rep.addErrorMessage(owned);
         // Route through OrderedSink with a stable fully-qualified identity so it participates in ordering.
         // We use "workspace:root" as the fq module identity.
         try self.sink.emitReport("workspace", "root", rep);
+    }
+
+    fn emitWorkspaceError(self: *BuildEnv, msg: []const u8) Allocator.Error!void {
+        try self.emitWorkspaceReport("Invalid package dependency", msg);
+    }
+
+    fn resolvePlatformTargetConfigConstants(self: *BuildEnv) Allocator.Error!void {
+        const semantic = self.getPlatformSemanticData() orelse return;
+        const checked_module = semantic.checked_artifact orelse return;
+
+        var pkg_it = self.packages.iterator();
+        while (pkg_it.next()) |entry| {
+            if (entry.value_ptr.kind != .platform) continue;
+            const targets_config = entry.value_ptr.targets_config orelse continue;
+            var diagnostic: targets_config_mod.TargetConfigResolveDiagnostic = undefined;
+            targets_config.resolveCheckedConstants(self.gpa, checked_module, &diagnostic) catch |err| switch (err) {
+                error.TargetConfigInvalid => {
+                    try self.emitTargetConfigResolveError(diagnostic);
+                    return;
+                },
+            };
+        }
+    }
+
+    fn emitTargetConfigResolveError(
+        self: *BuildEnv,
+        diagnostic: targets_config_mod.TargetConfigResolveDiagnostic,
+    ) Allocator.Error!void {
+        const msg = try std.fmt.allocPrint(
+            self.gpa,
+            "The target configuration field `{s}` for {s}.{s} uses identifier `{s}`, but it {s}.",
+            .{
+                diagnostic.field_name,
+                @tagName(diagnostic.target),
+                @tagName(diagnostic.output),
+                diagnostic.ident_name,
+                diagnostic.reason.message(),
+            },
+        );
+        defer self.gpa.free(msg);
+        try self.emitWorkspaceReport("INVALID TARGET CONFIGURATION", msg);
     }
 
     // Compute global deterministic emission of accumulated reports:

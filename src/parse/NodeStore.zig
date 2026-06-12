@@ -15,6 +15,16 @@ const Token = @import("tokenize.zig").Token;
 const Region = AST.TokenizedRegion;
 const Diagnostic = AST.Diagnostic;
 
+const TargetConfigValueNodeTag = enum(u32) {
+    int_literal,
+    string_literal,
+    tag_literal,
+    ident,
+    list,
+    files,
+    malformed,
+};
+
 /// Packed optional indices store null as 0 and non-null values as value + 1.
 /// All producers must use the fallible helpers below so maxInt(u32) overflows
 /// become OutOfMemory in every build mode.
@@ -41,6 +51,9 @@ scratch_exposed_items: base.Scratch(AST.ExposedItem.Idx),
 scratch_where_clauses: base.Scratch(AST.WhereClause.Idx),
 scratch_target_entries: base.Scratch(AST.TargetEntry.Idx),
 scratch_target_files: base.Scratch(AST.TargetFile.Idx),
+scratch_target_config_entries: base.Scratch(AST.TargetConfigEntry.Idx),
+scratch_target_config_values: base.Scratch(AST.TargetConfigValue.Idx),
+scratch_symbol_map_entries: base.Scratch(AST.SymbolMapEntry.Idx),
 scratch_for_clause_type_aliases: base.Scratch(AST.ForClauseTypeAlias.Idx),
 scratch_requires_entries: base.Scratch(AST.RequiresEntry.Idx),
 numeric_literals: std.ArrayList(NumericLiteral.Stored),
@@ -176,6 +189,12 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.E
     errdefer scratch_target_entries.deinit();
     var scratch_target_files = try base.Scratch(AST.TargetFile.Idx).init(gpa);
     errdefer scratch_target_files.deinit();
+    var scratch_target_config_entries = try base.Scratch(AST.TargetConfigEntry.Idx).init(gpa);
+    errdefer scratch_target_config_entries.deinit();
+    var scratch_target_config_values = try base.Scratch(AST.TargetConfigValue.Idx).init(gpa);
+    errdefer scratch_target_config_values.deinit();
+    var scratch_symbol_map_entries = try base.Scratch(AST.SymbolMapEntry.Idx).init(gpa);
+    errdefer scratch_symbol_map_entries.deinit();
     var scratch_for_clause_type_aliases = try base.Scratch(AST.ForClauseTypeAlias.Idx).init(gpa);
     errdefer scratch_for_clause_type_aliases.deinit();
     var scratch_requires_entries = try base.Scratch(AST.RequiresEntry.Idx).init(gpa);
@@ -202,6 +221,9 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.E
         .scratch_where_clauses = scratch_where_clauses,
         .scratch_target_entries = scratch_target_entries,
         .scratch_target_files = scratch_target_files,
+        .scratch_target_config_entries = scratch_target_config_entries,
+        .scratch_target_config_values = scratch_target_config_values,
+        .scratch_symbol_map_entries = scratch_symbol_map_entries,
         .scratch_for_clause_type_aliases = scratch_for_clause_type_aliases,
         .scratch_requires_entries = scratch_requires_entries,
         .numeric_literals = numeric_literals,
@@ -243,6 +265,9 @@ pub fn deinit(store: *NodeStore) void {
     store.scratch_where_clauses.deinit();
     store.scratch_target_entries.deinit();
     store.scratch_target_files.deinit();
+    store.scratch_target_config_entries.deinit();
+    store.scratch_target_config_values.deinit();
+    store.scratch_symbol_map_entries.deinit();
     store.scratch_for_clause_type_aliases.deinit();
     store.scratch_requires_entries.deinit();
     store.numeric_literals.deinit(store.gpa);
@@ -421,17 +446,20 @@ pub fn addHeader(store: *NodeStore, header: AST.Header) std.mem.Allocator.Error!
             node.tag = .platform_header;
             node.main_token = platform.name;
 
-            const ed_start = try store.reserveExtraDataStart(6);
+            const ed_start = try store.reserveExtraDataStart(9);
             // Store requires_entries span (start and len)
             store.extra_data.appendAssumeCapacity(platform.requires_entries.span.start);
             store.extra_data.appendAssumeCapacity(platform.requires_entries.span.len);
             store.extra_data.appendAssumeCapacity(@intFromEnum(platform.exposes));
             store.extra_data.appendAssumeCapacity(@intFromEnum(platform.packages));
-            store.extra_data.appendAssumeCapacity(@intFromEnum(platform.provides));
+            store.extra_data.appendAssumeCapacity(platform.provides.span.start);
+            store.extra_data.appendAssumeCapacity(platform.provides.span.len);
+            store.extra_data.appendAssumeCapacity(platform.hosted.span.start);
+            store.extra_data.appendAssumeCapacity(platform.hosted.span.len);
             store.extra_data.appendAssumeCapacity(try packOptionalIndex(platform.targets));
 
             node.data.lhs = ed_start;
-            node.data.rhs = 6;
+            node.data.rhs = 9;
 
             node.region = platform.region;
         },
@@ -1368,9 +1396,9 @@ pub fn getHeader(store: *const NodeStore, header_idx: AST.Header.Idx) AST.Header
         },
         .platform_header => {
             const ed_start = node.data.lhs;
-            std.debug.assert(node.data.rhs == 6);
+            std.debug.assert(node.data.rhs == 9);
 
-            const targets_val = store.extra_data.items[ed_start + 5];
+            const targets_val = store.extra_data.items[ed_start + 8];
             const targets = unpackOptionalIndex(AST.TargetsSection.Idx, targets_val);
 
             return .{ .platform = .{
@@ -1381,7 +1409,14 @@ pub fn getHeader(store: *const NodeStore, header_idx: AST.Header.Idx) AST.Header
                 } },
                 .exposes = @enumFromInt(store.extra_data.items[ed_start + 2]),
                 .packages = @enumFromInt(store.extra_data.items[ed_start + 3]),
-                .provides = @enumFromInt(store.extra_data.items[ed_start + 4]),
+                .provides = .{ .span = .{
+                    .start = store.extra_data.items[ed_start + 4],
+                    .len = store.extra_data.items[ed_start + 5],
+                } },
+                .hosted = .{ .span = .{
+                    .start = store.extra_data.items[ed_start + 6],
+                    .len = store.extra_data.items[ed_start + 7],
+                } },
                 .targets = targets,
                 .region = node.region,
             } };
@@ -2132,6 +2167,18 @@ pub fn getAnnoRecordField(store: *const NodeStore, anno_record_field_idx: AST.An
     };
 }
 
+/// Returns the source region for a stored type annotation without reconstructing the full AST union.
+pub fn typeAnnoRegion(store: *const NodeStore, ty_anno_idx: AST.TypeAnno.Idx) AST.TokenizedRegion {
+    const node = store.nodes.get(@enumFromInt(@intFromEnum(ty_anno_idx)));
+    return node.region;
+}
+
+/// Returns whether a stored type annotation is malformed without reconstructing the full AST union.
+pub fn typeAnnoIsMalformed(store: *const NodeStore, ty_anno_idx: AST.TypeAnno.Idx) bool {
+    const node = store.nodes.get(@enumFromInt(@intFromEnum(ty_anno_idx)));
+    return node.tag == .malformed;
+}
+
 /// Get a WhereClause node from the store, using a type-safe index to the node.
 pub fn getWhereClause(store: *const NodeStore, where_clause_idx: AST.WhereClause.Idx) AST.WhereClause {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(where_clause_idx)));
@@ -2735,10 +2782,10 @@ pub fn whereClauseSlice(store: *const NodeStore, span: AST.WhereClause.Span) []A
 pub fn addTargetsSection(store: *NodeStore, section: AST.TargetsSection) std.mem.Allocator.Error!AST.TargetsSection.Idx {
     const node = Node{
         .tag = .targets_section,
-        .main_token = section.files_path orelse 0,
+        .main_token = section.inputs_path orelse 0,
         .data = .{
-            .lhs = try packOptionalIndex(section.exe),
-            .rhs = try packOptionalIndex(section.static_lib),
+            .lhs = section.entries.span.start,
+            .rhs = section.entries.span.len,
         },
         .region = section.region,
     };
@@ -2746,16 +2793,16 @@ pub fn addTargetsSection(store: *NodeStore, section: AST.TargetsSection) std.mem
     return @enumFromInt(@intFromEnum(nid));
 }
 
-/// Adds a TargetLinkType node and returns its index.
-pub fn addTargetLinkType(store: *NodeStore, link_type: AST.TargetLinkType) std.mem.Allocator.Error!AST.TargetLinkType.Idx {
+/// Adds a SymbolMapEntry node and returns its index.
+pub fn addSymbolMapEntry(store: *NodeStore, entry: AST.SymbolMapEntry) std.mem.Allocator.Error!AST.SymbolMapEntry.Idx {
     const node = Node{
-        .tag = .target_link_type,
-        .main_token = 0,
+        .tag = .symbol_map_entry,
+        .main_token = entry.symbol,
         .data = .{
-            .lhs = link_type.entries.span.start,
-            .rhs = link_type.entries.span.len,
+            .lhs = if (entry.module) |module| try packNonNullOptionalU32(module) else 0,
+            .rhs = entry.func,
         },
-        .region = link_type.region,
+        .region = entry.region,
     };
     const nid = try store.nodes.append(store.gpa, node);
     return @enumFromInt(@intFromEnum(nid));
@@ -2767,8 +2814,8 @@ pub fn addTargetEntry(store: *NodeStore, entry: AST.TargetEntry) std.mem.Allocat
         .tag = .target_entry,
         .main_token = entry.target,
         .data = .{
-            .lhs = entry.files.span.start,
-            .rhs = entry.files.span.len,
+            .lhs = @intFromEnum(entry.config),
+            .rhs = 0,
         },
         .region = entry.region,
     };
@@ -2797,6 +2844,87 @@ pub fn addTargetFile(store: *NodeStore, file: AST.TargetFile) std.mem.Allocator.
         .malformed => |m| {
             node.tag = .malformed;
             node.data.lhs = @intFromEnum(m.reason);
+            node.region = m.region;
+        },
+    }
+
+    const nid = try store.nodes.append(store.gpa, node);
+    return @enumFromInt(@intFromEnum(nid));
+}
+
+/// Adds a TargetConfig node and returns its index.
+pub fn addTargetConfig(store: *NodeStore, config: AST.TargetConfig) std.mem.Allocator.Error!AST.TargetConfig.Idx {
+    const node = Node{
+        .tag = .target_config,
+        .main_token = 0,
+        .data = .{
+            .lhs = config.entries.span.start,
+            .rhs = config.entries.span.len,
+        },
+        .region = config.region,
+    };
+    const nid = try store.nodes.append(store.gpa, node);
+    return @enumFromInt(@intFromEnum(nid));
+}
+
+/// Adds a TargetConfigEntry node and returns its index.
+pub fn addTargetConfigEntry(store: *NodeStore, entry: AST.TargetConfigEntry) std.mem.Allocator.Error!AST.TargetConfigEntry.Idx {
+    const node = Node{
+        .tag = .target_config_entry,
+        .main_token = entry.name,
+        .data = .{
+            .lhs = @intFromEnum(entry.value),
+            .rhs = 0,
+        },
+        .region = entry.region,
+    };
+    const nid = try store.nodes.append(store.gpa, node);
+    return @enumFromInt(@intFromEnum(nid));
+}
+
+/// Adds a TargetConfigValue node and returns its index.
+pub fn addTargetConfigValue(store: *NodeStore, value: AST.TargetConfigValue) std.mem.Allocator.Error!AST.TargetConfigValue.Idx {
+    var node = Node{
+        .tag = .target_config_value,
+        .main_token = 0,
+        .data = .{ .lhs = 0, .rhs = 0 },
+        .region = AST.TokenizedRegion.empty(),
+    };
+
+    switch (value) {
+        .int_literal => |tok| {
+            node.main_token = tok;
+            node.data.lhs = @intFromEnum(TargetConfigValueNodeTag.int_literal);
+        },
+        .string_literal => |tok| {
+            node.main_token = tok;
+            node.data.lhs = @intFromEnum(TargetConfigValueNodeTag.string_literal);
+        },
+        .tag_literal => |tok| {
+            node.main_token = tok;
+            node.data.lhs = @intFromEnum(TargetConfigValueNodeTag.tag_literal);
+        },
+        .ident => |tok| {
+            node.main_token = tok;
+            node.data.lhs = @intFromEnum(TargetConfigValueNodeTag.ident);
+        },
+        .list => |span| {
+            const extra_token = try store.reserveExtraDataToken(2);
+            store.extra_data.appendAssumeCapacity(span.span.start);
+            store.extra_data.appendAssumeCapacity(span.span.len);
+            node.data.lhs = @intFromEnum(TargetConfigValueNodeTag.list);
+            node.data.rhs = extra_token;
+        },
+        .files => |span| {
+            const extra_token = try store.reserveExtraDataToken(2);
+            store.extra_data.appendAssumeCapacity(span.span.start);
+            store.extra_data.appendAssumeCapacity(span.span.len);
+            node.data.lhs = @intFromEnum(TargetConfigValueNodeTag.files);
+            node.data.rhs = extra_token;
+        },
+        .malformed => |m| {
+            node.data.lhs = @intFromEnum(TargetConfigValueNodeTag.malformed);
+            node.data.rhs = @intFromEnum(m.reason);
             node.region = m.region;
         },
     }
@@ -2871,30 +2999,128 @@ pub fn targetFileSlice(store: *const NodeStore, span: AST.TargetFile.Span) []AST
     return store.sliceFromSpan(AST.TargetFile.Idx, span.span);
 }
 
+/// Returns the start position for a new Span of TargetConfigEntry.Idxs in scratch.
+pub fn scratchTargetConfigEntryTop(store: *NodeStore) u32 {
+    return store.scratch_target_config_entries.top();
+}
+
+/// Places a new AST.TargetConfigEntry.Idx in the scratch.
+pub fn addScratchTargetConfigEntry(store: *NodeStore, idx: AST.TargetConfigEntry.Idx) std.mem.Allocator.Error!void {
+    try store.scratch_target_config_entries.append(idx);
+}
+
+/// Creates a new span starting at start. Moves the items from scratch to extra_data.
+pub fn targetConfigEntrySpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!AST.TargetConfigEntry.Span {
+    const end = store.scratch_target_config_entries.top();
+    defer store.scratch_target_config_entries.clearFrom(start);
+    var i = @as(usize, @intCast(start));
+    const ed_start = @as(u32, @intCast(store.extra_data.items.len));
+    while (i < end) {
+        try store.extra_data.append(store.gpa, @intFromEnum(store.scratch_target_config_entries.items.items[i]));
+        i += 1;
+    }
+    return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
+}
+
+/// Clears any TargetConfigEntry.Idxs added to scratch from start until the end.
+pub fn clearScratchTargetConfigEntriesFrom(store: *NodeStore, start: u32) void {
+    store.scratch_target_config_entries.clearFrom(start);
+}
+
+/// Returns a new TargetConfigEntry slice for iteration.
+pub fn targetConfigEntrySlice(store: *const NodeStore, span: AST.TargetConfigEntry.Span) []AST.TargetConfigEntry.Idx {
+    return store.sliceFromSpan(AST.TargetConfigEntry.Idx, span.span);
+}
+
+/// Returns the start position for a new Span of TargetConfigValue.Idxs in scratch.
+pub fn scratchTargetConfigValueTop(store: *NodeStore) u32 {
+    return store.scratch_target_config_values.top();
+}
+
+/// Places a new AST.TargetConfigValue.Idx in the scratch.
+pub fn addScratchTargetConfigValue(store: *NodeStore, idx: AST.TargetConfigValue.Idx) std.mem.Allocator.Error!void {
+    try store.scratch_target_config_values.append(idx);
+}
+
+/// Creates a new span starting at start. Moves the items from scratch to extra_data.
+pub fn targetConfigValueSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!AST.TargetConfigValue.Span {
+    const end = store.scratch_target_config_values.top();
+    defer store.scratch_target_config_values.clearFrom(start);
+    var i = @as(usize, @intCast(start));
+    const ed_start = @as(u32, @intCast(store.extra_data.items.len));
+    while (i < end) {
+        try store.extra_data.append(store.gpa, @intFromEnum(store.scratch_target_config_values.items.items[i]));
+        i += 1;
+    }
+    return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
+}
+
+/// Returns the current top of the SymbolMapEntry scratch list.
+pub fn scratchSymbolMapEntryTop(store: *NodeStore) u32 {
+    return store.scratch_symbol_map_entries.top();
+}
+
+/// Adds a SymbolMapEntry index to scratch.
+pub fn addScratchSymbolMapEntry(store: *NodeStore, idx: AST.SymbolMapEntry.Idx) std.mem.Allocator.Error!void {
+    try store.scratch_symbol_map_entries.append(idx);
+}
+
+/// Clears any SymbolMapEntry.Idxs added to scratch from start until the end.
+pub fn clearScratchSymbolMapEntriesFrom(store: *NodeStore, start: u32) void {
+    store.scratch_symbol_map_entries.clearFrom(start);
+}
+
+/// Creates a SymbolMapEntry span from scratch entries added since start.
+pub fn symbolMapEntrySpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!AST.SymbolMapEntry.Span {
+    const end = store.scratch_symbol_map_entries.top();
+    defer store.scratch_symbol_map_entries.clearFrom(start);
+    var i = @as(usize, @intCast(start));
+    const ed_start = @as(u32, @intCast(store.extra_data.items.len));
+    while (i < end) {
+        try store.extra_data.append(store.gpa, @intFromEnum(store.scratch_symbol_map_entries.items.items[i]));
+        i += 1;
+    }
+    return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
+}
+
+/// Returns a SymbolMapEntry slice for iteration over a span.
+pub fn symbolMapEntrySlice(store: *const NodeStore, span: AST.SymbolMapEntry.Span) []AST.SymbolMapEntry.Idx {
+    return store.sliceFromSpan(AST.SymbolMapEntry.Idx, span.span);
+}
+
+/// Clears any TargetConfigValue.Idxs added to scratch from start until the end.
+pub fn clearScratchTargetConfigValuesFrom(store: *NodeStore, start: u32) void {
+    store.scratch_target_config_values.clearFrom(start);
+}
+
+/// Returns a new TargetConfigValue slice for iteration.
+pub fn targetConfigValueSlice(store: *const NodeStore, span: AST.TargetConfigValue.Span) []AST.TargetConfigValue.Idx {
+    return store.sliceFromSpan(AST.TargetConfigValue.Idx, span.span);
+}
+
 /// Retrieves a TargetsSection from a stored node.
 pub fn getTargetsSection(store: *const NodeStore, idx: AST.TargetsSection.Idx) AST.TargetsSection {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(idx)));
     std.debug.assert(node.tag == .targets_section);
 
-    const files_path: ?Token.Idx = if (node.main_token == 0) null else node.main_token;
-    const exe = unpackOptionalIndex(AST.TargetLinkType.Idx, node.data.lhs);
-    const static_lib = unpackOptionalIndex(AST.TargetLinkType.Idx, node.data.rhs);
+    const inputs_path: ?Token.Idx = if (node.main_token == 0) null else node.main_token;
 
     return .{
-        .files_path = files_path,
-        .exe = exe,
-        .static_lib = static_lib,
+        .inputs_path = inputs_path,
+        .entries = .{ .span = .{ .start = node.data.lhs, .len = node.data.rhs } },
         .region = node.region,
     };
 }
 
-/// Retrieves a TargetLinkType from a stored node.
-pub fn getTargetLinkType(store: *const NodeStore, idx: AST.TargetLinkType.Idx) AST.TargetLinkType {
+/// Retrieves a SymbolMapEntry from a stored node.
+pub fn getSymbolMapEntry(store: *const NodeStore, idx: AST.SymbolMapEntry.Idx) AST.SymbolMapEntry {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(idx)));
-    std.debug.assert(node.tag == .target_link_type);
+    std.debug.assert(node.tag == .symbol_map_entry);
 
     return .{
-        .entries = .{ .span = .{ .start = node.data.lhs, .len = node.data.rhs } },
+        .symbol = node.main_token,
+        .module = if (node.data.lhs == 0) null else unpackNonNullOptionalU32(node.data.lhs),
+        .func = node.data.rhs,
         .region = node.region,
     };
 }
@@ -2906,7 +3132,7 @@ pub fn getTargetEntry(store: *const NodeStore, idx: AST.TargetEntry.Idx) AST.Tar
 
     return .{
         .target = node.main_token,
-        .files = .{ .span = .{ .start = node.data.lhs, .len = node.data.rhs } },
+        .config = @enumFromInt(node.data.lhs),
         .region = node.region,
     };
 }
@@ -2932,6 +3158,61 @@ pub fn getTargetFile(store: *const NodeStore, idx: AST.TargetFile.Idx) AST.Targe
             std.debug.panic("Expected a valid target_file tag, got {s}", .{@tagName(node.tag)});
         },
     }
+}
+
+/// Retrieves a TargetConfig from a stored node.
+pub fn getTargetConfig(store: *const NodeStore, idx: AST.TargetConfig.Idx) AST.TargetConfig {
+    const node = store.nodes.get(@enumFromInt(@intFromEnum(idx)));
+    std.debug.assert(node.tag == .target_config);
+
+    return .{
+        .entries = .{ .span = .{ .start = node.data.lhs, .len = node.data.rhs } },
+        .region = node.region,
+    };
+}
+
+/// Retrieves a TargetConfigEntry from a stored node.
+pub fn getTargetConfigEntry(store: *const NodeStore, idx: AST.TargetConfigEntry.Idx) AST.TargetConfigEntry {
+    const node = store.nodes.get(@enumFromInt(@intFromEnum(idx)));
+    std.debug.assert(node.tag == .target_config_entry);
+
+    return .{
+        .name = node.main_token,
+        .value = @enumFromInt(node.data.lhs),
+        .region = node.region,
+    };
+}
+
+/// Retrieves a TargetConfigValue from a stored node.
+pub fn getTargetConfigValue(store: *const NodeStore, idx: AST.TargetConfigValue.Idx) AST.TargetConfigValue {
+    const node = store.nodes.get(@enumFromInt(@intFromEnum(idx)));
+    std.debug.assert(node.tag == .target_config_value);
+
+    const tag: TargetConfigValueNodeTag = @enumFromInt(node.data.lhs);
+    return switch (tag) {
+        .int_literal => .{ .int_literal = node.main_token },
+        .string_literal => .{ .string_literal = node.main_token },
+        .tag_literal => .{ .tag_literal = node.main_token },
+        .ident => .{ .ident = node.main_token },
+        .list => blk: {
+            const extra_start = extraDataStart(node.data.rhs);
+            break :blk .{ .list = .{ .span = .{
+                .start = store.extra_data.items[extra_start],
+                .len = store.extra_data.items[extra_start + 1],
+            } } };
+        },
+        .files => blk: {
+            const extra_start = extraDataStart(node.data.rhs);
+            break :blk .{ .files = .{ .span = .{
+                .start = store.extra_data.items[extra_start],
+                .len = store.extra_data.items[extra_start + 1],
+            } } };
+        },
+        .malformed => .{ .malformed = .{
+            .reason = @enumFromInt(node.data.rhs),
+            .region = node.region,
+        } },
+    };
 }
 
 /// Adds a ForClauseTypeAlias node and returns its index.

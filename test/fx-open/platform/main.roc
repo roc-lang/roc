@@ -2,17 +2,20 @@ platform ""
     requires {} { main! : List(Str) => Try({}, [Exit(I32), ..]) }
     exposes [Stdout, Stderr, Stdin]
     packages {}
-    provides { main_for_host!: "main" }
+    provides { "roc_main": main_for_host! }
+    hosted {
+        "roc_stderr_line": Stderr.line!,
+        "roc_stdin_line": Stdin.line!,
+        "roc_stdout_line": Stdout.line!,
+    }
     targets: {
-        files: "targets/",
-        exe: {
-            x64mac: ["libhost.a", app],
-            arm64mac: ["libhost.a", app],
-            x64musl: ["crt1.o", "libhost.a", app, "libc.a"],
-            arm64musl: ["crt1.o", "libhost.a", app, "libc.a"],
-            x64win: ["host.lib", app],
-            arm64win: ["host.lib", app],
-        }
+        inputs: "targets/",
+        x64mac: { inputs: ["libhost.a", app] },
+        arm64mac: { inputs: ["libhost.a", app] },
+        x64musl: { inputs: ["crt1.o", "libhost.a", app, "libc.a"] },
+        arm64musl: { inputs: ["crt1.o", "libhost.a", app, "libc.a"] },
+        x64win: { inputs: ["host.lib", app] },
+        arm64win: { inputs: ["host.lib", app] },
     }
 
 import Stdout

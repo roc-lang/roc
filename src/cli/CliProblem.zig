@@ -115,6 +115,12 @@ pub const CliProblem = union(enum) {
         app_path: []const u8,
     },
 
+    /// The requested optimization level is not implemented for this command
+    unsupported_opt_level: struct {
+        command: []const u8,
+        opt: []const u8,
+    },
+
     /// Compilation produced errors
     compilation_failed: struct {
         path: []const u8,
@@ -124,6 +130,12 @@ pub const CliProblem = union(enum) {
     /// Linker failed
     linker_failed: struct {
         err: anyerror,
+        target: []const u8,
+    },
+
+    /// The platform's host inputs do not define symbols the app references
+    missing_host_symbols: struct {
+        symbols: []const []const u8,
         target: []const u8,
     },
 
@@ -224,8 +236,10 @@ pub const CliProblem = union(enum) {
             .platform_not_found,
             .no_platform_found,
             .build_not_supported_for_headerless,
+            .unsupported_opt_level,
             .compilation_failed,
             .linker_failed,
+            .missing_host_symbols,
             => .fatal,
 
             // Runtime errors - operation failed
@@ -280,8 +294,10 @@ pub const CliProblem = union(enum) {
             .absolute_platform_path => |info| try createAbsolutePlatformPathReport(allocator, info),
             .invalid_app_header => |info| try createInvalidAppHeaderReport(allocator, info),
             .build_not_supported_for_headerless => |info| try createBuildNotSupportedForHeaderlessReport(allocator, info),
+            .unsupported_opt_level => |info| try createUnsupportedOptLevelReport(allocator, info),
             .compilation_failed => |info| try createCompilationFailedReport(allocator, info),
             .linker_failed => |info| try createLinkerFailedReport(allocator, info),
+            .missing_host_symbols => |info| try createMissingHostSymbolsReport(allocator, info),
             .object_compilation_failed => |info| try createObjectCompilationFailedReport(allocator, info),
             .shim_generation_failed => |info| try createShimGenerationFailedReport(allocator, info),
             .invalid_url => |info| try createInvalidUrlReport(allocator, info),
@@ -580,6 +596,25 @@ fn createBuildNotSupportedForHeaderlessReport(allocator: Allocator, info: anytyp
     return report;
 }
 
+fn createUnsupportedOptLevelReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    var report = Report.init(allocator, "OPTIMIZATION MODE NOT IMPLEMENTED", .fatal);
+
+    try report.document.addText("The optimization mode ");
+    try report.document.addAnnotated(info.opt, .emphasized);
+    try report.document.addText(" is not implemented for ");
+    try report.document.addAnnotated(info.command, .emphasized);
+    try report.document.addText(" yet.");
+    try report.document.addLineBreak();
+    try report.document.addLineBreak();
+    try report.document.addText("Use ");
+    try report.document.addAnnotated("--opt=dev", .emphasized);
+    try report.document.addText(" for compiled builds, or ");
+    try report.document.addAnnotated("--opt=interpreter", .emphasized);
+    try report.document.addText(" for interpreter builds.");
+
+    return report;
+}
+
 fn createCompilationFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
     var report = Report.init(allocator, "COMPILATION FAILED", .fatal);
 
@@ -594,6 +629,29 @@ fn createCompilationFailedReport(allocator: Allocator, info: anytype) Allocator.
     try report.document.addText("Found ");
     try report.document.addAnnotated(count_str, .error_highlight);
     try report.document.addText(" error(s). See above for details.");
+
+    return report;
+}
+
+fn createMissingHostSymbolsReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    var report = Report.init(allocator, "MISSING HOST SYMBOLS", .fatal);
+
+    try report.document.addText("The platform's host inputs for target ");
+    try report.document.addAnnotated(info.target, .emphasized);
+    try report.document.addText(" do not define these symbols the application references:");
+    try report.document.addLineBreak();
+    for (info.symbols) |symbol| {
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(symbol, .emphasized);
+    }
+    try report.document.addLineBreak();
+    try report.document.addLineBreak();
+    try report.document.addText("Every linker symbol named in the platform header's ");
+    try report.document.addAnnotated("hosted", .emphasized);
+    try report.document.addText(" section, plus the fixed runtime set (roc_alloc, roc_dealloc, roc_realloc, roc_dbg, roc_expect_failed, roc_crashed), must be defined by the host inputs listed in the platform's ");
+    try report.document.addAnnotated("targets", .emphasized);
+    try report.document.addText(" section.");
 
     return report;
 }
@@ -870,6 +928,21 @@ test "compilation_failed generates correct report" {
     defer report.deinit();
 
     try std.testing.expectEqualStrings("COMPILATION FAILED", report.title);
+    try std.testing.expectEqual(Severity.fatal, report.severity);
+}
+
+test "unsupported_opt_level generates correct report" {
+    const allocator = std.testing.allocator;
+
+    const problem = CliProblem{ .unsupported_opt_level = .{
+        .command = "roc build",
+        .opt = "size",
+    } };
+
+    var report = try problem.toReport(allocator);
+    defer report.deinit();
+
+    try std.testing.expectEqualStrings("OPTIMIZATION MODE NOT IMPLEMENTED", report.title);
     try std.testing.expectEqual(Severity.fatal, report.severity);
 }
 

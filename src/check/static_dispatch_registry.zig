@@ -601,7 +601,9 @@ pub const StaticDispatchPlanTable = struct {
         for (module_env.numeral_dispatch_plans.items.items) |numeral_plan| {
             const node: CIR.Node.Idx = @enumFromInt(numeral_plan.node_idx);
             const expr_idx: CIR.Expr.Idx = @enumFromInt(numeral_plan.node_idx);
-            const checked_expr = checked_bodies.exprIdForSource(expr_idx) orelse continue;
+            const checked_expr = checked_bodies.exprIdForSource(expr_idx) orelse
+                checked_bodies.numeralConversionExprAtRawNode(numeral_plan.node_idx) orelse
+                continue;
             switch (checked_bodies.exprs[@intFromEnum(checked_expr)].data) {
                 .num_from_numeral,
                 .typed_num_from_numeral,
@@ -884,13 +886,13 @@ fn sourceCallableHasEqualityShape(
 
 fn checkedTypeIsBuiltinBool(checked_types: anytype, ty: CheckedTypeId) bool {
     const raw = @intFromEnum(ty);
-    if (raw >= checked_types.store.payloads.len) {
+    if (raw >= checked_types.store.payloads.items.len) {
         if (@import("builtin").mode == .Debug) {
             std.debug.panic("checked static dispatch invariant violated: equality return type root was outside the checked type store", .{});
         }
         unreachable;
     }
-    return switch (checked_types.store.payloads[raw]) {
+    return switch (checked_types.store.payloads.items[raw]) {
         .nominal => |nominal| if (nominal.builtin) |builtin_owner| builtin_owner == .bool else false,
         else => false,
     };
@@ -915,13 +917,13 @@ fn checkedFunctionReturnTypeId(
     callable_ty: CheckedTypeId,
 ) CheckedTypeId {
     const raw = @intFromEnum(callable_ty);
-    if (raw >= checked_types.store.payloads.len) {
+    if (raw >= checked_types.store.payloads.items.len) {
         if (@import("builtin").mode == .Debug) {
             std.debug.panic("checked static dispatch invariant violated: callable type root was outside the checked type store", .{});
         }
         unreachable;
     }
-    return switch (checked_types.store.payloads[raw]) {
+    return switch (checked_types.store.payloads.items[raw]) {
         .function => |func| func.ret,
         else => if (@import("builtin").mode == .Debug) {
             std.debug.panic("checked static dispatch invariant violated: for-loop dispatch constraint was not a function", .{});

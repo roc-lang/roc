@@ -8,6 +8,8 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const roc_base = @import("base");
 const WasmLinking = @import("WasmLinking.zig");
+const StaticDataExport = @import("../dev/StaticDataExport.zig").StaticDataExport;
+const StaticDataRelocation = @import("../dev/StaticDataExport.zig").StaticDataRelocation;
 const index_types = @import("index_types.zig");
 const DefinedFunction = index_types.DefinedFunction;
 const FunctionIndex = index_types.FunctionIndex;
@@ -15,6 +17,22 @@ const LocalFunctionIndex = index_types.LocalFunctionIndex;
 const SymbolIndex = index_types.SymbolIndex;
 
 const Self = @This();
+
+/// Errors that can occur while merging relocatable wasm object modules.
+pub const MergeError = Allocator.Error || error{
+    DuplicateSymbol,
+    FunctionTypeMismatch,
+    InvalidSection,
+};
+
+/// Errors that can occur while materializing static data into a wasm object module.
+pub const StaticDataError = Allocator.Error || error{MissingSymbol};
+
+/// Errors that can occur while encoding a relocatable wasm object.
+pub const RelocatableEncodeError = Allocator.Error || error{
+    InvalidRelocationSymbol,
+    UnsupportedSectionSymbolRelocation,
+};
 
 /// Wasm value types
 pub const ValType = enum(u8) {
@@ -290,6 +308,12 @@ const DataSegment = struct {
     /// Byte offset of this segment's payload within the original data section body.
     /// Used to normalize reloc.DATA entries during preload.
     section_offset: u32 = 0,
+    /// Segment name from linking metadata.
+    name: ?[]const u8 = null,
+    /// Segment alignment stored as log2(bytes), matching wasm object metadata.
+    alignment: u32 = 0,
+    /// Segment flags from linking metadata.
+    flags: u32 = 0,
 };
 
 /// An imported function
@@ -385,7 +409,9 @@ data_segments: std.ArrayList(DataSegment),
 /// Next available offset for data placement in linear memory (grows up from 0).
 data_offset: u32,
 has_memory: bool,
+memory_import: bool,
 memory_min_pages: u32,
+memory_max_pages: ?u32,
 has_stack_pointer: bool,
 stack_pointer_init: u32,
 /// Whether the module has a funcref table (for call_indirect).
@@ -438,7 +464,9 @@ pub fn init(allocator: Allocator) Self {
         .data_segments = .empty,
         .data_offset = 1024, // reserve first 1KB for future use
         .has_memory = false,
+        .memory_import = false,
         .memory_min_pages = 1,
+        .memory_max_pages = null,
         .has_stack_pointer = false,
         .stack_pointer_init = 65536,
         .has_table = false,
@@ -497,6 +525,7 @@ pub fn addImport(self: *Self, module_name: []const u8, field_name: []const u8, t
         .field_name = field_name,
         .type_idx = type_idx,
     });
+    self.import_fn_count = @intCast(self.imports.items.len);
     return func_idx;
 }
 
@@ -521,6 +550,87 @@ pub fn addFunctionImportWithSymbol(
         .function = FunctionIndex.fromRaw(raw_function),
         .symbol = SymbolIndex.fromRaw(raw_symbol),
     };
+}
+
+/// Add an imported global and the corresponding undefined linking symbol.
+pub fn addGlobalImportWithSymbol(
+    self: *Self,
+    module_name: []const u8,
+    field_name: []const u8,
+    val_type: ValType,
+    mutable: bool,
+) Allocator.Error!struct { global_index: u32, symbol: SymbolIndex } {
+    const imported = try self.addGlobalImportWithSymbolRaw(module_name, field_name, @intFromEnum(val_type), mutable);
+    return .{
+        .global_index = imported.global_index,
+        .symbol = imported.symbol,
+    };
+}
+
+/// Add an imported global and undefined linking symbol using a raw wasm value type byte.
+pub fn addGlobalImportWithSymbolRaw(
+    self: *Self,
+    module_name: []const u8,
+    field_name: []const u8,
+    val_type: u8,
+    mutable: bool,
+) Allocator.Error!struct { global_index: u32, symbol: SymbolIndex } {
+    const global_index: u32 = @intCast(self.global_imports.items.len);
+    try self.global_imports.append(self.allocator, .{
+        .module_name = module_name,
+        .field_name = field_name,
+        .val_type = val_type,
+        .mutable = mutable,
+    });
+    self.import_global_count = @intCast(self.global_imports.items.len);
+
+    const raw_symbol: u32 = @intCast(self.linking.symbol_table.items.len);
+    try self.linking.symbol_table.append(self.allocator, .{
+        .kind = .global,
+        .flags = WasmLinking.SymFlag.UNDEFINED | WasmLinking.SymFlag.EXPLICIT_NAME,
+        .name = field_name,
+        .index = global_index,
+    });
+    return .{
+        .global_index = global_index,
+        .symbol = SymbolIndex.fromRaw(raw_symbol),
+    };
+}
+
+/// Import the standard wasm object-mode stack pointer global.
+pub fn addStackPointerImportWithSymbol(self: *Self) Allocator.Error!SymbolIndex {
+    const imported = try self.addGlobalImportWithSymbol("env", "__stack_pointer", .i32, true);
+    return imported.symbol;
+}
+
+/// Import linear memory for a generated relocatable object.
+pub fn addMemoryImport(self: *Self) void {
+    self.has_memory = true;
+    self.memory_import = true;
+    self.memory_min_pages = @max(self.memory_min_pages, 1);
+}
+
+/// Import the standard indirect function table for a generated relocatable object.
+pub fn addTableImportWithSymbol(self: *Self) Allocator.Error!SymbolIndex {
+    return try self.addTableImportWithSymbolNamed("env", "__indirect_function_table");
+}
+
+/// Add an imported table and undefined table symbol with explicit import names.
+pub fn addTableImportWithSymbolNamed(self: *Self, module_name: []const u8, field_name: []const u8) Allocator.Error!SymbolIndex {
+    self.has_table = true;
+    const table_index: u32 = @intCast(self.table_imports.items.len);
+    try self.table_imports.append(self.allocator, .{
+        .module_name = module_name,
+        .field_name = field_name,
+    });
+    const raw_symbol: u32 = @intCast(self.linking.symbol_table.items.len);
+    try self.linking.symbol_table.append(self.allocator, .{
+        .kind = .table,
+        .flags = WasmLinking.SymFlag.UNDEFINED | WasmLinking.SymFlag.EXPLICIT_NAME,
+        .name = field_name,
+        .index = table_index,
+    });
+    return SymbolIndex.fromRaw(raw_symbol);
 }
 
 /// Get the number of imported functions. Regular function indices are offset by this.
@@ -594,11 +704,77 @@ pub fn findDefinedFunctionSymbolExact(self: *const Self, name: []const u8) Symbo
         const sym_name = sym.resolveName(self.imports.items, self.global_imports.items, self.table_imports.items) orelse continue;
         if (!std.mem.eql(u8, sym_name, name)) continue;
         if (sym.kind != .function) return error.WrongSymbolKind;
-        if (sym.isUndefined()) return error.UndefinedSymbol;
+        if (sym.isUndefined()) continue;
         if (found != null) return error.DuplicateSymbol;
         found = SymbolIndex.fromRaw(@intCast(i));
     }
     return found orelse error.MissingSymbol;
+}
+
+/// Find exactly one defined function symbol by exact name and return its function index.
+pub fn findDefinedFunctionIndexExact(self: *const Self, name: []const u8) SymbolLookupError!u32 {
+    const symbol = try self.findDefinedFunctionSymbolExact(name);
+    return self.linking.symbol_table.items[symbol.raw()].index;
+}
+
+fn findSymbolByNameAndKind(self: *const Self, name: []const u8, kind: WasmLinking.SymKind) ?u32 {
+    for (self.linking.symbol_table.items, 0..) |sym, i| {
+        if (sym.kind != kind) continue;
+        const sym_name = sym.resolveName(self.imports.items, self.global_imports.items, self.table_imports.items) orelse continue;
+        if (std.mem.eql(u8, sym_name, name)) return @intCast(i);
+    }
+    return null;
+}
+
+fn isUndefinedFunctionNamed(self: *const Self, sym: WasmLinking.SymInfo, name: []const u8) bool {
+    if (sym.kind != .function or !sym.isUndefined()) return false;
+    const sym_name = sym.resolveName(self.imports.items, self.global_imports.items, self.table_imports.items) orelse return false;
+    return std.mem.eql(u8, sym_name, name);
+}
+
+fn resolveUndefinedFunctionSymbols(
+    self: *Self,
+    name: []const u8,
+    defined_function_index: u32,
+    defined_flags: u32,
+    defined_name: ?[]const u8,
+) error{ InvalidSection, FunctionTypeMismatch }!?u32 {
+    const import_count = self.importCount();
+    if (defined_function_index < import_count) return error.InvalidSection;
+
+    const defined_local_index = defined_function_index - import_count;
+    if (defined_local_index >= self.func_type_indices.items.len) return error.InvalidSection;
+    const defined_type = self.func_type_indices.items[defined_local_index];
+
+    var first_match: ?u32 = null;
+    for (self.linking.symbol_table.items, 0..) |sym, i| {
+        if (!self.isUndefinedFunctionNamed(sym, name)) continue;
+        if (sym.index >= self.imports.items.len) return error.InvalidSection;
+        if (self.imports.items[sym.index].type_idx != defined_type) return error.FunctionTypeMismatch;
+        if (first_match == null) first_match = @intCast(i);
+    }
+
+    if (first_match == null) return null;
+
+    for (self.linking.symbol_table.items) |*sym| {
+        if (!self.isUndefinedFunctionNamed(sym.*, name)) continue;
+        const imported_function_index = sym.index;
+        for (self.table_func_indices.items) |*table_function_index| {
+            if (table_function_index.* == imported_function_index) {
+                table_function_index.* = defined_function_index;
+            }
+        }
+        for (self.exports.items) |*exp| {
+            if (exp.kind == .func and exp.idx == imported_function_index) {
+                exp.idx = defined_function_index;
+            }
+        }
+        sym.flags = defined_flags & ~WasmLinking.SymFlag.UNDEFINED;
+        sym.name = defined_name orelse name;
+        sym.index = defined_function_index;
+    }
+
+    return first_match;
 }
 
 /// Return the wasm type index for an imported or defined function.
@@ -651,6 +827,7 @@ pub fn addExport(self: *Self, name: []const u8, kind: ExportKind, idx: u32) Allo
 /// Enable memory section with the given minimum page count.
 pub fn enableMemory(self: *Self, min_pages: u32) void {
     self.has_memory = true;
+    self.memory_import = false;
     self.memory_min_pages = min_pages;
 }
 
@@ -668,8 +845,20 @@ pub fn ensureMemoryMinBytes(self: *Self, byte_count: usize) void {
 /// Add a data segment to linear memory. Returns the offset where the data
 /// will be placed. The data is copied and aligned to `align_bytes`.
 pub fn addDataSegment(self: *Self, data: []const u8, align_bytes: u32) Allocator.Error!u32 {
+    return try self.addDataSegmentWithInfo(data, align_bytes, null, 0);
+}
+
+/// Add a data segment with object-file segment metadata preserved in the linking section.
+pub fn addDataSegmentWithInfo(
+    self: *Self,
+    data: []const u8,
+    align_bytes: u32,
+    name: ?[]const u8,
+    flags: u32,
+) Allocator.Error!u32 {
     // Align the offset
     const alignment = if (align_bytes > 0) align_bytes else 1;
+    std.debug.assert(std.math.isPowerOfTwo(alignment));
     self.data_offset = (self.data_offset + alignment - 1) & ~(alignment - 1);
 
     const offset = self.data_offset;
@@ -678,9 +867,115 @@ pub fn addDataSegment(self: *Self, data: []const u8, align_bytes: u32) Allocator
         .offset = offset,
         .data = data_copy,
         .section_offset = 0,
+        .name = name,
+        .alignment = alignmentLog2(alignment),
+        .flags = flags,
     });
     self.data_offset += @intCast(data.len);
     return offset;
+}
+
+/// Add a data symbol that names a byte range within an existing data segment.
+pub fn addDataSymbol(
+    self: *Self,
+    segment_index: u32,
+    name: []const u8,
+    data_offset: u32,
+    size: u32,
+    flags: u32,
+) Allocator.Error!SymbolIndex {
+    std.debug.assert(segment_index < self.data_segments.items.len);
+    const raw_symbol: u32 = @intCast(self.linking.symbol_table.items.len);
+    try self.linking.symbol_table.append(self.allocator, .{
+        .kind = .data,
+        .flags = flags,
+        .name = name,
+        .index = segment_index,
+        .data_offset = data_offset,
+        .data_size = size,
+    });
+    return SymbolIndex.fromRaw(raw_symbol);
+}
+
+/// Build a relocatable data-only module from materialized static data exports.
+pub fn staticDataModule(allocator: Allocator, exports: []const StaticDataExport) StaticDataError!Self {
+    var module = Self.init(allocator);
+    errdefer module.deinit();
+    try module.addStaticDataExports(exports);
+    return module;
+}
+
+/// Add materialized static data exports to this relocatable module.
+pub fn addStaticDataExports(self: *Self, exports: []const StaticDataExport) StaticDataError!void {
+    if (exports.len == 0) return;
+
+    const segment_indices = try self.allocator.alloc(u32, exports.len);
+    defer self.allocator.free(segment_indices);
+
+    for (exports, 0..) |data_export, i| {
+        segment_indices[i] = @intCast(self.data_segments.items.len);
+        _ = try self.addDataSegmentWithInfo(
+            data_export.bytes,
+            @max(data_export.alignment, 1),
+            data_export.symbol_name,
+            0,
+        );
+
+        const symbol_flags: u32 = if (data_export.is_global)
+            0
+        else
+            WasmLinking.SymFlag.BINDING_LOCAL | WasmLinking.SymFlag.VISIBILITY_HIDDEN;
+        const symbol_offset: usize = @intCast(data_export.symbol_offset);
+        _ = try self.addDataSymbol(
+            segment_indices[i],
+            data_export.symbol_name,
+            data_export.symbol_offset,
+            @intCast(data_export.bytes.len - symbol_offset),
+            symbol_flags,
+        );
+    }
+
+    for (exports, segment_indices) |data_export, segment_index| {
+        for (data_export.relocations) |relocation| {
+            const symbol_index = try self.staticDataRelocationSymbol(relocation);
+            switch (relocation.kind) {
+                .address => try self.reloc_data.entries.append(self.allocator, .{ .offset = .{
+                    .type_id = .memory_addr_i32,
+                    .offset = @intCast(relocation.offset),
+                    .symbol_index = symbol_index.raw(),
+                    .addend = @intCast(relocation.addend),
+                    .data_segment_index = segment_index,
+                } }),
+                .function_pointer => try self.reloc_data.entries.append(self.allocator, .{ .index = .{
+                    .type_id = .table_index_i32,
+                    .offset = @intCast(relocation.offset),
+                    .symbol_index = symbol_index.raw(),
+                    .data_segment_index = segment_index,
+                } }),
+            }
+        }
+    }
+}
+
+fn staticDataRelocationSymbol(self: *Self, relocation: StaticDataRelocation) StaticDataError!SymbolIndex {
+    const kind: WasmLinking.SymKind = switch (relocation.kind) {
+        .address => .data,
+        .function_pointer => .function,
+    };
+    if (self.findSymbolByNameAndKind(relocation.target_symbol_name, kind)) |symbol_index| {
+        return SymbolIndex.fromRaw(symbol_index);
+    }
+    if (relocation.kind == .address) return error.MissingSymbol;
+
+    const raw_symbol: u32 = @intCast(self.linking.symbol_table.items.len);
+    const flags = WasmLinking.SymFlag.UNDEFINED | WasmLinking.SymFlag.EXPLICIT_NAME;
+    try self.linking.symbol_table.append(self.allocator, .{
+        .kind = kind,
+        .flags = flags,
+        .name = relocation.target_symbol_name,
+        .index = 0,
+    });
+    return SymbolIndex.fromRaw(raw_symbol);
 }
 
 /// Enable the __stack_pointer global (global index 0).
@@ -870,6 +1165,12 @@ pub const MergeResult = struct {
     }
 };
 
+/// Selects whether module merging produces final wasm or a relocatable object.
+pub const MergeMode = enum {
+    final_link,
+    relocatable_object,
+};
+
 // --- Phase 8b: Builtin Symbol Lookup ---
 
 /// Maps builtin operations to their symbol indices in the merged module.
@@ -1025,7 +1326,17 @@ pub const BuiltinSymbols = struct {
 ///
 /// Returns a MergeResult with the symbol index mapping, which callers
 /// use to look up merged builtins by their original symbol indices.
-pub fn mergeModule(self: *Self, source: *const Self) Allocator.Error!MergeResult {
+pub fn mergeModule(self: *Self, source: *const Self) MergeError!MergeResult {
+    return try self.mergeModuleMode(source, .final_link);
+}
+
+/// Merge `source` while preserving wasm object ABI imports and relocation metadata.
+pub fn mergeModuleForObject(self: *Self, source: *const Self) MergeError!MergeResult {
+    return try self.mergeModuleMode(source, .relocatable_object);
+}
+
+/// Merge `source` into this module using the requested final-link or object-mode policy.
+pub fn mergeModuleMode(self: *Self, source: *const Self, mode: MergeMode) MergeError!MergeResult {
     const gpa = self.allocator;
 
     // --- 1. Merge type section (with deduplication) ---
@@ -1052,6 +1363,26 @@ pub fn mergeModule(self: *Self, source: *const Self) Allocator.Error!MergeResult
         }
     }
 
+    if (mode == .relocatable_object and source.has_memory) {
+        self.addMemoryImport();
+        self.memory_min_pages = @max(self.memory_min_pages, source.memory_min_pages);
+        if (source.memory_max_pages) |max_pages| {
+            self.memory_max_pages = if (self.memory_max_pages) |current|
+                @min(current, max_pages)
+            else
+                max_pages;
+        }
+    } else if (mode == .final_link and source.has_memory) {
+        self.has_memory = true;
+        self.memory_min_pages = @max(self.memory_min_pages, source.memory_min_pages);
+        if (source.memory_max_pages) |max_pages| {
+            self.memory_max_pages = if (self.memory_max_pages) |current|
+                @min(current, max_pages)
+            else
+                max_pages;
+        }
+    }
+
     // --- 2. Compute function index mapping ---
     // Source defined functions start at source.import_fn_count in source's index space.
     // In self, they'll be appended after existing defined functions.
@@ -1063,12 +1394,34 @@ pub fn mergeModule(self: *Self, source: *const Self) Allocator.Error!MergeResult
     const total_source_fns = source.import_fn_count + source_defined_count;
     const func_remap = try gpa.alloc(u32, total_source_fns);
     defer gpa.free(func_remap);
+    const source_import_resolved_to_defined = try gpa.alloc(bool, source.imports.items.len);
+    defer gpa.free(source_import_resolved_to_defined);
+    @memset(source_import_resolved_to_defined, false);
 
     // Remap source imports → self imports (by name match).
     // NOTE: This loop may add new imports to self, changing importCount().
     // We must compute self_defined_base AFTER this loop completes.
     const old_import_count = self.importCount();
     for (source.imports.items, 0..) |src_imp, src_idx| {
+        const remapped_type = type_remap[src_imp.type_idx];
+        var matched_defined: ?u32 = null;
+        for (self.linking.symbol_table.items) |sym| {
+            if (sym.kind != .function or sym.isUndefined()) continue;
+            const sym_name = sym.resolveName(self.imports.items, self.global_imports.items, self.table_imports.items) orelse continue;
+            if (!std.mem.eql(u8, sym_name, src_imp.field_name)) continue;
+            if (matched_defined != null) return error.DuplicateSymbol;
+            matched_defined = sym.index;
+        }
+        if (matched_defined) |fn_idx| {
+            if (fn_idx < old_import_count) return error.InvalidSection;
+            const local_idx = fn_idx - old_import_count;
+            if (local_idx >= self.func_type_indices.items.len) return error.InvalidSection;
+            if (self.func_type_indices.items[local_idx] != remapped_type) return error.FunctionTypeMismatch;
+            func_remap[src_idx] = fn_idx;
+            source_import_resolved_to_defined[src_idx] = true;
+            continue;
+        }
+
         // Find matching import in self by field_name.
         var matched: ?u32 = null;
         for (self.imports.items, 0..) |self_imp, self_idx| {
@@ -1079,7 +1432,6 @@ pub fn mergeModule(self: *Self, source: *const Self) Allocator.Error!MergeResult
         }
         func_remap[src_idx] = matched orelse {
             // Source imports a function self doesn't have — add it as a new import.
-            const remapped_type = type_remap[src_imp.type_idx];
             func_remap[src_idx] = try self.addImport(src_imp.module_name, src_imp.field_name, remapped_type);
             continue;
         };
@@ -1107,6 +1459,9 @@ pub fn mergeModule(self: *Self, source: *const Self) Allocator.Error!MergeResult
                 exp.idx += import_delta;
             }
         }
+        for (source_import_resolved_to_defined, 0..) |resolved_to_defined, src_idx| {
+            if (resolved_to_defined) func_remap[src_idx] += import_delta;
+        }
     }
 
     // Compute defined function base AFTER imports are finalized,
@@ -1133,9 +1488,6 @@ pub fn mergeModule(self: *Self, source: *const Self) Allocator.Error!MergeResult
     }
 
     // --- 5. Merge data section (adjust memory offsets) ---
-    // data_remap: maps source segment index → new data base address.
-    const data_remap = try gpa.alloc(u32, source.data_segments.items.len);
-    defer gpa.free(data_remap);
     // data_segment_remap: maps source segment index → new segment index in self.data_segments.
     const data_segment_remap = try gpa.alloc(u32, source.data_segments.items.len);
     defer gpa.free(data_segment_remap);
@@ -1144,11 +1496,20 @@ pub fn mergeModule(self: *Self, source: *const Self) Allocator.Error!MergeResult
         // Find alignment from segment info if available, default to 1.
         const alignment: u32 = if (i < source.linking.segment_info.items.len)
             @as(u32, 1) << @intCast(source.linking.segment_info.items[i].alignment)
+        else if (src_ds.alignment < @bitSizeOf(u32))
+            @as(u32, 1) << @intCast(src_ds.alignment)
         else
             1;
+        const segment_name = if (i < source.linking.segment_info.items.len)
+            source.linking.segment_info.items[i].name
+        else
+            src_ds.name;
+        const segment_flags = if (i < source.linking.segment_info.items.len)
+            source.linking.segment_info.items[i].flags
+        else
+            src_ds.flags;
         data_segment_remap[i] = @intCast(self.data_segments.items.len);
-        const new_offset = try self.addDataSegment(src_ds.data, alignment);
-        data_remap[i] = new_offset;
+        _ = try self.addDataSegmentWithInfo(src_ds.data, alignment, segment_name, segment_flags);
     }
 
     // --- 5b. Merge element section (remap function indices) ---
@@ -1188,6 +1549,19 @@ pub fn mergeModule(self: *Self, source: *const Self) Allocator.Error!MergeResult
                     symbol_remap[src_sym_idx] = new_sym_idx;
                 } else {
                     // Defined function in source — add as defined in self.
+                    if (!src_sym.isLocal()) {
+                        if (src_name) |name| {
+                            if (try self.resolveUndefinedFunctionSymbols(
+                                name,
+                                func_remap[src_sym.index],
+                                src_sym.flags,
+                                src_sym.name,
+                            )) |existing| {
+                                symbol_remap[src_sym_idx] = existing;
+                                continue;
+                            }
+                        }
+                    }
                     const new_sym_idx: u32 = @intCast(self.linking.symbol_table.items.len);
                     try self.linking.symbol_table.append(gpa, .{
                         .kind = .function,
@@ -1212,22 +1586,10 @@ pub fn mergeModule(self: *Self, source: *const Self) Allocator.Error!MergeResult
                     try self.linking.symbol_table.append(gpa, src_sym);
                     symbol_remap[src_sym_idx] = new_sym_idx;
                 } else {
-                    // Defined data — rebase the symbol's absolute memory address.
-                    //
-                    // Preloaded relocatable modules normalize data_offset from
-                    // segment-relative to absolute during parse. To merge a data
-                    // symbol into self, first recover its offset within the
-                    // source segment, then add that intra-segment offset to the
-                    // new segment base in self.
+                    // Defined data — keep the symbol's segment-relative offset.
+                    // The segment itself was remapped above; final relocation
+                    // resolution computes the absolute address from the segment.
                     const new_sym_idx: u32 = @intCast(self.linking.symbol_table.items.len);
-                    const new_offset = if (src_sym.index < data_remap.len and src_sym.index < source.data_segments.items.len) blk: {
-                        const source_segment_offset = source.data_segments.items[src_sym.index].offset;
-                        const within_segment_offset = if (src_sym.data_offset >= source_segment_offset)
-                            src_sym.data_offset - source_segment_offset
-                        else
-                            src_sym.data_offset;
-                        break :blk data_remap[src_sym.index] + within_segment_offset;
-                    } else src_sym.data_offset;
                     const new_segment_idx = if (src_sym.index < data_segment_remap.len)
                         data_segment_remap[src_sym.index]
                     else
@@ -1237,7 +1599,7 @@ pub fn mergeModule(self: *Self, source: *const Self) Allocator.Error!MergeResult
                         .flags = src_sym.flags,
                         .name = src_sym.name,
                         .index = new_segment_idx,
-                        .data_offset = new_offset,
+                        .data_offset = src_sym.data_offset,
                         .data_size = src_sym.data_size,
                     });
                     symbol_remap[src_sym_idx] = new_sym_idx;
@@ -1247,8 +1609,32 @@ pub fn mergeModule(self: *Self, source: *const Self) Allocator.Error!MergeResult
                 // Resolve globals (like __stack_pointer) against self.
                 if (src_sym.isUndefined()) {
                     if (src_name) |name| {
-                        if (self.linking.findSymbolByName(name, self.imports.items, self.global_imports.items, self.table_imports.items)) |existing| {
+                        if (self.findSymbolByNameAndKind(name, .global)) |existing| {
                             symbol_remap[src_sym_idx] = existing;
+                            continue;
+                        }
+                        if (mode == .relocatable_object) {
+                            if (src_sym.index >= source.global_imports.items.len) return error.InvalidSection;
+                            const src_imp = source.global_imports.items[src_sym.index];
+                            const imported = try self.addGlobalImportWithSymbolRaw(
+                                src_imp.module_name,
+                                src_imp.field_name,
+                                src_imp.val_type,
+                                src_imp.mutable,
+                            );
+                            symbol_remap[src_sym_idx] = imported.symbol.raw();
+                            continue;
+                        }
+                        if (std.mem.eql(u8, name, "__stack_pointer")) {
+                            self.enableStackPointer(self.stack_pointer_init);
+                            const new_sym_idx: u32 = @intCast(self.linking.symbol_table.items.len);
+                            try self.linking.symbol_table.append(gpa, .{
+                                .kind = .global,
+                                .flags = 0,
+                                .name = name,
+                                .index = 0,
+                            });
+                            symbol_remap[src_sym_idx] = new_sym_idx;
                             continue;
                         }
                         // PIC globals: define them as constants in the final module.
@@ -1278,6 +1664,17 @@ pub fn mergeModule(self: *Self, source: *const Self) Allocator.Error!MergeResult
                 // PIC: __indirect_function_table → just enable the module's table.
                 if (src_sym.isUndefined()) {
                     if (src_name) |name| {
+                        if (self.findSymbolByNameAndKind(name, .table)) |existing| {
+                            symbol_remap[src_sym_idx] = existing;
+                            continue;
+                        }
+                        if (mode == .relocatable_object) {
+                            if (src_sym.index >= source.table_imports.items.len) return error.InvalidSection;
+                            const src_imp = source.table_imports.items[src_sym.index];
+                            const symbol = try self.addTableImportWithSymbolNamed(src_imp.module_name, src_imp.field_name);
+                            symbol_remap[src_sym_idx] = symbol.raw();
+                            continue;
+                        }
                         if (std.mem.eql(u8, name, "__indirect_function_table")) {
                             self.has_table = true;
                             // Map to a symbol that references table 0.
@@ -1314,7 +1711,7 @@ pub fn mergeModule(self: *Self, source: *const Self) Allocator.Error!MergeResult
                 if (idx.type_id == .type_index_leb) {
                     // R_WASM_TYPE_INDEX_LEB: the placeholder in code_bytes is the
                     // SOURCE type index. Remap it immediately using type_remap rather
-                    // than deferring — resolveCodeRelocations doesn't have type_remap.
+                    // than deferring to final relocation resolution.
                     const src_type_idx = readPaddedU32(
                         self.code_bytes.items,
                         base_code_offset + idx.offset,
@@ -1328,7 +1725,13 @@ pub fn mergeModule(self: *Self, source: *const Self) Allocator.Error!MergeResult
                         base_code_offset + idx.offset,
                         remapped,
                     );
-                    // Don't add to reloc_code — already resolved.
+                    if (mode == .relocatable_object) {
+                        try self.reloc_code.entries.append(gpa, .{ .index = .{
+                            .type_id = idx.type_id,
+                            .offset = base_code_offset + idx.offset,
+                            .symbol_index = remapped,
+                        } });
+                    }
                     continue;
                 }
                 try self.reloc_code.entries.append(gpa, .{ .index = .{
@@ -1400,46 +1803,52 @@ fn findTableIndex(self: *const Self, func_idx: u32) ?u32 {
 }
 
 fn patchResolvedRelocation(self: *const Self, target_bytes: []u8, entry: WasmLinking.RelocationEntry, patch_offset: u32) void {
-    const sym = self.linking.symbol_table.items[entry.getSymbolIndex()];
     switch (entry) {
         .index => |idx| {
-            const value = sym.index;
             switch (idx.type_id) {
                 .type_index_leb => {
-                    // type_index_leb relocations are normally resolved during merge
-                    // (when the type_remap is available). If one survives, use the
-                    // resolved symbol index directly.
-                    overwritePaddedU32(target_bytes, patch_offset, value);
+                    overwritePaddedU32(target_bytes, patch_offset, idx.symbol_index);
                 },
                 .function_index_leb,
                 .global_index_leb,
                 .event_index_leb,
                 .table_number_leb,
-                => overwritePaddedU32(target_bytes, patch_offset, value),
+                => {
+                    const sym = self.linking.symbol_table.items[idx.symbol_index];
+                    overwritePaddedU32(target_bytes, patch_offset, sym.index);
+                },
                 .table_index_sleb,
                 .table_index_rel_sleb,
                 => {
+                    const sym = self.linking.symbol_table.items[idx.symbol_index];
+                    const value = sym.index;
                     const table_idx = self.findTableIndex(value) orelse value;
                     overwritePaddedI32(target_bytes, patch_offset, @intCast(table_idx));
                 },
                 .table_index_i32 => {
+                    const sym = self.linking.symbol_table.items[idx.symbol_index];
+                    const value = sym.index;
                     const table_idx = self.findTableIndex(value) orelse value;
                     const off: usize = @intCast(patch_offset);
                     std.mem.writeInt(u32, target_bytes[off..][0..4], table_idx, .little);
                 },
                 .global_index_i32 => {
+                    const sym = self.linking.symbol_table.items[idx.symbol_index];
+                    const value = sym.index;
                     const off: usize = @intCast(patch_offset);
                     std.mem.writeInt(u32, target_bytes[off..][0..4], value, .little);
                 },
             }
         },
         .offset => |off| {
-            // For data symbols, the resolved address is the data_offset.
+            const sym = self.linking.symbol_table.items[off.symbol_index];
+            // For data symbols, the resolved address is segment base + symbol offset.
             // For others, use the symbol's index as the base address.
-            const base: i64 = if (sym.kind == .data)
-                @intCast(sym.data_offset)
-            else
-                @intCast(sym.index);
+            const base: i64 = if (sym.kind == .data) blk: {
+                std.debug.assert(sym.index < self.data_segments.items.len);
+                const segment = self.data_segments.items[sym.index];
+                break :blk @as(i64, @intCast(segment.offset)) + @as(i64, @intCast(sym.data_offset));
+            } else @intCast(sym.index);
             const patched = base + @as(i64, off.addend);
             switch (off.type_id) {
                 .memory_addr_leb => overwritePaddedU32(
@@ -1612,6 +2021,57 @@ pub fn verifyNoBuiltinImports(self: *const Self) error{UnresolvedBuiltinImport}!
             return error.UnresolvedBuiltinImport;
         }
     }
+}
+
+/// Errors reported when a wasm no-link object violates its public linking contract.
+pub const NoLinkObjectContractError = error{
+    UnexpectedFunctionImport,
+    UnexpectedUndefinedFunctionSymbol,
+    UnexpectedGlobalImport,
+    UnexpectedTableImport,
+    UnexpectedUndefinedSymbol,
+};
+
+/// Verify that a no-link app object exposes only app definitions and wasm object ABI imports.
+/// Function imports are the wasm object encoding of undefined symbols; under
+/// the symbol ABI the app object legitimately references the platform's
+/// runtime and hosted symbols, so `env` function imports are permitted and
+/// resolve at final link (or stay imports in hostless archives).
+pub fn verifyNoLinkObjectContract(self: *const Self) NoLinkObjectContractError!void {
+    for (self.imports.items) |imp| {
+        if (!std.mem.eql(u8, imp.module_name, "env")) return error.UnexpectedFunctionImport;
+    }
+
+    for (self.global_imports.items) |imp| {
+        if (!std.mem.eql(u8, imp.module_name, "env") or !isAllowedObjectAbiGlobal(imp.field_name)) {
+            return error.UnexpectedGlobalImport;
+        }
+    }
+
+    for (self.table_imports.items) |imp| {
+        if (!std.mem.eql(u8, imp.module_name, "env") or
+            !std.mem.eql(u8, imp.field_name, "__indirect_function_table"))
+        {
+            return error.UnexpectedTableImport;
+        }
+    }
+
+    for (self.linking.symbol_table.items) |sym| {
+        if (!sym.isUndefined()) continue;
+        const name = sym.resolveName(self.imports.items, self.global_imports.items, self.table_imports.items) orelse return error.UnexpectedUndefinedSymbol;
+        switch (sym.kind) {
+            .function => {},
+            .global => if (!isAllowedObjectAbiGlobal(name)) return error.UnexpectedUndefinedSymbol,
+            .table => if (!std.mem.eql(u8, name, "__indirect_function_table")) return error.UnexpectedUndefinedSymbol,
+            .data, .section, .event => return error.UnexpectedUndefinedSymbol,
+        }
+    }
+}
+
+fn isAllowedObjectAbiGlobal(name: []const u8) bool {
+    return std.mem.eql(u8, name, "__stack_pointer") or
+        std.mem.eql(u8, name, "__memory_base") or
+        std.mem.eql(u8, name, "__table_base");
 }
 
 // --- Phase 10: Dead Code Elimination ---
@@ -1820,7 +2280,7 @@ fn traceLiveFunctions(
                                 .type_index_leb => {
                                     // Indirect call: conservatively mark all element-section
                                     // functions with matching type signature as live.
-                                    const type_idx = self.linking.symbol_table.items[idx.symbol_index].index;
+                                    const type_idx = idx.symbol_index;
                                     for (self.table_func_indices.items) |tfi| {
                                         if (tfi >= fn_index_min and tfi < fn_count) {
                                             const local = tfi - fn_index_min;
@@ -1872,7 +2332,8 @@ pub fn exportGlobalSymbols(self: *Self) Allocator.Error!void {
         if (sym.kind != .function or sym.isUndefined() or sym.isLocal()) continue;
         if ((sym.flags & WasmLinking.SymFlag.VISIBILITY_HIDDEN) != 0) continue;
         const name = sym.name orelse continue;
-        // Skip roc__ symbols (handled by linkHostToAppCalls).
+        // Skip roc-internal symbols (roc__proc_*, roc__num_*); entrypoints use
+        // the literal provides symbols and are exported like any host export.
         if (std.mem.startsWith(u8, name, "roc__")) continue;
         // Avoid duplicate exports.
         var already_exported = false;
@@ -1902,6 +2363,21 @@ pub fn removeMemoryAndTableImports(self: *Self) void {
     // Table will be set during finalization if table_func_indices are populated.
 }
 
+/// Memory settings used when finalizing a wasm module after code generation.
+pub const FinalMemoryConfig = struct {
+    stack_bytes: u32,
+    import_memory: bool = false,
+    minimum_memory: ?usize = null,
+    maximum_memory: ?usize = null,
+    export_memory: bool = true,
+};
+
+/// Set the byte offset where this module's data segments begin.
+pub fn setDataBase(self: *Self, offset: u32) void {
+    std.debug.assert(self.data_segments.items.len == 0);
+    self.data_offset = offset;
+}
+
 /// Finalization step (called after all code generation and surgical linking,
 /// before encode):
 ///
@@ -1910,6 +2386,11 @@ pub fn removeMemoryAndTableImports(self: *Self) void {
 /// 3. Configure table size based on actual element count
 /// 4. Export memory as "memory" for host/runtime access
 pub fn finalizeMemoryAndTable(self: *Self, stack_bytes: u32) Allocator.Error!void {
+    try self.finalizeMemoryAndTableWithConfig(.{ .stack_bytes = stack_bytes });
+}
+
+/// Finalize memory and table layout using explicit target configuration.
+pub fn finalizeMemoryAndTableWithConfig(self: *Self, config: FinalMemoryConfig) Allocator.Error!void {
     // Calculate the highest data segment end address.
     var data_end: u32 = self.data_offset;
     for (self.data_segments.items) |ds| {
@@ -1918,18 +2399,25 @@ pub fn finalizeMemoryAndTable(self: *Self, stack_bytes: u32) Allocator.Error!voi
     }
 
     // Calculate memory pages: data + stack, rounded up to page boundary.
-    const total_bytes: u64 = @as(u64, data_end) + @as(u64, stack_bytes);
+    const required_bytes = @as(u64, data_end) + @as(u64, config.stack_bytes);
+    const configured_min = config.minimum_memory orelse 0;
+    const total_bytes: u64 = @max(required_bytes, @as(u64, configured_min));
     const page_size: u64 = 65536;
     const pages: u32 = @intCast(@max(1, (total_bytes + page_size - 1) / page_size));
     self.memory_min_pages = pages;
+    self.memory_max_pages = if (config.maximum_memory) |maximum_memory|
+        @intCast(@max(1, (@as(u64, maximum_memory) + page_size - 1) / page_size))
+    else
+        null;
 
     // Define __stack_pointer as a mutable i32 global.
     // Initial value = top of memory (stack grows downward).
     self.has_stack_pointer = true;
     self.stack_pointer_init = pages * @as(u32, 65536);
 
-    // Ensure memory is defined (not imported) in the final module.
+    // Ensure memory is present in the final module.
     self.has_memory = true;
+    self.memory_import = config.import_memory;
 
     // Configure table if we have any function indices to place in it.
     if (self.table_func_indices.items.len > 0) {
@@ -1937,11 +2425,13 @@ pub fn finalizeMemoryAndTable(self: *Self, stack_bytes: u32) Allocator.Error!voi
     }
 
     // Export memory as "memory" for host/runtime access.
-    try self.exports.append(self.allocator, .{
-        .name = "memory",
-        .kind = .memory,
-        .idx = 0,
-    });
+    if (config.export_memory and !config.import_memory) {
+        try self.exports.append(self.allocator, .{
+            .name = "memory",
+            .kind = .memory,
+            .idx = 0,
+        });
+    }
 }
 
 // --- Parsing (preload) ---
@@ -1982,6 +2472,14 @@ pub fn preload(allocator: Allocator, bytes: []const u8, require_relocatable: boo
         try module.parseCustomSection(bytes, &cursor);
     }
 
+    for (module.data_segments.items, 0..) |*segment, i| {
+        if (i >= module.linking.segment_info.items.len) break;
+        const info = module.linking.segment_info.items[i];
+        segment.name = info.name;
+        segment.alignment = info.alignment;
+        segment.flags = info.flags;
+    }
+
     // Adjust reloc.CODE offsets: they are relative to the code section body
     // (which includes the function count LEB128), but code_bytes starts after
     // the count. Subtract the count's LEB128 size so offsets index into code_bytes.
@@ -2003,17 +2501,6 @@ pub fn preload(allocator: Allocator, bytes: []const u8, require_relocatable: boo
     }
 
     try module.normalizeDataRelocations();
-
-    // Convert data symbol offsets from (segment-relative) to absolute memory addresses.
-    // The linking section stores data_offset as the offset within the segment, but
-    // resolveCodeRelocations uses data_offset as the absolute address in linear memory.
-    for (module.linking.symbol_table.items) |*sym| {
-        if (sym.kind == .data and !sym.isUndefined()) {
-            if (sym.index < module.data_segments.items.len) {
-                sym.data_offset += module.data_segments.items[sym.index].offset;
-            }
-        }
-    }
 
     // Validate relocatable requirements
     if (require_relocatable) {
@@ -2141,11 +2628,12 @@ fn parseImportSection(self: *Self, bytes: []const u8, cursor: *usize) ParseError
             },
             0x02 => { // memory import
                 self.has_memory = true;
+                self.memory_import = true;
                 if (cursor.* >= bytes.len) return error.UnexpectedEnd;
                 const limits_flag = bytes[cursor.*];
                 cursor.* += 1;
                 self.memory_min_pages = try readU32(bytes, cursor);
-                if (limits_flag == 0x01) _ = try readU32(bytes, cursor); // max
+                if (limits_flag == 0x01) self.memory_max_pages = try readU32(bytes, cursor);
             },
             0x03 => { // global import (e.g. __stack_pointer)
                 const val_type_byte = try readU32(bytes, cursor);
@@ -2191,13 +2679,14 @@ fn parseMemorySection_(self: *Self, bytes: []const u8, cursor: *usize) ParseErro
     const section_size = try beginSection(bytes, cursor, .memory_section) orelse return;
     const section_end = cursor.* + section_size;
     self.has_memory = true;
+    self.memory_import = false;
     const count = try readU32(bytes, cursor);
     if (count > 0) {
         if (cursor.* >= bytes.len) return error.UnexpectedEnd;
         const limits_flag = bytes[cursor.*];
         cursor.* += 1;
         self.memory_min_pages = try readU32(bytes, cursor);
-        if (limits_flag == 0x01) _ = try readU32(bytes, cursor); // max
+        if (limits_flag == 0x01) self.memory_max_pages = try readU32(bytes, cursor);
     }
     cursor.* = section_end;
 }
@@ -2327,6 +2816,9 @@ fn parseDataSection_(self: *Self, bytes: []const u8, cursor: *usize) ParseError!
                 .offset = 0,
                 .data = data_copy,
                 .section_offset = @intCast(data_start - section_body_start),
+                .name = null,
+                .alignment = 0,
+                .flags = 0,
             });
         } else {
             // Active segment — parse init expression: i32.const <offset> end
@@ -2343,6 +2835,9 @@ fn parseDataSection_(self: *Self, bytes: []const u8, cursor: *usize) ParseError!
                 .offset = offset,
                 .data = data_copy,
                 .section_offset = @intCast(data_start - section_body_start),
+                .name = null,
+                .alignment = 0,
+                .flags = 0,
             });
             if (offset + data_len > self.data_offset) {
                 self.data_offset = offset + data_len;
@@ -2404,7 +2899,7 @@ pub fn encode(self: *Self, allocator: Allocator) Allocator.Error![]u8 {
     }
 
     // Import section (must be between type and function sections)
-    if (self.imports.items.len > 0) {
+    if (self.imports.items.len > 0 or self.memory_import) {
         try self.encodeImportSection(allocator, &output);
     }
 
@@ -2419,7 +2914,7 @@ pub fn encode(self: *Self, allocator: Allocator) Allocator.Error![]u8 {
     }
 
     // Memory section
-    if (self.has_memory) {
+    if (self.has_memory and !self.memory_import) {
         try self.encodeMemorySection(allocator, &output);
     }
 
@@ -2451,6 +2946,346 @@ pub fn encode(self: *Self, allocator: Allocator) Allocator.Error![]u8 {
     return output.toOwnedSlice(allocator);
 }
 
+/// Encode this module as a relocatable wasm object.
+///
+/// Unlike `encode()`, this preserves the linking metadata and relocation
+/// sections. Function bodies are emitted directly from `code_bytes`, because
+/// relocation offsets are recorded against that representation.
+pub fn encodeRelocatable(self: *Self, allocator: Allocator) RelocatableEncodeError![]u8 {
+    var output: std.ArrayList(u8) = .empty;
+    errdefer output.deinit(allocator);
+
+    var symbol_encode_map = try self.buildRelocatableSymbolEncodeMap(allocator);
+    defer symbol_encode_map.deinit(allocator);
+
+    try output.appendSlice(allocator, &.{ 0x00, 0x61, 0x73, 0x6D });
+    try output.appendSlice(allocator, &.{ 0x01, 0x00, 0x00, 0x00 });
+
+    var section_index: u32 = 0;
+    var code_section_index: ?u32 = null;
+    var data_section_index: ?u32 = null;
+
+    if (self.func_types.items.len > 0) {
+        try self.encodeTypeSection(allocator, &output);
+        section_index += 1;
+    }
+
+    if (self.imports.items.len > 0 or self.global_imports.items.len > 0 or self.table_imports.items.len > 0 or self.has_memory) {
+        try self.encodeRelocatableImportSection(allocator, &output);
+        section_index += 1;
+    }
+
+    if (self.func_type_indices.items.len > 0) {
+        try self.encodeFunctionSection(allocator, &output);
+        section_index += 1;
+    }
+
+    if (self.exports.items.len > 0) {
+        try self.encodeExportSection(allocator, &output);
+        section_index += 1;
+    }
+
+    const code_fn_count_leb_size = if (self.func_type_indices.items.len > 0) blk: {
+        code_section_index = section_index;
+        const count_leb_size = try self.encodeCodeSectionFromCodeBytes(allocator, &output);
+        section_index += 1;
+        break :blk count_leb_size;
+    } else 0;
+
+    if (self.data_segments.items.len > 0) {
+        data_section_index = section_index;
+        try self.encodeDataSection(allocator, &output);
+        section_index += 1;
+    }
+
+    try self.encodeLinkingSection(allocator, &output, symbol_encode_map);
+    section_index += 1;
+    if (self.reloc_code.entries.items.len > 0) {
+        try self.encodeRelocationSection(allocator, &output, "reloc.CODE", code_section_index orelse unreachable, self.reloc_code.entries.items, code_fn_count_leb_size, symbol_encode_map);
+        section_index += 1;
+    }
+    if (self.reloc_data.entries.items.len > 0) {
+        try self.encodeRelocationSection(allocator, &output, "reloc.DATA", data_section_index orelse unreachable, self.reloc_data.entries.items, 0, symbol_encode_map);
+        section_index += 1;
+    }
+
+    return output.toOwnedSlice(allocator);
+}
+
+const SymbolEncodeMap = struct {
+    emit: []bool,
+    remap: []u32,
+    count: u32,
+
+    fn deinit(self: *SymbolEncodeMap, allocator: Allocator) void {
+        allocator.free(self.emit);
+        allocator.free(self.remap);
+    }
+};
+
+fn buildRelocatableSymbolEncodeMap(self: *const Self, allocator: Allocator) RelocatableEncodeError!SymbolEncodeMap {
+    const symbol_count = self.linking.symbol_table.items.len;
+    const referenced = try allocator.alloc(bool, symbol_count);
+    defer allocator.free(referenced);
+    @memset(referenced, false);
+
+    for (self.reloc_code.entries.items) |entry| {
+        try markRelocationSymbolReference(referenced, entry);
+    }
+    for (self.reloc_data.entries.items) |entry| {
+        try markRelocationSymbolReference(referenced, entry);
+    }
+
+    const emit = try allocator.alloc(bool, symbol_count);
+    errdefer allocator.free(emit);
+    const remap = try allocator.alloc(u32, symbol_count);
+    errdefer allocator.free(remap);
+
+    var emitted_count: u32 = 0;
+    for (self.linking.symbol_table.items, 0..) |sym, i| {
+        if (sym.kind == .section) {
+            if (referenced[i]) return error.UnsupportedSectionSymbolRelocation;
+            emit[i] = false;
+            continue;
+        }
+
+        emit[i] = true;
+        remap[i] = emitted_count;
+        emitted_count += 1;
+    }
+
+    return .{
+        .emit = emit,
+        .remap = remap,
+        .count = emitted_count,
+    };
+}
+
+fn markRelocationSymbolReference(referenced: []bool, entry: WasmLinking.RelocationEntry) error{InvalidRelocationSymbol}!void {
+    switch (entry) {
+        .index => |idx| {
+            if (idx.type_id == .type_index_leb) return;
+            try markReferencedSymbol(referenced, idx.symbol_index);
+        },
+        .offset => |off| try markReferencedSymbol(referenced, off.symbol_index),
+    }
+}
+
+fn markReferencedSymbol(referenced: []bool, symbol_index: u32) error{InvalidRelocationSymbol}!void {
+    if (symbol_index >= referenced.len) return error.InvalidRelocationSymbol;
+    referenced[symbol_index] = true;
+}
+
+fn encodeRelocatableImportSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) Allocator.Error!void {
+    var section_data: std.ArrayList(u8) = .empty;
+    defer section_data.deinit(gpa);
+
+    const memory_import_count: u32 = if (self.has_memory) 1 else 0;
+    const import_count: u32 =
+        @as(u32, @intCast(self.imports.items.len)) +
+        @as(u32, @intCast(self.table_imports.items.len)) +
+        memory_import_count +
+        @as(u32, @intCast(self.global_imports.items.len));
+    try leb128WriteU32(gpa, &section_data, import_count);
+
+    for (self.imports.items) |imp| {
+        try leb128WriteU32(gpa, &section_data, @intCast(imp.module_name.len));
+        try section_data.appendSlice(gpa, imp.module_name);
+        try leb128WriteU32(gpa, &section_data, @intCast(imp.field_name.len));
+        try section_data.appendSlice(gpa, imp.field_name);
+        try section_data.append(gpa, 0x00);
+        try leb128WriteU32(gpa, &section_data, imp.type_idx);
+    }
+
+    for (self.table_imports.items) |imp| {
+        try leb128WriteU32(gpa, &section_data, @intCast(imp.module_name.len));
+        try section_data.appendSlice(gpa, imp.module_name);
+        try leb128WriteU32(gpa, &section_data, @intCast(imp.field_name.len));
+        try section_data.appendSlice(gpa, imp.field_name);
+        try section_data.append(gpa, 0x01);
+        try section_data.append(gpa, funcref);
+        try section_data.append(gpa, 0x00);
+        try leb128WriteU32(gpa, &section_data, @max(1, @as(u32, @intCast(self.table_func_indices.items.len))));
+    }
+
+    if (self.has_memory) {
+        try leb128WriteU32(gpa, &section_data, 3);
+        try section_data.appendSlice(gpa, "env");
+        try leb128WriteU32(gpa, &section_data, 15);
+        try section_data.appendSlice(gpa, "__linear_memory");
+        try section_data.append(gpa, 0x02);
+        if (self.memory_max_pages) |max_pages| {
+            try section_data.append(gpa, 0x01);
+            try leb128WriteU32(gpa, &section_data, @max(self.memory_min_pages, 1));
+            try leb128WriteU32(gpa, &section_data, max_pages);
+        } else {
+            try section_data.append(gpa, 0x00);
+            try leb128WriteU32(gpa, &section_data, @max(self.memory_min_pages, 1));
+        }
+    }
+
+    for (self.global_imports.items) |imp| {
+        try leb128WriteU32(gpa, &section_data, @intCast(imp.module_name.len));
+        try section_data.appendSlice(gpa, imp.module_name);
+        try leb128WriteU32(gpa, &section_data, @intCast(imp.field_name.len));
+        try section_data.appendSlice(gpa, imp.field_name);
+        try section_data.append(gpa, 0x03);
+        try section_data.append(gpa, imp.val_type);
+        try section_data.append(gpa, if (imp.mutable) @as(u8, 0x01) else @as(u8, 0x00));
+    }
+
+    try output.append(gpa, @intFromEnum(SectionId.import_section));
+    try leb128WriteU32(gpa, output, @intCast(section_data.items.len));
+    try output.appendSlice(gpa, section_data.items);
+}
+
+fn encodeCodeSectionFromCodeBytes(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) Allocator.Error!u32 {
+    var section_data: std.ArrayList(u8) = .empty;
+    defer section_data.deinit(gpa);
+
+    const before_count = section_data.items.len;
+    try leb128WriteU32(gpa, &section_data, @intCast(self.func_type_indices.items.len));
+    const count_leb_size: u32 = @intCast(section_data.items.len - before_count);
+    try section_data.appendSlice(gpa, self.code_bytes.items);
+
+    try output.append(gpa, @intFromEnum(SectionId.code_section));
+    try leb128WriteU32(gpa, output, @intCast(section_data.items.len));
+    try output.appendSlice(gpa, section_data.items);
+    return count_leb_size;
+}
+
+fn encodeLinkingSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8), symbol_encode_map: SymbolEncodeMap) Allocator.Error!void {
+    var payload: std.ArrayList(u8) = .empty;
+    defer payload.deinit(gpa);
+
+    try leb128WriteU32(gpa, &payload, 7);
+    try payload.appendSlice(gpa, "linking");
+    try payload.append(gpa, @intCast(WasmLinking.LINKING_VERSION));
+
+    if (self.data_segments.items.len > 0) {
+        var segment_data: std.ArrayList(u8) = .empty;
+        defer segment_data.deinit(gpa);
+        try leb128WriteU32(gpa, &segment_data, @intCast(self.data_segments.items.len));
+        for (self.data_segments.items, 0..) |segment, i| {
+            var generated_name: ?[]u8 = null;
+            defer if (generated_name) |name| gpa.free(name);
+            const name = segment.name orelse blk: {
+                generated_name = try std.fmt.allocPrint(gpa, ".rodata.{d}", .{i});
+                break :blk generated_name.?;
+            };
+            try leb128WriteU32(gpa, &segment_data, @intCast(name.len));
+            try segment_data.appendSlice(gpa, name);
+            try leb128WriteU32(gpa, &segment_data, segment.alignment);
+            try leb128WriteU32(gpa, &segment_data, segment.flags);
+        }
+        try payload.append(gpa, @intFromEnum(WasmLinking.LinkingSubsection.segment_info));
+        try leb128WriteU32(gpa, &payload, @intCast(segment_data.items.len));
+        try payload.appendSlice(gpa, segment_data.items);
+    }
+
+    var symbol_data: std.ArrayList(u8) = .empty;
+    defer symbol_data.deinit(gpa);
+    try leb128WriteU32(gpa, &symbol_data, symbol_encode_map.count);
+    for (self.linking.symbol_table.items, 0..) |sym, i| {
+        if (!symbol_encode_map.emit[i]) continue;
+        try encodeSymbol(gpa, &symbol_data, sym);
+    }
+    try payload.append(gpa, @intFromEnum(WasmLinking.LinkingSubsection.symbol_table));
+    try leb128WriteU32(gpa, &payload, @intCast(symbol_data.items.len));
+    try payload.appendSlice(gpa, symbol_data.items);
+
+    try output.append(gpa, @intFromEnum(SectionId.custom_section));
+    try leb128WriteU32(gpa, output, @intCast(payload.items.len));
+    try output.appendSlice(gpa, payload.items);
+}
+
+fn encodeSymbol(gpa: Allocator, output: *std.ArrayList(u8), sym: WasmLinking.SymInfo) Allocator.Error!void {
+    try output.append(gpa, @intFromEnum(sym.kind));
+    try leb128WriteU32(gpa, output, sym.flags);
+    switch (sym.kind) {
+        .function, .global, .event, .table => {
+            try leb128WriteU32(gpa, output, sym.index);
+            if (!sym.isUndefined() or (sym.flags & WasmLinking.SymFlag.EXPLICIT_NAME) != 0) {
+                const name = sym.name orelse "";
+                try leb128WriteU32(gpa, output, @intCast(name.len));
+                try output.appendSlice(gpa, name);
+            }
+        },
+        .data => {
+            const name = sym.name orelse "";
+            try leb128WriteU32(gpa, output, @intCast(name.len));
+            try output.appendSlice(gpa, name);
+            if (!sym.isUndefined()) {
+                try leb128WriteU32(gpa, output, sym.index);
+                try leb128WriteU32(gpa, output, sym.data_offset);
+                try leb128WriteU32(gpa, output, sym.data_size);
+            }
+        },
+        .section => {
+            try leb128WriteU32(gpa, output, sym.index);
+        },
+    }
+}
+
+fn encodeRelocationSection(
+    self: *Self,
+    gpa: Allocator,
+    output: *std.ArrayList(u8),
+    name: []const u8,
+    target_section: u32,
+    entries: []const WasmLinking.RelocationEntry,
+    code_offset_delta: u32,
+    symbol_encode_map: SymbolEncodeMap,
+) RelocatableEncodeError!void {
+    var payload: std.ArrayList(u8) = .empty;
+    defer payload.deinit(gpa);
+
+    try leb128WriteU32(gpa, &payload, @intCast(name.len));
+    try payload.appendSlice(gpa, name);
+    try leb128WriteU32(gpa, &payload, target_section);
+    try leb128WriteU32(gpa, &payload, @intCast(entries.len));
+
+    for (entries) |entry| {
+        const segment_delta: u32 = switch (entry) {
+            .index => |idx| if (idx.data_segment_index != std.math.maxInt(u32) and idx.data_segment_index < self.data_segments.items.len)
+                self.data_segments.items[idx.data_segment_index].section_offset
+            else
+                0,
+            .offset => |off| if (off.data_segment_index != std.math.maxInt(u32) and off.data_segment_index < self.data_segments.items.len)
+                self.data_segments.items[off.data_segment_index].section_offset
+            else
+                0,
+        };
+        switch (entry) {
+            .index => |idx| {
+                try payload.append(gpa, @intFromEnum(idx.type_id));
+                try leb128WriteU32(gpa, &payload, idx.offset + code_offset_delta + segment_delta);
+                const relocation_index = if (idx.type_id == .type_index_leb)
+                    idx.symbol_index
+                else
+                    try encodedSymbolIndex(symbol_encode_map, idx.symbol_index);
+                try leb128WriteU32(gpa, &payload, relocation_index);
+            },
+            .offset => |off| {
+                try payload.append(gpa, @intFromEnum(off.type_id));
+                try leb128WriteU32(gpa, &payload, off.offset + code_offset_delta + segment_delta);
+                try leb128WriteU32(gpa, &payload, try encodedSymbolIndex(symbol_encode_map, off.symbol_index));
+                try leb128WriteI32(gpa, &payload, off.addend);
+            },
+        }
+    }
+
+    try output.append(gpa, @intFromEnum(SectionId.custom_section));
+    try leb128WriteU32(gpa, output, @intCast(payload.items.len));
+    try output.appendSlice(gpa, payload.items);
+}
+
+fn encodedSymbolIndex(symbol_encode_map: SymbolEncodeMap, symbol_index: u32) error{InvalidRelocationSymbol}!u32 {
+    if (symbol_index >= symbol_encode_map.emit.len) return error.InvalidRelocationSymbol;
+    if (!symbol_encode_map.emit[symbol_index]) return error.InvalidRelocationSymbol;
+    return symbol_encode_map.remap[symbol_index];
+}
+
 fn encodeTypeSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) Allocator.Error!void {
     var section_data: std.ArrayList(u8) = .empty;
     defer section_data.deinit(gpa);
@@ -2480,7 +3315,8 @@ fn encodeImportSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) 
     var section_data: std.ArrayList(u8) = .empty;
     defer section_data.deinit(gpa);
 
-    try leb128WriteU32(gpa, &section_data, @intCast(self.imports.items.len));
+    const memory_import_count: u32 = if (self.memory_import) 1 else 0;
+    try leb128WriteU32(gpa, &section_data, @as(u32, @intCast(self.imports.items.len)) + memory_import_count);
     for (self.imports.items) |imp| {
         // Module name
         try leb128WriteU32(gpa, &section_data, @intCast(imp.module_name.len));
@@ -2492,6 +3328,22 @@ fn encodeImportSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) 
         try section_data.append(gpa, 0x00);
         // Type index
         try leb128WriteU32(gpa, &section_data, imp.type_idx);
+    }
+
+    if (self.memory_import) {
+        try leb128WriteU32(gpa, &section_data, 3);
+        try section_data.appendSlice(gpa, "env");
+        try leb128WriteU32(gpa, &section_data, 6);
+        try section_data.appendSlice(gpa, "memory");
+        try section_data.append(gpa, 0x02);
+        if (self.memory_max_pages) |max_pages| {
+            try section_data.append(gpa, 0x01);
+            try leb128WriteU32(gpa, &section_data, self.memory_min_pages);
+            try leb128WriteU32(gpa, &section_data, max_pages);
+        } else {
+            try section_data.append(gpa, 0x00);
+            try leb128WriteU32(gpa, &section_data, self.memory_min_pages);
+        }
     }
 
     try output.append(gpa, @intFromEnum(SectionId.import_section));
@@ -2518,8 +3370,14 @@ fn encodeMemorySection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) 
     defer section_data.deinit(gpa);
 
     try leb128WriteU32(gpa, &section_data, 1); // 1 memory
-    try section_data.append(gpa, 0x00); // no max
-    try leb128WriteU32(gpa, &section_data, self.memory_min_pages);
+    if (self.memory_max_pages) |max_pages| {
+        try section_data.append(gpa, 0x01);
+        try leb128WriteU32(gpa, &section_data, self.memory_min_pages);
+        try leb128WriteU32(gpa, &section_data, max_pages);
+    } else {
+        try section_data.append(gpa, 0x00); // no max
+        try leb128WriteU32(gpa, &section_data, self.memory_min_pages);
+    }
 
     try output.append(gpa, @intFromEnum(SectionId.memory_section));
     try leb128WriteU32(gpa, output, @intCast(section_data.items.len));
@@ -2591,7 +3449,7 @@ fn encodeDataSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) Al
     defer section_data.deinit(gpa);
 
     try leb128WriteU32(gpa, &section_data, @intCast(self.data_segments.items.len));
-    for (self.data_segments.items) |ds| {
+    for (self.data_segments.items) |*ds| {
         // Active segment for memory 0
         try leb128WriteU32(gpa, &section_data, 0); // flags: active, memory 0
         // Offset expression: i32.const <offset>; end
@@ -2600,6 +3458,7 @@ fn encodeDataSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) Al
         try section_data.append(gpa, Op.end);
         // Data bytes
         try leb128WriteU32(gpa, &section_data, @intCast(ds.data.len));
+        ds.section_offset = @intCast(section_data.items.len);
         try section_data.appendSlice(gpa, ds.data);
     }
 
@@ -2823,6 +3682,19 @@ pub fn appendPaddedU32(gpa: Allocator, output: *std.ArrayList(u8), value: u32) A
         x >>= 7;
     }
     try output.append(gpa, @as(u8, @truncate(x)));
+}
+
+/// Append an i32 as exactly 5 bytes of padded signed LEB128 to an output buffer.
+pub fn appendPaddedI32(gpa: Allocator, output: *std.ArrayList(u8), value: i32) Allocator.Error!void {
+    const start = output.items.len;
+    try output.appendNTimes(gpa, 0, padded_leb128_size);
+    overwritePaddedI32(output.items[start..][0..padded_leb128_size], 0, value);
+}
+
+fn alignmentLog2(alignment: u32) u32 {
+    std.debug.assert(alignment > 0);
+    std.debug.assert(std.math.isPowerOfTwo(alignment));
+    return @intCast(@ctz(alignment));
 }
 
 // --- Tests for padded LEB128 ---
@@ -3629,10 +4501,10 @@ test "preload — parses real Zig-compiled wasm host object" {
     // Should have relocation entries for code
     try std.testing.expect(module.reloc_code.entries.items.len > 0);
 
-    // The host imports roc__main — verify we can find it by name
+    // The host imports the app's roc_main entrypoint — verify we can find it by name
     var found_roc_main = false;
     for (module.imports.items) |imp| {
-        if (std.mem.eql(u8, imp.field_name, "roc__main")) {
+        if (std.mem.eql(u8, imp.field_name, "roc_main")) {
             found_roc_main = true;
             break;
         }
@@ -4281,14 +5153,14 @@ fn buildMergeDataRelocModule(allocator: Allocator) Allocator.Error!Self {
     // Segment 0: relocation patch site (4-byte placeholder)
     _ = try module.addDataSegment(&[_]u8{ 0, 0, 0, 0 }, 4);
     // Segment 1: relocation target
-    const target_offset = try module.addDataSegment("DATA", 4);
+    _ = try module.addDataSegment("DATA", 4);
 
     try module.linking.symbol_table.append(allocator, .{
         .kind = .data,
         .flags = 0,
         .name = ".rodata.target",
         .index = 1,
-        .data_offset = target_offset, // absolute address before merge
+        .data_offset = 0,
         .data_size = 4,
     });
 
@@ -4388,6 +5260,71 @@ test "mergeModule — undefined symbol in builtins resolved to host's roc_alloc 
 
     // No new import should be added (roc_alloc already exists in host)
     try std.testing.expectEqual(@as(usize, 2), host.imports.items.len);
+}
+
+test "mergeModule — later weak definition resolves earlier undefined function import" {
+    const allocator = std.testing.allocator;
+
+    var host = Self.init(allocator);
+    defer host.deinit();
+    _ = try host.addFuncType(&.{}, &.{});
+    _ = try host.addImport("env", "__multi3", 0);
+    host.import_fn_count = 1;
+
+    try host.func_type_indices.append(allocator, 0);
+    try host.code_bytes.appendSlice(allocator, &.{0x08});
+    try host.code_bytes.append(allocator, 0x00);
+    try host.code_bytes.append(allocator, Op.call);
+    try appendPaddedU32(allocator, &host.code_bytes, 0);
+    try host.code_bytes.append(allocator, Op.end);
+    try host.function_offsets.append(allocator, 0);
+    try host.table_func_indices.append(allocator, 0);
+    try host.linking.symbol_table.appendSlice(allocator, &.{
+        .{ .kind = .function, .flags = WasmLinking.SymFlag.UNDEFINED, .name = null, .index = 0 },
+        .{ .kind = .function, .flags = 0, .name = "host_start", .index = 1 },
+    });
+    try host.reloc_code.entries.append(allocator, .{ .index = .{
+        .type_id = .function_index_leb,
+        .offset = 3,
+        .symbol_index = 0,
+    } });
+
+    var compiler_rt = Self.init(allocator);
+    defer compiler_rt.deinit();
+    _ = try compiler_rt.addFuncType(&.{}, &.{});
+    try compiler_rt.func_type_indices.append(allocator, 0);
+    try compiler_rt.code_bytes.appendSlice(allocator, &.{ 0x02, 0x00, Op.end });
+    try compiler_rt.function_offsets.append(allocator, 0);
+    try compiler_rt.linking.symbol_table.append(allocator, .{
+        .kind = .function,
+        .flags = WasmLinking.SymFlag.BINDING_WEAK,
+        .name = "__multi3",
+        .index = 0,
+    });
+
+    var result = try host.mergeModule(&compiler_rt);
+    defer result.deinit();
+
+    try std.testing.expectEqual(@as(u32, 0), result.symbol_remap[0]);
+    const multi3_sym = host.linking.symbol_table.items[0];
+    try std.testing.expect(!multi3_sym.isUndefined());
+    try std.testing.expectEqual(@as(u32, 2), multi3_sym.index);
+    try std.testing.expectEqualStrings("__multi3", multi3_sym.name.?);
+    try std.testing.expect((multi3_sym.flags & WasmLinking.SymFlag.BINDING_WEAK) != 0);
+    try std.testing.expectEqual(@as(u32, 2), host.table_func_indices.items[0]);
+
+    try host.resolveRelocations();
+    var expected = [_]u8{0} ** 5;
+    overwritePaddedU32(&expected, 0, 2);
+    try std.testing.expectEqualSlices(u8, &expected, host.code_bytes.items[3..8]);
+
+    const called_fns = try allocator.alloc(bool, host.liveFunctionCount());
+    defer allocator.free(called_fns);
+    @memset(called_fns, false);
+    called_fns[1] = true;
+    try host.eliminateDeadCode(called_fns);
+
+    try std.testing.expectEqual(@as(usize, 0), host.imports.items.len);
 }
 
 test "mergeModule — relocation offsets shifted by base_code_offset" {
@@ -4738,6 +5675,267 @@ test "verifyNoBuiltinImports — allows roc_panic platform import" {
     try module.verifyNoBuiltinImports();
 }
 
+test "verifyNoLinkObjectContract - allows only env wasm object ABI imports" {
+    const allocator = std.testing.allocator;
+    var module = Self.init(allocator);
+    defer module.deinit();
+
+    module.addMemoryImport();
+    _ = try module.addTableImportWithSymbol();
+    _ = try module.addStackPointerImportWithSymbol();
+    _ = try module.addGlobalImportWithSymbol("env", "__memory_base", .i32, false);
+    _ = try module.addGlobalImportWithSymbol("env", "__table_base", .i32, false);
+
+    const type_idx = try module.addFuncType(&.{ .i32, .i32, .i32 }, &.{});
+    const defined = try module.addDefinedFunction(type_idx);
+    _ = try module.addDefinedFunctionSymbol(defined.local, "roc__main", 0);
+
+    try module.verifyNoLinkObjectContract();
+}
+
+test "verifyNoLinkObjectContract - rejects undefined Roc builtin function symbols" {
+    const allocator = std.testing.allocator;
+    var module = Self.init(allocator);
+    defer module.deinit();
+
+    try module.linking.symbol_table.append(allocator, .{
+        .kind = .function,
+        .flags = WasmLinking.SymFlag.UNDEFINED | WasmLinking.SymFlag.EXPLICIT_NAME,
+        .name = "roc_builtins_int_to_str",
+        .index = 0,
+    });
+
+    // Undefined function symbols are the object encoding of symbol-ABI
+    // references; they are permitted.
+    try module.verifyNoLinkObjectContract();
+}
+
+test "verifyNoLinkObjectContract - rejects function imports and non-env ABI imports" {
+    const allocator = std.testing.allocator;
+
+    {
+        var module = Self.init(allocator);
+        defer module.deinit();
+
+        const type_idx = try module.addFuncType(&.{}, &.{});
+        _ = try module.addFunctionImportWithSymbol("env", "roc_alloc", type_idx);
+
+        // Symbol-ABI references to platform symbols are env function imports.
+        try module.verifyNoLinkObjectContract();
+    }
+
+    {
+        var module = Self.init(allocator);
+        defer module.deinit();
+
+        const type_idx = try module.addFuncType(&.{}, &.{});
+        _ = try module.addFunctionImportWithSymbol("not_env", "roc_alloc", type_idx);
+
+        try std.testing.expectError(error.UnexpectedFunctionImport, module.verifyNoLinkObjectContract());
+    }
+
+    {
+        var module = Self.init(allocator);
+        defer module.deinit();
+
+        _ = try module.addGlobalImportWithSymbol("not_env", "__stack_pointer", .i32, true);
+
+        try std.testing.expectError(error.UnexpectedGlobalImport, module.verifyNoLinkObjectContract());
+    }
+
+    {
+        var module = Self.init(allocator);
+        defer module.deinit();
+
+        _ = try module.addTableImportWithSymbolNamed("not_env", "__indirect_function_table");
+
+        try std.testing.expectError(error.UnexpectedTableImport, module.verifyNoLinkObjectContract());
+    }
+}
+
+test "mergeModuleForObject - preserves wasm object ABI symbols as imports" {
+    const allocator = std.testing.allocator;
+    var app = Self.init(allocator);
+    defer app.deinit();
+
+    app.addMemoryImport();
+    const app_table_symbol = try app.addTableImportWithSymbol();
+    const app_stack_symbol = try app.addStackPointerImportWithSymbol();
+
+    var builtins = Self.init(allocator);
+    defer builtins.deinit();
+    builtins.addMemoryImport();
+    const builtins_stack_symbol = try builtins.addStackPointerImportWithSymbol();
+    const builtins_memory_base_symbol = (try builtins.addGlobalImportWithSymbol("env", "__memory_base", .i32, false)).symbol;
+    const builtins_table_base_symbol = (try builtins.addGlobalImportWithSymbol("env", "__table_base", .i32, false)).symbol;
+    const builtins_table_symbol = try builtins.addTableImportWithSymbol();
+
+    var result = try app.mergeModuleForObject(&builtins);
+    defer result.deinit();
+
+    try std.testing.expectEqual(app_stack_symbol.raw(), result.symbol_remap[builtins_stack_symbol.raw()]);
+    try std.testing.expectEqual(app_table_symbol.raw(), result.symbol_remap[builtins_table_symbol.raw()]);
+    try std.testing.expectEqual(@as(usize, 3), app.global_imports.items.len);
+    try std.testing.expectEqual(@as(usize, 1), app.table_imports.items.len);
+
+    const memory_base = app.linking.symbol_table.items[result.symbol_remap[builtins_memory_base_symbol.raw()]];
+    const table_base = app.linking.symbol_table.items[result.symbol_remap[builtins_table_base_symbol.raw()]];
+    try std.testing.expect(memory_base.isUndefined());
+    try std.testing.expect(table_base.isUndefined());
+    try std.testing.expectEqualStrings("__memory_base", memory_base.name.?);
+    try std.testing.expectEqualStrings("__table_base", table_base.name.?);
+
+    try app.verifyNoLinkObjectContract();
+}
+
+test "mergeModule final link - resolves PIC globals and table symbols" {
+    const allocator = std.testing.allocator;
+    var app = Self.init(allocator);
+    defer app.deinit();
+
+    var builtins = Self.init(allocator);
+    defer builtins.deinit();
+    const memory_base_symbol = (try builtins.addGlobalImportWithSymbol("env", "__memory_base", .i32, false)).symbol;
+    const table_base_symbol = (try builtins.addGlobalImportWithSymbol("env", "__table_base", .i32, false)).symbol;
+    const table_symbol = try builtins.addTableImportWithSymbol();
+
+    var result = try app.mergeModule(&builtins);
+    defer result.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), app.global_imports.items.len);
+    try std.testing.expectEqual(@as(usize, 0), app.table_imports.items.len);
+    try std.testing.expect(app.has_table);
+
+    const memory_base = app.linking.symbol_table.items[result.symbol_remap[memory_base_symbol.raw()]];
+    const table_base = app.linking.symbol_table.items[result.symbol_remap[table_base_symbol.raw()]];
+    const table = app.linking.symbol_table.items[result.symbol_remap[table_symbol.raw()]];
+
+    try std.testing.expect(!memory_base.isUndefined());
+    try std.testing.expect(!table_base.isUndefined());
+    try std.testing.expect(!table.isUndefined());
+    try std.testing.expectEqual(WasmLinking.SymKind.global, memory_base.kind);
+    try std.testing.expectEqual(WasmLinking.SymKind.global, table_base.kind);
+    try std.testing.expectEqual(WasmLinking.SymKind.table, table.kind);
+    try std.testing.expectEqualStrings("__memory_base", memory_base.name.?);
+    try std.testing.expectEqualStrings("__table_base", table_base.name.?);
+    try std.testing.expectEqualStrings("__indirect_function_table", table.name.?);
+    try std.testing.expectEqual(@as(u32, 0), table.index);
+}
+
+test "mergeModule final link - resolves stack pointer import to global zero" {
+    const allocator = std.testing.allocator;
+    var app = Self.init(allocator);
+    defer app.deinit();
+
+    var source = Self.init(allocator);
+    defer source.deinit();
+    const stack_symbol = try source.addStackPointerImportWithSymbol();
+
+    try source.code_bytes.append(allocator, Op.global_get);
+    try appendPaddedU32(allocator, &source.code_bytes, 99);
+    try source.reloc_code.entries.append(allocator, .{ .index = .{
+        .type_id = .global_index_leb,
+        .offset = 1,
+        .symbol_index = stack_symbol.raw(),
+    } });
+
+    var result = try app.mergeModule(&source);
+    defer result.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), app.global_imports.items.len);
+    try std.testing.expect(app.has_stack_pointer);
+
+    const stack = app.linking.symbol_table.items[result.symbol_remap[stack_symbol.raw()]];
+    try std.testing.expect(!stack.isUndefined());
+    try std.testing.expectEqual(WasmLinking.SymKind.global, stack.kind);
+    try std.testing.expectEqualStrings("__stack_pointer", stack.name.?);
+    try std.testing.expectEqual(@as(u32, 0), stack.index);
+
+    app.resolveCodeRelocations();
+    try std.testing.expectEqual(@as(u32, 0), decodePaddedU32(app.code_bytes.items[1..6]));
+}
+
+test "encodeRelocatable roundtrip - preserves data symbols and data relocations" {
+    const allocator = std.testing.allocator;
+    var module = Self.init(allocator);
+    defer module.deinit();
+
+    module.addMemoryImport();
+    const stack_symbol = try module.addStackPointerImportWithSymbol();
+    const type_idx = try module.addFuncType(&.{}, &.{});
+    _ = try module.addDefinedFunction(type_idx);
+    try module.function_offsets.append(allocator, @intCast(module.code_bytes.items.len));
+    try leb128WriteU32(allocator, &module.code_bytes, 9);
+    try module.code_bytes.append(allocator, 0);
+    try module.code_bytes.append(allocator, Op.global_get);
+    try appendPaddedU32(allocator, &module.code_bytes, 0);
+    try module.code_bytes.append(allocator, Op.drop);
+    try module.code_bytes.append(allocator, Op.end);
+    try module.reloc_code.entries.append(allocator, .{ .index = .{
+        .type_id = .global_index_leb,
+        .offset = 3,
+        .symbol_index = stack_symbol.raw(),
+    } });
+    try module.linking.symbol_table.append(allocator, .{
+        .kind = .section,
+        .flags = WasmLinking.SymFlag.BINDING_LOCAL,
+        .name = null,
+        .index = 99,
+    });
+
+    const segment_index: u32 = @intCast(module.data_segments.items.len);
+    _ = try module.addDataSegmentWithInfo(&.{ 0, 0, 0, 0, 'D', 'A', 'T', 'A' }, 4, ".rodata.roc_test", 0);
+    const data_symbol = try module.addDataSymbol(
+        segment_index,
+        "roc.test.data",
+        4,
+        4,
+        WasmLinking.SymFlag.BINDING_LOCAL | WasmLinking.SymFlag.VISIBILITY_HIDDEN,
+    );
+    try module.reloc_data.entries.append(allocator, .{ .offset = .{
+        .type_id = .memory_addr_i32,
+        .offset = 0,
+        .symbol_index = data_symbol.raw(),
+        .addend = 7,
+        .data_segment_index = segment_index,
+    } });
+
+    const encoded = try module.encodeRelocatable(allocator);
+    defer allocator.free(encoded);
+    try std.testing.expect(std.mem.find(u8, encoded, "__linear_memory") != null);
+
+    var parsed = try Self.preload(allocator, encoded, true);
+    defer parsed.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), parsed.data_segments.items.len);
+    try std.testing.expectEqualStrings(".rodata.roc_test", parsed.data_segments.items[0].name.?);
+    try std.testing.expectEqual(@as(u32, 2), parsed.data_segments.items[0].alignment);
+
+    for (parsed.linking.symbol_table.items) |sym| {
+        try std.testing.expect(sym.kind != .section);
+    }
+    const parsed_data_symbol_index = parsed.findSymbolByNameAndKind("roc.test.data", .data).?;
+    const parsed_symbol = parsed.linking.symbol_table.items[parsed_data_symbol_index];
+    try std.testing.expectEqual(WasmLinking.SymKind.data, parsed_symbol.kind);
+    try std.testing.expectEqualStrings("roc.test.data", parsed_symbol.name.?);
+    try std.testing.expectEqual(@as(u32, 0), parsed_symbol.index);
+    try std.testing.expectEqual(@as(u32, 4), parsed_symbol.data_offset);
+    try std.testing.expectEqual(@as(u32, 4), parsed_symbol.data_size);
+
+    try std.testing.expectEqual(@as(usize, 1), parsed.reloc_data.entries.items.len);
+    const parsed_reloc = parsed.reloc_data.entries.items[0].offset;
+    try std.testing.expectEqual(WasmLinking.OffsetRelocType.memory_addr_i32, parsed_reloc.type_id);
+    try std.testing.expectEqual(@as(u32, 0), parsed_reloc.offset);
+    try std.testing.expectEqual(parsed_data_symbol_index, parsed_reloc.symbol_index);
+    try std.testing.expectEqual(@as(i32, 7), parsed_reloc.addend);
+    try std.testing.expectEqual(@as(u32, 0), parsed_reloc.data_segment_index);
+
+    try std.testing.expectEqual(@as(usize, 1), parsed.reloc_code.entries.items.len);
+    const parsed_code_reloc = parsed.reloc_code.entries.items[0].index;
+    try std.testing.expectEqual(WasmLinking.IndexRelocType.global_index_leb, parsed_code_reloc.type_id);
+    try std.testing.expectEqual(@as(u32, 3), parsed_code_reloc.offset);
+}
+
 // --- Dead Code Elimination Tests ---
 
 /// Build a test module for DCE tests.
@@ -5029,25 +6227,13 @@ test "eliminateDeadCode — call_indirect conservatively keeps matching-signatur
     // Add dead_fn to the element section so it's an indirect call target.
     try module.table_func_indices.append(allocator, 5);
 
-    // Add a call_indirect (type_index_leb) relocation in main_fn's body
-    // pointing to a symbol with type index 1 (matching dead_fn's signature).
-    // We need a symbol for type 1. Add it to the symbol table.
-    try module.linking.symbol_table.append(allocator, .{
-        .kind = .function, // type_index_leb relocs use function symbols in some impls,
-        // but the index field carries the type index.
-        // For our implementation, we use the symbol's index as the type index.
-        .flags = 0,
-        .name = "type1_sig",
-        .index = 1, // type index 1
-    });
-    const type_sym_idx: u32 = @intCast(module.linking.symbol_table.items.len - 1);
-
-    // Add a type_index_leb reloc inside main_fn's body range (offset 0..17).
+    // Add a type_index_leb relocation inside main_fn's body range (offset 0..17).
+    // The relocation index carries the type index directly.
     try module.reloc_code.entries.append(allocator, .{
         .index = .{
             .type_id = .type_index_leb,
             .offset = 14, // within main_fn's byte range
-            .symbol_index = type_sym_idx,
+            .symbol_index = 1,
         },
     });
 

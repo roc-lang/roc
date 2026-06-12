@@ -39,3 +39,5 @@ WRONLY = "WRONLY" # File open mode
 
 [default.extend-identifiers]
 CMOVcc = "CMOVcc"
+expandMemCpyAsLoop = "expandMemCpyAsLoop"
+MemCpyInst = "MemCpyInst"

@@ -170,6 +170,13 @@ defer_generalize: bool = false,
 /// This prevents rank pollution where inner lambda generalization pulls outer
 /// scope vars to rank 0 via Rank.min in merge.
 checking_call_arg: bool = false,
+/// True when checking the right-hand side of an immutable binding (a top-level
+/// def or a block-local `s_decl`). Used to generalize a binding whose RHS is a
+/// bare reference to an already-generalized scheme (e.g. `shorthand = Foo.bar`).
+/// Such a reference is non-expansive, so generalizing it is the value-restriction
+/// treatment of a variable binding. Deliberately NOT set for mutable `var`
+/// bindings, which must never generalize.
+checking_binding_rhs: bool = false,
 /// Deferred def-level unifications (def_var = ptrn_var = expr_var).
 /// These must happen AFTER generalization to avoid lowering expr_var's rank
 /// before generalization can process it, but BEFORE eql constraint resolution
@@ -2138,6 +2145,8 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
 
     try self.reportPolymorphicTopLevelValues();
 
+    try self.checkPlatformHostedSection();
+
     // Two coordinated ambiguity sweeps share a `reported` set keyed by resolved
     // dispatcher var so a receiver caught per-instantiation is not also reported
     // by the def-site sweep. The per-instantiation sweep runs first because it
@@ -2863,6 +2872,157 @@ fn varsHaveUnresolvedStaticDispatchConstraints(
     return false;
 }
 
+/// Validate a platform module's hosted section against the hosted functions
+/// its imported type modules declare: every hosted function must appear
+/// exactly once, every entry must name a real hosted function, linker symbols
+/// must be unique across the hosted and provides sections, and the fixed
+/// runtime symbols plus the internal roc__ namespace are reserved.
+///
+/// Applications never pay for this: it only runs for platform modules.
+fn checkPlatformHostedSection(self: *Self) std.mem.Allocator.Error!void {
+    if (self.cir.module_kind != .platform) return;
+
+    const section = self.cir.hosted_entries.items.items;
+
+    // Qualified names of every hosted function declared by imported modules,
+    // built the same way the hosted dispatch catalog builds its keys:
+    // "Module.func" with a trailing `!` stripped.
+    var declared = std.StringHashMap(void).init(self.gpa);
+    defer {
+        var key_it = declared.keyIterator();
+        while (key_it.next()) |key| self.gpa.free(key.*);
+        declared.deinit();
+    }
+    // Walk owner modules (direct imports plus their transitive public
+    // dependencies), since hosted functions can live in modules the platform
+    // root never imports directly. Within each module, walk global value defs,
+    // not all_defs: hosted functions declared as associated items of (possibly
+    // nested) type modules are hoisted into global_value_defs only, and the
+    // hosted dispatch catalog scans the same list.
+    for (self.owner_modules) |imported_env| {
+        const all_defs = imported_env.store.sliceDefs(imported_env.global_value_defs);
+        for (all_defs) |def_idx| {
+            const def = imported_env.store.getDef(def_idx);
+            const expr = imported_env.store.getExpr(def.expr);
+            if (expr != .e_hosted_lambda) continue;
+
+            var module_name = imported_env.module_name;
+            if (Ident.textEndsWith(module_name, ".roc")) {
+                module_name = module_name[0 .. module_name.len - 4];
+            }
+            var func_name = imported_env.getIdent(expr.e_hosted_lambda.symbol_name);
+            if (Ident.textEndsWith(func_name, "!")) {
+                func_name = func_name[0 .. func_name.len - 1];
+            }
+            const key = try std.fmt.allocPrint(self.gpa, "{s}.{s}", .{ module_name, func_name });
+            const gop = try declared.getOrPut(key);
+            if (gop.found_existing) self.gpa.free(key);
+        }
+    }
+
+    // Walk the section: resolve each entry, detect duplicate functions and
+    // duplicate/reserved symbols (provides symbols share the namespace).
+    var mapped = std.StringHashMap(void).init(self.gpa);
+    defer {
+        var key_it = mapped.keyIterator();
+        while (key_it.next()) |key| self.gpa.free(key.*);
+        mapped.deinit();
+    }
+    var symbols = std.StringHashMap(void).init(self.gpa);
+    defer symbols.deinit();
+    for (self.cir.provides_entries.items.items) |provides_entry| {
+        const symbol_text = self.cir.getString(provides_entry.ffi_symbol);
+        try self.checkHostSymbol(symbol_text, &symbols);
+    }
+
+    for (section) |entry| {
+        var func_name = self.cir.getIdent(entry.func_ident);
+        if (Ident.textEndsWith(func_name, "!")) {
+            func_name = func_name[0 .. func_name.len - 1];
+        }
+        const key = if (entry.module_ident) |module_ident|
+            try std.fmt.allocPrint(self.gpa, "{s}.{s}", .{ self.cir.getIdent(module_ident), func_name })
+        else
+            try self.gpa.dupe(u8, func_name);
+
+        if (!declared.contains(key)) {
+            const name_idx = try self.problems.putExtraString(key);
+            _ = try self.problems.appendProblem(self.gpa, .{ .platform_hosted_section = .{
+                .name = name_idx,
+                .reason = .unknown_function,
+            } });
+        }
+
+        const gop = try mapped.getOrPut(key);
+        if (gop.found_existing) {
+            const name_idx = try self.problems.putExtraString(key);
+            _ = try self.problems.appendProblem(self.gpa, .{ .platform_hosted_section = .{
+                .name = name_idx,
+                .reason = .duplicate_function,
+            } });
+            self.gpa.free(key);
+        }
+
+        const symbol_text = self.cir.getString(entry.symbol);
+        try self.checkHostSymbol(symbol_text, &symbols);
+    }
+
+    // Every declared hosted function needs exactly one section entry.
+    var declared_it = declared.keyIterator();
+    while (declared_it.next()) |key| {
+        if (mapped.contains(key.*)) continue;
+        const name_idx = try self.problems.putExtraString(key.*);
+        _ = try self.problems.appendProblem(self.gpa, .{ .platform_hosted_section = .{
+            .name = name_idx,
+            .reason = .function_not_in_section,
+        } });
+    }
+}
+
+/// The fixed runtime symbols every host defines; platform headers may not
+/// reuse them for provides or hosted entries.
+const reserved_host_symbols = [_][]const u8{
+    "roc_alloc",
+    "roc_dealloc",
+    "roc_realloc",
+    "roc_dbg",
+    "roc_expect_failed",
+    "roc_crashed",
+};
+
+fn checkHostSymbol(
+    self: *Self,
+    symbol_text: []const u8,
+    symbols: *std.StringHashMap(void),
+) std.mem.Allocator.Error!void {
+    for (reserved_host_symbols) |reserved| {
+        if (Ident.textEql(symbol_text, reserved)) {
+            const name_idx = try self.problems.putExtraString(symbol_text);
+            _ = try self.problems.appendProblem(self.gpa, .{ .platform_hosted_section = .{
+                .name = name_idx,
+                .reason = .reserved_symbol,
+            } });
+            return;
+        }
+    }
+    if (Ident.textStartsWith(symbol_text, "roc__")) {
+        const name_idx = try self.problems.putExtraString(symbol_text);
+        _ = try self.problems.appendProblem(self.gpa, .{ .platform_hosted_section = .{
+            .name = name_idx,
+            .reason = .reserved_prefix,
+        } });
+        return;
+    }
+    const gop = try symbols.getOrPut(symbol_text);
+    if (gop.found_existing) {
+        const name_idx = try self.problems.putExtraString(symbol_text);
+        _ = try self.problems.appendProblem(self.gpa, .{ .platform_hosted_section = .{
+            .name = name_idx,
+            .reason = .duplicate_symbol,
+        } });
+    }
+}
+
 /// Process the requires_types annotations for platform modules, like:
 ///
 ///   { [Model : model] for main : { init : model, ... } }
@@ -3153,6 +3313,7 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
     };
 
     // Infer types for the body, checking against the instantiated annotation
+    self.checking_binding_rhs = true;
     const def_does_fx = try self.checkExpr(def.expr, env, expectation);
     if (def_does_fx) {
         _ = try self.problems.appendProblem(self.gpa, .{ .effectful_top_level = .{
@@ -4818,8 +4979,9 @@ fn checkPatternHelp(
                     };
 
                     // Create flex var with from_numeral constraint
-                    const flex_var = try self.mkFlexWithFromNumeralConstraint(null, num_literal_info, env);
+                    const flex_var = try self.mkFlexWithFromNumeralConstraint(ModuleEnv.nodeIdxFrom(pattern_idx), num_literal_info, env);
                     _ = try self.unify(pattern_var, flex_var, env);
+                    try self.mkPatternLiteralEqConstraint(pattern_var, env, pattern_region);
                 },
                 // Phase 5: For explicitly typed literals, use nominal types from Builtin
                 .u8 => try self.unifyWith(pattern_var, try self.mkNumberTypeContent(.u8, env), env),
@@ -4858,8 +5020,9 @@ fn checkPatternHelp(
                     pattern_region,
                 );
 
-                const flex_var = try self.mkFlexWithFromNumeralConstraint(null, num_literal_info, env);
+                const flex_var = try self.mkFlexWithFromNumeralConstraint(ModuleEnv.nodeIdxFrom(pattern_idx), num_literal_info, env);
                 _ = try self.unify(pattern_var, flex_var, env);
+                try self.mkPatternLiteralEqConstraint(pattern_var, env, pattern_region);
             }
         },
         .small_dec_literal => |dec| {
@@ -4876,8 +5039,9 @@ fn checkPatternHelp(
                     pattern_region,
                 );
 
-                const flex_var = try self.mkFlexWithFromNumeralConstraint(null, num_literal_info, env);
+                const flex_var = try self.mkFlexWithFromNumeralConstraint(ModuleEnv.nodeIdxFrom(pattern_idx), num_literal_info, env);
                 _ = try self.unify(pattern_var, flex_var, env);
+                try self.mkPatternLiteralEqConstraint(pattern_var, env, pattern_region);
             }
         },
         .runtime_error => {
@@ -5109,12 +5273,30 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
     const is_call_arg = self.checking_call_arg;
     self.checking_call_arg = false;
 
+    // Consume the binding-RHS flag: it applies only to this immediate checkExpr
+    // call and must not propagate into subexpressions.
+    const is_binding_rhs = self.checking_binding_rhs;
+    self.checking_binding_rhs = false;
+
     // Value restriction: only generalize at the inner lambda level, not the
     // outer e_closure wrapper (which delegates to e_lambda's own checkExpr).
     // Direct call-argument lambdas are consumed immediately, so they must not
     // generalize independently. Doing so lets their generalized vars escape
     // into the enclosing value via unification.
-    const should_generalize = isFunctionDef(&self.cir.store, expr) and expr != .e_closure and !is_call_arg;
+    //
+    // We also generalize a binding whose RHS is a bare reference to an already-
+    // generalized scheme (e.g. `shorthand = FooBar.myfunc`). Such a reference is
+    // non-expansive: it performs no work and can hide no `dbg`/`expect`, so it
+    // raises none of the duplicate-work or duplicate-effect concerns that motivate
+    // restricting generalization to syntactic functions. In practice the only
+    // generalized schemes are functions (numeric literals use the separate
+    // defaulting path), so this never re-generalizes numbers or tag unions. We
+    // restrict this to binding-RHS position so that bare lookups appearing as
+    // arbitrary subexpressions don't pay generalization cost or get generalized
+    // out from under their surrounding context.
+    const is_value_alias = is_binding_rhs and
+        (expr == .e_lookup_local or expr == .e_lookup_external);
+    const should_generalize = (isFunctionDef(&self.cir.store, expr) and expr != .e_closure and !is_call_arg) or is_value_alias;
 
     // Push/pop ranks based on if we should generalize
     if (should_generalize) try env.var_pool.pushRank();
@@ -6572,6 +6754,12 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         .e_crash => {
             try self.unifyWith(expr_var, .{ .flex = Flex.init() }, env);
         },
+        .e_expect_err => |expect_err| {
+            // The Err payload is consumed at runtime when the enclosing expect
+            // fails; this expression itself never returns, so its type is free.
+            _ = try self.checkExpr(expect_err.expr, env, Expected.none());
+            try self.unifyWith(expr_var, .{ .flex = Flex.init() }, env);
+        },
         .e_dbg => |dbg| {
             // dbg evaluates its inner expression but returns {} (like expect)
             _ = try self.checkExpr(dbg.expr, env, Expected.none());
@@ -7193,7 +7381,10 @@ fn isFunctionDef(store: *const CIR.NodeStore, expr: CIR.Expr) bool {
 
 fn exprAlwaysCrashes(self: *const Self, expr_idx: CIR.Expr.Idx) bool {
     return switch (self.cir.store.getExpr(expr_idx)) {
-        .e_crash => true,
+        .e_crash,
+        .e_ellipsis,
+        .e_expect_err,
+        => true,
         .e_block => |block| self.exprAlwaysCrashes(block.final_expr),
         else => false,
     };
@@ -7260,6 +7451,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                     });
                 }
 
+                self.checking_binding_rhs = true;
                 does_fx = try self.checkExpr(decl_stmt.expr, env, expectation) or does_fx;
                 if (decl_stmt.anno == null and self.erroneous_value_exprs.contains(decl_stmt.expr)) {
                     try self.erroneous_value_patterns.put(self.gpa, decl_stmt.pattern, {});
@@ -7673,6 +7865,7 @@ fn checkMatchExpr(
     // Check the match's condition
     var does_fx = try self.checkExpr(match.cond, env, Expected.none());
     const cond_var = ModuleEnv.varFrom(match.cond);
+    const cond_always_crashes = self.exprAlwaysCrashes(match.cond);
 
     // Assert we have at least 1 branch
     std.debug.assert(match.branches.span.len > 0);
@@ -7718,16 +7911,18 @@ fn checkMatchExpr(
     for (first_branch_ptrn_idxs, 0..) |branch_ptrn_idx, cur_ptrn_index| {
         const branch_ptrn = self.cir.store.getMatchBranchPattern(branch_ptrn_idx);
         try self.checkPattern(branch_ptrn.pattern, .match_branch, env);
-        const branch_ptrn_var = ModuleEnv.varFrom(branch_ptrn.pattern);
 
-        const ptrn_result = try self.unifyInContext(cond_var, branch_ptrn_var, env, .{ .match_pattern = .{
-            .branch_index = 0,
-            .pattern_index = @intCast(cur_ptrn_index),
-            .num_branches = @intCast(match.branches.span.len),
-            .num_patterns = @intCast(first_branch_ptrn_idxs.len),
-            .match_expr = expr_idx,
-        } });
-        if (!ptrn_result.isOk()) had_type_error = true;
+        if (!cond_always_crashes) {
+            const branch_ptrn_var = ModuleEnv.varFrom(branch_ptrn.pattern);
+            const ptrn_result = try self.unifyInContext(cond_var, branch_ptrn_var, env, .{ .match_pattern = .{
+                .branch_index = 0,
+                .pattern_index = @intCast(cur_ptrn_index),
+                .num_branches = @intCast(match.branches.span.len),
+                .num_patterns = @intCast(first_branch_ptrn_idxs.len),
+                .match_expr = expr_idx,
+            } });
+            if (!ptrn_result.isOk()) had_type_error = true;
+        }
     }
 
     if (try self.unifyMatchAltPatternBindings(first_branch_ptrn_idxs, 0, @intCast(match.branches.span.len), expr_idx, env)) {
@@ -7769,15 +7964,17 @@ fn checkMatchExpr(
             try self.checkPattern(branch_ptrn.pattern, .match_branch, env);
 
             // Check the pattern against the cond
-            const branch_ptrn_var = ModuleEnv.varFrom(branch_ptrn.pattern);
-            const ptrn_result = try self.unifyInContext(cond_var, branch_ptrn_var, env, .{ .match_pattern = .{
-                .branch_index = @intCast(branch_cur_index),
-                .pattern_index = @intCast(cur_ptrn_index),
-                .num_branches = @intCast(match.branches.span.len),
-                .num_patterns = @intCast(branch_ptrn_idxs.len),
-                .match_expr = expr_idx,
-            } });
-            if (!ptrn_result.isOk()) had_type_error = true;
+            if (!cond_always_crashes) {
+                const branch_ptrn_var = ModuleEnv.varFrom(branch_ptrn.pattern);
+                const ptrn_result = try self.unifyInContext(cond_var, branch_ptrn_var, env, .{ .match_pattern = .{
+                    .branch_index = @intCast(branch_cur_index),
+                    .pattern_index = @intCast(cur_ptrn_index),
+                    .num_branches = @intCast(match.branches.span.len),
+                    .num_patterns = @intCast(branch_ptrn_idxs.len),
+                    .match_expr = expr_idx,
+                } });
+                if (!ptrn_result.isOk()) had_type_error = true;
+            }
         }
 
         if (try self.unifyMatchAltPatternBindings(branch_ptrn_idxs, @intCast(branch_cur_index), @intCast(match.branches.span.len), expr_idx, env)) {
@@ -7826,14 +8023,16 @@ fn checkMatchExpr(
                         try self.checkPattern(other_branch_ptrn.pattern, .match_branch, env);
 
                         // Check the pattern against the cond
-                        const other_branch_ptrn_var = ModuleEnv.varFrom(other_branch_ptrn.pattern);
-                        _ = try self.unifyInContext(cond_var, other_branch_ptrn_var, env, .{ .match_pattern = .{
-                            .branch_index = @intCast(other_branch_cur_index),
-                            .pattern_index = @intCast(other_cur_ptrn_index),
-                            .num_branches = @intCast(match.branches.span.len),
-                            .num_patterns = @intCast(other_branch_ptrn_idxs.len),
-                            .match_expr = expr_idx,
-                        } });
+                        if (!cond_always_crashes) {
+                            const other_branch_ptrn_var = ModuleEnv.varFrom(other_branch_ptrn.pattern);
+                            _ = try self.unifyInContext(cond_var, other_branch_ptrn_var, env, .{ .match_pattern = .{
+                                .branch_index = @intCast(other_branch_cur_index),
+                                .pattern_index = @intCast(other_cur_ptrn_index),
+                                .num_branches = @intCast(match.branches.span.len),
+                                .num_patterns = @intCast(other_branch_ptrn_idxs.len),
+                                .match_expr = expr_idx,
+                            } });
+                        }
                     }
 
                     // Then check the other branch's exprs
@@ -7866,10 +8065,11 @@ fn checkMatchExpr(
     // that confuse the exhaustiveness checker
     // Also skip if the condition type is an error type (can happen with complex inference)
     // Also skip if we already reported an invalid try operator error
+    // Also skip if the condition explicitly diverges; no pattern is observed at runtime.
     const resolved_cond = self.types.resolveVar(cond_var);
     const cond_is_error = resolved_cond.desc.content == .err;
 
-    if (!had_type_error and !cond_is_error and !has_invalid_try) {
+    if (!had_type_error and !cond_is_error and !has_invalid_try and !cond_always_crashes) {
         const match_region = self.getRegionAt(@enumFromInt(@intFromEnum(expr_idx)));
         const builtin_idents = exhaustive.BuiltinIdents{
             .builtin_module = self.cir.idents.builtin_module,
@@ -8394,6 +8594,18 @@ fn getNominalOriginEnv(self: *Self, nominal_type: types_mod.NominalType) *const 
 
 /// Create a static dispatch fn like: `lhs, rhs -> ret` and assert the
 /// constraint to the lhs (receiver) var.
+/// Constrain a literal pattern's type to support equality, since matching the
+/// pattern compares the scrutinee against the literal's converted value.
+fn mkPatternLiteralEqConstraint(
+    self: *Self,
+    pattern_var: Var,
+    env: *Env,
+    region: Region,
+) Allocator.Error!void {
+    const ret_var = try self.freshBool(env, region);
+    try self.mkBinopConstraint(pattern_var, pattern_var, ret_var, self.cir.idents.is_eq, false, env, region, null);
+}
+
 fn mkBinopConstraint(
     self: *Self,
     lhs_var: Var,
@@ -10342,6 +10554,11 @@ fn validateUnsignedFromNumeralLiteral(
 
     if (value > @as(u128, @intCast(std.math.maxInt(T)))) return .out_of_range;
     return null;
+}
+
+test "unsuffixed positive integer literal validates against unsigned builtin type" {
+    const info = types_mod.NumeralInfo.fromI128(42, false, false, Region.zero());
+    try std.testing.expectEqual(@as(?BuiltinFromNumeralLiteralProblem, null), validateBuiltinFromNumeralLiteral(.u64, info));
 }
 
 fn validateSignedFromNumeralLiteral(

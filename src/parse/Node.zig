@@ -521,21 +521,21 @@ pub const Tag = enum {
     // Target section nodes
 
     /// A targets section in a platform header
-    /// * main_token - files string token (or 0 if no files directive)
-    /// * lhs - exe TargetLinkType index (or 0 if none)
-    /// * rhs - reserved for future (static_lib, shared_lib)
+    /// * main_token - inputs string token (or 0 if no inputs directive)
+    /// * lhs - start of TargetEntry span
+    /// * rhs - length of TargetEntry span
     targets_section,
 
-    /// A target link type section (exe, static_lib, shared_lib)
-    /// * lhs - start of entries span
-    /// * rhs - length of entries span
-    target_link_type,
-
-    /// A single target entry: x64musl: ["crt1.o", "host.o", app]
+    /// A single target entry: x64musl: { inputs: ["crt1.o", "host.o", app], output: Exe }
     /// * main_token - target name identifier token
-    /// * lhs - start of files span
-    /// * rhs - length of files span
+    /// * lhs - TargetConfig index
     target_entry,
+
+    /// A symbol map entry: "roc_main": main_for_host! or "roc_stdout_line": Stdout.line!
+    /// * main_token - symbol string token (StringPart)
+    /// * lhs - module UpperIdent token (packed optional; 0 if unqualified)
+    /// * rhs - function ident token
+    symbol_map_entry,
 
     /// A string literal file in a target list: "crt1.o"
     /// * main_token - string token
@@ -544,6 +544,20 @@ pub const Tag = enum {
     /// A special identifier in a target list: app, win_gui
     /// * main_token - identifier token
     target_file_ident,
+
+    /// Per-target configuration record.
+    /// * lhs - start of config entries span
+    /// * rhs - length of config entries span
+    target_config,
+
+    /// A field in a target configuration record.
+    /// * main_token - field name token
+    /// * lhs - TargetConfigValue index
+    target_config_entry,
+
+    /// Target configuration value node.
+    /// * main_token/data depend on the value variant
+    target_config_value,
 
     /// A for-clause type alias: Model : model
     /// * main_token - alias name token (UpperIdent)

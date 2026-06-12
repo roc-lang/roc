@@ -7,6 +7,7 @@
 //! operations efficiently and safely.
 const std = @import("std");
 const i128h = @import("compiler_rt_128.zig");
+const parse_float = @import("parse_float.zig");
 
 const WithOverflow = @import("utils.zig").WithOverflow;
 const Ordering = @import("utils.zig").Ordering;
@@ -84,12 +85,133 @@ pub fn mul_u128(a: u128, b: u128) U256 {
 
 /// Parses an integer from a RocStr
 pub fn parseIntFromStr(comptime T: type, buf: RocStr) NumParseResult(T) {
-    const radix = 0;
-    if (std.fmt.parseInt(T, buf.asSlice(), radix)) |success| {
+    if (parseIntNoFmt(T, buf.asSlice())) |success| {
         return .{ .errorcode = 0, .value = success };
     } else |_| {
         return .{ .errorcode = 1, .value = 0 };
     }
+}
+
+const ParseIntError = error{
+    InvalidCharacter,
+    Overflow,
+};
+
+fn parseIntNoFmt(comptime T: type, bytes: []const u8) ParseIntError!T {
+    if (bytes.len == 0) return error.InvalidCharacter;
+
+    const info = @typeInfo(T).int;
+    const signed = info.signedness == .signed;
+
+    var index: usize = 0;
+    const negative = bytes[index] == '-';
+    if (bytes[index] == '-' or bytes[index] == '+') {
+        index += 1;
+        if (index == bytes.len) return error.InvalidCharacter;
+    }
+
+    const radix = detectRadix(bytes, &index);
+
+    if (signed) {
+        const positive_limit: u128 = @intCast(std.math.maxInt(T));
+        const negative_limit = positive_limit + 1;
+        const magnitude = if (negative)
+            try parseMagnitude(negative_limit, bytes, index, radix)
+        else
+            try parseMagnitude(positive_limit, bytes, index, radix);
+
+        if (negative) {
+            if (magnitude == negative_limit) return std.math.minInt(T);
+            const positive: T = @intCast(magnitude);
+            return -positive;
+        }
+        return @intCast(magnitude);
+    } else {
+        const magnitude = try parseMagnitude(@as(u128, @intCast(std.math.maxInt(T))), bytes, index, radix);
+        if (negative and magnitude != 0) return error.Overflow;
+        return @intCast(magnitude);
+    }
+}
+
+/// Parse an unsigned decimal integer, returning null on invalid input or overflow.
+pub fn parseUnsignedDecimal(comptime T: type, bytes: []const u8) ?T {
+    const info = @typeInfo(T).int;
+    const limit: u128 = switch (info.signedness) {
+        .signed => @intCast(std.math.maxInt(T)),
+        .unsigned => @intCast(std.math.maxInt(T)),
+    };
+    const magnitude = parseMagnitude(limit, bytes, 0, 10) catch return null;
+    return @intCast(magnitude);
+}
+
+fn detectRadix(bytes: []const u8, index: *usize) u8 {
+    if (bytes.len - index.* >= 2 and bytes[index.*] == '0') {
+        switch (bytes[index.* + 1]) {
+            'b', 'B' => {
+                index.* += 2;
+                return 2;
+            },
+            'o', 'O' => {
+                index.* += 2;
+                return 8;
+            },
+            'x', 'X' => {
+                index.* += 2;
+                return 16;
+            },
+            else => {},
+        }
+    }
+    return 10;
+}
+
+fn parseMagnitude(comptime limit: u128, bytes: []const u8, start: usize, radix: u8) ParseIntError!u128 {
+    return switch (radix) {
+        2 => parseMagnitudeRadix(2, limit, bytes, start),
+        8 => parseMagnitudeRadix(8, limit, bytes, start),
+        10 => parseMagnitudeRadix(10, limit, bytes, start),
+        16 => parseMagnitudeRadix(16, limit, bytes, start),
+        else => unreachable,
+    };
+}
+
+fn parseMagnitudeRadix(comptime radix: u8, comptime limit: u128, bytes: []const u8, start: usize) ParseIntError!u128 {
+    const max_before_mul = limit / radix;
+    const max_digit = limit % radix;
+
+    var value: u128 = 0;
+    var saw_digit = false;
+    var previous_underscore = false;
+
+    for (bytes[start..]) |byte| {
+        if (byte == '_') {
+            if (!saw_digit or previous_underscore) return error.InvalidCharacter;
+            previous_underscore = true;
+            continue;
+        }
+
+        const digit = digitValue(byte) orelse return error.InvalidCharacter;
+        if (digit >= radix) return error.InvalidCharacter;
+        if (value > max_before_mul or (value == max_before_mul and digit > max_digit)) {
+            return error.Overflow;
+        }
+
+        value = value * radix + digit;
+        saw_digit = true;
+        previous_underscore = false;
+    }
+
+    if (!saw_digit or previous_underscore) return error.InvalidCharacter;
+    return value;
+}
+
+fn digitValue(byte: u8) ?u8 {
+    return switch (byte) {
+        '0'...'9' => byte - '0',
+        'a'...'z' => byte - 'a' + 10,
+        'A'...'Z' => byte - 'A' + 10,
+        else => null,
+    };
 }
 
 /// Exports a function to parse integers from strings.
@@ -105,7 +227,7 @@ pub fn exportParseInt(comptime T: type, comptime name: []const u8) void {
 /// Parses a floating-point number from a RocStr.
 pub fn parseFloatFromStr(comptime T: type, buf: RocStr) NumParseResult(T) {
     const bytes = buf.asSlice();
-    if (std.fmt.parseFloat(T, bytes)) |success| {
+    if (parse_float.parseFloat(T, bytes)) |success| {
         if (std.math.isInf(success) and !isExplicitInfinity(bytes)) {
             return .{ .errorcode = 1, .value = 0 };
         }

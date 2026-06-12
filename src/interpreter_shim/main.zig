@@ -55,7 +55,7 @@ fn shimIo() std.Io {
 }
 
 fn allocator() Allocator {
-    return std.heap.smp_allocator;
+    return std.heap.page_allocator;
 }
 
 fn openRuntimeState(gpa: Allocator) anyerror!RuntimeState {
@@ -119,6 +119,9 @@ fn reportEvalError(ops: *RocOps, interpreter: *const eval.LirInterpreter, err: e
         error.RuntimeError => interpreter.getRuntimeErrorMessage() orelse "Roc runtime error",
         error.DivisionByZero => interpreter.getRuntimeErrorMessage() orelse "Division by zero",
         error.Crash => return,
+        // expect_err statements only occur in top-level expect test roots,
+        // never in platform entrypoints.
+        error.ExpectErr => unreachable,
     };
     ops.crash(message);
 }
@@ -190,6 +193,73 @@ fn viewEmbeddedLirImage(image_base: *anyopaque, image_len: usize, ops: *RocOps) 
         ops.crash("Interpreter shim could not view the embedded LIR image");
         return error.LirImageUnavailable;
     };
+}
+
+// --- Symbol-ABI host bridge
+// Under the symbol ABI the host defines the runtime symbols and hosted
+// functions; nothing hands the interpreter a RocOps. The generated platform
+// shim calls roc_shim_get_ops() to obtain one built over those symbols, with
+// the hosted dispatch table supplied by the generated module.
+
+const extern_host = struct {
+    extern fn roc_alloc(length: usize, alignment: usize) ?*anyopaque;
+    extern fn roc_dealloc(ptr: *anyopaque, alignment: usize) void;
+    extern fn roc_realloc(ptr: *anyopaque, new_length: usize, alignment: usize) ?*anyopaque;
+    extern fn roc_dbg(bytes: [*]const u8, len: usize) void;
+    extern fn roc_expect_failed(bytes: [*]const u8, len: usize) void;
+    extern fn roc_crashed(bytes: [*]const u8, len: usize) void;
+};
+
+/// Hosted dispatch table defined by the generated platform shim module, in
+/// hosted-section order.
+extern const roc_shim_hosted_fns: [*]const builtins.host_abi.HostedFn;
+extern const roc_shim_hosted_count: usize;
+
+fn shimAlloc(_: *RocOps, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+    return extern_host.roc_alloc(length, alignment);
+}
+
+fn shimDealloc(_: *RocOps, ptr: *anyopaque, alignment: usize) callconv(.c) void {
+    extern_host.roc_dealloc(ptr, alignment);
+}
+
+fn shimRealloc(_: *RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+    return extern_host.roc_realloc(ptr, new_length, alignment);
+}
+
+fn shimDbg(_: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
+    extern_host.roc_dbg(bytes, len);
+}
+
+fn shimExpectFailed(_: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
+    extern_host.roc_expect_failed(bytes, len);
+}
+
+fn shimCrashed(_: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
+    extern_host.roc_crashed(bytes, len);
+}
+
+var shim_ops: RocOps = undefined;
+var shim_ops_initialized = false;
+
+export fn roc_shim_get_ops() callconv(.c) *anyopaque {
+    if (!shim_ops_initialized) {
+        shim_ops = .{
+            .env = @ptrCast(&shim_ops),
+            .roc_alloc = shimAlloc,
+            .roc_dealloc = shimDealloc,
+            .roc_realloc = shimRealloc,
+            .roc_dbg = shimDbg,
+            .roc_expect_failed = shimExpectFailed,
+            .roc_crashed = shimCrashed,
+            .hosted_fns = .{
+                .count = @intCast(roc_shim_hosted_count),
+                .fns = @constCast(roc_shim_hosted_fns),
+            },
+        };
+        shim_ops_initialized = true;
+    }
+    return @ptrCast(&shim_ops);
 }
 
 export fn roc_entrypoint(

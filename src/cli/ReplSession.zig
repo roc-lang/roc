@@ -349,13 +349,13 @@ fn renderModuleProblems(self: *ReplSession, source: []const u8, report_config: r
     };
 }
 
-fn renderModuleParseDiagnostics(self: *ReplSession, source: []const u8, report_config: reporting.ReportingConfig) (Allocator.Error || error{ TooNested, WriteFailed })![]u8 {
+fn renderModuleParseDiagnostics(self: *ReplSession, source: []const u8, report_config: reporting.ReportingConfig) (Allocator.Error || error{WriteFailed})![]u8 {
     var env = try ModuleEnv.init(self.allocator, source);
     defer env.deinit();
     env.common.source = source;
     try env.common.calcLineStarts(self.allocator);
 
-    const ast = try parse.parse(self.allocator, &env.common);
+    const ast = try parse.file(self.allocator, &env.common);
     defer ast.deinit();
 
     return self.renderAstDiagnostics(ast, &env.common, "repl", report_config);
@@ -367,10 +367,7 @@ fn renderStatementParseDiagnostics(self: *ReplSession, source: []const u8, repor
     env.common.source = source;
     try env.common.calcLineStarts(self.allocator);
 
-    const ast = parse.parseStatement(self.allocator, &env.common) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-        else => return self.renderFallbackParseDiagnostic(source, report_config),
-    };
+    const ast = try parse.statement(self.allocator, &env.common);
     defer ast.deinit();
 
     return self.renderAstDiagnostics(ast, &env.common, "repl", report_config);
@@ -472,10 +469,7 @@ pub fn inputStatusWithAllocator(allocator: Allocator, line: []const u8) Allocato
     env.common.source = line;
     try env.common.calcLineStarts(allocator);
 
-    const ast = parse.parseStatement(allocator, &env.common) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-        else => return .invalid,
-    };
+    const ast = try parse.statement(allocator, &env.common);
     defer ast.deinit();
     if (ast.tokenize_diagnostics.items.len > 0 or ast.parse_diagnostics.items.len > 0) {
         return if (inputDiagnosticsAreIncomplete(ast)) .incomplete else .invalid;

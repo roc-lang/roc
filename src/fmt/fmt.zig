@@ -172,7 +172,7 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.Io.Dir, path: []cons
     var module_env = try ModuleEnv.init(gpa, contents);
     defer module_env.deinit();
 
-    const parse_ast = try parse.parse(gpa, &module_env.common);
+    const parse_ast = try parse.file(gpa, &module_env.common);
     defer parse_ast.deinit();
 
     // If there are any parsing problems, print them to stderr
@@ -221,7 +221,7 @@ pub fn formatStdin(gpa: std.mem.Allocator, io: std.Io, stdin: std.Io.File, stdou
     var module_env = try ModuleEnv.init(gpa, contents);
     defer module_env.deinit();
 
-    const parse_ast = try parse.parse(gpa, &module_env.common);
+    const parse_ast = try parse.file(gpa, &module_env.common);
     defer parse_ast.deinit();
 
     // If there are any parsing problems, print them to stderr
@@ -1960,38 +1960,26 @@ const Formatter = struct {
 
         var has_content = false;
 
-        // Format files: field if present
-        if (targets.files_path) |files_token| {
+        // Format inputs: directory directive if present
+        if (targets.inputs_path) |inputs_token| {
             has_content = true;
             try fmt.ensureNewline();
             fmt.curr_indent = start_indent + 1;
             try fmt.pushIndent();
-            try fmt.pushAll("files: ");
+            try fmt.pushAll("inputs: ");
             try fmt.push('"');
-            try fmt.pushTokenText(files_token);
+            try fmt.pushTokenText(inputs_token);
             try fmt.push('"');
             try fmt.push(',');
         }
 
-        // Format exe: field if present
-        if (targets.exe) |exe_idx| {
+        // Format per-target entries
+        for (fmt.ast.store.targetEntrySlice(targets.entries)) |entry_idx| {
             has_content = true;
             try fmt.ensureNewline();
             fmt.curr_indent = start_indent + 1;
             try fmt.pushIndent();
-            try fmt.pushAll("exe: ");
-            try fmt.formatTargetLinkType(exe_idx, start_indent + 1);
-            try fmt.push(',');
-        }
-
-        // Format static_lib: field if present
-        if (targets.static_lib) |static_lib_idx| {
-            has_content = true;
-            try fmt.ensureNewline();
-            fmt.curr_indent = start_indent + 1;
-            try fmt.pushIndent();
-            try fmt.pushAll("static_lib: ");
-            try fmt.formatTargetLinkType(static_lib_idx, start_indent + 1);
+            try fmt.formatTargetEntry(entry_idx);
             try fmt.push(',');
         }
 
@@ -2003,18 +1991,89 @@ const Formatter = struct {
         try fmt.push('}');
     }
 
-    /// Format a target link type (exe, static_lib, shared_lib) section
-    fn formatTargetLinkType(fmt: *Formatter, link_type_idx: AST.TargetLinkType.Idx, base_indent: u32) (Allocator.Error || error{WriteFailed})!void {
-        const link_type = fmt.ast.store.getTargetLinkType(link_type_idx);
-        const entries = fmt.ast.store.targetEntrySlice(link_type.entries);
-
+    /// Format a symbol map section: { "roc_main": main_for_host!, ... }
+    fn formatSymbolMapSection(fmt: *Formatter, span: AST.SymbolMapEntry.Span, base_indent: u32) (Allocator.Error || error{WriteFailed})!void {
+        const entries = fmt.ast.store.symbolMapEntrySlice(span);
+        if (entries.len == 0) {
+            try fmt.pushAll("{}");
+            return;
+        }
+        if (entries.len <= 2) {
+            try fmt.pushAll("{ ");
+            for (entries, 0..) |entry_idx, i| {
+                if (i > 0) {
+                    try fmt.pushAll(", ");
+                }
+                try fmt.formatSymbolMapEntry(entry_idx);
+            }
+            try fmt.pushAll(" }");
+            return;
+        }
         try fmt.push('{');
-
-        for (entries, 0..) |entry_idx, i| {
+        for (entries) |entry_idx| {
             try fmt.ensureNewline();
             fmt.curr_indent = base_indent + 1;
             try fmt.pushIndent();
-            try fmt.formatTargetEntry(entry_idx);
+            try fmt.formatSymbolMapEntry(entry_idx);
+            try fmt.push(',');
+        }
+        try fmt.ensureNewline();
+        fmt.curr_indent = base_indent;
+        try fmt.pushIndent();
+        try fmt.push('}');
+    }
+
+    /// Format a single symbol map entry: "roc_stdout_line": Stdout.line!
+    fn formatSymbolMapEntry(fmt: *Formatter, entry_idx: AST.SymbolMapEntry.Idx) (Allocator.Error || error{WriteFailed})!void {
+        const entry = fmt.ast.store.getSymbolMapEntry(entry_idx);
+        try fmt.push('"');
+        try fmt.pushTokenText(entry.symbol);
+        try fmt.push('"');
+        try fmt.pushAll(": ");
+        if (entry.module) |module_tok| {
+            // Emit every token from the module through the function name; for
+            // functions on nested type modules (Foo.Idx.get!) the tokens in
+            // between are the nested type segments.
+            var tok = module_tok;
+            while (tok <= entry.func) : (tok += 1) {
+                if (tok != module_tok) try fmt.push('.');
+                try fmt.pushTokenText(tok);
+            }
+        } else {
+            try fmt.pushTokenText(entry.func);
+        }
+    }
+
+    /// Format a single target entry: x64linux: { inputs: ["host.o", app], output: Exe }
+    fn formatTargetEntry(fmt: *Formatter, entry_idx: AST.TargetEntry.Idx) (Allocator.Error || error{WriteFailed})!void {
+        const entry = fmt.ast.store.getTargetEntry(entry_idx);
+
+        // Format target name (e.g., x64linux)
+        try fmt.pushTokenText(entry.target);
+        try fmt.pushAll(": ");
+        try fmt.formatTargetConfig(entry.config);
+    }
+
+    fn formatTargetConfig(fmt: *Formatter, config_idx: AST.TargetConfig.Idx) (Allocator.Error || error{WriteFailed})!void {
+        const config = fmt.ast.store.getTargetConfig(config_idx);
+        const entries = fmt.ast.store.targetConfigEntrySlice(config.entries);
+        const base_indent = fmt.curr_indent;
+
+        if (entries.len == 1) {
+            const entry = fmt.ast.store.getTargetConfigEntry(entries[0]);
+            try fmt.pushAll("{ ");
+            try fmt.formatTargetConfigEntry(entry);
+            try fmt.pushAll(" }");
+            return;
+        }
+
+        try fmt.push('{');
+        for (entries, 0..) |entry_idx, i| {
+            const entry = fmt.ast.store.getTargetConfigEntry(entry_idx);
+            try fmt.ensureNewline();
+            fmt.curr_indent = base_indent + 1;
+            try fmt.pushIndent();
+            try fmt.formatTargetConfigEntry(entry);
             if (i < entries.len - 1 or entries.len > 0) {
                 try fmt.push(',');
             }
@@ -2028,24 +2087,55 @@ const Formatter = struct {
         try fmt.push('}');
     }
 
-    /// Format a single target entry: x64linux: ["host.o", app]
-    fn formatTargetEntry(fmt: *Formatter, entry_idx: AST.TargetEntry.Idx) (Allocator.Error || error{WriteFailed})!void {
-        const entry = fmt.ast.store.getTargetEntry(entry_idx);
-        const files = fmt.ast.store.targetFileSlice(entry.files);
+    fn formatTargetConfigEntry(fmt: *Formatter, entry: AST.TargetConfigEntry) (Allocator.Error || error{WriteFailed})!void {
+        try fmt.pushTokenText(entry.name);
+        if (fmt.targetConfigEntryIsPunned(entry)) return;
+        try fmt.pushAll(": ");
+        try fmt.formatTargetConfigValue(entry.value);
+    }
 
-        // Format target name (e.g., x64linux)
-        try fmt.pushTokenText(entry.target);
-        try fmt.pushAll(": [");
+    fn targetConfigEntryIsPunned(fmt: *Formatter, entry: AST.TargetConfigEntry) bool {
+        return switch (fmt.ast.store.getTargetConfigValue(entry.value)) {
+            .ident => |token| token == entry.name,
+            else => false,
+        };
+    }
 
-        // Format file list
-        for (files, 0..) |file_idx, i| {
-            try fmt.formatTargetFile(file_idx);
-            if (i < files.len - 1) {
-                try fmt.pushAll(", ");
-            }
+    fn formatTargetConfigValue(fmt: *Formatter, value_idx: AST.TargetConfigValue.Idx) (Allocator.Error || error{WriteFailed})!void {
+        const value = fmt.ast.store.getTargetConfigValue(value_idx);
+        switch (value) {
+            .int_literal, .tag_literal, .ident => |token| {
+                try fmt.pushTokenText(token);
+            },
+            .string_literal => |token| {
+                try fmt.push('"');
+                try fmt.pushTokenText(token);
+                try fmt.push('"');
+            },
+            .list => |span| {
+                const values = fmt.ast.store.targetConfigValueSlice(span);
+                try fmt.push('[');
+                for (values, 0..) |child_idx, i| {
+                    try fmt.formatTargetConfigValue(child_idx);
+                    if (i < values.len - 1) {
+                        try fmt.pushAll(", ");
+                    }
+                }
+                try fmt.push(']');
+            },
+            .files => |span| {
+                const files = fmt.ast.store.targetFileSlice(span);
+                try fmt.push('[');
+                for (files, 0..) |file_idx, i| {
+                    try fmt.formatTargetFile(file_idx);
+                    if (i < files.len - 1) {
+                        try fmt.pushAll(", ");
+                    }
+                }
+                try fmt.push(']');
+            },
+            .malformed => {},
         }
-
-        try fmt.push(']');
     }
 
     /// Format a single target file entry
@@ -2346,25 +2436,19 @@ const Formatter = struct {
                 fmt.curr_indent = start_indent + 1;
                 try fmt.pushIndent();
 
-                try fmt.pushAll("provides");
-                const provides = fmt.ast.store.getCollection(p.provides);
-                if (try fmt.flushCommentsBefore(provides.region.start)) {
-                    fmt.curr_indent += 1;
+                try fmt.pushAll("provides ");
+                try fmt.formatSymbolMapSection(p.provides, start_indent + 1);
+
+                if (p.hosted.span.len > 0) {
+                    try fmt.ensureNewline();
+                    fmt.curr_indent = start_indent + 1;
                     try fmt.pushIndent();
-                } else {
-                    try fmt.push(' ');
+                    try fmt.pushAll("hosted ");
+                    try fmt.formatSymbolMapSection(p.hosted, start_indent + 1);
                 }
-                try fmt.formatCollection(
-                    provides.region,
-                    .curly,
-                    AST.RecordField.Idx,
-                    fmt.ast.store.recordFieldSlice(.{ .span = provides.span }),
-                    Formatter.formatRecordField,
-                );
 
                 // Format targets section if present
                 if (p.targets) |targets_idx| {
-                    try fmt.flushCommentsBeforeDiscard(provides.region.end);
                     try fmt.ensureNewline();
                     fmt.curr_indent = start_indent + 1;
                     try fmt.pushIndent();
@@ -3130,7 +3214,7 @@ const Formatter = struct {
                             return true;
                         }
 
-                        return fmt.collectionWillBeMultiline(AST.RecordField.Idx, p.provides);
+                        return p.provides.span.len > 2 or p.hosted.span.len > 0;
                     },
                     else => return false,
                 }
@@ -3178,7 +3262,6 @@ pub fn moduleFmtsStable(gpa: std.mem.Allocator, input: []const u8, debug: bool) 
 
     const formatted = parseAndFmt(gpa, input, debug) catch |err| {
         switch (err) {
-            error.TooNested => return error.ParseFailed,
             else => return err,
         }
     };
@@ -3199,7 +3282,7 @@ fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) anyerror!
     var module_env = try ModuleEnv.init(gpa, input);
     defer module_env.deinit();
 
-    const parse_ast = try parse.parse(gpa, &module_env.common);
+    const parse_ast = try parse.file(gpa, &module_env.common);
     defer parse_ast.deinit();
 
     // Currently disabled cause SExpr are missing a lot of IR coverage resulting in panics.
@@ -3302,11 +3385,9 @@ test "issue 8989: platform header targets section is preserved" {
         \\    packages {}
         \\    provides {}
         \\    targets: {
-        \\        files: "build/",
-        \\        exe: {
-        \\            x64linux: ["host.o", app],
-        \\            arm64linux: ["host.o", app],
-        \\        },
+        \\        inputs: "build/",
+        \\        x64linux: { inputs: ["host.o", app] },
+        \\        arm64linux: { inputs: ["host.o", app], output: Shared },
         \\    }
     ;
     const result = try moduleFmtsStable(std.testing.allocator, input, false);

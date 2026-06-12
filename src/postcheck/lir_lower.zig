@@ -218,19 +218,21 @@ const Lowerer = struct {
                 .body = null,
                 .ret_layout = try self.layoutOfType(fn_.ret),
                 .abi = if (self.usesErasedCallableAbi(fn_)) .erased_callable else .roc,
-                .hosted = hostedProcForFn(fn_),
+                .hosted = try self.hostedProcForFn(fn_),
             });
             self.fn_map[index] = proc_id;
         }
     }
 
-    fn hostedProcForFn(fn_: LambdaMono.Fn) ?LIR.HostedProc {
+    fn hostedProcForFn(self: *Lowerer, fn_: LambdaMono.Fn) Common.LowerError!?LIR.HostedProc {
         const source = fn_.source orelse return null;
         return switch (source.fn_def) {
             .local_hosted,
             .imported_hosted,
             => |hosted| .{
-                .external_symbol_name = hosted.external_symbol_name,
+                .symbol = try self.result.store.insertString(
+                    self.program.names.externalSymbolNameText(hosted.external_symbol_name),
+                ),
                 .dispatch_index = hosted.dispatch_index,
             },
             else => null,
@@ -729,6 +731,14 @@ const Lowerer = struct {
                 const message = try self.addTemp(self.expr(child).ty);
                 const debug_stmt = try self.result.store.addCFStmt(.{ .debug = .{ .message = message, .next = after_dbg } });
                 break :blk try self.lowerExprInto(message, child, debug_stmt);
+            },
+            .expect_err => |expect_err| blk: {
+                const message = try self.addTemp(self.expr(expect_err.msg).ty);
+                const expect_err_stmt = try self.result.store.addCFStmt(.{ .expect_err = .{
+                    .message = message,
+                    .region = expect_err.region,
+                } });
+                break :blk try self.lowerExprInto(message, expect_err.msg, expect_err_stmt);
             },
             .expect => |child| try self.lowerExpectExprInto(target, child, next),
         };

@@ -15,6 +15,7 @@
 #pragma GCC diagnostic ignored "-Winit-list-lifetime"
 #endif
 
+#include <llvm/ADT/SmallVector.h>
 #include <llvm/Analysis/AliasAnalysis.h>
 #include <llvm/Analysis/TargetLibraryInfo.h>
 #include <llvm/Analysis/TargetTransformInfo.h>
@@ -22,6 +23,7 @@
 #include <llvm/IR/DiagnosticInfo.h>
 #include <llvm/IR/InlineAsm.h>
 #include <llvm/IR/Instructions.h>
+#include <llvm/IR/IntrinsicInst.h>
 #include <llvm/IR/LegacyPassManager.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/OptBisect.h>
@@ -38,7 +40,9 @@
 #include <llvm/Object/COFFImportFile.h>
 #include <llvm/Object/COFFModuleDefinition.h>
 #include <llvm/PassRegistry.h>
+#include <llvm/BinaryFormat/Magic.h>
 #include <llvm/Support/CommandLine.h>
+#include <llvm/Support/ErrorHandling.h>
 #include <llvm/Support/FileSystem.h>
 #include <llvm/Support/Process.h>
 #include <llvm/Support/TimeProfiler.h>
@@ -49,12 +53,14 @@
 #include <llvm/Target/CodeGenCWrappers.h>
 #include <llvm/Transforms/IPO.h>
 #include <llvm/Transforms/IPO/AlwaysInliner.h>
+#include <llvm/Transforms/IPO/GlobalDCE.h>
 #include <llvm/Transforms/Instrumentation/ThreadSanitizer.h>
 #include <llvm/Transforms/Instrumentation/SanitizerCoverage.h>
 #include <llvm/Transforms/Scalar.h>
 #include <llvm/Transforms/Utils.h>
 #include <llvm/Transforms/Utils/AddDiscriminators.h>
 #include <llvm/Transforms/Utils/CanonicalizeAliases.h>
+#include <llvm/Transforms/Utils/LowerMemIntrinsics.h>
 #include <llvm/Transforms/Utils/NameAnonGlobals.h>
 
 #include <lld/Common/Driver.h>
@@ -64,6 +70,7 @@
 #endif
 
 #include <new>
+#include <utility>
 
 #include <stdlib.h>
 
@@ -74,6 +81,71 @@ static const bool assertions_on = true;
 #else
 static const bool assertions_on = false;
 #endif
+
+static OptimizationLevel toLLVMOptimizationLevel(ZigLLVMIROptimizationLevel level) {
+    switch (level) {
+        case ZigLLVMIROptimizationLevel_Oz:
+            return OptimizationLevel::Oz;
+        case ZigLLVMIROptimizationLevel_O3:
+            return OptimizationLevel::O3;
+    }
+
+    llvm_unreachable("invalid LLVM IR optimization level");
+}
+
+namespace {
+struct LowerMemoryIntrinsicsPass : PassInfoMixin<LowerMemoryIntrinsicsPass> {
+    TargetIRAnalysis target_ir_analysis;
+
+    explicit LowerMemoryIntrinsicsPass(TargetIRAnalysis target_ir_analysis)
+        : target_ir_analysis(std::move(target_ir_analysis)) {}
+
+    PreservedAnalyses run(Function &function, FunctionAnalysisManager &function_am) {
+        SmallVector<Instruction *, 16> intrinsics;
+
+        for (BasicBlock &block : function) {
+            for (Instruction &instruction : block) {
+                if (isa<MemCpyInst>(&instruction) ||
+                    isa<MemMoveInst>(&instruction) ||
+                    isa<MemSetInst>(&instruction) ||
+                    isa<MemSetPatternInst>(&instruction)) {
+                    intrinsics.push_back(&instruction);
+                }
+            }
+        }
+
+        if (intrinsics.empty()) {
+            return PreservedAnalyses::all();
+        }
+
+        TargetTransformInfo tti = target_ir_analysis.run(function, function_am);
+        bool changed = false;
+
+        for (Instruction *instruction : intrinsics) {
+            if (auto *memcpy = dyn_cast<MemCpyInst>(instruction)) {
+                expandMemCpyAsLoop(memcpy, tti);
+                instruction->eraseFromParent();
+                changed = true;
+            } else if (auto *memmove = dyn_cast<MemMoveInst>(instruction)) {
+                if (expandMemMoveAsLoop(memmove, tti)) {
+                    instruction->eraseFromParent();
+                    changed = true;
+                }
+            } else if (auto *memset = dyn_cast<MemSetInst>(instruction)) {
+                expandMemSetAsLoop(memset);
+                instruction->eraseFromParent();
+                changed = true;
+            } else if (auto *memset_pattern = dyn_cast<MemSetPatternInst>(instruction)) {
+                expandMemSetPatternAsLoop(memset_pattern);
+                instruction->eraseFromParent();
+                changed = true;
+            }
+        }
+
+        return changed ? PreservedAnalyses::none() : PreservedAnalyses::all();
+    }
+};
+} // end anonymous namespace
 
 LLVMTargetMachineRef ZigLLVMCreateTargetMachine(LLVMTargetRef T, const char *Triple,
     const char *CPU, const char *Features, LLVMCodeGenOptLevel Level, LLVMRelocMode Reloc,
@@ -212,6 +284,19 @@ static SanitizerCoverageOptions getSanCovOptions(ZigLLVMCoverageOptions z) {
     return o;
 }
 
+ZIG_EXTERN_C void ZigLLVMRunGlobalDCE(LLVMModuleRef module_ref) {
+    Module &llvm_module = *unwrap(module_ref);
+
+    PipelineTuningOptions pipeline_opts;
+    PassBuilder pass_builder(nullptr, pipeline_opts, std::nullopt, nullptr);
+    ModuleAnalysisManager module_am;
+    pass_builder.registerModuleAnalyses(module_am);
+
+    ModulePassManager module_pm;
+    module_pm.addPass(GlobalDCEPass());
+    module_pm.run(llvm_module, module_am);
+}
+
 ZIG_EXTERN_C bool ZigLLVMTargetMachineEmitToFile(LLVMTargetMachineRef targ_machine_ref, LLVMModuleRef module_ref,
     char **error_message, const ZigLLVMEmitOptions *options)
 {
@@ -272,12 +357,17 @@ ZIG_EXTERN_C bool ZigLLVMTargetMachineEmitToFile(LLVMTargetMachineRef targ_machi
     Module &llvm_module = *unwrap(module_ref);
 
     // Pipeline configurations
+    const OptimizationLevel opt_level = toLLVMOptimizationLevel(options->ir_opt_level);
     PipelineTuningOptions pipeline_opts;
-    pipeline_opts.LoopUnrolling = !options->is_debug;
-    pipeline_opts.SLPVectorization = !options->is_debug;
-    pipeline_opts.LoopVectorization = !options->is_debug;
-    pipeline_opts.LoopInterleaving = !options->is_debug;
-    pipeline_opts.MergeFunctions = !options->is_debug;
+    pipeline_opts.LoopUnrolling = true;
+    pipeline_opts.SLPVectorization = true;
+    pipeline_opts.LoopVectorization = true;
+    pipeline_opts.LoopInterleaving = true;
+    pipeline_opts.MergeFunctions = true;
+    // HACK (experiment): crank the inliner threshold so LLVM inlines the
+    // specialized iterator/stream combinator steps into their drive loops,
+    // to observe what fusion/unrolling becomes possible. Not for production.
+    pipeline_opts.InlinerThreshold = 1000000;
 
     // Instrumentations
     PassInstrumentationCallbacks instr_callbacks;
@@ -300,6 +390,9 @@ ZIG_EXTERN_C bool ZigLLVMTargetMachineEmitToFile(LLVMTargetMachineRef targ_machi
 
     Triple target_triple(llvm_module.getTargetTriple());
     auto tlii = std::make_unique<TargetLibraryInfoImpl>(target_triple);
+    if (options->no_target_libcalls) {
+        tlii->disableAllFunctions();
+    }
     function_am.registerPass([&] { return TargetLibraryAnalysis(*tlii); });
 
     // Initialize the AnalysisManagers
@@ -315,9 +408,7 @@ ZIG_EXTERN_C bool ZigLLVMTargetMachineEmitToFile(LLVMTargetMachineRef targ_machi
             module_pm.addPass(VerifierPass());
         }
 
-        if (!options->is_debug) {
-            module_pm.addPass(createModuleToFunctionPassAdaptor(AddDiscriminatorsPass()));
-        }
+        module_pm.addPass(createModuleToFunctionPassAdaptor(AddDiscriminatorsPass()));
     });
 
     const bool early_san = options->is_debug;
@@ -358,15 +449,6 @@ ZIG_EXTERN_C bool ZigLLVMTargetMachineEmitToFile(LLVMTargetMachineRef targ_machi
     });
 
     ModulePassManager module_pm;
-    OptimizationLevel opt_level;
-    // Setting up the optimization level
-    if (options->is_debug)
-      opt_level = OptimizationLevel::O0;
-    else if (options->is_small)
-      opt_level = OptimizationLevel::Oz;
-    else
-      opt_level = OptimizationLevel::O3;
-
     // Initialize the PassManager
     if (opt_level == OptimizationLevel::O0) {
       module_pm = pass_builder.buildO0DefaultPipeline(opt_level, static_cast<ThinOrFullLTOPhase>(options->lto));
@@ -396,6 +478,27 @@ ZIG_EXTERN_C bool ZigLLVMTargetMachineEmitToFile(LLVMTargetMachineRef targ_machi
 
     // Optimization phase
     module_pm.run(llvm_module, module_am);
+
+    if (options->no_target_libcalls) {
+        FunctionPassManager lower_mem_pm;
+        lower_mem_pm.addPass(LowerMemoryIntrinsicsPass(target_machine.getTargetIRAnalysis()));
+
+        for (Function &function : llvm_module) {
+            if (!function.isDeclaration()) {
+                lower_mem_pm.run(function, function_am);
+            }
+        }
+
+        if (assertions_on) {
+            std::string verify_error;
+            raw_string_ostream verify_stream(verify_error);
+            if (verifyModule(llvm_module, &verify_stream)) {
+                verify_stream.flush();
+                *error_message = strdup(verify_error.c_str());
+                return true;
+            }
+        }
+    }
 
     // Code generation phase
     codegen_pm.run(llvm_module);
@@ -525,6 +628,65 @@ bool ZigLLVMWriteImportLibrary(const char *def_path, unsigned int coff_machine,
     return static_cast<bool>(
         object::writeImportLibrary(def->OutputFile, output_lib_path,
                                    def->Exports, machine, /* MinGW */ true));
+}
+
+// Like ZigLLVMWriteArchive, but inputs that are themselves archives are
+// flattened: their members are added to the output archive directly, so the
+// result never contains nested archives.
+bool ZigLLVMWriteArchiveFlattened(const char *archive_name, const char **file_names,
+    size_t file_name_count, ZigLLVMArchiveKind archive_kind)
+{
+    std::vector<std::unique_ptr<MemoryBuffer>> live_buffers;
+    std::vector<std::unique_ptr<object::Archive>> live_archives;
+    std::vector<NewArchiveMember> new_members;
+    for (size_t i = 0; i < file_name_count; i += 1) {
+        ErrorOr<std::unique_ptr<MemoryBuffer>> buf_or =
+            MemoryBuffer::getFile(file_names[i], /*IsText=*/false, /*RequiresNullTerminator=*/false);
+        if (!buf_or) return true;
+        std::unique_ptr<MemoryBuffer> buf = std::move(*buf_or);
+        if (identify_magic(buf->getBuffer()) == file_magic::archive) {
+            Error archive_err = Error::success();
+            auto archive = std::make_unique<object::Archive>(buf->getMemBufferRef(), archive_err);
+            if (archive_err) {
+                consumeError(std::move(archive_err));
+                return true;
+            }
+            Error iter_err = Error::success();
+            for (const object::Archive::Child &child : archive->children(iter_err)) {
+                Expected<NewArchiveMember> member =
+                    NewArchiveMember::getOldMember(child, /*Deterministic=*/true);
+                if (!member) {
+                    consumeError(member.takeError());
+                    return true;
+                }
+                // Members reference data inside buf; keep it alive until writeArchive.
+                new_members.push_back(std::move(*member));
+            }
+            if (iter_err) {
+                consumeError(std::move(iter_err));
+                return true;
+            }
+            live_archives.push_back(std::move(archive));
+            live_buffers.push_back(std::move(buf));
+        } else {
+            Expected<NewArchiveMember> member =
+                NewArchiveMember::getFile(file_names[i], /*Deterministic=*/true);
+            if (!member) {
+                consumeError(member.takeError());
+                return true;
+            }
+            new_members.push_back(std::move(*member));
+        }
+    }
+    Error err = writeArchive(archive_name, new_members,
+        SymtabWritingMode::NormalSymtab, static_cast<object::Archive::Kind>(archive_kind),
+        /*Deterministic=*/true, /*Thin=*/false, nullptr);
+
+    if (err) {
+        consumeError(std::move(err));
+        return true;
+    }
+    return false;
 }
 
 bool ZigLLVMWriteArchive(const char *archive_name, const char **file_names, size_t file_name_count,

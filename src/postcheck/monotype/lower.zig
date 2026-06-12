@@ -44,6 +44,10 @@ pub fn run(
         try builder.lowerStaticDataRequest(request);
     }
 
+    if (builder.widen_queue.items.len != 0 or builder.reconcile_queue.items.len != 0) {
+        Common.invariant("open-row work remained after Monotype lowering");
+    }
+
     program.next_symbol = builder.symbols.next;
     return program;
 }
@@ -184,6 +188,21 @@ const HostedCatalogEntry = struct {
     def_idx: u32,
 };
 
+/// The platform header's hosted section, resolved to the same qualified keys
+/// the checked modules' hosted tables sort by ("Module.func" with a trailing `!`
+/// stripped). Section order defines hosted dispatch order, and each entry's
+/// string is the hosted function's linker symbol.
+const HostedSectionMap = struct {
+    keys: []const []const u8,
+    symbols: []const []const u8,
+
+    fn deinit(self: HostedSectionMap, allocator: Allocator) void {
+        for (self.keys) |key| allocator.free(key);
+        allocator.free(self.keys);
+        allocator.free(self.symbols);
+    }
+};
+
 const BinderMap = std.AutoHashMap(checked.PatternBinderId, Ast.LocalId);
 /// State for one checked type inside a single Monotype instantiation context.
 /// The cell owns the stage-local monotype for that checked type in this
@@ -233,6 +252,44 @@ const TypeCell = struct {
 const CheckedMonoRelation = struct {
     checked: CheckedTypeAddress,
     mono: Type.TypeId,
+};
+
+/// Deferred widening of an open-row Monotype tag union or record. A checked row
+/// member was constrained against a Monotype row that was closed by a checked row
+/// default, so the missing member must be added to the Monotype row. The request
+/// is applied only when no constraint walk holds slices into the type store.
+const WidenRequest = struct {
+    ctx: *BodyContext,
+    mono_ty: Type.TypeId,
+    member: union(enum) {
+        tag: checked.CheckedTag,
+        record_field: checked.CheckedRecordField,
+    },
+};
+
+/// Deferred re-check of a checked-type cell whose Monotype differed from a newly
+/// arriving Monotype while open-row widenings were still pending. Once pending
+/// widenings are applied, the two Monotypes are joined and the relation re-checked.
+const ReconcileRequest = struct {
+    ctx: *BodyContext,
+    checked_ty: checked.CheckedTypeId,
+    mono_ty: Type.TypeId,
+};
+
+/// A lowered procedure template specialization together with the Monotype
+/// function type its body was lowered at. A cache hit whose requested function
+/// type is a different Monotype instance joins the two so open-row widenings
+/// keep the call site and the lowered body structurally identical.
+const LoweredTemplate = struct {
+    def: Ast.DefId,
+    fn_ty: Type.TypeId,
+};
+
+/// A lowered nested function specialization together with the Monotype function
+/// type its body was lowered at.
+const LoweredNestedFn = struct {
+    nested_id: u32,
+    fn_ty: Type.TypeId,
 };
 
 const LambdaArgLet = struct {
@@ -287,8 +344,8 @@ const Builder = struct {
     program: *Ast.Program,
     symbols: Common.SymbolGen = .{},
     type_cache: std.AutoHashMap(CheckedTypeAddress, Type.TypeId),
-    lowered_templates: std.AutoHashMap(TemplateAddress, Ast.DefId),
-    lowered_nested_fns: std.AutoHashMap(NestedFnTemplateAddress, u32),
+    lowered_templates: std.AutoHashMap(TemplateAddress, LoweredTemplate),
+    lowered_nested_fns: std.AutoHashMap(NestedFnTemplateAddress, LoweredNestedFn),
     nested_site_cache: std.AutoHashMap(NestedSiteAddress, names.ProcSiteId),
     const_expr_cache: std.AutoHashMap(ConstExprAddress, Ast.ExprId),
     inspect_defs: std.AutoHashMap(InspectDefAddress, InspectDefEntry),
@@ -296,6 +353,21 @@ const Builder = struct {
     method_lookup_index: []MethodLookupIndexEntry = &.{},
     u64_ty: ?Type.TypeId = null,
     bool_ty: ?Type.TypeId = null,
+    /// Monotype tag unions and records whose row was closed by a checked row
+    /// default rather than by checked row evidence. Such rows may still be
+    /// widened with additional members until Monotype IR is emitted.
+    open_row_monos: std.DynamicBitSetUnmanaged = .{},
+    open_row_count: usize = 0,
+    widen_queue: std.ArrayList(WidenRequest) = .empty,
+    reconcile_queue: std.ArrayList(ReconcileRequest) = .empty,
+    /// Pairs of structurally equal open-row Monotypes that must stay equal:
+    /// widening one member of a couple propagates to the other.
+    widen_couples: std.AutoHashMap(Type.TypeId, std.ArrayList(Type.TypeId)),
+    constrain_depth: usize = 0,
+    /// Monotonic count of open-row widenings; constraint fixed-point loops
+    /// re-run until it stabilizes alongside their context cell revisions. It is
+    /// bounded by the total number of row members, so the loops converge.
+    widen_revision: u64 = 0,
 
     fn init(allocator: Allocator, modules: Common.CheckedModules, program: *Ast.Program) Builder {
         return .{
@@ -304,15 +376,24 @@ const Builder = struct {
             .root_view = checked.importedView(modules.root.module),
             .program = program,
             .type_cache = std.AutoHashMap(CheckedTypeAddress, Type.TypeId).init(allocator),
-            .lowered_templates = std.AutoHashMap(TemplateAddress, Ast.DefId).init(allocator),
-            .lowered_nested_fns = std.AutoHashMap(NestedFnTemplateAddress, u32).init(allocator),
+            .lowered_templates = std.AutoHashMap(TemplateAddress, LoweredTemplate).init(allocator),
+            .lowered_nested_fns = std.AutoHashMap(NestedFnTemplateAddress, LoweredNestedFn).init(allocator),
             .nested_site_cache = std.AutoHashMap(NestedSiteAddress, names.ProcSiteId).init(allocator),
             .const_expr_cache = std.AutoHashMap(ConstExprAddress, Ast.ExprId).init(allocator),
             .inspect_defs = std.AutoHashMap(InspectDefAddress, InspectDefEntry).init(allocator),
+            .widen_couples = std.AutoHashMap(Type.TypeId, std.ArrayList(Type.TypeId)).init(allocator),
         };
     }
 
     fn deinit(self: *Builder) void {
+        var couple_iter = self.widen_couples.valueIterator();
+        while (couple_iter.next()) |list| {
+            list.deinit(self.allocator);
+        }
+        self.widen_couples.deinit();
+        self.reconcile_queue.deinit(self.allocator);
+        self.widen_queue.deinit(self.allocator);
+        self.open_row_monos.deinit(self.allocator);
         self.allocator.free(self.method_lookup_index);
         self.allocator.free(self.hosted_catalog);
         self.inspect_defs.deinit();
@@ -352,7 +433,80 @@ const Builder = struct {
             entry.dispatch_index = @intCast(index);
         }
 
+        if (try self.buildHostedSectionMap()) |map| {
+            defer map.deinit(self.allocator);
+
+            // Platform checking already verified the section is total over the
+            // platform's hosted functions and duplicate-free, so every catalog
+            // entry has exactly one section position.
+            if (entries.items.len != map.keys.len) {
+                Common.invariant("platform hosted section disagrees with the hosted catalog size");
+            }
+            for (entries.items) |*entry| {
+                const pos = blk: {
+                    for (map.keys, 0..) |key, key_index| {
+                        if (std.mem.eql(u8, key, entry.order)) break :blk key_index;
+                    }
+                    Common.invariant("hosted function is missing from the platform hosted section");
+                };
+                entry.dispatch_index = @intCast(pos);
+                entry.external_symbol_name = try self.program.names.internExternalSymbolName(map.symbols[pos]);
+            }
+
+            const DispatchSort = struct {
+                pub fn lessThan(_: void, a: HostedCatalogEntry, b: HostedCatalogEntry) bool {
+                    return a.dispatch_index < b.dispatch_index;
+                }
+            };
+            std.mem.sort(HostedCatalogEntry, entries.items, {}, DispatchSort.lessThan);
+        }
+
         self.hosted_catalog = try entries.toOwnedSlice(self.allocator);
+    }
+
+    /// Find the platform module's hosted section among the checked modules and
+    /// resolve it to qualified keys + linker symbols. Returns null when no
+    /// module declares hosted entries (e.g. a platform with no hosted section,
+    /// or compiler-internal evaluation).
+    fn buildHostedSectionMap(self: *Builder) Allocator.Error!?HostedSectionMap {
+        const platform_env = blk: {
+            const root_env = moduleView(self.root_view).module_env;
+            if (root_env.hosted_entries.items.items.len != 0) break :blk root_env;
+            for (self.modules.imports) |imported| {
+                const env = moduleView(imported).module_env;
+                if (env.hosted_entries.items.items.len != 0) break :blk env;
+            }
+            for (self.modules.root.relation_modules) |relation| {
+                const env = moduleView(relation).module_env;
+                if (env.hosted_entries.items.items.len != 0) break :blk env;
+            }
+            return null;
+        };
+
+        const section = platform_env.hosted_entries.items.items;
+        var keys = try self.allocator.alloc([]const u8, section.len);
+        var key_count: usize = 0;
+        errdefer {
+            for (keys[0..key_count]) |key| self.allocator.free(key);
+            self.allocator.free(keys);
+        }
+        const symbols = try self.allocator.alloc([]const u8, section.len);
+        errdefer self.allocator.free(symbols);
+
+        for (section, 0..) |entry, index| {
+            var func_text = platform_env.getIdentText(entry.func_ident);
+            if (func_text.len > 0 and func_text[func_text.len - 1] == '!') {
+                func_text = func_text[0 .. func_text.len - 1];
+            }
+            keys[index] = if (entry.module_ident) |module_ident|
+                try std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ platform_env.getIdentText(module_ident), func_text })
+            else
+                try self.allocator.dupe(u8, func_text);
+            key_count = index + 1;
+            symbols[index] = platform_env.getString(entry.symbol);
+        }
+
+        return .{ .keys = keys, .symbols = symbols };
     }
 
     fn initMethodLookupIndex(self: *Builder) Allocator.Error!void {
@@ -807,7 +961,10 @@ const Builder = struct {
         const fn_ty_digest = self.program.types.typeDigest(&self.program.names, fn_ty);
         const address = TemplateAddress.from(template_ref, source_fn_key, fn_ty_digest);
         if (self.lowered_templates.get(address)) |existing| {
-            return existing;
+            if (existing.fn_ty != fn_ty) {
+                try self.joinOpenRowMonos(existing.fn_ty, fn_ty);
+            }
+            return existing.def;
         }
 
         const view = self.moduleForDigest(names.procTemplateModuleDigest(template_ref));
@@ -817,7 +974,7 @@ const Builder = struct {
 
         const reserved: Ast.DefId = @enumFromInt(@as(u32, @intCast(self.program.defs.items.len)));
         try self.program.defs.append(self.allocator, undefined);
-        try self.lowered_templates.put(address, reserved);
+        try self.lowered_templates.put(address, .{ .def = reserved, .fn_ty = fn_ty });
 
         switch (template.target) {
             .hosted => {
@@ -1088,6 +1245,409 @@ const Builder = struct {
         };
     }
 
+    /// Resolve a Monotype id through named backings to the id that carries the
+    /// structural content. Open-row marks live on that id.
+    fn shapeTypeId(self: *Builder, ty: Type.TypeId) Type.TypeId {
+        var current = ty;
+        while (true) {
+            switch (self.program.types.get(current)) {
+                .named => |named| if (named.backing) |backing| {
+                    current = backing.ty;
+                    continue;
+                } else return current,
+                else => return current,
+            }
+        }
+    }
+
+    fn markOpenRowMono(self: *Builder, ty: Type.TypeId) Allocator.Error!void {
+        const index = @intFromEnum(ty);
+        if (index >= self.open_row_monos.bit_length) {
+            const grown = @max(index + 1, self.program.types.types.items.len);
+            try self.open_row_monos.resize(self.allocator, grown, false);
+        }
+        if (!self.open_row_monos.isSet(index)) {
+            self.open_row_monos.set(index);
+            self.open_row_count += 1;
+        }
+    }
+
+    fn clearOpenRowMono(self: *Builder, ty: Type.TypeId) void {
+        const index = @intFromEnum(ty);
+        if (index < self.open_row_monos.bit_length and self.open_row_monos.isSet(index)) {
+            self.open_row_monos.unset(index);
+            self.open_row_count -= 1;
+        }
+    }
+
+    fn isOpenRowMono(self: *const Builder, ty: Type.TypeId) bool {
+        const index = @intFromEnum(ty);
+        return index < self.open_row_monos.bit_length and self.open_row_monos.isSet(index);
+    }
+
+    /// Whether any open-row Monotype is reachable from this type.
+    fn typeContainsOpenRow(self: *Builder, ty: Type.TypeId) Allocator.Error!bool {
+        if (self.open_row_count == 0) return false;
+        var visited = std.AutoHashMap(Type.TypeId, void).init(self.allocator);
+        defer visited.deinit();
+        var stack = std.ArrayList(Type.TypeId).empty;
+        defer stack.deinit(self.allocator);
+        try stack.append(self.allocator, ty);
+        while (stack.pop()) |current| {
+            if (visited.contains(current)) continue;
+            try visited.put(current, {});
+            if (self.isOpenRowMono(current)) return true;
+            switch (self.program.types.get(current)) {
+                .primitive, .erased, .zst => {},
+                .list, .box => |elem| try stack.append(self.allocator, elem),
+                .tuple => |items| try stack.appendSlice(self.allocator, self.program.types.span(items)),
+                .func => |func| {
+                    try stack.appendSlice(self.allocator, self.program.types.span(func.args));
+                    try stack.append(self.allocator, func.ret);
+                },
+                .record => |fields| for (self.program.types.fieldSpan(fields)) |field| {
+                    try stack.append(self.allocator, field.ty);
+                },
+                .tag_union => |tags| for (self.program.types.tagSpan(tags)) |tag| {
+                    try stack.appendSlice(self.allocator, self.program.types.span(tag.payloads));
+                },
+                .named => |named| {
+                    try stack.appendSlice(self.allocator, self.program.types.span(named.args));
+                    if (named.backing) |backing| try stack.append(self.allocator, backing.ty);
+                },
+            }
+        }
+        return false;
+    }
+
+    fn addWidenCouple(self: *Builder, a: Type.TypeId, b: Type.TypeId) Allocator.Error!void {
+        const entry = try self.widen_couples.getOrPut(a);
+        if (!entry.found_existing) entry.value_ptr.* = .empty;
+        for (entry.value_ptr.items) |existing| {
+            if (existing == b) return;
+        }
+        try entry.value_ptr.append(self.allocator, b);
+    }
+
+    fn monoTagSpanHasName(self: *const Builder, tags: []const Type.Tag, name: names.TagNameId) bool {
+        const wanted = self.program.names.tagLabelText(name);
+        for (tags) |tag| {
+            if (Ident.textEql(wanted, self.program.names.tagLabelText(tag.name))) return true;
+        }
+        return false;
+    }
+
+    fn monoFieldSpanHasName(self: *const Builder, fields: []const Type.Field, name: names.RecordFieldNameId) bool {
+        const wanted = self.program.names.recordFieldLabelText(name);
+        for (fields) |field| {
+            if (Ident.textEql(wanted, self.program.names.recordFieldLabelText(field.name))) return true;
+        }
+        return false;
+    }
+
+    /// Insert a tag into an open-row Monotype tag union, keeping lexicographic
+    /// order, and propagate the insertion to coupled open rows.
+    fn insertTagIntoOpenRow(self: *Builder, union_ty: Type.TypeId, tag: Type.Tag) Allocator.Error!void {
+        var pending = std.ArrayList(Type.TypeId).empty;
+        defer pending.deinit(self.allocator);
+        var visited = std.AutoHashMap(Type.TypeId, void).init(self.allocator);
+        defer visited.deinit();
+        try pending.append(self.allocator, union_ty);
+        while (pending.pop()) |current| {
+            if (visited.contains(current)) continue;
+            try visited.put(current, {});
+            const existing = switch (self.program.types.get(current)) {
+                .tag_union => |tags| tags,
+                else => Common.invariant("open-row widening reached a coupled Monotype that is not a tag union"),
+            };
+            if (!self.monoTagSpanHasName(self.program.types.tagSpan(existing), tag.name)) {
+                var tags = std.ArrayList(Type.Tag).empty;
+                defer tags.deinit(self.allocator);
+                try tags.appendSlice(self.allocator, self.program.types.tagSpan(existing));
+                try tags.append(self.allocator, tag);
+                std.mem.sort(Type.Tag, tags.items, self, tagLessThan);
+                assertNoDuplicateTags(self, tags.items, "open-row widening produced duplicate tags");
+                const span = try self.program.types.addTags(tags.items);
+                self.program.types.types.items[@intFromEnum(current)] = .{ .tag_union = span };
+                self.widen_revision += 1;
+            }
+            if (self.widen_couples.get(current)) |coupled| {
+                try pending.appendSlice(self.allocator, coupled.items);
+            }
+        }
+    }
+
+    /// Insert a field into an open-row Monotype record, keeping lexicographic
+    /// order, and propagate the insertion to coupled open rows.
+    fn insertFieldIntoOpenRow(self: *Builder, record_ty: Type.TypeId, field: Type.Field) Allocator.Error!void {
+        var pending = std.ArrayList(Type.TypeId).empty;
+        defer pending.deinit(self.allocator);
+        var visited = std.AutoHashMap(Type.TypeId, void).init(self.allocator);
+        defer visited.deinit();
+        try pending.append(self.allocator, record_ty);
+        while (pending.pop()) |current| {
+            if (visited.contains(current)) continue;
+            try visited.put(current, {});
+            const existing = switch (self.program.types.get(current)) {
+                .record => |fields| fields,
+                else => Common.invariant("open-row widening reached a coupled Monotype that is not a record"),
+            };
+            if (!self.monoFieldSpanHasName(self.program.types.fieldSpan(existing), field.name)) {
+                var fields = std.ArrayList(Type.Field).empty;
+                defer fields.deinit(self.allocator);
+                try fields.appendSlice(self.allocator, self.program.types.fieldSpan(existing));
+                try fields.append(self.allocator, field);
+                std.mem.sort(Type.Field, fields.items, self, recordFieldLessThan);
+                assertNoDuplicateRecordFields(self, fields.items, "open-row widening produced duplicate record fields");
+                const span = try self.program.types.addFields(fields.items);
+                self.program.types.types.items[@intFromEnum(current)] = .{ .record = span };
+                self.widen_revision += 1;
+            }
+            if (self.widen_couples.get(current)) |coupled| {
+                try pending.appendSlice(self.allocator, coupled.items);
+            }
+        }
+    }
+
+    const JoinPair = struct {
+        left: Type.TypeId,
+        right: Type.TypeId,
+    };
+
+    /// Join two Monotypes that must denote the same type: copy row members
+    /// missing from whichever side has an open row, and couple open-row pairs so
+    /// later widenings keep both sides identical. Non-row structural differences
+    /// are left for the caller's structural-equality check to reject.
+    fn joinOpenRowMonos(self: *Builder, a: Type.TypeId, b: Type.TypeId) Allocator.Error!void {
+        if (self.open_row_count == 0) return;
+        var active = std.AutoHashMap(JoinPair, void).init(self.allocator);
+        defer active.deinit();
+        try self.joinOpenRowMonosInner(a, b, &active);
+    }
+
+    fn joinOpenRowMonosInner(
+        self: *Builder,
+        a: Type.TypeId,
+        b: Type.TypeId,
+        active: *std.AutoHashMap(JoinPair, void),
+    ) Allocator.Error!void {
+        const left = self.shapeTypeId(a);
+        const right = self.shapeTypeId(b);
+        if (left == right) return;
+        const pair = JoinPair{ .left = left, .right = right };
+        if (active.contains(pair)) return;
+        try active.put(pair, {});
+
+        switch (self.program.types.get(left)) {
+            .tag_union => switch (self.program.types.get(right)) {
+                .tag_union => try self.joinTagRows(left, right, active),
+                else => {},
+            },
+            .record => switch (self.program.types.get(right)) {
+                .record => try self.joinRecordRows(left, right, active),
+                else => {},
+            },
+            .func => |left_fn| switch (self.program.types.get(right)) {
+                .func => |right_fn| {
+                    if (left_fn.args.len != right_fn.args.len) return;
+                    const left_args = try self.allocator.dupe(Type.TypeId, self.program.types.span(left_fn.args));
+                    defer self.allocator.free(left_args);
+                    const right_args = try self.allocator.dupe(Type.TypeId, self.program.types.span(right_fn.args));
+                    defer self.allocator.free(right_args);
+                    for (left_args, right_args) |left_arg, right_arg| {
+                        try self.joinOpenRowMonosInner(left_arg, right_arg, active);
+                    }
+                    try self.joinOpenRowMonosInner(left_fn.ret, right_fn.ret, active);
+                },
+                else => {},
+            },
+            .tuple => |left_items| switch (self.program.types.get(right)) {
+                .tuple => |right_items| {
+                    if (left_items.len != right_items.len) return;
+                    const lhs = try self.allocator.dupe(Type.TypeId, self.program.types.span(left_items));
+                    defer self.allocator.free(lhs);
+                    const rhs = try self.allocator.dupe(Type.TypeId, self.program.types.span(right_items));
+                    defer self.allocator.free(rhs);
+                    for (lhs, rhs) |left_item, right_item| {
+                        try self.joinOpenRowMonosInner(left_item, right_item, active);
+                    }
+                },
+                else => {},
+            },
+            .list => |left_elem| switch (self.program.types.get(right)) {
+                .list => |right_elem| try self.joinOpenRowMonosInner(left_elem, right_elem, active),
+                else => {},
+            },
+            .box => |left_elem| switch (self.program.types.get(right)) {
+                .box => |right_elem| try self.joinOpenRowMonosInner(left_elem, right_elem, active),
+                else => {},
+            },
+            .primitive, .erased, .zst, .named => {},
+        }
+    }
+
+    fn joinTagRows(
+        self: *Builder,
+        left: Type.TypeId,
+        right: Type.TypeId,
+        active: *std.AutoHashMap(JoinPair, void),
+    ) Allocator.Error!void {
+        const left_open = self.isOpenRowMono(left);
+        const right_open = self.isOpenRowMono(right);
+
+        if (left_open or right_open) {
+            const left_tags = try self.dupeTagSpan(left);
+            defer self.allocator.free(left_tags);
+            const right_tags = try self.dupeTagSpan(right);
+            defer self.allocator.free(right_tags);
+            if (left_open) {
+                for (right_tags) |tag| {
+                    if (!self.monoTagSpanHasName(left_tags, tag.name)) {
+                        try self.insertTagIntoOpenRow(left, tag);
+                    }
+                }
+            }
+            if (right_open) {
+                for (left_tags) |tag| {
+                    if (!self.monoTagSpanHasName(right_tags, tag.name)) {
+                        try self.insertTagIntoOpenRow(right, tag);
+                    }
+                }
+            }
+            try self.addWidenCouple(left, right);
+            try self.addWidenCouple(right, left);
+        }
+
+        const left_tags = try self.dupeTagSpan(left);
+        defer self.allocator.free(left_tags);
+        const right_tags = try self.dupeTagSpan(right);
+        defer self.allocator.free(right_tags);
+        for (left_tags) |left_tag| {
+            const wanted = self.program.names.tagLabelText(left_tag.name);
+            for (right_tags) |right_tag| {
+                if (!Ident.textEql(wanted, self.program.names.tagLabelText(right_tag.name))) continue;
+                if (left_tag.payloads.len != right_tag.payloads.len) break;
+                const left_payloads = try self.allocator.dupe(Type.TypeId, self.program.types.span(left_tag.payloads));
+                defer self.allocator.free(left_payloads);
+                const right_payloads = try self.allocator.dupe(Type.TypeId, self.program.types.span(right_tag.payloads));
+                defer self.allocator.free(right_payloads);
+                for (left_payloads, right_payloads) |left_payload, right_payload| {
+                    try self.joinOpenRowMonosInner(left_payload, right_payload, active);
+                }
+                break;
+            }
+        }
+    }
+
+    fn joinRecordRows(
+        self: *Builder,
+        left: Type.TypeId,
+        right: Type.TypeId,
+        active: *std.AutoHashMap(JoinPair, void),
+    ) Allocator.Error!void {
+        const left_open = self.isOpenRowMono(left);
+        const right_open = self.isOpenRowMono(right);
+
+        if (left_open or right_open) {
+            const left_fields = try self.dupeFieldSpan(left);
+            defer self.allocator.free(left_fields);
+            const right_fields = try self.dupeFieldSpan(right);
+            defer self.allocator.free(right_fields);
+            if (left_open) {
+                for (right_fields) |field| {
+                    if (!self.monoFieldSpanHasName(left_fields, field.name)) {
+                        try self.insertFieldIntoOpenRow(left, field);
+                    }
+                }
+            }
+            if (right_open) {
+                for (left_fields) |field| {
+                    if (!self.monoFieldSpanHasName(right_fields, field.name)) {
+                        try self.insertFieldIntoOpenRow(right, field);
+                    }
+                }
+            }
+            try self.addWidenCouple(left, right);
+            try self.addWidenCouple(right, left);
+        }
+
+        const left_fields = try self.dupeFieldSpan(left);
+        defer self.allocator.free(left_fields);
+        const right_fields = try self.dupeFieldSpan(right);
+        defer self.allocator.free(right_fields);
+        for (left_fields) |left_field| {
+            const wanted = self.program.names.recordFieldLabelText(left_field.name);
+            for (right_fields) |right_field| {
+                if (!Ident.textEql(wanted, self.program.names.recordFieldLabelText(right_field.name))) continue;
+                try self.joinOpenRowMonosInner(left_field.ty, right_field.ty, active);
+                break;
+            }
+        }
+    }
+
+    fn dupeTagSpan(self: *Builder, union_ty: Type.TypeId) Allocator.Error![]Type.Tag {
+        return switch (self.program.types.get(union_ty)) {
+            .tag_union => |tags| try self.allocator.dupe(Type.Tag, self.program.types.tagSpan(tags)),
+            else => Common.invariant("open-row join expected a tag union"),
+        };
+    }
+
+    fn dupeFieldSpan(self: *Builder, record_ty: Type.TypeId) Allocator.Error![]Type.Field {
+        return switch (self.program.types.get(record_ty)) {
+            .record => |fields| try self.allocator.dupe(Type.Field, self.program.types.fieldSpan(fields)),
+            else => Common.invariant("open-row join expected a record"),
+        };
+    }
+
+    /// Apply deferred open-row work once no constraint walk holds slices into the
+    /// type store. Widenings strictly grow rows, so this converges; a reconcile
+    /// that repeatedly makes no progress is a genuine constraint conflict.
+    fn drainWidenQueue(self: *Builder) Allocator.Error!void {
+        var stalled: usize = 0;
+        while (self.widen_queue.items.len != 0 or self.reconcile_queue.items.len != 0) {
+            while (self.widen_queue.pop()) |request| {
+                try request.ctx.applyWidenRequest(request);
+            }
+            const request = self.reconcile_queue.pop() orelse continue;
+            const before = self.widen_revision;
+            const resolved = try request.ctx.reconcileCellWithMono(request.checked_ty, request.mono_ty);
+            if (resolved or self.widen_revision != before) {
+                stalled = 0;
+            } else {
+                stalled += 1;
+                if (stalled > self.reconcile_queue.items.len) {
+                    Common.invariant("checked type relation conflicted with an existing Monotype constraint after open-row widening");
+                }
+            }
+        }
+    }
+
+    fn tupleItemSpan(self: *Builder, ty: Type.TypeId) Type.Span {
+        return switch (self.shapeContent(ty)) {
+            .tuple => |items| items,
+            else => Common.invariant("tuple pattern had a non-tuple checked type"),
+        };
+    }
+
+    fn recordFieldsSpan(self: *Builder, ty: Type.TypeId) Type.Span {
+        return switch (self.shapeContent(ty)) {
+            .record => |fields| fields,
+            else => Common.invariant("record pattern had a non-record checked type"),
+        };
+    }
+
+    fn tagPayloadSpan(self: *Builder, ty: Type.TypeId, name: names.TagNameId) Type.Span {
+        return switch (self.shapeContent(ty)) {
+            .tag_union => |tags| {
+                for (self.program.types.tagSpan(tags)) |tag| {
+                    if (self.program.names.tagLabelTextEql(tag.name, name)) return tag.payloads;
+                }
+                Common.invariant("tag pattern was absent from checked tag-union type");
+            },
+            else => Common.invariant("tag pattern had a non-tag-union checked type"),
+        };
+    }
+
     fn lowerNominalBackingType(
         self: *Builder,
         view: ModuleView,
@@ -1104,34 +1664,18 @@ const Builder = struct {
     }
 
     fn tupleItemTypes(self: *Builder, ty: Type.TypeId) []const Type.TypeId {
-        return switch (self.shapeContent(ty)) {
-            .tuple => |items| self.program.types.span(items),
-            else => Common.invariant("tuple pattern had a non-tuple checked type"),
-        };
+        return self.program.types.span(self.tupleItemSpan(ty));
     }
 
     fn recordFieldType(self: *Builder, ty: Type.TypeId, name: names.RecordFieldNameId) Type.TypeId {
-        return switch (self.shapeContent(ty)) {
-            .record => |fields| {
-                for (self.program.types.fieldSpan(fields)) |field| {
-                    if (self.program.names.recordFieldLabelTextEql(field.name, name)) return field.ty;
-                }
-                Common.invariant("record pattern field was absent from checked record type");
-            },
-            else => Common.invariant("record pattern had a non-record checked type"),
-        };
+        for (self.program.types.fieldSpan(self.recordFieldsSpan(ty))) |field| {
+            if (self.program.names.recordFieldLabelTextEql(field.name, name)) return field.ty;
+        }
+        Common.invariant("record pattern field was absent from checked record type");
     }
 
     fn tagPayloadTypes(self: *Builder, ty: Type.TypeId, name: names.TagNameId) []const Type.TypeId {
-        return switch (self.shapeContent(ty)) {
-            .tag_union => |tags| {
-                for (self.program.types.tagSpan(tags)) |tag| {
-                    if (self.program.names.tagLabelTextEql(tag.name, name)) return self.program.types.span(tag.payloads);
-                }
-                Common.invariant("tag pattern was absent from checked tag-union type");
-            },
-            else => Common.invariant("tag pattern had a non-tag-union checked type"),
-        };
+        return self.program.types.span(self.tagPayloadSpan(ty, name));
     }
 
     fn lowerRecordFields(self: *Builder, view: ModuleView, fields: []const checked.CheckedRecordField) Allocator.Error!Type.Content {
@@ -1358,12 +1902,6 @@ const Builder = struct {
         return false;
     }
 
-    fn fnDefForProcedureUse(self: *Builder, source_ty_view: ModuleView, proc: checked.ProcedureUseTemplate) Allocator.Error!Ast.FnTemplate {
-        const source_fn_ty = proc.source_fn_ty_payload orelse
-            Common.invariant("checked procedure use reached Monotype without a requested function type");
-        return try self.fnDefForProcedureUseWithType(source_ty_view, proc, source_fn_ty);
-    }
-
     fn fnDefForProcedureUseWithType(
         self: *Builder,
         source_ty_view: ModuleView,
@@ -1498,11 +2036,16 @@ const Builder = struct {
         };
         const fn_ty_digest = self.program.types.typeDigest(&self.program.names, fn_template.mono_fn_ty);
         const address = NestedFnTemplateAddress.from(nested, fn_template.source_fn_key, fn_ty_digest);
-        if (self.lowered_nested_fns.contains(address)) return;
+        if (self.lowered_nested_fns.get(address)) |existing| {
+            if (existing.fn_ty != fn_template.mono_fn_ty) {
+                try self.joinOpenRowMonos(existing.fn_ty, fn_template.mono_fn_ty);
+            }
+            return;
+        }
 
         const nested_id: u32 = @intCast(self.program.nested_defs.items.len);
         try self.program.nested_defs.append(self.allocator, undefined);
-        try self.lowered_nested_fns.put(address, nested_id);
+        try self.lowered_nested_fns.put(address, .{ .nested_id = nested_id, .fn_ty = fn_template.mono_fn_ty });
 
         var nested_ctx = try source_ctx.nestedInstantiationContext(Ast.fnTemplateDigest(fn_template, &self.program.types, &self.program.names));
         defer nested_ctx.deinit();
@@ -1751,12 +2294,14 @@ const Builder = struct {
         ty: Type.TypeId,
         items: []const checked.ConstNodeId,
     ) Allocator.Error!Ast.Span(Ast.ExprId) {
-        const item_tys = self.tupleItemTypes(ty);
-        if (item_tys.len != items.len) Common.invariant("ConstStore tuple length differs from checked type");
+        const item_span = self.tupleItemSpan(ty);
+        const item_count: usize = @intCast(item_span.len);
+        if (item_count != items.len) Common.invariant("ConstStore tuple length differs from checked type");
         const lowered = try self.allocator.alloc(Ast.ExprId, items.len);
         defer self.allocator.free(lowered);
         for (items, 0..) |item, index| {
-            lowered[index] = try self.restoreConstNodeAtType(store_view, type_view, item, item_tys[index]);
+            const item_ty = self.program.types.span(item_span)[index];
+            lowered[index] = try self.restoreConstNodeAtType(store_view, type_view, item, item_ty);
         }
         return try self.program.addExprSpan(lowered);
     }
@@ -1768,14 +2313,16 @@ const Builder = struct {
         ty: Type.TypeId,
         items: []const checked.ConstNodeId,
     ) Allocator.Error!Ast.Span(Ast.FieldExpr) {
-        const fields = self.constRecordFields(ty);
-        if (fields.len != items.len) Common.invariant("ConstStore record length differs from checked type");
+        const field_span = self.recordFieldsSpan(ty);
+        const field_count: usize = @intCast(field_span.len);
+        if (field_count != items.len) Common.invariant("ConstStore record length differs from checked type");
         const lowered = try self.allocator.alloc(Ast.FieldExpr, items.len);
         defer self.allocator.free(lowered);
         for (items, 0..) |item, index| {
+            const field = self.program.types.fieldSpan(field_span)[index];
             lowered[index] = .{
-                .name = fields[index].name,
-                .value = try self.restoreConstNodeAtType(store_view, type_view, item, fields[index].ty),
+                .name = field.name,
+                .value = try self.restoreConstNodeAtType(store_view, type_view, item, field.ty),
             };
         }
         return try self.program.addFieldExprSpan(lowered);
@@ -1789,12 +2336,14 @@ const Builder = struct {
         tag: anytype,
     ) Allocator.Error!Ast.Span(Ast.ExprId) {
         const mono_tag_name = try self.program.names.internTagLabel(tag.tag_name);
-        const payload_tys = self.tagPayloadTypes(ty, mono_tag_name);
-        if (payload_tys.len != tag.payloads.len) Common.invariant("ConstStore tag payload count differs from checked type");
+        const payload_span = self.tagPayloadSpan(ty, mono_tag_name);
+        const payload_count: usize = @intCast(payload_span.len);
+        if (payload_count != tag.payloads.len) Common.invariant("ConstStore tag payload count differs from checked type");
         const lowered = try self.allocator.alloc(Ast.ExprId, tag.payloads.len);
         defer self.allocator.free(lowered);
         for (tag.payloads, 0..) |payload, index| {
-            lowered[index] = try self.restoreConstNodeAtType(store_view, type_view, payload, payload_tys[index]);
+            const payload_ty = self.program.types.span(payload_span)[index];
+            lowered[index] = try self.restoreConstNodeAtType(store_view, type_view, payload, payload_ty);
         }
         return try self.program.addExprSpan(lowered);
     }
@@ -1814,10 +2363,7 @@ const Builder = struct {
     }
 
     fn constRecordFields(self: *Builder, ty: Type.TypeId) []const Type.Field {
-        return switch (self.shapeContent(ty)) {
-            .record => |fields| self.program.types.fieldSpan(fields),
-            else => Common.invariant("ConstStore record restored with a non-record monotype"),
-        };
+        return self.program.types.fieldSpan(self.recordFieldsSpan(ty));
     }
 
     fn inspectCall(self: *Builder, value: Ast.ExprId, value_ty: Type.TypeId, str_ty: Type.TypeId) Allocator.Error!Ast.ExprId {
@@ -2229,6 +2775,17 @@ const BodyContext = struct {
     string_literals: []?Ast.StringLiteralId,
     loop_contexts: std.ArrayList(LoopContext),
     type_cell_revision: u64,
+    /// Literal sub-patterns on non-builtin number types collected while
+    /// lowering a match branch's pattern; each becomes an equality condition
+    /// on the branch comparing the bound value against the literal's
+    /// `from_numeral`-converted constant.
+    pattern_literal_guards: std.ArrayList(PatternLiteralGuard),
+
+    const PatternLiteralGuard = struct {
+        local: Ast.LocalId,
+        conversion: checked.CheckedExprId,
+        ty: Type.TypeId,
+    };
 
     const MaterializedArg = struct {
         pattern: checked.CheckedPatternId,
@@ -2250,6 +2807,11 @@ const BodyContext = struct {
             rest_expr: Ast.ExprId,
             carries: []const LoopCarry,
         },
+    };
+
+    const CurrentLocal = struct {
+        binder: checked.PatternBinderId,
+        local: Ast.LocalId,
     };
 
     fn init(
@@ -2274,10 +2836,12 @@ const BodyContext = struct {
             .string_literals = string_literals,
             .loop_contexts = .empty,
             .type_cell_revision = 0,
+            .pattern_literal_guards = .empty,
         };
     }
 
     fn deinit(self: *BodyContext) void {
+        self.pattern_literal_guards.deinit(self.allocator);
         self.loop_contexts.deinit(self.allocator);
         self.allocator.free(self.string_literals);
         self.type_cells.deinit();
@@ -2436,6 +3000,18 @@ const BodyContext = struct {
         mono_ty: Type.TypeId,
         comptime conflict_message: []const u8,
     ) Allocator.Error!void {
+        self.builder.constrain_depth += 1;
+        defer self.builder.constrain_depth -= 1;
+        try self.constrainTypeToMonoInner(checked_ty, mono_ty, conflict_message);
+        if (self.builder.constrain_depth == 1) try self.builder.drainWidenQueue();
+    }
+
+    fn constrainTypeToMonoInner(
+        self: *BodyContext,
+        checked_ty: checked.CheckedTypeId,
+        mono_ty: Type.TypeId,
+        comptime conflict_message: []const u8,
+    ) Allocator.Error!void {
         const address = self.typeAddress(checked_ty);
         if (self.type_cells.get(address)) |existing| {
             if (!self.sameType(existing.ty, mono_ty)) {
@@ -2447,12 +3023,22 @@ const BodyContext = struct {
                     var entry = self.type_cells.getPtr(address) orelse Common.invariant("checked type cell disappeared while completing replaceable type");
                     entry.state = try self.cellStateFor(checked_ty, existing.ty);
                     self.type_cell_revision += 1;
+                    if (self.builder.isOpenRowMono(self.builder.shapeTypeId(mono_ty))) {
+                        try self.builder.markOpenRowMono(existing.ty);
+                    } else {
+                        self.builder.clearOpenRowMono(existing.ty);
+                    }
+                    try self.builder.joinOpenRowMonos(existing.ty, mono_ty);
                     try self.constrainTypeChildrenToMono(checked_ty, existing.ty, conflict_message);
                     return;
                 }
                 try self.constrainTypeChildrenToMono(checked_ty, mono_ty, conflict_message);
                 if (self.sameType(existing.ty, mono_ty)) return;
+                if (try self.deferOpenRowReconcile(checked_ty, existing.ty, mono_ty)) return;
                 Common.invariant(conflict_message);
+            }
+            if (existing.ty != mono_ty) {
+                try self.builder.joinOpenRowMonos(existing.ty, mono_ty);
             }
             return;
         }
@@ -2460,6 +3046,50 @@ const BodyContext = struct {
         self.type_cell_revision += 1;
 
         try self.constrainTypeChildrenToMono(checked_ty, mono_ty, conflict_message);
+    }
+
+    /// A checked type's cell and a newly arriving Monotype disagreed while
+    /// open-row work may still change either side. Defer the relation so it is
+    /// re-checked after pending widenings are applied and open rows are joined.
+    fn deferOpenRowReconcile(
+        self: *BodyContext,
+        checked_ty: checked.CheckedTypeId,
+        existing_ty: Type.TypeId,
+        mono_ty: Type.TypeId,
+    ) Allocator.Error!bool {
+        const builder = self.builder;
+        if (builder.widen_queue.items.len == 0 and builder.reconcile_queue.items.len == 0) {
+            if (!try builder.typeContainsOpenRow(existing_ty) and !try builder.typeContainsOpenRow(mono_ty)) {
+                return false;
+            }
+        }
+        try builder.reconcile_queue.append(builder.allocator, .{
+            .ctx = self,
+            .checked_ty = checked_ty,
+            .mono_ty = mono_ty,
+        });
+        return true;
+    }
+
+    /// Re-check a deferred cell relation after pending widenings were applied.
+    /// Returns true when the relation is satisfied; false re-queues it, and the
+    /// drain loop treats repeated no-progress re-queues as a genuine conflict.
+    fn reconcileCellWithMono(
+        self: *BodyContext,
+        checked_ty: checked.CheckedTypeId,
+        mono_ty: Type.TypeId,
+    ) Allocator.Error!bool {
+        const address = self.typeAddress(checked_ty);
+        const existing = self.type_cells.get(address) orelse Common.invariant("checked type cell disappeared before open-row reconciliation");
+        if (self.sameType(existing.ty, mono_ty)) return true;
+        try self.builder.joinOpenRowMonos(existing.ty, mono_ty);
+        if (self.sameType(existing.ty, mono_ty)) return true;
+        try self.builder.reconcile_queue.append(self.builder.allocator, .{
+            .ctx = self,
+            .checked_ty = checked_ty,
+            .mono_ty = mono_ty,
+        });
+        return false;
     }
 
     fn monoTypeIsEmptyTagUnion(self: *BodyContext, ty: Type.TypeId) bool {
@@ -2712,7 +3342,8 @@ const BodyContext = struct {
         comptime conflict_message: []const u8,
     ) Allocator.Error!void {
         for (fields) |field| {
-            try self.constrainTypeToMono(field.ty, self.monoRecordField(mono_ty, field.name), conflict_message);
+            const mono_field_ty = (try self.monoRecordField(mono_ty, field)) orelse continue;
+            try self.constrainTypeToMono(field.ty, mono_field_ty, conflict_message);
         }
     }
 
@@ -2723,7 +3354,7 @@ const BodyContext = struct {
         comptime conflict_message: []const u8,
     ) Allocator.Error!void {
         for (tags) |tag| {
-            const mono_args = self.monoTagArgs(mono_ty, tag.name);
+            const mono_args = (try self.monoTagArgs(mono_ty, tag)) orelse continue;
             try self.constrainTypeSpanToMono(tag.args, mono_args, conflict_message);
         }
     }
@@ -2744,6 +3375,7 @@ const BodyContext = struct {
                         },
                         else => if (try self.monoTypeContainsUninhabited(mono_ty)) {
                             self.builder.program.types.types.items[@intFromEnum(mono_ty)] = .{ .primitive = primitive };
+                            self.builder.clearOpenRowMono(mono_ty);
                             return;
                         } else Common.invariant("builtin primitive nominal was constrained to a non-primitive monotype"),
                     }
@@ -2802,16 +3434,27 @@ const BodyContext = struct {
         };
     }
 
+    /// Monotype of a record field by checked name. Returns null after queueing a
+    /// widen request when the field is missing from an open-row record.
     fn monoRecordField(
         self: *BodyContext,
         mono_ty: Type.TypeId,
-        checked_field: names.RecordFieldNameId,
-    ) Type.TypeId {
-        return switch (self.builder.shapeContent(mono_ty)) {
+        checked_field: checked.CheckedRecordField,
+    ) Allocator.Error!?Type.TypeId {
+        const shape_ty = self.builder.shapeTypeId(mono_ty);
+        return switch (self.builder.program.types.get(shape_ty)) {
             .record => |record| {
-                const wanted = self.view.names.recordFieldLabelText(checked_field);
+                const wanted = self.view.names.recordFieldLabelText(checked_field.name);
                 for (self.builder.program.types.fieldSpan(record)) |field| {
                     if (Ident.textEql(wanted, self.builder.program.names.recordFieldLabelText(field.name))) return field.ty;
+                }
+                if (self.builder.isOpenRowMono(shape_ty)) {
+                    try self.builder.widen_queue.append(self.builder.allocator, .{
+                        .ctx = self,
+                        .mono_ty = shape_ty,
+                        .member = .{ .record_field = checked_field },
+                    });
+                    return null;
                 }
                 Common.invariant("Monotype type instantiation record field was absent from concrete type");
             },
@@ -2819,23 +3462,90 @@ const BodyContext = struct {
         };
     }
 
+    /// Monotype payloads of a tag by checked name. Returns null after queueing a
+    /// widen request when the tag is missing from an open-row tag union.
     fn monoTagArgs(
         self: *BodyContext,
         mono_ty: Type.TypeId,
-        checked_tag: names.TagNameId,
-    ) []const Type.TypeId {
-        return switch (self.builder.shapeContent(mono_ty)) {
+        checked_tag: checked.CheckedTag,
+    ) Allocator.Error!?[]const Type.TypeId {
+        const shape_ty = self.builder.shapeTypeId(mono_ty);
+        return switch (self.builder.program.types.get(shape_ty)) {
             .tag_union => |tag_union| {
-                const wanted = self.view.names.tagLabelText(checked_tag);
+                const wanted = self.view.names.tagLabelText(checked_tag.name);
                 for (self.builder.program.types.tagSpan(tag_union)) |tag| {
                     if (Ident.textEql(wanted, self.builder.program.names.tagLabelText(tag.name))) {
                         return self.builder.program.types.span(tag.payloads);
                     }
                 }
+                if (self.builder.isOpenRowMono(shape_ty)) {
+                    try self.builder.widen_queue.append(self.builder.allocator, .{
+                        .ctx = self,
+                        .mono_ty = shape_ty,
+                        .member = .{ .tag = checked_tag },
+                    });
+                    return null;
+                }
                 Common.invariant("Monotype type instantiation tag was absent from concrete type");
             },
             else => Common.invariant("Monotype type instantiation expected a concrete tag-union type"),
         };
+    }
+
+    /// Apply a deferred open-row widening: add the missing checked member to the
+    /// Monotype row, or constrain its payloads when another widening already
+    /// added it.
+    fn applyWidenRequest(self: *BodyContext, request: WidenRequest) Allocator.Error!void {
+        const builder = self.builder;
+        const shape_ty = builder.shapeTypeId(request.mono_ty);
+        switch (request.member) {
+            .tag => |checked_tag| {
+                const tag_union = switch (builder.program.types.get(shape_ty)) {
+                    .tag_union => |tags| tags,
+                    else => Common.invariant("Monotype type instantiation expected a concrete tag-union type"),
+                };
+                const wanted = self.view.names.tagLabelText(checked_tag.name);
+                for (builder.program.types.tagSpan(tag_union)) |tag| {
+                    if (!Ident.textEql(wanted, builder.program.names.tagLabelText(tag.name))) continue;
+                    const payloads = try self.allocator.dupe(Type.TypeId, builder.program.types.span(tag.payloads));
+                    defer self.allocator.free(payloads);
+                    try self.constrainTypeSpanToMono(checked_tag.args, payloads, "checked tag payload conflicted with an existing Monotype constraint after open-row widening");
+                    return;
+                }
+                if (!builder.isOpenRowMono(shape_ty)) {
+                    Common.invariant("Monotype type instantiation tag was absent from concrete type");
+                }
+                const payload_tys = try self.allocator.alloc(Type.TypeId, checked_tag.args.len);
+                defer self.allocator.free(payload_tys);
+                for (checked_tag.args, 0..) |arg, index| {
+                    payload_tys[index] = try self.lowerType(arg);
+                }
+                try builder.insertTagIntoOpenRow(shape_ty, .{
+                    .name = try builder.tagName(self.view, checked_tag.name),
+                    .checked_name = checked_tag.name,
+                    .payloads = try builder.program.types.addSpan(payload_tys),
+                });
+            },
+            .record_field => |checked_field| {
+                const record = switch (builder.program.types.get(shape_ty)) {
+                    .record => |fields| fields,
+                    else => Common.invariant("Monotype type instantiation expected a concrete record type"),
+                };
+                const wanted = self.view.names.recordFieldLabelText(checked_field.name);
+                for (builder.program.types.fieldSpan(record)) |field| {
+                    if (!Ident.textEql(wanted, builder.program.names.recordFieldLabelText(field.name))) continue;
+                    try self.constrainTypeToMono(checked_field.ty, field.ty, "checked record field conflicted with an existing Monotype constraint after open-row widening");
+                    return;
+                }
+                if (!builder.isOpenRowMono(shape_ty)) {
+                    Common.invariant("Monotype type instantiation record field was absent from concrete type");
+                }
+                try builder.insertFieldIntoOpenRow(shape_ty, .{
+                    .name = try builder.recordFieldName(self.view, checked_field.name),
+                    .ty = try self.lowerType(checked_field.ty),
+                });
+            },
+        }
     }
 
     fn monoAliasBacking(types: *const Type.Store, mono_ty: Type.TypeId) ?Type.TypeId {
@@ -3389,6 +4099,12 @@ const BodyContext = struct {
             else => {
                 const lowered = try self.lowerTypePayload(checked_ty, payload);
                 self.builder.program.types.types.items[@intFromEnum(mono_ty)] = lowered;
+                switch (payload) {
+                    .flex, .rigid => |variable| if (variable.numeric_default_phase == null and variable.row_default != null) {
+                        try self.builder.markOpenRowMono(mono_ty);
+                    },
+                    else => {},
+                }
             },
         }
 
@@ -3473,7 +4189,10 @@ const BodyContext = struct {
                 .alias => |alias| current = alias.backing,
                 .empty_record => break,
                 .flex, .rigid => |variable| {
-                    if (variable.row_default == .empty_record) break;
+                    if (variable.row_default == .empty_record) {
+                        try self.builder.markOpenRowMono(mono_ty);
+                        break;
+                    }
                     Common.invariant("open non-record checked row reached Monotype record lowering");
                 },
                 .record_unbound => |tail_fields| {
@@ -3537,7 +4256,10 @@ const BodyContext = struct {
                 .alias => |alias| current = alias.backing,
                 .empty_tag_union => break,
                 .flex, .rigid => |variable| {
-                    if (variable.row_default == .empty_tag_union) break;
+                    if (variable.row_default == .empty_tag_union) {
+                        try self.builder.markOpenRowMono(mono_ty);
+                        break;
+                    }
                     Common.invariant("open non-tag-union checked row reached Monotype tag-union lowering");
                 },
                 .tag_union => |tag_union| {
@@ -4009,6 +4731,14 @@ const BodyContext = struct {
             },
             .entry_wrapper => |wrapper_id| {
                 const wrapper = self.view.entry_wrappers.get(wrapper_id);
+                const root = self.view.compile_time_roots.root(wrapper.root);
+                if (root.kind == .numeral_conversion) {
+                    return .{
+                        .args = .empty(),
+                        .body = try self.lowerNumeralRootBody(wrapper.body_expr, ret_ty),
+                        .ret = ret_ty,
+                    };
+                }
                 return .{
                     .args = .empty(),
                     .body = try self.lowerExprAtType(wrapper.body_expr, ret_ty),
@@ -4206,6 +4936,9 @@ const BodyContext = struct {
             .dispatch_call => |plan| (try self.dispatchResultMonoType(expr.ty, plan, null)) orelse try self.lowerType(expr.ty),
             .type_dispatch_call => |plan| (try self.dispatchResultMonoType(expr.ty, plan, null)) orelse try self.lowerType(expr.ty),
             .method_eq => |plan| (try self.dispatchResultMonoType(expr.ty, plan, null)) orelse try self.lowerType(expr.ty),
+            .lookup_local => |lookup| try self.lookupExprMonoType(expr.ty, lookup.resolved),
+            .lookup_external => |resolved| try self.lookupExprMonoType(expr.ty, resolved),
+            .lookup_required => |resolved| try self.lookupExprMonoType(expr.ty, resolved),
             .lambda => |lambda| try self.lambdaFunctionType(lambda),
             .closure => |closure| try self.closureFunctionType(closure),
             .field_access => |field| try self.fieldAccessMonoType(field.receiver, field.field_name),
@@ -4235,7 +4968,6 @@ const BodyContext = struct {
         const expr = self.view.bodies.exprs[@intFromEnum(expr_id)];
         const data: Ast.ExprData = switch (expr.data) {
             .pending,
-            .ellipsis,
             .anno_only,
             .runtime_error,
             => Common.invariant("non-runtime checked expression reached Monotype lowering"),
@@ -4245,17 +4977,23 @@ const BodyContext = struct {
             .frac_f64 => |frac| .{ .frac_f64_lit = frac.value },
             .dec => |dec| .{ .dec_lit = dec.value },
             .dec_small => Common.invariant("small decimal literal reached Monotype after numeric finalization"),
-            .num_from_numeral => |plan| return try self.lowerNumeralCall(expr.ty, plan, ty),
+            .num_from_numeral => |plan| {
+                if (try self.restoredNumeralConst(expr_id, ty)) |restored| return restored;
+                return try self.lowerNumeralCall(expr.ty, plan, ty);
+            },
             .typed_frac => Common.invariant("typed fractional integer literal reached Monotype after numeric finalization"),
-            .typed_num_from_numeral => |plan| return try self.lowerNumeralCall(expr.ty, plan, ty),
+            .typed_num_from_numeral => |plan| {
+                if (try self.restoredNumeralConst(expr_id, ty)) |restored| return restored;
+                return try self.lowerNumeralCall(expr.ty, plan, ty);
+            },
             .str_segment => |str| .{ .str_lit = try self.lowerStringLiteral(str) },
             .bytes_literal => |str| .{ .str_lit = try self.lowerStringLiteral(str) },
             .empty_list => .{ .list = .empty() },
             .empty_record => .{ .record = .empty() },
             .str => |segments| try self.lowerStr(segments),
-            .lookup_local => |lookup| return try self.lowerLookupExpr(expr.ty, lookup.resolved),
-            .lookup_external => |resolved| return try self.lowerLookupExpr(expr.ty, resolved),
-            .lookup_required => |resolved| return try self.lowerLookupExpr(expr.ty, resolved),
+            .lookup_local => |lookup| return try self.lowerLookupExprAtType(expr.ty, lookup.resolved, ty),
+            .lookup_external => |resolved| return try self.lowerLookupExprAtType(expr.ty, resolved, ty),
+            .lookup_required => |resolved| return try self.lowerLookupExprAtType(expr.ty, resolved, ty),
             .list => |items| .{ .list = try self.lowerListExpr(items, ty) },
             .tuple => |items| .{ .tuple = try self.lowerExprSpanAtTypes(items, self.builder.tupleItemTypes(ty)) },
             .record => |record| return try self.lowerRecordExpr(record, ty),
@@ -4299,8 +5037,13 @@ const BodyContext = struct {
             .unary_minus,
             .unary_not,
             => Common.invariant("desugared operator expression reached Monotype without checked dispatch or low-level form"),
+            .ellipsis => .{ .crash = try self.builder.program.addStringLiteral("not implemented") },
             .crash => |msg| .{ .crash = try self.lowerStringLiteral(msg) },
             .dbg => |child| .{ .dbg = try self.lowerDbgMessage(child) },
+            .expect_err => |expect_err| .{ .expect_err = .{
+                .msg = try self.lowerExpectErrMessage(expect_err.expr, expect_err.snippet),
+                .region = expr.source_region,
+            } },
             .expect => |child| .{ .expect = try self.lowerExpr(child) },
             .return_ => |ret| .{ .return_ = try self.lowerExpr(ret.expr) },
             .for_ => |for_| try self.lowerIteratorFor(for_, ty, &.{}),
@@ -4315,6 +5058,33 @@ const BodyContext = struct {
         const value_ty = self.builder.program.exprs.items[@intFromEnum(value)].ty;
         const str_ty = try self.builder.primitiveType(.str);
         return try self.builder.inspectCall(value, value_ty, str_ty);
+    }
+
+    fn lowerExpectErrMessage(
+        self: *BodyContext,
+        child: checked.CheckedExprId,
+        snippet: checked.CheckedStringLiteralId,
+    ) Allocator.Error!Ast.ExprId {
+        const value = try self.lowerExpr(child);
+        const value_ty = self.builder.program.exprs.items[@intFromEnum(value)].ty;
+        const str_ty = try self.builder.primitiveType(.str);
+        const rendered = try self.builder.inspectCall(value, value_ty, str_ty);
+
+        const snippet_index = @intFromEnum(snippet);
+        if (snippet_index >= self.view.bodies.string_literals.len) {
+            Common.invariant("checked string literal id outside checked body string store");
+        }
+        const snippet_text = self.view.bodies.string_literals[snippet_index];
+        const prefix_text = try std.fmt.allocPrint(
+            self.builder.allocator,
+            "The `?` operator in `{s}` evaluated an `Err` inside an `expect`. The value was: Err(",
+            .{snippet_text},
+        );
+        defer self.builder.allocator.free(prefix_text);
+        const prefix = try self.builder.stringExpr(prefix_text, str_ty);
+        const with_value = try self.builder.concatExpr(prefix, rendered, str_ty);
+        const suffix = try self.builder.stringExpr(")", str_ty);
+        return try self.builder.concatExpr(with_value, suffix, str_ty);
     }
 
     fn lowerStr(self: *BodyContext, segments: []const checked.CheckedExprId) Allocator.Error!Ast.ExprData {
@@ -4385,7 +5155,14 @@ const BodyContext = struct {
             };
         }
 
-        const fn_ty = try self.lowerType(call.source_fn_ty_payload);
+        const fn_ty = (try self.indirectCalleeMonoType(call.func)) orelse fn_ty: {
+            var call_ctx = try BodyContext.init(self.allocator, self.builder, self.view, self.owner_template);
+            defer call_ctx.deinit();
+            call_ctx.owner_context_fn_key = self.owner_context_fn_key;
+            call_ctx.current_fn_key = self.current_fn_key;
+
+            break :fn_ty try call_ctx.instantiateCallTypeFromCaller(call.source_fn_ty_payload, self, checked_ret_ty, call.args);
+        };
         const fn_data = self.builder.functionShape(fn_ty, "checked call function type was not a function");
         return .{
             .ret_ty = fn_data.ret,
@@ -4394,6 +5171,31 @@ const BodyContext = struct {
                 .args = try self.lowerExprSpanAtTypes(call.args, self.builder.program.types.span(fn_data.args)),
             } },
         };
+    }
+
+    fn indirectCalleeMonoType(self: *BodyContext, checked_func: checked.CheckedExprId) Allocator.Error!?Type.TypeId {
+        const expr = self.view.bodies.exprs[@intFromEnum(checked_func)];
+        return switch (expr.data) {
+            .lookup_local,
+            .lookup_external,
+            .lookup_required,
+            => self.localCalleeMonoType(checked_func),
+            .field_access => try self.lowerExprType(checked_func),
+            else => null,
+        };
+    }
+
+    fn localCalleeMonoType(self: *BodyContext, checked_func: checked.CheckedExprId) ?Type.TypeId {
+        const expr = self.view.bodies.exprs[@intFromEnum(checked_func)];
+        const maybe_ref = switch (expr.data) {
+            .lookup_local => |lookup| lookup.resolved,
+            .lookup_external => |resolved| resolved,
+            .lookup_required => |resolved| resolved,
+            else => return null,
+        };
+        const ref_id = maybe_ref orelse Common.invariant("checked callee lookup reached Monotype without resolved value ref");
+        const local_id = self.currentLocalForResolvedValue(ref_id) orelse return null;
+        return self.builder.program.locals.items[@intFromEnum(local_id)].ty;
     }
 
     fn directCallInstantiationSourceFnType(
@@ -4725,8 +5527,9 @@ const BodyContext = struct {
         while (true) {
             const before_self = self.type_cell_revision;
             const before_plan = plan_ctx.type_cell_revision;
+            const before_widen = self.builder.widen_revision;
             try self.constrainTargetArgsFromPlan(target_args, plan_ctx, plan_args, conflict_message);
-            if (self.type_cell_revision == before_self and plan_ctx.type_cell_revision == before_plan) return;
+            if (self.type_cell_revision == before_self and plan_ctx.type_cell_revision == before_plan and self.builder.widen_revision == before_widen) return;
         }
     }
 
@@ -4972,9 +5775,10 @@ const BodyContext = struct {
         while (true) {
             const before_self = self.type_cell_revision;
             const before_caller = caller.type_cell_revision;
+            const before_widen = self.builder.widen_revision;
             try self.constrainCallArgTypesFromCaller(formal_tys, caller, checked_args, false, conflict_message);
             try self.constrainCallArgTypesFromCaller(formal_tys, caller, checked_args, true, conflict_message);
-            if (self.type_cell_revision == before_self and caller.type_cell_revision == before_caller) return;
+            if (self.type_cell_revision == before_self and caller.type_cell_revision == before_caller and self.builder.widen_revision == before_widen) return;
         }
     }
 
@@ -5040,9 +5844,10 @@ const BodyContext = struct {
         while (true) {
             const before_self = self.type_cell_revision;
             const before_caller = caller.type_cell_revision;
+            const before_widen = self.builder.widen_revision;
             try self.constrainDispatchArgTypesFromCaller(formal_tys, caller, operands, false, conflict_message);
             try self.constrainDispatchArgTypesFromCaller(formal_tys, caller, operands, true, conflict_message);
-            if (self.type_cell_revision == before_self and caller.type_cell_revision == before_caller) return;
+            if (self.type_cell_revision == before_self and caller.type_cell_revision == before_caller and self.builder.widen_revision == before_widen) return;
         }
     }
 
@@ -5053,9 +5858,12 @@ const BodyContext = struct {
         right_ty: checked.CheckedTypeId,
         comptime conflict_message: []const u8,
     ) Allocator.Error!void {
+        self.builder.constrain_depth += 1;
+        defer self.builder.constrain_depth -= 1;
         var active = std.AutoHashMap(CheckedTypeRelation, void).init(self.allocator);
         defer active.deinit();
         try self.constrainCheckedTypeRelationsInner(left_ty, right_ctx, right_ty, conflict_message, &active);
+        if (self.builder.constrain_depth == 1) try self.builder.drainWidenQueue();
     }
 
     fn constrainCheckedTypeRelationsInner(
@@ -5264,6 +6072,26 @@ const BodyContext = struct {
         return null;
     }
 
+    fn lookupExprMonoType(
+        self: *BodyContext,
+        checked_ty: checked.CheckedTypeId,
+        maybe_ref: ?checked.ResolvedValueId,
+    ) Allocator.Error!Type.TypeId {
+        const ref_id = maybe_ref orelse Common.invariant("checked lookup reached Monotype without resolved value ref");
+        if (self.currentLocalForResolvedValue(ref_id)) |local_id| {
+            const local_ty = self.builder.program.locals.items[@intFromEnum(local_id)].ty;
+            try self.constrainTypeToMono(checked_ty, local_ty, "checked local lookup type conflicted with its current Monotype binding");
+            return local_ty;
+        }
+        const record = self.view.resolved_refs.records[@intFromEnum(ref_id)];
+        return switch (record.ref) {
+            .top_level_const => |const_use| try self.constUseMonoType(const_use),
+            .imported_const => |const_use| try self.constUseMonoType(const_use),
+            .platform_required_const => |required| try self.constUseMonoType(required.const_use),
+            else => try self.lowerType(checked_ty),
+        };
+    }
+
     fn lookupArgumentMonoType(
         self: *BodyContext,
         checked_ty: checked.CheckedTypeId,
@@ -5317,12 +6145,26 @@ const BodyContext = struct {
         expected_ret_ty: ?Type.TypeId,
     ) Allocator.Error!?Type.TypeId {
         if (call.direct_target == null) {
-            if (expected_ret_ty) |ret_ty| {
+            if (try self.indirectCalleeMonoType(call.func)) |fn_ty| {
+                const ret_ty = self.functionReturnType(fn_ty);
+                if (expected_ret_ty) |expected| {
+                    if (!self.sameType(expected, ret_ty)) {
+                        Common.invariant("checked indirect call result type differed from its expected Monotype type");
+                    }
+                    try self.constrainTypeToMono(checked_ret_ty, expected, "checked indirect call result type conflicted with an existing Monotype constraint");
+                    return expected;
+                }
                 try self.constrainTypeToMono(checked_ret_ty, ret_ty, "checked indirect call result type conflicted with an existing Monotype constraint");
                 return ret_ty;
             }
-            if (!try self.checkedTypeCanLower(checked_ret_ty)) return null;
-            return try self.lowerType(checked_ret_ty);
+
+            var call_ctx = try BodyContext.init(self.allocator, self.builder, self.view, self.owner_template);
+            defer call_ctx.deinit();
+            call_ctx.owner_context_fn_key = self.owner_context_fn_key;
+            call_ctx.current_fn_key = self.current_fn_key;
+
+            const mono_fn_ty = try call_ctx.instantiateCallTypeFromCallerAtType(call.source_fn_ty_payload, self, checked_ret_ty, call.args, expected_ret_ty);
+            return call_ctx.functionReturnType(mono_fn_ty);
         }
 
         var call_ctx = try BodyContext.init(self.allocator, self.builder, self.view, self.owner_template);
@@ -5366,19 +6208,6 @@ const BodyContext = struct {
         };
     }
 
-    fn fnTemplateForLocalProc(
-        self: *BodyContext,
-        local: checked.LocalProcedureBinding,
-        source_fn_ty: checked.CheckedTypeId,
-    ) Allocator.Error!Ast.FnTemplate {
-        return try self.fnTemplateForLocalProcWithMono(
-            local,
-            source_fn_ty,
-            self.view.types.rootKey(source_fn_ty),
-            try self.lowerType(source_fn_ty),
-        );
-    }
-
     fn fnTemplateForLocalProcWithMono(
         self: *BodyContext,
         local: checked.LocalProcedureBinding,
@@ -5399,21 +6228,6 @@ const BodyContext = struct {
         );
         try self.builder.lowerNestedFnFromContext(self, local.expr, fn_template);
         return fn_template;
-    }
-
-    fn fnDefForProcedureUse(self: *BodyContext, proc: checked.ProcedureUseTemplate) Allocator.Error!Ast.FnTemplate {
-        const source_fn_ty = proc.source_fn_ty_payload orelse
-            Common.invariant("checked procedure use reached Monotype without a requested function type");
-        return try self.fnDefForProcedureUseWithType(proc, source_fn_ty);
-    }
-
-    fn fnDefForProcedureUseWithType(
-        self: *BodyContext,
-        proc: checked.ProcedureUseTemplate,
-        source_fn_ty: checked.CheckedTypeId,
-    ) Allocator.Error!Ast.FnTemplate {
-        const mono_fn_ty = try self.lowerType(source_fn_ty);
-        return try self.fnDefForProcedureUseWithMono(proc, source_fn_ty, proc.source_fn_ty_template, mono_fn_ty);
     }
 
     fn fnDefForProcedureUseWithMono(
@@ -5460,7 +6274,7 @@ const BodyContext = struct {
         return fn_template;
     }
 
-    fn currentLocalForResolvedValue(self: *BodyContext, ref_id: checked.ResolvedValueId) ?Ast.LocalId {
+    fn currentLocalBindingForResolvedValue(self: *BodyContext, ref_id: checked.ResolvedValueId) ?CurrentLocal {
         const raw = @intFromEnum(ref_id);
         if (raw >= self.view.resolved_refs.records.len) {
             Common.invariant("checked lookup resolved value id was outside resolved value table");
@@ -5471,38 +6285,63 @@ const BodyContext = struct {
             .local_value,
             .local_mutable_version,
             .pattern_binder,
-            => |local| self.binders.get(local.binder) orelse
-                Common.invariant("local lookup referenced an unbound pattern binder"),
+            => |local| .{
+                .binder = local.binder,
+                .local = self.binders.get(local.binder) orelse
+                    Common.invariant("local lookup referenced an unbound pattern binder"),
+            },
             else => null,
         };
     }
 
-    fn lowerLookupExpr(self: *BodyContext, checked_ty: checked.CheckedTypeId, maybe_ref: ?checked.ResolvedValueId) Allocator.Error!Ast.ExprId {
+    fn currentLocalForResolvedValue(self: *BodyContext, ref_id: checked.ResolvedValueId) ?Ast.LocalId {
+        return if (self.currentLocalBindingForResolvedValue(ref_id)) |binding| binding.local else null;
+    }
+
+    fn lowerLookupExprAtType(
+        self: *BodyContext,
+        checked_ty: checked.CheckedTypeId,
+        maybe_ref: ?checked.ResolvedValueId,
+        ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
         const ref_id = maybe_ref orelse Common.invariant("checked lookup reached Monotype without resolved value ref");
         const record = self.view.resolved_refs.records[@intFromEnum(ref_id)];
-        if (self.currentLocalForResolvedValue(ref_id)) |local_id| {
-            const ty = self.builder.program.locals.items[@intFromEnum(local_id)].ty;
-            try self.constrainTypeToMono(checked_ty, ty, "checked local lookup type conflicted with an existing Monotype constraint");
+        if (self.currentLocalBindingForResolvedValue(ref_id)) |binding| {
+            const local_id = binding.local;
+            const local_ty = self.builder.program.locals.items[@intFromEnum(local_id)].ty;
+            try self.constrainTypeToMono(checkedBinderType(self.view, binding.binder), ty, "checked local binder type conflicted with its expected Monotype use type");
+            try self.constrainTypeToMono(checked_ty, ty, "checked local lookup type conflicted with its expected Monotype use type");
+            if (!self.sameType(ty, local_ty)) {
+                Common.invariant("checked local lookup type differed from its expected Monotype use type");
+            }
             return try self.builder.program.addExpr(.{ .ty = ty, .data = .{ .local = local_id } });
         }
 
-        const ty = try self.lowerType(checked_ty);
+        switch (record.ref) {
+            .top_level_const => |const_use| return try self.restoreConstUseAtType(const_use, ty),
+            .imported_const => |const_use| return try self.restoreConstUseAtType(const_use, ty),
+            .platform_required_const => |required| return try self.restoreConstUseAtType(required.const_use, ty),
+            else => {},
+        }
+
+        try self.constrainTypeToMono(checked_ty, ty, "checked lookup type conflicted with its expected Monotype use type");
         const data: Ast.ExprData = switch (record.ref) {
             .local_param,
             .local_value,
             .local_mutable_version,
             .pattern_binder,
             => Common.invariant("local lookup reached Monotype without a current local binding"),
-            .local_proc => |local| .{ .fn_def = try self.fnTemplateForLocalProc(local, checked_ty) },
+            .local_proc => |local| .{ .fn_def = try self.fnTemplateForLocalProcWithMono(local, checked_ty, self.view.types.rootKey(checked_ty), ty) },
             .top_level_proc,
             .imported_proc,
             .hosted_proc,
             .promoted_top_level_proc,
             => |proc| return try self.lowerProcedureUseValue(proc, ty),
             .platform_required_proc => |proc| return try self.lowerProcedureUseValue(proc.procedure, ty),
-            .top_level_const => |const_use| return try self.restoreConstUse(const_use),
-            .imported_const => |const_use| return try self.restoreConstUse(const_use),
-            .platform_required_const => |required| return try self.restoreConstUse(required.const_use),
+            .top_level_const,
+            .imported_const,
+            .platform_required_const,
+            => unreachable,
             .platform_required_declaration => Common.invariant("platform required declaration reached Monotype without a binding"),
         };
         return try self.builder.program.addExpr(.{ .ty = ty, .data = data });
@@ -5557,12 +6396,22 @@ const BodyContext = struct {
         };
     }
 
-    fn restoreConstUse(self: *BodyContext, const_use: checked.ConstUseTemplate) Allocator.Error!Ast.ExprId {
+    fn constUseMonoType(self: *BodyContext, const_use: checked.ConstUseTemplate) Allocator.Error!Type.TypeId {
         const requested_ty = const_use.requested_source_ty_payload orelse
             Common.invariant("checked const use reached Monotype without a requested checked type");
+        return try self.lowerType(requested_ty);
+    }
+
+    fn restoreConstUseAtType(
+        self: *BodyContext,
+        const_use: checked.ConstUseTemplate,
+        ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const requested_ty = const_use.requested_source_ty_payload orelse
+            Common.invariant("checked const use reached Monotype without a requested checked type");
+        try self.constrainTypeToMono(requested_ty, ty, "checked const use requested type conflicted with its Monotype use type");
 
         const store_view = self.builder.moduleForId(checked.constModuleId(const_use.const_ref));
-        const ty = try self.lowerType(requested_ty);
         const template = store_view.const_templates.get(const_use.const_ref);
         return switch (template.state) {
             .stored_const => |stored| try self.restoreConstNodeAtType(store_view, self.view, stored.node, ty),
@@ -5707,12 +6556,14 @@ const BodyContext = struct {
         ty: Type.TypeId,
         items: []const checked.ConstNodeId,
     ) Allocator.Error!Ast.Span(Ast.ExprId) {
-        const item_tys = self.builder.tupleItemTypes(ty);
-        if (item_tys.len != items.len) Common.invariant("ConstStore tuple length differs from checked type");
+        const item_span = self.builder.tupleItemSpan(ty);
+        const item_count: usize = @intCast(item_span.len);
+        if (item_count != items.len) Common.invariant("ConstStore tuple length differs from checked type");
         const lowered = try self.allocator.alloc(Ast.ExprId, items.len);
         defer self.allocator.free(lowered);
         for (items, 0..) |item, index| {
-            lowered[index] = try self.restoreConstNodeAtType(store_view, type_view, item, item_tys[index]);
+            const item_ty = self.builder.program.types.span(item_span)[index];
+            lowered[index] = try self.restoreConstNodeAtType(store_view, type_view, item, item_ty);
         }
         return try self.builder.program.addExprSpan(lowered);
     }
@@ -5724,14 +6575,16 @@ const BodyContext = struct {
         ty: Type.TypeId,
         items: []const checked.ConstNodeId,
     ) Allocator.Error!Ast.Span(Ast.FieldExpr) {
-        const fields = self.constRecordFields(ty);
-        if (fields.len != items.len) Common.invariant("ConstStore record length differs from checked type");
+        const field_span = self.builder.recordFieldsSpan(ty);
+        const field_count: usize = @intCast(field_span.len);
+        if (field_count != items.len) Common.invariant("ConstStore record length differs from checked type");
         const lowered = try self.allocator.alloc(Ast.FieldExpr, items.len);
         defer self.allocator.free(lowered);
         for (items, 0..) |item, index| {
+            const field = self.builder.program.types.fieldSpan(field_span)[index];
             lowered[index] = .{
-                .name = fields[index].name,
-                .value = try self.restoreConstNodeAtType(store_view, type_view, item, fields[index].ty),
+                .name = field.name,
+                .value = try self.restoreConstNodeAtType(store_view, type_view, item, field.ty),
             };
         }
         return try self.builder.program.addFieldExprSpan(lowered);
@@ -5745,12 +6598,14 @@ const BodyContext = struct {
         tag: anytype,
     ) Allocator.Error!Ast.Span(Ast.ExprId) {
         const mono_tag_name = try self.builder.program.names.internTagLabel(tag.tag_name);
-        const payload_tys = self.builder.tagPayloadTypes(ty, mono_tag_name);
-        if (payload_tys.len != tag.payloads.len) Common.invariant("ConstStore tag payload count differs from checked type");
+        const payload_span = self.builder.tagPayloadSpan(ty, mono_tag_name);
+        const payload_count: usize = @intCast(payload_span.len);
+        if (payload_count != tag.payloads.len) Common.invariant("ConstStore tag payload count differs from checked type");
         const lowered = try self.allocator.alloc(Ast.ExprId, tag.payloads.len);
         defer self.allocator.free(lowered);
         for (tag.payloads, 0..) |payload, index| {
-            lowered[index] = try self.restoreConstNodeAtType(store_view, type_view, payload, payload_tys[index]);
+            const payload_ty = self.builder.program.types.span(payload_span)[index];
+            lowered[index] = try self.restoreConstNodeAtType(store_view, type_view, payload, payload_ty);
         }
         return try self.builder.program.addExprSpan(lowered);
     }
@@ -5770,10 +6625,7 @@ const BodyContext = struct {
     }
 
     fn constRecordFields(self: *BodyContext, ty: Type.TypeId) []const Type.Field {
-        return switch (self.builder.shapeContent(ty)) {
-            .record => |fields| self.builder.program.types.fieldSpan(fields),
-            else => Common.invariant("ConstStore record restored with a non-record monotype"),
-        };
+        return self.builder.program.types.fieldSpan(self.builder.recordFieldsSpan(ty));
     }
 
     fn restoreConstFn(
@@ -5872,6 +6724,9 @@ const BodyContext = struct {
             .dispatch_call => |plan| return try self.lowerDispatchExprAtType(expr.ty, plan, ty),
             .type_dispatch_call => |plan| return try self.lowerDispatchExprAtType(expr.ty, plan, ty),
             .method_eq => |plan| return try self.lowerDispatchExprAtType(expr.ty, plan, ty),
+            .lookup_local => |lookup| return try self.lowerLookupExprAtType(expr.ty, lookup.resolved, ty),
+            .lookup_external => |resolved| return try self.lowerLookupExprAtType(expr.ty, resolved, ty),
+            .lookup_required => |resolved| return try self.lowerLookupExprAtType(expr.ty, resolved, ty),
             .structural_eq => |eq| {
                 try self.constrainKnownType(expr.ty, ty);
                 const lowered = try self.lowerDirectStructuralEqAtType(eq, ty);
@@ -5914,22 +6769,116 @@ const BodyContext = struct {
         }
         const expected_digest = self.builder.program.types.typeDigest(&self.builder.program.names, expected);
         const actual_digest = self.builder.program.types.typeDigest(&self.builder.program.names, actual);
-        return std.mem.eql(u8, expected_digest.bytes[0..], actual_digest.bytes[0..]);
+        if (std.mem.eql(u8, expected_digest.bytes[0..], actual_digest.bytes[0..])) return true;
+
+        return self.sameTypeContent(expected, actual, depth + 1);
+    }
+
+    fn sameTypeContent(self: *BodyContext, expected: Type.TypeId, actual: Type.TypeId, depth: u8) bool {
+        const expected_content = self.builder.program.types.get(expected);
+        const actual_content = self.builder.program.types.get(actual);
+        return switch (expected_content) {
+            .primitive => |primitive| switch (actual_content) {
+                .primitive => |actual_primitive| primitive == actual_primitive,
+                else => false,
+            },
+            .named => |named| switch (actual_content) {
+                .named => |actual_named| self.sameNamedType(named, actual_named, depth),
+                else => false,
+            },
+            .record => |fields| switch (actual_content) {
+                .record => |actual_fields| self.sameRecordFields(fields, actual_fields, depth),
+                else => false,
+            },
+            .tuple => |items| switch (actual_content) {
+                .tuple => |actual_items| self.sameTypeSpans(items, actual_items, depth),
+                else => false,
+            },
+            .tag_union => |tags| switch (actual_content) {
+                .tag_union => |actual_tags| self.sameTags(tags, actual_tags, depth),
+                else => false,
+            },
+            .list => |elem| switch (actual_content) {
+                .list => |actual_elem| self.sameTypeInner(elem, actual_elem, depth),
+                else => false,
+            },
+            .box => |elem| switch (actual_content) {
+                .box => |actual_elem| self.sameTypeInner(elem, actual_elem, depth),
+                else => false,
+            },
+            .func => |function| switch (actual_content) {
+                .func => |actual_function| self.sameTypeSpans(function.args, actual_function.args, depth) and
+                    self.sameTypeInner(function.ret, actual_function.ret, depth),
+                else => false,
+            },
+            .erased => |erased| switch (actual_content) {
+                .erased => |actual_erased| std.mem.eql(u8, erased.bytes[0..], actual_erased.bytes[0..]),
+                else => false,
+            },
+            .zst => switch (actual_content) {
+                .zst => true,
+                else => false,
+            },
+        };
+    }
+
+    fn sameNamedType(self: *BodyContext, expected: anytype, actual: anytype, depth: u8) bool {
+        if (!std.mem.eql(u8, expected.named_type.module.bytes[0..], actual.named_type.module.bytes[0..])) return false;
+        if (expected.def.module_name != actual.def.module_name) return false;
+        if (expected.def.source_decl != actual.def.source_decl) return false;
+        if (expected.def.source_decl == null and expected.def.type_name != actual.def.type_name) return false;
+        if (expected.kind != actual.kind) return false;
+        if (expected.builtin_owner != actual.builtin_owner) return false;
+        return self.sameTypeSpans(expected.args, actual.args, depth);
+    }
+
+    fn sameTypeSpans(self: *BodyContext, expected: Type.Span, actual: Type.Span, depth: u8) bool {
+        const expected_items = self.builder.program.types.span(expected);
+        const actual_items = self.builder.program.types.span(actual);
+        if (expected_items.len != actual_items.len) return false;
+        for (expected_items, actual_items) |expected_item, actual_item| {
+            if (!self.sameTypeInner(expected_item, actual_item, depth)) return false;
+        }
+        return true;
+    }
+
+    fn sameRecordFields(self: *BodyContext, expected: Type.Span, actual: Type.Span, depth: u8) bool {
+        const expected_fields = self.builder.program.types.fieldSpan(expected);
+        const actual_fields = self.builder.program.types.fieldSpan(actual);
+        if (expected_fields.len != actual_fields.len) return false;
+        for (expected_fields, actual_fields) |expected_field, actual_field| {
+            if (expected_field.name != actual_field.name) return false;
+            if (!self.sameTypeInner(expected_field.ty, actual_field.ty, depth)) return false;
+        }
+        return true;
+    }
+
+    fn sameTags(self: *BodyContext, expected: Type.Span, actual: Type.Span, depth: u8) bool {
+        const expected_tags = self.builder.program.types.tagSpan(expected);
+        const actual_tags = self.builder.program.types.tagSpan(actual);
+        if (expected_tags.len != actual_tags.len) return false;
+        for (expected_tags, actual_tags) |expected_tag, actual_tag| {
+            if (expected_tag.name != actual_tag.name) return false;
+            if (!self.sameTypeSpans(expected_tag.payloads, actual_tag.payloads, depth)) return false;
+        }
+        return true;
     }
 
     fn lowerRecordExpr(self: *BodyContext, record: anytype, ty: Type.TypeId) Allocator.Error!Ast.ExprId {
         const target_fields = switch (self.builder.shapeContent(ty)) {
-            .record => |fields| self.builder.program.types.fieldSpan(fields),
+            .record => |fields| fields,
             else => Common.invariant("record expression had a non-record monotype"),
         };
-        const lowered = try self.allocator.alloc(Ast.FieldExpr, target_fields.len);
+        const target_field_count: usize = @intCast(target_fields.len);
+        const lowered = try self.allocator.alloc(Ast.FieldExpr, target_field_count);
         defer self.allocator.free(lowered);
         const base_record = if (record.ext) |ext| try self.lowerExpr(ext) else null;
         const base_ty = if (base_record) |base_expr| self.builder.program.exprs.items[@intFromEnum(base_expr)].ty else ty;
         const base_local = if (base_record) |_| try self.builder.program.addLocal(self.builder.symbols.fresh(), base_ty) else null;
         const base_expr = if (base_local) |local| try self.builder.localExpr(local, base_ty) else null;
 
-        for (target_fields, 0..) |field, i| {
+        for (0..target_field_count) |i| {
+            const field = self.builder.program.types.fieldSpan(target_fields)[i];
             const value = if (try self.recordUpdateFieldValue(record.fields, field.name)) |field_value|
                 try self.lowerExprAtType(field_value, field.ty)
             else if (base_expr) |base_value|
@@ -5992,9 +6941,16 @@ const BodyContext = struct {
     fn lambdaFunctionType(self: *BodyContext, lambda: anytype) Allocator.Error!Type.TypeId {
         const args = try self.allocator.alloc(Type.TypeId, lambda.args.len);
         defer self.allocator.free(args);
+        var saved = std.ArrayList(BinderRestore).empty;
+        defer saved.deinit(self.allocator);
+
         for (lambda.args, 0..) |pattern_id, i| {
             args[i] = try self.lowerType(self.view.bodies.patterns[@intFromEnum(pattern_id)].ty);
+            try self.savePatternBinders(pattern_id, &saved);
+            try self.preRegisterPatternBinders(pattern_id, args[i]);
         }
+        defer self.restoreBinders(saved.items);
+
         return try self.builder.program.types.add(.{ .func = .{
             .args = try self.builder.program.types.addSpan(args),
             .ret = try self.lowerExprType(lambda.body),
@@ -6095,6 +7051,21 @@ const BodyContext = struct {
         maybe_plan: ?static_dispatch.StaticDispatchPlanId,
         target_ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprId {
+        const result = try self.lowerNumeralCallRaw(checked_ret_ty, maybe_plan, target_ty);
+        return try self.unwrapNumeralResult(result.call, result.try_ty, target_ty);
+    }
+
+    const NumeralCall = struct {
+        call: Ast.ExprId,
+        try_ty: Type.TypeId,
+    };
+
+    fn lowerNumeralCallRaw(
+        self: *BodyContext,
+        checked_ret_ty: checked.CheckedTypeId,
+        maybe_plan: ?static_dispatch.StaticDispatchPlanId,
+        target_ty: Type.TypeId,
+    ) Allocator.Error!NumeralCall {
         const plan_id = maybe_plan orelse Common.invariant("checked from_numeral expression reached Monotype without a dispatch plan");
         const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
         if (plan.result_mode != .value) Common.invariant("checked from_numeral plan had a non-value result mode");
@@ -6125,7 +7096,40 @@ const BodyContext = struct {
             .ty = fn_data.ret,
             .data = try self.lowerResolvedDispatch(plan, resolved, target_mono_ty, self),
         });
-        return try self.unwrapNumeralResult(call_expr, fn_data.ret, target_ty);
+        return .{ .call = call_expr, .try_ty = fn_data.ret };
+    }
+
+    fn lowerNumeralRootBody(
+        self: *BodyContext,
+        expr_id: checked.CheckedExprId,
+        try_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const expr = self.view.bodies.exprs[@intFromEnum(expr_id)];
+        const plan = switch (expr.data) {
+            .num_from_numeral, .typed_num_from_numeral => |plan| plan,
+            else => Common.invariant("numeral conversion root did not point at a from_numeral expression"),
+        };
+        const ok_tag = self.monoTagByText(try_ty, "Ok");
+        const ok_payloads = self.builder.program.types.span(ok_tag.payloads);
+        if (ok_payloads.len != 1) Common.invariant("numeral conversion root Try.Ok did not carry one payload");
+        const result = try self.lowerNumeralCallRaw(expr.ty, plan, ok_payloads[0]);
+        if (!self.sameType(result.try_ty, try_ty)) {
+            Common.invariant("numeral conversion root type differed from the from_numeral result type");
+        }
+        return result.call;
+    }
+
+    fn restoredNumeralConst(
+        self: *BodyContext,
+        expr_id: checked.CheckedExprId,
+        ty: Type.TypeId,
+    ) Allocator.Error!?Ast.ExprId {
+        const root = self.view.compile_time_roots.lookupNumeralRootByExpr(expr_id) orelse return null;
+        return switch (root.payload) {
+            .const_node => |node| try self.restoreConstNodeAtType(self.view, self.view, node, ty),
+            .pending => null,
+            else => Common.invariant("numeral conversion root stored a non-constant payload"),
+        };
     }
 
     fn lowerNumeralValue(
@@ -6158,16 +7162,18 @@ const BodyContext = struct {
         literal: can.ModuleEnv.NumeralLiteral,
         ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprId {
-        const fields = switch (self.builder.shapeContent(ty)) {
-            .record => |span| self.builder.program.types.fieldSpan(span),
+        const field_span = switch (self.builder.shapeContent(ty)) {
+            .record => |span| span,
             else => Common.invariant("Numeral Literal payload was not a record"),
         };
-        const lowered = try self.allocator.alloc(Ast.FieldExpr, fields.len);
+        const field_count: usize = @intCast(field_span.len);
+        const lowered = try self.allocator.alloc(Ast.FieldExpr, field_count);
         defer self.allocator.free(lowered);
 
         const before = self.view.module_env.numeralDigitsBefore(literal);
         const after = self.view.module_env.numeralDigitsAfter(literal);
-        for (fields, 0..) |field, i| {
+        for (0..field_count) |i| {
+            const field = self.builder.program.types.fieldSpan(field_span)[i];
             const label = self.builder.program.names.recordFieldLabelText(field.name);
             const value = if (Ident.textEql(label, "is_negative"))
                 try self.boolLiteral(literal.isNegative(), field.ty)
@@ -7167,7 +8173,10 @@ const BodyContext = struct {
 
                 var checks = std.ArrayList(CollectedListPattern).empty;
                 defer checks.deinit(branch_ctx.allocator);
+                const literal_guards_start = branch_ctx.pattern_literal_guards.items.len;
                 const pat = try branch_ctx.lowerPatternAtTypeCollectingLists(pattern.pattern, scrutinee_ty, &checks);
+                const literal_guards = try branch_ctx.drainPatternLiteralGuards(literal_guards_start);
+                defer branch_ctx.allocator.free(literal_guards);
 
                 try branch_ctx.applyAlternativeBinderRemaps(pattern.binder_remaps);
 
@@ -7176,6 +8185,8 @@ const BodyContext = struct {
                     const guard_cond = try branch_ctx.lowerExpr(guard_expr);
                     body_lowered = try branch_ctx.builder.ifExpr(guard_cond, body_lowered, fallback, output_ty);
                 }
+
+                body_lowered = try branch_ctx.applyPatternLiteralGuards(literal_guards, body_lowered, fallback, output_ty);
 
                 var i = checks.items.len;
                 while (i > 0) {
@@ -7235,17 +8246,27 @@ const BodyContext = struct {
             self.allocator.free(sub_checks_per_elem);
         }
         for (sub_checks_per_elem) |*sub| sub.* = std.ArrayList(CollectedListPattern).empty;
+        const literal_guards_per_elem = try self.allocator.alloc([]PatternLiteralGuard, list.patterns.len);
+        defer {
+            for (literal_guards_per_elem) |guards| self.allocator.free(guards);
+            self.allocator.free(literal_guards_per_elem);
+        }
+        for (literal_guards_per_elem) |*guards| guards.* = &.{};
 
         for (list.patterns, 0..) |pattern_id, index| {
             const item_index = try self.listPatternItemIndex(index, list.patterns.len, list.rest, len, u64_ty);
             values[index] = try self.builder.lowLevelExpr(.list_get_unsafe, &.{ scrutinee, item_index }, elem_ty);
+            const guards_start = self.pattern_literal_guards.items.len;
             patterns[index] = try self.lowerPatternAtTypeCollectingLists(pattern_id, elem_ty, &sub_checks_per_elem[index]);
+            literal_guards_per_elem[index] = try self.drainPatternLiteralGuards(guards_start);
         }
 
         var rest_pat: ?Ast.PatId = null;
         var rest_value: ?Ast.ExprId = null;
         var rest_sub_checks = std.ArrayList(CollectedListPattern).empty;
         defer rest_sub_checks.deinit(self.allocator);
+        var rest_literal_guards: []PatternLiteralGuard = &.{};
+        defer self.allocator.free(rest_literal_guards);
         if (list.rest) |rest| {
             if (rest.pattern) |rest_pattern| {
                 const list_len = len orelse try self.builder.lowLevelExpr(.list_len, &.{scrutinee}, u64_ty);
@@ -7254,7 +8275,9 @@ const BodyContext = struct {
                 const rest_start = try self.builder.intLiteralExpr(rest.index, u64_ty);
                 const range = try self.sublistRangeExpr(rest_start, rest_len, u64_ty);
                 rest_value = try self.builder.lowLevelExpr(.list_sublist, &.{ scrutinee, range }, scrutinee_ty);
+                const guards_start = self.pattern_literal_guards.items.len;
                 rest_pat = try self.lowerPatternAtTypeCollectingLists(rest_pattern, scrutinee_ty, &rest_sub_checks);
+                rest_literal_guards = try self.drainPatternLiteralGuards(guards_start);
             }
         }
 
@@ -7271,6 +8294,7 @@ const BodyContext = struct {
                 const sub_scrut = try self.builder.localExpr(sub.local, sub.ty);
                 elem_success = try self.applyListCheck(sub_scrut, sub.ty, sub, elem_success, fallback, output_ty);
             }
+            elem_success = try self.applyPatternLiteralGuards(literal_guards_per_elem[index], elem_success, fallback, output_ty);
             success = try self.wrapPatternMatch(values[index], elem_ty, patterns[index], elem_success, fallback, output_ty);
         }
 
@@ -7283,6 +8307,7 @@ const BodyContext = struct {
                 const sub_scrut = try self.builder.localExpr(sub.local, sub.ty);
                 rest_success = try self.applyListCheck(sub_scrut, sub.ty, sub, rest_success, fallback, output_ty);
             }
+            rest_success = try self.applyPatternLiteralGuards(rest_literal_guards, rest_success, fallback, output_ty);
             success = try self.wrapPatternMatch(
                 rest_value orelse Common.invariant("list rest pattern had no lowered rest value"),
                 scrutinee_ty,
@@ -7420,9 +8445,18 @@ const BodyContext = struct {
                 break :blk .{ .bind = local };
             },
             .tuple => |items| .{ .tuple = try self.lowerPatternSpanAtTypesCollectingLists(items, self.builder.tupleItemTypes(ty), checks_out) },
-            .num_literal => |num| self.lowerNumPattern(num.value, ty),
-            .small_dec_literal => Common.invariant("small decimal pattern reached Monotype after numeric finalization"),
-            .dec_literal => |dec| .{ .dec_lit = dec.value },
+            .num_literal => |num| if (num.conversion) |conversion|
+                try self.bindLiteralGuardPattern(conversion, ty)
+            else
+                self.lowerNumPattern(num.value, ty),
+            .small_dec_literal => |dec| if (dec.conversion) |conversion|
+                try self.bindLiteralGuardPattern(conversion, ty)
+            else
+                Common.invariant("small decimal pattern reached Monotype after numeric finalization"),
+            .dec_literal => |dec| if (dec.conversion) |conversion|
+                try self.bindLiteralGuardPattern(conversion, ty)
+            else
+                .{ .dec_lit = dec.value },
             .frac_f32_literal => |value| .{ .frac_f32_lit = value },
             .frac_f64_literal => |value| .{ .frac_f64_lit = value },
             .str_literal => |str| .{ .str_lit = try self.lowerStringLiteral(str) },
@@ -7781,8 +8815,8 @@ const BodyContext = struct {
     }
 
     fn lowerMatch(self: *BodyContext, match: anytype, output: MatchOutput) Allocator.Error!Ast.ExprData {
-        const scrutinee = try self.lowerExpr(match.cond);
-        const scrutinee_ty = self.builder.program.exprs.items[@intFromEnum(scrutinee)].ty;
+        const scrutinee_ty = try self.matchScrutineeType(match);
+        const scrutinee = try self.lowerExprAtType(match.cond, scrutinee_ty);
         const branches = try self.allocator.alloc(Ast.Branch, branchCount(match.branches));
         defer self.allocator.free(branches);
         var index: usize = 0;
@@ -7797,7 +8831,8 @@ const BodyContext = struct {
 
                 const pat = try branch_ctx.lowerPatternAtType(pattern.pattern, scrutinee_ty);
                 try branch_ctx.applyAlternativeBinderRemaps(pattern.binder_remaps);
-                const guard = if (branch.guard) |guard_expr| try branch_ctx.lowerExpr(guard_expr) else null;
+                const user_guard = if (branch.guard) |guard_expr| try branch_ctx.lowerExpr(guard_expr) else null;
+                const guard = try branch_ctx.conjoinPatternLiteralGuards(user_guard);
                 const body = try branch_ctx.lowerMatchBranchBody(branch.value, output);
                 branches[index] = .{
                     .pat = pat,
@@ -7811,6 +8846,10 @@ const BodyContext = struct {
             .scrutinee = scrutinee,
             .branches = try self.builder.program.addBranchSpan(branches),
         } };
+    }
+
+    fn matchScrutineeType(self: *BodyContext, match: anytype) Allocator.Error!Type.TypeId {
+        return try self.lowerExprType(match.cond);
     }
 
     fn saveMatchPatternBinders(
@@ -8369,6 +9408,7 @@ const BodyContext = struct {
         const checked_expr = self.view.bodies.exprs[@intFromEnum(checked_expr_id)];
         return switch (checked_expr.data) {
             .block => |block| try self.lowerBlock(block, ty),
+            .ellipsis => .{ .crash = try self.builder.program.addStringLiteral("not implemented") },
             .crash => |msg| .{ .crash = try self.lowerStringLiteral(msg) },
             .return_ => |ret| .{ .return_ = try self.lowerExpr(ret.expr) },
             else => Common.invariant("checked expression was marked divergent but has no divergent lowering path"),
@@ -8684,9 +9724,10 @@ const BodyContext = struct {
         while (true) {
             const before_self = self.type_cell_revision;
             const before_caller = caller.type_cell_revision;
+            const before_widen = self.builder.widen_revision;
             try self.constrainIteratorArgTypesFromCaller(formal_tys, caller, operands, loop_iterator, false);
             try self.constrainIteratorArgTypesFromCaller(formal_tys, caller, operands, loop_iterator, true);
-            if (self.type_cell_revision == before_self and caller.type_cell_revision == before_caller) return;
+            if (self.type_cell_revision == before_self and caller.type_cell_revision == before_caller and self.builder.widen_revision == before_widen) return;
         }
     }
 
@@ -9097,6 +10138,7 @@ const BodyContext = struct {
             .dbg,
             .expect,
             => |child| try self.collectReassignedBindersInExpr(child, out),
+            .expect_err => |expect_err| try self.collectReassignedBindersInExpr(expect_err.expr, out),
             .field_access => |field| try self.collectReassignedBindersInExpr(field.receiver, out),
             .structural_eq => |eq| {
                 try self.collectReassignedBindersInExpr(eq.lhs, out);
@@ -9451,9 +10493,18 @@ const BodyContext = struct {
             .record_destructure => |destructs| try self.lowerRecordPattern(destructs, ty),
             .list => Common.invariant("list pattern must be lowered to explicit list operations before Monotype output"),
             .tuple => |items| .{ .tuple = try self.lowerTuplePattern(items, ty) },
-            .num_literal => |num| self.lowerNumPattern(num.value, ty),
-            .small_dec_literal => Common.invariant("small decimal pattern reached Monotype after numeric finalization"),
-            .dec_literal => |dec| .{ .dec_lit = dec.value },
+            .num_literal => |num| if (num.conversion) |conversion|
+                try self.bindLiteralGuardPattern(conversion, ty)
+            else
+                self.lowerNumPattern(num.value, ty),
+            .small_dec_literal => |dec| if (dec.conversion) |conversion|
+                try self.bindLiteralGuardPattern(conversion, ty)
+            else
+                Common.invariant("small decimal pattern reached Monotype after numeric finalization"),
+            .dec_literal => |dec| if (dec.conversion) |conversion|
+                try self.bindLiteralGuardPattern(conversion, ty)
+            else
+                .{ .dec_lit = dec.value },
             .frac_f32_literal => |value| .{ .frac_f32_lit = value },
             .frac_f64_literal => |value| .{ .frac_f64_lit = value },
             .str_literal => |str| .{ .str_lit = try self.lowerStringLiteral(str) },
@@ -9518,6 +10569,92 @@ const BodyContext = struct {
             .underscore => true,
             else => false,
         };
+    }
+
+    /// Lower a literal pattern on a non-builtin number type to a fresh bind,
+    /// recording an equality condition for the enclosing match branch.
+    fn bindLiteralGuardPattern(
+        self: *BodyContext,
+        conversion: checked.CheckedExprId,
+        ty: Type.TypeId,
+    ) Allocator.Error!Ast.PatData {
+        const local = try self.builder.program.addLocal(self.builder.symbols.fresh(), ty);
+        try self.pattern_literal_guards.append(self.allocator, .{
+            .local = local,
+            .conversion = conversion,
+            .ty = ty,
+        });
+        return .{ .bind = local };
+    }
+
+    /// Compare a bound match value against a literal's converted constant,
+    /// dispatching to the type's `is_eq` method when it has one and falling
+    /// back to structural equality otherwise, mirroring `==`.
+    fn lowerPatternLiteralEq(self: *BodyContext, entry: PatternLiteralGuard) Allocator.Error!Ast.ExprId {
+        const scrutinee = try self.builder.localExpr(entry.local, entry.ty);
+        const expected = try self.lowerExpr(entry.conversion);
+        if (methodOwnerFromType(&self.builder.program.types, entry.ty)) |owner| {
+            if (self.builder.lookupMethodTargetByName(owner, "is_eq")) |lookup| {
+                var target_ctx = try self.methodTargetContext(lookup);
+                defer target_ctx.deinit();
+                const target_fn = target_ctx.checkedFunctionType(lookup.target.callable_ty);
+                const bool_ty = try self.builder.lowerType(lookup.view, target_fn.ret);
+                const arg_tys = [_]Type.TypeId{ entry.ty, entry.ty };
+                const callable_mono_ty = try self.methodTargetMonoTypeFromArgs(lookup, &arg_tys, bool_ty);
+                const callee = try self.methodTargetCalleeWithMono(lookup, callable_mono_ty);
+                return try self.builder.program.addExpr(.{ .ty = bool_ty, .data = .{ .call_proc = .{
+                    .callee = .{ .template = callee },
+                    .args = try self.builder.program.addExprSpan(&.{ scrutinee, expected }),
+                } } });
+            }
+        }
+        return try self.lowerEqualityExpr(entry.ty, scrutinee, expected, "is_eq", try self.builder.primitiveType(.bool));
+    }
+
+    /// Take ownership of the literal-equality conditions collected since
+    /// `start`, restoring the collection to that length.
+    fn drainPatternLiteralGuards(self: *BodyContext, start: usize) Allocator.Error![]PatternLiteralGuard {
+        const drained = try self.allocator.dupe(PatternLiteralGuard, self.pattern_literal_guards.items[start..]);
+        self.pattern_literal_guards.shrinkRetainingCapacity(start);
+        return drained;
+    }
+
+    /// Wrap a match-branch body so it only runs when every collected literal
+    /// equality holds, jumping to the branch's miss target otherwise.
+    fn applyPatternLiteralGuards(
+        self: *BodyContext,
+        guards: []const PatternLiteralGuard,
+        body: Ast.ExprId,
+        fallback: Ast.ExprId,
+        output_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        var result = body;
+        var i = guards.len;
+        while (i > 0) {
+            i -= 1;
+            const eq = try self.lowerPatternLiteralEq(guards[i]);
+            result = try self.builder.ifExpr(eq, result, fallback, output_ty);
+        }
+        return result;
+    }
+
+    /// Conjoin the branch's collected literal-equality conditions with its
+    /// (optional) user guard, literal conditions first.
+    fn conjoinPatternLiteralGuards(self: *BodyContext, user_guard: ?Ast.ExprId) Allocator.Error!?Ast.ExprId {
+        if (self.pattern_literal_guards.items.len == 0) return user_guard;
+        const bool_ty = try self.builder.primitiveType(.bool);
+        var cond = user_guard;
+        var i = self.pattern_literal_guards.items.len;
+        while (i > 0) {
+            i -= 1;
+            const eq = try self.lowerPatternLiteralEq(self.pattern_literal_guards.items[i]);
+            cond = if (cond) |inner|
+                try self.builder.ifExpr(eq, inner, try self.boolLiteral(false, bool_ty), bool_ty)
+            else
+                eq;
+        }
+        self.pattern_literal_guards.clearRetainingCapacity();
+        return cond;
     }
 
     fn lowerNumPattern(self: *BodyContext, value: can.CIR.IntValue, ty: Type.TypeId) Ast.PatData {

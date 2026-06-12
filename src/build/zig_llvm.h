@@ -63,9 +63,14 @@ enum ZigLLVMThinOrFullLTOPhase {
     ZigLLVMThinOrFullLTOPhase_FullPostLink,
 };
 
+enum ZigLLVMIROptimizationLevel {
+    ZigLLVMIROptimizationLevel_Oz = 0,
+    ZigLLVMIROptimizationLevel_O3,
+};
+
 struct ZigLLVMEmitOptions {
     bool is_debug;
-    bool is_small;
+    ZigLLVMIROptimizationLevel ir_opt_level;
     // If not null, and `ZigLLVMTargetMachineEmitToFile` returns `false` indicating success, this
     // `char *` will be populated with a `malloc`-allocated string containing the serialized (as
     // JSON) time report data. The caller is responsible for freeing that memory.
@@ -80,6 +85,7 @@ struct ZigLLVMEmitOptions {
     const char *llvm_ir_filename;
     const char *bitcode_filename;
     ZigLLVMCoverageOptions coverage;
+    bool no_target_libcalls;
 };
 
 // synchronize with llvm/include/Object/Archive.h::Object::Archive::Kind
@@ -105,6 +111,8 @@ enum ZigLLVMFloatABI {
 ZIG_EXTERN_C bool ZigLLVMTargetMachineEmitToFile(LLVMTargetMachineRef targ_machine_ref, LLVMModuleRef module_ref,
     char **error_message, const ZigLLVMEmitOptions *options);
 
+ZIG_EXTERN_C void ZigLLVMRunGlobalDCE(LLVMModuleRef module_ref);
+
 ZIG_EXTERN_C LLVMTargetMachineRef ZigLLVMCreateTargetMachine(LLVMTargetRef T, const char *Triple,
     const char *CPU, const char *Features, LLVMCodeGenOptLevel Level, LLVMRelocMode Reloc,
     LLVMCodeModel CodeModel, bool function_sections, bool data_sections, ZigLLVMFloatABI float_abi,
@@ -126,6 +134,9 @@ ZIG_EXTERN_C bool ZigLLDLinkWasm(int argc, const char **argv, bool can_exit_earl
 
 ZIG_EXTERN_C bool ZigLLVMWriteArchive(const char *archive_name, const char **file_names, size_t file_name_count,
     ZigLLVMArchiveKind archive_kind);
+
+ZIG_EXTERN_C bool ZigLLVMWriteArchiveFlattened(const char *archive_name, const char **file_names,
+    size_t file_name_count, ZigLLVMArchiveKind archive_kind);
 
 ZIG_EXTERN_C bool ZigLLVMWriteImportLibrary(const char *def_path, unsigned int coff_machine,
     const char *output_lib_path, bool kill_at);

@@ -51,8 +51,9 @@ transform = |result|
     }
 ~~~
 # EXPECTED
-PARSE ERROR - qualified_type_canonicalization.md:8:1:8:7
-PARSE ERROR - qualified_type_canonicalization.md:8:14:8:18
+MODULE HEADER DEPRECATED - qualified_type_canonicalization.md:1:1:6:2
+DUPLICATE DEFINITION - qualified_type_canonicalization.md:8:1:8:18
+MODULE NOT FOUND - qualified_type_canonicalization.md:8:1:8:18
 MODULE NOT FOUND - qualified_type_canonicalization.md:9:1:9:13
 MODULE NOT FOUND - qualified_type_canonicalization.md:10:1:10:40
 MODULE NOT FOUND - qualified_type_canonicalization.md:11:1:11:32
@@ -76,39 +77,53 @@ DOES NOT EXIST - qualified_type_canonicalization.md:42:24:42:39
 UNDECLARED TYPE - qualified_type_canonicalization.md:43:9:43:12
 DOES NOT EXIST - qualified_type_canonicalization.md:43:25:43:38
 UNUSED VARIABLE - qualified_type_canonicalization.md:43:17:43:20
+EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:3:5:3:26
+EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
 # PROBLEMS
-**PARSE ERROR**
-A parsing error occurred: `import_exposing_no_close`
-This is an unexpected parsing error. Please check your syntax.
+**MODULE HEADER DEPRECATED**
+The `module` header is deprecated.
 
-**qualified_type_canonicalization.md:8:1:8:7:**
+Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.
+
+Remove the `module` header and ensure your file defines a type that matches the filename.
+**qualified_type_canonicalization.md:1:1:6:2:**
+```roc
+module [
+    Color,
+    ModuleA.ModuleB.TypeC,
+    Try,
+    ExternalModule,
+]
+```
+
+
+**DUPLICATE DEFINITION**
+The name `Try` is being redeclared in this scope.
+
+The redeclaration is here:
+**qualified_type_canonicalization.md:8:1:8:18:**
 ```roc
 import Basics.Try
 ```
-^^^^^^
+^^^^^^^^^^^^^^^^^
+
+But `Try` was already defined here:
+**qualified_type_canonicalization.md:1:1:1:1:**
+```roc
+module [
+```
+^
 
 
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
+**MODULE NOT FOUND**
+The module `Basics` was not found in this Roc project.
 
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Try(a, Str)`
-    `Maybe(List(U64))`
-
-**qualified_type_canonicalization.md:8:14:8:18:**
+You're attempting to use this module here:
+**qualified_type_canonicalization.md:8:1:8:18:**
 ```roc
 import Basics.Try
 ```
-             ^^^^
+^^^^^^^^^^^^^^^^^
 
 
 **MODULE NOT FOUND**
@@ -363,6 +378,26 @@ The unused variable is declared here:
                 ^^^
 
 
+**EXPOSED BUT NOT DEFINED**
+The module header says that `.TypeC` is exposed, but it is not defined anywhere in this module.
+
+**qualified_type_canonicalization.md:3:5:3:26:**
+```roc
+    ModuleA.ModuleB.TypeC,
+```
+    ^^^^^^^^^^^^^^^^^^^^^
+You can fix this by either defining `.TypeC` in this module, or by removing it from the list of exposed values.
+
+**EXPOSED BUT NOT DEFINED**
+The module header says that `Try` is exposed, but it is not defined anywhere in this module.
+
+**qualified_type_canonicalization.md:4:5:4:8:**
+```roc
+    Try,
+```
+    ^^^
+You can fix this by either defining `Try` in this module, or by removing it from the list of exposed values.
+
 # TOKENS
 ~~~zig
 KwModule,OpenSquare,
@@ -399,9 +434,16 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(malformed-header (tag "import_exposing_no_close"))
+	(module
+		(exposes
+			(exposed-upper-ident (text "Color"))
+			(exposed-upper-ident (text "TypeC"))
+			(exposed-upper-ident (text "Try"))
+			(exposed-upper-ident (text "ExternalModule"))))
 	(statements
-		(s-malformed (tag "expected_colon_after_type_annotation"))
+		(s-import (raw "Basics")
+			(exposing
+				(exposed-upper-ident (text "Try"))))
 		(s-import (raw "Color"))
 		(s-import (raw "ModuleA.ModuleB")
 			(exposing
@@ -497,7 +539,14 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
+module [
+	Color,
+	TypeC,
+	Try,
+	ExternalModule,
+]
 
+import Basics exposing [Try]
 import Color
 import ModuleA.ModuleB exposing [TypeC]
 import ExternalModule as ExtMod
@@ -616,6 +665,9 @@ transform = |result|
 			(ty-fn (effectful false)
 				(ty-malformed)
 				(ty-malformed))))
+	(s-import (module "Basics")
+		(exposes
+			(exposed (name "Try") (wildcard false))))
 	(s-import (module "Color")
 		(exposes))
 	(s-import (module "ModuleA")

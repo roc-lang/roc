@@ -7,6 +7,7 @@
 //! - ordinary wasm lowering is forbidden from inventing ownership policy
 
 pub const WasmModule = @import("WasmModule.zig");
+pub const ObjectArchive = @import("ObjectArchive.zig");
 pub const WasmCodeGen = @import("WasmCodeGen.zig");
 pub const WasmLayout = @import("WasmLayout.zig");
 pub const WasmLinking = @import("WasmLinking.zig");

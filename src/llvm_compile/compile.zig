@@ -100,17 +100,259 @@ pub const CompileOptions = struct {
     /// Whether to place each function in its own section.
     /// Set to false for JIT mode (single .text section is simpler).
     function_sections: bool = true,
-    /// Optimization level for code generation.
-    opt_level: bindings.CodeGenOptLevel = .Default,
-    /// Prefer LLVM's size-optimized pipeline.
-    is_small: bool = false,
+    /// Optimization level for LLVM IR and target-machine code generation.
+    optimization: bindings.IrOptimizationLevel = .O3,
+    /// Whether to include debug information in the generated object.
+    debug: bool = false,
     /// Relocation model to use when emitting the object file.
     reloc_mode: bindings.RelocMode = .Default,
     /// Whether to use the module's native target triple instead of LLVM's default.
     use_module_target_triple: bool = false,
+    /// LLVM CPU name for target-machine code generation. Empty means LLVM's target default.
+    cpu: [:0]const u8 = "",
+    /// LLVM feature string for target-machine code generation. Empty means LLVM's target default.
+    features: [:0]const u8 = "",
+    /// Target pointer width in bits. Used to select the matching embedded
+    /// builtin bitcode payload before retargeting the merged LLVM module.
+    target_ptr_width_bits: u8,
+    /// Treat the target as freestanding for LLVM object emission: optimization
+    /// cannot assume target library functions, and memory intrinsics are lowered
+    /// to explicit loops before codegen.
+    no_target_libcalls: bool = false,
 };
 
+fn valueName(value: *bindings.Value) []const u8 {
+    var name_len: usize = 0;
+    const name_ptr = value.getName(&name_len);
+    return name_ptr[0..name_len];
+}
+
+fn recordValueName(allocator: Allocator, defs: *std.StringHashMap(void), value: *bindings.Value) Error!void {
+    const name = valueName(value);
+    if (defs.contains(name)) return;
+
+    const owned_name = allocator.dupe(u8, name) catch return Error.OutOfMemory;
+    errdefer allocator.free(owned_name);
+    defs.put(owned_name, {}) catch return Error.OutOfMemory;
+}
+
+fn recordModuleDefinitions(allocator: Allocator, module: *bindings.Module, defs: *std.StringHashMap(void)) Error!void {
+    var func = module.getFirstFunction();
+    while (func) |value| : (func = value.getNextFunction()) {
+        if (value.isDeclaration().toBool()) continue;
+        try recordValueName(allocator, defs, value);
+    }
+
+    var global = module.getFirstGlobal();
+    while (global) |value| : (global = value.getNextGlobal()) {
+        if (value.isDeclaration().toBool()) continue;
+        try recordValueName(allocator, defs, value);
+    }
+
+    var alias = module.getFirstGlobalAlias();
+    while (alias) |value| : (alias = value.getNextGlobalAlias()) {
+        try recordValueName(allocator, defs, value);
+    }
+}
+
+fn recordModuleDeclarations(allocator: Allocator, module: *bindings.Module, decls: *std.StringHashMap(void)) Error!void {
+    var func = module.getFirstFunction();
+    while (func) |value| : (func = value.getNextFunction()) {
+        if (!value.isDeclaration().toBool()) continue;
+        try recordValueName(allocator, decls, value);
+    }
+
+    var global = module.getFirstGlobal();
+    while (global) |value| : (global = value.getNextGlobal()) {
+        if (!value.isDeclaration().toBool()) continue;
+        try recordValueName(allocator, decls, value);
+    }
+}
+
+const core_builtin_roots = std.StaticStringMap(void).initComptime(.{
+    .{ "roc__num_add_with_overflow_i128", {} },
+    .{ "roc__num_mul_with_overflow_i16", {} },
+    .{ "roc__num_mul_with_overflow_i32", {} },
+    .{ "roc__num_mul_with_overflow_i64", {} },
+    .{ "roc__num_mul_with_overflow_i8", {} },
+    .{ "roc__num_sub_with_overflow_i128", {} },
+    .{ "roc_builtins_allocate_with_refcount", {} },
+    .{ "roc_builtins_box_decref_with", {} },
+    .{ "roc_builtins_box_decref_with_single_thread", {} },
+    .{ "roc_builtins_box_free_with", {} },
+    .{ "roc_builtins_dbg_str", {} },
+    .{ "roc_builtins_expect_err_str", {} },
+    .{ "roc_builtins_decref_data_ptr", {} },
+    .{ "roc_builtins_decref_data_ptr_single_thread", {} },
+    .{ "roc_builtins_erased_callable_decref", {} },
+    .{ "roc_builtins_erased_callable_decref_single_thread", {} },
+    .{ "roc_builtins_erased_callable_free", {} },
+    .{ "roc_builtins_erased_callable_incref", {} },
+    .{ "roc_builtins_free_data_ptr", {} },
+    .{ "roc_builtins_i16_mod_by", {} },
+    .{ "roc_builtins_i32_mod_by", {} },
+    .{ "roc_builtins_i64_mod_by", {} },
+    .{ "roc_builtins_i8_mod_by", {} },
+    .{ "roc_builtins_incref_data_ptr", {} },
+    .{ "roc_builtins_incref_data_ptr_single_thread", {} },
+    .{ "roc_builtins_int_from_str", {} },
+    .{ "roc_builtins_int_to_str", {} },
+    .{ "roc_builtins_list_append_unsafe", {} },
+    .{ "roc_builtins_list_concat", {} },
+    .{ "roc_builtins_list_decref_flat_list", {} },
+    .{ "roc_builtins_list_decref_str", {} },
+    .{ "roc_builtins_list_decref_with", {} },
+    .{ "roc_builtins_list_decref_with_single_thread", {} },
+    .{ "roc_builtins_list_drop_at", {} },
+    .{ "roc_builtins_list_eq", {} },
+    .{ "roc_builtins_list_free_flat_list", {} },
+    .{ "roc_builtins_list_free_with", {} },
+    .{ "roc_builtins_list_incref", {} },
+    .{ "roc_builtins_list_incref_single_thread", {} },
+    .{ "roc_builtins_list_list_eq", {} },
+    .{ "roc_builtins_list_prepend", {} },
+    .{ "roc_builtins_list_release_excess_capacity", {} },
+    .{ "roc_builtins_list_replace", {} },
+    .{ "roc_builtins_list_reserve", {} },
+    .{ "roc_builtins_list_reverse", {} },
+    .{ "roc_builtins_list_str_eq", {} },
+    .{ "roc_builtins_list_sublist", {} },
+    .{ "roc_builtins_list_swap", {} },
+    .{ "roc_builtins_list_with_capacity", {} },
+    .{ "roc_builtins_roc_crashed", {} },
+    .{ "roc_builtins_roc_expect_failed", {} },
+    .{ "roc_builtins_str_caseless_ascii_equals", {} },
+    .{ "roc_builtins_str_concat", {} },
+    .{ "roc_builtins_str_contains", {} },
+    .{ "roc_builtins_str_count_utf8_bytes", {} },
+    .{ "roc_builtins_str_drop_prefix", {} },
+    .{ "roc_builtins_str_drop_suffix", {} },
+    .{ "roc_builtins_str_ends_with", {} },
+    .{ "roc_builtins_str_equal", {} },
+    .{ "roc_builtins_str_escape_and_quote", {} },
+    .{ "roc_builtins_str_from_literal", {} },
+    .{ "roc_builtins_str_from_utf8", {} },
+    .{ "roc_builtins_str_from_utf8_lossy", {} },
+    .{ "roc_builtins_str_from_utf8_parts", {} },
+    .{ "roc_builtins_str_from_utf8_result", {} },
+    .{ "roc_builtins_str_join_with", {} },
+    .{ "roc_builtins_str_release_excess_capacity", {} },
+    .{ "roc_builtins_str_repeat", {} },
+    .{ "roc_builtins_str_reserve", {} },
+    .{ "roc_builtins_str_split", {} },
+    .{ "roc_builtins_str_starts_with", {} },
+    .{ "roc_builtins_str_to_utf8", {} },
+    .{ "roc_builtins_str_trim", {} },
+    .{ "roc_builtins_str_trim_end", {} },
+    .{ "roc_builtins_str_trim_start", {} },
+    .{ "roc_builtins_str_with_ascii_lowercased", {} },
+    .{ "roc_builtins_str_with_ascii_uppercased", {} },
+    .{ "roc_builtins_str_with_capacity", {} },
+    .{ "roc_builtins_u16_mod_by", {} },
+    .{ "roc_builtins_u32_mod_by", {} },
+    .{ "roc_builtins_u64_mod_by", {} },
+    .{ "roc_builtins_u8_mod_by", {} },
+});
+
+fn isBuiltinRoot(name: []const u8) bool {
+    return std.mem.startsWith(u8, name, "roc_builtins_") or std.mem.startsWith(u8, name, "roc__num_");
+}
+
+fn canUseCoreBuiltins(app_decls: *const std.StringHashMap(void)) bool {
+    var roots = app_decls.keyIterator();
+    while (roots.next()) |root| {
+        if (isBuiltinRoot(root.*) and !core_builtin_roots.has(root.*)) return false;
+    }
+    return true;
+}
+
+fn selectBuiltinBitcode(ptr_width: u8, app_decls: *const std.StringHashMap(void)) []const u8 {
+    const use_core = canUseCoreBuiltins(app_decls);
+    return switch (ptr_width) {
+        32 => if (use_core) llvm_embedded.builtins32_core_bc else llvm_embedded.builtins32_bc,
+        64 => if (use_core) llvm_embedded.builtins64_core_bc else llvm_embedded.builtins64_bc,
+        else => "",
+    };
+}
+
+fn removeFunctionTargetAttrs(func: *bindings.Value) void {
+    func.removeStringAttributeAtIndex(
+        bindings.attribute_function_index,
+        "target-features",
+        "target-features".len,
+    );
+    func.removeStringAttributeAtIndex(
+        bindings.attribute_function_index,
+        "target-cpu",
+        "target-cpu".len,
+    );
+}
+
+fn cleanMergedBuiltinDefinitions(module: *bindings.Module, app_defs: *const std.StringHashMap(void)) void {
+    var alias = module.getFirstGlobalAlias();
+    while (alias) |value| : (alias = value.getNextGlobalAlias()) {
+        if (app_defs.contains(valueName(value))) continue;
+        if (value.aliasGetAliasee()) |aliasee| {
+            value.replaceAllUsesWith(aliasee);
+        }
+        value.setLinkage(bindings.internal_linkage);
+    }
+
+    var func = module.getFirstFunction();
+    while (func) |value| : (func = value.getNextFunction()) {
+        if (value.isDeclaration().toBool()) continue;
+        if (app_defs.contains(valueName(value))) continue;
+        removeFunctionTargetAttrs(value);
+        value.setLinkage(bindings.internal_linkage);
+    }
+
+    var global = module.getFirstGlobal();
+    while (global) |value| : (global = value.getNextGlobal()) {
+        if (value.isDeclaration().toBool()) continue;
+        if (app_defs.contains(valueName(value))) continue;
+        value.setLinkage(bindings.internal_linkage);
+    }
+}
+
+fn removeBuiltinUsedRoots(module: *bindings.Module) void {
+    if (module.getNamedGlobal("llvm.used")) |used| {
+        used.deleteGlobal();
+    }
+    if (module.getNamedGlobal("llvm.compiler.used")) |compiler_used| {
+        compiler_used.deleteGlobal();
+    }
+}
+
+fn pruneBuiltinModule(module: *bindings.Module, app_decls: *const std.StringHashMap(void)) void {
+    removeBuiltinUsedRoots(module);
+
+    var alias = module.getFirstGlobalAlias();
+    while (alias) |value| : (alias = value.getNextGlobalAlias()) {
+        if (!app_decls.contains(valueName(value))) {
+            value.setLinkage(bindings.internal_linkage);
+        }
+    }
+
+    var func = module.getFirstFunction();
+    while (func) |value| : (func = value.getNextFunction()) {
+        if (value.isDeclaration().toBool()) continue;
+        removeFunctionTargetAttrs(value);
+        if (!app_decls.contains(valueName(value))) {
+            value.setLinkage(bindings.internal_linkage);
+        }
+    }
+
+    var global = module.getFirstGlobal();
+    while (global) |value| : (global = value.getNextGlobal()) {
+        if (value.isDeclaration().toBool()) continue;
+        if (!app_decls.contains(valueName(value))) {
+            value.setLinkage(bindings.internal_linkage);
+        }
+    }
+}
+
 fn emitMergedBitcodeToObjectFile(
+    allocator: Allocator,
     io: std.Io,
     bitcode: []const u32,
     options: CompileOptions,
@@ -170,20 +412,13 @@ fn emitMergedBitcodeToObjectFile(
         return Error.CompilationFailed;
     }
 
-    // Use a baseline CPU that has the required features for each architecture.
-    const cpu: [*:0]const u8 = switch (builtin.cpu.arch) {
-        .x86_64 => "x86-64",
-        .x86 => "pentium4",
-        else => "generic",
-    };
-
     // Create target machine
     const target_machine = bindings.TargetMachine.create(
         target,
         triple,
-        cpu,
-        "", // No specific features
-        options.opt_level, // optimization level
+        if (options.cpu.len == 0) null else options.cpu.ptr,
+        if (options.features.len == 0) null else options.features.ptr,
+        options.optimization.toCodeGenOptLevel(),
         options.reloc_mode,
         .Default, // code model
         options.function_sections, // function_sections
@@ -194,10 +429,27 @@ fn emitMergedBitcodeToObjectFile(
     );
     defer target_machine.dispose();
 
-    // Load and merge builtin bitcode into the user module.
-    // This makes all builtin functions available.
+    var app_defs = std.StringHashMap(void).init(allocator);
+    defer {
+        var keys = app_defs.keyIterator();
+        while (keys.next()) |key| allocator.free(key.*);
+        app_defs.deinit();
+    }
+    try recordModuleDefinitions(allocator, module, &app_defs);
+
+    var app_decls = std.StringHashMap(void).init(allocator);
+    defer {
+        var keys = app_decls.keyIterator();
+        while (keys.next()) |key| allocator.free(key.*);
+        app_decls.deinit();
+    }
+    try recordModuleDeclarations(allocator, module, &app_decls);
+
+    // Load and merge builtin bitcode into the user module. Builtin definitions
+    // remain real definitions so LLVM can inline and optimize them with the app.
     {
-        const builtin_bitcode = llvm_embedded.builtins_bc;
+        const builtin_bitcode = selectBuiltinBitcode(options.target_ptr_width_bits, &app_decls);
+        if (builtin_bitcode.len == 0) return Error.CompilationFailed;
         const builtin_mem_buf = bindings.MemoryBuffer.createMemoryBufferWithMemoryRange(
             builtin_bitcode.ptr,
             builtin_bitcode.len,
@@ -220,12 +472,17 @@ fn emitMergedBitcodeToObjectFile(
         } else {
             builtin_module.setDataLayout(module_data_layout);
         }
+        pruneBuiltinModule(builtin_module, &app_decls);
+        bindings.runGlobalDCE(builtin_module);
 
         // Link builtins into user module (destroys builtin_module on success)
         if (module.link(builtin_module).toBool()) {
             return Error.ModuleLinkFailed;
         }
         // Note: builtin_module is now invalid - do NOT dispose it
+
+        cleanMergedBuiltinDefinitions(module, &app_defs);
+        bindings.runGlobalDCE(module);
     }
 
     var verify_error: [*:0]const u8 = undefined;
@@ -257,8 +514,8 @@ fn emitMergedBitcodeToObjectFile(
     };
 
     const emit_options = bindings.TargetMachine.EmitOptions{
-        .is_debug = options.opt_level == .None,
-        .is_small = options.is_small,
+        .is_debug = options.debug,
+        .ir_opt_level = options.optimization,
         .time_report_out = null,
         .tsan = false,
         .sancov = false,
@@ -270,6 +527,7 @@ fn emitMergedBitcodeToObjectFile(
         .llvm_ir_filename = null,
         .bitcode_filename = null,
         .coverage = default_coverage,
+        .no_target_libcalls = options.no_target_libcalls,
     };
 
     // Emit merged module to object file
@@ -286,7 +544,7 @@ pub fn compileToObject(allocator: Allocator, io: std.Io, bitcode: []const u32, o
     const temp_path = createTempPath(allocator, io, ".o") catch return Error.TempFileError;
     defer allocator.free(temp_path);
 
-    try emitMergedBitcodeToObjectFile(io, bitcode, options, temp_path);
+    try emitMergedBitcodeToObjectFile(allocator, io, bitcode, options, temp_path);
 
     // Read the object file back into memory
     const object_bytes = std.Io.Dir.cwd().readFileAlloc(
@@ -328,8 +586,12 @@ pub fn compileToSharedLibrary(allocator: Allocator, io: std.Io, bitcode: []const
     var pic_options = options;
     pic_options.reloc_mode = .PIC;
     pic_options.use_module_target_triple = true;
+    pic_options.no_target_libcalls = switch (builtin.os.tag) {
+        .macos, .windows => false,
+        else => true,
+    };
 
-    try emitMergedBitcodeToObjectFile(io, bitcode, pic_options, object_path);
+    try emitMergedBitcodeToObjectFile(allocator, io, bitcode, pic_options, object_path);
 
     if (std.c.getenv("ROC_LLVM_KEEP_OBJECT")) |keep_path_z| {
         std.Io.Dir.cwd().copyFile(

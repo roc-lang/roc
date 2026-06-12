@@ -35,6 +35,8 @@ zig-pkg
 *.o
 *.a
 *.s
+# Hand-written assembly source (the interpreter's hosted-call trampoline), not a build artifact.
+!src/eval/host_trampoline.S
 *.so
 *.so.*
 *.obj
@@ -150,3 +152,4 @@ test/glue/*/roc_platform_abi.zig
 
 # Debug files written by builtin_doc_tests when a block fails
 test/echo/builtin_doc_*.roc
+tmp/

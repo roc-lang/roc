@@ -15,53 +15,9 @@ match ... {
 }
 ~~~
 # EXPECTED
-TYPE MISMATCH - pattern_alternatives_mixed.md:2:10:2:11
-TYPE MISMATCH - pattern_alternatives_mixed.md:1:1:1:1
+NIL
 # PROBLEMS
-**TYPE MISMATCH**
-This number is being used where a non-number type is needed:
-**pattern_alternatives_mixed.md:2:10:2:11:**
-```roc
-	1 | 2 | 3 => "small numbers"
-```
-	        ^
-
-The type was determined to be non-numeric here:
-**pattern_alternatives_mixed.md:3:2:3:9:**
-```roc
-	"hello" | "world" => "greetings"
-```
-	^^^^^^^
-
-Other code expects this to have the type:
-
-    Str
-
-**TYPE MISMATCH**
-This pattern in the  third branch of this `match` does not match the previous ones:
-**pattern_alternatives_mixed.md:1:1:**
-```roc
-match ... {
-	1 | 2 | 3 => "small numbers"
-	"hello" | "world" => "greetings"
-	Ok(_) | Some(_) => "success value"
-	[] | [_] => "short list"
-	(0, _) | (_, 0) => "has zero"
-	_ => "other"
-}
-```
- ^^^^^
-
-This pattern is trying to match:
-
-    [Ok(_a), ..]
-
-But the expression between the `match` parenthesis has the type:
-
-    Str
-
-These can never match! Either the pattern or expression has a problem.
-
+NIL
 # TOKENS
 ~~~zig
 KwMatch,TripleDot,OpenCurly,

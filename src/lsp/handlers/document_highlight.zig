@@ -159,10 +159,7 @@ fn findHighlightsByToken(allocator: std.mem.Allocator, source: []const u8, line:
     var module_env = try can.ModuleEnv.init(allocator, source);
     defer module_env.deinit();
 
-    const ast = parse.parse(allocator, &module_env.common) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-        error.TooNested => return &[_]DocumentHighlight{},
-    };
+    const ast = try parse.file(allocator, &module_env.common);
     defer ast.deinit();
 
     const tags = ast.tokens.tokens.items(.tag);

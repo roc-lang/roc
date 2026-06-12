@@ -4,6 +4,7 @@
 //! then emit a relocation to the listed `roc_builtins_*` symbol.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const WasmModule = @import("WasmModule.zig");
 const SymbolIndex = @import("index_types.zig").SymbolIndex;
 
@@ -50,6 +51,7 @@ pub const BuiltinKind = enum {
     list_append_unsafe,
     list_concat,
     list_drop_at,
+    list_reserve,
     list_eq,
     list_str_eq,
     list_list_eq,
@@ -93,30 +95,31 @@ pub const sigs: [@typeInfo(BuiltinKind).@"enum".fields.len]Sig = .{
     .{ .name = "roc_builtins_dec_from_str", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = false },
     .{ .name = "roc_builtins_float_from_str", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = false },
     .{ .name = "roc_builtins_str_equal", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{.i32}, .takes_roc_ops = false },
-    .{ .name = "roc_builtins_str_concat", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
+    .{ .name = "roc_builtins_str_concat", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
     .{ .name = "roc_builtins_str_repeat", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i64, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
-    .{ .name = "roc_builtins_str_trim", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
-    .{ .name = "roc_builtins_str_trim_start", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
-    .{ .name = "roc_builtins_str_trim_end", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
+    .{ .name = "roc_builtins_str_trim", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
+    .{ .name = "roc_builtins_str_trim_start", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
+    .{ .name = "roc_builtins_str_trim_end", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
     .{ .name = "roc_builtins_str_split", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
     .{ .name = "roc_builtins_str_join_with", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
-    .{ .name = "roc_builtins_str_reserve", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i64, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
-    .{ .name = "roc_builtins_str_release_excess_capacity", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
+    .{ .name = "roc_builtins_str_reserve", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i64, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
+    .{ .name = "roc_builtins_str_release_excess_capacity", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
     .{ .name = "roc_builtins_str_with_capacity", .wasm_params = &.{ .i32, .i64, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
     .{ .name = "roc_builtins_str_drop_prefix", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
     .{ .name = "roc_builtins_str_drop_suffix", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
-    .{ .name = "roc_builtins_str_with_ascii_lowercased", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
-    .{ .name = "roc_builtins_str_with_ascii_uppercased", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
+    .{ .name = "roc_builtins_str_with_ascii_lowercased", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
+    .{ .name = "roc_builtins_str_with_ascii_uppercased", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
     .{ .name = "roc_builtins_str_caseless_ascii_equals", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{.i32}, .takes_roc_ops = false },
     .{ .name = "roc_builtins_str_escape_and_quote", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
     .{ .name = "roc_builtins_str_from_utf8", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
     .{ .name = "roc_builtins_list_append_unsafe", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
-    .{ .name = "roc_builtins_list_concat", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
-    .{ .name = "roc_builtins_list_drop_at", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i64, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
+    .{ .name = "roc_builtins_list_concat", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i64, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
+    .{ .name = "roc_builtins_list_drop_at", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i64, .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
+    .{ .name = "roc_builtins_list_reserve", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32, .i64, .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
     .{ .name = "roc_builtins_list_eq", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{.i32}, .takes_roc_ops = false },
     .{ .name = "roc_builtins_list_str_eq", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{.i32}, .takes_roc_ops = false },
     .{ .name = "roc_builtins_list_list_eq", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{.i32}, .takes_roc_ops = false },
-    .{ .name = "roc_builtins_list_reverse", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
+    .{ .name = "roc_builtins_list_reverse", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
     .{ .name = "roc_builtins_allocate_with_refcount", .wasm_params = &.{ .i32, .i32, .i32, .i32 }, .wasm_results = &.{.i32}, .takes_roc_ops = true },
     .{ .name = "roc_builtins_i8_mod_by", .wasm_params = &.{ .i32, .i32 }, .wasm_results = &.{.i32}, .takes_roc_ops = false },
     .{ .name = "roc_builtins_u8_mod_by", .wasm_params = &.{ .i32, .i32 }, .wasm_results = &.{.i32}, .takes_roc_ops = false },
@@ -135,6 +138,19 @@ pub fn sigOf(kind: BuiltinKind) Sig {
 
 /// Relocation symbol table indexed by builtin kind.
 pub const SymbolTable = std.enums.EnumArray(BuiltinKind, SymbolIndex);
+
+/// Declare every builtin wrapper as an undefined function symbol in a generated
+/// relocatable wasm object.
+pub fn declareUndefinedRelocs(module: *WasmModule) Allocator.Error!SymbolTable {
+    var result = SymbolTable.initUndefined();
+    inline for (std.meta.tags(BuiltinKind)) |kind| {
+        const sig = sigOf(kind);
+        const type_idx = try module.addFuncType(sig.wasm_params, sig.wasm_results);
+        const imported = try module.addFunctionImportWithSymbol("env", sig.name, type_idx);
+        result.set(kind, imported.symbol);
+    }
+    return result;
+}
 
 /// Locate builtin function symbols in a merged wasm module.
 pub fn populateForRelocs(module: *const WasmModule) WasmModule.SymbolLookupError!SymbolTable {

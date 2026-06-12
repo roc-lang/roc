@@ -2,16 +2,19 @@ platform ""
     requires {} { main! : () => {} }
     exposes [Effect]
     packages {}
-    provides { main_for_host!: "main" }
+    provides { "roc_main": main_for_host! }
+    hosted {
+        "roc_bar_idx_get": Bar.Idx.get!,
+        "roc_effect_things": Effect.things!,
+        "roc_foo_idx_get": Foo.Idx.get!,
+    }
     targets: {
-        files: "../../fx/platform/targets/",
-        exe: {
-            arm64mac: ["libhost.a", app],
-            arm64musl: ["libhost.a", app],
-            x64musl: ["libhost.a", app],
-            arm64win: ["host.lib", app],
-            x64win: ["host.lib", app],
-        }
+        inputs: "../../fx/platform/targets/",
+        arm64mac: { inputs: ["libhost.a", app] },
+        arm64musl: { inputs: ["libhost.a", app] },
+        x64musl: { inputs: ["libhost.a", app] },
+        arm64win: { inputs: ["host.lib", app] },
+        x64win: { inputs: ["host.lib", app] },
     }
 
 import Effect

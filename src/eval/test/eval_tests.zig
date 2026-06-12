@@ -105,6 +105,173 @@ const core_tests = [_]TestCase{
         } },
     },
 
+    // In-place List.map: same element type, unique list -> the output reuses
+    // the input allocation, so map itself must not allocate.
+    .{
+        .name = "allocation - List.map reuses unique same-type list in place",
+        .source =
+        \\{
+        \\    base = List.concat([1, 2], [3, 4])
+        \\    doubled = List.map(base, |x| x * 2)
+        \\    if doubled == List.concat([2, 4], [6, 8]) {
+        \\        "ok"
+        \\    } else {
+        \\        "bad"
+        \\    }
+        \\}
+        ,
+        // Four list literals plus two concats; the map itself contributes
+        // zero. The copy path would allocate one more and fail this ceiling.
+        .expected = .{ .allocations_at_most = .{
+            .output = "ok",
+            .max_allocations = 6,
+        } },
+    },
+
+    .{
+        .name = "inspect: List.map in place over unique same-type list",
+        .source = "List.map(List.concat([1, 2], [3, 4]), |x| x * 10)",
+        .expected = .{ .inspect_str = "[10.0, 20.0, 30.0, 40.0]" },
+    },
+
+    // Cross-type reuse: a tuple and a record with the same field layouts are
+    // different types but interchangeable in one allocation, so a unique
+    // list still maps in place.
+    .{
+        .name = "allocation - List.map reuses unique list across tuple-to-record types",
+        .source =
+        \\{
+        \\    base = List.concat([(1, 2)], [(3, 4)])
+        \\    swapped = List.map(base, |(a, b)| { x: b, y: a })
+        \\    if swapped == List.concat([{ x: 2, y: 1 }], [{ x: 4, y: 3 }]) {
+        \\        "ok"
+        \\    } else {
+        \\        "bad"
+        \\    }
+        \\}
+        ,
+        // Four list literals plus two concats; the map itself contributes
+        // zero. The copy path would allocate one more and fail this ceiling.
+        .expected = .{ .allocations_at_most = .{
+            .output = "ok",
+            .max_allocations = 6,
+        } },
+    },
+
+    // Cross-type reuse with refcounted elements: ownership of each string
+    // moves out of the slot and back in inside the new record.
+    .{
+        .name = "inspect: List.map in place across tuple-to-record with strings",
+        .source = "List.map(List.concat([(\"a\", 1)], [(\"b\", 2)]), |(s, n)| { label: s, n: n })",
+        .expected = .{ .inspect_str = "[{ label: \"a\", n: 1.0 }, { label: \"b\", n: 2.0 }]" },
+    },
+
+    // The list is shared (used again after the map), so map must take the
+    // copy path and leave the original untouched.
+    .{
+        .name = "inspect: List.map leaves shared list unchanged",
+        .source =
+        \\{
+        \\    a = List.concat([1], [2])
+        \\    b = List.map(a, |x| x + 1)
+        \\    (a, b)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "([1.0, 2.0], [2.0, 3.0])" },
+    },
+
+    // The transform captures the list it is mapping, which holds the
+    // refcount above 1; in-place mutation here would make later elements
+    // observe already-written outputs through the capture.
+    .{
+        .name = "inspect: List.map transform capturing the mapped list",
+        .source =
+        \\{
+        \\    a = List.concat([5], [7])
+        \\    List.map(a, |x| x + (match a.get(0) {
+        \\        Ok(v) => v
+        \\        Err(_) => 0
+        \\    }))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[10.0, 12.0]" },
+    },
+
+    // A seamless slice can be uniquely owned yet must never be mutated in
+    // place, because its buffer points into the middle of an allocation.
+    .{
+        .name = "inspect: List.map over unique seamless slice",
+        .source =
+        \\{
+        \\    s = List.sublist(List.concat([1, 2], [3, 4]), { start: 1, len: 2 })
+        \\    List.map(s, |x| x * 2)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[4.0, 6.0]" },
+    },
+
+    // A unique list emptied at runtime still goes through the in-place
+    // branch; the loop must tolerate len == 0.
+    .{
+        .name = "inspect: List.map in place over emptied unique list",
+        .source = "List.map(List.drop_first(List.concat([1], [2]), 2), |x| x + 1)",
+        .expected = .{ .inspect_str = "[]" },
+    },
+
+    // Zero-sized elements have no allocation to reuse; the runtime check
+    // lowers to a constant 0 and the copy path handles them.
+    .{
+        .name = "inspect: List.map over zero-sized elements",
+        .source = "List.map(List.concat([{}], [{}]), |x| x)",
+        .expected = .{ .inspect_str = "[{}, {}]" },
+    },
+
+    // Str -> Str maps are in-place eligible and the elements are refcounted:
+    // the identity transform exercises element ownership moving out of and
+    // back into the buffer without double-frees or leaks.
+    .{
+        .name = "inspect: List.map identity over unique list of strings",
+        .source = "List.map(List.concat([\"hello\"], [\"world\"]), |s| s)",
+        .expected = .{ .inspect_str = "[\"hello\", \"world\"]" },
+    },
+
+    // Heap-allocated strings: each transform result replaces a heap-owning
+    // element, so the old element must be released exactly once.
+    .{
+        .name = "inspect: List.map concat over unique list of heap strings",
+        .source = "List.map(List.concat([Str.repeat(\"x\", 30)], [Str.repeat(\"y\", 30)]), |s| Str.concat(s, \"!\"))",
+        .expected = .{ .inspect_str = "[\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx!\", \"yyyyyyyyyyyyyyyyyyyyyyyyyyyyyy!\"]" },
+    },
+
+    // Shared list of refcounted elements: copy path, original intact.
+    .{
+        .name = "inspect: List.map leaves shared string list unchanged",
+        .source =
+        \\{
+        \\    a = List.concat(["x"], ["y"])
+        \\    b = List.map(a, |s| Str.concat(s, "!"))
+        \\    (a, b)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "([\"x\", \"y\"], [\"x!\", \"y!\"])" },
+    },
+
+    // The transform crashes partway through an in-place map; crash is fatal,
+    // so the half-rewritten buffer must never be observed by cleanup.
+    .{
+        .name = "inspect: List.map transform crashes mid-list",
+        .source =
+        \\List.map(List.concat(["a"], ["b", "c"]), |s| {
+        \\    if Str.starts_with(s, "b") {
+        \\        crash "boom"
+        \\    } else {
+        \\        s
+        \\    }
+        \\})
+        ,
+        .expected = .{ .crash = {} },
+    },
+
     // Basic expressions and control flow
     .{ .name = "inspect: integer literal", .source = "42", .expected = .{ .inspect_str = "42.0" } },
     .{ .name = "inspect: negative integer literal", .source = "-1234", .expected = .{ .inspect_str = "-1234.0" } },
@@ -324,6 +491,187 @@ const core_tests = [_]TestCase{
         \\}
         ,
         .expected = .{ .inspect_str = "(False, [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [1], 20)" },
+    },
+    .{
+        .name = "inspect: custom from_numeral literal pattern dispatches through is_eq",
+        .source_kind = .module,
+        .source =
+        \\Code := [Code(List(U8))].{
+        \\    from_numeral : Numeral -> Try(Code, [InvalidNumeral(Str)])
+        \\    from_numeral = |numeral| match numeral {
+        \\        Literal(parts) => Ok(Code(parts.digits_before_pt))
+        \\    }
+        \\    is_eq : Code, Code -> Bool
+        \\    is_eq = |a, b| match (a, b) {
+        \\        (Code(x), Code(y)) => x == y
+        \\    }
+        \\}
+        \\
+        \\force : Code -> Code
+        \\force = |n| n
+        \\
+        \\describe : Code -> Str
+        \\describe = |code| match code {
+        \\    42 => "yes"
+        \\    _ => "no"
+        \\}
+        \\
+        \\main = (describe(force(42)), describe(force(7)))
+        ,
+        .expected = .{ .inspect_str = "(\"yes\", \"no\")" },
+    },
+    .{
+        .name = "inspect: custom from_numeral literal pattern compares converted values not raw digits",
+        .source_kind = .module,
+        .source =
+        \\Tally := [Tally(U64)].{
+        \\    from_numeral : Numeral -> Try(Tally, [InvalidNumeral(Str)])
+        \\    from_numeral = |numeral| match numeral {
+        \\        Literal(parts) => Ok(Tally(parts.digits_before_pt.len()))
+        \\    }
+        \\    is_eq : Tally, Tally -> Bool
+        \\    is_eq = |a, b| match (a, b) {
+        \\        (Tally(x), Tally(y)) => x == y
+        \\    }
+        \\}
+        \\
+        \\force : Tally -> Tally
+        \\force = |n| n
+        \\
+        \\describe : Tally -> Str
+        \\describe = |tally| match tally {
+        \\    100 => "one byte"
+        \\    _ => "other"
+        \\}
+        \\
+        \\main = (describe(force(999)), describe(force(7)))
+        ,
+        // digits_before_pt holds base-256 digits: 999 is two bytes, while 100
+        // and 7 are one byte each — so 7 converts equal to the pattern literal
+        // and 999 does not, proving the pattern compares converted values.
+        .expected = .{ .inspect_str = "(\"other\", \"one byte\")" },
+    },
+    .{
+        .name = "inspect: custom from_numeral codepoint literals convert in exprs and patterns",
+        .source_kind = .module,
+        .source =
+        \\Code := [Code(List(U8))].{
+        \\    from_numeral : Numeral -> Try(Code, [InvalidNumeral(Str)])
+        \\    from_numeral = |numeral| match numeral {
+        \\        Literal(parts) => Ok(Code(parts.digits_before_pt))
+        \\    }
+        \\    is_eq : Code, Code -> Bool
+        \\    is_eq = |a, b| match (a, b) {
+        \\        (Code(x), Code(y)) => x == y
+        \\    }
+        \\}
+        \\
+        \\force : Code -> Code
+        \\force = |n| n
+        \\
+        \\describe : Code -> Str
+        \\describe = |code| match code {
+        \\    'a' => "letter a"
+        \\    _ => "other"
+        \\}
+        \\
+        \\main = (describe(force('a')), describe(force('b')))
+        ,
+        .expected = .{ .inspect_str = "(\"letter a\", \"other\")" },
+    },
+    .{
+        .name = "inspect: custom from_numeral fractional literal pattern dispatches through is_eq",
+        .source_kind = .module,
+        .source =
+        \\Scale := [Scale(U64)].{
+        \\    from_numeral : Numeral -> Try(Scale, [InvalidNumeral(Str)])
+        \\    from_numeral = |numeral| match numeral {
+        \\        Literal(parts) => Ok(Scale(parts.digits_after_pt_count))
+        \\    }
+        \\    is_eq : Scale, Scale -> Bool
+        \\    is_eq = |a, b| match (a, b) {
+        \\        (Scale(x), Scale(y)) => x == y
+        \\    }
+        \\}
+        \\
+        \\force : Scale -> Scale
+        \\force = |n| n
+        \\
+        \\describe : Scale -> Str
+        \\describe = |scale| match scale {
+        \\    2.5 => "one decimal"
+        \\    _ => "other"
+        \\}
+        \\
+        \\main = (describe(force(7.5)), describe(force(0.25)))
+        ,
+        .expected = .{ .inspect_str = "(\"one decimal\", \"other\")" },
+    },
+    .{
+        .name = "inspect: imported custom from_numeral converts literals in exprs and patterns",
+        .source_kind = .module,
+        .source =
+        \\import TallyMod
+        \\
+        \\force : TallyMod.Tally -> TallyMod.Tally
+        \\force = |n| n
+        \\
+        \\describe : TallyMod.Tally -> Str
+        \\describe = |tally| match tally {
+        \\    100 => "one byte"
+        \\    _ => "other"
+        \\}
+        \\
+        \\main = (describe(force(999)), describe(force(7)))
+        ,
+        .imports = &.{.{
+            .name = "TallyMod",
+            .source =
+            \\Tally := [Tally(U64)].{
+            \\    from_numeral : Numeral -> Try(Tally, [InvalidNumeral(Str)])
+            \\    from_numeral = |numeral| match numeral {
+            \\        Literal(parts) => Ok(Tally(parts.digits_before_pt.len()))
+            \\    }
+            \\    is_eq : Tally, Tally -> Bool
+            \\    is_eq = |a, b| match (a, b) {
+            \\        (Tally(x), Tally(y)) => x == y
+            \\    }
+            \\}
+            ,
+        }},
+        .expected = .{ .inspect_str = "(\"other\", \"one byte\")" },
+    },
+    .{
+        .name = "custom from_numeral Err is a compile-time problem",
+        .source_kind = .module,
+        .source =
+        \\Picky := [Picky].{
+        \\    from_numeral : Numeral -> Try(Picky, [InvalidNumeral(Str)])
+        \\    from_numeral = |_numeral| Err(InvalidNumeral("Picky rejects every numeral"))
+        \\}
+        \\
+        \\force : Picky -> Picky
+        \\force = |n| n
+        \\
+        \\main = force(42)
+        ,
+        .expected = .problem,
+    },
+    .{
+        .name = "custom from_numeral Err in an uncalled function is a compile-time problem",
+        .source_kind = .module,
+        .source =
+        \\Picky := [Picky].{
+        \\    from_numeral : Numeral -> Try(Picky, [InvalidNumeral(Str)])
+        \\    from_numeral = |_numeral| Err(InvalidNumeral("Picky rejects every numeral"))
+        \\}
+        \\
+        \\unused : {} -> Picky
+        \\unused = |_| 42
+        \\
+        \\main = "ok"
+        ,
+        .expected = .problem,
     },
     .{
         .name = "inspect: unconstrained empty list specialization remains replaceable until constrained",

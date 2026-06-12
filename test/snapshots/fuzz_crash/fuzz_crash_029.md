@@ -55,7 +55,7 @@ For example:     packages { base: "../base/main.roc" }
 
 
 **PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
+A parsing error occurred: `expected_provides`
 This is an unexpected parsing error. Please check your syntax.
 
 **fuzz_crash_029.md:12:3:12:4:**
@@ -276,9 +276,8 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(malformed-header (tag "expected_packages_open_curly"))
+	(malformed-header (tag "expected_provides"))
 	(statements
-		(s-malformed (tag "statement_unexpected_token"))
 		(s-type-anno (name "pkg")
 			(ty-malformed (tag "ty_anno_unexpected_token")))
 		(s-malformed (tag "statement_unexpected_token"))
@@ -297,7 +296,6 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-# Cd
 # pen
 pkg : 
 # Cose
