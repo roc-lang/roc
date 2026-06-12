@@ -4647,9 +4647,9 @@ const BodyContext = struct {
         if (self.currentLocalBindingForResolvedValue(ref_id)) |binding| {
             const local_id = binding.local;
             const local_ty = self.builder.program.locals.items[@intFromEnum(local_id)].ty;
-            // The local's Monotype is the bridge to the binder's node in the
-            // context that bound it; importing it reconnects this context's
-            // instantiation to that node before the use type is related.
+            // The local's Monotype identifies the binder's node in the
+            // context that bound it; importing it unifies this context's
+            // instantiation with that node before the use type is unified.
             try self.constrainTypeToMono(checkedBinderType(self.view, binding.binder), local_ty);
             try self.constrainTypeToMono(checkedBinderType(self.view, binding.binder), ty);
             try self.constrainTypeToMono(checked_ty, ty);
