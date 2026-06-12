@@ -170,6 +170,7 @@ const CustomCase = enum {
     generated_graph_5_5,
     generated_graph_2_100,
     generated_graph_200_5,
+    list_builtin_inlined,
     fmt_reformats_file,
     fmt_does_not_change_file,
     fmt_stdin_formats,
@@ -178,6 +179,7 @@ const CustomCase = enum {
     build_int_interpreter_output_runs,
     build_int_dev_output_runs,
     build_glibc_target_non_linux_error,
+    build_windows_shared_library,
     cache_passing_results,
     cache_failing_results,
     cache_invalidated_by_source_change,
@@ -193,6 +195,8 @@ const CustomCase = enum {
     glue_c_header,
     glue_c_header_compiles,
     glue_zig,
+    glue_zig_compiles,
+    glue_rust,
     glue_zig_bang_record_fields,
     glue_c_tests,
 };
@@ -448,6 +452,8 @@ const glue_cases = [_]CliCase{
     .{ .id = 0, .suite = .glue, .name = "glue command with CGlue generates expected C header", .body = .{ .custom = .glue_c_header } },
     .{ .id = 0, .suite = .glue, .name = "glue command generated C header compiles with zig cc", .body = .{ .custom = .glue_c_header_compiles } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: ZigGlue succeeds on fx platform", .body = .{ .custom = .glue_zig } },
+    .{ .id = 0, .suite = .glue, .name = "glue command generated Zig compiles with zig build-obj", .body = .{ .custom = .glue_zig_compiles } },
+    .{ .id = 0, .suite = .glue, .name = "glue regression: RustGlue succeeds on fx platform", .body = .{ .custom = .glue_rust } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: ZigGlue quotes bang record fields", .body = .{ .custom = .glue_zig_bang_record_fields } },
     .{ .id = 0, .suite = .glue, .name = "CGlue.roc expect tests pass", .body = .{ .custom = .glue_c_tests } },
 };
@@ -497,13 +503,17 @@ const no_errors_needles = [_]OutputNeedle{
 
 const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "CLI test cache roots are distinct", .body = .{ .custom = .cli_cache_roots_distinct } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc build reports missing host symbols before linking", .body = .{ .command = .{ .args = &.{ "build", "--no-cache", "--target=x64musl" }, .roc_file = "test/missing-host-symbol/app.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "MISSING HOST SYMBOLS" }, .{ .stream = .stderr, .text = "roc_host_vanish" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check writes parse errors to stderr", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/has_parse_error.roc", .exit = .failure, .stderr_min_len = 1, .contains_any = &.{.{ .needles = &parse_error_needles }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check displays correct file path in parse error messages", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/has_parse_error.roc", .exit = .failure, .stderr_min_len = 1, .contains = &.{.{ .stream = .stderr, .text = "has_parse_error.roc" }}, .not_contains = &.{.{ .stream = .stderr, .text = "\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc check rejects invalid hosted sections", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/hosted-section-errors/platform/main.roc", .exit = .failure, .stderr_min_len = 1, .contains = &.{ .{ .stream = .stderr, .text = "INVALID HOSTED SECTION" }, .{ .stream = .stderr, .text = "Host.nonexistent" }, .{ .stream = .stderr, .text = "Host.quadruple" }, .{ .stream = .stderr, .text = "roc_alloc" }, .{ .stream = .stderr, .text = "roc__sneaky" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc check accepts a valid hosted section", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/fx/platform/main.roc", .not_contains = &.{.{ .stream = .stderr, .text = "INVALID HOSTED SECTION" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check succeeds on valid file", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/simple_success.roc", .not_contains = &.{ .{ .stream = .stderr, .text = "Failed to check" }, .{ .stream = .stderr, .text = "error" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check generated module graph succeeds with 1 file and 1 symbol", .body = .{ .custom = .generated_graph_1_1 } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check generated module graph succeeds with 5 files and 5 symbols", .body = .{ .custom = .generated_graph_5_5 } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check generated module graph handles many symbols per file", .body = .{ .custom = .generated_graph_2_100 } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check generated module graph handles many imported files", .body = .{ .custom = .generated_graph_200_5 } },
+    .{ .id = 0, .suite = .subcommands, .name = "list builtins inline in native --opt=speed build", .body = .{ .custom = .list_builtin_inlined } },
     .{ .id = 0, .suite = .subcommands, .name = "roc version outputs at least 5 chars to stdout", .body = .{ .command = .{ .args = &.{"version"}, .stdout_min_len = 5 } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc repl batch mode suppresses welcome banner", .body = .{ .command = .{ .args = &.{"repl"}, .stdin = "", .stdout_exact = "", .stderr_exact = "" } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc repl evaluates simple expression", .body = .{ .command = .{ .args = &.{"repl"}, .stdin = "1 + 1\n", .contains = &.{.{ .stream = .stdout, .text = "2" }}, .not_contains = &.{ .{ .stream = .stdout, .text = "Roc REPL" }, .{ .stream = .stdout, .text = ">" }, .{ .stream = .stdout, .text = "Goodbye" } } } } },
@@ -532,13 +542,14 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc run test/str/app_static_24_byte_string.roc does not panic", .skip = .{ .windows = "test/str platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{"--no-cache"}, .roc_file = "test/str/app_static_24_byte_string.roc", .exit = .not_panic, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "reached unreachable code" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build creates executable from test/int/app.roc (interpreter)", .backend = .interpreter, .skip = .{ .windows = "test/int platform does not have Windows host libraries" }, .body = .{ .custom = .build_int_interpreter_creates_output } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build creates executable from test/int/app.roc (dev)", .backend = .dev, .skip = .{ .always = "TODO: dev backend compilation fails for test/int/app.roc" }, .body = .{ .custom = .noop } },
-    .{ .id = 0, .suite = .subcommands, .name = "roc build --no-link lowers platform required init consts", .body = .{ .command = .{ .args = &.{ "build", "--no-link", "--no-cache" }, .roc_file = "test/postcheck/platform_required_init/app.roc", .contains = &.{.{ .stream = .stdout, .text = "Object file generated:" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc build archive output lowers platform required init consts", .body = .{ .command = .{ .args = &.{ "build", "--no-cache" }, .roc_file = "test/postcheck/platform_required_init/app.roc", .contains = &.{.{ .stream = .stdout, .text = "Built " }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build executable runs correctly (interpreter)", .backend = .interpreter, .skip = .{ .windows = "test/int platform does not have Windows host libraries" }, .body = .{ .custom = .build_int_interpreter_output_runs } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build --opt=dev executable runs correctly for test/int/app.roc", .backend = .dev, .skip = .{ .windows = "test/int platform does not have Windows host libraries" }, .body = .{ .custom = .build_int_dev_output_runs } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build fails with file not found error", .body = .{ .command = .{ .args = &.{"build"}, .roc_file = "nonexistent_file.roc", .exit = .failure, .contains_any = &.{.{ .needles = &.{ .{ .stream = .stderr, .text = "FileNotFound" }, .{ .stream = .stderr, .text = "not found" }, .{ .stream = .stderr, .text = "NOT FOUND" }, .{ .stream = .stderr, .text = "Failed" } } }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build fails with invalid target error", .body = .{ .command = .{ .args = &.{ "build", "--target=invalid_target_name" }, .roc_file = "test/int/app.roc", .exit = .failure, .contains_any = &.{.{ .needles = &.{ .{ .stream = .stderr, .text = "Invalid target" }, .{ .stream = .stderr, .text = "invalid" } } }} } } },
-    .{ .id = 0, .suite = .subcommands, .name = "roc build wasm32 no-link succeeds for list builtins", .body = .{ .command = .{ .args = &.{ "build", "--target=wasm32", "--no-link", "--no-cache" }, .roc_file = "test/wasm/list_builtin_static_lib_app.roc", .contains = &.{.{ .stream = .stdout, .text = "Object file generated:" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "FunctionTypeMismatch" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc build wasm32 shared module succeeds for list builtins", .body = .{ .command = .{ .args = &.{ "build", "--target=wasm32", "--no-cache" }, .roc_file = "test/wasm/list_builtin_static_lib_app.roc", .contains = &.{.{ .stream = .stdout, .text = "Built " }}, .not_contains = &.{ .{ .stream = .stderr, .text = "FunctionTypeMismatch" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build glibc target gives helpful error on non-Linux", .body = .{ .custom = .build_glibc_target_non_linux_error } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc build Shared output links a Windows DLL", .body = .{ .custom = .build_windows_shared_library } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test caches passing results (interpreter)", .backend = .interpreter, .body = .{ .custom = .cache_passing_results } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test caches passing results (dev)", .backend = .dev, .body = .{ .custom = .cache_passing_results } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test caches failing results (interpreter)", .backend = .interpreter, .body = .{ .custom = .cache_failing_results } },
@@ -591,6 +602,12 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc test issue 9388 List.sort_with top-level expect does not overflow", .body = .{ .command = .{ .args = &.{ "test", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/Issue9388SortWithTopLevelExpect.roc", .contains = &.{.{ .stream = .stdout, .text = "passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "overflowed its stack" }, .{ .stream = .stderr, .text = "Segmentation fault" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test issue 9487 static dispatch result compares to tag literal", .skip = .{ .windows = "issue 9487 static dispatch repro is run on POSIX only" }, .body = .{ .command = .{ .args = &.{ "test", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/Issue9487StaticDispatchEq.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test eq on tag union with list payload does not panic", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/cli/EqTagWithListPayload.roc", .exit = .success, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc test list prepend retains its element (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/RcListPrepend.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "passed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc test list prepend retains its element (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/RcListPrepend.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "passed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc test list set retains its element (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/RcListSet.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "passed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc test list set retains its element (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/RcListSet.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "passed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc test list replace retains its element (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/RcListReplace.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "passed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc test list replace retains its element (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/RcListReplace.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "passed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test issue 9392 numeric utility expects are deterministic with no cache", .body = .{ .custom = .issue_9392_deterministic_no_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "roc run issue 9208 open union tag before Exit matches wildcard", .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/fx-open/test_bar_error.roc", .exit = .{ .code = 1 }, .contains = &.{.{ .stream = .stderr, .text = "exited with other error: Bar" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build issue 9435 hosted nominal return builds without mono panic", .body = .{ .custom = .build_issue_9435_hosted_nominal_return } },
@@ -600,6 +617,11 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc bundle complex_package includes all transitively imported modules", .body = .{ .custom = .bundle_complex_package } },
     .{ .id = 0, .suite = .subcommands, .name = "failed inline expect exits with code 1 and continues program (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{}, .roc_file = "test/cli/failed_inline_expect.roc", .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stdout, .text = "Hello, World!" }, .{ .stream = .stderr, .text = "expect failed" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "failed inline expect exits with code 1 and continues program (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{"--opt=interpreter"}, .roc_file = "test/cli/failed_inline_expect.roc", .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stdout, .text = "Hello, World!" }, .{ .stream = .stderr, .text = "Expect failed" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc test ? on Ok inside top-level expect passes (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/QuestionInExpect.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "passed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc test ? on Ok inside top-level expect passes (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/QuestionInExpect.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "passed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc test ? on Err inside top-level expect fails with snippet and value (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/QuestionInExpectFail.roc", .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stderr, .text = "The `?` operator in `to_positive(-3)?` evaluated an `Err` inside an `expect`. The value was: Err(IsNegative)" }, .{ .stream = .stderr, .text = "result = to_positive(-3)?" } }, .not_contains = &.{.{ .stream = .stderr, .text = "crash" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc test ? on Err inside top-level expect fails with snippet and value (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/QuestionInExpectFail.roc", .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stderr, .text = "The `?` operator in `to_positive(-3)?` evaluated an `Err` inside an `expect`. The value was: Err(IsNegative)" }, .{ .stream = .stderr, .text = "result = to_positive(-3)?" } }, .not_contains = &.{.{ .stream = .stderr, .text = "crash" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc test ? on Err inside top-level expect fails with snippet and value (llvm)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "test", "--opt=speed", "--no-cache" }, .roc_file = "test/cli/QuestionInExpectFail.roc", .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stderr, .text = "The `?` operator in `to_positive(-3)?` evaluated an `Err` inside an `expect`. The value was: Err(IsNegative)" }, .{ .stream = .stderr, .text = "result = to_positive(-3)?" } }, .not_contains = &.{.{ .stream = .stderr, .text = "crash" }} } } },
 };
 
 // Wire protocol (child -> parent via pipe)
@@ -1347,6 +1369,7 @@ fn runCustomCase(
         .generated_graph_5_5 => customGeneratedModuleGraph(io, allocator, &env, &timer, timeout_ms, .{ .roc_file_count = 5, .symbols_per_file = 5 }),
         .generated_graph_2_100 => customGeneratedModuleGraph(io, allocator, &env, &timer, timeout_ms, .{ .roc_file_count = 2, .symbols_per_file = 100 }),
         .generated_graph_200_5 => customGeneratedModuleGraph(io, allocator, &env, &timer, timeout_ms, .{ .roc_file_count = 200, .symbols_per_file = 5 }),
+        .list_builtin_inlined => customListBuiltinInlined(io, allocator, &env, &timer, timeout_ms),
         .fmt_reformats_file => customFmtReformatsFile(io, allocator, &env, &timer, timeout_ms),
         .fmt_does_not_change_file => customFmtDoesNotChangeFile(io, allocator, &env, &timer, timeout_ms),
         .fmt_stdin_formats => customFmtStdin(io, allocator, &env, &timer, timeout_ms, false),
@@ -1355,6 +1378,7 @@ fn runCustomCase(
         .build_int_interpreter_output_runs => customBuildIntOutputRuns(io, allocator, &env, &timer, timeout_ms, .interpreter),
         .build_int_dev_output_runs => customBuildIntOutputRuns(io, allocator, &env, &timer, timeout_ms, .dev),
         .build_glibc_target_non_linux_error => customGlibcTargetNonLinux(io, allocator, &env, &timer, timeout_ms),
+        .build_windows_shared_library => customWindowsSharedLibrary(io, allocator, &env, &timer, timeout_ms),
         .cache_passing_results => customCachePassingResults(io, allocator, &env, &timer, timeout_ms, spec.backend orelse .interpreter),
         .cache_failing_results => customCacheFailingResults(io, allocator, &env, &timer, timeout_ms, spec.backend orelse .interpreter),
         .cache_invalidated_by_source_change => customCacheInvalidated(io, allocator, &env, &timer, timeout_ms, spec.backend orelse .interpreter),
@@ -1370,6 +1394,8 @@ fn runCustomCase(
         .glue_c_header => customGlueCHeader(io, allocator, &env, &timer, timeout_ms),
         .glue_c_header_compiles => customGlueCHeaderCompiles(io, allocator, &env, &timer, timeout_ms),
         .glue_zig => customGlueZig(io, allocator, &env, &timer, timeout_ms),
+        .glue_zig_compiles => customGlueZigCompiles(io, allocator, &env, &timer, timeout_ms),
+        .glue_rust => customGlueRust(io, allocator, &env, &timer, timeout_ms),
         .glue_zig_bang_record_fields => customGlueZigBangRecordFields(io, allocator, &env, &timer, timeout_ms),
         .glue_c_tests => customGlueCTests(io, allocator, &env, &timer, timeout_ms),
     };
@@ -1511,6 +1537,77 @@ const GeneratedModuleGraphConfig = struct {
     roc_file_count: usize,
     symbols_per_file: usize,
 };
+
+/// Regression test for builtin inlining: a native `--opt=speed` archive build must
+/// inline list builtins (link builtins.bc) rather than leave them as opaque external
+/// calls. If the builtin symbol naming ever drifts between the codegen and the
+/// bitcode, the inlining silently stops; this catches that by asserting the archive's
+/// app object has no remaining reference to `roc_builtins_list_append_unsafe`.
+fn customListBuiltinInlined(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    const plat_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "inline_plat.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate platform path: {}", .{err});
+    const app_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "inline_app.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate app path: {}", .{err});
+    const archive_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "inline_app.a" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate archive path: {}", .{err});
+    const output_arg = std.fmt.allocPrint(allocator, "--output={s}", .{archive_path}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate output arg: {}", .{err});
+
+    const plat_src =
+        \\platform ""
+        \\    requires {} { main! : () => List(I32) }
+        \\    exposes []
+        \\    packages {}
+        \\    provides { "roc_main": main_for_host! }
+        \\    targets: {
+        \\        inputs: "targets/",
+        \\        arm64mac: { inputs: [app], output: Archive },
+        \\        x64mac: { inputs: [app], output: Archive },
+        \\        arm64musl: { inputs: [app], output: Archive },
+        \\        x64musl: { inputs: [app], output: Archive },
+        \\        arm64glibc: { inputs: [app], output: Archive },
+        \\        x64glibc: { inputs: [app], output: Archive },
+        \\        arm64win: { inputs: [app], output: Archive },
+        \\        x64win: { inputs: [app], output: Archive },
+        \\    }
+        \\
+        \\main_for_host! : () => List(I32)
+        \\main_for_host! = || main!()
+        \\
+    ;
+    const app_src =
+        \\app [main!] { pf: platform "./inline_plat.roc" }
+        \\
+        \\main! : () => List(I32)
+        \\main! = || [1.I32, 2, 3].map(|x| x + 1)
+        \\
+    ;
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = plat_path, .data = plat_src }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write platform: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = app_path, .data = app_src }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write app: {}", .{err});
+
+    const child_timeout_ms = childCommandTimeoutMs(timer, timeout_ms) orelse
+        return timeoutFailure(allocator, timer, .run, "case timeout exhausted before roc build started");
+    const result = runRocInEnv(io, allocator, env, &.{ "build", "--opt=speed", "--no-cache", output_arg }, app_path, .absolute, null, child_timeout_ms) catch |err|
+        return customInfraFailure(allocator, timer, "roc build spawn error: {}", .{err});
+    if (checkCommandExpectation(allocator, result, .{ .args = &.{"build"}, .exit = .success })) |message| {
+        return failureFromRun(allocator, timer, result, message);
+    }
+
+    const archive_bytes = std.Io.Dir.cwd().readFileAlloc(io, archive_path, allocator, .limited(64 * 1024 * 1024)) catch |err|
+        return customInfraFailure(allocator, timer, "failed to read archive {s}: {}", .{ archive_path, err });
+    if (std.mem.find(u8, archive_bytes, "roc_builtins_list_append_unsafe") != null) {
+        return customFailure(allocator, timer, "list_append_unsafe was not inlined into the --opt=speed archive object (it still references the builtin symbol)", .{});
+    }
+    return null;
+}
 
 fn customGeneratedModuleGraph(
     io: std.Io,
@@ -1786,6 +1883,38 @@ fn customGlibcTargetNonLinux(io: std.Io, allocator: Allocator, env: *const CaseE
     return null;
 }
 
+/// Shared output on COFF: link the dylib test app and its host into one DLL.
+/// lld-link resolves the app/host symbol references in a single pass, the
+/// same as the ELF and Mach-O shared-library links. Windows-only: the link
+/// needs the native Windows SDK.
+fn customWindowsSharedLibrary(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    if (builtin.os.tag != .windows) return null;
+
+    const dll_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "app.dll" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate dll path: {}", .{err});
+    const output_arg = std.fmt.allocPrint(allocator, "--output={s}", .{dll_path}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate output arg: {}", .{err});
+
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "build", "--no-cache", output_arg },
+        .roc_file = "test/dylib/app.roc",
+        .contains = &.{.{ .stream = .stdout, .text = "Built " }},
+    })) |failure| return failure;
+
+    const dll_bytes = std.Io.Dir.cwd().readFileAlloc(io, dll_path, allocator, .limited(256 * 1024 * 1024)) catch |err|
+        return customInfraFailure(allocator, timer, "failed to read built DLL {s}: {}", .{ dll_path, err });
+
+    // The host's unused canary blob must be dead-stripped from the DLL. A
+    // presence check on the used hosted symbol's name would prove nothing
+    // here: linked PE images carry no symbol table, so internal names vanish
+    // even though the code survives; the ELF and Mach-O shared-library tests
+    // cover the positive side.
+    if (std.mem.find(u8, dll_bytes, "ROC_DCE_CANARY_BLOB_7f3a9c") != null) {
+        return customFailure(allocator, timer, "unused host canary blob was not dead-stripped from the DLL", .{});
+    }
+    return null;
+}
+
 fn customCachePassingResults(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64, backend: OptMode) ?TestResult {
     const opt_arg = backendOptArg(allocator, backend) catch |err|
         return customInfraFailure(allocator, timer, "failed to allocate opt arg: {}", .{err});
@@ -2026,6 +2155,71 @@ fn customGlueCHeaderCompiles(io: std.Io, allocator: Allocator, env: *const CaseE
     return null;
 }
 
+fn customGlueZigCompiles(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    const output_dir = createWorkSubdir(io, allocator, env, "glue-out") catch |err|
+        return customInfraFailure(allocator, timer, "failed to create glue output dir: {}", .{err});
+    if (runGlueCommandInEnv(io, allocator, env, timer, timeout_ms, "src/glue/src/ZigGlue.roc", output_dir)) |failure| return failure;
+
+    // Reference the key generated ABI types so they are semantically analyzed (the
+    // natural-signature PlatformHostedFns, the register-style RocOps, RocStr, and the
+    // HostedFunctions table). Importing the file also runs its comptime size/alignment
+    // assertions. Then compile to an object to confirm the generated Zig is well-formed.
+    // The generated ABI file name is interpolated rather than written as a literal import
+    // path so the dead-files lint does not mistake this test fixture for a real import of an
+    // untracked source file.
+    const test_zig_content = std.fmt.allocPrint(allocator,
+        \\const abi = @import("{s}");
+        \\export fn _roc_glue_abi_check() void {{
+        \\    var ops: abi.RocOps = undefined;
+        \\    var str: abi.RocStr = undefined;
+        \\    var funcs: abi.HostedFunctions = undefined;
+        \\    var hosted: abi.PlatformHostedFns = undefined;
+        \\    _ = &ops;
+        \\    _ = &str;
+        \\    _ = &funcs;
+        \\    _ = &hosted;
+        \\}}
+    , .{"roc_platform_abi.zig"}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to render test Zig source: {}", .{err});
+    const test_zig_path = std.fs.path.join(allocator, &.{ output_dir, "test_abi.zig" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate test Zig path: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = test_zig_path, .data = test_zig_content }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write test Zig file: {}", .{err});
+    const test_o_path = std.fs.path.join(allocator, &.{ output_dir, "test_abi.o" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate test object path: {}", .{err});
+    const emit_flag = std.fmt.allocPrint(allocator, "-femit-bin={s}", .{test_o_path}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate emit flag: {}", .{err});
+
+    if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{
+        "zig",
+        "build-obj",
+        test_zig_path,
+        emit_flag,
+    }, project_root_path, .{ .args = &.{} })) |failure| return failure;
+    return null;
+}
+
+fn customGlueRust(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    const output_dir = createWorkSubdir(io, allocator, env, "glue-out") catch |err|
+        return customInfraFailure(allocator, timer, "failed to create glue output dir: {}", .{err});
+    if (runGlueCommandInEnv(io, allocator, env, timer, timeout_ms, "src/glue/src/RustGlue.roc", output_dir)) |failure| return failure;
+    const generated_path = std.fs.path.join(allocator, &.{ output_dir, "roc_platform_abi.rs" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate generated Rust path: {}", .{err});
+    const generated = std.Io.Dir.cwd().readFileAlloc(io, generated_path, allocator, .limited(1024 * 1024)) catch |err|
+        return customFailure(allocator, timer, "failed to read generated Rust file: {}", .{err});
+    for ([_][]const u8{ "pub struct RocOps", "pub struct RocStr", "PlatformHostedFns" }) |needle| {
+        if (std.mem.find(u8, generated, needle) == null) {
+            return customFailure(allocator, timer, "generated Rust file missing {s}", .{needle});
+        }
+    }
+    // The old uniform-ABI argument struct must be gone (confirms RustGlue tracks the new
+    // register-style host ABI rather than the struct-by-pointer callbacks).
+    if (std.mem.find(u8, generated, "pub struct RocAlloc") != null) {
+        return customFailure(allocator, timer, "generated Rust file still defines the obsolete RocAlloc struct", .{});
+    }
+    return null;
+}
+
 fn customGlueZig(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
     const output_dir = createWorkSubdir(io, allocator, env, "glue-out") catch |err|
         return customInfraFailure(allocator, timer, "failed to create glue output dir: {}", .{err});
@@ -2071,28 +2265,28 @@ fn customGlueZigBoxHelperTest(
         \\    dealloc_alignment: usize = 0,
         \\};
         \\
-        \\fn dummyHostedFn(_: *anyopaque, _: *anyopaque, _: *anyopaque) callconv(.c) void {}
+        \\fn dummyHostedFn() callconv(.c) void {}
         \\
-        \\var hosted_fns = [_]abi.HostedFn{&dummyHostedFn};
+        \\var hosted_fns = [_]abi.HostedFn{@ptrCast(&dummyHostedFn)};
         \\
-        \\fn rocAlloc(_: *abi.RocAlloc, _: *anyopaque) callconv(.c) void {
+        \\fn rocAlloc(_: *abi.RocOps, _: usize, _: usize) callconv(.c) ?*anyopaque {
         \\    unreachable;
         \\}
         \\
-        \\fn rocDealloc(dealloc_args: *abi.RocDealloc, env_ptr: *anyopaque) callconv(.c) void {
-        \\    const env_ref: *Env = @ptrCast(@alignCast(env_ptr));
+        \\fn rocDealloc(ops: *abi.RocOps, ptr: *anyopaque, alignment: usize) callconv(.c) void {
+        \\    const env_ref: *Env = @ptrCast(@alignCast(ops.env));
         \\    env_ref.dealloc_count += 1;
-        \\    env_ref.dealloc_ptr = @intFromPtr(dealloc_args.ptr);
-        \\    env_ref.dealloc_alignment = dealloc_args.alignment;
+        \\    env_ref.dealloc_ptr = @intFromPtr(ptr);
+        \\    env_ref.dealloc_alignment = alignment;
         \\}
         \\
-        \\fn rocRealloc(_: *abi.RocRealloc, _: *anyopaque) callconv(.c) void {
+        \\fn rocRealloc(_: *abi.RocOps, _: *anyopaque, _: usize, _: usize) callconv(.c) ?*anyopaque {
         \\    unreachable;
         \\}
         \\
-        \\fn rocDbg(_: *const abi.RocDbg, _: *anyopaque) callconv(.c) void {}
-        \\fn rocExpectFailed(_: *const abi.RocExpectFailed, _: *anyopaque) callconv(.c) void {}
-        \\fn rocCrashed(_: *const abi.RocCrashed, _: *anyopaque) callconv(.c) void {}
+        \\fn rocDbg(_: *abi.RocOps, _: [*]const u8, _: usize) callconv(.c) void {}
+        \\fn rocExpectFailed(_: *abi.RocOps, _: [*]const u8, _: usize) callconv(.c) void {}
+        \\fn rocCrashed(_: *abi.RocOps, _: [*]const u8, _: usize) callconv(.c) void {}
         \\
         \\fn makeOps(env_ref: *Env) abi.RocOps {
         \\    return .{
@@ -2157,36 +2351,23 @@ fn customGlueZigBoxHelperTest(
         \\        .allocator = std.testing.allocator,
         \\        .roc_io = abi.RocIo.freestanding(),
         \\    };
+        \\    var roc_ops = abi.makeRocOps(&env_value, .{ .count = 0, .fns = &hosted_fns });
         \\
-        \\    var alloc_args = abi.RocAlloc{
-        \\        .alignment = 4,
-        \\        .length = 8,
-        \\        .answer = undefined,
-        \\    };
-        \\    abi.DefaultAllocators.rocAlloc(&alloc_args, @ptrCast(&env_value));
+        \\    const alloc_ptr = abi.DefaultAllocators.rocAlloc(&roc_ops, 8, 4) orelse return error.OutOfMemory;
         \\
-        \\    const old_bytes: [*]u8 = @ptrCast(alloc_args.answer);
+        \\    const old_bytes: [*]u8 = @ptrCast(alloc_ptr);
         \\    old_bytes[0] = 0xaa;
         \\    old_bytes[1] = 0xbb;
         \\    old_bytes[7] = 0xcc;
         \\
-        \\    var realloc_args = abi.RocRealloc{
-        \\        .alignment = 4,
-        \\        .new_length = 16,
-        \\        .answer = alloc_args.answer,
-        \\    };
-        \\    abi.DefaultAllocators.rocRealloc(&realloc_args, @ptrCast(&env_value));
+        \\    const realloc_ptr = abi.DefaultAllocators.rocRealloc(&roc_ops, alloc_ptr, 16, 4) orelse return error.OutOfMemory;
         \\
-        \\    const new_bytes: [*]u8 = @ptrCast(realloc_args.answer);
+        \\    const new_bytes: [*]u8 = @ptrCast(realloc_ptr);
         \\    try std.testing.expectEqual(@as(u8, 0xaa), new_bytes[0]);
         \\    try std.testing.expectEqual(@as(u8, 0xbb), new_bytes[1]);
         \\    try std.testing.expectEqual(@as(u8, 0xcc), new_bytes[7]);
         \\
-        \\    var dealloc_args = abi.RocDealloc{
-        \\        .alignment = 4,
-        \\        .ptr = realloc_args.answer,
-        \\    };
-        \\    abi.DefaultAllocators.rocDealloc(&dealloc_args, @ptrCast(&env_value));
+        \\    abi.DefaultAllocators.rocDealloc(&roc_ops, realloc_ptr, 4);
         \\}
     ;
 

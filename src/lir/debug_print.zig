@@ -159,6 +159,11 @@ const Printer = struct {
                     try writer.print("expect l{d}\n", .{@intFromEnum(s.condition)});
                     current = s.next;
                 },
+                .expect_err => |s| {
+                    try writeIndent(indent, writer);
+                    try writer.print("expect_err l{d}\n", .{@intFromEnum(s.message)});
+                    return;
+                },
                 .incref => |s| {
                     try writeIndent(indent, writer);
                     try writer.print("incref l{d} x{d}\n", .{ @intFromEnum(s.value), s.count });

@@ -420,7 +420,7 @@ const Detection = struct {
                         try work.append(gpa, .{ .stmt = branches[i].body, .edge = .{ .switch_branch = .{ .stmt = item.stmt, .index = @intCast(i) } } });
                     }
                 },
-                .jump, .ret, .crash, .runtime_error, .loop_continue, .loop_break => {},
+                .jump, .ret, .crash, .expect_err, .runtime_error, .loop_continue, .loop_break => {},
                 inline .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .free => |s| {
                     try work.append(gpa, .{ .stmt = s.next, .edge = .{ .stmt_next = item.stmt } });
                 },
@@ -474,7 +474,7 @@ const Detection = struct {
                     try self.appendSharedSuccessor(work, branch.body);
                 }
             },
-            .jump, .ret, .crash, .runtime_error, .loop_continue, .loop_break => {},
+            .jump, .ret, .crash, .expect_err, .runtime_error, .loop_continue, .loop_break => {},
             inline .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .free => |s| {
                 try self.appendSharedSuccessor(work, s.next);
             },
@@ -680,6 +680,7 @@ const Detection = struct {
             .free => |s| c.chainContains(s.value),
             .switch_stmt => |s| c.chainContains(s.cond),
             .ret => |s| c.chainContains(s.value),
+            .expect_err => |s| c.chainContains(s.message),
             .jump, .crash, .runtime_error, .loop_continue, .loop_break, .join => false,
         };
     }

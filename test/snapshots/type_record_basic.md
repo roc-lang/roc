@@ -25,8 +25,11 @@ main! = |_| getName({namee: "luke", age:21})
 
 This argument has the type:
 
-    { age: a, namee: Str }
-      where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
+    { age: a, namee: b }
+      where [
+        a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
+        b.from_quote : List(U8) -> Try(b, [BadQuotedBytes(Str)]),
+      ]
 
 But `getName` needs the first argument to be:
 

@@ -348,10 +348,22 @@ pub const BoolRoot = struct {
     ret_layout: LayoutIdx,
 };
 
-/// Result of evaluating a bool-returning test root: passed (bool) or crashed (message).
+/// Result of evaluating a bool-returning test root: passed (bool), crashed
+/// (message), or failed because a `?` operator evaluated an Err inside the
+/// expect (message plus the source region of the `?` expression).
 pub const BoolRootEvalResult = union(enum) {
     passed: bool,
     crashed: []const u8,
+    expect_err: ExpectErrFailure,
+};
+
+/// Failure detail for a `?` operator that evaluated an Err inside a
+/// top-level expect: the runtime-built message and the byte offsets of the
+/// `?` expression in the failing module's source.
+pub const ExpectErrFailure = struct {
+    message: []const u8,
+    region_start: u32,
+    region_end: u32,
 };
 
 /// LLVM optimization level for test compilation.
@@ -366,6 +378,7 @@ pub fn deinitBoolRootEvalResults(allocator: Allocator, results: []BoolRootEvalRe
         switch (result) {
             .passed => {},
             .crashed => |message| allocator.free(message),
+            .expect_err => |failure| allocator.free(failure.message),
         }
     }
     allocator.free(results);
@@ -799,9 +812,46 @@ pub fn parseAndCanonicalizeProgramPublishedRoots(
     return parseAndCanonicalizeProgramWithRootMode(allocator, source_kind, source, imports, false, .published_roots_only, null);
 }
 
+/// Whether publishing a program for compile-time evaluation reported problems.
+pub const ComptimePublishOutcome = enum { no_problems, comptime_problems };
+
+/// Publish a program with compile-time evaluation problems routed into the
+/// checker's problem store, reporting whether any were found. The runtime eval
+/// pipeline intentionally publishes without a problem store so that crashes
+/// reachable from compile-time roots still compile and crash at runtime; this
+/// entry point exists for tests that assert on the compile-time diagnostics
+/// instead.
+pub fn publishProgramForComptimeProblems(
+    allocator: Allocator,
+    source_kind: SourceKind,
+    source: []const u8,
+    imports: []const ModuleSource,
+) anyerror!ComptimePublishOutcome {
+    const resources = parseAndCanonicalizeProgramWithRootModeReporting(
+        allocator,
+        source_kind,
+        source,
+        imports,
+        false,
+        .published_roots_only,
+        null,
+        .report_comptime_problems,
+    ) catch |err| switch (err) {
+        error.CompileTimeProblem => return .comptime_problems,
+        else => return err,
+    };
+    cleanupParseAndCanonical(allocator, resources);
+    return .no_problems;
+}
+
 const PublishedRootMode = union(enum) {
     eval_root: bool,
     published_roots_only,
+};
+
+const ComptimeProblemReporting = enum {
+    ignore_comptime_problems,
+    report_comptime_problems,
 };
 
 fn problemBlocksCheckedArtifact(problem: check.problem.Problem) bool {
@@ -826,6 +876,28 @@ fn parseAndCanonicalizeProgramWithRootMode(
     inspect_wrap: bool,
     root_mode: PublishedRootMode,
     pre_published_builtin: ?PrePublishedBuiltin,
+) anyerror!ParsedResources {
+    return parseAndCanonicalizeProgramWithRootModeReporting(
+        allocator,
+        source_kind,
+        source,
+        imports,
+        inspect_wrap,
+        root_mode,
+        pre_published_builtin,
+        .ignore_comptime_problems,
+    );
+}
+
+fn parseAndCanonicalizeProgramWithRootModeReporting(
+    allocator: Allocator,
+    source_kind: SourceKind,
+    source: []const u8,
+    imports: []const ModuleSource,
+    inspect_wrap: bool,
+    root_mode: PublishedRootMode,
+    pre_published_builtin: ?PrePublishedBuiltin,
+    problem_reporting: ComptimeProblemReporting,
 ) anyerror!ParsedResources {
     const builtin_indices: CIR.BuiltinIndices = if (pre_published_builtin) |ppb|
         ppb.indices
@@ -995,6 +1067,10 @@ fn parseAndCanonicalizeProgramWithRootMode(
             .imports = publish_imports,
             .explicit_roots = explicit_roots,
             .compile_time_finalizer = CompileTimeFinalization.finalizer(),
+            .problem_store = switch (problem_reporting) {
+                .ignore_comptime_problems => null,
+                .report_comptime_problems => &main_checked.checker.problems,
+            },
         },
     );
     errdefer checked_artifact.deinit(allocator);
@@ -1214,6 +1290,10 @@ fn lowerCheckedRootWithViews(
         .{ .requests = root_module.root_requests.runtime_requests },
         .{
             .target_usize = target_usize,
+            // Match optimized builds so every backend exercises the in-place
+            // List.map path; the copy path is still covered by shared-list,
+            // slice, and layout-mismatch cases.
+            .list_in_place_map = true,
         },
     );
 
@@ -1691,6 +1771,7 @@ fn deinitPartialBoolRootEvalResults(allocator: Allocator, results: []BoolRootEva
         switch (result) {
             .passed => {},
             .crashed => |message| allocator.free(message),
+            .expect_err => |failure| allocator.free(failure.message),
         }
     }
     allocator.free(results);
@@ -1705,6 +1786,9 @@ fn runExecutableBoolRoot(
 ) anyerror!BoolRootEvalResult {
     runtime_env.resetObservation();
     runtime_env.resetAllocationTracker();
+    // Dev-JIT code calls the host's own expect_err wrapper, which records the
+    // `?` region in this thread-local slot; clear any stale value first.
+    _ = builtins.dev_wrappers.takeExpectErrRegion();
 
     const arg_buffer = try zeroedEntrypointArgBufferForLayouts(allocator, layouts, root.arg_layouts);
     defer if (arg_buffer) |buf| allocator.free(buf);
@@ -1725,7 +1809,11 @@ fn runExecutableBoolRoot(
 
     const result: BoolRootEvalResult = switch (runtime_env.crashState()) {
         .did_not_crash => .{ .passed = ret_buf[0] != 0 },
-        .crashed => .{ .crashed = try copyRuntimeCrashMessage(allocator, runtime_env) },
+        .crashed => if (builtins.dev_wrappers.takeExpectErrRegion()) |region| .{ .expect_err = .{
+            .message = try copyRuntimeCrashMessage(allocator, runtime_env),
+            .region_start = region.start,
+            .region_end = region.end,
+        } } else .{ .crashed = try copyRuntimeCrashMessage(allocator, runtime_env) },
     };
     runtime_env.resetAllocationTracker();
     return result;
@@ -1773,18 +1861,24 @@ pub fn devEvalBoolRoots(
     }
 }
 
-fn llvmCompileOptions(opt: LlvmTestOpt) @import("llvm_compile").CompileOptions {
+fn targetPtrWidthBits(target_usize: base.target.TargetUsize) u8 {
+    return @intCast(target_usize.size() * 8);
+}
+
+fn llvmCompileOptions(target_usize: base.target.TargetUsize, opt: LlvmTestOpt) @import("llvm_compile").CompileOptions {
     const llvm_compile = @import("llvm_compile");
     return switch (opt) {
         .size => .{
             .function_sections = false,
             .use_module_target_triple = true,
             .optimization = llvm_compile.bindings.IrOptimizationLevel.Oz,
+            .target_ptr_width_bits = targetPtrWidthBits(target_usize),
         },
         .speed => .{
             .function_sections = false,
             .use_module_target_triple = true,
             .optimization = llvm_compile.bindings.IrOptimizationLevel.O3,
+            .target_ptr_width_bits = targetPtrWidthBits(target_usize),
         },
     };
 }
@@ -1795,9 +1889,11 @@ fn callLlvmBoolRoot(
     entry: *const fn (*builtins.host_abi.RocOps, [*]u8, ?*anyopaque) callconv(.c) void,
     root: BoolRoot,
     runtime_env: *RuntimeHostEnv,
+    expect_err_region: ?*[3]u32,
 ) anyerror!BoolRootEvalResult {
     runtime_env.resetObservation();
     runtime_env.resetAllocationTracker();
+    if (expect_err_region) |region| region[0] = 0;
 
     const arg_buffer = try zeroedEntrypointArgBufferForLayouts(allocator, layouts, root.arg_layouts);
     defer if (arg_buffer) |buf| allocator.free(buf);
@@ -1818,7 +1914,16 @@ fn callLlvmBoolRoot(
 
     const result: BoolRootEvalResult = switch (runtime_env.crashState()) {
         .did_not_crash => .{ .passed = ret_buf[0] != 0 },
-        .crashed => .{ .crashed = try copyRuntimeCrashMessage(allocator, runtime_env) },
+        .crashed => blk: {
+            if (expect_err_region) |region| {
+                if (region[0] != 0) break :blk .{ .expect_err = .{
+                    .message = try copyRuntimeCrashMessage(allocator, runtime_env),
+                    .region_start = region[1],
+                    .region_end = region[2],
+                } };
+            }
+            break :blk .{ .crashed = try copyRuntimeCrashMessage(allocator, runtime_env) };
+        },
     };
     runtime_env.resetAllocationTracker();
     return result;
@@ -1860,7 +1965,7 @@ pub fn llvmEvalBoolRoots(
         allocator,
         std.Options.debug_io,
         bitcode.bitcode,
-        llvmCompileOptions(opt),
+        llvmCompileOptions(layouts.targetUsize(), opt),
     );
     defer {
         std.Io.Dir.deleteFileAbsolute(std.Options.debug_io, std.mem.sliceTo(dylib_path, 0)) catch {};
@@ -1881,9 +1986,14 @@ pub fn llvmEvalBoolRoots(
     var result_len: usize = 0;
     errdefer deinitPartialBoolRootEvalResults(allocator, results, result_len);
 
+    // Present only when the module contains an expect_err statement; written
+    // by the generated code so the harness can point the failure report at
+    // the `?` expression.
+    const expect_err_region = lib.lookup(*[3]u32, "roc_expect_err_region");
+
     for (roots, 0..) |root, i| {
         const entry = lib.lookup(EntryFn, root.symbol_name) orelse return error.LlvmBackendUnavailable;
-        results[i] = try callLlvmBoolRoot(allocator, layouts, entry, root, &runtime_env);
+        results[i] = try callLlvmBoolRoot(allocator, layouts, entry, root, &runtime_env, expect_err_region);
         result_len += 1;
     }
 
@@ -2039,6 +2149,7 @@ pub fn llvmEvaluatorInspectedStr(allocator: Allocator, lowered: *const LoweredPr
     const dylib_path = try llvm_compile.compileToSharedLibrary(allocator, std.Options.debug_io, bitcode.bitcode, .{
         .function_sections = false,
         .use_module_target_triple = true,
+        .target_ptr_width_bits = targetPtrWidthBits(lowered.view.layouts.targetUsize()),
     });
     defer {
         std.Io.Dir.deleteFileAbsolute(std.Options.debug_io, std.mem.sliceTo(dylib_path, 0)) catch {};

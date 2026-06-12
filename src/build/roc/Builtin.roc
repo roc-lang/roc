@@ -333,6 +333,31 @@ Builtin :: [].{
 		## ```
 		from_utf8 : List(U8) -> Try(Str, [BadUtf8({ problem : Str.Utf8Problem, index : U64 }), ..])
 
+		## Converts the UTF-8 bytes of a string literal to a [Str].
+		##
+		## The compiler calls this when a string literal's type is [Str], passing
+		## the literal's bytes after escape processing. It can also be called
+		## directly, in which case invalid UTF-8 returns `Err`.
+		## ```roc
+		## expect Str.from_quote([82, 111, 99]) == Ok("Roc")
+		## expect Str.from_quote([255]).is_err()
+		## ```
+		from_quote : List(U8) -> Try(Str, [BadQuotedBytes(Str)])
+		from_quote = |bytes| match Str.from_utf8(bytes) {
+			Ok(str) => Ok(str)
+			Err(_) => Err(BadQuotedBytes("the bytes were not valid UTF-8"))
+		}
+
+		## Assembles an interpolated string literal.
+		##
+		## The compiler calls this when a string literal contains interpolations:
+		## the first argument is the literal segment before the first
+		## interpolation, and the iterator yields each interpolated value paired
+		## with the literal segment that follows it.
+		from_interpolation : Str, Iter((Str, Str)) -> Str
+		from_interpolation = |first, rest|
+			rest.fold(first, |acc, (interpolated, segment)| acc.concat(interpolated).concat(segment))
+
 		## Split a string around a separator.
 		##
 		## Passing `""` for the separator is not useful;
@@ -407,6 +432,24 @@ Builtin :: [].{
 		iter : Iter(item) -> Iter(item)
 		iter = |self| self
 
+		## Returns an iterator that yields the given item first, followed by
+		## everything the given iterator yields.
+		##
+		## The compiler uses this to assemble the iterator it passes to a type's
+		## `from_interpolation` method when an interpolated string literal
+		## targets that type.
+		## ```roc
+		## expect Iter.fold([2, 3].iter().prepended(1), [], |acc, item| acc.append(item)) == [1, 2, 3]
+		## ```
+		prepended : Iter(item), item -> Iter(item)
+		prepended = |rest, item| {
+			len_if_known: match rest.len_if_known {
+				Known(n) => Known(n + 1)
+				Unknown => Unknown
+			},
+			step: || One({ item, rest }),
+		}
+
 		next : Iter(item) -> [One({ item : item, rest : Iter(item) }), Skip({ rest : Iter(item) }), Done]
 		next = |iterator| (iterator.step)()
 
@@ -471,6 +514,26 @@ Builtin :: [].{
 				Skip({ rest }) => Iter.fold(rest, acc, step)
 				One({ item, rest }) => Iter.fold(rest, step(acc, item), step)
 			}
+
+		## Returns the iterator's length if it is known up front, so collections
+		## can pre-size their allocation.
+		size_hint : Iter(item) -> [Known(U64), Unknown]
+		size_hint = |iterator| match iterator {
+			{ len_if_known, .. } => len_if_known
+		}
+
+		## Collect this iterator into any output type that provides `from_iter`.
+		collect : Iter(item) -> output
+			where [output.from_iter : Iter(item) -> output]
+		collect = |iterator| {
+			Output : output
+			Output.from_iter(iterator)
+		}
+
+		## Lift this pure iterator into an effectful [Stream], so it can be combined
+		## with effectful operations like [Stream.map].
+		stream : Iter(item) -> Stream(item)
+		stream = |iterator| Stream.from_iter(iterator)
 
 		## Returns an iterator that yields at most the first `n` items of this iterator.
 		## If the source has fewer than `n` items, all of them are yielded.
@@ -589,6 +652,101 @@ Builtin :: [].{
 				}
 	}
 
+	## An effectful iterator: identical to [Iter] except that its `step!` thunk is
+	## effectful, so combinators like [Stream.map!] can run effects per element while
+	## staying lazy. Produced from an [Iter] via [Iter.map!] and driven by [Stream.collect!].
+	Stream(item) :: {
+		len_if_known : [Known(U64), Unknown],
+		step! : () => [One({ item : item, rest : Stream(item) }), Skip({ rest : Stream(item) }), Done],
+	}.{
+
+		## Lift a pure [Iter] into a [Stream]. The lifted steps do no effect themselves,
+		## but the stream can then be combined with effectful operations like [Stream.map].
+		## Carries the source's length forward so [Stream.collect!] can pre-size.
+		from_iter : Iter(item) -> Stream(item)
+		from_iter = |iterator|
+			{
+				len_if_known: Iter.size_hint(iterator),
+				step!: ||
+					match Iter.next(iterator) {
+						Done => Done
+						Skip({ rest }) => Skip({ rest: Stream.from_iter(rest) })
+						One({ item, rest }) => One({ item, rest: Stream.from_iter(rest) })
+					},
+			}
+
+		## Transform each item of this stream. The transform may run effects; because
+		## the stream's steps are already effectful, building the mapped stream stays
+		## lazy (the transform runs only as the stream is driven).
+		map : Stream(a), (a => b) -> Stream(b)
+		map = |stream, transform!|
+			match stream {
+				{ len_if_known, step! } => {
+					len_if_known,
+					step!: ||
+						match step!() {
+							Done => Done
+							Skip({ rest }) => Skip({ rest: Stream.map(rest, transform!) })
+							One({ item, rest }) => One({ item: transform!(item), rest: Stream.map(rest, transform!) })
+						},
+				}
+			}
+
+		## Transform each item of this stream with an effectful function.
+		map! : Stream(a), (a => b) => Stream(b)
+		map! = |stream, transform!|
+			match stream {
+				{ len_if_known, step! } => {
+					len_if_known,
+					step!: ||
+						match step!() {
+							Done => Done
+							Skip({ rest }) => Skip({ rest: Stream.map!(rest, transform!) })
+							One({ item, rest }) => One({ item: transform!(item), rest: Stream.map!(rest, transform!) })
+						},
+				}
+			}
+
+		## Advance the stream by one step.
+		next! : Stream(item) => [One({ item : item, rest : Stream(item) }), Skip({ rest : Stream(item) }), Done]
+		next! = |stream| match stream {
+			{ step!, .. } => step!()
+		}
+
+		## Returns the stream's length if it is known up front.
+		size_hint : Stream(item) -> [Known(U64), Unknown]
+		size_hint = |stream| match stream {
+			{ len_if_known, .. } => len_if_known
+		}
+
+		## Drive the stream to completion with an explicit loop, collecting its items
+		## into a [List] (pre-sized from `len_if_known` when known).
+		collect! : Stream(item) => List(item)
+		collect! = |stream| {
+			cap = match Stream.size_hint(stream) {
+				Known(n) => n
+				Unknown => 0
+			}
+			var $list = List.with_capacity(cap)
+			var $rest = stream
+			while Bool.True {
+				match Stream.next!($rest) {
+					Done => {
+						break
+					}
+					Skip({ rest }) => {
+						$rest = rest
+					}
+					One({ item, rest }) => {
+						$list = list_append_unsafe($list, item)
+						$rest = rest
+					}
+				}
+			}
+			$list
+		}
+	}
+
 	List(_item) :: [ProvidedByCompiler].{
 
 		## Returns the length of the list, which is equal to the number of elements it contains.
@@ -624,6 +782,34 @@ Builtin :: [].{
 			}
 
 			make(0)
+		}
+
+		## Build a list from a pure [Iter], pre-sizing the allocation from the
+		## iterator's `len_if_known` when it is known up front. This is the `from_iter`
+		## that [Iter.collect] dispatches to.
+		from_iter : Iter(item) -> List(item)
+		from_iter = |iterator| {
+			cap = match Iter.size_hint(iterator) {
+				Known(n) => n
+				Unknown => 0
+			}
+			var $list = List.with_capacity(cap)
+			var $rest = iterator
+			while Bool.True {
+				match Iter.next($rest) {
+					Done => {
+						break
+					}
+					Skip({ rest }) => {
+						$rest = rest
+					}
+					One({ item, rest }) => {
+						$list = list_append_unsafe($list, item)
+						$rest = rest
+					}
+				}
+			}
+			$list
 		}
 
 		## Put two lists together.
@@ -856,12 +1042,26 @@ Builtin :: [].{
 		## ```
 		map : List(a), (a -> b) -> List(b)
 		map = |list, transform| {
-			# TODO: Optimize with in-place update when list is unique and element sizes match
-			var $new_list = List.with_capacity(list.len())
-			for item in list {
-				$new_list = list_append_unsafe($new_list, transform(item))
+			match list_map_can_reuse(list, transform) {
+				1 => {
+					len = list.len()
+					var $out = list_map_cast_unsafe(list)
+					var $index = 0
+					while $index < len {
+						item = list_map_extract_unsafe($out, $index)
+						$out = list_map_write_unsafe($out, $index, transform(item))
+						$index = $index + 1
+					}
+					$out
+				}
+				_ => {
+					var $new_list = List.with_capacity(list.len())
+					for item in list {
+						$new_list = list_append_unsafe($new_list, transform(item))
+					}
+					$new_list
+				}
 			}
-			$new_list
 		}
 
 		## This works like [List.map], except it also passes the index
@@ -1280,40 +1480,6 @@ Builtin :: [].{
 			len = List.len(list)
 			take_len = if (len <= n) 0 else len - n
 			List.sublist(list, { start: 0, len: take_len })
-		}
-
-		## Join a list of items into a single item, inserting the given separator between
-		## each pair. Works for any type that implements a `join_with` method, such as [Str].
-		## ```roc
-		## expect ["a", "b", "c"].join_with(", ") == "a, b, c"
-		##
-		## expect [].join_with(", ") == ""
-		## ```
-		join_with : List(item), item -> item
-			where [item.join_with : List(item), item -> item]
-		join_with = |list, joiner| {
-			Item : item
-			Item.join_with(list, joiner)
-		}
-
-		join_list_with : List(List(item)), List(item) -> List(item)
-		join_list_with = |list, joiner| {
-			len = List.len(list)
-
-			if len == 0 {
-				[]
-			} else {
-				var $index = 1
-				var $result = list_get_unsafe(list, 0)
-
-				while $index < len {
-					$result = List.concat($result, joiner)
-					$result = List.concat($result, list_get_unsafe(list, $index))
-					$index = $index + 1
-				}
-
-				$result
-			}
 		}
 
 		## Find the first element in a list that satisfies a given predicate, returning it wrapped in `Ok` if found, or `Err(NotFound)` if no such element exists.
@@ -9490,6 +9656,29 @@ list_replace_unsafe : List(item), U64, item -> { list : List(item), prev : item 
 
 # Implemented by the compiler, does not perform bounds checks
 list_swap_unsafe : List(item), U64, U64 -> List(item)
+
+# Implemented by the compiler. Returns 1 (otherwise 0) when List.map may reuse
+# the input list's allocation for its output: the input and output element
+# layouts are interchangeable, and at runtime the list is uniquely owned and
+# not a seamless slice. Lowered to a constant 0 when the layouts are not
+# interchangeable, which lets lowering drop the in-place branch entirely.
+# Note: success is U8 (0 = false, 1 = true) since Bool is not available at top level
+list_map_can_reuse : List(input), (input -> output) -> U8
+
+# Implemented by the compiler. Retypes a unique, non-slice list in place so
+# List.map can overwrite its elements without allocating a new list. Must only
+# be called on a list for which list_map_can_reuse returned 1.
+list_map_cast_unsafe : List(input) -> List(output)
+
+# Implemented by the compiler. Moves ownership of the element at the given
+# index out of the list's buffer; the slot keeps stale bytes until
+# list_map_write_unsafe stores its replacement. No bounds checks.
+list_map_extract_unsafe : List(output), U64 -> input
+
+# Implemented by the compiler. Stores an owned element into the slot at the
+# given index, which must have been vacated by list_map_extract_unsafe.
+# No bounds checks.
+list_map_write_unsafe : List(output), U64, output -> List(output)
 
 # Implemented by the compiler, ensures at least spare additional elements of capacity
 list_reserve : List(item), U64 -> List(item)

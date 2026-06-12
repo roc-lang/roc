@@ -430,28 +430,31 @@ provides { entrypoint: "roc__entrypoint" }
 
 ### targets
 
-The `targets` section specifies the supported build targets and default linking behaviour:
+The `targets` section specifies the supported build targets, what to link for each, and what kind of artifact each target produces:
 
 ```roc
 targets : {
-    files: "targets/",
-    exe: {
-        x64linux: ["crt1.o", "host.o", app],
-        arm64mac: ["host.o", app]
-    },
-    static_lib: {
-        x64: ["lib.a", app]
-    }
+    inputs: "targets/",
+    x64linux: { inputs: ["crt1.o", "host.o", app] },
+    arm64mac: { inputs: ["host.o", app] },
+    wasm32: { inputs: ["host.wasm", app], output: Shared },
 }
 ```
 
-- `files`: The directory containing target-specific files within a package `.tar.zst` bundle.
-- `exe`: Executable build targets
-- `static_lib`: Static library build targets
+- `inputs`: The directory containing target-specific files within a package `.tar.zst` bundle.
+- Each target entry lists its link `inputs` and an optional `output` kind.
+
+The `output` field declares the artifact kind the target produces:
+
+- `Exe` (the default): a linked executable. For wasm32, a command module with an entry point.
+- `Shared`: a shared library (`.so`, `.dylib`, `.dll`). For wasm32, a reactor module: no entry point, with the `provides` entrypoints exported.
+- `Archive`: a static archive (`.a`, `.lib`) containing the host inputs, the compiled app, and the builtins, for linking in another build.
+
+The platform decides what gets built; application authors never pass artifact-kind flags to `roc build`.
 
 The `app` placeholder represents the compiled Roc application. The order files are specified in each of the build targets is important for linking correctly.
 
-The default behaviour for `roc build` without a `--target` flag is the first compatible target in the `exe` or `static_lib` sections.
+The default behaviour for `roc build` without a `--target` flag is the first compatible target in the `targets` section.
 
 ### Hosted type modules
 

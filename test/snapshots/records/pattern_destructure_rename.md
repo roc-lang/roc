@@ -66,17 +66,45 @@ match person {
 									(sub-pattern
 										(p-assign (ident "userAge"))))))))
 				(value
-					(e-string
-						(e-literal (string "User "))
-						(e-lookup-local
-							(p-assign (ident "userName")))
-						(e-literal (string " is "))
-						(e-dispatch-call (method "to_str") (constraint-fn-var 32)
+					(e-block
+						(s-let
+							(p-assign (ident "#interp_0"))
+							(e-lookup-local
+								(p-assign (ident "userName"))))
+						(s-let
+							(p-assign (ident "#interp_1"))
+							(e-dispatch-call (method "to_str") (constraint-fn-var 39)
+								(receiver
+									(e-lookup-local
+										(p-assign (ident "userAge"))))
+								(args)))
+						(e-dispatch-call (method "from_interpolation") (constraint-fn-var 224)
 							(receiver
-								(e-lookup-local
-									(p-assign (ident "userAge"))))
-							(args))
-						(e-literal (string " years old"))))))))
+								(e-string
+									(e-literal (string "User "))))
+							(args
+								(e-dispatch-call (method "prepended") (constraint-fn-var 182)
+									(receiver
+										(e-dispatch-call (method "prepended") (constraint-fn-var 124)
+											(receiver
+												(e-dispatch-call (method "iter") (constraint-fn-var 60)
+													(receiver
+														(e-empty_list))
+													(args)))
+											(args
+												(e-tuple
+													(elems
+														(e-lookup-local
+															(p-assign (ident "#interp_1")))
+														(e-string
+															(e-literal (string " years old"))))))))
+									(args
+										(e-tuple
+											(elems
+												(e-lookup-local
+													(p-assign (ident "#interp_0")))
+												(e-string
+													(e-literal (string " is ")))))))))))))))
 ~~~
 # TYPES
 ~~~clojure

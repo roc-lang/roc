@@ -386,32 +386,31 @@ const HostEnv = struct {
     inline_expect_failed: bool = false,
 };
 
-/// Roc allocation function with size-tracking metadata
-fn rocAllocFn(roc_alloc: *builtins.host_abi.RocAlloc, env: *anyopaque) callconv(.c) void {
-    // Debug check: verify roc_alloc pointer alignment
-    const roc_alloc_addr = @intFromPtr(roc_alloc);
-    if (roc_alloc_addr % @alignOf(builtins.host_abi.RocAlloc) != 0) {
-        std.debug.panic("[rocAllocFn] roc_alloc ptr not aligned! addr=0x{x} required={}", .{ roc_alloc_addr, @alignOf(builtins.host_abi.RocAlloc) });
-    }
+/// File-level pointer to the host's `RocOps`, used by hosted functions that
+/// have no leading `*RocOps` parameter (and therefore cannot reach state via
+/// `ops.env`). Set wherever `RocOps.env` is set.
+var g_roc_ops: ?*builtins.host_abi.RocOps = null;
 
+/// Roc allocation function with size-tracking metadata
+fn rocAllocFn(ops: *builtins.host_abi.RocOps, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
     // Debug check: verify env is properly aligned for HostEnv
-    const env_addr = @intFromPtr(env);
+    const env_addr = @intFromPtr(ops.env);
     if (env_addr % @alignOf(HostEnv) != 0) {
         std.debug.panic("rocAllocFn: env=0x{x} not aligned to {} bytes", .{ env_addr, @alignOf(HostEnv) });
     }
 
-    const host: *HostEnv = @ptrCast(@alignCast(env));
+    const host: *HostEnv = @ptrCast(@alignCast(ops.env));
     const allocator = host.gpa.allocator();
 
     // The allocation must be at least 8-byte aligned because:
     // 1. The refcount (isize/usize) is stored before the data and needs proper alignment
     // 2. The builtins code casts data pointers to [*]isize for refcount access
-    const min_alignment: usize = @max(roc_alloc.alignment, @alignOf(usize));
+    const min_alignment: usize = @max(alignment, @alignOf(usize));
     const align_enum = std.mem.Alignment.fromByteUnits(min_alignment);
 
     // Calculate additional bytes needed to store the size
-    const size_storage_bytes = @max(roc_alloc.alignment, @alignOf(usize));
-    const total_size = roc_alloc.length + size_storage_bytes;
+    const size_storage_bytes = @max(alignment, @alignOf(usize));
+    const total_size = length + size_storage_bytes;
 
     // Allocate memory including space for size metadata
     const result = allocator.rawAlloc(total_size, align_enum, @returnAddress());
@@ -420,7 +419,7 @@ fn rocAllocFn(roc_alloc: *builtins.host_abi.RocAlloc, env: *anyopaque) callconv(
         var buf: [256]u8 = undefined;
         const msg = std.fmt.bufPrint(&buf, "\x1b[31mHost error:\x1b[0m allocation failed for size={d} align={d}\n", .{
             total_size,
-            roc_alloc.alignment,
+            alignment,
         }) catch "\x1b[31mHost error:\x1b[0m allocation failed, out of memory\n";
         std.debug.print("{s}", .{msg});
         std.process.exit(1);
@@ -436,12 +435,12 @@ fn rocAllocFn(roc_alloc: *builtins.host_abi.RocAlloc, env: *anyopaque) callconv(
     const size_ptr: *usize = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes - @sizeOf(usize));
     size_ptr.* = total_size;
 
-    // Return pointer to the user data (after the size metadata)
-    roc_alloc.answer = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes);
+    // Pointer to the user data (after the size metadata)
+    const answer: *anyopaque = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes);
 
     // Debug check: verify the returned pointer is also properly aligned
-    const answer_addr = @intFromPtr(roc_alloc.answer);
-    if (answer_addr % roc_alloc.alignment != 0) {
+    const answer_addr = @intFromPtr(answer);
+    if (answer_addr % alignment != 0) {
         @panic("Host allocator returned misaligned answer in rocAllocFn");
     }
 
@@ -454,40 +453,42 @@ fn rocAllocFn(roc_alloc: *builtins.host_abi.RocAlloc, env: *anyopaque) callconv(
     host.alloc_count += 1;
 
     if (trace_refcount) {
-        std.debug.print("[ALLOC] ptr=0x{x} size={d} align={d}\n", .{ @intFromPtr(roc_alloc.answer), roc_alloc.length, roc_alloc.alignment });
+        std.debug.print("[ALLOC] ptr=0x{x} size={d} align={d}\n", .{ answer_addr, length, alignment });
     }
+
+    return answer;
 }
 
 /// Roc deallocation function with size-tracking metadata
-fn rocDeallocFn(roc_dealloc: *builtins.host_abi.RocDealloc, env: *anyopaque) callconv(.c) void {
+fn rocDeallocFn(ops: *builtins.host_abi.RocOps, ptr: *anyopaque, alignment: usize) callconv(.c) void {
     // Debug check: verify env is properly aligned for HostEnv
-    const env_addr = @intFromPtr(env);
+    const env_addr = @intFromPtr(ops.env);
     if (env_addr % @alignOf(HostEnv) != 0) {
         std.debug.panic("[rocDeallocFn] env=0x{x} not aligned to {} bytes", .{ env_addr, @alignOf(HostEnv) });
     }
-    const host: *HostEnv = @ptrCast(@alignCast(env));
+    const host: *HostEnv = @ptrCast(@alignCast(ops.env));
     const allocator = host.gpa.allocator();
 
     // Use same minimum alignment as alloc
-    const min_alignment: usize = @max(roc_dealloc.alignment, @alignOf(usize));
+    const min_alignment: usize = @max(alignment, @alignOf(usize));
     const align_enum = std.mem.Alignment.fromByteUnits(min_alignment);
 
     // Calculate where the size metadata is stored
-    const size_storage_bytes = @max(roc_dealloc.alignment, @alignOf(usize));
-    const size_ptr: *const usize = @ptrFromInt(@intFromPtr(roc_dealloc.ptr) - @sizeOf(usize));
+    const size_storage_bytes = @max(alignment, @alignOf(usize));
+    const size_ptr: *const usize = @ptrFromInt(@intFromPtr(ptr) - @sizeOf(usize));
     const total_size = size_ptr.*;
 
     if (trace_refcount) {
         std.debug.print("[DEALLOC] ptr=0x{x} align={d} total_size={d} size_storage={d}\n", .{
-            @intFromPtr(roc_dealloc.ptr),
-            roc_dealloc.alignment,
+            @intFromPtr(ptr),
+            alignment,
             total_size,
             size_storage_bytes,
         });
     }
 
     // Calculate the base pointer (start of actual allocation)
-    const base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(roc_dealloc.ptr) - size_storage_bytes);
+    const base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(ptr) - size_storage_bytes);
 
     // Remove from tracking list
     for (host.roc_allocations.items, 0..) |alloc, i| {
@@ -504,31 +505,31 @@ fn rocDeallocFn(roc_dealloc: *builtins.host_abi.RocDealloc, env: *anyopaque) cal
 }
 
 /// Roc reallocation function with size-tracking metadata
-fn rocReallocFn(roc_realloc: *builtins.host_abi.RocRealloc, env: *anyopaque) callconv(.c) void {
+fn rocReallocFn(ops: *builtins.host_abi.RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
     // Debug check: verify env is properly aligned for HostEnv
-    const env_addr = @intFromPtr(env);
+    const env_addr = @intFromPtr(ops.env);
     if (env_addr % @alignOf(HostEnv) != 0) {
         std.debug.panic("[rocReallocFn] env=0x{x} not aligned to {} bytes", .{ env_addr, @alignOf(HostEnv) });
     }
-    const host: *HostEnv = @ptrCast(@alignCast(env));
+    const host: *HostEnv = @ptrCast(@alignCast(ops.env));
     const allocator = host.gpa.allocator();
 
     // Use same minimum alignment as alloc
-    const min_alignment: usize = @max(roc_realloc.alignment, @alignOf(usize));
+    const min_alignment: usize = @max(alignment, @alignOf(usize));
     const align_enum = std.mem.Alignment.fromByteUnits(min_alignment);
 
     // Calculate where the size metadata is stored for the old allocation
-    const size_storage_bytes = @max(roc_realloc.alignment, @alignOf(usize));
-    const old_size_ptr: *const usize = @ptrFromInt(@intFromPtr(roc_realloc.answer) - @sizeOf(usize));
+    const size_storage_bytes = @max(alignment, @alignOf(usize));
+    const old_size_ptr: *const usize = @ptrFromInt(@intFromPtr(ptr) - @sizeOf(usize));
 
     // Read the old total size from metadata
     const old_total_size = old_size_ptr.*;
 
     // Calculate the old base pointer (start of actual allocation)
-    const old_base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(roc_realloc.answer) - size_storage_bytes);
+    const old_base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(ptr) - size_storage_bytes);
 
     // Calculate new total size needed
-    const new_total_size = roc_realloc.new_length + size_storage_bytes;
+    const new_total_size = new_length + size_storage_bytes;
 
     // Free old memory and allocate new with proper alignment
     // This is necessary because Zig's realloc infers alignment from slice type ([]u8 = alignment 1)
@@ -567,35 +568,37 @@ fn rocReallocFn(roc_realloc: *builtins.host_abi.RocRealloc, env: *anyopaque) cal
     const new_size_ptr: *usize = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes - @sizeOf(usize));
     new_size_ptr.* = new_total_size;
 
-    // Return pointer to the user data (after the size metadata)
-    roc_realloc.answer = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes);
+    // Pointer to the user data (after the size metadata)
+    const answer: *anyopaque = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes);
 
     if (trace_refcount) {
-        std.debug.print("[REALLOC] old=0x{x} new=0x{x} new_size={d}\n", .{ @intFromPtr(old_base_ptr) + size_storage_bytes, @intFromPtr(roc_realloc.answer), roc_realloc.new_length });
+        std.debug.print("[REALLOC] old=0x{x} new=0x{x} new_size={d}\n", .{ @intFromPtr(old_base_ptr) + size_storage_bytes, @intFromPtr(answer), new_length });
     }
+
+    return answer;
 }
 
 /// Roc debug function
-fn rocDbgFn(roc_dbg: *const builtins.host_abi.RocDbg, env: *anyopaque) callconv(.c) void {
-    _ = env;
-    const message = roc_dbg.utf8_bytes[0..roc_dbg.len];
+fn rocDbgFn(ops: *builtins.host_abi.RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
+    _ = ops;
+    const message = bytes[0..len];
     std.debug.print("ROC DBG: {s}\n", .{message});
 }
 
 /// Roc expect failed function
-fn rocExpectFailedFn(roc_expect: *const builtins.host_abi.RocExpectFailed, env: *anyopaque) callconv(.c) void {
-    const host: *HostEnv = @ptrCast(@alignCast(env));
+fn rocExpectFailedFn(ops: *builtins.host_abi.RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
+    const host: *HostEnv = @ptrCast(@alignCast(ops.env));
     host.inline_expect_failed = true;
-    const source_bytes = roc_expect.utf8_bytes[0..roc_expect.len];
+    const source_bytes = bytes[0..len];
     const trimmed = std.mem.trim(u8, source_bytes, " \t\n\r");
     std.debug.print("Expect failed: {s}\n", .{trimmed});
     std.process.exit(1);
 }
 
 /// Roc crashed function
-fn rocCrashedFn(roc_crashed: *const builtins.host_abi.RocCrashed, env: *anyopaque) callconv(.c) noreturn {
-    _ = env;
-    const message = roc_crashed.utf8_bytes[0..roc_crashed.len];
+fn rocCrashedFn(ops: *builtins.host_abi.RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
+    _ = ops;
+    const message = bytes[0..len];
     var buf: [512]u8 = undefined;
     const msg = std.fmt.bufPrint(&buf, "\n\x1b[31mRoc crashed:\x1b[0m {s}\n", .{message}) catch "\n\x1b[31mRoc crashed\x1b[0m\n";
     std.debug.print("{s}", .{msg});
@@ -604,7 +607,7 @@ fn rocCrashedFn(roc_crashed: *const builtins.host_abi.RocCrashed, env: *anyopaqu
 
 // External symbols provided by the Roc runtime object file
 // Follows RocCall ABI: ops, ret_ptr, then argument pointers
-extern fn roc__main(ops: *builtins.host_abi.RocOps, ret_ptr: ?*anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
+extern fn roc_main() callconv(.c) void;
 
 // OS-specific entry point handling
 comptime {
@@ -680,9 +683,10 @@ const RocStr = builtins.str.RocStr;
 /// Hosted function: Stderr.line! (index 0 - sorted alphabetically)
 /// Follows RocCall ABI: (ops, ret_ptr, args_ptr)
 /// Returns {} and takes Str as argument
-fn hostedStderrLine(ops: *builtins.host_abi.RocOps, _: *anyopaque, args: *const extern struct { str: RocStr }) callconv(.c) void {
-    const message = args.str.asSlice();
-    defer args.str.decref(ops);
+fn hostedStderrLine(str: RocStr) callconv(.c) void {
+    const ops = g_roc_ops.?;
+    const message = str.asSlice();
+    defer str.decref(ops);
 
     const host: *HostEnv = @ptrCast(@alignCast(ops.env));
 
@@ -758,7 +762,8 @@ fn hostedStderrLine(ops: *builtins.host_abi.RocOps, _: *anyopaque, args: *const 
 /// Hosted function: Stdin.line! (index 1 - sorted alphabetically)
 /// Follows RocCall ABI: (ops, ret_ptr, args_ptr)
 /// Returns Str and takes {} as argument
-fn hostedStdinLine(ops: *builtins.host_abi.RocOps, result: *RocStr, _: *anyopaque) callconv(.c) void {
+fn hostedStdinLine() callconv(.c) RocStr {
+    const ops = g_roc_ops.?;
     const host: *HostEnv = @ptrCast(@alignCast(ops.env));
 
     // Test mode: consume next stdin_input entry from spec
@@ -767,13 +772,13 @@ fn hostedStdinLine(ops: *builtins.host_abi.RocOps, result: *RocStr, _: *anyopaqu
             const entry = host.test_state.entries[host.test_state.current_index];
             if (entry.effect_type == .stdin_input) {
                 host.test_state.current_index += 1;
-                result.* = RocStr.fromSlice(entry.value, ops);
+                const line = RocStr.fromSlice(entry.value, ops);
                 if (host.test_state.verbose) {
                     std.debug.print("{s}", .{"[OK] stdin: \""});
                     std.debug.print("{s}", .{entry.value});
                     std.debug.print("{s}", .{"\"\n"});
                 }
-                return;
+                return line;
             }
             // Wrong type - expected stdin but spec has output
             host.test_state.failed = true;
@@ -805,22 +810,19 @@ fn hostedStdinLine(ops: *builtins.host_abi.RocOps, result: *RocStr, _: *anyopaqu
                 std.debug.print("{s}", .{"[FAIL] stdin read (unexpected - no more expected operations)\n"});
             }
         }
-        result.* = RocStr.empty();
-        return;
+        return RocStr.empty();
     }
 
     // Normal mode: Read a line from stdin
     var buffer: [4096]u8 = undefined;
     const bytes_read = std.Io.File.stdin().readStreaming(host.std_io, &.{&buffer}) catch {
         // Return empty string on error
-        result.* = RocStr.empty();
-        return;
+        return RocStr.empty();
     };
 
     // Handle EOF (no bytes read)
     if (bytes_read == 0) {
-        result.* = RocStr.empty();
-        return;
+        return RocStr.empty();
     }
 
     // Find newline and trim it (handle both \n and \r\n)
@@ -838,15 +840,16 @@ fn hostedStdinLine(ops: *builtins.host_abi.RocOps, result: *RocStr, _: *anyopaqu
     // Create RocStr from the read line and return it
     // RocStr.fromSlice handles allocation internally (either inline for small strings
     // or via roc_alloc for big strings with proper refcount tracking)
-    result.* = RocStr.fromSlice(line, ops);
+    return RocStr.fromSlice(line, ops);
 }
 
 /// Hosted function: Stdout.line! (index 2 - sorted alphabetically)
 /// Follows RocCall ABI: (ops, ret_ptr, args_ptr)
 /// Returns {} and takes Str as argument
-fn hostedStdoutLine(ops: *builtins.host_abi.RocOps, _: *anyopaque, args: *const extern struct { str: RocStr }) callconv(.c) void {
-    const message = args.str.asSlice();
-    defer args.str.decref(ops);
+fn hostedStdoutLine(str: RocStr) callconv(.c) void {
+    const ops = g_roc_ops.?;
+    const message = str.asSlice();
+    defer str.decref(ops);
 
     const host: *HostEnv = @ptrCast(@alignCast(ops.env));
 
@@ -927,41 +930,44 @@ const BuilderArgs = extern struct {
     value: RocStr,
 };
 
-fn hostedBuilderPrintValue(ops: *builtins.host_abi.RocOps, _: *anyopaque, args: *const BuilderArgs) callconv(.c) void {
-    const value_slice = args.value.asSlice();
+fn hostedBuilderPrintValue(builder: BuilderArgs) callconv(.c) void {
+    const ops = g_roc_ops.?;
+    const value_slice = builder.value.asSlice();
 
     // Format the output messages
     var buf: [256]u8 = undefined;
-    const count_str = std.fmt.bufPrint(&buf, "{d}", .{args.count}) catch "?";
+    const count_str = std.fmt.bufPrint(&buf, "{d}", .{builder.count}) catch "?";
 
     // Use hostedStdoutLine to respect test mode tracking
     // Create temporary RocStr instances for each line
-    var empty_ret: u8 = 0;
-    var line1 = RocStr.fromSlice("SUCCESS: Builder.print_value! called via static dispatch!", ops);
-    hostedStdoutLine(ops, @ptrCast(&empty_ret), @ptrCast(&line1));
+    const line1 = RocStr.fromSlice("SUCCESS: Builder.print_value! called via static dispatch!", ops);
+    hostedStdoutLine(line1);
 
     var line2_buf: [256]u8 = undefined;
     const line2_str = std.fmt.bufPrint(&line2_buf, "  value: {s}", .{value_slice}) catch "  value: ?";
-    var line2 = RocStr.fromSlice(line2_str, ops);
-    hostedStdoutLine(ops, @ptrCast(&empty_ret), @ptrCast(&line2));
+    const line2 = RocStr.fromSlice(line2_str, ops);
+    hostedStdoutLine(line2);
 
     var line3_buf: [256]u8 = undefined;
     const line3_str = std.fmt.bufPrint(&line3_buf, "  count: {s}", .{count_str}) catch "  count: ?";
-    var line3 = RocStr.fromSlice(line3_str, ops);
-    hostedStdoutLine(ops, @ptrCast(&empty_ret), @ptrCast(&line3));
+    const line3 = RocStr.fromSlice(line3_str, ops);
+    hostedStdoutLine(line3);
 }
 
 /// Hosted function: Host.get_greeting! (index 5 - sorted alphabetically)
 /// This tests hosted effects on opaque types with data (not just []).
 /// Takes Host { name: Str } as first argument, returns Str
-fn hostedHostGetGreeting(ops: *builtins.host_abi.RocOps, ret: *RocStr, args: *const extern struct { name: RocStr }) callconv(.c) void {
-    const name_slice = args.name.asSlice();
-    defer args.name.decref(ops);
+const HostRecord = extern struct { name: RocStr };
+
+fn hostedHostGetGreeting(host: HostRecord) callconv(.c) RocStr {
+    const ops = g_roc_ops.?;
+    const name_slice = host.name.asSlice();
+    defer host.name.decref(ops);
 
     // Create the result string: "Hello, <name>!"
     var buf: [256]u8 = undefined;
     const result_str = std.fmt.bufPrint(&buf, "Hello, {s}!", .{name_slice}) catch "Hello!";
-    ret.* = RocStr.fromSlice(result_str, ops);
+    return RocStr.fromSlice(result_str, ops);
 }
 
 const BoxedHostDropCounts = struct {
@@ -1071,15 +1077,18 @@ fn hostAddCaptureOnDrop(_: ?[*]u8, _: *builtins.host_abi.RocOps) callconv(.c) vo
     boxed_host_drop_counts.primitive += 1;
 }
 
-fn hostedHostBoxedAdd(ops: *builtins.host_abi.RocOps, ret: *?[*]u8, args: *const extern struct { amount: i64 }) callconv(.c) void {
+fn hostedHostBoxedAdd(amount: i64) callconv(.c) ?[*]u8 {
+    const ops = g_roc_ops.?;
+    var ret: ?[*]u8 = null;
     writeErasedCallable(
         AddCapture,
-        ret,
+        &ret,
         @ptrCast(&hostAddCallable),
         &hostAddCaptureOnDrop,
-        .{ .amount = args.amount },
+        .{ .amount = amount },
         ops,
     );
+    return ret;
 }
 
 fn hostNestedRecordCallable(_: *builtins.host_abi.RocOps, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
@@ -1088,20 +1097,25 @@ fn hostNestedRecordCallable(_: *builtins.host_abi.RocOps, ret: ?[*]u8, args: ?[*
     writeI64Result(ret, x + capture.inner.base + capture.adjustment + @as(i64, @intCast(capture.inner.label.asSlice().len)));
 }
 
-fn hostNestedRecordCaptureOnDrop(capture_ptr: ?[*]u8, ops: *builtins.host_abi.RocOps) callconv(.c) void {
+fn hostNestedRecordCaptureOnDrop(capture_ptr: ?[*]u8, _: *builtins.host_abi.RocOps) callconv(.c) void {
+    // The ops argument is whatever the final release passed; app code under
+    // the symbol ABI passes null, so the host uses its own RocOps.
+    const ops = g_roc_ops.?;
     const capture = capturePtrAs(NestedRecordCapture, capture_ptr);
     capture.inner.label.decref(ops);
     boxed_host_drop_counts.nested_record_str_releases += 1;
     boxed_host_drop_counts.nested_record += 1;
 }
 
-fn hostedHostBoxedNestedRecord(ops: *builtins.host_abi.RocOps, ret: *?[*]u8, args: *const extern struct { label: RocStr }) callconv(.c) void {
-    const capture_label = args.label;
+fn hostedHostBoxedNestedRecord(label: RocStr) callconv(.c) ?[*]u8 {
+    const ops = g_roc_ops.?;
+    const capture_label = label;
     capture_label.incref(1, ops);
-    defer args.label.decref(ops);
+    defer label.decref(ops);
+    var ret: ?[*]u8 = null;
     writeErasedCallable(
         NestedRecordCapture,
-        ret,
+        &ret,
         @ptrCast(&hostNestedRecordCallable),
         &hostNestedRecordCaptureOnDrop,
         .{
@@ -1113,6 +1127,7 @@ fn hostedHostBoxedNestedRecord(ops: *builtins.host_abi.RocOps, ret: *?[*]u8, arg
         },
         ops,
     );
+    return ret;
 }
 
 fn hostTreeCloneBox(tree: *const HostTree, ops: *builtins.host_abi.RocOps) ?[*]u8 {
@@ -1185,22 +1200,27 @@ fn hostTreeCallable(_: *builtins.host_abi.RocOps, ret: ?[*]u8, args: ?[*]const u
     writeI64Result(ret, readI64ToI64Arg(args) + hostTreeSum(&capture.tree));
 }
 
-fn hostTreeCaptureOnDrop(capture_ptr: ?[*]u8, ops: *builtins.host_abi.RocOps) callconv(.c) void {
+fn hostTreeCaptureOnDrop(capture_ptr: ?[*]u8, _: *builtins.host_abi.RocOps) callconv(.c) void {
+    const ops = g_roc_ops.?;
     const capture = capturePtrAs(TreeCapture, capture_ptr);
     hostTreeDropPayload(@ptrCast(&capture.tree), ops);
     boxed_host_drop_counts.recursive_tree += 1;
 }
 
-fn hostedHostBoxedRecursiveTree(ops: *builtins.host_abi.RocOps, ret: *?[*]u8, args: *const extern struct { tree: HostTree }) callconv(.c) void {
-    defer hostTreeDropPayloadWithoutReport(@ptrCast(@constCast(&args.tree)), ops);
+fn hostedHostBoxedRecursiveTree(tree: HostTree) callconv(.c) ?[*]u8 {
+    const ops = g_roc_ops.?;
+    var tree_local = tree;
+    defer hostTreeDropPayloadWithoutReport(@ptrCast(&tree_local), ops);
+    var ret: ?[*]u8 = null;
     writeErasedCallable(
         TreeCapture,
-        ret,
+        &ret,
         @ptrCast(&hostTreeCallable),
         &hostTreeCaptureOnDrop,
-        .{ .tree = hostTreeClonePayload(&args.tree, ops) },
+        .{ .tree = hostTreeClonePayload(&tree_local, ops) },
         ops,
     );
+    return ret;
 }
 
 fn hostBoxedCaptureCallable(ops: *builtins.host_abi.RocOps, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
@@ -1209,73 +1229,83 @@ fn hostBoxedCaptureCallable(ops: *builtins.host_abi.RocOps, ret: ?[*]u8, args: ?
     writeI64Result(ret, callBoxedI64ToI64(ops, capture.inner, x) + capture.bonus);
 }
 
-fn hostBoxedCaptureOnDrop(capture_ptr: ?[*]u8, ops: *builtins.host_abi.RocOps) callconv(.c) void {
+fn hostBoxedCaptureOnDrop(capture_ptr: ?[*]u8, _: *builtins.host_abi.RocOps) callconv(.c) void {
+    const ops = g_roc_ops.?;
     const capture = capturePtrAs(BoxedCallableCapture, capture_ptr);
     builtins.erased_callable.decref(capture.inner, ops);
     boxed_host_drop_counts.boxed_capture += 1;
 }
 
-fn hostedHostBoxedWithBoxedCapture(ops: *builtins.host_abi.RocOps, ret: *?[*]u8, args: *const extern struct { inner: ?[*]u8, bonus: i64 }) callconv(.c) void {
-    if (args.inner) |inner| {
-        builtins.erased_callable.incref(inner, 1, ops);
+fn hostedHostBoxedWithBoxedCapture(inner: ?[*]u8, bonus: i64) callconv(.c) ?[*]u8 {
+    const ops = g_roc_ops.?;
+    if (inner) |inner_ptr| {
+        builtins.erased_callable.incref(inner_ptr, 1, ops);
     } else {
         ops.crash("host boxed callable capture received null inner callable");
         unreachable;
     }
-    defer builtins.erased_callable.decref(args.inner, ops);
+    defer builtins.erased_callable.decref(inner, ops);
 
+    var ret: ?[*]u8 = null;
     writeErasedCallable(
         BoxedCallableCapture,
-        ret,
+        &ret,
         @ptrCast(&hostBoxedCaptureCallable),
         &hostBoxedCaptureOnDrop,
         .{
-            .inner = args.inner,
-            .bonus = args.bonus,
+            .inner = inner,
+            .bonus = bonus,
         },
         ops,
     );
+    return ret;
 }
 
-fn hostedHostCallBoxed(ops: *builtins.host_abi.RocOps, ret: *i64, args: *const extern struct { boxed: ?[*]u8, value: i64 }) callconv(.c) void {
-    defer builtins.erased_callable.decref(args.boxed, ops);
-    ret.* = callBoxedI64ToI64(ops, args.boxed, args.value);
+fn hostedHostCallBoxed(boxed: ?[*]u8, value: i64) callconv(.c) i64 {
+    const ops = g_roc_ops.?;
+    defer builtins.erased_callable.decref(boxed, ops);
+    return callBoxedI64ToI64(ops, boxed, value);
 }
 
-fn hostedHostReleaseStoredBoxed(ops: *builtins.host_abi.RocOps, _: *anyopaque, _: *anyopaque) callconv(.c) void {
+fn hostedHostReleaseStoredBoxed() callconv(.c) void {
+    const ops = g_roc_ops.?;
     if (stored_boxed_callable) |boxed| {
         builtins.erased_callable.decref(boxed, ops);
         stored_boxed_callable = null;
     }
 }
 
-fn hostedHostRoundtripBoxed(ops: *builtins.host_abi.RocOps, ret: *?[*]u8, args: *const extern struct { boxed: ?[*]u8 }) callconv(.c) void {
-    if (args.boxed) |boxed| {
-        builtins.erased_callable.incref(boxed, 1, ops);
-        builtins.erased_callable.decref(boxed, ops);
+fn hostedHostRoundtripBoxed(boxed: ?[*]u8) callconv(.c) ?[*]u8 {
+    const ops = g_roc_ops.?;
+    if (boxed) |b| {
+        builtins.erased_callable.incref(b, 1, ops);
+        builtins.erased_callable.decref(b, ops);
     }
-    ret.* = args.boxed;
+    return boxed;
 }
 
-fn hostedHostStoreBoxed(ops: *builtins.host_abi.RocOps, _: *anyopaque, args: *const extern struct { boxed: ?[*]u8 }) callconv(.c) void {
-    if (stored_boxed_callable) |boxed| {
-        builtins.erased_callable.decref(boxed, ops);
+fn hostedHostStoreBoxed(boxed: ?[*]u8) callconv(.c) void {
+    const ops = g_roc_ops.?;
+    if (stored_boxed_callable) |prev| {
+        builtins.erased_callable.decref(prev, ops);
         stored_boxed_callable = null;
     }
-    const boxed = args.boxed orelse {
+    const new_boxed = boxed orelse {
         ops.crash("host attempted to store a null boxed erased callable");
         unreachable;
     };
-    builtins.erased_callable.incref(boxed, 1, ops);
-    stored_boxed_callable = boxed;
-    builtins.erased_callable.decref(boxed, ops);
+    builtins.erased_callable.incref(new_boxed, 1, ops);
+    stored_boxed_callable = new_boxed;
+    builtins.erased_callable.decref(new_boxed, ops);
 }
 
-fn hostedHostStoredBoxedCall(ops: *builtins.host_abi.RocOps, ret: *i64, args: *const extern struct { value: i64 }) callconv(.c) void {
-    ret.* = callBoxedI64ToI64(ops, stored_boxed_callable, args.value);
+fn hostedHostStoredBoxedCall(value: i64) callconv(.c) i64 {
+    const ops = g_roc_ops.?;
+    return callBoxedI64ToI64(ops, stored_boxed_callable, value);
 }
 
-fn hostedHostBoxedDropReport(ops: *builtins.host_abi.RocOps, ret: *RocStr, _: *anyopaque) callconv(.c) void {
+fn hostedHostBoxedDropReport() callconv(.c) RocStr {
+    const ops = g_roc_ops.?;
     var buf: [256]u8 = undefined;
     const report = std.fmt.bufPrint(
         &buf,
@@ -1289,10 +1319,11 @@ fn hostedHostBoxedDropReport(ops: *builtins.host_abi.RocOps, ret: *RocStr, _: *a
             boxed_host_drop_counts.boxed_capture,
         },
     ) catch "drops unavailable";
-    ret.* = RocStr.fromSlice(report, ops);
+    return RocStr.fromSlice(report, ops);
 }
 
-fn hostedHostResetBoxedDropReport(ops: *builtins.host_abi.RocOps, _: *anyopaque, _: *anyopaque) callconv(.c) void {
+fn hostedHostResetBoxedDropReport() callconv(.c) void {
+    const ops = g_roc_ops.?;
     if (stored_boxed_callable) |boxed| {
         builtins.erased_callable.decref(boxed, ops);
         stored_boxed_callable = null;
@@ -1300,26 +1331,57 @@ fn hostedHostResetBoxedDropReport(ops: *builtins.host_abi.RocOps, _: *anyopaque,
     boxed_host_drop_counts = .{};
 }
 
-/// Array of hosted function pointers, sorted alphabetically by fully-qualified name
-/// These correspond to the hosted functions defined in Stderr, Stdin, Stdout, Builder, and Host Type Modules
-const hosted_function_ptrs = [_]builtins.host_abi.HostedFn{
-    builtins.host_abi.hostedFn(&hostedBuilderPrintValue), // Builder.print_value! (index 0)
-    builtins.host_abi.hostedFn(&hostedHostBoxedAdd), // Host.boxed_add! (index 1)
-    builtins.host_abi.hostedFn(&hostedHostBoxedDropReport), // Host.boxed_drop_report! (index 2)
-    builtins.host_abi.hostedFn(&hostedHostBoxedNestedRecord), // Host.boxed_nested_record! (index 3)
-    builtins.host_abi.hostedFn(&hostedHostBoxedRecursiveTree), // Host.boxed_recursive_tree! (index 4)
-    builtins.host_abi.hostedFn(&hostedHostBoxedWithBoxedCapture), // Host.boxed_with_boxed_capture! (index 5)
-    builtins.host_abi.hostedFn(&hostedHostCallBoxed), // Host.call_boxed! (index 6)
-    builtins.host_abi.hostedFn(&hostedHostGetGreeting), // Host.get_greeting! (index 7)
-    builtins.host_abi.hostedFn(&hostedHostReleaseStoredBoxed), // Host.release_stored_boxed! (index 8)
-    builtins.host_abi.hostedFn(&hostedHostResetBoxedDropReport), // Host.reset_boxed_drop_report! (index 9)
-    builtins.host_abi.hostedFn(&hostedHostRoundtripBoxed), // Host.roundtrip_boxed! (index 10)
-    builtins.host_abi.hostedFn(&hostedHostStoreBoxed), // Host.store_boxed! (index 11)
-    builtins.host_abi.hostedFn(&hostedHostStoredBoxedCall), // Host.stored_boxed_call! (index 12)
-    builtins.host_abi.hostedFn(&hostedStderrLine), // Stderr.line! (index 13)
-    builtins.host_abi.hostedFn(&hostedStdinLine), // Stdin.line! (index 14)
-    builtins.host_abi.hostedFn(&hostedStdoutLine), // Stdout.line! (index 15)
-};
+// The platform's hosted functions, exported under their header symbols, plus
+// the fixed runtime symbols every symbol-ABI host defines.
+comptime {
+    @export(&hostedBuilderPrintValue, .{ .name = "roc_builder_print_value", .visibility = .hidden });
+    @export(&hostedHostBoxedAdd, .{ .name = "roc_host_boxed_add", .visibility = .hidden });
+    @export(&hostedHostBoxedDropReport, .{ .name = "roc_host_boxed_drop_report", .visibility = .hidden });
+    @export(&hostedHostBoxedNestedRecord, .{ .name = "roc_host_boxed_nested_record", .visibility = .hidden });
+    @export(&hostedHostBoxedRecursiveTree, .{ .name = "roc_host_boxed_recursive_tree", .visibility = .hidden });
+    @export(&hostedHostBoxedWithBoxedCapture, .{ .name = "roc_host_boxed_with_boxed_capture", .visibility = .hidden });
+    @export(&hostedHostCallBoxed, .{ .name = "roc_host_call_boxed", .visibility = .hidden });
+    @export(&hostedHostGetGreeting, .{ .name = "roc_host_get_greeting", .visibility = .hidden });
+    @export(&hostedHostReleaseStoredBoxed, .{ .name = "roc_host_release_stored_boxed", .visibility = .hidden });
+    @export(&hostedHostResetBoxedDropReport, .{ .name = "roc_host_reset_boxed_drop_report", .visibility = .hidden });
+    @export(&hostedHostRoundtripBoxed, .{ .name = "roc_host_roundtrip_boxed", .visibility = .hidden });
+    @export(&hostedHostStoreBoxed, .{ .name = "roc_host_store_boxed", .visibility = .hidden });
+    @export(&hostedHostStoredBoxedCall, .{ .name = "roc_host_stored_boxed_call", .visibility = .hidden });
+    @export(&hostedStderrLine, .{ .name = "roc_stderr_line", .visibility = .hidden });
+    @export(&hostedStdinLine, .{ .name = "roc_stdin_line", .visibility = .hidden });
+    @export(&hostedStdoutLine, .{ .name = "roc_stdout_line", .visibility = .hidden });
+
+    @export(&hostAlloc, .{ .name = "roc_alloc", .visibility = .hidden });
+    @export(&hostDealloc, .{ .name = "roc_dealloc", .visibility = .hidden });
+    @export(&hostRealloc, .{ .name = "roc_realloc", .visibility = .hidden });
+    @export(&hostDbg, .{ .name = "roc_dbg", .visibility = .hidden });
+    @export(&hostExpectFailed, .{ .name = "roc_expect_failed", .visibility = .hidden });
+    @export(&hostCrashed, .{ .name = "roc_crashed", .visibility = .hidden });
+}
+
+fn hostAlloc(length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+    return rocAllocFn(g_roc_ops.?, length, alignment);
+}
+
+fn hostDealloc(ptr: *anyopaque, alignment: usize) callconv(.c) void {
+    rocDeallocFn(g_roc_ops.?, ptr, alignment);
+}
+
+fn hostRealloc(ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+    return rocReallocFn(g_roc_ops.?, ptr, new_length, alignment);
+}
+
+fn hostDbg(bytes: [*]const u8, len: usize) callconv(.c) void {
+    rocDbgFn(g_roc_ops.?, bytes, len);
+}
+
+fn hostExpectFailed(bytes: [*]const u8, len: usize) callconv(.c) void {
+    rocExpectFailedFn(g_roc_ops.?, bytes, len);
+}
+
+fn hostCrashed(bytes: [*]const u8, len: usize) callconv(.c) void {
+    rocCrashedFn(g_roc_ops.?, bytes, len);
+}
 
 /// Platform host entrypoint
 fn platform_main(test_spec: ?[]const u8, test_verbose: bool) (Allocator.Error || error{InvalidSpecFormat})!c_int {
@@ -1406,7 +1468,8 @@ fn platform_main(test_spec: ?[]const u8, test_verbose: bool) (Allocator.Error ||
         }
     }
 
-    // Create the RocOps struct
+    // The host-private RocOps used by builtins helpers (RocStr etc.) and the
+    // exported runtime symbols; not part of the ABI.
     var roc_ops = builtins.host_abi.RocOps{
         .env = @as(*anyopaque, @ptrCast(&host_env)),
         .roc_alloc = rocAllocFn,
@@ -1415,17 +1478,13 @@ fn platform_main(test_spec: ?[]const u8, test_verbose: bool) (Allocator.Error ||
         .roc_dbg = rocDbgFn,
         .roc_expect_failed = rocExpectFailedFn,
         .roc_crashed = rocCrashedFn,
-        .hosted_fns = .{
-            .count = hosted_function_ptrs.len,
-            .fns = @constCast(&hosted_function_ptrs),
-        },
+        .hosted_fns = .{ .count = 0, .fns = undefined },
     };
 
-    // Call the app's main! entrypoint with concrete storage even for ZST
-    // arg/ret positions so every backend sees valid ABI pointers.
-    var dummy_ret: u8 = 0;
-    var dummy_arg: u8 = 0;
-    roc__main(&roc_ops, @ptrCast(&dummy_ret), @ptrCast(&dummy_arg));
+    g_roc_ops = &roc_ops;
+
+    // Call the app's main! entrypoint with its natural C ABI.
+    roc_main();
 
     // Check test results if in test mode
     if (host_env.test_state.enabled) {

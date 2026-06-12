@@ -392,7 +392,7 @@ fn hasSelfCall(allocator: Allocator, store: *const LirStore, proc_id: LIR.LirPro
                 try work.append(allocator, s.default_branch);
                 if (s.continuation) |continuation| try work.append(allocator, continuation);
             },
-            .jump, .ret, .crash, .runtime_error, .loop_continue, .loop_break => {},
+            .jump, .ret, .crash, .expect_err, .runtime_error, .loop_continue, .loop_break => {},
             inline .assign_ref, .assign_literal, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .free => |s| {
                 try work.append(allocator, s.next);
             },
@@ -441,7 +441,7 @@ test "trmc transforms the canonical repeat shape and builds correct structure" {
     try std.testing.expectEqual(LIR.TailTransform.trmc, store.getProcSpec(repeat).tail_transform);
     try std.testing.expect(!(try hasSelfCall(allocator, &store, repeat)));
 
-    try lir.Arc.insert(&store, &layouts);
+    try lir.Arc.insert(&store, &layouts, .{});
 
     var interp = try eval.Interpreter.init(allocator, &store, &layouts, runtime_env.get_ops());
     defer interp.deinit();
@@ -473,7 +473,7 @@ test "trmc'd repeat escapes the interpreter call-depth cap" {
         var b = ProcBuilder.init(&store);
         defer b.deinit(allocator);
         const repeat = try buildRepeatProc(allocator, &b, &store, peano);
-        try lir.Arc.insert(&store, &layouts);
+        try lir.Arc.insert(&store, &layouts, .{});
 
         var interp = try eval.Interpreter.init(allocator, &store, &layouts, runtime_env.get_ops());
         defer interp.deinit();
@@ -499,7 +499,7 @@ test "trmc'd repeat escapes the interpreter call-depth cap" {
         defer b.deinit(allocator);
         const repeat = try buildRepeatProc(allocator, &b, &store, peano);
         try lir.Trmc.run(&store, &layouts);
-        try lir.Arc.insert(&store, &layouts);
+        try lir.Arc.insert(&store, &layouts, .{});
 
         var interp = try eval.Interpreter.init(allocator, &store, &layouts, runtime_env.get_ops());
         defer interp.deinit();
@@ -555,7 +555,7 @@ test "trmc'd repeat is leak-free and allocation-exact when consumed" {
     try lir.Trmc.run(&store, &layouts);
     try std.testing.expectEqual(LIR.TailTransform.trmc, store.getProcSpec(repeat).tail_transform);
     try std.testing.expectEqual(LIR.TailTransform.none, store.getProcSpec(root).tail_transform);
-    try lir.Arc.insert(&store, &layouts);
+    try lir.Arc.insert(&store, &layouts, .{});
 
     const n: u64 = 50;
     try std.testing.expectEqual(@as(u64, 0), try runProcU64Args(allocator, &store, &layouts, root, &runtime_env, &.{n}));
@@ -632,7 +632,7 @@ test "tce transforms the countdown shape and escapes the call-depth cap" {
     try lir.Trmc.run(&store, &layouts);
     try std.testing.expectEqual(LIR.TailTransform.tce, store.getProcSpec(count).tail_transform);
     try std.testing.expect(!(try hasSelfCall(allocator, &store, count)));
-    try lir.Arc.insert(&store, &layouts);
+    try lir.Arc.insert(&store, &layouts, .{});
 
     try std.testing.expectEqual(
         @as(u64, 100_000),
@@ -701,7 +701,7 @@ test "tce loop-back copies swapped params through temps" {
 
     try lir.Trmc.run(&store, &layouts);
     try std.testing.expectEqual(LIR.TailTransform.tce, store.getProcSpec(proc).tail_transform);
-    try lir.Arc.insert(&store, &layouts);
+    try lir.Arc.insert(&store, &layouts, .{});
 
     // Odd swap count returns the second argument; even returns the first.
     // Sequential param writes without temp copies would return garbage.
@@ -841,7 +841,7 @@ test "mixed construct and plain-tail branches both become jumps" {
     try lir.Trmc.run(&store, &layouts);
     try std.testing.expectEqual(LIR.TailTransform.trmc, store.getProcSpec(proc).tail_transform);
     try std.testing.expect(!(try hasSelfCall(allocator, &store, proc)));
-    try lir.Arc.insert(&store, &layouts);
+    try lir.Arc.insert(&store, &layouts, .{});
 
     // Depth 2000 makes 2000 recursive calls (1000 S nodes): both rewritten
     // branches must loop for this to survive the 1024-frame cap.

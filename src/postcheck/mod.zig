@@ -15,6 +15,7 @@ pub const Monotype = struct {
 pub const MonotypeLifted = struct {
     pub const Ast = @import("monotype_lifted/ast.zig");
     pub const Lift = @import("monotype_lifted/lift.zig");
+    pub const SpecConstr = @import("monotype_lifted/spec_constr.zig");
 };
 /// Lifted IR with lambda-set relationships solved in the type store.
 pub const LambdaSolved = struct {

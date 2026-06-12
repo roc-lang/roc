@@ -18,12 +18,10 @@ platform ""
     requires {} { greet : Str -> Str }
     exposes []
     packages {}
-    provides { greet_for_host: "greet" }
+    provides { "roc_greet": greet_for_host }
     targets: {
-        files: "targets/",
-        exe: {
-            x64glibc: { files: [app] },
-        }
+        inputs: "targets/",
+        x64glibc: { inputs: [app] },
     }
 
 greet_for_host : Str -> Str

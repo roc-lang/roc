@@ -253,7 +253,7 @@ NO CHANGE
 			(e-nominal (nominal "Container")
 				(e-tag (name "Box")
 					(args
-						(e-call (constraint-fn-var 215)
+						(e-call (constraint-fn-var 225)
 							(e-lookup-local
 								(p-assign (ident "fn")))
 							(e-lookup-local
@@ -271,7 +271,7 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "x")))
-			(e-dispatch-call (method "get_value") (constraint-fn-var 240)
+			(e-dispatch-call (method "get_value") (constraint-fn-var 250)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "x"))))
@@ -291,7 +291,7 @@ NO CHANGE
 			(args
 				(p-assign (ident "x"))
 				(p-assign (ident "fn")))
-			(e-dispatch-call (method "transform") (constraint-fn-var 273)
+			(e-dispatch-call (method "transform") (constraint-fn-var 283)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "x"))))
@@ -335,7 +335,7 @@ NO CHANGE
 			(ty-lookup (name "Container") (local))))
 	(d-let
 		(p-assign (ident "directCall"))
-		(e-dispatch-call (method "get_value") (constraint-fn-var 334)
+		(e-dispatch-call (method "get_value") (constraint-fn-var 436)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "myContainer"))))
@@ -344,7 +344,7 @@ NO CHANGE
 			(ty-lookup (name "Str") (builtin))))
 	(d-let
 		(p-assign (ident "result1"))
-		(e-call (constraint-fn-var 346)
+		(e-call (constraint-fn-var 448)
 			(e-lookup-local
 				(p-assign (ident "extract")))
 			(e-lookup-local
@@ -353,7 +353,7 @@ NO CHANGE
 			(ty-lookup (name "Str") (builtin))))
 	(d-let
 		(p-assign (ident "result2"))
-		(e-call (constraint-fn-var 375)
+		(e-call (constraint-fn-var 592)
 			(e-lookup-local
 				(p-assign (ident "modify")))
 			(e-lookup-local
@@ -361,11 +361,29 @@ NO CHANGE
 			(e-lambda
 				(args
 					(p-assign (ident "s")))
-				(e-string
-					(e-literal (string ""))
-					(e-lookup-local
-						(p-assign (ident "s")))
-					(e-literal (string " world")))))
+				(e-block
+					(s-let
+						(p-assign (ident "#interp_0"))
+						(e-lookup-local
+							(p-assign (ident "s"))))
+					(e-dispatch-call (method "from_interpolation") (constraint-fn-var 590)
+						(receiver
+							(e-string
+								(e-literal (string ""))))
+						(args
+							(e-dispatch-call (method "prepended") (constraint-fn-var 548)
+								(receiver
+									(e-dispatch-call (method "iter") (constraint-fn-var 484)
+										(receiver
+											(e-empty_list))
+										(args)))
+								(args
+									(e-tuple
+										(elems
+											(e-lookup-local
+												(p-assign (ident "#interp_0")))
+											(e-string
+												(e-literal (string " world"))))))))))))
 		(annotation
 			(ty-lookup (name "Container") (local))))
 	(d-let
@@ -376,7 +394,7 @@ NO CHANGE
 					(p-assign (ident "directCall")))
 				(e-lookup-local
 					(p-assign (ident "result1")))
-				(e-call (constraint-fn-var 399)
+				(e-call (constraint-fn-var 738)
 					(e-lookup-local
 						(p-assign (ident "extract")))
 					(e-lookup-local

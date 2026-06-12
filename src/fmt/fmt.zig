@@ -1175,6 +1175,21 @@ const Formatter = struct {
                 }
                 try fmt.push('"');
             },
+            .typed_string => |s| {
+                try fmt.push('"');
+                for (fmt.ast.store.exprSlice(s.parts)) |idx| {
+                    const e = fmt.ast.store.getExpr(idx);
+                    switch (e) {
+                        .string_part => |str| {
+                            try fmt.pushTokenText(str.token);
+                        },
+                        else => try fmt.formatStringInterpolation(idx),
+                    }
+                }
+                try fmt.push('"');
+                try fmt.push('.');
+                try fmt.pushAll(fmt.ast.env.getIdent(s.type_ident));
+            },
             .multiline_string => |s| {
                 if (!fmt.has_newline) {
                     fmt.curr_indent += 1;
@@ -1202,6 +1217,40 @@ const Formatter = struct {
                         },
                     }
                 }
+                fmt.has_multiline_string = true;
+            },
+            .typed_multiline_string => |s| {
+                if (!fmt.has_newline) {
+                    fmt.curr_indent += 1;
+                }
+                var add_newline = false;
+                try fmt.pushAll("\\\\");
+                for (fmt.ast.store.exprSlice(s.parts)) |idx| {
+                    const e = fmt.ast.store.getExpr(idx);
+                    switch (e) {
+                        .string_part => |str| {
+                            if (add_newline) {
+                                // Comments could be located before the MultilineStringStart token, not the StringPart token
+                                try fmt.flushCommentsBeforeDiscard(str.region.start - 1);
+                                try fmt.ensureNewline();
+                                try fmt.pushIndent();
+                                try fmt.pushAll("\\\\");
+                            }
+
+                            add_newline = true;
+                            try fmt.pushTokenText(str.token);
+                        },
+                        else => {
+                            add_newline = false;
+                            try fmt.formatStringInterpolation(idx);
+                        },
+                    }
+                }
+                // The type suffix lives on its own line after the string body.
+                try fmt.ensureNewline();
+                try fmt.pushIndent();
+                try fmt.push('.');
+                try fmt.pushAll(fmt.ast.env.getIdent(s.type_ident));
                 fmt.has_multiline_string = true;
             },
             .single_quote => |s| {
@@ -1960,38 +2009,26 @@ const Formatter = struct {
 
         var has_content = false;
 
-        // Format files: field if present
-        if (targets.files_path) |files_token| {
+        // Format inputs: directory directive if present
+        if (targets.inputs_path) |inputs_token| {
             has_content = true;
             try fmt.ensureNewline();
             fmt.curr_indent = start_indent + 1;
             try fmt.pushIndent();
-            try fmt.pushAll("files: ");
+            try fmt.pushAll("inputs: ");
             try fmt.push('"');
-            try fmt.pushTokenText(files_token);
+            try fmt.pushTokenText(inputs_token);
             try fmt.push('"');
             try fmt.push(',');
         }
 
-        // Format exe: field if present
-        if (targets.exe) |exe_idx| {
+        // Format per-target entries
+        for (fmt.ast.store.targetEntrySlice(targets.entries)) |entry_idx| {
             has_content = true;
             try fmt.ensureNewline();
             fmt.curr_indent = start_indent + 1;
             try fmt.pushIndent();
-            try fmt.pushAll("exe: ");
-            try fmt.formatTargetLinkType(exe_idx, start_indent + 1);
-            try fmt.push(',');
-        }
-
-        // Format static_lib: field if present
-        if (targets.static_lib) |static_lib_idx| {
-            has_content = true;
-            try fmt.ensureNewline();
-            fmt.curr_indent = start_indent + 1;
-            try fmt.pushIndent();
-            try fmt.pushAll("static_lib: ");
-            try fmt.formatTargetLinkType(static_lib_idx, start_indent + 1);
+            try fmt.formatTargetEntry(entry_idx);
             try fmt.push(',');
         }
 
@@ -2003,32 +2040,60 @@ const Formatter = struct {
         try fmt.push('}');
     }
 
-    /// Format a target link type (exe, static_lib, shared_lib) section
-    fn formatTargetLinkType(fmt: *Formatter, link_type_idx: AST.TargetLinkType.Idx, base_indent: u32) (Allocator.Error || error{WriteFailed})!void {
-        const link_type = fmt.ast.store.getTargetLinkType(link_type_idx);
-        const entries = fmt.ast.store.targetEntrySlice(link_type.entries);
-
+    /// Format a symbol map section: { "roc_main": main_for_host!, ... }
+    fn formatSymbolMapSection(fmt: *Formatter, span: AST.SymbolMapEntry.Span, base_indent: u32) (Allocator.Error || error{WriteFailed})!void {
+        const entries = fmt.ast.store.symbolMapEntrySlice(span);
+        if (entries.len == 0) {
+            try fmt.pushAll("{}");
+            return;
+        }
+        if (entries.len <= 2) {
+            try fmt.pushAll("{ ");
+            for (entries, 0..) |entry_idx, i| {
+                if (i > 0) {
+                    try fmt.pushAll(", ");
+                }
+                try fmt.formatSymbolMapEntry(entry_idx);
+            }
+            try fmt.pushAll(" }");
+            return;
+        }
         try fmt.push('{');
-
-        for (entries, 0..) |entry_idx, i| {
+        for (entries) |entry_idx| {
             try fmt.ensureNewline();
             fmt.curr_indent = base_indent + 1;
             try fmt.pushIndent();
-            try fmt.formatTargetEntry(entry_idx);
-            if (i < entries.len - 1 or entries.len > 0) {
-                try fmt.push(',');
-            }
+            try fmt.formatSymbolMapEntry(entry_idx);
+            try fmt.push(',');
         }
-
-        if (entries.len > 0) {
-            try fmt.ensureNewline();
-            fmt.curr_indent = base_indent;
-            try fmt.pushIndent();
-        }
+        try fmt.ensureNewline();
+        fmt.curr_indent = base_indent;
+        try fmt.pushIndent();
         try fmt.push('}');
     }
 
-    /// Format a single target entry: x64linux: { files: ["host.o", app] }
+    /// Format a single symbol map entry: "roc_stdout_line": Stdout.line!
+    fn formatSymbolMapEntry(fmt: *Formatter, entry_idx: AST.SymbolMapEntry.Idx) (Allocator.Error || error{WriteFailed})!void {
+        const entry = fmt.ast.store.getSymbolMapEntry(entry_idx);
+        try fmt.push('"');
+        try fmt.pushTokenText(entry.symbol);
+        try fmt.push('"');
+        try fmt.pushAll(": ");
+        if (entry.module) |module_tok| {
+            // Emit every token from the module through the function name; for
+            // functions on nested type modules (Foo.Idx.get!) the tokens in
+            // between are the nested type segments.
+            var tok = module_tok;
+            while (tok <= entry.func) : (tok += 1) {
+                if (tok != module_tok) try fmt.push('.');
+                try fmt.pushTokenText(tok);
+            }
+        } else {
+            try fmt.pushTokenText(entry.func);
+        }
+    }
+
+    /// Format a single target entry: x64linux: { inputs: ["host.o", app], output: Exe }
     fn formatTargetEntry(fmt: *Formatter, entry_idx: AST.TargetEntry.Idx) (Allocator.Error || error{WriteFailed})!void {
         const entry = fmt.ast.store.getTargetEntry(entry_idx);
 
@@ -2420,25 +2485,19 @@ const Formatter = struct {
                 fmt.curr_indent = start_indent + 1;
                 try fmt.pushIndent();
 
-                try fmt.pushAll("provides");
-                const provides = fmt.ast.store.getCollection(p.provides);
-                if (try fmt.flushCommentsBefore(provides.region.start)) {
-                    fmt.curr_indent += 1;
+                try fmt.pushAll("provides ");
+                try fmt.formatSymbolMapSection(p.provides, start_indent + 1);
+
+                if (p.hosted.span.len > 0) {
+                    try fmt.ensureNewline();
+                    fmt.curr_indent = start_indent + 1;
                     try fmt.pushIndent();
-                } else {
-                    try fmt.push(' ');
+                    try fmt.pushAll("hosted ");
+                    try fmt.formatSymbolMapSection(p.hosted, start_indent + 1);
                 }
-                try fmt.formatCollection(
-                    provides.region,
-                    .curly,
-                    AST.RecordField.Idx,
-                    fmt.ast.store.recordFieldSlice(.{ .span = provides.span }),
-                    Formatter.formatRecordField,
-                );
 
                 // Format targets section if present
                 if (p.targets) |targets_idx| {
-                    try fmt.flushCommentsBeforeDiscard(provides.region.end);
                     try fmt.ensureNewline();
                     fmt.curr_indent = start_indent + 1;
                     try fmt.pushIndent();
@@ -3204,7 +3263,7 @@ const Formatter = struct {
                             return true;
                         }
 
-                        return fmt.collectionWillBeMultiline(AST.RecordField.Idx, p.provides);
+                        return p.provides.span.len > 2 or p.hosted.span.len > 0;
                     },
                     else => return false,
                 }
@@ -3375,11 +3434,9 @@ test "issue 8989: platform header targets section is preserved" {
         \\    packages {}
         \\    provides {}
         \\    targets: {
-        \\        files: "build/",
-        \\        exe: {
-        \\            x64linux: { files: ["host.o", app] },
-        \\            arm64linux: { files: ["host.o", app] },
-        \\        },
+        \\        inputs: "build/",
+        \\        x64linux: { inputs: ["host.o", app] },
+        \\        arm64linux: { inputs: ["host.o", app], output: Shared },
         \\    }
     ;
     const result = try moduleFmtsStable(std.testing.allocator, input, false);

@@ -163,7 +163,7 @@ main = {
 							(e-num (value "3"))))))
 			(s-let
 				(p-assign (ident "string_list"))
-				(e-call (constraint-fn-var 204)
+				(e-call (constraint-fn-var 234)
 					(e-lookup-local
 						(p-assign (ident "shorthand")))
 					(e-list

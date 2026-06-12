@@ -1470,7 +1470,7 @@ fn parseTargetConfigEntryTokens(self: *Parser) Error!AST.TargetConfigEntry.Idx {
             return try self.pushMalformed(AST.TargetConfigEntry.Idx, .expected_targets_field_colon, start);
         };
 
-        if (std.mem.eql(u8, self.tokenText(name), "files")) {
+        if (std.mem.eql(u8, self.tokenText(name), "inputs")) {
             const files_span = self.parseTargetFileList() catch |err| switch (err) {
                 error.ExpectedNotFound => {
                     return try self.pushMalformed(AST.TargetConfigEntry.Idx, .expected_target_files_open_square, start);
@@ -1516,52 +1516,6 @@ fn parseTargetConfigTokens(self: *Parser) Error!AST.TargetConfig.Idx {
     });
 }
 
-fn parseTargetEntryTokens(self: *Parser) Error!AST.TargetEntry.Idx {
-    const start = self.pos;
-    if (self.peek() != .LowerIdent) {
-        return try self.pushMalformed(AST.TargetEntry.Idx, .expected_target_name, start);
-    }
-    const target_name = self.pos;
-    self.advance();
-    self.expect(.OpColon) catch {
-        return try self.pushMalformed(AST.TargetEntry.Idx, .expected_target_colon, start);
-    };
-
-    if (self.peek() != .OpenCurly) {
-        return try self.pushMalformed(AST.TargetEntry.Idx, .expected_targets_open_curly, start);
-    }
-    const config = try self.parseTargetConfigTokens();
-
-    return try self.store.addTargetEntry(.{
-        .target = target_name,
-        .config = config,
-        .region = .{ .start = start, .end = self.pos },
-    });
-}
-
-fn parseTargetLinkTypeTokens(self: *Parser) Error!AST.TargetLinkType.Idx {
-    const start = self.pos;
-    self.expect(.OpenCurly) catch {
-        return try self.pushMalformed(AST.TargetLinkType.Idx, .expected_target_link_open_curly, start);
-    };
-    const entries_top = self.store.scratchTargetEntryTop();
-    while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
-        try self.store.addScratchTargetEntry(try self.parseTargetEntryTokens());
-        if (!self.consumeComma()) {
-            break;
-        }
-    }
-    if (self.peek() != .CloseCurly) {
-        self.store.clearScratchTargetEntriesFrom(entries_top);
-        return try self.pushMalformed(AST.TargetLinkType.Idx, .expected_target_link_close_curly, start);
-    }
-    self.advance();
-    return try self.store.addTargetLinkType(.{
-        .entries = try self.store.targetEntrySpanFrom(entries_top),
-        .region = .{ .start = start, .end = self.pos },
-    });
-}
-
 fn parseTargetsSectionTokens(self: *Parser) Error!AST.TargetsSection.Idx {
     const start = self.pos;
     self.expect(.OpColon) catch {
@@ -1571,25 +1525,27 @@ fn parseTargetsSectionTokens(self: *Parser) Error!AST.TargetsSection.Idx {
         return try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_open_curly, start);
     };
 
-    var files_path: ?TokenIdx = null;
-    var exe: ?AST.TargetLinkType.Idx = null;
-    var static_lib: ?AST.TargetLinkType.Idx = null;
+    var inputs_path: ?TokenIdx = null;
+    const entries_top = self.store.scratchTargetEntryTop();
 
     while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
         if (self.peek() != .LowerIdent) {
+            self.store.clearScratchTargetEntriesFrom(entries_top);
             return try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_field_name, start);
         }
         const field_name_tok = self.pos;
         self.advance();
         self.expect(.OpColon) catch {
+            self.store.clearScratchTargetEntriesFrom(entries_top);
             return try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_field_colon, start);
         };
 
         switch (self.peek()) {
             .StringStart => {
+                // inputs: "targets/" directory directive
                 self.advance();
                 if (self.peek() == .StringPart) {
-                    files_path = self.pos;
+                    inputs_path = self.pos;
                     self.advance();
                 }
                 while (self.peek() != .StringEnd and self.peek() != .EndOfFile) {
@@ -1600,30 +1556,105 @@ fn parseTargetsSectionTokens(self: *Parser) Error!AST.TargetsSection.Idx {
                 }
             },
             .OpenCurly => {
-                const parsed_link_type = try self.parseTargetLinkTypeTokens();
-                const region = self.tok_buf.resolve(field_name_tok);
-                const field_name = self.tok_buf.env.source[@intCast(region.start.offset)..@intCast(region.end.offset)];
-                if (std.mem.eql(u8, field_name, "exe")) {
-                    exe = parsed_link_type;
-                } else if (std.mem.eql(u8, field_name, "static_lib")) {
-                    static_lib = parsed_link_type;
-                }
+                // <target>: { inputs: [...], output: Exe }
+                const config = try self.parseTargetConfigTokens();
+                try self.store.addScratchTargetEntry(try self.store.addTargetEntry(.{
+                    .target = field_name_tok,
+                    .config = config,
+                    .region = .{ .start = field_name_tok, .end = self.pos },
+                }));
             },
-            else => return try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_field_name, start),
+            else => {
+                self.store.clearScratchTargetEntriesFrom(entries_top);
+                return try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_field_name, start);
+            },
         }
 
         _ = self.consumeComma();
     }
 
     self.expect(.CloseCurly) catch {
+        self.store.clearScratchTargetEntriesFrom(entries_top);
         return try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_close_curly, start);
     };
     return try self.store.addTargetsSection(.{
-        .files_path = files_path,
-        .exe = exe,
-        .static_lib = static_lib,
+        .inputs_path = inputs_path,
+        .entries = try self.store.targetEntrySpanFrom(entries_top),
         .region = .{ .start = start, .end = self.pos },
     });
+}
+
+fn parseSymbolMapEntryTokens(self: *Parser) Error!AST.SymbolMapEntry.Idx {
+    const start = self.pos;
+    self.expect(.StringStart) catch {
+        return try self.pushMalformed(AST.SymbolMapEntry.Idx, .expected_symbol_string, start);
+    };
+    if (self.peek() != .StringPart) {
+        return try self.pushMalformed(AST.SymbolMapEntry.Idx, .expected_symbol_string, start);
+    }
+    const symbol = self.pos;
+    self.advance();
+    self.expect(.StringEnd) catch {
+        return try self.pushMalformed(AST.SymbolMapEntry.Idx, .expected_symbol_string, start);
+    };
+    self.expect(.OpColon) catch {
+        return try self.pushMalformed(AST.SymbolMapEntry.Idx, .expected_symbol_map_colon, start);
+    };
+
+    var module: ?TokenIdx = null;
+    var func: TokenIdx = undefined;
+    switch (self.peek()) {
+        .UpperIdent => {
+            module = self.pos;
+            self.advance();
+            // Hosted functions on nested type modules have extra uppercase
+            // segments between the module and the function: Foo.Idx.get!
+            while (self.peek() == .NoSpaceDotUpperIdent) {
+                self.advance();
+            }
+            if (self.peek() != .NoSpaceDotLowerIdent) {
+                return try self.pushMalformed(AST.SymbolMapEntry.Idx, .expected_symbol_map_function, start);
+            }
+            func = self.pos;
+            self.advance();
+        },
+        .LowerIdent => {
+            func = self.pos;
+            self.advance();
+        },
+        else => return try self.pushMalformed(AST.SymbolMapEntry.Idx, .expected_symbol_map_function, start),
+    }
+
+    return try self.store.addSymbolMapEntry(.{
+        .symbol = symbol,
+        .module = module,
+        .func = func,
+        .region = .{ .start = start, .end = self.pos },
+    });
+}
+
+fn parseSymbolMapCollectionTokens(
+    self: *Parser,
+    open_tag: AST.Diagnostic.Tag,
+    close_tag: AST.Diagnostic.Tag,
+) Error!AST.SymbolMapEntry.Span {
+    self.expect(.OpenCurly) catch {
+        _ = try self.pushMalformed(AST.SymbolMapEntry.Idx, open_tag, self.pos);
+        return .{ .span = .{ .start = 0, .len = 0 } };
+    };
+    const top = self.store.scratchSymbolMapEntryTop();
+    while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
+        try self.store.addScratchSymbolMapEntry(try self.parseSymbolMapEntryTokens());
+        if (!self.consumeComma()) {
+            break;
+        }
+    }
+    self.expect(.CloseCurly) catch {
+        self.store.clearScratchSymbolMapEntriesFrom(top);
+        _ = try self.pushMalformed(AST.SymbolMapEntry.Idx, close_tag, self.pos);
+        return .{ .span = .{ .start = 0, .len = 0 } };
+    };
+    return try self.store.symbolMapEntrySpanFrom(top);
 }
 
 fn parsePlatformHeaderTokens(self: *Parser) Error!AST.Header.Idx {
@@ -1671,12 +1702,19 @@ fn parsePlatformHeaderTokens(self: *Parser) Error!AST.Header.Idx {
     self.expect(.KwProvides) catch {
         return try self.pushMalformed(AST.Header.Idx, .expected_provides, self.pos);
     };
-    const provides = try self.parseRecordFieldCollectionTokens(
-        self.pos,
-        .collection_record_fields,
+    const provides = try self.parseSymbolMapCollectionTokens(
         .expected_provides_open_curly,
         .expected_provides_close_curly,
     );
+
+    var hosted: AST.SymbolMapEntry.Span = .{ .span = .{ .start = 0, .len = 0 } };
+    if (self.peek() == .KwHosted) {
+        self.advance();
+        hosted = try self.parseSymbolMapCollectionTokens(
+            .expected_hosted_open_curly,
+            .expected_hosted_close_curly,
+        );
+    }
 
     var targets: ?AST.TargetsSection.Idx = null;
     if (self.peek() == .KwTargets) {
@@ -1690,6 +1728,7 @@ fn parsePlatformHeaderTokens(self: *Parser) Error!AST.Header.Idx {
         .exposes = exposes,
         .packages = packages,
         .provides = provides,
+        .hosted = hosted,
         .targets = targets,
         .region = .{ .start = start, .end = self.pos },
     } });
@@ -3794,7 +3833,19 @@ fn runExprStatementKernel(
                 }
                 self.advance();
                 const parts = try self.store.exprSpanFrom(expr_string_state.scratch_top);
-                const expr = try self.store.addExpr(.{ .string = .{
+                const expr = if (self.peek() == .NoSpaceDotUpperIdent) blk: {
+                    const type_token = self.pos;
+                    self.advance();
+                    const type_ident = self.tok_buf.resolveIdentifier(type_token) orelse {
+                        break :blk try self.pushMalformed(AST.Expr.Idx, .expr_unexpected_token, type_token);
+                    };
+                    break :blk try self.store.addExpr(.{ .typed_string = .{
+                        .token = expr_string_state.start,
+                        .type_ident = type_ident,
+                        .parts = parts,
+                        .region = .{ .start = expr_string_state.start, .end = self.pos },
+                    } });
+                } else try self.store.addExpr(.{ .string = .{
                     .token = expr_string_state.start,
                     .parts = parts,
                     .region = .{ .start = expr_string_state.start, .end = self.pos },
@@ -3852,7 +3903,19 @@ fn runExprStatementKernel(
                     continue :expr_kernel .suffix;
                 }
                 const parts = try self.store.exprSpanFrom(expr_string_state.scratch_top);
-                const expr = try self.store.addExpr(.{ .multiline_string = .{
+                const expr = if (self.peek() == .DotUpperIdent or self.peek() == .NoSpaceDotUpperIdent) blk: {
+                    const type_token = self.pos;
+                    self.advance();
+                    const type_ident = self.tok_buf.resolveIdentifier(type_token) orelse {
+                        break :blk try self.pushMalformed(AST.Expr.Idx, .expr_unexpected_token, type_token);
+                    };
+                    break :blk try self.store.addExpr(.{ .typed_multiline_string = .{
+                        .token = expr_string_state.start,
+                        .type_ident = type_ident,
+                        .parts = parts,
+                        .region = .{ .start = expr_string_state.start, .end = self.pos },
+                    } });
+                } else try self.store.addExpr(.{ .multiline_string = .{
                     .token = expr_string_state.start,
                     .parts = parts,
                     .region = .{ .start = expr_string_state.start, .end = self.pos },
@@ -6042,7 +6105,6 @@ const bin_op_bp_table = blk: {
     table[@intFromEnum(Token.Tag.OpPlus) - start] = .{ .left = 20, .right = 21 };
     table[@intFromEnum(Token.Tag.OpBinaryMinus) - start] = .{ .left = 20, .right = 21 };
     table[@intFromEnum(Token.Tag.OpDoubleQuestion) - start] = .{ .left = 18, .right = 19 };
-    table[@intFromEnum(Token.Tag.OpQuestion) - start] = .{ .left = 16, .right = 17 };
     table[@intFromEnum(Token.Tag.OpEquals) - start] = .{ .left = 15, .right = 15 };
     table[@intFromEnum(Token.Tag.OpNotEquals) - start] = .{ .left = 13, .right = 13 };
     table[@intFromEnum(Token.Tag.OpLessThan) - start] = .{ .left = 11, .right = 11 };

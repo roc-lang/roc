@@ -8,21 +8,20 @@ platform ""
     exposes [Host]
     packages {}
     provides {
-        init_for_host!: "init_for_host",
-        render_for_host!: "render_for_host",
+        "roc_init_for_host": init_for_host!,
+        "roc_render_for_host": render_for_host!,
     }
+    hosted { "roc_host_read_env": Host.read_env! }
     targets: {
-        files: "targets/",
-        exe: {
-            x64mac: { files: [app] },
-            arm64mac: { files: [app] },
-            x64musl: { files: [app] },
-            arm64musl: { files: [app] },
-            x64glibc: { files: [app] },
-            arm64glibc: { files: [app] },
-            x64win: { files: [app] },
-            arm64win: { files: [app] },
-        }
+        inputs: "targets/",
+        x64mac: { inputs: [app], output: Archive },
+        arm64mac: { inputs: [app], output: Archive },
+        x64musl: { inputs: [app], output: Archive },
+        arm64musl: { inputs: [app], output: Archive },
+        x64glibc: { inputs: [app], output: Archive },
+        arm64glibc: { inputs: [app], output: Archive },
+        x64win: { inputs: [app], output: Archive },
+        arm64win: { inputs: [app], output: Archive },
     }
 
 import Host

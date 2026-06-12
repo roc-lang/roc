@@ -380,6 +380,14 @@ pub const Tag = enum {
     /// * lhs - LHS DESCRIPTION
     /// * rhs - RHS DESCRIPTION
     multiline_string,
+    /// A string literal with an explicit type suffix, e.g. `"foo".MyType`
+    /// * lhs - type identifier (Ident.Idx bits)
+    /// * rhs - extra_data index holding [parts.span.start, parts.span.len]
+    typed_string,
+    /// A multiline string literal with an explicit type suffix
+    /// * lhs - type identifier (Ident.Idx bits)
+    /// * rhs - extra_data index holding [parts.span.start, parts.span.len]
+    typed_multiline_string,
     /// DESCRIPTION
     /// Example: EXAMPLE
     /// * lhs - LHS DESCRIPTION
@@ -521,20 +529,21 @@ pub const Tag = enum {
     // Target section nodes
 
     /// A targets section in a platform header
-    /// * main_token - files string token (or 0 if no files directive)
-    /// * lhs - exe TargetLinkType index (or 0 if none)
-    /// * rhs - reserved for future (static_lib, shared_lib)
+    /// * main_token - inputs string token (or 0 if no inputs directive)
+    /// * lhs - start of TargetEntry span
+    /// * rhs - length of TargetEntry span
     targets_section,
 
-    /// A target link type section (exe, static_lib, shared_lib)
-    /// * lhs - start of entries span
-    /// * rhs - length of entries span
-    target_link_type,
-
-    /// A single target entry: x64musl: { files: ["crt1.o", "host.o", app] }
+    /// A single target entry: x64musl: { inputs: ["crt1.o", "host.o", app], output: Exe }
     /// * main_token - target name identifier token
     /// * lhs - TargetConfig index
     target_entry,
+
+    /// A symbol map entry: "roc_main": main_for_host! or "roc_stdout_line": Stdout.line!
+    /// * main_token - symbol string token (StringPart)
+    /// * lhs - module UpperIdent token (packed optional; 0 if unqualified)
+    /// * rhs - function ident token
+    symbol_map_entry,
 
     /// A string literal file in a target list: "crt1.o"
     /// * main_token - string token

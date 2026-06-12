@@ -91,7 +91,8 @@ test "NodeStore round trip - Headers" {
             .exposes = rand_idx(random, AST.Collection.Idx),
             .name = rand_token_idx(random),
             .packages = rand_idx(random, AST.Collection.Idx),
-            .provides = rand_idx(random, AST.Collection.Idx),
+            .provides = .{ .span = rand_span(random) },
+            .hosted = .{ .span = rand_span(random) },
             .requires_entries = .{ .span = .{ .start = 0, .len = 0 } },
             .targets = null,
             .region = rand_region(random),
@@ -670,6 +671,22 @@ test "NodeStore round trip - Expr" {
         },
     });
     try expressions.append(gpa, AST.Expr{
+        .typed_string = .{
+            .parts = AST.Expr.Span{ .span = rand_span(random) },
+            .type_ident = rand_idx(random, base.Ident.Idx),
+            .region = rand_region(random),
+            .token = rand_token_idx(random),
+        },
+    });
+    try expressions.append(gpa, AST.Expr{
+        .typed_multiline_string = .{
+            .parts = AST.Expr.Span{ .span = rand_span(random) },
+            .type_ident = rand_idx(random, base.Ident.Idx),
+            .region = rand_region(random),
+            .token = rand_token_idx(random),
+        },
+    });
+    try expressions.append(gpa, AST.Expr{
         .list = .{
             .items = AST.Expr.Span{ .span = rand_span(random) },
             .region = rand_region(random),
@@ -929,25 +946,10 @@ test "NodeStore round trip - Targets" {
         return err;
     };
 
-    // Test TargetLinkType round trip
-    const link_type = AST.TargetLinkType{
-        .entries = .{ .span = rand_span(random) },
-        .region = rand_region(random),
-    };
-    const link_type_idx = try store.addTargetLinkType(link_type);
-    const retrieved_link_type = store.getTargetLinkType(link_type_idx);
-
-    testing.expectEqualDeep(link_type, retrieved_link_type) catch |err| {
-        std.debug.print("\n\nOriginal TargetLinkType:  {any}\n\n", .{link_type});
-        std.debug.print("Retrieved TargetLinkType: {any}\n\n", .{retrieved_link_type});
-        return err;
-    };
-
     // Test TargetsSection round trip
     const section = AST.TargetsSection{
-        .files_path = rand_token_idx(random),
-        .exe = link_type_idx,
-        .static_lib = null,
+        .inputs_path = rand_token_idx(random),
+        .entries = .{ .span = rand_span(random) },
         .region = rand_region(random),
     };
     const section_idx = try store.addTargetsSection(section);
@@ -959,19 +961,18 @@ test "NodeStore round trip - Targets" {
         return err;
     };
 
-    // Test TargetsSection with null values
+    // Test TargetsSection with no inputs directive
     const section_nulls = AST.TargetsSection{
-        .files_path = null,
-        .exe = null,
-        .static_lib = null,
+        .inputs_path = null,
+        .entries = .{ .span = rand_span(random) },
         .region = rand_region(random),
     };
     const section_nulls_idx = try store.addTargetsSection(section_nulls);
     const retrieved_section_nulls = store.getTargetsSection(section_nulls_idx);
 
     testing.expectEqualDeep(section_nulls, retrieved_section_nulls) catch |err| {
-        std.debug.print("\n\nOriginal TargetsSection (nulls):  {any}\n\n", .{section_nulls});
-        std.debug.print("Retrieved TargetsSection (nulls): {any}\n\n", .{retrieved_section_nulls});
+        std.debug.print("\n\nOriginal TargetsSection (no inputs):  {any}\n\n", .{section_nulls});
+        std.debug.print("Retrieved TargetsSection (no inputs): {any}\n\n", .{retrieved_section_nulls});
         return err;
     };
 }
@@ -1001,14 +1002,6 @@ test "NodeStore rejects optional index sentinel overflow in release builds" {
     var store = try NodeStore.initCapacity(gpa, 16);
     defer store.deinit();
 
-    const max_link_type: AST.TargetLinkType.Idx = @enumFromInt(std.math.maxInt(u32));
-    try testing.expectError(error.OutOfMemory, store.addTargetsSection(.{
-        .files_path = null,
-        .exe = max_link_type,
-        .static_lib = null,
-        .region = .{ .start = 0, .end = 0 },
-    }));
-
     const max_expr: AST.Expr.Idx = @enumFromInt(std.math.maxInt(u32));
     try testing.expectError(error.OutOfMemory, store.addMatchBranch(.{
         .pattern = @enumFromInt(1),
@@ -1032,7 +1025,8 @@ test "NodeStore rejects unaddressable extra data reservations in release builds"
             .exposes = @enumFromInt(1),
             .name = 0,
             .packages = @enumFromInt(1),
-            .provides = @enumFromInt(1),
+            .provides = .{ .span = .{ .start = 0, .len = 0 } },
+            .hosted = .{ .span = .{ .start = 0, .len = 0 } },
             .requires_entries = .{ .span = .{ .start = 0, .len = 0 } },
             .targets = null,
             .region = .{ .start = 0, .end = 0 },

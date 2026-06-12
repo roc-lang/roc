@@ -8,39 +8,19 @@ type=expr
 [1, "hello", 3.14]
 ~~~
 # EXPECTED
-TYPE MISMATCH - can_list_heterogeneous.md:1:2:1:3
-TYPE MISMATCH - can_list_heterogeneous.md:1:14:1:18
+TYPE MISMATCH - can_list_heterogeneous.md:1:5:1:12
 # PROBLEMS
 **TYPE MISMATCH**
-This number is being used where a non-number type is needed:
-**can_list_heterogeneous.md:1:2:1:3:**
-```roc
-[1, "hello", 3.14]
-```
- ^
-
-The type was determined to be non-numeric here:
+This string literal is being used where a non-string type is needed:
 **can_list_heterogeneous.md:1:5:1:12:**
 ```roc
 [1, "hello", 3.14]
 ```
     ^^^^^^^
 
-Other code expects this to have the type:
+The type was determined to be:
 
-    Str
-
-**TYPE MISMATCH**
-This number is being used where a non-number type is needed:
-**can_list_heterogeneous.md:1:14:1:18:**
-```roc
-[1, "hello", 3.14]
-```
-             ^^^^
-
-Other code expects this to have the type:
-
-    Str
+    Dec
 
 # TOKENS
 ~~~zig
@@ -70,5 +50,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "List(Str)"))
+(expr (type "List(Dec)"))
 ~~~

@@ -285,11 +285,11 @@ fn tidyFile(
     file: SourceFile,
     errors: *Errors,
 ) Allocator.Error!void {
-
     tidyControlCharacters(file, errors);
     if (file.hasExtension(".zig")) {
         tidyBanned(file, errors);
         tidyBannedStdIo(file, errors);
+        tidyBannedBuiltinStdFormat(file, errors);
         tidyBannedIndexOf(file, errors);
         tidyBannedCoreCtxCreation(file, errors);
 
@@ -302,6 +302,36 @@ fn tidyFile(
     }
     if (file.hasExtension(".md")) {
         tidyMarkdownTitle(file, errors);
+    }
+}
+
+/// Runtime builtins are merged into compiled Roc programs as bitcode. Keep them
+/// free of Zig's formatting and I/O layers so helper symbols cannot leak into
+/// user programs through LLVM bitcode merging and inlining.
+fn tidyBannedBuiltinStdFormat(file: SourceFile, errors: *Errors) void {
+    if (!std.mem.startsWith(u8, file.path, "src/builtins/")) return;
+    if (std.mem.endsWith(u8, file.path, "fuzz_sort.zig")) return;
+
+    const banned_patterns: []const struct { []const u8, []const u8 } = &.{
+        .{ "std.fmt.", "builtin-local parsing/formatting helpers" },
+        .{ "std.Io.", "RocOps or shim_io outside runtime builtins" },
+    };
+
+    var line_start: usize = 0;
+    while (line_start <= file.text.len) {
+        const line_end = std.mem.findScalarPos(u8, file.text, line_start, '\n') orelse file.text.len;
+        const line = file.text[line_start..line_end];
+        const trimmed = std.mem.trim(u8, line, " \t");
+        if (!std.mem.startsWith(u8, trimmed, "//")) {
+            for (banned_patterns) |ban_item| {
+                const banned, const replacement = ban_item;
+                if (std.mem.find(u8, line, banned)) |index| {
+                    errors.addBanned(file, line_start + index, banned, replacement);
+                }
+            }
+        }
+        if (line_end == file.text.len) break;
+        line_start = line_end + 1;
     }
 }
 
@@ -688,7 +718,6 @@ fn tidyAst(
         }
     }
 }
-
 
 /// Forbid inferred error set return types (`fn foo() !T`). Every fallible
 /// compiler function must spell out its error set explicitly (e.g.

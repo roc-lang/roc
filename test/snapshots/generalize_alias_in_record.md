@@ -13,7 +13,6 @@ main = (r.f(1), r.f("a"))
 ~~~
 # EXPECTED
 MISSING METHOD - generalize_alias_in_record.md:5:11:5:12
-MISSING METHOD - generalize_alias_in_record.md:5:19:5:20
 # PROBLEMS
 **MISSING METHOD**
 This **f** method is being called on a value whose type doesn't have that method:
@@ -22,18 +21,6 @@ This **f** method is being called on a value whose type doesn't have that method
 main = (r.f(1), r.f("a"))
 ```
           ^
-
-The value's type, which does not have a method named **f**, is:
-
-    { f: a -> a }
-
-**MISSING METHOD**
-This **f** method is being called on a value whose type doesn't have that method:
-**generalize_alias_in_record.md:5:19:5:20:**
-```roc
-main = (r.f(1), r.f("a"))
-```
-                  ^
 
 The value's type, which does not have a method named **f**, is:
 

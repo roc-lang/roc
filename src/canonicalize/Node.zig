@@ -102,6 +102,7 @@ pub const Tag = enum {
     expr_match,
     expr_dbg,
     expr_crash,
+    expr_expect_err,
     expr_block,
     expr_ellipsis,
     expr_anno_only,
@@ -327,6 +328,7 @@ pub const Payload = extern union {
     expr_nominal_external: ExprNominalExternal,
     expr_crash: ExprCrash,
     expr_dbg: ExprDbg,
+    expr_expect_err: ExprExpectErr,
     expr_anno_only: ExprAnnoOnly,
     expr_return: ExprReturn,
     // === Pattern payloads ===
@@ -746,6 +748,13 @@ pub const Payload = extern union {
     pub const ExprDbg = extern struct {
         expr: u32,
         _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
+    };
+
+    /// expr_expect_err: Err arm of `?` inside a top-level expect
+    pub const ExprExpectErr = extern struct {
+        expr: u32,
+        snippet: u32,
+        _padding: [4]u8 = .{ 0, 0, 0, 0 },
     };
 
     /// expr_anno_only: annotation-only expression

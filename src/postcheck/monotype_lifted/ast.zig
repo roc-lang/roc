@@ -5,6 +5,7 @@
 //! capture locals.
 
 const std = @import("std");
+const base = @import("base");
 const check = @import("check");
 
 const Common = @import("../common.zig");
@@ -120,6 +121,18 @@ pub const Program = struct {
     roots: std.ArrayList(Root),
     layout_requests: std.ArrayList(LayoutRequest),
     runtime_schema_requests: std.ArrayList(RuntimeSchemaRequest),
+    /// Source file table for `SourceLoc.file` indices (moved from Monotype).
+    source_files: std.ArrayList([]const u8),
+    /// Source location per expression, parallel to `exprs`.
+    expr_locs: std.ArrayList(base.SourceLoc),
+    /// Source location per statement, parallel to `stmts`.
+    stmt_locs: std.ArrayList(base.SourceLoc),
+    /// Source-level name per local, parallel to `locals` (empty for
+    /// compiler-generated temporaries; moved from Monotype).
+    local_names: std.ArrayList([]const u8),
+    /// Ambient location recorded by `addExpr`/`addStmt`. Passes that add
+    /// nodes set this so synthetic nodes inherit a source location.
+    current_loc: base.SourceLoc,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -138,6 +151,10 @@ pub const Program = struct {
         branches: std.ArrayList(Branch),
         if_branches: std.ArrayList(IfBranch),
         string_literals: std.ArrayList(Mono.StringLiteral),
+        source_files: std.ArrayList([]const u8),
+        expr_locs: std.ArrayList(base.SourceLoc),
+        stmt_locs: std.ArrayList(base.SourceLoc),
+        local_names: std.ArrayList([]const u8),
         next_symbol: u32,
     ) Program {
         return .{
@@ -162,10 +179,23 @@ pub const Program = struct {
             .roots = .empty,
             .layout_requests = .empty,
             .runtime_schema_requests = .empty,
+            .source_files = source_files,
+            .expr_locs = expr_locs,
+            .stmt_locs = stmt_locs,
+            .local_names = local_names,
+            .current_loc = base.SourceLoc.none,
         };
     }
 
     pub fn deinit(self: *Program) void {
+        for (self.local_names.items) |name| {
+            if (name.len > 0) self.allocator.free(name);
+        }
+        self.local_names.deinit(self.allocator);
+        self.stmt_locs.deinit(self.allocator);
+        self.expr_locs.deinit(self.allocator);
+        for (self.source_files.items) |file| self.allocator.free(file);
+        self.source_files.deinit(self.allocator);
         self.runtime_schema_requests.deinit(self.allocator);
         self.layout_requests.deinit(self.allocator);
         self.roots.deinit(self.allocator);
@@ -194,9 +224,102 @@ pub const Program = struct {
         return id;
     }
 
+    pub fn addExpr(self: *Program, expr: Expr) std.mem.Allocator.Error!ExprId {
+        const id: ExprId = @enumFromInt(@as(u32, @intCast(self.exprs.items.len)));
+        try self.exprs.append(self.allocator, expr);
+        try self.expr_locs.append(self.allocator, self.current_loc);
+        return id;
+    }
+
+    /// Source location of an expression.
+    pub fn exprLoc(self: *const Program, id: ExprId) base.SourceLoc {
+        return self.expr_locs.items[@intFromEnum(id)];
+    }
+
+    /// Source location of a statement.
+    pub fn stmtLoc(self: *const Program, id: StmtId) base.SourceLoc {
+        return self.stmt_locs.items[@intFromEnum(id)];
+    }
+
+    pub fn addPat(self: *Program, pat_: Pat) std.mem.Allocator.Error!PatId {
+        const id: PatId = @enumFromInt(@as(u32, @intCast(self.pats.items.len)));
+        try self.pats.append(self.allocator, pat_);
+        return id;
+    }
+
+    pub fn addStmt(self: *Program, stmt_: Stmt) std.mem.Allocator.Error!StmtId {
+        const id: StmtId = @enumFromInt(@as(u32, @intCast(self.stmts.items.len)));
+        try self.stmts.append(self.allocator, stmt_);
+        try self.stmt_locs.append(self.allocator, self.current_loc);
+        return id;
+    }
+
+    pub fn addLocal(self: *Program, symbol: Common.Symbol, ty: Type.TypeId) std.mem.Allocator.Error!LocalId {
+        return try self.addLocalWithBinder(symbol, ty, null);
+    }
+
+    /// Source-level name of a local; empty for compiler-generated temporaries.
+    pub fn localName(self: *const Program, id: LocalId) []const u8 {
+        return self.local_names.items[@intFromEnum(id)];
+    }
+
+    pub fn addLocalWithBinder(
+        self: *Program,
+        symbol: Common.Symbol,
+        ty: Type.TypeId,
+        binder: ?check.CheckedModule.PatternBinderId,
+    ) std.mem.Allocator.Error!LocalId {
+        const id: LocalId = @enumFromInt(@as(u32, @intCast(self.locals.items.len)));
+        try self.locals.append(self.allocator, .{ .id = id, .symbol = symbol, .ty = ty, .binder = binder });
+        try self.local_names.append(self.allocator, "");
+        return id;
+    }
+
     pub fn addTypedLocalSpan(self: *Program, values: []const TypedLocal) std.mem.Allocator.Error!Span(TypedLocal) {
         const start: u32 = @intCast(self.typed_locals.items.len);
         try self.typed_locals.appendSlice(self.allocator, values);
+        return .{ .start = start, .len = @intCast(values.len) };
+    }
+
+    pub fn addExprSpan(self: *Program, ids: []const ExprId) std.mem.Allocator.Error!Span(ExprId) {
+        const start: u32 = @intCast(self.expr_ids.items.len);
+        try self.expr_ids.appendSlice(self.allocator, ids);
+        return .{ .start = start, .len = @intCast(ids.len) };
+    }
+
+    pub fn addPatSpan(self: *Program, ids: []const PatId) std.mem.Allocator.Error!Span(PatId) {
+        const start: u32 = @intCast(self.pat_ids.items.len);
+        try self.pat_ids.appendSlice(self.allocator, ids);
+        return .{ .start = start, .len = @intCast(ids.len) };
+    }
+
+    pub fn addStmtSpan(self: *Program, ids: []const StmtId) std.mem.Allocator.Error!Span(StmtId) {
+        const start: u32 = @intCast(self.stmt_ids.items.len);
+        try self.stmt_ids.appendSlice(self.allocator, ids);
+        return .{ .start = start, .len = @intCast(ids.len) };
+    }
+
+    pub fn addFieldExprSpan(self: *Program, values: []const FieldExpr) std.mem.Allocator.Error!Span(FieldExpr) {
+        const start: u32 = @intCast(self.field_exprs.items.len);
+        try self.field_exprs.appendSlice(self.allocator, values);
+        return .{ .start = start, .len = @intCast(values.len) };
+    }
+
+    pub fn addRecordDestructSpan(self: *Program, values: []const RecordDestruct) std.mem.Allocator.Error!Span(RecordDestruct) {
+        const start: u32 = @intCast(self.record_destructs.items.len);
+        try self.record_destructs.appendSlice(self.allocator, values);
+        return .{ .start = start, .len = @intCast(values.len) };
+    }
+
+    pub fn addBranchSpan(self: *Program, values: []const Branch) std.mem.Allocator.Error!Span(Branch) {
+        const start: u32 = @intCast(self.branches.items.len);
+        try self.branches.appendSlice(self.allocator, values);
+        return .{ .start = start, .len = @intCast(values.len) };
+    }
+
+    pub fn addIfBranchSpan(self: *Program, values: []const IfBranch) std.mem.Allocator.Error!Span(IfBranch) {
+        const start: u32 = @intCast(self.if_branches.items.len);
+        try self.if_branches.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
@@ -226,6 +349,69 @@ pub const Program = struct {
 
     pub fn branchSpan(self: *const Program, span_: Span(Branch)) []const Branch {
         return self.branches.items[span_.start..][0..span_.len];
+    }
+
+    /// The two pieces direct LIR lowering needs to consider folding away the
+    /// in-place `List.map` branch: the `list_map_can_reuse` call's arguments
+    /// (to compute layout eligibility) and the body a constant-0 scrutinee
+    /// selects.
+    pub const ListMapCanReuseMatch = struct {
+        call_args: Span(ExprId),
+        zero_branch_body: ExprId,
+    };
+
+    /// Recognizes the `List.map` reuse match: a match whose scrutinee calls
+    /// the Builtin `list_map_can_reuse` wrapper, with guard-free
+    /// integer-literal and wildcard branches. Returns null for any other
+    /// shape. Whether to fold is the caller's layout-aware decision; this
+    /// only identifies the site and the branch a constant 0 reaches.
+    pub fn listMapCanReuseMatch(
+        self: *const Program,
+        scrutinee: ExprId,
+        branches_span: Span(Branch),
+    ) ?ListMapCanReuseMatch {
+        const call = switch (self.exprs.items[@intFromEnum(scrutinee)].data) {
+            .call_proc => |call| call,
+            else => return null,
+        };
+        const callee = switch (call.callee) {
+            .lifted => |fn_id| fn_id,
+            .template => return null,
+        };
+        const callee_body = switch (self.fns.items[@intFromEnum(callee)].body) {
+            .roc => |body| body,
+            .hosted => return null,
+        };
+        if (!self.exprIsListMapCanReuseOp(callee_body)) return null;
+
+        for (self.branchSpan(branches_span)) |branch| {
+            if (branch.guard != null) return null;
+            switch (self.pats.items[@intFromEnum(branch.pat)].data) {
+                .wildcard => return .{ .call_args = call.args, .zero_branch_body = branch.body },
+                .int_lit => |value| if (value.toI128() == 0) {
+                    return .{ .call_args = call.args, .zero_branch_body = branch.body };
+                },
+                else => return null,
+            }
+        }
+        return null;
+    }
+
+    /// One match statically resolved by direct LIR lowering, recorded so the
+    /// debug Lambda Mono materializer replays the identical resolution and
+    /// the two derivations demand the same set of functions. Keyed by the
+    /// match's scrutinee expression, which belongs to exactly one match.
+    pub const FoldedMatch = struct {
+        scrutinee: ExprId,
+        body: ExprId,
+    };
+
+    fn exprIsListMapCanReuseOp(self: *const Program, expr_id: ExprId) bool {
+        return switch (self.exprs.items[@intFromEnum(expr_id)].data) {
+            .low_level => |ll| ll.op == .list_map_can_reuse,
+            .block => |block| block.statements.len == 0 and self.exprIsListMapCanReuseOp(block.final_expr),
+            else => false,
+        };
     }
 
     pub fn ifBranchSpan(self: *const Program, span_: Span(IfBranch)) []const IfBranch {
