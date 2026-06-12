@@ -1628,6 +1628,13 @@ fn createTestPlatformHostLib(
         }),
     });
     configureBackend(lib, target);
+    if (target.result.os.tag == .linux) {
+        // The symbol-ABI platform tests depend on the visibility declared in
+        // @export options: default-visibility host functions are public shared
+        // library exports, while hidden runtime and hosted symbols are internal
+        // link inputs. Zig's LLVM backend emits that ELF visibility metadata.
+        lib.use_llvm = true;
+    }
     if (options.uses_stack_handler) {
         lib.root_module.addImport("base", roc_modules.base);
     }
@@ -1983,8 +1990,10 @@ fn setupTestPlatforms(
         clear_cache_step.dependOn(copy_step);
     }
 
-    // Cross-compile for musl targets (glibc is not needed for native CLI platform tests)
-    for (musl_cross_targets) |cross_target| {
+    // Cross-compile for all Linux targets. `roc build` selects the host
+    // platform's native target by default, which is commonly x64glibc even
+    // when this Zig build compiles the `roc` binary as native-musl.
+    for (linux_cross_targets) |cross_target| {
         const cross_resolved_target = b.resolveTargetQuery(cross_target.query);
 
         for (all_test_platform_dirs) |platform_dir| {
@@ -3378,6 +3387,19 @@ pub fn build(b: *std.Build) void {
     // Build the shared-library test fixture with `roc build` and verify it by
     // running a separate loader executable that dlopens it and calls its C API.
     {
+        const dylib_host_target = if (target.result.os.tag == .linux)
+            b.resolveTargetQuery(.{
+                .cpu_arch = target.result.cpu.arch,
+                .os_tag = .linux,
+                .abi = .gnu,
+            })
+        else
+            target;
+        const dylib_roc_target_arg: ?[]const u8 = if (target.result.os.tag == .linux)
+            b.fmt("--target={s}", .{roc_target.RocTarget.fromStdTarget(dylib_host_target.result).toName()})
+        else
+            null;
+
         const dylib_ext = switch (target.result.os.tag) {
             .windows => ".dll",
             .macos => ".dylib",
@@ -3392,17 +3414,21 @@ pub fn build(b: *std.Build) void {
             "--opt=size",
             b.fmt("--output={s}", .{dylib_output}),
         });
+        if (dylib_roc_target_arg) |target_arg| {
+            build_dylib_app.addArg(target_arg);
+        }
         build_dylib_app.step.dependOn(build_test_hosts_step);
 
         const dylib_loader_exe = b.addExecutable(.{
             .name = "dylib_loader",
             .root_module = b.createModule(.{
                 .root_source_file = b.path("test/dylib/loader.zig"),
-                .target = target,
+                .target = dylib_host_target,
                 .optimize = optimize,
+                .link_libc = target.result.os.tag == .linux,
             }),
         });
-        configureBackend(dylib_loader_exe, target);
+        configureBackend(dylib_loader_exe, dylib_host_target);
 
         const install_dylib_loader = b.addInstallArtifact(dylib_loader_exe, .{});
 
