@@ -95,11 +95,11 @@ This number is being used where a non-number type is needed:
 		^
 
 The type was determined to be non-numeric here:
-**multiline_string_complex.md:37:7:37:9:**
+**multiline_string_complex.md:1:1:1:1:**
 ```roc
-		0 - \\
+package
 ```
-		    ^^
+^
 
 Other code expects this to have the type:
 
@@ -280,23 +280,88 @@ x = {
 			(e-literal (string "This is a "string" with just one line"))))
 	(d-let
 		(p-assign (ident "value3"))
-		(e-string
-			(e-literal (string "This is a string
+		(e-block
+			(s-let
+				(p-assign (ident "#interp_0"))
+				(e-lookup-local
+					(p-assign (ident "value1"))))
+			(e-dispatch-call (method "from_interpolation") (constraint-fn-var 231)
+				(receiver
+					(e-string
+						(e-literal (string "This is a string
 With multiple lines
-"))
-			(e-lookup-local
-				(p-assign (ident "value1")))))
+"))))
+				(args
+					(e-dispatch-call (method "prepended") (constraint-fn-var 189)
+						(receiver
+							(e-dispatch-call (method "iter") (constraint-fn-var 125)
+								(receiver
+									(e-empty_list))
+								(args)))
+						(args
+							(e-tuple
+								(elems
+									(e-lookup-local
+										(p-assign (ident "#interp_0")))
+									(e-string
+										(e-literal (string "")))))))))))
 	(d-let
 		(p-assign (ident "value4"))
-		(e-string
-			(e-literal (string "This is a string
+		(e-block
+			(s-let
+				(p-assign (ident "#interp_1"))
+				(e-lookup-local
+					(p-assign (ident "value2"))))
+			(e-dispatch-call (method "from_interpolation") (constraint-fn-var 358)
+				(receiver
+					(e-string
+						(e-literal (string "This is a string
 With multiple lines
-"))
-			(e-lookup-local
-				(p-assign (ident "value2")))))
+"))))
+				(args
+					(e-dispatch-call (method "prepended") (constraint-fn-var 316)
+						(receiver
+							(e-dispatch-call (method "iter") (constraint-fn-var 252)
+								(receiver
+									(e-empty_list))
+								(args)))
+						(args
+							(e-tuple
+								(elems
+									(e-lookup-local
+										(p-assign (ident "#interp_1")))
+									(e-string
+										(e-literal (string "")))))))))))
 	(d-let
 		(p-assign (ident "value5"))
-		(e-runtime-error (tag "erroneous_value_expr")))
+		(e-record
+			(fields
+				(field (name "a")
+					(e-string
+						(e-literal (string "Multiline"))))
+				(field (name "b")
+					(e-tuple
+						(elems
+							(e-string
+								(e-literal (string "Multiline")))
+							(e-string
+								(e-literal (string "Multiline"))))))
+				(field (name "c")
+					(e-list
+						(elems
+							(e-string
+								(e-literal (string "multiline"))))))
+				(field (name "d")
+					(e-dispatch-call (method "minus") (constraint-fn-var 469)
+						(receiver
+							(e-num (value "0")))
+						(args
+							(e-string))))
+				(field (name "e")
+					(e-dispatch-call (method "not") (constraint-fn-var 484)
+						(receiver
+							(e-string))
+						(args))))))
 	(d-let
 		(p-assign (ident "x"))
 		(e-block

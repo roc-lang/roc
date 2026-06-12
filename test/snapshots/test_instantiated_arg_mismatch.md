@@ -13,26 +13,19 @@ type=expr
 }
 ~~~
 # EXPECTED
-TYPE MISMATCH - test_instantiated_arg_mismatch.md:5:10:5:12
+TYPE MISMATCH - test_instantiated_arg_mismatch.md:5:14:5:21
 # PROBLEMS
 **TYPE MISMATCH**
-This number is being used where a non-number type is needed:
-**test_instantiated_arg_mismatch.md:5:10:5:12:**
-```roc
-    pair(42, "hello")
-```
-         ^^
-
-The type was determined to be non-numeric here:
+This string literal is being used where a non-string type is needed:
 **test_instantiated_arg_mismatch.md:5:14:5:21:**
 ```roc
     pair(42, "hello")
 ```
              ^^^^^^^
 
-Other code expects this to have the type:
+The type was determined to be:
 
-    Str
+    Dec
 
 # TOKENS
 ~~~zig
@@ -93,7 +86,7 @@ EndOfFile,
 						(p-assign (ident "x")))
 					(e-lookup-local
 						(p-assign (ident "y")))))))
-	(e-call (constraint-fn-var 70)
+	(e-call (constraint-fn-var 80)
 		(e-lookup-local
 			(p-assign (ident "pair")))
 		(e-num (value "42"))
@@ -102,5 +95,5 @@ EndOfFile,
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "(Str, Str)"))
+(expr (type "(Dec, Dec)"))
 ~~~

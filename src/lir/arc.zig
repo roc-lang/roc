@@ -872,6 +872,9 @@ const Inserter = struct {
         tail_start: LIR.CFStmtId,
     ) ResourceError!LIR.CFStmtId {
         const stmt = self.store.getCFStmt(frame.stmt);
+        const saved_loc = self.store.current_loc;
+        defer self.store.current_loc = saved_loc;
+        self.store.current_loc = self.store.stmtLoc(frame.stmt);
         var next = tail_start;
         var cloned: LIR.CFStmtId = undefined;
 

@@ -24,6 +24,31 @@ pub fn generateObjectFile(
     rodata_relocations: []const DataRelocation,
     output: *std.ArrayList(u8),
 ) (Allocator.Error || error{UnsupportedTarget})!void {
+    return generateObjectFileWithDebug(allocator, target, code, rodata, symbols, relocations, rodata_relocations, null, output);
+}
+
+/// DWARF debug sections to include in the object file.
+pub const DebugSections = struct {
+    line: []const u8,
+    abbrev: []const u8,
+    info: []const u8,
+    line_relocs: []const object.DebugReloc,
+    info_relocs: []const object.DebugReloc,
+};
+
+/// Like `generateObjectFile`, with DWARF debug sections (ELF and Mach-O;
+/// COFF dev objects do not carry debug info yet).
+pub fn generateObjectFileWithDebug(
+    allocator: Allocator,
+    target: RocTarget,
+    code: []const u8,
+    rodata: []const u8,
+    symbols: []const Symbol,
+    relocations: []const Relocation,
+    rodata_relocations: []const DataRelocation,
+    debug: ?DebugSections,
+    output: *std.ArrayList(u8),
+) (Allocator.Error || error{UnsupportedTarget})!void {
     const cpu_arch = target.toCpuArch();
     const os_tag = target.toOsTag();
 
@@ -39,6 +64,7 @@ pub fn generateObjectFile(
 
             try elf.setCode(code);
             try elf.setRodata(rodata);
+            if (debug) |d| try elf.setDebugSections(d.line, d.abbrev, d.info, d.line_relocs, d.info_relocs);
 
             // Add symbols
             for (symbols) |sym| {
@@ -86,6 +112,7 @@ pub fn generateObjectFile(
 
             try macho.setCode(code);
             try macho.setRodata(rodata);
+            if (debug) |d| try macho.setDebugSections(d.line, d.abbrev, d.info, d.line_relocs, d.info_relocs);
 
             // Add symbols (underscore prefix for C ABI is added in MachOWriter.write())
             for (symbols) |sym| {

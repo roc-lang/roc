@@ -1332,3 +1332,113 @@ test "spec constr uses fully known entry shape for multiple tuple states" {
     try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, multiTupleWorkerIsFullySpecialized));
     try std.testing.expect(try reachableProcShape(allocator, &unoptimized.lowered, multiTupleWorkerIsGeneric));
 }
+
+test "LIR statements and procs carry resolved source locations" {
+    const allocator = std.testing.allocator;
+
+    const source =
+        \\module [main]
+        \\
+        \\add2 : U64 -> U64
+        \\add2 = |n| n + 2
+        \\
+        \\main : U64
+        \\main = {
+        \\    x = 40
+        \\    add2(x)
+        \\}
+    ;
+
+    var lowered_source = try lowerModule(allocator, source, .none);
+    defer lowered_source.deinit(allocator);
+
+    const store = &lowered_source.lowered.lir_result.store;
+    try std.testing.expectEqual(store.cf_stmts.items.len, store.cf_stmt_locs.items.len);
+    try std.testing.expectEqual(store.proc_specs.items.len, store.proc_locs.items.len);
+    try std.testing.expect(store.sourceFileCount() >= 1);
+
+    var located: usize = 0;
+    for (store.cf_stmt_locs.items, store.cf_stmts.items) |loc, stmt| {
+        switch (stmt) {
+            .incref, .decref, .free => try std.testing.expect(!loc.hasLocation()),
+            else => {},
+        }
+        if (loc.hasLocation()) {
+            located += 1;
+            try std.testing.expect(loc.file < store.sourceFileCount());
+            try std.testing.expect(loc.line >= 1);
+            try std.testing.expect(loc.column >= 1);
+        }
+    }
+    try std.testing.expect(located > 0);
+
+    var located_procs: usize = 0;
+    for (store.proc_locs.items) |loc| {
+        if (loc.hasLocation()) {
+            located_procs += 1;
+            try std.testing.expect(loc.file < store.sourceFileCount());
+        }
+    }
+    try std.testing.expect(located_procs > 0);
+}
+
+test "LIR statements carry source locations under optimizing inline mode" {
+    const allocator = std.testing.allocator;
+
+    const source =
+        \\module [main]
+        \\
+        \\add2 : U64 -> U64
+        \\add2 = |n| n + 2
+        \\
+        \\main : U64
+        \\main = {
+        \\    x = 40
+        \\    add2(x)
+        \\}
+    ;
+
+    var lowered_source = try lowerModule(allocator, source, .direct_call_wrappers);
+    defer lowered_source.deinit(allocator);
+
+    const store = &lowered_source.lowered.lir_result.store;
+    var located: usize = 0;
+    for (store.cf_stmt_locs.items) |loc| {
+        if (loc.hasLocation()) located += 1;
+    }
+    try std.testing.expect(located > 0);
+}
+
+test "LIR locals carry source-level names" {
+    const allocator = std.testing.allocator;
+
+    const source =
+        \\module [main]
+        \\
+        \\compute : U64 -> U64
+        \\compute = |n| {
+        \\    first_part = n * 2
+        \\    second_part = first_part + 1
+        \\    second_part
+        \\}
+        \\
+        \\main : U64
+        \\main = compute(20)
+    ;
+
+    var lowered_source = try lowerModule(allocator, source, .none);
+    defer lowered_source.deinit(allocator);
+
+    const store = &lowered_source.lowered.lir_result.store;
+    try std.testing.expectEqual(store.locals.items.len, store.local_names.items.len);
+
+    var found_first = false;
+    var found_second = false;
+    for (0..store.locals.items.len) |i| {
+        const name = store.localName(@enumFromInt(i)) orelse continue;
+        if (std.mem.eql(u8, name, "first_part")) found_first = true;
+        if (std.mem.eql(u8, name, "second_part")) found_second = true;
+    }
+    try std.testing.expect(found_first);
+    try std.testing.expect(found_second);
+}

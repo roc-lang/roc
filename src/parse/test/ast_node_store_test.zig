@@ -671,6 +671,22 @@ test "NodeStore round trip - Expr" {
         },
     });
     try expressions.append(gpa, AST.Expr{
+        .typed_string = .{
+            .parts = AST.Expr.Span{ .span = rand_span(random) },
+            .type_ident = rand_idx(random, base.Ident.Idx),
+            .region = rand_region(random),
+            .token = rand_token_idx(random),
+        },
+    });
+    try expressions.append(gpa, AST.Expr{
+        .typed_multiline_string = .{
+            .parts = AST.Expr.Span{ .span = rand_span(random) },
+            .type_ident = rand_idx(random, base.Ident.Idx),
+            .region = rand_region(random),
+            .token = rand_token_idx(random),
+        },
+    });
+    try expressions.append(gpa, AST.Expr{
         .list = .{
             .items = AST.Expr.Span{ .span = rand_span(random) },
             .region = rand_region(random),

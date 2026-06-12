@@ -27,9 +27,8 @@ result = multi_arg_fn(
 UNUSED VARIABLE - lambda_multi_arg_mismatch.md:3:25:3:27
 UNUSED VARIABLE - lambda_multi_arg_mismatch.md:3:33:3:35
 UNUSED VARIABLE - lambda_multi_arg_mismatch.md:3:41:3:43
-TYPE MISMATCH - lambda_multi_arg_mismatch.md:15:5:15:9
-TYPE MISMATCH - lambda_multi_arg_mismatch.md:9:5:9:7
-TYPE MISMATCH - lambda_multi_arg_mismatch.md:13:5:13:9
+MISSING METHOD - lambda_multi_arg_mismatch.md:13:5:13:9
+MISSING METHOD - lambda_multi_arg_mismatch.md:11:5:11:12
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable `x3` is not used anywhere in your code.
@@ -67,54 +66,29 @@ multi_arg_fn = |x1, x2, x3, x4, x5, x6, x7, x8|
                                         ^^
 
 
-**TYPE MISMATCH**
-The first and seventh arguments to `multi_arg_fn` must have compatible types, but they are incompatible in this call:
-**lambda_multi_arg_mismatch.md:15:5:15:9:**
-```roc
-    True,      # x7: Bool (should be 'a' = U64) - MISMATCH
-```
-    ^^^^
-
-The first argument has the type:
-
-    Str
-
-But the seventh argument has the type:
-
-    [True, ..]
-
-`multi_arg_fn` needs these arguments to have compatible types.
-
-**TYPE MISMATCH**
-This number is being used where a non-number type is needed:
-**lambda_multi_arg_mismatch.md:9:5:9:7:**
-```roc
-    42,        # x1: U64 (type 'a')
-```
-    ^^
-
-The type was determined to be non-numeric here:
-**lambda_multi_arg_mismatch.md:11:5:11:12:**
-```roc
-    "world",   # x3: Str (should be 'a' = U64) - MISMATCH  
-```
-    ^^^^^^^
-
-Other code expects this to have the type:
-
-    Str
-
-**TYPE MISMATCH**
-This number is being used where a non-number type is needed:
+**MISSING METHOD**
+This **from_numeral** method is being called on a value whose type doesn't have that method:
 **lambda_multi_arg_mismatch.md:13:5:13:9:**
 ```roc
     3.14,      # x5: F64 (should be 'a' = U64) - MISMATCH
 ```
     ^^^^
 
-Other code expects this to have the type:
+The value's type, which does not have a method named **from_numeral**, is:
 
-    Str
+    [True, ..]
+
+**MISSING METHOD**
+This **from_quote** method is being called on a value whose type doesn't have that method:
+**lambda_multi_arg_mismatch.md:11:5:11:12:**
+```roc
+    "world",   # x3: Str (should be 'a' = U64) - MISMATCH  
+```
+    ^^^^^^^
+
+The value's type, which does not have a method named **from_quote**, is:
+
+    [True, ..]
 
 # TOKENS
 ~~~zig
@@ -255,15 +229,31 @@ result = multi_arg_fn(
 					(ty-rigid-var-lookup (ty-rigid-var (name "e")))))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-runtime-error (tag "erroneous_value_expr"))))
+		(e-call (constraint-fn-var 275)
+			(e-lookup-local
+				(p-assign (ident "multi_arg_fn")))
+			(e-num (value "42"))
+			(e-string
+				(e-literal (string "hello")))
+			(e-string
+				(e-literal (string "world")))
+			(e-dec-small (numerator "15") (denominator-power-of-ten "1") (value "1.5"))
+			(e-dec-small (numerator "314") (denominator-power-of-ten "2") (value "3.14"))
+			(e-list
+				(elems
+					(e-num (value "1"))
+					(e-num (value "2"))))
+			(e-tag (name "True"))
+			(e-string
+				(e-literal (string "done"))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
 		(patt (type "a, b, a, c, a, d, a, e -> (a, b, c, d, e)"))
-		(patt (type "Error")))
+		(patt (type "([True, ..], Str, Dec, List(Dec), Str)")))
 	(expressions
 		(expr (type "a, b, a, c, a, d, a, e -> (a, b, c, d, e)"))
-		(expr (type "Error"))))
+		(expr (type "([True, ..], Str, Dec, List(Dec), Str)"))))
 ~~~

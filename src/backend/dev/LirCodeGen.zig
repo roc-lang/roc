@@ -145,6 +145,15 @@ fn builtinInternalListAbi(ls: *const LayoutStore, comptime _: []const u8, list_l
 /// This is important because the dev backend can be used in two ways:
 /// 1. In-process execution (dev evaluator): Direct function pointers work
 /// 2. Object file generation (roc build --opt=dev): Need symbol references
+/// One source line table entry: the code offset where a statement's machine
+/// code begins, paired with the statement's source location.
+pub const LineEntry = struct {
+    offset: u32,
+    loc: base.SourceLoc,
+};
+
+/// How generated code will be executed, which determines how calls to
+/// builtins and other procs are encoded.
 pub const GenerationMode = enum {
     /// Code runs in-process (dev evaluator), direct function pointers are valid.
     /// The compiled code calls builtins via absolute addresses embedded in the code.
@@ -662,6 +671,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// already-generated block instead of regenerating it.
         stmt_locations: std.AutoHashMap(u32, usize),
 
+        /// Source line entries in emission order (code offset paired with
+        /// the statement's source location), consumed by DWARF line-table
+        /// emission for object files.
+        line_entries: std.ArrayList(LineEntry),
+
         /// Registry of compiled procedures (proc-spec id -> CompiledProc)
         /// Used to find call targets during second pass
         proc_registry: std.AutoHashMap(u32, CompiledProc),
@@ -1011,6 +1025,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .local_locations = std.AutoHashMap(u32, ValueLocation).init(allocator),
                 .join_points = std.AutoHashMap(u32, usize).init(allocator),
                 .stmt_locations = std.AutoHashMap(u32, usize).init(allocator),
+                .line_entries = .empty,
                 .proc_registry = std.AutoHashMap(u32, CompiledProc).init(allocator),
                 .compiled_rc_helpers = std.AutoHashMap(u64, usize).init(allocator),
                 .rc_helper_worklist = std.ArrayList(RcHelperVariant).empty,
@@ -1041,6 +1056,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.local_locations.deinit();
             self.join_points.deinit();
             self.stmt_locations.deinit();
+            self.line_entries.deinit(self.allocator);
             self.proc_registry.deinit();
             self.compiled_rc_helpers.deinit();
             self.rc_helper_worklist.deinit(self.allocator);
@@ -13497,6 +13513,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
                     try self.stmt_locations.put(stmt_key, self.codegen.currentOffset());
 
+                    const stmt_loc = self.store.stmtLoc(stmt_id);
+                    if (stmt_loc.hasLocation()) {
+                        try self.line_entries.append(self.allocator, .{
+                            .offset = @intCast(self.codegen.currentOffset()),
+                            .loc = stmt_loc,
+                        });
+                    }
+
                     self.current_stmt_id = stmt_id;
 
                     const stmt = self.store.getCFStmt(stmt_id);
@@ -14937,6 +14961,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Get the generated code buffer for object-file emission.
+        /// Source line entries recorded during code generation, in emission
+        /// (and therefore code offset) order.
+        pub fn getLineEntries(self: *const Self) []const LineEntry {
+            return self.line_entries.items;
+        }
+
         pub fn getGeneratedCode(self: *Self) []const u8 {
             return self.codegen.getCode();
         }
