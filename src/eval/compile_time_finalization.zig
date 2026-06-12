@@ -14,7 +14,9 @@ const checked = check.CheckedArtifact;
 const canonical = check.CanonicalNames;
 const CompilerHost = @import("compiler_host.zig");
 const ConstStoreWriter = @import("const_store_writer.zig");
-const Interpreter = @import("interpreter.zig").Interpreter;
+const interpreter_mod = @import("interpreter.zig");
+const Interpreter = interpreter_mod.Interpreter;
+const ExpectFailure = interpreter_mod.ExpectFailure;
 
 /// Return the checking finalizer that evaluates compile-time roots.
 pub fn finalizer() checked.CompileTimeFinalizer {
@@ -31,6 +33,7 @@ fn finalize(
     problem_store: ?*check.problem.Store,
 ) anyerror!void {
     const requests = module.root_requests.compile_time_requests;
+    var had_problem = false;
 
     if (requests.len != 0) {
         const lowering_imports = try finalizationImports(allocator, checked.importedView(module), imports, available_modules);
@@ -55,7 +58,7 @@ fn finalize(
             if (ready.items.len == 0) {
                 finalizationInvariant("compile-time roots had a cyclic or incomplete local dependency");
             }
-            try lowerEvalAndFinishRoots(
+            if (try lowerEvalAndFinishRoots(
                 allocator,
                 module,
                 lowering_imports,
@@ -63,12 +66,13 @@ fn finalize(
                 ready.items,
                 &state,
                 problem_store,
-            );
+            )) had_problem = true;
             pending -= ready.items.len;
         }
     }
 
     try module.const_store.verifyComplete();
+    if (had_problem) return error.CompileTimeProblem;
 }
 
 const RootStatus = enum {
@@ -287,7 +291,7 @@ fn lowerEvalAndFinishRoots(
     requests: []const checked.RootRequest,
     state: *RootCompletionState,
     problem_store: ?*check.problem.Store,
-) anyerror!void {
+) anyerror!bool {
     var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
         allocator,
         .{
@@ -316,6 +320,7 @@ fn lowerEvalAndFinishRoots(
     var writer = ConstStoreWriter.Writer.init(allocator, module, &lowered.lir_result);
     defer writer.deinit();
 
+    var had_problem = false;
     for (lowered.lir_result.const_roots.items) |root| {
         const root_id = compileTimeRootForRequest(module, root.request);
         const compile_time_root = module.compile_time_roots.root(root_id);
@@ -347,6 +352,14 @@ fn lowerEvalAndFinishRoots(
             break :blk try writer.storeRoot(root, eval_result.value);
         };
 
+        if (try reportCompileTimeExpectFailures(
+            allocator,
+            problem_store,
+            module,
+            compile_time_root,
+            interpreter.getExpectFailures(),
+        )) had_problem = true;
+
         switch (compile_time_root.kind) {
             .numeral_conversion, .quote_conversion => {
                 payload = try finishLiteralConversionRoot(allocator, module, problem_store, compile_time_root, payload);
@@ -358,6 +371,8 @@ fn lowerEvalAndFinishRoots(
         finishConstRoot(module, compile_time_root, payload);
         state.markDone(root_id);
     }
+
+    return had_problem;
 }
 
 /// Unwrap the `Try` value a literal-conversion root evaluated to. `Ok` payloads
@@ -447,6 +462,26 @@ fn appendCrashConst(
         .offset = 0,
         .len = @intCast(message.len),
     } });
+}
+
+fn reportCompileTimeExpectFailures(
+    allocator: Allocator,
+    maybe_problem_store: ?*check.problem.Store,
+    module: *const checked.CheckedModuleArtifact,
+    root: checked.CompileTimeRoot,
+    failures: []const ExpectFailure,
+) anyerror!bool {
+    if (failures.len == 0) return false;
+    const problem_store = maybe_problem_store orelse return false;
+    const region = module.checked_bodies.expr(root.expr).source_region;
+    for (failures) |failure| {
+        const message_idx = try problem_store.putExtraString(failure.message);
+        _ = try problem_store.appendProblem(allocator, .{ .comptime_expect_failed = .{
+            .message = message_idx,
+            .region = region,
+        } });
+    }
+    return true;
 }
 
 fn evalCompileTimeRoot(
