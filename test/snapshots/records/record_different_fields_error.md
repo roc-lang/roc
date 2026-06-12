@@ -38,10 +38,10 @@ UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:7:30:7:31
 DECLARATION HAS NO VALUE - record_different_fields_error.md:2:5:2:21
 DECLARATION HAS NO VALUE - record_different_fields_error.md:3:5:3:14
 TYPE MISMATCH - record_different_fields_error.md:4:5:4:15
-TYPE MISMATCH - record_different_fields_error.md:4:17:4:25
-TYPE MISMATCH - record_different_fields_error.md:5:17:5:24
+MISSING METHOD - record_different_fields_error.md:4:17:4:25
+MISSING METHOD - record_different_fields_error.md:5:17:5:24
 DECLARATION HAS NO VALUE - record_different_fields_error.md:6:5:6:21
-TYPE MISMATCH - record_different_fields_error.md:7:19:7:30
+MISSING METHOD - record_different_fields_error.md:7:19:7:30
 # PROBLEMS
 **STRAY DOLLAR SIGN**
 Dollar sign ($) is only allowed at the very beginning of a name, not in the middle or at the end.
@@ -299,35 +299,29 @@ It has the type:
 Since this expression is used as a statement, it must evaluate to `{}`.
 If you don't need the value, you can ignore it with `_ =`.
 
-**TYPE MISMATCH**
-This expression produces a value, but it's not being used:
+**MISSING METHOD**
+This **from_quote** method is being called on a value whose type doesn't have that method:
 **record_different_fields_error.md:4:17:4:25:**
 ```roc
     PascalCase: "pascal",
 ```
                 ^^^^^^^^
 
-It has the type:
+The value's type, which does not have a method named **from_quote**, is:
 
-    Str
+    {}
 
-Since this expression is used as a statement, it must evaluate to `{}`.
-If you don't need the value, you can ignore it with `_ =`.
-
-**TYPE MISMATCH**
-This expression produces a value, but it's not being used:
+**MISSING METHOD**
+This **from_quote** method is being called on a value whose type doesn't have that method:
 **record_different_fields_error.md:5:17:5:24:**
 ```roc
     kebab-case: "kebab",
 ```
                 ^^^^^^^
 
-It has the type:
+The value's type, which does not have a method named **from_quote**, is:
 
-    Str
-
-Since this expression is used as a statement, it must evaluate to `{}`.
-If you don't need the value, you can ignore it with `_ =`.
+    {}
 
 **DECLARATION HAS NO VALUE**
 This declaration has a type annotation but no implementation.
@@ -340,20 +334,17 @@ This declaration has a type annotation but no implementation.
 
 Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary.
 
-**TYPE MISMATCH**
-This expression produces a value, but it's not being used:
+**MISSING METHOD**
+This **from_quote** method is being called on a value whose type doesn't have that method:
 **record_different_fields_error.md:7:19:7:30:**
 ```roc
     field@symbol: "at symbol",
 ```
                   ^^^^^^^^^^^
 
-It has the type:
+The value's type, which does not have a method named **from_quote**, is:
 
-    Str
-
-Since this expression is used as a statement, it must evaluate to `{}`.
-If you don't need the value, you can ignore it with `_ =`.
+    {}
 
 # TOKENS
 ~~~zig
@@ -459,7 +450,7 @@ EndOfFile,
 	(s-expr
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(s-expr
-		(e-dispatch-call (method "negate") (constraint-fn-var 120)
+		(e-dispatch-call (method "negate") (constraint-fn-var 131)
 			(receiver
 				(e-runtime-error (tag "ident_not_in_scope")))
 			(args)))

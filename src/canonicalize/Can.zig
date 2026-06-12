@@ -324,6 +324,9 @@ current_local_def_ident: ?Ident.Idx = null,
 /// references its forward-referencer back. null when not in a local def body
 /// or the def has no resolvable name.
 current_local_def_index: ?usize = null,
+/// Counter for generating unique `#interp_N` locals in interpolated string
+/// desugaring.
+interp_tmp_counter: u32 = 0,
 /// Whether the current declaration-pattern canonicalization should reuse
 /// existing mutable binders when it encounters `$name` patterns.
 allow_pattern_var_reuse: bool = false,
@@ -8126,6 +8129,32 @@ fn runExprKernel(
                         }
                     }
                 },
+                .typed_string => |e| {
+                    const parts = self.parse_ir.store.exprSlice(e.parts);
+                    var interpolation_count: usize = 0;
+                    for (parts) |part| {
+                        if (self.parse_ir.store.getExpr(part) != .string_part) {
+                            interpolation_count += 1;
+                        }
+                    }
+
+                    try stacks.pushFinishString(frame_allocator, .{
+                        .parts = e.parts,
+                        .region = self.parse_ir.tokenizedRegionToRegion(e.region),
+                        .free_vars_start = self.scratch_free_vars.top(),
+                        .interpolation_count = interpolation_count,
+                        .is_multiline = false,
+                        .type_ident = e.type_ident,
+                    });
+
+                    var i = parts.len;
+                    while (i > 0) {
+                        i -= 1;
+                        if (self.parse_ir.store.getExpr(parts[i]) != .string_part) {
+                            try stacks.pushParse(frame_allocator, .{ .idx = parts[i], .target = .scratch });
+                        }
+                    }
+                },
                 .multiline_string => |e| {
                     const parts = self.parse_ir.store.exprSlice(e.parts);
                     var interpolation_count: usize = 0;
@@ -8141,6 +8170,32 @@ fn runExprKernel(
                         .free_vars_start = self.scratch_free_vars.top(),
                         .interpolation_count = interpolation_count,
                         .is_multiline = true,
+                    });
+
+                    var i = parts.len;
+                    while (i > 0) {
+                        i -= 1;
+                        if (self.parse_ir.store.getExpr(parts[i]) != .string_part) {
+                            try stacks.pushParse(frame_allocator, .{ .idx = parts[i], .target = .scratch });
+                        }
+                    }
+                },
+                .typed_multiline_string => |e| {
+                    const parts = self.parse_ir.store.exprSlice(e.parts);
+                    var interpolation_count: usize = 0;
+                    for (parts) |part| {
+                        if (self.parse_ir.store.getExpr(part) != .string_part) {
+                            interpolation_count += 1;
+                        }
+                    }
+
+                    try stacks.pushFinishString(frame_allocator, .{
+                        .parts = e.parts,
+                        .region = self.parse_ir.tokenizedRegionToRegion(e.region),
+                        .free_vars_start = self.scratch_free_vars.top(),
+                        .interpolation_count = interpolation_count,
+                        .is_multiline = true,
+                        .type_ident = e.type_ident,
                     });
 
                     var i = parts.len;
@@ -9773,9 +9828,15 @@ fn runExprKernel(
             std.debug.assert(interpolation_i == state.interpolation_count);
 
             const can_str_span = try self.env.store.exprSpanFrom(scratch_top);
-            const expr_idx = try self.env.addExpr(Expr{ .e_str = .{
-                .span = can_str_span,
-            } }, state.region);
+            const expr_idx = if (state.interpolation_count == 0) blk: {
+                const str_idx = try self.env.addExpr(Expr{ .e_str = .{
+                    .span = can_str_span,
+                } }, state.region);
+                if (state.type_ident) |type_ident| {
+                    try self.recordTypedNumericSuffix(str_idx, type_ident);
+                }
+                break :blk str_idx;
+            } else try self.desugarInterpolatedString(can_str_span, state.region, state.type_ident);
 
             const free_vars_span = self.scratch_free_vars.spanFrom(state.free_vars_start);
             child_slots.shrinkRetainingCapacity(result_start);
@@ -12293,6 +12354,168 @@ fn processEscapeSequences(allocator: std.mem.Allocator, input: []const u8) std.m
 }
 
 /// Helper function to create a string literal expression and add it to the scratch stack
+/// Desugar an interpolated string literal into ordinary CIR:
+///
+/// ```roc
+/// "a${x}b${y}c"
+/// ```
+/// becomes
+/// ```roc
+/// {
+///     #interp_0 = x
+///     #interp_1 = y
+///     "a".from_interpolation([].iter().prepended((#interp_1, "c")).prepended((#interp_0, "b")))
+/// }
+/// ```
+/// The interpolated expressions bind to locals first so they evaluate in
+/// source order; the iterator yields each interpolated value paired with the
+/// literal segment that follows it. Every literal segment stays a real string
+/// literal expression, so each converts through `from_quote` like any other,
+/// and the receiver's type suffix (when present) pins the target type.
+fn desugarInterpolatedString(
+    self: *Self,
+    span: CIR.Expr.Span,
+    region: Region,
+    type_ident: ?Ident.Idx,
+) std.mem.Allocator.Error!Expr.Idx {
+    const gpa = self.env.gpa;
+
+    // The span's backing store grows as we add expressions, so copy it first.
+    const stored_items = self.env.store.sliceExpr(span);
+    const items = try gpa.dupe(Expr.Idx, stored_items);
+    defer gpa.free(items);
+
+    // Normalize the alternating segment/interpolation sequence: a literal
+    // segment for position k, then for each interpolation the segment that
+    // follows it (empty when interpolations are adjacent or at either end).
+    var segments: std.ArrayList(?Expr.Idx) = .empty;
+    defer segments.deinit(gpa);
+    var interps: std.ArrayList(Expr.Idx) = .empty;
+    defer interps.deinit(gpa);
+
+    var pending_segment: ?Expr.Idx = null;
+    var saw_leading_segment = false;
+    for (items) |item_idx| {
+        switch (self.env.store.getExpr(item_idx)) {
+            .e_str_segment => {
+                pending_segment = item_idx;
+                if (interps.items.len == 0) saw_leading_segment = true;
+            },
+            else => {
+                if (interps.items.len == 0) {
+                    try segments.append(gpa, if (saw_leading_segment) pending_segment else null);
+                } else {
+                    try segments.append(gpa, pending_segment);
+                }
+                pending_segment = null;
+                try interps.append(gpa, item_idx);
+            },
+        }
+    }
+    try segments.append(gpa, pending_segment);
+    std.debug.assert(segments.items.len == interps.items.len + 1);
+
+    // Bind each interpolated expression to a local, preserving evaluation order.
+    const stmts_top = self.env.store.scratchTop("statements");
+    const tmp_patterns = try gpa.alloc(CIR.Pattern.Idx, interps.items.len);
+    defer gpa.free(tmp_patterns);
+    for (interps.items, 0..) |interp_idx, i| {
+        var name_buf: [32]u8 = undefined;
+        const name = std.fmt.bufPrint(&name_buf, "#interp_{d}", .{self.interp_tmp_counter}) catch unreachable;
+        self.interp_tmp_counter += 1;
+        const tmp_ident = try self.env.insertIdent(Ident.for_text(name));
+        const interp_region = self.env.store.getNodeRegion(ModuleEnv.nodeIdxFrom(interp_idx));
+        const pattern_idx = try self.env.addPattern(Pattern{ .assign = .{ .ident = tmp_ident } }, interp_region);
+        tmp_patterns[i] = pattern_idx;
+        const stmt_idx = try self.env.addStatement(CIR.Statement{ .s_decl = .{
+            .pattern = pattern_idx,
+            .expr = interp_idx,
+            .anno = null,
+        } }, interp_region);
+        try self.env.store.addScratchStatement(stmt_idx);
+    }
+    const stmts_span = try self.env.store.statementSpanFrom(stmts_top);
+
+    // Wrap each literal segment in its own string expression.
+    const seg_exprs = try gpa.alloc(Expr.Idx, segments.items.len);
+    defer gpa.free(seg_exprs);
+    for (segments.items, 0..) |maybe_segment, i| {
+        const segment_idx = maybe_segment orelse blk: {
+            const empty_literal = try self.env.insertString("");
+            break :blk try self.env.addExpr(CIR.Expr{ .e_str_segment = .{
+                .literal = empty_literal,
+            } }, region);
+        };
+        const seg_region = self.env.store.getNodeRegion(ModuleEnv.nodeIdxFrom(segment_idx));
+        const seg_scratch_top = self.env.store.scratchExprTop();
+        try self.env.store.addScratchExpr(segment_idx);
+        const seg_span = try self.env.store.exprSpanFrom(seg_scratch_top);
+        seg_exprs[i] = try self.env.addExpr(CIR.Expr{ .e_str = .{
+            .span = seg_span,
+        } }, seg_region);
+    }
+
+    // The receiver's type suffix (e.g. `"a${x}b".MyType`) pins the target type.
+    if (type_ident) |suffix_ident| {
+        try self.recordTypedNumericSuffix(seg_exprs[0], suffix_ident);
+    }
+
+    const iter_method = try self.env.insertIdent(Ident.for_text("iter"));
+    const prepended_method = try self.env.insertIdent(Ident.for_text("prepended"));
+    const from_interpolation_method = try self.env.insertIdent(Ident.for_text("from_interpolation"));
+
+    // [].iter()
+    const empty_list_idx = try self.env.addExpr(CIR.Expr{ .e_empty_list = .{} }, region);
+    var chain_idx = try self.addSyntheticMethodCall(empty_list_idx, iter_method, &.{}, region);
+
+    // Prepend (interpolation, following-segment) pairs back to front so the
+    // iterator yields them in source order.
+    var pair_i = interps.items.len;
+    while (pair_i > 0) {
+        pair_i -= 1;
+        const interp_region = self.env.store.getNodeRegion(ModuleEnv.nodeIdxFrom(interps.items[pair_i]));
+        const tmp_lookup_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{
+            .pattern_idx = tmp_patterns[pair_i],
+        } }, interp_region);
+        const elems_top = self.env.store.scratchExprTop();
+        try self.env.store.addScratchExpr(tmp_lookup_idx);
+        try self.env.store.addScratchExpr(seg_exprs[pair_i + 1]);
+        const elems_span = try self.env.store.exprSpanFrom(elems_top);
+        const pair_idx = try self.env.addExpr(CIR.Expr{ .e_tuple = .{
+            .elems = elems_span,
+        } }, interp_region);
+        chain_idx = try self.addSyntheticMethodCall(chain_idx, prepended_method, &.{pair_idx}, interp_region);
+    }
+
+    const call_idx = try self.addSyntheticMethodCall(seg_exprs[0], from_interpolation_method, &.{chain_idx}, region);
+    try self.env.recordInterpolationCallNode(ModuleEnv.nodeIdxFrom(call_idx));
+
+    return try self.env.addExpr(CIR.Expr{ .e_block = .{
+        .stmts = stmts_span,
+        .final_expr = call_idx,
+    } }, region);
+}
+
+fn addSyntheticMethodCall(
+    self: *Self,
+    receiver: Expr.Idx,
+    method_name: Ident.Idx,
+    args: []const Expr.Idx,
+    region: Region,
+) std.mem.Allocator.Error!Expr.Idx {
+    const args_top = self.env.store.scratchExprTop();
+    for (args) |arg| {
+        try self.env.store.addScratchExpr(arg);
+    }
+    const args_span = try self.env.store.exprSpanFrom(args_top);
+    return try self.env.addExpr(CIR.Expr{ .e_method_call = .{
+        .receiver = receiver,
+        .method_name = method_name,
+        .method_name_region = region,
+        .args = args_span,
+    } }, region);
+}
+
 fn addStringLiteralToScratch(self: *Self, text: []const u8, region: AST.TokenizedRegion) std.mem.Allocator.Error!void {
     // intern the string in the ModuleEnv
     const string_idx = try self.env.insertString(text);
@@ -12913,6 +13136,9 @@ const ExprFinishStringWork = struct {
     free_vars_start: u32,
     interpolation_count: usize,
     is_multiline: bool,
+    /// Explicit type suffix (e.g. `"foo".MyType`), recorded against the
+    /// finished string expression for the type checker.
+    type_ident: ?Ident.Idx = null,
 };
 
 const ExprFinishListWork = struct {

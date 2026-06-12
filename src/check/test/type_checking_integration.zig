@@ -380,7 +380,7 @@ test "check type - record - field typo" {
         \\
         \\It has the type:
         \\
-        \\    { helo: Str }
+        \\    { helo: a } where [a.from_quote : List(U8) -> Try(a, [BadQuotedBytes(Str)])]
         \\
         \\But the annotation say it should be:
         \\
@@ -413,7 +413,7 @@ test "check type - record - field missing" {
         \\
         \\It has the type:
         \\
-        \\    { hello: Str }
+        \\    { hello: a } where [a.from_quote : List(U8) -> Try(a, [BadQuotedBytes(Str)])]
         \\
         \\But the annotation say it should be:
         \\
@@ -445,7 +445,7 @@ test "check type - record - ext - field missing" {
         \\
         \\It has the type:
         \\
-        \\    { hello: Str }
+        \\    { hello: a } where [a.from_quote : List(U8) -> Try(a, [BadQuotedBytes(Str)])]
         \\
         \\But the annotation say it should be:
         \\
@@ -900,18 +900,14 @@ test "check type - def - wrong arg" {
         source,
         .fail_with,
         \\**TYPE MISMATCH**
-        \\The second argument being passed to this function has the wrong type:
-        \\**test:6:8:**
+        \\This string literal is being used where a non-string type is needed:
+        \\**test:6:22:6:29:**
         \\```roc
         \\test = func("hello", "world")
         \\```
         \\                     ^^^^^^^
         \\
-        \\This argument has the type:
-        \\
-        \\    Str
-        \\
-        \\But `func` needs the second argument to be:
+        \\The type was determined to be:
         \\
         \\    U8
         \\
@@ -1024,8 +1020,9 @@ test "check type - polymorphic function function param should be constrained" {
         \\}
         \\result = use_twice(id)
     ;
-    // Number literal 42 used where Str is expected (function type unified from both calls)
-    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+    // The literal arguments force `f`'s parameter to be both a number and a
+    // string literal type at once; the conflict is reported per instantiation.
+    try checkTypesModule(source, .fail_first, "TYPE MISMATCH");
 }
 
 test "check type - def - call with wrong fn arity - too many" {
@@ -1095,18 +1092,14 @@ test "check type - def - call with mismatch arg" {
         source,
         .fail_with,
         \\**TYPE MISMATCH**
-        \\The second argument being passed to this function has the wrong type:
-        \\**test:4:8:**
+        \\This string literal is being used where a non-string type is needed:
+        \\**test:4:23:4:30:**
         \\```roc
         \\test = idStr("hello", "world")
         \\```
         \\                      ^^^^^^^
         \\
-        \\This argument has the type:
-        \\
-        \\    Str
-        \\
-        \\But `idStr` needs the second argument to be:
+        \\The type was determined to be:
         \\
         \\    U8
         \\
@@ -1478,7 +1471,7 @@ test "check type - nominal with with rigid vars mismatch" {
         \\pairU64 : Pair(U64)
         \\pairU64 = Pair.Pair(u64val, "Str")
     ;
-    try checkTypesModule(source, .fail, "INVALID NOMINAL TAG");
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 test "check type - nominal recursive type" {
@@ -1735,20 +1728,16 @@ test "check type - if else - different branch types 1" {
         source,
         .fail_with,
         \\**TYPE MISMATCH**
-        \\The second branch of this `if` does not match the previous branch :
-        \\**test:1:25:1:30:**
+        \\This string literal is being used where a non-string type is needed:
+        \\**test:1:13:1:19:**
         \\```roc
         \\x = if True "true" else 10.U8
         \\```
-        \\                        ^^^^^
+        \\            ^^^^^^
         \\
-        \\The second branch is:
+        \\The type was determined to be:
         \\
         \\    U8
-        \\
-        \\But the previous branch results in:
-        \\
-        \\    Str
         \\
         \\
         ,
@@ -1852,26 +1841,17 @@ test "check type - match - diff cond types 1" {
     try checkTypesModule(
         source,
         .fail_with,
-        \\**TYPE MISMATCH**
-        \\The first pattern in this `match` is incompatible:
-        \\**test:2:3:**
+        \\**MISSING METHOD**
+        \\This **from_quote** method is being called on a value whose type doesn't have that method:
+        \\**test:2:9:2:16:**
         \\```roc
         \\  match "hello" {
-        \\    True => "true"
-        \\    False => "false"
-        \\  }
         \\```
-        \\    ^^^^
+        \\        ^^^^^^^
         \\
-        \\The first pattern is trying to match:
+        \\The value's type, which does not have a method named **from_quote**, is:
         \\
         \\    [True, ..]
-        \\
-        \\But the expression between the `match` parenthesis has the type:
-        \\
-        \\    Str
-        \\
-        \\These can never match! Either the pattern or expression has a problem.
         \\
         \\
         ,
@@ -1913,24 +1893,16 @@ test "check type - match alternative binders reject incompatible types" {
         source,
         .fail_with,
         \\**TYPE MISMATCH**
-        \\The `v` binding in the second pattern of the first branch of this `match` does not match the same binding in the first pattern:
-        \\**test:3:3:**
+        \\This string literal is being used where a non-string type is needed:
+        \\**test:1:32:1:35:**
         \\```roc
-        \\  match value {
-        \\    A(v) | B(v) => v
-        \\  }
+        \\value = if True A(1.U8) else B("x")
         \\```
-        \\             ^
+        \\                               ^^^
         \\
-        \\In the second pattern, `v` is:
-        \\
-        \\    Str
-        \\
-        \\But in the first pattern, `v` is:
+        \\The type was determined to be:
         \\
         \\    U8
-        \\
-        \\A name shared across `|` patterns in the same `match` branch must have one compatible type.
         \\
         \\
         ,
@@ -2104,7 +2076,7 @@ test "check type - record - access - not a record" {
         \\
         \\x = r.my_field
     ;
-    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+    try checkTypesModule(source, .fail, "MISSING METHOD");
 }
 
 // record update
@@ -2215,22 +2187,16 @@ test "check type - record - update - fail - field mismatch" {
     ;
     try checkTypesModule(source, .fail_with,
         \\**TYPE MISMATCH**
-        \\The type of the field `hello` is incompatible:
-        \\**test:5:17:5:22:**
+        \\This string literal is being used where a non-string type is needed:
+        \\**test:4:16:4:23:**
         \\```roc
-        \\  { ..r, hello: 10.U8 }
+        \\  r = { hello: "world" }
         \\```
-        \\                ^^^^^
+        \\               ^^^^^^^
         \\
-        \\You are trying to update the `hello` field to be the type:
+        \\The type was determined to be:
         \\
         \\    U8
-        \\
-        \\But the `r` record needs it to be
-        \\
-        \\    Str
-        \\
-        \\__Note:__ You cannot change the type of a record field with the record update syntax. You can do that by create a new record, copying over the unchanged fields, then transforming `hello` to be the new type.
         \\
         \\
     );
@@ -2247,22 +2213,16 @@ test "check type - record - update - fail - field mismatch 2" {
     ;
     try checkTypesModule(source, .fail_with,
         \\**TYPE MISMATCH**
-        \\The type of the field `hello` is incompatible:
-        \\**test:5:17:5:23:**
+        \\This string literal is being used where a non-string type is needed:
+        \\**test:4:16:4:23:**
         \\```roc
-        \\  { ..r, hello: 10.Dec }
+        \\  r = { hello: "world", nice: 10.U8 }
         \\```
-        \\                ^^^^^^
+        \\               ^^^^^^^
         \\
-        \\You are trying to update the `hello` field to be the type:
+        \\The type was determined to be:
         \\
         \\    Dec
-        \\
-        \\But the `r` record needs it to be
-        \\
-        \\    Str
-        \\
-        \\__Note:__ You cannot change the type of a record field with the record update syntax. You can do that by create a new record, copying over the unchanged fields, then transforming `hello` to be the new type.
         \\
         \\
     );
@@ -2309,20 +2269,16 @@ test "check type - record - update - fail 2" {
     // Number literal 10 used where Str is expected (data field type)
     try checkTypesModule(source, .fail_with,
         \\**TYPE MISMATCH**
-        \\The second argument being passed to this function has the wrong type:
-        \\**test:3:11:**
+        \\This string literal is being used where a non-string type is needed:
+        \\**test:3:28:3:35:**
         \\```roc
         \\updated = set_data({ data: "hello" }, 10.U8)
         \\```
-        \\                                      ^^^^^
+        \\                           ^^^^^^^
         \\
-        \\This argument has the type:
+        \\The type was determined to be:
         \\
         \\    U8
-        \\
-        \\But `set_data` needs the second argument to be:
-        \\
-        \\    Str
         \\
         \\
     );
@@ -2359,10 +2315,11 @@ test "check type - patterns - wrong type" {
         \\
         \\  match(x) {
         \\    "hello" => "world",
+        \\    _ => "other",
         \\  }
         \\}
     ;
-    try checkTypesExpr(source, .fail, "TYPE MISMATCH");
+    try checkTypesExpr(source, .fail, "MISSING METHOD");
 }
 
 test "check type - patterns tag without payload" {
@@ -2404,7 +2361,7 @@ test "check type - patterns tag with payload mismatch" {
         \\  }
         \\}
     ;
-    try checkTypesExpr(source, .fail, "TYPE MISMATCH");
+    try checkTypesExpr(source, .fail_first, "MISSING METHOD");
 }
 
 test "check type - patterns str" {
@@ -2558,7 +2515,7 @@ test "check type - patterns record field mismatch" {
         \\  }
         \\}
     ;
-    try checkTypesExpr(source, .fail, "TYPE MISMATCH");
+    try checkTypesExpr(source, .fail, "MISSING METHOD");
 }
 
 // vars + reassignment //
@@ -3968,6 +3925,7 @@ const ExprExpectation = union(enum) {
     pass,
     fail,
     fail_with,
+    fail_first, // Allows multiple errors, checks first error title
 };
 
 /// A unified helper to run the full pipeline: parse, canonicalize, and type-check source code.
@@ -3992,6 +3950,9 @@ fn checkTypesExpr(
         },
         .fail_with => {
             return test_env.assertOneTypeErrorMsg(expected);
+        },
+        .fail_first => {
+            return test_env.assertFirstTypeError(expected);
         },
     }
 
@@ -4206,7 +4167,7 @@ test "check type - record ext - arg inferred as open" {
         \\
         \\This argument has the type:
         \\
-        \\    { foo: Str }
+        \\    { foo: a } where [a.from_quote : List(U8) -> Try(a, [BadQuotedBytes(Str)])]
         \\
         \\But `use_record` needs the first argument to be:
         \\
@@ -4439,22 +4400,16 @@ test "check type - early return - fail" {
         source,
         .fail_with,
         \\**TYPE MISMATCH**
-        \\This `return` does not match the function's return type:
+        \\This string literal is being used where a non-string type is needed:
         \\**test:3:12:3:19:**
         \\```roc
         \\    return "hello"
         \\```
         \\           ^^^^^^^
         \\
-        \\It has the type:
-        \\
-        \\    Str
-        \\
-        \\But the function's return type is:
+        \\The type was determined to be:
         \\
         \\    List(_a)
-        \\
-        \\**Hint:** All `return` statements and the final expression in a function must have the same type.
         \\
         \\
         ,
@@ -4472,22 +4427,16 @@ test "check type - early return - ? - fail" {
         source,
         .fail_with,
         \\**TYPE MISMATCH**
-        \\This `?` may return early with a type that doesn't match the function body:
-        \\**test:2:10:2:27:**
+        \\This string literal is being used where a non-string type is needed:
+        \\**test:2:18:2:25:**
         \\```roc
         \\  _val = Try.Err("hello")?
         \\```
-        \\         ^^^^^^^^^^^^^^^^^
+        \\                 ^^^^^^^
         \\
-        \\On error, this would return:
+        \\The type was determined to be:
         \\
-        \\    Try(ok, Str)
-        \\
-        \\But the function body evaluates to:
-        \\
-        \\    Try(ok, Bool)
-        \\
-        \\**Hint:** The error types from all `?` operators and the function body must be compatible since any of them could be the actual return value.
+        \\    Bool
         \\
         \\
         ,
@@ -4537,20 +4486,16 @@ test "check type - self recursive function - fibonacci - fail" {
         source,
         .fail_with,
         \\**TYPE MISMATCH**
-        \\The recursive definition `fib` is used in an unexpected way:
-        \\**test:5:5:5:8:**
+        \\This string literal is being used where a non-string type is needed:
+        \\**test:5:9:5:18:**
         \\```roc
         \\    fib("bad arg") + fib(n - 2.U8)
         \\```
-        \\    ^^^
+        \\        ^^^^^^^^^
         \\
-        \\It has the type:
+        \\The type was determined to be:
         \\
-        \\    Str -> U8
-        \\
-        \\But other places expect it to be:
-        \\
-        \\    U8 -> U8
+        \\    U8
         \\
         \\
         ,
@@ -4852,7 +4797,7 @@ test "check type - self recursive static dispatch - wrong arg type" {
     try checkTypesModule(
         source,
         .fail,
-        "INVALID NOMINAL TAG",
+        "TYPE MISMATCH",
     );
 }
 
@@ -5380,7 +5325,7 @@ test "check type - zulip repro" {
         \\
         \\This argument has the type:
         \\
-        \\    { foo: Str }
+        \\    { foo: a } where [a.from_quote : List(U8) -> Try(a, [BadQuotedBytes(Str)])]
         \\
         \\But `use_record` needs the first argument to be:
         \\
@@ -5499,7 +5444,7 @@ test "check type - exhaustive match with nested payload is inferred as closed" {
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "[Err(Str), Ok([Blue, Red])] -> Str" },
+            .{ .def = "test", .expected = "[Err(a), Ok([Blue, Red])] -> a\n  where [a.from_quote : List(U8) -> Try(a, [BadQuotedBytes(Str)])]" },
         },
     );
 }
@@ -5518,7 +5463,7 @@ test "check type - exhaustive match with nested payload with wildcard is inferre
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "[Err(Str), Ok([Blue, Red, ..])] -> Str" },
+            .{ .def = "test", .expected = "[Err(a), Ok([Blue, Red, ..])] -> a\n  where [a.from_quote : List(U8) -> Try(a, [BadQuotedBytes(Str)])]" },
         },
     );
 }
@@ -5590,7 +5535,7 @@ test "check type - exhaustive match mixed nested closure" {
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "[Err(Str), Ok([A, B])] -> Str" },
+            .{ .def = "test", .expected = "[Err(a), Ok([A, B])] -> a\n  where [a.from_quote : List(U8) -> Try(a, [BadQuotedBytes(Str)])]" },
         },
     );
 }

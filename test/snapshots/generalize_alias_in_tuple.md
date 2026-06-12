@@ -15,26 +15,19 @@ main = {
 }
 ~~~
 # EXPECTED
-TYPE MISMATCH - generalize_alias_in_tuple.md:7:8:7:9
+TYPE MISMATCH - generalize_alias_in_tuple.md:7:14:7:17
 # PROBLEMS
 **TYPE MISMATCH**
-This number is being used where a non-number type is needed:
-**generalize_alias_in_tuple.md:7:8:7:9:**
-```roc
-    (a(1), a("x"), b(2))
-```
-       ^
-
-The type was determined to be non-numeric here:
+This string literal is being used where a non-string type is needed:
 **generalize_alias_in_tuple.md:7:14:7:17:**
 ```roc
     (a(1), a("x"), b(2))
 ```
              ^^^
 
-Other code expects this to have the type:
+The type was determined to be:
 
-    Str
+    Dec
 
 # TOKENS
 ~~~zig
@@ -128,12 +121,12 @@ main = {
 						(e-lookup-local
 							(p-assign (ident "a")))
 						(e-num (value "1")))
-					(e-call (constraint-fn-var 76)
+					(e-call (constraint-fn-var 86)
 						(e-lookup-local
 							(p-assign (ident "a")))
 						(e-string
 							(e-literal (string "x"))))
-					(e-call (constraint-fn-var 108)
+					(e-call (constraint-fn-var 117)
 						(e-lookup-local
 							(p-assign (ident "b")))
 						(e-num (value "2"))))))))
@@ -143,10 +136,10 @@ main = {
 (inferred-types
 	(defs
 		(patt (type "c -> c"))
-		(patt (type "(Str -> Str, Dec -> Dec)"))
-		(patt (type "(Str, Str, Dec)")))
+		(patt (type "(Dec -> Dec, Dec -> Dec)"))
+		(patt (type "(Dec, Dec, Dec)")))
 	(expressions
 		(expr (type "c -> c"))
-		(expr (type "(Str -> Str, Dec -> Dec)"))
-		(expr (type "(Str, Str, Dec)"))))
+		(expr (type "(Dec -> Dec, Dec -> Dec)"))
+		(expr (type "(Dec, Dec, Dec)"))))
 ~~~

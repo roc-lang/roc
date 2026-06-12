@@ -149,11 +149,29 @@ match ... {
 																	(required
 																		(p-assign (ident "c"))))))))))))))))
 				(value
-					(e-string
-						(e-literal (string "deeply nested: "))
-						(e-lookup-local
-							(p-assign (ident "c")))
-						(e-literal (string "")))))
+					(e-block
+						(s-let
+							(p-assign (ident "#interp_0"))
+							(e-lookup-local
+								(p-assign (ident "c"))))
+						(e-dispatch-call (method "from_interpolation") (constraint-fn-var 297)
+							(receiver
+								(e-string
+									(e-literal (string "deeply nested: "))))
+							(args
+								(e-dispatch-call (method "prepended") (constraint-fn-var 255)
+									(receiver
+										(e-dispatch-call (method "iter") (constraint-fn-var 191)
+											(receiver
+												(e-empty_list))
+											(args)))
+									(args
+										(e-tuple
+											(elems
+												(e-lookup-local
+													(p-assign (ident "#interp_0")))
+												(e-string
+													(e-literal (string ""))))))))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -167,11 +185,29 @@ match ... {
 										(p-record-destructure
 											(destructs))))))))
 				(value
-					(e-string
-						(e-literal (string "mixed with empty: "))
-						(e-lookup-local
-							(p-assign (ident "x")))
-						(e-literal (string "")))))
+					(e-block
+						(s-let
+							(p-assign (ident "#interp_1"))
+							(e-lookup-local
+								(p-assign (ident "x"))))
+						(e-dispatch-call (method "from_interpolation") (constraint-fn-var 424)
+							(receiver
+								(e-string
+									(e-literal (string "mixed with empty: "))))
+							(args
+								(e-dispatch-call (method "prepended") (constraint-fn-var 382)
+									(receiver
+										(e-dispatch-call (method "iter") (constraint-fn-var 318)
+											(receiver
+												(e-empty_list))
+											(args)))
+									(args
+										(e-tuple
+											(elems
+												(e-lookup-local
+													(p-assign (ident "#interp_1")))
+												(e-string
+													(e-literal (string ""))))))))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -188,14 +224,42 @@ match ... {
 									(required
 										(p-assign (ident "simple"))))))))
 				(value
-					(e-string
-						(e-literal (string "mixed: "))
-						(e-lookup-local
-							(p-assign (ident "inner")))
-						(e-literal (string " and "))
-						(e-lookup-local
-							(p-assign (ident "simple")))
-						(e-literal (string "")))))
+					(e-block
+						(s-let
+							(p-assign (ident "#interp_2"))
+							(e-lookup-local
+								(p-assign (ident "inner"))))
+						(s-let
+							(p-assign (ident "#interp_3"))
+							(e-lookup-local
+								(p-assign (ident "simple"))))
+						(e-dispatch-call (method "from_interpolation") (constraint-fn-var 609)
+							(receiver
+								(e-string
+									(e-literal (string "mixed: "))))
+							(args
+								(e-dispatch-call (method "prepended") (constraint-fn-var 567)
+									(receiver
+										(e-dispatch-call (method "prepended") (constraint-fn-var 509)
+											(receiver
+												(e-dispatch-call (method "iter") (constraint-fn-var 445)
+													(receiver
+														(e-empty_list))
+													(args)))
+											(args
+												(e-tuple
+													(elems
+														(e-lookup-local
+															(p-assign (ident "#interp_3")))
+														(e-string
+															(e-literal (string ""))))))))
+									(args
+										(e-tuple
+											(elems
+												(e-lookup-local
+													(p-assign (ident "#interp_2")))
+												(e-string
+													(e-literal (string " and "))))))))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -216,14 +280,42 @@ match ... {
 													(required
 														(p-assign (ident "d"))))))))))))
 				(value
-					(e-string
-						(e-literal (string "multiple nested: "))
-						(e-lookup-local
-							(p-assign (ident "b")))
-						(e-literal (string ", "))
-						(e-lookup-local
-							(p-assign (ident "d")))
-						(e-literal (string "")))))
+					(e-block
+						(s-let
+							(p-assign (ident "#interp_4"))
+							(e-lookup-local
+								(p-assign (ident "b"))))
+						(s-let
+							(p-assign (ident "#interp_5"))
+							(e-lookup-local
+								(p-assign (ident "d"))))
+						(e-dispatch-call (method "from_interpolation") (constraint-fn-var 794)
+							(receiver
+								(e-string
+									(e-literal (string "multiple nested: "))))
+							(args
+								(e-dispatch-call (method "prepended") (constraint-fn-var 752)
+									(receiver
+										(e-dispatch-call (method "prepended") (constraint-fn-var 694)
+											(receiver
+												(e-dispatch-call (method "iter") (constraint-fn-var 630)
+													(receiver
+														(e-empty_list))
+													(args)))
+											(args
+												(e-tuple
+													(elems
+														(e-lookup-local
+															(p-assign (ident "#interp_5")))
+														(e-string
+															(e-literal (string ""))))))))
+									(args
+										(e-tuple
+											(elems
+												(e-lookup-local
+													(p-assign (ident "#interp_4")))
+												(e-string
+													(e-literal (string ", "))))))))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -233,11 +325,29 @@ match ... {
 									(sub-pattern
 										(p-assign (ident "x"))))))))
 				(value
-					(e-string
-						(e-literal (string "renamed: "))
-						(e-lookup-local
-							(p-assign (ident "x")))
-						(e-literal (string "")))))
+					(e-block
+						(s-let
+							(p-assign (ident "#interp_6"))
+							(e-lookup-local
+								(p-assign (ident "x"))))
+						(e-dispatch-call (method "from_interpolation") (constraint-fn-var 921)
+							(receiver
+								(e-string
+									(e-literal (string "renamed: "))))
+							(args
+								(e-dispatch-call (method "prepended") (constraint-fn-var 879)
+									(receiver
+										(e-dispatch-call (method "iter") (constraint-fn-var 815)
+											(receiver
+												(e-empty_list))
+											(args)))
+									(args
+										(e-tuple
+											(elems
+												(e-lookup-local
+													(p-assign (ident "#interp_6")))
+												(e-string
+													(e-literal (string ""))))))))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -254,17 +364,45 @@ match ... {
 													(sub-pattern
 														(p-assign (ident "userAge"))))))))))))
 				(value
-					(e-string
-						(e-literal (string "renamed nested: "))
-						(e-lookup-local
-							(p-assign (ident "firstName")))
-						(e-literal (string " ("))
-						(e-dispatch-call (method "to_str") (constraint-fn-var 175)
+					(e-block
+						(s-let
+							(p-assign (ident "#interp_7"))
+							(e-lookup-local
+								(p-assign (ident "firstName"))))
+						(s-let
+							(p-assign (ident "#interp_8"))
+							(e-dispatch-call (method "to_str") (constraint-fn-var 923)
+								(receiver
+									(e-lookup-local
+										(p-assign (ident "userAge"))))
+								(args)))
+						(e-dispatch-call (method "from_interpolation") (constraint-fn-var 1108)
 							(receiver
-								(e-lookup-local
-									(p-assign (ident "userAge"))))
-							(args))
-						(e-literal (string ")")))))
+								(e-string
+									(e-literal (string "renamed nested: "))))
+							(args
+								(e-dispatch-call (method "prepended") (constraint-fn-var 1066)
+									(receiver
+										(e-dispatch-call (method "prepended") (constraint-fn-var 1008)
+											(receiver
+												(e-dispatch-call (method "iter") (constraint-fn-var 944)
+													(receiver
+														(e-empty_list))
+													(args)))
+											(args
+												(e-tuple
+													(elems
+														(e-lookup-local
+															(p-assign (ident "#interp_8")))
+														(e-string
+															(e-literal (string ")"))))))))
+									(args
+										(e-tuple
+											(elems
+												(e-lookup-local
+													(p-assign (ident "#interp_7")))
+												(e-string
+													(e-literal (string " ("))))))))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)

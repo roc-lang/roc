@@ -101,17 +101,55 @@ match person {
 													(required
 														(p-assign (ident "zipCode"))))))))))))
 				(value
-					(e-string
-						(e-literal (string ""))
-						(e-lookup-local
-							(p-assign (ident "name")))
-						(e-literal (string " lives on "))
-						(e-lookup-local
-							(p-assign (ident "street")))
-						(e-literal (string " in "))
-						(e-lookup-local
-							(p-assign (ident "city")))
-						(e-literal (string ""))))))))
+					(e-block
+						(s-let
+							(p-assign (ident "#interp_0"))
+							(e-lookup-local
+								(p-assign (ident "name"))))
+						(s-let
+							(p-assign (ident "#interp_1"))
+							(e-lookup-local
+								(p-assign (ident "street"))))
+						(s-let
+							(p-assign (ident "#interp_2"))
+							(e-lookup-local
+								(p-assign (ident "city"))))
+						(e-dispatch-call (method "from_interpolation") (constraint-fn-var 294)
+							(receiver
+								(e-string
+									(e-literal (string ""))))
+							(args
+								(e-dispatch-call (method "prepended") (constraint-fn-var 252)
+									(receiver
+										(e-dispatch-call (method "prepended") (constraint-fn-var 194)
+											(receiver
+												(e-dispatch-call (method "prepended") (constraint-fn-var 136)
+													(receiver
+														(e-dispatch-call (method "iter") (constraint-fn-var 72)
+															(receiver
+																(e-empty_list))
+															(args)))
+													(args
+														(e-tuple
+															(elems
+																(e-lookup-local
+																	(p-assign (ident "#interp_2")))
+																(e-string
+																	(e-literal (string ""))))))))
+											(args
+												(e-tuple
+													(elems
+														(e-lookup-local
+															(p-assign (ident "#interp_1")))
+														(e-string
+															(e-literal (string " in "))))))))
+									(args
+										(e-tuple
+											(elems
+												(e-lookup-local
+													(p-assign (ident "#interp_0")))
+												(e-string
+													(e-literal (string " lives on ")))))))))))))))
 ~~~
 # TYPES
 ~~~clojure
