@@ -107,16 +107,14 @@ const FnFamilyMap = std.HashMap(Mono.FnTemplate, std.ArrayList(Ast.FnId), FnFami
 /// disambiguates among multiple specializations of one checked template and
 /// scheme.
 const FnFamilyContext = struct {
-    pub fn hash(self: FnFamilyContext, template: Mono.FnTemplate) u64 {
-        _ = self;
+    pub fn hash(_: FnFamilyContext, template: Mono.FnTemplate) u64 {
         var hasher = std.hash.Wyhash.init(0);
         FnTemplateContext.hashFnDef(&hasher, template.fn_def);
         hasher.update(&template.source_fn_key.bytes);
         return hasher.final();
     }
 
-    pub fn eql(self: FnFamilyContext, lhs: Mono.FnTemplate, rhs: Mono.FnTemplate) bool {
-        _ = self;
+    pub fn eql(_: FnFamilyContext, lhs: Mono.FnTemplate, rhs: Mono.FnTemplate) bool {
         return std.meta.eql(lhs.fn_def, rhs.fn_def) and
             std.mem.eql(u8, lhs.source_fn_key.bytes[0..], rhs.source_fn_key.bytes[0..]);
     }
