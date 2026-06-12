@@ -1003,14 +1003,17 @@ pub const InstGraph = struct {
     }
 };
 
+/// Orders record fields by label text for layout-stable sorting.
 pub fn recordFieldLessThan(name_store: *const names.NameStore, lhs: Type.Field, rhs: Type.Field) bool {
     return name_store.recordFieldLabelTextLessThan(lhs.name, rhs.name);
 }
 
+/// Orders tag union tags by label text for layout-stable sorting.
 pub fn tagLessThan(name_store: *const names.NameStore, lhs: Type.Tag, rhs: Type.Tag) bool {
     return name_store.tagLabelTextLessThan(lhs.name, rhs.name);
 }
 
+/// Panics with the given message if a sorted field list contains a repeated label.
 pub fn assertNoDuplicateRecordFields(name_store: *const names.NameStore, fields: []const Type.Field, comptime message: []const u8) void {
     if (fields.len < 2) return;
     for (fields[1..], 1..) |field, i| {
@@ -1020,6 +1023,7 @@ pub fn assertNoDuplicateRecordFields(name_store: *const names.NameStore, fields:
     }
 }
 
+/// Panics with the given message if a sorted tag list contains a repeated label.
 pub fn assertNoDuplicateTags(name_store: *const names.NameStore, tags: []const Type.Tag, comptime message: []const u8) void {
     if (tags.len < 2) return;
     for (tags[1..], 1..) |tag, i| {
