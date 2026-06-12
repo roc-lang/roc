@@ -17,6 +17,8 @@ name_counter: u32,
 
 const BuiltinAdapterKind = enum {
     bool_not,
+    bool_encode,
+    bool_decode,
     str_is_empty,
     str_concat,
     str_contains,
@@ -43,6 +45,8 @@ const BuiltinAdapterKind = enum {
     str_join_with,
     str_is_eq,
     str_inspect,
+    str_encode,
+    str_decode,
     list_len,
     list_is_empty,
     list_iter,
@@ -104,6 +108,8 @@ const BuiltinAdapterKind = enum {
     list_sum,
     list_min,
     list_max,
+    list_encode,
+    list_decode,
     iter_next,
     iter_custom,
     iter_iter,
@@ -223,6 +229,8 @@ const NumericAdapterKind = enum {
     from_dec_digits,
     from_numeral,
     from_str,
+    encode,
+    decode,
     to,
     until,
 };
@@ -255,6 +263,8 @@ const NumericConversionAdapter = struct {
 
 const builtin_adapters = [_]BuiltinAdapter{
     .{ .owner = "Bool", .name = "not", .kind = .bool_not },
+    .{ .owner = "Bool", .name = "encode", .kind = .bool_encode },
+    .{ .owner = "Bool", .name = "decode", .kind = .bool_decode },
     .{ .owner = "Bool", .name = "is_eq", .kind = .bool_is_eq },
     .{ .owner = "Str", .name = "is_empty", .kind = .str_is_empty },
     .{ .owner = "Str", .name = "concat", .kind = .str_concat },
@@ -282,6 +292,8 @@ const builtin_adapters = [_]BuiltinAdapter{
     .{ .owner = "Str", .name = "join_with", .kind = .str_join_with },
     .{ .owner = "Str", .name = "is_eq", .kind = .str_is_eq },
     .{ .owner = "Str", .name = "inspect", .kind = .str_inspect },
+    .{ .owner = "Str", .name = "encode", .kind = .str_encode },
+    .{ .owner = "Str", .name = "decode", .kind = .str_decode },
     .{ .owner = "List", .name = "len", .kind = .list_len },
     .{ .owner = "List", .name = "is_empty", .kind = .list_is_empty },
     .{ .owner = "List", .name = "iter", .kind = .list_iter },
@@ -343,6 +355,8 @@ const builtin_adapters = [_]BuiltinAdapter{
     .{ .owner = "List", .name = "sum", .kind = .list_sum },
     .{ .owner = "List", .name = "min", .kind = .list_min },
     .{ .owner = "List", .name = "max", .kind = .list_max },
+    .{ .owner = "List", .name = "encode", .kind = .list_encode },
+    .{ .owner = "List", .name = "decode", .kind = .list_decode },
     .{ .owner = "Iter", .name = "next", .kind = .iter_next },
     .{ .owner = "Iter", .name = "custom", .kind = .iter_custom },
     .{ .owner = "Iter", .name = "iter", .kind = .iter_iter },
@@ -455,6 +469,8 @@ const numeric_adapters = [_]NumericAdapter{
     .{ .name = "from_dec_digits", .kind = .from_dec_digits, .family = .float },
     .{ .name = "from_numeral", .kind = .from_numeral, .family = .all },
     .{ .name = "from_str", .kind = .from_str, .family = .all },
+    .{ .name = "encode", .kind = .encode, .family = .all },
+    .{ .name = "decode", .kind = .decode, .family = .all },
     .{ .name = "to", .kind = .to, .family = .integer },
     .{ .name = "until", .kind = .until, .family = .integer },
     .{ .name = "add_checked", .kind = .add_checked, .family = .decimal },
@@ -599,9 +615,6 @@ fn isGeneratedBuiltinFunction(function: BuiltinSurface.Function) bool {
 fn isUnsupportedBuiltinFunction(function: BuiltinSurface.Function) bool {
     if (std.mem.eql(u8, function.owner, "Builtin")) return true;
 
-    if (std.mem.endsWith(u8, function.name, "!")) return true;
-    if (std.mem.eql(u8, function.name, "encode")) return true;
-    if (std.mem.eql(u8, function.name, "decode")) return true;
     return false;
 }
 
@@ -1099,6 +1112,74 @@ pub fn generateModule(self: *Self) std.mem.Allocator.Error!void {
         \\}
         \\
         \\
+        \\Fmt := [Fmt].{
+        \\    encode_bool : Fmt, Bool -> Try(Str, Str)
+        \\    encode_bool = |_, _| Ok("bool")
+        \\    decode_bool : Fmt, Str -> (Try(Bool, Str), Str)
+        \\    decode_bool = |_, source| (Ok(True), source)
+        \\    encode_str : Fmt, Str -> Try(Str, Str)
+        \\    encode_str = |_, value| Ok(value)
+        \\    decode_str : Fmt, Str -> (Try(Str, Str), Str)
+        \\    decode_str = |_, source| (Ok(source), source)
+        \\    encode_list : Fmt, List(item), (item, Fmt -> Try(Str, Str)) -> Try(Str, Str)
+        \\    encode_list = |_, _, _| Ok("list")
+        \\    decode_list : Fmt, Str, (Str, Fmt -> (Try(item, Str), Str)) -> (Try(List(item), Str), Str)
+        \\    decode_list = |_, source, _| (Ok([]), source)
+        \\    encode_u8 : Fmt, U8 -> Try(Str, Str)
+        \\    encode_u8 = |_, _| Ok("u8")
+        \\    decode_u8 : Fmt, Str -> (Try(U8, Str), Str)
+        \\    decode_u8 = |_, source| (Ok(1), source)
+        \\    encode_i8 : Fmt, I8 -> Try(Str, Str)
+        \\    encode_i8 = |_, _| Ok("i8")
+        \\    decode_i8 : Fmt, Str -> (Try(I8, Str), Str)
+        \\    decode_i8 = |_, source| (Ok(1), source)
+        \\    encode_u16 : Fmt, U16 -> Try(Str, Str)
+        \\    encode_u16 = |_, _| Ok("u16")
+        \\    decode_u16 : Fmt, Str -> (Try(U16, Str), Str)
+        \\    decode_u16 = |_, source| (Ok(1), source)
+        \\    encode_i16 : Fmt, I16 -> Try(Str, Str)
+        \\    encode_i16 = |_, _| Ok("i16")
+        \\    decode_i16 : Fmt, Str -> (Try(I16, Str), Str)
+        \\    decode_i16 = |_, source| (Ok(1), source)
+        \\    encode_u32 : Fmt, U32 -> Try(Str, Str)
+        \\    encode_u32 = |_, _| Ok("u32")
+        \\    decode_u32 : Fmt, Str -> (Try(U32, Str), Str)
+        \\    decode_u32 = |_, source| (Ok(1), source)
+        \\    encode_i32 : Fmt, I32 -> Try(Str, Str)
+        \\    encode_i32 = |_, _| Ok("i32")
+        \\    decode_i32 : Fmt, Str -> (Try(I32, Str), Str)
+        \\    decode_i32 = |_, source| (Ok(1), source)
+        \\    encode_u64 : Fmt, U64 -> Try(Str, Str)
+        \\    encode_u64 = |_, _| Ok("u64")
+        \\    decode_u64 : Fmt, Str -> (Try(U64, Str), Str)
+        \\    decode_u64 = |_, source| (Ok(1), source)
+        \\    encode_i64 : Fmt, I64 -> Try(Str, Str)
+        \\    encode_i64 = |_, _| Ok("i64")
+        \\    decode_i64 : Fmt, Str -> (Try(I64, Str), Str)
+        \\    decode_i64 = |_, source| (Ok(1), source)
+        \\    encode_u128 : Fmt, U128 -> Try(Str, Str)
+        \\    encode_u128 = |_, _| Ok("u128")
+        \\    decode_u128 : Fmt, Str -> (Try(U128, Str), Str)
+        \\    decode_u128 = |_, source| (Ok(1), source)
+        \\    encode_i128 : Fmt, I128 -> Try(Str, Str)
+        \\    encode_i128 = |_, _| Ok("i128")
+        \\    decode_i128 : Fmt, Str -> (Try(I128, Str), Str)
+        \\    decode_i128 = |_, source| (Ok(1), source)
+        \\    encode_dec : Fmt, Dec -> Try(Str, Str)
+        \\    encode_dec = |_, _| Ok("dec")
+        \\    decode_dec : Fmt, Str -> (Try(Dec, Str), Str)
+        \\    decode_dec = |_, source| (Ok(1.0), source)
+        \\    encode_f32 : Fmt, F32 -> Try(Str, Str)
+        \\    encode_f32 = |_, _| Ok("f32")
+        \\    decode_f32 : Fmt, Str -> (Try(F32, Str), Str)
+        \\    decode_f32 = |_, source| (Ok(1.0), source)
+        \\    encode_f64 : Fmt, F64 -> Try(Str, Str)
+        \\    encode_f64 = |_, _| Ok("f64")
+        \\    decode_f64 : Fmt, Str -> (Try(F64, Str), Str)
+        \\    decode_f64 = |_, source| (Ok(1.0), source)
+        \\}
+        \\
+        \\
         \\Tree := [Leaf(Str), Node(List(Tree))].{
         \\    label : Tree -> Str
         \\    label = |tree| match tree {
@@ -1440,6 +1521,8 @@ fn generateBuiltinAssociatedFunction(self: *Self) std.mem.Allocator.Error!void {
 
     switch (adapter.kind) {
         .bool_not => try self.generateBoolNotBuiltinFunction(name_id),
+        .bool_encode => try self.generateBoolEncodeBuiltinFunction(name_id),
+        .bool_decode => try self.generateBoolDecodeBuiltinFunction(name_id),
         .bool_is_eq => try self.generateBoolIsEqBuiltinFunction(name_id),
         .str_is_empty => try self.generateStrUnaryBuiltinFunction(name_id, "is_empty", .bool),
         .str_concat => try self.generateStrBinaryBuiltinFunction(name_id, "concat", .str),
@@ -1467,6 +1550,8 @@ fn generateBuiltinAssociatedFunction(self: *Self) std.mem.Allocator.Error!void {
         .str_join_with => try self.generateStrJoinWithBuiltinFunction(name_id),
         .str_is_eq => try self.generateStrIsEqBuiltinFunction(name_id),
         .str_inspect => try self.generateStrInspectBuiltinFunction(name_id),
+        .str_encode => try self.generateStrEncodeBuiltinFunction(name_id),
+        .str_decode => try self.generateStrDecodeBuiltinFunction(name_id),
         .list_len => try self.generateListLenFunction(name_id, self.chooseListType()),
         .list_is_empty => try self.generateListIsEmptyBuiltinFunction(name_id, self.chooseListType()),
         .list_iter => try self.generateListIterBuiltinFunction(name_id),
@@ -1528,6 +1613,8 @@ fn generateBuiltinAssociatedFunction(self: *Self) std.mem.Allocator.Error!void {
         .list_sum => try self.generateListAggregateBuiltinFunction(name_id, "sum"),
         .list_min => try self.generateListMinMaxBuiltinFunction(name_id, "min"),
         .list_max => try self.generateListMinMaxBuiltinFunction(name_id, "max"),
+        .list_encode => try self.generateListEncodeBuiltinFunction(name_id),
+        .list_decode => try self.generateListDecodeBuiltinFunction(name_id),
         .iter_next => try self.generateIterNextBuiltinFunction(name_id),
         .iter_custom => try self.generateIterCustomBuiltinFunction(name_id),
         .iter_iter => try self.generateIterIterBuiltinFunction(name_id),
@@ -1650,6 +1737,8 @@ fn generateNumericBuiltinAssociatedFunction(self: *Self, name_id: u32, adapter: 
         .from_dec_digits => try self.generateNumericFromDecDigitsBuiltinFunction(name_id, typ),
         .from_numeral => try self.generateNumericFromNumeralBuiltinFunction(name_id, typ),
         .from_str => try self.generateNumericFromStrBuiltinFunction(name_id, typ),
+        .encode => try self.generateNumericEncodeBuiltinFunction(name_id, typ),
+        .decode => try self.generateNumericDecodeBuiltinFunction(name_id, typ),
         .to => try self.generateNumericRangeBuiltinFunction(name_id, typ, "to"),
         .until => try self.generateNumericRangeBuiltinFunction(name_id, typ, "until"),
     }
@@ -1780,6 +1869,24 @@ fn generateNumericFromStrBuiltinFunction(self: *Self, name_id: u32, typ: Type) s
     try self.write("\n");
 }
 
+fn generateNumericEncodeBuiltinFunction(self: *Self, name_id: u32, typ: Type) std.mem.Allocator.Error!void {
+    std.debug.assert(typ.isNumber());
+
+    try self.writeFmtEncodeFunctionStart(name_id);
+    try self.write("        ");
+    try self.writeQualifiedCall(numberOwner(typ), "encode", &.{ .{ .small_number_literal = typ }, .{ .raw = "fmt" } });
+    try self.write("\n    }\n");
+}
+
+fn generateNumericDecodeBuiltinFunction(self: *Self, name_id: u32, typ: Type) std.mem.Allocator.Error!void {
+    std.debug.assert(typ.isNumber());
+
+    try self.writeFmtDecodeFunctionStart(name_id, typ);
+    try self.write("        ");
+    try self.writeQualifiedCall(numberOwner(typ), "decode", &.{ .{ .string_literal = {} }, .{ .raw = "fmt" } });
+    try self.write("\n    }\n");
+}
+
 fn generateNumericRangeBuiltinFunction(self: *Self, name_id: u32, typ: Type, method: []const u8) std.mem.Allocator.Error!void {
     std.debug.assert(typ.isNumber() and !typ.isFloat());
 
@@ -1804,6 +1911,20 @@ fn generateBoolIsEqBuiltinFunction(self: *Self, name_id: u32) std.mem.Allocator.
     try self.write("|_| ");
     try self.writeCall("Bool.is_eq", &.{ .{ .bool_literal = {} }, .{ .bool_literal = {} } });
     try self.write("\n");
+}
+
+fn generateBoolEncodeBuiltinFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFmtEncodeFunctionStart(name_id);
+    try self.write("        ");
+    try self.writeAssociatedOrMethodCall("Bool", .{ .bool_literal = {} }, "encode", &.{.{ .raw = "fmt" }});
+    try self.write("\n    }\n");
+}
+
+fn generateBoolDecodeBuiltinFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFmtDecodeFunctionStart(name_id, .bool);
+    try self.write("        ");
+    try self.writeQualifiedCall("Bool", "decode", &.{ .{ .string_literal = {} }, .{ .raw = "fmt" } });
+    try self.write("\n    }\n");
 }
 
 fn generateStrUnaryBuiltinFunction(self: *Self, name_id: u32, method: []const u8, return_type: Type) std.mem.Allocator.Error!void {
@@ -1901,6 +2022,20 @@ fn generateStrInspectBuiltinFunction(self: *Self, name_id: u32) std.mem.Allocato
     try self.write("|_| ");
     try self.writeCall("Str.inspect", &.{.{ .literal = typ }});
     try self.write("\n");
+}
+
+fn generateStrEncodeBuiltinFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFmtEncodeFunctionStart(name_id);
+    try self.write("        ");
+    try self.writeAssociatedOrMethodCall("Str", .{ .string_literal = {} }, "encode", &.{.{ .raw = "fmt" }});
+    try self.write("\n    }\n");
+}
+
+fn generateStrDecodeBuiltinFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFmtDecodeFunctionStart(name_id, .str);
+    try self.write("        ");
+    try self.writeQualifiedCall("Str", "decode", &.{ .{ .string_literal = {} }, .{ .raw = "fmt" } });
+    try self.write("\n    }\n");
 }
 
 fn generateListIsEmptyBuiltinFunction(self: *Self, name_id: u32, typ: Type) std.mem.Allocator.Error!void {
@@ -2771,6 +2906,20 @@ fn generateListMinMaxBuiltinFunction(self: *Self, name_id: u32, method: []const 
     try self.write("|_| match ");
     try self.writeAssociatedOrMethodCall("List", .{ .literal = .list_u64 }, method, &.{});
     try self.write(" {\n        Ok(value) => value\n        Err(_) => 0\n    }\n");
+}
+
+fn generateListEncodeBuiltinFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFmtEncodeFunctionStart(name_id);
+    try self.write("        ");
+    try self.writeAssociatedOrMethodCall("List", .{ .literal = .list_u64 }, "encode", &.{.{ .raw = "fmt" }});
+    try self.write("\n    }\n");
+}
+
+fn generateListDecodeBuiltinFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFmtDecodeFunctionStart(name_id, .list_u64);
+    try self.write("        ");
+    try self.writeQualifiedCall("List", "decode", &.{ .{ .string_literal = {} }, .{ .raw = "fmt" } });
+    try self.write("\n    }\n");
 }
 
 fn generateIterNextBuiltinFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
@@ -4136,6 +4285,25 @@ fn writeTrySignature(self: *Self, name_id: u32, ok_type: Type) std.mem.Allocator
     try self.write(" : Main -> Try(");
     try self.writeType(ok_type);
     try self.write(", _)\n");
+}
+
+fn writeFmtEncodeFunctionStart(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeRawFunctionSignature(name_id, "Main", "Try(Str, Str)");
+    try self.writeFmtLocalFunctionHeader(name_id);
+}
+
+fn writeFmtDecodeFunctionStart(self: *Self, name_id: u32, decoded_type: Type) std.mem.Allocator.Error!void {
+    try self.write("    value");
+    try self.output.print(self.allocator, "{d}", .{name_id});
+    try self.write(" : Main -> (Try(");
+    try self.writeType(decoded_type);
+    try self.write(", Str), Str)\n");
+    try self.writeFmtLocalFunctionHeader(name_id);
+}
+
+fn writeFmtLocalFunctionHeader(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| {\n        fmt : Fmt\n        fmt = Fmt\n");
 }
 
 fn chooseType(self: *Self) Type {
