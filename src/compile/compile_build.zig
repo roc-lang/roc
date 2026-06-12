@@ -189,6 +189,11 @@ pub const BuildEnv = struct {
     /// they did not declare; attached to error output from those packages.
     version_notes: std.StringHashMapUnmanaged([]const u8) = .{},
 
+    /// The hash-addressed package cache directory used by resolution. Set
+    /// before `build` to override the default location (used by tests);
+    /// otherwise populated from the environment on first resolution.
+    package_cache_dir: ?[]const u8 = null,
+
     // Builtin modules (Bool, Try, Str) shared across all packages (heap-allocated to prevent moves)
     builtin_modules: *BuiltinModules,
     owns_builtin_modules: bool,
@@ -287,6 +292,8 @@ pub const BuildEnv = struct {
             }
             self.version_notes.deinit(self.gpa);
         }
+
+        if (self.package_cache_dir) |dir| self.gpa.free(@constCast(dir));
 
         // Deinit and free owned builtin modules. Borrowed builtins outlive this
         // BuildEnv and are released by their owner.
@@ -1634,16 +1641,17 @@ pub const BuildEnv = struct {
 
         // Without a cache directory, resolution still works for graphs with
         // no URL dependencies; URL specs report a download failure.
-        const cache_dir: ?[]const u8 = self.getRocCacheDir(self.gpa) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            else => null,
-        };
-        defer if (cache_dir) |dir| self.gpa.free(dir);
+        if (self.package_cache_dir == null) {
+            self.package_cache_dir = self.getRocCacheDir(self.gpa) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => null,
+            };
+        }
 
         var ctx_fetcher = package_resolution.CtxFetcher{
             .fs = self.filesystem,
             .gpa = self.gpa,
-            .cache_packages_dir = cache_dir,
+            .cache_packages_dir = self.package_cache_dir,
         };
         var resolver = package_resolution.Resolver.init(self.gpa, ctx_fetcher.fetcher(), self.resolution_config);
         defer resolver.deinit();
@@ -2093,6 +2101,21 @@ pub const BuildEnv = struct {
             }
         }
         return null;
+    }
+
+    /// Whether a module belongs in a bundle of this build's root package.
+    /// URL dependencies are excluded: consumers resolve them from the URLs
+    /// in the header, and their files live in the local package cache. The
+    /// cache-directory check also excludes path dependencies that live
+    /// inside an extracted bundle.
+    pub fn isBundleableModule(self: *BuildEnv, pkg_name: []const u8, module_path: []const u8) bool {
+        if (self.packages.getPtr(pkg_name)) |pkg| {
+            if (pkg.url != null) return false;
+        }
+        if (self.package_cache_dir) |cache_dir| {
+            if (PathUtils.isWithinRoot(module_path, &.{cache_dir})) return false;
+        }
+        return true;
     }
 
     pub fn getCompiledModules(self: *BuildEnv, allocator: Allocator) Allocator.Error![]CompiledModuleInfo {

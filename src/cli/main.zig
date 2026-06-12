@@ -3207,6 +3207,8 @@ fn discoverAndAddBundleModules(
     }
 
     // Append any discovered module that is not already in the bundle list.
+    // URL dependencies are skipped: their files live in the local package
+    // cache, and consumers resolve them from the URLs in the header.
     // The Coordinator yields absolute paths; convert each to a path relative
     // to cwd so it round-trips through `cwd.openFile` and survives the
     // bundle's path-validation step (which rejects absolute paths).
@@ -3215,6 +3217,7 @@ fn discoverAndAddBundleModules(
         while (coord_pkg_it.next()) |pkg_entry| {
             for (pkg_entry.value_ptr.*.modules.items) |mod_state| {
                 const abs_path = mod_state.path;
+                if (!build_env.isBundleableModule(pkg_entry.key_ptr.*, abs_path)) continue;
                 if (bundled_set.contains(abs_path)) continue;
 
                 const rel_path = std.fs.path.relative(ctx.arena, cwd, null, cwd, abs_path) catch {
