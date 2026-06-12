@@ -61,11 +61,29 @@ NO CHANGE
 	(e-record
 		(fields
 			(field (name "greeting")
-				(e-string
-					(e-literal (string "Hello "))
-					(e-lookup-local
-						(p-assign (ident "name")))
-					(e-literal (string ""))))
+				(e-block
+					(s-let
+						(p-assign (ident "#interp_0"))
+						(e-lookup-local
+							(p-assign (ident "name"))))
+					(e-dispatch-call (method "from_interpolation") (constraint-fn-var 163)
+						(receiver
+							(e-string
+								(e-literal (string "Hello "))))
+						(args
+							(e-dispatch-call (method "prepended") (constraint-fn-var 121)
+								(receiver
+									(e-dispatch-call (method "iter") (constraint-fn-var 57)
+										(receiver
+											(e-empty_list))
+										(args)))
+								(args
+									(e-tuple
+										(elems
+											(e-lookup-local
+												(p-assign (ident "#interp_0")))
+											(e-string
+												(e-literal (string "")))))))))))
 			(field (name "full_record")
 				(e-lookup-local
 					(p-as (as "person")
@@ -81,7 +99,7 @@ NO CHANGE
 									(rest-pattern
 										(p-assign (ident "a")))))))))
 			(field (name "is_adult")
-				(e-dispatch-call (method "is_gte") (constraint-fn-var 73)
+				(e-dispatch-call (method "is_gte") (constraint-fn-var 198)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "age"))))

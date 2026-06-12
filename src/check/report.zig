@@ -74,6 +74,7 @@ const EffectfulExpect = problem_mod.EffectfulExpect;
 // Comptime errors
 const ComptimeCrash = problem_mod.ComptimeCrash;
 const ComptimeInvalidNumeral = problem_mod.ComptimeInvalidNumeral;
+const ComptimeInvalidQuote = problem_mod.ComptimeInvalidQuote;
 const ComptimeExpectFailed = problem_mod.ComptimeExpectFailed;
 const ComptimeEvalError = problem_mod.ComptimeEvalError;
 
@@ -819,6 +820,7 @@ pub const ReportBuilder = struct {
             },
             .comptime_crash => |data| return self.buildComptimeCrashReport(data),
             .comptime_invalid_numeral => |data| return self.buildComptimeInvalidNumeralReport(data),
+            .comptime_invalid_quote => |data| return self.buildComptimeInvalidQuoteReport(data),
             .comptime_expect_failed => |data| return self.buildComptimeExpectFailedReport(data),
             .comptime_eval_error => |data| return self.buildComptimeEvalErrorReport(data),
             .invalid_numeric_literal => |data| return self.buildInvalidNumericLiteralReport(data),
@@ -1864,6 +1866,10 @@ pub const ReportBuilder = struct {
         if (data.origin == .from_numeral) {
             return self.buildNumberUsedAsNonNumber(data);
         }
+        // Special case: string literal being used where a non-string type is expected
+        if (data.origin == .from_quote) {
+            return self.buildStringUsedAsNonString(data);
+        }
 
         var report = Report.init(self.gpa, "MISSING METHOD", .runtime_error);
         errdefer report.deinit();
@@ -2084,6 +2090,44 @@ pub const ReportBuilder = struct {
         return report;
     }
 
+    /// Build a report for when a string literal is used where a non-string type is expected
+    fn buildStringUsedAsNonString(
+        self: *Self,
+        data: DispatcherDoesNotImplMethod,
+    ) Allocator.Error!Report {
+        var report = Report.init(self.gpa, "TYPE MISMATCH", .runtime_error);
+        errdefer report.deinit();
+
+        const snapshot_str = try report.addOwnedString(self.getFormattedString(data.dispatcher_snapshot));
+
+        const literal_region = data.quote_region orelse
+            (if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.dispatcher_var)))) |r| r.* else Region.zero());
+        const region_info = self.module_env.calcRegionInfo(literal_region);
+
+        try D.renderSlice(&.{
+            D.bytes("This string literal is being used where a non-string type is needed:"),
+        }, self, &report);
+        try report.document.addLineBreak();
+
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        try D.renderSlice(&.{
+            D.bytes("The type was determined to be:"),
+        }, self, &report);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(snapshot_str);
+
+        return report;
+    }
+
     /// Build a report for when a number literal is used where a non-number type is expected
     fn buildNumberUsedAsNonNumber(
         self: *Self,
@@ -2249,6 +2293,12 @@ pub const ReportBuilder = struct {
         types: TypePair,
         ctx: Context.MethodTypeContext,
     ) Allocator.Error!Report {
+        // Auto-imported builtin types display unqualified (e.g. "Str", not "Builtin.Str").
+        const dispatcher_display = if (self.import_mapping.get(ctx.dispatcher_name)) |display_ident|
+            display_ident
+        else
+            ctx.dispatcher_name;
+
         // Note: The unifier's actual/expected are opposite to display order.
         // We want to show "type has X" (from expected_snapshot) then "expected Y" (from actual_snapshot)
         return try self.makeMismatchReport(
@@ -2257,7 +2307,7 @@ pub const ReportBuilder = struct {
                 D.bytes("The"),
                 D.ident(ctx.method_name).withAnnotation(.inline_code),
                 D.bytes("method on"),
-                D.ident(ctx.dispatcher_name).withAnnotation(.inline_code),
+                D.ident(dispatcher_display).withAnnotation(.inline_code),
                 D.bytes("has an incompatible type:"),
             },
             &.{
@@ -3364,6 +3414,42 @@ pub const ReportBuilder = struct {
             D.bytes("The"),
             D.bytes("from_numeral").withAnnotation(.inline_code),
             D.bytes("implementation for this number literal's type rejected it:"),
+        }, self, &report);
+        try report.document.addLineBreak();
+
+        // Add source region highlighting
+        const region_info = self.module_env.calcRegionInfo(data.region);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        try D.renderSlice(&.{
+            D.bytes("It returned this error message:"),
+        }, self, &report);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(owned_message);
+
+        return report;
+    }
+
+    fn buildComptimeInvalidQuoteReport(self: *Self, data: ComptimeInvalidQuote) Allocator.Error!Report {
+        var report = Report.init(self.gpa, "INVALID STRING", .runtime_error);
+        errdefer report.deinit();
+
+        const owned_message = try report.addOwnedString(
+            self.problems.getExtraString(data.message),
+        );
+
+        try D.renderSlice(&.{
+            D.bytes("The"),
+            D.bytes("from_quote").withAnnotation(.inline_code),
+            D.bytes("implementation for this string literal's type rejected it:"),
         }, self, &report);
         try report.document.addLineBreak();
 

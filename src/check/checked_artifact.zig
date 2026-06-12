@@ -698,7 +698,7 @@ pub const RootRequestTable = struct {
             try appendRoot(&requests, allocator, .{
                 .module_idx = root.module_idx,
                 .kind = switch (root.kind) {
-                    .constant, .numeral_conversion => .compile_time_constant,
+                    .constant, .numeral_conversion, .quote_conversion => .compile_time_constant,
                     .callable_binding => .compile_time_callable,
                     .expect => .test_expect,
                 },
@@ -706,7 +706,7 @@ pub const RootRequestTable = struct {
                 .checked_type = entryWrapperForRoot(entry_wrappers, root.id).checked_fn_root,
                 .abi = switch (root.kind) {
                     .expect => .test_expect,
-                    .constant, .callable_binding, .numeral_conversion => .compile_time,
+                    .constant, .callable_binding, .numeral_conversion, .quote_conversion => .compile_time,
                 },
                 .exposure = .private,
                 .procedure_template = templateForEntryWrapperRoot(entry_wrappers, root.id),
@@ -894,7 +894,7 @@ fn compileTimeRootKindMatchesRequest(
         .constant => request_kind == .compile_time_constant,
         .callable_binding => request_kind == .compile_time_callable,
         .expect => request_kind == .test_expect,
-        .numeral_conversion => request_kind == .compile_time_constant,
+        .numeral_conversion, .quote_conversion => request_kind == .compile_time_constant,
     };
 }
 
@@ -952,6 +952,7 @@ fn compileTimeRootDependsOnUnboundPlatformRequirement(
         .constant,
         .callable_binding,
         .numeral_conversion,
+        .quote_conversion,
         => exprDependsOnUnboundPlatformRequirement(
             checked_bodies,
             resolved_value_refs,
@@ -1047,6 +1048,7 @@ fn exprDependsOnUnboundPlatformRequirement(
         .typed_int,
         .typed_frac,
         .typed_num_from_numeral,
+        .str_from_quote,
         .str_segment,
         .bytes_literal,
         .empty_list,
@@ -1439,7 +1441,11 @@ pub const CheckedStaticDispatchConstraint = struct {
 /// Public `NumericDefaultPhase` declaration.
 pub const NumericDefaultPhase = enum {
     checking_finalized,
+    /// Defaults to Dec when still unresolved at monomorphic specialization.
     mono_specialization,
+    /// Defaults to Str when still unresolved at monomorphic specialization
+    /// (string literals carrying a from_quote constraint).
+    mono_specialization_str,
 };
 
 /// Public `RowDefault` declaration.
@@ -3946,6 +3952,14 @@ fn appendStaticDispatchTypeRoots(
         _ = try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, @enumFromInt(plan.target_var));
         _ = try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, @enumFromInt(plan.fn_var));
     }
+
+    for (module.moduleEnvConst().quote_dispatch_plans.items.items) |plan| {
+        const is_expr = source_nodes.hasExpr(@enumFromInt(plan.node_idx));
+        const is_pattern = source_nodes.hasPattern(@enumFromInt(plan.node_idx));
+        if (!is_expr and !is_pattern) continue;
+        _ = try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, @enumFromInt(plan.target_var));
+        _ = try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, @enumFromInt(plan.fn_var));
+    }
 }
 
 fn syntheticFunctionTypeKey(
@@ -4142,10 +4156,13 @@ fn numericDefaultPhaseForConstraints(
     constraints_range: types.StaticDispatchConstraint.SafeList.Range,
 ) ?NumericDefaultPhase {
     const constraints = module.typeStoreConst().sliceStaticDispatchConstraints(constraints_range);
+    var has_from_quote = false;
     for (constraints) |constraint| {
         if (constraint.origin == .from_numeral) return .mono_specialization;
+        if (constraint.origin == .from_quote) has_from_quote = true;
         if (isDefaultableArithmeticConstraint(module, constraint)) return .mono_specialization;
     }
+    if (has_from_quote) return .mono_specialization_str;
     return null;
 }
 
@@ -4163,6 +4180,7 @@ fn isDefaultableArithmeticConstraint(
             constraint.fn_name.eql(idents.rem_by),
         .desugared_unaryop => constraint.fn_name.eql(idents.negate),
         .from_numeral,
+        .from_quote,
         .method_call,
         .where_clause,
         => false,
@@ -4746,7 +4764,7 @@ pub const CheckedPatternBinder = struct {
 };
 
 /// Public `CheckedStringLiteralId` declaration.
-pub const CheckedStringLiteralId = enum(u32) { _ };
+pub const CheckedStringLiteralId = checked_ids.CheckedStringLiteralId;
 
 /// Public `CheckedRecordExprField` declaration.
 pub const CheckedRecordExprField = struct {
@@ -4873,7 +4891,12 @@ pub const CheckedPatternData = union(enum) {
     },
     frac_f32_literal: f32,
     frac_f64_literal: f64,
-    str_literal: CheckedStringLiteralId,
+    str_literal: struct {
+        literal: CheckedStringLiteralId,
+        /// Synthesized `.str_from_quote` checked expression for matching this
+        /// literal against a non-builtin string type; null on the Str fast path.
+        conversion: ?CheckedExprId = null,
+    },
     underscore,
     runtime_error,
 };
@@ -4911,6 +4934,13 @@ pub const CheckedExprData = union(enum) {
         type_name: canonical.TypeNameId,
     },
     typed_num_from_numeral: ?StaticDispatchPlanId,
+    /// A string literal whose target is a non-builtin nominal type, converted
+    /// through the type's `from_quote` method. `literal` holds the complete
+    /// post-escape UTF-8 bytes.
+    str_from_quote: struct {
+        plan: ?StaticDispatchPlanId,
+        literal: CheckedStringLiteralId,
+    },
     str_segment: CheckedStringLiteralId,
     str: []const CheckedExprId,
     bytes_literal: CheckedStringLiteralId,
@@ -5352,7 +5382,18 @@ const CheckedSourceNodes = struct {
             },
             .e_dispatch_call => |call| {
                 try self.markExpr(call.receiver, work);
-                try self.markExprSpan(module, call.args, work);
+                if (module.moduleEnvConst().isStrInterpolationCall(expr_idx)) {
+                    // A Str-typed interpolation publishes as a plain segment
+                    // list; the synthetic iterator chain stays out of the
+                    // artifact, so only the pair payloads are reachable.
+                    var pairs = module.moduleEnvConst().interpolationPairs(expr_idx);
+                    while (pairs.next()) |pair| {
+                        try self.markExpr(pair.interpolation, work);
+                        try self.markExpr(pair.segment, work);
+                    }
+                } else {
+                    try self.markExprSpan(module, call.args, work);
+                }
             },
             .e_structural_eq => |eq| {
                 try self.markExpr(eq.lhs, work);
@@ -5902,6 +5943,36 @@ pub const CheckedBodyStore = struct {
         }
     }
 
+    pub fn attachQuotePlans(
+        self: *CheckedBodyStore,
+        plans: *const static_dispatch.StaticDispatchPlanTable,
+    ) void {
+        var iter = plans.quote_by_node.iterator();
+        while (iter.next()) |entry| {
+            const raw_node = @intFromEnum(entry.key_ptr.*);
+            const checked_expr = self.source_node_map.exprAtRawNode(raw_node) orelse
+                self.numeralConversionExprAtRawNode(raw_node) orelse
+                {
+                    checkedArtifactInvariant(
+                        "from_quote plan {d} points at source node {d} with no checked expression",
+                        .{ @intFromEnum(entry.value_ptr.*), raw_node },
+                    );
+                };
+            const data = &self.exprs[@intFromEnum(checked_expr)].data;
+            switch (data.*) {
+                .str_from_quote => |quote| data.* = .{ .str_from_quote = .{
+                    .plan = entry.value_ptr.*,
+                    .literal = quote.literal,
+                } },
+                .str, .str_segment => {},
+                else => checkedArtifactInvariant(
+                    "from_quote plan {d} points at non-string checked expression {d}",
+                    .{ @intFromEnum(entry.value_ptr.*), @intFromEnum(checked_expr) },
+                ),
+            }
+        }
+    }
+
     pub fn attachResolvedValueRefs(
         self: *CheckedBodyStore,
         refs: *const ResolvedValueRefTable,
@@ -6159,6 +6230,7 @@ fn checkedExprDataDiverges(
         .typed_int,
         .typed_frac,
         .typed_num_from_numeral,
+        .str_from_quote,
         .str_segment,
         .bytes_literal,
         .lookup_local,
@@ -6401,6 +6473,14 @@ const CheckedStringLiteralBuilder = struct {
         return id;
     }
 
+    fn internBytes(self: *CheckedStringLiteralBuilder, bytes: []const u8) Allocator.Error!CheckedStringLiteralId {
+        const id: CheckedStringLiteralId = @enumFromInt(@as(u32, @intCast(self.strings.items.len)));
+        const owned = try self.allocator.dupe(u8, bytes);
+        errdefer self.allocator.free(owned);
+        try self.strings.append(self.allocator, owned);
+        return id;
+    }
+
     fn toOwnedSlice(self: *CheckedStringLiteralBuilder) Allocator.Error![]const []const u8 {
         return try self.strings.toOwnedSlice(self.allocator);
     }
@@ -6442,7 +6522,7 @@ const CheckedBodyPayloadCopier = struct {
             .e_typed_frac => |typed| try self.copyTypedFracLiteral(expr_idx, typed.value, typed.type_name),
             .e_typed_num_from_numeral => try self.copyTypedNumFromNumeralLiteral(expr_idx),
             .e_str_segment => |str| .{ .str_segment = try self.string_builder.intern(str.literal) },
-            .e_str => |str| .{ .str = try self.copyExprSpan(str.span) },
+            .e_str => |str| try self.copyStrExpr(expr_idx, str.span),
             .e_bytes_literal => |bytes| .{ .bytes_literal = try self.string_builder.intern(bytes.literal) },
             .e_lookup_local => |lookup| .{ .lookup_local = .{
                 .pattern = self.checkedPattern(lookup.pattern_idx),
@@ -6520,7 +6600,12 @@ const CheckedBodyPayloadCopier = struct {
                 "ordinary method call reached artifact publication after checking; expected explicit static-dispatch plan",
                 .{},
             ),
-            .e_dispatch_call => .{ .dispatch_call = null },
+            .e_dispatch_call => blk: {
+                if (self.module.moduleEnvConst().isStrInterpolationCall(expr_idx)) {
+                    break :blk .{ .str = try self.copyStrInterpolationSegments(expr_idx) };
+                }
+                break :blk .{ .dispatch_call = null };
+            },
             .e_structural_eq => |eq| .{ .structural_eq = .{
                 .lhs = self.checkedExpr(eq.lhs),
                 .rhs = self.checkedExpr(eq.rhs),
@@ -6569,6 +6654,93 @@ const CheckedBodyPayloadCopier = struct {
                 .args = try self.copyExprSpan(run.args),
             } },
         };
+    }
+
+    /// Publish a Str-typed interpolation dispatch call as its ordered
+    /// segment list: the receiver literal, then each interpolation and the
+    /// literal segment that follows it. Lowering turns this into direct
+    /// string concatenation, so the synthetic iterator chain never reaches
+    /// code generation.
+    fn copyStrInterpolationSegments(self: *@This(), expr_idx: CIR.Expr.Idx) Allocator.Error![]const CheckedExprId {
+        const env = self.module.moduleEnvConst();
+        var segments = std.ArrayList(CheckedExprId).empty;
+        errdefer segments.deinit(self.allocator);
+
+        const call = switch (self.module.expr(expr_idx).data) {
+            .e_dispatch_call => |call| call,
+            else => checkedArtifactInvariant("interpolation segment publication reached a non-dispatch expression", .{}),
+        };
+        try segments.append(self.allocator, self.checkedExpr(call.receiver));
+        var pairs = env.interpolationPairs(expr_idx);
+        while (pairs.next()) |pair| {
+            try segments.append(self.allocator, self.checkedExpr(pair.interpolation));
+            try segments.append(self.allocator, self.checkedExpr(pair.segment));
+        }
+        return try segments.toOwnedSlice(self.allocator);
+    }
+
+    fn copyStrExpr(self: *@This(), expr_idx: CIR.Expr.Idx, span: CIR.Expr.Span) Allocator.Error!CheckedExprData {
+        // A literal whose checked type is a non-builtin nominal converts through
+        // from_quote; checking recorded a dispatch plan for it.
+        if (self.module.moduleEnvConst().quoteDispatchPlanForNode(ModuleEnv.nodeIdxFrom(expr_idx)) != null and
+            self.checkedBuiltinForExpr(expr_idx) == null)
+        {
+            return .{ .str_from_quote = .{
+                .plan = null,
+                .literal = try self.internQuoteBytes(span),
+            } };
+        }
+        return .{ .str = try self.copyExprSpan(span) };
+    }
+
+    /// Intern the complete post-escape bytes of a literal-only string,
+    /// concatenating its segments.
+    fn internQuoteBytes(self: *@This(), span: CIR.Expr.Span) Allocator.Error!CheckedStringLiteralId {
+        const segments = self.module.sliceExpr(span);
+        if (segments.len == 1) {
+            switch (self.module.expr(segments[0]).data) {
+                .e_str_segment => |seg| return try self.string_builder.intern(seg.literal),
+                else => {},
+            }
+        }
+        var bytes = std.ArrayList(u8).empty;
+        defer bytes.deinit(self.allocator);
+        for (segments) |seg_idx| {
+            switch (self.module.expr(seg_idx).data) {
+                .e_str_segment => |seg| try bytes.appendSlice(self.allocator, self.module.getString(seg.literal)),
+                else => checkedArtifactInvariant("from_quote literal contained an interpolation segment", .{}),
+            }
+        }
+        return try self.string_builder.internBytes(bytes.items);
+    }
+
+    /// Synthesize the `.str_from_quote` checked expression a string literal
+    /// pattern converts through when its type is a non-builtin string type,
+    /// registered in the conversion table the same way numeral patterns are.
+    fn quoteConversionExprForPattern(
+        self: *@This(),
+        pattern_idx: CIR.Pattern.Idx,
+        literal: StringLiteral.Idx,
+    ) Allocator.Error!?CheckedExprId {
+        const node = ModuleEnv.nodeIdxFrom(pattern_idx);
+        if (self.module.moduleEnvConst().quoteDispatchPlanForNode(node) == null) return null;
+        const checked_ty = self.checkedPatternTypeRoot(pattern_idx);
+        if (checkedBuiltinForLiteralTarget(self.checked_types.store.view(), checked_ty) != null) return null;
+        const id: CheckedExprId = @enumFromInt(try checkedSourceNodeIdFromLen(self.exprs.items.len));
+        try self.exprs.append(self.allocator, .{
+            .id = id,
+            .ty = checked_ty,
+            .source_region = self.module.regionAt(node),
+            .data = .{ .str_from_quote = .{
+                .plan = null,
+                .literal = try self.string_builder.intern(literal),
+            } },
+        });
+        try self.numeral_conversion_exprs.append(self.allocator, .{
+            .raw_node = @intFromEnum(node),
+            .expr = id,
+        });
+        return id;
     }
 
     fn copyNumFromNumeralLiteral(
@@ -6814,7 +6986,10 @@ const CheckedBodyPayloadCopier = struct {
             } },
             .frac_f32_literal => |frac| .{ .frac_f32_literal = frac.value },
             .frac_f64_literal => |frac| .{ .frac_f64_literal = frac.value },
-            .str_literal => |str| .{ .str_literal = try self.string_builder.intern(str.literal) },
+            .str_literal => |str| .{ .str_literal = .{
+                .literal = try self.string_builder.intern(str.literal),
+                .conversion = try self.quoteConversionExprForPattern(pattern_idx, str.literal),
+            } },
             .underscore => .underscore,
             .runtime_error => .runtime_error,
         };
@@ -7363,6 +7538,7 @@ fn checkedBuiltinForLiteralTarget(view: CheckedTypeStoreView, root: CheckedTypeI
 fn checkedBuiltinForDefaultedNumericVariable(variable: CheckedTypeVariable) ?CheckedBuiltinNominal {
     return switch (variable.numeric_default_phase orelse return null) {
         .mono_specialization => .dec,
+        .mono_specialization_str => .str,
         .checking_finalized => checkedArtifactInvariant("checking-finalized numeric variable reached checked literal publication", .{}),
     };
 }
@@ -7503,6 +7679,7 @@ fn deinitCheckedExprData(allocator: Allocator, data: *CheckedExprData) void {
         .typed_int,
         .typed_frac,
         .typed_num_from_numeral,
+        .str_from_quote,
         .str_segment,
         .bytes_literal,
         .lookup_local,
@@ -8873,6 +9050,11 @@ const CheckedTemplateRefCollector = struct {
                 try self.dispatch_refs.append(self.allocator, id);
                 try self.collectStaticDispatchPlanArgs(id);
             },
+            .str_from_quote => |quote| {
+                const id = quote.plan orelse checkedArtifactInvariant("checked from_quote expression reached template closure collection without a dispatch plan", .{});
+                try self.dispatch_refs.append(self.allocator, id);
+                try self.collectStaticDispatchPlanArgs(id);
+            },
             .str,
             .list,
             .tuple,
@@ -8981,7 +9163,7 @@ const CheckedTemplateRefCollector = struct {
         const plan = self.static_dispatch_plans.plans[raw];
         for (plan.args) |arg| switch (arg) {
             .checked_expr => |expr| try self.collectExpr(expr),
-            .generated_numeral => {},
+            .generated_numeral, .generated_quote => {},
         };
     }
 
@@ -9375,7 +9557,7 @@ pub const CheckedProcedureTemplateTable = struct {
                 .nested_proc_sites = .{},
                 .target = switch (root.kind) {
                     .expect => .entry,
-                    .constant, .callable_binding, .numeral_conversion => .comptime_only,
+                    .constant, .callable_binding, .numeral_conversion, .quote_conversion => .comptime_only,
                 },
             });
         }
@@ -9582,6 +9764,7 @@ const NestedProcSiteBuilder = struct {
             .num_from_numeral,
             .typed_num_from_numeral,
             => |plan_id| try self.scanStaticDispatchPlanArgs(plan_id orelse checkedArtifactInvariant("checked from_numeral expression reached nested procedure site collection without a dispatch plan", .{}), owner),
+            .str_from_quote => |quote| try self.scanStaticDispatchPlanArgs(quote.plan orelse checkedArtifactInvariant("checked from_quote expression reached nested procedure site collection without a dispatch plan", .{}), owner),
             .structural_eq => |eq| {
                 try self.scanExpr(eq.lhs, owner, false);
                 try self.scanExpr(eq.rhs, owner, false);
@@ -9637,7 +9820,7 @@ const NestedProcSiteBuilder = struct {
         const plan = self.static_dispatch_plans.plans[raw];
         for (plan.args) |arg| switch (arg) {
             .checked_expr => |expr| try self.scanExpr(expr, owner, false),
-            .generated_numeral => {},
+            .generated_numeral, .generated_quote => {},
         };
     }
 
@@ -12581,6 +12764,10 @@ pub const CompileTimeRootKind = enum {
     /// `Try` result; finalization unwraps `Ok` into the stored constant and
     /// reports `Err(InvalidNumeral(..))` as a checking problem.
     numeral_conversion,
+    /// A `from_quote` conversion of a string literal whose target is a
+    /// non-builtin nominal type; works exactly like `numeral_conversion` with
+    /// `Err(BadQuotedBytes(..))` reported as the checking problem.
+    quote_conversion,
 };
 
 /// Public `CompileTimeRootPayload` declaration.
@@ -12675,6 +12862,31 @@ pub const CompileTimeRootTable = struct {
             });
         }
 
+        for (module_env.quote_dispatch_plans.items.items) |quote_plan| {
+            const expr_idx: CIR.Expr.Idx = @enumFromInt(quote_plan.node_idx);
+            const checked_expr = checked_bodies.exprIdForSource(expr_idx) orelse
+                checked_bodies.numeralConversionExprAtRawNode(quote_plan.node_idx) orelse
+                continue;
+            switch (checked_bodies.exprs[@intFromEnum(checked_expr)].data) {
+                .str_from_quote => {},
+                else => continue,
+            }
+            const fn_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(quote_plan.fn_var));
+            const try_ty = switch (checked_types.store.payloads.items[@intFromEnum(fn_ty)]) {
+                .function => |function| function.ret,
+                else => checkedArtifactInvariant("from_quote dispatch plan type was not a function", .{}),
+            };
+            try appendCompileTimeRoot(&roots, allocator, .{
+                .module_idx = module.moduleIndex(),
+                .kind = .quote_conversion,
+                .source = .{ .expr = expr_idx },
+                .pattern = null,
+                .expr = checked_expr,
+                .checked_type = try_ty,
+                .payload = .pending,
+            });
+        }
+
         return .{ .roots = try roots.toOwnedSlice(allocator) };
     }
 
@@ -12692,9 +12904,14 @@ pub const CompileTimeRootTable = struct {
         return null;
     }
 
+    /// Look up the literal-conversion (from_numeral or from_quote) root whose
+    /// body is the given checked expression.
     pub fn lookupNumeralRootByExpr(self: *const CompileTimeRootTable, expr: CheckedExprId) ?CompileTimeRoot {
         for (self.roots) |entry| {
-            if (entry.kind == .numeral_conversion and entry.expr == expr) return entry;
+            switch (entry.kind) {
+                .numeral_conversion, .quote_conversion => if (entry.expr == expr) return entry,
+                else => {},
+            }
         }
         return null;
     }
@@ -12764,7 +12981,7 @@ fn verifyCompileTimeRootPayloadMatchesKind(kind: CompileTimeRootKind, payload: C
             .expect => true,
             else => false,
         },
-        .numeral_conversion => switch (payload) {
+        .numeral_conversion, .quote_conversion => switch (payload) {
             .const_node => true,
             else => false,
         },
@@ -15404,7 +15621,7 @@ pub const CheckedModuleArtifact = struct {
             std.debug.assert(@intFromEnum(root.expr) < self.checked_bodies.exprs.len);
             if (root.pattern) |pattern| std.debug.assert(@intFromEnum(pattern) < self.checked_bodies.patterns.len);
             switch (root.kind) {
-                .constant, .callable_binding, .numeral_conversion => switch (root.payload) {
+                .constant, .callable_binding, .numeral_conversion, .quote_conversion => switch (root.payload) {
                     .pending => {},
                     else => verifyCompileTimeRootPayloadMatchesKind(root.kind, root.payload),
                 },
@@ -17289,6 +17506,7 @@ pub fn publishFromTypedModule(
     errdefer static_dispatch_plans.deinit(allocator);
     checked_bodies.attachStaticDispatchPlans(&static_dispatch_plans);
     checked_bodies.attachNumeralPlans(&static_dispatch_plans);
+    checked_bodies.attachQuotePlans(&static_dispatch_plans);
     checked_bodies.attachIteratorForPlans(&static_dispatch_plans);
 
     var hosted_procs = try HostedProcTable.fromModule(allocator, module, global_value_defs, &canonical_names, &checked_procedure_templates);

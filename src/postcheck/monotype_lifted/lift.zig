@@ -51,6 +51,14 @@ pub fn run(
     owned.string_literals = .empty;
     var runtime_schema_requests = owned.runtime_schema_requests;
     owned.runtime_schema_requests = .empty;
+    var source_files = owned.source_files;
+    owned.source_files = .empty;
+    var expr_locs = owned.expr_locs;
+    owned.expr_locs = .empty;
+    var stmt_locs = owned.stmt_locs;
+    owned.stmt_locs = .empty;
+    var local_names = owned.local_names;
+    owned.local_names = .empty;
 
     var program = Ast.Program.init(
         allocator,
@@ -69,6 +77,10 @@ pub fn run(
         branches,
         if_branches,
         string_literals,
+        source_files,
+        expr_locs,
+        stmt_locs,
+        local_names,
         owned.next_symbol,
     );
     name_store = undefined;
@@ -86,6 +98,10 @@ pub fn run(
     branches = undefined;
     if_branches = undefined;
     string_literals = undefined;
+    source_files = undefined;
+    expr_locs = undefined;
+    stmt_locs = undefined;
+    local_names = undefined;
     program.runtime_schema_requests = runtime_schema_requests;
     runtime_schema_requests = undefined;
     errdefer program.deinit();

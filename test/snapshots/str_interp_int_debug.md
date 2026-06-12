@@ -31,13 +31,31 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-string
-	(e-literal (string "zero: "))
-	(e-call (constraint-fn-var 59)
-		(e-lookup-external
-			(builtin))
-		(e-num (value "0")))
-	(e-literal (string "")))
+(e-block
+	(s-let
+		(p-assign (ident "#interp_0"))
+		(e-call (constraint-fn-var 66)
+			(e-lookup-external
+				(builtin))
+			(e-num (value "0"))))
+	(e-dispatch-call (method "from_interpolation") (constraint-fn-var 262)
+		(receiver
+			(e-string
+				(e-literal (string "zero: "))))
+		(args
+			(e-dispatch-call (method "prepended") (constraint-fn-var 220)
+				(receiver
+					(e-dispatch-call (method "iter") (constraint-fn-var 156)
+						(receiver
+							(e-empty_list))
+						(args)))
+				(args
+					(e-tuple
+						(elems
+							(e-lookup-local
+								(p-assign (ident "#interp_0")))
+							(e-string
+								(e-literal (string ""))))))))))
 ~~~
 # TYPES
 ~~~clojure

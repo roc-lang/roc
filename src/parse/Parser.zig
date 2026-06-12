@@ -3833,7 +3833,19 @@ fn runExprStatementKernel(
                 }
                 self.advance();
                 const parts = try self.store.exprSpanFrom(expr_string_state.scratch_top);
-                const expr = try self.store.addExpr(.{ .string = .{
+                const expr = if (self.peek() == .NoSpaceDotUpperIdent) blk: {
+                    const type_token = self.pos;
+                    self.advance();
+                    const type_ident = self.tok_buf.resolveIdentifier(type_token) orelse {
+                        break :blk try self.pushMalformed(AST.Expr.Idx, .expr_unexpected_token, type_token);
+                    };
+                    break :blk try self.store.addExpr(.{ .typed_string = .{
+                        .token = expr_string_state.start,
+                        .type_ident = type_ident,
+                        .parts = parts,
+                        .region = .{ .start = expr_string_state.start, .end = self.pos },
+                    } });
+                } else try self.store.addExpr(.{ .string = .{
                     .token = expr_string_state.start,
                     .parts = parts,
                     .region = .{ .start = expr_string_state.start, .end = self.pos },
@@ -3891,7 +3903,19 @@ fn runExprStatementKernel(
                     continue :expr_kernel .suffix;
                 }
                 const parts = try self.store.exprSpanFrom(expr_string_state.scratch_top);
-                const expr = try self.store.addExpr(.{ .multiline_string = .{
+                const expr = if (self.peek() == .DotUpperIdent or self.peek() == .NoSpaceDotUpperIdent) blk: {
+                    const type_token = self.pos;
+                    self.advance();
+                    const type_ident = self.tok_buf.resolveIdentifier(type_token) orelse {
+                        break :blk try self.pushMalformed(AST.Expr.Idx, .expr_unexpected_token, type_token);
+                    };
+                    break :blk try self.store.addExpr(.{ .typed_multiline_string = .{
+                        .token = expr_string_state.start,
+                        .type_ident = type_ident,
+                        .parts = parts,
+                        .region = .{ .start = expr_string_state.start, .end = self.pos },
+                    } });
+                } else try self.store.addExpr(.{ .multiline_string = .{
                     .token = expr_string_state.start,
                     .parts = parts,
                     .region = .{ .start = expr_string_state.start, .end = self.pos },

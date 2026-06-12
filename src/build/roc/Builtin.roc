@@ -333,6 +333,31 @@ Builtin :: [].{
 		## ```
 		from_utf8 : List(U8) -> Try(Str, [BadUtf8({ problem : Str.Utf8Problem, index : U64 }), ..])
 
+		## Converts the UTF-8 bytes of a string literal to a [Str].
+		##
+		## The compiler calls this when a string literal's type is [Str], passing
+		## the literal's bytes after escape processing. It can also be called
+		## directly, in which case invalid UTF-8 returns `Err`.
+		## ```roc
+		## expect Str.from_quote([82, 111, 99]) == Ok("Roc")
+		## expect Str.from_quote([255]).is_err()
+		## ```
+		from_quote : List(U8) -> Try(Str, [BadQuotedBytes(Str)])
+		from_quote = |bytes| match Str.from_utf8(bytes) {
+			Ok(str) => Ok(str)
+			Err(_) => Err(BadQuotedBytes("the bytes were not valid UTF-8"))
+		}
+
+		## Assembles an interpolated string literal.
+		##
+		## The compiler calls this when a string literal contains interpolations:
+		## the first argument is the literal segment before the first
+		## interpolation, and the iterator yields each interpolated value paired
+		## with the literal segment that follows it.
+		from_interpolation : Str, Iter((Str, Str)) -> Str
+		from_interpolation = |first, rest|
+			rest.fold(first, |acc, (interpolated, segment)| acc.concat(interpolated).concat(segment))
+
 		## Split a string around a separator.
 		##
 		## Passing `""` for the separator is not useful;
@@ -406,6 +431,24 @@ Builtin :: [].{
 
 		iter : Iter(item) -> Iter(item)
 		iter = |self| self
+
+		## Returns an iterator that yields the given item first, followed by
+		## everything the given iterator yields.
+		##
+		## The compiler uses this to assemble the iterator it passes to a type's
+		## `from_interpolation` method when an interpolated string literal
+		## targets that type.
+		## ```roc
+		## expect Iter.fold([2, 3].iter().prepended(1), [], |acc, item| acc.append(item)) == [1, 2, 3]
+		## ```
+		prepended : Iter(item), item -> Iter(item)
+		prepended = |rest, item| {
+			len_if_known: match rest.len_if_known {
+				Known(n) => Known(n + 1)
+				Unknown => Unknown
+			},
+			step: || One({ item, rest }),
+		}
 
 		next : Iter(item) -> [One({ item : item, rest : Iter(item) }), Skip({ rest : Iter(item) }), Done]
 		next = |iterator| (iterator.step)()
@@ -1437,40 +1480,6 @@ Builtin :: [].{
 			len = List.len(list)
 			take_len = if (len <= n) 0 else len - n
 			List.sublist(list, { start: 0, len: take_len })
-		}
-
-		## Join a list of items into a single item, inserting the given separator between
-		## each pair. Works for any type that implements a `join_with` method, such as [Str].
-		## ```roc
-		## expect ["a", "b", "c"].join_with(", ") == "a, b, c"
-		##
-		## expect [].join_with(", ") == ""
-		## ```
-		join_with : List(item), item -> item
-			where [item.join_with : List(item), item -> item]
-		join_with = |list, joiner| {
-			Item : item
-			Item.join_with(list, joiner)
-		}
-
-		join_list_with : List(List(item)), List(item) -> List(item)
-		join_list_with = |list, joiner| {
-			len = List.len(list)
-
-			if len == 0 {
-				[]
-			} else {
-				var $index = 1
-				var $result = list_get_unsafe(list, 0)
-
-				while $index < len {
-					$result = List.concat($result, joiner)
-					$result = List.concat($result, list_get_unsafe(list, $index))
-					$index = $index + 1
-				}
-
-				$result
-			}
 		}
 
 		## Find the first element in a list that satisfies a given predicate, returning it wrapped in `Ok` if found, or `Err(NotFound)` if no such element exists.

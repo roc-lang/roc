@@ -65,8 +65,8 @@ test "issue 9614: default app list fold_until result tag narrowing lowers to LIR
         \\    requires {} { main! : List(Str) => Try({}, [Exit(I8), ..]) }
         \\    exposes [Echo]
         \\    packages {}
-        \\    provides { "main": main_for_host! }
-        \\    hosted { "echo_line": Echo.line! }
+        \\    provides { "roc_main": main_for_host! }
+        \\    hosted { "roc_echo_line": Echo.line! }
         \\
         \\import Echo
         \\
