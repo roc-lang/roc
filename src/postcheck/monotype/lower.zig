@@ -4391,10 +4391,31 @@ const BodyContext = struct {
         switch (operand) {
             .checked_expr => |checked_arg| {
                 const arg_ty = caller.view.bodies.exprs[@intFromEnum(checked_arg)].ty;
-                try self.graph.unify(try self.instNode(formal_ty), try caller.instNode(arg_ty));
+                const formal_node = try self.instNode(formal_ty);
+                try self.graph.unify(formal_node, try caller.instNode(arg_ty));
+                if (try caller.callArgumentMonoType(checked_arg, null)) |evidence_ty| {
+                    try self.graph.unify(formal_node, try self.graph.importMono(evidence_ty));
+                }
             },
             .generated_numeral => {},
         }
+    }
+
+    /// An operand expression that reads a bound local carries that local's
+    /// Monotype: the local id identifies the binder's node in the context that
+    /// bound it, so importing it unifies this use with the binding.
+    fn relateExprToBoundLocal(self: *BodyContext, checked_expr: checked.CheckedExprId) Allocator.Error!void {
+        const expr = self.view.bodies.exprs[@intFromEnum(checked_expr)];
+        const maybe_ref = switch (expr.data) {
+            .lookup_local => |lookup| lookup.resolved,
+            .lookup_external => |resolved| resolved,
+            .lookup_required => |resolved| resolved,
+            else => return,
+        };
+        const ref_id = maybe_ref orelse return;
+        const local_id = self.currentLocalForResolvedValue(ref_id) orelse return;
+        const local_ty = self.builder.program.locals.items[@intFromEnum(local_id)].ty;
+        try self.graph.unify(try self.instNode(expr.ty), try self.graph.importMono(local_ty));
     }
 
     fn instantiateNumeralPlanCallType(
@@ -4410,9 +4431,10 @@ const BodyContext = struct {
             Common.invariant("checked from_numeral plan arity differs from its function type");
         }
         const fn_node = try self.instNode(source_fn_ty);
-        const target_node = try self.graph.importMono(target_ty);
-        try self.graph.unify(try caller.instNode(checked_ret_ty), target_node);
-        try self.graph.unify(try self.instNode(function.ret), target_node);
+        // The numeral expression's checked type is the converted value type;
+        // the plan's checked structure relates it to the Try-shaped return.
+        try self.graph.unify(try caller.instNode(checked_ret_ty), try self.graph.importMono(target_ty));
+        try self.graph.unify(try self.instNode(checked_ret_ty), try self.graph.importMono(target_ty));
         for (function.args, operands) |formal_ty, operand| {
             try self.relateFormalToOperand(formal_ty, caller, operand);
         }
@@ -4466,6 +4488,17 @@ const BodyContext = struct {
         expected_ty: ?Type.TypeId,
     ) Allocator.Error!?Type.TypeId {
         const expr = self.view.bodies.exprs[@intFromEnum(checked_arg)];
+        switch (expr.data) {
+            .call => |call| return try self.callResultMonoType(expr.ty, call, expected_ty),
+            .dispatch_call => |plan| return try self.dispatchResultMonoType(expr.ty, plan, expected_ty),
+            .type_dispatch_call => |plan| return try self.dispatchResultMonoType(expr.ty, plan, expected_ty),
+            .method_eq => |plan| return try self.dispatchResultMonoType(expr.ty, plan, expected_ty),
+            .field_access => |field| return try self.fieldAccessMonoType(field.receiver, field.field_name),
+            .lookup_local => |lookup| return try self.lookupExprMonoType(expr.ty, lookup.resolved),
+            .lookup_external => |resolved| return try self.lookupExprMonoType(expr.ty, resolved),
+            .lookup_required => |resolved| return try self.lookupExprMonoType(expr.ty, resolved),
+            else => {},
+        }
         if (expected_ty) |ty| {
             try self.constrainTypeToMono(expr.ty, ty);
             return ty;
@@ -7930,6 +7963,9 @@ const BodyContext = struct {
                 .checked_expr => |checked_arg| {
                     const arg_ty = caller.view.bodies.exprs[@intFromEnum(checked_arg)].ty;
                     try self.graph.unify(formal_node, try caller.instNode(arg_ty));
+                    if (try caller.callArgumentMonoType(checked_arg, null)) |evidence_ty| {
+                        try self.graph.unify(formal_node, try self.graph.importMono(evidence_ty));
+                    }
                 },
                 .loop_iterator_state => {
                     const iterator = loop_iterator orelse Common.invariant("iterator .next dispatch reached Monotype without a loop iterator local");
