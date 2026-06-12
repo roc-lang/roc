@@ -439,3 +439,67 @@ test "monotype empty spans use shared empty descriptor" {
     try std.testing.expectEqual(Span.empty(), try store.addFields(&.{}));
     try std.testing.expectEqual(Span.empty(), try store.addTags(&.{}));
 }
+
+test "monotype digest terminates on recursive structural types" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const field_name = try name_store.internRecordFieldLabel("step");
+
+    // A record whose field is a function returning the record itself.
+    const rec_a = try store.add(.zst);
+    const fn_a = try store.add(.{ .func = .{ .args = Span.empty(), .ret = rec_a } });
+    const fields_a = try store.addFields(&.{.{ .name = field_name, .ty = fn_a }});
+    store.types.items[@intFromEnum(rec_a)] = .{ .record = fields_a };
+
+    const first = store.typeDigest(&name_store, rec_a);
+    const again = store.typeDigest(&name_store, rec_a);
+    try std.testing.expect(std.mem.eql(u8, first.bytes[0..], again.bytes[0..]));
+
+    // An isomorphic cycle at different ids digests identically: cycles are
+    // encoded as back references by position, not by id.
+    const rec_b = try store.add(.zst);
+    const fn_b = try store.add(.{ .func = .{ .args = Span.empty(), .ret = rec_b } });
+    const fields_b = try store.addFields(&.{.{ .name = field_name, .ty = fn_b }});
+    store.types.items[@intFromEnum(rec_b)] = .{ .record = fields_b };
+
+    const other = store.typeDigest(&name_store, rec_b);
+    try std.testing.expect(std.mem.eql(u8, first.bytes[0..], other.bytes[0..]));
+}
+
+test "monotype digest treats aliases as their backing" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const module_name = try name_store.internModuleName("Test");
+    const type_name = try name_store.internTypeName("Pretty");
+    const checked_ty: checked.CheckedTypeId = @enumFromInt(1);
+
+    const str = try store.add(.{ .primitive = .str });
+    const aliased = try store.add(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = checked_ty },
+        .def = .{ .module_name = module_name, .type_name = type_name },
+        .kind = .alias,
+        .args = Span.empty(),
+        .backing = .{ .ty = str, .use = .inspectable },
+    } });
+    const nominal = try store.add(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = checked_ty },
+        .def = .{ .module_name = module_name, .type_name = type_name },
+        .kind = .nominal,
+        .args = Span.empty(),
+        .backing = .{ .ty = str, .use = .inspectable },
+    } });
+
+    const str_digest = store.typeDigest(&name_store, str);
+    const alias_digest = store.typeDigest(&name_store, aliased);
+    const nominal_digest = store.typeDigest(&name_store, nominal);
+    try std.testing.expect(std.mem.eql(u8, str_digest.bytes[0..], alias_digest.bytes[0..]));
+    try std.testing.expect(!std.mem.eql(u8, str_digest.bytes[0..], nominal_digest.bytes[0..]));
+}
