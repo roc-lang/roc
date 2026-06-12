@@ -1747,6 +1747,9 @@ fn buildAndCopyWasmHostObject(
     configureBackend(obj, target);
     obj.root_module.addImport("builtins", roc_modules.builtins);
     obj.root_module.addImport("build_options", roc_modules.build_options);
+    // Per-function/data sections so wasm final-link DCE can strip unused host code.
+    obj.link_function_sections = true;
+    obj.link_data_sections = true;
 
     const dest_path = "test/wasm/platform/targets/wasm32/host.wasm";
     const copy_step = b.addUpdateSourceFiles();
@@ -3313,6 +3316,31 @@ pub fn build(b: *std.Build) void {
         const install = b.addInstallArtifact(wasm_test_exe, .{});
         build_test_wasm_static_lib_runner_step.dependOn(&install.step);
 
+        const wasm_dce_check_exe = b.addExecutable(.{
+            .name = "wasm_dce_check",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("test/archive/archive_check.zig"),
+                .target = target,
+                .optimize = optimize,
+            }),
+        });
+        configureBackend(wasm_dce_check_exe, target);
+        const run_wasm_dce_check = b.addRunArtifact(wasm_dce_check_exe);
+        run_wasm_dce_check.addArgs(&.{
+            "test/wasm/app.wasm",
+            "--absent",
+            "roc_unused_host_canary_7f3a9c",
+            "--absent",
+            "roc_dead_private_helper_canary_41d2cb",
+            "--absent",
+            "ROC_DCE_WASM_DEAD_HOSTED_BLOB_0ac91d",
+            "--absent",
+            "ROC_DCE_WASM_DEAD_HELPER_BLOB_f25a77",
+            "ROC_DCE_WASM_SHARED_BLOB_31e82f",
+        });
+        run_wasm_dce_check.step.dependOn(&build_wasm_app.step);
+        run_test_wasm_static_lib_step.dependOn(&run_wasm_dce_check.step);
+
         const run_wasm_test = b.addRunArtifact(wasm_test_exe);
         if (run_args.len != 0) {
             run_wasm_test.addArgs(run_args);
@@ -3384,12 +3412,13 @@ pub fn build(b: *std.Build) void {
         run_dylib_test.step.dependOn(&build_dylib_app.step);
         run_test_dylib_step.dependOn(&run_dylib_test.step);
 
-        // Unused host code (the canary function and its constant) must be
-        // dead-code-eliminated from the linked library. This is a byte-scan for
-        // the canary's data blob. (That the *used* hosted function survives is
-        // proven functionally by the loader's roc_run_app(20)==121, and that it
-        // is not over-exported is checked by the loader's negative lookup —
-        // neither can be a byte-scan, since PE retains no internal symbol names.)
+        // Dead host code must be dead-code-eliminated while live host code
+        // survives, checked by byte-scanning for marker data blobs (data works
+        // on every object format, unlike symbol names — PE retains no internal
+        // symbol names): the dead-hosted and dead-only-helper blobs must be
+        // absent, and the blob shared with the live Host.double! path must be
+        // present. (That roc_run_app/roc_main are exported and the hidden
+        // roc_host_double is not is checked separately by the loader.)
         const dylib_dce_check_exe = b.addExecutable(.{
             .name = "dylib_dce_check",
             .root_module = b.createModule(.{
@@ -3400,7 +3429,14 @@ pub fn build(b: *std.Build) void {
         });
         configureBackend(dylib_dce_check_exe, target);
         const run_dylib_dce_check = b.addRunArtifact(dylib_dce_check_exe);
-        run_dylib_dce_check.addArgs(&.{ dylib_output, "--absent", "ROC_DCE_CANARY_BLOB_7f3a9c" });
+        run_dylib_dce_check.addArgs(&.{
+            dylib_output,
+            "--absent",
+            "ROC_DCE_CANARY_BLOB_7f3a9c",
+            "--absent",
+            "ROC_DCE_DEAD_HELPER_BLOB_28d0aa",
+            "ROC_DCE_SHARED_BLOB_93e2c1",
+        });
         run_dylib_dce_check.step.dependOn(&build_dylib_app.step);
         run_test_dylib_step.dependOn(&run_dylib_dce_check.step);
     }
@@ -3457,6 +3493,18 @@ pub fn build(b: *std.Build) void {
             }),
         });
         configureBackend(archive_check_exe, target);
+
+        const run_native_archive_dce_check = b.addRunArtifact(archive_check_exe);
+        run_native_archive_dce_check.addFileArg(archive_consumer_exe.getEmittedBin());
+        run_native_archive_dce_check.addArgs(&.{
+            "--absent",
+            "ROC_DCE_CANARY_BLOB_7f3a9c",
+            "--absent",
+            "ROC_DCE_DEAD_HELPER_BLOB_28d0aa",
+            "ROC_DCE_SHARED_BLOB_93e2c1",
+        });
+        run_native_archive_dce_check.step.dependOn(&archive_consumer_exe.step);
+        run_test_archive_step.dependOn(&run_native_archive_dce_check.step);
 
         const run_wasm_archive_check = b.addRunArtifact(archive_check_exe);
         run_wasm_archive_check.addArgs(&.{ "--archive", "test/archive/app-wasm32.a", "roc_builtins" });
