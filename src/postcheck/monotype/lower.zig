@@ -215,6 +215,27 @@ const LoweredNestedFn = struct {
     fn_ty: Type.TypeId,
 };
 
+/// A procedure template body request deferred to the end of the requesting
+/// specialization, when that specialization's types are final. Requesting at
+/// final types keeps specialization keys stable: two requests whose types
+/// would later converge to one digest must resolve to one lowered body.
+const DeferredTemplate = struct {
+    template_ref: names.ProcTemplate,
+    view: ModuleView,
+    source_fn_ty: checked.CheckedTypeId,
+    source_fn_key: names.TypeDigest,
+    fn_ty: Type.TypeId,
+};
+
+/// A nested function body request deferred to the end of the requesting
+/// specialization. The instantiation context snapshots the lexical binders at
+/// the request site; the body lowers once the requester's types are final.
+const DeferredNested = struct {
+    ctx: *BodyContext,
+    expr_id: checked.CheckedExprId,
+    fn_template: Ast.FnTemplate,
+};
+
 const LambdaArgLet = struct {
     pat: Ast.PatId,
     value: Ast.ExprId,
@@ -360,6 +381,10 @@ const InstGraph = struct {
     /// to an extension changes the flattened view of every row above it, so
     /// dirty marks propagate through these back references.
     row_parents: std.AutoHashMap(NodeId, std.ArrayList(NodeId)),
+    /// Specialization body requests made while lowering this specialization,
+    /// processed once its body is complete and its types are final.
+    deferred_templates: std.ArrayList(DeferredTemplate) = .empty,
+    deferred_nested: std.ArrayList(DeferredNested) = .empty,
 
     fn create(allocator: Allocator, builder: *Builder) Allocator.Error!*InstGraph {
         const graph = try allocator.create(InstGraph);
@@ -378,6 +403,12 @@ const InstGraph = struct {
 
     fn destroy(self: *InstGraph) void {
         const allocator = self.allocator;
+        for (self.deferred_nested.items) |request| {
+            request.ctx.deinit();
+            allocator.destroy(request.ctx);
+        }
+        self.deferred_nested.deinit(allocator);
+        self.deferred_templates.deinit(allocator);
         var views = self.node_monos.valueIterator();
         while (views.next()) |list| {
             list.deinit(allocator);
@@ -999,10 +1030,10 @@ const InstGraph = struct {
     fn importMono(self: *InstGraph, ty: Type.TypeId) Allocator.Error!NodeId {
         if (self.mono_nodes.get(ty)) |existing| return existing;
         const node = try self.newNode(.{ .unresolved = .{} });
+        // One-way memo: the import is a snapshot of a finished Monotype, never
+        // a view of this graph. Registering it as a view would let refreshes
+        // rewrite another specialization's final type in place.
         try self.mono_nodes.put(ty, node);
-        const entry = try self.node_monos.getOrPut(node);
-        if (!entry.found_existing) entry.value_ptr.* = .empty;
-        try entry.value_ptr.append(self.allocator, ty);
 
         const types = &self.builder.program.types;
         const imported: InstNode = switch (types.get(ty)) {
@@ -1016,7 +1047,12 @@ const InstGraph = struct {
             } },
             .tag_union => |tags| blk: {
                 const span = types.tagSpan(tags);
-                if (span.len == 0) break :blk .empty_tag_union;
+                // An empty tag union in a finished Monotype records a slot no
+                // value reached: either genuinely uninhabited or an unresolved
+                // variable that was defaulted at materialization. Either way,
+                // concrete evidence in this specialization supersedes it, so it
+                // imports as an unresolved node rather than as a closed row.
+                if (span.len == 0) break :blk .{ .unresolved = .{ .row_default = .empty_tag_union } };
                 const inst_tags = try self.arena().alloc(InstTag, span.len);
                 for (span, 0..) |tag, index| {
                     inst_tags[index] = .{
@@ -1208,6 +1244,10 @@ const Builder = struct {
     u64_ty: ?Type.TypeId = null,
     bool_ty: ?Type.TypeId = null,
     constrain_depth: usize = 0,
+    /// The specialization graph currently being lowered. Template body
+    /// requests made anywhere inside that specialization defer to its end,
+    /// when its types are final and specialization keys are stable.
+    active_graph: ?*InstGraph = null,
 
     fn init(allocator: Allocator, modules: Common.CheckedModules, program: *Ast.Program) Builder {
         return .{
@@ -1769,6 +1809,9 @@ const Builder = struct {
 
         const graph = try InstGraph.create(self.allocator, self);
         defer graph.destroy();
+        const saved_graph = self.active_graph;
+        self.active_graph = graph;
+        defer self.active_graph = saved_graph;
         var body_ctx = try BodyContext.init(self.allocator, self, view, wrapper.template, graph);
         defer body_ctx.deinit();
         const root_fn_key = Ast.fnTemplateDigest(wrapper_template, &self.program.types, &self.program.names);
@@ -1778,7 +1821,9 @@ const Builder = struct {
         try body_ctx.constrainTypeToMono(template.checked_fn_root, mono_fn_ty, "callable eval template root conflicted with an existing Monotype constraint");
         try body_ctx.constrainKnownType(root.checked_type, mono_fn_ty);
 
-        return try body_ctx.lowerExprAtType(wrapper.body_expr, mono_fn_ty);
+        const lowered = try body_ctx.lowerExprAtType(wrapper.body_expr, mono_fn_ty);
+        try self.drainSpecRequests(graph);
+        return lowered;
     }
 
     fn lowerTemplate(
@@ -1865,6 +1910,9 @@ const Builder = struct {
 
         const graph = try InstGraph.create(self.allocator, self);
         defer graph.destroy();
+        const saved_graph = self.active_graph;
+        self.active_graph = graph;
+        defer self.active_graph = saved_graph;
         var body_ctx = try BodyContext.init(self.allocator, self, view, template_ref, graph);
         const root_fn_key = Ast.fnTemplateDigest(fn_template, &self.program.types, &self.program.names);
         body_ctx.owner_context_fn_key = root_fn_key;
@@ -1883,6 +1931,7 @@ const Builder = struct {
             .body = .{ .roc = lowered.body },
             .ret = lowered.ret,
         };
+        try self.drainSpecRequests(graph);
         return reserved;
     }
 
@@ -2148,6 +2197,9 @@ const Builder = struct {
     ) Allocator.Error!Type.TypeId {
         const graph = try InstGraph.create(self.allocator, self);
         defer graph.destroy();
+        const saved_graph = self.active_graph;
+        self.active_graph = graph;
+        defer self.active_graph = saved_graph;
         var ctx = try BodyContext.init(self.allocator, self, view, .{
             .proc_base = undefined, // type-only context; type lowering does not read the owner template
             .template = undefined, // type-only context; type lowering does not read the owner template
@@ -2453,16 +2505,27 @@ const Builder = struct {
     }
 
     fn lowerFnTemplateDef(self: *Builder, source_ty_view: ModuleView, fn_template: Ast.FnTemplate) Allocator.Error!void {
-        switch (fn_template.fn_def) {
+        const template_ref = switch (fn_template.fn_def) {
             .local_template,
             .imported_template,
             .checked_generated,
-            => |template| _ = try self.lowerTemplateWithMono(template, source_ty_view, fn_template.source_fn_ty, fn_template.source_fn_key, fn_template.mono_fn_ty),
+            => |template| template,
             .local_hosted,
             .imported_hosted,
-            => |hosted| _ = try self.lowerTemplateWithMono(hosted.template, source_ty_view, fn_template.source_fn_ty, fn_template.source_fn_key, fn_template.mono_fn_ty),
-            .nested => {},
+            => |hosted| hosted.template,
+            .nested => return,
+        };
+        if (self.active_graph) |graph| {
+            try graph.deferred_templates.append(self.allocator, .{
+                .template_ref = template_ref,
+                .view = source_ty_view,
+                .source_fn_ty = fn_template.source_fn_ty,
+                .source_fn_key = fn_template.source_fn_key,
+                .fn_ty = fn_template.mono_fn_ty,
+            });
+            return;
         }
+        _ = try self.lowerTemplateWithMono(template_ref, source_ty_view, fn_template.source_fn_ty, fn_template.source_fn_key, fn_template.mono_fn_ty);
     }
 
     fn lowerRestoredConstFnTemplate(self: *Builder, type_view: ModuleView, fn_template: Ast.FnTemplate) Allocator.Error!void {
@@ -2471,9 +2534,13 @@ const Builder = struct {
                 const fn_view = self.moduleForConstFnDef(fn_template.fn_def);
                 const graph = try InstGraph.create(self.allocator, self);
                 defer graph.destroy();
+                const saved_graph = self.active_graph;
+                self.active_graph = graph;
+                defer self.active_graph = saved_graph;
                 var fn_ctx = try BodyContext.init(self.allocator, self, fn_view, ownerTemplateForConstFnDef(fn_template.fn_def), graph);
                 defer fn_ctx.deinit();
                 try self.lowerNestedFnFromContext(&fn_ctx, checkedLambdaExprIdForConstFn(fn_view, fn_template.fn_def), fn_template);
+                try self.drainSpecRequests(graph);
                 break :blk;
             },
             else => try self.lowerFnTemplateDef(type_view, fn_template),
@@ -2485,10 +2552,22 @@ const Builder = struct {
             .local_template,
             .imported_template,
             .checked_generated,
-            => |template| _ = try self.lowerTemplateWithMonoFor(template, source_ctx.view, fn_template.source_fn_ty, fn_template.source_fn_key, fn_template.mono_fn_ty, source_ctx.graph),
+            => |template| try source_ctx.graph.deferred_templates.append(self.allocator, .{
+                .template_ref = template,
+                .view = source_ctx.view,
+                .source_fn_ty = fn_template.source_fn_ty,
+                .source_fn_key = fn_template.source_fn_key,
+                .fn_ty = fn_template.mono_fn_ty,
+            }),
             .local_hosted,
             .imported_hosted,
-            => |hosted| _ = try self.lowerTemplateWithMonoFor(hosted.template, source_ctx.view, fn_template.source_fn_ty, fn_template.source_fn_key, fn_template.mono_fn_ty, source_ctx.graph),
+            => |hosted| try source_ctx.graph.deferred_templates.append(self.allocator, .{
+                .template_ref = hosted.template,
+                .view = source_ctx.view,
+                .source_fn_ty = fn_template.source_fn_ty,
+                .source_fn_key = fn_template.source_fn_key,
+                .fn_ty = fn_template.mono_fn_ty,
+            }),
             .nested => {},
         }
     }
@@ -2543,6 +2622,22 @@ const Builder = struct {
         expr_id: checked.CheckedExprId,
         fn_template: Ast.FnTemplate,
     ) Allocator.Error!void {
+        const nested_ctx = try self.allocator.create(BodyContext);
+        errdefer self.allocator.destroy(nested_ctx);
+        nested_ctx.* = try source_ctx.nestedInstantiationContext(Ast.fnTemplateDigest(fn_template, &self.program.types, &self.program.names));
+        try source_ctx.graph.deferred_nested.append(self.allocator, .{
+            .ctx = nested_ctx,
+            .expr_id = expr_id,
+            .fn_template = fn_template,
+        });
+    }
+
+    fn lowerDeferredNestedFn(self: *Builder, request: DeferredNested) Allocator.Error!void {
+        defer {
+            request.ctx.deinit();
+            self.allocator.destroy(request.ctx);
+        }
+        const fn_template = request.fn_template;
         const nested = switch (fn_template.fn_def) {
             .nested => |nested| nested,
             else => Common.invariant("local procedure specialization did not have a nested function identity"),
@@ -2555,11 +2650,11 @@ const Builder = struct {
             if (existing.fn_ty != fn_template.mono_fn_ty) {
                 const existing_digest = self.program.types.typeDigest(&self.program.names, existing.fn_ty);
                 if (!std.mem.eql(u8, existing_digest.bytes[0..], fn_ty_digest.bytes[0..])) continue;
-                try source_ctx.graph.unify(
-                    try source_ctx.graph.importMono(fn_template.mono_fn_ty),
-                    try source_ctx.graph.importMono(existing.fn_ty),
+                try request.ctx.graph.unify(
+                    try request.ctx.graph.importMono(fn_template.mono_fn_ty),
+                    try request.ctx.graph.importMono(existing.fn_ty),
                 );
-                try source_ctx.graph.drainDirty();
+                try request.ctx.graph.drainDirty();
             }
             return;
         }
@@ -2568,11 +2663,9 @@ const Builder = struct {
         try self.program.nested_defs.append(self.allocator, undefined);
         try family_entry.value_ptr.append(self.allocator, .{ .nested_id = nested_id, .fn_ty = fn_template.mono_fn_ty });
 
-        var nested_ctx = try source_ctx.nestedInstantiationContext(Ast.fnTemplateDigest(fn_template, &self.program.types, &self.program.names));
-        defer nested_ctx.deinit();
-        try nested_ctx.constrainTypeToMono(fn_template.source_fn_ty, fn_template.mono_fn_ty, "nested function root conflicted with an existing Monotype constraint");
+        try request.ctx.constrainTypeToMono(fn_template.source_fn_ty, fn_template.mono_fn_ty, "nested function root conflicted with an existing Monotype constraint");
 
-        const lowered = try nested_ctx.lowerNestedFunction(expr_id, fn_template.mono_fn_ty);
+        const lowered = try request.ctx.lowerNestedFunction(request.expr_id, fn_template.mono_fn_ty);
         self.program.nested_defs.items[nested_id] = .{
             .symbol = self.symbols.fresh(),
             .fn_def = fn_template,
@@ -2580,6 +2673,30 @@ const Builder = struct {
             .body = lowered.body,
             .ret = lowered.ret,
         };
+    }
+
+    /// Process the specialization body requests this specialization enqueued
+    /// while its body lowered. Its types are final now, so every request's
+    /// specialization key is stable.
+    fn drainSpecRequests(self: *Builder, graph: *InstGraph) Allocator.Error!void {
+        while (graph.deferred_templates.items.len != 0 or graph.deferred_nested.items.len != 0) {
+            // Nested function bodies belong to this specialization's graph and
+            // contribute type evidence to it, so they all lower before any
+            // template request's specialization key is taken.
+            while (graph.deferred_nested.pop()) |request| {
+                try self.lowerDeferredNestedFn(request);
+            }
+            if (graph.deferred_templates.pop()) |request| {
+                _ = try self.lowerTemplateWithMonoFor(
+                    request.template_ref,
+                    request.view,
+                    request.source_fn_ty,
+                    request.source_fn_key,
+                    request.fn_ty,
+                    graph,
+                );
+            }
+        }
     }
 
     fn moduleForConstFnDef(self: *Builder, fn_def: anytype) ModuleView {
@@ -2634,6 +2751,9 @@ const Builder = struct {
         const fn_view = self.moduleForConstFnDef(fn_value.fn_def);
         const graph = try InstGraph.create(self.allocator, self);
         defer graph.destroy();
+        const saved_graph = self.active_graph;
+        self.active_graph = graph;
+        defer self.active_graph = saved_graph;
         var fn_ctx = try BodyContext.init(self.allocator, self, fn_view, ownerTemplateForConstFnDef(fn_value.fn_def), graph);
         defer fn_ctx.deinit();
 
@@ -2711,6 +2831,7 @@ const Builder = struct {
                 } },
             });
         }
+        try self.drainSpecRequests(graph);
         return expr;
     }
 
@@ -2983,6 +3104,9 @@ const Builder = struct {
 
         const graph = try InstGraph.create(self.allocator, self);
         defer graph.destroy();
+        const saved_graph = self.active_graph;
+        self.active_graph = graph;
+        defer self.active_graph = saved_graph;
         var target_ctx = try BodyContext.init(self.allocator, self, lookup.view, template, graph);
         defer target_ctx.deinit();
         const callable_mono_ty = try target_ctx.instantiateTargetCallTypeFromMonoArgs(lookup.target.callable_ty, &.{value_ty}, str_ty);
@@ -2995,7 +3119,7 @@ const Builder = struct {
         );
 
         const args = [_]Ast.ExprId{value};
-        return try self.program.addExpr(.{ .ty = str_ty, .data = .{ .call_proc = .{
+        const call = try self.program.addExpr(.{ .ty = str_ty, .data = .{ .call_proc = .{
             .callee = .{ .template = self.fnDefForTemplate(
                 lookup.view,
                 template,
@@ -3005,6 +3129,8 @@ const Builder = struct {
             ) },
             .args = try self.program.addExprSpan(&args),
         } } });
+        try self.drainSpecRequests(graph);
+        return call;
     }
 
     fn primitiveInspect(self: *Builder, value: Ast.ExprId, primitive: Type.Primitive, str_ty: Type.TypeId) Allocator.Error!Ast.ExprId {
@@ -4753,6 +4879,9 @@ const BodyContext = struct {
 
         const graph = try InstGraph.create(self.allocator, self.builder);
         defer graph.destroy();
+        const saved_graph = self.builder.active_graph;
+        self.builder.active_graph = graph;
+        defer self.builder.active_graph = saved_graph;
         var body_ctx = try BodyContext.init(self.allocator, self.builder, store_view, eval.entry_template, graph);
         defer body_ctx.deinit();
         const root_fn_key = Ast.fnTemplateDigest(wrapper_template, &self.builder.program.types, &self.builder.program.names);
@@ -4761,7 +4890,9 @@ const BodyContext = struct {
         try body_ctx.constrainTypeToMono(entry_template.checked_fn_root, wrapper_fn_ty, "const eval wrapper root conflicted with an existing Monotype constraint");
         try body_ctx.constrainTypeToMono(body.checked_type, ty, "const eval body conflicted with an existing Monotype constraint");
 
-        return try body_ctx.lowerExprAtType(body.body_expr, ty);
+        const lowered = try body_ctx.lowerExprAtType(body.body_expr, ty);
+        try self.builder.drainSpecRequests(graph);
+        return lowered;
     }
 
     fn restoreConstNode(
@@ -5744,13 +5875,13 @@ const BodyContext = struct {
         const source_fn_key = lookup.view.types.rootKey(source_fn_ty);
         return switch (lookup.target.kind) {
             .procedure => |procedure| blk: {
-                _ = try self.builder.lowerTemplateWithMono(
-                    procedure.template,
-                    lookup.view,
-                    source_fn_ty,
-                    source_fn_key,
-                    callable_mono_ty,
-                );
+                try self.graph.deferred_templates.append(self.builder.allocator, .{
+                    .template_ref = procedure.template,
+                    .view = lookup.view,
+                    .source_fn_ty = source_fn_ty,
+                    .source_fn_key = source_fn_key,
+                    .fn_ty = callable_mono_ty,
+                });
                 break :blk self.builder.fnDefForTemplate(
                     lookup.view,
                     procedure.template,
