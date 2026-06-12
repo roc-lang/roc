@@ -2025,7 +2025,6 @@ Builtin :: [].{
 			{
 				entries : List({ key : k, value : v, hash : U64 }),
 				buckets : List([Empty, Full(U64)]),
-				seed : U64,
 			},
 		),
 	].{
@@ -2069,7 +2068,7 @@ Builtin :: [].{
 		## empty_dict = Dict.empty()
 		## ```
 		empty : () -> Dict(_k, _v)
-		empty = || HashMap({ entries: [], buckets: [], seed: dict_seed() })
+		empty = || HashMap({ entries: [], buckets: [] })
 
 		## Returns an empty `Dict` with room for at least the requested number of entries.
 		with_capacity : U64 -> Dict(_k, _v)
@@ -2079,7 +2078,6 @@ Builtin :: [].{
 				{
 					entries: List.with_capacity(requested),
 					buckets: List.repeat(Empty, raw),
-					seed: dict_seed(),
 				},
 			)
 		}
@@ -2102,7 +2100,7 @@ Builtin :: [].{
 					raw = dict_grown_raw_capacity(List.len(data.buckets), desired)
 					spare = dict_usable_capacity(raw) - len
 					entries = List.reserve(data.entries, spare)
-					HashMap({ entries, buckets: dict_rebuild_buckets(entries, raw), seed: data.seed })
+					HashMap({ entries, buckets: dict_rebuild_buckets(entries, raw) })
 				}
 			}
 		}
@@ -2113,7 +2111,7 @@ Builtin :: [].{
 			HashMap(data) => {
 				entries = List.release_excess_capacity(data.entries)
 				raw = dict_raw_capacity_for_entries(List.len(entries))
-				HashMap({ entries, buckets: dict_rebuild_buckets(entries, raw), seed: data.seed })
+				HashMap({ entries, buckets: dict_rebuild_buckets(entries, raw) })
 			}
 		}
 
@@ -2126,7 +2124,6 @@ Builtin :: [].{
 					{
 						entries: List.with_capacity(cap),
 						buckets: List.repeat(Empty, List.len(data.buckets)),
-						seed: data.seed,
 					},
 				)
 			}
@@ -2179,7 +2176,7 @@ Builtin :: [].{
 				if List.is_empty(data.buckets) {
 					Try.Err(KeyNotFound)
 				} else {
-					hash = dict_hash_key(key, data.seed)
+					hash = dict_hash_key(key)
 					match dict_probe(data.buckets, data.entries, key, hash) {
 						Found(entry_index) => Try.Ok(list_get_unsafe(data.entries, entry_index).value)
 						Missing(_) => Try.Err(KeyNotFound)
@@ -2211,14 +2208,14 @@ Builtin :: [].{
 			where [k.is_eq : k, k -> Bool, k.to_hash : k, Hasher -> Hasher]
 		insert = |dict, key, value| match dict {
 			HashMap(data) => {
-				hash = dict_hash_key(key, data.seed)
+				hash = dict_hash_key(key)
 
 				if !List.is_empty(data.buckets) {
 					match dict_probe(data.buckets, data.entries, key, hash) {
 						Found(entry_index) => {
 							entry = list_get_unsafe(data.entries, entry_index)
 							entries = list_set_unsafe(data.entries, entry_index, { key: entry.key, value, hash: entry.hash })
-							return HashMap({ entries, buckets: data.buckets, seed: data.seed })
+							return HashMap({ entries, buckets: data.buckets })
 						}
 						Missing(_) => {}
 					}
@@ -2229,13 +2226,13 @@ Builtin :: [].{
 					Found(entry_index) => {
 						entry = list_get_unsafe(prepared.entries, entry_index)
 						entries = list_set_unsafe(prepared.entries, entry_index, { key: entry.key, value, hash: entry.hash })
-						HashMap({ entries, buckets: prepared.buckets, seed: prepared.seed })
+						HashMap({ entries, buckets: prepared.buckets })
 					}
 					Missing(bucket_index) => {
 						entry_index = List.len(prepared.entries)
 						entries = List.append(prepared.entries, { key, value, hash })
 						buckets = list_set_unsafe(prepared.buckets, bucket_index, Full(entry_index))
-						HashMap({ entries, buckets, seed: prepared.seed })
+						HashMap({ entries, buckets })
 					}
 				}
 			}
@@ -2255,11 +2252,11 @@ Builtin :: [].{
 				if List.is_empty(data.buckets) {
 					dict
 				} else {
-					hash = dict_hash_key(key, data.seed)
+					hash = dict_hash_key(key)
 					match dict_probe(data.buckets, data.entries, key, hash) {
 						Found(entry_index) => {
 							entries = dict_remove_entry(data.entries, entry_index)
-							HashMap({ entries, buckets: dict_rebuild_buckets(entries, List.len(data.buckets)), seed: data.seed })
+							HashMap({ entries, buckets: dict_rebuild_buckets(entries, List.len(data.buckets)) })
 						}
 						Missing(_) => dict
 					}
@@ -2370,7 +2367,7 @@ Builtin :: [].{
 						$entries = List.append($entries, entry)
 					}
 				}
-				HashMap({ entries: $entries, buckets: dict_rebuild_buckets($entries, List.len(data.buckets)), seed: data.seed })
+				HashMap({ entries: $entries, buckets: dict_rebuild_buckets($entries, List.len(data.buckets)) })
 			}
 		}
 
@@ -2408,7 +2405,7 @@ Builtin :: [].{
 				for entry in data.entries {
 					$entries = List.append($entries, { key: entry.key, value: transform(entry.key, entry.value), hash: entry.hash })
 				}
-				HashMap({ entries: $entries, buckets: data.buckets, seed: data.seed })
+				HashMap({ entries: $entries, buckets: data.buckets })
 			}
 		}
 
@@ -9662,11 +9659,11 @@ Builtin :: [].{
 		}
 	}
 
-	dict_hash_key : k, U64 -> U64
+	dict_hash_key : k -> U64
 		where [k.to_hash : k, Hasher -> Hasher]
-	dict_hash_key = |key, seed| hasher_finish(key.to_hash(hasher_start(seed)))
+	dict_hash_key = |key| hasher_finish(key.to_hash(hasher_start(dict_seed())))
 
-	dict_ensure_capacity : { entries : List({ key : k, value : v, hash : U64 }), buckets : List([Empty, Full(U64)]), seed : U64 }, U64 -> { entries : List({ key : k, value : v, hash : U64 }), buckets : List([Empty, Full(U64)]), seed : U64 }
+	dict_ensure_capacity : { entries : List({ key : k, value : v, hash : U64 }), buckets : List([Empty, Full(U64)]) }, U64 -> { entries : List({ key : k, value : v, hash : U64 }), buckets : List([Empty, Full(U64)]) }
 	dict_ensure_capacity = |data, desired| {
 		if desired <= dict_usable_capacity(List.len(data.buckets)) {
 			data
@@ -9674,7 +9671,7 @@ Builtin :: [].{
 			raw = dict_grown_raw_capacity(List.len(data.buckets), desired)
 			spare = dict_usable_capacity(raw) - List.len(data.entries)
 			entries = List.reserve(data.entries, spare)
-			{ entries, buckets: dict_rebuild_buckets(entries, raw), seed: data.seed }
+			{ entries, buckets: dict_rebuild_buckets(entries, raw) }
 		}
 	}
 
