@@ -157,10 +157,7 @@ fn computeSelectionRange(allocator: std.mem.Allocator, source: []const u8, line:
     var module_env = try can.ModuleEnv.init(allocator, source);
     defer module_env.deinit();
 
-    const ast = parse.parse(allocator, &module_env.common) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-        error.TooNested => return error.ParseFailed,
-    };
+    const ast = try parse.file(allocator, &module_env.common);
     defer ast.deinit();
 
     // Collect all containing regions
@@ -464,7 +461,7 @@ fn collectContainingRegionsFromExpr(
             try collectContainingRegionsFromExpr(allocator, ast, f.body, target_offset, regions);
         },
         // Leaf expressions - no children to recurse into
-        .int, .frac, .typed_int, .typed_frac, .single_quote, .string_part, .string, .multiline_string, .tag, .ident, .record_updater, .ellipsis, .malformed => {},
+        .int, .frac, .typed_int, .typed_frac, .single_quote, .string_part, .string, .multiline_string, .typed_string, .typed_multiline_string, .tag, .ident, .record_updater, .ellipsis, .malformed => {},
     }
 }
 

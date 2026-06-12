@@ -11,7 +11,7 @@ const shim_io = @import("shim_io");
 pub const panic = std.debug.no_panic;
 
 pub const std_options_elf_debug_info_search_paths = shim_io.elfDebugInfoSearchPaths;
-/// Minimal std.Io override for debug output; avoids pulling in the full threaded IO vtable.
+/// Minimal debug output override; avoids pulling in the full threaded IO vtable.
 pub const std_options_debug_io = shim_io.io();
 /// Disables threaded debug IO to prevent the threaded vtable from being linked into user programs.
 pub const std_options_debug_threaded_io = null;
@@ -66,15 +66,18 @@ comptime {
     @export(&dw.roc_builtins_str_from_utf8_parts, .{ .name = "roc_builtins_str_from_utf8_parts" });
     @export(&dw.roc_builtins_str_escape_and_quote, .{ .name = "roc_builtins_str_escape_and_quote" });
     @export(&dw.roc_builtins_dbg_str, .{ .name = "roc_builtins_dbg_str" });
+    @export(&dw.roc_builtins_expect_err_str, .{ .name = "roc_builtins_expect_err_str" });
     @export(&dw.roc_builtins_roc_expect_failed, .{ .name = "roc_builtins_roc_expect_failed" });
     @export(&dw.roc_builtins_roc_crashed, .{ .name = "roc_builtins_roc_crashed" });
     @export(&dw.roc_builtins_str_from_literal, .{ .name = "roc_builtins_str_from_literal" });
     @export(&dw.roc_builtins_list_with_capacity, .{ .name = "roc_builtins_list_with_capacity" });
     @export(&dw.roc_builtins_list_append_unsafe, .{ .name = "roc_builtins_list_append_unsafe" });
+    @export(&dw.roc_builtins_list_map_can_reuse, .{ .name = "roc_builtins_list_map_can_reuse" });
     @export(&dw.roc_builtins_list_concat, .{ .name = "roc_builtins_list_concat" });
     @export(&dw.roc_builtins_list_prepend, .{ .name = "roc_builtins_list_prepend" });
     @export(&dw.roc_builtins_list_sublist, .{ .name = "roc_builtins_list_sublist" });
     @export(&dw.roc_builtins_list_incref, .{ .name = "roc_builtins_list_incref" });
+    @export(&dw.roc_builtins_list_incref_single_thread, .{ .name = "roc_builtins_list_incref_single_thread" });
     @export(&dw.roc_builtins_list_drop_at, .{ .name = "roc_builtins_list_drop_at" });
     @export(&dw.roc_builtins_list_replace, .{ .name = "roc_builtins_list_replace" });
     @export(&dw.roc_builtins_list_swap, .{ .name = "roc_builtins_list_swap" });
@@ -83,16 +86,21 @@ comptime {
     @export(&dw.roc_builtins_list_decref_str, .{ .name = "roc_builtins_list_decref_str" });
     @export(&dw.roc_builtins_list_decref_flat_list, .{ .name = "roc_builtins_list_decref_flat_list" });
     @export(&dw.roc_builtins_list_decref_with, .{ .name = "roc_builtins_list_decref_with" });
+    @export(&dw.roc_builtins_list_decref_with_single_thread, .{ .name = "roc_builtins_list_decref_with_single_thread" });
     @export(&dw.roc_builtins_list_free_flat_list, .{ .name = "roc_builtins_list_free_flat_list" });
     @export(&dw.roc_builtins_list_free_with, .{ .name = "roc_builtins_list_free_with" });
     @export(&dw.roc_builtins_box_decref_with, .{ .name = "roc_builtins_box_decref_with" });
+    @export(&dw.roc_builtins_box_decref_with_single_thread, .{ .name = "roc_builtins_box_decref_with_single_thread" });
     @export(&dw.roc_builtins_box_free_with, .{ .name = "roc_builtins_box_free_with" });
     @export(&dw.roc_builtins_erased_callable_incref, .{ .name = "roc_builtins_erased_callable_incref" });
     @export(&dw.roc_builtins_erased_callable_decref, .{ .name = "roc_builtins_erased_callable_decref" });
+    @export(&dw.roc_builtins_erased_callable_decref_single_thread, .{ .name = "roc_builtins_erased_callable_decref_single_thread" });
     @export(&dw.roc_builtins_erased_callable_free, .{ .name = "roc_builtins_erased_callable_free" });
     @export(&dw.roc_builtins_allocate_with_refcount, .{ .name = "roc_builtins_allocate_with_refcount" });
     @export(&dw.roc_builtins_incref_data_ptr, .{ .name = "roc_builtins_incref_data_ptr" });
+    @export(&dw.roc_builtins_incref_data_ptr_single_thread, .{ .name = "roc_builtins_incref_data_ptr_single_thread" });
     @export(&dw.roc_builtins_decref_data_ptr, .{ .name = "roc_builtins_decref_data_ptr" });
+    @export(&dw.roc_builtins_decref_data_ptr_single_thread, .{ .name = "roc_builtins_decref_data_ptr_single_thread" });
     @export(&dw.roc_builtins_free_data_ptr, .{ .name = "roc_builtins_free_data_ptr" });
     @export(&dw.roc_builtins_dec_to_str, .{ .name = "roc_builtins_dec_to_str" });
     // Numeric conversion wrappers

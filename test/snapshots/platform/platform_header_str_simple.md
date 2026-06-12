@@ -11,7 +11,7 @@ platform ""
     }
     exposes []
     packages {}
-    provides { entrypoint: "roc__entrypoint" }
+    provides { "roc_roc__entrypoint": entrypoint }
 
 entrypoint : Str -> Str
 entrypoint = main
@@ -28,7 +28,7 @@ LowerIdent,OpColon,UpperIdent,OpArrow,UpperIdent,
 CloseCurly,
 KwExposes,OpenSquare,CloseSquare,
 KwPackages,OpenCurly,CloseCurly,
-KwProvides,OpenCurly,LowerIdent,OpColon,StringStart,StringPart,StringEnd,CloseCurly,
+KwProvides,OpenCurly,StringStart,StringPart,StringEnd,OpColon,LowerIdent,CloseCurly,
 LowerIdent,OpColon,UpperIdent,OpArrow,UpperIdent,
 LowerIdent,OpAssign,LowerIdent,
 EndOfFile,
@@ -47,9 +47,7 @@ EndOfFile,
 		(exposes)
 		(packages)
 		(provides
-			(record-field (name "entrypoint")
-				(e-string
-					(e-string-part (raw "roc__entrypoint"))))))
+			(symbol-map-entry (symbol "roc_roc__entrypoint") (func "entrypoint"))))
 	(statements
 		(s-type-anno (name "entrypoint")
 			(ty-fn
@@ -67,7 +65,7 @@ platform ""
 	}
 	exposes []
 	packages {}
-	provides { entrypoint: "roc__entrypoint" }
+	provides { "roc_roc__entrypoint": entrypoint }
 
 entrypoint : Str -> Str
 entrypoint = main

@@ -5,6 +5,8 @@ const core = @import("lir_core");
 
 /// Core statement-only LIR type definitions.
 pub const LIR = core.LIR;
+/// Resolved source location recorded in LIR side tables.
+pub const SourceLoc = @import("base").SourceLoc;
 /// Flat storage for statement-only LIR nodes and spans.
 pub const LirStore = core.LirStore;
 /// LIR-owned root metadata.
@@ -15,8 +17,16 @@ pub const Hosted = core.Hosted;
 pub const Program = core.Program;
 /// Public checked-module-to-LIR lowering entrypoint.
 pub const CheckedPipeline = @import("checked_pipeline.zig");
-/// Mechanical ARC insertion over explicit LIR values and control flow.
+/// Struct-typed join parameters split into per-field parameters before ARC.
+pub const ScalarizeJoins = @import("scalarize_joins.zig");
+/// ARC borrow inference and RC statement insertion over explicit LIR.
 pub const Arc = @import("arc.zig");
+/// ARC-stage per-proc ownership signatures.
+pub const ArcSig = @import("arc_sig.zig");
+/// ARC borrow-inference solver over ownership-neutral LIR.
+pub const ArcSolve = @import("arc_solve.zig");
+/// Debug borrow certifier for ARC-complete LIR.
+pub const ArcCertify = @import("arc_certify.zig");
 /// Shared-memory ARC-inserted LIR image for interpreter-shim execution.
 pub const LirImage = @import("lir_image.zig");
 
@@ -65,6 +75,10 @@ test "lir tests" {
     std.testing.refAllDecls(Hosted);
     std.testing.refAllDecls(Program);
     std.testing.refAllDecls(CheckedPipeline);
+    std.testing.refAllDecls(ScalarizeJoins);
     std.testing.refAllDecls(Arc);
+    std.testing.refAllDecls(ArcSig);
+    std.testing.refAllDecls(ArcSolve);
+    std.testing.refAllDecls(ArcCertify);
     std.testing.refAllDecls(LirImage);
 }

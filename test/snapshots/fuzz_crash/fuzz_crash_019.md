@@ -192,16 +192,17 @@ TOO FEW ARGS - fuzz_crash_019.md:17:3:18:4
 DECLARATION HAS NO VALUE - fuzz_crash_019.md:22:1:23:2
 DECLARATION HAS NO VALUE - fuzz_crash_019.md:37:1:37:9
 MISSING METHOD - fuzz_crash_019.md:39:2:39:3
+MISSING METHOD - fuzz_crash_019.md:58:6:58:11
 TYPE MISMATCH - fuzz_crash_019.md:52:2:52:2
 DECLARATION HAS NO VALUE - fuzz_crash_019.md:74:1:74:22
 TOO FEW ARGS - fuzz_crash_019.md:84:2:86:3
-TYPE MISMATCH - fuzz_crash_019.md:86:11:86:17
-TYPE MISMATCH - fuzz_crash_019.md:77:11:77:14
+MISSING METHOD - fuzz_crash_019.md:86:11:86:17
 TYPE MISMATCH - fuzz_crash_019.md:98:4:104:3
 TYPE MISMATCH - fuzz_crash_019.md:105:2:105:54
 DECLARATION HAS NO VALUE - fuzz_crash_019.md:113:1:113:7
 DECLARATION HAS NO VALUE - fuzz_crash_019.md:116:1:116:13
 TYPE MISMATCH - fuzz_crash_019.md:119:2:119:10
+TYPE MISMATCH - fuzz_crash_019.md:77:11:77:14
 MISSING METHOD - fuzz_crash_019.md:105:55:105:66
 MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 # PROBLEMS
@@ -930,8 +931,20 @@ The value's type, which does not have a method named **from_numeral**, is:
 
     {}
 
+**MISSING METHOD**
+This **from_quote** method is being called on a value whose type doesn't have that method:
+**fuzz_crash_019.md:58:6:58:11:**
+```roc
+			1	"for" => 20[1, ] # t
+```
+			 	^^^^^
+
+The value's type, which does not have a method named **from_quote**, is:
+
+    [Blue, ..]
+
 **TYPE MISMATCH**
-The fourth branch of this `match` does not match the previous ones:
+The fifth branch of this `match` does not match the previous ones:
 **fuzz_crash_019.md:52:2:**
 ```roc
 	match a {lue  {
@@ -953,11 +966,15 @@ The fourth branch of this `match` does not match the previous ones:
 		Ok(123) => 12
 	}
 ```
-     ^^^^^
+                ^^^^^
 
-This fourth branch is trying to match:
+This fifth branch is trying to match:
 
-    Str
+    List(f)
+      where [
+        f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)]),
+        f.is_eq : f, f -> Bool,
+      ]
 
 But the expression between the `match` parenthesis has the type:
 
@@ -991,39 +1008,17 @@ The `me` function has the type:
 
 Are there any missing commas?
 
-**TYPE MISMATCH**
-This expression produces a value, but it's not being used:
+**MISSING METHOD**
+This **from_quote** method is being called on a value whose type doesn't have that method:
 **fuzz_crash_019.md:86:11:86:17:**
 ```roc
 	)crash ke"Unr!" #)
 ```
 	         ^^^^^^
 
-It has the type:
+The value's type, which does not have a method named **from_quote**, is:
 
-    Str
-
-Since this expression is used as a statement, it must evaluate to `{}`.
-If you don't need the value, you can ignore it with `_ =`.
-
-**TYPE MISMATCH**
-This number is being used where a non-number type is needed:
-**fuzz_crash_019.md:77:11:77:14:**
-```roc
-	var er = 123
-```
-	         ^^^
-
-The type was determined to be non-numeric here:
-**fuzz_crash_019.md:93:22:93:24:**
-```roc
-	line!("Ag ${n} to ${er}")
-```
-	                    ^^
-
-Other code expects this to have the type:
-
-    Str
+    {}
 
 **TYPE MISMATCH**
 This expression produces a value, but it's not being used:
@@ -1040,10 +1035,11 @@ This expression produces a value, but it's not being used:
 
 It has the type:
 
-    (f, Str, Error, [O, ..], (Error, Error), List(j))
+    (f, j, Error, [O, ..], (Error, Error), List(k))
       where [
         f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)]),
-        j.from_numeral : Numeral -> Try(j, [InvalidNumeral(Str)]),
+        j.from_quote : List(U8) -> Try(j, [BadQuotedBytes(Str)]),
+        k.from_numeral : Numeral -> Try(k, [InvalidNumeral(Str)]),
       ]
 
 Since this expression is used as a statement, it must evaluate to `{}`.
@@ -1100,6 +1096,25 @@ It has the type:
 
 Since this expression is used as a statement, it must evaluate to `{}`.
 If you don't need the value, you can ignore it with `_ =`.
+
+**TYPE MISMATCH**
+This number is being used where a non-number type is needed:
+**fuzz_crash_019.md:77:11:77:14:**
+```roc
+	var er = 123
+```
+	         ^^^
+
+The type was determined to be non-numeric here:
+**fuzz_crash_019.md:93:14:93:15:**
+```roc
+	line!("Ag ${n} to ${er}")
+```
+	            ^
+
+Other code expects this to have the type:
+
+    Str
 
 **MISSING METHOD**
 This is trying to dispatch a method named `od` on an unresolved type variable, but unresolved type variables have no methods.
@@ -1905,7 +1920,7 @@ expect {
 				(s-expr
 					(e-not-implemented))
 				(s-expr
-					(e-call (constraint-fn-var 1341)
+					(e-call (constraint-fn-var 1468)
 						(e-lookup-local
 							(p-assign (ident "me")))
 						(e-not-implemented)))
@@ -1915,10 +1930,28 @@ expect {
 						(e-literal (string "Unr!"))))
 				(s-let
 					(p-assign (ident "i"))
-					(e-string
-						(e-literal (string "H, "))
-						(e-runtime-error (tag "ident_not_in_scope"))
-						(e-literal (string ""))))
+					(e-block
+						(s-let
+							(p-assign (ident "#interp_0"))
+							(e-runtime-error (tag "ident_not_in_scope")))
+						(e-dispatch-call (method "from_interpolation") (constraint-fn-var 1613)
+							(receiver
+								(e-string
+									(e-literal (string "H, "))))
+							(args
+								(e-dispatch-call (method "prepended") (constraint-fn-var 1571)
+									(receiver
+										(e-dispatch-call (method "iter") (constraint-fn-var 1507)
+											(receiver
+												(e-empty_list))
+											(args)))
+									(args
+										(e-tuple
+											(elems
+												(e-lookup-local
+													(p-assign (ident "#interp_0")))
+												(e-string
+													(e-literal (string "")))))))))))
 				(s-let
 					(p-assign (ident "t"))
 					(e-list
@@ -1937,15 +1970,43 @@ expect {
 						(s-expr
 							(e-call
 								(e-runtime-error (tag "ident_not_in_scope"))
-								(e-string
-									(e-literal (string "Ag "))
-									(e-lookup-local
-										(p-assign (ident "n")))
-									(e-literal (string " to "))
-									(e-lookup-local
-										(p-assign (ident "er")))
-									(e-literal (string "")))))
-						(e-dispatch-call (method "plus") (constraint-fn-var 1526)
+								(e-block
+									(s-let
+										(p-assign (ident "#interp_1"))
+										(e-lookup-local
+											(p-assign (ident "n"))))
+									(s-let
+										(p-assign (ident "#interp_2"))
+										(e-lookup-local
+											(p-assign (ident "er"))))
+									(e-dispatch-call (method "from_interpolation") (constraint-fn-var 1945)
+										(receiver
+											(e-string
+												(e-literal (string "Ag "))))
+										(args
+											(e-dispatch-call (method "prepended") (constraint-fn-var 1903)
+												(receiver
+													(e-dispatch-call (method "prepended") (constraint-fn-var 1845)
+														(receiver
+															(e-dispatch-call (method "iter") (constraint-fn-var 1781)
+																(receiver
+																	(e-empty_list))
+																(args)))
+														(args
+															(e-tuple
+																(elems
+																	(e-lookup-local
+																		(p-assign (ident "#interp_2")))
+																	(e-string
+																		(e-literal (string ""))))))))
+												(args
+													(e-tuple
+														(elems
+															(e-lookup-local
+																(p-assign (ident "#interp_1")))
+															(e-string
+																(e-literal (string " to "))))))))))))
+						(e-dispatch-call (method "plus") (constraint-fn-var 1948)
 							(receiver
 								(e-runtime-error (tag "ident_not_in_scope")))
 							(args
@@ -2009,7 +2070,7 @@ expect {
 					(e-if
 						(if-branches
 							(if-branch
-								(e-dispatch-call (method "is_gt") (constraint-fn-var 1909)
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 2361)
 									(receiver
 										(e-match
 											(match
@@ -2043,18 +2104,18 @@ expect {
 										(e-if
 											(if-branches
 												(if-branch
-													(e-dispatch-call (method "is_lt") (constraint-fn-var 2017)
+													(e-dispatch-call (method "is_lt") (constraint-fn-var 2469)
 														(receiver
-															(e-dispatch-call (method "plus") (constraint-fn-var 1982)
+															(e-dispatch-call (method "plus") (constraint-fn-var 2434)
 																(receiver
 																	(e-num (value "13")))
 																(args
 																	(e-num (value "2")))))
 														(args
 															(e-num (value "5"))))
-													(e-dispatch-call (method "is_gte") (constraint-fn-var 2117)
+													(e-dispatch-call (method "is_gte") (constraint-fn-var 2569)
 														(receiver
-															(e-dispatch-call (method "minus") (constraint-fn-var 2082)
+															(e-dispatch-call (method "minus") (constraint-fn-var 2534)
 																(receiver
 																	(e-num (value "10")))
 																(args
@@ -2069,7 +2130,7 @@ expect {
 											(builtin)
 											(e-tag (name "True")))))
 								(if-else
-									(e-dispatch-call (method "is_lte") (constraint-fn-var 2195)
+									(e-dispatch-call (method "is_lte") (constraint-fn-var 2647)
 										(receiver
 											(e-num (value "12")))
 										(args
@@ -2083,12 +2144,12 @@ expect {
 										(e-match
 											(match
 												(cond
-													(e-dispatch-call (method "ned") (constraint-fn-var 2262)
+													(e-dispatch-call (method "ned") (constraint-fn-var 2714)
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dispatch-call (method "od") (constraint-fn-var 2229)
+																		(e-dispatch-call (method "od") (constraint-fn-var 2681)
 																			(receiver
 																				(e-match
 																					(match
@@ -2186,12 +2247,30 @@ expect {
 															(p-assign (ident "#err")))))))))))))
 				(e-tag (name "Stdo!")
 					(args
-						(e-string
-							(e-literal (string "Ho"))
-							(e-call
-								(e-runtime-error (tag "ident_not_in_scope"))
-								(e-runtime-error (tag "ident_not_in_scope")))
-							(e-literal (string " "))))))))
+						(e-block
+							(s-let
+								(p-assign (ident "#interp_3"))
+								(e-call
+									(e-runtime-error (tag "ident_not_in_scope"))
+									(e-runtime-error (tag "ident_not_in_scope"))))
+							(e-dispatch-call (method "from_interpolation") (constraint-fn-var 2907)
+								(receiver
+									(e-string
+										(e-literal (string "Ho"))))
+								(args
+									(e-dispatch-call (method "prepended") (constraint-fn-var 2865)
+										(receiver
+											(e-dispatch-call (method "iter") (constraint-fn-var 2801)
+												(receiver
+													(e-empty_list))
+												(args)))
+										(args
+											(e-tuple
+												(elems
+													(e-lookup-local
+														(p-assign (ident "#interp_3")))
+													(e-string
+														(e-literal (string " ")))))))))))))))
 	(d-let
 		(p-assign (ident "y"))
 		(e-anno-only)

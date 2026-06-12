@@ -248,13 +248,18 @@ comptime {
     exportUtilsFn(utils.test_dbg, "test_dbg");
     exportUtilsFn(utils.test_panic, "test_panic");
     exportUtilsFn(utils.increfRcPtrC, "incref_rc_ptr");
+    exportUtilsFn(utils.increfRcPtrSingleThreadC, "incref_rc_ptr_single_thread");
     exportUtilsFn(utils.decrefRcPtrC, "decref_rc_ptr");
+    exportUtilsFn(utils.decrefRcPtrSingleThreadC, "decref_rc_ptr_single_thread");
     exportUtilsFn(utils.freeRcPtrC, "free_rc_ptr");
     exportUtilsFn(utils.increfDataPtrC, "incref_data_ptr");
+    exportUtilsFn(utils.increfDataPtrSingleThreadC, "incref_data_ptr_single_thread");
     exportUtilsFn(utils.decrefDataPtrC, "decref_data_ptr");
+    exportUtilsFn(utils.decrefDataPtrSingleThreadC, "decref_data_ptr_single_thread");
     exportUtilsFn(utils.freeDataPtrC, "free_data_ptr");
     exportUtilsFn(utils.isUnique, "is_unique");
     exportUtilsFn(utils.decrefCheckNullC, "decref_check_null");
+    exportUtilsFn(utils.decrefCheckNullSingleThreadC, "decref_check_null_single_thread");
     exportUtilsFn(utils.allocateWithRefcountC, "allocate_with_refcount");
     exportUtilsFn(utils.dictPseudoSeed, "dict_pseudo_seed");
     exportUtilsFn(@import("erased_callable.zig").incref, "erased_callable.incref");

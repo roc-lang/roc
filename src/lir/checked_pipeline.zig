@@ -11,6 +11,7 @@ const check = @import("check");
 const core = @import("lir_core");
 
 const Arc = @import("arc.zig");
+const ScalarizeJoins = @import("scalarize_joins.zig");
 const LIR = core.LIR;
 const LirImage = @import("lir_image.zig");
 const LirProgram = core.Program;
@@ -39,6 +40,11 @@ pub const TargetConfig = struct {
     target_usize: base.target.TargetUsize = base.target.TargetUsize.native,
     checked_module_state: CheckedModuleState = .complete,
     inline_mode: InlineMode = .none,
+    /// Allow `List.map` to reuse a unique input list's allocation when the
+    /// input and output element layouts are interchangeable. Optimized builds
+    /// enable this; dev builds and compile-time evaluation leave it off so
+    /// the in-place branch is dropped during lowering.
+    list_in_place_map: bool = false,
 };
 
 /// Whether the root checked module is complete or inside checking finalization.
@@ -197,6 +203,10 @@ pub fn lowerCheckedModulesToLir(
     var lifted_owned = true;
     errdefer if (lifted_owned) lifted.deinit();
 
+    if (target.inline_mode != .none) {
+        try postcheck.MonotypeLifted.SpecConstr.run(allocator, &lifted);
+    }
+
     var solved = try postcheck.LambdaSolved.Solve.run(allocator, lifted);
     lifted_owned = false;
     lifted = undefined;
@@ -208,12 +218,18 @@ pub fn lowerCheckedModulesToLir(
 
     var lowered = try postcheck.SolvedLirLower.run(allocator, target.target_usize, solved, .{
         .inline_plan = inline_plan.view(),
+        .list_in_place_map = target.list_in_place_map,
     });
     solved_owned = false;
     solved = undefined;
     errdefer lowered.deinit();
 
-    try Arc.insert(&lowered.lir_result.store, &lowered.lir_result.layouts);
+    try ScalarizeJoins.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
+
+    try Arc.insert(&lowered.lir_result.store, &lowered.lir_result.layouts, .{
+        .roots = lowered.lir_result.root_procs.items,
+        .specialize = target.inline_mode != .none,
+    });
 
     if (roots.requests.len != 0 and lowered.lir_result.root_procs.items.len == 0) {
         checkedPipelineInvariant("explicit root set produced no LIR roots");

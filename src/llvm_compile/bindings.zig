@@ -92,7 +92,64 @@ pub const Module = opaque {
 
     pub const verify = LLVMVerifyModule;
     extern fn LLVMVerifyModule(M: *Module, Action: VerifierFailureAction, OutMessage: *[*:0]const u8) Bool;
+
+    pub const getFirstFunction = LLVMGetFirstFunction;
+    extern fn LLVMGetFirstFunction(M: *Module) ?*Value;
+
+    pub const getFirstGlobal = LLVMGetFirstGlobal;
+    extern fn LLVMGetFirstGlobal(M: *Module) ?*Value;
+
+    pub const getFirstGlobalAlias = LLVMGetFirstGlobalAlias;
+    extern fn LLVMGetFirstGlobalAlias(M: *Module) ?*Value;
+
+    pub const getNamedGlobal = LLVMGetNamedGlobal;
+    extern fn LLVMGetNamedGlobal(M: *Module, Name: [*:0]const u8) ?*Value;
 };
+
+/// Opaque handle to an LLVM value.
+pub const Value = opaque {
+    pub const getNextFunction = LLVMGetNextFunction;
+    extern fn LLVMGetNextFunction(FnVal: *Value) ?*Value;
+
+    pub const getNextGlobal = LLVMGetNextGlobal;
+    extern fn LLVMGetNextGlobal(Global: *Value) ?*Value;
+
+    pub const getNextGlobalAlias = LLVMGetNextGlobalAlias;
+    extern fn LLVMGetNextGlobalAlias(Alias: *Value) ?*Value;
+
+    pub const getName = LLVMGetValueName2;
+    extern fn LLVMGetValueName2(Val: *Value, Len: *usize) [*]const u8;
+
+    pub const isDeclaration = LLVMIsDeclaration;
+    extern fn LLVMIsDeclaration(Global: *Value) Bool;
+
+    pub const setLinkage = LLVMSetLinkage;
+    extern fn LLVMSetLinkage(Global: *Value, Linkage: c_int) void;
+
+    pub const aliasGetAliasee = LLVMAliasGetAliasee;
+    extern fn LLVMAliasGetAliasee(Alias: *Value) ?*Value;
+
+    pub const replaceAllUsesWith = LLVMReplaceAllUsesWith;
+    extern fn LLVMReplaceAllUsesWith(OldVal: *Value, NewVal: *Value) void;
+
+    pub const removeStringAttributeAtIndex = LLVMRemoveStringAttributeAtIndex;
+    extern fn LLVMRemoveStringAttributeAtIndex(FnVal: *Value, Idx: c_uint, Name: [*]const u8, Len: c_uint) void;
+
+    pub const deleteGlobal = LLVMDeleteGlobal;
+    extern fn LLVMDeleteGlobal(GlobalVar: *Value) void;
+};
+
+/// Runs LLVM global dead-code elimination on a module whose unused definitions
+/// have already been made internal.
+pub const runGlobalDCE = ZigLLVMRunGlobalDCE;
+extern fn ZigLLVMRunGlobalDCE(module: *Module) void;
+
+/// LLVM-C linkage value for `internal`: a local definition, never an exported
+/// symbol, and discarded by global DCE when unused.
+pub const internal_linkage: c_int = 8;
+
+/// LLVM-C attribute index for function-level attributes (`~0U`).
+pub const attribute_function_index: c_uint = 0xFFFFFFFF;
 
 /// Controls how LLVM reports module verifier failures.
 pub const VerifierFailureAction = enum(c_int) {
@@ -149,6 +206,7 @@ pub const TargetMachine = opaque {
         llvm_ir_filename: ?[*:0]const u8,
         bitcode_filename: ?[*:0]const u8,
         coverage: Coverage,
+        no_target_libcalls: bool,
 
         pub const LtoPhase = enum(c_int) {
             None,
@@ -581,6 +639,7 @@ pub fn compileBitcodeToObject(
         .llvm_ir_filename = null,
         .bitcode_filename = null,
         .coverage = default_coverage,
+        .no_target_libcalls = false,
     };
 
     // Emit object file

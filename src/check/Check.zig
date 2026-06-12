@@ -113,6 +113,10 @@ builtin_types_copied: bool,
 ident_to_var_map: std.AutoHashMap(Ident.Idx, Var),
 /// Checker-local source-site mapping for method/equality rewrites.
 constraint_expr_by_fn_var: std.AutoHashMap(Var, CIR.Expr.Idx),
+/// Dispatcher/method pairs already reported by `reportConstraintError`, so a
+/// constraint failing in multiple passes (or reachable through several aliased
+/// type variables) is reported once.
+reported_constraint_errors: std.AutoHashMap(ReportedConstraintError, void),
 /// Static dispatch constraints created while checking an expect body.
 expect_region_by_constraint_fn_var: std.AutoHashMap(Var, Region),
 /// Region of the expect body currently being checked, if any.
@@ -170,6 +174,13 @@ defer_generalize: bool = false,
 /// This prevents rank pollution where inner lambda generalization pulls outer
 /// scope vars to rank 0 via Rank.min in merge.
 checking_call_arg: bool = false,
+/// True when checking the right-hand side of an immutable binding (a top-level
+/// def or a block-local `s_decl`). Used to generalize a binding whose RHS is a
+/// bare reference to an already-generalized scheme (e.g. `shorthand = Foo.bar`).
+/// Such a reference is non-expansive, so generalizing it is the value-restriction
+/// treatment of a variable binding. Deliberately NOT set for mutable `var`
+/// bindings, which must never generalize.
+checking_binding_rhs: bool = false,
 /// Deferred def-level unifications (def_var = ptrn_var = expr_var).
 /// These must happen AFTER generalization to avoid lowering expr_var's rank
 /// before generalization can process it, but BEFORE eql constraint resolution
@@ -435,6 +446,7 @@ fn initAssumePrepared(
         .builtin_types_copied = false,
         .ident_to_var_map = std.AutoHashMap(Ident.Idx, Var).init(gpa),
         .constraint_expr_by_fn_var = std.AutoHashMap(Var, CIR.Expr.Idx).init(gpa),
+        .reported_constraint_errors = std.AutoHashMap(ReportedConstraintError, void).init(gpa),
         .expect_region_by_constraint_fn_var = std.AutoHashMap(Var, Region).init(gpa),
         .current_expect_region = null,
         .top_level_ptrns = std.AutoHashMap(CIR.Pattern.Idx, DefProcessed).init(gpa),
@@ -527,6 +539,7 @@ pub fn deinit(self: *Self) void {
     self.import_cache.deinit(self.gpa);
     self.ident_to_var_map.deinit();
     self.constraint_expr_by_fn_var.deinit();
+    self.reported_constraint_errors.deinit();
     self.expect_region_by_constraint_fn_var.deinit();
     self.top_level_ptrns.deinit();
     self.local_processing_ptrns.deinit(self.gpa);
@@ -909,7 +922,7 @@ fn instantiateVarHelp(
                     var has_from_numeral = false;
                     var has_non_from_numeral = false;
                     for (constraints) |c| {
-                        if (c.origin == .from_numeral) {
+                        if (c.origin == .from_numeral or c.origin == .from_quote) {
                             has_from_numeral = true;
                         } else {
                             has_non_from_numeral = true;
@@ -1604,6 +1617,81 @@ fn mkFlexWithFromNumeralConstraint(
     return flex_var;
 }
 
+/// Create a flex variable with a from_quote constraint for string literals.
+/// The constraint's function type is `List(U8) -> Try(a, [BadQuotedBytes(Str)])`,
+/// where the bytes are the literal's UTF-8 content after escape processing.
+fn mkFlexWithFromQuoteConstraint(
+    self: *Self,
+    source_node: ?CIR.Node.Idx,
+    region: Region,
+    env: *Env,
+) Allocator.Error!Var {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    const from_quote_ident = self.cir.idents.from_quote;
+
+    // Create the flex var first - this represents the target type `a`
+    const flex_rank = env.rank();
+    const flex_var = try self.freshFromContentAtRank(.{ .flex = Flex.init() }, env, region, flex_rank);
+
+    // Create the argument type: List(U8)
+    const u8_var = try self.freshFromContent(try self.mkNumberTypeContent(.u8, env), env, region);
+    const arg_var = try self.freshFromContent(try self.mkListContent(u8_var, env), env, region);
+
+    // Create the error type: [BadQuotedBytes(Str)] (closed tag union)
+    const str_var = self.str_var;
+    const bad_quoted_bytes_tag_ident = try @constCast(self.cir).insertIdent(
+        base.Ident.for_text("BadQuotedBytes"),
+    );
+    const bad_quoted_bytes_tag = try self.types.mkTag(
+        bad_quoted_bytes_tag_ident,
+        &.{str_var},
+    );
+    const err_ext_var = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, region);
+    const err_type = try self.types.mkTagUnion(&.{bad_quoted_bytes_tag}, err_ext_var);
+    const err_var = try self.freshFromContent(err_type, env, region);
+
+    // Create Try(flex_var, err_var) as the return type
+    const try_type_content = try self.mkTryContent(flex_var, err_var, env);
+    const ret_var = try self.freshFromContent(try_type_content, env, region);
+
+    const func_content = types_mod.Content{
+        .structure = types_mod.FlatType{
+            .fn_unbound = types_mod.Func{
+                .args = try self.types.appendVars(&.{arg_var}),
+                .ret = ret_var,
+                .needs_instantiation = false,
+            },
+        },
+    };
+    const fn_var = try self.freshFromContent(func_content, env, region);
+    if (source_node) |node_idx| {
+        try self.cir.recordQuoteDispatchPlan(node_idx, flex_var, fn_var);
+    }
+
+    const constraint = types_mod.StaticDispatchConstraint{
+        .fn_name = from_quote_ident,
+        .fn_var = fn_var,
+        .origin = .from_quote,
+    };
+
+    const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
+
+    const flex_content = types_mod.Content{
+        .flex = types_mod.Flex{
+            .name = null,
+            .constraints = constraint_range,
+        },
+    };
+    try self.unifyWith(flex_var, flex_content, env);
+    // Shares the numeric counter: it only gates the literal-defaulting and
+    // constraint-compatibility sweeps, which handle both origins.
+    self.types.from_numeral_flex_count += 1;
+
+    return flex_var;
+}
+
 fn recordedNumeralLiteralForExpr(self: *const Self, expr_idx: CIR.Expr.Idx) ModuleEnv.NumeralLiteral {
     return self.cir.numeralLiteralForNode(ModuleEnv.nodeIdxFrom(expr_idx)) orelse {
         if (builtin.mode == .Debug) {
@@ -2110,6 +2198,10 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
 
     // Check any accumulated constraints
     try self.checkAllConstraints(&env);
+
+    if (!skip_numeric_defaults) {
+        try self.finalizeQuoteDefaults(&env);
+    }
     try self.resolveNumericLiteralsFromContext(&env);
 
     if (!skip_numeric_defaults) {
@@ -2137,6 +2229,8 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     }
 
     try self.reportPolymorphicTopLevelValues();
+
+    try self.checkPlatformHostedSection();
 
     // Two coordinated ambiguity sweeps share a `reported` set keyed by resolved
     // dispatcher var so a receiver caught per-instantiation is not also reported
@@ -2261,7 +2355,7 @@ fn reportAmbiguousStaticDispatchPerInstantiation(
         var first_constraint: ?StaticDispatchConstraint = null;
         var skip_receiver = false;
         for (constraints) |c| {
-            if (c.origin == .from_numeral) {
+            if (c.origin == .from_numeral or c.origin == .from_quote) {
                 skip_receiver = true;
             } else if (c.fn_name.eql(self.cir.idents.is_eq)) {
                 continue;
@@ -2426,7 +2520,7 @@ fn reportAmbiguousStaticDispatch(
         var first_constraint: ?StaticDispatchConstraint = null;
         for (constraints) |c| {
             switch (c.origin) {
-                .from_numeral, .where_clause => {
+                .from_numeral, .from_quote, .where_clause => {
                     has_excluded_origin = true;
                 },
                 .method_call, .desugared_binop, .desugared_unaryop => {
@@ -2863,6 +2957,157 @@ fn varsHaveUnresolvedStaticDispatchConstraints(
     return false;
 }
 
+/// Validate a platform module's hosted section against the hosted functions
+/// its imported type modules declare: every hosted function must appear
+/// exactly once, every entry must name a real hosted function, linker symbols
+/// must be unique across the hosted and provides sections, and the fixed
+/// runtime symbols plus the internal roc__ namespace are reserved.
+///
+/// Applications never pay for this: it only runs for platform modules.
+fn checkPlatformHostedSection(self: *Self) std.mem.Allocator.Error!void {
+    if (self.cir.module_kind != .platform) return;
+
+    const section = self.cir.hosted_entries.items.items;
+
+    // Qualified names of every hosted function declared by imported modules,
+    // built the same way the hosted dispatch catalog builds its keys:
+    // "Module.func" with a trailing `!` stripped.
+    var declared = std.StringHashMap(void).init(self.gpa);
+    defer {
+        var key_it = declared.keyIterator();
+        while (key_it.next()) |key| self.gpa.free(key.*);
+        declared.deinit();
+    }
+    // Walk owner modules (direct imports plus their transitive public
+    // dependencies), since hosted functions can live in modules the platform
+    // root never imports directly. Within each module, walk global value defs,
+    // not all_defs: hosted functions declared as associated items of (possibly
+    // nested) type modules are hoisted into global_value_defs only, and the
+    // hosted dispatch catalog scans the same list.
+    for (self.owner_modules) |imported_env| {
+        const all_defs = imported_env.store.sliceDefs(imported_env.global_value_defs);
+        for (all_defs) |def_idx| {
+            const def = imported_env.store.getDef(def_idx);
+            const expr = imported_env.store.getExpr(def.expr);
+            if (expr != .e_hosted_lambda) continue;
+
+            var module_name = imported_env.module_name;
+            if (Ident.textEndsWith(module_name, ".roc")) {
+                module_name = module_name[0 .. module_name.len - 4];
+            }
+            var func_name = imported_env.getIdent(expr.e_hosted_lambda.symbol_name);
+            if (Ident.textEndsWith(func_name, "!")) {
+                func_name = func_name[0 .. func_name.len - 1];
+            }
+            const key = try std.fmt.allocPrint(self.gpa, "{s}.{s}", .{ module_name, func_name });
+            const gop = try declared.getOrPut(key);
+            if (gop.found_existing) self.gpa.free(key);
+        }
+    }
+
+    // Walk the section: resolve each entry, detect duplicate functions and
+    // duplicate/reserved symbols (provides symbols share the namespace).
+    var mapped = std.StringHashMap(void).init(self.gpa);
+    defer {
+        var key_it = mapped.keyIterator();
+        while (key_it.next()) |key| self.gpa.free(key.*);
+        mapped.deinit();
+    }
+    var symbols = std.StringHashMap(void).init(self.gpa);
+    defer symbols.deinit();
+    for (self.cir.provides_entries.items.items) |provides_entry| {
+        const symbol_text = self.cir.getString(provides_entry.ffi_symbol);
+        try self.checkHostSymbol(symbol_text, &symbols);
+    }
+
+    for (section) |entry| {
+        var func_name = self.cir.getIdent(entry.func_ident);
+        if (Ident.textEndsWith(func_name, "!")) {
+            func_name = func_name[0 .. func_name.len - 1];
+        }
+        const key = if (entry.module_ident) |module_ident|
+            try std.fmt.allocPrint(self.gpa, "{s}.{s}", .{ self.cir.getIdent(module_ident), func_name })
+        else
+            try self.gpa.dupe(u8, func_name);
+
+        if (!declared.contains(key)) {
+            const name_idx = try self.problems.putExtraString(key);
+            _ = try self.problems.appendProblem(self.gpa, .{ .platform_hosted_section = .{
+                .name = name_idx,
+                .reason = .unknown_function,
+            } });
+        }
+
+        const gop = try mapped.getOrPut(key);
+        if (gop.found_existing) {
+            const name_idx = try self.problems.putExtraString(key);
+            _ = try self.problems.appendProblem(self.gpa, .{ .platform_hosted_section = .{
+                .name = name_idx,
+                .reason = .duplicate_function,
+            } });
+            self.gpa.free(key);
+        }
+
+        const symbol_text = self.cir.getString(entry.symbol);
+        try self.checkHostSymbol(symbol_text, &symbols);
+    }
+
+    // Every declared hosted function needs exactly one section entry.
+    var declared_it = declared.keyIterator();
+    while (declared_it.next()) |key| {
+        if (mapped.contains(key.*)) continue;
+        const name_idx = try self.problems.putExtraString(key.*);
+        _ = try self.problems.appendProblem(self.gpa, .{ .platform_hosted_section = .{
+            .name = name_idx,
+            .reason = .function_not_in_section,
+        } });
+    }
+}
+
+/// The fixed runtime symbols every host defines; platform headers may not
+/// reuse them for provides or hosted entries.
+const reserved_host_symbols = [_][]const u8{
+    "roc_alloc",
+    "roc_dealloc",
+    "roc_realloc",
+    "roc_dbg",
+    "roc_expect_failed",
+    "roc_crashed",
+};
+
+fn checkHostSymbol(
+    self: *Self,
+    symbol_text: []const u8,
+    symbols: *std.StringHashMap(void),
+) std.mem.Allocator.Error!void {
+    for (reserved_host_symbols) |reserved| {
+        if (Ident.textEql(symbol_text, reserved)) {
+            const name_idx = try self.problems.putExtraString(symbol_text);
+            _ = try self.problems.appendProblem(self.gpa, .{ .platform_hosted_section = .{
+                .name = name_idx,
+                .reason = .reserved_symbol,
+            } });
+            return;
+        }
+    }
+    if (Ident.textStartsWith(symbol_text, "roc__")) {
+        const name_idx = try self.problems.putExtraString(symbol_text);
+        _ = try self.problems.appendProblem(self.gpa, .{ .platform_hosted_section = .{
+            .name = name_idx,
+            .reason = .reserved_prefix,
+        } });
+        return;
+    }
+    const gop = try symbols.getOrPut(symbol_text);
+    if (gop.found_existing) {
+        const name_idx = try self.problems.putExtraString(symbol_text);
+        _ = try self.problems.appendProblem(self.gpa, .{ .platform_hosted_section = .{
+            .name = name_idx,
+            .reason = .duplicate_symbol,
+        } });
+    }
+}
+
 /// Process the requires_types annotations for platform modules, like:
 ///
 ///   { [Model : model] for main : { init : model, ... } }
@@ -2993,6 +3238,7 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
 
     // Check any accumulated constraints
     try self.checkAllConstraints(&env);
+    try self.finalizeQuoteDefaults(&env);
     try self.resolveNumericLiteralsFromContext(&env);
     try self.finalizeNumericDefaultsInternal(&env);
 
@@ -3063,6 +3309,7 @@ pub fn checkExprReplWithDefs(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Alloca
 
     // Check any accumulated constraints
     try self.checkAllConstraints(&env);
+    try self.finalizeQuoteDefaults(&env);
     try self.resolveNumericLiteralsFromContext(&env);
     try self.finalizeNumericDefaultsInternal(&env);
 
@@ -3153,6 +3400,7 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
     };
 
     // Infer types for the body, checking against the instantiated annotation
+    self.checking_binding_rhs = true;
     const def_does_fx = try self.checkExpr(def.expr, env, expectation);
     if (def_does_fx) {
         _ = try self.problems.appendProblem(self.gpa, .{ .effectful_top_level = .{
@@ -4554,8 +4802,12 @@ fn checkPatternHelp(
         },
         // str //
         .str_literal => {
-            const str_var = try self.freshStr(env, pattern_region);
-            _ = try self.unify(pattern_var, str_var, env);
+            // A literal pattern converts through from_quote and compares the
+            // matched value against the converted constant, so the type also
+            // needs equality.
+            const flex_var = try self.mkFlexWithFromQuoteConstraint(ModuleEnv.nodeIdxFrom(pattern_idx), pattern_region, env);
+            _ = try self.unify(pattern_var, flex_var, env);
+            try self.mkPatternLiteralEqConstraint(pattern_var, env, pattern_region);
         },
         // as //
         .as => |p| {
@@ -4818,8 +5070,9 @@ fn checkPatternHelp(
                     };
 
                     // Create flex var with from_numeral constraint
-                    const flex_var = try self.mkFlexWithFromNumeralConstraint(null, num_literal_info, env);
+                    const flex_var = try self.mkFlexWithFromNumeralConstraint(ModuleEnv.nodeIdxFrom(pattern_idx), num_literal_info, env);
                     _ = try self.unify(pattern_var, flex_var, env);
+                    try self.mkPatternLiteralEqConstraint(pattern_var, env, pattern_region);
                 },
                 // Phase 5: For explicitly typed literals, use nominal types from Builtin
                 .u8 => try self.unifyWith(pattern_var, try self.mkNumberTypeContent(.u8, env), env),
@@ -4858,8 +5111,9 @@ fn checkPatternHelp(
                     pattern_region,
                 );
 
-                const flex_var = try self.mkFlexWithFromNumeralConstraint(null, num_literal_info, env);
+                const flex_var = try self.mkFlexWithFromNumeralConstraint(ModuleEnv.nodeIdxFrom(pattern_idx), num_literal_info, env);
                 _ = try self.unify(pattern_var, flex_var, env);
+                try self.mkPatternLiteralEqConstraint(pattern_var, env, pattern_region);
             }
         },
         .small_dec_literal => |dec| {
@@ -4876,8 +5130,9 @@ fn checkPatternHelp(
                     pattern_region,
                 );
 
-                const flex_var = try self.mkFlexWithFromNumeralConstraint(null, num_literal_info, env);
+                const flex_var = try self.mkFlexWithFromNumeralConstraint(ModuleEnv.nodeIdxFrom(pattern_idx), num_literal_info, env);
                 _ = try self.unify(pattern_var, flex_var, env);
+                try self.mkPatternLiteralEqConstraint(pattern_var, env, pattern_region);
             }
         },
         .runtime_error => {
@@ -5109,12 +5364,30 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
     const is_call_arg = self.checking_call_arg;
     self.checking_call_arg = false;
 
+    // Consume the binding-RHS flag: it applies only to this immediate checkExpr
+    // call and must not propagate into subexpressions.
+    const is_binding_rhs = self.checking_binding_rhs;
+    self.checking_binding_rhs = false;
+
     // Value restriction: only generalize at the inner lambda level, not the
     // outer e_closure wrapper (which delegates to e_lambda's own checkExpr).
     // Direct call-argument lambdas are consumed immediately, so they must not
     // generalize independently. Doing so lets their generalized vars escape
     // into the enclosing value via unification.
-    const should_generalize = isFunctionDef(&self.cir.store, expr) and expr != .e_closure and !is_call_arg;
+    //
+    // We also generalize a binding whose RHS is a bare reference to an already-
+    // generalized scheme (e.g. `shorthand = FooBar.myfunc`). Such a reference is
+    // non-expansive: it performs no work and can hide no `dbg`/`expect`, so it
+    // raises none of the duplicate-work or duplicate-effect concerns that motivate
+    // restricting generalization to syntactic functions. In practice the only
+    // generalized schemes are functions (numeric literals use the separate
+    // defaulting path), so this never re-generalizes numbers or tag unions. We
+    // restrict this to binding-RHS position so that bare lookups appearing as
+    // arbitrary subexpressions don't pay generalization cost or get generalized
+    // out from under their surrounding context.
+    const is_value_alias = is_binding_rhs and
+        (expr == .e_lookup_local or expr == .e_lookup_external);
+    const should_generalize = (isFunctionDef(&self.cir.store, expr) and expr != .e_closure and !is_call_arg) or is_value_alias;
 
     // Push/pop ranks based on if we should generalize
     if (should_generalize) try env.var_pool.pushRank();
@@ -5194,6 +5467,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             // Iterate over the string segments, checking each one
             const segment_expr_idx_slice = self.cir.store.sliceExpr(str.span);
             var did_err = false;
+            var has_interpolation = false;
             for (segment_expr_idx_slice) |seg_expr_idx| {
                 const seg_expr = self.cir.store.getExpr(seg_expr_idx);
 
@@ -5203,6 +5477,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                         does_fx = try self.checkExpr(seg_expr_idx, env, Expected.none()) or does_fx;
                     },
                     else => {
+                        has_interpolation = true;
                         does_fx = try self.checkExpr(seg_expr_idx, env, Expected.none()) or does_fx;
                         const seg_var = ModuleEnv.varFrom(seg_expr_idx);
 
@@ -5229,10 +5504,19 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             if (did_err) {
                 // If any segment errored, propagate that error to the root string
                 try self.unifyWith(expr_var, .err, env);
-            } else {
-                // Otherwise, set the type of this expr to be nominal Str
+            } else if (has_interpolation) {
+                // Interpolated strings are Str
                 const str_var = try self.freshStr(env, expr_region);
                 _ = try self.unify(expr_var, str_var, env);
+            } else {
+                // A plain literal converts to its target type through from_quote,
+                // defaulting to Str if nothing pins it.
+                const flex_var = try self.mkFlexWithFromQuoteConstraint(ModuleEnv.nodeIdxFrom(expr_idx), expr_region, env);
+                if (self.cir.numericSuffixTypeForNode(ModuleEnv.nodeIdxFrom(expr_idx)) != null) {
+                    // Explicit type suffix, e.g. `"foo".MyType`.
+                    try self.unifyTypedLiteralWithExplicitType(flex_var, expr_idx, expr_region, env);
+                }
+                _ = try self.unify(expr_var, flex_var, env);
             }
         },
         // nums //
@@ -6456,6 +6740,12 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     method_call.args,
                     constraint_fn_var,
                 );
+                if (self.cir.isInterpolationCallNode(ModuleEnv.nodeIdxFrom(expr_idx))) {
+                    // The from_interpolation protocol returns the receiver's
+                    // type, so the literal's target is pinned by the result
+                    // before string defaulting runs.
+                    _ = try self.unify(expr_var, receiver_var, env);
+                }
             }
         },
         .e_dispatch_call => |method_call| {
@@ -6570,6 +6860,12 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             }
         },
         .e_crash => {
+            try self.unifyWith(expr_var, .{ .flex = Flex.init() }, env);
+        },
+        .e_expect_err => |expect_err| {
+            // The Err payload is consumed at runtime when the enclosing expect
+            // fails; this expression itself never returns, so its type is free.
+            _ = try self.checkExpr(expect_err.expr, env, Expected.none());
             try self.unifyWith(expr_var, .{ .flex = Flex.init() }, env);
         },
         .e_dbg => |dbg| {
@@ -7195,6 +7491,7 @@ fn exprAlwaysCrashes(self: *const Self, expr_idx: CIR.Expr.Idx) bool {
     return switch (self.cir.store.getExpr(expr_idx)) {
         .e_crash,
         .e_ellipsis,
+        .e_expect_err,
         => true,
         .e_block => |block| self.exprAlwaysCrashes(block.final_expr),
         else => false,
@@ -7262,6 +7559,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                     });
                 }
 
+                self.checking_binding_rhs = true;
                 does_fx = try self.checkExpr(decl_stmt.expr, env, expectation) or does_fx;
                 if (decl_stmt.anno == null and self.erroneous_value_exprs.contains(decl_stmt.expr)) {
                     try self.erroneous_value_patterns.put(self.gpa, decl_stmt.pattern, {});
@@ -8404,6 +8702,18 @@ fn getNominalOriginEnv(self: *Self, nominal_type: types_mod.NominalType) *const 
 
 /// Create a static dispatch fn like: `lhs, rhs -> ret` and assert the
 /// constraint to the lhs (receiver) var.
+/// Constrain a literal pattern's type to support equality, since matching the
+/// pattern compares the scrutinee against the literal's converted value.
+fn mkPatternLiteralEqConstraint(
+    self: *Self,
+    pattern_var: Var,
+    env: *Env,
+    region: Region,
+) Allocator.Error!void {
+    const ret_var = try self.freshBool(env, region);
+    try self.mkBinopConstraint(pattern_var, pattern_var, ret_var, self.cir.idents.is_eq, false, env, region, null);
+}
+
 fn mkBinopConstraint(
     self: *Self,
     lhs_var: Var,
@@ -9171,7 +9481,7 @@ fn resolveFromNumeralFlexFromConcreteDispatchArg(
     const dispatcher_resolved = self.types.resolveVar(dispatcher_var);
 
     for (constraints) |constraint| {
-        if (constraint.origin == .from_numeral) continue;
+        if (constraint.origin == .from_numeral or constraint.origin == .from_quote) continue;
 
         const fn_content = self.types.resolveVar(constraint.fn_var).desc.content;
         const func = fn_content.unwrapFunc() orelse continue;
@@ -9305,47 +9615,6 @@ fn staticDispatchConstraintAcceptsCandidate(
     return try self.probeUnifyWithoutRecordingProblems(method_var, constraint.fn_var);
 }
 
-fn listJoinWithListItemsMethodDef(
-    self: *Self,
-    original_env: *const ModuleEnv,
-    is_this_module: bool,
-    nominal_type: types_mod.NominalType,
-    constraint: StaticDispatchConstraint,
-    env: *Env,
-    region: Region,
-) Allocator.Error!?ModuleEnv.MethodBinding {
-    if (!constraint.fn_name.eql(self.cir.idents.join_with)) return null;
-    if (!nominal_type.ident.ident_idx.eql(self.cir.idents.list)) return null;
-
-    const join_list_with_ident = original_env.idents.join_list_with;
-    const helper_binding = original_env.lookupMethodBindingFromEnvAndDeclConst(
-        original_env,
-        nominal_type.sourceDeclOptional(),
-        join_list_with_ident,
-    ) orelse return null;
-    const helper_def_var: Var = ModuleEnv.varFrom(helper_binding.type_node_idx);
-
-    var probe = try self.beginProbe();
-    defer probe.rollback();
-
-    var probe_env = try self.env_pool.acquire();
-    defer self.env_pool.release(probe_env);
-    try probe_env.reset(env.rank());
-
-    const helper_var = if (is_this_module) blk: {
-        if (self.types.resolveVar(helper_def_var).desc.rank == .generalized) {
-            break :blk try self.instantiateVar(helper_def_var, &probe_env, .use_last_var);
-        }
-        break :blk helper_def_var;
-    } else blk: {
-        const copied_var = try self.copyVar(helper_def_var, original_env, region);
-        break :blk try self.instantiateVar(copied_var, &probe_env, .{ .explicit = region });
-    };
-
-    if (!try self.probeUnifyWithoutRecordingProblems(helper_var, constraint.fn_var)) return null;
-    return helper_binding;
-}
-
 fn probeUnifyWithoutRecordingProblems(
     self: *Self,
     expected: Var,
@@ -9390,6 +9659,64 @@ fn finalizeNumericDefaultsInternal(self: *Self, env: *Env) std.mem.Allocator.Err
 
         const dec_var = try self.freshFromContent(try self.mkBuiltinNumberTypeContentFromKind(.dec, env), env, Region.zero());
         _ = try self.unify(resolved.var_, dec_var, env);
+    }
+}
+
+/// Default every non-generalized flex var carrying a from_quote constraint to
+/// Str. This runs before numeric context resolution: a still-flex string
+/// literal blocks resolution of the method chains hanging off it (e.g.
+/// `"x".to_utf8().concat([0])`), and those chains are what give numeric
+/// literals their context.
+fn finalizeQuoteDefaults(self: *Self, env: *Env) Allocator.Error!void {
+    if (self.types.from_numeral_flex_count == 0) return;
+
+    // Lazily-built set of vars some instantiation can pin (argument-position
+    // and lambda-parameter reachable). A generalized literal var outside this
+    // set can never be pinned to anything else, so defaulting it to Str now is
+    // the same resolution monomorphic specialization would apply — done early
+    // enough for the method chains hanging off it to resolve during checking.
+    var pinnable = std.AutoHashMap(Var, void).init(self.gpa);
+    defer pinnable.deinit();
+    var collected_pinnable = false;
+
+    const num_vars: u32 = @intCast(self.types.len());
+    var i: u32 = 0;
+    while (i < num_vars) : (i += 1) {
+        const var_: types_mod.Var = @enumFromInt(i);
+        const resolved = self.types.resolveVar(var_);
+        if (resolved.desc.content != .flex) continue;
+        const flex = resolved.desc.content.flex;
+        const constraints = self.types.sliceStaticDispatchConstraints(flex.constraints);
+        var has_from_quote = false;
+        var has_from_numeral = false;
+        for (constraints) |c| {
+            switch (c.origin) {
+                .from_quote => has_from_quote = true,
+                .from_numeral => has_from_numeral = true,
+                else => {},
+            }
+        }
+        // A var carrying both origins is left for the numeric default, which
+        // then reports the unsatisfiable from_quote constraint against Dec.
+        if (!has_from_quote or has_from_numeral) continue;
+
+        if (resolved.desc.rank == .generalized) {
+            if (!collected_pinnable) {
+                try self.collectPinnableVars(&pinnable);
+                collected_pinnable = true;
+            }
+            if (pinnable.contains(resolved.var_)) continue;
+        }
+
+        const default_str_var = try self.freshStr(env, Region.zero());
+        _ = try self.unify(resolved.var_, default_str_var, env);
+    }
+
+    // Resolve the dispatch chains the defaults just unblocked, so numeric
+    // literals see their context before numeric defaulting runs.
+    if (env.deferred_static_dispatch_constraints.items.items.len > 0) {
+        try self.checkStaticDispatchConstraints(env, false);
+        try self.checkAllConstraints(env);
     }
 }
 
@@ -9671,14 +9998,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                             );
                             continue;
                         };
-                    } else (try self.listJoinWithListItemsMethodDef(
-                        original_env,
-                        is_this_module,
-                        nominal_type,
-                        constraint,
-                        env,
-                        region,
-                    )) orelse original_env.lookupMethodBindingFromEnvAndDeclConst(self.cir, nominal_type.sourceDeclOptional(), constraint.fn_name) orelse {
+                    } else original_env.lookupMethodBindingFromEnvAndDeclConst(self.cir, nominal_type.sourceDeclOptional(), constraint.fn_name) orelse {
                         // Method name doesn't exist in target module
                         try self.reportConstraintError(
                             deferred_constraint.var_,
@@ -10354,6 +10674,11 @@ fn validateUnsignedFromNumeralLiteral(
     return null;
 }
 
+test "unsuffixed positive integer literal validates against unsigned builtin type" {
+    const info = types_mod.NumeralInfo.fromI128(42, false, false, Region.zero());
+    try std.testing.expectEqual(@as(?BuiltinFromNumeralLiteralProblem, null), validateBuiltinFromNumeralLiteral(.u64, info));
+}
+
 fn validateSignedFromNumeralLiteral(
     comptime T: type,
     num_literal: types_mod.NumeralInfo,
@@ -10536,41 +10861,48 @@ fn checkFlexVarConstraintCompatibility(self: *Self, var_: Var, env: *Env, is_num
     const constraints = self.types.sliceStaticDispatchConstraints(flex.constraints);
     if (constraints.len == 0) return;
 
-    // Check if this flex var has from_numeral constraint (indicating numeric type)
+    // Find the literal-origin constraint that determines the default type.
     var has_from_numeral = false;
+    var has_from_quote = false;
     for (constraints) |c| {
-        if (c.origin == .from_numeral) {
-            has_from_numeral = true;
-            break;
+        switch (c.origin) {
+            .from_numeral => has_from_numeral = true,
+            .from_quote => has_from_quote = true,
+            else => {},
         }
     }
+    if (!has_from_numeral and !has_from_quote) return;
 
-    if (has_from_numeral) {
-        // This flex will default to Dec. Validate that all other constraints
-        // can be satisfied by Dec.
-        const builtin_env = self.builtin_ctx.builtin_module orelse return;
-        const indices = self.builtin_ctx.builtin_indices orelse return;
+    // This flex will default to Dec (numerals) or Str (quotes). Validate that
+    // all other constraints can be satisfied by the default type.
+    const builtin_env = self.builtin_ctx.builtin_module orelse return;
+    const indices = self.builtin_ctx.builtin_indices orelse return;
+    const default_type_stmt = if (has_from_numeral) indices.dec_type else indices.str_type;
 
-        for (constraints) |constraint| {
-            // Skip from_numeral - that's satisfied by Dec by definition
-            if (constraint.origin == .from_numeral) continue;
+    for (constraints) |constraint| {
+        // Skip the literal-origin constraint the default type satisfies by
+        // definition. (With both origins present, the var defaults to Dec and
+        // the from_quote constraint must still be validated against it.)
+        switch (constraint.origin) {
+            .from_numeral => if (has_from_numeral) continue,
+            .from_quote => if (!has_from_numeral) continue,
+            else => {},
+        }
 
-            // Check if Dec has this method
-            const method_binding = builtin_env.lookupMethodBindingFromTwoEnvsAndDeclConst(
-                @intFromEnum(indices.dec_type),
-                self.cir,
-                constraint.fn_name,
+        // Check if the default type has this method
+        const method_binding = builtin_env.lookupMethodBindingFromTwoEnvsAndDeclConst(
+            @intFromEnum(default_type_stmt),
+            self.cir,
+            constraint.fn_name,
+        );
+        if (method_binding == null) {
+            try self.reportConstraintError(
+                var_,
+                constraint,
+                .{ .missing_method = .nominal },
+                env,
+                is_numeric_default_pass,
             );
-            if (method_binding == null) {
-                // Dec doesn't have this method - report error
-                try self.reportConstraintError(
-                    var_,
-                    constraint,
-                    .{ .missing_method = .nominal },
-                    env,
-                    is_numeric_default_pass,
-                );
-            }
         }
     }
 }
@@ -10817,6 +11149,25 @@ fn markConstraintFunctionAsError(self: *Self, constraint: StaticDispatchConstrai
     _ = try self.unify(resolved_func.ret, err_var, env);
 }
 
+/// Find the source region of the string literal whose from_quote constraint
+/// resolved into `dispatcher_var`, for error reporting. The constraint itself
+/// carries no region, but the literal's dispatch plan records its source node.
+fn quoteLiteralRegionForDispatcher(self: *Self, constraint: StaticDispatchConstraint, dispatcher_var: Var) ?Region {
+    if (constraint.origin != .from_quote) return null;
+    const resolved_dispatcher = self.types.resolveVar(dispatcher_var).var_;
+    for (self.cir.quote_dispatch_plans.items.items) |plan| {
+        const target: Var = @enumFromInt(plan.target_var);
+        if (self.types.resolveVar(target).var_ != resolved_dispatcher) continue;
+        return self.cir.store.getNodeRegion(@enumFromInt(plan.node_idx));
+    }
+    return null;
+}
+
+const ReportedConstraintError = struct {
+    dispatcher: Var,
+    fn_name: Ident.Idx,
+};
+
 /// Report a constraint validation error
 fn reportConstraintError(
     self: *Self,
@@ -10829,6 +11180,16 @@ fn reportConstraintError(
     env: *Env,
     is_numeric_default_pass: bool,
 ) Allocator.Error!void {
+    const dedup_key = ReportedConstraintError{
+        .dispatcher = self.types.resolveVar(dispatcher_var).var_,
+        .fn_name = constraint.fn_name,
+    };
+    const dedup_entry = try self.reported_constraint_errors.getOrPut(dedup_key);
+    if (dedup_entry.found_existing) {
+        try self.markConstraintFunctionAsError(constraint, env);
+        return;
+    }
+
     const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, dispatcher_var);
     const constraint_problem = switch (kind) {
         .missing_method => |dispatcher_type| problem.Problem{ .static_dispatch = .{
@@ -10840,6 +11201,7 @@ fn reportConstraintError(
                 .method_name = constraint.fn_name,
                 .origin = constraint.origin,
                 .num_literal = constraint.num_literal,
+                .quote_region = self.quoteLiteralRegionForDispatcher(constraint, dispatcher_var),
                 .defaulted_from_numeric_literal = is_numeric_default_pass,
             },
         } },

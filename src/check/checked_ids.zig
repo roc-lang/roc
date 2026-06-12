@@ -8,6 +8,8 @@ pub const CheckedExprId = enum(u32) { _ };
 pub const CheckedPatternId = enum(u32) { _ };
 /// Public `CheckedStatementId` declaration.
 pub const CheckedStatementId = enum(u32) { _ };
+/// Public `CheckedStringLiteralId` declaration.
+pub const CheckedStringLiteralId = enum(u32) { _ };
 /// Public `CheckedTypeId` declaration.
 pub const CheckedTypeId = enum(u32) { _ };
 /// Public `CheckedTypeSchemeId` declaration.

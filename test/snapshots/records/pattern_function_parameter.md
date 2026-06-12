@@ -63,23 +63,61 @@ NO CHANGE
 						(record-destruct (label "email") (ident "email")
 							(required
 								(p-assign (ident "email")))))))
-			(e-string
-				(e-literal (string "User: "))
-				(e-lookup-local
-					(p-assign (ident "name")))
-				(e-literal (string " ("))
-				(e-method-call (method "toStr")
+			(e-block
+				(s-let
+					(p-assign (ident "#interp_0"))
+					(e-lookup-local
+						(p-assign (ident "name"))))
+				(s-let
+					(p-assign (ident "#interp_1"))
+					(e-method-call (method "toStr")
+						(receiver
+							(e-lookup-local
+								(p-assign (ident "age"))))
+						(args)))
+				(s-let
+					(p-assign (ident "#interp_2"))
+					(e-method-call (method "display")
+						(receiver
+							(e-lookup-local
+								(p-assign (ident "email"))))
+						(args)))
+				(e-method-call (method "from_interpolation")
 					(receiver
-						(e-lookup-local
-							(p-assign (ident "age"))))
-					(args))
-				(e-literal (string " years old) - Contact: "))
-				(e-method-call (method "display")
-					(receiver
-						(e-lookup-local
-							(p-assign (ident "email"))))
-					(args))
-				(e-literal (string ""))))))
+						(e-string
+							(e-literal (string "User: "))))
+					(args
+						(e-method-call (method "prepended")
+							(receiver
+								(e-method-call (method "prepended")
+									(receiver
+										(e-method-call (method "prepended")
+											(receiver
+												(e-method-call (method "iter")
+													(receiver
+														(e-empty_list))
+													(args)))
+											(args
+												(e-tuple
+													(elems
+														(e-lookup-local
+															(p-assign (ident "#interp_2")))
+														(e-string
+															(e-literal (string ""))))))))
+									(args
+										(e-tuple
+											(elems
+												(e-lookup-local
+													(p-assign (ident "#interp_1")))
+												(e-string
+													(e-literal (string " years old) - Contact: "))))))))
+							(args
+								(e-tuple
+									(elems
+										(e-lookup-local
+											(p-assign (ident "#interp_0")))
+										(e-string
+											(e-literal (string " (")))))))))))))
 ~~~
 # TYPES
 ~~~clojure

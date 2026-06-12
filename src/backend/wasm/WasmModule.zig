@@ -409,7 +409,9 @@ data_segments: std.ArrayList(DataSegment),
 /// Next available offset for data placement in linear memory (grows up from 0).
 data_offset: u32,
 has_memory: bool,
+memory_import: bool,
 memory_min_pages: u32,
+memory_max_pages: ?u32,
 has_stack_pointer: bool,
 stack_pointer_init: u32,
 /// Whether the module has a funcref table (for call_indirect).
@@ -462,7 +464,9 @@ pub fn init(allocator: Allocator) Self {
         .data_segments = .empty,
         .data_offset = 1024, // reserve first 1KB for future use
         .has_memory = false,
+        .memory_import = false,
         .memory_min_pages = 1,
+        .memory_max_pages = null,
         .has_stack_pointer = false,
         .stack_pointer_init = 65536,
         .has_table = false,
@@ -602,6 +606,7 @@ pub fn addStackPointerImportWithSymbol(self: *Self) Allocator.Error!SymbolIndex 
 /// Import linear memory for a generated relocatable object.
 pub fn addMemoryImport(self: *Self) void {
     self.has_memory = true;
+    self.memory_import = true;
     self.memory_min_pages = @max(self.memory_min_pages, 1);
 }
 
@@ -822,6 +827,7 @@ pub fn addExport(self: *Self, name: []const u8, kind: ExportKind, idx: u32) Allo
 /// Enable memory section with the given minimum page count.
 pub fn enableMemory(self: *Self, min_pages: u32) void {
     self.has_memory = true;
+    self.memory_import = false;
     self.memory_min_pages = min_pages;
 }
 
@@ -1360,6 +1366,21 @@ pub fn mergeModuleMode(self: *Self, source: *const Self, mode: MergeMode) MergeE
     if (mode == .relocatable_object and source.has_memory) {
         self.addMemoryImport();
         self.memory_min_pages = @max(self.memory_min_pages, source.memory_min_pages);
+        if (source.memory_max_pages) |max_pages| {
+            self.memory_max_pages = if (self.memory_max_pages) |current|
+                @min(current, max_pages)
+            else
+                max_pages;
+        }
+    } else if (mode == .final_link and source.has_memory) {
+        self.has_memory = true;
+        self.memory_min_pages = @max(self.memory_min_pages, source.memory_min_pages);
+        if (source.memory_max_pages) |max_pages| {
+            self.memory_max_pages = if (self.memory_max_pages) |current|
+                @min(current, max_pages)
+            else
+                max_pages;
+        }
     }
 
     // --- 2. Compute function index mapping ---
@@ -1602,6 +1623,18 @@ pub fn mergeModuleMode(self: *Self, source: *const Self, mode: MergeMode) MergeE
                                 src_imp.mutable,
                             );
                             symbol_remap[src_sym_idx] = imported.symbol.raw();
+                            continue;
+                        }
+                        if (std.mem.eql(u8, name, "__stack_pointer")) {
+                            self.enableStackPointer(self.stack_pointer_init);
+                            const new_sym_idx: u32 = @intCast(self.linking.symbol_table.items.len);
+                            try self.linking.symbol_table.append(gpa, .{
+                                .kind = .global,
+                                .flags = 0,
+                                .name = name,
+                                .index = 0,
+                            });
+                            symbol_remap[src_sym_idx] = new_sym_idx;
                             continue;
                         }
                         // PIC globals: define them as constants in the final module.
@@ -2000,8 +2033,14 @@ pub const NoLinkObjectContractError = error{
 };
 
 /// Verify that a no-link app object exposes only app definitions and wasm object ABI imports.
+/// Function imports are the wasm object encoding of undefined symbols; under
+/// the symbol ABI the app object legitimately references the platform's
+/// runtime and hosted symbols, so `env` function imports are permitted and
+/// resolve at final link (or stay imports in hostless archives).
 pub fn verifyNoLinkObjectContract(self: *const Self) NoLinkObjectContractError!void {
-    if (self.imports.items.len != 0) return error.UnexpectedFunctionImport;
+    for (self.imports.items) |imp| {
+        if (!std.mem.eql(u8, imp.module_name, "env")) return error.UnexpectedFunctionImport;
+    }
 
     for (self.global_imports.items) |imp| {
         if (!std.mem.eql(u8, imp.module_name, "env") or !isAllowedObjectAbiGlobal(imp.field_name)) {
@@ -2021,7 +2060,7 @@ pub fn verifyNoLinkObjectContract(self: *const Self) NoLinkObjectContractError!v
         if (!sym.isUndefined()) continue;
         const name = sym.resolveName(self.imports.items, self.global_imports.items, self.table_imports.items) orelse return error.UnexpectedUndefinedSymbol;
         switch (sym.kind) {
-            .function => return error.UnexpectedUndefinedFunctionSymbol,
+            .function => {},
             .global => if (!isAllowedObjectAbiGlobal(name)) return error.UnexpectedUndefinedSymbol,
             .table => if (!std.mem.eql(u8, name, "__indirect_function_table")) return error.UnexpectedUndefinedSymbol,
             .data, .section, .event => return error.UnexpectedUndefinedSymbol,
@@ -2098,6 +2137,8 @@ pub fn eliminateDeadCode(self: *Self, called_fns: []const bool) Allocator.Error!
         }
     }
 
+    try self.eliminateDeadData(live_flags, fn_index_min, fn_count);
+
     // --- 3. Replace dead defined-function bodies with dummies ---
     var buffer: std.ArrayList(u8) = .empty;
     defer buffer.deinit(gpa);
@@ -2141,6 +2182,80 @@ pub fn eliminateDeadCode(self: *Self, called_fns: []const bool) Allocator.Error!
 
     // Update import_fn_count to reflect removals.
     self.import_fn_count -= eliminated_import_count;
+}
+
+fn eliminateDeadData(self: *Self, live_flags: []const bool, fn_index_min: u32, fn_count: u32) Allocator.Error!void {
+    const gpa = self.allocator;
+    if (self.data_segments.items.len == 0) return;
+
+    const live_segments = try gpa.alloc(bool, self.data_segments.items.len);
+    defer gpa.free(live_segments);
+    @memset(live_segments, false);
+
+    // Seed data liveness from relocations inside live function bodies.
+    for (live_flags, 0..) |is_live, fi| {
+        if (!is_live) continue;
+        if (fi < fn_index_min or fi >= fn_count) continue;
+
+        const offset_index = fi - fn_index_min;
+        const code_start = self.function_offsets.items[offset_index];
+        const code_end: u32 = if (offset_index + 1 < self.function_offsets.items.len)
+            self.function_offsets.items[offset_index + 1]
+        else
+            @intCast(self.code_bytes.items.len);
+
+        for (self.reloc_code.entries.items) |entry| {
+            if (!relocationOffsetInRange(entry, code_start, code_end)) continue;
+            _ = self.markRelocationDataTarget(live_segments, entry);
+        }
+    }
+
+    // Follow data-to-data references until all transitively live segments are marked.
+    var changed = true;
+    while (changed) {
+        changed = false;
+        for (self.reloc_data.entries.items) |entry| {
+            const source_segment = relocationDataSegment(entry);
+            std.debug.assert(source_segment < live_segments.len);
+            if (!live_segments[source_segment]) continue;
+
+            if (self.markRelocationDataTarget(live_segments, entry)) changed = true;
+        }
+    }
+
+    var write_idx: usize = 0;
+    for (self.data_segments.items, 0..) |segment, i| {
+        if (live_segments[i]) {
+            self.data_segments.items[write_idx] = segment;
+            write_idx += 1;
+        } else {
+            gpa.free(segment.data);
+        }
+    }
+    self.data_segments.items.len = write_idx;
+}
+
+fn relocationOffsetInRange(entry: WasmLinking.RelocationEntry, code_start: u32, code_end: u32) bool {
+    const offset = entry.getOffset();
+    return offset > code_start and offset < code_end;
+}
+
+fn relocationDataSegment(entry: WasmLinking.RelocationEntry) u32 {
+    return switch (entry) {
+        .index => |idx| idx.data_segment_index,
+        .offset => |off| off.data_segment_index,
+    };
+}
+
+fn markRelocationDataTarget(self: *const Self, live_segments: []bool, entry: WasmLinking.RelocationEntry) bool {
+    const symbol_index = entry.getSymbolIndex();
+    std.debug.assert(symbol_index < self.linking.symbol_table.items.len);
+    const sym = self.linking.symbol_table.items[symbol_index];
+    if (sym.kind != .data or sym.isUndefined()) return false;
+    std.debug.assert(sym.index < live_segments.len);
+    const was_live = live_segments[sym.index];
+    live_segments[sym.index] = true;
+    return !was_live;
 }
 
 /// Trace the call graph starting from called functions, exports, init funcs,
@@ -2293,7 +2408,8 @@ pub fn exportGlobalSymbols(self: *Self) Allocator.Error!void {
         if (sym.kind != .function or sym.isUndefined() or sym.isLocal()) continue;
         if ((sym.flags & WasmLinking.SymFlag.VISIBILITY_HIDDEN) != 0) continue;
         const name = sym.name orelse continue;
-        // Skip roc__ symbols (handled by linkHostToAppCalls).
+        // Skip roc-internal symbols (roc__proc_*, roc__num_*); entrypoints use
+        // the literal provides symbols and are exported like any host export.
         if (std.mem.startsWith(u8, name, "roc__")) continue;
         // Avoid duplicate exports.
         var already_exported = false;
@@ -2323,6 +2439,21 @@ pub fn removeMemoryAndTableImports(self: *Self) void {
     // Table will be set during finalization if table_func_indices are populated.
 }
 
+/// Memory settings used when finalizing a wasm module after code generation.
+pub const FinalMemoryConfig = struct {
+    stack_bytes: u32,
+    import_memory: bool = false,
+    minimum_memory: ?usize = null,
+    maximum_memory: ?usize = null,
+    export_memory: bool = true,
+};
+
+/// Set the byte offset where this module's data segments begin.
+pub fn setDataBase(self: *Self, offset: u32) void {
+    std.debug.assert(self.data_segments.items.len == 0);
+    self.data_offset = offset;
+}
+
 /// Finalization step (called after all code generation and surgical linking,
 /// before encode):
 ///
@@ -2331,6 +2462,11 @@ pub fn removeMemoryAndTableImports(self: *Self) void {
 /// 3. Configure table size based on actual element count
 /// 4. Export memory as "memory" for host/runtime access
 pub fn finalizeMemoryAndTable(self: *Self, stack_bytes: u32) Allocator.Error!void {
+    try self.finalizeMemoryAndTableWithConfig(.{ .stack_bytes = stack_bytes });
+}
+
+/// Finalize memory and table layout using explicit target configuration.
+pub fn finalizeMemoryAndTableWithConfig(self: *Self, config: FinalMemoryConfig) Allocator.Error!void {
     // Calculate the highest data segment end address.
     var data_end: u32 = self.data_offset;
     for (self.data_segments.items) |ds| {
@@ -2339,18 +2475,25 @@ pub fn finalizeMemoryAndTable(self: *Self, stack_bytes: u32) Allocator.Error!voi
     }
 
     // Calculate memory pages: data + stack, rounded up to page boundary.
-    const total_bytes: u64 = @as(u64, data_end) + @as(u64, stack_bytes);
+    const required_bytes = @as(u64, data_end) + @as(u64, config.stack_bytes);
+    const configured_min = config.minimum_memory orelse 0;
+    const total_bytes: u64 = @max(required_bytes, @as(u64, configured_min));
     const page_size: u64 = 65536;
     const pages: u32 = @intCast(@max(1, (total_bytes + page_size - 1) / page_size));
     self.memory_min_pages = pages;
+    self.memory_max_pages = if (config.maximum_memory) |maximum_memory|
+        @intCast(@max(1, (@as(u64, maximum_memory) + page_size - 1) / page_size))
+    else
+        null;
 
     // Define __stack_pointer as a mutable i32 global.
     // Initial value = top of memory (stack grows downward).
     self.has_stack_pointer = true;
     self.stack_pointer_init = pages * @as(u32, 65536);
 
-    // Ensure memory is defined (not imported) in the final module.
+    // Ensure memory is present in the final module.
     self.has_memory = true;
+    self.memory_import = config.import_memory;
 
     // Configure table if we have any function indices to place in it.
     if (self.table_func_indices.items.len > 0) {
@@ -2358,11 +2501,13 @@ pub fn finalizeMemoryAndTable(self: *Self, stack_bytes: u32) Allocator.Error!voi
     }
 
     // Export memory as "memory" for host/runtime access.
-    try self.exports.append(self.allocator, .{
-        .name = "memory",
-        .kind = .memory,
-        .idx = 0,
-    });
+    if (config.export_memory and !config.import_memory) {
+        try self.exports.append(self.allocator, .{
+            .name = "memory",
+            .kind = .memory,
+            .idx = 0,
+        });
+    }
 }
 
 // --- Parsing (preload) ---
@@ -2559,11 +2704,12 @@ fn parseImportSection(self: *Self, bytes: []const u8, cursor: *usize) ParseError
             },
             0x02 => { // memory import
                 self.has_memory = true;
+                self.memory_import = true;
                 if (cursor.* >= bytes.len) return error.UnexpectedEnd;
                 const limits_flag = bytes[cursor.*];
                 cursor.* += 1;
                 self.memory_min_pages = try readU32(bytes, cursor);
-                if (limits_flag == 0x01) _ = try readU32(bytes, cursor); // max
+                if (limits_flag == 0x01) self.memory_max_pages = try readU32(bytes, cursor);
             },
             0x03 => { // global import (e.g. __stack_pointer)
                 const val_type_byte = try readU32(bytes, cursor);
@@ -2609,13 +2755,14 @@ fn parseMemorySection_(self: *Self, bytes: []const u8, cursor: *usize) ParseErro
     const section_size = try beginSection(bytes, cursor, .memory_section) orelse return;
     const section_end = cursor.* + section_size;
     self.has_memory = true;
+    self.memory_import = false;
     const count = try readU32(bytes, cursor);
     if (count > 0) {
         if (cursor.* >= bytes.len) return error.UnexpectedEnd;
         const limits_flag = bytes[cursor.*];
         cursor.* += 1;
         self.memory_min_pages = try readU32(bytes, cursor);
-        if (limits_flag == 0x01) _ = try readU32(bytes, cursor); // max
+        if (limits_flag == 0x01) self.memory_max_pages = try readU32(bytes, cursor);
     }
     cursor.* = section_end;
 }
@@ -2828,7 +2975,7 @@ pub fn encode(self: *Self, allocator: Allocator) Allocator.Error![]u8 {
     }
 
     // Import section (must be between type and function sections)
-    if (self.imports.items.len > 0) {
+    if (self.imports.items.len > 0 or self.memory_import) {
         try self.encodeImportSection(allocator, &output);
     }
 
@@ -2843,7 +2990,7 @@ pub fn encode(self: *Self, allocator: Allocator) Allocator.Error![]u8 {
     }
 
     // Memory section
-    if (self.has_memory) {
+    if (self.has_memory and !self.memory_import) {
         try self.encodeMemorySection(allocator, &output);
     }
 
@@ -3043,8 +3190,14 @@ fn encodeRelocatableImportSection(self: *Self, gpa: Allocator, output: *std.Arra
         try leb128WriteU32(gpa, &section_data, 15);
         try section_data.appendSlice(gpa, "__linear_memory");
         try section_data.append(gpa, 0x02);
-        try section_data.append(gpa, 0x00);
-        try leb128WriteU32(gpa, &section_data, @max(self.memory_min_pages, 1));
+        if (self.memory_max_pages) |max_pages| {
+            try section_data.append(gpa, 0x01);
+            try leb128WriteU32(gpa, &section_data, @max(self.memory_min_pages, 1));
+            try leb128WriteU32(gpa, &section_data, max_pages);
+        } else {
+            try section_data.append(gpa, 0x00);
+            try leb128WriteU32(gpa, &section_data, @max(self.memory_min_pages, 1));
+        }
     }
 
     for (self.global_imports.items) |imp| {
@@ -3238,7 +3391,8 @@ fn encodeImportSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) 
     var section_data: std.ArrayList(u8) = .empty;
     defer section_data.deinit(gpa);
 
-    try leb128WriteU32(gpa, &section_data, @intCast(self.imports.items.len));
+    const memory_import_count: u32 = if (self.memory_import) 1 else 0;
+    try leb128WriteU32(gpa, &section_data, @as(u32, @intCast(self.imports.items.len)) + memory_import_count);
     for (self.imports.items) |imp| {
         // Module name
         try leb128WriteU32(gpa, &section_data, @intCast(imp.module_name.len));
@@ -3250,6 +3404,22 @@ fn encodeImportSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) 
         try section_data.append(gpa, 0x00);
         // Type index
         try leb128WriteU32(gpa, &section_data, imp.type_idx);
+    }
+
+    if (self.memory_import) {
+        try leb128WriteU32(gpa, &section_data, 3);
+        try section_data.appendSlice(gpa, "env");
+        try leb128WriteU32(gpa, &section_data, 6);
+        try section_data.appendSlice(gpa, "memory");
+        try section_data.append(gpa, 0x02);
+        if (self.memory_max_pages) |max_pages| {
+            try section_data.append(gpa, 0x01);
+            try leb128WriteU32(gpa, &section_data, self.memory_min_pages);
+            try leb128WriteU32(gpa, &section_data, max_pages);
+        } else {
+            try section_data.append(gpa, 0x00);
+            try leb128WriteU32(gpa, &section_data, self.memory_min_pages);
+        }
     }
 
     try output.append(gpa, @intFromEnum(SectionId.import_section));
@@ -3276,8 +3446,14 @@ fn encodeMemorySection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) 
     defer section_data.deinit(gpa);
 
     try leb128WriteU32(gpa, &section_data, 1); // 1 memory
-    try section_data.append(gpa, 0x00); // no max
-    try leb128WriteU32(gpa, &section_data, self.memory_min_pages);
+    if (self.memory_max_pages) |max_pages| {
+        try section_data.append(gpa, 0x01);
+        try leb128WriteU32(gpa, &section_data, self.memory_min_pages);
+        try leb128WriteU32(gpa, &section_data, max_pages);
+    } else {
+        try section_data.append(gpa, 0x00); // no max
+        try leb128WriteU32(gpa, &section_data, self.memory_min_pages);
+    }
 
     try output.append(gpa, @intFromEnum(SectionId.memory_section));
     try leb128WriteU32(gpa, output, @intCast(section_data.items.len));
@@ -4401,10 +4577,10 @@ test "preload — parses real Zig-compiled wasm host object" {
     // Should have relocation entries for code
     try std.testing.expect(module.reloc_code.entries.items.len > 0);
 
-    // The host imports roc__main — verify we can find it by name
+    // The host imports the app's roc_main entrypoint — verify we can find it by name
     var found_roc_main = false;
     for (module.imports.items) |imp| {
-        if (std.mem.eql(u8, imp.field_name, "roc__main")) {
+        if (std.mem.eql(u8, imp.field_name, "roc_main")) {
             found_roc_main = true;
             break;
         }
@@ -5605,7 +5781,9 @@ test "verifyNoLinkObjectContract - rejects undefined Roc builtin function symbol
         .index = 0,
     });
 
-    try std.testing.expectError(error.UnexpectedUndefinedFunctionSymbol, module.verifyNoLinkObjectContract());
+    // Undefined function symbols are the object encoding of symbol-ABI
+    // references; they are permitted.
+    try module.verifyNoLinkObjectContract();
 }
 
 test "verifyNoLinkObjectContract - rejects function imports and non-env ABI imports" {
@@ -5617,6 +5795,17 @@ test "verifyNoLinkObjectContract - rejects function imports and non-env ABI impo
 
         const type_idx = try module.addFuncType(&.{}, &.{});
         _ = try module.addFunctionImportWithSymbol("env", "roc_alloc", type_idx);
+
+        // Symbol-ABI references to platform symbols are env function imports.
+        try module.verifyNoLinkObjectContract();
+    }
+
+    {
+        var module = Self.init(allocator);
+        defer module.deinit();
+
+        const type_idx = try module.addFuncType(&.{}, &.{});
+        _ = try module.addFunctionImportWithSymbol("not_env", "roc_alloc", type_idx);
 
         try std.testing.expectError(error.UnexpectedFunctionImport, module.verifyNoLinkObjectContract());
     }
@@ -5707,6 +5896,39 @@ test "mergeModule final link - resolves PIC globals and table symbols" {
     try std.testing.expectEqualStrings("__table_base", table_base.name.?);
     try std.testing.expectEqualStrings("__indirect_function_table", table.name.?);
     try std.testing.expectEqual(@as(u32, 0), table.index);
+}
+
+test "mergeModule final link - resolves stack pointer import to global zero" {
+    const allocator = std.testing.allocator;
+    var app = Self.init(allocator);
+    defer app.deinit();
+
+    var source = Self.init(allocator);
+    defer source.deinit();
+    const stack_symbol = try source.addStackPointerImportWithSymbol();
+
+    try source.code_bytes.append(allocator, Op.global_get);
+    try appendPaddedU32(allocator, &source.code_bytes, 99);
+    try source.reloc_code.entries.append(allocator, .{ .index = .{
+        .type_id = .global_index_leb,
+        .offset = 1,
+        .symbol_index = stack_symbol.raw(),
+    } });
+
+    var result = try app.mergeModule(&source);
+    defer result.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), app.global_imports.items.len);
+    try std.testing.expect(app.has_stack_pointer);
+
+    const stack = app.linking.symbol_table.items[result.symbol_remap[stack_symbol.raw()]];
+    try std.testing.expect(!stack.isUndefined());
+    try std.testing.expectEqual(WasmLinking.SymKind.global, stack.kind);
+    try std.testing.expectEqualStrings("__stack_pointer", stack.name.?);
+    try std.testing.expectEqual(@as(u32, 0), stack.index);
+
+    app.resolveCodeRelocations();
+    try std.testing.expectEqual(@as(u32, 0), decodePaddedU32(app.code_bytes.items[1..6]));
 }
 
 test "encodeRelocatable roundtrip - preserves data symbols and data relocations" {
