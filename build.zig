@@ -3463,6 +3463,10 @@ pub fn build(b: *std.Build) void {
                 .root_source_file = b.path("test/archive/consumer.zig"),
                 .target = target,
                 .optimize = optimize,
+                // A COFF /DEBUG link disables lld-link's /OPT:REF default, so
+                // an unstripped Windows Debug build would keep the DCE canary
+                // sections this test asserts are eliminated.
+                .strip = true,
             }),
         });
         configureBackend(archive_consumer_exe, target);
