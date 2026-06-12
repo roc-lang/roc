@@ -12,26 +12,19 @@ picked = if Bool.True id else id
 main = (picked(1), picked("a"))
 ~~~
 # EXPECTED
-TYPE MISMATCH - generalize_alias_if_branches.md:5:16:5:17
+TYPE MISMATCH - generalize_alias_if_branches.md:5:27:5:30
 # PROBLEMS
 **TYPE MISMATCH**
-This number is being used where a non-number type is needed:
-**generalize_alias_if_branches.md:5:16:5:17:**
-```roc
-main = (picked(1), picked("a"))
-```
-               ^
-
-The type was determined to be non-numeric here:
+This string literal is being used where a non-string type is needed:
 **generalize_alias_if_branches.md:5:27:5:30:**
 ```roc
 main = (picked(1), picked("a"))
 ```
                           ^^^
 
-Other code expects this to have the type:
+The type was determined to be:
 
-    Str
+    Dec
 
 # TOKENS
 ~~~zig
@@ -103,7 +96,7 @@ NO CHANGE
 					(e-lookup-local
 						(p-assign (ident "picked")))
 					(e-num (value "1")))
-				(e-call (constraint-fn-var 81)
+				(e-call (constraint-fn-var 91)
 					(e-lookup-local
 						(p-assign (ident "picked")))
 					(e-string
@@ -114,10 +107,10 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt (type "a -> a"))
-		(patt (type "Str -> Str"))
-		(patt (type "(Str, Str)")))
+		(patt (type "Dec -> Dec"))
+		(patt (type "(Dec, Dec)")))
 	(expressions
 		(expr (type "a -> a"))
-		(expr (type "Str -> Str"))
-		(expr (type "(Str, Str)"))))
+		(expr (type "Dec -> Dec"))
+		(expr (type "(Dec, Dec)"))))
 ~~~

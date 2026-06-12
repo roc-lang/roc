@@ -393,6 +393,7 @@ const Lifter = struct {
             .dbg,
             .expect,
             => |child| try self.rewriteExpr(child),
+            .expect_err => |expect_err| try self.rewriteExpr(expect_err.msg),
             .let_ => |let_| {
                 try self.rewriteExpr(let_.value);
                 try self.rewriteExpr(let_.rest);
@@ -630,6 +631,7 @@ const CaptureSet = struct {
             .dbg,
             .expect,
             => |child| try self.collectExpr(child, bound),
+            .expect_err => |expect_err| try self.collectExpr(expect_err.msg, bound),
             .let_ => |let_| {
                 try self.collectExpr(let_.value, bound);
                 var added = std.ArrayList(Mono.LocalId).empty;

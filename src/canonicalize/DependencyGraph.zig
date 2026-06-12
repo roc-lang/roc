@@ -269,6 +269,9 @@ fn collectExprDependencies(
             .e_dbg => |dbg| {
                 try pending.append(stack_allocator, dbg.expr);
             },
+            .e_expect_err => |expect_err| {
+                try pending.append(stack_allocator, expect_err.expr);
+            },
             .e_expect => |expect| {
                 try pending.append(stack_allocator, expect.body);
             },

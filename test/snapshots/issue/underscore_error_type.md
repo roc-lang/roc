@@ -174,7 +174,11 @@ quux = ("hello", 42)
 
 It has the type:
 
-    (Str, a) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
+    (a, b)
+      where [
+        a.from_quote : List(U8) -> Try(a, [BadQuotedBytes(Str)]),
+        b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
+      ]
 
 But the annotation say it should be:
 

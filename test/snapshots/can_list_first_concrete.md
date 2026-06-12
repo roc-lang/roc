@@ -8,39 +8,19 @@ type=expr
 [42, "world", 3.14]
 ~~~
 # EXPECTED
-TYPE MISMATCH - can_list_first_concrete.md:1:2:1:4
-TYPE MISMATCH - can_list_first_concrete.md:1:15:1:19
+TYPE MISMATCH - can_list_first_concrete.md:1:6:1:13
 # PROBLEMS
 **TYPE MISMATCH**
-This number is being used where a non-number type is needed:
-**can_list_first_concrete.md:1:2:1:4:**
-```roc
-[42, "world", 3.14]
-```
- ^^
-
-The type was determined to be non-numeric here:
+This string literal is being used where a non-string type is needed:
 **can_list_first_concrete.md:1:6:1:13:**
 ```roc
 [42, "world", 3.14]
 ```
      ^^^^^^^
 
-Other code expects this to have the type:
+The type was determined to be:
 
-    Str
-
-**TYPE MISMATCH**
-This number is being used where a non-number type is needed:
-**can_list_first_concrete.md:1:15:1:19:**
-```roc
-[42, "world", 3.14]
-```
-              ^^^^
-
-Other code expects this to have the type:
-
-    Str
+    Dec
 
 # TOKENS
 ~~~zig
@@ -70,5 +50,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "List(Str)"))
+(expr (type "List(Dec)"))
 ~~~

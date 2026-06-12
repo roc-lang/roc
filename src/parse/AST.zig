@@ -2743,6 +2743,8 @@ pub const Expr = union(enum) {
     },
     string: StringLike,
     multiline_string: StringLike,
+    typed_string: TypedStringLike,
+    typed_multiline_string: TypedStringLike,
     list: struct {
         items: Expr.Span,
         region: TokenizedRegion,
@@ -2842,6 +2844,14 @@ pub const Expr = union(enum) {
         parts: Expr.Span,
     };
 
+    /// A string literal with an explicit type suffix, e.g. `"foo".MyType`.
+    pub const TypedStringLike = struct {
+        token: Token.Idx,
+        type_ident: base.Ident.Idx,
+        region: TokenizedRegion,
+        parts: Expr.Span,
+    };
+
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
 
@@ -2862,6 +2872,8 @@ pub const Expr = union(enum) {
             .typed_frac => |e| e.region,
             .string => |e| e.region,
             .multiline_string => |e| e.region,
+            .typed_string => |e| e.region,
+            .typed_multiline_string => |e| e.region,
             .tag => |e| e.region,
             .list => |e| e.region,
             .record => |e| e.region,
@@ -2970,6 +2982,34 @@ pub const Expr = union(enum) {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("e-multiline-string");
                 try ast.appendRegionInfoToSexprTree(env, tree, str.region);
+                const attrs = tree.beginNode();
+
+                for (ast.store.exprSlice(str.parts)) |part_id| {
+                    const part_expr = ast.store.getExpr(part_id);
+                    try part_expr.pushToSExprTree(gpa, env, ast, tree);
+                }
+
+                try tree.endNode(begin, attrs);
+            },
+            .typed_string => |str| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-typed-string");
+                try ast.appendRegionInfoToSexprTree(env, tree, str.region);
+                try tree.pushStringPair("type", env.getIdent(str.type_ident));
+                const attrs = tree.beginNode();
+
+                for (ast.store.exprSlice(str.parts)) |part_id| {
+                    const part_expr = ast.store.getExpr(part_id);
+                    try part_expr.pushToSExprTree(gpa, env, ast, tree);
+                }
+
+                try tree.endNode(begin, attrs);
+            },
+            .typed_multiline_string => |str| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-typed-multiline-string");
+                try ast.appendRegionInfoToSexprTree(env, tree, str.region);
+                try tree.pushStringPair("type", env.getIdent(str.type_ident));
                 const attrs = tree.beginNode();
 
                 for (ast.store.exprSlice(str.parts)) |part_id| {

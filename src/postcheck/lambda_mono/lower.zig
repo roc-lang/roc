@@ -524,6 +524,10 @@ const Lowerer = struct {
             .return_ => |value| .{ .return_ = try self.lowerExpr(value) },
             .crash => |msg| .{ .crash = msg },
             .dbg => |child| .{ .dbg = try self.lowerExpr(child) },
+            .expect_err => |expect_err| .{ .expect_err = .{
+                .msg = try self.lowerExpr(expect_err.msg),
+                .region = expect_err.region,
+            } },
             .expect => |child| .{ .expect = try self.lowerExpr(child) },
         };
 

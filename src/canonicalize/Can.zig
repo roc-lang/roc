@@ -170,8 +170,9 @@ parse_ir: *AST,
 /// Statement position: if without else is OK (default)
 /// Expression position: if without else is ERROR (explicitly set in assignments, etc.)
 in_statement_position: bool = true,
-/// Track whether we're inside an expect block.
-/// When true, the ? operator crashes on Err instead of returning early.
+/// Track whether we're directly inside a top-level expect (and not inside a
+/// lambda body within it). When true, the ? operator desugars to e_expect_err
+/// on Err, which fails the enclosing expect instead of returning early.
 in_expect: bool = false,
 scopes: std.ArrayList(Scope) = .empty,
 /// Set when a scope-exit (run from a `defer`, which cannot propagate an error)
@@ -323,6 +324,9 @@ current_local_def_ident: ?Ident.Idx = null,
 /// references its forward-referencer back. null when not in a local def body
 /// or the def has no resolvable name.
 current_local_def_index: ?usize = null,
+/// Counter for generating unique `#interp_N` locals in interpolated string
+/// desugaring.
+interp_tmp_counter: u32 = 0,
 /// Whether the current declaration-pattern canonicalization should reuse
 /// existing mutable binders when it encounters `$name` patterns.
 allow_pattern_var_reuse: bool = false,
@@ -3688,7 +3692,8 @@ pub fn canonicalizeFile(
                 // Top-level expect statement
                 const region = self.parse_ir.tokenizedRegionToRegion(e.region);
 
-                // Track that we're inside an expect so ? operator crashes on Err
+                // Track that we're inside a top-level expect so the ? operator
+                // fails the expect on Err instead of returning early
                 const was_in_expect = self.in_expect;
                 self.in_expect = true;
                 defer self.in_expect = was_in_expect;
@@ -6978,10 +6983,16 @@ fn finishSuffixSingleQuestionExpr(
 
         // Create the branch body
         const branch_value_idx = if (self.in_expect) blk: {
-            // Inside an expect: crash with a message instead of returning
-            // This makes the expect fail when ? encounters an Err
-            break :blk try self.env.addExpr(CIR.Expr{ .e_crash = .{
-                .msg = try self.env.insertString("The ? operator returned an Err in an expect"),
+            // Inside a top-level expect: consume the Err payload and fail the
+            // entire expect at runtime, reporting the payload value.
+            const err_lookup_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{
+                .pattern_idx = err_assign_pattern_idx,
+            } }, region);
+            try self.used_patterns.put(self.env.gpa, err_assign_pattern_idx, {});
+
+            break :blk try self.env.addExpr(CIR.Expr{ .e_expect_err = .{
+                .expr = err_lookup_idx,
+                .snippet = try self.env.insertString(self.env.getSource(region)),
             } }, region);
         } else blk: {
             // Normal case: return Err(#err)
@@ -8118,6 +8129,32 @@ fn runExprKernel(
                         }
                     }
                 },
+                .typed_string => |e| {
+                    const parts = self.parse_ir.store.exprSlice(e.parts);
+                    var interpolation_count: usize = 0;
+                    for (parts) |part| {
+                        if (self.parse_ir.store.getExpr(part) != .string_part) {
+                            interpolation_count += 1;
+                        }
+                    }
+
+                    try stacks.pushFinishString(frame_allocator, .{
+                        .parts = e.parts,
+                        .region = self.parse_ir.tokenizedRegionToRegion(e.region),
+                        .free_vars_start = self.scratch_free_vars.top(),
+                        .interpolation_count = interpolation_count,
+                        .is_multiline = false,
+                        .type_ident = e.type_ident,
+                    });
+
+                    var i = parts.len;
+                    while (i > 0) {
+                        i -= 1;
+                        if (self.parse_ir.store.getExpr(parts[i]) != .string_part) {
+                            try stacks.pushParse(frame_allocator, .{ .idx = parts[i], .target = .scratch });
+                        }
+                    }
+                },
                 .multiline_string => |e| {
                     const parts = self.parse_ir.store.exprSlice(e.parts);
                     var interpolation_count: usize = 0;
@@ -8133,6 +8170,32 @@ fn runExprKernel(
                         .free_vars_start = self.scratch_free_vars.top(),
                         .interpolation_count = interpolation_count,
                         .is_multiline = true,
+                    });
+
+                    var i = parts.len;
+                    while (i > 0) {
+                        i -= 1;
+                        if (self.parse_ir.store.getExpr(parts[i]) != .string_part) {
+                            try stacks.pushParse(frame_allocator, .{ .idx = parts[i], .target = .scratch });
+                        }
+                    }
+                },
+                .typed_multiline_string => |e| {
+                    const parts = self.parse_ir.store.exprSlice(e.parts);
+                    var interpolation_count: usize = 0;
+                    for (parts) |part| {
+                        if (self.parse_ir.store.getExpr(part) != .string_part) {
+                            interpolation_count += 1;
+                        }
+                    }
+
+                    try stacks.pushFinishString(frame_allocator, .{
+                        .parts = e.parts,
+                        .region = self.parse_ir.tokenizedRegionToRegion(e.region),
+                        .free_vars_start = self.scratch_free_vars.top(),
+                        .interpolation_count = interpolation_count,
+                        .is_multiline = true,
+                        .type_ident = e.type_ident,
                     });
 
                     var i = parts.len;
@@ -8408,6 +8471,12 @@ fn runExprKernel(
                     const saved_enclosing_lambda = self.enclosing_lambda;
                     self.enclosing_lambda = lambda_idx;
 
+                    // A `?` inside a lambda body always has normal early-return
+                    // semantics, even when the lambda appears inside a
+                    // top-level expect.
+                    const saved_in_expect = self.in_expect;
+                    self.in_expect = false;
+
                     const saved_defining_patterns_start = self.defining_patterns_start;
                     const saved_defining_pattern = self.defining_pattern;
                     self.defining_patterns_start = null;
@@ -8421,6 +8490,7 @@ fn runExprKernel(
                         .body_free_vars_start = self.scratch_free_vars.top(),
                         .captures_top = self.scratch_captures.top(),
                         .saved_enclosing_lambda = saved_enclosing_lambda,
+                        .saved_in_expect = saved_in_expect,
                         .saved_defining_patterns_start = saved_defining_patterns_start,
                         .saved_defining_pattern = saved_defining_pattern,
                     });
@@ -8606,21 +8676,6 @@ fn runExprKernel(
                 },
                 .bin_op => |e| {
                     const region = self.parse_ir.tokenizedRegionToRegion(e.region);
-                    const op_token = self.parse_ir.tokens.tokens.get(e.operator);
-                    if (op_token.tag == .OpQuestion) {
-                        const rhs_is_bare_tag = self.parse_ir.store.getExpr(e.right) == .tag;
-                        try stacks.pushFinishSingleQuestionBinop(frame_allocator, .{
-                            .bin_op = e,
-                            .region = region,
-                            .free_vars_start = self.scratch_free_vars.top(),
-                            .rhs_is_bare_tag = rhs_is_bare_tag,
-                        });
-                        if (!rhs_is_bare_tag) {
-                            try stacks.pushParse(frame_allocator, .{ .idx = e.right, .target = .scratch });
-                        }
-                        try stacks.pushParse(frame_allocator, .{ .idx = e.left, .target = .scratch });
-                        continue :expr_kernel_loop .dispatch;
-                    }
 
                     try stacks.pushFinishBinOp(frame_allocator, .{
                         .bin_op = e,
@@ -9170,14 +9225,11 @@ fn runExprKernel(
                     try stacks.pushParse(frame_allocator, .{ .idx = d.expr, .target = .scratch });
                 },
                 .expect => |e_| {
-                    const was_in_expect = self.in_expect;
-                    self.in_expect = true;
                     try stacks.pushFinishBlockExpectStmt(frame_allocator, .{
                         .block = work,
                         .next = next,
                         .region = self.parse_ir.tokenizedRegionToRegion(e_.region),
                         .ast_expr = e_.body,
-                        .saved_in_expect = was_in_expect,
                     });
                     try stacks.pushParse(frame_allocator, .{ .idx = e_.body, .target = .scratch });
                 },
@@ -9429,7 +9481,6 @@ fn runExprKernel(
         },
         .finish_block_expect_stmt => {
             const state = stacks.takeFinishBlockExpectStmt();
-            defer self.in_expect = state.saved_in_expect;
             const result_start = child_slots.items.len - 1;
             const expr = try self.exprOrMalformedFromResult(child_slots.items[result_start].expr, state.ast_expr);
             const stmt_idx = try self.env.addStatement(Statement{ .s_expect = .{
@@ -9777,9 +9828,15 @@ fn runExprKernel(
             std.debug.assert(interpolation_i == state.interpolation_count);
 
             const can_str_span = try self.env.store.exprSpanFrom(scratch_top);
-            const expr_idx = try self.env.addExpr(Expr{ .e_str = .{
-                .span = can_str_span,
-            } }, state.region);
+            const expr_idx = if (state.interpolation_count == 0) blk: {
+                const str_idx = try self.env.addExpr(Expr{ .e_str = .{
+                    .span = can_str_span,
+                } }, state.region);
+                if (state.type_ident) |type_ident| {
+                    try self.recordTypedNumericSuffix(str_idx, type_ident);
+                }
+                break :blk str_idx;
+            } else try self.desugarInterpolatedString(can_str_span, state.region, state.type_ident);
 
             const free_vars_span = self.scratch_free_vars.spanFrom(state.free_vars_start);
             child_slots.shrinkRetainingCapacity(result_start);
@@ -10036,34 +10093,6 @@ fn runExprKernel(
             const free_vars_span = self.scratch_free_vars.spanFrom(state.free_vars_start);
             child_slots.shrinkRetainingCapacity(result_start);
             try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = expr_idx, .free_vars = free_vars_span });
-
-            continue :expr_kernel_loop .dispatch;
-        },
-        .finish_single_question_binop => {
-            const state = stacks.takeFinishSingleQuestionBinop();
-            const child_count: usize = if (state.rhs_is_bare_tag) 1 else 2;
-            const result_start = child_slots.items.len - child_count;
-            const can_lhs = child_slots.items[result_start].expr orelse {
-                child_slots.shrinkRetainingCapacity(result_start);
-                try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, null);
-                continue :expr_kernel_loop .dispatch;
-            };
-
-            const can_rhs_idx: ?Expr.Idx = if (state.rhs_is_bare_tag) null else blk: {
-                const can_rhs = child_slots.items[result_start + 1].expr orelse {
-                    const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
-                        .region = state.region,
-                    } });
-                    child_slots.shrinkRetainingCapacity(result_start);
-                    try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() });
-                    continue :expr_kernel_loop .dispatch;
-                };
-                break :blk can_rhs.idx;
-            };
-
-            const can_expr = try self.finishSingleQuestionBinop(state.bin_op, state.region, can_lhs, can_rhs_idx, state.free_vars_start);
-            child_slots.shrinkRetainingCapacity(result_start);
-            try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, can_expr);
 
             continue :expr_kernel_loop .dispatch;
         },
@@ -10556,6 +10585,7 @@ fn runExprKernel(
             defer self.exitFunction();
             defer self.scopeExit(self.env.gpa) catch |err| self.recordScopeExitError(err);
             defer self.enclosing_lambda = state.saved_enclosing_lambda;
+            defer self.in_expect = state.saved_in_expect;
             defer self.defining_patterns_start = state.saved_defining_patterns_start;
             defer self.defining_pattern = state.saved_defining_pattern;
             defer self.scratch_captures.clearFrom(state.captures_top);
@@ -11425,265 +11455,6 @@ fn canonicalizeDoubleQuestionOp(
     // Combine free vars from both lhs and rhs
     const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
     _ = e; // unused, but kept for consistency with other handlers
-
-    return CanonicalizedExpr{ .idx = expr_idx, .free_vars = free_vars_span };
-}
-
-fn finishSingleQuestionBinop(
-    self: *Self,
-    e: AST.BinOp,
-    region: base.Region,
-    can_lhs: CanonicalizedExpr,
-    can_rhs_idx: ?Expr.Idx,
-    free_vars_start: u32,
-) std.mem.Allocator.Error!CanonicalizedExpr {
-    // Inspect the rhs AST: a bare tag constructor (e.g. `NoFirstError`) must be
-    // applied as a tag with the err as payload, not canonicalized as a no-arg
-    // tag and then called as a function (which would be a type error).
-    const rhs_ast = self.parse_ir.store.getExpr(e.right);
-    const rhs_is_bare_tag = rhs_ast == .tag;
-    std.debug.assert(rhs_is_bare_tag == (can_rhs_idx == null));
-
-    // Use pre-interned identifiers for the Ok/Err values and tag names
-    const ok_val_ident = self.env.idents.question_ok;
-    const err_val_ident = self.env.idents.question_err;
-    const ok_tag_ident = self.env.idents.ok;
-    const err_tag_ident = self.env.idents.err;
-
-    // Look up Try type for nominal wrapping (improves error messages)
-    const try_ident = self.env.idents.@"try";
-    const try_nominal_info: ?struct { import_idx: CIR.Import.Idx, target_node_idx: u32 } = blk: {
-        if (try self.scopeLookupTypeBinding(try_ident)) |type_binding_loc| {
-            switch (type_binding_loc.binding.*) {
-                .external_nominal => |ext| {
-                    if (ext.import_idx) |import_idx| {
-                        if (ext.target_node_idx) |target_node_idx| {
-                            break :blk .{ .import_idx = import_idx, .target_node_idx = target_node_idx };
-                        }
-                    }
-                },
-                else => {},
-            }
-        }
-        break :blk null;
-    };
-
-    // Mark the start of scratch match branches
-    const scratch_top = self.env.store.scratchMatchBranchTop();
-
-    // === Branch 1: Ok(#ok) => #ok ===
-    {
-        try self.scopeEnter(self.env.gpa, false);
-        defer self.scopeExit(self.env.gpa) catch |err| self.recordScopeExitError(err);
-
-        const ok_assign_pattern_idx = try self.env.addPattern(Pattern{
-            .assign = .{ .ident = ok_val_ident },
-        }, region);
-
-        _ = try self.scopeIntroduceInternal(self.env.gpa, .ident, ok_val_ident, ok_assign_pattern_idx, false, true);
-
-        const ok_patterns_start = self.env.store.scratchPatternTop();
-        try self.env.store.addScratchPattern(ok_assign_pattern_idx);
-        const ok_args_span = try self.env.store.patternSpanFrom(ok_patterns_start);
-
-        const ok_tag_pattern_idx = ok_blk: {
-            const applied_tag_pattern = try self.env.addPattern(Pattern{
-                .applied_tag = .{
-                    .name = ok_tag_ident,
-                    .args = ok_args_span,
-                },
-            }, region);
-
-            if (try_nominal_info) |info| {
-                break :ok_blk try self.env.addPattern(Pattern{
-                    .nominal_external = .{
-                        .module_idx = info.import_idx,
-                        .target_node_idx = info.target_node_idx,
-                        .backing_pattern = applied_tag_pattern,
-                        .backing_type = .tag,
-                    },
-                }, region);
-            }
-            break :ok_blk applied_tag_pattern;
-        };
-
-        const branch_pat_scratch_top = self.env.store.scratchMatchBranchPatternTop();
-        const ok_branch_pattern_idx = try self.env.addMatchBranchPattern(Expr.Match.BranchPattern{
-            .pattern = ok_tag_pattern_idx,
-            .degenerate = false,
-        }, region);
-        try self.env.store.addScratchMatchBranchPattern(ok_branch_pattern_idx);
-        const ok_branch_pat_span = try self.env.store.matchBranchPatternSpanFrom(branch_pat_scratch_top);
-
-        const ok_lookup_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{
-            .pattern_idx = ok_assign_pattern_idx,
-        } }, region);
-        try self.used_patterns.put(self.env.gpa, ok_assign_pattern_idx, {});
-
-        const ok_branch_idx = try self.env.addMatchBranch(
-            Expr.Match.Branch{
-                .patterns = ok_branch_pat_span,
-                .value = ok_lookup_idx,
-                .guard = null,
-                .redundant = try self.env.types.fresh(),
-            },
-            region,
-        );
-        try self.env.store.addScratchMatchBranch(ok_branch_idx);
-    }
-
-    // === Branch 2: Err(#err) => return Err(<rhs>(#err)) ===
-    {
-        try self.scopeEnter(self.env.gpa, false);
-        defer self.scopeExit(self.env.gpa) catch |err| self.recordScopeExitError(err);
-
-        const err_assign_pattern_idx = try self.env.addPattern(Pattern{
-            .assign = .{ .ident = err_val_ident },
-        }, region);
-
-        _ = try self.scopeIntroduceInternal(self.env.gpa, .ident, err_val_ident, err_assign_pattern_idx, false, true);
-
-        const err_patterns_start = self.env.store.scratchPatternTop();
-        try self.env.store.addScratchPattern(err_assign_pattern_idx);
-        const err_args_span = try self.env.store.patternSpanFrom(err_patterns_start);
-
-        const err_tag_pattern_idx = err_blk: {
-            const applied_tag_pattern = try self.env.addPattern(Pattern{
-                .applied_tag = .{
-                    .name = err_tag_ident,
-                    .args = err_args_span,
-                },
-            }, region);
-
-            if (try_nominal_info) |info| {
-                break :err_blk try self.env.addPattern(Pattern{
-                    .nominal_external = .{
-                        .module_idx = info.import_idx,
-                        .target_node_idx = info.target_node_idx,
-                        .backing_pattern = applied_tag_pattern,
-                        .backing_type = .tag,
-                    },
-                }, region);
-            }
-            break :err_blk applied_tag_pattern;
-        };
-
-        const branch_pat_scratch_top = self.env.store.scratchMatchBranchPatternTop();
-        const err_branch_pattern_idx = try self.env.addMatchBranchPattern(Expr.Match.BranchPattern{
-            .pattern = err_tag_pattern_idx,
-            .degenerate = false,
-        }, region);
-        try self.env.store.addScratchMatchBranchPattern(err_branch_pattern_idx);
-        const err_branch_pat_span = try self.env.store.matchBranchPatternSpanFrom(branch_pat_scratch_top);
-
-        // Build the branch body
-        const branch_value_idx = if (self.in_expect) blk: {
-            // Inside an expect: crash with a message instead of returning
-            break :blk try self.env.addExpr(CIR.Expr{ .e_crash = .{
-                .msg = try self.env.insertString("The ? operator returned an Err in an expect"),
-            } }, region);
-        } else blk: {
-            // Build lookup for the bound #err
-            const err_lookup_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{
-                .pattern_idx = err_assign_pattern_idx,
-            } }, region);
-            try self.used_patterns.put(self.env.gpa, err_assign_pattern_idx, {});
-
-            // Build the transformed err: either Tag(#err) (when rhs is a bare
-            // tag constructor) or <rhs>(#err) (when rhs is any other expression).
-            const transformed_err_idx = if (rhs_is_bare_tag) blk_tag: {
-                const tag_token = rhs_ast.tag.token;
-                const tag_name = self.parse_ir.tokens.resolveIdentifier(tag_token) orelse {
-                    break :blk_tag try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
-                        .region = region,
-                    } });
-                };
-                const tag_args_start = self.env.store.scratchExprTop();
-                try self.env.store.addScratchExpr(err_lookup_idx);
-                const tag_args_span = try self.env.store.exprSpanFrom(tag_args_start);
-                break :blk_tag try self.env.addExpr(CIR.Expr{
-                    .e_tag = .{
-                        .name = tag_name,
-                        .args = tag_args_span,
-                    },
-                }, region);
-            } else blk_call: {
-                const call_args_start = self.env.store.scratchExprTop();
-                try self.env.store.addScratchExpr(err_lookup_idx);
-                const call_args_span = try self.env.store.exprSpanFrom(call_args_start);
-                break :blk_call try self.env.addExpr(CIR.Expr{
-                    .e_call = .{
-                        .func = can_rhs_idx.?,
-                        .args = call_args_span,
-                        .called_via = CalledVia.apply,
-                    },
-                }, region);
-            };
-
-            // Wrap in Err(...)
-            const err_tag_args_start = self.env.store.scratchExprTop();
-            try self.env.store.addScratchExpr(transformed_err_idx);
-            const err_tag_args_span = try self.env.store.exprSpanFrom(err_tag_args_start);
-
-            const err_tag_expr_idx = expr_blk: {
-                const tag_expr = try self.env.addExpr(CIR.Expr{
-                    .e_tag = .{
-                        .name = err_tag_ident,
-                        .args = err_tag_args_span,
-                    },
-                }, region);
-
-                if (try_nominal_info) |info| {
-                    break :expr_blk try self.env.addExpr(CIR.Expr{
-                        .e_nominal_external = .{
-                            .module_idx = info.import_idx,
-                            .target_node_idx = info.target_node_idx,
-                            .backing_expr = tag_expr,
-                            .backing_type = .tag,
-                        },
-                    }, region);
-                }
-                break :expr_blk tag_expr;
-            };
-
-            // Wrap in return
-            break :blk if (self.enclosing_lambda) |lambda_idx|
-                try self.env.addExpr(CIR.Expr{ .e_return = .{
-                    .expr = err_tag_expr_idx,
-                    .lambda = lambda_idx,
-                    .context = .try_suffix,
-                } }, region)
-            else
-                try self.env.pushMalformed(Expr.Idx, Diagnostic{ .return_outside_fn = .{
-                    .region = region,
-                    .context = .try_suffix,
-                } });
-        };
-
-        const err_branch_idx = try self.env.addMatchBranch(
-            Expr.Match.Branch{
-                .patterns = err_branch_pat_span,
-                .value = branch_value_idx,
-                .guard = null,
-                .redundant = try self.env.types.fresh(),
-            },
-            region,
-        );
-        try self.env.store.addScratchMatchBranch(err_branch_idx);
-    }
-
-    const branches_span = try self.env.store.matchBranchSpanFrom(scratch_top);
-
-    // is_try_suffix = true since this comes from `?` (early return semantics)
-    const match_expr = Expr.Match{
-        .cond = can_lhs.idx,
-        .branches = branches_span,
-        .exhaustive = try self.env.types.fresh(),
-        .is_try_suffix = true,
-    };
-    const expr_idx = try self.env.addExpr(CIR.Expr{ .e_match = match_expr }, region);
-
-    const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
 
     return CanonicalizedExpr{ .idx = expr_idx, .free_vars = free_vars_span };
 }
@@ -12583,6 +12354,168 @@ fn processEscapeSequences(allocator: std.mem.Allocator, input: []const u8) std.m
 }
 
 /// Helper function to create a string literal expression and add it to the scratch stack
+/// Desugar an interpolated string literal into ordinary CIR:
+///
+/// ```roc
+/// "a${x}b${y}c"
+/// ```
+/// becomes
+/// ```roc
+/// {
+///     #interp_0 = x
+///     #interp_1 = y
+///     "a".from_interpolation([].iter().prepended((#interp_1, "c")).prepended((#interp_0, "b")))
+/// }
+/// ```
+/// The interpolated expressions bind to locals first so they evaluate in
+/// source order; the iterator yields each interpolated value paired with the
+/// literal segment that follows it. Every literal segment stays a real string
+/// literal expression, so each converts through `from_quote` like any other,
+/// and the receiver's type suffix (when present) pins the target type.
+fn desugarInterpolatedString(
+    self: *Self,
+    span: CIR.Expr.Span,
+    region: Region,
+    type_ident: ?Ident.Idx,
+) std.mem.Allocator.Error!Expr.Idx {
+    const gpa = self.env.gpa;
+
+    // The span's backing store grows as we add expressions, so copy it first.
+    const stored_items = self.env.store.sliceExpr(span);
+    const items = try gpa.dupe(Expr.Idx, stored_items);
+    defer gpa.free(items);
+
+    // Normalize the alternating segment/interpolation sequence: a literal
+    // segment for position k, then for each interpolation the segment that
+    // follows it (empty when interpolations are adjacent or at either end).
+    var segments: std.ArrayList(?Expr.Idx) = .empty;
+    defer segments.deinit(gpa);
+    var interps: std.ArrayList(Expr.Idx) = .empty;
+    defer interps.deinit(gpa);
+
+    var pending_segment: ?Expr.Idx = null;
+    var saw_leading_segment = false;
+    for (items) |item_idx| {
+        switch (self.env.store.getExpr(item_idx)) {
+            .e_str_segment => {
+                pending_segment = item_idx;
+                if (interps.items.len == 0) saw_leading_segment = true;
+            },
+            else => {
+                if (interps.items.len == 0) {
+                    try segments.append(gpa, if (saw_leading_segment) pending_segment else null);
+                } else {
+                    try segments.append(gpa, pending_segment);
+                }
+                pending_segment = null;
+                try interps.append(gpa, item_idx);
+            },
+        }
+    }
+    try segments.append(gpa, pending_segment);
+    std.debug.assert(segments.items.len == interps.items.len + 1);
+
+    // Bind each interpolated expression to a local, preserving evaluation order.
+    const stmts_top = self.env.store.scratchTop("statements");
+    const tmp_patterns = try gpa.alloc(CIR.Pattern.Idx, interps.items.len);
+    defer gpa.free(tmp_patterns);
+    for (interps.items, 0..) |interp_idx, i| {
+        var name_buf: [32]u8 = undefined;
+        const name = std.fmt.bufPrint(&name_buf, "#interp_{d}", .{self.interp_tmp_counter}) catch unreachable;
+        self.interp_tmp_counter += 1;
+        const tmp_ident = try self.env.insertIdent(Ident.for_text(name));
+        const interp_region = self.env.store.getNodeRegion(ModuleEnv.nodeIdxFrom(interp_idx));
+        const pattern_idx = try self.env.addPattern(Pattern{ .assign = .{ .ident = tmp_ident } }, interp_region);
+        tmp_patterns[i] = pattern_idx;
+        const stmt_idx = try self.env.addStatement(CIR.Statement{ .s_decl = .{
+            .pattern = pattern_idx,
+            .expr = interp_idx,
+            .anno = null,
+        } }, interp_region);
+        try self.env.store.addScratchStatement(stmt_idx);
+    }
+    const stmts_span = try self.env.store.statementSpanFrom(stmts_top);
+
+    // Wrap each literal segment in its own string expression.
+    const seg_exprs = try gpa.alloc(Expr.Idx, segments.items.len);
+    defer gpa.free(seg_exprs);
+    for (segments.items, 0..) |maybe_segment, i| {
+        const segment_idx = maybe_segment orelse blk: {
+            const empty_literal = try self.env.insertString("");
+            break :blk try self.env.addExpr(CIR.Expr{ .e_str_segment = .{
+                .literal = empty_literal,
+            } }, region);
+        };
+        const seg_region = self.env.store.getNodeRegion(ModuleEnv.nodeIdxFrom(segment_idx));
+        const seg_scratch_top = self.env.store.scratchExprTop();
+        try self.env.store.addScratchExpr(segment_idx);
+        const seg_span = try self.env.store.exprSpanFrom(seg_scratch_top);
+        seg_exprs[i] = try self.env.addExpr(CIR.Expr{ .e_str = .{
+            .span = seg_span,
+        } }, seg_region);
+    }
+
+    // The receiver's type suffix (e.g. `"a${x}b".MyType`) pins the target type.
+    if (type_ident) |suffix_ident| {
+        try self.recordTypedNumericSuffix(seg_exprs[0], suffix_ident);
+    }
+
+    const iter_method = try self.env.insertIdent(Ident.for_text("iter"));
+    const prepended_method = try self.env.insertIdent(Ident.for_text("prepended"));
+    const from_interpolation_method = try self.env.insertIdent(Ident.for_text("from_interpolation"));
+
+    // [].iter()
+    const empty_list_idx = try self.env.addExpr(CIR.Expr{ .e_empty_list = .{} }, region);
+    var chain_idx = try self.addSyntheticMethodCall(empty_list_idx, iter_method, &.{}, region);
+
+    // Prepend (interpolation, following-segment) pairs back to front so the
+    // iterator yields them in source order.
+    var pair_i = interps.items.len;
+    while (pair_i > 0) {
+        pair_i -= 1;
+        const interp_region = self.env.store.getNodeRegion(ModuleEnv.nodeIdxFrom(interps.items[pair_i]));
+        const tmp_lookup_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{
+            .pattern_idx = tmp_patterns[pair_i],
+        } }, interp_region);
+        const elems_top = self.env.store.scratchExprTop();
+        try self.env.store.addScratchExpr(tmp_lookup_idx);
+        try self.env.store.addScratchExpr(seg_exprs[pair_i + 1]);
+        const elems_span = try self.env.store.exprSpanFrom(elems_top);
+        const pair_idx = try self.env.addExpr(CIR.Expr{ .e_tuple = .{
+            .elems = elems_span,
+        } }, interp_region);
+        chain_idx = try self.addSyntheticMethodCall(chain_idx, prepended_method, &.{pair_idx}, interp_region);
+    }
+
+    const call_idx = try self.addSyntheticMethodCall(seg_exprs[0], from_interpolation_method, &.{chain_idx}, region);
+    try self.env.recordInterpolationCallNode(ModuleEnv.nodeIdxFrom(call_idx));
+
+    return try self.env.addExpr(CIR.Expr{ .e_block = .{
+        .stmts = stmts_span,
+        .final_expr = call_idx,
+    } }, region);
+}
+
+fn addSyntheticMethodCall(
+    self: *Self,
+    receiver: Expr.Idx,
+    method_name: Ident.Idx,
+    args: []const Expr.Idx,
+    region: Region,
+) std.mem.Allocator.Error!Expr.Idx {
+    const args_top = self.env.store.scratchExprTop();
+    for (args) |arg| {
+        try self.env.store.addScratchExpr(arg);
+    }
+    const args_span = try self.env.store.exprSpanFrom(args_top);
+    return try self.env.addExpr(CIR.Expr{ .e_method_call = .{
+        .receiver = receiver,
+        .method_name = method_name,
+        .method_name_region = region,
+        .args = args_span,
+    } }, region);
+}
+
 fn addStringLiteralToScratch(self: *Self, text: []const u8, region: AST.TokenizedRegion) std.mem.Allocator.Error!void {
     // intern the string in the ModuleEnv
     const string_idx = try self.env.insertString(text);
@@ -13011,7 +12944,6 @@ const ExprKernelLabel = enum {
     finish_unary,
     finish_suffix_single_question,
     finish_bin_op,
-    finish_single_question_binop,
     finish_method_call,
     finish_arrow_apply,
     finish_arrow_tag_apply,
@@ -13104,7 +13036,6 @@ const ExprFinishBlockExpectStmtWork = struct {
     next: usize,
     region: Region,
     ast_expr: AST.Expr.Idx,
-    saved_in_expect: bool,
 };
 
 const ExprFinishBlockReturnStmtWork = struct {
@@ -13205,6 +13136,9 @@ const ExprFinishStringWork = struct {
     free_vars_start: u32,
     interpolation_count: usize,
     is_multiline: bool,
+    /// Explicit type suffix (e.g. `"foo".MyType`), recorded against the
+    /// finished string expression for the type checker.
+    type_ident: ?Ident.Idx = null,
 };
 
 const ExprFinishListWork = struct {
@@ -13243,13 +13177,6 @@ const ExprFinishBinOpWork = struct {
     bin_op: AST.BinOp,
     region: Region,
     free_vars_start: u32,
-};
-
-const ExprFinishSingleQuestionBinopWork = struct {
-    bin_op: AST.BinOp,
-    region: Region,
-    free_vars_start: u32,
-    rhs_is_bare_tag: bool,
 };
 
 const ExprFinishMethodCallWork = struct {
@@ -13334,6 +13261,7 @@ const ExprFinishLambdaWork = struct {
     body_free_vars_start: u32,
     captures_top: u32,
     saved_enclosing_lambda: ?Expr.Idx,
+    saved_in_expect: bool,
     saved_defining_patterns_start: ?u32,
     saved_defining_pattern: ?Pattern.Idx,
 };
@@ -13470,7 +13398,6 @@ const ExprKernelWork = struct {
     finish_unary: std.ArrayList(ExprFinishUnaryWork) = .empty,
     finish_suffix_single_question: std.ArrayList(ExprFinishSuffixSingleQuestionWork) = .empty,
     finish_bin_op: std.ArrayList(ExprFinishBinOpWork) = .empty,
-    finish_single_question_binop: std.ArrayList(ExprFinishSingleQuestionBinopWork) = .empty,
     finish_method_call: std.ArrayList(ExprFinishMethodCallWork) = .empty,
     finish_arrow_apply: std.ArrayList(ExprFinishArrowApplyWork) = .empty,
     finish_arrow_tag_apply: std.ArrayList(ExprFinishArrowTagApplyWork) = .empty,
@@ -13523,7 +13450,6 @@ const ExprKernelWork = struct {
             .finish_unary => _ = self.takeFinishUnary(),
             .finish_suffix_single_question => _ = self.takeFinishSuffixSingleQuestion(),
             .finish_bin_op => _ = self.takeFinishBinOp(),
-            .finish_single_question_binop => _ = self.takeFinishSingleQuestionBinop(),
             .finish_method_call => _ = self.takeFinishMethodCall(),
             .finish_arrow_apply => _ = self.takeFinishArrowApply(),
             .finish_arrow_tag_apply => _ = self.takeFinishArrowTagApply(),
@@ -13605,7 +13531,6 @@ const ExprKernelWork = struct {
         self.finish_unary.deinit(allocator);
         self.finish_suffix_single_question.deinit(allocator);
         self.finish_bin_op.deinit(allocator);
-        self.finish_single_question_binop.deinit(allocator);
         self.finish_method_call.deinit(allocator);
         self.finish_arrow_apply.deinit(allocator);
         self.finish_arrow_tag_apply.deinit(allocator);
@@ -13660,7 +13585,6 @@ const ExprKernelWork = struct {
         self.finish_unary.clearRetainingCapacity();
         self.finish_suffix_single_question.clearRetainingCapacity();
         self.finish_bin_op.clearRetainingCapacity();
-        self.finish_single_question_binop.clearRetainingCapacity();
         self.finish_method_call.clearRetainingCapacity();
         self.finish_arrow_apply.clearRetainingCapacity();
         self.finish_arrow_tag_apply.clearRetainingCapacity();
@@ -13850,12 +13774,6 @@ const ExprKernelWork = struct {
         try self.finish_bin_op.append(allocator, item);
         errdefer _ = self.finish_bin_op.pop();
         try self.pushLabel(allocator, .finish_bin_op, self.current_target);
-    }
-
-    inline fn pushFinishSingleQuestionBinop(self: *ExprKernelWork, allocator: std.mem.Allocator, item: ExprFinishSingleQuestionBinopWork) std.mem.Allocator.Error!void {
-        try self.finish_single_question_binop.append(allocator, item);
-        errdefer _ = self.finish_single_question_binop.pop();
-        try self.pushLabel(allocator, .finish_single_question_binop, self.current_target);
     }
 
     inline fn pushFinishMethodCall(self: *ExprKernelWork, allocator: std.mem.Allocator, item: ExprFinishMethodCallWork) std.mem.Allocator.Error!void {
@@ -14096,10 +14014,6 @@ const ExprKernelWork = struct {
 
     inline fn takeFinishBinOp(self: *ExprKernelWork) ExprFinishBinOpWork {
         return self.finish_bin_op.pop() orelse unreachable;
-    }
-
-    inline fn takeFinishSingleQuestionBinop(self: *ExprKernelWork) ExprFinishSingleQuestionBinopWork {
-        return self.finish_single_question_binop.pop() orelse unreachable;
     }
 
     inline fn takeFinishMethodCall(self: *ExprKernelWork) ExprFinishMethodCallWork {

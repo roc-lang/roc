@@ -184,6 +184,7 @@ pub const MonoLlvmCodeGen = struct {
     current_debug_file: u32 = SourceLoc.no_file,
     /// Debug type metadata per layout index, memoized per module build.
     debug_types: std.AutoHashMap(u32, LlvmBuilder.Metadata),
+    expect_err_region_global: ?LlvmBuilder.Value = null,
 
     /// Errors reported while building LLVM IR.
     pub const Error = error{
@@ -332,6 +333,7 @@ pub const MonoLlvmCodeGen = struct {
         self.current_subprogram = .none;
         self.current_debug_file = SourceLoc.no_file;
         self.debug_types.clearRetainingCapacity();
+        self.expect_err_region_global = null;
     }
 
     /// Generates a single eval-style module for `root_proc`.
@@ -1751,6 +1753,37 @@ pub const MonoLlvmCodeGen = struct {
             .jump => |jump_stmt| try self.emitJump(jump_stmt),
             .ret => |ret_stmt| try self.emitReturn(ret_stmt.value),
             .crash => |crash_stmt| try self.emitCrashBytes(self.store.getString(crash_stmt.msg)),
+            .expect_err => |expect_err_stmt| {
+                const wip = self.wip orelse return error.CompilationFailed;
+                const builder = self.builder orelse return error.CompilationFailed;
+                const region_start = builder.intValue(.i32, expect_err_stmt.region.start.offset) catch return error.OutOfMemory;
+                const region_end = builder.intValue(.i32, expect_err_stmt.region.end.offset) catch return error.OutOfMemory;
+
+                const region_global = try self.expectErrRegionGlobal();
+                const flag = builder.intValue(.i32, 1) catch return error.OutOfMemory;
+                const align4 = LlvmBuilder.Alignment.fromByteUnits(4);
+                _ = wip.store(.normal, flag, region_global, align4) catch return error.OutOfMemory;
+                _ = wip.store(.normal, region_start, try self.offsetPtr(region_global, 4), align4) catch return error.OutOfMemory;
+                _ = wip.store(.normal, region_end, try self.offsetPtr(region_global, 8), align4) catch return error.OutOfMemory;
+
+                try self.callBuiltinVoid(
+                    "roc_builtins_expect_err_str",
+                    &.{ try self.ptrType(), .i32, .i32, try self.ptrType() },
+                    &.{
+                        self.slot(expect_err_stmt.message).ptr,
+                        region_start,
+                        region_end,
+                        self.rocOps(),
+                    },
+                );
+                // Linux AArch64 eval tests handle crashes by returning to the Zig host.
+                // Longjmping through LLVM-generated frames is not reliable on that target.
+                if (self.target.cpu.arch == .aarch64 and self.target.os.tag == .linux) {
+                    _ = wip.retVoid() catch return error.OutOfMemory;
+                } else {
+                    _ = wip.@"unreachable"() catch return error.OutOfMemory;
+                }
+            },
         }
     }
 
@@ -2579,6 +2612,23 @@ pub const MonoLlvmCodeGen = struct {
                 self.rocOps(),
             },
         );
+    }
+
+    /// Exported global the test harness reads back after an expect_err
+    /// unwind: [0] = set flag, [1] = region start offset, [2] = region end
+    /// offset. Exported (rather than carried through the host's crash
+    /// callback) because LLVM test roots run from a dlopen'd shared library,
+    /// whose linked-in builtins cannot share state with the host process.
+    fn expectErrRegionGlobal(self: *MonoLlvmCodeGen) Error!LlvmBuilder.Value {
+        if (self.expect_err_region_global) |value| return value;
+        const builder = self.builder orelse return error.CompilationFailed;
+        const arr_ty = builder.arrayType(3, .i32) catch return error.OutOfMemory;
+        const name = builder.strtabString("roc_expect_err_region") catch return error.OutOfMemory;
+        const variable = builder.addVariable(name, arr_ty, .default) catch return error.OutOfMemory;
+        variable.setInitializer(builder.zeroInitConst(arr_ty) catch return error.OutOfMemory, builder) catch return error.OutOfMemory;
+        const value = variable.toValue(builder);
+        self.expect_err_region_global = value;
+        return value;
     }
 
     fn staticBytes(self: *MonoLlvmCodeGen, bytes: []const u8) Error!LlvmBuilder.Value {
