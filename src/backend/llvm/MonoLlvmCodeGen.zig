@@ -1109,8 +1109,14 @@ pub const MonoLlvmCodeGen = struct {
         if (!builder.strip) {
             const proc_loc = self.store.procLoc(proc_id);
             const file = try self.debugFileFor(builder, proc_loc.file);
-            const name_str = try self.procDebugName(builder, proc_id, proc);
-            const linkage_name_str = try self.procSymbolDebugName(builder, proc_id, proc);
+            const name_str = if (self.enable_default_platform_diagnostics)
+                try self.procDebugName(builder, proc_id, proc)
+            else
+                try self.procSymbolDebugName(builder, proc_id, proc);
+            const linkage_name_str = if (self.enable_default_platform_diagnostics)
+                try self.procSymbolDebugName(builder, proc_id, proc)
+            else
+                name_str;
             const subprogram = builder.debugSubprogram(
                 file,
                 name_str,
