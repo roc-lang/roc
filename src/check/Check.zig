@@ -3382,8 +3382,10 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
     try self.setVarRank(def_var, env);
     try self.setVarRank(ptrn_var, env);
 
+    const def_pattern_ctx: PatternCtx = if (self.patternNeedsExhaustiveness(def.pattern)) .match_branch else .bound;
+
     // Check the pattern
-    try self.checkPattern(def.pattern, .bound, env);
+    try self.checkPattern(def.pattern, def_pattern_ctx, env);
 
     // Extract function name from the pattern (for better error messages)
     const saved_func_name = self.enclosing_func_name;
@@ -3414,6 +3416,7 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
     if (def.annotation == null and self.erroneous_value_exprs.contains(def.expr)) {
         try self.erroneous_value_patterns.put(self.gpa, def.pattern, {});
     }
+    try self.closeAbsentConstructedPayloadVars(def.expr, expr_var);
 
     if (self.defer_generalize) {
         // defer_generalize is only set when a cycle root has been identified.
@@ -3429,10 +3432,15 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
         });
     } else {
         // Unify the ptrn and the expr
-        _ = try self.unify(ptrn_var, expr_var, env);
+        const ptrn_result = try self.unify(ptrn_var, expr_var, env);
 
         // Unify the def and ptrn
         _ = try self.unify(def_var, ptrn_var, env);
+
+        if (ptrn_result.isOk()) {
+            const def_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(def.pattern));
+            try self.checkDestructureExhaustiveness(def.pattern, def.expr, expr_var, env, def_region);
+        }
     }
 
     // Mark as processed
@@ -5152,6 +5160,43 @@ fn getPatternIdent(self: *const Self, ptrn_idx: CIR.Pattern.Idx) ?Ident.Idx {
     }
 }
 
+fn patternNeedsExhaustiveness(self: *const Self, pattern_idx: CIR.Pattern.Idx) bool {
+    const pattern = self.cir.store.getPattern(pattern_idx);
+    return switch (pattern) {
+        .assign, .underscore, .runtime_error => false,
+        .as => |as_pattern| self.patternNeedsExhaustiveness(as_pattern.pattern),
+        .applied_tag,
+        .list,
+        .num_literal,
+        .small_dec_literal,
+        .dec_literal,
+        .frac_f32_literal,
+        .frac_f64_literal,
+        .str_literal,
+        => true,
+        .tuple => |tuple| {
+            for (self.cir.store.slicePatterns(tuple.patterns)) |elem_pattern_idx| {
+                if (self.patternNeedsExhaustiveness(elem_pattern_idx)) return true;
+            }
+            return false;
+        },
+        .record_destructure => |destructure| {
+            for (self.cir.store.sliceRecordDestructs(destructure.destructs)) |destruct_idx| {
+                const destruct = self.cir.store.getRecordDestruct(destruct_idx);
+                const sub_pattern_idx = switch (destruct.kind) {
+                    .Required => |sub_pattern| sub_pattern,
+                    .SubPattern => |sub_pattern| sub_pattern,
+                    .Rest => |sub_pattern| sub_pattern,
+                };
+                if (self.patternNeedsExhaustiveness(sub_pattern_idx)) return true;
+            }
+            return false;
+        },
+        .nominal => |nominal| self.patternNeedsExhaustiveness(nominal.backing_pattern),
+        .nominal_external => |nominal| self.patternNeedsExhaustiveness(nominal.backing_pattern),
+    };
+}
+
 const PatternBinding = struct {
     ident: Ident.Idx,
     pattern_idx: CIR.Pattern.Idx,
@@ -6353,9 +6398,14 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             // If we have an expected function, use that as the expr's expected type
             const body_does_fx = if (mb_anno_func) |expected_func| blk: {
                 const lambda_body_does_fx = try self.checkExpr(lambda.body, env, Expected.none().withBranchResult(expected_func.ret));
+                try self.closeAbsentConstructedPayloadVars(lambda.body, body_var);
                 _ = try self.unifyInContext(expected_func.ret, body_var, env, .type_annotation);
                 break :blk lambda_body_does_fx;
-            } else try self.checkExpr(lambda.body, env, Expected.none());
+            } else blk: {
+                const lambda_body_does_fx = try self.checkExpr(lambda.body, env, Expected.none());
+                try self.closeAbsentConstructedPayloadVars(lambda.body, body_var);
+                break :blk lambda_body_does_fx;
+            };
 
             // Process any pending return constraints (from early returns / ? operator) before
             // creating the function type. This must happen after the body is fully checked
@@ -7498,6 +7548,234 @@ fn exprAlwaysCrashes(self: *const Self, expr_idx: CIR.Expr.Idx) bool {
     };
 }
 
+fn exhaustiveBuiltinIdents(self: *const Self) exhaustive.BuiltinIdents {
+    return .{
+        .builtin_module = self.cir.idents.builtin_module,
+        .u8_type = self.cir.idents.u8_type,
+        .i8_type = self.cir.idents.i8_type,
+        .u16_type = self.cir.idents.u16_type,
+        .i16_type = self.cir.idents.i16_type,
+        .u32_type = self.cir.idents.u32_type,
+        .i32_type = self.cir.idents.i32_type,
+        .u64_type = self.cir.idents.u64_type,
+        .i64_type = self.cir.idents.i64_type,
+        .u128_type = self.cir.idents.u128_type,
+        .i128_type = self.cir.idents.i128_type,
+        .f32_type = self.cir.idents.f32_type,
+        .f64_type = self.cir.idents.f64_type,
+        .dec_type = self.cir.idents.dec_type,
+        .u8 = self.cir.idents.u8,
+        .i8 = self.cir.idents.i8,
+        .u16 = self.cir.idents.u16,
+        .i16 = self.cir.idents.i16,
+        .u32 = self.cir.idents.u32,
+        .i32 = self.cir.idents.i32,
+        .u64 = self.cir.idents.u64,
+        .i64 = self.cir.idents.i64,
+        .u128 = self.cir.idents.u128,
+        .i128 = self.cir.idents.i128,
+        .f32 = self.cir.idents.f32,
+        .f64 = self.cir.idents.f64,
+        .dec = self.cir.idents.dec,
+    };
+}
+
+fn closeExhaustiveVars(
+    self: *Self,
+    result: exhaustive.CheckResult,
+    env: *Env,
+    region: Region,
+) std.mem.Allocator.Error!void {
+    for (result.ext_vars_to_close) |ext_var| {
+        const empty_tu_var = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, region);
+        _ = try self.unify(ext_var, empty_tu_var, env);
+    }
+
+    for (result.payload_vars_to_close) |payload_var| {
+        try self.closePayloadVarToEmpty(payload_var);
+    }
+}
+
+fn appendUniqueIdent(gpa: std.mem.Allocator, out: *std.ArrayList(Ident.Idx), ident: Ident.Idx) Allocator.Error!void {
+    for (out.items) |existing| {
+        if (existing.eql(ident)) return;
+    }
+    try out.append(gpa, ident);
+}
+
+fn collectConstructedTagsForExpr(
+    self: *Self,
+    expr_idx: CIR.Expr.Idx,
+    out: *std.ArrayList(Ident.Idx),
+) Allocator.Error!bool {
+    const expr = self.cir.store.getExpr(expr_idx);
+    switch (expr) {
+        .e_zero_argument_tag => |tag| {
+            try appendUniqueIdent(self.gpa, out, tag.name);
+            return true;
+        },
+        .e_tag => |tag| {
+            try appendUniqueIdent(self.gpa, out, tag.name);
+            return true;
+        },
+        .e_nominal => |nominal| {
+            return self.collectConstructedTagsForExpr(nominal.backing_expr, out);
+        },
+        .e_nominal_external => |nominal| {
+            return self.collectConstructedTagsForExpr(nominal.backing_expr, out);
+        },
+        .e_block => |block| {
+            return self.collectConstructedTagsForExpr(block.final_expr, out);
+        },
+        .e_if => |if_expr| {
+            const branches = self.cir.store.sliceIfBranches(if_expr.branches);
+            for (branches) |branch_idx| {
+                const branch = self.cir.store.getIfBranch(branch_idx);
+                if (!try self.collectConstructedTagsForExpr(branch.body, out)) return false;
+            }
+            return self.collectConstructedTagsForExpr(if_expr.final_else, out);
+        },
+        .e_match => |match_expr| {
+            const branches = self.cir.store.sliceMatchBranches(match_expr.branches);
+            for (branches) |branch_idx| {
+                const branch = self.cir.store.getMatchBranch(branch_idx);
+                if (!try self.collectConstructedTagsForExpr(branch.value, out)) return false;
+            }
+            return true;
+        },
+        else => return false,
+    }
+}
+
+fn collectAbsentCtorPayloadBlockers(
+    self: *Self,
+    target_var: Var,
+    constructed_tags: []const Ident.Idx,
+    out: *std.ArrayList(Var),
+) Allocator.Error!void {
+    var arena = std.heap.ArenaAllocator.init(self.gpa);
+    defer arena.deinit();
+
+    try exhaustive.collectAbsentCtorPayloadBlockersForConstructedTags(
+        arena.allocator(),
+        self.types,
+        self.exhaustiveBuiltinIdents(),
+        target_var,
+        constructed_tags,
+        out,
+    );
+}
+
+fn payloadVarCanResolveToEmpty(content: Content) bool {
+    return switch (content) {
+        .flex => |flex| flex.constraints.len() == 0 and if (flex.name) |name| name.attributes.ignored else true,
+        .rigid => |rigid| rigid.constraints.len() == 0 and rigid.name.attributes.ignored,
+        else => false,
+    };
+}
+
+fn closePayloadVarToEmpty(
+    self: *Self,
+    payload_var: Var,
+) Allocator.Error!void {
+    const empty_content = Content{ .structure = .empty_tag_union };
+    const resolved = self.types.resolveVar(payload_var);
+    if (payloadVarCanResolveToEmpty(resolved.desc.content)) {
+        try self.types.setVarContent(resolved.var_, empty_content);
+    }
+}
+
+fn collectKnownEmptyPayloadVarsForExpr(
+    self: *Self,
+    expr_idx: CIR.Expr.Idx,
+    target_var: Var,
+    out: *std.ArrayList(Var),
+) Allocator.Error!bool {
+    var constructed_tags: std.ArrayList(Ident.Idx) = .empty;
+    defer constructed_tags.deinit(self.gpa);
+
+    const known = try self.collectConstructedTagsForExpr(expr_idx, &constructed_tags);
+    if (!known) return false;
+    if (constructed_tags.items.len == 0) return true;
+
+    try self.collectAbsentCtorPayloadBlockers(target_var, constructed_tags.items, out);
+    return true;
+}
+
+fn closeAbsentConstructedPayloadVars(
+    self: *Self,
+    expr_idx: CIR.Expr.Idx,
+    target_var: Var,
+) Allocator.Error!void {
+    var payload_vars_to_close: std.ArrayList(Var) = .empty;
+    defer payload_vars_to_close.deinit(self.gpa);
+
+    _ = try self.collectKnownEmptyPayloadVarsForExpr(expr_idx, target_var, &payload_vars_to_close);
+
+    for (payload_vars_to_close.items) |payload_var| {
+        try self.closePayloadVarToEmpty(payload_var);
+    }
+}
+
+fn checkDestructureExhaustiveness(
+    self: *Self,
+    pattern_idx: CIR.Pattern.Idx,
+    value_expr_idx: CIR.Expr.Idx,
+    value_var: Var,
+    env: *Env,
+    region: Region,
+) std.mem.Allocator.Error!void {
+    if (!self.patternNeedsExhaustiveness(pattern_idx)) return;
+
+    var known_empty_payload_vars: std.ArrayList(Var) = .empty;
+    defer known_empty_payload_vars.deinit(self.gpa);
+    const value_constructors_known = try self.collectKnownEmptyPayloadVarsForExpr(value_expr_idx, value_var, &known_empty_payload_vars);
+
+    const result = exhaustive.checkDestructure(
+        self.cir.gpa,
+        self.types,
+        &self.cir.store,
+        self.exhaustiveBuiltinIdents(),
+        pattern_idx,
+        value_var,
+        region,
+        known_empty_payload_vars.items,
+        value_constructors_known,
+    ) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.TypeError => return,
+    };
+    defer result.deinit(self.cir.gpa);
+
+    try self.closeExhaustiveVars(result, env, region);
+
+    if (!result.is_exhaustive) {
+        const value_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, value_var);
+        const missing_patterns_start = self.problems.missing_patterns_backing.items.len;
+
+        for (result.missing_patterns) |pattern| {
+            const idx = try exhaustive.formatPattern(
+                &self.problems.extra_strings_backing,
+                &self.cir.common.idents,
+                &self.cir.common.strings,
+                pattern,
+            );
+            try self.problems.missing_patterns_backing.append(idx);
+        }
+
+        const missing_patterns_range = problem.MissingPatternsRange{
+            .start = missing_patterns_start,
+            .count = self.problems.missing_patterns_backing.items.len - missing_patterns_start,
+        };
+
+        _ = try self.problems.appendProblem(self.gpa, .{ .non_exhaustive_destructure = .{
+            .pattern = pattern_idx,
+            .value_snapshot = value_snapshot,
+            .missing_patterns = missing_patterns_range,
+        } });
+    }
+}
+
 // stmts //
 
 const BlockStatementsResult = struct {
@@ -7526,8 +7804,10 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 const decl_expr_var: Var = ModuleEnv.varFrom(decl_stmt.expr);
                 const decl_pattern_var: Var = ModuleEnv.varFrom(decl_stmt.pattern);
 
+                const decl_pattern_ctx: PatternCtx = if (self.patternNeedsExhaustiveness(decl_stmt.pattern)) .match_branch else .bound;
+
                 // Check the pattern
-                try self.checkPattern(decl_stmt.pattern, .bound, env);
+                try self.checkPattern(decl_stmt.pattern, decl_pattern_ctx, env);
 
                 // Extract function name from the pattern (for better error messages)
                 const saved_func_name = self.enclosing_func_name;
@@ -7564,9 +7844,14 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 if (decl_stmt.anno == null and self.erroneous_value_exprs.contains(decl_stmt.expr)) {
                     try self.erroneous_value_patterns.put(self.gpa, decl_stmt.pattern, {});
                 }
+                try self.closeAbsentConstructedPayloadVars(decl_stmt.expr, decl_expr_var);
 
-                _ = try self.unify(decl_pattern_var, decl_expr_var, env);
+                const decl_pattern_result = try self.unify(decl_pattern_var, decl_expr_var, env);
                 _ = try self.unify(stmt_var, decl_pattern_var, env);
+
+                if (decl_pattern_result.isOk()) {
+                    try self.checkDestructureExhaustiveness(decl_stmt.pattern, decl_stmt.expr, decl_expr_var, env, stmt_region);
+                }
 
                 if (decl_is_fn) {
                     // The def's lambda has generalized (inside checkExpr) and the
@@ -7577,8 +7862,10 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 }
             },
             .s_var => |var_stmt| {
+                const var_pattern_ctx: PatternCtx = if (self.patternNeedsExhaustiveness(var_stmt.pattern_idx)) .match_branch else .bound;
+
                 // Check the pattern
-                try self.checkPattern(var_stmt.pattern_idx, .bound, env);
+                try self.checkPattern(var_stmt.pattern_idx, var_pattern_ctx, env);
                 const var_pattern_var: Var = ModuleEnv.varFrom(var_stmt.pattern_idx);
 
                 // Check the annotation, if it exists
@@ -7596,9 +7883,14 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                     try self.erroneous_value_patterns.put(self.gpa, var_stmt.pattern_idx, {});
                 }
                 const var_expr: Var = ModuleEnv.varFrom(var_stmt.expr);
+                try self.closeAbsentConstructedPayloadVars(var_stmt.expr, var_expr);
 
-                _ = try self.unify(var_pattern_var, var_expr, env);
+                const var_pattern_result = try self.unify(var_pattern_var, var_expr, env);
                 _ = try self.unify(stmt_var, var_expr, env);
+
+                if (var_pattern_result.isOk()) {
+                    try self.checkDestructureExhaustiveness(var_stmt.pattern_idx, var_stmt.expr, var_expr, env, stmt_region);
+                }
             },
             .s_reassign => |reassign| {
                 // Reassignment patterns can mix existing mutable binders with
@@ -7606,20 +7898,26 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 // The pattern occurrence itself must therefore always be
                 // checked here so its structural type and any fresh binders are
                 // established explicitly before we unify it with the RHS.
-                try self.checkPattern(reassign.pattern_idx, .bound, env);
+                const reassign_pattern_ctx: PatternCtx = if (self.patternNeedsExhaustiveness(reassign.pattern_idx)) .match_branch else .bound;
+                try self.checkPattern(reassign.pattern_idx, reassign_pattern_ctx, env);
 
                 const reassign_pattern_var: Var = ModuleEnv.varFrom(reassign.pattern_idx);
 
                 does_fx = try self.checkExpr(reassign.expr, env, Expected.none()) or does_fx;
                 const reassign_expr_var: Var = ModuleEnv.varFrom(reassign.expr);
+                try self.closeAbsentConstructedPayloadVars(reassign.expr, reassign_expr_var);
 
                 // Unify the pattern with the expression
                 //
                 // TODO: if there's a mismatch here, the region of the error is
                 // the original assignment pattern, not the reassignment region
-                _ = try self.unify(reassign_pattern_var, reassign_expr_var, env);
+                const reassign_pattern_result = try self.unify(reassign_pattern_var, reassign_expr_var, env);
 
                 _ = try self.unify(stmt_var, reassign_expr_var, env);
+
+                if (reassign_pattern_result.isOk()) {
+                    try self.checkDestructureExhaustiveness(reassign.pattern_idx, reassign.expr, reassign_expr_var, env, stmt_region);
+                }
             },
             .s_for => |for_stmt| {
                 const for_region = self.cir.store.getStatementRegion(stmt_idx);
@@ -7974,6 +8272,9 @@ fn checkMatchExpr(
     var does_fx = try self.checkExpr(match.cond, env, Expected.none());
     const cond_var = ModuleEnv.varFrom(match.cond);
     const cond_always_crashes = self.exprAlwaysCrashes(match.cond);
+    if (!match.is_try_suffix) {
+        try self.closeAbsentConstructedPayloadVars(match.cond, cond_var);
+    }
 
     // Assert we have at least 1 branch
     std.debug.assert(match.branches.span.len > 0);
@@ -8177,46 +8478,23 @@ fn checkMatchExpr(
     const resolved_cond = self.types.resolveVar(cond_var);
     const cond_is_error = resolved_cond.desc.content == .err;
 
-    if (!had_type_error and !cond_is_error and !has_invalid_try and !cond_always_crashes) {
+    if (!match.is_try_suffix and !had_type_error and !cond_is_error and !has_invalid_try and !cond_always_crashes) {
         const match_region = self.getRegionAt(@enumFromInt(@intFromEnum(expr_idx)));
-        const builtin_idents = exhaustive.BuiltinIdents{
-            .builtin_module = self.cir.idents.builtin_module,
-            .u8_type = self.cir.idents.u8_type,
-            .i8_type = self.cir.idents.i8_type,
-            .u16_type = self.cir.idents.u16_type,
-            .i16_type = self.cir.idents.i16_type,
-            .u32_type = self.cir.idents.u32_type,
-            .i32_type = self.cir.idents.i32_type,
-            .u64_type = self.cir.idents.u64_type,
-            .i64_type = self.cir.idents.i64_type,
-            .u128_type = self.cir.idents.u128_type,
-            .i128_type = self.cir.idents.i128_type,
-            .f32_type = self.cir.idents.f32_type,
-            .f64_type = self.cir.idents.f64_type,
-            .dec_type = self.cir.idents.dec_type,
-            .u8 = self.cir.idents.u8,
-            .i8 = self.cir.idents.i8,
-            .u16 = self.cir.idents.u16,
-            .i16 = self.cir.idents.i16,
-            .u32 = self.cir.idents.u32,
-            .i32 = self.cir.idents.i32,
-            .u64 = self.cir.idents.u64,
-            .i64 = self.cir.idents.i64,
-            .u128 = self.cir.idents.u128,
-            .i128 = self.cir.idents.i128,
-            .f32 = self.cir.idents.f32,
-            .f64 = self.cir.idents.f64,
-            .dec = self.cir.idents.dec,
-        };
+
+        var known_empty_payload_vars: std.ArrayList(Var) = .empty;
+        defer known_empty_payload_vars.deinit(self.gpa);
+        const cond_constructors_known = try self.collectKnownEmptyPayloadVarsForExpr(match.cond, cond_var, &known_empty_payload_vars);
 
         const result = exhaustive.checkMatch(
             self.cir.gpa,
             self.types,
             &self.cir.store,
-            builtin_idents,
+            self.exhaustiveBuiltinIdents(),
             match.branches,
             cond_var,
             match_region,
+            known_empty_payload_vars.items,
+            cond_constructors_known,
         ) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.TypeError => {
@@ -8228,13 +8506,7 @@ fn checkMatchExpr(
         };
         defer result.deinit(self.cir.gpa);
 
-        // Close ext vars identified by exhaustiveness checker via proper unification.
-        // These are tag union positions where all constructors were exhaustively
-        // covered without wildcards (open unions that should become closed).
-        for (result.ext_vars_to_close) |ext_var| {
-            const empty_tu_var = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, match_region);
-            _ = try self.unify(ext_var, empty_tu_var, env);
-        }
+        try self.closeExhaustiveVars(result, env, match_region);
 
         // Report non-exhaustive match if any patterns are missing
         if (!result.is_exhaustive) {
