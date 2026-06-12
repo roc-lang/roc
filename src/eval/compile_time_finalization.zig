@@ -312,11 +312,6 @@ fn lowerEvalAndFinishRoots(
         host.ops(),
     );
     defer interpreter.deinit();
-    // Termination guard: TRMC/TCE turns tail recursion into loops, so the
-    // interpreter's call-depth cap no longer bounds non-terminating constants.
-    // Generous enough for large compile-time structures (a million-iteration
-    // accumulator loop is ~10M steps).
-    interpreter.setStepBudget(64_000_000);
 
     var writer = ConstStoreWriter.Writer.init(allocator, module, &lowered.lir_result);
     defer writer.deinit();

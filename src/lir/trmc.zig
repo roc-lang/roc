@@ -150,11 +150,10 @@ fn transformProc(
 
 /// How a statement is reached: the incoming reference the transform redirects
 /// to splice statements out of the graph. Statement graphs are DAGs (lowering
-/// shares linear tails), so this is the FIRST-seen reference — splicing or
-/// repurposing a statement that has a second incoming reference would
-/// miscompile the other path, which is why the transform asserts (in Debug)
-/// that every statement it rewrites non-uniformly is singly referenced; see
-/// Scratch.stamps and assertRewrittenStmtsUnshared.
+/// shares linear tails), so this is the FIRST-seen reference. TRMC/TCE
+/// eligibility rejects candidates whose recorded edge or rewritten statements
+/// are reachable through a shared tail; otherwise splicing or repurposing the
+/// shared node would change another path through the proc.
 const Edge = union(enum) {
     proc_body,
     stmt_next: CFStmtId,
@@ -242,15 +241,21 @@ const WorkItem = struct { stmt: CFStmtId, edge: Edge };
 /// the largest proc's high-water mark.)
 const Scratch = struct {
     gpa: Allocator,
-    /// Visited marks for the walk, indexed by CFStmtId. stamps[i] ==
-    /// generation means seen once this proc; generation + 1 means seen
-    /// through more than one incoming reference (consulted by
-    /// assertRewrittenStmtsUnshared).
+    /// Visited marks for the walk, indexed by CFStmtId:
+    ///
+    /// - generation: reached once on a unique path in this proc
+    /// - generation + 1: reached through a shared tail, not yet propagated
+    /// - generation + 2: reached through a shared tail, propagated
+    ///
+    /// Once a statement has two incoming references, every statement reachable
+    /// through it is shared too: mutating any of them changes both paths.
     stamps: []u32,
-    /// Always even; bumped by 2 in beginProc so both stamp values are fresh.
+    /// Bumped by 3 in beginProc so all stamp values are fresh.
     generation: u32 = 0,
     work: std.ArrayList(WorkItem) = .empty,
     candidates: std.ArrayList(Candidate) = .empty,
+    /// Heads of shared tails discovered during the walk.
+    shared_heads: std.ArrayList(CFStmtId) = .empty,
     /// Every original `ret` statement of the current proc (epilogue-rewritten
     /// by TRMC).
     rets: std.ArrayList(CFStmtId) = .empty,
@@ -265,20 +270,22 @@ const Scratch = struct {
         self.gpa.free(self.stamps);
         self.work.deinit(self.gpa);
         self.candidates.deinit(self.gpa);
+        self.shared_heads.deinit(self.gpa);
         self.rets.deinit(self.gpa);
     }
 
     fn beginProc(self: *Scratch) void {
         self.work.clearRetainingCapacity();
         self.candidates.clearRetainingCapacity();
+        self.shared_heads.clearRetainingCapacity();
         self.rets.clearRetainingCapacity();
-        if (self.generation >= std.math.maxInt(u32) - 1) {
+        if (self.generation >= std.math.maxInt(u32) - 2) {
             // ~2 billion procs in one run; unreachable in practice, but wrap
             // would make stale stamps read as visited.
             @memset(self.stamps, 0);
             self.generation = 0;
         }
-        self.generation += 2;
+        self.generation += 3;
     }
 };
 
@@ -315,6 +322,9 @@ const Detection = struct {
         self.eligible_trmc = ret_layout_val.tag == .tag_union;
 
         try self.walk(proc.body.?);
+        if (self.bail) return;
+        try self.propagateSharedTails();
+        self.invalidateSharedRewriteCandidates();
     }
 
     /// Does jumping to `target` ultimately return `local`? True when the join
@@ -368,9 +378,13 @@ const Detection = struct {
         while (work.pop()) |item| {
             const stamp = &stamps[@intFromEnum(item.stmt)];
             if (stamp.* >= gen) {
-                // Second arrival: mark the statement as multiply referenced
-                // (read back by assertRewrittenStmtsUnshared) and skip it.
-                stamp.* = gen + 1;
+                // Second arrival: this statement is the head of a shared tail.
+                // Record it so the sharing mark can be propagated to every
+                // downstream statement before final candidate eligibility.
+                if (stamp.* == gen) {
+                    try self.scratch.shared_heads.append(gpa, item.stmt);
+                    stamp.* = gen + 1;
+                }
                 continue;
             }
             stamp.* = gen;
@@ -411,6 +425,59 @@ const Detection = struct {
                     try work.append(gpa, .{ .stmt = s.next, .edge = .{ .stmt_next = item.stmt } });
                 },
             }
+        }
+    }
+
+    /// A shared tail head makes every reachable descendant shared for the
+    /// purpose of TRMC/TCE rewrites. Direct in-degree is not enough: if two
+    /// branches point at `a` and `a.next` is `b`, then mutating `b` still
+    /// changes both branch paths even though only `a` points directly at `b`.
+    fn propagateSharedTails(self: *Detection) ResourceError!void {
+        const gpa = self.scratch.gpa;
+        const work = &self.scratch.work;
+        const stamps = self.scratch.stamps;
+        const gen = self.scratch.generation;
+
+        work.clearRetainingCapacity();
+        for (self.scratch.shared_heads.items) |shared_head| {
+            try work.append(gpa, .{ .stmt = shared_head, .edge = .proc_body });
+        }
+
+        while (work.pop()) |item| {
+            const stamp = &stamps[@intFromEnum(item.stmt)];
+            if (stamp.* == gen + 2) continue;
+            stamp.* = gen + 2;
+
+            const stmt = self.store.getCFStmt(item.stmt);
+            try self.appendSuccessorsForSharedPropagation(work, stmt);
+        }
+    }
+
+    fn appendSharedSuccessor(self: *Detection, work: *std.ArrayList(WorkItem), stmt_id: CFStmtId) ResourceError!void {
+        if (self.scratch.stamps[@intFromEnum(stmt_id)] == self.scratch.generation + 2) return;
+        try work.append(self.scratch.gpa, .{ .stmt = stmt_id, .edge = .proc_body });
+    }
+
+    fn appendSuccessorsForSharedPropagation(self: *Detection, work: *std.ArrayList(WorkItem), stmt: LIR.CFStmt) ResourceError!void {
+        switch (stmt) {
+            .join => |s| {
+                try self.appendSharedSuccessor(work, s.remainder);
+                try self.appendSharedSuccessor(work, s.body);
+            },
+            .switch_stmt => |s| {
+                if (s.continuation) |continuation| {
+                    try self.appendSharedSuccessor(work, continuation);
+                }
+                try self.appendSharedSuccessor(work, s.default_branch);
+                const branches = self.store.getCFSwitchBranches(s.branches);
+                for (branches) |branch| {
+                    try self.appendSharedSuccessor(work, branch.body);
+                }
+            },
+            .jump, .ret, .crash, .runtime_error, .loop_continue, .loop_break => {},
+            inline .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .free => |s| {
+                try self.appendSharedSuccessor(work, s.next);
+            },
         }
     }
 
@@ -624,38 +691,69 @@ const Detection = struct {
         return false;
     }
 
-    /// Debug check, run just before transforming: every statement the
-    /// transform splices out via its recorded edge (the call, alias hops) or
-    /// overwrites with path-specific semantics (the box allocation, the site
-    /// terminal) must have exactly one incoming reference — a second
-    /// predecessor would still route through the rewritten statement and
-    /// miscompile. Epilogue-rewritten rets are exempt: that rewrite is uniform
-    /// for every path reaching them. Lowering's shared tails have only ever
-    /// been observed to hold refs/rets/tags, never candidate statements, but
-    /// nothing upstream guarantees that.
+    fn invalidateSharedRewriteCandidates(self: *Detection) void {
+        for (self.scratch.candidates.items) |*candidate| {
+            switch (candidate.state) {
+                .confirmed_construct, .confirmed_tail => {},
+                else => continue,
+            }
+            if (self.candidateTouchesSharedRewritePath(candidate)) {
+                candidate.state = .invalid;
+            }
+        }
+    }
+
+    fn candidateTouchesSharedRewritePath(self: *const Detection, candidate: *const Candidate) bool {
+        if (self.edgeOwnerIsShared(candidate.call_edge)) return true;
+        if (self.isSharedPath(candidate.call_stmt)) return true;
+        if (self.isSharedPath(candidate.terminal_stmt)) return true;
+
+        if (candidate.state == .confirmed_construct) {
+            if (self.isSharedPath(candidate.box_stmt)) return true;
+            for (
+                candidate.alias_stmts[0..candidate.alias_len],
+                candidate.alias_edges[0..candidate.alias_len],
+            ) |alias_stmt, alias_edge| {
+                if (self.edgeOwnerIsShared(alias_edge)) return true;
+                if (self.isSharedPath(alias_stmt)) return true;
+            }
+        }
+
+        return false;
+    }
+
+    fn edgeOwnerIsShared(self: *const Detection, edge: Edge) bool {
+        return switch (edge) {
+            .proc_body => false,
+            .stmt_next => |stmt| self.isSharedPath(stmt),
+            .join_body => |stmt| self.isSharedPath(stmt),
+            .join_remainder => |stmt| self.isSharedPath(stmt),
+            .switch_branch => |info| self.isSharedPath(info.stmt),
+            .switch_default => |stmt| self.isSharedPath(stmt),
+            .switch_continuation => |stmt| self.isSharedPath(stmt),
+        };
+    }
+
+    fn isSharedPath(self: *const Detection, stmt_id: CFStmtId) bool {
+        return self.scratch.stamps[@intFromEnum(stmt_id)] >= self.scratch.generation + 1;
+    }
+
+    /// Debug check, run just before transforming: candidate eligibility must
+    /// have rejected every path-specific rewrite that touches a shared tail.
+    /// Epilogue-rewritten rets are exempt: that rewrite is uniform for every
+    /// path reaching them.
     fn assertRewrittenStmtsUnshared(self: *const Detection) void {
         for (self.scratch.candidates.items) |candidate| {
             switch (candidate.state) {
                 .confirmed_construct, .confirmed_tail => {},
                 else => continue,
             }
-            self.assertUnshared(candidate.call_stmt);
-            self.assertUnshared(candidate.terminal_stmt);
-            if (candidate.state == .confirmed_construct) {
-                self.assertUnshared(candidate.box_stmt);
-                for (candidate.alias_stmts[0..candidate.alias_len]) |alias_stmt| {
-                    self.assertUnshared(alias_stmt);
-                }
+            if (self.candidateTouchesSharedRewritePath(&candidate)) {
+                std.debug.panic(
+                    "TRMC invariant violated: candidate reached transform after touching a shared rewrite path",
+                    .{},
+                );
             }
-        }
-    }
-
-    fn assertUnshared(self: *const Detection, stmt_id: CFStmtId) void {
-        if (self.scratch.stamps[@intFromEnum(stmt_id)] == self.scratch.generation + 1) {
-            std.debug.panic(
-                "TRMC invariant violated: rewritten statement {d} has more than one incoming reference",
-                .{@intFromEnum(stmt_id)},
-            );
         }
     }
 };

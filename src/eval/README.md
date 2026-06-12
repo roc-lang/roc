@@ -57,12 +57,6 @@ All RocOps interactions (alloc, dealloc, crash, expect, dbg) happen through the
   constructor-tail-recursive functions don't hit this: the TRMC/TCE pass
   (`src/lir/trmc.zig`) rewrites them into join-point loops before the
   interpreter ever sees them.
-- **Step budget** — `setStepBudget()` caps total executed statements.
-  Compile-time finalization (`compile_time_finalization.zig`) sets a finite
-  budget so a non-terminating top-level constant becomes a compile-time crash
-  instead of hanging the compiler; the call-depth cap can no longer catch
-  those once TRMC/TCE has turned the recursion into a loop. Normal runtime
-  evaluation is effectively unlimited.
 - **Debug value validation** — In Debug builds, `setLocal` walks values to
   check they match their layouts. The walk is best-effort: it stops at
   `max_debug_value_depth` (64) nested values and after

@@ -942,7 +942,7 @@ test "golden: repeat IR before and after the trmc transform" {
     , after);
 }
 
-test "must not transform: result used twice, constructor not returned, non-union return, mutual recursion" {
+test "must not transform: result used twice, constructor not returned, non-union return, mutual recursion, shared tail" {
     const allocator = std.testing.allocator;
     var store = LirStore.init(allocator);
     defer store.deinit();
@@ -1045,6 +1045,37 @@ test "must not transform: result used twice, constructor not returned, non-union
         pb.frame_locals = try store.addLocalSpan(&.{rb});
     }
 
+    // (5) Two control-flow edges share the same recursive tail. TRMC/TCE
+    // rewrites statements in place, so this shape is not eligible unless the
+    // pass first splits the shared tail.
+    const shared_tail = blk: {
+        const a_n = try b.addLocal(allocator, .u64);
+        const proc = try store.addProcSpec(.{
+            .name = store.freshSyntheticSymbol(),
+            .args = try store.addLocalSpan(&.{a_n}),
+            .ret_layout = .u64,
+        });
+        const cond = try b.addLocal(allocator, .bool);
+        const r = try b.addLocal(allocator, .u64);
+        const ret_r = try store.addCFStmt(.{ .ret = .{ .value = r } });
+        const call = try store.addCFStmt(.{ .assign_call = .{
+            .target = r,
+            .proc = proc,
+            .args = try store.addLocalSpan(&.{a_n}),
+            .next = ret_r,
+        } });
+        const branches = try store.addCFSwitchBranches(&.{.{ .value = 1, .body = call }});
+        const switch_stmt = try store.addCFStmt(.{ .switch_stmt = .{
+            .cond = cond,
+            .branches = branches,
+            .default_branch = call,
+        } });
+        const proc_ptr = store.getProcSpecPtr(proc);
+        proc_ptr.body = switch_stmt;
+        proc_ptr.frame_locals = try store.addLocalSpan(b.locals.items);
+        break :blk proc;
+    };
+
     try lir.Trmc.run(&store, &layouts);
 
     try std.testing.expectEqual(LIR.TailTransform.none, store.getProcSpec(used_twice).tail_transform);
@@ -1053,4 +1084,6 @@ test "must not transform: result used twice, constructor not returned, non-union
     try std.testing.expectEqual(LIR.TailTransform.none, store.getProcSpec(fib_like).tail_transform);
     try std.testing.expectEqual(LIR.TailTransform.none, store.getProcSpec(mutual_a).tail_transform);
     try std.testing.expectEqual(LIR.TailTransform.none, store.getProcSpec(mutual_b).tail_transform);
+    try std.testing.expectEqual(LIR.TailTransform.none, store.getProcSpec(shared_tail).tail_transform);
+    try std.testing.expect(try hasSelfCall(allocator, &store, shared_tail));
 }

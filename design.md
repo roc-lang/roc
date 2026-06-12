@@ -2008,12 +2008,11 @@ that value kind must be added explicitly here with a checked cache rule.
 - function values
 
 Compile-time evaluation failures are owned by checking finalization because the
-module has not been output yet. User-written compile-time crashes, exhausted
-compile-time limits, invalid compile-time host interaction, and unsupported
-compile-time operations become checking diagnostics attached to the checked root
-being finalized. OOM remains OOM. A post-check invariant failure while lowering
-or interpreting a compile-time root is still a compiler bug, not a user-facing
-diagnostic.
+module has not been output yet. User-written compile-time crashes, invalid
+compile-time host interaction, and unsupported compile-time operations become
+checking diagnostics attached to the checked root being finalized. OOM remains
+OOM. A post-check invariant failure while lowering or interpreting a
+compile-time root is still a compiler bug, not a user-facing diagnostic.
 
 While storing an eval result, the builder may reserve a `ConstNodeId` before
 storing its children so repeated references to the same acyclic runtime value

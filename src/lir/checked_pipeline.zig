@@ -216,10 +216,7 @@ pub fn lowerCheckedModulesToLir(
 
     // TRMC/TCE must rewrite recursive procs before ARC insertion: it deletes
     // calls and changes allocation sites, and ARC panics on pre-existing RC
-    // statements (see src/lir/trmc.zig). This also applies during checking
-    // finalization, where the interpreter's step budget (not its call-depth
-    // cap, which loops no longer hit) guards against non-terminating
-    // compile-time constants.
+    // statements (see src/lir/trmc.zig).
     try Trmc.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
     try Arc.insert(&lowered.lir_result.store, &lowered.lir_result.layouts);
 
