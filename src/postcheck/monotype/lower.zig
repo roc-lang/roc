@@ -1030,16 +1030,12 @@ const InstGraph = struct {
     fn importMono(self: *InstGraph, ty: Type.TypeId) Allocator.Error!NodeId {
         if (self.mono_nodes.get(ty)) |existing| return existing;
         const node = try self.newNode(.{ .unresolved = .{} });
+        // One-way memo: every import is a finished Monotype from outside this
+        // graph (ids materialized here hit the memo above), so it enters as a
+        // snapshot. Registering a view would let this specialization's
+        // evidence rewrite another specialization's final type, destabilizing
+        // every digest taken from it.
         try self.mono_nodes.put(ty, node);
-        // An imported Monotype becomes a refreshable view of its node, so
-        // every holder of the id observes the solved type, unless it belongs
-        // to the builder-global cache: those serve many specializations as
-        // finished snapshots and stay as they are.
-        if (!self.builder.frozen_monos.contains(ty)) {
-            const entry = try self.node_monos.getOrPut(node);
-            if (!entry.found_existing) entry.value_ptr.* = .empty;
-            try entry.value_ptr.append(self.allocator, ty);
-        }
 
         const types = &self.builder.program.types;
         const imported: InstNode = switch (types.get(ty)) {
@@ -1240,10 +1236,6 @@ const Builder = struct {
     program: *Ast.Program,
     symbols: Common.SymbolGen = .{},
     type_cache: std.AutoHashMap(CheckedTypeAddress, Type.TypeId),
-    /// Monotypes owned by the builder-global type cache. They serve many
-    /// specializations as finished snapshots, so specialization graphs never
-    /// register refreshable views of them.
-    frozen_monos: std.AutoHashMap(Type.TypeId, void),
     lowered_templates: std.AutoHashMap(TemplateFamily, std.ArrayList(LoweredTemplate)),
     lowered_nested_fns: std.AutoHashMap(NestedFnFamily, std.ArrayList(LoweredNestedFn)),
     nested_site_cache: std.AutoHashMap(NestedSiteAddress, names.ProcSiteId),
@@ -1266,7 +1258,6 @@ const Builder = struct {
             .root_view = checked.importedView(modules.root.module),
             .program = program,
             .type_cache = std.AutoHashMap(CheckedTypeAddress, Type.TypeId).init(allocator),
-            .frozen_monos = std.AutoHashMap(Type.TypeId, void).init(allocator),
             .lowered_templates = std.AutoHashMap(TemplateFamily, std.ArrayList(LoweredTemplate)).init(allocator),
             .lowered_nested_fns = std.AutoHashMap(NestedFnFamily, std.ArrayList(LoweredNestedFn)).init(allocator),
             .nested_site_cache = std.AutoHashMap(NestedSiteAddress, names.ProcSiteId).init(allocator),
@@ -1291,7 +1282,6 @@ const Builder = struct {
             list.deinit(self.allocator);
         }
         self.lowered_templates.deinit();
-        self.frozen_monos.deinit();
         self.type_cache.deinit();
     }
 
@@ -2047,7 +2037,6 @@ const Builder = struct {
 
         const reserved = try self.program.types.add(.zst);
         try self.type_cache.put(address, reserved);
-        try self.frozen_monos.put(reserved, {});
         const lowered = try self.lowerTypePayload(view, checked_ty, view.types.payloads[raw]);
         self.program.types.types.items[@intFromEnum(reserved)] = lowered;
         return reserved;
