@@ -4382,16 +4382,64 @@ fn staticDataLinkRootSymbols(
     return symbols.items;
 }
 
-/// Symbols a shared-library link must export, read out of the host inputs so a
-/// Roc-built shared library exposes the host's public API on every target
-/// (generalizing the wasm `--export` path). Empty for non-shared output.
+fn sharedLibraryAppExports(
+    ctx: *CliCtx,
+    entrypoints: []const backend.Entrypoint,
+    static_data_exports: []const backend.StaticDataExport,
+) Allocator.Error![]const []const u8 {
+    var symbols = try std.array_list.Managed([]const u8).initCapacity(
+        ctx.arena,
+        entrypoints.len + static_data_exports.len,
+    );
+
+    for (entrypoints) |entrypoint| {
+        try symbols.append(entrypoint.symbol_name);
+    }
+    for (static_data_exports) |data_export| {
+        if (!data_export.is_global) continue;
+        try symbols.append(data_export.symbol_name);
+    }
+
+    return symbols.items;
+}
+
+fn appendUniqueSharedLibraryExport(
+    seen: *std.StringHashMap(void),
+    symbols: *std.array_list.Managed([]const u8),
+    symbol: []const u8,
+) Allocator.Error!void {
+    if (symbol.len == 0) return;
+    const gop = try seen.getOrPut(symbol);
+    if (gop.found_existing) return;
+    try symbols.append(symbol);
+}
+
+/// Symbols a shared-library link must export: app-provided symbols plus host
+/// input exports, so the final library exposes its explicit public ABI on every
+/// target. Empty for non-shared output.
 fn sharedLibraryExports(
     ctx: *CliCtx,
     link_type: roc_target.OutputKind,
     link_inputs: PlatformLinkInputs,
+    app_export_symbols: []const []const u8,
 ) Allocator.Error![]const []const u8 {
     if (link_type != .shared) return &.{};
-    return host_symbols.collectHostExports(ctx.arena, ctx.io.std_io, try hostInputPaths(ctx, link_inputs));
+
+    const host_export_symbols = try host_symbols.collectHostExports(ctx.arena, ctx.io.std_io, try hostInputPaths(ctx, link_inputs));
+    var seen = std.StringHashMap(void).init(ctx.arena);
+    var symbols = try std.array_list.Managed([]const u8).initCapacity(
+        ctx.arena,
+        app_export_symbols.len + host_export_symbols.len,
+    );
+
+    for (app_export_symbols) |symbol| {
+        try appendUniqueSharedLibraryExport(&seen, &symbols, symbol);
+    }
+    for (host_export_symbols) |symbol| {
+        try appendUniqueSharedLibraryExport(&seen, &symbols, symbol);
+    }
+
+    return symbols.items;
 }
 
 fn llvmOptimizationLevel(opt: cli_args.OptLevel) builder.OptimizationLevel {
@@ -4974,7 +5022,8 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
             );
 
             const force_undefined_symbols = try staticDataLinkRootSymbols(ctx, static_data_exports);
-            const export_symbols = try sharedLibraryExports(ctx, link_type, link_inputs);
+            const app_export_symbols = try sharedLibraryAppExports(ctx, entrypoints, static_data_exports);
+            const export_symbols = try sharedLibraryExports(ctx, link_type, link_inputs, app_export_symbols);
 
             const link_config = linker.LinkConfig{
                 .target_format = linker.TargetFormat.detectFromOs(target_os),
@@ -5303,7 +5352,8 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
         );
 
         const force_undefined_symbols = try staticDataLinkRootSymbols(ctx, static_data_exports);
-        const export_symbols = try sharedLibraryExports(ctx, link_type, link_inputs);
+        const app_export_symbols = try sharedLibraryAppExports(ctx, entrypoints, static_data_exports);
+        const export_symbols = try sharedLibraryExports(ctx, link_type, link_inputs, app_export_symbols);
 
         const link_config = linker.LinkConfig{
             .target_format = linker.TargetFormat.detectFromOs(target_os),
@@ -5568,7 +5618,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
             .platform_files_pre = link_inputs.platform_files_pre,
             .platform_files_post = link_inputs.platform_files_post,
             .extra_args = extra_args.items,
-            .export_symbols = try sharedLibraryExports(ctx, link_type, link_inputs),
+            .export_symbols = try sharedLibraryExports(ctx, link_type, link_inputs, entrypoint_names),
             .can_exit_early = false,
             .disable_output = false,
             .wasm_initial_memory = configuredWasmMinimumMemory(args, link_inputs.wasm),
