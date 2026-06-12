@@ -16,11 +16,19 @@ const names = check.CheckedNames;
 const static_dispatch = check.StaticDispatchRegistry;
 const Ident = base.Ident;
 
+/// Options used while lowering checked modules into Monotype IR.
+pub const Options = struct {
+    /// Preserve source-level procedure names for consumers that present runtime
+    /// diagnostics from lowered code.
+    proc_debug_names: bool = false,
+};
+
 /// Lower checked modules and explicit roots into Monotype IR.
 pub fn run(
     allocator: Allocator,
     modules: Common.CheckedModules,
     roots: Common.RootRequests,
+    options: Options,
 ) Common.LowerError!Ast.Program {
     if (roots.requests.len == 0 and roots.layout_requests.len == 0 and roots.static_data_requests.len == 0) {
         Common.invariant("Monotype lowering requires explicit roots, layout requests, or static data requests");
@@ -29,7 +37,7 @@ pub fn run(
     var program = Ast.Program.init(allocator);
     errdefer program.deinit();
 
-    var builder = Builder.init(allocator, modules, &program);
+    var builder = Builder.init(allocator, modules, &program, options);
     defer builder.deinit();
     try builder.initHostedCatalog();
     try builder.initMethodLookupIndex();
@@ -342,6 +350,7 @@ const Builder = struct {
     modules: Common.CheckedModules,
     root_view: checked.ImportedModuleView,
     program: *Ast.Program,
+    proc_debug_names: bool,
     symbols: Common.SymbolGen = .{},
     type_cache: std.AutoHashMap(CheckedTypeAddress, Type.TypeId),
     lowered_templates: std.AutoHashMap(TemplateAddress, LoweredTemplate),
@@ -370,12 +379,13 @@ const Builder = struct {
     /// bounded by the total number of row members, so the loops converge.
     widen_revision: u64 = 0,
 
-    fn init(allocator: Allocator, modules: Common.CheckedModules, program: *Ast.Program) Builder {
+    fn init(allocator: Allocator, modules: Common.CheckedModules, program: *Ast.Program, options: Options) Builder {
         return .{
             .allocator = allocator,
             .modules = modules,
             .root_view = checked.importedView(modules.root.module),
             .program = program,
+            .proc_debug_names = options.proc_debug_names,
             .type_cache = std.AutoHashMap(CheckedTypeAddress, Type.TypeId).init(allocator),
             .lowered_templates = std.AutoHashMap(TemplateAddress, LoweredTemplate).init(allocator),
             .lowered_nested_fns = std.AutoHashMap(NestedFnTemplateAddress, LoweredNestedFn).init(allocator),
@@ -1081,6 +1091,7 @@ const Builder = struct {
         view: ModuleView,
         template: names.ProcTemplate,
     ) Allocator.Error!?names.ExportNameId {
+        if (!self.proc_debug_names) return null;
         const proc_base = view.names.procBase(template.proc_base);
         const export_name = proc_base.export_name orelse return null;
         return try self.program.names.internExportName(view.names.exportNameText(export_name));

@@ -37,6 +37,15 @@ fn lowerModule(
     source: []const u8,
     inline_mode: lir.CheckedPipeline.InlineMode,
 ) anyerror!LoweredSource {
+    return lowerModuleWithProcDebugNames(allocator, source, inline_mode, false);
+}
+
+fn lowerModuleWithProcDebugNames(
+    allocator: Allocator,
+    source: []const u8,
+    inline_mode: lir.CheckedPipeline.InlineMode,
+    proc_debug_names: bool,
+) anyerror!LoweredSource {
     var resources = try helpers.parseAndCanonicalizeProgram(allocator, .module, source, &.{});
     errdefer helpers.cleanupParseAndCanonical(allocator, resources);
 
@@ -64,6 +73,7 @@ fn lowerModule(
         .{
             .target_usize = base.target.TargetUsize.native,
             .inline_mode = inline_mode,
+            .proc_debug_names = proc_debug_names,
         },
     );
     errdefer lowered.deinit();
@@ -169,6 +179,7 @@ fn liftModuleAfterSpecConstr(
             .imports = import_views,
         },
         .{ .requests = resources.checked_artifact.root_requests.requests },
+        .{},
     );
     var mono_owned = true;
     errdefer if (mono_owned) mono.deinit();
@@ -1352,7 +1363,7 @@ test "LIR statements and procs carry resolved source locations" {
         \\}
     ;
 
-    var lowered_source = try lowerModule(allocator, source, .none);
+    var lowered_source = try lowerModuleWithProcDebugNames(allocator, source, .none, true);
     defer lowered_source.deinit(allocator);
 
     const store = &lowered_source.lowered.lir_result.store;

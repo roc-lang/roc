@@ -4976,6 +4976,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
         .{
             .target_usize = target_usize,
             .list_in_place_map = listInPlaceMapForOpt(args.opt),
+            .proc_debug_names = args.synthetic_default_platform,
         },
     );
     defer lowered.deinit();
@@ -5285,6 +5286,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
             .target_usize = target_usize,
             .inline_mode = postCheckInlineModeForOpt(args.opt),
             .list_in_place_map = listInPlaceMapForOpt(args.opt),
+            .proc_debug_names = args.synthetic_default_platform,
         },
     );
     defer lowered.deinit();

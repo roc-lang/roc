@@ -112,6 +112,8 @@ pub const Options = struct {
     /// When disabled, `list_map_can_reuse` lowers to a constant 0 and the
     /// in-place branch of `List.map` is dropped before it reaches LIR.
     list_in_place_map: bool = false,
+    /// Preserve source-level procedure names in LIR for runtime diagnostics.
+    proc_debug_names: bool = false,
 };
 
 /// Lower Lambda Solved directly into LIR.
@@ -250,6 +252,7 @@ const Lowerer = struct {
     fn_written: std.ArrayList(bool),
     inline_plan: SolvedInline.Plan,
     list_in_place_map: bool,
+    proc_debug_names: bool,
     /// Match sites statically resolved by `foldListMapCanReuseMatch`,
     /// recorded (Debug only) so the Lambda Mono verifier replays them.
     folded_map_matches: std.ArrayList(Lifted.Program.FoldedMatch),
@@ -302,6 +305,7 @@ const Lowerer = struct {
             .fn_written = .empty,
             .inline_plan = options.inline_plan,
             .list_in_place_map = options.list_in_place_map,
+            .proc_debug_names = options.proc_debug_names,
             .folded_map_matches = .empty,
             .source_symbols = std.AutoHashMap(Common.Symbol, Lifted.FnId).init(allocator),
             .capture_types = CaptureTypeMap.initContext(allocator, .{}),
@@ -631,8 +635,10 @@ const Lowerer = struct {
             .abi = if (spec.abi == .erased) .erased_callable else .roc,
             .hosted = try self.hostedProcForSource(source_fn.source),
         });
-        if (source_fn.debug_name) |name| {
-            try self.result.store.setProcDebugName(proc, self.solved.lifted.names.exportNameText(name));
+        if (self.proc_debug_names) {
+            if (source_fn.debug_name) |name| {
+                try self.result.store.setProcDebugName(proc, self.solved.lifted.names.exportNameText(name));
+            }
         }
         entry.proc = proc;
         self.fn_entries.items[index] = entry;
