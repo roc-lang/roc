@@ -525,7 +525,7 @@ pub const io_spec_tests = [_]TestSpec{
     },
 
     // Leak regression tests for the address-taken element-decref callbacks in
-    // the list/str builtins. The lld COFF linker once mis-resolved strJoinWithC's
+    // the list/str builtins. The lld COFF linker once misresolved strJoinWithC's
     // &strDecref callback into .rdata, silently leaking every heap element string
     // of a consumed List(Str) under `roc build` (LLVM backend) on x64 Windows.
     // These apps build runtime heap strings (>= 24 bytes, derived from stdin) so
@@ -536,7 +536,7 @@ pub const io_spec_tests = [_]TestSpec{
     .{
         .roc_file = "test/fx/leak_join_with_heap_strs.roc",
         .io_spec = "0<xy|1>joined bytes: 98",
-        .description = "Regression test: Str.join_with consuming a unique heap List(Str) frees its element strings (lld-COFF &strDecref mis-resolution)",
+        .description = "Regression test: Str.join_with consuming a unique heap List(Str) frees its element strings (lld-COFF &strDecref misresolution)",
     },
     .{
         .roc_file = "test/fx/leak_list_str_ops.roc",

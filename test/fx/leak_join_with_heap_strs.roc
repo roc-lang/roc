@@ -3,7 +3,7 @@ app [main!] { pf: platform "./platform/main.roc" }
 import pf.Stdin
 import pf.Stdout
 
-# Regression test for the lld-COFF &strDecref mis-resolution bug: Str.join_with
+# Regression test for the lld-COFF &strDecref misresolution bug: Str.join_with
 # consumes a unique List(Str), and its heap element strings must be decref'd.
 # Every string is derived from stdin so it exists only at runtime (literals can
 # be static rc=0 constants), and is >= 24 bytes so it is heap-allocated rather

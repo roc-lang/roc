@@ -1041,7 +1041,7 @@ pub fn strJoinWithC(
     //
     // We do this inline with direct `RocStr.decref` calls rather than handing a
     // `&strDecref` callback to `RocList.decref`. Taking the address of that
-    // internal builtin and calling it through a pointer is mis-resolved by the
+    // internal builtin and calling it through a pointer is misresolved by the
     // COFF linker: the function pointer ends up aimed into `.rdata` instead of
     // `.text`, so the element loop never runs and every heap element string
     // leaks (verified on x64win). Direct calls relocate correctly, and this
@@ -2829,7 +2829,7 @@ test "strJoinWithC: consuming a unique heap List(Str) frees its element strings"
     // Regression test: `strJoinWithC` consumes the list and must decref each
     // (heap) element string. A previous implementation did this through a
     // `&strDecref` function-pointer callback handed to `RocList.decref`; on
-    // x64win the COFF linker mis-resolved that pointer (into `.rdata`), so the
+    // x64win the COFF linker misresolved that pointer (into `.rdata`), so the
     // element loop never ran and every heap element string leaked. The leak
     // checker in `std.testing.allocator` (via TestEnv.deinit) catches a
     // regression here.

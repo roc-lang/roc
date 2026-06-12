@@ -122,7 +122,7 @@ jobs:
   # tests, the platforms suite built with roc build --opt=size/speed (linked by
   # the embedded lld and executed, with the fx host's leak detection), and the
   # dylib/archive build-and-run fixtures. The strJoinWithC &strDecref leak was
-  # an lld-COFF mis-resolution that only this pipeline can catch.
+  # an lld-COFF misresolution that only this pipeline can catch.
   eval-llvm:
     needs: check-once
     runs-on: ${{ matrix.os }}

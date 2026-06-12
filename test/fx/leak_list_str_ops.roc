@@ -7,7 +7,7 @@ import pf.Stdout
 # (roc_builtins_list_{concat,sublist,drop_at,replace,swap,append,
 # release_excess_capacity} in src/builtins/dev_wrappers.zig), which pass
 # address-taken element incref/decref callbacks — the same pattern the
-# lld-COFF linker mis-resolved for strJoinWithC's &strDecref.
+# lld-COFF linker misresolved for strJoinWithC's &strDecref.
 #
 # `base` is used several times, so the early ops see a shared (rc > 1) list
 # and take the incref-elements/copy branches; the later chain operates on
