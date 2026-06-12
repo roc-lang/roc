@@ -227,10 +227,9 @@ const DeferredTemplate = struct {
     fn_ty: Type.TypeId,
 };
 
-/// A nested function body request deferred to the end of the requesting
-/// specialization. The instantiation context snapshots the lexical binders at
-/// the request site; the body lowers once the requester's types are final.
-const DeferredNested = struct {
+/// A nested function body together with the instantiation context that
+/// snapshots the lexical binders at its site.
+const NestedFnRequest = struct {
     ctx: *BodyContext,
     expr_id: checked.CheckedExprId,
     fn_template: Ast.FnTemplate,
@@ -381,10 +380,9 @@ const InstGraph = struct {
     /// to an extension changes the flattened view of every row above it, so
     /// dirty marks propagate through these back references.
     row_parents: std.AutoHashMap(NodeId, std.ArrayList(NodeId)),
-    /// Specialization body requests made while lowering this specialization,
+    /// Template body requests made while lowering this specialization,
     /// processed once its body is complete and its types are final.
     deferred_templates: std.ArrayList(DeferredTemplate) = .empty,
-    deferred_nested: std.ArrayList(DeferredNested) = .empty,
 
     fn create(allocator: Allocator, builder: *Builder) Allocator.Error!*InstGraph {
         const graph = try allocator.create(InstGraph);
@@ -403,11 +401,6 @@ const InstGraph = struct {
 
     fn destroy(self: *InstGraph) void {
         const allocator = self.allocator;
-        for (self.deferred_nested.items) |request| {
-            request.ctx.deinit();
-            allocator.destroy(request.ctx);
-        }
-        self.deferred_nested.deinit(allocator);
         self.deferred_templates.deinit(allocator);
         var views = self.node_monos.valueIterator();
         while (views.next()) |list| {
@@ -2670,14 +2663,14 @@ const Builder = struct {
         // Nested functions share the requester's graph, and an inferred local
         // procedure's body pins signature variables (its own evidence) that
         // the requester's remaining body relies on, so the body lowers now.
-        try self.lowerDeferredNestedFn(.{
+        try self.lowerNestedFnRequest(.{
             .ctx = nested_ctx,
             .expr_id = expr_id,
             .fn_template = fn_template,
         });
     }
 
-    fn lowerDeferredNestedFn(self: *Builder, request: DeferredNested) Allocator.Error!void {
+    fn lowerNestedFnRequest(self: *Builder, request: NestedFnRequest) Allocator.Error!void {
         defer {
             request.ctx.deinit();
             self.allocator.destroy(request.ctx);
@@ -2725,23 +2718,15 @@ const Builder = struct {
     /// while its body lowered. Its types are final now, so every request's
     /// specialization key is stable.
     fn drainSpecRequests(self: *Builder, graph: *InstGraph) Allocator.Error!void {
-        while (graph.deferred_templates.items.len != 0 or graph.deferred_nested.items.len != 0) {
-            // Nested function bodies belong to this specialization's graph and
-            // contribute type evidence to it, so they all lower before any
-            // template request's specialization key is taken.
-            while (graph.deferred_nested.pop()) |request| {
-                try self.lowerDeferredNestedFn(request);
-            }
-            if (graph.deferred_templates.pop()) |request| {
-                _ = try self.lowerTemplateWithMonoFor(
-                    request.template_ref,
-                    request.view,
-                    request.source_fn_ty,
-                    request.source_fn_key,
-                    request.fn_ty,
-                    graph,
-                );
-            }
+        while (graph.deferred_templates.pop()) |request| {
+            _ = try self.lowerTemplateWithMonoFor(
+                request.template_ref,
+                request.view,
+                request.source_fn_ty,
+                request.source_fn_key,
+                request.fn_ty,
+                graph,
+            );
         }
     }
 
@@ -4402,23 +4387,6 @@ const BodyContext = struct {
             },
             .generated_numeral => {},
         }
-    }
-
-    /// An operand expression that reads a bound local carries that local's
-    /// Monotype: the local id identifies the binder's node in the context that
-    /// bound it, so importing it unifies this use with the binding.
-    fn relateExprToBoundLocal(self: *BodyContext, checked_expr: checked.CheckedExprId) Allocator.Error!void {
-        const expr = self.view.bodies.exprs[@intFromEnum(checked_expr)];
-        const maybe_ref = switch (expr.data) {
-            .lookup_local => |lookup| lookup.resolved,
-            .lookup_external => |resolved| resolved,
-            .lookup_required => |resolved| resolved,
-            else => return,
-        };
-        const ref_id = maybe_ref orelse return;
-        const local_id = self.currentLocalForResolvedValue(ref_id) orelse return;
-        const local_ty = self.builder.program.locals.items[@intFromEnum(local_id)].ty;
-        try self.graph.unify(try self.instNode(expr.ty), try self.graph.importMono(local_ty));
     }
 
     fn instantiateNumeralPlanCallType(
