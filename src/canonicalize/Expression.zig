@@ -357,6 +357,18 @@ pub const Expr = union(enum) {
         args: Expr.Span,
         constraint_fn_var: TypeVar,
     },
+    /// Compiler-created interpolation dispatch.
+    ///
+    /// Unlike an ordinary method call, this dispatch is owned by the result
+    /// type of the whole interpolation expression. Runtime arguments are the
+    /// first `Str` segment and the iterator of interpolated values paired with
+    /// following `Str` segments.
+    e_interpolation: struct {
+        first: Expr.Idx,
+        rest: Expr.Idx,
+        method_name_region: base.Region,
+        constraint_fn_var: ?TypeVar = null,
+    },
     /// Structural equality chosen explicitly by the checker.
     ///
     /// This is not method dispatch. It represents the semantic case where
@@ -1258,6 +1270,34 @@ pub const Expr = union(enum) {
                     try ir.store.getExpr(arg_idx).pushToSExprTree(ir, tree, arg_idx);
                 }
                 try tree.endNode(args_begin, args_attrs);
+
+                try tree.endNode(begin, attrs);
+            },
+            .e_interpolation => |e| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-interpolation");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                if (e.constraint_fn_var) |constraint_fn_var| {
+                    try tree.pushU64Pair("constraint-fn-var", @intFromEnum(constraint_fn_var));
+                }
+                const attrs = tree.beginNode();
+
+                {
+                    const first_begin = tree.beginNode();
+                    try tree.pushStaticAtom("first");
+                    const first_attrs = tree.beginNode();
+                    try ir.store.getExpr(e.first).pushToSExprTree(ir, tree, e.first);
+                    try tree.endNode(first_begin, first_attrs);
+                }
+
+                {
+                    const rest_begin = tree.beginNode();
+                    try tree.pushStaticAtom("rest");
+                    const rest_attrs = tree.beginNode();
+                    try ir.store.getExpr(e.rest).pushToSExprTree(ir, tree, e.rest);
+                    try tree.endNode(rest_begin, rest_attrs);
+                }
 
                 try tree.endNode(begin, attrs);
             },

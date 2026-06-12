@@ -538,6 +538,7 @@ pub const StaticDispatchPlanTable = struct {
             const tag = module.nodeTag(@enumFromInt(node_idx));
             switch (tag) {
                 .expr_dispatch_call,
+                .expr_interpolation,
                 .expr_type_dispatch_call,
                 .expr_method_eq,
                 => {},
@@ -545,10 +546,6 @@ pub const StaticDispatchPlanTable = struct {
             }
 
             const expr_idx: CIR.Expr.Idx = @enumFromInt(node_idx);
-            // Str-typed interpolation calls publish as plain segment lists,
-            // so they have no dispatch plan and their iterator-chain
-            // arguments never enter the checked body store.
-            if (module.moduleEnvConst().isStrInterpolationCall(expr_idx)) continue;
             const checked_expr = checked_bodies.exprIdForSource(expr_idx) orelse continue;
             const expr = module.expr(expr_idx);
             const idents = module.identStoreConst();
@@ -570,6 +567,21 @@ pub const StaticDispatchPlanTable = struct {
                         .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, dispatch_call.constraint_fn_var),
                         .args = args,
                         .result_mode = try staticDispatchResultModeForCheckedValueCall(allocator, module, checked_types, &constraint_index, dispatch_call.method_name, dispatch_call.constraint_fn_var),
+                    });
+                },
+                .e_interpolation => |interpolation| {
+                    const args = try staticDispatchOperandsForSlice(allocator, checked_bodies, &.{ interpolation.first, interpolation.rest });
+                    const from_interpolation = try names.internMethodName("from_interpolation");
+                    const constraint_fn_var = interpolation.constraint_fn_var orelse unreachable;
+
+                    try plans.append(allocator, .{
+                        .expr = checked_expr,
+                        .method = from_interpolation,
+                        .dispatcher = .type_only,
+                        .dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, module.exprType(expr_idx)),
+                        .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, constraint_fn_var),
+                        .args = args,
+                        .result_mode = .value,
                     });
                 },
                 .e_type_dispatch_call => |dispatch_call| {
@@ -826,6 +838,7 @@ const StaticDispatchConstraintIndex = struct {
             const expr_idx: CIR.Expr.Idx = @enumFromInt(node_idx);
             const constraint_fn_var: ?Var = switch (module.nodeTag(@enumFromInt(node_idx))) {
                 .expr_dispatch_call => module.expr(expr_idx).data.e_dispatch_call.constraint_fn_var,
+                .expr_interpolation => module.expr(expr_idx).data.e_interpolation.constraint_fn_var,
                 .expr_type_dispatch_call => module.expr(expr_idx).data.e_type_dispatch_call.constraint_fn_var,
                 .expr_method_eq => module.expr(expr_idx).data.e_method_eq.constraint_fn_var,
                 else => null,

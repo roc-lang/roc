@@ -932,6 +932,7 @@ pub const StaticDispatchConstraint = struct {
         where_clause, // From where clause in type annotation
         from_numeral, // From numeric literal conversion
         from_quote, // From string literal conversion
+        from_interpolation, // From interpolated string literal conversion
     };
 
     /// A safe list of static dispatch constraints

@@ -1055,6 +1055,7 @@ fn exprDependsOnUnboundPlatformRequirement(
         .empty_record,
         .zero_argument_tag,
         .dispatch_call,
+        .interpolation,
         .method_eq,
         .type_dispatch_call,
         .runtime_error,
@@ -3912,6 +3913,7 @@ fn appendStaticDispatchTypeRoots(
         const tag = module.nodeTag(@enumFromInt(node_idx));
         switch (tag) {
             .expr_dispatch_call,
+            .expr_interpolation,
             .expr_type_dispatch_call,
             .expr_method_eq,
             => {},
@@ -3925,6 +3927,19 @@ fn appendStaticDispatchTypeRoots(
             .e_dispatch_call => |dispatch_call| {
                 _ = try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, module.exprType(dispatch_call.receiver));
                 _ = try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, dispatch_call.constraint_fn_var);
+            },
+            .e_interpolation => |interpolation| {
+                _ = try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, module.exprType(expr_idx));
+                _ = try appendCheckedTypeRoot(
+                    allocator,
+                    module,
+                    names,
+                    imports,
+                    roots,
+                    payloads,
+                    active,
+                    interpolation.constraint_fn_var orelse checkedArtifactInvariant("checked interpolation expression had no static dispatch constraint type", .{}),
+                );
             },
             .e_type_dispatch_call => |dispatch_call| {
                 const alias_stmt = module.getStatement(dispatch_call.type_var_alias_stmt);
@@ -4156,13 +4171,13 @@ fn numericDefaultPhaseForConstraints(
     constraints_range: types.StaticDispatchConstraint.SafeList.Range,
 ) ?NumericDefaultPhase {
     const constraints = module.typeStoreConst().sliceStaticDispatchConstraints(constraints_range);
-    var has_from_quote = false;
+    var has_str_defaultable_literal = false;
     for (constraints) |constraint| {
         if (constraint.origin == .from_numeral) return .mono_specialization;
-        if (constraint.origin == .from_quote) has_from_quote = true;
+        if (constraint.origin == .from_quote or constraint.origin == .from_interpolation) has_str_defaultable_literal = true;
         if (isDefaultableArithmeticConstraint(module, constraint)) return .mono_specialization;
     }
-    if (has_from_quote) return .mono_specialization_str;
+    if (has_str_defaultable_literal) return .mono_specialization_str;
     return null;
 }
 
@@ -4181,6 +4196,7 @@ fn isDefaultableArithmeticConstraint(
         .desugared_unaryop => constraint.fn_name.eql(idents.negate),
         .from_numeral,
         .from_quote,
+        .from_interpolation,
         .method_call,
         .where_clause,
         => false,
@@ -5011,6 +5027,7 @@ pub const CheckedExprData = union(enum) {
         field_name: canonical.RecordFieldLabelId,
     },
     dispatch_call: ?StaticDispatchPlanId,
+    interpolation: ?StaticDispatchPlanId,
     structural_eq: struct {
         lhs: CheckedExprId,
         rhs: CheckedExprId,
@@ -5382,18 +5399,11 @@ const CheckedSourceNodes = struct {
             },
             .e_dispatch_call => |call| {
                 try self.markExpr(call.receiver, work);
-                if (module.moduleEnvConst().isStrInterpolationCall(expr_idx)) {
-                    // A Str-typed interpolation publishes as a plain segment
-                    // list; the synthetic iterator chain stays out of the
-                    // artifact, so only the pair payloads are reachable.
-                    var pairs = module.moduleEnvConst().interpolationPairs(expr_idx);
-                    while (pairs.next()) |pair| {
-                        try self.markExpr(pair.interpolation, work);
-                        try self.markExpr(pair.segment, work);
-                    }
-                } else {
-                    try self.markExprSpan(module, call.args, work);
-                }
+                try self.markExprSpan(module, call.args, work);
+            },
+            .e_interpolation => |interpolation| {
+                try self.markExpr(interpolation.first, work);
+                try self.markExpr(interpolation.rest, work);
             },
             .e_structural_eq => |eq| {
                 try self.markExpr(eq.lhs, work);
@@ -5854,6 +5864,7 @@ pub const CheckedBodyStore = struct {
             const data = &self.exprs[@intFromEnum(checked_expr)].data;
             switch (data.*) {
                 .dispatch_call => data.* = .{ .dispatch_call = entry.value_ptr.* },
+                .interpolation => data.* = .{ .interpolation = entry.value_ptr.* },
                 .method_eq => data.* = .{ .method_eq = entry.value_ptr.* },
                 .type_dispatch_call => data.* = .{ .type_dispatch_call = entry.value_ptr.* },
                 else => {
@@ -6240,6 +6251,7 @@ fn checkedExprDataDiverges(
         .empty_record,
         .zero_argument_tag,
         .dispatch_call,
+        .interpolation,
         .method_eq,
         .type_dispatch_call,
         .runtime_error,
@@ -6600,12 +6612,8 @@ const CheckedBodyPayloadCopier = struct {
                 "ordinary method call reached artifact publication after checking; expected explicit static-dispatch plan",
                 .{},
             ),
-            .e_dispatch_call => blk: {
-                if (self.module.moduleEnvConst().isStrInterpolationCall(expr_idx)) {
-                    break :blk .{ .str = try self.copyStrInterpolationSegments(expr_idx) };
-                }
-                break :blk .{ .dispatch_call = null };
-            },
+            .e_dispatch_call => .{ .dispatch_call = null },
+            .e_interpolation => .{ .interpolation = null },
             .e_structural_eq => |eq| .{ .structural_eq = .{
                 .lhs = self.checkedExpr(eq.lhs),
                 .rhs = self.checkedExpr(eq.rhs),
@@ -6654,29 +6662,6 @@ const CheckedBodyPayloadCopier = struct {
                 .args = try self.copyExprSpan(run.args),
             } },
         };
-    }
-
-    /// Publish a Str-typed interpolation dispatch call as its ordered
-    /// segment list: the receiver literal, then each interpolation and the
-    /// literal segment that follows it. Lowering turns this into direct
-    /// string concatenation, so the synthetic iterator chain never reaches
-    /// code generation.
-    fn copyStrInterpolationSegments(self: *@This(), expr_idx: CIR.Expr.Idx) Allocator.Error![]const CheckedExprId {
-        const env = self.module.moduleEnvConst();
-        var segments = std.ArrayList(CheckedExprId).empty;
-        errdefer segments.deinit(self.allocator);
-
-        const call = switch (self.module.expr(expr_idx).data) {
-            .e_dispatch_call => |call| call,
-            else => checkedArtifactInvariant("interpolation segment publication reached a non-dispatch expression", .{}),
-        };
-        try segments.append(self.allocator, self.checkedExpr(call.receiver));
-        var pairs = env.interpolationPairs(expr_idx);
-        while (pairs.next()) |pair| {
-            try segments.append(self.allocator, self.checkedExpr(pair.interpolation));
-            try segments.append(self.allocator, self.checkedExpr(pair.segment));
-        }
-        return try segments.toOwnedSlice(self.allocator);
     }
 
     fn copyStrExpr(self: *@This(), expr_idx: CIR.Expr.Idx, span: CIR.Expr.Span) Allocator.Error!CheckedExprData {
@@ -7689,6 +7674,7 @@ fn deinitCheckedExprData(allocator: Allocator, data: *CheckedExprData) void {
         .empty_record,
         .zero_argument_tag,
         .dispatch_call,
+        .interpolation,
         .structural_eq,
         .method_eq,
         .type_dispatch_call,
@@ -7770,6 +7756,7 @@ fn verifyCheckedExprDataComplete(data: CheckedExprData) void {
         .lookup_external => |ref| std.debug.assert(ref != null),
         .lookup_required => |ref| std.debug.assert(ref != null),
         .dispatch_call => |plan| std.debug.assert(plan != null),
+        .interpolation => |plan| std.debug.assert(plan != null),
         .method_eq => |plan| std.debug.assert(plan != null),
         .type_dispatch_call => |plan| std.debug.assert(plan != null),
         .num_from_numeral => |plan| std.debug.assert(plan != null),
@@ -9036,6 +9023,7 @@ const CheckedTemplateRefCollector = struct {
                 if (ref_id) |id| try self.value_refs.append(self.allocator, id);
             },
             .dispatch_call,
+            .interpolation,
             .method_eq,
             .type_dispatch_call,
             => |plan_id| {
@@ -9758,6 +9746,7 @@ const NestedProcSiteBuilder = struct {
             },
             .field_access => |field| try self.scanExpr(field.receiver, owner, false),
             .dispatch_call,
+            .interpolation,
             .method_eq,
             .type_dispatch_call,
             => |plan_id| try self.scanStaticDispatchPlanArgs(plan_id orelse checkedArtifactInvariant("checked dispatch expression reached nested procedure site collection without a static-dispatch plan", .{}), owner),

@@ -67,6 +67,7 @@ pub const Tag = enum {
     expr_field_access,
     expr_method_call,
     expr_dispatch_call,
+    expr_interpolation,
     expr_structural_eq,
     expr_method_eq,
     expr_type_method_call,
@@ -310,6 +311,7 @@ pub const Payload = extern union {
     expr_field_access: ExprFieldAccess,
     expr_method_call: ExprMethodCall,
     expr_dispatch_call: ExprDispatchCall,
+    expr_interpolation: ExprInterpolation,
     expr_structural_eq: ExprStructuralEq,
     expr_method_eq: ExprMethodEq,
     expr_type_method_call: ExprTypeMethodCall,
@@ -636,6 +638,13 @@ pub const Payload = extern union {
         method_name: u32,
         method_call_data_idx: u32,
         constraint_fn_var: u32,
+    };
+
+    pub const ExprInterpolation = extern struct {
+        first: u32,
+        rest: u32,
+        method_name_region_span2_idx: u32,
+        constraint_fn_var_plus_one: u32,
     };
 
     pub const ExprStructuralEq = extern struct {

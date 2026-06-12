@@ -231,6 +231,20 @@ const InstantiationDispatcher = struct {
     dispatcher_var: Var,
 };
 
+fn isLiteralStaticDispatchOrigin(origin: StaticDispatchConstraint.Origin) bool {
+    return switch (origin) {
+        .from_numeral,
+        .from_quote,
+        .from_interpolation,
+        => true,
+        .desugared_binop,
+        .desugared_unaryop,
+        .method_call,
+        .where_clause,
+        => false,
+    };
+}
+
 /// Indicates if something has been processed or not
 const HasProcessed = enum { processed, processing, not_processed };
 
@@ -922,7 +936,7 @@ fn instantiateVarHelp(
                     var has_from_numeral = false;
                     var has_non_from_numeral = false;
                     for (constraints) |c| {
-                        if (c.origin == .from_numeral or c.origin == .from_quote) {
+                        if (isLiteralStaticDispatchOrigin(c.origin)) {
                             has_from_numeral = true;
                         } else {
                             has_non_from_numeral = true;
@@ -2355,7 +2369,7 @@ fn reportAmbiguousStaticDispatchPerInstantiation(
         var first_constraint: ?StaticDispatchConstraint = null;
         var skip_receiver = false;
         for (constraints) |c| {
-            if (c.origin == .from_numeral or c.origin == .from_quote) {
+            if (isLiteralStaticDispatchOrigin(c.origin)) {
                 skip_receiver = true;
             } else if (c.fn_name.eql(self.cir.idents.is_eq)) {
                 continue;
@@ -2520,7 +2534,7 @@ fn reportAmbiguousStaticDispatch(
         var first_constraint: ?StaticDispatchConstraint = null;
         for (constraints) |c| {
             switch (c.origin) {
-                .from_numeral, .from_quote, .where_clause => {
+                .from_numeral, .from_quote, .from_interpolation, .where_clause => {
                     has_excluded_origin = true;
                 },
                 .method_call, .desugared_binop, .desugared_unaryop => {
@@ -6701,6 +6715,40 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             } });
             _ = try self.unify(expr_var, record_field_var, env);
         },
+        .e_interpolation => |interpolation| {
+            self.checking_call_arg = true;
+            does_fx = try self.checkExpr(interpolation.first, env, Expected.none()) or does_fx;
+            const first_var = ModuleEnv.varFrom(interpolation.first);
+            var did_err = self.types.resolveVar(first_var).desc.content == .err;
+
+            self.checking_call_arg = true;
+            does_fx = try self.checkExpr(interpolation.rest, env, Expected.none()) or does_fx;
+            const rest_var = ModuleEnv.varFrom(interpolation.rest);
+            did_err = did_err or (self.types.resolveVar(rest_var).desc.content == .err);
+
+            if (did_err) {
+                try self.unifyWith(expr_var, .err, env);
+            } else {
+                const from_interpolation_ident = try @constCast(self.cir).insertIdent(Ident.for_text("from_interpolation"));
+                const arg_vars = [_]Var{ first_var, rest_var };
+                const constraint_fn_var = try self.mkInterpolationConstraint(
+                    expr_var,
+                    &arg_vars,
+                    expr_var,
+                    from_interpolation_ident,
+                    env,
+                    interpolation.method_name_region,
+                    expr_idx,
+                );
+                try self.cir.store.replaceExprWithInterpolationConstraint(
+                    expr_idx,
+                    interpolation.first,
+                    interpolation.rest,
+                    interpolation.method_name_region,
+                    constraint_fn_var,
+                );
+            }
+        },
         .e_method_call => |method_call| {
             does_fx = try self.checkExpr(method_call.receiver, env, Expected.none()) or does_fx;
             const receiver_var = ModuleEnv.varFrom(method_call.receiver);
@@ -6740,12 +6788,6 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     method_call.args,
                     constraint_fn_var,
                 );
-                if (self.cir.isInterpolationCallNode(ModuleEnv.nodeIdxFrom(expr_idx))) {
-                    // The from_interpolation protocol returns the receiver's
-                    // type, so the literal's target is pinned by the result
-                    // before string defaulting runs.
-                    _ = try self.unify(expr_var, receiver_var, env);
-                }
             }
         },
         .e_dispatch_call => |method_call| {
@@ -9036,6 +9078,48 @@ fn mkTypeMethodCallConstraint(
     return constraint_fn_var;
 }
 
+fn mkInterpolationConstraint(
+    self: *Self,
+    dispatcher_var: Var,
+    arg_vars: []const Var,
+    ret_var: Var,
+    method_name: Ident.Idx,
+    env: *Env,
+    region: Region,
+    expr_idx: CIR.Expr.Idx,
+) Allocator.Error!Var {
+    const args_range = try self.types.appendVars(arg_vars);
+    const constraint_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
+        .args = args_range,
+        .ret = ret_var,
+        .needs_instantiation = false,
+    } } }, env, region);
+
+    const constraint = StaticDispatchConstraint{
+        .fn_name = method_name,
+        .fn_var = constraint_fn_var,
+        .origin = .from_interpolation,
+    };
+    const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
+    try self.constraint_expr_by_fn_var.put(constraint_fn_var, expr_idx);
+    if (self.current_expect_region) |expect_region| {
+        try self.expect_region_by_constraint_fn_var.put(constraint_fn_var, expect_region);
+    }
+
+    const constrained_var = try self.freshFromContent(
+        .{ .flex = Flex{ .name = null, .constraints = constraint_range } },
+        env,
+        region,
+    );
+
+    _ = try self.unify(constrained_var, dispatcher_var, env);
+
+    // Shares the literal-defaulting counter with numerals and quoted strings.
+    self.types.from_numeral_flex_count += 1;
+
+    return constraint_fn_var;
+}
+
 fn rewriteImplicitEqMethodCallAsStructuralEq(
     self: *Self,
     constraint: StaticDispatchConstraint,
@@ -9481,7 +9565,7 @@ fn resolveFromNumeralFlexFromConcreteDispatchArg(
     const dispatcher_resolved = self.types.resolveVar(dispatcher_var);
 
     for (constraints) |constraint| {
-        if (constraint.origin == .from_numeral or constraint.origin == .from_quote) continue;
+        if (isLiteralStaticDispatchOrigin(constraint.origin)) continue;
 
         const fn_content = self.types.resolveVar(constraint.fn_var).desc.content;
         const func = fn_content.unwrapFunc() orelse continue;
@@ -9662,11 +9746,11 @@ fn finalizeNumericDefaultsInternal(self: *Self, env: *Env) std.mem.Allocator.Err
     }
 }
 
-/// Default every non-generalized flex var carrying a from_quote constraint to
-/// Str. This runs before numeric context resolution: a still-flex string
-/// literal blocks resolution of the method chains hanging off it (e.g.
-/// `"x".to_utf8().concat([0])`), and those chains are what give numeric
-/// literals their context.
+/// Default every non-generalized flex var carrying a quote-like literal
+/// constraint to Str. This runs before numeric context resolution: a still-flex
+/// string literal or interpolation blocks resolution of the method chains
+/// hanging off it (e.g. `"x".to_utf8().concat([0])`), and those chains are what
+/// give numeric literals their context.
 fn finalizeQuoteDefaults(self: *Self, env: *Env) Allocator.Error!void {
     if (self.types.from_numeral_flex_count == 0) return;
 
@@ -9687,18 +9771,20 @@ fn finalizeQuoteDefaults(self: *Self, env: *Env) Allocator.Error!void {
         if (resolved.desc.content != .flex) continue;
         const flex = resolved.desc.content.flex;
         const constraints = self.types.sliceStaticDispatchConstraints(flex.constraints);
-        var has_from_quote = false;
+        var has_str_defaultable_literal = false;
         var has_from_numeral = false;
         for (constraints) |c| {
             switch (c.origin) {
-                .from_quote => has_from_quote = true,
+                .from_quote,
+                .from_interpolation,
+                => has_str_defaultable_literal = true,
                 .from_numeral => has_from_numeral = true,
                 else => {},
             }
         }
         // A var carrying both origins is left for the numeric default, which
-        // then reports the unsatisfiable from_quote constraint against Dec.
-        if (!has_from_quote or has_from_numeral) continue;
+        // then reports the unsatisfiable string-like constraint against Dec.
+        if (!has_str_defaultable_literal or has_from_numeral) continue;
 
         if (resolved.desc.rank == .generalized) {
             if (!collected_pinnable) {
@@ -10850,9 +10936,8 @@ fn varSupportsIsEqInternal(
 
 /// Check if a flex var has incompatible constraints and report errors.
 /// This is called after type-checking to catch cases like `!3` where a flex var
-/// has both `from_numeral` (numeric) and `not` (Bool only) constraints.
-/// If the flex var has a from_numeral constraint (meaning it will default to a numeric
-/// type like Dec), we validate that all other constraints can be satisfied by Dec.
+/// has both `from_numeral` (numeric) and `not` (Bool only) constraints. Literal
+/// constraints default to Dec for numerals and Str for quote/interpolation.
 fn checkFlexVarConstraintCompatibility(self: *Self, var_: Var, env: *Env, is_numeric_default_pass: bool) Allocator.Error!void {
     const resolved = self.types.resolveVar(var_);
     if (resolved.desc.content != .flex) return;
@@ -10863,29 +10948,33 @@ fn checkFlexVarConstraintCompatibility(self: *Self, var_: Var, env: *Env, is_num
 
     // Find the literal-origin constraint that determines the default type.
     var has_from_numeral = false;
-    var has_from_quote = false;
+    var has_str_defaultable_literal = false;
     for (constraints) |c| {
         switch (c.origin) {
             .from_numeral => has_from_numeral = true,
-            .from_quote => has_from_quote = true,
+            .from_quote,
+            .from_interpolation,
+            => has_str_defaultable_literal = true,
             else => {},
         }
     }
-    if (!has_from_numeral and !has_from_quote) return;
+    if (!has_from_numeral and !has_str_defaultable_literal) return;
 
-    // This flex will default to Dec (numerals) or Str (quotes). Validate that
-    // all other constraints can be satisfied by the default type.
+    // This flex will default to Dec (numerals) or Str (quotes/interpolations).
+    // Validate that all other constraints can be satisfied by the default type.
     const builtin_env = self.builtin_ctx.builtin_module orelse return;
     const indices = self.builtin_ctx.builtin_indices orelse return;
     const default_type_stmt = if (has_from_numeral) indices.dec_type else indices.str_type;
 
     for (constraints) |constraint| {
         // Skip the literal-origin constraint the default type satisfies by
-        // definition. (With both origins present, the var defaults to Dec and
-        // the from_quote constraint must still be validated against it.)
+        // definition. (With a numeric origin present, the var defaults to Dec
+        // and any string-like constraint must still be validated against it.)
         switch (constraint.origin) {
             .from_numeral => if (has_from_numeral) continue,
-            .from_quote => if (!has_from_numeral) continue,
+            .from_quote,
+            .from_interpolation,
+            => if (!has_from_numeral) continue,
             else => {},
         }
 

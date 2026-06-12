@@ -435,9 +435,8 @@ Builtin :: [].{
 		## Returns an iterator that yields the given item first, followed by
 		## everything the given iterator yields.
 		##
-		## The compiler uses this to assemble the iterator it passes to a type's
-		## `from_interpolation` method when an interpolated string literal
-		## targets that type.
+		## The compiler uses this to assemble the iterator it passes to
+		## `from_interpolation` when checking an interpolated string literal.
 		## ```roc
 		## expect Iter.fold([2, 3].iter().prepended(1), [], |acc, item| acc.append(item)) == [1, 2, 3]
 		## ```
@@ -1826,6 +1825,18 @@ Builtin :: [].{
 		is_err = |try| match try {
 			Ok(_) => False
 			Err(_) => True
+		}
+
+		## Forwards interpolated string literal assembly through an inner type
+		## whose `from_interpolation` method returns the same [Try].
+		from_interpolation : Str, Iter((interpolated, Str)) -> Try(ok, err)
+			where [
+				ok.from_interpolation : Str, Iter((interpolated, Str)) -> Try(ok, err),
+			]
+		from_interpolation = |first, rest| {
+			OkType : ok
+
+			OkType.from_interpolation(first, rest)
 		}
 
 		## If the result is `Ok`, returns the value it holds. Otherwise, returns

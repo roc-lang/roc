@@ -4958,6 +4958,7 @@ const BodyContext = struct {
         return switch (expr.data) {
             .call => |call| (try self.callResultMonoType(expr.ty, call, null)) orelse try self.lowerType(expr.ty),
             .dispatch_call => |plan| (try self.dispatchResultMonoType(expr.ty, plan, null)) orelse try self.lowerType(expr.ty),
+            .interpolation => |plan| (try self.dispatchResultMonoType(expr.ty, plan, null)) orelse try self.lowerType(expr.ty),
             .type_dispatch_call => |plan| (try self.dispatchResultMonoType(expr.ty, plan, null)) orelse try self.lowerType(expr.ty),
             .method_eq => |plan| (try self.dispatchResultMonoType(expr.ty, plan, null)) orelse try self.lowerType(expr.ty),
             .lookup_local => |lookup| try self.lookupExprMonoType(expr.ty, lookup.resolved),
@@ -4994,6 +4995,7 @@ const BodyContext = struct {
         switch (expr.data) {
             .call => |call| return try self.lowerCallExpr(expr.ty, call),
             .dispatch_call => |plan| return try self.lowerDispatchExpr(expr.ty, plan),
+            .interpolation => |plan| return try self.lowerDispatchExpr(expr.ty, plan),
             .type_dispatch_call => |plan| return try self.lowerDispatchExpr(expr.ty, plan),
             .method_eq => |plan| return try self.lowerDispatchExpr(expr.ty, plan),
             .structural_eq => |eq| return try self.lowerDirectStructuralEq(expr.ty, eq),
@@ -5065,6 +5067,7 @@ const BodyContext = struct {
             },
             .call => Common.invariant("call expression reached ordinary expression lowering after call-site lowering"),
             .dispatch_call,
+            .interpolation,
             .type_dispatch_call,
             .method_eq,
             => Common.invariant("dispatch expression reached ordinary expression lowering after call-site lowering"),
@@ -6091,6 +6094,7 @@ const BodyContext = struct {
         return switch (expr.data) {
             .call => |call| if (expected_ty != null) try self.callResultMonoType(expr.ty, call, expected_ty) else null,
             .dispatch_call => |plan| try self.dispatchResultMonoType(expr.ty, plan, expected_ty),
+            .interpolation => |plan| try self.dispatchResultMonoType(expr.ty, plan, expected_ty),
             .type_dispatch_call => |plan| try self.dispatchResultMonoType(expr.ty, plan, expected_ty),
             .method_eq => |plan| try self.dispatchResultMonoType(expr.ty, plan, expected_ty),
             .lookup_local => |lookup| try self.lookupArgumentMonoType(expr.ty, lookup.resolved, expected_ty, allow_defaulted_type),
@@ -6773,6 +6777,7 @@ const BodyContext = struct {
                 });
             },
             .dispatch_call => |plan| return try self.lowerDispatchExprAtType(expr.ty, plan, ty),
+            .interpolation => |plan| return try self.lowerDispatchExprAtType(expr.ty, plan, ty),
             .type_dispatch_call => |plan| return try self.lowerDispatchExprAtType(expr.ty, plan, ty),
             .method_eq => |plan| return try self.lowerDispatchExprAtType(expr.ty, plan, ty),
             .lookup_local => |lookup| return try self.lowerLookupExprAtType(expr.ty, lookup.resolved, ty),
@@ -7638,6 +7643,7 @@ const BodyContext = struct {
         return switch (expr.data) {
             .call => |call| try self.callResultMonoType(expr.ty, call, expected_ty),
             .dispatch_call => |plan| try self.dispatchResultMonoType(expr.ty, plan, expected_ty),
+            .interpolation => |plan| try self.dispatchResultMonoType(expr.ty, plan, expected_ty),
             .type_dispatch_call => |plan| try self.dispatchResultMonoType(expr.ty, plan, expected_ty),
             .method_eq => |plan| try self.dispatchResultMonoType(expr.ty, plan, expected_ty),
             .lookup_local => |lookup| try self.lookupArgumentMonoType(expr.ty, lookup.resolved, expected_ty, false),
@@ -10229,6 +10235,7 @@ const BodyContext = struct {
             .empty_record,
             .zero_argument_tag,
             .dispatch_call,
+            .interpolation,
             .method_eq,
             .type_dispatch_call,
             .runtime_error,
