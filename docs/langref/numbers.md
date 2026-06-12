@@ -148,7 +148,7 @@ from_ratio(12.57)
 
 First, the compiler would determine that the argument to `from_ratio` is a `Ratio`, and therefore call `Ratio.from_numeral` specifying that the digits before the decimal point are `12` and the digits after the decimal point are `57`. Assuming that returns `Ok`, the value inside that `Ok` would be what ended up getting passed to `from_ratio`.
 
-From there, everything works the same way as in the previous example with the explicit `.Ratio` suffix. The only difference is that you didn't have to write the word `Ratio` becuase the compiler inferred that was the type, and called its `from_numeral` method.
+From there, everything works the same way as in the previous example with the explicit `.Ratio` suffix. The only difference is that you didn't have to write the word `Ratio` because the compiler inferred that was the type, and called its `from_numeral` method.
 
 ### Custom Number Types and Operators
 
