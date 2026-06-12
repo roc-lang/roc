@@ -11,6 +11,7 @@ r = "a"..<"z"
 MISSING METHOD - range_missing_method_error.md:1:5:1:14
 MISSING METHOD - range_missing_method_error.md:1:5:1:14
 MISSING METHOD - range_missing_method_error.md:1:5:1:14
+MISSING METHOD - range_missing_method_error.md:1:5:1:14
 # PROBLEMS
 **MISSING METHOD**
 This **add_checked** method is being called on a value whose type doesn't have that method:
@@ -53,6 +54,20 @@ The value's type, which does not have a method named **is_lt**, is:
     Str
 
 **Hint:** For this to work, the type would need to have a method named **is_lt** associated with it in the type's declaration.
+
+**MISSING METHOD**
+This **steps_between** method is being called on a value whose type doesn't have that method:
+**range_missing_method_error.md:1:5:1:14:**
+```roc
+r = "a"..<"z"
+```
+    ^^^^^^^^^
+
+The value's type, which does not have a method named **steps_between**, is:
+
+    Str
+
+**Hint:** For this to work, the type would need to have a method named **steps_between** associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig

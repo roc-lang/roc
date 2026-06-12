@@ -372,13 +372,13 @@ const IterCollectShape = enum {
 };
 
 fn procShapeMatchesIterCollect(shape: ProcShape, wanted: IterCollectShape) bool {
-    // Fingerprints of the `Iter.collect` -> `List.from_iter` worker over a range
-    // (an Unknown-length iterator). `from_iter` is a single growth-safe append
-    // loop; spec constr specializes it for the concrete element type, leaving a
-    // richer worker. A range carries no length, so the specialized worker takes
-    // 2 args (a Known length would thread a third).
+    // Fingerprints of the `Iter.collect` -> `List.from_iter` worker over a range.
+    // `from_iter` is a single growth-safe append loop; spec constr specializes it
+    // for the concrete element type, leaving a richer worker. Ranges now carry a
+    // Known length (via each numeric type's `steps_between`), so the specialized
+    // worker threads that count as a third arg (`with_capacity` preallocation).
     return switch (wanted) {
-        .specialized => shape.arg_count == 2 and
+        .specialized => shape.arg_count == 3 and
             shape.direct_call_count >= 10 and
             shape.switch_count >= 10 and
             shape.join_count >= 16 and

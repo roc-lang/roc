@@ -486,9 +486,10 @@ Builtin :: [].{
 				num.is_lt : num, num -> Bool,
 				num.add_checked : num, num -> Try(num, [Overflow]),
 				num.from_numeral : Builtin.Num.Numeral -> Try(num, [InvalidNumeral(Str)]),
+				num.steps_between : num, num -> [Known(U64), Unknown],
 			]
 		exclusive_range = |start, end| {
-			len_if_known: Unknown,
+			len_if_known: start.steps_between(end),
 			step: ||
 				if start < end {
 					One(
@@ -516,9 +517,20 @@ Builtin :: [].{
 				num.is_lte : num, num -> Bool,
 				num.add_checked : num, num -> Try(num, [Overflow]),
 				num.from_numeral : Builtin.Num.Numeral -> Try(num, [InvalidNumeral(Str)]),
+				num.steps_between : num, num -> [Known(U64), Unknown],
 			]
 		inclusive_range = |start, end| {
-			len_if_known: Unknown,
+			len_if_known: if start <= end {
+				match start.steps_between(end) {
+					Known(n) => match n.add_checked(1) {
+						Ok(len) => Known(len)
+						Err(Overflow) => Unknown
+					}
+					Unknown => Unknown
+				}
+			} else {
+				Known(0)
+			},
 			step: ||
 				if start <= end {
 					One(
@@ -2979,6 +2991,13 @@ Builtin :: [].{
 			add_checked : U8, U8 -> Try(U8, [Overflow])
 			add_checked = |a, b| unsigned_add_checked(U8.highest, a, b)
 
+			steps_between : U8, U8 -> [Known(U64), Unknown]
+			steps_between = |start, end|
+				if start < end
+					Known(start.abs_diff(end).to_u64())
+				else
+					Known(0)
+
 			## Add two [U8] values, saturating at [U8.highest] on overflow rather than wrapping around.
 			## ```roc
 			## expect U8.plus_saturated(U8.highest, 1) == U8.highest
@@ -3341,6 +3360,13 @@ Builtin :: [].{
 
 			add_checked : I8, I8 -> Try(I8, [Overflow])
 			add_checked = |a, b| signed_add_checked(I8.lowest, I8.highest, 0, a, b)
+
+			steps_between : I8, I8 -> [Known(U64), Unknown]
+			steps_between = |start, end|
+				if start < end
+					Known(start.abs_diff(end).to_u64())
+				else
+					Known(0)
 
 			## Add two [I8] values, saturating at [I8.highest] or [I8.lowest] on overflow rather than wrapping around.
 			## ```roc
@@ -3758,6 +3784,13 @@ Builtin :: [].{
 			add_checked : U16, U16 -> Try(U16, [Overflow])
 			add_checked = |a, b| unsigned_add_checked(U16.highest, a, b)
 
+			steps_between : U16, U16 -> [Known(U64), Unknown]
+			steps_between = |start, end|
+				if start < end
+					Known(start.abs_diff(end).to_u64())
+				else
+					Known(0)
+
 			## Add two [U16] values, saturating at [U16.highest] on overflow rather than wrapping around.
 			## ```roc
 			## expect U16.plus_saturated(U16.highest, 1) == U16.highest
@@ -4158,6 +4191,13 @@ Builtin :: [].{
 
 			add_checked : I16, I16 -> Try(I16, [Overflow])
 			add_checked = |a, b| signed_add_checked(I16.lowest, I16.highest, 0, a, b)
+
+			steps_between : I16, I16 -> [Known(U64), Unknown]
+			steps_between = |start, end|
+				if start < end
+					Known(start.abs_diff(end).to_u64())
+				else
+					Known(0)
 
 			## Add two [I16] values, saturating at [I16.highest] or [I16.lowest] on overflow rather than wrapping around.
 			## ```roc
@@ -4591,6 +4631,13 @@ Builtin :: [].{
 
 			add_checked : U32, U32 -> Try(U32, [Overflow])
 			add_checked = |a, b| unsigned_add_checked(U32.highest, a, b)
+
+			steps_between : U32, U32 -> [Known(U64), Unknown]
+			steps_between = |start, end|
+				if start < end
+					Known(start.abs_diff(end).to_u64())
+				else
+					Known(0)
 
 			## Add two [U32] values, saturating at [U32.highest] on overflow rather than wrapping around.
 			## ```roc
@@ -5030,6 +5077,13 @@ Builtin :: [].{
 
 			add_checked : I32, I32 -> Try(I32, [Overflow])
 			add_checked = |a, b| signed_add_checked(I32.lowest, I32.highest, 0, a, b)
+
+			steps_between : I32, I32 -> [Known(U64), Unknown]
+			steps_between = |start, end|
+				if start < end
+					Known(start.abs_diff(end).to_u64())
+				else
+					Known(0)
 
 			## Add two [I32] values, saturating at [I32.highest] or [I32.lowest] on overflow rather than wrapping around.
 			## ```roc
@@ -5483,6 +5537,13 @@ Builtin :: [].{
 
 			add_checked : U64, U64 -> Try(U64, [Overflow])
 			add_checked = |a, b| unsigned_add_checked(U64.highest, a, b)
+
+			steps_between : U64, U64 -> [Known(U64), Unknown]
+			steps_between = |start, end|
+				if start < end
+					Known(start.abs_diff(end))
+				else
+					Known(0)
 
 			## Add two [U64] values, saturating at [U64.highest] on overflow rather than wrapping around.
 			## ```roc
@@ -5965,6 +6026,13 @@ Builtin :: [].{
 			add_checked : I64, I64 -> Try(I64, [Overflow])
 			add_checked = |a, b| signed_add_checked(I64.lowest, I64.highest, 0, a, b)
 
+			steps_between : I64, I64 -> [Known(U64), Unknown]
+			steps_between = |start, end|
+				if start < end
+					Known(start.abs_diff(end))
+				else
+					Known(0)
+
 			## Add two [I64] values, saturating at [I64.highest] or [I64.lowest] on overflow rather than wrapping around.
 			## ```roc
 			## expect I64.plus_saturated(I64.highest, 1) == I64.highest
@@ -6433,6 +6501,16 @@ Builtin :: [].{
 
 			add_checked : U128, U128 -> Try(U128, [Overflow])
 			add_checked = |a, b| unsigned_add_checked(U128.highest, a, b)
+
+			steps_between : U128, U128 -> [Known(U64), Unknown]
+			steps_between = |start, end|
+				if start < end
+					match start.abs_diff(end).to_u64_try() {
+						Ok(n) => Known(n)
+						Err(OutOfRange) => Unknown
+					}
+				else
+					Known(0)
 
 			## Add two [U128] values, saturating at [U128.highest] on overflow rather than wrapping around.
 			## ```roc
@@ -6953,6 +7031,16 @@ Builtin :: [].{
 
 			add_checked : I128, I128 -> Try(I128, [Overflow])
 			add_checked = |a, b| signed_add_checked(I128.lowest, I128.highest, 0, a, b)
+
+			steps_between : I128, I128 -> [Known(U64), Unknown]
+			steps_between = |start, end|
+				if start < end
+					match start.abs_diff(end).to_u64_try() {
+						Ok(n) => Known(n)
+						Err(OutOfRange) => Unknown
+					}
+				else
+					Known(0)
 
 			## Add two [I128] values, saturating at [I128.highest] or [I128.lowest] on overflow rather than wrapping around.
 			## ```roc
@@ -7490,6 +7578,13 @@ Builtin :: [].{
 
 			add_checked : Dec, Dec -> Try(Dec, [Overflow])
 			add_checked = |a, b| signed_add_checked(Dec.lowest, Dec.highest, 0.0, a, b)
+
+			## Conservative placeholder: always returns `Unknown`. Counting the steps
+			## in a fractional `[start, end)` range advancing by `1` would require
+			## `ceil(end - start)`; until that is implemented, `Unknown` is always a
+			## correct (if imprecise) length hint.
+			steps_between : Dec, Dec -> [Known(U64), Unknown]
+			steps_between = |_start, _end| Unknown
 
 			## Add two [Dec] values, saturating at [Dec.highest] or [Dec.lowest] on overflow rather than wrapping around.
 			## ```roc
