@@ -133,6 +133,7 @@ fn buildBuiltinIndices(gpa: Allocator, env: *const ModuleEnv) !BuiltinIndices {
     const str_type_idx = try findTypeDeclaration(gpa, env, "Str");
     const hasher_type_idx = try findTypeDeclaration(gpa, env, "Hasher");
     const iter_type_idx = try findTypeDeclaration(gpa, env, "Iter");
+    const stream_type_idx = try findTypeDeclaration(gpa, env, "Stream");
     const list_type_idx = try findTypeDeclaration(gpa, env, "List");
     const box_type_idx = try findTypeDeclaration(gpa, env, "Box");
 
@@ -161,6 +162,7 @@ fn buildBuiltinIndices(gpa: Allocator, env: *const ModuleEnv) !BuiltinIndices {
         .str_type = str_type_idx,
         .hasher_type = hasher_type_idx,
         .iter_type = iter_type_idx,
+        .stream_type = stream_type_idx,
         .list_type = list_type_idx,
         .box_type = box_type_idx,
         .utf8_problem_type = utf8_problem_type_idx,
@@ -185,6 +187,7 @@ fn buildBuiltinIndices(gpa: Allocator, env: *const ModuleEnv) !BuiltinIndices {
         .str_ident = expectBuiltinIdent(env, "Builtin.Str"),
         .hasher_ident = expectBuiltinIdent(env, "Builtin.Hasher"),
         .iter_ident = expectBuiltinIdent(env, "Builtin.Iter"),
+        .stream_ident = expectBuiltinIdent(env, "Builtin.Stream"),
         .list_ident = expectBuiltinIdent(env, "Builtin.List"),
         .box_ident = expectBuiltinIdent(env, "Builtin.Box"),
         .utf8_problem_ident = expectBuiltinIdent(env, "Builtin.Str.Utf8Problem"),
@@ -219,6 +222,7 @@ fn installBuiltinNodeIndices(gpa: Allocator, env: *ModuleEnv, indices: BuiltinIn
     try env.common.setNodeIndexById(gpa, indices.str_ident, @intCast(@intFromEnum(indices.str_type)));
     try env.common.setNodeIndexById(gpa, indices.hasher_ident, @intCast(@intFromEnum(indices.hasher_type)));
     try env.common.setNodeIndexById(gpa, indices.iter_ident, @intCast(@intFromEnum(indices.iter_type)));
+    try env.common.setNodeIndexById(gpa, indices.stream_ident, @intCast(@intFromEnum(indices.stream_type)));
     try env.common.setNodeIndexById(gpa, indices.list_ident, @intCast(@intFromEnum(indices.list_type)));
     try env.common.setNodeIndexById(gpa, indices.box_ident, @intCast(@intFromEnum(indices.box_type)));
     try env.common.setNodeIndexById(gpa, indices.utf8_problem_ident, @intCast(@intFromEnum(indices.utf8_problem_type)));

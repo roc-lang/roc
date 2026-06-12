@@ -380,6 +380,14 @@ pub const Tag = enum {
     /// * lhs - LHS DESCRIPTION
     /// * rhs - RHS DESCRIPTION
     multiline_string,
+    /// A string literal with an explicit type suffix, e.g. `"foo".MyType`
+    /// * lhs - type identifier (Ident.Idx bits)
+    /// * rhs - extra_data index holding [parts.span.start, parts.span.len]
+    typed_string,
+    /// A multiline string literal with an explicit type suffix
+    /// * lhs - type identifier (Ident.Idx bits)
+    /// * rhs - extra_data index holding [parts.span.start, parts.span.len]
+    typed_multiline_string,
     /// DESCRIPTION
     /// Example: EXAMPLE
     /// * lhs - LHS DESCRIPTION
@@ -530,6 +538,12 @@ pub const Tag = enum {
     /// * main_token - target name identifier token
     /// * lhs - TargetConfig index
     target_entry,
+
+    /// A symbol map entry: "roc_main": main_for_host! or "roc_stdout_line": Stdout.line!
+    /// * main_token - symbol string token (StringPart)
+    /// * lhs - module UpperIdent token (packed optional; 0 if unqualified)
+    /// * rhs - function ident token
+    symbol_map_entry,
 
     /// A string literal file in a target list: "crt1.o"
     /// * main_token - string token

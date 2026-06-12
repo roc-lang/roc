@@ -13,7 +13,7 @@ foo = if 1 A
 ~~~
 # EXPECTED
 TYPE MISMATCH - if_then_else_simple_file.md:1:10:1:11
-TYPE MISMATCH - if_then_else_simple_file.md:3:10:5:6
+MISSING METHOD - if_then_else_simple_file.md:4:2:4:9
 # PROBLEMS
 **TYPE MISMATCH**
 This number is being used where a non-number type is needed:
@@ -27,20 +27,15 @@ Other code expects this to have the type:
 
     Bool
 
-**TYPE MISMATCH**
-The second branch of this `if` does not match the previous branch :
-**if_then_else_simple_file.md:3:10:5:6:**
+**MISSING METHOD**
+This **from_quote** method is being called on a value whose type doesn't have that method:
+**if_then_else_simple_file.md:4:2:4:9:**
 ```roc
-    else {
 	"hello"
-    }
 ```
+	^^^^^^^
 
-The second branch is:
-
-    Str
-
-But the previous branch results in:
+The value's type, which does not have a method named **from_quote**, is:
 
     [A, ..]
 
@@ -80,13 +75,21 @@ foo = if 1 A
 (can-ir
 	(d-let
 		(p-assign (ident "foo"))
-		(e-runtime-error (tag "erroneous_value_expr"))))
+		(e-if
+			(if-branches
+				(if-branch
+					(e-num (value "1"))
+					(e-tag (name "A"))))
+			(if-else
+				(e-block
+					(e-string
+						(e-literal (string "hello"))))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error")))
+		(patt (type "[A, ..]")))
 	(expressions
-		(expr (type "Error"))))
+		(expr (type "[A, ..]"))))
 ~~~

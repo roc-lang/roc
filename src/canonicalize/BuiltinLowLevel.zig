@@ -242,6 +242,18 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
     if (env.common.findIdent("list_swap_unsafe")) |list_swap_unsafe_ident| {
         try low_level_map.put(list_swap_unsafe_ident, .list_swap);
     }
+    if (env.common.findIdent("list_map_can_reuse")) |list_map_can_reuse_ident| {
+        try low_level_map.put(list_map_can_reuse_ident, .list_map_can_reuse);
+    }
+    if (env.common.findIdent("list_map_cast_unsafe")) |list_map_cast_unsafe_ident| {
+        try low_level_map.put(list_map_cast_unsafe_ident, .list_map_cast_unsafe);
+    }
+    if (env.common.findIdent("list_map_extract_unsafe")) |list_map_extract_unsafe_ident| {
+        try low_level_map.put(list_map_extract_unsafe_ident, .list_map_extract_unsafe);
+    }
+    if (env.common.findIdent("list_map_write_unsafe")) |list_map_write_unsafe_ident| {
+        try low_level_map.put(list_map_write_unsafe_ident, .list_map_write_unsafe);
+    }
     if (env.common.findIdent("Builtin.dict_pseudo_seed")) |ident| {
         try low_level_map.put(ident, .dict_pseudo_seed);
     }

@@ -21,7 +21,11 @@ This expression is doing an equality check on a type that doesn't support equali
 
 The type is:
 
-    { age: Str, name: Str, process: a -> a }
+    { age: a, name: b, process: c -> c }
+      where [
+        a.from_quote : List(U8) -> Try(a, [BadQuotedBytes(Str)]),
+        b.from_quote : List(U8) -> Try(b, [BadQuotedBytes(Str)]),
+      ]
 
 This record does not support equality because these fields have types that don't support **is_eq**:
 

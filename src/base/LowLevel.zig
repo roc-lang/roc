@@ -70,6 +70,10 @@ pub const LowLevel = enum {
     list_release_excess_capacity,
     list_split_first,
     list_split_last,
+    list_map_can_reuse,
+    list_map_cast_unsafe,
+    list_map_extract_unsafe,
+    list_map_write_unsafe,
 
     // Bool operations
     bool_not,
@@ -605,7 +609,6 @@ pub const LowLevel = enum {
 
             .list_drop_at,
             .list_sublist,
-            .list_prepend,
             .list_drop_first,
             .list_drop_last,
             .list_take_first,
@@ -617,12 +620,32 @@ pub const LowLevel = enum {
             .list_split_last,
             => RcEffect.runtimeUniqueness(argMask(&.{0})),
 
+            .list_prepend => RcEffect.runtimeUniquenessRetainingArgs(argMask(&.{0}), argMask(&.{1})),
+
             .list_append_unsafe => RcEffect.consumesArgsReturningConsumedArgsRetainingArgs(argMask(&.{0}), argMask(&.{1})),
+
+            // Reads the list's refcount (and slice bit) without changing it.
+            .list_map_can_reuse => RcEffect.none(),
+
+            // Retypes a unique non-slice list to the output element type,
+            // keeping the same allocation. Only reachable behind a true
+            // `list_map_can_reuse`, so the result's count is 1 on return.
+            .list_map_cast_unsafe => RcEffect.consumesArgsReturningConsumedArgsRetainingArgs(argMask(&.{0}), 0),
+
+            // Moves one element's ownership out of a unique list's buffer.
+            // The buffer slot keeps stale bytes until `list_map_write_unsafe`
+            // stores the replacement; the op itself performs no RC work.
+            .list_map_extract_unsafe => RcEffect.none(),
+
+            // Stores an owned element into the slot vacated by
+            // `list_map_extract_unsafe`, mirroring `list_append_unsafe`.
+            .list_map_write_unsafe => RcEffect.consumesArgsReturningConsumedArgsRetainingArgs(argMask(&.{0}), argMask(&.{2})),
+
+            .list_swap => RcEffect.runtimeUniqueness(argMask(&.{0})),
 
             .list_set,
             .list_replace_unsafe,
-            .list_swap,
-            => RcEffect.runtimeUniqueness(argMask(&.{0})),
+            => RcEffect.runtimeUniquenessRetainingArgs(argMask(&.{0}), argMask(&.{2})),
 
             .list_concat => RcEffect.runtimeUniqueness(argMask(&.{ 0, 1 })),
 

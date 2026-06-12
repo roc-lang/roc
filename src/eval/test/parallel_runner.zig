@@ -1138,6 +1138,19 @@ fn runTestProblem(
             .backends = undefined,
         };
     }
+
+    // Checking found nothing; publish so compile-time evaluation can report
+    // problems (e.g. a custom from_numeral rejecting a literal).
+    const comptime_outcome = try helpers.publishProgramForComptimeProblems(allocator, source_kind, src, imports);
+    if (comptime_outcome == .comptime_problems) {
+        return .{
+            .status = .pass,
+            .timings = timings,
+            .has_backend_details = false,
+            .backends = undefined,
+        };
+    }
+
     return .{
         .status = .fail,
         .message = "expected problems but none found",

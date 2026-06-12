@@ -736,6 +736,18 @@ pub fn CodeGen(comptime target: RocTarget) type {
             }
         }
 
+        /// Load float32 from stack slot.
+        pub fn emitLoadStackF32(self: *Self, dst: FloatReg, offset: i32) Allocator.Error!void {
+            if (offset >= 0 and offset <= 16380) {
+                const uoffset: u12 = @intCast(@as(u32, @intCast(offset)) >> 2);
+                try self.emit.fldrRegMemUoff(.single, dst, .FP, uoffset);
+            } else {
+                try self.emit.movRegImm64(.IP0, @bitCast(@as(i64, offset)));
+                try self.emit.addRegRegReg(.w64, .IP0, .FP, .IP0);
+                try self.emit.fldrRegMemUoff(.single, dst, .IP0, 0);
+            }
+        }
+
         /// Store float32 to stack slot.
         pub fn emitStoreStackF32(self: *Self, offset: i32, src: FloatReg) Allocator.Error!void {
             if (offset >= 0 and offset <= 16380) {

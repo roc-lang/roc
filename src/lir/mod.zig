@@ -5,6 +5,8 @@ const core = @import("lir_core");
 
 /// Core statement-only LIR type definitions.
 pub const LIR = core.LIR;
+/// Resolved source location recorded in LIR side tables.
+pub const SourceLoc = @import("base").SourceLoc;
 /// Flat storage for statement-only LIR nodes and spans.
 pub const LirStore = core.LirStore;
 /// LIR-owned root metadata.

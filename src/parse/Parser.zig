@@ -1584,6 +1584,79 @@ fn parseTargetsSectionTokens(self: *Parser) Error!AST.TargetsSection.Idx {
     });
 }
 
+fn parseSymbolMapEntryTokens(self: *Parser) Error!AST.SymbolMapEntry.Idx {
+    const start = self.pos;
+    self.expect(.StringStart) catch {
+        return try self.pushMalformed(AST.SymbolMapEntry.Idx, .expected_symbol_string, start);
+    };
+    if (self.peek() != .StringPart) {
+        return try self.pushMalformed(AST.SymbolMapEntry.Idx, .expected_symbol_string, start);
+    }
+    const symbol = self.pos;
+    self.advance();
+    self.expect(.StringEnd) catch {
+        return try self.pushMalformed(AST.SymbolMapEntry.Idx, .expected_symbol_string, start);
+    };
+    self.expect(.OpColon) catch {
+        return try self.pushMalformed(AST.SymbolMapEntry.Idx, .expected_symbol_map_colon, start);
+    };
+
+    var module: ?TokenIdx = null;
+    var func: TokenIdx = undefined;
+    switch (self.peek()) {
+        .UpperIdent => {
+            module = self.pos;
+            self.advance();
+            // Hosted functions on nested type modules have extra uppercase
+            // segments between the module and the function: Foo.Idx.get!
+            while (self.peek() == .NoSpaceDotUpperIdent) {
+                self.advance();
+            }
+            if (self.peek() != .NoSpaceDotLowerIdent) {
+                return try self.pushMalformed(AST.SymbolMapEntry.Idx, .expected_symbol_map_function, start);
+            }
+            func = self.pos;
+            self.advance();
+        },
+        .LowerIdent => {
+            func = self.pos;
+            self.advance();
+        },
+        else => return try self.pushMalformed(AST.SymbolMapEntry.Idx, .expected_symbol_map_function, start),
+    }
+
+    return try self.store.addSymbolMapEntry(.{
+        .symbol = symbol,
+        .module = module,
+        .func = func,
+        .region = .{ .start = start, .end = self.pos },
+    });
+}
+
+fn parseSymbolMapCollectionTokens(
+    self: *Parser,
+    open_tag: AST.Diagnostic.Tag,
+    close_tag: AST.Diagnostic.Tag,
+) Error!AST.SymbolMapEntry.Span {
+    self.expect(.OpenCurly) catch {
+        _ = try self.pushMalformed(AST.SymbolMapEntry.Idx, open_tag, self.pos);
+        return .{ .span = .{ .start = 0, .len = 0 } };
+    };
+    const top = self.store.scratchSymbolMapEntryTop();
+    while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
+        try self.store.addScratchSymbolMapEntry(try self.parseSymbolMapEntryTokens());
+        if (!self.consumeComma()) {
+            break;
+        }
+    }
+    self.expect(.CloseCurly) catch {
+        self.store.clearScratchSymbolMapEntriesFrom(top);
+        _ = try self.pushMalformed(AST.SymbolMapEntry.Idx, close_tag, self.pos);
+        return .{ .span = .{ .start = 0, .len = 0 } };
+    };
+    return try self.store.symbolMapEntrySpanFrom(top);
+}
+
 fn parsePlatformHeaderTokens(self: *Parser) Error!AST.Header.Idx {
     const start = self.pos;
     std.debug.assert(self.peek() == .KwPlatform);
@@ -1629,12 +1702,19 @@ fn parsePlatformHeaderTokens(self: *Parser) Error!AST.Header.Idx {
     self.expect(.KwProvides) catch {
         return try self.pushMalformed(AST.Header.Idx, .expected_provides, self.pos);
     };
-    const provides = try self.parseRecordFieldCollectionTokens(
-        self.pos,
-        .collection_record_fields,
+    const provides = try self.parseSymbolMapCollectionTokens(
         .expected_provides_open_curly,
         .expected_provides_close_curly,
     );
+
+    var hosted: AST.SymbolMapEntry.Span = .{ .span = .{ .start = 0, .len = 0 } };
+    if (self.peek() == .KwHosted) {
+        self.advance();
+        hosted = try self.parseSymbolMapCollectionTokens(
+            .expected_hosted_open_curly,
+            .expected_hosted_close_curly,
+        );
+    }
 
     var targets: ?AST.TargetsSection.Idx = null;
     if (self.peek() == .KwTargets) {
@@ -1648,6 +1728,7 @@ fn parsePlatformHeaderTokens(self: *Parser) Error!AST.Header.Idx {
         .exposes = exposes,
         .packages = packages,
         .provides = provides,
+        .hosted = hosted,
         .targets = targets,
         .region = .{ .start = start, .end = self.pos },
     } });
@@ -3752,7 +3833,19 @@ fn runExprStatementKernel(
                 }
                 self.advance();
                 const parts = try self.store.exprSpanFrom(expr_string_state.scratch_top);
-                const expr = try self.store.addExpr(.{ .string = .{
+                const expr = if (self.peek() == .NoSpaceDotUpperIdent) blk: {
+                    const type_token = self.pos;
+                    self.advance();
+                    const type_ident = self.tok_buf.resolveIdentifier(type_token) orelse {
+                        break :blk try self.pushMalformed(AST.Expr.Idx, .expr_unexpected_token, type_token);
+                    };
+                    break :blk try self.store.addExpr(.{ .typed_string = .{
+                        .token = expr_string_state.start,
+                        .type_ident = type_ident,
+                        .parts = parts,
+                        .region = .{ .start = expr_string_state.start, .end = self.pos },
+                    } });
+                } else try self.store.addExpr(.{ .string = .{
                     .token = expr_string_state.start,
                     .parts = parts,
                     .region = .{ .start = expr_string_state.start, .end = self.pos },
@@ -3810,7 +3903,19 @@ fn runExprStatementKernel(
                     continue :expr_kernel .suffix;
                 }
                 const parts = try self.store.exprSpanFrom(expr_string_state.scratch_top);
-                const expr = try self.store.addExpr(.{ .multiline_string = .{
+                const expr = if (self.peek() == .DotUpperIdent or self.peek() == .NoSpaceDotUpperIdent) blk: {
+                    const type_token = self.pos;
+                    self.advance();
+                    const type_ident = self.tok_buf.resolveIdentifier(type_token) orelse {
+                        break :blk try self.pushMalformed(AST.Expr.Idx, .expr_unexpected_token, type_token);
+                    };
+                    break :blk try self.store.addExpr(.{ .typed_multiline_string = .{
+                        .token = expr_string_state.start,
+                        .type_ident = type_ident,
+                        .parts = parts,
+                        .region = .{ .start = expr_string_state.start, .end = self.pos },
+                    } });
+                } else try self.store.addExpr(.{ .multiline_string = .{
                     .token = expr_string_state.start,
                     .parts = parts,
                     .region = .{ .start = expr_string_state.start, .end = self.pos },
@@ -6000,7 +6105,6 @@ const bin_op_bp_table = blk: {
     table[@intFromEnum(Token.Tag.OpPlus) - start] = .{ .left = 20, .right = 21 };
     table[@intFromEnum(Token.Tag.OpBinaryMinus) - start] = .{ .left = 20, .right = 21 };
     table[@intFromEnum(Token.Tag.OpDoubleQuestion) - start] = .{ .left = 18, .right = 19 };
-    table[@intFromEnum(Token.Tag.OpQuestion) - start] = .{ .left = 16, .right = 17 };
     table[@intFromEnum(Token.Tag.OpEquals) - start] = .{ .left = 15, .right = 15 };
     table[@intFromEnum(Token.Tag.OpNotEquals) - start] = .{ .left = 13, .right = 13 };
     table[@intFromEnum(Token.Tag.OpLessThan) - start] = .{ .left = 11, .right = 11 };

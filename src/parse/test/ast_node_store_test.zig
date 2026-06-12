@@ -91,7 +91,8 @@ test "NodeStore round trip - Headers" {
             .exposes = rand_idx(random, AST.Collection.Idx),
             .name = rand_token_idx(random),
             .packages = rand_idx(random, AST.Collection.Idx),
-            .provides = rand_idx(random, AST.Collection.Idx),
+            .provides = .{ .span = rand_span(random) },
+            .hosted = .{ .span = rand_span(random) },
             .requires_entries = .{ .span = .{ .start = 0, .len = 0 } },
             .targets = null,
             .region = rand_region(random),
@@ -670,6 +671,22 @@ test "NodeStore round trip - Expr" {
         },
     });
     try expressions.append(gpa, AST.Expr{
+        .typed_string = .{
+            .parts = AST.Expr.Span{ .span = rand_span(random) },
+            .type_ident = rand_idx(random, base.Ident.Idx),
+            .region = rand_region(random),
+            .token = rand_token_idx(random),
+        },
+    });
+    try expressions.append(gpa, AST.Expr{
+        .typed_multiline_string = .{
+            .parts = AST.Expr.Span{ .span = rand_span(random) },
+            .type_ident = rand_idx(random, base.Ident.Idx),
+            .region = rand_region(random),
+            .token = rand_token_idx(random),
+        },
+    });
+    try expressions.append(gpa, AST.Expr{
         .list = .{
             .items = AST.Expr.Span{ .span = rand_span(random) },
             .region = rand_region(random),
@@ -1008,7 +1025,8 @@ test "NodeStore rejects unaddressable extra data reservations in release builds"
             .exposes = @enumFromInt(1),
             .name = 0,
             .packages = @enumFromInt(1),
-            .provides = @enumFromInt(1),
+            .provides = .{ .span = .{ .start = 0, .len = 0 } },
+            .hosted = .{ .span = .{ .start = 0, .len = 0 } },
             .requires_entries = .{ .span = .{ .start = 0, .len = 0 } },
             .targets = null,
             .region = .{ .start = 0, .end = 0 },

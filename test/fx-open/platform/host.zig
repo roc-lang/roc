@@ -20,15 +20,15 @@ const HostEnv = struct {
 };
 
 /// Roc allocation function with size-tracking metadata
-fn rocAllocFn(roc_alloc: *builtins.host_abi.RocAlloc, env: *anyopaque) callconv(.c) void {
-    const host: *HostEnv = @ptrCast(@alignCast(env));
+fn rocAllocFn(ops: *builtins.host_abi.RocOps, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+    const host: *HostEnv = @ptrCast(@alignCast(ops.env));
     const allocator = host.gpa.allocator();
 
-    const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(roc_alloc.alignment)));
+    const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(alignment)));
 
     // Calculate additional bytes needed to store the size
-    const size_storage_bytes = @max(roc_alloc.alignment, @alignOf(usize));
-    const total_size = roc_alloc.length + size_storage_bytes;
+    const size_storage_bytes = @max(alignment, @alignOf(usize));
+    const total_size = length + size_storage_bytes;
 
     // Allocate memory including space for size metadata
     const result = allocator.rawAlloc(total_size, align_enum, @returnAddress());
@@ -37,7 +37,7 @@ fn rocAllocFn(roc_alloc: *builtins.host_abi.RocAlloc, env: *anyopaque) callconv(
         var buf: [256]u8 = undefined;
         const msg = std.fmt.bufPrint(&buf, "\x1b[31mHost error:\x1b[0m allocation failed for size={d} align={d}\n", .{
             total_size,
-            roc_alloc.alignment,
+            alignment,
         }) catch "\x1b[31mHost error:\x1b[0m allocation failed, out of memory\n";
         std.debug.print("{s}", .{msg});
         std.process.exit(1);
@@ -48,37 +48,39 @@ fn rocAllocFn(roc_alloc: *builtins.host_abi.RocAlloc, env: *anyopaque) callconv(
     size_ptr.* = total_size;
 
     // Return pointer to the user data (after the size metadata)
-    roc_alloc.answer = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes);
+    const answer: *anyopaque = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes);
 
     if (trace_refcount) {
-        std.debug.print("[ALLOC] ptr=0x{x} size={d} align={d}\n", .{ @intFromPtr(roc_alloc.answer), roc_alloc.length, roc_alloc.alignment });
+        std.debug.print("[ALLOC] ptr=0x{x} size={d} align={d}\n", .{ @intFromPtr(answer), length, alignment });
     }
+
+    return answer;
 }
 
 /// Roc deallocation function with size-tracking metadata
-fn rocDeallocFn(roc_dealloc: *builtins.host_abi.RocDealloc, env: *anyopaque) callconv(.c) void {
-    const host: *HostEnv = @ptrCast(@alignCast(env));
+fn rocDeallocFn(ops: *builtins.host_abi.RocOps, ptr: *anyopaque, alignment: usize) callconv(.c) void {
+    const host: *HostEnv = @ptrCast(@alignCast(ops.env));
     const allocator = host.gpa.allocator();
 
     // Calculate where the size metadata is stored
-    const size_storage_bytes = @max(roc_dealloc.alignment, @alignOf(usize));
-    const size_ptr: *const usize = @ptrFromInt(@intFromPtr(roc_dealloc.ptr) - @sizeOf(usize));
+    const size_storage_bytes = @max(alignment, @alignOf(usize));
+    const size_ptr: *const usize = @ptrFromInt(@intFromPtr(ptr) - @sizeOf(usize));
     const total_size = size_ptr.*;
 
     if (trace_refcount) {
         std.debug.print("[DEALLOC] ptr=0x{x} align={d} total_size={d} size_storage={d}\n", .{
-            @intFromPtr(roc_dealloc.ptr),
-            roc_dealloc.alignment,
+            @intFromPtr(ptr),
+            alignment,
             total_size,
             size_storage_bytes,
         });
     }
 
     // Calculate the base pointer (start of actual allocation)
-    const base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(roc_dealloc.ptr) - size_storage_bytes);
+    const base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(ptr) - size_storage_bytes);
 
     // Use same alignment calculation as alloc
-    const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(roc_dealloc.alignment)));
+    const align_enum = std.mem.Alignment.fromByteUnits(@as(usize, @intCast(alignment)));
 
     // Free the memory (including the size metadata)
     const slice = @as([*]u8, @ptrCast(base_ptr))[0..total_size];
@@ -86,22 +88,22 @@ fn rocDeallocFn(roc_dealloc: *builtins.host_abi.RocDealloc, env: *anyopaque) cal
 }
 
 /// Roc reallocation function with size-tracking metadata
-fn rocReallocFn(roc_realloc: *builtins.host_abi.RocRealloc, env: *anyopaque) callconv(.c) void {
-    const host: *HostEnv = @ptrCast(@alignCast(env));
+fn rocReallocFn(ops: *builtins.host_abi.RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+    const host: *HostEnv = @ptrCast(@alignCast(ops.env));
     const allocator = host.gpa.allocator();
 
     // Calculate where the size metadata is stored for the old allocation
-    const size_storage_bytes = @max(roc_realloc.alignment, @alignOf(usize));
-    const old_size_ptr: *const usize = @ptrFromInt(@intFromPtr(roc_realloc.answer) - @sizeOf(usize));
+    const size_storage_bytes = @max(alignment, @alignOf(usize));
+    const old_size_ptr: *const usize = @ptrFromInt(@intFromPtr(ptr) - @sizeOf(usize));
 
     // Read the old total size from metadata
     const old_total_size = old_size_ptr.*;
 
     // Calculate the old base pointer (start of actual allocation)
-    const old_base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(roc_realloc.answer) - size_storage_bytes);
+    const old_base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(ptr) - size_storage_bytes);
 
     // Calculate new total size needed
-    const new_total_size = roc_realloc.new_length + size_storage_bytes;
+    const new_total_size = new_length + size_storage_bytes;
 
     // Perform reallocation
     const old_slice = @as([*]u8, @ptrCast(old_base_ptr))[0..old_total_size];
@@ -115,42 +117,43 @@ fn rocReallocFn(roc_realloc: *builtins.host_abi.RocRealloc, env: *anyopaque) cal
     new_size_ptr.* = new_total_size;
 
     // Return pointer to the user data (after the size metadata)
-    roc_realloc.answer = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes);
+    const answer: *anyopaque = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes);
 
     if (trace_refcount) {
-        std.debug.print("[REALLOC] old=0x{x} new=0x{x} new_size={d}\n", .{ @intFromPtr(old_base_ptr) + size_storage_bytes, @intFromPtr(roc_realloc.answer), roc_realloc.new_length });
+        std.debug.print("[REALLOC] old=0x{x} new=0x{x} new_size={d}\n", .{ @intFromPtr(old_base_ptr) + size_storage_bytes, @intFromPtr(answer), new_length });
     }
+
+    return answer;
 }
 
 /// Roc debug function
-fn rocDbgFn(roc_dbg: *const builtins.host_abi.RocDbg, env: *anyopaque) callconv(.c) void {
-    _ = env;
-    const message = roc_dbg.utf8_bytes[0..roc_dbg.len];
+fn rocDbgFn(ops: *builtins.host_abi.RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
+    _ = ops;
+    const message = bytes[0..len];
     std.debug.print("ROC DBG: {s}\n", .{message});
 }
 
 /// Roc expect failed function
-fn rocExpectFailedFn(roc_expect: *const builtins.host_abi.RocExpectFailed, env: *anyopaque) callconv(.c) void {
-    _ = env;
-    const source_bytes = roc_expect.utf8_bytes[0..roc_expect.len];
+fn rocExpectFailedFn(ops: *builtins.host_abi.RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
+    _ = ops;
+    const source_bytes = bytes[0..len];
     const trimmed = std.mem.trim(u8, source_bytes, " \t\n\r");
     std.debug.print("Expect failed: {s}\n", .{trimmed});
 }
 
 /// Roc crashed function
-fn rocCrashedFn(roc_crashed: *const builtins.host_abi.RocCrashed, env: *anyopaque) callconv(.c) noreturn {
-    _ = env;
-    const message = roc_crashed.utf8_bytes[0..roc_crashed.len];
+fn rocCrashedFn(ops: *builtins.host_abi.RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
+    _ = ops;
+    const message = bytes[0..len];
     var buf: [512]u8 = undefined;
     const msg = std.fmt.bufPrint(&buf, "\n\x1b[31mRoc crashed:\x1b[0m {s}\n", .{message}) catch "\n\x1b[31mRoc crashed\x1b[0m\n";
     std.debug.print("{s}", .{msg});
     std.process.exit(1);
 }
 
-// External symbols provided by the Roc runtime object file
-// Follows RocCall ABI: ops, ret_ptr, then argument pointers
-// main_for_host! takes List(Str) and returns I32
-extern fn roc__main(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
+// The app's entrypoint, exported under its provides symbol with its natural
+// C ABI: main_for_host! takes List(Str) and returns I32.
+extern fn roc_main(args: RocList) callconv(.c) i32;
 
 // OS-specific entry point handling
 comptime {
@@ -183,32 +186,37 @@ const RocStr = builtins.str.RocStr;
 const RocList = builtins.list.RocList;
 const RocOps = builtins.host_abi.RocOps;
 
-/// Hosted function: Stderr.line! (index 0 - sorted alphabetically)
-/// Follows RocCall ABI: (ops, ret_ptr, args_ptr)
-/// Returns {} and takes Str as argument
-fn hostedStderrLine(_: *anyopaque, _: *anyopaque, args: *const extern struct { str: RocStr }) callconv(.c) void {
-    const message = args.str.asSlice();
+// The host's private RocOps. Hosted functions have natural C ABIs with no ops
+// parameter, so they reach the host's allocator and std.Io through this
+// global, set by platform_main before any Roc code runs.
+var g_roc_ops: ?*RocOps = null;
+
+/// Hosted function: Stderr.line!
+/// Returns {} and takes Str as argument; ownership of the Str transfers here.
+fn hostedStderrLine(str: RocStr) callconv(.c) void {
+    const ops = g_roc_ops.?;
+    var owned = str;
+    defer owned.decref(ops);
+    const message = owned.asSlice();
     std.debug.print("{s}", .{message});
     std.debug.print("{s}", .{"\n"});
 }
 
-/// Hosted function: Stdin.line! (index 1 - sorted alphabetically)
-/// Follows RocCall ABI: (ops, ret_ptr, args_ptr)
-/// Returns Str and takes {} as argument
-fn hostedStdinLine(ops: *RocOps, result: *RocStr, _: *anyopaque) callconv(.c) void {
+/// Hosted function: Stdin.line!
+/// Returns Str and takes no arguments.
+fn hostedStdinLine() callconv(.c) RocStr {
+    const ops = g_roc_ops.?;
     const host: *HostEnv = @ptrCast(@alignCast(ops.env));
     // Read a line from stdin
     var buffer: [4096]u8 = undefined;
     const bytes_read = std.Io.File.stdin().readStreaming(host.std_io, &.{&buffer}) catch {
         // Return empty string on error
-        result.* = RocStr.empty();
-        return;
+        return RocStr.empty();
     };
 
     // Handle EOF (no bytes read)
     if (bytes_read == 0) {
-        result.* = RocStr.empty();
-        return;
+        return RocStr.empty();
     }
 
     // Find newline and trim it (handle both \n and \r\n)
@@ -226,27 +234,62 @@ fn hostedStdinLine(ops: *RocOps, result: *RocStr, _: *anyopaque) callconv(.c) vo
     // Create RocStr from the read line and return it
     // RocStr.fromSlice handles allocation internally (either inline for small strings
     // or via roc_alloc for big strings with proper refcount tracking)
-    result.* = RocStr.fromSlice(line, ops);
+    return RocStr.fromSlice(line, ops);
 }
 
-/// Hosted function: Stdout.line! (index 2 - sorted alphabetically)
-/// Follows RocCall ABI: (ops, ret_ptr, args_ptr)
-/// Returns {} and takes Str as argument
-fn hostedStdoutLine(ops_ptr: *anyopaque, _: *anyopaque, args: *const extern struct { str: RocStr }) callconv(.c) void {
-    const ops: *RocOps = @ptrCast(@alignCast(ops_ptr));
+/// Hosted function: Stdout.line!
+/// Returns {} and takes Str as argument; ownership of the Str transfers here.
+fn hostedStdoutLine(str: RocStr) callconv(.c) void {
+    const ops = g_roc_ops.?;
+    var owned = str;
+    defer owned.decref(ops);
     const host: *HostEnv = @ptrCast(@alignCast(ops.env));
-    const message = args.str.asSlice();
+    const message = owned.asSlice();
     std.Io.File.stdout().writeStreamingAll(host.std_io, message) catch {};
     std.Io.File.stdout().writeStreamingAll(host.std_io, "\n") catch {};
 }
 
-/// Array of hosted function pointers, sorted alphabetically by fully-qualified name
-/// These correspond to the hosted functions defined in Stderr, Stdin, and Stdout Type Modules
-const hosted_function_ptrs = [_]builtins.host_abi.HostedFn{
-    builtins.host_abi.hostedFn(&hostedStderrLine), // Stderr.line! (index 0)
-    builtins.host_abi.hostedFn(&hostedStdinLine), // Stdin.line! (index 1)
-    builtins.host_abi.hostedFn(&hostedStdoutLine), // Stdout.line! (index 2)
-};
+// --- Symbol-ABI runtime exports
+// The fixed runtime symbols every symbol-ABI host defines, plus this
+// platform's hosted function symbols. All hidden: they are link-time plumbing
+// between the app and the host, not part of the host binary's public API.
+
+fn hostAlloc(length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+    return rocAllocFn(g_roc_ops.?, length, alignment);
+}
+
+fn hostDealloc(ptr: *anyopaque, alignment: usize) callconv(.c) void {
+    rocDeallocFn(g_roc_ops.?, ptr, alignment);
+}
+
+fn hostRealloc(ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+    return rocReallocFn(g_roc_ops.?, ptr, new_length, alignment);
+}
+
+fn hostDbg(bytes: [*]const u8, len: usize) callconv(.c) void {
+    rocDbgFn(g_roc_ops.?, bytes, len);
+}
+
+fn hostExpectFailed(bytes: [*]const u8, len: usize) callconv(.c) void {
+    rocExpectFailedFn(g_roc_ops.?, bytes, len);
+}
+
+fn hostCrashed(bytes: [*]const u8, len: usize) callconv(.c) void {
+    rocCrashedFn(g_roc_ops.?, bytes, len);
+}
+
+comptime {
+    @export(&hostedStderrLine, .{ .name = "roc_stderr_line", .visibility = .hidden });
+    @export(&hostedStdinLine, .{ .name = "roc_stdin_line", .visibility = .hidden });
+    @export(&hostedStdoutLine, .{ .name = "roc_stdout_line", .visibility = .hidden });
+
+    @export(&hostAlloc, .{ .name = "roc_alloc", .visibility = .hidden });
+    @export(&hostDealloc, .{ .name = "roc_dealloc", .visibility = .hidden });
+    @export(&hostRealloc, .{ .name = "roc_realloc", .visibility = .hidden });
+    @export(&hostDbg, .{ .name = "roc_dbg", .visibility = .hidden });
+    @export(&hostExpectFailed, .{ .name = "roc_expect_failed", .visibility = .hidden });
+    @export(&hostCrashed, .{ .name = "roc_crashed", .visibility = .hidden });
+}
 
 /// Build a RocList of RocStr from argc/argv
 fn buildArgsList(ops: *builtins.host_abi.RocOps, argc: c_int, argv: [*][*:0]u8) RocList {
@@ -284,7 +327,8 @@ fn platform_main(argc: c_int, argv: [*][*:0]u8) Allocator.Error!c_int {
         }
     }
 
-    // Create the RocOps struct
+    // The host's private RocOps for using builtins helpers (RocStr/RocList
+    // allocation, decref). Not part of the ABI.
     var roc_ops = builtins.host_abi.RocOps{
         .env = @as(*anyopaque, @ptrCast(&host_env)),
         .roc_alloc = rocAllocFn,
@@ -293,23 +337,15 @@ fn platform_main(argc: c_int, argv: [*][*:0]u8) Allocator.Error!c_int {
         .roc_dbg = rocDbgFn,
         .roc_expect_failed = rocExpectFailedFn,
         .roc_crashed = rocCrashedFn,
-        .hosted_fns = .{
-            .count = hosted_function_ptrs.len,
-            .fns = @constCast(&hosted_function_ptrs),
-        },
+        .hosted_fns = .{ .count = 0, .fns = undefined },
     };
+    g_roc_ops = &roc_ops;
 
-    // Build the args list
-    var args = buildArgsList(&roc_ops, argc, argv);
+    // Build the args list; ownership transfers to the entrypoint.
+    const args = buildArgsList(&roc_ops, argc, argv);
 
-    // Call the app's main_for_host! entrypoint which returns I32
-    var exit_code: i32 = 0;
-    roc__main(&roc_ops, @as(*anyopaque, @ptrCast(&exit_code)), @as(*anyopaque, @ptrCast(&args)));
-
-    // Note: We don't explicitly free the args list here because:
-    // 1. The process is about to exit anyway
-    // 2. Properly freeing would require a Dec function for RocStr elements
-    // The GPA leak detection is fine with this since OS will reclaim memory
+    // Call the app's main_for_host! entrypoint with its natural C ABI.
+    const exit_code: i32 = roc_main(args);
 
     return exit_code;
 }

@@ -17,6 +17,23 @@ test "U8: 255 fits" {
     try test_env.assertLastDefType("U8");
 }
 
+test "U64: app string interpolation constrains local unsuffixed positive literal" {
+    const source =
+        \\app [main] { pf: platform "platform.roc" }
+        \\
+        \\main = {
+        \\  x = 42
+        \\  y = x
+        \\
+        \\  "done: ${U64.to_str(y)}"
+        \\}
+    ;
+
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertDefType("main", "Str");
+}
+
 test "I8: -128 fits" {
     const source =
         \\{

@@ -519,6 +519,7 @@ const Solver = struct {
             .dbg,
             .expect,
             => |child| _ = try self.inferExpr(child),
+            .expect_err => |expect_err| _ = try self.inferExpr(expect_err.msg),
         }
         return self.program.types.root(expected);
     }

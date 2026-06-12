@@ -1671,6 +1671,9 @@ fn createTestPlatformHostLib(
     // can emit stack-protector calls to __stack_chk_fail; x86_64 macOS (LLVM)
     // needs symbols like __zig_probe_stack.
     lib.bundle_compiler_rt = testHostNeedsCompilerRt(target);
+    // Per-function/data sections so symbol-ABI links can strip unused host code.
+    lib.link_function_sections = true;
+    lib.link_data_sections = true;
 
     return lib;
 }
@@ -1774,6 +1777,9 @@ fn buildAndCopyWasmHostObject(
     configureBackend(obj, target);
     obj.root_module.addImport("builtins", roc_modules.builtins);
     obj.root_module.addImport("build_options", roc_modules.build_options);
+    // Per-function/data sections so wasm final-link DCE can strip unused host code.
+    obj.link_function_sections = true;
+    obj.link_data_sections = true;
 
     const dest_path = "test/wasm/platform/targets/wasm32/host.wasm";
     const copy_step = b.addUpdateSourceFiles();
@@ -2527,6 +2533,8 @@ pub fn build(b: *std.Build) void {
     run_builtin_format.step.dependOn(build_roc_step);
     run_check_builtin_format_step.dependOn(&run_builtin_format.step);
 
+    var release_exe_for_llvm_embedded: ?*Step.Compile = null;
+
     // Release build with platform-optimal settings
     {
         const release_target = b.resolveTargetQuery(getReleaseTargetQuery());
@@ -2555,6 +2563,7 @@ pub fn build(b: *std.Build) void {
             roc_modules.addAll(exe);
             exe.root_module.addImport("compiled_builtins", compiled_builtins_module);
             exe.step.dependOn(&write_compiled_builtins.step);
+            release_exe_for_llvm_embedded = exe;
             const install = b.addInstallArtifact(exe, .{});
             build_release_step.dependOn(&install.step);
         }
@@ -2662,36 +2671,222 @@ pub fn build(b: *std.Build) void {
         },
     });
 
-    const builtins_bc_obj = b.addObject(.{
-        .name = "roc_builtins_bc",
+    const builtins64_target = b.resolveTargetQuery(.{ .cpu_arch = .wasm64, .os_tag = .freestanding, .abi = .none });
+    const builtins64_bc_obj = b.addObject(.{
+        .name = "roc_builtins64_bc",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/builtins/static_lib.zig"),
-            .target = target,
+            .target = builtins64_target,
             .optimize = .ReleaseFast,
             .strip = true,
             .pic = true,
             .single_threaded = true,
         }),
     });
-    builtins_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub_bc", .{
+    builtins64_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub64_bc", .{
         .root_source_file = b.path("src/builtins/tracy_stub.zig"),
     }));
-    builtins_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io_bc", .{
+    builtins64_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io64_bc", .{
         .root_source_file = b.path("src/shim_io.zig"),
     }));
-    builtins_bc_obj.root_module.omit_frame_pointer = true;
-    builtins_bc_obj.root_module.stack_check = false;
-    builtins_bc_obj.root_module.link_libc = true;
-    builtins_bc_obj.use_llvm = true;
-    builtins_bc_obj.bundle_compiler_rt = true;
-    _ = builtins_bc_obj.getEmittedBin();
-    const builtins_bc_file = builtins_bc_obj.getEmittedLlvmBc();
+    builtins64_bc_obj.root_module.omit_frame_pointer = true;
+    builtins64_bc_obj.root_module.stack_check = false;
+    builtins64_bc_obj.root_module.link_libc = false;
+    builtins64_bc_obj.use_llvm = true;
+    builtins64_bc_obj.bundle_compiler_rt = false;
+    _ = builtins64_bc_obj.getEmittedBin();
+    const builtins64_bc_file = builtins64_bc_obj.getEmittedLlvmBc();
+
+    const builtins64_core_bc_obj = b.addObject(.{
+        .name = "roc_builtins64_core_bc",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/builtins/static_lib_core.zig"),
+            .target = builtins64_target,
+            .optimize = .ReleaseFast,
+            .strip = true,
+            .pic = true,
+            .single_threaded = true,
+        }),
+    });
+    builtins64_core_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub64_core_bc", .{
+        .root_source_file = b.path("src/builtins/tracy_stub.zig"),
+    }));
+    builtins64_core_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io64_core_bc", .{
+        .root_source_file = b.path("src/shim_io.zig"),
+    }));
+    builtins64_core_bc_obj.root_module.omit_frame_pointer = true;
+    builtins64_core_bc_obj.root_module.stack_check = false;
+    builtins64_core_bc_obj.root_module.link_libc = false;
+    builtins64_core_bc_obj.use_llvm = true;
+    builtins64_core_bc_obj.bundle_compiler_rt = false;
+    _ = builtins64_core_bc_obj.getEmittedBin();
+    const builtins64_core_bc_file = builtins64_core_bc_obj.getEmittedLlvmBc();
+
+    const builtins32_target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .freestanding, .abi = .none });
+    const builtins32_bc_obj = b.addObject(.{
+        .name = "roc_builtins32_bc",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/builtins/static_lib.zig"),
+            .target = builtins32_target,
+            .optimize = .ReleaseFast,
+            .strip = true,
+            .pic = true,
+            .single_threaded = true,
+        }),
+    });
+    builtins32_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub32_bc", .{
+        .root_source_file = b.path("src/builtins/tracy_stub.zig"),
+    }));
+    builtins32_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io32_bc", .{
+        .root_source_file = b.path("src/shim_io.zig"),
+    }));
+    builtins32_bc_obj.root_module.omit_frame_pointer = true;
+    builtins32_bc_obj.root_module.stack_check = false;
+    builtins32_bc_obj.use_llvm = true;
+    builtins32_bc_obj.bundle_compiler_rt = false;
+    _ = builtins32_bc_obj.getEmittedBin();
+    const builtins32_bc_file = builtins32_bc_obj.getEmittedLlvmBc();
+
+    const builtins32_core_bc_obj = b.addObject(.{
+        .name = "roc_builtins32_core_bc",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/builtins/static_lib_core.zig"),
+            .target = builtins32_target,
+            .optimize = .ReleaseFast,
+            .strip = true,
+            .pic = true,
+            .single_threaded = true,
+        }),
+    });
+    builtins32_core_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub32_core_bc", .{
+        .root_source_file = b.path("src/builtins/tracy_stub.zig"),
+    }));
+    builtins32_core_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io32_core_bc", .{
+        .root_source_file = b.path("src/shim_io.zig"),
+    }));
+    builtins32_core_bc_obj.root_module.omit_frame_pointer = true;
+    builtins32_core_bc_obj.root_module.stack_check = false;
+    builtins32_core_bc_obj.use_llvm = true;
+    builtins32_core_bc_obj.bundle_compiler_rt = false;
+    _ = builtins32_core_bc_obj.getEmittedBin();
+    const builtins32_core_bc_file = builtins32_core_bc_obj.getEmittedLlvmBc();
+
+    const builtins64_extern_bc_obj = b.addObject(.{
+        .name = "roc_builtins64_extern_bc",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/builtins/extern_static_lib.zig"),
+            .target = builtins64_target,
+            .optimize = .ReleaseFast,
+            .strip = true,
+            .pic = true,
+            .single_threaded = true,
+        }),
+    });
+    builtins64_extern_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub64_extern_bc", .{
+        .root_source_file = b.path("src/builtins/tracy_stub.zig"),
+    }));
+    builtins64_extern_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io64_extern_bc", .{
+        .root_source_file = b.path("src/shim_io.zig"),
+    }));
+    builtins64_extern_bc_obj.root_module.omit_frame_pointer = true;
+    builtins64_extern_bc_obj.root_module.stack_check = false;
+    builtins64_extern_bc_obj.use_llvm = true;
+    builtins64_extern_bc_obj.bundle_compiler_rt = false;
+    _ = builtins64_extern_bc_obj.getEmittedBin();
+    const builtins64_extern_bc_file = builtins64_extern_bc_obj.getEmittedLlvmBc();
+
+    const builtins64_core_extern_bc_obj = b.addObject(.{
+        .name = "roc_builtins64_core_extern_bc",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/builtins/extern_static_lib_core.zig"),
+            .target = builtins64_target,
+            .optimize = .ReleaseFast,
+            .strip = true,
+            .pic = true,
+            .single_threaded = true,
+        }),
+    });
+    builtins64_core_extern_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub64_core_extern_bc", .{
+        .root_source_file = b.path("src/builtins/tracy_stub.zig"),
+    }));
+    builtins64_core_extern_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io64_core_extern_bc", .{
+        .root_source_file = b.path("src/shim_io.zig"),
+    }));
+    builtins64_core_extern_bc_obj.root_module.omit_frame_pointer = true;
+    builtins64_core_extern_bc_obj.root_module.stack_check = false;
+    builtins64_core_extern_bc_obj.use_llvm = true;
+    builtins64_core_extern_bc_obj.bundle_compiler_rt = false;
+    _ = builtins64_core_extern_bc_obj.getEmittedBin();
+    const builtins64_core_extern_bc_file = builtins64_core_extern_bc_obj.getEmittedLlvmBc();
+
+    const builtins32_extern_bc_obj = b.addObject(.{
+        .name = "roc_builtins32_extern_bc",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/builtins/extern_static_lib.zig"),
+            .target = builtins32_target,
+            .optimize = .ReleaseFast,
+            .strip = true,
+            .pic = true,
+            .single_threaded = true,
+        }),
+    });
+    builtins32_extern_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub32_extern_bc", .{
+        .root_source_file = b.path("src/builtins/tracy_stub.zig"),
+    }));
+    builtins32_extern_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io32_extern_bc", .{
+        .root_source_file = b.path("src/shim_io.zig"),
+    }));
+    builtins32_extern_bc_obj.root_module.omit_frame_pointer = true;
+    builtins32_extern_bc_obj.root_module.stack_check = false;
+    builtins32_extern_bc_obj.use_llvm = true;
+    builtins32_extern_bc_obj.bundle_compiler_rt = false;
+    _ = builtins32_extern_bc_obj.getEmittedBin();
+    const builtins32_extern_bc_file = builtins32_extern_bc_obj.getEmittedLlvmBc();
+
+    const builtins32_core_extern_bc_obj = b.addObject(.{
+        .name = "roc_builtins32_core_extern_bc",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/builtins/extern_static_lib_core.zig"),
+            .target = builtins32_target,
+            .optimize = .ReleaseFast,
+            .strip = true,
+            .pic = true,
+            .single_threaded = true,
+        }),
+    });
+    builtins32_core_extern_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub32_core_extern_bc", .{
+        .root_source_file = b.path("src/builtins/tracy_stub.zig"),
+    }));
+    builtins32_core_extern_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io32_core_extern_bc", .{
+        .root_source_file = b.path("src/shim_io.zig"),
+    }));
+    builtins32_core_extern_bc_obj.root_module.omit_frame_pointer = true;
+    builtins32_core_extern_bc_obj.root_module.stack_check = false;
+    builtins32_core_extern_bc_obj.use_llvm = true;
+    builtins32_core_extern_bc_obj.bundle_compiler_rt = false;
+    _ = builtins32_core_extern_bc_obj.getEmittedBin();
+    const builtins32_core_extern_bc_file = builtins32_core_extern_bc_obj.getEmittedLlvmBc();
 
     const llvm_embedded_files = b.addWriteFiles();
-    _ = llvm_embedded_files.addCopyFile(builtins_bc_file, "builtins.bc");
+    _ = llvm_embedded_files.addCopyFile(builtins32_bc_file, "builtins32.bc");
+    _ = llvm_embedded_files.addCopyFile(builtins64_bc_file, "builtins64.bc");
+    _ = llvm_embedded_files.addCopyFile(builtins32_core_bc_file, "builtins32_core.bc");
+    _ = llvm_embedded_files.addCopyFile(builtins64_core_bc_file, "builtins64_core.bc");
+    _ = llvm_embedded_files.addCopyFile(builtins32_extern_bc_file, "builtins32_extern.bc");
+    _ = llvm_embedded_files.addCopyFile(builtins64_extern_bc_file, "builtins64_extern.bc");
+    _ = llvm_embedded_files.addCopyFile(builtins32_core_extern_bc_file, "builtins32_core_extern.bc");
+    _ = llvm_embedded_files.addCopyFile(builtins64_core_extern_bc_file, "builtins64_core_extern.bc");
 
     const llvm_embedded_source: []const u8 =
-        \\pub const builtins_bc = @embedFile("builtins.bc");
+        \\pub const builtins32_bc = @embedFile("builtins32.bc");
+        \\pub const builtins64_bc = @embedFile("builtins64.bc");
+        \\pub const builtins32_core_bc = @embedFile("builtins32_core.bc");
+        \\pub const builtins64_core_bc = @embedFile("builtins64_core.bc");
+        \\pub const builtins32_extern_bc = @embedFile("builtins32_extern.bc");
+        \\pub const builtins64_extern_bc = @embedFile("builtins64_extern.bc");
+        \\pub const builtins32_core_extern_bc = @embedFile("builtins32_core_extern.bc");
+        \\pub const builtins64_core_extern_bc = @embedFile("builtins64_core_extern.bc");
+        \\pub const builtins_bc = builtins64_bc;
         \\
     ;
 
@@ -2699,6 +2894,11 @@ pub fn build(b: *std.Build) void {
         .root_source_file = llvm_embedded_files.add("llvm_embedded.zig", llvm_embedded_source),
     });
     roc_exe.step.dependOn(&llvm_embedded_files.step);
+    roc_exe.root_module.addImport("llvm_embedded", llvm_embedded_module);
+    if (release_exe_for_llvm_embedded) |exe| {
+        exe.step.dependOn(&llvm_embedded_files.step);
+        exe.root_module.addImport("llvm_embedded", llvm_embedded_module);
+    }
 
     roc_modules.eval.addAnonymousImport("llvm_compile", .{
         .root_source_file = b.path("src/llvm_compile/mod.zig"),
@@ -3168,6 +3368,31 @@ pub fn build(b: *std.Build) void {
         const install = b.addInstallArtifact(wasm_test_exe, .{});
         build_test_wasm_static_lib_runner_step.dependOn(&install.step);
 
+        const wasm_dce_check_exe = b.addExecutable(.{
+            .name = "wasm_dce_check",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("test/archive/archive_check.zig"),
+                .target = target,
+                .optimize = optimize,
+            }),
+        });
+        configureBackend(wasm_dce_check_exe, target);
+        const run_wasm_dce_check = b.addRunArtifact(wasm_dce_check_exe);
+        run_wasm_dce_check.addArgs(&.{
+            "test/wasm/app.wasm",
+            "--absent",
+            "roc_unused_host_canary_7f3a9c",
+            "--absent",
+            "roc_dead_private_helper_canary_41d2cb",
+            "--absent",
+            "ROC_DCE_WASM_DEAD_HOSTED_BLOB_0ac91d",
+            "--absent",
+            "ROC_DCE_WASM_DEAD_HELPER_BLOB_f25a77",
+            "ROC_DCE_WASM_SHARED_BLOB_31e82f",
+        });
+        run_wasm_dce_check.step.dependOn(&build_wasm_app.step);
+        run_test_wasm_static_lib_step.dependOn(&run_wasm_dce_check.step);
+
         const run_wasm_test = b.addRunArtifact(wasm_test_exe);
         if (run_args.len != 0) {
             run_wasm_test.addArgs(run_args);
@@ -3241,6 +3466,31 @@ pub fn build(b: *std.Build) void {
         run_dylib_test.addArg(dylib_output);
         run_dylib_test.step.dependOn(&build_dylib_app.step);
         run_test_dylib_step.dependOn(&run_dylib_test.step);
+
+        // Unused host code (the canary function and its constant) must be
+        // dead-code-eliminated from the linked library, while the used hosted
+        // function survives.
+        const dylib_dce_check_exe = b.addExecutable(.{
+            .name = "dylib_dce_check",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("test/archive/archive_check.zig"),
+                .target = target,
+                .optimize = optimize,
+            }),
+        });
+        configureBackend(dylib_dce_check_exe, target);
+        const run_dylib_dce_check = b.addRunArtifact(dylib_dce_check_exe);
+        run_dylib_dce_check.addArgs(&.{
+            dylib_output,
+            "--absent",
+            "ROC_DCE_CANARY_BLOB_7f3a9c",
+            "--absent",
+            "ROC_DCE_DEAD_HELPER_BLOB_28d0aa",
+            "ROC_DCE_SHARED_BLOB_93e2c1",
+            "roc_host_double",
+        });
+        run_dylib_dce_check.step.dependOn(&build_dylib_app.step);
+        run_test_dylib_step.dependOn(&run_dylib_dce_check.step);
     }
 
     // Build the static-archive test fixture with `roc build`, link a consumer
@@ -3274,6 +3524,8 @@ pub fn build(b: *std.Build) void {
         archive_consumer_exe.root_module.addObjectFile(b.path(archive_output));
         archive_consumer_exe.step.dependOn(&build_archive_app.step);
 
+        archive_consumer_exe.link_gc_sections = true;
+
         const run_archive_consumer = b.addRunArtifact(archive_consumer_exe);
         run_test_archive_step.dependOn(&run_archive_consumer.step);
 
@@ -3297,8 +3549,20 @@ pub fn build(b: *std.Build) void {
         });
         configureBackend(archive_check_exe, target);
 
+        const run_native_archive_dce_check = b.addRunArtifact(archive_check_exe);
+        run_native_archive_dce_check.addFileArg(archive_consumer_exe.getEmittedBin());
+        run_native_archive_dce_check.addArgs(&.{
+            "--absent",
+            "ROC_DCE_CANARY_BLOB_7f3a9c",
+            "--absent",
+            "ROC_DCE_DEAD_HELPER_BLOB_28d0aa",
+            "ROC_DCE_SHARED_BLOB_93e2c1",
+        });
+        run_native_archive_dce_check.step.dependOn(&archive_consumer_exe.step);
+        run_test_archive_step.dependOn(&run_native_archive_dce_check.step);
+
         const run_wasm_archive_check = b.addRunArtifact(archive_check_exe);
-        run_wasm_archive_check.addArgs(&.{ "test/archive/app-wasm32.a", "roc_builtins" });
+        run_wasm_archive_check.addArgs(&.{ "--archive", "test/archive/app-wasm32.a", "roc_builtins" });
         run_wasm_archive_check.step.dependOn(&build_wasm_archive_app.step);
         run_test_archive_step.dependOn(&run_wasm_archive_check.step);
     }
@@ -4419,6 +4683,28 @@ fn addMainExe(
     builtins_obj.bundle_compiler_rt = false;
     configureBackend(builtins_obj, target);
 
+    // Extern-symbol-mode builtins object: same builtins, but host operations
+    // go through linker-resolved symbols (the symbol ABI) instead of RocOps.
+    const builtins_extern_obj = b.addObject(.{
+        .name = "roc_builtins_extern",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/builtins/extern_static_lib.zig"),
+            .target = target,
+            .optimize = optimize,
+            .strip = strip,
+            .omit_frame_pointer = omit_frame_pointer,
+            .pic = true,
+        }),
+    });
+    builtins_extern_obj.root_module.addImport("tracy", b.addModule("tracy_stub_extern", .{
+        .root_source_file = b.path("src/builtins/tracy_stub.zig"),
+    }));
+    builtins_extern_obj.root_module.addImport("shim_io", b.addModule("shim_io_extern", .{
+        .root_source_file = b.path("src/shim_io.zig"),
+    }));
+    builtins_extern_obj.bundle_compiler_rt = false;
+    configureBackend(builtins_extern_obj, target);
+
     // Create shim static library at build time - fully static without libc
     //
     // NOTE we do NOT link libC here to avoid dynamic dependency on libC
@@ -4463,6 +4749,11 @@ fn addMainExe(
     const host_builtins_filename = if (target.result.os.tag == .windows) "roc_builtins.obj" else "roc_builtins.o";
     copy_builtins.addCopyFileToSource(builtins_obj.getEmittedBin(), b.pathJoin(&.{ "src/cli", host_builtins_filename }));
     exe.step.dependOn(&copy_builtins.step);
+
+    const copy_builtins_extern = b.addUpdateSourceFiles();
+    const host_builtins_extern_filename = if (target.result.os.tag == .windows) "roc_builtins_extern.obj" else "roc_builtins_extern.o";
+    copy_builtins_extern.addCopyFileToSource(builtins_extern_obj.getEmittedBin(), b.pathJoin(&.{ "src/cli", host_builtins_extern_filename }));
+    exe.step.dependOn(&copy_builtins_extern.step);
 
     // Add tracy support (required by parse/can/check modules)
     add_tracy(b, roc_modules.build_options, shim_lib, b.graph.host, false, flag_enable_tracy);
@@ -4518,6 +4809,37 @@ fn addMainExe(
             b.pathJoin(&.{ "src/cli/targets", cross_target.name, builtins_ext }),
         );
         exe.step.dependOn(&copy_cross_builtins.step);
+
+        // Extern-symbol-mode builtins object for this target (the symbol ABI).
+        const cross_builtins_extern_obj = b.addObject(.{
+            .name = b.fmt("roc_builtins_extern_{s}", .{cross_target.name}),
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/builtins/extern_static_lib.zig"),
+                .target = cross_resolved_target,
+                .optimize = optimize,
+                .strip = strip,
+                .omit_frame_pointer = omit_frame_pointer,
+                .pic = true,
+            }),
+        });
+        cross_builtins_extern_obj.root_module.addImport("tracy", b.addModule(
+            b.fmt("tracy_stub_extern_{s}", .{cross_target.name}),
+            .{ .root_source_file = b.path("src/builtins/tracy_stub.zig") },
+        ));
+        cross_builtins_extern_obj.root_module.addImport("shim_io", b.addModule(
+            b.fmt("shim_io_extern_{s}", .{cross_target.name}),
+            .{ .root_source_file = b.path("src/shim_io.zig") },
+        ));
+        cross_builtins_extern_obj.bundle_compiler_rt = false;
+        configureBackend(cross_builtins_extern_obj, cross_resolved_target);
+
+        const builtins_extern_ext = if (cross_target.query.os_tag == .windows) "roc_builtins_extern.obj" else "roc_builtins_extern.o";
+        const copy_cross_builtins_extern = b.addUpdateSourceFiles();
+        copy_cross_builtins_extern.addCopyFileToSource(
+            cross_builtins_extern_obj.getEmittedBin(),
+            b.pathJoin(&.{ "src/cli/targets", cross_target.name, builtins_extern_ext }),
+        );
+        exe.step.dependOn(&copy_cross_builtins_extern.step);
     }
 
     const config = b.addOptions();

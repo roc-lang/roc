@@ -16,6 +16,7 @@ const lir = @import("lir");
 const LIR = lir.LIR;
 const LirStore = lir.LirStore;
 const lir_value = @import("value.zig");
+const host_trampoline = @import("host_trampoline.zig");
 const builtins = @import("builtins");
 const sljmp = @import("sljmp");
 const build_options = @import("build_options");
@@ -72,12 +73,6 @@ const dev_wrappers = builtins.dev_wrappers;
 const RocStr = builtins.str.RocStr;
 const RocList = builtins.list.RocList;
 const RocOps = builtins.host_abi.RocOps;
-const RocAlloc = builtins.host_abi.RocAlloc;
-const RocDealloc = builtins.host_abi.RocDealloc;
-const RocRealloc = builtins.host_abi.RocRealloc;
-const RocDbg = builtins.host_abi.RocDbg;
-const RocExpectFailed = builtins.host_abi.RocExpectFailed;
-const RocCrashed = builtins.host_abi.RocCrashed;
 const UpdateMode = builtins.utils.UpdateMode;
 const JmpBuf = sljmp.JmpBuf;
 const setjmp = sljmp.setjmp;
@@ -95,6 +90,8 @@ const InterpreterRocEnv = struct {
     crash_message: ?[]const u8 = null,
     runtime_error_message: ?[]const u8 = null,
     expect_message: ?[]const u8 = null,
+    expect_err_message: ?[]const u8 = null,
+    expect_err_region: ?base.Region = null,
     jmp_buf: JmpBuf = undefined,
     active_jmp_buf: ?*JmpBuf = null,
     caller_roc_ops: *RocOps,
@@ -109,6 +106,7 @@ const InterpreterRocEnv = struct {
     fn deinit(self: *InterpreterRocEnv) void {
         if (self.crash_message) |msg| self.allocator.free(msg);
         if (self.expect_message) |msg| self.allocator.free(msg);
+        if (self.expect_err_message) |msg| self.allocator.free(msg);
     }
 
     /// Reset the static buffer — call once at the start of a full evaluation.
@@ -119,6 +117,9 @@ const InterpreterRocEnv = struct {
         self.runtime_error_message = null;
         if (self.expect_message) |msg| self.allocator.free(msg);
         self.expect_message = null;
+        if (self.expect_err_message) |msg| self.allocator.free(msg);
+        self.expect_err_message = null;
+        self.expect_err_region = null;
     }
 
     /// Reset just the crash state before calling a builtin that might crash.
@@ -148,17 +149,13 @@ const InterpreterRocEnv = struct {
 
     fn reportCrash(self: *InterpreterRocEnv, msg: []const u8) void {
         const caller_roc_ops = self.currentRocOps();
-        const roc_crashed = RocCrashed{
-            .utf8_bytes = @constCast(msg.ptr),
-            .len = msg.len,
-        };
-        caller_roc_ops.roc_crashed(&roc_crashed, caller_roc_ops.env);
+        caller_roc_ops.roc_crashed(caller_roc_ops, msg.ptr, msg.len);
         self.recordCrash(msg);
     }
 
-    /// The host allocators signal OOM by writing a null `answer` (see
-    /// `host_abi.RocAlloc`). Turn that into a Roc crash that unwinds to the eval
-    /// boundary via the active jump buffer, instead of letting it abort.
+    /// The host allocators signal OOM by returning a null pointer (see
+    /// `host_abi.RocOps.roc_alloc`). Turn that into a Roc crash that unwinds to
+    /// the eval boundary via the active jump buffer, instead of letting it abort.
     fn crashAllocationFailed(self: *InterpreterRocEnv) noreturn {
         self.reportCrash("ran out of memory");
         const active_jmp_buf = self.active_jmp_buf orelse {
@@ -176,49 +173,49 @@ const InterpreterRocEnv = struct {
         longjmp(active_jmp_buf, 1);
     }
 
-    fn rocAllocFn(roc_alloc: *RocAlloc, env: *anyopaque) callconv(.c) void {
-        const self: *InterpreterRocEnv = @ptrCast(@alignCast(env));
+    fn rocAllocFn(ops: *RocOps, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+        const self: *InterpreterRocEnv = @ptrCast(@alignCast(ops.env));
         const caller_roc_ops = self.currentRocOps();
-        caller_roc_ops.roc_alloc(roc_alloc, caller_roc_ops.env);
-        const ptr = roc_alloc.answer orelse self.crashAllocationFailed();
-        trace_rc.log("alloc(fwd): ptr=0x{x} size={d} align={d}", .{ @intFromPtr(ptr), roc_alloc.length, roc_alloc.alignment });
+        const ptr = caller_roc_ops.roc_alloc(caller_roc_ops, length, alignment) orelse self.crashAllocationFailed();
+        trace_rc.log("alloc(fwd): ptr=0x{x} size={d} align={d}", .{ @intFromPtr(ptr), length, alignment });
+        return ptr;
     }
 
-    fn rocDeallocFn(roc_dealloc: *RocDealloc, env: *anyopaque) callconv(.c) void {
-        const self: *InterpreterRocEnv = @ptrCast(@alignCast(env));
-        trace_rc.log("dealloc: ptr=0x{x} align={d}", .{ @intFromPtr(roc_dealloc.ptr), roc_dealloc.alignment });
+    fn rocDeallocFn(ops: *RocOps, ptr: *anyopaque, alignment: usize) callconv(.c) void {
+        const self: *InterpreterRocEnv = @ptrCast(@alignCast(ops.env));
+        trace_rc.log("dealloc: ptr=0x{x} align={d}", .{ @intFromPtr(ptr), alignment });
         const caller_roc_ops = self.currentRocOps();
-        caller_roc_ops.roc_dealloc(roc_dealloc, caller_roc_ops.env);
+        caller_roc_ops.roc_dealloc(caller_roc_ops, ptr, alignment);
     }
 
-    fn rocReallocFn(roc_realloc: *RocRealloc, env: *anyopaque) callconv(.c) void {
-        const self: *InterpreterRocEnv = @ptrCast(@alignCast(env));
+    fn rocReallocFn(ops: *RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+        const self: *InterpreterRocEnv = @ptrCast(@alignCast(ops.env));
         const caller_roc_ops = self.currentRocOps();
-        const old_ptr = roc_realloc.answer.?;
-        caller_roc_ops.roc_realloc(roc_realloc, caller_roc_ops.env);
-        const new_ptr = roc_realloc.answer orelse self.crashAllocationFailed();
-        trace_rc.log("realloc(fwd): old=0x{x} new=0x{x} size={d}", .{ @intFromPtr(old_ptr), @intFromPtr(new_ptr), roc_realloc.new_length });
+        const old_ptr = ptr;
+        const new_ptr = caller_roc_ops.roc_realloc(caller_roc_ops, ptr, new_length, alignment) orelse self.crashAllocationFailed();
+        trace_rc.log("realloc(fwd): old=0x{x} new=0x{x} size={d}", .{ @intFromPtr(old_ptr), @intFromPtr(new_ptr), new_length });
+        return new_ptr;
     }
 
-    fn rocDbgFn(roc_dbg: *const RocDbg, env: *anyopaque) callconv(.c) void {
-        const self: *InterpreterRocEnv = @ptrCast(@alignCast(env));
+    fn rocDbgFn(ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
+        const self: *InterpreterRocEnv = @ptrCast(@alignCast(ops.env));
         const caller_roc_ops = self.currentRocOps();
-        caller_roc_ops.roc_dbg(roc_dbg, caller_roc_ops.env);
+        caller_roc_ops.roc_dbg(caller_roc_ops, bytes, len);
     }
 
-    fn rocExpectFailedFn(expect_args: *const RocExpectFailed, env: *anyopaque) callconv(.c) void {
-        const self: *InterpreterRocEnv = @ptrCast(@alignCast(env));
+    fn rocExpectFailedFn(ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
+        const self: *InterpreterRocEnv = @ptrCast(@alignCast(ops.env));
         const caller_roc_ops = self.currentRocOps();
-        caller_roc_ops.roc_expect_failed(expect_args, caller_roc_ops.env);
-        const source = expect_args.utf8_bytes[0..expect_args.len];
+        caller_roc_ops.roc_expect_failed(caller_roc_ops, bytes, len);
+        const source = bytes[0..len];
         if (self.expect_message == null) {
             self.expect_message = self.allocator.dupe(u8, source) catch null;
         }
     }
 
-    fn rocCrashedFn(roc_crashed: *const RocCrashed, env: *anyopaque) callconv(.c) void {
-        const self: *InterpreterRocEnv = @ptrCast(@alignCast(env));
-        const msg = roc_crashed.utf8_bytes[0..roc_crashed.len];
+    fn rocCrashedFn(ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
+        const self: *InterpreterRocEnv = @ptrCast(@alignCast(ops.env));
+        const msg = bytes[0..len];
         self.reportCrash(msg);
         const active_jmp_buf = self.active_jmp_buf orelse {
             debugPrint(
@@ -289,6 +286,7 @@ pub const Interpreter = struct {
         RuntimeError,
         DivisionByZero,
         Crash,
+        ExpectErr,
     };
 
     const CrashBoundary = struct {
@@ -585,6 +583,18 @@ pub const Interpreter = struct {
 
     pub fn getExpectMessage(self: *const LirInterpreter) ?[]const u8 {
         return self.roc_env.expect_message;
+    }
+
+    /// The failure message from a `?` operator that evaluated an Err inside a
+    /// top-level expect, if the last evaluation failed that way.
+    /// Owned by the interpreter and valid until the next eval or deinit.
+    pub fn getExpectErrMessage(self: *const LirInterpreter) ?[]const u8 {
+        return self.roc_env.expect_err_message;
+    }
+
+    /// The source region of the `?` whose Err failed the expect.
+    pub fn getExpectErrRegion(self: *const LirInterpreter) ?base.Region {
+        return self.roc_env.expect_err_region;
     }
 
     pub fn getFailedCallStack(self: *const LirInterpreter) []const LirProcSpecId {
@@ -1370,6 +1380,7 @@ pub const Interpreter = struct {
                 .jump,
                 .ret,
                 .crash,
+                .expect_err,
                 .loop_continue,
                 .loop_break,
                 => break,
@@ -1857,6 +1868,16 @@ pub const Interpreter = struct {
                 },
                 .ret => |ret_stmt| return .{ .returned = ret_stmt.value },
                 .crash => |crash_stmt| return self.triggerCrash(self.store.getString(crash_stmt.msg)),
+                .expect_err => |expect_err_stmt| {
+                    const message_value = try self.getLocalChecked(frame, expect_err_stmt.message);
+                    const message = self.readRocStr(message_value);
+                    if (self.roc_env.expect_err_message) |old| self.roc_env.allocator.free(old);
+                    self.roc_env.expect_err_message = self.roc_env.allocator.dupe(u8, message) catch null;
+                    self.roc_env.expect_err_region = expect_err_stmt.region;
+                    // The statement consumes the message's ownership unit.
+                    self.dropValue(message_value, self.store.getLocal(expect_err_stmt.message).layout_idx);
+                    return error.ExpectErr;
+                },
             }
         }
     }
@@ -2111,6 +2132,12 @@ pub const Interpreter = struct {
                     debugPrint("    {d}: crash msg={d}\n", .{
                         @intFromEnum(stmt_id),
                         @intFromEnum(crash.msg),
+                    });
+                },
+                .expect_err => |expect_err_stmt| {
+                    debugPrint("    {d}: expect_err message={d}\n", .{
+                        @intFromEnum(stmt_id),
+                        @intFromEnum(expect_err_stmt.message),
                     });
                 },
             }
@@ -2427,6 +2454,9 @@ pub const Interpreter = struct {
             error.RuntimeError => ops.crash("LIR/interpreter erased callable trampoline hit runtime error"),
             error.DivisionByZero => ops.crash("LIR/interpreter erased callable trampoline hit division by zero"),
             error.Crash => ops.crash("LIR/interpreter erased callable trampoline hit Roc crash"),
+            // expect_err statements only occur in top-level expect test
+            // roots, never in callable bodies.
+            error.ExpectErr => unreachable,
         };
     }
 
@@ -2913,26 +2943,28 @@ pub const Interpreter = struct {
         arg_layouts: []const layout_mod.Idx,
         ret_layout: layout_mod.Idx,
     ) Error!Value {
+        // Pack arguments into a buffer in Roc layout order, recording each argument's offset
+        // so the C-ABI trampoline can scatter them into registers.
         var total_args_size: usize = 0;
         var args_alignment: layout_mod.RocAlignment = .@"1";
-        for (arg_layouts) |arg_layout| {
+        const arg_offsets = try self.allocator.alloc(u32, arg_layouts.len);
+        defer self.allocator.free(arg_offsets);
+        for (arg_layouts, arg_offsets) |arg_layout, *arg_offset| {
             const sa = self.helper.sizeAlignOf(arg_layout);
             args_alignment = maxRocAlignment(args_alignment, sa.alignment);
             total_args_size = std.mem.alignForward(usize, total_args_size, sa.alignment.toByteUnits());
+            arg_offset.* = @intCast(total_args_size);
             total_args_size += sa.size;
         }
 
         const args_buf_size = @max(total_args_size, 8);
         const args_buf = try self.allocAlignedByteSlice(args_buf_size, args_alignment);
 
-        var offset: usize = 0;
-        for (args, arg_layouts) |arg, arg_layout| {
+        for (args, arg_layouts, arg_offsets) |arg, arg_layout, arg_offset| {
             const sa = self.helper.sizeAlignOf(arg_layout);
-            offset = std.mem.alignForward(usize, offset, sa.alignment.toByteUnits());
             if (sa.size > 0 and !arg.isZst()) {
-                @memcpy(args_buf[offset .. offset + sa.size], arg.readBytes(sa.size));
+                @memcpy(args_buf[arg_offset .. arg_offset + sa.size], arg.readBytes(sa.size));
             }
-            offset += sa.size;
         }
 
         const ret_sa = self.helper.sizeAlignOf(ret_layout);
@@ -2951,8 +2983,24 @@ pub const Interpreter = struct {
         }
 
         const hosted_fn = self.roc_ops.hosted_fns.fns[hosted.dispatch_index];
-        const ops_for_host = self.currentRocOps();
-        hosted_fn(@ptrCast(ops_for_host), @ptrCast(ret_buf.ptr), @ptrCast(args_buf.ptr));
+
+        // Call the hosted function with the platform C ABI via the fixed register-image
+        // trampoline (no runtime code generation).
+        var arena_state = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena_state.deinit();
+        host_trampoline.call(
+            self.layout_store,
+            arena_state.allocator(),
+            @ptrCast(hosted_fn),
+            arg_layouts,
+            ret_layout,
+            args_buf.ptr,
+            arg_offsets,
+            ret_buf.ptr,
+        ) catch |err| return self.invariantFailedError(
+            "hosted call C-ABI lowering failed for proc {d}: {s}",
+            .{ @intFromEnum(proc_id), @errorName(err) },
+        );
 
         if (self.roc_env.crashed) return error.Crash;
         if (ret_sa.size == 0) return Value.zst;
@@ -4314,6 +4362,38 @@ pub const Interpreter = struct {
                     &self.roc_ops,
                 );
                 break :blk self.rocListToValue(result, ll.ret_layout);
+            },
+            .list_map_can_reuse => blk: {
+                const rl = self.valueToRocListForLayout(args[0], arg_layout);
+                const val = try self.alloc(ll.ret_layout);
+                val.write(u8, if (builtins.list.listMapCanReuse(rl, &self.roc_ops)) 1 else 0);
+                break :blk val;
+            },
+            .list_map_cast_unsafe => blk: {
+                const rl = self.valueToRocListForLayout(args[0], arg_layout);
+                break :blk self.rocListToValue(rl, ll.ret_layout);
+            },
+            .list_map_extract_unsafe => blk: {
+                // Same data movement as list_get_unsafe; ownership of the
+                // element transfers out of the buffer, which is RC metadata
+                // rather than runtime behavior.
+                const rl = self.valueToRocListForLayout(args[0], arg_layout);
+                const idx = args[1].read(u64);
+                const info = self.listElemInfo(arg_layout);
+                if (info.width == 0) break :blk try self.alloc(ll.ret_layout);
+                const elem_ptr = rl.bytes.? + @as(usize, @intCast(idx)) * info.width;
+                const val = try self.alloc(ll.ret_layout);
+                @memcpy(val.ptr[0..info.width], elem_ptr[0..info.width]);
+                break :blk val;
+            },
+            .list_map_write_unsafe => blk: {
+                const rl = self.valueToRocListForLayout(args[0], arg_layout);
+                const idx = args[1].read(u64);
+                const info = self.listElemInfo(arg_layout);
+                if (info.width == 0) break :blk self.rocListToValue(rl, ll.ret_layout);
+                const elem_ptr = rl.bytes.? + @as(usize, @intCast(idx)) * info.width;
+                @memcpy(elem_ptr[0..info.width], args[2].ptr[0..info.width]);
+                break :blk self.rocListToValue(rl, ll.ret_layout);
             },
             .list_sublist => blk: {
                 if (args.len != 2 or ll.arg_layouts.len != 2) {

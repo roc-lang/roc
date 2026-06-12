@@ -155,7 +155,7 @@ result = duplicate(["a", "b", "c"])
 					(ty-rigid-var-lookup (ty-rigid-var (name "a")))))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-call (constraint-fn-var 124)
+		(e-call (constraint-fn-var 154)
 			(e-lookup-local
 				(p-assign (ident "duplicate")))
 			(e-list

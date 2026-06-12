@@ -988,7 +988,7 @@ pub const BuildEnv = struct {
     const PackageKind = enum { app, package, platform, module, hosted, type_module, default_app };
 
     /// A mapping from a Roc identifier to an FFI symbol name, extracted from
-    /// a platform's `provides { roc_ident: "ffi_symbol" }` clause.
+    /// a platform's `provides { "roc_ffi_symbol": roc_ident }` clause.
     pub const ProvidesEntry = struct {
         roc_ident: []const u8,
         ffi_symbol: []const u8,
@@ -1332,30 +1332,11 @@ pub const BuildEnv = struct {
                     try info.exposes.append(self.gpa, try self.gpa.dupe(u8, item_name));
                 }
 
-                // Extract provides entries (roc_ident -> ffi_symbol mapping)
-                const provides_coll = ast.store.getCollection(p.provides);
-                const provides_fields = ast.store.recordFieldSlice(.{ .span = provides_coll.span });
-                for (provides_fields) |field_idx| {
-                    const field = ast.store.getRecordField(field_idx);
-                    const roc_ident = ast.resolve(field.name);
-                    const ffi_symbol = if (field.value) |value_idx| blk: {
-                        const value_expr = ast.store.getExpr(value_idx);
-                        switch (value_expr) {
-                            .string => |str_like| {
-                                const parts = ast.store.exprSlice(str_like.parts);
-                                if (parts.len > 0) {
-                                    const first_part = ast.store.getExpr(parts[0]);
-                                    switch (first_part) {
-                                        .string_part => |sp| break :blk ast.resolve(sp.token),
-                                        else => continue,
-                                    }
-                                }
-                                continue;
-                            },
-                            .string_part => |str_part| break :blk ast.resolve(str_part.token),
-                            else => continue,
-                        }
-                    } else continue;
+                // Extract provides entries (roc_ident -> linker symbol mapping)
+                for (ast.store.symbolMapEntrySlice(p.provides)) |entry_idx| {
+                    const entry = ast.store.getSymbolMapEntry(entry_idx);
+                    const roc_ident = ast.resolve(entry.func);
+                    const ffi_symbol = ast.resolve(entry.symbol);
                     try info.provides_entries.append(self.gpa, .{
                         .roc_ident = try self.gpa.dupe(u8, roc_ident),
                         .ffi_symbol = try self.gpa.dupe(u8, ffi_symbol),

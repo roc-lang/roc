@@ -26,25 +26,25 @@ const CoreCtx = @import("ctx").CoreCtx;
 // Allocator callbacks for the test's RocOps. The simple_success.roc app's
 // `main!` is empty, so these are unlikely to fire — but they must be valid
 // function pointers.
-fn testRocAlloc(args: *host_abi.RocAlloc, _: *anyopaque) callconv(.c) void {
-    const align_enum = std.mem.Alignment.fromByteUnits(@max(args.alignment, @alignOf(usize)));
-    const raw = base.defaultGpa().rawAlloc(args.length, align_enum, @returnAddress()) orelse {
+fn testRocAlloc(_: *host_abi.RocOps, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+    const align_enum = std.mem.Alignment.fromByteUnits(@max(alignment, @alignOf(usize)));
+    const raw = base.defaultGpa().rawAlloc(length, align_enum, @returnAddress()) orelse {
         std.debug.panic("embedding smoke test roc_alloc OOM", .{});
     };
-    args.answer = @ptrCast(raw);
+    return @ptrCast(raw);
 }
 
-fn testRocDealloc(_: *host_abi.RocDealloc, _: *anyopaque) callconv(.c) void {
+fn testRocDealloc(_: *host_abi.RocOps, _: *anyopaque, _: usize) callconv(.c) void {
     // No-op for the smoke test — pages are reclaimed at exit.
 }
 
-fn testRocRealloc(_: *host_abi.RocRealloc, _: *anyopaque) callconv(.c) void {
+fn testRocRealloc(_: *host_abi.RocOps, _: *anyopaque, _: usize, _: usize) callconv(.c) ?*anyopaque {
     std.debug.panic("embedding smoke test roc_realloc unexpected", .{});
 }
 
-fn testRocDbg(_: *const host_abi.RocDbg, _: *anyopaque) callconv(.c) void {}
-fn testRocExpectFailed(_: *const host_abi.RocExpectFailed, _: *anyopaque) callconv(.c) void {}
-fn testRocCrashed(_: *const host_abi.RocCrashed, _: *anyopaque) callconv(.c) void {
+fn testRocDbg(_: *host_abi.RocOps, _: [*]const u8, _: usize) callconv(.c) void {}
+fn testRocExpectFailed(_: *host_abi.RocOps, _: [*]const u8, _: usize) callconv(.c) void {}
+fn testRocCrashed(_: *host_abi.RocOps, _: [*]const u8, _: usize) callconv(.c) void {
     std.debug.panic("embedding smoke test received roc_crashed", .{});
 }
 
