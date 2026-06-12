@@ -94,6 +94,14 @@ pub const LinkConfig = struct {
     /// Symbols that must remain live even under section garbage collection.
     force_undefined_symbols: []const []const u8 = &.{},
 
+    /// Host-declared symbols to force-include and place in the shared library's
+    /// export table. Only consulted for shared-library output. Generalizes the
+    /// wasm `--export` model to native formats so a Roc-built shared library
+    /// exports the host's public API on every target rather than relying on the
+    /// platform linker's implicit default-visibility auto-export (which COFF
+    /// does not do).
+    export_symbols: []const []const u8 = &.{},
+
     /// Whether to allow LLD to exit early on errors
     can_exit_early: bool = false,
 
@@ -151,6 +159,40 @@ fn appendForceUndefinedSymbol(
         },
         else => {
             const undefined_arg = std.fmt.allocPrint(ctx.arena, "--undefined={s}", .{symbol}) catch return LinkError.OutOfMemory;
+            try args.append(undefined_arg);
+        },
+    }
+}
+
+/// Emit the flags that both force-include `symbol` and place it in the shared
+/// library's export table, in each linker's spelling. Force-inclusion matters
+/// because an outward export is typically unreferenced by the rest of the link
+/// (the loader resolves it at runtime), so lazy archive members holding it
+/// would otherwise be dropped.
+fn appendExportSymbol(
+    ctx: *CliCtx,
+    args: *std.array_list.Managed([]const u8),
+    target_os: std.Target.Os.Tag,
+    symbol: []const u8,
+) LinkError!void {
+    switch (target_os) {
+        .macos => {
+            const prefixed = std.fmt.allocPrint(ctx.arena, "_{s}", .{symbol}) catch return LinkError.OutOfMemory;
+            try args.append("-exported_symbol");
+            try args.append(prefixed);
+            try args.append("-u");
+            try args.append(prefixed);
+        },
+        .windows => {
+            // `/export:` adds the symbol to the export table and as an undefined,
+            // which pulls its archive member and roots it against `/opt:ref`.
+            const export_arg = std.fmt.allocPrint(ctx.arena, "/export:{s}", .{symbol}) catch return LinkError.OutOfMemory;
+            try args.append(export_arg);
+        },
+        else => {
+            const export_arg = std.fmt.allocPrint(ctx.arena, "--export-dynamic-symbol={s}", .{symbol}) catch return LinkError.OutOfMemory;
+            const undefined_arg = std.fmt.allocPrint(ctx.arena, "--undefined={s}", .{symbol}) catch return LinkError.OutOfMemory;
+            try args.append(export_arg);
             try args.append(undefined_arg);
         },
     }
@@ -638,6 +680,14 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
         try appendForceUndefinedSymbol(ctx, &args, target_os, symbol);
     }
 
+    // Force-include and export the host's declared exports from a shared
+    // library. (wasm shared output uses --export via config.wasm_exports.)
+    if (is_shared_lib and config.target_format != .wasm) {
+        for (config.export_symbols) |symbol| {
+            try appendExportSymbol(ctx, &args, target_os, symbol);
+        }
+    }
+
     // For WASM targets, wrap platform files in --whole-archive to include all symbols
     // This ensures host exports (init, handleEvent, update) aren't stripped even when
     // not referenced by other code
@@ -906,6 +956,72 @@ test "force undefined symbols use target linker spelling" {
     };
     const linux_args = try buildLinkArgs(&ctx, linux_config);
     _ = findArg(linux_args.items, "--undefined=roc__answer") orelse return error.MissingForceUndefined;
+}
+
+test "shared library exports use target linker spelling" {
+    var arena_instance = collections.SingleThreadArena.init(std.testing.allocator);
+    defer arena_instance.deinit();
+
+    var io = Io.create(std.testing.io);
+    var ctx = CliCtx.init(std.testing.allocator, arena_instance.allocator(), &io, .build);
+    ctx.initIo();
+    defer ctx.deinit();
+
+    // Windows: /export: both exports and force-includes.
+    const win_config = LinkConfig{
+        .target_format = .coff,
+        .target_os = .windows,
+        .target_arch = .x86_64,
+        .output_path = "test_output.dll",
+        .output_kind = .shared_lib,
+        .object_files = &.{"app.o"},
+        .export_symbols = &.{"roc_run_app"},
+    };
+    const win_args = try buildLinkArgs(&ctx, win_config);
+    _ = findArg(win_args.items, "/export:roc_run_app") orelse return error.MissingExport;
+
+    // macOS: -exported_symbol + -u, both underscore-prefixed.
+    const mac_config = LinkConfig{
+        .target_format = .macho,
+        .target_os = .macos,
+        .target_arch = .x86_64,
+        .output_path = "test_output.dylib",
+        .output_kind = .shared_lib,
+        .object_files = &.{"app.o"},
+        .export_symbols = &.{"roc_run_app"},
+    };
+    const mac_args = try buildLinkArgs(&ctx, mac_config);
+    const mac_exp_idx = findArg(mac_args.items, "-exported_symbol") orelse return error.MissingExport;
+    try std.testing.expect(mac_exp_idx + 1 < mac_args.items.len);
+    try std.testing.expectEqualStrings("_roc_run_app", mac_args.items[mac_exp_idx + 1]);
+
+    // ELF: --export-dynamic-symbol + --undefined to root and pull the member.
+    const linux_config = LinkConfig{
+        .target_format = .elf,
+        .target_abi = .musl,
+        .target_os = .linux,
+        .target_arch = .x86_64,
+        .output_path = "test_output.so",
+        .output_kind = .shared_lib,
+        .object_files = &.{"app.o"},
+        .export_symbols = &.{"roc_run_app"},
+    };
+    const linux_args = try buildLinkArgs(&ctx, linux_config);
+    _ = findArg(linux_args.items, "--export-dynamic-symbol=roc_run_app") orelse return error.MissingExport;
+    _ = findArg(linux_args.items, "--undefined=roc_run_app") orelse return error.MissingExport;
+
+    // Exports must not leak into a non-shared (exe) link.
+    const exe_config = LinkConfig{
+        .target_format = .coff,
+        .target_os = .windows,
+        .target_arch = .x86_64,
+        .output_path = "test_output.exe",
+        .output_kind = .exe,
+        .object_files = &.{"app.o"},
+        .export_symbols = &.{"roc_run_app"},
+    };
+    const exe_args = try buildLinkArgs(&ctx, exe_config);
+    try std.testing.expectEqual(@as(?usize, null), findArg(exe_args.items, "/export:roc_run_app"));
 }
 
 test "macOS platform archives use scoped force_load" {

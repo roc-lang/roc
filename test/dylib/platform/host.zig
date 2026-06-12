@@ -5,6 +5,7 @@
 //! drives the Roc app through the platform ABI.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const shim_io = @import("shim_io");
 
 pub const std_options_elf_debug_info_search_paths = shim_io.elfDebugInfoSearchPaths;
@@ -135,4 +136,20 @@ extern fn roc_main(n: i64) callconv(.c) i64;
 /// return its answer.
 export fn roc_run_app(n: i64) callconv(.c) i64 {
     return roc_main(n);
+}
+
+// On ELF/Mach-O, `export fn`'s default visibility is enough for the symbol to
+// land in the shared library's export table. COFF has no such notion: a static
+// library built from `export fn` carries no `dllexport` intent, so the symbol
+// would be dropped from the DLL. Emit the `.drectve /EXPORT:` directive that
+// `__declspec(dllexport)` would — `roc build` reads it back out of the host and
+// forwards `/export:roc_run_app` to the linker. Any host that exposes a C API
+// from a Windows shared library must declare its exports this way.
+comptime {
+    if (builtin.os.tag == .windows) {
+        asm (
+            \\.section .drectve,"yn"
+            \\.ascii " -export:roc_run_app"
+        );
+    }
 }

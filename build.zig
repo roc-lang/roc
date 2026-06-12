@@ -3385,8 +3385,11 @@ pub fn build(b: *std.Build) void {
         run_test_dylib_step.dependOn(&run_dylib_test.step);
 
         // Unused host code (the canary function and its constant) must be
-        // dead-code-eliminated from the linked library, while the used hosted
-        // function survives.
+        // dead-code-eliminated from the linked library. This is a byte-scan for
+        // the canary's data blob. (That the *used* hosted function survives is
+        // proven functionally by the loader's roc_run_app(20)==121, and that it
+        // is not over-exported is checked by the loader's negative lookup —
+        // neither can be a byte-scan, since PE retains no internal symbol names.)
         const dylib_dce_check_exe = b.addExecutable(.{
             .name = "dylib_dce_check",
             .root_module = b.createModule(.{
@@ -3397,7 +3400,7 @@ pub fn build(b: *std.Build) void {
         });
         configureBackend(dylib_dce_check_exe, target);
         const run_dylib_dce_check = b.addRunArtifact(dylib_dce_check_exe);
-        run_dylib_dce_check.addArgs(&.{ dylib_output, "--absent", "ROC_DCE_CANARY_BLOB_7f3a9c", "roc_host_double" });
+        run_dylib_dce_check.addArgs(&.{ dylib_output, "--absent", "ROC_DCE_CANARY_BLOB_7f3a9c" });
         run_dylib_dce_check.step.dependOn(&build_dylib_app.step);
         run_test_dylib_step.dependOn(&run_dylib_dce_check.step);
     }
