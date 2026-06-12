@@ -840,7 +840,7 @@ const Transform = struct {
                 try self.rewriteTailSite(candidate);
             }
         }
-        try self.installWrapper(false, undefined);
+        try self.installTceLoop();
     }
 
     fn isSiteTerminal(self: *const Transform, stmt_id: CFStmtId) bool {
@@ -1071,6 +1071,25 @@ const Transform = struct {
         proc_ptr.args = fresh_span;
         proc_ptr.body = join_stmt;
         proc_ptr.frame_locals = frame_locals;
+    }
+
+    /// Plain TCE does not need a wrapper argument frame. The proc's existing
+    /// argument locals are already the initial loop-carried values, so enter
+    /// the join directly and only rewrite recursive sites to rebind params.
+    fn installTceLoop(self: *Transform) ResourceError!void {
+        const proc_ptr = self.store.getProcSpecPtr(self.proc_id);
+        const old_body = proc_ptr.body.?;
+
+        const entry_jump = try self.store.addCFStmt(.{ .jump = .{ .target = self.join_id } });
+        const join_stmt = try self.store.addCFStmt(.{ .join = .{
+            .id = self.join_id,
+            .params = proc_ptr.args,
+            .body = old_body,
+            .remainder = entry_jump,
+        } });
+
+        proc_ptr.body = join_stmt;
+        proc_ptr.frame_locals = try self.rebuildFrameLocals();
     }
 
     /// frame_locals must stay complete, unique, and sorted: the interpreter

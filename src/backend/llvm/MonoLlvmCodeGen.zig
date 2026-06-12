@@ -1061,7 +1061,10 @@ pub const MonoLlvmCodeGen = struct {
             try self.emitHostedProcBody(hosted, proc);
         } else {
             const body = proc.body orelse return error.CompilationFailed;
-            try self.compileStmt(body);
+            const compiled_direct_tce_loop = try self.compileDirectEntryTceLoop(proc, body);
+            if (!compiled_direct_tce_loop) {
+                try self.compileStmt(body);
+            }
             if (!self.currentBlockHasTerminator()) {
                 _ = wip.retVoid() catch return error.OutOfMemory;
             }
@@ -1497,6 +1500,33 @@ pub const MonoLlvmCodeGen = struct {
                 },
             }
         }
+    }
+
+    /// Plain TCE installs the proc body as `join J { remainder: jump J, body: old_body }`.
+    /// That shape does not need the generic join continuation block: proc entry
+    /// branches directly to the loop body, and recursive sites jump back there
+    /// after their explicit `initialize_join_param` writes.
+    fn compileDirectEntryTceLoop(self: *MonoLlvmCodeGen, proc: LirProcSpec, stmt_id: CFStmtId) Error!bool {
+        if (proc.tail_transform != .tce) return false;
+
+        const join_stmt = switch (self.store.getCFStmt(stmt_id)) {
+            .join => |j| j,
+            else => return error.CompilationFailed,
+        };
+        switch (self.store.getCFStmt(join_stmt.remainder)) {
+            .jump => |j| if (j.target != join_stmt.id) return error.CompilationFailed,
+            else => return error.CompilationFailed,
+        }
+
+        const wip = self.wip orelse return error.CompilationFailed;
+        const key = @intFromEnum(join_stmt.id);
+        const loop_block = wip.block(0, "tce_loop") catch return error.OutOfMemory;
+        try self.join_points.put(key, .{ .block = loop_block, .params = join_stmt.params, .body = join_stmt.body });
+
+        _ = wip.br(loop_block) catch return error.OutOfMemory;
+        wip.cursor = .{ .block = loop_block };
+        try self.compileStmt(join_stmt.body);
+        return true;
     }
 
     /// Processes a single statement node, queueing successors and nested-body
