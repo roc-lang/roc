@@ -897,29 +897,55 @@ Builtin :: [].{
 		## iterator's `len_if_known` when it is known up front. This is the `from_iter`
 		## that [Iter.collect] dispatches to.
 		from_iter : Iter(item) -> List(item)
-		from_iter = |iterator| {
-			cap = match Iter.size_hint(iterator) {
-				Known(n) => n
-				Unknown => 0
-			}
-			var $list = List.with_capacity(cap)
-			var $rest = iterator
-			while Bool.True {
-				match Iter.next($rest) {
-					Done => {
-						break
+		from_iter = |iterator|
+			match iterator.len_if_known {
+				# Known length: preallocate exactly, then fill with the unchecked
+				# append. It never reallocates because the capacity is exact.
+				Known(n) => {
+					var $list = List.with_capacity(n)
+					var $rest = iterator
+
+					while Bool.True {
+						match Iter.next($rest) {
+							Done => {
+								break
+							}
+							Skip({ rest }) => {
+								$rest = rest
+							}
+							One({ item, rest }) => {
+								$list = list_append_unsafe($list, item)
+								$rest = rest
+							}
+						}
 					}
-					Skip({ rest }) => {
-						$rest = rest
+
+					$list
+				}
+				# Unknown length: start empty and grow with the checked append,
+				# which reserves room as needed.
+				Unknown => {
+					var $list = List.with_capacity(0)
+					var $rest = iterator
+
+					while Bool.True {
+						match Iter.next($rest) {
+							Done => {
+								break
+							}
+							Skip({ rest }) => {
+								$rest = rest
+							}
+							One({ item, rest }) => {
+								$list = List.append($list, item)
+								$rest = rest
+							}
+						}
 					}
-					One({ item, rest }) => {
-						$list = list_append_unsafe($list, item)
-						$rest = rest
-					}
+
+					$list
 				}
 			}
-			$list
-		}
 
 		## Put two lists together.
 		## ```roc

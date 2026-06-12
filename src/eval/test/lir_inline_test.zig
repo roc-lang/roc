@@ -372,17 +372,23 @@ const IterCollectShape = enum {
 };
 
 fn procShapeMatchesIterCollect(shape: ProcShape, wanted: IterCollectShape) bool {
+    // Fingerprints of the `Iter.collect` -> `List.from_iter` worker over a range
+    // (an Unknown-length iterator). `from_iter` branches on `len_if_known`, so its
+    // unoptimized (generic) worker contains both the Known and Unknown loops; spec
+    // constr selects the single live arm, leaving a leaner specialized worker. A
+    // range carries no length, so the specialized worker takes 2 args (a Known
+    // length would thread a third).
     return switch (wanted) {
-        .specialized => shape.arg_count == 3 and
+        .specialized => shape.arg_count == 2 and
             shape.direct_call_count >= 10 and
             shape.switch_count >= 10 and
             shape.join_count >= 16 and
             shape.jump_count >= 20,
         .generic => shape.arg_count == 1 and
-            shape.direct_call_count == 4 and
-            shape.switch_count == 6 and
-            shape.join_count == 9 and
-            shape.jump_count == 11 and
+            shape.direct_call_count == 6 and
+            shape.switch_count == 10 and
+            shape.join_count == 15 and
+            shape.jump_count == 22 and
             shape.struct_assign_count >= 8,
     };
 }
@@ -933,7 +939,7 @@ test "plant iter pipeline specializes collect worker after inlining" {
         \\
         \\starting_plants : () -> List(Plant)
         \\starting_plants = || {
-        \\    0.I64.to(15)
+        \\    (0.I64..=15)
         \\        .map(|i| random_plant(i * 12))
         \\        .collect()
         \\}
@@ -955,7 +961,7 @@ test "direct iter collect worker specializes constructor recursive call" {
         \\main : List(Plant)
         \\main =
         \\    Iter.collect(
-        \\        Iter.map(0.I64.to(15), |i| random_plant(i * 12)),
+        \\        Iter.map(0.I64..=15, |i| random_plant(i * 12)),
         \\    )
     );
 }
