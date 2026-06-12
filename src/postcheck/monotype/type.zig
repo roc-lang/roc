@@ -185,16 +185,46 @@ pub const Store = struct {
 
     pub fn typeDigest(self: *const Store, name_store: *const names.NameStore, ty: TypeId) names.TypeDigest {
         var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-        self.writeTypeDigest(name_store, &hasher, ty);
+        var visiting = DigestVisiting{};
+        self.writeTypeDigest(name_store, &hasher, ty, &visiting);
         return .{ .bytes = hasher.finalResult() };
     }
+
+    /// Stack of types currently being digested. Recursive types reference a
+    /// type already on this stack; the digest encodes such a back reference by
+    /// stack position so cyclic content digests deterministically.
+    const DigestVisiting = struct {
+        items: [digest_visiting_max]TypeId = undefined,
+        len: usize = 0,
+    };
+
+    const digest_visiting_max = 256;
 
     fn writeTypeDigest(
         self: *const Store,
         name_store: *const names.NameStore,
         hasher: *std.crypto.hash.sha2.Sha256,
         ty: TypeId,
+        visiting: *DigestVisiting,
     ) void {
+        for (visiting.items[0..visiting.len], 0..) |open_ty, position| {
+            if (open_ty == ty) {
+                writeBytes(hasher, "cycle");
+                writeU32(hasher, @intCast(position));
+                return;
+            }
+        }
+        if (visiting.len == digest_visiting_max) {
+            // Deeper nesting than the stack tracks cannot contain an
+            // unrecorded cycle shorter than the stack, so digest the type's
+            // identity instead of recursing further.
+            writeBytes(hasher, "deep");
+            writeU32(hasher, @intFromEnum(ty));
+            return;
+        }
+        visiting.items[visiting.len] = ty;
+        visiting.len += 1;
+        defer visiting.len -= 1;
         switch (self.get(ty)) {
             .primitive => |primitive| {
                 writeBytes(hasher, "primitive");
@@ -215,7 +245,7 @@ pub const Store = struct {
                 } else {
                     writeBytes(hasher, "not-builtin");
                 }
-                self.writeTypeSpanDigest(name_store, hasher, named.args);
+                self.writeTypeSpanDigest(name_store, hasher, named.args, visiting);
             },
             .record => |fields| {
                 writeBytes(hasher, "record");
@@ -223,12 +253,12 @@ pub const Store = struct {
                 writeU32(hasher, @intCast(field_slice.len));
                 for (field_slice) |field| {
                     writeBytes(hasher, name_store.recordFieldLabelText(field.name));
-                    self.writeTypeDigest(name_store, hasher, field.ty);
+                    self.writeTypeDigest(name_store, hasher, field.ty, visiting);
                 }
             },
             .tuple => |items| {
                 writeBytes(hasher, "tuple");
-                self.writeTypeSpanDigest(name_store, hasher, items);
+                self.writeTypeSpanDigest(name_store, hasher, items, visiting);
             },
             .tag_union => |tags| {
                 writeBytes(hasher, "tag_union");
@@ -236,21 +266,21 @@ pub const Store = struct {
                 writeU32(hasher, @intCast(tag_slice.len));
                 for (tag_slice) |tag| {
                     writeBytes(hasher, name_store.tagLabelText(tag.name));
-                    self.writeTypeSpanDigest(name_store, hasher, tag.payloads);
+                    self.writeTypeSpanDigest(name_store, hasher, tag.payloads, visiting);
                 }
             },
             .list => |elem| {
                 writeBytes(hasher, "list");
-                self.writeTypeDigest(name_store, hasher, elem);
+                self.writeTypeDigest(name_store, hasher, elem, visiting);
             },
             .box => |elem| {
                 writeBytes(hasher, "box");
-                self.writeTypeDigest(name_store, hasher, elem);
+                self.writeTypeDigest(name_store, hasher, elem, visiting);
             },
             .func => |function| {
                 writeBytes(hasher, "func");
-                self.writeTypeSpanDigest(name_store, hasher, function.args);
-                self.writeTypeDigest(name_store, hasher, function.ret);
+                self.writeTypeSpanDigest(name_store, hasher, function.args, visiting);
+                self.writeTypeDigest(name_store, hasher, function.ret, visiting);
             },
             .erased => |erased| {
                 writeBytes(hasher, "erased");
@@ -265,11 +295,12 @@ pub const Store = struct {
         name_store: *const names.NameStore,
         hasher: *std.crypto.hash.sha2.Sha256,
         span_: Span,
+        visiting: *DigestVisiting,
     ) void {
         const values = self.span(span_);
         writeU32(hasher, @intCast(values.len));
         for (values) |child| {
-            self.writeTypeDigest(name_store, hasher, child);
+            self.writeTypeDigest(name_store, hasher, child, visiting);
         }
     }
 };
