@@ -2050,6 +2050,386 @@ test "local packages mix with URL packages" {
     try std.testing.expectEqualStrings(a_url, resolved.packages[helper.deps[0].target].identity);
 }
 
+test "pin violations report the full chain through deep indirect dependencies" {
+    const gpa = std.testing.allocator;
+    var registry = TestRegistry.init(gpa);
+    defer registry.deinit();
+
+    const a_100 = "https://example.com/a/1.0.0/hashA100.tar.zst";
+    const a_101 = "https://example.com/a/1.0.1/hashA101.tar.zst";
+    const b_url = "https://example.com/b/1.0.0/hashB.tar.zst";
+    const c_url = "https://example.com/c/1.0.0/hashC.tar.zst";
+    const d_url = "https://example.com/d/1.0.0/hashD.tar.zst";
+
+    try registry.locals.put("/app/main.roc", .{
+        .kind = .app,
+        .deps = &.{
+            .{ .alias = "a", .spec = a_100, .is_platform = false },
+            .{ .alias = "b", .spec = b_url, .is_platform = false },
+        },
+    });
+    try registry.urls.put(a_100, .{});
+    try registry.urls.put(a_101, .{});
+    try registry.urls.put(b_url, .{ .deps = &.{.{ .alias = "c", .spec = c_url, .is_platform = false }} });
+    try registry.urls.put(c_url, .{ .deps = &.{.{ .alias = "d", .spec = d_url, .is_platform = false }} });
+    try registry.urls.put(d_url, .{ .deps = &.{.{ .alias = "a", .spec = a_101, .is_platform = false }} });
+
+    var resolver = Resolver.init(gpa, registry.fetcher(), .{});
+    defer resolver.deinit();
+
+    try std.testing.expectError(error.ResolutionFailed, resolver.resolve("/app/main.roc"));
+    const diagnostic = resolver.diagnostics.items[0];
+    try std.testing.expectEqualStrings("PACKAGE VERSION CONFLICT", diagnostic.title);
+    // Every link of the indirect chain appears, in order, plus the
+    // violating version itself.
+    const b_at = std.mem.find(u8, diagnostic.message, b_url).?;
+    const c_at = std.mem.find(u8, diagnostic.message, c_url).?;
+    const d_at = std.mem.find(u8, diagnostic.message, d_url).?;
+    try std.testing.expect(b_at < c_at);
+    try std.testing.expect(c_at < d_at);
+    try std.testing.expect(std.mem.find(u8, diagnostic.message, a_101) != null);
+}
+
+test "retraction prunes a loser's entire subtree without downloading it" {
+    const gpa = std.testing.allocator;
+    var registry = TestRegistry.init(gpa);
+    defer registry.deinit();
+
+    // q 1.2.0 pulls in r, which pulls in t — but s bumps q to 1.4.0 (which
+    // has no deps) before q 1.2.0's subtree is ever followed, so r and t are
+    // never even downloaded.
+    const q_120 = "https://example.com/q/1.2.0/hashQ120.tar.zst";
+    const q_140 = "https://example.com/q/1.4.0/hashQ140.tar.zst";
+    const r_150 = "https://example.com/r/1.5.0/hashR150.tar.zst";
+    const t_100 = "https://example.com/t/1.0.0/hashT100.tar.zst";
+    const s_100 = "https://example.com/s/1.0.0/hashS100.tar.zst";
+
+    try registry.locals.put("/app/main.roc", .{
+        .kind = .package,
+        .deps = &.{
+            .{ .alias = "q", .spec = q_120, .is_platform = false },
+            .{ .alias = "s", .spec = s_100, .is_platform = false },
+        },
+    });
+    try registry.urls.put(q_120, .{ .deps = &.{.{ .alias = "r", .spec = r_150, .is_platform = false }} });
+    try registry.urls.put(q_140, .{});
+    try registry.urls.put(r_150, .{ .deps = &.{.{ .alias = "t", .spec = t_100, .is_platform = false }} });
+    try registry.urls.put(t_100, .{});
+    try registry.urls.put(s_100, .{ .deps = &.{.{ .alias = "q", .spec = q_140, .is_platform = false }} });
+
+    var resolver = Resolver.init(gpa, registry.fetcher(), .{});
+    defer resolver.deinit();
+
+    var resolved = try resolver.resolve("/app/main.roc");
+    defer resolved.deinit();
+
+    try std.testing.expect(testFindPackage(&resolved, q_140) != null);
+    try std.testing.expect(testFindPackage(&resolved, r_150) == null);
+    try std.testing.expect(testFindPackage(&resolved, t_100) == null);
+    // The subtree was retracted before ever being followed, so it was never
+    // fetched at all.
+    try std.testing.expect(!resolver.url_nodes.contains("hashR150"));
+    try std.testing.expect(!resolver.url_nodes.contains("hashT100"));
+}
+
+test "an over-downloaded intermediate version is retracted and does not violate the app's pin" {
+    const gpa = std.testing.allocator;
+    var registry = TestRegistry.init(gpa);
+    defer registry.deinit();
+
+    // c 1.2.0 mentions a 1.3.0, briefly making it the chosen version of a
+    // (so it gets downloaded). Then d bumps c to 1.5.0, which does not
+    // mention a at all — retracting the 1.3.0 mention, restoring the app's
+    // pinned 1.2.3, and reporting no conflict. The intermediate download is
+    // intended waste.
+    const a_123 = "https://example.com/a/1.2.3/hashA123.tar.zst";
+    const a_130 = "https://example.com/a/1.3.0/hashA130.tar.zst";
+    const b_url = "https://example.com/b/1.0.0/hashB.tar.zst";
+    const c_120 = "https://example.com/c/1.2.0/hashC120.tar.zst";
+    const c_150 = "https://example.com/c/1.5.0/hashC150.tar.zst";
+    const d_url = "https://example.com/d/1.0.0/hashD.tar.zst";
+
+    try registry.locals.put("/app/main.roc", .{
+        .kind = .app,
+        .deps = &.{
+            .{ .alias = "a", .spec = a_123, .is_platform = false },
+            .{ .alias = "b", .spec = b_url, .is_platform = false },
+        },
+    });
+    try registry.urls.put(a_123, .{});
+    try registry.urls.put(a_130, .{});
+    try registry.urls.put(b_url, .{ .deps = &.{
+        .{ .alias = "c", .spec = c_120, .is_platform = false },
+        .{ .alias = "d", .spec = d_url, .is_platform = false },
+    } });
+    try registry.urls.put(c_120, .{ .deps = &.{.{ .alias = "a", .spec = a_130, .is_platform = false }} });
+    try registry.urls.put(c_150, .{});
+    try registry.urls.put(d_url, .{ .deps = &.{.{ .alias = "c", .spec = c_150, .is_platform = false }} });
+
+    var resolver = Resolver.init(gpa, registry.fetcher(), .{});
+    defer resolver.deinit();
+
+    var resolved = try resolver.resolve("/app/main.roc");
+    defer resolved.deinit();
+
+    try std.testing.expect(testFindPackage(&resolved, a_123) != null);
+    try std.testing.expect(testFindPackage(&resolved, a_130) == null);
+    try std.testing.expect(testFindPackage(&resolved, c_150) != null);
+    try std.testing.expect(testFindPackage(&resolved, c_120) == null);
+    // The losing version really was downloaded along the way.
+    try std.testing.expect(resolver.url_nodes.contains("hashA130"));
+}
+
+test "a bumped winner's new dependencies join the graph" {
+    const gpa = std.testing.allocator;
+    var registry = TestRegistry.init(gpa);
+    defer registry.deinit();
+
+    // x 1.0.0 has no deps, but the winning x 1.1.0 introduces z.
+    const x_100 = "https://example.com/x/1.0.0/hashX100.tar.zst";
+    const x_110 = "https://example.com/x/1.1.0/hashX110.tar.zst";
+    const y_url = "https://example.com/y/1.0.0/hashY.tar.zst";
+    const z_url = "https://example.com/z/1.0.0/hashZ.tar.zst";
+
+    try registry.locals.put("/app/main.roc", .{
+        .kind = .package,
+        .deps = &.{
+            .{ .alias = "x", .spec = x_100, .is_platform = false },
+            .{ .alias = "y", .spec = y_url, .is_platform = false },
+        },
+    });
+    try registry.urls.put(x_100, .{});
+    try registry.urls.put(x_110, .{ .deps = &.{.{ .alias = "z", .spec = z_url, .is_platform = false }} });
+    try registry.urls.put(y_url, .{ .deps = &.{.{ .alias = "x", .spec = x_110, .is_platform = false }} });
+    try registry.urls.put(z_url, .{});
+
+    var resolver = Resolver.init(gpa, registry.fetcher(), .{});
+    defer resolver.deinit();
+
+    var resolved = try resolver.resolve("/app/main.roc");
+    defer resolved.deinit();
+
+    try std.testing.expect(testFindPackage(&resolved, x_110) != null);
+    try std.testing.expect(testFindPackage(&resolved, z_url) != null);
+    try std.testing.expect(testFindPackage(&resolved, x_100) == null);
+}
+
+test "diamond dependencies unify on a single package" {
+    const gpa = std.testing.allocator;
+    var registry = TestRegistry.init(gpa);
+    defer registry.deinit();
+
+    const a_url = "https://example.com/a/1.0.0/hashA.tar.zst";
+    const b_url = "https://example.com/b/1.0.0/hashB.tar.zst";
+    const c_11 = "https://example.com/c/1.1.0/hashC11.tar.zst";
+    const c_12 = "https://example.com/c/1.2.0/hashC12.tar.zst";
+
+    try registry.locals.put("/app/main.roc", .{
+        .kind = .package,
+        .deps = &.{
+            .{ .alias = "a", .spec = a_url, .is_platform = false },
+            .{ .alias = "b", .spec = b_url, .is_platform = false },
+        },
+    });
+    try registry.urls.put(a_url, .{ .deps = &.{.{ .alias = "c", .spec = c_11, .is_platform = false }} });
+    try registry.urls.put(b_url, .{ .deps = &.{.{ .alias = "c", .spec = c_12, .is_platform = false }} });
+    try registry.urls.put(c_11, .{});
+    try registry.urls.put(c_12, .{});
+
+    var resolver = Resolver.init(gpa, registry.fetcher(), .{});
+    defer resolver.deinit();
+
+    var resolved = try resolver.resolve("/app/main.roc");
+    defer resolved.deinit();
+
+    // Exactly one c, and both sides of the diamond point at it.
+    try std.testing.expectEqual(@as(usize, 4), resolved.packages.len);
+    const a = testFindPackage(&resolved, a_url).?;
+    const b = testFindPackage(&resolved, b_url).?;
+    try std.testing.expectEqual(@as(usize, 1), a.deps.len);
+    try std.testing.expectEqual(@as(usize, 1), b.deps.len);
+    try std.testing.expectEqual(a.deps[0].target, b.deps[0].target);
+    try std.testing.expectEqualStrings(c_12, resolved.packages[a.deps[0].target].identity);
+}
+
+test "app pins constrain only their own major version" {
+    const gpa = std.testing.allocator;
+    var registry = TestRegistry.init(gpa);
+    defer registry.deinit();
+
+    const a_v1 = "https://example.com/a/1.2.3/hashA1.tar.zst";
+    const a_v2 = "https://example.com/a/2.5.0/hashA2.tar.zst";
+    const b_url = "https://example.com/b/1.0.0/hashB.tar.zst";
+
+    try registry.locals.put("/app/main.roc", .{
+        .kind = .app,
+        .deps = &.{
+            .{ .alias = "a", .spec = a_v1, .is_platform = false },
+            .{ .alias = "b", .spec = b_url, .is_platform = false },
+        },
+    });
+    try registry.urls.put(a_v1, .{});
+    try registry.urls.put(a_v2, .{});
+    try registry.urls.put(b_url, .{ .deps = &.{.{ .alias = "a", .spec = a_v2, .is_platform = false }} });
+
+    var resolver = Resolver.init(gpa, registry.fetcher(), .{});
+    defer resolver.deinit();
+
+    var resolved = try resolver.resolve("/app/main.roc");
+    defer resolved.deinit();
+
+    // A different major version is a different package: no conflict, both
+    // present.
+    try std.testing.expect(testFindPackage(&resolved, a_v1) != null);
+    try std.testing.expect(testFindPackage(&resolved, a_v2) != null);
+}
+
+test "an app may declare the identical version twice under different aliases" {
+    const gpa = std.testing.allocator;
+    var registry = TestRegistry.init(gpa);
+    defer registry.deinit();
+
+    const a_url = "https://example.com/a/1.2.3/hashA.tar.zst";
+
+    try registry.locals.put("/app/main.roc", .{
+        .kind = .app,
+        .deps = &.{
+            .{ .alias = "one", .spec = a_url, .is_platform = false },
+            .{ .alias = "two", .spec = a_url, .is_platform = false },
+        },
+    });
+    try registry.urls.put(a_url, .{});
+
+    var resolver = Resolver.init(gpa, registry.fetcher(), .{});
+    defer resolver.deinit();
+
+    var resolved = try resolver.resolve("/app/main.roc");
+    defer resolved.deinit();
+
+    // One package, two aliases pointing at it.
+    try std.testing.expectEqual(@as(usize, 2), resolved.packages.len);
+    const root = resolved.packages[Resolved.root_index];
+    try std.testing.expectEqual(@as(usize, 2), root.deps.len);
+    try std.testing.expectEqual(root.deps[0].target, root.deps[1].target);
+}
+
+test "transitive tally counts retracted downloads against every root that reached them" {
+    const gpa = std.testing.allocator;
+    var registry = TestRegistry.init(gpa);
+    defer registry.deinit();
+
+    // big is pulled in by q 1.0.0 and downloaded before t bumps q to 1.1.0
+    // (which would retract it). The tally deliberately keeps counting it —
+    // it is a safety mechanism over everything resolution caused to enter
+    // the graph — and counts it against both direct dependencies, since
+    // both reach it.
+    const q_100 = "https://example.com/q/1.0.0/hashQ100.tar.zst";
+    const q_110 = "https://example.com/q/1.1.0/hashQ110.tar.zst";
+    const s_url = "https://example.com/s/1.0.0/hashS.tar.zst";
+    const t_url = "https://example.com/t/1.0.0/hashT.tar.zst";
+    const big_url = "https://example.com/big/1.0.0/hashBig.tar.zst";
+
+    try registry.locals.put("/app/main.roc", .{
+        .kind = .package,
+        .deps = &.{
+            .{ .alias = "q", .spec = q_100, .is_platform = false },
+            .{ .alias = "s", .spec = s_url, .is_platform = false },
+        },
+    });
+    try registry.urls.put(q_100, .{
+        .content_bytes = 1000,
+        .deps = &.{.{ .alias = "big", .spec = big_url, .is_platform = false }},
+    });
+    try registry.urls.put(q_110, .{ .content_bytes = 1000 });
+    try registry.urls.put(s_url, .{
+        .content_bytes = 1000,
+        .deps = &.{.{ .alias = "t", .spec = t_url, .is_platform = false }},
+    });
+    try registry.urls.put(t_url, .{
+        .content_bytes = 1000,
+        .deps = &.{.{ .alias = "q", .spec = q_110, .is_platform = false }},
+    });
+    try registry.urls.put(big_url, .{ .content_bytes = 9000 });
+
+    var resolver = Resolver.init(gpa, registry.fetcher(), .{
+        .max_transitive_expanded_bytes = 5000,
+    });
+    defer resolver.deinit();
+
+    try std.testing.expectError(error.ResolutionFailed, resolver.resolve("/app/main.roc"));
+    try std.testing.expectEqual(@as(usize, 2), resolver.diagnostics.items.len);
+    for (resolver.diagnostics.items) |diagnostic| {
+        try std.testing.expectEqualStrings("DEPENDENCY TREE TOO LARGE", diagnostic.title);
+    }
+    try std.testing.expect(std.mem.find(u8, resolver.diagnostics.items[0].message, q_100) != null);
+    try std.testing.expect(std.mem.find(u8, resolver.diagnostics.items[1].message, s_url) != null);
+}
+
+test "mirrors of the same content are distinct packages sharing one download" {
+    const gpa = std.testing.allocator;
+    var registry = TestRegistry.init(gpa);
+    defer registry.deinit();
+
+    const mirror_one = "https://one.example.com/x/1.0.0/hashShared.tar.zst";
+    const mirror_two = "https://two.example.com/x/1.0.0/hashShared.tar.zst";
+
+    try registry.locals.put("/app/main.roc", .{
+        .kind = .package,
+        .deps = &.{
+            .{ .alias = "m1", .spec = mirror_one, .is_platform = false },
+            .{ .alias = "m2", .spec = mirror_two, .is_platform = false },
+        },
+    });
+    try registry.urls.put(mirror_one, .{});
+    try registry.urls.put(mirror_two, .{});
+
+    var resolver = Resolver.init(gpa, registry.fetcher(), .{});
+    defer resolver.deinit();
+
+    var resolved = try resolver.resolve("/app/main.roc");
+    defer resolved.deinit();
+
+    // Different url ids: two separate packages, even with identical hashes —
+    // but the content was only fetched once and they share an extraction.
+    try std.testing.expectEqual(@as(usize, 3), resolved.packages.len);
+    const one = testFindPackage(&resolved, mirror_one).?;
+    const two = testFindPackage(&resolved, mirror_two).?;
+    try std.testing.expectEqualStrings(one.root_file, two.root_file);
+}
+
+test "version solving spans local packages bridging URL dependencies" {
+    const gpa = std.testing.allocator;
+    var registry = TestRegistry.init(gpa);
+    defer registry.deinit();
+
+    const a_10 = "https://example.com/a/1.0.0/hashA10.tar.zst";
+    const a_11 = "https://example.com/a/1.1.0/hashA11.tar.zst";
+
+    try registry.locals.put("/app/main.roc", .{
+        .kind = .package,
+        .deps = &.{
+            .{ .alias = "a", .spec = a_10, .is_platform = false },
+            .{ .alias = "helper", .spec = "vendored/helper/main.roc", .is_platform = false },
+        },
+    });
+    try registry.locals.put("/app/vendored/helper/main.roc", .{
+        .kind = .package,
+        .deps = &.{.{ .alias = "a", .spec = a_11, .is_platform = false }},
+    });
+    try registry.urls.put(a_10, .{});
+    try registry.urls.put(a_11, .{});
+
+    var resolver = Resolver.init(gpa, registry.fetcher(), .{});
+    defer resolver.deinit();
+
+    var resolved = try resolver.resolve("/app/main.roc");
+    defer resolved.deinit();
+
+    // The local package's mention participates in solving like any other.
+    try std.testing.expect(testFindPackage(&resolved, a_11) != null);
+    try std.testing.expect(testFindPackage(&resolved, a_10) == null);
+}
+
 test "versionBumpNotes reports packages compiled against undeclared versions" {
     const gpa = std.testing.allocator;
     var registry = TestRegistry.init(gpa);
