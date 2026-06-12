@@ -152,6 +152,10 @@ pub const Resolved = struct {
         target: u32,
         /// True only for the root app's platform dependency.
         is_platform: bool,
+        /// The version this package's header declared for the dependency,
+        /// when it differs from what solving could pick. Compare with the
+        /// target package's resolved version to detect bumps.
+        declared_version: ?Version = null,
     };
 
     pub const Package = struct {
@@ -172,6 +176,53 @@ pub const Resolved = struct {
         child.destroy(self.arena);
     }
 };
+
+/// A note explaining that a package was compiled against a dependency
+/// version it did not declare (because version solving picked a higher
+/// minor.patch elsewhere in the graph).
+pub const VersionBumpNote = struct {
+    /// Identity of the package whose declared dependency was bumped.
+    package_identity: []const u8,
+    message: []const u8,
+};
+
+/// Collect a note for every package in the final graph that was compiled
+/// against a dependency version it did not declare. In a well-behaved
+/// ecosystem these bumps are compatible, so the notes are only worth showing
+/// when a package fails to compile, attached to the error itself. All
+/// strings are allocated with `allocator`.
+pub fn versionBumpNotes(resolved: *const Resolved, allocator: Allocator) Allocator.Error![]VersionBumpNote {
+    var notes = std.ArrayListUnmanaged(VersionBumpNote).empty;
+    for (resolved.packages) |package| {
+        for (package.deps) |dep| {
+            const declared = dep.declared_version orelse continue;
+            const target = resolved.packages[dep.target];
+            const resolved_url = target.url orelse continue;
+            if (declared.eql(resolved_url.version)) continue;
+            try notes.append(allocator, .{
+                .package_identity = try allocator.dupe(u8, package.identity),
+                .message = try std.fmt.allocPrint(
+                    allocator,
+                    "the package this error is in declares its dependency {s} as version {d}.{d}.{d}, " ++
+                        "but version solving resolved {s} to {s} because something else in the " ++
+                        "dependency graph mentions that higher version. " ++
+                        "Minor version bumps are supposed to be backwards-compatible, but that is " ++
+                        "a guideline and not an enforced invariant, and this particular minor " ++
+                        "version bump may not have been backwards-compatible in practice.",
+                    .{
+                        dep.alias,
+                        declared.major,
+                        declared.minor,
+                        declared.patch,
+                        dep.alias,
+                        resolved_url.url,
+                    },
+                ),
+            });
+        }
+    }
+    return notes.toOwnedSlice(allocator);
+}
 
 /// Sidecar metadata recorded next to each extracted bundle in the cache.
 /// `format` guards against layout changes; unknown formats are regenerated
@@ -967,6 +1018,10 @@ pub const Resolver = struct {
                 .alias = try out.dupe(u8, edge.alias),
                 .target = target_index,
                 .is_platform = edge.is_platform,
+                .declared_version = switch (edge.target) {
+                    .url => |t| if (t.version.isPresent()) t.version else null,
+                    else => null,
+                },
             });
         }
 
@@ -1993,6 +2048,46 @@ test "local packages mix with URL packages" {
     const helper = testFindPackage(&resolved, "/app/vendored/helper/main.roc").?;
     try std.testing.expectEqual(@as(usize, 1), helper.deps.len);
     try std.testing.expectEqualStrings(a_url, resolved.packages[helper.deps[0].target].identity);
+}
+
+test "versionBumpNotes reports packages compiled against undeclared versions" {
+    const gpa = std.testing.allocator;
+    var registry = TestRegistry.init(gpa);
+    defer registry.deinit();
+
+    const a_123 = "https://example.com/foo/a/1.2.3/hashA123.tar.zst";
+    const a_131 = "https://example.com/foo/a/1.3.1/hashA131.tar.zst";
+    const b_url = "https://example.com/foo/b/2.0.0/hashB200.tar.zst";
+
+    try registry.locals.put("/app/main.roc", .{
+        .kind = .package,
+        .deps = &.{
+            .{ .alias = "a", .spec = a_123, .is_platform = false },
+            .{ .alias = "b", .spec = b_url, .is_platform = false },
+        },
+    });
+    try registry.urls.put(a_123, .{});
+    try registry.urls.put(a_131, .{});
+    try registry.urls.put(b_url, .{
+        .deps = &.{.{ .alias = "a", .spec = a_131, .is_platform = false }},
+    });
+
+    var resolver = Resolver.init(gpa, registry.fetcher(), .{});
+    defer resolver.deinit();
+
+    var resolved = try resolver.resolve("/app/main.roc");
+    defer resolved.deinit();
+
+    // The root declared a 1.2.3 but the build uses 1.3.1; b declared the
+    // winner, so only the root gets a note.
+    var note_arena = std.heap.ArenaAllocator.init(gpa);
+    defer note_arena.deinit();
+    const notes = try versionBumpNotes(&resolved, note_arena.allocator());
+
+    try std.testing.expectEqual(@as(usize, 1), notes.len);
+    try std.testing.expectEqualStrings("/app/main.roc", notes[0].package_identity);
+    try std.testing.expect(std.mem.find(u8, notes[0].message, "1.2.3") != null);
+    try std.testing.expect(std.mem.find(u8, notes[0].message, a_131) != null);
 }
 
 test "insecure URLs are rejected" {

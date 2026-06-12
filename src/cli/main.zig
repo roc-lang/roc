@@ -2382,6 +2382,16 @@ fn renderCoordinatorReports(ctx: *CliCtx, coord: *Coordinator, roc_file_path: []
         const rep = entry.report;
         if (rep.severity == .fatal or rep.severity == .runtime_error) {
             counts.errors += 1;
+            // When a package compiled against a bumped dependency version has
+            // errors, attach its version note to the first one. Consuming the
+            // note keeps re-renders from attaching it twice.
+            if (coord.version_notes.fetchRemove(entry.package_name)) |note_entry| {
+                if (rep.addOwnedString(note_entry.value)) |owned| {
+                    rep.addNote(owned) catch {};
+                } else |_| {}
+                ctx.gpa.free(@constCast(note_entry.key));
+                ctx.gpa.free(@constCast(note_entry.value));
+            }
             if (!builtin.is_test) {
                 reporting.renderReportToTerminal(rep, ctx.io.stderr(), ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch {};
             }
@@ -2589,6 +2599,23 @@ pub fn buildLirImageWithCoordinator(
             .url_id = url.url_id,
         } else null;
         _ = try coord.ensurePackageWithUrl(package.identity, package.root_dir, url_view);
+    }
+
+    {
+        // Record notes for packages whose declared dependency versions were
+        // bumped by solving, so errors inside them can explain the bump.
+        const bump_notes = try compile.package_resolution.versionBumpNotes(&resolved, ctx.gpa);
+        defer ctx.gpa.free(bump_notes);
+        for (bump_notes) |note| {
+            const gop = try coord.version_notes.getOrPut(note.package_identity);
+            if (gop.found_existing) {
+                // One note per package is enough; keep the first.
+                ctx.gpa.free(@constCast(note.package_identity));
+                ctx.gpa.free(@constCast(note.message));
+            } else {
+                gop.value_ptr.* = note.message;
+            }
+        }
     }
 
     for (resolved_packages, 0..) |package, i| {

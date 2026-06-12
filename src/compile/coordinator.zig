@@ -795,6 +795,11 @@ pub const Coordinator = struct {
     /// Set to true for executable platform builds where platform modules need hosted lambdas.
     enable_hosted_transform: bool,
 
+    /// Package name -> note for packages compiled against a dependency
+    /// version they did not declare. Rendered alongside errors from those
+    /// packages. Keys and values are gpa-owned.
+    version_notes: std.StringHashMap([]const u8),
+
     /// Timing accumulators
     total_parse_ns: u64,
     total_canonicalize_ns: u64,
@@ -868,6 +873,7 @@ pub const Coordinator = struct {
             .checked_artifact_index = std.AutoHashMap([32]u8, ModuleRef).init(gpa),
             .retired_checked_artifacts = std.ArrayList(RetiredCheckedArtifact).empty,
             .enable_hosted_transform = false,
+            .version_notes = std.StringHashMap([]const u8).init(gpa),
             .total_parse_ns = 0,
             .total_canonicalize_ns = 0,
             .total_canonicalize_diag_ns = 0,
@@ -888,6 +894,15 @@ pub const Coordinator = struct {
         }
         // Stop workers
         self.shutdown();
+
+        {
+            var note_it = self.version_notes.iterator();
+            while (note_it.next()) |entry| {
+                self.gpa.free(@constCast(entry.key_ptr.*));
+                self.gpa.free(@constCast(entry.value_ptr.*));
+            }
+            self.version_notes.deinit();
+        }
 
         if (comptime trace_build) {
             std.debug.print("[COORD DEINIT] shutdown done, freeing packages...\n", .{});
@@ -1972,14 +1987,17 @@ pub const Coordinator = struct {
 
     /// One entry yielded by `ReportIter` — a single diagnostic with the package
     /// and module it came from. Pointers borrow from the Coordinator's storage.
+    /// The report may be appended to in place (e.g. to attach notes), but
+    /// reports must not be added or removed while iterating.
     pub const ReportEntry = struct {
         package_name: []const u8,
         module_name: []const u8,
-        report: *const Report,
+        report: *Report,
     };
 
     /// Iterator over every report from every module in every package.
-    /// Borrows from `Coordinator` storage — do not mutate while iterating.
+    /// Borrows from `Coordinator` storage — do not add or remove reports
+    /// while iterating.
     pub const ReportIter = struct {
         pkg_it: std.StringHashMap(*PackageState).Iterator,
         cur_pkg: ?*PackageState = null,

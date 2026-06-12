@@ -185,6 +185,10 @@ pub const BuildEnv = struct {
     /// Size limits applied during package version resolution.
     resolution_config: package_resolution.Config = .{},
 
+    /// Identity -> note for packages compiled against a dependency version
+    /// they did not declare; attached to error output from those packages.
+    version_notes: std.StringHashMapUnmanaged([]const u8) = .{},
+
     // Builtin modules (Bool, Try, Str) shared across all packages (heap-allocated to prevent moves)
     builtin_modules: *BuiltinModules,
     owns_builtin_modules: bool,
@@ -273,6 +277,15 @@ pub const BuildEnv = struct {
     pub fn deinit(self: *BuildEnv) void {
         if (comptime trace_build) {
             std.debug.print("[DEINIT] BuildEnv.deinit starting\n", .{});
+        }
+
+        {
+            var note_it = self.version_notes.iterator();
+            while (note_it.next()) |entry| {
+                self.gpa.free(@constCast(entry.key_ptr.*));
+                self.gpa.free(@constCast(entry.value_ptr.*));
+            }
+            self.version_notes.deinit(self.gpa);
         }
 
         // Deinit and free owned builtin modules. Borrowed builtins outlive this
@@ -1718,6 +1731,21 @@ pub const BuildEnv = struct {
                 try self.registerPlatformExposes(root_pkg_name, root_dep.alias, package.root_dir, &child_info);
             }
         }
+
+        // Record notes for packages whose declared dependency versions were
+        // bumped by solving, so errors inside them can explain the bump.
+        const bump_notes = try package_resolution.versionBumpNotes(resolved, self.gpa);
+        defer self.gpa.free(bump_notes);
+        for (bump_notes) |note| {
+            const gop = try self.version_notes.getOrPut(self.gpa, note.package_identity);
+            if (gop.found_existing) {
+                // One note per package is enough; keep the first.
+                self.gpa.free(@constCast(note.package_identity));
+                self.gpa.free(@constCast(note.message));
+            } else {
+                gop.value_ptr.* = note.message;
+            }
+        }
     }
 
     /// Register a platform's exposed modules (e.g. Stdout, Stderr) as
@@ -1870,6 +1898,9 @@ pub const BuildEnv = struct {
         const drained = try self.sink.drainEmitted(self.gpa);
         defer self.gpa.free(drained);
 
+        var noted_pkgs = std.StringHashMapUnmanaged(void){};
+        defer noted_pkgs.deinit(self.gpa);
+
         var out = try self.gpa.alloc(DrainedModuleReports, drained.len);
         var i: usize = 0;
         while (i < drained.len) : (i += 1) {
@@ -1877,6 +1908,22 @@ pub const BuildEnv = struct {
                 error.OutOfMemory => return error.OutOfMemory,
                 error.InvalidPackageName, error.PathOutsideWorkspace => try self.gpa.dupe(u8, ""),
             };
+
+            // When a package that was compiled against a bumped dependency
+            // version has errors, attach its version note to the first error
+            // (once per package) so the reader knows the bump may be the cause.
+            if (self.version_notes.get(drained[i].pkg_name)) |note| {
+                if (!noted_pkgs.contains(drained[i].pkg_name)) {
+                    for (drained[i].reports) |*report| {
+                        if (report.severity != .runtime_error and report.severity != .fatal) continue;
+                        try noted_pkgs.put(self.gpa, drained[i].pkg_name, {});
+                        const owned = try report.addOwnedString(note);
+                        try report.addNote(owned);
+                        break;
+                    }
+                }
+            }
+
             out[i] = .{
                 .abs_path = path,
                 .reports = drained[i].reports,
