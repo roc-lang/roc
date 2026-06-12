@@ -17,6 +17,7 @@ pub const ParsedUrl = unbundle_mod.download.ParsedUrl;
 /// Errors that can occur during the download operation.
 pub const DownloadError = error{
     InvalidUrl,
+    InvalidVersion,
     InvalidHash,
     HttpError,
     NoHashInUrl,
@@ -31,6 +32,7 @@ pub fn validateUrl(url: []const u8) DownloadError!ParsedUrl {
 
     return unbundle_mod.download.parseUrlPath(url) catch |err| switch (err) {
         error.InvalidUrl => error.InvalidUrl,
+        error.InvalidVersion => error.InvalidVersion,
         error.NoHashInUrl => error.NoHashInUrl,
     };
 }

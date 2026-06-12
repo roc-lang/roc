@@ -482,6 +482,7 @@ test "downloadAndExtract with bad archive returns error without crash" {
         io,
         url,
         tmp_path,
+        .{},
     );
 
     try testing.expectError(download.DownloadError.InvalidTarHeader, result);

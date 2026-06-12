@@ -60,15 +60,19 @@ const ThreadCondition = threading.Condition;
 /// Native fetchUrl implementation that downloads a tar.zst bundle via HTTP
 /// and extracts it into the destination directory. Used by the CLI to wire up
 /// real download support through the Filesystem vtable.
-pub const nativeFetchUrl: ?*const fn (?*anyopaque, std.Io, Allocator, []const u8, []const u8) CoreCtx.FetchUrlError!void = if (!is_freestanding)
+pub const nativeFetchUrl: ?*const fn (?*anyopaque, std.Io, Allocator, []const u8, []const u8, ?u64) CoreCtx.FetchUrlError!u64 = if (!is_freestanding)
     &nativeFetchUrlImpl
 else
     null;
 
-fn nativeFetchUrlImpl(_: ?*anyopaque, std_io: std.Io, allocator: Allocator, url: []const u8, dest_path: []const u8) CoreCtx.FetchUrlError!void {
+fn nativeFetchUrlImpl(_: ?*anyopaque, std_io: std.Io, allocator: Allocator, url: []const u8, dest_path: []const u8, max_expanded_bytes: ?u64) CoreCtx.FetchUrlError!u64 {
     var alloc = allocator;
-    unbundle.download.downloadAndExtract(&alloc, std_io, url, dest_path) catch {
-        return error.DownloadFailed;
+    return unbundle.download.downloadAndExtract(&alloc, std_io, url, dest_path, .{
+        .max_expanded_bytes = max_expanded_bytes,
+    }) catch |err| switch (err) {
+        error.ExpandedSizeLimitExceeded => error.ExpandedSizeLimitExceeded,
+        error.OutOfMemory => error.OutOfMemory,
+        else => error.DownloadFailed,
     };
 }
 
@@ -1605,7 +1609,7 @@ pub const BuildEnv = struct {
             };
 
             // Download and extract via io vtable (path-based, no Dir handle needed)
-            self.filesystem.fetchUrl(self.gpa, url, package_dir_path) catch |fetch_err| {
+            _ = self.filesystem.fetchUrl(self.gpa, url, package_dir_path, null) catch |fetch_err| {
                 self.filesystem.deleteTree(package_dir_path) catch {};
                 switch (fetch_err) {
                     error.OutOfMemory => return error.OutOfMemory,

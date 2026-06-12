@@ -63,6 +63,7 @@ fn getTempDir(allocator: std.mem.Allocator, io: std.Io) Allocator.Error!std.Io.D
 /// Errors that can occur during the download operation.
 pub const DownloadError = error{
     InvalidUrl,
+    InvalidVersion,
     LocalhostWasNotLoopback,
     InvalidHash,
     HttpError,
@@ -141,7 +142,7 @@ fn makeUrlId(url: []const u8, start: usize, end: usize) error{InvalidUrl}!base.u
     };
 }
 
-pub fn parseUrlPath(url: []const u8) error{ InvalidUrl, NoHashInUrl }!ParsedUrl {
+pub fn parseUrlPath(url: []const u8) error{ InvalidUrl, InvalidVersion, NoHashInUrl }!ParsedUrl {
     const url_id_start = schemeContentStart(url) orelse return error.InvalidUrl;
     const last_slash = std.mem.findLast(u8, url, "/") orelse return error.NoHashInUrl;
     if (last_slash < url_id_start) return error.NoHashInUrl;
@@ -162,6 +163,11 @@ pub fn parseUrlPath(url: []const u8) error{ InvalidUrl, NoHashInUrl }!ParsedUrl 
         if (version_slash >= url_id_start) parseVersionComponent(before_hash[version_slash + 1 ..]) else null
     else
         null;
+    if (version_parse) |parsed_version| {
+        // 0.0.0 is reserved as the no-version sentinel; the lowest publishable
+        // version is 0.0.1.
+        if (!parsed_version.isPresent()) return error.InvalidVersion;
+    }
     const version = version_parse orelse Version.none;
     const url_id_end = if (version_parse != null)
         std.mem.findLast(u8, before_hash, "/").?
@@ -207,12 +213,23 @@ test "parseUrlPath extracts url id" {
     }
 
     {
-        const url = "https://example.com/0.0.0/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst";
+        const url = "https://example.com/foo/0.0.1/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst";
         const parsed = try parseUrlPath(url);
 
-        try std.testing.expectEqualStrings("example.com", parsed.urlId(url));
-        try std.testing.expectEqual(Version.none, parsed.version);
+        try std.testing.expectEqualStrings("example.com/foo", parsed.urlId(url));
+        try std.testing.expectEqual(Version{ .major = 0, .minor = 0, .patch = 1 }, parsed.version);
     }
+}
+
+test "parseUrlPath rejects the reserved 0.0.0 version" {
+    try std.testing.expectError(
+        error.InvalidVersion,
+        parseUrlPath("https://example.com/0.0.0/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst"),
+    );
+    try std.testing.expectError(
+        error.InvalidVersion,
+        parseUrlPath("https://example.com/foo/bar/0.0.0/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst"),
+    );
 }
 
 test "parseUrlPath rejects URLs without a hash path segment" {
@@ -239,7 +256,15 @@ pub fn validateUrl(url: []const u8) DownloadError!ParsedUrl {
     return parseUrlPath(url);
 }
 
+/// Options controlling download and extraction.
+pub const DownloadOptions = struct {
+    /// Maximum allowed decompressed size of the bundle in bytes, or null for
+    /// no limit.
+    max_expanded_bytes: ?u64 = null,
+};
+
 /// Download and extract a bundled tar.zst file from a URL.
+/// Returns the total decompressed size of the bundle in bytes.
 ///
 /// The URL must:
 /// - Start with "https://" or "http://127.0.0.1"
@@ -254,7 +279,8 @@ pub fn downloadAndExtract(
     io: std.Io,
     url: []const u8,
     dest_path: []const u8,
-) DownloadError!void {
+    options: DownloadOptions,
+) DownloadError!u64 {
     var extract_dir = std.Io.Dir.cwd().openDir(io, dest_path, .{}) catch return error.FileError;
     defer extract_dir.close(io);
 
@@ -293,7 +319,9 @@ pub fn downloadAndExtract(
     defer dir_writer.deinit();
 
     // Extract the content using the streaming architecture
-    unbundle.unbundleStream(allocator.*, &file_reader.interface, dir_writer.extractWriter(), &expected_hash, null) catch |err| {
+    const expanded_bytes = unbundle.unbundleStream(allocator.*, &file_reader.interface, dir_writer.extractWriter(), &expected_hash, null, .{
+        .max_expanded_bytes = options.max_expanded_bytes,
+    }) catch |err| {
         // Clean up temp file on error
         extract_dir.deleteFile(io, temp_filename) catch {};
         return err;
@@ -304,6 +332,8 @@ pub fn downloadAndExtract(
         // If rename fails, just delete the temp file
         extract_dir.deleteFile(io, temp_filename) catch {};
     };
+
+    return expanded_bytes;
 }
 
 /// Download HTTP response body to a file with a unique random suffix.
@@ -397,6 +427,7 @@ pub fn downloadAndExtractToBuffer(
     allocator: *std.mem.Allocator,
     io: std.Io,
     url: []const u8,
+    options: DownloadOptions,
 ) DownloadError!unbundle.BufferExtractWriter {
     // Validate URL and extract hash
     const parsed_url = try validateUrl(url);
@@ -439,7 +470,9 @@ pub fn downloadAndExtractToBuffer(
     errdefer buffer_writer.deinit();
 
     // Extract the content using the streaming architecture
-    try unbundle.unbundleStream(allocator.*, &file_reader.interface, buffer_writer.extractWriter(), &expected_hash, null);
+    _ = try unbundle.unbundleStream(allocator.*, &file_reader.interface, buffer_writer.extractWriter(), &expected_hash, null, .{
+        .max_expanded_bytes = options.max_expanded_bytes,
+    });
 
     return buffer_writer;
 }

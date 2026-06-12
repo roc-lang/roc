@@ -2961,7 +2961,7 @@ fn resolveUrlBundle(ctx: *CliCtx, url: []const u8) (CliError || error{OutOfMemor
 
         // Download and extract (path-based, no Dir handle needed)
         var gpa_copy = ctx.gpa;
-        download.downloadAndExtract(&gpa_copy, ctx.io.std_io, url, package_dir_path) catch |download_err| {
+        _ = download.downloadAndExtract(&gpa_copy, ctx.io.std_io, url, package_dir_path, .{}) catch |download_err| {
             std.Io.Dir.cwd().deleteTree(ctx.io.std_io, package_dir_path) catch {};
             return ctx.fail(.{ .download_failed = .{
                 .url = url,
