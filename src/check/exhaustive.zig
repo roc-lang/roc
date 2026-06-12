@@ -1319,6 +1319,7 @@ fn isCtorPayloadTagUnionInhabited(
     }
 }
 
+/// Collects unresolved unbound type variables that make a constructor payload uninhabited.
 pub fn collectCtorPayloadBlockers(
     type_store: *TypeStore,
     builtin_idents: BuiltinIdents,
