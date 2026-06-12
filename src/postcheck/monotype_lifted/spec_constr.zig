@@ -436,6 +436,7 @@ const Pass = struct {
                 try self.program.fns.append(self.allocator, .{
                     .symbol = self.symbols.fresh(),
                     .source = null,
+                    .debug_name = source_fn.debug_name,
                     .args = .empty(),
                     .captures = source_fn.captures,
                     .body = .hosted,
@@ -740,6 +741,7 @@ const Pass = struct {
         try self.program.fns.append(self.allocator, .{
             .symbol = self.symbols.fresh(),
             .source = null,
+            .debug_name = source_fn.debug_name,
             .args = .empty(),
             .captures = source_fn.captures,
             .body = .hosted,
@@ -772,6 +774,7 @@ const Pass = struct {
         self.program.fns.items[@intFromEnum(spec_fn_id)] = .{
             .symbol = symbol,
             .source = null,
+            .debug_name = source_fn.debug_name,
             .args = args,
             .captures = source_fn.captures,
             .body = body,
@@ -2788,6 +2791,7 @@ const Cloner = struct {
         try self.pass.program.fns.append(self.pass.allocator, .{
             .symbol = symbol,
             .source = source_fn.source,
+            .debug_name = source_fn.debug_name,
             .args = args_span,
             .captures = captures_span,
             .body = .hosted,
@@ -2833,6 +2837,7 @@ const Cloner = struct {
         self.pass.program.fns.items[@intFromEnum(fn_id)] = .{
             .symbol = symbol,
             .source = source_fn.source,
+            .debug_name = source_fn.debug_name,
             .args = args_span,
             .captures = captures_span,
             .body = .{ .roc = try self.cloneExpr(source_body) },

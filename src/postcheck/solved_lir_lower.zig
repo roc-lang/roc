@@ -631,6 +631,9 @@ const Lowerer = struct {
             .abi = if (spec.abi == .erased) .erased_callable else .roc,
             .hosted = try self.hostedProcForSource(source_fn.source),
         });
+        if (source_fn.debug_name) |name| {
+            try self.result.store.setProcDebugName(proc, self.solved.lifted.names.exportNameText(name));
+        }
         entry.proc = proc;
         self.fn_entries.items[index] = entry;
         return proc;

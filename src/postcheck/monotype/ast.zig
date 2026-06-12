@@ -365,6 +365,7 @@ pub const Stmt = union(enum) {
 pub const Def = struct {
     symbol: Common.Symbol,
     fn_def: ?FnTemplate = null,
+    debug_name: ?names.ExportNameId = null,
     args: Span(TypedLocal),
     body: FnBody,
     ret: Type.TypeId,
@@ -380,6 +381,7 @@ pub const FnBody = union(enum) {
 pub const NestedDef = struct {
     symbol: Common.Symbol,
     fn_def: FnTemplate,
+    debug_name: ?names.ExportNameId = null,
     args: Span(TypedLocal),
     body: ExprId,
     ret: Type.TypeId,

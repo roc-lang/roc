@@ -241,6 +241,7 @@ pub const Stmt = union(enum) {
 pub const Fn = struct {
     symbol: Common.Symbol,
     source: ?Mono.FnTemplate = null,
+    debug_name: ?names.ExportNameId = null,
     args: Span(TypedLocal),
     body: FnBody,
     ret: Type.TypeId,

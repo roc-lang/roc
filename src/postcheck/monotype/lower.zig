@@ -915,6 +915,7 @@ const Builder = struct {
         const template = view.templates.get(template_ref.template);
         const symbol = self.symbols.fresh();
         const fn_template = self.fnDefForTemplate(view, template_ref, source_fn_ty, source_fn_key, fn_ty);
+        const debug_name = try self.debugNameForTemplate(view, template_ref);
 
         const reserved: Ast.DefId = @enumFromInt(@as(u32, @intCast(self.program.defs.items.len)));
         try self.program.defs.append(self.allocator, undefined);
@@ -927,6 +928,7 @@ const Builder = struct {
                 self.program.defs.items[@intFromEnum(reserved)] = .{
                     .symbol = symbol,
                     .fn_def = fn_template,
+                    .debug_name = debug_name,
                     .args = args,
                     .body = .hosted,
                     .ret = fn_data.ret,
@@ -954,6 +956,7 @@ const Builder = struct {
         self.program.defs.items[@intFromEnum(reserved)] = .{
             .symbol = symbol,
             .fn_def = fn_template,
+            .debug_name = debug_name,
             .args = lowered.args,
             .body = .{ .roc = lowered.body },
             .ret = lowered.ret,
@@ -1002,6 +1005,16 @@ const Builder = struct {
             .source_fn_key = source_fn_key,
             .mono_fn_ty = mono_fn_ty,
         };
+    }
+
+    fn debugNameForTemplate(
+        self: *Builder,
+        view: ModuleView,
+        template: names.ProcTemplate,
+    ) Allocator.Error!?names.ExportNameId {
+        const proc_base = view.names.procBase(template.proc_base);
+        const export_name = proc_base.export_name orelse return null;
+        return try self.program.names.internExportName(view.names.exportNameText(export_name));
     }
 
     fn fnDefForProcedureBindingBody(

@@ -257,6 +257,22 @@ const BuiltinsObjects = struct {
     }
 };
 
+const DefaultPlatformRuntimeObjects = struct {
+    const x64musl = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64musl/roc_default_platform.o");
+
+    pub fn forTarget(target: RocTarget) ?[]const u8 {
+        return switch (target) {
+            .x64musl => x64musl,
+            else => null,
+        };
+    }
+
+    pub fn filename(target: RocTarget) []const u8 {
+        _ = target;
+        return "roc_default_platform.o";
+    }
+};
+
 // Workaround for Zig standard library compilation issue on macOS ARM64.
 //
 // The Problem:
@@ -1814,6 +1830,7 @@ fn rocRun(ctx: *CliCtx, args: cli_args.RunArgs) anyerror!void {
                 host_input_paths.items,
                 try hostedSymbolsFromLir(ctx.arena, &view.store),
                 target_name,
+                false,
             );
         }
 
@@ -3567,13 +3584,9 @@ fn rocBuild(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
         return;
     }
 
-    // Headerless apps use a simple builtin platform and cannot be compiled
+    // Headerless apps build through a synthetic default platform.
     if (try readDefaultAppSource(ctx, args.path)) |source| {
-        ctx.gpa.free(source);
-        try renderProblem(ctx.gpa, ctx.io.stderr(), .{
-            .build_not_supported_for_headerless = .{ .app_path = args.path },
-        });
-        return error.UnsupportedTarget;
+        return rocBuildDefaultApp(ctx, args, source);
     }
 
     // Select build path based on optimization level
@@ -3582,6 +3595,63 @@ fn rocBuild(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
         .interpreter => try rocBuildEmbedded(ctx, args),
         .size, .speed => try rocBuildLlvm(ctx, args),
     }
+}
+
+fn rocBuildDefaultApp(ctx: *CliCtx, args: cli_args.BuildArgs, original_source: []const u8) anyerror!void {
+    defer ctx.gpa.free(original_source);
+
+    const temp_dir = createUniqueTempDir(ctx) catch |err| {
+        return ctx.fail(.{ .temp_dir_failed = .{ .err = err } });
+    };
+    defer std.Io.Dir.cwd().deleteTree(ctx.io.std_io, temp_dir) catch {};
+
+    const platform_dir = try std.fs.path.join(ctx.arena, &.{ temp_dir, ".roc_echo_platform" });
+    try std.Io.Dir.cwd().createDirPath(ctx.io.std_io, platform_dir);
+
+    const app_filename = std.fs.path.basename(args.path);
+    const app_path = try std.fs.path.join(ctx.arena, &.{ temp_dir, app_filename });
+    const platform_main_path = try std.fs.path.join(ctx.arena, &.{ platform_dir, "main.roc" });
+    const echo_module_path = try std.fs.path.join(ctx.arena, &.{ platform_dir, "Echo.roc" });
+
+    const header =
+        "app [main!] { pf: platform \"./.roc_echo_platform/main.roc\" }\n\n" ++
+        "import pf.Echo\n\n" ++
+        "echo! = |msg| Echo.line!(msg)\n\n";
+    const synthetic_source = try std.mem.concat(ctx.gpa, u8, &.{ header, original_source });
+    defer ctx.gpa.free(synthetic_source);
+
+    try std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = app_path, .data = synthetic_source });
+    try std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = platform_main_path, .data = defaultBuildPlatformSource(args) });
+    try std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = echo_module_path, .data = echo_platform.echo_module_source });
+
+    var synthetic_args = args;
+    synthetic_args.path = app_path;
+    synthetic_args.synthetic_default_platform = true;
+    if (synthetic_args.output == null) {
+        synthetic_args.output = try base.module_path.getModuleNameAlloc(ctx.arena, args.path);
+    }
+
+    switch (synthetic_args.opt) {
+        .dev => try rocBuildNative(ctx, synthetic_args),
+        .interpreter => try rocBuildEmbedded(ctx, synthetic_args),
+        .size, .speed => try rocBuildLlvm(ctx, synthetic_args),
+    }
+}
+
+fn defaultBuildPlatformSource(args: cli_args.BuildArgs) []const u8 {
+    const target = if (args.target) |target_str|
+        RocTarget.fromString(target_str)
+    else
+        RocTarget.detectNative();
+
+    if (target) |roc_build_target| {
+        return switch (roc_build_target.toOsTag()) {
+            .macos, .windows => echo_platform.build_c_platform_main_source,
+            else => echo_platform.build_platform_main_source,
+        };
+    }
+
+    return echo_platform.build_platform_main_source;
 }
 
 /// Build using the dev backend to generate native machine code.
@@ -3761,7 +3831,12 @@ fn verifyHostInputSymbols(
     host_input_paths: []const []const u8,
     hosted_symbols: []const []const u8,
     target_name: []const u8,
+    synthetic_default_platform: bool,
 ) anyerror!void {
+    if (host_input_paths.len == 0 and synthetic_default_platform) {
+        return;
+    }
+
     var needed = std.ArrayList([]const u8).empty;
     try needed.appendSlice(ctx.arena, &host_symbols.runtime_symbols);
     try needed.appendSlice(ctx.arena, hosted_symbols);
@@ -3773,6 +3848,16 @@ fn verifyHostInputSymbols(
             .target = target_name,
         } });
     }
+}
+
+fn writeDefaultPlatformRuntimeObject(ctx: *CliCtx, build_cache_dir: []const u8, target: RocTarget) anyerror!?[]const u8 {
+    const bytes = DefaultPlatformRuntimeObjects.forTarget(target) orelse return null;
+    const runtime_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, DefaultPlatformRuntimeObjects.filename(target) });
+    backend.writeFileWindowsAvSafe(ctx.io.std_io, runtime_path, bytes) catch |err| {
+        std.log.err("Failed to write default platform runtime object {s}: {}", .{ runtime_path, err });
+        return err;
+    };
+    return runtime_path;
 }
 
 /// The host inputs of a link, in link order.
@@ -4456,6 +4541,7 @@ fn compileLlvmAppObject(
     link_type: roc_target.OutputKind,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
     entrypoints: []const backend.Entrypoint,
+    enable_default_platform_runtime: bool,
 ) anyerror!LlvmObjectPaths {
     const std_target = try stdTargetForLlvmBuild(ctx, target);
     const llvm_cpu = llvmCpuNameForTarget(std_target);
@@ -4468,6 +4554,7 @@ fn compileLlvmAppObject(
     );
     codegen.layout_store = &lowered.lir_result.layouts;
     codegen.emit_debug_info = true;
+    codegen.enable_default_platform_runtime = enable_default_platform_runtime;
     codegen.debug_producer = "roc " ++ build_options.compiler_version;
     defer codegen.deinit();
 
@@ -4621,7 +4708,7 @@ fn rocBuildWasmLlvm(
         unreachable;
     }
 
-    const app_object = try compileLlvmAppObject(ctx, args, build_cache_dir, .wasm32, link_type, lowered, entrypoints);
+    const app_object = try compileLlvmAppObject(ctx, args, build_cache_dir, .wasm32, link_type, lowered, entrypoints, false);
 
     var owned_inputs: std.ArrayList([]u8) = .empty;
     defer freeOwnedWasmInputs(ctx, &owned_inputs);
@@ -4926,7 +5013,19 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
             static_data_exports,
         );
     } else {
-        const app_object = try compileLlvmAppObject(ctx, args, build_cache_dir, target, link_type, &lowered, entrypoints);
+        const hosted_symbols = try hostedSymbolsFromLir(ctx.arena, &lowered.lir_result.store);
+        const enable_default_platform_runtime = target_os == .linux and args.synthetic_default_platform;
+
+        const app_object = try compileLlvmAppObject(
+            ctx,
+            args,
+            build_cache_dir,
+            target,
+            link_type,
+            &lowered,
+            entrypoints,
+            enable_default_platform_runtime,
+        );
 
         var static_data_obj_path: ?[]const u8 = null;
         if (static_data_exports.len > 0) {
@@ -4949,6 +5048,13 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
         if (static_data_obj_path) |path| {
             try object_files.append(path);
         }
+        if (enable_default_platform_runtime) {
+            if (try writeDefaultPlatformRuntimeObject(ctx, build_cache_dir, target)) |runtime_path| {
+                try object_files.append(runtime_path);
+            } else {
+                return error.UnsupportedTarget;
+            }
+        }
 
         if (link_type == .archive) {
             try writeArchiveOutput(ctx, target, final_output_path, link_inputs, object_files.items);
@@ -4956,8 +5062,9 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
             try verifyHostInputSymbols(
                 ctx,
                 try hostInputPaths(ctx, link_inputs),
-                try hostedSymbolsFromLir(ctx.arena, &lowered.lir_result.store),
+                hosted_symbols,
                 link_inputs.target_name,
+                args.synthetic_default_platform,
             );
 
             const force_undefined_symbols = try staticDataLinkRootSymbols(ctx, static_data_exports);
@@ -5289,6 +5396,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
             try hostInputPaths(ctx, link_inputs),
             try hostedSymbolsFromLir(ctx.arena, &lowered.lir_result.store),
             link_inputs.target_name,
+            false,
         );
 
         const force_undefined_symbols = try staticDataLinkRootSymbols(ctx, static_data_exports);

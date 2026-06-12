@@ -317,6 +317,7 @@ const Lifter = struct {
         self.output.fns.items[@intFromEnum(fn_id)] = .{
             .symbol = def.symbol,
             .source = def.fn_def,
+            .debug_name = def.debug_name,
             .args = def.args,
             .captures = .empty(),
             .body = body,
@@ -340,6 +341,7 @@ const Lifter = struct {
         self.output.fns.items[@intFromEnum(fn_id)] = .{
             .symbol = def.symbol,
             .source = def.fn_def,
+            .debug_name = def.debug_name,
             .args = def.args,
             .captures = capture_span,
             .body = .{ .roc = def.body },

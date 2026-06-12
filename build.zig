@@ -4734,6 +4734,32 @@ fn addMainExe(
             b.pathJoin(&.{ "src/cli/targets", cross_target.name, builtins_extern_ext }),
         );
         exe.step.dependOn(&copy_cross_builtins_extern.step);
+
+        if (std.mem.eql(u8, cross_target.name, "x64musl")) {
+            const default_platform_runtime_obj = b.addObject(.{
+                .name = "roc_default_platform_x64musl",
+                .root_module = b.createModule(.{
+                    .root_source_file = b.path("src/default_platform/linux_runtime.zig"),
+                    .target = cross_resolved_target,
+                    .optimize = .ReleaseFast,
+                    .strip = false,
+                    .omit_frame_pointer = false,
+                    .pic = true,
+                    .single_threaded = true,
+                }),
+            });
+            default_platform_runtime_obj.root_module.stack_check = false;
+            default_platform_runtime_obj.root_module.link_libc = false;
+            default_platform_runtime_obj.bundle_compiler_rt = false;
+            configureBackend(default_platform_runtime_obj, cross_resolved_target);
+
+            const copy_default_platform_runtime = b.addUpdateSourceFiles();
+            copy_default_platform_runtime.addCopyFileToSource(
+                default_platform_runtime_obj.getEmittedBin(),
+                b.pathJoin(&.{ "src/cli/targets", cross_target.name, "roc_default_platform.o" }),
+            );
+            exe.step.dependOn(&copy_default_platform_runtime.step);
+        }
     }
 
     const config = b.addOptions();

@@ -62,6 +62,7 @@ pub const Stmt = Mono.Stmt;
 pub const Fn = struct {
     symbol: Common.Symbol,
     source: ?Mono.FnTemplate = null,
+    debug_name: ?names.ExportNameId = null,
     args: Span(TypedLocal),
     captures: Span(TypedLocal),
     body: FnBody,

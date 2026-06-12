@@ -2014,6 +2014,7 @@ const Inserter = struct {
             .abi = source_spec.abi,
             .hosted = source_spec.hosted,
         });
+        self.store.copyProcDebugInfo(variant, callee);
         entry.value_ptr.* = variant;
         try self.variants.sigs.append(self.store.allocator, demanded);
         try self.variants.queue.append(self.store.allocator, .{
