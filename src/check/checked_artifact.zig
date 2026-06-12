@@ -5376,7 +5376,18 @@ const CheckedSourceNodes = struct {
             },
             .e_dispatch_call => |call| {
                 try self.markExpr(call.receiver, work);
-                try self.markExprSpan(module, call.args, work);
+                if (module.moduleEnvConst().isStrInterpolationCall(expr_idx)) {
+                    // A Str-typed interpolation publishes as a plain segment
+                    // list; the synthetic iterator chain stays out of the
+                    // artifact, so only the pair payloads are reachable.
+                    var pairs = module.moduleEnvConst().interpolationPairs(expr_idx);
+                    while (pairs.next()) |pair| {
+                        try self.markExpr(pair.interpolation, work);
+                        try self.markExpr(pair.segment, work);
+                    }
+                } else {
+                    try self.markExprSpan(module, call.args, work);
+                }
             },
             .e_structural_eq => |eq| {
                 try self.markExpr(eq.lhs, work);
@@ -6581,7 +6592,12 @@ const CheckedBodyPayloadCopier = struct {
                 "ordinary method call reached artifact publication after checking; expected explicit static-dispatch plan",
                 .{},
             ),
-            .e_dispatch_call => .{ .dispatch_call = null },
+            .e_dispatch_call => blk: {
+                if (self.module.moduleEnvConst().isStrInterpolationCall(expr_idx)) {
+                    break :blk .{ .str = try self.copyStrInterpolationSegments(expr_idx) };
+                }
+                break :blk .{ .dispatch_call = null };
+            },
             .e_structural_eq => |eq| .{ .structural_eq = .{
                 .lhs = self.checkedExpr(eq.lhs),
                 .rhs = self.checkedExpr(eq.rhs),
@@ -6626,6 +6642,29 @@ const CheckedBodyPayloadCopier = struct {
                 .args = try self.copyExprSpan(run.args),
             } },
         };
+    }
+
+    /// Publish a Str-typed interpolation dispatch call as its ordered
+    /// segment list: the receiver literal, then each interpolation and the
+    /// literal segment that follows it. Lowering turns this into direct
+    /// string concatenation, so the synthetic iterator chain never reaches
+    /// code generation.
+    fn copyStrInterpolationSegments(self: *@This(), expr_idx: CIR.Expr.Idx) Allocator.Error![]const CheckedExprId {
+        const env = self.module.moduleEnvConst();
+        var segments = std.ArrayList(CheckedExprId).empty;
+        errdefer segments.deinit(self.allocator);
+
+        const call = switch (self.module.expr(expr_idx).data) {
+            .e_dispatch_call => |call| call,
+            else => checkedArtifactInvariant("interpolation segment publication reached a non-dispatch expression", .{}),
+        };
+        try segments.append(self.allocator, self.checkedExpr(call.receiver));
+        var pairs = env.interpolationPairs(expr_idx);
+        while (pairs.next()) |pair| {
+            try segments.append(self.allocator, self.checkedExpr(pair.interpolation));
+            try segments.append(self.allocator, self.checkedExpr(pair.segment));
+        }
+        return try segments.toOwnedSlice(self.allocator);
     }
 
     fn copyStrExpr(self: *@This(), expr_idx: CIR.Expr.Idx, span: CIR.Expr.Span) Allocator.Error!CheckedExprData {

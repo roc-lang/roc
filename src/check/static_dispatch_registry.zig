@@ -545,6 +545,10 @@ pub const StaticDispatchPlanTable = struct {
             }
 
             const expr_idx: CIR.Expr.Idx = @enumFromInt(node_idx);
+            // Str-typed interpolation calls publish as plain segment lists,
+            // so they have no dispatch plan and their iterator-chain
+            // arguments never enter the checked body store.
+            if (module.moduleEnvConst().isStrInterpolationCall(expr_idx)) continue;
             const checked_expr = checked_bodies.exprIdForSource(expr_idx) orelse continue;
             const expr = module.expr(expr_idx);
             const idents = module.identStoreConst();

@@ -3397,6 +3397,107 @@ pub fn isInterpolationCallNode(self: *const Self, node_idx: Node.Idx) bool {
     return false;
 }
 
+/// Whether the expression is a desugared interpolation dispatch call whose
+/// result type resolved to builtin `Str`. Such a call can be published as a
+/// plain ordered segment list — equivalent to `Str.from_interpolation` —
+/// instead of dispatching through the synthetic iterator chain.
+pub fn isStrInterpolationCall(self: *const Self, expr_idx: CIR.Expr.Idx) bool {
+    if (!self.isInterpolationCallNode(nodeIdxFrom(expr_idx))) return false;
+    switch (self.store.getExpr(expr_idx)) {
+        .e_dispatch_call => {},
+        else => return false,
+    }
+    var current = varFrom(expr_idx);
+    while (true) {
+        const resolved = self.types.resolveVar(current);
+        switch (resolved.desc.content) {
+            .alias => |alias| current = self.types.getAliasBackingVar(alias),
+            .structure => |flat| return switch (flat) {
+                .nominal_type => |nominal| nominal.originIsBuiltin() and
+                    (nominal.ident.ident_idx.eql(self.idents.str) or
+                        nominal.ident.ident_idx.eql(self.idents.builtin_str)),
+                else => false,
+            },
+            else => return false,
+        }
+    }
+}
+
+/// One `(interpolation, following-segment)` pair from the synthetic
+/// `prepended` chain of a desugared interpolated string.
+pub const InterpolationPair = struct {
+    interpolation: CIR.Expr.Idx,
+    segment: CIR.Expr.Idx,
+};
+
+/// Iterator yielding a desugared interpolated string's
+/// `(interpolation, following-segment)` pairs in source order.
+pub const InterpolationPairIterator = struct {
+    env: *const Self,
+    current: CIR.Expr.Idx,
+
+    /// Next pair in source order, or null once the terminal `[].iter()`
+    /// call is reached.
+    pub fn next(self: *InterpolationPairIterator) ?InterpolationPair {
+        const call = switch (self.env.store.getExpr(self.current)) {
+            .e_dispatch_call => |call| call,
+            else => {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic("module env invariant violated: interpolation chain expression is not a dispatch call", .{});
+                }
+                unreachable;
+            },
+        };
+        const args = self.env.store.sliceExpr(call.args);
+        if (args.len == 0) return null;
+        if (args.len != 1) {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("module env invariant violated: interpolation chain call has {d} arguments", .{args.len});
+            }
+            unreachable;
+        }
+        const elems = switch (self.env.store.getExpr(args[0])) {
+            .e_tuple => |tuple| self.env.store.sliceExpr(tuple.elems),
+            else => {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic("module env invariant violated: interpolation chain argument is not a pair", .{});
+                }
+                unreachable;
+            },
+        };
+        if (elems.len != 2) {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("module env invariant violated: interpolation pair has {d} elements", .{elems.len});
+            }
+            unreachable;
+        }
+        self.current = call.receiver;
+        return .{ .interpolation = elems[0], .segment = elems[1] };
+    }
+};
+
+/// Iterate the `(interpolation, following-segment)` pairs of a desugared
+/// interpolation dispatch call in source order.
+pub fn interpolationPairs(self: *const Self, call_expr_idx: CIR.Expr.Idx) InterpolationPairIterator {
+    const call = switch (self.store.getExpr(call_expr_idx)) {
+        .e_dispatch_call => |call| call,
+        else => {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("module env invariant violated: interpolation call expression is not a dispatch call", .{});
+            }
+            unreachable;
+        },
+    };
+    const args = self.store.sliceExpr(call.args);
+    if (args.len != 1) {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("module env invariant violated: interpolation call has {d} arguments", .{args.len});
+        }
+        unreachable;
+    }
+    return .{ .env = self, .current = args[0] };
+}
+
 /// Record the scope-resolved type target for an explicit numeric suffix.
 pub fn recordNumericSuffixType(
     self: *Self,
