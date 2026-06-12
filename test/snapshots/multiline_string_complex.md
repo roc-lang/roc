@@ -285,16 +285,15 @@ x = {
 				(p-assign (ident "#interp_0"))
 				(e-lookup-local
 					(p-assign (ident "value1"))))
-			(e-dispatch-call (method "from_interpolation") (constraint-fn-var 231)
-				(receiver
-					(e-string
-						(e-literal (string "This is a string
+			(e-interpolation (constraint-fn-var 195)
+				(first
+					(e-literal (string "This is a string
 With multiple lines
-"))))
-				(args
-					(e-dispatch-call (method "prepended") (constraint-fn-var 189)
+")))
+				(rest
+					(e-dispatch-call (method "prepended") (constraint-fn-var 153)
 						(receiver
-							(e-dispatch-call (method "iter") (constraint-fn-var 125)
+							(e-dispatch-call (method "iter") (constraint-fn-var 102)
 								(receiver
 									(e-empty_list))
 								(args)))
@@ -303,8 +302,7 @@ With multiple lines
 								(elems
 									(e-lookup-local
 										(p-assign (ident "#interp_0")))
-									(e-string
-										(e-literal (string "")))))))))))
+									(e-literal (string ""))))))))))
 	(d-let
 		(p-assign (ident "value4"))
 		(e-block
@@ -312,16 +310,15 @@ With multiple lines
 				(p-assign (ident "#interp_1"))
 				(e-lookup-local
 					(p-assign (ident "value2"))))
-			(e-dispatch-call (method "from_interpolation") (constraint-fn-var 358)
-				(receiver
-					(e-string
-						(e-literal (string "This is a string
+			(e-interpolation (constraint-fn-var 296)
+				(first
+					(e-literal (string "This is a string
 With multiple lines
-"))))
-				(args
-					(e-dispatch-call (method "prepended") (constraint-fn-var 316)
+")))
+				(rest
+					(e-dispatch-call (method "prepended") (constraint-fn-var 254)
 						(receiver
-							(e-dispatch-call (method "iter") (constraint-fn-var 252)
+							(e-dispatch-call (method "iter") (constraint-fn-var 203)
 								(receiver
 									(e-empty_list))
 								(args)))
@@ -330,8 +327,7 @@ With multiple lines
 								(elems
 									(e-lookup-local
 										(p-assign (ident "#interp_1")))
-									(e-string
-										(e-literal (string "")))))))))))
+									(e-literal (string ""))))))))))
 	(d-let
 		(p-assign (ident "value5"))
 		(e-record
@@ -352,13 +348,13 @@ With multiple lines
 							(e-string
 								(e-literal (string "multiline"))))))
 				(field (name "d")
-					(e-dispatch-call (method "minus") (constraint-fn-var 469)
+					(e-dispatch-call (method "minus") (constraint-fn-var 392)
 						(receiver
 							(e-num (value "0")))
 						(args
 							(e-string))))
 				(field (name "e")
-					(e-dispatch-call (method "not") (constraint-fn-var 484)
+					(e-dispatch-call (method "not") (constraint-fn-var 404)
 						(receiver
 							(e-string))
 						(args))))))

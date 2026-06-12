@@ -90,7 +90,7 @@ main = |_y| {
 							(e-lookup-local
 								(p-assign (ident "alias")))
 							(e-num (value "1")))
-						(e-call (constraint-fn-var 80)
+						(e-call (constraint-fn-var 77)
 							(e-lookup-local
 								(p-assign (ident "alias")))
 							(e-string

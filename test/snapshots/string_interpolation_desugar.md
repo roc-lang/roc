@@ -54,14 +54,13 @@ NO CHANGE
 					(p-assign (ident "#interp_0"))
 					(e-lookup-local
 						(p-assign (ident "name"))))
-				(e-dispatch-call (method "from_interpolation") (constraint-fn-var 170)
-					(receiver
-						(e-string
-							(e-literal (string "Hello, "))))
-					(args
-						(e-dispatch-call (method "prepended") (constraint-fn-var 128)
+				(e-interpolation (constraint-fn-var 142)
+					(first
+						(e-literal (string "Hello, ")))
+					(rest
+						(e-dispatch-call (method "prepended") (constraint-fn-var 100)
 							(receiver
-								(e-dispatch-call (method "iter") (constraint-fn-var 64)
+								(e-dispatch-call (method "iter") (constraint-fn-var 49)
 									(receiver
 										(e-empty_list))
 									(args)))
@@ -70,8 +69,7 @@ NO CHANGE
 									(elems
 										(e-lookup-local
 											(p-assign (ident "#interp_0")))
-										(e-string
-											(e-literal (string "!")))))))))))
+										(e-literal (string "!"))))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Str") (builtin))

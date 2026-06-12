@@ -172,21 +172,20 @@ NO CHANGE
 						(p-assign (ident "acc"))))
 				(s-let
 					(p-assign (ident "#interp_1"))
-					(e-call (constraint-fn-var 587)
+					(e-call (constraint-fn-var 455)
 						(e-lookup-local
 							(p-assign (ident "process")))
 						(e-lookup-local
 							(p-assign (ident "child")))))
-				(e-dispatch-call (method "from_interpolation") (constraint-fn-var 771)
-					(receiver
-						(e-string
-							(e-literal (string ""))))
-					(args
-						(e-dispatch-call (method "prepended") (constraint-fn-var 729)
+				(e-interpolation (constraint-fn-var 600)
+					(first
+						(e-literal (string "")))
+					(rest
+						(e-dispatch-call (method "prepended") (constraint-fn-var 558)
 							(receiver
-								(e-dispatch-call (method "prepended") (constraint-fn-var 671)
+								(e-dispatch-call (method "prepended") (constraint-fn-var 513)
 									(receiver
-										(e-dispatch-call (method "iter") (constraint-fn-var 607)
+										(e-dispatch-call (method "iter") (constraint-fn-var 462)
 											(receiver
 												(e-empty_list))
 											(args)))
@@ -195,15 +194,13 @@ NO CHANGE
 											(elems
 												(e-lookup-local
 													(p-assign (ident "#interp_1")))
-												(e-string
-													(e-literal (string ""))))))))
+												(e-literal (string "")))))))
 							(args
 								(e-tuple
 									(elems
 										(e-lookup-local
 											(p-assign (ident "#interp_0")))
-										(e-string
-											(e-literal (string " ")))))))))))
+										(e-literal (string " "))))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Str") (builtin))
@@ -232,7 +229,7 @@ NO CHANGE
 											(p-assign (ident "tag"))))
 									(s-let
 										(p-assign (ident "#interp_3"))
-										(e-call (constraint-fn-var 239)
+										(e-call (constraint-fn-var 230)
 											(e-lookup-external
 												(builtin))
 											(e-lookup-local
@@ -241,16 +238,15 @@ NO CHANGE
 												(e-literal (string "")))
 											(e-lookup-local
 												(p-assign (ident "process_child")))))
-									(e-dispatch-call (method "from_interpolation") (constraint-fn-var 459)
-										(receiver
-											(e-string
-												(e-literal (string ""))))
-										(args
-											(e-dispatch-call (method "prepended") (constraint-fn-var 381)
+									(e-interpolation (constraint-fn-var 399)
+										(first
+											(e-literal (string "")))
+										(rest
+											(e-dispatch-call (method "prepended") (constraint-fn-var 333)
 												(receiver
-													(e-dispatch-call (method "prepended") (constraint-fn-var 323)
+													(e-dispatch-call (method "prepended") (constraint-fn-var 288)
 														(receiver
-															(e-dispatch-call (method "iter") (constraint-fn-var 259)
+															(e-dispatch-call (method "iter") (constraint-fn-var 237)
 																(receiver
 																	(e-empty_list))
 																(args)))
@@ -259,15 +255,13 @@ NO CHANGE
 																(elems
 																	(e-lookup-local
 																		(p-assign (ident "#interp_3")))
-																	(e-string
-																		(e-literal (string ""))))))))
+																	(e-literal (string "")))))))
 												(args
 													(e-tuple
 														(elems
 															(e-lookup-local
 																(p-assign (ident "#interp_2")))
-															(e-string
-																(e-literal (string ":"))))))))))))
+															(e-literal (string ":")))))))))))
 						(branch
 							(patterns
 								(pattern (degenerate false)
@@ -295,7 +289,7 @@ NO CHANGE
 			(ty-lookup (name "Elem") (local))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-call (constraint-fn-var 1039)
+		(e-call (constraint-fn-var 766)
 			(e-lookup-local
 				(p-assign (ident "process")))
 			(e-lookup-local

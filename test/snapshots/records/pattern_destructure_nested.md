@@ -114,18 +114,17 @@ match person {
 							(p-assign (ident "#interp_2"))
 							(e-lookup-local
 								(p-assign (ident "city"))))
-						(e-dispatch-call (method "from_interpolation") (constraint-fn-var 294)
-							(receiver
-								(e-string
-									(e-literal (string ""))))
-							(args
-								(e-dispatch-call (method "prepended") (constraint-fn-var 252)
+						(e-interpolation (constraint-fn-var 238)
+							(first
+								(e-literal (string "")))
+							(rest
+								(e-dispatch-call (method "prepended") (constraint-fn-var 196)
 									(receiver
-										(e-dispatch-call (method "prepended") (constraint-fn-var 194)
+										(e-dispatch-call (method "prepended") (constraint-fn-var 151)
 											(receiver
-												(e-dispatch-call (method "prepended") (constraint-fn-var 136)
+												(e-dispatch-call (method "prepended") (constraint-fn-var 106)
 													(receiver
-														(e-dispatch-call (method "iter") (constraint-fn-var 72)
+														(e-dispatch-call (method "iter") (constraint-fn-var 55)
 															(receiver
 																(e-empty_list))
 															(args)))
@@ -134,22 +133,19 @@ match person {
 															(elems
 																(e-lookup-local
 																	(p-assign (ident "#interp_2")))
-																(e-string
-																	(e-literal (string ""))))))))
+																(e-literal (string "")))))))
 											(args
 												(e-tuple
 													(elems
 														(e-lookup-local
 															(p-assign (ident "#interp_1")))
-														(e-string
-															(e-literal (string " in "))))))))
+														(e-literal (string " in ")))))))
 									(args
 										(e-tuple
 											(elems
 												(e-lookup-local
 													(p-assign (ident "#interp_0")))
-												(e-string
-													(e-literal (string " lives on ")))))))))))))))
+												(e-literal (string " lives on "))))))))))))))
 ~~~
 # TYPES
 ~~~clojure

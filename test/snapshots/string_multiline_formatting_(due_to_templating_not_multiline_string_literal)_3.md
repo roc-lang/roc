@@ -49,14 +49,13 @@ NO CHANGE
 			(e-runtime-error (tag "ident_not_in_scope"))
 			(e-runtime-error (tag "ident_not_in_scope"))
 			(e-runtime-error (tag "ident_not_in_scope"))))
-	(e-dispatch-call (method "from_interpolation") (constraint-fn-var 151)
-		(receiver
-			(e-string
-				(e-literal (string "This is a string with "))))
-		(args
-			(e-dispatch-call (method "prepended") (constraint-fn-var 109)
+	(e-interpolation (constraint-fn-var 123)
+		(first
+			(e-literal (string "This is a string with ")))
+		(rest
+			(e-dispatch-call (method "prepended") (constraint-fn-var 81)
 				(receiver
-					(e-dispatch-call (method "iter") (constraint-fn-var 45)
+					(e-dispatch-call (method "iter") (constraint-fn-var 30)
 						(receiver
 							(e-empty_list))
 						(args)))
@@ -65,8 +64,7 @@ NO CHANGE
 						(elems
 							(e-lookup-local
 								(p-assign (ident "#interp_0")))
-							(e-string
-								(e-literal (string " lines of text due to the template parts"))))))))))
+							(e-literal (string " lines of text due to the template parts")))))))))
 ~~~
 # TYPES
 ~~~clojure

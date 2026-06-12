@@ -127,7 +127,7 @@ main = "${y}"
 				(p-assign (ident "thing"))
 				(p-assign (ident "f")))
 			(e-block
-				(e-call (constraint-fn-var 55)
+				(e-call (constraint-fn-var 53)
 					(e-lookup-local
 						(p-assign (ident "f")))
 					(e-lookup-local
@@ -142,7 +142,7 @@ main = "${y}"
 				(ty-rigid-var-lookup (ty-rigid-var (name "b"))))))
 	(d-let
 		(p-assign (ident "y"))
-		(e-call (constraint-fn-var 122)
+		(e-call (constraint-fn-var 120)
 			(e-lookup-local
 				(p-assign (ident "call")))
 			(e-num (value "5"))
@@ -150,7 +150,7 @@ main = "${y}"
 				(args
 					(p-assign (ident "i")))
 				(e-block
-					(e-dispatch-call (method "plus") (constraint-fn-var 120)
+					(e-dispatch-call (method "plus") (constraint-fn-var 118)
 						(receiver
 							(e-runtime-error (tag "erroneous_value_use")))
 						(args
@@ -161,14 +161,13 @@ main = "${y}"
 			(s-let
 				(p-assign (ident "#interp_0"))
 				(e-runtime-error (tag "erroneous_value_use")))
-			(e-dispatch-call (method "from_interpolation") (constraint-fn-var 248)
-				(receiver
-					(e-string
-						(e-literal (string ""))))
-				(args
-					(e-dispatch-call (method "prepended") (constraint-fn-var 206)
+			(e-interpolation (constraint-fn-var 220)
+				(first
+					(e-literal (string "")))
+				(rest
+					(e-dispatch-call (method "prepended") (constraint-fn-var 178)
 						(receiver
-							(e-dispatch-call (method "iter") (constraint-fn-var 142)
+							(e-dispatch-call (method "iter") (constraint-fn-var 127)
 								(receiver
 									(e-empty_list))
 								(args)))
@@ -176,8 +175,7 @@ main = "${y}"
 							(e-tuple
 								(elems
 									(e-runtime-error (tag "erroneous_value_use"))
-									(e-string
-										(e-literal (string ""))))))))))))
+									(e-literal (string "")))))))))))
 ~~~
 # TYPES
 ~~~clojure

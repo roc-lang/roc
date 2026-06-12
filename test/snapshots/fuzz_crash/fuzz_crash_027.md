@@ -1885,7 +1885,7 @@ main! = |_| { # Yeah Ie
 				(s-expr
 					(e-not-implemented))
 				(s-expr
-					(e-call (constraint-fn-var 1938)
+					(e-call (constraint-fn-var 1924)
 						(e-lookup-local
 							(p-assign (ident "match_time")))
 						(e-not-implemented)))
@@ -1908,14 +1908,13 @@ main! = |_| { # Yeah Ie
 							(p-assign (ident "#interp_0"))
 							(e-lookup-local
 								(p-assign (ident "world"))))
-						(e-dispatch-call (method "from_interpolation") (constraint-fn-var 2097)
-							(receiver
-								(e-string
-									(e-literal (string "Hello, "))))
-							(args
-								(e-dispatch-call (method "prepended") (constraint-fn-var 2055)
+						(e-interpolation (constraint-fn-var 2057)
+							(first
+								(e-literal (string "Hello, ")))
+							(rest
+								(e-dispatch-call (method "prepended") (constraint-fn-var 2015)
 									(receiver
-										(e-dispatch-call (method "iter") (constraint-fn-var 1991)
+										(e-dispatch-call (method "iter") (constraint-fn-var 1964)
 											(receiver
 												(e-empty_list))
 											(args)))
@@ -1924,8 +1923,7 @@ main! = |_| { # Yeah Ie
 											(elems
 												(e-lookup-local
 													(p-assign (ident "#interp_0")))
-												(e-string
-													(e-literal (string "")))))))))))
+												(e-literal (string ""))))))))))
 				(s-let
 					(p-assign (ident "list"))
 					(e-runtime-error (tag "expr_not_canonicalized")))

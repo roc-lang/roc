@@ -34,18 +34,17 @@ NO CHANGE
 (e-block
 	(s-let
 		(p-assign (ident "#interp_0"))
-		(e-call (constraint-fn-var 66)
+		(e-call (constraint-fn-var 64)
 			(e-lookup-external
 				(builtin))
 			(e-num (value "0"))))
-	(e-dispatch-call (method "from_interpolation") (constraint-fn-var 262)
-		(receiver
-			(e-string
-				(e-literal (string "zero: "))))
-		(args
-			(e-dispatch-call (method "prepended") (constraint-fn-var 220)
+	(e-interpolation (constraint-fn-var 234)
+		(first
+			(e-literal (string "zero: ")))
+		(rest
+			(e-dispatch-call (method "prepended") (constraint-fn-var 192)
 				(receiver
-					(e-dispatch-call (method "iter") (constraint-fn-var 156)
+					(e-dispatch-call (method "iter") (constraint-fn-var 141)
 						(receiver
 							(e-empty_list))
 						(args)))
@@ -54,8 +53,7 @@ NO CHANGE
 						(elems
 							(e-lookup-local
 								(p-assign (ident "#interp_0")))
-							(e-string
-								(e-literal (string ""))))))))))
+							(e-literal (string "")))))))))
 ~~~
 # TYPES
 ~~~clojure
