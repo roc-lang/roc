@@ -1319,6 +1319,11 @@ pub fn generateModule(self: *Self) std.mem.Allocator.Error!void {
         try self.generateForLoopFunction();
     }
 
+    const pattern_count = self.reader.intRangeAtMost(u8, 1, 4);
+    for (0..pattern_count) |_| {
+        try self.generatePatternFunction();
+    }
+
     const builtin_count = self.reader.intRangeAtMost(u8, 12, 36);
     for (0..builtin_count) |_| {
         try self.generateBuiltinAssociatedFunction();
@@ -1597,6 +1602,56 @@ fn generateForLoopFunction(self: *Self) std.mem.Allocator.Error!void {
         2 => try self.generateSupportForLoopFunction(name_id),
         else => unreachable,
     }
+}
+
+fn generatePatternFunction(self: *Self) std.mem.Allocator.Error!void {
+    const name_id = self.name_counter;
+    self.name_counter += 1;
+
+    switch (self.reader.intRangeAtMost(u8, 0, 4)) {
+        0 => try self.generateTupleParamPatternFunction(name_id),
+        1 => try self.generateRecordParamPatternFunction(name_id),
+        2 => try self.generateSupportParamPatternFunction(name_id),
+        3 => try self.generateNestedParamPatternFunction(name_id),
+        4 => try self.generateMutableTupleParamPatternFunction(name_id),
+        else => unreachable,
+    }
+}
+
+fn generateTupleParamPatternFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeRawFunctionSignature(name_id, "Main, (Str, U64)", "U64");
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_, (_, count)| count\n");
+}
+
+fn generateRecordParamPatternFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeRawFunctionSignature(name_id, "Main, { name : Str, count : U64 }", "Str");
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_, { name, count: _ }| name\n");
+}
+
+fn generateSupportParamPatternFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFunctionSignature(name_id, "Main, Support", .u64);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_, Packet(record)| record.count\n");
+}
+
+fn generateNestedParamPatternFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeRawFunctionSignature(name_id, "Main, (Support, { name : Str, count : U64 })", "Str");
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_, (Packet(_), { name })| name\n");
+}
+
+fn generateMutableTupleParamPatternFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeRawFunctionSignature(name_id, "Main, (Str, U64, U64)", "U64");
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_, (_, count, var $index)| {\n");
+    try self.writeMutableLocalAssignmentStart("index");
+    try self.writeMutableLocalReference("index");
+    try self.write(" + count\n");
+    try self.write("        ");
+    try self.writeMutableLocalReference("index");
+    try self.write("\n    }\n");
 }
 
 fn generateBuiltinAssociatedFunction(self: *Self) std.mem.Allocator.Error!void {
