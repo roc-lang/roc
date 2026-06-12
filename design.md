@@ -901,8 +901,8 @@ encoding.
 
 ### String Interpolation
 
-An interpolated string literal is its own canonical expression. It is not
-canonicalized as receiver method-call syntax, because interpolation method
+An interpolated string literal is its own CIR expression. It is not
+desugared as receiver method-call syntax, because interpolation method
 selection is owned by the expression result type, not by the first literal
 segment. The interpolated expressions bind to locals in source order. Literal
 segments are always builtin `Str` values, and the interpolation expression
