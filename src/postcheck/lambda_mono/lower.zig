@@ -308,7 +308,6 @@ const Lowerer = struct {
         self.program.fns.items[@intFromEnum(out_id)] = .{
             .symbol = symbol,
             .source = fn_.source,
-            .debug_name = fn_.debug_name,
             .args = args_span,
             .body = body,
             .ret = ret,
@@ -368,6 +367,9 @@ const Lowerer = struct {
         try self.fn_specs.append(self.allocator, spec);
         try self.fn_written.append(self.allocator, false);
         result.value_ptr.* = fn_id;
+        if (self.solved.lifted.procDebugName(source_fn.symbol)) |name| {
+            try self.program.setProcDebugName(symbol, name);
+        }
 
         const ret_ty = try self.lowerType(switch (self.solved.types.rootContent(spec.solved_fn_ty)) {
             .func => |func| func.ret,
@@ -377,7 +379,6 @@ const Lowerer = struct {
         self.program.fns.items[@intFromEnum(fn_id)] = .{
             .symbol = symbol,
             .source = source_fn.source,
-            .debug_name = source_fn.debug_name,
             .args = .empty(),
             .body = .hosted,
             .ret = ret_ty,

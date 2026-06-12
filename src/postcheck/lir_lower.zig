@@ -225,7 +225,7 @@ const Lowerer = struct {
                 .abi = if (self.usesErasedCallableAbi(fn_)) .erased_callable else .roc,
                 .hosted = try self.hostedProcForFn(fn_),
             });
-            if (fn_.debug_name) |name| {
+            if (self.program.procDebugName(fn_.symbol)) |name| {
                 try self.result.store.setProcDebugName(proc_id, self.program.names.exportNameText(name));
             }
             self.result.store.current_loc = base.SourceLoc.none;

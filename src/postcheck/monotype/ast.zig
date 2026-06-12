@@ -377,7 +377,6 @@ pub const Stmt = union(enum) {
 pub const Def = struct {
     symbol: Common.Symbol,
     fn_def: ?FnTemplate = null,
-    debug_name: ?names.ExportNameId = null,
     args: Span(TypedLocal),
     body: FnBody,
     ret: Type.TypeId,
@@ -393,11 +392,13 @@ pub const FnBody = union(enum) {
 pub const NestedDef = struct {
     symbol: Common.Symbol,
     fn_def: FnTemplate,
-    debug_name: ?names.ExportNameId = null,
     args: Span(TypedLocal),
     body: ExprId,
     ret: Type.TypeId,
 };
+
+/// Source procedure names for runtime diagnostics, keyed by generated symbol.
+pub const ProcDebugNameMap = std.AutoHashMap(Common.Symbol, names.ExportNameId);
 
 /// Root request bound to a Monotype definition.
 pub const Root = struct {
@@ -439,6 +440,7 @@ pub const Program = struct {
     branches: std.ArrayList(Branch),
     if_branches: std.ArrayList(IfBranch),
     string_literals: std.ArrayList(StringLiteral),
+    proc_debug_names: ProcDebugNameMap,
     roots: std.ArrayList(Root),
     layout_requests: std.ArrayList(LayoutRequest),
     runtime_schema_requests: std.ArrayList(RuntimeSchemaRequest),
@@ -478,6 +480,7 @@ pub const Program = struct {
             .branches = .empty,
             .if_branches = .empty,
             .string_literals = .empty,
+            .proc_debug_names = ProcDebugNameMap.init(allocator),
             .roots = .empty,
             .layout_requests = .empty,
             .runtime_schema_requests = .empty,
@@ -501,6 +504,7 @@ pub const Program = struct {
         self.runtime_schema_requests.deinit(self.allocator);
         self.layout_requests.deinit(self.allocator);
         self.roots.deinit(self.allocator);
+        self.proc_debug_names.deinit();
         for (self.string_literals.items) |literal| self.allocator.free(literal.backing);
         self.string_literals.deinit(self.allocator);
         self.if_branches.deinit(self.allocator);
@@ -526,6 +530,14 @@ pub const Program = struct {
         try self.exprs.append(self.allocator, expr);
         try self.expr_locs.append(self.allocator, self.current_loc);
         return id;
+    }
+
+    pub fn setProcDebugName(self: *Program, symbol: Common.Symbol, name: names.ExportNameId) std.mem.Allocator.Error!void {
+        try self.proc_debug_names.put(symbol, name);
+    }
+
+    pub fn procDebugName(self: *const Program, symbol: Common.Symbol) ?names.ExportNameId {
+        return self.proc_debug_names.get(symbol);
     }
 
     /// Register a source file (module display name) and return its index for

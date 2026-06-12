@@ -173,6 +173,9 @@ pub const MonoLlvmCodeGen = struct {
     /// Build-only default-platform Linux executables link a small runtime
     /// object that owns process startup diagnostics and signal handling.
     enable_default_platform_runtime: bool = false,
+    /// Synthetic default-platform apps lower the default echo host call to
+    /// direct platform writes instead of calling an external host function.
+    enable_default_platform_hosted_calls: bool = false,
     /// DW_AT_producer for the compile unit. Carries the compiler version so
     /// debugger formatters can detect when a binary was built by a different
     /// roc than the formatter was written for.
@@ -1348,7 +1351,8 @@ pub const MonoLlvmCodeGen = struct {
         arg_layouts: []const layout.Idx,
         ret_layout: layout.Idx,
     ) Error!void {
-        if (self.host_call_mode == .extern_symbols and
+        if (self.enable_default_platform_runtime and
+            self.host_call_mode == .extern_symbols and
             self.target.os.tag == .linux and
             std.mem.eql(u8, symbol_name, "_start"))
         {
@@ -4654,6 +4658,7 @@ pub const MonoLlvmCodeGen = struct {
         arg_layouts: []const layout.Idx,
         ret_layout: layout.Idx,
     ) Error!bool {
+        if (!self.enable_default_platform_hosted_calls) return false;
         if (self.host_call_mode != .extern_symbols) return false;
         if (!std.mem.eql(u8, self.store.getString(hosted.symbol), "roc_default_echo_line")) return false;
 

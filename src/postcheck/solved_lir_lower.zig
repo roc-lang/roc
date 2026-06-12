@@ -636,7 +636,7 @@ const Lowerer = struct {
             .hosted = try self.hostedProcForSource(source_fn.source),
         });
         if (self.proc_debug_names) {
-            if (source_fn.debug_name) |name| {
+            if (self.solved.lifted.procDebugName(source_fn.symbol)) |name| {
                 try self.result.store.setProcDebugName(proc, self.solved.lifted.names.exportNameText(name));
             }
         }
@@ -3867,6 +3867,7 @@ fn cloneLiftedProgram(allocator: std.mem.Allocator, program: *const Lifted.Progr
         .branches = try cloneArrayList(Lifted.Branch, allocator, &program.branches),
         .if_branches = try cloneArrayList(Lifted.IfBranch, allocator, &program.if_branches),
         .string_literals = string_literals,
+        .proc_debug_names = try cloneProcDebugNameMap(allocator, &program.proc_debug_names),
         .roots = try cloneArrayList(Lifted.Root, allocator, &program.roots),
         .layout_requests = try cloneArrayList(Lifted.LayoutRequest, allocator, &program.layout_requests),
         .runtime_schema_requests = try cloneArrayList(Lifted.RuntimeSchemaRequest, allocator, &program.runtime_schema_requests),
@@ -3889,6 +3890,19 @@ fn cloneLiftedProgram(allocator: std.mem.Allocator, program: *const Lifted.Progr
         },
         .current_loc = program.current_loc,
     };
+}
+
+fn cloneProcDebugNameMap(allocator: std.mem.Allocator, source: *const Lifted.ProcDebugNameMap) std.mem.Allocator.Error!Lifted.ProcDebugNameMap {
+    var cloned = Lifted.ProcDebugNameMap.init(allocator);
+    errdefer cloned.deinit();
+
+    try cloned.ensureTotalCapacity(source.count());
+    var it = source.iterator();
+    while (it.next()) |entry| {
+        cloned.putAssumeCapacity(entry.key_ptr.*, entry.value_ptr.*);
+    }
+
+    return cloned;
 }
 
 fn cloneNameStore(allocator: std.mem.Allocator, source: *const check.CheckedNames.NameStore) std.mem.Allocator.Error!check.CheckedNames.NameStore {

@@ -4544,6 +4544,7 @@ fn compileLlvmAppObject(
     lowered: *const lir.CheckedPipeline.LoweredProgram,
     entrypoints: []const backend.Entrypoint,
     enable_default_platform_runtime: bool,
+    enable_default_platform_hosted_calls: bool,
 ) anyerror!LlvmObjectPaths {
     const std_target = try stdTargetForLlvmBuild(ctx, target);
     const llvm_cpu = llvmCpuNameForTarget(std_target);
@@ -4557,6 +4558,7 @@ fn compileLlvmAppObject(
     codegen.layout_store = &lowered.lir_result.layouts;
     codegen.emit_debug_info = true;
     codegen.enable_default_platform_runtime = enable_default_platform_runtime;
+    codegen.enable_default_platform_hosted_calls = enable_default_platform_hosted_calls;
     codegen.debug_producer = "roc " ++ build_options.compiler_version;
     defer codegen.deinit();
 
@@ -4710,7 +4712,7 @@ fn rocBuildWasmLlvm(
         unreachable;
     }
 
-    const app_object = try compileLlvmAppObject(ctx, args, build_cache_dir, .wasm32, link_type, lowered, entrypoints, false);
+    const app_object = try compileLlvmAppObject(ctx, args, build_cache_dir, .wasm32, link_type, lowered, entrypoints, false, false);
 
     var owned_inputs: std.ArrayList([]u8) = .empty;
     defer freeOwnedWasmInputs(ctx, &owned_inputs);
@@ -5028,6 +5030,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
             &lowered,
             entrypoints,
             enable_default_platform_runtime,
+            args.synthetic_default_platform,
         );
 
         var static_data_obj_path: ?[]const u8 = null;

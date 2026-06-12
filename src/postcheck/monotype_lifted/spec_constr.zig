@@ -401,6 +401,12 @@ const Pass = struct {
         self.program.next_symbol = self.symbols.next;
     }
 
+    fn copyProcDebugName(self: *Pass, source_symbol: Common.Symbol, target_symbol: Common.Symbol) Allocator.Error!void {
+        if (self.program.procDebugName(source_symbol)) |name| {
+            try self.program.setProcDebugName(target_symbol, name);
+        }
+    }
+
     fn collectArgUses(self: *Pass, original_fn_count: usize) Allocator.Error!void {
         var changed = true;
         while (changed) {
@@ -432,16 +438,17 @@ const Pass = struct {
             const source_fn = self.program.fns.items[source_index];
             for (plan.specs.items) |*spec| {
                 const fn_id: Ast.FnId = @enumFromInt(@as(u32, @intCast(self.program.fns.items.len)));
+                const symbol = self.symbols.fresh();
                 spec.fn_id = fn_id;
                 try self.program.fns.append(self.allocator, .{
-                    .symbol = self.symbols.fresh(),
+                    .symbol = symbol,
                     .source = null,
-                    .debug_name = source_fn.debug_name,
                     .args = .empty(),
                     .captures = source_fn.captures,
                     .body = .hosted,
                     .ret = source_fn.ret,
                 });
+                try self.copyProcDebugName(source_fn.symbol, symbol);
             }
         }
     }
@@ -736,19 +743,20 @@ const Pass = struct {
 
         const source_fn = self.program.fns.items[raw];
         const fn_id_reserved: Ast.FnId = @enumFromInt(@as(u32, @intCast(self.program.fns.items.len)));
+        const symbol = self.symbols.fresh();
         try self.plans[raw].specs.append(self.allocator, .{
             .pattern = pattern,
             .fn_id = fn_id_reserved,
         });
         try self.program.fns.append(self.allocator, .{
-            .symbol = self.symbols.fresh(),
+            .symbol = symbol,
             .source = null,
-            .debug_name = source_fn.debug_name,
             .args = .empty(),
             .captures = source_fn.captures,
             .body = .hosted,
             .ret = source_fn.ret,
         });
+        try self.copyProcDebugName(source_fn.symbol, symbol);
     }
 
     fn writeSpecialization(self: *Pass, source_fn_id: Ast.FnId, spec_index: usize) Common.LowerError!void {
@@ -776,12 +784,12 @@ const Pass = struct {
         self.program.fns.items[@intFromEnum(spec_fn_id)] = .{
             .symbol = symbol,
             .source = null,
-            .debug_name = source_fn.debug_name,
             .args = args,
             .captures = source_fn.captures,
             .body = body,
             .ret = source_fn.ret,
         };
+        try self.copyProcDebugName(source_fn.symbol, symbol);
     }
 
     fn rewriteExistingCalls(self: *Pass) Allocator.Error!void {
@@ -2798,12 +2806,12 @@ const Cloner = struct {
         try self.pass.program.fns.append(self.pass.allocator, .{
             .symbol = symbol,
             .source = source_fn.source,
-            .debug_name = source_fn.debug_name,
             .args = args_span,
             .captures = captures_span,
             .body = .hosted,
             .ret = source_fn.ret,
         });
+        try self.pass.copyProcDebugName(source_fn.symbol, symbol);
 
         try self.callable_stack.append(self.pass.allocator, .{
             .source = callable.fn_id,
@@ -2844,7 +2852,6 @@ const Cloner = struct {
         self.pass.program.fns.items[@intFromEnum(fn_id)] = .{
             .symbol = symbol,
             .source = source_fn.source,
-            .debug_name = source_fn.debug_name,
             .args = args_span,
             .captures = captures_span,
             .body = .{ .roc = try self.cloneExpr(source_body) },
