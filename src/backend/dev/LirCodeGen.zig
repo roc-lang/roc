@@ -191,6 +191,7 @@ pub const BuiltinFn = enum {
     str_from_utf8,
     str_escape_and_quote,
     dbg_str,
+    expect_err_str,
 
     // List operations
     list_with_capacity,
@@ -295,6 +296,7 @@ pub const BuiltinFn = enum {
             .str_from_utf8 => "roc_builtins_str_from_utf8_result",
             .str_escape_and_quote => "roc_builtins_str_escape_and_quote",
             .dbg_str => "roc_builtins_dbg_str",
+            .expect_err_str => "roc_builtins_expect_err_str",
 
             // List operations
             .list_with_capacity => "roc_builtins_list_with_capacity",
@@ -5058,6 +5060,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try locals.put(localKey(debug_stmt.message), debug_stmt.message);
                         try stack.append(sa, debug_stmt.next);
                     },
+                    .expect_err => |expect_err_stmt| {
+                        try locals.put(localKey(expect_err_stmt.message), expect_err_stmt.message);
+                    },
                     .expect => |expect_stmt| {
                         try locals.put(localKey(expect_stmt.condition), expect_stmt.condition);
                         try stack.append(sa, expect_stmt.next);
@@ -5175,6 +5180,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .debug => |debug_stmt| {
                         try locals.put(localKey(debug_stmt.message), debug_stmt.message);
                         try stack.append(sa, debug_stmt.next);
+                    },
+                    .expect_err => |expect_err_stmt| {
+                        try locals.put(localKey(expect_err_stmt.message), expect_err_stmt.message);
                     },
                     .expect => |expect_stmt| {
                         try locals.put(localKey(expect_stmt.condition), expect_stmt.condition);
@@ -13623,6 +13631,19 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             try work.append(wa, .{ .node = expect_stmt.next });
                         },
 
+                        .expect_err => |expect_err_stmt| {
+                            const msg_loc = try self.emitValueLocal(expect_err_stmt.message);
+                            const msg_offset = switch (msg_loc) {
+                                .stack_str => |offset| offset,
+                                else => std.debug.panic(
+                                    "Dev/codegen invariant violated: expect_err message local {d} did not lower to a RocStr stack value",
+                                    .{@intFromEnum(expect_err_stmt.message)},
+                                ),
+                            };
+                            try self.emitRocExpectErrFromStackStr(msg_offset, expect_err_stmt.region);
+                            try self.emitTrap();
+                        },
+
                         .runtime_error => {
                             try self.emitRocCrash("hit a runtime error");
                             try self.emitTrap();
@@ -14083,6 +14104,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try builder.addLeaArg(frame_ptr, str_offset);
             try builder.addRegArg(self.roc_ops_reg orelse unreachable);
             try self.callBuiltin(&builder, @intFromPtr(&dev_wrappers.roc_builtins_dbg_str), .dbg_str);
+        }
+
+        fn emitRocExpectErrFromStackStr(self: *Self, str_offset: i32, region: base.Region) Allocator.Error!void {
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addLeaArg(frame_ptr, str_offset);
+            try builder.addImmArg(@intCast(region.start.offset));
+            try builder.addImmArg(@intCast(region.end.offset));
+            try builder.addRegArg(self.roc_ops_reg orelse unreachable);
+            try self.callBuiltin(&builder, @intFromPtr(&dev_wrappers.roc_builtins_expect_err_str), .expect_err_str);
         }
 
         fn emitRocExpectFailed(self: *Self) Allocator.Error!void {

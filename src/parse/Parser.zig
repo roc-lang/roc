@@ -6105,7 +6105,6 @@ const bin_op_bp_table = blk: {
     table[@intFromEnum(Token.Tag.OpPlus) - start] = .{ .left = 20, .right = 21 };
     table[@intFromEnum(Token.Tag.OpBinaryMinus) - start] = .{ .left = 20, .right = 21 };
     table[@intFromEnum(Token.Tag.OpDoubleQuestion) - start] = .{ .left = 18, .right = 19 };
-    table[@intFromEnum(Token.Tag.OpQuestion) - start] = .{ .left = 16, .right = 17 };
     table[@intFromEnum(Token.Tag.OpEquals) - start] = .{ .left = 15, .right = 15 };
     table[@intFromEnum(Token.Tag.OpNotEquals) - start] = .{ .left = 13, .right = 13 };
     table[@intFromEnum(Token.Tag.OpLessThan) - start] = .{ .left = 11, .right = 11 };

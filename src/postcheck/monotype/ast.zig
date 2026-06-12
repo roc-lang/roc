@@ -3,6 +3,7 @@
 //! This is closed, monomorphic, and source-level dispatch-free.
 
 const std = @import("std");
+const base = @import("base");
 const check = @import("check");
 const can = @import("can");
 const builtins = @import("builtins");
@@ -293,7 +294,19 @@ pub const ExprData = union(enum) {
     return_: ExprId,
     crash: StringLiteralId,
     dbg: ExprId,
+    expect_err: ExpectErrExpr,
     expect: ExprId,
+};
+
+/// The Err arm of a `?` operator used directly inside a top-level `expect`.
+/// Fails the enclosing expect at runtime with the pre-composed message and
+/// the source region of the `?` itself. Never returns.
+pub const ExpectErrExpr = struct {
+    /// String-typed expression producing the failure message (includes the
+    /// rendered Err value).
+    msg: ExprId,
+    /// Source region of the `?` expression, for failure reporting.
+    region: base.Region,
 };
 
 /// Typed Monotype pattern.
