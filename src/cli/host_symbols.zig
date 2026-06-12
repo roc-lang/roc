@@ -322,7 +322,7 @@ fn collectDrectveExports(text: []const u8, sink: ExportSink) Allocator.Error!voi
         var name = token["export:".len..];
         // `/export:exportName=internalName` and `/export:name,@ord,DATA`: the
         // exported (loader-visible) name is the part before `=` or `,`.
-        if (std.mem.indexOfAny(u8, name, "=,")) |cut| name = name[0..cut];
+        if (std.mem.findAny(u8, name, "=,")) |cut| name = name[0..cut];
         try sink.add(name);
     }
 }
