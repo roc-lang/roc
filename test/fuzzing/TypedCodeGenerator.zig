@@ -13,6 +13,7 @@ const Self = @This();
 allocator: std.mem.Allocator,
 reader: *FuzzReader,
 output: std.ArrayList(u8),
+support_output: std.ArrayList(u8),
 name_counter: u32,
 
 const BuiltinAdapterKind = enum {
@@ -627,6 +628,7 @@ fn ownerIn(owner: []const u8, owners: []const []const u8) bool {
 
 const Type = enum {
     main,
+    support,
     tree,
     my_num,
     bool,
@@ -703,6 +705,10 @@ const Type = enum {
     dec,
     f32,
     f64,
+
+    fn isSupport(self: Type) bool {
+        return self == .support;
+    }
 
     fn isList(self: Type) bool {
         return switch (self) {
@@ -859,7 +865,7 @@ const Type = enum {
 
     fn isSimpleEquatable(self: Type) bool {
         return switch (self) {
-            .main, .my_num, .bool, .str => true,
+            .main, .support, .my_num, .bool, .str => true,
             else => false,
         };
     }
@@ -1027,20 +1033,78 @@ pub fn init(allocator: std.mem.Allocator, reader: *FuzzReader) Self {
         .allocator = allocator,
         .reader = reader,
         .output = .empty,
+        .support_output = .empty,
         .name_counter = 0,
     };
 }
 
 pub fn deinit(self: *Self) void {
     self.output.deinit(self.allocator);
+    self.support_output.deinit(self.allocator);
 }
 
 pub fn getOutput(self: *const Self) []const u8 {
     return self.output.items;
 }
 
+pub fn getSupportOutput(self: *const Self) []const u8 {
+    return self.support_output.items;
+}
+
+fn generateSupportModule(self: *Self) std.mem.Allocator.Error!void {
+    try self.writeSupport(
+        \\Support := [Empty, Packet({ name : Str, count : U64 }), Many(List(U64))].{
+        \\    make : U64 -> Support
+        \\    make = |count| Packet({ name: "support", count: count })
+        \\    from_list : List(U64) -> Support
+        \\    from_list = |items| Many(items)
+        \\    from_pair : (Str, U64) -> Support
+        \\    from_pair = |pair| match pair {
+        \\        (name, count) => Packet({ name: name, count: count })
+        \\    }
+        \\    to_pair : Support -> (Str, U64)
+        \\    to_pair = |item| match item {
+        \\        Empty => ("empty", 0)
+        \\        Packet(record) => (record.name, record.count)
+        \\        Many(items) => ("many", items.len())
+        \\    }
+        \\    count : Support -> U64
+        \\    count = |item| match item {
+        \\        Empty => 0
+        \\        Packet(record) => record.count
+        \\        Many(items) => items.len()
+        \\    }
+        \\    label : Support -> Str
+        \\    label = |item| match item {
+        \\        Empty => "empty"
+        \\        Packet(record) => record.name
+        \\        Many(_) => "many"
+        \\    }
+        \\    map_count : Support, (U64 -> U64) -> Support
+        \\    map_count = |item, transform| match item {
+        \\        Empty => Packet({ name: "empty", count: transform(0) })
+        \\        Packet(record) => Packet({ name: record.name, count: transform(record.count) })
+        \\        Many(items) => Packet({ name: "many", count: transform(items.len()) })
+        \\    }
+        \\    maybe : Support -> Try(U64, Str)
+        \\    maybe = |item| match item {
+        \\        Empty => Err("empty")
+        \\        Packet(record) => Ok(record.count)
+        \\        Many(items) => Ok(items.len())
+        \\    }
+        \\    is_eq : Support, Support -> Bool
+        \\    is_eq = |left, right| if Support.count(left) == Support.count(right) Support.label(left) == Support.label(right) else False
+        \\}
+        \\
+    );
+}
+
 pub fn generateModule(self: *Self) std.mem.Allocator.Error!void {
+    try self.generateSupportModule();
     try self.write(
+        \\import Support
+        \\
+        \\
         \\AliasBool : Bool
         \\U64s : List(U64)
         \\NameCount : { name : Str, count : U64 }
@@ -1230,6 +1294,7 @@ pub fn generateModule(self: *Self) std.mem.Allocator.Error!void {
     try self.write("\n");
 
     try self.generateFunction(.main);
+    try self.generateFunction(.support);
     try self.generateFunction(.tree);
     try self.generateFunction(.my_num);
     try self.generateFunction(.bool);
@@ -1280,6 +1345,8 @@ fn generateExpectations(self: *Self) std.mem.Allocator.Error!void {
 fn generateFunction(self: *Self, typ: Type) std.mem.Allocator.Error!void {
     const max_style: u8 = if (typ == .my_num)
         8
+    else if (typ.isSupport())
+        8
     else if (typ.isHolder())
         9
     else if (typ.isBuilder())
@@ -1326,6 +1393,8 @@ fn generateFunction(self: *Self, typ: Type) std.mem.Allocator.Error!void {
         4 => try self.generateMatchMainFunction(name_id, typ),
         5 => if (typ.isHolder())
             try self.generateHolderGetFunction(name_id, typ)
+        else if (typ.isSupport())
+            try self.generateSupportCountFunction(name_id)
         else if (typ.isBuilder())
             try self.generateBuilderRunFunction(name_id, typ)
         else if (typ.isWrap())
@@ -1358,6 +1427,8 @@ fn generateFunction(self: *Self, typ: Type) std.mem.Allocator.Error!void {
             try self.generateRecordFieldFunction(name_id, typ),
         6 => if (typ.isHolder())
             try self.generateHolderMapFunction(name_id, typ)
+        else if (typ.isSupport())
+            try self.generateSupportMapFunction(name_id)
         else if (typ.isBuilder())
             try self.generateBuilderMap2Function(name_id, typ)
         else if (typ.isWrap())
@@ -1390,6 +1461,8 @@ fn generateFunction(self: *Self, typ: Type) std.mem.Allocator.Error!void {
             unreachable,
         7 => if (typ.isHolder())
             try self.generateHolderMethodFunction(name_id, typ)
+        else if (typ.isSupport())
+            try self.generateSupportPairFunction(name_id)
         else if (typ.isBuilder())
             try self.generateBuilderMethodFunction(name_id, typ)
         else if (typ.isWrap())
@@ -1414,7 +1487,9 @@ fn generateFunction(self: *Self, typ: Type) std.mem.Allocator.Error!void {
             try self.generateWherePlusFunction(name_id, typ)
         else
             try self.generateRecordDestructureFunction(name_id, typ),
-        8 => if (typ.isHolder())
+        8 => if (typ.isSupport())
+            try self.generateSupportTryFunction(name_id)
+        else if (typ.isHolder())
             try self.generateHolderMap2Function(name_id, typ)
         else if (typ.isWrap())
             try self.generateWrapMap2Function(name_id, typ)
@@ -2192,6 +2267,46 @@ fn generateMatchMainFunction(self: *Self, name_id: u32, typ: Type) std.mem.Alloc
         try self.writeStrU64PayloadBranch(typ);
         try self.write("\n    }\n");
     }
+}
+
+fn generateSupportCountFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFunctionSignature(name_id, "Main", .u64);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| ");
+    try self.writeAssociatedOrMethodCall("Support", .{ .literal = .support }, "count", &.{});
+    try self.write("\n");
+}
+
+fn generateSupportMapFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFunctionSignature(name_id, "Main", .support);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| ");
+    try self.writeAssociatedOrMethodCall("Support", .{ .literal = .support }, "map_count", &.{.{ .raw = "|count| count + 1" }});
+    try self.write("\n");
+}
+
+fn generateSupportPairFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    if (self.reader.boolean()) {
+        try self.writeFunctionSignature(name_id, "Main", .tuple_str_u64);
+        try self.writeFunctionHeader(name_id);
+        try self.write("|_| Support.to_pair(");
+        try self.writeLiteral(.support);
+        try self.write(")\n");
+    } else {
+        try self.writeFunctionSignature(name_id, "Main", .support);
+        try self.writeFunctionHeader(name_id);
+        try self.write("|_| Support.from_pair(");
+        try self.writeLiteral(.tuple_str_u64);
+        try self.write(")\n");
+    }
+}
+
+fn generateSupportTryFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFunctionSignature(name_id, "Main", .u64);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| match Support.maybe(");
+    try self.writeLiteral(.support);
+    try self.write(") {\n        Ok(count) => count\n        Err(_) => 0\n    }\n");
 }
 
 fn generateRecordFieldFunction(self: *Self, name_id: u32, typ: Type) std.mem.Allocator.Error!void {
@@ -4307,85 +4422,86 @@ fn writeFmtLocalFunctionHeader(self: *Self, name_id: u32) std.mem.Allocator.Erro
 }
 
 fn chooseType(self: *Self) Type {
-    return switch (self.reader.intRangeAtMost(u8, 0, 77)) {
+    return switch (self.reader.intRangeAtMost(u8, 0, 78)) {
         0 => .main,
-        1 => .tree,
-        2 => .my_num,
-        3 => .bool,
-        4 => .str,
-        5 => .record_bool,
-        6 => .record_str_u64,
-        7 => .holder_bool,
-        8 => .holder_str,
-        9 => .holder_u64,
-        10 => .holder_record_bool,
-        11 => .holder_list_u64,
-        12 => .holder_try_u64_str,
-        13 => .builder_bool,
-        14 => .builder_str,
-        15 => .builder_u64,
-        16 => .builder_record_str_u64,
-        17 => .builder_list_u64,
-        18 => .builder_try_u64_str,
-        19 => .wrap_bool,
-        20 => .wrap_str,
-        21 => .wrap_u64,
-        22 => .wrap_record_str_u64,
-        23 => .wrap_list_u64,
-        24 => .wrap_try_u64_str,
-        25 => .secret_bool,
-        26 => .secret_str,
-        27 => .secret_u64,
-        28 => .secret_record_str_u64,
-        29 => .secret_list_u64,
-        30 => .secret_try_u64_str,
-        31 => .box_bool,
-        32 => .box_str,
-        33 => .box_u64,
-        34 => .box_record_str_u64,
-        35 => .box_list_u64,
-        36 => .box_try_u64_str,
-        37 => .dict_str_u64,
-        38 => .dict_u64_str,
-        39 => .set_str,
-        40 => .set_u64,
-        41 => .fn_bool_bool,
-        42 => .fn_u64_u64,
-        43 => .fn_str_str,
-        44 => .tuple_bool_u64,
-        45 => .tuple_str_u64,
-        46 => .tuple_u64_str,
-        47 => .tuple_record_bool_u64,
-        48 => .tuple_try_u64_str_bool,
-        49 => .tuple_list_u64_str,
-        50 => .try_bool_str,
-        51 => .try_str_bool,
-        52 => .try_u64_str,
-        53 => .try_list_u64_str,
-        54 => .list_bool,
-        55 => .list_str,
-        56 => .list_u64,
-        57 => .list_record_bool,
-        58 => .list_list_u64,
-        59 => .list_tuple_bool_u64,
-        60 => .list_tuple_str_u64,
-        61 => .list_tuple_u64_str,
-        62 => .list_try_u64_str,
-        63 => .list_holder_u64,
-        64 => .u8,
-        65 => .i8,
-        66 => .u16,
-        67 => .i16,
-        68 => .u32,
-        69 => .i32,
-        70 => .u64,
-        71 => .i64,
-        72 => .u128,
-        73 => .i128,
-        74 => .f32,
-        75 => .f64,
-        76 => .record_str_u64,
-        77 => .dec,
+        1 => .support,
+        2 => .tree,
+        3 => .my_num,
+        4 => .bool,
+        5 => .str,
+        6 => .record_bool,
+        7 => .record_str_u64,
+        8 => .holder_bool,
+        9 => .holder_str,
+        10 => .holder_u64,
+        11 => .holder_record_bool,
+        12 => .holder_list_u64,
+        13 => .holder_try_u64_str,
+        14 => .builder_bool,
+        15 => .builder_str,
+        16 => .builder_u64,
+        17 => .builder_record_str_u64,
+        18 => .builder_list_u64,
+        19 => .builder_try_u64_str,
+        20 => .wrap_bool,
+        21 => .wrap_str,
+        22 => .wrap_u64,
+        23 => .wrap_record_str_u64,
+        24 => .wrap_list_u64,
+        25 => .wrap_try_u64_str,
+        26 => .secret_bool,
+        27 => .secret_str,
+        28 => .secret_u64,
+        29 => .secret_record_str_u64,
+        30 => .secret_list_u64,
+        31 => .secret_try_u64_str,
+        32 => .box_bool,
+        33 => .box_str,
+        34 => .box_u64,
+        35 => .box_record_str_u64,
+        36 => .box_list_u64,
+        37 => .box_try_u64_str,
+        38 => .dict_str_u64,
+        39 => .dict_u64_str,
+        40 => .set_str,
+        41 => .set_u64,
+        42 => .fn_bool_bool,
+        43 => .fn_u64_u64,
+        44 => .fn_str_str,
+        45 => .tuple_bool_u64,
+        46 => .tuple_str_u64,
+        47 => .tuple_u64_str,
+        48 => .tuple_record_bool_u64,
+        49 => .tuple_try_u64_str_bool,
+        50 => .tuple_list_u64_str,
+        51 => .try_bool_str,
+        52 => .try_str_bool,
+        53 => .try_u64_str,
+        54 => .try_list_u64_str,
+        55 => .list_bool,
+        56 => .list_str,
+        57 => .list_u64,
+        58 => .list_record_bool,
+        59 => .list_list_u64,
+        60 => .list_tuple_bool_u64,
+        61 => .list_tuple_str_u64,
+        62 => .list_tuple_u64_str,
+        63 => .list_try_u64_str,
+        64 => .list_holder_u64,
+        65 => .u8,
+        66 => .i8,
+        67 => .u16,
+        68 => .i16,
+        69 => .u32,
+        70 => .i32,
+        71 => .u64,
+        72 => .i64,
+        73 => .u128,
+        74 => .i128,
+        75 => .f32,
+        76 => .f64,
+        77 => .record_str_u64,
+        78 => .dec,
         else => unreachable,
     };
 }
@@ -4606,6 +4722,7 @@ fn writeType(self: *Self, typ: Type) std.mem.Allocator.Error!void {
 
     try self.write(switch (typ) {
         .main => "Main",
+        .support => "Support",
         .tree => "Tree",
         .my_num => "MyNum",
         .bool => "Bool",
@@ -4688,6 +4805,7 @@ fn writeType(self: *Self, typ: Type) std.mem.Allocator.Error!void {
 fn writeLiteral(self: *Self, typ: Type) std.mem.Allocator.Error!void {
     switch (typ) {
         .main => try self.writeMainLiteral(),
+        .support => try self.writeSupportLiteral(),
         .tree => try self.writeTreeLiteral(),
         .my_num => try self.writeCustomNumberLiteral(),
         .bool => try self.writeBoolLiteral(),
@@ -4901,6 +5019,15 @@ fn writeMainLiteral(self: *Self) std.mem.Allocator.Error!void {
         0 => try self.write("Main"),
         1 => try self.writeCall("WithBool", &.{.{ .bool_literal = {} }}),
         2 => try self.writeCall("WithStrU64", &.{ .{ .string_literal = {} }, .{ .integer_literal = {} } }),
+        else => unreachable,
+    }
+}
+
+fn writeSupportLiteral(self: *Self) std.mem.Allocator.Error!void {
+    switch (self.reader.intRangeAtMost(u8, 0, 2)) {
+        0 => try self.writeCall("Support.make", &.{.{ .integer_literal = {} }}),
+        1 => try self.writeCall("Support.from_list", &.{.{ .literal = .list_u64 }}),
+        2 => try self.writeCall("Support.from_pair", &.{.{ .literal = .tuple_str_u64 }}),
         else => unreachable,
     }
 }
@@ -5190,6 +5317,10 @@ fn writeTypedLocalFunctionStart(self: *Self, name_id: u32, local_name: []const u
 
 fn write(self: *Self, text: []const u8) std.mem.Allocator.Error!void {
     try self.output.appendSlice(self.allocator, text);
+}
+
+fn writeSupport(self: *Self, text: []const u8) std.mem.Allocator.Error!void {
+    try self.support_output.appendSlice(self.allocator, text);
 }
 
 fn tupleFieldType(typ: Type, first: bool) Type {
