@@ -1453,6 +1453,11 @@ pub fn generateModule(self: *Self) std.mem.Allocator.Error!void {
         try self.generateImportedStatusFunction();
     }
 
+    const guarded_match_count = self.reader.intRangeAtMost(u8, 1, 3);
+    for (0..guarded_match_count) |_| {
+        try self.generateGuardedMatchFunction();
+    }
+
     const builtin_count = self.reader.intRangeAtMost(u8, 12, 36);
     for (0..builtin_count) |_| {
         try self.generateBuiltinAssociatedFunction();
@@ -2248,6 +2253,46 @@ fn generateSupportStatusLocalFunction(self: *Self, name_id: u32) std.mem.Allocat
     try self.write("|_| {\n        status : Support.Status\n        status = ");
     try self.writeLiteral(.support_status);
     try self.write("\n        Support.Status.label(status)\n    }\n");
+}
+
+fn generateGuardedMatchFunction(self: *Self) std.mem.Allocator.Error!void {
+    const name_id = self.name_counter;
+    self.name_counter += 1;
+
+    switch (self.reader.intRangeAtMost(u8, 0, 2)) {
+        0 => try self.generateNumberGuardMatchFunction(name_id),
+        1 => try self.generateSupportStatusGuardMatchFunction(name_id),
+        2 => try self.generateSupportStatusOrPatternFunction(name_id),
+        else => unreachable,
+    }
+}
+
+fn generateNumberGuardMatchFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFunctionSignature(name_id, "Main", .str);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| match ");
+    try self.writeIntegerLiteral();
+    try self.write(" {\n        number if number > ");
+    try self.writeIntegerLiteral();
+    try self.write(" => \"large\"\n        _ => \"small\"\n    }\n");
+}
+
+fn generateSupportStatusGuardMatchFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFunctionSignature(name_id, "Main", .u64);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| match ");
+    try self.writeLiteral(.support_status);
+    try self.write(" {\n        Support.Status.Waiting(count) if count > ");
+    try self.writeIntegerLiteral();
+    try self.write(" => count\n        Support.Status.Waiting(_) => 0\n        Support.Status.Named(name) if Str.is_empty(name) => 1\n        Support.Status.Named(name) => Str.count_utf8_bytes(name)\n        Support.Status.Ready => 2\n    }\n");
+}
+
+fn generateSupportStatusOrPatternFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFunctionSignature(name_id, "Main", .str);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| match ");
+    try self.writeLiteral(.support_status);
+    try self.write(" {\n        Support.Status.Ready | Support.Status.Named(_) => \"named\"\n        Support.Status.Waiting(_) => \"waiting\"\n    }\n");
 }
 
 fn generateBuiltinAssociatedFunction(self: *Self) std.mem.Allocator.Error!void {
