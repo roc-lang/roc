@@ -7563,7 +7563,12 @@ fn checkedBuiltinForDefaultedNumericVariable(variable: CheckedTypeVariable) ?Che
     };
 }
 
-fn numeralLiteralDecimalText(
+/// Render a recorded numeral literal as its canonical decimal text (sign,
+/// integer digits, optional `.` and fractional digits). Monotype lowering reuses
+/// this to fold a monomorphized `from_numeral` literal into a constant at the
+/// concrete target type, so the produced text must stay byte-for-byte identical
+/// to what compile-time finalization feeds the interpreter.
+pub fn numeralLiteralDecimalText(
     allocator: Allocator,
     module_env: *const ModuleEnv,
     literal: ModuleEnv.NumeralLiteral,
