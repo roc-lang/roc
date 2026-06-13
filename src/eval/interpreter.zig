@@ -265,6 +265,14 @@ pub const Interpreter = struct {
     const max_call_depth: usize = 1024;
     const stack_overflow_message =
         "This Roc program overflowed its stack memory. This usually means there is very deep or infinite recursion somewhere in the code.";
+    /// Debug value-shape validation stops descending past this many nested
+    /// values; deeper structures are legal (TRMC builds arbitrarily long
+    /// lists) but walking them would overflow the native stack.
+    const max_debug_value_depth: usize = 64;
+    /// ... and stops after visiting this many heap cells in one walk: a wide
+    /// balanced tree fits entirely inside the depth cap, and re-walking it on
+    /// every assignment turns O(n) programs quadratic.
+    const max_debug_value_visits: usize = 16;
     pub const erased_callable_context_alignment: usize = builtins.erased_callable.capture_alignment;
 
     pub const ErasedCallableInterpreterContext = extern struct {
@@ -970,6 +978,12 @@ pub const Interpreter = struct {
     ) void {
         if (builtin.mode != .Debug) return;
         if (comptime builtin.target.os.tag == .freestanding) return;
+        // Bound the walk: stop descending into very deep structures
+        // (e.g. long TRMC-built lists), since this walk recurses natively, and
+        // stop after a bounded number of heap cells so wide structures don't
+        // make every assignment O(structure size).
+        if (path_len >= max_debug_value_depth) return;
+        if (visited.items.len >= max_debug_value_visits) return;
 
         const layout_val = self.layout_store.getLayout(layout_idx);
         switch (layout_val.tag) {
@@ -989,15 +1003,24 @@ pub const Interpreter = struct {
                 }
             },
             .zst, .box_of_zst => return,
+            // Compiler-internal pointers (TRMC holes) are opaque here: the slot they
+            // point at may be a not-yet-filled hole, so there is nothing to validate.
+            .ptr => return,
             .box => {
-                const data_ptr = self.readBoxedDataPointer(value) orelse self.debugValueShapePanicAt(
-                    proc_id,
-                    stmt_id,
-                    local_id,
-                    layout_idx,
-                    path_buf[0..path_len],
-                    "boxed value had null data pointer",
-                );
+                const data_ptr = self.readBoxedDataPointer(value) orelse {
+                    // Inside a TRMC-transformed proc a null box pointer is a
+                    // legal in-flight hole (zero-filled cells await their child
+                    // value); everywhere else it is a real bug.
+                    if (self.store.getProcSpec(proc_id).tail_transform == .trmc) return;
+                    self.debugValueShapePanicAt(
+                        proc_id,
+                        stmt_id,
+                        local_id,
+                        layout_idx,
+                        path_buf[0..path_len],
+                        "boxed value had null data pointer",
+                    );
+                };
 
                 const key = DebugVisitedValue{
                     .ptr = @intFromPtr(data_ptr),
@@ -1438,7 +1461,7 @@ pub const Interpreter = struct {
         debugPrint("{s}{d}: {s}\n", .{ debugIndent(indent), @intFromEnum(layout_idx), @tagName(layout_val.tag) });
         switch (layout_val.tag) {
             .scalar, .zst, .box_of_zst, .list_of_zst, .erased_callable => {},
-            .box => self.debugPrintLayoutShapeLines(layout_val.getIdx(), indent + 1, visited),
+            .box, .ptr => self.debugPrintLayoutShapeLines(layout_val.getIdx(), indent + 1, visited),
             .list => self.debugPrintLayoutShapeLines(layout_val.getIdx(), indent + 1, visited),
             .closure => self.debugPrintLayoutShapeLines(layout_val.getClosure().captures_layout_idx, indent + 1, visited),
             .struct_ => {
@@ -3224,7 +3247,8 @@ pub const Interpreter = struct {
 
         const l = self.layout_store.getLayout(helper.layout_idx);
         return switch (l.tag) {
-            .zst => .noop,
+            // ptr is never refcounted, so the early return above already handled it.
+            .zst, .ptr => .noop,
             .scalar => if (l.getScalar().tag == .str)
                 switch (helper.op) {
                     .incref => .str_incref,
@@ -3417,7 +3441,7 @@ pub const Interpreter = struct {
         const direct = switch (layout_val.tag) {
             .scalar => layout_val.getScalar().tag == .str,
             .list, .list_of_zst, .box, .box_of_zst, .erased_callable => true,
-            .zst => false,
+            .zst, .ptr => false,
             .struct_, .tag_union, .closure => null,
         };
         if (direct) |result| {
@@ -3444,7 +3468,7 @@ pub const Interpreter = struct {
                 break :blk false;
             },
             .closure => self.layoutContainsRc(layout_val.getClosure().captures_layout_idx),
-            .scalar, .list, .list_of_zst, .box, .box_of_zst, .erased_callable, .zst => unreachable,
+            .scalar, .list, .list_of_zst, .box, .box_of_zst, .erased_callable, .zst, .ptr => unreachable,
         };
         self.rc_presence[raw] = if (contains) .yes else .no;
         return contains;
@@ -5005,6 +5029,11 @@ pub const Interpreter = struct {
             .box_box => try self.evalBoxBox(args[0], ll.ret_layout),
             .box_unbox => try self.evalBoxUnbox(args[0], ll.ret_layout),
             .erased_capture_load => try self.evalErasedCaptureLoad(args[0], ll.ret_layout),
+            .ptr_alloca => try self.evalPtrAlloca(ll.ret_layout),
+            .box_alloc_zeroed => try self.evalBoxAllocZeroed(ll.ret_layout),
+            .ptr_store => try self.evalPtrStore(args[0], args[1], ll.arg_layouts[1]),
+            .ptr_load => try self.evalPtrLoad(args[0], ll.ret_layout),
+            .ptr_cast => try self.evalPtrCast(args[0], ll.ret_layout),
 
             // ── Crash ──
             .crash => return error.Crash,
@@ -5300,6 +5329,10 @@ pub const Interpreter = struct {
             },
             .erased_callable => return self.invariantFailedError(
                 "LIR/interpreter invariant violated: equality on erased callable layout {d} survived lowering",
+                .{@intFromEnum(layout_idx)},
+            ),
+            .ptr => return self.invariantFailedError(
+                "LIR/interpreter invariant violated: equality on compiler-internal ptr layout {d}",
                 .{@intFromEnum(layout_idx)},
             ),
             .struct_ => blk: {
@@ -6940,6 +6973,84 @@ pub const Interpreter = struct {
             result.copyFrom(.{ .ptr = @ptrFromInt(raw_capture_ptr) }, size);
         }
 
+        return result;
+    }
+
+    /// ptr_alloca: reserve a zeroed frame slot for the ptr layout's element and
+    /// yield its address. The slot lives in the eval arena, which outlives the
+    /// frame — fine, since TRMC emits at most one alloca per proc invocation.
+    fn evalPtrAlloca(self: *LirInterpreter, ret_layout: layout_mod.Idx) Error!Value {
+        const ret_layout_val = self.layout_store.getLayout(ret_layout);
+        if (builtin.mode == .Debug and ret_layout_val.tag != .ptr) {
+            self.invariantFailed(
+                "LIR/interpreter invariant violated: ptr_alloca target had layout {s}, expected ptr",
+                .{@tagName(ret_layout_val.tag)},
+            );
+        }
+        const sa = self.helper.sizeAlignOf(ret_layout_val.getIdx());
+        // allocAlignedByteSlice zero-fills, so the slot reads as null holes until written.
+        const slot = try self.allocAlignedByteSlice(@max(sa.size, 1), sa.alignment);
+        const result = try self.alloc(ret_layout);
+        self.writePointerInt(result, @intFromPtr(slot.ptr));
+        return result;
+    }
+
+    /// box_alloc_zeroed: a box_box whose payload is all zeroes — heap cell with
+    /// rc=1 and a zero-filled payload (so any box fields inside read as null).
+    fn evalBoxAllocZeroed(self: *LirInterpreter, ret_layout: layout_mod.Idx) Error!Value {
+        const ret_layout_val = self.layout_store.getLayout(ret_layout);
+        if (ret_layout_val.tag == .box_of_zst) return try self.allocBoxOfZstValue(ret_layout);
+
+        const box_info = self.boxAllocInfo(ret_layout_val);
+        const data_ptr = try self.allocRocDataWithRc(box_info.elem_size, box_info.elem_alignment, box_info.contains_rc);
+        if (box_info.elem_size > 0) {
+            @memset(data_ptr[0..box_info.elem_size], 0);
+        }
+        const boxed = try self.alloc(ret_layout);
+        self.writeBoxedDataPointer(boxed, data_ptr);
+        return boxed;
+    }
+
+    /// ptr_store: copy sizeOf(value layout) bytes from the value into *ptr.
+    fn evalPtrStore(self: *LirInterpreter, ptr_val: Value, value: Value, value_layout: layout_mod.Idx) Error!Value {
+        const size = self.helper.sizeOf(value_layout);
+        if (size > 0) {
+            const raw_ptr = self.readPointerInt(ptr_val);
+            if (builtin.mode == .Debug and raw_ptr == 0) {
+                self.invariantFailed(
+                    "LIR/interpreter invariant violated: ptr_store received a null pointer for non-ZST layout {d}",
+                    .{@intFromEnum(value_layout)},
+                );
+            }
+            const dest: [*]u8 = @ptrFromInt(raw_ptr);
+            @memcpy(dest[0..size], value.ptr[0..size]);
+        }
+        return Value.zst;
+    }
+
+    /// ptr_load: copy sizeOf(target layout) bytes out of *ptr.
+    fn evalPtrLoad(self: *LirInterpreter, ptr_val: Value, ret_layout: layout_mod.Idx) Error!Value {
+        if (ret_layout == .zst) return Value.zst;
+
+        const result = try self.alloc(ret_layout);
+        const size = self.helper.sizeOf(ret_layout);
+        if (size > 0) {
+            const raw_ptr = self.readPointerInt(ptr_val);
+            if (builtin.mode == .Debug and raw_ptr == 0) {
+                self.invariantFailed(
+                    "LIR/interpreter invariant violated: ptr_load received a null pointer for non-ZST layout {d}",
+                    .{@intFromEnum(ret_layout)},
+                );
+            }
+            result.copyFrom(.{ .ptr = @ptrFromInt(raw_ptr) }, size);
+        }
+        return result;
+    }
+
+    /// ptr_cast: identity bits (box(T) -> ptr(T) or ptr -> ptr).
+    fn evalPtrCast(self: *LirInterpreter, ptr_val: Value, ret_layout: layout_mod.Idx) Error!Value {
+        const result = try self.alloc(ret_layout);
+        self.writePointerInt(result, self.readPointerInt(ptr_val));
         return result;
     }
 

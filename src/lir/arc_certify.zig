@@ -47,6 +47,8 @@ pub const Diagnostic = struct {
     context_local: ?LIR.LocalId = null,
     /// Proc containing the violation.
     context_proc: ?LIR.LirProcSpecId = null,
+    /// Statement where the violation was detected.
+    context_stmt: ?LIR.CFStmtId = null,
     /// Lender/holder chain of the dead value at the violation.
     chain: [8]ChainLink = undefined,
     chain_len: usize = 0,
@@ -263,7 +265,7 @@ pub fn certifyStoreOrPanic(
                 for (diag.chain[0..diag.chain_len], 0..) |link, index| {
                     extra_locals[index] = link.origin;
                 }
-                writeFailureContext(&context, store, proc_id, diag.context_local, extra_locals[0..diag.chain_len]);
+                writeFailureContext(&context, store, proc_id, diag.context_stmt, diag.context_local, extra_locals[0..diag.chain_len]);
             }
             std.debug.panic("ARC borrow certifier: {s}{s}", .{ diag.message(), context.text() });
         },
@@ -289,7 +291,7 @@ const FailureContext = struct {
 
 /// Writes every statement of the failing proc that mentions the implicated
 /// local, plus all join/jump structure, into the panic context buffer.
-fn writeFailureContext(context: *FailureContext, store: *const LirStore, proc_id: LIR.LirProcSpecId, local: ?LIR.LocalId, extra_locals: []const LIR.LocalId) void {
+fn writeFailureContext(context: *FailureContext, store: *const LirStore, proc_id: LIR.LirProcSpecId, stmt_id: ?LIR.CFStmtId, local: ?LIR.LocalId, extra_locals: []const LIR.LocalId) void {
     const proc = store.getProcSpec(proc_id);
     context.append("\nfailure context: proc={d}", .{@intFromEnum(proc_id)});
     if (local) |l| {
@@ -340,7 +342,11 @@ fn writeFailureContext(context: *FailureContext, store: *const LirStore, proc_id
             .join, .jump, .incref, .decref, .free => true,
             else => false,
         };
-        if (!mentions and !structural) continue;
+        const nearby = if (stmt_id) |focus_stmt| if (index > @intFromEnum(focus_stmt))
+            index - @intFromEnum(focus_stmt) <= 12
+        else
+            @intFromEnum(focus_stmt) - index <= 12 else false;
+        if (!mentions and !structural and !nearby) continue;
         context.append("  stmt {d}: {s}", .{ index, @tagName(stmt) });
         switch (stmt) {
             .join => |j| context.append(" id={d} body={d} remainder={d}", .{
@@ -613,6 +619,7 @@ const Certifier = struct {
             @intFromEnum(self.current_proc),
             @intFromEnum(self.current_stmt),
         } ++ args;
+        self.diag.context_stmt = self.current_stmt;
         self.diag.set("proc={d} stmt={d}: " ++ fmt, full_args);
         return error.Certification;
     }
@@ -1275,6 +1282,8 @@ const Certifier = struct {
                 );
             }
             if (!self.repr_scratch.contains(@intCast(value_index))) {
+                self.diag.context_proc = self.current_proc;
+                self.diag.context_local = origin;
                 return self.fail(
                     "ownership unit of value originating at local {d} not carried into join {d}",
                     .{ @intFromEnum(origin), @intFromEnum(join_id) },
