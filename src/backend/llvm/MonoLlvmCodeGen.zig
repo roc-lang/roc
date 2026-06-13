@@ -12,6 +12,7 @@
 const std = @import("std");
 
 const builtin = @import("builtin");
+const build_options = @import("build_options");
 const SourceLoc = lir.SourceLoc;
 const builtins = @import("builtins");
 const layout = @import("layout");
@@ -1333,22 +1334,15 @@ pub const MonoLlvmCodeGen = struct {
             .name = "Roc statement LLVM CodeGen",
             .version = .{ .major = 1, .minor = 0, .patch = 0 },
         };
-        const environ: std.process.Environ = if (builtin.os.tag == .windows)
-            .{ .block = .global }
-        else blk: {
-            const env_ptr: [*:null]const ?[*:0]const u8 = @ptrCast(std.c.environ);
-            break :blk .{ .block = .{ .slice = std.mem.sliceTo(env_ptr, null) } };
-        };
-        if (environ.getAlloc(self.allocator, "ROC_LLVM_KEEP_IR")) |keep_path| {
-            defer self.allocator.free(keep_path);
+        if (comptime build_options.llvm_keep_ir.len != 0) {
             // Render the IR into a buffer and write it through the CoreCtx
             // filesystem abstraction rather than reaching into the cwd directory
             // handle directly, keeping compiler-core decoupled from the OS I/O layer.
             var ir_text: std.Io.Writer.Allocating = .init(self.allocator);
             defer ir_text.deinit();
             builder.print(&ir_text.writer) catch return error.CompilationFailed;
-            CoreCtx.writeFileCwd(std.Options.debug_io, keep_path, ir_text.written()) catch return error.CompilationFailed;
-        } else |_| {}
+            CoreCtx.writeFileCwd(std.Options.debug_io, build_options.llvm_keep_ir, ir_text.written()) catch return error.CompilationFailed;
+        }
         return builder.toBitcode(self.allocator, producer) catch return error.OutOfMemory;
     }
 

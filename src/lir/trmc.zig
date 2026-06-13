@@ -50,13 +50,14 @@
 //! Zero-filled cells are decref-safe: in-flight box fields read as null, and
 //! the RC runtime treats null as a no-op.
 //!
-//! Debug flags (zero cost when unset):
-//! - ROC_PRINT_TRMC=1: one line per transformed proc on stderr.
-//! - ROC_PRINT_IR_AFTER_TRMC=1: full IR dump of each transformed proc.
+//! Build debug options:
+//! - `-Dprint-trmc=true`: one line per transformed proc on stderr.
+//! - `-Dprint-ir-after-trmc=true`: full IR dump of each transformed proc.
 
 const std = @import("std");
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
+const build_options = @import("build_options");
 const core = @import("lir_core");
 const layout_mod = @import("layout");
 const debug_print = @import("debug_print.zig");
@@ -72,8 +73,8 @@ pub const ResourceError = std.mem.Allocator.Error;
 
 /// Apply TRMC/TCE to every eligible proc in the store.
 pub fn run(store: *LirStore, layouts: *layout_mod.Store) ResourceError!void {
-    const print_transforms = debugFlagEnabled("ROC_PRINT_TRMC");
-    const print_ir = debugFlagEnabled("ROC_PRINT_IR_AFTER_TRMC");
+    const print_transforms = build_options.print_trmc;
+    const print_ir = build_options.print_ir_after_trmc;
 
     // Every statement a proc's walk can reach exists before the pass runs;
     // statements appended by earlier transforms belong to already-processed
@@ -1150,16 +1151,9 @@ const Transform = struct {
 // Debug output
 // ═══════════════════════════════════════════════════════════════════════════
 
-fn debugFlagEnabled(name: [:0]const u8) bool {
-    if (comptime builtin.target.os.tag == .freestanding or builtin.target.os.tag == .windows) return false;
-    return std.c.getenv(name.ptr) != null;
-}
-
 /// std.debug.print reaches stderr through std.Io.Threaded, which does not
-/// compile for freestanding wasm. The ROC_PRINT_* dumps these flags gate are
-/// dev-only and can never be active on freestanding (see debugFlagEnabled), so
-/// keep the std.debug.print call inside a comptime-false block there to avoid
-/// pulling Io.Threaded into the freestanding wasm builds.
+/// compile for freestanding wasm. These build-option dumps are dev-only and
+/// should not pull Io.Threaded into freestanding wasm builds.
 fn debugPrint(comptime fmt: []const u8, args: anytype) void {
     if (comptime builtin.target.os.tag != .freestanding) {
         std.debug.print(fmt, args);
