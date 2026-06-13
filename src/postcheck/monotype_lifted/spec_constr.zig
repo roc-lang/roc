@@ -973,7 +973,7 @@ const Pass = struct {
                     .tag => |expr_tag| expr_tag,
                     else => return false,
                 };
-                if (expr.ty != tag.ty or expr_tag.name != tag.name) return false;
+                if (!sameType(self.program, expr.ty, tag.ty) or expr_tag.name != tag.name) return false;
                 const payloads = self.program.exprSpan(expr_tag.payloads);
                 if (payloads.len != tag.payloads.len) Common.invariant("tag call pattern arity differed from tag expression arity");
                 for (tag.payloads, payloads) |payload_shape, payload| {
@@ -987,7 +987,7 @@ const Pass = struct {
                     .record => |fields| self.program.fieldExprSpan(fields),
                     else => return false,
                 };
-                if (expr.ty != record.ty or fields.len != record.fields.len) return false;
+                if (!sameType(self.program, expr.ty, record.ty) or fields.len != record.fields.len) return false;
                 for (record.fields, fields) |field_shape, field| {
                     if (field_shape.name != field.name) return false;
                     if (!try self.appendExistingExprsForShape(field_shape.shape, field.value, out)) return false;
@@ -1000,7 +1000,7 @@ const Pass = struct {
                     .tuple => |items| self.program.exprSpan(items),
                     else => return false,
                 };
-                if (expr.ty != tuple.ty or items.len != tuple.items.len) return false;
+                if (!sameType(self.program, expr.ty, tuple.ty) or items.len != tuple.items.len) return false;
                 for (tuple.items, items) |item_shape, item| {
                     if (!try self.appendExistingExprsForShape(item_shape, item, out)) return false;
                 }
@@ -1012,7 +1012,7 @@ const Pass = struct {
                     .nominal => |backing| backing,
                     else => return false,
                 };
-                if (expr.ty != nominal.ty) return false;
+                if (!sameType(self.program, expr.ty, nominal.ty)) return false;
                 return try self.appendExistingExprsForShape(nominal.backing.*, backing, out);
             },
             .callable => return false,
@@ -3227,6 +3227,17 @@ fn valueType(program: *const Ast.Program, value: Value) Type.TypeId {
     };
 }
 
+/// Whether two Monotype ids denote the same type. The type store is not
+/// interned: each specialization materializes its own ids, so structurally
+/// identical types reached from different specializations (a call site and
+/// the callee's own body) carry different ids and compare by digest.
+fn sameType(program: *const Ast.Program, lhs: Type.TypeId, rhs: Type.TypeId) bool {
+    if (lhs == rhs) return true;
+    const lhs_digest = program.types.typeDigest(&program.names, lhs);
+    const rhs_digest = program.types.typeDigest(&program.names, rhs);
+    return std.mem.eql(u8, &lhs_digest.bytes, &rhs_digest.bytes);
+}
+
 fn patternEql(program: *const Ast.Program, lhs: CallPattern, rhs: CallPattern) bool {
     if (lhs.args.len != rhs.args.len) return false;
     for (lhs.args, rhs.args) |lhs_arg, rhs_arg| {
@@ -3238,10 +3249,10 @@ fn patternEql(program: *const Ast.Program, lhs: CallPattern, rhs: CallPattern) b
 fn shapeEql(program: *const Ast.Program, lhs: Shape, rhs: Shape) bool {
     if (std.meta.activeTag(lhs) != std.meta.activeTag(rhs)) return false;
     return switch (lhs) {
-        .any => |lhs_ty| lhs_ty == rhs.any,
+        .any => |lhs_ty| sameType(program, lhs_ty, rhs.any),
         .tag => |lhs_tag| blk: {
             const rhs_tag = rhs.tag;
-            if (lhs_tag.ty != rhs_tag.ty or lhs_tag.name != rhs_tag.name or lhs_tag.payloads.len != rhs_tag.payloads.len) break :blk false;
+            if (!sameType(program, lhs_tag.ty, rhs_tag.ty) or lhs_tag.name != rhs_tag.name or lhs_tag.payloads.len != rhs_tag.payloads.len) break :blk false;
             for (lhs_tag.payloads, rhs_tag.payloads) |lhs_payload, rhs_payload| {
                 if (!shapeEql(program, lhs_payload, rhs_payload)) break :blk false;
             }
@@ -3249,7 +3260,7 @@ fn shapeEql(program: *const Ast.Program, lhs: Shape, rhs: Shape) bool {
         },
         .record => |lhs_record| blk: {
             const rhs_record = rhs.record;
-            if (lhs_record.ty != rhs_record.ty or lhs_record.fields.len != rhs_record.fields.len) break :blk false;
+            if (!sameType(program, lhs_record.ty, rhs_record.ty) or lhs_record.fields.len != rhs_record.fields.len) break :blk false;
             for (lhs_record.fields, rhs_record.fields) |lhs_field, rhs_field| {
                 if (lhs_field.name != rhs_field.name or !shapeEql(program, lhs_field.shape, rhs_field.shape)) break :blk false;
             }
@@ -3257,7 +3268,7 @@ fn shapeEql(program: *const Ast.Program, lhs: Shape, rhs: Shape) bool {
         },
         .tuple => |lhs_tuple| blk: {
             const rhs_tuple = rhs.tuple;
-            if (lhs_tuple.ty != rhs_tuple.ty or lhs_tuple.items.len != rhs_tuple.items.len) break :blk false;
+            if (!sameType(program, lhs_tuple.ty, rhs_tuple.ty) or lhs_tuple.items.len != rhs_tuple.items.len) break :blk false;
             for (lhs_tuple.items, rhs_tuple.items) |lhs_item, rhs_item| {
                 if (!shapeEql(program, lhs_item, rhs_item)) break :blk false;
             }
@@ -3265,11 +3276,11 @@ fn shapeEql(program: *const Ast.Program, lhs: Shape, rhs: Shape) bool {
         },
         .nominal => |lhs_nominal| {
             const rhs_nominal = rhs.nominal;
-            return lhs_nominal.ty == rhs_nominal.ty and shapeEql(program, lhs_nominal.backing.*, rhs_nominal.backing.*);
+            return sameType(program, lhs_nominal.ty, rhs_nominal.ty) and shapeEql(program, lhs_nominal.backing.*, rhs_nominal.backing.*);
         },
         .callable => |lhs_callable| blk: {
             const rhs_callable = rhs.callable;
-            if (lhs_callable.ty != rhs_callable.ty or
+            if (!sameType(program, lhs_callable.ty, rhs_callable.ty) or
                 !callableTargetMatches(program, lhs_callable.fn_id, rhs_callable.fn_id) or
                 lhs_callable.captures.len != rhs_callable.captures.len)
             {
@@ -3291,7 +3302,7 @@ fn shapeMatchesValue(program: *const Ast.Program, shape: Shape, value: Value) bo
                 .tag => |value_tag| value_tag,
                 else => break :blk false,
             };
-            if (tag.ty != value_tag.ty or tag.name != value_tag.name or tag.payloads.len != value_tag.payloads.len) break :blk false;
+            if (!sameType(program, tag.ty, value_tag.ty) or tag.name != value_tag.name or tag.payloads.len != value_tag.payloads.len) break :blk false;
             for (tag.payloads, value_tag.payloads) |payload_shape, payload_value| {
                 if (!shapeMatchesValue(program, payload_shape, payload_value)) break :blk false;
             }
@@ -3302,7 +3313,7 @@ fn shapeMatchesValue(program: *const Ast.Program, shape: Shape, value: Value) bo
                 .record => |value_record| value_record,
                 else => break :blk false,
             };
-            if (record.ty != value_record.ty or record.fields.len != value_record.fields.len) break :blk false;
+            if (!sameType(program, record.ty, value_record.ty) or record.fields.len != value_record.fields.len) break :blk false;
             for (record.fields, value_record.fields) |field_shape, field_value| {
                 if (field_shape.name != field_value.name or !shapeMatchesValue(program, field_shape.shape, field_value.value)) break :blk false;
             }
@@ -3313,7 +3324,7 @@ fn shapeMatchesValue(program: *const Ast.Program, shape: Shape, value: Value) bo
                 .tuple => |value_tuple| value_tuple,
                 else => break :blk false,
             };
-            if (tuple.ty != value_tuple.ty or tuple.items.len != value_tuple.items.len) break :blk false;
+            if (!sameType(program, tuple.ty, value_tuple.ty) or tuple.items.len != value_tuple.items.len) break :blk false;
             for (tuple.items, value_tuple.items) |item_shape, item_value| {
                 if (!shapeMatchesValue(program, item_shape, item_value)) break :blk false;
             }
@@ -3324,14 +3335,14 @@ fn shapeMatchesValue(program: *const Ast.Program, shape: Shape, value: Value) bo
                 .nominal => |value_nominal| value_nominal,
                 else => break :blk false,
             };
-            break :blk nominal.ty == value_nominal.ty and shapeMatchesValue(program, nominal.backing.*, value_nominal.backing.*);
+            break :blk sameType(program, nominal.ty, value_nominal.ty) and shapeMatchesValue(program, nominal.backing.*, value_nominal.backing.*);
         },
         .callable => |callable| blk: {
             const value_callable = switch (value) {
                 .callable => |value_callable| value_callable,
                 else => break :blk false,
             };
-            if (callable.ty != value_callable.ty or
+            if (!sameType(program, callable.ty, value_callable.ty) or
                 !callableTargetMatches(program, callable.fn_id, value_callable.fn_id) or
                 callable.captures.len != value_callable.captures.len)
             {

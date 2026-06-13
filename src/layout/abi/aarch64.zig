@@ -64,7 +64,7 @@ pub fn classifyType(store: *const Store, idx: Idx) Class {
             }
         },
         // A Box is a single pointer.
-        .box, .box_of_zst => return .byval,
+        .box, .box_of_zst, .ptr => return .byval,
         // RocList is a three-word aggregate.
         .list, .list_of_zst => return classifyBySize(store, lay),
         .struct_ => {

@@ -1143,12 +1143,14 @@ that checked module. The same checked function template may therefore produce
 many Monotype bodies, and the same checked nested lambda site may produce many
 nested Monotype functions, each with a different monomorphic function type.
 
-An instantiation context owns stage-local type cells addressed by
-`(checked module id, checked type id)`. The address is the checked identity of
-the type variable/content in the current specialization. It is not a structural
-digest, source name, runtime layout, object symbol, or generated procedure id.
-Cells begin unresolved. As the specialization is lowered, explicit evidence from
-checked data constrains those cells:
+Each specialization owns an instantiation graph: union-find nodes with
+explicit row-extension links, created by instantiating checked types on first
+touch. Instantiation contexts cache nodes by `(checked module id, checked type
+id)`. The address is the checked identity of the type variable/content in the
+current specialization. It is not a structural digest, source name, runtime
+layout, object symbol, or generated procedure id. Nodes begin unresolved. As
+the specialization is lowered, explicit evidence from checked data unifies
+those nodes:
 
 - the requested root function/value type constrains the checked root type;
 - lambda and closure expected function types constrain the nested function
@@ -1255,8 +1257,8 @@ encounter the same checked type under better evidence and try to assign a
 different Monotype type. That is not a valid compiler state; it is evidence that
 the stage was not lowering from one constrained specialization graph. The
 instantiation model makes the intended data flow explicit, so the first
-constraint and every later constraint meet in the same cell before the final
-Monotype body is emitted.
+constraint and every later constraint meet in the same graph node before the
+final Monotype body is emitted.
 
 An unconstrained checked type variable that remains open after checking lowers
 to the empty tag union in Monotype. This is not a default choice. It records the
@@ -1265,19 +1267,33 @@ can still be represented as `List([ ])` because they contain no elements, and
 code that would need an actual element value must have constrained the element
 type earlier or must be unreachable at runtime.
 
-During Monotype construction, an open checked variable is represented by a
-stage-local type cell. The cell starts as the empty tag union, and it may be
-completed with a concrete type while the same Monotype body is still being
-constructed if call-site arguments, expected lambda types, numeric literals, or
-checked type relations provide concrete evidence. This is ordinary type solving
-inside one stage. Once Monotype IR is output, no open cell remains and no
-later stage may change a type.
+During Monotype construction, an open checked variable is an unresolved graph
+node carrying the variable's numeric and row defaults. Unification resolves it
+when call-site arguments, expected lambda types, numeric literals, or checked
+type relations provide concrete evidence; defaults apply only at
+materialization. A Monotype is a materialized view of a solved node: it is
+reserved at a stable id and its content is refilled in place when its node
+gains evidence, so every holder of the id observes the solved type. This is
+ordinary type solving inside one stage. Once Monotype IR is output, no
+unresolved node remains reachable and no later stage may change a type.
 
-Monotype type cells are addressed by the owning checked module id and the exact
-checked type id. They are not addressed by `TypeDigest`. A digest can identify
-closed structural type content for specialization and comparison, but it cannot
-distinguish two different open checked variables with the same shape. Treating
-those variables as the same cell is a compiler bug.
+A Monotype imported into another specialization's graph is a finished
+snapshot, never a refreshable view: a specialization that needs more than its
+requested type is a unification conflict, not a silent rewrite of another
+specialization's final type. Procedure template body requests therefore defer
+to the end of the requesting specialization, when its types are final and the
+specialization key is stable. Nested functions are the exception: they share
+the requester's graph, and an inferred local procedure's body pins signature
+variables the requester's remaining body relies on, so nested bodies lower at
+their request site.
+
+Instantiation graph nodes are cached by the owning checked module id and the
+exact checked type id. They are not cached by `TypeDigest`. A digest can
+identify closed structural type content for specialization and comparison, but
+it cannot distinguish two different open checked variables with the same shape.
+Treating those variables as the same node is a compiler bug. Type digests are
+alias-transparent and encode recursive back references, so structurally equal
+types digest equally regardless of alias spelling or knot-tying ids.
 
 Generated helper code for an empty tag union, such as an inspector requested
 only because a container type mentions the empty tag union, has an unreachable
@@ -2773,12 +2789,11 @@ that value kind must be added explicitly here with a checked cache rule.
 - function values
 
 Compile-time evaluation failures are owned by checking finalization because the
-module has not been output yet. User-written compile-time crashes, exhausted
-compile-time limits, invalid compile-time host interaction, and unsupported
-compile-time operations become checking diagnostics attached to the checked root
-being finalized. OOM remains OOM. A post-check invariant failure while lowering
-or interpreting a compile-time root is still a compiler bug, not a user-facing
-diagnostic.
+module has not been output yet. User-written compile-time crashes, invalid
+compile-time host interaction, and unsupported compile-time operations become
+checking diagnostics attached to the checked root being finalized. OOM remains
+OOM. A post-check invariant failure while lowering or interpreting a
+compile-time root is still a compiler bug, not a user-facing diagnostic.
 
 While storing an eval result, the builder may reserve a `ConstNodeId` before
 storing its children so repeated references to the same acyclic runtime value
