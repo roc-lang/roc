@@ -5,6 +5,7 @@
 //! capture locals.
 
 const std = @import("std");
+const base = @import("base");
 const check = @import("check");
 
 const Common = @import("../common.zig");
@@ -67,6 +68,9 @@ pub const Fn = struct {
     ret: Type.TypeId,
 };
 
+/// Source procedure names for runtime diagnostics, keyed by generated symbol.
+pub const ProcDebugNameMap = Mono.ProcDebugNameMap;
+
 /// Body availability for a lifted function.
 pub const FnBody = union(enum) {
     roc: ExprId,
@@ -117,9 +121,22 @@ pub const Program = struct {
     branches: std.ArrayList(Branch),
     if_branches: std.ArrayList(IfBranch),
     string_literals: std.ArrayList(Mono.StringLiteral),
+    proc_debug_names: ProcDebugNameMap,
     roots: std.ArrayList(Root),
     layout_requests: std.ArrayList(LayoutRequest),
     runtime_schema_requests: std.ArrayList(RuntimeSchemaRequest),
+    /// Source file table for `SourceLoc.file` indices (moved from Monotype).
+    source_files: std.ArrayList([]const u8),
+    /// Source location per expression, parallel to `exprs`.
+    expr_locs: std.ArrayList(base.SourceLoc),
+    /// Source location per statement, parallel to `stmts`.
+    stmt_locs: std.ArrayList(base.SourceLoc),
+    /// Source-level name per local, parallel to `locals` (empty for
+    /// compiler-generated temporaries; moved from Monotype).
+    local_names: std.ArrayList([]const u8),
+    /// Ambient location recorded by `addExpr`/`addStmt`. Passes that add
+    /// nodes set this so synthetic nodes inherit a source location.
+    current_loc: base.SourceLoc,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -138,6 +155,11 @@ pub const Program = struct {
         branches: std.ArrayList(Branch),
         if_branches: std.ArrayList(IfBranch),
         string_literals: std.ArrayList(Mono.StringLiteral),
+        proc_debug_names: ProcDebugNameMap,
+        source_files: std.ArrayList([]const u8),
+        expr_locs: std.ArrayList(base.SourceLoc),
+        stmt_locs: std.ArrayList(base.SourceLoc),
+        local_names: std.ArrayList([]const u8),
         next_symbol: u32,
     ) Program {
         return .{
@@ -159,16 +181,31 @@ pub const Program = struct {
             .branches = branches,
             .if_branches = if_branches,
             .string_literals = string_literals,
+            .proc_debug_names = proc_debug_names,
             .roots = .empty,
             .layout_requests = .empty,
             .runtime_schema_requests = .empty,
+            .source_files = source_files,
+            .expr_locs = expr_locs,
+            .stmt_locs = stmt_locs,
+            .local_names = local_names,
+            .current_loc = base.SourceLoc.none,
         };
     }
 
     pub fn deinit(self: *Program) void {
+        for (self.local_names.items) |name| {
+            if (name.len > 0) self.allocator.free(name);
+        }
+        self.local_names.deinit(self.allocator);
+        self.stmt_locs.deinit(self.allocator);
+        self.expr_locs.deinit(self.allocator);
+        for (self.source_files.items) |file| self.allocator.free(file);
+        self.source_files.deinit(self.allocator);
         self.runtime_schema_requests.deinit(self.allocator);
         self.layout_requests.deinit(self.allocator);
         self.roots.deinit(self.allocator);
+        self.proc_debug_names.deinit();
         for (self.string_literals.items) |literal| self.allocator.free(literal.backing);
         self.string_literals.deinit(self.allocator);
         self.if_branches.deinit(self.allocator);
@@ -194,10 +231,29 @@ pub const Program = struct {
         return id;
     }
 
+    pub fn setProcDebugName(self: *Program, symbol: Common.Symbol, name: names.ExportNameId) std.mem.Allocator.Error!void {
+        try self.proc_debug_names.put(symbol, name);
+    }
+
+    pub fn procDebugName(self: *const Program, symbol: Common.Symbol) ?names.ExportNameId {
+        return self.proc_debug_names.get(symbol);
+    }
+
     pub fn addExpr(self: *Program, expr: Expr) std.mem.Allocator.Error!ExprId {
         const id: ExprId = @enumFromInt(@as(u32, @intCast(self.exprs.items.len)));
         try self.exprs.append(self.allocator, expr);
+        try self.expr_locs.append(self.allocator, self.current_loc);
         return id;
+    }
+
+    /// Source location of an expression.
+    pub fn exprLoc(self: *const Program, id: ExprId) base.SourceLoc {
+        return self.expr_locs.items[@intFromEnum(id)];
+    }
+
+    /// Source location of a statement.
+    pub fn stmtLoc(self: *const Program, id: StmtId) base.SourceLoc {
+        return self.stmt_locs.items[@intFromEnum(id)];
     }
 
     pub fn addPat(self: *Program, pat_: Pat) std.mem.Allocator.Error!PatId {
@@ -209,11 +265,17 @@ pub const Program = struct {
     pub fn addStmt(self: *Program, stmt_: Stmt) std.mem.Allocator.Error!StmtId {
         const id: StmtId = @enumFromInt(@as(u32, @intCast(self.stmts.items.len)));
         try self.stmts.append(self.allocator, stmt_);
+        try self.stmt_locs.append(self.allocator, self.current_loc);
         return id;
     }
 
     pub fn addLocal(self: *Program, symbol: Common.Symbol, ty: Type.TypeId) std.mem.Allocator.Error!LocalId {
         return try self.addLocalWithBinder(symbol, ty, null);
+    }
+
+    /// Source-level name of a local; empty for compiler-generated temporaries.
+    pub fn localName(self: *const Program, id: LocalId) []const u8 {
+        return self.local_names.items[@intFromEnum(id)];
     }
 
     pub fn addLocalWithBinder(
@@ -224,6 +286,7 @@ pub const Program = struct {
     ) std.mem.Allocator.Error!LocalId {
         const id: LocalId = @enumFromInt(@as(u32, @intCast(self.locals.items.len)));
         try self.locals.append(self.allocator, .{ .id = id, .symbol = symbol, .ty = ty, .binder = binder });
+        try self.local_names.append(self.allocator, "");
         return id;
     }
 

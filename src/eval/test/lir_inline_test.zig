@@ -37,6 +37,15 @@ fn lowerModule(
     source: []const u8,
     inline_mode: lir.CheckedPipeline.InlineMode,
 ) anyerror!LoweredSource {
+    return lowerModuleWithProcDebugNames(allocator, source, inline_mode, false);
+}
+
+fn lowerModuleWithProcDebugNames(
+    allocator: Allocator,
+    source: []const u8,
+    inline_mode: lir.CheckedPipeline.InlineMode,
+    proc_debug_names: bool,
+) anyerror!LoweredSource {
     var resources = try helpers.parseAndCanonicalizeProgram(allocator, .module, source, &.{});
     errdefer helpers.cleanupParseAndCanonical(allocator, resources);
 
@@ -64,6 +73,7 @@ fn lowerModule(
         .{
             .target_usize = base.target.TargetUsize.native,
             .inline_mode = inline_mode,
+            .proc_debug_names = proc_debug_names,
         },
     );
     errdefer lowered.deinit();
@@ -169,6 +179,7 @@ fn liftModuleAfterSpecConstr(
             .imports = import_views,
         },
         .{ .requests = resources.checked_artifact.root_requests.requests },
+        .{},
     );
     var mono_owned = true;
     errdefer if (mono_owned) mono.deinit();
@@ -557,13 +568,15 @@ fn countUnreachableLiftedDirectCalls(
 
 fn directRecordWorkerIsSpecialized(shape: ProcShape) bool {
     return shape.arg_count == 2 and
-        shape.self_call_count == 1 and
+        shape.self_call_count == 0 and
+        shape.jump_count >= 1 and
         shape.struct_assign_count == 0;
 }
 
 fn directRecordWorkerIsGeneric(shape: ProcShape) bool {
     return shape.arg_count == 1 and
-        shape.self_call_count == 1 and
+        shape.self_call_count == 0 and
+        shape.jump_count >= 1 and
         shape.struct_assign_count >= 1;
 }
 
@@ -585,50 +598,57 @@ fn whileRecordStateWorkerIsGeneric(shape: ProcShape) bool {
 
 fn directTupleWorkerIsSpecialized(shape: ProcShape) bool {
     return shape.arg_count == 2 and
-        shape.self_call_count == 1 and
+        shape.self_call_count == 0 and
+        shape.jump_count >= 1 and
         shape.struct_assign_count == 0;
 }
 
 fn directTupleWorkerIsGeneric(shape: ProcShape) bool {
     return shape.arg_count == 1 and
-        shape.self_call_count == 1 and
+        shape.self_call_count == 0 and
+        shape.jump_count >= 1 and
         shape.struct_assign_count >= 1;
 }
 
 fn unusedStateWorkerIsSpecialized(shape: ProcShape) bool {
     return shape.arg_count == 2 and
-        shape.self_call_count == 1 and
+        shape.self_call_count == 0 and
+        shape.jump_count >= 1 and
         shape.struct_assign_count == 0;
 }
 
 fn unusedStateWorkerIsGeneric(shape: ProcShape) bool {
     return shape.arg_count == 2 and
-        shape.self_call_count == 1 and
+        shape.self_call_count == 0 and
+        shape.jump_count >= 1 and
         shape.struct_assign_count >= 1;
 }
 
 fn taggedStepWorkerIsSpecialized(shape: ProcShape) bool {
     return shape.arg_count == 2 and
-        shape.self_call_count == 1 and
-        shape.direct_call_count >= 2 and
+        shape.self_call_count == 0 and
+        shape.jump_count >= 1 and
         shape.tag_assign_count == 0;
 }
 
 fn taggedStepWorkerIsGeneric(shape: ProcShape) bool {
     return shape.arg_count == 2 and
-        shape.self_call_count >= 1 and
+        shape.self_call_count == 0 and
+        shape.jump_count >= 1 and
         shape.tag_assign_count >= 1;
 }
 
 fn multiTupleWorkerIsFullySpecialized(shape: ProcShape) bool {
     return shape.arg_count == 5 and
-        shape.self_call_count == 2 and
+        shape.self_call_count == 0 and
+        shape.jump_count >= 1 and
         shape.struct_assign_count == 0;
 }
 
 fn multiTupleWorkerIsGeneric(shape: ProcShape) bool {
     return shape.arg_count == 3 and
-        shape.self_call_count == 2 and
+        shape.self_call_count == 0 and
+        shape.jump_count >= 1 and
         shape.struct_assign_count >= 2;
 }
 
@@ -784,15 +804,29 @@ test "call value wrapper is not inlined" {
 }
 
 test "self-recursive direct wrapper is not inlined" {
-    try expectRootTargetHasCalls(
+    const allocator = std.testing.allocator;
+    var lowered_source = try lowerModule(allocator,
         \\module [main]
         \\
         \\wrapper : U64 -> U64
         \\wrapper = |x| wrapper(x)
         \\
-        \\main : U64
-        \\main = wrapper(1)
+        \\main : U64 -> U64
+        \\main = |x| wrapper(x)
     , .direct_call_wrappers);
+    defer lowered_source.deinit(allocator);
+
+    // The root still calls the wrapper as a separate proc (not inlined). The
+    // wrapper's own self-call is gone: the TRMC pass rewrote it into a tail
+    // jump, recorded as a TCE transform.
+    const target = try rootDirectCallTarget(allocator, &lowered_source.lowered);
+    try std.testing.expectEqual(
+        LIR.TailTransform.tce,
+        lowered_source.lowered.lir_result.store.getProcSpec(target).tail_transform,
+    );
+    const target_calls = try collectAssignCallProcs(allocator, &lowered_source.lowered, target);
+    defer allocator.free(target_calls);
+    try std.testing.expectEqual(@as(usize, 0), target_calls.len);
 }
 
 test "mutually recursive direct wrappers are not inlined" {
@@ -805,8 +839,8 @@ test "mutually recursive direct wrappers are not inlined" {
         \\b : U64 -> U64
         \\b = |x| a(x)
         \\
-        \\main : U64
-        \\main = a(1)
+        \\main : U64 -> U64
+        \\main = |x| a(x)
     , .direct_call_wrappers);
 }
 
@@ -824,6 +858,68 @@ test "capturing direct wrapper is not inlined" {
         \\    wrapper(41)
         \\}
     , .direct_call_wrappers);
+}
+// ─── TRMC pass outcomes through the full pipeline ───
+
+fn expectRootTargetTailTransform(
+    source: []const u8,
+    expected: LIR.TailTransform,
+) anyerror!void {
+    const allocator = std.testing.allocator;
+    var lowered_source = try lowerModule(allocator, source, .none);
+    defer lowered_source.deinit(allocator);
+
+    const target = try rootDirectCallTarget(allocator, &lowered_source.lowered);
+    try std.testing.expectEqual(
+        expected,
+        lowered_source.lowered.lir_result.store.getProcSpec(target).tail_transform,
+    );
+}
+
+test "trmc: recursive list builder is TRMC-transformed through the pipeline" {
+    try expectRootTargetTailTransform(
+        \\module [main]
+        \\
+        \\LinkedList := [Nil, Cons(I64, LinkedList)]
+        \\
+        \\repeat : I64, I64 -> LinkedList
+        \\repeat = |value, n| if n <= 0.I64 LinkedList.Nil else LinkedList.Cons(value, repeat(value, n - 1))
+        \\
+        \\main = repeat(7.I64, 3.I64)
+    , .trmc);
+}
+
+test "trmc: accumulator recursion is TCE-transformed through the pipeline" {
+    try expectRootTargetTailTransform(
+        \\module [main]
+        \\
+        \\sum_to : I64, I64 -> I64
+        \\sum_to = |n, acc| if n == 0.I64 acc else sum_to(n - 1, acc + n)
+        \\
+        \\main = sum_to(10.I64, 0.I64)
+    , .tce);
+}
+
+test "trmc: result used before the constructor is not transformed" {
+    try expectRootTargetTailTransform(
+        \\module [main]
+        \\
+        \\LinkedList := [Nil, Cons(I64, LinkedList)]
+        \\
+        \\length_acc : LinkedList, I64 -> I64
+        \\length_acc = |list, acc| match list {
+        \\    Nil => acc
+        \\    Cons(_, rest) => length_acc(rest, acc + 1)
+        \\}
+        \\
+        \\with_lengths : I64 -> LinkedList
+        \\with_lengths = |n| if n <= 0.I64 LinkedList.Nil else {
+        \\    rest = with_lengths(n - 1)
+        \\    LinkedList.Cons(length_acc(rest, 0), rest)
+        \\}
+        \\
+        \\main = with_lengths(4.I64)
+    , .none);
 }
 
 test "plant iter pipeline specializes collect worker after inlining" {
@@ -1331,4 +1427,131 @@ test "spec constr uses fully known entry shape for multiple tuple states" {
 
     try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, multiTupleWorkerIsFullySpecialized));
     try std.testing.expect(try reachableProcShape(allocator, &unoptimized.lowered, multiTupleWorkerIsGeneric));
+}
+
+test "LIR statements and procs carry resolved source locations" {
+    const allocator = std.testing.allocator;
+
+    const source =
+        \\module [main]
+        \\
+        \\add2 : U64 -> U64
+        \\add2 = |n| n + 2
+        \\
+        \\mul3 : U64 -> U64
+        \\mul3 = |n| n * 3
+        \\
+        \\main : U64
+        \\main = {
+        \\    x = 40
+        \\    mul3(add2(x))
+        \\}
+    ;
+
+    var lowered_source = try lowerModuleWithProcDebugNames(allocator, source, .none, true);
+    defer lowered_source.deinit(allocator);
+
+    const store = &lowered_source.lowered.lir_result.store;
+    try std.testing.expectEqual(store.cf_stmts.items.len, store.cf_stmt_locs.items.len);
+    try std.testing.expectEqual(store.proc_specs.items.len, store.proc_locs.items.len);
+    try std.testing.expect(store.proc_debug_names.items.len > 0);
+    for (store.proc_debug_names.items) |entry| {
+        try std.testing.expect(entry.proc < store.proc_specs.items.len);
+    }
+    try std.testing.expect(store.sourceFileCount() >= 1);
+
+    var located: usize = 0;
+    for (store.cf_stmt_locs.items, store.cf_stmts.items) |loc, stmt| {
+        switch (stmt) {
+            .incref, .decref, .free => try std.testing.expect(!loc.hasLocation()),
+            else => {},
+        }
+        if (loc.hasLocation()) {
+            located += 1;
+            try std.testing.expect(loc.file < store.sourceFileCount());
+            try std.testing.expect(loc.line >= 1);
+            try std.testing.expect(loc.column >= 1);
+        }
+    }
+    try std.testing.expect(located > 0);
+
+    var located_procs: usize = 0;
+    for (store.proc_locs.items) |loc| {
+        if (loc.hasLocation()) {
+            located_procs += 1;
+            try std.testing.expect(loc.file < store.sourceFileCount());
+        }
+    }
+    try std.testing.expect(located_procs > 0);
+
+    var found_add2 = false;
+    var found_mul3 = false;
+    for (0..store.proc_specs.items.len) |i| {
+        const name = store.procDebugName(@enumFromInt(i)) orelse continue;
+        if (std.mem.eql(u8, name, "add2")) found_add2 = true;
+        if (std.mem.eql(u8, name, "mul3")) found_mul3 = true;
+    }
+    try std.testing.expect(found_add2);
+    try std.testing.expect(found_mul3);
+}
+
+test "LIR statements carry source locations under optimizing inline mode" {
+    const allocator = std.testing.allocator;
+
+    const source =
+        \\module [main]
+        \\
+        \\add2 : U64 -> U64
+        \\add2 = |n| n + 2
+        \\
+        \\main : U64
+        \\main = {
+        \\    x = 40
+        \\    add2(x)
+        \\}
+    ;
+
+    var lowered_source = try lowerModule(allocator, source, .direct_call_wrappers);
+    defer lowered_source.deinit(allocator);
+
+    const store = &lowered_source.lowered.lir_result.store;
+    var located: usize = 0;
+    for (store.cf_stmt_locs.items) |loc| {
+        if (loc.hasLocation()) located += 1;
+    }
+    try std.testing.expect(located > 0);
+}
+
+test "LIR locals carry source-level names" {
+    const allocator = std.testing.allocator;
+
+    const source =
+        \\module [main]
+        \\
+        \\compute : U64 -> U64
+        \\compute = |n| {
+        \\    first_part = n * 2
+        \\    second_part = first_part + 1
+        \\    second_part
+        \\}
+        \\
+        \\main : U64
+        \\main = compute(20)
+    ;
+
+    var lowered_source = try lowerModule(allocator, source, .none);
+    defer lowered_source.deinit(allocator);
+
+    const store = &lowered_source.lowered.lir_result.store;
+    try std.testing.expectEqual(store.locals.items.len, store.local_names.items.len);
+
+    var found_first = false;
+    var found_second = false;
+    for (0..store.locals.items.len) |i| {
+        const name = store.localName(@enumFromInt(i)) orelse continue;
+        if (std.mem.eql(u8, name, "first_part")) found_first = true;
+        if (std.mem.eql(u8, name, "second_part")) found_second = true;
+    }
+    try std.testing.expect(found_first);
+    try std.testing.expect(found_second);
 }

@@ -7,6 +7,22 @@ They do not [evaluate](expressions.md#evaluation) to a [value](expressions.md#va
 
 An _assignment statement_ gives a name to a [value](expressions.md#value) inside the current scope.
 
+### [Pattern matching in assignments](#import-exposing) {#import-exposing}
+
+You can use [pattern matching](pattern-matching) in assignments to do things like destructuring:
+
+```roc
+(x, y) = (1.1, 2.2)
+```
+
+The pattern you use here must be [exhaustive](pattern-matching#exhaustiveness). For example, the following would give an exhaustiveness error because it doesn't specify what to do if `list.first()` returned an `Err` instead of `Ok`:
+
+```roc
+Ok(item) = list.first()
+```
+
+If you can't write an exhaustive pattern-match, you can use [`match`](pattern-matching#match) instead of an assignment.
+
 ### [Assignment Order](#assignment-order) {#assignment-order}
 
 Assignments inside expressions can only reference names that were assigned earlier in scope.

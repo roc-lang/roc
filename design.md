@@ -868,26 +868,53 @@ The method registry is an exact table keyed by `(MethodOwner, MethodNameId)`.
 It is not an owner-discovery mechanism. Post-check code may use it only after a
 concrete monomorphic dispatcher type has already determined the owner.
 
-### Compile-Time Numeral Conversions
+### Compile-Time Literal Conversions
 
 A numeric literal whose target type is a non-builtin nominal type converts
-through that type's `from_numeral` method. Every such conversion with a
-concrete target type is a compile-time root (`numeral_conversion`), no matter
+through that type's `from_numeral` method, and a string literal converts
+through `from_quote` (receiving the literal's post-escape UTF-8 bytes as
+`List(U8)`). Every such conversion with a concrete target type is a
+compile-time root (`numeral_conversion` / `quote_conversion`), no matter
 where the literal sits in the AST: checking finalization evaluates the raw
 dispatch call, stores its `Try` result through `ConstStore`, unwraps `Ok` into
-the literal's stored constant, and reports `Err(InvalidNumeral(msg))` as a
-checking problem carrying the implementation's message. Runtime lowering
-restores the stored constant instead of emitting a call. Conversions whose
-target type is still polymorphic (literals inside generalized functions) keep
-the dispatch call per monomorphic specialization.
+the literal's stored constant, and reports `Err(InvalidNumeral(msg))` /
+`Err(BadQuotedBytes(msg))` as a checking problem carrying the implementation's
+message. Runtime lowering restores the stored constant instead of emitting a
+call. Conversions whose target type is still polymorphic (literals inside
+generalized functions) keep the dispatch call per monomorphic specialization.
+
+Unresolved literal-origin type variables default — numerals to `Dec`, quotes
+to `Str`. Quote defaulting runs before numeric context resolution because a
+still-flex string receiver blocks the method chains that give numeric literals
+their context, and it also resolves generalized literal variables that no
+instantiation can pin, which is the same resolution monomorphic specialization
+would apply, made early enough for checking to resolve dependent dispatch.
 
 Literal patterns participate through the same machinery. A literal pattern on
-a non-builtin number type carries a synthesized checked conversion expression;
-match lowering binds the matched value and tests it against the converted
-constant, dispatching to the type's `is_eq` method when it has one and using
-structural equality otherwise — exactly mirroring `==`. Checking attaches an
-`is_eq` constraint to the pattern's type so this lowering is total. Literal
-patterns on builtin number types keep their direct literal-pattern encoding.
+a non-builtin number or string type carries a synthesized checked conversion
+expression; match lowering binds the matched value and tests it against the
+converted constant, dispatching to the type's `is_eq` method when it has one
+and using structural equality otherwise — exactly mirroring `==`. Checking
+attaches an `is_eq` constraint to the pattern's type so this lowering is
+total. Literal patterns on builtin types keep their direct literal-pattern
+encoding.
+
+### String Interpolation
+
+An interpolated string literal is canonicalization sugar. It desugars into
+ordinary CIR: the interpolated expressions bind to locals in source order,
+each literal segment stays a real string literal (so each converts through
+`from_quote`), and the result is
+`seg0.from_interpolation([].iter().prepended((interp_n, seg_n+1))...)` — the
+iterator yields each interpolated value paired with the literal segment that
+follows it. `from_interpolation : val, Iter((interpolated, val)) -> val` is an
+ordinary method: each implementing type chooses its `interpolated` type (`Str`
+chooses `Str`; a `Url`-style type can interpolate `Str` rather than itself),
+and a type that needs to validate assembled values simply does not implement
+it. The synthesized call node is recorded so checking unifies the call result
+with the receiver, pinning the literal's target type from the use site before
+string defaulting runs. No post-canonicalization stage knows interpolation
+exists.
 
 ## Shared Post-Check Model
 
@@ -1083,12 +1110,14 @@ that checked module. The same checked function template may therefore produce
 many Monotype bodies, and the same checked nested lambda site may produce many
 nested Monotype functions, each with a different monomorphic function type.
 
-An instantiation context owns stage-local type cells addressed by
-`(checked module id, checked type id)`. The address is the checked identity of
-the type variable/content in the current specialization. It is not a structural
-digest, source name, runtime layout, object symbol, or generated procedure id.
-Cells begin unresolved. As the specialization is lowered, explicit evidence from
-checked data constrains those cells:
+Each specialization owns an instantiation graph: union-find nodes with
+explicit row-extension links, created by instantiating checked types on first
+touch. Instantiation contexts cache nodes by `(checked module id, checked type
+id)`. The address is the checked identity of the type variable/content in the
+current specialization. It is not a structural digest, source name, runtime
+layout, object symbol, or generated procedure id. Nodes begin unresolved. As
+the specialization is lowered, explicit evidence from checked data unifies
+those nodes:
 
 - the requested root function/value type constrains the checked root type;
 - lambda and closure expected function types constrain the nested function
@@ -1195,8 +1224,8 @@ encounter the same checked type under better evidence and try to assign a
 different Monotype type. That is not a valid compiler state; it is evidence that
 the stage was not lowering from one constrained specialization graph. The
 instantiation model makes the intended data flow explicit, so the first
-constraint and every later constraint meet in the same cell before the final
-Monotype body is emitted.
+constraint and every later constraint meet in the same graph node before the
+final Monotype body is emitted.
 
 An unconstrained checked type variable that remains open after checking lowers
 to the empty tag union in Monotype. This is not a default choice. It records the
@@ -1205,19 +1234,33 @@ can still be represented as `List([ ])` because they contain no elements, and
 code that would need an actual element value must have constrained the element
 type earlier or must be unreachable at runtime.
 
-During Monotype construction, an open checked variable is represented by a
-stage-local type cell. The cell starts as the empty tag union, and it may be
-completed with a concrete type while the same Monotype body is still being
-constructed if call-site arguments, expected lambda types, numeric literals, or
-checked type relations provide concrete evidence. This is ordinary type solving
-inside one stage. Once Monotype IR is output, no open cell remains and no
-later stage may change a type.
+During Monotype construction, an open checked variable is an unresolved graph
+node carrying the variable's numeric and row defaults. Unification resolves it
+when call-site arguments, expected lambda types, numeric literals, or checked
+type relations provide concrete evidence; defaults apply only at
+materialization. A Monotype is a materialized view of a solved node: it is
+reserved at a stable id and its content is refilled in place when its node
+gains evidence, so every holder of the id observes the solved type. This is
+ordinary type solving inside one stage. Once Monotype IR is output, no
+unresolved node remains reachable and no later stage may change a type.
 
-Monotype type cells are addressed by the owning checked module id and the exact
-checked type id. They are not addressed by `TypeDigest`. A digest can identify
-closed structural type content for specialization and comparison, but it cannot
-distinguish two different open checked variables with the same shape. Treating
-those variables as the same cell is a compiler bug.
+A Monotype imported into another specialization's graph is a finished
+snapshot, never a refreshable view: a specialization that needs more than its
+requested type is a unification conflict, not a silent rewrite of another
+specialization's final type. Procedure template body requests therefore defer
+to the end of the requesting specialization, when its types are final and the
+specialization key is stable. Nested functions are the exception: they share
+the requester's graph, and an inferred local procedure's body pins signature
+variables the requester's remaining body relies on, so nested bodies lower at
+their request site.
+
+Instantiation graph nodes are cached by the owning checked module id and the
+exact checked type id. They are not cached by `TypeDigest`. A digest can
+identify closed structural type content for specialization and comparison, but
+it cannot distinguish two different open checked variables with the same shape.
+Treating those variables as the same node is a compiler bug. Type digests are
+alias-transparent and encode recursive back references, so structurally equal
+types digest equally regardless of alias spelling or knot-tying ids.
 
 Generated helper code for an empty tag union, such as an inspector requested
 only because a container type mentions the empty tag union, has an unreachable
@@ -2713,12 +2756,11 @@ that value kind must be added explicitly here with a checked cache rule.
 - function values
 
 Compile-time evaluation failures are owned by checking finalization because the
-module has not been output yet. User-written compile-time crashes, exhausted
-compile-time limits, invalid compile-time host interaction, and unsupported
-compile-time operations become checking diagnostics attached to the checked root
-being finalized. OOM remains OOM. A post-check invariant failure while lowering
-or interpreting a compile-time root is still a compiler bug, not a user-facing
-diagnostic.
+module has not been output yet. User-written compile-time crashes, invalid
+compile-time host interaction, and unsupported compile-time operations become
+checking diagnostics attached to the checked root being finalized. OOM remains
+OOM. A post-check invariant failure while lowering or interpreting a
+compile-time root is still a compiler bug, not a user-facing diagnostic.
 
 While storing an eval result, the builder may reserve a `ConstNodeId` before
 storing its children so repeated references to the same acyclic runtime value

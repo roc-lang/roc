@@ -2,6 +2,7 @@
 
 const TestCase = @import("parallel_runner.zig").TestCase;
 const bughunt_repros = @import("eval_bughunt_repros.zig");
+const trmc_tests = @import("eval_trmc_tests.zig");
 const closure_recursion_tests = @import("eval_closure_recursion_tests.zig");
 const comptime_finalization_tests = @import("eval_comptime_finalization_tests.zig");
 const highest_lowest_tests = @import("eval_highest_lowest_tests.zig");
@@ -640,6 +641,162 @@ const core_tests = [_]TestCase{
             ,
         }},
         .expected = .{ .inspect_str = "(\"other\", \"one byte\")" },
+    },
+    .{
+        .name = "inspect: custom from_quote receives literal bytes",
+        .source_kind = .module,
+        .source =
+        \\Tag := [Tag(List(U8))].{
+        \\    from_quote : List(U8) -> Try(Tag, [BadQuotedBytes(Str)])
+        \\    from_quote = |bytes| Ok(Tag(bytes))
+        \\}
+        \\
+        \\force : Tag -> Tag
+        \\force = |t| t
+        \\
+        \\main = force("Roc")
+        ,
+        .expected = .{ .inspect_str = "Tag([82, 111, 99])" },
+    },
+    .{
+        .name = "inspect: from_quote literal defaults to Str",
+        .source_kind = .module,
+        .source =
+        \\main = "hello".concat("!")
+        ,
+        .expected = .{ .inspect_str = "\"hello!\"" },
+    },
+    .{
+        .name = "inspect: custom from_quote literal pattern dispatches through is_eq",
+        .source_kind = .module,
+        .source =
+        \\Tag := [Tag(List(U8))].{
+        \\    from_quote : List(U8) -> Try(Tag, [BadQuotedBytes(Str)])
+        \\    from_quote = |bytes| Ok(Tag(bytes))
+        \\    is_eq : Tag, Tag -> Bool
+        \\    is_eq = |a, b| match (a, b) {
+        \\        (Tag(x), Tag(y)) => x == y
+        \\    }
+        \\}
+        \\
+        \\force : Tag -> Tag
+        \\force = |t| t
+        \\
+        \\describe : Tag -> Str
+        \\describe = |tag| match tag {
+        \\    "yes" => "matched"
+        \\    _ => "other"
+        \\}
+        \\
+        \\main = (describe(force("yes")), describe(force("no")))
+        ,
+        .expected = .{ .inspect_str = "(\"matched\", \"other\")" },
+    },
+    .{
+        .name = "inspect: string literal patterns on Str keep working",
+        .source_kind = .module,
+        .source =
+        \\describe : Str -> Str
+        \\describe = |s| match s {
+        \\    "hello" => "greeting"
+        \\    _ => "other"
+        \\}
+        \\
+        \\main = (describe("hello"), describe("bye"))
+        ,
+        .expected = .{ .inspect_str = "(\"greeting\", \"other\")" },
+    },
+    .{
+        .name = "inspect: string literal type suffix pins custom from_quote target",
+        .source_kind = .module,
+        .source =
+        \\Tag := [Tag(List(U8))].{
+        \\    from_quote : List(U8) -> Try(Tag, [BadQuotedBytes(Str)])
+        \\    from_quote = |bytes| Ok(Tag(bytes))
+        \\}
+        \\
+        \\main = "Roc".Tag
+        ,
+        .expected = .{ .inspect_str = "Tag([82, 111, 99])" },
+    },
+    .{
+        .name = "inspect: string literal Str type suffix",
+        .source_kind = .module,
+        .source =
+        \\main = "hello".Str
+        ,
+        .expected = .{ .inspect_str = "\"hello\"" },
+    },
+    .{
+        .name = "inspect: multiline string literal type suffix on its own line",
+        .source_kind = .module,
+        .source =
+        \\Tally := [Tally(U64)].{
+        \\    from_quote : List(U8) -> Try(Tally, [BadQuotedBytes(Str)])
+        \\    from_quote = |bytes| Ok(Tally(bytes.len()))
+        \\}
+        \\
+        \\main = {
+        \\    value =
+        \\        \\line one
+        \\        \\line two
+        \\        .Tally
+        \\    value
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Tally(17)" },
+    },
+    .{
+        .name = "inspect: custom from_interpolation interpolates Str into a custom type",
+        .source_kind = .module,
+        .source =
+        \\Url := [Url(Str)].{
+        \\    from_quote : List(U8) -> Try(Url, [BadQuotedBytes(Str)])
+        \\    from_quote = |bytes| Ok(Url(Str.from_utf8_lossy(bytes)))
+        \\    from_interpolation : Url, Iter((Str, Url)) -> Url
+        \\    from_interpolation = |first, rest| {
+        \\        Url.Url(rest.fold(first.inner(), |acc, (interpolated, segment)| acc.concat(interpolated).concat(segment.inner())))
+        \\    }
+        \\    inner : Url -> Str
+        \\    inner = |Url.Url(str)| str
+        \\}
+        \\
+        \\main = {
+        \\    domain = "example"
+        \\    url : Url
+        \\    url = "https://${domain}.com"
+        \\    url
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Url(\"https://example.com\")" },
+    },
+    .{
+        .name = "inspect: interpolation with adjacent and boundary interpolations",
+        .source_kind = .module,
+        .source =
+        \\main = {
+        \\    a = "one"
+        \\    b = "two"
+        \\    "${a}${b} and ${a}"
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"onetwo and one\"" },
+    },
+    .{
+        .name = "custom from_quote Err is a compile-time problem",
+        .source_kind = .module,
+        .source =
+        \\Strict := [Strict].{
+        \\    from_quote : List(U8) -> Try(Strict, [BadQuotedBytes(Str)])
+        \\    from_quote = |_bytes| Err(BadQuotedBytes("Strict rejects every string"))
+        \\}
+        \\
+        \\force : Strict -> Strict
+        \\force = |s| s
+        \\
+        \\main = force("nope")
+        ,
+        .expected = .problem,
     },
     .{
         .name = "custom from_numeral Err is a compile-time problem",
@@ -3884,4 +4041,4 @@ const core_tests = [_]TestCase{
     },
 };
 
-pub const tests = core_tests ++ comptime_finalization_tests.tests ++ closure_recursion_tests.tests ++ recursive_data_tests.tests ++ low_level_tests.tests ++ highest_lowest_tests.tests ++ polymorphism_tests.tests ++ issue_tests.tests ++ interpreter_style_tests.tests ++ bughunt_repros.tests;
+pub const tests = core_tests ++ comptime_finalization_tests.tests ++ closure_recursion_tests.tests ++ recursive_data_tests.tests ++ low_level_tests.tests ++ highest_lowest_tests.tests ++ polymorphism_tests.tests ++ issue_tests.tests ++ interpreter_style_tests.tests ++ bughunt_repros.tests ++ trmc_tests.tests;

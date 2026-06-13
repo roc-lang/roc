@@ -49,10 +49,12 @@ pub const Problem = union(enum) {
     platform_alias_not_found: PlatformAliasNotFound,
     comptime_crash: ComptimeCrash,
     comptime_invalid_numeral: ComptimeInvalidNumeral,
+    comptime_invalid_quote: ComptimeInvalidQuote,
     comptime_expect_failed: ComptimeExpectFailed,
     comptime_eval_error: ComptimeEvalError,
     invalid_numeric_literal: InvalidNumericLiteral,
     non_exhaustive_match: NonExhaustiveMatch,
+    non_exhaustive_destructure: NonExhaustiveDestructure,
     redundant_pattern: RedundantPattern,
     unmatchable_pattern: UnmatchablePattern,
 
@@ -126,6 +128,13 @@ pub const ComptimeCrash = struct {
 /// A numeric literal that a custom `from_numeral` implementation rejected
 /// during compile-time evaluation
 pub const ComptimeInvalidNumeral = struct {
+    message: ExtraStringIdx,
+    region: base.Region,
+};
+
+/// A string literal that a custom `from_quote` implementation rejected
+/// during compile-time evaluation
+pub const ComptimeInvalidQuote = struct {
     message: ExtraStringIdx,
     region: base.Region,
 };
@@ -224,6 +233,15 @@ pub const NonExhaustiveMatch = struct {
     missing_patterns: MissingPatternsRange,
 };
 
+/// Problem data for a non-exhaustive destructuring pattern
+pub const NonExhaustiveDestructure = struct {
+    pattern: CIR.Pattern.Idx,
+    /// Snapshot of the destructured value type for error messages
+    value_snapshot: SnapshotContentIdx,
+    /// Range into the problems store's missing_patterns_backing for pattern indices
+    missing_patterns: MissingPatternsRange,
+};
+
 /// Problem data for a redundant pattern in a match
 pub const RedundantPattern = struct {
     match_expr: CIR.Expr.Idx,
@@ -296,6 +314,8 @@ pub const DispatcherDoesNotImplMethod = struct {
     origin: types_mod.StaticDispatchConstraint.Origin,
     /// Optional numeric literal info for from_numeral constraints
     num_literal: ?types_mod.NumeralInfo = null,
+    /// Source region of the string literal for from_quote constraints
+    quote_region: ?base.Region = null,
     /// True when the dispatcher was a numeric literal that was defaulted to Dec
     /// because no type annotation was given. Used to add explanatory text in errors.
     defaulted_from_numeric_literal: bool = false,

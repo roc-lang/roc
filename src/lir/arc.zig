@@ -710,8 +710,8 @@ const Inserter = struct {
                     if (assign.target != assign.value) {
                         const move_value = try self.canMoveSetLocalValue(&path.owned, assign.value, assign.next, path.options.loop_keep);
                         switch (assign.mode) {
-                            .replace_existing => current_start = try self.releaseOldTargetIfNeeded(assign.target, &path.owned, current_start),
-                            .initialize_join_result, .initialize_join_param => {},
+                            .replace_existing, .initialize_join_param => current_start = try self.releaseOldTargetIfNeeded(assign.target, &path.owned, current_start),
+                            .initialize_join_result => {},
                         }
                         if (move_value) {
                             path.owned.unset(assign.value);
@@ -872,6 +872,9 @@ const Inserter = struct {
         tail_start: LIR.CFStmtId,
     ) ResourceError!LIR.CFStmtId {
         const stmt = self.store.getCFStmt(frame.stmt);
+        const saved_loc = self.store.current_loc;
+        defer self.store.current_loc = saved_loc;
+        self.store.current_loc = self.store.stmtLoc(frame.stmt);
         var next = tail_start;
         var cloned: LIR.CFStmtId = undefined;
 
@@ -1492,8 +1495,8 @@ const Inserter = struct {
                     if (assign.target != assign.value) {
                         const move_value = try self.canMoveSetLocalValue(&path.owned, assign.value, assign.next, path.loop_keep);
                         switch (assign.mode) {
-                            .initialize_join_result, .initialize_join_param => {},
-                            .replace_existing => {},
+                            .replace_existing, .initialize_join_param => path.owned.unset(assign.target),
+                            .initialize_join_result => {},
                         }
                         if (move_value) path.owned.unset(assign.value);
                     }
@@ -2027,6 +2030,7 @@ const Inserter = struct {
             .abi = source_spec.abi,
             .hosted = source_spec.hosted,
         });
+        try self.store.copyProcDebugInfo(variant, callee);
         entry.value_ptr.* = variant;
         try self.variants.sigs.append(self.store.allocator, demanded);
         try self.variants.queue.append(self.store.allocator, .{
