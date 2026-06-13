@@ -1324,6 +1324,11 @@ pub fn generateModule(self: *Self) std.mem.Allocator.Error!void {
         try self.generatePatternFunction();
     }
 
+    const recursion_count = self.reader.intRangeAtMost(u8, 1, 2);
+    for (0..recursion_count) |_| {
+        try self.generateRecursiveFunctionGroup();
+    }
+
     const builtin_count = self.reader.intRangeAtMost(u8, 12, 36);
     for (0..builtin_count) |_| {
         try self.generateBuiltinAssociatedFunction();
@@ -1652,6 +1657,43 @@ fn generateMutableTupleParamPatternFunction(self: *Self, name_id: u32) std.mem.A
     try self.write("        ");
     try self.writeMutableLocalReference("index");
     try self.write("\n    }\n");
+}
+
+fn generateRecursiveFunctionGroup(self: *Self) std.mem.Allocator.Error!void {
+    if (self.reader.boolean()) {
+        try self.generateDirectRecursiveFunction();
+    } else {
+        try self.generateMutualRecursiveFunctions();
+    }
+}
+
+fn generateDirectRecursiveFunction(self: *Self) std.mem.Allocator.Error!void {
+    const name_id = self.name_counter;
+    self.name_counter += 1;
+
+    try self.writeRawFunctionSignature(name_id, "Main, U64", "U64");
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_, n| if n == 0 0 else Main.");
+    try self.writeFunctionName(name_id);
+    try self.write("(Main, n - 1)\n");
+}
+
+fn generateMutualRecursiveFunctions(self: *Self) std.mem.Allocator.Error!void {
+    const even_id = self.name_counter;
+    const odd_id = self.name_counter + 1;
+    self.name_counter += 2;
+
+    try self.writeRawFunctionSignature(even_id, "Main, U64", "Bool");
+    try self.writeFunctionHeader(even_id);
+    try self.write("|_, n| if n == 0 True else Main.");
+    try self.writeFunctionName(odd_id);
+    try self.write("(Main, n - 1)\n");
+
+    try self.writeRawFunctionSignature(odd_id, "Main, U64", "Bool");
+    try self.writeFunctionHeader(odd_id);
+    try self.write("|_, n| if n == 0 False else Main.");
+    try self.writeFunctionName(even_id);
+    try self.write("(Main, n - 1)\n");
 }
 
 fn generateBuiltinAssociatedFunction(self: *Self) std.mem.Allocator.Error!void {
@@ -2104,7 +2146,7 @@ fn generateBoolIsEqBuiltinFunction(self: *Self, name_id: u32) std.mem.Allocator.
 fn generateBoolEncodeBuiltinFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
     try self.writeFmtEncodeFunctionStart(name_id);
     try self.write("        ");
-    try self.writeAssociatedOrMethodCall("Bool", .{ .bool_literal = {} }, "encode", &.{.{ .raw = "fmt" }});
+    try self.writeCall("Bool.encode", &.{ .{ .bool_literal = {} }, .{ .raw = "fmt" } });
     try self.write("\n    }\n");
 }
 
@@ -4490,8 +4532,8 @@ fn writeSetLocalFunctionStart(self: *Self, name_id: u32, typ: Type, return_type:
 }
 
 fn writeFunctionSignature(self: *Self, name_id: u32, arg_type: []const u8, return_type: Type) std.mem.Allocator.Error!void {
-    try self.write("    value");
-    try self.output.print(self.allocator, "{d}", .{name_id});
+    try self.write("    ");
+    try self.writeFunctionName(name_id);
     try self.write(" : ");
     try self.write(arg_type);
     try self.write(" -> ");
@@ -4500,8 +4542,8 @@ fn writeFunctionSignature(self: *Self, name_id: u32, arg_type: []const u8, retur
 }
 
 fn writeRawFunctionSignature(self: *Self, name_id: u32, arg_type: []const u8, return_type: []const u8) std.mem.Allocator.Error!void {
-    try self.write("    value");
-    try self.output.print(self.allocator, "{d}", .{name_id});
+    try self.write("    ");
+    try self.writeFunctionName(name_id);
     try self.write(" : ");
     try self.write(arg_type);
     try self.write(" -> ");
@@ -4510,8 +4552,8 @@ fn writeRawFunctionSignature(self: *Self, name_id: u32, arg_type: []const u8, re
 }
 
 fn writeRawEffectfulFunctionSignature(self: *Self, name_id: u32, arg_type: []const u8, return_type: []const u8) std.mem.Allocator.Error!void {
-    try self.write("    value");
-    try self.output.print(self.allocator, "{d}", .{name_id});
+    try self.write("    ");
+    try self.writeFunctionName(name_id);
     try self.write(" : ");
     try self.write(arg_type);
     try self.write(" => ");
@@ -4519,19 +4561,24 @@ fn writeRawEffectfulFunctionSignature(self: *Self, name_id: u32, arg_type: []con
     try self.write("\n");
 }
 
+fn writeFunctionName(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.write("value");
+    try self.output.print(self.allocator, "{d}", .{name_id});
+}
+
 fn writeNumberIterFunctionSignature(self: *Self, name_id: u32, typ: Type) std.mem.Allocator.Error!void {
     std.debug.assert(typ.isNumber());
 
-    try self.write("    value");
-    try self.output.print(self.allocator, "{d}", .{name_id});
+    try self.write("    ");
+    try self.writeFunctionName(name_id);
     try self.write(" : Main -> Iter(");
     try self.write(numberOwner(typ));
     try self.write(")\n");
 }
 
 fn writeFunctionHeader(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
-    try self.write("    value");
-    try self.output.print(self.allocator, "{d}", .{name_id});
+    try self.write("    ");
+    try self.writeFunctionName(name_id);
     try self.write(" = ");
 }
 
@@ -4548,8 +4595,8 @@ fn writeNumericTrySignature(self: *Self, name_id: u32, typ: Type) std.mem.Alloca
 }
 
 fn writeTrySignature(self: *Self, name_id: u32, ok_type: Type) std.mem.Allocator.Error!void {
-    try self.write("    value");
-    try self.output.print(self.allocator, "{d}", .{name_id});
+    try self.write("    ");
+    try self.writeFunctionName(name_id);
     try self.write(" : Main -> Try(");
     try self.writeType(ok_type);
     try self.write(", _)\n");
@@ -4561,8 +4608,8 @@ fn writeFmtEncodeFunctionStart(self: *Self, name_id: u32) std.mem.Allocator.Erro
 }
 
 fn writeFmtDecodeFunctionStart(self: *Self, name_id: u32, decoded_type: Type) std.mem.Allocator.Error!void {
-    try self.write("    value");
-    try self.output.print(self.allocator, "{d}", .{name_id});
+    try self.write("    ");
+    try self.writeFunctionName(name_id);
     try self.write(" : Main -> (Try(");
     try self.writeType(decoded_type);
     try self.write(", Str), Str)\n");
