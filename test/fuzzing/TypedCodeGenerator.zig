@@ -1340,6 +1340,11 @@ pub fn generateModule(self: *Self) std.mem.Allocator.Error!void {
         try self.generateOpenUnionFunction();
     }
 
+    const rest_pattern_count = self.reader.intRangeAtMost(u8, 1, 4);
+    for (0..rest_pattern_count) |_| {
+        try self.generateRestPatternFunction();
+    }
+
     const builtin_count = self.reader.intRangeAtMost(u8, 12, 36);
     for (0..builtin_count) |_| {
         try self.generateBuiltinAssociatedFunction();
@@ -1789,6 +1794,50 @@ fn generateOpenErrorTryFunction(self: *Self, name_id: u32) std.mem.Allocator.Err
         try self.writeCall("Err", &.{.{ .raw = "Big(\"open\")" }});
     }
     try self.write("\n        match result {\n            Ok(value) => value\n            Err(Small) => 0\n            Err(Big(_)) => 1\n            Err(_) => 2\n        }\n    }\n");
+}
+
+fn generateRestPatternFunction(self: *Self) std.mem.Allocator.Error!void {
+    const name_id = self.name_counter;
+    self.name_counter += 1;
+
+    switch (self.reader.intRangeAtMost(u8, 0, 2)) {
+        0 => try self.generateRecordUpdateFunction(name_id),
+        1 => try self.generateListRestPatternFunction(name_id),
+        2 => try self.generateListBetweenPatternFunction(name_id),
+        else => unreachable,
+    }
+}
+
+fn generateRecordUpdateFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFunctionSignature(name_id, "Main", .record_str_u64);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| {\n        record = ");
+    try self.writeRecordStrU64Literal();
+    try self.write("\n        { ..record, ");
+    if (self.reader.boolean()) {
+        try self.write("count: record.count + ");
+        try self.writeIntegerLiteral();
+    } else {
+        try self.write("name: ");
+        try self.writeStringLiteral();
+    }
+    try self.write(" }\n    }\n");
+}
+
+fn generateListRestPatternFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFunctionSignature(name_id, "Main", .u64);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| match ");
+    try self.writeNonEmptyListLiteral(.u64);
+    try self.write(" {\n        [first, .. as rest] => first + rest.len()\n        [] => 0\n    }\n");
+}
+
+fn generateListBetweenPatternFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFunctionSignature(name_id, "Main", .u64);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| match ");
+    try self.writeNonEmptyListLiteral(.u64);
+    try self.write(" {\n        [first, .., last] => first + last\n        [only] => only\n        [] => 0\n    }\n");
 }
 
 fn generateBuiltinAssociatedFunction(self: *Self) std.mem.Allocator.Error!void {
