@@ -630,6 +630,7 @@ fn ownerIn(owner: []const u8, owners: []const []const u8) bool {
 const Type = enum {
     main,
     support,
+    support_token,
     tree,
     my_num,
     bool,
@@ -1104,6 +1105,16 @@ fn generateSupportModule(self: *Self) std.mem.Allocator.Error!void {
         \\        Packet(record) => Ok(record.count)
         \\        Many(items) => Ok(items.len())
         \\    }
+        \\    Token :: { count : U64 }.{
+        \\        make : U64 -> Token
+        \\        make = |count| { count: count }
+        \\        count : Token -> U64
+        \\        count = |token| token.count
+        \\        map : Token, (U64 -> U64) -> Token
+        \\        map = |token, transform| { count: transform(token.count) }
+        \\        is_eq : Token, Token -> Bool
+        \\        is_eq = |left, right| left.count == right.count
+        \\    }
         \\    is_eq : Support, Support -> Bool
         \\    is_eq = |left, right| if Support.count(left) == Support.count(right) Support.label(left) == Support.label(right) else False
         \\}
@@ -1413,6 +1424,11 @@ pub fn generateModule(self: *Self) std.mem.Allocator.Error!void {
     const try_chain_count = self.reader.intRangeAtMost(u8, 1, 2);
     for (0..try_chain_count) |_| {
         try self.generateTryWildcardChainGroup();
+    }
+
+    const imported_opaque_count = self.reader.intRangeAtMost(u8, 1, 3);
+    for (0..imported_opaque_count) |_| {
+        try self.generateImportedOpaqueFunction();
     }
 
     const builtin_count = self.reader.intRangeAtMost(u8, 12, 36);
@@ -2098,6 +2114,62 @@ fn generateTryWildcardChainGroup(self: *Self) std.mem.Allocator.Error!void {
     try self.write("?\n        ");
     try self.writeCall("Ok", &.{.{ .raw = "second" }});
     try self.write("\n    }\n");
+}
+
+fn generateImportedOpaqueFunction(self: *Self) std.mem.Allocator.Error!void {
+    const name_id = self.name_counter;
+    self.name_counter += 1;
+
+    switch (self.reader.intRangeAtMost(u8, 0, 4)) {
+        0 => try self.generateSupportTokenCountFunction(name_id),
+        1 => try self.generateSupportTokenMapFunction(name_id),
+        2 => try self.generateSupportTokenEqFunction(name_id),
+        3 => try self.generateSupportTokenWhereEqFunction(name_id),
+        4 => try self.generateSupportTokenLocalFunction(name_id),
+        else => unreachable,
+    }
+}
+
+fn generateSupportTokenCountFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFunctionSignature(name_id, "Main", .u64);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| ");
+    try self.writeAssociatedOrMethodCall("Support.Token", .{ .literal = .support_token }, "count", &.{});
+    try self.write("\n");
+}
+
+fn generateSupportTokenMapFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFunctionSignature(name_id, "Main", .support_token);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| ");
+    try self.writeAssociatedOrMethodCall("Support.Token", .{ .literal = .support_token }, "map", &.{.{ .raw = "|count| count + 1" }});
+    try self.write("\n");
+}
+
+fn generateSupportTokenEqFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFunctionSignature(name_id, "Main", .bool);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| ");
+    try self.writeCall("Support.Token.is_eq", &.{ .{ .literal = .support_token }, .{ .literal = .support_token } });
+    try self.write("\n");
+}
+
+fn generateSupportTokenWhereEqFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFunctionSignature(name_id, "Main", .bool);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| Main.where_eq(");
+    try self.writeLiteral(.support_token);
+    try self.write(", ");
+    try self.writeLiteral(.support_token);
+    try self.write(")\n");
+}
+
+fn generateSupportTokenLocalFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFunctionSignature(name_id, "Main", .u64);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| {\n        token : Support.Token\n        token = ");
+    try self.writeLiteral(.support_token);
+    try self.write("\n        Support.Token.count(token)\n    }\n");
 }
 
 fn generateBuiltinAssociatedFunction(self: *Self) std.mem.Allocator.Error!void {
@@ -5026,86 +5098,87 @@ fn writeFmtLocalFunctionHeader(self: *Self, name_id: u32) std.mem.Allocator.Erro
 }
 
 fn chooseType(self: *Self) Type {
-    return switch (self.reader.intRangeAtMost(u8, 0, 78)) {
+    return switch (self.reader.intRangeAtMost(u8, 0, 79)) {
         0 => .main,
         1 => .support,
-        2 => .tree,
-        3 => .my_num,
-        4 => .bool,
-        5 => .str,
-        6 => .record_bool,
-        7 => .record_str_u64,
-        8 => .holder_bool,
-        9 => .holder_str,
-        10 => .holder_u64,
-        11 => .holder_record_bool,
-        12 => .holder_list_u64,
-        13 => .holder_try_u64_str,
-        14 => .builder_bool,
-        15 => .builder_str,
-        16 => .builder_u64,
-        17 => .builder_record_str_u64,
-        18 => .builder_list_u64,
-        19 => .builder_try_u64_str,
-        20 => .wrap_bool,
-        21 => .wrap_str,
-        22 => .wrap_u64,
-        23 => .wrap_record_str_u64,
-        24 => .wrap_list_u64,
-        25 => .wrap_try_u64_str,
-        26 => .secret_bool,
-        27 => .secret_str,
-        28 => .secret_u64,
-        29 => .secret_record_str_u64,
-        30 => .secret_list_u64,
-        31 => .secret_try_u64_str,
-        32 => .box_bool,
-        33 => .box_str,
-        34 => .box_u64,
-        35 => .box_record_str_u64,
-        36 => .box_list_u64,
-        37 => .box_try_u64_str,
-        38 => .dict_str_u64,
-        39 => .dict_u64_str,
-        40 => .set_str,
-        41 => .set_u64,
-        42 => .fn_bool_bool,
-        43 => .fn_u64_u64,
-        44 => .fn_str_str,
-        45 => .tuple_bool_u64,
-        46 => .tuple_str_u64,
-        47 => .tuple_u64_str,
-        48 => .tuple_record_bool_u64,
-        49 => .tuple_try_u64_str_bool,
-        50 => .tuple_list_u64_str,
-        51 => .try_bool_str,
-        52 => .try_str_bool,
-        53 => .try_u64_str,
-        54 => .try_list_u64_str,
-        55 => .list_bool,
-        56 => .list_str,
-        57 => .list_u64,
-        58 => .list_record_bool,
-        59 => .list_list_u64,
-        60 => .list_tuple_bool_u64,
-        61 => .list_tuple_str_u64,
-        62 => .list_tuple_u64_str,
-        63 => .list_try_u64_str,
-        64 => .list_holder_u64,
-        65 => .u8,
-        66 => .i8,
-        67 => .u16,
-        68 => .i16,
-        69 => .u32,
-        70 => .i32,
-        71 => .u64,
-        72 => .i64,
-        73 => .u128,
-        74 => .i128,
-        75 => .f32,
-        76 => .f64,
-        77 => .record_str_u64,
-        78 => .dec,
+        2 => .support_token,
+        3 => .tree,
+        4 => .my_num,
+        5 => .bool,
+        6 => .str,
+        7 => .record_bool,
+        8 => .record_str_u64,
+        9 => .holder_bool,
+        10 => .holder_str,
+        11 => .holder_u64,
+        12 => .holder_record_bool,
+        13 => .holder_list_u64,
+        14 => .holder_try_u64_str,
+        15 => .builder_bool,
+        16 => .builder_str,
+        17 => .builder_u64,
+        18 => .builder_record_str_u64,
+        19 => .builder_list_u64,
+        20 => .builder_try_u64_str,
+        21 => .wrap_bool,
+        22 => .wrap_str,
+        23 => .wrap_u64,
+        24 => .wrap_record_str_u64,
+        25 => .wrap_list_u64,
+        26 => .wrap_try_u64_str,
+        27 => .secret_bool,
+        28 => .secret_str,
+        29 => .secret_u64,
+        30 => .secret_record_str_u64,
+        31 => .secret_list_u64,
+        32 => .secret_try_u64_str,
+        33 => .box_bool,
+        34 => .box_str,
+        35 => .box_u64,
+        36 => .box_record_str_u64,
+        37 => .box_list_u64,
+        38 => .box_try_u64_str,
+        39 => .dict_str_u64,
+        40 => .dict_u64_str,
+        41 => .set_str,
+        42 => .set_u64,
+        43 => .fn_bool_bool,
+        44 => .fn_u64_u64,
+        45 => .fn_str_str,
+        46 => .tuple_bool_u64,
+        47 => .tuple_str_u64,
+        48 => .tuple_u64_str,
+        49 => .tuple_record_bool_u64,
+        50 => .tuple_try_u64_str_bool,
+        51 => .tuple_list_u64_str,
+        52 => .try_bool_str,
+        53 => .try_str_bool,
+        54 => .try_u64_str,
+        55 => .try_list_u64_str,
+        56 => .list_bool,
+        57 => .list_str,
+        58 => .list_u64,
+        59 => .list_record_bool,
+        60 => .list_list_u64,
+        61 => .list_tuple_bool_u64,
+        62 => .list_tuple_str_u64,
+        63 => .list_tuple_u64_str,
+        64 => .list_try_u64_str,
+        65 => .list_holder_u64,
+        66 => .u8,
+        67 => .i8,
+        68 => .u16,
+        69 => .i16,
+        70 => .u32,
+        71 => .i32,
+        72 => .u64,
+        73 => .i64,
+        74 => .u128,
+        75 => .i128,
+        76 => .f32,
+        77 => .f64,
+        78 => .record_str_u64,
+        79 => .dec,
         else => unreachable,
     };
 }
@@ -5327,6 +5400,7 @@ fn writeType(self: *Self, typ: Type) std.mem.Allocator.Error!void {
     try self.write(switch (typ) {
         .main => "Main",
         .support => "Support",
+        .support_token => "Support.Token",
         .tree => "Tree",
         .my_num => "MyNum",
         .bool => "Bool",
@@ -5410,6 +5484,7 @@ fn writeLiteral(self: *Self, typ: Type) std.mem.Allocator.Error!void {
     switch (typ) {
         .main => try self.writeMainLiteral(),
         .support => try self.writeSupportLiteral(),
+        .support_token => try self.writeSupportTokenLiteral(),
         .tree => try self.writeTreeLiteral(),
         .my_num => try self.writeCustomNumberLiteral(),
         .bool => try self.writeBoolLiteral(),
@@ -5640,6 +5715,10 @@ fn writeSupportLiteral(self: *Self) std.mem.Allocator.Error!void {
         2 => try self.writeCall("Support.from_pair", &.{.{ .literal = .tuple_str_u64 }}),
         else => unreachable,
     }
+}
+
+fn writeSupportTokenLiteral(self: *Self) std.mem.Allocator.Error!void {
+    try self.writeCall("Support.Token.make", &.{.{ .integer_literal = {} }});
 }
 
 fn writeToolsLiteral(self: *Self) std.mem.Allocator.Error!void {
