@@ -1291,6 +1291,8 @@ pub fn generateModule(self: *Self) std.mem.Allocator.Error!void {
         \\    where_plus = |left, right| left + right
         \\    where_map : a, (b -> c) -> d where [a.map : a, (b -> c) -> d]
         \\    where_map = |container, transform| container.map(transform)
+        \\    has_count : { count : U64, .. } -> U64
+        \\    has_count = |record| record.count
     );
     try self.write("\n");
 
@@ -1353,6 +1355,11 @@ pub fn generateModule(self: *Self) std.mem.Allocator.Error!void {
     const statement_count = self.reader.intRangeAtMost(u8, 1, 3);
     for (0..statement_count) |_| {
         try self.generateStatementFunction();
+    }
+
+    const row_record_count = self.reader.intRangeAtMost(u8, 1, 3);
+    for (0..row_record_count) |_| {
+        try self.generateRowRecordFunction();
     }
 
     const builtin_count = self.reader.intRangeAtMost(u8, 12, 36);
@@ -1928,6 +1935,40 @@ fn generateCrashStatementFunction(self: *Self, name_id: u32) std.mem.Allocator.E
     try self.write("\n        }\n        ");
     try self.writeIntegerLiteral();
     try self.write("\n    }\n");
+}
+
+fn generateRowRecordFunction(self: *Self) std.mem.Allocator.Error!void {
+    const name_id = self.name_counter;
+    self.name_counter += 1;
+
+    switch (self.reader.intRangeAtMost(u8, 0, 2)) {
+        0 => try self.generateRowRecordArgFunction(name_id),
+        1 => try self.generateRowRecordLocalFunction(name_id),
+        2 => try self.generateRowRecordPatternFunction(name_id),
+        else => unreachable,
+    }
+}
+
+fn generateRowRecordArgFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeRawFunctionSignature(name_id, "Main, { count : U64, .. }", "U64");
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_, record| Main.has_count(record)\n");
+}
+
+fn generateRowRecordLocalFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFunctionSignature(name_id, "Main", .u64);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| Main.has_count(");
+    try self.writeWideRecordLiteral();
+    try self.write(")\n");
+}
+
+fn generateRowRecordPatternFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFunctionSignature(name_id, "Main", .u64);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| match ");
+    try self.writeWideRecordLiteral();
+    try self.write(" {\n        { count, .. } => count\n    }\n");
 }
 
 fn generateBuiltinAssociatedFunction(self: *Self) std.mem.Allocator.Error!void {
@@ -5538,6 +5579,16 @@ fn writeRecordStrU64Literal(self: *Self) std.mem.Allocator.Error!void {
     try self.writeStringLiteral();
     try self.write(", count: ");
     try self.writeIntegerLiteral();
+    try self.write(" }");
+}
+
+fn writeWideRecordLiteral(self: *Self) std.mem.Allocator.Error!void {
+    try self.write("{ name: ");
+    try self.writeStringLiteral();
+    try self.write(", count: ");
+    try self.writeIntegerLiteral();
+    try self.write(", flag: ");
+    try self.writeBoolLiteral();
     try self.write(" }");
 }
 
