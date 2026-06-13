@@ -298,6 +298,7 @@ test "NodeStore round trip - Expressions" {
             .branches = CIR.Expr.Match.Branch.Span{ .span = rand_span() },
             .exhaustive = rand_idx(TypeVar),
             .is_try_suffix = false,
+            .skip_exhaustiveness = false,
         },
     });
     try expressions.append(gpa, CIR.Expr{
