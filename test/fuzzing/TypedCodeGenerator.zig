@@ -1350,6 +1350,11 @@ pub fn generateModule(self: *Self) std.mem.Allocator.Error!void {
         try self.generateControlFlowFunction();
     }
 
+    const statement_count = self.reader.intRangeAtMost(u8, 1, 3);
+    for (0..statement_count) |_| {
+        try self.generateStatementFunction();
+    }
+
     const builtin_count = self.reader.intRangeAtMost(u8, 12, 36);
     for (0..builtin_count) |_| {
         try self.generateBuiltinAssociatedFunction();
@@ -1886,6 +1891,40 @@ fn generateEarlyReturnFunction(self: *Self, name_id: u32) std.mem.Allocator.Erro
     try self.writeBoolLiteral();
     try self.write(" {\n            return ");
     try self.writeIntegerLiteral();
+    try self.write("\n        }\n        ");
+    try self.writeIntegerLiteral();
+    try self.write("\n    }\n");
+}
+
+fn generateStatementFunction(self: *Self) std.mem.Allocator.Error!void {
+    const name_id = self.name_counter;
+    self.name_counter += 1;
+
+    switch (self.reader.intRangeAtMost(u8, 0, 2)) {
+        0 => try self.generateDbgStatementFunction(name_id, .u64),
+        1 => try self.generateDbgStatementFunction(name_id, .str),
+        2 => try self.generateCrashStatementFunction(name_id),
+        else => unreachable,
+    }
+}
+
+fn generateDbgStatementFunction(self: *Self, name_id: u32, typ: Type) std.mem.Allocator.Error!void {
+    try self.writeFunctionSignature(name_id, "Main", typ);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| {\n        dbg ");
+    try self.writeLiteral(typ);
+    try self.write("\n        ");
+    try self.writeLiteral(typ);
+    try self.write("\n    }\n");
+}
+
+fn generateCrashStatementFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFunctionSignature(name_id, "Main", .u64);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| {\n        if ");
+    try self.writeBoolLiteral();
+    try self.write(" {\n            crash ");
+    try self.writeStringLiteral();
     try self.write("\n        }\n        ");
     try self.writeIntegerLiteral();
     try self.write("\n    }\n");
