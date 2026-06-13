@@ -1491,6 +1491,11 @@ pub fn generateModule(self: *Self) std.mem.Allocator.Error!void {
         try self.generateAliasFunction();
     }
 
+    const pattern_as_count = self.reader.intRangeAtMost(u8, 1, 4);
+    for (0..pattern_as_count) |_| {
+        try self.generatePatternAsFunction();
+    }
+
     const builtin_count = self.reader.intRangeAtMost(u8, 12, 36);
     for (0..builtin_count) |_| {
         try self.generateBuiltinAssociatedFunction();
@@ -2443,6 +2448,56 @@ fn generateAliasImportedPairFunction(self: *Self, name_id: u32) std.mem.Allocato
     try self.writeLocalAssignmentStart("pair");
     try self.writeTuple(&.{ .{ .literal = .support_status }, .{ .literal = .record_str_u64 } });
     try self.write("\n        match pair {\n            (Support.Status.Named(status_name), { name: record_name }) => Str.concat(status_name, record_name)\n            (Support.Status.Waiting(count), _) => U64.to_str(count)\n            (Support.Status.Ready, { name }) => name\n        }\n    }\n");
+}
+
+fn generatePatternAsFunction(self: *Self) std.mem.Allocator.Error!void {
+    const name_id = self.name_counter;
+    self.name_counter += 1;
+
+    switch (self.reader.intRangeAtMost(u8, 0, 4)) {
+        0 => try self.generateMainTagAsPatternFunction(name_id),
+        1 => try self.generateRecordAsPatternFunction(name_id),
+        2 => try self.generateTupleAsPatternFunction(name_id),
+        3 => try self.generateSupportStatusAsPatternFunction(name_id),
+        4 => try self.generateOpenUnionAsPatternFunction(name_id),
+        else => unreachable,
+    }
+}
+
+fn generateMainTagAsPatternFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFunctionSignature(name_id, "Main", .u64);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|value| match value {\n        WithStrU64(_, count) as original => if Main.is_eq(original, original) count else 0\n        WithBool(flag) as original => if Main.is_eq(original, original) if flag 1 else 2 else 0\n        Main as original => if Main.is_eq(original, Main) 3 else 4\n    }\n");
+}
+
+fn generateRecordAsPatternFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFunctionSignature(name_id, "Main", .u64);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| match ");
+    try self.writeRecordStrU64Literal();
+    try self.write(" {\n        { count } as whole => whole.count + count\n    }\n");
+}
+
+fn generateTupleAsPatternFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFunctionSignature(name_id, "Main", .u64);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| match ");
+    try self.writeTuple(&.{ .{ .literal = .try_u64_str }, .{ .bool_literal = {} } });
+    try self.write(" {\n        (Ok(value), flag) as whole => if flag value else match whole {\n            (_, _) => 0\n        }\n        (Err(_), _) as whole => match whole {\n            (_, _) => 1\n        }\n    }\n");
+}
+
+fn generateSupportStatusAsPatternFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFunctionSignature(name_id, "Main", .u64);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| match ");
+    try self.writeLiteral(.support_status);
+    try self.write(" {\n        Support.Status.Waiting(count) as status => Support.Status.count(status) + count\n        Support.Status.Named(_) as status => Support.Status.count(status)\n        Support.Status.Ready as status => Support.Status.count(status)\n    }\n");
+}
+
+fn generateOpenUnionAsPatternFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeRawFunctionSignature(name_id, "Main, [Red, Green, ..]", "[Red, Green, ..]");
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_, color| match color {\n        Red => Red\n        _ as other => other\n    }\n");
 }
 
 fn generateBuiltinAssociatedFunction(self: *Self) std.mem.Allocator.Error!void {
