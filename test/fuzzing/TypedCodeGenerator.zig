@@ -1329,6 +1329,11 @@ pub fn generateModule(self: *Self) std.mem.Allocator.Error!void {
         try self.generateRecursiveFunctionGroup();
     }
 
+    const closure_count = self.reader.intRangeAtMost(u8, 1, 3);
+    for (0..closure_count) |_| {
+        try self.generateClosureFunction();
+    }
+
     const builtin_count = self.reader.intRangeAtMost(u8, 12, 36);
     for (0..builtin_count) |_| {
         try self.generateBuiltinAssociatedFunction();
@@ -1694,6 +1699,46 @@ fn generateMutualRecursiveFunctions(self: *Self) std.mem.Allocator.Error!void {
     try self.write("|_, n| if n == 0 False else Main.");
     try self.writeFunctionName(even_id);
     try self.write("(Main, n - 1)\n");
+}
+
+fn generateClosureFunction(self: *Self) std.mem.Allocator.Error!void {
+    const name_id = self.name_counter;
+    self.name_counter += 1;
+
+    switch (self.reader.intRangeAtMost(u8, 0, 2)) {
+        0 => try self.generateCapturedMapFunction(name_id),
+        1 => try self.generateReturnedClosureFunction(name_id),
+        2 => try self.generateCapturedSupportFoldFunction(name_id),
+        else => unreachable,
+    }
+}
+
+fn generateCapturedMapFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFunctionSignature(name_id, "Main", .list_u64);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| {\n        offset = ");
+    try self.writeIntegerLiteral();
+    try self.write("\n        ");
+    try self.writeNonEmptyListLiteral(.u64);
+    try self.write(".map(|item| item + offset)\n    }\n");
+}
+
+fn generateReturnedClosureFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeRawFunctionSignature(name_id, "Main", "(U64 -> U64)");
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| {\n        offset = ");
+    try self.writeIntegerLiteral();
+    try self.write("\n        |item| item + offset\n    }\n");
+}
+
+fn generateCapturedSupportFoldFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFunctionSignature(name_id, "Main", .u64);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| {\n        support = ");
+    try self.writeLiteral(.support);
+    try self.write("\n        folder = |acc, item| acc + item + Support.count(support)\n        ");
+    try self.writeNonEmptyListLiteral(.u64);
+    try self.write(".fold(0, folder)\n    }\n");
 }
 
 fn generateBuiltinAssociatedFunction(self: *Self) std.mem.Allocator.Error!void {
