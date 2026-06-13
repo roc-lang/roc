@@ -1110,6 +1110,7 @@ pub fn generateModule(self: *Self) std.mem.Allocator.Error!void {
         \\NameCount : { name : Str, count : U64 }
         \\Pair(a, b) : (a, b)
         \\Fallible(ok, err) : Try(ok, err)
+        \\Color(others) : [Red, Green, Blue, Other(Str), ..others]
         \\
         \\
         \\MyNum := [MyNum(U64)].{
@@ -1332,6 +1333,11 @@ pub fn generateModule(self: *Self) std.mem.Allocator.Error!void {
     const closure_count = self.reader.intRangeAtMost(u8, 1, 3);
     for (0..closure_count) |_| {
         try self.generateClosureFunction();
+    }
+
+    const open_union_count = self.reader.intRangeAtMost(u8, 1, 3);
+    for (0..open_union_count) |_| {
+        try self.generateOpenUnionFunction();
     }
 
     const builtin_count = self.reader.intRangeAtMost(u8, 12, 36);
@@ -1739,6 +1745,50 @@ fn generateCapturedSupportFoldFunction(self: *Self, name_id: u32) std.mem.Alloca
     try self.write("\n        folder = |acc, item| acc + item + Support.count(support)\n        ");
     try self.writeNonEmptyListLiteral(.u64);
     try self.write(".fold(0, folder)\n    }\n");
+}
+
+fn generateOpenUnionFunction(self: *Self) std.mem.Allocator.Error!void {
+    const name_id = self.name_counter;
+    self.name_counter += 1;
+
+    switch (self.reader.intRangeAtMost(u8, 0, 2)) {
+        0 => try self.generateOpenColorMatchFunction(name_id),
+        1 => try self.generateOpenColorArgFunction(name_id),
+        2 => try self.generateOpenErrorTryFunction(name_id),
+        else => unreachable,
+    }
+}
+
+fn generateOpenColorMatchFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFunctionSignature(name_id, "Main", .str);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| {\n        color : Color(_)\n        color = ");
+    try self.writeOpenColorLiteral();
+    try self.write("\n        ");
+    try self.writeOpenColorMatch("color");
+    try self.write("\n    }\n");
+}
+
+fn generateOpenColorArgFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeRawFunctionSignature(name_id, "Main, [Red, Green, ..]", "Str");
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_, color| match color {\n        Red => \"red\"\n        Green => \"green\"\n        _ => \"other\"\n    }\n");
+}
+
+fn generateOpenErrorTryFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFunctionSignature(name_id, "Main", .u64);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| {\n        result : Try(U64, [Small, Big(Str), ..])\n        result = if ");
+    try self.writeBoolLiteral();
+    try self.write(" Ok(");
+    try self.writeIntegerLiteral();
+    try self.write(") else ");
+    if (self.reader.boolean()) {
+        try self.write("Err(Small)");
+    } else {
+        try self.writeCall("Err", &.{.{ .raw = "Big(\"open\")" }});
+    }
+    try self.write("\n        match result {\n            Ok(value) => value\n            Err(Small) => 0\n            Err(Big(_)) => 1\n            Err(_) => 2\n        }\n    }\n");
 }
 
 fn generateBuiltinAssociatedFunction(self: *Self) std.mem.Allocator.Error!void {
@@ -5293,6 +5343,28 @@ fn writeSupportListLiteral(self: *Self) std.mem.Allocator.Error!void {
         try self.writeSupportLiteral();
     }
     try self.write("]");
+}
+
+fn writeOpenColorLiteral(self: *Self) std.mem.Allocator.Error!void {
+    switch (self.reader.intRangeAtMost(u8, 0, 3)) {
+        0 => try self.write("Red"),
+        1 => try self.write("Green"),
+        2 => try self.write("Blue"),
+        3 => try self.writeCall("Other", &.{.{ .string_literal = {} }}),
+        else => unreachable,
+    }
+}
+
+fn writeOpenColorMatch(self: *Self, expr: []const u8) std.mem.Allocator.Error!void {
+    try self.write("match ");
+    try self.write(expr);
+    try self.write(" {\n");
+    try self.write("            Red => \"red\"\n");
+    try self.write("            Green => \"green\"\n");
+    try self.write("            Blue => \"blue\"\n");
+    try self.write("            Other(name) => name\n");
+    try self.write("            _ => \"other\"\n");
+    try self.write("        }");
 }
 
 fn writeTreeLiteral(self: *Self) std.mem.Allocator.Error!void {
