@@ -3654,6 +3654,44 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "(1, 1, 1, 1, 1, 1, 1, 1, 1, 1)" },
     },
     .{
+        // Directly exercises the steps_between length primitive: ascending ->
+        // Known(count); descending and equal -> Known(0) (the lower guard
+        // branch the range boundary tests never hit); and the U128/I128
+        // over-U64-width + Dec cases -> Unknown (the fallback that feeds the
+        // from_iter grow path).
+        .name = "inspect: steps_between reports Known counts, Known(0) descending, Unknown on overflow",
+        .source =
+        \\{
+        \\    (
+        \\        U8.steps_between(5, 10),
+        \\        U8.steps_between(10, 5),
+        \\        U8.steps_between(5, 5),
+        \\        I8.steps_between(-3, 2),
+        \\        I8.steps_between(2, -3),
+        \\        U128.steps_between(0, 100),
+        \\        U128.steps_between(0, U128.highest),
+        \\        I128.steps_between(0, I128.highest),
+        \\        Dec.steps_between(1.0, 5.0),
+        \\    )
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(Known(5), Known(0), Known(0), Known(5), Known(0), Known(100), Unknown, Unknown, Unknown)" },
+    },
+    .{
+        // Collecting a range whose length is Unknown (Dec ranges always report
+        // Unknown) must route through from_iter's grow path rather than exact
+        // preallocation. It also exercises the generic from_numeral fold: the
+        // range constructor's literal `1` is monomorphized to Dec here, so this
+        // must compile (not just interpret) on every backend.
+        .name = "inspect: collect over Unknown-length (Dec) range grows correctly",
+        .source_kind = .module,
+        .source =
+        \\main : List(Dec)
+        \\main = Iter.collect(1.0..<4.0)
+        ,
+        .expected = .{ .inspect_str = "[1.0, 2.0, 3.0]" },
+    },
+    .{
         .name = "inspect: generic local attached method specialization on nominal",
         .source_kind = .module,
         .source =
