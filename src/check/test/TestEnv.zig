@@ -278,6 +278,7 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
     errdefer checker.deinit();
 
     try checker.checkFile();
+    _ = try checker.problems.flushAllPendingStaticExhaustiveness(gpa);
 
     var type_writer = try module_env.initTypeWriter();
     errdefer type_writer.deinit();
@@ -388,6 +389,7 @@ pub fn init(module_name: []const u8, source: []const u8) Allocator.Error!TestEnv
     errdefer checker.deinit();
 
     try checker.checkFile();
+    _ = try checker.problems.flushAllPendingStaticExhaustiveness(gpa);
 
     var type_writer = try module_env.initTypeWriter();
     errdefer type_writer.deinit();

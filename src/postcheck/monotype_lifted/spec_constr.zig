@@ -483,6 +483,7 @@ const Pass = struct {
             .str_lit,
             .fn_ref,
             .crash,
+            .comptime_exhaustiveness_failed,
             => {},
             .list,
             .tuple,
@@ -495,6 +496,7 @@ const Pass = struct {
             .expect,
             => |child| try self.markArgUsesInExpr(fn_id, child, changed),
             .expect_err => |expect_err| try self.markArgUsesInExpr(fn_id, expect_err.msg, changed),
+            .comptime_branch_taken => |taken| try self.markArgUsesInExpr(fn_id, taken.body, changed),
             .let_ => |let_| {
                 try self.markArgUsesInExpr(fn_id, let_.value, changed);
                 try self.markArgUsesInExpr(fn_id, let_.rest, changed);
@@ -602,6 +604,7 @@ const Pass = struct {
             .str_lit,
             .fn_ref,
             .crash,
+            .comptime_exhaustiveness_failed,
             => {},
             .list,
             .tuple,
@@ -614,6 +617,7 @@ const Pass = struct {
             .expect,
             => |child| try self.collectCallPatternsInExpr(owner, child),
             .expect_err => |expect_err| try self.collectCallPatternsInExpr(owner, expect_err.msg),
+            .comptime_branch_taken => |taken| try self.collectCallPatternsInExpr(owner, taken.body),
             .let_ => |let_| {
                 try self.collectCallPatternsInExpr(owner, let_.value);
                 try self.collectCallPatternsInExpr(owner, let_.rest);
@@ -823,6 +827,7 @@ const Pass = struct {
             .str_lit,
             .fn_ref,
             .crash,
+            .comptime_exhaustiveness_failed,
             => {},
             .list,
             .tuple,
@@ -835,6 +840,7 @@ const Pass = struct {
             .expect,
             => |child| try self.rewriteCallsInExpr(child, done),
             .expect_err => |expect_err| try self.rewriteCallsInExpr(expect_err.msg, done),
+            .comptime_branch_taken => |taken| try self.rewriteCallsInExpr(taken.body, done),
             .let_ => |let_| {
                 try self.rewriteCallsInExpr(let_.value, done);
                 try self.rewriteCallsInExpr(let_.rest, done);
@@ -1384,6 +1390,7 @@ const Cloner = struct {
                 return .{ .expr = try self.addExpr(.{ .ty = expr.ty, .data = .{ .match_ = .{
                     .scrutinee = scrutinee_expr,
                     .branches = try self.cloneBranchSpan(match.branches),
+                    .comptime_site = match.comptime_site,
                 } } }) };
             },
             .call_value => |call| {
@@ -1444,6 +1451,8 @@ const Cloner = struct {
                 const value = itemFromValue(tuple, access.elem_index) orelse break :blk false;
                 break :blk (try self.pass.shapeFromValue(value)) != null;
             },
+            .comptime_branch_taken => |taken| try self.exprHasKnownShape(taken.body),
+            .comptime_exhaustiveness_failed => false,
             else => false,
         };
     }
@@ -1568,6 +1577,12 @@ const Cloner = struct {
             .continue_ => |continue_| try self.cloneContinue(continue_),
             .return_ => |value| .{ .return_ = try self.cloneExpr(value) },
             .crash => |msg| .{ .crash = msg },
+            .comptime_branch_taken => |taken| .{ .comptime_branch_taken = .{
+                .site = taken.site,
+                .branch_index = taken.branch_index,
+                .body = try self.cloneExpr(taken.body),
+            } },
+            .comptime_exhaustiveness_failed => |site| .{ .comptime_exhaustiveness_failed = site },
             .dbg => |child| .{ .dbg = try self.cloneExpr(child) },
             .expect_err => |expect_err| .{ .expect_err = .{
                 .msg = try self.cloneExpr(expect_err.msg),
@@ -1593,6 +1608,7 @@ const Cloner = struct {
             .bind = try self.clonePat(let_.bind),
             .value = value_expr,
             .rest = try self.cloneExpr(let_.rest),
+            .comptime_site = let_.comptime_site,
         } } }) };
     }
 
@@ -1614,6 +1630,7 @@ const Cloner = struct {
             .bind = try self.clonePat(let_.bind),
             .value = value_expr,
             .rest = rest,
+            .comptime_site = let_.comptime_site,
         } };
     }
 
@@ -1642,6 +1659,7 @@ const Cloner = struct {
         return .{ .match_ = .{
             .scrutinee = match.scrutinee,
             .branches = try self.pass.program.addBranchSpan(rewritten),
+            .comptime_site = match.comptime_site,
         } };
     }
 
@@ -1700,6 +1718,7 @@ const Cloner = struct {
         const expr = self.pass.program.exprs.items[@intFromEnum(expr_id)];
         return switch (expr.data) {
             .crash => |msg| try self.addExpr(.{ .ty = ty, .data = .{ .crash = msg } }),
+            .comptime_exhaustiveness_failed => |site| try self.addExpr(.{ .ty = ty, .data = .{ .comptime_exhaustiveness_failed = site } }),
             .return_ => |value| try self.addExpr(.{ .ty = ty, .data = .{ .return_ = try self.cloneExpr(value) } }),
             else => null,
         };
@@ -2016,6 +2035,7 @@ const Cloner = struct {
         return try self.addExpr(.{ .ty = ty, .data = .{ .match_ = .{
             .scrutinee = scrutinee_expr,
             .branches = try self.cloneBranchSpan(match.branches),
+            .comptime_site = match.comptime_site,
         } } });
     }
 
@@ -2340,6 +2360,7 @@ const Cloner = struct {
         return .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .match_ = .{
             .scrutinee = inner_match.scrutinee,
             .branches = try self.pass.program.addBranchSpan(rewritten),
+            .comptime_site = inner_match.comptime_site,
         } } }) };
     }
 
@@ -2585,6 +2606,7 @@ const Cloner = struct {
                     .pat = try self.clonePat(let_.pat),
                     .value = value_expr,
                     .recursive = let_.recursive,
+                    .comptime_site = let_.comptime_site,
                 } };
             },
             .expr => |expr| .{ .expr = try self.cloneExpr(expr) },
@@ -2982,6 +3004,7 @@ fn localUseCountInExpr(program: *const Ast.Program, local: Ast.LocalId, expr_id:
         .str_lit,
         .fn_ref,
         .crash,
+        .comptime_exhaustiveness_failed,
         => 0,
         .list,
         .tuple,
@@ -2998,6 +3021,7 @@ fn localUseCountInExpr(program: *const Ast.Program, local: Ast.LocalId, expr_id:
         .expect,
         => |child| localUseCountInExpr(program, local, child),
         .expect_err => |expect_err| localUseCountInExpr(program, local, expect_err.msg),
+        .comptime_branch_taken => |taken| localUseCountInExpr(program, local, taken.body),
         .let_ => |let_| localUseCountInExpr(program, local, let_.value) + localUseCountInExpr(program, local, let_.rest),
         .lambda,
         .def_ref,
@@ -3088,7 +3112,7 @@ fn scanLocalUseInExpr(program: *const Ast.Program, local: Ast.LocalId, expr_id: 
         .str_lit,
         .fn_ref,
         => {},
-        .crash => scan.seen_effect = true,
+        .crash, .comptime_exhaustiveness_failed => scan.seen_effect = true,
         .list,
         .tuple,
         => |items| scanLocalUseInExprSpan(program, local, items, scan),
@@ -3111,6 +3135,7 @@ fn scanLocalUseInExpr(program: *const Ast.Program, local: Ast.LocalId, expr_id: 
             scanLocalUseInExpr(program, local, expect_err.msg, scan);
             scan.seen_effect = true;
         },
+        .comptime_branch_taken => |taken| scanLocalUseInExpr(program, local, taken.body, scan),
         .let_ => |let_| {
             scanLocalUseInExpr(program, local, let_.value, scan);
             scanLocalUseInExpr(program, local, let_.rest, scan);

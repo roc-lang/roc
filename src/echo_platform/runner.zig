@@ -287,6 +287,10 @@ fn runEchoView(
             diag.step("interpreter.runEntrypoint", err);
             return error.EvaluationFailed;
         },
+        error.ComptimeExhaustiveness => {
+            diag.step("interpreter.runEntrypoint", err);
+            return error.EvaluationFailed;
+        },
         error.OutOfMemory => {
             diag.step("interpreter.runEntrypoint", err);
             return error.OutOfMemory;

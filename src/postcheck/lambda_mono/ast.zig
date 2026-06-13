@@ -30,6 +30,8 @@ pub const FnId = Type.FnId;
 pub const LocalId = enum(u32) { _ };
 /// Owned string literal id shared with the lifted stage.
 pub const StringLiteralId = Lifted.StringLiteralId;
+/// Identifier for a compile-time-observed control-flow site.
+pub const ComptimeSiteId = enum(u32) { _ };
 
 /// Slice descriptor over one of the program side arrays.
 pub fn Span(comptime _: type) type {
@@ -100,6 +102,23 @@ pub const CallableValue = struct {
     payload: ?ExprId,
 };
 
+/// Source control-flow construct observed during compile-time finalization.
+pub const ComptimeSiteKind = Lifted.ComptimeSiteKind;
+
+/// Metadata for one compile-time-observed control-flow site.
+pub const ComptimeSite = struct {
+    kind: ComptimeSiteKind,
+    region: base.Region,
+    branch_regions: []const base.Region = &.{},
+};
+
+/// Expression wrapper that records a branch hit before evaluating `body`.
+pub const ComptimeBranchTaken = struct {
+    site: ComptimeSiteId,
+    branch_index: u32,
+    body: ExprId,
+};
+
 /// Typed Lambda Mono expression.
 pub const Expr = struct {
     ty: Type.TypeId,
@@ -129,6 +148,7 @@ pub const ExprData = union(enum) {
         bind: PatId,
         value: ExprId,
         rest: ExprId,
+        comptime_site: ?ComptimeSiteId = null,
     },
     direct_call: DirectCall,
     indirect_erased_call: ErasedCall,
@@ -154,6 +174,7 @@ pub const ExprData = union(enum) {
     match_: struct {
         scrutinee: ExprId,
         branches: Span(Branch),
+        comptime_site: ?ComptimeSiteId = null,
     },
     if_: struct {
         branches: Span(IfBranch),
@@ -174,6 +195,8 @@ pub const ExprData = union(enum) {
     },
     return_: ExprId,
     crash: StringLiteralId,
+    comptime_branch_taken: ComptimeBranchTaken,
+    comptime_exhaustiveness_failed: ComptimeSiteId,
     dbg: ExprId,
     expect_err: ExpectErrExpr,
     expect: ExprId,
@@ -241,6 +264,7 @@ pub const Stmt = union(enum) {
         pat: PatId,
         value: ExprId,
         recursive: bool = false,
+        comptime_site: ?ComptimeSiteId = null,
     },
     expr: ExprId,
     expect: ExprId,
@@ -309,6 +333,7 @@ pub const Program = struct {
     roots: std.ArrayList(Root),
     layout_requests: std.ArrayList(LayoutRequest),
     runtime_schema_requests: std.ArrayList(RuntimeSchemaRequest),
+    comptime_sites: std.ArrayList(ComptimeSite),
     /// Source file table for `SourceLoc.file` indices (copied from the lifted
     /// program; owned by this program).
     source_files: std.ArrayList([]const u8),
@@ -351,6 +376,7 @@ pub const Program = struct {
             .roots = .empty,
             .layout_requests = .empty,
             .runtime_schema_requests = .empty,
+            .comptime_sites = .empty,
             .source_files = .empty,
             .expr_locs = .empty,
             .stmt_locs = .empty,
@@ -368,6 +394,10 @@ pub const Program = struct {
         self.expr_locs.deinit(self.allocator);
         for (self.source_files.items) |file| self.allocator.free(file);
         self.source_files.deinit(self.allocator);
+        for (self.comptime_sites.items) |site| {
+            self.allocator.free(site.branch_regions);
+        }
+        self.comptime_sites.deinit(self.allocator);
         self.runtime_schema_requests.deinit(self.allocator);
         self.layout_requests.deinit(self.allocator);
         self.roots.deinit(self.allocator);
@@ -433,6 +463,27 @@ pub const Program = struct {
         try self.stmts.append(self.allocator, stmt);
         try self.stmt_locs.append(self.allocator, self.current_loc);
         return id;
+    }
+
+    pub fn addComptimeSite(
+        self: *Program,
+        kind: ComptimeSiteKind,
+        region: base.Region,
+        branch_regions: []const base.Region,
+    ) std.mem.Allocator.Error!ComptimeSiteId {
+        const owned_branch_regions = try self.allocator.dupe(base.Region, branch_regions);
+        errdefer self.allocator.free(owned_branch_regions);
+        const id: ComptimeSiteId = @enumFromInt(@as(u32, @intCast(self.comptime_sites.items.len)));
+        try self.comptime_sites.append(self.allocator, .{
+            .kind = kind,
+            .region = region,
+            .branch_regions = owned_branch_regions,
+        });
+        return id;
+    }
+
+    pub fn comptimeSite(self: *const Program, id: ComptimeSiteId) ComptimeSite {
+        return self.comptime_sites.items[@intFromEnum(id)];
     }
 
     pub fn addLocal(self: *Program, symbol: Common.Symbol, ty: Type.TypeId) std.mem.Allocator.Error!LocalId {

@@ -482,6 +482,8 @@ fn generateAllReports(
         try reports.append(report);
     }
 
+    _ = try solver.problems.flushPendingStaticExhaustiveness(allocator);
+
     // Generate type checking reports
     for (solver.problems.problems.items) |problem| {
         const empty_modules: []const *ModuleEnv = &.{};

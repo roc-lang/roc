@@ -201,6 +201,7 @@ pub const Expr = union(enum) {
     e_if: struct {
         branches: IfBranch.Span,
         final_else: Expr.Idx,
+        warn_unused_branches: bool,
     },
     /// This is *only* for calling functions, not for tag application.
     /// The Tag variant contains any applied values inside it.

@@ -32,6 +32,12 @@ pub const Local = Mono.Local;
 pub const TypedLocal = Mono.TypedLocal;
 /// Owned string literal id shared with Monotype IR.
 pub const StringLiteralId = Mono.StringLiteralId;
+/// Compile-time site id shared with Monotype IR.
+pub const ComptimeSiteId = Mono.ComptimeSiteId;
+/// Compile-time site kind shared with Monotype IR.
+pub const ComptimeSiteKind = Mono.ComptimeSiteKind;
+/// Compile-time site metadata shared with Monotype IR.
+pub const ComptimeSite = Mono.ComptimeSite;
 /// Record field expression entry.
 pub const FieldExpr = Mono.FieldExpr;
 /// Record destructuring field pattern.
@@ -125,6 +131,7 @@ pub const Program = struct {
     roots: std.ArrayList(Root),
     layout_requests: std.ArrayList(LayoutRequest),
     runtime_schema_requests: std.ArrayList(RuntimeSchemaRequest),
+    comptime_sites: std.ArrayList(ComptimeSite),
     /// Source file table for `SourceLoc.file` indices (moved from Monotype).
     source_files: std.ArrayList([]const u8),
     /// Source location per expression, parallel to `exprs`.
@@ -160,6 +167,7 @@ pub const Program = struct {
         expr_locs: std.ArrayList(base.SourceLoc),
         stmt_locs: std.ArrayList(base.SourceLoc),
         local_names: std.ArrayList([]const u8),
+        comptime_sites: std.ArrayList(ComptimeSite),
         next_symbol: u32,
     ) Program {
         return .{
@@ -185,6 +193,7 @@ pub const Program = struct {
             .roots = .empty,
             .layout_requests = .empty,
             .runtime_schema_requests = .empty,
+            .comptime_sites = comptime_sites,
             .source_files = source_files,
             .expr_locs = expr_locs,
             .stmt_locs = stmt_locs,
@@ -202,6 +211,10 @@ pub const Program = struct {
         self.expr_locs.deinit(self.allocator);
         for (self.source_files.items) |file| self.allocator.free(file);
         self.source_files.deinit(self.allocator);
+        for (self.comptime_sites.items) |site| {
+            self.allocator.free(site.branch_regions);
+        }
+        self.comptime_sites.deinit(self.allocator);
         self.runtime_schema_requests.deinit(self.allocator);
         self.layout_requests.deinit(self.allocator);
         self.roots.deinit(self.allocator);
@@ -267,6 +280,10 @@ pub const Program = struct {
         try self.stmts.append(self.allocator, stmt_);
         try self.stmt_locs.append(self.allocator, self.current_loc);
         return id;
+    }
+
+    pub fn comptimeSite(self: *const Program, id: ComptimeSiteId) ComptimeSite {
+        return self.comptime_sites.items[@intFromEnum(id)];
     }
 
     pub fn addLocal(self: *Program, symbol: Common.Symbol, ty: Type.TypeId) std.mem.Allocator.Error!LocalId {

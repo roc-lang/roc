@@ -53,6 +53,8 @@ pub fn run(
     owned.proc_debug_names = Mono.ProcDebugNameMap.init(allocator);
     var runtime_schema_requests = owned.runtime_schema_requests;
     owned.runtime_schema_requests = .empty;
+    var comptime_sites = owned.comptime_sites;
+    owned.comptime_sites = .empty;
     var source_files = owned.source_files;
     owned.source_files = .empty;
     var expr_locs = owned.expr_locs;
@@ -84,6 +86,7 @@ pub fn run(
         expr_locs,
         stmt_locs,
         local_names,
+        comptime_sites,
         owned.next_symbol,
     );
     name_store = undefined;
@@ -106,6 +109,7 @@ pub fn run(
     expr_locs = undefined;
     stmt_locs = undefined;
     local_names = undefined;
+    comptime_sites = undefined;
     program.runtime_schema_requests = runtime_schema_requests;
     runtime_schema_requests = undefined;
     errdefer program.deinit();
@@ -408,6 +412,7 @@ const Lifter = struct {
             .dec_lit,
             .str_lit,
             .crash,
+            .comptime_exhaustiveness_failed,
             .fn_ref,
             => {},
             .list,
@@ -421,6 +426,7 @@ const Lifter = struct {
             .expect,
             => |child| try self.rewriteExpr(child),
             .expect_err => |expect_err| try self.rewriteExpr(expect_err.msg),
+            .comptime_branch_taken => |taken| try self.rewriteExpr(taken.body),
             .let_ => |let_| {
                 try self.rewriteExpr(let_.value);
                 try self.rewriteExpr(let_.rest);
@@ -657,6 +663,7 @@ const CaptureSet = struct {
             .fn_def,
             .fn_ref,
             .crash,
+            .comptime_exhaustiveness_failed,
             => {},
             .list,
             .tuple,
@@ -669,6 +676,7 @@ const CaptureSet = struct {
             .expect,
             => |child| try self.collectExpr(child, bound),
             .expect_err => |expect_err| try self.collectExpr(expect_err.msg, bound),
+            .comptime_branch_taken => |taken| try self.collectExpr(taken.body, bound),
             .let_ => |let_| {
                 try self.collectExpr(let_.value, bound);
                 var added = std.ArrayList(Mono.LocalId).empty;
