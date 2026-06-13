@@ -1496,6 +1496,11 @@ pub fn generateModule(self: *Self) std.mem.Allocator.Error!void {
         try self.generatePatternAsFunction();
     }
 
+    const lambda_pattern_count = self.reader.intRangeAtMost(u8, 1, 4);
+    for (0..lambda_pattern_count) |_| {
+        try self.generateLambdaPatternFunction();
+    }
+
     const builtin_count = self.reader.intRangeAtMost(u8, 12, 36);
     for (0..builtin_count) |_| {
         try self.generateBuiltinAssociatedFunction();
@@ -2498,6 +2503,60 @@ fn generateOpenUnionAsPatternFunction(self: *Self, name_id: u32) std.mem.Allocat
     try self.writeRawFunctionSignature(name_id, "Main, [Red, Green, ..]", "[Red, Green, ..]");
     try self.writeFunctionHeader(name_id);
     try self.write("|_, color| match color {\n        Red => Red\n        _ as other => other\n    }\n");
+}
+
+fn generateLambdaPatternFunction(self: *Self) std.mem.Allocator.Error!void {
+    const name_id = self.name_counter;
+    self.name_counter += 1;
+
+    switch (self.reader.intRangeAtMost(u8, 0, 4)) {
+        0 => try self.generateTupleLambdaPatternFunction(name_id),
+        1 => try self.generateRecordLambdaPatternFunction(name_id),
+        2 => try self.generateHolderLambdaPatternFunction(name_id),
+        3 => try self.generateWrapTryLambdaPatternFunction(name_id),
+        4 => try self.generateSupportLambdaPatternFunction(name_id),
+        else => unreachable,
+    }
+}
+
+fn generateTupleLambdaPatternFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFunctionSignature(name_id, "Main", .list_u64);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| List.map(");
+    try self.writeLiteral(.list_tuple_str_u64);
+    try self.write(", |(_, count)| count)\n");
+}
+
+fn generateRecordLambdaPatternFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFunctionSignature(name_id, "Main", .list_bool);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| ");
+    try self.writeLiteral(.list_record_bool);
+    try self.write(".map(|{ flag }| flag)\n");
+}
+
+fn generateHolderLambdaPatternFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFunctionSignature(name_id, "Main", .holder_u64);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| Holder.map(Holder.make(");
+    try self.writeRecordStrU64Literal();
+    try self.write("), |{ count }| count)\n");
+}
+
+fn generateWrapTryLambdaPatternFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFunctionSignature(name_id, "Main", .wrap_u64);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| Wrap.map(Wrap.make(Ok(");
+    try self.writeIntegerLiteral();
+    try self.write(")), |Ok(value)| value)\n");
+}
+
+fn generateSupportLambdaPatternFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFunctionSignature(name_id, "Main", .list_u64);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| List.map(");
+    try self.writeList(&.{.{ .raw = "Support.make(1)" }, .{ .raw = "Support.make(2)" }});
+    try self.write(", |Packet(record)| record.count)\n");
 }
 
 fn generateBuiltinAssociatedFunction(self: *Self) std.mem.Allocator.Error!void {
