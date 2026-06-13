@@ -1029,6 +1029,11 @@ const Expr = union(enum) {
     small_number_literal: Type,
 };
 
+const RecordField = struct {
+    name: []const u8,
+    value: Expr,
+};
+
 pub fn init(allocator: std.mem.Allocator, reader: *FuzzReader) Self {
     return .{
         .allocator = allocator,
@@ -2074,27 +2079,25 @@ fn generateTryWildcardChainGroup(self: *Self) std.mem.Allocator.Error!void {
 
     try self.writeRawFunctionSignature(first_id, "Main, U64", "Try(U64, _)");
     try self.writeFunctionHeader(first_id);
-    try self.write("|_, _| Ok(");
-    try self.writeIntegerLiteral();
-    try self.write(")\n");
+    try self.write("|_, _| ");
+    try self.writeCall("Ok", &.{.{ .integer_literal = {} }});
+    try self.write("\n");
 
     try self.writeRawFunctionSignature(second_id, "Main, U64", "Try(U64, _)");
     try self.writeFunctionHeader(second_id);
-    try self.write("|_, _| Ok(");
-    try self.writeIntegerLiteral();
-    try self.write(")\n");
+    try self.write("|_, _| ");
+    try self.writeCall("Ok", &.{.{ .integer_literal = {} }});
+    try self.write("\n");
 
     try self.writeRawFunctionSignature(chain_id, "Main", "Try(U64, _)");
     try self.writeFunctionHeader(chain_id);
-    try self.write("|_| {\n        _first = Main.");
-    try self.writeFunctionName(first_id);
-    try self.write("(Main, ");
-    try self.writeIntegerLiteral();
-    try self.write(")?\n        second = Main.");
-    try self.writeFunctionName(second_id);
-    try self.write("(Main, ");
-    try self.writeIntegerLiteral();
-    try self.write(")?\n        Ok(second)\n    }\n");
+    try self.write("|_| {\n        _first = ");
+    try self.writeGeneratedFunctionCall(first_id, &.{ .{ .raw = "Main" }, .{ .integer_literal = {} } });
+    try self.write("?\n        second = ");
+    try self.writeGeneratedFunctionCall(second_id, &.{ .{ .raw = "Main" }, .{ .integer_literal = {} } });
+    try self.write("?\n        ");
+    try self.writeCall("Ok", &.{.{ .raw = "second" }});
+    try self.write("\n    }\n");
 }
 
 fn generateBuiltinAssociatedFunction(self: *Self) std.mem.Allocator.Error!void {
@@ -5618,9 +5621,7 @@ fn writeListLiteralRange(self: *Self, elem_type: Type, min_len: u8, max_len: u8)
 }
 
 fn writeRecordBoolLiteral(self: *Self) std.mem.Allocator.Error!void {
-    try self.write("{ flag: ");
-    try self.writeBoolLiteral();
-    try self.write(" }");
+    try self.writeRecordLiteral(&.{.{ .name = "flag", .value = .{ .bool_literal = {} } }});
 }
 
 fn writeMainLiteral(self: *Self) std.mem.Allocator.Error!void {
@@ -5684,13 +5685,14 @@ fn writeOpenColorMatch(self: *Self, expr: []const u8) std.mem.Allocator.Error!vo
 fn writeTreeLiteral(self: *Self) std.mem.Allocator.Error!void {
     switch (self.reader.intRangeAtMost(u8, 0, 3)) {
         0 => try self.writeCall("Leaf", &.{.{ .string_literal = {} }}),
-        1 => try self.write("Node([])"),
+        1 => try self.writeCall("Node", &.{.{ .raw = "[]" }}),
         2 => {
-            try self.write("Node([");
+            try self.write("Node(");
+            try self.write("[");
             try self.writeCall("Leaf", &.{.{ .string_literal = {} }});
             try self.write("])");
         },
-        3 => try self.write("Node([Node([])])"),
+        3 => try self.writeCall("Node", &.{.{ .raw = "[Node([])]" }}),
         else => unreachable,
     }
 }
@@ -5709,21 +5711,18 @@ fn writeTypedCustomNumberLiteral(self: *Self) std.mem.Allocator.Error!void {
 }
 
 fn writeRecordStrU64Literal(self: *Self) std.mem.Allocator.Error!void {
-    try self.write("{ name: ");
-    try self.writeStringLiteral();
-    try self.write(", count: ");
-    try self.writeIntegerLiteral();
-    try self.write(" }");
+    try self.writeRecordLiteral(&.{
+        .{ .name = "name", .value = .{ .string_literal = {} } },
+        .{ .name = "count", .value = .{ .integer_literal = {} } },
+    });
 }
 
 fn writeWideRecordLiteral(self: *Self) std.mem.Allocator.Error!void {
-    try self.write("{ name: ");
-    try self.writeStringLiteral();
-    try self.write(", count: ");
-    try self.writeIntegerLiteral();
-    try self.write(", flag: ");
-    try self.writeBoolLiteral();
-    try self.write(" }");
+    try self.writeRecordLiteral(&.{
+        .{ .name = "name", .value = .{ .string_literal = {} } },
+        .{ .name = "count", .value = .{ .integer_literal = {} } },
+        .{ .name = "flag", .value = .{ .bool_literal = {} } },
+    });
 }
 
 fn writeHolderLiteral(self: *Self, inner: Type) std.mem.Allocator.Error!void {
@@ -5756,9 +5755,7 @@ fn writeDictLiteral(self: *Self, key: Type, value: Type) std.mem.Allocator.Error
             try self.writeCallThenMethod("Dict.single", &.{ .{ .literal = key }, .{ .literal = value } }, "insert", &.{ .{ .literal = key }, .{ .literal = value } });
         },
         3 => {
-            try self.write("Dict.from_list(");
-            try self.writeListLiteral(if (key == .str) .tuple_str_u64 else .tuple_u64_str);
-            try self.write(")");
+            try self.writeCall("Dict.from_list", &.{.{ .literal = if (key == .str) .list_tuple_str_u64 else .list_tuple_u64_str }});
         },
         else => unreachable,
     }
@@ -5774,20 +5771,14 @@ fn writeSetLiteral(self: *Self, elem: Type) std.mem.Allocator.Error!void {
             try self.writeCallThenMethod("Set.single", &.{.{ .literal = elem }}, "insert", &.{.{ .literal = elem }});
         },
         3 => {
-            try self.write("Set.from_list(");
-            try self.writeListLiteral(elem);
-            try self.write(")");
+            try self.writeCall("Set.from_list", &.{.{ .literal = if (elem == .str) .list_str else .list_u64 }});
         },
         else => unreachable,
     }
 }
 
 fn writeTupleLiteral(self: *Self, first: Type, second: Type) std.mem.Allocator.Error!void {
-    try self.write("(");
-    try self.writeLiteral(first);
-    try self.write(", ");
-    try self.writeLiteral(second);
-    try self.write(")");
+    try self.writeTuple(&.{ .{ .literal = first }, .{ .literal = second } });
 }
 
 fn writeTryLiteral(self: *Self, ok_type: Type, err_type: Type) std.mem.Allocator.Error!void {
@@ -5864,25 +5855,24 @@ fn writeStringLiteral(self: *Self) std.mem.Allocator.Error!void {
 }
 
 fn writeUtf8BytesLiteral(self: *Self) std.mem.Allocator.Error!void {
-    try self.write(switch (self.reader.intRangeAtMost(u8, 0, 3)) {
-        0 => "[]",
-        1 => "[82, 111, 99]",
-        2 => "[240, 159, 144, 166]",
-        3 => "[255]",
+    switch (self.reader.intRangeAtMost(u8, 0, 3)) {
+        0 => try self.writeList(&.{}),
+        1 => try self.writeList(&.{ .{ .raw = "82" }, .{ .raw = "111" }, .{ .raw = "99" } }),
+        2 => try self.writeList(&.{ .{ .raw = "240" }, .{ .raw = "159" }, .{ .raw = "144" }, .{ .raw = "166" } }),
+        3 => try self.writeList(&.{.{ .raw = "255" }}),
         else => unreachable,
-    });
+    }
 }
 
 fn writeNumeralLiteral(self: *Self) std.mem.Allocator.Error!void {
-    try self.write("Literal({ is_negative: ");
-    try self.writeBoolLiteral();
-    try self.write(", digits_before_pt: ");
-    try self.writeUtf8BytesLiteral();
-    try self.write(", digits_after_pt: ");
-    try self.writeUtf8BytesLiteral();
-    try self.write(", digits_after_pt_count: ");
-    try self.writeIntegerLiteral();
-    try self.write(" })");
+    try self.write("Literal(");
+    try self.writeRecordLiteral(&.{
+        .{ .name = "is_negative", .value = .{ .bool_literal = {} } },
+        .{ .name = "digits_before_pt", .value = .{ .utf8_bytes_literal = {} } },
+        .{ .name = "digits_after_pt", .value = .{ .utf8_bytes_literal = {} } },
+        .{ .name = "digits_after_pt_count", .value = .{ .integer_literal = {} } },
+    });
+    try self.write(")");
 }
 
 fn writeMutableLocalDeclaration(self: *Self, name: []const u8, initializer: Expr) std.mem.Allocator.Error!void {
@@ -5934,6 +5924,14 @@ fn writeExpr(self: *Self, expr: Expr) std.mem.Allocator.Error!void {
 
 fn writeCall(self: *Self, callee: []const u8, args: []const Expr) std.mem.Allocator.Error!void {
     try self.write(callee);
+    try self.write("(");
+    try self.writeArgs(args);
+    try self.write(")");
+}
+
+fn writeGeneratedFunctionCall(self: *Self, name_id: u32, args: []const Expr) std.mem.Allocator.Error!void {
+    try self.write("Main.");
+    try self.writeFunctionName(name_id);
     try self.write("(");
     try self.writeArgs(args);
     try self.write(")");
@@ -5991,6 +5989,29 @@ fn writeArgs(self: *Self, args: []const Expr) std.mem.Allocator.Error!void {
         if (index > 0) try self.write(", ");
         try self.writeExpr(arg);
     }
+}
+
+fn writeList(self: *Self, items: []const Expr) std.mem.Allocator.Error!void {
+    try self.write("[");
+    try self.writeArgs(items);
+    try self.write("]");
+}
+
+fn writeTuple(self: *Self, items: []const Expr) std.mem.Allocator.Error!void {
+    try self.write("(");
+    try self.writeArgs(items);
+    try self.write(")");
+}
+
+fn writeRecordLiteral(self: *Self, fields: []const RecordField) std.mem.Allocator.Error!void {
+    try self.write("{ ");
+    for (fields, 0..) |field, index| {
+        if (index > 0) try self.write(", ");
+        try self.write(field.name);
+        try self.write(": ");
+        try self.writeExpr(field.value);
+    }
+    try self.write(" }");
 }
 
 fn writeTypedLocalFunctionStart(self: *Self, name_id: u32, local_name: []const u8, local_type: Type, return_type: Type) std.mem.Allocator.Error!void {
