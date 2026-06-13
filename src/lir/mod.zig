@@ -21,6 +21,10 @@ pub const CheckedPipeline = @import("checked_pipeline.zig");
 pub const ScalarizeJoins = @import("scalarize_joins.zig");
 /// ARC borrow inference and RC statement insertion over explicit LIR.
 pub const Arc = @import("arc.zig");
+/// Tail recursion modulo constructor + plain tail-call elimination.
+pub const Trmc = @import("trmc.zig");
+/// Compact textual LIR dumps for golden tests and debug flags.
+pub const DebugPrint = @import("debug_print.zig");
 /// ARC-stage per-proc ownership signatures.
 pub const ArcSig = @import("arc_sig.zig");
 /// ARC borrow-inference solver over ownership-neutral LIR.

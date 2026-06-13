@@ -773,6 +773,19 @@ pub const MonoLlvmCodeGen = struct {
                     0,
                 ) catch return error.OutOfMemory;
             },
+            .ptr => {
+                const elem_ty = try self.debugTypeFor(builder, lay.getIdx());
+                return builder.debugPointerType(
+                    builder.metadataString("Ptr") catch return error.OutOfMemory,
+                    null,
+                    null,
+                    0,
+                    elem_ty,
+                    word_bits,
+                    word_bits,
+                    0,
+                ) catch return error.OutOfMemory;
+            },
             .list, .list_of_zst => {
                 const elem_ty: LlvmBuilder.Metadata = if (lay.tag == .list)
                     try self.debugTypeFor(builder, lay.getIdx())
@@ -1048,7 +1061,10 @@ pub const MonoLlvmCodeGen = struct {
             try self.emitHostedProcBody(hosted, proc);
         } else {
             const body = proc.body orelse return error.CompilationFailed;
-            try self.compileStmt(body);
+            const compiled_direct_tce_loop = try self.compileDirectEntryTceLoop(proc, body);
+            if (!compiled_direct_tce_loop) {
+                try self.compileStmt(body);
+            }
             if (!self.currentBlockHasTerminator()) {
                 _ = wip.retVoid() catch return error.OutOfMemory;
             }
@@ -1484,6 +1500,33 @@ pub const MonoLlvmCodeGen = struct {
                 },
             }
         }
+    }
+
+    /// Plain TCE installs the proc body as `join J { remainder: jump J, body: old_body }`.
+    /// That shape does not need the generic join continuation block: proc entry
+    /// branches directly to the loop body, and recursive sites jump back there
+    /// after their explicit `initialize_join_param` writes.
+    fn compileDirectEntryTceLoop(self: *MonoLlvmCodeGen, proc: LirProcSpec, stmt_id: CFStmtId) Error!bool {
+        if (proc.tail_transform != .tce) return false;
+
+        const join_stmt = switch (self.store.getCFStmt(stmt_id)) {
+            .join => |j| j,
+            else => return error.CompilationFailed,
+        };
+        switch (self.store.getCFStmt(join_stmt.remainder)) {
+            .jump => |j| if (j.target != join_stmt.id) return error.CompilationFailed,
+            else => return error.CompilationFailed,
+        }
+
+        const wip = self.wip orelse return error.CompilationFailed;
+        const key = @intFromEnum(join_stmt.id);
+        const loop_block = wip.block(0, "tce_loop") catch return error.OutOfMemory;
+        try self.join_points.put(key, .{ .block = loop_block, .params = join_stmt.params, .body = join_stmt.body });
+
+        _ = wip.br(loop_block) catch return error.OutOfMemory;
+        wip.cursor = .{ .block = loop_block };
+        try self.compileStmt(join_stmt.body);
+        return true;
     }
 
     /// Processes a single statement node, queueing successors and nested-body
@@ -1964,6 +2007,11 @@ pub const MonoLlvmCodeGen = struct {
             .box_box => try self.emitBoxBox(target, arg_locals[0]),
             .box_unbox => try self.emitBoxUnbox(target, arg_locals[0]),
             .erased_capture_load => try self.emitErasedCaptureLoad(target, arg_locals[0]),
+            .ptr_alloca => try self.emitPtrAlloca(target),
+            .box_alloc_zeroed => try self.emitBoxAllocZeroed(target),
+            .ptr_store => try self.emitPtrStore(arg_locals[0], arg_locals[1]),
+            .ptr_load => try self.emitPtrLoad(target, arg_locals[0]),
+            .ptr_cast => try self.emitPtrCast(target, arg_locals[0]),
             .crash => try self.emitCrashBytes("Roc crashed"),
             else => try self.emitNumericConversionOrCrash(target, op, arg_locals),
         }
@@ -3125,6 +3173,47 @@ pub const MonoLlvmCodeGen = struct {
     fn emitErasedCaptureLoad(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
         const capture_ptr = try self.loadPointer(self.slot(arg).ptr);
         if (self.slot(target).size > 0) try self.copyBytes(self.slot(target).ptr, capture_ptr, self.slot(target).size, self.slot(target).alignment);
+    }
+
+    /// ptr_alloca: () -> Ptr(T). Reserve a zeroed slot for T and store its
+    /// address into the target. TRMC emits this once per proc entry (pre-loop),
+    /// so a .normal alloca at the op site executes once per call.
+    fn emitPtrAlloca(self: *MonoLlvmCodeGen, target: LocalId) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const elem_idx = self.layoutValue(self.localLayout(target)).getIdx();
+        const sa = self.sizeAlignOf(elem_idx);
+        const len = builder.intValue(.i32, @max(sa.size, 1)) catch return error.OutOfMemory;
+        const slot_ptr = wip.alloca(.normal, .i8, len, self.llvmAlignment(sa.alignment), .default, "trmc_slot") catch return error.OutOfMemory;
+        if (sa.size > 0) try self.zeroBytes(slot_ptr, sa.size);
+        try self.storePointer(self.slot(target).ptr, slot_ptr);
+    }
+
+    /// box_alloc_zeroed: () -> Box(T). allocAggregateTarget's box branch is
+    /// exactly this op: allocate_with_refcount + zero payload + store the data
+    /// pointer into the target slot.
+    fn emitBoxAllocZeroed(self: *MonoLlvmCodeGen, target: LocalId) Error!void {
+        _ = try self.allocAggregateTarget(target);
+    }
+
+    /// ptr_store: (Ptr(T), T) -> {}. Copy sizeOf(T) bytes into *ptr.
+    fn emitPtrStore(self: *MonoLlvmCodeGen, ptr_arg: LocalId, value_arg: LocalId) Error!void {
+        const value_size = self.slot(value_arg).size;
+        if (value_size == 0) return;
+        const dst = try self.loadPointer(self.slot(ptr_arg).ptr);
+        try self.copyBytes(dst, self.slot(value_arg).ptr, value_size, self.slot(value_arg).alignment);
+    }
+
+    /// ptr_load: (Ptr(T)) -> T. Same load-through-pointer as emitBoxUnbox.
+    fn emitPtrLoad(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
+        const src = try self.loadPointer(self.slot(arg).ptr);
+        if (self.slot(target).size > 0) try self.copyBytes(self.slot(target).ptr, src, self.slot(target).size, self.slot(target).alignment);
+    }
+
+    /// ptr_cast: identity bits (box(T) -> ptr(T) or ptr -> ptr).
+    fn emitPtrCast(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
+        const ptr_value = try self.loadPointer(self.slot(arg).ptr);
+        try self.storePointer(self.slot(target).ptr, ptr_value);
     }
 
     /// Heap-backed glue carried across the per-field children of one struct

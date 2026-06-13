@@ -11,6 +11,7 @@ const check = @import("check");
 const core = @import("lir_core");
 
 const Arc = @import("arc.zig");
+const Trmc = @import("trmc.zig");
 const ScalarizeJoins = @import("scalarize_joins.zig");
 const LIR = core.LIR;
 const LirImage = @import("lir_image.zig");
@@ -224,6 +225,10 @@ pub fn lowerCheckedModulesToLir(
     solved = undefined;
     errdefer lowered.deinit();
 
+    // TRMC/TCE must rewrite recursive procs before ARC insertion: it deletes
+    // calls and changes allocation sites, and ARC panics on pre-existing RC
+    // statements (see src/lir/trmc.zig).
+    try Trmc.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
     try ScalarizeJoins.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
 
     try Arc.insert(&lowered.lir_result.store, &lowered.lir_result.layouts, .{

@@ -109,7 +109,8 @@ pub const Resolver = struct {
         if (!self.store.layoutContainsRefcounted(l)) return .noop;
 
         return switch (l.tag) {
-            .zst => .noop,
+            // ptr is never refcounted, so the early return above already handled it.
+            .zst, .ptr => .noop,
             .scalar => if (l.getScalar().tag == .str)
                 switch (helper_key.op) {
                     .incref => .str_incref,
