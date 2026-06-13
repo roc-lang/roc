@@ -114,6 +114,7 @@ pub const BuildArgs = struct {
     warning_count_out: ?*usize = null, // optionally receive the total warning count
     require_executable_output: bool = false, // reject static/shared library targets
     suppress_build_status: bool = false, // suppress "Built..." output (used by roc run)
+    synthetic_default_platform: bool = false, // internal: build rewrote a headerless app to the default platform
 };
 
 /// Arguments for `roc test`

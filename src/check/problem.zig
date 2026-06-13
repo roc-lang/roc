@@ -41,6 +41,7 @@ pub const UnusedValue = types.UnusedValue;
 
 // Match/exhaustiveness errors
 pub const NonExhaustiveMatch = types.NonExhaustiveMatch;
+pub const NonExhaustiveDestructure = types.NonExhaustiveDestructure;
 pub const RedundantPattern = types.RedundantPattern;
 pub const UnmatchablePattern = types.UnmatchablePattern;
 

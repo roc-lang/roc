@@ -54,6 +54,7 @@ pub const Problem = union(enum) {
     comptime_eval_error: ComptimeEvalError,
     invalid_numeric_literal: InvalidNumericLiteral,
     non_exhaustive_match: NonExhaustiveMatch,
+    non_exhaustive_destructure: NonExhaustiveDestructure,
     redundant_pattern: RedundantPattern,
     unmatchable_pattern: UnmatchablePattern,
 
@@ -228,6 +229,15 @@ pub const NonExhaustiveMatch = struct {
     match_expr: CIR.Expr.Idx,
     /// Snapshot of the condition type for error messages
     condition_snapshot: SnapshotContentIdx,
+    /// Range into the problems store's missing_patterns_backing for pattern indices
+    missing_patterns: MissingPatternsRange,
+};
+
+/// Problem data for a non-exhaustive destructuring pattern
+pub const NonExhaustiveDestructure = struct {
+    pattern: CIR.Pattern.Idx,
+    /// Snapshot of the destructured value type for error messages
+    value_snapshot: SnapshotContentIdx,
     /// Range into the problems store's missing_patterns_backing for pattern indices
     missing_patterns: MissingPatternsRange,
 };

@@ -5,9 +5,6 @@ const builtin = @import("builtin");
 
 const Step = std.Build.Step;
 
-const non_tty_test_progress_env = "ROC_TEST_PROGRESS_INTERVAL_MS";
-const default_non_tty_test_progress_ms = "30000";
-
 const PhasePosition = struct {
     index: usize,
     total: usize,
@@ -69,7 +66,6 @@ pub const SemanticAuditStep = struct {
             step,
             checkedDataAuditPhase(),
             .{ .progress_node = options.progress_node },
-            false,
         );
     }
 };
@@ -136,7 +132,7 @@ const Heartbeat = struct {
     }
 };
 
-fn runPhaseAction(step: *Step, phase: Phase, ctx: RunContext, inject_test_progress: bool) !void {
+fn runPhaseAction(step: *Step, phase: Phase, ctx: RunContext) !void {
     if (try shouldSkipPhase(step, phase)) return;
 
     const b = step.owner;
@@ -153,7 +149,6 @@ fn runPhaseAction(step: *Step, phase: Phase, ctx: RunContext, inject_test_progre
         phase.label,
         phase.failure_message,
         abnormal_message,
-        inject_test_progress,
     );
 }
 
@@ -219,26 +214,13 @@ fn spawnAndWait(
     display: []const u8,
     failure_message: ?[]const u8,
     abnormal_message: []const u8,
-    inject_test_progress: bool,
 ) !void {
     const b = step.owner;
     const io = b.graph.io;
 
-    var child_env_storage: ?std.process.Environ.Map = null;
-    defer if (child_env_storage) |*child_env| child_env.deinit();
-
-    var env_map: *const std.process.Environ.Map = &b.graph.environ_map;
-    if (inject_test_progress) {
-        child_env_storage = try b.graph.environ_map.clone(b.allocator);
-        if (child_env_storage) |*child_env| {
-            try addCiChildEnv(child_env);
-            env_map = child_env;
-        }
-    }
-
     var child = try std.process.spawn(io, .{
         .argv = argv,
-        .environ_map = env_map,
+        .environ_map = &b.graph.environ_map,
         .progress_node = ctx.progress_node,
     });
     var heartbeat = Heartbeat.init(io, ctx, display);
@@ -257,12 +239,6 @@ fn spawnAndWait(
             }
         },
         else => return step.fail("{s}", .{abnormal_message}),
-    }
-}
-
-fn addCiChildEnv(env_map: *std.process.Environ.Map) !void {
-    if (!env_map.contains(non_tty_test_progress_env)) {
-        try env_map.put(non_tty_test_progress_env, default_non_tty_test_progress_ms);
     }
 }
 

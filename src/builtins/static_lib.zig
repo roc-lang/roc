@@ -154,4 +154,13 @@ comptime {
     @export(&dw.roc_builtins_u32_mod_by, .{ .name = "roc_builtins_u32_mod_by" });
     @export(&dw.roc_builtins_i64_mod_by, .{ .name = "roc_builtins_i64_mod_by" });
     @export(&dw.roc_builtins_u64_mod_by, .{ .name = "roc_builtins_u64_mod_by" });
+    // Hasher wrappers
+    @export(&dw.roc_builtins_dict_pseudo_seed, .{ .name = "roc_builtins_dict_pseudo_seed" });
+    @export(&dw.roc_builtins_hasher_finish, .{ .name = "roc_builtins_hasher_finish" });
+    @export(&dw.roc_builtins_hasher_write_u64, .{ .name = "roc_builtins_hasher_write_u64" });
+    @export(&dw.roc_builtins_hasher_write_u128, .{ .name = "roc_builtins_hasher_write_u128" });
+    @export(&dw.roc_builtins_hasher_write_f32_bits, .{ .name = "roc_builtins_hasher_write_f32_bits" });
+    @export(&dw.roc_builtins_hasher_write_f64_bits, .{ .name = "roc_builtins_hasher_write_f64_bits" });
+    @export(&dw.roc_builtins_hasher_write_bytes, .{ .name = "roc_builtins_hasher_write_bytes" });
+    @export(&dw.roc_builtins_hasher_write_str, .{ .name = "roc_builtins_hasher_write_str" });
 }

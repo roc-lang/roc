@@ -857,6 +857,7 @@ fn populateBuiltinAutoImportedTypes(
         .{ "Dict", builtin_indices.dict_type, builtin_indices.dict_ident },
         .{ "Set", builtin_indices.set_type, builtin_indices.set_ident },
         .{ "Str", builtin_indices.str_type, builtin_indices.str_ident },
+        .{ "Hasher", builtin_indices.hasher_type, builtin_indices.hasher_ident },
         .{ "Iter", builtin_indices.iter_type, builtin_indices.iter_ident },
         .{ "Stream", builtin_indices.stream_type, builtin_indices.stream_ident },
         .{ "List", builtin_indices.list_type, builtin_indices.list_ident },
@@ -910,6 +911,7 @@ pub fn populateModuleEnvs(
         .{ "Dict", builtin_indices.dict_type, builtin_indices.dict_ident },
         .{ "Set", builtin_indices.set_type, builtin_indices.set_ident },
         .{ "Str", builtin_indices.str_type, builtin_indices.str_ident },
+        .{ "Hasher", builtin_indices.hasher_type, builtin_indices.hasher_ident },
         .{ "Iter", builtin_indices.iter_type, builtin_indices.iter_ident },
         .{ "Stream", builtin_indices.stream_type, builtin_indices.stream_ident },
         .{ "List", builtin_indices.list_type, builtin_indices.list_ident },
@@ -7065,6 +7067,7 @@ fn finishSuffixSingleQuestionExpr(
         .branches = branches_span,
         .exhaustive = try self.env.types.fresh(),
         .is_try_suffix = true,
+        .skip_exhaustiveness = true,
     };
     const expr_idx = try self.env.addExpr(CIR.Expr{ .e_match = match_expr }, region);
 
@@ -10953,6 +10956,7 @@ fn runExprKernel(
                     .branches = branches_span,
                     .exhaustive = try self.env.types.fresh(),
                     .is_try_suffix = false,
+                    .skip_exhaustiveness = false,
                 };
                 const expr_idx = try self.env.addExpr(CIR.Expr{ .e_match = match_expr }, state.region);
                 const free_vars_span = self.scratch_free_vars.spanFrom(state.free_vars_start);
@@ -11449,6 +11453,7 @@ fn canonicalizeDoubleQuestionOp(
         .branches = branches_span,
         .exhaustive = try self.env.types.fresh(),
         .is_try_suffix = false,
+        .skip_exhaustiveness = true,
     };
     const expr_idx = try self.env.addExpr(CIR.Expr{ .e_match = match_expr }, region);
 
