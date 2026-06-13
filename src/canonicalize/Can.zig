@@ -12456,6 +12456,8 @@ fn desugarInterpolatedString(
     // [].iter()
     const empty_list_idx = try self.env.addExpr(CIR.Expr{ .e_empty_list = .{} }, region);
     var chain_idx = try self.addSyntheticMethodCall(empty_list_idx, iter_method, &.{}, region);
+    const part_exprs = try gpa.alloc(Expr.Idx, interps.items.len * 2);
+    defer gpa.free(part_exprs);
 
     // Prepend (interpolation, following-segment) pairs back to front so the
     // iterator yields them in source order.
@@ -12466,6 +12468,8 @@ fn desugarInterpolatedString(
         const tmp_lookup_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{
             .pattern_idx = tmp_patterns[pair_i],
         } }, interp_region);
+        part_exprs[pair_i * 2] = tmp_lookup_idx;
+        part_exprs[pair_i * 2 + 1] = seg_exprs[pair_i + 1];
         const elems_top = self.env.store.scratchExprTop();
         try self.env.store.addScratchExpr(tmp_lookup_idx);
         try self.env.store.addScratchExpr(seg_exprs[pair_i + 1]);
@@ -12475,6 +12479,7 @@ fn desugarInterpolatedString(
         } }, interp_region);
         chain_idx = try self.addSyntheticMethodCall(chain_idx, prepended_method, &.{pair_idx}, interp_region);
     }
+    const parts_span = try self.env.store.appendExprSpan(part_exprs);
 
     const final_idx = if (type_ident) |suffix_ident| suffix_blk: {
         const fn_expr = try self.canonicalizeTypeAssociatedLookup(suffix_ident, from_interpolation_method, region) orelse
@@ -12495,6 +12500,7 @@ fn desugarInterpolatedString(
         } }, region);
     } else try self.env.addExpr(CIR.Expr{ .e_interpolation = .{
         .first = seg_exprs[0],
+        .parts = parts_span,
         .rest = chain_idx,
         .method_name_region = region,
     } }, region);

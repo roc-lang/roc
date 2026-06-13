@@ -61,30 +61,16 @@ NO CHANGE
 					(e-lookup-local
 						(p-assign (ident "age"))))
 				(args)))
-		(e-interpolation (constraint-fn-var 178)
+		(e-interpolation (constraint-fn-var 43)
 			(first
 				(e-literal (string "Hello ")))
-			(rest
-				(e-dispatch-call (method "prepended") (constraint-fn-var 136)
-					(receiver
-						(e-dispatch-call (method "prepended") (constraint-fn-var 91)
-							(receiver
-								(e-dispatch-call (method "iter") (constraint-fn-var 40)
-									(receiver
-										(e-empty_list))
-									(args)))
-							(args
-								(e-tuple
-									(elems
-										(e-lookup-local
-											(p-assign (ident "#interp_1")))
-										(e-literal (string " years old")))))))
-					(args
-						(e-tuple
-							(elems
-								(e-lookup-local
-									(p-assign (ident "#interp_0")))
-								(e-literal (string ", you are "))))))))))
+			(parts
+				(e-lookup-local
+					(p-assign (ident "#interp_0")))
+				(e-literal (string ", you are "))
+				(e-lookup-local
+					(p-assign (ident "#interp_1")))
+				(e-literal (string " years old"))))))
 ~~~
 # TYPES
 ~~~clojure

@@ -365,6 +365,13 @@ pub const Expr = union(enum) {
     /// following `Str` segments.
     e_interpolation: struct {
         first: Expr.Idx,
+        /// Flat `(interpolated, following_segment)` pairs. The span length is
+        /// always even, with `following_segment` expressions already typed as
+        /// builtin `Str` segments.
+        parts: Expr.Span,
+        /// Synthetic iterator chain for the custom-dispatch path. The builtin
+        /// `Str` path consumes `parts` directly and does not check or lower
+        /// this expression.
         rest: Expr.Idx,
         method_name_region: base.Region,
         constraint_fn_var: ?TypeVar = null,
@@ -1292,11 +1299,13 @@ pub const Expr = union(enum) {
                 }
 
                 {
-                    const rest_begin = tree.beginNode();
-                    try tree.pushStaticAtom("rest");
-                    const rest_attrs = tree.beginNode();
-                    try ir.store.getExpr(e.rest).pushToSExprTree(ir, tree, e.rest);
-                    try tree.endNode(rest_begin, rest_attrs);
+                    const parts_begin = tree.beginNode();
+                    try tree.pushStaticAtom("parts");
+                    const parts_attrs = tree.beginNode();
+                    for (ir.store.sliceExpr(e.parts)) |part_idx| {
+                        try ir.store.getExpr(part_idx).pushToSExprTree(ir, tree, part_idx);
+                    }
+                    try tree.endNode(parts_begin, parts_attrs);
                 }
 
                 try tree.endNode(begin, attrs);

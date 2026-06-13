@@ -285,24 +285,15 @@ x = {
 				(p-assign (ident "#interp_0"))
 				(e-lookup-local
 					(p-assign (ident "value1"))))
-			(e-interpolation (constraint-fn-var 195)
+			(e-interpolation (constraint-fn-var 102)
 				(first
 					(e-literal (string "This is a string
 With multiple lines
 ")))
-				(rest
-					(e-dispatch-call (method "prepended") (constraint-fn-var 153)
-						(receiver
-							(e-dispatch-call (method "iter") (constraint-fn-var 102)
-								(receiver
-									(e-empty_list))
-								(args)))
-						(args
-							(e-tuple
-								(elems
-									(e-lookup-local
-										(p-assign (ident "#interp_0")))
-									(e-literal (string ""))))))))))
+				(parts
+					(e-lookup-local
+						(p-assign (ident "#interp_0")))
+					(e-literal (string ""))))))
 	(d-let
 		(p-assign (ident "value4"))
 		(e-block
@@ -310,24 +301,15 @@ With multiple lines
 				(p-assign (ident "#interp_1"))
 				(e-lookup-local
 					(p-assign (ident "value2"))))
-			(e-interpolation (constraint-fn-var 296)
+			(e-interpolation (constraint-fn-var 110)
 				(first
 					(e-literal (string "This is a string
 With multiple lines
 ")))
-				(rest
-					(e-dispatch-call (method "prepended") (constraint-fn-var 254)
-						(receiver
-							(e-dispatch-call (method "iter") (constraint-fn-var 203)
-								(receiver
-									(e-empty_list))
-								(args)))
-						(args
-							(e-tuple
-								(elems
-									(e-lookup-local
-										(p-assign (ident "#interp_1")))
-									(e-literal (string ""))))))))))
+				(parts
+					(e-lookup-local
+						(p-assign (ident "#interp_1")))
+					(e-literal (string ""))))))
 	(d-let
 		(p-assign (ident "value5"))
 		(e-record
@@ -348,13 +330,13 @@ With multiple lines
 							(e-string
 								(e-literal (string "multiline"))))))
 				(field (name "d")
-					(e-dispatch-call (method "minus") (constraint-fn-var 392)
+					(e-dispatch-call (method "minus") (constraint-fn-var 206)
 						(receiver
 							(e-num (value "0")))
 						(args
 							(e-string))))
 				(field (name "e")
-					(e-dispatch-call (method "not") (constraint-fn-var 404)
+					(e-dispatch-call (method "not") (constraint-fn-var 218)
 						(receiver
 							(e-string))
 						(args))))))

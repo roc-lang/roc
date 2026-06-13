@@ -113,6 +113,11 @@ builtin_types_copied: bool,
 ident_to_var_map: std.AutoHashMap(Ident.Idx, Var),
 /// Checker-local source-site mapping for method/equality rewrites.
 constraint_expr_by_fn_var: std.AutoHashMap(Var, CIR.Expr.Idx),
+/// Interpolation synthetic iterator expressions checked for custom dispatch.
+checked_interpolation_rests: std.AutoHashMap(Var, void),
+/// When checking a custom interpolation's synthetic iterator, defer resolving
+/// the dispatch constraints it creates until the surrounding dispatch pass.
+defer_expr_static_dispatch_checks: bool,
 /// Dispatcher/method pairs already reported by `reportConstraintError`, so a
 /// constraint failing in multiple passes (or reachable through several aliased
 /// type variables) is reported once.
@@ -460,6 +465,8 @@ fn initAssumePrepared(
         .builtin_types_copied = false,
         .ident_to_var_map = std.AutoHashMap(Ident.Idx, Var).init(gpa),
         .constraint_expr_by_fn_var = std.AutoHashMap(Var, CIR.Expr.Idx).init(gpa),
+        .checked_interpolation_rests = std.AutoHashMap(Var, void).init(gpa),
+        .defer_expr_static_dispatch_checks = false,
         .reported_constraint_errors = std.AutoHashMap(ReportedConstraintError, void).init(gpa),
         .expect_region_by_constraint_fn_var = std.AutoHashMap(Var, Region).init(gpa),
         .current_expect_region = null,
@@ -553,6 +560,7 @@ pub fn deinit(self: *Self) void {
     self.import_cache.deinit(self.gpa);
     self.ident_to_var_map.deinit();
     self.constraint_expr_by_fn_var.deinit();
+    self.checked_interpolation_rests.deinit();
     self.reported_constraint_errors.deinit();
     self.expect_region_by_constraint_fn_var.deinit();
     self.top_level_ptrns.deinit();
@@ -6720,21 +6728,31 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             const first_var = ModuleEnv.varFrom(interpolation.first);
             var did_err = self.types.resolveVar(first_var).desc.content == .err;
 
-            self.checking_call_arg = true;
-            does_fx = try self.checkExpr(interpolation.rest, env, Expected.none()) or does_fx;
+            const parts = self.cir.store.sliceExpr(interpolation.parts);
+            std.debug.assert(parts.len % 2 == 0);
+            var part_i: usize = 0;
+            while (part_i < parts.len) : (part_i += 2) {
+                self.checking_call_arg = true;
+                does_fx = try self.checkExpr(parts[part_i], env, Expected.none()) or does_fx;
+                did_err = did_err or (self.types.resolveVar(ModuleEnv.varFrom(parts[part_i])).desc.content == .err);
+
+                self.checking_call_arg = true;
+                does_fx = try self.checkExpr(parts[part_i + 1], env, Expected.none()) or does_fx;
+                did_err = did_err or (self.types.resolveVar(ModuleEnv.varFrom(parts[part_i + 1])).desc.content == .err);
+            }
+
             const rest_var = ModuleEnv.varFrom(interpolation.rest);
-            did_err = did_err or (self.types.resolveVar(rest_var).desc.content == .err);
+            try self.setVarRank(rest_var, env);
 
             if (did_err) {
                 try self.unifyWith(expr_var, .err, env);
             } else {
-                const from_interpolation_ident = try @constCast(self.cir).insertIdent(Ident.for_text("from_interpolation"));
                 const arg_vars = [_]Var{ first_var, rest_var };
                 const constraint_fn_var = try self.mkInterpolationConstraint(
                     expr_var,
                     &arg_vars,
                     expr_var,
-                    from_interpolation_ident,
+                    self.cir.idents.from_interpolation,
                     env,
                     interpolation.method_name_region,
                     expr_idx,
@@ -6742,6 +6760,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 try self.cir.store.replaceExprWithInterpolationConstraint(
                     expr_idx,
                     interpolation.first,
+                    interpolation.parts,
                     interpolation.rest,
                     interpolation.method_name_region,
                     constraint_fn_var,
@@ -7053,7 +7072,9 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
     }
 
     // Check any accumulated static dispatch constraints
-    try self.checkStaticDispatchConstraints(env, false);
+    if (!self.defer_expr_static_dispatch_checks) {
+        try self.checkStaticDispatchConstraints(env, false);
+    }
 
     // If this type of expr should be generalized, generalize it!
     if (should_generalize) {
@@ -10055,6 +10076,14 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                     )) {
                         continue;
                     }
+                    if (constraint.origin == .from_interpolation and self.nominalIsBuiltinStrType(nominal_type)) {
+                        if (try self.satisfyBuiltinStrInterpolation(deferred_constraint.var_, constraint, env)) {
+                            continue;
+                        }
+                    }
+                    if (constraint.origin == .from_interpolation) {
+                        try self.ensureCustomInterpolationRestChecked(constraint, env);
+                    }
                     const method_binding = if (constraint.fn_name.eql(self.cir.idents.is_eq) and
                         try self.nominalSupportsImplicitIsEq(nominal_type))
                     blk: {
@@ -10259,6 +10288,9 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         is_numeric_default_pass,
                     )) {
                         continue;
+                    }
+                    if (constraint.origin == .from_interpolation) {
+                        try self.ensureCustomInterpolationRestChecked(constraint, env);
                     }
 
                     if (constraint.fn_name.eql(self.cir.idents.is_eq)) {
@@ -10521,6 +10553,90 @@ fn reportEffectfulDispatchInExpect(
     }
 }
 
+fn interpolationExprForConstraint(self: *Self, constraint: StaticDispatchConstraint) ?CIR.Expr.Idx {
+    if (constraint.origin != .from_interpolation) return null;
+    const expr_idx = self.constraint_expr_by_fn_var.get(constraint.fn_var) orelse return null;
+    if (self.cir.store.getExpr(expr_idx) != .e_interpolation) return null;
+    return expr_idx;
+}
+
+fn recordInterpolationPartTypeMismatch(self: *Self, expected_var: Var, actual_var: Var) Allocator.Error!void {
+    const expected_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, expected_var);
+    const actual_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, actual_var);
+    _ = try self.problems.appendProblem(self.gpa, .{ .type_mismatch = .{
+        .types = .{
+            .expected_var = expected_var,
+            .expected_snapshot = expected_snapshot,
+            .actual_var = actual_var,
+            .actual_snapshot = actual_snapshot,
+        },
+        .context = .none,
+    } });
+}
+
+fn constrainInterpolationExprToStr(self: *Self, expr_idx: CIR.Expr.Idx, expected_str_var: Var, env: *Env) Allocator.Error!bool {
+    const expr_var = ModuleEnv.varFrom(expr_idx);
+    const resolved_expr = self.types.resolveVar(expr_var);
+    if (resolved_expr.desc.content == .err) return false;
+
+    const compatible = blk: {
+        var probe = try self.beginProbe();
+        defer probe.rollback();
+        break :blk try self.probeUnifyWithoutRecordingProblems(expected_str_var, expr_var);
+    };
+
+    if (!compatible) {
+        try self.recordInterpolationPartTypeMismatch(expected_str_var, expr_var);
+        return true;
+    }
+
+    const result = try self.unify(expected_str_var, expr_var, env);
+    std.debug.assert(result.isOk());
+    return false;
+}
+
+fn satisfyBuiltinStrInterpolation(
+    self: *Self,
+    dispatcher_var: Var,
+    constraint: StaticDispatchConstraint,
+    env: *Env,
+) Allocator.Error!bool {
+    const expr_idx = self.interpolationExprForConstraint(constraint) orelse return false;
+    const interpolation = self.cir.store.getExpr(expr_idx).e_interpolation;
+    const expr_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(expr_idx));
+    const expected_str_var = try self.freshStr(env, expr_region);
+
+    var did_err = false;
+    const parts = self.cir.store.sliceExpr(interpolation.parts);
+    std.debug.assert(parts.len % 2 == 0);
+    var part_i: usize = 0;
+    while (part_i < parts.len) : (part_i += 2) {
+        did_err = (try self.constrainInterpolationExprToStr(parts[part_i], expected_str_var, env)) or did_err;
+    }
+
+    if (did_err) {
+        try self.unifyWith(dispatcher_var, .err, env);
+        try self.markConstraintFunctionAsError(constraint, env);
+    }
+    return true;
+}
+
+fn ensureCustomInterpolationRestChecked(
+    self: *Self,
+    constraint: StaticDispatchConstraint,
+    env: *Env,
+) Allocator.Error!void {
+    const expr_idx = self.interpolationExprForConstraint(constraint) orelse return;
+    const entry = try self.checked_interpolation_rests.getOrPut(constraint.fn_var);
+    if (entry.found_existing) return;
+
+    const interpolation = self.cir.store.getExpr(expr_idx).e_interpolation;
+    const saved = self.defer_expr_static_dispatch_checks;
+    self.defer_expr_static_dispatch_checks = true;
+    defer self.defer_expr_static_dispatch_checks = saved;
+    _ = try self.checkExpr(interpolation.rest, env, Expected.none());
+}
+
 /// Check if a structural type supports is_eq.
 /// A type supports is_eq if:
 /// - It's not a function type
@@ -10709,6 +10825,17 @@ fn nominalSupportsImplicitIsEq(self: *Self, nominal_type: types_mod.NominalType)
 fn builtinNumKindFromNominalType(self: *const Self, nominal_type: types_mod.NominalType) ?CIR.NumKind {
     if (!nominal_type.originIsBuiltin()) return null;
     return self.builtinNumKindFromBuiltinSourceDecl(nominal_type.sourceDeclOptional());
+}
+
+fn nominalIsBuiltinStrType(self: *const Self, nominal_type: types_mod.NominalType) bool {
+    if (!nominal_type.originIsBuiltin()) return false;
+    if (nominal_type.sourceDeclOptional()) |source_decl| {
+        if (self.builtin_ctx.builtin_indices) |indices| {
+            if (source_decl == @intFromEnum(indices.str_type)) return true;
+        }
+    }
+    const ident = nominal_type.ident.ident_idx;
+    return ident.eql(self.cir.idents.str) or ident.eql(self.cir.idents.builtin_str);
 }
 
 fn nominalIsBuiltinNumberType(self: *Self, nominal_type: types_mod.NominalType) bool {
@@ -11280,9 +11407,12 @@ fn reportRecursiveStaticDispatchIfNeeded(
     env: *Env,
 ) Allocator.Error!bool {
     if (constraint.origin != .where_clause) return false;
+    if (!constraint.fn_name.eql(self.cir.idents.from_interpolation)) return false;
+
+    const items = env.deferred_static_dispatch_constraints.items.items;
+    if (deferred_len_before == items.len) return false;
 
     const dispatcher_resolved = self.types.resolveVar(dispatcher_var).var_;
-    const items = env.deferred_static_dispatch_constraints.items.items;
     var deferred_index = deferred_len_before;
     while (deferred_index < items.len) : (deferred_index += 1) {
         const deferred = items[deferred_index];

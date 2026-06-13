@@ -38,22 +38,13 @@ NO CHANGE
 			(e-lookup-external
 				(builtin))
 			(e-num (value "0"))))
-	(e-interpolation (constraint-fn-var 234)
+	(e-interpolation (constraint-fn-var 141)
 		(first
 			(e-literal (string "zero: ")))
-		(rest
-			(e-dispatch-call (method "prepended") (constraint-fn-var 192)
-				(receiver
-					(e-dispatch-call (method "iter") (constraint-fn-var 141)
-						(receiver
-							(e-empty_list))
-						(args)))
-				(args
-					(e-tuple
-						(elems
-							(e-lookup-local
-								(p-assign (ident "#interp_0")))
-							(e-literal (string "")))))))))
+		(parts
+			(e-lookup-local
+				(p-assign (ident "#interp_0")))
+			(e-literal (string "")))))
 ~~~
 # TYPES
 ~~~clojure

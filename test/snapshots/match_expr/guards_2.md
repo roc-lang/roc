@@ -122,22 +122,13 @@ describe = |value| match value {
 												(e-lookup-local
 													(p-assign (ident "first"))))
 											(args)))
-									(e-interpolation (constraint-fn-var 345)
+									(e-interpolation (constraint-fn-var 252)
 										(first
 											(e-literal (string "long list starting with ")))
-										(rest
-											(e-dispatch-call (method "prepended") (constraint-fn-var 303)
-												(receiver
-													(e-dispatch-call (method "iter") (constraint-fn-var 252)
-														(receiver
-															(e-empty_list))
-														(args)))
-												(args
-													(e-tuple
-														(elems
-															(e-lookup-local
-																(p-assign (ident "#interp_0")))
-															(e-literal (string ""))))))))))
+										(parts
+											(e-lookup-local
+												(p-assign (ident "#interp_0")))
+											(e-literal (string ""))))))
 							(guard
 								(e-dispatch-call (method "is_gt") (constraint-fn-var 141)
 									(receiver
@@ -159,27 +150,18 @@ describe = |value| match value {
 								(e-block
 									(s-let
 										(p-assign (ident "#interp_1"))
-										(e-dispatch-call (method "to_str") (constraint-fn-var 371)
+										(e-dispatch-call (method "to_str") (constraint-fn-var 278)
 											(receiver
 												(e-lookup-local
 													(p-assign (ident "x"))))
 											(args)))
-									(e-interpolation (constraint-fn-var 486)
+									(e-interpolation (constraint-fn-var 300)
 										(first
 											(e-literal (string "pair of equal values: ")))
-										(rest
-											(e-dispatch-call (method "prepended") (constraint-fn-var 444)
-												(receiver
-													(e-dispatch-call (method "iter") (constraint-fn-var 393)
-														(receiver
-															(e-empty_list))
-														(args)))
-												(args
-													(e-tuple
-														(elems
-															(e-lookup-local
-																(p-assign (ident "#interp_1")))
-															(e-literal (string ""))))))))))
+										(parts
+											(e-lookup-local
+												(p-assign (ident "#interp_1")))
+											(e-literal (string ""))))))
 							(guard
 								(e-method-eq (negated "false")
 									(lhs

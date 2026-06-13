@@ -1908,22 +1908,13 @@ main! = |_| { # Yeah Ie
 							(p-assign (ident "#interp_0"))
 							(e-lookup-local
 								(p-assign (ident "world"))))
-						(e-interpolation (constraint-fn-var 2057)
+						(e-interpolation (constraint-fn-var 1964)
 							(first
 								(e-literal (string "Hello, ")))
-							(rest
-								(e-dispatch-call (method "prepended") (constraint-fn-var 2015)
-									(receiver
-										(e-dispatch-call (method "iter") (constraint-fn-var 1964)
-											(receiver
-												(e-empty_list))
-											(args)))
-									(args
-										(e-tuple
-											(elems
-												(e-lookup-local
-													(p-assign (ident "#interp_0")))
-												(e-literal (string ""))))))))))
+							(parts
+								(e-lookup-local
+									(p-assign (ident "#interp_0")))
+								(e-literal (string ""))))))
 				(s-let
 					(p-assign (ident "list"))
 					(e-runtime-error (tag "expr_not_canonicalized")))

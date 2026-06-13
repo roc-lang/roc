@@ -110,22 +110,13 @@ describe = |value| match value {
 												(e-lookup-local
 													(p-assign (ident "x"))))
 											(args)))
-									(e-interpolation (constraint-fn-var 315)
+									(e-interpolation (constraint-fn-var 222)
 										(first
 											(e-literal (string "positive: ")))
-										(rest
-											(e-dispatch-call (method "prepended") (constraint-fn-var 273)
-												(receiver
-													(e-dispatch-call (method "iter") (constraint-fn-var 222)
-														(receiver
-															(e-empty_list))
-														(args)))
-												(args
-													(e-tuple
-														(elems
-															(e-lookup-local
-																(p-assign (ident "#interp_0")))
-															(e-literal (string ""))))))))))
+										(parts
+											(e-lookup-local
+												(p-assign (ident "#interp_0")))
+											(e-literal (string ""))))))
 							(guard
 								(e-dispatch-call (method "is_gt") (constraint-fn-var 109)
 									(receiver
@@ -141,29 +132,20 @@ describe = |value| match value {
 								(e-block
 									(s-let
 										(p-assign (ident "#interp_1"))
-										(e-dispatch-call (method "to_str") (constraint-fn-var 439)
+										(e-dispatch-call (method "to_str") (constraint-fn-var 346)
 											(receiver
 												(e-lookup-local
 													(p-assign (ident "x"))))
 											(args)))
-									(e-interpolation (constraint-fn-var 554)
+									(e-interpolation (constraint-fn-var 368)
 										(first
 											(e-literal (string "negative: ")))
-										(rest
-											(e-dispatch-call (method "prepended") (constraint-fn-var 512)
-												(receiver
-													(e-dispatch-call (method "iter") (constraint-fn-var 461)
-														(receiver
-															(e-empty_list))
-														(args)))
-												(args
-													(e-tuple
-														(elems
-															(e-lookup-local
-																(p-assign (ident "#interp_1")))
-															(e-literal (string ""))))))))))
+										(parts
+											(e-lookup-local
+												(p-assign (ident "#interp_1")))
+											(e-literal (string ""))))))
 							(guard
-								(e-dispatch-call (method "is_lt") (constraint-fn-var 350)
+								(e-dispatch-call (method "is_lt") (constraint-fn-var 257)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "x"))))

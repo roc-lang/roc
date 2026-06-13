@@ -2274,22 +2274,13 @@ expect {
 							(p-assign (ident "#interp_0"))
 							(e-lookup-local
 								(p-assign (ident "world"))))
-						(e-interpolation (constraint-fn-var 2634)
+						(e-interpolation (constraint-fn-var 2541)
 							(first
 								(e-literal (string "Hello, ")))
-							(rest
-								(e-dispatch-call (method "prepended") (constraint-fn-var 2592)
-									(receiver
-										(e-dispatch-call (method "iter") (constraint-fn-var 2541)
-											(receiver
-												(e-empty_list))
-											(args)))
-									(args
-										(e-tuple
-											(elems
-												(e-lookup-local
-													(p-assign (ident "#interp_0")))
-												(e-literal (string ""))))))))))
+							(parts
+								(e-lookup-local
+									(p-assign (ident "#interp_0")))
+								(e-literal (string ""))))))
 				(s-let
 					(p-assign (ident "list"))
 					(e-list
@@ -2319,33 +2310,19 @@ expect {
 										(p-assign (ident "#interp_2"))
 										(e-lookup-local
 											(p-assign (ident "number"))))
-									(e-interpolation (constraint-fn-var 2972)
+									(e-interpolation
 										(first
 											(e-literal (string "Adding ")))
-										(rest
-											(e-dispatch-call (method "prepended") (constraint-fn-var 2930)
-												(receiver
-													(e-dispatch-call (method "prepended") (constraint-fn-var 2885)
-														(receiver
-															(e-dispatch-call (method "iter") (constraint-fn-var 2834)
-																(receiver
-																	(e-empty_list))
-																(args)))
-														(args
-															(e-tuple
-																(elems
-																	(e-lookup-local
-																		(p-assign (ident "#interp_2")))
-																	(e-literal (string "")))))))
-												(args
-													(e-tuple
-														(elems
-															(e-lookup-local
-																(p-assign (ident "#interp_1")))
-															(e-literal (string " to ")))))))))))
+										(parts
+											(e-lookup-local
+												(p-assign (ident "#interp_1")))
+											(e-literal (string " to "))
+											(e-lookup-local
+												(p-assign (ident "#interp_2")))
+											(e-literal (string "")))))))
 						(s-reassign
 							(p-assign (ident "number"))
-							(e-dispatch-call (method "plus") (constraint-fn-var 2975)
+							(e-dispatch-call (method "plus") (constraint-fn-var 2745)
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "number"))))
@@ -2421,7 +2398,7 @@ expect {
 					(e-if
 						(if-branches
 							(if-branch
-								(e-dispatch-call (method "is_gt") (constraint-fn-var 3406)
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 3176)
 									(receiver
 										(e-match
 											(match
@@ -2446,7 +2423,7 @@ expect {
 														(value
 															(e-num (value "12"))))))))
 									(args
-										(e-dispatch-call (method "times") (constraint-fn-var 3401)
+										(e-dispatch-call (method "times") (constraint-fn-var 3171)
 											(receiver
 												(e-num (value "5")))
 											(args
@@ -2461,18 +2438,18 @@ expect {
 										(e-if
 											(if-branches
 												(if-branch
-													(e-dispatch-call (method "is_lt") (constraint-fn-var 3514)
+													(e-dispatch-call (method "is_lt") (constraint-fn-var 3284)
 														(receiver
-															(e-dispatch-call (method "plus") (constraint-fn-var 3479)
+															(e-dispatch-call (method "plus") (constraint-fn-var 3249)
 																(receiver
 																	(e-num (value "13")))
 																(args
 																	(e-num (value "2")))))
 														(args
 															(e-num (value "5"))))
-													(e-dispatch-call (method "is_gte") (constraint-fn-var 3614)
+													(e-dispatch-call (method "is_gte") (constraint-fn-var 3384)
 														(receiver
-															(e-dispatch-call (method "minus") (constraint-fn-var 3579)
+															(e-dispatch-call (method "minus") (constraint-fn-var 3349)
 																(receiver
 																	(e-num (value "10")))
 																(args
@@ -2487,11 +2464,11 @@ expect {
 											(builtin)
 											(e-tag (name "True")))))
 								(if-else
-									(e-dispatch-call (method "is_lte") (constraint-fn-var 3724)
+									(e-dispatch-call (method "is_lte") (constraint-fn-var 3494)
 										(receiver
 											(e-num (value "12")))
 										(args
-											(e-dispatch-call (method "div_by") (constraint-fn-var 3719)
+											(e-dispatch-call (method "div_by") (constraint-fn-var 3489)
 												(receiver
 													(e-num (value "3")))
 												(args
@@ -2506,12 +2483,12 @@ expect {
 										(e-match
 											(match
 												(cond
-													(e-dispatch-call (method "next_static_dispatch_method") (constraint-fn-var 3790)
+													(e-dispatch-call (method "next_static_dispatch_method") (constraint-fn-var 3560)
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dispatch-call (method "static_dispatch_method") (constraint-fn-var 3757)
+																		(e-dispatch-call (method "static_dispatch_method") (constraint-fn-var 3527)
 																			(receiver
 																				(e-match
 																					(match
@@ -2646,22 +2623,13 @@ expect {
 								(e-runtime-error (tag "qualified_ident_does_not_exist"))
 								(e-lookup-local
 									(p-assign (ident "number")))))
-						(e-interpolation (constraint-fn-var 3988)
+						(e-interpolation
 							(first
 								(e-literal (string "How about ")))
-							(rest
-								(e-dispatch-call (method "prepended") (constraint-fn-var 3946)
-									(receiver
-										(e-dispatch-call (method "iter") (constraint-fn-var 3895)
-											(receiver
-												(e-empty_list))
-											(args)))
-									(args
-										(e-tuple
-											(elems
-												(e-lookup-local
-													(p-assign (ident "#interp_3")))
-												(e-literal (string " as a string?"))))))))))))
+							(parts
+								(e-lookup-local
+									(p-assign (ident "#interp_3")))
+								(e-literal (string " as a string?"))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-apply (name "List") (builtin)

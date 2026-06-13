@@ -548,6 +548,7 @@ pub const StaticDispatchPlanTable = struct {
             const expr_idx: CIR.Expr.Idx = @enumFromInt(node_idx);
             const checked_expr = checked_bodies.exprIdForSource(expr_idx) orelse continue;
             const expr = module.expr(expr_idx);
+            const checked_expr_data = checked_bodies.exprs[@intFromEnum(checked_expr)].data;
             const idents = module.identStoreConst();
             const plan_id: StaticDispatchPlanId = @enumFromInt(@as(u32, @intCast(plans.items.len)));
             switch (expr.data) {
@@ -570,6 +571,7 @@ pub const StaticDispatchPlanTable = struct {
                     });
                 },
                 .e_interpolation => |interpolation| {
+                    if (checked_expr_data != .interpolation) continue;
                     const args = try staticDispatchOperandsForSlice(allocator, checked_bodies, &.{ interpolation.first, interpolation.rest });
                     const from_interpolation = try names.internMethodName("from_interpolation");
                     const constraint_fn_var = interpolation.constraint_fn_var orelse unreachable;
@@ -844,7 +846,12 @@ const StaticDispatchConstraintIndex = struct {
                 else => null,
             };
             if (constraint_fn_var) |fn_var| {
-                if (checked_bodies.exprIdForSource(expr_idx) == null) continue;
+                const checked_expr = checked_bodies.exprIdForSource(expr_idx) orelse continue;
+                if (module.nodeTag(@enumFromInt(node_idx)) == .expr_interpolation and
+                    checked_bodies.exprs[@intFromEnum(checked_expr)].data != .interpolation)
+                {
+                    continue;
+                }
                 try live_fn_vars.put(allocator, fn_var, {});
             }
         }

@@ -389,8 +389,8 @@ fn emitExprFrame(
         },
         .e_interpolation => |interpolation| {
             try frames.append(allocator, .{ .write = ")" });
-            try frames.append(allocator, .{ .expr = interpolation.rest });
-            try frames.append(allocator, .{ .write = ", " });
+            try pushExprList(frames, allocator, self.module_env.store.sliceExpr(interpolation.parts), "]", ", ");
+            try frames.append(allocator, .{ .write = ", [" });
             try frames.append(allocator, .{ .expr = interpolation.first });
             try frames.append(allocator, .{ .write = "<interpolation>(" });
         },

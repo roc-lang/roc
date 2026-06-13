@@ -213,22 +213,13 @@ main = {
 						(p-assign (ident "#interp_0"))
 						(e-lookup-local
 							(p-assign (ident "domain"))))
-					(e-interpolation (constraint-fn-var 442)
+					(e-interpolation (constraint-fn-var 349)
 						(first
 							(e-literal (string "https://")))
-						(rest
-							(e-dispatch-call (method "prepended") (constraint-fn-var 400)
-								(receiver
-									(e-dispatch-call (method "iter") (constraint-fn-var 349)
-										(receiver
-											(e-empty_list))
-										(args)))
-								(args
-									(e-tuple
-										(elems
-											(e-lookup-local
-												(p-assign (ident "#interp_0")))
-											(e-literal (string ".com"))))))))))
+						(parts
+							(e-lookup-local
+								(p-assign (ident "#interp_0")))
+							(e-literal (string ".com"))))))
 			(e-lookup-local
 				(p-assign (ident "url")))))
 	(s-nominal-decl

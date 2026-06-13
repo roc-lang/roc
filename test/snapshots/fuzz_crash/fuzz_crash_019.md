@@ -1106,11 +1106,11 @@ This number is being used where a non-number type is needed:
 	         ^^^
 
 The type was determined to be non-numeric here:
-**fuzz_crash_019.md:93:14:93:15:**
+**fuzz_crash_019.md:93:22:93:24:**
 ```roc
 	line!("Ag ${n} to ${er}")
 ```
-	            ^
+	                    ^^
 
 Other code expects this to have the type:
 
@@ -1934,22 +1934,13 @@ expect {
 						(s-let
 							(p-assign (ident "#interp_0"))
 							(e-runtime-error (tag "ident_not_in_scope")))
-						(e-interpolation (constraint-fn-var 1571)
+						(e-interpolation
 							(first
 								(e-literal (string "H, ")))
-							(rest
-								(e-dispatch-call (method "prepended") (constraint-fn-var 1529)
-									(receiver
-										(e-dispatch-call (method "iter") (constraint-fn-var 1478)
-											(receiver
-												(e-empty_list))
-											(args)))
-									(args
-										(e-tuple
-											(elems
-												(e-lookup-local
-													(p-assign (ident "#interp_0")))
-												(e-literal (string ""))))))))))
+							(parts
+								(e-lookup-local
+									(p-assign (ident "#interp_0")))
+								(e-literal (string ""))))))
 				(s-let
 					(p-assign (ident "t"))
 					(e-list
@@ -1977,31 +1968,17 @@ expect {
 										(p-assign (ident "#interp_2"))
 										(e-lookup-local
 											(p-assign (ident "er"))))
-									(e-interpolation (constraint-fn-var 1864)
+									(e-interpolation (constraint-fn-var 1634)
 										(first
 											(e-literal (string "Ag ")))
-										(rest
-											(e-dispatch-call (method "prepended") (constraint-fn-var 1822)
-												(receiver
-													(e-dispatch-call (method "prepended") (constraint-fn-var 1777)
-														(receiver
-															(e-dispatch-call (method "iter") (constraint-fn-var 1726)
-																(receiver
-																	(e-empty_list))
-																(args)))
-														(args
-															(e-tuple
-																(elems
-																	(e-lookup-local
-																		(p-assign (ident "#interp_2")))
-																	(e-literal (string "")))))))
-												(args
-													(e-tuple
-														(elems
-															(e-lookup-local
-																(p-assign (ident "#interp_1")))
-															(e-literal (string " to ")))))))))))
-						(e-dispatch-call (method "plus") (constraint-fn-var 1867)
+										(parts
+											(e-lookup-local
+												(p-assign (ident "#interp_1")))
+											(e-literal (string " to "))
+											(e-lookup-local
+												(p-assign (ident "#interp_2")))
+											(e-literal (string "")))))))
+						(e-dispatch-call (method "plus") (constraint-fn-var 1637)
 							(receiver
 								(e-runtime-error (tag "ident_not_in_scope")))
 							(args
@@ -2065,7 +2042,7 @@ expect {
 					(e-if
 						(if-branches
 							(if-branch
-								(e-dispatch-call (method "is_gt") (constraint-fn-var 2271)
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 2041)
 									(receiver
 										(e-match
 											(match
@@ -2099,18 +2076,18 @@ expect {
 										(e-if
 											(if-branches
 												(if-branch
-													(e-dispatch-call (method "is_lt") (constraint-fn-var 2379)
+													(e-dispatch-call (method "is_lt") (constraint-fn-var 2149)
 														(receiver
-															(e-dispatch-call (method "plus") (constraint-fn-var 2344)
+															(e-dispatch-call (method "plus") (constraint-fn-var 2114)
 																(receiver
 																	(e-num (value "13")))
 																(args
 																	(e-num (value "2")))))
 														(args
 															(e-num (value "5"))))
-													(e-dispatch-call (method "is_gte") (constraint-fn-var 2479)
+													(e-dispatch-call (method "is_gte") (constraint-fn-var 2249)
 														(receiver
-															(e-dispatch-call (method "minus") (constraint-fn-var 2444)
+															(e-dispatch-call (method "minus") (constraint-fn-var 2214)
 																(receiver
 																	(e-num (value "10")))
 																(args
@@ -2125,7 +2102,7 @@ expect {
 											(builtin)
 											(e-tag (name "True")))))
 								(if-else
-									(e-dispatch-call (method "is_lte") (constraint-fn-var 2557)
+									(e-dispatch-call (method "is_lte") (constraint-fn-var 2327)
 										(receiver
 											(e-num (value "12")))
 										(args
@@ -2139,12 +2116,12 @@ expect {
 										(e-match
 											(match
 												(cond
-													(e-dispatch-call (method "ned") (constraint-fn-var 2624)
+													(e-dispatch-call (method "ned") (constraint-fn-var 2394)
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dispatch-call (method "od") (constraint-fn-var 2591)
+																		(e-dispatch-call (method "od") (constraint-fn-var 2361)
 																			(receiver
 																				(e-match
 																					(match
@@ -2248,22 +2225,13 @@ expect {
 								(e-call
 									(e-runtime-error (tag "ident_not_in_scope"))
 									(e-runtime-error (tag "ident_not_in_scope"))))
-							(e-interpolation (constraint-fn-var 2791)
+							(e-interpolation
 								(first
 									(e-literal (string "Ho")))
-								(rest
-									(e-dispatch-call (method "prepended") (constraint-fn-var 2749)
-										(receiver
-											(e-dispatch-call (method "iter") (constraint-fn-var 2698)
-												(receiver
-													(e-empty_list))
-												(args)))
-										(args
-											(e-tuple
-												(elems
-													(e-lookup-local
-														(p-assign (ident "#interp_3")))
-													(e-literal (string " "))))))))))))))
+								(parts
+									(e-lookup-local
+										(p-assign (ident "#interp_3")))
+									(e-literal (string " "))))))))))
 	(d-let
 		(p-assign (ident "y"))
 		(e-anno-only)

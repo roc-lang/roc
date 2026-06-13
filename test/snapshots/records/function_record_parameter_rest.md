@@ -59,30 +59,16 @@ NO CHANGE
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "rest"))))))
-		(e-interpolation (constraint-fn-var 179)
+		(e-interpolation (constraint-fn-var 44)
 			(first
 				(e-literal (string "Hello ")))
-			(rest
-				(e-dispatch-call (method "prepended") (constraint-fn-var 137)
-					(receiver
-						(e-dispatch-call (method "prepended") (constraint-fn-var 92)
-							(receiver
-								(e-dispatch-call (method "iter") (constraint-fn-var 41)
-									(receiver
-										(e-empty_list))
-									(args)))
-							(args
-								(e-tuple
-									(elems
-										(e-lookup-local
-											(p-assign (ident "#interp_1")))
-										(e-literal (string "")))))))
-					(args
-						(e-tuple
-							(elems
-								(e-lookup-local
-									(p-assign (ident "#interp_0")))
-								(e-literal (string " "))))))))))
+			(parts
+				(e-lookup-local
+					(p-assign (ident "#interp_0")))
+				(e-literal (string " "))
+				(e-lookup-local
+					(p-assign (ident "#interp_1")))
+				(e-literal (string ""))))))
 ~~~
 # TYPES
 ~~~clojure

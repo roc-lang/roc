@@ -33,24 +33,15 @@ NO CHANGE
 	(s-let
 		(p-assign (ident "#interp_0"))
 		(e-runtime-error (tag "ident_not_in_scope")))
-	(e-interpolation (constraint-fn-var 118)
+	(e-interpolation
 		(first
 			(e-literal (string "Hello ")))
-		(rest
-			(e-dispatch-call (method "prepended") (constraint-fn-var 76)
-				(receiver
-					(e-dispatch-call (method "iter") (constraint-fn-var 25)
-						(receiver
-							(e-empty_list))
-						(args)))
-				(args
-					(e-tuple
-						(elems
-							(e-lookup-local
-								(p-assign (ident "#interp_0")))
-							(e-literal (string "!")))))))))
+		(parts
+			(e-lookup-local
+				(p-assign (ident "#interp_0")))
+			(e-literal (string "!")))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Str"))
+(expr (type "Error"))
 ~~~

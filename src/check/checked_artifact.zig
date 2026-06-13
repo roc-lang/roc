@@ -80,6 +80,15 @@ pub const ModuleEnvStorage = union(enum) {
     }
 };
 
+fn moduleExprIsBuiltinStr(module: TypedCIR.Module, expr_idx: CIR.Expr.Idx) bool {
+    const resolved = module.typeStoreConst().resolveVar(module.exprType(expr_idx));
+    const nominal = resolved.desc.content.unwrapNominalType() orelse return false;
+    if (!nominal.originIsBuiltin()) return false;
+    const ident = nominal.ident.ident_idx;
+    const common = module.commonIdents();
+    return ident.eql(common.str) or ident.eql(common.builtin_str);
+}
+
 /// Public `CheckedModuleArtifactKey` declaration.
 pub const CheckedModuleArtifactKey = struct {
     source_hash: [32]u8 = [_]u8{0} ** 32,
@@ -5403,7 +5412,10 @@ const CheckedSourceNodes = struct {
             },
             .e_interpolation => |interpolation| {
                 try self.markExpr(interpolation.first, work);
-                try self.markExpr(interpolation.rest, work);
+                try self.markExprSpan(module, interpolation.parts, work);
+                if (!moduleExprIsBuiltinStr(module, expr_idx)) {
+                    try self.markExpr(interpolation.rest, work);
+                }
             },
             .e_structural_eq => |eq| {
                 try self.markExpr(eq.lhs, work);
@@ -6613,7 +6625,7 @@ const CheckedBodyPayloadCopier = struct {
                 .{},
             ),
             .e_dispatch_call => .{ .dispatch_call = null },
-            .e_interpolation => .{ .interpolation = null },
+            .e_interpolation => |interpolation| try self.copyInterpolationExpr(expr_idx, interpolation),
             .e_structural_eq => |eq| .{ .structural_eq = .{
                 .lhs = self.checkedExpr(eq.lhs),
                 .rhs = self.checkedExpr(eq.rhs),
@@ -6662,6 +6674,27 @@ const CheckedBodyPayloadCopier = struct {
                 .args = try self.copyExprSpan(run.args),
             } },
         };
+    }
+
+    fn copyInterpolationExpr(self: *@This(), expr_idx: CIR.Expr.Idx, interpolation: anytype) Allocator.Error!CheckedExprData {
+        if (self.checkedBuiltinForExpr(expr_idx) == .str) {
+            return .{ .str = try self.copyStrInterpolationSegments(interpolation) };
+        }
+        return .{ .interpolation = null };
+    }
+
+    fn copyStrInterpolationSegments(self: *@This(), interpolation: anytype) Allocator.Error![]const CheckedExprId {
+        var segments = std.ArrayList(CheckedExprId).empty;
+        errdefer segments.deinit(self.allocator);
+
+        try segments.append(self.allocator, self.checkedExpr(interpolation.first));
+        const parts = self.module.sliceExpr(interpolation.parts);
+        std.debug.assert(parts.len % 2 == 0);
+        for (parts) |part_idx| {
+            try segments.append(self.allocator, self.checkedExpr(part_idx));
+        }
+
+        return try segments.toOwnedSlice(self.allocator);
     }
 
     fn copyStrExpr(self: *@This(), expr_idx: CIR.Expr.Idx, span: CIR.Expr.Span) Allocator.Error!CheckedExprData {

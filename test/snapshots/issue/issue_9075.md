@@ -161,21 +161,12 @@ main = "${y}"
 			(s-let
 				(p-assign (ident "#interp_0"))
 				(e-runtime-error (tag "erroneous_value_use")))
-			(e-interpolation (constraint-fn-var 220)
+			(e-interpolation (constraint-fn-var 127)
 				(first
 					(e-literal (string "")))
-				(rest
-					(e-dispatch-call (method "prepended") (constraint-fn-var 178)
-						(receiver
-							(e-dispatch-call (method "iter") (constraint-fn-var 127)
-								(receiver
-									(e-empty_list))
-								(args)))
-						(args
-							(e-tuple
-								(elems
-									(e-runtime-error (tag "erroneous_value_use"))
-									(e-literal (string "")))))))))))
+				(parts
+					(e-runtime-error (tag "erroneous_value_use"))
+					(e-literal (string "")))))))
 ~~~
 # TYPES
 ~~~clojure

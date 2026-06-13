@@ -67,30 +67,16 @@ NO CHANGE
 			(p-assign (ident "#interp_1"))
 			(e-lookup-local
 				(p-assign (ident "world"))))
-		(e-interpolation (constraint-fn-var 204)
+		(e-interpolation (constraint-fn-var 69)
 			(first
 				(e-literal (string "")))
-			(rest
-				(e-dispatch-call (method "prepended") (constraint-fn-var 162)
-					(receiver
-						(e-dispatch-call (method "prepended") (constraint-fn-var 117)
-							(receiver
-								(e-dispatch-call (method "iter") (constraint-fn-var 66)
-									(receiver
-										(e-empty_list))
-									(args)))
-							(args
-								(e-tuple
-									(elems
-										(e-lookup-local
-											(p-assign (ident "#interp_1")))
-										(e-literal (string "")))))))
-					(args
-						(e-tuple
-							(elems
-								(e-lookup-local
-									(p-assign (ident "#interp_0")))
-								(e-literal (string " "))))))))))
+			(parts
+				(e-lookup-local
+					(p-assign (ident "#interp_0")))
+				(e-literal (string " "))
+				(e-lookup-local
+					(p-assign (ident "#interp_1")))
+				(e-literal (string ""))))))
 ~~~
 # TYPES
 ~~~clojure

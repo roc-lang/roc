@@ -98,30 +98,16 @@ match ... {
 									(e-lookup-local
 										(p-assign (ident "age"))))
 								(args)))
-						(e-interpolation (constraint-fn-var 214)
+						(e-interpolation (constraint-fn-var 79)
 							(first
 								(e-literal (string "")))
-							(rest
-								(e-dispatch-call (method "prepended") (constraint-fn-var 172)
-									(receiver
-										(e-dispatch-call (method "prepended") (constraint-fn-var 127)
-											(receiver
-												(e-dispatch-call (method "iter") (constraint-fn-var 76)
-													(receiver
-														(e-empty_list))
-													(args)))
-											(args
-												(e-tuple
-													(elems
-														(e-lookup-local
-															(p-assign (ident "#interp_1")))
-														(e-literal (string " years old")))))))
-									(args
-										(e-tuple
-											(elems
-												(e-lookup-local
-													(p-assign (ident "#interp_0")))
-												(e-literal (string " is ")))))))))))
+							(parts
+								(e-lookup-local
+									(p-assign (ident "#interp_0")))
+								(e-literal (string " is "))
+								(e-lookup-local
+									(p-assign (ident "#interp_1")))
+								(e-literal (string " years old")))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -147,30 +133,16 @@ match ... {
 							(p-assign (ident "#interp_3"))
 							(e-lookup-local
 								(p-assign (ident "name"))))
-						(e-interpolation (constraint-fn-var 360)
+						(e-interpolation (constraint-fn-var 90)
 							(first
 								(e-literal (string "")))
-							(rest
-								(e-dispatch-call (method "prepended") (constraint-fn-var 318)
-									(receiver
-										(e-dispatch-call (method "prepended") (constraint-fn-var 273)
-											(receiver
-												(e-dispatch-call (method "iter") (constraint-fn-var 222)
-													(receiver
-														(e-empty_list))
-													(args)))
-											(args
-												(e-tuple
-													(elems
-														(e-lookup-local
-															(p-assign (ident "#interp_3")))
-														(e-literal (string "")))))))
-									(args
-										(e-tuple
-											(elems
-												(e-lookup-local
-													(p-assign (ident "#interp_2")))
-												(e-literal (string " is the city of ")))))))))))
+							(parts
+								(e-lookup-local
+									(p-assign (ident "#interp_2")))
+								(e-literal (string " is the city of "))
+								(e-lookup-local
+									(p-assign (ident "#interp_3")))
+								(e-literal (string "")))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)

@@ -190,6 +190,7 @@ pub const CommonIdents = extern struct {
     err: Ident.Idx,
     from_numeral: Ident.Idx,
     from_quote: Ident.Idx,
+    from_interpolation: Ident.Idx,
     true_tag: Ident.Idx,
     false_tag: Ident.Idx,
     // from_utf8 result fields
@@ -289,6 +290,7 @@ pub const CommonIdents = extern struct {
             .err = try common.insertIdent(gpa, Ident.for_text("Err")),
             .from_numeral = try common.insertIdent(gpa, Ident.for_text("from_numeral")),
             .from_quote = try common.insertIdent(gpa, Ident.for_text("from_quote")),
+            .from_interpolation = try common.insertIdent(gpa, Ident.for_text("from_interpolation")),
             .true_tag = try common.insertIdent(gpa, Ident.for_text("True")),
             .false_tag = try common.insertIdent(gpa, Ident.for_text("False")),
             // from_utf8 result fields
@@ -391,6 +393,7 @@ pub const CommonIdents = extern struct {
             .err = common.findIdent("Err") orelse unreachable,
             .from_numeral = common.findIdent("from_numeral") orelse unreachable,
             .from_quote = common.findIdent("from_quote") orelse unreachable,
+            .from_interpolation = common.findIdent("from_interpolation") orelse unreachable,
             .true_tag = common.findIdent("True") orelse unreachable,
             .false_tag = common.findIdent("False") orelse unreachable,
             // from_utf8 result fields

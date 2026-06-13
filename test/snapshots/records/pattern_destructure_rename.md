@@ -78,30 +78,16 @@ match person {
 									(e-lookup-local
 										(p-assign (ident "userAge"))))
 								(args)))
-						(e-interpolation (constraint-fn-var 182)
+						(e-interpolation (constraint-fn-var 47)
 							(first
 								(e-literal (string "User ")))
-							(rest
-								(e-dispatch-call (method "prepended") (constraint-fn-var 140)
-									(receiver
-										(e-dispatch-call (method "prepended") (constraint-fn-var 95)
-											(receiver
-												(e-dispatch-call (method "iter") (constraint-fn-var 44)
-													(receiver
-														(e-empty_list))
-													(args)))
-											(args
-												(e-tuple
-													(elems
-														(e-lookup-local
-															(p-assign (ident "#interp_1")))
-														(e-literal (string " years old")))))))
-									(args
-										(e-tuple
-											(elems
-												(e-lookup-local
-													(p-assign (ident "#interp_0")))
-												(e-literal (string " is "))))))))))))))
+							(parts
+								(e-lookup-local
+									(p-assign (ident "#interp_0")))
+								(e-literal (string " is "))
+								(e-lookup-local
+									(p-assign (ident "#interp_1")))
+								(e-literal (string " years old"))))))))))
 ~~~
 # TYPES
 ~~~clojure
