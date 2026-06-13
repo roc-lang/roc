@@ -504,6 +504,148 @@ test "unmatchable - Err pattern first on empty error type is unreachable" {
     try test_env.assertFirstTypeError("UNMATCHABLE PATTERN");
 }
 
+test "exhaustive - ignored error type means only Ok needed" {
+    const source =
+        \\x : Try(I64, _err)
+        \\x = Ok(42)
+        \\
+        \\result : I64
+        \\result = match x {
+        \\    Ok(n) => n
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertLastDefType("I64");
+}
+
+test "exhaustive - inferred wildcard error type means only Ok needed" {
+    const source =
+        \\x : Try(I64, _)
+        \\x = Ok(42)
+        \\
+        \\result : I64
+        \\result = match x {
+        \\    Ok(n) => n
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertLastDefType("I64");
+}
+
+test "exhaustive - direct Try.Ok match only needs Ok" {
+    const source =
+        \\result : Str
+        \\result = match Try.Ok("blah") {
+        \\    Ok(foo) => foo
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertLastDefType("Str");
+}
+
+test "unmatchable - Err pattern first on ignored error type is unreachable" {
+    const source =
+        \\x : Try(I64, _err)
+        \\x = Ok(42)
+        \\
+        \\result = match x {
+        \\    Err(_) => 0
+        \\    Ok(n) => n
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("UNMATCHABLE PATTERN");
+}
+
+test "exhaustive - structural tag with ignored payload is not required" {
+    const source =
+        \\x : [Something, Other(_payload)]
+        \\x = Something
+        \\
+        \\result : I64
+        \\result = match x {
+        \\    Something => 1
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertLastDefType("I64");
+}
+
+test "non-exhaustive - structural tag with ordinary payload is required" {
+    const source =
+        \\x : [Something, Other(payload)]
+        \\x = Something
+        \\
+        \\result = match x {
+        \\    Something => 1
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeError("NON-EXHAUSTIVE MATCH");
+}
+
+test "destructure - Ok on ignored error type is exhaustive" {
+    const source =
+        \\result : Str
+        \\result = {
+        \\    x : Try(Str, _err)
+        \\    x = Ok("blah")
+        \\
+        \\    Ok(foo) = x
+        \\
+        \\    foo
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertLastDefType("Str");
+}
+
+test "destructure - direct Try.Ok is exhaustive" {
+    const source =
+        \\result : Str
+        \\result = {
+        \\    Ok(foo) = Try.Ok("blah")
+        \\
+        \\    foo
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertLastDefType("Str");
+}
+
+test "non-exhaustive destructure - Ok on concrete error type can miss Err" {
+    const source =
+        \\result = {
+        \\    x : Try(Str, Str)
+        \\    x = if True { Ok("blah") } else { Err("bad") }
+        \\
+        \\    Ok(foo) = x
+        \\
+        \\    foo
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("NON-EXHAUSTIVE DESTRUCTURE");
+}
+
 // Additional Inhabitedness Edge Cases
 // These tests verify correct handling of various uninhabited type scenarios.
 

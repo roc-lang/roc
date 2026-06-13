@@ -361,6 +361,10 @@ pub const Store = struct {
                 try self.startInternKey(.box);
                 try self.appendInternKeyIdx(layout.getIdx());
             },
+            .ptr => {
+                try self.startInternKey(.ptr);
+                try self.appendInternKeyIdx(layout.getIdx());
+            },
             .box_of_zst => try self.startInternKey(.box_of_zst),
             .erased_callable => try self.startInternKey(.erased_callable),
             .list => {
@@ -496,6 +500,15 @@ pub const Store = struct {
     /// passing the .box_of_zst scalar.
     pub fn insertBox(self: *Self, elem_idx: Idx) std.mem.Allocator.Error!Idx {
         const layout = Layout.box(elem_idx);
+        return try self.insertLayout(layout);
+    }
+
+    /// Insert a compiler-internal pointer layout with the given element layout.
+    /// `ptr` layouts are never refcounted; they are introduced by the TRMC pass
+    /// for hole/head locals and must never appear as struct fields, tag payloads,
+    /// or list elements.
+    pub fn insertPtr(self: *Self, elem_idx: Idx) std.mem.Allocator.Error!Idx {
+        const layout = Layout.ptr(elem_idx);
         return try self.insertLayout(layout);
     }
 
@@ -1858,7 +1871,7 @@ pub const Store = struct {
                     .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(target_usize.size())),
                 },
             },
-            .box, .box_of_zst, .erased_callable => .{
+            .box, .box_of_zst, .erased_callable, .ptr => .{
                 .size = @intCast(target_usize.size()), // a Box is just a pointer to refcounted memory
                 .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(target_usize.size())),
             },
@@ -1917,6 +1930,9 @@ pub const Store = struct {
         return switch (l.tag) {
             .scalar => l.getScalar().tag == .str,
             .list, .list_of_zst, .box, .box_of_zst, .erased_callable => true,
+            // Compiler-internal pointers are never refcounted (TRMC holes); this is
+            // what keeps ARC from tracking hole/head locals.
+            .ptr => false,
             .zst => false,
             .struct_ => self.getStructData(l.getStruct().idx).contains_refcounted,
             .tag_union => self.getTagUnionData(l.getTagUnion().idx).contains_refcounted,
