@@ -14,6 +14,7 @@ allocator: std.mem.Allocator,
 reader: *FuzzReader,
 output: std.ArrayList(u8),
 support_output: std.ArrayList(u8),
+tools_output: std.ArrayList(u8),
 name_counter: u32,
 
 const BuiltinAdapterKind = enum {
@@ -1034,6 +1035,7 @@ pub fn init(allocator: std.mem.Allocator, reader: *FuzzReader) Self {
         .reader = reader,
         .output = .empty,
         .support_output = .empty,
+        .tools_output = .empty,
         .name_counter = 0,
     };
 }
@@ -1041,6 +1043,7 @@ pub fn init(allocator: std.mem.Allocator, reader: *FuzzReader) Self {
 pub fn deinit(self: *Self) void {
     self.output.deinit(self.allocator);
     self.support_output.deinit(self.allocator);
+    self.tools_output.deinit(self.allocator);
 }
 
 pub fn getOutput(self: *const Self) []const u8 {
@@ -1049,6 +1052,10 @@ pub fn getOutput(self: *const Self) []const u8 {
 
 pub fn getSupportOutput(self: *const Self) []const u8 {
     return self.support_output.items;
+}
+
+pub fn getToolsOutput(self: *const Self) []const u8 {
+    return self.tools_output.items;
 }
 
 fn generateSupportModule(self: *Self) std.mem.Allocator.Error!void {
@@ -1099,10 +1106,41 @@ fn generateSupportModule(self: *Self) std.mem.Allocator.Error!void {
     );
 }
 
+fn generateToolsModule(self: *Self) std.mem.Allocator.Error!void {
+    try self.writeTools(
+        \\import Support exposing [Support]
+        \\
+        \\
+        \\Tools := [Tool({ name : Str, count : U64 })].{
+        \\    make : U64 -> Tools
+        \\    make = |count| Tool({ name: "tool", count: count })
+        \\    from_support : Support -> Tools
+        \\    from_support = |item| Tool({ name: Support.label(item), count: Support.count(item) })
+        \\    count : Tools -> U64
+        \\    count = |item| match item {
+        \\        Tool(record) => record.count
+        \\    }
+        \\    label : Tools -> Str
+        \\    label = |item| match item {
+        \\        Tool(record) => record.name
+        \\    }
+        \\    map_count : Tools, (U64 -> U64) -> Tools
+        \\    map_count = |item, transform| match item {
+        \\        Tool(record) => Tool({ name: record.name, count: transform(record.count) })
+        \\    }
+        \\    is_eq : Tools, Tools -> Bool
+        \\    is_eq = |left, right| Tools.count(left) == Tools.count(right) and Tools.label(left) == Tools.label(right)
+        \\}
+        \\
+    );
+}
+
 pub fn generateModule(self: *Self) std.mem.Allocator.Error!void {
     try self.generateSupportModule();
+    try self.generateToolsModule();
     try self.write(
         \\import Support
+        \\import Tools exposing [Tools]
         \\
         \\
         \\AliasBool : Bool
@@ -1360,6 +1398,11 @@ pub fn generateModule(self: *Self) std.mem.Allocator.Error!void {
     const row_record_count = self.reader.intRangeAtMost(u8, 1, 3);
     for (0..row_record_count) |_| {
         try self.generateRowRecordFunction();
+    }
+
+    const tools_count = self.reader.intRangeAtMost(u8, 1, 4);
+    for (0..tools_count) |_| {
+        try self.generateToolsFunction();
     }
 
     const builtin_count = self.reader.intRangeAtMost(u8, 12, 36);
@@ -1969,6 +2012,53 @@ fn generateRowRecordPatternFunction(self: *Self, name_id: u32) std.mem.Allocator
     try self.write("|_| match ");
     try self.writeWideRecordLiteral();
     try self.write(" {\n        { count, .. } => count\n    }\n");
+}
+
+fn generateToolsFunction(self: *Self) std.mem.Allocator.Error!void {
+    const name_id = self.name_counter;
+    self.name_counter += 1;
+
+    switch (self.reader.intRangeAtMost(u8, 0, 3)) {
+        0 => try self.generateToolsCountFunction(name_id),
+        1 => try self.generateToolsMapFunction(name_id),
+        2 => try self.generateToolsLabelFunction(name_id),
+        3 => try self.generateToolsEqFunction(name_id),
+        else => unreachable,
+    }
+}
+
+fn generateToolsCountFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFunctionSignature(name_id, "Main", .u64);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| ");
+    try self.writeAssociatedOrMethodCall("Tools", .{ .raw = "Tools.from_support(Support.make(1))" }, "count", &.{});
+    try self.write("\n");
+}
+
+fn generateToolsMapFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeRawFunctionSignature(name_id, "Main", "Tools");
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| ");
+    try self.writeAssociatedOrMethodCall("Tools", .{ .raw = "Tools.from_support(Support.make(2))" }, "map_count", &.{.{ .raw = "|count| count + 1" }});
+    try self.write("\n");
+}
+
+fn generateToolsLabelFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFunctionSignature(name_id, "Main", .str);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| Tools.label(");
+    try self.writeToolsLiteral();
+    try self.write(")\n");
+}
+
+fn generateToolsEqFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFunctionSignature(name_id, "Main", .bool);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| Tools.is_eq(");
+    try self.writeToolsLiteral();
+    try self.write(", ");
+    try self.writeToolsLiteral();
+    try self.write(")\n");
 }
 
 fn generateBuiltinAssociatedFunction(self: *Self) std.mem.Allocator.Error!void {
@@ -5515,6 +5605,14 @@ fn writeSupportLiteral(self: *Self) std.mem.Allocator.Error!void {
     }
 }
 
+fn writeToolsLiteral(self: *Self) std.mem.Allocator.Error!void {
+    switch (self.reader.intRangeAtMost(u8, 0, 1)) {
+        0 => try self.writeCall("Tools.make", &.{.{ .integer_literal = {} }}),
+        1 => try self.writeCall("Tools.from_support", &.{.{ .literal = .support }}),
+        else => unreachable,
+    }
+}
+
 fn writeSupportListLiteral(self: *Self) std.mem.Allocator.Error!void {
     try self.write("[");
     const len = self.reader.intRangeAtMost(u8, 1, 4);
@@ -5879,6 +5977,10 @@ fn write(self: *Self, text: []const u8) std.mem.Allocator.Error!void {
 
 fn writeSupport(self: *Self, text: []const u8) std.mem.Allocator.Error!void {
     try self.support_output.appendSlice(self.allocator, text);
+}
+
+fn writeTools(self: *Self, text: []const u8) std.mem.Allocator.Error!void {
+    try self.tools_output.appendSlice(self.allocator, text);
 }
 
 fn tupleFieldType(typ: Type, first: bool) Type {
