@@ -27,11 +27,19 @@ const names = check.CheckedNames;
 const static_dispatch = check.StaticDispatchRegistry;
 const Ident = base.Ident;
 
+/// Options used while lowering checked modules into Monotype IR.
+pub const Options = struct {
+    /// Preserve source-level procedure names for consumers that present runtime
+    /// diagnostics from lowered code.
+    proc_debug_names: bool = false,
+};
+
 /// Lower checked modules and explicit roots into Monotype IR.
 pub fn run(
     allocator: Allocator,
     modules: Common.CheckedModules,
     roots: Common.RootRequests,
+    options: Options,
 ) Common.LowerError!Ast.Program {
     if (roots.requests.len == 0 and roots.layout_requests.len == 0 and roots.static_data_requests.len == 0) {
         Common.invariant("Monotype lowering requires explicit roots, layout requests, or static data requests");
@@ -40,7 +48,7 @@ pub fn run(
     var program = Ast.Program.init(allocator);
     errdefer program.deinit();
 
-    var builder = Builder.init(allocator, modules, &program);
+    var builder = Builder.init(allocator, modules, &program, options);
     defer builder.deinit();
     try builder.initHostedCatalog();
     try builder.initMethodLookupIndex();
@@ -284,6 +292,7 @@ const Builder = struct {
     modules: Common.CheckedModules,
     root_view: checked.ImportedModuleView,
     program: *Ast.Program,
+    proc_debug_names: bool,
     symbols: Common.SymbolGen = .{},
     type_cache: std.AutoHashMap(CheckedTypeAddress, Type.TypeId),
     /// Monotypes owned by the builder-global type cache. They are lowered
@@ -306,12 +315,13 @@ const Builder = struct {
     /// when its types are final and specialization keys are stable.
     active_graph: ?*InstGraph = null,
 
-    fn init(allocator: Allocator, modules: Common.CheckedModules, program: *Ast.Program) Builder {
+    fn init(allocator: Allocator, modules: Common.CheckedModules, program: *Ast.Program, options: Options) Builder {
         return .{
             .allocator = allocator,
             .modules = modules,
             .root_view = checked.importedView(modules.root.module),
             .program = program,
+            .proc_debug_names = options.proc_debug_names,
             .type_cache = std.AutoHashMap(CheckedTypeAddress, Type.TypeId).init(allocator),
             .unsolved_monos = std.AutoHashMap(Type.TypeId, void).init(allocator),
             .lowered_templates = std.AutoHashMap(TemplateFamily, std.ArrayList(LoweredTemplate)).init(allocator),
@@ -954,6 +964,7 @@ const Builder = struct {
         const template = view.templates.get(template_ref.template);
         const symbol = self.symbols.fresh();
         const fn_template = self.fnDefForTemplate(view, template_ref, source_fn_ty, source_fn_key, fn_ty);
+        try self.registerProcDebugNameForTemplate(symbol, view, template_ref);
 
         const reserved: Ast.DefId = @enumFromInt(@as(u32, @intCast(self.program.defs.items.len)));
         // The definition fills once its body lowers; a recursive request that
@@ -1085,6 +1096,19 @@ const Builder = struct {
             .source_fn_key = source_fn_key,
             .mono_fn_ty = mono_fn_ty,
         };
+    }
+
+    fn registerProcDebugNameForTemplate(
+        self: *Builder,
+        symbol: Common.Symbol,
+        view: ModuleView,
+        template: names.ProcTemplate,
+    ) Allocator.Error!void {
+        if (!self.proc_debug_names) return;
+        const proc_base = view.names.procBase(template.proc_base);
+        const export_name = proc_base.export_name orelse return;
+        const name = try self.program.names.internExportName(view.names.exportNameText(export_name));
+        try self.program.setProcDebugName(symbol, name);
     }
 
     fn fnDefForProcedureBindingBody(

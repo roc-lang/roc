@@ -171,6 +171,15 @@ pub const MonoLlvmCodeGen = struct {
     /// one subprogram per proc, and per-statement line locations from the
     /// LIR store's source-location tables.
     emit_debug_info: bool = false,
+    /// Build-only default-platform Linux executables link a small runtime
+    /// object that owns process startup diagnostics and signal handling.
+    enable_default_platform_runtime: bool = false,
+    /// Synthetic default-platform apps lower the default echo host call to
+    /// direct platform writes instead of calling an external host function.
+    enable_default_platform_hosted_calls: bool = false,
+    /// Synthetic default-platform apps preserve source proc names and local
+    /// debug locations for crash and stack-overflow diagnostics.
+    enable_default_platform_diagnostics: bool = false,
     /// DW_AT_producer for the compile unit. Carries the compiler version so
     /// debugger formatters can detect when a binary was built by a different
     /// roc than the formatter was written for.
@@ -485,6 +494,10 @@ pub const MonoLlvmCodeGen = struct {
             );
         }
 
+        if (self.enable_default_platform_runtime) {
+            try self.emitDefaultPlatformBacktraceTable();
+        }
+
         if (!builder.strip) {
             const empty_tuple = builder.metadataTuple(&.{}) catch return error.OutOfMemory;
             builder.resolveDebugForwardReference(self.debug_enums_fwd_ref.unwrap().?, empty_tuple);
@@ -583,6 +596,77 @@ pub const MonoLlvmCodeGen = struct {
         builder.finishModuleAsm(&aw) catch return error.OutOfMemory;
     }
 
+    fn emitDefaultPlatformBacktraceTable(self: *MonoLlvmCodeGen) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const ptr_ty = builder.ptrType(.default) catch return error.OutOfMemory;
+        const usize_ty = self.ptrSizedIntType();
+        const entry_ty = builder.structType(.normal, &.{ usize_ty, usize_ty, ptr_ty, usize_ty, ptr_ty, usize_ty, .i32, .i32 }) catch return error.OutOfMemory;
+
+        var entries = std.ArrayList(LlvmBuilder.Constant).empty;
+        defer entries.deinit(self.allocator);
+        try entries.ensureTotalCapacity(self.allocator, @max(self.proc_registry.count(), 1));
+
+        var proc_iter = self.proc_registry.iterator();
+        while (proc_iter.next()) |entry| {
+            const proc_id: LirProcSpecId = @enumFromInt(entry.key_ptr.*);
+            const proc = self.store.getProcSpec(proc_id);
+            const loc = self.store.procLoc(proc_id);
+            var allocated_name: ?[]u8 = null;
+            defer if (allocated_name) |name| self.allocator.free(name);
+            const name = self.store.procDebugName(proc_id) orelse blk: {
+                const symbol_name = try std.fmt.allocPrint(self.allocator, "roc__proc_{x}", .{proc.name.raw()});
+                allocated_name = symbol_name;
+                break :blk symbol_name;
+            };
+            const file = if (loc.file == SourceLoc.no_file or loc.file >= self.store.sourceFileCount())
+                ""
+            else
+                self.store.sourceFileName(loc.file);
+
+            const name_ptr = (try self.staticBytes(name)).toConst().?;
+            const file_ptr = (try self.staticBytes(file)).toConst().?;
+            const start_addr = builder.castConst(.ptrtoint, entry.value_ptr.*.toConst(builder), usize_ty) catch return error.OutOfMemory;
+
+            entries.appendAssumeCapacity(builder.structConst(entry_ty, &.{
+                start_addr,
+                builder.intConst(usize_ty, 0) catch return error.OutOfMemory,
+                name_ptr,
+                builder.intConst(usize_ty, name.len) catch return error.OutOfMemory,
+                file_ptr,
+                builder.intConst(usize_ty, file.len) catch return error.OutOfMemory,
+                builder.intConst(.i32, loc.line) catch return error.OutOfMemory,
+                builder.intConst(.i32, loc.column) catch return error.OutOfMemory,
+            }) catch return error.OutOfMemory);
+        }
+
+        if (entries.items.len == 0) {
+            entries.appendAssumeCapacity(builder.structConst(entry_ty, &.{
+                builder.intConst(usize_ty, 0) catch return error.OutOfMemory,
+                builder.intConst(usize_ty, 0) catch return error.OutOfMemory,
+                builder.nullConst(ptr_ty) catch return error.OutOfMemory,
+                builder.intConst(usize_ty, 0) catch return error.OutOfMemory,
+                builder.nullConst(ptr_ty) catch return error.OutOfMemory,
+                builder.intConst(usize_ty, 0) catch return error.OutOfMemory,
+                builder.intConst(.i32, 0) catch return error.OutOfMemory,
+                builder.intConst(.i32, 0) catch return error.OutOfMemory,
+            }) catch return error.OutOfMemory);
+        }
+
+        const table_ty = builder.arrayType(entries.items.len, entry_ty) catch return error.OutOfMemory;
+        const table_data = builder.addVariable(builder.strtabString("roc_default_backtrace_table_data") catch return error.OutOfMemory, table_ty, .default) catch return error.OutOfMemory;
+        table_data.ptrConst(builder).global.setLinkage(.internal, builder);
+        table_data.setMutability(.constant, builder);
+        table_data.setInitializer(builder.arrayConst(table_ty, entries.items) catch return error.OutOfMemory, builder) catch return error.OutOfMemory;
+
+        const table_var = builder.addVariable(builder.strtabString("roc_default_backtrace_table") catch return error.OutOfMemory, ptr_ty, .default) catch return error.OutOfMemory;
+        table_var.setMutability(.constant, builder);
+        table_var.setInitializer(table_data.toConst(builder), builder) catch return error.OutOfMemory;
+
+        const count_var = builder.addVariable(builder.strtabString("roc_default_backtrace_count") catch return error.OutOfMemory, usize_ty, .default) catch return error.OutOfMemory;
+        count_var.setMutability(.constant, builder);
+        count_var.setInitializer(builder.intConst(usize_ty, self.proc_registry.count()) catch return error.OutOfMemory, builder) catch return error.OutOfMemory;
+    }
+
     /// DIFile metadata for one source file table entry (interned by the
     /// builder, so repeated calls are cheap).
     fn debugFileFor(self: *MonoLlvmCodeGen, builder: *LlvmBuilder, file: u32) Error!LlvmBuilder.Metadata {
@@ -597,6 +681,20 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn procDebugName(
+        self: *MonoLlvmCodeGen,
+        builder: *LlvmBuilder,
+        proc_id: LirProcSpecId,
+        proc: LirProcSpec,
+    ) Error!LlvmBuilder.Metadata.String {
+        if (self.enable_default_platform_diagnostics) {
+            if (self.store.procDebugName(proc_id)) |name| {
+                return builder.metadataString(name) catch return error.OutOfMemory;
+            }
+        }
+        return try self.procSymbolDebugName(builder, proc_id, proc);
+    }
+
+    fn procSymbolDebugName(
         self: *MonoLlvmCodeGen,
         builder: *LlvmBuilder,
         proc_id: LirProcSpecId,
@@ -898,6 +996,16 @@ pub const MonoLlvmCodeGen = struct {
         const scope = self.current_subprogram.unwrap() orelse return;
         const file = try self.debugFileFor(builder, self.current_debug_file);
         const empty_expr = builder.debugExpression(&.{}) catch return error.OutOfMemory;
+        const previous_debug_location = wip.debug_location;
+        if (self.enable_default_platform_diagnostics) {
+            wip.debug_location = .{ .location = .{
+                .line = proc_line,
+                .column = if (proc_line == 0) 0 else 1,
+                .scope = scope.toOptional(),
+                .inlined_at = .none,
+            } };
+        }
+        defer wip.debug_location = previous_debug_location;
 
         for (self.store.getLocalSpan(proc.frame_locals)) |local_id| {
             const name = self.store.localName(local_id) orelse continue;
@@ -950,6 +1058,24 @@ pub const MonoLlvmCodeGen = struct {
         const name = try self.procFunctionName(builder, proc_id, proc);
         const func = builder.addFunction(fn_ty, name, .default) catch return error.OutOfMemory;
         func.setLinkage(if (self.proc_symbol_mode == .lir_symbol) .external else .internal, builder);
+        if (self.enable_default_platform_runtime or self.enable_default_platform_diagnostics) {
+            var attrs_wip: LlvmBuilder.FunctionAttributes.Wip = .{};
+            defer attrs_wip.deinit(builder);
+            if (self.enable_default_platform_runtime) {
+                try attrs_wip.addFnAttr(.{ .string = .{
+                    .kind = builder.string("frame-pointer") catch return error.OutOfMemory,
+                    .value = builder.string("all") catch return error.OutOfMemory,
+                } }, builder);
+            }
+            if (self.enable_default_platform_diagnostics) {
+                try attrs_wip.addFnAttr(.@"noinline", builder);
+                try attrs_wip.addFnAttr(.{ .string = .{
+                    .kind = builder.string("disable-tail-calls") catch return error.OutOfMemory,
+                    .value = builder.string("true") catch return error.OutOfMemory,
+                } }, builder);
+            }
+            func.setAttributes(attrs_wip.finish(builder) catch return error.OutOfMemory, builder);
+        }
         try self.proc_registry.put(@intFromEnum(proc_id), func);
     }
 
@@ -1006,11 +1132,18 @@ pub const MonoLlvmCodeGen = struct {
         if (!builder.strip) {
             const proc_loc = self.store.procLoc(proc_id);
             const file = try self.debugFileFor(builder, proc_loc.file);
-            const name_str = try self.procDebugName(builder, proc_id, proc);
+            const name_str = if (self.enable_default_platform_diagnostics)
+                try self.procDebugName(builder, proc_id, proc)
+            else
+                try self.procSymbolDebugName(builder, proc_id, proc);
+            const linkage_name_str = if (self.enable_default_platform_diagnostics)
+                try self.procSymbolDebugName(builder, proc_id, proc)
+            else
+                name_str;
             const subprogram = builder.debugSubprogram(
                 file,
                 name_str,
-                name_str,
+                linkage_name_str,
                 proc_loc.line,
                 proc_loc.line,
                 builder.debugSubroutineType(null) catch return error.OutOfMemory,
@@ -1257,6 +1390,13 @@ pub const MonoLlvmCodeGen = struct {
         arg_layouts: []const layout.Idx,
         ret_layout: layout.Idx,
     ) Error!void {
+        if (self.enable_default_platform_runtime and
+            self.host_call_mode == .extern_symbols and
+            self.target.os.tag == .linux and
+            std.mem.eql(u8, symbol_name, "_start"))
+        {
+            return self.generateLinuxStartEntrypointWrapper(symbol_name, entry_proc, arg_layouts, ret_layout);
+        }
         if (self.host_call_mode == .extern_symbols) {
             return self.generateCAbiEntrypointWrapper(symbol_name, entry_proc, arg_layouts, ret_layout, null);
         }
@@ -1292,6 +1432,53 @@ pub const MonoLlvmCodeGen = struct {
         try self.copyEntrypointArgsToInternalBuffer(args_ptr, args_buf, arg_layouts);
         _ = try self.callFunctionIndex(proc_fn, &.{ roc_ops, ret_ptr, args_buf });
         _ = wip.retVoid() catch return error.OutOfMemory;
+        try self.finishCurrentWipFunction();
+    }
+
+    fn generateLinuxStartEntrypointWrapper(
+        self: *MonoLlvmCodeGen,
+        symbol_name: []const u8,
+        entry_proc: LirProcSpecId,
+        arg_layouts: []const layout.Idx,
+        ret_layout: layout.Idx,
+    ) Error!void {
+        switch (self.target.cpu.arch) {
+            .x86_64, .aarch64 => {},
+            else => return error.CompilationFailed,
+        }
+
+        const builder = self.builder orelse return error.CompilationFailed;
+        const proc_fn = self.proc_registry.get(@intFromEnum(entry_proc)) orelse return error.CompilationFailed;
+
+        const wrapper_ty = builder.fnType(.void, &.{}, .normal) catch return error.OutOfMemory;
+        const wrapper_name = try self.exportedFunctionName(builder, symbol_name);
+        const wrapper = builder.addFunction(wrapper_ty, wrapper_name, .default) catch return error.OutOfMemory;
+        wrapper.setLinkage(.external, builder);
+        self.configureExportCallConv(wrapper, builder);
+
+        const outer_wip = self.wip;
+        defer self.wip = outer_wip;
+
+        var wip = LlvmBuilder.WipFunction.init(builder, .{ .function = wrapper, .strip = true }) catch return error.OutOfMemory;
+        defer wip.deinit();
+        self.wip = &wip;
+
+        const entry = wip.block(0, "entry") catch return error.OutOfMemory;
+        wip.cursor = .{ .block = entry };
+
+        if (self.enable_default_platform_runtime) {
+            const init_ty = builder.fnType(.void, &.{}, .normal) catch return error.OutOfMemory;
+            const init_fn = try self.declareExternSymbol("roc_default_runtime_init", init_ty);
+            _ = wip.call(.normal, .ccc, .none, init_ty, init_fn.toValue(builder), &.{}, "") catch return error.OutOfMemory;
+        }
+
+        const ret_slot = try self.allocArgBuffer(&.{ret_layout}, false);
+        const args_buf = try self.allocArgBuffer(arg_layouts, true);
+        _ = try self.callFunctionIndex(proc_fn, &.{ ret_slot, args_buf });
+
+        const exit_code_raw = try self.loadScalar(ret_slot, ret_layout);
+        const exit_code = try self.coerceScalar(exit_code_raw, self.ptrSizedIntType(), false);
+        try self.emitLinuxExitSyscall(exit_code);
         try self.finishCurrentWipFunction();
     }
 
@@ -4572,6 +4759,237 @@ pub const MonoLlvmCodeGen = struct {
         return self.abiTarget() == .x86_64_sysv;
     }
 
+    fn emitDefaultPlatformHostedCall(
+        self: *MonoLlvmCodeGen,
+        hosted: lir.LIR.HostedProc,
+        arg_ptrs: []const LlvmBuilder.Value,
+        arg_layouts: []const layout.Idx,
+        ret_layout: layout.Idx,
+    ) Error!bool {
+        if (!self.enable_default_platform_hosted_calls) return false;
+        if (self.host_call_mode != .extern_symbols) return false;
+        if (!std.mem.eql(u8, self.store.getString(hosted.symbol), "roc_default_echo_line")) return false;
+
+        switch (self.target.os.tag) {
+            .linux, .macos, .windows => {},
+            else => return error.CompilationFailed,
+        }
+        if (arg_ptrs.len != 1 or arg_layouts.len != 1 or arg_layouts[0] != .str or ret_layout != .zst) {
+            return error.CompilationFailed;
+        }
+
+        try self.emitDefaultPlatformWriteLine(arg_ptrs[0]);
+
+        return true;
+    }
+
+    fn emitDefaultPlatformWriteLine(self: *MonoLlvmCodeGen, str_ptr: LlvmBuilder.Value) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const usize_ty = self.ptrSizedIntType();
+        const static_newline = try self.staticBytes("\n");
+        const static_newline_len = builder.intValue(usize_ty, 1) catch return error.OutOfMemory;
+
+        const raw_len = try self.loadUsize(try self.offsetPtr(str_ptr, self.rocStrLenOffset()));
+        const is_small = wip.icmp(.slt, raw_len, builder.intValue(usize_ty, 0) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const small_block = wip.block(0, "echo_small_str") catch return error.OutOfMemory;
+        const heap_block = wip.block(0, "echo_heap_str") catch return error.OutOfMemory;
+        const after = wip.block(0, "echo_after") catch return error.OutOfMemory;
+        _ = wip.brCond(is_small, small_block, heap_block, .then_likely) catch return error.OutOfMemory;
+
+        wip.cursor = .{ .block = small_block };
+        const last_byte_offset = self.targetWordSize() * 3 - 1;
+        const last_byte = wip.load(.normal, .i8, try self.offsetPtr(str_ptr, last_byte_offset), LlvmBuilder.Alignment.fromByteUnits(1), "") catch return error.OutOfMemory;
+        const small_len_byte = wip.bin(.@"and", last_byte, builder.intValue(.i8, 0x7f) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const small_len = try self.coerceScalar(small_len_byte, usize_ty, false);
+        const small_has_spare = wip.icmp(.ult, small_len, builder.intValue(usize_ty, self.targetWordSize() * 3 - 1) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        try self.emitDefaultPlatformWriteLineFromBuffer(str_ptr, small_len, small_has_spare, static_newline, static_newline_len, after);
+
+        wip.cursor = .{ .block = heap_block };
+        const big_ptr = try self.loadPointer(str_ptr);
+        const cap_or_alloc = try self.loadUsize(try self.offsetPtr(str_ptr, self.rocStrCapacityOffset()));
+        const slice_tag = wip.bin(.@"and", cap_or_alloc, builder.intValue(usize_ty, 1) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const not_slice = wip.icmp(.eq, slice_tag, builder.intValue(usize_ty, 0) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const capacity = wip.bin(.lshr, cap_or_alloc, builder.intValue(usize_ty, 1) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const has_spare = wip.icmp(.ugt, capacity, raw_len, "") catch return error.OutOfMemory;
+        const data_ptr = try self.loadStrDataPtrForRc(str_ptr);
+        const rc_offset: i64 = -@as(i64, @intCast(self.targetWordSize()));
+        const rc_ptr = wip.gep(.inbounds, .i8, data_ptr, &.{builder.intValue(.i32, rc_offset) catch return error.OutOfMemory}, "") catch return error.OutOfMemory;
+        const refcount = wip.load(.normal, usize_ty, rc_ptr, self.targetPointerAlignment(), "") catch return error.OutOfMemory;
+        const is_unique = wip.icmp(.eq, refcount, builder.intValue(usize_ty, 1) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const writable_heap = wip.bin(.@"and", not_slice, is_unique, "") catch return error.OutOfMemory;
+        const heap_can_append = wip.bin(.@"and", writable_heap, has_spare, "") catch return error.OutOfMemory;
+        try self.emitDefaultPlatformWriteLineFromBuffer(big_ptr, raw_len, heap_can_append, static_newline, static_newline_len, after);
+
+        wip.cursor = .{ .block = after };
+    }
+
+    fn emitDefaultPlatformWriteLineFromBuffer(
+        self: *MonoLlvmCodeGen,
+        ptr: LlvmBuilder.Value,
+        len: LlvmBuilder.Value,
+        can_append_newline: LlvmBuilder.Value,
+        static_newline: LlvmBuilder.Value,
+        static_newline_len: LlvmBuilder.Value,
+        after: LlvmBuilder.Function.Block.Index,
+    ) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const usize_ty = self.ptrSizedIntType();
+
+        const append_block = wip.block(0, "echo_append_newline") catch return error.OutOfMemory;
+        const separate_block = wip.block(0, "echo_separate_newline") catch return error.OutOfMemory;
+        _ = wip.brCond(can_append_newline, append_block, separate_block, .then_likely) catch return error.OutOfMemory;
+
+        wip.cursor = .{ .block = append_block };
+        const newline_ptr = wip.gep(.inbounds, .i8, ptr, &.{len}, "") catch return error.OutOfMemory;
+        _ = wip.store(.normal, builder.intValue(.i8, '\n') catch return error.OutOfMemory, newline_ptr, LlvmBuilder.Alignment.fromByteUnits(1)) catch return error.OutOfMemory;
+        const len_with_newline = wip.bin(.add, len, builder.intValue(usize_ty, 1) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        try self.emitDefaultPlatformWriteStdout(ptr, len_with_newline);
+        _ = wip.store(.normal, builder.intValue(.i8, 0) catch return error.OutOfMemory, newline_ptr, LlvmBuilder.Alignment.fromByteUnits(1)) catch return error.OutOfMemory;
+        _ = wip.br(after) catch return error.OutOfMemory;
+
+        wip.cursor = .{ .block = separate_block };
+        try self.emitDefaultPlatformWriteStdout(ptr, len);
+        try self.emitDefaultPlatformWriteStdout(static_newline, static_newline_len);
+        _ = wip.br(after) catch return error.OutOfMemory;
+    }
+
+    fn emitDefaultPlatformWriteStdout(self: *MonoLlvmCodeGen, ptr: LlvmBuilder.Value, len: LlvmBuilder.Value) Error!void {
+        switch (self.target.os.tag) {
+            .linux => try self.emitLinuxWriteStdout(ptr, len),
+            .macos, .windows => try self.emitCWriteStdout(ptr, len),
+            else => return error.CompilationFailed,
+        }
+    }
+
+    fn emitCWriteStdout(self: *MonoLlvmCodeGen, ptr: LlvmBuilder.Value, len: LlvmBuilder.Value) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const ptr_ty = try self.ptrType();
+        const len_ty: LlvmBuilder.Type = if (self.target.os.tag == .windows) .i32 else self.ptrSizedIntType();
+        const ret_ty: LlvmBuilder.Type = if (self.target.os.tag == .windows) .i32 else self.ptrSizedIntType();
+        const symbol = if (self.target.os.tag == .windows) "_write" else "write";
+        const fn_ty = builder.fnType(ret_ty, &.{ .i32, ptr_ty, len_ty }, .normal) catch return error.OutOfMemory;
+        const write_fn = try self.declareExternSymbol(symbol, fn_ty);
+
+        _ = wip.call(
+            .normal,
+            .ccc,
+            .none,
+            fn_ty,
+            write_fn.toValue(builder),
+            &.{
+                builder.intValue(.i32, 1) catch return error.OutOfMemory,
+                ptr,
+                try self.coerceScalar(len, len_ty, false),
+            },
+            "",
+        ) catch return error.OutOfMemory;
+    }
+
+    fn emitLinuxWriteStdout(self: *MonoLlvmCodeGen, ptr: LlvmBuilder.Value, len: LlvmBuilder.Value) Error!void {
+        switch (self.target.cpu.arch) {
+            .x86_64 => try self.emitX86_64LinuxWriteStdout(ptr, len),
+            .aarch64 => try self.emitAarch64LinuxWriteStdout(ptr, len),
+            else => return error.CompilationFailed,
+        }
+    }
+
+    fn emitLinuxExitSyscall(self: *MonoLlvmCodeGen, code: LlvmBuilder.Value) Error!void {
+        switch (self.target.cpu.arch) {
+            .x86_64 => try self.emitX86_64LinuxExitSyscall(code),
+            .aarch64 => try self.emitAarch64LinuxExitSyscall(code),
+            else => return error.CompilationFailed,
+        }
+    }
+
+    fn emitX86_64LinuxWriteStdout(self: *MonoLlvmCodeGen, ptr: LlvmBuilder.Value, len: LlvmBuilder.Value) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const usize_ty = self.ptrSizedIntType();
+        const fn_ty = builder.fnType(.i64, &.{ .i64, .i64, try self.ptrType(), usize_ty }, .normal) catch return error.OutOfMemory;
+
+        _ = wip.callAsm(
+            .none,
+            fn_ty,
+            .{ .sideeffect = true },
+            builder.string("syscall") catch return error.OutOfMemory,
+            builder.string("={rax},{rax},{rdi},{rsi},{rdx},~{rcx},~{r11},~{memory}") catch return error.OutOfMemory,
+            &.{
+                builder.intValue(.i64, 1) catch return error.OutOfMemory,
+                builder.intValue(.i64, 1) catch return error.OutOfMemory,
+                ptr,
+                len,
+            },
+            "",
+        ) catch return error.OutOfMemory;
+    }
+
+    fn emitAarch64LinuxWriteStdout(self: *MonoLlvmCodeGen, ptr: LlvmBuilder.Value, len: LlvmBuilder.Value) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const usize_ty = self.ptrSizedIntType();
+        const fn_ty = builder.fnType(usize_ty, &.{ usize_ty, usize_ty, try self.ptrType(), usize_ty }, .normal) catch return error.OutOfMemory;
+
+        _ = wip.callAsm(
+            .none,
+            fn_ty,
+            .{ .sideeffect = true },
+            builder.string("svc #0") catch return error.OutOfMemory,
+            builder.string("={x0},{x8},{x0},{x1},{x2},~{memory}") catch return error.OutOfMemory,
+            &.{
+                builder.intValue(usize_ty, 64) catch return error.OutOfMemory,
+                builder.intValue(usize_ty, 1) catch return error.OutOfMemory,
+                ptr,
+                len,
+            },
+            "",
+        ) catch return error.OutOfMemory;
+    }
+
+    fn emitX86_64LinuxExitSyscall(self: *MonoLlvmCodeGen, code: LlvmBuilder.Value) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const usize_ty = self.ptrSizedIntType();
+        const fn_ty = builder.fnType(.void, &.{ usize_ty, usize_ty }, .normal) catch return error.OutOfMemory;
+
+        _ = wip.callAsm(
+            .none,
+            fn_ty,
+            .{ .sideeffect = true },
+            builder.string("syscall") catch return error.OutOfMemory,
+            builder.string("{rax},{rdi},~{rcx},~{r11},~{memory}") catch return error.OutOfMemory,
+            &.{
+                builder.intValue(usize_ty, 60) catch return error.OutOfMemory,
+                code,
+            },
+            "",
+        ) catch return error.OutOfMemory;
+        _ = wip.@"unreachable"() catch return error.OutOfMemory;
+    }
+
+    fn emitAarch64LinuxExitSyscall(self: *MonoLlvmCodeGen, code: LlvmBuilder.Value) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const usize_ty = self.ptrSizedIntType();
+        const fn_ty = builder.fnType(.void, &.{ usize_ty, usize_ty }, .normal) catch return error.OutOfMemory;
+
+        _ = wip.callAsm(
+            .none,
+            fn_ty,
+            .{ .sideeffect = true },
+            builder.string("svc #0") catch return error.OutOfMemory,
+            builder.string("{x8},{x0},~{memory}") catch return error.OutOfMemory,
+            &.{
+                builder.intValue(usize_ty, 94) catch return error.OutOfMemory,
+                code,
+            },
+            "",
+        ) catch return error.OutOfMemory;
+        _ = wip.@"unreachable"() catch return error.OutOfMemory;
+    }
+
     /// Emit a hosted-function call using the platform C ABI: small arguments and the return
     /// travel in registers per `abi.lower`, with `*RocOps` threaded only when the signature
     /// touches Roc-managed memory. `arg_ptrs` point at each argument's value bytes; the result
@@ -4584,6 +5002,10 @@ pub const MonoLlvmCodeGen = struct {
         ret_ptr: LlvmBuilder.Value,
         ret_layout: layout.Idx,
     ) Error!void {
+        if (try self.emitDefaultPlatformHostedCall(hosted, arg_ptrs, arg_layouts, ret_layout)) {
+            return;
+        }
+
         const builder = self.builder orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
         const ptr_ty = try self.ptrType();
