@@ -1044,13 +1044,22 @@ pub const MonoLlvmCodeGen = struct {
         const name = try self.procFunctionName(builder, proc_id, proc);
         const func = builder.addFunction(fn_ty, name, .default) catch return error.OutOfMemory;
         func.setLinkage(if (self.proc_symbol_mode == .lir_symbol) .external else .internal, builder);
-        if (self.enable_default_platform_runtime) {
+        if (self.enable_default_platform_runtime or self.enable_default_platform_diagnostics) {
             var attrs_wip: LlvmBuilder.FunctionAttributes.Wip = .{};
             defer attrs_wip.deinit(builder);
-            try attrs_wip.addFnAttr(.{ .string = .{
-                .kind = builder.string("frame-pointer") catch return error.OutOfMemory,
-                .value = builder.string("all") catch return error.OutOfMemory,
-            } }, builder);
+            if (self.enable_default_platform_runtime) {
+                try attrs_wip.addFnAttr(.{ .string = .{
+                    .kind = builder.string("frame-pointer") catch return error.OutOfMemory,
+                    .value = builder.string("all") catch return error.OutOfMemory,
+                } }, builder);
+            }
+            if (self.enable_default_platform_diagnostics) {
+                try attrs_wip.addFnAttr(.@"noinline", builder);
+                try attrs_wip.addFnAttr(.{ .string = .{
+                    .kind = builder.string("disable-tail-calls") catch return error.OutOfMemory,
+                    .value = builder.string("true") catch return error.OutOfMemory,
+                } }, builder);
+            }
             func.setAttributes(attrs_wip.finish(builder) catch return error.OutOfMemory, builder);
         }
         try self.proc_registry.put(@intFromEnum(proc_id), func);
