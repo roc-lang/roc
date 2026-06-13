@@ -59,16 +59,6 @@ main_for_host = main
 (package-docs
   (name "test-app")
   (module
-    (name "app")
-    (package "app")
-    (kind app)
-    (entry
-      (name "main")
-      (kind value)
-      (type (type-ref (name "Str")))
-    )
-  )
-  (module
     (name "Color")
     (package "app")
     (kind type_module)
@@ -90,6 +80,16 @@ main_for_host = main
         (type (fn (type-ref (module "app.Color") (name "Color")) (type-ref (name "Str"))))
         (doc "Convert a color to a string.")
       )
+    )
+  )
+  (module
+    (name "app")
+    (package "app")
+    (kind app)
+    (entry
+      (name "main")
+      (kind value)
+      (type (type-ref (name "Str")))
     )
   )
   (module

@@ -211,7 +211,7 @@ fn getEnvVarWasm(_: ?*anyopaque, _: std.Io, _: []const u8, _: Allocator) CoreCtx
     return error.EnvironmentVariableMissing;
 }
 
-fn fetchUrlWasm(_: ?*anyopaque, _: std.Io, _: Allocator, _: []const u8, _: []const u8) CoreCtx.FetchUrlError!void {
+fn fetchUrlWasm(_: ?*anyopaque, _: std.Io, _: Allocator, _: []const u8, _: []const u8, _: ?u64) CoreCtx.FetchUrlError!u64 {
     return error.Unsupported;
 }
 
