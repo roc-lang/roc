@@ -1486,6 +1486,11 @@ pub fn generateModule(self: *Self) std.mem.Allocator.Error!void {
         try self.generateImportedRecordBuilderFunction();
     }
 
+    const alias_count = self.reader.intRangeAtMost(u8, 1, 4);
+    for (0..alias_count) |_| {
+        try self.generateAliasFunction();
+    }
+
     const builtin_count = self.reader.intRangeAtMost(u8, 12, 36);
     for (0..builtin_count) |_| {
         try self.generateBuiltinAssociatedFunction();
@@ -2376,6 +2381,68 @@ fn generateImportedRecordBuilderWideFunction(self: *Self, name_id: u32) std.mem.
     try self.write("), retries: Rb.field(");
     try self.writeIntegerLiteral();
     try self.write(") }.Rb.run()\n");
+}
+
+fn generateAliasFunction(self: *Self) std.mem.Allocator.Error!void {
+    const name_id = self.name_counter;
+    self.name_counter += 1;
+
+    switch (self.reader.intRangeAtMost(u8, 0, 4)) {
+        0 => try self.generateAliasBoolFunction(name_id),
+        1 => try self.generateAliasRecordUpdateFunction(name_id),
+        2 => try self.generateAliasPairMatchFunction(name_id),
+        3 => try self.generateAliasListMapFunction(name_id),
+        4 => try self.generateAliasImportedPairFunction(name_id),
+        else => unreachable,
+    }
+}
+
+fn generateAliasBoolFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeRawFunctionSignature(name_id, "Main", "AliasBool");
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| {\n");
+    try self.writeRawTypedLocalDeclaration("flag", "AliasBool", .{ .bool_literal = {} });
+    try self.write("        Bool.not(flag)\n    }\n");
+}
+
+fn generateAliasRecordUpdateFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeRawFunctionSignature(name_id, "Main", "NameCount");
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| {\n");
+    try self.writeRawTypedLocalDeclaration("record", "NameCount", .{ .literal = .record_str_u64 });
+    try self.write("        { ..record, count: record.count + ");
+    try self.writeIntegerLiteral();
+    try self.write(" }\n    }\n");
+}
+
+fn generateAliasPairMatchFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFunctionSignature(name_id, "Main", .u64);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| {\n");
+    try self.writeRawLocalAnnotation("pair", "Pair(NameCount, Fallible(U64, Str))");
+    try self.writeLocalAssignmentStart("pair");
+    try self.writeTuple(&.{ .{ .literal = .record_str_u64 }, .{ .literal = .try_u64_str } });
+    try self.write("\n        match pair {\n            ({ count }, Ok(value)) => count + value\n            ({ count }, Err(_)) => count\n        }\n    }\n");
+}
+
+fn generateAliasListMapFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeRawFunctionSignature(name_id, "Main", "U64s");
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| {\n");
+    try self.writeRawTypedLocalDeclaration("items", "U64s", .{ .literal = .list_u64 });
+    try self.write("        items.map(|item| item + ");
+    try self.writeSmallNumberLiteral(.u64);
+    try self.write(")\n    }\n");
+}
+
+fn generateAliasImportedPairFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFunctionSignature(name_id, "Main", .str);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| {\n");
+    try self.writeRawLocalAnnotation("pair", "Pair(Support.Status, NameCount)");
+    try self.writeLocalAssignmentStart("pair");
+    try self.writeTuple(&.{ .{ .literal = .support_status }, .{ .literal = .record_str_u64 } });
+    try self.write("\n        match pair {\n            (Support.Status.Named(status_name), { name: record_name }) => Str.concat(status_name, record_name)\n            (Support.Status.Waiting(count), _) => U64.to_str(count)\n            (Support.Status.Ready, { name }) => name\n        }\n    }\n");
 }
 
 fn generateBuiltinAssociatedFunction(self: *Self) std.mem.Allocator.Error!void {
@@ -6188,6 +6255,27 @@ fn writeMutableLocalAssignmentStart(self: *Self, name: []const u8) std.mem.Alloc
 fn writeMutableLocalReference(self: *Self, name: []const u8) std.mem.Allocator.Error!void {
     try self.write("$");
     try self.write(name);
+}
+
+fn writeRawTypedLocalDeclaration(self: *Self, name: []const u8, type_name: []const u8, initializer: Expr) std.mem.Allocator.Error!void {
+    try self.writeRawLocalAnnotation(name, type_name);
+    try self.writeLocalAssignmentStart(name);
+    try self.writeExpr(initializer);
+    try self.write("\n");
+}
+
+fn writeRawLocalAnnotation(self: *Self, name: []const u8, type_name: []const u8) std.mem.Allocator.Error!void {
+    try self.write("        ");
+    try self.write(name);
+    try self.write(" : ");
+    try self.write(type_name);
+    try self.write("\n");
+}
+
+fn writeLocalAssignmentStart(self: *Self, name: []const u8) std.mem.Allocator.Error!void {
+    try self.write("        ");
+    try self.write(name);
+    try self.write(" = ");
 }
 
 fn writeForInPrefix(self: *Self, item_name: []const u8) std.mem.Allocator.Error!void {
