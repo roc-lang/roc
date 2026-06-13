@@ -188,7 +188,7 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
             // Type modules expose their main type under the module name
             const type_ident = other_test_env.module_env.common.findIdent(other_module_name);
             if (type_ident) |ident| {
-                if (other_test_env.module_env.getExposedNodeIndexById(ident)) |node_idx| {
+                if (other_test_env.module_env.getExposedTypeNodeIndexById(ident)) |node_idx| {
                     // The node index IS the statement index for type declarations
                     break :blk @as(CIR.Statement.Idx, @enumFromInt(node_idx));
                 }
