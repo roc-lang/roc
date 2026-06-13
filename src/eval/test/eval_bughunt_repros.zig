@@ -708,6 +708,5 @@ pub const tests = [_]TestCase{
         \\}
         ,
         .expected = .{ .inspect_str = "0" },
-        .known_bug = true,
     },
 };
