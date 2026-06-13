@@ -44,9 +44,12 @@ const BuiltinAdapterKind = enum {
     str_to_utf8,
     str_from_utf8_lossy,
     str_from_utf8,
+    str_from_quote,
+    str_from_interpolation,
     str_split_on,
     str_join_with,
     str_is_eq,
+    str_to_hash,
     str_inspect,
     str_encode,
     str_decode,
@@ -59,6 +62,7 @@ const BuiltinAdapterKind = enum {
     list_release_excess_capacity,
     list_sort_with,
     list_is_eq,
+    list_to_hash,
     list_first,
     list_get,
     list_subscript,
@@ -106,16 +110,31 @@ const BuiltinAdapterKind = enum {
     list_split_on_list,
     list_split_first,
     list_split_last,
-    list_join_with,
-    list_join_list_with,
     list_sum,
     list_min,
     list_max,
     list_encode,
     list_decode,
+    hasher_write_bool,
+    hasher_write_u8,
+    hasher_write_u16,
+    hasher_write_u32,
+    hasher_write_u64,
+    hasher_write_u128,
+    hasher_write_i8,
+    hasher_write_i16,
+    hasher_write_i32,
+    hasher_write_i64,
+    hasher_write_i128,
+    hasher_write_f32,
+    hasher_write_f64,
+    hasher_write_dec,
+    hasher_write_bytes,
+    hasher_write_str,
     iter_next,
     iter_custom,
     iter_iter,
+    iter_prepended,
     iter_map,
     iter_keep_if,
     iter_drop_if,
@@ -142,12 +161,19 @@ const BuiltinAdapterKind = enum {
     try_map_ok_bang,
     try_map_err_bang,
     try_is_eq,
+    try_to_hash,
     box_box,
     box_unbox,
     bool_is_eq,
+    bool_to_hash,
     dict_empty,
     dict_is_eq,
     dict_single,
+    dict_with_capacity,
+    dict_capacity,
+    dict_reserve,
+    dict_release_excess_capacity,
+    dict_clear,
     dict_len,
     dict_is_empty,
     dict_get,
@@ -196,6 +222,7 @@ const BuiltinAdapter = struct {
 const NumericAdapterKind = enum {
     default,
     to_str,
+    to_hash,
     is_zero,
     is_negative,
     is_positive,
@@ -291,9 +318,12 @@ const builtin_adapters = [_]BuiltinAdapter{
     .{ .owner = "Str", .name = "to_utf8", .kind = .str_to_utf8 },
     .{ .owner = "Str", .name = "from_utf8_lossy", .kind = .str_from_utf8_lossy },
     .{ .owner = "Str", .name = "from_utf8", .kind = .str_from_utf8 },
+    .{ .owner = "Str", .name = "from_quote", .kind = .str_from_quote },
+    .{ .owner = "Str", .name = "from_interpolation", .kind = .str_from_interpolation },
     .{ .owner = "Str", .name = "split_on", .kind = .str_split_on },
     .{ .owner = "Str", .name = "join_with", .kind = .str_join_with },
     .{ .owner = "Str", .name = "is_eq", .kind = .str_is_eq },
+    .{ .owner = "Str", .name = "to_hash", .kind = .str_to_hash },
     .{ .owner = "Str", .name = "inspect", .kind = .str_inspect },
     .{ .owner = "Str", .name = "encode", .kind = .str_encode },
     .{ .owner = "Str", .name = "decode", .kind = .str_decode },
@@ -306,6 +336,7 @@ const builtin_adapters = [_]BuiltinAdapter{
     .{ .owner = "List", .name = "release_excess_capacity", .kind = .list_release_excess_capacity },
     .{ .owner = "List", .name = "sort_with", .kind = .list_sort_with },
     .{ .owner = "List", .name = "is_eq", .kind = .list_is_eq },
+    .{ .owner = "List", .name = "to_hash", .kind = .list_to_hash },
     .{ .owner = "List", .name = "first", .kind = .list_first },
     .{ .owner = "List", .name = "get", .kind = .list_get },
     .{ .owner = "List", .name = "subscript", .kind = .list_subscript },
@@ -353,16 +384,31 @@ const builtin_adapters = [_]BuiltinAdapter{
     .{ .owner = "List", .name = "split_on_list", .kind = .list_split_on_list },
     .{ .owner = "List", .name = "split_first", .kind = .list_split_first },
     .{ .owner = "List", .name = "split_last", .kind = .list_split_last },
-    .{ .owner = "List", .name = "join_with", .kind = .list_join_with },
-    .{ .owner = "List", .name = "join_list_with", .kind = .list_join_list_with },
     .{ .owner = "List", .name = "sum", .kind = .list_sum },
     .{ .owner = "List", .name = "min", .kind = .list_min },
     .{ .owner = "List", .name = "max", .kind = .list_max },
     .{ .owner = "List", .name = "encode", .kind = .list_encode },
     .{ .owner = "List", .name = "decode", .kind = .list_decode },
+    .{ .owner = "Hasher", .name = "write_bool", .kind = .hasher_write_bool },
+    .{ .owner = "Hasher", .name = "write_u8", .kind = .hasher_write_u8 },
+    .{ .owner = "Hasher", .name = "write_u16", .kind = .hasher_write_u16 },
+    .{ .owner = "Hasher", .name = "write_u32", .kind = .hasher_write_u32 },
+    .{ .owner = "Hasher", .name = "write_u64", .kind = .hasher_write_u64 },
+    .{ .owner = "Hasher", .name = "write_u128", .kind = .hasher_write_u128 },
+    .{ .owner = "Hasher", .name = "write_i8", .kind = .hasher_write_i8 },
+    .{ .owner = "Hasher", .name = "write_i16", .kind = .hasher_write_i16 },
+    .{ .owner = "Hasher", .name = "write_i32", .kind = .hasher_write_i32 },
+    .{ .owner = "Hasher", .name = "write_i64", .kind = .hasher_write_i64 },
+    .{ .owner = "Hasher", .name = "write_i128", .kind = .hasher_write_i128 },
+    .{ .owner = "Hasher", .name = "write_f32", .kind = .hasher_write_f32 },
+    .{ .owner = "Hasher", .name = "write_f64", .kind = .hasher_write_f64 },
+    .{ .owner = "Hasher", .name = "write_dec", .kind = .hasher_write_dec },
+    .{ .owner = "Hasher", .name = "write_bytes", .kind = .hasher_write_bytes },
+    .{ .owner = "Hasher", .name = "write_str", .kind = .hasher_write_str },
     .{ .owner = "Iter", .name = "next", .kind = .iter_next },
     .{ .owner = "Iter", .name = "custom", .kind = .iter_custom },
     .{ .owner = "Iter", .name = "iter", .kind = .iter_iter },
+    .{ .owner = "Iter", .name = "prepended", .kind = .iter_prepended },
     .{ .owner = "Iter", .name = "map", .kind = .iter_map },
     .{ .owner = "Iter", .name = "keep_if", .kind = .iter_keep_if },
     .{ .owner = "Iter", .name = "drop_if", .kind = .iter_drop_if },
@@ -389,11 +435,18 @@ const builtin_adapters = [_]BuiltinAdapter{
     .{ .owner = "Try", .name = "map_ok!", .kind = .try_map_ok_bang },
     .{ .owner = "Try", .name = "map_err!", .kind = .try_map_err_bang },
     .{ .owner = "Try", .name = "is_eq", .kind = .try_is_eq },
+    .{ .owner = "Try", .name = "to_hash", .kind = .try_to_hash },
     .{ .owner = "Box", .name = "box", .kind = .box_box },
     .{ .owner = "Box", .name = "unbox", .kind = .box_unbox },
+    .{ .owner = "Bool", .name = "to_hash", .kind = .bool_to_hash },
     .{ .owner = "Dict", .name = "empty", .kind = .dict_empty },
     .{ .owner = "Dict", .name = "is_eq", .kind = .dict_is_eq },
     .{ .owner = "Dict", .name = "single", .kind = .dict_single },
+    .{ .owner = "Dict", .name = "with_capacity", .kind = .dict_with_capacity },
+    .{ .owner = "Dict", .name = "capacity", .kind = .dict_capacity },
+    .{ .owner = "Dict", .name = "reserve", .kind = .dict_reserve },
+    .{ .owner = "Dict", .name = "release_excess_capacity", .kind = .dict_release_excess_capacity },
+    .{ .owner = "Dict", .name = "clear", .kind = .dict_clear },
     .{ .owner = "Dict", .name = "len", .kind = .dict_len },
     .{ .owner = "Dict", .name = "is_empty", .kind = .dict_is_empty },
     .{ .owner = "Dict", .name = "get", .kind = .dict_get },
@@ -436,6 +489,7 @@ const builtin_adapters = [_]BuiltinAdapter{
 const numeric_adapters = [_]NumericAdapter{
     .{ .name = "default", .kind = .default, .family = .all },
     .{ .name = "to_str", .kind = .to_str, .family = .all },
+    .{ .name = "to_hash", .kind = .to_hash, .family = .all },
     .{ .name = "is_zero", .kind = .is_zero, .family = .all },
     .{ .name = "is_negative", .kind = .is_negative, .family = .signed_or_float },
     .{ .name = "is_positive", .kind = .is_positive, .family = .signed_or_float },
@@ -533,7 +587,7 @@ fn isNumericConversionName(name: []const u8) bool {
 }
 
 fn parseNumericConversionSignature(signature: []const u8) ?ParsedNumericConversion {
-    const arrow = std.mem.indexOf(u8, signature, "->") orelse return null;
+    const arrow = std.mem.find(u8, signature, "->") orelse return null;
     var rest = trimLeft(signature[arrow + "->".len ..]);
 
     const mode: NumericConversionMode = if (std.mem.startsWith(u8, rest, "Try(")) mode: {
@@ -2578,7 +2632,7 @@ fn generateSupportLambdaPatternFunction(self: *Self, name_id: u32) std.mem.Alloc
     try self.writeFunctionSignature(name_id, "Main", .list_u64);
     try self.writeFunctionHeader(name_id);
     try self.write("|_| List.map(");
-    try self.writeList(&.{.{ .raw = "Support.make(1)" }, .{ .raw = "Support.make(2)" }});
+    try self.writeList(&.{ .{ .raw = "Support.make(1)" }, .{ .raw = "Support.make(2)" } });
     try self.write(", |Packet(record)| record.count)\n");
 }
 
@@ -2719,6 +2773,7 @@ fn generateBuiltinAssociatedFunction(self: *Self) std.mem.Allocator.Error!void {
         .bool_encode => try self.generateBoolEncodeBuiltinFunction(name_id),
         .bool_decode => try self.generateBoolDecodeBuiltinFunction(name_id),
         .bool_is_eq => try self.generateBoolIsEqBuiltinFunction(name_id),
+        .bool_to_hash => try self.generateToHashBuiltinFunction(name_id, "Bool", .bool),
         .str_is_empty => try self.generateStrUnaryBuiltinFunction(name_id, "is_empty", .bool),
         .str_concat => try self.generateStrBinaryBuiltinFunction(name_id, "concat", .str),
         .str_contains => try self.generateStrBinaryBuiltinFunction(name_id, "contains", .bool),
@@ -2741,9 +2796,12 @@ fn generateBuiltinAssociatedFunction(self: *Self) std.mem.Allocator.Error!void {
         .str_to_utf8 => try self.generateStrToUtf8BuiltinFunction(name_id),
         .str_from_utf8_lossy => try self.generateStrFromUtf8LossyBuiltinFunction(name_id),
         .str_from_utf8 => try self.generateStrFromUtf8BuiltinFunction(name_id),
+        .str_from_quote => try self.generateStrFromQuoteBuiltinFunction(name_id),
+        .str_from_interpolation => try self.generateStrFromInterpolationBuiltinFunction(name_id),
         .str_split_on => try self.generateStrBinaryBuiltinFunction(name_id, "split_on", .list_str),
         .str_join_with => try self.generateStrJoinWithBuiltinFunction(name_id),
         .str_is_eq => try self.generateStrIsEqBuiltinFunction(name_id),
+        .str_to_hash => try self.generateToHashBuiltinFunction(name_id, "Str", .str),
         .str_inspect => try self.generateStrInspectBuiltinFunction(name_id),
         .str_encode => try self.generateStrEncodeBuiltinFunction(name_id),
         .str_decode => try self.generateStrDecodeBuiltinFunction(name_id),
@@ -2756,6 +2814,7 @@ fn generateBuiltinAssociatedFunction(self: *Self) std.mem.Allocator.Error!void {
         .list_release_excess_capacity => try self.generateListReleaseExcessCapacityBuiltinFunction(name_id, self.chooseListType()),
         .list_sort_with => try self.generateListSortWithBuiltinFunction(name_id),
         .list_is_eq => try self.generateListIsEqBuiltinFunction(name_id, self.chooseEquatableListType()),
+        .list_to_hash => try self.generateToHashBuiltinFunction(name_id, "List", .list_u64),
         .list_first => try self.generateListFirstFunction(name_id, self.chooseListType()),
         .list_get => try self.generateListGetFunction(name_id, self.chooseListType()),
         .list_subscript => try self.generateListSubscriptFunction(name_id, self.chooseListType()),
@@ -2803,16 +2862,31 @@ fn generateBuiltinAssociatedFunction(self: *Self) std.mem.Allocator.Error!void {
         .list_split_on_list => try self.generateListSplitOnListBuiltinFunction(name_id),
         .list_split_first => try self.generateListSplitFirstLastBuiltinFunction(name_id, "split_first"),
         .list_split_last => try self.generateListSplitFirstLastBuiltinFunction(name_id, "split_last"),
-        .list_join_with => try self.generateListJoinWithBuiltinFunction(name_id, .list_str),
-        .list_join_list_with => try self.generateListJoinListWithBuiltinFunction(name_id),
         .list_sum => try self.generateListAggregateBuiltinFunction(name_id, "sum"),
         .list_min => try self.generateListMinMaxBuiltinFunction(name_id, "min"),
         .list_max => try self.generateListMinMaxBuiltinFunction(name_id, "max"),
         .list_encode => try self.generateListEncodeBuiltinFunction(name_id),
         .list_decode => try self.generateListDecodeBuiltinFunction(name_id),
+        .hasher_write_bool => try self.generateHasherWriteBuiltinFunction(name_id, "write_bool", .{ .bool_literal = {} }),
+        .hasher_write_u8 => try self.generateHasherWriteBuiltinFunction(name_id, "write_u8", .{ .small_number_literal = .u8 }),
+        .hasher_write_u16 => try self.generateHasherWriteBuiltinFunction(name_id, "write_u16", .{ .small_number_literal = .u16 }),
+        .hasher_write_u32 => try self.generateHasherWriteBuiltinFunction(name_id, "write_u32", .{ .small_number_literal = .u32 }),
+        .hasher_write_u64 => try self.generateHasherWriteBuiltinFunction(name_id, "write_u64", .{ .small_number_literal = .u64 }),
+        .hasher_write_u128 => try self.generateHasherWriteBuiltinFunction(name_id, "write_u128", .{ .small_number_literal = .u128 }),
+        .hasher_write_i8 => try self.generateHasherWriteBuiltinFunction(name_id, "write_i8", .{ .small_number_literal = .i8 }),
+        .hasher_write_i16 => try self.generateHasherWriteBuiltinFunction(name_id, "write_i16", .{ .small_number_literal = .i16 }),
+        .hasher_write_i32 => try self.generateHasherWriteBuiltinFunction(name_id, "write_i32", .{ .small_number_literal = .i32 }),
+        .hasher_write_i64 => try self.generateHasherWriteBuiltinFunction(name_id, "write_i64", .{ .small_number_literal = .i64 }),
+        .hasher_write_i128 => try self.generateHasherWriteBuiltinFunction(name_id, "write_i128", .{ .small_number_literal = .i128 }),
+        .hasher_write_f32 => try self.generateHasherWriteBuiltinFunction(name_id, "write_f32", .{ .small_number_literal = .f32 }),
+        .hasher_write_f64 => try self.generateHasherWriteBuiltinFunction(name_id, "write_f64", .{ .small_number_literal = .f64 }),
+        .hasher_write_dec => try self.generateHasherWriteBuiltinFunction(name_id, "write_dec", .{ .small_number_literal = .dec }),
+        .hasher_write_bytes => try self.generateHasherWriteBuiltinFunction(name_id, "write_bytes", .{ .utf8_bytes_literal = {} }),
+        .hasher_write_str => try self.generateHasherWriteBuiltinFunction(name_id, "write_str", .{ .string_literal = {} }),
         .iter_next => try self.generateIterNextBuiltinFunction(name_id),
         .iter_custom => try self.generateIterCustomBuiltinFunction(name_id),
         .iter_iter => try self.generateIterIterBuiltinFunction(name_id),
+        .iter_prepended => try self.generateIterPrependedBuiltinFunction(name_id),
         .iter_map => try self.generateIterTransformCollectBuiltinFunction(name_id, "map"),
         .iter_keep_if => try self.generateIterPredicateCollectBuiltinFunction(name_id, "keep_if"),
         .iter_drop_if => try self.generateIterPredicateCollectBuiltinFunction(name_id, "drop_if"),
@@ -2839,11 +2913,17 @@ fn generateBuiltinAssociatedFunction(self: *Self) std.mem.Allocator.Error!void {
         .try_map_ok_bang => try self.generateTryMapOkErrBangBuiltinFunction(name_id, self.chooseTryType(), "map_ok!"),
         .try_map_err_bang => try self.generateTryMapOkErrBangBuiltinFunction(name_id, self.chooseTryType(), "map_err!"),
         .try_is_eq => try self.generateTryIsEqBuiltinFunction(name_id, self.chooseTryType()),
+        .try_to_hash => try self.generateToHashBuiltinFunction(name_id, "Try", .try_u64_str),
         .box_box => try self.generateBoxBoxBuiltinFunction(name_id, self.chooseBoxType()),
         .box_unbox => try self.generateBoxUnboxFunction(name_id, self.chooseBoxType()),
         .dict_empty => try self.generateDictEmptyBuiltinFunction(name_id, self.chooseDictType()),
         .dict_is_eq => try self.generateDictIsEqBuiltinFunction(name_id, self.chooseDictType()),
         .dict_single => try self.generateDictSingleBuiltinFunction(name_id, self.chooseDictType()),
+        .dict_with_capacity => try self.generateDictWithCapacityBuiltinFunction(name_id, self.chooseDictType()),
+        .dict_capacity => try self.generateDictCapacityBuiltinFunction(name_id, self.chooseDictType()),
+        .dict_reserve => try self.generateDictReserveBuiltinFunction(name_id, self.chooseDictType()),
+        .dict_release_excess_capacity => try self.generateDictNoArgReturnSelfBuiltinFunction(name_id, self.chooseDictType(), "release_excess_capacity"),
+        .dict_clear => try self.generateDictNoArgReturnSelfBuiltinFunction(name_id, self.chooseDictType(), "clear"),
         .dict_len => try self.generateDictLenFunction(name_id, self.chooseDictType()),
         .dict_is_empty => try self.generateDictIsEmptyFunction(name_id, self.chooseDictType()),
         .dict_get => try self.generateDictGetFunction(name_id, self.chooseDictType()),
@@ -2936,6 +3016,7 @@ fn generateNumericBuiltinAssociatedFunction(self: *Self, name_id: u32, adapter: 
         .decode => try self.generateNumericDecodeBuiltinFunction(name_id, typ),
         .to => try self.generateNumericRangeBuiltinFunction(name_id, typ, "to"),
         .until => try self.generateNumericRangeBuiltinFunction(name_id, typ, "until"),
+        .to_hash => try self.generateToHashBuiltinFunction(name_id, numberOwner(typ), typ),
     }
 }
 
@@ -3212,6 +3293,24 @@ fn generateStrIsEqBuiltinFunction(self: *Self, name_id: u32) std.mem.Allocator.E
     try self.write("\n");
 }
 
+fn generateToHashBuiltinFunction(self: *Self, name_id: u32, owner: []const u8, typ: Type) std.mem.Allocator.Error!void {
+    try self.writeHasherFunctionStart(name_id);
+    try self.writeAssociatedOrMethodCall(owner, .{ .literal = typ }, "to_hash", &.{.{ .raw = "hasher" }});
+    try self.write("\n");
+}
+
+fn generateHasherWriteBuiltinFunction(self: *Self, name_id: u32, method: []const u8, value: Expr) std.mem.Allocator.Error!void {
+    try self.writeHasherFunctionStart(name_id);
+    try self.writeAssociatedOrMethodCall("Hasher", .{ .raw = "hasher" }, method, &.{value});
+    try self.write("\n");
+}
+
+fn writeHasherFunctionStart(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeRawFunctionSignature(name_id, "Main, Hasher", "Hasher");
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_, hasher| ");
+}
+
 fn generateStrToUtf8BuiltinFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
     try self.writeRawFunctionSignature(name_id, "Main", "List(U8)");
     try self.writeFunctionHeader(name_id);
@@ -3233,6 +3332,25 @@ fn generateStrFromUtf8BuiltinFunction(self: *Self, name_id: u32) std.mem.Allocat
     try self.writeFunctionHeader(name_id);
     try self.write("|_| ");
     try self.writeCall("Str.from_utf8", &.{.{ .utf8_bytes_literal = {} }});
+    try self.write("\n");
+}
+
+fn generateStrFromQuoteBuiltinFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeTrySignature(name_id, .str);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| ");
+    try self.writeCall("Str.from_quote", &.{.{ .utf8_bytes_literal = {} }});
+    try self.write("\n");
+}
+
+fn generateStrFromInterpolationBuiltinFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFunctionSignature(name_id, "Main", .str);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| ");
+    try self.writeCall("Str.from_interpolation", &.{
+        .{ .string_literal = {} },
+        .{ .raw = "List.iter([(\"mid\", \"tail\")])" },
+    });
     try self.write("\n");
 }
 
@@ -4178,25 +4296,6 @@ fn generateListSplitFirstLastBuiltinFunction(self: *Self, name_id: u32, method: 
     try self.write(" {\n        Ok(parts) => parts.before\n        Err(_) => []\n    }\n");
 }
 
-fn generateListJoinWithBuiltinFunction(self: *Self, name_id: u32, typ: Type) std.mem.Allocator.Error!void {
-    std.debug.assert(typ.isList());
-
-    const elem_type = typ.listElement();
-    try self.writeFunctionSignature(name_id, "Main", elem_type);
-    try self.writeFunctionHeader(name_id);
-    try self.write("|_| ");
-    try self.writeAssociatedOrMethodCall("List", .{ .literal = typ }, "join_with", &.{.{ .literal = elem_type }});
-    try self.write("\n");
-}
-
-fn generateListJoinListWithBuiltinFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
-    try self.writeFunctionSignature(name_id, "Main", .list_u64);
-    try self.writeFunctionHeader(name_id);
-    try self.write("|_| ");
-    try self.writeAssociatedOrMethodCall("List", .{ .literal = .list_list_u64 }, "join_list_with", &.{.{ .literal = .list_u64 }});
-    try self.write("\n");
-}
-
 fn generateListAggregateBuiltinFunction(self: *Self, name_id: u32, method: []const u8) std.mem.Allocator.Error!void {
     try self.writeFunctionSignature(name_id, "Main", .u64);
     try self.writeFunctionHeader(name_id);
@@ -4247,6 +4346,14 @@ fn generateIterIterBuiltinFunction(self: *Self, name_id: u32) std.mem.Allocator.
     try self.write("|_| ");
     try self.writeAssociatedOrMethodCall("Iter", .{ .raw = "List.iter([1, 2, 3])" }, "iter", &.{});
     try self.write("\n");
+}
+
+fn generateIterPrependedBuiltinFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFunctionSignature(name_id, "Main", .list_u64);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| Iter.collect(");
+    try self.writeAssociatedOrMethodCall("Iter", .{ .raw = "List.iter([2, 3])" }, "prepended", &.{.{ .raw = "1" }});
+    try self.write(")\n");
 }
 
 fn generateIterTransformCollectBuiltinFunction(self: *Self, name_id: u32, method: []const u8) std.mem.Allocator.Error!void {
@@ -4965,6 +5072,43 @@ fn generateDictSingleBuiltinFunction(self: *Self, name_id: u32, typ: Type) std.m
     try self.write("|_| ");
     try self.writeCall("Dict.single", &.{ .{ .literal = typ.dictKey() }, .{ .literal = typ.dictValue() } });
     try self.write("\n");
+}
+
+fn generateDictWithCapacityBuiltinFunction(self: *Self, name_id: u32, typ: Type) std.mem.Allocator.Error!void {
+    std.debug.assert(typ.isDict());
+
+    try self.writeFunctionSignature(name_id, "Main", typ);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| ");
+    try self.writeCall("Dict.with_capacity", &.{.{ .integer_literal = {} }});
+    try self.write("\n");
+}
+
+fn generateDictCapacityBuiltinFunction(self: *Self, name_id: u32, typ: Type) std.mem.Allocator.Error!void {
+    std.debug.assert(typ.isDict());
+
+    try self.writeDictLocalFunctionStart(name_id, typ, .u64);
+    try self.write("        ");
+    try self.writeAssociatedOrMethodCall("Dict", .{ .raw = "dict" }, "capacity", &.{});
+    try self.write("\n    }\n");
+}
+
+fn generateDictReserveBuiltinFunction(self: *Self, name_id: u32, typ: Type) std.mem.Allocator.Error!void {
+    std.debug.assert(typ.isDict());
+
+    try self.writeDictLocalFunctionStart(name_id, typ, typ);
+    try self.write("        ");
+    try self.writeAssociatedOrMethodCall("Dict", .{ .raw = "dict" }, "reserve", &.{.{ .integer_literal = {} }});
+    try self.write("\n    }\n");
+}
+
+fn generateDictNoArgReturnSelfBuiltinFunction(self: *Self, name_id: u32, typ: Type, method: []const u8) std.mem.Allocator.Error!void {
+    std.debug.assert(typ.isDict());
+
+    try self.writeDictLocalFunctionStart(name_id, typ, typ);
+    try self.write("        ");
+    try self.writeAssociatedOrMethodCall("Dict", .{ .raw = "dict" }, method, &.{});
+    try self.write("\n    }\n");
 }
 
 fn generateDictLenFunction(self: *Self, name_id: u32, typ: Type) std.mem.Allocator.Error!void {

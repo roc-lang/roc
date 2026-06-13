@@ -90,28 +90,37 @@ jobs:
           # Just the do super fast check step for now.
           zig build -Dno-bin -Dfuzz -Dtracy=./tracy
 
-      - name: Run typecheck fuzz seed
+      - name: Run fuzz seed reproducers
         env:
           ROC_FUZZ_SEED: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
-          python3 - <<'PY'
+          set -euo pipefail
+
+          for target in tokenize parse canonicalize typecheck; do
+            export ROC_FUZZ_TARGET="$target"
+            export ROC_FUZZ_INPUT="/tmp/roc-${target}-fuzz-input"
+
+            python3 - <<'PY'
           import base64
           import hashlib
           import os
           import pathlib
 
           seed = os.environ["ROC_FUZZ_SEED"]
+          target = os.environ["ROC_FUZZ_TARGET"]
           data = bytearray()
           for index in range(8):
-              data.extend(hashlib.sha256(f"{seed}:{index}".encode()).digest())
+              data.extend(hashlib.sha256(f"{seed}:{target}:{index}".encode()).digest())
 
-          path = pathlib.Path("/tmp/roc-typecheck-fuzz-input")
+          path = pathlib.Path(os.environ["ROC_FUZZ_INPUT"])
           path.write_bytes(data)
 
-          print(f"typecheck fuzz seed: {seed}")
-          print(f"typecheck fuzz input base64: {base64.b64encode(data).decode()}")
+          print(f"{target} fuzz seed: {seed}")
+          print(f"{target} fuzz input base64: {base64.b64encode(data).decode()}")
           PY
-          zig build run-repro-typecheck -- /tmp/roc-typecheck-fuzz-input
+
+            zig build "run-repro-${target}" -- "$ROC_FUZZ_INPUT"
+          done
 
   exec-bench-checks:
     needs: check-once

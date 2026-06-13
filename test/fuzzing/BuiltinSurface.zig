@@ -92,7 +92,7 @@ fn parseFunctions() Parsed {
 
         if (associatedOwnerStart(trimmed)) |name| {
             const owner: Owner = .{ .name = name, .indent = indent };
-            if (std.mem.indexOf(u8, trimmed, ".{") != null) {
+            if (std.mem.find(u8, trimmed, ".{") != null) {
                 if (owner_count >= owners.len) @compileError("Builtin.roc associated block nesting exceeded parser capacity");
                 owners[owner_count] = owner;
                 owner_count += 1;
@@ -128,7 +128,7 @@ fn associatedOwnerStart(line: []const u8) ?[]const u8 {
 
 fn functionName(line: []const u8) ?[]const u8 {
     if (line.len == 0 or !isLower(line[0])) return null;
-    if (std.mem.indexOf(u8, line, "->") == null and std.mem.indexOf(u8, line, "=>") == null) return null;
+    if (std.mem.find(u8, line, "->") == null and std.mem.find(u8, line, "=>") == null) return null;
 
     const name_end = functionIdentifierEnd(line, 0);
     const after_name = trimLeft(line[name_end..]);
