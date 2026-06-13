@@ -258,6 +258,9 @@ pub const Fn = struct {
     ret: Type.TypeId,
 };
 
+/// Source procedure names for runtime diagnostics, keyed by generated symbol.
+pub const ProcDebugNameMap = std.AutoHashMap(Common.Symbol, names.ExportNameId);
+
 /// Body availability for a Lambda Mono function.
 pub const FnBody = union(enum) {
     roc: ExprId,
@@ -302,6 +305,7 @@ pub const Program = struct {
     branches: std.ArrayList(Branch),
     if_branches: std.ArrayList(IfBranch),
     string_literals: std.ArrayList(Mono.StringLiteral),
+    proc_debug_names: ProcDebugNameMap,
     roots: std.ArrayList(Root),
     layout_requests: std.ArrayList(LayoutRequest),
     runtime_schema_requests: std.ArrayList(RuntimeSchemaRequest),
@@ -343,6 +347,7 @@ pub const Program = struct {
             .branches = .empty,
             .if_branches = .empty,
             .string_literals = string_literals,
+            .proc_debug_names = ProcDebugNameMap.init(allocator),
             .roots = .empty,
             .layout_requests = .empty,
             .runtime_schema_requests = .empty,
@@ -366,6 +371,7 @@ pub const Program = struct {
         self.runtime_schema_requests.deinit(self.allocator);
         self.layout_requests.deinit(self.allocator);
         self.roots.deinit(self.allocator);
+        self.proc_debug_names.deinit();
         for (self.string_literals.items) |literal| self.allocator.free(literal.backing);
         self.string_literals.deinit(self.allocator);
         self.if_branches.deinit(self.allocator);
@@ -389,6 +395,14 @@ pub const Program = struct {
         const id: FnId = @enumFromInt(@as(u32, @intCast(self.fns.items.len)));
         try self.fns.append(self.allocator, fn_);
         return id;
+    }
+
+    pub fn setProcDebugName(self: *Program, symbol: Common.Symbol, name: names.ExportNameId) std.mem.Allocator.Error!void {
+        try self.proc_debug_names.put(symbol, name);
+    }
+
+    pub fn procDebugName(self: *const Program, symbol: Common.Symbol) ?names.ExportNameId {
+        return self.proc_debug_names.get(symbol);
     }
 
     pub fn addExpr(self: *Program, expr: Expr) std.mem.Allocator.Error!ExprId {
