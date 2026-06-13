@@ -902,7 +902,7 @@ const Builder = struct {
         try body_ctx.constrainTypeToMono(template.checked_fn_root, mono_fn_ty);
         try body_ctx.constrainKnownType(root.checked_type, mono_fn_ty);
 
-        const lowered = try body_ctx.lowerExprAtType(wrapper.body_expr, mono_fn_ty);
+        const lowered = try body_ctx.lowerComptimeRootExprAtType(wrapper.body_expr, mono_fn_ty);
         try self.drainSpecRequests(graph);
         return lowered;
     }
@@ -2560,6 +2560,7 @@ const BodyContext = struct {
     owner_template: names.ProcTemplate,
     owner_context_fn_key: names.TypeDigest,
     current_fn_key: names.TypeDigest,
+    comptime_exhaustiveness_depth: u32,
     binders: BinderMap,
     local_proc_contexts: std.AutoHashMap(checked.PatternBinderId, names.TypeDigest),
     /// This specialization's type solver, shared by every instantiation
@@ -2630,6 +2631,7 @@ const BodyContext = struct {
             .owner_template = owner_template,
             .owner_context_fn_key = .{},
             .current_fn_key = .{},
+            .comptime_exhaustiveness_depth = 0,
             .binders = BinderMap.init(allocator),
             .local_proc_contexts = std.AutoHashMap(checked.PatternBinderId, names.TypeDigest).init(allocator),
             .graph = graph,
@@ -2667,6 +2669,7 @@ const BodyContext = struct {
         errdefer child.deinit();
         child.owner_context_fn_key = self.owner_context_fn_key;
         child.current_fn_key = current_fn_key;
+        child.comptime_exhaustiveness_depth = self.comptime_exhaustiveness_depth;
 
         var binder_iter = self.binders.iterator();
         while (binder_iter.next()) |entry| {
@@ -3029,7 +3032,7 @@ const BodyContext = struct {
                 }
                 return .{
                     .args = .empty(),
-                    .body = try self.lowerExprAtType(wrapper.body_expr, ret_ty),
+                    .body = try self.lowerComptimeRootExprAtType(wrapper.body_expr, ret_ty),
                     .ret = ret_ty,
                 };
             },
@@ -3082,6 +3085,9 @@ const BodyContext = struct {
         ret_ty: Type.TypeId,
     ) Allocator.Error!LoweredLambdaArgs {
         if (arg_tys.len != checked_args.len) Common.invariant("lambda arity differs from concrete function type");
+
+        const saved_comptime_depth = self.resetComptimeExhaustivenessDepth();
+        defer self.restoreComptimeExhaustivenessDepth(saved_comptime_depth);
 
         const args = try self.allocator.alloc(Ast.TypedLocal, checked_args.len);
         defer self.allocator.free(args);
@@ -3208,6 +3214,30 @@ const BodyContext = struct {
         }
         const ty = try self.lowerExprType(expr_id);
         return try self.lowerExprWithType(expr_id, ty);
+    }
+
+    fn lowerComptimeRootExprAtType(
+        self: *BodyContext,
+        expr_id: checked.CheckedExprId,
+        ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        self.comptime_exhaustiveness_depth += 1;
+        defer self.comptime_exhaustiveness_depth -= 1;
+        return try self.lowerExprAtType(expr_id, ty);
+    }
+
+    fn resetComptimeExhaustivenessDepth(self: *BodyContext) u32 {
+        const saved = self.comptime_exhaustiveness_depth;
+        self.comptime_exhaustiveness_depth = 0;
+        return saved;
+    }
+
+    fn restoreComptimeExhaustivenessDepth(self: *BodyContext, saved: u32) void {
+        self.comptime_exhaustiveness_depth = saved;
+    }
+
+    fn inComptimeExhaustivenessContext(self: *const BodyContext) bool {
+        return self.comptime_exhaustiveness_depth != 0;
     }
 
     fn lowerExprWithType(
@@ -4018,7 +4048,7 @@ const BodyContext = struct {
         try body_ctx.constrainTypeToMono(entry_template.checked_fn_root, wrapper_fn_ty);
         try body_ctx.constrainTypeToMono(body.checked_type, ty);
 
-        const lowered = try body_ctx.lowerExprAtType(body.body_expr, ty);
+        const lowered = try body_ctx.lowerComptimeRootExprAtType(body.body_expr, ty);
         try self.builder.drainSpecRequests(graph);
         return lowered;
     }
@@ -6427,6 +6457,7 @@ const BodyContext = struct {
     }
 
     fn matchComptimeSite(self: *BodyContext, expr_id: checked.CheckedExprId, match: anytype) Allocator.Error!?Ast.ComptimeSiteId {
+        if (!self.inComptimeExhaustivenessContext()) return null;
         if (match.skip_exhaustiveness) return null;
         const branch_regions = try self.matchBranchRegions(match.branches);
         defer self.allocator.free(branch_regions);
@@ -6447,6 +6478,7 @@ const BodyContext = struct {
     }
 
     fn ifComptimeSite(self: *BodyContext, expr_id: checked.CheckedExprId, if_: anytype) Allocator.Error!?Ast.ComptimeSiteId {
+        if (!self.inComptimeExhaustivenessContext()) return null;
         if (!if_.warn_unused_branches) return null;
         const branch_regions = try self.ifBranchRegions(if_);
         defer self.allocator.free(branch_regions);
@@ -6997,7 +7029,7 @@ const BodyContext = struct {
         } }));
 
         const source_expr = try self.builder.localExpr(source_local, value_ty);
-        const comptime_site = if (self.patternCanMiss(pattern))
+        const comptime_site = if (self.inComptimeExhaustivenessContext() and self.patternCanMiss(pattern))
             try self.addComptimeSite(.destructure, statement.source_region, &.{})
         else
             null;
@@ -8024,7 +8056,7 @@ const BodyContext = struct {
     ) Allocator.Error!Ast.Stmt {
         const value = try self.lowerExpr(expr);
         const value_ty = self.builder.program.exprs.items[@intFromEnum(value)].ty;
-        const comptime_site = if (self.patternCanMiss(pattern))
+        const comptime_site = if (self.inComptimeExhaustivenessContext() and self.patternCanMiss(pattern))
             try self.addComptimeSite(.destructure, source_region, &.{})
         else
             null;
