@@ -2556,7 +2556,10 @@ pub fn buildLirImageWithCoordinator(
 
     // Run global package version resolution: downloads every (transitive)
     // URL dependency, solves versions, and yields the final package graph.
-    const roc_file_abs = std.Io.Dir.cwd().realPathFileAlloc(ctx.io.std_io, roc_file_path, ctx.arena) catch
+    // Use a logical absolute path (cwd-based) rather than a realpath syscall,
+    // matching how the rest of the build resolves paths and avoiding musl's
+    // realpath reading uninitialized bytes under valgrind.
+    const roc_file_abs = std.fs.path.resolve(ctx.arena, &.{roc_file_path}) catch
         try ctx.arena.dupe(u8, roc_file_path);
     var resolved = try resolvePackages(ctx, roc_file_abs, resolution_config);
     defer resolved.deinit();
