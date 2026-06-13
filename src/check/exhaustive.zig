@@ -4043,7 +4043,6 @@ pub fn checkDestructure(
     builtin_idents: BuiltinIdents,
     pattern_idx: CirPattern.Idx,
     scrutinee_type: Var,
-    overall_region: Region,
     known_empty_payload_vars: []const Var,
     scrutinee_constructors_known: bool,
 ) PatternResolveError!CheckResult {
@@ -4120,7 +4119,6 @@ pub fn checkDestructure(
         result_patterns[i] = try pat.dupe(allocator);
     }
 
-    _ = overall_region;
     return .{
         .is_exhaustive = missing.len == 0,
         .missing_patterns = result_patterns,

@@ -7738,7 +7738,6 @@ fn checkDestructureExhaustiveness(
         self.exhaustiveBuiltinIdents(),
         pattern_idx,
         value_var,
-        region,
         known_empty_payload_vars.items,
         value_constructors_known,
     ) catch |err| switch (err) {
