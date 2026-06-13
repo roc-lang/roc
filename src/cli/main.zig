@@ -3887,6 +3887,13 @@ fn linkerOutputKind(output: roc_target.OutputKind) linker.OutputKind {
     };
 }
 
+fn llvmBuildLinkAbi(target: RocTarget, synthetic_default_platform: bool) linker.TargetAbi {
+    if (synthetic_default_platform and target.toOsTag() == .linux) {
+        return .musl;
+    }
+    return linker.TargetAbi.fromRocTarget(target);
+}
+
 /// Write an Archive output: a static archive of the platform's pre inputs,
 /// the compiled objects, and the post inputs, with input archives flattened.
 fn writeArchiveOutput(
@@ -5086,7 +5093,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
 
             const link_config = linker.LinkConfig{
                 .target_format = linker.TargetFormat.detectFromOs(target_os),
-                .target_abi = linker.TargetAbi.fromRocTarget(target),
+                .target_abi = llvmBuildLinkAbi(target, args.synthetic_default_platform),
                 .target_os = target_os,
                 .target_arch = target_arch,
                 .output_path = final_output_path,
