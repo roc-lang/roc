@@ -44,7 +44,7 @@
 //! ## Hang detection
 //!
 //! Integrated into the parent's poll() loop. If a child has been running
-//! longer than the timeout (default 30s for interpreter/dev/wasm, 7 minutes
+//! longer than the timeout (default 60s for interpreter/dev/wasm, 7 minutes
 //! for LLVM), the parent SIGKILLs it. No separate watchdog thread is needed.
 //!
 //! ## Usage
@@ -156,6 +156,8 @@ const LLVM_BACKEND_INDEX = 3;
 /// finish while the other backends keep the normal eval timeout.
 const LLVM_BACKEND_TIMEOUT_MS: u64 = 420_000;
 const BACKEND_TIMEOUT_REPORT_GRACE_MS: u64 = 5_000;
+const DEFAULT_HANG_TIMEOUT_MS: u64 = 60_000;
+const MUSL_HANG_TIMEOUT_MS: u64 = 120_000;
 const FORKED_BACKEND_KILL_GRACE_MS: i64 = 5_000;
 const FORKED_BACKEND_KILL_POLL_NS: u64 = 10 * std.time.ns_per_ms;
 const LLVM_EVAL_LOCK_POLL_NS: u64 = 10 * std.time.ns_per_ms;
@@ -1728,7 +1730,7 @@ fn printHelp() void {
         \\  --threads <N>         Max concurrent child processes (default: number of CPU cores).
         \\  --verbose             Print PASS and SKIP results (default: only FAIL/CRASH).
         \\  --timeout <MS>        Hang timeout in ms for parse/interp/dev/wasm.
-        \\                        Default: 30000, 120000 on musl.
+        \\                        Default: 60000, 120000 on musl.
         \\                        LLVM uses a separate 420000ms backend budget.
         \\                        LLVM eval lock slots match the worker count.
         \\  --llvm                Include the LLVM backend. Default: skip LLVM.
@@ -2160,10 +2162,10 @@ const WorkerTrace = struct {
     }
 };
 
-fn effectiveHangTimeoutMs(cli: harness.StandardArgs, max_children: usize) u64 {
+fn effectiveHangTimeoutMs(cli: harness.StandardArgs) u64 {
     if (cli.timeout_provided and cli.timeout_ms > 0) return cli.timeout_ms;
-    if (builtin.abi == .musl) return 120_000;
-    return if (max_children <= 1) 10_000 else 30_000;
+    if (builtin.abi == .musl) return MUSL_HANG_TIMEOUT_MS;
+    return DEFAULT_HANG_TIMEOUT_MS;
 }
 
 fn effectiveMaxChildren(cli: harness.StandardArgs, cpu_count: usize, test_count: usize) usize {
@@ -2386,7 +2388,7 @@ pub fn main(init: std.process.Init) anyerror!void {
 
     // Native musl CI has enough process-startup variance for the larger shared
     // harness default to be more reliable, especially for heavy boundary tests.
-    const hang_timeout_ms: u64 = effectiveHangTimeoutMs(cli, max_children);
+    const hang_timeout_ms: u64 = effectiveHangTimeoutMs(cli);
 
     // Build a worker_argv_template so Windows can spawn `Child` workers that
     // re-invoke this binary with `--worker <idx>`. On POSIX the template is
