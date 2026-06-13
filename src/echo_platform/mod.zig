@@ -32,6 +32,8 @@ pub const build_platform_main_source =
     \\        inputs: "targets/",
     \\        x64musl: { inputs: [app] },
     \\        arm64musl: { inputs: [app] },
+    \\        x64glibc: { inputs: [app] },
+    \\        arm64glibc: { inputs: [app] },
     \\    }
     \\
     \\import Echo
@@ -58,8 +60,6 @@ pub const build_c_platform_main_source =
     \\    hosted { "roc_default_echo_line": Echo.line! }
     \\    targets: {
     \\        inputs: "targets/",
-    \\        x64glibc: { inputs: [app] },
-    \\        arm64glibc: { inputs: [app] },
     \\        x64mac: { inputs: [app] },
     \\        arm64mac: { inputs: [app] },
     \\        x64win: { inputs: [app] },

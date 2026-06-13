@@ -1388,7 +1388,7 @@ pub const MonoLlvmCodeGen = struct {
         arg_layouts: []const layout.Idx,
         ret_layout: layout.Idx,
     ) Error!void {
-        if (self.enable_default_platform_runtime and
+        if (self.enable_default_platform_hosted_calls and
             self.host_call_mode == .extern_symbols and
             self.target.os.tag == .linux and
             std.mem.eql(u8, symbol_name, "_start"))
@@ -4855,10 +4855,7 @@ pub const MonoLlvmCodeGen = struct {
 
     fn emitDefaultPlatformWriteStdout(self: *MonoLlvmCodeGen, ptr: LlvmBuilder.Value, len: LlvmBuilder.Value) Error!void {
         switch (self.target.os.tag) {
-            .linux => switch (self.target.abi) {
-                .gnu, .gnueabi, .gnueabihf, .gnux32 => try self.emitCWriteStdout(ptr, len),
-                else => try self.emitLinuxWriteStdout(ptr, len),
-            },
+            .linux => try self.emitLinuxWriteStdout(ptr, len),
             .macos, .windows => try self.emitCWriteStdout(ptr, len),
             else => return error.CompilationFailed,
         }

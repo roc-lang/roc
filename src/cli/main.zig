@@ -3646,7 +3646,7 @@ fn defaultBuildPlatformSource(args: cli_args.BuildArgs) []const u8 {
     if (args.target) |target_str| {
         if (RocTarget.fromString(target_str)) |target| {
             return switch (target) {
-                .x64glibc, .arm64glibc, .x64mac, .arm64mac, .x64win, .arm64win => echo_platform.build_c_platform_main_source,
+                .x64mac, .arm64mac, .x64win, .arm64win => echo_platform.build_c_platform_main_source,
                 .wasm32 => echo_platform.build_wasm_archive_platform_main_source,
                 else => echo_platform.build_platform_main_source,
             };
