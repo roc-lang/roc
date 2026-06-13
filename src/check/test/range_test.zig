@@ -4,8 +4,6 @@
 
 const TestEnv = @import("./TestEnv.zig");
 
-// ─── Iter.exclusive_range / Iter.inclusive_range direct constructor tests ────
-
 test "exclusive_range of unannotated literals defaults to Iter(Dec)" {
     var test_env = try TestEnv.initExpr("Test", "Iter.exclusive_range(0, 3)");
     defer test_env.deinit();
