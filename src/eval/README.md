@@ -13,23 +13,17 @@ interpreter or interpreter shim; the parent compiler lowers through checked
 modules, post-check IRs, LIR, and ARC first.
 
 ```
-checked modules → post-check IRs → LIR → ARC → Interpret
+checked modules → post-check IRs → LIR → TRMC/TCE → ARC → Interpret
 ```
 
 ### Core Modules
 
-- **`interpreter.zig`** exports `LirInterpreter`. Each instance evaluates LIR
-  expressions using a stack-safe iterative architecture with two explicit stacks:
-  - A `WorkStack` of items to evaluate (expressions, control-flow statements,
-    and continuations).
-  - A `ValueStack` of results from completed sub-expressions.
-  - A flat `ArrayList` of bindings modeling lexical scopes (push on entry, trim
-    on exit — no cloning).
-
-- **`work_stack.zig`** defines the `WorkItem` and `Continuation` types that
-  drive the stack-safe eval engine. `WorkItem` has three variants: `eval_expr`,
-  `eval_cf_stmt`, and `apply_continuation`. There are ~25 continuation variants
-  covering function calls, aggregate construction, control flow, loops, etc.
+- **`interpreter.zig`** exports `LirInterpreter`. Each Roc call gets a frame
+  whose local slots are looked up through the proc's sorted `frame_locals`
+  span. Within a frame, `execStmtChain` walks the statement chain in a flat
+  loop — `join`/`jump` execute as loops without growing any stack — while
+  `assign_call` recurses natively into the callee (bounded by the call-depth
+  cap below).
 
 - **`value.zig`** defines `Value` — a raw pointer to bytes in memory. Values
   carry no runtime type information; the layout is always tracked separately
@@ -39,21 +33,37 @@ checked modules → post-check IRs → LIR → ARC → Interpret
 
 1. **Published inputs** — Consumers (REPL, tests, CLI) type check source and
    publish checked modules plus explicit roots.
-2. **Lowering** — The checked-module pipeline lowers through post-check IRs,
-   LIR, and ARC, producing a `LirStore`, committed layouts, and explicit root
+2. **Lowering** — The checked-module pipeline lowers through post-check IRs
+   and LIR, rewrites tail recursion via TRMC/TCE (`src/lir/trmc.zig`), and
+   inserts ARC, producing a `LirStore`, committed layouts, and explicit root
    procedures.
 3. **Interpretation** — `LirInterpreter.init()` creates the interpreter, then
-   `eval()` or `evalEntrypoint()` runs the stack-safe engine.
-4. **Stack-safe engine** — `evalStackSafe()` is the main loop. It pops work
-   items, dispatches expression evaluation, and pushes continuations + values.
-   Immediates (literals, lookups) push values directly; compound expressions
-   schedule continuations for post-evaluation assembly.
+   `eval()` (by proc id) or `runEntrypoint()` (by platform entrypoint ordinal,
+   for LIR images) evaluates a root procedure.
+4. **Statement walk** — `execStmtChain` executes each frame's statement chain
+   iteratively, dispatching per `CFStmt` variant; low-level ops go through
+   `evalLowLevel`.
 5. **Crash handling** — Crash/expect expressions delegate to the host via
    `RocOps.crash`. Hosts supply a `CrashContext` (see `crash_context.zig`) to
    record messages.
 
 All RocOps interactions (alloc, dealloc, crash, expect, dbg) happen through the
 `RocOps` pointer. This keeps host integrations consistent.
+
+## Evaluation Limits
+
+- **Call-depth cap** — `LirInterpreter` crashes ("stack overflow") after 1024
+  nested Roc calls (`max_call_depth`). Tail-recursive and
+  constructor-tail-recursive functions don't hit this: the TRMC/TCE pass
+  (`src/lir/trmc.zig`) rewrites them into join-point loops before the
+  interpreter ever sees them.
+- **Debug value validation** — In Debug builds, `setLocal` walks values to
+  check they match their layouts. The walk is best-effort: it stops at
+  `max_debug_value_depth` (64) nested values and after
+  `max_debug_value_visits` (16) heap cells (so deep lists can't overflow the
+  native stack and wide trees don't make every assignment O(structure size)),
+  and inside TRMC-transformed procs a null box pointer is accepted as a legal
+  not-yet-filled hole.
 
 ## Host Integrations
 
@@ -63,17 +73,30 @@ All RocOps interactions (alloc, dealloc, crash, expect, dbg) happen through the
 
 ## Tests
 
-Interpreter-specific coverage lives in `src/eval/test/`:
+Evaluation coverage lives in `src/eval/test/`:
 
-- `eval_test.zig` — End-to-end tests that parse, canonicalize, lower, and
-  evaluate Roc expressions.
-- `arithmetic_comprehensive_test.zig` — Comprehensive numeric operation tests.
-- `list_refcount_*.zig` — Reference counting tests for list operations.
-- `cor_pipeline_test.zig`, `parallel_runner.zig`, `anno_only_interp_test.zig`
-  — Targeted test suites for cor-style lowering, inspect-only backend parity,
-  and interpreter-specific features.
+- `parallel_runner.zig` — Runs every data-driven `TestCase` on all enabled
+  backends (interpreter, dev, wasm; llvm with `--llvm`) in forked
+  subprocesses, requiring byte-identical `Str.inspect` output.
+- `eval_tests.zig` — Aggregates the `TestCase` tables from the
+  `eval_*_tests.zig` files (recursive data, closures, low-level ops,
+  polymorphism, issue repros, ...). `eval_trmc_tests.zig` holds the TRMC/TCE
+  stack-safety gates and the CFold/NQueens/RBTreeCk benchmark ports.
+- `trmc_lir_test.zig`, `lir_inline_test.zig` — Standalone binaries asserting
+  on LIR structure (TRMC pointer ops, detection/transform outcomes, inlining).
+- `host_effects_runner.zig` / `host_effects_tests.zig` — Runtime host-effect
+  coverage.
+- `RuntimeHostEnv.zig` — Test host implementing `RocOps` with allocation
+  tracking (`checkForLeaks()`) and crash capture.
 
 Run tests with:
+
+```bash
+zig build run-test-eval                 # interpreter + dev + wasm
+zig build run-test-eval -- --llvm       # also the LLVM backend
+zig build run-test-zig-trmc-lir         # LIR-level TRMC tests
+zig build run-test-zig-lir-inline       # LIR-level inlining tests
+```
 
 ## Debugging
 
@@ -84,8 +107,8 @@ evaluation output. To build with tracing enabled:
 zig build -Dtrace-eval=true
 ```
 
-This flag is automatically enabled in Debug builds (`-Doptimize=Debug`). When
-enabled, the interpreter outputs detailed information about evaluation steps.
+When enabled, the interpreter outputs detailed information about evaluation
+steps. Both tracing flags default to `false`.
 
 ### Refcount Tracing
 
@@ -103,5 +126,4 @@ When enabled, this outputs detailed refcount operations to stderr:
 [REFCOUNT] INCREF str ptr=0x1234 len=5 cap=32
 ```
 
-Unlike `-Dtrace-eval`, this flag defaults to `false` even in Debug builds due to
-the volume of output it produces.
+Expect a large volume of output: every incref/decref is logged.

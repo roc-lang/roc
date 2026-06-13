@@ -33,6 +33,10 @@ jobs:
       - uses: cachix/install-nix-action@02a151ada4993995686f9ed4f1be7cfbb229e56f # ratchet:cachix/install-nix-action@v31
         with:
           nix_path: nixpkgs=channel:nixos-25.05
+          extra_nix_config: |
+              min-free = 1073741824
+              max-free = 5368709120
+              # When free space drops below min-free (1 GB), nix GCs until max-free (5 GB) is available. This avoids "No space left on device" on CI.
 
       - name: Build inside a nix dev shell
         uses: ./.github/actions/flaky-retry

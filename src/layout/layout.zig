@@ -26,6 +26,9 @@ pub const LayoutTag = enum(u4) {
     erased_callable, // Refcounted boxed erased function payload: header + inline capture bytes
     zst, // Zero-sized type (empty records, empty tuples, phantom types, etc.)
     tag_union, // Tag union with variant-specific layouts for proper refcounting
+    ptr, // Compiler-internal pointer to a value of the element layout; never refcounted.
+    // Introduced by the TRMC pass (see src/lir/trmc.zig); never a struct field,
+    // tag payload, or list element. The pass author must uphold those invariants.
 };
 
 /// The Layout untagged union should take up this many bits in memory.
@@ -595,6 +598,7 @@ pub const Layout = packed struct {
             .tag_union => self.getTagUnion().alignment,
             .closure => target_usize.alignment(),
             .zst => std.mem.Alignment.@"1",
+            .ptr => target_usize.alignment(),
         };
     }
 
@@ -641,6 +645,11 @@ pub const Layout = packed struct {
     /// box of zero-sized type layout (e.g. Box({}))
     pub fn boxOfZst() Layout {
         return .{ .data = 0, .tag = .box_of_zst };
+    }
+
+    /// compiler-internal pointer layout with the given element layout
+    pub fn ptr(elem_idx: Idx) Layout {
+        return .{ .data = @intFromEnum(elem_idx), .tag = .ptr };
     }
 
     /// list layout with the given element layout
@@ -722,6 +731,7 @@ pub const Layout = packed struct {
             .zst => true, // No additional data
             .tag_union => self.getTagUnion().alignment == other.getTagUnion().alignment and
                 self.getTagUnion().idx.int_idx == other.getTagUnion().idx.int_idx,
+            .ptr => self.getIdx() == other.getIdx(),
         };
     }
 };

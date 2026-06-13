@@ -41,7 +41,7 @@ pub fn classifyType(store: *const Store, idx: Idx) Class {
                 .str => return .indirect,
             }
         },
-        .box, .box_of_zst => return .{ .direct = idx }, // single pointer
+        .box, .box_of_zst, .ptr => return .{ .direct = idx }, // single pointer
         .list, .list_of_zst => return .indirect, // multi-field aggregate
         .struct_ => {
             const struct_idx = lay.getStruct().idx;

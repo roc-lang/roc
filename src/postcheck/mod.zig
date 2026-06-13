@@ -9,6 +9,7 @@ pub const Monotype = struct {
     pub const Ast = @import("monotype/ast.zig");
     pub const Type = @import("monotype/type.zig");
     pub const Lower = @import("monotype/lower.zig");
+    pub const Solve = @import("monotype/solve.zig");
     pub const Specialize = @import("monotype/specialize.zig");
 };
 /// Monotype IR after nested function bodies are lifted.
