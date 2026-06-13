@@ -1563,16 +1563,37 @@ const TestRegistry = struct {
         return toFetched(allocator, package, root_file, max_expanded_bytes);
     }
 
+    /// Test paths in the registry are written Unix-style; on Windows the
+    /// resolver hands back natively-resolved paths (backslashes, possibly a
+    /// drive prefix), so lookups normalize before comparing.
+    fn normalizedLookupKey(buf: []u8, path: []const u8) []const u8 {
+        var trimmed = path;
+        if (trimmed.len >= 2 and trimmed[1] == ':') {
+            trimmed = trimmed[2..];
+        }
+        const len = @min(buf.len, trimmed.len);
+        for (trimmed[0..len], 0..) |byte, i| {
+            buf[i] = if (byte == '\\') '/' else byte;
+        }
+        return buf[0..len];
+    }
+
     fn loadLocalImpl(ctx: ?*anyopaque, allocator: Allocator, root_file_abs: []const u8) FetchError!FetchedPackage {
         const self: *TestRegistry = @ptrCast(@alignCast(ctx.?));
-        const package = self.locals.get(root_file_abs) orelse return error.FileNotFound;
+        var key_buf: [512]u8 = undefined;
+        const key = normalizedLookupKey(&key_buf, root_file_abs);
+        const package = self.locals.get(key) orelse return error.FileNotFound;
         return toFetched(allocator, package, root_file_abs, null);
     }
 };
 
 fn testFindPackage(resolved: *const Resolved, identity: []const u8) ?*const Resolved.Package {
+    var needle_buf: [512]u8 = undefined;
+    const needle = TestRegistry.normalizedLookupKey(&needle_buf, identity);
     for (resolved.packages) |*package| {
-        if (std.mem.eql(u8, package.identity, identity)) return package;
+        var identity_buf: [512]u8 = undefined;
+        const package_identity = TestRegistry.normalizedLookupKey(&identity_buf, package.identity);
+        if (std.mem.eql(u8, package_identity, needle)) return package;
     }
     return null;
 }
