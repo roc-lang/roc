@@ -58,10 +58,39 @@ pub const build_c_platform_main_source =
     \\    hosted { "roc_default_echo_line": Echo.line! }
     \\    targets: {
     \\        inputs: "targets/",
+    \\        x64glibc: { inputs: [app] },
+    \\        arm64glibc: { inputs: [app] },
     \\        x64mac: { inputs: [app] },
     \\        arm64mac: { inputs: [app] },
     \\        x64win: { inputs: [app] },
     \\        arm64win: { inputs: [app] },
+    \\    }
+    \\
+    \\import Echo
+    \\
+    \\main_for_host! : {} => I32
+    \\main_for_host! = |_args|
+    \\    match main!([]) {
+    \\        Ok({}) => 0
+    \\        Err(Exit(code)) => I8.to_i32(code)
+    \\        Err(_) => 1
+    \\    }
+    \\
+;
+
+/// Build-only default platform for hostless wasm output. Without a platform
+/// host object there is no process entrypoint or stdout, so wasm default apps
+/// compile to an archive that a host can link and satisfy.
+pub const build_wasm_archive_platform_main_source =
+    \\platform ""
+    \\    requires {} { main! : List(Str) => Try({}, [Exit(I8), ..]) }
+    \\    exposes [Echo]
+    \\    packages {}
+    \\    provides { "main": main_for_host! }
+    \\    hosted { "roc_default_echo_line": Echo.line! }
+    \\    targets: {
+    \\        inputs: "targets/",
+    \\        wasm32: { inputs: [app], output: Archive },
     \\    }
     \\
     \\import Echo

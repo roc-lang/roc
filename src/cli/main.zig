@@ -3643,19 +3643,22 @@ fn rocBuildDefaultApp(ctx: *CliCtx, args: cli_args.BuildArgs, original_source: [
 }
 
 fn defaultBuildPlatformSource(args: cli_args.BuildArgs) []const u8 {
-    const target = if (args.target) |target_str|
-        RocTarget.fromString(target_str)
-    else
-        RocTarget.detectNative();
+    if (args.target) |target_str| {
+        if (RocTarget.fromString(target_str)) |target| {
+            return switch (target) {
+                .x64glibc, .arm64glibc, .x64mac, .arm64mac, .x64win, .arm64win => echo_platform.build_c_platform_main_source,
+                .wasm32 => echo_platform.build_wasm_archive_platform_main_source,
+                else => echo_platform.build_platform_main_source,
+            };
+        }
 
-    if (target) |roc_build_target| {
-        return switch (roc_build_target.toOsTag()) {
-            .macos, .windows => echo_platform.build_c_platform_main_source,
-            else => echo_platform.build_platform_main_source,
-        };
+        return echo_platform.build_platform_main_source;
     }
 
-    return echo_platform.build_platform_main_source;
+    return switch (RocTarget.detectNative().toOsTag()) {
+        .macos, .windows => echo_platform.build_c_platform_main_source,
+        else => echo_platform.build_platform_main_source,
+    };
 }
 
 /// Build using the dev backend to generate native machine code.
@@ -5022,7 +5025,10 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
         );
     } else {
         const hosted_symbols = try hostedSymbolsFromLir(ctx.arena, &lowered.lir_result.store);
-        const enable_default_platform_runtime = target_os == .linux and args.synthetic_default_platform;
+        const enable_default_platform_runtime = args.synthetic_default_platform and switch (target) {
+            .x64musl, .arm64musl => true,
+            else => false,
+        };
 
         const app_object = try compileLlvmAppObject(
             ctx,
