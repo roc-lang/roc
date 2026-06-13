@@ -171,6 +171,8 @@ pub const MonoLlvmCodeGen = struct {
     /// one subprogram per proc, and per-statement line locations from the
     /// LIR store's source-location tables.
     emit_debug_info: bool = false,
+    /// Emit local variable declarations for source-level debugger inspection.
+    emit_local_debug_info: bool = false,
     /// Build-only default-platform Linux executables link a small runtime
     /// object that owns process startup diagnostics and signal handling.
     enable_default_platform_runtime: bool = false,
@@ -998,8 +1000,8 @@ pub const MonoLlvmCodeGen = struct {
         const empty_expr = builder.debugExpression(&.{}) catch return error.OutOfMemory;
         const previous_debug_location = wip.debug_location;
         wip.debug_location = .{ .location = .{
-            .line = if (self.enable_default_platform_diagnostics) proc_line else 0,
-            .column = if (self.enable_default_platform_diagnostics and proc_line != 0) 1 else 0,
+            .line = proc_line,
+            .column = if (proc_line == 0) 0 else 1,
             .scope = scope.toOptional(),
             .inlined_at = .none,
         } };
@@ -1187,7 +1189,9 @@ pub const MonoLlvmCodeGen = struct {
         defer self.allocator.free(self.local_slots);
         try self.allocLocalSlots();
         try self.unpackProcArgs(proc);
-        if (!builder.strip) try self.declareFrameLocals(proc, self.store.procLoc(proc_id).line);
+        if (!builder.strip and self.emit_local_debug_info) {
+            try self.declareFrameLocals(proc, self.store.procLoc(proc_id).line);
+        }
 
         if (proc.hosted) |hosted| {
             try self.emitHostedProcBody(hosted, proc);
