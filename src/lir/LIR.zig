@@ -225,9 +225,9 @@ pub const ProcAbi = enum {
 };
 
 /// Which tail-recursion rewrite the TRMC pass (src/lir/trmc.zig) applied to a
-/// proc. Consumed by debug output (ROC_PRINT_TRMC), test assertions, and the
-/// interpreter's debug validator (null box pointers are legal in-flight holes
-/// only inside `.trmc` procs).
+/// proc. Consumed by TRMC debug output, test assertions, and the interpreter's
+/// debug validator (null box pointers are legal in-flight holes only inside
+/// `.trmc` procs).
 pub const TailTransform = enum(u8) {
     none,
     trmc,
