@@ -90,7 +90,7 @@ pub fn wasmReprWithStore(layout_idx: layout.Idx, ls: *const layout.Store) Error!
                         break :blk .{ .stack_memory = tu_layout.size };
                     },
                     .zst => .{ .primitive = .i32 }, // zero-sized, dummy i32
-                    .box, .box_of_zst, .erased_callable => .{ .primitive = .i32 }, // pointer
+                    .box, .box_of_zst, .erased_callable, .ptr => .{ .primitive = .i32 }, // pointer
                     .list, .list_of_zst => .{ .stack_memory = 12 }, // RocList
                     .closure => unreachable, // handled above
                 };
@@ -209,7 +209,7 @@ fn wasmSizeAlign(root_idx: layout.Idx, ls: *const layout.Store) Error!SizeAlign 
                 .zst => try results.append(ra, .{ .size = 0, .alignment = 1 }),
                 .scalar => try results.append(ra, scalarSizeAlign(l)),
                 .list, .list_of_zst => try results.append(ra, .{ .size = 12, .alignment = 4 }),
-                .box, .box_of_zst, .erased_callable => try results.append(ra, .{ .size = 4, .alignment = 4 }),
+                .box, .box_of_zst, .erased_callable, .ptr => try results.append(ra, .{ .size = 4, .alignment = 4 }),
                 .closure => {
                     const sa = ls.layoutSizeAlign(l);
                     try results.append(ra, .{ .size = sa.size, .alignment = @intCast(sa.alignment.toByteUnits()) });
