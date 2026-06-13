@@ -1519,6 +1519,11 @@ pub fn generateModule(self: *Self) std.mem.Allocator.Error!void {
         try self.generateAttachedMethodChainFunction();
     }
 
+    const local_type_count = self.reader.intRangeAtMost(u8, 1, 3);
+    for (0..local_type_count) |_| {
+        try self.generateLocalTypeFunction();
+    }
+
     const builtin_count = self.reader.intRangeAtMost(u8, 12, 36);
     for (0..builtin_count) |_| {
         try self.generateBuiltinAssociatedFunction();
@@ -2624,6 +2629,70 @@ fn generateAttachedMethodChainPatternFunction(self: *Self, name_id: u32) std.mem
     try self.write("|_| Chain.wrap(");
     try self.writeRecordStrU64Literal();
     try self.write(").map(|{ count }| count).add1()\n");
+}
+
+fn generateLocalTypeFunction(self: *Self) std.mem.Allocator.Error!void {
+    const name_id = self.name_counter;
+    self.name_counter += 1;
+
+    switch (self.reader.intRangeAtMost(u8, 0, 4)) {
+        0 => try self.generateLocalAliasFunction(name_id),
+        1 => try self.generateLocalGenericAliasFunction(name_id),
+        2 => try self.generateLocalNominalFunction(name_id),
+        3 => try self.generateShadowedLocalNominalFunction(name_id),
+        4 => try self.generateLocalAssociatedTypeFunction(name_id),
+        else => unreachable,
+    }
+}
+
+fn generateLocalAliasFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFunctionSignature(name_id, "Main", .u64);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| {\n        LocalCount : U64\n");
+    try self.writeRawTypedLocalDeclaration("count", "LocalCount", .{ .integer_literal = {} });
+    try self.write("        count\n    }\n");
+}
+
+fn generateLocalGenericAliasFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFunctionSignature(name_id, "Main", .u64);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| {\n        LocalList(a) : List(a)\n");
+    try self.writeRawTypedLocalDeclaration("items", "LocalList(U64)", .{ .literal = .list_u64 });
+    try self.write("        items.len()\n    }\n");
+}
+
+fn generateLocalNominalFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFunctionSignature(name_id, "Main", .u64);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| {\n        Local := [Local(U64)]\n");
+    try self.writeRawLocalAnnotation("value", "Local");
+    try self.writeLocalAssignmentStart("value");
+    try self.writeCall("Local", &.{.{ .integer_literal = {} }});
+    try self.write("\n        match value {\n            Local(count) => count\n        }\n    }\n");
+}
+
+fn generateShadowedLocalNominalFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFunctionSignature(name_id, "Main", .u64);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| if ");
+    try self.writeBoolLiteral();
+    try self.write(" {\n        Local := [First(U64)]\n");
+    try self.writeRawLocalAnnotation("value", "Local");
+    try self.writeLocalAssignmentStart("value");
+    try self.writeCall("First", &.{.{ .integer_literal = {} }});
+    try self.write("\n        match value {\n            First(count) => count\n        }\n    } else {\n        Local := [Second(U64)]\n");
+    try self.writeRawLocalAnnotation("value", "Local");
+    try self.writeLocalAssignmentStart("value");
+    try self.writeCall("Second", &.{.{ .integer_literal = {} }});
+    try self.write("\n        match value {\n            Second(count) => count\n        }\n    }\n");
+}
+
+fn generateLocalAssociatedTypeFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFunctionSignature(name_id, "Main", .u64);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| {\n        LocalCounter := [LocalCounter(U64)].{\n            get : LocalCounter -> U64\n            get = |LocalCounter(count)| count\n        }\n        LocalCounter.get(");
+    try self.writeCall("LocalCounter", &.{.{ .integer_literal = {} }});
+    try self.write(")\n    }\n");
 }
 
 fn generateBuiltinAssociatedFunction(self: *Self) std.mem.Allocator.Error!void {
