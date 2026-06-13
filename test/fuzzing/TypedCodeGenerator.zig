@@ -1405,6 +1405,11 @@ pub fn generateModule(self: *Self) std.mem.Allocator.Error!void {
         try self.generateToolsFunction();
     }
 
+    const try_chain_count = self.reader.intRangeAtMost(u8, 1, 2);
+    for (0..try_chain_count) |_| {
+        try self.generateTryWildcardChainGroup();
+    }
+
     const builtin_count = self.reader.intRangeAtMost(u8, 12, 36);
     for (0..builtin_count) |_| {
         try self.generateBuiltinAssociatedFunction();
@@ -2059,6 +2064,37 @@ fn generateToolsEqFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!vo
     try self.write(", ");
     try self.writeToolsLiteral();
     try self.write(")\n");
+}
+
+fn generateTryWildcardChainGroup(self: *Self) std.mem.Allocator.Error!void {
+    const first_id = self.name_counter;
+    const second_id = self.name_counter + 1;
+    const chain_id = self.name_counter + 2;
+    self.name_counter += 3;
+
+    try self.writeRawFunctionSignature(first_id, "Main, U64", "Try(U64, _)");
+    try self.writeFunctionHeader(first_id);
+    try self.write("|_, _| Ok(");
+    try self.writeIntegerLiteral();
+    try self.write(")\n");
+
+    try self.writeRawFunctionSignature(second_id, "Main, U64", "Try(U64, _)");
+    try self.writeFunctionHeader(second_id);
+    try self.write("|_, _| Ok(");
+    try self.writeIntegerLiteral();
+    try self.write(")\n");
+
+    try self.writeRawFunctionSignature(chain_id, "Main", "Try(U64, _)");
+    try self.writeFunctionHeader(chain_id);
+    try self.write("|_| {\n        _first = Main.");
+    try self.writeFunctionName(first_id);
+    try self.write("(Main, ");
+    try self.writeIntegerLiteral();
+    try self.write(")?\n        second = Main.");
+    try self.writeFunctionName(second_id);
+    try self.write("(Main, ");
+    try self.writeIntegerLiteral();
+    try self.write(")?\n        Ok(second)\n    }\n");
 }
 
 fn generateBuiltinAssociatedFunction(self: *Self) std.mem.Allocator.Error!void {
