@@ -147,8 +147,22 @@ jobs:
           arch: x64
 
       - name: Run eval tests with LLVM backend
+        if: runner.os != 'Windows'
         run: |
           zig build run-test-eval -- --llvm
+
+      # Windows has no fork(), so the runner spawns a fresh worker process per
+      # test that compiles the whole program (front-end + LIR lowering) before
+      # running any backend. The TRMC/TCE "stack gate" stress tests have a
+      # multi-second lowering cost (measured ~9-17s locally; backend eval itself
+      # is sub-millisecond) that, on the slower hosted Windows runner under
+      # full-suite concurrency, overruns the 30s default per-test timeout and is
+      # killed as a HANG. POSIX uses fork-based per-backend isolation on faster
+      # runners where 30s is plenty. Give Windows a larger hang budget.
+      - name: Run eval tests with LLVM backend (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          zig build run-test-eval -- --llvm --timeout 120000
 
       - name: Run CLI platform tests (LLVM size/speed backends)
         if: runner.os != 'Windows'
