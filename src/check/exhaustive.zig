@@ -941,10 +941,8 @@ const GatheredTag = struct {
 // require matching.
 //
 // Core API:
-// - `isTypeInhabited`: Check if a single type is inhabited (THE primary entry point)
-// - `areAllTypesInhabited`: Check if all types in a slice are inhabited (AND semantics)
-//
-// Pattern.isInhabited() delegates to isTypeInhabited for wildcard patterns.
+// - `isTypeInhabitedWithKnownEmpty`: Check if a single type is inhabited.
+// - `areAllTypesInhabitedWithKnownEmpty`: Check if all types in a slice are inhabited (AND semantics).
 //
 // Based on the algorithm from the Rust implementation in crates/compiler/types/src/subs.rs.
 
@@ -987,10 +985,6 @@ const WorkItem = union(enum) {
 ///
 /// This implementation uses a work-list algorithm to avoid stack overflow on
 /// deeply nested types. See docs/exhaustiveness/004_worklist_inhabitedness_algorithm.md
-fn isTypeInhabited(type_store: *TypeStore, builtin_idents: BuiltinIdents, type_var: Var) error{OutOfMemory}!bool {
-    return isTypeInhabitedWithKnownEmpty(type_store, builtin_idents, type_var, &.{});
-}
-
 fn varIsKnownEmpty(type_store: *TypeStore, known_empty_vars: []const Var, type_var: Var) bool {
     const resolved_var = type_store.resolveVar(type_var).var_;
     for (known_empty_vars) |known_empty_var| {
@@ -1899,16 +1893,6 @@ fn isExtensionOpen(type_store: *TypeStore, ext_var: Var) error{OutOfMemory}!bool
     }
 }
 
-/// Check if all types in a slice are inhabited.
-/// Returns false if ANY type is uninhabited (AND semantics).
-fn areAllTypesInhabited(
-    type_store: *TypeStore,
-    builtin_idents: BuiltinIdents,
-    type_vars: []const Var,
-) error{OutOfMemory}!bool {
-    return areAllTypesInhabitedWithKnownEmpty(type_store, builtin_idents, type_vars, &.{});
-}
-
 fn areAllTypesInhabitedWithKnownEmpty(
     type_store: *TypeStore,
     builtin_idents: BuiltinIdents,
@@ -1921,32 +1905,6 @@ fn areAllTypesInhabitedWithKnownEmpty(
         }
     }
     return true;
-}
-
-/// Check constructor payload argument types.
-///
-/// Unresolved payload variables are treated as uninhabited here, and any such
-/// variables that make the constructor impossible are recorded for the caller.
-/// The caller decides whether to use them only for this exhaustiveness query or
-/// to resolve them globally to `[]`.
-fn areAllCtorPayloadTypesInhabited(
-    type_store: *TypeStore,
-    builtin_idents: BuiltinIdents,
-    type_vars: []const Var,
-    payload_vars_to_close: ?*std.ArrayList(Var),
-) error{OutOfMemory}!bool {
-    var all_inhabited = true;
-    for (type_vars) |type_var| {
-        if (!try isCtorPayloadTypeInhabited(type_store, builtin_idents, type_var)) {
-            all_inhabited = false;
-            if (payload_vars_to_close) |out| {
-                try collectCtorPayloadBlockers(type_store, builtin_idents, type_var, out);
-            } else {
-                return false;
-            }
-        }
-    }
-    return all_inhabited;
 }
 
 /// Check if an UnresolvedPattern (sketched pattern) is inhabited.
