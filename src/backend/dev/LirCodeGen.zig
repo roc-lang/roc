@@ -3719,6 +3719,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     };
                 },
 
+                // Resolved before backend codegen: builtin `from_numeral` is
+                // folded to a constant during Monotype lowering, so the op must
+                // never reach a backend. Reaching here is an invariant failure,
+                // not a missing feature.
+                .num_from_numeral => {
+                    std.debug.panic("num_from_numeral reached the dev backend; it must be folded to a constant during Monotype lowering", .{});
+                },
                 // Unimplemented ops
                 .num_pow,
                 .num_sqrt,
@@ -3726,7 +3733,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .num_round,
                 .num_floor,
                 .num_ceiling,
-                .num_from_numeral,
                 .compare,
                 => {
                     std.debug.panic("UNIMPLEMENTED low-level op: {s}", .{@tagName(ll.op)});
