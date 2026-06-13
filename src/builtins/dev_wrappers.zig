@@ -13,6 +13,7 @@ const num = @import("num.zig");
 const utils = @import("utils.zig");
 const erased_callable = @import("erased_callable.zig");
 const dec = @import("dec.zig");
+const hash = @import("hash.zig");
 const i128h = @import("compiler_rt_128.zig");
 
 const RocStr = str.RocStr;
@@ -34,6 +35,48 @@ pub const freeDataPtrC = utils.freeDataPtrC;
 pub const erasedCallableIncref = erased_callable.incref;
 pub const erasedCallableDecref = erased_callable.decref;
 pub const erasedCallableFree = erased_callable.free;
+
+/// C ABI wrapper for hashing integer-width scalar values.
+pub fn roc_builtins_hasher_write_u64(seed: u64, domain: u8, value: u64, width: u8) callconv(.c) u64 {
+    return hash.hasher_write_u64(seed, domain, value, width);
+}
+
+/// C ABI wrapper for hashing 128-bit scalar values.
+pub fn roc_builtins_hasher_write_u128(seed: u64, domain: u8, low: u64, high: u64) callconv(.c) u64 {
+    return hash.hasher_write_u128(seed, domain, low, high);
+}
+
+/// C ABI wrapper for hashing raw F32 bits.
+pub fn roc_builtins_hasher_write_f32_bits(seed: u64, bits: u64) callconv(.c) u64 {
+    return hash.hasher_write_f32_bits(seed, @truncate(bits));
+}
+
+/// C ABI wrapper for hashing raw F64 bits.
+pub fn roc_builtins_hasher_write_f64_bits(seed: u64, bits: u64) callconv(.c) u64 {
+    return hash.hasher_write_f64_bits(seed, bits);
+}
+
+/// C ABI wrapper for hashing byte-list contents.
+pub fn roc_builtins_hasher_write_bytes(seed: u64, domain: u8, bytes: ?[*]const u8, length: usize) callconv(.c) u64 {
+    return hash.hasher_write_bytes(seed, domain, bytes, length);
+}
+
+/// C ABI wrapper for hashing RocStr contents.
+pub fn roc_builtins_hasher_write_str(seed: u64, str_bytes: ?[*]u8, str_len: usize, str_cap: usize) callconv(.c) u64 {
+    const value = RocStr{ .bytes = str_bytes, .length = str_len, .capacity_or_alloc_ptr = str_cap };
+    const bytes = value.asSlice();
+    return hash.hasher_write_bytes(seed, @intFromEnum(hash.HasherDomain.str), bytes.ptr, bytes.len);
+}
+
+/// C ABI wrapper for finalizing a builtin Hasher state.
+pub fn roc_builtins_hasher_finish(seed: u64) callconv(.c) u64 {
+    return hash.hasher_finish(seed);
+}
+
+/// C ABI wrapper for the compiler-owned Dict hash seed.
+pub fn roc_builtins_dict_pseudo_seed() callconv(.c) u64 {
+    return utils.dictPseudoSeed();
+}
 
 // Import builtin functions we wrap (using actual function names from str.zig and list.zig)
 const strToUtf8C = str.strToUtf8C;

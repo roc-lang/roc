@@ -37,14 +37,19 @@ fn lowerModule(
     source: []const u8,
     inline_mode: lir.CheckedPipeline.InlineMode,
 ) anyerror!LoweredSource {
-    return lowerModuleWithDebugEffects(allocator, source, inline_mode, .run);
+    return lowerModuleWithOptions(allocator, source, inline_mode, .{});
 }
 
-fn lowerModuleWithDebugEffects(
+const LowerModuleOptions = struct {
+    debug_effects: lir.CheckedPipeline.DebugEffectMode = .run,
+    proc_debug_names: bool = false,
+};
+
+fn lowerModuleWithOptions(
     allocator: Allocator,
     source: []const u8,
     inline_mode: lir.CheckedPipeline.InlineMode,
-    debug_effects: lir.CheckedPipeline.DebugEffectMode,
+    options: LowerModuleOptions,
 ) anyerror!LoweredSource {
     var resources = try helpers.parseAndCanonicalizeProgram(allocator, .module, source, &.{});
     errdefer helpers.cleanupParseAndCanonical(allocator, resources);
@@ -73,7 +78,8 @@ fn lowerModuleWithDebugEffects(
         .{
             .target_usize = base.target.TargetUsize.native,
             .inline_mode = inline_mode,
-            .debug_effects = debug_effects,
+            .debug_effects = options.debug_effects,
+            .proc_debug_names = options.proc_debug_names,
         },
     );
     errdefer lowered.deinit();
@@ -82,6 +88,24 @@ fn lowerModuleWithDebugEffects(
         .resources = resources,
         .lowered = lowered,
     };
+}
+
+fn lowerModuleWithDebugEffects(
+    allocator: Allocator,
+    source: []const u8,
+    inline_mode: lir.CheckedPipeline.InlineMode,
+    debug_effects: lir.CheckedPipeline.DebugEffectMode,
+) anyerror!LoweredSource {
+    return lowerModuleWithOptions(allocator, source, inline_mode, .{ .debug_effects = debug_effects });
+}
+
+fn lowerModuleWithProcDebugNames(
+    allocator: Allocator,
+    source: []const u8,
+    inline_mode: lir.CheckedPipeline.InlineMode,
+    proc_debug_names: bool,
+) anyerror!LoweredSource {
+    return lowerModuleWithOptions(allocator, source, inline_mode, .{ .proc_debug_names = proc_debug_names });
 }
 
 fn mainProcArgLayouts(
@@ -225,6 +249,7 @@ fn liftModuleAfterSpecConstr(
             .imports = import_views,
         },
         .{ .requests = resources.checked_artifact.root_requests.requests },
+        .{},
     );
     var mono_owned = true;
     errdefer if (mono_owned) mono.deinit();
@@ -1483,19 +1508,26 @@ test "LIR statements and procs carry resolved source locations" {
         \\add2 : U64 -> U64
         \\add2 = |n| n + 2
         \\
+        \\mul3 : U64 -> U64
+        \\mul3 = |n| n * 3
+        \\
         \\main : U64
         \\main = {
         \\    x = 40
-        \\    add2(x)
+        \\    mul3(add2(x))
         \\}
     ;
 
-    var lowered_source = try lowerModule(allocator, source, .none);
+    var lowered_source = try lowerModuleWithProcDebugNames(allocator, source, .none, true);
     defer lowered_source.deinit(allocator);
 
     const store = &lowered_source.lowered.lir_result.store;
     try std.testing.expectEqual(store.cf_stmts.items.len, store.cf_stmt_locs.items.len);
     try std.testing.expectEqual(store.proc_specs.items.len, store.proc_locs.items.len);
+    try std.testing.expect(store.proc_debug_names.items.len > 0);
+    for (store.proc_debug_names.items) |entry| {
+        try std.testing.expect(entry.proc < store.proc_specs.items.len);
+    }
     try std.testing.expect(store.sourceFileCount() >= 1);
 
     var located: usize = 0;
@@ -1521,6 +1553,16 @@ test "LIR statements and procs carry resolved source locations" {
         }
     }
     try std.testing.expect(located_procs > 0);
+
+    var found_add2 = false;
+    var found_mul3 = false;
+    for (0..store.proc_specs.items.len) |i| {
+        const name = store.procDebugName(@enumFromInt(i)) orelse continue;
+        if (std.mem.eql(u8, name, "add2")) found_add2 = true;
+        if (std.mem.eql(u8, name, "mul3")) found_mul3 = true;
+    }
+    try std.testing.expect(found_add2);
+    try std.testing.expect(found_mul3);
 }
 
 test "LIR statements carry source locations under optimizing inline mode" {

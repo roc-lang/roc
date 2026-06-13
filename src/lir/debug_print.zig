@@ -1,8 +1,8 @@
 //! Compact textual dump of LIR procs.
 //!
 //! Used by the TRMC golden tests (before/after transform diffs) and the
-//! ROC_PRINT_IR_AFTER_TRMC debug flag. The format aims for stability and
-//! readability, not completeness — it is not a serialization format.
+//! `-Dprint-ir-after-trmc` debug build option. The format aims for stability
+//! and readability, not completeness — it is not a serialization format.
 
 const std = @import("std");
 const core = @import("lir_core");

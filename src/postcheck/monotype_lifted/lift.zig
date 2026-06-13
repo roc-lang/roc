@@ -49,6 +49,8 @@ pub fn run(
     owned.if_branches = .empty;
     var string_literals = owned.string_literals;
     owned.string_literals = .empty;
+    var proc_debug_names = owned.proc_debug_names;
+    owned.proc_debug_names = Mono.ProcDebugNameMap.init(allocator);
     var runtime_schema_requests = owned.runtime_schema_requests;
     owned.runtime_schema_requests = .empty;
     var source_files = owned.source_files;
@@ -77,6 +79,7 @@ pub fn run(
         branches,
         if_branches,
         string_literals,
+        proc_debug_names,
         source_files,
         expr_locs,
         stmt_locs,
@@ -98,6 +101,7 @@ pub fn run(
     branches = undefined;
     if_branches = undefined;
     string_literals = undefined;
+    proc_debug_names = undefined;
     source_files = undefined;
     expr_locs = undefined;
     stmt_locs = undefined;

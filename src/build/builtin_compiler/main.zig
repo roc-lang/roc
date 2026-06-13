@@ -131,6 +131,7 @@ fn buildBuiltinIndices(gpa: Allocator, env: *const ModuleEnv) !BuiltinIndices {
     const dict_type_idx = try findTypeDeclaration(gpa, env, "Dict");
     const set_type_idx = try findTypeDeclaration(gpa, env, "Set");
     const str_type_idx = try findTypeDeclaration(gpa, env, "Str");
+    const hasher_type_idx = try findTypeDeclaration(gpa, env, "Hasher");
     const iter_type_idx = try findTypeDeclaration(gpa, env, "Iter");
     const stream_type_idx = try findTypeDeclaration(gpa, env, "Stream");
     const list_type_idx = try findTypeDeclaration(gpa, env, "List");
@@ -159,6 +160,7 @@ fn buildBuiltinIndices(gpa: Allocator, env: *const ModuleEnv) !BuiltinIndices {
         .dict_type = dict_type_idx,
         .set_type = set_type_idx,
         .str_type = str_type_idx,
+        .hasher_type = hasher_type_idx,
         .iter_type = iter_type_idx,
         .stream_type = stream_type_idx,
         .list_type = list_type_idx,
@@ -183,6 +185,7 @@ fn buildBuiltinIndices(gpa: Allocator, env: *const ModuleEnv) !BuiltinIndices {
         .dict_ident = expectBuiltinIdent(env, "Builtin.Dict"),
         .set_ident = expectBuiltinIdent(env, "Builtin.Set"),
         .str_ident = expectBuiltinIdent(env, "Builtin.Str"),
+        .hasher_ident = expectBuiltinIdent(env, "Builtin.Hasher"),
         .iter_ident = expectBuiltinIdent(env, "Builtin.Iter"),
         .stream_ident = expectBuiltinIdent(env, "Builtin.Stream"),
         .list_ident = expectBuiltinIdent(env, "Builtin.List"),
@@ -217,6 +220,7 @@ fn installBuiltinNodeIndices(gpa: Allocator, env: *ModuleEnv, indices: BuiltinIn
     try env.common.setNodeIndexById(gpa, indices.dict_ident, @intCast(@intFromEnum(indices.dict_type)));
     try env.common.setNodeIndexById(gpa, indices.set_ident, @intCast(@intFromEnum(indices.set_type)));
     try env.common.setNodeIndexById(gpa, indices.str_ident, @intCast(@intFromEnum(indices.str_type)));
+    try env.common.setNodeIndexById(gpa, indices.hasher_ident, @intCast(@intFromEnum(indices.hasher_type)));
     try env.common.setNodeIndexById(gpa, indices.iter_ident, @intCast(@intFromEnum(indices.iter_type)));
     try env.common.setNodeIndexById(gpa, indices.stream_ident, @intCast(@intFromEnum(indices.stream_type)));
     try env.common.setNodeIndexById(gpa, indices.list_ident, @intCast(@intFromEnum(indices.list_type)));
@@ -591,6 +595,6 @@ fn serializeBuiltinIndices(
     defer file.close(io);
 
     // Write the struct directly as binary data
-    // This is a simple struct with two u32 fields, so we can write it directly
+    // BuiltinIndices stores compact enum indices, so we can write it directly.
     try file.writePositionalAll(io, std.mem.asBytes(&indices), 0);
 }

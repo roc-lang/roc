@@ -3947,6 +3947,75 @@ pub const Interpreter = struct {
         unique_args: u64 = 0,
     };
 
+    fn lowLevelArgLayout(self: *const LirInterpreter, ll: LowLevelEvalInput, index: usize) Error!layout_mod.Idx {
+        if (index < ll.arg_layouts.len) return ll.arg_layouts[index];
+
+        return self.invariantFailedError(
+            "LIR/interpreter invariant violated: low-level op {s} missing arg layout {d}",
+            .{ @tagName(ll.op), index },
+        );
+    }
+
+    fn writeHasherValue(self: *LirInterpreter, ret_layout: layout_mod.Idx, seed: u64) Error!Value {
+        const val = try self.alloc(ret_layout);
+        val.write(u64, seed);
+        return val;
+    }
+
+    fn hasherDomain(op: LIR.LowLevel) builtins.hash.HasherDomain {
+        return switch (op) {
+            .hasher_write_bool => .bool,
+            .hasher_write_u8 => .u8,
+            .hasher_write_u16 => .u16,
+            .hasher_write_u32 => .u32,
+            .hasher_write_u64 => .u64,
+            .hasher_write_u128 => .u128,
+            .hasher_write_i8 => .i8,
+            .hasher_write_i16 => .i16,
+            .hasher_write_i32 => .i32,
+            .hasher_write_i64 => .i64,
+            .hasher_write_i128 => .i128,
+            .hasher_write_f32 => .f32,
+            .hasher_write_f64 => .f64,
+            .hasher_write_dec => .dec,
+            .hasher_write_bytes => .bytes,
+            .hasher_write_str => .str,
+            else => unreachable,
+        };
+    }
+
+    fn hasherU64Width(op: LIR.LowLevel) u8 {
+        return switch (op) {
+            .hasher_write_bool,
+            .hasher_write_u8,
+            .hasher_write_i8,
+            => 1,
+            .hasher_write_u16,
+            .hasher_write_i16,
+            => 2,
+            .hasher_write_u32,
+            .hasher_write_i32,
+            .hasher_write_f32,
+            => 4,
+            .hasher_write_u64,
+            .hasher_write_i64,
+            .hasher_write_f64,
+            => 8,
+            else => unreachable,
+        };
+    }
+
+    fn byteListSlice(self: *LirInterpreter, list_val: Value, list_layout: layout_mod.Idx) Error![]const u8 {
+        const list = self.valueToRocListForLayout(list_val, list_layout);
+        if (list.bytes) |bytes| return bytes[0..list.len()];
+        if (list.len() == 0) return &.{};
+
+        return self.invariantFailedError(
+            "LIR/interpreter invariant violated: non-empty byte list had null bytes",
+            .{},
+        );
+    }
+
     /// Select the update mode for a builtin whose first argument carries the
     /// op's runtime uniqueness check: `.InPlace` when ARC emission proved the
     /// check redundant, `.Immutable` (checked) otherwise.
@@ -4710,6 +4779,78 @@ pub const Interpreter = struct {
                 const val = try self.alloc(.bool);
                 val.write(u8, if (args[0].read(u8) == 0) 1 else 0);
                 break :blk val;
+            },
+
+            // ── Hasher ──
+            .dict_pseudo_seed => self.writeHasherValue(ll.ret_layout, builtins.utils.dictPseudoSeed()),
+            .hasher_finish => self.writeHasherValue(ll.ret_layout, builtins.hash.hasher_finish(args[0].read(u64))),
+            .hasher_write_bool => blk: {
+                const seed = args[0].read(u64);
+                const value: u64 = if (try self.readBoolValue(args[1], try self.lowLevelArgLayout(ll, 1))) 1 else 0;
+                const next = builtins.hash.hasher_write_u64(seed, @intFromEnum(hasherDomain(ll.op)), value, hasherU64Width(ll.op));
+                break :blk self.writeHasherValue(ll.ret_layout, next);
+            },
+            .hasher_write_u8,
+            .hasher_write_u16,
+            .hasher_write_u32,
+            .hasher_write_u64,
+            .hasher_write_i8,
+            .hasher_write_i16,
+            .hasher_write_i32,
+            .hasher_write_i64,
+            => blk: {
+                const seed = args[0].read(u64);
+                const value: u64 = switch (ll.op) {
+                    .hasher_write_u8 => args[1].read(u8),
+                    .hasher_write_u16 => args[1].read(u16),
+                    .hasher_write_u32 => args[1].read(u32),
+                    .hasher_write_u64 => args[1].read(u64),
+                    .hasher_write_i8 => @as(u64, @as(u8, @bitCast(args[1].read(i8)))),
+                    .hasher_write_i16 => @as(u64, @as(u16, @bitCast(args[1].read(i16)))),
+                    .hasher_write_i32 => @as(u64, @as(u32, @bitCast(args[1].read(i32)))),
+                    .hasher_write_i64 => @bitCast(args[1].read(i64)),
+                    else => unreachable,
+                };
+                const next = builtins.hash.hasher_write_u64(seed, @intFromEnum(hasherDomain(ll.op)), value, hasherU64Width(ll.op));
+                break :blk self.writeHasherValue(ll.ret_layout, next);
+            },
+            .hasher_write_f32 => blk: {
+                const seed = args[0].read(u64);
+                const value = args[1].read(f32);
+                const bits: u64 = if (value == 0.0) 0 else @as(u64, @as(u32, @bitCast(value)));
+                const next = builtins.hash.hasher_write_u64(seed, @intFromEnum(hasherDomain(ll.op)), bits, hasherU64Width(ll.op));
+                break :blk self.writeHasherValue(ll.ret_layout, next);
+            },
+            .hasher_write_f64 => blk: {
+                const seed = args[0].read(u64);
+                const value = args[1].read(f64);
+                const bits: u64 = if (value == 0.0) 0 else @bitCast(value);
+                const next = builtins.hash.hasher_write_u64(seed, @intFromEnum(hasherDomain(ll.op)), bits, hasherU64Width(ll.op));
+                break :blk self.writeHasherValue(ll.ret_layout, next);
+            },
+            .hasher_write_u128,
+            .hasher_write_i128,
+            .hasher_write_dec,
+            => blk: {
+                const seed = args[0].read(u64);
+                const bits: u128 = @bitCast(args[1].read(i128));
+                const low: u64 = @truncate(bits);
+                const high: u64 = @truncate(bits >> 64);
+                const next = builtins.hash.hasher_write_u128(seed, @intFromEnum(hasherDomain(ll.op)), low, high);
+                break :blk self.writeHasherValue(ll.ret_layout, next);
+            },
+            .hasher_write_bytes => blk: {
+                const seed = args[0].read(u64);
+                const bytes = try self.byteListSlice(args[1], try self.lowLevelArgLayout(ll, 1));
+                const next = builtins.hash.hasher_write_bytes(seed, @intFromEnum(hasherDomain(ll.op)), bytes.ptr, bytes.len);
+                break :blk self.writeHasherValue(ll.ret_layout, next);
+            },
+            .hasher_write_str => blk: {
+                const seed = args[0].read(u64);
+                var str = valueToRocStr(args[1]);
+                const bytes = str.asSlice();
+                const next = builtins.hash.hasher_write_bytes(seed, @intFromEnum(hasherDomain(ll.op)), bytes.ptr, bytes.len);
+                break :blk self.writeHasherValue(ll.ret_layout, next);
             },
 
             // ── Numeric parsing ──

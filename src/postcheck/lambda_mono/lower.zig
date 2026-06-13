@@ -387,6 +387,9 @@ const Lowerer = struct {
         try self.fn_specs.append(self.allocator, spec);
         try self.fn_written.append(self.allocator, false);
         result.value_ptr.* = fn_id;
+        if (self.solved.lifted.procDebugName(source_fn.symbol)) |name| {
+            try self.program.setProcDebugName(symbol, name);
+        }
 
         const ret_ty = try self.lowerType(switch (self.solved.types.rootContent(spec.solved_fn_ty)) {
             .func => |func| func.ret,
