@@ -40,6 +40,7 @@ const linux_cross_targets = musl_cross_targets ++ glibc_cross_targets;
 
 /// Test platform directories that need host libraries built
 const all_test_platform_dirs = [_][]const u8{ "str", "int", "fx", "fx-open", "dylib", "archive" };
+const glibc_test_platform_dirs = [_][]const u8{ "str", "int", "dylib", "archive" };
 
 fn mustUseLlvm(target: ResolvedTarget) bool {
     return target.result.os.tag == .macos and target.result.cpu.arch == .x86_64;
@@ -87,6 +88,35 @@ fn isNativeishOrMusl(target: ResolvedTarget) bool {
     return target.result.cpu.arch == builtin.target.cpu.arch and
         target.result.os.tag == builtin.target.os.tag and
         (target.query.isNativeAbi() or target.result.abi.isMusl());
+}
+
+const NativeSharedArchiveTarget = struct {
+    resolved: ResolvedTarget,
+    roc_name: []const u8,
+};
+
+fn nativeSharedArchiveTarget(b: *std.Build, target: ResolvedTarget) NativeSharedArchiveTarget {
+    if (target.result.os.tag == .linux) {
+        return switch (target.result.cpu.arch) {
+            .x86_64 => .{
+                .resolved = b.resolveTargetQuery(.{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .gnu }),
+                .roc_name = "x64glibc",
+            },
+            .aarch64 => .{
+                .resolved = b.resolveTargetQuery(.{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .gnu }),
+                .roc_name = "arm64glibc",
+            },
+            else => .{
+                .resolved = target,
+                .roc_name = roc_target.RocTarget.fromStdTarget(target.result).toName(),
+            },
+        };
+    }
+
+    return .{
+        .resolved = target,
+        .roc_name = roc_target.RocTarget.fromStdTarget(target.result).toName(),
+    };
 }
 
 /// Returns the optimal target query for release builds on the current host.
@@ -2005,6 +2035,28 @@ fn setupTestPlatforms(
         }
     }
 
+    // Cross-compile for glibc targets declared by test platform manifests.
+    for (glibc_cross_targets) |cross_target| {
+        const cross_resolved_target = b.resolveTargetQuery(cross_target.query);
+
+        for (glibc_test_platform_dirs) |platform_dir| {
+            if (platform_filter) |filter| {
+                if (!std.mem.eql(u8, platform_dir, filter)) continue;
+            }
+            const copy_step = buildAndCopyTestPlatformHostLib(
+                b,
+                platform_dir,
+                cross_resolved_target,
+                cross_target.name,
+                optimize,
+                roc_modules,
+                strip,
+                omit_frame_pointer,
+            );
+            clear_cache_step.dependOn(copy_step);
+        }
+    }
+
     // Cross-compile for Windows targets
     for (windows_cross_targets) |cross_target| {
         const cross_resolved_target = b.resolveTargetQuery(cross_target.query);
@@ -3386,7 +3438,8 @@ pub fn build(b: *std.Build) void {
     // Build the shared-library test fixture with `roc build` and verify it by
     // running a separate loader executable that dlopens it and calls its C API.
     {
-        const dylib_ext = switch (target.result.os.tag) {
+        const output_target = nativeSharedArchiveTarget(b, target);
+        const dylib_ext = switch (output_target.resolved.result.os.tag) {
             .windows => ".dll",
             .macos => ".dylib",
             else => ".so",
@@ -3398,6 +3451,7 @@ pub fn build(b: *std.Build) void {
             "build",
             "test/dylib/app.roc",
             "--opt=size",
+            b.fmt("--target={s}", .{output_target.roc_name}),
             b.fmt("--output={s}", .{dylib_output}),
         });
         build_dylib_app.step.dependOn(build_test_hosts_step);
@@ -3406,11 +3460,12 @@ pub fn build(b: *std.Build) void {
             .name = "dylib_loader",
             .root_module = b.createModule(.{
                 .root_source_file = b.path("test/dylib/loader.zig"),
-                .target = target,
+                .target = output_target.resolved,
                 .optimize = optimize,
+                .link_libc = true,
             }),
         });
-        configureBackend(dylib_loader_exe, target);
+        configureBackend(dylib_loader_exe, output_target.resolved);
 
         const install_dylib_loader = b.addInstallArtifact(dylib_loader_exe, .{});
 
@@ -3450,7 +3505,8 @@ pub fn build(b: *std.Build) void {
     // executable against the produced archive, and run it. Also build the
     // hostless wasm32 archive and verify its contents.
     {
-        const archive_ext = if (target.result.os.tag == .windows) ".lib" else ".a";
+        const output_target = nativeSharedArchiveTarget(b, target);
+        const archive_ext = if (output_target.resolved.result.os.tag == .windows) ".lib" else ".a";
         const archive_output = b.fmt("test/archive/app{s}", .{archive_ext});
 
         const build_archive_app = b.addRunArtifact(roc_exe);
@@ -3458,6 +3514,7 @@ pub fn build(b: *std.Build) void {
             "build",
             "test/archive/app.roc",
             "--opt=dev",
+            b.fmt("--target={s}", .{output_target.roc_name}),
             b.fmt("--output={s}", .{archive_output}),
         });
         build_archive_app.step.dependOn(build_test_hosts_step);
@@ -3466,11 +3523,12 @@ pub fn build(b: *std.Build) void {
             .name = "archive_consumer",
             .root_module = b.createModule(.{
                 .root_source_file = b.path("test/archive/consumer.zig"),
-                .target = target,
+                .target = output_target.resolved,
                 .optimize = optimize,
+                .link_libc = true,
             }),
         });
-        configureBackend(archive_consumer_exe, target);
+        configureBackend(archive_consumer_exe, output_target.resolved);
         archive_consumer_exe.root_module.addObjectFile(b.path(archive_output));
         archive_consumer_exe.step.dependOn(&build_archive_app.step);
 

@@ -268,6 +268,16 @@ pub const BuiltinFn = enum {
     dec_from_str,
     float_from_str,
 
+    // Hasher operations
+    dict_pseudo_seed,
+    hasher_finish,
+    hasher_write_u64,
+    hasher_write_u128,
+    hasher_write_f32_bits,
+    hasher_write_f64_bits,
+    hasher_write_bytes,
+    hasher_write_str,
+
     /// Get the exported symbol name for object file linking.
     pub fn symbolName(self: BuiltinFn) []const u8 {
         return switch (self) {
@@ -372,6 +382,16 @@ pub const BuiltinFn = enum {
             .int_from_str => "roc_builtins_int_from_str",
             .dec_from_str => "roc_builtins_dec_from_str",
             .float_from_str => "roc_builtins_float_from_str",
+
+            // Hasher operations
+            .dict_pseudo_seed => "roc_builtins_dict_pseudo_seed",
+            .hasher_finish => "roc_builtins_hasher_finish",
+            .hasher_write_u64 => "roc_builtins_hasher_write_u64",
+            .hasher_write_u128 => "roc_builtins_hasher_write_u128",
+            .hasher_write_f32_bits => "roc_builtins_hasher_write_f32_bits",
+            .hasher_write_f64_bits => "roc_builtins_hasher_write_f64_bits",
+            .hasher_write_bytes => "roc_builtins_hasher_write_bytes",
+            .hasher_write_str => "roc_builtins_hasher_write_str",
         };
     }
 };
@@ -3592,6 +3612,26 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     return .{ .general_reg = result_reg };
                 },
 
+                .dict_pseudo_seed,
+                .hasher_finish,
+                .hasher_write_bool,
+                .hasher_write_u8,
+                .hasher_write_u16,
+                .hasher_write_u32,
+                .hasher_write_u64,
+                .hasher_write_u128,
+                .hasher_write_i8,
+                .hasher_write_i16,
+                .hasher_write_i32,
+                .hasher_write_i64,
+                .hasher_write_i128,
+                .hasher_write_f32,
+                .hasher_write_f64,
+                .hasher_write_dec,
+                .hasher_write_bytes,
+                .hasher_write_str,
+                => return try self.generateHasherLowLevel(ll, args),
+
                 .u8_to_str => {
                     const value_loc = try self.emitValueLocal(args[0]);
                     return self.callIntToStr(value_loc, 1, false);
@@ -3950,6 +3990,196 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // or LEAVE IT AS A PANIC.
                     @panic("TODO: ll.crash message forwarding is not implemented");
                 },
+            }
+        }
+
+        fn hasherDomain(op: lir.LowLevel) u8 {
+            return @intFromEnum(switch (op) {
+                .hasher_write_bool => builtins.hash.HasherDomain.bool,
+                .hasher_write_u8 => builtins.hash.HasherDomain.u8,
+                .hasher_write_u16 => builtins.hash.HasherDomain.u16,
+                .hasher_write_u32 => builtins.hash.HasherDomain.u32,
+                .hasher_write_u64 => builtins.hash.HasherDomain.u64,
+                .hasher_write_u128 => builtins.hash.HasherDomain.u128,
+                .hasher_write_i8 => builtins.hash.HasherDomain.i8,
+                .hasher_write_i16 => builtins.hash.HasherDomain.i16,
+                .hasher_write_i32 => builtins.hash.HasherDomain.i32,
+                .hasher_write_i64 => builtins.hash.HasherDomain.i64,
+                .hasher_write_i128 => builtins.hash.HasherDomain.i128,
+                .hasher_write_dec => builtins.hash.HasherDomain.dec,
+                .hasher_write_bytes => builtins.hash.HasherDomain.bytes,
+                else => unreachable,
+            });
+        }
+
+        fn hasherWidth(op: lir.LowLevel) u8 {
+            return switch (op) {
+                .hasher_write_bool,
+                .hasher_write_u8,
+                .hasher_write_i8,
+                => 1,
+                .hasher_write_u16,
+                .hasher_write_i16,
+                => 2,
+                .hasher_write_u32,
+                .hasher_write_i32,
+                => 4,
+                .hasher_write_u64,
+                .hasher_write_i64,
+                => 8,
+                else => unreachable,
+            };
+        }
+
+        fn hasherStateReg(self: *Self, local: LocalId) Allocator.Error!GeneralReg {
+            const loc = try self.emitValueLocal(local);
+            return switch (loc) {
+                .stack => |s| blk: {
+                    const reg = try self.allocTempGeneral();
+                    try self.codegen.emitLoadStack(.w64, reg, s.offset);
+                    break :blk reg;
+                },
+                else => try self.ensureInGeneralReg(loc),
+            };
+        }
+
+        fn scalarRetReg(self: *Self) Allocator.Error!ValueLocation {
+            const result_reg = try self.allocTempGeneral();
+            try self.codegen.emit.movRegReg(.w64, result_reg, ret_reg_0);
+            return .{ .general_reg = result_reg };
+        }
+
+        fn callHasherWriteU64(
+            self: *Self,
+            seed_reg: GeneralReg,
+            value_reg: GeneralReg,
+            domain: u8,
+            width: u8,
+        ) Allocator.Error!ValueLocation {
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addRegArg(seed_reg);
+            try builder.addImmArg(@intCast(domain));
+            try builder.addRegArg(value_reg);
+            try builder.addImmArg(@intCast(width));
+            try self.callBuiltin(&builder, @intFromPtr(&dev_wrappers.roc_builtins_hasher_write_u64), .hasher_write_u64);
+            self.codegen.freeGeneral(seed_reg);
+            if (value_reg != seed_reg) self.codegen.freeGeneral(value_reg);
+            return try self.scalarRetReg();
+        }
+
+        fn callHasherWriteBits(self: *Self, seed_reg: GeneralReg, bits_reg: GeneralReg, comptime is_f32: bool) Allocator.Error!ValueLocation {
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addRegArg(seed_reg);
+            try builder.addRegArg(bits_reg);
+            try self.callBuiltin(
+                &builder,
+                if (is_f32) @intFromPtr(&dev_wrappers.roc_builtins_hasher_write_f32_bits) else @intFromPtr(&dev_wrappers.roc_builtins_hasher_write_f64_bits),
+                if (is_f32) .hasher_write_f32_bits else .hasher_write_f64_bits,
+            );
+            self.codegen.freeGeneral(seed_reg);
+            if (bits_reg != seed_reg) self.codegen.freeGeneral(bits_reg);
+            return try self.scalarRetReg();
+        }
+
+        fn callHasherWriteU128(self: *Self, seed_reg: GeneralReg, parts: I128Parts, domain: u8) Allocator.Error!ValueLocation {
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addRegArg(seed_reg);
+            try builder.addImmArg(@intCast(domain));
+            try builder.addRegArg(parts.low);
+            try builder.addRegArg(parts.high);
+            try self.callBuiltin(&builder, @intFromPtr(&dev_wrappers.roc_builtins_hasher_write_u128), .hasher_write_u128);
+            self.codegen.freeGeneral(seed_reg);
+            self.codegen.freeGeneral(parts.low);
+            self.codegen.freeGeneral(parts.high);
+            return try self.scalarRetReg();
+        }
+
+        fn generateHasherLowLevel(self: *Self, ll: anytype, args: []const LocalId) Allocator.Error!ValueLocation {
+            switch (ll.op) {
+                .dict_pseudo_seed => {
+                    if (args.len != 0) unreachable;
+                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    try self.callBuiltin(&builder, @intFromPtr(&dev_wrappers.roc_builtins_dict_pseudo_seed), .dict_pseudo_seed);
+                    return try self.scalarRetReg();
+                },
+                .hasher_finish => {
+                    if (args.len != 1) unreachable;
+                    const seed_reg = try self.hasherStateReg(args[0]);
+                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    try builder.addRegArg(seed_reg);
+                    try self.callBuiltin(&builder, @intFromPtr(&dev_wrappers.roc_builtins_hasher_finish), .hasher_finish);
+                    self.codegen.freeGeneral(seed_reg);
+                    return try self.scalarRetReg();
+                },
+                .hasher_write_bool,
+                .hasher_write_u8,
+                .hasher_write_u16,
+                .hasher_write_u32,
+                .hasher_write_u64,
+                .hasher_write_i8,
+                .hasher_write_i16,
+                .hasher_write_i32,
+                .hasher_write_i64,
+                => {
+                    if (args.len != 2) unreachable;
+                    const seed_reg = try self.hasherStateReg(args[0]);
+                    const value_loc = try self.emitValueLocal(args[1]);
+                    const value_reg = try self.ensureInGeneralReg(value_loc);
+                    return try self.callHasherWriteU64(seed_reg, value_reg, hasherDomain(ll.op), hasherWidth(ll.op));
+                },
+                .hasher_write_f32 => {
+                    if (args.len != 2) unreachable;
+                    const seed_reg = try self.hasherStateReg(args[0]);
+                    const value_loc = try self.emitValueLocal(args[1]);
+                    const bits_reg = try self.materializeF32BitsInGeneralReg(value_loc);
+                    return try self.callHasherWriteBits(seed_reg, bits_reg, true);
+                },
+                .hasher_write_f64 => {
+                    if (args.len != 2) unreachable;
+                    const seed_reg = try self.hasherStateReg(args[0]);
+                    const value_loc = try self.emitValueLocal(args[1]);
+                    const bits_reg = try self.ensureInGeneralReg(value_loc);
+                    return try self.callHasherWriteBits(seed_reg, bits_reg, false);
+                },
+                .hasher_write_u128,
+                .hasher_write_i128,
+                .hasher_write_dec,
+                => {
+                    if (args.len != 2) unreachable;
+                    const seed_reg = try self.hasherStateReg(args[0]);
+                    const value_loc = try self.emitValueLocal(args[1]);
+                    const parts = try self.getI128Parts(value_loc, if (ll.op == .hasher_write_u128) .unsigned else .signed);
+                    return try self.callHasherWriteU128(seed_reg, parts, hasherDomain(ll.op));
+                },
+                .hasher_write_bytes => {
+                    if (args.len != 2) unreachable;
+                    const seed_reg = try self.hasherStateReg(args[0]);
+                    const list_loc = try self.emitValueLocal(args[1]);
+                    const list_off = try self.ensureOnStack(list_loc, roc_list_size);
+                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    try builder.addRegArg(seed_reg);
+                    try builder.addImmArg(@intCast(@intFromEnum(builtins.hash.HasherDomain.bytes)));
+                    try builder.addMemArg(frame_ptr, list_off);
+                    try builder.addMemArg(frame_ptr, list_off + 8);
+                    try self.callBuiltin(&builder, @intFromPtr(&dev_wrappers.roc_builtins_hasher_write_bytes), .hasher_write_bytes);
+                    self.codegen.freeGeneral(seed_reg);
+                    return try self.scalarRetReg();
+                },
+                .hasher_write_str => {
+                    if (args.len != 2) unreachable;
+                    const seed_reg = try self.hasherStateReg(args[0]);
+                    const str_loc = try self.emitValueLocal(args[1]);
+                    const str_off = try self.ensureOnStack(str_loc, roc_str_size);
+                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    try builder.addRegArg(seed_reg);
+                    try builder.addMemArg(frame_ptr, str_off);
+                    try builder.addMemArg(frame_ptr, str_off + 16);
+                    try builder.addMemArg(frame_ptr, str_off + 8);
+                    try self.callBuiltin(&builder, @intFromPtr(&dev_wrappers.roc_builtins_hasher_write_str), .hasher_write_str);
+                    self.codegen.freeGeneral(seed_reg);
+                    return try self.scalarRetReg();
+                },
+                else => unreachable,
             }
         }
 
