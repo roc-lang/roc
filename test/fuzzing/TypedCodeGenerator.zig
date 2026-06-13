@@ -1345,6 +1345,11 @@ pub fn generateModule(self: *Self) std.mem.Allocator.Error!void {
         try self.generateRestPatternFunction();
     }
 
+    const control_flow_count = self.reader.intRangeAtMost(u8, 1, 3);
+    for (0..control_flow_count) |_| {
+        try self.generateControlFlowFunction();
+    }
+
     const builtin_count = self.reader.intRangeAtMost(u8, 12, 36);
     for (0..builtin_count) |_| {
         try self.generateBuiltinAssociatedFunction();
@@ -1838,6 +1843,52 @@ fn generateListBetweenPatternFunction(self: *Self, name_id: u32) std.mem.Allocat
     try self.write("|_| match ");
     try self.writeNonEmptyListLiteral(.u64);
     try self.write(" {\n        [first, .., last] => first + last\n        [only] => only\n        [] => 0\n    }\n");
+}
+
+fn generateControlFlowFunction(self: *Self) std.mem.Allocator.Error!void {
+    const name_id = self.name_counter;
+    self.name_counter += 1;
+
+    if (self.reader.boolean()) {
+        try self.generateWhileFunction(name_id);
+    } else {
+        try self.generateEarlyReturnFunction(name_id);
+    }
+}
+
+fn generateWhileFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    const upper = self.reader.intRangeAtMost(u8, 0, 8);
+    try self.writeFunctionSignature(name_id, "Main", .u64);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| {\n");
+    try self.writeMutableLocalDeclaration("index", .{ .raw = "0" });
+    try self.writeMutableLocalDeclaration("total", .{ .raw = "0" });
+    try self.write("        while ");
+    try self.writeMutableLocalReference("index");
+    try self.output.print(self.allocator, " < {d} {{\n", .{upper});
+    try self.writeMutableLocalAssignmentStart("total");
+    try self.writeMutableLocalReference("total");
+    try self.write(" + ");
+    try self.writeMutableLocalReference("index");
+    try self.write("\n");
+    try self.writeMutableLocalAssignmentStart("index");
+    try self.writeMutableLocalReference("index");
+    try self.write(" + 1\n");
+    try self.write("        }\n        ");
+    try self.writeMutableLocalReference("total");
+    try self.write("\n    }\n");
+}
+
+fn generateEarlyReturnFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFunctionSignature(name_id, "Main", .u64);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| {\n        if ");
+    try self.writeBoolLiteral();
+    try self.write(" {\n            return ");
+    try self.writeIntegerLiteral();
+    try self.write("\n        }\n        ");
+    try self.writeIntegerLiteral();
+    try self.write("\n    }\n");
 }
 
 fn generateBuiltinAssociatedFunction(self: *Self) std.mem.Allocator.Error!void {
