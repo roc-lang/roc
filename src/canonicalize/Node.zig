@@ -580,7 +580,7 @@ pub const Payload = extern union {
     };
 
     pub const ExprMatch = extern struct {
-        match_data_idx: u32, // Index into match_data: (cond, branches_start, branches_len, exhaustive, is_try_suffix)
+        match_data_idx: u32, // Index into match_data: (cond, branches_start, branches_len, exhaustive, is_try_suffix, skip_exhaustiveness)
         _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
     };
 

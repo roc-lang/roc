@@ -158,6 +158,12 @@ const RocListFields = struct {
     cap: u32,
 };
 
+const RocStrFields = struct {
+    bytes: u32,
+    len: u32,
+    cap: u32,
+};
+
 const RocListElementCallbacks = struct {
     elements_refcounted: u32,
     incref_table_idx: u32,
@@ -589,6 +595,204 @@ fn emitRocListFields(self: *Self, fields: RocListFields) Allocator.Error!void {
     try self.emitLocalGet(fields.bytes);
     try self.emitLocalGet(fields.len);
     try self.emitLocalGet(fields.cap);
+}
+
+fn loadRocStrFields(self: *Self, str_ptr: u32) Allocator.Error!RocStrFields {
+    const fields = RocStrFields{
+        .bytes = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory,
+        .len = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory,
+        .cap = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory,
+    };
+
+    try self.emitLocalGet(str_ptr);
+    try self.emitLoadOp(.i32, 0);
+    try self.emitLocalSet(fields.bytes);
+
+    try self.emitLocalGet(str_ptr);
+    try self.emitLoadOp(.i32, 8);
+    try self.emitLocalSet(fields.len);
+
+    try self.emitLocalGet(str_ptr);
+    try self.emitLoadOp(.i32, 4);
+    try self.emitLocalSet(fields.cap);
+
+    return fields;
+}
+
+fn emitRocStrFields(self: *Self, fields: RocStrFields) Allocator.Error!void {
+    try self.emitLocalGet(fields.bytes);
+    try self.emitLocalGet(fields.len);
+    try self.emitLocalGet(fields.cap);
+}
+
+fn hasherDomain(op: lir.LowLevel) u8 {
+    return @intFromEnum(switch (op) {
+        .hasher_write_bool => builtins.hash.HasherDomain.bool,
+        .hasher_write_u8 => builtins.hash.HasherDomain.u8,
+        .hasher_write_u16 => builtins.hash.HasherDomain.u16,
+        .hasher_write_u32 => builtins.hash.HasherDomain.u32,
+        .hasher_write_u64 => builtins.hash.HasherDomain.u64,
+        .hasher_write_u128 => builtins.hash.HasherDomain.u128,
+        .hasher_write_i8 => builtins.hash.HasherDomain.i8,
+        .hasher_write_i16 => builtins.hash.HasherDomain.i16,
+        .hasher_write_i32 => builtins.hash.HasherDomain.i32,
+        .hasher_write_i64 => builtins.hash.HasherDomain.i64,
+        .hasher_write_i128 => builtins.hash.HasherDomain.i128,
+        .hasher_write_dec => builtins.hash.HasherDomain.dec,
+        .hasher_write_bytes => builtins.hash.HasherDomain.bytes,
+        else => unreachable,
+    });
+}
+
+fn hasherWidth(op: lir.LowLevel) u8 {
+    return switch (op) {
+        .hasher_write_bool,
+        .hasher_write_u8,
+        .hasher_write_i8,
+        => 1,
+        .hasher_write_u16,
+        .hasher_write_i16,
+        => 2,
+        .hasher_write_u32,
+        .hasher_write_i32,
+        => 4,
+        .hasher_write_u64,
+        .hasher_write_i64,
+        => 8,
+        else => unreachable,
+    };
+}
+
+fn emitHasherState(self: *Self, hasher: ProcLocalId) Allocator.Error!void {
+    try self.emitProcLocal(hasher);
+    try self.emitLoadOp(.i64, 0);
+}
+
+fn emitHasherRecordFromI64(self: *Self) Allocator.Error!void {
+    const state_local = self.storage.allocAnonymousLocal(.i64) catch return error.OutOfMemory;
+    try self.emitLocalSet(state_local);
+
+    const result_offset = try self.allocStackMemory(8, 8);
+    const result_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitFpOffset(result_offset);
+    try self.emitLocalSet(result_ptr);
+
+    try self.emitLocalGet(result_ptr);
+    try self.emitLocalGet(state_local);
+    try self.emitStoreOp(.i64, 0);
+    try self.emitLocalGet(result_ptr);
+}
+
+fn emitHasherScalarAsI64(self: *Self, value: ProcLocalId) Allocator.Error!void {
+    try self.emitProcLocal(value);
+    const vt = try self.procLocalValType(value);
+    if (vt == .i32) {
+        self.currentCode().append(self.allocator, Op.i64_extend_i32_u) catch return error.OutOfMemory;
+    }
+}
+
+fn emitHasherFloatBits(self: *Self, value: ProcLocalId, is_f32: bool) Allocator.Error!void {
+    try self.emitProcLocal(value);
+    if (is_f32) {
+        const raw_f32 = self.storage.allocAnonymousLocal(.f32) catch return error.OutOfMemory;
+        try self.emitLocalSet(raw_f32);
+        try self.emitLocalGet(raw_f32);
+        self.currentCode().append(self.allocator, Op.i32_reinterpret_f32) catch return error.OutOfMemory;
+        self.currentCode().append(self.allocator, Op.i64_extend_i32_u) catch return error.OutOfMemory;
+    } else {
+        const raw_f64 = self.storage.allocAnonymousLocal(.f64) catch return error.OutOfMemory;
+        try self.emitLocalSet(raw_f64);
+        try self.emitLocalGet(raw_f64);
+        self.currentCode().append(self.allocator, Op.i64_reinterpret_f64) catch return error.OutOfMemory;
+    }
+}
+
+fn emitHasherU128Parts(self: *Self, value: ProcLocalId) Allocator.Error!void {
+    try self.emitProcLocal(value);
+    const ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitLocalSet(ptr);
+
+    try self.emitLocalGet(ptr);
+    try self.emitLoadOp(.i64, 0);
+
+    try self.emitLocalGet(ptr);
+    try self.emitLoadOp(.i64, 8);
+}
+
+fn emitHasherLowLevel(self: *Self, op: lir.LowLevel, args: []const ProcLocalId) Allocator.Error!void {
+    switch (op) {
+        .dict_pseudo_seed => {
+            try self.emitBuiltinCall(.dict_pseudo_seed, null);
+        },
+        .hasher_finish => {
+            try self.emitHasherState(args[0]);
+            try self.emitBuiltinCall(.hasher_finish, null);
+        },
+        .hasher_write_bool,
+        .hasher_write_u8,
+        .hasher_write_u16,
+        .hasher_write_u32,
+        .hasher_write_u64,
+        .hasher_write_i8,
+        .hasher_write_i16,
+        .hasher_write_i32,
+        .hasher_write_i64,
+        => {
+            try self.emitHasherState(args[0]);
+            try self.emitI32Const(@intCast(hasherDomain(op)));
+            try self.emitHasherScalarAsI64(args[1]);
+            try self.emitI32Const(@intCast(hasherWidth(op)));
+            try self.emitBuiltinCall(.hasher_write_u64, null);
+            try self.emitHasherRecordFromI64();
+        },
+        .hasher_write_f32 => {
+            try self.emitHasherState(args[0]);
+            try self.emitHasherFloatBits(args[1], true);
+            try self.emitBuiltinCall(.hasher_write_f32_bits, null);
+            try self.emitHasherRecordFromI64();
+        },
+        .hasher_write_f64 => {
+            try self.emitHasherState(args[0]);
+            try self.emitHasherFloatBits(args[1], false);
+            try self.emitBuiltinCall(.hasher_write_f64_bits, null);
+            try self.emitHasherRecordFromI64();
+        },
+        .hasher_write_u128,
+        .hasher_write_i128,
+        .hasher_write_dec,
+        => {
+            try self.emitHasherState(args[0]);
+            try self.emitI32Const(@intCast(hasherDomain(op)));
+            try self.emitHasherU128Parts(args[1]);
+            try self.emitBuiltinCall(.hasher_write_u128, null);
+            try self.emitHasherRecordFromI64();
+        },
+        .hasher_write_bytes => {
+            try self.emitProcLocal(args[1]);
+            const list_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            try self.emitLocalSet(list_ptr);
+            const fields = try self.loadRocListFields(list_ptr);
+
+            try self.emitHasherState(args[0]);
+            try self.emitI32Const(@intCast(hasherDomain(op)));
+            try self.emitLocalGet(fields.bytes);
+            try self.emitLocalGet(fields.len);
+            try self.emitBuiltinCall(.hasher_write_bytes, null);
+            try self.emitHasherRecordFromI64();
+        },
+        .hasher_write_str => {
+            try self.emitProcLocal(args[1]);
+            const str_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            try self.emitLocalSet(str_ptr);
+            const fields = try self.loadRocStrFields(str_ptr);
+
+            try self.emitHasherState(args[0]);
+            try self.emitRocStrFields(fields);
+            try self.emitBuiltinCall(.hasher_write_str, null);
+            try self.emitHasherRecordFromI64();
+        },
+        else => unreachable,
+    }
 }
 
 fn compileBuiltinInternalIncrefCallback(self: *Self, helper_key: RcHelperKey) Allocator.Error!u32 {
@@ -8552,6 +8756,28 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         .bool_not => {
             try self.emitProcLocal(args[0]);
             self.currentCode().append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
+        },
+
+        .dict_pseudo_seed,
+        .hasher_finish,
+        .hasher_write_bool,
+        .hasher_write_u8,
+        .hasher_write_u16,
+        .hasher_write_u32,
+        .hasher_write_u64,
+        .hasher_write_u128,
+        .hasher_write_i8,
+        .hasher_write_i16,
+        .hasher_write_i32,
+        .hasher_write_i64,
+        .hasher_write_i128,
+        .hasher_write_f32,
+        .hasher_write_f64,
+        .hasher_write_dec,
+        .hasher_write_bytes,
+        .hasher_write_str,
+        => {
+            return self.emitHasherLowLevel(ll.op, args);
         },
 
         // Safe integer widenings (no-op or single instruction)

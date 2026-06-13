@@ -63,13 +63,14 @@ pub const MethodCallData = extern struct {
 };
 
 /// Match expression data.
-/// Stores cond, branches span, exhaustive flag, and is_try_suffix flag.
+/// Stores cond, branches span, exhaustive flag, try-suffix flag, and exhaustiveness-reporting flag.
 pub const MatchData = extern struct {
     cond: u32,
     branches_start: u32,
     branches_len: u32,
     exhaustive: u32,
     is_try_suffix: u32,
+    skip_exhaustiveness: u32,
 };
 
 /// Match branch data.
@@ -921,6 +922,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                     .branches = .{ .span = .{ .start = md.branches_start, .len = md.branches_len } },
                     .exhaustive = @enumFromInt(md.exhaustive),
                     .is_try_suffix = md.is_try_suffix != 0,
+                    .skip_exhaustiveness = md.skip_exhaustiveness != 0,
                 },
             };
         },
@@ -2443,6 +2445,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
                 .branches_len = e.branches.span.len,
                 .exhaustive = @intFromEnum(e.exhaustive),
                 .is_try_suffix = @intFromBool(e.is_try_suffix),
+                .skip_exhaustiveness = @intFromBool(e.skip_exhaustiveness),
             });
 
             node.setPayload(.{ .expr_match = .{

@@ -4982,6 +4982,7 @@ pub const CheckedExprData = union(enum) {
         cond: CheckedExprId,
         branches: []const CheckedMatchBranch,
         is_try_suffix: bool,
+        skip_exhaustiveness: bool,
     },
     if_: struct {
         branches: []const CheckedIfBranch,
@@ -6561,6 +6562,7 @@ const CheckedBodyPayloadCopier = struct {
                 .cond = self.checkedExpr(match.cond),
                 .branches = try self.copyMatchBranches(match.branches),
                 .is_try_suffix = match.is_try_suffix,
+                .skip_exhaustiveness = match.skip_exhaustiveness,
             } },
             .e_if => |if_| .{ .if_ = .{
                 .branches = try self.copyIfBranches(if_.branches),

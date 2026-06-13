@@ -197,6 +197,42 @@ fn looksLikeTypeDecl(self: *Parser) bool {
     };
 }
 
+fn looksLikeAppliedTagDestructure(self: *Parser) bool {
+    std.debug.assert(self.peek() == .UpperIdent);
+
+    var lookahead: u32 = 1;
+    while (self.peekN(lookahead) == .NoSpaceDotUpperIdent) {
+        lookahead += 1;
+    }
+
+    if (self.peekN(lookahead) != .NoSpaceOpenRound) {
+        return false;
+    }
+
+    lookahead += 1;
+    var depth: u32 = 1;
+    var closing_tok = Token.Tag.EndOfFile;
+    while (depth > 0) {
+        const tok = self.peekN(lookahead);
+        switch (tok) {
+            .OpenRound, .NoSpaceOpenRound, .OpenSquare, .OpenCurly => depth += 1,
+            .CloseRound, .CloseSquare, .CloseCurly => {
+                closing_tok = tok;
+                depth -= 1;
+            },
+            .EndOfFile => return false,
+            else => {},
+        }
+        lookahead += 1;
+    }
+
+    if (closing_tok != .CloseRound) {
+        return false;
+    }
+
+    return self.peekN(lookahead) == .OpAssign;
+}
+
 /// The error set that methods of the Parser return
 pub const Error = std.mem.Allocator.Error;
 
@@ -4969,6 +5005,16 @@ fn runExprStatementKernel(
                 }
                 if (tok == .UpperIdent) {
                     const start = self.pos;
+                    if (self.looksLikeAppliedTagDestructure()) {
+                        try open_syntax.pushPattern(open_allocator, .statement_destructure_pattern, Token.Idx, start);
+                        pattern_root_state = .{
+                            .outer_start = self.pos,
+                            .scratch_top = self.store.scratchPatternTop(),
+                            .alternatives = .alternatives_forbidden,
+                        };
+                        continue :expr_kernel .pattern_root_next;
+                    }
+
                     const is_type_decl_context = statement_type == .top_level or
                         statement_type == .in_associated_block or
                         (statement_type == .in_body and self.looksLikeTypeDecl());

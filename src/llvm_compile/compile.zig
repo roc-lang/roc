@@ -361,9 +361,9 @@ fn emitMergedBitcodeToObjectFile(
     // Convert u32 slice to u8 slice for the bindings
     const bitcode_bytes: []const u8 = @as([*]const u8, @ptrCast(bitcode.ptr))[0 .. bitcode.len * 4];
 
-    if (std.c.getenv("ROC_LLVM_KEEP_BITCODE")) |keep_path_z| {
+    if (comptime build_options.llvm_keep_bitcode.len != 0) {
         std.Io.Dir.cwd().writeFile(io, .{
-            .sub_path = std.mem.sliceTo(keep_path_z, 0),
+            .sub_path = build_options.llvm_keep_bitcode,
             .data = bitcode_bytes,
         }) catch {};
     }
@@ -554,13 +554,12 @@ pub fn compileToObject(allocator: Allocator, io: std.Io, bitcode: []const u32, o
         .limited(10 * 1024 * 1024), // 10MB max
     ) catch return Error.TempFileError;
 
-    if (std.process.getEnvVarOwned(allocator, "ROC_LLVM_KEEP_OBJECT")) |keep_path| {
-        defer allocator.free(keep_path);
+    if (comptime build_options.llvm_keep_object.len != 0) {
         std.Io.Dir.cwd().writeFile(io, .{
-            .sub_path = keep_path,
+            .sub_path = build_options.llvm_keep_object,
             .data = object_bytes,
         }) catch {};
-    } else |_| {}
+    }
 
     // Clean up temp file
     std.Io.Dir.cwd().deleteFile(io, std.mem.sliceTo(temp_path, 0)) catch {};
@@ -593,11 +592,11 @@ pub fn compileToSharedLibrary(allocator: Allocator, io: std.Io, bitcode: []const
 
     try emitMergedBitcodeToObjectFile(allocator, io, bitcode, pic_options, object_path);
 
-    if (std.c.getenv("ROC_LLVM_KEEP_OBJECT")) |keep_path_z| {
+    if (comptime build_options.llvm_keep_object.len != 0) {
         std.Io.Dir.cwd().copyFile(
             std.mem.sliceTo(object_path, 0),
             std.Io.Dir.cwd(),
-            std.mem.sliceTo(keep_path_z, 0),
+            build_options.llvm_keep_object,
             io,
             .{},
         ) catch {};
@@ -605,11 +604,11 @@ pub fn compileToSharedLibrary(allocator: Allocator, io: std.Io, bitcode: []const
 
     try linkSharedLibrary(allocator, object_path, shared_lib_path);
 
-    if (std.c.getenv("ROC_LLVM_KEEP_DYLIB")) |keep_path_z| {
+    if (comptime build_options.llvm_keep_dylib.len != 0) {
         std.Io.Dir.cwd().copyFile(
             std.mem.sliceTo(shared_lib_path, 0),
             std.Io.Dir.cwd(),
-            std.mem.sliceTo(keep_path_z, 0),
+            build_options.llvm_keep_dylib,
             io,
             .{},
         ) catch {};

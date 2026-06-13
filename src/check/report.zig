@@ -51,6 +51,7 @@ const RecursiveDispatch = problem_mod.RecursiveDispatch;
 
 // Match/exhaustiveness errors
 const NonExhaustiveMatch = problem_mod.NonExhaustiveMatch;
+const NonExhaustiveDestructure = problem_mod.NonExhaustiveDestructure;
 const RedundantPattern = problem_mod.RedundantPattern;
 const UnmatchablePattern = problem_mod.UnmatchablePattern;
 
@@ -827,6 +828,7 @@ pub const ReportBuilder = struct {
             .comptime_eval_error => |data| return self.buildComptimeEvalErrorReport(data),
             .invalid_numeric_literal => |data| return self.buildInvalidNumericLiteralReport(data),
             .non_exhaustive_match => |data| return self.buildNonExhaustiveMatchReport(data),
+            .non_exhaustive_destructure => |data| return self.buildNonExhaustiveDestructureReport(data),
             .redundant_pattern => |data| return self.buildRedundantPatternReport(data),
             .unmatchable_pattern => |data| return self.buildUnmatchablePatternReport(data),
         }
@@ -3676,6 +3678,45 @@ pub const ReportBuilder = struct {
             D.bytes("_").withAnnotation(.keyword),
             D.bytes("to match anything."),
         }, self, &report);
+
+        return report;
+    }
+
+    fn buildNonExhaustiveDestructureReport(self: *Self, data: NonExhaustiveDestructure) Allocator.Error!Report {
+        var report = Report.init(self.gpa, "NON-EXHAUSTIVE DESTRUCTURE", .runtime_error);
+        errdefer report.deinit();
+
+        try D.renderSlice(&.{
+            D.bytes("This destructuring pattern doesn't cover all possible cases:"),
+        }, self, &report);
+        try report.document.addLineBreak();
+
+        try self.addSourceHighlight(&report, regionIdxFrom(data.pattern));
+        try report.document.addLineBreak();
+
+        const value_type = self.getFormattedString(data.value_snapshot);
+        try D.renderSlice(&.{
+            D.bytes("The value being destructured has type:"),
+        }, self, &report);
+        try report.document.addLineBreak();
+        try report.document.addText("        ");
+        try report.document.addAnnotated(value_type, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        try D.renderSlice(&.{
+            D.bytes("Missing patterns:"),
+        }, self, &report);
+        try report.document.addLineBreak();
+
+        const missing_patterns = self.problems.getMissingPatterns(data.missing_patterns);
+        for (missing_patterns) |pattern_idx| {
+            const pattern = self.problems.getExtraString(pattern_idx);
+            const owned_pattern = try report.addOwnedString(pattern);
+            try report.document.addText("    ");
+            try report.document.addCodeBlock(owned_pattern);
+            try report.document.addLineBreak();
+        }
 
         return report;
     }

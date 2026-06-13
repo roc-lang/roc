@@ -65,6 +65,14 @@ pub const BuiltinKind = enum {
     u32_mod_by,
     i64_mod_by,
     u64_mod_by,
+    dict_pseudo_seed,
+    hasher_finish,
+    hasher_write_u64,
+    hasher_write_u128,
+    hasher_write_f32_bits,
+    hasher_write_f64_bits,
+    hasher_write_bytes,
+    hasher_write_str,
 };
 
 /// Wasm call signature and symbol name for a builtin wrapper.
@@ -129,6 +137,14 @@ pub const sigs: [@typeInfo(BuiltinKind).@"enum".fields.len]Sig = .{
     .{ .name = "roc_builtins_u32_mod_by", .wasm_params = &.{ .i32, .i32 }, .wasm_results = &.{.i32}, .takes_roc_ops = false },
     .{ .name = "roc_builtins_i64_mod_by", .wasm_params = &.{ .i64, .i64 }, .wasm_results = &.{.i64}, .takes_roc_ops = false },
     .{ .name = "roc_builtins_u64_mod_by", .wasm_params = &.{ .i64, .i64 }, .wasm_results = &.{.i64}, .takes_roc_ops = false },
+    .{ .name = "roc_builtins_dict_pseudo_seed", .wasm_params = &.{}, .wasm_results = &.{.i64}, .takes_roc_ops = false },
+    .{ .name = "roc_builtins_hasher_finish", .wasm_params = &.{.i64}, .wasm_results = &.{.i64}, .takes_roc_ops = false },
+    .{ .name = "roc_builtins_hasher_write_u64", .wasm_params = &.{ .i64, .i32, .i64, .i32 }, .wasm_results = &.{.i64}, .takes_roc_ops = false },
+    .{ .name = "roc_builtins_hasher_write_u128", .wasm_params = &.{ .i64, .i32, .i64, .i64 }, .wasm_results = &.{.i64}, .takes_roc_ops = false },
+    .{ .name = "roc_builtins_hasher_write_f32_bits", .wasm_params = &.{ .i64, .i64 }, .wasm_results = &.{.i64}, .takes_roc_ops = false },
+    .{ .name = "roc_builtins_hasher_write_f64_bits", .wasm_params = &.{ .i64, .i64 }, .wasm_results = &.{.i64}, .takes_roc_ops = false },
+    .{ .name = "roc_builtins_hasher_write_bytes", .wasm_params = &.{ .i64, .i32, .i32, .i32 }, .wasm_results = &.{.i64}, .takes_roc_ops = false },
+    .{ .name = "roc_builtins_hasher_write_str", .wasm_params = &.{ .i64, .i32, .i32, .i32 }, .wasm_results = &.{.i64}, .takes_roc_ops = false },
 };
 
 /// Return the builtin wrapper signature for `kind`.

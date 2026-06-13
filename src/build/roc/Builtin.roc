@@ -374,6 +374,10 @@ Builtin :: [].{
 		## Returns `True` if the two strings are exactly the same.
 		is_eq : Str, Str -> Bool
 
+		## Feed a string into a [Hasher].
+		to_hash : Str, Hasher -> Hasher
+		to_hash = |str, hasher| Hasher.write_str(hasher, str)
+
 		## Returns a human-readable representation of a value, useful for debugging.
 		inspect : _val -> Str
 
@@ -391,6 +395,57 @@ Builtin :: [].{
 			Fmt : fmt
 			Fmt.decode_str(format, source)
 		}
+	}
+
+	Hasher :: { state : U64 }.{
+
+		## Feed a [Bool] into the hasher.
+		write_bool : Hasher, Bool -> Hasher
+
+		## Feed a [U8] into the hasher.
+		write_u8 : Hasher, U8 -> Hasher
+
+		## Feed a [U16] into the hasher.
+		write_u16 : Hasher, U16 -> Hasher
+
+		## Feed a [U32] into the hasher.
+		write_u32 : Hasher, U32 -> Hasher
+
+		## Feed a [U64] into the hasher.
+		write_u64 : Hasher, U64 -> Hasher
+
+		## Feed a [U128] into the hasher.
+		write_u128 : Hasher, U128 -> Hasher
+
+		## Feed an [I8] into the hasher.
+		write_i8 : Hasher, I8 -> Hasher
+
+		## Feed an [I16] into the hasher.
+		write_i16 : Hasher, I16 -> Hasher
+
+		## Feed an [I32] into the hasher.
+		write_i32 : Hasher, I32 -> Hasher
+
+		## Feed an [I64] into the hasher.
+		write_i64 : Hasher, I64 -> Hasher
+
+		## Feed an [I128] into the hasher.
+		write_i128 : Hasher, I128 -> Hasher
+
+		## Feed an [F32] into the hasher.
+		write_f32 : Hasher, F32 -> Hasher
+
+		## Feed an [F64] into the hasher.
+		write_f64 : Hasher, F64 -> Hasher
+
+		## Feed a [Dec] into the hasher.
+		write_dec : Hasher, Dec -> Hasher
+
+		## Feed bytes into the hasher.
+		write_bytes : Hasher, List(U8) -> Hasher
+
+		## Feed a string into the hasher.
+		write_str : Hasher, Str -> Hasher
 	}
 
 	Iter(item) :: {
@@ -894,6 +949,18 @@ Builtin :: [].{
 			}
 
 			True
+		}
+
+		## Feed a list into a [Hasher].
+		to_hash : List(item), Hasher -> Hasher
+			where [item.to_hash : item, Hasher -> Hasher]
+		to_hash = |list, hasher| {
+			Item : item
+			var $next = Hasher.write_u64(hasher, List.len(list))
+			for item in list {
+				$next = Item.to_hash(item, $next)
+			}
+			$next
 		}
 
 		## Add a single element to the end of a list.
@@ -1773,6 +1840,10 @@ Builtin :: [].{
 			}
 		}
 
+		## Feed a boolean into a [Hasher].
+		to_hash : Bool, Hasher -> Hasher
+		to_hash = |bool, hasher| Hasher.write_bool(hasher, bool)
+
 		## Encode a bool using a format that provides encode_bool
 		encode : Bool, fmt -> Try(encoded, err)
 			where [fmt.encode_bool : fmt, Bool -> Try(encoded, err)]
@@ -1942,15 +2013,36 @@ Builtin :: [].{
 				}
 			}
 		}
+
+		## Feed a [Try] into a [Hasher].
+		to_hash : Try(ok, err), Hasher -> Hasher
+			where [
+				ok.to_hash : ok, Hasher -> Hasher,
+				err.to_hash : err, Hasher -> Hasher,
+			]
+		to_hash = |try, hasher| match try {
+			Ok(ok) => ok.to_hash(Hasher.write_u64(hasher, 0))
+			Err(err) => err.to_hash(Hasher.write_u64(hasher, 1))
+		}
 	}
 
-	# TODO use hashing for better performance
-	Dict(k, v) :: [Pairs(List((k, v)))].{
+	Dict(k, v) :: [
+		HashMap(
+			{
+				entries : List({ key : k, value : v, hash : U64 }),
+				buckets : List([Empty, Full(U64)]),
+			},
+		),
+	].{
 
 		## Returns `Bool.True` if the two dictionaries contain the same key-value
 		## pairs, and `Bool.False` otherwise.
 		is_eq : Dict(k, v), Dict(k, v) -> Bool
-			where [k.is_eq : k, k -> Bool, v.is_eq : v, v -> Bool]
+			where [
+				k.is_eq : k, k -> Bool,
+				k.to_hash : k, Hasher -> Hasher,
+				v.is_eq : v, v -> Bool,
+			]
 		is_eq = |dict_a, dict_b| {
 			if Dict.len(dict_a) != Dict.len(dict_b) {
 				return False
@@ -1982,14 +2074,74 @@ Builtin :: [].{
 		## empty_dict = Dict.empty()
 		## ```
 		empty : () -> Dict(_k, _v)
-		empty = || Pairs([])
+		empty = || HashMap({ entries: [], buckets: [] })
+
+		## Returns an empty `Dict` with room for at least the requested number of entries.
+		with_capacity : U64 -> Dict(_k, _v)
+		with_capacity = |requested| {
+			raw = dict_raw_capacity_for_entries(requested)
+			HashMap(
+				{
+					entries: List.with_capacity(requested),
+					buckets: List.repeat(Empty, raw),
+				},
+			)
+		}
+
+		## Returns the number of entries the dictionary can hold before growing.
+		capacity : Dict(_k, _v) -> U64
+		capacity = |dict| match dict {
+			HashMap(data) => dict_usable_capacity(List.len(data.buckets))
+		}
+
+		## Ensure this dictionary has room for at least this many additional entries.
+		reserve : Dict(k, v), U64 -> Dict(k, v)
+		reserve = |dict, additional| match dict {
+			HashMap(data) => {
+				len = List.len(data.entries)
+				desired = dict_add_capacity(len, additional)
+				if desired <= dict_usable_capacity(List.len(data.buckets)) {
+					dict
+				} else {
+					raw = dict_grown_raw_capacity(List.len(data.buckets), desired)
+					spare = dict_usable_capacity(raw) - len
+					entries = List.reserve(data.entries, spare)
+					HashMap({ entries, buckets: dict_rebuild_buckets(entries, raw) })
+				}
+			}
+		}
+
+		## Reduce unused dictionary capacity.
+		release_excess_capacity : Dict(k, v) -> Dict(k, v)
+		release_excess_capacity = |dict| match dict {
+			HashMap(data) => {
+				entries = List.release_excess_capacity(data.entries)
+				raw = dict_raw_capacity_for_entries(List.len(entries))
+				HashMap({ entries, buckets: dict_rebuild_buckets(entries, raw) })
+			}
+		}
+
+		## Remove every entry while preserving the current capacity.
+		clear : Dict(k, v) -> Dict(k, v)
+		clear = |dict| match dict {
+			HashMap(data) => {
+				cap = dict_usable_capacity(List.len(data.buckets))
+				HashMap(
+					{
+						entries: List.with_capacity(cap),
+						buckets: List.repeat(Empty, List.len(data.buckets)),
+					},
+				)
+			}
+		}
 
 		## Returns a `Dict` containing the key and value provided as input.
 		## ```roc
 		## expect Dict.single("A", "B") == Dict.empty().insert("A", "B")
 		## ```
 		single : k, v -> Dict(k, v)
-		single = |key, value| Pairs([(key, value)])
+			where [k.is_eq : k, k -> Bool, k.to_hash : k, Hasher -> Hasher]
+		single = |key, value| Dict.insert(Dict.empty(), key, value)
 
 		## Returns the number of key-value pairs in the dictionary.
 		## ```roc
@@ -2001,7 +2153,7 @@ Builtin :: [].{
 		## ```
 		len : Dict(_k, _v) -> U64
 		len = |dict| match dict {
-			Pairs(list) => List.len(list)
+			HashMap(data) => List.len(data.entries)
 		}
 
 		## Check if the dictionary is empty.
@@ -2011,9 +2163,7 @@ Builtin :: [].{
 		## expect Dict.empty().is_empty()
 		## ```
 		is_empty : Dict(_k, _v) -> Bool
-		is_empty = |dict| match dict {
-			Pairs(list) => List.is_empty(list)
-		}
+		is_empty = |dict| Dict.len(dict) == 0
 
 		## Get the value for a given key. If there is a value for the specified
 		## key it will return `Ok(value)`, otherwise return `Err(KeyNotFound)`.
@@ -2026,15 +2176,18 @@ Builtin :: [].{
 		## expect dictionary.get(2000) == Err(KeyNotFound)
 		## ```
 		get : Dict(k, v), k -> Try(v, [KeyNotFound, ..])
-			where [k.is_eq : k, k -> Bool]
+			where [k.is_eq : k, k -> Bool, k.to_hash : k, Hasher -> Hasher]
 		get = |dict, key| match dict {
-			Pairs(list) => {
-				for (item_key, item_value) in list {
-					if item_key == key {
-						return Try.Ok(item_value)
+			HashMap(data) => {
+				if List.is_empty(data.buckets) {
+					Try.Err(KeyNotFound)
+				} else {
+					hash = dict_hash_key(key)
+					match dict_probe(data.buckets, data.entries, key, hash) {
+						Found(entry_index) => Try.Ok(list_get_unsafe(data.entries, entry_index).value)
+						Missing(_) => Try.Err(KeyNotFound)
 					}
 				}
-				Try.Err(KeyNotFound)
 			}
 		}
 
@@ -2043,13 +2196,12 @@ Builtin :: [].{
 		## expect Dict.empty().insert(1234, "5678").contains(1234)
 		## ```
 		contains : Dict(k, _v), k -> Bool
-			where [k.is_eq : k, k -> Bool]
-		contains = |dict, key| match dict {
-			Pairs(list) => List.any(
-				list,
-				|(item_key, _)| item_key == key,
-			)
-		}
+			where [k.is_eq : k, k -> Bool, k.to_hash : k, Hasher -> Hasher]
+		contains = |dict, key|
+			match Dict.get(dict, key) {
+				Try.Ok(_) => True
+				Try.Err(_) => False
+			}
 
 		## Insert a value into the dictionary at a specified key. If the key
 		## already exists, the existing value is replaced.
@@ -2059,16 +2211,36 @@ Builtin :: [].{
 		##            .get("Apples") == Ok(12)
 		## ```
 		insert : Dict(k, v), k, v -> Dict(k, v)
-			where [k.is_eq : k, k -> Bool]
+			where [k.is_eq : k, k -> Bool, k.to_hash : k, Hasher -> Hasher]
 		insert = |dict, key, value| match dict {
-			Pairs(list) => {
-				var $new_list = List.with_capacity(List.len(list))
-				for (item_key, item_value) in list {
-					if item_key != key {
-						$new_list = List.append($new_list, (item_key, item_value))
+			HashMap(data) => {
+				hash = dict_hash_key(key)
+
+				if !List.is_empty(data.buckets) {
+					match dict_probe(data.buckets, data.entries, key, hash) {
+						Found(entry_index) => {
+							entry = list_get_unsafe(data.entries, entry_index)
+							entries = list_set_unsafe(data.entries, entry_index, { key: entry.key, value, hash: entry.hash })
+							return HashMap({ entries, buckets: data.buckets })
+						}
+						Missing(_) => {}
 					}
 				}
-				Pairs(List.append($new_list, (key, value)))
+
+				prepared = dict_ensure_capacity(data, dict_add_capacity(List.len(data.entries), 1))
+				match dict_probe(prepared.buckets, prepared.entries, key, hash) {
+					Found(entry_index) => {
+						entry = list_get_unsafe(prepared.entries, entry_index)
+						entries = list_set_unsafe(prepared.entries, entry_index, { key: entry.key, value, hash: entry.hash })
+						HashMap({ entries, buckets: prepared.buckets })
+					}
+					Missing(bucket_index) => {
+						entry_index = List.len(prepared.entries)
+						entries = List.append(prepared.entries, { key, value, hash })
+						buckets = list_set_unsafe(prepared.buckets, bucket_index, Full(entry_index))
+						HashMap({ entries, buckets })
+					}
+				}
 			}
 		}
 
@@ -2080,16 +2252,21 @@ Builtin :: [].{
 		##            .len() == 0
 		## ```
 		remove : Dict(k, v), k -> Dict(k, v)
-			where [k.is_eq : k, k -> Bool]
+			where [k.is_eq : k, k -> Bool, k.to_hash : k, Hasher -> Hasher]
 		remove = |dict, key| match dict {
-			Pairs(list) => {
-				var $new_list = List.with_capacity(List.len(list))
-				for (item_key, item_value) in list {
-					if item_key != key {
-						$new_list = List.append($new_list, (item_key, item_value))
+			HashMap(data) => {
+				if List.is_empty(data.buckets) {
+					dict
+				} else {
+					hash = dict_hash_key(key)
+					match dict_probe(data.buckets, data.entries, key, hash) {
+						Found(entry_index) => {
+							entries = dict_remove_entry(data.entries, entry_index)
+							HashMap({ entries, buckets: dict_rebuild_buckets(entries, List.len(data.buckets)) })
+						}
+						Missing(_) => dict
 					}
 				}
-				Pairs($new_list)
 			}
 		}
 
@@ -2101,7 +2278,13 @@ Builtin :: [].{
 		## ```
 		to_list : Dict(k, v) -> List((k, v))
 		to_list = |dict| match dict {
-			Pairs(list) => list
+			HashMap(data) => {
+				var $pairs = List.with_capacity(List.len(data.entries))
+				for entry in data.entries {
+					$pairs = List.append($pairs, (entry.key, entry.value))
+				}
+				$pairs
+			}
 		}
 
 		## Create a `Dict` from a `List` of key-value pairs. If the list
@@ -2111,9 +2294,9 @@ Builtin :: [].{
 		## 	Dict.single(1, "One").insert(2, "Two")
 		## ```
 		from_list : List((k, v)) -> Dict(k, v)
-			where [k.is_eq : k, k -> Bool]
+			where [k.is_eq : k, k -> Bool, k.to_hash : k, Hasher -> Hasher]
 		from_list = |list|
-			List.fold(list, Pairs([]), |dict, (k, v)| Dict.insert(dict, k, v))
+			List.fold(list, Dict.with_capacity(List.len(list)), |dict, (k, v)| Dict.insert(dict, k, v))
 
 		## Returns the keys of a dictionary as a `List`.
 		## ```roc
@@ -2123,10 +2306,13 @@ Builtin :: [].{
 		## ```
 		keys : Dict(k, _v) -> List(k)
 		keys = |dict| match dict {
-			Pairs(list) => List.map(
-				list,
-				|(k, _)| k,
-			)
+			HashMap(data) => {
+				var $keys = List.with_capacity(List.len(data.entries))
+				for entry in data.entries {
+					$keys = List.append($keys, entry.key)
+				}
+				$keys
+			}
 		}
 
 		## Returns the values of a dictionary as a `List`.
@@ -2137,10 +2323,13 @@ Builtin :: [].{
 		## ```
 		values : Dict(_k, v) -> List(v)
 		values = |dict| match dict {
-			Pairs(list) => List.map(
-				list,
-				|(_, v)| v,
-			)
+			HashMap(data) => {
+				var $values = List.with_capacity(List.len(data.entries))
+				for entry in data.entries {
+					$values = List.append($values, entry.value)
+				}
+				$values
+			}
 		}
 
 		## Build a value by folding through each key-value pair in the
@@ -2154,8 +2343,15 @@ Builtin :: [].{
 		##            .fold(0, |count, _key, qty| count + qty) == 36
 		## ```
 		fold : Dict(k, v), state, (state, k, v -> state) -> state
-		fold = |dict, init, step|
-			List.fold(Dict.to_list(dict), init, |st, (k, v)| step(st, k, v))
+		fold = |dict, init, step| match dict {
+			HashMap(data) => {
+				var $state = init
+				for entry in data.entries {
+					$state = step($state, entry.key, entry.value)
+				}
+				$state
+			}
+		}
 
 		## Run the given function on each key-value pair of a dictionary, and
 		## return a dictionary with just the pairs for which the function
@@ -2170,7 +2366,15 @@ Builtin :: [].{
 		## ```
 		keep_if : Dict(k, v), ((k, v) -> Bool) -> Dict(k, v)
 		keep_if = |dict, predicate| match dict {
-			Pairs(list) => Pairs(List.keep_if(list, predicate))
+			HashMap(data) => {
+				var $entries = List.with_capacity(List.len(data.entries))
+				for entry in data.entries {
+					if predicate((entry.key, entry.value)) {
+						$entries = List.append($entries, entry)
+					}
+				}
+				HashMap({ entries: $entries, buckets: dict_rebuild_buckets($entries, List.len(data.buckets)) })
+			}
 		}
 
 		## Run the given function on each key-value pair of a dictionary, and
@@ -2185,9 +2389,7 @@ Builtin :: [].{
 		##            .len() == 1
 		## ```
 		drop_if : Dict(k, v), ((k, v) -> Bool) -> Dict(k, v)
-		drop_if = |dict, predicate| match dict {
-			Pairs(list) => Pairs(List.drop_if(list, predicate))
-		}
+		drop_if = |dict, predicate| Dict.keep_if(dict, |pair| !predicate(pair))
 
 		## Convert each value in the dictionary to something new, by calling a
 		## conversion function on each of them which receives both the key
@@ -2204,14 +2406,14 @@ Builtin :: [].{
 		## ```
 		map : Dict(k, a), (k, a -> b) -> Dict(k, b)
 		map = |dict, transform| match dict {
-			Pairs(list) =>
-				Pairs(
-					List.map(
-						list,
-						|(k, v)| (k, transform(k, v)),
-					),
-				)
+			HashMap(data) => {
+				var $entries = List.with_capacity(List.len(data.entries))
+				for entry in data.entries {
+					$entries = List.append($entries, { key: entry.key, value: transform(entry.key, entry.value), hash: entry.hash })
+				}
+				HashMap({ entries: $entries, buckets: data.buckets })
 			}
+		}
 
 		## Like [Dict.map], except the transformation function returns a
 		## dictionary. At the end, all the dictionaries are joined together
@@ -2219,7 +2421,7 @@ Builtin :: [].{
 		##
 		## You may know a similar function named `concat_map` in other languages.
 		join_map : Dict(a, b), (a, b -> Dict(x, y)) -> Dict(x, y)
-			where [x.is_eq : x, x -> Bool]
+			where [x.is_eq : x, x -> Bool, x.to_hash : x, Hasher -> Hasher]
 		join_map = |dict, transform| {
 			var $acc = Dict.empty()
 			for (k, v) in Dict.to_list(dict) {
@@ -2241,7 +2443,7 @@ Builtin :: [].{
 		## }
 		## ```
 		insert_all : Dict(k, v), Dict(k, v) -> Dict(k, v)
-			where [k.is_eq : k, k -> Bool]
+			where [k.is_eq : k, k -> Bool, k.to_hash : k, Hasher -> Hasher]
 		insert_all = |xs, ys| {
 			var $acc = xs
 			for (k, v) in Dict.to_list(ys) {
@@ -2264,19 +2466,19 @@ Builtin :: [].{
 		## }
 		## ```
 		keep_shared : Dict(k, v), Dict(k, v) -> Dict(k, v)
-			where [k.is_eq : k, k -> Bool, v.is_eq : v, v -> Bool]
+			where [
+				k.is_eq : k, k -> Bool,
+				k.to_hash : k, Hasher -> Hasher,
+				v.is_eq : v, v -> Bool,
+			]
 		keep_shared = |xs, ys| {
-			ys_list = Dict.to_list(ys)
 			var $acc = Dict.empty()
 			for (k, v) in Dict.to_list(xs) {
-				var $found_match = False
-				for (yk, yv) in ys_list {
-					if yk == k and yv == v {
-						$found_match = True
+				match Dict.get(ys, k) {
+					Try.Ok(yv) => if yv == v {
+						$acc = Dict.insert($acc, k, v)
 					}
-				}
-				if $found_match {
-					$acc = Dict.insert($acc, k, v)
+					Try.Err(_) => {}
 				}
 			}
 			$acc
@@ -2295,7 +2497,7 @@ Builtin :: [].{
 		## }
 		## ```
 		remove_all : Dict(k, v), Dict(k, _w) -> Dict(k, v)
-			where [k.is_eq : k, k -> Bool]
+			where [k.is_eq : k, k -> Bool, k.to_hash : k, Hasher -> Hasher]
 		remove_all = |xs, ys| {
 			var $acc = xs
 			for (k, _) in Dict.to_list(ys) {
@@ -2326,7 +2528,7 @@ Builtin :: [].{
 		## )
 		## ```
 		update : Dict(k, v), k, (Try(v, [Missing]) -> Try(v, [Missing])) -> Dict(k, v)
-			where [k.is_eq : k, k -> Bool]
+			where [k.is_eq : k, k -> Bool, k.to_hash : k, Hasher -> Hasher]
 		update = |dict, key, alter|
 			match Dict.get(dict, key) {
 				Try.Ok(value) =>
@@ -2642,6 +2844,10 @@ Builtin :: [].{
 			## expect !U8.is_eq(3, 4)
 			## ```
 			is_eq : U8, U8 -> Bool
+
+			## Feed a [U8] into a [Hasher].
+			to_hash : U8, Hasher -> Hasher
+			to_hash = |num, hasher| Hasher.write_u8(hasher, num)
 
 			## Returns `Bool.True` if the first value is greater than the second.
 			## ```roc
@@ -3055,6 +3261,10 @@ Builtin :: [].{
 			## expect !I8.is_eq(3, 4)
 			## ```
 			is_eq : I8, I8 -> Bool
+
+			## Feed an [I8] into a [Hasher].
+			to_hash : I8, Hasher -> Hasher
+			to_hash = |num, hasher| Hasher.write_i8(hasher, num)
 
 			## Returns `Bool.True` if the first value is greater than the second.
 			## ```roc
@@ -3563,6 +3773,10 @@ Builtin :: [].{
 			## ```
 			is_eq : U16, U16 -> Bool
 
+			## Feed a [U16] into a [Hasher].
+			to_hash : U16, Hasher -> Hasher
+			to_hash = |num, hasher| Hasher.write_u16(hasher, num)
+
 			## Returns `Bool.True` if the first value is greater than the second.
 			## ```roc
 			## expect U16.is_gt(5, 3)
@@ -4012,6 +4226,10 @@ Builtin :: [].{
 			## expect !I16.is_eq(3, 4)
 			## ```
 			is_eq : I16, I16 -> Bool
+
+			## Feed an [I16] into a [Hasher].
+			to_hash : I16, Hasher -> Hasher
+			to_hash = |num, hasher| Hasher.write_i16(hasher, num)
 
 			## Returns `Bool.True` if the first value is greater than the second.
 			## ```roc
@@ -4537,6 +4755,10 @@ Builtin :: [].{
 			## ```
 			is_eq : U32, U32 -> Bool
 
+			## Feed a [U32] into a [Hasher].
+			to_hash : U32, Hasher -> Hasher
+			to_hash = |num, hasher| Hasher.write_u32(hasher, num)
+
 			## Returns `Bool.True` if the first value is greater than the second.
 			## ```roc
 			## expect U32.is_gt(5, 3)
@@ -5024,6 +5246,10 @@ Builtin :: [].{
 			## expect !I32.is_eq(3, 4)
 			## ```
 			is_eq : I32, I32 -> Bool
+
+			## Feed an [I32] into a [Hasher].
+			to_hash : I32, Hasher -> Hasher
+			to_hash = |num, hasher| Hasher.write_i32(hasher, num)
 
 			## Returns `Bool.True` if the first value is greater than the second.
 			## ```roc
@@ -5569,6 +5795,10 @@ Builtin :: [].{
 			## ```
 			is_eq : U64, U64 -> Bool
 
+			## Feed a [U64] into a [Hasher].
+			to_hash : U64, Hasher -> Hasher
+			to_hash = |num, hasher| Hasher.write_u64(hasher, num)
+
 			## Returns `Bool.True` if the first value is greater than the second.
 			## ```roc
 			## expect U64.is_gt(5, 3)
@@ -6100,6 +6330,10 @@ Builtin :: [].{
 			## expect !I64.is_eq(3, 4)
 			## ```
 			is_eq : I64, I64 -> Bool
+
+			## Feed an [I64] into a [Hasher].
+			to_hash : I64, Hasher -> Hasher
+			to_hash = |num, hasher| Hasher.write_i64(hasher, num)
 
 			## Returns `Bool.True` if the first value is greater than the second.
 			## ```roc
@@ -6670,6 +6904,10 @@ Builtin :: [].{
 			## expect !U128.is_eq(3, 4)
 			## ```
 			is_eq : U128, U128 -> Bool
+
+			## Feed a [U128] into a [Hasher].
+			to_hash : U128, Hasher -> Hasher
+			to_hash = |num, hasher| Hasher.write_u128(hasher, num)
 
 			## Returns `Bool.True` if the first value is greater than the second.
 			## ```roc
@@ -7246,6 +7484,10 @@ Builtin :: [].{
 			## expect !I128.is_eq(3, 4)
 			## ```
 			is_eq : I128, I128 -> Bool
+
+			## Feed an [I128] into a [Hasher].
+			to_hash : I128, Hasher -> Hasher
+			to_hash = |num, hasher| Hasher.write_i128(hasher, num)
 
 			## Returns `Bool.True` if the first value is greater than the second.
 			## ```roc
@@ -7872,6 +8114,10 @@ Builtin :: [].{
 			## ```
 			is_eq : Dec, Dec -> Bool
 
+			## Feed a [Dec] into a [Hasher].
+			to_hash : Dec, Hasher -> Hasher
+			to_hash = |num, hasher| Hasher.write_dec(hasher, num)
+
 			## Returns `Bool.True` if the first value is greater than the second.
 			## ```roc
 			## expect Dec.is_gt(5.0, 3.0)
@@ -8439,6 +8685,10 @@ Builtin :: [].{
 
 			is_eq : F32, F32 -> Bool
 
+			## Feed an [F32] into a [Hasher].
+			to_hash : F32, Hasher -> Hasher
+			to_hash = |num, hasher| Hasher.write_f32(hasher, num)
+
 			## Returns `Bool.True` if the value is less than `0.0`.
 			## ```roc
 			## expect F32.is_negative(-0.5)
@@ -8918,6 +9168,10 @@ Builtin :: [].{
 
 			is_eq : F64, F64 -> Bool
 
+			## Feed an [F64] into a [Hasher].
+			to_hash : F64, Hasher -> Hasher
+			to_hash = |num, hasher| Hasher.write_f64(hasher, num)
+
 			## Returns `Bool.True` if the value is less than `0.0`.
 			## ```roc
 			## expect F64.is_negative(-0.5)
@@ -9360,6 +9614,149 @@ Builtin :: [].{
 				Fmt.decode_f64(format, source)
 			}
 		}
+	}
+
+	hasher_start : U64 -> Hasher
+	hasher_start = |seed| { state: seed }
+
+	hasher_finish : Hasher -> U64
+
+	dict_pseudo_seed : () -> U64
+
+	dict_seed : () -> U64
+	dict_seed = || dict_pseudo_seed()
+
+	dict_usable_capacity : U64 -> U64
+	dict_usable_capacity = |raw_capacity| (raw_capacity * 3) / 4
+
+	dict_raw_capacity_for_entries : U64 -> U64
+	dict_raw_capacity_for_entries = |entry_capacity|
+		if entry_capacity == 0 {
+			0
+		} else if entry_capacity > U64.highest / 4 {
+			crash "Dict capacity overflow"
+		} else {
+			((entry_capacity * 4) + 2) / 3
+		}
+
+	dict_add_capacity : U64, U64 -> U64
+	dict_add_capacity = |a, b|
+		if b > U64.highest - a {
+			crash "Dict capacity overflow"
+		} else {
+			a + b
+		}
+
+	dict_grown_raw_capacity : U64, U64 -> U64
+	dict_grown_raw_capacity = |current_raw, desired_entries| {
+		min_raw = dict_raw_capacity_for_entries(desired_entries)
+		grown = if current_raw == 0 {
+			8
+		} else if current_raw > U64.highest / 2 {
+			U64.highest
+		} else {
+			current_raw * 2
+		}
+
+		if min_raw > grown {
+			min_raw
+		} else {
+			grown
+		}
+	}
+
+	dict_hash_key : k -> U64
+		where [k.to_hash : k, Hasher -> Hasher]
+	dict_hash_key = |key| hasher_finish(key.to_hash(hasher_start(dict_seed())))
+
+	dict_ensure_capacity : { entries : List({ key : k, value : v, hash : U64 }), buckets : List([Empty, Full(U64)]) }, U64 -> { entries : List({ key : k, value : v, hash : U64 }), buckets : List([Empty, Full(U64)]) }
+	dict_ensure_capacity = |data, desired| {
+		if desired <= dict_usable_capacity(List.len(data.buckets)) {
+			data
+		} else {
+			raw = dict_grown_raw_capacity(List.len(data.buckets), desired)
+			spare = dict_usable_capacity(raw) - List.len(data.entries)
+			entries = List.reserve(data.entries, spare)
+			{ entries, buckets: dict_rebuild_buckets(entries, raw) }
+		}
+	}
+
+	dict_probe : List([Empty, Full(U64)]), List({ key : k, value : v, hash : U64 }), k, U64 -> [Found(U64), Missing(U64)]
+		where [k.is_eq : k, k -> Bool]
+	dict_probe = |buckets, entries, key, hash| {
+		raw = List.len(buckets)
+		if raw == 0 {
+			return Missing(0)
+		}
+
+		start = hash % raw
+		var $step = 0
+		while $step < raw {
+			bucket_index = (start + $step) % raw
+			match list_get_unsafe(buckets, bucket_index) {
+				Empty => {
+					return Missing(bucket_index)
+				}
+				Full(entry_index) => {
+					entry = list_get_unsafe(entries, entry_index)
+					if entry.hash == hash and entry.key == key {
+						return Found(entry_index)
+					}
+				}
+			}
+			$step = $step + 1
+		}
+
+		crash "Dict invariant violated: full bucket table"
+	}
+
+	dict_empty_bucket_for_hash : List([Empty, Full(U64)]), U64 -> U64
+	dict_empty_bucket_for_hash = |buckets, hash| {
+		raw = List.len(buckets)
+		if raw == 0 {
+			crash "Dict invariant violated: empty bucket table"
+		}
+
+		start = hash % raw
+		var $step = 0
+		while $step < raw {
+			bucket_index = (start + $step) % raw
+			match list_get_unsafe(buckets, bucket_index) {
+				Empty => {
+					return bucket_index
+				}
+				Full(_) => {}
+			}
+			$step = $step + 1
+		}
+
+		crash "Dict invariant violated: full bucket table"
+	}
+
+	dict_rebuild_buckets : List({ key : k, value : v, hash : U64 }), U64 -> List([Empty, Full(U64)])
+	dict_rebuild_buckets = |entries, raw| {
+		var $buckets = List.repeat(Empty, raw)
+		var $index = 0
+		while $index < List.len(entries) {
+			entry = list_get_unsafe(entries, $index)
+			bucket_index = dict_empty_bucket_for_hash($buckets, entry.hash)
+			$buckets = list_set_unsafe($buckets, bucket_index, Full($index))
+			$index = $index + 1
+		}
+		$buckets
+	}
+
+	dict_remove_entry : List({ key : k, value : v, hash : U64 }), U64 -> List({ key : k, value : v, hash : U64 })
+	dict_remove_entry = |entries, remove_index| {
+		var $new_entries = List.with_capacity(List.len(entries))
+		var $index = 0
+		while $index < List.len(entries) {
+			if $index != remove_index {
+				$new_entries = List.append($new_entries, list_get_unsafe(entries, $index))
+			}
+			$index = $index + 1
+		}
+		$new_entries
 	}
 
 	u8_from_str : Str -> Try(U8, [BadNumStr])

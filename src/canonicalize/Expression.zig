@@ -1581,6 +1581,9 @@ pub const Expr = union(enum) {
         /// Whether this match was desugared from the `?` (try suffix) operator.
         /// When true, we need to verify the condition is actually a Try type.
         is_try_suffix: bool,
+        /// Whether to skip user-facing exhaustiveness/redundancy diagnostics for this match.
+        /// This is true for compiler-generated matches such as `?` and `??` desugarings.
+        skip_exhaustiveness: bool,
 
         pub const Idx = enum(u32) { _ };
         pub const Span = extern struct { span: base.DataSpan };

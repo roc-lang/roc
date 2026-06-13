@@ -112,6 +112,8 @@ pub const Options = struct {
     /// When disabled, `list_map_can_reuse` lowers to a constant 0 and the
     /// in-place branch of `List.map` is dropped before it reaches LIR.
     list_in_place_map: bool = false,
+    /// Preserve source-level procedure names in LIR for runtime diagnostics.
+    proc_debug_names: bool = false,
 };
 
 /// Lower Lambda Solved directly into LIR.
@@ -250,6 +252,7 @@ const Lowerer = struct {
     fn_written: std.ArrayList(bool),
     inline_plan: SolvedInline.Plan,
     list_in_place_map: bool,
+    proc_debug_names: bool,
     /// Match sites statically resolved by `foldListMapCanReuseMatch`,
     /// recorded (Debug only) so the Lambda Mono verifier replays them.
     folded_map_matches: std.ArrayList(Lifted.Program.FoldedMatch),
@@ -302,6 +305,7 @@ const Lowerer = struct {
             .fn_written = .empty,
             .inline_plan = options.inline_plan,
             .list_in_place_map = options.list_in_place_map,
+            .proc_debug_names = options.proc_debug_names,
             .folded_map_matches = .empty,
             .source_symbols = std.AutoHashMap(Common.Symbol, Lifted.FnId).init(allocator),
             .capture_types = CaptureTypeMap.initContext(allocator, .{}),
@@ -631,6 +635,11 @@ const Lowerer = struct {
             .abi = if (spec.abi == .erased) .erased_callable else .roc,
             .hosted = try self.hostedProcForSource(source_fn.source),
         });
+        if (self.proc_debug_names) {
+            if (self.solved.lifted.procDebugName(source_fn.symbol)) |name| {
+                try self.result.store.setProcDebugName(proc, self.solved.lifted.names.exportNameText(name));
+            }
+        }
         entry.proc = proc;
         self.fn_entries.items[index] = entry;
         return proc;
@@ -3858,6 +3867,7 @@ fn cloneLiftedProgram(allocator: std.mem.Allocator, program: *const Lifted.Progr
         .branches = try cloneArrayList(Lifted.Branch, allocator, &program.branches),
         .if_branches = try cloneArrayList(Lifted.IfBranch, allocator, &program.if_branches),
         .string_literals = string_literals,
+        .proc_debug_names = try cloneProcDebugNameMap(allocator, &program.proc_debug_names),
         .roots = try cloneArrayList(Lifted.Root, allocator, &program.roots),
         .layout_requests = try cloneArrayList(Lifted.LayoutRequest, allocator, &program.layout_requests),
         .runtime_schema_requests = try cloneArrayList(Lifted.RuntimeSchemaRequest, allocator, &program.runtime_schema_requests),
@@ -3880,6 +3890,19 @@ fn cloneLiftedProgram(allocator: std.mem.Allocator, program: *const Lifted.Progr
         },
         .current_loc = program.current_loc,
     };
+}
+
+fn cloneProcDebugNameMap(allocator: std.mem.Allocator, source: *const Lifted.ProcDebugNameMap) std.mem.Allocator.Error!Lifted.ProcDebugNameMap {
+    var cloned = Lifted.ProcDebugNameMap.init(allocator);
+    errdefer cloned.deinit();
+
+    try cloned.ensureTotalCapacity(source.count());
+    var it = source.iterator();
+    while (it.next()) |entry| {
+        cloned.putAssumeCapacity(entry.key_ptr.*, entry.value_ptr.*);
+    }
+
+    return cloned;
 }
 
 fn cloneNameStore(allocator: std.mem.Allocator, source: *const check.CheckedNames.NameStore) std.mem.Allocator.Error!check.CheckedNames.NameStore {
