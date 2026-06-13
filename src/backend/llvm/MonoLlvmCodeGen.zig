@@ -4855,7 +4855,10 @@ pub const MonoLlvmCodeGen = struct {
 
     fn emitDefaultPlatformWriteStdout(self: *MonoLlvmCodeGen, ptr: LlvmBuilder.Value, len: LlvmBuilder.Value) Error!void {
         switch (self.target.os.tag) {
-            .linux => try self.emitLinuxWriteStdout(ptr, len),
+            .linux => switch (self.target.abi) {
+                .gnu, .gnueabi, .gnueabihf, .gnux32 => try self.emitCWriteStdout(ptr, len),
+                else => try self.emitLinuxWriteStdout(ptr, len),
+            },
             .macos, .windows => try self.emitCWriteStdout(ptr, len),
             else => return error.CompilationFailed,
         }
