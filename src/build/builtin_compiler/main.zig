@@ -215,31 +215,31 @@ fn expectBuiltinIdent(env: *const ModuleEnv, text: []const u8) base.Ident.Idx {
 }
 
 fn installBuiltinNodeIndices(gpa: Allocator, env: *ModuleEnv, indices: BuiltinIndices) !void {
-    try env.common.setNodeIndexById(gpa, indices.bool_ident, @intCast(@intFromEnum(indices.bool_type)));
-    try env.common.setNodeIndexById(gpa, indices.try_ident, @intCast(@intFromEnum(indices.try_type)));
-    try env.common.setNodeIndexById(gpa, indices.dict_ident, @intCast(@intFromEnum(indices.dict_type)));
-    try env.common.setNodeIndexById(gpa, indices.set_ident, @intCast(@intFromEnum(indices.set_type)));
-    try env.common.setNodeIndexById(gpa, indices.str_ident, @intCast(@intFromEnum(indices.str_type)));
-    try env.common.setNodeIndexById(gpa, indices.hasher_ident, @intCast(@intFromEnum(indices.hasher_type)));
-    try env.common.setNodeIndexById(gpa, indices.iter_ident, @intCast(@intFromEnum(indices.iter_type)));
-    try env.common.setNodeIndexById(gpa, indices.stream_ident, @intCast(@intFromEnum(indices.stream_type)));
-    try env.common.setNodeIndexById(gpa, indices.list_ident, @intCast(@intFromEnum(indices.list_type)));
-    try env.common.setNodeIndexById(gpa, indices.box_ident, @intCast(@intFromEnum(indices.box_type)));
-    try env.common.setNodeIndexById(gpa, indices.utf8_problem_ident, @intCast(@intFromEnum(indices.utf8_problem_type)));
-    try env.common.setNodeIndexById(gpa, indices.u8_ident, @intCast(@intFromEnum(indices.u8_type)));
-    try env.common.setNodeIndexById(gpa, indices.i8_ident, @intCast(@intFromEnum(indices.i8_type)));
-    try env.common.setNodeIndexById(gpa, indices.u16_ident, @intCast(@intFromEnum(indices.u16_type)));
-    try env.common.setNodeIndexById(gpa, indices.i16_ident, @intCast(@intFromEnum(indices.i16_type)));
-    try env.common.setNodeIndexById(gpa, indices.u32_ident, @intCast(@intFromEnum(indices.u32_type)));
-    try env.common.setNodeIndexById(gpa, indices.i32_ident, @intCast(@intFromEnum(indices.i32_type)));
-    try env.common.setNodeIndexById(gpa, indices.u64_ident, @intCast(@intFromEnum(indices.u64_type)));
-    try env.common.setNodeIndexById(gpa, indices.i64_ident, @intCast(@intFromEnum(indices.i64_type)));
-    try env.common.setNodeIndexById(gpa, indices.u128_ident, @intCast(@intFromEnum(indices.u128_type)));
-    try env.common.setNodeIndexById(gpa, indices.i128_ident, @intCast(@intFromEnum(indices.i128_type)));
-    try env.common.setNodeIndexById(gpa, indices.dec_ident, @intCast(@intFromEnum(indices.dec_type)));
-    try env.common.setNodeIndexById(gpa, indices.f32_ident, @intCast(@intFromEnum(indices.f32_type)));
-    try env.common.setNodeIndexById(gpa, indices.f64_ident, @intCast(@intFromEnum(indices.f64_type)));
-    try env.common.setNodeIndexById(gpa, indices.numeral_ident, @intCast(@intFromEnum(indices.numeral_type)));
+    try env.common.setTypeNodeIndexById(gpa, indices.bool_ident, @intCast(@intFromEnum(indices.bool_type)));
+    try env.common.setTypeNodeIndexById(gpa, indices.try_ident, @intCast(@intFromEnum(indices.try_type)));
+    try env.common.setTypeNodeIndexById(gpa, indices.dict_ident, @intCast(@intFromEnum(indices.dict_type)));
+    try env.common.setTypeNodeIndexById(gpa, indices.set_ident, @intCast(@intFromEnum(indices.set_type)));
+    try env.common.setTypeNodeIndexById(gpa, indices.str_ident, @intCast(@intFromEnum(indices.str_type)));
+    try env.common.setTypeNodeIndexById(gpa, indices.hasher_ident, @intCast(@intFromEnum(indices.hasher_type)));
+    try env.common.setTypeNodeIndexById(gpa, indices.iter_ident, @intCast(@intFromEnum(indices.iter_type)));
+    try env.common.setTypeNodeIndexById(gpa, indices.stream_ident, @intCast(@intFromEnum(indices.stream_type)));
+    try env.common.setTypeNodeIndexById(gpa, indices.list_ident, @intCast(@intFromEnum(indices.list_type)));
+    try env.common.setTypeNodeIndexById(gpa, indices.box_ident, @intCast(@intFromEnum(indices.box_type)));
+    try env.common.setTypeNodeIndexById(gpa, indices.utf8_problem_ident, @intCast(@intFromEnum(indices.utf8_problem_type)));
+    try env.common.setTypeNodeIndexById(gpa, indices.u8_ident, @intCast(@intFromEnum(indices.u8_type)));
+    try env.common.setTypeNodeIndexById(gpa, indices.i8_ident, @intCast(@intFromEnum(indices.i8_type)));
+    try env.common.setTypeNodeIndexById(gpa, indices.u16_ident, @intCast(@intFromEnum(indices.u16_type)));
+    try env.common.setTypeNodeIndexById(gpa, indices.i16_ident, @intCast(@intFromEnum(indices.i16_type)));
+    try env.common.setTypeNodeIndexById(gpa, indices.u32_ident, @intCast(@intFromEnum(indices.u32_type)));
+    try env.common.setTypeNodeIndexById(gpa, indices.i32_ident, @intCast(@intFromEnum(indices.i32_type)));
+    try env.common.setTypeNodeIndexById(gpa, indices.u64_ident, @intCast(@intFromEnum(indices.u64_type)));
+    try env.common.setTypeNodeIndexById(gpa, indices.i64_ident, @intCast(@intFromEnum(indices.i64_type)));
+    try env.common.setTypeNodeIndexById(gpa, indices.u128_ident, @intCast(@intFromEnum(indices.u128_type)));
+    try env.common.setTypeNodeIndexById(gpa, indices.i128_ident, @intCast(@intFromEnum(indices.i128_type)));
+    try env.common.setTypeNodeIndexById(gpa, indices.dec_ident, @intCast(@intFromEnum(indices.dec_type)));
+    try env.common.setTypeNodeIndexById(gpa, indices.f32_ident, @intCast(@intFromEnum(indices.f32_type)));
+    try env.common.setTypeNodeIndexById(gpa, indices.f64_ident, @intCast(@intFromEnum(indices.f64_type)));
+    try env.common.setTypeNodeIndexById(gpa, indices.numeral_ident, @intCast(@intFromEnum(indices.numeral_type)));
 }
 
 /// Validates that BuiltinIndices contains all nominal type declarations in the Builtin module.
