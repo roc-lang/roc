@@ -45,10 +45,12 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
 
     const generated = generator.getOutput();
     const support_generated = generator.getSupportOutput();
+    const rb_generated = generator.getRbOutput();
     const tools_generated = generator.getToolsOutput();
     if (debug) {
         std.debug.print("Input length: {d}, bytes consumed: {d}\n", .{ input.len, reader.position });
         std.debug.print("Generated Support.roc:\n==========\n{s}\n==========\n\n", .{support_generated});
+        std.debug.print("Generated Rb.roc:\n==========\n{s}\n==========\n\n", .{rb_generated});
         std.debug.print("Generated Tools.roc:\n==========\n{s}\n==========\n\n", .{tools_generated});
         std.debug.print("Generated code:\n==========\n{s}\n==========\n\n", .{generated});
     }
@@ -70,6 +72,7 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
     var tmp_dir = std.Io.Dir.openDirAbsolute(fuzz_io, case_path, .{}) catch @panic("failed to open typecheck fuzz case dir");
     defer tmp_dir.close(fuzz_io);
     tmp_dir.writeFile(fuzz_io, .{ .sub_path = "Support.roc", .data = support_generated }) catch @panic("failed to write generated typecheck fuzz support source");
+    tmp_dir.writeFile(fuzz_io, .{ .sub_path = "Rb.roc", .data = rb_generated }) catch @panic("failed to write generated typecheck fuzz record builder source");
     tmp_dir.writeFile(fuzz_io, .{ .sub_path = "Tools.roc", .data = tools_generated }) catch @panic("failed to write generated typecheck fuzz tools source");
     tmp_dir.writeFile(fuzz_io, .{ .sub_path = "Main.roc", .data = generated }) catch @panic("failed to write generated typecheck fuzz source");
 
@@ -110,6 +113,7 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
     if (blocking_report_title) |title| {
         if (!debug) {
             std.debug.print("Generated Support.roc:\n==========\n{s}\n==========\n\n", .{support_generated});
+            std.debug.print("Generated Rb.roc:\n==========\n{s}\n==========\n\n", .{rb_generated});
             std.debug.print("Generated Tools.roc:\n==========\n{s}\n==========\n\n", .{tools_generated});
             std.debug.print("Generated code:\n==========\n{s}\n==========\n\n", .{generated});
         }

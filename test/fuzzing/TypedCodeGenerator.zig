@@ -14,6 +14,7 @@ allocator: std.mem.Allocator,
 reader: *FuzzReader,
 output: std.ArrayList(u8),
 support_output: std.ArrayList(u8),
+rb_output: std.ArrayList(u8),
 tools_output: std.ArrayList(u8),
 name_counter: u32,
 
@@ -1042,6 +1043,7 @@ pub fn init(allocator: std.mem.Allocator, reader: *FuzzReader) Self {
         .reader = reader,
         .output = .empty,
         .support_output = .empty,
+        .rb_output = .empty,
         .tools_output = .empty,
         .name_counter = 0,
     };
@@ -1050,6 +1052,7 @@ pub fn init(allocator: std.mem.Allocator, reader: *FuzzReader) Self {
 pub fn deinit(self: *Self) void {
     self.output.deinit(self.allocator);
     self.support_output.deinit(self.allocator);
+    self.rb_output.deinit(self.allocator);
     self.tools_output.deinit(self.allocator);
 }
 
@@ -1059,6 +1062,10 @@ pub fn getOutput(self: *const Self) []const u8 {
 
 pub fn getSupportOutput(self: *const Self) []const u8 {
     return self.support_output.items;
+}
+
+pub fn getRbOutput(self: *const Self) []const u8 {
+    return self.rb_output.items;
 }
 
 pub fn getToolsOutput(self: *const Self) []const u8 {
@@ -1168,11 +1175,27 @@ fn generateToolsModule(self: *Self) std.mem.Allocator.Error!void {
     );
 }
 
+fn generateRbModule(self: *Self) std.mem.Allocator.Error!void {
+    try self.writeRb(
+        \\Rb(a) := { value : a }.{
+        \\    map2 : Rb(a), Rb(b), (a, b -> c) -> Rb(c)
+        \\    map2 = |left, right, combine| { value: combine(left.value, right.value) }
+        \\    field : a -> Rb(a)
+        \\    field = |value| { value: value }
+        \\    run : Rb(a) -> a
+        \\    run = |builder| builder.value
+        \\}
+        \\
+    );
+}
+
 pub fn generateModule(self: *Self) std.mem.Allocator.Error!void {
     try self.generateSupportModule();
+    try self.generateRbModule();
     try self.generateToolsModule();
     try self.write(
         \\import Support
+        \\import Rb
         \\import Tools exposing [Tools]
         \\
         \\
@@ -1456,6 +1479,11 @@ pub fn generateModule(self: *Self) std.mem.Allocator.Error!void {
     const guarded_match_count = self.reader.intRangeAtMost(u8, 1, 3);
     for (0..guarded_match_count) |_| {
         try self.generateGuardedMatchFunction();
+    }
+
+    const imported_record_builder_count = self.reader.intRangeAtMost(u8, 1, 3);
+    for (0..imported_record_builder_count) |_| {
+        try self.generateImportedRecordBuilderFunction();
     }
 
     const builtin_count = self.reader.intRangeAtMost(u8, 12, 36);
@@ -2293,6 +2321,61 @@ fn generateSupportStatusOrPatternFunction(self: *Self, name_id: u32) std.mem.All
     try self.write("|_| match ");
     try self.writeLiteral(.support_status);
     try self.write(" {\n        Support.Status.Ready | Support.Status.Named(_) => \"named\"\n        Support.Status.Waiting(_) => \"waiting\"\n    }\n");
+}
+
+fn generateImportedRecordBuilderFunction(self: *Self) std.mem.Allocator.Error!void {
+    const name_id = self.name_counter;
+    self.name_counter += 1;
+
+    switch (self.reader.intRangeAtMost(u8, 0, 3)) {
+        0 => try self.generateImportedRecordBuilderDirectFunction(name_id),
+        1 => try self.generateImportedRecordBuilderSyntaxFunction(name_id),
+        2 => try self.generateImportedRecordBuilderValueFunction(name_id),
+        3 => try self.generateImportedRecordBuilderWideFunction(name_id),
+        else => unreachable,
+    }
+}
+
+fn generateImportedRecordBuilderDirectFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeRawFunctionSignature(name_id, "Main", "{ host : Str, port : Str }");
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| Rb.map2(Rb.field(");
+    try self.writeStringLiteral();
+    try self.write("), Rb.field(");
+    try self.writeStringLiteral();
+    try self.write("), |host, port| { host: host, port: port }).run()\n");
+}
+
+fn generateImportedRecordBuilderSyntaxFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeRawFunctionSignature(name_id, "Main", "{ host : Str, port : Str }");
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| { host: Rb.field(");
+    try self.writeStringLiteral();
+    try self.write("), port: Rb.field(");
+    try self.writeStringLiteral();
+    try self.write(") }.Rb.run()\n");
+}
+
+fn generateImportedRecordBuilderValueFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeRawFunctionSignature(name_id, "Main", "Rb({ host : Str, port : Str })");
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| { host: Rb.field(");
+    try self.writeStringLiteral();
+    try self.write("), port: Rb.field(");
+    try self.writeStringLiteral();
+    try self.write(") }.Rb\n");
+}
+
+fn generateImportedRecordBuilderWideFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeRawFunctionSignature(name_id, "Main", "{ host : Str, port : Str, retries : U64 }");
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| { host: Rb.field(");
+    try self.writeStringLiteral();
+    try self.write("), port: Rb.field(");
+    try self.writeStringLiteral();
+    try self.write("), retries: Rb.field(");
+    try self.writeIntegerLiteral();
+    try self.write(") }.Rb.run()\n");
 }
 
 fn generateBuiltinAssociatedFunction(self: *Self) std.mem.Allocator.Error!void {
@@ -6247,6 +6330,10 @@ fn write(self: *Self, text: []const u8) std.mem.Allocator.Error!void {
 
 fn writeSupport(self: *Self, text: []const u8) std.mem.Allocator.Error!void {
     try self.support_output.appendSlice(self.allocator, text);
+}
+
+fn writeRb(self: *Self, text: []const u8) std.mem.Allocator.Error!void {
+    try self.rb_output.appendSlice(self.allocator, text);
 }
 
 fn writeTools(self: *Self, text: []const u8) std.mem.Allocator.Error!void {
