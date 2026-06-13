@@ -631,6 +631,7 @@ const Type = enum {
     main,
     support,
     support_token,
+    support_status,
     tree,
     my_num,
     bool,
@@ -1115,6 +1116,22 @@ fn generateSupportModule(self: *Self) std.mem.Allocator.Error!void {
         \\        is_eq : Token, Token -> Bool
         \\        is_eq = |left, right| left.count == right.count
         \\    }
+        \\    Status := [Ready, Waiting(U64), Named(Str)].{
+        \\        label : Status -> Str
+        \\        label = |status| match status {
+        \\            Ready => "ready"
+        \\            Waiting(_) => "waiting"
+        \\            Named(name) => name
+        \\        }
+        \\        count : Status -> U64
+        \\        count = |status| match status {
+        \\            Ready => 0
+        \\            Waiting(count) => count
+        \\            Named(name) => Str.count_utf8_bytes(name)
+        \\        }
+        \\        is_eq : Status, Status -> Bool
+        \\        is_eq = |left, right| Status.count(left) == Status.count(right) and Status.label(left) == Status.label(right)
+        \\    }
         \\    is_eq : Support, Support -> Bool
         \\    is_eq = |left, right| if Support.count(left) == Support.count(right) Support.label(left) == Support.label(right) else False
         \\}
@@ -1429,6 +1446,11 @@ pub fn generateModule(self: *Self) std.mem.Allocator.Error!void {
     const imported_opaque_count = self.reader.intRangeAtMost(u8, 1, 3);
     for (0..imported_opaque_count) |_| {
         try self.generateImportedOpaqueFunction();
+    }
+
+    const imported_status_count = self.reader.intRangeAtMost(u8, 1, 3);
+    for (0..imported_status_count) |_| {
+        try self.generateImportedStatusFunction();
     }
 
     const builtin_count = self.reader.intRangeAtMost(u8, 12, 36);
@@ -2170,6 +2192,62 @@ fn generateSupportTokenLocalFunction(self: *Self, name_id: u32) std.mem.Allocato
     try self.write("|_| {\n        token : Support.Token\n        token = ");
     try self.writeLiteral(.support_token);
     try self.write("\n        Support.Token.count(token)\n    }\n");
+}
+
+fn generateImportedStatusFunction(self: *Self) std.mem.Allocator.Error!void {
+    const name_id = self.name_counter;
+    self.name_counter += 1;
+
+    switch (self.reader.intRangeAtMost(u8, 0, 4)) {
+        0 => try self.generateSupportStatusLabelFunction(name_id),
+        1 => try self.generateSupportStatusCountFunction(name_id),
+        2 => try self.generateSupportStatusMatchFunction(name_id),
+        3 => try self.generateSupportStatusWhereEqFunction(name_id),
+        4 => try self.generateSupportStatusLocalFunction(name_id),
+        else => unreachable,
+    }
+}
+
+fn generateSupportStatusLabelFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFunctionSignature(name_id, "Main", .str);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| ");
+    try self.writeCall("Support.Status.label", &.{.{ .literal = .support_status }});
+    try self.write("\n");
+}
+
+fn generateSupportStatusCountFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFunctionSignature(name_id, "Main", .u64);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| ");
+    try self.writeCall("Support.Status.count", &.{.{ .literal = .support_status }});
+    try self.write("\n");
+}
+
+fn generateSupportStatusMatchFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFunctionSignature(name_id, "Main", .u64);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| match ");
+    try self.writeLiteral(.support_status);
+    try self.write(" {\n        Support.Status.Ready => 0\n        Support.Status.Waiting(count) => count\n        Support.Status.Named(name) => Str.count_utf8_bytes(name)\n    }\n");
+}
+
+fn generateSupportStatusWhereEqFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFunctionSignature(name_id, "Main", .bool);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| Main.where_eq(");
+    try self.writeLiteral(.support_status);
+    try self.write(", ");
+    try self.writeLiteral(.support_status);
+    try self.write(")\n");
+}
+
+fn generateSupportStatusLocalFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFunctionSignature(name_id, "Main", .str);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| {\n        status : Support.Status\n        status = ");
+    try self.writeLiteral(.support_status);
+    try self.write("\n        Support.Status.label(status)\n    }\n");
 }
 
 fn generateBuiltinAssociatedFunction(self: *Self) std.mem.Allocator.Error!void {
@@ -5401,6 +5479,7 @@ fn writeType(self: *Self, typ: Type) std.mem.Allocator.Error!void {
         .main => "Main",
         .support => "Support",
         .support_token => "Support.Token",
+        .support_status => "Support.Status",
         .tree => "Tree",
         .my_num => "MyNum",
         .bool => "Bool",
@@ -5485,6 +5564,7 @@ fn writeLiteral(self: *Self, typ: Type) std.mem.Allocator.Error!void {
         .main => try self.writeMainLiteral(),
         .support => try self.writeSupportLiteral(),
         .support_token => try self.writeSupportTokenLiteral(),
+        .support_status => try self.writeSupportStatusLiteral(),
         .tree => try self.writeTreeLiteral(),
         .my_num => try self.writeCustomNumberLiteral(),
         .bool => try self.writeBoolLiteral(),
@@ -5719,6 +5799,15 @@ fn writeSupportLiteral(self: *Self) std.mem.Allocator.Error!void {
 
 fn writeSupportTokenLiteral(self: *Self) std.mem.Allocator.Error!void {
     try self.writeCall("Support.Token.make", &.{.{ .integer_literal = {} }});
+}
+
+fn writeSupportStatusLiteral(self: *Self) std.mem.Allocator.Error!void {
+    switch (self.reader.intRangeAtMost(u8, 0, 2)) {
+        0 => try self.write("Support.Status.Ready"),
+        1 => try self.writeCall("Support.Status.Waiting", &.{.{ .integer_literal = {} }}),
+        2 => try self.writeCall("Support.Status.Named", &.{.{ .string_literal = {} }}),
+        else => unreachable,
+    }
 }
 
 fn writeToolsLiteral(self: *Self) std.mem.Allocator.Error!void {
