@@ -1861,14 +1861,14 @@ fn customDefaultPlatformDebugBacktrace(
         .crash => &.{
             .{ .stream = .stderr, .text = "Roc application crashed with this message:\n\n\tdefault platform crash contract\n\n" },
             .{ .stream = .stderr, .text = "Backtrace:" },
-            .{ .stream = .stderr, .text = "\x1b[94mtrigger!\x1b[0m " },
+            .{ .stream = .stderr, .text = "\x1b[94mtrigger!\x1b[0m" },
             .{ .stream = .stderr, .text = "\x1b[94mmain!\x1b[0m " },
             .{ .stream = .stderr, .text = " main:" },
         },
         .stack_overflow => &.{
             .{ .stream = .stderr, .text = "Roc application overflowed its stack memory\n\n" },
             .{ .stream = .stderr, .text = "Backtrace:" },
-            .{ .stream = .stderr, .text = "\x1b[94mrecurse\x1b[0m " },
+            .{ .stream = .stderr, .text = "\x1b[94mrecurse\x1b[0m" },
             .{ .stream = .stderr, .text = " main:" },
         },
     };
