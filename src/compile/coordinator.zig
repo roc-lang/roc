@@ -51,6 +51,7 @@ const compile_package = @import("compile_package.zig");
 const compile_build = @import("compile_build.zig");
 const module_discovery = @import("module_discovery.zig");
 const cache_manager_mod = @import("cache_manager.zig");
+const package_source = @import("package_source.zig");
 const CacheManager = cache_manager_mod.CacheManager;
 const CacheConfig = @import("cache_config.zig").CacheConfig;
 const CacheStats = @import("cache_config.zig").CacheStats;
@@ -515,6 +516,8 @@ pub const PackageState = struct {
     name: []const u8,
     /// Root directory for the package
     root_dir: []const u8,
+    /// Source URL data when this package came from a URL bundle.
+    url: ?package_source.UrlSource,
     /// All modules in this package
     modules: std.ArrayList(ModuleState),
     /// Module name -> module ID lookup
@@ -526,10 +529,11 @@ pub const PackageState = struct {
     /// Package shorthands (alias -> target package name)
     shorthands: std.StringHashMap([]const u8),
 
-    pub fn init(_: Allocator, name: []const u8, root_dir: []const u8) PackageState {
+    pub fn init(_: Allocator, name: []const u8, root_dir: []const u8, url: ?package_source.UrlSource) PackageState {
         return .{
             .name = name,
             .root_dir = root_dir,
+            .url = url,
             .modules = std.ArrayList(ModuleState).empty,
             .module_names = std.StringHashMap(ModuleId).init(thread_safe_allocator),
             .remaining_modules = 0,
@@ -567,11 +571,19 @@ pub const PackageState = struct {
         if (comptime trace_build) {
             std.debug.print("[PKG DEINIT] {s}: freeing name and root_dir\n", .{self.name});
         }
+        if (self.url) |*url| url.deinit(gpa);
         gpa.free(self.name);
         gpa.free(self.root_dir);
         if (comptime trace_build) {
             std.debug.print("[PKG DEINIT] done\n", .{});
         }
+    }
+
+    pub fn urlId(self: *const PackageState) ?[]const u8 {
+        if (self.url) |url| {
+            return url.urlId();
+        }
+        return null;
     }
 
     /// Ensure a module exists, creating it if necessary
@@ -783,6 +795,11 @@ pub const Coordinator = struct {
     /// Set to true for executable platform builds where platform modules need hosted lambdas.
     enable_hosted_transform: bool,
 
+    /// Package name -> note for packages compiled against a dependency
+    /// version they did not declare. Rendered alongside errors from those
+    /// packages. Keys and values are gpa-owned.
+    version_notes: std.StringHashMap([]const u8),
+
     /// Timing accumulators
     total_parse_ns: u64,
     total_canonicalize_ns: u64,
@@ -856,6 +873,7 @@ pub const Coordinator = struct {
             .checked_artifact_index = std.AutoHashMap([32]u8, ModuleRef).init(gpa),
             .retired_checked_artifacts = std.ArrayList(RetiredCheckedArtifact).empty,
             .enable_hosted_transform = false,
+            .version_notes = std.StringHashMap([]const u8).init(gpa),
             .total_parse_ns = 0,
             .total_canonicalize_ns = 0,
             .total_canonicalize_diag_ns = 0,
@@ -876,6 +894,15 @@ pub const Coordinator = struct {
         }
         // Stop workers
         self.shutdown();
+
+        {
+            var note_it = self.version_notes.iterator();
+            while (note_it.next()) |entry| {
+                self.gpa.free(@constCast(entry.key_ptr.*));
+                self.gpa.free(@constCast(entry.value_ptr.*));
+            }
+            self.version_notes.deinit();
+        }
 
         if (comptime trace_build) {
             std.debug.print("[COORD DEINIT] shutdown done, freeing packages...\n", .{});
@@ -961,9 +988,23 @@ pub const Coordinator = struct {
         return owned;
     }
 
-    /// Create or get a package
     pub fn ensurePackage(self: *Coordinator, name: []const u8, root_dir: []const u8) Allocator.Error!*PackageState {
+        return self.ensurePackageWithUrl(name, root_dir, null);
+    }
+
+    /// Create or get a package.
+    pub fn ensurePackageWithUrl(
+        self: *Coordinator,
+        name: []const u8,
+        root_dir: []const u8,
+        url: ?package_source.UrlSourceView,
+    ) Allocator.Error!*PackageState {
         if (self.packages.get(name)) |pkg| {
+            if (pkg.url == null) {
+                if (url) |url_view| {
+                    pkg.url = try package_source.UrlSource.init(self.gpa, url_view);
+                }
+            }
             return pkg;
         }
 
@@ -975,8 +1016,18 @@ pub const Coordinator = struct {
             self.gpa.free(owned_name);
             return err;
         };
+        var package_initialized = false;
+        errdefer if (!package_initialized) {
+            self.gpa.free(owned_name);
+            self.gpa.free(owned_root_dir);
+        };
 
-        pkg.* = PackageState.init(self.gpa, owned_name, owned_root_dir);
+        var package_url = if (url) |url_view| try package_source.UrlSource.init(self.gpa, url_view) else null;
+        errdefer if (package_url) |*url_source| url_source.deinit(self.gpa);
+
+        pkg.* = PackageState.init(self.gpa, owned_name, owned_root_dir, package_url);
+        package_initialized = true;
+        package_url = null;
         errdefer pkg.deinit(self.gpa);
 
         try self.packages.put(pkg.name, pkg);
@@ -1072,7 +1123,18 @@ pub const Coordinator = struct {
         platform_main_path: []const u8,
         qualifier: ?[]const u8,
     ) Allocator.Error!void {
-        const pf_pkg = try self.ensurePackage("pf", platform_dir);
+        return self.registerPlatformPackageWithUrl(app_pkg, platform_dir, platform_main_path, qualifier, null);
+    }
+
+    pub fn registerPlatformPackageWithUrl(
+        self: *Coordinator,
+        app_pkg: *PackageState,
+        platform_dir: []const u8,
+        platform_main_path: []const u8,
+        qualifier: ?[]const u8,
+        url: ?package_source.UrlSourceView,
+    ) Allocator.Error!void {
+        const pf_pkg = try self.ensurePackageWithUrl("pf", platform_dir, url);
 
         if (qualifier) |qual| {
             try app_pkg.shorthands.put(
@@ -1101,7 +1163,18 @@ pub const Coordinator = struct {
         app_pkg: ?*PackageState,
         shorthand_on_app: ?[]const u8,
     ) Allocator.Error!*PackageState {
-        const pkg = try self.ensurePackage(package_name, package_root_dir);
+        return self.registerInlinePackageWithUrl(package_name, package_root_dir, app_pkg, shorthand_on_app, null);
+    }
+
+    pub fn registerInlinePackageWithUrl(
+        self: *Coordinator,
+        package_name: []const u8,
+        package_root_dir: []const u8,
+        app_pkg: ?*PackageState,
+        shorthand_on_app: ?[]const u8,
+        url: ?package_source.UrlSourceView,
+    ) Allocator.Error!*PackageState {
+        const pkg = try self.ensurePackageWithUrl(package_name, package_root_dir, url);
         if (app_pkg) |a| {
             if (shorthand_on_app) |sh| {
                 try a.shorthands.put(
@@ -1914,14 +1987,17 @@ pub const Coordinator = struct {
 
     /// One entry yielded by `ReportIter` — a single diagnostic with the package
     /// and module it came from. Pointers borrow from the Coordinator's storage.
+    /// The report may be appended to in place (e.g. to attach notes), but
+    /// reports must not be added or removed while iterating.
     pub const ReportEntry = struct {
         package_name: []const u8,
         module_name: []const u8,
-        report: *const Report,
+        report: *Report,
     };
 
     /// Iterator over every report from every module in every package.
-    /// Borrows from `Coordinator` storage — do not mutate while iterating.
+    /// Borrows from `Coordinator` storage — do not add or remove reports
+    /// while iterating.
     pub const ReportIter = struct {
         pkg_it: std.StringHashMap(*PackageState).Iterator,
         cur_pkg: ?*PackageState = null,
