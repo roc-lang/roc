@@ -1271,6 +1271,19 @@ pub fn generateModule(self: *Self) std.mem.Allocator.Error!void {
         \\}
         \\
         \\
+        \\Chain(a) := [ChainValue(a)].{
+        \\    add2 = |container| container.add1().add1()
+        \\    add1 = |container| container.map(|value| value + 1)
+        \\
+        \\    wrap : a -> Chain(a)
+        \\    wrap = |value| ChainValue(value)
+        \\    unwrap : Chain(a) -> a
+        \\    unwrap = |ChainValue(value)| value
+        \\    map : Chain(a), (a -> b) -> Chain(b)
+        \\    map = |ChainValue(value), f| ChainValue(f(value))
+        \\}
+        \\
+        \\
         \\Fmt := [Fmt].{
         \\    encode_bool : Fmt, Bool -> Try(Str, Str)
         \\    encode_bool = |_, _| Ok("bool")
@@ -1499,6 +1512,11 @@ pub fn generateModule(self: *Self) std.mem.Allocator.Error!void {
     const lambda_pattern_count = self.reader.intRangeAtMost(u8, 1, 4);
     for (0..lambda_pattern_count) |_| {
         try self.generateLambdaPatternFunction();
+    }
+
+    const attached_method_chain_count = self.reader.intRangeAtMost(u8, 1, 3);
+    for (0..attached_method_chain_count) |_| {
+        try self.generateAttachedMethodChainFunction();
     }
 
     const builtin_count = self.reader.intRangeAtMost(u8, 12, 36);
@@ -2557,6 +2575,55 @@ fn generateSupportLambdaPatternFunction(self: *Self, name_id: u32) std.mem.Alloc
     try self.write("|_| List.map(");
     try self.writeList(&.{.{ .raw = "Support.make(1)" }, .{ .raw = "Support.make(2)" }});
     try self.write(", |Packet(record)| record.count)\n");
+}
+
+fn generateAttachedMethodChainFunction(self: *Self) std.mem.Allocator.Error!void {
+    const name_id = self.name_counter;
+    self.name_counter += 1;
+
+    switch (self.reader.intRangeAtMost(u8, 0, 3)) {
+        0 => try self.generateAttachedMethodChainUnwrapFunction(name_id),
+        1 => try self.generateAttachedMethodChainAssociatedFunction(name_id),
+        2 => try self.generateAttachedMethodChainLocalFunction(name_id),
+        3 => try self.generateAttachedMethodChainPatternFunction(name_id),
+        else => unreachable,
+    }
+}
+
+fn generateAttachedMethodChainUnwrapFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeFunctionSignature(name_id, "Main", .u64);
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| Chain.wrap(");
+    try self.writeIntegerLiteral();
+    try self.write(").add2().unwrap()\n");
+}
+
+fn generateAttachedMethodChainAssociatedFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeRawFunctionSignature(name_id, "Main", "Chain(U64)");
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| Chain.add2(Chain.wrap(");
+    try self.writeIntegerLiteral();
+    try self.write("))\n");
+}
+
+fn generateAttachedMethodChainLocalFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeRawFunctionSignature(name_id, "Main", "Chain(U64)");
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| {\n");
+    try self.writeRawLocalAnnotation("item", "Chain(U64)");
+    try self.writeLocalAssignmentStart("item");
+    try self.writeCall("Chain.wrap", &.{.{ .integer_literal = {} }});
+    try self.write("\n        item.add1().map(|value| value + ");
+    try self.writeSmallNumberLiteral(.u64);
+    try self.write(")\n    }\n");
+}
+
+fn generateAttachedMethodChainPatternFunction(self: *Self, name_id: u32) std.mem.Allocator.Error!void {
+    try self.writeRawFunctionSignature(name_id, "Main", "Chain(U64)");
+    try self.writeFunctionHeader(name_id);
+    try self.write("|_| Chain.wrap(");
+    try self.writeRecordStrU64Literal();
+    try self.write(").map(|{ count }| count).add1()\n");
 }
 
 fn generateBuiltinAssociatedFunction(self: *Self) std.mem.Allocator.Error!void {
