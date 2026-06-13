@@ -7065,6 +7065,7 @@ fn finishSuffixSingleQuestionExpr(
         .branches = branches_span,
         .exhaustive = try self.env.types.fresh(),
         .is_try_suffix = true,
+        .skip_exhaustiveness = true,
     };
     const expr_idx = try self.env.addExpr(CIR.Expr{ .e_match = match_expr }, region);
 
@@ -10953,6 +10954,7 @@ fn runExprKernel(
                     .branches = branches_span,
                     .exhaustive = try self.env.types.fresh(),
                     .is_try_suffix = false,
+                    .skip_exhaustiveness = false,
                 };
                 const expr_idx = try self.env.addExpr(CIR.Expr{ .e_match = match_expr }, state.region);
                 const free_vars_span = self.scratch_free_vars.spanFrom(state.free_vars_start);
@@ -11449,6 +11451,7 @@ fn canonicalizeDoubleQuestionOp(
         .branches = branches_span,
         .exhaustive = try self.env.types.fresh(),
         .is_try_suffix = false,
+        .skip_exhaustiveness = true,
     };
     const expr_idx = try self.env.addExpr(CIR.Expr{ .e_match = match_expr }, region);
 

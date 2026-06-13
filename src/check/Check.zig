@@ -8477,7 +8477,7 @@ fn checkMatchExpr(
     const resolved_cond = self.types.resolveVar(cond_var);
     const cond_is_error = resolved_cond.desc.content == .err;
 
-    if (!match.is_try_suffix and !had_type_error and !cond_is_error and !has_invalid_try and !cond_always_crashes) {
+    if (!match.skip_exhaustiveness and !had_type_error and !cond_is_error and !has_invalid_try and !cond_always_crashes) {
         const match_region = self.getRegionAt(@enumFromInt(@intFromEnum(expr_idx)));
 
         var known_empty_payload_vars: std.ArrayList(Var) = .empty;
