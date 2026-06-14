@@ -38,4 +38,5 @@ pub const StructuralTest = @import("structural_test.zig");
 
 test "postcheck declarations are referenced" {
     std.testing.refAllDecls(@This());
+    std.testing.refAllDecls(@import("monotype/solve.zig"));
 }
