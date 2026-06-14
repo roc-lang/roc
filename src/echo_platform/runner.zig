@@ -423,8 +423,8 @@ fn echoRename(ctx_ptr: ?*anyopaque, _: std.Io, old: []const u8, new: []const u8)
 fn echoGetEnvVar(ctx_ptr: ?*anyopaque, _: std.Io, key: []const u8, gpa: Allocator) Io.GetEnvVarError![]u8 {
     return echoGetCtx(ctx_ptr).fallback.getEnvVar(key, gpa);
 }
-fn echoFetchUrl(ctx_ptr: ?*anyopaque, _: std.Io, gpa: Allocator, url: []const u8, dest: []const u8) Io.FetchUrlError!void {
-    return echoGetCtx(ctx_ptr).fallback.fetchUrl(gpa, url, dest);
+fn echoFetchUrl(ctx_ptr: ?*anyopaque, _: std.Io, gpa: Allocator, url: []const u8, dest: []const u8, max_expanded_bytes: ?u64) Io.FetchUrlError!u64 {
+    return echoGetCtx(ctx_ptr).fallback.fetchUrl(gpa, url, dest, max_expanded_bytes);
 }
 fn echoWriteStdout(ctx_ptr: ?*anyopaque, _: std.Io, data: []const u8) Io.StdioError!void {
     return echoGetCtx(ctx_ptr).fallback.writeStdout(data);
