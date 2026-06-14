@@ -108,7 +108,6 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .numeral_literals = serialized_ptr.numeral_literals.deserializeInto(base_ptr),
         .numeral_dispatch_plans = serialized_ptr.numeral_dispatch_plans.deserializeInto(base_ptr),
         .quote_dispatch_plans = serialized_ptr.quote_dispatch_plans.deserializeInto(base_ptr),
-        .interpolation_call_nodes = serialized_ptr.interpolation_call_nodes.deserializeInto(base_ptr),
         .numeric_suffix_types = serialized_ptr.numeric_suffix_types.deserializeInto(base_ptr),
     };
 
@@ -188,7 +187,7 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
             // Type modules expose their main type under the module name
             const type_ident = other_test_env.module_env.common.findIdent(other_module_name);
             if (type_ident) |ident| {
-                if (other_test_env.module_env.getExposedNodeIndexById(ident)) |node_idx| {
+                if (other_test_env.module_env.getExposedTypeNodeIndexById(ident)) |node_idx| {
                     // The node index IS the statement index for type declarations
                     break :blk @as(CIR.Statement.Idx, @enumFromInt(node_idx));
                 }

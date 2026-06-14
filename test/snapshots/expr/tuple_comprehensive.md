@@ -201,7 +201,7 @@ EndOfFile,
 		(p-assign (ident "mixed"))
 		(e-tuple
 			(elems
-				(e-call (constraint-fn-var 463)
+				(e-call (constraint-fn-var 460)
 					(e-lookup-local
 						(p-assign (ident "add_one")))
 					(e-num (value "5")))
@@ -229,7 +229,7 @@ EndOfFile,
 				(e-lambda
 					(args
 						(p-assign (ident "n")))
-					(e-dispatch-call (method "plus") (constraint-fn-var 602)
+					(e-dispatch-call (method "plus") (constraint-fn-var 596)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "n"))))

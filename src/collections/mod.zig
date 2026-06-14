@@ -34,6 +34,7 @@ pub const SafeStringHashMap = @import("safe_hash_map.zig").SafeStringHashMap;
 
 pub const SortedArrayBuilder = @import("SortedArrayBuilder.zig").SortedArrayBuilder;
 pub const ExposedItems = @import("ExposedItems.zig").ExposedItems;
+pub const ExposedItemTarget = @import("ExposedItems.zig").ExposedItemTarget;
 pub const CompactWriter = @import("CompactWriter.zig");
 
 /// Single-threaded arena allocator; the non-atomic counterpart to

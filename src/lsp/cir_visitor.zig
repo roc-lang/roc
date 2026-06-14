@@ -211,6 +211,12 @@ pub fn CirVisitor(comptime Context: type) type {
                         if (self.stopped) return;
                     }
                 },
+                .e_interpolation => |interpolation| {
+                    self.walkExpr(store, interpolation.first);
+                    if (self.stopped) return;
+                    self.walkExpr(store, interpolation.rest);
+                    if (self.stopped) return;
+                },
                 .e_structural_eq => |eq| {
                     self.walkExpr(store, eq.lhs);
                     if (self.stopped) return;

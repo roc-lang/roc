@@ -645,12 +645,12 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "(\"other\", \"one byte\")" },
     },
     .{
-        .name = "inspect: custom from_quote receives literal bytes",
+        .name = "inspect: custom from_quote receives literal Str",
         .source_kind = .module,
         .source =
-        \\Tag := [Tag(List(U8))].{
-        \\    from_quote : List(U8) -> Try(Tag, [BadQuotedBytes(Str)])
-        \\    from_quote = |bytes| Ok(Tag(bytes))
+        \\Tag := [Tag(Str)].{
+        \\    from_quote : Str -> Try(Tag, [BadQuotedBytes(Str)])
+        \\    from_quote = |str| Ok(Tag(str))
         \\}
         \\
         \\force : Tag -> Tag
@@ -658,7 +658,7 @@ const core_tests = [_]TestCase{
         \\
         \\main = force("Roc")
         ,
-        .expected = .{ .inspect_str = "Tag([82, 111, 99])" },
+        .expected = .{ .inspect_str = "Tag(\"Roc\")" },
     },
     .{
         .name = "inspect: from_quote literal defaults to Str",
@@ -672,9 +672,9 @@ const core_tests = [_]TestCase{
         .name = "inspect: custom from_quote literal pattern dispatches through is_eq",
         .source_kind = .module,
         .source =
-        \\Tag := [Tag(List(U8))].{
-        \\    from_quote : List(U8) -> Try(Tag, [BadQuotedBytes(Str)])
-        \\    from_quote = |bytes| Ok(Tag(bytes))
+        \\Tag := [Tag(Str)].{
+        \\    from_quote : Str -> Try(Tag, [BadQuotedBytes(Str)])
+        \\    from_quote = |str| Ok(Tag(str))
         \\    is_eq : Tag, Tag -> Bool
         \\    is_eq = |a, b| match (a, b) {
         \\        (Tag(x), Tag(y)) => x == y
@@ -712,14 +712,14 @@ const core_tests = [_]TestCase{
         .name = "inspect: string literal type suffix pins custom from_quote target",
         .source_kind = .module,
         .source =
-        \\Tag := [Tag(List(U8))].{
-        \\    from_quote : List(U8) -> Try(Tag, [BadQuotedBytes(Str)])
-        \\    from_quote = |bytes| Ok(Tag(bytes))
+        \\Tag := [Tag(Str)].{
+        \\    from_quote : Str -> Try(Tag, [BadQuotedBytes(Str)])
+        \\    from_quote = |str| Ok(Tag(str))
         \\}
         \\
         \\main = "Roc".Tag
         ,
-        .expected = .{ .inspect_str = "Tag([82, 111, 99])" },
+        .expected = .{ .inspect_str = "Tag(\"Roc\")" },
     },
     .{
         .name = "inspect: string literal Str type suffix",
@@ -734,8 +734,8 @@ const core_tests = [_]TestCase{
         .source_kind = .module,
         .source =
         \\Tally := [Tally(U64)].{
-        \\    from_quote : List(U8) -> Try(Tally, [BadQuotedBytes(Str)])
-        \\    from_quote = |bytes| Ok(Tally(bytes.len()))
+        \\    from_quote : Str -> Try(Tally, [BadQuotedBytes(Str)])
+        \\    from_quote = |str| Ok(Tally(str.count_utf8_bytes()))
         \\}
         \\
         \\main = {
@@ -753,11 +753,11 @@ const core_tests = [_]TestCase{
         .source_kind = .module,
         .source =
         \\Url := [Url(Str)].{
-        \\    from_quote : List(U8) -> Try(Url, [BadQuotedBytes(Str)])
-        \\    from_quote = |bytes| Ok(Url(Str.from_utf8_lossy(bytes)))
-        \\    from_interpolation : Url, Iter((Str, Url)) -> Url
+        \\    from_quote : Str -> Try(Url, [BadQuotedBytes(Str)])
+        \\    from_quote = |str| Ok(Url(str))
+        \\    from_interpolation : Str, Iter((Str, Str)) -> Url
         \\    from_interpolation = |first, rest| {
-        \\        Url.Url(rest.fold(first.inner(), |acc, (interpolated, segment)| acc.concat(interpolated).concat(segment.inner())))
+        \\        Url.Url(rest.fold(first, |acc, (interpolated, segment)| acc.concat(interpolated).concat(segment)))
         \\    }
         \\    inner : Url -> Str
         \\    inner = |Url.Url(str)| str
@@ -771,6 +771,58 @@ const core_tests = [_]TestCase{
         \\}
         ,
         .expected = .{ .inspect_str = "Url(\"https://example.com\")" },
+    },
+    .{
+        .name = "inspect: Try interpolation forwards to custom result type",
+        .source_kind = .module,
+        .source =
+        \\Url := [Url(Str)].{
+        \\    from_interpolation : Str, Iter((Str, Str)) -> Try(Url, [InvalidUrl])
+        \\    from_interpolation = |first, rest| Ok(Url.Url(rest.fold(first, |acc, (interpolated, segment)| acc.concat(interpolated).concat(segment))))
+        \\}
+        \\
+        \\main = {
+        \\    domain = "example"
+        \\    url : Try(Url, [InvalidUrl])
+        \\    url = "https://${domain}.com"
+        \\    url
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Ok(Url(\"https://example.com\"))" },
+    },
+    .{
+        .name = "problem: nested Try interpolation does not recursively satisfy forwarding",
+        .source_kind = .module,
+        .source =
+        \\Url := [Url(Str)].{
+        \\    from_interpolation : Str, Iter((Str, Str)) -> Try(Url, [InvalidUrl])
+        \\    from_interpolation = |first, rest| Ok(Url.Url(rest.fold(first, |acc, (interpolated, segment)| acc.concat(interpolated).concat(segment))))
+        \\}
+        \\
+        \\main = {
+        \\    domain = "example"
+        \\    url : Try(Try(Url, [InvalidUrl]), [Outer])
+        \\    url = "https://${domain}.com"
+        \\    url
+        \\}
+        ,
+        .expected = .{ .problem = {} },
+    },
+    .{
+        .name = "inspect: suffixed interpolation accepts custom return type",
+        .source_kind = .module,
+        .source =
+        \\Url := [Url(Str)].{
+        \\    from_interpolation : Str, Iter((Str, Str)) -> Try(Url, [InvalidUrl])
+        \\    from_interpolation = |first, rest| Ok(Url.Url(rest.fold(first, |acc, (interpolated, segment)| acc.concat(interpolated).concat(segment))))
+        \\}
+        \\
+        \\main = {
+        \\    domain = "example"
+        \\    "https://${domain}.com".Url
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Ok(Url(\"https://example.com\"))" },
     },
     .{
         .name = "inspect: interpolation with adjacent and boundary interpolations",
@@ -789,8 +841,8 @@ const core_tests = [_]TestCase{
         .source_kind = .module,
         .source =
         \\Strict := [Strict].{
-        \\    from_quote : List(U8) -> Try(Strict, [BadQuotedBytes(Str)])
-        \\    from_quote = |_bytes| Err(BadQuotedBytes("Strict rejects every string"))
+        \\    from_quote : Str -> Try(Strict, [BadQuotedBytes(Str)])
+        \\    from_quote = |_str| Err(BadQuotedBytes("Strict rejects every string"))
         \\}
         \\
         \\force : Strict -> Strict

@@ -333,20 +333,15 @@ Builtin :: [].{
 		## ```
 		from_utf8 : List(U8) -> Try(Str, [BadUtf8({ problem : Str.Utf8Problem, index : U64 }), ..])
 
-		## Converts the UTF-8 bytes of a string literal to a [Str].
+		## Converts a string literal to a [Str].
 		##
 		## The compiler calls this when a string literal's type is [Str], passing
-		## the literal's bytes after escape processing. It can also be called
-		## directly, in which case invalid UTF-8 returns `Err`.
+		## the literal's contents after escape processing.
 		## ```roc
-		## expect Str.from_quote([82, 111, 99]) == Ok("Roc")
-		## expect Str.from_quote([255]).is_err()
+		## expect Str.from_quote("Roc") == Ok("Roc")
 		## ```
-		from_quote : List(U8) -> Try(Str, [BadQuotedBytes(Str)])
-		from_quote = |bytes| match Str.from_utf8(bytes) {
-			Ok(str) => Ok(str)
-			Err(_) => Err(BadQuotedBytes("the bytes were not valid UTF-8"))
-		}
+		from_quote : Str -> Try(Str, [BadQuotedBytes(Str)])
+		from_quote = |str| Ok(str)
 
 		## Assembles an interpolated string literal.
 		##
@@ -490,9 +485,8 @@ Builtin :: [].{
 		## Returns an iterator that yields the given item first, followed by
 		## everything the given iterator yields.
 		##
-		## The compiler uses this to assemble the iterator it passes to a type's
-		## `from_interpolation` method when an interpolated string literal
-		## targets that type.
+		## The compiler uses this to assemble the iterator it passes to
+		## `from_interpolation` when checking an interpolated string literal.
 		## ```roc
 		## expect Iter.fold([2, 3].iter().prepended(1), [], |acc, item| acc.append(item)) == [1, 2, 3]
 		## ```
@@ -1897,6 +1891,18 @@ Builtin :: [].{
 		is_err = |try| match try {
 			Ok(_) => False
 			Err(_) => True
+		}
+
+		## Forwards interpolated string literal assembly through an inner type
+		## whose `from_interpolation` method returns the same [Try].
+		from_interpolation : Str, Iter((interpolated, Str)) -> Try(ok, err)
+			where [
+				ok.from_interpolation : Str, Iter((interpolated, Str)) -> Try(ok, err),
+			]
+		from_interpolation = |first, rest| {
+			OkType : ok
+
+			OkType.from_interpolation(first, rest)
 		}
 
 		## If the result is `Ok`, returns the value it holds. Otherwise, returns
