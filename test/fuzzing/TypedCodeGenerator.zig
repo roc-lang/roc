@@ -373,7 +373,7 @@ fn writeBoolExpr(self: *Self, context: ExprContext, depth: u8, visible_methods: 
 }
 
 fn writeStrExpr(self: *Self, context: ExprContext, depth: u8, visible_methods: usize) std.mem.Allocator.Error!void {
-    switch (self.reader.intRangeAtMost(u8, 0, 6)) {
+    switch (self.reader.intRangeAtMost(u8, 0, 7)) {
         0 => if (self.contextSymbol(.str, context)) |arg| try self.writeSymbol(arg) else try self.writeStringLiteral(),
         1 => if (!try self.writeMethodCall(.str, context, depth - 1, visible_methods)) try self.writeStringLiteral(),
         2 => try self.writeIfExpr(.str, context, depth - 1, visible_methods),
@@ -390,12 +390,13 @@ fn writeStrExpr(self: *Self, context: ExprContext, depth: u8, visible_methods: u
         },
         5 => try self.writeStringLiteral(),
         6 => try self.writeRootMatchExpr(.str, context, depth - 1, visible_methods),
+        7 => try self.writeTryErrOrExpr(context, depth - 1, visible_methods),
         else => unreachable,
     }
 }
 
 fn writeU64Expr(self: *Self, context: ExprContext, depth: u8, visible_methods: usize) std.mem.Allocator.Error!void {
-    switch (self.reader.intRangeAtMost(u8, 0, 8)) {
+    switch (self.reader.intRangeAtMost(u8, 0, 9)) {
         0 => if (self.contextSymbol(.u64, context)) |arg| try self.writeSymbol(arg) else try self.writeU64Literal(),
         1 => if (!try self.writeMethodCall(.u64, context, depth - 1, visible_methods)) try self.writeU64Literal(),
         2 => try self.writeIfExpr(.u64, context, depth - 1, visible_methods),
@@ -421,6 +422,7 @@ fn writeU64Expr(self: *Self, context: ExprContext, depth: u8, visible_methods: u
         },
         7 => try self.writeRootMatchExpr(.u64, context, depth - 1, visible_methods),
         8 => try self.writeListGetExpr(context, depth - 1, visible_methods),
+        9 => try self.writeTryOkOrExpr(context, depth - 1, visible_methods),
         else => unreachable,
     }
 }
@@ -450,13 +452,15 @@ fn writeListU64Expr(self: *Self, context: ExprContext, depth: u8, visible_method
 }
 
 fn writeTryExpr(self: *Self, context: ExprContext, depth: u8, visible_methods: usize) std.mem.Allocator.Error!void {
-    switch (self.reader.intRangeAtMost(u8, 0, 5)) {
+    switch (self.reader.intRangeAtMost(u8, 0, 7)) {
         0 => try self.writeContextSymbolOrElse(.try_u64_str, context, writeTryLiteral, depth - 1, visible_methods),
         1 => if (!try self.writeMethodCall(.try_u64_str, context, depth - 1, visible_methods)) try self.writeTryLiteral(context, depth - 1, visible_methods),
         2 => try self.writeIfExpr(.try_u64_str, context, depth - 1, visible_methods),
         3 => try self.writeTryLiteral(context, depth - 1, visible_methods),
         4 => try self.writeTryMatchExpr(context, depth - 1, visible_methods),
         5 => try self.writeRootMatchExpr(.try_u64_str, context, depth - 1, visible_methods),
+        6 => try self.writeTryMapOkExpr(context, depth - 1, visible_methods),
+        7 => try self.writeTryMapErrExpr(context, depth - 1, visible_methods),
         else => unreachable,
     }
 }
@@ -711,6 +715,46 @@ fn writeTryMatchExpr(self: *Self, context: ExprContext, depth: u8, visible_metho
     try self.write(")\n");
     try self.writeIndent(1);
     try self.write("}");
+}
+
+fn writeTryMapOkExpr(self: *Self, context: ExprContext, depth: u8, visible_methods: usize) std.mem.Allocator.Error!void {
+    const ok_payload = self.fresh(.value);
+
+    try self.write("Try.map_ok(");
+    try self.writeExpr(.try_u64_str, context, depth, visible_methods);
+    try self.write(", |");
+    try self.writeSymbol(ok_payload);
+    try self.write("| ");
+    try self.writeExpr(.u64, extendContext(context, ok_payload, .u64), depth, visible_methods);
+    try self.write(")");
+}
+
+fn writeTryMapErrExpr(self: *Self, context: ExprContext, depth: u8, visible_methods: usize) std.mem.Allocator.Error!void {
+    const err_payload = self.fresh(.value);
+
+    try self.write("Try.map_err(");
+    try self.writeExpr(.try_u64_str, context, depth, visible_methods);
+    try self.write(", |");
+    try self.writeSymbol(err_payload);
+    try self.write("| ");
+    try self.writeExpr(.str, extendContext(context, err_payload, .str), depth, visible_methods);
+    try self.write(")");
+}
+
+fn writeTryOkOrExpr(self: *Self, context: ExprContext, depth: u8, visible_methods: usize) std.mem.Allocator.Error!void {
+    try self.write("Try.ok_or(");
+    try self.writeExpr(.try_u64_str, context, depth, visible_methods);
+    try self.write(", ");
+    try self.writeExpr(.u64, context, depth, visible_methods);
+    try self.write(")");
+}
+
+fn writeTryErrOrExpr(self: *Self, context: ExprContext, depth: u8, visible_methods: usize) std.mem.Allocator.Error!void {
+    try self.write("Try.err_or(");
+    try self.writeExpr(.try_u64_str, context, depth, visible_methods);
+    try self.write(", ");
+    try self.writeExpr(.str, context, depth, visible_methods);
+    try self.write(")");
 }
 
 fn writeTypedTryScrutinee(self: *Self, context: ExprContext, depth: u8, visible_methods: usize) std.mem.Allocator.Error!void {
