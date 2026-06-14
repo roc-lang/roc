@@ -844,7 +844,12 @@ Builtin :: [].{
 		## into a [List] (pre-sized from `len_if_known` when known).
 		collect! : Stream(item) => List(item)
 		collect! = |stream| {
-			cap = match Stream.size_hint(stream) {
+			# `Known(n)` guarantees exactly n items (count-changing combinators
+			# report `Unknown`), so reserve up front and use the unchecked append.
+			# When the length is unknown, start empty and grow with the reserving
+			# append — the unchecked append would corrupt a zero-capacity list.
+			length = Stream.size_hint(stream)
+			cap = match length {
 				Known(n) => n
 				Unknown => 0
 			}
@@ -859,7 +864,10 @@ Builtin :: [].{
 						$rest = rest
 					}
 					One({ item, rest }) => {
-						$list = list_append_unsafe($list, item)
+						$list = match length {
+							Known(_) => list_append_unsafe($list, item)
+							Unknown => List.append($list, item)
+						}
 						$rest = rest
 					}
 				}
@@ -910,10 +918,13 @@ Builtin :: [].{
 		## that [Iter.collect] dispatches to.
 		from_iter : Iter(item) -> List(item)
 		from_iter = |iterator| {
-			# Preallocate exactly when the length is known, otherwise start empty.
-			# Either way grow with the checked append, which reserves room as
-			# needed (a no-op while the exact-capacity preallocation has space).
-			cap = match iterator.len_if_known {
+			# `Known(n)` guarantees the iterator yields exactly n items: every
+			# combinator that can change the count (e.g. keep_if) reports `Unknown`.
+			# So when the length is known we reserve the whole allocation up front
+			# and write each item with the unchecked append; when it is unknown we
+			# start empty and grow with the reserving append instead.
+			length = iterator.len_if_known
+			cap = match length {
 				Known(n) => n
 				Unknown => 0
 			}
@@ -930,7 +941,10 @@ Builtin :: [].{
 						$rest = rest
 					}
 					One({ item, rest }) => {
-						$list = List.append($list, item)
+						$list = match length {
+							Known(_) => list_append_unsafe($list, item)
+							Unknown => List.append($list, item)
+						}
 						$rest = rest
 					}
 				}
