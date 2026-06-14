@@ -3333,6 +3333,7 @@ const BodyContext = struct {
         return switch (expr.data) {
             .call => |call| (try self.callResultMonoType(expr.ty, call, null)) orelse try self.lowerType(expr.ty),
             .dispatch_call => |plan| (try self.dispatchResultMonoType(expr.ty, plan, null)) orelse try self.lowerType(expr.ty),
+            .interpolation => |plan| (try self.dispatchResultMonoType(expr.ty, plan, null)) orelse try self.lowerType(expr.ty),
             .type_dispatch_call => |plan| (try self.dispatchResultMonoType(expr.ty, plan, null)) orelse try self.lowerType(expr.ty),
             .method_eq => |plan| (try self.dispatchResultMonoType(expr.ty, plan, null)) orelse try self.lowerType(expr.ty),
             .lookup_local => |lookup| try self.lookupExprMonoType(expr.ty, lookup.resolved),
@@ -3369,6 +3370,7 @@ const BodyContext = struct {
         switch (expr.data) {
             .call => |call| return try self.lowerCallExpr(expr.ty, call),
             .dispatch_call => |plan| return try self.lowerDispatchExpr(expr.ty, plan),
+            .interpolation => |plan| return try self.lowerDispatchExpr(expr.ty, plan),
             .type_dispatch_call => |plan| return try self.lowerDispatchExpr(expr.ty, plan),
             .method_eq => |plan| return try self.lowerDispatchExpr(expr.ty, plan),
             .structural_eq => |eq| return try self.lowerDirectStructuralEq(expr.ty, eq),
@@ -3440,6 +3442,7 @@ const BodyContext = struct {
             },
             .call => Common.invariant("call expression reached ordinary expression lowering after call-site lowering"),
             .dispatch_call,
+            .interpolation,
             .type_dispatch_call,
             .method_eq,
             => Common.invariant("dispatch expression reached ordinary expression lowering after call-site lowering"),
@@ -3822,6 +3825,7 @@ const BodyContext = struct {
         switch (expr.data) {
             .call => |call| return try self.callResultMonoType(expr.ty, call, expected_ty),
             .dispatch_call => |plan| return try self.dispatchResultMonoType(expr.ty, plan, expected_ty),
+            .interpolation => |plan| return try self.dispatchResultMonoType(expr.ty, plan, expected_ty),
             .type_dispatch_call => |plan| return try self.dispatchResultMonoType(expr.ty, plan, expected_ty),
             .method_eq => |plan| return try self.dispatchResultMonoType(expr.ty, plan, expected_ty),
             .field_access => |field| return try self.fieldAccessMonoType(field.receiver, field.field_name),
@@ -4486,6 +4490,7 @@ const BodyContext = struct {
                 });
             },
             .dispatch_call => |plan| return try self.lowerDispatchExprAtType(expr.ty, plan, ty),
+            .interpolation => |plan| return try self.lowerDispatchExprAtType(expr.ty, plan, ty),
             .type_dispatch_call => |plan| return try self.lowerDispatchExprAtType(expr.ty, plan, ty),
             .method_eq => |plan| return try self.lowerDispatchExprAtType(expr.ty, plan, ty),
             .lookup_local => |lookup| return try self.lowerLookupExprAtType(expr.ty, lookup.resolved, ty),
@@ -4903,27 +4908,17 @@ const BodyContext = struct {
         };
     }
 
-    /// Materialize a string literal's bytes as the `List(U8)` argument of a
-    /// `from_quote` dispatch call.
+    /// Materialize a string literal as the `Str` argument of a `from_quote`
+    /// dispatch call.
     fn lowerQuoteValue(
         self: *BodyContext,
         literal: checked.CheckedStringLiteralId,
         ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprId {
-        const bytes = self.view.bodies.string_literals[@intFromEnum(literal)];
-        const data: Ast.ExprData = .{ .list = blk: {
-            const elem_ty = switch (self.builder.shapeContent(ty)) {
-                .list => |elem| elem,
-                else => Common.invariant("checked from_quote argument was not a List(U8)"),
-            };
-            const items = try self.allocator.alloc(Ast.ExprId, bytes.len);
-            defer self.allocator.free(items);
-            for (bytes, 0..) |byte, i| {
-                items[i] = try self.builder.intLiteralExpr(byte, elem_ty);
-            }
-            break :blk try self.builder.program.addExprSpan(items);
-        } };
-        return try self.builder.program.addExpr(.{ .ty = ty, .data = data });
+        return try self.builder.program.addExpr(.{
+            .ty = ty,
+            .data = .{ .str_lit = try self.lowerStringLiteral(literal) },
+        });
     }
 
     fn lowerNumeralValue(
@@ -5295,8 +5290,64 @@ const BodyContext = struct {
     fn structuralEqualityOperandType(self: *BodyContext, eq: anytype) Allocator.Error!Type.TypeId {
         const lhs_checked_ty = self.view.bodies.exprs[@intFromEnum(eq.lhs)].ty;
         const rhs_checked_ty = self.view.bodies.exprs[@intFromEnum(eq.rhs)].ty;
+        const conflict_message = "checked structural equality operand type conflicted with an existing Monotype constraint";
+
         try self.constrainCheckedTypeRelations(lhs_checked_ty, self, rhs_checked_ty);
+
+        if (try self.structuralEqualityExprResultType(eq.lhs, null)) |lhs_ty| {
+            return try self.constrainStructuralEqualityOperandType(lhs_ty, eq.rhs, rhs_checked_ty, conflict_message);
+        }
+        if (try self.structuralEqualityExprResultType(eq.rhs, null)) |rhs_ty| {
+            return try self.constrainStructuralEqualityOperandType(rhs_ty, eq.lhs, lhs_checked_ty, conflict_message);
+        }
+
         return try self.lowerType(lhs_checked_ty);
+    }
+
+    /// Resolves the Monotype an equality operand evaluates to, when that operand is a
+    /// result-producing expression (call, dispatch, lookup, field access). The shared
+    /// equality operand type is taken from this result so an open tag literal on the other
+    /// side cannot narrow it. Returns null for any other expression shape (e.g. a tag
+    /// literal): the caller then falls through to the concrete-shape ladder in
+    /// structuralEqualityOperandType, so this must not fall back to lowerType itself.
+    fn structuralEqualityExprResultType(
+        self: *BodyContext,
+        expr_id: checked.CheckedExprId,
+        expected_ty: ?Type.TypeId,
+    ) Allocator.Error!?Type.TypeId {
+        const expr = self.view.bodies.exprs[@intFromEnum(expr_id)];
+        return switch (expr.data) {
+            .call => |call| try self.callResultMonoType(expr.ty, call, expected_ty),
+            .dispatch_call => |plan| try self.dispatchResultMonoType(expr.ty, plan, expected_ty),
+            .interpolation => |plan| try self.dispatchResultMonoType(expr.ty, plan, expected_ty),
+            .type_dispatch_call => |plan| try self.dispatchResultMonoType(expr.ty, plan, expected_ty),
+            .method_eq => |plan| try self.dispatchResultMonoType(expr.ty, plan, expected_ty),
+            .lookup_local => |lookup| try self.lookupExprMonoType(expr.ty, lookup.resolved),
+            .lookup_external => |resolved| try self.lookupExprMonoType(expr.ty, resolved),
+            .lookup_required => |resolved| try self.lookupExprMonoType(expr.ty, resolved),
+            .field_access => |field| blk: {
+                if (expected_ty) |ty| {
+                    try self.constrainTypeToMono(expr.ty, ty);
+                    break :blk ty;
+                }
+                break :blk try self.fieldAccessMonoType(field.receiver, field.field_name);
+            },
+            else => null,
+        };
+    }
+
+    fn constrainStructuralEqualityOperandType(
+        self: *BodyContext,
+        operand_ty: Type.TypeId,
+        other_expr_id: checked.CheckedExprId,
+        other_checked_ty: checked.CheckedTypeId,
+        comptime conflict_message: []const u8,
+    ) Allocator.Error!Type.TypeId {
+        try self.constrainTypeToMono(other_checked_ty, operand_ty);
+        if (try self.structuralEqualityExprResultType(other_expr_id, operand_ty)) |other_ty| {
+            if (!self.sameType(operand_ty, other_ty)) Common.invariant(conflict_message);
+        }
+        return operand_ty;
     }
 
     fn lowerEqualityExpr(
@@ -7795,6 +7846,7 @@ const BodyContext = struct {
             .empty_record,
             .zero_argument_tag,
             .dispatch_call,
+            .interpolation,
             .method_eq,
             .type_dispatch_call,
             .runtime_error,

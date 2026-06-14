@@ -38,7 +38,7 @@ name = "World"
 main = {
 	cinterp_0 = greeting
 	cinterp_1 = name
-	"".from_interpolation([].iter().prepended((cinterp_1, "!")).prepended((cinterp_0, ", ")))
+	<interpolation>("", [cinterp_0, ", ", cinterp_1, "!"])
 }
 
 ~~~

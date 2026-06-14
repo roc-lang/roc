@@ -176,7 +176,7 @@ It has the type:
 
     (a, b)
       where [
-        a.from_quote : List(U8) -> Try(a, [BadQuotedBytes(Str)]),
+        a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)]),
         b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
       ]
 

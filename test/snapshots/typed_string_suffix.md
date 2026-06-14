@@ -5,9 +5,9 @@ type=file
 ~~~
 # SOURCE
 ~~~roc
-Tag := [Tag(List(U8))].{
-	from_quote : List(U8) -> Try(Tag, [BadQuotedBytes(Str)])
-	from_quote = |bytes| Ok(Tag(bytes))
+Tag := [Tag(Str)].{
+	from_quote : Str -> Try(Tag, [BadQuotedBytes(Str)])
+	from_quote = |str| Ok(Tag(str))
 }
 
 single = "Roc".Tag
@@ -23,8 +23,8 @@ NIL
 NIL
 # TOKENS
 ~~~zig
-UpperIdent,OpColonEqual,OpenSquare,UpperIdent,NoSpaceOpenRound,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,CloseRound,CloseSquare,Dot,OpenCurly,
-LowerIdent,OpColon,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,OpArrow,UpperIdent,NoSpaceOpenRound,UpperIdent,Comma,OpenSquare,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,CloseSquare,CloseRound,
+UpperIdent,OpColonEqual,OpenSquare,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,CloseSquare,Dot,OpenCurly,
+LowerIdent,OpColon,UpperIdent,OpArrow,UpperIdent,NoSpaceOpenRound,UpperIdent,Comma,OpenSquare,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,CloseSquare,CloseRound,
 LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,UpperIdent,NoSpaceOpenRound,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,CloseRound,
 CloseCurly,
 LowerIdent,OpAssign,StringStart,StringPart,StringEnd,NoSpaceDotUpperIdent,
@@ -46,15 +46,11 @@ EndOfFile,
 				(tags
 					(ty-apply
 						(ty (name "Tag"))
-						(ty-apply
-							(ty (name "List"))
-							(ty (name "U8"))))))
+						(ty (name "Str")))))
 			(associated
 				(s-type-anno (name "from_quote")
 					(ty-fn
-						(ty-apply
-							(ty (name "List"))
-							(ty (name "U8")))
+						(ty (name "Str"))
 						(ty-apply
 							(ty (name "Try"))
 							(ty (name "Tag"))
@@ -67,12 +63,12 @@ EndOfFile,
 					(p-ident (raw "from_quote"))
 					(e-lambda
 						(args
-							(p-ident (raw "bytes")))
+							(p-ident (raw "str")))
 						(e-apply
 							(e-tag (raw "Ok"))
 							(e-apply
 								(e-tag (raw "Tag"))
-								(e-ident (raw "bytes"))))))))
+								(e-ident (raw "str"))))))))
 		(s-decl
 			(p-ident (raw "single"))
 			(e-typed-string (type "Tag")
@@ -85,9 +81,9 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-Tag := [Tag(List(U8))].{
-	from_quote : List(U8) -> Try(Tag, [BadQuotedBytes(Str)])
-	from_quote = |bytes| Ok(Tag(bytes))
+Tag := [Tag(Str)].{
+	from_quote : Str -> Try(Tag, [BadQuotedBytes(Str)])
+	from_quote = |str| Ok(Tag(str))
 }
 
 single = "Roc".Tag
@@ -104,17 +100,16 @@ multi =
 		(p-assign (ident "typed_string_suffix.Tag.from_quote"))
 		(e-lambda
 			(args
-				(p-assign (ident "bytes")))
+				(p-assign (ident "str")))
 			(e-tag (name "Ok")
 				(args
 					(e-tag (name "Tag")
 						(args
 							(e-lookup-local
-								(p-assign (ident "bytes"))))))))
+								(p-assign (ident "str"))))))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-apply (name "List") (builtin)
-					(ty-lookup (name "U8") (builtin)))
+				(ty-lookup (name "Str") (builtin))
 				(ty-apply (name "Try") (builtin)
 					(ty-lookup (name "Tag") (local))
 					(ty-tag-union
@@ -133,21 +128,20 @@ line two"))))
 		(ty-header (name "Tag"))
 		(ty-tag-union
 			(ty-tag-name (name "Tag")
-				(ty-apply (name "List") (builtin)
-					(ty-lookup (name "U8") (builtin)))))))
+				(ty-lookup (name "Str") (builtin))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "List(U8) -> Try(Tag, [BadQuotedBytes(Str)])"))
+		(patt (type "Str -> Try(Tag, [BadQuotedBytes(Str)])"))
 		(patt (type "Tag"))
 		(patt (type "Tag")))
 	(type_decls
 		(nominal (type "Tag")
 			(ty-header (name "Tag"))))
 	(expressions
-		(expr (type "List(U8) -> Try(Tag, [BadQuotedBytes(Str)])"))
+		(expr (type "Str -> Try(Tag, [BadQuotedBytes(Str)])"))
 		(expr (type "Tag"))
 		(expr (type "Tag"))))
 ~~~
