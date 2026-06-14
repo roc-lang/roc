@@ -343,7 +343,7 @@ fn writeRootExpr(self: *Self, context: ExprContext, depth: u8, visible_methods: 
 }
 
 fn writeBoolExpr(self: *Self, context: ExprContext, depth: u8, visible_methods: usize) std.mem.Allocator.Error!void {
-    switch (self.reader.intRangeAtMost(u8, 0, 7)) {
+    switch (self.reader.intRangeAtMost(u8, 0, 8)) {
         0 => if (self.contextSymbol(.bool, context)) |arg| try self.writeSymbol(arg) else try self.writeBoolLiteral(),
         1 => if (!try self.writeMethodCall(.bool, context, depth - 1, visible_methods)) try self.writeBoolLiteral(),
         2 => try self.writeIfExpr(.bool, context, depth - 1, visible_methods),
@@ -368,6 +368,7 @@ fn writeBoolExpr(self: *Self, context: ExprContext, depth: u8, visible_methods: 
             try self.writeParenthesizedExpr(.u64, context, depth - 1, visible_methods);
         },
         7 => try self.writeRootMatchExpr(.bool, context, depth - 1, visible_methods),
+        8 => try self.writeTupleFirstExpr(context, depth - 1, visible_methods),
         else => unreachable,
     }
 }
@@ -396,7 +397,7 @@ fn writeStrExpr(self: *Self, context: ExprContext, depth: u8, visible_methods: u
 }
 
 fn writeU64Expr(self: *Self, context: ExprContext, depth: u8, visible_methods: usize) std.mem.Allocator.Error!void {
-    switch (self.reader.intRangeAtMost(u8, 0, 9)) {
+    switch (self.reader.intRangeAtMost(u8, 0, 10)) {
         0 => if (self.contextSymbol(.u64, context)) |arg| try self.writeSymbol(arg) else try self.writeU64Literal(),
         1 => if (!try self.writeMethodCall(.u64, context, depth - 1, visible_methods)) try self.writeU64Literal(),
         2 => try self.writeIfExpr(.u64, context, depth - 1, visible_methods),
@@ -423,6 +424,7 @@ fn writeU64Expr(self: *Self, context: ExprContext, depth: u8, visible_methods: u
         7 => try self.writeRootMatchExpr(.u64, context, depth - 1, visible_methods),
         8 => try self.writeListGetExpr(context, depth - 1, visible_methods),
         9 => try self.writeTryOkOrExpr(context, depth - 1, visible_methods),
+        10 => try self.writeTupleSecondExpr(context, depth - 1, visible_methods),
         else => unreachable,
     }
 }
@@ -469,12 +471,14 @@ fn writeTryExpr(self: *Self, context: ExprContext, depth: u8, visible_methods: u
 }
 
 fn writeTupleExpr(self: *Self, context: ExprContext, depth: u8, visible_methods: usize) std.mem.Allocator.Error!void {
-    switch (self.reader.intRangeAtMost(u8, 0, 4)) {
+    switch (self.reader.intRangeAtMost(u8, 0, 6)) {
         0 => try self.writeContextSymbolOrElse(.tuple_bool_u64, context, writeTupleLiteral, depth - 1, visible_methods),
         1 => if (!try self.writeMethodCall(.tuple_bool_u64, context, depth - 1, visible_methods)) try self.writeTupleLiteral(context, depth - 1, visible_methods),
         2 => try self.writeIfExpr(.tuple_bool_u64, context, depth - 1, visible_methods),
         3 => try self.writeTupleLiteral(context, depth - 1, visible_methods),
         4 => try self.writeRootMatchExpr(.tuple_bool_u64, context, depth - 1, visible_methods),
+        5 => try self.writeTupleProjectionExpr(context, depth - 1, visible_methods),
+        6 => try self.writeTupleMatchExpr(context, depth - 1, visible_methods),
         else => unreachable,
     }
 }
@@ -786,6 +790,44 @@ fn writeTryErrOrExpr(self: *Self, context: ExprContext, depth: u8, visible_metho
     try self.write(", ");
     try self.writeExpr(.str, context, depth, visible_methods);
     try self.write(")");
+}
+
+fn writeTupleFirstExpr(self: *Self, context: ExprContext, depth: u8, visible_methods: usize) std.mem.Allocator.Error!void {
+    try self.writeParenthesizedExpr(.tuple_bool_u64, context, depth, visible_methods);
+    try self.write(".0");
+}
+
+fn writeTupleSecondExpr(self: *Self, context: ExprContext, depth: u8, visible_methods: usize) std.mem.Allocator.Error!void {
+    try self.writeParenthesizedExpr(.tuple_bool_u64, context, depth, visible_methods);
+    try self.write(".1");
+}
+
+fn writeTupleProjectionExpr(self: *Self, context: ExprContext, depth: u8, visible_methods: usize) std.mem.Allocator.Error!void {
+    try self.write("(");
+    try self.writeTupleFirstExpr(context, depth, visible_methods);
+    try self.write(", ");
+    try self.writeTupleSecondExpr(context, depth, visible_methods);
+    try self.write(")");
+}
+
+fn writeTupleMatchExpr(self: *Self, context: ExprContext, depth: u8, visible_methods: usize) std.mem.Allocator.Error!void {
+    const bool_payload = self.fresh(.value);
+    const u64_payload = self.fresh(.value);
+    const branch_context = extendContext(extendContext(context, bool_payload, .bool), u64_payload, .u64);
+
+    try self.write("match ");
+    try self.writeExpr(.tuple_bool_u64, context, depth, visible_methods);
+    try self.write(" {\n");
+    try self.writeIndent(2);
+    try self.write("(");
+    try self.writeSymbol(bool_payload);
+    try self.write(", ");
+    try self.writeSymbol(u64_payload);
+    try self.write(") => ");
+    try self.writeTupleLiteral(branch_context, depth, visible_methods);
+    try self.write("\n");
+    try self.writeIndent(1);
+    try self.write("}");
 }
 
 fn writeTypedTryScrutinee(self: *Self, context: ExprContext, depth: u8, visible_methods: usize) std.mem.Allocator.Error!void {
