@@ -267,6 +267,10 @@ pub const ScopeMap = struct {
                     try self.traverseExpr(module_env, arg_idx, scope_end, depth + 1);
                 }
             },
+            .e_interpolation => |interpolation| {
+                try self.traverseExpr(module_env, interpolation.first, scope_end, depth + 1);
+                try self.traverseExpr(module_env, interpolation.rest, scope_end, depth + 1);
+            },
             .e_structural_eq => |eq| {
                 try self.traverseExpr(module_env, eq.lhs, scope_end, depth + 1);
                 try self.traverseExpr(module_env, eq.rhs, scope_end, depth + 1);
