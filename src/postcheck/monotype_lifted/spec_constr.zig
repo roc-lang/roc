@@ -443,7 +443,7 @@ const Pass = struct {
                 spec.fn_id = fn_id;
                 try self.program.fns.append(self.allocator, .{
                     .symbol = symbol,
-                    .source = null,
+                    .source = source_fn.source,
                     .args = .empty(),
                     .captures = source_fn.captures,
                     .body = .hosted,
@@ -751,7 +751,7 @@ const Pass = struct {
         });
         try self.program.fns.append(self.allocator, .{
             .symbol = symbol,
-            .source = null,
+            .source = source_fn.source,
             .args = .empty(),
             .captures = source_fn.captures,
             .body = .hosted,
@@ -784,7 +784,7 @@ const Pass = struct {
 
         self.program.fns.items[@intFromEnum(spec_fn_id)] = .{
             .symbol = symbol,
-            .source = null,
+            .source = source_fn.source,
             .args = args,
             .captures = source_fn.captures,
             .body = body,

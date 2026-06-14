@@ -76,8 +76,10 @@ pub const VTable = struct {
     /// Look up environment variable `key`. Caller owns the returned slice.
     getEnvVar: *const fn (?*anyopaque, std.Io, []const u8, Allocator) GetEnvVarError![]u8,
 
-    /// Download `url` and extract its contents into `dest_path`.
-    fetchUrl: *const fn (?*anyopaque, std.Io, Allocator, []const u8, []const u8) FetchUrlError!void,
+    /// Download `url` and extract its contents into `dest_path`, enforcing an
+    /// optional limit on the decompressed size in bytes. Returns the total
+    /// decompressed size.
+    fetchUrl: *const fn (?*anyopaque, std.Io, Allocator, []const u8, []const u8, ?u64) FetchUrlError!u64,
 
     // --- Directory operations ---
 
@@ -189,9 +191,10 @@ pub fn getEnvVar(self: Self, key: []const u8, allocator: Allocator) GetEnvVarErr
     return self.vtable.getEnvVar(self.ctx, self.std_io, key, allocator);
 }
 
-/// Download `url` and extract into `dest_path` directory.
-pub fn fetchUrl(self: Self, allocator: Allocator, url: []const u8, dest_path: []const u8) FetchUrlError!void {
-    return self.vtable.fetchUrl(self.ctx, self.std_io, allocator, url, dest_path);
+/// Download `url` and extract into `dest_path` directory, enforcing an
+/// optional decompressed-size limit in bytes. Returns the decompressed size.
+pub fn fetchUrl(self: Self, allocator: Allocator, url: []const u8, dest_path: []const u8, max_expanded_bytes: ?u64) FetchUrlError!u64 {
+    return self.vtable.fetchUrl(self.ctx, self.std_io, allocator, url, dest_path, max_expanded_bytes);
 }
 
 // --- Directory wrapper methods ---
@@ -334,6 +337,7 @@ pub const GetEnvVarError = error{
 pub const FetchUrlError = error{
     Unsupported,
     DownloadFailed,
+    ExpandedSizeLimitExceeded,
     OutOfMemory,
 };
 
@@ -656,7 +660,7 @@ fn osGetEnvVar(_: ?*anyopaque, _: std.Io, key: []const u8, allocator: Allocator)
 /// Real HTTP download support is injected by BuildEnv.init() using nativeFetchUrl.
 /// Callers constructing their own Io for download support should set vtable.fetchUrl
 /// to a suitable implementation before use.
-fn osFetchUrl(_: ?*anyopaque, _: std.Io, _: Allocator, _: []const u8, _: []const u8) FetchUrlError!void {
+fn osFetchUrl(_: ?*anyopaque, _: std.Io, _: Allocator, _: []const u8, _: []const u8, _: ?u64) FetchUrlError!u64 {
     return error.Unsupported;
 }
 
@@ -785,7 +789,7 @@ fn testingGetEnvVar(_: ?*anyopaque, _: std.Io, _: []const u8, _: Allocator) GetE
     return error.EnvironmentVariableMissing;
 }
 
-fn testingFetchUrl(_: ?*anyopaque, _: std.Io, _: Allocator, _: []const u8, _: []const u8) FetchUrlError!void {
+fn testingFetchUrl(_: ?*anyopaque, _: std.Io, _: Allocator, _: []const u8, _: []const u8, _: ?u64) FetchUrlError!u64 {
     return error.Unsupported;
 }
 
@@ -908,7 +912,7 @@ fn freestandingGetEnvVar(_: ?*anyopaque, _: std.Io, _: []const u8, _: Allocator)
     return error.EnvironmentVariableMissing;
 }
 
-fn freestandingFetchUrl(_: ?*anyopaque, _: std.Io, _: Allocator, _: []const u8, _: []const u8) FetchUrlError!void {
+fn freestandingFetchUrl(_: ?*anyopaque, _: std.Io, _: Allocator, _: []const u8, _: []const u8, _: ?u64) FetchUrlError!u64 {
     return error.Unsupported;
 }
 

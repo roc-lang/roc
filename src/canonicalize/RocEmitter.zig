@@ -387,6 +387,13 @@ fn emitExprFrame(
             try frames.append(allocator, .{ .write = "." });
             try frames.append(allocator, .{ .expr = method_call.receiver });
         },
+        .e_interpolation => |interpolation| {
+            try frames.append(allocator, .{ .write = ")" });
+            try pushExprList(frames, allocator, self.module_env.store.sliceExpr(interpolation.parts), "]", ", ");
+            try frames.append(allocator, .{ .write = ", [" });
+            try frames.append(allocator, .{ .expr = interpolation.first });
+            try frames.append(allocator, .{ .write = "<interpolation>(" });
+        },
         .e_structural_eq => |eq| {
             try frames.append(allocator, .{ .expr = eq.rhs });
             try frames.append(allocator, .{ .write = if (eq.negated) " != " else " == " });

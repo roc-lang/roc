@@ -638,7 +638,6 @@ pub const tests = [_]TestCase{
         \\main = (combine(Baz, Baz, |a, b| a + b) == Baz, combine(Bar(1), Bar(2), |a, b| a + b) == Bar(3))
         ,
         .expected = .{ .inspect_str = "(True, True)" },
-        .known_bug = true,
     },
     .{
         .name = "bughunt B102: recursive Monotype record lowering keeps field span stable",
@@ -683,5 +682,30 @@ pub const tests = [_]TestCase{
         \\}
         ,
         .expected = .{ .inspect_str = "24" },
+    },
+    .{
+        .name = "bughunt B103: dispatched imported-module method returning a multi-field record panics in monotype lowering (#9591)",
+        .source_kind = .module,
+        .imports = &.{.{
+            .name = "Foo",
+            .source =
+            \\Foo :: { id : U64 }.{
+            \\    bar : U64 -> Foo
+            \\    bar = |id| { id: id }
+            \\
+            \\    baz : Foo, {} -> { a : I32, b : I32 }
+            \\    baz = |_, {}| { a: 0, b: 0 }
+            \\}
+            ,
+        }},
+        .source =
+        \\import Foo exposing [bar]
+        \\
+        \\main = {
+        \\    out = bar(0).baz({})
+        \\    out.a
+        \\}
+        ,
+        .expected = .{ .inspect_str = "0" },
     },
 };

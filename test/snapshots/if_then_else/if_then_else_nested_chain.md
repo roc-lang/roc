@@ -113,7 +113,7 @@ NO CHANGE
 								(e-string
 									(e-literal (string "zero")))))
 						(if-branch
-							(e-dispatch-call (method "is_gt") (constraint-fn-var 177)
+							(e-dispatch-call (method "is_gt") (constraint-fn-var 171)
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "num"))))
