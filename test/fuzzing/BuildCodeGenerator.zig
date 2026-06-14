@@ -68,6 +68,8 @@ const Symbols = struct {
     is_odd: Symbol,
     get_item: Symbol,
     collect_items: Symbol,
+    transform_items: Symbol,
+    fold_items: Symbol,
     walk_rows: Symbol,
     walk_cols: Symbol,
     describe_try: Symbol,
@@ -152,6 +154,8 @@ pub fn generate(self: *Self) std.mem.Allocator.Error!void {
         .is_odd = self.fresh(.function),
         .get_item = self.fresh(.function),
         .collect_items = self.fresh(.function),
+        .transform_items = self.fresh(.function),
+        .fold_items = self.fresh(.function),
         .walk_rows = self.fresh(.function),
         .walk_cols = self.fresh(.function),
         .describe_try = self.fresh(.function),
@@ -459,6 +463,7 @@ fn writeTopLevelFunctions(self: *Self) std.mem.Allocator.Error!void {
     try self.writeMutualRecursion();
     try self.writeGetItem();
     try self.writeCollectItems();
+    try self.writeItemTransforms();
     try self.writeGridRecursion();
     try self.writeDescribeTry();
     try self.writeTreeScoring();
@@ -652,6 +657,160 @@ fn writeCollectItems(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppText("$");
     try self.writeAppSymbol(next);
     try self.writeAppText("\n}\n\n");
+}
+
+fn writeItemTransforms(self: *Self) std.mem.Allocator.Error!void {
+    const input_items = self.fresh(.value);
+    const prefix = self.fresh(.value);
+    const offset = self.fresh(.value);
+    const mapped = self.fresh(.value);
+    const map_item = self.fresh(.value);
+    const map_index = self.fresh(.value);
+    const filtered = self.fresh(.value);
+    const keep_item = self.fresh(.value);
+    const drop_item = self.fresh(.value);
+    const second_map_item = self.fresh(.value);
+    const fold_items = self.fresh(.value);
+    const fold_seed = self.fresh(.value);
+    const fold_acc = self.fresh(.value);
+    const fold_item = self.fresh(.value);
+
+    try self.writeAppSymbol(self.symbols.transform_items);
+    try self.writeAppText(" : List(");
+    try self.writeAppSymbol(self.symbols.item_type);
+    try self.writeAppText("), Str, U64 -> List(");
+    try self.writeAppSymbol(self.symbols.item_type);
+    try self.writeAppText(")\n");
+    try self.writeAppSymbol(self.symbols.transform_items);
+    try self.writeAppText(" = |");
+    try self.writeAppSymbol(input_items);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(prefix);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(offset);
+    try self.writeAppText("| {\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(mapped);
+    try self.writeAppText(" : List(");
+    try self.writeAppSymbol(self.symbols.item_type);
+    try self.writeAppText(")\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(mapped);
+    try self.writeAppText(" = List.map_with_index(");
+    try self.writeAppSymbol(input_items);
+    try self.writeAppText(", |");
+    try self.writeAppSymbol(map_item);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(map_index);
+    try self.writeAppText("| { ..");
+    try self.writeAppSymbol(map_item);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(self.symbols.item_id);
+    try self.writeAppText(": ");
+    try self.writeAppSymbol(map_item);
+    try self.writeAppText(".");
+    try self.writeAppSymbol(self.symbols.item_id);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(offset);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(map_index);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(self.symbols.item_text);
+    try self.writeAppText(": Str.concat(");
+    try self.writeAppSymbol(prefix);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(map_item);
+    try self.writeAppText(".");
+    try self.writeAppSymbol(self.symbols.item_text);
+    try self.writeAppText("), ");
+    try self.writeAppSymbol(self.symbols.item_flag);
+    try self.writeAppText(": ");
+    try self.writeAppSymbol(self.symbols.is_even);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(map_item);
+    try self.writeAppText(".");
+    try self.writeAppSymbol(self.symbols.item_id);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(map_index);
+    try self.writeAppText(") })\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(filtered);
+    try self.writeAppText(" : List(");
+    try self.writeAppSymbol(self.symbols.item_type);
+    try self.writeAppText(")\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(filtered);
+    try self.writeAppText(" = if ");
+    try self.writeAppSymbol(self.symbols.is_even);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(offset);
+    try self.writeAppText(") List.keep_if(");
+    try self.writeAppSymbol(mapped);
+    try self.writeAppText(", |");
+    try self.writeAppSymbol(keep_item);
+    try self.writeAppText("| ");
+    try self.writeAppSymbol(keep_item);
+    try self.writeAppText(".");
+    try self.writeAppSymbol(self.symbols.item_flag);
+    try self.writeAppText(") else List.drop_if(");
+    try self.writeAppSymbol(mapped);
+    try self.writeAppText(", |");
+    try self.writeAppSymbol(drop_item);
+    try self.writeAppText("| ");
+    try self.writeAppSymbol(drop_item);
+    try self.writeAppText(".");
+    try self.writeAppSymbol(self.symbols.item_id);
+    try self.writeAppText(" == 0)\n");
+
+    try self.writeIndent(1);
+    try self.writeAppText("List.concat(");
+    try self.writeAppSymbol(filtered);
+    try self.writeAppText(", List.map(");
+    try self.writeAppSymbol(input_items);
+    try self.writeAppText(", |");
+    try self.writeAppSymbol(second_map_item);
+    try self.writeAppText("| { ..");
+    try self.writeAppSymbol(second_map_item);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(self.symbols.item_id);
+    try self.writeAppText(": ");
+    try self.writeAppSymbol(second_map_item);
+    try self.writeAppText(".");
+    try self.writeAppSymbol(self.symbols.item_id);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(offset);
+    try self.writeAppText(" }))\n}\n\n");
+
+    try self.writeAppSymbol(self.symbols.fold_items);
+    try self.writeAppText(" : List(");
+    try self.writeAppSymbol(self.symbols.item_type);
+    try self.writeAppText("), U64 -> U64\n");
+    try self.writeAppSymbol(self.symbols.fold_items);
+    try self.writeAppText(" = |");
+    try self.writeAppSymbol(fold_items);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(fold_seed);
+    try self.writeAppText("| List.fold(");
+    try self.writeAppSymbol(fold_items);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(fold_seed);
+    try self.writeAppText(", |");
+    try self.writeAppSymbol(fold_acc);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(fold_item);
+    try self.writeAppText("| ");
+    try self.writeAppSymbol(fold_acc);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(fold_item);
+    try self.writeAppText(".");
+    try self.writeAppSymbol(self.symbols.item_id);
+    try self.writeAppText(" + (if ");
+    try self.writeAppSymbol(fold_item);
+    try self.writeAppText(".");
+    try self.writeAppSymbol(self.symbols.item_flag);
+    try self.writeAppText(" 1 else 0))\n\n");
 }
 
 fn writeGridRecursion(self: *Self) std.mem.Allocator.Error!void {
@@ -877,6 +1036,8 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     const third = self.fresh(.value);
     const items = self.fresh(.value);
     const collected = self.fresh(.value);
+    const transformed = self.fresh(.value);
+    const folded = self.fresh(.value);
     const builder = self.fresh(.value);
     const state = self.fresh(.value);
     const tree = self.fresh(.value);
@@ -888,6 +1049,7 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     const first_id = self.reader.intRangeAtMost(u8, 0, 9);
     const second_id = self.reader.intRangeAtMost(u8, 10, 29);
     const third_id = self.reader.intRangeAtMost(u8, 30, 59);
+    const transform_offset = self.reader.intRangeAtMost(u8, 0, 7);
     const pick_index = self.reader.intRangeAtMost(u8, 0, 5);
 
     try self.writeAppSymbol(self.symbols.app_entry);
@@ -952,6 +1114,34 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppText(")\n");
 
     try self.writeIndent(1);
+    try self.writeAppSymbol(transformed);
+    try self.writeAppText(" : List(");
+    try self.writeAppSymbol(self.symbols.item_type);
+    try self.writeAppText(")\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(transformed);
+    try self.writeAppText(" = ");
+    try self.writeAppSymbol(self.symbols.transform_items);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(collected);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(input);
+    try self.writeAppText(", ");
+    try self.writeU64(transform_offset);
+    try self.writeAppText(")\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(folded);
+    try self.writeAppText(" : U64\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(folded);
+    try self.writeAppText(" = ");
+    try self.writeAppSymbol(self.symbols.fold_items);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(transformed);
+    try self.writeAppText(", 0)\n");
+
+    try self.writeIndent(1);
     try self.writeAppSymbol(builder);
     try self.writeAppText(" : ");
     try self.writeAppSymbol(self.symbols.builder_type);
@@ -971,7 +1161,7 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppText(").");
     try self.writeAppSymbol(self.symbols.builder_add_many);
     try self.writeAppText("(");
-    try self.writeAppSymbol(collected);
+    try self.writeAppSymbol(transformed);
     try self.writeAppText(")\n");
 
     try self.writeLocalHeader(state, self.symbols.state_type);
@@ -1007,6 +1197,8 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppText(", ");
     try self.writeU64(rows);
     try self.writeAppText(", 0) + ");
+    try self.writeAppSymbol(folded);
+    try self.writeAppText(" + ");
     try self.writeAppSymbol(tree_score);
     try self.writeAppText("\n");
 
