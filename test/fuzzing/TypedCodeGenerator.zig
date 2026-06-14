@@ -263,6 +263,11 @@ fn writeMethodBody(self: *Self, result_type: Type, args: [max_method_arity]Symbo
 
         try self.writeIndent(2);
         try self.writeSymbol(local);
+        try self.write(" : ");
+        try self.writeType(local_type);
+        try self.write("\n");
+        try self.writeIndent(2);
+        try self.writeSymbol(local);
         try self.write(" = ");
         try self.writeExpr(local_type, context, local_depth, visible_methods);
         try self.write("\n");
@@ -468,6 +473,11 @@ fn writeTupleExpr(self: *Self, context: ExprContext, depth: u8, visible_methods:
 }
 
 fn writeMethodCall(self: *Self, result_type: Type, context: ExprContext, depth: u8, visible_methods: usize) std.mem.Allocator.Error!bool {
+    if (self.reader.boolean() and try self.writeReceiverMethodCall(result_type, context, depth, visible_methods)) return true;
+    return self.writeAssociatedMethodCall(result_type, context, depth, visible_methods);
+}
+
+fn writeAssociatedMethodCall(self: *Self, result_type: Type, context: ExprContext, depth: u8, visible_methods: usize) std.mem.Allocator.Error!bool {
     const method = self.chooseMethod(result_type, visible_methods) orelse return false;
 
     try self.writeSymbol(self.symbols.typ);
@@ -482,6 +492,36 @@ fn writeMethodCall(self: *Self, result_type: Type, context: ExprContext, depth: 
     return true;
 }
 
+fn writeReceiverMethodCall(self: *Self, result_type: Type, context: ExprContext, depth: u8, visible_methods: usize) std.mem.Allocator.Error!bool {
+    const method = self.chooseReceiverMethod(result_type, visible_methods) orelse return false;
+
+    if (!try self.writeRootReceiver(context, depth, visible_methods)) return false;
+    try self.write(".");
+    try self.writeSymbol(method.symbol);
+    try self.write("(");
+    for (1..method.arity) |index| {
+        if (index > 1) try self.write(", ");
+        try self.writeExpr(method.param_types[index], context, depth, visible_methods);
+    }
+    try self.write(")");
+    return true;
+}
+
+fn writeRootReceiver(self: *Self, context: ExprContext, depth: u8, visible_methods: usize) std.mem.Allocator.Error!bool {
+    if (self.contextSymbol(.root, context)) |arg| {
+        if (self.reader.boolean()) {
+            try self.writeSymbol(arg);
+            return true;
+        }
+    }
+    if (try self.writeAssociatedMethodCall(.root, context, depth, visible_methods)) return true;
+    if (self.contextSymbol(.root, context)) |arg| {
+        try self.writeSymbol(arg);
+        return true;
+    }
+    return false;
+}
+
 fn chooseMethod(self: *Self, result_type: Type, visible_methods: usize) ?Method {
     var count: usize = 0;
     for (self.methods[0..visible_methods]) |method| {
@@ -492,6 +532,22 @@ fn chooseMethod(self: *Self, result_type: Type, visible_methods: usize) ?Method 
     var index = self.reader.intRangeLessThan(usize, 0, count);
     for (self.methods[0..visible_methods]) |method| {
         if (method.result_type != result_type) continue;
+        if (index == 0) return method;
+        index -= 1;
+    }
+    unreachable;
+}
+
+fn chooseReceiverMethod(self: *Self, result_type: Type, visible_methods: usize) ?Method {
+    var count: usize = 0;
+    for (self.methods[0..visible_methods]) |method| {
+        if (method.result_type == result_type and method.param_types[0] == .root) count += 1;
+    }
+    if (count == 0) return null;
+
+    var index = self.reader.intRangeLessThan(usize, 0, count);
+    for (self.methods[0..visible_methods]) |method| {
+        if (method.result_type != result_type or method.param_types[0] != .root) continue;
         if (index == 0) return method;
         index -= 1;
     }
