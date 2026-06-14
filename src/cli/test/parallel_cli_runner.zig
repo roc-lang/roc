@@ -2551,9 +2551,11 @@ fn customGlueZigCompiles(io: std.Io, allocator: Allocator, env: *const CaseEnv, 
         \\    var host: abi.RocHost = undefined;
         \\    var box: abi.RocBox = null;
         \\    var str: abi.RocStr = undefined;
+        \\    var builder_args: abi.BuilderPrint_valueArgs = undefined;
         \\    _ = &host;
         \\    _ = &box;
         \\    _ = &str;
+        \\    _ = &builder_args;
         \\}}
     , .{"roc_platform_abi.zig"}) catch |err|
         return customInfraFailure(allocator, timer, "failed to render test Zig source: {}", .{err});
@@ -2612,6 +2614,7 @@ fn customGlueZig(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *
         "pub fn decrefBox",
         "pub fn decrefBoxWith",
         "pub extern fn roc_alloc(length: usize, alignment: usize) callconv(.c) ?*anyopaque;",
+        "pub const BuilderPrint_valueArgs = extern struct",
         "pub extern fn roc_stdout_line(arg0: RocStr) callconv(.c) void;",
         "pub extern fn roc_main() callconv(.c) void;",
     }) |needle| {
@@ -2811,7 +2814,12 @@ fn customGlueZigBangRecordFields(io: std.Io, allocator: Allocator, env: *const C
     const generated = std.Io.Dir.cwd().readFileAlloc(io, generated_path, allocator, .limited(1024 * 1024)) catch |err|
         return customFailure(allocator, timer, "failed to read generated Zig file: {}", .{err});
 
-    for ([_][]const u8{ "@\"init!\": *anyopaque", "@\"render!\": *anyopaque" }) |needle| {
+    for ([_][]const u8{
+        "@\"init!\": *anyopaque",
+        "@\"render!\": *anyopaque",
+        "pub const HostSet_mouseArgs = extern struct",
+        "pub extern fn roc_host_set_mouse(arg0: HostSet_mouseArgs) callconv(.c) void;",
+    }) |needle| {
         if (std.mem.find(u8, generated, needle) == null) {
             return customFailure(allocator, timer, "generated Zig file missing {s}", .{needle});
         }

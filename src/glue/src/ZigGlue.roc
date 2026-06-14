@@ -839,6 +839,7 @@ generate_zig_file = |hosted_functions, type_table, provides_list| {
 		.concat(generate_element_type_structs(type_table))
 		.concat(generate_tag_union_structs(type_table))
 		.concat(generate_all_record_structs(hosted_functions, type_table))
+		.concat(generate_all_args_structs(hosted_functions, type_table))
 		.concat("\n")
 		.concat(generate_runtime_symbol_externs)
 		.concat("\n")
@@ -1262,6 +1263,34 @@ is_unit_type_id = |type_table, type_id| {
 	}
 }
 
+## Check whether a type is an explicitly anonymous record shape.
+is_anonymous_record_type_id = |type_table, type_id| {
+	match List.get(type_table, type_id) {
+		Ok(type_repr) => is_anonymous_record_repr(type_table, type_repr)
+		Err(_) => Bool.False
+	}
+}
+
+is_anonymous_record_repr = |type_table, type_repr| {
+	match type_repr {
+		RocRecord(rec) => rec.anonymous
+		RocTagUnion(tu) =>
+			if List.len(tu.tags) == 1 {
+				match List.first(tu.tags) {
+					Ok(tag) =>
+						match List.first(tag.payload) {
+							Ok(payload_id) => is_anonymous_record_type_id(type_table, payload_id)
+							_ => Bool.False
+						}
+					_ => Bool.False
+				}
+			} else {
+				Bool.False
+			}
+		_ => Bool.False
+	}
+}
+
 ## Build a natural C ABI parameter list from Roc function argument type IDs.
 direct_param_list = |type_table, arg_type_ids| {
 	var $params = ""
@@ -1270,6 +1299,42 @@ direct_param_list = |type_table, arg_type_ids| {
 	for arg_type_id in arg_type_ids {
 		if !is_unit_type_id(type_table, arg_type_id) {
 			arg_zig = type_id_to_zig(type_table, arg_type_id)
+			sep = if $params == "" {
+				""
+			} else {
+				", "
+			}
+			$params = "${$params}${sep}arg${U64.to_str($idx)}: ${arg_zig}"
+			$idx = $idx + 1
+		}
+	}
+
+	$params
+}
+
+## Build a hosted symbol parameter list, using the generated Args wrapper for
+## anonymous single-record arguments so direct-symbol glue stays readable.
+direct_hosted_param_list = |type_table, func| {
+	use_args_wrapper =
+		if List.len(func.arg_type_ids) == 1 {
+			match List.first(func.arg_type_ids) {
+				Ok(arg_id) => is_anonymous_record_type_id(type_table, arg_id)
+				Err(_) => Bool.False
+			}
+		} else {
+			Bool.False
+		}
+
+	var $params = ""
+	var $idx = 0
+
+	for arg_type_id in func.arg_type_ids {
+		if !is_unit_type_id(type_table, arg_type_id) {
+			arg_zig = if use_args_wrapper {
+				"${name_to_struct_name(func.name)}Args"
+			} else {
+				type_id_to_zig(type_table, arg_type_id)
+			}
 			sep = if $params == "" {
 				""
 			} else {
@@ -1309,7 +1374,7 @@ generate_hosted_symbol_externs = |hosted_functions, type_table| {
 	var $result = "// =============================================================================\n// Hosted Symbols\n//\n// The platform host must export these symbols with the exact direct C ABI signatures.\n// Refcounted arguments are owned by the hosted function.\n// =============================================================================\n\n"
 
 	for func in hosted_functions {
-		params = direct_param_list(type_table, func.arg_type_ids)
+		params = direct_hosted_param_list(type_table, func)
 		ret_zig = type_id_to_zig(type_table, func.ret_type_id)
 
 		$result = Str.concat(

@@ -882,7 +882,7 @@ const CollectedTypeRepr = union(enum) {
     unit,
     list: u64,
     function: struct { arg_ids: []const u64, ret_id: u64 },
-    record: struct { name: []const u8, fields: []const CollectedRecordField, size: u64, alignment: u64 },
+    record: struct { name: []const u8, anonymous: bool, fields: []const CollectedRecordField, size: u64, alignment: u64 },
     tag_union: struct { name: []const u8, tags: []const CollectedTagInfo, size: u64, alignment: u64 },
     unknown: []const u8,
 };
@@ -1007,6 +1007,7 @@ const TypeTable = struct {
                 if (rec.name.len == 0) {
                     self.entries.items[@intCast(idx)] = .{ .record = .{
                         .name = try std.fmt.allocPrint(self.gpa, "__AnonStruct{d}", .{idx}),
+                        .anonymous = true,
                         .fields = rec.fields,
                         .size = rec.size,
                         .alignment = rec.alignment,
@@ -1124,6 +1125,7 @@ const TypeTable = struct {
         return switch (backing_repr) {
             .record => |rec| .{ .record = .{
                 .name = try self.gpa.dupe(u8, display_name),
+                .anonymous = false,
                 .fields = rec.fields,
                 .size = rec.size,
                 .alignment = rec.alignment,
@@ -1221,6 +1223,7 @@ const TypeTable = struct {
 
         return .{ .record = .{
             .name = "",
+            .anonymous = true,
             .fields = collected_fields,
             .size = record_size,
             .alignment = max_alignment,
@@ -1307,6 +1310,7 @@ const TypeTable = struct {
 
         return .{ .record = .{
             .name = "",
+            .anonymous = true,
             .fields = collected_fields,
             .size = record_size,
             .alignment = max_alignment,
@@ -1814,6 +1818,7 @@ fn writeTypeRepr(
             writer.zeroValue(value_base, payload_layout);
             const fields_slot = writer.recordField(value_base, payload_layout, "RecordRepr", "fields");
             writer.writeField(value_base, payload_layout, "RecordRepr", "alignment", u64, rec.alignment);
+            writer.writeField(value_base, payload_layout, "RecordRepr", "anonymous", bool, rec.anonymous);
             writer.writeField(value_base, payload_layout, "RecordRepr", "fields", RocList, buildRecordFieldTypeReprList(writer, rec.fields, fields_slot.layout_idx));
             writer.writeField(value_base, payload_layout, "RecordRepr", "name", RocStr, createBigRocStr(rec.name, writer.roc_ops));
             writer.writeField(value_base, payload_layout, "RecordRepr", "size", u64, rec.size);
