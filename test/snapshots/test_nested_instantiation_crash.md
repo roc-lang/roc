@@ -185,10 +185,10 @@ answer = composed([42])
 		(e-lambda
 			(args
 				(p-assign (ident "n")))
-			(e-call (constraint-fn-var 164)
+			(e-call (constraint-fn-var 149)
 				(e-lookup-local
 					(p-assign (ident "get_value")))
-				(e-call (constraint-fn-var 163)
+				(e-call (constraint-fn-var 148)
 					(e-lookup-local
 						(p-assign (ident "make_record")))
 					(e-runtime-error (tag "erroneous_value_use")))))
@@ -199,7 +199,7 @@ answer = composed([42])
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "answer"))
-		(e-call (constraint-fn-var 200)
+		(e-call (constraint-fn-var 185)
 			(e-lookup-local
 				(p-assign (ident "composed")))
 			(e-list

@@ -7,7 +7,6 @@ const Mono = @import("../monotype/ast.zig");
 const MonoType = @import("../monotype/type.zig");
 const Ast = @import("ast.zig");
 const checked = @import("check").CheckedModule;
-const names = @import("check").CheckedNames;
 
 const Allocator = std.mem.Allocator;
 
@@ -120,80 +119,11 @@ pub fn run(
     return program;
 }
 
-const FnTemplateMap = std.HashMap(Mono.FnTemplate, Ast.FnId, FnTemplateContext, std.hash_map.default_max_load_percentage);
-const FnFamilyMap = std.HashMap(Mono.FnTemplate, std.ArrayList(Ast.FnId), FnFamilyContext, std.hash_map.default_max_load_percentage);
-
-/// Template identity without the monomorphic type: the digest only
-/// disambiguates among multiple specializations of one checked template and
-/// scheme.
-const FnFamilyContext = struct {
-    pub fn hash(_: FnFamilyContext, template: Mono.FnTemplate) u64 {
-        var hasher = std.hash.Wyhash.init(0);
-        FnTemplateContext.hashFnDef(&hasher, template.fn_def);
-        hasher.update(&template.source_fn_key.bytes);
-        return hasher.final();
-    }
-
-    pub fn eql(_: FnFamilyContext, lhs: Mono.FnTemplate, rhs: Mono.FnTemplate) bool {
-        return std.meta.eql(lhs.fn_def, rhs.fn_def) and
-            std.mem.eql(u8, lhs.source_fn_key.bytes[0..], rhs.source_fn_key.bytes[0..]);
-    }
-};
 const FnActiveSet = std.AutoHashMap(Ast.FnId, void);
-
-const FnTemplateContext = struct {
-    types: *const MonoType.Store,
-    names: *const names.NameStore,
-
-    pub fn hash(self: FnTemplateContext, template: Mono.FnTemplate) u64 {
-        var hasher = std.hash.Wyhash.init(0);
-        hashFnDef(&hasher, template.fn_def);
-        hasher.update(&template.source_fn_key.bytes);
-        const mono_digest = self.types.typeDigest(self.names, template.mono_fn_ty);
-        hasher.update(&mono_digest.bytes);
-        return hasher.final();
-    }
-
-    pub fn eql(self: FnTemplateContext, lhs: Mono.FnTemplate, rhs: Mono.FnTemplate) bool {
-        const lhs_digest = self.types.typeDigest(self.names, lhs.mono_fn_ty);
-        const rhs_digest = self.types.typeDigest(self.names, rhs.mono_fn_ty);
-        return std.meta.eql(lhs.fn_def, rhs.fn_def) and
-            std.mem.eql(u8, lhs.source_fn_key.bytes[0..], rhs.source_fn_key.bytes[0..]) and
-            std.mem.eql(u8, lhs_digest.bytes[0..], rhs_digest.bytes[0..]);
-    }
-
-    pub fn hashFnDef(hasher: *std.hash.Wyhash, fn_def: Mono.FnDef) void {
-        std.hash.autoHash(hasher, std.meta.activeTag(fn_def));
-        switch (fn_def) {
-            .local_template,
-            .imported_template,
-            .checked_generated,
-            => |template| hashProcTemplate(hasher, template),
-            .local_hosted,
-            .imported_hosted,
-            => |hosted| {
-                hashProcTemplate(hasher, hosted.template);
-                std.hash.autoHash(hasher, @intFromEnum(hosted.external_symbol_name));
-                std.hash.autoHash(hasher, hosted.dispatch_index);
-            },
-            .nested => |nested| {
-                hashProcTemplate(hasher, nested.owner);
-                std.hash.autoHash(hasher, @intFromEnum(nested.site));
-                hasher.update(&nested.context_fn_key.bytes);
-            },
-        }
-    }
-
-    fn hashProcTemplate(hasher: *std.hash.Wyhash, template: names.ProcTemplate) void {
-        const module_digest = names.procTemplateModuleDigest(template);
-        hasher.update(&module_digest.bytes);
-        std.hash.autoHash(hasher, @intFromEnum(template.proc_base));
-        std.hash.autoHash(hasher, @intFromEnum(template.template));
-    }
-};
 
 const DefMap = []?Ast.FnId;
 const NestedDefMap = []?Ast.FnId;
+const FnMap = []?Ast.FnId;
 
 const MonoFnBody = struct {
     args: Mono.Span(Mono.TypedLocal),
@@ -208,8 +138,7 @@ const Lifter = struct {
     stmt_done: []bool,
     def_map: DefMap,
     nested_def_map: NestedDefMap,
-    fn_templates: FnTemplateMap,
-    fn_families: FnFamilyMap,
+    fn_map: FnMap,
     fn_bodies: std.ArrayList(?MonoFnBody),
     nested_fn_ids: std.AutoHashMap(Ast.FnId, void),
     initialized_fns: std.AutoHashMap(Ast.FnId, void),
@@ -232,11 +161,7 @@ const Lifter = struct {
             .stmt_done = stmt_done,
             .def_map = &.{},
             .nested_def_map = &.{},
-            .fn_templates = FnTemplateMap.initContext(allocator, .{
-                .types = &output.types,
-                .names = &output.names,
-            }),
-            .fn_families = FnFamilyMap.initContext(allocator, .{}),
+            .fn_map = &.{},
             .fn_bodies = .empty,
             .nested_fn_ids = std.AutoHashMap(Ast.FnId, void).init(allocator),
             .initialized_fns = std.AutoHashMap(Ast.FnId, void).init(allocator),
@@ -248,12 +173,7 @@ const Lifter = struct {
         self.initialized_fns.deinit();
         self.nested_fn_ids.deinit();
         self.fn_bodies.deinit(self.allocator);
-        var families = self.fn_families.valueIterator();
-        while (families.next()) |list| {
-            list.deinit(self.allocator);
-        }
-        self.fn_families.deinit();
-        self.fn_templates.deinit();
+        if (self.fn_map.len > 0) self.allocator.free(self.fn_map);
         if (self.nested_def_map.len > 0) self.allocator.free(self.nested_def_map);
         if (self.def_map.len > 0) self.allocator.free(self.def_map);
         self.allocator.free(self.stmt_done);
@@ -261,6 +181,9 @@ const Lifter = struct {
     }
 
     fn lowerDefsAndRoots(self: *Lifter) Allocator.Error!void {
+        self.fn_map = try self.allocator.alloc(?Ast.FnId, self.source.fns.items.len);
+        @memset(self.fn_map, null);
+
         self.def_map = try self.allocator.alloc(?Ast.FnId, self.source.defs.items.len);
         @memset(self.def_map, null);
 
@@ -269,7 +192,7 @@ const Lifter = struct {
             try self.output.fns.append(self.allocator, undefined);
             try self.fn_bodies.append(self.allocator, .{ .args = def.args, .body = def.body });
             self.def_map[index] = fn_id;
-            if (def.fn_def) |source| try self.registerFnTemplate(source, fn_id);
+            if (def.fn_id) |source_fn_id| self.registerFn(source_fn_id, fn_id);
         }
 
         self.nested_def_map = try self.allocator.alloc(?Ast.FnId, self.source.nested_defs.items.len);
@@ -280,7 +203,7 @@ const Lifter = struct {
             try self.fn_bodies.append(self.allocator, .{ .args = def.args, .body = .{ .roc = def.body } });
             self.nested_def_map[index] = fn_id;
             try self.nested_fn_ids.put(fn_id, {});
-            try self.registerFnTemplate(def.fn_def, fn_id);
+            self.registerFn(def.fn_id, fn_id);
         }
 
         for (self.source.defs.items, 0..) |def, index| {
@@ -345,7 +268,7 @@ const Lifter = struct {
         };
         self.output.fns.items[@intFromEnum(fn_id)] = .{
             .symbol = def.symbol,
-            .source = def.fn_def,
+            .source = if (def.fn_id) |source_fn_id| self.defSource(source_fn_id, def.fn_def) else null,
             .args = def.args,
             .captures = .empty(),
             .body = body,
@@ -368,7 +291,7 @@ const Lifter = struct {
         const capture_span = try self.output.addTypedLocalSpan(captures.items.items);
         self.output.fns.items[@intFromEnum(fn_id)] = .{
             .symbol = def.symbol,
-            .source = def.fn_def,
+            .source = self.nestedSource(def.fn_id, def.fn_def),
             .args = def.args,
             .captures = capture_span,
             .body = .{ .roc = def.body },
@@ -432,14 +355,14 @@ const Lifter = struct {
                 expr.data = .{ .fn_ref = self.def_map[raw] orelse
                     Common.invariant("Monotype definition reference reached lifting before its function was registered") };
             },
-            .fn_def => |fn_def| expr.data = .{ .fn_ref = self.fnIdForTemplate(fn_def) },
+            .fn_def => |fn_id| expr.data = .{ .fn_ref = self.liftedFn(fn_id) },
             .call_value => |call| {
                 try self.rewriteExpr(call.callee);
                 for (self.output.exprSpan(call.args)) |arg| try self.rewriteExpr(arg);
             },
             .call_proc => |call| {
                 const fn_id = switch (call.callee) {
-                    .template => |template| self.fnIdForTemplate(template),
+                    .func => |mono_fn_id| self.liftedFn(mono_fn_id),
                     .lifted => |fn_id| fn_id,
                 };
                 for (self.output.exprSpan(call.args)) |arg| try self.rewriteExpr(arg);
@@ -483,7 +406,7 @@ const Lifter = struct {
     }
 
     fn liftLambda(self: *Lifter, expr_id: Mono.ExprId, ty: @import("../monotype/type.zig").TypeId, lambda: Mono.LambdaExpr) Allocator.Error!void {
-        const fn_id = try self.reserveFnTemplate(lambda.source);
+        const fn_id = try self.reserveFn(lambda.fn_id);
         self.output.exprs.items[@intFromEnum(expr_id)].data = .{ .fn_ref = fn_id };
         if (self.nested_fn_ids.contains(fn_id)) return;
         if (self.initialized_fns.contains(fn_id)) return;
@@ -502,7 +425,7 @@ const Lifter = struct {
         const capture_span = try self.output.addTypedLocalSpan(captures.items.items);
         self.output.fns.items[@intFromEnum(fn_id)] = .{
             .symbol = self.symbols.fresh(),
-            .source = lambda.source,
+            .source = self.source.fnSource(lambda.fn_id),
             .args = lambda.args,
             .captures = capture_span,
             .body = .{ .roc = lambda.body },
@@ -511,13 +434,15 @@ const Lifter = struct {
         try self.initialized_fns.put(fn_id, {});
     }
 
-    fn reserveFnTemplate(self: *Lifter, template: Mono.FnTemplate) Allocator.Error!Ast.FnId {
-        if (self.fn_templates.get(template)) |existing| return existing;
+    fn reserveFn(self: *Lifter, mono_fn_id: Mono.FnId) Allocator.Error!Ast.FnId {
+        const raw = @intFromEnum(mono_fn_id);
+        if (raw >= self.fn_map.len) Common.invariant("Monotype lambda referenced a missing function specialization");
+        if (self.fn_map[raw]) |existing| return existing;
 
         const fn_id: Ast.FnId = @enumFromInt(@as(u32, @intCast(self.output.fns.items.len)));
         try self.output.fns.append(self.allocator, undefined);
         try self.fn_bodies.append(self.allocator, null);
-        try self.registerFnTemplate(template, fn_id);
+        self.fn_map[raw] = fn_id;
         return fn_id;
     }
 
@@ -531,30 +456,39 @@ const Lifter = struct {
         return FnActiveSet.init(self.allocator);
     }
 
-    fn registerFnTemplate(self: *Lifter, template: Mono.FnTemplate, fn_id: Ast.FnId) Allocator.Error!void {
-        const result = try self.fn_templates.getOrPut(template);
-        if (result.found_existing) {
-            if (result.value_ptr.* != fn_id) {
-                Common.invariant("Monotype function template was assigned two lifted function ids");
-            }
+    fn registerFn(self: *Lifter, mono_fn_id: Mono.FnId, fn_id: Ast.FnId) void {
+        const raw = @intFromEnum(mono_fn_id);
+        if (raw >= self.fn_map.len) Common.invariant("Monotype definition referenced a missing function specialization");
+        if (self.fn_map[raw]) |existing| {
+            if (existing != fn_id) Common.invariant("Monotype function specialization was assigned two lifted function ids");
             return;
         }
-        result.value_ptr.* = fn_id;
-        const family = try self.fn_families.getOrPut(template);
-        if (!family.found_existing) family.value_ptr.* = .empty;
-        try family.value_ptr.append(self.allocator, fn_id);
+        self.fn_map[raw] = fn_id;
     }
 
-    fn fnIdForTemplate(self: *Lifter, template: Mono.FnTemplate) Ast.FnId {
-        if (self.fn_templates.get(template)) |fn_id| return fn_id;
-        // The reference's monomorphic type may have been refined after the
-        // expression embedded it. The digest only disambiguates among
-        // multiple specializations of one template and scheme, so a family
-        // with exactly one specialization identifies the function on its own.
-        if (self.fn_families.get(template)) |family| {
-            if (family.items.len == 1) return family.items[0];
+    fn liftedFn(self: *Lifter, mono_fn_id: Mono.FnId) Ast.FnId {
+        const raw = @intFromEnum(mono_fn_id);
+        if (raw >= self.fn_map.len) Common.invariant("Monotype expression referenced a missing function specialization");
+        return self.fn_map[raw] orelse
+            Common.invariant("Monotype expression referenced a function specialization before lifting registered it");
+    }
+
+    fn defSource(self: *Lifter, mono_fn_id: Mono.FnId, expected: ?Mono.FnTemplate) ?Mono.FnTemplate {
+        const source = self.source.fnSource(mono_fn_id);
+        if (expected) |template| {
+            if (!std.meta.eql(source, template)) {
+                Common.invariant("Monotype definition source disagreed with its function specialization source");
+            }
         }
-        Common.invariant("Monotype function template reached lifting before its function was registered");
+        return source;
+    }
+
+    fn nestedSource(self: *Lifter, mono_fn_id: Mono.FnId, expected: Mono.FnTemplate) Mono.FnTemplate {
+        const source = self.source.fnSource(mono_fn_id);
+        if (!std.meta.eql(source, expected)) {
+            Common.invariant("Monotype nested definition source disagreed with its function specialization source");
+        }
+        return source;
     }
 };
 
@@ -654,10 +588,10 @@ const CaptureSet = struct {
             .dec_lit,
             .str_lit,
             .def_ref,
-            .fn_def,
             .fn_ref,
             .crash,
             => {},
+            .fn_def => |fn_id| try self.collectFnCaptures(self.lifter.liftedFn(fn_id), bound),
             .list,
             .tuple,
             => |items| for (input.exprSpan(items)) |child| try self.collectExpr(child, bound),
@@ -690,7 +624,7 @@ const CaptureSet = struct {
             },
             .call_proc => |call| {
                 switch (call.callee) {
-                    .template => |template| try self.collectTemplateCaptures(template, bound),
+                    .func => |mono_fn_id| try self.collectFnCaptures(self.lifter.liftedFn(mono_fn_id), bound),
                     .lifted => |fn_id| try self.collectFnCaptures(fn_id, bound),
                 }
                 for (input.exprSpan(call.args)) |arg| try self.collectExpr(arg, bound);
@@ -738,10 +672,6 @@ const CaptureSet = struct {
             .break_ => |maybe| if (maybe) |value| try self.collectExpr(value, bound),
             .continue_ => |continue_| for (input.exprSpan(continue_.values)) |value| try self.collectExpr(value, bound),
         }
-    }
-
-    fn collectTemplateCaptures(self: *CaptureSet, template: Mono.FnTemplate, caller_bound: *BoundSet) Allocator.Error!void {
-        try self.collectFnCaptures(self.lifter.fnIdForTemplate(template), caller_bound);
     }
 
     fn collectFnCaptures(self: *CaptureSet, fn_id: Ast.FnId, caller_bound: *BoundSet) Allocator.Error!void {

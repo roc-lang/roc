@@ -96,7 +96,7 @@ NO CHANGE
 					(e-lookup-local
 						(p-assign (ident "picked")))
 					(e-num (value "1")))
-				(e-call (constraint-fn-var 91)
+				(e-call (constraint-fn-var 88)
 					(e-lookup-local
 						(p-assign (ident "picked")))
 					(e-string

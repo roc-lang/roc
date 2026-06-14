@@ -113,6 +113,11 @@ builtin_types_copied: bool,
 ident_to_var_map: std.AutoHashMap(Ident.Idx, Var),
 /// Checker-local source-site mapping for method/equality rewrites.
 constraint_expr_by_fn_var: std.AutoHashMap(Var, CIR.Expr.Idx),
+/// Interpolation synthetic iterator expressions checked for custom dispatch.
+checked_interpolation_rests: std.AutoHashMap(Var, void),
+/// When checking a custom interpolation's synthetic iterator, defer resolving
+/// the dispatch constraints it creates until the surrounding dispatch pass.
+defer_expr_static_dispatch_checks: bool,
 /// Dispatcher/method pairs already reported by `reportConstraintError`, so a
 /// constraint failing in multiple passes (or reachable through several aliased
 /// type variables) is reported once.
@@ -230,6 +235,20 @@ const InstantiationDispatcher = struct {
     /// The freshly instantiated receiver (dispatcher) var.
     dispatcher_var: Var,
 };
+
+fn isLiteralStaticDispatchOrigin(origin: StaticDispatchConstraint.Origin) bool {
+    return switch (origin) {
+        .from_numeral,
+        .from_quote,
+        .from_interpolation,
+        => true,
+        .desugared_binop,
+        .desugared_unaryop,
+        .method_call,
+        .where_clause,
+        => false,
+    };
+}
 
 /// Indicates if something has been processed or not
 const HasProcessed = enum { processed, processing, not_processed };
@@ -446,6 +465,8 @@ fn initAssumePrepared(
         .builtin_types_copied = false,
         .ident_to_var_map = std.AutoHashMap(Ident.Idx, Var).init(gpa),
         .constraint_expr_by_fn_var = std.AutoHashMap(Var, CIR.Expr.Idx).init(gpa),
+        .checked_interpolation_rests = std.AutoHashMap(Var, void).init(gpa),
+        .defer_expr_static_dispatch_checks = false,
         .reported_constraint_errors = std.AutoHashMap(ReportedConstraintError, void).init(gpa),
         .expect_region_by_constraint_fn_var = std.AutoHashMap(Var, Region).init(gpa),
         .current_expect_region = null,
@@ -539,6 +560,7 @@ pub fn deinit(self: *Self) void {
     self.import_cache.deinit(self.gpa);
     self.ident_to_var_map.deinit();
     self.constraint_expr_by_fn_var.deinit();
+    self.checked_interpolation_rests.deinit();
     self.reported_constraint_errors.deinit();
     self.expect_region_by_constraint_fn_var.deinit();
     self.top_level_ptrns.deinit();
@@ -922,7 +944,7 @@ fn instantiateVarHelp(
                     var has_from_numeral = false;
                     var has_non_from_numeral = false;
                     for (constraints) |c| {
-                        if (c.origin == .from_numeral or c.origin == .from_quote) {
+                        if (isLiteralStaticDispatchOrigin(c.origin)) {
                             has_from_numeral = true;
                         } else {
                             has_non_from_numeral = true;
@@ -1618,8 +1640,8 @@ fn mkFlexWithFromNumeralConstraint(
 }
 
 /// Create a flex variable with a from_quote constraint for string literals.
-/// The constraint's function type is `List(U8) -> Try(a, [BadQuotedBytes(Str)])`,
-/// where the bytes are the literal's UTF-8 content after escape processing.
+/// The constraint's function type is `Str -> Try(a, [BadQuotedBytes(Str)])`,
+/// where the Str is the literal's content after escape processing.
 fn mkFlexWithFromQuoteConstraint(
     self: *Self,
     source_node: ?CIR.Node.Idx,
@@ -1635,9 +1657,8 @@ fn mkFlexWithFromQuoteConstraint(
     const flex_rank = env.rank();
     const flex_var = try self.freshFromContentAtRank(.{ .flex = Flex.init() }, env, region, flex_rank);
 
-    // Create the argument type: List(U8)
-    const u8_var = try self.freshFromContent(try self.mkNumberTypeContent(.u8, env), env, region);
-    const arg_var = try self.freshFromContent(try self.mkListContent(u8_var, env), env, region);
+    // Create the argument type: Str
+    const arg_var = try self.freshStr(env, region);
 
     // Create the error type: [BadQuotedBytes(Str)] (closed tag union)
     const str_var = self.str_var;
@@ -2355,7 +2376,7 @@ fn reportAmbiguousStaticDispatchPerInstantiation(
         var first_constraint: ?StaticDispatchConstraint = null;
         var skip_receiver = false;
         for (constraints) |c| {
-            if (c.origin == .from_numeral or c.origin == .from_quote) {
+            if (isLiteralStaticDispatchOrigin(c.origin)) {
                 skip_receiver = true;
             } else if (c.fn_name.eql(self.cir.idents.is_eq)) {
                 continue;
@@ -2520,7 +2541,7 @@ fn reportAmbiguousStaticDispatch(
         var first_constraint: ?StaticDispatchConstraint = null;
         for (constraints) |c| {
             switch (c.origin) {
-                .from_numeral, .from_quote, .where_clause => {
+                .from_numeral, .from_quote, .from_interpolation, .where_clause => {
                     has_excluded_origin = true;
                 },
                 .method_call, .desugared_binop, .desugared_unaryop => {
@@ -6751,6 +6772,51 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             } });
             _ = try self.unify(expr_var, record_field_var, env);
         },
+        .e_interpolation => |interpolation| {
+            self.checking_call_arg = true;
+            does_fx = try self.checkExpr(interpolation.first, env, Expected.none()) or does_fx;
+            const first_var = ModuleEnv.varFrom(interpolation.first);
+            var did_err = self.types.resolveVar(first_var).desc.content == .err;
+
+            const parts = self.cir.store.sliceExpr(interpolation.parts);
+            std.debug.assert(parts.len % 2 == 0);
+            var part_i: usize = 0;
+            while (part_i < parts.len) : (part_i += 2) {
+                self.checking_call_arg = true;
+                does_fx = try self.checkExpr(parts[part_i], env, Expected.none()) or does_fx;
+                did_err = did_err or (self.types.resolveVar(ModuleEnv.varFrom(parts[part_i])).desc.content == .err);
+
+                self.checking_call_arg = true;
+                does_fx = try self.checkExpr(parts[part_i + 1], env, Expected.none()) or does_fx;
+                did_err = did_err or (self.types.resolveVar(ModuleEnv.varFrom(parts[part_i + 1])).desc.content == .err);
+            }
+
+            const rest_var = ModuleEnv.varFrom(interpolation.rest);
+            try self.setVarRank(rest_var, env);
+
+            if (did_err) {
+                try self.unifyWith(expr_var, .err, env);
+            } else {
+                const arg_vars = [_]Var{ first_var, rest_var };
+                const constraint_fn_var = try self.mkInterpolationConstraint(
+                    expr_var,
+                    &arg_vars,
+                    expr_var,
+                    self.cir.idents.from_interpolation,
+                    env,
+                    interpolation.method_name_region,
+                    expr_idx,
+                );
+                try self.cir.store.replaceExprWithInterpolationConstraint(
+                    expr_idx,
+                    interpolation.first,
+                    interpolation.parts,
+                    interpolation.rest,
+                    interpolation.method_name_region,
+                    constraint_fn_var,
+                );
+            }
+        },
         .e_method_call => |method_call| {
             does_fx = try self.checkExpr(method_call.receiver, env, Expected.none()) or does_fx;
             const receiver_var = ModuleEnv.varFrom(method_call.receiver);
@@ -6790,12 +6856,6 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     method_call.args,
                     constraint_fn_var,
                 );
-                if (self.cir.isInterpolationCallNode(ModuleEnv.nodeIdxFrom(expr_idx))) {
-                    // The from_interpolation protocol returns the receiver's
-                    // type, so the literal's target is pinned by the result
-                    // before string defaulting runs.
-                    _ = try self.unify(expr_var, receiver_var, env);
-                }
             }
         },
         .e_dispatch_call => |method_call| {
@@ -7062,7 +7122,9 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
     }
 
     // Check any accumulated static dispatch constraints
-    try self.checkStaticDispatchConstraints(env, false);
+    if (!self.defer_expr_static_dispatch_checks) {
+        try self.checkStaticDispatchConstraints(env, false);
+    }
 
     // If this type of expr should be generalized, generalize it!
     if (should_generalize) {
@@ -9307,6 +9369,48 @@ fn mkTypeMethodCallConstraint(
     return constraint_fn_var;
 }
 
+fn mkInterpolationConstraint(
+    self: *Self,
+    dispatcher_var: Var,
+    arg_vars: []const Var,
+    ret_var: Var,
+    method_name: Ident.Idx,
+    env: *Env,
+    region: Region,
+    expr_idx: CIR.Expr.Idx,
+) Allocator.Error!Var {
+    const args_range = try self.types.appendVars(arg_vars);
+    const constraint_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
+        .args = args_range,
+        .ret = ret_var,
+        .needs_instantiation = false,
+    } } }, env, region);
+
+    const constraint = StaticDispatchConstraint{
+        .fn_name = method_name,
+        .fn_var = constraint_fn_var,
+        .origin = .from_interpolation,
+    };
+    const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
+    try self.constraint_expr_by_fn_var.put(constraint_fn_var, expr_idx);
+    if (self.current_expect_region) |expect_region| {
+        try self.expect_region_by_constraint_fn_var.put(constraint_fn_var, expect_region);
+    }
+
+    const constrained_var = try self.freshFromContent(
+        .{ .flex = Flex{ .name = null, .constraints = constraint_range } },
+        env,
+        region,
+    );
+
+    _ = try self.unify(constrained_var, dispatcher_var, env);
+
+    // Shares the literal-defaulting counter with numerals and quoted strings.
+    self.types.from_numeral_flex_count += 1;
+
+    return constraint_fn_var;
+}
+
 fn rewriteImplicitEqMethodCallAsStructuralEq(
     self: *Self,
     constraint: StaticDispatchConstraint,
@@ -9752,7 +9856,7 @@ fn resolveFromNumeralFlexFromConcreteDispatchArg(
     const dispatcher_resolved = self.types.resolveVar(dispatcher_var);
 
     for (constraints) |constraint| {
-        if (constraint.origin == .from_numeral or constraint.origin == .from_quote) continue;
+        if (isLiteralStaticDispatchOrigin(constraint.origin)) continue;
 
         const fn_content = self.types.resolveVar(constraint.fn_var).desc.content;
         const func = fn_content.unwrapFunc() orelse continue;
@@ -9933,11 +10037,11 @@ fn finalizeNumericDefaultsInternal(self: *Self, env: *Env) std.mem.Allocator.Err
     }
 }
 
-/// Default every non-generalized flex var carrying a from_quote constraint to
-/// Str. This runs before numeric context resolution: a still-flex string
-/// literal blocks resolution of the method chains hanging off it (e.g.
-/// `"x".to_utf8().concat([0])`), and those chains are what give numeric
-/// literals their context.
+/// Default every non-generalized flex var carrying a quote-like literal
+/// constraint to Str. This runs before numeric context resolution: a still-flex
+/// string literal or interpolation blocks resolution of the method chains
+/// hanging off it (e.g. `"x".to_utf8().concat([0])`), and those chains are what
+/// give numeric literals their context.
 fn finalizeQuoteDefaults(self: *Self, env: *Env) Allocator.Error!void {
     if (self.types.from_numeral_flex_count == 0) return;
 
@@ -9958,18 +10062,20 @@ fn finalizeQuoteDefaults(self: *Self, env: *Env) Allocator.Error!void {
         if (resolved.desc.content != .flex) continue;
         const flex = resolved.desc.content.flex;
         const constraints = self.types.sliceStaticDispatchConstraints(flex.constraints);
-        var has_from_quote = false;
+        var has_str_defaultable_literal = false;
         var has_from_numeral = false;
         for (constraints) |c| {
             switch (c.origin) {
-                .from_quote => has_from_quote = true,
+                .from_quote,
+                .from_interpolation,
+                => has_str_defaultable_literal = true,
                 .from_numeral => has_from_numeral = true,
                 else => {},
             }
         }
         // A var carrying both origins is left for the numeric default, which
-        // then reports the unsatisfiable from_quote constraint against Dec.
-        if (!has_from_quote or has_from_numeral) continue;
+        // then reports the unsatisfiable string-like constraint against Dec.
+        if (!has_str_defaultable_literal or has_from_numeral) continue;
 
         if (resolved.desc.rank == .generalized) {
             if (!collected_pinnable) {
@@ -10241,6 +10347,14 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                     )) {
                         continue;
                     }
+                    if (constraint.origin == .from_interpolation and self.nominalIsBuiltinStrType(nominal_type)) {
+                        if (try self.satisfyBuiltinStrInterpolation(deferred_constraint.var_, constraint, env)) {
+                            continue;
+                        }
+                    }
+                    if (constraint.origin == .from_interpolation) {
+                        try self.ensureCustomInterpolationRestChecked(constraint, env);
+                    }
                     const method_binding = if (constraint.fn_name.eql(self.cir.idents.is_eq) and
                         try self.nominalSupportsImplicitIsEq(nominal_type))
                     blk: {
@@ -10382,6 +10496,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         continue;
                     };
 
+                    const deferred_len_before = env.deferred_static_dispatch_constraints.items.items.len;
                     const fn_result = try self.unifyInContext(method_var, constraint.fn_var, env, .{
                         .method_type = .{
                             .constraint_var = deferred_constraint.var_,
@@ -10401,6 +10516,13 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                             try self.unifyWith(arg, .err, env);
                         }
                         try self.unifyWith(deferred_constraint.var_, .err, env);
+                        try self.unifyWith(constraint_fn.ret, .err, env);
+                    } else if (try self.reportRecursiveStaticDispatchIfNeeded(
+                        deferred_constraint.var_,
+                        constraint,
+                        deferred_len_before,
+                        env,
+                    )) {
                         try self.unifyWith(constraint_fn.ret, .err, env);
                     } else {
                         try self.reportEffectfulDispatchInExpect(constraint);
@@ -10437,6 +10559,9 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         is_numeric_default_pass,
                     )) {
                         continue;
+                    }
+                    if (constraint.origin == .from_interpolation) {
+                        try self.ensureCustomInterpolationRestChecked(constraint, env);
                     }
 
                     if (constraint.fn_name.eql(self.cir.idents.is_eq)) {
@@ -10563,6 +10688,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         continue;
                     };
 
+                    const deferred_len_before = env.deferred_static_dispatch_constraints.items.items.len;
                     const fn_result = try self.unifyInContext(method_var, constraint.fn_var, env, .{
                         .method_type = .{
                             .constraint_var = deferred_constraint.var_,
@@ -10576,6 +10702,13 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                             try self.unifyWith(arg, .err, env);
                         }
                         try self.unifyWith(deferred_constraint.var_, .err, env);
+                        try self.unifyWith(constraint_fn.ret, .err, env);
+                    } else if (try self.reportRecursiveStaticDispatchIfNeeded(
+                        deferred_constraint.var_,
+                        constraint,
+                        deferred_len_before,
+                        env,
+                    )) {
                         try self.unifyWith(constraint_fn.ret, .err, env);
                     } else {
                         try self.reportEffectfulDispatchInExpect(constraint);
@@ -10689,6 +10822,90 @@ fn reportEffectfulDispatchInExpect(
             .region = entry.value,
         } });
     }
+}
+
+fn interpolationExprForConstraint(self: *Self, constraint: StaticDispatchConstraint) ?CIR.Expr.Idx {
+    if (constraint.origin != .from_interpolation) return null;
+    const expr_idx = self.constraint_expr_by_fn_var.get(constraint.fn_var) orelse return null;
+    if (self.cir.store.getExpr(expr_idx) != .e_interpolation) return null;
+    return expr_idx;
+}
+
+fn recordInterpolationPartTypeMismatch(self: *Self, expected_var: Var, actual_var: Var) Allocator.Error!void {
+    const expected_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, expected_var);
+    const actual_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, actual_var);
+    _ = try self.problems.appendProblem(self.gpa, .{ .type_mismatch = .{
+        .types = .{
+            .expected_var = expected_var,
+            .expected_snapshot = expected_snapshot,
+            .actual_var = actual_var,
+            .actual_snapshot = actual_snapshot,
+        },
+        .context = .none,
+    } });
+}
+
+fn constrainInterpolationExprToStr(self: *Self, expr_idx: CIR.Expr.Idx, expected_str_var: Var, env: *Env) Allocator.Error!bool {
+    const expr_var = ModuleEnv.varFrom(expr_idx);
+    const resolved_expr = self.types.resolveVar(expr_var);
+    if (resolved_expr.desc.content == .err) return false;
+
+    const compatible = blk: {
+        var probe = try self.beginProbe();
+        defer probe.rollback();
+        break :blk try self.probeUnifyWithoutRecordingProblems(expected_str_var, expr_var);
+    };
+
+    if (!compatible) {
+        try self.recordInterpolationPartTypeMismatch(expected_str_var, expr_var);
+        return true;
+    }
+
+    const result = try self.unify(expected_str_var, expr_var, env);
+    std.debug.assert(result.isOk());
+    return false;
+}
+
+fn satisfyBuiltinStrInterpolation(
+    self: *Self,
+    dispatcher_var: Var,
+    constraint: StaticDispatchConstraint,
+    env: *Env,
+) Allocator.Error!bool {
+    const expr_idx = self.interpolationExprForConstraint(constraint) orelse return false;
+    const interpolation = self.cir.store.getExpr(expr_idx).e_interpolation;
+    const expr_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(expr_idx));
+    const expected_str_var = try self.freshStr(env, expr_region);
+
+    var did_err = false;
+    const parts = self.cir.store.sliceExpr(interpolation.parts);
+    std.debug.assert(parts.len % 2 == 0);
+    var part_i: usize = 0;
+    while (part_i < parts.len) : (part_i += 2) {
+        did_err = (try self.constrainInterpolationExprToStr(parts[part_i], expected_str_var, env)) or did_err;
+    }
+
+    if (did_err) {
+        try self.unifyWith(dispatcher_var, .err, env);
+        try self.markConstraintFunctionAsError(constraint, env);
+    }
+    return true;
+}
+
+fn ensureCustomInterpolationRestChecked(
+    self: *Self,
+    constraint: StaticDispatchConstraint,
+    env: *Env,
+) Allocator.Error!void {
+    const expr_idx = self.interpolationExprForConstraint(constraint) orelse return;
+    const entry = try self.checked_interpolation_rests.getOrPut(constraint.fn_var);
+    if (entry.found_existing) return;
+
+    const interpolation = self.cir.store.getExpr(expr_idx).e_interpolation;
+    const saved = self.defer_expr_static_dispatch_checks;
+    self.defer_expr_static_dispatch_checks = true;
+    defer self.defer_expr_static_dispatch_checks = saved;
+    _ = try self.checkExpr(interpolation.rest, env, Expected.none());
 }
 
 /// Check if a structural type supports is_eq.
@@ -10879,6 +11096,17 @@ fn nominalSupportsImplicitIsEq(self: *Self, nominal_type: types_mod.NominalType)
 fn builtinNumKindFromNominalType(self: *const Self, nominal_type: types_mod.NominalType) ?CIR.NumKind {
     if (!nominal_type.originIsBuiltin()) return null;
     return self.builtinNumKindFromBuiltinSourceDecl(nominal_type.sourceDeclOptional());
+}
+
+fn nominalIsBuiltinStrType(self: *const Self, nominal_type: types_mod.NominalType) bool {
+    if (!nominal_type.originIsBuiltin()) return false;
+    if (nominal_type.sourceDeclOptional()) |source_decl| {
+        if (self.builtin_ctx.builtin_indices) |indices| {
+            if (source_decl == @intFromEnum(indices.str_type)) return true;
+        }
+    }
+    const ident = nominal_type.ident.ident_idx;
+    return ident.eql(self.cir.idents.str) or ident.eql(self.cir.idents.builtin_str);
 }
 
 fn nominalIsBuiltinNumberType(self: *Self, nominal_type: types_mod.NominalType) bool {
@@ -11121,9 +11349,8 @@ fn varSupportsIsEqInternal(
 
 /// Check if a flex var has incompatible constraints and report errors.
 /// This is called after type-checking to catch cases like `!3` where a flex var
-/// has both `from_numeral` (numeric) and `not` (Bool only) constraints.
-/// If the flex var has a from_numeral constraint (meaning it will default to a numeric
-/// type like Dec), we validate that all other constraints can be satisfied by Dec.
+/// has both `from_numeral` (numeric) and `not` (Bool only) constraints. Literal
+/// constraints default to Dec for numerals and Str for quote/interpolation.
 fn checkFlexVarConstraintCompatibility(self: *Self, var_: Var, env: *Env, is_numeric_default_pass: bool) Allocator.Error!void {
     const resolved = self.types.resolveVar(var_);
     if (resolved.desc.content != .flex) return;
@@ -11134,29 +11361,33 @@ fn checkFlexVarConstraintCompatibility(self: *Self, var_: Var, env: *Env, is_num
 
     // Find the literal-origin constraint that determines the default type.
     var has_from_numeral = false;
-    var has_from_quote = false;
+    var has_str_defaultable_literal = false;
     for (constraints) |c| {
         switch (c.origin) {
             .from_numeral => has_from_numeral = true,
-            .from_quote => has_from_quote = true,
+            .from_quote,
+            .from_interpolation,
+            => has_str_defaultable_literal = true,
             else => {},
         }
     }
-    if (!has_from_numeral and !has_from_quote) return;
+    if (!has_from_numeral and !has_str_defaultable_literal) return;
 
-    // This flex will default to Dec (numerals) or Str (quotes). Validate that
-    // all other constraints can be satisfied by the default type.
+    // This flex will default to Dec (numerals) or Str (quotes/interpolations).
+    // Validate that all other constraints can be satisfied by the default type.
     const builtin_env = self.builtin_ctx.builtin_module orelse return;
     const indices = self.builtin_ctx.builtin_indices orelse return;
     const default_type_stmt = if (has_from_numeral) indices.dec_type else indices.str_type;
 
     for (constraints) |constraint| {
         // Skip the literal-origin constraint the default type satisfies by
-        // definition. (With both origins present, the var defaults to Dec and
-        // the from_quote constraint must still be validated against it.)
+        // definition. (With a numeric origin present, the var defaults to Dec
+        // and any string-like constraint must still be validated against it.)
         switch (constraint.origin) {
             .from_numeral => if (has_from_numeral) continue,
-            .from_quote => if (!has_from_numeral) continue,
+            .from_quote,
+            .from_interpolation,
+            => if (!has_from_numeral) continue,
             else => {},
         }
 
@@ -11438,6 +11669,63 @@ const ReportedConstraintError = struct {
     dispatcher: Var,
     fn_name: Ident.Idx,
 };
+
+fn reportRecursiveStaticDispatchIfNeeded(
+    self: *Self,
+    dispatcher_var: Var,
+    constraint: StaticDispatchConstraint,
+    deferred_len_before: usize,
+    env: *Env,
+) Allocator.Error!bool {
+    if (constraint.origin != .where_clause) return false;
+    if (!constraint.fn_name.eql(self.cir.idents.from_interpolation)) return false;
+
+    const items = env.deferred_static_dispatch_constraints.items.items;
+    if (deferred_len_before == items.len) return false;
+
+    const dispatcher_resolved = self.types.resolveVar(dispatcher_var).var_;
+    var deferred_index = deferred_len_before;
+    while (deferred_index < items.len) : (deferred_index += 1) {
+        const deferred = items[deferred_index];
+        if (self.types.resolveVar(deferred.var_).var_ != dispatcher_resolved) continue;
+
+        const new_constraints = self.types.sliceStaticDispatchConstraints(deferred.constraints);
+        for (new_constraints) |new_constraint| {
+            if (new_constraint.origin != .where_clause) continue;
+            if (!new_constraint.fn_name.eql(constraint.fn_name)) continue;
+            if (!try self.staticDispatchConstraintFunctionsCanUnify(
+                constraint.fn_var,
+                new_constraint.fn_var,
+            )) {
+                continue;
+            }
+
+            const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, dispatcher_var);
+            _ = try self.problems.appendProblem(self.cir.gpa, .{ .static_dispatch = .{
+                .recursive_dispatch = .{
+                    .dispatcher_snapshot = snapshot,
+                    .fn_var = constraint.fn_var,
+                    .method_name = constraint.fn_name,
+                },
+            } });
+
+            try self.markConstraintFunctionAsError(constraint, env);
+            try self.markConstraintFunctionAsError(new_constraint, env);
+            return true;
+        }
+    }
+    return false;
+}
+
+fn staticDispatchConstraintFunctionsCanUnify(
+    self: *Self,
+    left: Var,
+    right: Var,
+) Allocator.Error!bool {
+    var probe = try self.beginProbe();
+    defer probe.rollback();
+    return try self.probeUnifyWithoutRecordingProblems(left, right);
+}
 
 /// Report a constraint validation error
 fn reportConstraintError(

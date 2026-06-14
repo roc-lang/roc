@@ -117,33 +117,22 @@ describe = |value| match value {
 								(e-block
 									(s-let
 										(p-assign (ident "#interp_0"))
-										(e-dispatch-call (method "to_str") (constraint-fn-var 234)
+										(e-dispatch-call (method "to_str") (constraint-fn-var 230)
 											(receiver
 												(e-lookup-local
 													(p-assign (ident "first"))))
 											(args)))
-									(e-dispatch-call (method "from_interpolation") (constraint-fn-var 375)
-										(receiver
-											(e-string
-												(e-literal (string "long list starting with "))))
-										(args
-											(e-dispatch-call (method "prepended") (constraint-fn-var 333)
-												(receiver
-													(e-dispatch-call (method "iter") (constraint-fn-var 269)
-														(receiver
-															(e-empty_list))
-														(args)))
-												(args
-													(e-tuple
-														(elems
-															(e-lookup-local
-																(p-assign (ident "#interp_0")))
-															(e-string
-																(e-literal (string "")))))))))))
+									(e-interpolation (constraint-fn-var 252)
+										(first
+											(e-literal (string "long list starting with ")))
+										(parts
+											(e-lookup-local
+												(p-assign (ident "#interp_0")))
+											(e-literal (string ""))))))
 							(guard
-								(e-dispatch-call (method "is_gt") (constraint-fn-var 145)
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 141)
 									(receiver
-										(e-call (constraint-fn-var 111)
+										(e-call (constraint-fn-var 107)
 											(e-lookup-external
 												(builtin))
 											(e-lookup-local
@@ -161,29 +150,18 @@ describe = |value| match value {
 								(e-block
 									(s-let
 										(p-assign (ident "#interp_1"))
-										(e-dispatch-call (method "to_str") (constraint-fn-var 401)
+										(e-dispatch-call (method "to_str") (constraint-fn-var 278)
 											(receiver
 												(e-lookup-local
 													(p-assign (ident "x"))))
 											(args)))
-									(e-dispatch-call (method "from_interpolation") (constraint-fn-var 542)
-										(receiver
-											(e-string
-												(e-literal (string "pair of equal values: "))))
-										(args
-											(e-dispatch-call (method "prepended") (constraint-fn-var 500)
-												(receiver
-													(e-dispatch-call (method "iter") (constraint-fn-var 436)
-														(receiver
-															(e-empty_list))
-														(args)))
-												(args
-													(e-tuple
-														(elems
-															(e-lookup-local
-																(p-assign (ident "#interp_1")))
-															(e-string
-																(e-literal (string "")))))))))))
+									(e-interpolation (constraint-fn-var 300)
+										(first
+											(e-literal (string "pair of equal values: ")))
+										(parts
+											(e-lookup-local
+												(p-assign (ident "#interp_1")))
+											(e-literal (string ""))))))
 							(guard
 								(e-method-eq (negated "false")
 									(lhs

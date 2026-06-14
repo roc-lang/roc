@@ -81,6 +81,7 @@ const helpers = eval.test_helpers;
 const LoweredProgram = helpers.LoweredProgram;
 
 const posix = std.posix;
+const DEFAULT_EVAL_TIMEOUT_MS: u64 = 240_000;
 
 fn milliTimestamp(io: std.Io) i64 {
     return std.Io.Timestamp.now(io, .awake).toMilliseconds();
@@ -158,7 +159,6 @@ const LLVM_BACKEND_INDEX = 3;
 /// finish while the other backends keep the normal eval timeout.
 const LLVM_BACKEND_TIMEOUT_MS: u64 = 420_000;
 const BACKEND_TIMEOUT_REPORT_GRACE_MS: u64 = 5_000;
-const DEFAULT_HANG_TIMEOUT_MS: u64 = 240_000;
 const FORKED_BACKEND_KILL_GRACE_MS: i64 = 5_000;
 const FORKED_BACKEND_KILL_POLL_NS: u64 = 10 * std.time.ns_per_ms;
 const LLVM_EVAL_LOCK_POLL_NS: u64 = 10 * std.time.ns_per_ms;
@@ -2140,7 +2140,7 @@ const WorkerTrace = struct {
 
 fn effectiveHangTimeoutMs(cli: harness.StandardArgs) u64 {
     if (cli.timeout_provided and cli.timeout_ms > 0) return cli.timeout_ms;
-    return DEFAULT_HANG_TIMEOUT_MS;
+    return DEFAULT_EVAL_TIMEOUT_MS;
 }
 
 fn effectiveMaxChildren(cli: harness.StandardArgs, cpu_count: usize, test_count: usize) usize {
@@ -2228,7 +2228,7 @@ pub fn main(init: std.process.Init) anyerror!void {
         if (idx >= tests.len) std.process.exit(2);
         var tc = tests[idx];
         if (cli.worker_backend) |name| applyBackendIsolation(&tc.skip, name);
-        const worker_timeout_ms: u64 = if (cli.timeout_provided and cli.timeout_ms > 0) cli.timeout_ms else 30_000;
+        const worker_timeout_ms: u64 = if (cli.timeout_provided and cli.timeout_ms > 0) cli.timeout_ms else DEFAULT_EVAL_TIMEOUT_MS;
 
         var arena = collections.SingleThreadArena.init(base.defaultGpa());
         defer arena.deinit();
@@ -2259,7 +2259,7 @@ pub fn main(init: std.process.Init) anyerror!void {
     // until stdin EOFs. Amortizes the per-Child process-boot cost across
     // many tests on the same worker.
     if (cli.worker_stream) {
-        const worker_timeout_ms: u64 = if (cli.timeout_provided and cli.timeout_ms > 0) cli.timeout_ms else 30_000;
+        const worker_timeout_ms: u64 = if (cli.timeout_provided and cli.timeout_ms > 0) cli.timeout_ms else DEFAULT_EVAL_TIMEOUT_MS;
         var arena = collections.SingleThreadArena.init(base.defaultGpa());
         defer arena.deinit();
 

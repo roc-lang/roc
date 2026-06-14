@@ -28,8 +28,8 @@ The type is:
 
     [Err(a), Ok(b), Transform(c -> c), Validate(d -> Bool), ..]
       where [
-        a.from_quote : List(U8) -> Try(a, [BadQuotedBytes(Str)]),
-        b.from_quote : List(U8) -> Try(b, [BadQuotedBytes(Str)]),
+        a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)]),
+        b.from_quote : Str -> Try(b, [BadQuotedBytes(Str)]),
         d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]),
         d.is_gt : d, d -> Bool,
       ]
@@ -154,7 +154,7 @@ expect result == result
 				(e-lambda
 					(args
 						(p-assign (ident "n")))
-					(e-dispatch-call (method "is_gt") (constraint-fn-var 101)
+					(e-dispatch-call (method "is_gt") (constraint-fn-var 98)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "n"))))

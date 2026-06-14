@@ -380,7 +380,7 @@ test "check type - record - field typo" {
         \\
         \\It has the type:
         \\
-        \\    { helo: a } where [a.from_quote : List(U8) -> Try(a, [BadQuotedBytes(Str)])]
+        \\    { helo: a } where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]
         \\
         \\But the annotation say it should be:
         \\
@@ -413,7 +413,7 @@ test "check type - record - field missing" {
         \\
         \\It has the type:
         \\
-        \\    { hello: a } where [a.from_quote : List(U8) -> Try(a, [BadQuotedBytes(Str)])]
+        \\    { hello: a } where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]
         \\
         \\But the annotation say it should be:
         \\
@@ -445,7 +445,7 @@ test "check type - record - ext - field missing" {
         \\
         \\It has the type:
         \\
-        \\    { hello: a } where [a.from_quote : List(U8) -> Try(a, [BadQuotedBytes(Str)])]
+        \\    { hello: a } where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]
         \\
         \\But the annotation say it should be:
         \\
@@ -4167,7 +4167,7 @@ test "check type - record ext - arg inferred as open" {
         \\
         \\This argument has the type:
         \\
-        \\    { foo: a } where [a.from_quote : List(U8) -> Try(a, [BadQuotedBytes(Str)])]
+        \\    { foo: a } where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]
         \\
         \\But `use_record` needs the first argument to be:
         \\
@@ -5325,7 +5325,7 @@ test "check type - zulip repro" {
         \\
         \\This argument has the type:
         \\
-        \\    { foo: a } where [a.from_quote : List(U8) -> Try(a, [BadQuotedBytes(Str)])]
+        \\    { foo: a } where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]
         \\
         \\But `use_record` needs the first argument to be:
         \\
@@ -5444,7 +5444,7 @@ test "check type - exhaustive match with nested payload is inferred as closed" {
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "[Err(a), Ok([Blue, Red])] -> a\n  where [a.from_quote : List(U8) -> Try(a, [BadQuotedBytes(Str)])]" },
+            .{ .def = "test", .expected = "[Err(a), Ok([Blue, Red])] -> a\n  where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]" },
         },
     );
 }
@@ -5463,7 +5463,7 @@ test "check type - exhaustive match with nested payload with wildcard is inferre
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "[Err(a), Ok([Blue, Red, ..])] -> a\n  where [a.from_quote : List(U8) -> Try(a, [BadQuotedBytes(Str)])]" },
+            .{ .def = "test", .expected = "[Err(a), Ok([Blue, Red, ..])] -> a\n  where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]" },
         },
     );
 }
@@ -5535,7 +5535,7 @@ test "check type - exhaustive match mixed nested closure" {
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "[Err(a), Ok([A, B])] -> a\n  where [a.from_quote : List(U8) -> Try(a, [BadQuotedBytes(Str)])]" },
+            .{ .def = "test", .expected = "[Err(a), Ok([A, B])] -> a\n  where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]" },
         },
     );
 }

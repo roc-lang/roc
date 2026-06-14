@@ -56,38 +56,21 @@ NO CHANGE
 				(p-assign (ident "name"))))
 		(s-let
 			(p-assign (ident "#interp_1"))
-			(e-dispatch-call (method "to_str") (constraint-fn-var 35)
+			(e-dispatch-call (method "to_str") (constraint-fn-var 32)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "age"))))
 				(args)))
-		(e-dispatch-call (method "from_interpolation") (constraint-fn-var 220)
-			(receiver
-				(e-string
-					(e-literal (string "Hello "))))
-			(args
-				(e-dispatch-call (method "prepended") (constraint-fn-var 178)
-					(receiver
-						(e-dispatch-call (method "prepended") (constraint-fn-var 120)
-							(receiver
-								(e-dispatch-call (method "iter") (constraint-fn-var 56)
-									(receiver
-										(e-empty_list))
-									(args)))
-							(args
-								(e-tuple
-									(elems
-										(e-lookup-local
-											(p-assign (ident "#interp_1")))
-										(e-string
-											(e-literal (string " years old"))))))))
-					(args
-						(e-tuple
-							(elems
-								(e-lookup-local
-									(p-assign (ident "#interp_0")))
-								(e-string
-									(e-literal (string ", you are ")))))))))))
+		(e-interpolation (constraint-fn-var 43)
+			(first
+				(e-literal (string "Hello ")))
+			(parts
+				(e-lookup-local
+					(p-assign (ident "#interp_0")))
+				(e-literal (string ", you are "))
+				(e-lookup-local
+					(p-assign (ident "#interp_1")))
+				(e-literal (string " years old"))))))
 ~~~
 # TYPES
 ~~~clojure
