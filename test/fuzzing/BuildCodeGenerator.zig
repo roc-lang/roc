@@ -13,14 +13,17 @@ allocator: std.mem.Allocator,
 reader: *FuzzReader,
 app_output: std.ArrayList(u8),
 platform_output: std.ArrayList(u8),
+module_output: std.ArrayList(u8),
 app_file_name: ?[]u8,
 platform_file_name: ?[]u8,
+module_file_name: ?[]u8,
 next_id: u32,
 symbols: Symbols,
 
 const SymbolKind = enum {
     app_file,
     platform_file,
+    module_file,
     package,
     type,
     tag,
@@ -38,11 +41,13 @@ const Symbols = struct {
     app_entry: Symbol,
     platform_alias: Symbol,
     platform_wrapper: Symbol,
+    import_module: Symbol,
     item_type: Symbol,
     state_type: Symbol,
     err_type: Symbol,
     builder_type: Symbol,
     tree_type: Symbol,
+    imported_type: Symbol,
     err_missing: Symbol,
     err_bad: Symbol,
     tree_leaf: Symbol,
@@ -51,6 +56,8 @@ const Symbols = struct {
     item_id: Symbol,
     item_text: Symbol,
     item_flag: Symbol,
+    imported_num: Symbol,
+    imported_text: Symbol,
     state_items: Symbol,
     state_count: Symbol,
     state_label: Symbol,
@@ -62,6 +69,8 @@ const Symbols = struct {
     builder_add_many: Symbol,
     builder_build: Symbol,
     builder_text: Symbol,
+    imported_make: Symbol,
+    imported_score: Symbol,
     make_item: Symbol,
     sum_items: Symbol,
     is_even: Symbol,
@@ -86,8 +95,10 @@ pub fn init(allocator: std.mem.Allocator, reader: *FuzzReader) Self {
         .reader = reader,
         .app_output = .empty,
         .platform_output = .empty,
+        .module_output = .empty,
         .app_file_name = null,
         .platform_file_name = null,
+        .module_file_name = null,
         .next_id = 0,
         .symbols = undefined,
     };
@@ -96,8 +107,10 @@ pub fn init(allocator: std.mem.Allocator, reader: *FuzzReader) Self {
 pub fn deinit(self: *Self) void {
     self.app_output.deinit(self.allocator);
     self.platform_output.deinit(self.allocator);
+    self.module_output.deinit(self.allocator);
     if (self.app_file_name) |name| self.allocator.free(name);
     if (self.platform_file_name) |name| self.allocator.free(name);
+    if (self.module_file_name) |name| self.allocator.free(name);
 }
 
 pub fn getAppOutput(self: *const Self) []const u8 {
@@ -108,6 +121,10 @@ pub fn getPlatformOutput(self: *const Self) []const u8 {
     return self.platform_output.items;
 }
 
+pub fn getModuleOutput(self: *const Self) []const u8 {
+    return self.module_output.items;
+}
+
 pub fn getAppFileName(self: *const Self) []const u8 {
     return self.app_file_name orelse @panic("build fuzzer app file name requested before generation");
 }
@@ -116,22 +133,30 @@ pub fn getPlatformFileName(self: *const Self) []const u8 {
     return self.platform_file_name orelse @panic("build fuzzer platform file name requested before generation");
 }
 
+pub fn getModuleFileName(self: *const Self) []const u8 {
+    return self.module_file_name orelse @panic("build fuzzer module file name requested before generation");
+}
+
 pub fn generate(self: *Self) std.mem.Allocator.Error!void {
     self.app_output.clearRetainingCapacity();
     self.platform_output.clearRetainingCapacity();
+    self.module_output.clearRetainingCapacity();
     self.next_id = 0;
 
     const app_file = self.fresh(.app_file);
     const platform_file = self.fresh(.platform_file);
+    const module_file = self.fresh(.module_file);
     self.symbols = .{
         .app_entry = self.fresh(.function),
         .platform_alias = self.fresh(.package),
         .platform_wrapper = self.fresh(.function),
+        .import_module = module_file,
         .item_type = self.fresh(.type),
         .state_type = self.fresh(.type),
         .err_type = self.fresh(.type),
         .builder_type = self.fresh(.type),
         .tree_type = self.fresh(.type),
+        .imported_type = module_file,
         .err_missing = self.fresh(.tag),
         .err_bad = self.fresh(.tag),
         .tree_leaf = self.fresh(.tag),
@@ -140,6 +165,8 @@ pub fn generate(self: *Self) std.mem.Allocator.Error!void {
         .item_id = self.fresh(.field),
         .item_text = self.fresh(.field),
         .item_flag = self.fresh(.field),
+        .imported_num = self.fresh(.field),
+        .imported_text = self.fresh(.field),
         .state_items = self.fresh(.field),
         .state_count = self.fresh(.field),
         .state_label = self.fresh(.field),
@@ -151,6 +178,8 @@ pub fn generate(self: *Self) std.mem.Allocator.Error!void {
         .builder_add_many = self.fresh(.function),
         .builder_build = self.fresh(.function),
         .builder_text = self.fresh(.function),
+        .imported_make = self.fresh(.function),
+        .imported_score = self.fresh(.function),
         .make_item = self.fresh(.function),
         .sum_items = self.fresh(.function),
         .is_even = self.fresh(.function),
@@ -169,16 +198,81 @@ pub fn generate(self: *Self) std.mem.Allocator.Error!void {
         .score_tree_list = self.fresh(.function),
     };
 
-    try self.setFileNames(app_file, platform_file);
+    try self.setFileNames(app_file, platform_file, module_file);
+    try self.writeModule();
     try self.writePlatform();
     try self.writeApp();
 }
 
-fn setFileNames(self: *Self, app_file: Symbol, platform_file: Symbol) std.mem.Allocator.Error!void {
+fn setFileNames(self: *Self, app_file: Symbol, platform_file: Symbol, module_file: Symbol) std.mem.Allocator.Error!void {
     if (self.app_file_name) |name| self.allocator.free(name);
     if (self.platform_file_name) |name| self.allocator.free(name);
+    if (self.module_file_name) |name| self.allocator.free(name);
     self.app_file_name = try std.fmt.allocPrint(self.allocator, "{c}{d}.roc", .{ symbolPrefix(app_file.kind), app_file.id });
     self.platform_file_name = try std.fmt.allocPrint(self.allocator, "{c}{d}.roc", .{ symbolPrefix(platform_file.kind), platform_file.id });
+    self.module_file_name = try std.fmt.allocPrint(self.allocator, "{c}{d}.roc", .{ symbolPrefix(module_file.kind), module_file.id });
+}
+
+fn writeModule(self: *Self) std.mem.Allocator.Error!void {
+    const num = self.fresh(.value);
+    const text = self.fresh(.value);
+    const record = self.fresh(.value);
+    const extra = self.fresh(.value);
+
+    try self.writeModuleSymbol(self.symbols.imported_type);
+    try self.writeModuleText(" := {\n");
+    try self.writeModuleText("    ");
+    try self.writeModuleSymbol(self.symbols.imported_num);
+    try self.writeModuleText(" : U64,\n");
+    try self.writeModuleText("    ");
+    try self.writeModuleSymbol(self.symbols.imported_text);
+    try self.writeModuleText(" : Str,\n");
+    try self.writeModuleText("}.{\n");
+
+    try self.writeModuleText("    ");
+    try self.writeModuleSymbol(self.symbols.imported_make);
+    try self.writeModuleText(" : U64, Str -> ");
+    try self.writeModuleSymbol(self.symbols.imported_type);
+    try self.writeModuleText("\n");
+    try self.writeModuleText("    ");
+    try self.writeModuleSymbol(self.symbols.imported_make);
+    try self.writeModuleText(" = |");
+    try self.writeModuleSymbol(num);
+    try self.writeModuleText(", ");
+    try self.writeModuleSymbol(text);
+    try self.writeModuleText("| { ");
+    try self.writeModuleSymbol(self.symbols.imported_num);
+    try self.writeModuleText(": ");
+    try self.writeModuleSymbol(num);
+    try self.writeModuleText(", ");
+    try self.writeModuleSymbol(self.symbols.imported_text);
+    try self.writeModuleText(": ");
+    try self.writeModuleSymbol(text);
+    try self.writeModuleText(" }\n");
+
+    try self.writeModuleText("    ");
+    try self.writeModuleSymbol(self.symbols.imported_score);
+    try self.writeModuleText(" : ");
+    try self.writeModuleSymbol(self.symbols.imported_type);
+    try self.writeModuleText(", U64 -> U64\n");
+    try self.writeModuleText("    ");
+    try self.writeModuleSymbol(self.symbols.imported_score);
+    try self.writeModuleText(" = |");
+    try self.writeModuleSymbol(record);
+    try self.writeModuleText(", ");
+    try self.writeModuleSymbol(extra);
+    try self.writeModuleText("| ");
+    try self.writeModuleSymbol(record);
+    try self.writeModuleText(".");
+    try self.writeModuleSymbol(self.symbols.imported_num);
+    try self.writeModuleText(" + ");
+    try self.writeModuleSymbol(extra);
+    try self.writeModuleText(" + List.len(Str.to_utf8(");
+    try self.writeModuleSymbol(record);
+    try self.writeModuleText(".");
+    try self.writeModuleSymbol(self.symbols.imported_text);
+    try self.writeModuleText("))\n");
+    try self.writeModuleText("}\n");
 }
 
 fn writePlatform(self: *Self) std.mem.Allocator.Error!void {
@@ -221,6 +315,9 @@ fn writeApp(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppText(": platform \"./");
     try self.writeAppText(self.getPlatformFileName());
     try self.writeAppText("\" }\n\n");
+    try self.writeAppText("import ");
+    try self.writeAppSymbol(self.symbols.import_module);
+    try self.writeAppText("\n\n");
 
     try self.writeTypeDeclarations();
     try self.writeBuilderType();
@@ -1220,6 +1317,8 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     const pair_score = self.fresh(.value);
     const try_score = self.fresh(.value);
     const try_value = self.fresh(.value);
+    const imported_record = self.fresh(.value);
+    const imported_score = self.fresh(.value);
     const builder = self.fresh(.value);
     const state = self.fresh(.value);
     const tree = self.fresh(.value);
@@ -1361,6 +1460,31 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     try self.writeIndent(1);
     try self.writeAppText("}\n");
 
+    try self.writeLocalHeader(imported_record, self.symbols.imported_type);
+    try self.writeAppSymbol(self.symbols.imported_type);
+    try self.writeAppText(".");
+    try self.writeAppSymbol(self.symbols.imported_make);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(try_score);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(pair_score);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(input);
+    try self.writeAppText(")\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(imported_score);
+    try self.writeAppText(" : U64\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(imported_score);
+    try self.writeAppText(" = ");
+    try self.writeAppSymbol(imported_record);
+    try self.writeAppText(".");
+    try self.writeAppSymbol(self.symbols.imported_score);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(folded);
+    try self.writeAppText(")\n");
+
     try self.writeIndent(1);
     try self.writeAppSymbol(builder);
     try self.writeAppText(" : ");
@@ -1427,6 +1551,8 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppText(" + ");
     try self.writeAppSymbol(try_score);
     try self.writeAppText(" + ");
+    try self.writeAppSymbol(imported_score);
+    try self.writeAppText(" + ");
     try self.writeAppSymbol(tree_score);
     try self.writeAppText(", 0)\n");
 
@@ -1447,6 +1573,8 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppSymbol(pair_score);
     try self.writeAppText(" + ");
     try self.writeAppSymbol(try_score);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(imported_score);
     try self.writeAppText(" + ");
     try self.writeAppSymbol(tree_score);
     try self.writeAppText(" + ");
@@ -1591,6 +1719,10 @@ fn writePlatformSymbol(self: *Self, symbol: Symbol) std.mem.Allocator.Error!void
     try writeSymbolTo(&self.platform_output, self.allocator, symbol);
 }
 
+fn writeModuleSymbol(self: *Self, symbol: Symbol) std.mem.Allocator.Error!void {
+    try writeSymbolTo(&self.module_output, self.allocator, symbol);
+}
+
 fn writeSymbolTo(output: *std.ArrayList(u8), allocator: std.mem.Allocator, symbol: Symbol) std.mem.Allocator.Error!void {
     const text = try std.fmt.allocPrint(allocator, "{c}{d}", .{ symbolPrefix(symbol.kind), symbol.id });
     defer allocator.free(text);
@@ -1601,6 +1733,7 @@ fn symbolPrefix(kind: SymbolKind) u8 {
     return switch (kind) {
         .app_file => 'A',
         .platform_file => 'P',
+        .module_file => 'M',
         .package => 'p',
         .type => 'T',
         .tag => 'C',
@@ -1616,4 +1749,8 @@ fn writeAppText(self: *Self, text: []const u8) std.mem.Allocator.Error!void {
 
 fn writePlatformText(self: *Self, text: []const u8) std.mem.Allocator.Error!void {
     try self.platform_output.appendSlice(self.allocator, text);
+}
+
+fn writeModuleText(self: *Self, text: []const u8) std.mem.Allocator.Error!void {
+    try self.module_output.appendSlice(self.allocator, text);
 }

@@ -48,12 +48,15 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
 
     const app_source = generator.getAppOutput();
     const platform_source = generator.getPlatformOutput();
+    const module_source = generator.getModuleOutput();
     const app_file_name = generator.getAppFileName();
     const platform_file_name = generator.getPlatformFileName();
+    const module_file_name = generator.getModuleFileName();
     if (debug) {
         std.debug.print("Input length: {d}, bytes consumed: {d}\n", .{ input.len, reader.position });
         std.debug.print("Generated {s}:\n==========\n{s}\n==========\n\n", .{ app_file_name, app_source });
         std.debug.print("Generated {s}:\n==========\n{s}\n==========\n\n", .{ platform_file_name, platform_source });
+        std.debug.print("Generated {s}:\n==========\n{s}\n==========\n\n", .{ module_file_name, module_source });
     }
 
     const fuzz_io = std.Io.Threaded.global_single_threaded.io();
@@ -74,6 +77,7 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
     defer tmp_dir.close(fuzz_io);
     tmp_dir.writeFile(fuzz_io, .{ .sub_path = app_file_name, .data = app_source }) catch @panic("failed to write generated build fuzz app source");
     tmp_dir.writeFile(fuzz_io, .{ .sub_path = platform_file_name, .data = platform_source }) catch @panic("failed to write generated build fuzz platform source");
+    tmp_dir.writeFile(fuzz_io, .{ .sub_path = module_file_name, .data = module_source }) catch @panic("failed to write generated build fuzz module source");
 
     const abs_app_path = tmp_dir.realPathFileAlloc(fuzz_io, app_file_name, gpa) catch @panic("failed to resolve generated build fuzz app source");
     defer gpa.free(abs_app_path);
@@ -95,7 +99,7 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
         else => {},
     };
 
-    assertNoBlockingReports(&build_env, debug, app_file_name, app_source, platform_file_name, platform_source) catch |err| switch (err) {
+    assertNoBlockingReports(&build_env, debug, app_file_name, app_source, platform_file_name, platform_source, module_file_name, module_source) catch |err| switch (err) {
         error.OutOfMemory => @panic("OOM while draining generated app reports"),
     };
 
@@ -134,6 +138,8 @@ fn assertNoBlockingReports(
     app_source: []const u8,
     platform_file_name: []const u8,
     platform_source: []const u8,
+    module_file_name: []const u8,
+    module_source: []const u8,
 ) std.mem.Allocator.Error!void {
     const drained = try build_env.drainReports();
     defer build_env.freeDrainedReports(drained);
@@ -159,6 +165,7 @@ fn assertNoBlockingReports(
         if (!debug) {
             std.debug.print("Generated {s}:\n==========\n{s}\n==========\n\n", .{ app_file_name, app_source });
             std.debug.print("Generated {s}:\n==========\n{s}\n==========\n\n", .{ platform_file_name, platform_source });
+            std.debug.print("Generated {s}:\n==========\n{s}\n==========\n\n", .{ module_file_name, module_source });
         }
         std.debug.panic("generated build fuzz app produced blocking report: {s}", .{title});
     }
