@@ -1,0 +1,100 @@
+const std = @import("std");
+const dec = @import("dec.zig");
+const i128h = @import("compiler_rt_128.zig");
+
+fn powerOfTwo(comptime Float: type, exponent: u32) Float {
+    var result: Float = 1.0;
+    var i: u32 = 0;
+    while (i < exponent) : (i += 1) {
+        result *= 2.0;
+    }
+    return result;
+}
+
+pub fn i128FitsTarget(value: i128, target_bits: u32, target_signed: bool) bool {
+    if (target_bits >= 128) {
+        return target_signed or value >= 0;
+    }
+
+    if (target_signed) {
+        const shift: u7 = @intCast(target_bits - 1);
+        const magnitude = @as(i128, @bitCast(i128h.shl(1, shift)));
+        return value >= -magnitude and value < magnitude;
+    }
+
+    if (value < 0) return false;
+    return u128FitsTarget(@intCast(value), target_bits, false);
+}
+
+pub fn u128FitsTarget(value: u128, target_bits: u32, target_signed: bool) bool {
+    if (target_bits >= 128) {
+        return !target_signed or value <= @as(u128, @bitCast(@as(i128, std.math.maxInt(i128))));
+    }
+
+    const shift: u7 = @intCast(if (target_signed) target_bits - 1 else target_bits);
+    return value < i128h.shl(1, shift);
+}
+
+pub fn truncatedFloatFitsTarget(comptime Float: type, truncated: Float, target_bits: u32, target_signed: bool) bool {
+    if (target_signed) {
+        const magnitude = powerOfTwo(Float, target_bits - 1);
+        return truncated >= -magnitude and truncated < magnitude;
+    }
+
+    return truncated >= 0 and truncated < powerOfTwo(Float, target_bits);
+}
+
+pub fn floatToIntTry(comptime Float: type, comptime Int: type, value: Float) ?Int {
+    if (!std.math.isFinite(value)) return null;
+
+    const truncated = @trunc(value);
+    const int_info = @typeInfo(Int).int;
+    const target_signed = int_info.signedness == .signed;
+    if (!truncatedFloatFitsTarget(Float, truncated, int_info.bits, target_signed)) {
+        return null;
+    }
+
+    if (int_info.bits <= 64) {
+        return @intFromFloat(truncated);
+    }
+
+    const as_f64: f64 = @floatCast(truncated);
+    return switch (int_info.signedness) {
+        .signed => @intCast(i128h.f64_to_i128(as_f64)),
+        .unsigned => @intCast(i128h.f64_to_u128(as_f64)),
+    };
+}
+
+pub fn f64ToIntTryBits(value: f64, target_bits: u32, target_signed: bool) ?u128 {
+    if (!std.math.isFinite(value)) return null;
+
+    const truncated = @trunc(value);
+    if (!truncatedFloatFitsTarget(f64, truncated, target_bits, target_signed)) {
+        return null;
+    }
+
+    if (target_signed) {
+        const int_value: i128 = if (target_bits <= 64)
+            @intFromFloat(truncated)
+        else
+            i128h.f64_to_i128(truncated);
+
+        return @bitCast(int_value);
+    }
+
+    const int_value: u128 = if (target_bits <= 64)
+        @intFromFloat(truncated)
+    else
+        i128h.f64_to_u128(truncated);
+
+    return int_value;
+}
+
+pub fn decToIntTryBits(dec_value: i128, target_bits: u32, target_signed: bool) ?u128 {
+    const whole_part = i128h.divTrunc_i128(dec_value, dec.RocDec.one_point_zero_i128);
+    if (!i128FitsTarget(whole_part, target_bits, target_signed)) {
+        return null;
+    }
+
+    return @bitCast(whole_part);
+}
