@@ -4523,6 +4523,7 @@ pub fn build(b: *std.Build) void {
         "parse",
         "canonicalize",
         "typecheck",
+        "build",
     };
     for (names) |name| {
         add_fuzz_target(
