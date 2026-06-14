@@ -918,7 +918,7 @@ const Builder = struct {
         try body_ctx.constrainTypeToMono(template.checked_fn_root, mono_fn_ty);
         try body_ctx.constrainKnownType(root.checked_type, mono_fn_ty);
 
-        const lowered = try body_ctx.lowerExprAtType(wrapper.body_expr, mono_fn_ty);
+        const lowered = try body_ctx.lowerComptimeRootExprAtType(wrapper.body_expr, mono_fn_ty);
         try self.drainSpecRequests(graph);
         return lowered;
     }
@@ -2724,6 +2724,7 @@ const BodyContext = struct {
     owner_template: names.ProcTemplate,
     owner_context_fn_key: names.TypeDigest,
     current_fn_key: names.TypeDigest,
+    comptime_exhaustiveness_depth: u32,
     binders: BinderMap,
     local_proc_contexts: std.AutoHashMap(checked.PatternBinderId, names.TypeDigest),
     /// This specialization's type solver, shared by every instantiation
@@ -2794,6 +2795,7 @@ const BodyContext = struct {
             .owner_template = owner_template,
             .owner_context_fn_key = .{},
             .current_fn_key = .{},
+            .comptime_exhaustiveness_depth = 0,
             .binders = BinderMap.init(allocator),
             .local_proc_contexts = std.AutoHashMap(checked.PatternBinderId, names.TypeDigest).init(allocator),
             .graph = graph,
@@ -2831,6 +2833,7 @@ const BodyContext = struct {
         errdefer child.deinit();
         child.owner_context_fn_key = self.owner_context_fn_key;
         child.current_fn_key = current_fn_key;
+        child.comptime_exhaustiveness_depth = self.comptime_exhaustiveness_depth;
 
         var binder_iter = self.binders.iterator();
         while (binder_iter.next()) |entry| {
@@ -3193,7 +3196,7 @@ const BodyContext = struct {
                 }
                 return .{
                     .args = .empty(),
-                    .body = try self.lowerExprAtType(wrapper.body_expr, ret_ty),
+                    .body = try self.lowerComptimeRootExprAtType(wrapper.body_expr, ret_ty),
                     .ret = ret_ty,
                 };
             },
@@ -3246,6 +3249,9 @@ const BodyContext = struct {
         ret_ty: Type.TypeId,
     ) Allocator.Error!LoweredLambdaArgs {
         if (arg_tys.len != checked_args.len) Common.invariant("lambda arity differs from concrete function type");
+
+        const saved_comptime_depth = self.resetComptimeExhaustivenessDepth();
+        defer self.restoreComptimeExhaustivenessDepth(saved_comptime_depth);
 
         const args = try self.allocator.alloc(Ast.TypedLocal, checked_args.len);
         defer self.allocator.free(args);
@@ -3378,6 +3384,30 @@ const BodyContext = struct {
         }
         const ty = try self.lowerExprType(expr_id);
         return try self.lowerExprWithType(expr_id, ty);
+    }
+
+    fn lowerComptimeRootExprAtType(
+        self: *BodyContext,
+        expr_id: checked.CheckedExprId,
+        ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        self.comptime_exhaustiveness_depth += 1;
+        defer self.comptime_exhaustiveness_depth -= 1;
+        return try self.lowerExprAtType(expr_id, ty);
+    }
+
+    fn resetComptimeExhaustivenessDepth(self: *BodyContext) u32 {
+        const saved = self.comptime_exhaustiveness_depth;
+        self.comptime_exhaustiveness_depth = 0;
+        return saved;
+    }
+
+    fn restoreComptimeExhaustivenessDepth(self: *BodyContext, saved: u32) void {
+        self.comptime_exhaustiveness_depth = saved;
+    }
+
+    fn inComptimeExhaustivenessContext(self: *const BodyContext) bool {
+        return self.comptime_exhaustiveness_depth != 0;
     }
 
     fn lowerExprWithType(
@@ -4200,7 +4230,7 @@ const BodyContext = struct {
             try graph.addMonoView(result_node, ty);
         }
         const live_ty = try graph.monoFor(result_node);
-        const lowered = try body_ctx.lowerExprAtType(body.body_expr, live_ty);
+        const lowered = try body_ctx.lowerComptimeRootExprAtType(body.body_expr, live_ty);
         try self.builder.drainSpecRequests(graph);
         return lowered;
     }
@@ -5677,10 +5707,11 @@ const BodyContext = struct {
     }
 
     fn lowerMatchExpr(self: *BodyContext, expr_id: checked.CheckedExprId, match: anytype, result_ty: Type.TypeId) Allocator.Error!Ast.ExprId {
+        const comptime_site = try self.matchComptimeSite(expr_id, match);
         const merge_binders = try self.stateMergeBinders(expr_id);
         defer self.allocator.free(merge_binders);
         if (merge_binders.len == 0) {
-            return try self.lowerMatchExprWithOutput(match, .{ .value = result_ty });
+            return try self.lowerMatchExprWithOutput(match, .{ .value = result_ty }, comptime_site);
         }
 
         const state_ty = try self.stateResultType(merge_binders, result_ty);
@@ -5688,7 +5719,7 @@ const BodyContext = struct {
             .result_ty = result_ty,
             .state_ty = state_ty,
             .merge_binders = merge_binders,
-        } });
+        } }, comptime_site);
 
         const pattern_items = try self.allocator.alloc(Ast.PatId, merge_binders.len + 1);
         defer self.allocator.free(pattern_items);
@@ -5711,12 +5742,17 @@ const BodyContext = struct {
         } } });
     }
 
-    fn lowerMatchExprWithOutput(self: *BodyContext, match: anytype, output: MatchOutput) Allocator.Error!Ast.ExprId {
+    fn lowerMatchExprWithOutput(
+        self: *BodyContext,
+        match: anytype,
+        output: MatchOutput,
+        comptime_site: ?Ast.ComptimeSiteId,
+    ) Allocator.Error!Ast.ExprId {
         const output_ty = self.matchOutputType(output);
         if (!self.matchContainsListPattern(match)) {
             return try self.builder.program.addExpr(.{
                 .ty = output_ty,
-                .data = try self.lowerMatch(match, output),
+                .data = try self.lowerMatch(match, output, comptime_site),
             });
         }
 
@@ -5724,7 +5760,7 @@ const BodyContext = struct {
         const scrutinee_ty = self.builder.program.exprs.items[@intFromEnum(scrutinee)].ty;
         const scrutinee_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), scrutinee_ty);
         const scrutinee_expr = try self.builder.localExpr(scrutinee_local, scrutinee_ty);
-        const rest = try self.lowerListPatternMatchAlternatives(scrutinee_expr, scrutinee_ty, match.branches, output);
+        const rest = try self.lowerListPatternMatchAlternatives(scrutinee_expr, scrutinee_ty, match.branches, output, comptime_site);
         return try self.builder.program.addExpr(.{ .ty = output_ty, .data = .{ .let_ = .{
             .bind = try self.builder.bindPat(scrutinee_local, scrutinee_ty),
             .value = scrutinee,
@@ -5793,6 +5829,44 @@ const BodyContext = struct {
         };
     }
 
+    fn patternCanMiss(self: *BodyContext, pattern_id: checked.CheckedPatternId) bool {
+        const pattern = self.view.bodies.patterns[@intFromEnum(pattern_id)];
+        return switch (pattern.data) {
+            .assign,
+            .underscore,
+            => false,
+            .as => |as| self.patternCanMiss(as.pattern),
+            .nominal => |nominal| self.patternCanMiss(nominal.backing_pattern),
+            .tuple => |items| blk: {
+                for (items) |child| {
+                    if (self.patternCanMiss(child)) break :blk true;
+                }
+                break :blk false;
+            },
+            .record_destructure => |destructs| blk: {
+                for (destructs) |destruct| {
+                    const child = switch (destruct.kind) {
+                        .required, .sub_pattern, .rest => |child_pattern| child_pattern,
+                    };
+                    if (self.patternCanMiss(child)) break :blk true;
+                }
+                break :blk false;
+            },
+            .applied_tag,
+            .list,
+            .num_literal,
+            .small_dec_literal,
+            .dec_literal,
+            .frac_f32_literal,
+            .frac_f64_literal,
+            .str_literal,
+            => true,
+            .pending,
+            .runtime_error,
+            => false,
+        };
+    }
+
     fn recordDestructsNeedExplicitRest(self: *BodyContext, destructs: []const checked.CheckedRecordDestruct) bool {
         for (destructs) |destruct| {
             switch (destruct.kind) {
@@ -5809,18 +5883,25 @@ const BodyContext = struct {
         scrutinee_ty: Type.TypeId,
         branches: []const checked.CheckedMatchBranch,
         output: MatchOutput,
+        comptime_site: ?Ast.ComptimeSiteId,
     ) Allocator.Error!Ast.ExprId {
         const output_ty = self.matchOutputType(output);
-        const msg = try self.builder.program.addStringLiteral("non-exhaustive checked match reached Monotype");
-        var fallback = try self.builder.program.addExpr(.{ .ty = output_ty, .data = .{ .crash = msg } });
+        var fallback = if (comptime_site) |site|
+            try self.comptimeExhaustivenessFailedExpr(output_ty, site)
+        else blk: {
+            const msg = try self.builder.program.addStringLiteral("non-exhaustive checked match reached Monotype");
+            break :blk try self.builder.program.addExpr(.{ .ty = output_ty, .data = .{ .crash = msg } });
+        };
 
         var branch_index = branches.len;
+        var alternative_index = branchCount(branches);
         while (branch_index > 0) {
             branch_index -= 1;
             const branch = branches[branch_index];
             var pattern_index = branch.patterns.len;
             while (pattern_index > 0) {
                 pattern_index -= 1;
+                alternative_index -= 1;
                 fallback = try self.lowerListPatternMatchAlternative(
                     scrutinee,
                     scrutinee_ty,
@@ -5829,6 +5910,8 @@ const BodyContext = struct {
                     branch.value,
                     fallback,
                     output,
+                    comptime_site,
+                    alternative_index,
                 );
             }
         }
@@ -5845,6 +5928,8 @@ const BodyContext = struct {
         body: checked.CheckedExprId,
         fallback: Ast.ExprId,
         output: MatchOutput,
+        comptime_site: ?Ast.ComptimeSiteId,
+        alternative_index: usize,
     ) Allocator.Error!Ast.ExprId {
         const output_ty = self.matchOutputType(output);
         const checked_pattern = self.view.bodies.patterns[@intFromEnum(pattern.pattern)];
@@ -5860,7 +5945,11 @@ const BodyContext = struct {
                 try branch_ctx.preRegisterPatternBinders(pattern.pattern, scrutinee_ty);
                 try branch_ctx.applyAlternativeBinderRemaps(pattern.binder_remaps);
 
-                var body_lowered = try branch_ctx.lowerMatchBranchBody(body, output);
+                var body_lowered = try branch_ctx.wrapComptimeBranch(
+                    comptime_site,
+                    alternative_index,
+                    try branch_ctx.lowerMatchBranchBody(body, output),
+                );
                 if (guard) |guard_expr| {
                     const guard_cond = try branch_ctx.lowerExpr(guard_expr);
                     body_lowered = try branch_ctx.builder.ifExpr(guard_cond, body_lowered, fallback, output_ty);
@@ -5876,7 +5965,11 @@ const BodyContext = struct {
                 try branch_ctx.saveMatchPatternBinders(pattern, &saved);
                 defer branch_ctx.restoreBinders(saved.items);
                 try branch_ctx.applyAlternativeBinderRemaps(pattern.binder_remaps);
-                const branch_body = try branch_ctx.lowerMatchBranchBody(body, output);
+                const branch_body = try branch_ctx.wrapComptimeBranch(
+                    comptime_site,
+                    alternative_index,
+                    try branch_ctx.lowerMatchBranchBody(body, output),
+                );
                 if (guard) |guard_expr| {
                     const guard_cond = try branch_ctx.lowerExpr(guard_expr);
                     return try branch_ctx.builder.ifExpr(guard_cond, branch_body, fallback, output_ty);
@@ -5902,7 +5995,11 @@ const BodyContext = struct {
 
                 try branch_ctx.applyAlternativeBinderRemaps(pattern.binder_remaps);
 
-                var body_lowered = try branch_ctx.lowerMatchBranchBody(body, output);
+                var body_lowered = try branch_ctx.wrapComptimeBranch(
+                    comptime_site,
+                    alternative_index,
+                    try branch_ctx.lowerMatchBranchBody(body, output),
+                );
                 if (guard) |guard_expr| {
                     const guard_cond = try branch_ctx.lowerExpr(guard_expr);
                     body_lowered = try branch_ctx.builder.ifExpr(guard_cond, body_lowered, fallback, output_ty);
@@ -6543,7 +6640,77 @@ const BodyContext = struct {
         });
     }
 
-    fn lowerMatch(self: *BodyContext, match: anytype, output: MatchOutput) Allocator.Error!Ast.ExprData {
+    fn comptimeExhaustivenessFailedExpr(self: *BodyContext, ty: Type.TypeId, site: Ast.ComptimeSiteId) Allocator.Error!Ast.ExprId {
+        return try self.builder.program.addExpr(.{
+            .ty = ty,
+            .data = .{ .comptime_exhaustiveness_failed = site },
+        });
+    }
+
+    fn addComptimeSite(
+        self: *BodyContext,
+        kind: Ast.ComptimeSiteKind,
+        region: base.Region,
+        branch_regions: []const base.Region,
+    ) Allocator.Error!Ast.ComptimeSiteId {
+        return try self.builder.program.addComptimeSite(kind, region, branch_regions);
+    }
+
+    fn wrapComptimeBranch(
+        self: *BodyContext,
+        site: ?Ast.ComptimeSiteId,
+        branch_index: usize,
+        body: Ast.ExprId,
+    ) Allocator.Error!Ast.ExprId {
+        const actual_site = site orelse return body;
+        const ty = self.builder.program.exprs.items[@intFromEnum(body)].ty;
+        return try self.builder.program.addExpr(.{ .ty = ty, .data = .{ .comptime_branch_taken = .{
+            .site = actual_site,
+            .branch_index = @intCast(branch_index),
+            .body = body,
+        } } });
+    }
+
+    fn matchComptimeSite(self: *BodyContext, expr_id: checked.CheckedExprId, match: anytype) Allocator.Error!?Ast.ComptimeSiteId {
+        if (!self.inComptimeExhaustivenessContext()) return null;
+        if (match.skip_exhaustiveness) return null;
+        const branch_regions = try self.matchBranchRegions(match.branches);
+        defer self.allocator.free(branch_regions);
+        const expr = self.view.bodies.exprs[@intFromEnum(expr_id)];
+        return try self.addComptimeSite(.match, expr.source_region, branch_regions);
+    }
+
+    fn matchBranchRegions(self: *BodyContext, branches: []const checked.CheckedMatchBranch) Allocator.Error![]base.Region {
+        const regions = try self.allocator.alloc(base.Region, branchCount(branches));
+        var index: usize = 0;
+        for (branches) |branch| {
+            for (branch.patterns) |pattern| {
+                regions[index] = self.view.bodies.patterns[@intFromEnum(pattern.pattern)].source_region;
+                index += 1;
+            }
+        }
+        return regions;
+    }
+
+    fn ifComptimeSite(self: *BodyContext, expr_id: checked.CheckedExprId, if_: anytype) Allocator.Error!?Ast.ComptimeSiteId {
+        if (!self.inComptimeExhaustivenessContext()) return null;
+        if (!if_.warn_unused_branches) return null;
+        const branch_regions = try self.ifBranchRegions(if_);
+        defer self.allocator.free(branch_regions);
+        const expr = self.view.bodies.exprs[@intFromEnum(expr_id)];
+        return try self.addComptimeSite(.if_, expr.source_region, branch_regions);
+    }
+
+    fn ifBranchRegions(self: *BodyContext, if_: anytype) Allocator.Error![]base.Region {
+        const regions = try self.allocator.alloc(base.Region, if_.branches.len + 1);
+        for (if_.branches, 0..) |branch, index| {
+            regions[index] = self.view.bodies.exprs[@intFromEnum(branch.cond)].source_region;
+        }
+        regions[if_.branches.len] = self.view.bodies.exprs[@intFromEnum(if_.final_else)].source_region;
+        return regions;
+    }
+
+    fn lowerMatch(self: *BodyContext, match: anytype, output: MatchOutput, comptime_site: ?Ast.ComptimeSiteId) Allocator.Error!Ast.ExprData {
         const scrutinee_ty = try self.matchScrutineeType(match);
         const scrutinee = try self.lowerExprAtType(match.cond, scrutinee_ty);
         const branches = try self.allocator.alloc(Ast.Branch, branchCount(match.branches));
@@ -6562,7 +6729,11 @@ const BodyContext = struct {
                 try branch_ctx.applyAlternativeBinderRemaps(pattern.binder_remaps);
                 const user_guard = if (branch.guard) |guard_expr| try branch_ctx.lowerExpr(guard_expr) else null;
                 const guard = try branch_ctx.conjoinPatternLiteralGuards(user_guard);
-                const body = try branch_ctx.lowerMatchBranchBody(branch.value, output);
+                const body = try branch_ctx.wrapComptimeBranch(
+                    comptime_site,
+                    index,
+                    try branch_ctx.lowerMatchBranchBody(branch.value, output),
+                );
                 branches[index] = .{
                     .pat = pat,
                     .guard = guard,
@@ -6574,6 +6745,7 @@ const BodyContext = struct {
         return .{ .match_ = .{
             .scrutinee = scrutinee,
             .branches = try self.builder.program.addBranchSpan(branches),
+            .comptime_site = comptime_site,
         } };
     }
 
@@ -6680,20 +6852,21 @@ const BodyContext = struct {
         if_: anytype,
         result_ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprId {
+        const comptime_site = try self.ifComptimeSite(expr_id, if_);
         const merge_binders = try self.stateMergeBinders(expr_id);
         defer self.allocator.free(merge_binders);
 
         if (merge_binders.len == 0) {
             return try self.builder.program.addExpr(.{
                 .ty = result_ty,
-                .data = try self.lowerIf(if_, result_ty, result_ty, &.{}),
+                .data = try self.lowerIf(if_, result_ty, result_ty, &.{}, comptime_site),
             });
         }
 
         const state_ty = try self.stateResultType(merge_binders, result_ty);
         const state_expr = try self.builder.program.addExpr(.{
             .ty = state_ty,
-            .data = try self.lowerIf(if_, result_ty, state_ty, merge_binders),
+            .data = try self.lowerIf(if_, result_ty, state_ty, merge_binders, comptime_site),
         });
 
         const pattern_items = try self.allocator.alloc(Ast.PatId, merge_binders.len + 1);
@@ -6767,6 +6940,7 @@ const BodyContext = struct {
         result_ty: Type.TypeId,
         branch_ty: Type.TypeId,
         merge_binders: []const MergeBinder,
+        comptime_site: ?Ast.ComptimeSiteId,
     ) Allocator.Error!Ast.ExprData {
         const branches = try self.allocator.alloc(Ast.IfBranch, if_.branches.len);
         defer self.allocator.free(branches);
@@ -6776,14 +6950,22 @@ const BodyContext = struct {
             defer branch_ctx.deinit();
             branches[i] = .{
                 .cond = cond,
-                .body = try branch_ctx.lowerIfBranchBody(branch.body, result_ty, branch_ty, merge_binders),
+                .body = try branch_ctx.wrapComptimeBranch(
+                    comptime_site,
+                    i,
+                    try branch_ctx.lowerIfBranchBody(branch.body, result_ty, branch_ty, merge_binders),
+                ),
             };
         }
         var else_ctx = try self.childContext(self.current_fn_key);
         defer else_ctx.deinit();
         return .{ .if_ = .{
             .branches = try self.builder.program.addIfBranchSpan(branches),
-            .final_else = try else_ctx.lowerIfBranchBody(if_.final_else, result_ty, branch_ty, merge_binders),
+            .final_else = try else_ctx.wrapComptimeBranch(
+                comptime_site,
+                if_.branches.len,
+                try else_ctx.lowerIfBranchBody(if_.final_else, result_ty, branch_ty, merge_binders),
+            ),
         } };
     }
 
@@ -6804,6 +6986,7 @@ const BodyContext = struct {
         if_: anytype,
         state_ty: Type.TypeId,
         merge_binders: []const MergeBinder,
+        comptime_site: ?Ast.ComptimeSiteId,
     ) Allocator.Error!Ast.ExprData {
         const branches = try self.allocator.alloc(Ast.IfBranch, if_.branches.len);
         defer self.allocator.free(branches);
@@ -6813,14 +6996,22 @@ const BodyContext = struct {
             defer branch_ctx.deinit();
             branches[i] = .{
                 .cond = cond,
-                .body = try branch_ctx.lowerBodyThenStateOnly(branch.body, state_ty, merge_binders),
+                .body = try branch_ctx.wrapComptimeBranch(
+                    comptime_site,
+                    i,
+                    try branch_ctx.lowerBodyThenStateOnly(branch.body, state_ty, merge_binders),
+                ),
             };
         }
         var else_ctx = try self.childContext(self.current_fn_key);
         defer else_ctx.deinit();
         return .{ .if_ = .{
             .branches = try self.builder.program.addIfBranchSpan(branches),
-            .final_else = try else_ctx.lowerBodyThenStateOnly(if_.final_else, state_ty, merge_binders),
+            .final_else = try else_ctx.wrapComptimeBranch(
+                comptime_site,
+                if_.branches.len,
+                try else_ctx.lowerBodyThenStateOnly(if_.final_else, state_ty, merge_binders),
+            ),
         } };
     }
 
@@ -7053,7 +7244,11 @@ const BodyContext = struct {
         } }));
 
         const source_expr = try self.builder.localExpr(source_local, value_ty);
-        try self.appendRecordRestPatternStatements(source_expr, value_ty, destructs, lowered);
+        const comptime_site = if (self.inComptimeExhaustivenessContext() and self.patternCanMiss(pattern))
+            try self.addComptimeSite(.destructure, statement.source_region, &.{})
+        else
+            null;
+        try self.appendRecordRestPatternStatements(source_expr, value_ty, destructs, lowered, comptime_site);
         return true;
     }
 
@@ -7063,6 +7258,7 @@ const BodyContext = struct {
         value_ty: Type.TypeId,
         destructs: []const checked.CheckedRecordDestruct,
         lowered: *LoweredStatements,
+        comptime_site: ?Ast.ComptimeSiteId,
     ) Allocator.Error!void {
         for (destructs) |destruct| {
             switch (destruct.kind) {
@@ -7079,6 +7275,7 @@ const BodyContext = struct {
                     try lowered.append(self.allocator, try self.builder.program.addStmt(.{ .let_ = .{
                         .pat = try self.lowerPatternAtType(child, field_ty),
                         .value = field_value,
+                        .comptime_site = if (self.patternCanMiss(child)) comptime_site else null,
                     } }));
                 },
                 .rest => |child| {
@@ -7088,6 +7285,7 @@ const BodyContext = struct {
                     try lowered.append(self.allocator, try self.builder.program.addStmt(.{ .let_ = .{
                         .pat = try self.lowerPatternAtType(child, rest_ty),
                         .value = rest_value,
+                        .comptime_site = if (self.patternCanMiss(child)) comptime_site else null,
                     } }));
                 },
             }
@@ -8015,10 +8213,10 @@ const BodyContext = struct {
                     const unit_ty = try self.unitType();
                     break :blk .{ .expr = try self.builder.program.addExpr(.{ .ty = unit_ty, .data = .unit }) };
                 }
-                break :blk try self.lowerPatternStatement(decl.pattern, decl.expr);
+                break :blk try self.lowerPatternStatement(decl.pattern, decl.expr, statement.source_region);
             },
-            .var_ => |decl| try self.lowerPatternStatement(decl.pattern, decl.expr),
-            .reassign => |decl| try self.lowerPatternStatement(decl.pattern, decl.expr),
+            .var_ => |decl| try self.lowerPatternStatement(decl.pattern, decl.expr, statement.source_region),
+            .reassign => |decl| try self.lowerPatternStatement(decl.pattern, decl.expr, statement.source_region),
             .crash => |msg| .{ .crash = try self.lowerStringLiteral(msg) },
             .dbg => |child| .{ .dbg = try self.lowerDbgMessage(child) },
             .expr => |child| try self.lowerExprStatement(child),
@@ -8070,19 +8268,29 @@ const BodyContext = struct {
         self: *BodyContext,
         pattern: checked.CheckedPatternId,
         expr: checked.CheckedExprId,
+        source_region: base.Region,
     ) Allocator.Error!Ast.Stmt {
         const value = try self.lowerExpr(expr);
         const value_ty = self.builder.program.exprs.items[@intFromEnum(value)].ty;
+        const comptime_site = if (self.inComptimeExhaustivenessContext() and self.patternCanMiss(pattern))
+            try self.addComptimeSite(.destructure, source_region, &.{})
+        else
+            null;
         if (!self.patternNeedsExplicitBinding(pattern)) {
             return .{ .let_ = .{
                 .pat = try self.lowerPatternAtType(pattern, value_ty),
                 .value = value,
+                .comptime_site = comptime_site,
             } };
         }
 
         const unit_ty = try self.unitType();
-        const unit = try self.builder.program.addExpr(.{ .ty = unit_ty, .data = .unit });
-        const miss = try self.runtimeCrashExpr(unit_ty, "pattern match failed");
+        var unit = try self.builder.program.addExpr(.{ .ty = unit_ty, .data = .unit });
+        unit = try self.wrapComptimeBranch(comptime_site, 0, unit);
+        const miss = if (comptime_site) |site|
+            try self.comptimeExhaustivenessFailedExpr(unit_ty, site)
+        else
+            try self.runtimeCrashExpr(unit_ty, "pattern match failed");
         return .{ .expr = try self.lowerMaterializedPatternValueThen(
             pattern,
             value,
@@ -8122,12 +8330,12 @@ const BodyContext = struct {
         const state_expr = switch (checked_expr.data) {
             .if_ => |if_| try self.builder.program.addExpr(.{
                 .ty = state_ty,
-                .data = try self.lowerIfStateOnly(if_, state_ty, merge_binders),
+                .data = try self.lowerIfStateOnly(if_, state_ty, merge_binders, try self.ifComptimeSite(expr_id, if_)),
             }),
             .match_ => |match| try self.lowerMatchExprWithOutput(match, .{ .state_only = .{
                 .state_ty = state_ty,
                 .merge_binders = merge_binders,
-            } }),
+            } }, try self.matchComptimeSite(expr_id, match)),
             else => try self.lowerBodyThenStateOnly(expr_id, state_ty, merge_binders),
         };
         return .{ .let_ = .{

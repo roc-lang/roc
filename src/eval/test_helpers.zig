@@ -840,8 +840,12 @@ pub fn publishProgramForComptimeProblems(
         error.CompileTimeProblem => return .comptime_problems,
         else => return err,
     };
-    cleanupParseAndCanonical(allocator, resources);
-    return .no_problems;
+    defer cleanupParseAndCanonical(allocator, resources);
+
+    return if (resources.checker.problems.problems.items.len == 0)
+        .no_problems
+    else
+        .comptime_problems;
 }
 
 const PublishedRootMode = union(enum) {
@@ -856,7 +860,7 @@ const ComptimeProblemReporting = enum {
 
 fn problemBlocksCheckedArtifact(problem: check.problem.Problem) bool {
     return switch (problem) {
-        .redundant_pattern, .unmatchable_pattern => false,
+        .redundant_pattern, .unmatchable_pattern, .comptime_unused_branch => false,
         else => true,
     };
 }

@@ -625,6 +625,62 @@ const tag_payload_single =
     \\main = lookup([MyTag.Foo({x: 42, y: 7})], 0)
 ;
 
+const comptime_exhaustive_match_ok =
+    \\x : Try(Str, Str)
+    \\x = Ok("blah")
+    \\
+    \\main = match x {
+    \\    Ok(foo) => foo
+    \\}
+;
+
+const comptime_exhaustive_destructure_email =
+    \\Email := [Email(Str)].{
+    \\    parse : Str -> Try(Email, Str)
+    \\    parse = |raw| if raw == "" { Err("empty") } else { Ok(Email(raw)) }
+    \\
+    \\    to_str : Email -> Str
+    \\    to_str = |Email(raw)| raw
+    \\}
+    \\
+    \\main = {
+    \\    Ok(email) = Email.parse("alice@example.com")
+    \\
+    \\    Email.to_str(email)
+    \\}
+;
+
+const comptime_non_exhaustive_match =
+    \\x : Try(Str, Str)
+    \\x = Err("bad")
+    \\
+    \\main = match x {
+    \\    Ok(foo) => foo
+    \\}
+;
+
+const comptime_non_exhaustive_destructure =
+    \\main = {
+    \\    x : Try(Str, Str)
+    \\    x = Err("bad")
+    \\
+    \\    Ok(foo) = x
+    \\
+    \\    foo
+    \\}
+;
+
+const comptime_unused_match_alternative =
+    \\main = match True {
+    \\    True => "yes"
+    \\    False => "no"
+    \\}
+;
+
+const comptime_unused_if_branch =
+    \\main = if True { 42 } else { 0 }
+;
+
 const opaque_function_field =
     \\W(a) := { f : {} -> [V(a)] }.{
     \\    run : W(a) -> [V(a)]
@@ -822,6 +878,12 @@ pub const tests = [_]TestCase{
     .{ .name = "issue 8979: while (False) should not crash", .source_kind = .module, .source = while_false, .expected = .{ .inspect_str = "42.0" } },
     .{ .name = "issue 8979: nested while - inner break does not save outer loop", .source = crash_now, .expected = .{ .crash = {} } },
     .{ .name = "tag union matching with payload inside function - single module", .source_kind = .module, .source = tag_payload_single, .expected = .{ .inspect_str = "42" } },
+    .{ .name = "comptime exhaustiveness - match succeeds empirically", .source_kind = .module, .source = comptime_exhaustive_match_ok, .expected = .{ .inspect_str = "\"blah\"" } },
+    .{ .name = "comptime exhaustiveness - Email.parse destructure succeeds empirically", .source_kind = .module, .source = comptime_exhaustive_destructure_email, .expected = .{ .inspect_str = "\"alice@example.com\"" } },
+    .{ .name = "comptime exhaustiveness - match failure is reported empirically", .source_kind = .module, .source = comptime_non_exhaustive_match, .expected = .{ .problem = {} } },
+    .{ .name = "comptime exhaustiveness - destructure failure is reported empirically", .source_kind = .module, .source = comptime_non_exhaustive_destructure, .expected = .{ .problem = {} } },
+    .{ .name = "comptime exhaustiveness - unused match alternative is reported", .source_kind = .module, .source = comptime_unused_match_alternative, .expected = .{ .problem = {} } },
+    .{ .name = "comptime exhaustiveness - unused if branch is reported", .source_kind = .module, .source = comptime_unused_if_branch, .expected = .{ .problem = {} } },
     .{
         .name = "tag union matching with payload inside function - cross module",
         .source_kind = .module,
