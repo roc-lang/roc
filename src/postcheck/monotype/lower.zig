@@ -3249,6 +3249,10 @@ const BodyContext = struct {
         ret_ty: Type.TypeId,
     ) Allocator.Error!LoweredLambdaArgs {
         if (arg_tys.len != checked_args.len) Common.invariant("lambda arity differs from concrete function type");
+        const saved_loc = self.builder.program.current_loc;
+        defer self.builder.program.current_loc = saved_loc;
+        const body_expr = self.view.bodies.exprs[@intFromEnum(checked_body)];
+        self.builder.program.current_loc = try self.sourceLocFor(body_expr.source_region);
 
         const saved_comptime_depth = self.resetComptimeExhaustivenessDepth();
         defer self.restoreComptimeExhaustivenessDepth(saved_comptime_depth);
@@ -3291,8 +3295,8 @@ const BodyContext = struct {
             .body = checked_body,
         } }, ret_ty);
         const body_loc = self.builder.program.exprLoc(body);
-        const saved_loc = self.builder.program.current_loc;
-        defer self.builder.program.current_loc = saved_loc;
+        const saved_body_loc = self.builder.program.current_loc;
+        defer self.builder.program.current_loc = saved_body_loc;
         self.builder.program.current_loc = body_loc;
         var remaining = arg_lets.items.len;
         while (remaining > 0) {

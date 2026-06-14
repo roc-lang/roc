@@ -205,6 +205,7 @@
 
 const std = @import("std");
 
+const SourceLoc = @import("base").SourceLoc;
 const Common = @import("../common.zig");
 const Ast = @import("ast.zig");
 const Mono = @import("../monotype/ast.zig");
@@ -1182,6 +1183,7 @@ const Cloner = struct {
     loop_stack: std.ArrayList(LoopPattern),
     inline_direct_calls: bool,
     inline_direct_requires_known_arg: bool,
+    current_loc: SourceLoc,
 
     fn init(pass: *Pass, source_fn: Ast.FnId, pattern: CallPattern) Cloner {
         return .{
@@ -1196,6 +1198,7 @@ const Cloner = struct {
             .loop_stack = .empty,
             .inline_direct_calls = true,
             .inline_direct_requires_known_arg = true,
+            .current_loc = SourceLoc.none,
         };
     }
 
@@ -1212,6 +1215,7 @@ const Cloner = struct {
             .loop_stack = .empty,
             .inline_direct_calls = true,
             .inline_direct_requires_known_arg = false,
+            .current_loc = SourceLoc.none,
         };
     }
 
@@ -1228,6 +1232,12 @@ const Cloner = struct {
         const source_fn = self.pass.program.fns.items[@intFromEnum(self.source_fn)];
         const source_args = self.pass.program.typedLocalSpan(source_fn.args);
         if (source_args.len != self.pattern.args.len) Common.invariant("call-pattern argument count differed from source function arity");
+        const saved_loc = self.current_loc;
+        defer self.current_loc = saved_loc;
+        self.current_loc = switch (source_fn.body) {
+            .roc => |body| self.pass.program.exprLoc(body),
+            .hosted => SourceLoc.none,
+        };
 
         var args = std.ArrayList(Ast.TypedLocal).empty;
         defer args.deinit(self.pass.allocator);
@@ -1245,7 +1255,7 @@ const Cloner = struct {
             .any => |ty| {
                 const local = try self.pass.program.addLocal(self.pass.symbols.fresh(), ty);
                 try args.append(self.pass.allocator, .{ .local = local, .ty = ty });
-                return .{ .expr = try self.pass.program.addExpr(.{
+                return .{ .expr = try self.addExpr(.{
                     .ty = ty,
                     .data = .{ .local = local },
                 }) };
@@ -1307,13 +1317,16 @@ const Cloner = struct {
     }
 
     fn cloneExpr(self: *Cloner, expr_id: Ast.ExprId) Common.LowerError!Ast.ExprId {
+        const saved_loc = self.current_loc;
+        defer self.current_loc = saved_loc;
+        self.current_loc = self.pass.program.exprLoc(expr_id);
         return try self.materialize(try self.cloneExprValue(expr_id));
     }
 
     fn cloneExprValue(self: *Cloner, expr_id: Ast.ExprId) Common.LowerError!Value {
-        const saved_loc = self.pass.program.current_loc;
-        defer self.pass.program.current_loc = saved_loc;
-        self.pass.program.current_loc = self.pass.program.exprLoc(expr_id);
+        const saved_loc = self.current_loc;
+        defer self.current_loc = saved_loc;
+        self.current_loc = self.pass.program.exprLoc(expr_id);
 
         const expr = self.pass.program.exprs.items[@intFromEnum(expr_id)];
         switch (expr.data) {
@@ -1531,9 +1544,9 @@ const Cloner = struct {
     }
 
     fn cloneExprPlain(self: *Cloner, expr_id: Ast.ExprId) Common.LowerError!Ast.ExprId {
-        const saved_loc = self.pass.program.current_loc;
-        defer self.pass.program.current_loc = saved_loc;
-        self.pass.program.current_loc = self.pass.program.exprLoc(expr_id);
+        const saved_loc = self.current_loc;
+        defer self.current_loc = saved_loc;
+        self.current_loc = self.pass.program.exprLoc(expr_id);
 
         const expr = self.pass.program.exprs.items[@intFromEnum(expr_id)];
         const data: Ast.ExprData = switch (expr.data) {
@@ -2604,12 +2617,12 @@ const Cloner = struct {
     }
 
     fn cloneStmt(self: *Cloner, stmt_id: Ast.StmtId) Common.LowerError!Ast.StmtId {
-        const saved_loc = self.pass.program.current_loc;
-        defer self.pass.program.current_loc = saved_loc;
-        self.pass.program.current_loc = self.pass.program.stmtLoc(stmt_id);
+        const saved_loc = self.current_loc;
+        defer self.current_loc = saved_loc;
+        self.current_loc = self.pass.program.stmtLoc(stmt_id);
 
         const stmt = self.pass.program.stmts.items[@intFromEnum(stmt_id)];
-        return try self.pass.program.addStmt(switch (stmt) {
+        return try self.addStmt(switch (stmt) {
             .let_ => |let_| blk: {
                 const value = try self.cloneExprValue(let_.value);
                 const value_expr = try self.materialize(value);
@@ -2869,14 +2882,14 @@ const Cloner = struct {
         defer self.restore(change_start);
 
         for (source_captures, captures) |source_capture, capture| {
-            const local_expr = try self.pass.program.addExpr(.{
+            const local_expr = try self.addExpr(.{
                 .ty = capture.ty,
                 .data = .{ .local = capture.local },
             });
             try self.putSubst(source_capture.local, .{ .expr = local_expr });
         }
         for (source_args, args) |source_arg, arg| {
-            const arg_expr = try self.pass.program.addExpr(.{
+            const arg_expr = try self.addExpr(.{
                 .ty = arg.ty,
                 .data = .{ .local = arg.local },
             });
@@ -2994,7 +3007,17 @@ const Cloner = struct {
     }
 
     fn addExpr(self: *Cloner, expr: Ast.Expr) Allocator.Error!Ast.ExprId {
+        const saved_loc = self.pass.program.current_loc;
+        defer self.pass.program.current_loc = saved_loc;
+        self.pass.program.current_loc = self.current_loc;
         return try self.pass.program.addExpr(expr);
+    }
+
+    fn addStmt(self: *Cloner, stmt: Ast.Stmt) Allocator.Error!Ast.StmtId {
+        const saved_loc = self.pass.program.current_loc;
+        defer self.pass.program.current_loc = saved_loc;
+        self.pass.program.current_loc = self.current_loc;
+        return try self.pass.program.addStmt(stmt);
     }
 };
 
