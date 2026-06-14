@@ -103,7 +103,7 @@ pub const RuntimeSchemaRequest = Mono.RuntimeSchemaRequest;
 pub fn callProcCallee(call: Mono.CallProc) FnId {
     return switch (call.callee) {
         .lifted => |fn_id| fn_id,
-        .template => Common.invariant("Monotype Lifted direct call still referenced a Monotype function template"),
+        .func => Common.invariant("Monotype Lifted direct call still referenced a Monotype function id"),
     };
 }
 
@@ -408,7 +408,7 @@ pub const Program = struct {
         };
         const callee = switch (call.callee) {
             .lifted => |fn_id| fn_id,
-            .template => return null,
+            .func => return null,
         };
         const callee_body = switch (self.fns.items[@intFromEnum(callee)].body) {
             .roc => |body| body,

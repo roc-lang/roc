@@ -1486,7 +1486,7 @@ pub const PackageEnv = struct {
             else => return null,
         }
         const type_ident_in_module = sibling_env.common.findIdent(sibling_name) orelse return null;
-        const type_node_idx = sibling_env.getExposedNodeIndexById(type_ident_in_module) orelse return null;
+        const type_node_idx = sibling_env.getExposedTypeNodeIndexById(type_ident_in_module) orelse return null;
         return @enumFromInt(type_node_idx);
     }
 
@@ -1607,7 +1607,7 @@ pub const PackageEnv = struct {
             const statement_idx: ?can.CIR.Statement.Idx = stmt_blk: {
                 // Look up the type in the module's exposed_items to get the actual node index
                 const type_ident_in_module = actual_env.common.findIdent(base_module_name) orelse break :stmt_blk null;
-                const type_node_idx = actual_env.getExposedNodeIndexById(type_ident_in_module) orelse break :stmt_blk null;
+                const type_node_idx = actual_env.getExposedTypeNodeIndexById(type_ident_in_module) orelse break :stmt_blk null;
                 break :stmt_blk @enumFromInt(type_node_idx);
             };
 

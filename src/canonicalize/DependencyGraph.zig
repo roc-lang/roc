@@ -193,6 +193,12 @@ fn collectExprDependencies(
                 }
                 try pending.append(stack_allocator, call.receiver);
             },
+            .e_interpolation => |interpolation| {
+                for (cir.store.sliceExpr(interpolation.parts)) |part_idx| {
+                    try pending.append(stack_allocator, part_idx);
+                }
+                try pending.append(stack_allocator, interpolation.first);
+            },
             .e_structural_eq => |eq| {
                 try pending.append(stack_allocator, eq.rhs);
                 try pending.append(stack_allocator, eq.lhs);

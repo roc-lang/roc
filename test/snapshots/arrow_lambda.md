@@ -90,7 +90,7 @@ NO CHANGE
 			(e-num (value "10"))))
 	(d-let
 		(p-assign (ident "test2"))
-		(e-call (constraint-fn-var 134)
+		(e-call (constraint-fn-var 128)
 			(e-lambda
 				(args
 					(p-underscore))
@@ -100,14 +100,14 @@ NO CHANGE
 				(e-literal (string "hello")))))
 	(d-let
 		(p-assign (ident "test3"))
-		(e-call (constraint-fn-var 188)
+		(e-call (constraint-fn-var 173)
 			(e-lambda
 				(args
 					(p-assign (ident "s")))
 				(e-if
 					(if-branches
 						(if-branch
-							(e-dispatch-call (method "is_empty") (constraint-fn-var 135)
+							(e-dispatch-call (method "is_empty") (constraint-fn-var 129)
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "s"))))

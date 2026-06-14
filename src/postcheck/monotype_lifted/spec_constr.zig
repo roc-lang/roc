@@ -442,7 +442,7 @@ const Pass = struct {
                 spec.fn_id = fn_id;
                 try self.program.fns.append(self.allocator, .{
                     .symbol = symbol,
-                    .source = null,
+                    .source = source_fn.source,
                     .args = .empty(),
                     .captures = source_fn.captures,
                     .body = .hosted,
@@ -754,7 +754,7 @@ const Pass = struct {
         });
         try self.program.fns.append(self.allocator, .{
             .symbol = symbol,
-            .source = null,
+            .source = source_fn.source,
             .args = .empty(),
             .captures = source_fn.captures,
             .body = .hosted,
@@ -787,7 +787,7 @@ const Pass = struct {
 
         self.program.fns.items[@intFromEnum(spec_fn_id)] = .{
             .symbol = symbol,
-            .source = null,
+            .source = source_fn.source,
             .args = args,
             .captures = source_fn.captures,
             .body = body,
@@ -1311,6 +1311,10 @@ const Cloner = struct {
     }
 
     fn cloneExprValue(self: *Cloner, expr_id: Ast.ExprId) Common.LowerError!Value {
+        const saved_loc = self.pass.program.current_loc;
+        defer self.pass.program.current_loc = saved_loc;
+        self.pass.program.current_loc = self.pass.program.exprLoc(expr_id);
+
         const expr = self.pass.program.exprs.items[@intFromEnum(expr_id)];
         switch (expr.data) {
             .local => |local| {
@@ -1527,6 +1531,10 @@ const Cloner = struct {
     }
 
     fn cloneExprPlain(self: *Cloner, expr_id: Ast.ExprId) Common.LowerError!Ast.ExprId {
+        const saved_loc = self.pass.program.current_loc;
+        defer self.pass.program.current_loc = saved_loc;
+        self.pass.program.current_loc = self.pass.program.exprLoc(expr_id);
+
         const expr = self.pass.program.exprs.items[@intFromEnum(expr_id)];
         const data: Ast.ExprData = switch (expr.data) {
             .local => |local| .{ .local = local },
@@ -2596,6 +2604,10 @@ const Cloner = struct {
     }
 
     fn cloneStmt(self: *Cloner, stmt_id: Ast.StmtId) Common.LowerError!Ast.StmtId {
+        const saved_loc = self.pass.program.current_loc;
+        defer self.pass.program.current_loc = saved_loc;
+        self.pass.program.current_loc = self.pass.program.stmtLoc(stmt_id);
+
         const stmt = self.pass.program.stmts.items[@intFromEnum(stmt_id)];
         return try self.pass.program.addStmt(switch (stmt) {
             .let_ => |let_| blk: {

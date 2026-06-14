@@ -121,12 +121,12 @@ main = {
 						(e-lookup-local
 							(p-assign (ident "a")))
 						(e-num (value "1")))
-					(e-call (constraint-fn-var 86)
+					(e-call (constraint-fn-var 83)
 						(e-lookup-local
 							(p-assign (ident "a")))
 						(e-string
 							(e-literal (string "x"))))
-					(e-call (constraint-fn-var 117)
+					(e-call (constraint-fn-var 114)
 						(e-lookup-local
 							(p-assign (ident "b")))
 						(e-num (value "2"))))))))

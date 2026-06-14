@@ -47,6 +47,7 @@ const DispatcherNotNominal = problem_mod.DispatcherNotNominal;
 const DispatcherDoesNotImplMethod = problem_mod.DispatcherDoesNotImplMethod;
 const TypeDoesNotSupportEquality = problem_mod.TypeDoesNotSupportEquality;
 const UnresolvedDispatcher = problem_mod.UnresolvedDispatcher;
+const RecursiveDispatch = problem_mod.RecursiveDispatch;
 
 // Match/exhaustiveness errors
 const NonExhaustiveMatch = problem_mod.NonExhaustiveMatch;
@@ -782,6 +783,7 @@ pub const ReportBuilder = struct {
                     .dispatcher_does_not_impl_method => |data| return self.buildStaticDispatchDispatcherDoesNotImplMethod(data),
                     .type_does_not_support_equality => |data| return self.buildTypeDoesNotSupportEquality(data),
                     .unresolved_dispatcher => |data| return self.buildStaticDispatchUnresolvedDispatcher(data),
+                    .recursive_dispatch => |data| return self.buildStaticDispatchRecursiveDispatch(data),
                 }
             },
             .recursive_alias => |data| {
@@ -2089,6 +2091,54 @@ pub const ReportBuilder = struct {
         try D.renderSlice(&.{
             D.bytes("Hint:").withAnnotation(.emphasized),
             D.bytes("You can replace this static dispatch call with an ordinary function call, or force the type variable to become more concrete—for example, by adding a type annotation that narrows its type to something that actually has methods."),
+        }, self, &report);
+
+        return report;
+    }
+
+    /// Build a report for an unproductive static-dispatch cycle.
+    fn buildStaticDispatchRecursiveDispatch(
+        self: *Self,
+        data: RecursiveDispatch,
+    ) Allocator.Error!Report {
+        var report = Report.init(self.gpa, "RECURSIVE DISPATCH", .runtime_error);
+        errdefer report.deinit();
+
+        const snapshot_str = try report.addOwnedString(self.getFormattedString(data.dispatcher_snapshot));
+
+        try D.renderSlice(&.{
+            D.bytes("This"),
+            D.ident(data.method_name).withAnnotation(.emphasized),
+            D.bytes("dispatch would have to call itself to satisfy its own type:"),
+        }, self, &report);
+        try report.document.addLineBreak();
+
+        if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.fn_var)))) |region| {
+            const region_info = self.module_env.calcRegionInfo(region.*);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                self.filename,
+                self.source,
+                self.module_env.getLineStarts(),
+            );
+            try report.document.addLineBreak();
+        }
+
+        try D.renderSlice(&.{
+            D.bytes("The dispatcher type is:"),
+        }, self, &report);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(snapshot_str);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        try D.renderSlice(&.{
+            D.bytes("Hint:").withAnnotation(.emphasized),
+            D.bytes("Use a more specific result type, or add an associated function whose"),
+            D.ident(data.method_name).withAnnotation(.emphasized),
+            D.bytes("implementation does not require the same dispatch on the same type."),
         }, self, &report);
 
         return report;

@@ -387,7 +387,7 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// Count of the diagnostic nodes in the ModuleEnv
 pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 77;
 /// Count of the expression nodes in the ModuleEnv
-pub const MODULEENV_EXPR_NODE_COUNT = 52;
+pub const MODULEENV_EXPR_NODE_COUNT = 53;
 /// Count of the statement nodes in the ModuleEnv
 pub const MODULEENV_STATEMENT_NODE_COUNT = 17;
 /// Count of the type annotation nodes in the ModuleEnv
@@ -1090,6 +1090,27 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 .constraint_fn_var = @enumFromInt(p.constraint_fn_var),
             } };
         },
+        .expr_interpolation => {
+            const p = payload.expr_interpolation;
+            const region_span = store.span2_data.items.items[p.method_name_region_span2_idx];
+            const parts_rest = store.span_with_node_data.items.items[p.parts_rest_idx];
+            return CIR.Expr{ .e_interpolation = .{
+                .first = @enumFromInt(p.first),
+                .parts = .{ .span = .{
+                    .start = parts_rest.start,
+                    .len = parts_rest.len,
+                } },
+                .rest = @enumFromInt(parts_rest.node),
+                .method_name_region = base.Region{
+                    .start = .{ .offset = region_span.start },
+                    .end = .{ .offset = region_span.len },
+                },
+                .constraint_fn_var = if (p.constraint_fn_var_plus_one == 0)
+                    null
+                else
+                    @enumFromInt(p.constraint_fn_var_plus_one - 1),
+            } };
+        },
         .expr_structural_eq => {
             const p = payload.expr_structural_eq;
             return CIR.Expr{ .e_structural_eq = .{
@@ -1281,6 +1302,38 @@ pub fn replaceExprWithDispatchCall(
         .method_name = @bitCast(method_name),
         .method_call_data_idx = method_call_data_idx,
         .constraint_fn_var = @intFromEnum(constraint_fn_var),
+    } });
+    store.nodes.set(node_idx, node);
+}
+
+/// Replaces an existing expression with checked interpolation dispatch metadata.
+pub fn replaceExprWithInterpolationConstraint(
+    store: *NodeStore,
+    expr_idx: CIR.Expr.Idx,
+    first: CIR.Expr.Idx,
+    parts: CIR.Expr.Span,
+    rest: CIR.Expr.Idx,
+    method_name_region: Region,
+    constraint_fn_var: types.Var,
+) Allocator.Error!void {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+    const parts_rest_idx: u32 = @intCast(store.span_with_node_data.len());
+    _ = try store.span_with_node_data.append(store.gpa, .{
+        .start = parts.span.start,
+        .len = parts.span.len,
+        .node = @intFromEnum(rest),
+    });
+    const region_span2_idx: u32 = @intCast(store.span2_data.len());
+    _ = try store.span2_data.append(store.gpa, .{
+        .start = method_name_region.start.offset,
+        .len = method_name_region.end.offset,
+    });
+    var node = Node.init(.expr_interpolation);
+    node.setPayload(.{ .expr_interpolation = .{
+        .first = @intFromEnum(first),
+        .parts_rest_idx = parts_rest_idx,
+        .method_name_region_span2_idx = region_span2_idx,
+        .constraint_fn_var_plus_one = @intFromEnum(constraint_fn_var) + 1,
     } });
     store.nodes.set(node_idx, node);
 }
@@ -2273,6 +2326,29 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
                 .method_name = @bitCast(e.method_name),
                 .method_call_data_idx = method_call_data_idx,
                 .constraint_fn_var = @intFromEnum(e.constraint_fn_var),
+            } });
+        },
+        .e_interpolation => |e| {
+            node.tag = .expr_interpolation;
+            const parts_rest_idx: u32 = @intCast(store.span_with_node_data.len());
+            _ = try store.span_with_node_data.append(store.gpa, .{
+                .start = e.parts.span.start,
+                .len = e.parts.span.len,
+                .node = @intFromEnum(e.rest),
+            });
+            const region_span2_idx: u32 = @intCast(store.span2_data.len());
+            _ = try store.span2_data.append(store.gpa, .{
+                .start = e.method_name_region.start.offset,
+                .len = e.method_name_region.end.offset,
+            });
+            node.setPayload(.{ .expr_interpolation = .{
+                .first = @intFromEnum(e.first),
+                .parts_rest_idx = parts_rest_idx,
+                .method_name_region_span2_idx = region_span2_idx,
+                .constraint_fn_var_plus_one = if (e.constraint_fn_var) |var_|
+                    @intFromEnum(var_) + 1
+                else
+                    0,
             } });
         },
         .e_structural_eq => |e| {

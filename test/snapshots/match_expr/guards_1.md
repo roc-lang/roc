@@ -105,31 +105,20 @@ describe = |value| match value {
 								(e-block
 									(s-let
 										(p-assign (ident "#interp_0"))
-										(e-dispatch-call (method "to_str") (constraint-fn-var 204)
+										(e-dispatch-call (method "to_str") (constraint-fn-var 200)
 											(receiver
 												(e-lookup-local
 													(p-assign (ident "x"))))
 											(args)))
-									(e-dispatch-call (method "from_interpolation") (constraint-fn-var 345)
-										(receiver
-											(e-string
-												(e-literal (string "positive: "))))
-										(args
-											(e-dispatch-call (method "prepended") (constraint-fn-var 303)
-												(receiver
-													(e-dispatch-call (method "iter") (constraint-fn-var 239)
-														(receiver
-															(e-empty_list))
-														(args)))
-												(args
-													(e-tuple
-														(elems
-															(e-lookup-local
-																(p-assign (ident "#interp_0")))
-															(e-string
-																(e-literal (string "")))))))))))
+									(e-interpolation (constraint-fn-var 222)
+										(first
+											(e-literal (string "positive: ")))
+										(parts
+											(e-lookup-local
+												(p-assign (ident "#interp_0")))
+											(e-literal (string ""))))))
 							(guard
-								(e-dispatch-call (method "is_gt") (constraint-fn-var 113)
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 109)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "x"))))
@@ -143,31 +132,20 @@ describe = |value| match value {
 								(e-block
 									(s-let
 										(p-assign (ident "#interp_1"))
-										(e-dispatch-call (method "to_str") (constraint-fn-var 469)
+										(e-dispatch-call (method "to_str") (constraint-fn-var 346)
 											(receiver
 												(e-lookup-local
 													(p-assign (ident "x"))))
 											(args)))
-									(e-dispatch-call (method "from_interpolation") (constraint-fn-var 610)
-										(receiver
-											(e-string
-												(e-literal (string "negative: "))))
-										(args
-											(e-dispatch-call (method "prepended") (constraint-fn-var 568)
-												(receiver
-													(e-dispatch-call (method "iter") (constraint-fn-var 504)
-														(receiver
-															(e-empty_list))
-														(args)))
-												(args
-													(e-tuple
-														(elems
-															(e-lookup-local
-																(p-assign (ident "#interp_1")))
-															(e-string
-																(e-literal (string "")))))))))))
+									(e-interpolation (constraint-fn-var 368)
+										(first
+											(e-literal (string "negative: ")))
+										(parts
+											(e-lookup-local
+												(p-assign (ident "#interp_1")))
+											(e-literal (string ""))))))
 							(guard
-								(e-dispatch-call (method "is_lt") (constraint-fn-var 380)
+								(e-dispatch-call (method "is_lt") (constraint-fn-var 257)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "x"))))
