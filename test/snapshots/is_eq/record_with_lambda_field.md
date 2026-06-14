@@ -23,8 +23,8 @@ The type is:
 
     { age: a, name: b, process: c -> c }
       where [
-        a.from_quote : List(U8) -> Try(a, [BadQuotedBytes(Str)]),
-        b.from_quote : List(U8) -> Try(b, [BadQuotedBytes(Str)]),
+        a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)]),
+        b.from_quote : Str -> Try(b, [BadQuotedBytes(Str)]),
       ]
 
 This record does not support equality because these fields have types that don't support **is_eq**:

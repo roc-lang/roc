@@ -12425,25 +12425,24 @@ fn processEscapeSequences(allocator: std.mem.Allocator, input: []const u8) std.m
     return result.toOwnedSlice(allocator);
 }
 
-/// Helper function to create a string literal expression and add it to the scratch stack
-/// Desugar an interpolated string literal into ordinary CIR:
+/// Canonicalize an interpolated string literal.
 ///
 /// ```roc
 /// "a${x}b${y}c"
 /// ```
-/// becomes
+/// becomes a block which evaluates interpolated expressions in source order and
+/// finishes with a result-owned interpolation dispatch:
 /// ```roc
 /// {
 ///     #interp_0 = x
 ///     #interp_1 = y
-///     "a".from_interpolation([].iter().prepended((#interp_1, "c")).prepended((#interp_0, "b")))
+///     <interpolation first="a" rest=[].iter().prepended((#interp_1, "c")).prepended((#interp_0, "b"))>
 /// }
 /// ```
 /// The interpolated expressions bind to locals first so they evaluate in
 /// source order; the iterator yields each interpolated value paired with the
-/// literal segment that follows it. Every literal segment stays a real string
-/// literal expression, so each converts through `from_quote` like any other,
-/// and the receiver's type suffix (when present) pins the target type.
+/// literal `Str` segment that follows it. With a type suffix, the final
+/// expression is a direct call to `Suffix.from_interpolation(first, rest)`.
 fn desugarInterpolatedString(
     self: *Self,
     span: CIR.Expr.Span,
@@ -12508,7 +12507,8 @@ fn desugarInterpolatedString(
     }
     const stmts_span = try self.env.store.statementSpanFrom(stmts_top);
 
-    // Wrap each literal segment in its own string expression.
+    // Interpolation segments are always builtin Str, so keep them as raw
+    // string-segment expressions instead of wrapping them in quote literals.
     const seg_exprs = try gpa.alloc(Expr.Idx, segments.items.len);
     defer gpa.free(seg_exprs);
     for (segments.items, 0..) |maybe_segment, i| {
@@ -12518,18 +12518,7 @@ fn desugarInterpolatedString(
                 .literal = empty_literal,
             } }, region);
         };
-        const seg_region = self.env.store.getNodeRegion(ModuleEnv.nodeIdxFrom(segment_idx));
-        const seg_scratch_top = self.env.store.scratchExprTop();
-        try self.env.store.addScratchExpr(segment_idx);
-        const seg_span = try self.env.store.exprSpanFrom(seg_scratch_top);
-        seg_exprs[i] = try self.env.addExpr(CIR.Expr{ .e_str = .{
-            .span = seg_span,
-        } }, seg_region);
-    }
-
-    // The receiver's type suffix (e.g. `"a${x}b".MyType`) pins the target type.
-    if (type_ident) |suffix_ident| {
-        try self.recordTypedNumericSuffix(seg_exprs[0], suffix_ident);
+        seg_exprs[i] = segment_idx;
     }
 
     const iter_method = try self.env.insertIdent(Ident.for_text("iter"));
@@ -12539,6 +12528,8 @@ fn desugarInterpolatedString(
     // [].iter()
     const empty_list_idx = try self.env.addExpr(CIR.Expr{ .e_empty_list = .{} }, region);
     var chain_idx = try self.addSyntheticMethodCall(empty_list_idx, iter_method, &.{}, region);
+    const part_exprs = try gpa.alloc(Expr.Idx, interps.items.len * 2);
+    defer gpa.free(part_exprs);
 
     // Prepend (interpolation, following-segment) pairs back to front so the
     // iterator yields them in source order.
@@ -12549,6 +12540,8 @@ fn desugarInterpolatedString(
         const tmp_lookup_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{
             .pattern_idx = tmp_patterns[pair_i],
         } }, interp_region);
+        part_exprs[pair_i * 2] = tmp_lookup_idx;
+        part_exprs[pair_i * 2 + 1] = seg_exprs[pair_i + 1];
         const elems_top = self.env.store.scratchExprTop();
         try self.env.store.addScratchExpr(tmp_lookup_idx);
         try self.env.store.addScratchExpr(seg_exprs[pair_i + 1]);
@@ -12558,13 +12551,35 @@ fn desugarInterpolatedString(
         } }, interp_region);
         chain_idx = try self.addSyntheticMethodCall(chain_idx, prepended_method, &.{pair_idx}, interp_region);
     }
+    const parts_span = try self.env.store.appendExprSpan(part_exprs);
 
-    const call_idx = try self.addSyntheticMethodCall(seg_exprs[0], from_interpolation_method, &.{chain_idx}, region);
-    try self.env.recordInterpolationCallNode(ModuleEnv.nodeIdxFrom(call_idx));
+    const final_idx = if (type_ident) |suffix_ident| suffix_blk: {
+        const fn_expr = try self.canonicalizeTypeAssociatedLookup(suffix_ident, from_interpolation_method, region) orelse
+            try self.canonicalizedMalformedExpr(Diagnostic{ .undeclared_type = .{
+                .name = suffix_ident,
+                .region = region,
+            } });
+
+        const args_top = self.env.store.scratchExprTop();
+        try self.env.store.addScratchExpr(seg_exprs[0]);
+        try self.env.store.addScratchExpr(chain_idx);
+        const args_span = try self.env.store.exprSpanFrom(args_top);
+
+        break :suffix_blk try self.env.addExpr(CIR.Expr{ .e_call = .{
+            .func = fn_expr.idx,
+            .args = args_span,
+            .called_via = CalledVia.apply,
+        } }, region);
+    } else try self.env.addExpr(CIR.Expr{ .e_interpolation = .{
+        .first = seg_exprs[0],
+        .parts = parts_span,
+        .rest = chain_idx,
+        .method_name_region = region,
+    } }, region);
 
     return try self.env.addExpr(CIR.Expr{ .e_block = .{
         .stmts = stmts_span,
-        .final_expr = call_idx,
+        .final_expr = final_idx,
     } }, region);
 }
 

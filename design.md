@@ -872,8 +872,8 @@ concrete monomorphic dispatcher type has already determined the owner.
 
 A numeric literal whose target type is a non-builtin nominal type converts
 through that type's `from_numeral` method, and a string literal converts
-through `from_quote` (receiving the literal's post-escape UTF-8 bytes as
-`List(U8)`). Every such conversion with a concrete target type is a
+through `from_quote` (receiving the literal's post-escape contents as `Str`).
+Every such conversion with a concrete target type is a
 compile-time root (`numeral_conversion` / `quote_conversion`), no matter
 where the literal sits in the AST: checking finalization evaluates the raw
 dispatch call, stores its `Try` result through `ConstStore`, unwraps `Ok` into
@@ -901,20 +901,53 @@ encoding.
 
 ### String Interpolation
 
-An interpolated string literal is canonicalization sugar. It desugars into
-ordinary CIR: the interpolated expressions bind to locals in source order,
-each literal segment stays a real string literal (so each converts through
-`from_quote`), and the result is
-`seg0.from_interpolation([].iter().prepended((interp_n, seg_n+1))...)` — the
-iterator yields each interpolated value paired with the literal segment that
-follows it. `from_interpolation : val, Iter((interpolated, val)) -> val` is an
-ordinary method: each implementing type chooses its `interpolated` type (`Str`
-chooses `Str`; a `Url`-style type can interpolate `Str` rather than itself),
-and a type that needs to validate assembled values simply does not implement
-it. The synthesized call node is recorded so checking unifies the call result
-with the receiver, pinning the literal's target type from the use site before
-string defaulting runs. No post-canonicalization stage knows interpolation
-exists.
+An interpolated string literal is its own CIR expression. It is not
+desugared as receiver method-call syntax, because interpolation method
+selection is owned by the expression result type, not by the first literal
+segment. The interpolated expressions bind to locals in source order. Literal
+segments are always builtin `Str` values, and the interpolation expression
+passes the first segment plus an `Iter((interpolated, Str))` of the remaining
+interpolated values paired with the literal segment that follows each one.
+
+For an unsuffixed interpolation, checking gives the expression this type:
+
+```roc
+val where [
+    val.from_interpolation : Str, Iter((_interpolated, Str)) -> val,
+]
+```
+
+The static dispatch owner is `val`, the interpolation result type. If `val`
+remains unconstrained, it defaults to `Str`, which selects:
+
+```roc
+Str.from_interpolation : Str, Iter((Str, Str)) -> Str
+```
+
+Types that want checked interpolation through `Try` implement their own
+`from_interpolation` and rely on `Try` forwarding:
+
+```roc
+Try.from_interpolation : Str, Iter((interpolated, Str)) -> Try(ok, err)
+    where [
+        ok.from_interpolation : Str, Iter((interpolated, Str)) -> Try(ok, err),
+    ]
+```
+
+For a suffixed interpolation such as `"a${x}b".Regex`, the suffix is not a
+static-dispatch owner. It is a direct associated-function call to
+`Regex.from_interpolation`; the function's argument types constrain the
+literal segments and interpolated expressions, and the function's return type is
+the type of the whole interpolation expression. Missing suffixed interpolation
+functions are reported as missing associated functions on the suffix type.
+
+Interpolation deliberately does not parameterize literal segments over an
+arbitrary `literal` type with a `literal.from_quote` constraint. That design
+would defer quoted-segment conversion errors until monomorphic specializations
+are known. `roc check` must report all compile-time conversion errors without
+monomorphizing the program, so interpolation segments use builtin `Str`
+directly. Normal non-interpolated quoted literals still convert through
+`from_quote` as described above.
 
 ## Shared Post-Check Model
 
