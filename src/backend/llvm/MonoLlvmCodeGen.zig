@@ -997,14 +997,12 @@ pub const MonoLlvmCodeGen = struct {
         const file = try self.debugFileFor(builder, self.current_debug_file);
         const empty_expr = builder.debugExpression(&.{}) catch return error.OutOfMemory;
         const previous_debug_location = wip.debug_location;
-        if (self.enable_default_platform_diagnostics) {
-            wip.debug_location = .{ .location = .{
-                .line = proc_line,
-                .column = if (proc_line == 0) 0 else 1,
-                .scope = scope.toOptional(),
-                .inlined_at = .none,
-            } };
-        }
+        wip.debug_location = .{ .location = .{
+            .line = proc_line,
+            .column = if (proc_line == 0) 0 else 1,
+            .scope = scope.toOptional(),
+            .inlined_at = .none,
+        } };
         defer wip.debug_location = previous_debug_location;
 
         for (self.store.getLocalSpan(proc.frame_locals)) |local_id| {
