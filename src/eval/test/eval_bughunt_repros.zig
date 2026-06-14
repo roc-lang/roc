@@ -638,7 +638,6 @@ pub const tests = [_]TestCase{
         \\main = (combine(Baz, Baz, |a, b| a + b) == Baz, combine(Bar(1), Bar(2), |a, b| a + b) == Bar(3))
         ,
         .expected = .{ .inspect_str = "(True, True)" },
-        .known_bug = true,
     },
     .{
         .name = "bughunt B102: recursive Monotype record lowering keeps field span stable",
