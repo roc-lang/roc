@@ -2493,6 +2493,7 @@ fn reportCliInterpreterError(ops: *echo_platform.host_abi.RocOps, interpreter: *
         error.OutOfMemory => "Roc interpreter ran out of memory",
         error.RuntimeError => interpreter.getRuntimeErrorMessage() orelse "Roc runtime error",
         error.DivisionByZero => interpreter.getRuntimeErrorMessage() orelse "Division by zero",
+        error.ComptimeExhaustiveness => "compile-time exhaustiveness failure reached runtime code",
         error.Crash => return,
         // expect_err statements only occur in top-level expect test roots,
         // never in program entrypoints.
@@ -3745,19 +3746,22 @@ fn rocBuildDefaultApp(ctx: *CliCtx, args: cli_args.BuildArgs, original_source: [
 }
 
 fn defaultBuildPlatformSource(args: cli_args.BuildArgs) []const u8 {
-    const target = if (args.target) |target_str|
-        RocTarget.fromString(target_str)
-    else
-        RocTarget.detectNative();
+    if (args.target) |target_str| {
+        if (RocTarget.fromString(target_str)) |target| {
+            return switch (target) {
+                .x64mac, .arm64mac, .x64win, .arm64win => echo_platform.build_c_platform_main_source,
+                .wasm32 => echo_platform.build_wasm_archive_platform_main_source,
+                else => echo_platform.build_platform_main_source,
+            };
+        }
 
-    if (target) |roc_build_target| {
-        return switch (roc_build_target.toOsTag()) {
-            .macos, .windows => echo_platform.build_c_platform_main_source,
-            else => echo_platform.build_platform_main_source,
-        };
+        return echo_platform.build_platform_main_source;
     }
 
-    return echo_platform.build_platform_main_source;
+    return switch (RocTarget.detectNative().toOsTag()) {
+        .macos, .windows => echo_platform.build_c_platform_main_source,
+        else => echo_platform.build_platform_main_source,
+    };
 }
 
 /// Build using the dev backend to generate native machine code.
@@ -3984,6 +3988,13 @@ fn linkerOutputKind(output: roc_target.OutputKind) linker.OutputKind {
         .exe => .exe,
         .archive => unreachable,
     };
+}
+
+fn llvmBuildLinkAbi(target: RocTarget, synthetic_default_platform: bool) linker.TargetAbi {
+    if (synthetic_default_platform and target.toOsTag() == .linux) {
+        return .musl;
+    }
+    return linker.TargetAbi.fromRocTarget(target);
 }
 
 /// Write an Archive output: a static archive of the platform's pre inputs,
@@ -4661,6 +4672,7 @@ fn compileLlvmAppObject(
     );
     codegen.layout_store = &lowered.lir_result.layouts;
     codegen.emit_debug_info = true;
+    codegen.emit_local_debug_info = args.debug;
     codegen.enable_default_platform_runtime = enable_default_platform_runtime;
     codegen.enable_default_platform_hosted_calls = enable_default_platform_hosted_calls;
     codegen.enable_default_platform_diagnostics = enable_default_platform_hosted_calls and args.debug;
@@ -5126,7 +5138,10 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
         );
     } else {
         const hosted_symbols = try hostedSymbolsFromLir(ctx.arena, &lowered.lir_result.store);
-        const enable_default_platform_runtime = target_os == .linux and args.synthetic_default_platform;
+        const enable_default_platform_runtime = args.synthetic_default_platform and switch (target) {
+            .x64musl, .arm64musl => true,
+            else => false,
+        };
 
         const app_object = try compileLlvmAppObject(
             ctx,
@@ -5184,7 +5199,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
 
             const link_config = linker.LinkConfig{
                 .target_format = linker.TargetFormat.detectFromOs(target_os),
-                .target_abi = linker.TargetAbi.fromRocTarget(target),
+                .target_abi = llvmBuildLinkAbi(target, args.synthetic_default_platform),
                 .target_os = target_os,
                 .target_arch = target_arch,
                 .output_path = final_output_path,
@@ -6351,6 +6366,7 @@ fn interpreterTestFailureMessage(
         error.OutOfMemory => return error.OutOfMemory,
         error.RuntimeError => interpreter.getRuntimeErrorMessage() orelse "Roc runtime error",
         error.DivisionByZero => interpreter.getRuntimeErrorMessage() orelse "Division by zero",
+        error.ComptimeExhaustiveness => "compile-time exhaustiveness failure reached runtime code",
         error.Crash => interpreter.getCrashMessage() orelse "Test crashed",
         error.ExpectErr => interpreter.getExpectErrMessage() orelse
             "The `?` operator evaluated an `Err` inside an `expect`",

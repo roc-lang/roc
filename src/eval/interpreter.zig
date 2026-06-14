@@ -307,6 +307,8 @@ pub const Interpreter = struct {
     call_stack: std.ArrayList(LirProcSpecId),
     /// Call stack captured at the first failed exit in the current evaluation.
     failed_call_stack: std.ArrayList(LirProcSpecId),
+    comptime_branch_hits: std.ArrayList(ComptimeBranchHit),
+    comptime_failed_site: ?LIR.ComptimeSiteId = null,
 
     const RcPresence = enum(u2) {
         unknown,
@@ -318,9 +320,15 @@ pub const Interpreter = struct {
     pub const Error = error{
         OutOfMemory,
         RuntimeError,
+        ComptimeExhaustiveness,
         DivisionByZero,
         Crash,
         ExpectErr,
+    };
+
+    pub const ComptimeBranchHit = struct {
+        site: LIR.ComptimeSiteId,
+        branch_index: u32,
     };
 
     const CrashBoundary = struct {
@@ -516,10 +524,12 @@ pub const Interpreter = struct {
             .tag_variant_plans = tag_variant_plans,
             .call_stack = .empty,
             .failed_call_stack = .empty,
+            .comptime_branch_hits = .empty,
         };
     }
 
     pub fn deinit(self: *LirInterpreter) void {
+        self.comptime_branch_hits.deinit(self.evalAllocator());
         self.failed_call_stack.deinit(self.evalAllocator());
         self.call_stack.deinit(self.evalAllocator());
         self.roc_env.deinit();
@@ -639,6 +649,14 @@ pub const Interpreter = struct {
         return self.failed_call_stack.items;
     }
 
+    pub fn getComptimeFailedSite(self: *const LirInterpreter) ?LIR.ComptimeSiteId {
+        return self.comptime_failed_site;
+    }
+
+    pub fn getComptimeBranchHits(self: *const LirInterpreter) []const ComptimeBranchHit {
+        return self.comptime_branch_hits.items;
+    }
+
     fn recordFailedCallStackIfUnset(self: *LirInterpreter) Allocator.Error!void {
         if (self.failed_call_stack.items.len != 0) return;
         try self.failed_call_stack.appendSlice(self.evalAllocator(), self.call_stack.items);
@@ -654,6 +672,11 @@ pub const Interpreter = struct {
     fn runtimeError(self: *LirInterpreter, message: []const u8) Error {
         self.roc_env.runtime_error_message = message;
         return error.RuntimeError;
+    }
+
+    fn comptimeExhaustivenessFailed(self: *LirInterpreter, site: LIR.ComptimeSiteId) Error {
+        self.comptime_failed_site = site;
+        return error.ComptimeExhaustiveness;
     }
 
     fn divisionByZeroMessageForLayout(self: *const LirInterpreter, layout_idx: layout_mod.Idx) []const u8 {
@@ -841,6 +864,8 @@ pub const Interpreter = struct {
         self.roc_env.resetForEval();
         self.call_stack.clearRetainingCapacity();
         self.failed_call_stack.clearRetainingCapacity();
+        self.comptime_branch_hits.clearRetainingCapacity();
+        self.comptime_failed_site = null;
 
         if (sljmp.supported) {
             var eval_jmp_buf: JmpBuf = undefined;
@@ -1424,12 +1449,14 @@ pub const Interpreter = struct {
                 .set_local => |assign| assign.next,
                 .debug => |stmt_next| stmt_next.next,
                 .expect => |stmt_next| stmt_next.next,
+                .comptime_branch_taken => |marker| marker.next,
                 .incref => |stmt_next| stmt_next.next,
                 .decref => |stmt_next| stmt_next.next,
                 .free => |stmt_next| stmt_next.next,
                 .join => |join_stmt| join_stmt.body,
                 .switch_stmt,
                 .runtime_error,
+                .comptime_exhaustiveness_failed,
                 .jump,
                 .ret,
                 .crash,
@@ -1805,6 +1832,16 @@ pub const Interpreter = struct {
                 .runtime_error => {
                     return self.runtimeError("RuntimeError");
                 },
+                .comptime_exhaustiveness_failed => |failed| {
+                    return self.comptimeExhaustivenessFailed(failed.site);
+                },
+                .comptime_branch_taken => |marker| {
+                    try self.comptime_branch_hits.append(self.evalAllocator(), .{
+                        .site = marker.site,
+                        .branch_index = marker.branch_index,
+                    });
+                    current = marker.next;
+                },
                 .incref => |inc| {
                     if (builtin.mode == .Debug and !frame.isAssigned(inc.value)) {
                         debugPrint(
@@ -2108,6 +2145,21 @@ pub const Interpreter = struct {
                 },
                 .runtime_error => {
                     debugPrint("    {d}: runtime_error\n", .{@intFromEnum(stmt_id)});
+                },
+                .comptime_exhaustiveness_failed => |failed| {
+                    debugPrint("    {d}: comptime_exhaustiveness_failed site={d}\n", .{
+                        @intFromEnum(stmt_id),
+                        @intFromEnum(failed.site),
+                    });
+                },
+                .comptime_branch_taken => |marker| {
+                    debugPrint("    {d}: comptime_branch_taken site={d} branch={d} next={d}\n", .{
+                        @intFromEnum(stmt_id),
+                        @intFromEnum(marker.site),
+                        marker.branch_index,
+                        @intFromEnum(marker.next),
+                    });
+                    stack.append(self.evalAllocator(), marker.next) catch return;
                 },
                 .incref => |inc| {
                     debugPrint("    {d}: incref value={d} next={d}\n", .{
@@ -2506,6 +2558,7 @@ pub const Interpreter = struct {
         context.interpreter.callInterpreterErasedCallable(context, ops, ret, args) catch |err| switch (err) {
             error.OutOfMemory => ops.crash("LIR/interpreter erased callable trampoline ran out of memory"),
             error.RuntimeError => ops.crash("LIR/interpreter erased callable trampoline hit runtime error"),
+            error.ComptimeExhaustiveness => ops.crash("LIR/interpreter erased callable trampoline hit compile-time exhaustiveness marker"),
             error.DivisionByZero => ops.crash("LIR/interpreter erased callable trampoline hit division by zero"),
             error.Crash => ops.crash("LIR/interpreter erased callable trampoline hit Roc crash"),
             // expect_err statements only occur in top-level expect test

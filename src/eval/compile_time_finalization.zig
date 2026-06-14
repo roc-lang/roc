@@ -18,6 +18,87 @@ const interpreter_mod = @import("interpreter.zig");
 const Interpreter = interpreter_mod.Interpreter;
 const ExpectFailure = interpreter_mod.ExpectFailure;
 
+const ComptimeCoverage = struct {
+    allocator: Allocator,
+    entries: std.ArrayList(Entry),
+
+    const Entry = struct {
+        kind: lir.LIR.ComptimeSiteKind,
+        region: base.Region,
+        branch_regions: []base.Region,
+        hits: []bool,
+    };
+
+    fn init(allocator: Allocator) ComptimeCoverage {
+        return .{
+            .allocator = allocator,
+            .entries = .empty,
+        };
+    }
+
+    fn deinit(self: *ComptimeCoverage) void {
+        for (self.entries.items) |entry| {
+            self.allocator.free(entry.branch_regions);
+            self.allocator.free(entry.hits);
+        }
+        self.entries.deinit(self.allocator);
+    }
+
+    fn record(self: *ComptimeCoverage, site: lir.LIR.ComptimeSite, branch_index: u32) Allocator.Error!void {
+        if (site.kind != .match and site.kind != .if_) return;
+        if (site.branch_regions.len == 0) return;
+        if (branch_index >= site.branch_regions.len) {
+            finalizationInvariant("compile-time branch hit referenced a branch outside its site");
+        }
+
+        const entry = try self.entryFor(site);
+        entry.hits[branch_index] = true;
+    }
+
+    fn entryFor(self: *ComptimeCoverage, site: lir.LIR.ComptimeSite) Allocator.Error!*Entry {
+        for (self.entries.items) |*entry| {
+            if (entry.kind == site.kind and regionsEqual(entry.region, site.region)) {
+                if (entry.branch_regions.len != site.branch_regions.len) {
+                    finalizationInvariant("compile-time site branch count changed for one source region");
+                }
+                return entry;
+            }
+        }
+
+        const branch_regions = try self.allocator.dupe(base.Region, site.branch_regions);
+        errdefer self.allocator.free(branch_regions);
+        const hits = try self.allocator.alloc(bool, site.branch_regions.len);
+        errdefer self.allocator.free(hits);
+        @memset(hits, false);
+
+        try self.entries.append(self.allocator, .{
+            .kind = site.kind,
+            .region = site.region,
+            .branch_regions = branch_regions,
+            .hits = hits,
+        });
+        return &self.entries.items[self.entries.items.len - 1];
+    }
+
+    fn reportUnusedBranches(self: *const ComptimeCoverage, allocator: Allocator, problem_store: ?*check.problem.Store) Allocator.Error!void {
+        const store = problem_store orelse return;
+        for (self.entries.items) |entry| {
+            for (entry.hits, 0..) |hit, index| {
+                if (hit) continue;
+                _ = try store.appendProblem(allocator, .{ .comptime_unused_branch = .{
+                    .kind = switch (entry.kind) {
+                        .match => .match,
+                        .if_ => .if_,
+                        .destructure => unreachable,
+                    },
+                    .site_region = entry.region,
+                    .branch_region = entry.branch_regions[index],
+                } });
+            }
+        }
+    }
+};
+
 /// Return the checking finalizer that evaluates compile-time roots.
 pub fn finalizer() checked.CompileTimeFinalizer {
     return .{ .finalize = finalize };
@@ -36,6 +117,9 @@ fn finalize(
     var had_problem = false;
 
     if (requests.len != 0) {
+        var coverage = ComptimeCoverage.init(allocator);
+        defer coverage.deinit();
+
         const lowering_imports = try finalizationImports(allocator, checked.importedView(module), imports, available_modules);
         defer allocator.free(lowering_imports);
 
@@ -66,8 +150,17 @@ fn finalize(
                 ready.items,
                 &state,
                 problem_store,
+                &coverage,
             )) had_problem = true;
             pending -= ready.items.len;
+        }
+
+        try coverage.reportUnusedBranches(allocator, problem_store);
+    }
+
+    if (problem_store) |store| {
+        if (try store.flushPendingStaticExhaustiveness(allocator) != 0) {
+            return error.CompileTimeProblem;
         }
     }
 
@@ -291,6 +384,7 @@ fn lowerEvalAndFinishRoots(
     requests: []const checked.RootRequest,
     state: *RootCompletionState,
     problem_store: ?*check.problem.Store,
+    coverage: *ComptimeCoverage,
 ) anyerror!bool {
     var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
         allocator,
@@ -335,6 +429,9 @@ fn lowerEvalAndFinishRoots(
                         const message = interpreter.getRuntimeErrorMessage() orelse host.crash_message orelse "compile-time evaluation failed";
                         break :blk .{ .const_node = try appendCrashConst(module, message) };
                     },
+                    error.ComptimeExhaustiveness => {
+                        break :blk .{ .const_node = try appendCrashConst(module, "compile-time exhaustiveness failure") };
+                    },
                     error.Crash => {
                         const message = interpreter.getCrashMessage() orelse host.crash_message orelse "Roc crashed";
                         break :blk .{ .const_node = try appendCrashConst(module, message) };
@@ -347,7 +444,8 @@ fn lowerEvalAndFinishRoots(
                 break :blk try writer.storeRoot(root, eval_result.value);
             }
 
-            const eval_result = try evalCompileTimeRoot(allocator, &interpreter, problem_store, module, compile_time_root, root.proc, root.ret_layout);
+            const eval_result = try evalCompileTimeRoot(allocator, &interpreter, problem_store, module, compile_time_root, &lowered.lir_result, root.proc, root.ret_layout);
+            try recordComptimeSiteHits(problem_store, coverage, &lowered.lir_result, interpreter.getComptimeBranchHits(), root.proc);
             defer interpreter.dropValue(eval_result.value, root.ret_layout);
             break :blk try writer.storeRoot(root, eval_result.value);
         };
@@ -490,6 +588,7 @@ fn evalCompileTimeRoot(
     problem_store: ?*check.problem.Store,
     module: *const checked.CheckedModuleArtifact,
     root: checked.CompileTimeRoot,
+    lir_result: *const lir.Program.Result,
     proc: lir.LIR.LirProcSpecId,
     ret_layout: @import("layout").Idx,
 ) anyerror!Interpreter.EvalResult {
@@ -499,10 +598,56 @@ fn evalCompileTimeRoot(
     }) catch |err| switch (err) {
         error.OutOfMemory => error.OutOfMemory,
         error.RuntimeError => finalizationInvariant("compile-time root produced a runtime error"),
+        error.ComptimeExhaustiveness => try reportCompileTimeExhaustiveness(allocator, problem_store, lir_result, interpreter),
         error.DivisionByZero => try reportCompileTimeCrash(allocator, problem_store, module, root, interpreter.getRuntimeErrorMessage() orelse "Division by zero"),
         error.Crash => try reportCompileTimeCrash(allocator, problem_store, module, root, interpreter.getCrashMessage() orelse "Roc crashed"),
         error.ExpectErr => finalizationInvariant("compile-time root reached an expect_err statement"),
     };
+}
+
+fn recordComptimeSiteHits(
+    maybe_problem_store: ?*check.problem.Store,
+    coverage: *ComptimeCoverage,
+    lir_result: *const lir.Program.Result,
+    hits: []const Interpreter.ComptimeBranchHit,
+    root_proc: lir.LIR.LirProcSpecId,
+) Allocator.Error!void {
+    const problem_store = maybe_problem_store orelse return;
+    for (hits) |hit| {
+        const site = lir_result.comptime_sites.items[@intFromEnum(hit.site)];
+        switch (site.kind) {
+            .match => problem_store.resolvePendingStaticExhaustiveness(.match, site.region),
+            .destructure => problem_store.resolvePendingStaticExhaustiveness(.destructure, site.region),
+            .if_ => {},
+        }
+        if (site.proc == root_proc) {
+            try coverage.record(site, hit.branch_index);
+        }
+    }
+}
+
+fn reportCompileTimeExhaustiveness(
+    allocator: Allocator,
+    maybe_problem_store: ?*check.problem.Store,
+    lir_result: *const lir.Program.Result,
+    interpreter: *const Interpreter,
+) anyerror!Interpreter.EvalResult {
+    const problem_store = maybe_problem_store orelse {
+        finalizationInvariant("compile-time root reached an empirical exhaustiveness failure without a checking problem store");
+    };
+    const site_id = interpreter.getComptimeFailedSite() orelse {
+        finalizationInvariant("compile-time root reported empirical exhaustiveness failure without a site");
+    };
+    const site = lir_result.comptime_sites.items[@intFromEnum(site_id)];
+    const matched = switch (site.kind) {
+        .match => try problem_store.appendEmpiricalExhaustivenessFailure(allocator, .match, site.region),
+        .destructure => try problem_store.appendEmpiricalExhaustivenessFailure(allocator, .destructure, site.region),
+        .if_ => finalizationInvariant("if expression reached empirical exhaustiveness failure"),
+    };
+    if (!matched) {
+        finalizationInvariant("empirical exhaustiveness failure had no pending static diagnostic");
+    }
+    return error.CompileTimeProblem;
 }
 
 fn reportCompileTimeCrash(
@@ -558,6 +703,10 @@ fn appendUniqueImport(
 
 fn sameModuleIdentity(a: checked.ImportedModuleView, b: checked.ImportedModuleView) bool {
     return std.meta.eql(a.module_identity.stable_hash, b.module_identity.stable_hash);
+}
+
+fn regionsEqual(a: base.Region, b: base.Region) bool {
+    return a.start.offset == b.start.offset and a.end.offset == b.end.offset;
 }
 
 fn compileTimeRootForRequest(

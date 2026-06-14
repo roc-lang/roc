@@ -5428,7 +5428,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try locals.put(localKey(expect_stmt.condition), expect_stmt.condition);
                         try stack.append(sa, expect_stmt.next);
                     },
-                    .runtime_error => {},
+                    .comptime_branch_taken => |marker| try stack.append(sa, marker.next),
+                    .runtime_error, .comptime_exhaustiveness_failed => {},
                     .incref => |inc| {
                         try locals.put(localKey(inc.value), inc.value);
                         try stack.append(sa, inc.next);
@@ -5549,7 +5550,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try locals.put(localKey(expect_stmt.condition), expect_stmt.condition);
                         try stack.append(sa, expect_stmt.next);
                     },
-                    .runtime_error => {},
+                    .comptime_branch_taken => |marker| try stack.append(sa, marker.next),
+                    .runtime_error, .comptime_exhaustiveness_failed => {},
                     .incref => |inc| {
                         try locals.put(localKey(inc.value), inc.value);
                         try stack.append(sa, inc.next);
@@ -14046,6 +14048,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .runtime_error => {
                             try self.emitRocCrash("hit a runtime error");
                             try self.emitTrap();
+                        },
+
+                        .comptime_exhaustiveness_failed => {
+                            try self.emitRocCrash("compile-time exhaustiveness failure reached runtime code");
+                            try self.emitTrap();
+                        },
+
+                        .comptime_branch_taken => |marker| {
+                            try work.append(wa, .{ .node = marker.next });
                         },
 
                         .join => |j| {

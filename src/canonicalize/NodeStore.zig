@@ -28,6 +28,7 @@ span2_data: collections.SafeList(Span2), // Typed storage for (start, len) span 
 span_with_node_data: collections.SafeList(SpanWithNode), // Typed storage for (start, len, node) triples
 method_call_data: collections.SafeList(MethodCallData), // Typed storage for method args plus method-token source region
 match_data: collections.SafeList(MatchData), // Typed storage for match expression data
+if_data: collections.SafeList(IfData), // Typed storage for if expression data
 match_branch_data: collections.SafeList(MatchBranchData), // Typed storage for match branch data
 closure_data: collections.SafeList(ClosureData), // Typed storage for closure expressions
 zero_arg_tag_data: collections.SafeList(ZeroArgTagData), // Typed storage for zero-argument tags
@@ -71,6 +72,15 @@ pub const MatchData = extern struct {
     exhaustive: u32,
     is_try_suffix: u32,
     skip_exhaustiveness: u32,
+};
+
+/// If expression data.
+/// Stores branches span, final else, and whether to warn for untaken compile-time branches.
+pub const IfData = extern struct {
+    branches_start: u32,
+    branches_len: u32,
+    final_else: u32,
+    warn_unused_branches: u32,
 };
 
 /// Match branch data.
@@ -257,6 +267,8 @@ pub fn initCapacity(gpa: Allocator, capacity: usize) Allocator.Error!NodeStore {
     errdefer method_call_data.deinit(gpa);
     var match_data = try collections.SafeList(MatchData).initCapacity(gpa, capacity / 8);
     errdefer match_data.deinit(gpa);
+    var if_data = try collections.SafeList(IfData).initCapacity(gpa, capacity / 8);
+    errdefer if_data.deinit(gpa);
     var match_branch_data = try collections.SafeList(MatchBranchData).initCapacity(gpa, capacity / 8);
     errdefer match_branch_data.deinit(gpa);
     var closure_data = try collections.SafeList(ClosureData).initCapacity(gpa, capacity / 16);
@@ -285,6 +297,7 @@ pub fn initCapacity(gpa: Allocator, capacity: usize) Allocator.Error!NodeStore {
         .span_with_node_data = span_with_node_data,
         .method_call_data = method_call_data,
         .match_data = match_data,
+        .if_data = if_data,
         .match_branch_data = match_branch_data,
         .closure_data = closure_data,
         .zero_arg_tag_data = zero_arg_tag_data,
@@ -308,6 +321,7 @@ pub fn clone(self: *const NodeStore, gpa: Allocator) Allocator.Error!NodeStore {
         .span_with_node_data = try self.span_with_node_data.clone(gpa),
         .method_call_data = try self.method_call_data.clone(gpa),
         .match_data = try self.match_data.clone(gpa),
+        .if_data = try self.if_data.clone(gpa),
         .match_branch_data = try self.match_branch_data.clone(gpa),
         .closure_data = try self.closure_data.clone(gpa),
         .zero_arg_tag_data = try self.zero_arg_tag_data.clone(gpa),
@@ -331,6 +345,7 @@ pub fn deinit(store: *NodeStore) void {
     store.span_with_node_data.deinit(store.gpa);
     store.method_call_data.deinit(store.gpa);
     store.match_data.deinit(store.gpa);
+    store.if_data.deinit(store.gpa);
     store.match_branch_data.deinit(store.gpa);
     store.closure_data.deinit(store.gpa);
     store.zero_arg_tag_data.deinit(store.gpa);
@@ -354,6 +369,7 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
     store.span_with_node_data.relocate(offset);
     store.method_call_data.relocate(offset);
     store.match_data.relocate(offset);
+    store.if_data.relocate(offset);
     store.match_branch_data.relocate(offset);
     store.closure_data.relocate(offset);
     store.zero_arg_tag_data.relocate(offset);
@@ -1034,12 +1050,12 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         },
         .expr_if_then_else => {
             const p = payload.expr_if_then_else;
-            // Retrieve branches span and final_else from span_with_node_data
-            const branches_else = store.span_with_node_data.items.items[p.branches_else_idx];
+            const if_data = store.if_data.items.items[p.branches_else_idx];
 
             return CIR.Expr{ .e_if = .{
-                .branches = .{ .span = .{ .start = branches_else.start, .len = branches_else.len } },
-                .final_else = @enumFromInt(branches_else.node),
+                .branches = .{ .span = .{ .start = if_data.branches_start, .len = if_data.branches_len } },
+                .final_else = @enumFromInt(if_data.final_else),
+                .warn_unused_branches = if_data.warn_unused_branches != 0,
             } };
         },
         .expr_field_access => {
@@ -2454,15 +2470,16 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         },
         .e_if => |e| {
             node.tag = .expr_if_then_else;
-            const branches_else_idx: u32 = @intCast(store.span_with_node_data.len());
-            _ = try store.span_with_node_data.append(store.gpa, .{
-                .start = e.branches.span.start,
-                .len = e.branches.span.len,
-                .node = @intFromEnum(e.final_else),
+            const if_data_idx: u32 = @intCast(store.if_data.len());
+            _ = try store.if_data.append(store.gpa, .{
+                .branches_start = e.branches.span.start,
+                .branches_len = e.branches.span.len,
+                .final_else = @intFromEnum(e.final_else),
+                .warn_unused_branches = @intFromBool(e.warn_unused_branches),
             });
 
             node.setPayload(.{ .expr_if_then_else = .{
-                .branches_else_idx = branches_else_idx,
+                .branches_else_idx = if_data_idx,
             } });
         },
         .e_call => |e| {
@@ -4603,6 +4620,7 @@ pub const Serialized = extern struct {
     span_with_node_data: collections.SafeList(SpanWithNode).Serialized,
     method_call_data: collections.SafeList(MethodCallData).Serialized,
     match_data: collections.SafeList(MatchData).Serialized,
+    if_data: collections.SafeList(IfData).Serialized,
     match_branch_data: collections.SafeList(MatchBranchData).Serialized,
     closure_data: collections.SafeList(ClosureData).Serialized,
     zero_arg_tag_data: collections.SafeList(ZeroArgTagData).Serialized,
@@ -4634,6 +4652,8 @@ pub const Serialized = extern struct {
         try self.method_call_data.serialize(&store.method_call_data, allocator, writer);
         // Serialize match_data
         try self.match_data.serialize(&store.match_data, allocator, writer);
+        // Serialize if_data
+        try self.if_data.serialize(&store.if_data, allocator, writer);
         // Serialize match_branch_data
         try self.match_branch_data.serialize(&store.match_branch_data, allocator, writer);
         // Serialize closure_data
@@ -4666,6 +4686,7 @@ pub const Serialized = extern struct {
             .span_with_node_data = self.span_with_node_data.deserializeInto(base_addr),
             .method_call_data = self.method_call_data.deserializeInto(base_addr),
             .match_data = self.match_data.deserializeInto(base_addr),
+            .if_data = self.if_data.deserializeInto(base_addr),
             .match_branch_data = self.match_branch_data.deserializeInto(base_addr),
             .closure_data = self.closure_data.deserializeInto(base_addr),
             .zero_arg_tag_data = self.zero_arg_tag_data.deserializeInto(base_addr),
@@ -4691,6 +4712,7 @@ pub const Serialized = extern struct {
             .span_with_node_data = self.span_with_node_data.deserializeInto(base_addr),
             .method_call_data = self.method_call_data.deserializeInto(base_addr),
             .match_data = self.match_data.deserializeInto(base_addr),
+            .if_data = self.if_data.deserializeInto(base_addr),
             .match_branch_data = self.match_branch_data.deserializeInto(base_addr),
             .closure_data = self.closure_data.deserializeInto(base_addr),
             .zero_arg_tag_data = self.zero_arg_tag_data.deserializeInto(base_addr),

@@ -136,6 +136,7 @@ const Lowerer = struct {
     expr_map: []?Ast.ExprId,
     pat_map: []?Ast.PatId,
     stmt_map: []?Ast.StmtId,
+    comptime_site_map: []?Ast.ComptimeSiteId,
     fn_specs: std.ArrayList(FnSpec),
     fn_spec_map: std.HashMap(FnSpec, Ast.FnId, FnSpecContext, std.hash_map.default_max_load_percentage),
     fn_written: std.ArrayList(bool),
@@ -173,6 +174,10 @@ const Lowerer = struct {
         errdefer allocator.free(stmt_map);
         @memset(stmt_map, null);
 
+        const comptime_site_map = try allocator.alloc(?Ast.ComptimeSiteId, solved.lifted.comptime_sites.items.len);
+        errdefer allocator.free(comptime_site_map);
+        @memset(comptime_site_map, null);
+
         return .{
             .allocator = allocator,
             .solved = solved,
@@ -182,6 +187,7 @@ const Lowerer = struct {
             .expr_map = expr_map,
             .pat_map = pat_map,
             .stmt_map = stmt_map,
+            .comptime_site_map = comptime_site_map,
             .fn_specs = .empty,
             .fn_spec_map = std.HashMap(FnSpec, Ast.FnId, FnSpecContext, std.hash_map.default_max_load_percentage).initContext(allocator, .{}),
             .fn_written = .empty,
@@ -202,6 +208,7 @@ const Lowerer = struct {
         self.fn_specs.deinit(self.allocator);
         self.type_map.deinit();
         self.allocator.free(self.stmt_map);
+        self.allocator.free(self.comptime_site_map);
         self.allocator.free(self.pat_map);
         self.allocator.free(self.expr_map);
         self.allocator.free(self.local_map);
@@ -484,6 +491,7 @@ const Lowerer = struct {
                 .bind = try self.lowerPat(let_.bind),
                 .value = try self.lowerExpr(let_.value),
                 .rest = try self.lowerExpr(let_.rest),
+                .comptime_site = if (let_.comptime_site) |site| try self.lowerComptimeSite(site) else null,
             } },
             .lambda,
             .def_ref,
@@ -525,6 +533,7 @@ const Lowerer = struct {
                 break :blk .{ .match_ = .{
                     .scrutinee = try self.lowerExpr(match.scrutinee),
                     .branches = try self.lowerBranchSpan(match.branches),
+                    .comptime_site = if (match.comptime_site) |site| try self.lowerComptimeSite(site) else null,
                 } };
             },
             .if_ => |if_| .{ .if_ = .{
@@ -544,6 +553,12 @@ const Lowerer = struct {
             .continue_ => |continue_| .{ .continue_ = .{ .values = try self.lowerExprSpan(continue_.values) } },
             .return_ => |value| .{ .return_ = try self.lowerExpr(value) },
             .crash => |msg| .{ .crash = msg },
+            .comptime_branch_taken => |taken| .{ .comptime_branch_taken = .{
+                .site = try self.lowerComptimeSite(taken.site),
+                .branch_index = taken.branch_index,
+                .body = try self.lowerExpr(taken.body),
+            } },
+            .comptime_exhaustiveness_failed => |site| .{ .comptime_exhaustiveness_failed = try self.lowerComptimeSite(site) },
             .dbg => |child| if (self.debug_effects == .erase)
                 .unit
             else
@@ -571,6 +586,16 @@ const Lowerer = struct {
             } };
         }
         return .{ .local = try self.localFor(local, ty) };
+    }
+
+    fn lowerComptimeSite(self: *Lowerer, site: Lifted.ComptimeSiteId) Allocator.Error!Ast.ComptimeSiteId {
+        const index = @intFromEnum(site);
+        if (self.comptime_site_map[index]) |existing| return existing;
+
+        const source = self.solved.lifted.comptimeSite(site);
+        const lowered = try self.program.addComptimeSite(source.kind, source.region, source.branch_regions);
+        self.comptime_site_map[index] = lowered;
+        return lowered;
     }
 
     fn lowerCallableValue(self: *Lowerer, expr_id: Lifted.ExprId, fn_id: Lifted.FnId, ty: Type.TypeId) Allocator.Error!Ast.ExprData {
@@ -692,6 +717,7 @@ const Lowerer = struct {
                 break :blk .{ .match_ = .{
                     .scrutinee = callee,
                     .branches = try self.program.addBranchSpan(branches),
+                    .comptime_site = null,
                 } };
             },
             .erased_fn => .{ .indirect_erased_call = .{
@@ -770,6 +796,7 @@ const Lowerer = struct {
                 .pat = try self.lowerPat(let_.pat),
                 .value = try self.lowerExpr(let_.value),
                 .recursive = let_.recursive,
+                .comptime_site = if (let_.comptime_site) |site| try self.lowerComptimeSite(site) else null,
             } },
             .expr => |expr| .{ .expr = try self.lowerExpr(expr) },
             .expect => |expr| if (self.debug_effects == .erase)
