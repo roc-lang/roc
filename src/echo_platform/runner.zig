@@ -262,6 +262,7 @@ fn runEchoView(
     var hosted_fn_array = [_]HostedFn{echo_platform.host_abi.hostedFn(&echo_platform.echoHostedFn)};
     var echo_env: echo_platform.EchoEnv = .{ .std_io = std_io };
     var roc_ops = echo_platform.makeDefaultRocOps(&echo_env, &hosted_fn_array);
+    echo_platform.g_roc_ops = &roc_ops;
     var cli_args_list = try echo_platform.buildCliArgs(&.{}, &roc_ops);
     var result_buf: [16]u8 align(16) = undefined;
 
@@ -292,8 +293,11 @@ fn runEchoView(
         },
         error.EntrypointNotFound => {
             diag.step("interpreter.runEntrypoint", err);
-            return err;
+            return error.EntrypointNotFound;
         },
+        // expect_err statements only occur in top-level expect test roots,
+        // never in program entrypoints.
+        error.ExpectErr => unreachable,
     };
 
     if (echo_env.inline_expect_failed) return 1;
@@ -415,8 +419,8 @@ fn echoRename(ctx_ptr: ?*anyopaque, _: std.Io, old: []const u8, new: []const u8)
 fn echoGetEnvVar(ctx_ptr: ?*anyopaque, _: std.Io, key: []const u8, gpa: Allocator) Io.GetEnvVarError![]u8 {
     return echoGetCtx(ctx_ptr).fallback.getEnvVar(key, gpa);
 }
-fn echoFetchUrl(ctx_ptr: ?*anyopaque, _: std.Io, gpa: Allocator, url: []const u8, dest: []const u8) Io.FetchUrlError!void {
-    return echoGetCtx(ctx_ptr).fallback.fetchUrl(gpa, url, dest);
+fn echoFetchUrl(ctx_ptr: ?*anyopaque, _: std.Io, gpa: Allocator, url: []const u8, dest: []const u8, max_expanded_bytes: ?u64) Io.FetchUrlError!u64 {
+    return echoGetCtx(ctx_ptr).fallback.fetchUrl(gpa, url, dest, max_expanded_bytes);
 }
 fn echoWriteStdout(ctx_ptr: ?*anyopaque, _: std.Io, data: []const u8) Io.StdioError!void {
     return echoGetCtx(ctx_ptr).fallback.writeStdout(data);

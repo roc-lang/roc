@@ -12,317 +12,65 @@ Pair2(_, y) = Pair(0, 1)
 Pair3(_, _) = Pair(0, 1)
 ~~~
 # EXPECTED
-PARSE ERROR - underscore_type_decl.md:3:13:3:14
-PARSE ERROR - underscore_type_decl.md:3:20:3:21
-PARSE ERROR - underscore_type_decl.md:3:23:3:24
-PARSE ERROR - underscore_type_decl.md:4:1:4:6
-PARSE ERROR - underscore_type_decl.md:4:6:4:7
-PARSE ERROR - underscore_type_decl.md:4:7:4:8
-PARSE ERROR - underscore_type_decl.md:4:8:4:9
-PARSE ERROR - underscore_type_decl.md:4:10:4:11
-PARSE ERROR - underscore_type_decl.md:4:11:4:12
-PARSE ERROR - underscore_type_decl.md:4:13:4:14
-PARSE ERROR - underscore_type_decl.md:4:20:4:21
-PARSE ERROR - underscore_type_decl.md:4:23:4:24
-PARSE ERROR - underscore_type_decl.md:5:1:5:6
-PARSE ERROR - underscore_type_decl.md:5:6:5:7
-PARSE ERROR - underscore_type_decl.md:5:7:5:8
-PARSE ERROR - underscore_type_decl.md:5:8:5:9
-PARSE ERROR - underscore_type_decl.md:5:10:5:11
-PARSE ERROR - underscore_type_decl.md:5:11:5:12
-PARSE ERROR - underscore_type_decl.md:5:13:5:14
-PARSE ERROR - underscore_type_decl.md:5:20:5:21
-PARSE ERROR - underscore_type_decl.md:5:23:5:24
-PARSE ERROR - underscore_type_decl.md:6:1:6:1
+NON-EXHAUSTIVE DESTRUCTURE - underscore_type_decl.md:3:1:3:12
+NON-EXHAUSTIVE DESTRUCTURE - underscore_type_decl.md:4:1:4:12
+NON-EXHAUSTIVE DESTRUCTURE - underscore_type_decl.md:5:1:5:12
 # PROBLEMS
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
-
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Try(a, Str)`
-    `Maybe(List(U64))`
-
-**underscore_type_decl.md:3:13:3:14:**
+**NON-EXHAUSTIVE DESTRUCTURE**
+This destructuring pattern doesn't cover all possible cases:
+**underscore_type_decl.md:3:1:3:12:**
 ```roc
 Pair1(x, _) = Pair(0, 1)
 ```
-            ^
+^^^^^^^^^^^
+
+The value being destructured has type:
+        _[Pair(a, b), Pair1([], []), ..]
+  where [
+    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
+    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
+  ]_
+
+Missing patterns:
+        _
 
 
-**PARSE ERROR**
-A parsing error occurred: `invalid_type_arg`
-This is an unexpected parsing error. Please check your syntax.
-
-**underscore_type_decl.md:3:20:3:21:**
-```roc
-Pair1(x, _) = Pair(0, 1)
-```
-                   ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `invalid_type_arg`
-This is an unexpected parsing error. Please check your syntax.
-
-**underscore_type_decl.md:3:23:3:24:**
-```roc
-Pair1(x, _) = Pair(0, 1)
-```
-                      ^
-
-
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
-
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Try(a, Str)`
-    `Maybe(List(U64))`
-
-**underscore_type_decl.md:4:1:4:6:**
+**NON-EXHAUSTIVE DESTRUCTURE**
+This destructuring pattern doesn't cover all possible cases:
+**underscore_type_decl.md:4:1:4:12:**
 ```roc
 Pair2(_, y) = Pair(0, 1)
 ```
-^^^^^
+^^^^^^^^^^^
+
+The value being destructured has type:
+        _[Pair(a, b), Pair2([], []), ..]
+  where [
+    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
+    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
+  ]_
+
+Missing patterns:
+        _
 
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**underscore_type_decl.md:4:6:4:7:**
-```roc
-Pair2(_, y) = Pair(0, 1)
-```
-     ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**underscore_type_decl.md:4:7:4:8:**
-```roc
-Pair2(_, y) = Pair(0, 1)
-```
-      ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**underscore_type_decl.md:4:8:4:9:**
-```roc
-Pair2(_, y) = Pair(0, 1)
-```
-       ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**underscore_type_decl.md:4:10:4:11:**
-```roc
-Pair2(_, y) = Pair(0, 1)
-```
-         ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**underscore_type_decl.md:4:11:4:12:**
-```roc
-Pair2(_, y) = Pair(0, 1)
-```
-          ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**underscore_type_decl.md:4:13:4:14:**
-```roc
-Pair2(_, y) = Pair(0, 1)
-```
-            ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `invalid_type_arg`
-This is an unexpected parsing error. Please check your syntax.
-
-**underscore_type_decl.md:4:20:4:21:**
-```roc
-Pair2(_, y) = Pair(0, 1)
-```
-                   ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `invalid_type_arg`
-This is an unexpected parsing error. Please check your syntax.
-
-**underscore_type_decl.md:4:23:4:24:**
-```roc
-Pair2(_, y) = Pair(0, 1)
-```
-                      ^
-
-
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
-
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Try(a, Str)`
-    `Maybe(List(U64))`
-
-**underscore_type_decl.md:5:1:5:6:**
+**NON-EXHAUSTIVE DESTRUCTURE**
+This destructuring pattern doesn't cover all possible cases:
+**underscore_type_decl.md:5:1:5:12:**
 ```roc
 Pair3(_, _) = Pair(0, 1)
 ```
-^^^^^
+^^^^^^^^^^^
 
+The value being destructured has type:
+        _[Pair(a, b), Pair3([], []), ..]
+  where [
+    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
+    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
+  ]_
 
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**underscore_type_decl.md:5:6:5:7:**
-```roc
-Pair3(_, _) = Pair(0, 1)
-```
-     ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**underscore_type_decl.md:5:7:5:8:**
-```roc
-Pair3(_, _) = Pair(0, 1)
-```
-      ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**underscore_type_decl.md:5:8:5:9:**
-```roc
-Pair3(_, _) = Pair(0, 1)
-```
-       ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**underscore_type_decl.md:5:10:5:11:**
-```roc
-Pair3(_, _) = Pair(0, 1)
-```
-         ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**underscore_type_decl.md:5:11:5:12:**
-```roc
-Pair3(_, _) = Pair(0, 1)
-```
-          ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**underscore_type_decl.md:5:13:5:14:**
-```roc
-Pair3(_, _) = Pair(0, 1)
-```
-            ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `invalid_type_arg`
-This is an unexpected parsing error. Please check your syntax.
-
-**underscore_type_decl.md:5:20:5:21:**
-```roc
-Pair3(_, _) = Pair(0, 1)
-```
-                   ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `invalid_type_arg`
-This is an unexpected parsing error. Please check your syntax.
-
-**underscore_type_decl.md:5:23:5:24:**
-```roc
-Pair3(_, _) = Pair(0, 1)
-```
-                      ^
-
-
-**PARSE ERROR**
-Type applications require parentheses around their type arguments.
-
-I found a type followed by what looks like a type argument, but they need to be connected with parentheses.
-
-Instead of:
-    **List U8**
-
-Use:
-    **List(U8)**
-
-Other valid examples:
-    `Dict(Str, Num)`
-    `Try(a, Str)`
-    `Maybe(List(U64))`
-
-**underscore_type_decl.md:6:1:6:1:**
-```roc
-
-```
-^
+Missing patterns:
+        _
 
 
 # TOKENS
@@ -341,33 +89,62 @@ EndOfFile,
 		(s-import (raw "Module")
 			(exposing
 				(exposed-upper-ident (text "Pair"))))
-		(s-malformed (tag "expected_colon_after_type_annotation"))
-		(s-malformed (tag "expected_colon_after_type_annotation"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "expected_colon_after_type_annotation"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "expected_colon_after_type_annotation"))))
+		(s-decl
+			(p-tag (raw "Pair1")
+				(p-ident (raw "x"))
+				(p-underscore))
+			(e-apply
+				(e-tag (raw "Pair"))
+				(e-int (raw "0"))
+				(e-int (raw "1"))))
+		(s-decl
+			(p-tag (raw "Pair2")
+				(p-underscore)
+				(p-ident (raw "y")))
+			(e-apply
+				(e-tag (raw "Pair"))
+				(e-int (raw "0"))
+				(e-int (raw "1"))))
+		(s-decl
+			(p-tag (raw "Pair3")
+				(p-underscore)
+				(p-underscore))
+			(e-apply
+				(e-tag (raw "Pair"))
+				(e-int (raw "0"))
+				(e-int (raw "1"))))))
 ~~~
 # FORMATTED
 ~~~roc
 import Module exposing [Pair]
 
+Pair1(x, _) = Pair(0, 1)
 
+Pair2(_, y) = Pair(0, 1)
 
+Pair3(_, _) = Pair(0, 1)
 ~~~
 # CANONICALIZE
 ~~~clojure
 (can-ir
+	(d-let
+		(p-applied-tag)
+		(e-tag (name "Pair")
+			(args
+				(e-num (value "0"))
+				(e-num (value "1")))))
+	(d-let
+		(p-applied-tag)
+		(e-tag (name "Pair")
+			(args
+				(e-num (value "0"))
+				(e-num (value "1")))))
+	(d-let
+		(p-applied-tag)
+		(e-tag (name "Pair")
+			(args
+				(e-num (value "0"))
+				(e-num (value "1")))))
 	(s-import (module "Module")
 		(exposes
 			(exposed (name "Pair") (wildcard false)))))
@@ -376,5 +153,8 @@ import Module exposing [Pair]
 ~~~clojure
 (inferred-types
 	(defs)
-	(expressions))
+	(expressions
+		(expr (type "[Pair(Dec, Dec), Pair1([], []), ..]"))
+		(expr (type "[Pair(Dec, Dec), Pair2([], []), ..]"))
+		(expr (type "[Pair(Dec, Dec), Pair3([], []), ..]"))))
 ~~~

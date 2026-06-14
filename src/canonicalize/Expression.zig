@@ -438,6 +438,18 @@ pub const Expr = union(enum) {
     e_dbg: struct {
         expr: Expr.Idx,
     },
+    /// The Err arm of a `?` operator used directly inside a top-level `expect`.
+    /// Consumes the Err payload and fails the enclosing `expect` at runtime,
+    /// reporting the payload value. This expression never returns.
+    ///
+    /// ```roc
+    /// expect Str.to_u64("abc")? == 5
+    /// ```
+    e_expect_err: struct {
+        expr: Expr.Idx,
+        /// Source text of the `?` expression, for the failure message.
+        snippet: StringLiteral.Idx,
+    },
     /// An expect expression that performs a runtime assertion.
     /// This expression evaluates to empty record {} but can fail at runtime.
     /// Used for both top-level tests and inline assertions.
@@ -1436,6 +1448,18 @@ pub const Expr = union(enum) {
 
                 try tree.endNode(begin, attrs);
             },
+            .e_expect_err => |e| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-expect-err");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                try tree.pushStringPair("snippet", ir.getString(e.snippet));
+                const attrs = tree.beginNode();
+
+                try ir.store.getExpr(e.expr).pushToSExprTree(ir, tree, e.expr);
+
+                try tree.endNode(begin, attrs);
+            },
             .e_expect => |expect_expr| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("e-expect");
@@ -1508,6 +1532,9 @@ pub const Expr = union(enum) {
         /// Whether this match was desugared from the `?` (try suffix) operator.
         /// When true, we need to verify the condition is actually a Try type.
         is_try_suffix: bool,
+        /// Whether to skip user-facing exhaustiveness/redundancy diagnostics for this match.
+        /// This is true for compiler-generated matches such as `?` and `??` desugarings.
+        skip_exhaustiveness: bool,
 
         pub const Idx = enum(u32) { _ };
         pub const Span = extern struct { span: base.DataSpan };

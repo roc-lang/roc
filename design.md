@@ -81,6 +81,60 @@ selected by LIR ARC insertion. Consumers may lazily cache code or interpreter
 execution plans for that helper, but they must not select a different helper
 from local layout data. Reference-counting policy belongs to LIR ARC insertion.
 
+## Backend Builtins
+
+Backend builtin linking is part of backend code generation, not a later repair
+step. Each backend consumes explicit builtin call symbols emitted from LIR and
+uses the representation that matches that backend.
+
+The dev object backend emits native object code directly. Its builtin calls are
+ordinary object-symbol references resolved by linking the target's
+`roc_builtins.o`. The dev backend keeps using target-specific builtin object
+files because it does not produce LLVM bitcode.
+
+The LLVM backend emits application LLVM bitcode. LLVM builds must not link
+`roc_builtins.o`. Instead, the compiler selects builtin LLVM bitcode by the
+target pointer width, links that builtin module with the application module
+before LLVM optimization, and emits the object file from the merged module.
+Roc supports only 32-bit and 64-bit target pointers here, so two builtin
+bitcode payload families are sufficient: one for 32-bit targets and one for
+64-bit targets. Each pointer-width family has a core payload for common
+string/list/refcount/debug roots plus lightweight integer parse/format roots,
+and a full payload for decimal, float parsing/formatting, wide-integer, and
+other heavier roots. The LLVM backend selects the core payload only when every
+explicit builtin declaration in the app module is in the core root set;
+otherwise it selects the full payload. These pointer-width
+payloads must contain Roc builtin definitions only; they must not bundle
+compiler-rt or other target-specific runtime code, because that would make the
+payload architecture-specific again. The payloads are built as freestanding
+LLVM bitcode so compile-time OS and CPU branches cannot bake a native
+platform's syscalls, inline assembly, or runtime support into a module that will
+later be retargeted. LLVM object emission for targets that are not required to
+link a platform C runtime disables target-library assumptions and lowers LLVM
+memory intrinsics to explicit loops before target code generation. macOS and
+Windows keep target library calls available because their final links include
+the platform runtime libraries.
+
+Builtin definitions in the merged LLVM module are real definitions. They must
+not be marked `available_externally`, because there is no later builtin object
+file to provide non-inlined calls. After builtin call symbols are resolved,
+builtin aliases and definitions that are not application exports may be made
+internal so LLVM dead-code elimination and the final linker can remove unused
+builtin code. Before merging, the LLVM backend roots builtin exports at the
+explicit builtin declarations emitted by the application module, internalizes
+all other builtin definitions, and runs LLVM global dead-code elimination on
+the builtin module. After merging, it resolves builtin aliases to their
+concrete definitions, internalizes the merged builtin definitions that are not
+application exports, and runs LLVM global dead-code elimination again before
+object emission. Pre-merge elimination keeps unused builtin IR out of the
+expensive optimization and code-generation pipeline. Post-merge elimination
+cleans up definitions and aliases whose final reachability is only visible
+after app calls have been resolved. Both passes preserve real definitions for
+builtin calls that the application can inline.
+LLVM object emission must request function and data sections, and the final
+target linker must use section garbage collection where the target format
+supports it.
+
 Static ownership reasoning lives in exactly one place: LIR ARC insertion.
 ARC insertion computes a whole-program borrows-with-lifetimes solution and
 emits explicit RC statements from it (see ARC Borrow Inference). No other
@@ -814,6 +868,54 @@ The method registry is an exact table keyed by `(MethodOwner, MethodNameId)`.
 It is not an owner-discovery mechanism. Post-check code may use it only after a
 concrete monomorphic dispatcher type has already determined the owner.
 
+### Compile-Time Literal Conversions
+
+A numeric literal whose target type is a non-builtin nominal type converts
+through that type's `from_numeral` method, and a string literal converts
+through `from_quote` (receiving the literal's post-escape UTF-8 bytes as
+`List(U8)`). Every such conversion with a concrete target type is a
+compile-time root (`numeral_conversion` / `quote_conversion`), no matter
+where the literal sits in the AST: checking finalization evaluates the raw
+dispatch call, stores its `Try` result through `ConstStore`, unwraps `Ok` into
+the literal's stored constant, and reports `Err(InvalidNumeral(msg))` /
+`Err(BadQuotedBytes(msg))` as a checking problem carrying the implementation's
+message. Runtime lowering restores the stored constant instead of emitting a
+call. Conversions whose target type is still polymorphic (literals inside
+generalized functions) keep the dispatch call per monomorphic specialization.
+
+Unresolved literal-origin type variables default — numerals to `Dec`, quotes
+to `Str`. Quote defaulting runs before numeric context resolution because a
+still-flex string receiver blocks the method chains that give numeric literals
+their context, and it also resolves generalized literal variables that no
+instantiation can pin, which is the same resolution monomorphic specialization
+would apply, made early enough for checking to resolve dependent dispatch.
+
+Literal patterns participate through the same machinery. A literal pattern on
+a non-builtin number or string type carries a synthesized checked conversion
+expression; match lowering binds the matched value and tests it against the
+converted constant, dispatching to the type's `is_eq` method when it has one
+and using structural equality otherwise — exactly mirroring `==`. Checking
+attaches an `is_eq` constraint to the pattern's type so this lowering is
+total. Literal patterns on builtin types keep their direct literal-pattern
+encoding.
+
+### String Interpolation
+
+An interpolated string literal is canonicalization sugar. It desugars into
+ordinary CIR: the interpolated expressions bind to locals in source order,
+each literal segment stays a real string literal (so each converts through
+`from_quote`), and the result is
+`seg0.from_interpolation([].iter().prepended((interp_n, seg_n+1))...)` — the
+iterator yields each interpolated value paired with the literal segment that
+follows it. `from_interpolation : val, Iter((interpolated, val)) -> val` is an
+ordinary method: each implementing type chooses its `interpolated` type (`Str`
+chooses `Str`; a `Url`-style type can interpolate `Str` rather than itself),
+and a type that needs to validate assembled values simply does not implement
+it. The synthesized call node is recorded so checking unifies the call result
+with the receiver, pinning the literal's target type from the use site before
+string defaulting runs. No post-canonicalization stage knows interpolation
+exists.
+
 ## Shared Post-Check Model
 
 Every post-check IR has a typed IR store:
@@ -1008,12 +1110,14 @@ that checked module. The same checked function template may therefore produce
 many Monotype bodies, and the same checked nested lambda site may produce many
 nested Monotype functions, each with a different monomorphic function type.
 
-An instantiation context owns stage-local type cells addressed by
-`(checked module id, checked type id)`. The address is the checked identity of
-the type variable/content in the current specialization. It is not a structural
-digest, source name, runtime layout, object symbol, or generated procedure id.
-Cells begin unresolved. As the specialization is lowered, explicit evidence from
-checked data constrains those cells:
+Each specialization owns an instantiation graph: union-find nodes with
+explicit row-extension links, created by instantiating checked types on first
+touch. Instantiation contexts cache nodes by `(checked module id, checked type
+id)`. The address is the checked identity of the type variable/content in the
+current specialization. It is not a structural digest, source name, runtime
+layout, object symbol, or generated procedure id. Nodes begin unresolved. As
+the specialization is lowered, explicit evidence from checked data unifies
+those nodes:
 
 - the requested root function/value type constrains the checked root type;
 - lambda and closure expected function types constrain the nested function
@@ -1120,8 +1224,8 @@ encounter the same checked type under better evidence and try to assign a
 different Monotype type. That is not a valid compiler state; it is evidence that
 the stage was not lowering from one constrained specialization graph. The
 instantiation model makes the intended data flow explicit, so the first
-constraint and every later constraint meet in the same cell before the final
-Monotype body is emitted.
+constraint and every later constraint meet in the same graph node before the
+final Monotype body is emitted.
 
 An unconstrained checked type variable that remains open after checking lowers
 to the empty tag union in Monotype. This is not a default choice. It records the
@@ -1130,19 +1234,33 @@ can still be represented as `List([ ])` because they contain no elements, and
 code that would need an actual element value must have constrained the element
 type earlier or must be unreachable at runtime.
 
-During Monotype construction, an open checked variable is represented by a
-stage-local type cell. The cell starts as the empty tag union, and it may be
-completed with a concrete type while the same Monotype body is still being
-constructed if call-site arguments, expected lambda types, numeric literals, or
-checked type relations provide concrete evidence. This is ordinary type solving
-inside one stage. Once Monotype IR is output, no open cell remains and no
-later stage may change a type.
+During Monotype construction, an open checked variable is an unresolved graph
+node carrying the variable's numeric and row defaults. Unification resolves it
+when call-site arguments, expected lambda types, numeric literals, or checked
+type relations provide concrete evidence; defaults apply only at
+materialization. A Monotype is a materialized view of a solved node: it is
+reserved at a stable id and its content is refilled in place when its node
+gains evidence, so every holder of the id observes the solved type. This is
+ordinary type solving inside one stage. Once Monotype IR is output, no
+unresolved node remains reachable and no later stage may change a type.
 
-Monotype type cells are addressed by the owning checked module id and the exact
-checked type id. They are not addressed by `TypeDigest`. A digest can identify
-closed structural type content for specialization and comparison, but it cannot
-distinguish two different open checked variables with the same shape. Treating
-those variables as the same cell is a compiler bug.
+A Monotype imported into another specialization's graph is a finished
+snapshot, never a refreshable view: a specialization that needs more than its
+requested type is a unification conflict, not a silent rewrite of another
+specialization's final type. Procedure template body requests therefore defer
+to the end of the requesting specialization, when its types are final and the
+specialization key is stable. Nested functions are the exception: they share
+the requester's graph, and an inferred local procedure's body pins signature
+variables the requester's remaining body relies on, so nested bodies lower at
+their request site.
+
+Instantiation graph nodes are cached by the owning checked module id and the
+exact checked type id. They are not cached by `TypeDigest`. A digest can
+identify closed structural type content for specialization and comparison, but
+it cannot distinguish two different open checked variables with the same shape.
+Treating those variables as the same node is a compiler bug. Type digests are
+alias-transparent and encode recursive back references, so structurally equal
+types digest equally regardless of alias spelling or knot-tying ids.
 
 Generated helper code for an empty tag union, such as an inspector requested
 only because a container type mentions the empty tag union, has an unreachable
@@ -2474,7 +2592,55 @@ choosing between a borrow and an owned move, the choice that keeps a
 mutation check-free becomes visible to the solver rather than a lucky
 outcome of emission order.
 
-### Adoption Stages
+### In-Place List.map
+
+`List.map` may overwrite a uniquely owned input list's buffer instead of
+allocating an output list when the input and output element layouts are
+interchangeable in one allocation: same stride, same allocation alignment
+class, and the same refcounted-elements header shape. The hidden header in
+front of a list's data and the alignment handed to the allocator both
+derive from the element layout, so reusing an allocation across layouts
+that disagree on either would make a later free reconstruct the wrong
+allocation pointer.
+
+The decision has a compile-time half and a runtime half. `List.map`'s body
+in Builtin.roc matches on the `list_map_can_reuse` primitive, whose runtime
+meaning is "uniquely owned and not a seamless slice" — a slice's buffer
+points into the middle of an allocation whose header bookkeeping covers the
+whole allocation, so a unique slice still copies. At direct LIR lowering,
+where layouts exist, the primitive lowers to a constant 0 whenever the
+layouts are not interchangeable (or the optimization is off), so the
+runtime check never runs for a pair it could corrupt.
+
+The in-place branch itself is dropped before it reaches LIR whenever the
+element layouts are not interchangeable or the optimization is disabled
+(`TargetConfig.list_in_place_map`, on for `--opt=size`/`--opt=speed`, off
+for dev, interpreter, and compile-time evaluation), so ineligible map
+specializations never carry dead in-place machinery and dev builds lower
+exactly the copy loop. The fold uses the same layout-eligibility decision
+as the primitive, so every interchangeable pair — including different
+types that share one layout — keeps the branch. The debug Lambda Mono
+materializer runs before layout selection and cannot recompute that
+decision; instead, direct lowering records each statically resolved match
+site as explicit data and the verifier replays the record, so the two
+derivations demand the same set of functions without the materializer ever
+consulting layouts. A wrong record can only misplace dead code, never a
+runtime check — the primitive's own lowering independently gates the
+runtime path — and a fold regression surfaces as a Debug stride assertion
+in the backends rather than as silent dead code.
+
+Inside the in-place loop, `list_map_extract_unsafe` moves one element's
+ownership out of the buffer and `list_map_write_unsafe` moves the
+transform's result into the vacated slot. Neither performs RC work: the
+extracted element is an ordinary owned local, so ARC places its release
+according to the transform's solved convention, and the certifier checks
+the loop like any other code. Between the two ops the slot holds stale
+bytes and the buffer is typed by the output element while later slots still
+hold input elements; this window is unobservable because no cleanup path
+walks live values — `crash` is fatal and leaks by design — and the loop
+itself is the only holder of the buffer (the runtime count of 1 proved
+there were no other counted handles, and a live borrow of the list would
+have forced the copy path through an owned capture's incref).
 
 Each stage fully replaces the previous behavior when it lands; there are no
 parallel insertion paths at any point:
@@ -2590,12 +2756,11 @@ that value kind must be added explicitly here with a checked cache rule.
 - function values
 
 Compile-time evaluation failures are owned by checking finalization because the
-module has not been output yet. User-written compile-time crashes, exhausted
-compile-time limits, invalid compile-time host interaction, and unsupported
-compile-time operations become checking diagnostics attached to the checked root
-being finalized. OOM remains OOM. A post-check invariant failure while lowering
-or interpreting a compile-time root is still a compiler bug, not a user-facing
-diagnostic.
+module has not been output yet. User-written compile-time crashes, invalid
+compile-time host interaction, and unsupported compile-time operations become
+checking diagnostics attached to the checked root being finalized. OOM remains
+OOM. A post-check invariant failure while lowering or interpreting a
+compile-time root is still a compiler bug, not a user-facing diagnostic.
 
 While storing an eval result, the builder may reserve a `ConstNodeId` before
 storing its children so repeated references to the same acyclic runtime value
@@ -2816,11 +2981,12 @@ Generated glue exposes closure invocation through helpers that set and restore
 that state so the contract is enforced by signatures rather than remembered.
 
 Weak linkage exists to break the app/host reference cycle without imposing
-link order; on Windows the same cycle is broken by generating a .def file of
-the host-provided symbols, converting it to an import library, and placing it
-between the app and host objects. Missing host symbols are diagnosed before
-linking by scanning the host inputs' symbol tables, not by changing how the
-linker resolves symbols.
+link order; COFF has no equivalent weak external, and needs none: the app
+object participates in the link directly while host archives are searched on
+demand, so a single pass resolves the app's references into the host and the
+host's references back into the app. Missing host symbols are diagnosed
+before linking by scanning the host inputs' symbol tables, not by changing
+how the linker resolves symbols.
 
 Because the app references host symbols directly, host inputs are linked
 without whole-archive wrapping, and section GC (--gc-sections, -dead_strip,

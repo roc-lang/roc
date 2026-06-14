@@ -698,7 +698,7 @@ pub const RootRequestTable = struct {
             try appendRoot(&requests, allocator, .{
                 .module_idx = root.module_idx,
                 .kind = switch (root.kind) {
-                    .constant => .compile_time_constant,
+                    .constant, .numeral_conversion, .quote_conversion => .compile_time_constant,
                     .callable_binding => .compile_time_callable,
                     .expect => .test_expect,
                 },
@@ -706,7 +706,7 @@ pub const RootRequestTable = struct {
                 .checked_type = entryWrapperForRoot(entry_wrappers, root.id).checked_fn_root,
                 .abi = switch (root.kind) {
                     .expect => .test_expect,
-                    .constant, .callable_binding => .compile_time,
+                    .constant, .callable_binding, .numeral_conversion, .quote_conversion => .compile_time,
                 },
                 .exposure = .private,
                 .procedure_template = templateForEntryWrapperRoot(entry_wrappers, root.id),
@@ -894,6 +894,7 @@ fn compileTimeRootKindMatchesRequest(
         .constant => request_kind == .compile_time_constant,
         .callable_binding => request_kind == .compile_time_callable,
         .expect => request_kind == .test_expect,
+        .numeral_conversion, .quote_conversion => request_kind == .compile_time_constant,
     };
 }
 
@@ -950,6 +951,8 @@ fn compileTimeRootDependsOnUnboundPlatformRequirement(
     return switch (root.kind) {
         .constant,
         .callable_binding,
+        .numeral_conversion,
+        .quote_conversion,
         => exprDependsOnUnboundPlatformRequirement(
             checked_bodies,
             resolved_value_refs,
@@ -1026,6 +1029,7 @@ fn exprDependsOnUnboundPlatformRequirement(
         .dbg,
         .expect,
         => |child| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, child, relation_blocked_exprs),
+        .expect_err => |expect_err| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, expect_err.expr, relation_blocked_exprs),
         .field_access => |access| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, access.receiver, relation_blocked_exprs),
         .structural_eq => |eq| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, eq.lhs, relation_blocked_exprs) or
             exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, eq.rhs, relation_blocked_exprs),
@@ -1044,6 +1048,7 @@ fn exprDependsOnUnboundPlatformRequirement(
         .typed_int,
         .typed_frac,
         .typed_num_from_numeral,
+        .str_from_quote,
         .str_segment,
         .bytes_literal,
         .empty_list,
@@ -1436,7 +1441,11 @@ pub const CheckedStaticDispatchConstraint = struct {
 /// Public `NumericDefaultPhase` declaration.
 pub const NumericDefaultPhase = enum {
     checking_finalized,
+    /// Defaults to Dec when still unresolved at monomorphic specialization.
     mono_specialization,
+    /// Defaults to Str when still unresolved at monomorphic specialization
+    /// (string literals carrying a from_quote constraint).
+    mono_specialization_str,
 };
 
 /// Public `RowDefault` declaration.
@@ -3937,7 +3946,17 @@ fn appendStaticDispatchTypeRoots(
     }
 
     for (module.moduleEnvConst().numeral_dispatch_plans.items.items) |plan| {
-        if (!source_nodes.hasExpr(@enumFromInt(plan.node_idx))) continue;
+        const is_expr = source_nodes.hasExpr(@enumFromInt(plan.node_idx));
+        const is_pattern = source_nodes.hasPattern(@enumFromInt(plan.node_idx));
+        if (!is_expr and !is_pattern) continue;
+        _ = try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, @enumFromInt(plan.target_var));
+        _ = try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, @enumFromInt(plan.fn_var));
+    }
+
+    for (module.moduleEnvConst().quote_dispatch_plans.items.items) |plan| {
+        const is_expr = source_nodes.hasExpr(@enumFromInt(plan.node_idx));
+        const is_pattern = source_nodes.hasPattern(@enumFromInt(plan.node_idx));
+        if (!is_expr and !is_pattern) continue;
         _ = try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, @enumFromInt(plan.target_var));
         _ = try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, @enumFromInt(plan.fn_var));
     }
@@ -4137,10 +4156,13 @@ fn numericDefaultPhaseForConstraints(
     constraints_range: types.StaticDispatchConstraint.SafeList.Range,
 ) ?NumericDefaultPhase {
     const constraints = module.typeStoreConst().sliceStaticDispatchConstraints(constraints_range);
+    var has_from_quote = false;
     for (constraints) |constraint| {
         if (constraint.origin == .from_numeral) return .mono_specialization;
+        if (constraint.origin == .from_quote) has_from_quote = true;
         if (isDefaultableArithmeticConstraint(module, constraint)) return .mono_specialization;
     }
+    if (has_from_quote) return .mono_specialization_str;
     return null;
 }
 
@@ -4158,6 +4180,7 @@ fn isDefaultableArithmeticConstraint(
             constraint.fn_name.eql(idents.rem_by),
         .desugared_unaryop => constraint.fn_name.eql(idents.negate),
         .from_numeral,
+        .from_quote,
         .method_call,
         .where_clause,
         => false,
@@ -4741,7 +4764,7 @@ pub const CheckedPatternBinder = struct {
 };
 
 /// Public `CheckedStringLiteralId` declaration.
-pub const CheckedStringLiteralId = enum(u32) { _ };
+pub const CheckedStringLiteralId = checked_ids.CheckedStringLiteralId;
 
 /// Public `CheckedRecordExprField` declaration.
 pub const CheckedRecordExprField = struct {
@@ -4852,18 +4875,28 @@ pub const CheckedPatternData = union(enum) {
     num_literal: struct {
         value: CIR.IntValue,
         kind: CIR.NumKind,
+        /// Synthesized `.num_from_numeral` checked expression for matching this
+        /// literal against a non-builtin number type; null on the builtin fast path.
+        conversion: ?CheckedExprId = null,
     },
     small_dec_literal: struct {
         value: CIR.SmallDecValue,
         has_suffix: bool,
+        conversion: ?CheckedExprId = null,
     },
     dec_literal: struct {
         value: builtins.dec.RocDec,
         has_suffix: bool,
+        conversion: ?CheckedExprId = null,
     },
     frac_f32_literal: f32,
     frac_f64_literal: f64,
-    str_literal: CheckedStringLiteralId,
+    str_literal: struct {
+        literal: CheckedStringLiteralId,
+        /// Synthesized `.str_from_quote` checked expression for matching this
+        /// literal against a non-builtin string type; null on the Str fast path.
+        conversion: ?CheckedExprId = null,
+    },
     underscore,
     runtime_error,
 };
@@ -4901,6 +4934,13 @@ pub const CheckedExprData = union(enum) {
         type_name: canonical.TypeNameId,
     },
     typed_num_from_numeral: ?StaticDispatchPlanId,
+    /// A string literal whose target is a non-builtin nominal type, converted
+    /// through the type's `from_quote` method. `literal` holds the complete
+    /// post-escape UTF-8 bytes.
+    str_from_quote: struct {
+        plan: ?StaticDispatchPlanId,
+        literal: CheckedStringLiteralId,
+    },
     str_segment: CheckedStringLiteralId,
     str: []const CheckedExprId,
     bytes_literal: CheckedStringLiteralId,
@@ -4917,6 +4957,7 @@ pub const CheckedExprData = union(enum) {
         cond: CheckedExprId,
         branches: []const CheckedMatchBranch,
         is_try_suffix: bool,
+        skip_exhaustiveness: bool,
     },
     if_: struct {
         branches: []const CheckedIfBranch,
@@ -4985,6 +5026,11 @@ pub const CheckedExprData = union(enum) {
     runtime_error,
     crash: CheckedStringLiteralId,
     dbg: CheckedExprId,
+    expect_err: struct {
+        expr: CheckedExprId,
+        /// Source text of the `?` expression, for the failure message.
+        snippet: CheckedStringLiteralId,
+    },
     expect: CheckedExprId,
     ellipsis,
     anno_only,
@@ -5337,7 +5383,18 @@ const CheckedSourceNodes = struct {
             },
             .e_dispatch_call => |call| {
                 try self.markExpr(call.receiver, work);
-                try self.markExprSpan(module, call.args, work);
+                if (module.moduleEnvConst().isStrInterpolationCall(expr_idx)) {
+                    // A Str-typed interpolation publishes as a plain segment
+                    // list; the synthetic iterator chain stays out of the
+                    // artifact, so only the pair payloads are reachable.
+                    var pairs = module.moduleEnvConst().interpolationPairs(expr_idx);
+                    while (pairs.next()) |pair| {
+                        try self.markExpr(pair.interpolation, work);
+                        try self.markExpr(pair.segment, work);
+                    }
+                } else {
+                    try self.markExprSpan(module, call.args, work);
+                }
             },
             .e_structural_eq => |eq| {
                 try self.markExpr(eq.lhs, work);
@@ -5357,6 +5414,7 @@ const CheckedSourceNodes = struct {
             },
             .e_tuple_access => |access| try self.markExpr(access.tuple, work),
             .e_dbg => |dbg| try self.markExpr(dbg.expr, work),
+            .e_expect_err => |expect_err| try self.markExpr(expect_err.expr, work),
             .e_expect => |expect| try self.markExpr(expect.body, work),
             .e_return => |ret| {
                 try self.markExpr(ret.expr, work);
@@ -5530,6 +5588,15 @@ pub const CheckedBodyStore = struct {
     pattern_binders: []CheckedPatternBinder = &.{},
     pattern_binder_by_pattern: []?PatternBinderId = &.{},
     source_node_map: CheckedSourceNodeMap = .{},
+    /// Synthesized `from_numeral` conversion expressions for literal patterns,
+    /// keyed by the pattern's source node. Pattern nodes already occupy their
+    /// slot in `source_node_map`, so these live in a dedicated table.
+    numeral_conversion_exprs: []const NumeralConversionExpr = &.{},
+
+    pub const NumeralConversionExpr = struct {
+        raw_node: u32,
+        expr: CheckedExprId,
+    };
 
     pub fn fromModule(
         allocator: Allocator,
@@ -5607,10 +5674,6 @@ pub const CheckedBodyStore = struct {
             }
         }
 
-        const expr_diverges = try allocator.alloc(bool, exprs.items.len);
-        errdefer allocator.free(expr_diverges);
-        @memset(expr_diverges, false);
-
         const statement_diverges = try allocator.alloc(bool, statements.items.len);
         errdefer allocator.free(statement_diverges);
         @memset(statement_diverges, false);
@@ -5618,6 +5681,9 @@ pub const CheckedBodyStore = struct {
         const pattern_binder_by_pattern = try allocator.alloc(?PatternBinderId, patterns.items.len);
         errdefer allocator.free(pattern_binder_by_pattern);
         @memset(pattern_binder_by_pattern, null);
+
+        var numeral_conversion_exprs = std.ArrayList(NumeralConversionExpr).empty;
+        errdefer numeral_conversion_exprs.deinit(allocator);
 
         var copier = CheckedBodyPayloadCopier{
             .allocator = allocator,
@@ -5628,6 +5694,8 @@ pub const CheckedBodyStore = struct {
             .pattern_binders = &pattern_binders,
             .pattern_binder_by_pattern = pattern_binder_by_pattern,
             .checked_types = checked_types,
+            .exprs = &exprs,
+            .numeral_conversion_exprs = &numeral_conversion_exprs,
         };
 
         node_idx = 0;
@@ -5645,6 +5713,12 @@ pub const CheckedBodyStore = struct {
                 statements.items[@intFromEnum(id)].data = try copier.copyStatementData(@enumFromInt(node_idx));
             }
         }
+
+        // Allocated after the copy pass because copying literal patterns may
+        // append synthesized numeral-conversion expressions.
+        const expr_diverges = try allocator.alloc(bool, exprs.items.len);
+        errdefer allocator.free(expr_diverges);
+        @memset(expr_diverges, false);
 
         try publishCheckedBodyDivergence(allocator, exprs.items, statements.items, expr_diverges, statement_diverges);
 
@@ -5689,6 +5763,7 @@ pub const CheckedBodyStore = struct {
             .pattern_binders = pattern_binder_slice,
             .pattern_binder_by_pattern = pattern_binder_by_pattern,
             .source_node_map = source_node_map,
+            .numeral_conversion_exprs = try numeral_conversion_exprs.toOwnedSlice(allocator),
         };
     }
 
@@ -5736,6 +5811,13 @@ pub const CheckedBodyStore = struct {
 
     pub fn statementIdForSource(self: *const CheckedBodyStore, statement: CIR.Statement.Idx) ?CheckedStatementId {
         return self.source_node_map.statement(statement);
+    }
+
+    pub fn numeralConversionExprAtRawNode(self: *const CheckedBodyStore, raw_node: u32) ?CheckedExprId {
+        for (self.numeral_conversion_exprs) |entry| {
+            if (entry.raw_node == raw_node) return entry.expr;
+        }
+        return null;
     }
 
     pub fn patternBinderForCheckedPattern(self: *const CheckedBodyStore, pattern: CheckedPatternId) ?PatternBinderId {
@@ -5834,12 +5916,14 @@ pub const CheckedBodyStore = struct {
         var iter = plans.numeral_by_node.iterator();
         while (iter.next()) |entry| {
             const raw_node = @intFromEnum(entry.key_ptr.*);
-            const checked_expr = self.source_node_map.exprAtRawNode(raw_node) orelse {
-                checkedArtifactInvariant(
-                    "from_numeral plan {d} points at source node {d} with no checked expression",
-                    .{ @intFromEnum(entry.value_ptr.*), raw_node },
-                );
-            };
+            const checked_expr = self.source_node_map.exprAtRawNode(raw_node) orelse
+                self.numeralConversionExprAtRawNode(raw_node) orelse
+                {
+                    checkedArtifactInvariant(
+                        "from_numeral plan {d} points at source node {d} with no checked expression",
+                        .{ @intFromEnum(entry.value_ptr.*), raw_node },
+                    );
+                };
             const data = &self.exprs[@intFromEnum(checked_expr)].data;
             switch (data.*) {
                 .num_from_numeral => data.* = .{ .num_from_numeral = entry.value_ptr.* },
@@ -5854,6 +5938,36 @@ pub const CheckedBodyStore = struct {
                 => {},
                 else => checkedArtifactInvariant(
                     "from_numeral plan {d} points at non-numeral checked expression {d}",
+                    .{ @intFromEnum(entry.value_ptr.*), @intFromEnum(checked_expr) },
+                ),
+            }
+        }
+    }
+
+    pub fn attachQuotePlans(
+        self: *CheckedBodyStore,
+        plans: *const static_dispatch.StaticDispatchPlanTable,
+    ) void {
+        var iter = plans.quote_by_node.iterator();
+        while (iter.next()) |entry| {
+            const raw_node = @intFromEnum(entry.key_ptr.*);
+            const checked_expr = self.source_node_map.exprAtRawNode(raw_node) orelse
+                self.numeralConversionExprAtRawNode(raw_node) orelse
+                {
+                    checkedArtifactInvariant(
+                        "from_quote plan {d} points at source node {d} with no checked expression",
+                        .{ @intFromEnum(entry.value_ptr.*), raw_node },
+                    );
+                };
+            const data = &self.exprs[@intFromEnum(checked_expr)].data;
+            switch (data.*) {
+                .str_from_quote => |quote| data.* = .{ .str_from_quote = .{
+                    .plan = entry.value_ptr.*,
+                    .literal = quote.literal,
+                } },
+                .str, .str_segment => {},
+                else => checkedArtifactInvariant(
+                    "from_quote plan {d} points at non-string checked expression {d}",
                     .{ @intFromEnum(entry.value_ptr.*), @intFromEnum(checked_expr) },
                 ),
             }
@@ -5937,6 +6051,7 @@ pub const CheckedBodyStore = struct {
     }
 
     pub fn deinit(self: *CheckedBodyStore, allocator: Allocator) void {
+        allocator.free(self.numeral_conversion_exprs);
         self.source_node_map.deinit(allocator);
         allocator.free(self.pattern_binder_by_pattern);
         allocator.free(self.pattern_binders);
@@ -6098,6 +6213,7 @@ fn checkedExprDataDiverges(
         .dbg,
         .expect,
         => |child| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, child, expr_states, statement_states),
+        .expect_err => true,
         .field_access => |field| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, field.receiver, expr_states, statement_states),
         .structural_eq => |eq| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, eq.lhs, expr_states, statement_states) or
             checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, eq.rhs, expr_states, statement_states),
@@ -6115,6 +6231,7 @@ fn checkedExprDataDiverges(
         .typed_int,
         .typed_frac,
         .typed_num_from_numeral,
+        .str_from_quote,
         .str_segment,
         .bytes_literal,
         .lookup_local,
@@ -6357,6 +6474,14 @@ const CheckedStringLiteralBuilder = struct {
         return id;
     }
 
+    fn internBytes(self: *CheckedStringLiteralBuilder, bytes: []const u8) Allocator.Error!CheckedStringLiteralId {
+        const id: CheckedStringLiteralId = @enumFromInt(@as(u32, @intCast(self.strings.items.len)));
+        const owned = try self.allocator.dupe(u8, bytes);
+        errdefer self.allocator.free(owned);
+        try self.strings.append(self.allocator, owned);
+        return id;
+    }
+
     fn toOwnedSlice(self: *CheckedStringLiteralBuilder) Allocator.Error![]const []const u8 {
         return try self.strings.toOwnedSlice(self.allocator);
     }
@@ -6377,11 +6502,13 @@ const CheckedBodyPayloadCopier = struct {
     allocator: Allocator,
     module: TypedCIR.Module,
     names: *canonical.CanonicalNameStore,
-    source_node_map: *const CheckedSourceNodeMap,
+    source_node_map: *CheckedSourceNodeMap,
     string_builder: *CheckedStringLiteralBuilder,
     pattern_binders: *std.ArrayList(CheckedPatternBinder),
     pattern_binder_by_pattern: []?PatternBinderId,
     checked_types: *const CheckedTypePublication,
+    exprs: *std.ArrayList(CheckedExpr),
+    numeral_conversion_exprs: *std.ArrayList(CheckedBodyStore.NumeralConversionExpr),
 
     fn copyExprData(self: *@This(), expr_idx: CIR.Expr.Idx) Allocator.Error!CheckedExprData {
         const expr = self.module.expr(expr_idx).data;
@@ -6396,7 +6523,7 @@ const CheckedBodyPayloadCopier = struct {
             .e_typed_frac => |typed| try self.copyTypedFracLiteral(expr_idx, typed.value, typed.type_name),
             .e_typed_num_from_numeral => try self.copyTypedNumFromNumeralLiteral(expr_idx),
             .e_str_segment => |str| .{ .str_segment = try self.string_builder.intern(str.literal) },
-            .e_str => |str| .{ .str = try self.copyExprSpan(str.span) },
+            .e_str => |str| try self.copyStrExpr(expr_idx, str.span),
             .e_bytes_literal => |bytes| .{ .bytes_literal = try self.string_builder.intern(bytes.literal) },
             .e_lookup_local => |lookup| .{ .lookup_local = .{
                 .pattern = self.checkedPattern(lookup.pattern_idx),
@@ -6411,6 +6538,7 @@ const CheckedBodyPayloadCopier = struct {
                 .cond = self.checkedExpr(match.cond),
                 .branches = try self.copyMatchBranches(match.branches),
                 .is_try_suffix = match.is_try_suffix,
+                .skip_exhaustiveness = match.skip_exhaustiveness,
             } },
             .e_if => |if_| .{ .if_ = .{
                 .branches = try self.copyIfBranches(if_.branches),
@@ -6474,7 +6602,12 @@ const CheckedBodyPayloadCopier = struct {
                 "ordinary method call reached artifact publication after checking; expected explicit static-dispatch plan",
                 .{},
             ),
-            .e_dispatch_call => .{ .dispatch_call = null },
+            .e_dispatch_call => blk: {
+                if (self.module.moduleEnvConst().isStrInterpolationCall(expr_idx)) {
+                    break :blk .{ .str = try self.copyStrInterpolationSegments(expr_idx) };
+                }
+                break :blk .{ .dispatch_call = null };
+            },
             .e_structural_eq => |eq| .{ .structural_eq = .{
                 .lhs = self.checkedExpr(eq.lhs),
                 .rhs = self.checkedExpr(eq.rhs),
@@ -6493,6 +6626,10 @@ const CheckedBodyPayloadCopier = struct {
             .e_runtime_error => .runtime_error,
             .e_crash => |crash| .{ .crash = try self.string_builder.intern(crash.msg) },
             .e_dbg => |dbg| .{ .dbg = self.checkedExpr(dbg.expr) },
+            .e_expect_err => |expect_err| .{ .expect_err = .{
+                .expr = self.checkedExpr(expect_err.expr),
+                .snippet = try self.string_builder.intern(expect_err.snippet),
+            } },
             .e_expect => |expect| .{ .expect = self.checkedExpr(expect.body) },
             .e_ellipsis => .ellipsis,
             .e_anno_only => .anno_only,
@@ -6519,6 +6656,93 @@ const CheckedBodyPayloadCopier = struct {
                 .args = try self.copyExprSpan(run.args),
             } },
         };
+    }
+
+    /// Publish a Str-typed interpolation dispatch call as its ordered
+    /// segment list: the receiver literal, then each interpolation and the
+    /// literal segment that follows it. Lowering turns this into direct
+    /// string concatenation, so the synthetic iterator chain never reaches
+    /// code generation.
+    fn copyStrInterpolationSegments(self: *@This(), expr_idx: CIR.Expr.Idx) Allocator.Error![]const CheckedExprId {
+        const env = self.module.moduleEnvConst();
+        var segments = std.ArrayList(CheckedExprId).empty;
+        errdefer segments.deinit(self.allocator);
+
+        const call = switch (self.module.expr(expr_idx).data) {
+            .e_dispatch_call => |call| call,
+            else => checkedArtifactInvariant("interpolation segment publication reached a non-dispatch expression", .{}),
+        };
+        try segments.append(self.allocator, self.checkedExpr(call.receiver));
+        var pairs = env.interpolationPairs(expr_idx);
+        while (pairs.next()) |pair| {
+            try segments.append(self.allocator, self.checkedExpr(pair.interpolation));
+            try segments.append(self.allocator, self.checkedExpr(pair.segment));
+        }
+        return try segments.toOwnedSlice(self.allocator);
+    }
+
+    fn copyStrExpr(self: *@This(), expr_idx: CIR.Expr.Idx, span: CIR.Expr.Span) Allocator.Error!CheckedExprData {
+        // A literal whose checked type is a non-builtin nominal converts through
+        // from_quote; checking recorded a dispatch plan for it.
+        if (self.module.moduleEnvConst().quoteDispatchPlanForNode(ModuleEnv.nodeIdxFrom(expr_idx)) != null and
+            self.checkedBuiltinForExpr(expr_idx) == null)
+        {
+            return .{ .str_from_quote = .{
+                .plan = null,
+                .literal = try self.internQuoteBytes(span),
+            } };
+        }
+        return .{ .str = try self.copyExprSpan(span) };
+    }
+
+    /// Intern the complete post-escape bytes of a literal-only string,
+    /// concatenating its segments.
+    fn internQuoteBytes(self: *@This(), span: CIR.Expr.Span) Allocator.Error!CheckedStringLiteralId {
+        const segments = self.module.sliceExpr(span);
+        if (segments.len == 1) {
+            switch (self.module.expr(segments[0]).data) {
+                .e_str_segment => |seg| return try self.string_builder.intern(seg.literal),
+                else => {},
+            }
+        }
+        var bytes = std.ArrayList(u8).empty;
+        defer bytes.deinit(self.allocator);
+        for (segments) |seg_idx| {
+            switch (self.module.expr(seg_idx).data) {
+                .e_str_segment => |seg| try bytes.appendSlice(self.allocator, self.module.getString(seg.literal)),
+                else => checkedArtifactInvariant("from_quote literal contained an interpolation segment", .{}),
+            }
+        }
+        return try self.string_builder.internBytes(bytes.items);
+    }
+
+    /// Synthesize the `.str_from_quote` checked expression a string literal
+    /// pattern converts through when its type is a non-builtin string type,
+    /// registered in the conversion table the same way numeral patterns are.
+    fn quoteConversionExprForPattern(
+        self: *@This(),
+        pattern_idx: CIR.Pattern.Idx,
+        literal: StringLiteral.Idx,
+    ) Allocator.Error!?CheckedExprId {
+        const node = ModuleEnv.nodeIdxFrom(pattern_idx);
+        if (self.module.moduleEnvConst().quoteDispatchPlanForNode(node) == null) return null;
+        const checked_ty = self.checkedPatternTypeRoot(pattern_idx);
+        if (checkedBuiltinForLiteralTarget(self.checked_types.store.view(), checked_ty) != null) return null;
+        const id: CheckedExprId = @enumFromInt(try checkedSourceNodeIdFromLen(self.exprs.items.len));
+        try self.exprs.append(self.allocator, .{
+            .id = id,
+            .ty = checked_ty,
+            .source_region = self.module.regionAt(node),
+            .data = .{ .str_from_quote = .{
+                .plan = null,
+                .literal = try self.string_builder.intern(literal),
+            } },
+        });
+        try self.numeral_conversion_exprs.append(self.allocator, .{
+            .raw_node = @intFromEnum(node),
+            .expr = id,
+        });
+        return id;
     }
 
     fn copyNumFromNumeralLiteral(
@@ -6677,6 +6901,36 @@ const CheckedBodyPayloadCopier = struct {
         return checkedBuiltinForLiteralTarget(self.checked_types.store.view(), checked_ty);
     }
 
+    fn checkedPatternTypeRoot(self: *@This(), pattern_idx: CIR.Pattern.Idx) CheckedTypeId {
+        return self.checked_types.rootForSourceVar(self.module, self.module.patternType(pattern_idx)) orelse {
+            checkedArtifactInvariant("checked numeric pattern type root was not published", .{});
+        };
+    }
+
+    /// Synthesize the `.num_from_numeral` checked expression a literal pattern
+    /// converts through when its type is a non-builtin number type. The
+    /// expression is registered at the pattern's source node so dispatch-plan
+    /// attachment and compile-time root creation find it the same way they
+    /// find literal expressions.
+    fn numeralConversionExprForPattern(self: *@This(), pattern_idx: CIR.Pattern.Idx) Allocator.Error!?CheckedExprId {
+        const node = ModuleEnv.nodeIdxFrom(pattern_idx);
+        if (self.module.moduleEnvConst().numeralDispatchPlanForNode(node) == null) return null;
+        const checked_ty = self.checkedPatternTypeRoot(pattern_idx);
+        if (checkedBuiltinForLiteralTarget(self.checked_types.store.view(), checked_ty) != null) return null;
+        const id: CheckedExprId = @enumFromInt(try checkedSourceNodeIdFromLen(self.exprs.items.len));
+        try self.exprs.append(self.allocator, .{
+            .id = id,
+            .ty = checked_ty,
+            .source_region = self.module.regionAt(node),
+            .data = .{ .num_from_numeral = null },
+        });
+        try self.numeral_conversion_exprs.append(self.allocator, .{
+            .raw_node = @intFromEnum(node),
+            .expr = id,
+        });
+        return id;
+    }
+
     fn floatLiteralForExpr(self: *@This(), comptime Float: type, expr_idx: CIR.Expr.Idx) Allocator.Error!Float {
         const literal = self.module.moduleEnvConst().numeralLiteralForNode(ModuleEnv.nodeIdxFrom(expr_idx)) orelse {
             checkedArtifactInvariant("checked typed float literal had no parser-owned numeral facts", .{});
@@ -6717,12 +6971,27 @@ const CheckedBodyPayloadCopier = struct {
                 } else null,
             } },
             .tuple => |tuple| .{ .tuple = try self.copyPatternSpan(tuple.patterns) },
-            .num_literal => |num| .{ .num_literal = .{ .value = num.value, .kind = num.kind } },
-            .small_dec_literal => |dec| .{ .small_dec_literal = .{ .value = dec.value, .has_suffix = dec.has_suffix } },
-            .dec_literal => |dec| .{ .dec_literal = .{ .value = dec.value, .has_suffix = dec.has_suffix } },
+            .num_literal => |num| .{ .num_literal = .{
+                .value = num.value,
+                .kind = num.kind,
+                .conversion = try self.numeralConversionExprForPattern(pattern_idx),
+            } },
+            .small_dec_literal => |dec| .{ .small_dec_literal = .{
+                .value = dec.value,
+                .has_suffix = dec.has_suffix,
+                .conversion = if (dec.has_suffix) null else try self.numeralConversionExprForPattern(pattern_idx),
+            } },
+            .dec_literal => |dec| .{ .dec_literal = .{
+                .value = dec.value,
+                .has_suffix = dec.has_suffix,
+                .conversion = if (dec.has_suffix) null else try self.numeralConversionExprForPattern(pattern_idx),
+            } },
             .frac_f32_literal => |frac| .{ .frac_f32_literal = frac.value },
             .frac_f64_literal => |frac| .{ .frac_f64_literal = frac.value },
-            .str_literal => |str| .{ .str_literal = try self.string_builder.intern(str.literal) },
+            .str_literal => |str| .{ .str_literal = .{
+                .literal = try self.string_builder.intern(str.literal),
+                .conversion = try self.quoteConversionExprForPattern(pattern_idx, str.literal),
+            } },
             .underscore => .underscore,
             .runtime_error => .runtime_error,
         };
@@ -7271,6 +7540,7 @@ fn checkedBuiltinForLiteralTarget(view: CheckedTypeStoreView, root: CheckedTypeI
 fn checkedBuiltinForDefaultedNumericVariable(variable: CheckedTypeVariable) ?CheckedBuiltinNominal {
     return switch (variable.numeric_default_phase orelse return null) {
         .mono_specialization => .dec,
+        .mono_specialization_str => .str,
         .checking_finalized => checkedArtifactInvariant("checking-finalized numeric variable reached checked literal publication", .{}),
     };
 }
@@ -7411,6 +7681,7 @@ fn deinitCheckedExprData(allocator: Allocator, data: *CheckedExprData) void {
         .typed_int,
         .typed_frac,
         .typed_num_from_numeral,
+        .str_from_quote,
         .str_segment,
         .bytes_literal,
         .lookup_local,
@@ -7427,6 +7698,7 @@ fn deinitCheckedExprData(allocator: Allocator, data: *CheckedExprData) void {
         .runtime_error,
         .crash,
         .dbg,
+        .expect_err,
         .expect,
         .ellipsis,
         .anno_only,
@@ -8780,6 +9052,11 @@ const CheckedTemplateRefCollector = struct {
                 try self.dispatch_refs.append(self.allocator, id);
                 try self.collectStaticDispatchPlanArgs(id);
             },
+            .str_from_quote => |quote| {
+                const id = quote.plan orelse checkedArtifactInvariant("checked from_quote expression reached template closure collection without a dispatch plan", .{});
+                try self.dispatch_refs.append(self.allocator, id);
+                try self.collectStaticDispatchPlanArgs(id);
+            },
             .str,
             .list,
             .tuple,
@@ -8836,6 +9113,7 @@ const CheckedTemplateRefCollector = struct {
             },
             .tuple_access => |access| try self.collectExpr(access.tuple),
             .dbg => |child| try self.collectExpr(child),
+            .expect_err => |expect_err| try self.collectExpr(expect_err.expr),
             .expect => |child| try self.collectExpr(child),
             .return_ => |ret| {
                 try self.collectExpr(ret.expr);
@@ -8887,7 +9165,7 @@ const CheckedTemplateRefCollector = struct {
         const plan = self.static_dispatch_plans.plans[raw];
         for (plan.args) |arg| switch (arg) {
             .checked_expr => |expr| try self.collectExpr(expr),
-            .generated_numeral => {},
+            .generated_numeral, .generated_quote => {},
         };
     }
 
@@ -9281,7 +9559,7 @@ pub const CheckedProcedureTemplateTable = struct {
                 .nested_proc_sites = .{},
                 .target = switch (root.kind) {
                     .expect => .entry,
-                    .constant, .callable_binding => .comptime_only,
+                    .constant, .callable_binding, .numeral_conversion, .quote_conversion => .comptime_only,
                 },
             });
         }
@@ -9473,6 +9751,7 @@ const NestedProcSiteBuilder = struct {
             .unary_minus => |child| try self.scanExpr(child, owner, false),
             .unary_not => |child| try self.scanExpr(child, owner, false),
             .dbg => |child| try self.scanExpr(child, owner, false),
+            .expect_err => |expect_err| try self.scanExpr(expect_err.expr, owner, false),
             .expect => |child| try self.scanExpr(child, owner, false),
             .return_ => |ret| {
                 try self.scanExpr(ret.expr, owner, false);
@@ -9487,6 +9766,7 @@ const NestedProcSiteBuilder = struct {
             .num_from_numeral,
             .typed_num_from_numeral,
             => |plan_id| try self.scanStaticDispatchPlanArgs(plan_id orelse checkedArtifactInvariant("checked from_numeral expression reached nested procedure site collection without a dispatch plan", .{}), owner),
+            .str_from_quote => |quote| try self.scanStaticDispatchPlanArgs(quote.plan orelse checkedArtifactInvariant("checked from_quote expression reached nested procedure site collection without a dispatch plan", .{}), owner),
             .structural_eq => |eq| {
                 try self.scanExpr(eq.lhs, owner, false);
                 try self.scanExpr(eq.rhs, owner, false);
@@ -9542,7 +9822,7 @@ const NestedProcSiteBuilder = struct {
         const plan = self.static_dispatch_plans.plans[raw];
         for (plan.args) |arg| switch (arg) {
             .checked_expr => |expr| try self.scanExpr(expr, owner, false),
-            .generated_numeral => {},
+            .generated_numeral, .generated_quote => {},
         };
     }
 
@@ -12481,6 +12761,15 @@ pub const CompileTimeRootKind = enum {
     constant,
     callable_binding,
     expect,
+    /// A `from_numeral` conversion of a numeric literal whose target is a
+    /// non-builtin nominal type. The root body evaluates the dispatch call's
+    /// `Try` result; finalization unwraps `Ok` into the stored constant and
+    /// reports `Err(InvalidNumeral(..))` as a checking problem.
+    numeral_conversion,
+    /// A `from_quote` conversion of a string literal whose target is a
+    /// non-builtin nominal type; works exactly like `numeral_conversion` with
+    /// `Err(BadQuotedBytes(..))` reported as the checking problem.
+    quote_conversion,
 };
 
 /// Public `CompileTimeRootPayload` declaration.
@@ -12550,6 +12839,56 @@ pub const CompileTimeRootTable = struct {
             });
         }
 
+        for (module_env.numeral_dispatch_plans.items.items) |numeral_plan| {
+            const expr_idx: CIR.Expr.Idx = @enumFromInt(numeral_plan.node_idx);
+            const checked_expr = checked_bodies.exprIdForSource(expr_idx) orelse
+                checked_bodies.numeralConversionExprAtRawNode(numeral_plan.node_idx) orelse
+                continue;
+            switch (checked_bodies.exprs[@intFromEnum(checked_expr)].data) {
+                .num_from_numeral, .typed_num_from_numeral => {},
+                else => continue,
+            }
+            const fn_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(numeral_plan.fn_var));
+            const try_ty = switch (checked_types.store.payloads.items[@intFromEnum(fn_ty)]) {
+                .function => |function| function.ret,
+                else => checkedArtifactInvariant("from_numeral dispatch plan type was not a function", .{}),
+            };
+            try appendCompileTimeRoot(&roots, allocator, .{
+                .module_idx = module.moduleIndex(),
+                .kind = .numeral_conversion,
+                .source = .{ .expr = expr_idx },
+                .pattern = null,
+                .expr = checked_expr,
+                .checked_type = try_ty,
+                .payload = .pending,
+            });
+        }
+
+        for (module_env.quote_dispatch_plans.items.items) |quote_plan| {
+            const expr_idx: CIR.Expr.Idx = @enumFromInt(quote_plan.node_idx);
+            const checked_expr = checked_bodies.exprIdForSource(expr_idx) orelse
+                checked_bodies.numeralConversionExprAtRawNode(quote_plan.node_idx) orelse
+                continue;
+            switch (checked_bodies.exprs[@intFromEnum(checked_expr)].data) {
+                .str_from_quote => {},
+                else => continue,
+            }
+            const fn_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(quote_plan.fn_var));
+            const try_ty = switch (checked_types.store.payloads.items[@intFromEnum(fn_ty)]) {
+                .function => |function| function.ret,
+                else => checkedArtifactInvariant("from_quote dispatch plan type was not a function", .{}),
+            };
+            try appendCompileTimeRoot(&roots, allocator, .{
+                .module_idx = module.moduleIndex(),
+                .kind = .quote_conversion,
+                .source = .{ .expr = expr_idx },
+                .pattern = null,
+                .expr = checked_expr,
+                .checked_type = try_ty,
+                .payload = .pending,
+            });
+        }
+
         return .{ .roots = try roots.toOwnedSlice(allocator) };
     }
 
@@ -12563,6 +12902,18 @@ pub const CompileTimeRootTable = struct {
     pub fn lookupIdBySource(self: *const CompileTimeRootTable, source: RootSource) ?ComptimeRootId {
         for (self.roots) |entry| {
             if (rootSourceMatches(entry.source, source)) return entry.id;
+        }
+        return null;
+    }
+
+    /// Look up the literal-conversion (from_numeral or from_quote) root whose
+    /// body is the given checked expression.
+    pub fn lookupNumeralRootByExpr(self: *const CompileTimeRootTable, expr: CheckedExprId) ?CompileTimeRoot {
+        for (self.roots) |entry| {
+            switch (entry.kind) {
+                .numeral_conversion, .quote_conversion => if (entry.expr == expr) return entry,
+                else => {},
+            }
         }
         return null;
     }
@@ -12630,6 +12981,10 @@ fn verifyCompileTimeRootPayloadMatchesKind(kind: CompileTimeRootKind, payload: C
         },
         .expect => switch (payload) {
             .expect => true,
+            else => false,
+        },
+        .numeral_conversion, .quote_conversion => switch (payload) {
+            .const_node => true,
             else => false,
         },
     };
@@ -15268,7 +15623,7 @@ pub const CheckedModuleArtifact = struct {
             std.debug.assert(@intFromEnum(root.expr) < self.checked_bodies.exprs.len);
             if (root.pattern) |pattern| std.debug.assert(@intFromEnum(pattern) < self.checked_bodies.patterns.len);
             switch (root.kind) {
-                .constant, .callable_binding => switch (root.payload) {
+                .constant, .callable_binding, .numeral_conversion, .quote_conversion => switch (root.payload) {
                     .pending => {},
                     else => verifyCompileTimeRootPayloadMatchesKind(root.kind, root.payload),
                 },
@@ -17153,6 +17508,7 @@ pub fn publishFromTypedModule(
     errdefer static_dispatch_plans.deinit(allocator);
     checked_bodies.attachStaticDispatchPlans(&static_dispatch_plans);
     checked_bodies.attachNumeralPlans(&static_dispatch_plans);
+    checked_bodies.attachQuotePlans(&static_dispatch_plans);
     checked_bodies.attachIteratorForPlans(&static_dispatch_plans);
 
     var hosted_procs = try HostedProcTable.fromModule(allocator, module, global_value_defs, &canonical_names, &checked_procedure_templates);
@@ -17832,7 +18188,7 @@ test "provided primitive constant is a data export, not a runtime root" {
         \\    requires {}
         \\    exposes []
         \\    packages {}
-        \\    provides { answer_for_host: "answer" }
+        \\    provides { "roc_answer": answer_for_host }
         \\
         \\answer_for_host : I64
         \\answer_for_host = 42
@@ -17851,7 +18207,7 @@ test "provided nested record constant is a data export, not a runtime root" {
         \\    requires {}
         \\    exposes []
         \\    packages {}
-        \\    provides { profile_for_host: "profile" }
+        \\    provides { "roc_profile": profile_for_host }
         \\
         \\profile_for_host : {
         \\    user : { name : Str, scores : List(I64) },
@@ -17876,7 +18232,7 @@ test "provided nested heap constant is a data export, not a runtime root" {
         \\    requires {}
         \\    exposes []
         \\    packages {}
-        \\    provides { table_for_host: "table" }
+        \\    provides { "roc_table": table_for_host }
         \\
         \\table_for_host : List(List(Str))
         \\table_for_host = [
@@ -17899,7 +18255,7 @@ test "provided recursive nominal constant is a data export, not a runtime root" 
         \\    requires {}
         \\    exposes []
         \\    packages {}
-        \\    provides { tree_for_host: "tree" }
+        \\    provides { "roc_tree": tree_for_host }
         \\
         \\Tree := [Leaf(I64), Node(Tree, Tree)]
         \\
@@ -17926,7 +18282,7 @@ test "provided callable-containing record constant is a data export, not a runti
         \\    requires {}
         \\    exposes []
         \\    packages {}
-        \\    provides { table_for_host: "table" }
+        \\    provides { "roc_table": table_for_host }
         \\
         \\I64ToI64 : I64 -> I64
         \\
@@ -17947,7 +18303,7 @@ test "provided procedure remains a runtime root" {
         \\    requires {}
         \\    exposes []
         \\    packages {}
-        \\    provides { add_one_for_host: "add_one" }
+        \\    provides { "roc_add_one": add_one_for_host }
         \\
         \\add_one_for_host : I64 -> I64
         \\add_one_for_host = |value| value + 1

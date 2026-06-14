@@ -85,6 +85,7 @@ struct ZigLLVMEmitOptions {
     const char *llvm_ir_filename;
     const char *bitcode_filename;
     ZigLLVMCoverageOptions coverage;
+    bool no_target_libcalls;
 };
 
 // synchronize with llvm/include/Object/Archive.h::Object::Archive::Kind
@@ -109,6 +110,8 @@ enum ZigLLVMFloatABI {
 
 ZIG_EXTERN_C bool ZigLLVMTargetMachineEmitToFile(LLVMTargetMachineRef targ_machine_ref, LLVMModuleRef module_ref,
     char **error_message, const ZigLLVMEmitOptions *options);
+
+ZIG_EXTERN_C void ZigLLVMRunGlobalDCE(LLVMModuleRef module_ref);
 
 ZIG_EXTERN_C LLVMTargetMachineRef ZigLLVMCreateTargetMachine(LLVMTargetRef T, const char *Triple,
     const char *CPU, const char *Features, LLVMCodeGenOptLevel Level, LLVMRelocMode Reloc,

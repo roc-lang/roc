@@ -55,8 +55,6 @@ x = {
 ~~~
 # EXPECTED
 MISSING METHOD - multiline_string_complex.md:40:5:40:8
-MISSING METHOD - multiline_string_complex.md:37:3:37:9
-TYPE MISMATCH - multiline_string_complex.md:37:3:37:4
 # PROBLEMS
 **MISSING METHOD**
 This **not** method is being called on a value whose type doesn't have that method:
@@ -71,39 +69,6 @@ The value's type, which does not have a method named **not**, is:
     Str
 
 **Hint:** For this to work, the type would need to have a method named **not** associated with it in the type's declaration.
-
-**MISSING METHOD**
-The value before this **-** operator has a type that doesn't have a **minus** method:
-**multiline_string_complex.md:37:3:37:9:**
-```roc
-		0 - \\
-```
-		^^^^^^
-
-The value's type, which does not have a method named **minus**, is:
-
-    Str
-
-**Hint:** This numeric literal was given the type **Dec** because it was never used as any concrete number type. To use a different numeric type, add a suffix or a type annotation.
-
-**TYPE MISMATCH**
-This number is being used where a non-number type is needed:
-**multiline_string_complex.md:37:3:37:4:**
-```roc
-		0 - \\
-```
-		^
-
-The type was determined to be non-numeric here:
-**multiline_string_complex.md:37:7:37:9:**
-```roc
-		0 - \\
-```
-		    ^^
-
-Other code expects this to have the type:
-
-    Error
 
 # TOKENS
 ~~~zig
@@ -280,23 +245,84 @@ x = {
 			(e-literal (string "This is a "string" with just one line"))))
 	(d-let
 		(p-assign (ident "value3"))
-		(e-string
-			(e-literal (string "This is a string
+		(e-block
+			(s-let
+				(p-assign (ident "#interp_0"))
+				(e-runtime-error (tag "erroneous_value_use")))
+			(e-dispatch-call (method "from_interpolation") (constraint-fn-var 231)
+				(receiver
+					(e-string
+						(e-literal (string "This is a string
 With multiple lines
-"))
-			(e-lookup-local
-				(p-assign (ident "value1")))))
+"))))
+				(args
+					(e-dispatch-call (method "prepended") (constraint-fn-var 189)
+						(receiver
+							(e-dispatch-call (method "iter") (constraint-fn-var 125)
+								(receiver
+									(e-empty_list))
+								(args)))
+						(args
+							(e-tuple
+								(elems
+									(e-runtime-error (tag "erroneous_value_use"))
+									(e-string
+										(e-literal (string "")))))))))))
 	(d-let
 		(p-assign (ident "value4"))
-		(e-string
-			(e-literal (string "This is a string
+		(e-block
+			(s-let
+				(p-assign (ident "#interp_1"))
+				(e-runtime-error (tag "erroneous_value_use")))
+			(e-dispatch-call (method "from_interpolation") (constraint-fn-var 358)
+				(receiver
+					(e-string
+						(e-literal (string "This is a string
 With multiple lines
-"))
-			(e-lookup-local
-				(p-assign (ident "value2")))))
+"))))
+				(args
+					(e-dispatch-call (method "prepended") (constraint-fn-var 316)
+						(receiver
+							(e-dispatch-call (method "iter") (constraint-fn-var 252)
+								(receiver
+									(e-empty_list))
+								(args)))
+						(args
+							(e-tuple
+								(elems
+									(e-runtime-error (tag "erroneous_value_use"))
+									(e-string
+										(e-literal (string "")))))))))))
 	(d-let
 		(p-assign (ident "value5"))
-		(e-runtime-error (tag "erroneous_value_expr")))
+		(e-record
+			(fields
+				(field (name "a")
+					(e-string
+						(e-literal (string "Multiline"))))
+				(field (name "b")
+					(e-tuple
+						(elems
+							(e-string
+								(e-literal (string "Multiline")))
+							(e-string
+								(e-literal (string "Multiline"))))))
+				(field (name "c")
+					(e-list
+						(elems
+							(e-string
+								(e-literal (string "multiline"))))))
+				(field (name "d")
+					(e-dispatch-call (method "minus") (constraint-fn-var 469)
+						(receiver
+							(e-num (value "0")))
+						(args
+							(e-string))))
+				(field (name "e")
+					(e-dispatch-call (method "not") (constraint-fn-var 484)
+						(receiver
+							(e-string))
+						(args))))))
 	(d-let
 		(p-assign (ident "x"))
 		(e-block
@@ -308,17 +334,17 @@ With multiple lines
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Str"))
-		(patt (type "Str"))
-		(patt (type "Str"))
-		(patt (type "Str"))
-		(patt (type "{ a: Str, b: (Str, Str), c: List(Str), d: Error, e: Error }"))
-		(patt (type "Str")))
+		(patt (type "Error"))
+		(patt (type "Error"))
+		(patt (type "Error"))
+		(patt (type "Error"))
+		(patt (type "{ a: Error, b: (Error, Error), c: List(Error), d: Error, e: Error }"))
+		(patt (type "Error")))
 	(expressions
-		(expr (type "Str"))
-		(expr (type "Str"))
-		(expr (type "Str"))
-		(expr (type "Str"))
-		(expr (type "{ a: Str, b: (Str, Str), c: List(Str), d: Error, e: Error }"))
-		(expr (type "Str"))))
+		(expr (type "Error"))
+		(expr (type "Error"))
+		(expr (type "Error"))
+		(expr (type "Error"))
+		(expr (type "{ a: Error, b: (Error, Error), c: List(Error), d: Error, e: Error }"))
+		(expr (type "Error"))))
 ~~~

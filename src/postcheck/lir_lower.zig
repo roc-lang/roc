@@ -107,6 +107,7 @@ pub fn run(
     var lowerer = try Lowerer.init(allocator, target_usize, &owned);
     errdefer lowerer.deinit();
 
+    try lowerer.result.store.setSourceFiles(owned.source_files.items);
     try lowerer.registerProcPlaceholders();
     try lowerer.lowerAllFns();
     try lowerer.bindRoots();
@@ -212,25 +213,35 @@ const Lowerer = struct {
                 arg_locals[i] = try self.localFor(arg.local);
             }
 
+            self.result.store.current_loc = switch (fn_.body) {
+                .roc => |body_id| self.program.exprLoc(body_id),
+                .hosted => base.SourceLoc.none,
+            };
             const proc_id = try self.result.store.addProcSpec(.{
                 .name = lirSymbol(fn_.symbol),
                 .args = try self.result.store.addLocalSpan(arg_locals),
                 .body = null,
                 .ret_layout = try self.layoutOfType(fn_.ret),
                 .abi = if (self.usesErasedCallableAbi(fn_)) .erased_callable else .roc,
-                .hosted = hostedProcForFn(fn_),
+                .hosted = try self.hostedProcForFn(fn_),
             });
+            if (self.program.procDebugName(fn_.symbol)) |name| {
+                try self.result.store.setProcDebugName(proc_id, self.program.names.exportNameText(name));
+            }
+            self.result.store.current_loc = base.SourceLoc.none;
             self.fn_map[index] = proc_id;
         }
     }
 
-    fn hostedProcForFn(fn_: LambdaMono.Fn) ?LIR.HostedProc {
+    fn hostedProcForFn(self: *Lowerer, fn_: LambdaMono.Fn) Common.LowerError!?LIR.HostedProc {
         const source = fn_.source orelse return null;
         return switch (source.fn_def) {
             .local_hosted,
             .imported_hosted,
             => |hosted| .{
-                .external_symbol_name = hosted.external_symbol_name,
+                .symbol = try self.result.store.insertString(
+                    self.program.names.externalSymbolNameText(hosted.external_symbol_name),
+                ),
                 .dispatch_index = hosted.dispatch_index,
             },
             else => null,
@@ -664,6 +675,9 @@ const Lowerer = struct {
         next: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
         const expr_data = self.expr(expr_id);
+        const saved_loc = self.result.store.current_loc;
+        defer self.result.store.current_loc = saved_loc;
+        self.result.store.current_loc = self.program.exprLoc(expr_id);
         return switch (expr_data.data) {
             .local => |local| try self.assignLocal(target, try self.localFor(local), next),
             .unit => try self.assignZst(target, next),
@@ -729,6 +743,14 @@ const Lowerer = struct {
                 const message = try self.addTemp(self.expr(child).ty);
                 const debug_stmt = try self.result.store.addCFStmt(.{ .debug = .{ .message = message, .next = after_dbg } });
                 break :blk try self.lowerExprInto(message, child, debug_stmt);
+            },
+            .expect_err => |expect_err| blk: {
+                const message = try self.addTemp(self.expr(expect_err.msg).ty);
+                const expect_err_stmt = try self.result.store.addCFStmt(.{ .expect_err = .{
+                    .message = message,
+                    .region = expect_err.region,
+                } });
+                break :blk try self.lowerExprInto(message, expect_err.msg, expect_err_stmt);
             },
             .expect => |child| try self.lowerExpectExprInto(target, child, next),
         };
@@ -1365,6 +1387,9 @@ const Lowerer = struct {
     }
 
     fn lowerStmt(self: *Lowerer, stmt_id: LambdaMono.StmtId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+        const saved_loc = self.result.store.current_loc;
+        defer self.result.store.current_loc = saved_loc;
+        self.result.store.current_loc = self.program.stmtLoc(stmt_id);
         return switch (self.program.stmts.items[@intFromEnum(stmt_id)]) {
             .let_ => |let_| blk: {
                 const value = try self.addTemp(self.expr(let_.value).ty);
@@ -2288,6 +2313,7 @@ const Lowerer = struct {
         }
         const program_local = self.program.locals.items[index];
         const lir_local = try self.addTemp(program_local.ty);
+        try self.result.store.setLocalName(lir_local, self.program.localName(local));
         self.local_map[index] = lir_local;
         return lir_local;
     }

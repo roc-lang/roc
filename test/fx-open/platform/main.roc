@@ -2,7 +2,12 @@ platform ""
     requires {} { main! : List(Str) => Try({}, [Exit(I32), ..]) }
     exposes [Stdout, Stderr, Stdin]
     packages {}
-    provides { main_for_host!: "main" }
+    provides { "roc_main": main_for_host! }
+    hosted {
+        "roc_stderr_line": Stderr.line!,
+        "roc_stdin_line": Stdin.line!,
+        "roc_stdout_line": Stdout.line!,
+    }
     targets: {
         inputs: "targets/",
         x64mac: { inputs: ["libhost.a", app] },

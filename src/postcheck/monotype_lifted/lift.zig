@@ -49,8 +49,18 @@ pub fn run(
     owned.if_branches = .empty;
     var string_literals = owned.string_literals;
     owned.string_literals = .empty;
+    var proc_debug_names = owned.proc_debug_names;
+    owned.proc_debug_names = Mono.ProcDebugNameMap.init(allocator);
     var runtime_schema_requests = owned.runtime_schema_requests;
     owned.runtime_schema_requests = .empty;
+    var source_files = owned.source_files;
+    owned.source_files = .empty;
+    var expr_locs = owned.expr_locs;
+    owned.expr_locs = .empty;
+    var stmt_locs = owned.stmt_locs;
+    owned.stmt_locs = .empty;
+    var local_names = owned.local_names;
+    owned.local_names = .empty;
 
     var program = Ast.Program.init(
         allocator,
@@ -69,6 +79,11 @@ pub fn run(
         branches,
         if_branches,
         string_literals,
+        proc_debug_names,
+        source_files,
+        expr_locs,
+        stmt_locs,
+        local_names,
         owned.next_symbol,
     );
     name_store = undefined;
@@ -86,6 +101,11 @@ pub fn run(
     branches = undefined;
     if_branches = undefined;
     string_literals = undefined;
+    proc_debug_names = undefined;
+    source_files = undefined;
+    expr_locs = undefined;
+    stmt_locs = undefined;
+    local_names = undefined;
     program.runtime_schema_requests = runtime_schema_requests;
     runtime_schema_requests = undefined;
     errdefer program.deinit();
@@ -101,6 +121,24 @@ pub fn run(
 }
 
 const FnTemplateMap = std.HashMap(Mono.FnTemplate, Ast.FnId, FnTemplateContext, std.hash_map.default_max_load_percentage);
+const FnFamilyMap = std.HashMap(Mono.FnTemplate, std.ArrayList(Ast.FnId), FnFamilyContext, std.hash_map.default_max_load_percentage);
+
+/// Template identity without the monomorphic type: the digest only
+/// disambiguates among multiple specializations of one checked template and
+/// scheme.
+const FnFamilyContext = struct {
+    pub fn hash(_: FnFamilyContext, template: Mono.FnTemplate) u64 {
+        var hasher = std.hash.Wyhash.init(0);
+        FnTemplateContext.hashFnDef(&hasher, template.fn_def);
+        hasher.update(&template.source_fn_key.bytes);
+        return hasher.final();
+    }
+
+    pub fn eql(_: FnFamilyContext, lhs: Mono.FnTemplate, rhs: Mono.FnTemplate) bool {
+        return std.meta.eql(lhs.fn_def, rhs.fn_def) and
+            std.mem.eql(u8, lhs.source_fn_key.bytes[0..], rhs.source_fn_key.bytes[0..]);
+    }
+};
 const FnActiveSet = std.AutoHashMap(Ast.FnId, void);
 
 const FnTemplateContext = struct {
@@ -124,7 +162,7 @@ const FnTemplateContext = struct {
             std.mem.eql(u8, lhs_digest.bytes[0..], rhs_digest.bytes[0..]);
     }
 
-    fn hashFnDef(hasher: *std.hash.Wyhash, fn_def: Mono.FnDef) void {
+    pub fn hashFnDef(hasher: *std.hash.Wyhash, fn_def: Mono.FnDef) void {
         std.hash.autoHash(hasher, std.meta.activeTag(fn_def));
         switch (fn_def) {
             .local_template,
@@ -171,6 +209,7 @@ const Lifter = struct {
     def_map: DefMap,
     nested_def_map: NestedDefMap,
     fn_templates: FnTemplateMap,
+    fn_families: FnFamilyMap,
     fn_bodies: std.ArrayList(?MonoFnBody),
     nested_fn_ids: std.AutoHashMap(Ast.FnId, void),
     initialized_fns: std.AutoHashMap(Ast.FnId, void),
@@ -197,6 +236,7 @@ const Lifter = struct {
                 .types = &output.types,
                 .names = &output.names,
             }),
+            .fn_families = FnFamilyMap.initContext(allocator, .{}),
             .fn_bodies = .empty,
             .nested_fn_ids = std.AutoHashMap(Ast.FnId, void).init(allocator),
             .initialized_fns = std.AutoHashMap(Ast.FnId, void).init(allocator),
@@ -208,6 +248,11 @@ const Lifter = struct {
         self.initialized_fns.deinit();
         self.nested_fn_ids.deinit();
         self.fn_bodies.deinit(self.allocator);
+        var families = self.fn_families.valueIterator();
+        while (families.next()) |list| {
+            list.deinit(self.allocator);
+        }
+        self.fn_families.deinit();
         self.fn_templates.deinit();
         if (self.nested_def_map.len > 0) self.allocator.free(self.nested_def_map);
         if (self.def_map.len > 0) self.allocator.free(self.def_map);
@@ -375,6 +420,7 @@ const Lifter = struct {
             .dbg,
             .expect,
             => |child| try self.rewriteExpr(child),
+            .expect_err => |expect_err| try self.rewriteExpr(expect_err.msg),
             .let_ => |let_| {
                 try self.rewriteExpr(let_.value);
                 try self.rewriteExpr(let_.rest);
@@ -494,11 +540,21 @@ const Lifter = struct {
             return;
         }
         result.value_ptr.* = fn_id;
+        const family = try self.fn_families.getOrPut(template);
+        if (!family.found_existing) family.value_ptr.* = .empty;
+        try family.value_ptr.append(self.allocator, fn_id);
     }
 
     fn fnIdForTemplate(self: *Lifter, template: Mono.FnTemplate) Ast.FnId {
-        return self.fn_templates.get(template) orelse
-            Common.invariant("Monotype function template reached lifting before its function was registered");
+        if (self.fn_templates.get(template)) |fn_id| return fn_id;
+        // The reference's monomorphic type may have been refined after the
+        // expression embedded it. The digest only disambiguates among
+        // multiple specializations of one template and scheme, so a family
+        // with exactly one specialization identifies the function on its own.
+        if (self.fn_families.get(template)) |family| {
+            if (family.items.len == 1) return family.items[0];
+        }
+        Common.invariant("Monotype function template reached lifting before its function was registered");
     }
 };
 
@@ -612,6 +668,7 @@ const CaptureSet = struct {
             .dbg,
             .expect,
             => |child| try self.collectExpr(child, bound),
+            .expect_err => |expect_err| try self.collectExpr(expect_err.msg, bound),
             .let_ => |let_| {
                 try self.collectExpr(let_.value, bound);
                 var added = std.ArrayList(Mono.LocalId).empty;

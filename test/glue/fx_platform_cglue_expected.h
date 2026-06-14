@@ -103,18 +103,20 @@ static inline uint8_t* roc_erased_callable_capture_ptr(RocErasedCallable callabl
 struct RocOps;
 
 /**
- * HostedFn - Function pointer type for hosted functions
+ * HostedFn - type-erased pointer to a hosted function.
  *
- * All hosted functions follow this signature:
- *   - ops: pointer to Roc runtime operations
- *   - ret: pointer to return value storage (or NULL if void return)
- *   - args: pointer to function-specific arguments struct (or NULL if no args)
+ * Each hosted function has its own natural C signature, determined by its Roc
+ * argument and return types: a leading `struct RocOps*` is present only when the
+ * function allocates or frees Roc-managed memory, followed by each argument by
+ * value and the natural return type. Store each implementation here cast to
+ * HostedFn (e.g. `(HostedFn) &my_impl`); the Roc runtime calls it with its
+ * concrete signature.
  *
  * Roc transfers ownership of refcounted arguments to hosted functions.
  * Hosted functions must decref owned refcounted arguments when done,
  * or retain/transfer ownership explicitly when storing or returning them.
  */
-typedef void (*HostedFn)(struct RocOps* ops, void* ret, void* args);
+typedef void (*HostedFn)(void);
 
 // =============================================================================
 // Hosted Function Count and Indices

@@ -70,9 +70,33 @@ pub const LowLevel = enum {
     list_release_excess_capacity,
     list_split_first,
     list_split_last,
+    list_map_can_reuse,
+    list_map_cast_unsafe,
+    list_map_extract_unsafe,
+    list_map_write_unsafe,
 
     // Bool operations
     bool_not,
+
+    // Hasher operations
+    dict_pseudo_seed,
+    hasher_finish,
+    hasher_write_bool,
+    hasher_write_u8,
+    hasher_write_u16,
+    hasher_write_u32,
+    hasher_write_u64,
+    hasher_write_u128,
+    hasher_write_i8,
+    hasher_write_i16,
+    hasher_write_i32,
+    hasher_write_i64,
+    hasher_write_i128,
+    hasher_write_f32,
+    hasher_write_f64,
+    hasher_write_dec,
+    hasher_write_bytes,
+    hasher_write_str,
 
     // Numeric comparison operations
     num_is_eq,
@@ -414,6 +438,24 @@ pub const LowLevel = enum {
     box_unbox,
     erased_capture_load,
 
+    // Compiler-internal pointer operations, introduced by the TRMC pass
+    // (src/lir/trmc.zig). Never produced by user code or canonicalization.
+    // Sizes always come from local layouts: the target local for ptr_alloca /
+    // box_alloc_zeroed (inner of ptr/box) and ptr_load, the value arg for
+    // ptr_store.
+    /// () -> Ptr(T): reserve a zeroed stack/frame slot for T, yield its address.
+    /// Emitted once per proc entry (pre-loop); backends may hoist to the prologue.
+    ptr_alloca,
+    /// () -> Box(T): heap cell via allocateWithRefcount (rc=1), payload zero-filled.
+    /// Bit-identical to a box_box whose payload is all zeroes.
+    box_alloc_zeroed,
+    /// (Ptr(T), T) -> {}: copy sizeOf(T) bytes from the value into *ptr.
+    ptr_store,
+    /// (Ptr(T)) -> T: copy sizeOf(T) bytes out of *ptr.
+    ptr_load,
+    /// (Box(T) | Ptr(T)) -> Ptr(T): identity bits.
+    ptr_cast,
+
     // Comparison
     compare,
 
@@ -595,7 +637,6 @@ pub const LowLevel = enum {
 
             .list_drop_at,
             .list_sublist,
-            .list_prepend,
             .list_drop_first,
             .list_drop_last,
             .list_take_first,
@@ -607,12 +648,32 @@ pub const LowLevel = enum {
             .list_split_last,
             => RcEffect.runtimeUniqueness(argMask(&.{0})),
 
+            .list_prepend => RcEffect.runtimeUniquenessRetainingArgs(argMask(&.{0}), argMask(&.{1})),
+
             .list_append_unsafe => RcEffect.consumesArgsReturningConsumedArgsRetainingArgs(argMask(&.{0}), argMask(&.{1})),
+
+            // Reads the list's refcount (and slice bit) without changing it.
+            .list_map_can_reuse => RcEffect.none(),
+
+            // Retypes a unique non-slice list to the output element type,
+            // keeping the same allocation. Only reachable behind a true
+            // `list_map_can_reuse`, so the result's count is 1 on return.
+            .list_map_cast_unsafe => RcEffect.consumesArgsReturningConsumedArgsRetainingArgs(argMask(&.{0}), 0),
+
+            // Moves one element's ownership out of a unique list's buffer.
+            // The buffer slot keeps stale bytes until `list_map_write_unsafe`
+            // stores the replacement; the op itself performs no RC work.
+            .list_map_extract_unsafe => RcEffect.none(),
+
+            // Stores an owned element into the slot vacated by
+            // `list_map_extract_unsafe`, mirroring `list_append_unsafe`.
+            .list_map_write_unsafe => RcEffect.consumesArgsReturningConsumedArgsRetainingArgs(argMask(&.{0}), argMask(&.{2})),
+
+            .list_swap => RcEffect.runtimeUniqueness(argMask(&.{0})),
 
             .list_set,
             .list_replace_unsafe,
-            .list_swap,
-            => RcEffect.runtimeUniqueness(argMask(&.{0})),
+            => RcEffect.runtimeUniquenessRetainingArgs(argMask(&.{0}), argMask(&.{2})),
 
             .list_concat => RcEffect.runtimeUniqueness(argMask(&.{ 0, 1 })),
 
@@ -655,6 +716,17 @@ pub const LowLevel = enum {
             // result cannot name a lender to borrow from.
             .erased_capture_load => RcEffect.retainsResult(),
 
+            .box_alloc_zeroed => RcEffect.allocates(),
+
+            // The stored value's ownership transfers into the pointed-at structure.
+            // The pointer args/results are ptr layouts, which are never refcounted.
+            .ptr_store => RcEffect.consumesArgsRetainingArgs(argMask(&.{1}), 0),
+
+            .ptr_alloca,
+            .ptr_load,
+            .ptr_cast,
+            => RcEffect.none(),
+
             .str_is_eq,
             .str_contains,
             .str_caseless_ascii_equals,
@@ -663,6 +735,24 @@ pub const LowLevel = enum {
             .str_count_utf8_bytes,
             .list_len,
             .bool_not,
+            .dict_pseudo_seed,
+            .hasher_finish,
+            .hasher_write_bool,
+            .hasher_write_u8,
+            .hasher_write_u16,
+            .hasher_write_u32,
+            .hasher_write_u64,
+            .hasher_write_u128,
+            .hasher_write_i8,
+            .hasher_write_i16,
+            .hasher_write_i32,
+            .hasher_write_i64,
+            .hasher_write_i128,
+            .hasher_write_f32,
+            .hasher_write_f64,
+            .hasher_write_dec,
+            .hasher_write_bytes,
+            .hasher_write_str,
             .num_is_eq,
             .num_is_gt,
             .num_is_gte,

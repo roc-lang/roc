@@ -107,6 +107,13 @@ pub const Output = struct {
 /// Options used by solved-to-LIR lowering.
 pub const Options = struct {
     inline_plan: SolvedInline.Plan = .{},
+    /// Allow `List.map` to reuse a unique input list's allocation for its
+    /// output when the input and output element layouts are interchangeable.
+    /// When disabled, `list_map_can_reuse` lowers to a constant 0 and the
+    /// in-place branch of `List.map` is dropped before it reaches LIR.
+    list_in_place_map: bool = false,
+    /// Preserve source-level procedure names in LIR for runtime diagnostics.
+    proc_debug_names: bool = false,
 };
 
 /// Lower Lambda Solved directly into LIR.
@@ -122,6 +129,7 @@ pub fn run(
     var lowerer = try Lowerer.init(allocator, target_usize, &owned, options);
     errdefer lowerer.deinit();
 
+    try lowerer.result.store.setSourceFiles(owned.lifted.source_files.items);
     try lowerer.lower();
     try lowerer.bindRoots();
     try lowerer.writeRuntimeSchemas();
@@ -243,6 +251,11 @@ const Lowerer = struct {
     fn_spec_map: std.HashMap(FnSpec, Type.FnId, FnSpecContext, std.hash_map.default_max_load_percentage),
     fn_written: std.ArrayList(bool),
     inline_plan: SolvedInline.Plan,
+    list_in_place_map: bool,
+    proc_debug_names: bool,
+    /// Match sites statically resolved by `foldListMapCanReuseMatch`,
+    /// recorded (Debug only) so the Lambda Mono verifier replays them.
+    folded_map_matches: std.ArrayList(Lifted.Program.FoldedMatch),
     source_symbols: std.AutoHashMap(Common.Symbol, Lifted.FnId),
     capture_types: CaptureTypeMap,
     captures: std.AutoHashMap(Lifted.LocalId, CaptureBinding),
@@ -291,6 +304,9 @@ const Lowerer = struct {
             .fn_spec_map = std.HashMap(FnSpec, Type.FnId, FnSpecContext, std.hash_map.default_max_load_percentage).initContext(allocator, .{}),
             .fn_written = .empty,
             .inline_plan = options.inline_plan,
+            .list_in_place_map = options.list_in_place_map,
+            .proc_debug_names = options.proc_debug_names,
+            .folded_map_matches = .empty,
             .source_symbols = std.AutoHashMap(Common.Symbol, Lifted.FnId).init(allocator),
             .capture_types = CaptureTypeMap.initContext(allocator, .{}),
             .captures = std.AutoHashMap(Lifted.LocalId, CaptureBinding).init(allocator),
@@ -306,6 +322,7 @@ const Lowerer = struct {
     }
 
     fn deinit(self: *Lowerer) void {
+        self.folded_map_matches.deinit(self.allocator);
         self.loop_stack.deinit(self.allocator);
         self.allocator.free(self.local_map);
         self.const_plan_map.deinit();
@@ -331,6 +348,7 @@ const Lowerer = struct {
             .lir_result = self.result,
             .runtime_schemas = self.runtime_schemas,
         };
+        self.folded_map_matches.deinit(self.allocator);
         self.loop_stack.deinit(self.allocator);
         self.allocator.free(self.local_map);
         self.const_plan_map.deinit();
@@ -351,6 +369,7 @@ const Lowerer = struct {
         self.runtime_schemas = RuntimeSchemaStore.init(self.allocator);
         self.local_map = &.{};
         self.loop_stack = .empty;
+        self.folded_map_matches = .empty;
         return output;
     }
 
@@ -477,17 +496,19 @@ const Lowerer = struct {
         self.fn_written.items[@intFromEnum(fn_id)] = true;
     }
 
-    fn hostedProcForSource(source: ?Mono.FnTemplate) ?LIR.HostedProc {
+    fn hostedProcForSource(self: *Lowerer, source: ?Mono.FnTemplate) Common.LowerError!?LIR.HostedProc {
         const template = source orelse return null;
-        return hostedProcForTemplate(template);
+        return try self.hostedProcForTemplate(template);
     }
 
-    fn hostedProcForTemplate(source: Mono.FnTemplate) ?LIR.HostedProc {
+    fn hostedProcForTemplate(self: *Lowerer, source: Mono.FnTemplate) Common.LowerError!?LIR.HostedProc {
         return switch (source.fn_def) {
             .local_hosted,
             .imported_hosted,
             => |hosted| .{
-                .external_symbol_name = hosted.external_symbol_name,
+                .symbol = try self.result.store.insertString(
+                    self.solved.lifted.names.externalSymbolNameText(hosted.external_symbol_name),
+                ),
                 .dispatch_index = hosted.dispatch_index,
             },
             else => null,
@@ -600,14 +621,25 @@ const Lowerer = struct {
             },
         }
 
+        const saved_loc = self.result.store.current_loc;
+        defer self.result.store.current_loc = saved_loc;
+        self.result.store.current_loc = switch (source_fn.body) {
+            .roc => |body_id| self.solved.lifted.exprLoc(body_id),
+            .hosted => base.SourceLoc.none,
+        };
         const proc = try self.result.store.addProcSpec(.{
             .name = lirSymbol(entry.symbol),
             .args = try self.result.store.addLocalSpan(arg_locals),
             .body = null,
             .ret_layout = try self.layoutOfType(entry.ret),
             .abi = if (spec.abi == .erased) .erased_callable else .roc,
-            .hosted = hostedProcForSource(source_fn.source),
+            .hosted = try self.hostedProcForSource(source_fn.source),
         });
+        if (self.proc_debug_names) {
+            if (self.solved.lifted.procDebugName(source_fn.symbol)) |name| {
+                try self.result.store.setProcDebugName(proc, self.solved.lifted.names.exportNameText(name));
+            }
+        }
         entry.proc = proc;
         self.fn_entries.items[index] = entry;
         return proc;
@@ -1246,7 +1278,7 @@ const Lowerer = struct {
         var clone_owned = true;
         errdefer if (clone_owned) solved_clone.deinit();
 
-        var materialized = try LambdaMonoLower.run(self.allocator, solved_clone);
+        var materialized = try LambdaMonoLower.run(self.allocator, solved_clone, self.folded_map_matches.items);
         clone_owned = false;
         defer materialized.deinit();
 
@@ -1370,6 +1402,9 @@ const Lowerer = struct {
     ) Common.LowerError!LIR.CFStmtId {
         const expr_data = self.solved.lifted.exprs.items[@intFromEnum(expr_id)];
         const expr_ty = try self.lowerExprTy(expr_id);
+        const saved_loc = self.result.store.current_loc;
+        defer self.result.store.current_loc = saved_loc;
+        self.result.store.current_loc = self.solved.lifted.exprLoc(expr_id);
         return switch (expr_data.data) {
             .local => |local| try self.lowerLocalInto(target, local, expr_ty, next),
             .unit => try self.assignZst(target, next),
@@ -1436,6 +1471,14 @@ const Lowerer = struct {
                 const message = try self.addTemp(try self.lowerExprTy(child));
                 const debug_stmt = try self.result.store.addCFStmt(.{ .debug = .{ .message = message, .next = after_dbg } });
                 break :blk try self.lowerExprInto(message, child, debug_stmt);
+            },
+            .expect_err => |expect_err| blk: {
+                const message = try self.addTemp(try self.lowerExprTy(expect_err.msg));
+                const expect_err_stmt = try self.result.store.addCFStmt(.{ .expect_err = .{
+                    .message = message,
+                    .region = expect_err.region,
+                } });
+                break :blk try self.lowerExprInto(message, expect_err.msg, expect_err_stmt);
             },
             .expect => |child| try self.lowerExpectExprInto(target, child, next),
         };
@@ -2101,6 +2144,19 @@ const Lowerer = struct {
             .box_box,
             .box_unbox,
             => return try self.lowerBoxBoundaryLowLevelInto(target, op, args, next),
+            .list_map_can_reuse => if (!try self.listMapLayoutsInterchangeable(args)) {
+                // Reuse is statically impossible (or disabled), so the
+                // runtime uniqueness check never needs to run. The op's
+                // arguments are pure local reads, so dropping them is safe.
+                return try self.result.store.addCFStmt(.{ .assign_literal = .{
+                    .target = target,
+                    .value = .{ .i64_literal = .{
+                        .value = 0,
+                        .layout_idx = self.result.store.getLocal(target).layout_idx,
+                    } },
+                    .next = next,
+                } });
+            },
             else => {},
         }
         if (lowLevelNeedsIntegerZeroDenominatorCheck(op)) {
@@ -2118,6 +2174,52 @@ const Lowerer = struct {
         } });
         current = try self.prependExprs(lowered, current);
         return current;
+    }
+
+    /// Compile-time half of the `list_map_can_reuse` decision. Returns true
+    /// when the input and output element layouts of a `List.map` call are
+    /// interchangeable in one allocation, meaning the same element stride,
+    /// the same allocation alignment class, and the same refcounted-elements
+    /// header shape — in that case the runtime uniqueness check decides.
+    /// Returns false when reuse is statically impossible or disabled, in
+    /// which case the op lowers to a constant 0.
+    fn listMapLayoutsInterchangeable(self: *Lowerer, args: []const Lifted.ExprId) Common.LowerError!bool {
+        if (args.len != 2) Common.invariant("list_map_can_reuse reached LIR lowering with the wrong arity");
+        if (!self.list_in_place_map) return false;
+
+        const list_layout_idx = try self.layoutOfType(try self.lowerExprTy(args[0]));
+        const list_layout = self.result.layouts.getLayout(list_layout_idx);
+        // A list of zero-sized elements has no allocation to reuse.
+        if (list_layout.tag != .list) return false;
+        const in_abi = self.result.layouts.builtinListAbi(list_layout_idx);
+        if (in_abi.elem_size == 0) return false;
+
+        const transform_ty = self.solved.expr_tys.items[@intFromEnum(args[1])];
+        const transform_root = self.solved.types.root(transform_ty);
+        const out_ret = switch (self.solved.types.get(transform_root)) {
+            .func => |func| func.ret,
+            else => Common.invariant("list_map_can_reuse transform argument is not a function"),
+        };
+        const out_elem_idx = self.result.layouts.runtimeRepresentationLayoutIdx(
+            try self.layoutOfType(try self.lowerType(out_ret)),
+        );
+        const out_elem = self.result.layouts.getLayout(out_elem_idx);
+
+        if (self.result.layouts.layoutSize(out_elem) != in_abi.elem_size) return false;
+
+        // The allocation's hidden header and the alignment passed to the
+        // allocator both derive from max(ptr_width, element alignment) and
+        // from whether elements are refcounted (which reserves an extra
+        // element-count slot for seamless slices). Both must agree or a
+        // later free would compute the wrong allocation pointer.
+        const target_usize = self.result.layouts.targetUsize();
+        const ptr_width = target_usize.size();
+        const out_alignment: u32 = @intCast(out_elem.alignment(target_usize).toByteUnits());
+        if (@max(ptr_width, in_abi.elem_alignment) != @max(ptr_width, out_alignment)) return false;
+
+        if (in_abi.contains_refcounted != self.result.layouts.layoutContainsRefcounted(out_elem)) return false;
+
+        return true;
     }
 
     fn lowLevelNeedsIntegerZeroDenominatorCheck(op: LIR.LowLevel) bool {
@@ -2276,6 +2378,7 @@ const Lowerer = struct {
         branches_span: Lifted.Span(Lifted.Branch),
         next: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
+        if (try self.foldListMapCanReuseMatch(target, scrutinee, branches_span, next)) |folded| return folded;
         const scrutinee_local = try self.addTemp(try self.lowerExprTy(scrutinee));
         const branches = self.solved.lifted.branchSpan(branches_span);
         const done = self.freshJoinPointId();
@@ -2287,6 +2390,36 @@ const Lowerer = struct {
             .body = next,
             .remainder = remainder,
         } });
+    }
+
+    /// When the in-place `List.map` branch is statically impossible — the
+    /// optimization is disabled or the element layouts are not
+    /// interchangeable — lower only the branch a constant-0
+    /// `list_map_can_reuse` selects, so the in-place machinery never reaches
+    /// LIR. Each fold is recorded as explicit data; the debug Lambda Mono
+    /// materializer replays the recorded resolutions instead of recomputing
+    /// them (it runs before layout selection and has no layout store), so
+    /// the two derivations demand the same set of functions.
+    fn foldListMapCanReuseMatch(
+        self: *Lowerer,
+        target: LIR.LocalId,
+        scrutinee: Lifted.ExprId,
+        branches_span: Lifted.Span(Lifted.Branch),
+        next: LIR.CFStmtId,
+    ) Common.LowerError!?LIR.CFStmtId {
+        const match = self.solved.lifted.listMapCanReuseMatch(scrutinee, branches_span) orelse return null;
+        const args = self.solved.lifted.exprSpan(match.call_args);
+        if (self.list_in_place_map and try self.listMapLayoutsInterchangeable(args)) {
+            // Reuse is possible; the runtime uniqueness check decides.
+            return null;
+        }
+        if (builtin.mode == .Debug) {
+            try self.folded_map_matches.append(self.allocator, .{
+                .scrutinee = scrutinee,
+                .body = match.zero_branch_body,
+            });
+        }
+        return try self.lowerExprInto(target, match.zero_branch_body, next);
     }
 
     fn lowerIfInto(self: *Lowerer, target: LIR.LocalId, branches_span: Lifted.Span(Lifted.IfBranch), final_else: Lifted.ExprId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
@@ -2321,6 +2454,9 @@ const Lowerer = struct {
     }
 
     fn lowerStmt(self: *Lowerer, stmt_id: Lifted.StmtId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+        const saved_loc = self.result.store.current_loc;
+        defer self.result.store.current_loc = saved_loc;
+        self.result.store.current_loc = self.solved.lifted.stmtLoc(stmt_id);
         return switch (self.solved.lifted.stmts.items[@intFromEnum(stmt_id)]) {
             .let_ => |let_| blk: {
                 const value = try self.addTemp(try self.lowerExprTy(let_.value));
@@ -3197,6 +3333,7 @@ const Lowerer = struct {
             return existing;
         }
         const lir_local = try self.addTemp(ty);
+        try self.result.store.setLocalName(lir_local, self.solved.lifted.localName(local));
         self.local_map[index] = lir_local;
         return lir_local;
     }
@@ -3701,6 +3838,16 @@ fn cloneLiftedProgram(allocator: std.mem.Allocator, program: *const Lifted.Progr
     var string_literals = try cloneStringLiterals(allocator, &program.string_literals);
     errdefer deinitStringLiterals(allocator, &string_literals);
 
+    var source_files: std.ArrayList([]const u8) = .empty;
+    errdefer {
+        for (source_files.items) |file| allocator.free(file);
+        source_files.deinit(allocator);
+    }
+    try source_files.ensureTotalCapacityPrecise(allocator, program.source_files.items.len);
+    for (program.source_files.items) |file| {
+        source_files.appendAssumeCapacity(try allocator.dupe(u8, file));
+    }
+
     return .{
         .allocator = allocator,
         .names = name_store,
@@ -3720,10 +3867,42 @@ fn cloneLiftedProgram(allocator: std.mem.Allocator, program: *const Lifted.Progr
         .branches = try cloneArrayList(Lifted.Branch, allocator, &program.branches),
         .if_branches = try cloneArrayList(Lifted.IfBranch, allocator, &program.if_branches),
         .string_literals = string_literals,
+        .proc_debug_names = try cloneProcDebugNameMap(allocator, &program.proc_debug_names),
         .roots = try cloneArrayList(Lifted.Root, allocator, &program.roots),
         .layout_requests = try cloneArrayList(Lifted.LayoutRequest, allocator, &program.layout_requests),
         .runtime_schema_requests = try cloneArrayList(Lifted.RuntimeSchemaRequest, allocator, &program.runtime_schema_requests),
+        .source_files = source_files,
+        .expr_locs = try cloneArrayList(base.SourceLoc, allocator, &program.expr_locs),
+        .stmt_locs = try cloneArrayList(base.SourceLoc, allocator, &program.stmt_locs),
+        .local_names = blk: {
+            var names: std.ArrayList([]const u8) = .empty;
+            errdefer {
+                for (names.items) |name| {
+                    if (name.len > 0) allocator.free(name);
+                }
+                names.deinit(allocator);
+            }
+            try names.ensureTotalCapacityPrecise(allocator, program.local_names.items.len);
+            for (program.local_names.items) |name| {
+                names.appendAssumeCapacity(if (name.len == 0) "" else try allocator.dupe(u8, name));
+            }
+            break :blk names;
+        },
+        .current_loc = program.current_loc,
     };
+}
+
+fn cloneProcDebugNameMap(allocator: std.mem.Allocator, source: *const Lifted.ProcDebugNameMap) std.mem.Allocator.Error!Lifted.ProcDebugNameMap {
+    var cloned = Lifted.ProcDebugNameMap.init(allocator);
+    errdefer cloned.deinit();
+
+    try cloned.ensureTotalCapacity(source.count());
+    var it = source.iterator();
+    while (it.next()) |entry| {
+        cloned.putAssumeCapacity(entry.key_ptr.*, entry.value_ptr.*);
+    }
+
+    return cloned;
 }
 
 fn cloneNameStore(allocator: std.mem.Allocator, source: *const check.CheckedNames.NameStore) std.mem.Allocator.Error!check.CheckedNames.NameStore {

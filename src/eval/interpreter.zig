@@ -16,6 +16,7 @@ const lir = @import("lir");
 const LIR = lir.LIR;
 const LirStore = lir.LirStore;
 const lir_value = @import("value.zig");
+const host_trampoline = @import("host_trampoline.zig");
 const builtins = @import("builtins");
 const sljmp = @import("sljmp");
 const build_options = @import("build_options");
@@ -72,12 +73,6 @@ const dev_wrappers = builtins.dev_wrappers;
 const RocStr = builtins.str.RocStr;
 const RocList = builtins.list.RocList;
 const RocOps = builtins.host_abi.RocOps;
-const RocAlloc = builtins.host_abi.RocAlloc;
-const RocDealloc = builtins.host_abi.RocDealloc;
-const RocRealloc = builtins.host_abi.RocRealloc;
-const RocDbg = builtins.host_abi.RocDbg;
-const RocExpectFailed = builtins.host_abi.RocExpectFailed;
-const RocCrashed = builtins.host_abi.RocCrashed;
 const UpdateMode = builtins.utils.UpdateMode;
 const JmpBuf = sljmp.JmpBuf;
 const setjmp = sljmp.setjmp;
@@ -95,6 +90,8 @@ const InterpreterRocEnv = struct {
     crash_message: ?[]const u8 = null,
     runtime_error_message: ?[]const u8 = null,
     expect_message: ?[]const u8 = null,
+    expect_err_message: ?[]const u8 = null,
+    expect_err_region: ?base.Region = null,
     jmp_buf: JmpBuf = undefined,
     active_jmp_buf: ?*JmpBuf = null,
     caller_roc_ops: *RocOps,
@@ -109,6 +106,7 @@ const InterpreterRocEnv = struct {
     fn deinit(self: *InterpreterRocEnv) void {
         if (self.crash_message) |msg| self.allocator.free(msg);
         if (self.expect_message) |msg| self.allocator.free(msg);
+        if (self.expect_err_message) |msg| self.allocator.free(msg);
     }
 
     /// Reset the static buffer — call once at the start of a full evaluation.
@@ -119,6 +117,9 @@ const InterpreterRocEnv = struct {
         self.runtime_error_message = null;
         if (self.expect_message) |msg| self.allocator.free(msg);
         self.expect_message = null;
+        if (self.expect_err_message) |msg| self.allocator.free(msg);
+        self.expect_err_message = null;
+        self.expect_err_region = null;
     }
 
     /// Reset just the crash state before calling a builtin that might crash.
@@ -148,17 +149,13 @@ const InterpreterRocEnv = struct {
 
     fn reportCrash(self: *InterpreterRocEnv, msg: []const u8) void {
         const caller_roc_ops = self.currentRocOps();
-        const roc_crashed = RocCrashed{
-            .utf8_bytes = @constCast(msg.ptr),
-            .len = msg.len,
-        };
-        caller_roc_ops.roc_crashed(&roc_crashed, caller_roc_ops.env);
+        caller_roc_ops.roc_crashed(caller_roc_ops, msg.ptr, msg.len);
         self.recordCrash(msg);
     }
 
-    /// The host allocators signal OOM by writing a null `answer` (see
-    /// `host_abi.RocAlloc`). Turn that into a Roc crash that unwinds to the eval
-    /// boundary via the active jump buffer, instead of letting it abort.
+    /// The host allocators signal OOM by returning a null pointer (see
+    /// `host_abi.RocOps.roc_alloc`). Turn that into a Roc crash that unwinds to
+    /// the eval boundary via the active jump buffer, instead of letting it abort.
     fn crashAllocationFailed(self: *InterpreterRocEnv) noreturn {
         self.reportCrash("ran out of memory");
         const active_jmp_buf = self.active_jmp_buf orelse {
@@ -176,49 +173,49 @@ const InterpreterRocEnv = struct {
         longjmp(active_jmp_buf, 1);
     }
 
-    fn rocAllocFn(roc_alloc: *RocAlloc, env: *anyopaque) callconv(.c) void {
-        const self: *InterpreterRocEnv = @ptrCast(@alignCast(env));
+    fn rocAllocFn(ops: *RocOps, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+        const self: *InterpreterRocEnv = @ptrCast(@alignCast(ops.env));
         const caller_roc_ops = self.currentRocOps();
-        caller_roc_ops.roc_alloc(roc_alloc, caller_roc_ops.env);
-        const ptr = roc_alloc.answer orelse self.crashAllocationFailed();
-        trace_rc.log("alloc(fwd): ptr=0x{x} size={d} align={d}", .{ @intFromPtr(ptr), roc_alloc.length, roc_alloc.alignment });
+        const ptr = caller_roc_ops.roc_alloc(caller_roc_ops, length, alignment) orelse self.crashAllocationFailed();
+        trace_rc.log("alloc(fwd): ptr=0x{x} size={d} align={d}", .{ @intFromPtr(ptr), length, alignment });
+        return ptr;
     }
 
-    fn rocDeallocFn(roc_dealloc: *RocDealloc, env: *anyopaque) callconv(.c) void {
-        const self: *InterpreterRocEnv = @ptrCast(@alignCast(env));
-        trace_rc.log("dealloc: ptr=0x{x} align={d}", .{ @intFromPtr(roc_dealloc.ptr), roc_dealloc.alignment });
+    fn rocDeallocFn(ops: *RocOps, ptr: *anyopaque, alignment: usize) callconv(.c) void {
+        const self: *InterpreterRocEnv = @ptrCast(@alignCast(ops.env));
+        trace_rc.log("dealloc: ptr=0x{x} align={d}", .{ @intFromPtr(ptr), alignment });
         const caller_roc_ops = self.currentRocOps();
-        caller_roc_ops.roc_dealloc(roc_dealloc, caller_roc_ops.env);
+        caller_roc_ops.roc_dealloc(caller_roc_ops, ptr, alignment);
     }
 
-    fn rocReallocFn(roc_realloc: *RocRealloc, env: *anyopaque) callconv(.c) void {
-        const self: *InterpreterRocEnv = @ptrCast(@alignCast(env));
+    fn rocReallocFn(ops: *RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+        const self: *InterpreterRocEnv = @ptrCast(@alignCast(ops.env));
         const caller_roc_ops = self.currentRocOps();
-        const old_ptr = roc_realloc.answer.?;
-        caller_roc_ops.roc_realloc(roc_realloc, caller_roc_ops.env);
-        const new_ptr = roc_realloc.answer orelse self.crashAllocationFailed();
-        trace_rc.log("realloc(fwd): old=0x{x} new=0x{x} size={d}", .{ @intFromPtr(old_ptr), @intFromPtr(new_ptr), roc_realloc.new_length });
+        const old_ptr = ptr;
+        const new_ptr = caller_roc_ops.roc_realloc(caller_roc_ops, ptr, new_length, alignment) orelse self.crashAllocationFailed();
+        trace_rc.log("realloc(fwd): old=0x{x} new=0x{x} size={d}", .{ @intFromPtr(old_ptr), @intFromPtr(new_ptr), new_length });
+        return new_ptr;
     }
 
-    fn rocDbgFn(roc_dbg: *const RocDbg, env: *anyopaque) callconv(.c) void {
-        const self: *InterpreterRocEnv = @ptrCast(@alignCast(env));
+    fn rocDbgFn(ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
+        const self: *InterpreterRocEnv = @ptrCast(@alignCast(ops.env));
         const caller_roc_ops = self.currentRocOps();
-        caller_roc_ops.roc_dbg(roc_dbg, caller_roc_ops.env);
+        caller_roc_ops.roc_dbg(caller_roc_ops, bytes, len);
     }
 
-    fn rocExpectFailedFn(expect_args: *const RocExpectFailed, env: *anyopaque) callconv(.c) void {
-        const self: *InterpreterRocEnv = @ptrCast(@alignCast(env));
+    fn rocExpectFailedFn(ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
+        const self: *InterpreterRocEnv = @ptrCast(@alignCast(ops.env));
         const caller_roc_ops = self.currentRocOps();
-        caller_roc_ops.roc_expect_failed(expect_args, caller_roc_ops.env);
-        const source = expect_args.utf8_bytes[0..expect_args.len];
+        caller_roc_ops.roc_expect_failed(caller_roc_ops, bytes, len);
+        const source = bytes[0..len];
         if (self.expect_message == null) {
             self.expect_message = self.allocator.dupe(u8, source) catch null;
         }
     }
 
-    fn rocCrashedFn(roc_crashed: *const RocCrashed, env: *anyopaque) callconv(.c) void {
-        const self: *InterpreterRocEnv = @ptrCast(@alignCast(env));
-        const msg = roc_crashed.utf8_bytes[0..roc_crashed.len];
+    fn rocCrashedFn(ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
+        const self: *InterpreterRocEnv = @ptrCast(@alignCast(ops.env));
+        const msg = bytes[0..len];
         self.reportCrash(msg);
         const active_jmp_buf = self.active_jmp_buf orelse {
             debugPrint(
@@ -242,6 +239,14 @@ pub const Interpreter = struct {
     const max_call_depth: usize = 1024;
     const stack_overflow_message =
         "This Roc program overflowed its stack memory. This usually means there is very deep or infinite recursion somewhere in the code.";
+    /// Debug value-shape validation stops descending past this many nested
+    /// values; deeper structures are legal (TRMC builds arbitrarily long
+    /// lists) but walking them would overflow the native stack.
+    const max_debug_value_depth: usize = 64;
+    /// ... and stops after visiting this many heap cells in one walk: a wide
+    /// balanced tree fits entirely inside the depth cap, and re-walking it on
+    /// every assignment turns O(n) programs quadratic.
+    const max_debug_value_visits: usize = 16;
     pub const erased_callable_context_alignment: usize = builtins.erased_callable.capture_alignment;
 
     pub const ErasedCallableInterpreterContext = extern struct {
@@ -289,6 +294,7 @@ pub const Interpreter = struct {
         RuntimeError,
         DivisionByZero,
         Crash,
+        ExpectErr,
     };
 
     const CrashBoundary = struct {
@@ -585,6 +591,18 @@ pub const Interpreter = struct {
 
     pub fn getExpectMessage(self: *const LirInterpreter) ?[]const u8 {
         return self.roc_env.expect_message;
+    }
+
+    /// The failure message from a `?` operator that evaluated an Err inside a
+    /// top-level expect, if the last evaluation failed that way.
+    /// Owned by the interpreter and valid until the next eval or deinit.
+    pub fn getExpectErrMessage(self: *const LirInterpreter) ?[]const u8 {
+        return self.roc_env.expect_err_message;
+    }
+
+    /// The source region of the `?` whose Err failed the expect.
+    pub fn getExpectErrRegion(self: *const LirInterpreter) ?base.Region {
+        return self.roc_env.expect_err_region;
     }
 
     pub fn getFailedCallStack(self: *const LirInterpreter) []const LirProcSpecId {
@@ -930,6 +948,12 @@ pub const Interpreter = struct {
     ) void {
         if (builtin.mode != .Debug) return;
         if (comptime builtin.target.os.tag == .freestanding) return;
+        // Bound the walk: stop descending into very deep structures
+        // (e.g. long TRMC-built lists), since this walk recurses natively, and
+        // stop after a bounded number of heap cells so wide structures don't
+        // make every assignment O(structure size).
+        if (path_len >= max_debug_value_depth) return;
+        if (visited.items.len >= max_debug_value_visits) return;
 
         const layout_val = self.layout_store.getLayout(layout_idx);
         switch (layout_val.tag) {
@@ -949,15 +973,24 @@ pub const Interpreter = struct {
                 }
             },
             .zst, .box_of_zst => return,
+            // Compiler-internal pointers (TRMC holes) are opaque here: the slot they
+            // point at may be a not-yet-filled hole, so there is nothing to validate.
+            .ptr => return,
             .box => {
-                const data_ptr = self.readBoxedDataPointer(value) orelse self.debugValueShapePanicAt(
-                    proc_id,
-                    stmt_id,
-                    local_id,
-                    layout_idx,
-                    path_buf[0..path_len],
-                    "boxed value had null data pointer",
-                );
+                const data_ptr = self.readBoxedDataPointer(value) orelse {
+                    // Inside a TRMC-transformed proc a null box pointer is a
+                    // legal in-flight hole (zero-filled cells await their child
+                    // value); everywhere else it is a real bug.
+                    if (self.store.getProcSpec(proc_id).tail_transform == .trmc) return;
+                    self.debugValueShapePanicAt(
+                        proc_id,
+                        stmt_id,
+                        local_id,
+                        layout_idx,
+                        path_buf[0..path_len],
+                        "boxed value had null data pointer",
+                    );
+                };
 
                 const key = DebugVisitedValue{
                     .ptr = @intFromPtr(data_ptr),
@@ -1370,6 +1403,7 @@ pub const Interpreter = struct {
                 .jump,
                 .ret,
                 .crash,
+                .expect_err,
                 .loop_continue,
                 .loop_break,
                 => break,
@@ -1397,7 +1431,7 @@ pub const Interpreter = struct {
         debugPrint("{s}{d}: {s}\n", .{ debugIndent(indent), @intFromEnum(layout_idx), @tagName(layout_val.tag) });
         switch (layout_val.tag) {
             .scalar, .zst, .box_of_zst, .list_of_zst, .erased_callable => {},
-            .box => self.debugPrintLayoutShapeLines(layout_val.getIdx(), indent + 1, visited),
+            .box, .ptr => self.debugPrintLayoutShapeLines(layout_val.getIdx(), indent + 1, visited),
             .list => self.debugPrintLayoutShapeLines(layout_val.getIdx(), indent + 1, visited),
             .closure => self.debugPrintLayoutShapeLines(layout_val.getClosure().captures_layout_idx, indent + 1, visited),
             .struct_ => {
@@ -1857,6 +1891,16 @@ pub const Interpreter = struct {
                 },
                 .ret => |ret_stmt| return .{ .returned = ret_stmt.value },
                 .crash => |crash_stmt| return self.triggerCrash(self.store.getString(crash_stmt.msg)),
+                .expect_err => |expect_err_stmt| {
+                    const message_value = try self.getLocalChecked(frame, expect_err_stmt.message);
+                    const message = self.readRocStr(message_value);
+                    if (self.roc_env.expect_err_message) |old| self.roc_env.allocator.free(old);
+                    self.roc_env.expect_err_message = self.roc_env.allocator.dupe(u8, message) catch null;
+                    self.roc_env.expect_err_region = expect_err_stmt.region;
+                    // The statement consumes the message's ownership unit.
+                    self.dropValue(message_value, self.store.getLocal(expect_err_stmt.message).layout_idx);
+                    return error.ExpectErr;
+                },
             }
         }
     }
@@ -2111,6 +2155,12 @@ pub const Interpreter = struct {
                     debugPrint("    {d}: crash msg={d}\n", .{
                         @intFromEnum(stmt_id),
                         @intFromEnum(crash.msg),
+                    });
+                },
+                .expect_err => |expect_err_stmt| {
+                    debugPrint("    {d}: expect_err message={d}\n", .{
+                        @intFromEnum(stmt_id),
+                        @intFromEnum(expect_err_stmt.message),
                     });
                 },
             }
@@ -2427,6 +2477,9 @@ pub const Interpreter = struct {
             error.RuntimeError => ops.crash("LIR/interpreter erased callable trampoline hit runtime error"),
             error.DivisionByZero => ops.crash("LIR/interpreter erased callable trampoline hit division by zero"),
             error.Crash => ops.crash("LIR/interpreter erased callable trampoline hit Roc crash"),
+            // expect_err statements only occur in top-level expect test
+            // roots, never in callable bodies.
+            error.ExpectErr => unreachable,
         };
     }
 
@@ -2913,26 +2966,28 @@ pub const Interpreter = struct {
         arg_layouts: []const layout_mod.Idx,
         ret_layout: layout_mod.Idx,
     ) Error!Value {
+        // Pack arguments into a buffer in Roc layout order, recording each argument's offset
+        // so the C-ABI trampoline can scatter them into registers.
         var total_args_size: usize = 0;
         var args_alignment: layout_mod.RocAlignment = .@"1";
-        for (arg_layouts) |arg_layout| {
+        const arg_offsets = try self.allocator.alloc(u32, arg_layouts.len);
+        defer self.allocator.free(arg_offsets);
+        for (arg_layouts, arg_offsets) |arg_layout, *arg_offset| {
             const sa = self.helper.sizeAlignOf(arg_layout);
             args_alignment = maxRocAlignment(args_alignment, sa.alignment);
             total_args_size = std.mem.alignForward(usize, total_args_size, sa.alignment.toByteUnits());
+            arg_offset.* = @intCast(total_args_size);
             total_args_size += sa.size;
         }
 
         const args_buf_size = @max(total_args_size, 8);
         const args_buf = try self.allocAlignedByteSlice(args_buf_size, args_alignment);
 
-        var offset: usize = 0;
-        for (args, arg_layouts) |arg, arg_layout| {
+        for (args, arg_layouts, arg_offsets) |arg, arg_layout, arg_offset| {
             const sa = self.helper.sizeAlignOf(arg_layout);
-            offset = std.mem.alignForward(usize, offset, sa.alignment.toByteUnits());
             if (sa.size > 0 and !arg.isZst()) {
-                @memcpy(args_buf[offset .. offset + sa.size], arg.readBytes(sa.size));
+                @memcpy(args_buf[arg_offset .. arg_offset + sa.size], arg.readBytes(sa.size));
             }
-            offset += sa.size;
         }
 
         const ret_sa = self.helper.sizeAlignOf(ret_layout);
@@ -2951,8 +3006,24 @@ pub const Interpreter = struct {
         }
 
         const hosted_fn = self.roc_ops.hosted_fns.fns[hosted.dispatch_index];
-        const ops_for_host = self.currentRocOps();
-        hosted_fn(@ptrCast(ops_for_host), @ptrCast(ret_buf.ptr), @ptrCast(args_buf.ptr));
+
+        // Call the hosted function with the platform C ABI via the fixed register-image
+        // trampoline (no runtime code generation).
+        var arena_state = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena_state.deinit();
+        host_trampoline.call(
+            self.layout_store,
+            arena_state.allocator(),
+            @ptrCast(hosted_fn),
+            arg_layouts,
+            ret_layout,
+            args_buf.ptr,
+            arg_offsets,
+            ret_buf.ptr,
+        ) catch |err| return self.invariantFailedError(
+            "hosted call C-ABI lowering failed for proc {d}: {s}",
+            .{ @intFromEnum(proc_id), @errorName(err) },
+        );
 
         if (self.roc_env.crashed) return error.Crash;
         if (ret_sa.size == 0) return Value.zst;
@@ -3145,7 +3216,8 @@ pub const Interpreter = struct {
 
         const l = self.layout_store.getLayout(helper.layout_idx);
         return switch (l.tag) {
-            .zst => .noop,
+            // ptr is never refcounted, so the early return above already handled it.
+            .zst, .ptr => .noop,
             .scalar => if (l.getScalar().tag == .str)
                 switch (helper.op) {
                     .incref => .str_incref,
@@ -3338,7 +3410,7 @@ pub const Interpreter = struct {
         const direct = switch (layout_val.tag) {
             .scalar => layout_val.getScalar().tag == .str,
             .list, .list_of_zst, .box, .box_of_zst, .erased_callable => true,
-            .zst => false,
+            .zst, .ptr => false,
             .struct_, .tag_union, .closure => null,
         };
         if (direct) |result| {
@@ -3365,7 +3437,7 @@ pub const Interpreter = struct {
                 break :blk false;
             },
             .closure => self.layoutContainsRc(layout_val.getClosure().captures_layout_idx),
-            .scalar, .list, .list_of_zst, .box, .box_of_zst, .erased_callable, .zst => unreachable,
+            .scalar, .list, .list_of_zst, .box, .box_of_zst, .erased_callable, .zst, .ptr => unreachable,
         };
         self.rc_presence[raw] = if (contains) .yes else .no;
         return contains;
@@ -3844,6 +3916,75 @@ pub const Interpreter = struct {
         unique_args: u64 = 0,
     };
 
+    fn lowLevelArgLayout(self: *const LirInterpreter, ll: LowLevelEvalInput, index: usize) Error!layout_mod.Idx {
+        if (index < ll.arg_layouts.len) return ll.arg_layouts[index];
+
+        return self.invariantFailedError(
+            "LIR/interpreter invariant violated: low-level op {s} missing arg layout {d}",
+            .{ @tagName(ll.op), index },
+        );
+    }
+
+    fn writeHasherValue(self: *LirInterpreter, ret_layout: layout_mod.Idx, seed: u64) Error!Value {
+        const val = try self.alloc(ret_layout);
+        val.write(u64, seed);
+        return val;
+    }
+
+    fn hasherDomain(op: LIR.LowLevel) builtins.hash.HasherDomain {
+        return switch (op) {
+            .hasher_write_bool => .bool,
+            .hasher_write_u8 => .u8,
+            .hasher_write_u16 => .u16,
+            .hasher_write_u32 => .u32,
+            .hasher_write_u64 => .u64,
+            .hasher_write_u128 => .u128,
+            .hasher_write_i8 => .i8,
+            .hasher_write_i16 => .i16,
+            .hasher_write_i32 => .i32,
+            .hasher_write_i64 => .i64,
+            .hasher_write_i128 => .i128,
+            .hasher_write_f32 => .f32,
+            .hasher_write_f64 => .f64,
+            .hasher_write_dec => .dec,
+            .hasher_write_bytes => .bytes,
+            .hasher_write_str => .str,
+            else => unreachable,
+        };
+    }
+
+    fn hasherU64Width(op: LIR.LowLevel) u8 {
+        return switch (op) {
+            .hasher_write_bool,
+            .hasher_write_u8,
+            .hasher_write_i8,
+            => 1,
+            .hasher_write_u16,
+            .hasher_write_i16,
+            => 2,
+            .hasher_write_u32,
+            .hasher_write_i32,
+            .hasher_write_f32,
+            => 4,
+            .hasher_write_u64,
+            .hasher_write_i64,
+            .hasher_write_f64,
+            => 8,
+            else => unreachable,
+        };
+    }
+
+    fn byteListSlice(self: *LirInterpreter, list_val: Value, list_layout: layout_mod.Idx) Error![]const u8 {
+        const list = self.valueToRocListForLayout(list_val, list_layout);
+        if (list.bytes) |bytes| return bytes[0..list.len()];
+        if (list.len() == 0) return &.{};
+
+        return self.invariantFailedError(
+            "LIR/interpreter invariant violated: non-empty byte list had null bytes",
+            .{},
+        );
+    }
+
     /// Select the update mode for a builtin whose first argument carries the
     /// op's runtime uniqueness check: `.InPlace` when ARC emission proved the
     /// check redundant, `.Immutable` (checked) otherwise.
@@ -4266,6 +4407,38 @@ pub const Interpreter = struct {
                 );
                 break :blk self.rocListToValue(result, ll.ret_layout);
             },
+            .list_map_can_reuse => blk: {
+                const rl = self.valueToRocListForLayout(args[0], arg_layout);
+                const val = try self.alloc(ll.ret_layout);
+                val.write(u8, if (builtins.list.listMapCanReuse(rl, &self.roc_ops)) 1 else 0);
+                break :blk val;
+            },
+            .list_map_cast_unsafe => blk: {
+                const rl = self.valueToRocListForLayout(args[0], arg_layout);
+                break :blk self.rocListToValue(rl, ll.ret_layout);
+            },
+            .list_map_extract_unsafe => blk: {
+                // Same data movement as list_get_unsafe; ownership of the
+                // element transfers out of the buffer, which is RC metadata
+                // rather than runtime behavior.
+                const rl = self.valueToRocListForLayout(args[0], arg_layout);
+                const idx = args[1].read(u64);
+                const info = self.listElemInfo(arg_layout);
+                if (info.width == 0) break :blk try self.alloc(ll.ret_layout);
+                const elem_ptr = rl.bytes.? + @as(usize, @intCast(idx)) * info.width;
+                const val = try self.alloc(ll.ret_layout);
+                @memcpy(val.ptr[0..info.width], elem_ptr[0..info.width]);
+                break :blk val;
+            },
+            .list_map_write_unsafe => blk: {
+                const rl = self.valueToRocListForLayout(args[0], arg_layout);
+                const idx = args[1].read(u64);
+                const info = self.listElemInfo(arg_layout);
+                if (info.width == 0) break :blk self.rocListToValue(rl, ll.ret_layout);
+                const elem_ptr = rl.bytes.? + @as(usize, @intCast(idx)) * info.width;
+                @memcpy(elem_ptr[0..info.width], args[2].ptr[0..info.width]);
+                break :blk self.rocListToValue(rl, ll.ret_layout);
+            },
             .list_sublist => blk: {
                 if (args.len != 2 or ll.arg_layouts.len != 2) {
                     return self.runtimeError("list_sublist expected 2 arguments");
@@ -4603,6 +4776,78 @@ pub const Interpreter = struct {
                 break :blk val;
             },
 
+            // ── Hasher ──
+            .dict_pseudo_seed => self.writeHasherValue(ll.ret_layout, builtins.utils.dictPseudoSeed()),
+            .hasher_finish => self.writeHasherValue(ll.ret_layout, builtins.hash.hasher_finish(args[0].read(u64))),
+            .hasher_write_bool => blk: {
+                const seed = args[0].read(u64);
+                const value: u64 = if (try self.readBoolValue(args[1], try self.lowLevelArgLayout(ll, 1))) 1 else 0;
+                const next = builtins.hash.hasher_write_u64(seed, @intFromEnum(hasherDomain(ll.op)), value, hasherU64Width(ll.op));
+                break :blk self.writeHasherValue(ll.ret_layout, next);
+            },
+            .hasher_write_u8,
+            .hasher_write_u16,
+            .hasher_write_u32,
+            .hasher_write_u64,
+            .hasher_write_i8,
+            .hasher_write_i16,
+            .hasher_write_i32,
+            .hasher_write_i64,
+            => blk: {
+                const seed = args[0].read(u64);
+                const value: u64 = switch (ll.op) {
+                    .hasher_write_u8 => args[1].read(u8),
+                    .hasher_write_u16 => args[1].read(u16),
+                    .hasher_write_u32 => args[1].read(u32),
+                    .hasher_write_u64 => args[1].read(u64),
+                    .hasher_write_i8 => @as(u64, @as(u8, @bitCast(args[1].read(i8)))),
+                    .hasher_write_i16 => @as(u64, @as(u16, @bitCast(args[1].read(i16)))),
+                    .hasher_write_i32 => @as(u64, @as(u32, @bitCast(args[1].read(i32)))),
+                    .hasher_write_i64 => @bitCast(args[1].read(i64)),
+                    else => unreachable,
+                };
+                const next = builtins.hash.hasher_write_u64(seed, @intFromEnum(hasherDomain(ll.op)), value, hasherU64Width(ll.op));
+                break :blk self.writeHasherValue(ll.ret_layout, next);
+            },
+            .hasher_write_f32 => blk: {
+                const seed = args[0].read(u64);
+                const value = args[1].read(f32);
+                const bits: u64 = if (value == 0.0) 0 else @as(u64, @as(u32, @bitCast(value)));
+                const next = builtins.hash.hasher_write_u64(seed, @intFromEnum(hasherDomain(ll.op)), bits, hasherU64Width(ll.op));
+                break :blk self.writeHasherValue(ll.ret_layout, next);
+            },
+            .hasher_write_f64 => blk: {
+                const seed = args[0].read(u64);
+                const value = args[1].read(f64);
+                const bits: u64 = if (value == 0.0) 0 else @bitCast(value);
+                const next = builtins.hash.hasher_write_u64(seed, @intFromEnum(hasherDomain(ll.op)), bits, hasherU64Width(ll.op));
+                break :blk self.writeHasherValue(ll.ret_layout, next);
+            },
+            .hasher_write_u128,
+            .hasher_write_i128,
+            .hasher_write_dec,
+            => blk: {
+                const seed = args[0].read(u64);
+                const bits: u128 = @bitCast(args[1].read(i128));
+                const low: u64 = @truncate(bits);
+                const high: u64 = @truncate(bits >> 64);
+                const next = builtins.hash.hasher_write_u128(seed, @intFromEnum(hasherDomain(ll.op)), low, high);
+                break :blk self.writeHasherValue(ll.ret_layout, next);
+            },
+            .hasher_write_bytes => blk: {
+                const seed = args[0].read(u64);
+                const bytes = try self.byteListSlice(args[1], try self.lowLevelArgLayout(ll, 1));
+                const next = builtins.hash.hasher_write_bytes(seed, @intFromEnum(hasherDomain(ll.op)), bytes.ptr, bytes.len);
+                break :blk self.writeHasherValue(ll.ret_layout, next);
+            },
+            .hasher_write_str => blk: {
+                const seed = args[0].read(u64);
+                var str = valueToRocStr(args[1]);
+                const bytes = str.asSlice();
+                const next = builtins.hash.hasher_write_bytes(seed, @intFromEnum(hasherDomain(ll.op)), bytes.ptr, bytes.len);
+                break :blk self.writeHasherValue(ll.ret_layout, next);
+            },
+
             // ── Numeric parsing ──
             .u8_from_str,
             .i8_from_str,
@@ -4920,6 +5165,11 @@ pub const Interpreter = struct {
             .box_box => try self.evalBoxBox(args[0], ll.ret_layout),
             .box_unbox => try self.evalBoxUnbox(args[0], ll.ret_layout),
             .erased_capture_load => try self.evalErasedCaptureLoad(args[0], ll.ret_layout),
+            .ptr_alloca => try self.evalPtrAlloca(ll.ret_layout),
+            .box_alloc_zeroed => try self.evalBoxAllocZeroed(ll.ret_layout),
+            .ptr_store => try self.evalPtrStore(args[0], args[1], ll.arg_layouts[1]),
+            .ptr_load => try self.evalPtrLoad(args[0], ll.ret_layout),
+            .ptr_cast => try self.evalPtrCast(args[0], ll.ret_layout),
 
             // ── Crash ──
             .crash => return error.Crash,
@@ -5215,6 +5465,10 @@ pub const Interpreter = struct {
             },
             .erased_callable => return self.invariantFailedError(
                 "LIR/interpreter invariant violated: equality on erased callable layout {d} survived lowering",
+                .{@intFromEnum(layout_idx)},
+            ),
+            .ptr => return self.invariantFailedError(
+                "LIR/interpreter invariant violated: equality on compiler-internal ptr layout {d}",
                 .{@intFromEnum(layout_idx)},
             ),
             .struct_ => blk: {
@@ -6912,6 +7166,84 @@ pub const Interpreter = struct {
             result.copyFrom(.{ .ptr = @ptrFromInt(raw_capture_ptr) }, size);
         }
 
+        return result;
+    }
+
+    /// ptr_alloca: reserve a zeroed frame slot for the ptr layout's element and
+    /// yield its address. The slot lives in the eval arena, which outlives the
+    /// frame — fine, since TRMC emits at most one alloca per proc invocation.
+    fn evalPtrAlloca(self: *LirInterpreter, ret_layout: layout_mod.Idx) Error!Value {
+        const ret_layout_val = self.layout_store.getLayout(ret_layout);
+        if (builtin.mode == .Debug and ret_layout_val.tag != .ptr) {
+            self.invariantFailed(
+                "LIR/interpreter invariant violated: ptr_alloca target had layout {s}, expected ptr",
+                .{@tagName(ret_layout_val.tag)},
+            );
+        }
+        const sa = self.helper.sizeAlignOf(ret_layout_val.getIdx());
+        // allocAlignedByteSlice zero-fills, so the slot reads as null holes until written.
+        const slot = try self.allocAlignedByteSlice(@max(sa.size, 1), sa.alignment);
+        const result = try self.alloc(ret_layout);
+        self.writePointerInt(result, @intFromPtr(slot.ptr));
+        return result;
+    }
+
+    /// box_alloc_zeroed: a box_box whose payload is all zeroes — heap cell with
+    /// rc=1 and a zero-filled payload (so any box fields inside read as null).
+    fn evalBoxAllocZeroed(self: *LirInterpreter, ret_layout: layout_mod.Idx) Error!Value {
+        const ret_layout_val = self.layout_store.getLayout(ret_layout);
+        if (ret_layout_val.tag == .box_of_zst) return try self.allocBoxOfZstValue(ret_layout);
+
+        const box_info = self.boxAllocInfo(ret_layout_val);
+        const data_ptr = try self.allocRocDataWithRc(box_info.elem_size, box_info.elem_alignment, box_info.contains_rc);
+        if (box_info.elem_size > 0) {
+            @memset(data_ptr[0..box_info.elem_size], 0);
+        }
+        const boxed = try self.alloc(ret_layout);
+        self.writeBoxedDataPointer(boxed, data_ptr);
+        return boxed;
+    }
+
+    /// ptr_store: copy sizeOf(value layout) bytes from the value into *ptr.
+    fn evalPtrStore(self: *LirInterpreter, ptr_val: Value, value: Value, value_layout: layout_mod.Idx) Error!Value {
+        const size = self.helper.sizeOf(value_layout);
+        if (size > 0) {
+            const raw_ptr = self.readPointerInt(ptr_val);
+            if (builtin.mode == .Debug and raw_ptr == 0) {
+                self.invariantFailed(
+                    "LIR/interpreter invariant violated: ptr_store received a null pointer for non-ZST layout {d}",
+                    .{@intFromEnum(value_layout)},
+                );
+            }
+            const dest: [*]u8 = @ptrFromInt(raw_ptr);
+            @memcpy(dest[0..size], value.ptr[0..size]);
+        }
+        return Value.zst;
+    }
+
+    /// ptr_load: copy sizeOf(target layout) bytes out of *ptr.
+    fn evalPtrLoad(self: *LirInterpreter, ptr_val: Value, ret_layout: layout_mod.Idx) Error!Value {
+        if (ret_layout == .zst) return Value.zst;
+
+        const result = try self.alloc(ret_layout);
+        const size = self.helper.sizeOf(ret_layout);
+        if (size > 0) {
+            const raw_ptr = self.readPointerInt(ptr_val);
+            if (builtin.mode == .Debug and raw_ptr == 0) {
+                self.invariantFailed(
+                    "LIR/interpreter invariant violated: ptr_load received a null pointer for non-ZST layout {d}",
+                    .{@intFromEnum(ret_layout)},
+                );
+            }
+            result.copyFrom(.{ .ptr = @ptrFromInt(raw_ptr) }, size);
+        }
+        return result;
+    }
+
+    /// ptr_cast: identity bits (box(T) -> ptr(T) or ptr -> ptr).
+    fn evalPtrCast(self: *LirInterpreter, ptr_val: Value, ret_layout: layout_mod.Idx) Error!Value {
+        const result = try self.alloc(ret_layout);
+        self.writePointerInt(result, self.readPointerInt(ptr_val));
         return result;
     }
 

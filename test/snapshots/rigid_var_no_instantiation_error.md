@@ -240,7 +240,7 @@ main! = |_| {
 			(e-block
 				(s-let
 					(p-assign (ident "result1"))
-					(e-call (constraint-fn-var 111)
+					(e-call (constraint-fn-var 121)
 						(e-lookup-local
 							(p-assign (ident "swap")))
 						(e-tuple
@@ -250,7 +250,7 @@ main! = |_| {
 									(e-literal (string "hello")))))))
 				(s-let
 					(p-assign (ident "result2"))
-					(e-call (constraint-fn-var 209)
+					(e-call (constraint-fn-var 219)
 						(e-lookup-local
 							(p-assign (ident "swap")))
 						(e-tuple
@@ -263,7 +263,7 @@ main! = |_| {
 										(e-num (value "3"))))))))
 				(s-let
 					(p-assign (ident "result3"))
-					(e-call (constraint-fn-var 227)
+					(e-call (constraint-fn-var 257)
 						(e-lookup-local
 							(p-assign (ident "swap")))
 						(e-tuple

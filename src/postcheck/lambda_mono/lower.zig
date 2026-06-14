@@ -15,6 +15,9 @@ const Allocator = std.mem.Allocator;
 pub fn run(
     allocator: Allocator,
     solved: Solved.Program,
+    /// Match sites the direct lowerer statically resolved; replayed here so
+    /// both derivations demand the same set of functions.
+    folded_matches: []const Lifted.Program.FoldedMatch,
 ) Common.LowerError!Ast.Program {
     var owned = solved;
     errdefer owned.deinit();
@@ -26,9 +29,15 @@ pub fn run(
     var program = Ast.Program.init(allocator, name_store, string_literals);
     name_store = undefined;
     string_literals = undefined;
+    program.source_files = owned.lifted.source_files;
+    owned.lifted.source_files = .empty;
     errdefer program.deinit();
 
     var lowerer = try Lowerer.init(allocator, &owned, &program);
+    defer lowerer.folded_matches.deinit(allocator);
+    for (folded_matches) |folded| {
+        try lowerer.folded_matches.put(allocator, folded.scrutinee, folded.body);
+    }
     defer lowerer.deinit();
     try lowerer.lower();
     program.next_symbol = lowerer.symbols.next;
@@ -123,6 +132,10 @@ const Lowerer = struct {
     captures: std.AutoHashMap(Lifted.LocalId, CaptureBinding),
     symbols: Common.SymbolGen,
     erased_capture_ptr_ty: ?Type.TypeId = null,
+    /// Replays the match resolutions direct LIR lowering recorded, so the
+    /// debug verifier sees the same set of demanded functions. Keyed by the
+    /// match's scrutinee expression.
+    folded_matches: std.AutoHashMapUnmanaged(Lifted.ExprId, Lifted.ExprId) = .empty,
 
     fn init(allocator: Allocator, solved: *const Solved.Program, program: *Ast.Program) Allocator.Error!Lowerer {
         const local_map = try allocator.alloc(?Ast.LocalId, solved.lifted.locals.items.len);
@@ -354,6 +367,9 @@ const Lowerer = struct {
         try self.fn_specs.append(self.allocator, spec);
         try self.fn_written.append(self.allocator, false);
         result.value_ptr.* = fn_id;
+        if (self.solved.lifted.procDebugName(source_fn.symbol)) |name| {
+            try self.program.setProcDebugName(symbol, name);
+        }
 
         const ret_ty = try self.lowerType(switch (self.solved.types.rootContent(spec.solved_fn_ty)) {
             .func => |func| func.ret,
@@ -424,6 +440,9 @@ const Lowerer = struct {
         if (self.expr_map[index]) |cached| return cached;
 
         const expr = self.solved.lifted.exprs.items[index];
+        const saved_loc = self.program.current_loc;
+        defer self.program.current_loc = saved_loc;
+        self.program.current_loc = self.solved.lifted.exprLoc(expr_id);
         const ty = try self.lowerExprTy(expr_id);
         const data: Ast.ExprData = switch (expr.data) {
             .local => |local| try self.lowerLocalExpr(local, ty),
@@ -476,10 +495,18 @@ const Lowerer = struct {
                 .rhs = try self.lowerExpr(eq.rhs),
                 .negated = eq.negated,
             } },
-            .match_ => |match| .{ .match_ = .{
-                .scrutinee = try self.lowerExpr(match.scrutinee),
-                .branches = try self.lowerBranchSpan(match.branches),
-            } },
+            .match_ => |match| blk: {
+                if (self.folded_matches.get(match.scrutinee)) |folded_body| {
+                    break :blk .{ .block = .{
+                        .statements = .empty(),
+                        .final_expr = try self.lowerExpr(folded_body),
+                    } };
+                }
+                break :blk .{ .match_ = .{
+                    .scrutinee = try self.lowerExpr(match.scrutinee),
+                    .branches = try self.lowerBranchSpan(match.branches),
+                } };
+            },
             .if_ => |if_| .{ .if_ = .{
                 .branches = try self.lowerIfBranchSpan(if_.branches),
                 .final_else = try self.lowerExpr(if_.final_else),
@@ -498,6 +525,10 @@ const Lowerer = struct {
             .return_ => |value| .{ .return_ = try self.lowerExpr(value) },
             .crash => |msg| .{ .crash = msg },
             .dbg => |child| .{ .dbg = try self.lowerExpr(child) },
+            .expect_err => |expect_err| .{ .expect_err = .{
+                .msg = try self.lowerExpr(expect_err.msg),
+                .region = expect_err.region,
+            } },
             .expect => |child| .{ .expect = try self.lowerExpr(child) },
         };
 
@@ -705,6 +736,9 @@ const Lowerer = struct {
     fn lowerStmt(self: *Lowerer, stmt_id: Lifted.StmtId) Allocator.Error!Ast.StmtId {
         const index = @intFromEnum(stmt_id);
         if (self.stmt_map[index]) |cached| return cached;
+        const saved_loc = self.program.current_loc;
+        defer self.program.current_loc = saved_loc;
+        self.program.current_loc = self.solved.lifted.stmtLoc(stmt_id);
         const lowered_stmt: Ast.Stmt = switch (self.solved.lifted.stmts.items[index]) {
             .let_ => |let_| .{ .let_ = .{
                 .pat = try self.lowerPat(let_.pat),
@@ -862,6 +896,7 @@ const Lowerer = struct {
         if (self.local_map[index]) |existing| return existing;
         const lifted_local = self.solved.lifted.locals.items[index];
         const lowered = try self.program.addLocalWithBinder(lifted_local.symbol, ty, lifted_local.binder);
+        try self.program.setLocalName(lowered, self.solved.lifted.localName(@enumFromInt(index)));
         self.local_map[index] = lowered;
         return lowered;
     }

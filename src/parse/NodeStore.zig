@@ -53,6 +53,7 @@ scratch_target_entries: base.Scratch(AST.TargetEntry.Idx),
 scratch_target_files: base.Scratch(AST.TargetFile.Idx),
 scratch_target_config_entries: base.Scratch(AST.TargetConfigEntry.Idx),
 scratch_target_config_values: base.Scratch(AST.TargetConfigValue.Idx),
+scratch_symbol_map_entries: base.Scratch(AST.SymbolMapEntry.Idx),
 scratch_for_clause_type_aliases: base.Scratch(AST.ForClauseTypeAlias.Idx),
 scratch_requires_entries: base.Scratch(AST.RequiresEntry.Idx),
 numeric_literals: std.ArrayList(NumericLiteral.Stored),
@@ -192,6 +193,8 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.E
     errdefer scratch_target_config_entries.deinit();
     var scratch_target_config_values = try base.Scratch(AST.TargetConfigValue.Idx).init(gpa);
     errdefer scratch_target_config_values.deinit();
+    var scratch_symbol_map_entries = try base.Scratch(AST.SymbolMapEntry.Idx).init(gpa);
+    errdefer scratch_symbol_map_entries.deinit();
     var scratch_for_clause_type_aliases = try base.Scratch(AST.ForClauseTypeAlias.Idx).init(gpa);
     errdefer scratch_for_clause_type_aliases.deinit();
     var scratch_requires_entries = try base.Scratch(AST.RequiresEntry.Idx).init(gpa);
@@ -220,6 +223,7 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.E
         .scratch_target_files = scratch_target_files,
         .scratch_target_config_entries = scratch_target_config_entries,
         .scratch_target_config_values = scratch_target_config_values,
+        .scratch_symbol_map_entries = scratch_symbol_map_entries,
         .scratch_for_clause_type_aliases = scratch_for_clause_type_aliases,
         .scratch_requires_entries = scratch_requires_entries,
         .numeric_literals = numeric_literals,
@@ -263,6 +267,7 @@ pub fn deinit(store: *NodeStore) void {
     store.scratch_target_files.deinit();
     store.scratch_target_config_entries.deinit();
     store.scratch_target_config_values.deinit();
+    store.scratch_symbol_map_entries.deinit();
     store.scratch_for_clause_type_aliases.deinit();
     store.scratch_requires_entries.deinit();
     store.numeric_literals.deinit(store.gpa);
@@ -441,17 +446,20 @@ pub fn addHeader(store: *NodeStore, header: AST.Header) std.mem.Allocator.Error!
             node.tag = .platform_header;
             node.main_token = platform.name;
 
-            const ed_start = try store.reserveExtraDataStart(6);
+            const ed_start = try store.reserveExtraDataStart(9);
             // Store requires_entries span (start and len)
             store.extra_data.appendAssumeCapacity(platform.requires_entries.span.start);
             store.extra_data.appendAssumeCapacity(platform.requires_entries.span.len);
             store.extra_data.appendAssumeCapacity(@intFromEnum(platform.exposes));
             store.extra_data.appendAssumeCapacity(@intFromEnum(platform.packages));
-            store.extra_data.appendAssumeCapacity(@intFromEnum(platform.provides));
+            store.extra_data.appendAssumeCapacity(platform.provides.span.start);
+            store.extra_data.appendAssumeCapacity(platform.provides.span.len);
+            store.extra_data.appendAssumeCapacity(platform.hosted.span.start);
+            store.extra_data.appendAssumeCapacity(platform.hosted.span.len);
             store.extra_data.appendAssumeCapacity(try packOptionalIndex(platform.targets));
 
             node.data.lhs = ed_start;
-            node.data.rhs = 6;
+            node.data.rhs = 9;
 
             node.region = platform.region;
         },
@@ -875,6 +883,26 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) std.mem.Allocator.Error!AST.Ex
             node.main_token = e.token;
             node.data.lhs = e.parts.span.start;
             node.data.rhs = e.parts.span.len;
+        },
+        .typed_string => |e| {
+            node.tag = .typed_string;
+            node.region = e.region;
+            node.main_token = e.token;
+            node.data.lhs = @bitCast(e.type_ident);
+            const parts_data_idx = store.extra_data.items.len;
+            try store.extra_data.append(store.gpa, e.parts.span.start);
+            try store.extra_data.append(store.gpa, e.parts.span.len);
+            node.data.rhs = @as(u32, @intCast(parts_data_idx));
+        },
+        .typed_multiline_string => |e| {
+            node.tag = .typed_multiline_string;
+            node.region = e.region;
+            node.main_token = e.token;
+            node.data.lhs = @bitCast(e.type_ident);
+            const parts_data_idx = store.extra_data.items.len;
+            try store.extra_data.append(store.gpa, e.parts.span.start);
+            try store.extra_data.append(store.gpa, e.parts.span.len);
+            node.data.rhs = @as(u32, @intCast(parts_data_idx));
         },
         .list => |l| {
             node.tag = .list;
@@ -1388,9 +1416,9 @@ pub fn getHeader(store: *const NodeStore, header_idx: AST.Header.Idx) AST.Header
         },
         .platform_header => {
             const ed_start = node.data.lhs;
-            std.debug.assert(node.data.rhs == 6);
+            std.debug.assert(node.data.rhs == 9);
 
-            const targets_val = store.extra_data.items[ed_start + 5];
+            const targets_val = store.extra_data.items[ed_start + 8];
             const targets = unpackOptionalIndex(AST.TargetsSection.Idx, targets_val);
 
             return .{ .platform = .{
@@ -1401,7 +1429,14 @@ pub fn getHeader(store: *const NodeStore, header_idx: AST.Header.Idx) AST.Header
                 } },
                 .exposes = @enumFromInt(store.extra_data.items[ed_start + 2]),
                 .packages = @enumFromInt(store.extra_data.items[ed_start + 3]),
-                .provides = @enumFromInt(store.extra_data.items[ed_start + 4]),
+                .provides = .{ .span = .{
+                    .start = store.extra_data.items[ed_start + 4],
+                    .len = store.extra_data.items[ed_start + 5],
+                } },
+                .hosted = .{ .span = .{
+                    .start = store.extra_data.items[ed_start + 6],
+                    .len = store.extra_data.items[ed_start + 7],
+                } },
                 .targets = targets,
                 .region = node.region,
             } };
@@ -1880,6 +1915,30 @@ pub fn getExpr(store: *const NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
                 .parts = .{ .span = base.DataSpan{
                     .start = node.data.lhs,
                     .len = node.data.rhs,
+                } },
+                .region = node.region,
+            } };
+        },
+        .typed_string => {
+            const parts_data_idx = node.data.rhs;
+            return .{ .typed_string = .{
+                .token = node.main_token,
+                .type_ident = @bitCast(node.data.lhs),
+                .parts = .{ .span = .{
+                    .start = store.extra_data.items[parts_data_idx],
+                    .len = store.extra_data.items[parts_data_idx + 1],
+                } },
+                .region = node.region,
+            } };
+        },
+        .typed_multiline_string => {
+            const parts_data_idx = node.data.rhs;
+            return .{ .typed_multiline_string = .{
+                .token = node.main_token,
+                .type_ident = @bitCast(node.data.lhs),
+                .parts = .{ .span = .{
+                    .start = store.extra_data.items[parts_data_idx],
+                    .len = store.extra_data.items[parts_data_idx + 1],
                 } },
                 .region = node.region,
             } };
@@ -2778,6 +2837,21 @@ pub fn addTargetsSection(store: *NodeStore, section: AST.TargetsSection) std.mem
     return @enumFromInt(@intFromEnum(nid));
 }
 
+/// Adds a SymbolMapEntry node and returns its index.
+pub fn addSymbolMapEntry(store: *NodeStore, entry: AST.SymbolMapEntry) std.mem.Allocator.Error!AST.SymbolMapEntry.Idx {
+    const node = Node{
+        .tag = .symbol_map_entry,
+        .main_token = entry.symbol,
+        .data = .{
+            .lhs = if (entry.module) |module| try packNonNullOptionalU32(module) else 0,
+            .rhs = entry.func,
+        },
+        .region = entry.region,
+    };
+    const nid = try store.nodes.append(store.gpa, node);
+    return @enumFromInt(@intFromEnum(nid));
+}
+
 /// Adds a TargetEntry node and returns its index.
 pub fn addTargetEntry(store: *NodeStore, entry: AST.TargetEntry) std.mem.Allocator.Error!AST.TargetEntry.Idx {
     const node = Node{
@@ -3025,6 +3099,39 @@ pub fn targetConfigValueSpanFrom(store: *NodeStore, start: u32) std.mem.Allocato
     return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
 }
 
+/// Returns the current top of the SymbolMapEntry scratch list.
+pub fn scratchSymbolMapEntryTop(store: *NodeStore) u32 {
+    return store.scratch_symbol_map_entries.top();
+}
+
+/// Adds a SymbolMapEntry index to scratch.
+pub fn addScratchSymbolMapEntry(store: *NodeStore, idx: AST.SymbolMapEntry.Idx) std.mem.Allocator.Error!void {
+    try store.scratch_symbol_map_entries.append(idx);
+}
+
+/// Clears any SymbolMapEntry.Idxs added to scratch from start until the end.
+pub fn clearScratchSymbolMapEntriesFrom(store: *NodeStore, start: u32) void {
+    store.scratch_symbol_map_entries.clearFrom(start);
+}
+
+/// Creates a SymbolMapEntry span from scratch entries added since start.
+pub fn symbolMapEntrySpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!AST.SymbolMapEntry.Span {
+    const end = store.scratch_symbol_map_entries.top();
+    defer store.scratch_symbol_map_entries.clearFrom(start);
+    var i = @as(usize, @intCast(start));
+    const ed_start = @as(u32, @intCast(store.extra_data.items.len));
+    while (i < end) {
+        try store.extra_data.append(store.gpa, @intFromEnum(store.scratch_symbol_map_entries.items.items[i]));
+        i += 1;
+    }
+    return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
+}
+
+/// Returns a SymbolMapEntry slice for iteration over a span.
+pub fn symbolMapEntrySlice(store: *const NodeStore, span: AST.SymbolMapEntry.Span) []AST.SymbolMapEntry.Idx {
+    return store.sliceFromSpan(AST.SymbolMapEntry.Idx, span.span);
+}
+
 /// Clears any TargetConfigValue.Idxs added to scratch from start until the end.
 pub fn clearScratchTargetConfigValuesFrom(store: *NodeStore, start: u32) void {
     store.scratch_target_config_values.clearFrom(start);
@@ -3045,6 +3152,19 @@ pub fn getTargetsSection(store: *const NodeStore, idx: AST.TargetsSection.Idx) A
     return .{
         .inputs_path = inputs_path,
         .entries = .{ .span = .{ .start = node.data.lhs, .len = node.data.rhs } },
+        .region = node.region,
+    };
+}
+
+/// Retrieves a SymbolMapEntry from a stored node.
+pub fn getSymbolMapEntry(store: *const NodeStore, idx: AST.SymbolMapEntry.Idx) AST.SymbolMapEntry {
+    const node = store.nodes.get(@enumFromInt(@intFromEnum(idx)));
+    std.debug.assert(node.tag == .symbol_map_entry);
+
+    return .{
+        .symbol = node.main_token,
+        .module = if (node.data.lhs == 0) null else unpackNonNullOptionalU32(node.data.lhs),
+        .func = node.data.rhs,
         .region = node.region,
     };
 }

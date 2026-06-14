@@ -24,6 +24,12 @@ const LirPattern = lir_defs.LirPattern;
 const LirPatternId = lir_defs.LirPatternId;
 const LirPatternSpan = lir_defs.LirPatternSpan;
 
+/// Source-level name to use when presenting a specialized LIR proc in debug output.
+pub const ProcDebugName = extern struct {
+    proc: u32,
+    string: base.StringLiteral.Idx,
+};
+
 const Self = @This();
 
 cf_stmts: std.ArrayList(CFStmt),
@@ -37,6 +43,24 @@ allocator: Allocator,
 next_synthetic_symbol: u64,
 patterns: std.ArrayList(LirPattern),
 pattern_ids: std.ArrayList(LirPatternId),
+/// Source file table (module display names) for `SourceLoc.file`, flattened
+/// as concatenated bytes plus per-entry end offsets so it can be mapped
+/// zero-copy from a LIR image.
+source_file_bytes: std.ArrayList(u8),
+source_file_ends: std.ArrayList(u32),
+/// Source location per statement, parallel to `cf_stmts`. Reference-count
+/// statements always record `SourceLoc.none`; they have no source counterpart.
+cf_stmt_locs: std.ArrayList(base.SourceLoc),
+/// Source location per proc, parallel to `proc_specs`.
+proc_locs: std.ArrayList(base.SourceLoc),
+/// Source-level debug names for procs that have source names.
+proc_debug_names: std.ArrayList(ProcDebugName),
+/// Source-level name per local, parallel to `locals`: an index into
+/// `strings`, or `no_local_name` for compiler-generated temporaries.
+local_names: std.ArrayList(u32),
+/// Ambient location recorded by `addCFStmt`/`addProcSpec`. Lowering sets
+/// this on entry to each source node it lowers.
+current_loc: base.SourceLoc,
 
 /// Initializes empty storage for statement-only LIR.
 pub fn init(allocator: Allocator) Self {
@@ -52,6 +76,13 @@ pub fn init(allocator: Allocator) Self {
         .next_synthetic_symbol = 0xf000_0000_0000_0000,
         .patterns = std.ArrayList(LirPattern).empty,
         .pattern_ids = std.ArrayList(LirPatternId).empty,
+        .source_file_bytes = std.ArrayList(u8).empty,
+        .source_file_ends = std.ArrayList(u32).empty,
+        .cf_stmt_locs = std.ArrayList(base.SourceLoc).empty,
+        .proc_locs = std.ArrayList(base.SourceLoc).empty,
+        .proc_debug_names = std.ArrayList(ProcDebugName).empty,
+        .local_names = std.ArrayList(u32).empty,
+        .current_loc = base.SourceLoc.none,
     };
 }
 
@@ -66,6 +97,99 @@ pub fn deinit(self: *Self) void {
     self.strings.deinit(self.allocator);
     self.patterns.deinit(self.allocator);
     self.pattern_ids.deinit(self.allocator);
+    self.source_file_bytes.deinit(self.allocator);
+    self.source_file_ends.deinit(self.allocator);
+    self.cf_stmt_locs.deinit(self.allocator);
+    self.proc_locs.deinit(self.allocator);
+    self.proc_debug_names.deinit(self.allocator);
+    self.local_names.deinit(self.allocator);
+}
+
+/// Sentinel in `local_names` for locals with no source-level name.
+pub const no_local_name: u32 = std.math.maxInt(u32);
+
+/// Record the source-level name of a local (empty means none).
+pub fn setLocalName(self: *Self, id: LocalId, name: []const u8) Allocator.Error!void {
+    if (name.len == 0) return;
+    const idx = try self.insertString(name);
+    self.local_names.items[@intFromEnum(id)] = @intFromEnum(idx);
+}
+
+/// Source-level name of a local, or null for compiler-generated temporaries.
+pub fn localName(self: *const Self, id: LocalId) ?[]const u8 {
+    const raw = self.local_names.items[@intFromEnum(id)];
+    if (raw == no_local_name) return null;
+    return self.getString(@enumFromInt(raw));
+}
+
+/// Record the source-level debug name of a proc.
+pub fn setProcDebugName(self: *Self, id: LirProcSpecId, name: []const u8) Allocator.Error!void {
+    if (name.len == 0) return;
+    try self.setProcDebugNameIndex(id, try self.insertString(name));
+}
+
+/// Copy proc source metadata from one proc to another, for compiler-generated variants.
+pub fn copyProcDebugInfo(self: *Self, dst: LirProcSpecId, src: LirProcSpecId) Allocator.Error!void {
+    self.proc_locs.items[@intFromEnum(dst)] = self.proc_locs.items[@intFromEnum(src)];
+    if (self.procDebugNameIndex(src)) |idx| {
+        try self.setProcDebugNameIndex(dst, idx);
+    }
+}
+
+/// Source-level debug name of a proc, or null for compiler-generated procs.
+pub fn procDebugName(self: *const Self, id: LirProcSpecId) ?[]const u8 {
+    const idx = self.procDebugNameIndex(id) orelse return null;
+    return self.getString(idx);
+}
+
+fn procDebugNameIndex(self: *const Self, id: LirProcSpecId) ?base.StringLiteral.Idx {
+    const proc = @intFromEnum(id);
+    for (self.proc_debug_names.items) |entry| {
+        if (entry.proc == proc) return entry.string;
+    }
+    return null;
+}
+
+fn setProcDebugNameIndex(self: *Self, id: LirProcSpecId, string: base.StringLiteral.Idx) Allocator.Error!void {
+    const proc = @intFromEnum(id);
+    for (self.proc_debug_names.items) |*entry| {
+        if (entry.proc == proc) {
+            entry.string = string;
+            return;
+        }
+    }
+    try self.proc_debug_names.append(self.allocator, .{ .proc = proc, .string = string });
+}
+
+/// Copies the source file table from a lowering stage's program.
+pub fn setSourceFiles(self: *Self, files: []const []const u8) Allocator.Error!void {
+    std.debug.assert(self.source_file_ends.items.len == 0);
+    for (files) |file| {
+        try self.source_file_bytes.appendSlice(self.allocator, file);
+        try self.source_file_ends.append(self.allocator, @intCast(self.source_file_bytes.items.len));
+    }
+}
+
+/// Number of entries in the source file table.
+pub fn sourceFileCount(self: *const Self) u32 {
+    return @intCast(self.source_file_ends.items.len);
+}
+
+/// Name of one source file table entry.
+pub fn sourceFileName(self: *const Self, file: u32) []const u8 {
+    const end = self.source_file_ends.items[file];
+    const start = if (file == 0) 0 else self.source_file_ends.items[file - 1];
+    return self.source_file_bytes.items[start..end];
+}
+
+/// Source location of a statement.
+pub fn stmtLoc(self: *const Self, id: CFStmtId) base.SourceLoc {
+    return self.cf_stmt_locs.items[@intFromEnum(id)];
+}
+
+/// Source location of a proc.
+pub fn procLoc(self: *const Self, id: LirProcSpecId) base.SourceLoc {
+    return self.proc_locs.items[@intFromEnum(id)];
 }
 
 /// Appends a pattern and returns its id.
@@ -156,6 +280,7 @@ pub fn getStringLiteralBacking(self: *const Self, literal: lir_defs.StrLiteral) 
 pub fn addLocal(self: *Self, local: Local) Allocator.Error!LocalId {
     const idx = self.locals.items.len;
     try self.locals.append(self.allocator, local);
+    try self.local_names.append(self.allocator, no_local_name);
     return @enumFromInt(@as(u32, @intCast(idx)));
 }
 
@@ -197,6 +322,11 @@ pub fn getLocalSpan(self: *const Self, span: LocalSpan) []const LocalId {
 pub fn addCFStmt(self: *Self, stmt: CFStmt) Allocator.Error!CFStmtId {
     const idx = self.cf_stmts.items.len;
     try self.cf_stmts.append(self.allocator, stmt);
+    const loc = switch (stmt) {
+        .incref, .decref, .free => base.SourceLoc.none,
+        else => self.current_loc,
+    };
+    try self.cf_stmt_locs.append(self.allocator, loc);
     return @enumFromInt(@as(u32, @intCast(idx)));
 }
 
@@ -291,6 +421,7 @@ pub fn getJoinPointSpan(self: *const Self, span: JoinPointSpan) []const JoinPoin
 pub fn addProcSpec(self: *Self, proc: LirProcSpec) Allocator.Error!LirProcSpecId {
     const idx = self.proc_specs.items.len;
     try self.proc_specs.append(self.allocator, proc);
+    try self.proc_locs.append(self.allocator, self.current_loc);
     return @enumFromInt(@as(u32, @intCast(idx)));
 }
 

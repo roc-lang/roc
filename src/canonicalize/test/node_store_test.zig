@@ -298,6 +298,7 @@ test "NodeStore round trip - Expressions" {
             .branches = CIR.Expr.Match.Branch.Span{ .span = rand_span() },
             .exhaustive = rand_idx(TypeVar),
             .is_try_suffix = false,
+            .skip_exhaustiveness = false,
         },
     });
     try expressions.append(gpa, CIR.Expr{
@@ -444,6 +445,12 @@ test "NodeStore round trip - Expressions" {
     try expressions.append(gpa, CIR.Expr{
         .e_dbg = .{
             .expr = rand_idx(CIR.Expr.Idx),
+        },
+    });
+    try expressions.append(gpa, CIR.Expr{
+        .e_expect_err = .{
+            .expr = rand_idx(CIR.Expr.Idx),
+            .snippet = rand_idx(StringLiteral.Idx),
         },
     });
     try expressions.append(gpa, CIR.Expr{

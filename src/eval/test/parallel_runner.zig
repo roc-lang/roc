@@ -64,6 +64,8 @@ const base = @import("base");
 /// - Runs eval in-process (no fork) so kcov can trace it
 /// - Forces single-threaded execution
 const coverage_mode: bool = coverage_options.coverage;
+const eval_no_fork: bool = build_options.eval_no_fork;
+const eval_time_worker: bool = build_options.eval_time_worker;
 
 const trace = struct {
     const enabled = if (@hasDecl(build_options, "trace_eval")) build_options.trace_eval else false;
@@ -319,16 +321,7 @@ fn forkAndEval(
     timeout_ms: u64,
     inherited_fd_to_close: ?posix.fd_t,
 ) ForkResult {
-    if (comptime !has_fork or coverage_mode) {
-        const result = eval_fn(base.defaultGpa(), lowered) catch |err| {
-            return .{ .child_error = @errorName(err) };
-        };
-        return .{ .success = result };
-    }
-
-    // std.process.getEnvVarOwned was removed in Zig 0.16; use std.c.getenv instead.
-    const disable_fork = std.c.getenv("ROC_EVAL_NO_FORK") != null;
-    if (disable_fork) {
+    if (comptime !has_fork or coverage_mode or eval_no_fork) {
         const result = eval_fn(base.defaultGpa(), lowered) catch |err| {
             return .{ .child_error = @errorName(err) };
         };
@@ -560,15 +553,7 @@ fn forkAndEvalWithStats(
     eval_fn: BackendEvalWithStatsFn,
     lowered: *const LoweredProgram,
 ) ForkStatsResult {
-    if (comptime !has_fork or coverage_mode) {
-        const result = eval_fn(base.defaultGpa(), lowered) catch |err| {
-            return .{ .child_error = @errorName(err) };
-        };
-        return .{ .success = result };
-    }
-
-    const disable_fork = std.c.getenv("ROC_EVAL_NO_FORK") != null;
-    if (disable_fork) {
+    if (comptime !has_fork or coverage_mode or eval_no_fork) {
         const result = eval_fn(base.defaultGpa(), lowered) catch |err| {
             return .{ .child_error = @errorName(err) };
         };
@@ -1138,6 +1123,19 @@ fn runTestProblem(
             .backends = undefined,
         };
     }
+
+    // Checking found nothing; publish so compile-time evaluation can report
+    // problems (e.g. a custom from_numeral rejecting a literal).
+    const comptime_outcome = try helpers.publishProgramForComptimeProblems(allocator, source_kind, src, imports);
+    if (comptime_outcome == .comptime_problems) {
+        return .{
+            .status = .pass,
+            .timings = timings,
+            .has_backend_details = false,
+            .backends = undefined,
+        };
+    }
+
     return .{
         .status = .fail,
         .message = "expected problems but none found",
@@ -2114,10 +2112,8 @@ fn printPerformanceSummary(gpa: std.mem.Allocator, tests: []const TestCase, resu
 // Main
 //
 
-/// Worker boot-path instrumentation. Set the env var `ROC_EVAL_TIME_WORKER=1`
-/// to dump per-phase timestamps from inside a worker process. Used to figure
-/// out where the ~70ms per-Child overhead is going on Windows; disabled by
-/// default so it adds no cost.
+/// Worker boot-path instrumentation. Enable with `-Deval-time-worker=true` to
+/// dump per-phase timestamps from inside a worker process.
 const WorkerTrace = struct {
     io: std.Io,
     enabled: bool,
@@ -2125,14 +2121,8 @@ const WorkerTrace = struct {
     last_ns: u64,
 
     fn init(io: std.Io) WorkerTrace {
-        const enabled = blk: {
-            const v = std.c.getenv("ROC_EVAL_TIME_WORKER");
-            if (v) |_| {
-                break :blk true;
-            }
-            break :blk false;
-        };
-        const now = std.Io.Timestamp.now(io, .real).nanoseconds;
+        const enabled = eval_time_worker;
+        const now = if (enabled) std.Io.Timestamp.now(io, .real).nanoseconds else 0;
         const start_ns: u64 = @intCast(@max(0, now));
         return .{ .io = io, .enabled = enabled, .start_ns = start_ns, .last_ns = start_ns };
     }
@@ -2310,20 +2300,10 @@ pub fn main(init: std.process.Init) anyerror!void {
         return;
     }
 
-    // In Zig 0.16, std.process.getEnvVarOwned was removed.
-    // Use Environ.getPosix on POSIX (no alloc). On Windows, the matching
-    // getPosix variant currently compiles incorrectly in the stdlib, and the fork
-    // path doesn't apply anyway (Windows uses the Child pool), so the
-    // env var has no effect there.
-    const disable_fork_env: ?[:0]const u8 = if (builtin.os.tag == .windows)
-        null
-    else
-        std.process.Environ.getPosix(init.minimal.environ, "ROC_EVAL_NO_FORK");
-
-    // Coverage mode and ROC_EVAL_NO_FORK use a simple single-threaded loop: no
-    // outer fork, no watchdog, no threads. ROC_EVAL_NO_FORK is also consumed by
-    // forkAndEval below, so backend calls run in-process too.
-    if (coverage_mode or disable_fork_env != null) {
+    // Coverage mode and -Deval-no-fork use a simple single-threaded loop: no
+    // outer fork, no watchdog, no threads. forkAndEval also consumes
+    // eval_no_fork, so backend calls run in-process too.
+    if (coverage_mode or eval_no_fork) {
         var arena = collections.SingleThreadArena.init(base.defaultGpa());
         defer arena.deinit();
 

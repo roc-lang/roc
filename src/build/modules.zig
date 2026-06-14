@@ -357,7 +357,7 @@ pub const ModuleType = enum {
             .backend => &.{ .base, .layout, .builtins, .can, .lir, .roc_target, .ctx },
             .lir_core => &.{ .base, .collections, .layout, .types, .can, .check },
             .postcheck => &.{ .base, .builtins, .can, .check, .layout, .lir_core },
-            .lir => &.{ .base, .collections, .layout, .types, .can, .check, .lir_core, .postcheck },
+            .lir => &.{ .base, .collections, .layout, .types, .can, .check, .build_options, .lir_core, .postcheck },
             .symbol => &.{.base},
             .roc_target => &.{.base},
             .sljmp => &.{},
@@ -462,6 +462,12 @@ pub const RocModules = struct {
         if (zstd) |z| {
             self.bundle.linkLibrary(z.artifact("zstd"));
         }
+
+        // The interpreter's hosted-call trampoline is hand-written assembly (see
+        // host_trampoline.S); attach it to the eval module so it is assembled and linked into
+        // every artifact that uses the interpreter. The file is arch-guarded, so it compiles
+        // to an empty object on targets without a trampoline (e.g. wasm).
+        self.eval.addAssemblyFile(b.path("src/eval/host_trampoline.S"));
 
         // Setup module dependencies using our generic helper
         self.setupModuleDependencies();

@@ -19,6 +19,63 @@ pub const platform_main_source = @embedFile("platform/main.roc");
 /// Embedded source for the echo platform's Echo.roc module (hosted line! function).
 pub const echo_module_source = @embedFile("platform/Echo.roc");
 
+/// Build-only Linux default platform. Unlike `roc run`, linked Linux output
+/// owns its process entrypoint and lowers echo directly in the backend.
+pub const build_platform_main_source =
+    \\platform ""
+    \\    requires {} { main! : List(Str) => Try({}, [Exit(I8), ..]) }
+    \\    exposes [Echo]
+    \\    packages {}
+    \\    provides { "_start": main_for_host! }
+    \\    hosted { "roc_default_echo_line": Echo.line! }
+    \\    targets: {
+    \\        inputs: "targets/",
+    \\        x64musl: { inputs: [app] },
+    \\        arm64musl: { inputs: [app] },
+    \\    }
+    \\
+    \\import Echo
+    \\
+    \\main_for_host! : {} => I8
+    \\main_for_host! = |_args|
+    \\    match main!([]) {
+    \\        Ok({}) => 0
+    \\        Err(Exit(code)) => code
+    \\        Err(_) => 1
+    \\    }
+    \\
+;
+
+/// Build-only default platform for targets that use a C runtime entrypoint.
+/// The user-facing main! signature stays the same; the synthetic main returns
+/// the C process status code.
+pub const build_c_platform_main_source =
+    \\platform ""
+    \\    requires {} { main! : List(Str) => Try({}, [Exit(I8), ..]) }
+    \\    exposes [Echo]
+    \\    packages {}
+    \\    provides { "main": main_for_host! }
+    \\    hosted { "roc_default_echo_line": Echo.line! }
+    \\    targets: {
+    \\        inputs: "targets/",
+    \\        x64mac: { inputs: [app] },
+    \\        arm64mac: { inputs: [app] },
+    \\        x64win: { inputs: [app] },
+    \\        arm64win: { inputs: [app] },
+    \\    }
+    \\
+    \\import Echo
+    \\
+    \\main_for_host! : {} => I32
+    \\main_for_host! = |_args|
+    \\    match main!([]) {
+    \\        Ok({}) => 0
+    \\        Err(Exit(code)) => I8.to_i32(code)
+    \\        Err(_) => 1
+    \\    }
+    \\
+;
+
 /// Echo platform environment, passed as RocOps.env.
 /// On WASM the std_io field is unused (undefined); on native it holds the
 /// std.Io obtained from the process init or the global single-threaded I/O.
@@ -29,17 +86,23 @@ pub const EchoEnv = struct {
     inline_expect_failed: bool = false,
 };
 
+/// The RocOps the echo platform's hosted functions use for refcounting and
+/// reaching the EchoEnv. Hosted functions have natural C ABIs with no ops
+/// parameter, so the runner stores its RocOps here before running any Roc code.
+pub var g_roc_ops: ?*host_abi.RocOps = null;
+
 /// Echo host function: reads a RocStr arg and prints it + newline to stdout.
 /// Ownership of `roc_str` transfers to this host function — the RC insertion
 /// pass emits zero RC ops for hosted-call args (see test in `src/lir/arc.zig`
 /// "RC hosted call transfers unused refcounted arg to host", and the test
 /// platform host in `test/fx/platform/host.zig` which decrefs every RocStr
 /// arg). Without this decref every `echo!` call leaks one heap RocStr.
-pub fn echoHostedFn(ops_ptr: *anyopaque, _: [*]u8, roc_str: *RocStr) callconv(.c) void {
-    const ops: *host_abi.RocOps = @ptrCast(@alignCast(ops_ptr));
-    defer roc_str.decref(ops);
+pub fn echoHostedFn(str: RocStr) callconv(.c) void {
+    const ops = g_roc_ops.?;
+    var owned = str;
+    defer owned.decref(ops);
 
-    const message = roc_str.asSlice();
+    const message = owned.asSlice();
 
     if (comptime is_wasm) {
         const js = struct {
@@ -49,10 +112,25 @@ pub fn echoHostedFn(ops_ptr: *anyopaque, _: [*]u8, roc_str: *RocStr) callconv(.c
     } else {
         const env: *EchoEnv = @ptrCast(@alignCast(ops.env));
         const stdout_file: std.Io.File = .stdout();
-        stdout_file.writeStreamingAll(env.std_io, message) catch |err| handleStdoutError(err);
-        stdout_file.writeStreamingAll(env.std_io, "\n") catch |err| handleStdoutError(err);
+        if (appendTemporaryNewline(&owned)) |message_with_newline| {
+            stdout_file.writeStreamingAll(env.std_io, message_with_newline) catch |err| handleStdoutError(err);
+            message_with_newline[message_with_newline.len - 1] = 0;
+        } else {
+            stdout_file.writeStreamingAll(env.std_io, message) catch |err| handleStdoutError(err);
+            stdout_file.writeStreamingAll(env.std_io, "\n") catch |err| handleStdoutError(err);
+        }
     }
     // Returns {} (ZST) — no bytes to write to ret_bytes
+}
+
+fn appendTemporaryNewline(str: *RocStr) ?[]u8 {
+    const len = str.len();
+    if (len >= str.getCapacity()) return null;
+    if (!(str.isSmallStr() or (!str.isSeamlessSlice() and str.isUnique()))) return null;
+
+    const bytes = str.asSliceWithCapacityMut();
+    bytes[len] = '\n';
+    return bytes[0 .. len + 1];
 }
 
 /// Handle stdout write errors: exit cleanly on broken pipe (standard
@@ -77,10 +155,10 @@ pub fn makeDefaultRocOps(env: *EchoEnv, hosted_fns: []host_abi.HostedFn) host_ab
         const size_prefix = @sizeOf(usize);
 
         /// Allocate with a size prefix so realloc/dealloc can recover the old length.
-        fn rocAlloc(alloc_args: *host_abi.RocAlloc, _: *anyopaque) callconv(.c) void {
+        fn rocAlloc(_: *host_abi.RocOps, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
             const alloc = if (comptime is_wasm) std.heap.wasm_allocator else std.heap.smp_allocator;
-            const total = alloc_args.length + size_prefix;
-            const align_enum = std.mem.Alignment.fromByteUnits(@max(alloc_args.alignment, @alignOf(usize)));
+            const total = length + size_prefix;
+            const align_enum = std.mem.Alignment.fromByteUnits(@max(alignment, @alignOf(usize)));
             const raw = alloc.rawAlloc(total, align_enum, @returnAddress()) orelse {
                 if (comptime is_wasm) @trap() else {
                     std.debug.print("roc_alloc failed: OOM\n", .{});
@@ -89,31 +167,31 @@ pub fn makeDefaultRocOps(env: *EchoEnv, hosted_fns: []host_abi.HostedFn) host_ab
             };
             // Store the allocation length in the prefix
             const size_slot: *usize = @ptrCast(@alignCast(raw));
-            size_slot.* = alloc_args.length;
-            alloc_args.answer = @ptrCast(raw + size_prefix);
+            size_slot.* = length;
+            return @ptrCast(raw + size_prefix);
         }
 
-        fn rocDealloc(dealloc_args: *host_abi.RocDealloc, _: *anyopaque) callconv(.c) void {
+        fn rocDealloc(_: *host_abi.RocOps, ptr: *anyopaque, alignment: usize) callconv(.c) void {
             const alloc = if (comptime is_wasm) std.heap.wasm_allocator else std.heap.smp_allocator;
             // Recover the length rocAlloc stored in the prefix, then free the whole block.
-            const user_ptr: [*]u8 = @ptrCast(dealloc_args.ptr);
+            const user_ptr: [*]u8 = @ptrCast(ptr);
             const raw = user_ptr - size_prefix;
             const length = @as(*const usize, @ptrCast(@alignCast(raw))).*;
-            const align_enum = std.mem.Alignment.fromByteUnits(@max(dealloc_args.alignment, @alignOf(usize)));
+            const align_enum = std.mem.Alignment.fromByteUnits(@max(alignment, @alignOf(usize)));
             alloc.rawFree(raw[0 .. length + size_prefix], align_enum, @returnAddress());
         }
 
-        fn rocRealloc(realloc_args: *host_abi.RocRealloc, _: *anyopaque) callconv(.c) void {
+        fn rocRealloc(_: *host_abi.RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
             const alloc = if (comptime is_wasm) std.heap.wasm_allocator else std.heap.smp_allocator;
-            const align_enum = std.mem.Alignment.fromByteUnits(@max(realloc_args.alignment, @alignOf(usize)));
+            const align_enum = std.mem.Alignment.fromByteUnits(@max(alignment, @alignOf(usize)));
 
             // Read old size from prefix
-            const old_ptr: [*]u8 = @ptrCast(realloc_args.answer);
+            const old_ptr: [*]u8 = @ptrCast(ptr);
             const old_raw = old_ptr - size_prefix;
             const old_size: usize = @as(*const usize, @ptrCast(@alignCast(old_raw))).*;
 
             // Allocate new block with size prefix
-            const new_total = realloc_args.new_length + size_prefix;
+            const new_total = new_length + size_prefix;
             const new_raw = alloc.rawAlloc(new_total, align_enum, @returnAddress()) orelse {
                 if (comptime is_wasm) @trap() else {
                     std.debug.print("roc_realloc failed: OOM\n", .{});
@@ -123,11 +201,11 @@ pub fn makeDefaultRocOps(env: *EchoEnv, hosted_fns: []host_abi.HostedFn) host_ab
 
             // Write new size prefix
             const new_size_slot: *usize = @ptrCast(@alignCast(new_raw));
-            new_size_slot.* = realloc_args.new_length;
+            new_size_slot.* = new_length;
             const new_ptr = new_raw + size_prefix;
 
             // Copy old data (only up to the smaller of old/new sizes)
-            const copy_len = @min(old_size, realloc_args.new_length);
+            const copy_len = @min(old_size, new_length);
             if (copy_len > 0) {
                 @memcpy(new_ptr[0..copy_len], old_ptr[0..copy_len]);
             }
@@ -135,45 +213,45 @@ pub fn makeDefaultRocOps(env: *EchoEnv, hosted_fns: []host_abi.HostedFn) host_ab
             // Free the old block now that its contents have been copied.
             alloc.rawFree(old_raw[0 .. old_size + size_prefix], align_enum, @returnAddress());
 
-            realloc_args.answer = @ptrCast(new_ptr);
+            return @ptrCast(new_ptr);
         }
 
-        fn rocDbg(dbg_args: *const host_abi.RocDbg, env_ptr: *anyopaque) callconv(.c) void {
+        fn rocDbg(ops: *host_abi.RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
             if (comptime is_wasm) {
                 // No-op on wasm — no stderr available
             } else {
-                const echo_env: *EchoEnv = @ptrCast(@alignCast(env_ptr));
-                const msg = dbg_args.utf8_bytes[0..dbg_args.len];
+                const echo_env: *EchoEnv = @ptrCast(@alignCast(ops.env));
+                const msg = bytes[0..len];
                 const stderr_file: std.Io.File = .stderr();
                 stderr_file.writeStreamingAll(echo_env.std_io, "[dbg] ") catch {};
                 stderr_file.writeStreamingAll(echo_env.std_io, msg) catch {};
                 stderr_file.writeStreamingAll(echo_env.std_io, "\n") catch {};
             }
         }
-        fn rocExpectFailed(expect_args: *const host_abi.RocExpectFailed, env_ptr: *anyopaque) callconv(.c) void {
-            const echo_env_for_flag: *EchoEnv = @ptrCast(@alignCast(env_ptr));
+        fn rocExpectFailed(ops: *host_abi.RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
+            const echo_env_for_flag: *EchoEnv = @ptrCast(@alignCast(ops.env));
             echo_env_for_flag.inline_expect_failed = true;
             if (comptime is_wasm) {
                 // No-op on wasm — no stderr available
             } else {
-                const echo_env: *EchoEnv = @ptrCast(@alignCast(env_ptr));
-                const msg = expect_args.utf8_bytes[0..expect_args.len];
+                const echo_env: *EchoEnv = @ptrCast(@alignCast(ops.env));
+                const msg = bytes[0..len];
                 const stderr_file: std.Io.File = .stderr();
                 stderr_file.writeStreamingAll(echo_env.std_io, "Expect failed: ") catch {};
                 stderr_file.writeStreamingAll(echo_env.std_io, msg) catch {};
                 stderr_file.writeStreamingAll(echo_env.std_io, "\n") catch {};
             }
         }
-        fn rocCrashed(crash_args: *const host_abi.RocCrashed, env_ptr: *anyopaque) callconv(.c) void {
+        fn rocCrashed(ops: *host_abi.RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
             if (comptime is_wasm) {
                 @trap();
             } else {
-                const echo_env: *EchoEnv = @ptrCast(@alignCast(env_ptr));
-                const msg = crash_args.utf8_bytes[0..crash_args.len];
+                const echo_env: *EchoEnv = @ptrCast(@alignCast(ops.env));
+                const msg = bytes[0..len];
                 const stderr_file: std.Io.File = .stderr();
-                stderr_file.writeStreamingAll(echo_env.std_io, "Roc crashed: ") catch {};
+                stderr_file.writeStreamingAll(echo_env.std_io, "Roc application crashed with this message:\n\n\t") catch {};
                 stderr_file.writeStreamingAll(echo_env.std_io, msg) catch {};
-                stderr_file.writeStreamingAll(echo_env.std_io, "\n") catch {};
+                stderr_file.writeStreamingAll(echo_env.std_io, "\n\n") catch {};
                 std.process.exit(1);
             }
         }
@@ -259,6 +337,48 @@ fn sanitizeUtf8(input: []const u8, allocator: std.mem.Allocator) std.mem.Allocat
 
 const testing = std.testing;
 const test_allocator = std.testing.allocator;
+
+test "appendTemporaryNewline: small string uses spare inline byte" {
+    var str = RocStr.fromSliceSmall("hello");
+
+    const message = appendTemporaryNewline(&str) orelse return error.TestUnexpectedResult;
+    try testing.expectEqualStrings("hello\n", message);
+    try testing.expectEqualStrings("hello", str.asSlice());
+
+    message[message.len - 1] = 0;
+    try testing.expectEqual(@as(u8, 0), str.asSliceWithCapacity()[str.len()]);
+}
+
+test "appendTemporaryNewline: unique heap string with spare capacity is writable" {
+    var test_env = builtins.utils.TestEnv.init(test_allocator);
+    defer test_env.deinit();
+    const ops = test_env.getOps();
+
+    var str = RocStr.fromSlice("a string long enough to require heap allocation", ops);
+    str = builtins.str.reserve(str, 1, .Immutable, ops);
+    defer str.decref(ops);
+
+    const message = appendTemporaryNewline(&str) orelse return error.TestUnexpectedResult;
+    try testing.expectEqualStrings("a string long enough to require heap allocation\n", message);
+    try testing.expectEqualStrings("a string long enough to require heap allocation", str.asSlice());
+
+    message[message.len - 1] = 0;
+    try testing.expectEqual(@as(u8, 0), str.asSliceWithCapacity()[str.len()]);
+}
+
+test "appendTemporaryNewline: shared heap string is not writable" {
+    var test_env = builtins.utils.TestEnv.init(test_allocator);
+    defer test_env.deinit();
+    const ops = test_env.getOps();
+
+    var str = RocStr.fromSlice("a string long enough to require heap allocation", ops);
+    str = builtins.str.reserve(str, 1, .Immutable, ops);
+    defer str.decref(ops);
+    str.incref(1, ops);
+    defer str.decref(ops);
+
+    try testing.expectEqual(@as(?[]u8, null), appendTemporaryNewline(&str));
+}
 
 test "sanitizeUtf8: valid ASCII passes through unchanged" {
     const input = "hello world";

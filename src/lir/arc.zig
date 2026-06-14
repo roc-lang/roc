@@ -710,8 +710,8 @@ const Inserter = struct {
                     if (assign.target != assign.value) {
                         const move_value = try self.canMoveSetLocalValue(&path.owned, assign.value, assign.next, path.options.loop_keep);
                         switch (assign.mode) {
-                            .replace_existing => current_start = try self.releaseOldTargetIfNeeded(assign.target, &path.owned, current_start),
-                            .initialize_join_result, .initialize_join_param => {},
+                            .replace_existing, .initialize_join_param => current_start = try self.releaseOldTargetIfNeeded(assign.target, &path.owned, current_start),
+                            .initialize_join_result => {},
                         }
                         if (move_value) {
                             path.owned.unset(assign.value);
@@ -835,6 +835,21 @@ const Inserter = struct {
                     self.destroyRewritePath(path);
                     return;
                 },
+                .expect_err => |expect_err_stmt| {
+                    // Terminal: the message's ownership unit transfers to the
+                    // failure report, so it is not released here.
+                    var tail = path.cursor;
+                    if (path.owned.contains(expect_err_stmt.message)) {
+                        path.owned.unset(expect_err_stmt.message);
+                        tail = try self.releaseAll(&path.owned, tail);
+                    } else {
+                        tail = try self.releaseAll(&path.owned, tail);
+                        tail = try self.retainLocalIfRc(expect_err_stmt.message, tail);
+                    }
+                    path.result.* = try self.finishLinearRewrite(&path.frames, tail);
+                    self.destroyRewritePath(path);
+                    return;
+                },
             }
         }
     }
@@ -857,6 +872,9 @@ const Inserter = struct {
         tail_start: LIR.CFStmtId,
     ) ResourceError!LIR.CFStmtId {
         const stmt = self.store.getCFStmt(frame.stmt);
+        const saved_loc = self.store.current_loc;
+        defer self.store.current_loc = saved_loc;
+        self.store.current_loc = self.store.stmtLoc(frame.stmt);
         var next = tail_start;
         var cloned: LIR.CFStmtId = undefined;
 
@@ -1027,6 +1045,7 @@ const Inserter = struct {
             .jump,
             .ret,
             .crash,
+            .expect_err,
             => arcInvariant("ARC linear rewrite attempted to patch a non-linear statement"),
         }
         return self.attachPrefix(frame.head, frame.stmt, cloned);
@@ -1476,8 +1495,8 @@ const Inserter = struct {
                     if (assign.target != assign.value) {
                         const move_value = try self.canMoveSetLocalValue(&path.owned, assign.value, assign.next, path.loop_keep);
                         switch (assign.mode) {
-                            .initialize_join_result, .initialize_join_param => {},
-                            .replace_existing => {},
+                            .replace_existing, .initialize_join_param => path.owned.unset(assign.target),
+                            .initialize_join_result => {},
                         }
                         if (move_value) path.owned.unset(assign.value);
                     }
@@ -1545,7 +1564,7 @@ const Inserter = struct {
                     self.destroyAnalysisPath(path);
                     return;
                 },
-                .runtime_error, .loop_continue, .loop_break, .jump, .ret, .crash => {
+                .runtime_error, .loop_continue, .loop_break, .jump, .ret, .crash, .expect_err => {
                     self.destroyAnalysisPath(path);
                     return;
                 },
@@ -2011,6 +2030,7 @@ const Inserter = struct {
             .abi = source_spec.abi,
             .hosted = source_spec.hosted,
         });
+        try self.store.copyProcDebugInfo(variant, callee);
         entry.value_ptr.* = variant;
         try self.variants.sigs.append(self.store.allocator, demanded);
         try self.variants.queue.append(self.store.allocator, .{
@@ -2106,6 +2126,7 @@ const Inserter = struct {
                 .loop_continue,
                 .loop_break,
                 .crash,
+                .expect_err,
                 => {},
                 .incref, .decref, .free => arcInvariant("ARC join-body collection received already-reference-counted LIR"),
             }
@@ -2193,6 +2214,7 @@ const Inserter = struct {
                 .loop_continue,
                 .loop_break,
                 .crash,
+                .expect_err,
                 => {},
             }
         }
@@ -2272,6 +2294,9 @@ const Inserter = struct {
                 .expect => |expect_stmt| {
                     if (expect_stmt.condition == needle) return true;
                     try stack.append(self.store.allocator, expect_stmt.next);
+                },
+                .expect_err => |expect_err_stmt| {
+                    if (expect_err_stmt.message == needle) return true;
                 },
                 .switch_stmt => |switch_stmt| {
                     if (switch_stmt.cond == needle) return true;
@@ -2412,6 +2437,9 @@ const Inserter = struct {
                 .expect => |expect_stmt| {
                     if (needles.contains(expect_stmt.condition)) return true;
                     try stack.append(self.store.allocator, expect_stmt.next);
+                },
+                .expect_err => |expect_err_stmt| {
+                    if (needles.contains(expect_err_stmt.message)) return true;
                 },
                 .switch_stmt => |switch_stmt| {
                     if (needles.contains(switch_stmt.cond)) return true;
@@ -2755,7 +2783,7 @@ const ArcTest = struct {
             .body = null,
             .ret_layout = ret_layout,
             .hosted = .{
-                .external_symbol_name = @enumFromInt(1),
+                .symbol = try self.store.insertString("roc_test_hosted"),
                 .dispatch_index = 0,
             },
         });
@@ -2998,7 +3026,7 @@ const ArcTest = struct {
                 inline .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .free => |s| {
                     try stack.append(self.allocator, s.next);
                 },
-                .ret, .jump, .crash, .runtime_error, .loop_continue, .loop_break => {},
+                .ret, .jump, .crash, .expect_err, .runtime_error, .loop_continue, .loop_break => {},
             }
         }
         return mask;
@@ -3059,7 +3087,7 @@ const ArcTest = struct {
                     if (before == .crash) return error.ExpectedRcBeforeStop;
                     return;
                 },
-                .runtime_error, .switch_stmt, .loop_continue, .loop_break, .join, .jump => return error.NonLinearPath,
+                .expect_err, .runtime_error, .switch_stmt, .loop_continue, .loop_break, .join, .jump => return error.NonLinearPath,
             }
         }
         return error.CyclicPath;

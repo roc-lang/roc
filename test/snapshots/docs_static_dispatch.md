@@ -31,7 +31,7 @@ platform ""
     requires {} { main : Str }
     exposes []
     packages {}
-    provides { main_for_host: "main" }
+    provides { "roc_main": main_for_host }
     targets: {
         inputs: "targets/",
         x64glibc: { inputs: [app] },
@@ -44,16 +44,6 @@ main_for_host = main
 ~~~clojure
 (package-docs
   (name "test-app")
-  (module
-    (name "app")
-    (package "app")
-    (kind app)
-    (entry
-      (name "main")
-      (kind value)
-      (type (error))
-    )
-  )
   (module
     (name "Counter")
     (package "app")
@@ -77,6 +67,16 @@ main_for_host = main
         (kind value)
         (type (fn (type-ref (module "app.Counter") (name "Counter")) (type-ref (name "U64"))))
       )
+    )
+  )
+  (module
+    (name "app")
+    (package "app")
+    (kind app)
+    (entry
+      (name "main")
+      (kind value)
+      (type (error))
     )
   )
   (module

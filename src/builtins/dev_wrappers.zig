@@ -13,6 +13,7 @@ const num = @import("num.zig");
 const utils = @import("utils.zig");
 const erased_callable = @import("erased_callable.zig");
 const dec = @import("dec.zig");
+const hash = @import("hash.zig");
 const i128h = @import("compiler_rt_128.zig");
 
 const RocStr = str.RocStr;
@@ -34,6 +35,48 @@ pub const freeDataPtrC = utils.freeDataPtrC;
 pub const erasedCallableIncref = erased_callable.incref;
 pub const erasedCallableDecref = erased_callable.decref;
 pub const erasedCallableFree = erased_callable.free;
+
+/// C ABI wrapper for hashing integer-width scalar values.
+pub fn roc_builtins_hasher_write_u64(seed: u64, domain: u8, value: u64, width: u8) callconv(.c) u64 {
+    return hash.hasher_write_u64(seed, domain, value, width);
+}
+
+/// C ABI wrapper for hashing 128-bit scalar values.
+pub fn roc_builtins_hasher_write_u128(seed: u64, domain: u8, low: u64, high: u64) callconv(.c) u64 {
+    return hash.hasher_write_u128(seed, domain, low, high);
+}
+
+/// C ABI wrapper for hashing raw F32 bits.
+pub fn roc_builtins_hasher_write_f32_bits(seed: u64, bits: u64) callconv(.c) u64 {
+    return hash.hasher_write_f32_bits(seed, @truncate(bits));
+}
+
+/// C ABI wrapper for hashing raw F64 bits.
+pub fn roc_builtins_hasher_write_f64_bits(seed: u64, bits: u64) callconv(.c) u64 {
+    return hash.hasher_write_f64_bits(seed, bits);
+}
+
+/// C ABI wrapper for hashing byte-list contents.
+pub fn roc_builtins_hasher_write_bytes(seed: u64, domain: u8, bytes: ?[*]const u8, length: usize) callconv(.c) u64 {
+    return hash.hasher_write_bytes(seed, domain, bytes, length);
+}
+
+/// C ABI wrapper for hashing RocStr contents.
+pub fn roc_builtins_hasher_write_str(seed: u64, str_bytes: ?[*]u8, str_len: usize, str_cap: usize) callconv(.c) u64 {
+    const value = RocStr{ .bytes = str_bytes, .length = str_len, .capacity_or_alloc_ptr = str_cap };
+    const bytes = value.asSlice();
+    return hash.hasher_write_bytes(seed, @intFromEnum(hash.HasherDomain.str), bytes.ptr, bytes.len);
+}
+
+/// C ABI wrapper for finalizing a builtin Hasher state.
+pub fn roc_builtins_hasher_finish(seed: u64) callconv(.c) u64 {
+    return hash.hasher_finish(seed);
+}
+
+/// C ABI wrapper for the compiler-owned Dict hash seed.
+pub fn roc_builtins_dict_pseudo_seed() callconv(.c) u64 {
+    return utils.dictPseudoSeed();
+}
 
 // Import builtin functions we wrap (using actual function names from str.zig and list.zig)
 const strToUtf8C = str.strToUtf8C;
@@ -360,6 +403,36 @@ pub fn roc_builtins_dbg_str(str_ptr: *const RocStr, roc_ops: *RocOps) callconv(.
     roc_ops.dbg(str_ptr.asSlice());
 }
 
+/// Source region of the `?` whose Err most recently failed a top-level
+/// expect via `roc_builtins_expect_err_str`. Compiled test roots run
+/// in-process under the harness's crash boundary, so the harness reads this
+/// back after the unwind via `takeExpectErrRegion` to point its failure
+/// report at the `?` expression.
+threadlocal var last_expect_err_region: ?ExpectErrRegion = null;
+
+/// Byte offsets into the failing module's source for the `?` expression.
+pub const ExpectErrRegion = struct {
+    start: u32,
+    end: u32,
+};
+
+/// Returns and clears the region recorded by the most recent
+/// `roc_builtins_expect_err_str` call on this thread.
+pub fn takeExpectErrRegion() ?ExpectErrRegion {
+    const region = last_expect_err_region;
+    last_expect_err_region = null;
+    return region;
+}
+
+/// Fail a top-level expect whose `?` operator evaluated an Err, reporting the
+/// runtime-built message (which includes the rendered Err value) and the
+/// source region of the `?` expression. Terminates evaluation via the host's
+/// crash callback; the message carries the expect-specific wording.
+pub fn roc_builtins_expect_err_str(str_ptr: *const RocStr, region_start: u32, region_end: u32, roc_ops: *RocOps) callconv(.c) void {
+    last_expect_err_region = .{ .start = region_start, .end = region_end };
+    roc_ops.crash(str_ptr.asSlice());
+}
+
 /// Report a failed `expect` using static message bytes owned by generated code.
 pub fn roc_builtins_roc_expect_failed(msg_bytes: [*]const u8, msg_len: usize, roc_ops: *RocOps) callconv(.c) void {
     roc_ops.expectFailed(msg_bytes[0..msg_len]);
@@ -448,6 +521,12 @@ pub fn roc_builtins_list_with_capacity(out: *RocList, capacity: u64, alignment: 
 pub fn roc_builtins_list_append_unsafe(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, element: ?[*]const u8, element_width: usize, _: *RocOps) callconv(.c) void {
     const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
     out.* = listAppendUnsafe(l, @constCast(element), element_width, @ptrCast(&copy_fallback));
+}
+
+/// Wrapper: listMapCanReuse
+pub fn roc_builtins_list_map_can_reuse(list_bytes: ?[*]u8, list_len: usize, list_cap: usize, roc_ops: *RocOps) callconv(.c) u8 {
+    const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
+    return @intFromBool(list.listMapCanReuse(l, roc_ops));
 }
 
 /// Wrapper: listConcat(RocList, RocList, alignment, element_width, ..., *RocOps) -> RocList.
@@ -1549,26 +1628,34 @@ fn i128ToStr(buf: []u8, val: i128) []u8 {
     return buf[0 .. 1 + digits.len];
 }
 
+fn signedIntToStr(comptime T: type, buf: []u8, val: T) []u8 {
+    return i128ToStr(buf, @as(i128, @intCast(val)));
+}
+
+fn unsignedIntToStr(comptime T: type, buf: []u8, val: T) []u8 {
+    return u128ToStr(buf, @as(u128, @intCast(val)));
+}
+
 /// Unified integer-to-string wrapper: dispatches on int_width/is_signed
 pub fn roc_builtins_int_to_str(out: *RocStr, val_low: u64, val_high: u64, int_width: u8, is_signed: bool, roc_ops: *RocOps) callconv(.c) void {
     var buf: [40]u8 = undefined;
     const result = switch (int_width) {
         1 => if (is_signed)
-            std.fmt.bufPrint(&buf, "{}", .{@as(i8, @bitCast(@as(u8, @truncate(val_low))))}) catch unreachable
+            signedIntToStr(i8, &buf, @as(i8, @bitCast(@as(u8, @truncate(val_low)))))
         else
-            std.fmt.bufPrint(&buf, "{}", .{@as(u8, @truncate(val_low))}) catch unreachable,
+            unsignedIntToStr(u8, &buf, @as(u8, @truncate(val_low))),
         2 => if (is_signed)
-            std.fmt.bufPrint(&buf, "{}", .{@as(i16, @bitCast(@as(u16, @truncate(val_low))))}) catch unreachable
+            signedIntToStr(i16, &buf, @as(i16, @bitCast(@as(u16, @truncate(val_low)))))
         else
-            std.fmt.bufPrint(&buf, "{}", .{@as(u16, @truncate(val_low))}) catch unreachable,
+            unsignedIntToStr(u16, &buf, @as(u16, @truncate(val_low))),
         4 => if (is_signed)
-            std.fmt.bufPrint(&buf, "{}", .{@as(i32, @bitCast(@as(u32, @truncate(val_low))))}) catch unreachable
+            signedIntToStr(i32, &buf, @as(i32, @bitCast(@as(u32, @truncate(val_low)))))
         else
-            std.fmt.bufPrint(&buf, "{}", .{@as(u32, @truncate(val_low))}) catch unreachable,
+            unsignedIntToStr(u32, &buf, @as(u32, @truncate(val_low))),
         8 => if (is_signed)
-            std.fmt.bufPrint(&buf, "{}", .{@as(i64, @bitCast(val_low))}) catch unreachable
+            signedIntToStr(i64, &buf, @as(i64, @bitCast(val_low)))
         else
-            std.fmt.bufPrint(&buf, "{}", .{val_low}) catch unreachable,
+            unsignedIntToStr(u64, &buf, val_low),
         16 => blk: {
             const val128: u128 = i128h.from_u64_pair(val_low, val_high);
             break :blk if (is_signed)
@@ -1583,7 +1670,7 @@ pub fn roc_builtins_int_to_str(out: *RocStr, val_low: u64, val_high: u64, int_wi
 
 /// Unified float-to-string wrapper: dispatches on is_f32.
 /// Uses Ryu's binaryToDecimal directly and formats manually to avoid
-/// pulling in std.fmt.float.formatDecimal which references isPowerOf10
+/// pulling in Zig's generic float formatter, which references isPowerOf10
 /// (u128 div/mod → __udivti3/__umodti3 compiler_rt symbols).
 pub fn roc_builtins_float_to_str(out: *RocStr, val_bits: u64, is_f32: bool, roc_ops: *RocOps) callconv(.c) void {
     out.* = str.floatToStrFromBits(val_bits, is_f32, roc_ops);

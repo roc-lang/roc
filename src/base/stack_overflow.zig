@@ -4,7 +4,6 @@ const std = @import("std");
 const builtin = @import("builtin");
 const posix = if (builtin.os.tag != .windows and builtin.os.tag != .freestanding) std.posix else undefined;
 const signal_handler = @import("signal_handler.zig");
-const STACK_OVERFLOW_TEST_HELPER_ENV_VAR = "ROC_STACK_OVERFLOW_TEST_HELPER";
 
 /// Error message to display on stack overflow
 const STACK_OVERFLOW_MESSAGE = "\nThe Roc compiler overflowed its stack memory and had to exit.\n\n";
@@ -172,19 +171,13 @@ test "worker thread installs stack overflow handler" {
 fn testCrashInChildProcess(mode: []const u8, expected: []const u8, expected_code: u8) anyerror!void {
     const allocator = std.testing.allocator;
     const io = std.testing.io;
+    const stack_overflow_test_options = @import("stack_overflow_test_options");
 
-    // zig 0.16 replaced std.process.getEnvVarOwned with the Environ API.
-    const environ: std.process.Environ = if (builtin.os.tag == .windows)
-        .{ .block = .global }
-    else blk: {
-        const env_ptr: [*:null]const ?[*:0]const u8 = @ptrCast(std.c.environ);
-        break :blk .{ .block = .{ .slice = std.mem.sliceTo(env_ptr, null) } };
-    };
-    const helper_path = environ.getAlloc(allocator, STACK_OVERFLOW_TEST_HELPER_ENV_VAR) catch |err| {
-        std.debug.print("Missing {s}: {s}\n", .{ STACK_OVERFLOW_TEST_HELPER_ENV_VAR, @errorName(err) });
+    const helper_path = stack_overflow_test_options.helper_path;
+    if (helper_path.len == 0) {
+        std.debug.print("Missing stack_overflow_test_options.helper_path\n", .{});
         return error.TestUnexpectedResult;
-    };
-    defer allocator.free(helper_path);
+    }
 
     const result = try std.process.run(allocator, io, .{
         .argv = &.{ helper_path, mode },

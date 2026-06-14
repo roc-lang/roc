@@ -41,6 +41,7 @@ pub const UnusedValue = types.UnusedValue;
 
 // Match/exhaustiveness errors
 pub const NonExhaustiveMatch = types.NonExhaustiveMatch;
+pub const NonExhaustiveDestructure = types.NonExhaustiveDestructure;
 pub const RedundantPattern = types.RedundantPattern;
 pub const UnmatchablePattern = types.UnmatchablePattern;
 
@@ -56,6 +57,7 @@ pub const NominalTypeResolutionFailed = types.NominalTypeResolutionFailed;
 // Platform errors
 pub const PlatformAliasNotFound = types.PlatformAliasNotFound;
 pub const PlatformDefNotFound = types.PlatformDefNotFound;
+pub const PlatformHostedSection = types.PlatformHostedSection;
 pub const HostedUnboxedFunction = types.HostedUnboxedFunction;
 pub const AnnotationOnlyValue = types.AnnotationOnlyValue;
 pub const EffectfulTopLevel = types.EffectfulTopLevel;
@@ -63,6 +65,8 @@ pub const EffectfulExpect = types.EffectfulExpect;
 
 // Comptime errors
 pub const ComptimeCrash = types.ComptimeCrash;
+pub const ComptimeInvalidNumeral = types.ComptimeInvalidNumeral;
+pub const ComptimeInvalidQuote = types.ComptimeInvalidQuote;
 pub const ComptimeExpectFailed = types.ComptimeExpectFailed;
 pub const ComptimeEvalError = types.ComptimeEvalError;
 

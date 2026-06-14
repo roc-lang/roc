@@ -29,74 +29,33 @@ mkPairInvalid : a, b -> Pair(a)
 mkPairInvalid = |x, y| Pair.Pair(x, y)
 ~~~
 # EXPECTED
-TYPE MISMATCH - annotations.md:16:21:16:35
-TYPE MISMATCH - annotations.md:16:33:16:34
-TYPE MISMATCH - annotations.md:19:22:19:41
-TYPE MISMATCH - annotations.md:19:32:19:33
+TYPE MISMATCH - annotations.md:16:28:16:31
+TYPE MISMATCH - annotations.md:19:35:19:40
 INVALID NOMINAL TAG - annotations.md:22:24:22:39
 # PROBLEMS
 **TYPE MISMATCH**
-This expression is used in an unexpected way:
-**annotations.md:16:21:16:35:**
+This string literal is being used where a non-string type is needed:
+**annotations.md:16:28:16:31:**
 ```roc
 failPairDiffTypes = mkPair("1", 2)
 ```
-                    ^^^^^^^^^^^^^^
+                           ^^^
 
-It has the type:
+The type was determined to be:
 
-    Pair(Str)
-
-But the annotation say it should be:
-
-    Pair(U8)
+    U8
 
 **TYPE MISMATCH**
-This number is being used where a non-number type is needed:
-**annotations.md:16:33:16:34:**
-```roc
-failPairDiffTypes = mkPair("1", 2)
-```
-                                ^
-
-Other code expects this to have the type:
-
-    Str
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**annotations.md:19:22:19:41:**
-```roc
-failPairDiffTypes2 = Pair.Pair(1, "str")
-```
-                     ^^^^^^^^^^^^^^^^^^^
-
-It has the type:
-
-    Pair(Str)
-
-But the annotation say it should be:
-
-    Pair(U64)
-
-**TYPE MISMATCH**
-This number is being used where a non-number type is needed:
-**annotations.md:19:32:19:33:**
-```roc
-failPairDiffTypes2 = Pair.Pair(1, "str")
-```
-                               ^
-
-The type was determined to be non-numeric here:
+This string literal is being used where a non-string type is needed:
 **annotations.md:19:35:19:40:**
 ```roc
 failPairDiffTypes2 = Pair.Pair(1, "str")
 ```
                                   ^^^^^
 
-Other code expects this to have the type:
+The type was determined to be:
 
-    Str
+    U64
 
 **INVALID NOMINAL TAG**
 I'm having trouble with this nominal tag:
@@ -287,7 +246,7 @@ NO CHANGE
 					(ty-rigid-var-lookup (ty-rigid-var (name "a")))))))
 	(d-let
 		(p-assign (ident "succeedPairSameType"))
-		(e-call (constraint-fn-var 370)
+		(e-call (constraint-fn-var 420)
 			(e-lookup-local
 				(p-assign (ident "mkPair")))
 			(e-num (value "1"))
@@ -297,7 +256,7 @@ NO CHANGE
 				(ty-lookup (name "U8") (builtin)))))
 	(d-let
 		(p-assign (ident "failPairDiffTypes"))
-		(e-call (constraint-fn-var 493)
+		(e-call (constraint-fn-var 553)
 			(e-lookup-local
 				(p-assign (ident "mkPair")))
 			(e-string

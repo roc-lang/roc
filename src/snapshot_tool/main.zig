@@ -3640,7 +3640,10 @@ fn processDocsSnapshot(
     }
 
     for (modules) |mod| {
-        var mod_docs = docs_mod.extract.extractModuleDocs(allocator, mod.semantic.env, mod.package_name, mod.path) catch |err| {
+        // Docs show the alias the root uses for a package, not its internal
+        // identity name (full URL or absolute path).
+        const display_pkg_name = build_env.rootAliasForPackage(mod.package_name) orelse mod.package_name;
+        var mod_docs = docs_mod.extract.extractModuleDocs(allocator, mod.semantic.env, display_pkg_name, mod.path) catch |err| {
             std.log.err("Failed to extract docs from module {s}: {}", .{ mod.name, err });
             continue;
         };
@@ -3651,6 +3654,10 @@ fn processDocsSnapshot(
         mod_docs.name = clean_name;
         try module_docs_list.append(allocator, mod_docs);
     }
+
+    // Modules are collected in package hash-map order, which is not
+    // deterministic; docs output must be.
+    std.mem.sort(docs_mod.DocModel.ModuleDocs, module_docs_list.items, {}, docs_mod.DocModel.moduleDocsLessThan);
 
     // Build PackageDocs
     const package_name = try allocator.dupe(u8, "test-app");
@@ -3951,7 +3958,7 @@ fn snapshotNativeEntrypoints(
         }
 
         const entrypoint_name = snapshotProvidedEntrypointName(root_artifact, root);
-        const symbol_name = try std.fmt.allocPrint(allocator, "roc__{s}", .{entrypoint_name});
+        const symbol_name = try allocator.dupe(u8, entrypoint_name);
         var symbol_name_owned = true;
         errdefer if (symbol_name_owned) allocator.free(symbol_name);
 

@@ -1,7 +1,7 @@
 //! Host integration test for provided readonly data exports.
 //!
-//! This host links directly against `roc__answer`, `roc__table`, `roc__names`,
-//! and `roc__tree`. It verifies that provided constants are normal Roc runtime
+//! This host links directly against `roc_answer`, `roc_table`, `roc_names`,
+//! and `roc_tree`. It verifies that provided constants are normal Roc runtime
 //! values in readonly data, including nested heap-shaped values whose refcount
 //! header is `REFCOUNT_STATIC_DATA`.
 
@@ -24,14 +24,8 @@ pub const std_options: std.Options = .{
     .allow_stack_tracing = false,
 };
 
-const RocAlloc = builtins.host_abi.RocAlloc;
-const RocCrashed = builtins.host_abi.RocCrashed;
-const RocDbg = builtins.host_abi.RocDbg;
-const RocDealloc = builtins.host_abi.RocDealloc;
-const RocExpectFailed = builtins.host_abi.RocExpectFailed;
 const RocList = builtins.list.RocList;
 const RocOps = builtins.host_abi.RocOps;
-const RocRealloc = builtins.host_abi.RocRealloc;
 const RocStr = builtins.str.RocStr;
 
 const CheckError = error{StaticDataHostCheckFailed};
@@ -88,14 +82,54 @@ const TreeNodePayload = extern struct {
     right: *const Branch,
 };
 
-extern const roc__answer: i64;
-extern const roc__flag: u8;
-extern const roc__flags: RocList;
-extern const roc__table: Table;
-extern const roc__names: RocList;
-extern const roc__tree: Tree;
-extern const roc__boxed_add_one: ?[*]u8;
-extern fn roc__main(ops: *RocOps, ret_ptr: ?*anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
+extern const roc_answer: i64;
+extern const roc_flag: u8;
+extern const roc_flags: RocList;
+extern const roc_table: Table;
+extern const roc_names: RocList;
+extern const roc_tree: Tree;
+extern const roc_boxed_add_one: ?[*]u8;
+// The app's entrypoint, exported under its provides symbol with its natural
+// C ABI: main_for_host! takes no arguments and returns {}.
+extern fn roc_main() callconv(.c) void;
+
+// The host's private RocOps. The exported runtime symbols below and the
+// builtins helpers reach the host allocator through this global, set by main
+// before any Roc code runs.
+var g_roc_ops: ?*RocOps = null;
+
+fn hostAlloc(length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+    return rocAllocFn(g_roc_ops.?, length, alignment);
+}
+
+fn hostDealloc(ptr: *anyopaque, alignment: usize) callconv(.c) void {
+    rocDeallocFn(g_roc_ops.?, ptr, alignment);
+}
+
+fn hostRealloc(ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+    return rocReallocFn(g_roc_ops.?, ptr, new_length, alignment);
+}
+
+fn hostDbg(bytes: [*]const u8, len: usize) callconv(.c) void {
+    rocDbgFn(g_roc_ops.?, bytes, len);
+}
+
+fn hostExpectFailed(bytes: [*]const u8, len: usize) callconv(.c) void {
+    rocExpectFailedFn(g_roc_ops.?, bytes, len);
+}
+
+fn hostCrashed(bytes: [*]const u8, len: usize) callconv(.c) void {
+    rocCrashedFn(g_roc_ops.?, bytes, len);
+}
+
+comptime {
+    @export(&hostAlloc, .{ .name = "roc_alloc", .visibility = .hidden });
+    @export(&hostDealloc, .{ .name = "roc_dealloc", .visibility = .hidden });
+    @export(&hostRealloc, .{ .name = "roc_realloc", .visibility = .hidden });
+    @export(&hostDbg, .{ .name = "roc_dbg", .visibility = .hidden });
+    @export(&hostExpectFailed, .{ .name = "roc_expect_failed", .visibility = .hidden });
+    @export(&hostCrashed, .{ .name = "roc_crashed", .visibility = .hidden });
+}
 
 comptime {
     @export(&main, .{ .name = "main" });
@@ -127,15 +161,14 @@ fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
         .roc_crashed = rocCrashedFn,
         .hosted_fns = builtins.host_abi.emptyHostedFunctions(),
     };
+    g_roc_ops = &roc_ops;
 
     runStaticDataChecks(&roc_ops, &host_env) catch |err| {
         std.debug.print("static data host check failed: {s}\n", .{@errorName(err)});
         return 1;
     };
 
-    var dummy_ret: u8 = 0;
-    var dummy_arg: u8 = 0;
-    roc__main(&roc_ops, @ptrCast(&dummy_ret), @ptrCast(&dummy_arg));
+    roc_main();
 
     expectEqualUsize(host_env.dealloc_count, 0, "no runtime deallocs for static data") catch return 1;
 
@@ -144,17 +177,17 @@ fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
 }
 
 fn runStaticDataChecks(roc_ops: *RocOps, host_env: *HostEnv) error{StaticDataHostCheckFailed}!void {
-    try expectEqualI64(roc__answer, 42, "answer");
-    try expectEqualU8(roc__flag, 1, "flag True discriminant");
-    try expectListOfBool(roc__flags, &.{ 0, 1, 0 }, roc_ops, "flags");
+    try expectEqualI64(roc_answer, 42, "answer");
+    try expectEqualU8(roc_flag, 1, "flag True discriminant");
+    try expectListOfBool(roc_flags, &.{ 0, 1, 0 }, roc_ops, "flags");
 
-    try expectEqualI64(roc__table.counts.@"0", 3, "table.counts.0");
-    try expectEqualI64(roc__table.counts.@"1", 5, "table.counts.1");
-    try expectEqualU8(roc__table.status.discriminant, 1, "table.status discriminant for Ok");
-    try expectStr(roc__table.status.payload, "ready readonly exported status", roc_ops, "table.status payload");
-    try expectStr(roc__table.user.name, "Alice readonly exported name", roc_ops, "table.user.name");
+    try expectEqualI64(roc_table.counts.@"0", 3, "table.counts.0");
+    try expectEqualI64(roc_table.counts.@"1", 5, "table.counts.1");
+    try expectEqualU8(roc_table.status.discriminant, 1, "table.status discriminant for Ok");
+    try expectStr(roc_table.status.payload, "ready readonly exported status", roc_ops, "table.status payload");
+    try expectStr(roc_table.user.name, "Alice readonly exported name", roc_ops, "table.user.name");
     try expectListOfStr(
-        roc__table.user.tags,
+        roc_table.user.tags,
         &.{
             "admin readonly exported tag",
             "ops readonly exported tag",
@@ -164,7 +197,7 @@ fn runStaticDataChecks(roc_ops: *RocOps, host_env: *HostEnv) error{StaticDataHos
     );
 
     try expectListOfListOfStr(
-        roc__names,
+        roc_names,
         &.{
             &.{ "Alice readonly nested list", "Bob readonly nested list" },
             &.{},
@@ -174,8 +207,8 @@ fn runStaticDataChecks(roc_ops: *RocOps, host_env: *HostEnv) error{StaticDataHos
         "names",
     );
 
-    try expectTree(roc__tree, roc_ops);
-    try expectBoxedAddOne(roc__boxed_add_one, roc_ops);
+    try expectTree(roc_tree, roc_ops);
+    try expectBoxedAddOne(roc_boxed_add_one, roc_ops);
 
     try expectEqualUsize(host_env.dealloc_count, 0, "static checks did not dealloc");
 }
@@ -395,14 +428,14 @@ fn fail(message: []const u8) CheckError {
     return CheckError.StaticDataHostCheckFailed;
 }
 
-fn rocAllocFn(roc_alloc: *RocAlloc, env: *anyopaque) callconv(.c) void {
-    const host: *HostEnv = @ptrCast(@alignCast(env));
+fn rocAllocFn(ops: *RocOps, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+    const host: *HostEnv = @ptrCast(@alignCast(ops.env));
     const allocator = host.gpa.allocator();
 
-    const min_alignment: usize = @max(roc_alloc.alignment, @alignOf(usize));
+    const min_alignment: usize = @max(alignment, @alignOf(usize));
     const align_enum = std.mem.Alignment.fromByteUnits(min_alignment);
     const size_storage_bytes = min_alignment;
-    const total_size = roc_alloc.length + size_storage_bytes;
+    const total_size = length + size_storage_bytes;
 
     const base_ptr = allocator.rawAlloc(total_size, align_enum, @returnAddress()) orelse {
         std.debug.print("host allocation failed for {d} bytes\n", .{total_size});
@@ -411,36 +444,36 @@ fn rocAllocFn(roc_alloc: *RocAlloc, env: *anyopaque) callconv(.c) void {
 
     const size_ptr: *usize = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes - @sizeOf(usize));
     size_ptr.* = total_size;
-    roc_alloc.answer = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes);
+    return @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes);
 }
 
-fn rocDeallocFn(roc_dealloc: *RocDealloc, env: *anyopaque) callconv(.c) void {
-    const host: *HostEnv = @ptrCast(@alignCast(env));
+fn rocDeallocFn(ops: *RocOps, ptr: *anyopaque, alignment: usize) callconv(.c) void {
+    const host: *HostEnv = @ptrCast(@alignCast(ops.env));
     host.dealloc_count += 1;
 
     const allocator = host.gpa.allocator();
-    const min_alignment: usize = @max(roc_dealloc.alignment, @alignOf(usize));
+    const min_alignment: usize = @max(alignment, @alignOf(usize));
     const align_enum = std.mem.Alignment.fromByteUnits(min_alignment);
     const size_storage_bytes = min_alignment;
-    const size_ptr: *const usize = @ptrFromInt(@intFromPtr(roc_dealloc.ptr) - @sizeOf(usize));
+    const size_ptr: *const usize = @ptrFromInt(@intFromPtr(ptr) - @sizeOf(usize));
     const total_size = size_ptr.*;
-    const base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(roc_dealloc.ptr) - size_storage_bytes);
+    const base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(ptr) - size_storage_bytes);
 
     allocator.rawFree(base_ptr[0..total_size], align_enum, @returnAddress());
 }
 
-fn rocReallocFn(roc_realloc: *RocRealloc, env: *anyopaque) callconv(.c) void {
-    const host: *HostEnv = @ptrCast(@alignCast(env));
+fn rocReallocFn(ops: *RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+    const host: *HostEnv = @ptrCast(@alignCast(ops.env));
     const allocator = host.gpa.allocator();
 
-    const min_alignment: usize = @max(roc_realloc.alignment, @alignOf(usize));
+    const min_alignment: usize = @max(alignment, @alignOf(usize));
     const align_enum = std.mem.Alignment.fromByteUnits(min_alignment);
     const size_storage_bytes = min_alignment;
-    const old_size_ptr: *const usize = @ptrFromInt(@intFromPtr(roc_realloc.answer) - @sizeOf(usize));
+    const old_size_ptr: *const usize = @ptrFromInt(@intFromPtr(ptr) - @sizeOf(usize));
     const old_total_size = old_size_ptr.*;
-    const old_base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(roc_realloc.answer) - size_storage_bytes);
+    const old_base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(ptr) - size_storage_bytes);
 
-    const new_total_size = roc_realloc.new_length + size_storage_bytes;
+    const new_total_size = new_length + size_storage_bytes;
     const new_ptr = allocator.rawAlloc(new_total_size, align_enum, @returnAddress()) orelse {
         std.debug.print("host reallocation failed for {d} bytes\n", .{new_total_size});
         std.process.exit(1);
@@ -450,21 +483,21 @@ fn rocReallocFn(roc_realloc: *RocRealloc, env: *anyopaque) callconv(.c) void {
 
     const new_size_ptr: *usize = @ptrFromInt(@intFromPtr(new_ptr) + size_storage_bytes - @sizeOf(usize));
     new_size_ptr.* = new_total_size;
-    roc_realloc.answer = @ptrFromInt(@intFromPtr(new_ptr) + size_storage_bytes);
+    return @ptrFromInt(@intFromPtr(new_ptr) + size_storage_bytes);
 }
 
-fn rocDbgFn(roc_dbg: *const RocDbg, env: *anyopaque) callconv(.c) void {
-    _ = env;
-    std.debug.print("ROC DBG: {s}\n", .{roc_dbg.utf8_bytes[0..roc_dbg.len]});
+fn rocDbgFn(ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
+    _ = ops;
+    std.debug.print("ROC DBG: {s}\n", .{bytes[0..len]});
 }
 
-fn rocExpectFailedFn(roc_expect: *const RocExpectFailed, env: *anyopaque) callconv(.c) void {
-    _ = env;
-    std.debug.print("ROC EXPECT FAILED: {s}\n", .{roc_expect.utf8_bytes[0..roc_expect.len]});
+fn rocExpectFailedFn(ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
+    _ = ops;
+    std.debug.print("ROC EXPECT FAILED: {s}\n", .{bytes[0..len]});
 }
 
-fn rocCrashedFn(roc_crashed: *const RocCrashed, env: *anyopaque) callconv(.c) void {
-    _ = env;
-    std.debug.print("ROC CRASHED: {s}\n", .{roc_crashed.utf8_bytes[0..roc_crashed.len]});
+fn rocCrashedFn(ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
+    _ = ops;
+    std.debug.print("ROC CRASHED: {s}\n", .{bytes[0..len]});
     std.process.exit(1);
 }

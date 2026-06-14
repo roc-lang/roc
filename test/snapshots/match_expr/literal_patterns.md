@@ -13,42 +13,9 @@ match Answer {
 }
 ~~~
 # EXPECTED
-TYPE MISMATCH - literal_patterns.md:2:15:2:16
-TYPE MISMATCH - literal_patterns.md:4:17:4:18
 MISSING METHOD - literal_patterns.md:5:5:5:7
-TYPE MISMATCH - literal_patterns.md:5:11:5:12
+TYPE MISMATCH - literal_patterns.md:3:13:3:20
 # PROBLEMS
-**TYPE MISMATCH**
-This number is being used where a non-number type is needed:
-**literal_patterns.md:2:15:2:16:**
-```roc
-    Answer => 1
-```
-              ^
-
-The type was determined to be non-numeric here:
-**literal_patterns.md:3:13:3:20:**
-```roc
-    Zero => "hello"
-```
-            ^^^^^^^
-
-Other code expects this to have the type:
-
-    Str
-
-**TYPE MISMATCH**
-This number is being used where a non-number type is needed:
-**literal_patterns.md:4:17:4:18:**
-```roc
-    Greeting => 3
-```
-                ^
-
-Other code expects this to have the type:
-
-    Str
-
 **MISSING METHOD**
 This **from_numeral** method is being called on a value whose type doesn't have that method:
 **literal_patterns.md:5:5:5:7:**
@@ -62,16 +29,16 @@ The value's type, which does not have a method named **from_numeral**, is:
     [Answer, Greeting, Zero, ..]
 
 **TYPE MISMATCH**
-This number is being used where a non-number type is needed:
-**literal_patterns.md:5:11:5:12:**
+This string literal is being used where a non-string type is needed:
+**literal_patterns.md:3:13:3:20:**
 ```roc
-    10 => 4
+    Zero => "hello"
 ```
-          ^
+            ^^^^^^^
 
-Other code expects this to have the type:
+The type was determined to be:
 
-    Str
+    Dec
 
 # TOKENS
 ~~~zig
@@ -146,5 +113,5 @@ match Answer {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Str"))
+(expr (type "Dec"))
 ~~~

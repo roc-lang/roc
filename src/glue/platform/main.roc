@@ -20,7 +20,7 @@ platform ""
         Types,
     ]
     packages {}
-    provides { make_glue_for_host: "make_glue" }
+    provides { "roc_make_glue": make_glue_for_host }
     targets: {
         inputs: "targets/",
         x64mac: { inputs: ["libhost.a", app] },
