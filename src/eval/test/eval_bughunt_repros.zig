@@ -683,4 +683,29 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "24" },
     },
+    .{
+        .name = "bughunt B103: dispatched imported-module method returning a multi-field record panics in monotype lowering (#9591)",
+        .source_kind = .module,
+        .imports = &.{.{
+            .name = "Foo",
+            .source =
+            \\Foo :: { id : U64 }.{
+            \\    bar : U64 -> Foo
+            \\    bar = |id| { id: id }
+            \\
+            \\    baz : Foo, {} -> { a : I32, b : I32 }
+            \\    baz = |_, {}| { a: 0, b: 0 }
+            \\}
+            ,
+        }},
+        .source =
+        \\import Foo exposing [bar]
+        \\
+        \\main = {
+        \\    out = bar(0).baz({})
+        \\    out.a
+        \\}
+        ,
+        .expected = .{ .inspect_str = "0" },
+    },
 };
