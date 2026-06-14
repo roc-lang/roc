@@ -1,3 +1,5 @@
+//! Shared numeric conversion bounds and truncation helpers.
+
 const std = @import("std");
 const dec = @import("dec.zig");
 const i128h = @import("compiler_rt_128.zig");
@@ -11,6 +13,7 @@ fn powerOfTwo(comptime Float: type, exponent: u32) Float {
     return result;
 }
 
+/// Return whether a signed 128-bit integer fits in the target integer type.
 pub fn i128FitsTarget(value: i128, target_bits: u32, target_signed: bool) bool {
     if (target_bits >= 128) {
         return target_signed or value >= 0;
@@ -26,6 +29,7 @@ pub fn i128FitsTarget(value: i128, target_bits: u32, target_signed: bool) bool {
     return u128FitsTarget(@intCast(value), target_bits, false);
 }
 
+/// Return whether an unsigned 128-bit integer fits in the target integer type.
 pub fn u128FitsTarget(value: u128, target_bits: u32, target_signed: bool) bool {
     if (target_bits >= 128) {
         return !target_signed or value <= @as(u128, @bitCast(@as(i128, std.math.maxInt(i128))));
@@ -35,6 +39,7 @@ pub fn u128FitsTarget(value: u128, target_bits: u32, target_signed: bool) bool {
     return value < i128h.shl(1, shift);
 }
 
+/// Return whether an already-truncated finite float fits in the target type.
 pub fn truncatedFloatFitsTarget(comptime Float: type, truncated: Float, target_bits: u32, target_signed: bool) bool {
     if (target_signed) {
         const magnitude = powerOfTwo(Float, target_bits - 1);
@@ -44,6 +49,7 @@ pub fn truncatedFloatFitsTarget(comptime Float: type, truncated: Float, target_b
     return truncated >= 0 and truncated < powerOfTwo(Float, target_bits);
 }
 
+/// Convert a float to an integer after truncating toward zero, or return null.
 pub fn floatToIntTry(comptime Float: type, comptime Int: type, value: Float) ?Int {
     if (!std.math.isFinite(value)) return null;
 
@@ -65,6 +71,7 @@ pub fn floatToIntTry(comptime Float: type, comptime Int: type, value: Float) ?In
     };
 }
 
+/// Convert an f64 to raw target integer bits after truncating toward zero.
 pub fn f64ToIntTryBits(value: f64, target_bits: u32, target_signed: bool) ?u128 {
     if (!std.math.isFinite(value)) return null;
 
@@ -90,6 +97,7 @@ pub fn f64ToIntTryBits(value: f64, target_bits: u32, target_signed: bool) ?u128 
     return int_value;
 }
 
+/// Convert a Roc Dec payload to raw target integer bits after truncating.
 pub fn decToIntTryBits(dec_value: i128, target_bits: u32, target_signed: bool) ?u128 {
     const whole_part = i128h.divTrunc_i128(dec_value, dec.RocDec.one_point_zero_i128);
     if (!i128FitsTarget(whole_part, target_bits, target_signed)) {
