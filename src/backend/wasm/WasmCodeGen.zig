@@ -3123,7 +3123,8 @@ fn collectProcLocals(
                 try recordProcLocal(locals, expect_stmt.condition);
                 try work.append(wa, expect_stmt.next);
             },
-            .runtime_error => {},
+            .comptime_branch_taken => |marker| try work.append(wa, marker.next),
+            .runtime_error, .comptime_exhaustiveness_failed => {},
             .switch_stmt => |switch_stmt| {
                 try recordProcLocal(locals, switch_stmt.cond);
                 for (self.store.getCFSwitchBranches(switch_stmt.branches)) |branch| {
@@ -7397,6 +7398,13 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
             ) catch "runtime_error";
             try self.emitRocStaticStringCall(wasm_roc_ops_crashed_offset, msg);
             self.currentCode().append(self.allocator, Op.@"unreachable") catch return error.OutOfMemory;
+        },
+        .comptime_exhaustiveness_failed => {
+            try self.emitRocStaticStringCall(wasm_roc_ops_crashed_offset, "compile-time exhaustiveness failure reached runtime code");
+            self.currentCode().append(self.allocator, Op.@"unreachable") catch return error.OutOfMemory;
+        },
+        .comptime_branch_taken => |marker| {
+            try work.append(wa, .{ .node = .{ .stmt_id = marker.next, .stop = stop } });
         },
         .crash => |crash| {
             const msg_bytes = self.store.getString(crash.msg);

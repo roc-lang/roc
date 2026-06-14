@@ -214,10 +214,10 @@ fn certifyUniqueArgs(
                     try stack.append(allocator, j.body);
                     try stack.append(allocator, j.remainder);
                 },
-                inline .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .free => |s| {
+                inline .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .free => |s| {
                     try stack.append(allocator, s.next);
                 },
-                .ret, .jump, .crash, .expect_err, .runtime_error, .loop_continue, .loop_break => {},
+                .ret, .jump, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
             }
         }
     }
@@ -314,7 +314,8 @@ fn writeFailureContext(context: *FailureContext, store: *const LirStore, proc_id
             if (reachable.contains(current)) continue;
             reachable.put(current, {}) catch return;
             switch (store.getCFStmt(current)) {
-                .runtime_error, .loop_continue, .loop_break, .jump, .ret, .crash, .expect_err => {},
+                .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break, .jump, .ret, .crash, .expect_err => {},
+                .comptime_branch_taken => |s| walk.append(store.allocator, s.next) catch return,
                 .switch_stmt => |s| {
                     for (store.getCFSwitchBranches(s.branches)) |branch| {
                         walk.append(store.allocator, branch.body) catch return;
@@ -394,7 +395,7 @@ fn stmtMentionsLocal(store: *const LirStore, stmt: LIR.CFStmt, needle: LIR.Local
         .free => |rc| rc.value == needle,
         .switch_stmt => |s| s.cond == needle,
         .ret => |r| r.value == needle,
-        .join, .jump, .crash, .runtime_error, .loop_continue, .loop_break => false,
+        .join, .jump, .crash, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .loop_continue, .loop_break => false,
     };
 }
 
@@ -1019,7 +1020,8 @@ const Certifier = struct {
                     try stack.append(self.allocator, join_stmt.remainder);
                 },
                 .ret => |ret_stmt| try self.noteProcLocal(ret_stmt.value),
-                .jump, .crash, .runtime_error, .loop_continue, .loop_break => {},
+                .jump, .crash, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
+                .comptime_branch_taken => |marker| try stack.append(self.allocator, marker.next),
             }
         }
     }
@@ -1131,7 +1133,8 @@ const Certifier = struct {
                 .ret => |ret_stmt| {
                     if (ret_stmt.value == needle) return true;
                 },
-                .runtime_error, .crash, .loop_continue, .loop_break => {},
+                .runtime_error, .comptime_exhaustiveness_failed, .crash, .loop_continue, .loop_break => {},
+                .comptime_branch_taken => |marker| try self.scan_stack.append(self.allocator, marker.next),
             }
         }
         return false;
@@ -1478,6 +1481,9 @@ const Certifier = struct {
                     _ = try self.requireLive(&state, expect_stmt.condition);
                     cursor = expect_stmt.next;
                 },
+                .comptime_branch_taken => |taken| {
+                    cursor = taken.next;
+                },
                 .incref => |rc| {
                     if (!self.isRc(rc.value)) {
                         return self.fail("incref of non-refcounted local {d}", .{@intFromEnum(rc.value)});
@@ -1569,7 +1575,7 @@ const Certifier = struct {
                     try self.checkLeaks(&state);
                     return;
                 },
-                .runtime_error => {
+                .runtime_error, .comptime_exhaustiveness_failed => {
                     try self.checkLeaks(&state);
                     return;
                 },

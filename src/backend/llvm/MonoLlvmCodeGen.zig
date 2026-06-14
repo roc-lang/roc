@@ -1800,6 +1800,12 @@ pub const MonoLlvmCodeGen = struct {
             .runtime_error => {
                 try self.emitCrashBytes("hit a runtime error");
             },
+            .comptime_exhaustiveness_failed => {
+                try self.emitCrashBytes("compile-time exhaustiveness failure reached runtime code");
+            },
+            .comptime_branch_taken => |marker| {
+                try work.append(wa, .{ .node = marker.next });
+            },
             .incref => |inc| {
                 try self.emitRcForLocal(.incref, inc.value, inc.count, inc.atomicity);
                 try work.append(wa, .{ .node = inc.next });

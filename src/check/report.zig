@@ -54,6 +54,7 @@ const NonExhaustiveMatch = problem_mod.NonExhaustiveMatch;
 const NonExhaustiveDestructure = problem_mod.NonExhaustiveDestructure;
 const RedundantPattern = problem_mod.RedundantPattern;
 const UnmatchablePattern = problem_mod.UnmatchablePattern;
+const ComptimeUnusedBranch = problem_mod.ComptimeUnusedBranch;
 
 // Type declaration errors
 const TypeApplyArityMismatch = problem_mod.TypeApplyArityMismatch;
@@ -831,6 +832,7 @@ pub const ReportBuilder = struct {
             .non_exhaustive_destructure => |data| return self.buildNonExhaustiveDestructureReport(data),
             .redundant_pattern => |data| return self.buildRedundantPatternReport(data),
             .unmatchable_pattern => |data| return self.buildUnmatchablePatternReport(data),
+            .comptime_unused_branch => |data| return self.buildComptimeUnusedBranchReport(data),
         }
     }
 
@@ -3678,6 +3680,13 @@ pub const ReportBuilder = struct {
             D.bytes("_").withAnnotation(.keyword),
             D.bytes("to match anything."),
         }, self, &report);
+        if (data.empirical) {
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try D.renderSlice(&.{
+                D.bytes("Note: This non-exhaustive match was discovered empirically during compile-time evaluation."),
+            }, self, &report);
+        }
 
         return report;
     }
@@ -3716,6 +3725,13 @@ pub const ReportBuilder = struct {
             try report.document.addText("    ");
             try report.document.addCodeBlock(owned_pattern);
             try report.document.addLineBreak();
+        }
+
+        if (data.empirical) {
+            try report.document.addLineBreak();
+            try D.renderSlice(&.{
+                D.bytes("Note: This non-exhaustive destructure was discovered empirically during compile-time evaluation."),
+            }, self, &report);
         }
 
         return report;
@@ -3764,6 +3780,38 @@ pub const ReportBuilder = struct {
 
         try D.renderSlice(&.{
             D.bytes("This pattern matches a type that has no possible values (an uninhabited type), so no value can ever match it."),
+        }, self, &report);
+
+        return report;
+    }
+
+    fn buildComptimeUnusedBranchReport(self: *Self, data: ComptimeUnusedBranch) Allocator.Error!Report {
+        var report = Report.init(self.gpa, "UNUSED BRANCH", .warning);
+        errdefer report.deinit();
+
+        const noun = switch (data.kind) {
+            .match => "match alternative",
+            .if_ => "if branch",
+        };
+        try D.renderSlice(&.{
+            D.bytes("This"),
+            D.bytes(noun),
+            D.bytes("was not taken during compile-time evaluation:"),
+        }, self, &report);
+        try report.document.addLineBreak();
+
+        const region_info = self.module_env.calcRegionInfo(data.branch_region);
+        try report.document.addSourceRegion(
+            region_info,
+            .warning_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        try D.renderSlice(&.{
+            D.bytes("Note: This warning is empirical; it only describes the compile-time evaluation that ran for this definition."),
         }, self, &report);
 
         return report;
