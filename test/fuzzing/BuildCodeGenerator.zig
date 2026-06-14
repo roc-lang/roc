@@ -42,8 +42,12 @@ const Symbols = struct {
     state_type: Symbol,
     err_type: Symbol,
     builder_type: Symbol,
+    tree_type: Symbol,
     err_missing: Symbol,
     err_bad: Symbol,
+    tree_leaf: Symbol,
+    tree_branch: Symbol,
+    tree_named: Symbol,
     item_id: Symbol,
     item_text: Symbol,
     item_flag: Symbol,
@@ -67,6 +71,8 @@ const Symbols = struct {
     walk_rows: Symbol,
     walk_cols: Symbol,
     describe_try: Symbol,
+    score_tree: Symbol,
+    score_tree_list: Symbol,
 };
 
 pub fn init(allocator: std.mem.Allocator, reader: *FuzzReader) Self {
@@ -120,8 +126,12 @@ pub fn generate(self: *Self) std.mem.Allocator.Error!void {
         .state_type = self.fresh(.type),
         .err_type = self.fresh(.type),
         .builder_type = self.fresh(.type),
+        .tree_type = self.fresh(.type),
         .err_missing = self.fresh(.tag),
         .err_bad = self.fresh(.tag),
+        .tree_leaf = self.fresh(.tag),
+        .tree_branch = self.fresh(.tag),
+        .tree_named = self.fresh(.tag),
         .item_id = self.fresh(.field),
         .item_text = self.fresh(.field),
         .item_flag = self.fresh(.field),
@@ -145,6 +155,8 @@ pub fn generate(self: *Self) std.mem.Allocator.Error!void {
         .walk_rows = self.fresh(.function),
         .walk_cols = self.fresh(.function),
         .describe_try = self.fresh(.function),
+        .score_tree = self.fresh(.function),
+        .score_tree_list = self.fresh(.function),
     };
 
     try self.setFileNames(app_file, platform_file);
@@ -231,6 +243,19 @@ fn writeTypeDeclarations(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppText(", ");
     try self.writeAppSymbol(self.symbols.err_bad);
     try self.writeAppText("(Str)]\n\n");
+
+    try self.writeAppSymbol(self.symbols.tree_type);
+    try self.writeAppText(" := [");
+    try self.writeAppSymbol(self.symbols.tree_leaf);
+    try self.writeAppText("(U64), ");
+    try self.writeAppSymbol(self.symbols.tree_branch);
+    try self.writeAppText("(List(");
+    try self.writeAppSymbol(self.symbols.tree_type);
+    try self.writeAppText("), U64), ");
+    try self.writeAppSymbol(self.symbols.tree_named);
+    try self.writeAppText("(Str, List(");
+    try self.writeAppSymbol(self.symbols.tree_type);
+    try self.writeAppText("))]\n\n");
 }
 
 fn writeBuilderType(self: *Self) std.mem.Allocator.Error!void {
@@ -436,6 +461,7 @@ fn writeTopLevelFunctions(self: *Self) std.mem.Allocator.Error!void {
     try self.writeCollectItems();
     try self.writeGridRecursion();
     try self.writeDescribeTry();
+    try self.writeTreeScoring();
 }
 
 fn writeMakeItem(self: *Self) std.mem.Allocator.Error!void {
@@ -745,6 +771,105 @@ fn writeDescribeTry(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppText("\n}\n\n");
 }
 
+fn writeTreeScoring(self: *Self) std.mem.Allocator.Error!void {
+    const node = self.fresh(.value);
+    const acc = self.fresh(.value);
+    const leaf_value = self.fresh(.value);
+    const branch_children = self.fresh(.value);
+    const branch_weight = self.fresh(.value);
+    const named_label = self.fresh(.value);
+    const named_children = self.fresh(.value);
+    const list = self.fresh(.value);
+    const list_acc = self.fresh(.value);
+    const first = self.fresh(.value);
+    const rest = self.fresh(.value);
+
+    try self.writeAppSymbol(self.symbols.score_tree);
+    try self.writeAppText(" : ");
+    try self.writeAppSymbol(self.symbols.tree_type);
+    try self.writeAppText(", U64 -> U64\n");
+    try self.writeAppSymbol(self.symbols.score_tree);
+    try self.writeAppText(" = |");
+    try self.writeAppSymbol(node);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(acc);
+    try self.writeAppText("| match ");
+    try self.writeAppSymbol(node);
+    try self.writeAppText(" {\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(self.symbols.tree_leaf);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(leaf_value);
+    try self.writeAppText(") => ");
+    try self.writeAppSymbol(acc);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(leaf_value);
+    try self.writeAppText("\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(self.symbols.tree_branch);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(branch_children);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(branch_weight);
+    try self.writeAppText(") => ");
+    try self.writeAppSymbol(self.symbols.score_tree_list);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(branch_children);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(acc);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(branch_weight);
+    try self.writeAppText(")\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(self.symbols.tree_named);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(named_label);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(named_children);
+    try self.writeAppText(") => ");
+    try self.writeAppSymbol(self.symbols.score_tree_list);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(named_children);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(acc);
+    try self.writeAppText(" + List.len(Str.to_utf8(");
+    try self.writeAppSymbol(named_label);
+    try self.writeAppText(")))\n}\n\n");
+
+    try self.writeAppSymbol(self.symbols.score_tree_list);
+    try self.writeAppText(" : List(");
+    try self.writeAppSymbol(self.symbols.tree_type);
+    try self.writeAppText("), U64 -> U64\n");
+    try self.writeAppSymbol(self.symbols.score_tree_list);
+    try self.writeAppText(" = |");
+    try self.writeAppSymbol(list);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(list_acc);
+    try self.writeAppText("| match ");
+    try self.writeAppSymbol(list);
+    try self.writeAppText(" {\n");
+    try self.writeIndent(1);
+    try self.writeAppText("[");
+    try self.writeAppSymbol(first);
+    try self.writeAppText(", .. as ");
+    try self.writeAppSymbol(rest);
+    try self.writeAppText("] => ");
+    try self.writeAppSymbol(self.symbols.score_tree_list);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(rest);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(self.symbols.score_tree);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(first);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(list_acc);
+    try self.writeAppText("))\n");
+    try self.writeIndent(1);
+    try self.writeAppText("[] => ");
+    try self.writeAppSymbol(list_acc);
+    try self.writeAppText("\n}\n\n");
+}
+
 fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     const input = self.fresh(.value);
     const first = self.fresh(.value);
@@ -754,9 +879,12 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     const collected = self.fresh(.value);
     const builder = self.fresh(.value);
     const state = self.fresh(.value);
+    const tree = self.fresh(.value);
+    const tree_score = self.fresh(.value);
     const walked = self.fresh(.value);
     const picked = self.fresh(.value);
     const rows = self.reader.intRangeAtMost(u8, 1, 6);
+    const tree_depth = self.reader.intRangeAtMost(u8, 1, 4);
     const first_id = self.reader.intRangeAtMost(u8, 0, 9);
     const second_id = self.reader.intRangeAtMost(u8, 10, 29);
     const third_id = self.reader.intRangeAtMost(u8, 30, 59);
@@ -852,6 +980,21 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppSymbol(self.symbols.builder_build);
     try self.writeAppText("()\n");
 
+    try self.writeLocalHeader(tree, self.symbols.tree_type);
+    try self.writeTreeExpression(input, tree_depth);
+    try self.writeAppText("\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(tree_score);
+    try self.writeAppText(" : U64\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(tree_score);
+    try self.writeAppText(" = ");
+    try self.writeAppSymbol(self.symbols.score_tree);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(tree);
+    try self.writeAppText(", 0)\n");
+
     try self.writeIndent(1);
     try self.writeAppSymbol(walked);
     try self.writeAppText(" : U64\n");
@@ -863,7 +1006,9 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppSymbol(state);
     try self.writeAppText(", ");
     try self.writeU64(rows);
-    try self.writeAppText(", 0)\n");
+    try self.writeAppText(", 0) + ");
+    try self.writeAppSymbol(tree_score);
+    try self.writeAppText("\n");
 
     try self.writeIndent(1);
     try self.writeAppSymbol(picked);
@@ -897,6 +1042,67 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppSymbol(self.symbols.builder_text);
     try self.writeAppText("()\n");
     try self.writeAppText("}\n");
+}
+
+fn writeTreeExpression(self: *Self, text_seed: Symbol, depth: u8) std.mem.Allocator.Error!void {
+    if (depth == 0) {
+        return self.writeTreeLeaf();
+    }
+
+    switch (self.reader.intRangeLessThan(u8, 0, 3)) {
+        0 => try self.writeTreeLeaf(),
+        1 => try self.writeTreeBranch(text_seed, depth - 1),
+        else => try self.writeTreeNamed(text_seed, depth - 1),
+    }
+}
+
+fn writeTreeLeaf(self: *Self) std.mem.Allocator.Error!void {
+    try self.writeAppSymbol(self.symbols.tree_leaf);
+    try self.writeAppText("(");
+    try self.writeU64(self.reader.intRangeAtMost(u8, 0, 31));
+    try self.writeAppText(")");
+}
+
+fn writeTreeBranch(self: *Self, text_seed: Symbol, depth: u8) std.mem.Allocator.Error!void {
+    const child_count = self.reader.intRangeAtMost(u8, 1, 3);
+
+    try self.writeAppSymbol(self.symbols.tree_branch);
+    try self.writeAppText("([");
+    for (0..child_count) |index| {
+        if (index != 0) try self.writeAppText(", ");
+        try self.writeTreeExpression(text_seed, depth);
+    }
+    try self.writeAppText("], ");
+    try self.writeU64(self.reader.intRangeAtMost(u8, 0, 31));
+    try self.writeAppText(")");
+}
+
+fn writeTreeNamed(self: *Self, text_seed: Symbol, depth: u8) std.mem.Allocator.Error!void {
+    const child_count = self.reader.intRangeAtMost(u8, 1, 2);
+
+    try self.writeAppSymbol(self.symbols.tree_named);
+    try self.writeAppText("(Str.concat(");
+    try self.writeAppSymbol(text_seed);
+    try self.writeAppText(", ");
+    try self.writeStringLiteral();
+    try self.writeAppText("), [");
+    for (0..child_count) |index| {
+        if (index != 0) try self.writeAppText(", ");
+        try self.writeTreeExpression(text_seed, depth);
+    }
+    try self.writeAppText("])");
+}
+
+fn writeStringLiteral(self: *Self) std.mem.Allocator.Error!void {
+    const len = self.reader.intRangeAtMost(u8, 0, 4);
+
+    try self.writeAppText("\"");
+    for (0..len) |_| {
+        const byte = @as(u8, 'a') + self.reader.intRangeLessThan(u8, 0, 26);
+        var buf = [_]u8{byte};
+        try self.writeAppText(buf[0..]);
+    }
+    try self.writeAppText("\"");
 }
 
 fn writeFieldTypeLine(self: *Self, field: Symbol, type_text: []const u8) std.mem.Allocator.Error!void {
