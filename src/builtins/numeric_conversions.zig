@@ -82,7 +82,7 @@ pub fn f64ToIntTryBits(value: f64, target_bits: u32, target_signed: bool) ?u128 
 
     if (target_signed) {
         const int_value: i128 = if (target_bits <= 64)
-            @intFromFloat(truncated)
+            @as(i64, @intFromFloat(truncated))
         else
             i128h.f64_to_i128(truncated);
 
@@ -90,7 +90,7 @@ pub fn f64ToIntTryBits(value: f64, target_bits: u32, target_signed: bool) ?u128 
     }
 
     const int_value: u128 = if (target_bits <= 64)
-        @intFromFloat(truncated)
+        @as(u64, @intFromFloat(truncated))
     else
         i128h.f64_to_u128(truncated);
 
