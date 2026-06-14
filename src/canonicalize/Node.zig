@@ -642,7 +642,7 @@ pub const Payload = extern union {
 
     pub const ExprInterpolation = extern struct {
         first: u32,
-        parts_rest_idx: u32, // Index into span_with_node_data: (parts.start, parts.len, rest)
+        parts_step_fn_idx: u32, // Index into span_with_node_data: (parts.start, parts.len, step_fn_var_plus_one)
         method_name_region_span2_idx: u32,
         constraint_fn_var_plus_one: u32,
     };

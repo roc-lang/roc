@@ -12436,13 +12436,13 @@ fn processEscapeSequences(allocator: std.mem.Allocator, input: []const u8) std.m
 /// {
 ///     #interp_0 = x
 ///     #interp_1 = y
-///     <interpolation first="a" rest=[].iter().prepended((#interp_1, "c")).prepended((#interp_0, "b"))>
+///     <interpolation first="a" parts=[#interp_0, "b", #interp_1, "c"]>
 /// }
 /// ```
 /// The interpolated expressions bind to locals first so they evaluate in
-/// source order; the iterator yields each interpolated value paired with the
-/// literal `Str` segment that follows it. With a type suffix, the final
-/// expression is a direct call to `Suffix.from_interpolation(first, rest)`.
+/// source order. The checker turns `parts` into the generated `Iter` argument
+/// for custom interpolation dispatch. With a type suffix, the same
+/// interpolation node is recorded with an explicit suffix target.
 fn desugarInterpolatedString(
     self: *Self,
     span: CIR.Expr.Span,
@@ -12521,85 +12521,38 @@ fn desugarInterpolatedString(
         seg_exprs[i] = segment_idx;
     }
 
-    const iter_method = try self.env.insertIdent(Ident.for_text("iter"));
-    const prepended_method = try self.env.insertIdent(Ident.for_text("prepended"));
-    const from_interpolation_method = try self.env.insertIdent(Ident.for_text("from_interpolation"));
-
-    // [].iter()
-    const empty_list_idx = try self.env.addExpr(CIR.Expr{ .e_empty_list = .{} }, region);
-    var chain_idx = try self.addSyntheticMethodCall(empty_list_idx, iter_method, &.{}, region);
     const part_exprs = try gpa.alloc(Expr.Idx, interps.items.len * 2);
     defer gpa.free(part_exprs);
 
-    // Prepend (interpolation, following-segment) pairs back to front so the
-    // iterator yields them in source order.
-    var pair_i = interps.items.len;
-    while (pair_i > 0) {
-        pair_i -= 1;
+    for (interps.items, 0..) |_, pair_i| {
         const interp_region = self.env.store.getNodeRegion(ModuleEnv.nodeIdxFrom(interps.items[pair_i]));
         const tmp_lookup_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{
             .pattern_idx = tmp_patterns[pair_i],
         } }, interp_region);
         part_exprs[pair_i * 2] = tmp_lookup_idx;
         part_exprs[pair_i * 2 + 1] = seg_exprs[pair_i + 1];
-        const elems_top = self.env.store.scratchExprTop();
-        try self.env.store.addScratchExpr(tmp_lookup_idx);
-        try self.env.store.addScratchExpr(seg_exprs[pair_i + 1]);
-        const elems_span = try self.env.store.exprSpanFrom(elems_top);
-        const pair_idx = try self.env.addExpr(CIR.Expr{ .e_tuple = .{
-            .elems = elems_span,
-        } }, interp_region);
-        chain_idx = try self.addSyntheticMethodCall(chain_idx, prepended_method, &.{pair_idx}, interp_region);
     }
     const parts_span = try self.env.store.appendExprSpan(part_exprs);
 
-    const final_idx = if (type_ident) |suffix_ident| suffix_blk: {
-        const fn_expr = try self.canonicalizeTypeAssociatedLookup(suffix_ident, from_interpolation_method, region) orelse
-            try self.canonicalizedMalformedExpr(Diagnostic{ .undeclared_type = .{
+    const final_idx = try self.env.addExpr(CIR.Expr{ .e_interpolation = .{
+        .first = seg_exprs[0],
+        .parts = parts_span,
+        .method_name_region = region,
+    } }, region);
+
+    if (type_ident) |suffix_ident| {
+        if ((try self.scopeLookupOrPrepareTypeBinding(suffix_ident)) == null) {
+            return try self.env.pushMalformed(Expr.Idx, Diagnostic{ .undeclared_type = .{
                 .name = suffix_ident,
                 .region = region,
             } });
-
-        const args_top = self.env.store.scratchExprTop();
-        try self.env.store.addScratchExpr(seg_exprs[0]);
-        try self.env.store.addScratchExpr(chain_idx);
-        const args_span = try self.env.store.exprSpanFrom(args_top);
-
-        break :suffix_blk try self.env.addExpr(CIR.Expr{ .e_call = .{
-            .func = fn_expr.idx,
-            .args = args_span,
-            .called_via = CalledVia.apply,
-        } }, region);
-    } else try self.env.addExpr(CIR.Expr{ .e_interpolation = .{
-        .first = seg_exprs[0],
-        .parts = parts_span,
-        .rest = chain_idx,
-        .method_name_region = region,
-    } }, region);
+        }
+        try self.recordTypedNumericSuffix(final_idx, suffix_ident);
+    }
 
     return try self.env.addExpr(CIR.Expr{ .e_block = .{
         .stmts = stmts_span,
         .final_expr = final_idx,
-    } }, region);
-}
-
-fn addSyntheticMethodCall(
-    self: *Self,
-    receiver: Expr.Idx,
-    method_name: Ident.Idx,
-    args: []const Expr.Idx,
-    region: Region,
-) std.mem.Allocator.Error!Expr.Idx {
-    const args_top = self.env.store.scratchExprTop();
-    for (args) |arg| {
-        try self.env.store.addScratchExpr(arg);
-    }
-    const args_span = try self.env.store.exprSpanFrom(args_top);
-    return try self.env.addExpr(CIR.Expr{ .e_method_call = .{
-        .receiver = receiver,
-        .method_name = method_name,
-        .method_name_region = region,
-        .args = args_span,
     } }, region);
 }
 
