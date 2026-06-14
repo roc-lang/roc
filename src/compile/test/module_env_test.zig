@@ -27,7 +27,7 @@ test "ModuleEnv.Serialized roundtrip" {
     _ = try original.insertString("test string");
 
     try original.addExposedById(hello_idx);
-    try original.setExposedNodeIndexById(hello_idx, 42);
+    try original.setExposedValueNodeIndexById(hello_idx, 42);
     original.ensureExposedSorted(gpa);
 
     try original.common.calcLineStarts(gpa);
@@ -76,7 +76,7 @@ test "ModuleEnv.Serialized roundtrip" {
     try std.testing.expectEqualStrings("world", env.getIdent(world_idx));
 
     try std.testing.expectEqual(@as(usize, 1), env.common.exposed_items.count());
-    try std.testing.expectEqual(@as(?u32, 42), env.common.exposed_items.getNodeIndexById(gpa, @as(u32, @bitCast(hello_idx))));
+    try std.testing.expectEqual(@as(?u32, 42), env.common.exposed_items.getValueNodeIndexById(gpa, @as(u32, @bitCast(hello_idx))));
 
     try std.testing.expectEqual(original.common.line_starts.len(), env.common.line_starts.len());
     for (original.common.line_starts.items.items, env.common.line_starts.items.items) |expected, actual| {
@@ -123,7 +123,7 @@ test "ModuleEnv.Serialized roundtrip" {
     try testing.expectEqual(@as(u32, 91), env.common.idents.interner.entry_count);
 
     try testing.expectEqual(@as(usize, 1), env.common.exposed_items.count());
-    try testing.expectEqual(@as(?u32, 42), env.common.exposed_items.getNodeIndexById(gpa, @as(u32, @bitCast(hello_idx))));
+    try testing.expectEqual(@as(?u32, 42), env.common.exposed_items.getValueNodeIndexById(gpa, @as(u32, @bitCast(hello_idx))));
 
     try testing.expectEqual(@as(usize, 3), env.common.line_starts.len());
     try testing.expectEqual(@as(u32, 0), env.common.line_starts.items.items[0]);

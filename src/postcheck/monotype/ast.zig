@@ -20,6 +20,10 @@ pub const ExprId = enum(u32) { _ };
 pub const PatId = enum(u32) { _ };
 /// Identifier for a definition in Monotype IR.
 pub const DefId = enum(u32) { _ };
+/// Identifier for a nested definition in Monotype IR.
+pub const NestedDefId = enum(u32) { _ };
+/// Identifier for a function specialization in Monotype IR.
+pub const FnId = enum(u32) { _ };
 /// Identifier for a local binding in Monotype IR.
 pub const LocalId = enum(u32) { _ };
 /// Identifier assigned by Monotype lifting when this storage is consumed.
@@ -80,6 +84,11 @@ pub const FnTemplate = struct {
     source_fn_ty: checked.CheckedTypeId,
     source_fn_key: names.TypeDigest,
     mono_fn_ty: Type.TypeId,
+};
+
+/// Monotype function-specialization metadata.
+pub const Fn = struct {
+    source: FnTemplate,
 };
 
 /// Compare the fields that make two function templates identical for Monotype.
@@ -181,9 +190,9 @@ pub const TagExpr = struct {
 
 /// Lambda expression before lifting.
 pub const LambdaExpr = struct {
+    fn_id: FnId,
     args: Span(TypedLocal),
     body: ExprId,
-    source: FnTemplate,
 };
 
 /// Call through a function value before lambda solving.
@@ -194,7 +203,7 @@ pub const CallValue = struct {
 
 /// Direct call target before or after Monotype lifting.
 pub const ProcCallee = union(enum) {
-    template: FnTemplate,
+    func: FnId,
     lifted: LiftedFnId,
 };
 
@@ -267,7 +276,7 @@ pub const ExprData = union(enum) {
     },
     lambda: LambdaExpr,
     def_ref: DefId,
-    fn_def: FnTemplate,
+    fn_def: FnId,
     fn_ref: LiftedFnId,
     call_value: CallValue,
     call_proc: CallProc,
@@ -377,6 +386,7 @@ pub const Stmt = union(enum) {
 pub const Def = struct {
     symbol: Common.Symbol,
     fn_def: ?FnTemplate = null,
+    fn_id: ?FnId = null,
     args: Span(TypedLocal),
     body: FnBody,
     ret: Type.TypeId,
@@ -392,6 +402,7 @@ pub const FnBody = union(enum) {
 pub const NestedDef = struct {
     symbol: Common.Symbol,
     fn_def: FnTemplate,
+    fn_id: FnId,
     args: Span(TypedLocal),
     body: ExprId,
     ret: Type.TypeId,
@@ -425,6 +436,7 @@ pub const Program = struct {
     names: names.NameStore,
     next_symbol: u32,
     types: Type.Store,
+    fns: std.ArrayList(Fn),
     defs: std.ArrayList(Def),
     nested_defs: std.ArrayList(NestedDef),
     exprs: std.ArrayList(Expr),
@@ -465,6 +477,7 @@ pub const Program = struct {
             .names = names.NameStore.init(allocator),
             .next_symbol = 0,
             .types = Type.Store.init(allocator),
+            .fns = .empty,
             .defs = .empty,
             .nested_defs = .empty,
             .exprs = .empty,
@@ -521,8 +534,21 @@ pub const Program = struct {
         self.exprs.deinit(self.allocator);
         self.nested_defs.deinit(self.allocator);
         self.defs.deinit(self.allocator);
+        self.fns.deinit(self.allocator);
         self.types.deinit();
         self.names.deinit();
+    }
+
+    pub fn addFn(self: *Program, source: FnTemplate) std.mem.Allocator.Error!FnId {
+        const id: FnId = @enumFromInt(@as(u32, @intCast(self.fns.items.len)));
+        try self.fns.append(self.allocator, .{ .source = source });
+        return id;
+    }
+
+    pub fn fnSource(self: *const Program, id: FnId) FnTemplate {
+        const raw = @intFromEnum(id);
+        if (raw >= self.fns.items.len) Common.invariant("Monotype function id referenced a missing specialization");
+        return self.fns.items[raw].source;
     }
 
     pub fn addExpr(self: *Program, expr: Expr) std.mem.Allocator.Error!ExprId {
@@ -632,6 +658,15 @@ pub const Program = struct {
         return self.local_names.items[@intFromEnum(id)];
     }
 
+    pub fn setLocalType(self: *Program, id: LocalId, ty: Type.TypeId) void {
+        self.locals.items[@intFromEnum(id)].ty = ty;
+        for (self.typed_locals.items) |*typed_local| {
+            if (typed_local.local == id) {
+                typed_local.ty = ty;
+            }
+        }
+    }
+
     pub fn addExprSpan(self: *Program, ids: []const ExprId) std.mem.Allocator.Error!Span(ExprId) {
         const start: u32 = @intCast(self.expr_ids.items.len);
         try self.expr_ids.appendSlice(self.allocator, ids);
@@ -646,7 +681,11 @@ pub const Program = struct {
 
     pub fn addTypedLocalSpan(self: *Program, values: []const TypedLocal) std.mem.Allocator.Error!Span(TypedLocal) {
         const start: u32 = @intCast(self.typed_locals.items.len);
-        try self.typed_locals.appendSlice(self.allocator, values);
+        try self.typed_locals.ensureUnusedCapacity(self.allocator, values.len);
+        for (values) |value| {
+            const local_ty = self.locals.items[@intFromEnum(value.local)].ty;
+            self.typed_locals.appendAssumeCapacity(.{ .local = value.local, .ty = local_ty });
+        }
         return .{ .start = start, .len = @intCast(values.len) };
     }
 

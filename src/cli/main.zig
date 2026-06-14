@@ -45,6 +45,7 @@ const parse = @import("parse");
 const tracy = @import("tracy");
 const ctx_mod = @import("ctx");
 const compile = @import("compile");
+const package_source = compile.package_source;
 const can = @import("can");
 const check = @import("check");
 const bundle = @import("bundle");
@@ -1641,7 +1642,7 @@ fn rocRun(ctx: *CliCtx, args: cli_args.RunArgs) anyerror!void {
     // host executable. The same lowered root metadata supplies the platform
     // entrypoint names used by the shim, so `roc run` does not rediscover roots
     // from platform source syntax after checking.
-    const shm_result = try buildLirImageWithCoordinator(ctx, args.path, null, args.max_threads);
+    const shm_result = try buildLirImageWithCoordinator(ctx, args.path, null, args.max_threads, resolutionConfigFromLimits(args.resolve_limits));
     const shm_handle = shm_result.handle;
     defer closeSharedMemoryHandle(shm_handle);
 
@@ -2017,7 +2018,7 @@ fn rocRunDefaultApp(ctx: *CliCtx, args: cli_args.RunArgs, original_source: []con
     };
 
     const original_source_dir = std.fs.path.dirname(args.path) orelse ".";
-    const shm_result = try buildLirImageWithCoordinator(ctx, app_path, original_source_dir, args.max_threads);
+    const shm_result = try buildLirImageWithCoordinator(ctx, app_path, original_source_dir, args.max_threads, resolutionConfigFromLimits(args.resolve_limits));
     defer closeSharedMemoryHandle(shm_result.handle);
 
     if (shm_result.error_count > 0) {
@@ -2399,6 +2400,16 @@ fn renderCoordinatorReports(ctx: *CliCtx, coord: *Coordinator, roc_file_path: []
         const rep = entry.report;
         if (rep.severity == .fatal or rep.severity == .runtime_error) {
             counts.errors += 1;
+            // When a package compiled against a bumped dependency version has
+            // errors, attach its version note to the first one. Consuming the
+            // note keeps re-renders from attaching it twice.
+            if (coord.version_notes.fetchRemove(entry.package_name)) |note_entry| {
+                if (rep.addOwnedString(note_entry.value)) |owned| {
+                    rep.addNote(owned) catch {};
+                } else |_| {}
+                ctx.gpa.free(@constCast(note_entry.key));
+                ctx.gpa.free(@constCast(note_entry.value));
+            }
             if (!builtin.is_test) {
                 reporting.renderReportToTerminal(rep, ctx.io.stderr(), ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch {};
             }
@@ -2526,6 +2537,7 @@ pub fn buildLirImageWithCoordinator(
     roc_file_path: []const u8,
     source_dir_override: ?[]const u8,
     max_threads: ?usize,
+    resolution_config: compile.package_resolution.Config,
 ) anyerror!SharedMemoryResult {
     // Create shared memory with SharedMemoryAllocator, trying progressively smaller
     // sizes if larger ones fail (e.g., due to valgrind or overcommit-disabled Linux)
@@ -2560,21 +2572,15 @@ pub fn buildLirImageWithCoordinator(
     };
     try validatePlatformSpec(ctx, header_info.platform_spec);
 
-    // Resolve the platform spec to a local main.roc path (handles URL fetch).
-    const platform_main_path: ?[]const u8 = if (std.mem.startsWith(u8, header_info.platform_spec, "./") or std.mem.startsWith(u8, header_info.platform_spec, "../"))
-        try std.fs.path.join(ctx.arena, &[_][]const u8{ app_dir, header_info.platform_spec })
-    else if (base.url.isSafeUrl(header_info.platform_spec)) blk: {
-        const platform_paths = resolveUrlPlatform(ctx, header_info.platform_spec) catch |err| switch (err) {
-            error.CliError => break :blk null,
-            error.OutOfMemory => return error.OutOfMemory,
-        };
-        break :blk platform_paths.platform_source_path;
-    } else null;
-
-    const platform_dir: ?[]const u8 = if (platform_main_path) |p|
-        std.fs.path.dirname(p) orelse return error.InvalidPlatformPath
-    else
-        null;
+    // Run global package version resolution: downloads every (transitive)
+    // URL dependency, solves versions, and yields the final package graph.
+    // Use a logical absolute path (cwd-based) rather than a realpath syscall,
+    // matching how the rest of the build resolves paths and avoiding musl's
+    // realpath reading uninitialized bytes under valgrind.
+    const roc_file_abs = std.fs.path.resolve(ctx.arena, &.{roc_file_path}) catch
+        try ctx.arena.dupe(u8, roc_file_path);
+    var resolved = try resolvePackages(ctx, roc_file_abs, resolution_config);
+    defer resolved.deinit();
 
     const thread_count: usize = max_threads orelse (std.Thread.getCpuCount() catch 1);
     const mode: Mode = if (thread_count <= 1) .single_threaded else .multi_threaded;
@@ -2605,31 +2611,65 @@ pub fn buildLirImageWithCoordinator(
     app_pkg.remaining_modules += 1;
     coord.total_remaining += 1;
 
-    if (platform_dir) |pf_dir| {
-        if (platform_main_path) |pmp| {
-            try coord.registerPlatformPackage(app_pkg, pf_dir, pmp, header_info.platform_qualifier);
-        } else if (header_info.platform_qualifier) |qual| {
-            // URL platform that failed to resolve — keep the shorthand wired so
-            // downstream code reports a clean error rather than a missing-import.
-            try app_pkg.shorthands.put(
-                try ctx.gpa.dupe(u8, qual),
-                try ctx.gpa.dupe(u8, "pf"),
-            );
-            _ = try coord.ensurePackage("pf", pf_dir);
+    // Register every resolved package (named by its unique identity), then
+    // wire each package's shorthand aliases and enqueue the platform root.
+    const resolved_packages = resolved.packages;
+    for (resolved_packages[1..]) |package| {
+        const url_view: ?package_source.UrlSourceView = if (package.url) |url| .{
+            .url = url.url,
+            .url_id = url.url_id,
+        } else null;
+        _ = try coord.ensurePackageWithUrl(package.identity, package.root_dir, url_view);
+    }
+
+    {
+        // Record notes for packages whose declared dependency versions were
+        // bumped by solving, so errors inside them can explain the bump.
+        const bump_notes = try compile.package_resolution.versionBumpNotes(&resolved, ctx.gpa);
+        defer ctx.gpa.free(bump_notes);
+        for (bump_notes) |note| {
+            const gop = try coord.version_notes.getOrPut(note.package_identity);
+            if (gop.found_existing) {
+                // One note per package is enough; keep the first.
+                ctx.gpa.free(@constCast(note.package_identity));
+                ctx.gpa.free(@constCast(note.message));
+            } else {
+                gop.value_ptr.* = note.message;
+            }
         }
     }
 
-    // Resolve and register non-platform packages (URL-aware path).
-    for (header_info.non_platform_packages) |entry| {
-        const pkg_abs_path = if (base.url.isSafeUrl(entry.spec)) blk: {
-            const cached = resolveUrlBundle(ctx, entry.spec) catch |err| switch (err) {
-                error.CliError => return error.CliError,
-                error.OutOfMemory => return error.OutOfMemory,
-            };
-            break :blk try ctx.arena.dupe(u8, cached);
-        } else try std.fs.path.join(ctx.arena, &.{ app_dir, entry.spec });
-        const pkg_dir = std.fs.path.dirname(pkg_abs_path) orelse ".";
-        _ = try coord.registerInlinePackage(entry.shorthand, pkg_dir, app_pkg, entry.shorthand);
+    for (resolved_packages, 0..) |package, i| {
+        const from_pkg = if (i == compile.package_resolution.Resolved.root_index)
+            app_pkg
+        else
+            coord.packages.get(package.identity) orelse return error.CliError;
+
+        for (package.deps) |dep| {
+            const target = resolved_packages[dep.target];
+            const target_name = if (dep.target == compile.package_resolution.Resolved.root_index)
+                "app"
+            else
+                target.identity;
+            try from_pkg.shorthands.put(
+                try ctx.gpa.dupe(u8, dep.alias),
+                try ctx.gpa.dupe(u8, target_name),
+            );
+
+            // The app's platform root module is parsed eagerly so its
+            // provides/hosted declarations are available to the build.
+            if (i == compile.package_resolution.Resolved.root_index and dep.is_platform) {
+                const pf_pkg = coord.packages.get(target.identity) orelse return error.CliError;
+                if (pf_pkg.root_module_id == null) {
+                    const pf_module_id = try pf_pkg.ensureModule(ctx.gpa, "main", target.root_file);
+                    pf_pkg.root_module_id = pf_module_id;
+                    pf_pkg.modules.items[pf_module_id].depth = 1;
+                    pf_pkg.remaining_modules += 1;
+                    coord.total_remaining += 1;
+                    try coord.enqueueParseTask(target.identity, pf_module_id);
+                }
+            }
+        }
     }
 
     try coord.enqueueParseTask("app", app_module_id);
@@ -2696,7 +2736,7 @@ pub fn buildLirImageWithCoordinator(
 /// Wrapper around buildLirImageWithCoordinator for callers that pass allow_errors.
 /// The allow_errors flag is handled by the caller; this function ignores it.
 pub fn setupSharedMemoryWithCoordinator(ctx: *CliCtx, roc_file_path: []const u8, _: bool) anyerror!SharedMemoryResult {
-    return buildLirImageWithCoordinator(ctx, roc_file_path, null, null);
+    return buildLirImageWithCoordinator(ctx, roc_file_path, null, null, .{});
 }
 
 /// Platform resolution result containing the platform source path
@@ -2912,19 +2952,72 @@ fn getEnvVar(allocator: std.mem.Allocator, key: []const u8) std.mem.Allocator.Er
     return try allocator.dupe(u8, value[0..len]);
 }
 
+/// Convert parsed CLI size-limit flags to a resolution config.
+fn resolutionConfigFromLimits(limits: cli_args.ResolveLimitArgs) compile.package_resolution.Config {
+    var config = compile.package_resolution.Config{};
+    if (limits.max_package_mb) |mb| {
+        config.max_package_expanded_bytes = if (mb == 0) null else @as(u64, mb) * 1024 * 1024;
+    }
+    if (limits.max_transitive_mb) |mb| {
+        config.max_transitive_expanded_bytes = if (mb == 0) null else @as(u64, mb) * 1024 * 1024;
+    }
+    return config;
+}
+
+/// Run global package version resolution rooted at `roc_file_abs`. On
+/// failure, renders every resolution diagnostic to stderr and fails.
+fn resolvePackages(ctx: *CliCtx, roc_file_abs: []const u8, resolution_config: compile.package_resolution.Config) (CliError || error{OutOfMemory})!compile.package_resolution.Resolved {
+    var fs_ctx = ctx.coreCtx();
+    if (compile.build.nativeFetchUrl) |fetch_fn| {
+        fs_ctx.vtable.fetchUrl = fetch_fn;
+    }
+
+    const cache_dir: ?[]const u8 = getRocCacheDir(ctx.arena) catch null;
+
+    var ctx_fetcher = compile.package_resolution.CtxFetcher{
+        .fs = fs_ctx,
+        .gpa = ctx.gpa,
+        .cache_packages_dir = cache_dir,
+    };
+    var resolver = compile.package_resolution.Resolver.init(ctx.gpa, ctx_fetcher.fetcher(), resolution_config);
+    defer resolver.deinit();
+
+    return resolver.resolve(roc_file_abs) catch |err| switch (err) {
+        error.OutOfMemory => error.OutOfMemory,
+        error.ResolutionFailed => {
+            for (resolver.diagnostics.items) |diagnostic| {
+                var report = reporting.Report.init(ctx.gpa, diagnostic.title, .runtime_error);
+                defer report.deinit();
+                const owned = report.addOwnedString(diagnostic.message) catch break;
+                report.addErrorMessage(owned) catch break;
+                if (!builtin.is_test) {
+                    reporting.renderReportToTerminal(&report, ctx.io.stderr(), ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch {};
+                }
+            }
+            ctx.io.flush();
+            return error.CliError;
+        },
+    };
+}
+
+const ResolvedUrlBundle = struct {
+    source_path: []const u8,
+};
+
 /// Resolve a URL bundle (platform or package) by downloading and caching it.
 /// The URL must point to a .tar.zst bundle with a base58-encoded BLAKE3 hash filename.
 /// Returns the path to `main.roc` inside the cache directory.
-fn resolveUrlBundle(ctx: *CliCtx, url: []const u8) (CliError || error{OutOfMemory})![]const u8 {
+fn resolveUrlBundle(ctx: *CliCtx, url: []const u8) (CliError || error{OutOfMemory})!ResolvedUrlBundle {
     const download = unbundle.download;
 
     // 1. Validate URL and extract hash
-    const base58_hash = download.validateUrl(url) catch {
+    const parsed_url = download.validateUrl(url) catch {
         return ctx.fail(.{ .invalid_url = .{
             .url = url,
             .reason = "Invalid URL format or missing hash. URLs must end with a base58-encoded BLAKE3 hash filename (e.g., '<hash>.tar.zst').",
         } });
     };
+    const base58_hash = parsed_url.hash;
 
     // 2. Get cache directory
     const cache_dir_path = getRocCacheDir(ctx.arena) catch {
@@ -2967,7 +3060,7 @@ fn resolveUrlBundle(ctx: *CliCtx, url: []const u8) (CliError || error{OutOfMemor
 
         // Download and extract (path-based, no Dir handle needed)
         var gpa_copy = ctx.gpa;
-        download.downloadAndExtract(&gpa_copy, ctx.io.std_io, url, package_dir_path) catch |download_err| {
+        _ = download.downloadAndExtract(&gpa_copy, ctx.io.std_io, url, package_dir_path, .{}) catch |download_err| {
             std.Io.Dir.cwd().deleteTree(ctx.io.std_io, package_dir_path) catch {};
             return ctx.fail(.{ .download_failed = .{
                 .url = url,
@@ -2987,14 +3080,18 @@ fn resolveUrlBundle(ctx: *CliCtx, url: []const u8) (CliError || error{OutOfMemor
         } });
     };
 
-    return platform_source_path;
+    return .{
+        .source_path = platform_source_path,
+    };
 }
 
 /// Resolve a URL platform specification by downloading and caching the bundle.
 /// The URL must point to a .tar.zst bundle with a base58-encoded BLAKE3 hash filename.
 fn resolveUrlPlatform(ctx: *CliCtx, url: []const u8) (CliError || error{OutOfMemory})!PlatformPaths {
-    const source_path = try resolveUrlBundle(ctx, url);
-    return PlatformPaths{ .platform_source_path = source_path };
+    const resolved = try resolveUrlBundle(ctx, url);
+    return PlatformPaths{
+        .platform_source_path = resolved.source_path,
+    };
 }
 
 /// Extract the embedded roc_shim library to the specified path for the given target.
@@ -3131,6 +3228,8 @@ fn discoverAndAddBundleModules(
     }
 
     // Append any discovered module that is not already in the bundle list.
+    // URL dependencies are skipped: their files live in the local package
+    // cache, and consumers resolve them from the URLs in the header.
     // The Coordinator yields absolute paths; convert each to a path relative
     // to cwd so it round-trips through `cwd.openFile` and survives the
     // bundle's path-validation step (which rejects absolute paths).
@@ -3139,6 +3238,7 @@ fn discoverAndAddBundleModules(
         while (coord_pkg_it.next()) |pkg_entry| {
             for (pkg_entry.value_ptr.*.modules.items) |mod_state| {
                 const abs_path = mod_state.path;
+                if (!build_env.isBundleableModule(pkg_entry.key_ptr.*, abs_path)) continue;
                 if (bundled_set.contains(abs_path)) continue;
 
                 const rel_path = std.fs.path.relative(ctx.arena, cwd, null, cwd, abs_path) catch {
@@ -4862,6 +4962,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
     const cwd = try std.Io.Dir.cwd().realPathFileAlloc(ctx.io.std_io, ".", ctx.gpa);
     defer ctx.gpa.free(cwd);
     var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd, ctx.io.std_io);
+    build_env.resolution_config = resolutionConfigFromLimits(args.resolve_limits);
     build_env.compiler_version = build_options.compiler_version;
     defer build_env.deinit();
 
@@ -5180,6 +5281,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
     const cwd = try std.Io.Dir.cwd().realPathFileAlloc(ctx.io.std_io, ".", ctx.gpa);
     defer ctx.gpa.free(cwd);
     var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd, ctx.io.std_io);
+    build_env.resolution_config = resolutionConfigFromLimits(args.resolve_limits);
     build_env.compiler_version = build_options.compiler_version;
     defer build_env.deinit();
 
@@ -5514,6 +5616,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
     const cwd = try std.Io.Dir.cwd().realPathFileAlloc(ctx.io.std_io, ".", ctx.gpa);
     defer ctx.gpa.free(cwd);
     var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd, ctx.io.std_io);
+    build_env.resolution_config = resolutionConfigFromLimits(args.resolve_limits);
     build_env.compiler_version = build_options.compiler_version;
     defer build_env.deinit();
 
@@ -6560,6 +6663,7 @@ fn rocTest(ctx: *CliCtx, args: cli_args.TestArgs) anyerror!void {
     var build_env = BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd, ctx.io.std_io) catch |err| {
         return err;
     };
+    build_env.resolution_config = resolutionConfigFromLimits(args.resolve_limits);
     build_env.compiler_version = build_options.compiler_version;
     defer build_env.deinit();
 
@@ -7134,6 +7238,7 @@ fn checkFileWithBuildEnvPreserved(
     _: bool,
     cache_config: CacheConfig,
     max_threads: ?usize,
+    resolution_config: compile.package_resolution.Config,
 ) anyerror!CheckResultWithBuildEnv {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -7146,6 +7251,7 @@ fn checkFileWithBuildEnvPreserved(
     const cwd = try std.Io.Dir.cwd().realPathFileAlloc(ctx.io.std_io, ".", ctx.gpa);
     defer ctx.gpa.free(cwd);
     var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd, ctx.io.std_io);
+    build_env.resolution_config = resolution_config;
     if (isCompilerOwnedBuiltinSourcePath(ctx.gpa, ctx.io.std_io, filepath)) {
         build_env.setRootModuleRole(.builtin);
     }
@@ -7284,6 +7390,7 @@ fn checkFileWithBuildEnv(
     _: bool,
     cache_config: CacheConfig,
     max_threads: ?usize,
+    resolution_config: compile.package_resolution.Config,
 ) anyerror!CheckResult {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -7296,6 +7403,7 @@ fn checkFileWithBuildEnv(
     const cwd = try std.Io.Dir.cwd().realPathFileAlloc(ctx.io.std_io, ".", ctx.gpa);
     defer ctx.gpa.free(cwd);
     var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd, ctx.io.std_io);
+    build_env.resolution_config = resolution_config;
 
     build_env.compiler_version = build_options.compiler_version;
     defer build_env.deinit();
@@ -7456,6 +7564,7 @@ fn rocCheck(ctx: *CliCtx, args: cli_args.CheckArgs) anyerror!void {
         args.time,
         cache_config,
         args.max_threads,
+        resolutionConfigFromLimits(args.resolve_limits),
     ) catch |err| {
         try handleProcessFileError(err, stderr, args.path);
         return;
@@ -7747,6 +7856,7 @@ fn rocDocs(ctx: *CliCtx, args: cli_args.DocsArgs) anyerror!void {
         args.time,
         cache_config,
         null, // max_threads: use default (single-threaded for now)
+        resolutionConfigFromLimits(args.resolve_limits),
     ) catch |err| {
         return handleProcessFileError(err, stderr, args.path);
     };
@@ -7831,7 +7941,9 @@ fn generateDocs(
 
     var sched_iter = build_env.schedulers.iterator();
     while (sched_iter.next()) |sched_entry| {
-        const sched_pkg_name = sched_entry.key_ptr.*;
+        // Docs show the alias the root uses for a package, not its internal
+        // identity name (full URL or absolute path).
+        const sched_pkg_name = build_env.rootAliasForPackage(sched_entry.key_ptr.*) orelse sched_entry.key_ptr.*;
         const package_env = sched_entry.value_ptr.*;
 
         for (package_env.modules.items) |*module_state| {
@@ -7860,6 +7972,10 @@ fn generateDocs(
             }
         }
     }
+
+    // Modules are collected in package hash-map order, which is not
+    // deterministic; docs output must be.
+    std.mem.sort(DocModel.ModuleDocs, module_docs_list.items, {}, DocModel.moduleDocsLessThan);
 
     // Determine the package name for the docs header.
     // For packages, use the parent directory name (e.g., "my_parser" from "my_parser/main.roc")
