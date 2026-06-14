@@ -679,7 +679,7 @@ pub const Resolver = struct {
         for (self.getTypesStore(module_idx).sliceStaticDispatchConstraints(constraints)) |constraint| {
             switch (constraint.origin) {
                 .from_numeral, .desugared_binop, .desugared_unaryop => return true,
-                .method_call, .where_clause => {},
+                .from_quote, .from_interpolation, .method_call, .where_clause => {},
             }
         }
 

@@ -8,6 +8,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const base = @import("base");
+const collections = @import("collections");
 const parse = @import("parse");
 
 const Can = @import("../Can.zig");
@@ -18,6 +19,22 @@ const BuiltinTestContext = @import("./BuiltinTestContext.zig").BuiltinTestContex
 const CoreCtx = @import("ctx").CoreCtx;
 const testing = std.testing;
 const expectEqual = testing.expectEqual;
+
+fn expectNoZeroTargetExternalLookup(env: *const ModuleEnv) error{TestUnexpectedResult}!void {
+    var raw_node_idx: u32 = 0;
+    while (raw_node_idx < env.store.nodes.len()) : (raw_node_idx += 1) {
+        const node_idx: CIR.Node.Idx = @enumFromInt(raw_node_idx);
+        if (env.store.nodes.get(node_idx).tag != .expr_external_lookup) continue;
+
+        const expr_idx: CIR.Expr.Idx = @enumFromInt(raw_node_idx);
+        switch (env.store.getExpr(expr_idx)) {
+            .e_lookup_external => |external| {
+                try testing.expect(external.target_node_idx != 0);
+            },
+            else => unreachable,
+        }
+    }
+}
 
 // Helper function to parse and canonicalize source code
 fn parseAndCanonicalizeSource(
@@ -78,13 +95,13 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
     // Add exposed items to Json module
     const Ident = base.Ident;
     const decode_idx = try json_env.common.idents.insert(allocator, Ident.for_text("decode"));
-    try json_env.addExposedById(decode_idx);
+    try json_env.setExposedValueNodeIndexById(decode_idx, 1);
     const encode_idx = try json_env.common.idents.insert(allocator, Ident.for_text("encode"));
-    try json_env.addExposedById(encode_idx);
+    try json_env.setExposedValueNodeIndexById(encode_idx, 2);
     const json_error_idx = try json_env.common.idents.insert(allocator, Ident.for_text("JsonError"));
-    try json_env.addExposedById(json_error_idx);
+    try json_env.setExposedTypeNodeIndexById(json_error_idx, 3);
     const decode_problem_idx = try json_env.common.idents.insert(allocator, Ident.for_text("DecodeProblem"));
-    try json_env.addExposedById(decode_problem_idx);
+    try json_env.setExposedTypeNodeIndexById(decode_problem_idx, 4);
 
     // Create module environment for "Utils" module
     const utils_env = try allocator.create(ModuleEnv);
@@ -95,11 +112,11 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
     }
     // Add exposed items to Utils module
     const map_idx = try utils_env.common.idents.insert(allocator, Ident.for_text("map"));
-    try utils_env.addExposedById(map_idx);
+    try utils_env.setExposedValueNodeIndexById(map_idx, 1);
     const filter_idx = try utils_env.common.idents.insert(allocator, Ident.for_text("filter"));
-    try utils_env.addExposedById(filter_idx);
+    try utils_env.setExposedValueNodeIndexById(filter_idx, 2);
     const result_idx = try utils_env.common.idents.insert(allocator, Ident.for_text("Try"));
-    try utils_env.addExposedById(result_idx);
+    try utils_env.setExposedTypeNodeIndexById(result_idx, 3);
     // Parse source code with various import statements
     const source =
         \\module [main]
@@ -297,6 +314,109 @@ test "import validation - type module associated values are importable via expos
             else => {},
         }
     }
+}
+
+test "unresolved exposed value is not imported as external lookup target zero" {
+    var gpa_state = std.heap.DebugAllocator(.{ .safety = true }){};
+    defer std.debug.assert(gpa_state.deinit() == .ok);
+    const allocator = gpa_state.allocator();
+    const Ident = base.Ident;
+
+    var builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer builtin_ctx.deinit();
+    const roc_ctx = CoreCtx.testing(allocator, allocator);
+
+    const a_source =
+        \\module [f]
+        \\
+        \\T := [].{
+        \\    f = |x| x
+        \\}
+    ;
+
+    var a_env = try ModuleEnv.init(allocator, a_source);
+    defer a_env.deinit();
+    try a_env.initCIRFields("A");
+
+    const a_ast = try parse.file(allocator, &a_env.common);
+    defer a_ast.deinit();
+
+    var a_can = try Can.initModule(roc_ctx, &a_env, a_ast, builtin_ctx.canInitContext());
+    defer a_can.deinit();
+    try a_can.canonicalizeFile();
+
+    const exposed_f = a_env.common.findIdent("f") orelse return error.MissingExposedIdent;
+    const f_target = a_env.getExposedTargetById(exposed_f) orelse return error.MissingExposedTarget;
+    try expectEqual(collections.ExposedItemTarget.Kind.unresolved, f_target.tag());
+    try expectEqual(@as(?u32, null), a_env.getExposedValueNodeIndexById(exposed_f));
+
+    var found_unimplemented_f = false;
+    const a_diagnostics = try a_env.getDiagnostics();
+    defer allocator.free(a_diagnostics);
+    for (a_diagnostics) |diagnostic| {
+        switch (diagnostic) {
+            .exposed_but_not_implemented => |d| {
+                if (std.mem.eql(u8, a_env.getIdent(d.ident), "f")) {
+                    found_unimplemented_f = true;
+                }
+            },
+            else => {},
+        }
+    }
+    try testing.expect(found_unimplemented_f);
+
+    const importer_source =
+        \\module [main]
+        \\
+        \\import A
+        \\
+        \\main = A.f({})
+    ;
+
+    var importer_env = try ModuleEnv.init(allocator, importer_source);
+    defer importer_env.deinit();
+    try importer_env.initCIRFields("Importer");
+
+    var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
+    defer module_envs.deinit();
+
+    const a_import_ident = try importer_env.insertIdent(Ident.for_text("A"));
+    const a_qualified_ident = try a_env.insertIdent(Ident.for_text("A"));
+    try module_envs.put(a_import_ident, .{
+        .env = &a_env,
+        .qualified_type_ident = a_qualified_ident,
+    });
+
+    const importer_ast = try parse.file(allocator, &importer_env.common);
+    defer importer_ast.deinit();
+
+    var importer_can = try Can.initModule(roc_ctx, &importer_env, importer_ast, .{
+        .builtin_types = .{
+            .builtin_module_env = builtin_ctx.builtin_module.env,
+            .builtin_indices = builtin_ctx.builtin_indices,
+        },
+        .imported_modules = &module_envs,
+    });
+    defer importer_can.deinit();
+    try importer_can.canonicalizeFile();
+
+    var found_missing_f = false;
+    const importer_diagnostics = try importer_env.getDiagnostics();
+    defer allocator.free(importer_diagnostics);
+    for (importer_diagnostics) |diagnostic| {
+        switch (diagnostic) {
+            .nested_value_not_found => |d| {
+                if (std.mem.eql(u8, importer_env.getIdent(d.parent_name), "A") and
+                    std.mem.eql(u8, importer_env.getIdent(d.nested_name), "f"))
+                {
+                    found_missing_f = true;
+                }
+            },
+            else => {},
+        }
+    }
+    try testing.expect(found_missing_f);
+    try expectNoZeroTargetExternalLookup(&importer_env);
 }
 
 test "import validation - no module_envs provided" {
@@ -618,11 +738,11 @@ test "exposed_items - tracking CIR node indices for exposed items" {
     // Add exposed items
     const Ident = base.Ident;
     const add_idx = try math_env.common.idents.insert(allocator, Ident.for_text("add"));
-    try math_env.addExposedById(add_idx);
+    try math_env.setExposedValueNodeIndexById(add_idx, 1);
     const multiply_idx = try math_env.common.idents.insert(allocator, Ident.for_text("multiply"));
-    try math_env.addExposedById(multiply_idx);
+    try math_env.setExposedValueNodeIndexById(multiply_idx, 2);
     const pi_idx = try math_env.common.idents.insert(allocator, Ident.for_text("PI"));
-    try math_env.addExposedById(pi_idx);
+    try math_env.setExposedTypeNodeIndexById(pi_idx, 3);
 
     const math_utils_ident = try temp_idents.insert(allocator, Ident.for_text("MathUtils"));
     const math_utils_qualified_ident = try math_env.common.insertIdent(math_env.gpa, Ident.for_text("MathUtils"));
