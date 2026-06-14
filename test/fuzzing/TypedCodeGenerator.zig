@@ -11,7 +11,7 @@ const Self = @This();
 const max_methods = 256;
 const max_method_arity = 2;
 const max_local_bindings = 4;
-const max_context_values = 16;
+const max_context_values = 32;
 
 allocator: std.mem.Allocator,
 reader: *FuzzReader,
@@ -332,18 +332,19 @@ fn writeContextSymbolOrElse(self: *Self, typ: Type, context: ExprContext, fallba
 }
 
 fn writeRootExpr(self: *Self, context: ExprContext, depth: u8, visible_methods: usize) std.mem.Allocator.Error!void {
-    switch (self.reader.intRangeAtMost(u8, 0, 4)) {
+    switch (self.reader.intRangeAtMost(u8, 0, 5)) {
         0 => try self.writeContextSymbolOrElse(.root, context, writeRootLiteral, depth - 1, visible_methods),
         1 => if (!try self.writeMethodCall(.root, context, depth - 1, visible_methods)) try self.writeRootLiteral(context, depth - 1, visible_methods),
         2 => try self.writeIfExpr(.root, context, depth - 1, visible_methods),
         3 => try self.writeRootLiteral(context, depth - 1, visible_methods),
         4 => try self.writeRootMatchExpr(.root, context, depth - 1, visible_methods),
+        5 => try self.writeRecordMatchExpr(.root, context, depth - 1, visible_methods),
         else => unreachable,
     }
 }
 
 fn writeBoolExpr(self: *Self, context: ExprContext, depth: u8, visible_methods: usize) std.mem.Allocator.Error!void {
-    switch (self.reader.intRangeAtMost(u8, 0, 8)) {
+    switch (self.reader.intRangeAtMost(u8, 0, 9)) {
         0 => if (self.contextSymbol(.bool, context)) |arg| try self.writeSymbol(arg) else try self.writeBoolLiteral(),
         1 => if (!try self.writeMethodCall(.bool, context, depth - 1, visible_methods)) try self.writeBoolLiteral(),
         2 => try self.writeIfExpr(.bool, context, depth - 1, visible_methods),
@@ -369,12 +370,13 @@ fn writeBoolExpr(self: *Self, context: ExprContext, depth: u8, visible_methods: 
         },
         7 => try self.writeRootMatchExpr(.bool, context, depth - 1, visible_methods),
         8 => try self.writeTupleFirstExpr(context, depth - 1, visible_methods),
+        9 => try self.writeRecordMatchExpr(.bool, context, depth - 1, visible_methods),
         else => unreachable,
     }
 }
 
 fn writeStrExpr(self: *Self, context: ExprContext, depth: u8, visible_methods: usize) std.mem.Allocator.Error!void {
-    switch (self.reader.intRangeAtMost(u8, 0, 7)) {
+    switch (self.reader.intRangeAtMost(u8, 0, 8)) {
         0 => if (self.contextSymbol(.str, context)) |arg| try self.writeSymbol(arg) else try self.writeStringLiteral(),
         1 => if (!try self.writeMethodCall(.str, context, depth - 1, visible_methods)) try self.writeStringLiteral(),
         2 => try self.writeIfExpr(.str, context, depth - 1, visible_methods),
@@ -392,12 +394,13 @@ fn writeStrExpr(self: *Self, context: ExprContext, depth: u8, visible_methods: u
         5 => try self.writeStringLiteral(),
         6 => try self.writeRootMatchExpr(.str, context, depth - 1, visible_methods),
         7 => try self.writeTryErrOrExpr(context, depth - 1, visible_methods),
+        8 => try self.writeRecordMatchExpr(.str, context, depth - 1, visible_methods),
         else => unreachable,
     }
 }
 
 fn writeU64Expr(self: *Self, context: ExprContext, depth: u8, visible_methods: usize) std.mem.Allocator.Error!void {
-    switch (self.reader.intRangeAtMost(u8, 0, 10)) {
+    switch (self.reader.intRangeAtMost(u8, 0, 11)) {
         0 => if (self.contextSymbol(.u64, context)) |arg| try self.writeSymbol(arg) else try self.writeU64Literal(),
         1 => if (!try self.writeMethodCall(.u64, context, depth - 1, visible_methods)) try self.writeU64Literal(),
         2 => try self.writeIfExpr(.u64, context, depth - 1, visible_methods),
@@ -425,24 +428,26 @@ fn writeU64Expr(self: *Self, context: ExprContext, depth: u8, visible_methods: u
         8 => try self.writeListGetExpr(context, depth - 1, visible_methods),
         9 => try self.writeTryOkOrExpr(context, depth - 1, visible_methods),
         10 => try self.writeTupleSecondExpr(context, depth - 1, visible_methods),
+        11 => try self.writeRecordMatchExpr(.u64, context, depth - 1, visible_methods),
         else => unreachable,
     }
 }
 
 fn writeRecordExpr(self: *Self, context: ExprContext, depth: u8, visible_methods: usize) std.mem.Allocator.Error!void {
-    switch (self.reader.intRangeAtMost(u8, 0, 5)) {
+    switch (self.reader.intRangeAtMost(u8, 0, 6)) {
         0 => try self.writeContextSymbolOrElse(.record, context, writeRecordLiteral, depth - 1, visible_methods),
         1 => if (!try self.writeMethodCall(.record, context, depth - 1, visible_methods)) try self.writeRecordLiteral(context, depth - 1, visible_methods),
         2 => try self.writeIfExpr(.record, context, depth - 1, visible_methods),
         3 => try self.writeRecordLiteral(context, depth - 1, visible_methods),
         4 => try self.writeRecordUpdateExpr(context, depth - 1, visible_methods),
         5 => try self.writeRootMatchExpr(.record, context, depth - 1, visible_methods),
+        6 => try self.writeRecordMatchExpr(.record, context, depth - 1, visible_methods),
         else => unreachable,
     }
 }
 
 fn writeListU64Expr(self: *Self, context: ExprContext, depth: u8, visible_methods: usize) std.mem.Allocator.Error!void {
-    switch (self.reader.intRangeAtMost(u8, 0, 8)) {
+    switch (self.reader.intRangeAtMost(u8, 0, 9)) {
         0 => try self.writeContextSymbolOrElse(.list_u64, context, writeListLiteral, depth - 1, visible_methods),
         1 => if (!try self.writeMethodCall(.list_u64, context, depth - 1, visible_methods)) try self.writeListLiteral(context, depth - 1, visible_methods),
         2 => try self.writeIfExpr(.list_u64, context, depth - 1, visible_methods),
@@ -452,12 +457,13 @@ fn writeListU64Expr(self: *Self, context: ExprContext, depth: u8, visible_method
         6 => try self.writeListConcatExpr(context, depth - 1, visible_methods),
         7 => try self.writeListAppendExpr(context, depth - 1, visible_methods),
         8 => try self.writeListFilterExpr(context, depth - 1, visible_methods),
+        9 => try self.writeRecordMatchExpr(.list_u64, context, depth - 1, visible_methods),
         else => unreachable,
     }
 }
 
 fn writeTryExpr(self: *Self, context: ExprContext, depth: u8, visible_methods: usize) std.mem.Allocator.Error!void {
-    switch (self.reader.intRangeAtMost(u8, 0, 7)) {
+    switch (self.reader.intRangeAtMost(u8, 0, 8)) {
         0 => try self.writeContextSymbolOrElse(.try_u64_str, context, writeTryLiteral, depth - 1, visible_methods),
         1 => if (!try self.writeMethodCall(.try_u64_str, context, depth - 1, visible_methods)) try self.writeTryLiteral(context, depth - 1, visible_methods),
         2 => try self.writeIfExpr(.try_u64_str, context, depth - 1, visible_methods),
@@ -466,12 +472,13 @@ fn writeTryExpr(self: *Self, context: ExprContext, depth: u8, visible_methods: u
         5 => try self.writeRootMatchExpr(.try_u64_str, context, depth - 1, visible_methods),
         6 => try self.writeTryMapOkExpr(context, depth - 1, visible_methods),
         7 => try self.writeTryMapErrExpr(context, depth - 1, visible_methods),
+        8 => try self.writeRecordMatchExpr(.try_u64_str, context, depth - 1, visible_methods),
         else => unreachable,
     }
 }
 
 fn writeTupleExpr(self: *Self, context: ExprContext, depth: u8, visible_methods: usize) std.mem.Allocator.Error!void {
-    switch (self.reader.intRangeAtMost(u8, 0, 6)) {
+    switch (self.reader.intRangeAtMost(u8, 0, 7)) {
         0 => try self.writeContextSymbolOrElse(.tuple_bool_u64, context, writeTupleLiteral, depth - 1, visible_methods),
         1 => if (!try self.writeMethodCall(.tuple_bool_u64, context, depth - 1, visible_methods)) try self.writeTupleLiteral(context, depth - 1, visible_methods),
         2 => try self.writeIfExpr(.tuple_bool_u64, context, depth - 1, visible_methods),
@@ -479,6 +486,7 @@ fn writeTupleExpr(self: *Self, context: ExprContext, depth: u8, visible_methods:
         4 => try self.writeRootMatchExpr(.tuple_bool_u64, context, depth - 1, visible_methods),
         5 => try self.writeTupleProjectionExpr(context, depth - 1, visible_methods),
         6 => try self.writeTupleMatchExpr(context, depth - 1, visible_methods),
+        7 => try self.writeRecordMatchExpr(.tuple_bool_u64, context, depth - 1, visible_methods),
         else => unreachable,
     }
 }
@@ -727,6 +735,35 @@ fn writeRecordUpdateExpr(self: *Self, context: ExprContext, depth: u8, visible_m
     try self.write(": ");
     try self.writeExpr(.u64, context, depth, visible_methods);
     try self.write(" }");
+}
+
+fn writeRecordMatchExpr(self: *Self, result_type: Type, context: ExprContext, depth: u8, visible_methods: usize) std.mem.Allocator.Error!void {
+    const bool_payload = self.fresh(.value);
+    const u64_payload = self.fresh(.value);
+    const str_payload = self.fresh(.value);
+    const branch_context = extendContext(extendContext(extendContext(context, bool_payload, .bool), u64_payload, .u64), str_payload, .str);
+
+    try self.write("match ");
+    try self.writeExpr(.record, context, depth, visible_methods);
+    try self.write(" {\n");
+    try self.writeIndent(2);
+    try self.write("{ ");
+    try self.writeSymbol(self.symbols.field0);
+    try self.write(": ");
+    try self.writeSymbol(bool_payload);
+    try self.write(", ");
+    try self.writeSymbol(self.symbols.field1);
+    try self.write(": ");
+    try self.writeSymbol(u64_payload);
+    try self.write(", ");
+    try self.writeSymbol(self.symbols.field2);
+    try self.write(": ");
+    try self.writeSymbol(str_payload);
+    try self.write(" } => ");
+    try self.writeExpr(result_type, branch_context, depth, visible_methods);
+    try self.write("\n");
+    try self.writeIndent(1);
+    try self.write("}");
 }
 
 fn writeTryMatchExpr(self: *Self, context: ExprContext, depth: u8, visible_methods: usize) std.mem.Allocator.Error!void {
