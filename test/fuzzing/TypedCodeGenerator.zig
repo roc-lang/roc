@@ -9,6 +9,7 @@ const FuzzReader = @import("FuzzReader.zig");
 const Self = @This();
 
 const max_methods = 256;
+const max_method_arity = 2;
 
 allocator: std.mem.Allocator,
 reader: *FuzzReader,
@@ -56,13 +57,15 @@ const Type = enum {
 
 const Method = struct {
     symbol: Symbol,
-    param_type: Type,
+    param_types: [max_method_arity]Type,
+    arity: u8,
     result_type: Type,
 };
 
 const ExprContext = struct {
-    arg: Symbol,
-    arg_type: Type,
+    args: [max_method_arity]Symbol,
+    arg_types: [max_method_arity]Type,
+    arity: u8,
 };
 
 const all_types = [_]Type{
@@ -124,10 +127,14 @@ pub fn generateModule(self: *Self) std.mem.Allocator.Error!void {
 
     const method_count = self.reader.intRangeAtMost(u8, 48, 128);
     for (0..method_count) |_| {
-        const param_type = self.chooseType();
+        const arity = self.chooseMethodArity();
+        var param_types: [max_method_arity]Type = undefined;
+        for (0..arity) |index| {
+            param_types[index] = self.chooseType();
+        }
         const result_type = self.chooseType();
         const depth = self.reader.intRangeAtMost(u8, 2, 5);
-        try self.generateMethod(param_type, result_type, depth);
+        try self.generateMethod(param_types, arity, result_type, depth);
     }
 
     try self.write("}\n");
@@ -155,37 +162,53 @@ fn writeRootTypeHeader(self: *Self) std.mem.Allocator.Error!void {
 
 fn generateSeedMethods(self: *Self) std.mem.Allocator.Error!void {
     for (all_types) |result_type| {
-        try self.generateMethod(.root, result_type, 0);
+        try self.generateUnaryMethod(.root, result_type, 0);
     }
     for (all_types) |param_type| {
-        try self.generateMethod(param_type, param_type, 1);
+        try self.generateUnaryMethod(param_type, param_type, 1);
     }
 }
 
-fn generateMethod(self: *Self, param_type: Type, result_type: Type, depth: u8) std.mem.Allocator.Error!void {
+fn generateUnaryMethod(self: *Self, param_type: Type, result_type: Type, depth: u8) std.mem.Allocator.Error!void {
+    var param_types: [max_method_arity]Type = undefined;
+    param_types[0] = param_type;
+    try self.generateMethod(param_types, 1, result_type, depth);
+}
+
+fn generateMethod(self: *Self, param_types: [max_method_arity]Type, arity: u8, result_type: Type, depth: u8) std.mem.Allocator.Error!void {
     if (self.method_count >= self.methods.len) return;
 
     const method: Method = .{
         .symbol = self.fresh(.function),
-        .param_type = param_type,
+        .param_types = param_types,
+        .arity = arity,
         .result_type = result_type,
     };
-    const arg = self.fresh(.value);
+    var args: [max_method_arity]Symbol = undefined;
+    for (0..arity) |index| {
+        args[index] = self.fresh(.value);
+    }
     const visible_methods = self.method_count;
 
     try self.writeIndent(1);
     try self.writeSymbol(method.symbol);
     try self.write(" : ");
-    try self.writeType(param_type);
+    for (0..arity) |index| {
+        if (index > 0) try self.write(", ");
+        try self.writeType(param_types[index]);
+    }
     try self.write(" -> ");
     try self.writeType(result_type);
     try self.write("\n");
     try self.writeIndent(1);
     try self.writeSymbol(method.symbol);
     try self.write(" = |");
-    try self.writeSymbol(arg);
+    for (0..arity) |index| {
+        if (index > 0) try self.write(", ");
+        try self.writeSymbol(args[index]);
+    }
     try self.write("| ");
-    try self.writeExpr(result_type, .{ .arg = arg, .arg_type = param_type }, depth, visible_methods);
+    try self.writeExpr(result_type, .{ .args = args, .arg_types = param_types, .arity = arity }, depth, visible_methods);
     try self.write("\n");
 
     self.methods[self.method_count] = method;
@@ -211,17 +234,59 @@ fn writeExpr(self: *Self, typ: Type, context: ExprContext, depth: u8, visible_me
 }
 
 fn writeLeafExpr(self: *Self, typ: Type, context: ExprContext, visible_methods: usize) std.mem.Allocator.Error!void {
-    if (context.arg_type == typ and self.reader.boolean()) {
-        try self.writeSymbol(context.arg);
-        return;
+    if (self.contextSymbol(typ, context)) |arg| {
+        if (self.reader.boolean()) {
+            try self.writeSymbol(arg);
+            return;
+        }
     }
     if (self.reader.boolean() and try self.writeMethodCall(typ, context, 0, visible_methods)) return;
     try self.writeLiteral(typ);
 }
 
+fn contextSymbol(self: *Self, typ: Type, context: ExprContext) ?Symbol {
+    var count: usize = 0;
+    for (0..context.arity) |index| {
+        if (context.arg_types[index] == typ) count += 1;
+    }
+    if (count == 0) return null;
+
+    var selected = self.reader.intRangeLessThan(usize, 0, count);
+    for (0..context.arity) |index| {
+        if (context.arg_types[index] != typ) continue;
+        if (selected == 0) return context.args[index];
+        selected -= 1;
+    }
+    unreachable;
+}
+
+fn oneArgContext(arg: Symbol, typ: Type) ExprContext {
+    var args: [max_method_arity]Symbol = undefined;
+    var arg_types: [max_method_arity]Type = undefined;
+    args[0] = arg;
+    arg_types[0] = typ;
+    return .{ .args = args, .arg_types = arg_types, .arity = 1 };
+}
+
+fn emptyContext() ExprContext {
+    return .{ .args = undefined, .arg_types = undefined, .arity = 0 };
+}
+
+fn chooseMethodArity(self: *Self) u8 {
+    return self.reader.intRangeAtMost(u8, 1, max_method_arity);
+}
+
+fn writeContextSymbolOrElse(self: *Self, typ: Type, context: ExprContext, fallback: *const fn (*Self, ExprContext, u8, usize) std.mem.Allocator.Error!void, depth: u8, visible_methods: usize) std.mem.Allocator.Error!void {
+    if (self.contextSymbol(typ, context)) |arg| {
+        try self.writeSymbol(arg);
+        return;
+    }
+    try fallback(self, context, depth, visible_methods);
+}
+
 fn writeRootExpr(self: *Self, context: ExprContext, depth: u8, visible_methods: usize) std.mem.Allocator.Error!void {
     switch (self.reader.intRangeAtMost(u8, 0, 4)) {
-        0 => if (context.arg_type == .root) try self.writeSymbol(context.arg) else try self.writeRootLiteral(context, depth - 1, visible_methods),
+        0 => try self.writeContextSymbolOrElse(.root, context, writeRootLiteral, depth - 1, visible_methods),
         1 => if (!try self.writeMethodCall(.root, context, depth - 1, visible_methods)) try self.writeRootLiteral(context, depth - 1, visible_methods),
         2 => try self.writeIfExpr(.root, context, depth - 1, visible_methods),
         3 => try self.writeRootLiteral(context, depth - 1, visible_methods),
@@ -232,7 +297,7 @@ fn writeRootExpr(self: *Self, context: ExprContext, depth: u8, visible_methods: 
 
 fn writeBoolExpr(self: *Self, context: ExprContext, depth: u8, visible_methods: usize) std.mem.Allocator.Error!void {
     switch (self.reader.intRangeAtMost(u8, 0, 7)) {
-        0 => if (context.arg_type == .bool) try self.writeSymbol(context.arg) else try self.writeBoolLiteral(),
+        0 => if (self.contextSymbol(.bool, context)) |arg| try self.writeSymbol(arg) else try self.writeBoolLiteral(),
         1 => if (!try self.writeMethodCall(.bool, context, depth - 1, visible_methods)) try self.writeBoolLiteral(),
         2 => try self.writeIfExpr(.bool, context, depth - 1, visible_methods),
         3 => {
@@ -262,7 +327,7 @@ fn writeBoolExpr(self: *Self, context: ExprContext, depth: u8, visible_methods: 
 
 fn writeStrExpr(self: *Self, context: ExprContext, depth: u8, visible_methods: usize) std.mem.Allocator.Error!void {
     switch (self.reader.intRangeAtMost(u8, 0, 6)) {
-        0 => if (context.arg_type == .str) try self.writeSymbol(context.arg) else try self.writeStringLiteral(),
+        0 => if (self.contextSymbol(.str, context)) |arg| try self.writeSymbol(arg) else try self.writeStringLiteral(),
         1 => if (!try self.writeMethodCall(.str, context, depth - 1, visible_methods)) try self.writeStringLiteral(),
         2 => try self.writeIfExpr(.str, context, depth - 1, visible_methods),
         3 => {
@@ -284,7 +349,7 @@ fn writeStrExpr(self: *Self, context: ExprContext, depth: u8, visible_methods: u
 
 fn writeU64Expr(self: *Self, context: ExprContext, depth: u8, visible_methods: usize) std.mem.Allocator.Error!void {
     switch (self.reader.intRangeAtMost(u8, 0, 8)) {
-        0 => if (context.arg_type == .u64) try self.writeSymbol(context.arg) else try self.writeU64Literal(),
+        0 => if (self.contextSymbol(.u64, context)) |arg| try self.writeSymbol(arg) else try self.writeU64Literal(),
         1 => if (!try self.writeMethodCall(.u64, context, depth - 1, visible_methods)) try self.writeU64Literal(),
         2 => try self.writeIfExpr(.u64, context, depth - 1, visible_methods),
         3 => {
@@ -315,7 +380,7 @@ fn writeU64Expr(self: *Self, context: ExprContext, depth: u8, visible_methods: u
 
 fn writeRecordExpr(self: *Self, context: ExprContext, depth: u8, visible_methods: usize) std.mem.Allocator.Error!void {
     switch (self.reader.intRangeAtMost(u8, 0, 5)) {
-        0 => if (context.arg_type == .record) try self.writeSymbol(context.arg) else try self.writeRecordLiteral(context, depth - 1, visible_methods),
+        0 => try self.writeContextSymbolOrElse(.record, context, writeRecordLiteral, depth - 1, visible_methods),
         1 => if (!try self.writeMethodCall(.record, context, depth - 1, visible_methods)) try self.writeRecordLiteral(context, depth - 1, visible_methods),
         2 => try self.writeIfExpr(.record, context, depth - 1, visible_methods),
         3 => try self.writeRecordLiteral(context, depth - 1, visible_methods),
@@ -327,7 +392,7 @@ fn writeRecordExpr(self: *Self, context: ExprContext, depth: u8, visible_methods
 
 fn writeListU64Expr(self: *Self, context: ExprContext, depth: u8, visible_methods: usize) std.mem.Allocator.Error!void {
     switch (self.reader.intRangeAtMost(u8, 0, 5)) {
-        0 => if (context.arg_type == .list_u64) try self.writeSymbol(context.arg) else try self.writeListLiteral(context, depth - 1, visible_methods),
+        0 => try self.writeContextSymbolOrElse(.list_u64, context, writeListLiteral, depth - 1, visible_methods),
         1 => if (!try self.writeMethodCall(.list_u64, context, depth - 1, visible_methods)) try self.writeListLiteral(context, depth - 1, visible_methods),
         2 => try self.writeIfExpr(.list_u64, context, depth - 1, visible_methods),
         3 => try self.writeListLiteral(context, depth - 1, visible_methods),
@@ -339,7 +404,7 @@ fn writeListU64Expr(self: *Self, context: ExprContext, depth: u8, visible_method
 
 fn writeTryExpr(self: *Self, context: ExprContext, depth: u8, visible_methods: usize) std.mem.Allocator.Error!void {
     switch (self.reader.intRangeAtMost(u8, 0, 5)) {
-        0 => if (context.arg_type == .try_u64_str) try self.writeSymbol(context.arg) else try self.writeTryLiteral(context, depth - 1, visible_methods),
+        0 => try self.writeContextSymbolOrElse(.try_u64_str, context, writeTryLiteral, depth - 1, visible_methods),
         1 => if (!try self.writeMethodCall(.try_u64_str, context, depth - 1, visible_methods)) try self.writeTryLiteral(context, depth - 1, visible_methods),
         2 => try self.writeIfExpr(.try_u64_str, context, depth - 1, visible_methods),
         3 => try self.writeTryLiteral(context, depth - 1, visible_methods),
@@ -351,7 +416,7 @@ fn writeTryExpr(self: *Self, context: ExprContext, depth: u8, visible_methods: u
 
 fn writeTupleExpr(self: *Self, context: ExprContext, depth: u8, visible_methods: usize) std.mem.Allocator.Error!void {
     switch (self.reader.intRangeAtMost(u8, 0, 4)) {
-        0 => if (context.arg_type == .tuple_bool_u64) try self.writeSymbol(context.arg) else try self.writeTupleLiteral(context, depth - 1, visible_methods),
+        0 => try self.writeContextSymbolOrElse(.tuple_bool_u64, context, writeTupleLiteral, depth - 1, visible_methods),
         1 => if (!try self.writeMethodCall(.tuple_bool_u64, context, depth - 1, visible_methods)) try self.writeTupleLiteral(context, depth - 1, visible_methods),
         2 => try self.writeIfExpr(.tuple_bool_u64, context, depth - 1, visible_methods),
         3 => try self.writeTupleLiteral(context, depth - 1, visible_methods),
@@ -367,7 +432,10 @@ fn writeMethodCall(self: *Self, result_type: Type, context: ExprContext, depth: 
     try self.write(".");
     try self.writeSymbol(method.symbol);
     try self.write("(");
-    try self.writeExpr(method.param_type, context, depth, visible_methods);
+    for (0..method.arity) |index| {
+        if (index > 0) try self.write(", ");
+        try self.writeExpr(method.param_types[index], context, depth, visible_methods);
+    }
     try self.write(")");
     return true;
 }
@@ -421,30 +489,32 @@ fn writeRootMatchExpr(self: *Self, result_type: Type, context: ExprContext, dept
     try self.write("(");
     try self.writeSymbol(u64_payload);
     try self.write(") => ");
-    try self.writeExpr(result_type, .{ .arg = u64_payload, .arg_type = .u64 }, depth, visible_methods);
+    try self.writeExpr(result_type, oneArgContext(u64_payload, .u64), depth, visible_methods);
     try self.write("\n");
     try self.writeIndent(2);
     try self.writeSymbol(self.symbols.tag2);
     try self.write("(");
     try self.writeSymbol(str_payload);
     try self.write(") => ");
-    try self.writeExpr(result_type, .{ .arg = str_payload, .arg_type = .str }, depth, visible_methods);
+    try self.writeExpr(result_type, oneArgContext(str_payload, .str), depth, visible_methods);
     try self.write("\n");
     try self.writeIndent(2);
     try self.writeSymbol(self.symbols.tag3);
     try self.write("(");
     try self.writeSymbol(record_payload);
     try self.write(") => ");
-    try self.writeExpr(result_type, .{ .arg = record_payload, .arg_type = .record }, depth, visible_methods);
+    try self.writeExpr(result_type, oneArgContext(record_payload, .record), depth, visible_methods);
     try self.write("\n");
     try self.writeIndent(1);
     try self.write("}");
 }
 
 fn writeTypedRootScrutinee(self: *Self, context: ExprContext, depth: u8, visible_methods: usize) std.mem.Allocator.Error!void {
-    if (context.arg_type == .root and self.reader.boolean()) {
-        try self.writeSymbol(context.arg);
-        return;
+    if (self.contextSymbol(.root, context)) |arg| {
+        if (self.reader.boolean()) {
+            try self.writeSymbol(arg);
+            return;
+        }
     }
     if (try self.writeMethodCall(.root, context, depth, visible_methods)) return;
     try self.writeRootLiteral(context, depth, visible_methods);
@@ -457,7 +527,7 @@ fn writeListMapExpr(self: *Self, context: ExprContext, depth: u8, visible_method
     try self.write(".map(|");
     try self.writeSymbol(item);
     try self.write("| ");
-    try self.writeExpr(.u64, .{ .arg = item, .arg_type = .u64 }, depth, visible_methods);
+    try self.writeExpr(.u64, oneArgContext(item, .u64), depth, visible_methods);
     try self.write(")");
 }
 
@@ -476,7 +546,7 @@ fn writeListMatchExpr(self: *Self, context: ExprContext, depth: u8, visible_meth
     try self.write("] => ");
     try self.writeSymbol(tail);
     try self.write(".append(");
-    try self.writeExpr(.u64, .{ .arg = head, .arg_type = .u64 }, depth, visible_methods);
+    try self.writeExpr(.u64, oneArgContext(head, .u64), depth, visible_methods);
     try self.write(")\n");
     try self.writeIndent(2);
     try self.write("[] => []\n");
@@ -496,7 +566,7 @@ fn writeListGetExpr(self: *Self, context: ExprContext, depth: u8, visible_method
     try self.write("Ok(");
     try self.writeSymbol(ok_payload);
     try self.write(") => ");
-    try self.writeExpr(.u64, .{ .arg = ok_payload, .arg_type = .u64 }, depth, visible_methods);
+    try self.writeExpr(.u64, oneArgContext(ok_payload, .u64), depth, visible_methods);
     try self.write("\n");
     try self.writeIndent(2);
     try self.write("Err(_) => ");
@@ -532,22 +602,24 @@ fn writeTryMatchExpr(self: *Self, context: ExprContext, depth: u8, visible_metho
     try self.write("Ok(");
     try self.writeSymbol(ok_payload);
     try self.write(") => Ok(");
-    try self.writeExpr(.u64, .{ .arg = ok_payload, .arg_type = .u64 }, depth, visible_methods);
+    try self.writeExpr(.u64, oneArgContext(ok_payload, .u64), depth, visible_methods);
     try self.write(")\n");
     try self.writeIndent(2);
     try self.write("Err(");
     try self.writeSymbol(err_payload);
     try self.write(") => Err(");
-    try self.writeExpr(.str, .{ .arg = err_payload, .arg_type = .str }, depth, visible_methods);
+    try self.writeExpr(.str, oneArgContext(err_payload, .str), depth, visible_methods);
     try self.write(")\n");
     try self.writeIndent(1);
     try self.write("}");
 }
 
 fn writeTypedTryScrutinee(self: *Self, context: ExprContext, depth: u8, visible_methods: usize) std.mem.Allocator.Error!void {
-    if (context.arg_type == .try_u64_str and self.reader.boolean()) {
-        try self.writeSymbol(context.arg);
-        return;
+    if (self.contextSymbol(.try_u64_str, context)) |arg| {
+        if (self.reader.boolean()) {
+            try self.writeSymbol(arg);
+            return;
+        }
     }
     if (try self.writeMethodCall(.try_u64_str, context, depth, visible_methods)) return;
     try self.writeTryLiteral(context, depth, visible_methods);
@@ -555,14 +627,14 @@ fn writeTypedTryScrutinee(self: *Self, context: ExprContext, depth: u8, visible_
 
 fn writeLiteral(self: *Self, typ: Type) std.mem.Allocator.Error!void {
     switch (typ) {
-        .root => try self.writeRootLiteral(.{ .arg = self.symbols.tag0, .arg_type = .root }, 0, self.method_count),
+        .root => try self.writeRootLiteral(emptyContext(), 0, self.method_count),
         .bool => try self.writeBoolLiteral(),
         .str => try self.writeStringLiteral(),
         .u64 => try self.writeU64Literal(),
-        .record => try self.writeRecordLiteral(.{ .arg = self.symbols.tag0, .arg_type = .root }, 0, self.method_count),
-        .list_u64 => try self.writeListLiteral(.{ .arg = self.symbols.tag0, .arg_type = .root }, 0, self.method_count),
-        .try_u64_str => try self.writeTryLiteral(.{ .arg = self.symbols.tag0, .arg_type = .root }, 0, self.method_count),
-        .tuple_bool_u64 => try self.writeTupleLiteral(.{ .arg = self.symbols.tag0, .arg_type = .root }, 0, self.method_count),
+        .record => try self.writeRecordLiteral(emptyContext(), 0, self.method_count),
+        .list_u64 => try self.writeListLiteral(emptyContext(), 0, self.method_count),
+        .try_u64_str => try self.writeTryLiteral(emptyContext(), 0, self.method_count),
+        .tuple_bool_u64 => try self.writeTupleLiteral(emptyContext(), 0, self.method_count),
     }
 }
 
