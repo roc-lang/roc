@@ -185,6 +185,11 @@ checking_call_arg: bool = false,
 /// treatment of a variable binding. Deliberately NOT set for mutable `var`
 /// bindings, which must never generalize.
 checking_binding_rhs: bool = false,
+/// Nonzero while checking source that constructs a compile-time value. Static
+/// exhaustiveness diagnostics under this depth are empirical candidates: the
+/// compile-time finalizer either observes them executing, reports their generated
+/// miss path, or discards them if the source was not reached.
+empirical_exhaustiveness_depth: u32 = 0,
 /// Deferred def-level unifications (def_var = ptrn_var = expr_var).
 /// These must happen AFTER generalization to avoid lowering expr_var's rank
 /// before generalization can process it, but BEFORE eql constraint resolution
@@ -3461,6 +3466,9 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
         }
     };
 
+    self.empirical_exhaustiveness_depth += 1;
+    defer self.empirical_exhaustiveness_depth -= 1;
+
     // Infer types for the body, checking against the instantiated annotation
     self.checking_binding_rhs = true;
     const def_does_fx = try self.checkExpr(def.expr, env, expectation);
@@ -6456,6 +6464,10 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
             // Check the the body of the expr
             // If we have an expected function, use that as the expr's expected type
+            const saved_empirical_exhaustiveness_depth = self.empirical_exhaustiveness_depth;
+            self.empirical_exhaustiveness_depth = 0;
+            defer self.empirical_exhaustiveness_depth = saved_empirical_exhaustiveness_depth;
+
             const body_does_fx = if (mb_anno_func) |expected_func| blk: {
                 const lambda_body_does_fx = try self.checkExpr(lambda.body, env, Expected.none().withBranchResult(expected_func.ret));
                 try self.closeAbsentConstructedPayloadVars(lambda.body, body_var);
@@ -7837,6 +7849,10 @@ fn closeAbsentConstructedPayloadVars(
     }
 }
 
+fn pendingExhaustivenessMode(self: *const Self) ProblemStore.PendingStaticExhaustivenessMode {
+    return if (self.empirical_exhaustiveness_depth == 0) .static else .empirical;
+}
+
 fn checkDestructureExhaustiveness(
     self: *Self,
     pattern_idx: CIR.Pattern.Idx,
@@ -7887,7 +7903,7 @@ fn checkDestructureExhaustiveness(
             .count = self.problems.missing_patterns_backing.items.len - missing_patterns_start,
         };
 
-        _ = try self.problems.appendProblem(self.gpa, .{ .non_exhaustive_destructure = .{
+        try self.problems.appendPendingStaticExhaustiveness(self.gpa, .destructure, self.pendingExhaustivenessMode(), region, .{ .non_exhaustive_destructure = .{
             .pattern = pattern_idx,
             .value_snapshot = value_snapshot,
             .missing_patterns = missing_patterns_range,
@@ -8645,7 +8661,7 @@ fn checkMatchExpr(
                 .count = self.problems.missing_patterns_backing.items.len - missing_patterns_start,
             };
 
-            _ = try self.problems.appendProblem(self.gpa, .{ .non_exhaustive_match = .{
+            try self.problems.appendPendingStaticExhaustiveness(self.gpa, .match, self.pendingExhaustivenessMode(), match_region, .{ .non_exhaustive_match = .{
                 .match_expr = expr_idx,
                 .condition_snapshot = condition_snapshot,
                 .missing_patterns = missing_patterns_range,
