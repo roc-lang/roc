@@ -8,6 +8,7 @@ const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 const testing = std.testing;
 const base = @import("base");
+const collections = @import("collections");
 const parse = @import("parse");
 const NumericLiteral = parse.NumericLiteral;
 const types = @import("types");
@@ -1980,7 +1981,7 @@ fn registerTypeDecl(
     // Exposed type names must resolve to the canonical type-decl statement idx
     // so importing modules consume an explicit exported-binding fact.
     if (self.exposed_types.contains(type_header.name)) {
-        try self.env.setExposedNodeIndexById(type_header.name, node_idx_u32);
+        try self.env.setExposedTypeNodeIndexById(type_header.name, node_idx_u32);
     }
 
     // For type modules, associate the node index with the exposed type.
@@ -1989,7 +1990,7 @@ fn registerTypeDecl(
     if (self.env.module_kind == .type_module) {
         if (qualified_name_idx.eql(self.env.display_module_name_idx)) {
             // This is the main type of the type module - set its node index
-            try self.env.setExposedNodeIndexById(qualified_name_idx, node_idx_u32);
+            try self.env.setExposedTypeNodeIndexById(qualified_name_idx, node_idx_u32);
         }
     }
 
@@ -2892,7 +2893,7 @@ fn finishAssociatedDeclBody(
 
     const def_idx_u32: u32 = @intFromEnum(associated_def.def_idx);
     if (state.owner_is_module_visible) {
-        try self.env.setExposedNodeIndexById(work.qualified_ident, def_idx_u32);
+        try self.env.setExposedValueNodeIndexById(work.qualified_ident, def_idx_u32);
     }
     try self.registerAssociatedMethodIdent(state.work.owner_stmt_idx, work.decl_ident, work.qualified_ident, method_binding);
 
@@ -2963,7 +2964,7 @@ fn registerNestedTypeDecl(
     );
 
     const node_idx_u32: u32 = @intFromEnum(nested_type_decl_idx);
-    try self.env.setExposedNodeIndexById(nested_qualified_idx, node_idx_u32);
+    try self.env.setExposedTypeNodeIndexById(nested_qualified_idx, node_idx_u32);
 
     const current_scope = &self.scopes.items[self.scopes.items.len - 1];
     try current_scope.introduceTypeAlias(self.env.gpa, nested_type_ident, nested_type_decl_idx);
@@ -3373,7 +3374,7 @@ fn canonicalizeAssociatedItems(
                         try self.createAnnoOnlyDef(qualified_idx, type_anno_idx, where_clauses, region);
 
                     if (owner_is_module_visible) {
-                        try self.env.setExposedNodeIndexById(qualified_idx, @intFromEnum(def_idx));
+                        try self.env.setExposedValueNodeIndexById(qualified_idx, @intFromEnum(def_idx));
                     }
                     const method_binding = try self.recordAssociatedValue(
                         AssociatedValueDef{ .def_idx = def_idx, .free_vars = DataSpan.empty() },
@@ -3395,7 +3396,7 @@ fn canonicalizeAssociatedItems(
                         qualified_idx
                     else blk_atq: {
                         // Re-fetch the ident texts here — earlier calls
-                        // (createAnnoOnlyDef, setExposedNodeIndexById, …) may
+                        // (createAnnoOnlyDef, setExposedValueNodeIndexById, …) may
                         // have grown the interner and invalidated the slices
                         // captured before this point.
                         const type_text_now = self.env.getIdent(type_name);
@@ -3855,7 +3856,7 @@ pub fn canonicalizeFile(
                                 const ident_text = self.env.getIdent(name_ident);
                                 if (self.exposed_ident_texts.contains(ident_text)) {
                                     const def_idx_u32: u32 = @intFromEnum(def_idx);
-                                    try self.env.setExposedNodeIndexById(name_ident, def_idx_u32);
+                                    try self.env.setExposedValueNodeIndexById(name_ident, def_idx_u32);
                                 }
                             }
                         },
@@ -3870,7 +3871,7 @@ pub fn canonicalizeFile(
                             const ident_text = self.env.getIdent(name_ident);
                             if (self.exposed_ident_texts.contains(ident_text)) {
                                 const def_idx_u32: u32 = @intFromEnum(def_idx);
-                                try self.env.setExposedNodeIndexById(name_ident, def_idx_u32);
+                                try self.env.setExposedValueNodeIndexById(name_ident, def_idx_u32);
                             }
                         },
                     }
@@ -3888,7 +3889,7 @@ pub fn canonicalizeFile(
                     const ident_text = self.env.getIdent(name_ident);
                     if (self.exposed_ident_texts.contains(ident_text)) {
                         const def_idx_u32: u32 = @intFromEnum(def_idx);
-                        try self.env.setExposedNodeIndexById(name_ident, def_idx_u32);
+                        try self.env.setExposedValueNodeIndexById(name_ident, def_idx_u32);
                     }
                 }
             },
@@ -4316,7 +4317,7 @@ fn canonicalizeStmtDecl(
         if (self.exposed_ident_texts.contains(ident_text) or is_associated_item) {
             // Store the def index as u16 in exposed_items
             const def_idx_u32: u32 = @intFromEnum(def_idx);
-            try self.env.setExposedNodeIndexById(idx, def_idx_u32);
+            try self.env.setExposedValueNodeIndexById(idx, def_idx_u32);
         }
 
         _ = self.exposed_ident_texts.remove(ident_text);
@@ -5018,7 +5019,8 @@ fn checkExposedTypeSurfaces(self: *Self) std.mem.Allocator.Error!void {
 
     var exposed_iter = self.env.common.exposed_items.iterator();
     while (exposed_iter.next()) |entry| {
-        const stmt_idx = self.exposedTypeDeclStatementIdx(entry.node_idx) orelse continue;
+        const node_idx = entry.target.typeDeclNode() orelse continue;
+        const stmt_idx = self.exposedTypeDeclStatementIdx(node_idx) orelse continue;
         const header = self.typeDeclHeader(stmt_idx) orelse continue;
         if (!self.typeIsAtOrUnderPublicRoot(header.relative_name, public_roots.items)) continue;
 
@@ -5030,7 +5032,8 @@ fn checkExposedTypeSurfaces(self: *Self) std.mem.Allocator.Error!void {
 
     exposed_iter = self.env.common.exposed_items.iterator();
     while (exposed_iter.next()) |entry| {
-        const stmt_idx = self.exposedTypeDeclStatementIdx(entry.node_idx) orelse continue;
+        const node_idx = entry.target.typeDeclNode() orelse continue;
+        const stmt_idx = self.exposedTypeDeclStatementIdx(node_idx) orelse continue;
         if (!public_type_decls.contains(stmt_idx)) continue;
 
         try self.checkPublicNominalStatementSurface(
@@ -5069,7 +5072,7 @@ fn addPublicTypeRoot(
     public_type_decls: *std.AutoHashMapUnmanaged(Statement.Idx, void),
 ) std.mem.Allocator.Error!void {
     const stmt_idx = blk: {
-        if (self.env.getExposedNodeIndexById(type_name)) |node_idx| {
+        if (self.env.getExposedTypeNodeIndexById(type_name)) |node_idx| {
             if (self.exposedTypeDeclStatementIdx(node_idx)) |stmt_idx| break :blk stmt_idx;
         }
         break :blk (try self.scopeLookupTypeDecl(type_name)) orelse return;
@@ -5086,7 +5089,7 @@ fn addPublicTypeRoot(
 }
 
 fn exposedTypeDeclStatementIdx(self: *Self, node_idx_u32: u32) ?Statement.Idx {
-    if (node_idx_u32 == 0 or node_idx_u32 >= self.env.store.nodes.len()) return null;
+    if (node_idx_u32 >= self.env.store.nodes.len()) return null;
 
     const node_idx: Node.Idx = @enumFromInt(node_idx_u32);
     return switch (self.env.store.nodes.get(node_idx).tag) {
@@ -5831,14 +5834,8 @@ fn introduceItemsAliased(
                 if (module_env.containsExposedById(main_type_ident)) {
                     const original_type_name = module_env.getIdent(main_type_ident);
                     const original_ident = try self.env.insertIdent(base.Ident.for_text(original_type_name));
-                    const item_info = Scope.ExposedItemInfo{
-                        .module_name = module_name,
-                        .original_name = original_ident,
-                    };
-                    try self.scopeIntroduceExposedItem(module_alias, item_info, import_region);
 
-                    // Get the correct target_node_idx using statement_idx from module_envs
-                    const target_node_idx = blk: {
+                    const maybe_target_node_idx = blk: {
                         // Use the already-captured envs_map from the outer scope
                         if (envs_map.get(module_name)) |auto_imported| {
                             if (auto_imported.statement_idx) |stmt_idx| {
@@ -5848,20 +5845,29 @@ fn introduceItemsAliased(
                             }
                         }
                         // If we can't find it via statement_idx, look it up by ident.
-                        break :blk module_env.getExposedNodeIndexById(main_type_ident);
+                        break :blk module_env.getExposedTypeNodeIndexById(main_type_ident);
                     };
 
-                    try self.setExternalTypeBinding(
-                        current_scope,
-                        module_alias,
-                        module_name,
-                        original_ident,
-                        original_type_name,
-                        target_node_idx,
-                        module_import_idx,
-                        import_region,
-                        .module_was_found,
-                    );
+                    if (maybe_target_node_idx) |target_node_idx| {
+                        const item_info = Scope.ExposedItemInfo{
+                            .module_name = module_name,
+                            .original_name = original_ident,
+                            .target = collections.ExposedItemTarget.typeDecl(target_node_idx),
+                        };
+                        try self.scopeIntroduceExposedItem(module_alias, item_info, import_region);
+
+                        try self.setExternalTypeBinding(
+                            current_scope,
+                            module_alias,
+                            module_name,
+                            original_ident,
+                            original_type_name,
+                            target_node_idx,
+                            module_import_idx,
+                            import_region,
+                            .module_was_found,
+                        );
+                    }
                 }
             },
             else => {},
@@ -5871,33 +5877,47 @@ fn introduceItemsAliased(
         for (exposed_items_slice) |exposed_item_idx| {
             const exposed_item = self.env.store.getExposedItem(exposed_item_idx);
             const item_name_text = self.env.getIdent(exposed_item.name);
+            const is_type_name = item_name_text.len > 0 and item_name_text[0] >= 'A' and item_name_text[0] <= 'Z';
 
             // Check if the item is exposed by the module. The identifiers are
             // from different modules, so look up by string. A type module's
             // associated items are exposed under `<MainType>.<item>`, which
-            // lookupImportedExposedNode resolves in addition to the bare name.
-            const is_exposed = (try self.lookupImportedExposedNode(module_env, item_name_text)) != null;
-
-            if (!is_exposed) {
-                // Determine if it's a type or value based on capitalization
-                const first_char = item_name_text[0];
-
-                if (first_char >= 'A' and first_char <= 'Z') {
-                    // Type not exposed
+            // lookupImportedExposedTarget resolves in addition to the bare name.
+            const target = (try self.lookupImportedExposedTarget(module_env, item_name_text)) orelse {
+                if (is_type_name) {
                     try self.env.pushDiagnostic(Diagnostic{ .type_not_exposed = .{
                         .module_name = module_name,
                         .type_name = exposed_item.name,
                         .region = import_region,
                     } });
                 } else {
-                    // Value not exposed
                     try self.env.pushDiagnostic(Diagnostic{ .value_not_exposed = .{
                         .module_name = module_name,
                         .value_name = exposed_item.name,
                         .region = import_region,
                     } });
                 }
-                continue; // Skip introducing this item to scope
+                continue;
+            };
+
+            if (is_type_name) {
+                if (target.typeDeclNode() == null) {
+                    try self.env.pushDiagnostic(Diagnostic{ .type_not_exposed = .{
+                        .module_name = module_name,
+                        .type_name = exposed_item.name,
+                        .region = import_region,
+                    } });
+                    continue;
+                }
+            } else {
+                if (target.valueDefNode() == null) {
+                    try self.env.pushDiagnostic(Diagnostic{ .value_not_exposed = .{
+                        .module_name = module_name,
+                        .value_name = exposed_item.name,
+                        .region = import_region,
+                    } });
+                    continue;
+                }
             }
 
             // Item is valid, introduce it to scope
@@ -5905,6 +5925,7 @@ fn introduceItemsAliased(
             const item_info = Scope.ExposedItemInfo{
                 .module_name = module_name,
                 .original_name = exposed_item.name,
+                .target = target,
             };
             try self.scopeIntroduceExposedItem(item_name, item_info, import_region);
         }
@@ -5916,6 +5937,7 @@ fn introduceItemsAliased(
             const item_info = Scope.ExposedItemInfo{
                 .module_name = module_name,
                 .original_name = exposed_item.name,
+                .target = null,
             };
             try self.scopeIntroduceExposedItem(item_name, item_info, import_region);
         }
@@ -5974,12 +5996,35 @@ fn introduceItemsUnaliased(
             const is_type_name = local_name_text.len > 0 and local_name_text[0] >= 'A' and local_name_text[0] <= 'Z';
 
             // A type module's associated items are exposed under
-            // `<MainType>.<item>`; lookupImportedExposedNode resolves both that
+            // `<MainType>.<item>`; lookupImportedExposedTarget resolves both that
             // qualified form and the bare module-style name.
-            if (try self.lookupImportedExposedNode(module_env, item_name_text)) |target_node_idx| {
+            if (try self.lookupImportedExposedTarget(module_env, item_name_text)) |target| {
+                const target_node_idx = if (is_type_name)
+                    target.typeDeclNode()
+                else
+                    target.valueDefNode();
+
+                if (target_node_idx == null) {
+                    if (is_type_name) {
+                        try self.env.pushDiagnostic(Diagnostic{ .type_not_exposed = .{
+                            .module_name = module_name,
+                            .type_name = exposed_item.name,
+                            .region = import_region,
+                        } });
+                    } else {
+                        try self.env.pushDiagnostic(Diagnostic{ .value_not_exposed = .{
+                            .module_name = module_name,
+                            .value_name = exposed_item.name,
+                            .region = import_region,
+                        } });
+                    }
+                    continue;
+                }
+
                 const item_info = Scope.ExposedItemInfo{
                     .module_name = module_name,
                     .original_name = exposed_item.name,
+                    .target = target,
                 };
                 try self.scopeIntroduceExposedItem(local_ident, item_info, import_region);
 
@@ -5993,7 +6038,7 @@ fn introduceItemsUnaliased(
                         module_name,
                         exposed_item.name,
                         original_type_name,
-                        target_node_idx,
+                        target_node_idx.?,
                         module_import_idx,
                         import_region,
                         .module_was_found,
@@ -6021,6 +6066,7 @@ fn introduceItemsUnaliased(
             const item_info = Scope.ExposedItemInfo{
                 .module_name = module_name,
                 .original_name = exposed_item.name,
+                .target = null,
             };
             try self.scopeIntroduceExposedItem(local_ident, item_info, import_region);
 
@@ -6571,7 +6617,7 @@ fn canonicalizeTypeAssociatedLookup(
             const qualified_text = self.env.getIdent(fully_qualified_idx);
 
             if (module_env.common.findIdent(qualified_text)) |qname_ident| {
-                if (module_env.getExposedNodeIndexById(qname_ident)) |target_node_idx| {
+                if (module_env.getExposedValueNodeIndexById(qname_ident)) |target_node_idx| {
                     const import_idx = if (autoImportedTypeUsesCompilerBuiltinImport(auto_imported_type_env))
                         try self.getOrCreateCompilerBuiltinAutoImport()
                     else blk_import: {
@@ -6663,7 +6709,7 @@ fn canonicalizeModuleQualifiedIdent(
         };
 
         const qname_ident = module_env.common.findIdent(lookup_name) orelse break :blk null;
-        break :blk module_env.getExposedNodeIndexById(qname_ident);
+        break :blk module_env.getExposedValueNodeIndexById(qname_ident);
     } else null;
 
     const target_node_idx = target_node_idx_opt orelse {
@@ -6724,10 +6770,12 @@ fn canonicalizeUnqualifiedIdentExpr(
         .not_found => {
             if (self.scopeLookupExposedItem(ident)) |exposed_info| {
                 const import_idx = self.scopeLookupImportedModule(exposed_info.module_name) orelse unreachable;
-                const field_text = self.env.getIdent(exposed_info.original_name);
-                const target_node_idx_opt: ?u32 = blk: {
+                const target_node_idx_opt: ?u32 = if (exposed_info.target) |target|
+                    target.valueDefNode()
+                else blk: {
+                    const field_text = self.env.getIdent(exposed_info.original_name);
                     if (self.lookupAvailableModuleEnv(exposed_info.module_name)) |auto_imported_type| {
-                        break :blk try self.lookupImportedExposedNode(auto_imported_type.env, field_text);
+                        break :blk try self.lookupImportedExposedValueNode(auto_imported_type.env, field_text);
                     }
                     break :blk null;
                 };
@@ -11509,7 +11557,7 @@ fn resolveRecordBuilderExternalMap2(
         const qualified_map2_name = try self.insertQualifiedIdent(qualified_type_text, map2_text);
         const qualified_map2_text = self.env.getIdent(qualified_map2_name);
         const imported_ident = imported_type.env.common.findIdent(qualified_map2_text) orelse return null;
-        const target_node_idx = imported_type.env.getExposedNodeIndexById(imported_ident) orelse return null;
+        const target_node_idx = imported_type.env.getExposedValueNodeIndexById(imported_ident) orelse return null;
 
         return RecordBuilderMap2{ .external = .{
             .module_idx = import_idx,
@@ -11518,7 +11566,7 @@ fn resolveRecordBuilderExternalMap2(
         } };
     }
 
-    const target_node_idx = (try self.lookupImportedExposedNode(imported_type.env, map2_text)) orelse return null;
+    const target_node_idx = (try self.lookupImportedExposedValueNode(imported_type.env, map2_text)) orelse return null;
     return RecordBuilderMap2{ .external = .{
         .module_idx = import_idx,
         .target_node_idx = target_node_idx,
@@ -11847,36 +11895,53 @@ fn validateImportedNominalTagTarget(
     }
 }
 
-/// Resolve the exposed-node index for an item exposed by `imported_env`,
+/// Resolve the explicit target for an item exposed by `imported_env`,
 /// handling both module-style exposure (the item is exposed under its bare
 /// name) and type-module associated items (exposed under `<MainType>.<item>`,
-/// since the module's main type name equals its module name). Used for both
-/// exposed types and exposed values.
-fn lookupImportedExposedNode(
+/// since the module's main type name equals its module name).
+fn lookupImportedExposedTarget(
     self: *Self,
     imported_env: *const ModuleEnv,
     item_text: []const u8,
-) std.mem.Allocator.Error!?u32 {
+) std.mem.Allocator.Error!?collections.ExposedItemTarget {
     const module_name_text = imported_env.module_name;
     const scratch_top = self.scratchBytesTop();
     defer self.clearScratchBytesFrom(scratch_top);
     const module_qualified_text = try self.scratchQualifiedText(module_name_text, item_text);
-    const module_qualified_node_idx = lookupExposedNodeByText(imported_env, module_qualified_text);
+    const module_qualified_target = lookupExposedTargetByText(imported_env, module_qualified_text);
 
-    if (module_qualified_node_idx) |target_node_idx| {
-        return target_node_idx;
+    if (module_qualified_target) |target| {
+        return target;
     }
 
-    return lookupExposedNodeByText(imported_env, item_text);
+    return lookupExposedTargetByText(imported_env, item_text);
 }
 
-fn lookupExposedNodeByText(
+fn lookupImportedExposedValueNode(
+    self: *Self,
+    imported_env: *const ModuleEnv,
+    item_text: []const u8,
+) std.mem.Allocator.Error!?u32 {
+    const target = (try self.lookupImportedExposedTarget(imported_env, item_text)) orelse return null;
+    return target.valueDefNode();
+}
+
+fn lookupImportedExposedTypeNode(
+    self: *Self,
+    imported_env: *const ModuleEnv,
+    item_text: []const u8,
+) std.mem.Allocator.Error!?u32 {
+    const target = (try self.lookupImportedExposedTarget(imported_env, item_text)) orelse return null;
+    return target.typeDeclNode();
+}
+
+fn lookupExposedTargetByText(
     imported_env: *const ModuleEnv,
     type_text: []const u8,
-) ?u32 {
+) ?collections.ExposedItemTarget {
     if (imported_env.common.findIdent(type_text)) |qualified_ident| {
-        if (imported_env.getExposedNodeIndexById(qualified_ident)) |target_node_idx| {
-            return target_node_idx;
+        if (imported_env.getExposedTargetById(qualified_ident)) |target| {
+            return target;
         }
     }
 
@@ -12025,15 +12090,17 @@ fn finishTagExprWithArgs(
                 } }), .free_vars = DataSpan.empty() };
             };
             const target_node_idx = blk: {
-                const original_name_text = self.env.getIdent(exposed_info.original_name);
-                break :blk (try self.lookupImportedExposedNode(imported_type.env, original_name_text)) orelse {
-                    // Type is not exposed by the imported module
-                    return CanonicalizedExpr{ .idx = try self.env.pushMalformed(Expr.Idx, CIR.Diagnostic{ .type_not_exposed = .{
-                        .module_name = module_name,
-                        .type_name = type_tok_ident,
-                        .region = type_tok_region,
-                    } }), .free_vars = DataSpan.empty() };
-                };
+                if (exposed_info.target) |target| {
+                    if (target.typeDeclNode()) |node_idx| break :blk node_idx;
+                } else {
+                    const original_name_text = self.env.getIdent(exposed_info.original_name);
+                    if (try self.lookupImportedExposedTypeNode(imported_type.env, original_name_text)) |node_idx| break :blk node_idx;
+                }
+                return CanonicalizedExpr{ .idx = try self.env.pushMalformed(Expr.Idx, CIR.Diagnostic{ .type_not_exposed = .{
+                    .module_name = module_name,
+                    .type_name = type_tok_ident,
+                    .region = type_tok_region,
+                } }), .free_vars = DataSpan.empty() };
             };
 
             if (try self.validateImportedNominalTagTarget(Expr.Idx, imported_type.env, target_node_idx, module_name, type_tok_ident, type_tok_region)) |malformed_idx| {
@@ -12085,7 +12152,7 @@ fn finishTagExprWithArgs(
             };
 
             const tag_text = self.env.getIdent(tag_name);
-            const target_node_idx = (try self.lookupImportedExposedNode(imported_type.env, tag_text)) orelse {
+            const target_node_idx = (try self.lookupImportedExposedTypeNode(imported_type.env, tag_text)) orelse {
                 return CanonicalizedExpr{ .idx = try self.env.pushMalformed(Expr.Idx, CIR.Diagnostic{ .type_not_exposed = .{
                     .module_name = module_name,
                     .type_name = tag_name,
@@ -12236,7 +12303,7 @@ fn finishTagExprWithArgs(
 
         // Look up the target node index in the imported file's exposed_nodes
         const target_node_idx = blk: {
-            const other_module_node_id = (try self.lookupImportedExposedNode(imported_type.env, type_name)) orelse {
+            const other_module_node_id = (try self.lookupImportedExposedTypeNode(imported_type.env, type_name)) orelse {
                 // Type is not exposed by the imported file
                 return CanonicalizedExpr{ .idx = try self.env.pushMalformed(Expr.Idx, CIR.Diagnostic{ .type_not_exposed = .{
                     .module_name = module_name,
@@ -12358,25 +12425,24 @@ fn processEscapeSequences(allocator: std.mem.Allocator, input: []const u8) std.m
     return result.toOwnedSlice(allocator);
 }
 
-/// Helper function to create a string literal expression and add it to the scratch stack
-/// Desugar an interpolated string literal into ordinary CIR:
+/// Canonicalize an interpolated string literal.
 ///
 /// ```roc
 /// "a${x}b${y}c"
 /// ```
-/// becomes
+/// becomes a block which evaluates interpolated expressions in source order and
+/// finishes with a result-owned interpolation dispatch:
 /// ```roc
 /// {
 ///     #interp_0 = x
 ///     #interp_1 = y
-///     "a".from_interpolation([].iter().prepended((#interp_1, "c")).prepended((#interp_0, "b")))
+///     <interpolation first="a" rest=[].iter().prepended((#interp_1, "c")).prepended((#interp_0, "b"))>
 /// }
 /// ```
 /// The interpolated expressions bind to locals first so they evaluate in
 /// source order; the iterator yields each interpolated value paired with the
-/// literal segment that follows it. Every literal segment stays a real string
-/// literal expression, so each converts through `from_quote` like any other,
-/// and the receiver's type suffix (when present) pins the target type.
+/// literal `Str` segment that follows it. With a type suffix, the final
+/// expression is a direct call to `Suffix.from_interpolation(first, rest)`.
 fn desugarInterpolatedString(
     self: *Self,
     span: CIR.Expr.Span,
@@ -12441,7 +12507,8 @@ fn desugarInterpolatedString(
     }
     const stmts_span = try self.env.store.statementSpanFrom(stmts_top);
 
-    // Wrap each literal segment in its own string expression.
+    // Interpolation segments are always builtin Str, so keep them as raw
+    // string-segment expressions instead of wrapping them in quote literals.
     const seg_exprs = try gpa.alloc(Expr.Idx, segments.items.len);
     defer gpa.free(seg_exprs);
     for (segments.items, 0..) |maybe_segment, i| {
@@ -12451,18 +12518,7 @@ fn desugarInterpolatedString(
                 .literal = empty_literal,
             } }, region);
         };
-        const seg_region = self.env.store.getNodeRegion(ModuleEnv.nodeIdxFrom(segment_idx));
-        const seg_scratch_top = self.env.store.scratchExprTop();
-        try self.env.store.addScratchExpr(segment_idx);
-        const seg_span = try self.env.store.exprSpanFrom(seg_scratch_top);
-        seg_exprs[i] = try self.env.addExpr(CIR.Expr{ .e_str = .{
-            .span = seg_span,
-        } }, seg_region);
-    }
-
-    // The receiver's type suffix (e.g. `"a${x}b".MyType`) pins the target type.
-    if (type_ident) |suffix_ident| {
-        try self.recordTypedNumericSuffix(seg_exprs[0], suffix_ident);
+        seg_exprs[i] = segment_idx;
     }
 
     const iter_method = try self.env.insertIdent(Ident.for_text("iter"));
@@ -12472,6 +12528,8 @@ fn desugarInterpolatedString(
     // [].iter()
     const empty_list_idx = try self.env.addExpr(CIR.Expr{ .e_empty_list = .{} }, region);
     var chain_idx = try self.addSyntheticMethodCall(empty_list_idx, iter_method, &.{}, region);
+    const part_exprs = try gpa.alloc(Expr.Idx, interps.items.len * 2);
+    defer gpa.free(part_exprs);
 
     // Prepend (interpolation, following-segment) pairs back to front so the
     // iterator yields them in source order.
@@ -12482,6 +12540,8 @@ fn desugarInterpolatedString(
         const tmp_lookup_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{
             .pattern_idx = tmp_patterns[pair_i],
         } }, interp_region);
+        part_exprs[pair_i * 2] = tmp_lookup_idx;
+        part_exprs[pair_i * 2 + 1] = seg_exprs[pair_i + 1];
         const elems_top = self.env.store.scratchExprTop();
         try self.env.store.addScratchExpr(tmp_lookup_idx);
         try self.env.store.addScratchExpr(seg_exprs[pair_i + 1]);
@@ -12491,13 +12551,35 @@ fn desugarInterpolatedString(
         } }, interp_region);
         chain_idx = try self.addSyntheticMethodCall(chain_idx, prepended_method, &.{pair_idx}, interp_region);
     }
+    const parts_span = try self.env.store.appendExprSpan(part_exprs);
 
-    const call_idx = try self.addSyntheticMethodCall(seg_exprs[0], from_interpolation_method, &.{chain_idx}, region);
-    try self.env.recordInterpolationCallNode(ModuleEnv.nodeIdxFrom(call_idx));
+    const final_idx = if (type_ident) |suffix_ident| suffix_blk: {
+        const fn_expr = try self.canonicalizeTypeAssociatedLookup(suffix_ident, from_interpolation_method, region) orelse
+            try self.canonicalizedMalformedExpr(Diagnostic{ .undeclared_type = .{
+                .name = suffix_ident,
+                .region = region,
+            } });
+
+        const args_top = self.env.store.scratchExprTop();
+        try self.env.store.addScratchExpr(seg_exprs[0]);
+        try self.env.store.addScratchExpr(chain_idx);
+        const args_span = try self.env.store.exprSpanFrom(args_top);
+
+        break :suffix_blk try self.env.addExpr(CIR.Expr{ .e_call = .{
+            .func = fn_expr.idx,
+            .args = args_span,
+            .called_via = CalledVia.apply,
+        } }, region);
+    } else try self.env.addExpr(CIR.Expr{ .e_interpolation = .{
+        .first = seg_exprs[0],
+        .parts = parts_span,
+        .rest = chain_idx,
+        .method_name_region = region,
+    } }, region);
 
     return try self.env.addExpr(CIR.Expr{ .e_block = .{
         .stmts = stmts_span,
-        .final_expr = call_idx,
+        .final_expr = final_idx,
     } }, region);
 }
 
@@ -12679,7 +12761,7 @@ fn finishTagPattern(
                 } });
             };
 
-            const other_module_node_id = (try self.lookupImportedExposedNode(auto_imported_type.env, type_name)) orelse {
+            const other_module_node_id = (try self.lookupImportedExposedTypeNode(auto_imported_type.env, type_name)) orelse {
                 return try self.env.pushMalformed(Pattern.Idx, CIR.Diagnostic{ .type_not_exposed = .{
                     .module_name = module_name,
                     .type_name = type_name_ident,
@@ -16166,9 +16248,13 @@ fn canonicalizeTypeAnnoBasicType(
                     // Get the node index from the imported module
                     if (self.lookupAvailableModuleEnv(exposed_info.module_name)) |auto_imported_type| {
                         // Convert identifier from current module to target module's interner
-                        const original_name_text = self.env.getIdent(exposed_info.original_name);
-                        const target_node_idx = (try self.lookupImportedExposedNode(auto_imported_type.env, original_name_text)) orelse {
-                            // Type is not exposed by the imported module
+                        const target_node_idx = blk: {
+                            if (exposed_info.target) |target| {
+                                if (target.typeDeclNode()) |node_idx| break :blk node_idx;
+                            } else {
+                                const original_name_text = self.env.getIdent(exposed_info.original_name);
+                                if (try self.lookupImportedExposedTypeNode(auto_imported_type.env, original_name_text)) |node_idx| break :blk node_idx;
+                            }
                             return try self.env.pushMalformed(TypeAnno.Idx, CIR.Diagnostic{ .type_not_exposed = .{
                                 .module_name = exposed_info.module_name,
                                 .type_name = type_name_ident,
@@ -16256,7 +16342,7 @@ fn canonicalizeTypeAnnoBasicType(
                 } });
             };
 
-            const target_node_idx = (try self.lookupImportedExposedNode(imported_type.env, type_path_text)) orelse {
+            const target_node_idx = (try self.lookupImportedExposedTypeNode(imported_type.env, type_path_text)) orelse {
                 return try self.env.pushMalformed(TypeAnno.Idx, CIR.Diagnostic{ .type_not_exposed = .{
                     .module_name = module_name,
                     .type_name = type_path_ident,
@@ -16322,7 +16408,7 @@ fn canonicalizeTypeAnnoBasicType(
                 } });
             };
 
-            const other_module_node_id = (try self.lookupImportedExposedNode(auto_imported_type.env, type_name_text)) orelse {
+            const other_module_node_id = (try self.lookupImportedExposedTypeNode(auto_imported_type.env, type_name_text)) orelse {
                 // Type is not exposed by the module
                 return try self.env.pushMalformed(TypeAnno.Idx, CIR.Diagnostic{ .type_not_exposed = .{
                     .module_name = module_name,
@@ -17881,7 +17967,7 @@ fn prepareModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Al
                 const qualified_text = self.env.getIdent(qualified_method_name);
 
                 if (module_env.common.findIdent(qualified_text)) |method_ident_idx| {
-                    if (module_env.getExposedNodeIndexById(method_ident_idx)) |method_node_idx| {
+                    if (module_env.getExposedValueNodeIndexById(method_ident_idx)) |method_node_idx| {
                         const func_expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_external = .{
                             .module_idx = auto_import_idx,
                             .target_node_idx = method_node_idx,
@@ -17907,7 +17993,7 @@ fn prepareModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Al
         const field_text = self.env.getIdent(method_name);
         const target_node_idx_opt: ?u32 = blk: {
             if (self.lookupAvailableModuleEnv(module_name)) |auto_imported_type| {
-                break :blk try self.lookupImportedExposedNode(auto_imported_type.env, field_text);
+                break :blk try self.lookupImportedExposedValueNode(auto_imported_type.env, field_text);
             }
             break :blk null;
         };
@@ -17981,7 +18067,7 @@ fn prepareModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Al
     const field_text = self.env.getIdent(field_name);
     const target_node_idx_opt: ?u32 = blk: {
         if (self.lookupAvailableModuleEnv(module_name)) |auto_imported_type| {
-            break :blk try self.lookupImportedExposedNode(auto_imported_type.env, field_text);
+            break :blk try self.lookupImportedExposedValueNode(auto_imported_type.env, field_text);
         }
         break :blk null;
     };
@@ -18287,7 +18373,7 @@ fn exposeTopLevelTypesForExplicitRoots(self: *Self) std.mem.Allocator.Error!void
             unreachable;
         };
 
-        try self.env.setExposedNodeIndexById(type_ident, @intFromEnum(stmt_idx));
+        try self.env.setExposedTypeNodeIndexById(type_ident, @intFromEnum(stmt_idx));
     }
 }
 

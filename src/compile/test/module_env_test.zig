@@ -27,7 +27,7 @@ test "ModuleEnv.Serialized roundtrip" {
     _ = try original.insertString("test string");
 
     try original.addExposedById(hello_idx);
-    try original.setExposedNodeIndexById(hello_idx, 42);
+    try original.setExposedValueNodeIndexById(hello_idx, 42);
     original.ensureExposedSorted(gpa);
 
     try original.common.calcLineStarts(gpa);
@@ -76,7 +76,7 @@ test "ModuleEnv.Serialized roundtrip" {
     try std.testing.expectEqualStrings("world", env.getIdent(world_idx));
 
     try std.testing.expectEqual(@as(usize, 1), env.common.exposed_items.count());
-    try std.testing.expectEqual(@as(?u32, 42), env.common.exposed_items.getNodeIndexById(gpa, @as(u32, @bitCast(hello_idx))));
+    try std.testing.expectEqual(@as(?u32, 42), env.common.exposed_items.getValueNodeIndexById(gpa, @as(u32, @bitCast(hello_idx))));
 
     try std.testing.expectEqual(original.common.line_starts.len(), env.common.line_starts.len());
     for (original.common.line_starts.items.items, env.common.line_starts.items.items) |expected, actual| {
@@ -97,6 +97,7 @@ test "ModuleEnv.Serialized roundtrip" {
     // Plus 7 more identifiers: tag, payload, is_negative, digits_before_pt, digits_after_pt, box, unbox
     // Plus 2 Try tag identifiers: Ok, Err
     // Plus 1 method identifier: from_numeral
+    // Plus 1 interpolation method identifier: from_interpolation
     // Plus 2 Bool tag identifiers: True, False
     // Plus 6 from_utf8 identifiers: byte_index, string, is_ok, problem_code, problem, index
     // Plus 2 synthetic identifiers for ? operator desugaring: #ok, #err
@@ -108,8 +109,8 @@ test "ModuleEnv.Serialized roundtrip" {
     // Plus 2 fully qualified Box intrinsic method names: Builtin.Box.box, Builtin.Box.unbox
     // Plus 1 fully qualified Bool type name: Builtin.Bool
     // Count reflects the merged builtin set after the zig-16 / origin/main merge
-    // (grew from 85 to 91 builtin identifiers).
-    try testing.expectEqual(@as(u32, 91), original.common.idents.interner.entry_count);
+    // (grew from 85 to 92 builtin identifiers).
+    try testing.expectEqual(@as(u32, 92), original.common.idents.interner.entry_count);
     try testing.expectEqualStrings("hello", original.getIdent(hello_idx));
     try testing.expectEqualStrings("world", original.getIdent(world_idx));
 
@@ -118,12 +119,12 @@ test "ModuleEnv.Serialized roundtrip" {
     try testing.expectEqual(@as(usize, 2), original.imports.imports.len()); // Should have 2 unique imports
 
     // First verify that the CommonEnv data was preserved after deserialization
-    // Should have same identifiers as original: hello, world, TestModule + 16 well-known identifiers + 21 type identifiers + 3 field/tag identifiers + 7 more identifiers + 2 Try tag identifiers + 1 method identifier + 2 Bool tag identifiers + 6 from_utf8 identifiers + 2 synthetic identifiers for ? operator desugaring + 2 numeric method identifiers (abs, abs_diff) + 1 inspect method identifier (to_inspect) + 15 unqualified builtin type names from ModuleEnv.init() (Num, Bool, U8, U16, U32, U64, U128, I8, I16, I32, I64, I128, F32, F64, Dec) + 2 fully qualified Box intrinsic method names (Builtin.Box.box, Builtin.Box.unbox) + 1 fully qualified Bool type name (Builtin.Bool)
+    // Should have same identifiers as original: hello, world, TestModule + 16 well-known identifiers + 21 type identifiers + 3 field/tag identifiers + 7 more identifiers + 2 Try tag identifiers + 1 method identifier + 1 interpolation method identifier + 2 Bool tag identifiers + 6 from_utf8 identifiers + 2 synthetic identifiers for ? operator desugaring + 2 numeric method identifiers (abs, abs_diff) + 1 inspect method identifier (to_inspect) + 15 unqualified builtin type names from ModuleEnv.init() (Num, Bool, U8, U16, U32, U64, U128, I8, I16, I32, I64, I128, F32, F64, Dec) + 2 fully qualified Box intrinsic method names (Builtin.Box.box, Builtin.Box.unbox) + 1 fully qualified Bool type name (Builtin.Bool)
     // (Note: "Try" is now shared with well-known identifiers, reducing total by 1)
-    try testing.expectEqual(@as(u32, 91), env.common.idents.interner.entry_count);
+    try testing.expectEqual(@as(u32, 92), env.common.idents.interner.entry_count);
 
     try testing.expectEqual(@as(usize, 1), env.common.exposed_items.count());
-    try testing.expectEqual(@as(?u32, 42), env.common.exposed_items.getNodeIndexById(gpa, @as(u32, @bitCast(hello_idx))));
+    try testing.expectEqual(@as(?u32, 42), env.common.exposed_items.getValueNodeIndexById(gpa, @as(u32, @bitCast(hello_idx))));
 
     try testing.expectEqual(@as(usize, 3), env.common.line_starts.len());
     try testing.expectEqual(@as(u32, 0), env.common.line_starts.items.items[0]);

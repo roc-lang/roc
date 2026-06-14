@@ -310,8 +310,8 @@ pub const CompletionBuilder = struct {
             var detail: ?[]const u8 = null;
             var documentation: ?[]const u8 = null;
             if (type_writer) |*tw| {
-                if (module_env.common.getNodeIndexById(self.allocator, ident_idx)) |node_idx| {
-                    if (node_idx != 0 and module_env.store.isDefNode(node_idx)) {
+                if (module_env.common.getValueNodeIndexById(self.allocator, ident_idx)) |node_idx| {
+                    if (module_env.store.isDefNode(node_idx)) {
                         const def_idx: CIR.Def.Idx = @enumFromInt(node_idx);
                         const def = module_env.store.getDef(def_idx);
                         const type_var = ModuleEnv.varFrom(def.pattern);
