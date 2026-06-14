@@ -1269,36 +1269,46 @@ test "download URL validation" {
     // Valid HTTPS URLs
     {
         const url = "https://example.com/path/to/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst";
-        const hash = try download.validateUrl(url);
-        try testing.expectEqualStrings(expected_hash, hash);
+        const parsed = try download.validateUrl(url);
+        try testing.expectEqualStrings(expected_hash, parsed.hash);
+        try testing.expectEqual(download.Version.none, parsed.version);
+        try testing.expectEqualStrings("example.com/path/to", parsed.urlId(url));
     }
 
     // Valid localhost IPv4 URL
     {
         const url = "http://127.0.0.1:8000/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst";
-        const hash = try download.validateUrl(url);
-        try testing.expectEqualStrings(expected_hash, hash);
+        const parsed = try download.validateUrl(url);
+        try testing.expectEqualStrings(expected_hash, parsed.hash);
+        try testing.expectEqual(download.Version.none, parsed.version);
+        try testing.expectEqualStrings("127.0.0.1:8000", parsed.urlId(url));
     }
 
     // Valid localhost IPv6 URL with port
     {
         const url = "http://[::1]:8000/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst";
-        const hash = try download.validateUrl(url);
-        try testing.expectEqualStrings(expected_hash, hash);
+        const parsed = try download.validateUrl(url);
+        try testing.expectEqualStrings(expected_hash, parsed.hash);
+        try testing.expectEqual(download.Version.none, parsed.version);
+        try testing.expectEqualStrings("[::1]:8000", parsed.urlId(url));
     }
 
     // Valid localhost IPv6 URL without port
     {
         const url = "http://[::1]/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst";
-        const hash = try download.validateUrl(url);
-        try testing.expectEqualStrings(expected_hash, hash);
+        const parsed = try download.validateUrl(url);
+        try testing.expectEqualStrings(expected_hash, parsed.hash);
+        try testing.expectEqual(download.Version.none, parsed.version);
+        try testing.expectEqualStrings("[::1]", parsed.urlId(url));
     }
 
     // Valid: localhost hostname (will be resolved and verified during download)
     {
         const url = "http://localhost:8000/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst";
-        const hash = try download.validateUrl(url);
-        try testing.expectEqualStrings(expected_hash, hash);
+        const parsed = try download.validateUrl(url);
+        try testing.expectEqualStrings(expected_hash, parsed.hash);
+        try testing.expectEqual(download.Version.none, parsed.version);
+        try testing.expectEqualStrings("localhost:8000", parsed.urlId(url));
     }
 
     // Invalid: HTTP (not localhost IP)
@@ -1318,15 +1328,28 @@ test "download URL validation" {
     // Valid: hash without .tar.zst extension
     {
         const url = "https://example.com/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf";
-        const hash = try download.validateUrl(url);
-        try testing.expectEqualStrings("4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf", hash);
+        const parsed = try download.validateUrl(url);
+        try testing.expectEqualStrings("4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf", parsed.hash);
+        try testing.expectEqual(download.Version.none, parsed.version);
+        try testing.expectEqualStrings("example.com", parsed.urlId(url));
     }
 
     // Valid: hash with .tar.zst extension
     {
         const url = "https://example.com/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst";
-        const hash = try download.validateUrl(url);
-        try testing.expectEqualStrings("4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf", hash);
+        const parsed = try download.validateUrl(url);
+        try testing.expectEqualStrings("4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf", parsed.hash);
+        try testing.expectEqual(download.Version.none, parsed.version);
+        try testing.expectEqualStrings("example.com", parsed.urlId(url));
+    }
+
+    // Valid: optional version component immediately before the hash
+    {
+        const url = "https://example.com/packages/1.2.3/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst";
+        const parsed = try download.validateUrl(url);
+        try testing.expectEqualStrings(expected_hash, parsed.hash);
+        try testing.expectEqual(download.Version{ .major = 1, .minor = 2, .patch = 3 }, parsed.version);
+        try testing.expectEqualStrings("example.com/packages", parsed.urlId(url));
     }
 }
 
@@ -1653,12 +1676,13 @@ test "unbundleStream with BufferExtractWriter (WASM simulation)" {
     var buffer_writer = BufferExtractWriter.init(arena_alloc);
     defer buffer_writer.deinit();
 
-    try unbundle_mod.unbundleStream(
+    _ = try unbundle_mod.unbundleStream(
         arena_alloc,
         &stream_reader,
         buffer_writer.extractWriter(),
         &expected_hash,
         null,
+        .{},
     );
 
     // Verify files were extracted correctly
@@ -1740,12 +1764,13 @@ test "unbundleStream with large file (multi-block zstd)" {
     var buffer_writer = BufferExtractWriter.init(arena_alloc);
     defer buffer_writer.deinit();
 
-    try unbundle_mod.unbundleStream(
+    _ = try unbundle_mod.unbundleStream(
         arena_alloc,
         &stream_reader,
         buffer_writer.extractWriter(),
         &expected_hash,
         null,
+        .{},
     );
 
     // Verify file was extracted with correct size and content
@@ -1759,5 +1784,98 @@ test "unbundleStream with large file (multi-block zstd)" {
     for (large_content.?.items, 0..) |b, i| {
         const expected: u8 = @truncate(i % 4096);
         try testing.expectEqual(expected, b);
+    }
+}
+
+test "unbundleStream reports expanded size and enforces the limit" {
+    const testing = std.testing;
+    var allocator = testing.allocator;
+    const io = std.testing.io;
+
+    var src_tmp = testing.tmpDir(.{});
+    defer src_tmp.cleanup();
+    const src_dir = src_tmp.dir;
+
+    const content_size = 64 * 1024;
+    {
+        const file = try src_dir.createFile(io, "payload.bin", .{});
+        defer file.close(io);
+
+        var buf: [4096]u8 = undefined;
+        for (&buf, 0..) |*b, i| {
+            b.* = @truncate(i);
+        }
+        var written: usize = 0;
+        while (written < content_size) {
+            const to_write = @min(buf.len, content_size - written);
+            try file.writeStreamingAll(io, buf[0..to_write]);
+            written += to_write;
+        }
+    }
+
+    const file_paths = [_][]const u8{"payload.bin"};
+    var file_iter = FilePathIterator{ .paths = &file_paths };
+
+    var bundle_writer: std.Io.Writer.Allocating = .init(allocator);
+    defer bundle_writer.deinit();
+
+    const filename = try bundle.bundle(
+        &file_iter,
+        TEST_COMPRESSION_LEVEL,
+        &allocator,
+        io,
+        &bundle_writer.writer,
+        src_dir,
+        null,
+        null,
+    );
+    defer allocator.free(filename);
+
+    const hash_str = filename[0 .. filename.len - ".tar.zst".len];
+    const expected_hash = (try unbundle_mod.validateBase58Hash(hash_str)).?;
+
+    var arena = collections.SingleThreadArena.init(allocator);
+    defer arena.deinit();
+    const arena_alloc = arena.allocator();
+
+    var bundle_data = bundle_writer.toArrayList();
+    defer bundle_data.deinit(allocator);
+
+    // With a generous limit, extraction succeeds and reports the expanded
+    // size of the whole tar stream (content plus tar framing).
+    {
+        var stream_reader = std.Io.Reader.fixed(bundle_data.items);
+        var buffer_writer = BufferExtractWriter.init(arena_alloc);
+        defer buffer_writer.deinit();
+
+        const expanded = try unbundle_mod.unbundleStream(
+            arena_alloc,
+            &stream_reader,
+            buffer_writer.extractWriter(),
+            &expected_hash,
+            null,
+            .{ .max_expanded_bytes = 10 * 1024 * 1024 },
+        );
+
+        try testing.expect(expanded >= content_size);
+        try testing.expect(expanded < content_size + 64 * 1024);
+    }
+
+    // With a limit smaller than the content, extraction aborts.
+    {
+        var stream_reader = std.Io.Reader.fixed(bundle_data.items);
+        var buffer_writer = BufferExtractWriter.init(arena_alloc);
+        defer buffer_writer.deinit();
+
+        const result = unbundle_mod.unbundleStream(
+            arena_alloc,
+            &stream_reader,
+            buffer_writer.extractWriter(),
+            &expected_hash,
+            null,
+            .{ .max_expanded_bytes = 4 * 1024 },
+        );
+
+        try testing.expectError(error.ExpandedSizeLimitExceeded, result);
     }
 }
