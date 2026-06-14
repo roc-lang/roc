@@ -2020,15 +2020,23 @@ Builtin :: [].{
 		}
 	}
 
+	DictBucket : { dist_and_fingerprint : U32, entry_index : U32 }
+
+	DictData(k, v) : {
+		entries : List((k, v)),
+		buckets : List(DictBucket),
+		max_entries_before_grow : U64,
+		shifts : U8,
+	}
+
+	DictMetadata : {
+		buckets : List(DictBucket),
+		max_entries_before_grow : U64,
+		shifts : U8,
+	}
+
 	Dict(k, v) :: [
-		HashMap(
-			{
-				entries : List((k, v)),
-				buckets : List({ dist_and_fingerprint : U32, entry_index : U32 }),
-				max_entries_before_grow : U64,
-				shifts : U8,
-			},
-		),
+		HashMap(DictData(k, v)),
 	].{
 
 		## Returns `Bool.True` if the two dictionaries contain the same key-value
@@ -9630,7 +9638,7 @@ Builtin :: [].{
 	dict_combine_entry_hashes : U64, U64 -> U64
 	dict_combine_entry_hashes = |a, b| U64.bitwise_xor(a, b)
 
-	dict_empty_bucket : { dist_and_fingerprint : U32, entry_index : U32 }
+	dict_empty_bucket : DictBucket
 	dict_empty_bucket = { dist_and_fingerprint: 0, entry_index: 0 }
 
 	dict_dist_inc : U32
@@ -9678,7 +9686,7 @@ Builtin :: [].{
 		$shifts
 	}
 
-	dict_allocate_buckets_for_capacity : U64 -> { buckets : List({ dist_and_fingerprint : U32, entry_index : U32 }), max_entries_before_grow : U64, shifts : U8 }
+	dict_allocate_buckets_for_capacity : U64 -> DictMetadata
 	dict_allocate_buckets_for_capacity = |requested| {
 		if requested == 0 {
 			{ buckets: [], max_entries_before_grow: 0, shifts: dict_initial_shifts }
@@ -9736,7 +9744,7 @@ Builtin :: [].{
 			bucket_index + 1
 		}
 
-	dict_ensure_capacity : { entries : List((k, v)), buckets : List({ dist_and_fingerprint : U32, entry_index : U32 }), max_entries_before_grow : U64, shifts : U8 }, U64 -> { entries : List((k, v)), buckets : List({ dist_and_fingerprint : U32, entry_index : U32 }), max_entries_before_grow : U64, shifts : U8 }
+	dict_ensure_capacity : DictData(k, v), U64 -> DictData(k, v)
 		where [k.to_hash : k, Hasher -> Hasher]
 	dict_ensure_capacity = |data, desired| {
 		if desired <= data.max_entries_before_grow {
@@ -9749,7 +9757,7 @@ Builtin :: [].{
 		}
 	}
 
-	dict_find : { entries : List((k, v)), buckets : List({ dist_and_fingerprint : U32, entry_index : U32 }), max_entries_before_grow : U64, shifts : U8 }, k -> [Found({ bucket_index : U64, entry_index : U64, value : v }), Missing({ bucket_index : U64, dist_and_fingerprint : U32 })]
+	dict_find : DictData(k, v), k -> [Found({ bucket_index : U64, entry_index : U64, value : v }), Missing({ bucket_index : U64, dist_and_fingerprint : U32 })]
 		where [k.is_eq : k, k -> Bool, k.to_hash : k, Hasher -> Hasher]
 	dict_find = |data, key| {
 		if List.is_empty(data.entries) {
@@ -9778,7 +9786,7 @@ Builtin :: [].{
 		}
 	}
 
-	dict_find_from : List({ dist_and_fingerprint : U32, entry_index : U32 }), List((k, v)), U64, U32, k -> [Found({ bucket_index : U64, entry_index : U64, value : v }), Missing({ bucket_index : U64, dist_and_fingerprint : U32 })]
+	dict_find_from : List(DictBucket), List((k, v)), U64, U32, k -> [Found({ bucket_index : U64, entry_index : U64, value : v }), Missing({ bucket_index : U64, dist_and_fingerprint : U32 })]
 		where [k.is_eq : k, k -> Bool]
 	dict_find_from = |buckets, entries, bucket_index, dist_and_fingerprint, key| {
 		bucket = list_get_unsafe(buckets, bucket_index)
@@ -9797,7 +9805,7 @@ Builtin :: [].{
 		}
 	}
 
-	dict_insert_new_data : { entries : List((k, v)), buckets : List({ dist_and_fingerprint : U32, entry_index : U32 }), max_entries_before_grow : U64, shifts : U8 }, U64, U32, k, v -> { entries : List((k, v)), buckets : List({ dist_and_fingerprint : U32, entry_index : U32 }), max_entries_before_grow : U64, shifts : U8 }
+	dict_insert_new_data : DictData(k, v), U64, U32, k, v -> DictData(k, v)
 	dict_insert_new_data = |data, bucket_index, dist_and_fingerprint, key, value| {
 		if List.is_empty(data.buckets) {
 			crash "Dict invariant violated: insert into empty bucket table"
@@ -9810,7 +9818,7 @@ Builtin :: [].{
 		{ entries, buckets, max_entries_before_grow: data.max_entries_before_grow, shifts: data.shifts }
 	}
 
-	dict_remove_bucket_data : { entries : List((k, v)), buckets : List({ dist_and_fingerprint : U32, entry_index : U32 }), max_entries_before_grow : U64, shifts : U8 }, U64 -> { entries : List((k, v)), buckets : List({ dist_and_fingerprint : U32, entry_index : U32 }), max_entries_before_grow : U64, shifts : U8 }
+	dict_remove_bucket_data : DictData(k, v), U64 -> DictData(k, v)
 		where [k.to_hash : k, Hasher -> Hasher]
 	dict_remove_bucket_data = |data, bucket_index| {
 		removed_bucket = list_get_unsafe(data.buckets, bucket_index)
@@ -9851,7 +9859,7 @@ Builtin :: [].{
 		}
 	}
 
-	dict_remove_bucket_from_probe : List({ dist_and_fingerprint : U32, entry_index : U32 }), U64 -> { buckets : List({ dist_and_fingerprint : U32, entry_index : U32 }), empty_bucket_index : U64 }
+	dict_remove_bucket_from_probe : List(DictBucket), U64 -> { buckets : List(DictBucket), empty_bucket_index : U64 }
 	dict_remove_bucket_from_probe = |buckets, bucket_index| {
 		next_index = dict_next_bucket_index(bucket_index, List.len(buckets))
 		next_bucket = list_get_unsafe(buckets, next_index)
@@ -9866,7 +9874,7 @@ Builtin :: [].{
 		}
 	}
 
-	dict_scan_for_entry_index : List({ dist_and_fingerprint : U32, entry_index : U32 }), U64, U32 -> U64
+	dict_scan_for_entry_index : List(DictBucket), U64, U32 -> U64
 	dict_scan_for_entry_index = |buckets, bucket_index, entry_index| {
 		bucket = list_get_unsafe(buckets, bucket_index)
 		if bucket.dist_and_fingerprint == 0 {
@@ -9878,7 +9886,7 @@ Builtin :: [].{
 		}
 	}
 
-	dict_fill_buckets_from_entries : List({ dist_and_fingerprint : U32, entry_index : U32 }), List((k, v)), U8 -> List({ dist_and_fingerprint : U32, entry_index : U32 })
+	dict_fill_buckets_from_entries : List(DictBucket), List((k, v)), U8 -> List(DictBucket)
 		where [k.to_hash : k, Hasher -> Hasher]
 	dict_fill_buckets_from_entries = |buckets, entries, shifts| {
 		var $buckets = buckets
@@ -9892,14 +9900,14 @@ Builtin :: [].{
 		$buckets
 	}
 
-	dict_next_while_less : List({ dist_and_fingerprint : U32, entry_index : U32 }), k, U8 -> (U64, U32)
+	dict_next_while_less : List(DictBucket), k, U8 -> (U64, U32)
 		where [k.to_hash : k, Hasher -> Hasher]
 	dict_next_while_less = |buckets, key, shifts| {
 		hash = dict_hash_key(key)
 		dict_next_while_less_from(buckets, dict_bucket_index_from_hash(hash, shifts), dict_dist_and_fingerprint_from_hash(hash))
 	}
 
-	dict_next_while_less_from : List({ dist_and_fingerprint : U32, entry_index : U32 }), U64, U32 -> (U64, U32)
+	dict_next_while_less_from : List(DictBucket), U64, U32 -> (U64, U32)
 	dict_next_while_less_from = |buckets, bucket_index, dist_and_fingerprint| {
 		loaded = list_get_unsafe(buckets, bucket_index)
 		if dist_and_fingerprint < loaded.dist_and_fingerprint {
@@ -9909,7 +9917,7 @@ Builtin :: [].{
 		}
 	}
 
-	dict_place_and_shift_up : List({ dist_and_fingerprint : U32, entry_index : U32 }), { dist_and_fingerprint : U32, entry_index : U32 }, U64 -> List({ dist_and_fingerprint : U32, entry_index : U32 })
+	dict_place_and_shift_up : List(DictBucket), DictBucket, U64 -> List(DictBucket)
 	dict_place_and_shift_up = |buckets, bucket, bucket_index| {
 		loaded = list_get_unsafe(buckets, bucket_index)
 		if loaded.dist_and_fingerprint == 0 {
