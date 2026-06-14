@@ -10,6 +10,8 @@ const Self = @This();
 
 const max_methods = 256;
 const max_method_arity = 2;
+const max_local_bindings = 4;
+const max_context_values = 16;
 
 allocator: std.mem.Allocator,
 reader: *FuzzReader,
@@ -63,8 +65,8 @@ const Method = struct {
 };
 
 const ExprContext = struct {
-    args: [max_method_arity]Symbol,
-    arg_types: [max_method_arity]Type,
+    args: [max_context_values]Symbol,
+    arg_types: [max_context_values]Type,
     arity: u8,
 };
 
@@ -208,7 +210,7 @@ fn generateMethod(self: *Self, param_types: [max_method_arity]Type, arity: u8, r
         try self.writeSymbol(args[index]);
     }
     try self.write("| ");
-    try self.writeExpr(result_type, .{ .args = args, .arg_types = param_types, .arity = arity }, depth, visible_methods);
+    try self.writeMethodBody(result_type, args, param_types, arity, depth, visible_methods);
     try self.write("\n");
 
     self.methods[self.method_count] = method;
@@ -244,6 +246,45 @@ fn writeLeafExpr(self: *Self, typ: Type, context: ExprContext, visible_methods: 
     try self.writeLiteral(typ);
 }
 
+fn writeMethodBody(self: *Self, result_type: Type, args: [max_method_arity]Symbol, arg_types: [max_method_arity]Type, arity: u8, depth: u8, visible_methods: usize) std.mem.Allocator.Error!void {
+    var context = contextFromParams(args, arg_types, arity);
+    const local_count = if (depth == 0) 0 else self.reader.intRangeAtMost(u8, 0, max_local_bindings);
+
+    if (local_count == 0) {
+        try self.writeExpr(result_type, context, depth, visible_methods);
+        return;
+    }
+
+    try self.write("{\n");
+    for (0..local_count) |_| {
+        const local = self.fresh(.value);
+        const local_type = self.chooseType();
+        const local_depth = self.reader.intRangeAtMost(u8, 0, depth - 1);
+
+        try self.writeIndent(2);
+        try self.writeSymbol(local);
+        try self.write(" = ");
+        try self.writeExpr(local_type, context, local_depth, visible_methods);
+        try self.write("\n");
+
+        context = extendContext(context, local, local_type);
+    }
+
+    try self.writeIndent(2);
+    try self.writeExpr(result_type, context, depth, visible_methods);
+    try self.write("\n");
+    try self.writeIndent(1);
+    try self.write("}");
+}
+
+fn contextFromParams(args: [max_method_arity]Symbol, arg_types: [max_method_arity]Type, arity: u8) ExprContext {
+    var context = emptyContext();
+    for (0..arity) |index| {
+        context = extendContext(context, args[index], arg_types[index]);
+    }
+    return context;
+}
+
 fn contextSymbol(self: *Self, typ: Type, context: ExprContext) ?Symbol {
     var count: usize = 0;
     for (0..context.arity) |index| {
@@ -260,12 +301,13 @@ fn contextSymbol(self: *Self, typ: Type, context: ExprContext) ?Symbol {
     unreachable;
 }
 
-fn oneArgContext(arg: Symbol, typ: Type) ExprContext {
-    var args: [max_method_arity]Symbol = undefined;
-    var arg_types: [max_method_arity]Type = undefined;
-    args[0] = arg;
-    arg_types[0] = typ;
-    return .{ .args = args, .arg_types = arg_types, .arity = 1 };
+fn extendContext(context: ExprContext, arg: Symbol, typ: Type) ExprContext {
+    std.debug.assert(context.arity < max_context_values);
+    var extended = context;
+    extended.args[extended.arity] = arg;
+    extended.arg_types[extended.arity] = typ;
+    extended.arity += 1;
+    return extended;
 }
 
 fn emptyContext() ExprContext {
@@ -489,21 +531,21 @@ fn writeRootMatchExpr(self: *Self, result_type: Type, context: ExprContext, dept
     try self.write("(");
     try self.writeSymbol(u64_payload);
     try self.write(") => ");
-    try self.writeExpr(result_type, oneArgContext(u64_payload, .u64), depth, visible_methods);
+    try self.writeExpr(result_type, extendContext(context, u64_payload, .u64), depth, visible_methods);
     try self.write("\n");
     try self.writeIndent(2);
     try self.writeSymbol(self.symbols.tag2);
     try self.write("(");
     try self.writeSymbol(str_payload);
     try self.write(") => ");
-    try self.writeExpr(result_type, oneArgContext(str_payload, .str), depth, visible_methods);
+    try self.writeExpr(result_type, extendContext(context, str_payload, .str), depth, visible_methods);
     try self.write("\n");
     try self.writeIndent(2);
     try self.writeSymbol(self.symbols.tag3);
     try self.write("(");
     try self.writeSymbol(record_payload);
     try self.write(") => ");
-    try self.writeExpr(result_type, oneArgContext(record_payload, .record), depth, visible_methods);
+    try self.writeExpr(result_type, extendContext(context, record_payload, .record), depth, visible_methods);
     try self.write("\n");
     try self.writeIndent(1);
     try self.write("}");
@@ -527,13 +569,14 @@ fn writeListMapExpr(self: *Self, context: ExprContext, depth: u8, visible_method
     try self.write(".map(|");
     try self.writeSymbol(item);
     try self.write("| ");
-    try self.writeExpr(.u64, oneArgContext(item, .u64), depth, visible_methods);
+    try self.writeExpr(.u64, extendContext(context, item, .u64), depth, visible_methods);
     try self.write(")");
 }
 
 fn writeListMatchExpr(self: *Self, context: ExprContext, depth: u8, visible_methods: usize) std.mem.Allocator.Error!void {
     const head = self.fresh(.value);
     const tail = self.fresh(.value);
+    const non_empty_context = extendContext(extendContext(context, head, .u64), tail, .list_u64);
 
     try self.write("match ");
     try self.writeExpr(.list_u64, context, depth, visible_methods);
@@ -546,7 +589,7 @@ fn writeListMatchExpr(self: *Self, context: ExprContext, depth: u8, visible_meth
     try self.write("] => ");
     try self.writeSymbol(tail);
     try self.write(".append(");
-    try self.writeExpr(.u64, oneArgContext(head, .u64), depth, visible_methods);
+    try self.writeExpr(.u64, non_empty_context, depth, visible_methods);
     try self.write(")\n");
     try self.writeIndent(2);
     try self.write("[] => []\n");
@@ -566,7 +609,7 @@ fn writeListGetExpr(self: *Self, context: ExprContext, depth: u8, visible_method
     try self.write("Ok(");
     try self.writeSymbol(ok_payload);
     try self.write(") => ");
-    try self.writeExpr(.u64, oneArgContext(ok_payload, .u64), depth, visible_methods);
+    try self.writeExpr(.u64, extendContext(context, ok_payload, .u64), depth, visible_methods);
     try self.write("\n");
     try self.writeIndent(2);
     try self.write("Err(_) => ");
@@ -602,13 +645,13 @@ fn writeTryMatchExpr(self: *Self, context: ExprContext, depth: u8, visible_metho
     try self.write("Ok(");
     try self.writeSymbol(ok_payload);
     try self.write(") => Ok(");
-    try self.writeExpr(.u64, oneArgContext(ok_payload, .u64), depth, visible_methods);
+    try self.writeExpr(.u64, extendContext(context, ok_payload, .u64), depth, visible_methods);
     try self.write(")\n");
     try self.writeIndent(2);
     try self.write("Err(");
     try self.writeSymbol(err_payload);
     try self.write(") => Err(");
-    try self.writeExpr(.str, oneArgContext(err_payload, .str), depth, visible_methods);
+    try self.writeExpr(.str, extendContext(context, err_payload, .str), depth, visible_methods);
     try self.write(")\n");
     try self.writeIndent(1);
     try self.write("}");
