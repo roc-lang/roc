@@ -1,0 +1,12 @@
+# Fuzzing
+
+The typecheck fuzzer must not hardcode userspace Roc names.
+
+All generated type names, tag names, field names, function names, local names,
+module names, and filenames must come from the fuzzer's symbol generator. Do not
+add fixture modules, canned domain models, semantic identifiers, or raw Roc
+snippets that bake in userspace names.
+
+Builtin names are the only exception. Hardcoding `Bool`, `Str`, `List`, `Try`,
+`Ok`, `Err`, and public builtin associated function names is allowed when the
+generated program is deliberately exercising builtin behavior.
