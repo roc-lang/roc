@@ -306,6 +306,13 @@ fn contextSymbol(self: *Self, typ: Type, context: ExprContext) ?Symbol {
     unreachable;
 }
 
+fn contextHasSymbol(typ: Type, context: ExprContext) bool {
+    for (0..context.arity) |index| {
+        if (context.arg_types[index] == typ) return true;
+    }
+    return false;
+}
+
 fn extendContext(context: ExprContext, arg: Symbol, typ: Type) ExprContext {
     std.debug.assert(context.arity < max_context_values);
     var extended = context;
@@ -376,7 +383,7 @@ fn writeBoolExpr(self: *Self, context: ExprContext, depth: u8, visible_methods: 
 }
 
 fn writeStrExpr(self: *Self, context: ExprContext, depth: u8, visible_methods: usize) std.mem.Allocator.Error!void {
-    switch (self.reader.intRangeAtMost(u8, 0, 8)) {
+    switch (self.reader.intRangeAtMost(u8, 0, 9)) {
         0 => if (self.contextSymbol(.str, context)) |arg| try self.writeSymbol(arg) else try self.writeStringLiteral(),
         1 => if (!try self.writeMethodCall(.str, context, depth - 1, visible_methods)) try self.writeStringLiteral(),
         2 => try self.writeIfExpr(.str, context, depth - 1, visible_methods),
@@ -395,6 +402,7 @@ fn writeStrExpr(self: *Self, context: ExprContext, depth: u8, visible_methods: u
         6 => try self.writeRootMatchExpr(.str, context, depth - 1, visible_methods),
         7 => try self.writeTryErrOrExpr(context, depth - 1, visible_methods),
         8 => try self.writeRecordMatchExpr(.str, context, depth - 1, visible_methods),
+        9 => if (self.canWriteStringInterpolationPart(context, visible_methods)) try self.writeStringInterpolationExpr(context, visible_methods) else try self.writeStringLiteral(),
         else => unreachable,
     }
 }
@@ -829,6 +837,72 @@ fn writeTryErrOrExpr(self: *Self, context: ExprContext, depth: u8, visible_metho
     try self.write(")");
 }
 
+fn writeStringInterpolationExpr(self: *Self, context: ExprContext, visible_methods: usize) std.mem.Allocator.Error!void {
+    try self.write("\"");
+    try self.writeStringLiteralChars(self.reader.intRangeAtMost(u8, 0, 4));
+    const part_count = self.reader.intRangeAtMost(u8, 1, 3);
+    for (0..part_count) |_| {
+        try self.write("${(");
+        try self.writeStringInterpolationPartExpr(context, visible_methods);
+        try self.write(")}");
+        try self.writeStringLiteralChars(self.reader.intRangeAtMost(u8, 0, 4));
+    }
+    try self.write("\"");
+}
+
+fn writeStringInterpolationPartExpr(self: *Self, context: ExprContext, visible_methods: usize) std.mem.Allocator.Error!void {
+    if (self.contextSymbol(.str, context)) |arg| {
+        if (self.reader.boolean()) {
+            try self.writeSymbol(arg);
+            return;
+        }
+    }
+
+    if (self.chooseRootUnaryMethod(.str, visible_methods)) |method| {
+        try self.writeSymbol(self.symbols.typ);
+        try self.write(".");
+        try self.writeSymbol(method.symbol);
+        try self.write("(");
+        try self.writeSymbol(self.symbols.tag0);
+        try self.write(")");
+        return;
+    }
+
+    if (self.contextSymbol(.str, context)) |arg| {
+        try self.writeSymbol(arg);
+        return;
+    }
+
+    unreachable;
+}
+
+fn canWriteStringInterpolationPart(self: *Self, context: ExprContext, visible_methods: usize) bool {
+    return contextHasSymbol(.str, context) or self.hasRootUnaryMethod(.str, visible_methods);
+}
+
+fn hasRootUnaryMethod(self: *Self, result_type: Type, visible_methods: usize) bool {
+    for (self.methods[0..visible_methods]) |method| {
+        if (method.result_type == result_type and method.arity == 1 and method.param_types[0] == .root) return true;
+    }
+    return false;
+}
+
+fn chooseRootUnaryMethod(self: *Self, result_type: Type, visible_methods: usize) ?Method {
+    var count: usize = 0;
+    for (self.methods[0..visible_methods]) |method| {
+        if (method.result_type == result_type and method.arity == 1 and method.param_types[0] == .root) count += 1;
+    }
+    if (count == 0) return null;
+
+    var index = self.reader.intRangeLessThan(usize, 0, count);
+    for (self.methods[0..visible_methods]) |method| {
+        if (method.result_type != result_type or method.arity != 1 or method.param_types[0] != .root) continue;
+        if (index == 0) return method;
+        index -= 1;
+    }
+    unreachable;
+}
+
 fn writeTupleFirstExpr(self: *Self, context: ExprContext, depth: u8, visible_methods: usize) std.mem.Allocator.Error!void {
     try self.writeParenthesizedExpr(.tuple_bool_u64, context, depth, visible_methods);
     try self.write(".0");
@@ -999,11 +1073,15 @@ fn writeU64Literal(self: *Self) std.mem.Allocator.Error!void {
 fn writeStringLiteral(self: *Self) std.mem.Allocator.Error!void {
     try self.write("\"");
     const len = self.reader.intRangeAtMost(u8, 0, 8);
+    try self.writeStringLiteralChars(len);
+    try self.write("\"");
+}
+
+fn writeStringLiteralChars(self: *Self, len: usize) std.mem.Allocator.Error!void {
     for (0..len) |_| {
         const char = self.reader.intRangeAtMost(u8, 'a', 'z');
         try self.output.append(self.allocator, char);
     }
-    try self.write("\"");
 }
 
 fn fresh(self: *Self, kind: SymbolKind) Symbol {
