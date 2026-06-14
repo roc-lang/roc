@@ -440,13 +440,16 @@ fn writeRecordExpr(self: *Self, context: ExprContext, depth: u8, visible_methods
 }
 
 fn writeListU64Expr(self: *Self, context: ExprContext, depth: u8, visible_methods: usize) std.mem.Allocator.Error!void {
-    switch (self.reader.intRangeAtMost(u8, 0, 5)) {
+    switch (self.reader.intRangeAtMost(u8, 0, 8)) {
         0 => try self.writeContextSymbolOrElse(.list_u64, context, writeListLiteral, depth - 1, visible_methods),
         1 => if (!try self.writeMethodCall(.list_u64, context, depth - 1, visible_methods)) try self.writeListLiteral(context, depth - 1, visible_methods),
         2 => try self.writeIfExpr(.list_u64, context, depth - 1, visible_methods),
         3 => try self.writeListLiteral(context, depth - 1, visible_methods),
         4 => try self.writeListMapExpr(context, depth - 1, visible_methods),
         5 => try self.writeListMatchExpr(context, depth - 1, visible_methods),
+        6 => try self.writeListConcatExpr(context, depth - 1, visible_methods),
+        7 => try self.writeListAppendExpr(context, depth - 1, visible_methods),
+        8 => try self.writeListFilterExpr(context, depth - 1, visible_methods),
         else => unreachable,
     }
 }
@@ -630,6 +633,34 @@ fn writeListMapExpr(self: *Self, context: ExprContext, depth: u8, visible_method
     try self.writeSymbol(item);
     try self.write("| ");
     try self.writeExpr(.u64, extendContext(context, item, .u64), depth, visible_methods);
+    try self.write(")");
+}
+
+fn writeListConcatExpr(self: *Self, context: ExprContext, depth: u8, visible_methods: usize) std.mem.Allocator.Error!void {
+    try self.write("List.concat(");
+    try self.writeExpr(.list_u64, context, depth, visible_methods);
+    try self.write(", ");
+    try self.writeExpr(.list_u64, context, depth, visible_methods);
+    try self.write(")");
+}
+
+fn writeListAppendExpr(self: *Self, context: ExprContext, depth: u8, visible_methods: usize) std.mem.Allocator.Error!void {
+    try self.write("List.append(");
+    try self.writeExpr(.list_u64, context, depth, visible_methods);
+    try self.write(", ");
+    try self.writeExpr(.u64, context, depth, visible_methods);
+    try self.write(")");
+}
+
+fn writeListFilterExpr(self: *Self, context: ExprContext, depth: u8, visible_methods: usize) std.mem.Allocator.Error!void {
+    const item = self.fresh(.value);
+
+    try self.write(if (self.reader.boolean()) "List.keep_if(" else "List.drop_if(");
+    try self.writeExpr(.list_u64, context, depth, visible_methods);
+    try self.write(", |");
+    try self.writeSymbol(item);
+    try self.write("| ");
+    try self.writeExpr(.bool, extendContext(context, item, .u64), depth, visible_methods);
     try self.write(")");
 }
 
