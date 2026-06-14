@@ -47,7 +47,8 @@ fn mustUseLlvm(target: ResolvedTarget) bool {
 }
 
 fn testHostNeedsCompilerRt(target: ResolvedTarget) bool {
-    return mustUseLlvm(target) or
+    return target.result.os.tag == .linux or
+        mustUseLlvm(target) or
         (target.result.os.tag == .windows and target.result.cpu.arch == .aarch64);
 }
 
@@ -1673,10 +1674,10 @@ fn createTestPlatformHostLib(
     lib.root_module.addImport("shim_io", b.addModule("shim_io", .{
         .root_source_file = b.path("src/shim_io.zig"),
     }));
-    // Bundle compiler_rt when the generated host object may call compiler_rt
-    // routines that are not supplied by the OS libraries. ARM64 Windows Zig code
-    // can emit stack-protector calls to __stack_chk_fail; x86_64 macOS (LLVM)
-    // needs symbols like __zig_probe_stack.
+    // Bundle compiler_rt when generated host object code may call compiler_rt
+    // routines that are not supplied by the OS libraries. Linux and x86_64
+    // macOS LLVM builds can emit symbols like __zig_probe_stack; ARM64 Windows
+    // Zig code can emit stack-protector calls to __stack_chk_fail.
     lib.bundle_compiler_rt = testHostNeedsCompilerRt(target);
     // Per-function/data sections so symbol-ABI links can strip unused host code.
     lib.link_function_sections = true;

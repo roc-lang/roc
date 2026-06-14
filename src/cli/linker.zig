@@ -206,6 +206,21 @@ fn appendExportSymbol(
     }
 }
 
+fn appendSharedLibraryExports(
+    ctx: *CliCtx,
+    args: *std.array_list.Managed([]const u8),
+    target_os: std.Target.Os.Tag,
+    target_format: TargetFormat,
+    output_kind: OutputKind,
+    export_symbols: []const []const u8,
+) LinkError!void {
+    if (output_kind != .shared_lib or target_format == .wasm) return;
+
+    for (export_symbols) |symbol| {
+        try appendExportSymbol(ctx, args, target_os, symbol);
+    }
+}
+
 /// Errors that can occur during linking
 pub const LinkError = error{
     LinkFailed,
@@ -705,11 +720,7 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
 
     // Force-include and export the host's declared exports from a shared
     // library. (wasm shared output uses --export via config.wasm_exports.)
-    if (is_shared_lib and config.target_format != .wasm) {
-        for (config.export_symbols) |symbol| {
-            try appendExportSymbol(ctx, &args, target_os, symbol);
-        }
-    }
+    try appendSharedLibraryExports(ctx, &args, target_os, config.target_format, config.output_kind, config.export_symbols);
 
     // For WASM targets, wrap platform files in --whole-archive to include all symbols
     // This ensures host exports (init, handleEvent, update) aren't stripped even when
@@ -1081,59 +1092,26 @@ test "shared library exports use target linker spelling" {
     defer ctx.deinit();
 
     // Windows: /export: both exports and force-includes.
-    const win_config = LinkConfig{
-        .target_format = .coff,
-        .target_os = .windows,
-        .target_arch = .x86_64,
-        .output_path = "test_output.dll",
-        .output_kind = .shared_lib,
-        .object_files = &.{"app.o"},
-        .export_symbols = &.{"roc_run_app"},
-    };
-    const win_args = try buildLinkArgs(&ctx, win_config);
+    var win_args = std.array_list.Managed([]const u8).init(ctx.arena);
+    try appendSharedLibraryExports(&ctx, &win_args, .windows, .coff, .shared_lib, &.{"roc_run_app"});
     _ = findArg(win_args.items, "/export:roc_run_app") orelse return error.MissingExport;
 
     // macOS: -exported_symbol + -u, both underscore-prefixed.
-    const mac_config = LinkConfig{
-        .target_format = .macho,
-        .target_os = .macos,
-        .target_arch = .x86_64,
-        .output_path = "test_output.dylib",
-        .output_kind = .shared_lib,
-        .object_files = &.{"app.o"},
-        .export_symbols = &.{"roc_run_app"},
-    };
-    const mac_args = try buildLinkArgs(&ctx, mac_config);
+    var mac_args = std.array_list.Managed([]const u8).init(ctx.arena);
+    try appendSharedLibraryExports(&ctx, &mac_args, .macos, .macho, .shared_lib, &.{"roc_run_app"});
     const mac_exp_idx = findArg(mac_args.items, "-exported_symbol") orelse return error.MissingExport;
     try std.testing.expect(mac_exp_idx + 1 < mac_args.items.len);
     try std.testing.expectEqualStrings("_roc_run_app", mac_args.items[mac_exp_idx + 1]);
 
     // ELF: --export-dynamic-symbol + --undefined to root and pull the member.
-    const linux_config = LinkConfig{
-        .target_format = .elf,
-        .target_abi = .musl,
-        .target_os = .linux,
-        .target_arch = .x86_64,
-        .output_path = "test_output.so",
-        .output_kind = .shared_lib,
-        .object_files = &.{"app.o"},
-        .export_symbols = &.{"roc_run_app"},
-    };
-    const linux_args = try buildLinkArgs(&ctx, linux_config);
+    var linux_args = std.array_list.Managed([]const u8).init(ctx.arena);
+    try appendSharedLibraryExports(&ctx, &linux_args, .linux, .elf, .shared_lib, &.{"roc_run_app"});
     _ = findArg(linux_args.items, "--export-dynamic-symbol=roc_run_app") orelse return error.MissingExport;
     _ = findArg(linux_args.items, "--undefined=roc_run_app") orelse return error.MissingExport;
 
     // Exports must not leak into a non-shared (exe) link.
-    const exe_config = LinkConfig{
-        .target_format = .coff,
-        .target_os = .windows,
-        .target_arch = .x86_64,
-        .output_path = "test_output.exe",
-        .output_kind = .exe,
-        .object_files = &.{"app.o"},
-        .export_symbols = &.{"roc_run_app"},
-    };
-    const exe_args = try buildLinkArgs(&ctx, exe_config);
+    var exe_args = std.array_list.Managed([]const u8).init(ctx.arena);
+    try appendSharedLibraryExports(&ctx, &exe_args, .windows, .coff, .exe, &.{"roc_run_app"});
     try std.testing.expectEqual(@as(?usize, null), findArg(exe_args.items, "/export:roc_run_app"));
 }
 
