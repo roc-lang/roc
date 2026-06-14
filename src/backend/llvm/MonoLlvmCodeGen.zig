@@ -2499,6 +2499,47 @@ pub const MonoLlvmCodeGen = struct {
 
     fn emitNumericConversionOrCrash(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LowLevel, args: []const LocalId) Error!void {
         const name = @tagName(op);
+        switch (op) {
+            .f32_to_i8_try_unsafe,
+            .f32_to_i16_try_unsafe,
+            .f32_to_i32_try_unsafe,
+            .f32_to_i64_try_unsafe,
+            .f32_to_i128_try_unsafe,
+            .f32_to_u8_try_unsafe,
+            .f32_to_u16_try_unsafe,
+            .f32_to_u32_try_unsafe,
+            .f32_to_u64_try_unsafe,
+            .f32_to_u128_try_unsafe,
+            .f64_to_i8_try_unsafe,
+            .f64_to_i16_try_unsafe,
+            .f64_to_i32_try_unsafe,
+            .f64_to_i64_try_unsafe,
+            .f64_to_i128_try_unsafe,
+            .f64_to_u8_try_unsafe,
+            .f64_to_u16_try_unsafe,
+            .f64_to_u32_try_unsafe,
+            .f64_to_u64_try_unsafe,
+            .f64_to_u128_try_unsafe,
+            => {
+                try self.emitFloatToIntTryUnsafeConversion(target, args[0]);
+                return;
+            },
+            .dec_to_i8_try_unsafe,
+            .dec_to_i16_try_unsafe,
+            .dec_to_i32_try_unsafe,
+            .dec_to_i64_try_unsafe,
+            .dec_to_i128_try_unsafe,
+            .dec_to_u8_try_unsafe,
+            .dec_to_u16_try_unsafe,
+            .dec_to_u32_try_unsafe,
+            .dec_to_u64_try_unsafe,
+            .dec_to_u128_try_unsafe,
+            => {
+                try self.emitDecToIntTryUnsafeConversion(target, args[0]);
+                return;
+            },
+            else => {},
+        }
         if (args.len >= 1 and isIntegerLayout(self.localLayout(args[0])) and self.localLayout(target) == .dec and std.mem.endsWith(u8, name, "_to_dec")) {
             try self.emitIntToDec(target, args[0]);
             return;
@@ -2555,6 +2596,71 @@ pub const MonoLlvmCodeGen = struct {
                 builder.intValue(.i32, @intFromBool(target_payload_layout.isSigned())) catch return error.OutOfMemory,
                 builder.intValue(.i32, self.layoutByteSize(target_payload_layout)) catch return error.OutOfMemory,
                 builder.intValue(.i32, disc_offset) catch return error.OutOfMemory,
+            },
+        );
+    }
+
+    const TryUnsafeRecordInfo = struct {
+        success_offset: u32,
+        value_offset: u32,
+        value_layout: layout.Idx,
+        value_size: u32,
+    };
+
+    fn tryUnsafeRecordInfo(self: *MonoLlvmCodeGen, ret_layout: layout.Idx) Error!TryUnsafeRecordInfo {
+        const ret_layout_val = self.layoutValue(ret_layout);
+        if (ret_layout_val.tag != .struct_) return error.CompilationFailed;
+        const struct_idx = ret_layout_val.getStruct().idx;
+        const value_layout = self.layouts().getStructFieldLayoutByOriginalIndex(struct_idx, 1);
+        if (!isIntegerLayout(value_layout)) return error.CompilationFailed;
+        return .{
+            .success_offset = self.layouts().getStructFieldOffsetByOriginalIndex(struct_idx, 0),
+            .value_offset = self.layouts().getStructFieldOffsetByOriginalIndex(struct_idx, 1),
+            .value_layout = value_layout,
+            .value_size = self.layoutByteSize(value_layout),
+        };
+    }
+
+    fn emitFloatToIntTryUnsafeConversion(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const info = try self.tryUnsafeRecordInfo(self.localLayout(target));
+        const arg_layout = self.localLayout(arg);
+        const raw_value = try self.loadScalar(self.slot(arg).ptr, arg_layout);
+        const value = try self.coerceScalar(raw_value, .double, false);
+
+        try self.callBuiltinVoid(
+            "roc_builtins_f64_to_int_try_unsafe",
+            &.{ try self.ptrType(), .double, .i32, .i32, .i32, .i32, .i32 },
+            &.{
+                self.slot(target).ptr,
+                value,
+                builder.intValue(.i32, self.intBits(info.value_layout)) catch return error.OutOfMemory,
+                builder.intValue(.i32, @intFromBool(info.value_layout.isSigned())) catch return error.OutOfMemory,
+                builder.intValue(.i32, info.value_size) catch return error.OutOfMemory,
+                builder.intValue(.i32, info.success_offset) catch return error.OutOfMemory,
+                builder.intValue(.i32, info.value_offset) catch return error.OutOfMemory,
+            },
+        );
+    }
+
+    fn emitDecToIntTryUnsafeConversion(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const info = try self.tryUnsafeRecordInfo(self.localLayout(target));
+        const value = try self.loadScalar(self.slot(arg).ptr, .dec);
+        const parts = try self.splitI128Value(value);
+
+        try self.callBuiltinVoid(
+            "roc_builtins_dec_to_int_try_unsafe",
+            &.{ try self.ptrType(), .i64, .i64, .i32, .i32, .i32, .i32, .i32 },
+            &.{
+                self.slot(target).ptr,
+                parts.low,
+                parts.high,
+                builder.intValue(.i32, self.intBits(info.value_layout)) catch return error.OutOfMemory,
+                builder.intValue(.i32, @intFromBool(info.value_layout.isSigned())) catch return error.OutOfMemory,
+                builder.intValue(.i32, info.value_size) catch return error.OutOfMemory,
+                builder.intValue(.i32, info.success_offset) catch return error.OutOfMemory,
+                builder.intValue(.i32, info.value_offset) catch return error.OutOfMemory,
             },
         );
     }
@@ -4500,6 +4606,10 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn storeIntToLayout(self: *MonoLlvmCodeGen, ptr: LlvmBuilder.Value, value: LlvmBuilder.Value, layout_idx: layout.Idx) Error!void {
+        if (self.layoutValue(layout_idx).tag == .tag_union) {
+            try self.storeTagDiscriminant(ptr, layout_idx, value);
+            return;
+        }
         try self.storeScalar(ptr, layout_idx, value);
     }
 
@@ -4584,6 +4694,18 @@ pub const MonoLlvmCodeGen = struct {
         const disc_ptr = try self.offsetPtr(ptr, data.discriminant_offset);
         const ty = intTypeForBytes(data.discriminant_size);
         _ = wip.store(.normal, builder.intValue(ty, discriminant) catch return error.OutOfMemory, disc_ptr, LlvmBuilder.Alignment.fromByteUnits(@max(data.discriminant_size, 1))) catch return error.OutOfMemory;
+    }
+
+    fn storeTagDiscriminant(self: *MonoLlvmCodeGen, ptr: LlvmBuilder.Value, layout_idx: layout.Idx, value: LlvmBuilder.Value) Error!void {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const layout_val = self.layoutValue(layout_idx);
+        if (layout_val.tag != .tag_union) return error.CompilationFailed;
+        const data = self.layouts().getTagUnionData(layout_val.getTagUnion().idx);
+        if (data.discriminant_size == 0) return;
+        const disc_ptr = try self.offsetPtr(ptr, data.discriminant_offset);
+        const ty = intTypeForBytes(data.discriminant_size);
+        const store_value = try self.coerceScalar(value, ty, false);
+        _ = wip.store(.normal, store_value, disc_ptr, LlvmBuilder.Alignment.fromByteUnits(@max(data.discriminant_size, 1))) catch return error.OutOfMemory;
     }
 
     fn tagPayloadLayout(self: *MonoLlvmCodeGen, layout_idx: layout.Idx, discriminant: u16) layout.Idx {
