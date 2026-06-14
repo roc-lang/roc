@@ -14,3 +14,7 @@ generated program is deliberately exercising builtin behavior.
 Generated platform/app fuzzers must also generate app-provided names, platform
 aliases, and platform wrapper names. External ABI symbol strings and target names
 are platform data, not userspace Roc identifiers.
+
+On macOS, AFL++ may fail with `shmget() failed` under the default System V
+shared-memory limits. Prefix AFL commands with `AFL_MAP_SIZE=2097152` unless the
+machine has already been configured with `afl-system-config`.
