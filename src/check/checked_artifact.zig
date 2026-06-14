@@ -510,7 +510,7 @@ pub const ProvidedExportTable = struct {
         errdefer exports.deinit(allocator);
 
         for (source, published_provides) |provides_entry, published| {
-            const def_node_idx = module_env.getExposedNodeIndexById(provides_entry.ident) orelse {
+            const def_node_idx = module_env.getExposedValueNodeIndexById(provides_entry.ident) orelse {
                 if (builtin.mode == .Debug) {
                     std.debug.panic(
                         "checked artifact invariant violated: provided entry {s} has no top-level definition",
@@ -1166,7 +1166,7 @@ fn appendPublishedEntrypointRoots(
     switch (module_env.module_kind) {
         .default_app => {
             const main_ident = module_env.idents.main_bang;
-            const main_node_idx = module_env.getExposedNodeIndexById(main_ident) orelse {
+            const main_node_idx = module_env.getExposedValueNodeIndexById(main_ident) orelse {
                 if (builtin.mode == .Debug) {
                     std.debug.panic(
                         "checked artifact invariant violated: default app main! has no published root definition",
@@ -8635,9 +8635,7 @@ fn collectPublishedExportDefs(
 
     var exposed_iter = module_env.common.exposed_items.iterator();
     while (exposed_iter.next()) |entry| {
-        if (entry.node_idx == 0) continue;
-
-        const raw_node_idx: u32 = entry.node_idx;
+        const raw_node_idx: u32 = entry.target.valueDefNode() orelse continue;
         if (raw_node_idx >= node_count) {
             if (builtin.mode == .Debug) {
                 std.debug.panic(
@@ -13624,8 +13622,7 @@ fn appendExposedTypeDeclarationPublicApiDependencies(
     const module_env = module.moduleEnvConst();
     var exposed_iter = module_env.common.exposed_items.iterator();
     while (exposed_iter.next()) |entry| {
-        if (entry.node_idx == 0) continue;
-        const raw_node_idx: u32 = entry.node_idx;
+        const raw_node_idx: u32 = entry.target.typeDeclNode() orelse continue;
         if (raw_node_idx >= module.nodeCount()) {
             checkedArtifactInvariant("exposed type item points at out-of-range node", .{});
         }

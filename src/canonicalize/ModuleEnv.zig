@@ -3423,14 +3423,29 @@ pub fn addExposedById(self: *Self, ident_idx: Ident.Idx) Allocator.Error!void {
     return try self.common.exposed_items.addExposedById(self.gpa, @bitCast(ident_idx));
 }
 
-/// Associates a node index with an exposed identifier.
-pub fn setExposedNodeIndexById(self: *Self, ident_idx: Ident.Idx, node_idx: u32) Allocator.Error!void {
-    return try self.common.exposed_items.setNodeIndexById(self.gpa, @bitCast(ident_idx), node_idx);
+/// Associates a value definition node index with an exposed identifier.
+pub fn setExposedValueNodeIndexById(self: *Self, ident_idx: Ident.Idx, node_idx: u32) Allocator.Error!void {
+    return try self.common.setValueNodeIndexById(self.gpa, ident_idx, node_idx);
 }
 
-/// Retrieves the node index associated with an exposed identifier, if any.
-pub fn getExposedNodeIndexById(self: *const Self, ident_idx: Ident.Idx) ?u32 {
-    return self.common.getNodeIndexById(self.gpa, ident_idx);
+/// Associates a type declaration node index with an exposed identifier.
+pub fn setExposedTypeNodeIndexById(self: *Self, ident_idx: Ident.Idx, node_idx: u32) Allocator.Error!void {
+    return try self.common.setTypeNodeIndexById(self.gpa, ident_idx, node_idx);
+}
+
+/// Retrieves the value definition node index associated with an exposed identifier, if any.
+pub fn getExposedValueNodeIndexById(self: *const Self, ident_idx: Ident.Idx) ?u32 {
+    return self.common.getValueNodeIndexById(self.gpa, ident_idx);
+}
+
+/// Retrieves the type declaration node index associated with an exposed identifier, if any.
+pub fn getExposedTypeNodeIndexById(self: *const Self, ident_idx: Ident.Idx) ?u32 {
+    return self.common.getTypeNodeIndexById(self.gpa, ident_idx);
+}
+
+/// Retrieves the explicit exposure target associated with an exposed identifier, if any.
+pub fn getExposedTargetById(self: *const Self, ident_idx: Ident.Idx) ?collections.ExposedItemTarget {
+    return self.common.getExposedTargetById(self.gpa, ident_idx);
 }
 
 /// Get the exposed node index for a type given its statement index.

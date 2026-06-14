@@ -220,18 +220,31 @@ const HostedSectionMap = struct {
 
 const BinderMap = std.AutoHashMap(checked.PatternBinderId, Ast.LocalId);
 
-/// A lowered procedure template specialization together with the Monotype
-/// function type its body was lowered at.
+const LoweredTemplateStatus = enum {
+    reserved,
+    lowering,
+    ready,
+};
+
+/// A procedure template specialization together with the Monotype function
+/// type its body is reserved or lowered at.
 const LoweredTemplate = struct {
     def: Ast.DefId,
     fn_ty: Type.TypeId,
+    status: LoweredTemplateStatus,
 };
 
 /// A lowered nested function specialization together with the Monotype
 /// function type its body was lowered at.
 const LoweredNestedFn = struct {
-    nested_id: u32,
+    nested_id: Ast.NestedDefId,
+    fn_id: Ast.FnId,
     fn_ty: Type.TypeId,
+};
+
+const ReservedTemplate = struct {
+    fn_id: Ast.FnId,
+    needs_lowering: bool,
 };
 
 /// A nested function body together with the instantiation context that
@@ -766,7 +779,7 @@ const Builder = struct {
         const body = try self.program.addExpr(.{
             .ty = fn_data.ret,
             .data = .{ .call_proc = .{
-                .callee = .{ .template = callee },
+                .callee = .{ .func = callee },
                 .args = try self.program.addExprSpan(arg_exprs),
             } },
         });
@@ -839,8 +852,11 @@ const Builder = struct {
                     view.types.rootKey(source_fn_ty),
                     mono_fn_ty,
                 );
-                const lowered_template = try self.lowerFnTemplateDef(view, fn_template);
-                break :blk try self.program.addExpr(.{ .ty = lowered_template.mono_fn_ty, .data = .{ .fn_def = lowered_template } });
+                const fn_id = try self.lowerFnTemplateDef(view, fn_template);
+                break :blk try self.program.addExpr(.{
+                    .ty = self.program.fnSource(fn_id).mono_fn_ty,
+                    .data = .{ .fn_def = fn_id },
+                });
             },
             .callable_eval_template => |template_id| try self.lowerCallableEvalBindingValue(view, template_id, mono_fn_ty),
         };
@@ -948,7 +964,9 @@ const Builder = struct {
         const family_entry = try self.lowered_templates.getOrPut(family);
         if (!family_entry.found_existing) family_entry.value_ptr.* = .empty;
         const fn_ty_digest = self.program.types.typeDigest(&self.program.names, fn_ty);
-        for (family_entry.value_ptr.items) |existing| {
+        var reserved_def: ?Ast.DefId = null;
+        var lower_fn_ty = fn_ty;
+        for (family_entry.value_ptr.items) |*existing| {
             if (existing.fn_ty != fn_ty) {
                 const existing_digest = self.program.types.typeDigest(&self.program.names, existing.fn_ty);
                 if (!std.mem.eql(u8, existing_digest.bytes[0..], fn_ty_digest.bytes[0..])) continue;
@@ -957,40 +975,81 @@ const Builder = struct {
                     try graph.drainDirty();
                 }
             }
-            return existing.def;
+            switch (existing.status) {
+                .ready,
+                .lowering,
+                => return existing.def,
+                .reserved => {
+                    reserved_def = existing.def;
+                    lower_fn_ty = existing.fn_ty;
+                    existing.status = .lowering;
+                    break;
+                },
+            }
         }
 
         const view = self.moduleForDigest(names.procTemplateModuleDigest(template_ref));
         const template = view.templates.get(template_ref.template);
-        const symbol = self.symbols.fresh();
-        const fn_template = self.fnDefForTemplate(view, template_ref, source_fn_ty, source_fn_key, fn_ty);
-        try self.registerProcDebugNameForTemplate(symbol, view, template_ref);
+        const fn_template = self.fnDefForTemplate(view, template_ref, source_fn_ty, source_fn_key, lower_fn_ty);
 
-        const reserved: Ast.DefId = @enumFromInt(@as(u32, @intCast(self.program.defs.items.len)));
-        // The definition fills once its body lowers; a recursive request that
-        // reuses this entry meanwhile reads the requested template, which is
-        // the same specialization by construction.
-        try self.program.defs.append(self.allocator, .{
-            .symbol = symbol,
-            .fn_def = fn_template,
-            .args = Ast.Span(Ast.TypedLocal).empty(),
-            .body = .hosted,
-            .ret = self.functionShape(fn_ty, "procedure template root type was not a function").ret,
-        });
-        try family_entry.value_ptr.append(self.allocator, .{ .def = reserved, .fn_ty = fn_ty });
+        const Reservation = struct {
+            def: Ast.DefId,
+            fn_id: Ast.FnId,
+            symbol: Common.Symbol,
+        };
+        const reservation: Reservation = if (reserved_def) |def_id| blk: {
+            const def = &self.program.defs.items[@intFromEnum(def_id)];
+            const fn_id = def.fn_id orelse
+                Common.invariant("reserved Monotype procedure template definition had no function id");
+            def.fn_def = fn_template;
+            self.program.fns.items[@intFromEnum(fn_id)].source = fn_template;
+            break :blk .{
+                .def = def_id,
+                .fn_id = fn_id,
+                .symbol = def.symbol,
+            };
+        } else blk: {
+            const symbol = self.symbols.fresh();
+            try self.registerProcDebugNameForTemplate(symbol, view, template_ref);
+            const fn_id = try self.program.addFn(fn_template);
+            const def_id: Ast.DefId = @enumFromInt(@as(u32, @intCast(self.program.defs.items.len)));
+            // The definition fills once its body lowers; a recursive request
+            // that reuses this entry meanwhile reads the requested template,
+            // which is the same specialization by construction.
+            try self.program.defs.append(self.allocator, .{
+                .symbol = symbol,
+                .fn_def = fn_template,
+                .fn_id = fn_id,
+                .args = Ast.Span(Ast.TypedLocal).empty(),
+                .body = .hosted,
+                .ret = self.functionShape(lower_fn_ty, "procedure template root type was not a function").ret,
+            });
+            try family_entry.value_ptr.append(self.allocator, .{
+                .def = def_id,
+                .fn_ty = lower_fn_ty,
+                .status = .lowering,
+            });
+            break :blk .{
+                .def = def_id,
+                .fn_id = fn_id,
+                .symbol = symbol,
+            };
+        };
 
         switch (template.target) {
             .hosted => {
-                const fn_data = self.functionShape(fn_ty, "hosted procedure template root type was not a function");
+                const fn_data = self.functionShape(lower_fn_ty, "hosted procedure template root type was not a function");
                 const args = try self.typedLocalsForArgs(self.program.types.span(fn_data.args));
-                self.program.defs.items[@intFromEnum(reserved)] = .{
-                    .symbol = symbol,
+                self.program.defs.items[@intFromEnum(reservation.def)] = .{
+                    .symbol = reservation.symbol,
                     .fn_def = fn_template,
+                    .fn_id = reservation.fn_id,
                     .args = args,
                     .body = .hosted,
                     .ret = fn_data.ret,
                 };
-                return reserved;
+                self.markTemplateReady(family, reservation.def, lower_fn_ty);
+                return reservation.def;
             },
             .roc,
             .intrinsic,
@@ -1010,9 +1069,9 @@ const Builder = struct {
         body_ctx.current_fn_key = root_fn_key;
         defer body_ctx.deinit();
         if (moduleBytesEqual(source_ty_view.key.bytes, view.key.bytes)) {
-            try body_ctx.constrainKnownType(source_fn_ty, fn_ty);
+            try body_ctx.constrainKnownType(source_fn_ty, lower_fn_ty);
         }
-        try body_ctx.constrainTypeToMono(template.checked_fn_root, fn_ty);
+        try body_ctx.constrainTypeToMono(template.checked_fn_root, lower_fn_ty);
 
         // The requested function type becomes a view of this specialization's
         // root: every later stage compares call-site and definition types for
@@ -1021,8 +1080,8 @@ const Builder = struct {
         // requester's id in place. Builder-global types stay snapshots; they
         // serve many specializations.
         const root_node = try body_ctx.instNode(template.checked_fn_root);
-        if (!self.unsolved_monos.contains(fn_ty)) {
-            try graph.addMonoView(root_node, fn_ty);
+        if (!self.unsolved_monos.contains(lower_fn_ty)) {
+            try graph.addMonoView(root_node, lower_fn_ty);
         }
         const live_fn_ty = try graph.monoFor(root_node);
         const lowered = try body_ctx.lowerTemplateBody(template_ref, template, live_fn_ty);
@@ -1033,6 +1092,7 @@ const Builder = struct {
         // adopt this recorded template directly.
         var def_template = fn_template;
         def_template.mono_fn_ty = live_fn_ty;
+        self.program.fns.items[@intFromEnum(reservation.fn_id)].source = def_template;
         // The body may have refined slots the request left unresolved (empty
         // tag unions). Flow the solved view back into the requester's Monotype
         // so call sites embedding the requested id digest identically to this
@@ -1044,15 +1104,81 @@ const Builder = struct {
             );
             try requester_graph.drainDirty();
         }
-        self.program.defs.items[@intFromEnum(reserved)] = .{
-            .symbol = symbol,
+        self.program.defs.items[@intFromEnum(reservation.def)] = .{
+            .symbol = reservation.symbol,
             .fn_def = def_template,
+            .fn_id = reservation.fn_id,
             .args = lowered.args,
             .body = .{ .roc = lowered.body },
             .ret = lowered.ret,
         };
+        self.markTemplateReady(family, reservation.def, live_fn_ty);
         try self.drainSpecRequests(graph);
-        return reserved;
+        return reservation.def;
+    }
+
+    fn reserveTemplateWithMonoFor(
+        self: *Builder,
+        template_ref: names.ProcTemplate,
+        source_fn_ty: checked.CheckedTypeId,
+        source_fn_key: names.TypeDigest,
+        fn_ty: Type.TypeId,
+        requester: *InstGraph,
+    ) Allocator.Error!ReservedTemplate {
+        const family = TemplateFamily.from(template_ref, source_fn_key);
+        const family_entry = try self.lowered_templates.getOrPut(family);
+        if (!family_entry.found_existing) family_entry.value_ptr.* = .empty;
+        const fn_ty_digest = self.program.types.typeDigest(&self.program.names, fn_ty);
+        for (family_entry.value_ptr.items) |existing| {
+            if (existing.fn_ty != fn_ty) {
+                const existing_digest = self.program.types.typeDigest(&self.program.names, existing.fn_ty);
+                if (!std.mem.eql(u8, existing_digest.bytes[0..], fn_ty_digest.bytes[0..])) continue;
+                try requester.unify(try requester.importMono(fn_ty), try requester.importMono(existing.fn_ty));
+                try requester.drainDirty();
+            }
+            const def = self.program.defs.items[@intFromEnum(existing.def)];
+            return .{
+                .fn_id = def.fn_id orelse
+                    Common.invariant("reserved Monotype procedure template definition had no function id"),
+                .needs_lowering = existing.status == .reserved,
+            };
+        }
+
+        const view = self.moduleForDigest(names.procTemplateModuleDigest(template_ref));
+        const fn_template = self.fnDefForTemplate(view, template_ref, source_fn_ty, source_fn_key, fn_ty);
+        const fn_id = try self.program.addFn(fn_template);
+        const def_id: Ast.DefId = @enumFromInt(@as(u32, @intCast(self.program.defs.items.len)));
+        const symbol = self.symbols.fresh();
+        try self.registerProcDebugNameForTemplate(symbol, view, template_ref);
+        try self.program.defs.append(self.allocator, .{
+            .symbol = symbol,
+            .fn_def = fn_template,
+            .fn_id = fn_id,
+            .args = Ast.Span(Ast.TypedLocal).empty(),
+            .body = .hosted,
+            .ret = self.functionShape(fn_ty, "procedure template root type was not a function").ret,
+        });
+        try family_entry.value_ptr.append(self.allocator, .{
+            .def = def_id,
+            .fn_ty = fn_ty,
+            .status = .reserved,
+        });
+        return .{
+            .fn_id = fn_id,
+            .needs_lowering = true,
+        };
+    }
+
+    fn markTemplateReady(self: *Builder, family: TemplateFamily, def: Ast.DefId, fn_ty: Type.TypeId) void {
+        const entries = self.lowered_templates.getPtr(family) orelse
+            Common.invariant("lowered procedure template family disappeared before completion");
+        for (entries.items) |*entry| {
+            if (entry.def != def) continue;
+            entry.fn_ty = fn_ty;
+            entry.status = .ready;
+            return;
+        }
+        Common.invariant("lowered procedure template definition disappeared before completion");
     }
 
     fn typedLocalsForArgs(self: *Builder, arg_tys: []const Type.TypeId) Allocator.Error!Ast.Span(Ast.TypedLocal) {
@@ -1601,7 +1727,7 @@ const Builder = struct {
         source_ty_view: ModuleView,
         proc: checked.ProcedureUseTemplate,
         source_fn_ty: checked.CheckedTypeId,
-    ) Allocator.Error!Ast.FnTemplate {
+    ) Allocator.Error!Ast.FnId {
         const mono_fn_ty = try self.lowerType(source_ty_view, source_fn_ty);
         const source_fn_key = proc.source_fn_ty_template;
         const fn_template = switch (proc.binding) {
@@ -1634,13 +1760,12 @@ const Builder = struct {
         return try self.lowerFnTemplateDef(source_ty_view, fn_template);
     }
 
-    /// Lower (or defer) a procedure template body and return the template the
-    /// call site should embed. Inside a specialization the request defers and
-    /// the requester's types agree with the body by construction. Outside one
-    /// (root and wrapper paths, whose types come from the builder-global cache
-    /// without body evidence), the body lowers now and the call site embeds
-    /// the definition's recorded template so both share the solved type.
-    fn lowerFnTemplateDef(self: *Builder, source_ty_view: ModuleView, fn_template: Ast.FnTemplate) Allocator.Error!Ast.FnTemplate {
+    /// Lower (or defer) a procedure template body and return the Monotype
+    /// function id the call site should embed. Inside a specialization the
+    /// request reserves an id and defers the body; outside one (root and
+    /// wrapper paths, whose types come from the builder-global cache without
+    /// body evidence), the body lowers now.
+    fn lowerFnTemplateDef(self: *Builder, source_ty_view: ModuleView, fn_template: Ast.FnTemplate) Allocator.Error!Ast.FnId {
         const template_ref = switch (fn_template.fn_def) {
             .local_template,
             .imported_template,
@@ -1649,7 +1774,7 @@ const Builder = struct {
             .local_hosted,
             .imported_hosted,
             => |hosted| hosted.template,
-            .nested => return fn_template,
+            .nested => Common.invariant("nested function specialization must be lowered through nested function lowering"),
         };
         // Deferral exists so a requester's solved types key the request; a
         // request typed by an unsolved builder-global Monotype gains nothing
@@ -1657,21 +1782,30 @@ const Builder = struct {
         // template instead.
         if (!self.unsolved_monos.contains(fn_template.mono_fn_ty)) {
             if (self.active_graph) |graph| {
-                try graph.deferred_templates.append(self.allocator, .{
-                    .template_ref = template_ref,
-                    .module = source_ty_view.key,
-                    .source_fn_ty = fn_template.source_fn_ty,
-                    .source_fn_key = fn_template.source_fn_key,
-                    .fn_ty = fn_template.mono_fn_ty,
-                });
-                return fn_template;
+                const reserved = try self.reserveTemplateWithMonoFor(
+                    template_ref,
+                    fn_template.source_fn_ty,
+                    fn_template.source_fn_key,
+                    fn_template.mono_fn_ty,
+                    graph,
+                );
+                if (reserved.needs_lowering) {
+                    try graph.deferred_templates.append(self.allocator, .{
+                        .template_ref = template_ref,
+                        .module = source_ty_view.key,
+                        .source_fn_ty = fn_template.source_fn_ty,
+                        .source_fn_key = fn_template.source_fn_key,
+                        .fn_ty = fn_template.mono_fn_ty,
+                    });
+                }
+                return reserved.fn_id;
             }
         }
         const def = try self.lowerTemplateWithMono(template_ref, source_ty_view, fn_template.source_fn_ty, fn_template.source_fn_key, fn_template.mono_fn_ty);
-        return self.program.defs.items[@intFromEnum(def)].fn_def orelse fn_template;
+        return self.defFnId(def);
     }
 
-    fn lowerRestoredConstFnTemplate(self: *Builder, type_view: ModuleView, fn_template: Ast.FnTemplate) Allocator.Error!Ast.FnTemplate {
+    fn lowerRestoredConstFnTemplate(self: *Builder, type_view: ModuleView, fn_template: Ast.FnTemplate) Allocator.Error!Ast.FnId {
         switch (fn_template.fn_def) {
             .nested => {
                 const fn_view = self.moduleForConstFnDef(fn_template.fn_def);
@@ -1682,37 +1816,47 @@ const Builder = struct {
                 defer self.active_graph = saved_graph;
                 var fn_ctx = try BodyContext.init(self.allocator, self, fn_view, ownerTemplateForConstFnDef(fn_template.fn_def), graph);
                 defer fn_ctx.deinit();
-                try self.lowerNestedFnFromContext(&fn_ctx, checkedLambdaExprIdForConstFn(fn_view, fn_template.fn_def), fn_template);
+                const fn_id = try self.lowerNestedFnFromContext(&fn_ctx, checkedLambdaExprIdForConstFn(fn_view, fn_template.fn_def), fn_template);
                 try self.drainSpecRequests(graph);
-                return fn_template;
+                return fn_id;
             },
             else => return try self.lowerFnTemplateDef(type_view, fn_template),
         }
     }
 
-    fn lowerFnTemplateDefFromContext(self: *Builder, source_ctx: *BodyContext, fn_template: Ast.FnTemplate) Allocator.Error!void {
-        switch (fn_template.fn_def) {
+    fn lowerFnTemplateDefFromContext(self: *Builder, source_ctx: *BodyContext, fn_template: Ast.FnTemplate) Allocator.Error!Ast.FnId {
+        const template_ref = switch (fn_template.fn_def) {
             .local_template,
             .imported_template,
             .checked_generated,
-            => |template| try source_ctx.graph.deferred_templates.append(self.allocator, .{
-                .template_ref = template,
-                .module = source_ctx.view.key,
-                .source_fn_ty = fn_template.source_fn_ty,
-                .source_fn_key = fn_template.source_fn_key,
-                .fn_ty = fn_template.mono_fn_ty,
-            }),
+            => |template| template,
             .local_hosted,
             .imported_hosted,
-            => |hosted| try source_ctx.graph.deferred_templates.append(self.allocator, .{
-                .template_ref = hosted.template,
+            => |hosted| hosted.template,
+            .nested => Common.invariant("nested function specialization must be lowered through nested function lowering"),
+        };
+        const reserved = try self.reserveTemplateWithMonoFor(
+            template_ref,
+            fn_template.source_fn_ty,
+            fn_template.source_fn_key,
+            fn_template.mono_fn_ty,
+            source_ctx.graph,
+        );
+        if (reserved.needs_lowering) {
+            try source_ctx.graph.deferred_templates.append(self.allocator, .{
+                .template_ref = template_ref,
                 .module = source_ctx.view.key,
                 .source_fn_ty = fn_template.source_fn_ty,
                 .source_fn_key = fn_template.source_fn_key,
                 .fn_ty = fn_template.mono_fn_ty,
-            }),
-            .nested => {},
+            });
         }
+        return reserved.fn_id;
+    }
+
+    fn defFnId(self: *Builder, def: Ast.DefId) Ast.FnId {
+        return self.program.defs.items[@intFromEnum(def)].fn_id orelse
+            Common.invariant("Monotype procedure template definition had no function id");
     }
 
     fn nestedFnForExpr(
@@ -1764,21 +1908,21 @@ const Builder = struct {
         source_ctx: *BodyContext,
         expr_id: checked.CheckedExprId,
         fn_template: Ast.FnTemplate,
-    ) Allocator.Error!void {
+    ) Allocator.Error!Ast.FnId {
         const nested_ctx = try self.allocator.create(BodyContext);
         errdefer self.allocator.destroy(nested_ctx);
         nested_ctx.* = try source_ctx.nestedInstantiationContext(Ast.fnTemplateDigest(fn_template, &self.program.types, &self.program.names));
         // Nested functions share the requester's graph, and an inferred local
         // procedure's body pins signature variables (its own evidence) that
         // the requester's remaining body relies on, so the body lowers now.
-        try self.lowerNestedFnRequest(.{
+        return try self.lowerNestedFnRequest(.{
             .ctx = nested_ctx,
             .expr_id = expr_id,
             .fn_template = fn_template,
         });
     }
 
-    fn lowerNestedFnRequest(self: *Builder, request: NestedFnRequest) Allocator.Error!void {
+    fn lowerNestedFnRequest(self: *Builder, request: NestedFnRequest) Allocator.Error!Ast.FnId {
         defer {
             request.ctx.deinit();
             self.allocator.destroy(request.ctx);
@@ -1802,24 +1946,47 @@ const Builder = struct {
                 );
                 try request.ctx.graph.drainDirty();
             }
-            return;
+            return existing.fn_id;
         }
 
-        const nested_id: u32 = @intCast(self.program.nested_defs.items.len);
+        const nested_id: Ast.NestedDefId = @enumFromInt(@as(u32, @intCast(self.program.nested_defs.items.len)));
+        const fn_id = try self.program.addFn(fn_template);
         try self.program.nested_defs.append(self.allocator, undefined);
-        try family_entry.value_ptr.append(self.allocator, .{ .nested_id = nested_id, .fn_ty = fn_template.mono_fn_ty });
+        try family_entry.value_ptr.append(self.allocator, .{
+            .nested_id = nested_id,
+            .fn_id = fn_id,
+            .fn_ty = fn_template.mono_fn_ty,
+        });
 
         try request.ctx.constrainTypeToMono(fn_template.source_fn_ty, fn_template.mono_fn_ty);
 
-        const live_fn_ty = try request.ctx.graph.monoFor(try request.ctx.instNode(fn_template.source_fn_ty));
+        const root_node = try request.ctx.instNode(fn_template.source_fn_ty);
+        if (!self.unsolved_monos.contains(fn_template.mono_fn_ty)) {
+            try request.ctx.graph.addMonoView(root_node, fn_template.mono_fn_ty);
+        }
+        const live_fn_ty = try request.ctx.graph.monoFor(root_node);
         const lowered = try request.ctx.lowerNestedFunction(request.expr_id, live_fn_ty);
-        self.program.nested_defs.items[nested_id] = .{
+        var def_template = fn_template;
+        def_template.mono_fn_ty = live_fn_ty;
+        self.program.fns.items[@intFromEnum(fn_id)].source = def_template;
+        self.program.nested_defs.items[@intFromEnum(nested_id)] = .{
             .symbol = self.symbols.fresh(),
-            .fn_def = fn_template,
+            .fn_def = def_template,
+            .fn_id = fn_id,
             .args = lowered.args,
             .body = lowered.body,
             .ret = lowered.ret,
         };
+        if (live_fn_ty != fn_template.mono_fn_ty) {
+            const entries = self.lowered_nested_fns.getPtr(family) orelse
+                Common.invariant("lowered nested function family disappeared before completion");
+            for (entries.items) |*entry| {
+                if (entry.nested_id != nested_id) continue;
+                entry.fn_ty = live_fn_ty;
+                break;
+            }
+        }
+        return fn_id;
     }
 
     /// Process the specialization body requests this specialization enqueued
@@ -1883,8 +2050,11 @@ const Builder = struct {
         const fn_value = store_view.const_store.fns.items[raw];
         const template = try self.constFnTemplateToMono(fn_value, ty);
         if (fn_value.captures.len == 0) {
-            const lowered_template = try self.lowerRestoredConstFnTemplate(type_view, template);
-            return try self.program.addExpr(.{ .ty = lowered_template.mono_fn_ty, .data = .{ .fn_def = lowered_template } });
+            const mono_fn_id = try self.lowerRestoredConstFnTemplate(type_view, template);
+            return try self.program.addExpr(.{
+                .ty = self.program.fnSource(mono_fn_id).mono_fn_ty,
+                .data = .{ .fn_def = mono_fn_id },
+            });
         }
 
         const fn_view = self.moduleForConstFnDef(fn_value.fn_def);
@@ -1955,7 +2125,7 @@ const Builder = struct {
         var expr = try self.program.addExpr(.{
             .ty = ty,
             .data = switch (lambda_expr.data) {
-                .lambda => |lambda| try fn_ctx.lowerLambdaExpr(lambda, template),
+                .lambda => try fn_ctx.lowerLambdaExpr(lambda_expr_id, template),
                 else => Common.invariant("stored capturing function did not reference a checked lambda"),
             },
         });
@@ -2250,7 +2420,7 @@ const Builder = struct {
         var target_ctx = try BodyContext.init(self.allocator, self, lookup.view, template, graph);
         defer target_ctx.deinit();
         const callable_mono_ty = try target_ctx.instantiateTargetCallTypeFromMonoArgs(lookup.target.callable_ty, &.{value_ty}, str_ty);
-        _ = try self.lowerTemplateWithMono(
+        const callee_def = try self.lowerTemplateWithMono(
             template,
             lookup.view,
             lookup.target.callable_ty,
@@ -2260,13 +2430,7 @@ const Builder = struct {
 
         const args = [_]Ast.ExprId{value};
         const call = try self.program.addExpr(.{ .ty = str_ty, .data = .{ .call_proc = .{
-            .callee = .{ .template = self.fnDefForTemplate(
-                lookup.view,
-                template,
-                lookup.target.callable_ty,
-                lookup.view.types.rootKey(lookup.target.callable_ty),
-                callable_mono_ty,
-            ) },
+            .callee = .{ .func = self.defFnId(callee_def) },
             .args = try self.program.addExprSpan(&args),
         } } });
         try self.drainSpecRequests(graph);
@@ -3120,6 +3284,10 @@ const BodyContext = struct {
             .index = 0,
             .body = checked_body,
         } }, ret_ty);
+        const body_loc = self.builder.program.exprLoc(body);
+        const saved_loc = self.builder.program.current_loc;
+        defer self.builder.program.current_loc = saved_loc;
+        self.builder.program.current_loc = body_loc;
         var remaining = arg_lets.items.len;
         while (remaining > 0) {
             remaining -= 1;
@@ -3266,9 +3434,9 @@ const BodyContext = struct {
             .zero_argument_tag => |tag| .{ .tag = .{ .name = try self.builder.tagName(self.view, tag.name), .payloads = .empty() } },
             .nominal => |nominal| .{ .nominal = try self.lowerExprAtType(nominal.backing_expr, self.builder.namedBackingType(ty) orelse ty) },
             .closure => |closure| try self.lowerClosure(expr_id, closure, ty),
-            .lambda => |lambda| blk: {
+            .lambda => blk: {
                 break :blk try self.lowerLambdaExpr(
-                    lambda,
+                    expr_id,
                     try self.builder.fnTemplateForNestedExprWithMono(self.view, self.owner_template, expr_id, expr.ty, self.view.types.rootKey(expr.ty), ty, self.current_fn_key),
                 );
             },
@@ -3409,7 +3577,7 @@ const BodyContext = struct {
             return .{
                 .ret_ty = fn_data.ret,
                 .data = .{ .call_proc = .{
-                    .callee = .{ .template = callee },
+                    .callee = .{ .func = callee },
                     .args = try self.lowerExprSpanAtTypes(call.args, self.builder.program.types.span(fn_data.args)),
                 } },
             };
@@ -3527,7 +3695,11 @@ const BodyContext = struct {
         const fn_node = try self.instNode(source_fn_ty);
         for (function.args, checked_args) |formal_ty, checked_arg| {
             const arg_ty = caller.view.bodies.exprs[@intFromEnum(checked_arg)].ty;
-            try self.graph.unify(try self.instNode(formal_ty), try caller.instNode(arg_ty));
+            const formal_node = try self.instNode(formal_ty);
+            try self.graph.unify(formal_node, try caller.instNode(arg_ty));
+            if (try caller.callArgumentMonoType(checked_arg, null)) |evidence_ty| {
+                try self.graph.unify(formal_node, try self.graph.importMono(evidence_ty));
+            }
         }
         try self.graph.unify(try self.instNode(function.ret), try caller.instNode(checked_ret_ty));
         if (expected_ret_ty) |expected| {
@@ -3746,7 +3918,7 @@ const BodyContext = struct {
         source_fn_ty: checked.CheckedTypeId,
         source_fn_key: names.TypeDigest,
         mono_fn_ty: Type.TypeId,
-    ) Allocator.Error!Ast.FnTemplate {
+    ) Allocator.Error!Ast.FnId {
         const raw = @intFromEnum(target);
         if (raw >= self.view.resolved_refs.records.len) {
             Common.invariant("checked direct call target is outside resolved value table");
@@ -3777,7 +3949,7 @@ const BodyContext = struct {
         source_fn_ty: checked.CheckedTypeId,
         source_fn_key: names.TypeDigest,
         mono_fn_ty: Type.TypeId,
-    ) Allocator.Error!Ast.FnTemplate {
+    ) Allocator.Error!Ast.FnId {
         const context_fn_key = self.local_proc_contexts.get(local.binder) orelse
             Common.invariant("local procedure use reached Monotype before its declaration context");
         const fn_template = try self.builder.fnTemplateForNestedExprWithMono(
@@ -3789,8 +3961,7 @@ const BodyContext = struct {
             mono_fn_ty,
             context_fn_key,
         );
-        try self.builder.lowerNestedFnFromContext(self, local.expr, fn_template);
-        return fn_template;
+        return try self.builder.lowerNestedFnFromContext(self, local.expr, fn_template);
     }
 
     fn fnDefForProcedureUseWithMono(
@@ -3799,7 +3970,7 @@ const BodyContext = struct {
         source_fn_ty: checked.CheckedTypeId,
         source_fn_key: names.TypeDigest,
         mono_fn_ty: Type.TypeId,
-    ) Allocator.Error!Ast.FnTemplate {
+    ) Allocator.Error!Ast.FnId {
         const fn_template = switch (proc.binding) {
             .top_level => |top_level| blk: {
                 const view = self.builder.moduleForId(checked.topLevelProcedureModuleId(top_level));
@@ -3833,8 +4004,7 @@ const BodyContext = struct {
                 break :blk self.builder.fnDefForProcedureBindingBody(app_view, binding.body, binding_source, app_view.types.rootKey(binding_source), mono_fn_ty);
             },
         };
-        try self.builder.lowerFnTemplateDefFromContext(self, fn_template);
-        return fn_template;
+        return try self.builder.lowerFnTemplateDefFromContext(self, fn_template);
     }
 
     fn currentLocalBindingForResolvedValue(self: *BodyContext, ref_id: checked.ResolvedValueId) ?CurrentLocal {
@@ -3872,16 +4042,19 @@ const BodyContext = struct {
         if (self.currentLocalBindingForResolvedValue(ref_id)) |binding| {
             const local_id = binding.local;
             const local_ty = self.builder.program.locals.items[@intFromEnum(local_id)].ty;
+            const binder_ty = checkedBinderType(self.view, binding.binder);
             // The local's Monotype identifies the binder's node in the
             // context that bound it; importing it unifies this context's
             // instantiation with that node before the use type is unified.
-            try self.constrainTypeToMono(checkedBinderType(self.view, binding.binder), local_ty);
-            try self.constrainTypeToMono(checkedBinderType(self.view, binding.binder), ty);
+            try self.constrainTypeToMono(binder_ty, local_ty);
+            try self.constrainTypeToMono(binder_ty, ty);
             try self.constrainTypeToMono(checked_ty, ty);
-            if (!self.sameType(ty, local_ty)) {
+            const live_ty = try self.lowerType(binder_ty);
+            if (live_ty != local_ty) self.builder.program.setLocalType(local_id, live_ty);
+            if (!self.sameType(ty, live_ty)) {
                 Common.invariant("checked local lookup type differed from its expected Monotype use type");
             }
-            return try self.builder.program.addExpr(.{ .ty = ty, .data = .{ .local = local_id } });
+            return try self.builder.program.addExpr(.{ .ty = live_ty, .data = .{ .local = local_id } });
         }
 
         switch (record.ref) {
@@ -3952,8 +4125,8 @@ const BodyContext = struct {
                     proc.source_fn_ty_template,
                     mono_fn_ty,
                 );
-                try self.builder.lowerFnTemplateDefFromContext(self, fn_template);
-                break :blk try self.builder.program.addExpr(.{ .ty = mono_fn_ty, .data = .{ .fn_def = fn_template } });
+                const fn_id = try self.builder.lowerFnTemplateDefFromContext(self, fn_template);
+                break :blk try self.builder.program.addExpr(.{ .ty = mono_fn_ty, .data = .{ .fn_def = fn_id } });
             },
             .platform_required => |required| blk: {
                 const view = self.builder.moduleForId(checked.requiredProcedureModuleId(required));
@@ -4022,7 +4195,12 @@ const BodyContext = struct {
         try body_ctx.constrainTypeToMono(entry_template.checked_fn_root, wrapper_fn_ty);
         try body_ctx.constrainTypeToMono(body.checked_type, ty);
 
-        const lowered = try body_ctx.lowerExprAtType(body.body_expr, ty);
+        const result_node = try body_ctx.instNode(body.checked_type);
+        if (!self.builder.unsolved_monos.contains(ty)) {
+            try graph.addMonoView(result_node, ty);
+        }
+        const live_ty = try graph.monoFor(result_node);
+        const lowered = try body_ctx.lowerExprAtType(body.body_expr, live_ty);
         try self.builder.drainSpecRequests(graph);
         return lowered;
     }
@@ -4296,6 +4474,9 @@ const BodyContext = struct {
         ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprId {
         const expr = self.view.bodies.exprs[@intFromEnum(checked_expr)];
+        const saved_loc = self.builder.program.current_loc;
+        defer self.builder.program.current_loc = saved_loc;
+        self.builder.program.current_loc = try self.sourceLocFor(expr.source_region);
         switch (expr.data) {
             .call => |call| {
                 try self.constrainKnownType(expr.ty, ty);
@@ -4510,9 +4691,9 @@ const BodyContext = struct {
     fn lowerClosure(self: *BodyContext, expr_id: checked.CheckedExprId, closure: anytype, closure_ty: Type.TypeId) Allocator.Error!Ast.ExprData {
         const lambda = self.view.bodies.exprs[@intFromEnum(closure.lambda)];
         return switch (lambda.data) {
-            .lambda => |lambda_data| blk: {
+            .lambda => blk: {
                 const nested = try self.builder.fnTemplateForNestedExprWithMono(self.view, self.owner_template, expr_id, lambda.ty, self.view.types.rootKey(lambda.ty), closure_ty, self.current_fn_key);
-                break :blk try self.lowerLambdaExpr(lambda_data, nested);
+                break :blk try self.lowerLambdaExpr(expr_id, nested);
             },
             else => Common.invariant("checked closure did not point at a lambda expression"),
         };
@@ -4545,27 +4726,16 @@ const BodyContext = struct {
         } });
     }
 
-    fn lowerLambdaExpr(self: *BodyContext, lambda: anytype, nested: Ast.FnTemplate) Allocator.Error!Ast.ExprData {
-        var lambda_ctx = try self.nestedInstantiationContext(Ast.fnTemplateDigest(nested, &self.builder.program.types, &self.builder.program.names));
-        defer lambda_ctx.deinit();
-        try lambda_ctx.constrainTypeToMono(nested.source_fn_ty, nested.mono_fn_ty);
-
-        const fn_data = self.builder.functionShape(nested.mono_fn_ty, "nested lambda had a non-function type");
-        const arg_tys = try self.allocator.dupe(Type.TypeId, self.builder.program.types.span(fn_data.args));
-        defer self.allocator.free(arg_tys);
-        if (arg_tys.len != lambda.args.len) Common.invariant("nested lambda arity differs from concrete function type");
-
-        const lowered = try lambda_ctx.lowerLambdaArgsAndBody(lambda.args, arg_tys, lambda.body, fn_data.ret);
+    fn lowerLambdaExpr(
+        self: *BodyContext,
+        expr_id: checked.CheckedExprId,
+        nested: Ast.FnTemplate,
+    ) Allocator.Error!Ast.ExprData {
         switch (nested.fn_def) {
             .nested => {},
             else => Common.invariant("expression-position lambda was not assigned a nested function identity"),
         }
-
-        return .{ .lambda = .{
-            .args = lowered.args,
-            .body = lowered.body,
-            .source = nested,
-        } };
+        return .{ .fn_def = try self.builder.lowerNestedFnFromContext(self, expr_id, nested) };
     }
 
     fn lowerDispatchExpr(
@@ -5018,25 +5188,19 @@ const BodyContext = struct {
         self: *BodyContext,
         lookup: MethodLookup,
         callable_mono_ty: Type.TypeId,
-    ) Allocator.Error!Ast.FnTemplate {
+    ) Allocator.Error!Ast.FnId {
         const source_fn_ty = lookup.target.callable_ty;
         const source_fn_key = lookup.view.types.rootKey(source_fn_ty);
         return switch (lookup.target.kind) {
             .procedure => |procedure| blk: {
-                try self.graph.deferred_templates.append(self.builder.allocator, .{
-                    .template_ref = procedure.template,
-                    .module = lookup.view.key,
-                    .source_fn_ty = source_fn_ty,
-                    .source_fn_key = source_fn_key,
-                    .fn_ty = callable_mono_ty,
-                });
-                break :blk self.builder.fnDefForTemplate(
+                const fn_template = self.builder.fnDefForTemplate(
                     lookup.view,
                     procedure.template,
                     source_fn_ty,
                     source_fn_key,
                     callable_mono_ty,
                 );
+                break :blk try self.builder.lowerFnTemplateDefFromContext(self, fn_template);
             },
             .local_proc => |local| blk: {
                 self.requireLocalMethodTargetInCurrentView(lookup);
@@ -5061,7 +5225,7 @@ const BodyContext = struct {
         const fn_data = self.builder.functionShape(callable_mono_ty, "checked dispatch target had a non-function type");
         const args = try arg_ctx.lowerDispatchOperandsAtTypes(plan.args, self.builder.program.types.span(fn_data.args), pre_lowered);
         return .{ .call_proc = .{
-            .callee = .{ .template = try self.methodTargetCalleeWithMono(lookup, callable_mono_ty) },
+            .callee = .{ .func = try self.methodTargetCalleeWithMono(lookup, callable_mono_ty) },
             .args = args,
         } };
     }
@@ -5458,7 +5622,7 @@ const BodyContext = struct {
         const callable_mono_ty = try self.methodTargetMonoTypeFromArgs(lookup, &arg_tys, bool_ty);
         const args = [_]Ast.ExprId{ lhs, rhs };
         return try self.builder.program.addExpr(.{ .ty = bool_ty, .data = .{ .call_proc = .{
-            .callee = .{ .template = try self.methodTargetCalleeWithMono(lookup, callable_mono_ty) },
+            .callee = .{ .func = try self.methodTargetCalleeWithMono(lookup, callable_mono_ty) },
             .args = try self.builder.program.addExprSpan(&args),
         } } });
     }
@@ -7195,7 +7359,7 @@ const BodyContext = struct {
         return try self.builder.program.addExpr(.{
             .ty = fn_data.ret,
             .data = .{ .call_proc = .{
-                .callee = .{ .template = try self.methodTargetCalleeWithMono(lookup, target_mono_ty) },
+                .callee = .{ .func = try self.methodTargetCalleeWithMono(lookup, target_mono_ty) },
                 .args = try self.builder.program.addExprSpan(args),
             } },
         });
@@ -8121,7 +8285,7 @@ const BodyContext = struct {
                 const callable_mono_ty = try self.methodTargetMonoTypeFromArgs(lookup, &arg_tys, bool_ty);
                 const callee = try self.methodTargetCalleeWithMono(lookup, callable_mono_ty);
                 return try self.builder.program.addExpr(.{ .ty = bool_ty, .data = .{ .call_proc = .{
-                    .callee = .{ .template = callee },
+                    .callee = .{ .func = callee },
                     .args = try self.builder.program.addExprSpan(&.{ scrutinee, expected }),
                 } } });
             }
