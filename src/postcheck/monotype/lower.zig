@@ -2821,7 +2821,10 @@ const BodyContext = struct {
     }
 
     fn nestedInstantiationContext(self: *BodyContext, current_fn_key: names.TypeDigest) Allocator.Error!BodyContext {
-        return try self.childContextWithTypeCells(current_fn_key, false);
+        var child = try self.childContextWithTypeCells(current_fn_key, false);
+        errdefer child.deinit();
+        try child.constrainCopiedBinderTypes();
+        return child;
     }
 
     fn childContextWithTypeCells(
@@ -2855,6 +2858,15 @@ const BodyContext = struct {
         try child.loop_contexts.appendSlice(child.allocator, self.loop_contexts.items);
 
         return child;
+    }
+
+    fn constrainCopiedBinderTypes(self: *BodyContext) Allocator.Error!void {
+        var binder_iter = self.binders.iterator();
+        while (binder_iter.next()) |entry| {
+            const local = entry.value_ptr.*;
+            const local_ty = self.builder.program.locals.items[@intFromEnum(local)].ty;
+            try self.constrainTypeToMono(checkedBinderType(self.view, entry.key_ptr.*), local_ty);
+        }
     }
 
     /// Constrain a checked type to a Monotype: instantiate the checked type
