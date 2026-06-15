@@ -97,6 +97,7 @@ const Symbols = struct {
     score_list_ops: Symbol,
     score_str_ops: Symbol,
     score_try_ops: Symbol,
+    score_set_ops: Symbol,
 };
 
 pub fn init(allocator: std.mem.Allocator, reader: *FuzzReader) Self {
@@ -215,6 +216,7 @@ pub fn generate(self: *Self) std.mem.Allocator.Error!void {
         .score_list_ops = self.fresh(.function),
         .score_str_ops = self.fresh(.function),
         .score_try_ops = self.fresh(.function),
+        .score_set_ops = self.fresh(.function),
     };
 
     try self.setFileNames(app_file, platform_file, module_file);
@@ -600,6 +602,7 @@ fn writeTopLevelFunctions(self: *Self) std.mem.Allocator.Error!void {
     try self.writeListOpsScoring();
     try self.writeStrOpsScoring();
     try self.writeTryOpsScoring();
+    try self.writeSetOpsScoring();
 }
 
 fn writeMakeItem(self: *Self) std.mem.Allocator.Error!void {
@@ -2572,6 +2575,197 @@ fn writeTryOpsScoring(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppText("\n}\n\n");
 }
 
+fn writeSetOpsScoring(self: *Self) std.mem.Allocator.Error!void {
+    const items = self.fresh(.value);
+    const seed = self.fresh(.value);
+    const ids = self.fresh(.value);
+    const map_item = self.fresh(.value);
+    const base = self.fresh(.value);
+    const extended = self.fresh(.value);
+    const trimmed = self.fresh(.value);
+    const kept = self.fresh(.value);
+    const keep_value = self.fresh(.value);
+    const dropped = self.fresh(.value);
+    const drop_value = self.fresh(.value);
+    const merged = self.fresh(.value);
+    const overlap = self.fresh(.value);
+    const diffed = self.fresh(.value);
+    const mapped = self.fresh(.value);
+    const map_value = self.fresh(.value);
+    const contains_score = self.fresh(.value);
+    const acc = self.fresh(.value);
+    const value = self.fresh(.value);
+
+    try self.writeAppSymbol(self.symbols.score_set_ops);
+    try self.writeAppText(" : List(");
+    try self.writeAppSymbol(self.symbols.item_type);
+    try self.writeAppText("), U64 -> U64\n");
+    try self.writeAppSymbol(self.symbols.score_set_ops);
+    try self.writeAppText(" = |");
+    try self.writeAppSymbol(items);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText("| {\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(ids);
+    try self.writeAppText(" : List(U64)\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(ids);
+    try self.writeAppText(" = List.map(");
+    try self.writeAppSymbol(items);
+    try self.writeAppText(", |");
+    try self.writeAppSymbol(map_item);
+    try self.writeAppText("| ");
+    try self.writeAppSymbol(map_item);
+    try self.writeAppText(".");
+    try self.writeAppSymbol(self.symbols.item_id);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText(")\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(base);
+    try self.writeAppText(" : Set(U64)\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(base);
+    try self.writeAppText(" = Set.from_list(");
+    try self.writeAppSymbol(ids);
+    try self.writeAppText(")\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(extended);
+    try self.writeAppText(" : Set(U64)\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(extended);
+    try self.writeAppText(" = Set.insert(Set.insert(");
+    try self.writeAppSymbol(base);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText("), List.len(");
+    try self.writeAppSymbol(ids);
+    try self.writeAppText("))\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(trimmed);
+    try self.writeAppText(" : Set(U64)\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(trimmed);
+    try self.writeAppText(" = Set.remove(");
+    try self.writeAppSymbol(extended);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText(" + 1)\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(kept);
+    try self.writeAppText(" : Set(U64)\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(kept);
+    try self.writeAppText(" = Set.keep_if(");
+    try self.writeAppSymbol(trimmed);
+    try self.writeAppText(", |");
+    try self.writeAppSymbol(keep_value);
+    try self.writeAppText("| ");
+    try self.writeAppSymbol(self.symbols.is_even);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(keep_value);
+    try self.writeAppText("))\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(dropped);
+    try self.writeAppText(" : Set(U64)\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(dropped);
+    try self.writeAppText(" = Set.drop_if(");
+    try self.writeAppSymbol(trimmed);
+    try self.writeAppText(", |");
+    try self.writeAppSymbol(drop_value);
+    try self.writeAppText("| ");
+    try self.writeAppSymbol(drop_value);
+    try self.writeAppText(" == ");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText(")\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(merged);
+    try self.writeAppText(" : Set(U64)\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(merged);
+    try self.writeAppText(" = Set.union(");
+    try self.writeAppSymbol(kept);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(dropped);
+    try self.writeAppText(")\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(overlap);
+    try self.writeAppText(" : Set(U64)\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(overlap);
+    try self.writeAppText(" = Set.intersection(");
+    try self.writeAppSymbol(merged);
+    try self.writeAppText(", Set.single(");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText("))\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(diffed);
+    try self.writeAppText(" : Set(U64)\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(diffed);
+    try self.writeAppText(" = Set.difference(");
+    try self.writeAppSymbol(merged);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(overlap);
+    try self.writeAppText(")\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(mapped);
+    try self.writeAppText(" : Set(U64)\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(mapped);
+    try self.writeAppText(" = Set.map(");
+    try self.writeAppSymbol(diffed);
+    try self.writeAppText(", |");
+    try self.writeAppSymbol(map_value);
+    try self.writeAppText("| ");
+    try self.writeAppSymbol(map_value);
+    try self.writeAppText(" + Set.len(");
+    try self.writeAppSymbol(overlap);
+    try self.writeAppText("))\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(contains_score);
+    try self.writeAppText(" : U64\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(contains_score);
+    try self.writeAppText(" = if Set.contains(");
+    try self.writeAppSymbol(mapped);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText(") 1 else 0\n");
+
+    try self.writeIndent(1);
+    try self.writeAppText("List.fold(Set.to_list(");
+    try self.writeAppSymbol(mapped);
+    try self.writeAppText("), ");
+    try self.writeAppSymbol(contains_score);
+    try self.writeAppText(" + Set.len(");
+    try self.writeAppSymbol(merged);
+    try self.writeAppText(") + Set.len(");
+    try self.writeAppSymbol(overlap);
+    try self.writeAppText("), |");
+    try self.writeAppSymbol(acc);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(value);
+    try self.writeAppText("| ");
+    try self.writeAppSymbol(acc);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(value);
+    try self.writeAppText(")\n}\n\n");
+}
+
 fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     const input = self.fresh(.value);
     const first = self.fresh(.value);
@@ -2594,6 +2788,7 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     const list_ops_score = self.fresh(.value);
     const str_score = self.fresh(.value);
     const try_ops_score = self.fresh(.value);
+    const set_ops_score = self.fresh(.value);
     const imported_record = self.fresh(.value);
     const alternate_imported = self.fresh(.value);
     const generic_imported = self.fresh(.value);
@@ -2871,6 +3066,19 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppSymbol(generic_text);
     try self.writeAppText(")\n");
 
+    try self.writeIndent(1);
+    try self.writeAppSymbol(set_ops_score);
+    try self.writeAppText(" : U64\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(set_ops_score);
+    try self.writeAppText(" = ");
+    try self.writeAppSymbol(self.symbols.score_set_ops);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(generic_items);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(try_ops_score);
+    try self.writeAppText(")\n");
+
     try self.writeLocalHeader(imported_record, self.symbols.imported_type);
     try self.writeAppSymbol(self.symbols.imported_type);
     try self.writeAppText(".");
@@ -2893,6 +3101,8 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppSymbol(str_score);
     try self.writeAppText(" + ");
     try self.writeAppSymbol(try_ops_score);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(set_ops_score);
     try self.writeAppText(", ");
     try self.writeAppSymbol(generic_text);
     try self.writeAppText(")\n");
@@ -3027,6 +3237,8 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppText(" + ");
     try self.writeAppSymbol(try_ops_score);
     try self.writeAppText(" + ");
+    try self.writeAppSymbol(set_ops_score);
+    try self.writeAppText(" + ");
     try self.writeAppSymbol(imported_score);
     try self.writeAppText(" + ");
     try self.writeAppSymbol(tree_score);
@@ -3063,6 +3275,8 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppSymbol(str_score);
     try self.writeAppText(" + ");
     try self.writeAppSymbol(try_ops_score);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(set_ops_score);
     try self.writeAppText(" + ");
     try self.writeAppSymbol(imported_score);
     try self.writeAppText(" + ");
