@@ -37,14 +37,19 @@ fn lowerModule(
     source: []const u8,
     inline_mode: lir.CheckedPipeline.InlineMode,
 ) anyerror!LoweredSource {
-    return lowerModuleWithProcDebugNames(allocator, source, inline_mode, false);
+    return lowerModuleWithOptions(allocator, source, inline_mode, .{});
 }
 
-fn lowerModuleWithProcDebugNames(
+const LowerModuleOptions = struct {
+    debug_effects: lir.CheckedPipeline.DebugEffectMode = .run,
+    proc_debug_names: bool = false,
+};
+
+fn lowerModuleWithOptions(
     allocator: Allocator,
     source: []const u8,
     inline_mode: lir.CheckedPipeline.InlineMode,
-    proc_debug_names: bool,
+    options: LowerModuleOptions,
 ) anyerror!LoweredSource {
     var resources = try helpers.parseAndCanonicalizeProgram(allocator, .module, source, &.{});
     errdefer helpers.cleanupParseAndCanonical(allocator, resources);
@@ -73,7 +78,8 @@ fn lowerModuleWithProcDebugNames(
         .{
             .target_usize = base.target.TargetUsize.native,
             .inline_mode = inline_mode,
-            .proc_debug_names = proc_debug_names,
+            .debug_effects = options.debug_effects,
+            .proc_debug_names = options.proc_debug_names,
         },
     );
     errdefer lowered.deinit();
@@ -82,6 +88,24 @@ fn lowerModuleWithProcDebugNames(
         .resources = resources,
         .lowered = lowered,
     };
+}
+
+fn lowerModuleWithDebugEffects(
+    allocator: Allocator,
+    source: []const u8,
+    inline_mode: lir.CheckedPipeline.InlineMode,
+    debug_effects: lir.CheckedPipeline.DebugEffectMode,
+) anyerror!LoweredSource {
+    return lowerModuleWithOptions(allocator, source, inline_mode, .{ .debug_effects = debug_effects });
+}
+
+fn lowerModuleWithProcDebugNames(
+    allocator: Allocator,
+    source: []const u8,
+    inline_mode: lir.CheckedPipeline.InlineMode,
+    proc_debug_names: bool,
+) anyerror!LoweredSource {
+    return lowerModuleWithOptions(allocator, source, inline_mode, .{ .proc_debug_names = proc_debug_names });
 }
 
 fn mainProcArgLayouts(
@@ -149,6 +173,52 @@ fn expectOptimizedDbgEvents(source: []const u8, expected: []const []const u8) an
             else => return error.TestUnexpectedResult,
         }
     }
+}
+
+const DebugEffectCounts = struct {
+    debug: usize = 0,
+    expect: usize = 0,
+};
+
+fn countDebugEffectStmts(lowered: *const lir.CheckedPipeline.LoweredProgram) DebugEffectCounts {
+    var counts = DebugEffectCounts{};
+    for (lowered.lir_result.store.cf_stmts.items) |stmt| {
+        switch (stmt) {
+            .debug => counts.debug += 1,
+            .expect => counts.expect += 1,
+            else => {},
+        }
+    }
+    return counts;
+}
+
+test "optimized debug effect lowering erases inline dbg and expect" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\module [main]
+        \\
+        \\main : I64
+        \\main = {
+        \\    dbg 1
+        \\    expect False
+        \\    expect 1 == 1
+        \\    2
+        \\}
+    ;
+
+    var run_effects = try lowerModuleWithDebugEffects(allocator, source, .direct_call_wrappers, .run);
+    defer run_effects.deinit(allocator);
+
+    const run_counts = countDebugEffectStmts(&run_effects.lowered);
+    try std.testing.expect(run_counts.debug > 0);
+    try std.testing.expect(run_counts.expect > 0);
+
+    var erased_effects = try lowerModuleWithDebugEffects(allocator, source, .direct_call_wrappers, .erase);
+    defer erased_effects.deinit(allocator);
+
+    const erased_counts = countDebugEffectStmts(&erased_effects.lowered);
+    try std.testing.expectEqual(@as(usize, 0), erased_counts.debug);
+    try std.testing.expectEqual(@as(usize, 0), erased_counts.expect);
 }
 
 fn liftModuleAfterSpecConstr(

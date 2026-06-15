@@ -64,6 +64,23 @@ const expect_failure =
     \\main = 42
 ;
 
+const inline_expect_failure =
+    \\bad = {
+    \\    expect False
+    \\    42
+    \\}
+    \\main = bad
+;
+
+const multiple_inline_expect_failures =
+    \\bad = {
+    \\    expect False
+    \\    expect 1 == 2
+    \\    42
+    \\}
+    \\main = bad
+;
+
 const dbg_does_not_halt =
     \\x = {
     \\    dbg 40
@@ -746,6 +763,8 @@ pub const tests = [_]TestCase{
     .{ .name = "comptime eval - expect success does not report", .source_kind = .module, .source = expect_success, .expected = .{ .inspect_str = "42.0" } },
     .{ .name = "comptime eval - expect failure is reported but does not halt within def", .source_kind = .module, .source = expect_failure, .expected = .{ .problem = {} } },
     .{ .name = "comptime eval - multiple expect failures are reported", .source_kind = .module, .source = expect_failure, .expected = .{ .problem = {} } },
+    .{ .name = "comptime eval - inline expect failure in constant is reported", .source_kind = .module, .source = inline_expect_failure, .expected = .{ .problem = {} } },
+    .{ .name = "comptime eval - multiple inline expect failures in constant are reported", .source_kind = .module, .source = multiple_inline_expect_failures, .expected = .{ .problem = {} } },
     .{ .name = "comptime eval - crash does not halt other defs", .source_kind = .module, .source = crash_other_defs, .expected = .{ .inspect_str = "42.0" } },
     .{ .name = "comptime eval - expect failure does not halt evaluation", .source_kind = .module, .source = expect_failure, .expected = .{ .problem = {} } },
     .{ .name = "comptime eval - dbg does not halt evaluation", .source_kind = .module, .source = dbg_does_not_halt, .expected = .{ .inspect_str = "42.0" } },

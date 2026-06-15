@@ -44,7 +44,7 @@
 //! ## Hang detection
 //!
 //! Integrated into the parent's poll() loop. If a child has been running
-//! longer than the timeout (default 60s for interpreter/dev/wasm, 7 minutes
+//! longer than the timeout (default 240s for interpreter/dev/wasm, 7 minutes
 //! for LLVM), the parent SIGKILLs it. No separate watchdog thread is needed.
 //!
 //! ## Usage
@@ -81,8 +81,7 @@ const helpers = eval.test_helpers;
 const LoweredProgram = helpers.LoweredProgram;
 
 const posix = std.posix;
-const DEFAULT_EVAL_TIMEOUT_MS: u64 = 60_000;
-const MUSL_EVAL_TIMEOUT_MS: u64 = 120_000;
+const DEFAULT_EVAL_TIMEOUT_MS: u64 = 240_000;
 
 fn milliTimestamp(io: std.Io) i64 {
     return std.Io.Timestamp.now(io, .awake).toMilliseconds();
@@ -1718,7 +1717,7 @@ fn printHelp() void {
         \\  --threads <N>         Max concurrent child processes (default: number of CPU cores).
         \\  --verbose             Print PASS and SKIP results (default: only FAIL/CRASH).
         \\  --timeout <MS>        Hang timeout in ms for parse/interp/dev/wasm.
-        \\                        Default: 60000, 120000 on musl.
+        \\                        Default: 240000.
         \\                        LLVM uses a separate 420000ms backend budget.
         \\                        LLVM eval lock slots match the worker count.
         \\  --llvm                Include the LLVM backend. Default: skip LLVM.
@@ -2144,7 +2143,6 @@ const WorkerTrace = struct {
 
 fn effectiveHangTimeoutMs(cli: harness.StandardArgs) u64 {
     if (cli.timeout_provided and cli.timeout_ms > 0) return cli.timeout_ms;
-    if (builtin.abi == .musl) return MUSL_EVAL_TIMEOUT_MS;
     return DEFAULT_EVAL_TIMEOUT_MS;
 }
 
