@@ -80,31 +80,6 @@ pub const ModuleEnvStorage = union(enum) {
     }
 };
 
-fn moduleExprUsesBuiltinStrInterpolationPath(module: TypedCIR.Module, expr_idx: CIR.Expr.Idx) bool {
-    const resolved = module.typeStoreConst().resolveVar(module.exprType(expr_idx));
-    switch (resolved.desc.content) {
-        .structure => |flat_type| {
-            if (flat_type != .nominal_type) return false;
-            const nominal = flat_type.nominal_type;
-            if (!nominal.originIsBuiltin()) return false;
-            const ident = nominal.ident.ident_idx;
-            const common = module.commonIdents();
-            return ident.eql(common.str) or ident.eql(common.builtin_str);
-        },
-        .flex => |flex| {
-            const phase = numericDefaultPhaseForFlex(module, flex) orelse return false;
-            return phase == .mono_specialization_str;
-        },
-        .rigid => |rigid| {
-            const phase = numericDefaultPhaseForConstraints(module, rigid.constraints) orelse return false;
-            return phase == .mono_specialization_str;
-        },
-        .alias,
-        .err,
-        => return false,
-    }
-}
-
 /// Public `CheckedModuleArtifactKey` declaration.
 pub const CheckedModuleArtifactKey = struct {
     source_hash: [32]u8 = [_]u8{0} ** 32,
@@ -1047,6 +1022,14 @@ fn exprDependsOnUnboundPlatformRequirement(
         .nominal => |nominal| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, nominal.backing_expr, relation_blocked_exprs),
         .closure => |closure| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, closure.lambda, relation_blocked_exprs),
         .lambda => |lambda| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, lambda.body, relation_blocked_exprs),
+        .interpolation => |interpolation| blk: {
+            if (exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, interpolation.first, relation_blocked_exprs)) break :blk true;
+            for (interpolation.parts) |part| {
+                if (exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, part.value, relation_blocked_exprs)) break :blk true;
+                if (exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, part.following_segment, relation_blocked_exprs)) break :blk true;
+            }
+            break :blk false;
+        },
         .binop => |binop| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, binop.lhs, relation_blocked_exprs) or
             exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, binop.rhs, relation_blocked_exprs),
         .unary_minus,
@@ -1080,7 +1063,6 @@ fn exprDependsOnUnboundPlatformRequirement(
         .empty_record,
         .zero_argument_tag,
         .dispatch_call,
-        .interpolation,
         .method_eq,
         .type_dispatch_call,
         .runtime_error,
@@ -3966,6 +3948,16 @@ fn appendStaticDispatchTypeRoots(
                     active,
                     interpolation.constraint_fn_var orelse checkedArtifactInvariant("checked interpolation expression had no static dispatch constraint type", .{}),
                 );
+                _ = try appendCheckedTypeRoot(
+                    allocator,
+                    module,
+                    names,
+                    imports,
+                    roots,
+                    payloads,
+                    active,
+                    interpolation.step_fn_var orelse checkedArtifactInvariant("checked interpolation expression had no generated step function type", .{}),
+                );
             },
             .e_type_dispatch_call => |dispatch_call| {
                 const alias_stmt = module.getStatement(dispatch_call.type_var_alias_stmt);
@@ -5055,7 +5047,7 @@ pub const CheckedExprData = union(enum) {
         field_name: canonical.RecordFieldLabelId,
     },
     dispatch_call: ?StaticDispatchPlanId,
-    interpolation: ?StaticDispatchPlanId,
+    interpolation: CheckedInterpolation,
     structural_eq: struct {
         lhs: CheckedExprId,
         rhs: CheckedExprId,
@@ -5097,6 +5089,20 @@ pub const CheckedExprData = union(enum) {
         op: CIR.Expr.LowLevel,
         args: []const CheckedExprId,
     },
+};
+
+/// One `(interpolated, following_segment)` entry in a checked interpolation iterator.
+pub const CheckedInterpolationPart = struct {
+    value: CheckedExprId,
+    following_segment: CheckedExprId,
+};
+
+/// Checked custom interpolation data used to generate the `Iter` argument after checking.
+pub const CheckedInterpolation = struct {
+    plan: ?StaticDispatchPlanId,
+    first: CheckedExprId,
+    parts: []const CheckedInterpolationPart,
+    step_fn_ty: CheckedTypeId,
 };
 
 /// Public `CheckedReturnContext` declaration.
@@ -5432,9 +5438,6 @@ const CheckedSourceNodes = struct {
             .e_interpolation => |interpolation| {
                 try self.markExpr(interpolation.first, work);
                 try self.markExprSpan(module, interpolation.parts, work);
-                if (!moduleExprUsesBuiltinStrInterpolationPath(module, expr_idx)) {
-                    try self.markExpr(interpolation.rest, work);
-                }
             },
             .e_structural_eq => |eq| {
                 try self.markExpr(eq.lhs, work);
@@ -5895,7 +5898,12 @@ pub const CheckedBodyStore = struct {
             const data = &self.exprs[@intFromEnum(checked_expr)].data;
             switch (data.*) {
                 .dispatch_call => data.* = .{ .dispatch_call = entry.value_ptr.* },
-                .interpolation => data.* = .{ .interpolation = entry.value_ptr.* },
+                .interpolation => |interpolation| data.* = .{ .interpolation = .{
+                    .plan = entry.value_ptr.*,
+                    .first = interpolation.first,
+                    .parts = interpolation.parts,
+                    .step_fn_ty = interpolation.step_fn_ty,
+                } },
                 .method_eq => data.* = .{ .method_eq = entry.value_ptr.* },
                 .type_dispatch_call => data.* = .{ .type_dispatch_call = entry.value_ptr.* },
                 else => {
@@ -6701,7 +6709,32 @@ const CheckedBodyPayloadCopier = struct {
         if (self.checkedBuiltinForExpr(expr_idx) == .str) {
             return .{ .str = try self.copyStrInterpolationSegments(interpolation) };
         }
-        return .{ .interpolation = null };
+        return .{ .interpolation = .{
+            .plan = null,
+            .first = self.checkedExpr(interpolation.first),
+            .parts = try self.copyInterpolationParts(interpolation.parts),
+            .step_fn_ty = try self.checkedTypeForRequiredVar(
+                interpolation.step_fn_var orelse checkedArtifactInvariant("checked interpolation expression had no generated step function type", .{}),
+                "checked interpolation generated step function type root was not published",
+            ),
+        } };
+    }
+
+    fn copyInterpolationParts(self: *@This(), span: CIR.Expr.Span) Allocator.Error![]const CheckedInterpolationPart {
+        const parts = self.module.sliceExpr(span);
+        std.debug.assert(parts.len % 2 == 0);
+
+        const out = try self.allocator.alloc(CheckedInterpolationPart, parts.len / 2);
+        errdefer self.allocator.free(out);
+
+        var part_i: usize = 0;
+        while (part_i < parts.len) : (part_i += 2) {
+            out[part_i / 2] = .{
+                .value = self.checkedExpr(parts[part_i]),
+                .following_segment = self.checkedExpr(parts[part_i + 1]),
+            };
+        }
+        return out;
     }
 
     fn copyStrInterpolationSegments(self: *@This(), interpolation: anytype) Allocator.Error![]const CheckedExprId {
@@ -7733,7 +7766,6 @@ fn deinitCheckedExprData(allocator: Allocator, data: *CheckedExprData) void {
         .empty_record,
         .zero_argument_tag,
         .dispatch_call,
-        .interpolation,
         .structural_eq,
         .method_eq,
         .type_dispatch_call,
@@ -7771,6 +7803,7 @@ fn deinitCheckedExprData(allocator: Allocator, data: *CheckedExprData) void {
         .unary_not,
         => {},
         .field_access => {},
+        .interpolation => |interpolation| allocator.free(interpolation.parts),
         .hosted_lambda => |hosted| allocator.free(hosted.args),
         .run_low_level => |run| allocator.free(run.args),
     }
@@ -7815,7 +7848,7 @@ fn verifyCheckedExprDataComplete(data: CheckedExprData) void {
         .lookup_external => |ref| std.debug.assert(ref != null),
         .lookup_required => |ref| std.debug.assert(ref != null),
         .dispatch_call => |plan| std.debug.assert(plan != null),
-        .interpolation => |plan| std.debug.assert(plan != null),
+        .interpolation => |interpolation| std.debug.assert(interpolation.plan != null),
         .method_eq => |plan| std.debug.assert(plan != null),
         .type_dispatch_call => |plan| std.debug.assert(plan != null),
         .num_from_numeral => |plan| std.debug.assert(plan != null),
@@ -9080,11 +9113,15 @@ const CheckedTemplateRefCollector = struct {
                 if (ref_id) |id| try self.value_refs.append(self.allocator, id);
             },
             .dispatch_call,
-            .interpolation,
             .method_eq,
             .type_dispatch_call,
             => |plan_id| {
                 const id = plan_id orelse checkedArtifactInvariant("checked dispatch expression reached template closure collection without a static-dispatch plan", .{});
+                try self.dispatch_refs.append(self.allocator, id);
+                try self.collectStaticDispatchPlanArgs(id);
+            },
+            .interpolation => |interpolation| {
+                const id = interpolation.plan orelse checkedArtifactInvariant("checked interpolation expression reached template closure collection without a static-dispatch plan", .{});
                 try self.dispatch_refs.append(self.allocator, id);
                 try self.collectStaticDispatchPlanArgs(id);
             },
@@ -9208,8 +9245,21 @@ const CheckedTemplateRefCollector = struct {
         const plan = self.static_dispatch_plans.plans[raw];
         for (plan.args) |arg| switch (arg) {
             .checked_expr => |expr| try self.collectExpr(expr),
+            .generated_interpolation_iter => |expr| try self.collectGeneratedInterpolationIter(expr),
             .generated_numeral, .generated_quote => {},
         };
+    }
+
+    fn collectGeneratedInterpolationIter(self: *CheckedTemplateRefCollector, expr_id: CheckedExprId) Allocator.Error!void {
+        const expr = self.checked_bodies.expr(expr_id);
+        const interpolation = switch (expr.data) {
+            .interpolation => |interpolation| interpolation,
+            else => checkedArtifactInvariant("generated interpolation iterator operand pointed at non-interpolation expression", .{}),
+        };
+        for (interpolation.parts) |part| {
+            try self.collectExpr(part.value);
+            try self.collectExpr(part.following_segment);
+        }
     }
 
     fn collectIteratorForPlan(
@@ -9803,10 +9853,10 @@ const NestedProcSiteBuilder = struct {
             },
             .field_access => |field| try self.scanExpr(field.receiver, owner, false),
             .dispatch_call,
-            .interpolation,
             .method_eq,
             .type_dispatch_call,
             => |plan_id| try self.scanStaticDispatchPlanArgs(plan_id orelse checkedArtifactInvariant("checked dispatch expression reached nested procedure site collection without a static-dispatch plan", .{}), owner),
+            .interpolation => |interpolation| try self.scanStaticDispatchPlanArgs(interpolation.plan orelse checkedArtifactInvariant("checked interpolation expression reached nested procedure site collection without a static-dispatch plan", .{}), owner),
             .num_from_numeral,
             .typed_num_from_numeral,
             => |plan_id| try self.scanStaticDispatchPlanArgs(plan_id orelse checkedArtifactInvariant("checked from_numeral expression reached nested procedure site collection without a dispatch plan", .{}), owner),
@@ -9866,8 +9916,25 @@ const NestedProcSiteBuilder = struct {
         const plan = self.static_dispatch_plans.plans[raw];
         for (plan.args) |arg| switch (arg) {
             .checked_expr => |expr| try self.scanExpr(expr, owner, false),
+            .generated_interpolation_iter => |expr| try self.scanGeneratedInterpolationIter(expr, owner),
             .generated_numeral, .generated_quote => {},
         };
+    }
+
+    fn scanGeneratedInterpolationIter(
+        self: *NestedProcSiteBuilder,
+        expr_id: CheckedExprId,
+        owner: canonical.ProcedureTemplateRef,
+    ) Allocator.Error!void {
+        const expr = self.checked_bodies.exprs[@intFromEnum(expr_id)];
+        const interpolation = switch (expr.data) {
+            .interpolation => |interpolation| interpolation,
+            else => checkedArtifactInvariant("generated interpolation iterator operand pointed at non-interpolation expression", .{}),
+        };
+        for (interpolation.parts) |part| {
+            try self.scanExpr(part.value, owner, false);
+            try self.scanExpr(part.following_segment, owner, false);
+        }
     }
 
     fn scanPattern(
