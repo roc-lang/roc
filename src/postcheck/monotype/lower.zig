@@ -3436,12 +3436,12 @@ const BodyContext = struct {
             .dec_small => Common.invariant("small decimal literal reached Monotype after numeric finalization"),
             .num_from_numeral => |plan| {
                 if (try self.restoredNumeralConst(expr_id, ty)) |restored| return restored;
-                return try self.lowerNumeralCall(expr.ty, plan, ty);
+                return try self.lowerNumeralFold(expr.ty, plan, ty);
             },
             .typed_frac => Common.invariant("typed fractional integer literal reached Monotype after numeric finalization"),
             .typed_num_from_numeral => |plan| {
                 if (try self.restoredNumeralConst(expr_id, ty)) |restored| return restored;
-                return try self.lowerNumeralCall(expr.ty, plan, ty);
+                return try self.lowerNumeralFold(expr.ty, plan, ty);
             },
             .str_from_quote => |quote| {
                 if (try self.restoredNumeralConst(expr_id, ty)) |restored| return restored;
@@ -4940,6 +4940,55 @@ const BodyContext = struct {
             .pending => null,
             else => Common.invariant("numeral conversion root stored a non-constant payload"),
         };
+    }
+
+    /// Fold a `from_numeral` conversion into a constant at its concrete target
+    /// type. Compile-time finalization only registers a constant for literals
+    /// whose type is already concrete at Check time; a literal inside a generic
+    /// body (e.g. the `1` in `Iter.exclusive_range`'s `start.add_checked(1)`) is
+    /// typed by the abstract `num` var and only gains a concrete type here, after
+    /// monomorphization. Rather than emit a runtime `num_from_numeral` low-level
+    /// op — which the compiled backends deliberately reject — we evaluate the
+    /// conversion at the stage that owns monomorphic types, reusing the exact
+    /// decimal-text + parse behavior the finalization/interpreter path uses so
+    /// the constant is identical regardless of where the literal is monomorphized.
+    fn lowerNumeralFold(
+        self: *BodyContext,
+        checked_ret_ty: checked.CheckedTypeId,
+        maybe_plan: ?static_dispatch.StaticDispatchPlanId,
+        target_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        // Only the builtin numeric types implement `from_numeral` as the
+        // `num_from_numeral` low-level op that compiled backends reject. A custom
+        // numeric type carries a user-defined `from_numeral` body that lowers to
+        // an ordinary call the backends handle, so it must keep going through the
+        // real dispatch rather than being folded.
+        const primitive = switch (self.builder.shapeContent(target_ty)) {
+            .primitive => |p| p,
+            else => return try self.lowerNumeralCall(checked_ret_ty, maybe_plan, target_ty),
+        };
+
+        const plan_id = maybe_plan orelse Common.invariant("checked from_numeral expression reached Monotype without a dispatch plan");
+        const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
+        if (plan.args.len != 1) Common.invariant("from_numeral plan did not carry exactly one operand");
+        const literal = switch (plan.args[0]) {
+            .generated_numeral => |lit| lit,
+            else => Common.invariant("from_numeral plan operand was not a generated numeral"),
+        };
+
+        const text = try checked.numeralLiteralDecimalText(self.allocator, self.view.module_env, literal);
+        defer self.allocator.free(text);
+
+        const folded = foldNumeralPrimitive(primitive, text);
+
+        // A value that does not fit its concrete target (e.g. a literal forced to
+        // a too-narrow type after monomorphization) matches the existing generic
+        // from_numeral behavior: a runtime crash on the conversion's Err branch.
+        const data = folded orelse blk: {
+            const msg = try self.builder.program.addStringLiteral("invalid numeric literal");
+            break :blk Ast.ExprData{ .crash = msg };
+        };
+        return try self.builder.program.addExpr(.{ .ty = target_ty, .data = data });
     }
 
     /// Materialize a string literal as the `Str` argument of a `from_quote`
@@ -8642,6 +8691,40 @@ fn restoreScalar(scalar: checked.ConstScalar) Ast.ExprData {
         .f64_bits => |bits| .{ .frac_f64_lit = @bitCast(bits) },
         .dec_bits => |bits| .{ .dec_lit = .{ .num = bits } },
     };
+}
+
+/// Parse a numeral's decimal text into a constant literal of the
+/// concrete numeric `primitive`, mirroring the interpreter's `parseNumeralPayload`
+/// (`std.fmt.parseInt`/`parseFloat`/`RocDec.fromNonemptySlice`). Returns null
+/// when the value does not fit the target representation (out of range, or a
+/// fractional text parsed as an integer), so the caller can lower the Err branch.
+fn foldNumeralPrimitive(primitive: Type.Primitive, text: []const u8) ?Ast.ExprData {
+    return switch (primitive) {
+        .u8 => foldUnsignedNumeral(u8, text),
+        .u16 => foldUnsignedNumeral(u16, text),
+        .u32 => foldUnsignedNumeral(u32, text),
+        .u64 => foldUnsignedNumeral(u64, text),
+        .u128 => foldUnsignedNumeral(u128, text),
+        .i8 => foldSignedNumeral(i8, text),
+        .i16 => foldSignedNumeral(i16, text),
+        .i32 => foldSignedNumeral(i32, text),
+        .i64 => foldSignedNumeral(i64, text),
+        .i128 => foldSignedNumeral(i128, text),
+        .f32 => if (std.fmt.parseFloat(f32, text)) |v| .{ .frac_f32_lit = v } else |_| null,
+        .f64 => if (std.fmt.parseFloat(f64, text)) |v| .{ .frac_f64_lit = v } else |_| null,
+        .dec => if (builtins.dec.RocDec.fromNonemptySlice(text)) |d| .{ .dec_lit = .{ .num = d.num } } else null,
+        .bool, .str => Common.invariant("from_numeral target was a non-numeric primitive"),
+    };
+}
+
+fn foldUnsignedNumeral(comptime T: type, text: []const u8) ?Ast.ExprData {
+    const value = std.fmt.parseInt(T, text, 10) catch return null;
+    return .{ .int_lit = unsignedIntLiteral(value) };
+}
+
+fn foldSignedNumeral(comptime T: type, text: []const u8) ?Ast.ExprData {
+    const value = std.fmt.parseInt(T, text, 10) catch return null;
+    return .{ .int_lit = signedIntLiteral(value) };
 }
 
 fn signedIntLiteral(value: anytype) can.CIR.IntValue {
