@@ -39,11 +39,52 @@ Reactive := [].{
             (result, _) = NodeValue.decode_str(NodeValue.format, nv)
             result
         })
+
+        bool : Codec(Bool)
+        bool = Codec.make(NodeValue.from_bool, |nv| {
+            (result, _) = NodeValue.decode_bool(NodeValue.format, nv)
+            result
+        })
+
+        list : Codec(a) -> Codec(List(a))
+        list = |item_codec| {
+            encode_item = item_codec.encode_fn
+            decode_item = item_codec.decode_fn
+
+            Codec.make(
+                |items| NodeValue.from_list(List.map(items, encode_item)),
+                |nv| {
+                    (list_result, _) = NodeValue.decode_list(NodeValue.format, nv)
+                    match list_result {
+                        Ok(items) =>
+                            List.fold(items, Ok([]), |acc_result, item_nv| {
+                                match acc_result {
+                                    Ok(acc) =>
+                                        match decode_item(item_nv) {
+                                            Ok(item) => Ok(List.append(acc, item))
+                                            Err(err) => Err(err)
+                                        }
+
+                                    Err(err) => Err(err)
+                                }
+                            })
+
+                        Err(err) => Err(err)
+                    }
+                },
+            )
+        }
     }
 
     EventSender(a) := { node : Graph.EventNode }.{
         to_node : EventSender(a) -> Graph.EventNode
         to_node = |sender| sender.node
+
+        send! : EventSender(a), Codec(a), a => {}
+        send! = |sender, event_codec, value| {
+            event_id = Graph.EventNode.walk!(sender.node)
+            Host.send_event!(event_id, Codec.encode(event_codec, value))
+        }
     }
 
     Event(a) := { node : Graph.EventNode }.{
@@ -201,6 +242,36 @@ Reactive := [].{
             }
 
             { node: Graph.SignalNode.make_map_signal(source, Box.box(wrapped)) }
+        }
+
+        map2 : Signal(a), Codec(a), Signal(b), Codec(b), Codec(c), (a, b -> c) -> Signal(c)
+        map2 = |left_signal, left_codec, right_signal, right_codec, output_codec, f| {
+            decode_left = left_codec.decode_fn
+            decode_right = right_codec.decode_fn
+            encode_output = output_codec.encode_fn
+            wrapped : (NodeValue, NodeValue) -> NodeValue
+            wrapped = |(left_nv, right_nv)| {
+                left =
+                    match decode_left(left_nv) {
+                        Ok(val) => val
+                        Err(_) => ...
+                    }
+                right =
+                    match decode_right(right_nv) {
+                        Ok(val) => val
+                        Err(_) => ...
+                    }
+                output = f(left, right)
+                encode_output(output)
+            }
+
+            {
+                node: Graph.SignalNode.make_map2_signal(
+                    left_signal.node,
+                    right_signal.node,
+                    Box.box(wrapped),
+                ),
+            }
         }
 
         map_i64_to_str : Signal(I64), (I64 -> Str) -> Signal(Str)

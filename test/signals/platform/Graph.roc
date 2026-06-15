@@ -63,16 +63,17 @@ Graph := [].{
     }
 
     SignalNode := [
-        Const(NodeValue),
+        ConstSignal(NodeValue),
         State(NodeValue),
         Prebuilt(U64),
         MapSignal({ source : SignalNode, transform : Box((NodeValue -> NodeValue)) }),
+        Map2Signal({ left : SignalNode, right : SignalNode, transform : Box(((NodeValue, NodeValue) -> NodeValue)) }),
         Hold({ initial : NodeValue, event : EventNode }),
         Fold({ initial : NodeValue, event : EventNode, step : Box(((NodeValue, NodeValue) -> NodeValue)) }),
         ZipWith({ source : SignalNode, event : EventNode, combine : Box(((NodeValue, NodeValue) -> NodeValue)) }),
     ].{
         make_const : NodeValue -> SignalNode
-        make_const = |nv| Const(nv)
+        make_const = |nv| ConstSignal(nv)
 
         make_state : NodeValue -> SignalNode
         make_state = |initial| State(initial)
@@ -82,6 +83,9 @@ Graph := [].{
 
         make_map_signal : SignalNode, Box((NodeValue -> NodeValue)) -> SignalNode
         make_map_signal = |source, transform| MapSignal({ source, transform })
+
+        make_map2_signal : SignalNode, SignalNode, Box(((NodeValue, NodeValue) -> NodeValue)) -> SignalNode
+        make_map2_signal = |left, right, transform| Map2Signal({ left, right, transform })
 
         make_fold : NodeValue, EventNode, Box(((NodeValue, NodeValue) -> NodeValue)) -> SignalNode
         make_fold = |initial, event, step| Fold({ initial, event, step })
@@ -95,7 +99,7 @@ Graph := [].{
         walk! : SignalNode => U64
         walk! = |signal| {
             match signal {
-                Const(nv) =>
+                ConstSignal(nv) =>
                     Host.create_signal_const!(nv)
 
                 State(initial) =>
@@ -107,6 +111,12 @@ Graph := [].{
                 MapSignal({ source, transform }) => {
                     source_id = SignalNode.walk!(source)
                     Host.create_signal_map!(source_id, transform)
+                }
+
+                Map2Signal({ left, right, transform }) => {
+                    left_id = SignalNode.walk!(left)
+                    right_id = SignalNode.walk!(right)
+                    Host.create_signal_map2!(left_id, right_id, transform)
                 }
 
                 Hold({ initial, event }) => {

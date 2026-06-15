@@ -1,39 +1,111 @@
-# Composable counters using Elem.translate
-expect_text span:0 "Left"
-expect_text button:0 "-"
-expect_text span:1 "0"
-expect_text button:1 "+"
-expect_text span:2 "Right"
-expect_text button:2 "-"
-expect_text span:3 "0"
-expect_text button:3 "+"
-expect_text span:4 "Total"
-expect_text span:5 "0"
+# Signals platform acceptance demo
 
-# Increment left
+# Initial controlled component state.
+expect_text span:0 "Controlled"
+expect_text span:1 "0"
+expect_text span:2 "0"
+expect_text span:3 "Controlled total"
+expect_text span:4 "0"
+
+# Initial independent local signals and map2-derived diamond.
+expect_text span:5 "Local"
+expect_text span:7 "0"
+expect_text span:9 "10"
+expect_text span:11 "10"
+expect_text span:13 "11/100"
+
+# Initial merged-event, dynamic, and keyed-list state.
+expect_text span:15 "0"
+expect_text span:17 "1"
+expect_text span:18 "0"
+expect_text span:19 "Dynamic on"
+expect_text span:21 "2"
+expect_text span:22 "0"
+expect_text span:23 "Alpha"
+expect_text span:24 "0"
+expect_text span:25 "Beta"
+expect_text span:26 "0"
+
+# Controlled child updates still flow through Elem.translate.
 click button:1
 expect_text span:1 "1"
-expect_text span:3 "0"
-expect_text span:5 "1"
+expect_text span:2 "0"
+expect_text span:4 "1"
+expect_updates span:1 2
+expect_updates span:2 1
+expect_updates span:4 2
+expect_updates span:7 1
+expect_updates span:11 1
 
-# Increment right twice
 click button:3
 expect_text span:1 "1"
-expect_text span:3 "1"
-expect_text span:5 "2"
+expect_text span:2 "1"
+expect_text span:4 "2"
+expect_updates span:1 2
+expect_updates span:2 2
+expect_updates span:4 3
 
-click button:3
-expect_text span:1 "1"
-expect_text span:3 "2"
-expect_text span:5 "3"
+# Independent local cells combine through Signal.map2, and the diamond
+# projection observes both fresh inputs in the same propagation.
+click button:5
+expect_text span:7 "1"
+expect_text span:9 "10"
+expect_text span:11 "11"
+expect_text span:13 "12/110"
+expect_updates span:7 2
+expect_updates span:9 1
+expect_updates span:11 2
+expect_updates span:13 2
 
-# Decrement both counters
-click button:0
-expect_text span:1 "0"
-expect_text span:3 "2"
-expect_text span:5 "2"
+click button:7
+expect_text span:7 "1"
+expect_text span:9 "11"
+expect_text span:11 "12"
+expect_text span:13 "13/120"
+expect_updates span:7 2
+expect_updates span:9 2
+expect_updates span:11 3
+expect_updates span:13 3
 
-click button:2
-expect_text span:1 "0"
-expect_text span:3 "1"
-expect_text span:5 "1"
+# A single source event reaches merge through two branches; both occurrences
+# are folded instead of dropping one side.
+click button:8
+expect_text span:15 "11"
+expect_updates span:15 2
+
+# Conditional structure mounts and unmounts scoped children.
+click button:9
+expect_text span:17 "1"
+expect_text span:18 "1"
+expect_text span:19 "Dynamic off"
+
+click button:9
+expect_text span:17 "2"
+expect_text span:18 "1"
+expect_text span:19 "Dynamic on"
+
+# Keyed children retain local state across reorder, then run unmount lifecycle
+# when a key disappears.
+click button:12
+expect_text span:23 "Alpha"
+expect_text span:24 "1"
+expect_text span:25 "Beta"
+expect_text span:26 "0"
+
+click button:10
+expect_text span:21 "2"
+expect_text span:22 "0"
+expect_text span:23 "Beta"
+expect_text span:24 "0"
+expect_text span:25 "Alpha"
+expect_text span:26 "1"
+
+click button:11
+expect_text span:21 "2"
+expect_text span:22 "1"
+expect_text span:23 "Alpha"
+expect_text span:24 "1"
+
+click button:12
+expect_text span:23 "Alpha"
+expect_text span:24 "2"

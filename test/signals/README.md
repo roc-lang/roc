@@ -1,8 +1,8 @@
 # Signals Test Platform
 
-This directory contains a small Roc platform that demonstrates a signal-based UI architecture with controlled child components.
+This directory contains a small Roc platform that demonstrates how Roc can build a realistic signal-based UI framework.
 
-The host is intentionally a simulated DOM and test runner. It is not a UI framework, but it exercises the same machinery a real UI framework would need: event sources, state signals, derived signals, component composition, and targeted text updates without rerendering the whole tree.
+The host is intentionally a simulated DOM and test runner. It does not draw pixels, but it exercises the same Roc machinery a real renderer needs: event channels, boxed callbacks, typed signal/event APIs in Roc, type-erased graph values in the host, scoped dynamic children, lifecycle events, keyed list reuse, and targeted text updates.
 
 ## Running
 
@@ -12,33 +12,52 @@ From the repository root:
 zig build run-test-signals
 ```
 
-The default spec is `test_counter.txt`, which simulates clicks and checks text content in the host DOM.
+The build step compiles `app.roc`, links it with the Zig host, and runs `test_counter.txt`. The spec simulates button clicks and checks the simulated DOM.
 
-The build step compiles the demo with the LLVM backend and debug info so host/app failures can be inspected with native debugging tools.
-
-To only rebuild the host archive along with the other test platforms:
+The host can also be rebuilt directly:
 
 ```sh
 zig build build-test-hosts -Dplatform=signals
 ```
 
-## App API
+The generated glue lives in `platform/roc_platform_abi.zig`. Regenerate it after changing hosted effects or exposed platform types:
 
-Apps import:
+```sh
+./zig-out/bin/roc glue src/glue/src/ZigGlue.roc test/signals/platform test/signals/platform/main.roc
+```
+
+## Demo Coverage
+
+`app.roc` is the acceptance demo. It covers:
+
+- controlled parent/child composition with `Elem.translate`,
+- independent local signal cells built with `Signal.fold`,
+- `Signal.map2` over two independent signals,
+- a diamond graph that must update topologically without stale inputs,
+- event merge preserving both same-transaction occurrences,
+- conditional dynamic structure with mount and unmount lifecycle events,
+- keyed list reordering that preserves child-local state,
+- keyed removal that tears down scoped nodes and sends unmount events,
+- targeted text updates observed through `expect_updates` in the spec.
+
+## Roc API
+
+Apps import the platform modules through `pf`:
 
 ```roc
 import pf.Elem
 import pf.Reactive
+import pf.NodeValue exposing [NodeValue]
 ```
 
 The public reactive API is nested under `Reactive`:
 
 - `Reactive.Signal(a)` is a continuous value with a current value.
 - `Reactive.Event(a)` is a discrete stream of occurrences.
-- `Reactive.EventSender(a)` is the write handle used by UI elements.
-- `Reactive.Codec(a)` explicitly describes how values cross the Roc/host graph boundary.
+- `Reactive.EventSender(a)` is the write-only handle used by buttons and lifecycle hooks.
+- `Reactive.Codec(a)` explicitly describes how typed Roc values cross the `NodeValue` host boundary.
 
-The current demo uses explicit codecs because graph nodes store values as `NodeValue`. App authors define codecs for their state types:
+Primitive codecs are provided for unit, bool, integers, strings, and lists. App-specific state uses explicit codecs:
 
 ```roc
 Counter := { count : I64 }.{
@@ -46,15 +65,22 @@ Counter := { count : I64 }.{
     codec = Reactive.Codec.make(Counter.encode, Counter.decode)
 
     encode : Counter -> NodeValue
+    encode = |counter| NodeValue.from_i64(counter.count)
+
     decode : NodeValue -> Try(Counter, [TypeMismatch])
+    decode = |nv| {
+        (result, _) = NodeValue.decode_i64(NodeValue.format, nv)
+        match result {
+            Ok(count) => Ok({ count })
+            Err(_) => Err(TypeMismatch)
+        }
+    }
 }
 ```
 
-Primitive codecs are provided as `Reactive.Codec.unit`, `Reactive.Codec.i64`, and `Reactive.Codec.str`.
-
 ## Components
 
-A component is:
+A component is a static element tree plus an event stream of state changes:
 
 ```roc
 Elem.Component(a) := {
@@ -63,19 +89,7 @@ Elem.Component(a) := {
 }
 ```
 
-`elem` is the static element tree to walk once at startup. `changes` emits the next complete component state when local events occur.
-
-The demo counter is reusable because it only knows about `Counter` state:
-
-```roc
-Counter.render! : Reactive.Signal(Counter) => Elem.Component(Counter)
-```
-
-It creates local click channels, samples the latest counter state when a button is clicked, and emits the next `Counter` value.
-
-## Lens-Style Translate
-
-`Elem.translate` adapts a controlled child component to parent-owned state:
+Controlled components receive a parent-owned `Signal(state)` and emit `Event(next_state)`. `Elem.translate` adapts a child component to one field of a parent state value:
 
 ```roc
 Elem.translate(
@@ -87,35 +101,79 @@ Elem.translate(
 )
 ```
 
-The getter projects `Signal(App)` into `Signal(Counter)`. The setter lifts child changes back into `Event(App)`. The parent merges translated child changes and passes them to `Elem.run_component!`, which updates the root state signal.
+The getter derives a child signal from the parent signal. The setter lifts child changes back into parent changes. The demo renders the same counter component twice against different fields of `App`.
 
-The result is the same counter component rendered twice against different fields of `App`.
+## Local Signals
+
+The platform also supports fine-grained local state. A component can create its own event channel and fold it into a local signal:
+
+```roc
+{ sender, receiver } = Reactive.Event.channel_unit!()
+deltas = Reactive.Event.map_unit_to_i64(receiver, |_| 1)
+count = Reactive.Signal.fold_i64(0, deltas, |current, delta| current + delta)
+```
+
+Independent local signals can be combined with `Signal.map2`:
+
+```roc
+total =
+    Reactive.Signal.map2(
+        left.count,
+        Reactive.Codec.i64,
+        right.count,
+        Reactive.Codec.i64,
+        Reactive.Codec.i64,
+        |left_value, right_value| left_value + right_value,
+    )
+```
+
+## Dynamic Structure
+
+`Elem.when` mounts one of two branches from a `Signal(Bool)`.
+
+`Elem.each` mounts a keyed list from a `Signal(List(a))`. The key function decides identity, so reordering keeps child scopes and their local signal state, while removing a key unmounts that scope.
+
+`Elem.lifecycle` sends unit events when a scope mounts or unmounts:
+
+```roc
+Elem.lifecycle({
+    on_mount: mount_send,
+    on_unmount: unmount_send,
+})
+```
+
+These APIs are simulated in the host, but they mirror the responsibilities a real UI renderer would need: create nodes, move keyed children, deactivate removed scopes, drop bindings, and dispatch lifecycle events.
 
 ## Host Model
 
-The host stores:
+Pure Roc builds immutable descriptions of elements, signals, events, and boxed callbacks. The Zig host owns mutable state:
 
 - graph nodes for events and signals,
-- simulated DOM elements,
-- click bindings from buttons to event nodes,
-- text bindings from labels/buttons to signal nodes.
+- current signal values and transaction-local event occurrences,
+- simulated DOM elements and text/click bindings,
+- mount scopes for dynamic children and keyed lists,
+- boxed Roc callbacks for maps, folds, renders, keys, and lifecycle wiring.
 
-`Elem.run_component!` creates one mutable root state signal. When a bound event fires, the host propagates through the graph, updates the root state from component changes, recomputes dependent signals, and updates text bindings.
+When an event fires, the host:
 
-The implemented graph node kinds include:
+1. records the source occurrence,
+2. computes the affected subgraph,
+3. evaluates affected nodes only after affected inputs are ready,
+4. records signals whose value actually changed,
+5. updates only text bindings attached to changed signals,
+6. drains lifecycle events queued during the transaction.
 
-- event source, map, filter, merge, and with-latest,
-- signal const, state, map, hold, fold, and zip-with.
+The current node kinds include event source, map, filter, merge, with-latest, signal const, state, map, map2, hold, fold, zip-with, dynamic, and keyed each.
 
-## Extending to a Real UI Framework
+## Extending To A Real Renderer
 
-A real renderer would replace the simulated DOM host effects with platform-specific effects:
+A real UI framework would replace the simulated DOM effects in `platform/host.zig` with renderer-specific work:
 
-- create/append/remove/move real UI nodes,
-- bind real input events to `EventSender`s,
+- create, append, remove, and move real UI nodes,
+- translate native input callbacks into `EventSender` sends,
 - schedule propagation on the UI thread,
-- add lifecycle cleanup for graph nodes and event bindings,
-- add typed element APIs beyond buttons, labels, and text,
-- add dynamic structure such as keyed lists and conditional children.
+- render more element types and attributes,
+- attach native resources to mount scopes,
+- release renderer resources when scopes unmount.
 
-The app-facing composition model can stay the same: components receive `Signal(state)`, emit `Event(next_state)`, and use `Elem.translate` to connect child state to parent state through explicit getter/setter functions.
+The app-facing model can stay the same: Roc code describes the signal graph and element tree, while the host owns mutation, scheduling, and renderer resources.

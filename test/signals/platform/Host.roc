@@ -44,6 +44,9 @@ Host := [].{
     ## Create a signal map node (host stores the transform closure)
     create_signal_map! : U64, Box((NodeValue -> NodeValue)) => U64
 
+    ## Create a signal map2 node (host stores the transform closure)
+    create_signal_map2! : U64, U64, Box(((NodeValue, NodeValue) -> NodeValue)) => U64
+
     ## Create a signal hold node
     create_signal_hold! : NodeValue, U64 => U64
 
@@ -58,6 +61,9 @@ Host := [].{
 
     ## Bind click events from element to event node
     bind_click! : U64, U64 => {}
+
+    ## Fire an event source from Roc code
+    send_event! : U64, NodeValue => {}
 
     ## Update a mutable signal from an event carrying the next signal value
     bind_signal_update! : U64, U64 => {}

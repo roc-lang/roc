@@ -517,29 +517,42 @@ pub const RocEnv = struct {
     roc_io: RocIo,
 };
 
-/// Element type for __AnonStruct14
-pub const __AnonStruct14 = extern struct {
+/// Element type for __AnonStruct4
+pub const __AnonStruct4 = extern struct {
     @"_0": NodeValue,
-    @"_1": NodeValue,
+    @"_1": u64,
 };
 
 comptime {
     if (@sizeOf(usize) == 8) {
-        if (@sizeOf(__AnonStruct14) != 64) @compileError("__AnonStruct14 size mismatch");
-        if (@alignOf(__AnonStruct14) != 8) @compileError("__AnonStruct14 alignment mismatch");
+        if (@sizeOf(__AnonStruct4) != 40) @compileError("__AnonStruct4 size mismatch");
+        if (@alignOf(__AnonStruct4) != 8) @compileError("__AnonStruct4 alignment mismatch");
     }
 }
 
-/// Element type for __AnonStruct29
-pub const __AnonStruct29 = extern struct {
+/// Element type for __AnonStruct27
+pub const __AnonStruct27 = extern struct {
     @"_0": NodeValue,
     @"_1": NodeValue,
 };
 
 comptime {
     if (@sizeOf(usize) == 8) {
-        if (@sizeOf(__AnonStruct29) != 64) @compileError("__AnonStruct29 size mismatch");
-        if (@alignOf(__AnonStruct29) != 8) @compileError("__AnonStruct29 alignment mismatch");
+        if (@sizeOf(__AnonStruct27) != 64) @compileError("__AnonStruct27 size mismatch");
+        if (@alignOf(__AnonStruct27) != 8) @compileError("__AnonStruct27 alignment mismatch");
+    }
+}
+
+/// Element type for __AnonStruct42
+pub const __AnonStruct42 = extern struct {
+    @"_0": NodeValue,
+    @"_1": NodeValue,
+};
+
+comptime {
+    if (@sizeOf(usize) == 8) {
+        if (@sizeOf(__AnonStruct42) != 64) @compileError("__AnonStruct42 size mismatch");
+        if (@alignOf(__AnonStruct42) != 8) @compileError("__AnonStruct42 alignment mismatch");
     }
 }
 
@@ -572,6 +585,33 @@ comptime {
         if (@alignOf(NodeValue) != 8) @compileError("NodeValue alignment mismatch");
     }
 }
+
+/// Arguments for Elem.create_dynamic!
+/// Roc signature: U64, U64, Box((NodeValue, U64) => {}) => {}
+/// Refcounted fields are owned by the hosted function.
+pub const ElemCreate_dynamicArgs = extern struct {
+    arg0: u64,
+    arg1: u64,
+    arg2: RocErasedCallable,
+};
+
+/// Arguments for Elem.create_each!
+/// Roc signature: U64, U64, Box(NodeValue -> Str), Box((NodeValue, U64) => {}) => {}
+/// Refcounted fields are owned by the hosted function.
+pub const ElemCreate_eachArgs = extern struct {
+    arg0: u64,
+    arg1: u64,
+    arg2: RocErasedCallable,
+    arg3: RocErasedCallable,
+};
+
+/// Arguments for Elem.register_lifecycle!
+/// Roc signature: U64, U64 => {}
+/// Refcounted fields are owned by the hosted function.
+pub const ElemRegister_lifecycleArgs = extern struct {
+    arg0: u64,
+    arg1: u64,
+};
 
 /// Arguments for Host.append_child!
 /// Roc signature: U64, U64 => {}
@@ -677,6 +717,15 @@ pub const HostCreate_signal_mapArgs = extern struct {
     arg1: RocErasedCallable,
 };
 
+/// Arguments for Host.create_signal_map2!
+/// Roc signature: U64, U64, Box((NodeValue, NodeValue) -> NodeValue) => U64
+/// Refcounted fields are owned by the hosted function.
+pub const HostCreate_signal_map2Args = extern struct {
+    arg0: u64,
+    arg1: u64,
+    arg2: RocErasedCallable,
+};
+
 /// Arguments for Host.create_signal_state!
 /// Roc signature: NodeValue => U64
 /// Refcounted fields are owned by the hosted function.
@@ -693,6 +742,14 @@ pub const HostCreate_signal_zip_withArgs = extern struct {
     arg2: RocErasedCallable,
 };
 
+/// Arguments for Host.send_event!
+/// Roc signature: U64, NodeValue => {}
+/// Refcounted fields are owned by the hosted function.
+pub const HostSend_eventArgs = extern struct {
+    arg0: u64,
+    arg1: NodeValue,
+};
+
 /// Arguments for Host.set_text!
 /// Roc signature: U64, Str => {}
 /// Refcounted fields are owned by the hosted function.
@@ -705,6 +762,9 @@ pub const HostSet_textArgs = extern struct {
 /// Refcounted hosted arguments are owned by the hosted function.
 /// Pass it to hostedFunctions() to create the dispatch table.
 pub const PlatformHostedFns = struct {
+    elem_create_dynamic: *const fn (roc_ops: *RocOps, arg0: u64, arg1: u64, arg2: RocErasedCallable) callconv(.c) void, // Elem.create_dynamic!
+    elem_create_each: *const fn (roc_ops: *RocOps, arg0: u64, arg1: u64, arg2: RocErasedCallable, arg3: RocErasedCallable) callconv(.c) void, // Elem.create_each!
+    elem_register_lifecycle: *const fn (arg0: u64, arg1: u64) callconv(.c) void, // Elem.register_lifecycle!
     host_append_child: *const fn (arg0: u64, arg1: u64) callconv(.c) void, // Host.append_child!
     host_bind_click: *const fn (arg0: u64, arg1: u64) callconv(.c) void, // Host.bind_click!
     host_bind_signal_update: *const fn (arg0: u64, arg1: u64) callconv(.c) void, // Host.bind_signal_update!
@@ -720,8 +780,10 @@ pub const PlatformHostedFns = struct {
     host_create_signal_fold: *const fn (roc_ops: *RocOps, arg0: NodeValue, arg1: u64, arg2: RocErasedCallable) callconv(.c) u64, // Host.create_signal_fold!
     host_create_signal_hold: *const fn (roc_ops: *RocOps, arg0: NodeValue, arg1: u64) callconv(.c) u64, // Host.create_signal_hold!
     host_create_signal_map: *const fn (roc_ops: *RocOps, arg0: u64, arg1: RocErasedCallable) callconv(.c) u64, // Host.create_signal_map!
+    host_create_signal_map2: *const fn (roc_ops: *RocOps, arg0: u64, arg1: u64, arg2: RocErasedCallable) callconv(.c) u64, // Host.create_signal_map2!
     host_create_signal_state: *const fn (roc_ops: *RocOps, arg0: NodeValue) callconv(.c) u64, // Host.create_signal_state!
     host_create_signal_zip_with: *const fn (roc_ops: *RocOps, arg0: u64, arg1: u64, arg2: RocErasedCallable) callconv(.c) u64, // Host.create_signal_zip_with!
+    host_send_event: *const fn (roc_ops: *RocOps, arg0: u64, arg1: NodeValue) callconv(.c) void, // Host.send_event!
     host_set_text: *const fn (roc_ops: *RocOps, arg0: u64, arg1: RocStr) callconv(.c) void, // Host.set_text!
 };
 
@@ -731,24 +793,29 @@ pub const PlatformHostedFns = struct {
 pub fn hostedFunctions(comptime fns: PlatformHostedFns) HostedFunctions {
     const Static = struct {
         const ptrs = [_]HostedFn{
-            hostedFn(fns.host_append_child), // Host.append_child! (index 0)
-            hostedFn(fns.host_bind_click), // Host.bind_click! (index 1)
-            hostedFn(fns.host_bind_signal_update), // Host.bind_signal_update! (index 2)
-            hostedFn(fns.host_bind_text), // Host.bind_text! (index 3)
-            hostedFn(fns.host_create_element), // Host.create_element! (index 4)
-            hostedFn(fns.host_create_event_filter), // Host.create_event_filter! (index 5)
-            hostedFn(fns.host_create_event_map), // Host.create_event_map! (index 6)
-            hostedFn(fns.host_create_event_merge), // Host.create_event_merge! (index 7)
-            hostedFn(fns.host_create_event_source), // Host.create_event_source! (index 8)
-            hostedFn(fns.host_create_event_with_latest), // Host.create_event_with_latest! (index 9)
-            hostedFn(fns.host_create_root), // Host.create_root! (index 10)
-            hostedFn(fns.host_create_signal_const), // Host.create_signal_const! (index 11)
-            hostedFn(fns.host_create_signal_fold), // Host.create_signal_fold! (index 12)
-            hostedFn(fns.host_create_signal_hold), // Host.create_signal_hold! (index 13)
-            hostedFn(fns.host_create_signal_map), // Host.create_signal_map! (index 14)
-            hostedFn(fns.host_create_signal_state), // Host.create_signal_state! (index 15)
-            hostedFn(fns.host_create_signal_zip_with), // Host.create_signal_zip_with! (index 16)
-            hostedFn(fns.host_set_text), // Host.set_text! (index 17)
+            hostedFn(fns.elem_create_dynamic), // Elem.create_dynamic! (index 0)
+            hostedFn(fns.elem_create_each), // Elem.create_each! (index 1)
+            hostedFn(fns.elem_register_lifecycle), // Elem.register_lifecycle! (index 2)
+            hostedFn(fns.host_append_child), // Host.append_child! (index 3)
+            hostedFn(fns.host_bind_click), // Host.bind_click! (index 4)
+            hostedFn(fns.host_bind_signal_update), // Host.bind_signal_update! (index 5)
+            hostedFn(fns.host_bind_text), // Host.bind_text! (index 6)
+            hostedFn(fns.host_create_element), // Host.create_element! (index 7)
+            hostedFn(fns.host_create_event_filter), // Host.create_event_filter! (index 8)
+            hostedFn(fns.host_create_event_map), // Host.create_event_map! (index 9)
+            hostedFn(fns.host_create_event_merge), // Host.create_event_merge! (index 10)
+            hostedFn(fns.host_create_event_source), // Host.create_event_source! (index 11)
+            hostedFn(fns.host_create_event_with_latest), // Host.create_event_with_latest! (index 12)
+            hostedFn(fns.host_create_root), // Host.create_root! (index 13)
+            hostedFn(fns.host_create_signal_const), // Host.create_signal_const! (index 14)
+            hostedFn(fns.host_create_signal_fold), // Host.create_signal_fold! (index 15)
+            hostedFn(fns.host_create_signal_hold), // Host.create_signal_hold! (index 16)
+            hostedFn(fns.host_create_signal_map), // Host.create_signal_map! (index 17)
+            hostedFn(fns.host_create_signal_map2), // Host.create_signal_map2! (index 18)
+            hostedFn(fns.host_create_signal_state), // Host.create_signal_state! (index 19)
+            hostedFn(fns.host_create_signal_zip_with), // Host.create_signal_zip_with! (index 20)
+            hostedFn(fns.host_send_event), // Host.send_event! (index 21)
+            hostedFn(fns.host_set_text), // Host.set_text! (index 22)
         };
     };
     return .{

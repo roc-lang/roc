@@ -1,6 +1,7 @@
 import Reactive
 import Graph
 import Host
+import NodeValue exposing [NodeValue]
 
 ## UI Element tree containing signal and event graphs.
 Elem := [
@@ -8,7 +9,18 @@ Elem := [
     Button({ on_click : Graph.EventNode, label : Graph.SignalNode }),
     Label({ signal : Graph.SignalNode }),
     Text(Str),
+    Dynamic({ signal : Graph.SignalNode, render : Box(((NodeValue, U64) => {})) }),
+    Each({ signal : Graph.SignalNode, key : Box((NodeValue -> Str)), render : Box(((NodeValue, U64) => {})) }),
+    Lifecycle({ on_mount : Graph.EventNode, on_unmount : Graph.EventNode }),
 ].{
+    ## Hosted effects with effectful boxed render callbacks. The callbacks
+    ## mount Elem trees from Roc, keeping Elem itself out of the host ABI.
+    create_dynamic! : U64, U64, Box(((NodeValue, U64) => {})) => {}
+
+    create_each! : U64, U64, Box((NodeValue -> Str)), Box(((NodeValue, U64) => {})) => {}
+
+    register_lifecycle! : U64, U64 => {}
+
     Component(a) := { elem : Elem, changes : Reactive.Event(a) }.{
         elem : Component(a) -> Elem
         elem = |component| component.elem
@@ -51,6 +63,28 @@ Elem := [
                 span_id = Host.create_element!("span")
                 Host.set_text!(span_id, s)
                 Host.append_child!(parent_id, span_id)
+            }
+
+            Dynamic({ signal, render }) => {
+                container_id = Host.create_element!("div")
+                Host.append_child!(parent_id, container_id)
+
+                signal_id = Graph.SignalNode.walk!(signal)
+                Elem.create_dynamic!(container_id, signal_id, render)
+            }
+
+            Each({ signal, key, render }) => {
+                container_id = Host.create_element!("div")
+                Host.append_child!(parent_id, container_id)
+
+                signal_id = Graph.SignalNode.walk!(signal)
+                Elem.create_each!(container_id, signal_id, key, render)
+            }
+
+            Lifecycle({ on_mount, on_unmount }) => {
+                on_mount_id = Graph.EventNode.walk!(on_mount)
+                on_unmount_id = Graph.EventNode.walk!(on_unmount)
+                Elem.register_lifecycle!(on_mount_id, on_unmount_id)
             }
         }
     }
@@ -118,4 +152,74 @@ Elem := [
 
     text : Str -> Elem
     text = |s| Text(s)
+
+    dynamic : Reactive.Signal(a), Reactive.Codec(a), (a => Elem) -> Elem
+    dynamic = |signal, codec, render| {
+        decode = codec.decode_fn
+        wrapped : (NodeValue, U64) => {}
+        wrapped = |(nv, parent_id)| {
+            value =
+                match decode(nv) {
+                    Ok(val) => val
+                    Err(_) => ...
+                }
+
+            Elem.walk!(render(value), parent_id)
+        }
+
+        Dynamic({
+            signal: Reactive.Signal.to_node(signal),
+            render: Box.box(wrapped),
+        })
+    }
+
+    when : Reactive.Signal(Bool), Elem, Elem -> Elem
+    when = |condition, when_true, when_false| {
+        Elem.dynamic(condition, Reactive.Codec.bool, |flag| if flag {
+            when_true
+        } else {
+            when_false
+        })
+    }
+
+    each : Reactive.Signal(List(a)), Reactive.Codec(a), (a -> Str), (a => Elem) -> Elem
+    each = |items_signal, item_codec, key_fn, render| {
+        decode = item_codec.decode_fn
+        wrapped_key : NodeValue -> Str
+        wrapped_key = |nv| {
+            value =
+                match decode(nv) {
+                    Ok(val) => val
+                    Err(_) => ...
+                }
+
+            key_fn(value)
+        }
+
+        wrapped_render : (NodeValue, U64) => {}
+        wrapped_render = |(nv, parent_id)| {
+            value =
+                match decode(nv) {
+                    Ok(val) => val
+                    Err(_) => ...
+                }
+
+            Elem.walk!(render(value), parent_id)
+        }
+
+        Each({
+            signal: Reactive.Signal.to_node(items_signal),
+            key: Box.box(wrapped_key),
+            render: Box.box(wrapped_render),
+        })
+    }
+
+    lifecycle : { on_mount : Reactive.EventSender({}), on_unmount : Reactive.EventSender({}) } -> Elem
+    lifecycle = |callbacks| {
+        Lifecycle({
+            on_mount: Reactive.EventSender.to_node(callbacks.on_mount),
+            on_unmount: Reactive.EventSender.to_node(callbacks.on_unmount),
+        })
+    }
+
 }
