@@ -12,10 +12,12 @@ pub const num = @import("num.zig");
 pub const sort = @import("sort.zig");
 pub const str = @import("str.zig");
 pub const utils = @import("utils.zig");
+pub const float_math_tan = @import("float_math/tan.zig");
 
 test "builtins tests" {
     std.testing.refAllDecls(@import("dec.zig"));
     std.testing.refAllDecls(@import("erased_callable.zig"));
+    std.testing.refAllDecls(@import("float_math/tan.zig"));
     std.testing.refAllDecls(@import("hash.zig"));
     std.testing.refAllDecls(@import("host_abi.zig"));
     std.testing.refAllDecls(@import("list.zig"));

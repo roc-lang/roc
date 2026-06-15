@@ -15,6 +15,7 @@ const erased_callable = @import("erased_callable.zig");
 const dec = @import("dec.zig");
 const hash = @import("hash.zig");
 const i128h = @import("compiler_rt_128.zig");
+const float_tan = @import("float_math/tan.zig");
 
 const RocStr = str.RocStr;
 const RocList = list.RocList;
@@ -1717,7 +1718,7 @@ fn floatUnaryMath(val: f64, float_width: u8, comptime op: FloatUnaryMathOp) f64 
         4 => @as(f64, @floatCast(switch (op) {
             .sin => std.math.sin(@as(f32, @floatCast(val))),
             .cos => std.math.cos(@as(f32, @floatCast(val))),
-            .tan => std.math.tan(@as(f32, @floatCast(val))),
+            .tan => float_tan.tan32(@as(f32, @floatCast(val))),
             .asin => std.math.asin(@as(f32, @floatCast(val))),
             .acos => std.math.acos(@as(f32, @floatCast(val))),
             .atan => std.math.atan(@as(f32, @floatCast(val))),
@@ -1725,7 +1726,7 @@ fn floatUnaryMath(val: f64, float_width: u8, comptime op: FloatUnaryMathOp) f64 
         8 => switch (op) {
             .sin => std.math.sin(val),
             .cos => std.math.cos(val),
-            .tan => std.math.tan(val),
+            .tan => float_tan.tan64(val),
             .asin => std.math.asin(val),
             .acos => std.math.acos(val),
             .atan => std.math.atan(val),

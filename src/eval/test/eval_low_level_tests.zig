@@ -175,6 +175,23 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "True" },
     },
     .{
+        .name = "low_level - F32 tan matrix",
+        .source =
+        \\{
+        \\within = |actual, expected, tolerance| F32.abs_diff(actual, expected) <= tolerance
+        \\within(F32.tan(0.2), 0.20271003, 0.000001)
+        \\    and within(F32.tan(F32.negate(0.2)), F32.negate(0.20271003), 0.000001)
+        \\    and within(F32.tan(0.8923), 1.2404218, 0.000001)
+        \\    and within(F32.tan(1.5), 14.10142, 0.00001)
+        \\    and within(F32.tan(37.45), F32.negate(0.25439608), 0.000001)
+        \\    and within(F32.tan(89.123), 2.2858377, 0.00001)
+        \\    and F32.is_nan(F32.tan(F32.infinity))
+        \\    and F32.is_nan(F32.tan(F32.negate(F32.infinity)))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
         .name = "low_level - F64 trig",
         .source =
         \\{
@@ -184,6 +201,23 @@ pub const tests = [_]TestCase{
         \\    and F64.asin(0.0).to_str() == "0"
         \\    and F64.acos(1.0).to_str() == "0"
         \\    and F64.atan(0.0).to_str() == "0"
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - F64 tan matrix",
+        .source =
+        \\{
+        \\within = |actual, expected, tolerance| F64.abs_diff(actual, expected) <= tolerance
+        \\within(F64.tan(0.2), 0.2027100355086725, 0.000000000000001)
+        \\    and within(F64.tan(F64.negate(0.2)), F64.negate(0.2027100355086725), 0.000000000000001)
+        \\    and within(F64.tan(0.8923), 1.2404217445497098, 0.000000000000001)
+        \\    and within(F64.tan(1.5), 14.101419947171719, 0.00000000000001)
+        \\    and within(F64.tan(37.45), F64.negate(0.25439607116885656), 0.000000000001)
+        \\    and within(F64.tan(89.123), 2.285837625135532, 0.000000000001)
+        \\    and F64.is_nan(F64.tan(F64.infinity))
+        \\    and F64.is_nan(F64.tan(F64.negate(F64.infinity)))
         \\}
         ,
         .expected = .{ .inspect_str = "True" },
