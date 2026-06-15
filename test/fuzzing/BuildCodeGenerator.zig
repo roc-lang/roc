@@ -118,6 +118,7 @@ const Symbols = struct {
     score_try_ops: Symbol,
     score_set_ops: Symbol,
     score_num_ops: Symbol,
+    score_hash_ops: Symbol,
     score_patterns: Symbol,
     score_structural_keys: Symbol,
     score_dict_combinators: Symbol,
@@ -263,6 +264,7 @@ pub fn generate(self: *Self) std.mem.Allocator.Error!void {
         .score_try_ops = self.fresh(.function),
         .score_set_ops = self.fresh(.function),
         .score_num_ops = self.fresh(.function),
+        .score_hash_ops = self.fresh(.function),
         .score_patterns = self.fresh(.function),
         .score_structural_keys = self.fresh(.function),
         .score_dict_combinators = self.fresh(.function),
@@ -503,6 +505,56 @@ fn writeKeyType(self: *Self) std.mem.Allocator.Error!void {
     const right = self.fresh(.value);
     const key = self.fresh(.value);
     const hasher = self.fresh(.value);
+    const hash_id = self.fresh(.value);
+    const hash_text = self.fresh(.value);
+    const hash_empty = self.fresh(.value);
+    const hash_small = self.fresh(.value);
+    const hash_medium = self.fresh(.value);
+    const hash_word = self.fresh(.value);
+    const hash_wide = self.fresh(.value);
+    const hash_signed8 = self.fresh(.value);
+    const hash_signed16 = self.fresh(.value);
+    const hash_signed32 = self.fresh(.value);
+    const hash_signed64 = self.fresh(.value);
+    const hash_signed128 = self.fresh(.value);
+    const hash_float32 = self.fresh(.value);
+    const hash_float64 = self.fresh(.value);
+    const hash_decimal = self.fresh(.value);
+    const hash_bytes = self.fresh(.value);
+    const hash_try = self.fresh(.value);
+    const hash1 = self.fresh(.value);
+    const hash2 = self.fresh(.value);
+    const hash3 = self.fresh(.value);
+    const hash4 = self.fresh(.value);
+    const hash5 = self.fresh(.value);
+    const hash6 = self.fresh(.value);
+    const hash7 = self.fresh(.value);
+    const hash8 = self.fresh(.value);
+    const hash9 = self.fresh(.value);
+    const hash10 = self.fresh(.value);
+    const hash11 = self.fresh(.value);
+    const hash12 = self.fresh(.value);
+    const hash13 = self.fresh(.value);
+    const hash14 = self.fresh(.value);
+    const hash15 = self.fresh(.value);
+    const hash16 = self.fresh(.value);
+    const hash17 = self.fresh(.value);
+    const hash18 = self.fresh(.value);
+    const hash19 = self.fresh(.value);
+    const hash20 = self.fresh(.value);
+    const hash21 = self.fresh(.value);
+    const hash22 = self.fresh(.value);
+    const hash23 = self.fresh(.value);
+    const hash24 = self.fresh(.value);
+    const hash25 = self.fresh(.value);
+    const hash26 = self.fresh(.value);
+    const hash27 = self.fresh(.value);
+    const hash28 = self.fresh(.value);
+    const hash29 = self.fresh(.value);
+    const hash30 = self.fresh(.value);
+    const hash31 = self.fresh(.value);
+    const hash32 = self.fresh(.value);
+    const hash33 = self.fresh(.value);
 
     try self.writeAppSymbol(self.symbols.key_type);
     try self.writeAppText(" :: {\n");
@@ -621,17 +673,208 @@ fn writeKeyType(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppSymbol(key);
     try self.writeAppText(", ");
     try self.writeAppSymbol(hasher);
-    try self.writeAppText("| Str.to_hash(");
-    try self.writeAppSymbol(key);
-    try self.writeAppText(".");
-    try self.writeAppSymbol(self.symbols.key_text);
-    try self.writeAppText(", U64.to_hash(");
+    try self.writeAppText("| {\n");
+
+    try self.writeIndent(2);
+    try self.writeAppSymbol(hash_id);
+    try self.writeAppText(" : U64\n");
+    try self.writeIndent(2);
+    try self.writeAppSymbol(hash_id);
+    try self.writeAppText(" = ");
     try self.writeAppSymbol(key);
     try self.writeAppText(".");
     try self.writeAppSymbol(self.symbols.key_id);
-    try self.writeAppText(", ");
-    try self.writeAppSymbol(hasher);
-    try self.writeAppText("))\n");
+    try self.writeAppText("\n");
+
+    try self.writeIndent(2);
+    try self.writeAppSymbol(hash_text);
+    try self.writeAppText(" : Str\n");
+    try self.writeIndent(2);
+    try self.writeAppSymbol(hash_text);
+    try self.writeAppText(" = ");
+    try self.writeAppSymbol(key);
+    try self.writeAppText(".");
+    try self.writeAppSymbol(self.symbols.key_text);
+    try self.writeAppText("\n");
+
+    try self.writeIndent(2);
+    try self.writeAppSymbol(hash_empty);
+    try self.writeAppText(" : Bool\n");
+    try self.writeIndent(2);
+    try self.writeAppSymbol(hash_empty);
+    try self.writeAppText(" = Str.is_empty(");
+    try self.writeAppSymbol(hash_text);
+    try self.writeAppText(")\n");
+
+    try self.writeIndent(2);
+    try self.writeAppSymbol(hash_small);
+    try self.writeAppText(" : U8\n");
+    try self.writeIndent(2);
+    try self.writeAppSymbol(hash_small);
+    try self.writeAppText(" = U64.to_u8_wrap(");
+    try self.writeAppSymbol(hash_id);
+    try self.writeAppText(")\n");
+
+    try self.writeIndent(2);
+    try self.writeAppSymbol(hash_medium);
+    try self.writeAppText(" : U16\n");
+    try self.writeIndent(2);
+    try self.writeAppSymbol(hash_medium);
+    try self.writeAppText(" = U64.to_u16_wrap(");
+    try self.writeAppSymbol(hash_id);
+    try self.writeAppText(")\n");
+
+    try self.writeIndent(2);
+    try self.writeAppSymbol(hash_word);
+    try self.writeAppText(" : U32\n");
+    try self.writeIndent(2);
+    try self.writeAppSymbol(hash_word);
+    try self.writeAppText(" = U64.to_u32_wrap(");
+    try self.writeAppSymbol(hash_id);
+    try self.writeAppText(")\n");
+
+    try self.writeIndent(2);
+    try self.writeAppSymbol(hash_wide);
+    try self.writeAppText(" : U128\n");
+    try self.writeIndent(2);
+    try self.writeAppSymbol(hash_wide);
+    try self.writeAppText(" = U64.to_u128(");
+    try self.writeAppSymbol(hash_id);
+    try self.writeAppText(")\n");
+
+    try self.writeIndent(2);
+    try self.writeAppSymbol(hash_signed8);
+    try self.writeAppText(" : I8\n");
+    try self.writeIndent(2);
+    try self.writeAppSymbol(hash_signed8);
+    try self.writeAppText(" = U64.to_i8_wrap(");
+    try self.writeAppSymbol(hash_id);
+    try self.writeAppText(")\n");
+
+    try self.writeIndent(2);
+    try self.writeAppSymbol(hash_signed16);
+    try self.writeAppText(" : I16\n");
+    try self.writeIndent(2);
+    try self.writeAppSymbol(hash_signed16);
+    try self.writeAppText(" = U64.to_i16_wrap(");
+    try self.writeAppSymbol(hash_id);
+    try self.writeAppText(")\n");
+
+    try self.writeIndent(2);
+    try self.writeAppSymbol(hash_signed32);
+    try self.writeAppText(" : I32\n");
+    try self.writeIndent(2);
+    try self.writeAppSymbol(hash_signed32);
+    try self.writeAppText(" = U64.to_i32_wrap(");
+    try self.writeAppSymbol(hash_id);
+    try self.writeAppText(")\n");
+
+    try self.writeIndent(2);
+    try self.writeAppSymbol(hash_signed64);
+    try self.writeAppText(" : I64\n");
+    try self.writeIndent(2);
+    try self.writeAppSymbol(hash_signed64);
+    try self.writeAppText(" = U64.to_i64_wrap(");
+    try self.writeAppSymbol(hash_id);
+    try self.writeAppText(")\n");
+
+    try self.writeIndent(2);
+    try self.writeAppSymbol(hash_signed128);
+    try self.writeAppText(" : I128\n");
+    try self.writeIndent(2);
+    try self.writeAppSymbol(hash_signed128);
+    try self.writeAppText(" = U64.to_i128(");
+    try self.writeAppSymbol(hash_id);
+    try self.writeAppText(")\n");
+
+    try self.writeIndent(2);
+    try self.writeAppSymbol(hash_float32);
+    try self.writeAppText(" : F32\n");
+    try self.writeIndent(2);
+    try self.writeAppSymbol(hash_float32);
+    try self.writeAppText(" = U64.to_f32(");
+    try self.writeAppSymbol(hash_id);
+    try self.writeAppText(" % 1024)\n");
+
+    try self.writeIndent(2);
+    try self.writeAppSymbol(hash_float64);
+    try self.writeAppText(" : F64\n");
+    try self.writeIndent(2);
+    try self.writeAppSymbol(hash_float64);
+    try self.writeAppText(" = U64.to_f64(");
+    try self.writeAppSymbol(hash_id);
+    try self.writeAppText(")\n");
+
+    try self.writeIndent(2);
+    try self.writeAppSymbol(hash_decimal);
+    try self.writeAppText(" : Dec\n");
+    try self.writeIndent(2);
+    try self.writeAppSymbol(hash_decimal);
+    try self.writeAppText(" = U64.to_dec(");
+    try self.writeAppSymbol(hash_id);
+    try self.writeAppText(" % 1000)\n");
+
+    try self.writeIndent(2);
+    try self.writeAppSymbol(hash_bytes);
+    try self.writeAppText(" : List(U8)\n");
+    try self.writeIndent(2);
+    try self.writeAppSymbol(hash_bytes);
+    try self.writeAppText(" = Str.to_utf8(");
+    try self.writeAppSymbol(hash_text);
+    try self.writeAppText(")\n");
+
+    try self.writeIndent(2);
+    try self.writeAppSymbol(hash_try);
+    try self.writeAppText(" : Try(U64, Str)\n");
+    try self.writeIndent(2);
+    try self.writeAppSymbol(hash_try);
+    try self.writeAppText(" = if ");
+    try self.writeAppSymbol(hash_empty);
+    try self.writeAppText(" Ok(");
+    try self.writeAppSymbol(hash_id);
+    try self.writeAppText(") else Err(");
+    try self.writeAppSymbol(hash_text);
+    try self.writeAppText(")\n");
+
+    try self.writeHasherWriteStep(2, hash1, hasher, "write_bool", hash_empty);
+    try self.writeHasherWriteStep(2, hash2, hash1, "write_u8", hash_small);
+    try self.writeHasherWriteStep(2, hash3, hash2, "write_u16", hash_medium);
+    try self.writeHasherWriteStep(2, hash4, hash3, "write_u32", hash_word);
+    try self.writeHasherWriteStep(2, hash5, hash4, "write_u64", hash_id);
+    try self.writeHasherWriteStep(2, hash6, hash5, "write_u128", hash_wide);
+    try self.writeHasherWriteStep(2, hash7, hash6, "write_i8", hash_signed8);
+    try self.writeHasherWriteStep(2, hash8, hash7, "write_i16", hash_signed16);
+    try self.writeHasherWriteStep(2, hash9, hash8, "write_i32", hash_signed32);
+    try self.writeHasherWriteStep(2, hash10, hash9, "write_i64", hash_signed64);
+    try self.writeHasherWriteStep(2, hash11, hash10, "write_i128", hash_signed128);
+    try self.writeHasherWriteStep(2, hash12, hash11, "write_f32", hash_float32);
+    try self.writeHasherWriteStep(2, hash13, hash12, "write_f64", hash_float64);
+    try self.writeHasherWriteStep(2, hash14, hash13, "write_dec", hash_decimal);
+    try self.writeHasherWriteStep(2, hash15, hash14, "write_bytes", hash_bytes);
+    try self.writeHasherWriteStep(2, hash16, hash15, "write_str", hash_text);
+    try self.writeBuiltinToHashStep(2, hash17, hash16, "List", hash_bytes);
+    try self.writeBuiltinToHashStep(2, hash18, hash17, "Str", hash_text);
+    try self.writeBuiltinToHashStep(2, hash19, hash18, "Bool", hash_empty);
+    try self.writeBuiltinToHashStep(2, hash20, hash19, "U8", hash_small);
+    try self.writeBuiltinToHashStep(2, hash21, hash20, "U16", hash_medium);
+    try self.writeBuiltinToHashStep(2, hash22, hash21, "U32", hash_word);
+    try self.writeBuiltinToHashStep(2, hash23, hash22, "U64", hash_id);
+    try self.writeBuiltinToHashStep(2, hash24, hash23, "U128", hash_wide);
+    try self.writeBuiltinToHashStep(2, hash25, hash24, "I8", hash_signed8);
+    try self.writeBuiltinToHashStep(2, hash26, hash25, "I16", hash_signed16);
+    try self.writeBuiltinToHashStep(2, hash27, hash26, "I32", hash_signed32);
+    try self.writeBuiltinToHashStep(2, hash28, hash27, "I64", hash_signed64);
+    try self.writeBuiltinToHashStep(2, hash29, hash28, "I128", hash_signed128);
+    try self.writeBuiltinToHashStep(2, hash30, hash29, "F32", hash_float32);
+    try self.writeBuiltinToHashStep(2, hash31, hash30, "F64", hash_float64);
+    try self.writeBuiltinToHashStep(2, hash32, hash31, "Dec", hash_decimal);
+    try self.writeBuiltinToHashStep(2, hash33, hash32, "Try", hash_try);
+
+    try self.writeIndent(2);
+    try self.writeAppSymbol(hash33);
+    try self.writeAppText("\n");
+    try self.writeIndent(1);
+    try self.writeAppText("}\n");
 
     try self.writeAppText("}\n\n");
 }
@@ -837,6 +1080,7 @@ fn writeTopLevelFunctions(self: *Self) std.mem.Allocator.Error!void {
     try self.writeTryOpsScoring();
     try self.writeSetOpsScoring();
     try self.writeNumOpsScoring();
+    try self.writeHasherScoring();
     try self.writePatternScoring();
     try self.writeStructuralKeyScoring();
     try self.writeDictCombinatorScoring();
@@ -5184,6 +5428,249 @@ fn writeNumOpsScoring(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppText(")\n}\n\n");
 }
 
+fn writeHasherScoring(self: *Self) std.mem.Allocator.Error!void {
+    const items = self.fresh(.value);
+    const text = self.fresh(.value);
+    const seed = self.fresh(.value);
+    const first_key = self.fresh(.value);
+    const second_key = self.fresh(.value);
+    const item_key = self.fresh(.value);
+    const item_value = self.fresh(.value);
+    const pairs = self.fresh(.value);
+    const dict = self.fresh(.value);
+    const inserted = self.fresh(.value);
+    const lookup_score = self.fresh(.value);
+    const lookup_value = self.fresh(.value);
+    const contains_score = self.fresh(.value);
+    const key_list = self.fresh(.value);
+    const key_set = self.fresh(.value);
+    const set_score = self.fresh(.value);
+
+    try self.writeAppSymbol(self.symbols.score_hash_ops);
+    try self.writeAppText(" : List(");
+    try self.writeAppSymbol(self.symbols.item_type);
+    try self.writeAppText("), Str, U64 -> U64\n");
+    try self.writeAppSymbol(self.symbols.score_hash_ops);
+    try self.writeAppText(" = |");
+    try self.writeAppSymbol(items);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(text);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText("| {\n");
+
+    try self.writeLocalHeader(first_key, self.symbols.key_type);
+    try self.writeAppSymbol(self.symbols.key_type);
+    try self.writeAppText(".");
+    try self.writeAppSymbol(self.symbols.key_fallback);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(text);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText(")\n");
+
+    try self.writeLocalHeader(second_key, self.symbols.key_type);
+    try self.writeAppSymbol(self.symbols.key_type);
+    try self.writeAppText(".");
+    try self.writeAppSymbol(self.symbols.key_fallback);
+    try self.writeAppText("(Str.concat(");
+    try self.writeAppSymbol(text);
+    try self.writeAppText(", U64.to_str(List.len(");
+    try self.writeAppSymbol(items);
+    try self.writeAppText("))), ");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText(" + List.len(");
+    try self.writeAppSymbol(items);
+    try self.writeAppText("))\n");
+
+    try self.writeLocalHeader(item_key, self.symbols.key_type);
+    try self.writeAppText("match List.first(");
+    try self.writeAppSymbol(items);
+    try self.writeAppText(") {\n");
+    try self.writeIndent(2);
+    try self.writeAppText("Ok(");
+    try self.writeAppSymbol(item_value);
+    try self.writeAppText(") => ");
+    try self.writeAppSymbol(self.symbols.key_type);
+    try self.writeAppText(".");
+    try self.writeAppSymbol(self.symbols.key_from_item);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(item_value);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(text);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText(")\n");
+    try self.writeIndent(2);
+    try self.writeAppText("Err(_) => ");
+    try self.writeAppSymbol(first_key);
+    try self.writeAppText("\n");
+    try self.writeIndent(1);
+    try self.writeAppText("}\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(pairs);
+    try self.writeAppText(" : List((");
+    try self.writeAppSymbol(self.symbols.key_type);
+    try self.writeAppText(", U64))\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(pairs);
+    try self.writeAppText(" = [(");
+    try self.writeAppSymbol(first_key);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText("), (");
+    try self.writeAppSymbol(second_key);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText(" + 1), (");
+    try self.writeAppSymbol(item_key);
+    try self.writeAppText(", List.len(");
+    try self.writeAppSymbol(items);
+    try self.writeAppText("))]\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(dict);
+    try self.writeAppText(" : Dict(");
+    try self.writeAppSymbol(self.symbols.key_type);
+    try self.writeAppText(", U64)\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(dict);
+    try self.writeAppText(" = Dict.from_list(");
+    try self.writeAppSymbol(pairs);
+    try self.writeAppText(")\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(inserted);
+    try self.writeAppText(" : Dict(");
+    try self.writeAppSymbol(self.symbols.key_type);
+    try self.writeAppText(", U64)\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(inserted);
+    try self.writeAppText(" = Dict.insert(");
+    try self.writeAppSymbol(dict);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(first_key);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText(" + Dict.len(");
+    try self.writeAppSymbol(dict);
+    try self.writeAppText("))\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(lookup_score);
+    try self.writeAppText(" : U64\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(lookup_score);
+    try self.writeAppText(" = match Dict.get(");
+    try self.writeAppSymbol(inserted);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(second_key);
+    try self.writeAppText(") {\n");
+    try self.writeIndent(2);
+    try self.writeAppText("Ok(");
+    try self.writeAppSymbol(lookup_value);
+    try self.writeAppText(") => ");
+    try self.writeAppSymbol(lookup_value);
+    try self.writeAppText("\n");
+    try self.writeIndent(2);
+    try self.writeAppText("Err(_) => ");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText("\n");
+    try self.writeIndent(1);
+    try self.writeAppText("}\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(contains_score);
+    try self.writeAppText(" : U64\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(contains_score);
+    try self.writeAppText(" = if Dict.contains(");
+    try self.writeAppSymbol(inserted);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(item_key);
+    try self.writeAppText(") 1 else 0\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(key_list);
+    try self.writeAppText(" : List(");
+    try self.writeAppSymbol(self.symbols.key_type);
+    try self.writeAppText(")\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(key_list);
+    try self.writeAppText(" = [");
+    try self.writeAppSymbol(first_key);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(second_key);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(item_key);
+    try self.writeAppText("]\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(key_set);
+    try self.writeAppText(" : Set(");
+    try self.writeAppSymbol(self.symbols.key_type);
+    try self.writeAppText(")\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(key_set);
+    try self.writeAppText(" = Set.from_list(");
+    try self.writeAppSymbol(key_list);
+    try self.writeAppText(")\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(set_score);
+    try self.writeAppText(" : U64\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(set_score);
+    try self.writeAppText(" = if Set.contains(");
+    try self.writeAppSymbol(key_set);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(first_key);
+    try self.writeAppText(") Set.len(");
+    try self.writeAppSymbol(key_set);
+    try self.writeAppText(") else 0\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(lookup_score);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(contains_score);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(set_score);
+    try self.writeAppText(" + Dict.len(");
+    try self.writeAppSymbol(inserted);
+    try self.writeAppText(")\n}\n\n");
+}
+
+fn writeHasherWriteStep(self: *Self, depth: u8, target: Symbol, previous: Symbol, method: []const u8, value: Symbol) std.mem.Allocator.Error!void {
+    try self.writeIndent(depth);
+    try self.writeAppSymbol(target);
+    try self.writeAppText(" : Hasher\n");
+    try self.writeIndent(depth);
+    try self.writeAppSymbol(target);
+    try self.writeAppText(" = Hasher.");
+    try self.writeAppText(method);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(previous);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(value);
+    try self.writeAppText(")\n");
+}
+
+fn writeBuiltinToHashStep(self: *Self, depth: u8, target: Symbol, previous: Symbol, builtin_type: []const u8, value: Symbol) std.mem.Allocator.Error!void {
+    try self.writeIndent(depth);
+    try self.writeAppSymbol(target);
+    try self.writeAppText(" : Hasher\n");
+    try self.writeIndent(depth);
+    try self.writeAppSymbol(target);
+    try self.writeAppText(" = ");
+    try self.writeAppText(builtin_type);
+    try self.writeAppText(".to_hash(");
+    try self.writeAppSymbol(value);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(previous);
+    try self.writeAppText(")\n");
+}
+
 fn writePatternScoring(self: *Self) std.mem.Allocator.Error!void {
     const state = self.fresh(.value);
     const tree = self.fresh(.value);
@@ -6792,6 +7279,7 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     const try_ops_score = self.fresh(.value);
     const set_ops_score = self.fresh(.value);
     const num_ops_score = self.fresh(.value);
+    const hash_score = self.fresh(.value);
     const imported_record = self.fresh(.value);
     const alternate_imported = self.fresh(.value);
     const generic_imported = self.fresh(.value);
@@ -7126,6 +7614,21 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppSymbol(generic_text);
     try self.writeAppText(")\n");
 
+    try self.writeIndent(1);
+    try self.writeAppSymbol(hash_score);
+    try self.writeAppText(" : U64\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(hash_score);
+    try self.writeAppText(" = ");
+    try self.writeAppSymbol(self.symbols.score_hash_ops);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(generic_items);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(generic_text);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(num_ops_score);
+    try self.writeAppText(")\n");
+
     try self.writeLocalHeader(imported_record, self.symbols.imported_type);
     try self.writeAppSymbol(self.symbols.imported_type);
     try self.writeAppText(".");
@@ -7154,6 +7657,8 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppSymbol(set_ops_score);
     try self.writeAppText(" + ");
     try self.writeAppSymbol(num_ops_score);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(hash_score);
     try self.writeAppText(", ");
     try self.writeAppSymbol(generic_text);
     try self.writeAppText(")\n");
@@ -7489,6 +7994,8 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppText(" + ");
     try self.writeAppSymbol(num_ops_score);
     try self.writeAppText(" + ");
+    try self.writeAppSymbol(hash_score);
+    try self.writeAppText(" + ");
     try self.writeAppSymbol(imported_score);
     try self.writeAppText(" + ");
     try self.writeAppSymbol(tree_score);
@@ -7549,6 +8056,8 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppSymbol(set_ops_score);
     try self.writeAppText(" + ");
     try self.writeAppSymbol(num_ops_score);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(hash_score);
     try self.writeAppText(" + ");
     try self.writeAppSymbol(imported_score);
     try self.writeAppText(" + ");
