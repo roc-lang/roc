@@ -46,8 +46,13 @@ fn mustUseLlvm(target: ResolvedTarget) bool {
     return target.result.os.tag == .macos and target.result.cpu.arch == .x86_64;
 }
 
-fn testHostNeedsCompilerRt(target: ResolvedTarget) bool {
+fn testHostNeedsLlvm(target: ResolvedTarget) bool {
     return mustUseLlvm(target) or
+        (target.result.os.tag == .linux and target.result.abi == .gnu);
+}
+
+fn testHostNeedsCompilerRt(target: ResolvedTarget) bool {
+    return testHostNeedsLlvm(target) or
         (target.result.os.tag == .windows and target.result.cpu.arch == .aarch64);
 }
 
@@ -1658,6 +1663,9 @@ fn createTestPlatformHostLib(
         }),
     });
     configureBackend(lib, target);
+    if (testHostNeedsLlvm(target)) {
+        lib.use_llvm = true;
+    }
     if (options.uses_stack_handler) {
         lib.root_module.addImport("base", roc_modules.base);
     }
@@ -1667,9 +1675,9 @@ fn createTestPlatformHostLib(
         .root_source_file = b.path("src/shim_io.zig"),
     }));
     // Bundle compiler_rt when the generated host object may call compiler_rt
-    // routines that are not supplied by the OS libraries. ARM64 Windows Zig code
-    // can emit stack-protector calls to __stack_chk_fail; x86_64 macOS (LLVM)
-    // needs symbols like __zig_probe_stack.
+    // routines that are not supplied by the OS libraries. LLVM-built Linux and
+    // x86_64 macOS hosts can emit symbols like __zig_probe_stack; ARM64 Windows
+    // Zig code can emit stack-protector calls to __stack_chk_fail.
     lib.bundle_compiler_rt = testHostNeedsCompilerRt(target);
     // Per-function/data sections so symbol-ABI links can strip unused host code.
     lib.link_function_sections = true;
