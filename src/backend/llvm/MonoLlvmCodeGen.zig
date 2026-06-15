@@ -3089,6 +3089,10 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn strMatchScanWidth(self: *const MonoLlvmCodeGen) u8 {
+        switch (self.target.cpu.arch) {
+            .x86_64, .aarch64 => return 16,
+            else => {},
+        }
         return switch (self.target.ptrBitWidth()) {
             64 => 8,
             32 => 4,
