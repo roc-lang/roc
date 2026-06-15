@@ -4539,6 +4539,8 @@ pub fn build(b: *std.Build) void {
         "tokenize",
         "parse",
         "canonicalize",
+        "typecheck",
+        "build",
     };
     for (names) |name| {
         add_fuzz_target(
@@ -4551,6 +4553,8 @@ pub fn build(b: *std.Build) void {
             target,
             optimize,
             roc_modules,
+            compiled_builtins_module,
+            write_compiled_builtins,
             flag_enable_tracy,
             name,
         );
@@ -4587,6 +4591,8 @@ fn add_fuzz_target(
     target: ResolvedTarget,
     optimize: OptimizeMode,
     roc_modules: modules.RocModules,
+    compiled_builtins_module: *std.Build.Module,
+    write_compiled_builtins: *Step.WriteFile,
     tracy: ?[]const u8,
     name: []const u8,
 ) void {
@@ -4612,6 +4618,8 @@ fn add_fuzz_target(
     }
 
     roc_modules.addAll(fuzz_obj);
+    fuzz_obj.root_module.addImport("compiled_builtins", compiled_builtins_module);
+    fuzz_obj.step.dependOn(&write_compiled_builtins.step);
     add_tracy(b, roc_modules.build_options, fuzz_obj, target, false, tracy);
 
     const name_exe = b.fmt("fuzz-{s}", .{name});
@@ -4636,12 +4644,56 @@ fn add_fuzz_target(
         const fuzz_step = b.step(b.fmt("build-fuzz-{s}", .{name}), b.fmt("Build fuzz executable for {s}", .{name}));
         b.default_step.dependOn(fuzz_step);
 
-        const afl = b.lazyImport(@This(), "afl_kit") orelse return;
-        const fuzz_exe = afl.addInstrumentedExe(b, target, .ReleaseSafe, &.{}, use_system_afl, fuzz_obj, &.{"-lm"}) orelse return;
+        const fuzz_exe = if (target.result.os.tag == .macos)
+            addMacosAflFuzzExe(b, target, .ReleaseSafe, use_system_afl, fuzz_obj) orelse return
+        else blk: {
+            const afl = b.lazyImport(@This(), "afl_kit") orelse return;
+            break :blk afl.addInstrumentedExe(b, target, .ReleaseSafe, &.{}, use_system_afl, fuzz_obj, &.{"-lm"}) orelse return;
+        };
         const install_fuzz = b.addInstallBinFile(fuzz_exe, name_exe);
         fuzz_step.dependOn(&install_fuzz.step);
         b.getInstallStep().dependOn(&install_fuzz.step);
     }
+}
+
+fn addMacosAflFuzzExe(
+    b: *std.Build,
+    target: ResolvedTarget,
+    optimize: OptimizeMode,
+    use_system_afl: bool,
+    fuzz_obj: *Step.Compile,
+) ?std.Build.LazyPath {
+    if (!use_system_afl) {
+        std.log.warn("Vendored AFL++ does not currently support macOS fuzz executable linking; use system AFL++", .{});
+        return null;
+    }
+
+    const afl_kit = b.lazyDependency("afl_kit", .{}) orelse return null;
+    const afl_cc = b.findProgram(&.{"afl-cc"}, &.{}) catch @panic("Could not find 'afl-cc', which is required to build");
+    const afl_bin_dir = std.fs.path.dirname(afl_cc) orelse @panic("Could not determine afl-cc directory");
+    const afl_compiler_rt = std.Build.LazyPath{ .cwd_relative = b.pathJoin(&.{ afl_bin_dir, "..", "lib", "afl", "afl-compiler-rt.o" }) };
+
+    fuzz_obj.root_module.fuzz = true;
+    fuzz_obj.root_module.link_libc = true;
+    fuzz_obj.sanitize_coverage_trace_pc_guard = true;
+
+    const exe = b.addExecutable(.{
+        .name = fuzz_obj.name,
+        .root_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+    });
+    configureBackend(exe, target);
+    exe.root_module.addCSourceFile(.{
+        .file = afl_kit.path("afl.c"),
+        .flags = &.{},
+    });
+    exe.root_module.addObject(fuzz_obj);
+    exe.root_module.addObjectFile(afl_compiler_rt);
+
+    return exe.getEmittedBin();
 }
 
 fn addMainExe(
