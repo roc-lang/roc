@@ -2677,15 +2677,42 @@ pub const MonoLlvmCodeGen = struct {
             match_bodies.deinit(self.allocator);
         }
 
-        for (arms, 0..) |arm, index| {
-            const next_miss_block = if (index + 1 == arms.len)
+        var index: usize = 0;
+        while (index < arms.len) {
+            const prefix = self.store.getStringLiteral(arms[index].prefix);
+            if (prefix.len == 0) {
+                const next_miss_block = if (index + 1 == arms.len)
+                    final_miss_block
+                else
+                    wip.block(0, "str_match_set_next") catch return error.OutOfMemory;
+                try match_bodies.append(self.allocator, try self.emitStrMatchArmTest(str_match_set.source, source, arms[index], next_miss_block));
+                if (index + 1 < arms.len) {
+                    wip.cursor = .{ .block = next_miss_block };
+                }
+                index += 1;
+                continue;
+            }
+
+            var segment_end = index + 1;
+            while (segment_end < arms.len and self.store.getStringLiteral(arms[segment_end].prefix).len > 0) {
+                segment_end += 1;
+            }
+
+            const segment_miss_block = if (segment_end == arms.len)
                 final_miss_block
             else
                 wip.block(0, "str_match_set_next") catch return error.OutOfMemory;
-            try match_bodies.append(self.allocator, try self.emitStrMatchArmTest(str_match_set.source, source, arm, next_miss_block));
-            if (index + 1 < arms.len) {
-                wip.cursor = .{ .block = next_miss_block };
+
+            if (self.strMatchSetDistinctFirstByteCount(arms[index..segment_end]) > 1) {
+                try self.emitStrMatchSetFirstByteDispatch(str_match_set.source, source, arms[index..segment_end], segment_miss_block, &match_bodies);
+            } else {
+                try self.emitStrMatchSetLinearRange(str_match_set.source, source, arms[index..segment_end], segment_miss_block, &match_bodies);
             }
+
+            if (segment_end < arms.len) {
+                wip.cursor = .{ .block = segment_miss_block };
+            }
+            index = segment_end;
         }
 
         try work.append(wa, .{ .str_match_body = .{ .block = final_miss_block, .stmt = str_match_set.on_miss } });
@@ -2702,6 +2729,106 @@ pub const MonoLlvmCodeGen = struct {
         }
         handed_off = true;
         self.allocator.free(owned_bodies);
+    }
+
+    fn strMatchSetDistinctFirstByteCount(self: *MonoLlvmCodeGen, arms: []const lir.LIR.StrMatchArm) usize {
+        var seen = [_]bool{false} ** 256;
+        var count: usize = 0;
+        for (arms) |arm| {
+            const prefix = self.store.getStringLiteral(arm.prefix);
+            if (prefix.len == 0) continue;
+            const byte = prefix[0];
+            if (!seen[byte]) {
+                seen[byte] = true;
+                count += 1;
+            }
+        }
+        return count;
+    }
+
+    fn emitStrMatchSetLinearRange(
+        self: *MonoLlvmCodeGen,
+        source_local: LocalId,
+        source: StrMatchSource,
+        arms: []const lir.LIR.StrMatchArm,
+        miss_block: LlvmBuilder.Function.Block.Index,
+        match_bodies: *std.ArrayList(StrMatchBody),
+    ) Error!void {
+        const wip = self.wip orelse return error.CompilationFailed;
+
+        for (arms, 0..) |arm, index| {
+            const next_miss_block = if (index + 1 == arms.len)
+                miss_block
+            else
+                wip.block(0, "str_match_set_next") catch return error.OutOfMemory;
+            try match_bodies.append(self.allocator, try self.emitStrMatchArmTest(source_local, source, arm, next_miss_block));
+            if (index + 1 < arms.len) {
+                wip.cursor = .{ .block = next_miss_block };
+            }
+        }
+    }
+
+    fn emitStrMatchSetFirstByteDispatch(
+        self: *MonoLlvmCodeGen,
+        source_local: LocalId,
+        source: StrMatchSource,
+        arms: []const lir.LIR.StrMatchArm,
+        miss_block: LlvmBuilder.Function.Block.Index,
+        match_bodies: *std.ArrayList(StrMatchBody),
+    ) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const usize_ty = self.ptrSizedIntType();
+
+        var bucket_blocks = [_]?LlvmBuilder.Function.Block.Index{null} ** 256;
+        var bucket_bytes = std.ArrayList(u8).empty;
+        defer bucket_bytes.deinit(self.allocator);
+
+        for (arms) |arm| {
+            const prefix = self.store.getStringLiteral(arm.prefix);
+            const byte = prefix[0];
+            if (bucket_blocks[byte] == null) {
+                bucket_blocks[byte] = wip.block(0, "str_match_set_first_byte") catch return error.OutOfMemory;
+                try bucket_bytes.append(self.allocator, byte);
+            }
+        }
+
+        const dispatch_block = wip.block(0, "str_match_set_dispatch") catch return error.OutOfMemory;
+        const zero = builder.intValue(usize_ty, 0) catch return error.OutOfMemory;
+        const has_first_byte = wip.icmp(.ugt, source.len, zero, "") catch return error.OutOfMemory;
+        _ = wip.brCond(has_first_byte, dispatch_block, miss_block, .then_likely) catch return error.OutOfMemory;
+
+        wip.cursor = .{ .block = dispatch_block };
+        const first_byte = wip.load(.normal, .i8, source.bytes, LlvmBuilder.Alignment.fromByteUnits(1), "") catch return error.OutOfMemory;
+        var switch_inst = wip.@"switch"(first_byte, miss_block, @intCast(bucket_bytes.items.len), .none) catch return error.OutOfMemory;
+        for (bucket_bytes.items) |byte| {
+            const block = bucket_blocks[byte] orelse return error.CompilationFailed;
+            switch_inst.addCase(builder.intConst(.i8, byte) catch return error.OutOfMemory, block, wip) catch return error.OutOfMemory;
+        }
+        switch_inst.finish(wip);
+
+        for (bucket_bytes.items) |byte| {
+            const bucket_block = bucket_blocks[byte] orelse return error.CompilationFailed;
+            wip.cursor = .{ .block = bucket_block };
+            var remaining_in_bucket: usize = 0;
+            for (arms) |arm| {
+                if (self.store.getStringLiteral(arm.prefix)[0] == byte) remaining_in_bucket += 1;
+            }
+
+            var emitted_in_bucket: usize = 0;
+            for (arms) |arm| {
+                if (self.store.getStringLiteral(arm.prefix)[0] != byte) continue;
+                emitted_in_bucket += 1;
+                const next_miss_block = if (emitted_in_bucket == remaining_in_bucket)
+                    miss_block
+                else
+                    wip.block(0, "str_match_set_next") catch return error.OutOfMemory;
+                try match_bodies.append(self.allocator, try self.emitStrMatchArmTest(source_local, source, arm, next_miss_block));
+                if (emitted_in_bucket < remaining_in_bucket) {
+                    wip.cursor = .{ .block = next_miss_block };
+                }
+            }
+        }
     }
 
     fn emitStrMatchArmTest(
