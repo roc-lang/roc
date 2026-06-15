@@ -91,6 +91,7 @@ const Symbols = struct {
     generic_id: Symbol,
     generic_choose: Symbol,
     score_iter: Symbol,
+    score_boxed: Symbol,
 };
 
 pub fn init(allocator: std.mem.Allocator, reader: *FuzzReader) Self {
@@ -203,6 +204,7 @@ pub fn generate(self: *Self) std.mem.Allocator.Error!void {
         .generic_id = self.fresh(.function),
         .generic_choose = self.fresh(.function),
         .score_iter = self.fresh(.function),
+        .score_boxed = self.fresh(.function),
     };
 
     try self.setFileNames(app_file, platform_file, module_file);
@@ -582,6 +584,7 @@ fn writeTopLevelFunctions(self: *Self) std.mem.Allocator.Error!void {
     try self.writeTreeScoring();
     try self.writeGenericHelpers();
     try self.writeIteratorScoring();
+    try self.writeBoxScoring();
 }
 
 fn writeMakeItem(self: *Self) std.mem.Allocator.Error!void {
@@ -1442,6 +1445,75 @@ fn writeIteratorScoring(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppText(")\n}\n\n");
 }
 
+fn writeBoxScoring(self: *Self) std.mem.Allocator.Error!void {
+    const items = self.fresh(.value);
+    const tree = self.fresh(.value);
+    const seed = self.fresh(.value);
+    const boxed_tree = self.fresh(.value);
+    const unboxed_tree = self.fresh(.value);
+    const boxed_scorer = self.fresh(.value);
+    const scorer = self.fresh(.value);
+    const scorer_item = self.fresh(.value);
+
+    try self.writeAppSymbol(self.symbols.score_boxed);
+    try self.writeAppText(" : List(");
+    try self.writeAppSymbol(self.symbols.item_type);
+    try self.writeAppText("), ");
+    try self.writeAppSymbol(self.symbols.tree_type);
+    try self.writeAppText(", U64 -> U64\n");
+    try self.writeAppSymbol(self.symbols.score_boxed);
+    try self.writeAppText(" = |");
+    try self.writeAppSymbol(items);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(tree);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText("| {\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(boxed_tree);
+    try self.writeAppText(" = Box.box(");
+    try self.writeAppSymbol(tree);
+    try self.writeAppText(")\n");
+
+    try self.writeLocalHeader(unboxed_tree, self.symbols.tree_type);
+    try self.writeAppText("Box.unbox(");
+    try self.writeAppSymbol(boxed_tree);
+    try self.writeAppText(")\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(boxed_scorer);
+    try self.writeAppText(" = Box.box(|");
+    try self.writeAppSymbol(scorer_item);
+    try self.writeAppText("| ");
+    try self.writeAppSymbol(scorer_item);
+    try self.writeAppText(".");
+    try self.writeAppSymbol(self.symbols.item_id);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText(")\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(scorer);
+    try self.writeAppText(" = Box.unbox(");
+    try self.writeAppSymbol(boxed_scorer);
+    try self.writeAppText(")\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(self.symbols.score_with);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(items);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(scorer);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(self.symbols.score_tree);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(unboxed_tree);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText("))\n}\n\n");
+}
+
 fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     const input = self.fresh(.value);
     const first = self.fresh(.value);
@@ -1467,6 +1539,7 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     const state = self.fresh(.value);
     const tree = self.fresh(.value);
     const tree_score = self.fresh(.value);
+    const boxed_score = self.fresh(.value);
     const captured_score = self.fresh(.value);
     const captured_item = self.fresh(.value);
     const walked = self.fresh(.value);
@@ -1764,6 +1837,21 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppText(", 0)\n");
 
     try self.writeIndent(1);
+    try self.writeAppSymbol(boxed_score);
+    try self.writeAppText(" : U64\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(boxed_score);
+    try self.writeAppText(" = ");
+    try self.writeAppSymbol(self.symbols.score_boxed);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(generic_items);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(tree);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(iter_score);
+    try self.writeAppText(")\n");
+
+    try self.writeIndent(1);
     try self.writeAppSymbol(captured_score);
     try self.writeAppText(" : U64\n");
     try self.writeIndent(1);
@@ -1790,6 +1878,8 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppSymbol(imported_score);
     try self.writeAppText(" + ");
     try self.writeAppSymbol(tree_score);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(boxed_score);
     try self.writeAppText(", 0)\n");
 
     try self.writeIndent(1);
@@ -1815,6 +1905,8 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppSymbol(imported_score);
     try self.writeAppText(" + ");
     try self.writeAppSymbol(tree_score);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(boxed_score);
     try self.writeAppText(" + ");
     try self.writeAppSymbol(captured_score);
     try self.writeAppText("\n");
