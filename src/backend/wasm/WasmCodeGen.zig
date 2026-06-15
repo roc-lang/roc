@@ -13880,6 +13880,17 @@ fn emitSetI32Local(self: *Self, local: u32, value: i32) Allocator.Error!void {
     try self.emitLocalSet(local);
 }
 
+fn emitSimdOp(self: *Self, opcode: u32) Allocator.Error!void {
+    self.currentCode().append(self.allocator, Op.simd_prefix) catch return error.OutOfMemory;
+    WasmModule.leb128WriteU32(self.allocator, self.currentCode(), opcode) catch return error.OutOfMemory;
+}
+
+fn emitV128Load(self: *Self, align_exponent: u32, offset: u32) Allocator.Error!void {
+    try self.emitSimdOp(Op.v128_load);
+    WasmModule.leb128WriteU32(self.allocator, self.currentCode(), align_exponent) catch return error.OutOfMemory;
+    WasmModule.leb128WriteU32(self.allocator, self.currentCode(), offset) catch return error.OutOfMemory;
+}
+
 fn emitStrMatchSourceShape(self: *Self, source: ProcLocalId) Allocator.Error!StrMatchSourceShape {
     const shape = StrMatchSourceShape{
         .str = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory,
@@ -14050,6 +14061,63 @@ fn emitStrMatchFindDelimiter(
         try self.emitLocalGet(cursor);
         try self.emitLocalSet(pos);
 
+        const simd_width = 16;
+        const mask = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+
+        self.currentCode().append(self.allocator, Op.block) catch return error.OutOfMemory;
+        self.currentCode().append(self.allocator, @intFromEnum(BlockType.void)) catch return error.OutOfMemory;
+        self.currentCode().append(self.allocator, Op.loop_) catch return error.OutOfMemory;
+        self.currentCode().append(self.allocator, @intFromEnum(BlockType.void)) catch return error.OutOfMemory;
+
+        try self.emitLocalGet(search_limit);
+        try self.emitLocalGet(pos);
+        self.currentCode().append(self.allocator, Op.i32_sub) catch return error.OutOfMemory;
+        try self.emitI32Const(simd_width);
+        self.currentCode().append(self.allocator, Op.i32_lt_u) catch return error.OutOfMemory;
+        self.currentCode().append(self.allocator, Op.br_if) catch return error.OutOfMemory;
+        WasmModule.leb128WriteU32(self.allocator, self.currentCode(), 1) catch return error.OutOfMemory;
+
+        try self.emitLocalGet(source_bytes);
+        try self.emitLocalGet(pos);
+        self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+        try self.emitV128Load(0, 0);
+        try self.emitI32Const(@intCast(delimiter[0]));
+        try self.emitSimdOp(Op.i8x16_splat);
+        try self.emitSimdOp(Op.i8x16_eq);
+        try self.emitSimdOp(Op.i8x16_bitmask);
+        try self.emitLocalSet(mask);
+
+        try self.emitLocalGet(mask);
+        self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
+        self.currentCode().append(self.allocator, @intFromEnum(BlockType.void)) catch return error.OutOfMemory;
+        {
+            try self.emitSetI32Local(found, 1);
+            try self.emitLocalGet(pos);
+            try self.emitLocalGet(mask);
+            self.currentCode().append(self.allocator, Op.i32_ctz) catch return error.OutOfMemory;
+            self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+            try self.emitLocalSet(found_pos);
+            self.currentCode().append(self.allocator, Op.br) catch return error.OutOfMemory;
+            WasmModule.leb128WriteU32(self.allocator, self.currentCode(), 2) catch return error.OutOfMemory;
+        }
+        self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
+
+        try self.emitLocalGet(pos);
+        try self.emitI32Const(simd_width);
+        self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+        try self.emitLocalSet(pos);
+
+        self.currentCode().append(self.allocator, Op.br) catch return error.OutOfMemory;
+        WasmModule.leb128WriteU32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
+
+        self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
+        self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
+
+        try self.emitLocalGet(found);
+        self.currentCode().append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
+        self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
+        self.currentCode().append(self.allocator, @intFromEnum(BlockType.void)) catch return error.OutOfMemory;
+
         self.currentCode().append(self.allocator, Op.block) catch return error.OutOfMemory;
         self.currentCode().append(self.allocator, @intFromEnum(BlockType.void)) catch return error.OutOfMemory;
         self.currentCode().append(self.allocator, Op.loop_) catch return error.OutOfMemory;
@@ -14084,6 +14152,7 @@ fn emitStrMatchFindDelimiter(
         self.currentCode().append(self.allocator, Op.br) catch return error.OutOfMemory;
         WasmModule.leb128WriteU32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
 
+        self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
         self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
         self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
     }
