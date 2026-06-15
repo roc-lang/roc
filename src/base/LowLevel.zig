@@ -1043,8 +1043,10 @@ pub const LowLevel = enum {
         return switch (self) {
             .str_count_utf8_bytes,
             .str_is_eq,
+            .str_contains,
             .str_starts_with,
             .str_ends_with,
+            .str_caseless_ascii_equals,
             => true,
             else => false,
         };

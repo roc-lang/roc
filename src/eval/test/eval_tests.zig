@@ -781,15 +781,15 @@ const core_tests = [_]TestCase{
         .name = "inspect: string interpolation pattern capture feeds read-only str builtins",
         .source_kind = .module,
         .source =
-        \\describe : Str -> (Bool, Bool, Bool)
+        \\describe : Str -> (Bool, Bool, Bool, Bool, Bool)
         \\describe = |s| match s {
-        \\    "foo${name}bar" => (name == "ALPHA", Str.starts_with(name, "AL"), Str.ends_with(name, "HA"))
-        \\    _ => (False, False, False)
+        \\    "foo${name}bar" => (name == "ALPHA", Str.starts_with(name, "AL"), Str.ends_with(name, "HA"), Str.contains(name, "PH"), Str.caseless_ascii_equals(name, "alpha"))
+        \\    _ => (False, False, False, False, False)
         \\}
         \\
         \\main = (describe("fooALPHAbar"), describe("fooOMEGAbar"))
         ,
-        .expected = .{ .inspect_str = "((True, True, True), (False, False, False))" },
+        .expected = .{ .inspect_str = "((True, True, True, True, True), (False, False, False, False, False))" },
     },
     .{
         .name = "allocation - string interpolation pattern capture returns seamless heap slice",
@@ -800,7 +800,12 @@ const core_tests = [_]TestCase{
         \\    source = Str.concat(prefix, payload)
         \\
         \\    match source {
-        \\        "MATCH_PREFIX:${rest}" => rest
+        \\        "MATCH_PREFIX:${rest}" =>
+        \\            if Str.contains(rest, "mnop") and Str.caseless_ascii_equals(rest, payload) {
+        \\                rest
+        \\            } else {
+        \\                ""
+        \\            }
         \\        _ => ""
         \\    }
         \\}
