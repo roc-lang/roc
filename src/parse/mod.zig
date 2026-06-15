@@ -158,6 +158,37 @@ test "deeply nested parentheses parse stack-safely" {
     try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
 }
 
+test "range operators parse as binary operators" {
+    const gpa = std.testing.allocator;
+
+    for ([_][]const u8{ "1..<5", "1..=5", "1..<n + 1", "start..=finish" }) |source| {
+        var env = try CommonEnv.init(gpa, source);
+        defer env.deinit(gpa);
+
+        const ast = try expr(gpa, &env);
+        defer ast.deinit();
+
+        try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
+        try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
+    }
+}
+
+test "bare .. in expression position is a helpful parse error" {
+    const gpa = std.testing.allocator;
+
+    var env = try CommonEnv.init(gpa, "1..5");
+    defer env.deinit(gpa);
+
+    const ast = try expr(gpa, &env);
+    defer ast.deinit();
+
+    try std.testing.expect(ast.parse_diagnostics.items.len > 0);
+    try std.testing.expectEqual(
+        AST.Diagnostic.Tag.expr_double_dot_is_not_range,
+        ast.parse_diagnostics.items[0].tag,
+    );
+}
+
 fn vmExprAllocationFailureImpl(allocator: Allocator, tokens: tokenize.TokenizedBuffer) Allocator.Error!void {
     var parser = try Parser.init(tokens, allocator);
     defer parser.store.deinit();

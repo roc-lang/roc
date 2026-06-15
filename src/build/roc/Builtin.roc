@@ -479,6 +479,78 @@ Builtin :: [].{
 				},
 		}
 
+		## Iterator over `num` values from `start` up to but not including `end`.
+		## Returns an empty iterator if `start >= end`. This is what `start..<end` desugars to.
+		exclusive_range : num, num -> Iter(num)
+			where [
+				num.is_lt : num, num -> Bool,
+				num.add_checked : num, num -> Try(num, [Overflow]),
+				num.from_numeral : Builtin.Num.Numeral -> Try(num, [InvalidNumeral(Str)]),
+				num.steps_between : num, num -> [Known(U64), Unknown],
+			]
+		exclusive_range = |start, end| {
+			len_if_known: start.steps_between(end),
+			step: ||
+				if start < end {
+					One(
+						{
+							item: start,
+							rest: match start.add_checked(1) {
+								Ok(next) => if next < end {
+									Iter.exclusive_range(next, end)
+								} else {
+									range_done()
+								}
+								Err(Overflow) => range_done()
+							},
+						},
+					)
+				} else {
+					Done
+				},
+		}
+
+		## Iterator over `num` values from `start` up to and including `end`.
+		## Returns an empty iterator if `start > end`. This is what `start..=end` desugars to.
+		inclusive_range : num, num -> Iter(num)
+			where [
+				num.is_lte : num, num -> Bool,
+				num.add_checked : num, num -> Try(num, [Overflow]),
+				num.from_numeral : Builtin.Num.Numeral -> Try(num, [InvalidNumeral(Str)]),
+				num.steps_between : num, num -> [Known(U64), Unknown],
+			]
+		inclusive_range = |start, end| {
+			len_if_known: if start <= end {
+				match start.steps_between(end) {
+					Known(n) => match n.add_checked(1) {
+						Ok(len) => Known(len)
+						Err(Overflow) => Unknown
+					}
+					Unknown => Unknown
+				}
+			} else {
+				Known(0)
+			},
+			step: ||
+				if start <= end {
+					One(
+						{
+							item: start,
+							rest: match start.add_checked(1) {
+								Ok(next) => if next <= end {
+									Iter.inclusive_range(next, end)
+								} else {
+									range_done()
+								}
+								Err(Overflow) => range_done()
+							},
+						},
+					)
+				} else {
+					Done
+				},
+		}
+
 		iter : Iter(item) -> Iter(item)
 		iter = |self| self
 
@@ -772,7 +844,12 @@ Builtin :: [].{
 		## into a [List] (pre-sized from `len_if_known` when known).
 		collect! : Stream(item) => List(item)
 		collect! = |stream| {
-			cap = match Stream.size_hint(stream) {
+			# `Known(n)` guarantees exactly n items (count-changing combinators
+			# report `Unknown`), so reserve up front and use the unchecked append.
+			# When the length is unknown, start empty and grow with the reserving
+			# append — the unchecked append would corrupt a zero-capacity list.
+			length = Stream.size_hint(stream)
+			cap = match length {
 				Known(n) => n
 				Unknown => 0
 			}
@@ -787,7 +864,10 @@ Builtin :: [].{
 						$rest = rest
 					}
 					One({ item, rest }) => {
-						$list = list_append_unsafe($list, item)
+						$list = match length {
+							Known(_) => list_append_unsafe($list, item)
+							Unknown => List.append($list, item)
+						}
 						$rest = rest
 					}
 				}
@@ -838,12 +918,20 @@ Builtin :: [].{
 		## that [Iter.collect] dispatches to.
 		from_iter : Iter(item) -> List(item)
 		from_iter = |iterator| {
-			cap = match Iter.size_hint(iterator) {
+			# `Known(n)` guarantees the iterator yields exactly n items: every
+			# combinator that can change the count (e.g. keep_if) reports `Unknown`.
+			# So when the length is known we reserve the whole allocation up front
+			# and write each item with the unchecked append; when it is unknown we
+			# start empty and grow with the reserving append instead.
+			length = iterator.len_if_known
+			cap = match length {
 				Known(n) => n
 				Unknown => 0
 			}
+
 			var $list = List.with_capacity(cap)
 			var $rest = iterator
+
 			while Bool.True {
 				match Iter.next($rest) {
 					Done => {
@@ -853,11 +941,15 @@ Builtin :: [].{
 						$rest = rest
 					}
 					One({ item, rest }) => {
-						$list = list_append_unsafe($list, item)
+						$list = match length {
+							Known(_) => list_append_unsafe($list, item)
+							Unknown => List.append($list, item)
+						}
 						$rest = rest
 					}
 				}
 			}
+
 			$list
 		}
 
@@ -2928,6 +3020,13 @@ Builtin :: [].{
 			add_checked : U8, U8 -> Try(U8, [Overflow])
 			add_checked = |a, b| unsigned_add_checked(U8.highest, a, b)
 
+			steps_between : U8, U8 -> [Known(U64), Unknown]
+			steps_between = |start, end|
+				if start < end
+					Known(start.abs_diff(end).to_u64())
+				else
+					Known(0)
+
 			## Add two [U8] values, saturating at [U8.highest] on overflow rather than wrapping around.
 			## ```roc
 			## expect U8.plus_saturated(U8.highest, 1) == U8.highest
@@ -3082,80 +3181,6 @@ Builtin :: [].{
 			## expect U8.from_str("-1") == Err(BadNumStr)
 			## ```
 			from_str : Str -> Try(U8, [BadNumStr, ..])
-
-			## Iterator of integers beginning with this `U8` and ending with the other `U8`.
-			## (Use [U8.until] instead to end with the other `U8` minus one.)
-			## Returns an empty iterator if this `U8` is greater than the other.
-			## ```roc
-			## expect Iter.fold(U8.to(1, 4), [], |acc, item| acc.append(item)) == [1, 2, 3, 4]
-			##
-			## expect Iter.fold(U8.to(3, 3), [], |acc, item| acc.append(item)) == [3]
-			##
-			## expect Iter.fold(U8.to(5, 2), [], |acc, item| acc.append(item)) == []
-			## ```
-			to : U8, U8 -> Iter(U8)
-			to = |start, end| {
-				len_if_known: if start > end {
-					Known(0)
-				} else {
-					Known(U8.to_u64(end) - U8.to_u64(start) + 1)
-				},
-				step: ||
-					if start <= end {
-						One(
-							{
-								item: start,
-								rest: match U8.add_checked(start, 1) {
-									Ok(next) => if next <= end {
-										U8.to(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
-							},
-						)
-					} else {
-						Done
-					},
-			}
-
-			## Iterator of integers beginning with this `U8` and ending with the other `U8` minus one.
-			## (Use [U8.to] instead to end with the other `U8` exactly, instead of minus one.)
-			## Returns an empty iterator if this `U8` is greater than or equal to the other.
-			## ```roc
-			## expect Iter.fold(U8.until(1, 4), [], |acc, item| acc.append(item)) == [1, 2, 3]
-			##
-			## expect Iter.fold(U8.until(3, 3), [], |acc, item| acc.append(item)) == []
-			##
-			## expect Iter.fold(U8.until(5, 2), [], |acc, item| acc.append(item)) == []
-			## ```
-			until : U8, U8 -> Iter(U8)
-			until = |start, end| {
-				len_if_known: if start >= end {
-					Known(0)
-				} else {
-					Known(U8.to_u64(end) - U8.to_u64(start))
-				},
-				step: ||
-					if start < end {
-						One(
-							{
-								item: start,
-								rest: match U8.add_checked(start, 1) {
-									Ok(next) => if next < end {
-										U8.until(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
-							},
-						)
-					} else {
-						Done
-					},
-			}
 
 			# Conversions to signed integers (I8 is lossy, others are safe)
 
@@ -3365,6 +3390,13 @@ Builtin :: [].{
 			add_checked : I8, I8 -> Try(I8, [Overflow])
 			add_checked = |a, b| signed_add_checked(I8.lowest, I8.highest, 0, a, b)
 
+			steps_between : I8, I8 -> [Known(U64), Unknown]
+			steps_between = |start, end|
+				if start < end
+					Known(start.abs_diff(end).to_u64())
+				else
+					Known(0)
+
 			## Add two [I8] values, saturating at [I8.highest] or [I8.lowest] on overflow rather than wrapping around.
 			## ```roc
 			## expect I8.plus_saturated(I8.highest, 1) == I8.highest
@@ -3509,80 +3541,6 @@ Builtin :: [].{
 			## expect I8.bitwise_not(5) == -6
 			## ```
 			bitwise_not : I8 -> I8
-
-			## Iterator of integers beginning with this `I8` and ending with the other `I8`.
-			## (Use [I8.until] instead to end with the other `I8` minus one.)
-			## Returns an empty iterator if this `I8` is greater than the other.
-			## ```roc
-			## expect Iter.fold(I8.to(1, 4), [], |acc, item| acc.append(item)) == [1, 2, 3, 4]
-			##
-			## expect Iter.fold(I8.to(-2, 1), [], |acc, item| acc.append(item)) == [-2, -1, 0, 1]
-			##
-			## expect Iter.fold(I8.to(5, 2), [], |acc, item| acc.append(item)) == []
-			## ```
-			to : I8, I8 -> Iter(I8)
-			to = |start, end| {
-				len_if_known: if start > end {
-					Known(0)
-				} else {
-					Known(I64.to_u64_wrap(I8.to_i64(end) - I8.to_i64(start) + 1))
-				},
-				step: ||
-					if start <= end {
-						One(
-							{
-								item: start,
-								rest: match I8.add_checked(start, 1) {
-									Ok(next) => if next <= end {
-										I8.to(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
-							},
-						)
-					} else {
-						Done
-					},
-			}
-
-			## Iterator of integers beginning with this `I8` and ending with the other `I8` minus one.
-			## (Use [I8.to] instead to end with the other `I8` exactly, instead of minus one.)
-			## Returns an empty iterator if this `I8` is greater than or equal to the other.
-			## ```roc
-			## expect Iter.fold(I8.until(1, 4), [], |acc, item| acc.append(item)) == [1, 2, 3]
-			##
-			## expect Iter.fold(I8.until(-2, 1), [], |acc, item| acc.append(item)) == [-2, -1, 0]
-			##
-			## expect Iter.fold(I8.until(5, 2), [], |acc, item| acc.append(item)) == []
-			## ```
-			until : I8, I8 -> Iter(I8)
-			until = |start, end| {
-				len_if_known: if start >= end {
-					Known(0)
-				} else {
-					Known(I64.to_u64_wrap(I8.to_i64(end) - I8.to_i64(start)))
-				},
-				step: ||
-					if start < end {
-						One(
-							{
-								item: start,
-								rest: match I8.add_checked(start, 1) {
-									Ok(next) => if next < end {
-										I8.until(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
-							},
-						)
-					} else {
-						Done
-					},
-			}
 
 			## Build an [I8] from a list of base-10 digits, most significant first.
 			## Each element of the list must be a digit in the range `0` to `9`.
@@ -3855,6 +3813,13 @@ Builtin :: [].{
 			add_checked : U16, U16 -> Try(U16, [Overflow])
 			add_checked = |a, b| unsigned_add_checked(U16.highest, a, b)
 
+			steps_between : U16, U16 -> [Known(U64), Unknown]
+			steps_between = |start, end|
+				if start < end
+					Known(start.abs_diff(end).to_u64())
+				else
+					Known(0)
+
 			## Add two [U16] values, saturating at [U16.highest] on overflow rather than wrapping around.
 			## ```roc
 			## expect U16.plus_saturated(U16.highest, 1) == U16.highest
@@ -3987,80 +3952,6 @@ Builtin :: [].{
 			## expect U16.bitwise_not(0) == 65535
 			## ```
 			bitwise_not : U16 -> U16
-
-			## Iterator of integers beginning with this `U16` and ending with the other `U16`.
-			## (Use [U16.until] instead to end with the other `U16` minus one.)
-			## Returns an empty iterator if this `U16` is greater than the other.
-			## ```roc
-			## expect Iter.fold(U16.to(1, 4), [], |acc, item| acc.append(item)) == [1, 2, 3, 4]
-			##
-			## expect Iter.fold(U16.to(3, 3), [], |acc, item| acc.append(item)) == [3]
-			##
-			## expect Iter.fold(U16.to(5, 2), [], |acc, item| acc.append(item)) == []
-			## ```
-			to : U16, U16 -> Iter(U16)
-			to = |start, end| {
-				len_if_known: if start > end {
-					Known(0)
-				} else {
-					Known(U16.to_u64(end) - U16.to_u64(start) + 1)
-				},
-				step: ||
-					if start <= end {
-						One(
-							{
-								item: start,
-								rest: match U16.add_checked(start, 1) {
-									Ok(next) => if next <= end {
-										U16.to(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
-							},
-						)
-					} else {
-						Done
-					},
-			}
-
-			## Iterator of integers beginning with this `U16` and ending with the other `U16` minus one.
-			## (Use [U16.to] instead to end with the other `U16` exactly, instead of minus one.)
-			## Returns an empty iterator if this `U16` is greater than or equal to the other.
-			## ```roc
-			## expect Iter.fold(U16.until(1, 4), [], |acc, item| acc.append(item)) == [1, 2, 3]
-			##
-			## expect Iter.fold(U16.until(3, 3), [], |acc, item| acc.append(item)) == []
-			##
-			## expect Iter.fold(U16.until(5, 2), [], |acc, item| acc.append(item)) == []
-			## ```
-			until : U16, U16 -> Iter(U16)
-			until = |start, end| {
-				len_if_known: if start >= end {
-					Known(0)
-				} else {
-					Known(U16.to_u64(end) - U16.to_u64(start))
-				},
-				step: ||
-					if start < end {
-						One(
-							{
-								item: start,
-								rest: match U16.add_checked(start, 1) {
-									Ok(next) => if next < end {
-										U16.until(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
-							},
-						)
-					} else {
-						Done
-					},
-			}
 
 			## Build a [U16] from a list of base-10 digits, most significant first.
 			## Each element of the list must be a digit in the range `0` to `9`.
@@ -4330,6 +4221,13 @@ Builtin :: [].{
 			add_checked : I16, I16 -> Try(I16, [Overflow])
 			add_checked = |a, b| signed_add_checked(I16.lowest, I16.highest, 0, a, b)
 
+			steps_between : I16, I16 -> [Known(U64), Unknown]
+			steps_between = |start, end|
+				if start < end
+					Known(start.abs_diff(end).to_u64())
+				else
+					Known(0)
+
 			## Add two [I16] values, saturating at [I16.highest] or [I16.lowest] on overflow rather than wrapping around.
 			## ```roc
 			## expect I16.plus_saturated(I16.highest, 1) == I16.highest
@@ -4474,80 +4372,6 @@ Builtin :: [].{
 			## expect I16.bitwise_not(5) == -6
 			## ```
 			bitwise_not : I16 -> I16
-
-			## Iterator of integers beginning with this `I16` and ending with the other `I16`.
-			## (Use [I16.until] instead to end with the other `I16` minus one.)
-			## Returns an empty iterator if this `I16` is greater than the other.
-			## ```roc
-			## expect Iter.fold(I16.to(1, 4), [], |acc, item| acc.append(item)) == [1, 2, 3, 4]
-			##
-			## expect Iter.fold(I16.to(-2, 1), [], |acc, item| acc.append(item)) == [-2, -1, 0, 1]
-			##
-			## expect Iter.fold(I16.to(5, 2), [], |acc, item| acc.append(item)) == []
-			## ```
-			to : I16, I16 -> Iter(I16)
-			to = |start, end| {
-				len_if_known: if start > end {
-					Known(0)
-				} else {
-					Known(I64.to_u64_wrap(I16.to_i64(end) - I16.to_i64(start) + 1))
-				},
-				step: ||
-					if start <= end {
-						One(
-							{
-								item: start,
-								rest: match I16.add_checked(start, 1) {
-									Ok(next) => if next <= end {
-										I16.to(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
-							},
-						)
-					} else {
-						Done
-					},
-			}
-
-			## Iterator of integers beginning with this `I16` and ending with the other `I16` minus one.
-			## (Use [I16.to] instead to end with the other `I16` exactly, instead of minus one.)
-			## Returns an empty iterator if this `I16` is greater than or equal to the other.
-			## ```roc
-			## expect Iter.fold(I16.until(1, 4), [], |acc, item| acc.append(item)) == [1, 2, 3]
-			##
-			## expect Iter.fold(I16.until(-2, 1), [], |acc, item| acc.append(item)) == [-2, -1, 0]
-			##
-			## expect Iter.fold(I16.until(5, 2), [], |acc, item| acc.append(item)) == []
-			## ```
-			until : I16, I16 -> Iter(I16)
-			until = |start, end| {
-				len_if_known: if start >= end {
-					Known(0)
-				} else {
-					Known(I64.to_u64_wrap(I16.to_i64(end) - I16.to_i64(start)))
-				},
-				step: ||
-					if start < end {
-						One(
-							{
-								item: start,
-								rest: match I16.add_checked(start, 1) {
-									Ok(next) => if next < end {
-										I16.until(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
-							},
-						)
-					} else {
-						Done
-					},
-			}
 
 			## Build an [I16] from a list of base-10 digits, most significant first.
 			## Each element of the list must be a digit in the range `0` to `9`.
@@ -4837,6 +4661,13 @@ Builtin :: [].{
 			add_checked : U32, U32 -> Try(U32, [Overflow])
 			add_checked = |a, b| unsigned_add_checked(U32.highest, a, b)
 
+			steps_between : U32, U32 -> [Known(U64), Unknown]
+			steps_between = |start, end|
+				if start < end
+					Known(start.abs_diff(end).to_u64())
+				else
+					Known(0)
+
 			## Add two [U32] values, saturating at [U32.highest] on overflow rather than wrapping around.
 			## ```roc
 			## expect U32.plus_saturated(U32.highest, 1) == U32.highest
@@ -4969,80 +4800,6 @@ Builtin :: [].{
 			## expect U32.bitwise_not(0) == 4294967295
 			## ```
 			bitwise_not : U32 -> U32
-
-			## Iterator of integers beginning with this `U32` and ending with the other `U32`.
-			## (Use [U32.until] instead to end with the other `U32` minus one.)
-			## Returns an empty iterator if this `U32` is greater than the other.
-			## ```roc
-			## expect Iter.fold(U32.to(1, 4), [], |acc, item| acc.append(item)) == [1, 2, 3, 4]
-			##
-			## expect Iter.fold(U32.to(3, 3), [], |acc, item| acc.append(item)) == [3]
-			##
-			## expect Iter.fold(U32.to(5, 2), [], |acc, item| acc.append(item)) == []
-			## ```
-			to : U32, U32 -> Iter(U32)
-			to = |start, end| {
-				len_if_known: if start > end {
-					Known(0)
-				} else {
-					Known(U32.to_u64(end) - U32.to_u64(start) + 1)
-				},
-				step: ||
-					if start <= end {
-						One(
-							{
-								item: start,
-								rest: match U32.add_checked(start, 1) {
-									Ok(next) => if next <= end {
-										U32.to(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
-							},
-						)
-					} else {
-						Done
-					},
-			}
-
-			## Iterator of integers beginning with this `U32` and ending with the other `U32` minus one.
-			## (Use [U32.to] instead to end with the other `U32` exactly, instead of minus one.)
-			## Returns an empty iterator if this `U32` is greater than or equal to the other.
-			## ```roc
-			## expect Iter.fold(U32.until(1, 4), [], |acc, item| acc.append(item)) == [1, 2, 3]
-			##
-			## expect Iter.fold(U32.until(3, 3), [], |acc, item| acc.append(item)) == []
-			##
-			## expect Iter.fold(U32.until(5, 2), [], |acc, item| acc.append(item)) == []
-			## ```
-			until : U32, U32 -> Iter(U32)
-			until = |start, end| {
-				len_if_known: if start >= end {
-					Known(0)
-				} else {
-					Known(U32.to_u64(end) - U32.to_u64(start))
-				},
-				step: ||
-					if start < end {
-						One(
-							{
-								item: start,
-								rest: match U32.add_checked(start, 1) {
-									Ok(next) => if next < end {
-										U32.until(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
-							},
-						)
-					} else {
-						Done
-					},
-			}
 
 			## Build a [U32] from a list of base-10 digits, most significant first.
 			## Each element of the list must be a digit in the range `0` to `9`.
@@ -5350,6 +5107,13 @@ Builtin :: [].{
 			add_checked : I32, I32 -> Try(I32, [Overflow])
 			add_checked = |a, b| signed_add_checked(I32.lowest, I32.highest, 0, a, b)
 
+			steps_between : I32, I32 -> [Known(U64), Unknown]
+			steps_between = |start, end|
+				if start < end
+					Known(start.abs_diff(end).to_u64())
+				else
+					Known(0)
+
 			## Add two [I32] values, saturating at [I32.highest] or [I32.lowest] on overflow rather than wrapping around.
 			## ```roc
 			## expect I32.plus_saturated(I32.highest, 1) == I32.highest
@@ -5494,80 +5258,6 @@ Builtin :: [].{
 			## expect I32.bitwise_not(5) == -6
 			## ```
 			bitwise_not : I32 -> I32
-
-			## Iterator of integers beginning with this `I32` and ending with the other `I32`.
-			## (Use [I32.until] instead to end with the other `I32` minus one.)
-			## Returns an empty iterator if this `I32` is greater than the other.
-			## ```roc
-			## expect Iter.fold(I32.to(1, 4), [], |acc, item| acc.append(item)) == [1, 2, 3, 4]
-			##
-			## expect Iter.fold(I32.to(-2, 1), [], |acc, item| acc.append(item)) == [-2, -1, 0, 1]
-			##
-			## expect Iter.fold(I32.to(5, 2), [], |acc, item| acc.append(item)) == []
-			## ```
-			to : I32, I32 -> Iter(I32)
-			to = |start, end| {
-				len_if_known: if start > end {
-					Known(0)
-				} else {
-					Known(I64.to_u64_wrap(I32.to_i64(end) - I32.to_i64(start) + 1))
-				},
-				step: ||
-					if start <= end {
-						One(
-							{
-								item: start,
-								rest: match I32.add_checked(start, 1) {
-									Ok(next) => if next <= end {
-										I32.to(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
-							},
-						)
-					} else {
-						Done
-					},
-			}
-
-			## Iterator of integers beginning with this `I32` and ending with the other `I32` minus one.
-			## (Use [I32.to] instead to end with the other `I32` exactly, instead of minus one.)
-			## Returns an empty iterator if this `I32` is greater than or equal to the other.
-			## ```roc
-			## expect Iter.fold(I32.until(1, 4), [], |acc, item| acc.append(item)) == [1, 2, 3]
-			##
-			## expect Iter.fold(I32.until(-2, 1), [], |acc, item| acc.append(item)) == [-2, -1, 0]
-			##
-			## expect Iter.fold(I32.until(5, 2), [], |acc, item| acc.append(item)) == []
-			## ```
-			until : I32, I32 -> Iter(I32)
-			until = |start, end| {
-				len_if_known: if start >= end {
-					Known(0)
-				} else {
-					Known(I64.to_u64_wrap(I32.to_i64(end) - I32.to_i64(start)))
-				},
-				step: ||
-					if start < end {
-						One(
-							{
-								item: start,
-								rest: match I32.add_checked(start, 1) {
-									Ok(next) => if next < end {
-										I32.until(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
-							},
-						)
-					} else {
-						Done
-					},
-			}
 
 			## Build an [I32] from a list of base-10 digits, most significant first.
 			## Each element of the list must be a digit in the range `0` to `9`.
@@ -5877,6 +5567,13 @@ Builtin :: [].{
 			add_checked : U64, U64 -> Try(U64, [Overflow])
 			add_checked = |a, b| unsigned_add_checked(U64.highest, a, b)
 
+			steps_between : U64, U64 -> [Known(U64), Unknown]
+			steps_between = |start, end|
+				if start < end
+					Known(start.abs_diff(end))
+				else
+					Known(0)
+
 			## Add two [U64] values, saturating at [U64.highest] on overflow rather than wrapping around.
 			## ```roc
 			## expect U64.plus_saturated(U64.highest, 1) == U64.highest
@@ -6009,83 +5706,6 @@ Builtin :: [].{
 			## expect U64.bitwise_not(0) == 18446744073709551615
 			## ```
 			bitwise_not : U64 -> U64
-
-			## Iterator of integers beginning with this `U64` and ending with the other `U64`.
-			## (Use [U64.until] instead to end with the other `U64` minus one.)
-			## Returns an empty iterator if this `U64` is greater than the other.
-			## ```roc
-			## expect Iter.fold(U64.to(1, 4), [], |acc, item| acc.append(item)) == [1, 2, 3, 4]
-			##
-			## expect Iter.fold(U64.to(3, 3), [], |acc, item| acc.append(item)) == [3]
-			##
-			## expect Iter.fold(U64.to(5, 2), [], |acc, item| acc.append(item)) == []
-			## ```
-			to : U64, U64 -> Iter(U64)
-			to = |start, end| {
-				len_if_known: if start > end {
-					Known(0)
-				} else {
-					match U64.add_checked(end - start, 1) {
-						Ok(len) => Known(len)
-						Err(Overflow) => Unknown
-					}
-				},
-				step: ||
-					if start <= end {
-						One(
-							{
-								item: start,
-								rest: match U64.add_checked(start, 1) {
-									Ok(next) => if next <= end {
-										U64.to(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
-							},
-						)
-					} else {
-						Done
-					},
-			}
-
-			## Iterator of integers beginning with this `U64` and ending with the other `U64` minus one.
-			## (Use [U64.to] instead to end with the other `U64` exactly, instead of minus one.)
-			## Returns an empty iterator if this `U64` is greater than or equal to the other.
-			## ```roc
-			## expect Iter.fold(U64.until(1, 4), [], |acc, item| acc.append(item)) == [1, 2, 3]
-			##
-			## expect Iter.fold(U64.until(3, 3), [], |acc, item| acc.append(item)) == []
-			##
-			## expect Iter.fold(U64.until(5, 2), [], |acc, item| acc.append(item)) == []
-			## ```
-			until : U64, U64 -> Iter(U64)
-			until = |start, end| {
-				len_if_known: if start >= end {
-					Known(0)
-				} else {
-					Known(end - start)
-				},
-				step: ||
-					if start < end {
-						One(
-							{
-								item: start,
-								rest: match U64.add_checked(start, 1) {
-									Ok(next) => if next < end {
-										U64.until(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
-							},
-						)
-					} else {
-						Done
-					},
-			}
 
 			## Build a [U64] from a list of base-10 digits, most significant first.
 			## Each element of the list must be a digit in the range `0` to `9`.
@@ -6435,6 +6055,13 @@ Builtin :: [].{
 			add_checked : I64, I64 -> Try(I64, [Overflow])
 			add_checked = |a, b| signed_add_checked(I64.lowest, I64.highest, 0, a, b)
 
+			steps_between : I64, I64 -> [Known(U64), Unknown]
+			steps_between = |start, end|
+				if start < end
+					Known(start.abs_diff(end))
+				else
+					Known(0)
+
 			## Add two [I64] values, saturating at [I64.highest] or [I64.lowest] on overflow rather than wrapping around.
 			## ```roc
 			## expect I64.plus_saturated(I64.highest, 1) == I64.highest
@@ -6579,89 +6206,6 @@ Builtin :: [].{
 			## expect I64.bitwise_not(5) == -6
 			## ```
 			bitwise_not : I64 -> I64
-
-			## Iterator of integers beginning with this `I64` and ending with the other `I64`.
-			## (Use [I64.until] instead to end with the other `I64` minus one.)
-			## Returns an empty iterator if this `I64` is greater than the other.
-			## ```roc
-			## expect Iter.fold(I64.to(1, 4), [], |acc, item| acc.append(item)) == [1, 2, 3, 4]
-			##
-			## expect Iter.fold(I64.to(-2, 1), [], |acc, item| acc.append(item)) == [-2, -1, 0, 1]
-			##
-			## expect Iter.fold(I64.to(5, 2), [], |acc, item| acc.append(item)) == []
-			## ```
-			to : I64, I64 -> Iter(I64)
-			to = |start, end| {
-				len_if_known: if start > end {
-					Known(0)
-				} else {
-					match I64.sub_checked(end, start) {
-						Ok(diff) => match I64.add_checked(diff, 1) {
-							Ok(d1) => Known(I64.to_u64_wrap(d1))
-							Err(Overflow) => Unknown
-						}
-						Err(Overflow) => Unknown
-					}
-				},
-				step: ||
-					if start <= end {
-						One(
-							{
-								item: start,
-								rest: match I64.add_checked(start, 1) {
-									Ok(next) => if next <= end {
-										I64.to(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
-							},
-						)
-					} else {
-						Done
-					},
-			}
-
-			## Iterator of integers beginning with this `I64` and ending with the other `I64` minus one.
-			## (Use [I64.to] instead to end with the other `I64` exactly, instead of minus one.)
-			## Returns an empty iterator if this `I64` is greater than or equal to the other.
-			## ```roc
-			## expect Iter.fold(I64.until(1, 4), [], |acc, item| acc.append(item)) == [1, 2, 3]
-			##
-			## expect Iter.fold(I64.until(-2, 1), [], |acc, item| acc.append(item)) == [-2, -1, 0]
-			##
-			## expect Iter.fold(I64.until(5, 2), [], |acc, item| acc.append(item)) == []
-			## ```
-			until : I64, I64 -> Iter(I64)
-			until = |start, end| {
-				len_if_known: if start >= end {
-					Known(0)
-				} else {
-					match I64.sub_checked(end, start) {
-						Ok(diff) => Known(I64.to_u64_wrap(diff))
-						Err(Overflow) => Unknown
-					}
-				},
-				step: ||
-					if start < end {
-						One(
-							{
-								item: start,
-								rest: match I64.add_checked(start, 1) {
-									Ok(next) => if next < end {
-										I64.until(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
-							},
-						)
-					} else {
-						Done
-					},
-			}
 
 			## Build an [I64] from a list of base-10 digits, most significant first.
 			## Each element of the list must be a digit in the range `0` to `9`.
@@ -6987,6 +6531,16 @@ Builtin :: [].{
 			add_checked : U128, U128 -> Try(U128, [Overflow])
 			add_checked = |a, b| unsigned_add_checked(U128.highest, a, b)
 
+			steps_between : U128, U128 -> [Known(U64), Unknown]
+			steps_between = |start, end|
+				if start < end
+					match start.abs_diff(end).to_u64_try() {
+						Ok(n) => Known(n)
+						Err(OutOfRange) => Unknown
+					}
+				else
+					Known(0)
+
 			## Add two [U128] values, saturating at [U128.highest] on overflow rather than wrapping around.
 			## ```roc
 			## expect U128.plus_saturated(U128.highest, 1) == U128.highest
@@ -7119,89 +6673,6 @@ Builtin :: [].{
 			## expect U128.bitwise_not(0) == 340282366920938463463374607431768211455
 			## ```
 			bitwise_not : U128 -> U128
-
-			## Iterator of integers beginning with this `U128` and ending with the other `U128`.
-			## (Use [U128.until] instead to end with the other `U128` minus one.)
-			## Returns an empty iterator if this `U128` is greater than the other.
-			## ```roc
-			## expect Iter.fold(U128.to(1, 4), [], |acc, item| acc.append(item)) == [1, 2, 3, 4]
-			##
-			## expect Iter.fold(U128.to(3, 3), [], |acc, item| acc.append(item)) == [3]
-			##
-			## expect Iter.fold(U128.to(5, 2), [], |acc, item| acc.append(item)) == []
-			## ```
-			to : U128, U128 -> Iter(U128)
-			to = |start, end| {
-				len_if_known: if start > end {
-					Known(0)
-				} else {
-					match U128.to_u64_try(end - start) {
-						Ok(diff_u64) => match U64.add_checked(diff_u64, 1) {
-							Ok(len) => Known(len)
-							Err(Overflow) => Unknown
-						}
-						Err(OutOfRange) => Unknown
-					}
-				},
-				step: ||
-					if start <= end {
-						One(
-							{
-								item: start,
-								rest: match U128.add_checked(start, 1) {
-									Ok(next) => if next <= end {
-										U128.to(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
-							},
-						)
-					} else {
-						Done
-					},
-			}
-
-			## Iterator of integers beginning with this `U128` and ending with the other `U128` minus one.
-			## (Use [U128.to] instead to end with the other `U128` exactly, instead of minus one.)
-			## Returns an empty iterator if this `U128` is greater than or equal to the other.
-			## ```roc
-			## expect Iter.fold(U128.until(1, 4), [], |acc, item| acc.append(item)) == [1, 2, 3]
-			##
-			## expect Iter.fold(U128.until(3, 3), [], |acc, item| acc.append(item)) == []
-			##
-			## expect Iter.fold(U128.until(5, 2), [], |acc, item| acc.append(item)) == []
-			## ```
-			until : U128, U128 -> Iter(U128)
-			until = |start, end| {
-				len_if_known: if start >= end {
-					Known(0)
-				} else {
-					match U128.to_u64_try(end - start) {
-						Ok(len) => Known(len)
-						Err(OutOfRange) => Unknown
-					}
-				},
-				step: ||
-					if start < end {
-						One(
-							{
-								item: start,
-								rest: match U128.add_checked(start, 1) {
-									Ok(next) => if next < end {
-										U128.until(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
-							},
-						)
-					} else {
-						Done
-					},
-			}
 
 			## Build a [U128] from a list of base-10 digits, most significant first.
 			## Each element of the list must be a digit in the range `0` to `9`.
@@ -7590,6 +7061,16 @@ Builtin :: [].{
 			add_checked : I128, I128 -> Try(I128, [Overflow])
 			add_checked = |a, b| signed_add_checked(I128.lowest, I128.highest, 0, a, b)
 
+			steps_between : I128, I128 -> [Known(U64), Unknown]
+			steps_between = |start, end|
+				if start < end
+					match start.abs_diff(end).to_u64_try() {
+						Ok(n) => Known(n)
+						Err(OutOfRange) => Unknown
+					}
+				else
+					Known(0)
+
 			## Add two [I128] values, saturating at [I128.highest] or [I128.lowest] on overflow rather than wrapping around.
 			## ```roc
 			## expect I128.plus_saturated(I128.highest, 1) == I128.highest
@@ -7735,95 +7216,6 @@ Builtin :: [].{
 			## expect I128.bitwise_not(5) == -6
 			## ```
 			bitwise_not : I128 -> I128
-
-			## Iterator of integers beginning with this `I128` and ending with the other `I128`.
-			## (Use [I128.until] instead to end with the other `I128` minus one.)
-			## Returns an empty iterator if this `I128` is greater than the other.
-			## ```roc
-			## expect Iter.fold(I128.to(1, 4), [], |acc, item| acc.append(item)) == [1, 2, 3, 4]
-			##
-			## expect Iter.fold(I128.to(-2, 1), [], |acc, item| acc.append(item)) == [-2, -1, 0, 1]
-			##
-			## expect Iter.fold(I128.to(5, 2), [], |acc, item| acc.append(item)) == []
-			## ```
-			to : I128, I128 -> Iter(I128)
-			to = |start, end| {
-				len_if_known: if start > end {
-					Known(0)
-				} else {
-					match I128.sub_checked(end, start) {
-						Ok(diff) => match I128.to_u64_try(diff) {
-							Ok(diff_u64) => match U64.add_checked(diff_u64, 1) {
-								Ok(len) => Known(len)
-								Err(Overflow) => Unknown
-							}
-							Err(OutOfRange) => Unknown
-						}
-						Err(Overflow) => Unknown
-					}
-				},
-				step: ||
-					if start <= end {
-						One(
-							{
-								item: start,
-								rest: match I128.add_checked(start, 1) {
-									Ok(next) => if next <= end {
-										I128.to(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
-							},
-						)
-					} else {
-						Done
-					},
-			}
-
-			## Iterator of integers beginning with this `I128` and ending with the other `I128` minus one.
-			## (Use [I128.to] instead to end with the other `I128` exactly, instead of minus one.)
-			## Returns an empty iterator if this `I128` is greater than or equal to the other.
-			## ```roc
-			## expect Iter.fold(I128.until(1, 4), [], |acc, item| acc.append(item)) == [1, 2, 3]
-			##
-			## expect Iter.fold(I128.until(-2, 1), [], |acc, item| acc.append(item)) == [-2, -1, 0]
-			##
-			## expect Iter.fold(I128.until(5, 2), [], |acc, item| acc.append(item)) == []
-			## ```
-			until : I128, I128 -> Iter(I128)
-			until = |start, end| {
-				len_if_known: if start >= end {
-					Known(0)
-				} else {
-					match I128.sub_checked(end, start) {
-						Ok(diff) => match I128.to_u64_try(diff) {
-							Ok(len) => Known(len)
-							Err(OutOfRange) => Unknown
-						}
-						Err(Overflow) => Unknown
-					}
-				},
-				step: ||
-					if start < end {
-						One(
-							{
-								item: start,
-								rest: match I128.add_checked(start, 1) {
-									Ok(next) => if next < end {
-										I128.until(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
-							},
-						)
-					} else {
-						Done
-					},
-			}
 
 			## Build an [I128] from a list of base-10 digits, most significant first.
 			## Each element of the list must be a digit in the range `0` to `9`.
@@ -8216,6 +7608,13 @@ Builtin :: [].{
 			add_checked : Dec, Dec -> Try(Dec, [Overflow])
 			add_checked = |a, b| signed_add_checked(Dec.lowest, Dec.highest, 0.0, a, b)
 
+			## Conservative placeholder: always returns `Unknown`. Counting the steps
+			## in a fractional `[start, end)` range advancing by `1` would require
+			## `ceil(end - start)`; until that is implemented, `Unknown` is always a
+			## correct (if imprecise) length hint.
+			steps_between : Dec, Dec -> [Known(U64), Unknown]
+			steps_between = |_start, _end| Unknown
+
 			## Add two [Dec] values, saturating at [Dec.highest] or [Dec.lowest] on overflow rather than wrapping around.
 			## ```roc
 			## expect Dec.plus_saturated(Dec.highest, 1.0) == Dec.highest
@@ -8563,75 +7962,6 @@ Builtin :: [].{
 			## Convert a [Dec] to an [F64]. This conversion is lossy because
 			## [Dec] has more precision than [F64] in its fractional range.
 			to_f64 : Dec -> F64
-
-			## Iterator of decimals beginning with this `Dec` and ending with the
-			## other `Dec`, stepping by `1.0`. (Use [Dec.until] instead to end with
-			## the other `Dec` minus one.) Returns an empty iterator if this `Dec`
-			## is greater than the other.
-			## ```roc
-			## expect Iter.fold(Dec.to(1.0, 4.0), [], |acc, item| acc.append(item)) == [1.0, 2.0, 3.0, 4.0]
-			##
-			## expect Iter.fold(Dec.to(-2.0, 1.0), [], |acc, item| acc.append(item)) == [-2.0, -1.0, 0.0, 1.0]
-			##
-			## expect Iter.fold(Dec.to(5.0, 2.0), [], |acc, item| acc.append(item)) == []
-			## ```
-			to : Dec, Dec -> Iter(Dec)
-			to = |start, end| {
-				len_if_known: Unknown,
-				step: ||
-					if start <= end {
-						One(
-							{
-								item: start,
-								rest: match Dec.add_checked(start, 1.0) {
-									Ok(next) => if next <= end {
-										Dec.to(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
-							},
-						)
-					} else {
-						Done
-					},
-			}
-
-			## Iterator of decimals beginning with this `Dec` and ending with the
-			## other `Dec` minus one, stepping by `1.0`. (Use [Dec.to] instead to
-			## end with the other `Dec` exactly, instead of minus one.) Returns
-			## an empty iterator if this `Dec` is greater than or equal to the
-			## other.
-			## ```roc
-			## expect Iter.fold(Dec.until(1.0, 4.0), [], |acc, item| acc.append(item)) == [1.0, 2.0, 3.0]
-			##
-			## expect Iter.fold(Dec.until(-2.0, 1.0), [], |acc, item| acc.append(item)) == [-2.0, -1.0, 0.0]
-			##
-			## expect Iter.fold(Dec.until(5.0, 2.0), [], |acc, item| acc.append(item)) == []
-			## ```
-			until : Dec, Dec -> Iter(Dec)
-			until = |start, end| {
-				len_if_known: Unknown,
-				step: ||
-					if start < end {
-						One(
-							{
-								item: start,
-								rest: match Dec.add_checked(start, 1.0) {
-									Ok(next) => if next < end {
-										Dec.until(next, end)
-									} else {
-										range_done()
-									}
-									Err(Overflow) => range_done()
-								},
-							},
-						)
-					} else {
-						Done
-					},
-			}
 
 			## Encode a Dec using a format that provides encode_dec
 			encode : Dec, fmt -> Try(encoded, err)

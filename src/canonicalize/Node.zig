@@ -260,6 +260,7 @@ pub const Tag = enum {
     diag_return_outside_fn,
     diag_mutually_recursive_type_aliases,
     diag_deprecated_number_suffix,
+    diag_range_op_chained,
 };
 
 /// Typed payload union for accessing node data in a type-safe manner.
