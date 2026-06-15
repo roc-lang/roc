@@ -122,6 +122,7 @@ const Symbols = struct {
     builder_add_many: Symbol,
     builder_build: Symbol,
     builder_text: Symbol,
+    constrained_score_method: Symbol,
     key_from_item: Symbol,
     key_fallback: Symbol,
     key_score: Symbol,
@@ -152,6 +153,8 @@ const Symbols = struct {
     score_inspect: Symbol,
     generic_id: Symbol,
     generic_choose: Symbol,
+    constrained_fold: Symbol,
+    score_constraints: Symbol,
     score_iter: Symbol,
     score_boxed: Symbol,
     score_function_values: Symbol,
@@ -282,6 +285,7 @@ pub fn generate(self: *Self) std.mem.Allocator.Error!void {
         .builder_add_many = self.fresh(.function),
         .builder_build = self.fresh(.function),
         .builder_text = self.fresh(.function),
+        .constrained_score_method = self.fresh(.function),
         .key_from_item = self.fresh(.function),
         .key_fallback = self.fresh(.function),
         .key_score = self.fresh(.function),
@@ -312,6 +316,8 @@ pub fn generate(self: *Self) std.mem.Allocator.Error!void {
         .score_inspect = self.fresh(.function),
         .generic_id = self.fresh(.function),
         .generic_choose = self.fresh(.function),
+        .constrained_fold = self.fresh(.function),
+        .score_constraints = self.fresh(.function),
         .score_iter = self.fresh(.function),
         .score_boxed = self.fresh(.function),
         .score_function_values = self.fresh(.function),
@@ -555,6 +561,8 @@ fn writeRecursiveOpsType(self: *Self) std.mem.Allocator.Error!void {
     const score_child = self.fresh(.value);
     const score_apply = self.fresh(.value);
     const applied = self.fresh(.value);
+    const constrained_node = self.fresh(.value);
+    const constrained_seed = self.fresh(.value);
 
     try self.writeAppSymbol(self.symbols.recursive_ops_type);
     try self.writeAppText(" := [");
@@ -807,6 +815,27 @@ fn writeRecursiveOpsType(self: *Self) std.mem.Allocator.Error!void {
     try self.writeIndent(1);
     try self.writeAppText("}\n");
 
+    try self.writeIndent(1);
+    try self.writeAppSymbol(self.symbols.constrained_score_method);
+    try self.writeAppText(" : ");
+    try self.writeAppSymbol(self.symbols.recursive_ops_type);
+    try self.writeAppText(", U64 -> U64\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(self.symbols.constrained_score_method);
+    try self.writeAppText(" = |");
+    try self.writeAppSymbol(constrained_node);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(constrained_seed);
+    try self.writeAppText("| ");
+    try self.writeAppSymbol(self.symbols.recursive_ops_type);
+    try self.writeAppText(".");
+    try self.writeAppSymbol(self.symbols.recursive_score);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(constrained_node);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(constrained_seed);
+    try self.writeAppText(")\n");
+
     try self.writeAppText("}\n\n");
 }
 
@@ -969,6 +998,27 @@ fn writeKeyType(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppText(".");
     try self.writeAppSymbol(self.symbols.key_text);
     try self.writeAppText("))\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(self.symbols.constrained_score_method);
+    try self.writeAppText(" : ");
+    try self.writeAppSymbol(self.symbols.key_type);
+    try self.writeAppText(", U64 -> U64\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(self.symbols.constrained_score_method);
+    try self.writeAppText(" = |");
+    try self.writeAppSymbol(key);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText("| ");
+    try self.writeAppSymbol(self.symbols.key_type);
+    try self.writeAppText(".");
+    try self.writeAppSymbol(self.symbols.key_score);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(key);
+    try self.writeAppText(") + ");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText("\n");
 
     try self.writeIndent(1);
     try self.writeAppText("is_eq : ");
@@ -1406,6 +1456,7 @@ fn writeTopLevelFunctions(self: *Self) std.mem.Allocator.Error!void {
     try self.writeRecursiveOpsScoring();
     try self.writeInspectScoring();
     try self.writeGenericHelpers();
+    try self.writeConstraintScoring();
     try self.writeIteratorScoring();
     try self.writeBoxScoring();
     try self.writeFunctionValueScoring();
@@ -3177,6 +3228,155 @@ fn writeGenericHelpers(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppText(" else ");
     try self.writeAppSymbol(right);
     try self.writeAppText("\n\n");
+}
+
+fn writeConstraintScoring(self: *Self) std.mem.Allocator.Error!void {
+    const constrained_type = self.fresh(.type_var);
+    const constrained_values = self.fresh(.value);
+    const constrained_seed = self.fresh(.value);
+    const constrained_acc = self.fresh(.value);
+    const constrained_value = self.fresh(.value);
+    const node = self.fresh(.value);
+    const items = self.fresh(.value);
+    const text = self.fresh(.value);
+    const seed = self.fresh(.value);
+    const first_key = self.fresh(.value);
+    const second_key = self.fresh(.value);
+    const first_item = self.fresh(.value);
+    const key_score = self.fresh(.value);
+    const made_node = self.fresh(.value);
+    const recursive_score = self.fresh(.value);
+
+    try self.writeAppSymbol(self.symbols.constrained_fold);
+    try self.writeAppText(" : List(");
+    try self.writeAppSymbol(constrained_type);
+    try self.writeAppText("), U64 -> U64 where [");
+    try self.writeAppSymbol(constrained_type);
+    try self.writeAppText(".");
+    try self.writeAppSymbol(self.symbols.constrained_score_method);
+    try self.writeAppText(" : ");
+    try self.writeAppSymbol(constrained_type);
+    try self.writeAppText(", U64 -> U64]\n");
+    try self.writeAppSymbol(self.symbols.constrained_fold);
+    try self.writeAppText(" = |");
+    try self.writeAppSymbol(constrained_values);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(constrained_seed);
+    try self.writeAppText("| List.fold(");
+    try self.writeAppSymbol(constrained_values);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(constrained_seed);
+    try self.writeAppText(", |");
+    try self.writeAppSymbol(constrained_acc);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(constrained_value);
+    try self.writeAppText("| ");
+    try self.writeAppSymbol(constrained_value);
+    try self.writeAppText(".");
+    try self.writeAppSymbol(self.symbols.constrained_score_method);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(constrained_acc);
+    try self.writeAppText("))\n\n");
+
+    try self.writeAppSymbol(self.symbols.score_constraints);
+    try self.writeAppText(" : ");
+    try self.writeAppSymbol(self.symbols.recursive_ops_type);
+    try self.writeAppText(", List(");
+    try self.writeAppSymbol(self.symbols.item_type);
+    try self.writeAppText("), Str, U64 -> U64\n");
+    try self.writeAppSymbol(self.symbols.score_constraints);
+    try self.writeAppText(" = |");
+    try self.writeAppSymbol(node);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(items);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(text);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText("| {\n");
+
+    try self.writeLocalHeader(first_key, self.symbols.key_type);
+    try self.writeAppSymbol(self.symbols.key_type);
+    try self.writeAppText(".");
+    try self.writeAppSymbol(self.symbols.key_fallback);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(text);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText(")\n");
+
+    try self.writeLocalHeader(second_key, self.symbols.key_type);
+    try self.writeAppText("match List.first(");
+    try self.writeAppSymbol(items);
+    try self.writeAppText(") {\n");
+    try self.writeIndent(2);
+    try self.writeAppText("Ok(");
+    try self.writeAppSymbol(first_item);
+    try self.writeAppText(") => ");
+    try self.writeAppSymbol(self.symbols.key_type);
+    try self.writeAppText(".");
+    try self.writeAppSymbol(self.symbols.key_from_item);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(first_item);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(text);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText(")\n");
+    try self.writeIndent(2);
+    try self.writeAppText("Err(_) => ");
+    try self.writeAppSymbol(first_key);
+    try self.writeAppText("\n");
+    try self.writeIndent(1);
+    try self.writeAppText("}\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(key_score);
+    try self.writeAppText(" : U64\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(key_score);
+    try self.writeAppText(" = ");
+    try self.writeAppSymbol(self.symbols.constrained_fold);
+    try self.writeAppText("([");
+    try self.writeAppSymbol(first_key);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(second_key);
+    try self.writeAppText("], ");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText(")\n");
+
+    try self.writeLocalHeader(made_node, self.symbols.recursive_ops_type);
+    try self.writeAppSymbol(self.symbols.recursive_ops_type);
+    try self.writeAppText(".");
+    try self.writeAppSymbol(self.symbols.recursive_make);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(key_score);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(text);
+    try self.writeAppText(")\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(recursive_score);
+    try self.writeAppText(" : U64\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(recursive_score);
+    try self.writeAppText(" = ");
+    try self.writeAppSymbol(self.symbols.constrained_fold);
+    try self.writeAppText("([");
+    try self.writeAppSymbol(node);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(made_node);
+    try self.writeAppText("], ");
+    try self.writeAppSymbol(key_score);
+    try self.writeAppText(")\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(key_score);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(recursive_score);
+    try self.writeAppText("\n}\n\n");
 }
 
 fn writeIteratorScoring(self: *Self) std.mem.Allocator.Error!void {
@@ -8382,6 +8582,7 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     const nested_try_err_text = self.fresh(.value);
     const recursive_node = self.fresh(.value);
     const recursive_score = self.fresh(.value);
+    const constraint_score = self.fresh(.value);
     const inspect_score = self.fresh(.value);
     const pattern_score = self.fresh(.value);
     const structural_score = self.fresh(.value);
@@ -8941,6 +9142,23 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppText(")\n");
 
     try self.writeIndent(1);
+    try self.writeAppSymbol(constraint_score);
+    try self.writeAppText(" : U64\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(constraint_score);
+    try self.writeAppText(" = ");
+    try self.writeAppSymbol(self.symbols.score_constraints);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(recursive_node);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(generic_items);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(generic_text);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(recursive_score);
+    try self.writeAppText(")\n");
+
+    try self.writeIndent(1);
     try self.writeAppSymbol(inspect_score);
     try self.writeAppText(" : U64\n");
     try self.writeIndent(1);
@@ -8961,6 +9179,8 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppSymbol(nested_try_score);
     try self.writeAppText(" + ");
     try self.writeAppSymbol(recursive_score);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(constraint_score);
     try self.writeAppText(")\n");
 
     try self.writeIndent(1);
@@ -9060,6 +9280,8 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppText(" + ");
     try self.writeAppSymbol(recursive_score);
     try self.writeAppText(" + ");
+    try self.writeAppSymbol(constraint_score);
+    try self.writeAppText(" + ");
     try self.writeAppSymbol(inspect_score);
     try self.writeAppText(" + ");
     try self.writeAppSymbol(pattern_score);
@@ -9140,6 +9362,8 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppText(" + ");
     try self.writeAppSymbol(recursive_score);
     try self.writeAppText(" + ");
+    try self.writeAppSymbol(constraint_score);
+    try self.writeAppText(" + ");
     try self.writeAppSymbol(inspect_score);
     try self.writeAppText(" + ");
     try self.writeAppSymbol(pattern_score);
@@ -9206,6 +9430,8 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppSymbol(nested_try_score);
     try self.writeAppText(" + ");
     try self.writeAppSymbol(recursive_score);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(constraint_score);
     try self.writeAppText(" + ");
     try self.writeAppSymbol(inspect_score);
     try self.writeAppText(" + ");
