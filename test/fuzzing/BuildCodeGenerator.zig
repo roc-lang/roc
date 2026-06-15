@@ -4032,6 +4032,8 @@ fn writeStrOpsScoring(self: *Self) std.mem.Allocator.Error!void {
     const suffix = self.fresh(.value);
     const joined_seed = self.fresh(.value);
     const normalized = self.fresh(.value);
+    const trimmed_start = self.fresh(.value);
+    const trimmed_end = self.fresh(.value);
     const repeated = self.fresh(.value);
     const prefixed = self.fresh(.value);
     const dropped = self.fresh(.value);
@@ -4040,8 +4042,16 @@ fn writeStrOpsScoring(self: *Self) std.mem.Allocator.Error!void {
     const bytes = self.fresh(.value);
     const roundtrip = self.fresh(.value);
     const roundtrip_ok = self.fresh(.value);
+    const invalid_bytes = self.fresh(.value);
+    const bad_utf8_score = self.fresh(.value);
+    const bad_utf8_ok = self.fresh(.value);
+    const bad_utf8_index = self.fresh(.value);
     const quoted = self.fresh(.value);
     const quoted_ok = self.fresh(.value);
+    const interpolated = self.fresh(.value);
+    const caseless_score = self.fresh(.value);
+    const empty_score = self.fresh(.value);
+    const byte_count = self.fresh(.value);
     const reserved = self.fresh(.value);
     const contains_score = self.fresh(.value);
     const starts_score = self.fresh(.value);
@@ -4083,6 +4093,28 @@ fn writeStrOpsScoring(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppSymbol(text);
     try self.writeAppText("), U64.to_str(");
     try self.writeAppSymbol(seed);
+    try self.writeAppText("))\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(trimmed_start);
+    try self.writeAppText(" : Str\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(trimmed_start);
+    try self.writeAppText(" = Str.trim_start(Str.concat(");
+    try self.writeAppSymbol(delimiter);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(joined_seed);
+    try self.writeAppText("))\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(trimmed_end);
+    try self.writeAppText(" : Str\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(trimmed_end);
+    try self.writeAppText(" = Str.trim_end(Str.concat(");
+    try self.writeAppSymbol(joined_seed);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(suffix);
     try self.writeAppText("))\n");
 
     try self.writeIndent(1);
@@ -4186,6 +4218,42 @@ fn writeStrOpsScoring(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppText("}\n");
 
     try self.writeIndent(1);
+    try self.writeAppSymbol(invalid_bytes);
+    try self.writeAppText(" : List(U8)\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(invalid_bytes);
+    try self.writeAppText(" = [U64.to_u8_wrap(255), U64.to_u8_wrap(");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText("), U64.to_u8_wrap(254)]\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(bad_utf8_score);
+    try self.writeAppText(" : U64\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(bad_utf8_score);
+    try self.writeAppText(" = match Str.from_utf8(");
+    try self.writeAppSymbol(invalid_bytes);
+    try self.writeAppText(") {\n");
+    try self.writeIndent(2);
+    try self.writeAppText("Ok(");
+    try self.writeAppSymbol(bad_utf8_ok);
+    try self.writeAppText(") => Str.count_utf8_bytes(");
+    try self.writeAppSymbol(bad_utf8_ok);
+    try self.writeAppText(")\n");
+    try self.writeIndent(2);
+    try self.writeAppText("Err(BadUtf8({ problem: _, index: ");
+    try self.writeAppSymbol(bad_utf8_index);
+    try self.writeAppText(" })) => ");
+    try self.writeAppSymbol(bad_utf8_index);
+    try self.writeAppText("\n");
+    try self.writeIndent(2);
+    try self.writeAppText("Err(_) => ");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText("\n");
+    try self.writeIndent(1);
+    try self.writeAppText("}\n");
+
+    try self.writeIndent(1);
     try self.writeAppSymbol(quoted);
     try self.writeAppText(" : Str\n");
     try self.writeIndent(1);
@@ -4205,6 +4273,52 @@ fn writeStrOpsScoring(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppText("\n");
     try self.writeIndent(1);
     try self.writeAppText("}\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(interpolated);
+    try self.writeAppText(" : Str\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(interpolated);
+    try self.writeAppText(" = Str.from_interpolation(");
+    try self.writeAppSymbol(trimmed_start);
+    try self.writeAppText(", [(U64.to_str(");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText("), ");
+    try self.writeAppSymbol(trimmed_end);
+    try self.writeAppText("), (");
+    try self.writeAppSymbol(joined);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(suffix);
+    try self.writeAppText(")].iter())\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(caseless_score);
+    try self.writeAppText(" : U64\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(caseless_score);
+    try self.writeAppText(" = if Str.caseless_ascii_equals(");
+    try self.writeAppSymbol(normalized);
+    try self.writeAppText(", Str.with_ascii_lowercased(");
+    try self.writeAppSymbol(trimmed_end);
+    try self.writeAppText(")) 1 else 0\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(empty_score);
+    try self.writeAppText(" : U64\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(empty_score);
+    try self.writeAppText(" = if Str.is_empty(Str.with_capacity(");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText(" % 4)) 1 else 0\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(byte_count);
+    try self.writeAppText(" : U64\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(byte_count);
+    try self.writeAppText(" = Str.count_utf8_bytes(");
+    try self.writeAppSymbol(interpolated);
+    try self.writeAppText(")\n");
 
     try self.writeIndent(1);
     try self.writeAppSymbol(reserved);
@@ -4260,10 +4374,20 @@ fn writeStrOpsScoring(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppSymbol(ends_score);
     try self.writeAppText(" + List.len(");
     try self.writeAppSymbol(bytes);
-    try self.writeAppText(") + List.len(Str.to_utf8(");
+    try self.writeAppText(") + ");
+    try self.writeAppSymbol(bad_utf8_score);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(caseless_score);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(empty_score);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(byte_count);
+    try self.writeAppText(" + List.len(Str.to_utf8(");
     try self.writeAppSymbol(roundtrip);
     try self.writeAppText(")) + List.len(Str.to_utf8(");
     try self.writeAppSymbol(quoted);
+    try self.writeAppText(")) + List.len(Str.to_utf8(");
+    try self.writeAppSymbol(interpolated);
     try self.writeAppText(")) + List.len(Str.to_utf8(");
     try self.writeAppSymbol(reserved);
     try self.writeAppText("))\n}\n\n");
