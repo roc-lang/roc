@@ -42,6 +42,8 @@ pub fn run(
     owned.field_exprs = .empty;
     var record_destructs = owned.record_destructs;
     owned.record_destructs = .empty;
+    const str_pattern_steps = owned.str_pattern_steps;
+    owned.str_pattern_steps = .empty;
     var branches = owned.branches;
     owned.branches = .empty;
     var if_branches = owned.if_branches;
@@ -77,6 +79,7 @@ pub fn run(
         stmt_ids,
         field_exprs,
         record_destructs,
+        str_pattern_steps,
         branches,
         if_branches,
         string_literals,
@@ -751,6 +754,13 @@ fn bindPat(allocator: Allocator, input: *const Ast.Program, pat_id: Mono.PatId, 
         .frac_f64_lit,
         .str_lit,
         => {},
+        .str_pattern => |str| {
+            for (input.strPatternStepSpan(str.steps)) |step| {
+                if (step.capture) |capture| {
+                    try bindPat(allocator, input, capture, bound, added);
+                }
+            }
+        },
         .as => |as| {
             try bindPat(allocator, input, as.pattern, bound, added);
             try bound.put(input, as.local);

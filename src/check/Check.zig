@@ -4846,6 +4846,21 @@ fn checkPatternHelp(
             _ = try self.unify(pattern_var, flex_var, env);
             try self.mkPatternLiteralEqConstraint(pattern_var, env, pattern_region);
         },
+        .str_interpolation => |str| {
+            const str_var = try self.freshStr(env, pattern_region);
+            _ = try self.unify(pattern_var, str_var, env);
+
+            var step_offset: u32 = 0;
+            while (step_offset < str.steps.span.len) : (step_offset += 1) {
+                const step = self.cir.store.getStrPatternStep(str.steps, step_offset);
+                if (step.capture) |capture_idx| {
+                    const capture_region = self.cir.store.getPatternRegion(capture_idx);
+                    const capture_var = try self.checkPatternHelp(capture_idx, ctx, env, .in_place);
+                    const capture_str_var = try self.freshStr(env, capture_region);
+                    _ = try self.unify(capture_var, capture_str_var, env);
+                }
+            }
+        },
         // as //
         .as => |p| {
             const var_ = try self.checkPatternHelp(p.pattern, ctx, env, out_var);
@@ -5202,6 +5217,7 @@ fn patternNeedsExhaustiveness(self: *const Self, pattern_idx: CIR.Pattern.Idx) b
         .frac_f32_literal,
         .frac_f64_literal,
         .str_literal,
+        .str_interpolation,
         => true,
         .tuple => |tuple| {
             for (self.cir.store.slicePatterns(tuple.patterns)) |elem_pattern_idx| {
@@ -5311,6 +5327,15 @@ fn collectPatternBindings(
         },
         .nominal => |nom| try self.collectPatternBindings(nom.backing_pattern, out),
         .nominal_external => |nom| try self.collectPatternBindings(nom.backing_pattern, out),
+        .str_interpolation => |str| {
+            var step_offset: u32 = 0;
+            while (step_offset < str.steps.span.len) : (step_offset += 1) {
+                const step = self.cir.store.getStrPatternStep(str.steps, step_offset);
+                if (step.capture) |capture_idx| {
+                    try self.collectPatternBindings(capture_idx, out);
+                }
+            }
+        },
         .num_literal,
         .small_dec_literal,
         .dec_literal,

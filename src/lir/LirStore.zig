@@ -19,6 +19,8 @@ const LirProcSpecId = lir_defs.LirProcSpecId;
 const Local = lir_defs.Local;
 const LocalId = lir_defs.LocalId;
 const LocalSpan = lir_defs.LocalSpan;
+const StrMatchStep = lir_defs.StrMatchStep;
+const StrMatchStepSpan = lir_defs.StrMatchStepSpan;
 const Symbol = lir_defs.Symbol;
 const LirPattern = lir_defs.LirPattern;
 const LirPatternId = lir_defs.LirPatternId;
@@ -34,6 +36,7 @@ const Self = @This();
 
 cf_stmts: std.ArrayList(CFStmt),
 cf_switch_branches: std.ArrayList(CFSwitchBranch),
+str_match_steps: std.ArrayList(StrMatchStep),
 join_points: std.ArrayList(JoinPoint),
 locals: std.ArrayList(Local),
 local_ids: std.ArrayList(LocalId),
@@ -67,6 +70,7 @@ pub fn init(allocator: Allocator) Self {
     return .{
         .cf_stmts = std.ArrayList(CFStmt).empty,
         .cf_switch_branches = std.ArrayList(CFSwitchBranch).empty,
+        .str_match_steps = std.ArrayList(StrMatchStep).empty,
         .join_points = std.ArrayList(JoinPoint).empty,
         .locals = std.ArrayList(Local).empty,
         .local_ids = std.ArrayList(LocalId).empty,
@@ -90,6 +94,7 @@ pub fn init(allocator: Allocator) Self {
 pub fn deinit(self: *Self) void {
     self.cf_stmts.deinit(self.allocator);
     self.cf_switch_branches.deinit(self.allocator);
+    self.str_match_steps.deinit(self.allocator);
     self.join_points.deinit(self.allocator);
     self.locals.deinit(self.allocator);
     self.local_ids.deinit(self.allocator);
@@ -391,6 +396,30 @@ pub fn getCFSwitchBranchesMut(self: *Self, span: CFSwitchBranchSpan) []CFSwitchB
         }
     }
     return self.cf_switch_branches.items[span.start..][0..span.len];
+}
+
+/// Appends string-match steps and returns the corresponding flat-storage span.
+pub fn addStrMatchSteps(self: *Self, steps: []const StrMatchStep) Allocator.Error!StrMatchStepSpan {
+    if (steps.len == 0) return StrMatchStepSpan.empty();
+
+    const start = @as(u32, @intCast(self.str_match_steps.items.len));
+    try self.str_match_steps.appendSlice(self.allocator, steps);
+    return .{ .start = start, .len = @intCast(steps.len) };
+}
+
+/// Resolves a string-match-step span to its stored slice.
+pub fn getStrMatchSteps(self: *const Self, span: StrMatchStepSpan) []const StrMatchStep {
+    if (span.len == 0) return &.{};
+    if (builtin.mode == .Debug) {
+        const end = @as(u64, span.start) + @as(u64, span.len);
+        if (end > self.str_match_steps.items.len) {
+            std.debug.panic(
+                "LirStore invariant violated: string-match-step span start={d} len={d} exceeds string-match-step storage len={d}",
+                .{ span.start, span.len, self.str_match_steps.items.len },
+            );
+        }
+    }
+    return self.str_match_steps.items[span.start..][0..span.len];
 }
 
 /// Appends join-point entries and returns the corresponding flat-storage span.

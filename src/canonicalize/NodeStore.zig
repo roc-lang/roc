@@ -36,6 +36,8 @@ def_data: collections.SafeList(DefData), // Typed storage for definitions
 import_data: collections.SafeList(ImportData), // Typed storage for import statements
 type_apply_data: collections.SafeList(TypeApplyData), // Typed storage for type annotation apply
 pattern_list_data: collections.SafeList(PatternListData), // Typed storage for pattern lists
+pattern_str_interpolation_data: collections.SafeList(PatternStrInterpolationData), // Typed storage for string interpolation patterns
+pattern_str_interpolation_steps: collections.SafeList(PatternStrInterpolationStepData), // Typed storage for string interpolation pattern steps
 index_data: collections.SafeList(u32), // Storage for variable-length index arrays (tuple elems, tag args, scratch spans)
 scratch: ?*Scratch, // Nullable because when we deserialize a NodeStore, we don't bother to reinitialize scratch.
 
@@ -149,6 +151,22 @@ pub const PatternListData = extern struct {
     rest_index: u32, // only valid if has_rest=1
     has_pattern: u32, // only valid if has_rest=1, 0 or 1
     pattern_idx: u32, // only valid if has_rest=1 and has_pattern=1
+};
+
+/// Pattern string interpolation data.
+/// Stores the literal prefix, span into pattern_str_interpolation_steps, and end mode.
+pub const PatternStrInterpolationData = extern struct {
+    prefix: u32,
+    steps_start: u32,
+    steps_len: u32,
+    end: u32,
+};
+
+/// One step in a string interpolation pattern.
+/// capture_plus_one is 0 for `${_}`, otherwise pattern index + 1.
+pub const PatternStrInterpolationStepData = extern struct {
+    capture_plus_one: u32,
+    delimiter: u32,
 };
 
 const Scratch = struct {
@@ -283,6 +301,10 @@ pub fn initCapacity(gpa: Allocator, capacity: usize) Allocator.Error!NodeStore {
     errdefer type_apply_data.deinit(gpa);
     var pattern_list_data = try collections.SafeList(PatternListData).initCapacity(gpa, capacity / 16);
     errdefer pattern_list_data.deinit(gpa);
+    var pattern_str_interpolation_data = try collections.SafeList(PatternStrInterpolationData).initCapacity(gpa, capacity / 32);
+    errdefer pattern_str_interpolation_data.deinit(gpa);
+    var pattern_str_interpolation_steps = try collections.SafeList(PatternStrInterpolationStepData).initCapacity(gpa, capacity / 16);
+    errdefer pattern_str_interpolation_steps.deinit(gpa);
     var index_data = try collections.SafeList(u32).initCapacity(gpa, capacity / 4);
     errdefer index_data.deinit(gpa);
     const scratch = try Scratch.init(gpa);
@@ -305,6 +327,8 @@ pub fn initCapacity(gpa: Allocator, capacity: usize) Allocator.Error!NodeStore {
         .import_data = import_data,
         .type_apply_data = type_apply_data,
         .pattern_list_data = pattern_list_data,
+        .pattern_str_interpolation_data = pattern_str_interpolation_data,
+        .pattern_str_interpolation_steps = pattern_str_interpolation_steps,
         .index_data = index_data,
         .scratch = scratch,
     };
@@ -329,6 +353,8 @@ pub fn clone(self: *const NodeStore, gpa: Allocator) Allocator.Error!NodeStore {
         .import_data = try self.import_data.clone(gpa),
         .type_apply_data = try self.type_apply_data.clone(gpa),
         .pattern_list_data = try self.pattern_list_data.clone(gpa),
+        .pattern_str_interpolation_data = try self.pattern_str_interpolation_data.clone(gpa),
+        .pattern_str_interpolation_steps = try self.pattern_str_interpolation_steps.clone(gpa),
         .index_data = try self.index_data.clone(gpa),
         .scratch = null,
     };
@@ -353,6 +379,8 @@ pub fn deinit(store: *NodeStore) void {
     store.import_data.deinit(store.gpa);
     store.type_apply_data.deinit(store.gpa);
     store.pattern_list_data.deinit(store.gpa);
+    store.pattern_str_interpolation_data.deinit(store.gpa);
+    store.pattern_str_interpolation_steps.deinit(store.gpa);
     store.index_data.deinit(store.gpa);
     if (store.scratch) |scratch| {
         scratch.deinit(store.gpa);
@@ -377,6 +405,8 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
     store.import_data.relocate(offset);
     store.type_apply_data.relocate(offset);
     store.pattern_list_data.relocate(offset);
+    store.pattern_str_interpolation_data.relocate(offset);
+    store.pattern_str_interpolation_steps.relocate(offset);
     store.index_data.relocate(offset);
     // scratch is null for deserialized NodeStores, no need to relocate
 }
@@ -393,7 +423,7 @@ pub const MODULEENV_STATEMENT_NODE_COUNT = 17;
 /// Count of the type annotation nodes in the ModuleEnv
 pub const MODULEENV_TYPE_ANNO_NODE_COUNT = 12;
 /// Count of the pattern nodes in the ModuleEnv
-pub const MODULEENV_PATTERN_NODE_COUNT = 16;
+pub const MODULEENV_PATTERN_NODE_COUNT = 17;
 
 comptime {
     // Check the number of CIR.Diagnostic nodes
@@ -1544,6 +1574,7 @@ fn isPatternTag(tag: Node.Tag) bool {
         .pattern_f64_literal,
         .pattern_small_dec_literal,
         .pattern_str_literal,
+        .pattern_str_interpolation,
         .pattern_underscore,
         .malformed, // Valid pattern tag for runtime_error patterns
         => true,
@@ -1711,6 +1742,15 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
             const p = payload.pattern_str_literal;
             return CIR.Pattern{ .str_literal = .{
                 .literal = @enumFromInt(p.literal),
+            } };
+        },
+        .pattern_str_interpolation => {
+            const p = payload.pattern_str_interpolation;
+            const data = store.pattern_str_interpolation_data.items.items[p.data_idx];
+            return CIR.Pattern{ .str_interpolation = .{
+                .prefix = @enumFromInt(data.prefix),
+                .steps = .{ .span = .{ .start = data.steps_start, .len = data.steps_len } },
+                .end = @enumFromInt(data.end),
             } };
         },
 
@@ -2867,6 +2907,19 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) 
                 .literal = @intFromEnum(p.literal),
             } });
         },
+        .str_interpolation => |p| {
+            node.tag = .pattern_str_interpolation;
+            const data_idx: u32 = @intCast(store.pattern_str_interpolation_data.len());
+            _ = try store.pattern_str_interpolation_data.append(store.gpa, .{
+                .prefix = @intFromEnum(p.prefix),
+                .steps_start = p.steps.span.start,
+                .steps_len = p.steps.span.len,
+                .end = @intFromEnum(p.end),
+            });
+            node.setPayload(.{ .pattern_str_interpolation = .{
+                .data_idx = data_idx,
+            } });
+        },
         .frac_f32_literal => |p| {
             node.tag = Node.Tag.pattern_f32_literal;
             node.setPayload(.{ .pattern_frac_f32 = .{
@@ -3496,6 +3549,22 @@ pub fn patternSpanFrom(store: *NodeStore, start: u32) Allocator.Error!CIR.Patter
     return try store.spanFrom("patterns", CIR.Pattern.Span, start);
 }
 
+/// Stores string interpolation pattern steps and returns their span.
+pub fn strPatternStepSpanFromSlice(store: *NodeStore, steps: []const CIR.Pattern.StrPatternStep) Allocator.Error!CIR.Pattern.StrPatternStep.Span {
+    const start: u32 = @intCast(store.pattern_str_interpolation_steps.len());
+    for (steps) |step| {
+        const capture_plus_one: u32 = if (step.capture) |capture|
+            @intFromEnum(capture) + 1
+        else
+            0;
+        _ = try store.pattern_str_interpolation_steps.append(store.gpa, .{
+            .capture_plus_one = capture_plus_one,
+            .delimiter = @intFromEnum(step.delimiter),
+        });
+    }
+    return .{ .span = .{ .start = start, .len = @intCast(steps.len) } };
+}
+
 /// Clears scratch definitions starting from a specified index.
 pub fn clearScratchDefsFrom(store: *NodeStore, start: u32) void {
     store.clearScratchFrom("defs", start);
@@ -3656,6 +3725,19 @@ pub fn sliceAnnoRecordFields(store: *const NodeStore, span: CIR.TypeAnno.RecordF
 /// Returns a slice of record destruct fields from the store.
 pub fn sliceRecordDestructs(store: *const NodeStore, span: CIR.Pattern.RecordDestruct.Span) []CIR.Pattern.RecordDestruct.Idx {
     return store.sliceFromSpan(CIR.Pattern.RecordDestruct.Idx, span.span);
+}
+
+/// Retrieves one string interpolation pattern step.
+pub fn getStrPatternStep(store: *const NodeStore, span: CIR.Pattern.StrPatternStep.Span, offset: u32) CIR.Pattern.StrPatternStep {
+    std.debug.assert(offset < span.span.len);
+    const item = store.pattern_str_interpolation_steps.items.items[span.span.start + offset];
+    return .{
+        .capture = if (item.capture_plus_one == 0)
+            null
+        else
+            @as(CIR.Pattern.Idx, @enumFromInt(item.capture_plus_one - 1)),
+        .delimiter = @enumFromInt(item.delimiter),
+    };
 }
 
 /// Creates a diagnostic node that stores error information.
@@ -4628,6 +4710,8 @@ pub const Serialized = extern struct {
     import_data: collections.SafeList(ImportData).Serialized,
     type_apply_data: collections.SafeList(TypeApplyData).Serialized,
     pattern_list_data: collections.SafeList(PatternListData).Serialized,
+    pattern_str_interpolation_data: collections.SafeList(PatternStrInterpolationData).Serialized,
+    pattern_str_interpolation_steps: collections.SafeList(PatternStrInterpolationStepData).Serialized,
     index_data: collections.SafeList(u32).Serialized,
     scratch: u64, // Reserve enough space for a 64-bit pointer
 
@@ -4668,6 +4752,10 @@ pub const Serialized = extern struct {
         try self.type_apply_data.serialize(&store.type_apply_data, allocator, writer);
         // Serialize pattern_list_data
         try self.pattern_list_data.serialize(&store.pattern_list_data, allocator, writer);
+        // Serialize pattern_str_interpolation_data
+        try self.pattern_str_interpolation_data.serialize(&store.pattern_str_interpolation_data, allocator, writer);
+        // Serialize pattern_str_interpolation_steps
+        try self.pattern_str_interpolation_steps.serialize(&store.pattern_str_interpolation_steps, allocator, writer);
         // Serialize index_data
         try self.index_data.serialize(&store.index_data, allocator, writer);
     }
@@ -4694,6 +4782,8 @@ pub const Serialized = extern struct {
             .import_data = self.import_data.deserializeInto(base_addr),
             .type_apply_data = self.type_apply_data.deserializeInto(base_addr),
             .pattern_list_data = self.pattern_list_data.deserializeInto(base_addr),
+            .pattern_str_interpolation_data = self.pattern_str_interpolation_data.deserializeInto(base_addr),
+            .pattern_str_interpolation_steps = self.pattern_str_interpolation_steps.deserializeInto(base_addr),
             .index_data = self.index_data.deserializeInto(base_addr),
             .scratch = null, // A deserialized NodeStore is read-only, so it has no need for scratch memory!
         };
@@ -4720,6 +4810,8 @@ pub const Serialized = extern struct {
             .import_data = self.import_data.deserializeInto(base_addr),
             .type_apply_data = self.type_apply_data.deserializeInto(base_addr),
             .pattern_list_data = self.pattern_list_data.deserializeInto(base_addr),
+            .pattern_str_interpolation_data = self.pattern_str_interpolation_data.deserializeInto(base_addr),
+            .pattern_str_interpolation_steps = self.pattern_str_interpolation_steps.deserializeInto(base_addr),
             .index_data = self.index_data.deserializeInto(base_addr),
             .scratch = null,
         };

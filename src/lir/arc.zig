@@ -338,6 +338,7 @@ const Inserter = struct {
         switch_no_continuation: *RewriteSwitchNoContinuationTask,
         switch_after_continuation: *RewriteSwitchContinuationTask,
         switch_finish_continuation: *RewriteSwitchContinuationTask,
+        str_match: *RewriteStrMatchTask,
     };
 
     const RewritePathTask = struct {
@@ -389,6 +390,18 @@ const Inserter = struct {
         result: *LIR.CFStmtId,
     };
 
+    const RewriteStrMatchTask = struct {
+        start: LIR.CFStmtId,
+        source: LIR.LocalId,
+        prefix: LIR.StrLiteral,
+        steps: LIR.StrMatchStepSpan,
+        end: LIR.StrPatternEnd,
+        on_match: LIR.CFStmtId = undefined,
+        on_miss: LIR.CFStmtId = undefined,
+        frames: std.ArrayList(LinearRewriteFrame),
+        result: *LIR.CFStmtId,
+    };
+
     const AnalysisTask = union(enum) {
         path: *AnalysisPathTask,
         resume_switch_continuation: *AnalysisSwitchContinuationTask,
@@ -426,6 +439,7 @@ const Inserter = struct {
                 .switch_no_continuation => |switch_| try self.finishRewriteSwitchNoContinuation(switch_),
                 .switch_after_continuation => |switch_| try self.processRewriteSwitchAfterContinuation(&tasks, switch_),
                 .switch_finish_continuation => |switch_| try self.finishRewriteSwitchContinuation(switch_),
+                .str_match => |str_match| try self.finishRewriteStrMatch(str_match),
             }
         }
         return result;
@@ -778,6 +792,11 @@ const Inserter = struct {
                     self.destroyRewritePath(path);
                     return;
                 },
+                .str_match => |str_match| {
+                    try self.scheduleRewriteStrMatch(tasks, path, path.cursor, str_match);
+                    self.destroyRewritePath(path);
+                    return;
+                },
                 .join => |join_stmt| {
                     try self.scheduleRewriteJoin(tasks, path, path.cursor, join_stmt);
                     self.destroyRewritePath(path);
@@ -1051,6 +1070,7 @@ const Inserter = struct {
             .runtime_error,
             .comptime_exhaustiveness_failed,
             .switch_stmt,
+            .str_match,
             .loop_continue,
             .loop_break,
             .join,
@@ -1350,6 +1370,58 @@ const Inserter = struct {
         self.destroyRewriteSwitchContinuation(state);
     }
 
+    fn scheduleRewriteStrMatch(
+        self: *Inserter,
+        tasks: *std.ArrayList(RewriteTask),
+        path: *RewritePathTask,
+        start: LIR.CFStmtId,
+        str_match: anytype,
+    ) ResourceError!void {
+        const state = try self.store.allocator.create(RewriteStrMatchTask);
+        var queued = false;
+        errdefer if (!queued) self.store.allocator.destroy(state);
+        state.* = .{
+            .start = start,
+            .source = str_match.source,
+            .prefix = str_match.prefix,
+            .steps = str_match.steps,
+            .end = str_match.end,
+            .frames = takeRewriteFrames(path),
+            .result = path.result,
+        };
+        errdefer if (!queued) state.frames.deinit(self.store.allocator);
+
+        try tasks.append(self.store.allocator, .{ .str_match = state });
+        queued = true;
+
+        var match_owned = try path.owned.clone();
+        defer match_owned.deinit();
+        for (self.store.getStrMatchSteps(str_match.steps)) |step| {
+            switch (step.capture) {
+                .discard => {},
+                .local => |local| self.addOwnedIfRc(&match_owned, local),
+            }
+        }
+
+        try self.pushRewritePath(tasks, str_match.on_miss, &path.owned, path.options, &state.on_miss);
+        try self.pushRewritePath(tasks, str_match.on_match, &match_owned, path.options, &state.on_match);
+    }
+
+    fn finishRewriteStrMatch(self: *Inserter, state: *RewriteStrMatchTask) ResourceError!void {
+        errdefer self.destroyRewriteStrMatch(state);
+        const on_match = try self.retainStrMatchSourceForCaptures(state.source, state.steps, state.on_match);
+        const str_match = try self.store.addCFStmt(.{ .str_match = .{
+            .source = state.source,
+            .prefix = state.prefix,
+            .steps = state.steps,
+            .end = state.end,
+            .on_match = on_match,
+            .on_miss = state.on_miss,
+        } });
+        state.result.* = try self.finishLinearRewrite(&state.frames, str_match);
+        self.destroyRewriteStrMatch(state);
+    }
+
     fn analyzeUntil(
         self: *Inserter,
         start: LIR.CFStmtId,
@@ -1569,6 +1641,20 @@ const Inserter = struct {
                     self.destroyAnalysisPath(path);
                     return;
                 },
+                .str_match => |str_match| {
+                    var match_owned = try path.owned.clone();
+                    defer match_owned.deinit();
+                    for (self.store.getStrMatchSteps(str_match.steps)) |step| {
+                        switch (step.capture) {
+                            .discard => {},
+                            .local => |local| self.addOwnedIfRc(&match_owned, local),
+                        }
+                    }
+                    try self.pushAnalysisPath(tasks, str_match.on_match, path.stop, &match_owned, path.exits, path.loop_keep);
+                    try self.pushAnalysisPath(tasks, str_match.on_miss, path.stop, &path.owned, path.exits, path.loop_keep);
+                    self.destroyAnalysisPath(path);
+                    return;
+                },
                 .join => {
                     // A join starts a separate loop/recursive ownership frame.
                     // Switch continuation analysis must not fold that frame into
@@ -1613,6 +1699,7 @@ const Inserter = struct {
             .switch_no_continuation => |switch_| self.destroyRewriteSwitchNoContinuation(switch_),
             .switch_after_continuation => |switch_| self.destroyRewriteSwitchContinuation(switch_),
             .switch_finish_continuation => |switch_| self.destroyRewriteSwitchContinuation(switch_),
+            .str_match => |str_match| self.destroyRewriteStrMatch(str_match),
         }
     }
 
@@ -1652,6 +1739,11 @@ const Inserter = struct {
         state.common.deinit();
         if (state.nested_boundaries.len != 0) self.store.allocator.free(state.nested_boundaries);
         self.store.allocator.free(state.branch_results);
+        self.store.allocator.destroy(state);
+    }
+
+    fn destroyRewriteStrMatch(self: *Inserter, state: *RewriteStrMatchTask) void {
+        self.destroyFrames(&state.frames);
         self.store.allocator.destroy(state);
     }
 
@@ -2127,6 +2219,10 @@ const Inserter = struct {
                         try stack.append(self.store.allocator, branch.body);
                     }
                 },
+                .str_match => |str_match| {
+                    try stack.append(self.store.allocator, str_match.on_match);
+                    try stack.append(self.store.allocator, str_match.on_miss);
+                },
                 .join => |join_stmt| {
                     const previous = try join_bodies.getOrPut(join_stmt.id);
                     if (previous.found_existing and previous.value_ptr.* != join_stmt.body) {
@@ -2211,6 +2307,10 @@ const Inserter = struct {
                     for (self.store.getCFSwitchBranches(switch_stmt.branches)) |branch| {
                         try stack.append(self.store.allocator, branch.body);
                     }
+                },
+                .str_match => |str_match| {
+                    try stack.append(self.store.allocator, str_match.on_match);
+                    try stack.append(self.store.allocator, str_match.on_miss);
                 },
                 .join => |join_stmt| {
                     const entry = try joins.getOrPut(self.store.allocator, join_stmt.id);
@@ -2326,6 +2426,20 @@ const Inserter = struct {
                     for (self.store.getCFSwitchBranches(switch_stmt.branches)) |branch| {
                         try stack.append(self.store.allocator, branch.body);
                     }
+                },
+                .str_match => |str_match| {
+                    if (str_match.source == needle) return true;
+                    var defines_needle_on_match = false;
+                    for (self.store.getStrMatchSteps(str_match.steps)) |step| {
+                        switch (step.capture) {
+                            .discard => {},
+                            .local => |local| {
+                                if (local == needle) defines_needle_on_match = true;
+                            },
+                        }
+                    }
+                    if (!defines_needle_on_match) try stack.append(self.store.allocator, str_match.on_match);
+                    try stack.append(self.store.allocator, str_match.on_miss);
                 },
                 .join => |join_stmt| {
                     // A join body runs only via jumps to it, and the `.jump`
@@ -2472,6 +2586,11 @@ const Inserter = struct {
                         try stack.append(self.store.allocator, branch.body);
                     }
                 },
+                .str_match => |str_match| {
+                    if (needles.contains(str_match.source)) return true;
+                    try stack.append(self.store.allocator, str_match.on_match);
+                    try stack.append(self.store.allocator, str_match.on_miss);
+                },
                 .join => |join_stmt| {
                     // Bodies enter via the `.jump` case only, exactly as in
                     // `localValueUsedInPath`.
@@ -2542,15 +2661,35 @@ const Inserter = struct {
     }
 
     fn retainLocalIfRc(self: *Inserter, local: LIR.LocalId, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
+        return try self.retainLocalIfRcCount(local, 1, next);
+    }
+
+    fn retainLocalIfRcCount(self: *Inserter, local: LIR.LocalId, count: u16, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
+        if (count == 0) return next;
         if (!self.localContainsRefcounted(local)) return next;
         const rc = self.rcHelperForLocal(.incref, local);
         return try self.store.addCFStmt(.{ .incref = .{
             .value = local,
             .rc = rc,
-            .count = 1,
+            .count = count,
             .atomicity = self.rcAtomicity(local),
             .next = next,
         } });
+    }
+
+    fn retainStrMatchSourceForCaptures(self: *Inserter, source: LIR.LocalId, steps: LIR.StrMatchStepSpan, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
+        var count: u16 = 0;
+        for (self.store.getStrMatchSteps(steps)) |step| {
+            switch (step.capture) {
+                .discard => {},
+                .local => |local| {
+                    if (self.localContainsRefcounted(local)) {
+                        count +|= 1;
+                    }
+                },
+            }
+        }
+        return try self.retainLocalIfRcCount(source, count, next);
     }
 
     fn releaseLocalIfRc(self: *Inserter, local: LIR.LocalId, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
@@ -3042,6 +3181,10 @@ const ArcTest = struct {
                         try stack.append(self.allocator, continuation);
                     }
                 },
+                .str_match => |s| {
+                    try stack.append(self.allocator, s.on_match);
+                    try stack.append(self.allocator, s.on_miss);
+                },
                 .join => |j| {
                     try stack.append(self.allocator, j.body);
                     try stack.append(self.allocator, j.remainder);
@@ -3111,7 +3254,7 @@ const ArcTest = struct {
                     if (before == .crash) return error.ExpectedRcBeforeStop;
                     return;
                 },
-                .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .switch_stmt, .loop_continue, .loop_break, .join, .jump => return error.NonLinearPath,
+                .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .switch_stmt, .str_match, .loop_continue, .loop_break, .join, .jump => return error.NonLinearPath,
             }
         }
         return error.CyclicPath;

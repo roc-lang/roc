@@ -495,6 +495,26 @@ fn emitPatternFrame(
         .underscore => try self.write("_"),
         .num_literal => |num| try self.emitIntValue(num.value),
         .str_literal => |str| try self.output.print(self.allocator, "\"{s}\"", .{self.module_env.common.getString(str.literal)}),
+        .str_interpolation => |str| {
+            try self.write("\"");
+            try self.write(self.module_env.common.getString(str.prefix));
+            var step_offset: u32 = 0;
+            while (step_offset < str.steps.span.len) : (step_offset += 1) {
+                const step = self.module_env.store.getStrPatternStep(str.steps, step_offset);
+                try self.write("${");
+                if (step.capture) |capture_idx| {
+                    switch (self.module_env.store.getPattern(capture_idx)) {
+                        .assign => |assign| try self.emitIdent(self.module_env.getIdent(assign.ident)),
+                        else => try self.write("<capture>"),
+                    }
+                } else {
+                    try self.write("_");
+                }
+                try self.write("}");
+                try self.write(self.module_env.common.getString(step.delimiter));
+            }
+            try self.write("\"");
+        },
         .applied_tag => |tag| {
             try self.emitTagName(self.module_env.getIdent(tag.name));
             const args = self.module_env.store.slicePatterns(tag.args);

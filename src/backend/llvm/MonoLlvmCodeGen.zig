@@ -1618,6 +1618,11 @@ pub const MonoLlvmCodeGen = struct {
         body: CFStmtId,
     };
 
+    const StrMatchBody = struct {
+        block: LlvmBuilder.Function.Block.Index,
+        stmt: CFStmtId,
+    };
+
     /// Drives statement-LIR emission with an explicit heap-backed work stack so
     /// arbitrarily deep statement graphs cannot overflow the native stack. A
     /// `.node` item processes one statement; the other variants reproduce the
@@ -1631,6 +1636,7 @@ pub const MonoLlvmCodeGen = struct {
         switch_free: *SwitchState,
         join_after_remainder: *JoinState,
         join_after_body: *JoinState,
+        str_match_body: StrMatchBody,
     };
 
     fn compileStmt(self: *MonoLlvmCodeGen, stmt_id: CFStmtId) Error!void {
@@ -1680,6 +1686,11 @@ pub const MonoLlvmCodeGen = struct {
                     if (!self.currentBlockHasTerminator()) _ = wip.br(state.after_block) catch return error.CompilationFailed;
                     wip.cursor = .{ .block = state.after_block };
                     self.allocator.destroy(state);
+                },
+                .str_match_body => |body| {
+                    const wip = self.wip orelse return error.CompilationFailed;
+                    wip.cursor = .{ .block = body.block };
+                    try work.append(wa, .{ .node = body.stmt });
                 },
             }
         }
@@ -1821,6 +1832,7 @@ pub const MonoLlvmCodeGen = struct {
                 try work.append(wa, .{ .node = free_stmt.next });
             },
             .switch_stmt => |sw| try self.emitSwitch(sw, wa, work),
+            .str_match => |str_match| try self.emitStrMatch(str_match, wa, work),
             .loop_continue => try self.emitLoopContinue(),
             .loop_break => try self.emitLoopBreak(),
             .join => |join_stmt| try self.emitJoin(join_stmt, wa, work),
@@ -2551,6 +2563,252 @@ pub const MonoLlvmCodeGen = struct {
         } else {
             try work.append(wa, .{ .switch_branch = .{ .state = state, .index = 0 } });
         }
+    }
+
+    const StrMatchSource = struct {
+        bytes: LlvmBuilder.Value,
+        len: LlvmBuilder.Value,
+        is_small: LlvmBuilder.Value,
+        alloc: LlvmBuilder.Value,
+    };
+
+    fn emitStrMatch(self: *MonoLlvmCodeGen, str_match: anytype, wa: Allocator, work: *std.ArrayList(StmtWork)) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const usize_ty = self.ptrSizedIntType();
+        const usize_alignment = self.targetPointerAlignment();
+
+        const on_match_block = wip.block(0, "str_match_success") catch return error.OutOfMemory;
+        const on_miss_block = wip.block(0, "str_match_miss") catch return error.OutOfMemory;
+
+        const source = try self.emitStrMatchSourceShape(self.slot(str_match.source).ptr);
+        const cursor_ptr = wip.alloca(.normal, usize_ty, .@"1", usize_alignment, .default, "str_match_cursor") catch return error.OutOfMemory;
+        const zero = builder.intValue(usize_ty, 0) catch return error.OutOfMemory;
+        try self.storeUsize(cursor_ptr, zero);
+
+        const prefix = self.store.getStringLiteral(str_match.prefix);
+        if (prefix.len > 0) {
+            try self.emitStrMatchCheckAvailable(cursor_ptr, source.len, prefix.len, on_miss_block);
+            try self.emitStrMatchCompareLiteral(source.bytes, prefix, on_miss_block);
+            try self.storeUsize(cursor_ptr, builder.intValue(usize_ty, prefix.len) catch return error.OutOfMemory);
+        }
+
+        const steps = self.store.getStrMatchSteps(str_match.steps);
+        for (steps, 0..) |step, step_i| {
+            const capture_start = try self.loadUsize(cursor_ptr);
+            const delimiter = self.store.getStringLiteral(step.delimiter);
+            const is_final_tail_capture = str_match.end == .tail and step_i + 1 == steps.len and delimiter.len == 0;
+
+            const capture_end = if (is_final_tail_capture) blk: {
+                try self.storeUsize(cursor_ptr, source.len);
+                break :blk source.len;
+            } else blk: {
+                try self.emitStrMatchFindDelimiter(source.bytes, source.len, cursor_ptr, delimiter, on_miss_block);
+                break :blk try self.loadUsize(cursor_ptr);
+            };
+
+            switch (step.capture) {
+                .discard => {},
+                .local => |local| try self.emitStoreStrMatchCapture(self.slot(local).ptr, source, capture_start, capture_end),
+            }
+
+            if (!is_final_tail_capture and delimiter.len > 0) {
+                const advanced = wip.bin(.add, try self.loadUsize(cursor_ptr), builder.intValue(usize_ty, delimiter.len) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+                try self.storeUsize(cursor_ptr, advanced);
+            }
+        }
+
+        switch (str_match.end) {
+            .exact => {
+                const at_end = wip.icmp(.eq, try self.loadUsize(cursor_ptr), source.len, "") catch return error.OutOfMemory;
+                _ = wip.brCond(at_end, on_match_block, on_miss_block, .then_likely) catch return error.OutOfMemory;
+            },
+            .tail => _ = wip.br(on_match_block) catch return error.OutOfMemory,
+        }
+
+        try work.append(wa, .{ .str_match_body = .{ .block = on_miss_block, .stmt = str_match.on_miss } });
+        try work.append(wa, .{ .str_match_body = .{ .block = on_match_block, .stmt = str_match.on_match } });
+    }
+
+    fn emitStrMatchSourceShape(self: *MonoLlvmCodeGen, source_ptr: LlvmBuilder.Value) Error!StrMatchSource {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const usize_ty = self.ptrSizedIntType();
+        const ptr_ty = try self.ptrType();
+        const word_size = self.targetWordSize();
+
+        const raw_len = try self.loadUsize(try self.offsetPtr(source_ptr, self.rocStrLenOffset()));
+        const small_bit = @as(u64, 1) << @intCast(self.target.ptrBitWidth() - 1);
+        const small_mask = wip.bin(.@"and", raw_len, builder.intValue(usize_ty, small_bit) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const is_small = wip.icmp(.ne, small_mask, builder.intValue(usize_ty, 0) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+
+        const small_block = wip.block(0, "str_match_source_small") catch return error.OutOfMemory;
+        const heap_block = wip.block(0, "str_match_source_heap") catch return error.OutOfMemory;
+        const after_block = wip.block(0, "str_match_source_after") catch return error.OutOfMemory;
+        _ = wip.brCond(is_small, small_block, heap_block, .then_likely) catch return error.OutOfMemory;
+
+        wip.cursor = .{ .block = small_block };
+        const small_len_byte = wip.load(.normal, .i8, try self.offsetPtr(source_ptr, 3 * word_size - 1), LlvmBuilder.Alignment.fromByteUnits(1), "") catch return error.OutOfMemory;
+        const small_len_masked = wip.bin(.@"and", small_len_byte, builder.intValue(.i8, 0x7F) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const small_len = try self.coerceScalar(small_len_masked, usize_ty, false);
+        const zero = builder.intValue(usize_ty, 0) catch return error.OutOfMemory;
+        _ = wip.br(after_block) catch return error.OutOfMemory;
+
+        wip.cursor = .{ .block = heap_block };
+        const heap_bytes = try self.loadPointer(source_ptr);
+        const cap_or_alloc = try self.loadUsize(try self.offsetPtr(source_ptr, self.rocStrCapacityOffset()));
+        const slice_tag = wip.bin(.@"and", cap_or_alloc, builder.intValue(usize_ty, 1) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const is_slice = wip.icmp(.ne, slice_tag, builder.intValue(usize_ty, 0) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const heap_bytes_int = wip.cast(.ptrtoint, heap_bytes, usize_ty, "") catch return error.OutOfMemory;
+        const encoded_heap_ptr = wip.bin(.@"or", heap_bytes_int, builder.intValue(usize_ty, 1) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const heap_alloc = wip.select(.normal, is_slice, cap_or_alloc, encoded_heap_ptr, "") catch return error.OutOfMemory;
+        _ = wip.br(after_block) catch return error.OutOfMemory;
+
+        wip.cursor = .{ .block = after_block };
+        const bytes_phi = wip.phi(ptr_ty, "str_match_bytes") catch return error.OutOfMemory;
+        bytes_phi.finish(&.{ source_ptr, heap_bytes }, &.{ small_block, heap_block }, wip);
+        const len_phi = wip.phi(usize_ty, "str_match_len") catch return error.OutOfMemory;
+        len_phi.finish(&.{ small_len, raw_len }, &.{ small_block, heap_block }, wip);
+        const alloc_phi = wip.phi(usize_ty, "str_match_alloc") catch return error.OutOfMemory;
+        alloc_phi.finish(&.{ zero, heap_alloc }, &.{ small_block, heap_block }, wip);
+
+        return .{
+            .bytes = bytes_phi.toValue(),
+            .len = len_phi.toValue(),
+            .is_small = is_small,
+            .alloc = alloc_phi.toValue(),
+        };
+    }
+
+    fn emitStrMatchFailIf(self: *MonoLlvmCodeGen, cond: LlvmBuilder.Value, fail_block: LlvmBuilder.Function.Block.Index) Error!void {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const cont = wip.block(0, "str_match_continue") catch return error.OutOfMemory;
+        _ = wip.brCond(cond, fail_block, cont, .none) catch return error.OutOfMemory;
+        wip.cursor = .{ .block = cont };
+    }
+
+    fn emitStrMatchCheckAvailable(
+        self: *MonoLlvmCodeGen,
+        cursor_ptr: LlvmBuilder.Value,
+        len: LlvmBuilder.Value,
+        needed: usize,
+        fail_block: LlvmBuilder.Function.Block.Index,
+    ) Error!void {
+        if (needed == 0) return;
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const usize_ty = self.ptrSizedIntType();
+        const needed_value = builder.intValue(usize_ty, needed) catch return error.OutOfMemory;
+        try self.emitStrMatchFailIf(wip.icmp(.ult, len, needed_value, "") catch return error.OutOfMemory, fail_block);
+        const limit = wip.bin(.sub, len, needed_value, "") catch return error.OutOfMemory;
+        try self.emitStrMatchFailIf(wip.icmp(.ugt, try self.loadUsize(cursor_ptr), limit, "") catch return error.OutOfMemory, fail_block);
+    }
+
+    fn emitStrMatchCompareLiteral(
+        self: *MonoLlvmCodeGen,
+        ptr: LlvmBuilder.Value,
+        literal: []const u8,
+        fail_block: LlvmBuilder.Function.Block.Index,
+    ) Error!void {
+        if (literal.len == 0) return;
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        for (literal, 0..) |byte, offset| {
+            const byte_ptr = try self.offsetPtrValue(ptr, builder.intValue(self.ptrSizedIntType(), offset) catch return error.OutOfMemory);
+            const actual = wip.load(.normal, .i8, byte_ptr, LlvmBuilder.Alignment.fromByteUnits(1), "") catch return error.OutOfMemory;
+            const mismatch = wip.icmp(.ne, actual, builder.intValue(.i8, byte) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+            try self.emitStrMatchFailIf(mismatch, fail_block);
+        }
+    }
+
+    fn emitStrMatchFindDelimiter(
+        self: *MonoLlvmCodeGen,
+        bytes: LlvmBuilder.Value,
+        len: LlvmBuilder.Value,
+        cursor_ptr: LlvmBuilder.Value,
+        delimiter: []const u8,
+        miss_block: LlvmBuilder.Function.Block.Index,
+    ) Error!void {
+        if (delimiter.len == 0) return;
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const usize_ty = self.ptrSizedIntType();
+        const delimiter_len = builder.intValue(usize_ty, delimiter.len) catch return error.OutOfMemory;
+        try self.emitStrMatchFailIf(wip.icmp(.ult, len, delimiter_len, "") catch return error.OutOfMemory, miss_block);
+        const limit = wip.bin(.sub, len, delimiter_len, "") catch return error.OutOfMemory;
+
+        const loop_block = wip.block(0, "str_match_scan") catch return error.OutOfMemory;
+        const compare_block = wip.block(0, "str_match_scan_compare") catch return error.OutOfMemory;
+        const advance_block = wip.block(0, "str_match_scan_advance") catch return error.OutOfMemory;
+        const found_block = wip.block(0, "str_match_scan_found") catch return error.OutOfMemory;
+
+        _ = wip.br(loop_block) catch return error.OutOfMemory;
+        wip.cursor = .{ .block = loop_block };
+        const cursor = try self.loadUsize(cursor_ptr);
+        const over_limit = wip.icmp(.ugt, cursor, limit, "") catch return error.OutOfMemory;
+        _ = wip.brCond(over_limit, miss_block, compare_block, .none) catch return error.OutOfMemory;
+
+        wip.cursor = .{ .block = compare_block };
+        const candidate = try self.offsetPtrValue(bytes, try self.loadUsize(cursor_ptr));
+        try self.emitStrMatchCompareLiteral(candidate, delimiter, advance_block);
+        _ = wip.br(found_block) catch return error.OutOfMemory;
+
+        wip.cursor = .{ .block = advance_block };
+        const next = wip.bin(.add, try self.loadUsize(cursor_ptr), builder.intValue(usize_ty, 1) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        try self.storeUsize(cursor_ptr, next);
+        _ = wip.br(loop_block) catch return error.OutOfMemory;
+
+        wip.cursor = .{ .block = found_block };
+    }
+
+    fn emitStoreStrMatchCapture(
+        self: *MonoLlvmCodeGen,
+        target_ptr: LlvmBuilder.Value,
+        source: StrMatchSource,
+        start: LlvmBuilder.Value,
+        end: LlvmBuilder.Value,
+    ) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const usize_ty = self.ptrSizedIntType();
+        const capture_len = wip.bin(.sub, end, start, "") catch return error.OutOfMemory;
+
+        const small_block = wip.block(0, "str_match_capture_small") catch return error.OutOfMemory;
+        const heap_block = wip.block(0, "str_match_capture_heap") catch return error.OutOfMemory;
+        const after_block = wip.block(0, "str_match_capture_after") catch return error.OutOfMemory;
+        _ = wip.brCond(source.is_small, small_block, heap_block, .then_likely) catch return error.OutOfMemory;
+
+        wip.cursor = .{ .block = small_block };
+        try self.zeroBytes(target_ptr, 3 * self.targetWordSize());
+        const small_src = try self.offsetPtrValue(source.bytes, start);
+        _ = wip.callMemCpy(
+            target_ptr,
+            LlvmBuilder.Alignment.fromByteUnits(1),
+            small_src,
+            LlvmBuilder.Alignment.fromByteUnits(1),
+            capture_len,
+            .normal,
+            false,
+        ) catch return error.OutOfMemory;
+        const len_byte = try self.coerceScalar(capture_len, .i8, false);
+        const tagged_len = wip.bin(.@"or", len_byte, builder.intValue(.i8, 0x80) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const small_len_ptr = try self.offsetPtr(target_ptr, 3 * self.targetWordSize() - 1);
+        _ = wip.store(.normal, tagged_len, small_len_ptr, LlvmBuilder.Alignment.fromByteUnits(1)) catch return error.OutOfMemory;
+        _ = wip.br(after_block) catch return error.OutOfMemory;
+
+        wip.cursor = .{ .block = heap_block };
+        try self.storePointer(target_ptr, try self.offsetPtrValue(source.bytes, start));
+        try self.storeUsize(try self.offsetPtr(target_ptr, self.rocStrCapacityOffset()), source.alloc);
+        try self.storeUsize(try self.offsetPtr(target_ptr, self.rocStrLenOffset()), capture_len);
+        _ = wip.br(after_block) catch return error.OutOfMemory;
+
+        wip.cursor = .{ .block = after_block };
+        _ = usize_ty;
+    }
+
+    fn offsetPtrValue(self: *MonoLlvmCodeGen, ptr: LlvmBuilder.Value, offset: LlvmBuilder.Value) Error!LlvmBuilder.Value {
+        const wip = self.wip orelse return error.CompilationFailed;
+        return wip.gep(.inbounds, .i8, ptr, &.{offset}, "") catch return error.OutOfMemory;
     }
 
     /// Registers the join point, queues the remainder subtree, and lets

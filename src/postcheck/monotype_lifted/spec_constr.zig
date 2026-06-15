@@ -2186,6 +2186,7 @@ const Cloner = struct {
             .frac_f32_lit,
             .frac_f64_lit,
             .str_lit,
+            .str_pattern,
             => return null,
         }
     }
@@ -2582,6 +2583,7 @@ const Cloner = struct {
             .frac_f32_lit,
             .frac_f64_lit,
             .str_lit,
+            .str_pattern,
             => return false,
         }
     }
@@ -2612,8 +2614,28 @@ const Cloner = struct {
             .frac_f32_lit => |value| .{ .frac_f32_lit = value },
             .frac_f64_lit => |value| .{ .frac_f64_lit = value },
             .str_lit => |value| .{ .str_lit = value },
+            .str_pattern => |str| .{ .str_pattern = try self.cloneStrPattern(str) },
         };
         return try self.pass.program.addPat(.{ .ty = pat.ty, .data = data });
+    }
+
+    fn cloneStrPattern(self: *Cloner, str: Ast.StrPattern) Allocator.Error!Ast.StrPattern {
+        const input_steps = self.pass.program.strPatternStepSpan(str.steps);
+        const output_steps = try self.pass.allocator.alloc(Ast.StrPatternStep, input_steps.len);
+        defer self.pass.allocator.free(output_steps);
+
+        for (input_steps, output_steps) |input_step, *output_step| {
+            output_step.* = .{
+                .capture = if (input_step.capture) |capture| try self.clonePat(capture) else null,
+                .delimiter = input_step.delimiter,
+            };
+        }
+
+        return .{
+            .prefix = str.prefix,
+            .steps = try self.pass.program.addStrPatternStepSpan(output_steps),
+            .end = str.end,
+        };
     }
 
     fn cloneStmt(self: *Cloner, stmt_id: Ast.StmtId) Common.LowerError!Ast.StmtId {

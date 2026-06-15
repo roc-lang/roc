@@ -1425,6 +1425,7 @@ pub const Interpreter = struct {
                 .free => |stmt_next| stmt_next.next,
                 .join => |join_stmt| join_stmt.body,
                 .switch_stmt,
+                .str_match,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
                 .jump,
@@ -1914,6 +1915,9 @@ pub const Interpreter = struct {
                     }
                     current = target;
                 },
+                .str_match => |str_match| {
+                    current = try self.execStrMatch(frame, current, str_match);
+                },
                 .loop_continue => return .loop_continue,
                 .loop_break => return .loop_break,
                 .join => |join_stmt| {
@@ -2169,6 +2173,16 @@ pub const Interpreter = struct {
                         });
                         stack.append(self.evalAllocator(), branch.body) catch return;
                     }
+                },
+                .str_match => |str_match| {
+                    debugPrint("    {d}: str_match source={d} on_match={d} on_miss={d}\n", .{
+                        @intFromEnum(stmt_id),
+                        @intFromEnum(str_match.source),
+                        @intFromEnum(str_match.on_match),
+                        @intFromEnum(str_match.on_miss),
+                    });
+                    stack.append(self.evalAllocator(), str_match.on_match) catch return;
+                    stack.append(self.evalAllocator(), str_match.on_miss) catch return;
                 },
                 .loop_continue => {
                     debugPrint("    {d}: loop_continue\n", .{@intFromEnum(stmt_id)});
@@ -3204,6 +3218,92 @@ pub const Interpreter = struct {
             return val.ptr[0..rs.len()];
         }
         return rs.asSlice();
+    }
+
+    fn execStrMatch(
+        self: *LirInterpreter,
+        frame: *Frame,
+        stmt_id: CFStmtId,
+        str_match: anytype,
+    ) Error!CFStmtId {
+        const source_value = try self.getLocalChecked(frame, str_match.source);
+        const source_rs = valueToRocStr(source_value);
+        const source_bytes = self.readRocStr(source_value);
+
+        const prefix = self.store.getStringLiteral(str_match.prefix);
+        if (!std.mem.startsWith(u8, source_bytes, prefix)) return str_match.on_miss;
+
+        var cursor: usize = prefix.len;
+        const steps = self.store.getStrMatchSteps(str_match.steps);
+        for (steps, 0..) |step, step_i| {
+            const capture_start = cursor;
+            const delimiter = self.store.getStringLiteral(step.delimiter);
+            const is_final_tail_capture = str_match.end == .tail and step_i + 1 == steps.len and delimiter.len == 0;
+
+            const capture_end = if (is_final_tail_capture) blk: {
+                cursor = source_bytes.len;
+                break :blk source_bytes.len;
+            } else blk: {
+                const found = if (delimiter.len == 0)
+                    cursor
+                else
+                    std.mem.indexOfPos(u8, source_bytes, cursor, delimiter) orelse return str_match.on_miss;
+                cursor = found + delimiter.len;
+                break :blk found;
+            };
+
+            switch (step.capture) {
+                .discard => {},
+                .local => |local| {
+                    self.setLocalChecked(
+                        frame,
+                        stmt_id,
+                        local,
+                        try self.makeStrCaptureValue(source_rs, source_bytes, capture_start, capture_end),
+                    );
+                },
+            }
+        }
+
+        switch (str_match.end) {
+            .exact => if (cursor != source_bytes.len) return str_match.on_miss,
+            .tail => {},
+        }
+
+        return str_match.on_match;
+    }
+
+    fn makeStrCaptureValue(
+        self: *LirInterpreter,
+        source_rs: RocStr,
+        source_bytes: []const u8,
+        start: usize,
+        end: usize,
+    ) Error!Value {
+        if (start > end or end > source_bytes.len) {
+            self.invariantFailed(
+                "LIR/interpreter invariant violated: str_match capture range [{d}, {d}) outside source length {d}",
+                .{ start, end, source_bytes.len },
+            );
+        }
+
+        if (source_rs.isSmallStr()) {
+            return self.rocStrToValue(RocStr.fromSliceSmall(source_bytes[start..end]), .str);
+        }
+
+        const source_ptr = source_rs.bytes orelse self.invariantFailed(
+            "LIR/interpreter invariant violated: non-small str_match source had null bytes",
+            .{},
+        );
+        const alloc_ptr = if (source_rs.isSeamlessSlice())
+            source_rs.capacity_or_alloc_ptr
+        else
+            RocStr.encodeSliceAllocationPtr(source_ptr);
+        return self.rocStrToValue(.{
+            .bytes = source_ptr + start,
+            .capacity_or_alloc_ptr = alloc_ptr,
+            .length = end - start,
+        }, .str);
     }
 
     // Function calls — all go through the stack-safe engine via enterFunction/evalProcStackSafe.

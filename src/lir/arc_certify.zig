@@ -210,6 +210,10 @@ fn certifyUniqueArgs(
                         try stack.append(allocator, continuation);
                     }
                 },
+                .str_match => |s| {
+                    try stack.append(allocator, s.on_match);
+                    try stack.append(allocator, s.on_miss);
+                },
                 .join => |j| {
                     try stack.append(allocator, j.body);
                     try stack.append(allocator, j.remainder);
@@ -321,6 +325,13 @@ fn writeFailureContext(context: *FailureContext, store: *const LirStore, proc_id
                         walk.append(store.allocator, branch.body) catch return;
                     }
                     walk.append(store.allocator, s.default_branch) catch return;
+                    if (s.continuation) |continuation| {
+                        walk.append(store.allocator, continuation) catch return;
+                    }
+                },
+                .str_match => |s| {
+                    walk.append(store.allocator, s.on_match) catch return;
+                    walk.append(store.allocator, s.on_miss) catch return;
                 },
                 .join => |j| {
                     walk.append(store.allocator, j.body) catch return;
@@ -367,6 +378,9 @@ fn writeFailureContext(context: *FailureContext, store: *const LirStore, proc_id
             .assign_low_level => |a| context.append(" target={d} op={s} next={d}", .{
                 @intFromEnum(a.target), @tagName(a.op), @intFromEnum(a.next),
             }),
+            .str_match => |a| context.append(" source={d} match={d} miss={d}", .{
+                @intFromEnum(a.source), @intFromEnum(a.on_match), @intFromEnum(a.on_miss),
+            }),
             .ret => |r| context.append(" value={d}", .{@intFromEnum(r.value)}),
             inline .assign_literal, .assign_list, .assign_struct, .assign_tag, .assign_call_erased, .assign_packed_erased_fn => |a| context.append(" target={d} next={d}", .{ @intFromEnum(a.target), @intFromEnum(a.next) }),
             else => {},
@@ -394,6 +408,16 @@ fn stmtMentionsLocal(store: *const LirStore, stmt: LIR.CFStmt, needle: LIR.Local
         .decref => |rc| rc.value == needle,
         .free => |rc| rc.value == needle,
         .switch_stmt => |s| s.cond == needle,
+        .str_match => |s| blk: {
+            if (s.source == needle) break :blk true;
+            for (store.getStrMatchSteps(s.steps)) |step| {
+                switch (step.capture) {
+                    .discard => {},
+                    .local => |local| if (local == needle) break :blk true,
+                }
+            }
+            break :blk false;
+        },
         .ret => |r| r.value == needle,
         .join, .jump, .crash, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .loop_continue, .loop_break => false,
     };
@@ -1013,6 +1037,17 @@ const Certifier = struct {
                         try stack.append(self.allocator, continuation);
                     }
                 },
+                .str_match => |str_match| {
+                    try self.noteProcLocal(str_match.source);
+                    for (self.store.getStrMatchSteps(str_match.steps)) |step| {
+                        switch (step.capture) {
+                            .discard => {},
+                            .local => |local| try self.noteProcLocal(local),
+                        }
+                    }
+                    try stack.append(self.allocator, str_match.on_match);
+                    try stack.append(self.allocator, str_match.on_miss);
+                },
                 .join => |join_stmt| {
                     try self.noteProcLocalSpan(join_stmt.params);
                     try self.join_bodies.put(join_stmt.id, join_stmt.body);
@@ -1120,6 +1155,20 @@ const Certifier = struct {
                     for (self.store.getCFSwitchBranches(switch_stmt.branches)) |branch| {
                         try self.scan_stack.append(self.allocator, branch.body);
                     }
+                },
+                .str_match => |str_match| {
+                    if (str_match.source == needle) return true;
+                    var defines_needle_on_match = false;
+                    for (self.store.getStrMatchSteps(str_match.steps)) |step| {
+                        switch (step.capture) {
+                            .discard => {},
+                            .local => |local| {
+                                if (local == needle) defines_needle_on_match = true;
+                            },
+                        }
+                    }
+                    if (!defines_needle_on_match) try self.scan_stack.append(self.allocator, str_match.on_match);
+                    try self.scan_stack.append(self.allocator, str_match.on_miss);
                 },
                 .join => |join_stmt| {
                     try self.scan_stack.append(self.allocator, join_stmt.remainder);
@@ -1510,6 +1559,25 @@ const Certifier = struct {
                     var default_state = try state.clone();
                     errdefer default_state.deinit();
                     try work.append(self.allocator, .{ .segment = .{ .cursor = switch_stmt.default_branch, .state = default_state, .origin_join = segment.origin_join } });
+                    return;
+                },
+                .str_match => |str_match| {
+                    const source_value = try self.requireLive(&state, str_match.source);
+                    var match_state = try state.clone();
+                    errdefer match_state.deinit();
+                    for (self.store.getStrMatchSteps(str_match.steps)) |step| {
+                        switch (step.capture) {
+                            .discard => {},
+                            .local => |local| if (self.isRc(local)) {
+                                match_state.bindValue(local, source_value);
+                            },
+                        }
+                    }
+                    try work.append(self.allocator, .{ .segment = .{ .cursor = str_match.on_match, .state = match_state, .origin_join = segment.origin_join } });
+
+                    var miss_state = try state.clone();
+                    errdefer miss_state.deinit();
+                    try work.append(self.allocator, .{ .segment = .{ .cursor = str_match.on_miss, .state = miss_state, .origin_join = segment.origin_join } });
                     return;
                 },
                 .join => |join_stmt| {

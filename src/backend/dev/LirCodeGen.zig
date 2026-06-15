@@ -5449,6 +5449,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         }
                         try stack.append(sa, sw.default_branch);
                     },
+                    .str_match => |str_match| {
+                        try locals.put(localKey(str_match.source), str_match.source);
+                        try stack.append(sa, str_match.on_match);
+                        try stack.append(sa, str_match.on_miss);
+                    },
                     .join => |join| {
                         try stack.append(sa, join.body);
                         try stack.append(sa, join.remainder);
@@ -5570,6 +5575,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             try stack.append(sa, branch.body);
                         }
                         try stack.append(sa, sw.default_branch);
+                    },
+                    .str_match => |str_match| {
+                        try locals.put(localKey(str_match.source), str_match.source);
+                        for (self.store.getStrMatchSteps(str_match.steps)) |step| {
+                            switch (step.capture) {
+                                .discard => {},
+                                .local => |local| try locals.put(localKey(local), local),
+                            }
+                        }
+                        try stack.append(sa, str_match.on_match);
+                        try stack.append(sa, str_match.on_miss);
                     },
                     .join => |join| {
                         for (self.store.getLocalSpan(join.params)) |param| {
@@ -11891,6 +11907,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
+        fn emitSubRegs(self: *Self, comptime width: anytype, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) Allocator.Error!void {
+            std.debug.assert(arch == .aarch64 or arch == .aarch64_be or dst == src1);
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                try self.codegen.emit.subRegRegReg(width, dst, src1, src2);
+            } else {
+                if (dst != src1) try self.codegen.emit.movRegReg(width, dst, src1);
+                try self.codegen.emit.subRegReg(width, dst, src2);
+            }
+        }
+
         fn emitMulRegs(self: *Self, comptime width: anytype, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) Allocator.Error!void {
             std.debug.assert(arch == .aarch64 or arch == .aarch64_be or dst == src1);
             if (comptime arch == .aarch64 or arch == .aarch64_be) {
@@ -11906,6 +11932,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try self.codegen.emit.andRegRegReg(width, dst, src1, src2);
             } else {
                 try self.codegen.emit.andRegReg(width, dst, src2);
+            }
+        }
+
+        fn emitOrRegs(self: *Self, comptime width: anytype, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) Allocator.Error!void {
+            std.debug.assert(arch == .aarch64 or arch == .aarch64_be or dst == src1);
+            if (comptime arch == .aarch64 or arch == .aarch64_be) {
+                try self.codegen.emit.orrRegRegReg(width, dst, src1, src2);
+            } else {
+                if (dst != src1) try self.codegen.emit.movRegReg(width, dst, src1);
+                try self.codegen.emit.orRegReg(width, dst, src2);
             }
         }
 
@@ -13850,6 +13886,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             default_branch: CFStmtId,
             end_patch: usize,
         };
+        const StrMatchState = struct {
+            owner: CFStmtId,
+            before_env: StmtEnvSnapshot,
+            miss_patches: std.ArrayList(usize),
+            on_miss: CFStmtId,
+            end_patch: usize,
+        };
         // Work item for the explicit statement-generation stack. `node` generates
         // one statement; the remaining variants are continuations that emit the
         // glue code which originally lived after a recursive descent.
@@ -13863,6 +13906,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             switch_end: *SwitchState,
             switch1_after_branch: *SwitchState1,
             switch1_end: *SwitchState1,
+            str_match_after_match: *StrMatchState,
+            str_match_end: *StrMatchState,
         };
 
         /// Generate code for a control flow statement and everything reachable
@@ -14152,6 +14197,21 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             }
                         },
 
+                        .str_match => |str_match| {
+                            const before_env = try self.captureStmtEnv();
+                            const miss_patches = try self.generateStrMatch(str_match);
+                            const state = try self.allocator.create(StrMatchState);
+                            state.* = .{
+                                .owner = stmt_id,
+                                .before_env = before_env,
+                                .miss_patches = miss_patches,
+                                .on_miss = str_match.on_miss,
+                                .end_patch = 0,
+                            };
+                            try work.append(wa, .{ .str_match_after_match = state });
+                            try work.append(wa, .{ .node = str_match.on_match });
+                        },
+
                         .incref => |inc| {
                             _ = try self.generateIncref(.{
                                 .value = inc.value,
@@ -14293,7 +14353,381 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     state.switch_env.deinit();
                     self.allocator.destroy(state);
                 },
+
+                .str_match_after_match => |state| {
+                    self.current_stmt_id = state.owner;
+                    state.end_patch = try self.codegen.emitJump();
+                    const miss_offset = self.codegen.currentOffset();
+                    for (state.miss_patches.items) |patch| {
+                        self.codegen.patchJump(patch, miss_offset);
+                    }
+                    try self.restoreStmtEnv(&state.before_env);
+                    try work.append(wa, .{ .str_match_end = state });
+                    try work.append(wa, .{ .node = state.on_miss });
+                },
+
+                .str_match_end => |state| {
+                    self.current_stmt_id = state.owner;
+                    self.codegen.patchJump(state.end_patch, self.codegen.currentOffset());
+                    try self.restoreStmtEnv(&state.before_env);
+                    state.before_env.deinit();
+                    state.miss_patches.deinit(self.allocator);
+                    self.allocator.destroy(state);
+                },
             };
+        }
+
+        fn generateStrMatch(self: *Self, str_match: anytype) Allocator.Error!std.ArrayList(usize) {
+            var miss_patches = std.ArrayList(usize).empty;
+            errdefer miss_patches.deinit(self.allocator);
+
+            const steps = self.store.getStrMatchSteps(str_match.steps);
+            var capture_offsets = std.ArrayList(?i32).empty;
+            defer capture_offsets.deinit(self.allocator);
+            try capture_offsets.ensureTotalCapacity(self.allocator, steps.len);
+            for (steps) |step| {
+                switch (step.capture) {
+                    .discard => try capture_offsets.append(self.allocator, null),
+                    .local => try capture_offsets.append(self.allocator, self.codegen.allocStackSlot(roc_str_size)),
+                }
+            }
+
+            const source_loc = try self.emitValueLocal(str_match.source);
+            const source_offset = switch (source_loc) {
+                .stack_str => |offset| offset,
+                else => std.debug.panic(
+                    "LIR/codegen invariant violated: str_match source local {d} did not lower to a RocStr stack value",
+                    .{@intFromEnum(str_match.source)},
+                ),
+            };
+
+            const bytes_reg = try self.allocTempGeneral();
+            const len_reg = try self.allocTempGeneral();
+            const cursor_reg = try self.allocTempGeneral();
+            const source_is_small_reg = try self.allocTempGeneral();
+            const source_alloc_reg = try self.allocTempGeneral();
+            defer self.codegen.freeGeneral(source_alloc_reg);
+            defer self.codegen.freeGeneral(source_is_small_reg);
+            defer self.codegen.freeGeneral(cursor_reg);
+            defer self.codegen.freeGeneral(len_reg);
+            defer self.codegen.freeGeneral(bytes_reg);
+
+            try self.emitLoadStrSourceShape(source_offset, bytes_reg, len_reg, source_is_small_reg, source_alloc_reg);
+            try self.codegen.emitLoadImm(cursor_reg, 0);
+
+            const prefix = self.store.getStringLiteral(str_match.prefix);
+            if (prefix.len > 0) {
+                try self.emitCheckBytesAvailable(cursor_reg, len_reg, prefix.len, &miss_patches);
+                try self.emitCompareLiteralAtPtr(bytes_reg, prefix, &miss_patches);
+                try self.emitAddUsizeImm(cursor_reg, cursor_reg, prefix.len);
+            }
+
+            for (steps, 0..) |step, step_i| {
+                const capture_start_reg = try self.allocTempGeneral();
+                defer self.codegen.freeGeneral(capture_start_reg);
+                try self.emitMovRegReg(capture_start_reg, cursor_reg);
+
+                const delimiter = self.store.getStringLiteral(step.delimiter);
+                const is_final_tail_capture = str_match.end == .tail and step_i + 1 == steps.len and delimiter.len == 0;
+
+                if (is_final_tail_capture) {
+                    if (capture_offsets.items[step_i]) |capture_offset| {
+                        try self.emitStoreStrCapture(capture_offset, bytes_reg, source_alloc_reg, source_is_small_reg, capture_start_reg, len_reg);
+                        switch (step.capture) {
+                            .discard => {},
+                            .local => |local| {
+                                const loc = ValueLocation{ .stack_str = capture_offset };
+                                try self.local_locations.put(localKey(local), loc);
+                                try self.emitDebugAssertValidStrLocal(local, loc);
+                            },
+                        }
+                    }
+                    try self.emitMovRegReg(cursor_reg, len_reg);
+                    continue;
+                }
+
+                try self.emitFindDelimiter(bytes_reg, len_reg, cursor_reg, delimiter, &miss_patches);
+
+                if (capture_offsets.items[step_i]) |capture_offset| {
+                    try self.emitStoreStrCapture(capture_offset, bytes_reg, source_alloc_reg, source_is_small_reg, capture_start_reg, cursor_reg);
+                    switch (step.capture) {
+                        .discard => {},
+                        .local => |local| {
+                            const loc = ValueLocation{ .stack_str = capture_offset };
+                            try self.local_locations.put(localKey(local), loc);
+                            try self.emitDebugAssertValidStrLocal(local, loc);
+                        },
+                    }
+                }
+
+                if (delimiter.len > 0) {
+                    try self.emitAddUsizeImm(cursor_reg, cursor_reg, delimiter.len);
+                }
+            }
+
+            switch (str_match.end) {
+                .exact => {
+                    try self.emitCmpReg(cursor_reg, len_reg);
+                    try miss_patches.append(self.allocator, try self.codegen.emitCondJump(condNotEqual()));
+                },
+                .tail => {},
+            }
+
+            return miss_patches;
+        }
+
+        fn emitLoadStrSourceShape(
+            self: *Self,
+            source_offset: i32,
+            bytes_reg: GeneralReg,
+            len_reg: GeneralReg,
+            source_is_small_reg: GeneralReg,
+            source_alloc_reg: GeneralReg,
+        ) Allocator.Error!void {
+            const tmp_reg = try self.allocTempGeneral();
+            defer self.codegen.freeGeneral(tmp_reg);
+
+            try self.emitLoad(.w64, len_reg, frame_ptr, source_offset + 16);
+            try self.codegen.emitLoadImm(tmp_reg, std.math.minInt(i64));
+            try self.emitAndRegs(.w64, tmp_reg, tmp_reg, len_reg);
+            try self.emitCmpImm(tmp_reg, 0);
+            const small_patch = try self.codegen.emitCondJump(condNotEqual());
+
+            try self.emitLoad(.w64, bytes_reg, frame_ptr, source_offset);
+            try self.codegen.emitLoadImm(source_is_small_reg, 0);
+            try self.emitLoad(.w64, source_alloc_reg, frame_ptr, source_offset + 8);
+            try self.codegen.emitLoadImm(tmp_reg, 1);
+            try self.emitAndRegs(.w64, tmp_reg, tmp_reg, source_alloc_reg);
+            try self.emitCmpImm(tmp_reg, 0);
+            const already_slice_patch = try self.codegen.emitCondJump(condNotEqual());
+            try self.emitMovRegReg(source_alloc_reg, bytes_reg);
+            try self.codegen.emitLoadImm(tmp_reg, 1);
+            try self.emitOrRegs(.w64, source_alloc_reg, source_alloc_reg, tmp_reg);
+            const alloc_done_patch = try self.codegen.emitJump();
+            const already_slice_offset = self.codegen.currentOffset();
+            self.codegen.patchJump(already_slice_patch, already_slice_offset);
+            const alloc_done_offset = self.codegen.currentOffset();
+            self.codegen.patchJump(alloc_done_patch, alloc_done_offset);
+            const shape_done_patch = try self.codegen.emitJump();
+
+            const small_offset = self.codegen.currentOffset();
+            self.codegen.patchJump(small_patch, small_offset);
+            try self.emitLeaStack(bytes_reg, source_offset);
+            try self.codegen.emitLoadImm(source_is_small_reg, 1);
+            try self.emitLsrImm(.w64, len_reg, len_reg, 56);
+            try self.codegen.emitLoadImm(tmp_reg, 0x7F);
+            try self.emitAndRegs(.w64, len_reg, len_reg, tmp_reg);
+            try self.codegen.emitLoadImm(source_alloc_reg, 0);
+
+            const shape_done_offset = self.codegen.currentOffset();
+            self.codegen.patchJump(shape_done_patch, shape_done_offset);
+        }
+
+        fn emitCheckBytesAvailable(
+            self: *Self,
+            cursor_reg: GeneralReg,
+            len_reg: GeneralReg,
+            needed: usize,
+            miss_patches: *std.ArrayList(usize),
+        ) Allocator.Error!void {
+            if (needed == 0) return;
+
+            const needed_reg = try self.allocTempGeneral();
+            const limit_reg = try self.allocTempGeneral();
+            defer self.codegen.freeGeneral(limit_reg);
+            defer self.codegen.freeGeneral(needed_reg);
+
+            try self.codegen.emitLoadImm(needed_reg, @bitCast(@as(u64, @intCast(needed))));
+            try self.emitCmpReg(len_reg, needed_reg);
+            try miss_patches.append(self.allocator, try self.codegen.emitCondJump(condBelow()));
+
+            try self.emitMovRegReg(limit_reg, len_reg);
+            try self.emitSubRegs(.w64, limit_reg, limit_reg, needed_reg);
+            try self.emitCmpReg(cursor_reg, limit_reg);
+            try miss_patches.append(self.allocator, try self.codegen.emitCondJump(condAbove()));
+        }
+
+        fn emitFindDelimiter(
+            self: *Self,
+            bytes_reg: GeneralReg,
+            len_reg: GeneralReg,
+            cursor_reg: GeneralReg,
+            delimiter: []const u8,
+            miss_patches: *std.ArrayList(usize),
+        ) Allocator.Error!void {
+            if (delimiter.len == 0) return;
+
+            const needed_reg = try self.allocTempGeneral();
+            const limit_reg = try self.allocTempGeneral();
+            const candidate_reg = try self.allocTempGeneral();
+            defer self.codegen.freeGeneral(candidate_reg);
+            defer self.codegen.freeGeneral(limit_reg);
+            defer self.codegen.freeGeneral(needed_reg);
+
+            try self.codegen.emitLoadImm(needed_reg, @bitCast(@as(u64, @intCast(delimiter.len))));
+            try self.emitCmpReg(len_reg, needed_reg);
+            try miss_patches.append(self.allocator, try self.codegen.emitCondJump(condBelow()));
+
+            try self.emitMovRegReg(limit_reg, len_reg);
+            try self.emitSubRegs(.w64, limit_reg, limit_reg, needed_reg);
+
+            const loop_start = self.codegen.currentOffset();
+            try self.emitCmpReg(cursor_reg, limit_reg);
+            try miss_patches.append(self.allocator, try self.codegen.emitCondJump(condAbove()));
+
+            try self.emitMovRegReg(candidate_reg, bytes_reg);
+            try self.emitAddRegs(.w64, candidate_reg, candidate_reg, cursor_reg);
+
+            var advance_patches = std.ArrayList(usize).empty;
+            defer advance_patches.deinit(self.allocator);
+            try self.emitCompareLiteralAtPtr(candidate_reg, delimiter, &advance_patches);
+
+            const found_patch = try self.codegen.emitJump();
+            const advance_offset = self.codegen.currentOffset();
+            for (advance_patches.items) |patch| {
+                self.codegen.patchJump(patch, advance_offset);
+            }
+            try self.emitAddUsizeImm(cursor_reg, cursor_reg, 1);
+            const back_patch = try self.codegen.emitJump();
+            self.codegen.patchJump(back_patch, loop_start);
+
+            const found_offset = self.codegen.currentOffset();
+            self.codegen.patchJump(found_patch, found_offset);
+        }
+
+        fn emitCompareLiteralAtPtr(
+            self: *Self,
+            ptr_reg: GeneralReg,
+            literal: []const u8,
+            mismatch_patches: *std.ArrayList(usize),
+        ) Allocator.Error!void {
+            if (literal.len == 0) return;
+
+            const loaded_reg = try self.allocTempGeneral();
+            const expected_reg = try self.allocTempGeneral();
+            defer self.codegen.freeGeneral(expected_reg);
+            defer self.codegen.freeGeneral(loaded_reg);
+
+            var offset: usize = 0;
+            while (offset < literal.len) {
+                const remaining = literal.len - offset;
+                const chunk_len: usize = if (remaining >= 8)
+                    8
+                else if (remaining >= 4)
+                    4
+                else if (remaining >= 2)
+                    2
+                else
+                    1;
+
+                const offset_i32: i32 = @intCast(offset);
+                switch (chunk_len) {
+                    8 => try self.emitLoad(.w64, loaded_reg, ptr_reg, offset_i32),
+                    4 => try self.emitLoad(.w32, loaded_reg, ptr_reg, offset_i32),
+                    2 => try self.emitLoadW16(loaded_reg, ptr_reg, offset_i32),
+                    1 => try self.emitLoadW8(loaded_reg, ptr_reg, offset_i32),
+                    else => unreachable,
+                }
+
+                var expected: u64 = 0;
+                for (literal[offset..][0..chunk_len], 0..) |byte, byte_i| {
+                    expected |= @as(u64, byte) << @intCast(byte_i * 8);
+                }
+                try self.codegen.emitLoadImm(expected_reg, @bitCast(expected));
+                try self.emitCmpReg(loaded_reg, expected_reg);
+                try mismatch_patches.append(self.allocator, try self.codegen.emitCondJump(condNotEqual()));
+
+                offset += chunk_len;
+            }
+        }
+
+        fn emitStoreStrCapture(
+            self: *Self,
+            dest_offset: i32,
+            source_bytes_reg: GeneralReg,
+            source_alloc_reg: GeneralReg,
+            source_is_small_reg: GeneralReg,
+            start_reg: GeneralReg,
+            end_reg: GeneralReg,
+        ) Allocator.Error!void {
+            const capture_len_reg = try self.allocTempGeneral();
+            defer self.codegen.freeGeneral(capture_len_reg);
+
+            try self.emitMovRegReg(capture_len_reg, end_reg);
+            try self.emitSubRegs(.w64, capture_len_reg, capture_len_reg, start_reg);
+
+            try self.emitCmpImm(source_is_small_reg, 0);
+            const heap_patch = try self.codegen.emitCondJump(condEqual());
+
+            try self.emitStoreSmallStrCapture(dest_offset, source_bytes_reg, start_reg, capture_len_reg);
+            const done_patch = try self.codegen.emitJump();
+
+            const heap_offset = self.codegen.currentOffset();
+            self.codegen.patchJump(heap_patch, heap_offset);
+            try self.emitStoreHeapStrCapture(dest_offset, source_bytes_reg, source_alloc_reg, start_reg, capture_len_reg);
+
+            const done_offset = self.codegen.currentOffset();
+            self.codegen.patchJump(done_patch, done_offset);
+        }
+
+        fn emitStoreSmallStrCapture(
+            self: *Self,
+            dest_offset: i32,
+            source_bytes_reg: GeneralReg,
+            start_reg: GeneralReg,
+            capture_len_reg: GeneralReg,
+        ) Allocator.Error!void {
+            try self.zeroStackArea(dest_offset, roc_str_size);
+
+            const src_cur_reg = try self.allocTempGeneral();
+            const dst_cur_reg = try self.allocTempGeneral();
+            const remaining_reg = try self.allocTempGeneral();
+            const byte_reg = try self.allocTempGeneral();
+            defer self.codegen.freeGeneral(byte_reg);
+            defer self.codegen.freeGeneral(remaining_reg);
+            defer self.codegen.freeGeneral(dst_cur_reg);
+            defer self.codegen.freeGeneral(src_cur_reg);
+
+            try self.emitMovRegReg(src_cur_reg, source_bytes_reg);
+            try self.emitAddRegs(.w64, src_cur_reg, src_cur_reg, start_reg);
+            try self.emitLeaStack(dst_cur_reg, dest_offset);
+            try self.emitMovRegReg(remaining_reg, capture_len_reg);
+
+            const loop_start = self.codegen.currentOffset();
+            try self.emitCmpImm(remaining_reg, 0);
+            const done_patch = try self.codegen.emitCondJump(condEqual());
+            try self.emitLoadW8(byte_reg, src_cur_reg, 0);
+            try self.emitStoreW8(dst_cur_reg, 0, byte_reg);
+            try self.emitAddUsizeImm(src_cur_reg, src_cur_reg, 1);
+            try self.emitAddUsizeImm(dst_cur_reg, dst_cur_reg, 1);
+            try self.emitSubImm(.w64, remaining_reg, remaining_reg, 1);
+            const back_patch = try self.codegen.emitJump();
+            self.codegen.patchJump(back_patch, loop_start);
+
+            const done_offset = self.codegen.currentOffset();
+            self.codegen.patchJump(done_patch, done_offset);
+
+            try self.emitMovRegReg(byte_reg, capture_len_reg);
+            try self.emitAddUsizeImm(byte_reg, byte_reg, 0x80);
+            try self.emitStoreW8(frame_ptr, dest_offset + @as(i32, small_str_max_len), byte_reg);
+        }
+
+        fn emitStoreHeapStrCapture(
+            self: *Self,
+            dest_offset: i32,
+            source_bytes_reg: GeneralReg,
+            source_alloc_reg: GeneralReg,
+            start_reg: GeneralReg,
+            capture_len_reg: GeneralReg,
+        ) Allocator.Error!void {
+            const slice_bytes_reg = try self.allocTempGeneral();
+            defer self.codegen.freeGeneral(slice_bytes_reg);
+
+            try self.emitMovRegReg(slice_bytes_reg, source_bytes_reg);
+            try self.emitAddRegs(.w64, slice_bytes_reg, slice_bytes_reg, start_reg);
+            try self.emitStore(.w64, frame_ptr, dest_offset, slice_bytes_reg);
+            try self.emitStore(.w64, frame_ptr, dest_offset + 8, source_alloc_reg);
+            try self.emitStore(.w64, frame_ptr, dest_offset + 16, capture_len_reg);
         }
 
         /// Set up storage locations for join point parameters

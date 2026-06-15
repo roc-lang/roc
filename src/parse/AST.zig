@@ -1392,7 +1392,7 @@ pub const Pattern = union(enum) {
     string: struct {
         string_tok: Token.Idx,
         region: TokenizedRegion,
-        expr: Expr.Idx,
+        parts: PatternStringPart.Span,
     },
     single_quote: struct {
         token: Token.Idx,
@@ -1544,6 +1544,9 @@ pub const Pattern = union(enum) {
                 try ast.appendRegionInfoToSexprTree(env, tree, str.region);
                 try tree.pushStringPair("raw", ast.resolve(str.string_tok));
                 const attrs = tree.beginNode();
+                for (ast.store.patternStringPartSlice(str.parts)) |part_idx| {
+                    try ast.store.getPatternStringPart(part_idx).pushToSExprTree(env, ast, tree);
+                }
                 try tree.endNode(begin, attrs);
             },
             .single_quote => |sq| {
@@ -1647,6 +1650,47 @@ pub const Pattern = union(enum) {
                 try tree.pushStaticAtom("p-malformed");
                 try ast.appendRegionInfoToSexprTree(env, tree, a.region);
                 try tree.pushStringPair("tag", @tagName(a.reason));
+                const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
+        }
+    }
+};
+
+/// A part of a string pattern. Unlike expression strings, interpolation holes
+/// in patterns are pattern binders or discards, never expressions.
+pub const PatternStringPart = union(enum) {
+    text: struct {
+        token: Token.Idx,
+        region: TokenizedRegion,
+    },
+    capture: struct {
+        name: ?Token.Idx,
+        region: TokenizedRegion,
+    },
+
+    pub const Idx = enum(u32) { _ };
+    pub const Span = struct { span: base.DataSpan };
+
+    pub fn pushToSExprTree(self: @This(), env: *const CommonEnv, ast: *const AST, tree: *SExprTree) Allocator.Error!void {
+        switch (self) {
+            .text => |text| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("p-string-text");
+                try ast.appendRegionInfoToSexprTree(env, tree, text.region);
+                try tree.pushStringPair("raw", ast.resolve(text.token));
+                const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
+            .capture => |capture| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("p-string-capture");
+                try ast.appendRegionInfoToSexprTree(env, tree, capture.region);
+                if (capture.name) |name| {
+                    try tree.pushStringPair("name", ast.resolve(name));
+                } else {
+                    try tree.pushBoolPair("discard", true);
+                }
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },

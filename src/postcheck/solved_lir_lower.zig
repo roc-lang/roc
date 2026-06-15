@@ -912,6 +912,11 @@ const Lowerer = struct {
         return self.solved.lifted.string_literals.items[@intFromEnum(id)];
     }
 
+    fn lirStrLiteral(self: *Lowerer, id: Lifted.StringLiteralId) Common.LowerError!LIR.StrLiteral {
+        const str_lit = self.stringLiteral(id);
+        return try self.result.store.insertStringView(str_lit.backing, str_lit.offset, str_lit.len);
+    }
+
     fn noteLocal(self: *Lowerer, local: LIR.LocalId) Common.LowerError!void {
         if (self.current_proc_locals) |locals| {
             try locals.put(self.allocator, @intFromEnum(local), {});
@@ -2667,7 +2672,7 @@ const Lowerer = struct {
                 break :blk false;
             },
             .nominal => |inner| self.patternCanMiss(inner),
-            .tag, .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit => true,
+            .tag, .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit, .str_pattern => true,
         };
     }
 
@@ -2689,6 +2694,7 @@ const Lowerer = struct {
             .frac_f32_lit => |value| try self.lowerLiteralPatternThen(source, pat_ty, .{ .frac_f32_lit = value }, on_match, miss),
             .frac_f64_lit => |value| try self.lowerLiteralPatternThen(source, pat_ty, .{ .frac_f64_lit = value }, on_match, miss),
             .str_lit => |value| try self.lowerLiteralPatternThen(source, pat_ty, .{ .str_lit = value }, on_match, miss),
+            .str_pattern => |str| try self.lowerStrPatternThen(str, source, on_match, miss),
         };
     }
 
@@ -2835,8 +2841,55 @@ const Lowerer = struct {
             .tuple => |items| try self.bindTuplePattern(items, source, next),
             .tag => |tag| try self.bindTagPayloadPatterns(self.tagIndex(pat_ty, tag.name), tag.payloads, source, next),
             .nominal => |inner| try self.bindPattern(inner, source, next),
-            .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit => next,
+            .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit, .str_pattern => next,
         };
+    }
+
+    fn lowerStrPatternThen(
+        self: *Lowerer,
+        str: Lifted.StrPattern,
+        source: LIR.LocalId,
+        on_match: LIR.CFStmtId,
+        miss: ?PatternMiss,
+    ) Common.LowerError!LIR.CFStmtId {
+        const input_steps = self.solved.lifted.strPatternStepSpan(str.steps);
+        const lir_steps = try self.allocator.alloc(LIR.StrMatchStep, input_steps.len);
+        defer self.allocator.free(lir_steps);
+
+        for (input_steps, lir_steps) |input_step, *lir_step| {
+            lir_step.* = .{
+                .capture = if (input_step.capture) |capture|
+                    .{ .local = try self.addTemp(try self.lowerPatTy(capture)) }
+                else
+                    .discard,
+                .delimiter = try self.lirStrLiteral(input_step.delimiter),
+            };
+        }
+
+        var match_body = on_match;
+        var index = input_steps.len;
+        while (index > 0) {
+            index -= 1;
+            if (input_steps[index].capture) |capture| {
+                const capture_local = switch (lir_steps[index].capture) {
+                    .local => |local| local,
+                    .discard => Common.invariant("string-pattern capture step lowered without a capture local"),
+                };
+                match_body = try self.bindPattern(capture, capture_local, match_body);
+            }
+        }
+
+        return try self.result.store.addCFStmt(.{ .str_match = .{
+            .source = source,
+            .prefix = try self.lirStrLiteral(str.prefix),
+            .steps = try self.result.store.addStrMatchSteps(lir_steps),
+            .end = switch (str.end) {
+                .exact => .exact,
+                .tail => .tail,
+            },
+            .on_match = match_body,
+            .on_miss = try self.patternMissJump(miss),
+        } });
     }
 
     fn bindPatternOrCrash(
@@ -3927,6 +3980,7 @@ fn cloneLiftedProgram(allocator: std.mem.Allocator, program: *const Lifted.Progr
         .stmt_ids = try cloneArrayList(Lifted.StmtId, allocator, &program.stmt_ids),
         .field_exprs = try cloneArrayList(Lifted.FieldExpr, allocator, &program.field_exprs),
         .record_destructs = try cloneArrayList(Lifted.RecordDestruct, allocator, &program.record_destructs),
+        .str_pattern_steps = try cloneArrayList(Lifted.StrPatternStep, allocator, &program.str_pattern_steps),
         .branches = try cloneArrayList(Lifted.Branch, allocator, &program.branches),
         .if_branches = try cloneArrayList(Lifted.IfBranch, allocator, &program.if_branches),
         .string_literals = string_literals,

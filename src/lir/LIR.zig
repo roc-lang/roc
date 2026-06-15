@@ -119,6 +119,42 @@ pub const StrLiteral = struct {
     len: u32,
 };
 
+/// How a string interpolation pattern must finish after its last step.
+pub const StrPatternEnd = enum {
+    exact,
+    tail,
+};
+
+/// Whether a string-pattern step writes the captured slice to a local.
+pub const StrMatchCapture = union(enum) {
+    discard,
+    local: LocalId,
+};
+
+/// One delimiter search in a string interpolation pattern.
+///
+/// The matcher captures the bytes from the current cursor up to the first
+/// occurrence of `delimiter`, optionally writes that slice to `capture`, and
+/// advances the cursor past the delimiter.
+pub const StrMatchStep = struct {
+    capture: StrMatchCapture,
+    delimiter: StrLiteral,
+};
+
+/// Span into flat string-match-step storage.
+pub const StrMatchStepSpan = extern struct {
+    start: u32,
+    len: u16,
+
+    pub fn empty() StrMatchStepSpan {
+        return .{ .start = 0, .len = 0 };
+    }
+
+    pub fn isEmpty(self: StrMatchStepSpan) bool {
+        return self.len == 0;
+    }
+};
+
 /// Literal RHS values supported by `assign_literal`.
 pub const LiteralValue = union(enum) {
     i64_literal: struct {
@@ -380,6 +416,17 @@ pub const CFStmt = union(enum) {
         /// the branch bodies flow back to a shared suffix. ARC insertion uses
         /// this to release branch-local owned values before the shared suffix.
         continuation: ?CFStmtId = null,
+    },
+    /// Runtime string-pattern match. On the match edge this initializes every
+    /// captured local in `steps` as a RocStr slice of `source`; on the miss edge
+    /// no capture locals are initialized.
+    str_match: struct {
+        source: LocalId,
+        prefix: StrLiteral,
+        steps: StrMatchStepSpan,
+        end: StrPatternEnd,
+        on_match: CFStmtId,
+        on_miss: CFStmtId,
     },
     loop_continue: void,
     loop_break: void,

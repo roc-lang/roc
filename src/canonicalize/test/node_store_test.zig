@@ -1322,6 +1322,13 @@ test "NodeStore round trip - Pattern" {
         },
     });
     try patterns.append(gpa, CIR.Pattern{
+        .str_interpolation = .{
+            .prefix = rand_idx(StringLiteral.Idx),
+            .steps = CIR.Pattern.StrPatternStep.Span{ .span = rand_span() },
+            .end = .tail,
+        },
+    });
+    try patterns.append(gpa, CIR.Pattern{
         .frac_f32_literal = .{
             .value = rand.random().float(f32),
         },

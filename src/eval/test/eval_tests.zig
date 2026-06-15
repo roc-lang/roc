@@ -707,6 +707,82 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "(\"greeting\", \"other\")" },
     },
     .{
+        .name = "inspect: string interpolation pattern captures between delimiters",
+        .source_kind = .module,
+        .source =
+        \\describe : Str -> (Str, Str)
+        \\describe = |s| match s {
+        \\    "foo${bar}baz${qux}etc" => (bar, qux)
+        \\    _ => ("miss", "miss")
+        \\}
+        \\
+        \\main = describe("fooALPHAbazOMEGAetc")
+        ,
+        .expected = .{ .inspect_str = "(\"ALPHA\", \"OMEGA\")" },
+    },
+    .{
+        .name = "inspect: string interpolation pattern falls through when delimiter is missing",
+        .source_kind = .module,
+        .source =
+        \\describe : Str -> Str
+        \\describe = |s| match s {
+        \\    "foo${bar}baz${_}" => bar
+        \\    _ => "miss"
+        \\}
+        \\
+        \\main = describe("fooALPHAbuxOMEGA")
+        ,
+        .expected = .{ .inspect_str = "\"miss\"" },
+    },
+    .{
+        .name = "inspect: string interpolation pattern discard matches suffix",
+        .source_kind = .module,
+        .source =
+        \\describe : Str -> Str
+        \\describe = |s| match s {
+        \\    "${_}.txt" => "text"
+        \\    _ => "other"
+        \\}
+        \\
+        \\main = (describe("notes.txt"), describe("notes.md"))
+        ,
+        .expected = .{ .inspect_str = "(\"text\", \"other\")" },
+    },
+    .{
+        .name = "inspect: string interpolation pattern tail capture and discard",
+        .source_kind = .module,
+        .source =
+        \\describe : Str -> (Str, Str)
+        \\describe = |s| match s {
+        \\    "foo${name}blah${_}" => (name, "tail")
+        \\    "prefix${rest}" => (rest, "rest")
+        \\    _ => ("miss", "miss")
+        \\}
+        \\
+        \\main = (describe("fooBARblahanything"), describe("prefixVALUE"))
+        ,
+        .expected = .{ .inspect_str = "((\"BAR\", \"tail\"), (\"VALUE\", \"rest\"))" },
+    },
+    .{
+        .name = "allocation - string interpolation pattern capture returns seamless heap slice",
+        .source =
+        \\{
+        \\    prefix = "MATCH_PREFIX:"
+        \\    payload = Str.repeat("abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ", 1)
+        \\    source = Str.concat(prefix, payload)
+        \\
+        \\    match source {
+        \\        "MATCH_PREFIX:${rest}" => rest
+        \\        _ => ""
+        \\    }
+        \\}
+        ,
+        .expected = .{ .allocations_at_most = .{
+            .output = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+            .max_allocations = 2,
+        } },
+    },
+    .{
         .name = "inspect: string literal type suffix pins custom from_quote target",
         .source_kind = .module,
         .source =

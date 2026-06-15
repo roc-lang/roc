@@ -74,6 +74,7 @@ pub const ProgramView = struct {
 pub const LirStoreImage = extern struct {
     cf_stmts: ArrayRef,
     cf_switch_branches: ArrayRef,
+    str_match_steps: ArrayRef,
     join_points: ArrayRef,
     locals: ArrayRef,
     local_ids: ArrayRef,
@@ -91,6 +92,7 @@ pub const LirStoreImage = extern struct {
         return .{
             .cf_stmts = try arrayRef(base_ptr, image_size, store.cf_stmts.items),
             .cf_switch_branches = try arrayRef(base_ptr, image_size, store.cf_switch_branches.items),
+            .str_match_steps = try arrayRef(base_ptr, image_size, store.str_match_steps.items),
             .join_points = try arrayRef(base_ptr, image_size, store.join_points.items),
             .locals = try arrayRef(base_ptr, image_size, store.locals.items),
             .local_ids = try arrayRef(base_ptr, image_size, store.local_ids.items),
@@ -110,6 +112,7 @@ pub const LirStoreImage = extern struct {
         return .{
             .cf_stmts = try arrayListFromRef(LIR.CFStmt, base_ptr, image_size, self.cf_stmts),
             .cf_switch_branches = try arrayListFromRef(LIR.CFSwitchBranch, base_ptr, image_size, self.cf_switch_branches),
+            .str_match_steps = try arrayListFromRef(LIR.StrMatchStep, base_ptr, image_size, self.str_match_steps),
             .join_points = try arrayListFromRef(LIR.JoinPoint, base_ptr, image_size, self.join_points),
             .locals = try arrayListFromRef(LIR.Local, base_ptr, image_size, self.locals),
             .local_ids = try arrayListFromRef(LIR.LocalId, base_ptr, image_size, self.local_ids),

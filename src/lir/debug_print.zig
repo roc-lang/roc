@@ -202,6 +202,26 @@ const Printer = struct {
                     }
                     return;
                 },
+                .str_match => |s| {
+                    try writeIndent(indent, writer);
+                    try writer.print("str_match l{d} prefix_len={d} end={s}\n", .{ @intFromEnum(s.source), s.prefix.len, @tagName(s.end) });
+                    for (self.store.getStrMatchSteps(s.steps), 0..) |step, index| {
+                        try writeIndent(indent + 1, writer);
+                        try writer.print("step {d} capture=", .{index});
+                        switch (step.capture) {
+                            .discard => try writer.writeAll("_"),
+                            .local => |local| try writer.print("l{d}", .{@intFromEnum(local)}),
+                        }
+                        try writer.print(" delimiter_len={d}\n", .{step.delimiter.len});
+                    }
+                    try writeIndent(indent + 1, writer);
+                    try writer.writeAll("match:\n");
+                    try self.writeChainInner(gpa, s.on_match, indent + 2, writer);
+                    try writeIndent(indent + 1, writer);
+                    try writer.writeAll("miss:\n");
+                    try self.writeChainInner(gpa, s.on_miss, indent + 2, writer);
+                    return;
+                },
                 .join => |s| {
                     try writeIndent(indent, writer);
                     try writer.print("join j{d} params=[", .{@intFromEnum(s.id)});

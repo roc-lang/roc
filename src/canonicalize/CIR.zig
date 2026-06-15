@@ -176,6 +176,7 @@ pub const Def = struct {
             .pattern_f64_literal,
             .pattern_small_dec_literal,
             .pattern_str_literal,
+            .pattern_str_interpolation,
             .pattern_underscore,
             => true,
             else => false,

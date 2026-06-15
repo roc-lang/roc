@@ -1598,7 +1598,7 @@ const Lowerer = struct {
                 break :blk false;
             },
             .nominal => |inner| self.patternCanMiss(inner),
-            .tag, .callable, .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit => true,
+            .tag, .callable, .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit, .str_pattern => true,
         };
     }
 
@@ -1620,6 +1620,7 @@ const Lowerer = struct {
             .frac_f32_lit => |value| try self.lowerLiteralPatternThen(source, pat_data.ty, .{ .frac_f32_lit = value }, on_match, miss),
             .frac_f64_lit => |value| try self.lowerLiteralPatternThen(source, pat_data.ty, .{ .frac_f64_lit = value }, on_match, miss),
             .str_lit => |value| try self.lowerLiteralPatternThen(source, pat_data.ty, .{ .str_lit = value }, on_match, miss),
+            .str_pattern => |str| try self.lowerStrPatternThen(str, source, on_match, miss),
         };
     }
 
@@ -1813,8 +1814,55 @@ const Lowerer = struct {
                     } });
             } else next,
             .nominal => |inner| try self.bindPattern(inner, source, next),
-            .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit => next,
+            .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit, .str_pattern => next,
         };
+    }
+
+    fn lowerStrPatternThen(
+        self: *Lowerer,
+        str: LambdaMono.StrPattern,
+        source: LIR.LocalId,
+        on_match: LIR.CFStmtId,
+        miss: ?PatternMiss,
+    ) Common.LowerError!LIR.CFStmtId {
+        const input_steps = self.program.strPatternStepSpan(str.steps);
+        const lir_steps = try self.allocator.alloc(LIR.StrMatchStep, input_steps.len);
+        defer self.allocator.free(lir_steps);
+
+        for (input_steps, lir_steps) |input_step, *lir_step| {
+            lir_step.* = .{
+                .capture = if (input_step.capture) |capture|
+                    .{ .local = try self.addTemp(self.pat(capture).ty) }
+                else
+                    .discard,
+                .delimiter = try self.lirStrLiteral(input_step.delimiter),
+            };
+        }
+
+        var match_body = on_match;
+        var index = input_steps.len;
+        while (index > 0) {
+            index -= 1;
+            if (input_steps[index].capture) |capture| {
+                const capture_local = switch (lir_steps[index].capture) {
+                    .local => |local| local,
+                    .discard => Common.invariant("string-pattern capture step lowered without a capture local"),
+                };
+                match_body = try self.bindPattern(capture, capture_local, match_body);
+            }
+        }
+
+        return try self.result.store.addCFStmt(.{ .str_match = .{
+            .source = source,
+            .prefix = try self.lirStrLiteral(str.prefix),
+            .steps = try self.result.store.addStrMatchSteps(lir_steps),
+            .end = switch (str.end) {
+                .exact => .exact,
+                .tail => .tail,
+            },
+            .on_match = match_body,
+            .on_miss = try self.patternMissJump(miss),
+        } });
     }
 
     fn bindPatternOrCrash(
@@ -2358,6 +2406,11 @@ const Lowerer = struct {
 
     fn addTemp(self: *Lowerer, ty: Type.TypeId) Common.LowerError!LIR.LocalId {
         return try self.addLocalForLayout(try self.layoutOfType(ty));
+    }
+
+    fn lirStrLiteral(self: *Lowerer, id: LambdaMono.StringLiteralId) Common.LowerError!LIR.StrLiteral {
+        const str_lit = self.program.stringLiteral(id);
+        return try self.result.store.insertStringView(str_lit.backing, str_lit.offset, str_lit.len);
     }
 
     fn addLocalForLayout(self: *Lowerer, layout_idx: layout.Idx) Common.LowerError!LIR.LocalId {

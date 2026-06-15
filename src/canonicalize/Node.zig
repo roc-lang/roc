@@ -153,6 +153,7 @@ pub const Tag = enum {
     pattern_f64_literal,
     pattern_small_dec_literal,
     pattern_str_literal,
+    pattern_str_interpolation,
     pattern_underscore,
 
     // Lambda Capture
@@ -346,6 +347,7 @@ pub const Payload = extern union {
     pattern_small_dec_literal: PatternSmallDecLiteral,
     pattern_dec_literal: PatternDecLiteral,
     pattern_str_literal: PatternStrLiteral,
+    pattern_str_interpolation: PatternStrInterpolation,
     pattern_frac_f32: PatternFracF32,
     pattern_frac_f64: PatternFracF64,
     pattern_malformed: PatternMalformed,
@@ -850,6 +852,11 @@ pub const Payload = extern union {
 
     pub const PatternStrLiteral = extern struct {
         literal: u32,
+        _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
+    };
+
+    pub const PatternStrInterpolation = extern struct {
+        data_idx: u32,
         _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
     };
 

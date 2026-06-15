@@ -582,6 +582,10 @@ fn retLenders(
                     try solver.stack.append(allocator, continuation);
                 }
             },
+            .str_match => |s| {
+                try solver.stack.append(allocator, s.on_match);
+                try solver.stack.append(allocator, s.on_miss);
+            },
             .join => |j| {
                 try solver.stack.append(allocator, j.body);
                 try solver.stack.append(allocator, j.remainder);
@@ -632,6 +636,10 @@ fn retAllUnique(
                 if (s.continuation) |continuation| {
                     try solver.stack.append(allocator, continuation);
                 }
+            },
+            .str_match => |s| {
+                try solver.stack.append(allocator, s.on_match);
+                try solver.stack.append(allocator, s.on_miss);
             },
             .join => |j| {
                 try solver.stack.append(allocator, j.body);
@@ -865,6 +873,16 @@ fn collectStmt(
                 try solver.stack.append(allocator, continuation);
             }
         },
+        .str_match => |str_match| {
+            for (store.getStrMatchSteps(str_match.steps)) |step| {
+                switch (step.capture) {
+                    .discard => {},
+                    .local => |local| noteDef(solver.defs, local, .fresh),
+                }
+            }
+            try solver.stack.append(allocator, str_match.on_match);
+            try solver.stack.append(allocator, str_match.on_miss);
+        },
         .join => |join_stmt| {
             // Join parameters are written at every jump; they stay owned.
             for (store.getLocalSpan(join_stmt.params)) |param| {
@@ -1022,6 +1040,10 @@ pub fn computeVisibility(
                         try stack.append(allocator, continuation);
                     }
                 },
+                .str_match => |stmt| {
+                    try stack.append(allocator, stmt.on_match);
+                    try stack.append(allocator, stmt.on_miss);
+                },
                 .join => |stmt| {
                     try stack.append(allocator, stmt.body);
                     try stack.append(allocator, stmt.remainder);
@@ -1113,6 +1135,14 @@ pub fn computeVisibility(
             .assign_packed_erased_fn => |assign| {
                 if (assign.capture) |capture| {
                     try addEdge(&edges, allocator, rc_local, @intFromEnum(assign.target), @intFromEnum(capture));
+                }
+            },
+            .str_match => |str_match| {
+                for (store.getStrMatchSteps(str_match.steps)) |step| {
+                    switch (step.capture) {
+                        .discard => {},
+                        .local => |local| try addEdge(&edges, allocator, rc_local, @intFromEnum(local), @intFromEnum(str_match.source)),
+                    }
                 }
             },
             .set_local => |assign| {
@@ -1474,6 +1504,18 @@ pub fn computeUniqueness(
                 marks.destroy(&foreign_def, assign.target);
                 if (assign.capture) |capture| marks.destroy(&destroyed, capture);
             },
+            .str_match => |str_match| {
+                marks.noteUse(&borrow_used, str_match.source);
+                for (store.getStrMatchSteps(str_match.steps)) |step| {
+                    switch (step.capture) {
+                        .discard => {},
+                        .local => |local| {
+                            marks.trackDef(&has_def, &multi_def, local);
+                            marks.destroy(&foreign_def, local);
+                        },
+                    }
+                }
+            },
             .assign_low_level => |assign| {
                 marks.trackDef(&has_def, &multi_def, assign.target);
                 if (assign.rc_effect.result_unique) {
@@ -1633,6 +1675,10 @@ fn computeSccs(solver: *Solver) SolveError!void {
                     if (s.continuation) |continuation| {
                         try solver.stack.append(allocator, continuation);
                     }
+                },
+                .str_match => |s| {
+                    try solver.stack.append(allocator, s.on_match);
+                    try solver.stack.append(allocator, s.on_miss);
                 },
                 .join => |j| {
                     try solver.stack.append(allocator, j.body);

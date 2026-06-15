@@ -5810,6 +5810,14 @@ const BodyContext = struct {
                 }
                 break :blk false;
             },
+            .str_interpolation => |str| blk: {
+                for (str.steps) |step| {
+                    if (step.capture) |capture| {
+                        if (self.patternContainsList(capture)) break :blk true;
+                    }
+                }
+                break :blk false;
+            },
             .assign,
             .pending,
             .num_literal,
@@ -5864,6 +5872,7 @@ const BodyContext = struct {
             .frac_f32_literal,
             .frac_f64_literal,
             .str_literal,
+            .str_interpolation,
             => true,
             .pending,
             .runtime_error,
@@ -6212,6 +6221,13 @@ const BodyContext = struct {
                     try self.preRegisterPatternBinders(item, item_ty);
                 }
             },
+            .str_interpolation => |str| {
+                for (str.steps) |step| {
+                    if (step.capture) |capture| {
+                        try self.preRegisterPatternBinders(capture, ty);
+                    }
+                }
+            },
             .pending,
             .num_literal,
             .small_dec_literal,
@@ -6290,9 +6306,36 @@ const BodyContext = struct {
                 try self.bindLiteralGuardPattern(conversion, ty)
             else
                 .{ .str_lit = try self.lowerStringLiteral(str.literal) },
+            .str_interpolation => |str| try self.lowerStrPatternCollectingLists(str, ty, checks_out),
             .underscore => .wildcard,
         };
         return try self.builder.program.addPat(.{ .ty = ty, .data = data });
+    }
+
+    fn lowerStrPatternCollectingLists(
+        self: *BodyContext,
+        str: anytype,
+        ty: Type.TypeId,
+        checks_out: *std.ArrayList(CollectedListPattern),
+    ) Allocator.Error!Ast.PatData {
+        const steps = try self.allocator.alloc(Ast.StrPatternStep, str.steps.len);
+        defer self.allocator.free(steps);
+
+        for (str.steps, 0..) |step, i| {
+            steps[i] = .{
+                .capture = if (step.capture) |capture| try self.lowerPatternAtTypeCollectingLists(capture, ty, checks_out) else null,
+                .delimiter = try self.lowerStringLiteral(step.delimiter),
+            };
+        }
+
+        return .{ .str_pattern = .{
+            .prefix = try self.lowerStringLiteral(str.prefix),
+            .steps = try self.builder.program.addStrPatternStepSpan(steps),
+            .end = switch (str.end) {
+                .exact => .exact,
+                .tail => .tail,
+            },
+        } };
     }
 
     fn lowerPatternSpanAtTypesCollectingLists(
@@ -6798,6 +6841,11 @@ const BodyContext = struct {
                 if (list.rest) |rest| if (rest.pattern) |rest_pattern| try self.savePatternBinders(rest_pattern, saved);
             },
             .tuple => |items| for (items) |child| try self.savePatternBinders(child, saved),
+            .str_interpolation => |str| {
+                for (str.steps) |step| {
+                    if (step.capture) |capture| try self.savePatternBinders(capture, saved);
+                }
+            },
             .pending,
             .num_literal,
             .small_dec_literal,
@@ -8402,9 +8450,35 @@ const BodyContext = struct {
                 try self.bindLiteralGuardPattern(conversion, ty)
             else
                 .{ .str_lit = try self.lowerStringLiteral(str.literal) },
+            .str_interpolation => |str| try self.lowerStrPattern(str, ty),
             .underscore => .wildcard,
         };
         return try self.builder.program.addPat(.{ .ty = ty, .data = data });
+    }
+
+    fn lowerStrPattern(
+        self: *BodyContext,
+        str: anytype,
+        ty: Type.TypeId,
+    ) Allocator.Error!Ast.PatData {
+        const steps = try self.allocator.alloc(Ast.StrPatternStep, str.steps.len);
+        defer self.allocator.free(steps);
+
+        for (str.steps, 0..) |step, i| {
+            steps[i] = .{
+                .capture = if (step.capture) |capture| try self.lowerPatternAtType(capture, ty) else null,
+                .delimiter = try self.lowerStringLiteral(step.delimiter),
+            };
+        }
+
+        return .{ .str_pattern = .{
+            .prefix = try self.lowerStringLiteral(str.prefix),
+            .steps = try self.builder.program.addStrPatternStepSpan(steps),
+            .end = switch (str.end) {
+                .exact => .exact,
+                .tail => .tail,
+            },
+        } };
     }
 
     fn lowerPatternSpanAtTypes(
