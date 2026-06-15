@@ -4504,6 +4504,63 @@ pub fn build(b: *std.Build) void {
                 "Run HTTP header Decoder platform Zig test",
             );
             run_http_header_decoder_platform_zig_test_step.dependOn(&run_http_header_decoder_platform_test.step);
+
+            const json_decoder_host_lib = createTestPlatformHostLib(
+                b,
+                "test_json_decoder_host",
+                "test/json-decoder/platform/host.zig",
+                http_host_target,
+                .ReleaseFast,
+                roc_modules,
+                strip,
+                omit_frame_pointer,
+                .{},
+            );
+
+            const copy_json_host = b.addUpdateSourceFiles();
+            const json_host_filename = if (http_host_target.result.os.tag == .windows) "host.lib" else "libhost.a";
+            const json_host_path = b.pathJoin(&.{ "test/json-decoder/platform/targets", target_dir, json_host_filename });
+            copy_json_host.addCopyFileToSource(json_decoder_host_lib.getEmittedBin(), json_host_path);
+
+            const final_json_host_step: *Step = if (http_host_target.result.os.tag != .windows) blk: {
+                const fix_json_host = FixArchivePaddingStep.create(b, json_host_path);
+                fix_json_host.step.dependOn(&copy_json_host.step);
+                break :blk &fix_json_host.step;
+            } else &copy_json_host.step;
+            b.getInstallStep().dependOn(final_json_host_step);
+
+            const json_decoder_platform_test = b.addTest(.{
+                .name = "json_decoder_platform_test",
+                .root_module = b.createModule(.{
+                    .root_source_file = b.path("src/cli/test/json_decoder_platform_test.zig"),
+                    .target = target,
+                    .optimize = optimize,
+                    .link_libc = true,
+                }),
+                .filters = test_filters,
+            });
+
+            const run_json_decoder_platform_test = b.addRunArtifact(json_decoder_platform_test);
+            if (run_args.len != 0) {
+                run_json_decoder_platform_test.addArgs(run_args);
+            }
+            build_test_zig_step.dependOn(&json_decoder_platform_test.step);
+            run_json_decoder_platform_test.step.dependOn(final_json_host_step);
+            run_json_decoder_platform_test.step.dependOn(build_roc_step);
+
+            const run_json_decoder_platform_test_for_summary = b.addRunArtifact(json_decoder_platform_test);
+            if (run_args.len != 0) {
+                run_json_decoder_platform_test_for_summary.addArgs(run_args);
+            }
+            run_json_decoder_platform_test_for_summary.step.dependOn(final_json_host_step);
+            run_json_decoder_platform_test_for_summary.step.dependOn(build_roc_step);
+            tests_summary.addRun(&run_json_decoder_platform_test_for_summary.step);
+
+            const run_json_decoder_platform_zig_test_step = b.step(
+                "run-test-zig-json-decoder-platform",
+                "Run JSON Decoder platform Zig test",
+            );
+            run_json_decoder_platform_zig_test_step.dependOn(&run_json_decoder_platform_test.step);
         }
     }
 

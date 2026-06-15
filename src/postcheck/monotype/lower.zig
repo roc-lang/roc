@@ -276,6 +276,15 @@ const LoweredCall = struct {
     data: Ast.ExprData,
 };
 
+const DecoderIntrinsic = enum {
+    str_decode,
+    record_init,
+    record_put,
+    record_finish,
+    tag_union_decode,
+    dispatch,
+};
+
 const ConstExprAddress = struct {
     store_module_bytes: [32]u8,
     type_module_bytes: [32]u8,
@@ -1345,6 +1354,24 @@ const Builder = struct {
                         .box => {
                             if (nominal.args.len != 1) Common.invariant("checked Box nominal must have exactly one type argument");
                             break :blk .{ .box = try self.lowerType(view, nominal.args[0]) };
+                        },
+                        .decoder_str_spec,
+                        .decoder_record_spec,
+                        .decoder_tag_union_spec,
+                        => {},
+                        .decoder_record_state => {
+                            if (nominal.args.len != 2) Common.invariant("checked Decoder.Record.State nominal must have exactly two type arguments");
+                            const shape_ty = try self.lowerType(view, nominal.args[0]);
+                            const slot_ty = try self.lowerType(view, nominal.args[1]);
+                            const fields_span = switch (self.shapeContent(shape_ty)) {
+                                .record => |fields| fields,
+                                else => Common.invariant("checked Decoder.Record.State shape argument was not a record type"),
+                            };
+                            const fields = self.program.types.fieldSpan(fields_span);
+                            const slots = try self.allocator.alloc(Type.TypeId, fields.len);
+                            defer self.allocator.free(slots);
+                            @memset(slots, slot_ty);
+                            break :blk .{ .tuple = try self.program.types.addSpan(slots) };
                         },
                     },
                     else => {},
@@ -3043,6 +3070,22 @@ const BodyContext = struct {
                     if (nominal.args.len != 1) Common.invariant("checked Box nominal must have exactly one type argument");
                     return try self.graph.newNode(.{ .box = try self.instNode(nominal.args[0]) });
                 },
+                .decoder_str_spec,
+                .decoder_record_spec,
+                .decoder_tag_union_spec,
+                => {},
+                .decoder_record_state => {
+                    if (nominal.args.len != 2) Common.invariant("checked Decoder.Record.State nominal must have exactly two type arguments");
+                    const shape_node = try self.instNode(nominal.args[0]);
+                    const slot_node = try self.instNode(nominal.args[1]);
+                    const fields = switch (self.graph.nodes.items[@intFromEnum(shape_node)]) {
+                        .record => |record| record.fields,
+                        else => Common.invariant("checked Decoder.Record.State shape argument was not a record type"),
+                    };
+                    const slots = try self.graph.arena().alloc(NodeId, fields.len);
+                    @memset(slots, slot_node);
+                    return try self.graph.newNode(.{ .tuple = slots });
+                },
             },
             else => {},
         }
@@ -3541,6 +3584,7 @@ const BodyContext = struct {
     }
 
     fn lowerCallExpr(self: *BodyContext, checked_ret_ty: checked.CheckedTypeId, call: anytype) Allocator.Error!Ast.ExprId {
+        if (try self.lowerDecoderIntrinsicCallExpr(checked_ret_ty, call, null)) |expr| return expr;
         const lowered = try self.lowerCall(checked_ret_ty, call);
         return try self.builder.program.addExpr(.{
             .ty = lowered.ret_ty,
@@ -3557,6 +3601,691 @@ const BodyContext = struct {
 
     fn functionReturnType(self: *BodyContext, fn_ty: Type.TypeId) Type.TypeId {
         return self.builder.functionShape(fn_ty, "checked call function type was not a function").ret;
+    }
+
+    fn lowerDecoderIntrinsicCallExpr(
+        self: *BodyContext,
+        checked_ret_ty: checked.CheckedTypeId,
+        call: anytype,
+        expected_ret_ty: ?Type.TypeId,
+    ) Allocator.Error!?Ast.ExprId {
+        const target = call.direct_target orelse return null;
+        const intrinsic = self.decoderIntrinsicForResolvedTarget(target) orelse return null;
+
+        if (intrinsic == .dispatch) {
+            return try self.lowerDecoderDispatch(call.args, expected_ret_ty);
+        }
+
+        const arg_tys = try self.allocator.alloc(Type.TypeId, call.args.len);
+        defer self.allocator.free(arg_tys);
+        for (call.args, 0..) |arg, index| {
+            arg_tys[index] = try self.decoderIntrinsicArgumentMonoType(arg);
+        }
+
+        _ = checked_ret_ty;
+
+        const ret_ty = try self.decoderIntrinsicReturnType(intrinsic, call.args, arg_tys, expected_ret_ty);
+        if (expected_ret_ty) |expected| {
+            if (!self.sameType(expected, ret_ty)) Common.invariant("checked decoder intrinsic lowered at a type different from its context type");
+        }
+
+        return switch (intrinsic) {
+            .str_decode => try self.lowerDecoderStrDecode(call.args, arg_tys, ret_ty),
+            .record_init => try self.lowerDecoderRecordInit(call.args, arg_tys, ret_ty),
+            .record_put => try self.lowerDecoderRecordPut(call.args, arg_tys, ret_ty),
+            .record_finish => try self.lowerDecoderRecordFinish(call.args, arg_tys, ret_ty),
+            .tag_union_decode => try self.lowerDecoderTagUnionDecode(call.args, arg_tys, ret_ty),
+            .dispatch => Common.invariant("Decoder.dispatch reached ordinary decoder intrinsic lowering"),
+        };
+    }
+
+    fn decoderIntrinsicReturnType(
+        self: *BodyContext,
+        intrinsic: DecoderIntrinsic,
+        args: []const checked.CheckedExprId,
+        arg_tys: []const Type.TypeId,
+        expected_ret_ty: ?Type.TypeId,
+    ) Allocator.Error!Type.TypeId {
+        const derived = switch (intrinsic) {
+            .str_decode => blk: {
+                if (args.len != 2 or arg_tys.len != 2) Common.invariant("Decoder.decode_str reached Monotype with an unexpected arity");
+                break :blk try self.lowerType(self.checkedDecoderStrSpecShape(args[0]));
+            },
+            .record_init => blk: {
+                if (args.len != 2 or arg_tys.len != 2) Common.invariant("Decoder.Record.init reached Monotype with an unexpected arity");
+                const fields = try self.decoderRecordFieldsFromSpecExpr(args[0]);
+                const slots = try self.allocator.alloc(Type.TypeId, fields.len);
+                defer self.allocator.free(slots);
+                @memset(slots, arg_tys[1]);
+                break :blk try self.builder.program.types.add(.{ .tuple = try self.builder.program.types.addSpan(slots) });
+            },
+            .record_put => blk: {
+                if (args.len != 5 or arg_tys.len != 5) Common.invariant("Decoder.Record.put reached Monotype with an unexpected arity");
+                break :blk arg_tys[1];
+            },
+            .record_finish => blk: {
+                if (args.len != 3 or arg_tys.len != 3) Common.invariant("Decoder.Record.finish reached Monotype with an unexpected arity");
+                break :blk try self.lowerType(self.checkedDecoderRecordSpecShape(args[0]));
+            },
+            .tag_union_decode => blk: {
+                if (args.len != 5 or arg_tys.len != 5) Common.invariant("Decoder.TagUnion.decode reached Monotype with an unexpected arity");
+                break :blk try self.lowerType(self.checkedDecoderTagUnionSpecShape(args[0]));
+            },
+            .dispatch => Common.invariant("Decoder.dispatch reached ordinary decoder intrinsic return type derivation"),
+        };
+
+        if (expected_ret_ty) |expected| {
+            if (!self.sameType(expected, derived)) Common.invariant("checked decoder intrinsic result differed from expected result type");
+            return expected;
+        }
+        return derived;
+    }
+
+    fn decoderIntrinsicArgumentMonoType(
+        self: *BodyContext,
+        checked_arg: checked.CheckedExprId,
+    ) Allocator.Error!Type.TypeId {
+        const expr = self.view.bodies.exprs[@intFromEnum(checked_arg)];
+        switch (expr.data) {
+            .lookup_local => |lookup| if (lookup.resolved) |ref_id| {
+                if (self.currentLocalForResolvedValue(ref_id)) |local_id| {
+                    return self.builder.program.locals.items[@intFromEnum(local_id)].ty;
+                }
+            },
+            .lookup_external => |resolved| if (resolved) |ref_id| {
+                if (self.currentLocalForResolvedValue(ref_id)) |local_id| {
+                    return self.builder.program.locals.items[@intFromEnum(local_id)].ty;
+                }
+            },
+            .lookup_required => |resolved| if (resolved) |ref_id| {
+                if (self.currentLocalForResolvedValue(ref_id)) |local_id| {
+                    return self.builder.program.locals.items[@intFromEnum(local_id)].ty;
+                }
+            },
+            else => {},
+        }
+        return (try self.callArgumentMonoType(checked_arg, null)) orelse Common.invariant("checked decoder intrinsic argument did not lower to a monotype");
+    }
+
+    fn lowerDecoderIntrinsicArgAtType(
+        self: *BodyContext,
+        checked_arg: checked.CheckedExprId,
+        ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const expr = self.view.bodies.exprs[@intFromEnum(checked_arg)];
+        const maybe_ref: ?checked.ResolvedValueId = switch (expr.data) {
+            .lookup_local => |lookup| lookup.resolved,
+            .lookup_external => |ref_id| ref_id,
+            .lookup_required => |ref_id| ref_id,
+            else => null,
+        };
+        if (maybe_ref) |ref_id| {
+            if (self.currentLocalForResolvedValue(ref_id)) |local_id| {
+                const local_ty = self.builder.program.locals.items[@intFromEnum(local_id)].ty;
+                if (!self.sameType(ty, local_ty)) {
+                    Common.invariant("checked decoder intrinsic local argument type differed from its concrete local type");
+                }
+                return try self.builder.program.addExpr(.{ .ty = local_ty, .data = .{ .local = local_id } });
+            }
+
+            const record = self.view.resolved_refs.records[@intFromEnum(ref_id)];
+            switch (record.ref) {
+                .local_proc => |local| return try self.builder.program.addExpr(.{
+                    .ty = ty,
+                    .data = .{ .fn_def = try self.fnTemplateForLocalProcWithMono(local, expr.ty, self.view.types.rootKey(expr.ty), ty) },
+                }),
+                .top_level_proc,
+                .imported_proc,
+                .hosted_proc,
+                .promoted_top_level_proc,
+                => |proc| return try self.lowerProcedureUseValueWithoutExtraConstraint(proc, ty),
+                .platform_required_proc => |proc| return try self.lowerProcedureUseValueWithoutExtraConstraint(proc.procedure, ty),
+                else => {},
+            }
+        }
+        return try self.lowerExprAtType(checked_arg, ty);
+    }
+
+    fn lowerProcedureUseValueWithoutExtraConstraint(
+        self: *BodyContext,
+        proc: checked.ProcedureUseTemplate,
+        mono_fn_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        return switch (proc.binding) {
+            .top_level => |top_level| blk: {
+                const view = self.builder.moduleForId(checked.topLevelProcedureModuleId(top_level));
+                const binding = view.top_level_procedure_bindings.get(top_level.binding);
+                break :blk try self.builder.lowerProcedureBindingValue(view, binding, mono_fn_ty);
+            },
+            .imported => |imported| blk: {
+                const view = self.builder.moduleForId(checked.importedProcedureModuleId(imported));
+                for (view.exported_procedure_bindings.bindings) |binding| {
+                    if (binding.binding.def == imported.def and binding.binding.pattern == imported.pattern) {
+                        const binding_source = schemeRoot(view, binding.source_scheme, "imported procedure binding source scheme was not output");
+                        const fn_template = self.builder.fnDefForImportedBindingBody(view, binding.body, binding_source, view.types.rootKey(binding_source), mono_fn_ty);
+                        const fn_id = try self.builder.lowerFnTemplateDef(view, fn_template);
+                        break :blk try self.builder.program.addExpr(.{
+                            .ty = mono_fn_ty,
+                            .data = .{ .fn_def = fn_id },
+                        });
+                    }
+                }
+                Common.invariant("imported procedure binding was not exported by its checked module");
+            },
+            .hosted => |hosted| blk: {
+                const source_fn_ty = proc.source_fn_ty_payload orelse
+                    Common.invariant("hosted procedure value reached decoder intrinsic callback lowering without source type");
+                const fn_template = self.builder.fnDefForTemplate(
+                    self.builder.moduleForId(moduleIdFromDigest(names.procTemplateModuleDigest(hosted.template))),
+                    hosted.template,
+                    source_fn_ty,
+                    proc.source_fn_ty_template,
+                    mono_fn_ty,
+                );
+                const fn_id = try self.builder.lowerFnTemplateDefFromContext(self, fn_template);
+                break :blk try self.builder.program.addExpr(.{ .ty = mono_fn_ty, .data = .{ .fn_def = fn_id } });
+            },
+            .platform_required => Common.invariant("platform required procedure reached decoder intrinsic callback lowering"),
+        };
+    }
+
+    fn decoderIntrinsicForResolvedTarget(self: *BodyContext, target: checked.ResolvedValueId) ?DecoderIntrinsic {
+        const raw = @intFromEnum(target);
+        if (raw >= self.view.resolved_refs.records.len) {
+            Common.invariant("checked direct call target is outside resolved value table");
+        }
+        const proc = switch (self.view.resolved_refs.records[raw].ref) {
+            .imported_proc => |proc| proc,
+            else => return null,
+        };
+        const imported = switch (proc.binding) {
+            .imported => |imported| imported,
+            else => return null,
+        };
+        const view = self.builder.moduleForId(checked.importedProcedureModuleId(imported));
+        if (view.module_env.module_role != .builtin) return null;
+
+        const def = view.module_env.store.getDef(imported.def);
+        const pattern = view.module_env.store.getPattern(def.pattern);
+        const ident = switch (pattern) {
+            .assign => |assign| assign.ident,
+            else => return null,
+        };
+        const text = view.module_env.getIdentText(ident);
+        if (Ident.textEql(text, "Builtin.Decoder.decode_str")) return .str_decode;
+        if (Ident.textEql(text, "Builtin.Decoder.Record.init")) return .record_init;
+        if (Ident.textEql(text, "Builtin.Decoder.Record.put")) return .record_put;
+        if (Ident.textEql(text, "Builtin.Decoder.Record.finish")) return .record_finish;
+        if (Ident.textEql(text, "Builtin.Decoder.TagUnion.decode")) return .tag_union_decode;
+        if (Ident.textEql(text, "Builtin.Decoder.dispatch")) return .dispatch;
+        return null;
+    }
+
+    fn lowerDecoderStrDecode(
+        self: *BodyContext,
+        args: []const checked.CheckedExprId,
+        arg_tys: []const Type.TypeId,
+        ret_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        if (args.len != 2 or arg_tys.len != 2) Common.invariant("Decoder.decode_str reached Monotype with an unexpected arity");
+        if (!self.typeHasBuiltinOwner(ret_ty, .str)) Common.invariant("Decoder.decode_str shape argument was not Str");
+
+        const spec_value = try self.lowerDecoderIntrinsicArgAtType(args[0], arg_tys[0]);
+        const slot_value = try self.lowerDecoderIntrinsicArgAtType(args[1], arg_tys[1]);
+        const decoded = try self.structuralDecoderFieldFromSlot(slot_value, arg_tys[1], ret_ty);
+        return try self.wrapWildcardLet(arg_tys[0], spec_value, decoded, ret_ty);
+    }
+
+    fn lowerDecoderRecordInit(
+        self: *BodyContext,
+        args: []const checked.CheckedExprId,
+        arg_tys: []const Type.TypeId,
+        ret_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        if (args.len != 2 or arg_tys.len != 2) Common.invariant("Decoder.Record.init reached Monotype with an unexpected arity");
+        const item_tys = self.builder.tupleItemTypes(ret_ty);
+
+        const spec_value = try self.lowerDecoderIntrinsicArgAtType(args[0], arg_tys[0]);
+        const default_value = try self.lowerDecoderIntrinsicArgAtType(args[1], arg_tys[1]);
+        const default_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), arg_tys[1]);
+
+        const items = try self.allocator.alloc(Ast.ExprId, item_tys.len);
+        defer self.allocator.free(items);
+        for (item_tys, 0..) |item_ty, index| {
+            if (!self.sameType(item_ty, arg_tys[1])) Common.invariant("Decoder.Record.State slot type did not match init default type");
+            items[index] = try self.builder.localExpr(default_local, item_ty);
+        }
+        const body = try self.builder.program.addExpr(.{
+            .ty = ret_ty,
+            .data = .{ .tuple = try self.builder.program.addExprSpan(items) },
+        });
+        const with_default = try self.wrapLet(default_local, arg_tys[1], default_value, body, ret_ty);
+        return try self.wrapWildcardLet(arg_tys[0], spec_value, with_default, ret_ty);
+    }
+
+    fn lowerDecoderRecordPut(
+        self: *BodyContext,
+        args: []const checked.CheckedExprId,
+        arg_tys: []const Type.TypeId,
+        ret_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        if (args.len != 5 or arg_tys.len != 5) Common.invariant("Decoder.Record.put reached Monotype with an unexpected arity");
+
+        const fields = try self.decoderRecordFieldsFromSpecExpr(args[0]);
+        const item_tys = self.builder.tupleItemTypes(ret_ty);
+        if (fields.len != item_tys.len) Common.invariant("Decoder.Record.State arity did not match derived record field count");
+
+        const spec_value = try self.lowerDecoderIntrinsicArgAtType(args[0], arg_tys[0]);
+        const state_value = try self.lowerDecoderIntrinsicArgAtType(args[1], arg_tys[1]);
+        const key_value = try self.lowerDecoderIntrinsicArgAtType(args[2], arg_tys[2]);
+        const slot_value = try self.lowerDecoderIntrinsicArgAtType(args[3], arg_tys[3]);
+        const matcher_value = try self.lowerDecoderIntrinsicArgAtType(args[4], arg_tys[4]);
+
+        const state_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), arg_tys[1]);
+        const key_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), arg_tys[2]);
+        const slot_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), arg_tys[3]);
+        const matcher_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), arg_tys[4]);
+
+        var body = try self.builder.localExpr(state_local, ret_ty);
+        var index = fields.len;
+        while (index > 0) {
+            index -= 1;
+            const updated = try self.decoderStateWithSlot(state_local, ret_ty, item_tys, slot_local, arg_tys[3], index);
+            const cond = try self.decoderFieldMatchCall(key_local, arg_tys[2], matcher_local, arg_tys[4], fields[index]);
+            body = try self.builder.ifExpr(cond, updated, body, ret_ty);
+        }
+
+        body = try self.wrapLet(matcher_local, arg_tys[4], matcher_value, body, ret_ty);
+        body = try self.wrapLet(slot_local, arg_tys[3], slot_value, body, ret_ty);
+        body = try self.wrapLet(key_local, arg_tys[2], key_value, body, ret_ty);
+        body = try self.wrapLet(state_local, arg_tys[1], state_value, body, ret_ty);
+        return try self.wrapWildcardLet(arg_tys[0], spec_value, body, ret_ty);
+    }
+
+    fn lowerDecoderRecordFinish(
+        self: *BodyContext,
+        args: []const checked.CheckedExprId,
+        arg_tys: []const Type.TypeId,
+        ret_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        if (args.len != 3 or arg_tys.len != 3) Common.invariant("Decoder.Record.finish reached Monotype with an unexpected arity");
+
+        const fields = try self.decoderRecordFieldsFromSpecExpr(args[0]);
+        const state_items = self.builder.tupleItemTypes(arg_tys[1]);
+        if (fields.len != state_items.len) Common.invariant("Decoder.Record.State arity did not match finish record field count");
+        const record_fields = switch (self.builder.shapeContent(ret_ty)) {
+            .record => |span| self.builder.program.types.fieldSpan(span),
+            else => Common.invariant("Decoder.Record.finish return type was not a record"),
+        };
+        if (record_fields.len != fields.len) Common.invariant("Decoder.Record.finish record field count differed from its spec");
+
+        const spec_value = try self.lowerDecoderIntrinsicArgAtType(args[0], arg_tys[0]);
+        const state_value = try self.lowerDecoderIntrinsicArgAtType(args[1], arg_tys[1]);
+        const state_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), arg_tys[1]);
+        const callback_template_args = self.builder.program.types.span(self.builder.functionShape(arg_tys[2], "Decoder.Record.finish callback was not a function").args);
+        if (callback_template_args.len != 2) Common.invariant("Decoder.Record.finish callback had an unexpected arity");
+        const callback_decoder_template_ty = callback_template_args[1];
+
+        const out_fields = try self.allocator.alloc(Ast.FieldExpr, record_fields.len);
+        defer self.allocator.free(out_fields);
+        for (record_fields, 0..) |field, index| {
+            const slot_expr = try self.builder.program.addExpr(.{
+                .ty = state_items[index],
+                .data = .{ .tuple_access = .{
+                    .tuple = try self.builder.localExpr(state_local, arg_tys[1]),
+                    .elem_index = @intCast(index),
+                } },
+            });
+            out_fields[index] = .{
+                .name = field.name,
+                .value = if (self.typeHasBuiltinOwner(field.ty, .str) or self.tryStrOptionalInfo(field.ty, self.decoderFieldValueInfo(state_items[index]).missing_tag) != null)
+                    try self.structuralDecoderFieldFromSlot(slot_expr, state_items[index], field.ty)
+                else
+                    try self.decoderCallbackCall(args[2], callback_decoder_template_ty, slot_expr, state_items[index], field.ty),
+            };
+        }
+
+        var body = try self.builder.program.addExpr(.{
+            .ty = ret_ty,
+            .data = .{ .record = try self.builder.program.addFieldExprSpan(out_fields) },
+        });
+        body = try self.wrapLet(state_local, arg_tys[1], state_value, body, ret_ty);
+        return try self.wrapWildcardLet(arg_tys[0], spec_value, body, ret_ty);
+    }
+
+    fn decoderRecordFieldsFromSpecExpr(self: *BodyContext, spec_expr: checked.CheckedExprId) Allocator.Error![]const Type.Field {
+        const shape_ty = try self.lowerType(self.checkedDecoderRecordSpecShape(spec_expr));
+        return switch (self.builder.shapeContent(shape_ty)) {
+            .record => |span| self.builder.program.types.fieldSpan(span),
+            else => Common.invariant("Decoder.Record.Spec shape argument was not a record type"),
+        };
+    }
+
+    fn checkedDecoderStrSpecShape(self: *BodyContext, spec_expr: checked.CheckedExprId) checked.CheckedTypeId {
+        const expr = self.view.bodies.exprs[@intFromEnum(spec_expr)];
+        return switch (resolvedPayload(self.view, expr.ty).payload) {
+            .nominal => |nominal| blk: {
+                if ((nominal.builtin orelse Common.invariant("Decoder.decode_str intrinsic spec argument was not a builtin nominal")) != .decoder_str_spec) {
+                    Common.invariant("Decoder.decode_str intrinsic spec argument was not DecoderStrSpec");
+                }
+                if (nominal.args.len != 2) Common.invariant("DecoderStrSpec had an unexpected type argument count");
+                break :blk nominal.args[0];
+            },
+            else => Common.invariant("Decoder.decode_str intrinsic spec argument was not nominal"),
+        };
+    }
+
+    fn checkedDecoderRecordSpecShape(self: *BodyContext, spec_expr: checked.CheckedExprId) checked.CheckedTypeId {
+        const expr = self.view.bodies.exprs[@intFromEnum(spec_expr)];
+        return switch (resolvedPayload(self.view, expr.ty).payload) {
+            .nominal => |nominal| blk: {
+                if ((nominal.builtin orelse Common.invariant("Decoder.Record intrinsic spec argument was not a builtin nominal")) != .decoder_record_spec) {
+                    Common.invariant("Decoder.Record intrinsic spec argument was not Decoder.Record.Spec");
+                }
+                if (nominal.args.len != 2) Common.invariant("Decoder.Record.Spec had an unexpected type argument count");
+                break :blk nominal.args[0];
+            },
+            else => Common.invariant("Decoder.Record intrinsic spec argument was not nominal"),
+        };
+    }
+
+    fn checkedDecoderTagUnionSpecShape(self: *BodyContext, spec_expr: checked.CheckedExprId) checked.CheckedTypeId {
+        const expr = self.view.bodies.exprs[@intFromEnum(spec_expr)];
+        return switch (resolvedPayload(self.view, expr.ty).payload) {
+            .nominal => |nominal| blk: {
+                if ((nominal.builtin orelse Common.invariant("Decoder.TagUnion intrinsic spec argument was not a builtin nominal")) != .decoder_tag_union_spec) {
+                    Common.invariant("Decoder.TagUnion intrinsic spec argument was not Decoder.TagUnion.Spec");
+                }
+                if (nominal.args.len != 2) Common.invariant("Decoder.TagUnion.Spec had an unexpected type argument count");
+                break :blk nominal.args[0];
+            },
+            else => Common.invariant("Decoder.TagUnion intrinsic spec argument was not nominal"),
+        };
+    }
+
+    fn lowerDecoderDispatch(
+        self: *BodyContext,
+        args: []const checked.CheckedExprId,
+        expected_ret_ty: ?Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        if (args.len != 5) Common.invariant("Decoder.dispatch reached Monotype with an unexpected arity");
+
+        const decoder_ty = try self.decoderIntrinsicArgumentMonoType(args[0]);
+        const slot_ty = try self.decoderIntrinsicArgumentMonoType(args[1]);
+        const decoder_args = self.decoderNamedArgs(decoder_ty);
+        if (!self.sameType(decoder_args.slot, slot_ty)) Common.invariant("Decoder.dispatch slot argument did not match decoder slot type");
+
+        const ret_ty = expected_ret_ty orelse decoder_args.shape;
+        if (!self.sameType(ret_ty, decoder_args.shape)) Common.invariant("Decoder.dispatch result type differed from decoder shape");
+
+        const backing_ty = self.builder.namedBackingType(decoder_ty) orelse Common.invariant("Decoder.dispatch decoder argument had no backing");
+        const selected = self.decoderDispatchSelection(ret_ty);
+        const payload_tys = self.decoderPayloadTypes(backing_ty, selected.tag_text);
+        if (payload_tys.len != 1) Common.invariant("Decoder.dispatch selected constructor had an unexpected payload count");
+
+        const decoder_value = try self.lowerDecoderIntrinsicArgAtType(args[0], decoder_ty);
+        const slot_value = try self.lowerDecoderIntrinsicArgAtType(args[1], slot_ty);
+        const slot_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), slot_ty);
+        const spec_expr = try self.builder.program.addExpr(.{
+            .ty = payload_tys[0],
+            .data = .unit,
+        });
+        const callback_arg_tys = [_]Type.TypeId{ payload_tys[0], slot_ty };
+        const callback_fn_ty = try self.builder.program.types.add(.{ .func = .{
+            .args = try self.builder.program.types.addSpan(&callback_arg_tys),
+            .ret = ret_ty,
+        } });
+        const callback_expr = try self.lowerDecoderIntrinsicArgAtType(args[selected.callback_index], callback_fn_ty);
+        const call_args = [_]Ast.ExprId{
+            spec_expr,
+            try self.builder.localExpr(slot_local, slot_ty),
+        };
+        var body = try self.builder.program.addExpr(.{
+            .ty = ret_ty,
+            .data = .{ .call_value = .{
+                .callee = callback_expr,
+                .args = try self.builder.program.addExprSpan(&call_args),
+            } },
+        });
+        body = try self.wrapLet(slot_local, slot_ty, slot_value, body, ret_ty);
+        return try self.wrapWildcardLet(decoder_ty, decoder_value, body, ret_ty);
+    }
+
+    const DecoderDispatchSelection = struct {
+        tag_text: []const u8,
+        callback_index: usize,
+    };
+
+    fn decoderDispatchSelection(self: *BodyContext, shape_ty: Type.TypeId) DecoderDispatchSelection {
+        if (self.typeHasBuiltinOwner(shape_ty, .str)) return .{ .tag_text = "Str", .callback_index = 2 };
+        return switch (self.builder.shapeContent(shape_ty)) {
+            .record => .{ .tag_text = "Record", .callback_index = 3 },
+            .tag_union => .{ .tag_text = "TagUnion", .callback_index = 4 },
+            else => Common.invariant("Decoder.dispatch shape was not supported"),
+        };
+    }
+
+    fn lowerDecoderTagUnionDecode(
+        self: *BodyContext,
+        args: []const checked.CheckedExprId,
+        arg_tys: []const Type.TypeId,
+        ret_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        if (args.len != 5 or arg_tys.len != 5) Common.invariant("Decoder.TagUnion.decode reached Monotype with an unexpected arity");
+
+        const tag_span = switch (self.builder.shapeContent(ret_ty)) {
+            .tag_union => |span| span,
+            else => Common.invariant("Decoder.TagUnion.decode return type was not a tag union"),
+        };
+        const tags = self.builder.program.types.tagSpan(tag_span);
+        const callback_template_args = self.builder.program.types.span(self.builder.functionShape(arg_tys[4], "Decoder.TagUnion.decode callback was not a function").args);
+        if (callback_template_args.len != 2) Common.invariant("Decoder.TagUnion.decode callback had an unexpected arity");
+        const callback_decoder_template_ty = callback_template_args[1];
+
+        const spec_value = try self.lowerDecoderIntrinsicArgAtType(args[0], arg_tys[0]);
+        const key_value = try self.lowerDecoderIntrinsicArgAtType(args[1], arg_tys[1]);
+        const slot_value = try self.lowerDecoderIntrinsicArgAtType(args[2], arg_tys[2]);
+        const matcher_value = try self.lowerDecoderIntrinsicArgAtType(args[3], arg_tys[3]);
+
+        const key_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), arg_tys[1]);
+        const slot_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), arg_tys[2]);
+        const matcher_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), arg_tys[3]);
+
+        var body = try self.unknownDecodedTagCrash(ret_ty);
+        var index = tags.len;
+        while (index > 0) {
+            index -= 1;
+            const tag_expr = try self.decodedTagUnionValue(tags[index], ret_ty, slot_local, arg_tys[2], args[4], callback_decoder_template_ty);
+            const cond = try self.decoderTagMatchCall(key_local, arg_tys[1], matcher_local, arg_tys[3], tags[index]);
+            body = try self.builder.ifExpr(cond, tag_expr, body, ret_ty);
+        }
+
+        body = try self.wrapLet(matcher_local, arg_tys[3], matcher_value, body, ret_ty);
+        body = try self.wrapLet(slot_local, arg_tys[2], slot_value, body, ret_ty);
+        body = try self.wrapLet(key_local, arg_tys[1], key_value, body, ret_ty);
+        return try self.wrapWildcardLet(arg_tys[0], spec_value, body, ret_ty);
+    }
+
+    fn decoderStateWithSlot(
+        self: *BodyContext,
+        state_local: Ast.LocalId,
+        state_ty: Type.TypeId,
+        item_tys: []const Type.TypeId,
+        slot_local: Ast.LocalId,
+        slot_ty: Type.TypeId,
+        replace_index: usize,
+    ) Allocator.Error!Ast.ExprId {
+        const items = try self.allocator.alloc(Ast.ExprId, item_tys.len);
+        defer self.allocator.free(items);
+        for (item_tys, 0..) |item_ty, index| {
+            if (!self.sameType(item_ty, slot_ty)) Common.invariant("Decoder.Record.State slot type did not match put slot type");
+            items[index] = if (index == replace_index)
+                try self.builder.localExpr(slot_local, item_ty)
+            else
+                try self.builder.program.addExpr(.{
+                    .ty = item_ty,
+                    .data = .{ .tuple_access = .{
+                        .tuple = try self.builder.localExpr(state_local, state_ty),
+                        .elem_index = @intCast(index),
+                    } },
+                });
+        }
+        return try self.builder.program.addExpr(.{
+            .ty = state_ty,
+            .data = .{ .tuple = try self.builder.program.addExprSpan(items) },
+        });
+    }
+
+    fn decoderCallbackCall(
+        self: *BodyContext,
+        callback_arg: checked.CheckedExprId,
+        decoder_template_ty: Type.TypeId,
+        slot_expr: Ast.ExprId,
+        slot_ty: Type.TypeId,
+        field_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const field_decoder = try self.decoderExprForType(decoder_template_ty, field_ty, slot_ty);
+        const field_decoder_ty = self.builder.program.exprs.items[@intFromEnum(field_decoder)].ty;
+        const callback_arg_tys = [_]Type.TypeId{ slot_ty, field_decoder_ty };
+        const callback_fn_ty = try self.builder.program.types.add(.{ .func = .{
+            .args = try self.builder.program.types.addSpan(&callback_arg_tys),
+            .ret = field_ty,
+        } });
+        const callback_expr = try self.lowerDecoderIntrinsicArgAtType(callback_arg, callback_fn_ty);
+        const call_args = [_]Ast.ExprId{ slot_expr, field_decoder };
+        return try self.builder.program.addExpr(.{
+            .ty = field_ty,
+            .data = .{ .call_value = .{
+                .callee = callback_expr,
+                .args = try self.builder.program.addExprSpan(&call_args),
+            } },
+        });
+    }
+
+    fn decodedTagUnionValue(
+        self: *BodyContext,
+        tag: Type.Tag,
+        ret_ty: Type.TypeId,
+        slot_local: Ast.LocalId,
+        slot_ty: Type.TypeId,
+        callback_arg: checked.CheckedExprId,
+        decoder_template_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const payload_tys = self.builder.program.types.span(tag.payloads);
+        const payloads = try self.allocator.alloc(Ast.ExprId, payload_tys.len);
+        defer self.allocator.free(payloads);
+        for (payload_tys, 0..) |payload_ty, index| {
+            const slot_expr = try self.builder.localExpr(slot_local, slot_ty);
+            payloads[index] = try self.decoderCallbackCall(callback_arg, decoder_template_ty, slot_expr, slot_ty, payload_ty);
+        }
+        return try self.tagUnionValue(ret_ty, tag, payloads);
+    }
+
+    fn tagUnionValue(
+        self: *BodyContext,
+        ret_ty: Type.TypeId,
+        tag: Type.Tag,
+        payloads: []const Ast.ExprId,
+    ) Allocator.Error!Ast.ExprId {
+        const backing_ty = self.builder.namedBackingType(ret_ty);
+        const tag_ty = backing_ty orelse ret_ty;
+        const backing_expr = try self.builder.program.addExpr(.{
+            .ty = tag_ty,
+            .data = .{ .tag = .{
+                .name = tag.name,
+                .payloads = try self.builder.program.addExprSpan(payloads),
+            } },
+        });
+        if (backing_ty == null) return backing_expr;
+        return try self.builder.program.addExpr(.{
+            .ty = ret_ty,
+            .data = .{ .nominal = backing_expr },
+        });
+    }
+
+    fn unknownDecodedTagCrash(self: *BodyContext, ret_ty: Type.TypeId) Allocator.Error!Ast.ExprId {
+        const msg = try self.builder.program.addStringLiteral("unknown decoded tag");
+        return try self.builder.program.addExpr(.{ .ty = ret_ty, .data = .{ .crash = msg } });
+    }
+
+    fn decoderTagMatchCall(
+        self: *BodyContext,
+        key_local: Ast.LocalId,
+        key_ty: Type.TypeId,
+        matcher_local: Ast.LocalId,
+        matcher_ty: Type.TypeId,
+        tag: Type.Tag,
+    ) Allocator.Error!Ast.ExprId {
+        const matcher_args = self.builder.program.types.span(self.builder.functionShape(matcher_ty, "Decoder.TagUnion.decode matcher was not a function").args);
+        if (matcher_args.len != 2) Common.invariant("Decoder.TagUnion.decode matcher had an unexpected arity");
+        if (!self.sameType(matcher_args[0], key_ty)) Common.invariant("Decoder.TagUnion.decode matcher key type differed from provided key type");
+        const tag_text = self.builder.program.names.tagLabelText(tag.name);
+        const tag_expr = try self.builder.stringExpr(tag_text, matcher_args[1]);
+        const key_expr = try self.builder.localExpr(key_local, key_ty);
+        const matcher_expr = try self.builder.localExpr(matcher_local, matcher_ty);
+        const call_args = [_]Ast.ExprId{ key_expr, tag_expr };
+        return try self.builder.program.addExpr(.{
+            .ty = self.builder.functionShape(matcher_ty, "Decoder.TagUnion.decode matcher was not a function").ret,
+            .data = .{ .call_value = .{
+                .callee = matcher_expr,
+                .args = try self.builder.program.addExprSpan(&call_args),
+            } },
+        });
+    }
+
+    fn decoderFieldMatchCall(
+        self: *BodyContext,
+        key_local: Ast.LocalId,
+        key_ty: Type.TypeId,
+        matcher_local: Ast.LocalId,
+        matcher_ty: Type.TypeId,
+        field: Type.Field,
+    ) Allocator.Error!Ast.ExprId {
+        const matcher_fn = self.builder.functionShape(matcher_ty, "Decoder.Record.put matcher was not a function");
+        const matcher_args = self.builder.program.types.span(matcher_fn.args);
+        if (matcher_args.len != 2) Common.invariant("Decoder.Record.put matcher did not have two arguments");
+        if (!self.sameType(matcher_args[0], key_ty)) Common.invariant("Decoder.Record.put matcher key type differed from provided key type");
+
+        const key_expr = try self.builder.localExpr(key_local, matcher_args[0]);
+        const field_expr = try self.builder.stringExpr(self.builder.program.names.recordFieldLabelText(field.name), matcher_args[1]);
+        const matcher_expr = try self.builder.localExpr(matcher_local, matcher_ty);
+        const call_args = [_]Ast.ExprId{ key_expr, field_expr };
+        return try self.builder.program.addExpr(.{
+            .ty = matcher_fn.ret,
+            .data = .{ .call_value = .{
+                .callee = matcher_expr,
+                .args = try self.builder.program.addExprSpan(&call_args),
+            } },
+        });
+    }
+
+    fn wrapLet(
+        self: *BodyContext,
+        local: Ast.LocalId,
+        ty: Type.TypeId,
+        value: Ast.ExprId,
+        rest: Ast.ExprId,
+        ret_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        return try self.builder.program.addExpr(.{ .ty = ret_ty, .data = .{ .let_ = .{
+            .bind = try self.builder.bindPat(local, ty),
+            .value = value,
+            .rest = rest,
+        } } });
+    }
+
+    fn wrapWildcardLet(
+        self: *BodyContext,
+        ty: Type.TypeId,
+        value: Ast.ExprId,
+        rest: Ast.ExprId,
+        ret_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        return try self.builder.program.addExpr(.{ .ty = ret_ty, .data = .{ .let_ = .{
+            .bind = try self.builder.program.addPat(.{ .ty = ty, .data = .wildcard }),
+            .value = value,
+            .rest = rest,
+        } } });
     }
 
     fn lowerCall(self: *BodyContext, checked_ret_ty: checked.CheckedTypeId, call: anytype) Allocator.Error!LoweredCall {
@@ -4479,6 +5208,7 @@ const BodyContext = struct {
         self.builder.program.current_loc = try self.sourceLocFor(expr.source_region);
         switch (expr.data) {
             .call => |call| {
+                if (try self.lowerDecoderIntrinsicCallExpr(expr.ty, call, ty)) |lowered| return lowered;
                 try self.constrainKnownType(expr.ty, ty);
                 const lowered = try self.lowerCall(expr.ty, call);
                 if (!self.sameType(ty, lowered.ret_ty)) {
@@ -5289,49 +6019,47 @@ const BodyContext = struct {
         };
         if (!decoder.structural_allowed) Common.invariant("structural decoder dispatch plan did not permit structural decoder lowering");
 
-        const record_ty = try self.lowerType(plan.dispatcher_ty);
-        const record_fields_span = switch (self.builder.shapeContent(record_ty)) {
-            .record => |fields| fields,
-            else => Common.invariant("structural decoder dispatcher was not a record type"),
-        };
-        const record_fields = self.builder.program.types.fieldSpan(record_fields_span);
-        if (record_fields.len != 4) Common.invariant("structural decoder currently supports exactly four record fields");
-
         const backing_ty = self.builder.namedBackingType(ret_ty) orelse
             Common.invariant("structural decoder return type was not a named Decoder type");
-        var record_tag_buf: [32]u8 = undefined;
-        const record_tag_text = std.fmt.bufPrint(&record_tag_buf, "Record{d}", .{record_fields.len}) catch
-            Common.invariant("structural decoder record tag name did not fit in stack buffer");
-        const record_payload_tys = self.decoderRecordPayloadTypes(backing_ty, record_tag_text);
-        if (record_payload_tys.len != record_fields.len + 1) Common.invariant("Decoder record constructor had an unexpected payload count");
-        for (record_payload_tys[0..record_fields.len]) |payload_ty| {
-            if (!self.typeHasBuiltinOwner(payload_ty, .str)) Common.invariant("Decoder record field-name payloads must be Str");
-        }
+        const decoder_args = self.decoderNamedArgs(ret_ty);
+        const shape_ty = try self.lowerType(plan.dispatcher_ty);
+        if (!self.sameType(decoder_args.shape, shape_ty)) Common.invariant("Decoder shape argument did not match structural decoder dispatcher");
+        const slot_info = self.decoderFieldValueInfo(decoder_args.slot);
 
-        const builder_fn_ty = record_payload_tys[record_fields.len];
-        const builder_fn = self.builder.functionShape(builder_fn_ty, "Decoder record builder payload was not a function");
-        const builder_arg_tys = self.builder.program.types.span(builder_fn.args);
-        if (builder_arg_tys.len != record_fields.len) Common.invariant("Decoder record builder arity did not match decoded record arity");
-        for (record_fields, builder_arg_tys) |field, slot_ty| {
-            const slot_info = self.decoderFieldValueInfo(slot_ty);
-            if (!self.decoderFieldTypeIsSupported(field.ty, slot_info)) Common.invariant("structural decoder record field type was not supported");
-        }
-        if (!self.sameType(builder_fn.ret, record_ty)) Common.invariant("Decoder record builder return type did not match decoded record");
+        const tag_text: []const u8 = if (self.typeHasBuiltinOwner(shape_ty, .str))
+            "Str"
+        else switch (self.builder.shapeContent(shape_ty)) {
+            .record => |fields_span| blk: {
+                for (self.builder.program.types.fieldSpan(fields_span)) |field| {
+                    if (!self.decoderFieldTypeIsSupported(field.ty, slot_info)) Common.invariant("structural decoder record field type was not supported");
+                }
+                break :blk "Record";
+            },
+            .tag_union => |tags_span| blk: {
+                for (self.builder.program.types.tagSpan(tags_span)) |tag| {
+                    for (self.builder.program.types.span(tag.payloads)) |payload_ty| {
+                        if (!self.decoderFieldTypeIsSupported(payload_ty, slot_info)) Common.invariant("structural decoder tag-union payload type was not supported");
+                    }
+                }
+                break :blk "TagUnion";
+            },
+            else => Common.invariant("structural decoder dispatcher was not a supported structural type"),
+        };
 
-        const payloads = try self.allocator.alloc(Ast.ExprId, record_fields.len + 1);
-        defer self.allocator.free(payloads);
-        for (record_fields, 0..) |field, i| {
-            const field_name = self.builder.program.names.recordFieldLabelText(field.name);
-            payloads[i] = try self.builder.stringExpr(field_name, record_payload_tys[i]);
-        }
-        payloads[record_fields.len] = try self.structuralDecoderRecordBuilder(record_ty, record_fields, builder_fn_ty, builder_arg_tys, plan.callable_ty);
+        const payload_tys = self.decoderPayloadTypes(backing_ty, tag_text);
+        if (payload_tys.len != 1) Common.invariant("Decoder structural constructor had an unexpected payload count");
+        const spec_expr = try self.builder.program.addExpr(.{
+            .ty = payload_tys[0],
+            .data = .unit,
+        });
+        const payloads = [_]Ast.ExprId{spec_expr};
 
-        const tag_name = try self.builder.program.names.internTagLabel(record_tag_text);
+        const tag_name = try self.builder.program.names.internTagLabel(tag_text);
         const backing_expr = try self.builder.program.addExpr(.{
             .ty = backing_ty,
             .data = .{ .tag = .{
                 .name = tag_name,
-                .payloads = try self.builder.program.addExprSpan(payloads),
+                .payloads = try self.builder.program.addExprSpan(&payloads),
             } },
         });
         const decoder_expr = try self.builder.program.addExpr(.{
@@ -5342,18 +6070,146 @@ const BodyContext = struct {
         return try self.wrapDispatchArgumentEvaluation(plan, callable_mono_ty, arg_ctx, pre_lowered, decoder_expr);
     }
 
-    fn decoderRecordPayloadTypes(self: *BodyContext, backing_ty: Type.TypeId, record_tag_text: []const u8) []const Type.TypeId {
+    const DecoderArgs = struct {
+        shape: Type.TypeId,
+        slot: Type.TypeId,
+    };
+
+    fn decoderNamedArgs(self: *BodyContext, decoder_ty: Type.TypeId) DecoderArgs {
+        return switch (self.builder.program.types.get(decoder_ty)) {
+            .named => |named| blk: {
+                const args = self.builder.program.types.span(named.args);
+                if (args.len != 2) Common.invariant("Decoder type had an unexpected argument count");
+                break :blk .{ .shape = args[0], .slot = args[1] };
+            },
+            else => Common.invariant("structural decoder return type was not named"),
+        };
+    }
+
+    fn decoderPayloadTypes(self: *BodyContext, backing_ty: Type.TypeId, tag_text: []const u8) []const Type.TypeId {
         return switch (self.builder.shapeContent(backing_ty)) {
             .tag_union => |tags| {
                 for (self.builder.program.types.tagSpan(tags)) |tag| {
-                    if (Ident.textEql(self.builder.program.names.tagLabelText(tag.name), record_tag_text)) {
+                    if (Ident.textEql(self.builder.program.names.tagLabelText(tag.name), tag_text)) {
                         return self.builder.program.types.span(tag.payloads);
                     }
                 }
-                Common.invariant("Decoder backing type did not contain requested record constructor");
+                Common.invariant("Decoder backing type did not contain requested constructor");
             },
             else => Common.invariant("Decoder backing type was not a tag union"),
         };
+    }
+
+    fn cloneNamedTypeWithArgs(
+        self: *BodyContext,
+        template_ty: Type.TypeId,
+        args: []const Type.TypeId,
+        backing_ty: Type.TypeId,
+    ) Allocator.Error!Type.TypeId {
+        const template = switch (self.builder.program.types.get(template_ty)) {
+            .named => |named| named,
+            else => Common.invariant("Decoder compiler helper expected a named template type"),
+        };
+        return try self.builder.program.types.add(.{ .named = .{
+            .named_type = template.named_type,
+            .def = template.def,
+            .kind = template.kind,
+            .builtin_owner = template.builtin_owner,
+            .args = try self.builder.program.types.addSpan(args),
+            .backing = .{ .ty = backing_ty, .use = template.backing.?.use },
+        } });
+    }
+
+    fn decoderSpecTypeFromTemplate(
+        self: *BodyContext,
+        template_ty: Type.TypeId,
+        shape_ty: Type.TypeId,
+        slot_ty: Type.TypeId,
+    ) Allocator.Error!Type.TypeId {
+        const args = [_]Type.TypeId{ shape_ty, slot_ty };
+        const backing_ty = switch (self.builder.program.types.get(template_ty)) {
+            .named => |named| (named.backing orelse Common.invariant("Decoder spec template had no backing")).ty,
+            else => Common.invariant("Decoder spec template was not named"),
+        };
+        return try self.cloneNamedTypeWithArgs(template_ty, &args, backing_ty);
+    }
+
+    fn decoderTypeFromTemplate(
+        self: *BodyContext,
+        template_decoder_ty: Type.TypeId,
+        shape_ty: Type.TypeId,
+        slot_ty: Type.TypeId,
+    ) Allocator.Error!Type.TypeId {
+        const template_backing = self.builder.namedBackingType(template_decoder_ty) orelse
+            Common.invariant("Decoder template type had no backing");
+        const template_tags_span = switch (self.builder.shapeContent(template_backing)) {
+            .tag_union => |tags| tags,
+            else => Common.invariant("Decoder template backing was not a tag union"),
+        };
+        const template_tags = self.builder.program.types.tagSpan(template_tags_span);
+        const tags = try self.allocator.alloc(Type.Tag, template_tags.len);
+        defer self.allocator.free(tags);
+
+        for (template_tags, 0..) |tag, index| {
+            const tag_text = self.builder.program.names.tagLabelText(tag.name);
+            const template_payloads = self.builder.program.types.span(tag.payloads);
+            const payloads = if (Ident.textEql(tag_text, "Str") or Ident.textEql(tag_text, "Record") or Ident.textEql(tag_text, "TagUnion")) blk: {
+                if (template_payloads.len != 1) Common.invariant("Decoder structural template tag had an unexpected payload count");
+                const spec_ty = try self.decoderSpecTypeFromTemplate(template_payloads[0], shape_ty, slot_ty);
+                break :blk try self.builder.program.types.addSpan(&[_]Type.TypeId{spec_ty});
+            } else blk: {
+                if (template_payloads.len != 0) Common.invariant("Decoder leaf template tag had unexpected payloads");
+                break :blk Type.Span.empty();
+            };
+            tags[index] = .{
+                .name = tag.name,
+                .checked_name = tag.checked_name,
+                .payloads = payloads,
+            };
+        }
+
+        const backing_ty = try self.builder.program.types.add(.{ .tag_union = try self.builder.program.types.addTags(tags) });
+        const args = [_]Type.TypeId{ shape_ty, slot_ty };
+        return try self.cloneNamedTypeWithArgs(template_decoder_ty, &args, backing_ty);
+    }
+
+    fn decoderExprForType(
+        self: *BodyContext,
+        template_decoder_ty: Type.TypeId,
+        shape_ty: Type.TypeId,
+        slot_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const decoder_ty = try self.decoderTypeFromTemplate(template_decoder_ty, shape_ty, slot_ty);
+        const backing_ty = self.builder.namedBackingType(decoder_ty) orelse Common.invariant("Decoder type had no backing");
+        const tag_text: []const u8 = if (self.typeHasBuiltinOwner(shape_ty, .str))
+            "Str"
+        else switch (self.builder.shapeContent(shape_ty)) {
+            .record => "Record",
+            .tag_union => "TagUnion",
+            else => Common.invariant("cannot derive Decoder expression for unsupported field type"),
+        };
+
+        const payload_tys = self.decoderPayloadTypes(backing_ty, tag_text);
+        const payloads = if (payload_tys.len == 0) blk: {
+            break :blk try self.builder.program.addExprSpan(&[_]Ast.ExprId{});
+        } else blk: {
+            if (payload_tys.len != 1) Common.invariant("Decoder expression structural payload had unexpected arity");
+            const spec_expr = try self.builder.program.addExpr(.{ .ty = payload_tys[0], .data = .unit });
+            break :blk try self.builder.program.addExprSpan(&[_]Ast.ExprId{spec_expr});
+        };
+
+        const tag_name = try self.builder.program.names.internTagLabel(tag_text);
+        const backing_expr = try self.builder.program.addExpr(.{
+            .ty = backing_ty,
+            .data = .{ .tag = .{
+                .name = tag_name,
+                .payloads = payloads,
+            } },
+        });
+        return try self.builder.program.addExpr(.{
+            .ty = decoder_ty,
+            .data = .{ .nominal = backing_expr },
+        });
     }
 
     const DecoderFieldValueInfo = struct {
@@ -5371,7 +6227,25 @@ const BodyContext = struct {
 
     fn decoderFieldTypeIsSupported(self: *BodyContext, ty: Type.TypeId, slot_info: DecoderFieldValueInfo) bool {
         if (self.typeHasBuiltinOwner(ty, .str)) return true;
-        return self.tryStrOptionalInfo(ty, slot_info.missing_tag) != null;
+        if (self.tryStrOptionalInfo(ty, slot_info.missing_tag) != null) return true;
+        return switch (self.builder.shapeContent(ty)) {
+            .record => |fields_span| blk: {
+                for (self.builder.program.types.fieldSpan(fields_span)) |field| {
+                    if (!self.decoderFieldTypeIsSupported(field.ty, slot_info)) break :blk false;
+                }
+                break :blk true;
+            },
+            .tag_union => |tags_span| blk: {
+                for (self.builder.program.types.tagSpan(tags_span)) |tag| {
+                    for (self.builder.program.types.span(tag.payloads)) |payload_ty| {
+                        if (!self.decoderFieldTypeIsSupported(payload_ty, slot_info)) break :blk false;
+                    }
+                }
+                break :blk true;
+            },
+            .zst => true,
+            else => false,
+        };
     }
 
     fn decoderFieldValueInfo(self: *BodyContext, slot_ty: Type.TypeId) DecoderFieldValueInfo {
@@ -8494,7 +9368,10 @@ const BodyContext = struct {
 
     fn lowerPatternAtType(self: *BodyContext, pattern_id: checked.CheckedPatternId, ty: Type.TypeId) Allocator.Error!Ast.PatId {
         const pattern = self.view.bodies.patterns[@intFromEnum(pattern_id)];
-        try self.constrainTypeToMono(pattern.ty, ty);
+        switch (pattern.data) {
+            .assign => {},
+            else => try self.constrainTypeToMono(pattern.ty, ty),
+        }
         const data: Ast.PatData = switch (pattern.data) {
             .pending,
             .runtime_error,
@@ -8892,6 +9769,10 @@ fn builtinOwner(builtin: ?checked.CheckedBuiltinNominal) ?static_dispatch.Builti
         .dec => .dec,
         .list => .list,
         .box => .box,
+        .decoder_str_spec => .decoder_str_spec,
+        .decoder_record_spec => .decoder_record_spec,
+        .decoder_record_state => .decoder_record_state,
+        .decoder_tag_union_spec => .decoder_tag_union_spec,
     };
 }
 

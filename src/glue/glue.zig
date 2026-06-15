@@ -1038,6 +1038,11 @@ const TypeTable = struct {
                     if (nominal.args.len >= 1) return .{ .box = try self.getOrInsert(artifact, nominal.args[0]) };
                     return .{ .unknown = try self.gpa.dupe(u8, "Box") };
                 },
+                .decoder_str_spec,
+                .decoder_record_spec,
+                .decoder_tag_union_spec,
+                => return .unit,
+                .decoder_record_state => return try self.convertDecoderRecordState(artifact, nominal.args),
                 .str => return .str_,
                 .bool => return .bool_,
                 .dec => return .dec,
@@ -1075,6 +1080,26 @@ const TypeTable = struct {
             },
             else => backing_repr,
         };
+    }
+
+    fn convertDecoderRecordState(
+        self: *TypeTable,
+        artifact: *const CheckedArtifact.CheckedModuleArtifact,
+        args: []const CheckedArtifact.CheckedTypeId,
+    ) Allocator.Error!CollectedTypeRepr {
+        if (args.len != 2) glueInvariant("Decoder.Record.State nominal had non-binary args", .{});
+
+        var shape_fields = std.ArrayList(CheckedArtifact.CheckedRecordField).empty;
+        defer shape_fields.deinit(self.gpa);
+        if (!(try collectRecordFieldsForRoot(self.gpa, artifact, args[0], &shape_fields))) {
+            glueInvariant("Decoder.Record.State shape argument was not a record", .{});
+        }
+
+        const elems = try self.gpa.alloc(CheckedArtifact.CheckedTypeId, shape_fields.items.len);
+        defer self.gpa.free(elems);
+        for (elems) |*elem| elem.* = args[1];
+
+        return self.convertTuple(artifact, elems);
     }
 
     fn convertRecord(

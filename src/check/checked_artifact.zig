@@ -833,6 +833,10 @@ fn checkedTypeIsConcreteCompileTimeRootInner(
                     .primitive,
                     .list,
                     .box,
+                    .decoder_str_spec,
+                    .decoder_record_spec,
+                    .decoder_record_state,
+                    .decoder_tag_union_spec,
                     => break :blk true,
                     .bool_tag_union => {},
                 },
@@ -1538,6 +1542,10 @@ pub const CheckedBuiltinNominal = enum {
     dec,
     list,
     box,
+    decoder_str_spec,
+    decoder_record_spec,
+    decoder_record_state,
+    decoder_tag_union_spec,
 };
 
 /// Public `CheckedPrimitive` declaration.
@@ -1565,6 +1573,10 @@ pub const CheckedBuiltinRuntimeEncoding = union(enum) {
     bool_tag_union,
     list,
     box,
+    decoder_str_spec,
+    decoder_record_spec,
+    decoder_record_state,
+    decoder_tag_union_spec,
 };
 
 /// Public `builtinRuntimeEncoding` function.
@@ -1587,6 +1599,10 @@ pub fn builtinRuntimeEncoding(builtin_nominal: CheckedBuiltinNominal) CheckedBui
         .dec => .{ .primitive = .dec },
         .list => .list,
         .box => .box,
+        .decoder_str_spec => .decoder_str_spec,
+        .decoder_record_spec => .decoder_record_spec,
+        .decoder_record_state => .decoder_record_state,
+        .decoder_tag_union_spec => .decoder_tag_union_spec,
     };
 }
 
@@ -4482,6 +4498,10 @@ fn checkedBuiltinNominalForIdent(module_env: *const ModuleEnv, ident: base.Ident
     if (ident.eql(common.dec) or ident.eql(common.dec_type)) return .dec;
     if (ident.eql(common.list) or ident.eql(common.builtin_list)) return .list;
     if (ident.eql(common.box) or ident.eql(common.builtin_box)) return .box;
+    if (ident.eql(common.builtin_decoder_str_spec)) return .decoder_str_spec;
+    if (ident.eql(common.builtin_decoder_record_spec)) return .decoder_record_spec;
+    if (ident.eql(common.builtin_decoder_record_state)) return .decoder_record_state;
+    if (ident.eql(common.builtin_decoder_tag_union_spec)) return .decoder_tag_union_spec;
     return null;
 }
 
@@ -12716,12 +12736,19 @@ fn checkedTypeHasNoReachableCallableSlotsInner(
                     .f64,
                     .dec,
                     .bool,
+                    .decoder_str_spec,
+                    .decoder_record_spec,
+                    .decoder_tag_union_spec,
                     => break :blk true,
                     .list,
                     .box,
                     => {
                         if (nominal.args.len != 1) checkedArtifactInvariant("builtin container nominal had non-unary args", .{});
                         break :blk try checkedTypeHasNoReachableCallableSlotsInner(checked_types, nominal.args[0], active);
+                    },
+                    .decoder_record_state => {
+                        if (nominal.args.len != 2) checkedArtifactInvariant("Decoder.Record.State nominal had non-binary args", .{});
+                        break :blk try checkedTypeSpanHasNoReachableCallableSlots(checked_types, nominal.args, active);
                     },
                 }
             }

@@ -32,6 +32,7 @@ pub const Diagnostic = @import("Diagnostic.zig").Diagnostic;
 pub const BuiltinIndices = struct {
     // Statement indices - positions within the Builtin module
     bool_type: Statement.Idx,
+    decoder_type: Statement.Idx,
     try_type: Statement.Idx,
     dict_type: Statement.Idx,
     set_type: Statement.Idx,
@@ -41,6 +42,12 @@ pub const BuiltinIndices = struct {
     stream_type: Statement.Idx,
     list_type: Statement.Idx,
     box_type: Statement.Idx,
+    decoder_str_spec_type: Statement.Idx,
+    decoder_record_type: Statement.Idx,
+    decoder_record_spec_type: Statement.Idx,
+    decoder_record_state_type: Statement.Idx,
+    decoder_tag_union_type: Statement.Idx,
+    decoder_tag_union_spec_type: Statement.Idx,
     utf8_problem_type: Statement.Idx,
     u8_type: Statement.Idx,
     i8_type: Statement.Idx,
@@ -59,6 +66,7 @@ pub const BuiltinIndices = struct {
 
     // Ident indices - simple unqualified names (e.g., "Bool", "U8")
     bool_ident: Ident.Idx,
+    decoder_ident: Ident.Idx,
     try_ident: Ident.Idx,
     dict_ident: Ident.Idx,
     set_ident: Ident.Idx,
@@ -68,6 +76,12 @@ pub const BuiltinIndices = struct {
     stream_ident: Ident.Idx,
     list_ident: Ident.Idx,
     box_ident: Ident.Idx,
+    decoder_str_spec_ident: Ident.Idx,
+    decoder_record_ident: Ident.Idx,
+    decoder_record_spec_ident: Ident.Idx,
+    decoder_record_state_ident: Ident.Idx,
+    decoder_tag_union_ident: Ident.Idx,
+    decoder_tag_union_spec_ident: Ident.Idx,
     utf8_problem_ident: Ident.Idx,
     u8_ident: Ident.Idx,
     i8_ident: Ident.Idx,

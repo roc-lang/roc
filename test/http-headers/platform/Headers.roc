@@ -1,29 +1,19 @@
-import Decoder exposing [Decoder, Decoder.*]
-
 Headers :: { raw : Str }.{
-	decode : Headers, Decoder(a) -> a
-	decode = |headers, decoder|
-		match decoder {
-			Record4(first_name, second_name, third_name, fourth_name, build) =>
-				decode_record4(headers.raw, first_name, second_name, third_name, fourth_name, build)
-		}
+	FieldValue := [Present(Str), Missing].{}
 
-	decode_record4 : Str, Str, Str, Str, Str, (Decoder.FieldValue, Decoder.FieldValue, Decoder.FieldValue, Decoder.FieldValue -> a) -> a
-	decode_record4 = |headers, first_name, second_name, third_name, fourth_name, build| {
+	decode : Headers, Decoder(a, FieldValue) -> a
+	decode = |headers, decoder|
+		Decoder.dispatch(decoder, FieldValue.Present(headers.raw), decode_str, decode_record_slot, decode_tag_union_slot)
+
+	decode_record : Str, DecoderRecordSpec(a, FieldValue) -> a
+	decode_record = |headers, spec| {
 		request_line = Str.find_first(headers, "\r\n")
 		var $remaining = if request_line.found {
 			request_line.after
 		} else {
 			""
 		}
-		var $first_value = ""
-		var $second_value = ""
-		var $third_value = ""
-		var $fourth_value = ""
-		var $found_first = False
-		var $found_second = False
-		var $found_third = False
-		var $found_fourth = False
+		var $state = Decoder.Record.init(spec, FieldValue.Missing)
 		var $keep_scanning = request_line.found
 
 		while $keep_scanning {
@@ -41,21 +31,7 @@ Headers :: { raw : Str }.{
 						name = header_split.before
 						value = Str.trim(header_split.after)
 
-						if header_name_matches_field(name, first_name) {
-							$first_value = value
-							$found_first = True
-						} else if header_name_matches_field(name, second_name) {
-							$second_value = value
-							$found_second = True
-						} else if header_name_matches_field(name, third_name) {
-							$third_value = value
-							$found_third = True
-						} else if header_name_matches_field(name, fourth_name) {
-							$fourth_value = value
-							$found_fourth = True
-						} else {
-							{}
-						}
+						$state = Decoder.Record.put(spec, $state, name, FieldValue.Present(value), header_name_matches_field)
 					} else {
 						{}
 					}
@@ -67,29 +43,38 @@ Headers :: { raw : Str }.{
 			}
 		}
 
-		first = if $found_first {
-			Decoder.FieldValue.Present($first_value)
-		} else {
-			Decoder.FieldValue.Missing
-		}
-		second = if $found_second {
-			Decoder.FieldValue.Present($second_value)
-		} else {
-			Decoder.FieldValue.Missing
-		}
-		third = if $found_third {
-			Decoder.FieldValue.Present($third_value)
-		} else {
-			Decoder.FieldValue.Missing
-		}
-		fourth = if $found_fourth {
-			Decoder.FieldValue.Present($fourth_value)
-		} else {
-			Decoder.FieldValue.Missing
+		Decoder.Record.finish(spec, $state, decode_slot)
+	}
+
+	decode_slot : FieldValue, Decoder(a, FieldValue) -> a
+	decode_slot = |slot, decoder|
+		Decoder.dispatch(decoder, slot, decode_str, decode_record_slot, decode_tag_union_slot)
+
+	decode_str : DecoderStrSpec(a, FieldValue), FieldValue -> a
+	decode_str = |spec, slot|
+		Decoder.decode_str(spec, slot)
+
+	decode_record_slot : DecoderRecordSpec(a, FieldValue), FieldValue -> a
+	decode_record_slot = |spec, slot|
+		match slot {
+			Present(value) => decode_record(value, spec)
+			Missing => {
+				crash "missing required decoded field"
+			}
 		}
 
-		build(first, second, third, fourth)
-	}
+	decode_tag_union_slot : DecoderTagUnionSpec(a, FieldValue), FieldValue -> a
+	decode_tag_union_slot = |spec, slot|
+		match slot {
+			Present(value) => decode_tag_union(value, spec)
+			Missing => {
+				crash "missing required decoded field"
+			}
+		}
+
+	decode_tag_union : Str, DecoderTagUnionSpec(a, FieldValue) -> a
+	decode_tag_union = |tag_name, spec|
+		Decoder.TagUnion.decode(spec, tag_name, FieldValue.Present(tag_name), Str.is_eq, decode_slot)
 
 	header_name_matches_field : Str, Str -> Bool
 	header_name_matches_field = |header_name, field_name| {

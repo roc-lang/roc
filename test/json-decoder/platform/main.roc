@@ -1,8 +1,8 @@
-platform "http-headers"
+platform "json-decoder"
 	requires {
-		main! : Headers => U64
+		main! : Json => U64
 	}
-	exposes [Headers]
+	exposes [Json]
 	packages {}
 	provides { "roc_main": main_for_host! }
 	targets: {
@@ -15,7 +15,7 @@ platform "http-headers"
 		arm64win: { inputs: ["host.lib", app], output: Exe },
 	}
 
-import Headers
+import Json
 
-main_for_host! : Headers => U64
-main_for_host! = |headers| main!(headers)
+main_for_host! : Json => U64
+main_for_host! = |json| main!(json)

@@ -3582,7 +3582,13 @@ const Lowerer = struct {
             .f32 => .f32,
             .f64 => .f64,
             .dec => .dec,
-            .list, .box => null,
+            .list,
+            .box,
+            .decoder_str_spec,
+            .decoder_record_spec,
+            .decoder_record_state,
+            .decoder_tag_union_spec,
+            => null,
         };
     }
 

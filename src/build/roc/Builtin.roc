@@ -1,4 +1,67 @@
 Builtin :: [].{
+	DecoderStrSpec(_shape, _slot) :: {}.{}
+	DecoderRecordSpec(_shape, _slot) :: {}.{}
+	DecoderRecordState(_shape, _slot) :: {}.{}
+	DecoderTagUnionSpec(_shape, _slot) :: {}.{}
+
+	Decoder(shape, slot) := [
+		Str(DecoderStrSpec(shape, slot)),
+		Record(DecoderRecordSpec(shape, slot)),
+		TagUnion(DecoderTagUnionSpec(shape, slot)),
+	].{
+		Record := [ProvidedByCompiler].{
+			# Compiler-generated descriptor for a derived record decoder. This is
+			# zero-sized at runtime; userspace can pass it around but cannot inspect it.
+			Spec(shape, slot) : DecoderRecordSpec(shape, slot)
+
+			# Compiler-generated field slot state for a derived record decoder. Its
+			# runtime representation is selected by Monotype lowering from _shape.
+			State(shape, slot) : DecoderRecordState(shape, slot)
+
+			init : DecoderRecordSpec(_shape, _slot), _slot -> DecoderRecordState(_shape, _slot)
+			init = |_, _| {
+				crash "Decoder.Record.init is compiler-generated"
+			}
+
+			put : DecoderRecordSpec(_shape, _slot), DecoderRecordState(_shape, _slot), Str, _slot, (Str, Str -> Bool) -> DecoderRecordState(_shape, _slot)
+			put = |_, _, _, _, _| {
+				crash "Decoder.Record.put is compiler-generated"
+			}
+
+			finish : DecoderRecordSpec(_shape, _slot), DecoderRecordState(_shape, _slot), (_slot, Decoder(_field, _slot) -> _field) -> _shape
+			finish = |_, _, _| {
+				crash "Decoder.Record.finish is compiler-generated"
+			}
+		}
+
+		TagUnion := [ProvidedByCompiler].{
+			# Compiler-generated descriptor for a derived tag-union decoder. This is
+			# zero-sized at runtime; userspace can pass it around but cannot inspect it.
+			Spec(shape, slot) : DecoderTagUnionSpec(shape, slot)
+
+			decode : DecoderTagUnionSpec(_shape, _slot), Str, _slot, (Str, Str -> Bool), (_slot, Decoder(_field, _slot) -> _field) -> _shape
+			decode = |_, _, _, _, _| {
+				crash "Decoder.TagUnion.decode is compiler-generated"
+			}
+		}
+
+		dispatch : Decoder(_shape, _slot), _slot, (DecoderStrSpec(_shape, _slot), _slot -> _shape), (DecoderRecordSpec(_shape, _slot), _slot -> _shape), (DecoderTagUnionSpec(_shape, _slot), _slot -> _shape) -> _shape
+		dispatch = |_, _, _, _, _| {
+			crash "Decoder.dispatch is compiler-generated"
+		}
+
+		decode_str : DecoderStrSpec(_shape, _slot), _slot -> _shape
+		decode_str = |_, _| {
+			crash "Decoder.decode_str is compiler-generated"
+		}
+
+		derive : {} -> Decoder(shape, slot) where [shape.decoder : () -> Decoder(shape, slot)]
+		derive = |_| {
+			Shape : shape
+			Shape.decoder()
+		}
+	}
+
 	Str :: [ProvidedByCompiler].{
 		Utf8Problem := [
 			InvalidStartByte,

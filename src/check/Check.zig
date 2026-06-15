@@ -11167,35 +11167,46 @@ fn decoderSlotInfoFromDecoderVar(self: *Self, var_: Var, record_arity: usize) Al
 }
 
 fn decoderSlotInfoFromDecoderTagUnion(self: *Self, tag_union: types_mod.TagUnion, record_arity: usize) Allocator.Error!?DerivedDecoderSlotInfo {
-    var record_tag_buf: [32]u8 = undefined;
-    const record_tag_name = std.fmt.bufPrint(&record_tag_buf, "Record{d}", .{record_arity}) catch
-        return null;
-
     const tags = self.types.getTagsSlice(tag_union.tags);
     for (tags.items(.name), tags.items(.args)) |name, payload_range| {
-        if (!Ident.textEql(self.cir.getIdentStoreConst().getText(name), record_tag_name)) continue;
+        if (!Ident.textEql(self.cir.getIdentStoreConst().getText(name), "Record")) continue;
 
         const payloads = self.types.sliceVars(payload_range);
-        if (payloads.len != record_arity + 1) return null;
-
-        const builder_fn = (try self.funcFromVar(payloads[payloads.len - 1])) orelse return null;
-        const builder_args = self.types.sliceVars(builder_fn.args);
-        if (builder_args.len != record_arity) return null;
-
-        var missing_tag: ?Ident.Idx = null;
-        for (builder_args) |builder_arg| {
-            const arg_missing_tag = (try self.decoderFieldSlotMissingTag(builder_arg)) orelse return null;
-            if (missing_tag) |previous| {
-                if (!self.identTextEql(previous, arg_missing_tag)) return null;
-            } else {
-                missing_tag = arg_missing_tag;
-            }
-        }
-
-        return .{ .missing_tag = missing_tag orelse return null };
+        if (payloads.len != 1) return null;
+        return try self.decoderSlotInfoFromDecoderRecordSpec(payloads[0], record_arity);
     }
 
     return null;
+}
+
+fn decoderSlotInfoFromDecoderRecordSpec(self: *Self, var_: Var, record_arity: usize) Allocator.Error!?DerivedDecoderSlotInfo {
+    return switch (self.types.resolveVar(var_).desc.content) {
+        .structure => |structure| switch (structure) {
+            .nominal_type => |nominal| blk: {
+                if (!self.nominalIsBuiltinDecoderRecordSpec(nominal)) return null;
+                const args = self.types.sliceNominalArgs(nominal);
+                if (args.len != 2) return null;
+                if (!try self.decoderShapeHasRecordArity(args[0], record_arity)) return null;
+                const missing_tag = (try self.decoderFieldSlotMissingTag(args[1])) orelse return null;
+                break :blk .{ .missing_tag = missing_tag };
+            },
+            else => null,
+        },
+        .alias => |alias| try self.decoderSlotInfoFromDecoderRecordSpec(self.types.getAliasBackingVar(alias), record_arity),
+        .err, .flex, .rigid => null,
+    };
+}
+
+fn decoderShapeHasRecordArity(self: *Self, var_: Var, record_arity: usize) Allocator.Error!bool {
+    return switch (self.types.resolveVar(var_).desc.content) {
+        .structure => |structure| switch (structure) {
+            .record => |record| self.types.getRecordFieldsSlice(record.fields).items(.var_).len == record_arity,
+            else => false,
+        },
+        .alias => |alias| try self.decoderShapeHasRecordArity(self.types.getAliasBackingVar(alias), record_arity),
+        .err => true,
+        .flex, .rigid => false,
+    };
 }
 
 fn identTextEql(self: *Self, lhs: Ident.Idx, rhs: Ident.Idx) bool {
@@ -11212,37 +11223,60 @@ fn funcFromVar(self: *Self, var_: Var) Allocator.Error!?types_mod.Func {
 }
 
 fn decoderFieldSlotMissingTag(self: *Self, var_: Var) Allocator.Error!?Ident.Idx {
+    var tags: DecoderFieldSlotTags = .{};
+    if (!try self.collectDecoderFieldSlotTags(var_, &tags)) return null;
+    if (tags.present_count != 1 or tags.missing_count != 1) return null;
+    return tags.missing_tag;
+}
+
+const DecoderFieldSlotTags = struct {
+    present_count: u8 = 0,
+    missing_count: u8 = 0,
+    missing_tag: ?Ident.Idx = null,
+};
+
+fn collectDecoderFieldSlotTags(self: *Self, var_: Var, tags: *DecoderFieldSlotTags) Allocator.Error!bool {
     return switch (self.types.resolveVar(var_).desc.content) {
         .structure => |structure| switch (structure) {
-            .nominal_type => |nominal| try self.decoderFieldSlotMissingTag(self.types.getNominalBackingVar(nominal)),
-            .tag_union => |tag_union| try self.decoderFieldSlotMissingTagFromUnion(tag_union),
-            else => null,
+            .nominal_type => |nominal| try self.collectDecoderFieldSlotTags(self.types.getNominalBackingVar(nominal), tags),
+            .tag_union => |tag_union| blk: {
+                if (!try self.collectDecoderFieldSlotTagsFromUnion(tag_union, tags)) break :blk false;
+                break :blk try self.collectDecoderFieldSlotTags(tag_union.ext, tags);
+            },
+            .empty_tag_union => true,
+            else => false,
         },
-        .alias => |alias| try self.decoderFieldSlotMissingTag(self.types.getAliasBackingVar(alias)),
-        .err, .flex, .rigid => null,
+        .alias => |alias| try self.collectDecoderFieldSlotTags(self.types.getAliasBackingVar(alias), tags),
+        .err => true,
+        .flex, .rigid => false,
     };
 }
 
-fn decoderFieldSlotMissingTagFromUnion(self: *Self, tag_union: types_mod.TagUnion) Allocator.Error!?Ident.Idx {
-    const tags = self.types.getTagsSlice(tag_union.tags);
-    var present_count: u8 = 0;
-    var missing_count: u8 = 0;
-    var missing_tag: ?Ident.Idx = null;
-
-    for (tags.items(.name), tags.items(.args)) |name, args_range| {
+fn collectDecoderFieldSlotTagsFromUnion(self: *Self, tag_union: types_mod.TagUnion, tags: *DecoderFieldSlotTags) Allocator.Error!bool {
+    const tag_slice = self.types.getTagsSlice(tag_union.tags);
+    for (tag_slice.items(.name), tag_slice.items(.args)) |name, args_range| {
         const args = self.types.sliceVars(args_range);
         if (args.len == 1 and try self.varIsBuiltinStr(args[0])) {
-            present_count += 1;
+            tags.present_count += 1;
         } else if (args.len == 0) {
-            missing_count += 1;
-            missing_tag = name;
+            tags.missing_count += 1;
+            tags.missing_tag = name;
         } else {
-            return null;
+            return false;
         }
     }
 
-    if (present_count != 1 or missing_count != 1) return null;
-    return missing_tag;
+    return true;
+}
+
+fn nominalIsBuiltinDecoderRecordSpec(self: *const Self, nominal_type: types_mod.NominalType) bool {
+    if (!nominal_type.originIsBuiltin()) return false;
+    if (nominal_type.sourceDeclOptional()) |source_decl| {
+        if (self.builtin_ctx.builtin_indices) |indices| {
+            if (source_decl == @intFromEnum(indices.decoder_record_spec_type)) return true;
+        }
+    }
+    return nominal_type.ident.ident_idx.eql(self.cir.idents.builtin_decoder_record_spec);
 }
 
 fn typeSupportsDerivedDecoder(
@@ -11256,13 +11290,44 @@ fn typeSupportsDerivedDecoder(
         .record => |record| blk: {
             const fields_slice = self.types.getRecordFieldsSlice(record.fields);
             const field_vars = fields_slice.items(.var_);
-            if (field_vars.len != 4) break :blk false;
             for (field_vars) |field_var| {
                 if (!try self.varSupportsDerivedDecoderField(field_var, slot_info, env, region)) break :blk false;
             }
             break :blk true;
         },
+        .tag_union => |tag_union| blk: {
+            const tags_slice = self.types.getTagsSlice(tag_union.tags);
+            for (tags_slice.items(.args)) |tag_args_range| {
+                const tag_args = self.types.sliceVars(tag_args_range);
+                for (tag_args) |tag_arg| {
+                    if (!try self.varSupportsDerivedDecoderField(tag_arg, slot_info, env, region)) break :blk false;
+                }
+            }
+            break :blk try self.varSupportsDerivedDecoderTagExt(tag_union.ext, slot_info, env, region);
+        },
+        .empty_record,
+        .empty_tag_union,
+        => true,
         else => false,
+    };
+}
+
+fn varSupportsDerivedDecoderTagExt(
+    self: *Self,
+    var_: Var,
+    slot_info: DerivedDecoderSlotInfo,
+    env: *Env,
+    region: Region,
+) Allocator.Error!bool {
+    return switch (self.types.resolveVar(var_).desc.content) {
+        .structure => |structure| switch (structure) {
+            .empty_tag_union => true,
+            .tag_union => |tag_union| try self.typeSupportsDerivedDecoder(.{ .tag_union = tag_union }, slot_info, env, region),
+            else => false,
+        },
+        .alias => |alias| try self.varSupportsDerivedDecoderTagExt(self.types.getAliasBackingVar(alias), slot_info, env, region),
+        .err => true,
+        .flex, .rigid => false,
     };
 }
 
@@ -11276,6 +11341,11 @@ fn varSupportsDerivedDecoderField(
     return switch (self.types.resolveVar(var_).desc.content) {
         .structure => |structure| switch (structure) {
             .nominal_type => |nominal| try self.nominalSupportsDerivedDecoderField(nominal, slot_info, env, region),
+            .record => |record| try self.typeSupportsDerivedDecoder(.{ .record = record }, slot_info, env, region),
+            .tag_union => |tag_union| try self.typeSupportsDerivedDecoder(.{ .tag_union = tag_union }, slot_info, env, region),
+            .empty_record,
+            .empty_tag_union,
+            => true,
             else => false,
         },
         .alias => |alias| try self.varSupportsDerivedDecoderField(self.types.getAliasBackingVar(alias), slot_info, env, region),
@@ -11292,7 +11362,9 @@ fn nominalSupportsDerivedDecoderField(
     region: Region,
 ) Allocator.Error!bool {
     if (self.nominalIsBuiltinStrType(nominal)) return true;
-    if (!self.nominalIsBuiltinTryType(nominal)) return false;
+    if (!self.nominalIsBuiltinTryType(nominal)) {
+        return try self.varSupportsDerivedDecoderField(self.types.getNominalBackingVar(nominal), slot_info, env, region);
+    }
 
     const args = self.types.sliceNominalArgs(nominal);
     if (args.len != 2) return false;
