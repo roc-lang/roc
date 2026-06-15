@@ -451,6 +451,21 @@ pub fn getStrMatchArms(self: *const Self, span: StrMatchArmSpan) []const StrMatc
     return self.str_match_arms.items[span.start..][0..span.len];
 }
 
+/// Resolves a string-match-arm span to its stored mutable slice.
+pub fn getStrMatchArmsMut(self: *Self, span: StrMatchArmSpan) []StrMatchArm {
+    if (span.len == 0) return self.str_match_arms.items[0..0];
+    if (builtin.mode == .Debug) {
+        const end = @as(u64, span.start) + @as(u64, span.len);
+        if (end > self.str_match_arms.items.len) {
+            std.debug.panic(
+                "LirStore invariant violated: mutable string-match-arm span start={d} len={d} exceeds string-match-arm storage len={d}",
+                .{ span.start, span.len, self.str_match_arms.items.len },
+            );
+        }
+    }
+    return self.str_match_arms.items[span.start..][0..span.len];
+}
+
 /// Appends join-point entries and returns the corresponding flat-storage span.
 pub fn addJoinPointSpan(self: *Self, join_points: []const JoinPoint) Allocator.Error!JoinPointSpan {
     if (join_points.len == 0) return JoinPointSpan.empty();
@@ -468,6 +483,21 @@ pub fn getJoinPointSpan(self: *const Self, span: JoinPointSpan) []const JoinPoin
         if (end > self.join_points.items.len) {
             std.debug.panic(
                 "LirStore invariant violated: join-point span start={d} len={d} exceeds join-point storage len={d}",
+                .{ span.start, span.len, self.join_points.items.len },
+            );
+        }
+    }
+    return self.join_points.items[span.start..][0..span.len];
+}
+
+/// Resolves a join-point span to its stored mutable slice.
+pub fn getJoinPointSpanMut(self: *Self, span: JoinPointSpan) []JoinPoint {
+    if (span.len == 0) return self.join_points.items[0..0];
+    if (builtin.mode == .Debug) {
+        const end = @as(u64, span.start) + @as(u64, span.len);
+        if (end > self.join_points.items.len) {
+            std.debug.panic(
+                "LirStore invariant violated: mutable join-point span start={d} len={d} exceeds join-point storage len={d}",
                 .{ span.start, span.len, self.join_points.items.len },
             );
         }

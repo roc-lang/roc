@@ -12,6 +12,9 @@ const Allocator = std.mem.Allocator;
 const LIR = lir.LIR;
 const LayoutIdx = @import("layout").Idx;
 
+var shared_test_builtins: ?eval.BuiltinModules = null;
+var shared_test_builtins_mutex: std.Io.Mutex = .init;
+
 const LoweredSource = struct {
     resources: helpers.ParsedResources,
     lowered: lir.CheckedPipeline.LoweredProgram,
@@ -32,6 +35,21 @@ const LiftedSource = struct {
     }
 };
 
+fn sharedPrePublishedBuiltin() anyerror!helpers.PrePublishedBuiltin {
+    shared_test_builtins_mutex.lockUncancelable(std.testing.io);
+    defer shared_test_builtins_mutex.unlock(std.testing.io);
+
+    if (shared_test_builtins == null) {
+        shared_test_builtins = try eval.BuiltinModules.init(std.heap.page_allocator);
+    }
+
+    return .{
+        .env = shared_test_builtins.?.builtin_module.env,
+        .indices = shared_test_builtins.?.builtin_indices,
+        .artifact = &shared_test_builtins.?.checked_artifact,
+    };
+}
+
 fn lowerModule(
     allocator: Allocator,
     source: []const u8,
@@ -46,7 +64,7 @@ fn lowerModuleWithProcDebugNames(
     inline_mode: lir.CheckedPipeline.InlineMode,
     proc_debug_names: bool,
 ) anyerror!LoweredSource {
-    var resources = try helpers.parseAndCanonicalizeProgram(allocator, .module, source, &.{});
+    var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(allocator, .module, source, &.{}, try sharedPrePublishedBuiltin());
     errdefer helpers.cleanupParseAndCanonical(allocator, resources);
 
     const import_count = resources.import_artifacts.len + if (resources.borrowed_builtin_artifact == null) @as(usize, 0) else 1;
@@ -155,7 +173,7 @@ fn liftModuleAfterSpecConstr(
     allocator: Allocator,
     source: []const u8,
 ) anyerror!LiftedSource {
-    var resources = try helpers.parseAndCanonicalizeProgram(allocator, .module, source, &.{});
+    var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(allocator, .module, source, &.{}, try sharedPrePublishedBuiltin());
     errdefer helpers.cleanupParseAndCanonical(allocator, resources);
 
     const import_count = resources.import_artifacts.len + if (resources.borrowed_builtin_artifact == null) @as(usize, 0) else 1;
@@ -203,7 +221,7 @@ fn expectInlinePlanDecision(
     expected: bool,
 ) anyerror!void {
     const allocator = std.testing.allocator;
-    var resources = try helpers.parseAndCanonicalizeProgram(allocator, .module, source, &.{});
+    var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(allocator, .module, source, &.{}, try sharedPrePublishedBuiltin());
     defer helpers.cleanupParseAndCanonical(allocator, resources);
 
     const import_count = resources.import_artifacts.len + if (resources.borrowed_builtin_artifact == null) @as(usize, 0) else 1;
