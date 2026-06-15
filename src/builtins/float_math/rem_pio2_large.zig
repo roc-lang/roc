@@ -1,3 +1,7 @@
+//! Large finite argument reduction by pi/2 for Roc float tangent builtins.
+//!
+//! The algorithm is ported from Zig compiler_rt, which is ported from musl.
+
 // Ported from musl, which is licensed under the MIT license:
 // https://git.musl-libc.org/cgit/musl/tree/COPYRIGHT
 //

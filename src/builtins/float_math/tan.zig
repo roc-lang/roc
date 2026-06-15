@@ -193,7 +193,7 @@ fn ulpDiff64(a: f64, b: f64) u64 {
     return if (ordered_a > ordered_b) ordered_a - ordered_b else ordered_b - ordered_a;
 }
 
-fn expectClose32(input_bits: u32, expected_bits: u32, actual: f32) !void {
+fn expectClose32(input_bits: u32, expected_bits: u32, actual: f32) error{TestUnexpectedResult}!void {
     const input = @as(f32, @bitCast(input_bits));
     const expected = @as(f32, @bitCast(expected_bits));
     const actual_bits: u32 = @bitCast(actual);
@@ -226,7 +226,7 @@ fn expectClose32(input_bits: u32, expected_bits: u32, actual: f32) !void {
     }
 }
 
-fn expectClose64(input_bits: u64, expected_bits: u64, actual: f64) !void {
+fn expectClose64(input_bits: u64, expected_bits: u64, actual: f64) error{TestUnexpectedResult}!void {
     const input = @as(f64, @bitCast(input_bits));
     const expected = @as(f64, @bitCast(expected_bits));
     const actual_bits: u64 = @bitCast(actual);

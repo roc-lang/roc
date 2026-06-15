@@ -1,3 +1,7 @@
+//! F32 argument reduction by pi/2 for Roc float tangent builtins.
+//!
+//! The algorithm is ported from Zig compiler_rt, which is ported from musl.
+
 // Ported from musl, which is licensed under the MIT license:
 // https://git.musl-libc.org/cgit/musl/tree/COPYRIGHT
 //
@@ -17,9 +21,9 @@ const pio2_1 = 1.57079631090164184570e+00; // 0x3FF921FB, 0x50000000
 // pio2_1t:  pi/2 - pio2_1
 const pio2_1t = 1.58932547735281966916e-08; // 0x3E5110b4, 0x611A6263
 
-// Returns the remainder of x rem pi/2 in *y
-// use double precision for everything except passing x
-// use rem_pio2_large() for large x
+/// Return x rem pi/2 in y, using F64 precision except for the F32 input.
+///
+/// Large inputs are reduced through rem_pio2_large().
 pub fn rem_pio2f(x: f32, y: *f64) i32 {
     var tx: [1]f64 = undefined;
     var ty: [1]f64 = undefined;

@@ -1,3 +1,7 @@
+//! Reduced-argument sine, cosine, and tangent kernels for Roc float builtins.
+//!
+//! The algorithms are ported from Zig compiler_rt, which is ported from musl.
+
 // Ported from musl, which is licensed under the MIT license:
 // https://git.musl-libc.org/cgit/musl/tree/COPYRIGHT
 //
@@ -66,6 +70,7 @@ pub fn cos(x: f64, y: f64) f64 {
     return w + (((1.0 - w) - hz) + (z * r - x * y));
 }
 
+/// Kernel cosine approximation for an F32 result on a reduced F64 argument.
 pub fn cosdf(x: f64) f32 {
     // |cos(x) - c(x)| < 2**-34.1 (~[-5.37e-11, 5.295e-11]).
     const C0 = -0x1ffffffd0c5e81.0p-54; // -0.499999997251031003120
@@ -80,6 +85,7 @@ pub fn cosdf(x: f64) f32 {
     return @floatCast(((1.0 + z * C0) + w * C1) + (w * z) * r);
 }
 
+/// Kernel cosine approximation for an extended-precision reduced argument.
 pub fn cosx(x: f80, y: f80) f80 {
     const C1: f80 = 0.0416666666666666666136;
     const C2: f64 = -0.0013888888888888874;
@@ -98,6 +104,7 @@ pub fn cosx(x: f80, y: f80) f80 {
     return w + (((1.0 - w) - hz) + (z * r - x * y));
 }
 
+/// Kernel cosine approximation for a quad-precision reduced argument.
 pub fn cosq(x: f128, y: f128) f128 {
     const C1: f128 = 0.04166666666666666666666666666666658424671;
     const C2: f128 = -0.001388888888888888888888888888863490893732;
@@ -166,6 +173,7 @@ pub fn sin(x: f64, y: f64, iy: i32) f64 {
     }
 }
 
+/// Kernel sine approximation for an F32 result on a reduced F64 argument.
 pub fn sindf(x: f64) f32 {
     // |sin(x)/x - s(x)| < 2**-37.5 (~[-4.89e-12, 4.824e-12]).
     const S1 = -0x15555554cbac77.0p-55; // -0.166666666416265235595
@@ -181,6 +189,7 @@ pub fn sindf(x: f64) f32 {
     return @floatCast((x + s * (S1 + z * S2)) + s * w * r);
 }
 
+/// Kernel sine approximation for an extended-precision reduced argument.
 pub fn sinx(x: f80, y: f80, iy: i32) f80 {
     const S1: f80 = -0.166666666666666666671;
     const S2: f64 = 0.0083333333333333332;
@@ -202,6 +211,7 @@ pub fn sinx(x: f80, y: f80, iy: i32) f80 {
     return x - ((z * (0.5 * y - v * r) - y) - v * S1);
 }
 
+/// Kernel sine approximation for a quad-precision reduced argument.
 pub fn sinq(x: f128, y: f128, iy: i32) f128 {
     const S1: f128 = -0.16666666666666666666666666666666666606732416116558;
     const S2: f128 = 0.0083333333333333333333333333333331135404851288270047;
@@ -332,6 +342,7 @@ pub fn tan(x_: f64, y_: f64, odd: bool) f64 {
     return a0 + a * (1.0 + a0 * w0 + a0 * v);
 }
 
+/// Kernel tangent approximation for an F32 result on a reduced F64 argument.
 pub fn tandf(x: f64, odd: bool) f32 {
     // |tan(x)/x - t(x)| < 2**-25.5 (~[-2e-08, 2e-08]).
     const T = [_]f64{
@@ -365,6 +376,7 @@ pub fn tandf(x: f64, odd: bool) f32 {
     return @floatCast(if (odd) -1.0 / r0 else r0);
 }
 
+/// Kernel tangent approximation for an extended-precision reduced argument.
 pub fn tanx(x_: f80, y_: f80, odd: i32) f80 {
     const pio4: f80 = 0.785398163397448309628;
     const pio4lo: f80 = -1.25413940316708300586e-20;
@@ -436,6 +448,7 @@ pub fn tanx(x_: f80, y_: f80, odd: i32) f80 {
     return t + a * (s + t * v);
 }
 
+/// Kernel tangent approximation for a quad-precision reduced argument.
 pub fn tanq(x_: f128, y_: f128, odd: i32) f128 {
     const pio4: f128 = 0x1.921fb54442d18469898cc51701b8p-1;
     const pio4lo: f128 = 0x1.cd129024e088a67cc74020bbea60p-116;
