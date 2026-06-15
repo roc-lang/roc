@@ -1773,6 +1773,14 @@ fn writeAdvancedIteratorScoring(self: *Self) std.mem.Allocator.Error!void {
     const dropped = self.fresh(.value);
     const front = self.fresh(.value);
     const back = self.fresh(.value);
+    const advance = self.fresh(.value);
+    const index = self.fresh(.value);
+    const limit = self.fresh(.value);
+    const custom = self.fresh(.value);
+    const unknown_tail = self.fresh(.value);
+    const unknown_score = self.fresh(.value);
+    const unknown_acc = self.fresh(.value);
+    const unknown_value = self.fresh(.value);
     const merged = self.fresh(.value);
     const keep_id = self.fresh(.value);
     const map_id = self.fresh(.value);
@@ -1864,6 +1872,72 @@ fn writeAdvancedIteratorScoring(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppText(") + 2)), ");
     try self.writeAppSymbol(seed);
     try self.writeAppText(" % 2)\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(advance);
+    try self.writeAppText(" : (U64, U64) -> Try((U64, (U64, U64)), [NoMore])\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(advance);
+    try self.writeAppText(" = |(");
+    try self.writeAppSymbol(index);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(limit);
+    try self.writeAppText(")| if ");
+    try self.writeAppSymbol(index);
+    try self.writeAppText(" >= ");
+    try self.writeAppSymbol(limit);
+    try self.writeAppText(" Err(NoMore) else Ok((");
+    try self.writeAppSymbol(index);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText(", (");
+    try self.writeAppSymbol(index);
+    try self.writeAppText(" + 1, ");
+    try self.writeAppSymbol(limit);
+    try self.writeAppText(")))\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(custom);
+    try self.writeAppText(" : Iter(U64)\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(custom);
+    try self.writeAppText(" = Iter.custom((0, List.len(");
+    try self.writeAppSymbol(ids);
+    try self.writeAppText(") + 1), Unknown, ");
+    try self.writeAppSymbol(advance);
+    try self.writeAppText(")\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(unknown_tail);
+    try self.writeAppText(" : List(U64)\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(unknown_tail);
+    try self.writeAppText(" = Iter.collect(Iter.drop_last(Iter.take_last(");
+    try self.writeAppSymbol(custom);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText(" % (List.len(");
+    try self.writeAppSymbol(ids);
+    try self.writeAppText(") + 2)), ");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText(" % 2))\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(unknown_score);
+    try self.writeAppText(" : U64\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(unknown_score);
+    try self.writeAppText(" = List.fold(");
+    try self.writeAppSymbol(unknown_tail);
+    try self.writeAppText(", 0, |");
+    try self.writeAppSymbol(unknown_acc);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(unknown_value);
+    try self.writeAppText("| ");
+    try self.writeAppSymbol(unknown_acc);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(unknown_value);
+    try self.writeAppText(")\n");
 
     try self.writeIndent(1);
     try self.writeAppSymbol(merged);
@@ -2049,10 +2123,14 @@ fn writeAdvancedIteratorScoring(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppSymbol(front_hint_score);
     try self.writeAppText(" + ");
     try self.writeAppSymbol(step_score);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(unknown_score);
     try self.writeAppText(" + List.len(");
     try self.writeAppSymbol(collected);
     try self.writeAppText(") + List.len(");
     try self.writeAppSymbol(tail);
+    try self.writeAppText(") + List.len(");
+    try self.writeAppSymbol(unknown_tail);
     try self.writeAppText(")\n}\n\n");
 }
 
