@@ -1,11 +1,11 @@
 Json :: { raw : Str }.{
-	FieldValue := [Present(Str), Missing].{}
+	FieldValue :: [Present(Str), Missing].{}
 
-	decode : Json, Decoder(a, FieldValue) -> a
+	decode : Json, Decoder(a) -> a
 	decode = |json, decoder|
 		Decoder.dispatch(decoder, FieldValue.Present(json.raw), decode_str, decode_record_slot, decode_tag_union_slot)
 
-	decode_record : Str, DecoderRecordSpec(a, FieldValue) -> a
+	decode_record : Str, DecoderRecordSpec(a) -> a
 	decode_record = |raw, spec| {
 		var $remaining = Str.trim_start(raw)
 		var $state = Decoder.Record.init(spec, FieldValue.Missing)
@@ -73,15 +73,15 @@ Json :: { raw : Str }.{
 		Decoder.Record.finish(spec, $state, decode_slot)
 	}
 
-	decode_slot : FieldValue, Decoder(a, FieldValue) -> a
+	decode_slot : FieldValue, Decoder(a) -> a
 	decode_slot = |slot, decoder|
 		Decoder.dispatch(decoder, slot, decode_str, decode_record_slot, decode_tag_union_slot)
 
-	decode_str : DecoderStrSpec(a, FieldValue), FieldValue -> a
+	decode_str : DecoderStrSpec(a), FieldValue -> a
 	decode_str = |spec, slot|
 		Decoder.decode_str(spec, slot)
 
-	decode_record_slot : DecoderRecordSpec(a, FieldValue), FieldValue -> a
+	decode_record_slot : DecoderRecordSpec(a), FieldValue -> a
 	decode_record_slot = |spec, slot|
 		match slot {
 			Present(value) => decode_record(value, spec)
@@ -90,7 +90,7 @@ Json :: { raw : Str }.{
 			}
 		}
 
-	decode_tag_union_slot : DecoderTagUnionSpec(a, FieldValue), FieldValue -> a
+	decode_tag_union_slot : DecoderTagUnionSpec(a), FieldValue -> a
 	decode_tag_union_slot = |spec, slot|
 		match slot {
 			Present(value) =>
@@ -100,7 +100,7 @@ Json :: { raw : Str }.{
 			}
 		}
 
-	decode_tag_union : Str, DecoderTagUnionSpec(a, FieldValue) -> a
+	decode_tag_union : Str, DecoderTagUnionSpec(a) -> a
 	decode_tag_union = |tag_name, spec|
 		Decoder.TagUnion.decode(spec, tag_name, FieldValue.Present(tag_name), Str.is_eq, decode_slot)
 

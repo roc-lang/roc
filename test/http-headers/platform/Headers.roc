@@ -1,11 +1,11 @@
 Headers :: { raw : Str }.{
-	FieldValue := [Present(Str), Missing].{}
+	FieldValue :: [Present(Str), Missing].{}
 
-	decode : Headers, Decoder(a, FieldValue) -> a
+	decode : Headers, Decoder(a) -> a
 	decode = |headers, decoder|
 		Decoder.dispatch(decoder, FieldValue.Present(headers.raw), decode_str, decode_record_slot, decode_tag_union_slot)
 
-	decode_record : Str, DecoderRecordSpec(a, FieldValue) -> a
+	decode_record : Str, DecoderRecordSpec(a) -> a
 	decode_record = |headers, spec| {
 		request_line = Str.find_first(headers, "\r\n")
 		var $remaining = if request_line.found {
@@ -46,15 +46,15 @@ Headers :: { raw : Str }.{
 		Decoder.Record.finish(spec, $state, decode_slot)
 	}
 
-	decode_slot : FieldValue, Decoder(a, FieldValue) -> a
+	decode_slot : FieldValue, Decoder(a) -> a
 	decode_slot = |slot, decoder|
 		Decoder.dispatch(decoder, slot, decode_str, decode_record_slot, decode_tag_union_slot)
 
-	decode_str : DecoderStrSpec(a, FieldValue), FieldValue -> a
+	decode_str : DecoderStrSpec(a), FieldValue -> a
 	decode_str = |spec, slot|
 		Decoder.decode_str(spec, slot)
 
-	decode_record_slot : DecoderRecordSpec(a, FieldValue), FieldValue -> a
+	decode_record_slot : DecoderRecordSpec(a), FieldValue -> a
 	decode_record_slot = |spec, slot|
 		match slot {
 			Present(value) => decode_record(value, spec)
@@ -63,7 +63,7 @@ Headers :: { raw : Str }.{
 			}
 		}
 
-	decode_tag_union_slot : DecoderTagUnionSpec(a, FieldValue), FieldValue -> a
+	decode_tag_union_slot : DecoderTagUnionSpec(a), FieldValue -> a
 	decode_tag_union_slot = |spec, slot|
 		match slot {
 			Present(value) => decode_tag_union(value, spec)
@@ -72,7 +72,7 @@ Headers :: { raw : Str }.{
 			}
 		}
 
-	decode_tag_union : Str, DecoderTagUnionSpec(a, FieldValue) -> a
+	decode_tag_union : Str, DecoderTagUnionSpec(a) -> a
 	decode_tag_union = |tag_name, spec|
 		Decoder.TagUnion.decode(spec, tag_name, FieldValue.Present(tag_name), Str.is_eq, decode_slot)
 

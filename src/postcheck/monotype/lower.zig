@@ -3938,7 +3938,7 @@ const BodyContext = struct {
             });
             out_fields[index] = .{
                 .name = field.name,
-                .value = if (self.typeHasBuiltinOwner(field.ty, .str) or self.tryStrOptionalInfo(field.ty, self.decoderFieldValueInfo(state_items[index]).missing_tag) != null)
+                .value = if (self.typeHasBuiltinOwner(field.ty, .str) or self.tryStrOptionalInfo(field.ty) != null)
                     try self.structuralDecoderFieldFromSlot(slot_expr, state_items[index], field.ty)
                 else
                     try self.decoderCallbackCall(args[2], callback_decoder_template_ty, slot_expr, state_items[index], field.ty),
@@ -3968,7 +3968,7 @@ const BodyContext = struct {
                 if ((nominal.builtin orelse Common.invariant("Decoder.decode_str intrinsic spec argument was not a builtin nominal")) != .decoder_str_spec) {
                     Common.invariant("Decoder.decode_str intrinsic spec argument was not DecoderStrSpec");
                 }
-                if (nominal.args.len != 2) Common.invariant("DecoderStrSpec had an unexpected type argument count");
+                if (nominal.args.len != 1) Common.invariant("DecoderStrSpec had an unexpected type argument count");
                 break :blk nominal.args[0];
             },
             else => Common.invariant("Decoder.decode_str intrinsic spec argument was not nominal"),
@@ -3982,7 +3982,7 @@ const BodyContext = struct {
                 if ((nominal.builtin orelse Common.invariant("Decoder.Record intrinsic spec argument was not a builtin nominal")) != .decoder_record_spec) {
                     Common.invariant("Decoder.Record intrinsic spec argument was not Decoder.Record.Spec");
                 }
-                if (nominal.args.len != 2) Common.invariant("Decoder.Record.Spec had an unexpected type argument count");
+                if (nominal.args.len != 1) Common.invariant("Decoder.Record.Spec had an unexpected type argument count");
                 break :blk nominal.args[0];
             },
             else => Common.invariant("Decoder.Record intrinsic spec argument was not nominal"),
@@ -3996,7 +3996,7 @@ const BodyContext = struct {
                 if ((nominal.builtin orelse Common.invariant("Decoder.TagUnion intrinsic spec argument was not a builtin nominal")) != .decoder_tag_union_spec) {
                     Common.invariant("Decoder.TagUnion intrinsic spec argument was not Decoder.TagUnion.Spec");
                 }
-                if (nominal.args.len != 2) Common.invariant("Decoder.TagUnion.Spec had an unexpected type argument count");
+                if (nominal.args.len != 1) Common.invariant("Decoder.TagUnion.Spec had an unexpected type argument count");
                 break :blk nominal.args[0];
             },
             else => Common.invariant("Decoder.TagUnion intrinsic spec argument was not nominal"),
@@ -4013,7 +4013,6 @@ const BodyContext = struct {
         const decoder_ty = try self.decoderIntrinsicArgumentMonoType(args[0]);
         const slot_ty = try self.decoderIntrinsicArgumentMonoType(args[1]);
         const decoder_args = self.decoderNamedArgs(decoder_ty);
-        if (!self.sameType(decoder_args.slot, slot_ty)) Common.invariant("Decoder.dispatch slot argument did not match decoder slot type");
 
         const ret_ty = expected_ret_ty orelse decoder_args.shape;
         if (!self.sameType(ret_ty, decoder_args.shape)) Common.invariant("Decoder.dispatch result type differed from decoder shape");
@@ -4144,7 +4143,7 @@ const BodyContext = struct {
         slot_ty: Type.TypeId,
         field_ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprId {
-        const field_decoder = try self.decoderExprForType(decoder_template_ty, field_ty, slot_ty);
+        const field_decoder = try self.decoderExprForType(decoder_template_ty, field_ty);
         const field_decoder_ty = self.builder.program.exprs.items[@intFromEnum(field_decoder)].ty;
         const callback_arg_tys = [_]Type.TypeId{ slot_ty, field_decoder_ty };
         const callback_fn_ty = try self.builder.program.types.add(.{ .func = .{
@@ -6024,21 +6023,20 @@ const BodyContext = struct {
         const decoder_args = self.decoderNamedArgs(ret_ty);
         const shape_ty = try self.lowerType(plan.dispatcher_ty);
         if (!self.sameType(decoder_args.shape, shape_ty)) Common.invariant("Decoder shape argument did not match structural decoder dispatcher");
-        const slot_info = self.decoderFieldValueInfo(decoder_args.slot);
 
         const tag_text: []const u8 = if (self.typeHasBuiltinOwner(shape_ty, .str))
             "Str"
         else switch (self.builder.shapeContent(shape_ty)) {
             .record => |fields_span| blk: {
                 for (self.builder.program.types.fieldSpan(fields_span)) |field| {
-                    if (!self.decoderFieldTypeIsSupported(field.ty, slot_info)) Common.invariant("structural decoder record field type was not supported");
+                    if (!self.decoderFieldTypeIsSupported(field.ty)) Common.invariant("structural decoder record field type was not supported");
                 }
                 break :blk "Record";
             },
             .tag_union => |tags_span| blk: {
                 for (self.builder.program.types.tagSpan(tags_span)) |tag| {
                     for (self.builder.program.types.span(tag.payloads)) |payload_ty| {
-                        if (!self.decoderFieldTypeIsSupported(payload_ty, slot_info)) Common.invariant("structural decoder tag-union payload type was not supported");
+                        if (!self.decoderFieldTypeIsSupported(payload_ty)) Common.invariant("structural decoder tag-union payload type was not supported");
                     }
                 }
                 break :blk "TagUnion";
@@ -6072,15 +6070,14 @@ const BodyContext = struct {
 
     const DecoderArgs = struct {
         shape: Type.TypeId,
-        slot: Type.TypeId,
     };
 
     fn decoderNamedArgs(self: *BodyContext, decoder_ty: Type.TypeId) DecoderArgs {
         return switch (self.builder.program.types.get(decoder_ty)) {
             .named => |named| blk: {
                 const args = self.builder.program.types.span(named.args);
-                if (args.len != 2) Common.invariant("Decoder type had an unexpected argument count");
-                break :blk .{ .shape = args[0], .slot = args[1] };
+                if (args.len != 1) Common.invariant("Decoder type had an unexpected argument count");
+                break :blk .{ .shape = args[0] };
             },
             else => Common.invariant("structural decoder return type was not named"),
         };
@@ -6124,9 +6121,8 @@ const BodyContext = struct {
         self: *BodyContext,
         template_ty: Type.TypeId,
         shape_ty: Type.TypeId,
-        slot_ty: Type.TypeId,
     ) Allocator.Error!Type.TypeId {
-        const args = [_]Type.TypeId{ shape_ty, slot_ty };
+        const args = [_]Type.TypeId{shape_ty};
         const backing_ty = switch (self.builder.program.types.get(template_ty)) {
             .named => |named| (named.backing orelse Common.invariant("Decoder spec template had no backing")).ty,
             else => Common.invariant("Decoder spec template was not named"),
@@ -6138,7 +6134,6 @@ const BodyContext = struct {
         self: *BodyContext,
         template_decoder_ty: Type.TypeId,
         shape_ty: Type.TypeId,
-        slot_ty: Type.TypeId,
     ) Allocator.Error!Type.TypeId {
         const template_backing = self.builder.namedBackingType(template_decoder_ty) orelse
             Common.invariant("Decoder template type had no backing");
@@ -6155,7 +6150,7 @@ const BodyContext = struct {
             const template_payloads = self.builder.program.types.span(tag.payloads);
             const payloads = if (Ident.textEql(tag_text, "Str") or Ident.textEql(tag_text, "Record") or Ident.textEql(tag_text, "TagUnion")) blk: {
                 if (template_payloads.len != 1) Common.invariant("Decoder structural template tag had an unexpected payload count");
-                const spec_ty = try self.decoderSpecTypeFromTemplate(template_payloads[0], shape_ty, slot_ty);
+                const spec_ty = try self.decoderSpecTypeFromTemplate(template_payloads[0], shape_ty);
                 break :blk try self.builder.program.types.addSpan(&[_]Type.TypeId{spec_ty});
             } else blk: {
                 if (template_payloads.len != 0) Common.invariant("Decoder leaf template tag had unexpected payloads");
@@ -6169,7 +6164,7 @@ const BodyContext = struct {
         }
 
         const backing_ty = try self.builder.program.types.add(.{ .tag_union = try self.builder.program.types.addTags(tags) });
-        const args = [_]Type.TypeId{ shape_ty, slot_ty };
+        const args = [_]Type.TypeId{shape_ty};
         return try self.cloneNamedTypeWithArgs(template_decoder_ty, &args, backing_ty);
     }
 
@@ -6177,9 +6172,8 @@ const BodyContext = struct {
         self: *BodyContext,
         template_decoder_ty: Type.TypeId,
         shape_ty: Type.TypeId,
-        slot_ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprId {
-        const decoder_ty = try self.decoderTypeFromTemplate(template_decoder_ty, shape_ty, slot_ty);
+        const decoder_ty = try self.decoderTypeFromTemplate(template_decoder_ty, shape_ty);
         const backing_ty = self.builder.namedBackingType(decoder_ty) orelse Common.invariant("Decoder type had no backing");
         const tag_text: []const u8 = if (self.typeHasBuiltinOwner(shape_ty, .str))
             "Str"
@@ -6225,20 +6219,20 @@ const BodyContext = struct {
         missing_tag: Type.Tag,
     };
 
-    fn decoderFieldTypeIsSupported(self: *BodyContext, ty: Type.TypeId, slot_info: DecoderFieldValueInfo) bool {
+    fn decoderFieldTypeIsSupported(self: *BodyContext, ty: Type.TypeId) bool {
         if (self.typeHasBuiltinOwner(ty, .str)) return true;
-        if (self.tryStrOptionalInfo(ty, slot_info.missing_tag) != null) return true;
+        if (self.tryStrOptionalInfo(ty) != null) return true;
         return switch (self.builder.shapeContent(ty)) {
             .record => |fields_span| blk: {
                 for (self.builder.program.types.fieldSpan(fields_span)) |field| {
-                    if (!self.decoderFieldTypeIsSupported(field.ty, slot_info)) break :blk false;
+                    if (!self.decoderFieldTypeIsSupported(field.ty)) break :blk false;
                 }
                 break :blk true;
             },
             .tag_union => |tags_span| blk: {
                 for (self.builder.program.types.tagSpan(tags_span)) |tag| {
                     for (self.builder.program.types.span(tag.payloads)) |payload_ty| {
-                        if (!self.decoderFieldTypeIsSupported(payload_ty, slot_info)) break :blk false;
+                        if (!self.decoderFieldTypeIsSupported(payload_ty)) break :blk false;
                     }
                 }
                 break :blk true;
@@ -6281,7 +6275,7 @@ const BodyContext = struct {
         };
     }
 
-    fn tryStrOptionalInfo(self: *BodyContext, ty: Type.TypeId, slot_missing_tag: Type.Tag) ?TryStrOptionalInfo {
+    fn tryStrOptionalInfo(self: *BodyContext, ty: Type.TypeId) ?TryStrOptionalInfo {
         const backing_ty = self.builder.namedBackingType(ty) orelse return null;
         const ok_tag = self.monoTagByTextOptional(backing_ty, "Ok") orelse return null;
         const err_tag = self.monoTagByTextOptional(backing_ty, "Err") orelse return null;
@@ -6289,14 +6283,24 @@ const BodyContext = struct {
         const err_payloads = self.builder.program.types.span(err_tag.payloads);
         if (ok_payloads.len != 1 or err_payloads.len != 1) return null;
         if (!self.typeHasBuiltinOwner(ok_payloads[0], .str)) return null;
-        const missing_tag = self.monoTagByNameOptional(err_payloads[0], slot_missing_tag.name) orelse return null;
-        if (self.builder.program.types.span(missing_tag.payloads).len != 0) return null;
+        const missing_tag = self.singleEmptyTagOptional(err_payloads[0]) orelse return null;
         return .{
             .backing_ty = backing_ty,
             .ok_payload_ty = ok_payloads[0],
             .err_ty = err_payloads[0],
             .missing_tag = missing_tag,
         };
+    }
+
+    fn singleEmptyTagOptional(self: *BodyContext, ty: Type.TypeId) ?Type.Tag {
+        const tags = switch (self.builder.shapeContent(ty)) {
+            .tag_union => |span| self.builder.program.types.tagSpan(span),
+            else => return null,
+        };
+        if (tags.len != 1) return null;
+        const tag = tags[0];
+        if (self.builder.program.types.span(tag.payloads).len != 0) return null;
+        return tag;
     }
 
     fn monoTagByNameOptional(self: *BodyContext, ty: Type.TypeId, name: names.TagNameId) ?Type.Tag {
@@ -6378,14 +6382,14 @@ const BodyContext = struct {
 
         const present_body = if (self.typeHasBuiltinOwner(field_ty, .str))
             try self.builder.localExpr(value_local, field_ty)
-        else if (self.tryStrOptionalInfo(field_ty, slot_info.missing_tag)) |info|
+        else if (self.tryStrOptionalInfo(field_ty)) |info|
             try self.tryOkFromFieldValue(value_local, info, field_ty)
         else
             Common.invariant("unsupported structural decoder field type reached slot lowering");
 
         const absent_body = if (self.typeHasBuiltinOwner(field_ty, .str))
             try self.requiredFieldMissingCrash(field_ty)
-        else if (self.tryStrOptionalInfo(field_ty, slot_info.missing_tag)) |info|
+        else if (self.tryStrOptionalInfo(field_ty)) |info|
             try self.tryErrMissing(info, field_ty)
         else
             Common.invariant("unsupported structural decoder field type reached slot lowering");
