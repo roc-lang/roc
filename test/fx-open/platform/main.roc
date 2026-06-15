@@ -1,6 +1,6 @@
 platform ""
     requires {} { main! : List(Str) => Try({}, [Exit(I32), ..]) }
-    exposes [Stdout, Stderr, Stdin]
+    exposes [Stdout, Stderr, Stdin, App]
     packages {}
     provides { "roc_main": main_for_host! }
     hosted {
@@ -21,6 +21,7 @@ platform ""
 import Stdout
 import Stderr
 import Stdin
+import App
 
 main_for_host! : List(Str) => I32
 main_for_host! = |args|
