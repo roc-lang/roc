@@ -2177,6 +2177,7 @@ pub fn build(b: *std.Build) void {
     const run_test_dylib_step = b.step("run-test-dylib", "Build a Roc shared library and run it through the loader test");
     const run_test_archive_step = b.step("run-test-archive", "Build a Roc static archive, link a consumer against it, and run it");
     const run_test_signals_step = b.step("run-test-signals", "Build and run the signals platform demo");
+    const run_signals_bench_step = b.step("run-signals-bench", "Build and run the signals NodeValue boundary benchmark");
     const build_coverage_tools_step = b.step("build-coverage-tools", "Build parser coverage tools");
     const run_coverage_parser_step = b.step("run-coverage-parser", "Run parser tests with kcov code coverage");
     const run_minici_step = b.step("minici", "Run a subset of CI build and test steps");
@@ -2577,6 +2578,15 @@ pub fn build(b: *std.Build) void {
     });
     run_signals_demo.step.dependOn(&build_signals_app.step);
     run_test_signals_step.dependOn(&run_signals_demo.step);
+
+    const run_signals_bench = b.addSystemCommand(&.{
+        signals_demo_path,
+        "--bench",
+        "--bench-iterations",
+        "200",
+    });
+    run_signals_bench.step.dependOn(&build_signals_app.step);
+    run_signals_bench_step.dependOn(&run_signals_bench.step);
 
     var release_exe_for_llvm_embedded: ?*Step.Compile = null;
 

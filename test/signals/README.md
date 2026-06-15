@@ -26,6 +26,44 @@ The generated glue lives in `platform/roc_platform_abi.zig`. Regenerate it after
 ./zig-out/bin/roc glue src/glue/src/ZigGlue.roc test/signals/platform test/signals/platform/main.roc
 ```
 
+## NodeValue Boundary Benchmarks
+
+The host has a research benchmark mode for measuring the `NodeValue` boundary
+without changing the production API:
+
+```sh
+zig build run-signals-bench
+```
+
+The built demo binary can also be run directly:
+
+```sh
+./zig-out/bin/signals-demo --bench --bench-iterations 1000
+./zig-out/bin/signals-demo --bench --bench-prototype A
+```
+
+Benchmark output is CSV. Each row records the prototype, case name, iteration
+count, wall time, operation count, Roc allocations/deallocations, retained
+allocation delta, `NodeValue` incref/decref/equality counts, synthetic
+boundary encode/decode counts, callback count, event count, evaluated graph
+nodes, signal writes/changes/suppressed writes, text updates, and active graph
+nodes.
+
+The prototype rows are:
+
+| Prototype | API impact | ABI impact | Ownership model | Callback shape | Equality strategy | `Elem.dynamic` / `Elem.each` |
+| --- | --- | --- | --- | --- | --- | --- |
+| A. Baseline `NodeValue` | Current typed Roc API | Current 32-byte tagged union | Host stores owned `NodeValue` copies | Boxed callbacks receive `NodeValue` | Recursive `NodeValue` equality | Supported today |
+| B. Scalar fast paths | Typed Roc API can stay, but scalar nodes need explicit host paths | Adds typed primitive node/callback paths | Scalars are copied directly; generic values stay `NodeValue` | Primitive callbacks can use scalar arguments | Direct scalar equality; recursive fallback for lists | Dynamic/list paths still need generic `NodeValue` |
+| C. Host value handles | Roc API may need handles or borrowed views at dynamic boundaries | Replaces hot values with host-owned handles | Host owns value storage and passes handles/views | Callbacks receive handles or borrowed views | Handle/version equality where valid | Needs explicit view support for dynamic and keyed list items |
+| D. Generated boundary shims | Roc API can stay typed, with generated per-type glue | Adds per-type encode/decode/equality/callback glue | Ownership follows generated type-specific code | Callbacks receive generated app-model shapes | Generated per-type equality | Needs generated glue for dynamic/list item types |
+
+Synthetic rows compare the four prototypes against identical microbenchmarks
+and signal-graph shapes. Current-app scenario rows use the existing compiled
+demo and therefore report only the A/Baseline implementation as the control
+case. The benchmark mode first runs `test_counter.txt` and a focused
+unchanged-value suppression check before printing measurements.
+
 ## Demo Coverage
 
 `app.roc` is the acceptance demo. It covers:
