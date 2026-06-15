@@ -205,7 +205,7 @@ const WrapperAnalyzer = struct {
     fn exprReadsOnlyArgs(self: *const WrapperAnalyzer, expr_id: Lifted.ExprId, args: []const Lifted.TypedLocal) bool {
         const expr = self.solved.lifted.exprs.items[@intFromEnum(expr_id)];
         return switch (expr.data) {
-            .local => |local| self.localIsArg(local, args),
+            .local => |local| localIsArg(local, args),
             .unit,
             .int_lit,
             .frac_f32_lit,
@@ -260,8 +260,7 @@ const WrapperAnalyzer = struct {
         return true;
     }
 
-    fn localIsArg(self: *const WrapperAnalyzer, local: Lifted.LocalId, args: []const Lifted.TypedLocal) bool {
-        _ = self;
+    fn localIsArg(local: Lifted.LocalId, args: []const Lifted.TypedLocal) bool {
         for (args) |arg| {
             if (arg.local == local) return true;
         }

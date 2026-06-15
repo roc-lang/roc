@@ -3007,16 +3007,6 @@ pub const MonoLlvmCodeGen = struct {
         _ = wip.br(found_block) catch return error.OutOfMemory;
     }
 
-    fn emitStrMatchWordByteMask(
-        self: *MonoLlvmCodeGen,
-        word: LlvmBuilder.Value,
-        byte: u8,
-        width: u8,
-    ) Error!LlvmBuilder.Value {
-        const builder = self.builder orelse return error.CompilationFailed;
-        return self.emitStrMatchWordByteMaskValue(word, builder.intValue(.i8, byte) catch return error.OutOfMemory, width);
-    }
-
     fn emitStrMatchWordByteMaskValue(
         self: *MonoLlvmCodeGen,
         word: LlvmBuilder.Value,
@@ -3285,7 +3275,6 @@ pub const MonoLlvmCodeGen = struct {
     ) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
-        const usize_ty = self.ptrSizedIntType();
         const capture_len = wip.bin(.sub, end, start, "") catch return error.OutOfMemory;
 
         const small_block = wip.block(0, "str_match_capture_small") catch return error.OutOfMemory;
@@ -3318,7 +3307,6 @@ pub const MonoLlvmCodeGen = struct {
         _ = wip.br(after_block) catch return error.OutOfMemory;
 
         wip.cursor = .{ .block = after_block };
-        _ = usize_ty;
     }
 
     fn clearDeferredStrCaptures(self: *MonoLlvmCodeGen) void {
@@ -3601,13 +3589,6 @@ pub const MonoLlvmCodeGen = struct {
         variable.setMutability(.constant, builder);
         variable.setInitializer(builder.stringConst(builder.string(actual) catch return error.OutOfMemory) catch return error.OutOfMemory, builder) catch return error.OutOfMemory;
         return variable.toValue(builder);
-    }
-
-    fn emitStrBoolBuiltin(self: *MonoLlvmCodeGen, target: LocalId, name: []const u8, args: []const LocalId) Error!void {
-        var call_args = try self.rocStrArgs2(args[0], args[1], false);
-        defer call_args.deinit(self.allocator);
-        const result = try self.callBuiltin(name, .i1, call_args.types.items, call_args.values.items);
-        try self.storeBool(self.slot(target).ptr, result);
     }
 
     fn emitStrByteSliceForLocal(self: *MonoLlvmCodeGen, local: LocalId) Error!StrByteSlice {

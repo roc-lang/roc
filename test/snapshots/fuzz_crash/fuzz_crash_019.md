@@ -1376,7 +1376,8 @@ EndOfFile,
 							(p-ident (raw "er"))
 							(e-int (raw "1")))
 						(branch
-							(p-string (raw """))
+							(p-string (raw """)
+								(p-string-text (raw "for")))
 							(e-int (raw "20")))
 						(branch
 							(p-list

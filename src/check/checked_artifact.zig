@@ -4848,11 +4848,13 @@ pub const CheckedListRestPattern = struct {
     pattern: ?CheckedPatternId,
 };
 
+/// End behavior for a checked string interpolation pattern.
 pub const CheckedStrPatternEnd = enum {
     exact,
     tail,
 };
 
+/// Delimited capture step inside a checked string interpolation pattern.
 pub const CheckedStrPatternStep = struct {
     capture: ?CheckedPatternId,
     delimiter: CheckedStringLiteralId,

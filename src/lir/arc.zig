@@ -111,7 +111,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         }
 
         const body = original_bodies[@intFromEnum(source_proc)] orelse continue;
-        const proc = store.getProcSpecPtr(emit_proc);
+        const emit_args = store.getProcSpec(emit_proc).args;
         inserter.current_sig = emit_sig;
 
         // Variant parameter positions demanded owned override the solved
@@ -122,7 +122,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         var override_count: usize = 0;
         var unique_locals_buffer: [64]LIR.LocalId = undefined;
         var unique_count: usize = 0;
-        for (store.getLocalSpan(proc.args), 0..) |param, position| {
+        for (store.getLocalSpan(emit_args), 0..) |param, position| {
             if (position >= 64) break;
             if (solved_sig.paramMode(position) == .borrowed and emit_sig.paramMode(position) == .owned) {
                 owned_param_override.set(param);
@@ -159,12 +159,14 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         defer inserter.rewritten_joins = null;
         var owned = try OwnedSet.init(store.allocator, store.locals.items.len);
         defer owned.deinit();
-        for (store.getLocalSpan(proc.args), 0..) |param, position| {
+        for (store.getLocalSpan(emit_args), 0..) |param, position| {
             if (emit_sig.paramMode(position) == .owned) {
                 if (inserter.localContainsRefcounted(param)) owned.set(param);
             }
         }
-        proc.body = try inserter.rewritePath(body, &owned, .{});
+        const rewritten_body = try inserter.rewritePath(body, &owned, .{});
+        const proc = store.getProcSpecPtr(emit_proc);
+        proc.body = rewritten_body;
         try inserter.writeProcJoinPoints(proc);
     }
 
@@ -5099,6 +5101,73 @@ test "RC specialization: owned final argument moves into a variant" {
     try testing.expectEqual(base_proc_count + 1, f.store.proc_specs.items.len);
     try f.expectRc(value, 0, 0, 0);
     try testing.expectEqual(@as(usize, 1), f.countRc(param, .decref));
+}
+
+test "RC specialization: caller body survives variant proc append" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    const one_str = try f.layouts.putStructFields(&[_]layout_mod.StructField{
+        .{ .index = 0, .layout = .str },
+    });
+
+    // Callee reads its aggregate parameter at position 1, so that parameter
+    // solves borrowed.
+    const callee_flag = try f.local(.i64);
+    const callee_param = try f.local(one_str);
+    const callee_result = try f.local(.i64);
+    const callee_ret = try f.ret(callee_result);
+    const callee_result_assign = try f.assignI64(callee_result, 1, callee_ret);
+    const callee_body = try f.expectStmt(callee_param, callee_result_assign);
+    const callee = try f.addProc(&.{ callee_flag, callee_param }, callee_body, .i64);
+
+    // Caller builds an owned aggregate from a borrowed field and passes that
+    // aggregate as its final use. Specialization appends a proc while this
+    // caller is being rewritten, so the caller body must be written back only
+    // after reacquiring its proc-spec pointer.
+    const source = try f.local(.str);
+    const field = try f.local(.str);
+    const pair = try f.local(one_str);
+    const flag = try f.local(.i64);
+    const result = try f.local(.i64);
+    const caller_ret = try f.ret(result);
+    const call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = result,
+        .proc = callee,
+        .args = try f.span(&.{ flag, pair }),
+        .next = caller_ret,
+    } });
+    const flag_assign = try f.assignI64(flag, 0, call);
+    const pair_assign = try f.assignStruct(pair, &.{field}, flag_assign);
+    const field_assign = try f.assignRefLocal(field, source, pair_assign);
+    const caller_body = try f.assignStr(source, "arg", field_assign);
+    const caller = try f.addProc(&.{}, caller_body, .i64);
+
+    const base_proc_count = f.store.proc_specs.items.len;
+    f.store.proc_specs.shrinkAndFree(f.allocator, f.store.proc_specs.items.len);
+    try insert(&f.store, &f.layouts, .{ .specialize = true });
+
+    try testing.expectEqual(base_proc_count + 1, f.store.proc_specs.items.len);
+    const variant: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(base_proc_count)));
+
+    var cursor = f.store.getProcSpec(caller).body orelse return error.MissingCallerBody;
+    var remaining = f.store.cf_stmts.items.len + 1;
+    while (remaining > 0) : (remaining -= 1) {
+        switch (f.store.getCFStmt(cursor)) {
+            .assign_call => |assign| {
+                if (assign.target == result) {
+                    try testing.expectEqual(variant, assign.proc);
+                    return;
+                }
+                cursor = assign.next;
+            },
+            inline .assign_ref, .assign_literal, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .free, .comptime_branch_taken => |stmt| {
+                cursor = stmt.next;
+            },
+            else => return error.ExpectedSpecializedCall,
+        }
+    }
+    return error.ExpectedSpecializedCall;
 }
 
 test "RC without specialization: owned final argument drops after the call" {

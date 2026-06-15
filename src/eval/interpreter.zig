@@ -3277,28 +3277,15 @@ pub const Interpreter = struct {
         arm: anytype,
     ) Error!bool {
         const prefix = self.store.getStringLiteral(arm.prefix);
-        if (!std.mem.startsWith(u8, source_bytes, prefix)) return false;
+        if (!LIR.strMatchPrefixMatches(source_bytes, prefix)) return false;
 
         var cursor: usize = prefix.len;
         const steps = self.store.getStrMatchSteps(arm.steps);
         for (steps, 0..) |step, step_i| {
-            const capture_start = cursor;
             const delimiter = self.store.getStringLiteral(step.delimiter);
             const is_final_tail_capture = arm.end == .tail and step_i + 1 == steps.len and delimiter.len == 0;
-
-            const capture_end = if (is_final_tail_capture) blk: {
-                cursor = source_bytes.len;
-                break :blk source_bytes.len;
-            } else blk: {
-                const found = if (delimiter.len == 0) cursor else found: {
-                    const candidate = std.mem.indexOfScalarPos(u8, source_bytes, cursor, delimiter[0]) orelse return false;
-                    if (source_bytes.len - candidate < delimiter.len) return false;
-                    if (!std.mem.eql(u8, source_bytes[candidate..][0..delimiter.len], delimiter)) return false;
-                    break :found candidate;
-                };
-                cursor = found + delimiter.len;
-                break :blk found;
-            };
+            const result = LIR.strMatchStep(source_bytes, cursor, delimiter, is_final_tail_capture) orelse return false;
+            cursor = result.next_cursor;
 
             switch (step.capture) {
                 .discard => {},
@@ -3307,18 +3294,13 @@ pub const Interpreter = struct {
                         frame,
                         stmt_id,
                         local,
-                        try self.makeStrCaptureValue(source_rs, source_bytes, capture_start, capture_end),
+                        try self.makeStrCaptureValue(source_rs, source_bytes, result.capture_start, result.capture_end),
                     );
                 },
             }
         }
 
-        switch (arm.end) {
-            .exact => if (cursor != source_bytes.len) return false,
-            .tail => {},
-        }
-
-        return true;
+        return LIR.strMatchEndMatches(source_bytes.len, cursor, arm.end);
     }
 
     fn makeStrCaptureValue(

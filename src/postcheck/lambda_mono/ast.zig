@@ -246,14 +246,17 @@ pub const PatData = union(enum) {
     str_pattern: StrPattern,
 };
 
+/// End behavior for a Lambda Mono string interpolation pattern.
 pub const StrPatternEnd = Mono.StrPatternEnd;
 
+/// Lambda Mono string interpolation pattern with lowered string literals.
 pub const StrPattern = struct {
     prefix: StringLiteralId,
     steps: Span(StrPatternStep),
     end: StrPatternEnd,
 };
 
+/// Delimited capture step inside a Lambda Mono string interpolation pattern.
 pub const StrPatternStep = struct {
     capture: ?PatId,
     delimiter: StringLiteralId,

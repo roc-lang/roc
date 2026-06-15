@@ -44,8 +44,10 @@ EndOfFile,
 				(e-string-part (raw "small numbers"))))
 		(branch
 			(p-alternatives
-				(p-string (raw """))
-				(p-string (raw """)))
+				(p-string (raw """)
+					(p-string-text (raw "hello")))
+				(p-string (raw """)
+					(p-string-text (raw "world"))))
 			(e-string
 				(e-string-part (raw "greetings"))))
 		(branch

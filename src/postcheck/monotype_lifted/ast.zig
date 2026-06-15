@@ -54,8 +54,11 @@ pub const Pat = Mono.Pat;
 
 /// Monotype Lifted pattern forms.
 pub const PatData = Mono.PatData;
+/// Monotype Lifted string interpolation pattern.
 pub const StrPattern = Mono.StrPattern;
+/// Monotype Lifted delimited capture step inside a string interpolation pattern.
 pub const StrPatternStep = Mono.StrPatternStep;
+/// Monotype Lifted end behavior for a string interpolation pattern.
 pub const StrPatternEnd = Mono.StrPatternEnd;
 
 /// Match branch.

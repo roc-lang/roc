@@ -275,7 +275,7 @@ pub fn certifyStoreOrPanic(
                 for (diag.chain[0..diag.chain_len], 0..) |link, index| {
                     extra_locals[index] = link.origin;
                 }
-                writeFailureContext(&context, store, proc_id, diag.context_stmt, diag.context_local, extra_locals[0..diag.chain_len]);
+                writeFailureContext(&context, store, sigs, proc_id, diag.context_stmt, diag.context_local, extra_locals[0..diag.chain_len]);
             }
             std.debug.panic("ARC borrow certifier: {s}{s}", .{ diag.message(), context.text() });
         },
@@ -301,7 +301,15 @@ const FailureContext = struct {
 
 /// Writes every statement of the failing proc that mentions the implicated
 /// local, plus all join/jump structure, into the panic context buffer.
-fn writeFailureContext(context: *FailureContext, store: *const LirStore, proc_id: LIR.LirProcSpecId, stmt_id: ?LIR.CFStmtId, local: ?LIR.LocalId, extra_locals: []const LIR.LocalId) void {
+fn writeFailureContext(
+    context: *FailureContext,
+    store: *const LirStore,
+    sigs: arc_sig.SigTable,
+    proc_id: LIR.LirProcSpecId,
+    stmt_id: ?LIR.CFStmtId,
+    local: ?LIR.LocalId,
+    extra_locals: []const LIR.LocalId,
+) void {
     const proc = store.getProcSpec(proc_id);
     context.append("\nfailure context: proc={d}", .{@intFromEnum(proc_id)});
     if (local) |l| {
@@ -386,10 +394,22 @@ fn writeFailureContext(context: *FailureContext, store: *const LirStore, proc_id
             .incref => |rc| context.append(" value={d} next={d}", .{ @intFromEnum(rc.value), @intFromEnum(rc.next) }),
             .decref => |rc| context.append(" value={d} next={d}", .{ @intFromEnum(rc.value), @intFromEnum(rc.next) }),
             .free => |rc| context.append(" value={d} next={d}", .{ @intFromEnum(rc.value), @intFromEnum(rc.next) }),
-            .assign_call => |a| context.append(" target={d} next={d}", .{ @intFromEnum(a.target), @intFromEnum(a.next) }),
-            .assign_low_level => |a| context.append(" target={d} op={s} next={d}", .{
-                @intFromEnum(a.target), @tagName(a.op), @intFromEnum(a.next),
-            }),
+            .assign_call => |a| {
+                const sig = sigs.get(a.proc);
+                context.append(" target={d} proc={d} sig(borrowed=0x{x}, ret={s}) args=", .{
+                    @intFromEnum(a.target),
+                    @intFromEnum(a.proc),
+                    sig.borrowed_params,
+                    @tagName(sig.ret_mode),
+                });
+                appendLocalSpan(context, store, a.args);
+                context.append(" next={d}", .{@intFromEnum(a.next)});
+            },
+            .assign_low_level => |a| {
+                context.append(" target={d} op={s} args=", .{ @intFromEnum(a.target), @tagName(a.op) });
+                appendLocalSpan(context, store, a.args);
+                context.append(" next={d}", .{@intFromEnum(a.next)});
+            },
             .str_match => |a| context.append(" source={d} match={d} miss={d}", .{
                 @intFromEnum(a.source), @intFromEnum(a.on_match), @intFromEnum(a.on_miss),
             }),
@@ -397,11 +417,30 @@ fn writeFailureContext(context: *FailureContext, store: *const LirStore, proc_id
                 @intFromEnum(a.source), a.arms.len, @intFromEnum(a.on_miss),
             }),
             .ret => |r| context.append(" value={d}", .{@intFromEnum(r.value)}),
-            inline .assign_literal, .assign_list, .assign_struct, .assign_tag, .assign_call_erased, .assign_packed_erased_fn => |a| context.append(" target={d} next={d}", .{ @intFromEnum(a.target), @intFromEnum(a.next) }),
+            .assign_list => |a| {
+                context.append(" target={d} elems=", .{@intFromEnum(a.target)});
+                appendLocalSpan(context, store, a.elems);
+                context.append(" next={d}", .{@intFromEnum(a.next)});
+            },
+            .assign_struct => |a| {
+                context.append(" target={d} fields=", .{@intFromEnum(a.target)});
+                appendLocalSpan(context, store, a.fields);
+                context.append(" next={d}", .{@intFromEnum(a.next)});
+            },
+            inline .assign_literal, .assign_tag, .assign_call_erased, .assign_packed_erased_fn => |a| context.append(" target={d} next={d}", .{ @intFromEnum(a.target), @intFromEnum(a.next) }),
             else => {},
         }
         context.append("\n", .{});
     }
+}
+
+fn appendLocalSpan(context: *FailureContext, store: *const LirStore, span: LIR.LocalSpan) void {
+    context.append("[", .{});
+    for (store.getLocalSpan(span), 0..) |local, index| {
+        if (index > 0) context.append(", ", .{});
+        context.append("{d}", .{@intFromEnum(local)});
+    }
+    context.append("]", .{});
 }
 
 fn stmtMentionsLocal(store: *const LirStore, stmt: LIR.CFStmt, needle: LIR.LocalId) bool {
@@ -832,6 +871,9 @@ const Certifier = struct {
             if (units == 0) continue;
             const origin = self.values.items[value_index].origin;
             if (units > 0) {
+                self.diag.context_local = origin;
+                self.diag.context_proc = self.current_proc;
+                self.describeValueChain(state, @intCast(value_index));
                 return self.fail(
                     "leaked {d} ownership unit(s) of value originating at local {d}",
                     .{ units, @intFromEnum(origin) },

@@ -1433,12 +1433,15 @@ EndOfFile,
 							(p-ident (raw "lower"))
 							(e-int (raw "1")))
 						(branch
-							(p-string (raw """))
+							(p-string (raw """)
+								(p-string-text (raw "foo")))
 							(e-int (raw "100")))
 						(branch
 							(p-alternatives
-								(p-string (raw """))
-								(p-string (raw """)))
+								(p-string (raw """)
+									(p-string-text (raw "foo")))
+								(p-string (raw """)
+									(p-string-text (raw "bar"))))
 							(e-int (raw "200")))
 						(branch
 							(p-list
@@ -1536,9 +1539,11 @@ EndOfFile,
 							(e-ident (raw "dude")))
 						(branch
 							(p-tag (raw "TwoArgs")
-								(p-string (raw """))
+								(p-string (raw """)
+									(p-string-text (raw "hello")))
 								(p-tag (raw "Some")
-									(p-string (raw """))))
+									(p-string (raw """)
+										(p-string-text (raw "world")))))
 							(e-int (raw "1000")))))))
 		(s-expect
 			(e-binop (op "==")

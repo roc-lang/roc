@@ -144,6 +144,56 @@ pub const StrMatchStep = struct {
     delimiter: StrLiteral,
 };
 
+/// Result of executing one string-pattern delimiter step.
+pub const StrMatchStepResult = struct {
+    capture_start: usize,
+    capture_end: usize,
+    next_cursor: usize,
+};
+
+/// Reports whether string-pattern matching may start with this prefix.
+pub fn strMatchPrefixMatches(source: []const u8, prefix: []const u8) bool {
+    return std.mem.startsWith(u8, source, prefix);
+}
+
+/// Executes one string-pattern delimiter step over source bytes.
+pub fn strMatchStep(source: []const u8, cursor: usize, delimiter: []const u8, tail_capture: bool) ?StrMatchStepResult {
+    if (cursor > source.len) return null;
+
+    if (tail_capture) {
+        return .{
+            .capture_start = cursor,
+            .capture_end = source.len,
+            .next_cursor = source.len,
+        };
+    }
+
+    const found = strMatchDelimiter(source, cursor, delimiter) orelse return null;
+    return .{
+        .capture_start = cursor,
+        .capture_end = found,
+        .next_cursor = found + delimiter.len,
+    };
+}
+
+/// Reports whether a string-pattern arm accepts the current cursor as its end.
+pub fn strMatchEndMatches(source_len: usize, cursor: usize, end: StrPatternEnd) bool {
+    return switch (end) {
+        .exact => cursor == source_len,
+        .tail => cursor <= source_len,
+    };
+}
+
+fn strMatchDelimiter(source: []const u8, cursor: usize, delimiter: []const u8) ?usize {
+    if (delimiter.len == 0) return cursor;
+    if (delimiter.len > source.len - cursor) return null;
+
+    const candidate = std.mem.findScalarPos(u8, source, cursor, delimiter[0]) orelse return null;
+    if (delimiter.len > source.len - candidate) return null;
+    if (!std.mem.eql(u8, source[candidate..][0..delimiter.len], delimiter)) return null;
+    return candidate;
+}
+
 /// Span into flat string-match-step storage.
 pub const StrMatchStepSpan = extern struct {
     start: u32,

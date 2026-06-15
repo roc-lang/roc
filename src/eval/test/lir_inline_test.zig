@@ -795,22 +795,6 @@ fn rootDirectCallTarget(
     return root_calls[0];
 }
 
-fn expectRootTargetCallCount(
-    source: []const u8,
-    inline_mode: lir.CheckedPipeline.InlineMode,
-    expected: usize,
-) anyerror!void {
-    const allocator = std.testing.allocator;
-    var lowered_source = try lowerModule(allocator, source, inline_mode);
-    defer lowered_source.deinit(allocator);
-
-    const target = try rootDirectCallTarget(allocator, &lowered_source.lowered);
-    const target_calls = try collectAssignCallProcs(allocator, &lowered_source.lowered, target);
-    defer allocator.free(target_calls);
-
-    try std.testing.expectEqual(expected, target_calls.len);
-}
-
 fn expectRootDirectCallCount(
     source: []const u8,
     inline_mode: lir.CheckedPipeline.InlineMode,

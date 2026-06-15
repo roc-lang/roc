@@ -374,17 +374,20 @@ pub const PatData = union(enum) {
     str_pattern: StrPattern,
 };
 
+/// End behavior for a Monotype string interpolation pattern.
 pub const StrPatternEnd = enum {
     exact,
     tail,
 };
 
+/// Monotype string interpolation pattern split into prefix and capture steps.
 pub const StrPattern = struct {
     prefix: StringLiteralId,
     steps: Span(StrPatternStep),
     end: StrPatternEnd,
 };
 
+/// Delimited capture step inside a Monotype string interpolation pattern.
 pub const StrPatternStep = struct {
     capture: ?PatId,
     delimiter: StringLiteralId,
