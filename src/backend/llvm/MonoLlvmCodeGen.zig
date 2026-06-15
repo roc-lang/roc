@@ -171,6 +171,8 @@ pub const MonoLlvmCodeGen = struct {
     /// one subprogram per proc, and per-statement line locations from the
     /// LIR store's source-location tables.
     emit_debug_info: bool = false,
+    /// Emit local variable declarations for source-level debugger inspection.
+    emit_local_debug_info: bool = false,
     /// Build-only default-platform Linux executables link a small runtime
     /// object that owns process startup diagnostics and signal handling.
     enable_default_platform_runtime: bool = false,
@@ -997,14 +999,12 @@ pub const MonoLlvmCodeGen = struct {
         const file = try self.debugFileFor(builder, self.current_debug_file);
         const empty_expr = builder.debugExpression(&.{}) catch return error.OutOfMemory;
         const previous_debug_location = wip.debug_location;
-        if (self.enable_default_platform_diagnostics) {
-            wip.debug_location = .{ .location = .{
-                .line = proc_line,
-                .column = if (proc_line == 0) 0 else 1,
-                .scope = scope.toOptional(),
-                .inlined_at = .none,
-            } };
-        }
+        wip.debug_location = .{ .location = .{
+            .line = proc_line,
+            .column = if (proc_line == 0) 0 else 1,
+            .scope = scope.toOptional(),
+            .inlined_at = .none,
+        } };
         defer wip.debug_location = previous_debug_location;
 
         for (self.store.getLocalSpan(proc.frame_locals)) |local_id| {
@@ -1189,7 +1189,9 @@ pub const MonoLlvmCodeGen = struct {
         defer self.allocator.free(self.local_slots);
         try self.allocLocalSlots();
         try self.unpackProcArgs(proc);
-        if (!builder.strip) try self.declareFrameLocals(proc, self.store.procLoc(proc_id).line);
+        if (!builder.strip and self.emit_local_debug_info) {
+            try self.declareFrameLocals(proc, self.store.procLoc(proc_id).line);
+        }
 
         if (proc.hosted) |hosted| {
             try self.emitHostedProcBody(hosted, proc);
@@ -1390,7 +1392,7 @@ pub const MonoLlvmCodeGen = struct {
         arg_layouts: []const layout.Idx,
         ret_layout: layout.Idx,
     ) Error!void {
-        if (self.enable_default_platform_runtime and
+        if (self.enable_default_platform_hosted_calls and
             self.host_call_mode == .extern_symbols and
             self.target.os.tag == .linux and
             std.mem.eql(u8, symbol_name, "_start"))
@@ -1800,6 +1802,12 @@ pub const MonoLlvmCodeGen = struct {
             .runtime_error => {
                 try self.emitCrashBytes("hit a runtime error");
             },
+            .comptime_exhaustiveness_failed => {
+                try self.emitCrashBytes("compile-time exhaustiveness failure reached runtime code");
+            },
+            .comptime_branch_taken => |marker| {
+                try work.append(wa, .{ .node = marker.next });
+            },
             .incref => |inc| {
                 try self.emitRcForLocal(.incref, inc.value, inc.count, inc.atomicity);
                 try work.append(wa, .{ .node = inc.next });
@@ -2136,7 +2144,9 @@ pub const MonoLlvmCodeGen = struct {
             .list_prepend => try self.emitListPrepend(target, arg_locals, unique_args),
             .list_sublist, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last => try self.emitListSublist(target, op, arg_locals, unique_args),
             .list_drop_at => try self.emitListDropAt(target, arg_locals, unique_args),
+            .list_swap => try self.emitListSwap(target, arg_locals, unique_args),
             .list_set => try self.emitListSet(target, arg_locals, unique_args),
+            .list_replace_unsafe => try self.emitListReplaceUnsafe(target, arg_locals, unique_args),
             .list_map_can_reuse => try self.emitListMapCanReuse(target, arg_locals),
             .list_map_cast_unsafe => try self.copyBytes(self.slot(target).ptr, self.slot(arg_locals[0]).ptr, self.slot(target).size, self.slot(target).alignment),
             .list_map_extract_unsafe => try self.emitListMapExtractUnsafe(target, arg_locals),
@@ -3266,6 +3276,22 @@ pub const MonoLlvmCodeGen = struct {
         try self.callBuiltinVoid("roc_builtins_list_drop_at", call_args.types.items, call_args.values.items);
     }
 
+    fn emitListSwap(self: *MonoLlvmCodeGen, target: LocalId, args: []const LocalId, unique_args: u64) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const abi = self.layouts().builtinListAbi(self.localLayout(args[0]));
+        var call_args = try self.rocListArgs1(args[0]);
+        defer call_args.deinit(self.allocator);
+        try call_args.prepend(self.allocator, try self.ptrType(), self.slot(target).ptr);
+        try call_args.append(self.allocator, .i32, builder.intValue(.i32, abi.elem_alignment) catch return error.OutOfMemory);
+        try call_args.append(self.allocator, self.ptrSizedIntType(), builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory);
+        try call_args.append(self.allocator, .i64, try self.coerceScalar(try self.loadScalar(self.slot(args[1]).ptr, self.localLayout(args[1])), .i64, false));
+        try call_args.append(self.allocator, .i64, try self.coerceScalar(try self.loadScalar(self.slot(args[2]).ptr, self.localLayout(args[2])), .i64, false));
+        try self.appendListElementRcArgs(&call_args, abi, true, true);
+        try self.appendUpdateModeArg(&call_args, unique_args);
+        try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
+        try self.callBuiltinVoid("roc_builtins_list_swap", call_args.types.items, call_args.values.items);
+    }
+
     fn emitListSet(self: *MonoLlvmCodeGen, target: LocalId, args: []const LocalId, unique_args: u64) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const abi = self.layouts().builtinListAbi(self.localLayout(args[0]));
@@ -3277,6 +3303,44 @@ pub const MonoLlvmCodeGen = struct {
         try call_args.append(self.allocator, try self.ptrType(), self.slot(args[2]).ptr);
         try call_args.append(self.allocator, self.ptrSizedIntType(), builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory);
         try call_args.append(self.allocator, try self.ptrType(), builder.nullValue(try self.ptrType()) catch return error.OutOfMemory);
+        try self.appendListElementRcArgs(&call_args, abi, true, true);
+        try self.appendUpdateModeArg(&call_args, unique_args);
+        try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
+        try self.callBuiltinVoid("roc_builtins_list_replace", call_args.types.items, call_args.values.items);
+    }
+
+    fn emitListReplaceUnsafe(self: *MonoLlvmCodeGen, target: LocalId, args: []const LocalId, unique_args: u64) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        // The result is a { list, prev } record. Reuse roc_builtins_list_replace
+        // and aim its (out_list, out_element) outputs directly at the record's
+        // fields, disambiguated by layout tag like the dev backend does.
+        const record_layout_val = self.layoutValue(self.localLayout(target));
+        if (record_layout_val.tag != .struct_) return error.CompilationFailed;
+        const rec_idx = record_layout_val.getStruct().idx;
+        const f0_layout = self.layoutValue(self.layouts().getStructFieldLayoutByOriginalIndex(rec_idx, 0));
+        const f0_offset = self.layouts().getStructFieldOffsetByOriginalIndex(rec_idx, 0);
+        const f1_offset = self.layouts().getStructFieldOffsetByOriginalIndex(rec_idx, 1);
+        const f0_is_list = f0_layout.tag == .list or f0_layout.tag == .list_of_zst;
+        const list_out_ptr = try self.offsetPtr(self.slot(target).ptr, if (f0_is_list) f0_offset else f1_offset);
+        const value_out_ptr = try self.offsetPtr(self.slot(target).ptr, if (f0_is_list) f1_offset else f0_offset);
+
+        const abi = self.layouts().builtinListAbi(self.localLayout(args[0]));
+        if (abi.elem_size == 0) {
+            // listReplace would dereference a NULL element pointer for ZST
+            // elements; the result list is the input unchanged and the prev
+            // field is zero-sized.
+            try self.copyBytes(list_out_ptr, self.slot(args[0]).ptr, self.slot(args[0]).size, self.slot(args[0]).alignment);
+            return;
+        }
+
+        var call_args = try self.rocListArgs1(args[0]);
+        defer call_args.deinit(self.allocator);
+        try call_args.prepend(self.allocator, try self.ptrType(), list_out_ptr);
+        try call_args.append(self.allocator, .i32, builder.intValue(.i32, abi.elem_alignment) catch return error.OutOfMemory);
+        try call_args.append(self.allocator, .i64, try self.coerceScalar(try self.loadScalar(self.slot(args[1]).ptr, self.localLayout(args[1])), .i64, false));
+        try call_args.append(self.allocator, try self.ptrType(), self.slot(args[2]).ptr);
+        try call_args.append(self.allocator, self.ptrSizedIntType(), builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory);
+        try call_args.append(self.allocator, try self.ptrType(), value_out_ptr);
         try self.appendListElementRcArgs(&call_args, abi, true, true);
         try self.appendUpdateModeArg(&call_args, unique_args);
         try call_args.append(self.allocator, try self.ptrType(), self.rocOps());

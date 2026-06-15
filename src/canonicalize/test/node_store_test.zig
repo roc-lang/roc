@@ -314,6 +314,7 @@ test "NodeStore round trip - Expressions" {
         .e_if = .{
             .branches = CIR.Expr.IfBranch.Span{ .span = rand_span() },
             .final_else = rand_idx(CIR.Expr.Idx),
+            .warn_unused_branches = true,
         },
     });
     try expressions.append(gpa, CIR.Expr{
@@ -1076,6 +1077,12 @@ test "NodeStore round trip - Diagnostics" {
     try diagnostics.append(gpa, CIR.Diagnostic{
         .file_import_not_utf8 = .{
             .path = rand_idx(StringLiteral.Idx),
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
+        .range_op_chained = .{
             .region = rand_region(),
         },
     });

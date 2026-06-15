@@ -240,6 +240,7 @@ fn collectAssignCallProcs(
             .set_local => |stmt| try work.append(allocator, stmt.next),
             .debug => |stmt| try work.append(allocator, stmt.next),
             .expect => |stmt| try work.append(allocator, stmt.next),
+            .comptime_branch_taken => |stmt| try work.append(allocator, stmt.next),
             .incref => |stmt| try work.append(allocator, stmt.next),
             .decref => |stmt| try work.append(allocator, stmt.next),
             .free => |stmt| try work.append(allocator, stmt.next),
@@ -255,6 +256,7 @@ fn collectAssignCallProcs(
                 try work.append(allocator, stmt.remainder);
             },
             .runtime_error,
+            .comptime_exhaustiveness_failed,
             .loop_continue,
             .loop_break,
             .jump,
@@ -330,6 +332,7 @@ fn collectProcShape(
             .set_local => |stmt| try work.append(allocator, stmt.next),
             .debug => |stmt| try work.append(allocator, stmt.next),
             .expect => |stmt| try work.append(allocator, stmt.next),
+            .comptime_branch_taken => |stmt| try work.append(allocator, stmt.next),
             .incref => |stmt| try work.append(allocator, stmt.next),
             .decref => |stmt| try work.append(allocator, stmt.next),
             .free => |stmt| try work.append(allocator, stmt.next),
@@ -354,6 +357,7 @@ fn collectProcShape(
                 shape.jump_count += 1;
             },
             .runtime_error,
+            .comptime_exhaustiveness_failed,
             .loop_continue,
             .loop_break,
             .ret,
@@ -372,6 +376,15 @@ const IterCollectShape = enum {
 };
 
 fn procShapeMatchesIterCollect(shape: ProcShape, wanted: IterCollectShape) bool {
+    // Fingerprints of the `Iter.collect` -> `List.from_iter` worker over a range.
+    // `from_iter` branches on the iterator's length: a Known length reserves the
+    // whole allocation up front and writes each item with the unchecked append,
+    // while an Unknown length grows with the reserving append. That per-element
+    // branch (the inner `match length`) is the extra switch/join/jump over the
+    // earlier single-append loop. Spec constr specializes the worker for the
+    // concrete element type, and because ranges carry a Known length (via each
+    // numeric type's `steps_between`) the specialized worker threads that count
+    // as a third arg (`with_capacity` preallocation).
     return switch (wanted) {
         .specialized => shape.arg_count == 3 and
             shape.direct_call_count >= 10 and
@@ -380,9 +393,9 @@ fn procShapeMatchesIterCollect(shape: ProcShape, wanted: IterCollectShape) bool 
             shape.jump_count >= 20,
         .generic => shape.arg_count == 1 and
             shape.direct_call_count == 4 and
-            shape.switch_count == 6 and
-            shape.join_count == 9 and
-            shape.jump_count == 11 and
+            shape.switch_count == 8 and
+            shape.join_count == 12 and
+            shape.jump_count == 15 and
             shape.struct_assign_count >= 8,
     };
 }
@@ -467,6 +480,7 @@ fn markReachableLiftedExpr(
         .str_lit,
         .fn_ref,
         .crash,
+        .comptime_exhaustiveness_failed,
         => {},
         .list,
         .tuple,
@@ -479,6 +493,7 @@ fn markReachableLiftedExpr(
         .expect,
         => |child| markReachableLiftedExpr(program, child, reachable),
         .expect_err => |expect_err| markReachableLiftedExpr(program, expect_err.msg, reachable),
+        .comptime_branch_taken => |taken| markReachableLiftedExpr(program, taken.body, reachable),
         .let_ => |let_| {
             markReachableLiftedExpr(program, let_.value, reachable);
             markReachableLiftedExpr(program, let_.rest, reachable);
@@ -933,7 +948,7 @@ test "plant iter pipeline specializes collect worker after inlining" {
         \\
         \\starting_plants : () -> List(Plant)
         \\starting_plants = || {
-        \\    0.I64.to(15)
+        \\    (0.I64..=15)
         \\        .map(|i| random_plant(i * 12))
         \\        .collect()
         \\}
@@ -941,6 +956,26 @@ test "plant iter pipeline specializes collect worker after inlining" {
         \\main : List(Plant)
         \\main = starting_plants()
     );
+}
+
+test "known-length List.iter collect specializes without unbound locals" {
+    // Regression: collecting a Known-length iterator (List.iter) under
+    // optimization specializes a recursive capturing worker (List.iter's `make`
+    // step). The specializer must reuse the source capture local ids; otherwise
+    // a leftover direct call to the un-specialized worker references an unbound
+    // capture local, which the ARC borrow certifier rejects. (Also exercises the
+    // ARC use-after-realloc fix, since main's rewrite emits an owned variant.)
+    const allocator = std.testing.allocator;
+    var optimized = try lowerModule(allocator,
+        \\module [main]
+        \\
+        \\main : List(I64)
+        \\main =
+        \\    Iter.collect(
+        \\        Iter.map(List.iter([1.I64, 2, 3]), |i| i * 12),
+        \\    )
+    , .direct_call_wrappers);
+    defer optimized.deinit(allocator);
 }
 
 test "direct iter collect worker specializes constructor recursive call" {
@@ -955,7 +990,7 @@ test "direct iter collect worker specializes constructor recursive call" {
         \\main : List(Plant)
         \\main =
         \\    Iter.collect(
-        \\        Iter.map(0.I64.to(15), |i| random_plant(i * 12)),
+        \\        Iter.map(0.I64..=15, |i| random_plant(i * 12)),
         \\    )
     );
 }

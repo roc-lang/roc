@@ -260,6 +260,7 @@ pub const Tag = enum {
     diag_return_outside_fn,
     diag_mutually_recursive_type_aliases,
     diag_deprecated_number_suffix,
+    diag_range_op_chained,
 };
 
 /// Typed payload union for accessing node data in a type-safe manner.
@@ -575,7 +576,7 @@ pub const Payload = extern union {
     };
 
     pub const ExprIfThenElse = extern struct {
-        branches_else_idx: u32, // Index into span_with_node_data: (branches.start, branches.len, final_else)
+        branches_else_idx: u32, // Index into if_data
         _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
     };
 
