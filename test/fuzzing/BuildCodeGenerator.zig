@@ -26,6 +26,7 @@ const SymbolKind = enum {
     module_file,
     package,
     type,
+    type_var,
     tag,
     field,
     value,
@@ -87,6 +88,8 @@ const Symbols = struct {
     describe_try: Symbol,
     score_tree: Symbol,
     score_tree_list: Symbol,
+    generic_id: Symbol,
+    generic_choose: Symbol,
 };
 
 pub fn init(allocator: std.mem.Allocator, reader: *FuzzReader) Self {
@@ -196,6 +199,8 @@ pub fn generate(self: *Self) std.mem.Allocator.Error!void {
         .describe_try = self.fresh(.function),
         .score_tree = self.fresh(.function),
         .score_tree_list = self.fresh(.function),
+        .generic_id = self.fresh(.function),
+        .generic_choose = self.fresh(.function),
     };
 
     try self.setFileNames(app_file, platform_file, module_file);
@@ -573,6 +578,7 @@ fn writeTopLevelFunctions(self: *Self) std.mem.Allocator.Error!void {
     try self.writeGridRecursion();
     try self.writeDescribeTry();
     try self.writeTreeScoring();
+    try self.writeGenericHelpers();
 }
 
 fn writeMakeItem(self: *Self) std.mem.Allocator.Error!void {
@@ -1305,6 +1311,51 @@ fn writeTreeScoring(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppText("\n}\n\n");
 }
 
+fn writeGenericHelpers(self: *Self) std.mem.Allocator.Error!void {
+    const id_type = self.fresh(.type_var);
+    const id_value = self.fresh(.value);
+    const choose_type = self.fresh(.type_var);
+    const condition = self.fresh(.value);
+    const left = self.fresh(.value);
+    const right = self.fresh(.value);
+
+    try self.writeAppSymbol(self.symbols.generic_id);
+    try self.writeAppText(" : ");
+    try self.writeAppSymbol(id_type);
+    try self.writeAppText(" -> ");
+    try self.writeAppSymbol(id_type);
+    try self.writeAppText("\n");
+    try self.writeAppSymbol(self.symbols.generic_id);
+    try self.writeAppText(" = |");
+    try self.writeAppSymbol(id_value);
+    try self.writeAppText("| ");
+    try self.writeAppSymbol(id_value);
+    try self.writeAppText("\n\n");
+
+    try self.writeAppSymbol(self.symbols.generic_choose);
+    try self.writeAppText(" : Bool, ");
+    try self.writeAppSymbol(choose_type);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(choose_type);
+    try self.writeAppText(" -> ");
+    try self.writeAppSymbol(choose_type);
+    try self.writeAppText("\n");
+    try self.writeAppSymbol(self.symbols.generic_choose);
+    try self.writeAppText(" = |");
+    try self.writeAppSymbol(condition);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(left);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(right);
+    try self.writeAppText("| if ");
+    try self.writeAppSymbol(condition);
+    try self.writeAppText(" ");
+    try self.writeAppSymbol(left);
+    try self.writeAppText(" else ");
+    try self.writeAppSymbol(right);
+    try self.writeAppText("\n\n");
+}
+
 fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     const input = self.fresh(.value);
     const first = self.fresh(.value);
@@ -1317,7 +1368,13 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     const pair_score = self.fresh(.value);
     const try_score = self.fresh(.value);
     const try_value = self.fresh(.value);
+    const generic_num = self.fresh(.value);
+    const generic_text = self.fresh(.value);
+    const generic_item = self.fresh(.value);
+    const generic_items = self.fresh(.value);
     const imported_record = self.fresh(.value);
+    const alternate_imported = self.fresh(.value);
+    const generic_imported = self.fresh(.value);
     const imported_score = self.fresh(.value);
     const builder = self.fresh(.value);
     const state = self.fresh(.value);
@@ -1460,6 +1517,55 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     try self.writeIndent(1);
     try self.writeAppText("}\n");
 
+    try self.writeIndent(1);
+    try self.writeAppSymbol(generic_num);
+    try self.writeAppText(" : U64\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(generic_num);
+    try self.writeAppText(" = ");
+    try self.writeAppSymbol(self.symbols.generic_choose);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(self.symbols.is_even);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(try_score);
+    try self.writeAppText("), ");
+    try self.writeAppSymbol(self.symbols.generic_id);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(folded);
+    try self.writeAppText("), ");
+    try self.writeAppSymbol(pair_score);
+    try self.writeAppText(")\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(generic_text);
+    try self.writeAppText(" : Str\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(generic_text);
+    try self.writeAppText(" = ");
+    try self.writeAppSymbol(self.symbols.generic_id);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(input);
+    try self.writeAppText(")\n");
+
+    try self.writeLocalHeader(generic_item, self.symbols.item_type);
+    try self.writeAppSymbol(self.symbols.generic_id);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(first);
+    try self.writeAppText(")\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(generic_items);
+    try self.writeAppText(" : List(");
+    try self.writeAppSymbol(self.symbols.item_type);
+    try self.writeAppText(")\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(generic_items);
+    try self.writeAppText(" = ");
+    try self.writeAppSymbol(self.symbols.generic_id);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(transformed);
+    try self.writeAppText(")\n");
+
     try self.writeLocalHeader(imported_record, self.symbols.imported_type);
     try self.writeAppSymbol(self.symbols.imported_type);
     try self.writeAppText(".");
@@ -1468,8 +1574,34 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppSymbol(try_score);
     try self.writeAppText(" + ");
     try self.writeAppSymbol(pair_score);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(generic_num);
     try self.writeAppText(", ");
-    try self.writeAppSymbol(input);
+    try self.writeAppSymbol(generic_text);
+    try self.writeAppText(")\n");
+
+    try self.writeLocalHeader(alternate_imported, self.symbols.imported_type);
+    try self.writeAppSymbol(self.symbols.imported_type);
+    try self.writeAppText(".");
+    try self.writeAppSymbol(self.symbols.imported_make);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(generic_num);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(generic_text);
+    try self.writeAppText(")\n");
+
+    try self.writeLocalHeader(generic_imported, self.symbols.imported_type);
+    try self.writeAppSymbol(self.symbols.generic_choose);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(self.symbols.is_even);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(generic_num);
+    try self.writeAppText("), ");
+    try self.writeAppSymbol(self.symbols.generic_id);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(imported_record);
+    try self.writeAppText("), ");
+    try self.writeAppSymbol(alternate_imported);
     try self.writeAppText(")\n");
 
     try self.writeIndent(1);
@@ -1478,7 +1610,7 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     try self.writeIndent(1);
     try self.writeAppSymbol(imported_score);
     try self.writeAppText(" = ");
-    try self.writeAppSymbol(imported_record);
+    try self.writeAppSymbol(generic_imported);
     try self.writeAppText(".");
     try self.writeAppSymbol(self.symbols.imported_score);
     try self.writeAppText("(");
@@ -1501,11 +1633,11 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppText(").");
     try self.writeAppSymbol(self.symbols.builder_add);
     try self.writeAppText("(");
-    try self.writeAppSymbol(first);
+    try self.writeAppSymbol(generic_item);
     try self.writeAppText(").");
     try self.writeAppSymbol(self.symbols.builder_add_many);
     try self.writeAppText("(");
-    try self.writeAppSymbol(transformed);
+    try self.writeAppSymbol(generic_items);
     try self.writeAppText(")\n");
 
     try self.writeLocalHeader(state, self.symbols.state_type);
@@ -1537,7 +1669,7 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppText(" = ");
     try self.writeAppSymbol(self.symbols.score_with);
     try self.writeAppText("(");
-    try self.writeAppSymbol(transformed);
+    try self.writeAppSymbol(generic_items);
     try self.writeAppText(", |");
     try self.writeAppSymbol(captured_item);
     try self.writeAppText("| ");
@@ -1736,6 +1868,7 @@ fn symbolPrefix(kind: SymbolKind) u8 {
         .module_file => 'M',
         .package => 'p',
         .type => 'T',
+        .type_var => 'a',
         .tag => 'C',
         .field => 'r',
         .value => 'v',
