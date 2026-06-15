@@ -3117,40 +3117,18 @@ fn reportPolymorphicTopLevelValues(self: *Self) std.mem.Allocator.Error!void {
         const def_var = ModuleEnv.varFrom(def_idx);
 
         if (self.erroneous_value_patterns.contains(def.pattern)) continue;
-        if (self.zeroArgFunctionReturnVar(def_var)) |ret_var| {
-            self.var_set.clearRetainingCapacity();
-            if (try self.varHasUnresolvedStaticDispatchConstraints(ret_var, &self.var_set)) {
-                try self.reportPolymorphicValueProblem(ret_var, ModuleEnv.varFrom(def.pattern), self.getPatternIdent(def.pattern));
-            }
-            continue;
-        }
+        // A function — including a zero-arg thunk (`|| …`) — may generalize to a
+        // polymorphic type: each call site monomorphizes its return. Only a
+        // non-function top-level *value* must be concrete, since it is computed
+        // once and needs a single representation. (A thunk whose return is left
+        // open is therefore allowed; if it is an app entry the platform's
+        // `requires` type unifies it to a concrete type anyway.)
         if (self.varIsFunctionType(def_var)) continue;
 
         self.var_set.clearRetainingCapacity();
         if (!try self.varHasUnresolvedStaticDispatchConstraints(def_var, &self.var_set)) continue;
 
         try self.reportPolymorphicValueProblem(def_var, ModuleEnv.varFrom(def.pattern), self.getPatternIdent(def.pattern));
-    }
-}
-
-fn zeroArgFunctionReturnVar(self: *Self, var_: Var) ?Var {
-    var current = var_;
-    while (true) {
-        const resolved = self.types.resolveVar(current);
-        switch (resolved.desc.content) {
-            .alias => |alias| {
-                current = self.types.getAliasBackingVar(alias);
-                continue;
-            },
-            .structure => |flat| switch (flat) {
-                .fn_pure, .fn_effectful, .fn_unbound => |func| {
-                    if (func.args.len() == 0) return func.ret;
-                    return null;
-                },
-                else => return null,
-            },
-            .err, .flex, .rigid => return null,
-        }
     }
 }
 
@@ -10532,6 +10510,13 @@ fn runLiteralDefaultingRounds(self: *Self, env: *Env, universe: LiteralDefaultUn
                     if (resolved.desc.content != .flex) continue;
                     if (resolved.desc.rank != boundary.rank) continue;
                     if (self.varLiteralKind(resolved.var_) == null) continue;
+                    // A signature-reachable literal stays open (let-polymorphic) and
+                    // generalizes — quotes and interpolations included (interpolations
+                    // are publishable while open thanks to the checked-interpolation
+                    // reachability handling). A zero-arg thunk's return is
+                    // signature-reachable too, so its literal also stays open; the
+                    // thunk simply generalizes as a polymorphic function (see
+                    // `reportPolymorphicTopLevelValues`).
                     if (self.boundary_reachable_vars.contains(resolved.var_)) continue;
                     const gop = try seen_roots.getOrPut(resolved.var_);
                     if (gop.found_existing) continue;
@@ -10972,6 +10957,11 @@ fn emitBoundaryWarningAfterCommit(
     literal_root: Var,
     snapshot_var: Var,
 ) std.mem.Allocator.Error!void {
+    // Only numerals warn on default. A numeral has many sensible types (I8…U64,
+    // Dec, F64), so silently committing it to Dec is a real choice worth flagging.
+    // A quote/interpolation defaults to Str — almost always what was meant, and how
+    // main defaulted them (silently) — so flagging it is just noise.
+    if (pending.kind != .numeral) return;
     if (!pending.leaks_into_signature) return;
     const default_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, snapshot_var);
     _ = try self.problems.appendProblem(self.gpa, .{ .literal_defaulted = .{
@@ -11149,6 +11139,7 @@ fn varLiteralKind(self: *Self, var_: Var) ?StaticDispatchConstraint.LiteralKind 
     return if (has_quote) .quote else if (has_interpolation) .interpolation else null;
 }
 
+/// Whether this flex var carries any interpolation `from_literal` constraint.
 // --- Per-kind literal facts, each an exhaustive `switch (LiteralKind)` ---------
 //
 // Adding a `LiteralKind` variant turns each switch below into a compile error

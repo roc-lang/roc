@@ -4378,16 +4378,18 @@ test "check type - record ext - arg inferred as open" {
         \\    use_record(rec)
         \\}
         \\create_record = || {
-        \\    {foo: "bar"}
+        \\    foo_val : Str
+        \\    foo_val = "bar"
+        \\    {foo: foo_val}
         \\}
         \\use_record = |rec| {
         \\    Str.is_empty(rec.blah)
         \\}
     ;
-    // The open string literal in `create_record`'s return stays generalized
-    // (signature-reachable, so each use may pin it); `rec`'s shared copy is never
-    // pinned, so the unresolved-polymorphic-value report fires alongside the
-    // argument mismatch — same shape as the numeral analogue.
+    // The `Str` annotation on `foo_val` pins `create_record`'s return to the
+    // concrete `{ foo: Str }`, so the zero-arg thunk is no longer polymorphic
+    // (thunks are allowed to generalize, but here nothing is left open). Only the
+    // argument mismatch — `rec` lacks the `blah` field `use_record` needs — fires.
     try checkTypesModule(source, .{ .fail_with_all = &.{
         \\**TYPE MISMATCH**
         \\The first argument being passed to this function has the wrong type:
@@ -4399,30 +4401,13 @@ test "check type - record ext - arg inferred as open" {
         \\
         \\This argument has the type:
         \\
-        \\    { foo: a } where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]
+        \\    { foo: Str }
         \\
         \\But `use_record` needs the first argument to be:
         \\
         \\    { blah: Str, .. }
         \\
         \\**Hint:** This record is missing the field: `blah`
-        \\
-        \\
-        ,
-        \\**POLYMORPHIC VALUE**
-        \\This top-level value still has an unresolved polymorphic type:
-        \\**test:2:11:2:24:**
-        \\```roc
-        \\    rec = create_record()
-        \\```
-        \\          ^^^^^^^^^^^^^
-        \\
-        \\
-        \\Its type is:
-        \\```roc
-        \\{ foo: a } where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]
-        \\```
-        \\Add an annotation or use this value in a way that fixes its concrete type.
         \\
         \\
     } }, "");
@@ -5590,16 +5575,18 @@ test "check type - zulip repro" {
         \\    use_record(rec)
         \\}
         \\create_record = || {
-        \\    {foo: "bar"}
+        \\    foo_val : Str
+        \\    foo_val = "bar"
+        \\    {foo: foo_val}
         \\}
         \\use_record = |rec| {
         \\    Str.is_empty(rec.blah)
         \\}
     ;
-    // The open string literal in `create_record`'s return stays generalized
-    // (signature-reachable, so each use may pin it); `rec`'s shared copy is never
-    // pinned, so the unresolved-polymorphic-value report fires alongside the
-    // argument mismatch — same shape as the numeral analogue.
+    // The `Str` annotation on `foo_val` pins `create_record`'s return to the
+    // concrete `{ foo: Str }`, so the zero-arg thunk is no longer polymorphic
+    // (thunks are allowed to generalize, but here nothing is left open). Only the
+    // argument mismatch — `rec` lacks the `blah` field `use_record` needs — fires.
     try checkTypesModule(source, .{ .fail_with_all = &.{
         \\**TYPE MISMATCH**
         \\The first argument being passed to this function has the wrong type:
@@ -5611,30 +5598,13 @@ test "check type - zulip repro" {
         \\
         \\This argument has the type:
         \\
-        \\    { foo: a } where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]
+        \\    { foo: Str }
         \\
         \\But `use_record` needs the first argument to be:
         \\
         \\    { blah: Str, .. }
         \\
         \\**Hint:** This record is missing the field: `blah`
-        \\
-        \\
-        ,
-        \\**POLYMORPHIC VALUE**
-        \\This top-level value still has an unresolved polymorphic type:
-        \\**test:2:11:2:24:**
-        \\```roc
-        \\    rec = create_record()
-        \\```
-        \\          ^^^^^^^^^^^^^
-        \\
-        \\
-        \\Its type is:
-        \\```roc
-        \\{ foo: a } where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]
-        \\```
-        \\Add an annotation or use this value in a way that fixes its concrete type.
         \\
         \\
     } }, "");

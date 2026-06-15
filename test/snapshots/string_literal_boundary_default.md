@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=An open string literal unreachable from a generalized def's signature is defaulted to Str at the generalization boundary, and the warning is worded for string literals
+description=An open string literal unreachable from a generalized def's signature is defaulted to Str at the generalization boundary, silently (string literals default to Str without a warning)
 type=snippet
 ~~~
 # SOURCE
@@ -8,18 +8,9 @@ type=snippet
 g = |x| "a".concat(x)
 ~~~
 # EXPECTED
-LITERAL DEFAULTED - string_literal_boundary_default.md:1:9:1:12
+NIL
 # PROBLEMS
-**LITERAL DEFAULTED**
-Nothing in this definition's type determines the type of this string literal, so it was given the default type **Str** instead:
-**string_literal_boundary_default.md:1:9:1:12:**
-```roc
-g = |x| "a".concat(x)
-```
-        ^^^
-
-**Hint:** To use a different string type here, add a type annotation.
-
+NIL
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,StringStart,StringPart,StringEnd,NoSpaceDotLowerIdent,NoSpaceOpenRound,LowerIdent,CloseRound,
