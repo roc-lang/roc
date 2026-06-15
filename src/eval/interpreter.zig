@@ -6350,13 +6350,8 @@ pub const Interpreter = struct {
 
     fn floatToIntTry(self: *LirInterpreter, comptime Src: type, comptime Dst: type, arg: Value, ret_layout: layout_mod.Idx) Error!Value {
         const sv = arg.read(Src);
-        const min_val = comptime @as(Src, @floatFromInt(std.math.minInt(Dst)));
-        const max_val = comptime @as(Src, @floatFromInt(std.math.maxInt(Dst)));
-        if (!std.math.isNan(sv) and !std.math.isInf(sv)) {
-            const truncated: Src = @trunc(sv);
-            if (truncated >= min_val and truncated <= max_val) {
-                return self.writeLowLevelTryRecord(Dst, ret_layout, @intFromFloat(truncated));
-            }
+        if (builtins.numeric_conversions.floatToIntTry(Src, Dst, sv)) |value| {
+            return self.writeLowLevelTryRecord(Dst, ret_layout, value);
         }
         return self.writeLowLevelTryRecord(Dst, ret_layout, null);
     }
