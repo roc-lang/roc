@@ -49,6 +49,7 @@ const Symbols = struct {
     builder_type: Symbol,
     tree_type: Symbol,
     box_tree_type: Symbol,
+    try_tree_type: Symbol,
     key_type: Symbol,
     imported_type: Symbol,
     err_missing: Symbol,
@@ -59,6 +60,9 @@ const Symbols = struct {
     box_tree_leaf: Symbol,
     box_tree_wrap: Symbol,
     box_tree_pair: Symbol,
+    try_tree_value: Symbol,
+    try_tree_many: Symbol,
+    try_tree_apply: Symbol,
     item_id: Symbol,
     item_text: Symbol,
     item_flag: Symbol,
@@ -99,6 +103,8 @@ const Symbols = struct {
     score_tree: Symbol,
     score_tree_list: Symbol,
     score_box_tree: Symbol,
+    score_try_tree: Symbol,
+    score_nested_try: Symbol,
     score_inspect: Symbol,
     generic_id: Symbol,
     generic_choose: Symbol,
@@ -188,6 +194,7 @@ pub fn generate(self: *Self) std.mem.Allocator.Error!void {
         .builder_type = self.fresh(.type),
         .tree_type = self.fresh(.type),
         .box_tree_type = self.fresh(.type),
+        .try_tree_type = self.fresh(.type),
         .key_type = self.fresh(.type),
         .imported_type = module_file,
         .err_missing = self.fresh(.tag),
@@ -198,6 +205,9 @@ pub fn generate(self: *Self) std.mem.Allocator.Error!void {
         .box_tree_leaf = self.fresh(.tag),
         .box_tree_wrap = self.fresh(.tag),
         .box_tree_pair = self.fresh(.tag),
+        .try_tree_value = self.fresh(.tag),
+        .try_tree_many = self.fresh(.tag),
+        .try_tree_apply = self.fresh(.tag),
         .item_id = self.fresh(.field),
         .item_text = self.fresh(.field),
         .item_flag = self.fresh(.field),
@@ -238,6 +248,8 @@ pub fn generate(self: *Self) std.mem.Allocator.Error!void {
         .score_tree = self.fresh(.function),
         .score_tree_list = self.fresh(.function),
         .score_box_tree = self.fresh(.function),
+        .score_try_tree = self.fresh(.function),
+        .score_nested_try = self.fresh(.function),
         .score_inspect = self.fresh(.function),
         .generic_id = self.fresh(.function),
         .generic_choose = self.fresh(.function),
@@ -442,6 +454,23 @@ fn writeTypeDeclarations(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppText("), List(Box(");
     try self.writeAppSymbol(self.symbols.box_tree_type);
     try self.writeAppText(")))]\n\n");
+
+    try self.writeAppSymbol(self.symbols.try_tree_type);
+    try self.writeAppText(" := [");
+    try self.writeAppSymbol(self.symbols.try_tree_value);
+    try self.writeAppText("(Try(U64, ");
+    try self.writeAppSymbol(self.symbols.err_type);
+    try self.writeAppText(")), ");
+    try self.writeAppSymbol(self.symbols.try_tree_many);
+    try self.writeAppText("(List(");
+    try self.writeAppSymbol(self.symbols.try_tree_type);
+    try self.writeAppText(")), ");
+    try self.writeAppSymbol(self.symbols.try_tree_apply);
+    try self.writeAppText("(Try((U64 -> Try(U64, ");
+    try self.writeAppSymbol(self.symbols.err_type);
+    try self.writeAppText(")), ");
+    try self.writeAppSymbol(self.symbols.err_type);
+    try self.writeAppText("))]\n\n");
 }
 
 fn writeBuilderType(self: *Self) std.mem.Allocator.Error!void {
@@ -795,6 +824,7 @@ fn writeTopLevelFunctions(self: *Self) std.mem.Allocator.Error!void {
     try self.writeDescribeTry();
     try self.writeTreeScoring();
     try self.writeBoxTreeScoring();
+    try self.writeTryTreeScoring();
     try self.writeInspectScoring();
     try self.writeGenericHelpers();
     try self.writeIteratorScoring();
@@ -1641,6 +1671,568 @@ fn writeBoxTreeScoring(self: *Self) std.mem.Allocator.Error!void {
     try self.writeIndent(1);
     try self.writeAppText("}\n");
     try self.writeAppText("}\n\n");
+}
+
+fn writeTryTreeScoring(self: *Self) std.mem.Allocator.Error!void {
+    const node = self.fresh(.value);
+    const seed = self.fresh(.value);
+    const leaf_try = self.fresh(.value);
+    const leaf_value = self.fresh(.value);
+    const children = self.fresh(.value);
+    const fold_acc = self.fresh(.value);
+    const child = self.fresh(.value);
+    const acc_value = self.fresh(.value);
+    const child_value = self.fresh(.value);
+    const try_fn = self.fresh(.value);
+    const fn_value = self.fresh(.value);
+    const applied = self.fresh(.value);
+    const items = self.fresh(.value);
+    const tree = self.fresh(.value);
+    const text = self.fresh(.value);
+    const nested_seed = self.fresh(.value);
+    const base = self.fresh(.value);
+    const nested = self.fresh(.value);
+    const from_items = self.fresh(.value);
+    const map_item = self.fresh(.value);
+    const lifted = self.fresh(.value);
+    const map_try = self.fresh(.value);
+    const bundle = self.fresh(.value);
+    const first_field = self.fresh(.field);
+    const nested_field = self.fresh(.field);
+    const list_field = self.fresh(.field);
+    const record_score = self.fresh(.value);
+    const first_try = self.fresh(.value);
+    const nested_try = self.fresh(.value);
+    const all_tries = self.fresh(.value);
+    const first_value = self.fresh(.value);
+    const outer_try = self.fresh(.value);
+    const inner_value = self.fresh(.value);
+    const folded = self.fresh(.value);
+    const lifted_acc = self.fresh(.value);
+    const lifted_outer = self.fresh(.value);
+    const lifted_acc_value = self.fresh(.value);
+    const lifted_inner = self.fresh(.value);
+    const lifted_value = self.fresh(.value);
+    const make_try = self.fresh(.value);
+    const make_arg = self.fresh(.value);
+    const ok_tag = self.fresh(.tag);
+    const fn_tag = self.fresh(.tag);
+    const tagged = self.fresh(.value);
+    const tag_score = self.fresh(.value);
+    const tagged_try = self.fresh(.value);
+    const tagged_fn = self.fresh(.value);
+    const record_value = self.fresh(.value);
+    const fn_result = self.fresh(.value);
+    const combined = self.fresh(.value);
+    const combined_fold = self.fresh(.value);
+    const combined_record = self.fresh(.value);
+    const combined_tag = self.fresh(.value);
+
+    try self.writeAppSymbol(self.symbols.score_try_tree);
+    try self.writeAppText(" : ");
+    try self.writeAppSymbol(self.symbols.try_tree_type);
+    try self.writeAppText(", U64 -> Try(U64, ");
+    try self.writeAppSymbol(self.symbols.err_type);
+    try self.writeAppText(")\n");
+    try self.writeAppSymbol(self.symbols.score_try_tree);
+    try self.writeAppText(" = |");
+    try self.writeAppSymbol(node);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText("| match ");
+    try self.writeAppSymbol(node);
+    try self.writeAppText(" {\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(self.symbols.try_tree_value);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(leaf_try);
+    try self.writeAppText(") => Try.map_ok(");
+    try self.writeAppSymbol(leaf_try);
+    try self.writeAppText(", |");
+    try self.writeAppSymbol(leaf_value);
+    try self.writeAppText("| ");
+    try self.writeAppSymbol(leaf_value);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText(")\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(self.symbols.try_tree_many);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(children);
+    try self.writeAppText(") => List.fold(");
+    try self.writeAppSymbol(children);
+    try self.writeAppText(", Ok(");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText("), |");
+    try self.writeAppSymbol(fold_acc);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(child);
+    try self.writeAppText("| {\n");
+    try self.writeIndent(2);
+    try self.writeAppSymbol(acc_value);
+    try self.writeAppText(" : U64\n");
+    try self.writeIndent(2);
+    try self.writeAppSymbol(acc_value);
+    try self.writeAppText(" = ");
+    try self.writeAppSymbol(fold_acc);
+    try self.writeAppText("?\n");
+    try self.writeIndent(2);
+    try self.writeAppSymbol(child_value);
+    try self.writeAppText(" : U64\n");
+    try self.writeIndent(2);
+    try self.writeAppSymbol(child_value);
+    try self.writeAppText(" = ");
+    try self.writeAppSymbol(self.symbols.score_try_tree);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(child);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(acc_value);
+    try self.writeAppText(")?\n");
+    try self.writeIndent(2);
+    try self.writeAppText("Ok(");
+    try self.writeAppSymbol(acc_value);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(child_value);
+    try self.writeAppText(")\n");
+    try self.writeIndent(1);
+    try self.writeAppText("})\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(self.symbols.try_tree_apply);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(try_fn);
+    try self.writeAppText(") => {\n");
+    try self.writeIndent(2);
+    try self.writeAppSymbol(fn_value);
+    try self.writeAppText(" : U64 -> Try(U64, ");
+    try self.writeAppSymbol(self.symbols.err_type);
+    try self.writeAppText(")\n");
+    try self.writeIndent(2);
+    try self.writeAppSymbol(fn_value);
+    try self.writeAppText(" = ");
+    try self.writeAppSymbol(try_fn);
+    try self.writeAppText("?\n");
+    try self.writeIndent(2);
+    try self.writeAppSymbol(applied);
+    try self.writeAppText(" : U64\n");
+    try self.writeIndent(2);
+    try self.writeAppSymbol(applied);
+    try self.writeAppText(" = ");
+    try self.writeAppSymbol(fn_value);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText(")?\n");
+    try self.writeIndent(2);
+    try self.writeAppText("Ok(");
+    try self.writeAppSymbol(applied);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText(")\n");
+    try self.writeIndent(1);
+    try self.writeAppText("}\n");
+    try self.writeAppText("}\n\n");
+
+    try self.writeAppSymbol(self.symbols.score_nested_try);
+    try self.writeAppText(" : List(");
+    try self.writeAppSymbol(self.symbols.item_type);
+    try self.writeAppText("), ");
+    try self.writeAppSymbol(self.symbols.try_tree_type);
+    try self.writeAppText(", Str, U64 -> Try(U64, ");
+    try self.writeAppSymbol(self.symbols.err_type);
+    try self.writeAppText(")\n");
+    try self.writeAppSymbol(self.symbols.score_nested_try);
+    try self.writeAppText(" = |");
+    try self.writeAppSymbol(items);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(tree);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(text);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(nested_seed);
+    try self.writeAppText("| {\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(base);
+    try self.writeAppText(" : Try(U64, ");
+    try self.writeAppSymbol(self.symbols.err_type);
+    try self.writeAppText(")\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(base);
+    try self.writeAppText(" = ");
+    try self.writeAppSymbol(self.symbols.score_try_tree);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(tree);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(nested_seed);
+    try self.writeAppText(")\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(nested);
+    try self.writeAppText(" : Try(Try(U64, ");
+    try self.writeAppSymbol(self.symbols.err_type);
+    try self.writeAppText("), ");
+    try self.writeAppSymbol(self.symbols.err_type);
+    try self.writeAppText(")\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(nested);
+    try self.writeAppText(" = if ");
+    try self.writeAppSymbol(self.symbols.is_even);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(nested_seed);
+    try self.writeAppText(") Ok(");
+    try self.writeAppSymbol(base);
+    try self.writeAppText(") else Err(");
+    try self.writeAppSymbol(self.symbols.err_bad);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(text);
+    try self.writeAppText("))\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(from_items);
+    try self.writeAppText(" : List(Try(U64, ");
+    try self.writeAppSymbol(self.symbols.err_type);
+    try self.writeAppText("))\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(from_items);
+    try self.writeAppText(" = List.map(");
+    try self.writeAppSymbol(items);
+    try self.writeAppText(", |");
+    try self.writeAppSymbol(map_item);
+    try self.writeAppText("| if ");
+    try self.writeAppSymbol(map_item);
+    try self.writeAppText(".");
+    try self.writeAppSymbol(self.symbols.item_flag);
+    try self.writeAppText(" Ok(");
+    try self.writeAppSymbol(map_item);
+    try self.writeAppText(".");
+    try self.writeAppSymbol(self.symbols.item_id);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(nested_seed);
+    try self.writeAppText(") else Err(");
+    try self.writeAppSymbol(self.symbols.err_bad);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(map_item);
+    try self.writeAppText(".");
+    try self.writeAppSymbol(self.symbols.item_text);
+    try self.writeAppText(")))\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(lifted);
+    try self.writeAppText(" : List(Try(Try(U64, ");
+    try self.writeAppSymbol(self.symbols.err_type);
+    try self.writeAppText("), ");
+    try self.writeAppSymbol(self.symbols.err_type);
+    try self.writeAppText("))\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(lifted);
+    try self.writeAppText(" = List.map(");
+    try self.writeAppSymbol(from_items);
+    try self.writeAppText(", |");
+    try self.writeAppSymbol(map_try);
+    try self.writeAppText("| Ok(");
+    try self.writeAppSymbol(map_try);
+    try self.writeAppText("))\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(bundle);
+    try self.writeAppText(" : { ");
+    try self.writeAppSymbol(first_field);
+    try self.writeAppText(" : Try(U64, ");
+    try self.writeAppSymbol(self.symbols.err_type);
+    try self.writeAppText("), ");
+    try self.writeAppSymbol(nested_field);
+    try self.writeAppText(" : Try(Try(U64, ");
+    try self.writeAppSymbol(self.symbols.err_type);
+    try self.writeAppText("), ");
+    try self.writeAppSymbol(self.symbols.err_type);
+    try self.writeAppText("), ");
+    try self.writeAppSymbol(list_field);
+    try self.writeAppText(" : List(Try(U64, ");
+    try self.writeAppSymbol(self.symbols.err_type);
+    try self.writeAppText(")) }\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(bundle);
+    try self.writeAppText(" = { ");
+    try self.writeAppSymbol(first_field);
+    try self.writeAppText(": ");
+    try self.writeAppSymbol(base);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(nested_field);
+    try self.writeAppText(": ");
+    try self.writeAppSymbol(nested);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(list_field);
+    try self.writeAppText(": ");
+    try self.writeAppSymbol(from_items);
+    try self.writeAppText(" }\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(record_score);
+    try self.writeAppText(" : Try(U64, ");
+    try self.writeAppSymbol(self.symbols.err_type);
+    try self.writeAppText(")\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(record_score);
+    try self.writeAppText(" = match ");
+    try self.writeAppSymbol(bundle);
+    try self.writeAppText(" {\n");
+    try self.writeIndent(2);
+    try self.writeAppText("{ ");
+    try self.writeAppSymbol(first_field);
+    try self.writeAppText(": ");
+    try self.writeAppSymbol(first_try);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(nested_field);
+    try self.writeAppText(": ");
+    try self.writeAppSymbol(nested_try);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(list_field);
+    try self.writeAppText(": ");
+    try self.writeAppSymbol(all_tries);
+    try self.writeAppText(" } => {\n");
+    try self.writeIndent(3);
+    try self.writeAppSymbol(first_value);
+    try self.writeAppText(" : U64\n");
+    try self.writeIndent(3);
+    try self.writeAppSymbol(first_value);
+    try self.writeAppText(" = ");
+    try self.writeAppSymbol(first_try);
+    try self.writeAppText("?\n");
+    try self.writeIndent(3);
+    try self.writeAppSymbol(outer_try);
+    try self.writeAppText(" : Try(U64, ");
+    try self.writeAppSymbol(self.symbols.err_type);
+    try self.writeAppText(")\n");
+    try self.writeIndent(3);
+    try self.writeAppSymbol(outer_try);
+    try self.writeAppText(" = ");
+    try self.writeAppSymbol(nested_try);
+    try self.writeAppText("?\n");
+    try self.writeIndent(3);
+    try self.writeAppSymbol(inner_value);
+    try self.writeAppText(" : U64\n");
+    try self.writeIndent(3);
+    try self.writeAppSymbol(inner_value);
+    try self.writeAppText(" = ");
+    try self.writeAppSymbol(outer_try);
+    try self.writeAppText("?\n");
+    try self.writeIndent(3);
+    try self.writeAppText("Ok(");
+    try self.writeAppSymbol(first_value);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(inner_value);
+    try self.writeAppText(" + List.len(");
+    try self.writeAppSymbol(all_tries);
+    try self.writeAppText("))\n");
+    try self.writeIndent(2);
+    try self.writeAppText("}\n");
+    try self.writeIndent(1);
+    try self.writeAppText("}\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(folded);
+    try self.writeAppText(" : Try(U64, ");
+    try self.writeAppSymbol(self.symbols.err_type);
+    try self.writeAppText(")\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(folded);
+    try self.writeAppText(" = List.fold(");
+    try self.writeAppSymbol(lifted);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(base);
+    try self.writeAppText(", |");
+    try self.writeAppSymbol(lifted_acc);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(lifted_outer);
+    try self.writeAppText("| {\n");
+    try self.writeIndent(2);
+    try self.writeAppSymbol(lifted_acc_value);
+    try self.writeAppText(" : U64\n");
+    try self.writeIndent(2);
+    try self.writeAppSymbol(lifted_acc_value);
+    try self.writeAppText(" = ");
+    try self.writeAppSymbol(lifted_acc);
+    try self.writeAppText("?\n");
+    try self.writeIndent(2);
+    try self.writeAppSymbol(lifted_inner);
+    try self.writeAppText(" : Try(U64, ");
+    try self.writeAppSymbol(self.symbols.err_type);
+    try self.writeAppText(")\n");
+    try self.writeIndent(2);
+    try self.writeAppSymbol(lifted_inner);
+    try self.writeAppText(" = ");
+    try self.writeAppSymbol(lifted_outer);
+    try self.writeAppText("?\n");
+    try self.writeIndent(2);
+    try self.writeAppSymbol(lifted_value);
+    try self.writeAppText(" : U64\n");
+    try self.writeIndent(2);
+    try self.writeAppSymbol(lifted_value);
+    try self.writeAppText(" = ");
+    try self.writeAppSymbol(lifted_inner);
+    try self.writeAppText("?\n");
+    try self.writeIndent(2);
+    try self.writeAppText("Ok(");
+    try self.writeAppSymbol(lifted_acc_value);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(lifted_value);
+    try self.writeAppText(")\n");
+    try self.writeIndent(1);
+    try self.writeAppText("})\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(make_try);
+    try self.writeAppText(" : U64 -> Try(U64, ");
+    try self.writeAppSymbol(self.symbols.err_type);
+    try self.writeAppText(")\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(make_try);
+    try self.writeAppText(" = |");
+    try self.writeAppSymbol(make_arg);
+    try self.writeAppText("| if ");
+    try self.writeAppSymbol(self.symbols.is_even);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(make_arg);
+    try self.writeAppText(") Ok(");
+    try self.writeAppSymbol(make_arg);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(nested_seed);
+    try self.writeAppText(") else Err(");
+    try self.writeAppSymbol(self.symbols.err_missing);
+    try self.writeAppText(")\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(tagged);
+    try self.writeAppText(" : [");
+    try self.writeAppSymbol(ok_tag);
+    try self.writeAppText("(Try(U64, ");
+    try self.writeAppSymbol(self.symbols.err_type);
+    try self.writeAppText(")), ");
+    try self.writeAppSymbol(fn_tag);
+    try self.writeAppText("((U64 -> Try(U64, ");
+    try self.writeAppSymbol(self.symbols.err_type);
+    try self.writeAppText(")))]\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(tagged);
+    try self.writeAppText(" = if ");
+    try self.writeAppSymbol(self.symbols.is_even);
+    try self.writeAppText("(List.len(");
+    try self.writeAppSymbol(items);
+    try self.writeAppText(") + ");
+    try self.writeAppSymbol(nested_seed);
+    try self.writeAppText(") ");
+    try self.writeAppSymbol(ok_tag);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(folded);
+    try self.writeAppText(") else ");
+    try self.writeAppSymbol(fn_tag);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(make_try);
+    try self.writeAppText(")\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(tag_score);
+    try self.writeAppText(" : Try(U64, ");
+    try self.writeAppSymbol(self.symbols.err_type);
+    try self.writeAppText(")\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(tag_score);
+    try self.writeAppText(" = match ");
+    try self.writeAppSymbol(tagged);
+    try self.writeAppText(" {\n");
+    try self.writeIndent(2);
+    try self.writeAppSymbol(ok_tag);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(tagged_try);
+    try self.writeAppText(") => Try.map_ok(");
+    try self.writeAppSymbol(tagged_try);
+    try self.writeAppText(", |");
+    try self.writeAppSymbol(record_value);
+    try self.writeAppText("| ");
+    try self.writeAppSymbol(record_value);
+    try self.writeAppText(" + List.len(");
+    try self.writeAppSymbol(items);
+    try self.writeAppText("))\n");
+    try self.writeIndent(2);
+    try self.writeAppSymbol(fn_tag);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(tagged_fn);
+    try self.writeAppText(") => {\n");
+    try self.writeIndent(3);
+    try self.writeAppSymbol(record_value);
+    try self.writeAppText(" : U64\n");
+    try self.writeIndent(3);
+    try self.writeAppSymbol(record_value);
+    try self.writeAppText(" = ");
+    try self.writeAppSymbol(record_score);
+    try self.writeAppText("?\n");
+    try self.writeIndent(3);
+    try self.writeAppSymbol(fn_result);
+    try self.writeAppText(" : U64\n");
+    try self.writeIndent(3);
+    try self.writeAppSymbol(fn_result);
+    try self.writeAppText(" = ");
+    try self.writeAppSymbol(tagged_fn);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(record_value);
+    try self.writeAppText(")?\n");
+    try self.writeIndent(3);
+    try self.writeAppText("Ok(");
+    try self.writeAppSymbol(fn_result);
+    try self.writeAppText(")\n");
+    try self.writeIndent(2);
+    try self.writeAppText("}\n");
+    try self.writeIndent(1);
+    try self.writeAppText("}\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(combined);
+    try self.writeAppText(" : Try(U64, ");
+    try self.writeAppSymbol(self.symbols.err_type);
+    try self.writeAppText(")\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(combined);
+    try self.writeAppText(" = {\n");
+    try self.writeIndent(2);
+    try self.writeAppSymbol(combined_fold);
+    try self.writeAppText(" : U64\n");
+    try self.writeIndent(2);
+    try self.writeAppSymbol(combined_fold);
+    try self.writeAppText(" = ");
+    try self.writeAppSymbol(folded);
+    try self.writeAppText("?\n");
+    try self.writeIndent(2);
+    try self.writeAppSymbol(combined_record);
+    try self.writeAppText(" : U64\n");
+    try self.writeIndent(2);
+    try self.writeAppSymbol(combined_record);
+    try self.writeAppText(" = ");
+    try self.writeAppSymbol(record_score);
+    try self.writeAppText("?\n");
+    try self.writeIndent(2);
+    try self.writeAppSymbol(combined_tag);
+    try self.writeAppText(" : U64\n");
+    try self.writeIndent(2);
+    try self.writeAppSymbol(combined_tag);
+    try self.writeAppText(" = ");
+    try self.writeAppSymbol(tag_score);
+    try self.writeAppText("?\n");
+    try self.writeIndent(2);
+    try self.writeAppText("Ok(");
+    try self.writeAppSymbol(combined_fold);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(combined_record);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(combined_tag);
+    try self.writeAppText(")\n");
+    try self.writeIndent(1);
+    try self.writeAppText("}\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(combined);
+    try self.writeAppText("\n}\n\n");
 }
 
 fn writeInspectScoring(self: *Self) std.mem.Allocator.Error!void {
@@ -5927,6 +6519,11 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     const tree_score = self.fresh(.value);
     const box_tree = self.fresh(.value);
     const box_tree_score = self.fresh(.value);
+    const try_tree = self.fresh(.value);
+    const nested_try_score = self.fresh(.value);
+    const nested_try_value = self.fresh(.value);
+    const nested_try_err = self.fresh(.value);
+    const nested_try_err_text = self.fresh(.value);
     const inspect_score = self.fresh(.value);
     const pattern_score = self.fresh(.value);
     const structural_score = self.fresh(.value);
@@ -5942,6 +6539,7 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     const rows = self.reader.intRangeAtMost(u8, 1, 6);
     const tree_depth = self.reader.intRangeAtMost(u8, 1, 4);
     const box_tree_depth = self.reader.intRangeAtMost(u8, 1, 4);
+    const try_tree_depth = self.reader.intRangeAtMost(u8, 1, 4);
     const first_id = self.reader.intRangeAtMost(u8, 0, 9);
     const second_id = self.reader.intRangeAtMost(u8, 10, 29);
     const third_id = self.reader.intRangeAtMost(u8, 30, 59);
@@ -6375,6 +6973,57 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppSymbol(tree_score);
     try self.writeAppText(")\n");
 
+    try self.writeLocalHeader(try_tree, self.symbols.try_tree_type);
+    try self.writeTryTreeExpression(generic_text, try_tree_depth);
+    try self.writeAppText("\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(nested_try_score);
+    try self.writeAppText(" : U64\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(nested_try_score);
+    try self.writeAppText(" = match ");
+    try self.writeAppSymbol(self.symbols.score_nested_try);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(generic_items);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(try_tree);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(generic_text);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(box_tree_score);
+    try self.writeAppText(") {\n");
+    try self.writeIndent(2);
+    try self.writeAppText("Ok(");
+    try self.writeAppSymbol(nested_try_value);
+    try self.writeAppText(") => ");
+    try self.writeAppSymbol(nested_try_value);
+    try self.writeAppText("\n");
+    try self.writeIndent(2);
+    try self.writeAppText("Err(");
+    try self.writeAppSymbol(nested_try_err);
+    try self.writeAppText(") => match ");
+    try self.writeAppSymbol(nested_try_err);
+    try self.writeAppText(" {\n");
+    try self.writeIndent(3);
+    try self.writeAppSymbol(self.symbols.err_missing);
+    try self.writeAppText(" => ");
+    try self.writeAppSymbol(box_tree_score);
+    try self.writeAppText("\n");
+    try self.writeIndent(3);
+    try self.writeAppSymbol(self.symbols.err_bad);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(nested_try_err_text);
+    try self.writeAppText(") => List.len(Str.to_utf8(");
+    try self.writeAppSymbol(nested_try_err_text);
+    try self.writeAppText(")) + ");
+    try self.writeAppSymbol(box_tree_score);
+    try self.writeAppText("\n");
+    try self.writeIndent(2);
+    try self.writeAppText("}\n");
+    try self.writeIndent(1);
+    try self.writeAppText("}\n");
+
     try self.writeIndent(1);
     try self.writeAppSymbol(inspect_score);
     try self.writeAppText(" : U64\n");
@@ -6392,6 +7041,8 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppSymbol(generic_items);
     try self.writeAppText(", ");
     try self.writeAppSymbol(box_tree_score);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(nested_try_score);
     try self.writeAppText(")\n");
 
     try self.writeIndent(1);
@@ -6487,6 +7138,8 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppText(" + ");
     try self.writeAppSymbol(box_tree_score);
     try self.writeAppText(" + ");
+    try self.writeAppSymbol(nested_try_score);
+    try self.writeAppText(" + ");
     try self.writeAppSymbol(inspect_score);
     try self.writeAppText(" + ");
     try self.writeAppSymbol(pattern_score);
@@ -6559,6 +7212,8 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppText(" + ");
     try self.writeAppSymbol(box_tree_score);
     try self.writeAppText(" + ");
+    try self.writeAppSymbol(nested_try_score);
+    try self.writeAppText(" + ");
     try self.writeAppSymbol(inspect_score);
     try self.writeAppText(" + ");
     try self.writeAppSymbol(pattern_score);
@@ -6617,6 +7272,8 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppSymbol(tree_score);
     try self.writeAppText(" + ");
     try self.writeAppSymbol(box_tree_score);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(nested_try_score);
     try self.writeAppText(" + ");
     try self.writeAppSymbol(inspect_score);
     try self.writeAppText(" + ");
@@ -6762,6 +7419,85 @@ fn writeBoxTreePair(self: *Self, depth: u8) std.mem.Allocator.Error!void {
         try self.writeAppText(")");
     }
     try self.writeAppText("])");
+}
+
+fn writeTryTreeExpression(self: *Self, text_seed: Symbol, depth: u8) std.mem.Allocator.Error!void {
+    if (depth == 0) {
+        return self.writeTryTreeLeaf(text_seed);
+    }
+
+    switch (self.reader.intRangeLessThan(u8, 0, 3)) {
+        0 => try self.writeTryTreeLeaf(text_seed),
+        1 => try self.writeTryTreeMany(text_seed, depth - 1),
+        else => try self.writeTryTreeApply(text_seed),
+    }
+}
+
+fn writeTryTreeLeaf(self: *Self, text_seed: Symbol) std.mem.Allocator.Error!void {
+    try self.writeAppSymbol(self.symbols.try_tree_value);
+    try self.writeAppText("(");
+    if (self.reader.boolean()) {
+        try self.writeAppText("Ok(");
+        try self.writeU64(self.reader.intRangeAtMost(u8, 0, 31));
+        try self.writeAppText(")");
+    } else {
+        try self.writeAppText("Err(");
+        try self.writeErrPayloadExpression(text_seed);
+        try self.writeAppText(")");
+    }
+    try self.writeAppText(")");
+}
+
+fn writeTryTreeMany(self: *Self, text_seed: Symbol, depth: u8) std.mem.Allocator.Error!void {
+    const child_count = self.reader.intRangeAtMost(u8, 0, 3);
+
+    try self.writeAppSymbol(self.symbols.try_tree_many);
+    try self.writeAppText("([");
+    for (0..child_count) |index| {
+        if (index != 0) try self.writeAppText(", ");
+        try self.writeTryTreeExpression(text_seed, depth);
+    }
+    try self.writeAppText("])");
+}
+
+fn writeTryTreeApply(self: *Self, text_seed: Symbol) std.mem.Allocator.Error!void {
+    const arg = self.fresh(.value);
+
+    try self.writeAppSymbol(self.symbols.try_tree_apply);
+    try self.writeAppText("(");
+    if (self.reader.boolean()) {
+        try self.writeAppText("Ok(|");
+        try self.writeAppSymbol(arg);
+        try self.writeAppText("| if ");
+        try self.writeAppSymbol(self.symbols.is_even);
+        try self.writeAppText("(");
+        try self.writeAppSymbol(arg);
+        try self.writeAppText(") Ok(");
+        try self.writeAppSymbol(arg);
+        try self.writeAppText(" + ");
+        try self.writeU64(self.reader.intRangeAtMost(u8, 0, 31));
+        try self.writeAppText(") else Err(");
+        try self.writeErrPayloadExpression(text_seed);
+        try self.writeAppText("))");
+    } else {
+        try self.writeAppText("Err(");
+        try self.writeErrPayloadExpression(text_seed);
+        try self.writeAppText(")");
+    }
+    try self.writeAppText(")");
+}
+
+fn writeErrPayloadExpression(self: *Self, text_seed: Symbol) std.mem.Allocator.Error!void {
+    if (self.reader.boolean()) {
+        try self.writeAppSymbol(self.symbols.err_missing);
+    } else {
+        try self.writeAppSymbol(self.symbols.err_bad);
+        try self.writeAppText("(Str.concat(");
+        try self.writeAppSymbol(text_seed);
+        try self.writeAppText(", ");
+        try self.writeStringLiteral();
+        try self.writeAppText("))");
+    }
 }
 
 fn writeStringLiteral(self: *Self) std.mem.Allocator.Error!void {
