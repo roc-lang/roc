@@ -92,6 +92,7 @@ const Symbols = struct {
     generic_choose: Symbol,
     score_iter: Symbol,
     score_boxed: Symbol,
+    score_control: Symbol,
 };
 
 pub fn init(allocator: std.mem.Allocator, reader: *FuzzReader) Self {
@@ -205,6 +206,7 @@ pub fn generate(self: *Self) std.mem.Allocator.Error!void {
         .generic_choose = self.fresh(.function),
         .score_iter = self.fresh(.function),
         .score_boxed = self.fresh(.function),
+        .score_control = self.fresh(.function),
     };
 
     try self.setFileNames(app_file, platform_file, module_file);
@@ -585,6 +587,7 @@ fn writeTopLevelFunctions(self: *Self) std.mem.Allocator.Error!void {
     try self.writeGenericHelpers();
     try self.writeIteratorScoring();
     try self.writeBoxScoring();
+    try self.writeControlFlowScoring();
 }
 
 fn writeMakeItem(self: *Self) std.mem.Allocator.Error!void {
@@ -1514,6 +1517,87 @@ fn writeBoxScoring(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppText("))\n}\n\n");
 }
 
+fn writeControlFlowScoring(self: *Self) std.mem.Allocator.Error!void {
+    const items = self.fresh(.value);
+    const seed = self.fresh(.value);
+    const total = self.fresh(.value);
+    const item = self.fresh(.value);
+
+    try self.writeAppSymbol(self.symbols.score_control);
+    try self.writeAppText(" : List(");
+    try self.writeAppSymbol(self.symbols.item_type);
+    try self.writeAppText("), U64 -> U64\n");
+    try self.writeAppSymbol(self.symbols.score_control);
+    try self.writeAppText(" = |");
+    try self.writeAppSymbol(items);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText("| {\n");
+
+    try self.writeIndent(1);
+    try self.writeAppText("var $");
+    try self.writeAppSymbol(total);
+    try self.writeAppText(" = ");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText("\n");
+
+    try self.writeIndent(1);
+    try self.writeAppText("for ");
+    try self.writeAppSymbol(item);
+    try self.writeAppText(" in ");
+    try self.writeAppSymbol(items);
+    try self.writeAppText(" {\n");
+
+    try self.writeIndent(2);
+    try self.writeAppText("if ");
+    try self.writeAppSymbol(item);
+    try self.writeAppText(".");
+    try self.writeAppSymbol(self.symbols.item_flag);
+    try self.writeAppText(" {\n");
+    try self.writeIndent(3);
+    try self.writeAppText("return $");
+    try self.writeAppSymbol(total);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(item);
+    try self.writeAppText(".");
+    try self.writeAppSymbol(self.symbols.item_id);
+    try self.writeAppText("\n");
+    try self.writeIndent(2);
+    try self.writeAppText("}\n");
+
+    try self.writeIndent(2);
+    try self.writeAppText("if ");
+    try self.writeAppSymbol(item);
+    try self.writeAppText(".");
+    try self.writeAppSymbol(self.symbols.item_id);
+    try self.writeAppText(" == ");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText(" {\n");
+    try self.writeIndent(3);
+    try self.writeAppText("break\n");
+    try self.writeIndent(2);
+    try self.writeAppText("}\n");
+
+    try self.writeIndent(2);
+    try self.writeAppText("$");
+    try self.writeAppSymbol(total);
+    try self.writeAppText(" = $");
+    try self.writeAppSymbol(total);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(item);
+    try self.writeAppText(".");
+    try self.writeAppSymbol(self.symbols.item_id);
+    try self.writeAppText("\n");
+
+    try self.writeIndent(1);
+    try self.writeAppText("}\n");
+
+    try self.writeIndent(1);
+    try self.writeAppText("$");
+    try self.writeAppSymbol(total);
+    try self.writeAppText("\n}\n\n");
+}
+
 fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     const input = self.fresh(.value);
     const first = self.fresh(.value);
@@ -1531,6 +1615,7 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     const generic_item = self.fresh(.value);
     const generic_items = self.fresh(.value);
     const iter_score = self.fresh(.value);
+    const control_score = self.fresh(.value);
     const imported_record = self.fresh(.value);
     const alternate_imported = self.fresh(.value);
     const generic_imported = self.fresh(.value);
@@ -1739,6 +1824,19 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppSymbol(generic_num);
     try self.writeAppText(")\n");
 
+    try self.writeIndent(1);
+    try self.writeAppSymbol(control_score);
+    try self.writeAppText(" : U64\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(control_score);
+    try self.writeAppText(" = ");
+    try self.writeAppSymbol(self.symbols.score_control);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(generic_items);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(iter_score);
+    try self.writeAppText(")\n");
+
     try self.writeLocalHeader(imported_record, self.symbols.imported_type);
     try self.writeAppSymbol(self.symbols.imported_type);
     try self.writeAppText(".");
@@ -1751,6 +1849,8 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppSymbol(generic_num);
     try self.writeAppText(" + ");
     try self.writeAppSymbol(iter_score);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(control_score);
     try self.writeAppText(", ");
     try self.writeAppSymbol(generic_text);
     try self.writeAppText(")\n");
@@ -1875,6 +1975,8 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppText(" + ");
     try self.writeAppSymbol(iter_score);
     try self.writeAppText(" + ");
+    try self.writeAppSymbol(control_score);
+    try self.writeAppText(" + ");
     try self.writeAppSymbol(imported_score);
     try self.writeAppText(" + ");
     try self.writeAppSymbol(tree_score);
@@ -1901,6 +2003,8 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppSymbol(try_score);
     try self.writeAppText(" + ");
     try self.writeAppSymbol(iter_score);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(control_score);
     try self.writeAppText(" + ");
     try self.writeAppSymbol(imported_score);
     try self.writeAppText(" + ");
