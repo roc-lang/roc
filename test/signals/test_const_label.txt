@@ -1,0 +1,2 @@
+# Constant signal label - Signal.const_str bound to a span
+expect_text span:0 "hi"

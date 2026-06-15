@@ -1,0 +1,2 @@
+# Button with constant label - Event.channel! and button element
+expect_text button:0 "click me"
