@@ -4755,6 +4755,20 @@ test "check type - self recursive function - fibonacci - fail" {
     );
 }
 
+// A numeral whose type is fixed only through a recursive call's return must not
+// default before the recursion resolves. Here `1`'s `plus` receiver is the inner
+// `fc(...)` call, whose return is a flex placeholder during cycle checking; the
+// boundary must keep `1` open (reachable through the recursive return) so it pins
+// to `I64` once the cycle resolves, instead of defaulting to `Dec` and reporting
+// a spurious `I64, Dec -> I64` mismatch on `plus`.
+test "check type - self recursive function - numeral pinned through recursive return" {
+    const source =
+        \\fc : I64, I64 -> I64
+        \\fc = |n, b| if n == 0 b else fc(n - 1, fc(n - 1, b) + 1)
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "fc" } }, "I64, I64 -> I64");
+}
+
 test "check type - mutually recursive functions - is_even and is_odd" {
     const source =
         \\is_even = |n| {

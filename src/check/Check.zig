@@ -11017,6 +11017,42 @@ fn defaultLiteralsAtGeneralizationBoundary(self: *Self, def_root_var: Var, env: 
         try self.collectReachableVars(deferred.def_var, &self.boundary_reachable_vars);
     }
 
+    // Recursive-reference edges (`ctx == .recursive_def`) link a recursive call's
+    // flex reference to the def's own (annotated) type and resolve only after this
+    // boundary, at the cycle root. Unlike an early-return edge, the reference is an
+    // internal body var unreachable from the def's signature, so the fixpoint below
+    // never activates it. Seed the reachable closure of each recursive call's
+    // RETURN: a literal whose dispatch hangs off an unresolved recursive result
+    // (e.g. `fc(.., fc(..) + 1)` where `fc : I64, I64 -> I64` — `1`'s `plus`
+    // receiver is `fc(..)`'s return) stays protected until the recursion resolves
+    // and `plus` pins it to I64, instead of defaulting to Dec first. Seed only the
+    // RETURN, not the call's arguments: a literal passed directly as a recursive
+    // argument (e.g. `fib("bad arg")`) must stay a defaulting/error candidate so a
+    // genuine arg-type mismatch is still reported at the argument. Purely
+    // conservative for the return path — keeps more literals open, defaults none.
+    {
+        var rec_iter = self.constraints.iterIndices();
+        while (rec_iter.next()) |constraint_idx| {
+            switch (self.constraints.get(constraint_idx).*) {
+                .eql => |eql| switch (eql.ctx) {
+                    .recursive_def => {
+                        const ref_resolved = self.types.resolveVar(eql.actual);
+                        switch (ref_resolved.desc.content) {
+                            .structure => |flat| switch (flat) {
+                                .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                                    try self.collectReachableVars(func.ret, &self.boundary_reachable_vars);
+                                },
+                                else => {},
+                            },
+                            else => {},
+                        }
+                    },
+                    else => {},
+                },
+            }
+        }
+    }
+
     // Pending `eql` constraints are unify-later edges (early returns,
     // recursive-group cross-references); a literal awaiting unification with the
     // def's type through one is NOT ambiguous. Close the set over them — when one
