@@ -90,7 +90,7 @@ comptime {
         std.testing.refAllDecls(platform_validation);
         std.testing.refAllDecls(cli_context);
         std.testing.refAllDecls(cli_problem);
-        std.testing.refAllDecls(@import("stack_probe.zig"));
+        std.testing.refAllDecls(@import("embedded_lld").stack_probe);
         std.testing.refAllDecls(@import("ReplLine.zig"));
     }
 }
@@ -4581,6 +4581,66 @@ fn staticDataLinkRootSymbols(
     return symbols.items;
 }
 
+fn sharedLibraryAppExports(
+    ctx: *CliCtx,
+    entrypoints: []const backend.Entrypoint,
+    static_data_exports: []const backend.StaticDataExport,
+) Allocator.Error![]const []const u8 {
+    var symbols = try std.array_list.Managed([]const u8).initCapacity(
+        ctx.arena,
+        entrypoints.len + static_data_exports.len,
+    );
+
+    for (entrypoints) |entrypoint| {
+        try symbols.append(entrypoint.symbol_name);
+    }
+    for (static_data_exports) |data_export| {
+        if (!data_export.is_global) continue;
+        try symbols.append(data_export.symbol_name);
+    }
+
+    return symbols.items;
+}
+
+fn appendUniqueSharedLibraryExport(
+    seen: *std.StringHashMap(void),
+    symbols: *std.array_list.Managed([]const u8),
+    symbol: []const u8,
+) Allocator.Error!void {
+    if (symbol.len == 0) return;
+    const gop = try seen.getOrPut(symbol);
+    if (gop.found_existing) return;
+    try symbols.append(symbol);
+}
+
+/// Symbols a shared-library link must export: app-provided symbols plus host
+/// input exports, so the final library exposes its explicit public ABI on every
+/// target. Empty for non-shared output.
+fn sharedLibraryExports(
+    ctx: *CliCtx,
+    link_type: roc_target.OutputKind,
+    link_inputs: PlatformLinkInputs,
+    app_export_symbols: []const []const u8,
+) Allocator.Error![]const []const u8 {
+    if (link_type != .shared) return &.{};
+
+    const host_export_symbols = try host_symbols.collectHostExports(ctx.arena, ctx.io.std_io, try hostInputPaths(ctx, link_inputs));
+    var seen = std.StringHashMap(void).init(ctx.arena);
+    var symbols = try std.array_list.Managed([]const u8).initCapacity(
+        ctx.arena,
+        app_export_symbols.len + host_export_symbols.len,
+    );
+
+    for (app_export_symbols) |symbol| {
+        try appendUniqueSharedLibraryExport(&seen, &symbols, symbol);
+    }
+    for (host_export_symbols) |symbol| {
+        try appendUniqueSharedLibraryExport(&seen, &symbols, symbol);
+    }
+
+    return symbols.items;
+}
+
 fn llvmOptimizationLevel(opt: cli_args.OptLevel) builder.OptimizationLevel {
     return switch (opt) {
         .size => .size,
@@ -4671,11 +4731,12 @@ fn compileLlvmAppObject(
         std_target,
     );
     codegen.layout_store = &lowered.lir_result.layouts;
-    codegen.emit_debug_info = true;
-    codegen.emit_local_debug_info = args.debug;
+    const emit_debug_info = args.debug;
+    codegen.emit_debug_info = emit_debug_info;
+    codegen.emit_local_debug_info = emit_debug_info;
     codegen.enable_default_platform_runtime = enable_default_platform_runtime;
     codegen.enable_default_platform_hosted_calls = enable_default_platform_hosted_calls;
-    codegen.enable_default_platform_diagnostics = enable_default_platform_hosted_calls and args.debug;
+    codegen.enable_default_platform_diagnostics = enable_default_platform_hosted_calls and emit_debug_info;
     codegen.debug_producer = "roc " ++ build_options.compiler_version;
     defer codegen.deinit();
 
@@ -4698,13 +4759,14 @@ fn compileLlvmAppObject(
     // separate from exe objects in the build cache.
     const pic = link_type == .shared;
     const kind_suffix: []const u8 = if (pic) "_pic" else "";
+    const debug_suffix: []const u8 = if (emit_debug_info) "_debug" else "";
     var tuning_hash = std.hash.Crc32.init();
     tuning_hash.update(llvm_cpu);
     tuning_hash.update(&[_]u8{0});
     tuning_hash.update(llvm_features);
     const tuning_hash_value = tuning_hash.final();
-    const bitcode_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_llvm_{s}_{s}_{x}{s}.bc", .{ target_name, opt_name, tuning_hash_value, kind_suffix });
-    const object_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_llvm_{s}_{s}_{x}{s}.o", .{ target_name, opt_name, tuning_hash_value, kind_suffix });
+    const bitcode_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_llvm_{s}_{s}_{x}{s}{s}.bc", .{ target_name, opt_name, tuning_hash_value, kind_suffix, debug_suffix });
+    const object_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_llvm_{s}_{s}_{x}{s}{s}.o", .{ target_name, opt_name, tuning_hash_value, kind_suffix, debug_suffix });
     const bitcode_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, bitcode_filename });
     const object_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, object_filename });
 
@@ -5196,6 +5258,8 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
             );
 
             const force_undefined_symbols = try staticDataLinkRootSymbols(ctx, static_data_exports);
+            const app_export_symbols = try sharedLibraryAppExports(ctx, entrypoints, static_data_exports);
+            const export_symbols = try sharedLibraryExports(ctx, link_type, link_inputs, app_export_symbols);
 
             const link_config = linker.LinkConfig{
                 .target_format = linker.TargetFormat.detectFromOs(target_os),
@@ -5212,6 +5276,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
                 .platform_files_post = link_inputs.platform_files_post,
                 .extra_args = &.{},
                 .force_undefined_symbols = force_undefined_symbols,
+                .export_symbols = export_symbols,
                 .can_exit_early = false,
                 .disable_output = false,
                 .platform_files_dir = link_inputs.platform_files_dir,
@@ -5531,6 +5596,8 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
         );
 
         const force_undefined_symbols = try staticDataLinkRootSymbols(ctx, static_data_exports);
+        const app_export_symbols = try sharedLibraryAppExports(ctx, entrypoints, static_data_exports);
+        const export_symbols = try sharedLibraryExports(ctx, link_type, link_inputs, app_export_symbols);
 
         const link_config = linker.LinkConfig{
             .target_format = linker.TargetFormat.detectFromOs(target_os),
@@ -5547,6 +5614,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
             .platform_files_post = link_inputs.platform_files_post,
             .extra_args = &.{},
             .force_undefined_symbols = force_undefined_symbols,
+            .export_symbols = export_symbols,
             .can_exit_early = false,
             .disable_output = false,
             .platform_files_dir = link_inputs.platform_files_dir,
@@ -5799,6 +5867,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
             .platform_files_pre = link_inputs.platform_files_pre,
             .platform_files_post = link_inputs.platform_files_post,
             .extra_args = extra_args.items,
+            .export_symbols = try sharedLibraryExports(ctx, link_type, link_inputs, entrypoint_names),
             .can_exit_early = false,
             .disable_output = false,
             .wasm_initial_memory = configuredWasmMinimumMemory(args, link_inputs.wasm),

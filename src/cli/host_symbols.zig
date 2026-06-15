@@ -79,6 +79,254 @@ fn stringLessThan(_: void, a: []const u8, b: []const u8) bool {
     return std.mem.order(u8, a, b) == .lt;
 }
 
+/// Collect the symbol names the host inputs declare as exports, so a shared
+/// library link can force-include and export exactly those on every target.
+/// This mirrors each platform linker's own "what gets exported" rule, so a
+/// host declares its public API the same way it would for any shared library:
+///   - ELF: defined GLOBAL/WEAK symbols with DEFAULT or PROTECTED visibility
+///     (the host's `.hidden` runtime glue is excluded).
+///   - Mach-O: defined external symbols that are not private-external.
+///   - COFF: names in `.drectve` `/export:` directives (the COFF symbol table
+///     carries no visibility, so the directive — what `__declspec(dllexport)`
+///     emits — is the only export signal).
+/// wasm shared output is handled separately via the wasm export section.
+/// Names are duped into `arena`. Inputs in an unrecognized format are skipped;
+/// the linker keeps the final say, so a miss degrades to prior behavior rather
+/// than dropping a real export hard.
+pub fn collectHostExports(
+    arena: Allocator,
+    io: std.Io,
+    host_input_paths: []const []const u8,
+) Allocator.Error![]const []const u8 {
+    var seen = std.StringHashMap(void).init(arena);
+    var exports = std.ArrayList([]const u8).empty;
+
+    for (host_input_paths) |path| {
+        const bytes = std.Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(512 * 1024 * 1024)) catch continue;
+        try collectInput(arena, bytes, &seen, &exports);
+    }
+
+    return exports.items;
+}
+
+const ExportSink = struct {
+    arena: Allocator,
+    seen: *std.StringHashMap(void),
+    exports: *std.ArrayList([]const u8),
+
+    fn add(self: ExportSink, name: []const u8) Allocator.Error!void {
+        if (name.len == 0) return;
+        if (self.seen.contains(name)) return;
+        const owned = try self.arena.dupe(u8, name);
+        try self.seen.put(owned, {});
+        try self.exports.append(self.arena, owned);
+    }
+};
+
+fn collectInput(
+    arena: Allocator,
+    bytes: []const u8,
+    seen: *std.StringHashMap(void),
+    exports: *std.ArrayList([]const u8),
+) Allocator.Error!void {
+    const sink = ExportSink{ .arena = arena, .seen = seen, .exports = exports };
+    if (std.mem.startsWith(u8, bytes, "!<arch>\n")) {
+        try collectArArchive(bytes, sink);
+        return;
+    }
+    try collectObject(bytes, sink);
+}
+
+/// Walk an ar archive's members and collect exports from each object member,
+/// reusing the same member layout handling as scanArArchive.
+fn collectArArchive(bytes: []const u8, sink: ExportSink) Allocator.Error!void {
+    var offset: usize = "!<arch>\n".len;
+
+    while (offset + 60 <= bytes.len) {
+        const header = bytes[offset .. offset + 60];
+        const name_field = std.mem.trimEnd(u8, header[0..16], " ");
+        const size_field = std.mem.trimEnd(u8, header[48..58], " ");
+        const member_size = std.fmt.parseInt(usize, size_field, 10) catch return;
+        offset += 60;
+        if (offset + member_size > bytes.len) return;
+
+        var member = bytes[offset .. offset + member_size];
+        var member_name = name_field;
+
+        if (std.mem.startsWith(u8, name_field, "#1/")) {
+            const name_len = std.fmt.parseInt(usize, name_field[3..], 10) catch return;
+            if (name_len > member.len) return;
+            member_name = std.mem.trimEnd(u8, member[0..name_len], "\x00");
+            member = member[name_len..];
+        }
+
+        const is_index = std.mem.eql(u8, member_name, "/") or
+            std.mem.eql(u8, member_name, "//") or
+            std.mem.eql(u8, member_name, "/SYM64/") or
+            std.mem.startsWith(u8, member_name, "__.SYMDEF");
+
+        if (!is_index and member.len > 0) {
+            try collectObject(member, sink);
+        }
+
+        offset += member_size;
+        if (offset % 2 == 1) offset += 1; // members are 2-byte aligned
+    }
+}
+
+fn collectObject(bytes: []const u8, sink: ExportSink) Allocator.Error!void {
+    if (bytes.len >= 4) {
+        const magic = std.mem.readInt(u32, bytes[0..4], .little);
+        if (std.mem.eql(u8, bytes[0..4], "\x7fELF")) return collectElfObject(bytes, sink);
+        if (magic == std.macho.MH_MAGIC_64) return collectMachoObject(bytes, sink);
+        if (std.mem.eql(u8, bytes[0..4], "\x00asm")) return; // wasm handled elsewhere
+    }
+    if (bytes.len >= 2) {
+        const machine = std.mem.readInt(u16, bytes[0..2], .little);
+        if (machine == @intFromEnum(std.coff.IMAGE.FILE.MACHINE.AMD64) or
+            machine == @intFromEnum(std.coff.IMAGE.FILE.MACHINE.ARM64) or
+            machine == @intFromEnum(std.coff.IMAGE.FILE.MACHINE.I386))
+        {
+            return collectCoffObject(bytes, sink);
+        }
+    }
+}
+
+fn collectElfObject(bytes: []const u8, sink: ExportSink) Allocator.Error!void {
+    const elf = std.elf;
+    if (bytes.len < @sizeOf(elf.Elf64_Ehdr)) return;
+    const ehdr = std.mem.bytesAsValue(elf.Elf64_Ehdr, bytes[0..@sizeOf(elf.Elf64_Ehdr)]);
+    if (ehdr.e_ident[elf.EI_CLASS] != elf.ELFCLASS64) return;
+
+    const shoff: usize = @intCast(ehdr.e_shoff);
+    const shnum: usize = ehdr.e_shnum;
+    const shentsize: usize = ehdr.e_shentsize;
+    if (shentsize < @sizeOf(elf.Elf64_Shdr)) return;
+    if (shoff + shnum * shentsize > bytes.len) return;
+
+    var i: usize = 0;
+    while (i < shnum) : (i += 1) {
+        const shdr = std.mem.bytesAsValue(elf.Elf64_Shdr, bytes[shoff + i * shentsize ..][0..@sizeOf(elf.Elf64_Shdr)]);
+        if (shdr.sh_type != elf.SHT_SYMTAB) continue;
+
+        const strtab_index: usize = shdr.sh_link;
+        if (strtab_index >= shnum) return;
+        const strtab_hdr = std.mem.bytesAsValue(elf.Elf64_Shdr, bytes[shoff + strtab_index * shentsize ..][0..@sizeOf(elf.Elf64_Shdr)]);
+        const strtab_off: usize = @intCast(strtab_hdr.sh_offset);
+        const strtab_size: usize = @intCast(strtab_hdr.sh_size);
+        if (strtab_off + strtab_size > bytes.len) return;
+        const strtab = bytes[strtab_off .. strtab_off + strtab_size];
+
+        const sym_off: usize = @intCast(shdr.sh_offset);
+        const sym_size: usize = @intCast(shdr.sh_size);
+        if (sym_off + sym_size > bytes.len) return;
+        const sym_count = sym_size / @sizeOf(elf.Elf64_Sym);
+
+        var s: usize = 0;
+        while (s < sym_count) : (s += 1) {
+            const sym = std.mem.bytesAsValue(elf.Elf64_Sym, bytes[sym_off + s * @sizeOf(elf.Elf64_Sym) ..][0..@sizeOf(elf.Elf64_Sym)]);
+            if (sym.st_shndx == elf.SHN_UNDEF) continue;
+            const binding = sym.st_info >> 4;
+            if (binding != elf.STB_GLOBAL and binding != elf.STB_WEAK) continue;
+            // Only DEFAULT or PROTECTED visibility symbols are exported from a
+            // shared object; HIDDEN/INTERNAL are the host's internals.
+            const visibility: u3 = @intCast(sym.st_other & 0x3);
+            if (visibility != @intFromEnum(elf.STV.DEFAULT) and visibility != @intFromEnum(elf.STV.PROTECTED)) continue;
+            const name_off: usize = sym.st_name;
+            if (name_off >= strtab.len) continue;
+            const name = std.mem.sliceTo(strtab[name_off..], 0);
+            try sink.add(name);
+        }
+    }
+}
+
+fn collectMachoObject(bytes: []const u8, sink: ExportSink) Allocator.Error!void {
+    const macho = std.macho;
+    if (bytes.len < @sizeOf(macho.mach_header_64)) return;
+    const header = std.mem.bytesAsValue(macho.mach_header_64, bytes[0..@sizeOf(macho.mach_header_64)]);
+
+    var offset: usize = @sizeOf(macho.mach_header_64);
+    var cmd_index: u32 = 0;
+    while (cmd_index < header.ncmds) : (cmd_index += 1) {
+        if (offset + @sizeOf(macho.load_command) > bytes.len) return;
+        const cmd = std.mem.bytesAsValue(macho.load_command, bytes[offset..][0..@sizeOf(macho.load_command)]);
+        if (cmd.cmd == .SYMTAB) {
+            if (offset + @sizeOf(macho.symtab_command) > bytes.len) return;
+            const symtab = std.mem.bytesAsValue(macho.symtab_command, bytes[offset..][0..@sizeOf(macho.symtab_command)]);
+
+            const str_off: usize = symtab.stroff;
+            const str_size: usize = symtab.strsize;
+            if (str_off + str_size > bytes.len) return;
+            const strtab = bytes[str_off .. str_off + str_size];
+
+            const sym_off: usize = symtab.symoff;
+            const sym_count: usize = symtab.nsyms;
+            if (sym_off + sym_count * @sizeOf(macho.nlist_64) > bytes.len) return;
+
+            var s: usize = 0;
+            while (s < sym_count) : (s += 1) {
+                const nlist = std.mem.bytesAsValue(macho.nlist_64, bytes[sym_off + s * @sizeOf(macho.nlist_64) ..][0..@sizeOf(macho.nlist_64)]);
+                if (nlist.n_type.bits.is_stab != 0) continue;
+                if (!nlist.n_type.bits.ext) continue;
+                // Private-external symbols (the host's `.hidden`) are not exported.
+                if (nlist.n_type.bits.pext) continue;
+                if (nlist.n_type.bits.type != .sect) continue;
+                const name_off: usize = nlist.n_strx;
+                if (name_off >= strtab.len) continue;
+                const raw = std.mem.sliceTo(strtab[name_off..], 0);
+                // Mach-O C symbols carry a leading underscore; the export-table
+                // name the loader resolves is the unmangled form.
+                const name = if (raw.len > 1 and raw[0] == '_') raw[1..] else raw;
+                try sink.add(name);
+            }
+        }
+        offset += cmd.cmdsize;
+    }
+}
+
+/// Collect `/export:` operands from a COFF object's `.drectve` section. This is
+/// the only place COFF records export intent (the symbol table has no
+/// visibility), and it is exactly what `__declspec(dllexport)` emits.
+fn collectCoffObject(bytes: []const u8, sink: ExportSink) Allocator.Error!void {
+    if (bytes.len < 20) return;
+    const num_sections: usize = std.mem.readInt(u16, bytes[2..4], .little);
+    const optional_header_size: usize = std.mem.readInt(u16, bytes[16..18], .little);
+    const section_table_off = 20 + optional_header_size;
+    const section_header_size = 40;
+    if (section_table_off + num_sections * section_header_size > bytes.len) return;
+
+    var i: usize = 0;
+    while (i < num_sections) : (i += 1) {
+        const sh = bytes[section_table_off + i * section_header_size ..][0..section_header_size];
+        const name = std.mem.sliceTo(sh[0..8], 0);
+        if (!std.mem.eql(u8, name, ".drectve")) continue;
+
+        const size_of_raw_data: usize = std.mem.readInt(u32, sh[16..20], .little);
+        const ptr_to_raw_data: usize = std.mem.readInt(u32, sh[20..24], .little);
+        if (ptr_to_raw_data == 0 or size_of_raw_data == 0) continue;
+        if (ptr_to_raw_data + size_of_raw_data > bytes.len) continue;
+
+        const text = bytes[ptr_to_raw_data .. ptr_to_raw_data + size_of_raw_data];
+        try collectDrectveExports(text, sink);
+    }
+}
+
+fn collectDrectveExports(text: []const u8, sink: ExportSink) Allocator.Error!void {
+    var it = std.mem.tokenizeAny(u8, text, " \t\r\n");
+    while (it.next()) |raw_token| {
+        var token = raw_token;
+        if (token.len > 0 and (token[0] == '/' or token[0] == '-')) token = token[1..];
+        if (token.len < "export:".len) continue;
+        if (!std.ascii.eqlIgnoreCase(token[0.."export:".len], "export:")) continue;
+
+        var name = token["export:".len..];
+        // `/export:exportName=internalName` and `/export:name,@ord,DATA`: the
+        // exported (loader-visible) name is the part before `=` or `,`.
+        if (std.mem.findAny(u8, name, "=,")) |cut| name = name[0..cut];
+        try sink.add(name);
+    }
+}
+
 /// A defined global symbol satisfies a needed name directly or with one
 /// leading underscore stripped (Mach-O and 32-bit COFF mangle C names that
 /// way).

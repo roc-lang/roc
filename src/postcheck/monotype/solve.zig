@@ -106,6 +106,13 @@ const NodePair = struct {
     right: NodeId,
 };
 
+const RelationStamp = struct {
+    left: NodeId,
+    left_version: u32,
+    right: NodeId,
+    right_version: u32,
+};
+
 /// Per-specialization type solver. Checked types instantiate into union-find
 /// nodes with explicit row extension links; constraints unify nodes
 /// order-independently; Monotypes are materialized views of solved nodes and
@@ -122,6 +129,8 @@ pub const InstGraph = struct {
     unsolved_monos: *const std.AutoHashMap(Type.TypeId, void),
     arena_impl: std.heap.ArenaAllocator,
     nodes: std.ArrayList(InstNode),
+    versions: std.ArrayList(u32),
+    processed_relations: std.AutoHashMap(RelationStamp, void),
     /// Materialized Monotype views per node root. The same root may have
     /// several views when roots with existing views are merged; all views of a
     /// root hold identical content.
@@ -132,6 +141,12 @@ pub const InstGraph = struct {
     /// Roots whose Monotype views need their content refilled. Drained when no
     /// constraint walk holds slices into the type store.
     dirty: std.ArrayList(NodeId),
+    /// Set matching `dirty`, so each current root is queued at most once.
+    dirty_set: std.AutoHashMap(NodeId, void),
+    /// Current extension root for each row root. This is the authority for
+    /// maintaining `row_parents`; stale extension edges are removed when row
+    /// content changes.
+    row_exts: std.AutoHashMap(NodeId, NodeId),
     /// Row nodes by the extension node they currently chain through. A change
     /// to an extension changes the flattened view of every row above it, so
     /// dirty marks propagate through these back references.
@@ -154,9 +169,13 @@ pub const InstGraph = struct {
             .unsolved_monos = unsolved_monos,
             .arena_impl = std.heap.ArenaAllocator.init(allocator),
             .nodes = .empty,
+            .versions = .empty,
+            .processed_relations = std.AutoHashMap(RelationStamp, void).init(allocator),
             .node_monos = std.AutoHashMap(NodeId, std.ArrayList(Type.TypeId)).init(allocator),
             .mono_nodes = std.AutoHashMap(Type.TypeId, NodeId).init(allocator),
             .dirty = .empty,
+            .dirty_set = std.AutoHashMap(NodeId, void).init(allocator),
+            .row_exts = std.AutoHashMap(NodeId, NodeId).init(allocator),
             .row_parents = std.AutoHashMap(NodeId, std.ArrayList(NodeId)).init(allocator),
         };
         return graph;
@@ -175,8 +194,12 @@ pub const InstGraph = struct {
             list.deinit(allocator);
         }
         self.row_parents.deinit();
+        self.row_exts.deinit();
+        self.dirty_set.deinit();
         self.mono_nodes.deinit();
         self.dirty.deinit(allocator);
+        self.processed_relations.deinit();
+        self.versions.deinit(allocator);
         self.nodes.deinit(allocator);
         self.arena_impl.deinit();
         allocator.destroy(self);
@@ -189,19 +212,67 @@ pub const InstGraph = struct {
     pub fn newNode(self: *InstGraph, node_content: InstNode) Allocator.Error!NodeId {
         const id: NodeId = @enumFromInt(@as(u32, @intCast(self.nodes.items.len)));
         try self.nodes.append(self.allocator, node_content);
+        try self.versions.append(self.allocator, 0);
         try self.registerRowParent(id, node_content);
         return id;
     }
 
     fn registerRowParent(self: *InstGraph, row: NodeId, node_content: InstNode) Allocator.Error!void {
-        const ext = switch (node_content) {
+        const row_root = self.find(row);
+        const maybe_ext = switch (node_content) {
             .tag_union => |tag_union| tag_union.ext,
             .record => |record| record.ext,
-            else => return,
+            else => null,
         };
+        const ext = if (maybe_ext) |raw_ext| self.find(raw_ext) else {
+            try self.unregisterRowParent(row_root);
+            return;
+        };
+
+        if (self.row_exts.get(row_root)) |old_ext| {
+            if (old_ext == ext) {
+                try self.addRowParent(ext, row_root);
+                return;
+            }
+            self.removeRowParent(old_ext, row_root);
+        }
+        try self.row_exts.put(row_root, ext);
+        try self.addRowParent(ext, row_root);
+    }
+
+    fn unregisterRowParent(self: *InstGraph, row: NodeId) Allocator.Error!void {
+        const row_root = self.find(row);
+        if (self.row_exts.fetchRemove(row_root)) |old| {
+            self.removeRowParent(old.value, row_root);
+        }
+    }
+
+    fn addRowParent(self: *InstGraph, ext: NodeId, row: NodeId) Allocator.Error!void {
         const entry = try self.row_parents.getOrPut(self.find(ext));
         if (!entry.found_existing) entry.value_ptr.* = .empty;
-        try entry.value_ptr.append(self.allocator, row);
+        const row_root = self.find(row);
+        for (entry.value_ptr.items) |existing| {
+            if (self.find(existing) == row_root) return;
+        }
+        try entry.value_ptr.append(self.allocator, row_root);
+    }
+
+    fn removeRowParent(self: *InstGraph, ext: NodeId, row: NodeId) void {
+        const ext_root = self.find(ext);
+        const parents = self.row_parents.getPtr(ext_root) orelse return;
+        const row_root = self.find(row);
+        var index: usize = 0;
+        while (index < parents.items.len) {
+            if (self.find(parents.items[index]) == row_root) {
+                _ = parents.swapRemove(index);
+                continue;
+            }
+            index += 1;
+        }
+        if (parents.items.len == 0) {
+            var removed = self.row_parents.fetchRemove(ext_root).?;
+            removed.value.deinit(self.allocator);
+        }
     }
 
     fn find(self: *InstGraph, id: NodeId) NodeId {
@@ -242,7 +313,7 @@ pub const InstGraph = struct {
             if (visited.contains(root)) continue;
             try visited.put(root, {});
             if (self.node_monos.contains(root)) {
-                try self.dirty.append(self.allocator, root);
+                try self.queueDirty(root);
             }
             if (self.row_parents.get(root)) |parents| {
                 try pending.appendSlice(self.allocator, parents.items);
@@ -253,13 +324,23 @@ pub const InstGraph = struct {
         }
     }
 
+    fn queueDirty(self: *InstGraph, raw_root: NodeId) Allocator.Error!void {
+        const root = self.find(raw_root);
+        const entry = try self.dirty_set.getOrPut(root);
+        if (entry.found_existing) return;
+        try self.dirty.append(self.allocator, root);
+    }
+
     /// Redirect `loser` into `winner`, moving Monotype views and row back
     /// references across, and queueing affected views for a content refill.
     fn union_(self: *InstGraph, raw_winner: NodeId, raw_loser: NodeId) Allocator.Error!void {
         const winner = self.find(raw_winner);
         const loser = self.find(raw_loser);
         if (winner == loser) return;
+        _ = self.dirty_set.remove(loser);
+        try self.unregisterRowParent(loser);
         self.nodes.items[@intFromEnum(loser)] = .{ .redirect = winner };
+        self.versions.items[@intFromEnum(winner)] +%= 1;
         if (self.node_monos.fetchRemove(loser)) |moved| {
             var moved_list = moved.value;
             const entry = try self.node_monos.getOrPut(winner);
@@ -272,18 +353,30 @@ pub const InstGraph = struct {
         }
         if (self.row_parents.fetchRemove(loser)) |moved| {
             var moved_list = moved.value;
-            const entry = try self.row_parents.getOrPut(winner);
-            if (!entry.found_existing) entry.value_ptr.* = .empty;
-            try entry.value_ptr.appendSlice(self.allocator, moved_list.items);
+            for (moved_list.items) |parent| {
+                const parent_root = self.find(parent);
+                try self.row_exts.put(parent_root, winner);
+                try self.addRowParent(winner, parent_root);
+            }
             moved_list.deinit(self.allocator);
         }
         try self.markDirty(winner);
     }
 
+    /// Replace a root's content in place without queueing a Monotype refill.
+    /// Returns whether the root's observable content changed.
+    fn replaceContentNoDirty(self: *InstGraph, raw_root: NodeId, new_content: InstNode) Allocator.Error!bool {
+        const root = self.find(raw_root);
+        if (instNodeEql(self.nodes.items[@intFromEnum(root)], new_content)) return false;
+        self.nodes.items[@intFromEnum(root)] = new_content;
+        self.versions.items[@intFromEnum(root)] +%= 1;
+        try self.registerRowParent(root, new_content);
+        return true;
+    }
+
     /// Replace a root's content in place and queue affected views for refill.
     fn setContent(self: *InstGraph, root: NodeId, new_content: InstNode) Allocator.Error!void {
-        self.nodes.items[@intFromEnum(root)] = new_content;
-        try self.registerRowParent(root, new_content);
+        if (!try self.replaceContentNoDirty(root, new_content)) return;
         try self.markDirty(root);
     }
 
@@ -311,6 +404,9 @@ pub const InstGraph = struct {
         const pair = NodePair{ .left = left, .right = right };
         if (related.contains(pair)) return;
         try related.put(pair, {});
+        const relation = self.relationStamp(left, right);
+        if (self.processed_relations.contains(relation)) return;
+        try self.processed_relations.put(relation, {});
 
         const left_content = self.nodes.items[@intFromEnum(left)];
         const right_content = self.nodes.items[@intFromEnum(right)];
@@ -329,6 +425,25 @@ pub const InstGraph = struct {
                 else => try self.unifyConcrete(left, left_content, right, right_content, pending),
             },
         }
+    }
+
+    fn relationStamp(self: *InstGraph, left: NodeId, right: NodeId) RelationStamp {
+        const left_raw = @intFromEnum(left);
+        const right_raw = @intFromEnum(right);
+        if (left_raw <= right_raw) {
+            return .{
+                .left = left,
+                .left_version = self.versions.items[left_raw],
+                .right = right,
+                .right_version = self.versions.items[right_raw],
+            };
+        }
+        return .{
+            .left = right,
+            .left_version = self.versions.items[right_raw],
+            .right = left,
+            .right_version = self.versions.items[left_raw],
+        };
     }
 
     fn mergeVariables(a: InstVariable, b: InstVariable) InstVariable {
@@ -472,22 +587,129 @@ pub const InstGraph = struct {
             .named => |named| named,
             else => unreachable,
         };
-        const backing = named.backing orelse
+        const declared_backing = named.backing orelse
             Common.invariant("instantiation unified an opaque type without backing against a structural type");
+        const backing = try self.structuralBackingNode(declared_backing.node, named);
+        const backing_node = backing.node;
+        if (backing.recursive) {
+            if (named.kind == .alias) {
+                Common.invariant("alias backing cycle reached Monotype instantiation");
+            }
+            switch (self.nodes.items[@intFromEnum(other)]) {
+                .named => Common.invariant("recursive nominal backing met a different named type"),
+                else => {
+                    try self.union_(named_node, other);
+                    return;
+                },
+            }
+        }
+        if (declared_backing.node != backing_node) {
+            var compressed = named;
+            compressed.backing = .{ .node = backing_node, .use = declared_backing.use };
+            try self.setContent(named_node, .{ .named = compressed });
+        }
         if (named.kind == .alias) {
-            try pending.append(self.allocator, .{ .left = backing.node, .right = other });
+            try pending.append(self.allocator, .{ .left = backing_node, .right = other });
             return;
         }
         switch (self.nodes.items[@intFromEnum(other)]) {
             .named => {
-                try pending.append(self.allocator, .{ .left = backing.node, .right = other });
+                try pending.append(self.allocator, .{ .left = backing_node, .right = other });
                 return;
             },
             else => {},
         }
         const moved = try self.newNode(self.nodes.items[@intFromEnum(other)]);
         try self.union_(named_node, other);
-        try pending.append(self.allocator, .{ .left = backing.node, .right = moved });
+        try pending.append(self.allocator, .{ .left = backing_node, .right = moved });
+    }
+
+    const StructuralBacking = struct {
+        node: NodeId,
+        recursive: bool,
+    };
+
+    fn structuralBackingNode(self: *InstGraph, raw: NodeId, owner: InstNamed) Allocator.Error!StructuralBacking {
+        const result = try self.findStructuralBackingNode(raw, owner);
+        if (!result.recursive) {
+            try self.compressStructuralBacking(raw, owner, result.node);
+        }
+        return result;
+    }
+
+    fn findStructuralBackingNode(self: *InstGraph, raw: NodeId, owner: InstNamed) Allocator.Error!StructuralBacking {
+        var seen = try std.DynamicBitSetUnmanaged.initEmpty(self.allocator, self.nodes.items.len);
+        defer seen.deinit(self.allocator);
+        var current = self.find(raw);
+        while (true) {
+            const index = @intFromEnum(current);
+            if (seen.isSet(index)) return .{ .node = current, .recursive = true };
+            seen.set(index);
+            const next = self.structuralBackingNext(current, owner) orelse return .{ .node = current, .recursive = false };
+            current = next;
+        }
+    }
+
+    fn compressStructuralBacking(self: *InstGraph, raw: NodeId, owner: InstNamed, result: NodeId) Allocator.Error!void {
+        var current = self.find(raw);
+        while (current != result) {
+            const named = switch (self.nodes.items[@intFromEnum(current)]) {
+                .named => |named| named,
+                else => Common.invariant("named backing compression reached a structural node before its result"),
+            };
+            if (named.kind != .alias and !self.sameNamedInstance(named, owner)) {
+                Common.invariant("named backing compression reached a non-transparent named type");
+            }
+            const backing = named.backing orelse
+                Common.invariant("named backing compression reached a named type without backing");
+            const next = self.find(backing.node);
+            if (backing.node != result) {
+                var compressed = named;
+                compressed.backing = .{ .node = result, .use = backing.use };
+                try self.setContent(current, .{ .named = compressed });
+            }
+            current = next;
+        }
+    }
+
+    fn structuralBackingNext(self: *InstGraph, raw: NodeId, owner: InstNamed) ?NodeId {
+        const current = self.find(raw);
+        switch (self.nodes.items[@intFromEnum(current)]) {
+            .named => |named| {
+                if (named.kind != .alias and !self.sameNamedInstance(named, owner)) return null;
+                const backing = named.backing orelse
+                    Common.invariant("named backing chain reached a named type without backing");
+                return self.find(backing.node);
+            },
+            else => return null,
+        }
+    }
+
+    fn sameNamedInstance(self: *InstGraph, left: InstNamed, right: InstNamed) bool {
+        return left.kind == right.kind and
+            sameTypeDef(left.def, right.def) and
+            left.builtin_owner == right.builtin_owner and
+            self.sameNodeRoots(left.args, right.args) and
+            sameNamedType(left.named_type, right.named_type);
+    }
+
+    fn sameNodeRoots(self: *InstGraph, left: []const NodeId, right: []const NodeId) bool {
+        if (left.len != right.len) return false;
+        for (left, right) |left_node, right_node| {
+            if (self.find(left_node) != self.find(right_node)) return false;
+        }
+        return true;
+    }
+
+    fn sameTypeDef(left: Type.TypeDef, right: Type.TypeDef) bool {
+        return left.module_name == right.module_name and
+            left.type_name == right.type_name and
+            left.source_decl == right.source_decl;
+    }
+
+    fn sameNamedType(left: Type.NamedType, right: Type.NamedType) bool {
+        return left.ty == right.ty and
+            std.mem.eql(u8, left.module.bytes[0..], right.module.bytes[0..]);
     }
 
     const RowKind = enum {
@@ -544,6 +766,17 @@ pub const InstGraph = struct {
         try seen.put(root, {});
 
         var ext = self.find(row.ext);
+        switch (self.nodes.items[@intFromEnum(ext)]) {
+            .unresolved, .empty_tag_union => {
+                if (row.ext != ext) {
+                    const flattened: InstNode = .{ .tag_union = .{ .tags = row.tags, .ext = ext } };
+                    _ = try self.replaceContentNoDirty(root, flattened);
+                }
+                return .{ .tags = row.tags, .ext = ext };
+            },
+            else => {},
+        }
+
         while (true) {
             if (seen.contains(ext)) {
                 // A cyclic extension chain contributes no further tags — every
@@ -565,8 +798,7 @@ pub const InstGraph = struct {
 
         const flat_tags = try self.arena().dupe(InstTag, tags.items);
         const flattened: InstNode = .{ .tag_union = .{ .tags = flat_tags, .ext = ext } };
-        self.nodes.items[@intFromEnum(root)] = flattened;
-        try self.registerRowParent(root, flattened);
+        _ = try self.replaceContentNoDirty(root, flattened);
         return .{ .tags = flat_tags, .ext = ext };
     }
 
@@ -585,6 +817,17 @@ pub const InstGraph = struct {
         try seen.put(root, {});
 
         var ext = self.find(row.ext);
+        switch (self.nodes.items[@intFromEnum(ext)]) {
+            .unresolved, .empty_record => {
+                if (row.ext != ext) {
+                    const flattened: InstNode = .{ .record = .{ .fields = row.fields, .ext = ext } };
+                    _ = try self.replaceContentNoDirty(root, flattened);
+                }
+                return .{ .fields = row.fields, .ext = ext };
+            },
+            else => {},
+        }
+
         while (true) {
             if (seen.contains(ext)) {
                 // A cyclic extension chain contributes no further fields —
@@ -606,8 +849,7 @@ pub const InstGraph = struct {
 
         const flat_fields = try self.arena().dupe(InstField, fields.items);
         const flattened: InstNode = .{ .record = .{ .fields = flat_fields, .ext = ext } };
-        self.nodes.items[@intFromEnum(root)] = flattened;
-        try self.registerRowParent(root, flattened);
+        _ = try self.replaceContentNoDirty(root, flattened);
         return .{ .fields = flat_fields, .ext = ext };
     }
 
@@ -667,31 +909,23 @@ pub const InstGraph = struct {
             try pending.append(self.allocator, .{ .left = flat_left.ext, .right = flat_right.ext });
         } else if (only_left.items.len == 0) {
             // Left lacks tags: its extension absorbs the right-only tags.
-            const right_rest = try self.newNode(.{ .tag_union = .{
-                .tags = try self.arena().dupe(InstTag, only_right.items),
-                .ext = flat_right.ext,
-            } });
-            try pending.append(self.allocator, .{ .left = flat_left.ext, .right = right_rest });
+            try self.writeOrQueueTagRest(flat_left.ext, only_right.items, flat_right.ext, pending);
             merged_ext = flat_right.ext;
         } else if (only_right.items.len == 0) {
-            const left_rest = try self.newNode(.{ .tag_union = .{
-                .tags = try self.arena().dupe(InstTag, only_left.items),
-                .ext = flat_left.ext,
-            } });
-            try pending.append(self.allocator, .{ .left = flat_right.ext, .right = left_rest });
+            try self.writeOrQueueTagRest(flat_right.ext, only_left.items, flat_left.ext, pending);
             merged_ext = flat_left.ext;
         } else {
             const new_ext = try self.newNode(.{ .unresolved = .{ .row_default = .empty_tag_union } });
-            const left_rest = try self.newNode(.{ .tag_union = .{
-                .tags = try self.arena().dupe(InstTag, only_left.items),
-                .ext = new_ext,
-            } });
-            const right_rest = try self.newNode(.{ .tag_union = .{
-                .tags = try self.arena().dupe(InstTag, only_right.items),
-                .ext = new_ext,
-            } });
-            try pending.append(self.allocator, .{ .left = flat_left.ext, .right = right_rest });
-            try pending.append(self.allocator, .{ .left = flat_right.ext, .right = left_rest });
+            if (self.find(flat_left.ext) == self.find(flat_right.ext)) {
+                var rest = std.ArrayList(InstTag).empty;
+                defer rest.deinit(self.allocator);
+                try rest.appendSlice(self.allocator, only_left.items);
+                try rest.appendSlice(self.allocator, only_right.items);
+                try self.writeOrQueueTagRest(flat_left.ext, rest.items, new_ext, pending);
+            } else {
+                try self.writeOrQueueTagRest(flat_left.ext, only_right.items, new_ext, pending);
+                try self.writeOrQueueTagRest(flat_right.ext, only_left.items, new_ext, pending);
+            }
             merged_ext = new_ext;
         }
 
@@ -700,6 +934,39 @@ pub const InstGraph = struct {
             .ext = merged_ext,
         } });
         try self.union_(left, right);
+    }
+
+    fn writeOrQueueTagRest(
+        self: *InstGraph,
+        ext: NodeId,
+        tags: []const InstTag,
+        tail_ext: NodeId,
+        pending: *std.ArrayList(NodePair),
+    ) Allocator.Error!void {
+        const ext_root = self.find(ext);
+        switch (self.nodes.items[@intFromEnum(ext_root)]) {
+            .unresolved => |variable| {
+                if (variable.numeric_default_phase != null) {
+                    Common.invariant("instantiation tried to write a tag row into a numeric variable");
+                }
+                if (variable.row_default) |default| {
+                    if (default != .empty_tag_union) {
+                        Common.invariant("instantiation tried to write a tag row into a record row variable");
+                    }
+                }
+                try self.setContent(ext_root, .{ .tag_union = .{
+                    .tags = try self.arena().dupe(InstTag, tags),
+                    .ext = tail_ext,
+                } });
+            },
+            else => {
+                const rest = try self.newNode(.{ .tag_union = .{
+                    .tags = try self.arena().dupe(InstTag, tags),
+                    .ext = tail_ext,
+                } });
+                try pending.append(self.allocator, .{ .left = ext_root, .right = rest });
+            },
+        }
     }
 
     fn unifyRecordRows(self: *InstGraph, left: NodeId, right: NodeId, pending: *std.ArrayList(NodePair)) Allocator.Error!void {
@@ -744,31 +1011,23 @@ pub const InstGraph = struct {
         if (only_left.items.len == 0 and only_right.items.len == 0) {
             try pending.append(self.allocator, .{ .left = flat_left.ext, .right = flat_right.ext });
         } else if (only_left.items.len == 0) {
-            const right_rest = try self.newNode(.{ .record = .{
-                .fields = try self.arena().dupe(InstField, only_right.items),
-                .ext = flat_right.ext,
-            } });
-            try pending.append(self.allocator, .{ .left = flat_left.ext, .right = right_rest });
+            try self.writeOrQueueRecordRest(flat_left.ext, only_right.items, flat_right.ext, pending);
             merged_ext = flat_right.ext;
         } else if (only_right.items.len == 0) {
-            const left_rest = try self.newNode(.{ .record = .{
-                .fields = try self.arena().dupe(InstField, only_left.items),
-                .ext = flat_left.ext,
-            } });
-            try pending.append(self.allocator, .{ .left = flat_right.ext, .right = left_rest });
+            try self.writeOrQueueRecordRest(flat_right.ext, only_left.items, flat_left.ext, pending);
             merged_ext = flat_left.ext;
         } else {
             const new_ext = try self.newNode(.{ .unresolved = .{ .row_default = .empty_record } });
-            const left_rest = try self.newNode(.{ .record = .{
-                .fields = try self.arena().dupe(InstField, only_left.items),
-                .ext = new_ext,
-            } });
-            const right_rest = try self.newNode(.{ .record = .{
-                .fields = try self.arena().dupe(InstField, only_right.items),
-                .ext = new_ext,
-            } });
-            try pending.append(self.allocator, .{ .left = flat_left.ext, .right = right_rest });
-            try pending.append(self.allocator, .{ .left = flat_right.ext, .right = left_rest });
+            if (self.find(flat_left.ext) == self.find(flat_right.ext)) {
+                var rest = std.ArrayList(InstField).empty;
+                defer rest.deinit(self.allocator);
+                try rest.appendSlice(self.allocator, only_left.items);
+                try rest.appendSlice(self.allocator, only_right.items);
+                try self.writeOrQueueRecordRest(flat_left.ext, rest.items, new_ext, pending);
+            } else {
+                try self.writeOrQueueRecordRest(flat_left.ext, only_right.items, new_ext, pending);
+                try self.writeOrQueueRecordRest(flat_right.ext, only_left.items, new_ext, pending);
+            }
             merged_ext = new_ext;
         }
 
@@ -777,6 +1036,39 @@ pub const InstGraph = struct {
             .ext = merged_ext,
         } });
         try self.union_(left, right);
+    }
+
+    fn writeOrQueueRecordRest(
+        self: *InstGraph,
+        ext: NodeId,
+        fields: []const InstField,
+        tail_ext: NodeId,
+        pending: *std.ArrayList(NodePair),
+    ) Allocator.Error!void {
+        const ext_root = self.find(ext);
+        switch (self.nodes.items[@intFromEnum(ext_root)]) {
+            .unresolved => |variable| {
+                if (variable.numeric_default_phase != null) {
+                    Common.invariant("instantiation tried to write a record row into a numeric variable");
+                }
+                if (variable.row_default) |default| {
+                    if (default != .empty_record) {
+                        Common.invariant("instantiation tried to write a record row into a tag row variable");
+                    }
+                }
+                try self.setContent(ext_root, .{ .record = .{
+                    .fields = try self.arena().dupe(InstField, fields),
+                    .ext = tail_ext,
+                } });
+            },
+            else => {
+                const rest = try self.newNode(.{ .record = .{
+                    .fields = try self.arena().dupe(InstField, fields),
+                    .ext = tail_ext,
+                } });
+                try pending.append(self.allocator, .{ .left = ext_root, .right = rest });
+            },
+        }
     }
 
     /// Import a Monotype into the graph. A Monotype already linked to a node
@@ -857,7 +1149,7 @@ pub const InstGraph = struct {
             .erased => |digest| .{ .erased = digest },
             .zst => .zst,
         };
-        self.nodes.items[@intFromEnum(node)] = imported;
+        _ = try self.replaceContentNoDirty(node, imported);
         return node;
     }
 
@@ -902,6 +1194,7 @@ pub const InstGraph = struct {
     fn fillMono(self: *InstGraph, raw_root: NodeId, ty: Type.TypeId) Allocator.Error!void {
         const root = self.find(raw_root);
         const types = self.types;
+        const previous = types.get(ty);
         const filled: Type.Content = switch (self.nodes.items[@intFromEnum(root)]) {
             .redirect => unreachable,
             .unresolved => |variable| blk: {
@@ -919,31 +1212,38 @@ pub const InstGraph = struct {
             .primitive => |primitive| .{ .primitive = primitive },
             .list => |elem| .{ .list = try self.monoFor(elem) },
             .box => |elem| .{ .box = try self.monoFor(elem) },
-            .tuple => |items| .{ .tuple = try self.monoSpan(items) },
+            .tuple => |items| .{ .tuple = try self.monoSpanWithReuse(items, switch (previous) {
+                .tuple => |span| span,
+                else => null,
+            }) },
             .func => |func| .{ .func = .{
-                .args = try self.monoSpan(func.args),
+                .args = try self.monoSpanWithReuse(func.args, switch (previous) {
+                    .func => |old| old.args,
+                    else => null,
+                }),
                 .ret = try self.monoFor(func.ret),
             } },
             .empty_tag_union => .{ .tag_union = Type.Span.empty() },
             .empty_record => .{ .record = Type.Span.empty() },
             .tag_union => blk: {
                 const flat = try self.flattenTagRow(root);
-                var tags = std.ArrayList(Type.Tag).empty;
+                var tags = std.ArrayList(PendingTag).empty;
                 defer tags.deinit(self.allocator);
                 try tags.ensureTotalCapacity(self.allocator, flat.tags.len);
                 for (flat.tags) |tag| {
                     tags.appendAssumeCapacity(.{
                         .name = tag.name,
                         .checked_name = tag.checked_name,
-                        .payloads = .empty(),
+                        .payloads = try self.monoSlice(tag.payloads),
                     });
                 }
-                for (flat.tags, tags.items) |tag, *out| {
-                    out.payloads = try types.addSpan(try self.monoSlice(tag.payloads));
-                }
-                std.mem.sort(Type.Tag, tags.items, self.name_store, tagLessThan);
-                assertNoDuplicateTags(self.name_store, tags.items, "instantiation produced a tag row with duplicate tags");
-                break :blk .{ .tag_union = try types.addTags(tags.items) };
+                std.mem.sort(PendingTag, tags.items, self.name_store, pendingTagLessThan);
+                assertNoDuplicatePendingTags(self.name_store, tags.items, "instantiation produced a tag row with duplicate tags");
+                const existing = switch (previous) {
+                    .tag_union => |span| span,
+                    else => null,
+                };
+                break :blk .{ .tag_union = try self.tagSpanWithReuse(tags.items, existing) };
             },
             .record => blk: {
                 const flat = try self.flattenRecordRow(root);
@@ -958,14 +1258,21 @@ pub const InstGraph = struct {
                 }
                 std.mem.sort(Type.Field, fields.items, self.name_store, recordFieldLessThan);
                 assertNoDuplicateRecordFields(self.name_store, fields.items, "instantiation produced a record row with duplicate fields");
-                break :blk .{ .record = try types.addFields(fields.items) };
+                const existing = switch (previous) {
+                    .record => |span| span,
+                    else => null,
+                };
+                break :blk .{ .record = try self.recordSpanWithReuse(fields.items, existing) };
             },
             .named => |named| .{ .named = .{
                 .named_type = named.named_type,
                 .def = named.def,
                 .kind = named.kind,
                 .builtin_owner = named.builtin_owner,
-                .args = try types.addSpan(try self.monoSlice(named.args)),
+                .args = try self.monoSpanWithReuse(named.args, switch (previous) {
+                    .named => |old| old.args,
+                    else => null,
+                }),
                 .backing = if (named.backing) |backing| .{
                     .ty = try self.monoFor(backing.node),
                     .use = backing.use,
@@ -985,8 +1292,55 @@ pub const InstGraph = struct {
         return out;
     }
 
-    fn monoSpan(self: *InstGraph, nodes_slice: []const NodeId) Allocator.Error!Type.Span {
-        return try self.types.addSpan(try self.monoSlice(nodes_slice));
+    fn monoSpanWithReuse(
+        self: *InstGraph,
+        nodes_slice: []const NodeId,
+        existing: ?Type.Span,
+    ) Allocator.Error!Type.Span {
+        const values = try self.monoSlice(nodes_slice);
+        if (existing) |span| {
+            if (typeSpanEql(self.types.span(span), values)) return span;
+        }
+        return try self.types.addSpan(values);
+    }
+
+    fn recordSpanWithReuse(
+        self: *InstGraph,
+        fields: []const Type.Field,
+        existing: ?Type.Span,
+    ) Allocator.Error!Type.Span {
+        if (existing) |span| {
+            if (recordSpanEql(self.types.fieldSpan(span), fields)) return span;
+        }
+        return try self.types.addFields(fields);
+    }
+
+    const PendingTag = struct {
+        name: names.TagNameId,
+        checked_name: names.TagNameId,
+        payloads: []const Type.TypeId,
+    };
+
+    fn tagSpanWithReuse(
+        self: *InstGraph,
+        tags: []const PendingTag,
+        existing: ?Type.Span,
+    ) Allocator.Error!Type.Span {
+        if (existing) |span| {
+            if (tagSpanEql(self.types, self.types.tagSpan(span), tags)) return span;
+        }
+
+        var materialized = std.ArrayList(Type.Tag).empty;
+        defer materialized.deinit(self.allocator);
+        try materialized.ensureTotalCapacity(self.allocator, tags.len);
+        for (tags) |tag| {
+            materialized.appendAssumeCapacity(.{
+                .name = tag.name,
+                .checked_name = tag.checked_name,
+                .payloads = try self.types.addSpan(tag.payloads),
+            });
+        }
+        return try self.types.addTags(materialized.items);
     }
 
     /// Refill the Monotype views of every node that changed since the last
@@ -995,6 +1349,7 @@ pub const InstGraph = struct {
     pub fn drainDirty(self: *InstGraph) Allocator.Error!void {
         while (self.dirty.pop()) |raw_root| {
             const root = self.find(raw_root);
+            if (!self.dirty_set.remove(root)) continue;
             const views = self.node_monos.get(root) orelse continue;
             for (views.items) |ty| {
                 try self.fillMono(root, ty);
@@ -1010,6 +1365,10 @@ pub fn recordFieldLessThan(name_store: *const names.NameStore, lhs: Type.Field, 
 
 /// Orders tag union tags by label text for layout-stable sorting.
 pub fn tagLessThan(name_store: *const names.NameStore, lhs: Type.Tag, rhs: Type.Tag) bool {
+    return name_store.tagLabelTextLessThan(lhs.name, rhs.name);
+}
+
+fn pendingTagLessThan(name_store: *const names.NameStore, lhs: InstGraph.PendingTag, rhs: InstGraph.PendingTag) bool {
     return name_store.tagLabelTextLessThan(lhs.name, rhs.name);
 }
 
@@ -1033,6 +1392,332 @@ pub fn assertNoDuplicateTags(name_store: *const names.NameStore, tags: []const T
     }
 }
 
+fn assertNoDuplicatePendingTags(name_store: *const names.NameStore, tags: []const InstGraph.PendingTag, comptime message: []const u8) void {
+    if (tags.len < 2) return;
+    for (tags[1..], 1..) |tag, i| {
+        if (name_store.tagLabelTextEql(tags[i - 1].name, tag.name)) {
+            Common.invariant(message);
+        }
+    }
+}
+
+fn typeSpanEql(left: []const Type.TypeId, right: []const Type.TypeId) bool {
+    if (left.len != right.len) return false;
+    for (left, right) |left_ty, right_ty| {
+        if (left_ty != right_ty) return false;
+    }
+    return true;
+}
+
+fn recordSpanEql(left: []const Type.Field, right: []const Type.Field) bool {
+    if (left.len != right.len) return false;
+    for (left, right) |left_field, right_field| {
+        if (left_field.name != right_field.name or left_field.ty != right_field.ty) return false;
+    }
+    return true;
+}
+
+fn tagSpanEql(types: *const Type.Store, left: []const Type.Tag, right: []const InstGraph.PendingTag) bool {
+    if (left.len != right.len) return false;
+    for (left, right) |left_tag, right_tag| {
+        if (left_tag.name != right_tag.name or left_tag.checked_name != right_tag.checked_name) return false;
+        if (!typeSpanEql(types.span(left_tag.payloads), right_tag.payloads)) return false;
+    }
+    return true;
+}
+
+fn instNodeEql(left: InstNode, right: InstNode) bool {
+    return switch (left) {
+        .redirect => |left_next| switch (right) {
+            .redirect => |right_next| left_next == right_next,
+            else => false,
+        },
+        .unresolved => |left_var| switch (right) {
+            .unresolved => |right_var| std.meta.eql(left_var, right_var),
+            else => false,
+        },
+        .primitive => |left_primitive| switch (right) {
+            .primitive => |right_primitive| left_primitive == right_primitive,
+            else => false,
+        },
+        .list => |left_elem| switch (right) {
+            .list => |right_elem| left_elem == right_elem,
+            else => false,
+        },
+        .box => |left_elem| switch (right) {
+            .box => |right_elem| left_elem == right_elem,
+            else => false,
+        },
+        .tuple => |left_items| switch (right) {
+            .tuple => |right_items| nodeSliceEql(left_items, right_items),
+            else => false,
+        },
+        .func => |left_fn| switch (right) {
+            .func => |right_fn| nodeSliceEql(left_fn.args, right_fn.args) and left_fn.ret == right_fn.ret,
+            else => false,
+        },
+        .tag_union => |left_row| switch (right) {
+            .tag_union => |right_row| left_row.ext == right_row.ext and instTagSliceEql(left_row.tags, right_row.tags),
+            else => false,
+        },
+        .record => |left_row| switch (right) {
+            .record => |right_row| left_row.ext == right_row.ext and instFieldSliceEql(left_row.fields, right_row.fields),
+            else => false,
+        },
+        .empty_tag_union => switch (right) {
+            .empty_tag_union => true,
+            else => false,
+        },
+        .empty_record => switch (right) {
+            .empty_record => true,
+            else => false,
+        },
+        .named => |left_named| switch (right) {
+            .named => |right_named| instNamedEql(left_named, right_named),
+            else => false,
+        },
+        .erased => |left_digest| switch (right) {
+            .erased => |right_digest| std.mem.eql(u8, left_digest.bytes[0..], right_digest.bytes[0..]),
+            else => false,
+        },
+        .zst => switch (right) {
+            .zst => true,
+            else => false,
+        },
+    };
+}
+
+fn nodeSliceEql(left: []const NodeId, right: []const NodeId) bool {
+    if (left.len != right.len) return false;
+    for (left, right) |left_node, right_node| {
+        if (left_node != right_node) return false;
+    }
+    return true;
+}
+
+fn instTagSliceEql(left: []const InstTag, right: []const InstTag) bool {
+    if (left.len != right.len) return false;
+    for (left, right) |left_tag, right_tag| {
+        if (left_tag.name != right_tag.name or left_tag.checked_name != right_tag.checked_name) return false;
+        if (!nodeSliceEql(left_tag.payloads, right_tag.payloads)) return false;
+    }
+    return true;
+}
+
+fn instFieldSliceEql(left: []const InstField, right: []const InstField) bool {
+    if (left.len != right.len) return false;
+    for (left, right) |left_field, right_field| {
+        if (left_field.name != right_field.name or left_field.ty != right_field.ty) return false;
+    }
+    return true;
+}
+
+fn instNamedEql(left: InstNamed, right: InstNamed) bool {
+    return std.meta.eql(left.named_type, right.named_type) and
+        std.meta.eql(left.def, right.def) and
+        left.kind == right.kind and
+        std.meta.eql(left.builtin_owner, right.builtin_owner) and
+        nodeSliceEql(left.args, right.args) and
+        backingEql(left.backing, right.backing);
+}
+
+fn backingEql(left: ?InstBacking, right: ?InstBacking) bool {
+    if (left) |left_backing| {
+        const right_backing = right orelse return false;
+        return left_backing.node == right_backing.node and left_backing.use == right_backing.use;
+    }
+    return right == null;
+}
+
+fn testCheckedTypeId(comptime value: u32) checked.CheckedTypeId {
+    comptime std.debug.assert(value != 0);
+    return @enumFromInt(value);
+}
+
 test "monotype solve declarations are referenced" {
     std.testing.refAllDecls(@This());
+}
+
+test "issue 9647: row refills do not duplicate dependencies or materialized spans" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    var unsolved_monos = std.AutoHashMap(Type.TypeId, void).init(gpa);
+    defer unsolved_monos.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store, &unsolved_monos);
+    defer graph.destroy();
+
+    const field_name = try name_store.internRecordFieldLabel("value");
+    const field_ty = try graph.newNode(.{ .primitive = .u64 });
+    const fields = try graph.arena().alloc(InstField, 1);
+    fields[0] = .{ .name = field_name, .ty = field_ty };
+
+    const ext = try graph.newNode(.{ .unresolved = .{ .row_default = .empty_record } });
+    const row = try graph.newNode(.{ .record = .{
+        .fields = fields,
+        .ext = ext,
+    } });
+
+    const view = try graph.monoFor(row);
+    for (0..32) |_| {
+        try graph.fillMono(row, view);
+    }
+
+    const parents = graph.row_parents.get(graph.find(ext)) orelse
+        return error.TestExpectedEqual;
+    try std.testing.expectEqual(@as(usize, 1), parents.items.len);
+    try std.testing.expectEqual(@as(usize, 1), type_store.fields.items.len);
+}
+
+test "issue 9647: unresolved tag row extension absorbs rest without allocating a rest node" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    var unsolved_monos = std.AutoHashMap(Type.TypeId, void).init(gpa);
+    defer unsolved_monos.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store, &unsolved_monos);
+    defer graph.destroy();
+
+    const shared_name = try name_store.internTagLabel("Shared");
+    const extra_name = try name_store.internTagLabel("Extra");
+
+    const left_ext = try graph.newNode(.{ .unresolved = .{ .row_default = .empty_tag_union } });
+    const right_ext = try graph.newNode(.{ .unresolved = .{ .row_default = .empty_tag_union } });
+
+    const left_tags = try graph.arena().alloc(InstTag, 1);
+    left_tags[0] = .{ .name = shared_name, .checked_name = shared_name, .payloads = try graph.arena().alloc(NodeId, 0) };
+
+    const right_tags = try graph.arena().alloc(InstTag, 2);
+    right_tags[0] = .{ .name = shared_name, .checked_name = shared_name, .payloads = try graph.arena().alloc(NodeId, 0) };
+    right_tags[1] = .{ .name = extra_name, .checked_name = extra_name, .payloads = try graph.arena().alloc(NodeId, 0) };
+
+    const left = try graph.newNode(.{ .tag_union = .{ .tags = left_tags, .ext = left_ext } });
+    const right = try graph.newNode(.{ .tag_union = .{ .tags = right_tags, .ext = right_ext } });
+    const before_nodes = graph.nodes.items.len;
+
+    try graph.unify(left, right);
+
+    try std.testing.expectEqual(before_nodes, graph.nodes.items.len);
+    const left_ext_content = graph.content(left_ext);
+    const rest = switch (left_ext_content) {
+        .tag_union => |row| row,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqual(@as(usize, 1), rest.tags.len);
+    try std.testing.expectEqual(extra_name, rest.tags[0].name);
+    try std.testing.expectEqual(graph.find(right_ext), graph.find(rest.ext));
+}
+
+test "issue 9647: same nominal backing wrapper resolves to structural backing once" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    var unsolved_monos = std.AutoHashMap(Type.TypeId, void).init(gpa);
+    defer unsolved_monos.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store, &unsolved_monos);
+    defer graph.destroy();
+
+    const module_name = try name_store.internModuleName("Main");
+    const type_name = try name_store.internTypeName("Role");
+    const tag_name = try name_store.internTagLabel("Tile");
+    const named_type: Type.NamedType = .{ .module = .{}, .ty = testCheckedTypeId(1) };
+    const def: Type.TypeDef = .{ .module_name = module_name, .type_name = type_name };
+    const empty_args = try graph.arena().alloc(NodeId, 0);
+
+    const empty = try graph.newNode(.empty_tag_union);
+    const backing_tags = try graph.arena().alloc(InstTag, 1);
+    backing_tags[0] = .{ .name = tag_name, .checked_name = tag_name, .payloads = try graph.arena().alloc(NodeId, 0) };
+    const structural_backing = try graph.newNode(.{ .tag_union = .{ .tags = backing_tags, .ext = empty } });
+
+    const inner_named = try graph.newNode(.{ .named = .{
+        .named_type = named_type,
+        .def = def,
+        .kind = .nominal,
+        .builtin_owner = null,
+        .args = empty_args,
+        .backing = .{ .node = structural_backing, .use = .inspectable },
+    } });
+    const outer_named = try graph.newNode(.{ .named = .{
+        .named_type = named_type,
+        .def = def,
+        .kind = .nominal,
+        .builtin_owner = null,
+        .args = empty_args,
+        .backing = .{ .node = inner_named, .use = .inspectable },
+    } });
+
+    const other_tags = try graph.arena().alloc(InstTag, 1);
+    other_tags[0] = .{ .name = tag_name, .checked_name = tag_name, .payloads = try graph.arena().alloc(NodeId, 0) };
+    const other = try graph.newNode(.{ .tag_union = .{ .tags = other_tags, .ext = empty } });
+    const before_nodes = graph.nodes.items.len;
+
+    try graph.unify(outer_named, other);
+
+    try std.testing.expectEqual(before_nodes + 1, graph.nodes.items.len);
+    const compressed = switch (graph.content(outer_named)) {
+        .named => |named| named,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqual(structural_backing, compressed.backing.?.node);
+}
+
+test "issue 9647: recursive nominal backing cycle is not chased as structural backing" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    var unsolved_monos = std.AutoHashMap(Type.TypeId, void).init(gpa);
+    defer unsolved_monos.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store, &unsolved_monos);
+    defer graph.destroy();
+
+    const module_name = try name_store.internModuleName("Main");
+    const type_name = try name_store.internTypeName("Recursive");
+    const tag_name = try name_store.internTagLabel("Wrap");
+    const named_type: Type.NamedType = .{ .module = .{}, .ty = testCheckedTypeId(2) };
+    const def: Type.TypeDef = .{ .module_name = module_name, .type_name = type_name };
+
+    const nominal = try graph.newNode(.{ .unresolved = .{} });
+    try graph.setContent(nominal, .{ .named = .{
+        .named_type = named_type,
+        .def = def,
+        .kind = .nominal,
+        .builtin_owner = null,
+        .args = try graph.arena().alloc(NodeId, 0),
+        .backing = .{ .node = nominal, .use = .inspectable },
+    } });
+
+    const empty = try graph.newNode(.empty_tag_union);
+    const tags = try graph.arena().alloc(InstTag, 1);
+    tags[0] = .{ .name = tag_name, .checked_name = tag_name, .payloads = try graph.arena().alloc(NodeId, 0) };
+    const structural = try graph.newNode(.{ .tag_union = .{ .tags = tags, .ext = empty } });
+    const before_nodes = graph.nodes.items.len;
+
+    try graph.unify(nominal, structural);
+
+    try std.testing.expectEqual(before_nodes, graph.nodes.items.len);
+    try std.testing.expectEqual(graph.find(nominal), graph.find(structural));
 }
