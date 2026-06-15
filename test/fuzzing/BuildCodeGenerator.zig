@@ -98,6 +98,7 @@ const Symbols = struct {
     generic_choose: Symbol,
     score_iter: Symbol,
     score_boxed: Symbol,
+    score_function_values: Symbol,
     score_control: Symbol,
     score_dict: Symbol,
     score_list_ops: Symbol,
@@ -229,6 +230,7 @@ pub fn generate(self: *Self) std.mem.Allocator.Error!void {
         .generic_choose = self.fresh(.function),
         .score_iter = self.fresh(.function),
         .score_boxed = self.fresh(.function),
+        .score_function_values = self.fresh(.function),
         .score_control = self.fresh(.function),
         .score_dict = self.fresh(.function),
         .score_list_ops = self.fresh(.function),
@@ -764,6 +766,7 @@ fn writeTopLevelFunctions(self: *Self) std.mem.Allocator.Error!void {
     try self.writeGenericHelpers();
     try self.writeIteratorScoring();
     try self.writeBoxScoring();
+    try self.writeFunctionValueScoring();
     try self.writeControlFlowScoring();
     try self.writeDictScoring();
     try self.writeListOpsScoring();
@@ -1994,6 +1997,428 @@ fn writeBoxScoring(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppText(", ");
     try self.writeAppSymbol(seed);
     try self.writeAppText("))\n}\n\n");
+}
+
+fn writeFunctionValueScoring(self: *Self) std.mem.Allocator.Error!void {
+    const items = self.fresh(.value);
+    const seed = self.fresh(.value);
+    const make_offset = self.fresh(.value);
+    const offset = self.fresh(.value);
+    const value = self.fresh(.value);
+    const first_fn = self.fresh(.value);
+    const second_fn = self.fresh(.value);
+    const boxed_fn = self.fresh(.value);
+    const unboxed_fn = self.fresh(.value);
+    const bundle = self.fresh(.value);
+    const left_field = self.fresh(.field);
+    const right_field = self.fresh(.field);
+    const left_fn = self.fresh(.value);
+    const right_fn = self.fresh(.value);
+    const record_score = self.fresh(.value);
+    const scorer_list = self.fresh(.value);
+    const list_score = self.fresh(.value);
+    const list_acc = self.fresh(.value);
+    const scorer = self.fresh(.value);
+    const mapped = self.fresh(.value);
+    const map_item = self.fresh(.value);
+    const mapped_score = self.fresh(.value);
+    const mapped_acc = self.fresh(.value);
+    const mapped_value = self.fresh(.value);
+    const apply_tag = self.fresh(.tag);
+    const keep_tag = self.fresh(.tag);
+    const tagged_apply = self.fresh(.value);
+    const tagged_keep = self.fresh(.value);
+    const tagged_fn = self.fresh(.value);
+    const tagged_num = self.fresh(.value);
+    const tagged_score = self.fresh(.value);
+    const boxed_factory = self.fresh(.value);
+    const factory_fn = self.fresh(.value);
+    const curried_fn = self.fresh(.value);
+    const curried_score = self.fresh(.value);
+    const inner_box = self.fresh(.value);
+    const outer_box = self.fresh(.value);
+    const outer_value = self.fresh(.value);
+    const outer_fn = self.fresh(.value);
+    const outer_score = self.fresh(.value);
+
+    try self.writeAppSymbol(self.symbols.score_function_values);
+    try self.writeAppText(" : List(");
+    try self.writeAppSymbol(self.symbols.item_type);
+    try self.writeAppText("), U64 -> U64\n");
+    try self.writeAppSymbol(self.symbols.score_function_values);
+    try self.writeAppText(" = |");
+    try self.writeAppSymbol(items);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText("| {\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(make_offset);
+    try self.writeAppText(" : U64 -> (U64 -> U64)\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(make_offset);
+    try self.writeAppText(" = |");
+    try self.writeAppSymbol(offset);
+    try self.writeAppText("| |");
+    try self.writeAppSymbol(value);
+    try self.writeAppText("| ");
+    try self.writeAppSymbol(value);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(offset);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText("\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(first_fn);
+    try self.writeAppText(" : U64 -> U64\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(first_fn);
+    try self.writeAppText(" = ");
+    try self.writeAppSymbol(make_offset);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText(")\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(second_fn);
+    try self.writeAppText(" : U64 -> U64\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(second_fn);
+    try self.writeAppText(" = ");
+    try self.writeAppSymbol(make_offset);
+    try self.writeAppText("(List.len(");
+    try self.writeAppSymbol(items);
+    try self.writeAppText("))\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(boxed_fn);
+    try self.writeAppText(" : Box((U64 -> U64))\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(boxed_fn);
+    try self.writeAppText(" = Box.box(|");
+    try self.writeAppSymbol(value);
+    try self.writeAppText("| ");
+    try self.writeAppSymbol(first_fn);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(value);
+    try self.writeAppText(") + ");
+    try self.writeAppSymbol(second_fn);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText("))\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(unboxed_fn);
+    try self.writeAppText(" : U64 -> U64\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(unboxed_fn);
+    try self.writeAppText(" = Box.unbox(");
+    try self.writeAppSymbol(boxed_fn);
+    try self.writeAppText(")\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(bundle);
+    try self.writeAppText(" : { ");
+    try self.writeAppSymbol(left_field);
+    try self.writeAppText(" : (U64 -> U64), ");
+    try self.writeAppSymbol(right_field);
+    try self.writeAppText(" : (U64 -> U64) }\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(bundle);
+    try self.writeAppText(" = { ");
+    try self.writeAppSymbol(left_field);
+    try self.writeAppText(": ");
+    try self.writeAppSymbol(first_fn);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(right_field);
+    try self.writeAppText(": ");
+    try self.writeAppSymbol(unboxed_fn);
+    try self.writeAppText(" }\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(left_fn);
+    try self.writeAppText(" : U64 -> U64\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(left_fn);
+    try self.writeAppText(" = ");
+    try self.writeAppSymbol(bundle);
+    try self.writeAppText(".");
+    try self.writeAppSymbol(left_field);
+    try self.writeAppText("\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(right_fn);
+    try self.writeAppText(" : U64 -> U64\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(right_fn);
+    try self.writeAppText(" = ");
+    try self.writeAppSymbol(bundle);
+    try self.writeAppText(".");
+    try self.writeAppSymbol(right_field);
+    try self.writeAppText("\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(record_score);
+    try self.writeAppText(" : U64\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(record_score);
+    try self.writeAppText(" = ");
+    try self.writeAppSymbol(left_fn);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText(") + ");
+    try self.writeAppSymbol(right_fn);
+    try self.writeAppText("(List.len(");
+    try self.writeAppSymbol(items);
+    try self.writeAppText("))\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(scorer_list);
+    try self.writeAppText(" : List((U64 -> U64))\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(scorer_list);
+    try self.writeAppText(" = [");
+    try self.writeAppSymbol(first_fn);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(second_fn);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(unboxed_fn);
+    try self.writeAppText("]\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(list_score);
+    try self.writeAppText(" : U64\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(list_score);
+    try self.writeAppText(" = List.fold(");
+    try self.writeAppSymbol(scorer_list);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(record_score);
+    try self.writeAppText(", |");
+    try self.writeAppSymbol(list_acc);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(scorer);
+    try self.writeAppText("| ");
+    try self.writeAppSymbol(scorer);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(list_acc);
+    try self.writeAppText("))\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(mapped);
+    try self.writeAppText(" : List(U64)\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(mapped);
+    try self.writeAppText(" = List.map(");
+    try self.writeAppSymbol(items);
+    try self.writeAppText(", |");
+    try self.writeAppSymbol(map_item);
+    try self.writeAppText("| ");
+    try self.writeAppSymbol(unboxed_fn);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(map_item);
+    try self.writeAppText(".");
+    try self.writeAppSymbol(self.symbols.item_id);
+    try self.writeAppText("))\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(mapped_score);
+    try self.writeAppText(" : U64\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(mapped_score);
+    try self.writeAppText(" = List.fold(");
+    try self.writeAppSymbol(mapped);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(list_score);
+    try self.writeAppText(", |");
+    try self.writeAppSymbol(mapped_acc);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(mapped_value);
+    try self.writeAppText("| ");
+    try self.writeAppSymbol(mapped_acc);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(mapped_value);
+    try self.writeAppText(")\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(tagged_apply);
+    try self.writeAppText(" : [");
+    try self.writeAppSymbol(apply_tag);
+    try self.writeAppText("((U64 -> U64)), ");
+    try self.writeAppSymbol(keep_tag);
+    try self.writeAppText("(U64)]\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(tagged_apply);
+    try self.writeAppText(" = ");
+    try self.writeAppSymbol(apply_tag);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(unboxed_fn);
+    try self.writeAppText(")\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(tagged_keep);
+    try self.writeAppText(" : [");
+    try self.writeAppSymbol(apply_tag);
+    try self.writeAppText("((U64 -> U64)), ");
+    try self.writeAppSymbol(keep_tag);
+    try self.writeAppText("(U64)]\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(tagged_keep);
+    try self.writeAppText(" = ");
+    try self.writeAppSymbol(keep_tag);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(mapped_score);
+    try self.writeAppText(")\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(tagged_score);
+    try self.writeAppText(" : U64\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(tagged_score);
+    try self.writeAppText(" = match ");
+    try self.writeAppSymbol(tagged_apply);
+    try self.writeAppText(" {\n");
+    try self.writeIndent(2);
+    try self.writeAppSymbol(apply_tag);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(tagged_fn);
+    try self.writeAppText(") => ");
+    try self.writeAppSymbol(tagged_fn);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText(")\n");
+    try self.writeIndent(2);
+    try self.writeAppSymbol(keep_tag);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(tagged_num);
+    try self.writeAppText(") => ");
+    try self.writeAppSymbol(tagged_num);
+    try self.writeAppText("\n");
+    try self.writeIndent(1);
+    try self.writeAppText("} + match ");
+    try self.writeAppSymbol(tagged_keep);
+    try self.writeAppText(" {\n");
+    try self.writeIndent(2);
+    try self.writeAppSymbol(apply_tag);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(tagged_fn);
+    try self.writeAppText(") => ");
+    try self.writeAppSymbol(tagged_fn);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText(")\n");
+    try self.writeIndent(2);
+    try self.writeAppSymbol(keep_tag);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(tagged_num);
+    try self.writeAppText(") => ");
+    try self.writeAppSymbol(tagged_num);
+    try self.writeAppText("\n");
+    try self.writeIndent(1);
+    try self.writeAppText("}\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(boxed_factory);
+    try self.writeAppText(" : Box((U64 -> (U64 -> U64)))\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(boxed_factory);
+    try self.writeAppText(" = Box.box(|");
+    try self.writeAppSymbol(offset);
+    try self.writeAppText("| |");
+    try self.writeAppSymbol(value);
+    try self.writeAppText("| ");
+    try self.writeAppSymbol(value);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(offset);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(tagged_score);
+    try self.writeAppText(")\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(factory_fn);
+    try self.writeAppText(" : U64 -> (U64 -> U64)\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(factory_fn);
+    try self.writeAppText(" = Box.unbox(");
+    try self.writeAppSymbol(boxed_factory);
+    try self.writeAppText(")\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(curried_fn);
+    try self.writeAppText(" : U64 -> U64\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(curried_fn);
+    try self.writeAppText(" = ");
+    try self.writeAppSymbol(factory_fn);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(record_score);
+    try self.writeAppText(")\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(curried_score);
+    try self.writeAppText(" : U64\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(curried_score);
+    try self.writeAppText(" = ");
+    try self.writeAppSymbol(curried_fn);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText(")\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(inner_box);
+    try self.writeAppText(" : Box((U64 -> U64))\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(inner_box);
+    try self.writeAppText(" = Box.box(");
+    try self.writeAppSymbol(first_fn);
+    try self.writeAppText(")\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(outer_box);
+    try self.writeAppText(" : Box((U64 -> U64))\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(outer_box);
+    try self.writeAppText(" = Box.box(|");
+    try self.writeAppSymbol(outer_value);
+    try self.writeAppText("| Box.unbox(");
+    try self.writeAppSymbol(inner_box);
+    try self.writeAppText(")(");
+    try self.writeAppSymbol(outer_value);
+    try self.writeAppText(") + ");
+    try self.writeAppSymbol(curried_score);
+    try self.writeAppText(")\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(outer_fn);
+    try self.writeAppText(" : U64 -> U64\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(outer_fn);
+    try self.writeAppText(" = Box.unbox(");
+    try self.writeAppSymbol(outer_box);
+    try self.writeAppText(")\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(outer_score);
+    try self.writeAppText(" : U64\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(outer_score);
+    try self.writeAppText(" = ");
+    try self.writeAppSymbol(outer_fn);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(mapped_score);
+    try self.writeAppText(")\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(mapped_score);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(tagged_score);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(curried_score);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(outer_score);
+    try self.writeAppText("\n}\n\n");
 }
 
 fn writeControlFlowScoring(self: *Self) std.mem.Allocator.Error!void {
@@ -4768,6 +5193,7 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     const dict_combo_score = self.fresh(.value);
     const list_advanced_score = self.fresh(.value);
     const boxed_score = self.fresh(.value);
+    const function_value_score = self.fresh(.value);
     const captured_score = self.fresh(.value);
     const captured_item = self.fresh(.value);
     const walked = self.fresh(.value);
@@ -5276,6 +5702,19 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppText(")\n");
 
     try self.writeIndent(1);
+    try self.writeAppSymbol(function_value_score);
+    try self.writeAppText(" : U64\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(function_value_score);
+    try self.writeAppText(" = ");
+    try self.writeAppSymbol(self.symbols.score_function_values);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(generic_items);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(boxed_score);
+    try self.writeAppText(")\n");
+
+    try self.writeIndent(1);
     try self.writeAppSymbol(captured_score);
     try self.writeAppText(" : U64\n");
     try self.writeIndent(1);
@@ -5328,6 +5767,8 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppSymbol(list_advanced_score);
     try self.writeAppText(" + ");
     try self.writeAppSymbol(boxed_score);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(function_value_score);
     try self.writeAppText(", 0)\n");
 
     try self.writeIndent(1);
@@ -5379,6 +5820,8 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppSymbol(list_advanced_score);
     try self.writeAppText(" + ");
     try self.writeAppSymbol(boxed_score);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(function_value_score);
     try self.writeAppText(" + ");
     try self.writeAppSymbol(captured_score);
     try self.writeAppText("\n");
