@@ -46,6 +46,17 @@ fn mustUseLlvm(target: ResolvedTarget) bool {
     return target.result.os.tag == .macos and target.result.cpu.arch == .x86_64;
 }
 
+fn isGlibcTestHost(target: ResolvedTarget) bool {
+    return target.result.os.tag == .linux and target.result.abi == .gnu;
+}
+
+fn testHostNeedsLlvm(target: ResolvedTarget) bool {
+    // macOS x86_64 must use the LLVM backend. All Linux test hosts use it too:
+    // the symbol-ABI tests need the ELF @export visibility metadata Zig's LLVM
+    // backend emits, and glibc hosts additionally rely on LLVM for DCE.
+    return mustUseLlvm(target) or target.result.os.tag == .linux;
+}
+
 fn testHostNeedsCompilerRt(target: ResolvedTarget) bool {
     return target.result.os.tag == .linux or
         mustUseLlvm(target) or
@@ -1653,13 +1664,16 @@ fn createTestPlatformHostLib(
             .optimize = optimize,
             .strip = strip,
             .omit_frame_pointer = omit_frame_pointer,
+            // These archives are linked into Roc-produced ELF outputs without
+            // a Zig runtime; keep safe-mode stack probes out of that ABI.
+            .stack_check = if (isGlibcTestHost(target)) false else null,
             .pic = true, // Enable Position Independent Code for PIE compatibility
             // Only linked so host code can set up stack overflow handling.
             .link_libc = testHostNeedsLibc(options, target),
         }),
     });
     configureBackend(lib, target);
-    if (target.result.os.tag == .linux) {
+    if (testHostNeedsLlvm(target)) {
         // The symbol-ABI platform tests depend on the visibility declared in
         // @export options: default-visibility host functions are public shared
         // library exports, while hidden runtime and hosted symbols are internal
