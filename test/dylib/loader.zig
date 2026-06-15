@@ -74,6 +74,21 @@ pub fn main(init: std.process.Init) anyerror!void {
         return error.SymbolNotFound;
     };
 
+    // The platform's `provides` symbol must also be exported under its own name.
+    if (lib.lookup(RunAppFn, "roc_main") == null) {
+        std.debug.print("FAILED: provides symbol roc_main not exported by {s}\n", .{lib_path});
+        return error.SymbolNotFound;
+    }
+
+    // Negative: a host symbol that is NOT a declared export (the hosted
+    // `roc_host_double`, exported `.hidden`) must not leak into the export
+    // table. On Linux this is what auto-export used to paper over; resolving it
+    // here on every target catches over-export.
+    if (lib.lookup(RunAppFn, "roc_host_double") != null) {
+        std.debug.print("FAILED: internal symbol roc_host_double is exported by {s}\n", .{lib_path});
+        return error.UnexpectedExport;
+    }
+
     // The app sums an allocated 3-element list of n, doubles it via the hosted
     // Host.double! function, and adds one: 6n + 1.
     const answer = roc_run_app(20);
@@ -82,5 +97,5 @@ pub fn main(init: std.process.Init) anyerror!void {
         return error.WrongAnswer;
     }
 
-    std.debug.print("SUCCESS: roc_run_app(20) == 121\n", .{});
+    std.debug.print("SUCCESS: roc_run_app(20) == 121, roc_main exported, roc_host_double hidden\n", .{});
 }

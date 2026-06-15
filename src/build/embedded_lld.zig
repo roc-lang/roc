@@ -4,6 +4,10 @@ const std = @import("std");
 const builtin = @import("builtin");
 const collections = @import("collections");
 
+/// COFF stack-probe (___chkstk_ms) object generation, shared by every
+/// embedded-lld COFF link of Roc-generated code.
+pub const stack_probe = @import("stack_probe.zig");
+
 /// Object format handled by one of the embedded LLD frontends.
 pub const Format = enum {
     elf,
