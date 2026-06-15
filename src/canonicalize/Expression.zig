@@ -362,20 +362,17 @@ pub const Expr = union(enum) {
     ///
     /// Unlike an ordinary method call, this dispatch is owned by the result
     /// type of the whole interpolation expression. Runtime arguments are the
-    /// first `Str` segment and the iterator of interpolated values paired with
-    /// following `Str` segments.
+    /// first `Str` segment and a compiler-generated `Iter` over interpolated
+    /// values paired with following `Str` segments.
     e_interpolation: struct {
         first: Expr.Idx,
         /// Flat `(interpolated, following_segment)` pairs. The span length is
         /// always even, with `following_segment` expressions already typed as
         /// builtin `Str` segments.
         parts: Expr.Span,
-        /// Synthetic iterator chain for the custom-dispatch path. The builtin
-        /// `Str` path consumes `parts` directly and does not check or lower
-        /// this expression.
-        rest: Expr.Idx,
         method_name_region: base.Region,
         constraint_fn_var: ?TypeVar = null,
+        step_fn_var: ?TypeVar = null,
     },
     /// Structural equality chosen explicitly by the checker.
     ///
