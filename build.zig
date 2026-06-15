@@ -46,13 +46,16 @@ fn mustUseLlvm(target: ResolvedTarget) bool {
     return target.result.os.tag == .macos and target.result.cpu.arch == .x86_64;
 }
 
+fn isGlibcTestHost(target: ResolvedTarget) bool {
+    return target.result.os.tag == .linux and target.result.abi == .gnu;
+}
+
 fn testHostNeedsLlvm(target: ResolvedTarget) bool {
-    return mustUseLlvm(target) or
-        (target.result.os.tag == .linux and target.result.abi == .gnu);
+    return mustUseLlvm(target) or isGlibcTestHost(target);
 }
 
 fn testHostNeedsCompilerRt(target: ResolvedTarget) bool {
-    return testHostNeedsLlvm(target) or
+    return mustUseLlvm(target) or
         (target.result.os.tag == .windows and target.result.cpu.arch == .aarch64);
 }
 
@@ -1657,6 +1660,9 @@ fn createTestPlatformHostLib(
             .optimize = optimize,
             .strip = strip,
             .omit_frame_pointer = omit_frame_pointer,
+            // These archives are linked into Roc-produced ELF outputs without
+            // a Zig runtime; keep safe-mode stack probes out of that ABI.
+            .stack_check = if (isGlibcTestHost(target)) false else null,
             .pic = true, // Enable Position Independent Code for PIE compatibility
             // Only linked so host code can set up stack overflow handling.
             .link_libc = testHostNeedsLibc(options, target),
@@ -1675,9 +1681,9 @@ fn createTestPlatformHostLib(
         .root_source_file = b.path("src/shim_io.zig"),
     }));
     // Bundle compiler_rt when the generated host object may call compiler_rt
-    // routines that are not supplied by the OS libraries. LLVM-built Linux and
-    // x86_64 macOS hosts can emit symbols like __zig_probe_stack; ARM64 Windows
-    // Zig code can emit stack-protector calls to __stack_chk_fail.
+    // routines that are not supplied by the OS libraries. x86_64 macOS hosts
+    // use the LLVM backend; ARM64 Windows Zig code can emit stack-protector
+    // calls to __stack_chk_fail.
     lib.bundle_compiler_rt = testHostNeedsCompilerRt(target);
     // Per-function/data sections so symbol-ABI links can strip unused host code.
     lib.link_function_sections = true;
