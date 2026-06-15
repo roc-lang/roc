@@ -47,7 +47,8 @@ fn mustUseLlvm(target: ResolvedTarget) bool {
 }
 
 fn testHostNeedsCompilerRt(target: ResolvedTarget) bool {
-    return mustUseLlvm(target) or
+    return target.result.os.tag == .linux or
+        mustUseLlvm(target) or
         (target.result.os.tag == .windows and target.result.cpu.arch == .aarch64);
 }
 
@@ -1662,6 +1663,13 @@ fn createTestPlatformHostLib(
         }),
     });
     configureBackend(lib, target);
+    if (target.result.os.tag == .linux) {
+        // The symbol-ABI platform tests depend on the visibility declared in
+        // @export options: default-visibility host functions are public shared
+        // library exports, while hidden runtime and hosted symbols are internal
+        // link inputs. Zig's LLVM backend emits that ELF visibility metadata.
+        lib.use_llvm = true;
+    }
     if (options.uses_stack_handler) {
         lib.root_module.addImport("base", roc_modules.base);
     }
@@ -1670,10 +1678,10 @@ fn createTestPlatformHostLib(
     lib.root_module.addImport("shim_io", b.addModule("shim_io", .{
         .root_source_file = b.path("src/shim_io.zig"),
     }));
-    // Bundle compiler_rt when the generated host object may call compiler_rt
-    // routines that are not supplied by the OS libraries. ARM64 Windows Zig code
-    // can emit stack-protector calls to __stack_chk_fail; x86_64 macOS (LLVM)
-    // needs symbols like __zig_probe_stack.
+    // Bundle compiler_rt when generated host object code may call compiler_rt
+    // routines that are not supplied by the OS libraries. Linux and x86_64
+    // macOS LLVM builds can emit symbols like __zig_probe_stack; ARM64 Windows
+    // Zig code can emit stack-protector calls to __stack_chk_fail.
     lib.bundle_compiler_rt = testHostNeedsCompilerRt(target);
     // Per-function/data sections so symbol-ABI links can strip unused host code.
     lib.link_function_sections = true;
@@ -2032,8 +2040,10 @@ fn setupTestPlatforms(
         clear_cache_step.dependOn(copy_step);
     }
 
-    // Cross-compile for musl targets (glibc is not needed for native CLI platform tests)
-    for (musl_cross_targets) |cross_target| {
+    // Cross-compile for all Linux targets. `roc build` selects the host
+    // platform's native target by default, which is commonly x64glibc even
+    // when this Zig build compiles the `roc` binary as native-musl.
+    for (linux_cross_targets) |cross_target| {
         const cross_resolved_target = b.resolveTargetQuery(cross_target.query);
 
         for (all_test_platform_dirs) |platform_dir| {
@@ -3515,9 +3525,13 @@ pub fn build(b: *std.Build) void {
         run_dylib_test.step.dependOn(&build_dylib_app.step);
         run_test_dylib_step.dependOn(&run_dylib_test.step);
 
-        // Unused host code (the canary function and its constant) must be
-        // dead-code-eliminated from the linked library, while the used hosted
-        // function survives.
+        // Dead host code must be dead-code-eliminated while live host code
+        // survives, checked by byte-scanning for marker data blobs (data works
+        // on every object format, unlike symbol names — PE retains no internal
+        // symbol names): the dead-hosted and dead-only-helper blobs must be
+        // absent, and the blob shared with the live Host.double! path must be
+        // present. (That roc_run_app/roc_main are exported and the hidden
+        // roc_host_double is not is checked separately by the loader.)
         const dylib_dce_check_exe = b.addExecutable(.{
             .name = "dylib_dce_check",
             .root_module = b.createModule(.{
@@ -3535,7 +3549,6 @@ pub fn build(b: *std.Build) void {
             "--absent",
             "ROC_DCE_DEAD_HELPER_BLOB_28d0aa",
             "ROC_DCE_SHARED_BLOB_93e2c1",
-            "roc_host_double",
         });
         run_dylib_dce_check.step.dependOn(&build_dylib_app.step);
         run_test_dylib_step.dependOn(&run_dylib_dce_check.step);
@@ -3566,6 +3579,10 @@ pub fn build(b: *std.Build) void {
                 .target = output_target.resolved,
                 .optimize = optimize,
                 .link_libc = true,
+                // A COFF /DEBUG link disables lld-link's /OPT:REF default, so
+                // an unstripped Windows Debug build would keep the DCE canary
+                // sections this test asserts are eliminated.
+                .strip = true,
             }),
         });
         configureBackend(archive_consumer_exe, output_target.resolved);
@@ -5548,7 +5565,10 @@ fn getCompilerArtifactHash(b: *std.Build, compiler_version: []const u8) [32]u8 {
     hasher.update("roc-checked-artifact-v1");
     hasher.update(compiler_version);
 
-    const builtin_source = std.Io.Dir.cwd().readFileAlloc(
+    // Resolve against the build root rather than cwd so the hash works both for
+    // standalone builds and when roc is consumed as a dependency (cwd is then the
+    // consumer's directory, not roc's).
+    const builtin_source = b.build_root.handle.readFileAlloc(
         b.graph.io,
         "src/build/roc/Builtin.roc",
         b.allocator,
