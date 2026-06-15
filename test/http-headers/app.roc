@@ -5,8 +5,8 @@ import pf.Headers
 
 main! : Headers => U64
 main! = |headers| {
-	decoded : { foo : Str, bar : Str }
+	decoded : { foo : Str, cache_control : Str }
 	decoded = Headers.decode(headers, Decoder.derive({}))
 
-	Str.count_utf8_bytes(decoded.foo) + Str.count_utf8_bytes(decoded.bar)
+	Str.count_utf8_bytes(decoded.foo) + Str.count_utf8_bytes(decoded.cache_control)
 }

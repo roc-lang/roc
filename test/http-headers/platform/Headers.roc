@@ -37,10 +37,10 @@ Headers :: { raw : Str }.{
 						name = header_split.before
 						value = Str.trim(header_split.after)
 
-						if name == first_name {
+						if header_name_matches_field(name, first_name) {
 							$first_value = value
 							$found_first = True
-						} else if name == second_name {
+						} else if header_name_matches_field(name, second_name) {
 							$second_value = value
 							$found_second = True
 						} else {
@@ -62,5 +62,44 @@ Headers :: { raw : Str }.{
 		} else {
 			crash "missing required HTTP header"
 		}
+	}
+
+	header_name_matches_field : Str, Str -> Bool
+	header_name_matches_field = |header_name, field_name| {
+		var $header_remaining = header_name
+		var $field_remaining = field_name
+		var $matched = True
+		var $keep_scanning = True
+
+		while $keep_scanning {
+			header_split = Str.find_first($header_remaining, "-")
+			field_split = Str.find_first($field_remaining, "_")
+
+			header_segment = if header_split.found {
+				header_split.before
+			} else {
+				$header_remaining
+			}
+			field_segment = if field_split.found {
+				field_split.before
+			} else {
+				$field_remaining
+			}
+
+			if !Str.caseless_ascii_equals(header_segment, field_segment) {
+				$matched = False
+				$keep_scanning = False
+			} else if header_split.found != field_split.found {
+				$matched = False
+				$keep_scanning = False
+			} else if header_split.found {
+				$header_remaining = header_split.after
+				$field_remaining = field_split.after
+			} else {
+				$keep_scanning = False
+			}
+		}
+
+		$matched
 	}
 }

@@ -14,6 +14,7 @@ const stderr_fd: c_int = 2;
 
 const ParseError = error{
     IncompleteHeaders,
+    InvalidUtf8,
     BadRequestLine,
     BadProtocol,
     BadHeader,
@@ -299,6 +300,7 @@ fn receiveRequest(fd: Socket, buffer: *[request_buffer_size]u8) ServerError!Pars
 fn parseHead(bytes: []const u8) ParseError!ParsedHead {
     const header_end = findHeaderEnd(bytes) orelse return error.IncompleteHeaders;
     const header_bytes = header_end + 4;
+    if (!std.unicode.utf8ValidateSlice(bytes[0..header_bytes])) return error.InvalidUtf8;
 
     const request_line_end = findCrlf(bytes[0..header_end]) orelse return error.BadRequestLine;
     const request_line = bytes[0..request_line_end];

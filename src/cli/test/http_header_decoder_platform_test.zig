@@ -10,8 +10,14 @@ const io = std.testing.io;
 const request =
     "GET /header-lengths HTTP/1.1\r\n" ++
     "Host: localhost\r\n" ++
-    "foo: abcdefghijklmnopqrstuvwxyz\r\n" ++
-    "bar: 012345678901234567890123456789\r\n" ++
+    "fOo: abcdefghijklmnopqrstuvwxyz\r\n" ++
+    "Cache-Control: 012345678901234567890123456789\r\n" ++
+    "Content-Length: 0\r\n" ++
+    "\r\n";
+
+const invalid_utf8_request =
+    "GET /bad-\xff HTTP/1.1\r\n" ++
+    "Host: localhost\r\n" ++
     "Content-Length: 0\r\n" ++
     "\r\n";
 
@@ -83,6 +89,7 @@ test "HTTP header Decoder platform derives record decoder without runtime alloca
     }
 
     try runServerAndCheckResponse(allocator, output_path);
+    try runServerAndCheckInvalidUtf8(allocator, output_path);
 }
 
 fn nativeRunnableTargetName() ?[]const u8 {
@@ -136,7 +143,7 @@ fn runServerAndCheckResponse(allocator: std.mem.Allocator, exe_path: []const u8)
     }
 
     const port = try readPortLine(child.stdout.?);
-    const response = try sendHttpRequest(allocator, port);
+    const response = try sendHttpRequest(allocator, port, request);
     defer allocator.free(response);
 
     const stderr = try readRemaining(allocator, child.stderr.?);
@@ -164,6 +171,70 @@ fn runServerAndCheckResponse(allocator: std.mem.Allocator, exe_path: []const u8)
     }
 
     try testing.expectEqualStrings(expected_response, response);
+    try expectNoRuntimeAllocation(stderr);
+}
+
+fn runServerAndCheckInvalidUtf8(allocator: std.mem.Allocator, exe_path: []const u8) !void {
+    var child = try std.process.spawn(io, .{
+        .argv = &.{exe_path},
+        .stdin = .ignore,
+        .stdout = .pipe,
+        .stderr = .pipe,
+        .pgid = switch (builtin.os.tag) {
+            .windows, .wasi => null,
+            else => 0,
+        },
+    });
+    var child_running = true;
+    errdefer if (child_running) child.kill(io);
+
+    var watch = Watch{
+        .child_id = child.id orelse undefined,
+        .timeout_ms = if (child.id == null) 0 else 30 * std.time.ms_per_s,
+        .done = std.atomic.Value(bool).init(false),
+        .timed_out = std.atomic.Value(bool).init(false),
+    };
+    const watch_thread = if (watch.timeout_ms == 0)
+        null
+    else
+        try std.Thread.spawn(.{}, Watch.run, .{&watch});
+    defer {
+        watch.done.store(true, .release);
+        if (watch_thread) |thread| thread.join();
+    }
+
+    const port = try readPortLine(child.stdout.?);
+    try sendHttpRequestWithoutReading(port, invalid_utf8_request);
+
+    const stderr = try readRemaining(allocator, child.stderr.?);
+    defer allocator.free(stderr);
+
+    const term = try child.wait(io);
+    child_running = false;
+
+    if (watch.timed_out.load(.acquire)) {
+        std.debug.print("HTTP header decoder invalid UTF-8 server timed out\nSTDERR:\n{s}\n", .{stderr});
+        return error.ServerTimedOut;
+    }
+
+    switch (term) {
+        .exited => |code| {
+            if (code == 0) {
+                std.debug.print("server accepted invalid UTF-8 request\nSTDERR:\n{s}\n", .{stderr});
+                return error.ServerFailed;
+            }
+        },
+        else => {
+            std.debug.print("server terminated unexpectedly for invalid UTF-8 request: {}\nSTDERR:\n{s}\n", .{ term, stderr });
+            return error.ServerFailed;
+        },
+    }
+
+    try testing.expect(std.mem.find(u8, stderr, "InvalidUtf8") != null);
+    try expectNoRuntimeAllocation(stderr);
+}
+
+fn expectNoRuntimeAllocation(stderr: []const u8) !void {
     try testing.expect(std.mem.find(u8, stderr, "roc_alloc called") == null);
     try testing.expect(std.mem.find(u8, stderr, "roc_realloc called") == null);
     try testing.expect(std.mem.find(u8, stderr, "roc_dealloc called") == null);
@@ -201,7 +272,7 @@ fn readPortLine(stdout: std.Io.File) !u16 {
     return @intCast(port);
 }
 
-fn sendHttpRequest(allocator: std.mem.Allocator, port: u16) ![]u8 {
+fn sendHttpRequest(allocator: std.mem.Allocator, port: u16, bytes: []const u8) ![]u8 {
     const net = std.Io.net;
     var address: net.IpAddress = .{ .ip4 = net.Ip4Address.loopback(port) };
     const stream = try net.IpAddress.connect(&address, io, .{ .mode = .stream });
@@ -209,7 +280,7 @@ fn sendHttpRequest(allocator: std.mem.Allocator, port: u16) ![]u8 {
 
     var write_buffer: [1024]u8 = undefined;
     var writer = stream.writer(io, &write_buffer);
-    try writer.interface.writeAll(request);
+    try writer.interface.writeAll(bytes);
     try writer.interface.flush();
 
     var response: std.ArrayList(u8) = .empty;
@@ -231,6 +302,18 @@ fn sendHttpRequest(allocator: std.mem.Allocator, port: u16) ![]u8 {
     }
 
     return response.toOwnedSlice(allocator);
+}
+
+fn sendHttpRequestWithoutReading(port: u16, bytes: []const u8) !void {
+    const net = std.Io.net;
+    var address: net.IpAddress = .{ .ip4 = net.Ip4Address.loopback(port) };
+    const stream = try net.IpAddress.connect(&address, io, .{ .mode = .stream });
+    defer stream.close(io);
+
+    var write_buffer: [1024]u8 = undefined;
+    var writer = stream.writer(io, &write_buffer);
+    try writer.interface.writeAll(bytes);
+    try writer.interface.flush();
 }
 
 fn readRemaining(allocator: std.mem.Allocator, file: std.Io.File) ![]u8 {
