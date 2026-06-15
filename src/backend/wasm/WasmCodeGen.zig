@@ -10384,7 +10384,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                 .{@tagName(self.procLocalLayoutIdx(args[0]))},
             ),
         },
-        .num_from_numeral => unreachable, // Resolved before backend codegen
+        .num_from_numeral => unreachable, // Folded to a constant during Monotype lowering
 
         // Box operations
         .box_box => {
