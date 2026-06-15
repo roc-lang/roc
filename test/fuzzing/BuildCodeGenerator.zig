@@ -5059,9 +5059,11 @@ fn writeNumOpsScoring(self: *Self) std.mem.Allocator.Error!void {
     const bits = self.fresh(.value);
     const signed_bits = self.fresh(.value);
     const u8_bits = self.fresh(.value);
+    const range_end = self.fresh(.value);
     const range_score = self.fresh(.value);
     const range_acc = self.fresh(.value);
     const range_item = self.fresh(.value);
+    const u8_range_end = self.fresh(.value);
     const u8_range_score = self.fresh(.value);
     const u8_range_acc = self.fresh(.value);
     const u8_range_item = self.fresh(.value);
@@ -5386,13 +5388,22 @@ fn writeNumOpsScoring(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppText(")))\n");
 
     try self.writeIndent(1);
+    try self.writeAppSymbol(range_end);
+    try self.writeAppText(" : U64\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(range_end);
+    try self.writeAppText(" = ");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText(" % 4\n");
+
+    try self.writeIndent(1);
     try self.writeAppSymbol(range_score);
     try self.writeAppText(" : U64\n");
     try self.writeIndent(1);
     try self.writeAppSymbol(range_score);
-    try self.writeAppText(" = Iter.fold(Iter.exclusive_range(0, ");
-    try self.writeAppSymbol(seed);
-    try self.writeAppText(" % 4), 0, |");
+    try self.writeAppText(" = Iter.fold((0..<");
+    try self.writeAppSymbol(range_end);
+    try self.writeAppText("), 0, |");
     try self.writeAppSymbol(range_acc);
     try self.writeAppText(", ");
     try self.writeAppSymbol(range_item);
@@ -5403,13 +5414,22 @@ fn writeNumOpsScoring(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppText(")\n");
 
     try self.writeIndent(1);
+    try self.writeAppSymbol(u8_range_end);
+    try self.writeAppText(" : U8\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(u8_range_end);
+    try self.writeAppText(" = U64.to_u8_wrap(");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText(" % 3)\n");
+
+    try self.writeIndent(1);
     try self.writeAppSymbol(u8_range_score);
     try self.writeAppText(" : U64\n");
     try self.writeIndent(1);
     try self.writeAppSymbol(u8_range_score);
-    try self.writeAppText(" = Iter.fold(Iter.inclusive_range(0, U64.to_u8_wrap(");
-    try self.writeAppSymbol(seed);
-    try self.writeAppText(" % 3)), 0, |");
+    try self.writeAppText(" = Iter.fold((0..=");
+    try self.writeAppSymbol(u8_range_end);
+    try self.writeAppText("), 0, |");
     try self.writeAppSymbol(u8_range_acc);
     try self.writeAppText(", ");
     try self.writeAppSymbol(u8_range_item);
