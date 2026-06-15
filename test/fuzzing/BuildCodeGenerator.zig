@@ -156,6 +156,7 @@ const Symbols = struct {
     constrained_fold: Symbol,
     score_constraints: Symbol,
     score_local_types: Symbol,
+    score_early_returns: Symbol,
     score_iter: Symbol,
     score_boxed: Symbol,
     score_function_values: Symbol,
@@ -320,6 +321,7 @@ pub fn generate(self: *Self) std.mem.Allocator.Error!void {
         .constrained_fold = self.fresh(.function),
         .score_constraints = self.fresh(.function),
         .score_local_types = self.fresh(.function),
+        .score_early_returns = self.fresh(.function),
         .score_iter = self.fresh(.function),
         .score_boxed = self.fresh(.function),
         .score_function_values = self.fresh(.function),
@@ -1460,6 +1462,7 @@ fn writeTopLevelFunctions(self: *Self) std.mem.Allocator.Error!void {
     try self.writeGenericHelpers();
     try self.writeConstraintScoring();
     try self.writeLocalTypeScoring();
+    try self.writeEarlyReturnScoring();
     try self.writeIteratorScoring();
     try self.writeBoxScoring();
     try self.writeFunctionValueScoring();
@@ -3519,6 +3522,96 @@ fn writeLocalTypeScoring(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppSymbol(fold_node);
     try self.writeAppText(", ");
     try self.writeAppSymbol(fold_acc);
+    try self.writeAppText("))\n}\n\n");
+}
+
+fn writeEarlyReturnScoring(self: *Self) std.mem.Allocator.Error!void {
+    const items = self.fresh(.value);
+    const text = self.fresh(.value);
+    const seed = self.fresh(.value);
+    const total = self.fresh(.value);
+    const item = self.fresh(.value);
+    const tail = self.fresh(.value);
+
+    try self.writeAppSymbol(self.symbols.score_early_returns);
+    try self.writeAppText(" : List(");
+    try self.writeAppSymbol(self.symbols.item_type);
+    try self.writeAppText("), Str, U64 -> U64\n");
+    try self.writeAppSymbol(self.symbols.score_early_returns);
+    try self.writeAppText(" = |");
+    try self.writeAppSymbol(items);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(text);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText("| {\n");
+
+    try self.writeIndent(1);
+    try self.writeAppText("var $");
+    try self.writeAppSymbol(total);
+    try self.writeAppText(" = ");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText("\n");
+
+    try self.writeIndent(1);
+    try self.writeAppText("for ");
+    try self.writeAppSymbol(item);
+    try self.writeAppText(" in ");
+    try self.writeAppSymbol(items);
+    try self.writeAppText(" {\n");
+    try self.writeIndent(2);
+    try self.writeAppText("$");
+    try self.writeAppSymbol(total);
+    try self.writeAppText(" = $");
+    try self.writeAppSymbol(total);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(item);
+    try self.writeAppText(".");
+    try self.writeAppSymbol(self.symbols.item_id);
+    try self.writeAppText(" + List.len(Str.to_utf8(");
+    try self.writeAppSymbol(item);
+    try self.writeAppText(".");
+    try self.writeAppSymbol(self.symbols.item_text);
+    try self.writeAppText("))\n");
+    try self.writeIndent(2);
+    try self.writeAppText("if ");
+    try self.writeAppSymbol(item);
+    try self.writeAppText(".");
+    try self.writeAppSymbol(self.symbols.item_flag);
+    try self.writeAppText(" {\n");
+    try self.writeIndent(3);
+    try self.writeAppText("return $");
+    try self.writeAppSymbol(total);
+    try self.writeAppText(" + List.len(Str.to_utf8(");
+    try self.writeAppSymbol(text);
+    try self.writeAppText("))\n");
+    try self.writeIndent(2);
+    try self.writeAppText("}\n");
+    try self.writeIndent(1);
+    try self.writeAppText("}\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(tail);
+    try self.writeAppText(" : Str\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(tail);
+    try self.writeAppText(" = if ");
+    try self.writeAppSymbol(self.symbols.is_even);
+    try self.writeAppText("($");
+    try self.writeAppSymbol(total);
+    try self.writeAppText(") Str.concat(");
+    try self.writeAppSymbol(text);
+    try self.writeAppText(", U64.to_str($");
+    try self.writeAppSymbol(total);
+    try self.writeAppText(")) else ");
+    try self.writeAppSymbol(text);
+    try self.writeAppText("\n");
+
+    try self.writeIndent(1);
+    try self.writeAppText("$");
+    try self.writeAppSymbol(total);
+    try self.writeAppText(" + List.len(Str.to_utf8(");
+    try self.writeAppSymbol(tail);
     try self.writeAppText("))\n}\n\n");
 }
 
@@ -8727,6 +8820,7 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     const recursive_score = self.fresh(.value);
     const constraint_score = self.fresh(.value);
     const local_type_score = self.fresh(.value);
+    const early_return_score = self.fresh(.value);
     const inspect_score = self.fresh(.value);
     const pattern_score = self.fresh(.value);
     const structural_score = self.fresh(.value);
@@ -9316,6 +9410,21 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppText(")\n");
 
     try self.writeIndent(1);
+    try self.writeAppSymbol(early_return_score);
+    try self.writeAppText(" : U64\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(early_return_score);
+    try self.writeAppText(" = ");
+    try self.writeAppSymbol(self.symbols.score_early_returns);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(generic_items);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(generic_text);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(local_type_score);
+    try self.writeAppText(")\n");
+
+    try self.writeIndent(1);
     try self.writeAppSymbol(inspect_score);
     try self.writeAppText(" : U64\n");
     try self.writeIndent(1);
@@ -9340,6 +9449,8 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppSymbol(constraint_score);
     try self.writeAppText(" + ");
     try self.writeAppSymbol(local_type_score);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(early_return_score);
     try self.writeAppText(")\n");
 
     try self.writeIndent(1);
@@ -9443,6 +9554,8 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppText(" + ");
     try self.writeAppSymbol(local_type_score);
     try self.writeAppText(" + ");
+    try self.writeAppSymbol(early_return_score);
+    try self.writeAppText(" + ");
     try self.writeAppSymbol(inspect_score);
     try self.writeAppText(" + ");
     try self.writeAppSymbol(pattern_score);
@@ -9527,6 +9640,8 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppText(" + ");
     try self.writeAppSymbol(local_type_score);
     try self.writeAppText(" + ");
+    try self.writeAppSymbol(early_return_score);
+    try self.writeAppText(" + ");
     try self.writeAppSymbol(inspect_score);
     try self.writeAppText(" + ");
     try self.writeAppSymbol(pattern_score);
@@ -9597,6 +9712,8 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppSymbol(constraint_score);
     try self.writeAppText(" + ");
     try self.writeAppSymbol(local_type_score);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(early_return_score);
     try self.writeAppText(" + ");
     try self.writeAppSymbol(inspect_score);
     try self.writeAppText(" + ");
