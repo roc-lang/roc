@@ -456,6 +456,15 @@ pub const ScopeMap = struct {
                     try self.extractBindingsFromPattern(module_env, elem_pattern, visible_from, visible_to, is_parameter, depth + 1);
                 }
             },
+            .str_interpolation => |p| {
+                var i: u32 = 0;
+                while (i < p.steps.span.len) : (i += 1) {
+                    const step = module_env.store.getStrPatternStep(p.steps, i);
+                    if (step.capture) |capture| {
+                        try self.extractBindingsFromPattern(module_env, capture, visible_from, visible_to, is_parameter, depth + 1);
+                    }
+                }
+            },
             // Literal and other patterns don't introduce bindings
             .num_literal,
             .small_dec_literal,

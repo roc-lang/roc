@@ -2644,7 +2644,7 @@ pub const MonoLlvmCodeGen = struct {
 
         const small_block = wip.block(0, "str_match_source_small") catch return error.OutOfMemory;
         const heap_block = wip.block(0, "str_match_source_heap") catch return error.OutOfMemory;
-        const after_block = wip.block(0, "str_match_source_after") catch return error.OutOfMemory;
+        const after_block = wip.block(2, "str_match_source_after") catch return error.OutOfMemory;
         _ = wip.brCond(is_small, small_block, heap_block, .then_likely) catch return error.OutOfMemory;
 
         wip.cursor = .{ .block = small_block };

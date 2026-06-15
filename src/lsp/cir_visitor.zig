@@ -502,6 +502,16 @@ pub fn CirVisitor(comptime Context: type) type {
                         if (self.stopped) return;
                     }
                 },
+                .str_interpolation => |str| {
+                    var i: u32 = 0;
+                    while (i < str.steps.span.len) : (i += 1) {
+                        const step = store.getStrPatternStep(str.steps, i);
+                        if (step.capture) |capture| {
+                            self.walkPattern(store, capture);
+                            if (self.stopped) return;
+                        }
+                    }
+                },
                 // Leaf patterns - no children to traverse
                 .assign,
                 .num_literal,
