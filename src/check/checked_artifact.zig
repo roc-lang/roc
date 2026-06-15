@@ -80,13 +80,29 @@ pub const ModuleEnvStorage = union(enum) {
     }
 };
 
-fn moduleExprIsBuiltinStr(module: TypedCIR.Module, expr_idx: CIR.Expr.Idx) bool {
+fn moduleExprUsesBuiltinStrInterpolationPath(module: TypedCIR.Module, expr_idx: CIR.Expr.Idx) bool {
     const resolved = module.typeStoreConst().resolveVar(module.exprType(expr_idx));
-    const nominal = resolved.desc.content.unwrapNominalType() orelse return false;
-    if (!nominal.originIsBuiltin()) return false;
-    const ident = nominal.ident.ident_idx;
-    const common = module.commonIdents();
-    return ident.eql(common.str) or ident.eql(common.builtin_str);
+    switch (resolved.desc.content) {
+        .structure => |flat_type| {
+            if (flat_type != .nominal_type) return false;
+            const nominal = flat_type.nominal_type;
+            if (!nominal.originIsBuiltin()) return false;
+            const ident = nominal.ident.ident_idx;
+            const common = module.commonIdents();
+            return ident.eql(common.str) or ident.eql(common.builtin_str);
+        },
+        .flex => |flex| {
+            const phase = numericDefaultPhaseForFlex(module, flex) orelse return false;
+            return phase == .mono_specialization_str;
+        },
+        .rigid => |rigid| {
+            const phase = numericDefaultPhaseForConstraints(module, rigid.constraints) orelse return false;
+            return phase == .mono_specialization_str;
+        },
+        .alias,
+        .err,
+        => return false,
+    }
 }
 
 /// Public `CheckedModuleArtifactKey` declaration.
@@ -1454,7 +1470,8 @@ pub const NumericDefaultPhase = enum {
     /// Defaults to Dec when still unresolved at monomorphic specialization.
     mono_specialization,
     /// Defaults to Str when still unresolved at monomorphic specialization
-    /// (string literals carrying a from_quote constraint).
+    /// (string literals carrying a from_quote constraint, and interpolated
+    /// string literals carrying a from_interpolation constraint).
     mono_specialization_str,
 };
 
@@ -5415,7 +5432,7 @@ const CheckedSourceNodes = struct {
             .e_interpolation => |interpolation| {
                 try self.markExpr(interpolation.first, work);
                 try self.markExprSpan(module, interpolation.parts, work);
-                if (!moduleExprIsBuiltinStr(module, expr_idx)) {
+                if (!moduleExprUsesBuiltinStrInterpolationPath(module, expr_idx)) {
                     try self.markExpr(interpolation.rest, work);
                 }
             },
