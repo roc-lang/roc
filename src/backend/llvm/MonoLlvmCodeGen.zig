@@ -2218,8 +2218,8 @@ pub const MonoLlvmCodeGen = struct {
             .str_trim_end => try self.emitStrUnaryRetBuiltin(target, "roc_builtins_str_trim_end", arg_locals[0], unique_args),
             .str_with_ascii_lowercased => try self.emitStrUnaryRetBuiltin(target, "roc_builtins_str_with_ascii_lowercased", arg_locals[0], unique_args),
             .str_with_ascii_uppercased => try self.emitStrUnaryRetBuiltin(target, "roc_builtins_str_with_ascii_uppercased", arg_locals[0], unique_args),
-            .str_drop_prefix => try self.emitStrRetBuiltin(target, "roc_builtins_str_drop_prefix", arg_locals, null),
-            .str_drop_suffix => try self.emitStrRetBuiltin(target, "roc_builtins_str_drop_suffix", arg_locals, null),
+            .str_drop_prefix => try self.emitStrDropEdge(target, arg_locals, .prefix),
+            .str_drop_suffix => try self.emitStrDropEdge(target, arg_locals, .suffix),
             .str_split_on => try self.emitStrRetBuiltin(target, "roc_builtins_str_split", arg_locals, null),
             .str_join_with => try self.emitStrJoinWith(target, arg_locals),
             .str_repeat => try self.emitStrRepeat(target, arg_locals),
@@ -2619,6 +2619,11 @@ pub const MonoLlvmCodeGen = struct {
     const StrByteSlice = struct {
         bytes: LlvmBuilder.Value,
         len: LlvmBuilder.Value,
+    };
+
+    const StrDropEdge = enum {
+        prefix,
+        suffix,
     };
 
     const DeferredStrCapture = struct {
@@ -3556,6 +3561,19 @@ pub const MonoLlvmCodeGen = struct {
         return .{ .bytes = source.bytes, .len = source.len };
     }
 
+    fn emitStrViewShapeForLocal(self: *MonoLlvmCodeGen, local: LocalId) Error!StrMatchSource {
+        if (self.deferredStrCapture(local)) |capture| {
+            const start = try self.loadUsize(capture.start_ptr);
+            return .{
+                .bytes = try self.offsetPtrValue(capture.source.bytes, start),
+                .len = try self.deferredStrCaptureLen(capture),
+                .is_small = capture.source.is_small,
+                .alloc = capture.source.alloc,
+            };
+        }
+        return self.emitStrMatchSourceShape(self.slot(local).ptr);
+    }
+
     fn emitStrBoolJoin(
         self: *MonoLlvmCodeGen,
         target: LocalId,
@@ -3761,6 +3779,66 @@ pub const MonoLlvmCodeGen = struct {
         cursor_phi.finish(&.{ zero, next_cursor }, &.{ same_len_block, after_byte_block }, wip);
 
         try self.emitStrBoolJoin(target, true_block, false_block, after_block);
+    }
+
+    fn emitStrDropEdge(self: *MonoLlvmCodeGen, target: LocalId, args: []const LocalId, edge: StrDropEdge) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const usize_ty = self.ptrSizedIntType();
+        const source = try self.emitStrViewShapeForLocal(args[0]);
+        const affix = try self.emitStrByteSliceForLocal(args[1]);
+        const target_slot = self.slot(target);
+        const result_ptr = if (target == args[0])
+            wip.alloca(
+                .normal,
+                .i8,
+                builder.intValue(.i32, @max(target_slot.size, 1)) catch return error.OutOfMemory,
+                target_slot.alignment,
+                .default,
+                "str_drop_result",
+            ) catch return error.OutOfMemory
+        else
+            target_slot.ptr;
+
+        const no_match_block = wip.block(0, "str_drop_no_match") catch return error.OutOfMemory;
+        const match_block = wip.block(0, "str_drop_match") catch return error.OutOfMemory;
+        const compare_block = wip.block(0, "str_drop_compare") catch return error.OutOfMemory;
+        const done_block = wip.block(0, "str_drop_done") catch return error.OutOfMemory;
+
+        const len_ok = wip.icmp(.uge, source.len, affix.len, "") catch return error.OutOfMemory;
+        _ = wip.brCond(len_ok, compare_block, no_match_block, .then_likely) catch return error.OutOfMemory;
+
+        wip.cursor = .{ .block = compare_block };
+        const compare_bytes = switch (edge) {
+            .prefix => source.bytes,
+            .suffix => blk: {
+                const suffix_start = wip.bin(.sub, source.len, affix.len, "") catch return error.OutOfMemory;
+                break :blk try self.offsetPtrValue(source.bytes, suffix_start);
+            },
+        };
+        try self.emitByteSlicesEqualBranch(compare_bytes, affix.bytes, affix.len, match_block, no_match_block);
+
+        wip.cursor = .{ .block = no_match_block };
+        const zero = builder.intValue(usize_ty, 0) catch return error.OutOfMemory;
+        try self.emitStoreStrMatchCapture(result_ptr, source, zero, source.len);
+        _ = wip.br(done_block) catch return error.OutOfMemory;
+
+        wip.cursor = .{ .block = match_block };
+        const result_start = switch (edge) {
+            .prefix => affix.len,
+            .suffix => zero,
+        };
+        const result_end = switch (edge) {
+            .prefix => source.len,
+            .suffix => wip.bin(.sub, source.len, affix.len, "") catch return error.OutOfMemory,
+        };
+        try self.emitStoreStrMatchCapture(result_ptr, source, result_start, result_end);
+        _ = wip.br(done_block) catch return error.OutOfMemory;
+
+        wip.cursor = .{ .block = done_block };
+        if (target == args[0]) {
+            try self.copyBytes(target_slot.ptr, result_ptr, target_slot.size, target_slot.alignment);
+        }
     }
 
     fn emitStrStartsWith(self: *MonoLlvmCodeGen, target: LocalId, args: []const LocalId) Error!void {

@@ -816,6 +816,25 @@ const core_tests = [_]TestCase{
         } },
     },
     .{
+        .name = "allocation - string interpolation pattern capture feeds drop prefix suffix without copy",
+        .source =
+        \\{
+        \\    prefix = "MATCH_PREFIX:"
+        \\    payload = Str.repeat("DROPabcdefghijklmnopqrstuvwxyz0123456789KEEP", 1)
+        \\    source = Str.concat(prefix, payload)
+        \\
+        \\    match source {
+        \\        "MATCH_PREFIX:${rest}" => Str.drop_suffix(Str.drop_prefix(rest, "DROP"), "KEEP")
+        \\        _ => ""
+        \\    }
+        \\}
+        ,
+        .expected = .{ .allocations_at_most = .{
+            .output = "abcdefghijklmnopqrstuvwxyz0123456789",
+            .max_allocations = 2,
+        } },
+    },
+    .{
         .name = "inspect: string literal type suffix pins custom from_quote target",
         .source_kind = .module,
         .source =
