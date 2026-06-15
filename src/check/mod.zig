@@ -63,6 +63,7 @@ test "check tests" {
     std.testing.refAllDecls(@import("test/unify_test.zig"));
     std.testing.refAllDecls(@import("test/instantiate_tag_union_test.zig"));
     std.testing.refAllDecls(@import("test/where_clause_test.zig"));
+    std.testing.refAllDecls(@import("test/range_test.zig"));
     std.testing.refAllDecls(@import("test/recursive_alias_test.zig"));
     std.testing.refAllDecls(@import("test/generalize_redirect_test.zig"));
     std.testing.refAllDecls(@import("test/exhaustiveness_test.zig"));

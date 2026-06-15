@@ -82,6 +82,9 @@ pub const CalledVia = enum {
     /// Try.parallel(get("a"), get("b"), (|foo, bar | { foo, bar }))
     /// ```
     record_builder,
+    /// This call is the result of desugaring range syntax,
+    /// e.g. `1..<5` becomes `Iter.exclusive_range(1, 5)`.
+    range,
 };
 
 /// Represents a value written as-is in a Roc source file.

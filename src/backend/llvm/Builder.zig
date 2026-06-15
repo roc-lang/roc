@@ -6111,7 +6111,7 @@ pub const WipFunction = struct {
         args: []const Value,
         name: []const u8,
     ) Allocator.Error!Value {
-        return self.callInner(kind, call_conv, function_attributes, ty, callee, args, name, false);
+        return self.callInner(kind, call_conv, function_attributes, ty, callee, args, name, false, false);
     }
 
     fn callInner(
@@ -6124,6 +6124,7 @@ pub const WipFunction = struct {
         args: []const Value,
         name: []const u8,
         has_op_bundle_cold: bool,
+        force_debug_location: bool,
     ) Allocator.Error!Value {
         const ret_ty = ty.functionReturn(self.builder);
         assert(ty.isFunction(self.builder));
@@ -6132,31 +6133,35 @@ pub const WipFunction = struct {
         for (params, args[0..params.len]) |param, arg_val| assert(param == arg_val.typeOfWip(self));
 
         try self.ensureUnusedExtraCapacity(1, Instruction.Call, args.len);
-        const instruction = try self.addInst(switch (ret_ty) {
-            .void => null,
-            else => name,
-        }, .{
-            .tag = switch (kind) {
-                .normal => .call,
-                .fast => .@"call fast",
-                .musttail => .@"musttail call",
-                .musttail_fast => .@"musttail call fast",
-                .notail => .@"notail call",
-                .notail_fast => .@"notail call fast",
-                .tail => .@"tail call",
-                .tail_fast => .@"tail call fast",
+        const instruction = try self.addInstInner(
+            switch (ret_ty) {
+                .void => null,
+                else => name,
             },
-            .data = self.addExtraAssumeCapacity(Instruction.Call{
-                .info = .{
-                    .call_conv = call_conv,
-                    .has_op_bundle_cold = has_op_bundle_cold,
+            .{
+                .tag = switch (kind) {
+                    .normal => .call,
+                    .fast => .@"call fast",
+                    .musttail => .@"musttail call",
+                    .musttail_fast => .@"musttail call fast",
+                    .notail => .@"notail call",
+                    .notail_fast => .@"notail call fast",
+                    .tail => .@"tail call",
+                    .tail_fast => .@"tail call fast",
                 },
-                .attributes = function_attributes,
-                .ty = ty,
-                .callee = callee,
-                .args_len = @intCast(args.len),
-            }),
-        });
+                .data = self.addExtraAssumeCapacity(Instruction.Call{
+                    .info = .{
+                        .call_conv = call_conv,
+                        .has_op_bundle_cold = has_op_bundle_cold,
+                    },
+                    .attributes = function_attributes,
+                    .ty = ty,
+                    .callee = callee,
+                    .args_len = @intCast(args.len),
+                }),
+            },
+            force_debug_location,
+        );
         self.extra.appendSliceAssumeCapacity(@ptrCast(args));
         return instruction.toValue();
     }
@@ -6185,7 +6190,7 @@ pub const WipFunction = struct {
         name: []const u8,
     ) Allocator.Error!Value {
         const intrinsic = try self.builder.getIntrinsic(id, overload);
-        return self.call(
+        return self.callInner(
             fast.toCallKind(),
             CallConv.default,
             function_attributes,
@@ -6193,6 +6198,11 @@ pub const WipFunction = struct {
             intrinsic.toValue(self.builder),
             args,
             name,
+            false,
+            switch (id) {
+                .@"dbg.declare", .@"dbg.value" => self.debug_location != .no_location,
+                else => false,
+            },
         );
     }
 
@@ -6207,6 +6217,7 @@ pub const WipFunction = struct {
             &.{try self.builder.intValue(.i1, 1)},
             "",
             true,
+            false,
         );
     }
 
@@ -6991,6 +7002,15 @@ pub const WipFunction = struct {
         name: ?[]const u8,
         instruction: Instruction,
     ) Allocator.Error!Instruction.Index {
+        return self.addInstInner(name, instruction, false);
+    }
+
+    fn addInstInner(
+        self: *WipFunction,
+        name: ?[]const u8,
+        instruction: Instruction,
+        force_debug_location: bool,
+    ) Allocator.Error!Instruction.Index {
         const block_instructions = &self.cursor.block.ptr(self).instructions;
         try self.instructions.ensureUnusedCapacity(self.builder.gpa, 1);
         if (!self.strip) {
@@ -7007,7 +7027,8 @@ pub const WipFunction = struct {
         self.instructions.appendAssumeCapacity(instruction);
         if (!self.strip) {
             self.names.appendAssumeCapacity(final_name);
-            if (block_instructions.items.len == 0 or
+            if (force_debug_location or
+                block_instructions.items.len == 0 or
                 !std.meta.eql(self.debug_location, self.prev_debug_location))
             {
                 self.debug_locations.putAssumeCapacity(index, self.debug_location);
