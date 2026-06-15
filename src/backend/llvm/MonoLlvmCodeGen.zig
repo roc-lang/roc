@@ -2174,7 +2174,15 @@ pub const MonoLlvmCodeGen = struct {
     fn emitLowLevel(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LowLevel, args: LocalSpan, unique_args: u64) Error!void {
         try self.prepareLocalWrite(target);
         const arg_locals = self.store.getLocalSpan(args);
-        if (op != .str_count_utf8_bytes) {
+        const accepts_deferred_str_args = switch (op) {
+            .str_count_utf8_bytes,
+            .str_is_eq,
+            .str_starts_with,
+            .str_ends_with,
+            => true,
+            else => false,
+        };
+        if (!accepts_deferred_str_args) {
             try self.materializeLocalSpanIfDeferred(arg_locals);
         }
         switch (op) {
@@ -2206,10 +2214,10 @@ pub const MonoLlvmCodeGen = struct {
             .list_reserve => try self.emitListReserve(target, arg_locals, unique_args),
             .list_release_excess_capacity => try self.emitListReleaseExcess(target, arg_locals, unique_args),
             .list_first, .list_last => try self.emitListFirstLast(target, op, arg_locals),
-            .str_is_eq => try self.emitStrBoolBuiltin(target, "roc_builtins_str_equal", arg_locals),
+            .str_is_eq => try self.emitStrIsEq(target, arg_locals),
             .str_contains => try self.emitStrBoolBuiltin(target, "roc_builtins_str_contains", arg_locals),
-            .str_starts_with => try self.emitStrBoolBuiltin(target, "roc_builtins_str_starts_with", arg_locals),
-            .str_ends_with => try self.emitStrBoolBuiltin(target, "roc_builtins_str_ends_with", arg_locals),
+            .str_starts_with => try self.emitStrStartsWith(target, arg_locals),
+            .str_ends_with => try self.emitStrEndsWith(target, arg_locals),
             .str_caseless_ascii_equals => try self.emitStrBoolBuiltin(target, "roc_builtins_str_caseless_ascii_equals", arg_locals),
             .str_count_utf8_bytes => try self.emitStrCountUtf8Bytes(target, arg_locals[0]),
             .str_concat => try self.emitStrRetBuiltin(target, "roc_builtins_str_concat", arg_locals, unique_args),
@@ -2616,6 +2624,11 @@ pub const MonoLlvmCodeGen = struct {
         alloc: LlvmBuilder.Value,
     };
 
+    const StrByteSlice = struct {
+        bytes: LlvmBuilder.Value,
+        len: LlvmBuilder.Value,
+    };
+
     const DeferredStrCapture = struct {
         source_local: LocalId,
         source: StrMatchSource,
@@ -2827,61 +2840,207 @@ pub const MonoLlvmCodeGen = struct {
         fail_block: LlvmBuilder.Function.Block.Index,
     ) Error!void {
         if (literal.len == 0) return;
-        const builder = self.builder orelse return error.CompilationFailed;
-        const wip = self.wip orelse return error.CompilationFailed;
 
+        var mismatch: ?LlvmBuilder.Value = null;
         var offset: usize = 0;
-        while (offset < literal.len) {
+        while (literal.len - offset >= 16) : (offset += 16) {
+            mismatch = try self.emitStrMatchAccumulateLiteralMismatch(ptr, literal, offset, 16, mismatch);
+        }
+
+        if (offset < literal.len) {
             const remaining = literal.len - offset;
-            const chunk_len: usize = if (remaining >= 16)
-                16
-            else if (remaining >= 8)
-                8
-            else if (remaining >= 4)
-                4
-            else if (remaining >= 2)
-                2
-            else
-                1;
-
-            const chunk_ty = intTypeForBytes(@intCast(chunk_len));
-            const chunk_ptr = try self.offsetPtrValue(ptr, builder.intValue(self.ptrSizedIntType(), offset) catch return error.OutOfMemory);
-            const actual = wip.load(.normal, chunk_ty, chunk_ptr, LlvmBuilder.Alignment.fromByteUnits(1), "") catch return error.OutOfMemory;
-
-            var expected: u128 = 0;
-            for (literal[offset..][0..chunk_len], 0..) |byte, byte_i| {
-                expected |= @as(u128, byte) << @intCast(byte_i * 8);
+            switch (remaining) {
+                1 => mismatch = try self.emitStrMatchAccumulateLiteralMismatch(ptr, literal, offset, 1, mismatch),
+                2 => mismatch = try self.emitStrMatchAccumulateLiteralMismatch(ptr, literal, offset, 2, mismatch),
+                3 => {
+                    mismatch = try self.emitStrMatchAccumulateLiteralMismatch(ptr, literal, offset, 2, mismatch);
+                    mismatch = try self.emitStrMatchAccumulateLiteralMismatch(ptr, literal, offset + 1, 2, mismatch);
+                },
+                4 => mismatch = try self.emitStrMatchAccumulateLiteralMismatch(ptr, literal, offset, 4, mismatch),
+                5...7 => {
+                    mismatch = try self.emitStrMatchAccumulateLiteralMismatch(ptr, literal, offset, 4, mismatch);
+                    mismatch = try self.emitStrMatchAccumulateLiteralMismatch(ptr, literal, literal.len - 4, 4, mismatch);
+                },
+                8 => mismatch = try self.emitStrMatchAccumulateLiteralMismatch(ptr, literal, offset, 8, mismatch),
+                9...15 => {
+                    mismatch = try self.emitStrMatchAccumulateLiteralMismatch(ptr, literal, offset, 8, mismatch);
+                    mismatch = try self.emitStrMatchAccumulateLiteralMismatch(ptr, literal, literal.len - 8, 8, mismatch);
+                },
+                else => return error.CompilationFailed,
             }
+        }
 
-            const mismatch = wip.icmp(.ne, actual, builder.intValue(chunk_ty, expected) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
-            try self.emitStrMatchFailIf(mismatch, fail_block);
-
-            offset += chunk_len;
+        if (mismatch) |value| {
+            try self.emitStrMatchFailIf(value, fail_block);
         }
     }
 
-    fn emitStrMatchProbeDelimiter(
+    fn emitStrMatchAccumulateLiteralMismatch(
+        self: *MonoLlvmCodeGen,
+        ptr: LlvmBuilder.Value,
+        literal: []const u8,
+        offset: usize,
+        chunk_len: usize,
+        previous: ?LlvmBuilder.Value,
+    ) Error!LlvmBuilder.Value {
+        const wip = self.wip orelse return error.CompilationFailed;
+
+        const mismatch = try self.emitStrMatchLiteralChunkMismatch(ptr, literal, offset, chunk_len);
+        if (previous) |prev| {
+            return wip.bin(.@"or", prev, mismatch, "") catch return error.OutOfMemory;
+        }
+        return mismatch;
+    }
+
+    fn emitStrMatchLiteralChunkMismatch(
+        self: *MonoLlvmCodeGen,
+        ptr: LlvmBuilder.Value,
+        literal: []const u8,
+        offset: usize,
+        chunk_len: usize,
+    ) Error!LlvmBuilder.Value {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+
+        if (chunk_len == 0 or offset + chunk_len > literal.len) return error.CompilationFailed;
+        const chunk_ty = intTypeForBytes(@intCast(chunk_len));
+        const chunk_ptr = try self.offsetPtrValue(ptr, builder.intValue(self.ptrSizedIntType(), offset) catch return error.OutOfMemory);
+        const actual = wip.load(.normal, chunk_ty, chunk_ptr, LlvmBuilder.Alignment.fromByteUnits(1), "") catch return error.OutOfMemory;
+        const expected = builder.intValue(chunk_ty, littleEndianInt(literal[offset..][0..chunk_len])) catch return error.OutOfMemory;
+        return wip.icmp(.ne, actual, expected, "") catch return error.OutOfMemory;
+    }
+
+    fn emitStrMatchProbeDelimiterByte(
         self: *MonoLlvmCodeGen,
         bytes: LlvmBuilder.Value,
         cursor: LlvmBuilder.Value,
         cursor_ptr: LlvmBuilder.Value,
-        delimiter: []const u8,
+        delimiter_byte: u8,
         found_block: LlvmBuilder.Function.Block.Index,
         fail_block: LlvmBuilder.Function.Block.Index,
     ) Error!void {
-        if (delimiter.len == 0) return error.CompilationFailed;
         const builder = self.builder orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
 
         const candidate = try self.offsetPtrValue(bytes, cursor);
-        const first_byte = wip.load(.normal, .i8, candidate, LlvmBuilder.Alignment.fromByteUnits(1), "") catch return error.OutOfMemory;
-        const first_matches = wip.icmp(.eq, first_byte, builder.intValue(.i8, delimiter[0]) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
-        const matched_block = wip.block(0, "str_match_scan_match") catch return error.OutOfMemory;
+        const actual = wip.load(.normal, .i8, candidate, LlvmBuilder.Alignment.fromByteUnits(1), "") catch return error.OutOfMemory;
+        const first_matches = wip.icmp(.eq, actual, builder.intValue(.i8, delimiter_byte) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const matched_block = wip.block(0, "str_match_scan_tail_match") catch return error.OutOfMemory;
         _ = wip.brCond(first_matches, matched_block, fail_block, .none) catch return error.OutOfMemory;
 
         wip.cursor = .{ .block = matched_block };
         try self.storeUsize(cursor_ptr, cursor);
         _ = wip.br(found_block) catch return error.OutOfMemory;
+    }
+
+    fn emitStrMatchWordByteMask(
+        self: *MonoLlvmCodeGen,
+        word: LlvmBuilder.Value,
+        byte: u8,
+        width: u8,
+    ) Error!LlvmBuilder.Value {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const word_ty = intTypeForBytes(width);
+        const repeated = builder.intValue(word_ty, repeatedByte(byte, width)) catch return error.OutOfMemory;
+        const ones = builder.intValue(word_ty, repeatedByte(0x01, width)) catch return error.OutOfMemory;
+        const high_bits = builder.intValue(word_ty, repeatedByte(0x80, width)) catch return error.OutOfMemory;
+
+        const x = wip.bin(.xor, word, repeated, "") catch return error.OutOfMemory;
+        const minus_ones = wip.bin(.sub, x, ones, "") catch return error.OutOfMemory;
+        const not_x = wip.not(x, "") catch return error.OutOfMemory;
+        const candidate = wip.bin(.@"and", minus_ones, not_x, "") catch return error.OutOfMemory;
+        return wip.bin(.@"and", candidate, high_bits, "") catch return error.OutOfMemory;
+    }
+
+    fn emitStrMatchFirstSetByteOffset(
+        self: *MonoLlvmCodeGen,
+        mask: LlvmBuilder.Value,
+        width: u8,
+    ) Error!LlvmBuilder.Value {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const word_ty = intTypeForBytes(width);
+        const trailing = wip.callIntrinsic(
+            .normal,
+            .none,
+            .cttz,
+            &.{word_ty},
+            &.{ mask, builder.intValue(.i1, 1) catch return error.OutOfMemory },
+            "",
+        ) catch return error.OutOfMemory;
+        const byte_bits = wip.bin(.lshr, trailing, builder.intValue(word_ty, 3) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        return self.coerceScalar(byte_bits, self.ptrSizedIntType(), false);
+    }
+
+    fn emitStrMatchWordProbeDelimiter(
+        self: *MonoLlvmCodeGen,
+        bytes: LlvmBuilder.Value,
+        cursor: LlvmBuilder.Value,
+        cursor_ptr: LlvmBuilder.Value,
+        delimiter_byte: u8,
+        width: u8,
+        found_block: LlvmBuilder.Function.Block.Index,
+        no_match_block: LlvmBuilder.Function.Block.Index,
+    ) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const word_ty = intTypeForBytes(width);
+        const word_ptr = try self.offsetPtrValue(bytes, cursor);
+        const word = wip.load(.normal, word_ty, word_ptr, LlvmBuilder.Alignment.fromByteUnits(1), "") catch return error.OutOfMemory;
+        const mask = try self.emitStrMatchWordByteMask(word, delimiter_byte, width);
+        const has_match = wip.icmp(.ne, mask, builder.intValue(word_ty, 0) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const matched_block = wip.block(0, "str_match_scan_word_match") catch return error.OutOfMemory;
+        _ = wip.brCond(has_match, matched_block, no_match_block, .none) catch return error.OutOfMemory;
+
+        wip.cursor = .{ .block = matched_block };
+        const byte_offset = try self.emitStrMatchFirstSetByteOffset(mask, width);
+        const found_cursor = wip.bin(.add, cursor, byte_offset, "") catch return error.OutOfMemory;
+        try self.storeUsize(cursor_ptr, found_cursor);
+        _ = wip.br(found_block) catch return error.OutOfMemory;
+    }
+
+    fn emitStrMatchCandidateCount(
+        self: *MonoLlvmCodeGen,
+        cursor: LlvmBuilder.Value,
+        limit: LlvmBuilder.Value,
+    ) Error!LlvmBuilder.Value {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const usize_ty = self.ptrSizedIntType();
+        const cursor_after_limit = wip.icmp(.ugt, cursor, limit, "") catch return error.OutOfMemory;
+        const remaining = wip.bin(.sub, limit, cursor, "") catch return error.OutOfMemory;
+        const count = wip.bin(.add, remaining, builder.intValue(usize_ty, 1) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        return wip.select(.normal, cursor_after_limit, builder.intValue(usize_ty, 0) catch return error.OutOfMemory, count, "") catch return error.OutOfMemory;
+    }
+
+    fn emitStrMatchBranchForCandidateCount(
+        self: *MonoLlvmCodeGen,
+        count: LlvmBuilder.Value,
+        width: u8,
+        word_block: LlvmBuilder.Function.Block.Index,
+        tail_block: LlvmBuilder.Function.Block.Index,
+        miss_block: LlvmBuilder.Function.Block.Index,
+    ) Error!LlvmBuilder.Function.Block.Index {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const usize_ty = self.ptrSizedIntType();
+        const has_word = wip.icmp(.uge, count, builder.intValue(usize_ty, width) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const maybe_tail_block = wip.block(0, "str_match_scan_maybe_tail") catch return error.OutOfMemory;
+        _ = wip.brCond(has_word, word_block, maybe_tail_block, .then_likely) catch return error.OutOfMemory;
+
+        wip.cursor = .{ .block = maybe_tail_block };
+        const has_tail = wip.icmp(.ne, count, builder.intValue(usize_ty, 0) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        _ = wip.brCond(has_tail, tail_block, miss_block, .none) catch return error.OutOfMemory;
+        return maybe_tail_block;
+    }
+
+    fn strMatchScanWidth(self: *const MonoLlvmCodeGen) u8 {
+        return switch (self.target.ptrBitWidth()) {
+            64 => 8,
+            32 => 4,
+            else => unreachable,
+        };
     }
 
     fn emitStrMatchFindDelimiter(
@@ -2896,104 +3055,49 @@ pub const MonoLlvmCodeGen = struct {
         const builder = self.builder orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
         const usize_ty = self.ptrSizedIntType();
+        const width = self.strMatchScanWidth();
         const delimiter_len = builder.intValue(usize_ty, delimiter.len) catch return error.OutOfMemory;
         try self.emitStrMatchFailIf(wip.icmp(.ult, len, delimiter_len, "") catch return error.OutOfMemory, miss_block);
         const limit = wip.bin(.sub, len, delimiter_len, "") catch return error.OutOfMemory;
 
         const found_block = wip.block(0, "str_match_scan_found") catch return error.OutOfMemory;
         const decide_block = wip.block(0, "str_match_scan_decide") catch return error.OutOfMemory;
-        const group_loop_block = wip.block(2, "str_match_scan_group") catch return error.OutOfMemory;
-        const group_after_block = wip.block(0, "str_match_scan_group_after") catch return error.OutOfMemory;
-        const tail_block = wip.block(2, "str_match_scan_tail") catch return error.OutOfMemory;
+        const word_loop_block = wip.block(2, "str_match_scan_word") catch return error.OutOfMemory;
+        const word_after_block = wip.block(0, "str_match_scan_word_after") catch return error.OutOfMemory;
+        const tail_block = wip.block(3, "str_match_scan_tail") catch return error.OutOfMemory;
 
         _ = wip.br(decide_block) catch return error.OutOfMemory;
 
         wip.cursor = .{ .block = decide_block };
         const initial_cursor = try self.loadUsize(cursor_ptr);
-        const initial_over_limit = wip.icmp(.ugt, initial_cursor, limit, "") catch return error.OutOfMemory;
-        const initial_in_range_block = wip.block(0, "str_match_scan_initial_in_range") catch return error.OutOfMemory;
-        _ = wip.brCond(initial_over_limit, miss_block, initial_in_range_block, .none) catch return error.OutOfMemory;
+        const initial_count = try self.emitStrMatchCandidateCount(initial_cursor, limit);
+        const initial_tail_pred = try self.emitStrMatchBranchForCandidateCount(initial_count, width, word_loop_block, tail_block, miss_block);
 
-        wip.cursor = .{ .block = initial_in_range_block };
-        const initial_remaining = wip.bin(.sub, limit, initial_cursor, "") catch return error.OutOfMemory;
-        const has_initial_group = wip.icmp(.uge, initial_remaining, builder.intValue(usize_ty, 3) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
-        _ = wip.brCond(has_initial_group, group_loop_block, tail_block, .then_likely) catch return error.OutOfMemory;
+        wip.cursor = .{ .block = word_loop_block };
+        const word_cursor_phi = wip.phi(usize_ty, "str_match_scan_word_cursor") catch return error.OutOfMemory;
+        const word_cursor = word_cursor_phi.toValue();
+        try self.emitStrMatchWordProbeDelimiter(bytes, word_cursor, cursor_ptr, delimiter[0], width, found_block, word_after_block);
 
-        wip.cursor = .{ .block = group_loop_block };
-        const group_cursor_phi = wip.phi(usize_ty, "str_match_scan_group_cursor") catch return error.OutOfMemory;
-        const group_cursor = group_cursor_phi.toValue();
-        var group_probe_blocks: [4]LlvmBuilder.Function.Block.Index = undefined;
-        for (0..4) |probe_i| {
-            group_probe_blocks[probe_i] = wip.block(0, "str_match_scan_group_probe") catch return error.OutOfMemory;
-        }
-        _ = wip.br(group_probe_blocks[0]) catch return error.OutOfMemory;
+        wip.cursor = .{ .block = word_after_block };
+        const next_word_cursor = wip.bin(.add, word_cursor, builder.intValue(usize_ty, width) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const remaining_count = try self.emitStrMatchCandidateCount(next_word_cursor, limit);
+        const word_tail_pred = try self.emitStrMatchBranchForCandidateCount(remaining_count, width, word_loop_block, tail_block, miss_block);
 
-        for (0..4) |probe_i| {
-            wip.cursor = .{ .block = group_probe_blocks[probe_i] };
-            const cursor = if (probe_i == 0)
-                group_cursor
-            else
-                wip.bin(.add, group_cursor, builder.intValue(usize_ty, probe_i) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
-            try self.emitStrMatchProbeDelimiter(
-                bytes,
-                cursor,
-                cursor_ptr,
-                delimiter,
-                found_block,
-                if (probe_i == 3) group_after_block else group_probe_blocks[probe_i + 1],
-            );
-        }
-
-        wip.cursor = .{ .block = group_after_block };
-        const group_remaining = wip.bin(.sub, limit, group_cursor, "") catch return error.OutOfMemory;
-        const next_group_cursor = wip.bin(.add, group_cursor, builder.intValue(usize_ty, 4) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
-        const has_next_group = wip.icmp(.uge, group_remaining, builder.intValue(usize_ty, 7) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
-        const maybe_tail_block = wip.block(0, "str_match_scan_maybe_tail") catch return error.OutOfMemory;
-        _ = wip.brCond(has_next_group, group_loop_block, maybe_tail_block, .then_likely) catch return error.OutOfMemory;
-
-        wip.cursor = .{ .block = maybe_tail_block };
-        const has_tail = wip.icmp(.uge, group_remaining, builder.intValue(usize_ty, 4) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
-        _ = wip.brCond(has_tail, tail_block, miss_block, .none) catch return error.OutOfMemory;
+        word_cursor_phi.finish(&.{ initial_cursor, next_word_cursor }, &.{ decide_block, word_after_block }, wip);
 
         wip.cursor = .{ .block = tail_block };
         const tail_cursor_phi = wip.phi(usize_ty, "str_match_scan_tail_cursor") catch return error.OutOfMemory;
         const tail_cursor = tail_cursor_phi.toValue();
-        const tail_cursor_1 = wip.bin(.add, tail_cursor, builder.intValue(usize_ty, 1) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
-        const tail_cursor_2 = wip.bin(.add, tail_cursor, builder.intValue(usize_ty, 2) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
-        const tail_cursors = [3]LlvmBuilder.Value{ tail_cursor, tail_cursor_1, tail_cursor_2 };
-        var tail_probe_blocks: [3]LlvmBuilder.Function.Block.Index = undefined;
-        var tail_next_blocks: [2]LlvmBuilder.Function.Block.Index = undefined;
-        for (0..3) |probe_i| {
-            tail_probe_blocks[probe_i] = wip.block(0, "str_match_scan_tail_probe") catch return error.OutOfMemory;
-        }
-        for (0..2) |probe_i| {
-            tail_next_blocks[probe_i] = wip.block(0, "str_match_scan_tail_next") catch return error.OutOfMemory;
-        }
-        _ = wip.br(tail_probe_blocks[0]) catch return error.OutOfMemory;
+        const tail_after_probe_block = wip.block(0, "str_match_scan_tail_after_probe") catch return error.OutOfMemory;
+        try self.emitStrMatchProbeDelimiterByte(bytes, tail_cursor, cursor_ptr, delimiter[0], found_block, tail_after_probe_block);
 
-        wip.cursor = .{ .block = tail_probe_blocks[0] };
-        try self.emitStrMatchProbeDelimiter(bytes, tail_cursor, cursor_ptr, delimiter, found_block, tail_next_blocks[0]);
+        wip.cursor = .{ .block = tail_after_probe_block };
+        const next_tail_cursor = wip.bin(.add, tail_cursor, builder.intValue(usize_ty, 1) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const next_tail_count = try self.emitStrMatchCandidateCount(next_tail_cursor, limit);
+        const has_next_tail = wip.icmp(.ne, next_tail_count, builder.intValue(usize_ty, 0) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        _ = wip.brCond(has_next_tail, tail_block, miss_block, .none) catch return error.OutOfMemory;
 
-        for (1..3) |probe_i| {
-            const previous_cursor = tail_cursors[probe_i - 1];
-
-            wip.cursor = .{ .block = tail_next_blocks[probe_i - 1] };
-            const has_next_tail = wip.icmp(.ult, previous_cursor, limit, "") catch return error.OutOfMemory;
-            _ = wip.brCond(has_next_tail, tail_probe_blocks[probe_i], miss_block, .none) catch return error.OutOfMemory;
-
-            wip.cursor = .{ .block = tail_probe_blocks[probe_i] };
-            try self.emitStrMatchProbeDelimiter(
-                bytes,
-                tail_cursors[probe_i],
-                cursor_ptr,
-                delimiter,
-                found_block,
-                if (probe_i == 2) miss_block else tail_next_blocks[probe_i],
-            );
-        }
-
-        group_cursor_phi.finish(&.{ initial_cursor, next_group_cursor }, &.{ initial_in_range_block, group_after_block }, wip);
-        tail_cursor_phi.finish(&.{ initial_cursor, next_group_cursor }, &.{ initial_in_range_block, maybe_tail_block }, wip);
+        tail_cursor_phi.finish(&.{ initial_cursor, next_word_cursor, next_tail_cursor }, &.{ initial_tail_pred, word_tail_pred, tail_after_probe_block }, wip);
 
         wip.cursor = .{ .block = found_block };
         if (delimiter.len > 1) {
@@ -3336,6 +3440,160 @@ pub const MonoLlvmCodeGen = struct {
         defer call_args.deinit(self.allocator);
         const result = try self.callBuiltin(name, .i1, call_args.types.items, call_args.values.items);
         try self.storeBool(self.slot(target).ptr, result);
+    }
+
+    fn emitStrByteSliceForLocal(self: *MonoLlvmCodeGen, local: LocalId) Error!StrByteSlice {
+        if (self.deferredStrCapture(local)) |capture| {
+            const start = try self.loadUsize(capture.start_ptr);
+            const bytes = try self.offsetPtrValue(capture.source.bytes, start);
+            return .{
+                .bytes = bytes,
+                .len = try self.deferredStrCaptureLen(capture),
+            };
+        }
+        const source = try self.emitStrMatchSourceShape(self.slot(local).ptr);
+        return .{ .bytes = source.bytes, .len = source.len };
+    }
+
+    fn emitStrBoolJoin(
+        self: *MonoLlvmCodeGen,
+        target: LocalId,
+        true_block: LlvmBuilder.Function.Block.Index,
+        false_block: LlvmBuilder.Function.Block.Index,
+        after_block: LlvmBuilder.Function.Block.Index,
+    ) Error!void {
+        const wip = self.wip orelse return error.CompilationFailed;
+
+        wip.cursor = .{ .block = true_block };
+        try self.storeBool(self.slot(target).ptr, (self.builder orelse return error.CompilationFailed).intValue(.i1, 1) catch return error.OutOfMemory);
+        _ = wip.br(after_block) catch return error.OutOfMemory;
+
+        wip.cursor = .{ .block = false_block };
+        try self.storeBool(self.slot(target).ptr, (self.builder orelse return error.CompilationFailed).intValue(.i1, 0) catch return error.OutOfMemory);
+        _ = wip.br(after_block) catch return error.OutOfMemory;
+
+        wip.cursor = .{ .block = after_block };
+    }
+
+    fn emitByteSlicesEqualBranch(
+        self: *MonoLlvmCodeGen,
+        lhs_bytes: LlvmBuilder.Value,
+        rhs_bytes: LlvmBuilder.Value,
+        len: LlvmBuilder.Value,
+        equal_block: LlvmBuilder.Function.Block.Index,
+        not_equal_block: LlvmBuilder.Function.Block.Index,
+    ) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const usize_ty = self.ptrSizedIntType();
+        const width = self.strMatchScanWidth();
+        const zero = builder.intValue(usize_ty, 0) catch return error.OutOfMemory;
+
+        const decide_block = wip.block(0, "str_eq_decide") catch return error.OutOfMemory;
+        const nonempty_block = wip.block(0, "str_eq_nonempty") catch return error.OutOfMemory;
+        const word_loop_block = wip.block(2, "str_eq_word") catch return error.OutOfMemory;
+        const word_after_block = wip.block(0, "str_eq_word_after") catch return error.OutOfMemory;
+        const word_maybe_tail_block = wip.block(0, "str_eq_word_maybe_tail") catch return error.OutOfMemory;
+        const tail_loop_block = wip.block(3, "str_eq_tail") catch return error.OutOfMemory;
+        const tail_after_block = wip.block(0, "str_eq_tail_after") catch return error.OutOfMemory;
+
+        _ = wip.br(decide_block) catch return error.OutOfMemory;
+
+        wip.cursor = .{ .block = decide_block };
+        const len_is_zero = wip.icmp(.eq, len, zero, "") catch return error.OutOfMemory;
+        _ = wip.brCond(len_is_zero, equal_block, nonempty_block, .none) catch return error.OutOfMemory;
+
+        wip.cursor = .{ .block = nonempty_block };
+        const has_word = wip.icmp(.uge, len, builder.intValue(usize_ty, width) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        _ = wip.brCond(has_word, word_loop_block, tail_loop_block, .then_likely) catch return error.OutOfMemory;
+
+        wip.cursor = .{ .block = word_loop_block };
+        const word_cursor_phi = wip.phi(usize_ty, "str_eq_word_cursor") catch return error.OutOfMemory;
+        const word_cursor = word_cursor_phi.toValue();
+        const lhs_word_ptr = try self.offsetPtrValue(lhs_bytes, word_cursor);
+        const rhs_word_ptr = try self.offsetPtrValue(rhs_bytes, word_cursor);
+        const word_ty = intTypeForBytes(width);
+        const lhs_word = wip.load(.normal, word_ty, lhs_word_ptr, LlvmBuilder.Alignment.fromByteUnits(1), "") catch return error.OutOfMemory;
+        const rhs_word = wip.load(.normal, word_ty, rhs_word_ptr, LlvmBuilder.Alignment.fromByteUnits(1), "") catch return error.OutOfMemory;
+        const words_equal = wip.icmp(.eq, lhs_word, rhs_word, "") catch return error.OutOfMemory;
+        _ = wip.brCond(words_equal, word_after_block, not_equal_block, .then_likely) catch return error.OutOfMemory;
+
+        wip.cursor = .{ .block = word_after_block };
+        const next_word_cursor = wip.bin(.add, word_cursor, builder.intValue(usize_ty, width) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const word_remaining = wip.bin(.sub, len, next_word_cursor, "") catch return error.OutOfMemory;
+        const has_next_word = wip.icmp(.uge, word_remaining, builder.intValue(usize_ty, width) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        _ = wip.brCond(has_next_word, word_loop_block, word_maybe_tail_block, .then_likely) catch return error.OutOfMemory;
+
+        wip.cursor = .{ .block = word_maybe_tail_block };
+        const has_word_tail = wip.icmp(.ne, word_remaining, zero, "") catch return error.OutOfMemory;
+        _ = wip.brCond(has_word_tail, tail_loop_block, equal_block, .none) catch return error.OutOfMemory;
+
+        word_cursor_phi.finish(&.{ zero, next_word_cursor }, &.{ nonempty_block, word_after_block }, wip);
+
+        wip.cursor = .{ .block = tail_loop_block };
+        const tail_cursor_phi = wip.phi(usize_ty, "str_eq_tail_cursor") catch return error.OutOfMemory;
+        const tail_cursor = tail_cursor_phi.toValue();
+        const lhs_byte = wip.load(.normal, .i8, try self.offsetPtrValue(lhs_bytes, tail_cursor), LlvmBuilder.Alignment.fromByteUnits(1), "") catch return error.OutOfMemory;
+        const rhs_byte = wip.load(.normal, .i8, try self.offsetPtrValue(rhs_bytes, tail_cursor), LlvmBuilder.Alignment.fromByteUnits(1), "") catch return error.OutOfMemory;
+        const bytes_equal = wip.icmp(.eq, lhs_byte, rhs_byte, "") catch return error.OutOfMemory;
+        _ = wip.brCond(bytes_equal, tail_after_block, not_equal_block, .then_likely) catch return error.OutOfMemory;
+
+        wip.cursor = .{ .block = tail_after_block };
+        const next_tail_cursor = wip.bin(.add, tail_cursor, builder.intValue(usize_ty, 1) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const tail_done = wip.icmp(.eq, next_tail_cursor, len, "") catch return error.OutOfMemory;
+        _ = wip.brCond(tail_done, equal_block, tail_loop_block, .none) catch return error.OutOfMemory;
+
+        tail_cursor_phi.finish(&.{ zero, next_word_cursor, next_tail_cursor }, &.{ nonempty_block, word_maybe_tail_block, tail_after_block }, wip);
+    }
+
+    fn emitStrIsEq(self: *MonoLlvmCodeGen, target: LocalId, args: []const LocalId) Error!void {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const lhs = try self.emitStrByteSliceForLocal(args[0]);
+        const rhs = try self.emitStrByteSliceForLocal(args[1]);
+        const true_block = wip.block(0, "str_eq_true") catch return error.OutOfMemory;
+        const false_block = wip.block(0, "str_eq_false") catch return error.OutOfMemory;
+        const same_len_block = wip.block(0, "str_eq_same_len") catch return error.OutOfMemory;
+        const after_block = wip.block(0, "str_eq_after") catch return error.OutOfMemory;
+        const same_len = wip.icmp(.eq, lhs.len, rhs.len, "") catch return error.OutOfMemory;
+        _ = wip.brCond(same_len, same_len_block, false_block, .then_likely) catch return error.OutOfMemory;
+
+        wip.cursor = .{ .block = same_len_block };
+        try self.emitByteSlicesEqualBranch(lhs.bytes, rhs.bytes, lhs.len, true_block, false_block);
+        try self.emitStrBoolJoin(target, true_block, false_block, after_block);
+    }
+
+    fn emitStrStartsWith(self: *MonoLlvmCodeGen, target: LocalId, args: []const LocalId) Error!void {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const haystack = try self.emitStrByteSliceForLocal(args[0]);
+        const needle = try self.emitStrByteSliceForLocal(args[1]);
+        const true_block = wip.block(0, "str_starts_true") catch return error.OutOfMemory;
+        const false_block = wip.block(0, "str_starts_false") catch return error.OutOfMemory;
+        const len_ok_block = wip.block(0, "str_starts_len_ok") catch return error.OutOfMemory;
+        const after_block = wip.block(0, "str_starts_after") catch return error.OutOfMemory;
+        const len_ok = wip.icmp(.uge, haystack.len, needle.len, "") catch return error.OutOfMemory;
+        _ = wip.brCond(len_ok, len_ok_block, false_block, .then_likely) catch return error.OutOfMemory;
+
+        wip.cursor = .{ .block = len_ok_block };
+        try self.emitByteSlicesEqualBranch(haystack.bytes, needle.bytes, needle.len, true_block, false_block);
+        try self.emitStrBoolJoin(target, true_block, false_block, after_block);
+    }
+
+    fn emitStrEndsWith(self: *MonoLlvmCodeGen, target: LocalId, args: []const LocalId) Error!void {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const haystack = try self.emitStrByteSliceForLocal(args[0]);
+        const needle = try self.emitStrByteSliceForLocal(args[1]);
+        const true_block = wip.block(0, "str_ends_true") catch return error.OutOfMemory;
+        const false_block = wip.block(0, "str_ends_false") catch return error.OutOfMemory;
+        const len_ok_block = wip.block(0, "str_ends_len_ok") catch return error.OutOfMemory;
+        const after_block = wip.block(0, "str_ends_after") catch return error.OutOfMemory;
+        const len_ok = wip.icmp(.uge, haystack.len, needle.len, "") catch return error.OutOfMemory;
+        _ = wip.brCond(len_ok, len_ok_block, false_block, .then_likely) catch return error.OutOfMemory;
+
+        wip.cursor = .{ .block = len_ok_block };
+        const start = wip.bin(.sub, haystack.len, needle.len, "") catch return error.OutOfMemory;
+        const suffix_bytes = try self.offsetPtrValue(haystack.bytes, start);
+        try self.emitByteSlicesEqualBranch(suffix_bytes, needle.bytes, needle.len, true_block, false_block);
+        try self.emitStrBoolJoin(target, true_block, false_block, after_block);
     }
 
     /// `unique_args` is non-null for wrappers whose first argument carries the
@@ -5872,4 +6130,22 @@ fn intTypeForBytes(size: u8) LlvmBuilder.Type {
         16 => .i128,
         else => unreachable,
     };
+}
+
+fn littleEndianInt(bytes: []const u8) u128 {
+    std.debug.assert(bytes.len <= 16);
+    var result: u128 = 0;
+    for (bytes, 0..) |byte, byte_i| {
+        result |= @as(u128, byte) << @intCast(byte_i * 8);
+    }
+    return result;
+}
+
+fn repeatedByte(byte: u8, width: u8) u128 {
+    std.debug.assert(width <= 16);
+    var result: u128 = 0;
+    for (0..width) |byte_i| {
+        result |= @as(u128, byte) << @intCast(byte_i * 8);
+    }
+    return result;
 }

@@ -778,6 +778,20 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "((\"BAR\", \"tail\"), (\"VALUE\", \"rest\"))" },
     },
     .{
+        .name = "inspect: string interpolation pattern capture feeds read-only str builtins",
+        .source_kind = .module,
+        .source =
+        \\describe : Str -> (Bool, Bool, Bool)
+        \\describe = |s| match s {
+        \\    "foo${name}bar" => (name == "ALPHA", Str.starts_with(name, "AL"), Str.ends_with(name, "HA"))
+        \\    _ => (False, False, False)
+        \\}
+        \\
+        \\main = (describe("fooALPHAbar"), describe("fooOMEGAbar"))
+        ,
+        .expected = .{ .inspect_str = "((True, True, True), (False, False, False))" },
+    },
+    .{
         .name = "allocation - string interpolation pattern capture returns seamless heap slice",
         .source =
         \\{
