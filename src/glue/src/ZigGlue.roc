@@ -346,7 +346,7 @@ generate_roc_io =
 	\\    }
 	\\
 	\\    fn nativeWriteStderr(_: ?*anyopaque, data: []const u8) void {
-	\\        std.fs.File.stderr().writeAll(data) catch {};
+	\\        std.Io.File.stderr().writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), data) catch {};
 	\\    }
 	\\
 	\\    fn nativeOnFatal(_: ?*anyopaque) noreturn {

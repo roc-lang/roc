@@ -53,9 +53,9 @@ const all_targets = [_]RocTarget{
 pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
-    // Get the roc dependency and its builtins module
-    const roc_dep = b.dependency("roc", .{});
-    const builtins_module = roc_dep.module("builtins");
+    const signal_handler_module = b.createModule(.{
+        .root_source_file = b.path("../../src/base/signal_handler.zig"),
+    });
 
     // Cleanup step
     const cleanup_step = b.step("clean", "Remove all built library files");
@@ -77,7 +77,7 @@ pub fn build(b: *std.Build) void {
     // Build for each Roc target
     for (all_targets) |roc_target| {
         const target = b.resolveTargetQuery(roc_target.toZigTarget());
-        const host_lib = buildHostLib(b, target, optimize, builtins_module);
+        const host_lib = buildHostLib(b, target, optimize, signal_handler_module);
 
         copy_all.addCopyFileToSource(
             host_lib.getEmittedBin(),
@@ -96,7 +96,7 @@ pub fn build(b: *std.Build) void {
         return;
     };
 
-    const native_lib = buildHostLib(b, native_target, optimize, builtins_module);
+    const native_lib = buildHostLib(b, native_target, optimize, signal_handler_module);
     b.installArtifact(native_lib);
 
     const copy_native = b.addUpdateSourceFiles();
@@ -150,8 +150,9 @@ const CleanupStep = struct {
     fn make(step: *std.Build.Step, options: std.Build.Step.MakeOptions) !void {
         _ = options;
         const self: *CleanupStep = @fieldParentPtr("step", step);
+        const io = step.owner.graph.io;
         const path = self.path.getPath2(step.owner, null);
-        std.fs.cwd().deleteFile(path) catch |err| switch (err) {
+        std.Io.Dir.cwd().deleteFile(io, path) catch |err| switch (err) {
             error.FileNotFound => {},
             else => return err,
         };
@@ -162,7 +163,7 @@ fn buildHostLib(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
-    builtins_module: *std.Build.Module,
+    signal_handler_module: *std.Build.Module,
 ) *std.Build.Step.Compile {
     const host_lib = b.addLibrary(.{
         .name = "host",
@@ -174,7 +175,7 @@ fn buildHostLib(
             .strip = optimize != .Debug,
             .pic = true,
             .imports = &.{
-                .{ .name = "builtins", .module = builtins_module },
+                .{ .name = "signal_handler", .module = signal_handler_module },
             },
         }),
     });

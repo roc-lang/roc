@@ -1,20 +1,36 @@
 platform ""
     requires {
-        main! : {} => Elem
+        main! : () => {}
     }
     exposes [Signal, Event, EventSender, Elem, NodeValue, SignalNode, EventNode]
     packages {}
     provides {
-        main_for_host!: "main",
-        call_transform: "call_transform",
-        call_step: "call_step",
-        call_predicate: "call_predicate",
+        "roc_main": main_for_host!,
+        "roc_call_transform": call_transform,
+        "roc_call_step": call_step,
+        "roc_call_predicate": call_predicate,
+    }
+    hosted {
+        "roc_host_append_child": Host.append_child!,
+        "roc_host_bind_click": Host.bind_click!,
+        "roc_host_bind_text": Host.bind_text!,
+        "roc_host_create_element": Host.create_element!,
+        "roc_host_create_event_filter": Host.create_event_filter!,
+        "roc_host_create_event_map": Host.create_event_map!,
+        "roc_host_create_event_merge": Host.create_event_merge!,
+        "roc_host_create_event_source": Host.create_event_source!,
+        "roc_host_create_root": Host.create_root!,
+        "roc_host_create_signal_const": Host.create_signal_const!,
+        "roc_host_create_signal_fold": Host.create_signal_fold!,
+        "roc_host_create_signal_hold": Host.create_signal_hold!,
+        "roc_host_create_signal_map": Host.create_signal_map!,
+        "roc_host_create_signal_zip_with": Host.create_signal_zip_with!,
+        "roc_host_set_text": Host.set_text!,
     }
     targets: {
-        files: "targets/",
-        exe: {
-            arm64mac: ["libhost.a", app],
-        }
+        inputs: "targets/",
+        x64mac: { inputs: ["libhost.a", app] },
+        arm64mac: { inputs: ["libhost.a", app] },
     }
 
 import Elem exposing [Elem]
@@ -27,12 +43,8 @@ import EventNode
 import Host
 
 ## Called by host at startup to build the UI
-main_for_host! : {} => {}
-main_for_host! = |{}| {
-    elem = main!({})
-    root = Host.create_root!({})
-    Elem.walk!(elem, root)
-}
+main_for_host! : () => {}
+main_for_host! = main!
 
 ## Called by host to evaluate a transform closure (for map operations)
 call_transform : Box((NodeValue -> NodeValue)), NodeValue -> NodeValue

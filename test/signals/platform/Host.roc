@@ -9,7 +9,7 @@ import NodeValue exposing [NodeValue]
 ## Host effects for creating DOM elements and graph nodes
 Host := [].{
     ## Create the root element container
-    create_root! : {} => U64
+    create_root! : () => U64
 
     ## Create a DOM element by tag name
     create_element! : Str => U64
@@ -21,7 +21,7 @@ Host := [].{
     append_child! : U64, U64 => {}
 
     ## Create an event source node in the graph
-    create_event_source! : {} => U64
+    create_event_source! : () => U64
 
     ## Create an event map node (host stores the transform closure)
     create_event_map! : U64, Box((NodeValue -> NodeValue)) => U64

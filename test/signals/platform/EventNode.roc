@@ -32,7 +32,7 @@ EventNode := [
     walk! = |event| {
         match event {
             Source =>
-                Host.create_event_source!({})
+                Host.create_event_source!()
 
             Prebuilt(id) =>
                 id

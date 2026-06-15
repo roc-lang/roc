@@ -12,9 +12,9 @@ Event(a) := { node : EventNode }.{
 
     ## Create a channel - returns sender/receiver pair
     ## Effectful: eagerly creates host event source so sender and receiver share the same node
-    channel! : {} => { sender : EventSender(a), receiver : Event(a) }
-    channel! = |{}| {
-        host_id = Host.create_event_source!({})
+    channel! : () => { sender : EventSender(a), receiver : Event(a) }
+    channel! = || {
+        host_id = Host.create_event_source!()
         event_node = EventNode.make_prebuilt(host_id)
         {
             sender: { node: event_node },

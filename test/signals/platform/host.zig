@@ -35,8 +35,8 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const builtins = @import("builtins");
-const posix = if (builtin.os.tag != .windows and builtin.os.tag != .wasi) std.posix else undefined;
+const signal_handler = @import("signal_handler");
+const abi = @import("roc_platform_abi.zig");
 
 pub const std_options: std.Options = .{
     .logFn = std.log.defaultLog,
@@ -46,16 +46,32 @@ pub const std_options: std.Options = .{
 /// Override the default panic handler to avoid secondary crashes in stack trace generation
 pub const panic = std.debug.FullPanic(panicImpl);
 
+fn writeStderr(bytes: []const u8) void {
+    std.Io.File.stderr().writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), bytes) catch {};
+}
+
+fn traceEnabled() bool {
+    if (current_host) |host| {
+        return host.test_state.verbose;
+    }
+    return false;
+}
+
+fn traceStderr(bytes: []const u8) void {
+    if (traceEnabled()) {
+        writeStderr(bytes);
+    }
+}
+
 fn panicImpl(msg: []const u8, addr: ?usize) noreturn {
-    const stderr: std.fs.File = .stderr();
-    stderr.writeAll("\n=== PANIC (no stack trace) ===\n") catch {};
-    stderr.writeAll(msg) catch {};
+    writeStderr("\n=== PANIC (no stack trace) ===\n");
+    writeStderr(msg);
     if (addr) |a| {
         var buf: [32]u8 = undefined;
         const hex = std.fmt.bufPrint(&buf, " at address 0x{x}\n", .{a}) catch "";
-        stderr.writeAll(hex) catch {};
+        writeStderr(hex);
     } else {
-        stderr.writeAll("\n") catch {};
+        writeStderr("\n");
     }
     std.process.abort();
 }
@@ -81,8 +97,8 @@ fn handleRocStackOverflow() noreturn {
         _ = kernel32.WriteFile(stderr_handle, STACK_OVERFLOW_MESSAGE.ptr, STACK_OVERFLOW_MESSAGE.len, &bytes_written, null);
         kernel32.ExitProcess(134);
     } else if (comptime builtin.os.tag != .wasi) {
-        _ = posix.write(posix.STDERR_FILENO, STACK_OVERFLOW_MESSAGE) catch {};
-        posix.exit(134);
+        writeStderr(STACK_OVERFLOW_MESSAGE);
+        std.process.exit(134);
     } else {
         std.process.exit(134);
     }
@@ -102,7 +118,7 @@ fn handleRocAccessViolation(fault_addr: usize) noreturn {
         };
 
         var addr_buf: [18]u8 = undefined;
-        const addr_str = builtins.handlers.formatHex(fault_addr, &addr_buf);
+        const addr_str = signal_handler.formatHex(fault_addr, &addr_buf);
 
         const msg1 = "\nSegmentation fault (SIGSEGV) in this Roc program.\nFault address: ";
         const msg2 = "\n\n";
@@ -114,13 +130,13 @@ fn handleRocAccessViolation(fault_addr: usize) noreturn {
         kernel32.ExitProcess(139);
     } else {
         const msg = "\nSegmentation fault (SIGSEGV) in this Roc program.\nFault address: ";
-        _ = posix.write(posix.STDERR_FILENO, msg) catch {};
+        writeStderr(msg);
 
         var addr_buf: [18]u8 = undefined;
-        const addr_str = builtins.handlers.formatHex(fault_addr, &addr_buf);
-        _ = posix.write(posix.STDERR_FILENO, addr_str) catch {};
-        _ = posix.write(posix.STDERR_FILENO, "\n\n") catch {};
-        posix.exit(139);
+        const addr_str = signal_handler.formatHex(fault_addr, &addr_buf);
+        writeStderr(addr_str);
+        writeStderr("\n\n");
+        std.process.exit(139);
     }
 }
 
@@ -145,51 +161,23 @@ fn handleRocArithmeticError() noreturn {
         _ = kernel32.WriteFile(stderr_handle, DIVISION_BY_ZERO_MESSAGE.ptr, DIVISION_BY_ZERO_MESSAGE.len, &bytes_written, null);
         kernel32.ExitProcess(136);
     } else if (comptime builtin.os.tag != .wasi) {
-        _ = posix.write(posix.STDERR_FILENO, DIVISION_BY_ZERO_MESSAGE) catch {};
-        posix.exit(136);
+        writeStderr(DIVISION_BY_ZERO_MESSAGE);
+        std.process.exit(136);
     } else {
         std.process.exit(136);
     }
 }
 
-// NodeValue - Universal value type matching Roc's NodeValue
+const RocStr = abi.RocStr;
+const RocBox = abi.RocErasedCallable;
+const NodeValue = abi.NodeValue;
 
-// Tag values must match Roc's alphabetical ordering of NodeValue variants:
-// NvBool, NvF64, NvI64, NvList, NvStr, NvUnit
-const NodeValueTag = enum(u8) {
-    bool_val = 0, // NvBool
-    f64_val = 1, // NvF64
-    i64_val = 2, // NvI64
-    list_val = 3, // NvList
-    str_val = 4, // NvStr
-    unit_val = 5, // NvUnit
-};
-
-const NodeValue = extern struct {
-    tag: u8,
-    _padding: [7]u8 = undefined,
-    payload: extern union {
-        i64_val: i64,
-        str_val: RocStr,
-        bool_val: bool,
-        f64_val: f64,
-    },
-
-    fn unit() NodeValue {
-        return .{
-            .tag = @intFromEnum(NodeValueTag.unit_val),
-            .payload = .{ .i64_val = 0 },
-        };
-    }
-
-    fn toI64(self: NodeValue) i64 {
-        return self.payload.i64_val;
-    }
-
-    fn toStr(self: NodeValue) []const u8 {
-        return self.payload.str_val.asSlice();
-    }
-};
+fn nodeValueUnit() NodeValue {
+    return .{
+        .payload = .{ .nv_unit = .{} },
+        .tag = .NvUnit,
+    };
+}
 
 // Simulated DOM
 
@@ -208,20 +196,22 @@ const DomElement = struct {
             .tag = tag,
             .text = null,
             .parent_id = null,
-            .children = .{},
+            .children = .empty,
             .bound_text_signal = null,
             .bound_click_event = null,
         };
     }
 
     fn deinit(self: *DomElement, allocator: std.mem.Allocator) void {
+        allocator.free(self.tag);
+        if (self.text) |text| {
+            allocator.free(text);
+        }
         self.children.deinit(allocator);
     }
 };
 
 // Reactive Graph
-
-const RocBox = *anyopaque;
 
 const NodeKind = union(enum) {
     event_source,
@@ -246,7 +236,7 @@ const GraphNode = struct {
             .id = id,
             .kind = kind,
             .current_value = null,
-            .dependents = .{},
+            .dependents = .empty,
         };
     }
 
@@ -299,10 +289,11 @@ const ParseError = error{
 
 /// Parse test spec from file
 fn parseTestSpecFile(allocator: std.mem.Allocator, file_path: []const u8) ParseError![]SpecCommand {
-    const file = std.fs.cwd().openFile(file_path, .{}) catch return ParseError.FileNotFound;
-    defer file.close();
-
-    const content = file.readToEndAlloc(allocator, 1024 * 1024) catch return ParseError.IoError;
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const content = std.Io.Dir.cwd().readFileAlloc(io, file_path, allocator, .limited(1024 * 1024)) catch |err| switch (err) {
+        error.FileNotFound => return ParseError.FileNotFound,
+        else => return ParseError.IoError,
+    };
     defer allocator.free(content);
 
     return parseTestSpec(allocator, content);
@@ -310,7 +301,7 @@ fn parseTestSpecFile(allocator: std.mem.Allocator, file_path: []const u8) ParseE
 
 /// Parse test spec content
 fn parseTestSpec(allocator: std.mem.Allocator, content: []const u8) ParseError![]SpecCommand {
-    var commands = std.ArrayListUnmanaged(SpecCommand){};
+    var commands: std.ArrayListUnmanaged(SpecCommand) = .empty;
     errdefer commands.deinit(allocator);
 
     var line_num: usize = 0;
@@ -392,27 +383,27 @@ const RocAllocation = struct {
 };
 
 const HostEnv = struct {
-    gpa: std.heap.GeneralPurposeAllocator(.{ .safety = true }),
+    gpa: std.heap.DebugAllocator(.{ .safety = true }),
     test_state: TestState,
-    roc_allocations: std.ArrayListUnmanaged(RocAllocation) = .{},
+    roc_allocations: std.ArrayListUnmanaged(RocAllocation) = .empty,
     alloc_count: usize = 0,
     dealloc_count: usize = 0,
 
     // Simulated DOM
-    dom_elements: std.ArrayListUnmanaged(DomElement) = .{},
+    dom_elements: std.ArrayListUnmanaged(DomElement) = .empty,
     next_elem_id: u64 = 0,
-    tag_counts: std.StringHashMapUnmanaged(usize) = .{}, // Track count per tag for indexing
+    tag_counts: std.StringHashMapUnmanaged(usize) = .empty, // Track count per tag for indexing
 
     // Reactive graph
-    graph_nodes: std.ArrayListUnmanaged(GraphNode) = .{},
+    graph_nodes: std.ArrayListUnmanaged(GraphNode) = .empty,
     next_node_id: u64 = 0,
 
     // RocOps pointer for closure evaluation
-    roc_ops: ?*builtins.host_abi.RocOps = null,
+    roc_ops: ?*abi.RocOps = null,
 
     fn init() HostEnv {
         return HostEnv{
-            .gpa = std.heap.GeneralPurposeAllocator(.{ .safety = true }){},
+            .gpa = std.heap.DebugAllocator(.{ .safety = true }){},
             .test_state = TestState.init(),
         };
     }
@@ -428,6 +419,13 @@ const HostEnv = struct {
         self.tag_counts.deinit(allocator);
 
         // Free graph nodes
+        if (self.roc_ops) |ops| {
+            for (self.graph_nodes.items) |node| {
+                if (node.current_value) |value| {
+                    decrefNodeValue(value, ops);
+                }
+            }
+        }
         for (self.graph_nodes.items) |*node| {
             node.deinit(allocator);
         }
@@ -467,21 +465,38 @@ const HostEnv = struct {
     fn addDependency(self: *HostEnv, source_id: u64, dependent_id: u64) void {
         const allocator = self.gpa.allocator();
         if (source_id < self.graph_nodes.items.len) {
-            self.graph_nodes.items[source_id].dependents.append(allocator, dependent_id) catch {};
+            self.graph_nodes.items[source_id].dependents.append(allocator, dependent_id) catch std.process.exit(1);
         }
     }
 };
 
-// Memory Management (same as fx platform)
+// Current Host Access
 
-fn rocAllocFn(roc_alloc: *builtins.host_abi.RocAlloc, env: *anyopaque) callconv(.c) void {
-    const host: *HostEnv = @ptrCast(@alignCast(env));
+var current_host: ?*HostEnv = null;
+var current_roc_ops: ?*abi.RocOps = null;
+
+fn hostFromOps(ops: *abi.RocOps) *HostEnv {
+    return @ptrCast(@alignCast(ops.env));
+}
+
+fn currentHost() *HostEnv {
+    return current_host orelse @panic("signals host is not initialized");
+}
+
+fn currentRocOps() *abi.RocOps {
+    return current_roc_ops orelse @panic("signals RocOps is not initialized");
+}
+
+// Memory Management
+
+fn rocAllocFn(ops: *abi.RocOps, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+    const host = hostFromOps(ops);
     const allocator = host.gpa.allocator();
 
-    const min_alignment: usize = @max(roc_alloc.alignment, @alignOf(usize));
+    const min_alignment: usize = @max(alignment, @alignOf(usize));
     const align_enum = std.mem.Alignment.fromByteUnits(min_alignment);
-    const size_storage_bytes = @max(roc_alloc.alignment, @alignOf(usize));
-    const total_size = roc_alloc.length + size_storage_bytes;
+    const size_storage_bytes = min_alignment;
+    const total_size = length + size_storage_bytes;
 
     const base_ptr = allocator.rawAlloc(total_size, align_enum, @returnAddress()) orelse {
         std.process.exit(1);
@@ -490,27 +505,27 @@ fn rocAllocFn(roc_alloc: *builtins.host_abi.RocAlloc, env: *anyopaque) callconv(
     const size_ptr: *usize = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes - @sizeOf(usize));
     size_ptr.* = total_size;
 
-    roc_alloc.answer = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes);
-
     host.roc_allocations.append(host.gpa.allocator(), .{
         .ptr = base_ptr,
         .total_size = total_size,
         .alignment = align_enum,
-    }) catch {};
+    }) catch std.process.exit(1);
     host.alloc_count += 1;
+
+    return @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes);
 }
 
-fn rocDeallocFn(roc_dealloc: *builtins.host_abi.RocDealloc, env: *anyopaque) callconv(.c) void {
-    const host: *HostEnv = @ptrCast(@alignCast(env));
+fn rocDeallocFn(ops: *abi.RocOps, ptr: *anyopaque, alignment: usize) callconv(.c) void {
+    const host = hostFromOps(ops);
     const allocator = host.gpa.allocator();
 
-    const min_alignment: usize = @max(roc_dealloc.alignment, @alignOf(usize));
+    const min_alignment: usize = @max(alignment, @alignOf(usize));
     const align_enum = std.mem.Alignment.fromByteUnits(min_alignment);
-    const size_storage_bytes = @max(roc_dealloc.alignment, @alignOf(usize));
-    const size_ptr: *const usize = @ptrFromInt(@intFromPtr(roc_dealloc.ptr) - @sizeOf(usize));
+    const size_storage_bytes = min_alignment;
+    const size_ptr: *const usize = @ptrFromInt(@intFromPtr(ptr) - @sizeOf(usize));
     const total_size = size_ptr.*;
 
-    const base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(roc_dealloc.ptr) - size_storage_bytes);
+    const base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(ptr) - size_storage_bytes);
 
     for (host.roc_allocations.items, 0..) |alloc, i| {
         if (alloc.ptr == base_ptr) {
@@ -524,25 +539,28 @@ fn rocDeallocFn(roc_dealloc: *builtins.host_abi.RocDealloc, env: *anyopaque) cal
     allocator.rawFree(slice, align_enum, @returnAddress());
 }
 
-fn rocReallocFn(roc_realloc: *builtins.host_abi.RocRealloc, env: *anyopaque) callconv(.c) void {
-    const host: *HostEnv = @ptrCast(@alignCast(env));
+fn rocReallocFn(ops: *abi.RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+    const host = hostFromOps(ops);
     const allocator = host.gpa.allocator();
 
-    const min_alignment: usize = @max(roc_realloc.alignment, @alignOf(usize));
+    const min_alignment: usize = @max(alignment, @alignOf(usize));
     const align_enum = std.mem.Alignment.fromByteUnits(min_alignment);
-    const size_storage_bytes = @max(roc_realloc.alignment, @alignOf(usize));
-    const old_size_ptr: *const usize = @ptrFromInt(@intFromPtr(roc_realloc.answer) - @sizeOf(usize));
+    const size_storage_bytes = min_alignment;
+    const old_size_ptr: *const usize = @ptrFromInt(@intFromPtr(ptr) - @sizeOf(usize));
     const old_total_size = old_size_ptr.*;
-    const old_base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(roc_realloc.answer) - size_storage_bytes);
-    const new_total_size = roc_realloc.new_length + size_storage_bytes;
+    const old_base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(ptr) - size_storage_bytes);
+    const old_user_data_size = old_total_size - size_storage_bytes;
+    const new_total_size = new_length + size_storage_bytes;
 
     const old_slice = @as([*]u8, @ptrCast(old_base_ptr))[0..old_total_size];
     const new_ptr = allocator.rawAlloc(new_total_size, align_enum, @returnAddress()) orelse {
         std.process.exit(1);
     };
 
-    const copy_size = @min(old_total_size, new_total_size);
-    @memcpy(new_ptr[0..copy_size], old_slice[0..copy_size]);
+    const new_user_ptr: [*]u8 = @ptrFromInt(@intFromPtr(new_ptr) + size_storage_bytes);
+    const old_user_ptr: [*]const u8 = @ptrCast(ptr);
+    const copy_size = @min(old_user_data_size, new_length);
+    @memcpy(new_user_ptr[0..copy_size], old_user_ptr[0..copy_size]);
 
     for (host.roc_allocations.items, 0..) |alloc, i| {
         if (alloc.ptr == old_base_ptr) {
@@ -554,118 +572,115 @@ fn rocReallocFn(roc_realloc: *builtins.host_abi.RocRealloc, env: *anyopaque) cal
         .ptr = new_ptr,
         .total_size = new_total_size,
         .alignment = align_enum,
-    }) catch {};
+    }) catch std.process.exit(1);
 
     allocator.rawFree(old_slice, align_enum, @returnAddress());
 
     const new_size_ptr: *usize = @ptrFromInt(@intFromPtr(new_ptr) + size_storage_bytes - @sizeOf(usize));
     new_size_ptr.* = new_total_size;
-    roc_realloc.answer = @ptrFromInt(@intFromPtr(new_ptr) + size_storage_bytes);
+    return new_user_ptr;
 }
 
-fn rocDbgFn(roc_dbg: *const builtins.host_abi.RocDbg, env: *anyopaque) callconv(.c) void {
-    _ = env;
-    const message = roc_dbg.utf8_bytes[0..roc_dbg.len];
+fn rocDbgFn(ops: *abi.RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
+    _ = ops;
+    const message = bytes[0..len];
     std.debug.print("ROC DBG: {s}\n", .{message});
 }
 
-fn rocExpectFailedFn(roc_expect: *const builtins.host_abi.RocExpectFailed, env: *anyopaque) callconv(.c) void {
-    _ = env;
-    const source_bytes = roc_expect.utf8_bytes[0..roc_expect.len];
+fn rocExpectFailedFn(ops: *abi.RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
+    _ = ops;
+    const source_bytes = bytes[0..len];
     const trimmed = std.mem.trim(u8, source_bytes, " \t\n\r");
     std.debug.print("Expect failed: {s}\n", .{trimmed});
 }
 
-fn rocCrashedFn(roc_crashed: *const builtins.host_abi.RocCrashed, env: *anyopaque) callconv(.c) noreturn {
-    _ = env;
-    const message = roc_crashed.utf8_bytes[0..roc_crashed.len];
-    const stderr: std.fs.File = .stderr();
-    stderr.writeAll("\n\x1b[31mRoc crashed:\x1b[0m ") catch {};
-    stderr.writeAll(message) catch {};
-    stderr.writeAll("\n") catch {};
+fn rocCrashedFn(ops: *abi.RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
+    _ = ops;
+    const message = bytes[0..len];
+    writeStderr("\n\x1b[31mRoc crashed:\x1b[0m ");
+    writeStderr(message);
+    writeStderr("\n");
     std.process.exit(1);
 }
 
-// Roc Entrypoints
+fn hostAlloc(length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+    return rocAllocFn(currentRocOps(), length, alignment);
+}
 
-extern fn roc__main(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
-extern fn roc__call_transform(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: *anyopaque) callconv(.c) void;
-extern fn roc__call_step(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: *anyopaque) callconv(.c) void;
+fn hostDealloc(ptr: *anyopaque, alignment: usize) callconv(.c) void {
+    rocDeallocFn(currentRocOps(), ptr, alignment);
+}
 
-const RocStr = builtins.str.RocStr;
+fn hostRealloc(ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+    return rocReallocFn(currentRocOps(), ptr, new_length, alignment);
+}
+
+fn hostDbg(bytes: [*]const u8, len: usize) callconv(.c) void {
+    rocDbgFn(currentRocOps(), bytes, len);
+}
+
+fn hostExpectFailed(bytes: [*]const u8, len: usize) callconv(.c) void {
+    rocExpectFailedFn(currentRocOps(), bytes, len);
+}
+
+fn hostCrashed(bytes: [*]const u8, len: usize) callconv(.c) void {
+    rocCrashedFn(currentRocOps(), bytes, len);
+}
 
 // Hosted Effects
 
-/// Host.append_child! (alphabetically first)
-fn hostedAppendChild(ops_opaque: *anyopaque, ret_ptr: *anyopaque, args_ptr: *anyopaque) callconv(.c) void {
-    _ = ret_ptr;
-    const ops: *builtins.host_abi.RocOps = @ptrCast(@alignCast(ops_opaque));
-    const Args = extern struct { parent_id: u64, child_id: u64 };
-    const args: *Args = @ptrCast(@alignCast(args_ptr));
-    const host: *HostEnv = @ptrCast(@alignCast(ops.env));
+/// Host.append_child!
+fn hostedAppendChild(parent_id: u64, child_id: u64) callconv(.c) void {
+    const host = currentHost();
     {
-        const stderr_dbg: std.fs.File = .stderr();
         var buf: [128]u8 = undefined;
-        const msg = std.fmt.bufPrint(&buf, "[HOST] append_child! parent={d} child={d}\n", .{ args.parent_id, args.child_id }) catch "[HOST] append_child!\n";
-        stderr_dbg.writeAll(msg) catch {};
+        const msg = std.fmt.bufPrint(&buf, "[HOST] append_child! parent={d} child={d}\n", .{ parent_id, child_id }) catch "[HOST] append_child!\n";
+        traceStderr(msg);
     }
 
-    if (args.parent_id < host.dom_elements.items.len and args.child_id < host.dom_elements.items.len) {
-        host.dom_elements.items[args.parent_id].children.append(host.gpa.allocator(), args.child_id) catch {};
-        host.dom_elements.items[args.child_id].parent_id = args.parent_id;
+    if (parent_id < host.dom_elements.items.len and child_id < host.dom_elements.items.len) {
+        host.dom_elements.items[parent_id].children.append(host.gpa.allocator(), child_id) catch std.process.exit(1);
+        host.dom_elements.items[child_id].parent_id = parent_id;
     }
 }
 
 /// Host.bind_click!
-fn hostedBindClick(ops_opaque: *anyopaque, ret_ptr: *anyopaque, args_ptr: *anyopaque) callconv(.c) void {
-    _ = ret_ptr;
-    const ops: *builtins.host_abi.RocOps = @ptrCast(@alignCast(ops_opaque));
-    const Args = extern struct { elem_id: u64, event_node_id: u64 };
-    const args: *Args = @ptrCast(@alignCast(args_ptr));
-    const host: *HostEnv = @ptrCast(@alignCast(ops.env));
+fn hostedBindClick(elem_id: u64, event_node_id: u64) callconv(.c) void {
+    const host = currentHost();
 
-    if (args.elem_id < host.dom_elements.items.len) {
-        host.dom_elements.items[args.elem_id].bound_click_event = args.event_node_id;
+    if (elem_id < host.dom_elements.items.len) {
+        host.dom_elements.items[elem_id].bound_click_event = event_node_id;
     }
 }
 
 /// Host.bind_text!
-fn hostedBindText(ops_opaque: *anyopaque, ret_ptr: *anyopaque, args_ptr: *anyopaque) callconv(.c) void {
-    _ = ret_ptr;
-    const ops: *builtins.host_abi.RocOps = @ptrCast(@alignCast(ops_opaque));
-    const Args = extern struct { elem_id: u64, signal_node_id: u64 };
-    const args: *Args = @ptrCast(@alignCast(args_ptr));
-    const host: *HostEnv = @ptrCast(@alignCast(ops.env));
+fn hostedBindText(elem_id: u64, signal_node_id: u64) callconv(.c) void {
+    const host = currentHost();
 
-    if (args.elem_id < host.dom_elements.items.len) {
-        host.dom_elements.items[args.elem_id].bound_text_signal = args.signal_node_id;
-        // Update text from signal's current value
-        updateElementText(host, args.elem_id);
+    if (elem_id < host.dom_elements.items.len) {
+        host.dom_elements.items[elem_id].bound_text_signal = signal_node_id;
+        updateElementText(host, elem_id);
     }
 }
 
 /// Host.create_element!
-fn hostedCreateElement(ops_opaque: *anyopaque, ret_ptr: *anyopaque, args_ptr: *anyopaque) callconv(.c) void {
-    const ops: *builtins.host_abi.RocOps = @ptrCast(@alignCast(ops_opaque));
-    const Args = extern struct { tag: RocStr };
-    const args: *Args = @ptrCast(@alignCast(args_ptr));
-    const host: *HostEnv = @ptrCast(@alignCast(ops.env));
-    const result: *u64 = @ptrCast(@alignCast(ret_ptr));
+fn hostedCreateElement(ops: *abi.RocOps, tag: RocStr) callconv(.c) u64 {
+    const host = hostFromOps(ops);
 
-    const tag_slice = args.tag.asSlice();
-    {
-        const stderr_dbg: std.fs.File = .stderr();
-        stderr_dbg.writeAll("[HOST] create_element! tag=\"") catch {};
-        stderr_dbg.writeAll(tag_slice) catch {};
-        stderr_dbg.writeAll("\"\n") catch {};
+    const tag_slice = tag.asSlice();
+    if (traceEnabled()) {
+        traceStderr("[HOST] create_element! tag=\"");
+        traceStderr(tag_slice);
+        traceStderr("\"\n");
     }
     const allocator = host.gpa.allocator();
 
     // Duplicate tag string for storage
     const tag_copy = allocator.dupe(u8, tag_slice) catch {
-        result.* = 0;
-        return;
+        tag.decref(ops);
+        std.process.exit(1);
     };
+    tag.decref(ops);
 
     const elem_id = host.next_elem_id;
     host.next_elem_id += 1;
@@ -673,338 +688,351 @@ fn hostedCreateElement(ops_opaque: *anyopaque, ret_ptr: *anyopaque, args_ptr: *a
     const elem = DomElement.init(elem_id, tag_copy);
     host.dom_elements.append(allocator, elem) catch {
         allocator.free(tag_copy);
-        result.* = 0;
-        return;
+        std.process.exit(1);
     };
 
-    result.* = elem_id;
+    return elem_id;
 }
 
 /// Host.create_event_filter!
-fn hostedCreateEventFilter(ops_opaque: *anyopaque, ret_ptr: *anyopaque, args_ptr: *anyopaque) callconv(.c) void {
-    const ops: *builtins.host_abi.RocOps = @ptrCast(@alignCast(ops_opaque));
-    const Args = extern struct { source_id: u64, predicate: RocBox };
-    const args: *Args = @ptrCast(@alignCast(args_ptr));
-    const host: *HostEnv = @ptrCast(@alignCast(ops.env));
-    const result: *u64 = @ptrCast(@alignCast(ret_ptr));
+fn hostedCreateEventFilter(ops: *abi.RocOps, source_id: u64, predicate: RocBox) callconv(.c) u64 {
+    const host = hostFromOps(ops);
+    traceStderr("[HOST] create_event_filter!\n");
 
     const node_id = host.next_node_id;
     host.next_node_id += 1;
 
     const node = GraphNode.init(node_id, .{ .event_filter = .{
-        .source = args.source_id,
-        .predicate = args.predicate,
+        .source = source_id,
+        .predicate = predicate,
     } });
     host.graph_nodes.append(host.gpa.allocator(), node) catch {
-        result.* = 0;
-        return;
+        std.process.exit(1);
     };
 
-    host.addDependency(args.source_id, node_id);
-    result.* = node_id;
+    host.addDependency(source_id, node_id);
+    return node_id;
 }
 
 /// Host.create_event_map!
-fn hostedCreateEventMap(ops_opaque: *anyopaque, ret_ptr: *anyopaque, args_ptr: *anyopaque) callconv(.c) void {
-    const ops: *builtins.host_abi.RocOps = @ptrCast(@alignCast(ops_opaque));
-    const Args = extern struct { source_id: u64, transform: RocBox };
-    const args: *Args = @ptrCast(@alignCast(args_ptr));
-    const host: *HostEnv = @ptrCast(@alignCast(ops.env));
-    const result: *u64 = @ptrCast(@alignCast(ret_ptr));
+fn hostedCreateEventMap(ops: *abi.RocOps, source_id: u64, transform: RocBox) callconv(.c) u64 {
+    const host = hostFromOps(ops);
+    traceStderr("[HOST] create_event_map!\n");
 
     const node_id = host.next_node_id;
     host.next_node_id += 1;
 
-    const node = GraphNode.init( node_id, .{ .event_map = .{
-        .source = args.source_id,
-        .transform = args.transform,
+    const node = GraphNode.init(node_id, .{ .event_map = .{
+        .source = source_id,
+        .transform = transform,
     } });
     host.graph_nodes.append(host.gpa.allocator(), node) catch {
-        result.* = 0;
-        return;
+        std.process.exit(1);
     };
 
-    host.addDependency(args.source_id, node_id);
-    result.* = node_id;
+    host.addDependency(source_id, node_id);
+    return node_id;
 }
 
 /// Host.create_event_merge!
-fn hostedCreateEventMerge(ops_opaque: *anyopaque, ret_ptr: *anyopaque, args_ptr: *anyopaque) callconv(.c) void {
-    const ops: *builtins.host_abi.RocOps = @ptrCast(@alignCast(ops_opaque));
-    const Args = extern struct { left_id: u64, right_id: u64 };
-    const args: *Args = @ptrCast(@alignCast(args_ptr));
-    const host: *HostEnv = @ptrCast(@alignCast(ops.env));
-    const result: *u64 = @ptrCast(@alignCast(ret_ptr));
+fn hostedCreateEventMerge(left_id: u64, right_id: u64) callconv(.c) u64 {
+    const host = currentHost();
+    traceStderr("[HOST] create_event_merge!\n");
 
     const node_id = host.next_node_id;
     host.next_node_id += 1;
 
-    const node = GraphNode.init( node_id, .{ .event_merge = .{
-        .left = args.left_id,
-        .right = args.right_id,
+    const node = GraphNode.init(node_id, .{ .event_merge = .{
+        .left = left_id,
+        .right = right_id,
     } });
     host.graph_nodes.append(host.gpa.allocator(), node) catch {
-        result.* = 0;
-        return;
+        std.process.exit(1);
     };
 
-    host.addDependency(args.left_id, node_id);
-    host.addDependency(args.right_id, node_id);
-    result.* = node_id;
+    host.addDependency(left_id, node_id);
+    host.addDependency(right_id, node_id);
+    return node_id;
 }
 
 /// Host.create_event_source!
-fn hostedCreateEventSource(ops_opaque: *anyopaque, ret_ptr: *anyopaque, args_ptr: *anyopaque) callconv(.c) void {
-    _ = args_ptr;
-    const ops: *builtins.host_abi.RocOps = @ptrCast(@alignCast(ops_opaque));
-    const host: *HostEnv = @ptrCast(@alignCast(ops.env));
-    const result: *u64 = @ptrCast(@alignCast(ret_ptr));
+fn hostedCreateEventSource() callconv(.c) u64 {
+    const host = currentHost();
+    traceStderr("[HOST] create_event_source!\n");
 
     const node_id = host.next_node_id;
     host.next_node_id += 1;
 
-    const node = GraphNode.init( node_id, .event_source);
+    const node = GraphNode.init(node_id, .event_source);
     host.graph_nodes.append(host.gpa.allocator(), node) catch {
-        result.* = 0;
-        return;
+        std.process.exit(1);
     };
 
-    result.* = node_id;
+    return node_id;
 }
 
 /// Host.create_root!
-fn hostedCreateRoot(ops_opaque: *anyopaque, ret_ptr: *anyopaque, args_ptr: *anyopaque) callconv(.c) void {
-    _ = args_ptr;
-    const ops: *builtins.host_abi.RocOps = @ptrCast(@alignCast(ops_opaque));
-    const host: *HostEnv = @ptrCast(@alignCast(ops.env));
-    const result: *u64 = @ptrCast(@alignCast(ret_ptr));
-    const stderr_dbg: std.fs.File = .stderr();
-    stderr_dbg.writeAll("[HOST] create_root!\n") catch {};
+fn hostedCreateRoot() callconv(.c) u64 {
+    const host = currentHost();
+    traceStderr("[HOST] create_root!\n");
 
     const elem_id = host.next_elem_id;
     host.next_elem_id += 1;
 
     const allocator = host.gpa.allocator();
     const root_tag = allocator.dupe(u8, "root") catch {
-        result.* = 0;
-        return;
+        std.process.exit(1);
     };
 
     const elem = DomElement.init(elem_id, root_tag);
     host.dom_elements.append(allocator, elem) catch {
         allocator.free(root_tag);
-        result.* = 0;
-        return;
+        std.process.exit(1);
     };
 
-    result.* = elem_id;
+    return elem_id;
 }
 
 /// Host.create_signal_const!
-fn hostedCreateSignalConst(ops_opaque: *anyopaque, ret_ptr: *anyopaque, args_ptr: *anyopaque) callconv(.c) void {
-    const ops: *builtins.host_abi.RocOps = @ptrCast(@alignCast(ops_opaque));
-    const Args = extern struct { value: NodeValue };
-    const args: *Args = @ptrCast(@alignCast(args_ptr));
-    const host: *HostEnv = @ptrCast(@alignCast(ops.env));
-    const result: *u64 = @ptrCast(@alignCast(ret_ptr));
+fn hostedCreateSignalConst(ops: *abi.RocOps, value: NodeValue) callconv(.c) u64 {
+    const host = hostFromOps(ops);
+    traceStderr("[HOST] create_signal_const!\n");
 
     const node_id = host.next_node_id;
     host.next_node_id += 1;
 
-    var node = GraphNode.init( node_id, .signal_const);
-    node.current_value = args.value;
+    var node = GraphNode.init(node_id, .signal_const);
+    node.current_value = value;
     host.graph_nodes.append(host.gpa.allocator(), node) catch {
-        result.* = 0;
-        return;
+        std.process.exit(1);
     };
 
-    result.* = node_id;
+    return node_id;
 }
 
 /// Host.create_signal_fold!
-fn hostedCreateSignalFold(ops_opaque: *anyopaque, ret_ptr: *anyopaque, args_ptr: *anyopaque) callconv(.c) void {
-    const ops: *builtins.host_abi.RocOps = @ptrCast(@alignCast(ops_opaque));
-    const Args = extern struct { initial: NodeValue, event_id: u64, step: RocBox };
-    const args: *Args = @ptrCast(@alignCast(args_ptr));
-    const host: *HostEnv = @ptrCast(@alignCast(ops.env));
-    const result: *u64 = @ptrCast(@alignCast(ret_ptr));
+fn hostedCreateSignalFold(ops: *abi.RocOps, initial: NodeValue, event_id: u64, step: RocBox) callconv(.c) u64 {
+    const host = hostFromOps(ops);
+    traceStderr("[HOST] create_signal_fold!\n");
 
     const node_id = host.next_node_id;
     host.next_node_id += 1;
 
-    var node = GraphNode.init( node_id, .{ .signal_fold = .{
-        .event = args.event_id,
-        .step = args.step,
+    var node = GraphNode.init(node_id, .{ .signal_fold = .{
+        .event = event_id,
+        .step = step,
     } });
-    node.current_value = args.initial;
+    node.current_value = initial;
     host.graph_nodes.append(host.gpa.allocator(), node) catch {
-        result.* = 0;
-        return;
+        std.process.exit(1);
     };
 
-    host.addDependency(args.event_id, node_id);
-    result.* = node_id;
+    host.addDependency(event_id, node_id);
+    return node_id;
 }
 
 /// Host.create_signal_hold!
-fn hostedCreateSignalHold(ops_opaque: *anyopaque, ret_ptr: *anyopaque, args_ptr: *anyopaque) callconv(.c) void {
-    const ops: *builtins.host_abi.RocOps = @ptrCast(@alignCast(ops_opaque));
-    const Args = extern struct { initial: NodeValue, event_id: u64 };
-    const args: *Args = @ptrCast(@alignCast(args_ptr));
-    const host: *HostEnv = @ptrCast(@alignCast(ops.env));
-    const result: *u64 = @ptrCast(@alignCast(ret_ptr));
+fn hostedCreateSignalHold(ops: *abi.RocOps, initial: NodeValue, event_id: u64) callconv(.c) u64 {
+    const host = hostFromOps(ops);
+    traceStderr("[HOST] create_signal_hold!\n");
 
     const node_id = host.next_node_id;
     host.next_node_id += 1;
 
-    var node = GraphNode.init( node_id, .{ .signal_hold = .{
-        .event = args.event_id,
+    var node = GraphNode.init(node_id, .{ .signal_hold = .{
+        .event = event_id,
     } });
-    node.current_value = args.initial;
+    node.current_value = initial;
     host.graph_nodes.append(host.gpa.allocator(), node) catch {
-        result.* = 0;
-        return;
+        std.process.exit(1);
     };
 
-    host.addDependency(args.event_id, node_id);
-    result.* = node_id;
+    host.addDependency(event_id, node_id);
+    return node_id;
 }
 
 /// Host.create_signal_map!
-fn hostedCreateSignalMap(ops_opaque: *anyopaque, ret_ptr: *anyopaque, args_ptr: *anyopaque) callconv(.c) void {
-    const ops: *builtins.host_abi.RocOps = @ptrCast(@alignCast(ops_opaque));
-    const Args = extern struct { source_id: u64, transform: RocBox };
-    const args: *Args = @ptrCast(@alignCast(args_ptr));
-    const host: *HostEnv = @ptrCast(@alignCast(ops.env));
-    const result: *u64 = @ptrCast(@alignCast(ret_ptr));
+fn hostedCreateSignalMap(ops: *abi.RocOps, source_id: u64, transform: RocBox) callconv(.c) u64 {
+    const host = hostFromOps(ops);
+    traceStderr("[HOST] create_signal_map!\n");
 
     const node_id = host.next_node_id;
     host.next_node_id += 1;
 
-    var node = GraphNode.init( node_id, .{ .signal_map = .{
-        .source = args.source_id,
-        .transform = args.transform,
+    var node = GraphNode.init(node_id, .{ .signal_map = .{
+        .source = source_id,
+        .transform = transform,
     } });
 
     // Compute initial value from source
-    if (args.source_id < host.graph_nodes.items.len) {
-        if (host.graph_nodes.items[args.source_id].current_value) |source_val| {
-            const result_val = callRocTransform(host, args.transform, source_val);
+    if (source_id < host.graph_nodes.items.len) {
+        if (host.graph_nodes.items[source_id].current_value) |source_val| {
+            traceStderr("[HOST] call initial signal map transform\n");
+            const result_val = callRocTransform(host, transform, source_val);
+            traceStderr("[HOST] initial signal map transform returned\n");
             node.current_value = result_val;
         }
     }
 
     host.graph_nodes.append(host.gpa.allocator(), node) catch {
-        result.* = 0;
-        return;
+        std.process.exit(1);
     };
 
-    host.addDependency(args.source_id, node_id);
-    result.* = node_id;
+    host.addDependency(source_id, node_id);
+    return node_id;
 }
 
 /// Host.create_signal_zip_with!
-fn hostedCreateSignalZipWith(ops_opaque: *anyopaque, ret_ptr: *anyopaque, args_ptr: *anyopaque) callconv(.c) void {
-    const ops: *builtins.host_abi.RocOps = @ptrCast(@alignCast(ops_opaque));
-    const Args = extern struct { source_id: u64, event_id: u64, combine: RocBox };
-    const args: *Args = @ptrCast(@alignCast(args_ptr));
-    const host: *HostEnv = @ptrCast(@alignCast(ops.env));
-    const result: *u64 = @ptrCast(@alignCast(ret_ptr));
+fn hostedCreateSignalZipWith(ops: *abi.RocOps, source_id: u64, event_id: u64, combine: RocBox) callconv(.c) u64 {
+    const host = hostFromOps(ops);
+    traceStderr("[HOST] create_signal_zip_with!\n");
 
     const node_id = host.next_node_id;
     host.next_node_id += 1;
 
-    var node = GraphNode.init( node_id, .{ .signal_zip_with = .{
-        .source = args.source_id,
-        .event = args.event_id,
-        .combine = args.combine,
+    var node = GraphNode.init(node_id, .{ .signal_zip_with = .{
+        .source = source_id,
+        .event = event_id,
+        .combine = combine,
     } });
 
     // Use source signal's initial value
-    if (args.source_id < host.graph_nodes.items.len) {
-        node.current_value = host.graph_nodes.items[args.source_id].current_value;
+    if (source_id < host.graph_nodes.items.len) {
+        if (host.graph_nodes.items[source_id].current_value) |value| {
+            increfNodeValue(value);
+            node.current_value = value;
+        }
     }
 
     host.graph_nodes.append(host.gpa.allocator(), node) catch {
-        result.* = 0;
-        return;
+        std.process.exit(1);
     };
 
-    host.addDependency(args.source_id, node_id);
-    host.addDependency(args.event_id, node_id);
-    result.* = node_id;
+    host.addDependency(source_id, node_id);
+    host.addDependency(event_id, node_id);
+    return node_id;
 }
 
 /// Host.set_text!
-fn hostedSetText(ops_opaque: *anyopaque, ret_ptr: *anyopaque, args_ptr: *anyopaque) callconv(.c) void {
-    _ = ret_ptr;
-    const ops: *builtins.host_abi.RocOps = @ptrCast(@alignCast(ops_opaque));
-    const Args = extern struct { elem_id: u64, text: RocStr };
-    const args: *Args = @ptrCast(@alignCast(args_ptr));
-    const host: *HostEnv = @ptrCast(@alignCast(ops.env));
+fn hostedSetText(ops: *abi.RocOps, elem_id: u64, text: RocStr) callconv(.c) void {
+    const host = hostFromOps(ops);
     {
-        const stderr_dbg: std.fs.File = .stderr();
         var buf: [256]u8 = undefined;
-        const msg = std.fmt.bufPrint(&buf, "[HOST] set_text! elem={d} text=\"{s}\"\n", .{ args.elem_id, args.text.asSlice() }) catch "[HOST] set_text!\n";
-        stderr_dbg.writeAll(msg) catch {};
+        const msg = std.fmt.bufPrint(&buf, "[HOST] set_text! elem={d} text=\"{s}\"\n", .{ elem_id, text.asSlice() }) catch "[HOST] set_text!\n";
+        traceStderr(msg);
     }
 
-    if (args.elem_id < host.dom_elements.items.len) {
+    if (elem_id < host.dom_elements.items.len) {
         const allocator = host.gpa.allocator();
-        const text_slice = args.text.asSlice();
+        const text_slice = text.asSlice();
+        const text_copy = allocator.dupe(u8, text_slice) catch {
+            text.decref(ops);
+            std.process.exit(1);
+        };
+        text.decref(ops);
 
         // Free old text if any
-        if (host.dom_elements.items[args.elem_id].text) |old_text| {
+        if (host.dom_elements.items[elem_id].text) |old_text| {
             allocator.free(old_text);
         }
 
-        // Duplicate new text
-        const text_copy = allocator.dupe(u8, text_slice) catch return;
-        host.dom_elements.items[args.elem_id].text = text_copy;
+        host.dom_elements.items[elem_id].text = text_copy;
+    } else {
+        text.decref(ops);
     }
 }
 
-// Array of hosted function pointers (MUST be alphabetically sorted by fully-qualified name)
-const hosted_function_ptrs = [_]builtins.host_abi.HostedFn{
-    hostedAppendChild, // Host.append_child!
-    hostedBindClick, // Host.bind_click!
-    hostedBindText, // Host.bind_text!
-    hostedCreateElement, // Host.create_element!
-    hostedCreateEventFilter, // Host.create_event_filter!
-    hostedCreateEventMap, // Host.create_event_map!
-    hostedCreateEventMerge, // Host.create_event_merge!
-    hostedCreateEventSource, // Host.create_event_source!
-    hostedCreateRoot, // Host.create_root!
-    hostedCreateSignalConst, // Host.create_signal_const!
-    hostedCreateSignalFold, // Host.create_signal_fold!
-    hostedCreateSignalHold, // Host.create_signal_hold!
-    hostedCreateSignalMap, // Host.create_signal_map!
-    hostedCreateSignalZipWith, // Host.create_signal_zip_with!
-    hostedSetText, // Host.set_text!
-};
+fn hostCreateElement(tag: RocStr) callconv(.c) u64 {
+    return hostedCreateElement(currentRocOps(), tag);
+}
+
+fn hostCreateEventFilter(source_id: u64, predicate: RocBox) callconv(.c) u64 {
+    return hostedCreateEventFilter(currentRocOps(), source_id, predicate);
+}
+
+fn hostCreateEventMap(source_id: u64, transform: RocBox) callconv(.c) u64 {
+    return hostedCreateEventMap(currentRocOps(), source_id, transform);
+}
+
+fn hostCreateSignalConst(value: NodeValue) callconv(.c) u64 {
+    return hostedCreateSignalConst(currentRocOps(), value);
+}
+
+fn hostCreateSignalFold(initial: NodeValue, event_id: u64, step: RocBox) callconv(.c) u64 {
+    return hostedCreateSignalFold(currentRocOps(), initial, event_id, step);
+}
+
+fn hostCreateSignalHold(initial: NodeValue, event_id: u64) callconv(.c) u64 {
+    return hostedCreateSignalHold(currentRocOps(), initial, event_id);
+}
+
+fn hostCreateSignalMap(source_id: u64, transform: RocBox) callconv(.c) u64 {
+    return hostedCreateSignalMap(currentRocOps(), source_id, transform);
+}
+
+fn hostCreateSignalZipWith(source_id: u64, event_id: u64, combine: RocBox) callconv(.c) u64 {
+    return hostedCreateSignalZipWith(currentRocOps(), source_id, event_id, combine);
+}
+
+fn hostSetText(elem_id: u64, text: RocStr) callconv(.c) void {
+    hostedSetText(currentRocOps(), elem_id, text);
+}
 
 // Reactive Graph Propagation
 
-fn callRocTransform(host: *HostEnv, transform: RocBox, input: NodeValue) NodeValue {
-    if (host.roc_ops) |ops| {
-        const Args = extern struct { boxed_fn: RocBox, input: NodeValue };
-        var args = Args{ .boxed_fn = transform, .input = input };
-        var result: NodeValue = undefined;
-        roc__call_transform(ops, @ptrCast(&result), @ptrCast(&args));
-        return result;
+fn increfNodeValue(value: NodeValue) void {
+    switch (value.tag) {
+        .NvStr => value.payload.nv_str.incref(1),
+        .NvList => value.payload.nv_list.incref(1),
+        else => {},
     }
-    return NodeValue.unit();
+}
+
+fn decrefNodeValue(value: NodeValue, ops: *abi.RocOps) void {
+    switch (value.tag) {
+        .NvStr => value.payload.nv_str.decref(ops),
+        .NvList => value.payload.nv_list.decref(ops),
+        else => {},
+    }
+}
+
+fn setCurrentValue(host: *HostEnv, node_id: u64, value: ?NodeValue) void {
+    if (node_id >= host.graph_nodes.items.len) return;
+    const ops = host.roc_ops orelse @panic("RocOps unavailable while updating signals");
+    if (host.graph_nodes.items[node_id].current_value) |old_value| {
+        decrefNodeValue(old_value, ops);
+    }
+    host.graph_nodes.items[node_id].current_value = value;
+}
+
+fn callRocTransform(host: *HostEnv, transform: RocBox, input: NodeValue) NodeValue {
+    const ops = host.roc_ops orelse @panic("RocOps unavailable while evaluating transform");
+    var result: NodeValue = undefined;
+    var input_arg = input;
+    const payload = abi.rocErasedCallablePayloadPtr(transform);
+    payload.callable_fn_ptr(ops, @ptrCast(&result), @ptrCast(&input_arg), abi.rocErasedCallableCapturePtr(transform));
+    return result;
 }
 
 fn callRocStep(host: *HostEnv, step: RocBox, acc: NodeValue, event_val: NodeValue) NodeValue {
-    if (host.roc_ops) |ops| {
-        const Args = extern struct { boxed_fn: RocBox, acc: NodeValue, event: NodeValue };
-        var args = Args{ .boxed_fn = step, .acc = acc, .event = event_val };
-        var result: NodeValue = undefined;
-        roc__call_step(ops, @ptrCast(&result), @ptrCast(&args));
-        return result;
-    }
-    return acc;
+    const ops = host.roc_ops orelse @panic("RocOps unavailable while evaluating step");
+    var args = extern struct {
+        _0: NodeValue,
+        _1: NodeValue,
+    }{ ._0 = acc, ._1 = event_val };
+    var result: NodeValue = undefined;
+    const payload = abi.rocErasedCallablePayloadPtr(step);
+    payload.callable_fn_ptr(ops, @ptrCast(&result), @ptrCast(&args), abi.rocErasedCallableCapturePtr(step));
+    return result;
+}
+
+fn callRocPredicate(host: *HostEnv, predicate: RocBox, input: NodeValue) bool {
+    const ops = host.roc_ops orelse @panic("RocOps unavailable while evaluating predicate");
+    var input_arg = input;
+    var result: bool = undefined;
+    const payload = abi.rocErasedCallablePayloadPtr(predicate);
+    payload.callable_fn_ptr(ops, @ptrCast(&result), @ptrCast(&input_arg), abi.rocErasedCallableCapturePtr(predicate));
+    return result;
 }
 
 fn fireEvent(host: *HostEnv, node_id: u64, value: NodeValue) void {
@@ -1014,20 +1042,20 @@ fn fireEvent(host: *HostEnv, node_id: u64, value: NodeValue) void {
 
     // Clear all event node values to prevent stale values from previous firings
     // being picked up by event_merge nodes
-    for (host.graph_nodes.items) |*n| {
+    for (host.graph_nodes.items, 0..) |*n, i| {
         switch (n.kind) {
             .event_source, .event_map, .event_filter, .event_merge => {
-                n.current_value = null;
+                setCurrentValue(host, @intCast(i), null);
             },
             else => {},
         }
     }
 
     // Set the event source value
-    host.graph_nodes.items[node_id].current_value = value;
+    setCurrentValue(host, node_id, value);
 
     // Collect nodes to evaluate in dependency order
-    var to_evaluate = std.ArrayListUnmanaged(u64){};
+    var to_evaluate: std.ArrayListUnmanaged(u64) = .empty;
     defer to_evaluate.deinit(allocator);
 
     collectDependents(host, node_id, &to_evaluate, allocator);
@@ -1055,7 +1083,7 @@ fn collectDependents(host: *HostEnv, node_id: u64, out: *std.ArrayListUnmanaged(
             }
         }
         if (!found) {
-            out.append(allocator, dep_id) catch {};
+            out.append(allocator, dep_id) catch std.process.exit(1);
             collectDependents(host, dep_id, out, allocator);
         }
     }
@@ -1072,35 +1100,43 @@ fn evaluateNode(host: *HostEnv, node_id: u64) void {
         .event_map => |data| {
             if (data.source < host.graph_nodes.items.len) {
                 if (host.graph_nodes.items[data.source].current_value) |input| {
-                    node.current_value = callRocTransform(host, data.transform, input);
+                    setCurrentValue(host, node_id, callRocTransform(host, data.transform, input));
                 }
             }
         },
 
         .event_merge => |data| {
-            // Pass through whichever input fired
-            // For simplicity, check left first
             if (data.left < host.graph_nodes.items.len) {
                 if (host.graph_nodes.items[data.left].current_value) |val| {
-                    node.current_value = val;
+                    increfNodeValue(val);
+                    setCurrentValue(host, node_id, val);
                 }
             }
             if (data.right < host.graph_nodes.items.len) {
                 if (host.graph_nodes.items[data.right].current_value) |val| {
-                    node.current_value = val;
+                    increfNodeValue(val);
+                    setCurrentValue(host, node_id, val);
                 }
             }
         },
 
         .event_filter => |data| {
-            // TODO: implement predicate call
-            _ = data;
+            if (data.source < host.graph_nodes.items.len) {
+                if (host.graph_nodes.items[data.source].current_value) |input| {
+                    if (callRocPredicate(host, data.predicate, input)) {
+                        increfNodeValue(input);
+                        setCurrentValue(host, node_id, input);
+                    } else {
+                        setCurrentValue(host, node_id, null);
+                    }
+                }
+            }
         },
 
         .signal_map => |data| {
             if (data.source < host.graph_nodes.items.len) {
                 if (host.graph_nodes.items[data.source].current_value) |input| {
-                    node.current_value = callRocTransform(host, data.transform, input);
+                    setCurrentValue(host, node_id, callRocTransform(host, data.transform, input));
                 }
             }
         },
@@ -1108,7 +1144,8 @@ fn evaluateNode(host: *HostEnv, node_id: u64) void {
         .signal_hold => |data| {
             if (data.event < host.graph_nodes.items.len) {
                 if (host.graph_nodes.items[data.event].current_value) |val| {
-                    node.current_value = val;
+                    increfNodeValue(val);
+                    setCurrentValue(host, node_id, val);
                 }
             }
         },
@@ -1117,7 +1154,7 @@ fn evaluateNode(host: *HostEnv, node_id: u64) void {
             if (data.event < host.graph_nodes.items.len) {
                 if (host.graph_nodes.items[data.event].current_value) |event_val| {
                     if (node.current_value) |acc| {
-                        node.current_value = callRocStep(host, data.step, acc, event_val);
+                        setCurrentValue(host, node_id, callRocStep(host, data.step, acc, event_val));
                     }
                 }
             }
@@ -1127,7 +1164,7 @@ fn evaluateNode(host: *HostEnv, node_id: u64) void {
             if (data.source < host.graph_nodes.items.len and data.event < host.graph_nodes.items.len) {
                 if (host.graph_nodes.items[data.source].current_value) |signal_val| {
                     if (host.graph_nodes.items[data.event].current_value) |event_val| {
-                        node.current_value = callRocStep(host, data.combine, signal_val, event_val);
+                        setCurrentValue(host, node_id, callRocStep(host, data.combine, signal_val, event_val));
                     }
                 }
             }
@@ -1144,19 +1181,25 @@ fn updateElementText(host: *HostEnv, elem_id: u64) void {
             if (host.graph_nodes.items[signal_id].current_value) |val| {
                 const allocator = host.gpa.allocator();
 
-                // Free old text
-                if (elem.text) |old_text| {
-                    allocator.free(old_text);
-                }
-
-                // Get string representation
-                if (val.tag == @intFromEnum(NodeValueTag.str_val)) {
-                    const text = val.toStr();
-                    elem.text = allocator.dupe(u8, text) catch null;
-                } else if (val.tag == @intFromEnum(NodeValueTag.i64_val)) {
-                    var buf: [32]u8 = undefined;
-                    const text = std.fmt.bufPrint(&buf, "{d}", .{val.toI64()}) catch "?";
-                    elem.text = allocator.dupe(u8, text) catch null;
+                switch (val.tag) {
+                    .NvStr => {
+                        const text = val.payload.nv_str.asSlice();
+                        const text_copy = allocator.dupe(u8, text) catch std.process.exit(1);
+                        if (elem.text) |old_text| {
+                            allocator.free(old_text);
+                        }
+                        elem.text = text_copy;
+                    },
+                    .NvI64 => {
+                        var buf: [32]u8 = undefined;
+                        const text = std.fmt.bufPrint(&buf, "{d}", .{val.payload.nv_i64}) catch std.process.exit(1);
+                        const text_copy = allocator.dupe(u8, text) catch std.process.exit(1);
+                        if (elem.text) |old_text| {
+                            allocator.free(old_text);
+                        }
+                        elem.text = text_copy;
+                    },
+                    else => {},
                 }
             }
         }
@@ -1172,6 +1215,29 @@ fn updateAllTextBindings(host: *HostEnv) void {
 // Main Entry Point
 
 comptime {
+    @export(&hostAlloc, .{ .name = "roc_alloc", .visibility = .hidden });
+    @export(&hostDealloc, .{ .name = "roc_dealloc", .visibility = .hidden });
+    @export(&hostRealloc, .{ .name = "roc_realloc", .visibility = .hidden });
+    @export(&hostDbg, .{ .name = "roc_dbg", .visibility = .hidden });
+    @export(&hostExpectFailed, .{ .name = "roc_expect_failed", .visibility = .hidden });
+    @export(&hostCrashed, .{ .name = "roc_crashed", .visibility = .hidden });
+
+    @export(&hostedAppendChild, .{ .name = "roc_host_append_child", .visibility = .hidden });
+    @export(&hostedBindClick, .{ .name = "roc_host_bind_click", .visibility = .hidden });
+    @export(&hostedBindText, .{ .name = "roc_host_bind_text", .visibility = .hidden });
+    @export(&hostCreateElement, .{ .name = "roc_host_create_element", .visibility = .hidden });
+    @export(&hostCreateEventFilter, .{ .name = "roc_host_create_event_filter", .visibility = .hidden });
+    @export(&hostCreateEventMap, .{ .name = "roc_host_create_event_map", .visibility = .hidden });
+    @export(&hostedCreateEventMerge, .{ .name = "roc_host_create_event_merge", .visibility = .hidden });
+    @export(&hostedCreateEventSource, .{ .name = "roc_host_create_event_source", .visibility = .hidden });
+    @export(&hostedCreateRoot, .{ .name = "roc_host_create_root", .visibility = .hidden });
+    @export(&hostCreateSignalConst, .{ .name = "roc_host_create_signal_const", .visibility = .hidden });
+    @export(&hostCreateSignalFold, .{ .name = "roc_host_create_signal_fold", .visibility = .hidden });
+    @export(&hostCreateSignalHold, .{ .name = "roc_host_create_signal_hold", .visibility = .hidden });
+    @export(&hostCreateSignalMap, .{ .name = "roc_host_create_signal_map", .visibility = .hidden });
+    @export(&hostCreateSignalZipWith, .{ .name = "roc_host_create_signal_zip_with", .visibility = .hidden });
+    @export(&hostSetText, .{ .name = "roc_host_set_text", .visibility = .hidden });
+
     @export(&main, .{ .name = "main" });
     if (@import("builtin").os.tag == .windows) {
         @export(&__main, .{ .name = "__main" });
@@ -1196,17 +1262,15 @@ fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
         }
     }
 
-    const stderr_file: std.fs.File = .stderr();
-
     if (spec_file == null) {
-        stderr_file.writeAll("Usage: ./app [--verbose] <test_spec.txt>\n") catch {};
+        writeStderr("Usage: ./app [--verbose] <test_spec.txt>\n");
         return 1;
     }
 
     const exit_code = platform_main(spec_file.?, verbose) catch |err| {
-        stderr_file.writeAll("HOST ERROR: ") catch {};
-        stderr_file.writeAll(@errorName(err)) catch {};
-        stderr_file.writeAll("\n") catch {};
+        writeStderr("HOST ERROR: ");
+        writeStderr(@errorName(err));
+        writeStderr("\n");
         return 1;
     };
     return exit_code;
@@ -1214,7 +1278,11 @@ fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
 
 fn platform_main(spec_file: []const u8, verbose: bool) !c_int {
     // Install signal handlers
-    _ = builtins.handlers.install(handleRocStackOverflow, handleRocAccessViolation, handleRocArithmeticError);
+    _ = signal_handler.installForCurrentThread(.{
+        .stack_overflow = handleRocStackOverflow,
+        .access_violation = handleRocAccessViolation,
+        .arithmetic_error = handleRocArithmeticError,
+    });
 
     var host_env = HostEnv.init();
     defer host_env.deinit();
@@ -1223,46 +1291,60 @@ fn platform_main(spec_file: []const u8, verbose: bool) !c_int {
 
     // Parse test spec
     host_env.test_state.commands = parseTestSpecFile(allocator, spec_file) catch |err| {
-        const stderr_file: std.fs.File = .stderr();
         switch (err) {
-            ParseError.FileNotFound => stderr_file.writeAll("Error: Test spec file not found\n") catch {},
-            ParseError.InvalidFormat => stderr_file.writeAll("Error: Invalid test spec format\n") catch {},
-            else => stderr_file.writeAll("Error: Failed to parse test spec\n") catch {},
+            ParseError.FileNotFound => writeStderr("Error: Test spec file not found\n"),
+            ParseError.InvalidFormat => writeStderr("Error: Invalid test spec format\n"),
+            else => writeStderr("Error: Failed to parse test spec\n"),
         }
         return 1;
     };
     host_env.test_state.enabled = true;
     host_env.test_state.verbose = verbose;
 
-    // Create RocOps
-    var roc_ops = builtins.host_abi.RocOps{
-        .env = @as(*anyopaque, @ptrCast(&host_env)),
-        .roc_alloc = rocAllocFn,
-        .roc_dealloc = rocDeallocFn,
-        .roc_realloc = rocReallocFn,
-        .roc_dbg = rocDbgFn,
-        .roc_expect_failed = rocExpectFailedFn,
-        .roc_crashed = rocCrashedFn,
-        .hosted_fns = .{
-            .count = hosted_function_ptrs.len,
-            .fns = @constCast(&hosted_function_ptrs),
-        },
+    const hosted_fns = abi.hostedFunctions(.{
+        .host_append_child = &hostedAppendChild,
+        .host_bind_click = &hostedBindClick,
+        .host_bind_text = &hostedBindText,
+        .host_create_element = &hostedCreateElement,
+        .host_create_event_filter = &hostedCreateEventFilter,
+        .host_create_event_map = &hostedCreateEventMap,
+        .host_create_event_merge = &hostedCreateEventMerge,
+        .host_create_event_source = &hostedCreateEventSource,
+        .host_create_root = &hostedCreateRoot,
+        .host_create_signal_const = &hostedCreateSignalConst,
+        .host_create_signal_fold = &hostedCreateSignalFold,
+        .host_create_signal_hold = &hostedCreateSignalHold,
+        .host_create_signal_map = &hostedCreateSignalMap,
+        .host_create_signal_zip_with = &hostedCreateSignalZipWith,
+        .host_set_text = &hostedSetText,
+    });
+
+    var roc_ops = abi.RocOps{
+        .env = @ptrCast(&host_env),
+        .roc_alloc = &rocAllocFn,
+        .roc_dealloc = &rocDeallocFn,
+        .roc_realloc = &rocReallocFn,
+        .roc_dbg = &rocDbgFn,
+        .roc_expect_failed = &rocExpectFailedFn,
+        .roc_crashed = &rocCrashedFn,
+        .hosted_fns = hosted_fns,
     };
     host_env.roc_ops = &roc_ops;
+    current_host = &host_env;
+    current_roc_ops = &roc_ops;
+    defer current_host = null;
+    defer current_roc_ops = null;
 
     // Call Roc main to build the UI
-    const stderr_dbg: std.fs.File = .stderr();
-    stderr_dbg.writeAll("[HOST] calling roc__main\n") catch {};
-    var ret: [0]u8 = undefined;
-    var args: [0]u8 = undefined;
-    roc__main(&roc_ops, @as(*anyopaque, @ptrCast(&ret)), @as(*anyopaque, @ptrCast(&args)));
-    stderr_dbg.writeAll("[HOST] roc__main returned\n") catch {};
+    traceStderr("[HOST] calling roc_main\n");
+    var ret: [0]u8 = .{};
+    abi.roc_main(&roc_ops, @ptrCast(&ret), null);
+    traceStderr("[HOST] roc_main returned\n");
 
     if (verbose) {
-        const stderr_file: std.fs.File = .stderr();
         var buf: [256]u8 = undefined;
         const msg = std.fmt.bufPrint(&buf, "[INFO] UI built: {d} DOM elements, {d} graph nodes\n", .{ host_env.dom_elements.items.len, host_env.graph_nodes.items.len }) catch "";
-        stderr_file.writeAll(msg) catch {};
+        writeStderr(msg);
 
         // Debug: dump all DOM elements
         for (host_env.dom_elements.items, 0..) |elem, idx| {
@@ -1274,34 +1356,33 @@ fn platform_main(spec_file: []const u8, verbose: bool) !c_int {
                 elem.parent_id,
                 elem.children.items.len,
             }) catch "";
-            stderr_file.writeAll(dbg_msg) catch {};
+            writeStderr(dbg_msg);
         }
     }
 
     // Execute test commands
-    const stderr_file: std.fs.File = .stderr();
     for (host_env.test_state.commands) |cmd| {
         switch (cmd.cmd_type) {
             .click => {
                 if (verbose) {
                     var buf: [256]u8 = undefined;
                     const msg = std.fmt.bufPrint(&buf, "[CMD] click {s}:{d}\n", .{ cmd.tag, cmd.index }) catch "";
-                    stderr_file.writeAll(msg) catch {};
+                    writeStderr(msg);
                 }
 
                 if (host_env.findElementByTagIndex(cmd.tag, cmd.index)) |elem| {
                     if (elem.bound_click_event) |event_id| {
-                        fireEvent(&host_env, event_id, NodeValue.unit());
+                        fireEvent(&host_env, event_id, nodeValueUnit());
                     } else {
                         var buf: [256]u8 = undefined;
                         const msg = std.fmt.bufPrint(&buf, "TEST FAILED at line {d}: Element {s}:{d} has no click binding\n", .{ cmd.line_num, cmd.tag, cmd.index }) catch "TEST FAILED\n";
-                        stderr_file.writeAll(msg) catch {};
+                        writeStderr(msg);
                         return 1;
                     }
                 } else {
                     var buf: [256]u8 = undefined;
                     const msg = std.fmt.bufPrint(&buf, "TEST FAILED at line {d}: Element {s}:{d} not found\n", .{ cmd.line_num, cmd.tag, cmd.index }) catch "TEST FAILED\n";
-                    stderr_file.writeAll(msg) catch {};
+                    writeStderr(msg);
                     return 1;
                 }
             },
@@ -1316,18 +1397,18 @@ fn platform_main(spec_file: []const u8, verbose: bool) !c_int {
                         if (verbose) {
                             var buf: [256]u8 = undefined;
                             const msg = std.fmt.bufPrint(&buf, "[OK] expect_text {s}:{d} = \"{s}\"\n", .{ cmd.tag, cmd.index, expected }) catch "";
-                            stderr_file.writeAll(msg) catch {};
+                            writeStderr(msg);
                         }
                     } else {
                         var buf: [512]u8 = undefined;
                         const msg = std.fmt.bufPrint(&buf, "TEST FAILED at line {d}:\n  Expected: {s}:{d} = \"{s}\"\n  Got:      {s}:{d} = \"{s}\"\n", .{ cmd.line_num, cmd.tag, cmd.index, expected, cmd.tag, cmd.index, actual }) catch "TEST FAILED\n";
-                        stderr_file.writeAll(msg) catch {};
+                        writeStderr(msg);
                         return 1;
                     }
                 } else {
                     var buf: [256]u8 = undefined;
                     const msg = std.fmt.bufPrint(&buf, "TEST FAILED at line {d}: Element {s}:{d} not found\n", .{ cmd.line_num, cmd.tag, cmd.index }) catch "TEST FAILED\n";
-                    stderr_file.writeAll(msg) catch {};
+                    writeStderr(msg);
                     return 1;
                 }
             },
@@ -1335,7 +1416,7 @@ fn platform_main(spec_file: []const u8, verbose: bool) !c_int {
     }
 
     if (verbose) {
-        stderr_file.writeAll("[PASS] All tests passed\n") catch {};
+        writeStderr("[PASS] All tests passed\n");
     }
 
     return 0;

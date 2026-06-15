@@ -52,6 +52,13 @@ Elem := [
         }
     }
 
+    ## Build the element tree under a new host root.
+    run! : Elem => {}
+    run! = |elem| {
+        root = Host.create_root!()
+        Elem.walk!(elem, root)
+    }
+
     ## Create a div element containing children
     div : List(Elem) -> Elem
     div = |children| Div(children)
