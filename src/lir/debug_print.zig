@@ -210,7 +210,7 @@ const Printer = struct {
                         try writer.print("step {d} capture=", .{index});
                         switch (step.capture) {
                             .discard => try writer.writeAll("_"),
-                            .local => |local| try writer.print("l{d}", .{@intFromEnum(local)}),
+                            .view => |local| try writer.print("view l{d}", .{@intFromEnum(local)}),
                         }
                         try writer.print(" delimiter_len={d}\n", .{step.delimiter.len});
                     }

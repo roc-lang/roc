@@ -413,7 +413,7 @@ fn stmtMentionsLocal(store: *const LirStore, stmt: LIR.CFStmt, needle: LIR.Local
             for (store.getStrMatchSteps(s.steps)) |step| {
                 switch (step.capture) {
                     .discard => {},
-                    .local => |local| if (local == needle) break :blk true,
+                    .view => |local| if (local == needle) break :blk true,
                 }
             }
             break :blk false;
@@ -1042,7 +1042,7 @@ const Certifier = struct {
                     for (self.store.getStrMatchSteps(str_match.steps)) |step| {
                         switch (step.capture) {
                             .discard => {},
-                            .local => |local| try self.noteProcLocal(local),
+                            .view => |local| try self.noteProcLocal(local),
                         }
                     }
                     try stack.append(self.allocator, str_match.on_match);
@@ -1162,7 +1162,7 @@ const Certifier = struct {
                     for (self.store.getStrMatchSteps(str_match.steps)) |step| {
                         switch (step.capture) {
                             .discard => {},
-                            .local => |local| {
+                            .view => |local| {
                                 if (local == needle) defines_needle_on_match = true;
                             },
                         }
@@ -1568,7 +1568,7 @@ const Certifier = struct {
                     for (self.store.getStrMatchSteps(str_match.steps)) |step| {
                         switch (step.capture) {
                             .discard => {},
-                            .local => |local| if (self.isRc(local)) {
+                            .view => |local| if (self.isRc(local)) {
                                 match_state.bindValue(local, source_value);
                             },
                         }

@@ -5581,7 +5581,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         for (self.store.getStrMatchSteps(str_match.steps)) |step| {
                             switch (step.capture) {
                                 .discard => {},
-                                .local => |local| try locals.put(localKey(local), local),
+                                .view => |local| try locals.put(localKey(local), local),
                             }
                         }
                         try stack.append(sa, str_match.on_match);
@@ -14388,7 +14388,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             for (steps) |step| {
                 switch (step.capture) {
                     .discard => try capture_offsets.append(self.allocator, null),
-                    .local => try capture_offsets.append(self.allocator, self.codegen.allocStackSlot(roc_str_size)),
+                    .view => try capture_offsets.append(self.allocator, self.codegen.allocStackSlot(roc_str_size)),
                 }
             }
 
@@ -14435,7 +14435,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try self.emitStoreStrCapture(capture_offset, bytes_reg, source_alloc_reg, source_is_small_reg, capture_start_reg, len_reg);
                         switch (step.capture) {
                             .discard => {},
-                            .local => |local| {
+                            .view => |local| {
                                 const loc = ValueLocation{ .stack_str = capture_offset };
                                 try self.local_locations.put(localKey(local), loc);
                                 try self.emitDebugAssertValidStrLocal(local, loc);
@@ -14452,7 +14452,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.emitStoreStrCapture(capture_offset, bytes_reg, source_alloc_reg, source_is_small_reg, capture_start_reg, cursor_reg);
                     switch (step.capture) {
                         .discard => {},
-                        .local => |local| {
+                        .view => |local| {
                             const loc = ValueLocation{ .stack_str = capture_offset };
                             try self.local_locations.put(localKey(local), loc);
                             try self.emitDebugAssertValidStrLocal(local, loc);

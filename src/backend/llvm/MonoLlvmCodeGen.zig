@@ -2174,15 +2174,7 @@ pub const MonoLlvmCodeGen = struct {
     fn emitLowLevel(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LowLevel, args: LocalSpan, unique_args: u64) Error!void {
         try self.prepareLocalWrite(target);
         const arg_locals = self.store.getLocalSpan(args);
-        const accepts_deferred_str_args = switch (op) {
-            .str_count_utf8_bytes,
-            .str_is_eq,
-            .str_starts_with,
-            .str_ends_with,
-            => true,
-            else => false,
-        };
-        if (!accepts_deferred_str_args) {
+        if (!op.acceptsStrViewArgs()) {
             try self.materializeLocalSpanIfDeferred(arg_locals);
         }
         switch (op) {
@@ -2666,7 +2658,7 @@ pub const MonoLlvmCodeGen = struct {
         for (steps, capture_slots) |step, *slots| {
             slots.* = switch (step.capture) {
                 .discard => null,
-                .local => .{
+                .view => .{
                     .start_ptr = wip.alloca(.normal, usize_ty, .@"1", usize_alignment, .default, "str_match_capture_start") catch return error.OutOfMemory,
                     .end_ptr = wip.alloca(.normal, usize_ty, .@"1", usize_alignment, .default, "str_match_capture_end") catch return error.OutOfMemory,
                 },
@@ -2703,7 +2695,7 @@ pub const MonoLlvmCodeGen = struct {
 
             switch (step.capture) {
                 .discard => {},
-                .local => |local| {
+                .view => |local| {
                     const slots = capture_slots[step_i] orelse return error.CompilationFailed;
                     try self.storeUsize(slots.start_ptr, capture_start);
                     try self.storeUsize(slots.end_ptr, capture_end);

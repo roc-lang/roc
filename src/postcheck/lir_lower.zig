@@ -1832,7 +1832,7 @@ const Lowerer = struct {
         for (input_steps, lir_steps) |input_step, *lir_step| {
             lir_step.* = .{
                 .capture = if (input_step.capture) |capture|
-                    .{ .local = try self.addTemp(self.pat(capture).ty) }
+                    .{ .view = try self.addTemp(self.pat(capture).ty) }
                 else
                     .discard,
                 .delimiter = try self.lirStrLiteral(input_step.delimiter),
@@ -1845,7 +1845,7 @@ const Lowerer = struct {
             index -= 1;
             if (input_steps[index].capture) |capture| {
                 const capture_local = switch (lir_steps[index].capture) {
-                    .local => |local| local,
+                    .view => |local| local,
                     .discard => Common.invariant("string-pattern capture step lowered without a capture local"),
                 };
                 match_body = try self.bindPattern(capture, capture_local, match_body);

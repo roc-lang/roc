@@ -1399,7 +1399,7 @@ const Inserter = struct {
         for (self.store.getStrMatchSteps(str_match.steps)) |step| {
             switch (step.capture) {
                 .discard => {},
-                .local => |local| self.addOwnedIfRc(&match_owned, local),
+                .view => |local| self.addOwnedIfRc(&match_owned, local),
             }
         }
 
@@ -1647,7 +1647,7 @@ const Inserter = struct {
                     for (self.store.getStrMatchSteps(str_match.steps)) |step| {
                         switch (step.capture) {
                             .discard => {},
-                            .local => |local| self.addOwnedIfRc(&match_owned, local),
+                            .view => |local| self.addOwnedIfRc(&match_owned, local),
                         }
                     }
                     try self.pushAnalysisPath(tasks, str_match.on_match, path.stop, &match_owned, path.exits, path.loop_keep);
@@ -2433,7 +2433,7 @@ const Inserter = struct {
                     for (self.store.getStrMatchSteps(str_match.steps)) |step| {
                         switch (step.capture) {
                             .discard => {},
-                            .local => |local| {
+                            .view => |local| {
                                 if (local == needle) defines_needle_on_match = true;
                             },
                         }
@@ -2682,7 +2682,7 @@ const Inserter = struct {
         for (self.store.getStrMatchSteps(steps)) |step| {
             switch (step.capture) {
                 .discard => {},
-                .local => |local| {
+                .view => |local| {
                     if (self.localContainsRefcounted(local) and !self.isBindingBorrowed(local)) {
                         count +|= 1;
                     }
@@ -3092,6 +3092,30 @@ const ArcTest = struct {
             .branches = branches,
             .default_branch = default_branch,
             .continuation = continuation,
+        } });
+    }
+
+    fn strMatchTailCapture(
+        self: *ArcTest,
+        source: LIR.LocalId,
+        capture: LIR.LocalId,
+        prefix: []const u8,
+        on_match: LIR.CFStmtId,
+        on_miss: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const steps = try self.store.addStrMatchSteps(&[_]LIR.StrMatchStep{
+            .{
+                .capture = .{ .view = capture },
+                .delimiter = try self.store.insertStringView("", 0, 0),
+            },
+        });
+        return try self.store.addCFStmt(.{ .str_match = .{
+            .source = source,
+            .prefix = try self.store.insertStringView(prefix, 0, @intCast(prefix.len)),
+            .steps = steps,
+            .end = .tail,
+            .on_match = on_match,
+            .on_miss = on_miss,
         } });
     }
 
@@ -4834,6 +4858,62 @@ test "RC borrow: list element read via low-level borrows the list" {
     try f.run();
     try f.expectRc(elem, 0, 0, 0);
     try f.expectRc(list, 0, 1, 0);
+}
+
+test "RC borrow: string match view capture used read-only does not retain source" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const source = try f.local(.str);
+    const capture = try f.local(.str);
+    const result = try f.local(.i64);
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, 1, ret);
+    const use_capture = try f.expectStmt(capture, result_assign);
+    const miss = try f.crash("miss");
+    const str_match = try f.strMatchTailCapture(source, capture, "pre", use_capture, miss);
+    const body = try f.assignStr(source, "prefix", str_match);
+    _ = try f.addProc(&.{}, body, .i64);
+
+    try f.run();
+
+    try testing.expectEqual(@as(usize, 0), f.countRc(source, .incref));
+    try f.expectRc(capture, 0, 0, 0);
+}
+
+test "RC borrow: string match view capture consumed by call retains source" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const source = try f.local(.str);
+    const capture = try f.local(.str);
+    const result = try f.local(.i64);
+    const ret = try f.ret(result);
+    const call = try f.assignCall(result, &.{capture}, ret);
+    const miss = try f.crash("miss");
+    const str_match = try f.strMatchTailCapture(source, capture, "pre", call, miss);
+    const body = try f.assignStr(source, "prefix", str_match);
+    _ = try f.addProc(&.{}, body, .i64);
+
+    try f.run();
+
+    try testing.expectEqual(@as(usize, 1), f.countRc(source, .incref));
+    try f.expectRc(capture, 0, 0, 0);
+}
+
+test "RC borrow: string match view capture returned retains the view" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const source = try f.local(.str);
+    const capture = try f.local(.str);
+    const match_ret = try f.ret(capture);
+    const miss_ret = try f.ret(source);
+    const str_match = try f.strMatchTailCapture(source, capture, "pre", match_ret, miss_ret);
+    const body = try f.assignStr(source, "prefix", str_match);
+    _ = try f.addProc(&.{}, body, .str);
+
+    try f.run();
+
+    try testing.expectEqual(@as(usize, 0), f.countRc(source, .incref));
+    try f.expectRc(capture, 1, 0, 0);
 }
 
 test "RC specialization: owned final argument moves into a variant" {

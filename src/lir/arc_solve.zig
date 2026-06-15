@@ -877,7 +877,7 @@ fn collectStmt(
             for (store.getStrMatchSteps(str_match.steps)) |step| {
                 switch (step.capture) {
                     .discard => {},
-                    .local => |local| noteDef(solver.defs, local, .{ .borrow_capable = @intFromEnum(str_match.source) }),
+                    .view => |local| noteDef(solver.defs, local, .{ .borrow_capable = @intFromEnum(str_match.source) }),
                 }
             }
             try solver.stack.append(allocator, str_match.on_match);
@@ -1141,7 +1141,7 @@ pub fn computeVisibility(
                 for (store.getStrMatchSteps(str_match.steps)) |step| {
                     switch (step.capture) {
                         .discard => {},
-                        .local => |local| try addEdge(&edges, allocator, rc_local, @intFromEnum(local), @intFromEnum(str_match.source)),
+                        .view => |local| try addEdge(&edges, allocator, rc_local, @intFromEnum(local), @intFromEnum(str_match.source)),
                     }
                 }
             },
@@ -1509,7 +1509,7 @@ pub fn computeUniqueness(
                 for (store.getStrMatchSteps(str_match.steps)) |step| {
                     switch (step.capture) {
                         .discard => {},
-                        .local => |local| {
+                        .view => |local| {
                             marks.trackDef(&has_def, &multi_def, local);
                             marks.destroy(&foreign_def, local);
                         },

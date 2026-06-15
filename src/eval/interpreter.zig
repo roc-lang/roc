@@ -3256,7 +3256,7 @@ pub const Interpreter = struct {
 
             switch (step.capture) {
                 .discard => {},
-                .local => |local| {
+                .view => |local| {
                     self.setLocalChecked(
                         frame,
                         stmt_id,

@@ -21,7 +21,8 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 /// Public `FORMAT_VERSION` declaration.
 /// v5: added LayoutTag.ptr and the TRMC LowLevel ops (ptr_alloca,
 /// box_alloc_zeroed, ptr_store, ptr_load, ptr_cast).
-pub const FORMAT_VERSION: u32 = 5;
+/// v6: string-pattern captures are explicit borrowed Str views.
+pub const FORMAT_VERSION: u32 = 6;
 
 /// Public `ImageError` declaration.
 pub const ImageError = error{

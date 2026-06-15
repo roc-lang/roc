@@ -125,17 +125,20 @@ pub const StrPatternEnd = enum {
     tail,
 };
 
-/// Whether a string-pattern step writes the captured slice to a local.
+/// Whether a string-pattern step binds the captured bytes.
 pub const StrMatchCapture = union(enum) {
     discard,
-    local: LocalId,
+    /// A borrowed `Str` view into the `str_match.source` bytes on the match
+    /// edge. This is not an eagerly materialized RocStr; consumers that need an
+    /// owned string must materialize the view at the use site.
+    view: LocalId,
 };
 
 /// One delimiter search in a string interpolation pattern.
 ///
 /// The matcher captures the bytes from the current cursor up to the first
-/// occurrence of `delimiter`, optionally writes that slice to `capture`, and
-/// advances the cursor past the delimiter.
+/// occurrence of `delimiter`, optionally binds that slice as a borrowed view,
+/// and advances the cursor past the delimiter.
 pub const StrMatchStep = struct {
     capture: StrMatchCapture,
     delimiter: StrLiteral,
@@ -418,8 +421,8 @@ pub const CFStmt = union(enum) {
         continuation: ?CFStmtId = null,
     },
     /// Runtime string-pattern match. On the match edge this initializes every
-    /// captured local in `steps` as a RocStr slice of `source`; on the miss edge
-    /// no capture locals are initialized.
+    /// captured local in `steps` as a borrowed `Str` view into `source`; on the
+    /// miss edge no capture locals are initialized.
     str_match: struct {
         source: LocalId,
         prefix: StrLiteral,

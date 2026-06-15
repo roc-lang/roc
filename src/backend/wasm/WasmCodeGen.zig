@@ -3145,7 +3145,7 @@ fn collectProcLocals(
                 for (self.store.getStrMatchSteps(str_match.steps)) |step| {
                     switch (step.capture) {
                         .discard => {},
-                        .local => |local| try recordProcLocal(locals, local),
+                        .view => |local| try recordProcLocal(locals, local),
                     }
                 }
                 try work.append(wa, str_match.on_match);
@@ -14140,7 +14140,7 @@ fn emitStrMatchCapture(
 ) Allocator.Error!void {
     switch (capture) {
         .discard => {},
-        .local => |target| {
+        .view => |target| {
             const capture_len = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             try self.emitLocalGet(capture_end);
             try self.emitLocalGet(capture_start);

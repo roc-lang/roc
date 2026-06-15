@@ -1037,6 +1037,19 @@ pub const LowLevel = enum {
         };
     }
 
+    /// Whether this primitive can consume borrowed string views directly,
+    /// without first materializing them into RocStr values.
+    pub fn acceptsStrViewArgs(self: LowLevel) bool {
+        return switch (self) {
+            .str_count_utf8_bytes,
+            .str_is_eq,
+            .str_starts_with,
+            .str_ends_with,
+            => true,
+            else => false,
+        };
+    }
+
     fn argMask(comptime args: []const u6) u64 {
         comptime var mask: u64 = 0;
         inline for (args) |arg| {

@@ -574,7 +574,7 @@ const Pass = struct {
                     for (self.store.getStrMatchSteps(s.steps)) |step| {
                         switch (step.capture) {
                             .discard => {},
-                            .local => |local| try self.noteWrite(local),
+                            .view => |local| try self.noteWrite(local),
                         }
                     }
                     try self.stack.append(self.allocator, s.on_match);
