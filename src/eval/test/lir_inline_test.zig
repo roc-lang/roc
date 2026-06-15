@@ -240,6 +240,7 @@ fn collectAssignCallProcs(
             .set_local => |stmt| try work.append(allocator, stmt.next),
             .debug => |stmt| try work.append(allocator, stmt.next),
             .expect => |stmt| try work.append(allocator, stmt.next),
+            .comptime_branch_taken => |stmt| try work.append(allocator, stmt.next),
             .incref => |stmt| try work.append(allocator, stmt.next),
             .decref => |stmt| try work.append(allocator, stmt.next),
             .free => |stmt| try work.append(allocator, stmt.next),
@@ -255,6 +256,7 @@ fn collectAssignCallProcs(
                 try work.append(allocator, stmt.remainder);
             },
             .runtime_error,
+            .comptime_exhaustiveness_failed,
             .loop_continue,
             .loop_break,
             .jump,
@@ -330,6 +332,7 @@ fn collectProcShape(
             .set_local => |stmt| try work.append(allocator, stmt.next),
             .debug => |stmt| try work.append(allocator, stmt.next),
             .expect => |stmt| try work.append(allocator, stmt.next),
+            .comptime_branch_taken => |stmt| try work.append(allocator, stmt.next),
             .incref => |stmt| try work.append(allocator, stmt.next),
             .decref => |stmt| try work.append(allocator, stmt.next),
             .free => |stmt| try work.append(allocator, stmt.next),
@@ -354,6 +357,7 @@ fn collectProcShape(
                 shape.jump_count += 1;
             },
             .runtime_error,
+            .comptime_exhaustiveness_failed,
             .loop_continue,
             .loop_break,
             .ret,
@@ -467,6 +471,7 @@ fn markReachableLiftedExpr(
         .str_lit,
         .fn_ref,
         .crash,
+        .comptime_exhaustiveness_failed,
         => {},
         .list,
         .tuple,
@@ -479,6 +484,7 @@ fn markReachableLiftedExpr(
         .expect,
         => |child| markReachableLiftedExpr(program, child, reachable),
         .expect_err => |expect_err| markReachableLiftedExpr(program, expect_err.msg, reachable),
+        .comptime_branch_taken => |taken| markReachableLiftedExpr(program, taken.body, reachable),
         .let_ => |let_| {
             markReachableLiftedExpr(program, let_.value, reachable);
             markReachableLiftedExpr(program, let_.rest, reachable);

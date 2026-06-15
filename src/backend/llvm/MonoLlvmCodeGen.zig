@@ -171,6 +171,8 @@ pub const MonoLlvmCodeGen = struct {
     /// one subprogram per proc, and per-statement line locations from the
     /// LIR store's source-location tables.
     emit_debug_info: bool = false,
+    /// Emit local variable declarations for source-level debugger inspection.
+    emit_local_debug_info: bool = false,
     /// Build-only default-platform Linux executables link a small runtime
     /// object that owns process startup diagnostics and signal handling.
     enable_default_platform_runtime: bool = false,
@@ -1187,7 +1189,9 @@ pub const MonoLlvmCodeGen = struct {
         defer self.allocator.free(self.local_slots);
         try self.allocLocalSlots();
         try self.unpackProcArgs(proc);
-        if (!builder.strip) try self.declareFrameLocals(proc, self.store.procLoc(proc_id).line);
+        if (!builder.strip and self.emit_local_debug_info) {
+            try self.declareFrameLocals(proc, self.store.procLoc(proc_id).line);
+        }
 
         if (proc.hosted) |hosted| {
             try self.emitHostedProcBody(hosted, proc);
@@ -1388,7 +1392,7 @@ pub const MonoLlvmCodeGen = struct {
         arg_layouts: []const layout.Idx,
         ret_layout: layout.Idx,
     ) Error!void {
-        if (self.enable_default_platform_runtime and
+        if (self.enable_default_platform_hosted_calls and
             self.host_call_mode == .extern_symbols and
             self.target.os.tag == .linux and
             std.mem.eql(u8, symbol_name, "_start"))
@@ -1797,6 +1801,12 @@ pub const MonoLlvmCodeGen = struct {
             },
             .runtime_error => {
                 try self.emitCrashBytes("hit a runtime error");
+            },
+            .comptime_exhaustiveness_failed => {
+                try self.emitCrashBytes("compile-time exhaustiveness failure reached runtime code");
+            },
+            .comptime_branch_taken => |marker| {
+                try work.append(wa, .{ .node = marker.next });
             },
             .incref => |inc| {
                 try self.emitRcForLocal(.incref, inc.value, inc.count, inc.atomicity);

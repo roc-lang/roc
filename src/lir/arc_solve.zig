@@ -586,10 +586,10 @@ fn retLenders(
                 try solver.stack.append(allocator, j.body);
                 try solver.stack.append(allocator, j.remainder);
             },
-            inline .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .free => |s| {
+            inline .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .free => |s| {
                 try solver.stack.append(allocator, s.next);
             },
-            .jump, .crash, .expect_err, .runtime_error, .loop_continue, .loop_break => {},
+            .jump, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
         }
     }
 
@@ -637,10 +637,10 @@ fn retAllUnique(
                 try solver.stack.append(allocator, j.body);
                 try solver.stack.append(allocator, j.remainder);
             },
-            inline .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .free => |s| {
+            inline .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .free => |s| {
                 try solver.stack.append(allocator, s.next);
             },
-            .jump, .crash, .expect_err, .runtime_error, .loop_continue, .loop_break => {},
+            .jump, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
         }
     }
 
@@ -852,6 +852,7 @@ fn collectStmt(
         // The failure report takes ownership of the message.
         .expect_err => |expect_err_stmt| noteDemand(solver, expect_err_stmt.message),
         .expect => |expect_stmt| try solver.stack.append(allocator, expect_stmt.next),
+        .comptime_branch_taken => |marker| try solver.stack.append(allocator, marker.next),
         .incref => |rc| try solver.stack.append(allocator, rc.next),
         .decref => |rc| try solver.stack.append(allocator, rc.next),
         .free => |rc| try solver.stack.append(allocator, rc.next),
@@ -874,7 +875,7 @@ fn collectStmt(
             try solver.stack.append(allocator, join_stmt.remainder);
         },
         .ret => {},
-        .jump, .crash, .runtime_error, .loop_continue, .loop_break => {},
+        .jump, .crash, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
     }
 }
 
@@ -1025,10 +1026,10 @@ pub fn computeVisibility(
                     try stack.append(allocator, stmt.body);
                     try stack.append(allocator, stmt.remainder);
                 },
-                inline .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .free => |stmt| {
+                inline .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .free => |stmt| {
                     try stack.append(allocator, stmt.next);
                 },
-                .jump, .crash, .expect_err, .runtime_error, .loop_continue, .loop_break => {},
+                .jump, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
             }
         }
     }
@@ -1539,8 +1540,9 @@ pub fn computeUniqueness(
             // The failure report is the message's consuming use.
             .expect_err => |expect_err_stmt| marks.consume(&consumed_once, &destroyed, expect_err_stmt.message),
             .expect => |expect_stmt| marks.noteUse(&borrow_used, expect_stmt.condition),
+            .comptime_branch_taken => {},
             .switch_stmt => |switch_stmt| marks.noteUse(&borrow_used, switch_stmt.cond),
-            .decref, .free, .jump, .crash, .runtime_error, .loop_continue, .loop_break => {},
+            .decref, .free, .jump, .crash, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
         }
     }
 
@@ -1636,10 +1638,10 @@ fn computeSccs(solver: *Solver) SolveError!void {
                     try solver.stack.append(allocator, j.body);
                     try solver.stack.append(allocator, j.remainder);
                 },
-                inline .assign_ref, .assign_literal, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .free => |s| {
+                inline .assign_ref, .assign_literal, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .free => |s| {
                     try solver.stack.append(allocator, s.next);
                 },
-                .jump, .ret, .crash, .expect_err, .runtime_error, .loop_continue, .loop_break => {},
+                .jump, .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
             }
         }
     }

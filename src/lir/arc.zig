@@ -783,11 +783,15 @@ const Inserter = struct {
                     self.destroyRewritePath(path);
                     return;
                 },
-                .runtime_error => {
+                .runtime_error, .comptime_exhaustiveness_failed => {
                     const tail = try self.releaseAll(&path.owned, path.cursor);
                     path.result.* = try self.finishLinearRewrite(&path.frames, tail);
                     self.destroyRewritePath(path);
                     return;
+                },
+                .comptime_branch_taken => |marker| {
+                    try path.frames.append(self.store.allocator, .{ .stmt = path.cursor, .head = current_start });
+                    path.cursor = marker.next;
                 },
                 .loop_continue => {
                     const tail = if (path.options.loop_keep) |keep| try self.releaseDifference(&path.owned, keep, path.cursor) else path.cursor;
@@ -1012,6 +1016,13 @@ const Inserter = struct {
                     .next = next,
                 } });
             },
+            .comptime_branch_taken => |marker| {
+                cloned = try self.store.addCFStmt(.{ .comptime_branch_taken = .{
+                    .site = marker.site,
+                    .branch_index = marker.branch_index,
+                    .next = next,
+                } });
+            },
             .incref => |rc| {
                 cloned = try self.store.addCFStmt(.{ .incref = .{
                     .value = rc.value,
@@ -1038,6 +1049,7 @@ const Inserter = struct {
                 } });
             },
             .runtime_error,
+            .comptime_exhaustiveness_failed,
             .switch_stmt,
             .loop_continue,
             .loop_break,
@@ -1564,9 +1576,12 @@ const Inserter = struct {
                     self.destroyAnalysisPath(path);
                     return;
                 },
-                .runtime_error, .loop_continue, .loop_break, .jump, .ret, .crash, .expect_err => {
+                .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break, .jump, .ret, .crash, .expect_err => {
                     self.destroyAnalysisPath(path);
                     return;
+                },
+                .comptime_branch_taken => |marker| {
+                    path.cursor = marker.next;
                 },
             }
         }
@@ -2102,6 +2117,7 @@ const Inserter = struct {
                 .set_local => |assign| try stack.append(self.store.allocator, assign.next),
                 .debug => |debug_stmt| try stack.append(self.store.allocator, debug_stmt.next),
                 .expect => |expect_stmt| try stack.append(self.store.allocator, expect_stmt.next),
+                .comptime_branch_taken => |taken| try stack.append(self.store.allocator, taken.next),
                 .switch_stmt => |switch_stmt| {
                     if (switch_stmt.continuation) |continuation| {
                         try stack.append(self.store.allocator, continuation);
@@ -2123,6 +2139,7 @@ const Inserter = struct {
                 .jump,
                 .ret,
                 .runtime_error,
+                .comptime_exhaustiveness_failed,
                 .loop_continue,
                 .loop_break,
                 .crash,
@@ -2185,6 +2202,7 @@ const Inserter = struct {
                 .incref => |rc| try stack.append(self.store.allocator, rc.next),
                 .decref => |rc| try stack.append(self.store.allocator, rc.next),
                 .free => |rc| try stack.append(self.store.allocator, rc.next),
+                .comptime_branch_taken => |taken| try stack.append(self.store.allocator, taken.next),
                 .switch_stmt => |switch_stmt| {
                     if (switch_stmt.continuation) |continuation| {
                         try stack.append(self.store.allocator, continuation);
@@ -2211,6 +2229,7 @@ const Inserter = struct {
                 .jump,
                 .ret,
                 .runtime_error,
+                .comptime_exhaustiveness_failed,
                 .loop_continue,
                 .loop_break,
                 .crash,
@@ -2328,8 +2347,10 @@ const Inserter = struct {
                     if (keep.contains(needle)) return true;
                 },
                 .runtime_error,
+                .comptime_exhaustiveness_failed,
                 .crash,
                 => {},
+                .comptime_branch_taken => |marker| try stack.append(self.store.allocator, marker.next),
                 .incref => |rc| try stack.append(self.store.allocator, rc.next),
                 .decref => |rc| try stack.append(self.store.allocator, rc.next),
                 .free => |rc| try stack.append(self.store.allocator, rc.next),
@@ -2471,8 +2492,10 @@ const Inserter = struct {
                     }
                 },
                 .runtime_error,
+                .comptime_exhaustiveness_failed,
                 .crash,
                 => {},
+                .comptime_branch_taken => |marker| try stack.append(self.store.allocator, marker.next),
                 .incref => |rc| try stack.append(self.store.allocator, rc.next),
                 .decref => |rc| try stack.append(self.store.allocator, rc.next),
                 .free => |rc| try stack.append(self.store.allocator, rc.next),
@@ -3023,10 +3046,10 @@ const ArcTest = struct {
                     try stack.append(self.allocator, j.body);
                     try stack.append(self.allocator, j.remainder);
                 },
-                inline .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .free => |s| {
+                inline .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .free => |s| {
                     try stack.append(self.allocator, s.next);
                 },
-                .ret, .jump, .crash, .expect_err, .runtime_error, .loop_continue, .loop_break => {},
+                .ret, .jump, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
             }
         }
         return mask;
@@ -3079,6 +3102,7 @@ const ArcTest = struct {
                 .set_local => |assign| cursor = assign.next,
                 .debug => |debug_stmt| cursor = debug_stmt.next,
                 .expect => |expect_stmt| cursor = expect_stmt.next,
+                .comptime_branch_taken => |marker| cursor = marker.next,
                 .ret => {
                     if (before == .ret) return error.ExpectedRcBeforeStop;
                     return;
@@ -3087,7 +3111,7 @@ const ArcTest = struct {
                     if (before == .crash) return error.ExpectedRcBeforeStop;
                     return;
                 },
-                .expect_err, .runtime_error, .switch_stmt, .loop_continue, .loop_break, .join, .jump => return error.NonLinearPath,
+                .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .switch_stmt, .loop_continue, .loop_break, .join, .jump => return error.NonLinearPath,
             }
         }
         return error.CyclicPath;

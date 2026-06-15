@@ -63,6 +63,26 @@ pub const CFStmtId = enum(u32) {
     _,
 };
 
+/// Identifier of a compile-time-observed control-flow site.
+pub const ComptimeSiteId = enum(u32) {
+    _,
+};
+
+/// Source control-flow construct observed during compile-time finalization.
+pub const ComptimeSiteKind = enum {
+    match,
+    destructure,
+    if_,
+};
+
+/// Metadata for one compile-time-observed control-flow site.
+pub const ComptimeSite = struct {
+    kind: ComptimeSiteKind,
+    region: base.Region,
+    proc: LirProcSpecId,
+    branch_regions: []const base.Region = &.{},
+};
+
 /// Identifier of a join point targeted by `jump`.
 pub const JoinPointId = enum(u32) {
     _,
@@ -322,6 +342,17 @@ pub const CFStmt = union(enum) {
     },
     /// Compiler-generated impossible execution path. This is terminal.
     runtime_error: void,
+    /// Pattern coverage failed during compile-time evaluation. This is
+    /// terminal and becomes a checking diagnostic while finalizing.
+    comptime_exhaustiveness_failed: struct {
+        site: ComptimeSiteId,
+    },
+    /// One compile-time-observed branch or match alternative was taken.
+    comptime_branch_taken: struct {
+        site: ComptimeSiteId,
+        branch_index: u32,
+        next: CFStmtId,
+    },
     incref: struct {
         value: LocalId,
         rc: layout.RcHelper,
