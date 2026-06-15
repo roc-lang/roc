@@ -4,12 +4,12 @@ Headers :: { raw : Str }.{
 	decode : Headers, Decoder(a) -> a
 	decode = |headers, decoder|
 		match decoder {
-			Record2(first_name, second_name, build) =>
-				decode_record2(headers.raw, first_name, second_name, build)
+			Record4(first_name, second_name, third_name, fourth_name, build) =>
+				decode_record4(headers.raw, first_name, second_name, third_name, fourth_name, build)
 		}
 
-	decode_record2 : Str, Str, Str, (Str, Str -> a) -> a
-	decode_record2 = |headers, first_name, second_name, build| {
+	decode_record4 : Str, Str, Str, Str, Str, (Decoder.FieldValue, Decoder.FieldValue, Decoder.FieldValue, Decoder.FieldValue -> a) -> a
+	decode_record4 = |headers, first_name, second_name, third_name, fourth_name, build| {
 		request_line = Str.find_first(headers, "\r\n")
 		var $remaining = if request_line.found {
 			request_line.after
@@ -18,8 +18,12 @@ Headers :: { raw : Str }.{
 		}
 		var $first_value = ""
 		var $second_value = ""
+		var $third_value = ""
+		var $fourth_value = ""
 		var $found_first = False
 		var $found_second = False
+		var $found_third = False
+		var $found_fourth = False
 		var $keep_scanning = request_line.found
 
 		while $keep_scanning {
@@ -43,6 +47,12 @@ Headers :: { raw : Str }.{
 						} else if header_name_matches_field(name, second_name) {
 							$second_value = value
 							$found_second = True
+						} else if header_name_matches_field(name, third_name) {
+							$third_value = value
+							$found_third = True
+						} else if header_name_matches_field(name, fourth_name) {
+							$fourth_value = value
+							$found_fourth = True
 						} else {
 							{}
 						}
@@ -57,11 +67,28 @@ Headers :: { raw : Str }.{
 			}
 		}
 
-		if $found_first and $found_second {
-			build($first_value, $second_value)
+		first = if $found_first {
+			Decoder.FieldValue.Present($first_value)
 		} else {
-			crash "missing required HTTP header"
+			Decoder.FieldValue.Missing
 		}
+		second = if $found_second {
+			Decoder.FieldValue.Present($second_value)
+		} else {
+			Decoder.FieldValue.Missing
+		}
+		third = if $found_third {
+			Decoder.FieldValue.Present($third_value)
+		} else {
+			Decoder.FieldValue.Missing
+		}
+		fourth = if $found_fourth {
+			Decoder.FieldValue.Present($fourth_value)
+		} else {
+			Decoder.FieldValue.Missing
+		}
+
+		build(first, second, third, fourth)
 	}
 
 	header_name_matches_field : Str, Str -> Bool

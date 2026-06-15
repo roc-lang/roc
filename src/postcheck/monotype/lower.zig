@@ -5054,14 +5054,18 @@ const BodyContext = struct {
     }
 
     fn monoTagByText(self: *BodyContext, ty: Type.TypeId, text: []const u8) Type.Tag {
+        return self.monoTagByTextOptional(ty, text) orelse Common.invariant("expected tag was absent from monotype tag union");
+    }
+
+    fn monoTagByTextOptional(self: *BodyContext, ty: Type.TypeId, text: []const u8) ?Type.Tag {
         return switch (self.builder.shapeContent(ty)) {
             .tag_union => |span| {
                 for (self.builder.program.types.tagSpan(span)) |tag| {
                     if (Ident.textEql(self.builder.program.names.tagLabelText(tag.name), text)) return tag;
                 }
-                Common.invariant("expected tag was absent from monotype tag union");
+                return null;
             },
-            else => Common.invariant("expected a tag union monotype"),
+            else => null,
         };
     }
 
@@ -5291,46 +5295,43 @@ const BodyContext = struct {
             else => Common.invariant("structural decoder dispatcher was not a record type"),
         };
         const record_fields = self.builder.program.types.fieldSpan(record_fields_span);
-        if (record_fields.len != 2) Common.invariant("structural decoder currently supports exactly two record fields");
-        for (record_fields) |field| {
-            if (!self.typeHasBuiltinOwner(field.ty, .str)) Common.invariant("structural decoder record field was not Str");
-        }
+        if (record_fields.len != 4) Common.invariant("structural decoder currently supports exactly four record fields");
 
         const backing_ty = self.builder.namedBackingType(ret_ty) orelse
             Common.invariant("structural decoder return type was not a named Decoder type");
-        const record2_payload_tys = self.decoderRecord2PayloadTypes(backing_ty);
-        if (record2_payload_tys.len != 3) Common.invariant("Decoder.Record2 must have exactly three payloads");
-        if (!self.typeHasBuiltinOwner(record2_payload_tys[0], .str) or
-            !self.typeHasBuiltinOwner(record2_payload_tys[1], .str))
-        {
-            Common.invariant("Decoder.Record2 field-name payloads must be Str");
+        var record_tag_buf: [32]u8 = undefined;
+        const record_tag_text = std.fmt.bufPrint(&record_tag_buf, "Record{d}", .{record_fields.len}) catch
+            Common.invariant("structural decoder record tag name did not fit in stack buffer");
+        const record_payload_tys = self.decoderRecordPayloadTypes(backing_ty, record_tag_text);
+        if (record_payload_tys.len != record_fields.len + 1) Common.invariant("Decoder record constructor had an unexpected payload count");
+        for (record_payload_tys[0..record_fields.len]) |payload_ty| {
+            if (!self.typeHasBuiltinOwner(payload_ty, .str)) Common.invariant("Decoder record field-name payloads must be Str");
         }
 
-        const builder_fn_ty = record2_payload_tys[2];
-        const builder_fn = self.builder.functionShape(builder_fn_ty, "Decoder.Record2 builder payload was not a function");
+        const builder_fn_ty = record_payload_tys[record_fields.len];
+        const builder_fn = self.builder.functionShape(builder_fn_ty, "Decoder record builder payload was not a function");
         const builder_arg_tys = self.builder.program.types.span(builder_fn.args);
-        if (builder_arg_tys.len != 2) Common.invariant("Decoder.Record2 builder must take two arguments");
-        if (!self.typeHasBuiltinOwner(builder_arg_tys[0], .str) or
-            !self.typeHasBuiltinOwner(builder_arg_tys[1], .str))
-        {
-            Common.invariant("Decoder.Record2 builder arguments must be Str");
+        if (builder_arg_tys.len != record_fields.len) Common.invariant("Decoder record builder arity did not match decoded record arity");
+        for (record_fields, builder_arg_tys) |field, slot_ty| {
+            const slot_info = self.decoderFieldValueInfo(slot_ty);
+            if (!self.decoderFieldTypeIsSupported(field.ty, slot_info)) Common.invariant("structural decoder record field type was not supported");
         }
-        if (!self.sameType(builder_fn.ret, record_ty)) Common.invariant("Decoder.Record2 builder return type did not match decoded record");
+        if (!self.sameType(builder_fn.ret, record_ty)) Common.invariant("Decoder record builder return type did not match decoded record");
 
-        const str_ty = record2_payload_tys[0];
-        const field0_name = self.builder.program.names.recordFieldLabelText(record_fields[0].name);
-        const field1_name = self.builder.program.names.recordFieldLabelText(record_fields[1].name);
-        const field0_expr = try self.builder.stringExpr(field0_name, str_ty);
-        const field1_expr = try self.builder.stringExpr(field1_name, str_ty);
-        const builder_expr = try self.structuralDecoderRecord2Builder(record_ty, record_fields, builder_fn_ty, builder_arg_tys, plan.callable_ty);
+        const payloads = try self.allocator.alloc(Ast.ExprId, record_fields.len + 1);
+        defer self.allocator.free(payloads);
+        for (record_fields, 0..) |field, i| {
+            const field_name = self.builder.program.names.recordFieldLabelText(field.name);
+            payloads[i] = try self.builder.stringExpr(field_name, record_payload_tys[i]);
+        }
+        payloads[record_fields.len] = try self.structuralDecoderRecordBuilder(record_ty, record_fields, builder_fn_ty, builder_arg_tys, plan.callable_ty);
 
-        const payloads = [_]Ast.ExprId{ field0_expr, field1_expr, builder_expr };
-        const tag_name = try self.builder.program.names.internTagLabel("Record2");
+        const tag_name = try self.builder.program.names.internTagLabel(record_tag_text);
         const backing_expr = try self.builder.program.addExpr(.{
             .ty = backing_ty,
             .data = .{ .tag = .{
                 .name = tag_name,
-                .payloads = try self.builder.program.addExprSpan(&payloads),
+                .payloads = try self.builder.program.addExprSpan(payloads),
             } },
         });
         const decoder_expr = try self.builder.program.addExpr(.{
@@ -5341,21 +5342,103 @@ const BodyContext = struct {
         return try self.wrapDispatchArgumentEvaluation(plan, callable_mono_ty, arg_ctx, pre_lowered, decoder_expr);
     }
 
-    fn decoderRecord2PayloadTypes(self: *BodyContext, backing_ty: Type.TypeId) []const Type.TypeId {
+    fn decoderRecordPayloadTypes(self: *BodyContext, backing_ty: Type.TypeId, record_tag_text: []const u8) []const Type.TypeId {
         return switch (self.builder.shapeContent(backing_ty)) {
             .tag_union => |tags| {
                 for (self.builder.program.types.tagSpan(tags)) |tag| {
-                    if (Ident.textEql(self.builder.program.names.tagLabelText(tag.name), "Record2")) {
+                    if (Ident.textEql(self.builder.program.names.tagLabelText(tag.name), record_tag_text)) {
                         return self.builder.program.types.span(tag.payloads);
                     }
                 }
-                Common.invariant("Decoder backing type did not contain Record2");
+                Common.invariant("Decoder backing type did not contain requested record constructor");
             },
             else => Common.invariant("Decoder backing type was not a tag union"),
         };
     }
 
-    fn structuralDecoderRecord2Builder(
+    const DecoderFieldValueInfo = struct {
+        present_tag: Type.Tag,
+        missing_tag: Type.Tag,
+        present_payload_ty: Type.TypeId,
+    };
+
+    const TryStrOptionalInfo = struct {
+        backing_ty: Type.TypeId,
+        ok_payload_ty: Type.TypeId,
+        err_ty: Type.TypeId,
+        missing_tag: Type.Tag,
+    };
+
+    fn decoderFieldTypeIsSupported(self: *BodyContext, ty: Type.TypeId, slot_info: DecoderFieldValueInfo) bool {
+        if (self.typeHasBuiltinOwner(ty, .str)) return true;
+        return self.tryStrOptionalInfo(ty, slot_info.missing_tag) != null;
+    }
+
+    fn decoderFieldValueInfo(self: *BodyContext, slot_ty: Type.TypeId) DecoderFieldValueInfo {
+        const tags_span = switch (self.builder.shapeContent(slot_ty)) {
+            .tag_union => |tags| tags,
+            else => Common.invariant("Decoder record builder argument was not a field-value tag union"),
+        };
+        const tags = self.builder.program.types.tagSpan(tags_span);
+        if (tags.len != 2) Common.invariant("Decoder field-value type must have exactly one present and one missing tag");
+
+        var present_tag: ?Type.Tag = null;
+        var missing_tag: ?Type.Tag = null;
+        var present_payload_ty: ?Type.TypeId = null;
+        for (tags) |tag| {
+            const payloads = self.builder.program.types.span(tag.payloads);
+            if (payloads.len == 1) {
+                if (!self.typeHasBuiltinOwner(payloads[0], .str)) Common.invariant("Decoder Present field value payload must be Str");
+                if (present_tag != null) Common.invariant("Decoder field-value type had multiple present tags");
+                present_tag = tag;
+                present_payload_ty = payloads[0];
+            } else if (payloads.len == 0) {
+                if (missing_tag != null) Common.invariant("Decoder field-value type had multiple missing tags");
+                missing_tag = tag;
+            } else {
+                Common.invariant("Decoder field-value type had an unsupported tag shape");
+            }
+        }
+
+        return .{
+            .present_tag = present_tag orelse Common.invariant("Decoder field-value type was missing a present tag"),
+            .missing_tag = missing_tag orelse Common.invariant("Decoder field-value type was missing a missing tag"),
+            .present_payload_ty = present_payload_ty orelse Common.invariant("Decoder field-value present tag was missing its payload"),
+        };
+    }
+
+    fn tryStrOptionalInfo(self: *BodyContext, ty: Type.TypeId, slot_missing_tag: Type.Tag) ?TryStrOptionalInfo {
+        const backing_ty = self.builder.namedBackingType(ty) orelse return null;
+        const ok_tag = self.monoTagByTextOptional(backing_ty, "Ok") orelse return null;
+        const err_tag = self.monoTagByTextOptional(backing_ty, "Err") orelse return null;
+        const ok_payloads = self.builder.program.types.span(ok_tag.payloads);
+        const err_payloads = self.builder.program.types.span(err_tag.payloads);
+        if (ok_payloads.len != 1 or err_payloads.len != 1) return null;
+        if (!self.typeHasBuiltinOwner(ok_payloads[0], .str)) return null;
+        const missing_tag = self.monoTagByNameOptional(err_payloads[0], slot_missing_tag.name) orelse return null;
+        if (self.builder.program.types.span(missing_tag.payloads).len != 0) return null;
+        return .{
+            .backing_ty = backing_ty,
+            .ok_payload_ty = ok_payloads[0],
+            .err_ty = err_payloads[0],
+            .missing_tag = missing_tag,
+        };
+    }
+
+    fn monoTagByNameOptional(self: *BodyContext, ty: Type.TypeId, name: names.TagNameId) ?Type.Tag {
+        const text = self.builder.program.names.tagLabelText(name);
+        return switch (self.builder.shapeContent(ty)) {
+            .tag_union => |span| {
+                for (self.builder.program.types.tagSpan(span)) |tag| {
+                    if (Ident.textEql(self.builder.program.names.tagLabelText(tag.name), text)) return tag;
+                }
+                return null;
+            },
+            else => null,
+        };
+    }
+
+    fn structuralDecoderRecordBuilder(
         self: *BodyContext,
         record_ty: Type.TypeId,
         record_fields: []const Type.Field,
@@ -5363,26 +5446,24 @@ const BodyContext = struct {
         builder_arg_tys: []const Type.TypeId,
         source_fn_ty: checked.CheckedTypeId,
     ) Allocator.Error!Ast.ExprId {
-        const arg0 = try self.builder.program.addLocal(self.builder.symbols.fresh(), builder_arg_tys[0]);
-        const arg1 = try self.builder.program.addLocal(self.builder.symbols.fresh(), builder_arg_tys[1]);
-        const args = [_]Ast.TypedLocal{
-            .{ .local = arg0, .ty = builder_arg_tys[0] },
-            .{ .local = arg1, .ty = builder_arg_tys[1] },
-        };
+        const args = try self.allocator.alloc(Ast.TypedLocal, builder_arg_tys.len);
+        defer self.allocator.free(args);
+        const fields = try self.allocator.alloc(Ast.FieldExpr, record_fields.len);
+        defer self.allocator.free(fields);
 
-        const fields = [_]Ast.FieldExpr{
-            .{
-                .name = record_fields[0].name,
-                .value = try self.builder.localExpr(arg0, record_fields[0].ty),
-            },
-            .{
-                .name = record_fields[1].name,
-                .value = try self.builder.localExpr(arg1, record_fields[1].ty),
-            },
-        };
+        for (builder_arg_tys, 0..) |arg_ty, i| {
+            const local = try self.builder.program.addLocal(self.builder.symbols.fresh(), arg_ty);
+            args[i] = .{ .local = local, .ty = arg_ty };
+            const arg_expr = try self.builder.localExpr(local, arg_ty);
+            fields[i] = .{
+                .name = record_fields[i].name,
+                .value = try self.structuralDecoderFieldFromSlot(arg_expr, arg_ty, record_fields[i].ty),
+            };
+        }
+
         const body = try self.builder.program.addExpr(.{
             .ty = record_ty,
-            .data = .{ .record = try self.builder.program.addFieldExprSpan(&fields) },
+            .data = .{ .record = try self.builder.program.addFieldExprSpan(fields) },
         });
 
         const fn_id = try self.builder.program.addFn(.{
@@ -5396,9 +5477,104 @@ const BodyContext = struct {
             .ty = builder_fn_ty,
             .data = .{ .lambda = .{
                 .fn_id = fn_id,
-                .args = try self.builder.program.addTypedLocalSpan(&args),
+                .args = try self.builder.program.addTypedLocalSpan(args),
                 .body = body,
             } },
+        });
+    }
+
+    fn structuralDecoderFieldFromSlot(
+        self: *BodyContext,
+        slot_expr: Ast.ExprId,
+        slot_ty: Type.TypeId,
+        field_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const slot_info = self.decoderFieldValueInfo(slot_ty);
+
+        const value_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), slot_info.present_payload_ty);
+        const value_pat = try self.builder.bindPat(value_local, slot_info.present_payload_ty);
+        const present_pat = try self.builder.program.addPat(.{ .ty = slot_ty, .data = .{ .tag = .{
+            .name = slot_info.present_tag.name,
+            .payloads = try self.builder.program.addPatSpan(&[_]Ast.PatId{value_pat}),
+        } } });
+        const missing_pat = try self.builder.program.addPat(.{ .ty = slot_ty, .data = .{ .tag = .{
+            .name = slot_info.missing_tag.name,
+            .payloads = try self.builder.program.addPatSpan(&[_]Ast.PatId{}),
+        } } });
+
+        const present_body = if (self.typeHasBuiltinOwner(field_ty, .str))
+            try self.builder.localExpr(value_local, field_ty)
+        else if (self.tryStrOptionalInfo(field_ty, slot_info.missing_tag)) |info|
+            try self.tryOkFromFieldValue(value_local, info, field_ty)
+        else
+            Common.invariant("unsupported structural decoder field type reached slot lowering");
+
+        const absent_body = if (self.typeHasBuiltinOwner(field_ty, .str))
+            try self.requiredFieldMissingCrash(field_ty)
+        else if (self.tryStrOptionalInfo(field_ty, slot_info.missing_tag)) |info|
+            try self.tryErrMissing(info, field_ty)
+        else
+            Common.invariant("unsupported structural decoder field type reached slot lowering");
+
+        const branches = [_]Ast.Branch{
+            .{ .pat = present_pat, .body = present_body },
+            .{ .pat = missing_pat, .body = absent_body },
+        };
+        return try self.builder.program.addExpr(.{ .ty = field_ty, .data = .{ .match_ = .{
+            .scrutinee = slot_expr,
+            .branches = try self.builder.program.addBranchSpan(&branches),
+        } } });
+    }
+
+    fn requiredFieldMissingCrash(self: *BodyContext, field_ty: Type.TypeId) Allocator.Error!Ast.ExprId {
+        const msg = try self.builder.program.addStringLiteral("missing required decoded field");
+        return try self.builder.program.addExpr(.{ .ty = field_ty, .data = .{ .crash = msg } });
+    }
+
+    fn tryOkFromFieldValue(
+        self: *BodyContext,
+        value_local: Ast.LocalId,
+        info: TryStrOptionalInfo,
+        try_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const ok_tag = self.monoTagByText(info.backing_ty, "Ok");
+        const value_expr = try self.builder.localExpr(value_local, info.ok_payload_ty);
+        const backing_expr = try self.builder.program.addExpr(.{
+            .ty = info.backing_ty,
+            .data = .{ .tag = .{
+                .name = ok_tag.name,
+                .payloads = try self.builder.program.addExprSpan(&[_]Ast.ExprId{value_expr}),
+            } },
+        });
+        return try self.builder.program.addExpr(.{
+            .ty = try_ty,
+            .data = .{ .nominal = backing_expr },
+        });
+    }
+
+    fn tryErrMissing(
+        self: *BodyContext,
+        info: TryStrOptionalInfo,
+        try_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const missing_expr = try self.builder.program.addExpr(.{
+            .ty = info.err_ty,
+            .data = .{ .tag = .{
+                .name = info.missing_tag.name,
+                .payloads = try self.builder.program.addExprSpan(&[_]Ast.ExprId{}),
+            } },
+        });
+        const err_tag = self.monoTagByText(info.backing_ty, "Err");
+        const backing_expr = try self.builder.program.addExpr(.{
+            .ty = info.backing_ty,
+            .data = .{ .tag = .{
+                .name = err_tag.name,
+                .payloads = try self.builder.program.addExprSpan(&[_]Ast.ExprId{missing_expr}),
+            } },
+        });
+        return try self.builder.program.addExpr(.{
+            .ty = try_ty,
+            .data = .{ .nominal = backing_expr },
         });
     }
 

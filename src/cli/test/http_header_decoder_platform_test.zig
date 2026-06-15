@@ -7,27 +7,24 @@ const util = @import("util.zig");
 const testing = std.testing;
 const io = std.testing.io;
 
-const request =
-    "GET /header-lengths HTTP/1.1\r\n" ++
-    "Host: localhost\r\n" ++
-    "fOo: abcdefghijklmnopqrstuvwxyz\r\n" ++
-    "Cache-Control: 012345678901234567890123456789\r\n" ++
-    "Content-Length: 0\r\n" ++
-    "\r\n";
+const required_foo_value = "abcdefghijklmnopqrstuvwxyz";
+
+const optional_headers = [_]OptionalHeader{
+    .{ .name = "Explicit-Optional", .value = "abc" },
+    .{ .name = "Wildcard-Optional", .value = "vwxyz" },
+    .{ .name = "Question-Optional", .value = "1234567" },
+};
+
+const OptionalHeader = struct {
+    name: []const u8,
+    value: []const u8,
+};
 
 const invalid_utf8_request =
     "GET /bad-\xff HTTP/1.1\r\n" ++
     "Host: localhost\r\n" ++
     "Content-Length: 0\r\n" ++
     "\r\n";
-
-const expected_response =
-    "HTTP/1.1 200 OK\r\n" ++
-    "Content-Type: text/plain\r\n" ++
-    "Content-Length: 2\r\n" ++
-    "Connection: close\r\n" ++
-    "\r\n" ++
-    "56";
 
 test "HTTP header Decoder platform derives record decoder without runtime allocations" {
     const target_name = nativeRunnableTargetName() orelse return error.SkipZigTest;
@@ -88,8 +85,67 @@ test "HTTP header Decoder platform derives record decoder without runtime alloca
         },
     }
 
-    try runServerAndCheckResponse(allocator, output_path);
+    for (0..8) |case_index| {
+        const mask: u8 = @intCast(case_index);
+        const request = try buildRequest(allocator, mask);
+        defer allocator.free(request);
+        const expected_response = try buildExpectedResponse(allocator, expectedHeaderLength(mask));
+        defer allocator.free(expected_response);
+
+        try runServerAndCheckResponse(allocator, output_path, request, expected_response);
+    }
+
     try runServerAndCheckInvalidUtf8(allocator, output_path);
+}
+
+fn buildRequest(allocator: std.mem.Allocator, optional_mask: u8) ![]u8 {
+    var request: std.ArrayList(u8) = .empty;
+    errdefer request.deinit(allocator);
+
+    try request.appendSlice(allocator, "GET /header-lengths HTTP/1.1\r\n");
+    try request.appendSlice(allocator, "Host: localhost\r\n");
+    try request.appendSlice(allocator, "fOo: ");
+    try request.appendSlice(allocator, required_foo_value);
+    try request.appendSlice(allocator, "\r\n");
+
+    for (optional_headers, 0..) |header, index| {
+        const bit = @as(u8, 1) << @intCast(index);
+        if ((optional_mask & bit) == 0) continue;
+
+        try request.appendSlice(allocator, header.name);
+        try request.appendSlice(allocator, ": ");
+        try request.appendSlice(allocator, header.value);
+        try request.appendSlice(allocator, "\r\n");
+    }
+
+    try request.appendSlice(allocator, "Content-Length: 0\r\n");
+    try request.appendSlice(allocator, "\r\n");
+
+    return request.toOwnedSlice(allocator);
+}
+
+fn expectedHeaderLength(optional_mask: u8) u64 {
+    var total: u64 = required_foo_value.len;
+    for (optional_headers, 0..) |header, index| {
+        const bit = @as(u8, 1) << @intCast(index);
+        if ((optional_mask & bit) != 0) {
+            total += header.value.len;
+        }
+    }
+    return total;
+}
+
+fn buildExpectedResponse(allocator: std.mem.Allocator, value: u64) ![]u8 {
+    return std.fmt.allocPrint(
+        allocator,
+        "HTTP/1.1 200 OK\r\n" ++
+            "Content-Type: text/plain\r\n" ++
+            "Content-Length: {d}\r\n" ++
+            "Connection: close\r\n" ++
+            "\r\n" ++
+            "{d}",
+        .{ std.fmt.count("{d}", .{value}), value },
+    );
 }
 
 fn nativeRunnableTargetName() ?[]const u8 {
@@ -113,7 +169,7 @@ fn nativeRunnableTargetName() ?[]const u8 {
     };
 }
 
-fn runServerAndCheckResponse(allocator: std.mem.Allocator, exe_path: []const u8) !void {
+fn runServerAndCheckResponse(allocator: std.mem.Allocator, exe_path: []const u8, request: []const u8, expected_response: []const u8) !void {
     var child = try std.process.spawn(io, .{
         .argv = &.{exe_path},
         .stdin = .ignore,
