@@ -33,9 +33,11 @@ pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
 pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
     var gpa_impl = std.heap.DebugAllocator(.{}){};
     defer {
-        _ = gpa_impl.deinit();
+        if (!builtin.fuzz or debug) {
+            _ = gpa_impl.deinit();
+        }
     }
-    const gpa = gpa_impl.allocator();
+    const gpa = if (builtin.fuzz and !debug) base.defaultGpa() else gpa_impl.allocator();
 
     const input = buf[0..@intCast(len)];
     var reader = FuzzReader.init(input);
