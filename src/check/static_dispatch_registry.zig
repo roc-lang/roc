@@ -433,6 +433,9 @@ pub const StaticDispatchResultMode = union(enum) {
         structural_allowed: bool,
         negated: bool,
     },
+    decoder: struct {
+        structural_allowed: bool,
+    },
 };
 
 /// Public `StaticDispatchDispatcher` declaration.
@@ -920,6 +923,12 @@ fn staticDispatchResultModeForCheckedValueCall(
     constraint_fn_var: Var,
 ) Allocator.Error!StaticDispatchResultMode {
     const common = module.commonIdents();
+    if (method_name.eql(common.decoder)) {
+        return .{ .decoder = .{
+            .structural_allowed = true,
+        } };
+    }
+
     if (!method_name.eql(common.is_eq)) return .value;
 
     if (constraint_index.lookup(constraint_fn_var)) |constraint| {

@@ -4427,6 +4427,84 @@ pub fn build(b: *std.Build) void {
             "Run fx platform Zig tests",
         );
         run_fx_platform_zig_test_step.dependOn(&run_fx_platform_test.step);
+
+        const http_host_target, const http_host_target_dir: ?[]const u8 = switch (target.result.os.tag) {
+            .linux => switch (target.result.cpu.arch) {
+                .x86_64 => .{ b.resolveTargetQuery(.{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .musl }), "x64musl" },
+                .aarch64 => .{ b.resolveTargetQuery(.{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .musl }), "arm64musl" },
+                else => .{ target, null },
+            },
+            .windows => switch (target.result.cpu.arch) {
+                .x86_64 => .{ target, "x64win" },
+                .aarch64 => .{ target, "arm64win" },
+                else => .{ target, null },
+            },
+            .macos => switch (target.result.cpu.arch) {
+                .x86_64 => .{ target, "x64mac" },
+                .aarch64 => .{ target, "arm64mac" },
+                else => .{ target, null },
+            },
+            else => .{ target, null },
+        };
+
+        if (http_host_target_dir) |target_dir| {
+            const http_header_decoder_host_lib = createTestPlatformHostLib(
+                b,
+                "test_http_header_decoder_host",
+                "test/http-headers/platform/host.zig",
+                http_host_target,
+                .ReleaseFast,
+                roc_modules,
+                strip,
+                omit_frame_pointer,
+                .{},
+            );
+
+            const copy_http_host = b.addUpdateSourceFiles();
+            const http_host_filename = if (http_host_target.result.os.tag == .windows) "host.lib" else "libhost.a";
+            const http_host_path = b.pathJoin(&.{ "test/http-headers/platform/targets", target_dir, http_host_filename });
+            copy_http_host.addCopyFileToSource(http_header_decoder_host_lib.getEmittedBin(), http_host_path);
+
+            const final_http_host_step: *Step = if (http_host_target.result.os.tag != .windows) blk: {
+                const fix_http_host = FixArchivePaddingStep.create(b, http_host_path);
+                fix_http_host.step.dependOn(&copy_http_host.step);
+                break :blk &fix_http_host.step;
+            } else &copy_http_host.step;
+            b.getInstallStep().dependOn(final_http_host_step);
+
+            const http_header_decoder_platform_test = b.addTest(.{
+                .name = "http_header_decoder_platform_test",
+                .root_module = b.createModule(.{
+                    .root_source_file = b.path("src/cli/test/http_header_decoder_platform_test.zig"),
+                    .target = target,
+                    .optimize = optimize,
+                    .link_libc = true,
+                }),
+                .filters = test_filters,
+            });
+
+            const run_http_header_decoder_platform_test = b.addRunArtifact(http_header_decoder_platform_test);
+            if (run_args.len != 0) {
+                run_http_header_decoder_platform_test.addArgs(run_args);
+            }
+            build_test_zig_step.dependOn(&http_header_decoder_platform_test.step);
+            run_http_header_decoder_platform_test.step.dependOn(final_http_host_step);
+            run_http_header_decoder_platform_test.step.dependOn(build_roc_step);
+
+            const run_http_header_decoder_platform_test_for_summary = b.addRunArtifact(http_header_decoder_platform_test);
+            if (run_args.len != 0) {
+                run_http_header_decoder_platform_test_for_summary.addArgs(run_args);
+            }
+            run_http_header_decoder_platform_test_for_summary.step.dependOn(final_http_host_step);
+            run_http_header_decoder_platform_test_for_summary.step.dependOn(build_roc_step);
+            tests_summary.addRun(&run_http_header_decoder_platform_test_for_summary.step);
+
+            const run_http_header_decoder_platform_zig_test_step = b.step(
+                "run-test-zig-http-header-decoder-platform",
+                "Run HTTP header Decoder platform Zig test",
+            );
+            run_http_header_decoder_platform_zig_test_step.dependOn(&run_http_header_decoder_platform_test.step);
+        }
     }
 
     // Build glue platform host at runtime for the native platform.

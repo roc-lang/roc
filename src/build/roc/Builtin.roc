@@ -183,6 +183,18 @@ Builtin :: [].{
 		## ```
 		drop_suffix : Str, Str -> Str
 
+		## Finds the first occurrence of a delimiter in a string.
+		##
+		## The returned strings are slices of the original string. If the delimiter is
+		## not found, `found` is `Bool.False`, `before` is the original string, and
+		## `matched` and `after` are empty.
+		##
+		## ```roc
+		## expect "foo: bar".find_first(":") == { before: "foo", found: Bool.True, matched: ":", after: " bar" }
+		## expect "foo".find_first(":").found == Bool.False
+		## ```
+		find_first : Str, Str -> { before : Str, found : Bool, matched : Str, after : Str }
+
 		## Gives the number of bytes in a [Str] value.
 		## ```roc
 		## expect "Hello World".count_utf8_bytes() == 11

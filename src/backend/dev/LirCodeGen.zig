@@ -69,6 +69,7 @@ const strReleaseExcessCapacity = builtins.str.strReleaseExcessCapacity;
 const strWithCapacityC = builtins.str.withCapacityC;
 const strDropPrefix = builtins.str.strDropPrefix;
 const strDropSuffix = builtins.str.strDropSuffix;
+const strFindFirst = builtins.str.findFirst;
 const strWithAsciiLowercased = builtins.str.strWithAsciiLowercased;
 const strWithAsciiUppercased = builtins.str.strWithAsciiUppercased;
 const strFromUtf8Lossy = builtins.str.fromUtf8Lossy;
@@ -182,6 +183,7 @@ pub const BuiltinFn = enum {
     str_ends_with,
     str_equal,
     str_count_utf8_bytes,
+    str_find_first,
     str_caseless_ascii_equals,
     str_repeat,
     str_trim,
@@ -297,6 +299,7 @@ pub const BuiltinFn = enum {
             .str_ends_with => "roc_builtins_str_ends_with",
             .str_equal => "roc_builtins_str_equal",
             .str_count_utf8_bytes => "roc_builtins_str_count_utf8_bytes",
+            .str_find_first => "roc_builtins_str_find_first",
             .str_caseless_ascii_equals => "roc_builtins_str_caseless_ascii_equals",
             .str_repeat => "roc_builtins_str_repeat",
             .str_trim => "roc_builtins_str_trim",
@@ -478,6 +481,18 @@ fn wrapStrEqual(a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_
 fn wrapStrCountUtf8Bytes(str_bytes: ?[*]u8, str_len: usize, str_cap: usize) callconv(.c) u64 {
     const s = RocStr{ .bytes = str_bytes, .length = str_len, .capacity_or_alloc_ptr = str_cap };
     return strCountUtf8Bytes(s);
+}
+
+fn wrapStrFindFirst(out: *anyopaque, a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize, find_layout: *const dev_wrappers.StrFindFirstLayout, roc_ops: *RocOps) callconv(.c) void {
+    const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
+    const b = RocStr{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
+    const result = strFindFirst(a, b, roc_ops);
+    const out_bytes: [*]u8 = @ptrCast(out);
+
+    @as(*RocStr, @ptrCast(@alignCast(out_bytes + find_layout.after_offset))).* = result.after;
+    @as(*RocStr, @ptrCast(@alignCast(out_bytes + find_layout.before_offset))).* = result.before;
+    @as(*u8, @ptrCast(@alignCast(out_bytes + find_layout.found_offset))).* = if (result.found) 1 else 0;
+    @as(*RocStr, @ptrCast(@alignCast(out_bytes + find_layout.matched_offset))).* = result.matched;
 }
 
 /// Wrapper: strCaselessAsciiEquals(RocStr, RocStr) -> bool
@@ -2787,6 +2802,60 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const str_off = try self.ensureOnStack(str_loc, roc_str_size);
                     return try self.callStr1ToScalar(str_off, @intFromPtr(&wrapStrCountUtf8Bytes), .str_count_utf8_bytes);
                 },
+                .str_find_first => {
+                    if (args.len != 2) unreachable;
+                    const a_loc = try self.emitValueLocal(args[0]);
+                    const b_loc = try self.emitValueLocal(args[1]);
+                    const a_off = try self.ensureOnStack(a_loc, roc_str_size);
+                    const b_off = try self.ensureOnStack(b_loc, roc_str_size);
+                    const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+
+                    const ls = self.layout_store;
+                    const ret_layout_val = ls.getLayout(ll.ret_layout);
+                    if (ret_layout_val.tag != .struct_) {
+                        std.debug.panic("LIR/codegen invariant violated: str_find_first expected record return layout", .{});
+                    }
+                    const record_idx = ret_layout_val.getStruct().idx;
+                    const record_data = ls.getStructData(record_idx);
+                    const fields = ls.struct_fields.sliceRange(record_data.getFields());
+                    if (fields.len != 4 or
+                        ls.getStructFieldLayoutByOriginalIndex(record_idx, 0) != .str or
+                        ls.getStructFieldLayoutByOriginalIndex(record_idx, 1) != .str or
+                        ls.getStructFieldLayoutByOriginalIndex(record_idx, 2) != .bool or
+                        ls.getStructFieldLayoutByOriginalIndex(record_idx, 3) != .str)
+                    {
+                        std.debug.panic("LIR/codegen invariant violated: str_find_first expected fields after Str, before Str, found Bool, matched Str", .{});
+                    }
+
+                    const result_offset = self.codegen.allocStackSlot(record_data.size);
+                    try self.zeroStackArea(result_offset, record_data.size);
+
+                    const layout_slot = self.codegen.allocStackSlot(@sizeOf(dev_wrappers.StrFindFirstLayout));
+                    const layout_reg = try self.allocTempGeneral();
+                    try self.codegen.emitLoadImm(layout_reg, @intCast(ls.getStructFieldOffsetByOriginalIndex(record_idx, 0)));
+                    try self.emitStore(.w32, frame_ptr, layout_slot, layout_reg);
+                    try self.codegen.emitLoadImm(layout_reg, @intCast(ls.getStructFieldOffsetByOriginalIndex(record_idx, 1)));
+                    try self.emitStore(.w32, frame_ptr, layout_slot + 4, layout_reg);
+                    try self.codegen.emitLoadImm(layout_reg, @intCast(ls.getStructFieldOffsetByOriginalIndex(record_idx, 2)));
+                    try self.emitStore(.w32, frame_ptr, layout_slot + 8, layout_reg);
+                    try self.codegen.emitLoadImm(layout_reg, @intCast(ls.getStructFieldOffsetByOriginalIndex(record_idx, 3)));
+                    try self.emitStore(.w32, frame_ptr, layout_slot + 12, layout_reg);
+                    self.codegen.freeGeneral(layout_reg);
+
+                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    try builder.addLeaArg(frame_ptr, result_offset);
+                    try builder.addMemArg(frame_ptr, a_off);
+                    try builder.addMemArg(frame_ptr, a_off + 16);
+                    try builder.addMemArg(frame_ptr, a_off + 8);
+                    try builder.addMemArg(frame_ptr, b_off);
+                    try builder.addMemArg(frame_ptr, b_off + 16);
+                    try builder.addMemArg(frame_ptr, b_off + 8);
+                    try builder.addLeaArg(frame_ptr, layout_slot);
+                    try builder.addRegArg(roc_ops_reg);
+                    try self.callBuiltin(&builder, @intFromPtr(&wrapStrFindFirst), .str_find_first);
+
+                    return self.stackLocationForLayout(ll.ret_layout, result_offset);
+                },
                 .str_caseless_ascii_equals => {
                     if (args.len != 2) unreachable;
                     const a_loc = try self.emitValueLocal(args[0]);
@@ -4268,6 +4337,25 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return .{ .general_reg = result_reg };
         }
 
+        /// Call a C wrapper: fn(str_f0, str_f1, str_f2, u64_val) -> scalar.
+        fn callStr1U64ToScalar(self: *Self, str_off: i32, u64_off: i32, fn_addr: usize, builtin_fn: BuiltinFn) Allocator.Error!ValueLocation {
+            const base_ptr = frame_ptr;
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addMemArg(base_ptr, str_off);
+            try builder.addMemArg(base_ptr, str_off + 16);
+            try builder.addMemArg(base_ptr, str_off + 8);
+            try builder.addMemArg(base_ptr, u64_off);
+            try self.callBuiltin(&builder, fn_addr, builtin_fn);
+
+            const result_reg = try self.allocTempGeneral();
+            if (comptime target.toCpuArch() == .aarch64) {
+                try self.codegen.emit.movRegReg(.w64, result_reg, .X0);
+            } else {
+                try self.codegen.emit.movRegReg(.w64, result_reg, .RAX);
+            }
+            return .{ .general_reg = result_reg };
+        }
+
         /// Call a C wrapper: fn(a_f0, a_f1, a_f2, b_f0, b_f1, b_f2) -> bool
         /// Used for (str, str) -> bool comparison ops (equal, contains, starts_with, etc.)
         fn callStr2ToScalar(self: *Self, a_off: i32, b_off: i32, fn_addr: usize, builtin_fn: BuiltinFn) Allocator.Error!ValueLocation {
@@ -4346,6 +4434,25 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try builder.addMemArg(base_ptr, str_off + 8);
             try builder.addMemArg(base_ptr, u64_off);
             if (update_mode_imm) |imm| try builder.addImmArg(imm);
+            try builder.addRegArg(roc_ops_reg);
+            try self.callBuiltin(&builder, fn_addr, builtin_fn);
+
+            return .{ .stack_str = result_offset };
+        }
+
+        /// Call: fn(out, str_f0, str_f1, str_f2, u64_val, u64_val, roc_ops) -> void.
+        fn callStr1U64U64RocOpsToStr(self: *Self, str_off: i32, first_u64_off: i32, second_u64_off: i32, fn_addr: usize, builtin_fn: BuiltinFn) Allocator.Error!ValueLocation {
+            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+            const result_offset = self.codegen.allocStackSlot(roc_str_size);
+
+            const base_ptr = frame_ptr;
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addLeaArg(base_ptr, result_offset);
+            try builder.addMemArg(base_ptr, str_off);
+            try builder.addMemArg(base_ptr, str_off + 16);
+            try builder.addMemArg(base_ptr, str_off + 8);
+            try builder.addMemArg(base_ptr, first_u64_off);
+            try builder.addMemArg(base_ptr, second_u64_off);
             try builder.addRegArg(roc_ops_reg);
             try self.callBuiltin(&builder, fn_addr, builtin_fn);
 

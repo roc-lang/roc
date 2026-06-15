@@ -372,6 +372,7 @@ str_trim_start_import: ?u32 = null,
 str_trim_end_import: ?u32 = null,
 str_split_import: ?u32 = null,
 str_join_with_import: ?u32 = null,
+str_find_first_import: ?u32 = null,
 str_reserve_import: ?u32 = null,
 str_release_excess_capacity_import: ?u32 = null,
 str_with_capacity_import: ?u32 = null,
@@ -1324,6 +1325,10 @@ fn registerHostImports(self: *Self) Allocator.Error!void {
     self.str_concat_import = try self.module.addImport("env", "roc_str_concat", str_binary_type);
     self.str_repeat_import = try self.module.addImport("env", "roc_str_repeat", str_binary_type);
     self.str_reserve_import = try self.module.addImport("env", "roc_str_reserve", str_binary_type);
+
+    // roc_str_find_first: (source, delimiter, result, after_off, before_off, found_off, matched_off) -> void
+    const str_find_first_type = try self.module.addFuncType(&.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
+    self.str_find_first_import = try self.module.addImport("env", "roc_str_find_first", str_find_first_type);
 
     // Caseless equals: (str_a, str_b) -> i32
     self.str_caseless_ascii_equals_import = try self.module.addImport("env", "roc_str_caseless_ascii_equals", str_eq_type);
@@ -9964,6 +9969,44 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             if (ret_vt == .i64) {
                 self.currentCode().append(self.allocator, Op.i64_extend_i32_u) catch return error.OutOfMemory;
             }
+        },
+
+        .str_find_first => {
+            const import_idx = self.str_find_first_import orelse unreachable;
+            try self.emitProcLocal(args[0]);
+            const source = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            try self.emitLocalSet(source);
+            try self.emitProcLocal(args[1]);
+            const delimiter = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            try self.emitLocalSet(delimiter);
+
+            const ls = self.getLayoutStore();
+            const ret_layout_val = ls.getLayout(ll.ret_layout);
+            if (ret_layout_val.tag != .struct_) unreachable;
+            const record_idx = ret_layout_val.getStruct().idx;
+            const record_data = ls.getStructData(record_idx);
+            const fields = ls.struct_fields.sliceRange(record_data.getFields());
+            if (fields.len != 4 or
+                ls.getStructFieldLayoutByOriginalIndex(record_idx, 0) != .str or
+                ls.getStructFieldLayoutByOriginalIndex(record_idx, 1) != .str or
+                ls.getStructFieldLayoutByOriginalIndex(record_idx, 2) != .bool or
+                ls.getStructFieldLayoutByOriginalIndex(record_idx, 3) != .str)
+            {
+                unreachable;
+            }
+
+            const result_size = try self.layoutStorageByteSize(ll.ret_layout);
+            const result_align = try self.layoutStorageByteAlign(ll.ret_layout);
+            const result_offset = try self.allocStackMemory(result_size, result_align);
+            try self.emitLocalGet(source);
+            try self.emitLocalGet(delimiter);
+            try self.emitFpOffset(result_offset);
+            try self.emitI32Const(@intCast(ls.getStructFieldOffsetByOriginalIndex(record_idx, 0)));
+            try self.emitI32Const(@intCast(ls.getStructFieldOffsetByOriginalIndex(record_idx, 1)));
+            try self.emitI32Const(@intCast(ls.getStructFieldOffsetByOriginalIndex(record_idx, 2)));
+            try self.emitI32Const(@intCast(ls.getStructFieldOffsetByOriginalIndex(record_idx, 3)));
+            try self.emitCall(import_idx);
+            try self.emitFpOffset(result_offset);
         },
 
         .str_is_eq => {

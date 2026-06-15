@@ -4785,7 +4785,11 @@ const BodyContext = struct {
         }
         const lookup = self.dispatchTarget(plan, dispatcher_ty);
         if (lookup == null) {
-            return try self.lowerStructuralEquality(plan, callable_mono_ty, plan_ret_ty, self, pre_lowered);
+            return switch (plan.result_mode) {
+                .equality => try self.lowerStructuralEquality(plan, callable_mono_ty, plan_ret_ty, self, pre_lowered),
+                .decoder => try self.lowerStructuralDecoder(plan, callable_mono_ty, plan_ret_ty, self, pre_lowered),
+                .value => Common.invariant("value dispatch plan had no resolved dispatch target"),
+            };
         }
         const resolved = lookup.?;
         const target_mono_ty = try self.methodTargetMonoTypeFromPlan(resolved, &call_ctx, plan.callable_ty, expected_ret_ty);
@@ -4813,6 +4817,7 @@ const BodyContext = struct {
     ) Allocator.Error!Ast.ExprId {
         return switch (mode) {
             .value => expr,
+            .decoder => expr,
             .equality => |eq| if (eq.negated) blk: {
                 if (!self.typeHasBuiltinOwner(expr_ty, .bool)) Common.invariant("checked equality dispatch returned a non-Bool value");
                 break :blk try self.builder.lowLevelExpr(.bool_not, &.{expr}, expr_ty);
@@ -5131,11 +5136,13 @@ const BodyContext = struct {
     ) ?MethodLookup {
         const owner = methodOwnerFromType(&self.builder.program.types, dispatcher_ty) orelse {
             if (plan.result_mode == .equality and plan.result_mode.equality.structural_allowed) return null;
+            if (plan.result_mode == .decoder and plan.result_mode.decoder.structural_allowed) return null;
             Common.invariant("dispatch plan had no method owner and no structural equality permission");
         };
 
         const lookup = self.builder.lookupMethodTarget(owner, self.view, plan.method) orelse {
             if (plan.result_mode == .equality and plan.result_mode.equality.structural_allowed) return null;
+            if (plan.result_mode == .decoder and plan.result_mode.decoder.structural_allowed) return null;
             Common.invariant("checked method registry is missing resolved dispatch target");
         };
         return lookup;
@@ -5260,7 +5267,171 @@ const BodyContext = struct {
                 break :blk result;
             } else Common.invariant("structural equality dispatch plan did not permit structural equality"),
             .value => Common.invariant("value dispatch plan reached structural equality lowering"),
+            .decoder => Common.invariant("decoder dispatch plan reached structural equality lowering"),
         };
+    }
+
+    fn lowerStructuralDecoder(
+        self: *BodyContext,
+        plan: static_dispatch.StaticDispatchCallPlan,
+        callable_mono_ty: Type.TypeId,
+        ret_ty: Type.TypeId,
+        arg_ctx: *BodyContext,
+        pre_lowered: ?PreLoweredOperand,
+    ) Allocator.Error!Ast.ExprId {
+        const decoder = switch (plan.result_mode) {
+            .decoder => |decoder| decoder,
+            else => Common.invariant("non-decoder dispatch plan reached structural decoder lowering"),
+        };
+        if (!decoder.structural_allowed) Common.invariant("structural decoder dispatch plan did not permit structural decoder lowering");
+
+        const record_ty = try self.lowerType(plan.dispatcher_ty);
+        const record_fields_span = switch (self.builder.shapeContent(record_ty)) {
+            .record => |fields| fields,
+            else => Common.invariant("structural decoder dispatcher was not a record type"),
+        };
+        const record_fields = self.builder.program.types.fieldSpan(record_fields_span);
+        if (record_fields.len != 2) Common.invariant("structural decoder currently supports exactly two record fields");
+        for (record_fields) |field| {
+            if (!self.typeHasBuiltinOwner(field.ty, .str)) Common.invariant("structural decoder record field was not Str");
+        }
+
+        const backing_ty = self.builder.namedBackingType(ret_ty) orelse
+            Common.invariant("structural decoder return type was not a named Decoder type");
+        const record2_payload_tys = self.decoderRecord2PayloadTypes(backing_ty);
+        if (record2_payload_tys.len != 3) Common.invariant("Decoder.Record2 must have exactly three payloads");
+        if (!self.typeHasBuiltinOwner(record2_payload_tys[0], .str) or
+            !self.typeHasBuiltinOwner(record2_payload_tys[1], .str))
+        {
+            Common.invariant("Decoder.Record2 field-name payloads must be Str");
+        }
+
+        const builder_fn_ty = record2_payload_tys[2];
+        const builder_fn = self.builder.functionShape(builder_fn_ty, "Decoder.Record2 builder payload was not a function");
+        const builder_arg_tys = self.builder.program.types.span(builder_fn.args);
+        if (builder_arg_tys.len != 2) Common.invariant("Decoder.Record2 builder must take two arguments");
+        if (!self.typeHasBuiltinOwner(builder_arg_tys[0], .str) or
+            !self.typeHasBuiltinOwner(builder_arg_tys[1], .str))
+        {
+            Common.invariant("Decoder.Record2 builder arguments must be Str");
+        }
+        if (!self.sameType(builder_fn.ret, record_ty)) Common.invariant("Decoder.Record2 builder return type did not match decoded record");
+
+        const str_ty = record2_payload_tys[0];
+        const field0_name = self.builder.program.names.recordFieldLabelText(record_fields[0].name);
+        const field1_name = self.builder.program.names.recordFieldLabelText(record_fields[1].name);
+        const field0_expr = try self.builder.stringExpr(field0_name, str_ty);
+        const field1_expr = try self.builder.stringExpr(field1_name, str_ty);
+        const builder_expr = try self.structuralDecoderRecord2Builder(record_ty, record_fields, builder_fn_ty, builder_arg_tys, plan.callable_ty);
+
+        const payloads = [_]Ast.ExprId{ field0_expr, field1_expr, builder_expr };
+        const tag_name = try self.builder.program.names.internTagLabel("Record2");
+        const backing_expr = try self.builder.program.addExpr(.{
+            .ty = backing_ty,
+            .data = .{ .tag = .{
+                .name = tag_name,
+                .payloads = try self.builder.program.addExprSpan(&payloads),
+            } },
+        });
+        const decoder_expr = try self.builder.program.addExpr(.{
+            .ty = ret_ty,
+            .data = .{ .nominal = backing_expr },
+        });
+
+        return try self.wrapDispatchArgumentEvaluation(plan, callable_mono_ty, arg_ctx, pre_lowered, decoder_expr);
+    }
+
+    fn decoderRecord2PayloadTypes(self: *BodyContext, backing_ty: Type.TypeId) []const Type.TypeId {
+        return switch (self.builder.shapeContent(backing_ty)) {
+            .tag_union => |tags| {
+                for (self.builder.program.types.tagSpan(tags)) |tag| {
+                    if (Ident.textEql(self.builder.program.names.tagLabelText(tag.name), "Record2")) {
+                        return self.builder.program.types.span(tag.payloads);
+                    }
+                }
+                Common.invariant("Decoder backing type did not contain Record2");
+            },
+            else => Common.invariant("Decoder backing type was not a tag union"),
+        };
+    }
+
+    fn structuralDecoderRecord2Builder(
+        self: *BodyContext,
+        record_ty: Type.TypeId,
+        record_fields: []const Type.Field,
+        builder_fn_ty: Type.TypeId,
+        builder_arg_tys: []const Type.TypeId,
+        source_fn_ty: checked.CheckedTypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const arg0 = try self.builder.program.addLocal(self.builder.symbols.fresh(), builder_arg_tys[0]);
+        const arg1 = try self.builder.program.addLocal(self.builder.symbols.fresh(), builder_arg_tys[1]);
+        const args = [_]Ast.TypedLocal{
+            .{ .local = arg0, .ty = builder_arg_tys[0] },
+            .{ .local = arg1, .ty = builder_arg_tys[1] },
+        };
+
+        const fields = [_]Ast.FieldExpr{
+            .{
+                .name = record_fields[0].name,
+                .value = try self.builder.localExpr(arg0, record_fields[0].ty),
+            },
+            .{
+                .name = record_fields[1].name,
+                .value = try self.builder.localExpr(arg1, record_fields[1].ty),
+            },
+        };
+        const body = try self.builder.program.addExpr(.{
+            .ty = record_ty,
+            .data = .{ .record = try self.builder.program.addFieldExprSpan(&fields) },
+        });
+
+        const fn_id = try self.builder.program.addFn(.{
+            .fn_def = .{ .checked_generated = self.owner_template },
+            .source_fn_ty = source_fn_ty,
+            .source_fn_key = self.view.types.rootKey(source_fn_ty),
+            .mono_fn_ty = builder_fn_ty,
+        });
+
+        return try self.builder.program.addExpr(.{
+            .ty = builder_fn_ty,
+            .data = .{ .lambda = .{
+                .fn_id = fn_id,
+                .args = try self.builder.program.addTypedLocalSpan(&args),
+                .body = body,
+            } },
+        });
+    }
+
+    fn wrapDispatchArgumentEvaluation(
+        self: *BodyContext,
+        plan: static_dispatch.StaticDispatchCallPlan,
+        callable_mono_ty: Type.TypeId,
+        arg_ctx: *BodyContext,
+        pre_lowered: ?PreLoweredOperand,
+        result: Ast.ExprId,
+    ) Allocator.Error!Ast.ExprId {
+        if (plan.args.len == 0) return result;
+
+        const fn_data = self.builder.functionShape(callable_mono_ty, "checked structural decoder target had a non-function type");
+        const arg_tys = try self.allocator.dupe(Type.TypeId, self.builder.program.types.span(fn_data.args));
+        defer self.allocator.free(arg_tys);
+        const lowered_span = try arg_ctx.lowerDispatchOperandsAtTypes(plan.args, arg_tys, pre_lowered);
+        const lowered = self.builder.program.exprSpan(lowered_span);
+
+        var rest = result;
+        var i = lowered.len;
+        while (i > 0) {
+            i -= 1;
+            rest = try self.builder.program.addExpr(.{
+                .ty = self.builder.program.exprs.items[@intFromEnum(rest)].ty,
+                .data = .{ .let_ = .{
+                    .bind = try self.builder.program.addPat(.{ .ty = arg_tys[i], .data = .wildcard }),
+                    .value = lowered[i],
+                    .rest = rest,
+                } },
+            });
+        }
+        return rest;
     }
 
     fn lowerDirectStructuralEq(

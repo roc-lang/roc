@@ -255,6 +255,13 @@ pub const MonoLlvmCodeGen = struct {
         inner_bad_utf8_tag: u32,
     };
 
+    const StrFindFirstLayoutInfo = struct {
+        after_offset: u32,
+        before_offset: u32,
+        found_offset: u32,
+        matched_offset: u32,
+    };
+
     const RcHelperEntry = struct {
         key: layout.RcHelperKey,
         atomicity: RcAtomicity,
@@ -2150,6 +2157,7 @@ pub const MonoLlvmCodeGen = struct {
             .str_ends_with => try self.emitStrBoolBuiltin(target, "roc_builtins_str_ends_with", arg_locals),
             .str_caseless_ascii_equals => try self.emitStrBoolBuiltin(target, "roc_builtins_str_caseless_ascii_equals", arg_locals),
             .str_count_utf8_bytes => try self.emitStrCountUtf8Bytes(target, arg_locals[0]),
+            .str_find_first => try self.emitStrFindFirst(target, arg_locals),
             .str_concat => try self.emitStrRetBuiltin(target, "roc_builtins_str_concat", arg_locals, unique_args),
             .str_trim => try self.emitStrUnaryRetBuiltin(target, "roc_builtins_str_trim", arg_locals[0], unique_args),
             .str_trim_start => try self.emitStrUnaryRetBuiltin(target, "roc_builtins_str_trim_start", arg_locals[0], unique_args),
@@ -2751,6 +2759,35 @@ pub const MonoLlvmCodeGen = struct {
         defer call_args.deinit(self.allocator);
         const result = try self.callBuiltin("roc_builtins_str_count_utf8_bytes", self.ptrSizedIntType(), call_args.types.items, call_args.values.items);
         try self.storeIntToLayout(self.slot(target).ptr, result, self.localLayout(target));
+    }
+
+    fn emitStrFindFirst(self: *MonoLlvmCodeGen, target: LocalId, args: []const LocalId) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const target_slot = self.slot(target);
+        const info = try self.resolveStrFindFirstLayout(target_slot.layout_idx);
+        if (target_slot.size > 0) try self.zeroBytes(target_slot.ptr, target_slot.size);
+
+        const layout_ptr = wip.alloca(
+            .normal,
+            .i8,
+            builder.intValue(.i32, @sizeOf(builtins.dev_wrappers.StrFindFirstLayout)) catch return error.OutOfMemory,
+            LlvmBuilder.Alignment.fromByteUnits(@alignOf(builtins.dev_wrappers.StrFindFirstLayout)),
+            .default,
+            "str_find_first_layout",
+        ) catch return error.OutOfMemory;
+
+        try self.storeRawInt(layout_ptr, 0, .i32, info.after_offset, 4);
+        try self.storeRawInt(layout_ptr, 4, .i32, info.before_offset, 4);
+        try self.storeRawInt(layout_ptr, 8, .i32, info.found_offset, 4);
+        try self.storeRawInt(layout_ptr, 12, .i32, info.matched_offset, 4);
+
+        var call_args = try self.rocStrArgs2(args[0], args[1], false);
+        defer call_args.deinit(self.allocator);
+        try call_args.prepend(self.allocator, try self.ptrType(), target_slot.ptr);
+        try call_args.append(self.allocator, try self.ptrType(), layout_ptr);
+        try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
+        try self.callBuiltinVoid("roc_builtins_str_find_first", call_args.types.items, call_args.values.items);
     }
 
     fn emitStrJoinWith(self: *MonoLlvmCodeGen, target: LocalId, args: []const LocalId) Error!void {
@@ -4527,6 +4564,28 @@ pub const MonoLlvmCodeGen = struct {
             .inner_disc_offset = inner_disc_offset,
             .inner_disc_size = inner_disc_size,
             .inner_bad_utf8_tag = inner_bad_utf8_disc,
+        };
+    }
+
+    fn resolveStrFindFirstLayout(self: *MonoLlvmCodeGen, layout_idx: layout.Idx) Error!StrFindFirstLayoutInfo {
+        const ret_layout_val = self.layoutValue(layout_idx);
+        if (ret_layout_val.tag != .struct_) return error.CompilationFailed;
+
+        const record_idx = ret_layout_val.getStruct().idx;
+        const record_data = self.layouts().getStructData(record_idx);
+        const fields = self.layouts().struct_fields.sliceRange(record_data.getFields());
+        if (fields.len != 4) return error.CompilationFailed;
+
+        if (self.layouts().getStructFieldLayoutByOriginalIndex(record_idx, 0) != .str) return error.CompilationFailed;
+        if (self.layouts().getStructFieldLayoutByOriginalIndex(record_idx, 1) != .str) return error.CompilationFailed;
+        if (self.layouts().getStructFieldLayoutByOriginalIndex(record_idx, 2) != .bool) return error.CompilationFailed;
+        if (self.layouts().getStructFieldLayoutByOriginalIndex(record_idx, 3) != .str) return error.CompilationFailed;
+
+        return .{
+            .after_offset = self.layouts().getStructFieldOffsetByOriginalIndex(record_idx, 0),
+            .before_offset = self.layouts().getStructFieldOffsetByOriginalIndex(record_idx, 1),
+            .found_offset = self.layouts().getStructFieldOffsetByOriginalIndex(record_idx, 2),
+            .matched_offset = self.layouts().getStructFieldOffsetByOriginalIndex(record_idx, 3),
         };
     }
 

@@ -785,6 +785,51 @@ pub fn substringUnsafeC(
     return substringUnsafe(string, start, length, roc_ops);
 }
 
+pub const FindFirstResult = struct {
+    before: RocStr,
+    found: bool,
+    matched: RocStr,
+    after: RocStr,
+};
+
+fn retainedSlice(source: RocStr, start: usize, length: usize, roc_ops: *RocOps) RocStr {
+    if (length == 0) return RocStr.empty();
+
+    source.incref(1, roc_ops);
+    return substringUnsafe(source, start, length, roc_ops);
+}
+
+pub fn findFirst(source: RocStr, delimiter: RocStr, roc_ops: *RocOps) FindFirstResult {
+    const source_bytes = source.asSlice();
+    const delimiter_bytes = delimiter.asSlice();
+
+    if (delimiter_bytes.len == 0) {
+        return .{
+            .before = RocStr.empty(),
+            .found = true,
+            .matched = RocStr.empty(),
+            .after = retainedSlice(source, 0, source_bytes.len, roc_ops),
+        };
+    }
+
+    const index = std.mem.indexOf(u8, source_bytes, delimiter_bytes) orelse {
+        source.incref(1, roc_ops);
+        return .{
+            .before = source,
+            .found = false,
+            .matched = RocStr.empty(),
+            .after = RocStr.empty(),
+        };
+    };
+
+    return .{
+        .before = retainedSlice(source, 0, index, roc_ops),
+        .found = true,
+        .matched = retainedSlice(source, index, delimiter_bytes.len, roc_ops),
+        .after = retainedSlice(source, index + delimiter_bytes.len, source_bytes.len - index - delimiter_bytes.len, roc_ops),
+    };
+}
+
 /// See substringUnsafeC for ownership documentation.
 pub fn substringUnsafe(
     string: RocStr,

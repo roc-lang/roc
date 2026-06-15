@@ -10747,6 +10747,23 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                 env,
                             );
                         }
+                    } else if (constraint.fn_name.eql(self.cir.idents.decoder)) {
+                        if (try self.typeSupportsDerivedDecoder(dispatcher_content.structure)) {
+                            try self.satisfyImplicitDecoderConstraint(
+                                constraint,
+                                constraint.fn_var,
+                                env,
+                                self.getRegionAt(deferred_constraint.var_),
+                            );
+                        } else {
+                            try self.reportConstraintError(
+                                deferred_constraint.var_,
+                                constraint,
+                                .not_nominal,
+                                env,
+                                is_numeric_default_pass,
+                            );
+                        }
                     } else {
                         // Structural types (other than is_eq) cannot have methods called on them.
                         // The user must explicitly wrap the value in a nominal type.
@@ -11109,6 +11126,33 @@ fn nominalIsBuiltinStrType(self: *const Self, nominal_type: types_mod.NominalTyp
     return ident.eql(self.cir.idents.str) or ident.eql(self.cir.idents.builtin_str);
 }
 
+fn typeSupportsDerivedDecoder(self: *Self, flat_type: types_mod.FlatType) std.mem.Allocator.Error!bool {
+    return switch (flat_type) {
+        .record => |record| blk: {
+            const fields_slice = self.types.getRecordFieldsSlice(record.fields);
+            const field_vars = fields_slice.items(.var_);
+            if (field_vars.len != 2) break :blk false;
+            for (field_vars) |field_var| {
+                if (!try self.varIsBuiltinStr(field_var)) break :blk false;
+            }
+            break :blk true;
+        },
+        else => false,
+    };
+}
+
+fn varIsBuiltinStr(self: *Self, var_: Var) std.mem.Allocator.Error!bool {
+    return switch (self.types.resolveVar(var_).desc.content) {
+        .structure => |structure| switch (structure) {
+            .nominal_type => |nominal| self.nominalIsBuiltinStrType(nominal),
+            else => false,
+        },
+        .alias => |alias| try self.varIsBuiltinStr(self.types.getAliasBackingVar(alias)),
+        .err => true,
+        .flex, .rigid => false,
+    };
+}
+
 fn nominalIsBuiltinNumberType(self: *Self, nominal_type: types_mod.NominalType) bool {
     return self.builtinNumKindFromNominalType(nominal_type) != null;
 }
@@ -11317,6 +11361,28 @@ fn satisfyImplicitEqualityConstraint(
     _ = try self.unify(dispatcher_var, arg1, env);
     _ = try self.unify(try self.freshBool(env, region), resolved_func.ret, env);
     self.rewriteImplicitEqMethodCallAsStructuralEq(constraint);
+}
+
+fn satisfyImplicitDecoderConstraint(
+    self: *Self,
+    constraint: StaticDispatchConstraint,
+    constraint_fn_var: Var,
+    env: *Env,
+    region: Region,
+) Allocator.Error!void {
+    _ = constraint;
+    const resolved_constraint = self.types.resolveVar(constraint_fn_var);
+    const resolved_func = resolved_constraint.desc.content.unwrapFunc() orelse {
+        try self.unifyWith(constraint_fn_var, .err, env);
+        return;
+    };
+
+    const args = self.types.sliceVars(resolved_func.args);
+    if (args.len != 0) {
+        try self.unifyWith(constraint_fn_var, .err, env);
+        return;
+    }
+    _ = region;
 }
 
 /// Check if a type variable supports is_eq by resolving it and checking its content

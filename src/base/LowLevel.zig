@@ -21,6 +21,7 @@ pub const LowLevel = enum {
     str_repeat,
     str_drop_prefix,
     str_drop_suffix,
+    str_find_first,
     str_count_utf8_bytes,
     str_with_capacity,
     str_reserve,
@@ -620,6 +621,7 @@ pub const LowLevel = enum {
 
             .str_drop_prefix,
             .str_drop_suffix,
+            .str_find_first,
             .str_from_utf8,
             => RcEffect.retainsOrReleasesSharingArgs(argMask(&.{0})),
 
