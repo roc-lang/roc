@@ -32,8 +32,14 @@ Host := [].{
     ## Create an event merge node
     create_event_merge! : U64, U64 => U64
 
+    ## Create an event node that samples a signal when the event fires
+    create_event_with_latest! : U64, U64, Box(((NodeValue, NodeValue) -> NodeValue)) => U64
+
     ## Create a constant signal node
     create_signal_const! : NodeValue => U64
+
+    ## Create a mutable root state signal node
+    create_signal_state! : NodeValue => U64
 
     ## Create a signal map node (host stores the transform closure)
     create_signal_map! : U64, Box((NodeValue -> NodeValue)) => U64
@@ -52,4 +58,7 @@ Host := [].{
 
     ## Bind click events from element to event node
     bind_click! : U64, U64 => {}
+
+    ## Update a mutable signal from an event carrying the next signal value
+    bind_signal_update! : U64, U64 => {}
 }

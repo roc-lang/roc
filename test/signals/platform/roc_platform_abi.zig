@@ -589,6 +589,14 @@ pub const HostBind_clickArgs = extern struct {
     arg1: u64,
 };
 
+/// Arguments for Host.bind_signal_update!
+/// Roc signature: U64, U64 => {}
+/// Refcounted fields are owned by the hosted function.
+pub const HostBind_signal_updateArgs = extern struct {
+    arg0: u64,
+    arg1: u64,
+};
+
 /// Arguments for Host.bind_text!
 /// Roc signature: U64, U64 => {}
 /// Refcounted fields are owned by the hosted function.
@@ -628,6 +636,15 @@ pub const HostCreate_event_mergeArgs = extern struct {
     arg1: u64,
 };
 
+/// Arguments for Host.create_event_with_latest!
+/// Roc signature: U64, U64, Box((NodeValue, NodeValue) -> NodeValue) => U64
+/// Refcounted fields are owned by the hosted function.
+pub const HostCreate_event_with_latestArgs = extern struct {
+    arg0: u64,
+    arg1: u64,
+    arg2: RocErasedCallable,
+};
+
 /// Arguments for Host.create_signal_const!
 /// Roc signature: NodeValue => U64
 /// Refcounted fields are owned by the hosted function.
@@ -660,6 +677,13 @@ pub const HostCreate_signal_mapArgs = extern struct {
     arg1: RocErasedCallable,
 };
 
+/// Arguments for Host.create_signal_state!
+/// Roc signature: NodeValue => U64
+/// Refcounted fields are owned by the hosted function.
+pub const HostCreate_signal_stateArgs = extern struct {
+    arg0: NodeValue,
+};
+
 /// Arguments for Host.create_signal_zip_with!
 /// Roc signature: U64, U64, Box((NodeValue, NodeValue) -> NodeValue) => U64
 /// Refcounted fields are owned by the hosted function.
@@ -683,17 +707,20 @@ pub const HostSet_textArgs = extern struct {
 pub const PlatformHostedFns = struct {
     host_append_child: *const fn (arg0: u64, arg1: u64) callconv(.c) void, // Host.append_child!
     host_bind_click: *const fn (arg0: u64, arg1: u64) callconv(.c) void, // Host.bind_click!
+    host_bind_signal_update: *const fn (arg0: u64, arg1: u64) callconv(.c) void, // Host.bind_signal_update!
     host_bind_text: *const fn (arg0: u64, arg1: u64) callconv(.c) void, // Host.bind_text!
     host_create_element: *const fn (roc_ops: *RocOps, arg0: RocStr) callconv(.c) u64, // Host.create_element!
     host_create_event_filter: *const fn (roc_ops: *RocOps, arg0: u64, arg1: RocErasedCallable) callconv(.c) u64, // Host.create_event_filter!
     host_create_event_map: *const fn (roc_ops: *RocOps, arg0: u64, arg1: RocErasedCallable) callconv(.c) u64, // Host.create_event_map!
     host_create_event_merge: *const fn (arg0: u64, arg1: u64) callconv(.c) u64, // Host.create_event_merge!
     host_create_event_source: *const fn () callconv(.c) u64, // Host.create_event_source!
+    host_create_event_with_latest: *const fn (roc_ops: *RocOps, arg0: u64, arg1: u64, arg2: RocErasedCallable) callconv(.c) u64, // Host.create_event_with_latest!
     host_create_root: *const fn () callconv(.c) u64, // Host.create_root!
     host_create_signal_const: *const fn (roc_ops: *RocOps, arg0: NodeValue) callconv(.c) u64, // Host.create_signal_const!
     host_create_signal_fold: *const fn (roc_ops: *RocOps, arg0: NodeValue, arg1: u64, arg2: RocErasedCallable) callconv(.c) u64, // Host.create_signal_fold!
     host_create_signal_hold: *const fn (roc_ops: *RocOps, arg0: NodeValue, arg1: u64) callconv(.c) u64, // Host.create_signal_hold!
     host_create_signal_map: *const fn (roc_ops: *RocOps, arg0: u64, arg1: RocErasedCallable) callconv(.c) u64, // Host.create_signal_map!
+    host_create_signal_state: *const fn (roc_ops: *RocOps, arg0: NodeValue) callconv(.c) u64, // Host.create_signal_state!
     host_create_signal_zip_with: *const fn (roc_ops: *RocOps, arg0: u64, arg1: u64, arg2: RocErasedCallable) callconv(.c) u64, // Host.create_signal_zip_with!
     host_set_text: *const fn (roc_ops: *RocOps, arg0: u64, arg1: RocStr) callconv(.c) void, // Host.set_text!
 };
@@ -706,19 +733,22 @@ pub fn hostedFunctions(comptime fns: PlatformHostedFns) HostedFunctions {
         const ptrs = [_]HostedFn{
             hostedFn(fns.host_append_child), // Host.append_child! (index 0)
             hostedFn(fns.host_bind_click), // Host.bind_click! (index 1)
-            hostedFn(fns.host_bind_text), // Host.bind_text! (index 2)
-            hostedFn(fns.host_create_element), // Host.create_element! (index 3)
-            hostedFn(fns.host_create_event_filter), // Host.create_event_filter! (index 4)
-            hostedFn(fns.host_create_event_map), // Host.create_event_map! (index 5)
-            hostedFn(fns.host_create_event_merge), // Host.create_event_merge! (index 6)
-            hostedFn(fns.host_create_event_source), // Host.create_event_source! (index 7)
-            hostedFn(fns.host_create_root), // Host.create_root! (index 8)
-            hostedFn(fns.host_create_signal_const), // Host.create_signal_const! (index 9)
-            hostedFn(fns.host_create_signal_fold), // Host.create_signal_fold! (index 10)
-            hostedFn(fns.host_create_signal_hold), // Host.create_signal_hold! (index 11)
-            hostedFn(fns.host_create_signal_map), // Host.create_signal_map! (index 12)
-            hostedFn(fns.host_create_signal_zip_with), // Host.create_signal_zip_with! (index 13)
-            hostedFn(fns.host_set_text), // Host.set_text! (index 14)
+            hostedFn(fns.host_bind_signal_update), // Host.bind_signal_update! (index 2)
+            hostedFn(fns.host_bind_text), // Host.bind_text! (index 3)
+            hostedFn(fns.host_create_element), // Host.create_element! (index 4)
+            hostedFn(fns.host_create_event_filter), // Host.create_event_filter! (index 5)
+            hostedFn(fns.host_create_event_map), // Host.create_event_map! (index 6)
+            hostedFn(fns.host_create_event_merge), // Host.create_event_merge! (index 7)
+            hostedFn(fns.host_create_event_source), // Host.create_event_source! (index 8)
+            hostedFn(fns.host_create_event_with_latest), // Host.create_event_with_latest! (index 9)
+            hostedFn(fns.host_create_root), // Host.create_root! (index 10)
+            hostedFn(fns.host_create_signal_const), // Host.create_signal_const! (index 11)
+            hostedFn(fns.host_create_signal_fold), // Host.create_signal_fold! (index 12)
+            hostedFn(fns.host_create_signal_hold), // Host.create_signal_hold! (index 13)
+            hostedFn(fns.host_create_signal_map), // Host.create_signal_map! (index 14)
+            hostedFn(fns.host_create_signal_state), // Host.create_signal_state! (index 15)
+            hostedFn(fns.host_create_signal_zip_with), // Host.create_signal_zip_with! (index 16)
+            hostedFn(fns.host_set_text), // Host.set_text! (index 17)
         };
     };
     return .{

@@ -2,7 +2,7 @@ platform ""
     requires {
         main! : () => {}
     }
-    exposes [Signal, Event, EventSender, Elem, NodeValue, SignalNode, EventNode]
+    exposes [Reactive, Elem, NodeValue, Graph]
     packages {}
     provides {
         "roc_main": main_for_host!,
@@ -19,13 +19,16 @@ platform ""
         "roc_host_create_event_map": Host.create_event_map!,
         "roc_host_create_event_merge": Host.create_event_merge!,
         "roc_host_create_event_source": Host.create_event_source!,
+        "roc_host_create_event_with_latest": Host.create_event_with_latest!,
         "roc_host_create_root": Host.create_root!,
         "roc_host_create_signal_const": Host.create_signal_const!,
         "roc_host_create_signal_fold": Host.create_signal_fold!,
         "roc_host_create_signal_hold": Host.create_signal_hold!,
         "roc_host_create_signal_map": Host.create_signal_map!,
+        "roc_host_create_signal_state": Host.create_signal_state!,
         "roc_host_create_signal_zip_with": Host.create_signal_zip_with!,
         "roc_host_set_text": Host.set_text!,
+        "roc_host_bind_signal_update": Host.bind_signal_update!,
     }
     targets: {
         inputs: "targets/",
@@ -34,12 +37,9 @@ platform ""
     }
 
 import Elem exposing [Elem]
-import Signal
-import Event
-import EventSender
+import Reactive
 import NodeValue exposing [NodeValue]
-import SignalNode
-import EventNode
+import Graph
 import Host
 
 ## Called by host at startup to build the UI

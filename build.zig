@@ -39,7 +39,7 @@ const windows_cross_targets = [_]CrossTarget{
 const linux_cross_targets = musl_cross_targets ++ glibc_cross_targets;
 
 /// Test platform directories that need host libraries built
-const all_test_platform_dirs = [_][]const u8{ "str", "int", "fx", "fx-open", "dylib", "archive" };
+const all_test_platform_dirs = [_][]const u8{ "str", "int", "fx", "fx-open", "dylib", "archive", "signals" };
 const glibc_test_platform_dirs = [_][]const u8{ "str", "int", "dylib", "archive" };
 
 fn mustUseLlvm(target: ResolvedTarget) bool {
@@ -62,7 +62,8 @@ const TestHostOptions = struct {
 };
 
 fn testPlatformUsesStackHandler(platform_dir: []const u8) bool {
-    return std.mem.eql(u8, platform_dir, "fx");
+    return std.mem.eql(u8, platform_dir, "fx") or
+        std.mem.eql(u8, platform_dir, "signals");
 }
 
 fn testHostNeedsLibc(options: TestHostOptions, target: ResolvedTarget) bool {
@@ -2175,6 +2176,7 @@ pub fn build(b: *std.Build) void {
     const run_test_wasm_static_lib_step = b.step("run-test-wasm-static-lib", "Run WASM static library test runner");
     const run_test_dylib_step = b.step("run-test-dylib", "Build a Roc shared library and run it through the loader test");
     const run_test_archive_step = b.step("run-test-archive", "Build a Roc static archive, link a consumer against it, and run it");
+    const run_test_signals_step = b.step("run-test-signals", "Build and run the signals platform demo");
     const build_coverage_tools_step = b.step("build-coverage-tools", "Build parser coverage tools");
     const run_coverage_parser_step = b.step("run-coverage-parser", "Run parser tests with kcov code coverage");
     const run_minici_step = b.step("minici", "Run a subset of CI build and test steps");
@@ -2206,7 +2208,7 @@ pub fn build(b: *std.Build) void {
     const trace_eval = b.option(bool, "trace-eval", "Enable detailed evaluation tracing for debugging") orelse false;
     const trace_refcount = b.option(bool, "trace-refcount", "Enable detailed refcount tracing for debugging memory issues") orelse false;
     const trace_modules = b.option(bool, "trace-modules", "Enable module compilation and import resolution tracing") orelse false;
-    const platform_filter = b.option([]const u8, "platform", "Filter which test platform to build (e.g., fx, str, int, fx-open)");
+    const platform_filter = b.option([]const u8, "platform", "Filter which test platform to build (e.g., fx, str, int, fx-open, signals)");
     const cli_test_llvm = b.option(bool, "cli-test-llvm", "Include LLVM size/speed backend jobs in CLI platform tests") orelse false;
     const trace_build = b.option(bool, "trace-build", "Enable detailed build pipeline tracing") orelse false;
     const debug_gpa = b.option(bool, "debug-gpa", "Use the leak-checking DebugAllocator for the roc binary even when libc is linked (default: off, so libc's malloc and its ASan/Valgrind/LD_PRELOAD tooling are used)") orelse false;
@@ -2551,6 +2553,30 @@ pub fn build(b: *std.Build) void {
     run_builtin_format.addArgs(&.{ "fmt", "--check", "src/build/roc/Builtin.roc" });
     run_builtin_format.step.dependOn(build_roc_step);
     run_check_builtin_format_step.dependOn(&run_builtin_format.step);
+
+    const check_signals_app = b.addRunArtifact(roc_exe);
+    check_signals_app.addArgs(&.{ "check", "test/signals/app.roc" });
+    check_signals_app.step.dependOn(build_roc_step);
+
+    const signals_demo_path = b.pathJoin(&.{ "zig-out", "bin", "signals-demo" });
+    const build_signals_app = b.addRunArtifact(roc_exe);
+    build_signals_app.addArgs(&.{
+        "build",
+        "--opt=speed",
+        "--debug",
+        "--no-cache",
+        b.fmt("--output={s}", .{signals_demo_path}),
+        "test/signals/app.roc",
+    });
+    build_signals_app.step.dependOn(&check_signals_app.step);
+    build_signals_app.step.dependOn(build_test_hosts_step);
+
+    const run_signals_demo = b.addSystemCommand(&.{
+        signals_demo_path,
+        "test/signals/test_counter.txt",
+    });
+    run_signals_demo.step.dependOn(&build_signals_app.step);
+    run_test_signals_step.dependOn(&run_signals_demo.step);
 
     var release_exe_for_llvm_embedded: ?*Step.Compile = null;
 

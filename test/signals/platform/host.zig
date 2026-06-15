@@ -35,12 +35,16 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const signal_handler = @import("signal_handler");
+const base = @import("base");
 const abi = @import("roc_platform_abi.zig");
 
 pub const std_options: std.Options = .{
     .logFn = std.log.defaultLog,
     .log_level = .warn,
+    // Zig 0.16's std.debug.SelfInfo (Windows) references ntdll.LdrRegisterDllNotification,
+    // which isn't available when the host static archive is linked into a roc-compiled
+    // program. Disabling stack tracing avoids pulling that code in.
+    .allow_stack_tracing = false,
 };
 
 /// Override the default panic handler to avoid secondary crashes in stack trace generation
@@ -118,7 +122,7 @@ fn handleRocAccessViolation(fault_addr: usize) noreturn {
         };
 
         var addr_buf: [18]u8 = undefined;
-        const addr_str = signal_handler.formatHex(fault_addr, &addr_buf);
+        const addr_str = base.signal_handler.formatHex(fault_addr, &addr_buf);
 
         const msg1 = "\nSegmentation fault (SIGSEGV) in this Roc program.\nFault address: ";
         const msg2 = "\n\n";
@@ -133,7 +137,7 @@ fn handleRocAccessViolation(fault_addr: usize) noreturn {
         writeStderr(msg);
 
         var addr_buf: [18]u8 = undefined;
-        const addr_str = signal_handler.formatHex(fault_addr, &addr_buf);
+        const addr_str = base.signal_handler.formatHex(fault_addr, &addr_buf);
         writeStderr(addr_str);
         writeStderr("\n\n");
         std.process.exit(139);
@@ -218,7 +222,9 @@ const NodeKind = union(enum) {
     event_map: struct { source: u64, transform: RocBox },
     event_filter: struct { source: u64, predicate: RocBox },
     event_merge: struct { left: u64, right: u64 },
+    event_with_latest: struct { event: u64, signal: u64, combine: RocBox },
     signal_const,
+    signal_state: struct { update_event: ?u64 },
     signal_map: struct { source: u64, transform: RocBox },
     signal_hold: struct { event: u64 },
     signal_fold: struct { event: u64, step: RocBox },
@@ -663,6 +669,24 @@ fn hostedBindText(elem_id: u64, signal_node_id: u64) callconv(.c) void {
     }
 }
 
+/// Host.bind_signal_update!
+fn hostedBindSignalUpdate(state_node_id: u64, event_node_id: u64) callconv(.c) void {
+    const host = currentHost();
+
+    if (state_node_id < host.graph_nodes.items.len) {
+        const node = &host.graph_nodes.items[state_node_id];
+        switch (node.kind) {
+            .signal_state => {
+                node.kind = .{ .signal_state = .{
+                    .update_event = event_node_id,
+                } };
+                host.addDependency(event_node_id, state_node_id);
+            },
+            else => {},
+        }
+    }
+}
+
 /// Host.create_element!
 fn hostedCreateElement(ops: *abi.RocOps, tag: RocStr) callconv(.c) u64 {
     const host = hostFromOps(ops);
@@ -755,6 +779,27 @@ fn hostedCreateEventMerge(left_id: u64, right_id: u64) callconv(.c) u64 {
     return node_id;
 }
 
+/// Host.create_event_with_latest!
+fn hostedCreateEventWithLatest(ops: *abi.RocOps, event_id: u64, signal_id: u64, combine: RocBox) callconv(.c) u64 {
+    const host = hostFromOps(ops);
+    traceStderr("[HOST] create_event_with_latest!\n");
+
+    const node_id = host.next_node_id;
+    host.next_node_id += 1;
+
+    const node = GraphNode.init(node_id, .{ .event_with_latest = .{
+        .event = event_id,
+        .signal = signal_id,
+        .combine = combine,
+    } });
+    host.graph_nodes.append(host.gpa.allocator(), node) catch {
+        std.process.exit(1);
+    };
+
+    host.addDependency(event_id, node_id);
+    return node_id;
+}
+
 /// Host.create_event_source!
 fn hostedCreateEventSource() callconv(.c) u64 {
     const host = currentHost();
@@ -803,6 +848,25 @@ fn hostedCreateSignalConst(ops: *abi.RocOps, value: NodeValue) callconv(.c) u64 
 
     var node = GraphNode.init(node_id, .signal_const);
     node.current_value = value;
+    host.graph_nodes.append(host.gpa.allocator(), node) catch {
+        std.process.exit(1);
+    };
+
+    return node_id;
+}
+
+/// Host.create_signal_state!
+fn hostedCreateSignalState(ops: *abi.RocOps, initial: NodeValue) callconv(.c) u64 {
+    const host = hostFromOps(ops);
+    traceStderr("[HOST] create_signal_state!\n");
+
+    const node_id = host.next_node_id;
+    host.next_node_id += 1;
+
+    var node = GraphNode.init(node_id, .{ .signal_state = .{
+        .update_event = null,
+    } });
+    node.current_value = initial;
     host.graph_nodes.append(host.gpa.allocator(), node) catch {
         std.process.exit(1);
     };
@@ -954,8 +1018,16 @@ fn hostCreateEventMap(source_id: u64, transform: RocBox) callconv(.c) u64 {
     return hostedCreateEventMap(currentRocOps(), source_id, transform);
 }
 
+fn hostCreateEventWithLatest(event_id: u64, signal_id: u64, combine: RocBox) callconv(.c) u64 {
+    return hostedCreateEventWithLatest(currentRocOps(), event_id, signal_id, combine);
+}
+
 fn hostCreateSignalConst(value: NodeValue) callconv(.c) u64 {
     return hostedCreateSignalConst(currentRocOps(), value);
+}
+
+fn hostCreateSignalState(initial: NodeValue) callconv(.c) u64 {
+    return hostedCreateSignalState(currentRocOps(), initial);
 }
 
 fn hostCreateSignalFold(initial: NodeValue, event_id: u64, step: RocBox) callconv(.c) u64 {
@@ -1008,6 +1080,7 @@ fn setCurrentValue(host: *HostEnv, node_id: u64, value: ?NodeValue) void {
 fn callRocTransform(host: *HostEnv, transform: RocBox, input: NodeValue) NodeValue {
     const ops = host.roc_ops orelse @panic("RocOps unavailable while evaluating transform");
     var result: NodeValue = undefined;
+    increfNodeValue(input);
     var input_arg = input;
     const payload = abi.rocErasedCallablePayloadPtr(transform);
     payload.callable_fn_ptr(ops, @ptrCast(&result), @ptrCast(&input_arg), abi.rocErasedCallableCapturePtr(transform));
@@ -1016,6 +1089,8 @@ fn callRocTransform(host: *HostEnv, transform: RocBox, input: NodeValue) NodeVal
 
 fn callRocStep(host: *HostEnv, step: RocBox, acc: NodeValue, event_val: NodeValue) NodeValue {
     const ops = host.roc_ops orelse @panic("RocOps unavailable while evaluating step");
+    increfNodeValue(acc);
+    increfNodeValue(event_val);
     var args = extern struct {
         _0: NodeValue,
         _1: NodeValue,
@@ -1028,6 +1103,7 @@ fn callRocStep(host: *HostEnv, step: RocBox, acc: NodeValue, event_val: NodeValu
 
 fn callRocPredicate(host: *HostEnv, predicate: RocBox, input: NodeValue) bool {
     const ops = host.roc_ops orelse @panic("RocOps unavailable while evaluating predicate");
+    increfNodeValue(input);
     var input_arg = input;
     var result: bool = undefined;
     const payload = abi.rocErasedCallablePayloadPtr(predicate);
@@ -1044,7 +1120,7 @@ fn fireEvent(host: *HostEnv, node_id: u64, value: NodeValue) void {
     // being picked up by event_merge nodes
     for (host.graph_nodes.items, 0..) |*n, i| {
         switch (n.kind) {
-            .event_source, .event_map, .event_filter, .event_merge => {
+            .event_source, .event_map, .event_filter, .event_merge, .event_with_latest => {
                 setCurrentValue(host, @intCast(i), null);
             },
             else => {},
@@ -1096,6 +1172,16 @@ fn evaluateNode(host: *HostEnv, node_id: u64) void {
     switch (node.kind) {
         .event_source => {}, // Value already set by fireEvent
         .signal_const => {}, // Constant, never changes
+        .signal_state => |data| {
+            if (data.update_event) |event_id| {
+                if (event_id < host.graph_nodes.items.len) {
+                    if (host.graph_nodes.items[event_id].current_value) |val| {
+                        increfNodeValue(val);
+                        setCurrentValue(host, node_id, val);
+                    }
+                }
+            }
+        },
 
         .event_map => |data| {
             if (data.source < host.graph_nodes.items.len) {
@@ -1128,6 +1214,16 @@ fn evaluateNode(host: *HostEnv, node_id: u64) void {
                         setCurrentValue(host, node_id, input);
                     } else {
                         setCurrentValue(host, node_id, null);
+                    }
+                }
+            }
+        },
+
+        .event_with_latest => |data| {
+            if (data.event < host.graph_nodes.items.len and data.signal < host.graph_nodes.items.len) {
+                if (host.graph_nodes.items[data.event].current_value) |event_val| {
+                    if (host.graph_nodes.items[data.signal].current_value) |signal_val| {
+                        setCurrentValue(host, node_id, callRocStep(host, data.combine, event_val, signal_val));
                     }
                 }
             }
@@ -1224,17 +1320,20 @@ comptime {
 
     @export(&hostedAppendChild, .{ .name = "roc_host_append_child", .visibility = .hidden });
     @export(&hostedBindClick, .{ .name = "roc_host_bind_click", .visibility = .hidden });
+    @export(&hostedBindSignalUpdate, .{ .name = "roc_host_bind_signal_update", .visibility = .hidden });
     @export(&hostedBindText, .{ .name = "roc_host_bind_text", .visibility = .hidden });
     @export(&hostCreateElement, .{ .name = "roc_host_create_element", .visibility = .hidden });
     @export(&hostCreateEventFilter, .{ .name = "roc_host_create_event_filter", .visibility = .hidden });
     @export(&hostCreateEventMap, .{ .name = "roc_host_create_event_map", .visibility = .hidden });
     @export(&hostedCreateEventMerge, .{ .name = "roc_host_create_event_merge", .visibility = .hidden });
     @export(&hostedCreateEventSource, .{ .name = "roc_host_create_event_source", .visibility = .hidden });
+    @export(&hostCreateEventWithLatest, .{ .name = "roc_host_create_event_with_latest", .visibility = .hidden });
     @export(&hostedCreateRoot, .{ .name = "roc_host_create_root", .visibility = .hidden });
     @export(&hostCreateSignalConst, .{ .name = "roc_host_create_signal_const", .visibility = .hidden });
     @export(&hostCreateSignalFold, .{ .name = "roc_host_create_signal_fold", .visibility = .hidden });
     @export(&hostCreateSignalHold, .{ .name = "roc_host_create_signal_hold", .visibility = .hidden });
     @export(&hostCreateSignalMap, .{ .name = "roc_host_create_signal_map", .visibility = .hidden });
+    @export(&hostCreateSignalState, .{ .name = "roc_host_create_signal_state", .visibility = .hidden });
     @export(&hostCreateSignalZipWith, .{ .name = "roc_host_create_signal_zip_with", .visibility = .hidden });
     @export(&hostSetText, .{ .name = "roc_host_set_text", .visibility = .hidden });
 
@@ -1278,7 +1377,7 @@ fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
 
 fn platform_main(spec_file: []const u8, verbose: bool) !c_int {
     // Install signal handlers
-    _ = signal_handler.installForCurrentThread(.{
+    _ = base.signal_handler.installForCurrentThread(.{
         .stack_overflow = handleRocStackOverflow,
         .access_violation = handleRocAccessViolation,
         .arithmetic_error = handleRocArithmeticError,
@@ -1304,17 +1403,20 @@ fn platform_main(spec_file: []const u8, verbose: bool) !c_int {
     const hosted_fns = abi.hostedFunctions(.{
         .host_append_child = &hostedAppendChild,
         .host_bind_click = &hostedBindClick,
+        .host_bind_signal_update = &hostedBindSignalUpdate,
         .host_bind_text = &hostedBindText,
         .host_create_element = &hostedCreateElement,
         .host_create_event_filter = &hostedCreateEventFilter,
         .host_create_event_map = &hostedCreateEventMap,
         .host_create_event_merge = &hostedCreateEventMerge,
         .host_create_event_source = &hostedCreateEventSource,
+        .host_create_event_with_latest = &hostedCreateEventWithLatest,
         .host_create_root = &hostedCreateRoot,
         .host_create_signal_const = &hostedCreateSignalConst,
         .host_create_signal_fold = &hostedCreateSignalFold,
         .host_create_signal_hold = &hostedCreateSignalHold,
         .host_create_signal_map = &hostedCreateSignalMap,
+        .host_create_signal_state = &hostedCreateSignalState,
         .host_create_signal_zip_with = &hostedCreateSignalZipWith,
         .host_set_text = &hostedSetText,
     });

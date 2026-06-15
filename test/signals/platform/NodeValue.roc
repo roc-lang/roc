@@ -60,6 +60,14 @@ NodeValue := [
         }
     }
 
+    decode_list : NodeValue, NodeValue -> (Try(List(NodeValue), [TypeMismatch]), NodeValue)
+    decode_list = |_fmt, nv| {
+        match nv {
+            NvList(items) => (Ok(items), nv)
+            _ => (Err(TypeMismatch), nv)
+        }
+    }
+
     ## Helper: Create NodeValue from I64
     from_i64 : I64 -> NodeValue
     from_i64 = |n| NvI64(n)
@@ -76,6 +84,24 @@ NodeValue := [
     unit : NodeValue
     unit = NvUnit
 
+    ## Helper: Create NodeValue from a list of NodeValues
+    from_list : List(NodeValue) -> NodeValue
+    from_list = |items| NvList(items)
+
+    ## Helper: Get an item from a NodeValue list
+    list_get : NodeValue, U64 -> Try(NodeValue, [TypeMismatch])
+    list_get = |nv, index| {
+        match nv {
+            NvList(items) =>
+                match List.get(items, index) {
+                    Ok(item) => Ok(item)
+                    Err(_) => Err(TypeMismatch)
+                }
+
+            _ => Err(TypeMismatch)
+        }
+    }
+
     ## Helper: Extract I64 from NodeValue (crashes on type mismatch)
     to_i64 : NodeValue -> I64
     to_i64 = |nv| {
@@ -90,6 +116,15 @@ NodeValue := [
     to_str = |nv| {
         match nv {
             NvStr(s) => s
+            _ => ...
+        }
+    }
+
+    ## Helper: Extract a list from NodeValue (crashes on type mismatch)
+    to_list : NodeValue -> List(NodeValue)
+    to_list = |nv| {
+        match nv {
+            NvList(items) => items
             _ => ...
         }
     }

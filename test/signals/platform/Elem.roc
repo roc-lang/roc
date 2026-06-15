@@ -1,19 +1,22 @@
-import Signal exposing [Signal]
-import EventSender exposing [EventSender]
-import SignalNode exposing [SignalNode]
-import EventNode exposing [EventNode]
+import Reactive
+import Graph
 import Host
 
 ## UI Element tree containing signal and event graphs.
-## Note: Label uses record wrapper to work around list iteration bug with opaque types
 Elem := [
     Div(List(Elem)),
-    Button({ on_click : EventNode, label : SignalNode }),
-    Label({ signal : SignalNode }),
+    Button({ on_click : Graph.EventNode, label : Graph.SignalNode }),
+    Label({ signal : Graph.SignalNode }),
     Text(Str),
 ].{
-    ## Walk the element tree, creating DOM elements and graph nodes
-    ## parent_id is an ElemId (U64) from the host
+    Component(a) := { elem : Elem, changes : Reactive.Event(a) }.{
+        elem : Component(a) -> Elem
+        elem = |component| component.elem
+
+        changes : Component(a) -> Reactive.Event(a)
+        changes = |component| component.changes
+    }
+
     walk! : Elem, U64 => {}
     walk! = |elem, parent_id| {
         match elem {
@@ -29,10 +32,10 @@ Elem := [
                 btn_id = Host.create_element!("button")
                 Host.append_child!(parent_id, btn_id)
 
-                label_node_id = SignalNode.walk!(btn_label)
+                label_node_id = Graph.SignalNode.walk!(btn_label)
                 Host.bind_text!(btn_id, label_node_id)
 
-                click_node_id = EventNode.walk!(on_click)
+                click_node_id = Graph.EventNode.walk!(on_click)
                 Host.bind_click!(btn_id, click_node_id)
             }
 
@@ -40,7 +43,7 @@ Elem := [
                 span_id = Host.create_element!("span")
                 Host.append_child!(parent_id, span_id)
 
-                text_node_id = SignalNode.walk!(text_signal)
+                text_node_id = Graph.SignalNode.walk!(text_signal)
                 Host.bind_text!(span_id, text_node_id)
             }
 
@@ -52,31 +55,67 @@ Elem := [
         }
     }
 
-    ## Build the element tree under a new host root.
     run! : Elem => {}
     run! = |elem| {
         root = Host.create_root!()
         Elem.walk!(elem, root)
     }
 
-    ## Create a div element containing children
+    run_component! : Reactive.Codec(a), a, (Reactive.Signal(a) => Component(a)) => {}
+    run_component! = |codec, initial, render!| {
+        state = Reactive.Signal.state!(codec, initial)
+        component = render!(state)
+
+        root = Host.create_root!()
+        Elem.walk!(Component.elem(component), root)
+
+        state_id = Graph.SignalNode.walk!(Reactive.Signal.to_node(state))
+        changes_id = Graph.EventNode.walk!(Reactive.Event.to_node(Component.changes(component)))
+        Host.bind_signal_update!(state_id, changes_id)
+    }
+
+    component : Elem, Reactive.Event(a) -> Component(a)
+    component = |elem, changes| { elem: elem, changes: changes }
+
+    translate :
+        Reactive.Codec(parent),
+        Reactive.Codec(child),
+        (Reactive.Signal(child) => Component(child)),
+        (parent -> child),
+        (parent, child -> parent)
+        -> (Reactive.Signal(parent) => Component(parent))
+    translate = |parent_codec, child_codec, child_render!, getter, setter| {
+        |parent_signal| {
+            child_signal = Reactive.Signal.map(parent_signal, parent_codec, child_codec, getter)
+            child_component = child_render!(child_signal)
+            parent_changes =
+                Reactive.Event.with_latest(
+                    Component.changes(child_component),
+                    child_codec,
+                    parent_signal,
+                    parent_codec,
+                    parent_codec,
+                    |child, parent| setter(parent, child),
+                )
+
+            Elem.component(Component.elem(child_component), parent_changes)
+        }
+    }
+
     div : List(Elem) -> Elem
     div = |children| Div(children)
 
-    ## Create a button element that fires an event when clicked
-    button : { on_click : EventSender({}), label : Signal(Str) } -> Elem
+    button : { on_click : Reactive.EventSender({}), label : Reactive.Signal(Str) } -> Elem
     button = |config| {
         Button({
-            on_click: EventSender.to_node(config.on_click),
-            label: Signal.to_node(config.label),
+            on_click: Reactive.EventSender.to_node(config.on_click),
+            label: Reactive.Signal.to_node(config.label),
         })
     }
 
-    ## Create a label element displaying reactive text
-    label : Signal(Str) -> Elem
-    label = |text_signal| Label({ signal: Signal.to_node(text_signal) })
+    label : Reactive.Signal(Str) -> Elem
+    label = |text_signal| Label({ signal: Reactive.Signal.to_node(text_signal) })
 
-    ## Create a static text element
     text : Str -> Elem
     text = |s| Text(s)
 }

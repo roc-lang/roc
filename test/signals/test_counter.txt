@@ -1,16 +1,39 @@
-# Counter app test
+# Composable counters using Elem.translate
+expect_text span:0 "Left"
 expect_text button:0 "-"
-expect_text span:0 "0"
+expect_text span:1 "0"
 expect_text button:1 "+"
+expect_text span:2 "Right"
+expect_text button:2 "-"
+expect_text span:3 "0"
+expect_text button:3 "+"
+expect_text span:4 "Total"
+expect_text span:5 "0"
 
-# Click increment
+# Increment left
 click button:1
-expect_text span:0 "1"
+expect_text span:1 "1"
+expect_text span:3 "0"
+expect_text span:5 "1"
 
-# Click increment again
-click button:1
-expect_text span:0 "2"
+# Increment right twice
+click button:3
+expect_text span:1 "1"
+expect_text span:3 "1"
+expect_text span:5 "2"
 
-# Click decrement
+click button:3
+expect_text span:1 "1"
+expect_text span:3 "2"
+expect_text span:5 "3"
+
+# Decrement both counters
 click button:0
-expect_text span:0 "1"
+expect_text span:1 "0"
+expect_text span:3 "2"
+expect_text span:5 "2"
+
+click button:2
+expect_text span:1 "0"
+expect_text span:3 "1"
+expect_text span:5 "1"
