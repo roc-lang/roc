@@ -1223,11 +1223,21 @@ pub fn scanHeaderSource(
     const ast = try parse.header(gpa, &env.common);
     defer ast.deinit();
 
-    if (ast.tokenize_diagnostics.items.len > 0 or ast.parse_diagnostics.items.len > 0) {
+    const header = ast.store.getHeader(@enumFromInt(ast.root_node_idx));
+
+    if (ast.parse_diagnostics.items.len > 0) {
+        return error.HeaderParseFailed;
+    }
+    if (header == .malformed) {
         return error.HeaderParseFailed;
     }
 
-    const header = ast.store.getHeader(@enumFromInt(ast.root_node_idx));
+    const header_end_offset = headerEndOffset(ast, header);
+    for (ast.tokenize_diagnostics.items) |diagnostic| {
+        if (diagnostic.region.start.offset < header_end_offset) {
+            return error.HeaderParseFailed;
+        }
+    }
 
     var deps = std.ArrayListUnmanaged(ScannedDep).empty;
 
@@ -1261,7 +1271,7 @@ pub fn scanHeaderSource(
             break :blk .platform;
         },
         .module, .hosted, .type_module, .default_app => .module,
-        .malformed => return error.HeaderParseFailed,
+        .malformed => unreachable,
     };
 
     return .{
@@ -1271,6 +1281,17 @@ pub fn scanHeaderSource(
         .content_bytes = 0,
         .deps = deps.items,
     };
+}
+
+fn headerEndOffset(ast: *const parse.AST, header: parse.AST.Header) u32 {
+    const region = header.to_tokenized_region();
+    if (region.end <= region.start) return 0;
+
+    const token_count: u32 = @intCast(ast.tokens.tokens.len);
+    if (token_count == 0) return 0;
+
+    const last_token = @min(region.end - 1, token_count - 1);
+    return ast.tokens.resolve(last_token).end.offset;
 }
 
 fn appendPackagesCollection(
@@ -1383,10 +1404,7 @@ pub const CtxFetcher = struct {
             }
         }
 
-        const src = self.fs.readFile(root_file, allocator) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            else => return error.FileNotFound,
-        };
+        const src = try self.readNormalizedSource(allocator, root_file);
         var scanned = try scanHeaderSource(allocator, self.gpa, root_file, src);
         scanned.content_bytes = try self.measureContentBytes(allocator, package_dir, hash);
 
@@ -1408,11 +1426,17 @@ pub const CtxFetcher = struct {
 
     fn loadLocalImpl(ctx: ?*anyopaque, allocator: Allocator, root_file_abs: []const u8) FetchError!FetchedPackage {
         const self: *CtxFetcher = @ptrCast(@alignCast(ctx.?));
-        const src = self.fs.readFile(root_file_abs, allocator) catch |err| switch (err) {
+        const src = try self.readNormalizedSource(allocator, root_file_abs);
+        return try scanHeaderSource(allocator, self.gpa, root_file_abs, src);
+    }
+
+    fn readNormalizedSource(self: *CtxFetcher, allocator: Allocator, root_file_abs: []const u8) FetchError![]u8 {
+        var src = self.fs.readFile(root_file_abs, allocator) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             else => return error.FileNotFound,
         };
-        return try scanHeaderSource(allocator, self.gpa, root_file_abs, src);
+        src = base.source_utils.normalizeLineEndingsRealloc(allocator, src) catch return error.OutOfMemory;
+        return src;
     }
 
     /// Sum the sizes of the bundle's extracted files. The cached archive
@@ -1501,6 +1525,51 @@ pub const CtxFetcher = struct {
 };
 
 // --- Tests ---
+
+test "scanHeaderSource ignores tokenizer diagnostics after the header" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    const src =
+        "app [main!] { pf: platform \"../platform/main.roc\" }\r\n" ++
+        "\r\n" ++
+        "multiline_str = |number|\r\n" ++
+        "    \\\\Line 1\r\n" ++
+        "    \\\\Line ${number.to_str()}\r\n";
+
+    const fetched = try scanHeaderSource(gpa, gpa, "/tmp/root.roc", src);
+
+    try std.testing.expectEqual(HeaderKind.app, fetched.kind);
+    try std.testing.expectEqual(@as(usize, 1), fetched.deps.len);
+    try std.testing.expectEqualStrings("pf", fetched.deps[0].alias);
+    try std.testing.expectEqualStrings("../platform/main.roc", fetched.deps[0].spec);
+    try std.testing.expect(fetched.deps[0].is_platform);
+}
+
+test "scanHeaderSource rejects malformed package headers" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    const src =
+        "app [main!] { pf: platform }\n" ++
+        "main! = |_| Ok({})\n";
+
+    try std.testing.expectError(error.HeaderParseFailed, scanHeaderSource(gpa, gpa, "/tmp/root.roc", src));
+}
+
+test "scanHeaderSource rejects tokenizer diagnostics inside the header" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    const src =
+        "app [main!] { pf: platform \"../bad\rpath\" }\n" ++
+        "main! = |_| Ok({})\n";
+
+    try std.testing.expectError(error.HeaderParseFailed, scanHeaderSource(gpa, gpa, "/tmp/root.roc", src));
+}
 
 const TestRegistry = struct {
     /// url -> package template. Specs inside templates are themselves
