@@ -82,6 +82,7 @@ const Symbols = struct {
     tree_type: Symbol,
     box_tree_type: Symbol,
     try_tree_type: Symbol,
+    recursive_ops_type: Symbol,
     key_type: Symbol,
     imported_type: Symbol,
     err_missing: Symbol,
@@ -95,6 +96,9 @@ const Symbols = struct {
     try_tree_value: Symbol,
     try_tree_many: Symbol,
     try_tree_apply: Symbol,
+    recursive_leaf: Symbol,
+    recursive_group: Symbol,
+    recursive_apply: Symbol,
     item_id: Symbol,
     item_text: Symbol,
     item_flag: Symbol,
@@ -106,6 +110,11 @@ const Symbols = struct {
     builder_items: Symbol,
     builder_label: Symbol,
     builder_count: Symbol,
+    recursive_value: Symbol,
+    recursive_label: Symbol,
+    recursive_children: Symbol,
+    recursive_step: Symbol,
+    recursive_next: Symbol,
     key_id: Symbol,
     key_text: Symbol,
     builder_make: Symbol,
@@ -137,6 +146,9 @@ const Symbols = struct {
     score_box_tree: Symbol,
     score_try_tree: Symbol,
     score_nested_try: Symbol,
+    recursive_make: Symbol,
+    recursive_map: Symbol,
+    recursive_score: Symbol,
     score_inspect: Symbol,
     generic_id: Symbol,
     generic_choose: Symbol,
@@ -152,6 +164,7 @@ const Symbols = struct {
     score_num_ops: Symbol,
     score_hash_ops: Symbol,
     score_float_dec_ops: Symbol,
+    score_recursive_ops: Symbol,
     score_patterns: Symbol,
     score_structural_keys: Symbol,
     score_dict_combinators: Symbol,
@@ -229,6 +242,7 @@ pub fn generate(self: *Self) std.mem.Allocator.Error!void {
         .tree_type = self.fresh(.type),
         .box_tree_type = self.fresh(.type),
         .try_tree_type = self.fresh(.type),
+        .recursive_ops_type = self.fresh(.type),
         .key_type = self.fresh(.type),
         .imported_type = module_file,
         .err_missing = self.fresh(.tag),
@@ -242,6 +256,9 @@ pub fn generate(self: *Self) std.mem.Allocator.Error!void {
         .try_tree_value = self.fresh(.tag),
         .try_tree_many = self.fresh(.tag),
         .try_tree_apply = self.fresh(.tag),
+        .recursive_leaf = self.fresh(.tag),
+        .recursive_group = self.fresh(.tag),
+        .recursive_apply = self.fresh(.tag),
         .item_id = self.fresh(.field),
         .item_text = self.fresh(.field),
         .item_flag = self.fresh(.field),
@@ -253,6 +270,11 @@ pub fn generate(self: *Self) std.mem.Allocator.Error!void {
         .builder_items = self.fresh(.field),
         .builder_label = self.fresh(.field),
         .builder_count = self.fresh(.field),
+        .recursive_value = self.fresh(.field),
+        .recursive_label = self.fresh(.field),
+        .recursive_children = self.fresh(.field),
+        .recursive_step = self.fresh(.field),
+        .recursive_next = self.fresh(.field),
         .key_id = self.fresh(.field),
         .key_text = self.fresh(.field),
         .builder_make = self.fresh(.function),
@@ -284,6 +306,9 @@ pub fn generate(self: *Self) std.mem.Allocator.Error!void {
         .score_box_tree = self.fresh(.function),
         .score_try_tree = self.fresh(.function),
         .score_nested_try = self.fresh(.function),
+        .recursive_make = self.fresh(.function),
+        .recursive_map = self.fresh(.function),
+        .recursive_score = self.fresh(.function),
         .score_inspect = self.fresh(.function),
         .generic_id = self.fresh(.function),
         .generic_choose = self.fresh(.function),
@@ -299,6 +324,7 @@ pub fn generate(self: *Self) std.mem.Allocator.Error!void {
         .score_num_ops = self.fresh(.function),
         .score_hash_ops = self.fresh(.function),
         .score_float_dec_ops = self.fresh(.function),
+        .score_recursive_ops = self.fresh(.function),
         .score_patterns = self.fresh(.function),
         .score_structural_keys = self.fresh(.function),
         .score_dict_combinators = self.fresh(.function),
@@ -507,6 +533,281 @@ fn writeTypeDeclarations(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppText(")), ");
     try self.writeAppSymbol(self.symbols.err_type);
     try self.writeAppText("))]\n\n");
+
+    try self.writeRecursiveOpsType();
+}
+
+fn writeRecursiveOpsType(self: *Self) std.mem.Allocator.Error!void {
+    const make_seed = self.fresh(.value);
+    const make_label = self.fresh(.value);
+    const map_node = self.fresh(.value);
+    const map_fn = self.fresh(.value);
+    const map_leaf_value = self.fresh(.value);
+    const map_group = self.fresh(.value);
+    const map_child = self.fresh(.value);
+    const map_apply = self.fresh(.value);
+    const map_arg = self.fresh(.value);
+    const score_node = self.fresh(.value);
+    const score_seed = self.fresh(.value);
+    const score_leaf_value = self.fresh(.value);
+    const score_group = self.fresh(.value);
+    const score_acc = self.fresh(.value);
+    const score_child = self.fresh(.value);
+    const score_apply = self.fresh(.value);
+    const applied = self.fresh(.value);
+
+    try self.writeAppSymbol(self.symbols.recursive_ops_type);
+    try self.writeAppText(" := [");
+    try self.writeAppSymbol(self.symbols.recursive_leaf);
+    try self.writeAppText("(U64), ");
+    try self.writeAppSymbol(self.symbols.recursive_group);
+    try self.writeAppText("({ ");
+    try self.writeAppSymbol(self.symbols.recursive_value);
+    try self.writeAppText(" : U64, ");
+    try self.writeAppSymbol(self.symbols.recursive_label);
+    try self.writeAppText(" : Str, ");
+    try self.writeAppSymbol(self.symbols.recursive_children);
+    try self.writeAppText(" : List(");
+    try self.writeAppSymbol(self.symbols.recursive_ops_type);
+    try self.writeAppText(") }), ");
+    try self.writeAppSymbol(self.symbols.recursive_apply);
+    try self.writeAppText("({ ");
+    try self.writeAppSymbol(self.symbols.recursive_value);
+    try self.writeAppText(" : U64, ");
+    try self.writeAppSymbol(self.symbols.recursive_step);
+    try self.writeAppText(" : U64 -> U64, ");
+    try self.writeAppSymbol(self.symbols.recursive_next);
+    try self.writeAppText(" : Box(");
+    try self.writeAppSymbol(self.symbols.recursive_ops_type);
+    try self.writeAppText(") })].{\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(self.symbols.recursive_make);
+    try self.writeAppText(" : U64, Str -> ");
+    try self.writeAppSymbol(self.symbols.recursive_ops_type);
+    try self.writeAppText("\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(self.symbols.recursive_make);
+    try self.writeAppText(" = |");
+    try self.writeAppSymbol(make_seed);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(make_label);
+    try self.writeAppText("| ");
+    try self.writeAppSymbol(self.symbols.recursive_group);
+    try self.writeAppText("({ ");
+    try self.writeAppSymbol(self.symbols.recursive_value);
+    try self.writeAppText(": ");
+    try self.writeAppSymbol(make_seed);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(self.symbols.recursive_label);
+    try self.writeAppText(": ");
+    try self.writeAppSymbol(make_label);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(self.symbols.recursive_children);
+    try self.writeAppText(": [");
+    try self.writeAppSymbol(self.symbols.recursive_leaf);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(make_seed);
+    try self.writeAppText(")] })\n\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(self.symbols.recursive_map);
+    try self.writeAppText(" : ");
+    try self.writeAppSymbol(self.symbols.recursive_ops_type);
+    try self.writeAppText(", (U64 -> U64) -> ");
+    try self.writeAppSymbol(self.symbols.recursive_ops_type);
+    try self.writeAppText("\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(self.symbols.recursive_map);
+    try self.writeAppText(" = |");
+    try self.writeAppSymbol(map_node);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(map_fn);
+    try self.writeAppText("| match ");
+    try self.writeAppSymbol(map_node);
+    try self.writeAppText(" {\n");
+    try self.writeIndent(2);
+    try self.writeAppSymbol(self.symbols.recursive_leaf);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(map_leaf_value);
+    try self.writeAppText(") => ");
+    try self.writeAppSymbol(self.symbols.recursive_leaf);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(map_fn);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(map_leaf_value);
+    try self.writeAppText("))\n");
+    try self.writeIndent(2);
+    try self.writeAppSymbol(self.symbols.recursive_group);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(map_group);
+    try self.writeAppText(") => ");
+    try self.writeAppSymbol(self.symbols.recursive_group);
+    try self.writeAppText("({ ..");
+    try self.writeAppSymbol(map_group);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(self.symbols.recursive_value);
+    try self.writeAppText(": ");
+    try self.writeAppSymbol(map_fn);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(map_group);
+    try self.writeAppText(".");
+    try self.writeAppSymbol(self.symbols.recursive_value);
+    try self.writeAppText("), ");
+    try self.writeAppSymbol(self.symbols.recursive_children);
+    try self.writeAppText(": List.map(");
+    try self.writeAppSymbol(map_group);
+    try self.writeAppText(".");
+    try self.writeAppSymbol(self.symbols.recursive_children);
+    try self.writeAppText(", |");
+    try self.writeAppSymbol(map_child);
+    try self.writeAppText("| ");
+    try self.writeAppSymbol(self.symbols.recursive_ops_type);
+    try self.writeAppText(".");
+    try self.writeAppSymbol(self.symbols.recursive_map);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(map_child);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(map_fn);
+    try self.writeAppText(")) })\n");
+    try self.writeIndent(2);
+    try self.writeAppSymbol(self.symbols.recursive_apply);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(map_apply);
+    try self.writeAppText(") => ");
+    try self.writeAppSymbol(self.symbols.recursive_apply);
+    try self.writeAppText("({ ..");
+    try self.writeAppSymbol(map_apply);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(self.symbols.recursive_value);
+    try self.writeAppText(": ");
+    try self.writeAppSymbol(map_fn);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(map_apply);
+    try self.writeAppText(".");
+    try self.writeAppSymbol(self.symbols.recursive_value);
+    try self.writeAppText("), ");
+    try self.writeAppSymbol(self.symbols.recursive_step);
+    try self.writeAppText(": |");
+    try self.writeAppSymbol(map_arg);
+    try self.writeAppText("| ");
+    try self.writeAppSymbol(map_fn);
+    try self.writeAppText("((");
+    try self.writeAppSymbol(map_apply);
+    try self.writeAppText(".");
+    try self.writeAppSymbol(self.symbols.recursive_step);
+    try self.writeAppText(")(");
+    try self.writeAppSymbol(map_arg);
+    try self.writeAppText(")), ");
+    try self.writeAppSymbol(self.symbols.recursive_next);
+    try self.writeAppText(": Box.box(");
+    try self.writeAppSymbol(self.symbols.recursive_ops_type);
+    try self.writeAppText(".");
+    try self.writeAppSymbol(self.symbols.recursive_map);
+    try self.writeAppText("(Box.unbox(");
+    try self.writeAppSymbol(map_apply);
+    try self.writeAppText(".");
+    try self.writeAppSymbol(self.symbols.recursive_next);
+    try self.writeAppText("), ");
+    try self.writeAppSymbol(map_fn);
+    try self.writeAppText(")) })\n");
+    try self.writeIndent(1);
+    try self.writeAppText("}\n\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(self.symbols.recursive_score);
+    try self.writeAppText(" : ");
+    try self.writeAppSymbol(self.symbols.recursive_ops_type);
+    try self.writeAppText(", U64 -> U64\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(self.symbols.recursive_score);
+    try self.writeAppText(" = |");
+    try self.writeAppSymbol(score_node);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(score_seed);
+    try self.writeAppText("| match ");
+    try self.writeAppSymbol(score_node);
+    try self.writeAppText(" {\n");
+    try self.writeIndent(2);
+    try self.writeAppSymbol(self.symbols.recursive_leaf);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(score_leaf_value);
+    try self.writeAppText(") => ");
+    try self.writeAppSymbol(score_seed);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(score_leaf_value);
+    try self.writeAppText("\n");
+    try self.writeIndent(2);
+    try self.writeAppSymbol(self.symbols.recursive_group);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(score_group);
+    try self.writeAppText(") => List.fold(");
+    try self.writeAppSymbol(score_group);
+    try self.writeAppText(".");
+    try self.writeAppSymbol(self.symbols.recursive_children);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(score_seed);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(score_group);
+    try self.writeAppText(".");
+    try self.writeAppSymbol(self.symbols.recursive_value);
+    try self.writeAppText(" + List.len(Str.to_utf8(");
+    try self.writeAppSymbol(score_group);
+    try self.writeAppText(".");
+    try self.writeAppSymbol(self.symbols.recursive_label);
+    try self.writeAppText(")), |");
+    try self.writeAppSymbol(score_acc);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(score_child);
+    try self.writeAppText("| ");
+    try self.writeAppSymbol(self.symbols.recursive_ops_type);
+    try self.writeAppText(".");
+    try self.writeAppSymbol(self.symbols.recursive_score);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(score_child);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(score_acc);
+    try self.writeAppText("))\n");
+    try self.writeIndent(2);
+    try self.writeAppSymbol(self.symbols.recursive_apply);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(score_apply);
+    try self.writeAppText(") => {\n");
+    try self.writeIndent(3);
+    try self.writeAppSymbol(applied);
+    try self.writeAppText(" : U64\n");
+    try self.writeIndent(3);
+    try self.writeAppSymbol(applied);
+    try self.writeAppText(" = (");
+    try self.writeAppSymbol(score_apply);
+    try self.writeAppText(".");
+    try self.writeAppSymbol(self.symbols.recursive_step);
+    try self.writeAppText(")(");
+    try self.writeAppSymbol(score_apply);
+    try self.writeAppText(".");
+    try self.writeAppSymbol(self.symbols.recursive_value);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(score_seed);
+    try self.writeAppText(")\n");
+    try self.writeIndent(3);
+    try self.writeAppSymbol(self.symbols.recursive_ops_type);
+    try self.writeAppText(".");
+    try self.writeAppSymbol(self.symbols.recursive_score);
+    try self.writeAppText("(Box.unbox(");
+    try self.writeAppSymbol(score_apply);
+    try self.writeAppText(".");
+    try self.writeAppSymbol(self.symbols.recursive_next);
+    try self.writeAppText("), ");
+    try self.writeAppSymbol(score_seed);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(applied);
+    try self.writeAppText(")\n");
+    try self.writeIndent(2);
+    try self.writeAppText("}\n");
+    try self.writeIndent(1);
+    try self.writeAppText("}\n");
+
+    try self.writeAppText("}\n\n");
 }
 
 fn writeBuilderType(self: *Self) std.mem.Allocator.Error!void {
@@ -1102,6 +1403,7 @@ fn writeTopLevelFunctions(self: *Self) std.mem.Allocator.Error!void {
     try self.writeTreeScoring();
     try self.writeBoxTreeScoring();
     try self.writeTryTreeScoring();
+    try self.writeRecursiveOpsScoring();
     try self.writeInspectScoring();
     try self.writeGenericHelpers();
     try self.writeIteratorScoring();
@@ -2512,6 +2814,156 @@ fn writeTryTreeScoring(self: *Self) std.mem.Allocator.Error!void {
     try self.writeIndent(1);
     try self.writeAppSymbol(combined);
     try self.writeAppText("\n}\n\n");
+}
+
+fn writeRecursiveOpsScoring(self: *Self) std.mem.Allocator.Error!void {
+    const node = self.fresh(.value);
+    const items = self.fresh(.value);
+    const text = self.fresh(.value);
+    const seed = self.fresh(.value);
+    const map_seed = self.fresh(.value);
+    const map_arg = self.fresh(.value);
+    const mapped = self.fresh(.value);
+    const from_items = self.fresh(.value);
+    const item = self.fresh(.value);
+    const folded = self.fresh(.value);
+    const fold_acc = self.fresh(.value);
+    const fold_node = self.fresh(.value);
+    const remap_arg = self.fresh(.value);
+    const direct = self.fresh(.value);
+
+    try self.writeAppSymbol(self.symbols.score_recursive_ops);
+    try self.writeAppText(" : ");
+    try self.writeAppSymbol(self.symbols.recursive_ops_type);
+    try self.writeAppText(", List(");
+    try self.writeAppSymbol(self.symbols.item_type);
+    try self.writeAppText("), Str, U64 -> U64\n");
+    try self.writeAppSymbol(self.symbols.score_recursive_ops);
+    try self.writeAppText(" = |");
+    try self.writeAppSymbol(node);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(items);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(text);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText("| {\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(map_seed);
+    try self.writeAppText(" : U64\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(map_seed);
+    try self.writeAppText(" = ");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText(" + List.len(Str.to_utf8(");
+    try self.writeAppSymbol(text);
+    try self.writeAppText("))\n");
+
+    try self.writeLocalHeader(mapped, self.symbols.recursive_ops_type);
+    try self.writeAppSymbol(self.symbols.recursive_ops_type);
+    try self.writeAppText(".");
+    try self.writeAppSymbol(self.symbols.recursive_map);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(node);
+    try self.writeAppText(", |");
+    try self.writeAppSymbol(map_arg);
+    try self.writeAppText("| ");
+    try self.writeAppSymbol(map_arg);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(map_seed);
+    try self.writeAppText(")\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(from_items);
+    try self.writeAppText(" : List(");
+    try self.writeAppSymbol(self.symbols.recursive_ops_type);
+    try self.writeAppText(")\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(from_items);
+    try self.writeAppText(" = List.map(");
+    try self.writeAppSymbol(items);
+    try self.writeAppText(", |");
+    try self.writeAppSymbol(item);
+    try self.writeAppText("| ");
+    try self.writeAppSymbol(self.symbols.recursive_ops_type);
+    try self.writeAppText(".");
+    try self.writeAppSymbol(self.symbols.recursive_make);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(item);
+    try self.writeAppText(".");
+    try self.writeAppSymbol(self.symbols.item_id);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText(", Str.concat(");
+    try self.writeAppSymbol(text);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(item);
+    try self.writeAppText(".");
+    try self.writeAppSymbol(self.symbols.item_text);
+    try self.writeAppText(")))\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(folded);
+    try self.writeAppText(" : U64\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(folded);
+    try self.writeAppText(" = List.fold(");
+    try self.writeAppSymbol(from_items);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(self.symbols.recursive_ops_type);
+    try self.writeAppText(".");
+    try self.writeAppSymbol(self.symbols.recursive_score);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(mapped);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(map_seed);
+    try self.writeAppText("), |");
+    try self.writeAppSymbol(fold_acc);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(fold_node);
+    try self.writeAppText("| ");
+    try self.writeAppSymbol(self.symbols.recursive_ops_type);
+    try self.writeAppText(".");
+    try self.writeAppSymbol(self.symbols.recursive_score);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(self.symbols.recursive_ops_type);
+    try self.writeAppText(".");
+    try self.writeAppSymbol(self.symbols.recursive_map);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(fold_node);
+    try self.writeAppText(", |");
+    try self.writeAppSymbol(remap_arg);
+    try self.writeAppText("| ");
+    try self.writeAppSymbol(remap_arg);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(fold_acc);
+    try self.writeAppText("), ");
+    try self.writeAppSymbol(fold_acc);
+    try self.writeAppText("))\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(direct);
+    try self.writeAppText(" : U64\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(direct);
+    try self.writeAppText(" = ");
+    try self.writeAppSymbol(self.symbols.recursive_ops_type);
+    try self.writeAppText(".");
+    try self.writeAppSymbol(self.symbols.recursive_score);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(node);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText(")\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(direct);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(folded);
+    try self.writeAppText(" + List.len(");
+    try self.writeAppSymbol(from_items);
+    try self.writeAppText(")\n}\n\n");
 }
 
 fn writeInspectScoring(self: *Self) std.mem.Allocator.Error!void {
@@ -7928,6 +8380,8 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     const nested_try_value = self.fresh(.value);
     const nested_try_err = self.fresh(.value);
     const nested_try_err_text = self.fresh(.value);
+    const recursive_node = self.fresh(.value);
+    const recursive_score = self.fresh(.value);
     const inspect_score = self.fresh(.value);
     const pattern_score = self.fresh(.value);
     const structural_score = self.fresh(.value);
@@ -7944,6 +8398,7 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     const tree_depth = self.reader.intRangeAtMost(u8, 1, 4);
     const box_tree_depth = self.reader.intRangeAtMost(u8, 1, 4);
     const try_tree_depth = self.reader.intRangeAtMost(u8, 1, 4);
+    const recursive_depth = self.reader.intRangeAtMost(u8, 1, 4);
     const first_id = self.reader.intRangeAtMost(u8, 0, 9);
     const second_id = self.reader.intRangeAtMost(u8, 10, 29);
     const third_id = self.reader.intRangeAtMost(u8, 30, 59);
@@ -8462,6 +8917,29 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     try self.writeIndent(1);
     try self.writeAppText("}\n");
 
+    try self.writeLocalHeader(recursive_node, self.symbols.recursive_ops_type);
+    try self.writeRecursiveOpsExpression(generic_text, recursive_depth);
+    try self.writeAppText("\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(recursive_score);
+    try self.writeAppText(" : U64\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(recursive_score);
+    try self.writeAppText(" = ");
+    try self.writeAppSymbol(self.symbols.score_recursive_ops);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(recursive_node);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(generic_items);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(generic_text);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(box_tree_score);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(nested_try_score);
+    try self.writeAppText(")\n");
+
     try self.writeIndent(1);
     try self.writeAppSymbol(inspect_score);
     try self.writeAppText(" : U64\n");
@@ -8481,6 +8959,8 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppSymbol(box_tree_score);
     try self.writeAppText(" + ");
     try self.writeAppSymbol(nested_try_score);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(recursive_score);
     try self.writeAppText(")\n");
 
     try self.writeIndent(1);
@@ -8578,6 +9058,8 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppText(" + ");
     try self.writeAppSymbol(nested_try_score);
     try self.writeAppText(" + ");
+    try self.writeAppSymbol(recursive_score);
+    try self.writeAppText(" + ");
     try self.writeAppSymbol(inspect_score);
     try self.writeAppText(" + ");
     try self.writeAppSymbol(pattern_score);
@@ -8656,6 +9138,8 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppText(" + ");
     try self.writeAppSymbol(nested_try_score);
     try self.writeAppText(" + ");
+    try self.writeAppSymbol(recursive_score);
+    try self.writeAppText(" + ");
     try self.writeAppSymbol(inspect_score);
     try self.writeAppText(" + ");
     try self.writeAppSymbol(pattern_score);
@@ -8721,6 +9205,8 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppText(" + ");
     try self.writeAppSymbol(nested_try_score);
     try self.writeAppText(" + ");
+    try self.writeAppSymbol(recursive_score);
+    try self.writeAppText(" + ");
     try self.writeAppSymbol(inspect_score);
     try self.writeAppText(" + ");
     try self.writeAppSymbol(pattern_score);
@@ -8772,6 +9258,73 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppSymbol(self.symbols.builder_text);
     try self.writeAppText("()\n");
     try self.writeAppText("}\n");
+}
+
+fn writeRecursiveOpsExpression(self: *Self, text_seed: Symbol, depth: u8) std.mem.Allocator.Error!void {
+    if (depth == 0) {
+        return self.writeRecursiveOpsLeaf();
+    }
+
+    switch (self.reader.intRangeLessThan(u8, 0, 3)) {
+        0 => try self.writeRecursiveOpsLeaf(),
+        1 => try self.writeRecursiveOpsGroup(text_seed, depth - 1),
+        else => try self.writeRecursiveOpsApply(text_seed, depth - 1),
+    }
+}
+
+fn writeRecursiveOpsLeaf(self: *Self) std.mem.Allocator.Error!void {
+    try self.writeAppSymbol(self.symbols.recursive_leaf);
+    try self.writeAppText("(");
+    try self.writeU64(self.reader.intRangeAtMost(u8, 0, 31));
+    try self.writeAppText(")");
+}
+
+fn writeRecursiveOpsGroup(self: *Self, text_seed: Symbol, depth: u8) std.mem.Allocator.Error!void {
+    const child_count = self.reader.intRangeAtMost(u8, 0, 3);
+
+    try self.writeAppSymbol(self.symbols.recursive_group);
+    try self.writeAppText("({ ");
+    try self.writeAppSymbol(self.symbols.recursive_value);
+    try self.writeAppText(": ");
+    try self.writeU64(self.reader.intRangeAtMost(u8, 0, 31));
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(self.symbols.recursive_label);
+    try self.writeAppText(": Str.concat(");
+    try self.writeAppSymbol(text_seed);
+    try self.writeAppText(", ");
+    try self.writeStringLiteral();
+    try self.writeAppText("), ");
+    try self.writeAppSymbol(self.symbols.recursive_children);
+    try self.writeAppText(": [");
+    for (0..child_count) |index| {
+        if (index != 0) try self.writeAppText(", ");
+        try self.writeRecursiveOpsExpression(text_seed, depth);
+    }
+    try self.writeAppText("] })");
+}
+
+fn writeRecursiveOpsApply(self: *Self, text_seed: Symbol, depth: u8) std.mem.Allocator.Error!void {
+    const step_arg = self.fresh(.value);
+    const offset = self.reader.intRangeAtMost(u8, 0, 31);
+
+    try self.writeAppSymbol(self.symbols.recursive_apply);
+    try self.writeAppText("({ ");
+    try self.writeAppSymbol(self.symbols.recursive_value);
+    try self.writeAppText(": ");
+    try self.writeU64(self.reader.intRangeAtMost(u8, 0, 31));
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(self.symbols.recursive_step);
+    try self.writeAppText(": |");
+    try self.writeAppSymbol(step_arg);
+    try self.writeAppText("| ");
+    try self.writeAppSymbol(step_arg);
+    try self.writeAppText(" + ");
+    try self.writeU64(offset);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(self.symbols.recursive_next);
+    try self.writeAppText(": Box.box(");
+    try self.writeRecursiveOpsExpression(text_seed, depth);
+    try self.writeAppText(") })");
 }
 
 fn writeTreeExpression(self: *Self, text_seed: Symbol, depth: u8) std.mem.Allocator.Error!void {
