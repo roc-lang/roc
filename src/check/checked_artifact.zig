@@ -4987,6 +4987,7 @@ pub const CheckedExprData = union(enum) {
     if_: struct {
         branches: []const CheckedIfBranch,
         final_else: CheckedExprId,
+        warn_unused_branches: bool,
     },
     call: struct {
         func: CheckedExprId,
@@ -6567,6 +6568,7 @@ const CheckedBodyPayloadCopier = struct {
             .e_if => |if_| .{ .if_ = .{
                 .branches = try self.copyIfBranches(if_.branches),
                 .final_else = self.checkedExpr(if_.final_else),
+                .warn_unused_branches = if_.warn_unused_branches,
             } },
             .e_call => |call| .{ .call = .{
                 .func = self.checkedExpr(call.func),
@@ -7563,7 +7565,12 @@ fn checkedBuiltinForDefaultedNumericVariable(variable: CheckedTypeVariable) ?Che
     };
 }
 
-fn numeralLiteralDecimalText(
+/// Render a recorded numeral literal as its canonical decimal text (sign,
+/// integer digits, optional `.` and fractional digits). Monotype lowering reuses
+/// this to fold a monomorphized `from_numeral` literal into a constant at the
+/// concrete target type, so the produced text must stay byte-for-byte identical
+/// to what compile-time finalization feeds the interpreter.
+pub fn numeralLiteralDecimalText(
     allocator: Allocator,
     module_env: *const ModuleEnv,
     literal: ModuleEnv.NumeralLiteral,

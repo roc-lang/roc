@@ -3945,10 +3945,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     return .{ .general_reg = gt_reg };
                 },
 
+                // Resolved before backend codegen: builtin `from_numeral` is
+                // folded to a constant during Monotype lowering, so the op must
+                // never reach a backend. Reaching here is an invariant failure,
+                // not a missing feature.
+                .num_from_numeral => {
+                    std.debug.panic("num_from_numeral reached the dev backend; it must be folded to a constant during Monotype lowering", .{});
+                },
                 // Unimplemented ops
                 .num_log,
                 .num_round,
-                .num_from_numeral,
                 => {
                     std.debug.panic("UNIMPLEMENTED low-level op: {s}", .{@tagName(ll.op)});
                 },
@@ -5649,7 +5655,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try locals.put(localKey(expect_stmt.condition), expect_stmt.condition);
                         try stack.append(sa, expect_stmt.next);
                     },
-                    .runtime_error => {},
+                    .comptime_branch_taken => |marker| try stack.append(sa, marker.next),
+                    .runtime_error, .comptime_exhaustiveness_failed => {},
                     .incref => |inc| {
                         try locals.put(localKey(inc.value), inc.value);
                         try stack.append(sa, inc.next);
@@ -5770,7 +5777,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try locals.put(localKey(expect_stmt.condition), expect_stmt.condition);
                         try stack.append(sa, expect_stmt.next);
                     },
-                    .runtime_error => {},
+                    .comptime_branch_taken => |marker| try stack.append(sa, marker.next),
+                    .runtime_error, .comptime_exhaustiveness_failed => {},
                     .incref => |inc| {
                         try locals.put(localKey(inc.value), inc.value);
                         try stack.append(sa, inc.next);
@@ -14486,6 +14494,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .runtime_error => {
                             try self.emitRocCrash("hit a runtime error");
                             try self.emitTrap();
+                        },
+
+                        .comptime_exhaustiveness_failed => {
+                            try self.emitRocCrash("compile-time exhaustiveness failure reached runtime code");
+                            try self.emitTrap();
+                        },
+
+                        .comptime_branch_taken => |marker| {
+                            try work.append(wa, .{ .node = marker.next });
                         },
 
                         .join => |j| {

@@ -57,6 +57,7 @@ pub const Problem = union(enum) {
     non_exhaustive_destructure: NonExhaustiveDestructure,
     redundant_pattern: RedundantPattern,
     unmatchable_pattern: UnmatchablePattern,
+    comptime_unused_branch: ComptimeUnusedBranch,
 
     pub const Idx = enum(u32) { _ };
     pub const Tag = std.meta.Tag(@This());
@@ -231,6 +232,8 @@ pub const NonExhaustiveMatch = struct {
     condition_snapshot: SnapshotContentIdx,
     /// Range into the problems store's missing_patterns_backing for pattern indices
     missing_patterns: MissingPatternsRange,
+    /// This was discovered by compile-time evaluation taking the generated miss branch.
+    empirical: bool = false,
 };
 
 /// Problem data for a non-exhaustive destructuring pattern
@@ -240,6 +243,18 @@ pub const NonExhaustiveDestructure = struct {
     value_snapshot: SnapshotContentIdx,
     /// Range into the problems store's missing_patterns_backing for pattern indices
     missing_patterns: MissingPatternsRange,
+    /// This was discovered by compile-time evaluation taking the generated miss branch.
+    empirical: bool = false,
+};
+
+/// A compile-time-only branch or match alternative was not taken by compile-time evaluation.
+pub const ComptimeUnusedBranch = struct {
+    kind: enum {
+        match,
+        if_,
+    },
+    site_region: base.Region,
+    branch_region: base.Region,
 };
 
 /// Problem data for a redundant pattern in a match

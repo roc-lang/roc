@@ -172,6 +172,9 @@ const CustomCase = enum {
     generated_graph_200_5,
     list_builtin_inlined,
     default_platform_linux_disassembly,
+    default_platform_build_x64glibc,
+    default_platform_build_arm64glibc,
+    default_platform_build_wasm32,
     default_platform_crash_x64musl,
     default_platform_crash_arm64musl,
     default_platform_crash_x64mac,
@@ -537,6 +540,9 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc check generated module graph handles many imported files", .body = .{ .custom = .generated_graph_200_5 } },
     .{ .id = 0, .suite = .subcommands, .name = "list builtins inline in native --opt=speed build", .body = .{ .custom = .list_builtin_inlined } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build default platform x64musl matches direct write assembly", .skip = .{ .always = "TODO: direct-write default-platform codegen" }, .body = .{ .custom = .default_platform_linux_disassembly } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc build default platform x64glibc succeeds", .body = .{ .custom = .default_platform_build_x64glibc } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc build default platform arm64glibc succeeds", .body = .{ .custom = .default_platform_build_arm64glibc } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc build default platform wasm32 archive succeeds", .body = .{ .custom = .default_platform_build_wasm32 } },
     .{ .id = 0, .suite = .subcommands, .name = "default platform crash prints debug backtrace on x64musl", .body = .{ .custom = .default_platform_crash_x64musl } },
     .{ .id = 0, .suite = .subcommands, .name = "default platform crash prints debug backtrace on arm64musl", .body = .{ .custom = .default_platform_crash_arm64musl } },
     .{ .id = 0, .suite = .subcommands, .name = "default platform crash prints debug backtrace on x64mac", .body = .{ .custom = .default_platform_crash_x64mac } },
@@ -1412,6 +1418,9 @@ fn runCustomCase(
         .generated_graph_200_5 => customGeneratedModuleGraph(io, allocator, &env, &timer, timeout_ms, .{ .roc_file_count = 200, .symbols_per_file = 5 }),
         .list_builtin_inlined => customListBuiltinInlined(io, allocator, &env, &timer, timeout_ms),
         .default_platform_linux_disassembly => customDefaultPlatformLinuxDisassembly(io, allocator, &env, &timer, timeout_ms),
+        .default_platform_build_x64glibc => customDefaultPlatformBuild(io, allocator, &env, &timer, timeout_ms, .x64glibc),
+        .default_platform_build_arm64glibc => customDefaultPlatformBuild(io, allocator, &env, &timer, timeout_ms, .arm64glibc),
+        .default_platform_build_wasm32 => customDefaultPlatformBuild(io, allocator, &env, &timer, timeout_ms, .wasm32),
         .default_platform_crash_x64musl => customDefaultPlatformDebugBacktrace(io, allocator, &env, &timer, timeout_ms, .x64musl, .crash),
         .default_platform_crash_arm64musl => customDefaultPlatformDebugBacktrace(io, allocator, &env, &timer, timeout_ms, .arm64musl, .crash),
         .default_platform_crash_x64mac => customDefaultPlatformDebugBacktrace(io, allocator, &env, &timer, timeout_ms, .x64mac, .crash),
@@ -1734,20 +1743,30 @@ fn isHexDigit(byte: u8) bool {
 const DefaultPlatformTarget = enum {
     x64musl,
     arm64musl,
+    x64glibc,
+    arm64glibc,
     x64mac,
     arm64mac,
     x64win,
     arm64win,
+    wasm32,
 
     fn cliName(self: DefaultPlatformTarget) []const u8 {
         return @tagName(self);
     }
 
+    fn canBuildOnHost(self: DefaultPlatformTarget) bool {
+        return switch (self) {
+            .x64glibc, .arm64glibc => builtin.os.tag == .linux,
+            else => true,
+        };
+    }
+
     fn canRunOnHost(self: DefaultPlatformTarget) bool {
         return switch (builtin.os.tag) {
             .linux => switch (builtin.cpu.arch) {
-                .x86_64 => self == .x64musl,
-                .aarch64 => self == .arm64musl,
+                .x86_64 => self == .x64musl or self == .x64glibc,
+                .aarch64 => self == .arm64musl or self == .arm64glibc,
                 else => false,
             },
             .macos => switch (builtin.cpu.arch) {
@@ -1760,6 +1779,7 @@ const DefaultPlatformTarget = enum {
                 .aarch64 => self == .arm64win,
                 else => false,
             },
+            .freestanding => false,
             else => false,
         };
     }
@@ -1813,6 +1833,78 @@ const default_platform_stack_overflow_debug_app =
     \\}
     \\
 ;
+
+const default_platform_echo_app =
+    \\main! = |_| {
+    \\    echo!("Hello, World!")
+    \\    Ok({})
+    \\}
+    \\
+;
+
+fn customDefaultPlatformBuild(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+    target: DefaultPlatformTarget,
+) ?TestResult {
+    if (!target.canBuildOnHost()) {
+        const message = std.fmt.allocPrint(
+            allocator,
+            "{s} default-platform build requires Linux host support",
+            .{target.cliName()},
+        ) catch "default-platform build requires Linux host support";
+        return .{ .status = .skip, .phase = .setup, .duration_ns = timer.read(), .message = message };
+    }
+
+    const app_filename = std.fmt.allocPrint(allocator, "default_platform_build_{s}.roc", .{target.cliName()}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate default platform app filename: {}", .{err});
+    const app_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, app_filename }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate default platform app path: {}", .{err});
+    const output_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "default_platform_build" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate default platform output path: {}", .{err});
+    const target_arg = std.fmt.allocPrint(allocator, "--target={s}", .{target.cliName()}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate target arg: {}", .{err});
+    const out_arg = outputArg(allocator, output_path) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate output arg: {}", .{err});
+
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = app_path, .data = default_platform_echo_app }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write default platform app: {}", .{err});
+
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "build", "--opt=speed", "--no-cache", target_arg, out_arg },
+        .roc_file = app_path,
+        .contains = &.{.{ .stream = .stdout, .text = "Built " }},
+    })) |failure| return failure;
+
+    if (target == .wasm32) {
+        var file = std.Io.Dir.cwd().openFile(io, output_path, .{ .mode = .read_only }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to open built wasm archive: {}", .{err});
+        defer file.close(io);
+
+        var magic: [8]u8 = undefined;
+        const bytes_read = file.readPositionalAll(io, &magic, 0) catch |err|
+            return customInfraFailure(allocator, timer, "failed to read built wasm archive: {}", .{err});
+        if (bytes_read != magic.len or !std.mem.eql(u8, magic[0..], "!<arch>\n")) {
+            return customFailure(allocator, timer, "wasm32 default platform output was not an archive", .{});
+        }
+    }
+
+    if (target.canRunOnHost()) {
+        const executable_path = runnableOutputPath(io, allocator, output_path) catch |err|
+            return customInfraFailure(allocator, timer, "failed to find built executable: {}", .{err});
+
+        if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{executable_path}, env.dirs.work_dir, .{
+            .args = &.{},
+            .stdout_exact = "Hello, World!\n",
+            .stderr_exact = "",
+        })) |failure| return failure;
+    }
+
+    return null;
+}
 
 fn customDefaultPlatformDebugBacktrace(
     io: std.Io,

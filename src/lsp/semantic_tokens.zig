@@ -160,6 +160,8 @@ pub fn tokenTagToSemanticType(tag: Token.Tag) ?u32 {
         .OpLessThanOrEq,
         .OpBackArrow,
         .OpLessThan,
+        .OpDoubleDotLessThan,
+        .OpDoubleDotEquals,
         .OpEquals,
         .OpColonEqual,
         .OpDoubleColon,

@@ -115,6 +115,8 @@ pub const Token = struct {
         OpLessThanOrEq,
         OpBackArrow,
         OpLessThan,
+        OpDoubleDotLessThan, // ..<  (exclusive range)
+        OpDoubleDotEquals, // ..=  (inclusive range)
         OpEquals,
         OpColonEqual,
         OpDoubleColon,
@@ -221,6 +223,8 @@ pub const Token = struct {
                 .OpLessThanOrEq,
                 .OpBackArrow,
                 .OpLessThan,
+                .OpDoubleDotLessThan,
+                .OpDoubleDotEquals,
                 .OpEquals,
                 .OpColonEqual,
                 .OpDoubleColon,
@@ -1200,6 +1204,12 @@ pub const Tokenizer = struct {
                             if (self.cursor.peekAt(2) == '.') {
                                 self.cursor.pos += 3;
                                 try self.pushTokenNormalHere(gpa, .TripleDot, start);
+                            } else if (self.cursor.peekAt(2) == '<') {
+                                self.cursor.pos += 3;
+                                try self.pushTokenNormalHere(gpa, .OpDoubleDotLessThan, start);
+                            } else if (self.cursor.peekAt(2) == '=') {
+                                self.cursor.pos += 3;
+                                try self.pushTokenNormalHere(gpa, .OpDoubleDotEquals, start);
                             } else {
                                 self.cursor.pos += 2;
                                 try self.pushTokenNormalHere(gpa, .DoubleDot, start);
@@ -2184,6 +2194,18 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
                 std.debug.assert(length == 1);
                 try buf2.append('<');
             },
+            .OpDoubleDotLessThan => {
+                std.debug.assert(length == 3);
+                try buf2.append('.');
+                try buf2.append('.');
+                try buf2.append('<');
+            },
+            .OpDoubleDotEquals => {
+                std.debug.assert(length == 3);
+                try buf2.append('.');
+                try buf2.append('.');
+                try buf2.append('=');
+            },
             .OpEquals => {
                 std.debug.assert(length == 2);
                 try buf2.append('=');
@@ -2379,6 +2401,15 @@ test "tokenizer" {
     try testTokenization(gpa, "_ident", &[_]Token.Tag{.NamedUnderscore});
     try testTokenization(gpa, "1..2", &[_]Token.Tag{ .Int, .DoubleDot, .Int });
     try testTokenization(gpa, "3...4", &[_]Token.Tag{ .Int, .TripleDot, .Int });
+    try testTokenization(gpa, "..<", &[_]Token.Tag{.OpDoubleDotLessThan});
+    try testTokenization(gpa, "..=", &[_]Token.Tag{.OpDoubleDotEquals});
+    try testTokenization(gpa, "1..<5", &[_]Token.Tag{ .Int, .OpDoubleDotLessThan, .Int });
+    try testTokenization(gpa, "1..=5", &[_]Token.Tag{ .Int, .OpDoubleDotEquals, .Int });
+    try testTokenization(gpa, "1 ..< 5", &[_]Token.Tag{ .Int, .OpDoubleDotLessThan, .Int });
+    try testTokenization(gpa, "a..=b", &[_]Token.Tag{ .LowerIdent, .OpDoubleDotEquals, .LowerIdent });
+    // existing behavior must not change:
+    try testTokenization(gpa, "1...5", &[_]Token.Tag{ .Int, .TripleDot, .Int });
+    try testTokenization(gpa, "1..5", &[_]Token.Tag{ .Int, .DoubleDot, .Int });
     try testTokenization(gpa, "1. .2", &[_]Token.Tag{ .Int, .Dot, .DotInt });
     try testTokenization(gpa, "1.2.3", &[_]Token.Tag{ .Float, .NoSpaceDotInt });
     try testTokenization(gpa, "match", &[_]Token.Tag{.KwMatch});
