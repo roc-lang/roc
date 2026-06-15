@@ -2,366 +2,326 @@ import NodeValue exposing [NodeValue]
 import Graph
 import Host
 
-## Public reactive types. Signals and events carry typed graph nodes. Codecs are
-## passed explicitly to graph combinators that need to cross the type-erased
-## NodeValue boundary.
+## Public reactive types. Signals and events carry typed graph nodes. Values cross
+## the host boundary through NodeValue using Roc's static-dispatch encode/decode
+## methods instead of explicit runtime codec records.
 Reactive := [].{
-    Codec(a) := { encode_fn : a -> NodeValue, decode_fn : NodeValue -> Try(a, [TypeMismatch]) }.{
-        make : (a -> NodeValue), (NodeValue -> Try(a, [TypeMismatch])) -> Codec(a)
-        make = |encode_fn, decode_fn| { encode_fn: encode_fn, decode_fn: decode_fn }
+	Unit := [UnitValue].{
+		value : Unit
+		value = UnitValue
 
-        encode : Codec(a), a -> NodeValue
-        encode = |codec_value, value| {
-            encode_fn = codec_value.encode_fn
-            encode_fn(value)
-        }
+		encode : Unit, NodeValue -> Try(NodeValue, [])
+		encode = |_unit, fmt| fmt.encode_unit({})
 
-        decode : Codec(a), NodeValue -> Try(a, [TypeMismatch])
-        decode = |codec_value, value| {
-            decode_fn = codec_value.decode_fn
-            decode_fn(value)
-        }
+		decode : NodeValue, NodeValue -> (Try(Unit, [TypeMismatch]), NodeValue)
+		decode = |nv, fmt| {
+			(result, rest) = NodeValue.decode_unit(fmt, nv)
+			unit_result =
+				match result {
+					Ok(_) => Ok(Unit.value)
+					Err(err) => Err(err)
+				}
 
-        unit : Codec({})
-        unit = Codec.make(|_| NodeValue.unit, |nv| {
-            (result, _) = NodeValue.decode_unit(NodeValue.format, nv)
-            result
-        })
+			(unit_result, rest)
+		}
+	}
 
-        i64 : Codec(I64)
-        i64 = Codec.make(NodeValue.from_i64, |nv| {
-            (result, _) = NodeValue.decode_i64(NodeValue.format, nv)
-            result
-        })
+	encode : a -> NodeValue where [a.encode : a, NodeValue -> Try(NodeValue, [])]
+	encode = |value| {
+		match value.encode(NodeValue.format) {
+			Ok(nv) => nv
+		}
+	}
 
-        str : Codec(Str)
-        str = Codec.make(NodeValue.from_str, |nv| {
-            (result, _) = NodeValue.decode_str(NodeValue.format, nv)
-            result
-        })
+	EventSender(a) := { node : Graph.EventNode }.{
+		to_node : EventSender(a) -> Graph.EventNode
+		to_node = |sender| sender.node
 
-        bool : Codec(Bool)
-        bool = Codec.make(NodeValue.from_bool, |nv| {
-            (result, _) = NodeValue.decode_bool(NodeValue.format, nv)
-            result
-        })
+		send! : EventSender(a), a => {} where [a.encode : a, NodeValue -> Try(NodeValue, [])]
+		send! = |sender, value| {
+			event_id = Graph.EventNode.walk!(sender.node)
+			Host.send_event!(event_id, Reactive.encode(value))
+		}
+	}
 
-        list : Codec(a) -> Codec(List(a))
-        list = |item_codec| {
-            encode_item = item_codec.encode_fn
-            decode_item = item_codec.decode_fn
+	Event(a) := { node : Graph.EventNode }.{
+		to_node : Event(a) -> Graph.EventNode
+		to_node = |event| event.node
 
-            Codec.make(
-                |items| NodeValue.from_list(List.map(items, encode_item)),
-                |nv| {
-                    (list_result, _) = NodeValue.decode_list(NodeValue.format, nv)
-                    match list_result {
-                        Ok(items) =>
-                            List.fold(items, Ok([]), |acc_result, item_nv| {
-                                match acc_result {
-                                    Ok(acc) =>
-                                        match decode_item(item_nv) {
-                                            Ok(item) => Ok(List.append(acc, item))
-                                            Err(err) => Err(err)
-                                        }
+		from_node : Graph.EventNode -> Event(a)
+		from_node = |node| { node: node }
 
-                                    Err(err) => Err(err)
-                                }
-                            })
+		channel! : () => { sender : EventSender(a), receiver : Event(a) }
+		channel! = || {
+			host_id = Host.create_event_source!()
+			event_node = Graph.EventNode.make_prebuilt(host_id)
+			{
+				sender: { node: event_node },
+				receiver: { node: event_node },
+			}
+		}
 
-                        Err(err) => Err(err)
-                    }
-                },
-            )
-        }
-    }
+		unit_channel! : () => { sender : EventSender(Unit), receiver : Event(Unit) }
+		unit_channel! = || Event.channel!()
 
-    EventSender(a) := { node : Graph.EventNode }.{
-        to_node : EventSender(a) -> Graph.EventNode
-        to_node = |sender| sender.node
+		map :
+			Event(a), (a -> b) -> Event(b)
+				where [
+					a.decode : NodeValue, NodeValue -> (Try(a, [TypeMismatch]), NodeValue),
+					b.encode : b, NodeValue -> Try(NodeValue, []),
+				]
+		map = |event, f| {
+			source = event.node
+			wrapped : NodeValue -> NodeValue
+			wrapped = |input_nv| {
+				A : a
+				typed_input : a
+				typed_input =
+					match A.decode(input_nv, NodeValue.format) {
+						(Ok(value), _) => value
+						(Err(_), _) => ...
+					}
+				typed_output : b
+				typed_output = f(typed_input)
+				Reactive.encode(typed_output)
+			}
 
-        send! : EventSender(a), Codec(a), a => {}
-        send! = |sender, event_codec, value| {
-            event_id = Graph.EventNode.walk!(sender.node)
-            Host.send_event!(event_id, Codec.encode(event_codec, value))
-        }
-    }
+			{ node: Graph.EventNode.make_map_event(source, Box.box(wrapped)) }
+		}
 
-    Event(a) := { node : Graph.EventNode }.{
-        to_node : Event(a) -> Graph.EventNode
-        to_node = |event| event.node
+		merge : Event(a), Event(a) -> Event(a)
+		merge = |left, right| {
+			{ node: Graph.EventNode.make_merge(left.node, right.node) }
+		}
 
-        from_node : Graph.EventNode -> Event(a)
-        from_node = |node| { node: node }
+		with_latest :
+			Event(e), Signal(s), (e, s -> out) -> Event(out)
+				where [
+					e.decode : NodeValue, NodeValue -> (Try(e, [TypeMismatch]), NodeValue),
+					s.decode : NodeValue, NodeValue -> (Try(s, [TypeMismatch]), NodeValue),
+					out.encode : out, NodeValue -> Try(NodeValue, []),
+				]
+		with_latest = |event, signal, combine| {
+			wrapped : (NodeValue, NodeValue) -> NodeValue
+			wrapped = |(event_nv, signal_nv)| {
+				E : e
+				typed_event : e
+				typed_event =
+					match E.decode(event_nv, NodeValue.format) {
+						(Ok(value), _) => value
+						(Err(_), _) => ...
+					}
+				S : s
+				typed_signal : s
+				typed_signal =
+					match S.decode(signal_nv, NodeValue.format) {
+						(Ok(value), _) => value
+						(Err(_), _) => ...
+					}
+				output : out
+				output = combine(typed_event, typed_signal)
+				Reactive.encode(output)
+			}
 
-        channel! : Codec(a) => { sender : EventSender(a), receiver : Event(a) }
-        channel! = |_event_codec| {
-            host_id = Host.create_event_source!()
-            event_node = Graph.EventNode.make_prebuilt(host_id)
-            {
-                sender: { node: event_node },
-                receiver: { node: event_node },
-            }
-        }
+			{
+				node: Graph.EventNode.make_with_latest(
+					event.node,
+					signal.node,
+					Box.box(wrapped),
+				),
+			}
+		}
 
-        channel_unit! : () => { sender : EventSender({}), receiver : Event({}) }
-        channel_unit! = || Event.channel!(Codec.unit)
+		with_latest_unit :
+			Event(Unit), Signal(s), (s -> out) -> Event(out)
+				where [
+					s.decode : NodeValue, NodeValue -> (Try(s, [TypeMismatch]), NodeValue),
+					out.encode : out, NodeValue -> Try(NodeValue, []),
+				]
+		with_latest_unit = |event, signal, combine| {
+			wrapped : (NodeValue, NodeValue) -> NodeValue
+			wrapped = |(_event_nv, signal_nv)| {
+				S : s
+				typed_signal : s
+				typed_signal =
+					match S.decode(signal_nv, NodeValue.format) {
+						(Ok(value), _) => value
+						(Err(_), _) => ...
+					}
+				output : out
+				output = combine(typed_signal)
+				Reactive.encode(output)
+			}
 
-        map : Event(a), Codec(a), Codec(b), (a -> b) -> Event(b)
-        map = |event, input_codec, output_codec, f| {
-            source = event.node
-            decode_input = input_codec.decode_fn
-            encode_output = output_codec.encode_fn
-            wrapped : NodeValue -> NodeValue
-            wrapped = |input_nv| {
-                typed_input =
-                    match decode_input(input_nv) {
-                        Ok(val) => val
-                        Err(_) => ...
-                    }
-                typed_output = f(typed_input)
-                encode_output(typed_output)
-            }
+			{
+				node: Graph.EventNode.make_with_latest(
+					event.node,
+					signal.node,
+					Box.box(wrapped),
+				),
+			}
+		}
+	}
 
-            { node: Graph.EventNode.make_map_event(source, Box.box(wrapped)) }
-        }
+	Signal(a) := { node : Graph.SignalNode }.{
+		to_node : Signal(a) -> Graph.SignalNode
+		to_node = |signal| signal.node
 
-        map_unit_to_i64 : Event({}), ({} -> I64) -> Event(I64)
-        map_unit_to_i64 = |event, f| {
-            source = event.node
-            wrapped : NodeValue -> NodeValue
-            wrapped = |_nv| NodeValue.from_i64(f({}))
+		from_node : Graph.SignalNode -> Signal(a)
+		from_node = |node| { node: node }
 
-            { node: Graph.EventNode.make_map_event(source, Box.box(wrapped)) }
-        }
+		state! : a => Signal(a) where [a.encode : a, NodeValue -> Try(NodeValue, [])]
+		state! = |value| {
+			nv = Reactive.encode(value)
+			host_id = Host.create_signal_state!(nv)
+			{ node: Graph.SignalNode.make_prebuilt_signal(host_id) }
+		}
 
-        merge : Event(a), Event(a) -> Event(a)
-        merge = |left, right| {
-            { node: Graph.EventNode.make_merge(left.node, right.node) }
-        }
+		const : a -> Signal(a) where [a.encode : a, NodeValue -> Try(NodeValue, [])]
+		const = |value| {
+			nv = Reactive.encode(value)
+			{ node: Graph.SignalNode.make_const(nv) }
+		}
 
-        with_latest : Event(e), Codec(e), Signal(s), Codec(s), Codec(out), (e, s -> out) -> Event(out)
-        with_latest = |event, event_codec, signal, signal_codec, output_codec, combine| {
-            decode_event = event_codec.decode_fn
-            decode_signal = signal_codec.decode_fn
-            encode_output = output_codec.encode_fn
-            wrapped : (NodeValue, NodeValue) -> NodeValue
-            wrapped = |(event_nv, signal_nv)| {
-                typed_event =
-                    match decode_event(event_nv) {
-                        Ok(val) => val
-                        Err(_) => ...
-                    }
-                typed_signal =
-                    match decode_signal(signal_nv) {
-                        Ok(val) => val
-                        Err(_) => ...
-                    }
-                output = combine(typed_event, typed_signal)
-                encode_output(output)
-            }
+		map :
+			Signal(a), (a -> b) -> Signal(b)
+				where [
+					a.decode : NodeValue, NodeValue -> (Try(a, [TypeMismatch]), NodeValue),
+					b.encode : b, NodeValue -> Try(NodeValue, []),
+				]
+		map = |signal, f| {
+			source = signal.node
+			wrapped : NodeValue -> NodeValue
+			wrapped = |input_nv| {
+				A : a
+				typed_input : a
+				typed_input =
+					match A.decode(input_nv, NodeValue.format) {
+						(Ok(value), _) => value
+						(Err(_), _) => ...
+					}
+				typed_output : b
+				typed_output = f(typed_input)
+				Reactive.encode(typed_output)
+			}
 
-            {
-                node: Graph.EventNode.make_with_latest(
-                    event.node,
-                    signal.node,
-                    Box.box(wrapped),
-                ),
-            }
-        }
+			{ node: Graph.SignalNode.make_map_signal(source, Box.box(wrapped)) }
+		}
 
-        with_latest_unit : Event({}), Signal(s), Codec(s), Codec(out), (s -> out) -> Event(out)
-        with_latest_unit = |event, signal, signal_codec, output_codec, combine| {
-            decode_signal = signal_codec.decode_fn
-            encode_output = output_codec.encode_fn
-            wrapped : (NodeValue, NodeValue) -> NodeValue
-            wrapped = |(_event_nv, signal_nv)| {
-                typed_signal =
-                    match decode_signal(signal_nv) {
-                        Ok(val) => val
-                        Err(_) => ...
-                    }
-                output = combine(typed_signal)
-                encode_output(output)
-            }
+		map2 :
+			Signal(a), Signal(b), (a, b -> c) -> Signal(c)
+				where [
+					a.decode : NodeValue, NodeValue -> (Try(a, [TypeMismatch]), NodeValue),
+					b.decode : NodeValue, NodeValue -> (Try(b, [TypeMismatch]), NodeValue),
+					c.encode : c, NodeValue -> Try(NodeValue, []),
+				]
+		map2 = |left_signal, right_signal, f| {
+			wrapped : (NodeValue, NodeValue) -> NodeValue
+			wrapped = |(left_nv, right_nv)| {
+				A : a
+				left : a
+				left =
+					match A.decode(left_nv, NodeValue.format) {
+						(Ok(value), _) => value
+						(Err(_), _) => ...
+					}
+				B : b
+				right : b
+				right =
+					match B.decode(right_nv, NodeValue.format) {
+						(Ok(value), _) => value
+						(Err(_), _) => ...
+					}
+				output : c
+				output = f(left, right)
+				Reactive.encode(output)
+			}
 
-            {
-                node: Graph.EventNode.make_with_latest(
-                    event.node,
-                    signal.node,
-                    Box.box(wrapped),
-                ),
-            }
-        }
-    }
+			{
+				node: Graph.SignalNode.make_map2_signal(
+					left_signal.node,
+					right_signal.node,
+					Box.box(wrapped),
+				),
+			}
+		}
 
-    Signal(a) := { node : Graph.SignalNode }.{
-        to_node : Signal(a) -> Graph.SignalNode
-        to_node = |signal| signal.node
+		fold :
+			a, Event(e), (a, e -> a) -> Signal(a)
+				where [
+					a.encode : a, NodeValue -> Try(NodeValue, []),
+					a.decode : NodeValue, NodeValue -> (Try(a, [TypeMismatch]), NodeValue),
+					e.decode : NodeValue, NodeValue -> (Try(e, [TypeMismatch]), NodeValue),
+				]
+		fold = |initial, event, step_fn| {
+			initial_nv = Reactive.encode(initial)
+			event_node = Event.to_node(event)
+			wrapped : (NodeValue, NodeValue) -> NodeValue
+			wrapped = |(acc_nv, evt_nv)| {
+				A : a
+				acc : a
+				acc =
+					match A.decode(acc_nv, NodeValue.format) {
+						(Ok(value), _) => value
+						(Err(_), _) => ...
+					}
+				E : e
+				evt : e
+				evt =
+					match E.decode(evt_nv, NodeValue.format) {
+						(Ok(value), _) => value
+						(Err(_), _) => ...
+					}
+				new_acc : a
+				new_acc = step_fn(acc, evt)
+				Reactive.encode(new_acc)
+			}
 
-        from_node : Graph.SignalNode -> Signal(a)
-        from_node = |node| { node: node }
+			{
+				node: Graph.SignalNode.make_fold(
+					initial_nv,
+					event_node,
+					Box.box(wrapped),
+				),
+			}
+		}
 
-        state! : Codec(a), a => Signal(a)
-        state! = |signal_codec, value| {
-            nv = Codec.encode(signal_codec, value)
-            host_id = Host.create_signal_state!(nv)
-            { node: Graph.SignalNode.make_prebuilt_signal(host_id) }
-        }
+		zip_with :
+			Signal(a), Event(e), (a, e -> a) -> Signal(a)
+				where [
+					a.encode : a, NodeValue -> Try(NodeValue, []),
+					a.decode : NodeValue, NodeValue -> (Try(a, [TypeMismatch]), NodeValue),
+					e.decode : NodeValue, NodeValue -> (Try(e, [TypeMismatch]), NodeValue),
+				]
+		zip_with = |signal, event, combine| {
+			wrapped : (NodeValue, NodeValue) -> NodeValue
+			wrapped = |(signal_nv, event_nv)| {
+				A : a
+				typed_signal : a
+				typed_signal =
+					match A.decode(signal_nv, NodeValue.format) {
+						(Ok(value), _) => value
+						(Err(_), _) => ...
+					}
+				E : e
+				typed_event : e
+				typed_event =
+					match E.decode(event_nv, NodeValue.format) {
+						(Ok(value), _) => value
+						(Err(_), _) => ...
+					}
+				output : a
+				output = combine(typed_signal, typed_event)
+				Reactive.encode(output)
+			}
 
-        const : Codec(a), a -> Signal(a)
-        const = |signal_codec, value| {
-            nv = Codec.encode(signal_codec, value)
-            { node: Graph.SignalNode.make_const(nv) }
-        }
-
-        const_i64 : I64 -> Signal(I64)
-        const_i64 = |value| {
-            node: Graph.SignalNode.make_const(NodeValue.from_i64(value)),
-        }
-
-        const_str : Str -> Signal(Str)
-        const_str = |value| {
-            node: Graph.SignalNode.make_const(NodeValue.from_str(value)),
-        }
-
-        map : Signal(a), Codec(a), Codec(b), (a -> b) -> Signal(b)
-        map = |signal, input_codec, output_codec, f| {
-            source = signal.node
-            decode_input = input_codec.decode_fn
-            encode_output = output_codec.encode_fn
-            wrapped : NodeValue -> NodeValue
-            wrapped = |input_nv| {
-                typed_input =
-                    match decode_input(input_nv) {
-                        Ok(val) => val
-                        Err(_) => ...
-                    }
-                typed_output = f(typed_input)
-                encode_output(typed_output)
-            }
-
-            { node: Graph.SignalNode.make_map_signal(source, Box.box(wrapped)) }
-        }
-
-        map2 : Signal(a), Codec(a), Signal(b), Codec(b), Codec(c), (a, b -> c) -> Signal(c)
-        map2 = |left_signal, left_codec, right_signal, right_codec, output_codec, f| {
-            decode_left = left_codec.decode_fn
-            decode_right = right_codec.decode_fn
-            encode_output = output_codec.encode_fn
-            wrapped : (NodeValue, NodeValue) -> NodeValue
-            wrapped = |(left_nv, right_nv)| {
-                left =
-                    match decode_left(left_nv) {
-                        Ok(val) => val
-                        Err(_) => ...
-                    }
-                right =
-                    match decode_right(right_nv) {
-                        Ok(val) => val
-                        Err(_) => ...
-                    }
-                output = f(left, right)
-                encode_output(output)
-            }
-
-            {
-                node: Graph.SignalNode.make_map2_signal(
-                    left_signal.node,
-                    right_signal.node,
-                    Box.box(wrapped),
-                ),
-            }
-        }
-
-        map_i64_to_str : Signal(I64), (I64 -> Str) -> Signal(Str)
-        map_i64_to_str = |signal, f| {
-            source = signal.node
-            wrapped : NodeValue -> NodeValue
-            wrapped = |nv| NodeValue.from_str(f(NodeValue.to_i64(nv)))
-
-            { node: Graph.SignalNode.make_map_signal(source, Box.box(wrapped)) }
-        }
-
-        fold : Codec(a), a, Event(e), Codec(e), (a, e -> a) -> Signal(a)
-        fold = |acc_codec, initial, event, event_codec, step_fn| {
-            initial_nv = Codec.encode(acc_codec, initial)
-            event_node = Event.to_node(event)
-            decode_acc = acc_codec.decode_fn
-            encode_acc = acc_codec.encode_fn
-            decode_event = event_codec.decode_fn
-            wrapped : (NodeValue, NodeValue) -> NodeValue
-            wrapped = |(acc_nv, evt_nv)| {
-                acc =
-                    match decode_acc(acc_nv) {
-                        Ok(val) => val
-                        Err(_) => ...
-                    }
-                evt =
-                    match decode_event(evt_nv) {
-                        Ok(val) => val
-                        Err(_) => ...
-                    }
-                new_acc = step_fn(acc, evt)
-                encode_acc(new_acc)
-            }
-
-            {
-                node: Graph.SignalNode.make_fold(
-                    initial_nv,
-                    event_node,
-                    Box.box(wrapped),
-                ),
-            }
-        }
-
-        fold_i64 : I64, Event(I64), (I64, I64 -> I64) -> Signal(I64)
-        fold_i64 = |initial, event, step_fn| {
-            event_node = Event.to_node(event)
-            wrapped : (NodeValue, NodeValue) -> NodeValue
-            wrapped = |(acc_nv, evt_nv)| {
-                acc = NodeValue.to_i64(acc_nv)
-                evt = NodeValue.to_i64(evt_nv)
-                NodeValue.from_i64(step_fn(acc, evt))
-            }
-
-            {
-                node: Graph.SignalNode.make_fold(
-                    NodeValue.from_i64(initial),
-                    event_node,
-                    Box.box(wrapped),
-                ),
-            }
-        }
-
-        zip_with : Signal(a), Codec(a), Event(e), Codec(e), (a, e -> a) -> Signal(a)
-        zip_with = |signal, signal_codec, event, event_codec, combine| {
-            decode_signal = signal_codec.decode_fn
-            encode_signal = signal_codec.encode_fn
-            decode_event = event_codec.decode_fn
-            wrapped : (NodeValue, NodeValue) -> NodeValue
-            wrapped = |(signal_nv, event_nv)| {
-                typed_signal =
-                    match decode_signal(signal_nv) {
-                        Ok(val) => val
-                        Err(_) => ...
-                    }
-                typed_event =
-                    match decode_event(event_nv) {
-                        Ok(val) => val
-                        Err(_) => ...
-                    }
-                output = combine(typed_signal, typed_event)
-                encode_signal(output)
-            }
-
-            {
-                node: Graph.SignalNode.make_zip_with(
-                    signal.node,
-                    Event.to_node(event),
-                    Box.box(wrapped),
-                ),
-            }
-        }
-    }
+			{
+				node: Graph.SignalNode.make_zip_with(
+					signal.node,
+					Event.to_node(event),
+					Box.box(wrapped),
+				),
+			}
+		}
+	}
 }

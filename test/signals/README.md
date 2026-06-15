@@ -55,25 +55,28 @@ The public reactive API is nested under `Reactive`:
 - `Reactive.Signal(a)` is a continuous value with a current value.
 - `Reactive.Event(a)` is a discrete stream of occurrences.
 - `Reactive.EventSender(a)` is the write-only handle used by buttons and lifecycle hooks.
-- `Reactive.Codec(a)` explicitly describes how typed Roc values cross the `NodeValue` host boundary.
+- `Reactive.Unit` is the nominal payload for click and lifecycle events.
 
-Primitive codecs are provided for unit, bool, integers, strings, and lists. App-specific state uses explicit codecs:
+Values cross the host boundary as `NodeValue`. The public API asks for Roc's normal static-dispatch `encode` and `decode` methods, so app-specific state defines methods on the nominal type:
 
 ```roc
 Counter := { count : I64 }.{
-    codec : Reactive.Codec(Counter)
-    codec = Reactive.Codec.make(Counter.encode, Counter.decode)
+    init : I64 -> Counter
+    init = |count| { count: count }
 
-    encode : Counter -> NodeValue
-    encode = |counter| NodeValue.from_i64(counter.count)
+    encode : Counter, NodeValue -> Try(NodeValue, [])
+    encode = |counter, fmt| counter.count.encode(fmt)
 
-    decode : NodeValue -> Try(Counter, [TypeMismatch])
-    decode = |nv| {
-        (result, _) = NodeValue.decode_i64(NodeValue.format, nv)
-        match result {
-            Ok(count) => Ok({ count })
-            Err(_) => Err(TypeMismatch)
-        }
+    decode : NodeValue, NodeValue -> (Try(Counter, [TypeMismatch]), NodeValue)
+    decode = |nv, fmt| {
+        (result, rest) = I64.decode(nv, fmt)
+        counter_result =
+            match result {
+                Ok(count) => Ok(Counter.init(count))
+                Err(err) => Err(err)
+            }
+
+        (counter_result, rest)
     }
 }
 ```
@@ -93,8 +96,6 @@ Controlled components receive a parent-owned `Signal(state)` and emit `Event(nex
 
 ```roc
 Elem.translate(
-    App.codec,
-    Counter.codec,
     Counter.render!,
     |model| model.left,
     |model, counter| App.make(counter, model.right),
@@ -108,9 +109,10 @@ The getter derives a child signal from the parent signal. The setter lifts child
 The platform also supports fine-grained local state. A component can create its own event channel and fold it into a local signal:
 
 ```roc
-{ sender, receiver } = Reactive.Event.channel_unit!()
-deltas = Reactive.Event.map_unit_to_i64(receiver, |_| 1)
-count = Reactive.Signal.fold_i64(0, deltas, |current, delta| current + delta)
+{ sender, receiver } = Reactive.Event.unit_channel!()
+deltas : Reactive.Event(I64)
+deltas = Reactive.Event.map(receiver, |_| 1)
+count = Reactive.Signal.fold(0, deltas, |current, delta| current + delta)
 ```
 
 Independent local signals can be combined with `Signal.map2`:
@@ -119,10 +121,7 @@ Independent local signals can be combined with `Signal.map2`:
 total =
     Reactive.Signal.map2(
         left.count,
-        Reactive.Codec.i64,
         right.count,
-        Reactive.Codec.i64,
-        Reactive.Codec.i64,
         |left_value, right_value| left_value + right_value,
     )
 ```

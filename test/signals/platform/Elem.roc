@@ -5,221 +5,244 @@ import NodeValue exposing [NodeValue]
 
 ## UI Element tree containing signal and event graphs.
 Elem := [
-    Div(List(Elem)),
-    Button({ on_click : Graph.EventNode, label : Graph.SignalNode }),
-    Label({ signal : Graph.SignalNode }),
-    Text(Str),
-    Dynamic({ signal : Graph.SignalNode, render : Box(((NodeValue, U64) => {})) }),
-    Each({ signal : Graph.SignalNode, key : Box((NodeValue -> Str)), render : Box(((NodeValue, U64) => {})) }),
-    Lifecycle({ on_mount : Graph.EventNode, on_unmount : Graph.EventNode }),
+	Div(List(Elem)),
+	Button({ on_click : Graph.EventNode, label : Graph.SignalNode }),
+	Label({ signal : Graph.SignalNode }),
+	Text(Str),
+	Dynamic({ signal : Graph.SignalNode, render : Box(((NodeValue, U64) => {})) }),
+	Each({ signal : Graph.SignalNode, key : Box((NodeValue -> Str)), render : Box(((NodeValue, U64) => {})) }),
+	Lifecycle({ on_mount : Graph.EventNode, on_unmount : Graph.EventNode }),
 ].{
-    ## Hosted effects with effectful boxed render callbacks. The callbacks
-    ## mount Elem trees from Roc, keeping Elem itself out of the host ABI.
-    create_dynamic! : U64, U64, Box(((NodeValue, U64) => {})) => {}
 
-    create_each! : U64, U64, Box((NodeValue -> Str)), Box(((NodeValue, U64) => {})) => {}
+	## Hosted effects with effectful boxed render callbacks. The callbacks
+	## mount Elem trees from Roc, keeping Elem itself out of the host ABI.
+	create_dynamic! : U64, U64, Box(((NodeValue, U64) => {})) => {}
 
-    register_lifecycle! : U64, U64 => {}
+	create_each! : U64, U64, Box((NodeValue -> Str)), Box(((NodeValue, U64) => {})) => {}
 
-    Component(a) := { elem : Elem, changes : Reactive.Event(a) }.{
-        elem : Component(a) -> Elem
-        elem = |component| component.elem
+	register_lifecycle! : U64, U64 => {}
 
-        changes : Component(a) -> Reactive.Event(a)
-        changes = |component| component.changes
-    }
+	Component(a) := { elem : Elem, changes : Reactive.Event(a) }.{
+		elem : Component(a) -> Elem
+		elem = |component| component.elem
 
-    walk! : Elem, U64 => {}
-    walk! = |elem, parent_id| {
-        match elem {
-            Div(children) => {
-                div_id = Host.create_element!("div")
-                Host.append_child!(parent_id, div_id)
-                List.for_each!(children, |child| {
-                    Elem.walk!(child, div_id)
-                })
-            }
+		changes : Component(a) -> Reactive.Event(a)
+		changes = |component| component.changes
+	}
 
-            Button({ on_click, label: btn_label }) => {
-                btn_id = Host.create_element!("button")
-                Host.append_child!(parent_id, btn_id)
+	walk! : Elem, U64 => {}
+	walk! = |elem, parent_id| {
+		match elem {
+			Div(children) => {
+				div_id = Host.create_element!("div")
+				Host.append_child!(parent_id, div_id)
+				List.for_each!(
+					children,
+					|child| {
+						Elem.walk!(child, div_id)
+					},
+				)
+			}
 
-                label_node_id = Graph.SignalNode.walk!(btn_label)
-                Host.bind_text!(btn_id, label_node_id)
+			Button({ on_click, label: btn_label }) => {
+				btn_id = Host.create_element!("button")
+				Host.append_child!(parent_id, btn_id)
 
-                click_node_id = Graph.EventNode.walk!(on_click)
-                Host.bind_click!(btn_id, click_node_id)
-            }
+				label_node_id = Graph.SignalNode.walk!(btn_label)
+				Host.bind_text!(btn_id, label_node_id)
 
-            Label({ signal: text_signal }) => {
-                span_id = Host.create_element!("span")
-                Host.append_child!(parent_id, span_id)
+				click_node_id = Graph.EventNode.walk!(on_click)
+				Host.bind_click!(btn_id, click_node_id)
+			}
 
-                text_node_id = Graph.SignalNode.walk!(text_signal)
-                Host.bind_text!(span_id, text_node_id)
-            }
+			Label({ signal: text_signal }) => {
+				span_id = Host.create_element!("span")
+				Host.append_child!(parent_id, span_id)
 
-            Text(s) => {
-                span_id = Host.create_element!("span")
-                Host.set_text!(span_id, s)
-                Host.append_child!(parent_id, span_id)
-            }
+				text_node_id = Graph.SignalNode.walk!(text_signal)
+				Host.bind_text!(span_id, text_node_id)
+			}
 
-            Dynamic({ signal, render }) => {
-                container_id = Host.create_element!("div")
-                Host.append_child!(parent_id, container_id)
+			Text(s) => {
+				span_id = Host.create_element!("span")
+				Host.set_text!(span_id, s)
+				Host.append_child!(parent_id, span_id)
+			}
 
-                signal_id = Graph.SignalNode.walk!(signal)
-                Elem.create_dynamic!(container_id, signal_id, render)
-            }
+			Dynamic({ signal, render }) => {
+				container_id = Host.create_element!("div")
+				Host.append_child!(parent_id, container_id)
 
-            Each({ signal, key, render }) => {
-                container_id = Host.create_element!("div")
-                Host.append_child!(parent_id, container_id)
+				signal_id = Graph.SignalNode.walk!(signal)
+				Elem.create_dynamic!(container_id, signal_id, render)
+			}
 
-                signal_id = Graph.SignalNode.walk!(signal)
-                Elem.create_each!(container_id, signal_id, key, render)
-            }
+			Each({ signal, key, render }) => {
+				container_id = Host.create_element!("div")
+				Host.append_child!(parent_id, container_id)
 
-            Lifecycle({ on_mount, on_unmount }) => {
-                on_mount_id = Graph.EventNode.walk!(on_mount)
-                on_unmount_id = Graph.EventNode.walk!(on_unmount)
-                Elem.register_lifecycle!(on_mount_id, on_unmount_id)
-            }
-        }
-    }
+				signal_id = Graph.SignalNode.walk!(signal)
+				Elem.create_each!(container_id, signal_id, key, render)
+			}
 
-    run! : Elem => {}
-    run! = |elem| {
-        root = Host.create_root!()
-        Elem.walk!(elem, root)
-    }
+			Lifecycle({ on_mount, on_unmount }) => {
+				on_mount_id = Graph.EventNode.walk!(on_mount)
+				on_unmount_id = Graph.EventNode.walk!(on_unmount)
+				Elem.register_lifecycle!(on_mount_id, on_unmount_id)
+			}
+		}
+	}
 
-    run_component! : Reactive.Codec(a), a, (Reactive.Signal(a) => Component(a)) => {}
-    run_component! = |codec, initial, render!| {
-        state = Reactive.Signal.state!(codec, initial)
-        component = render!(state)
+	run! : Elem => {}
+	run! = |elem| {
+		root = Host.create_root!()
+		Elem.walk!(elem, root)
+	}
 
-        root = Host.create_root!()
-        Elem.walk!(Component.elem(component), root)
+	run_component! : a, (Reactive.Signal(a) => Component(a)) => {} where [a.encode : a, NodeValue -> Try(NodeValue, [])]
+	run_component! = |initial, render!| {
+		state = Reactive.Signal.state!(initial)
+		component = render!(state)
 
-        state_id = Graph.SignalNode.walk!(Reactive.Signal.to_node(state))
-        changes_id = Graph.EventNode.walk!(Reactive.Event.to_node(Component.changes(component)))
-        Host.bind_signal_update!(state_id, changes_id)
-    }
+		root = Host.create_root!()
+		Elem.walk!(Component.elem(component), root)
 
-    component : Elem, Reactive.Event(a) -> Component(a)
-    component = |elem, changes| { elem: elem, changes: changes }
+		state_id = Graph.SignalNode.walk!(Reactive.Signal.to_node(state))
+		changes_id = Graph.EventNode.walk!(Reactive.Event.to_node(Component.changes(component)))
+		Host.bind_signal_update!(state_id, changes_id)
+	}
 
-    translate :
-        Reactive.Codec(parent),
-        Reactive.Codec(child),
-        (Reactive.Signal(child) => Component(child)),
-        (parent -> child),
-        (parent, child -> parent)
-        -> (Reactive.Signal(parent) => Component(parent))
-    translate = |parent_codec, child_codec, child_render!, getter, setter| {
-        |parent_signal| {
-            child_signal = Reactive.Signal.map(parent_signal, parent_codec, child_codec, getter)
-            child_component = child_render!(child_signal)
-            parent_changes =
-                Reactive.Event.with_latest(
-                    Component.changes(child_component),
-                    child_codec,
-                    parent_signal,
-                    parent_codec,
-                    parent_codec,
-                    |child, parent| setter(parent, child),
-                )
+	component : Elem, Reactive.Event(a) -> Component(a)
+	component = |elem, changes| { elem: elem, changes: changes }
 
-            Elem.component(Component.elem(child_component), parent_changes)
-        }
-    }
+	translate :
+		(Reactive.Signal(child) => Component(child)),
+		(parent -> child),
+		(parent, child -> parent) -> (Reactive.Signal(parent) => Component(parent))
+			where [
+				parent.encode : parent, NodeValue -> Try(NodeValue, []),
+				parent.decode : NodeValue, NodeValue -> (Try(parent, [TypeMismatch]), NodeValue),
+				child.encode : child, NodeValue -> Try(NodeValue, []),
+				child.decode : NodeValue, NodeValue -> (Try(child, [TypeMismatch]), NodeValue),
+			]
+	translate = |child_render!, getter, setter| {
+		|parent_signal| {
+			child_signal = Reactive.Signal.map(parent_signal, getter)
+			child_component = child_render!(child_signal)
+			parent_changes =
+				Reactive.Event.with_latest(
+					Component.changes(child_component),
+					parent_signal,
+					|child, parent| setter(parent, child),
+				)
 
-    div : List(Elem) -> Elem
-    div = |children| Div(children)
+			Elem.component(Component.elem(child_component), parent_changes)
+		}
+	}
 
-    button : { on_click : Reactive.EventSender({}), label : Reactive.Signal(Str) } -> Elem
-    button = |config| {
-        Button({
-            on_click: Reactive.EventSender.to_node(config.on_click),
-            label: Reactive.Signal.to_node(config.label),
-        })
-    }
+	div : List(Elem) -> Elem
+	div = |children| Div(children)
 
-    label : Reactive.Signal(Str) -> Elem
-    label = |text_signal| Label({ signal: Reactive.Signal.to_node(text_signal) })
+	button : { on_click : Reactive.EventSender(Reactive.Unit), label : Reactive.Signal(Str) } -> Elem
+	button = |config| {
+		Button(
+			{
+				on_click: Reactive.EventSender.to_node(config.on_click),
+				label: Reactive.Signal.to_node(config.label),
+			},
+		)
+	}
 
-    text : Str -> Elem
-    text = |s| Text(s)
+	label : Reactive.Signal(Str) -> Elem
+	label = |text_signal| Label({ signal: Reactive.Signal.to_node(text_signal) })
 
-    dynamic : Reactive.Signal(a), Reactive.Codec(a), (a => Elem) -> Elem
-    dynamic = |signal, codec, render| {
-        decode = codec.decode_fn
-        wrapped : (NodeValue, U64) => {}
-        wrapped = |(nv, parent_id)| {
-            value =
-                match decode(nv) {
-                    Ok(val) => val
-                    Err(_) => ...
-                }
+	text : Str -> Elem
+	text = |s| Text(s)
 
-            Elem.walk!(render(value), parent_id)
-        }
+	dynamic :
+		Reactive.Signal(a), (a => Elem) -> Elem
+			where [a.decode : NodeValue, NodeValue -> (Try(a, [TypeMismatch]), NodeValue)]
+	dynamic = |signal, render| {
+		wrapped : (NodeValue, U64) => {}
+		wrapped = |(nv, parent_id)| {
+			A : a
+			value : a
+			value =
+				match A.decode(nv, NodeValue.format) {
+					(Ok(val), _) => val
+					(Err(_), _) => ...
+				}
 
-        Dynamic({
-            signal: Reactive.Signal.to_node(signal),
-            render: Box.box(wrapped),
-        })
-    }
+			Elem.walk!(render(value), parent_id)
+		}
 
-    when : Reactive.Signal(Bool), Elem, Elem -> Elem
-    when = |condition, when_true, when_false| {
-        Elem.dynamic(condition, Reactive.Codec.bool, |flag| if flag {
-            when_true
-        } else {
-            when_false
-        })
-    }
+		Dynamic(
+			{
+				signal: Reactive.Signal.to_node(signal),
+				render: Box.box(wrapped),
+			},
+		)
+	}
 
-    each : Reactive.Signal(List(a)), Reactive.Codec(a), (a -> Str), (a => Elem) -> Elem
-    each = |items_signal, item_codec, key_fn, render| {
-        decode = item_codec.decode_fn
-        wrapped_key : NodeValue -> Str
-        wrapped_key = |nv| {
-            value =
-                match decode(nv) {
-                    Ok(val) => val
-                    Err(_) => ...
-                }
+	when : Reactive.Signal(Bool), Elem, Elem -> Elem
+	when = |condition, when_true, when_false| {
+		Elem.dynamic(
+			condition,
+			|flag| if flag {
+				when_true
+			} else {
+				when_false
+			},
+		)
+	}
 
-            key_fn(value)
-        }
+	each :
+		Reactive.Signal(List(a)), (a -> Str), (a => Elem) -> Elem
+			where [a.decode : NodeValue, NodeValue -> (Try(a, [TypeMismatch]), NodeValue)]
+	each = |items_signal, key_fn, render| {
+		wrapped_key : NodeValue -> Str
+		wrapped_key = |nv| {
+			A : a
+			value : a
+			value =
+				match A.decode(nv, NodeValue.format) {
+					(Ok(val), _) => val
+					(Err(_), _) => ...
+				}
 
-        wrapped_render : (NodeValue, U64) => {}
-        wrapped_render = |(nv, parent_id)| {
-            value =
-                match decode(nv) {
-                    Ok(val) => val
-                    Err(_) => ...
-                }
+			key_fn(value)
+		}
 
-            Elem.walk!(render(value), parent_id)
-        }
+		wrapped_render : (NodeValue, U64) => {}
+		wrapped_render = |(nv, parent_id)| {
+			A : a
+			value : a
+			value =
+				match A.decode(nv, NodeValue.format) {
+					(Ok(val), _) => val
+					(Err(_), _) => ...
+				}
 
-        Each({
-            signal: Reactive.Signal.to_node(items_signal),
-            key: Box.box(wrapped_key),
-            render: Box.box(wrapped_render),
-        })
-    }
+			Elem.walk!(render(value), parent_id)
+		}
 
-    lifecycle : { on_mount : Reactive.EventSender({}), on_unmount : Reactive.EventSender({}) } -> Elem
-    lifecycle = |callbacks| {
-        Lifecycle({
-            on_mount: Reactive.EventSender.to_node(callbacks.on_mount),
-            on_unmount: Reactive.EventSender.to_node(callbacks.on_unmount),
-        })
-    }
+		Each(
+			{
+				signal: Reactive.Signal.to_node(items_signal),
+				key: Box.box(wrapped_key),
+				render: Box.box(wrapped_render),
+			},
+		)
+	}
+
+	lifecycle : { on_mount : Reactive.EventSender(Reactive.Unit), on_unmount : Reactive.EventSender(Reactive.Unit) } -> Elem
+	lifecycle = |callbacks| {
+		Lifecycle(
+			{
+				on_mount: Reactive.EventSender.to_node(callbacks.on_mount),
+				on_unmount: Reactive.EventSender.to_node(callbacks.on_unmount),
+			},
+		)
+	}
 
 }
