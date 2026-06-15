@@ -15,7 +15,7 @@ main! = |json| {
 		status : [Active, Paused],
 		wildcard_optional : Try(Str, _),
 	}
-	decoded = Json.decode(json, Decoder.derive({}))
+	decoded = Json.decode(json)
 
 	explicit_optional_length = match decoded.explicit_optional {
 		Ok(value) => Str.count_utf8_bytes(value)

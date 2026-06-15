@@ -38,15 +38,20 @@ Builtin :: [].{
 			crash "Decoder.dispatch is compiler-generated"
 		}
 
+		decode : Decoder(shape), source, fmt -> shape
+			where [
+				fmt.init : fmt, source -> input,
+				fmt.decode_str : DecoderStrSpec(shape), input -> shape,
+				fmt.decode_record : DecoderRecordSpec(shape), input -> shape,
+				fmt.decode_tag_union : DecoderTagUnionSpec(shape), input -> shape,
+			]
+		decode = |_decoder, _source, _format| {
+			crash "Decoder.decode is compiler-generated"
+		}
+
 		decode_str : DecoderStrSpec(_shape), _slot -> _shape
 		decode_str = |_, _| {
 			crash "Decoder.decode_str is compiler-generated"
-		}
-
-		derive : {} -> Decoder(shape) where [shape.decoder : () -> Decoder(shape)]
-		derive = |_| {
-			Shape : shape
-			Shape.decoder()
 		}
 	}
 

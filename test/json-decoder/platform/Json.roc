@@ -1,12 +1,32 @@
 Json :: { raw : Str }.{
 	FieldValue :: [Present(Str), Missing].{}
+	JsonFormat :: [Default].{
+		default : () -> JsonFormat
+		default = || JsonFormat.Default
 
-	decode : Json, Decoder(a) -> a
-	decode = |json, decoder|
-		Decoder.dispatch(decoder, FieldValue.Present(json.raw), decode_str, decode_record_slot, decode_tag_union_slot)
+		init : JsonFormat, Json -> FieldValue
+		init = |_, json|
+			FieldValue.Present(json.raw)
 
-	decode_record : Str, DecoderRecordSpec(a) -> a
-	decode_record = |raw, spec| {
+		decode_str : DecoderStrSpec(a), FieldValue -> a
+		decode_str = |spec, slot|
+			decode_str(spec, slot)
+
+		decode_record : DecoderRecordSpec(a), FieldValue -> a
+		decode_record = |spec, slot| decode_record_slot(spec, slot)
+
+		decode_tag_union : DecoderTagUnionSpec(a), FieldValue -> a
+		decode_tag_union = |spec, slot| decode_tag_union_slot(spec, slot)
+	}
+
+	decode : Json -> a where [a.decoder : () -> Decoder(a)]
+	decode = |json| {
+		Shape : a
+		Shape.decoder().decode(json, JsonFormat.default())
+	}
+
+	decode_record_from_json : Str, DecoderRecordSpec(a) -> a
+	decode_record_from_json = |raw, spec| {
 		var $remaining = Str.trim_start(raw)
 		var $state = Decoder.Record.init(spec, FieldValue.Missing)
 		var $keep_scanning = True
@@ -84,7 +104,7 @@ Json :: { raw : Str }.{
 	decode_record_slot : DecoderRecordSpec(a), FieldValue -> a
 	decode_record_slot = |spec, slot|
 		match slot {
-			Present(value) => decode_record(value, spec)
+			Present(value) => decode_record_from_json(value, spec)
 			Missing => {
 				crash "missing required decoded field"
 			}
@@ -94,14 +114,14 @@ Json :: { raw : Str }.{
 	decode_tag_union_slot = |spec, slot|
 		match slot {
 			Present(value) =>
-				decode_tag_union(value, spec)
+				decode_tag_union_from_json(value, spec)
 			Missing => {
 				crash "missing required decoded field"
 			}
 		}
 
-	decode_tag_union : Str, DecoderTagUnionSpec(a) -> a
-	decode_tag_union = |tag_name, spec|
+	decode_tag_union_from_json : Str, DecoderTagUnionSpec(a) -> a
+	decode_tag_union_from_json = |tag_name, spec|
 		Decoder.TagUnion.decode(spec, tag_name, FieldValue.Present(tag_name), Str.is_eq, decode_slot)
 
 	find_object_end : Str -> { after : Str, found : Bool }

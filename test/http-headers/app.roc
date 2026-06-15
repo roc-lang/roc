@@ -10,7 +10,7 @@ main! = |headers| {
 		question_optional : Try(Str, [Missing]),
 		wildcard_optional : Try(Str, _),
 	}
-	decoded = Headers.decode(headers, Decoder.derive({}))
+	decoded = Headers.decode(headers)
 
 	explicit_optional_length = match decoded.explicit_optional {
 		Ok(value) => Str.count_utf8_bytes(value)

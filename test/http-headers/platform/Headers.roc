@@ -1,12 +1,32 @@
 Headers :: { raw : Str }.{
 	FieldValue :: [Present(Str), Missing].{}
+	HeaderFormat :: [Default].{
+		default : () -> HeaderFormat
+		default = || HeaderFormat.Default
 
-	decode : Headers, Decoder(a) -> a
-	decode = |headers, decoder|
-		Decoder.dispatch(decoder, FieldValue.Present(headers.raw), decode_str, decode_record_slot, decode_tag_union_slot)
+		init : HeaderFormat, Headers -> FieldValue
+		init = |_, headers|
+			FieldValue.Present(headers.raw)
 
-	decode_record : Str, DecoderRecordSpec(a) -> a
-	decode_record = |headers, spec| {
+		decode_str : DecoderStrSpec(a), FieldValue -> a
+		decode_str = |spec, slot|
+			decode_str(spec, slot)
+
+		decode_record : DecoderRecordSpec(a), FieldValue -> a
+		decode_record = |spec, slot| decode_record_slot(spec, slot)
+
+		decode_tag_union : DecoderTagUnionSpec(a), FieldValue -> a
+		decode_tag_union = |spec, slot| decode_tag_union_slot(spec, slot)
+	}
+
+	decode : Headers -> a where [a.decoder : () -> Decoder(a)]
+	decode = |headers| {
+		Shape : a
+		Shape.decoder().decode(headers, HeaderFormat.default())
+	}
+
+	decode_record_from_headers : Str, DecoderRecordSpec(a) -> a
+	decode_record_from_headers = |headers, spec| {
 		request_line = Str.find_first(headers, "\r\n")
 		var $remaining = if request_line.found {
 			request_line.after
@@ -57,7 +77,7 @@ Headers :: { raw : Str }.{
 	decode_record_slot : DecoderRecordSpec(a), FieldValue -> a
 	decode_record_slot = |spec, slot|
 		match slot {
-			Present(value) => decode_record(value, spec)
+			Present(value) => decode_record_from_headers(value, spec)
 			Missing => {
 				crash "missing required decoded field"
 			}
@@ -66,14 +86,14 @@ Headers :: { raw : Str }.{
 	decode_tag_union_slot : DecoderTagUnionSpec(a), FieldValue -> a
 	decode_tag_union_slot = |spec, slot|
 		match slot {
-			Present(value) => decode_tag_union(value, spec)
+			Present(value) => decode_tag_union_from_header(value, spec)
 			Missing => {
 				crash "missing required decoded field"
 			}
 		}
 
-	decode_tag_union : Str, DecoderTagUnionSpec(a) -> a
-	decode_tag_union = |tag_name, spec|
+	decode_tag_union_from_header : Str, DecoderTagUnionSpec(a) -> a
+	decode_tag_union_from_header = |tag_name, spec|
 		Decoder.TagUnion.decode(spec, tag_name, FieldValue.Present(tag_name), Str.is_eq, decode_slot)
 
 	header_name_matches_field : Str, Str -> Bool
