@@ -155,6 +155,7 @@ const Symbols = struct {
     generic_choose: Symbol,
     constrained_fold: Symbol,
     score_constraints: Symbol,
+    score_local_types: Symbol,
     score_iter: Symbol,
     score_boxed: Symbol,
     score_function_values: Symbol,
@@ -318,6 +319,7 @@ pub fn generate(self: *Self) std.mem.Allocator.Error!void {
         .generic_choose = self.fresh(.function),
         .constrained_fold = self.fresh(.function),
         .score_constraints = self.fresh(.function),
+        .score_local_types = self.fresh(.function),
         .score_iter = self.fresh(.function),
         .score_boxed = self.fresh(.function),
         .score_function_values = self.fresh(.function),
@@ -1457,6 +1459,7 @@ fn writeTopLevelFunctions(self: *Self) std.mem.Allocator.Error!void {
     try self.writeInspectScoring();
     try self.writeGenericHelpers();
     try self.writeConstraintScoring();
+    try self.writeLocalTypeScoring();
     try self.writeIteratorScoring();
     try self.writeBoxScoring();
     try self.writeFunctionValueScoring();
@@ -3377,6 +3380,146 @@ fn writeConstraintScoring(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppText(" + ");
     try self.writeAppSymbol(recursive_score);
     try self.writeAppText("\n}\n\n");
+}
+
+fn writeLocalTypeScoring(self: *Self) std.mem.Allocator.Error!void {
+    const seed = self.fresh(.value);
+    const text = self.fresh(.value);
+    const local_type = self.fresh(.type);
+    const local_tag = self.fresh(.tag);
+    const local_marker = self.fresh(.function);
+    const local_make = self.fresh(.function);
+    const local_score = self.fresh(.function);
+    const make_value = self.fresh(.value);
+    const score_node = self.fresh(.value);
+    const score_extra = self.fresh(.value);
+    const score_value = self.fresh(.value);
+    const local_node = self.fresh(.value);
+    const local_list = self.fresh(.value);
+    const fold_acc = self.fresh(.value);
+    const fold_node = self.fresh(.value);
+
+    try self.writeAppSymbol(self.symbols.score_local_types);
+    try self.writeAppText(" : U64, Str -> U64\n");
+    try self.writeAppSymbol(self.symbols.score_local_types);
+    try self.writeAppText(" = |");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(text);
+    try self.writeAppText("| {\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(local_type);
+    try self.writeAppText(" := [");
+    try self.writeAppSymbol(local_tag);
+    try self.writeAppText("(U64)].{\n");
+
+    try self.writeIndent(2);
+    try self.writeAppSymbol(local_marker);
+    try self.writeAppText(" : U64\n");
+    try self.writeIndent(2);
+    try self.writeAppSymbol(local_marker);
+    try self.writeAppText(" = ");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText(" + List.len(Str.to_utf8(");
+    try self.writeAppSymbol(text);
+    try self.writeAppText("))\n");
+
+    try self.writeIndent(2);
+    try self.writeAppSymbol(local_make);
+    try self.writeAppText(" : U64 -> ");
+    try self.writeAppSymbol(local_type);
+    try self.writeAppText("\n");
+    try self.writeIndent(2);
+    try self.writeAppSymbol(local_make);
+    try self.writeAppText(" = |");
+    try self.writeAppSymbol(make_value);
+    try self.writeAppText("| ");
+    try self.writeAppSymbol(local_tag);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(make_value);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(local_type);
+    try self.writeAppText(".");
+    try self.writeAppSymbol(local_marker);
+    try self.writeAppText(")\n");
+
+    try self.writeIndent(2);
+    try self.writeAppSymbol(local_score);
+    try self.writeAppText(" : ");
+    try self.writeAppSymbol(local_type);
+    try self.writeAppText(", U64 -> U64\n");
+    try self.writeIndent(2);
+    try self.writeAppSymbol(local_score);
+    try self.writeAppText(" = |");
+    try self.writeAppSymbol(score_node);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(score_extra);
+    try self.writeAppText("| match ");
+    try self.writeAppSymbol(score_node);
+    try self.writeAppText(" {\n");
+    try self.writeIndent(3);
+    try self.writeAppSymbol(local_tag);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(score_value);
+    try self.writeAppText(") => ");
+    try self.writeAppSymbol(score_value);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(score_extra);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(local_type);
+    try self.writeAppText(".");
+    try self.writeAppSymbol(local_marker);
+    try self.writeAppText("\n");
+    try self.writeIndent(2);
+    try self.writeAppText("}\n");
+
+    try self.writeIndent(1);
+    try self.writeAppText("}\n");
+
+    try self.writeLocalHeader(local_node, local_type);
+    try self.writeAppSymbol(local_type);
+    try self.writeAppText(".");
+    try self.writeAppSymbol(local_make);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText(")\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(local_list);
+    try self.writeAppText(" : List(");
+    try self.writeAppSymbol(local_type);
+    try self.writeAppText(")\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(local_list);
+    try self.writeAppText(" = [");
+    try self.writeAppSymbol(local_node);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(local_type);
+    try self.writeAppText(".");
+    try self.writeAppSymbol(local_make);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText(" + 1)]\n");
+
+    try self.writeIndent(1);
+    try self.writeAppText("List.fold(");
+    try self.writeAppSymbol(local_list);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText(", |");
+    try self.writeAppSymbol(fold_acc);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(fold_node);
+    try self.writeAppText("| ");
+    try self.writeAppSymbol(local_type);
+    try self.writeAppText(".");
+    try self.writeAppSymbol(local_score);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(fold_node);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(fold_acc);
+    try self.writeAppText("))\n}\n\n");
 }
 
 fn writeIteratorScoring(self: *Self) std.mem.Allocator.Error!void {
@@ -8583,6 +8726,7 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     const recursive_node = self.fresh(.value);
     const recursive_score = self.fresh(.value);
     const constraint_score = self.fresh(.value);
+    const local_type_score = self.fresh(.value);
     const inspect_score = self.fresh(.value);
     const pattern_score = self.fresh(.value);
     const structural_score = self.fresh(.value);
@@ -9159,6 +9303,19 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppText(")\n");
 
     try self.writeIndent(1);
+    try self.writeAppSymbol(local_type_score);
+    try self.writeAppText(" : U64\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(local_type_score);
+    try self.writeAppText(" = ");
+    try self.writeAppSymbol(self.symbols.score_local_types);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(constraint_score);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(generic_text);
+    try self.writeAppText(")\n");
+
+    try self.writeIndent(1);
     try self.writeAppSymbol(inspect_score);
     try self.writeAppText(" : U64\n");
     try self.writeIndent(1);
@@ -9181,6 +9338,8 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppSymbol(recursive_score);
     try self.writeAppText(" + ");
     try self.writeAppSymbol(constraint_score);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(local_type_score);
     try self.writeAppText(")\n");
 
     try self.writeIndent(1);
@@ -9282,6 +9441,8 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppText(" + ");
     try self.writeAppSymbol(constraint_score);
     try self.writeAppText(" + ");
+    try self.writeAppSymbol(local_type_score);
+    try self.writeAppText(" + ");
     try self.writeAppSymbol(inspect_score);
     try self.writeAppText(" + ");
     try self.writeAppSymbol(pattern_score);
@@ -9364,6 +9525,8 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppText(" + ");
     try self.writeAppSymbol(constraint_score);
     try self.writeAppText(" + ");
+    try self.writeAppSymbol(local_type_score);
+    try self.writeAppText(" + ");
     try self.writeAppSymbol(inspect_score);
     try self.writeAppText(" + ");
     try self.writeAppSymbol(pattern_score);
@@ -9432,6 +9595,8 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppSymbol(recursive_score);
     try self.writeAppText(" + ");
     try self.writeAppSymbol(constraint_score);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(local_type_score);
     try self.writeAppText(" + ");
     try self.writeAppSymbol(inspect_score);
     try self.writeAppText(" + ");
