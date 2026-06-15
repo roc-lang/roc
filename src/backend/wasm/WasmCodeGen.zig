@@ -3151,6 +3151,19 @@ fn collectProcLocals(
                 try work.append(wa, str_match.on_match);
                 try work.append(wa, str_match.on_miss);
             },
+            .str_match_set => |str_match_set| {
+                try recordProcLocal(locals, str_match_set.source);
+                for (self.store.getStrMatchArms(str_match_set.arms)) |arm| {
+                    for (self.store.getStrMatchSteps(arm.steps)) |step| {
+                        switch (step.capture) {
+                            .discard => {},
+                            .view => |local| try recordProcLocal(locals, local),
+                        }
+                    }
+                    try work.append(wa, arm.on_match);
+                }
+                try work.append(wa, str_match_set.on_miss);
+            },
             .join => |join_stmt| {
                 for (self.store.getLocalSpan(join_stmt.params)) |param| try recordProcLocal(locals, param);
                 try work.append(wa, join_stmt.body);
@@ -7238,6 +7251,23 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
             try work.append(wa, .{ .node = .{ .stmt_id = str_match.on_miss, .stop = stop } });
             try work.append(wa, .str_match_else);
             try work.append(wa, .{ .node = .{ .stmt_id = str_match.on_match, .stop = stop } });
+        },
+        .str_match_set => |str_match_set| {
+            const matched_arm = try self.generateStrMatchSet(str_match_set);
+            const arms = self.store.getStrMatchArms(str_match_set.arms);
+            const state = try self.allocator.create(SwitchEqState);
+            state.* = .{ .cond_local = matched_arm, .cond_vt = .i32, .branch_count = arms.len };
+
+            try work.append(wa, .{ .switch_close = state });
+            try work.append(wa, .{ .node = .{ .stmt_id = str_match_set.on_miss, .stop = stop } });
+
+            var arm_index = arms.len;
+            while (arm_index > 0) {
+                arm_index -= 1;
+                try work.append(wa, .switch_else);
+                try work.append(wa, .{ .node = .{ .stmt_id = arms[arm_index].on_match, .stop = stop } });
+                try work.append(wa, .{ .switch_test = .{ .state = state, .branch_value = @intCast(arm_index) } });
+            }
         },
         .join => |j| {
             const jp_key = @intFromEnum(j.id);
@@ -14180,6 +14210,10 @@ fn emitStrMatchCapture(
 
 fn generateStrMatch(self: *Self, str_match: anytype) Allocator.Error!u32 {
     const source = try self.emitStrMatchSourceShape(str_match.source);
+    return self.generateStrMatchWithSource(source, str_match);
+}
+
+fn generateStrMatchWithSource(self: *Self, source: StrMatchSourceShape, str_match: anytype) Allocator.Error!u32 {
     const cursor = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     const matched = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitSetI32Local(cursor, 0);
@@ -14258,6 +14292,33 @@ fn generateStrMatch(self: *Self, str_match: anytype) Allocator.Error!u32 {
     }
 
     return matched;
+}
+
+fn generateStrMatchSet(self: *Self, str_match_set: anytype) Allocator.Error!u32 {
+    const source = try self.emitStrMatchSourceShape(str_match_set.source);
+    const matched_arm = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitSetI32Local(matched_arm, -1);
+
+    for (self.store.getStrMatchArms(str_match_set.arms), 0..) |arm, index| {
+        try self.emitLocalGet(matched_arm);
+        try self.emitI32Const(-1);
+        self.currentCode().append(self.allocator, Op.i32_eq) catch return error.OutOfMemory;
+        self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
+        self.currentCode().append(self.allocator, @intFromEnum(BlockType.void)) catch return error.OutOfMemory;
+        {
+            const matched = try self.generateStrMatchWithSource(source, arm);
+            try self.emitLocalGet(matched);
+            self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
+            self.currentCode().append(self.allocator, @intFromEnum(BlockType.void)) catch return error.OutOfMemory;
+            {
+                try self.emitSetI32Local(matched_arm, @intCast(index));
+            }
+            self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
+        }
+        self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
+    }
+
+    return matched_arm;
 }
 
 /// Generate LowLevel list_append: create new list with one element appended.

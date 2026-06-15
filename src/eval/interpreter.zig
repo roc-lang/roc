@@ -1426,6 +1426,7 @@ pub const Interpreter = struct {
                 .join => |join_stmt| join_stmt.body,
                 .switch_stmt,
                 .str_match,
+                .str_match_set,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
                 .jump,
@@ -1918,6 +1919,9 @@ pub const Interpreter = struct {
                 .str_match => |str_match| {
                     current = try self.execStrMatch(frame, current, str_match);
                 },
+                .str_match_set => |str_match_set| {
+                    current = try self.execStrMatchSet(frame, current, str_match_set);
+                },
                 .loop_continue => return .loop_continue,
                 .loop_break => return .loop_break,
                 .join => |join_stmt| {
@@ -2183,6 +2187,18 @@ pub const Interpreter = struct {
                     });
                     stack.append(self.evalAllocator(), str_match.on_match) catch return;
                     stack.append(self.evalAllocator(), str_match.on_miss) catch return;
+                },
+                .str_match_set => |str_match_set| {
+                    debugPrint("    {d}: str_match_set source={d} arms={d} on_miss={d}\n", .{
+                        @intFromEnum(stmt_id),
+                        @intFromEnum(str_match_set.source),
+                        str_match_set.arms.len,
+                        @intFromEnum(str_match_set.on_miss),
+                    });
+                    for (self.store.getStrMatchArms(str_match_set.arms)) |arm| {
+                        stack.append(self.evalAllocator(), arm.on_match) catch return;
+                    }
+                    stack.append(self.evalAllocator(), str_match_set.on_miss) catch return;
                 },
                 .loop_continue => {
                     debugPrint("    {d}: loop_continue\n", .{@intFromEnum(stmt_id)});
@@ -3229,25 +3245,55 @@ pub const Interpreter = struct {
         const source_value = try self.getLocalChecked(frame, str_match.source);
         const source_rs = valueToRocStr(source_value);
         const source_bytes = self.readRocStr(source_value);
+        return if (try self.execStrMatchArm(frame, stmt_id, source_rs, source_bytes, str_match))
+            str_match.on_match
+        else
+            str_match.on_miss;
+    }
 
-        const prefix = self.store.getStringLiteral(str_match.prefix);
-        if (!std.mem.startsWith(u8, source_bytes, prefix)) return str_match.on_miss;
+    fn execStrMatchSet(
+        self: *LirInterpreter,
+        frame: *Frame,
+        stmt_id: CFStmtId,
+        str_match_set: anytype,
+    ) Error!CFStmtId {
+        const source_value = try self.getLocalChecked(frame, str_match_set.source);
+        const source_rs = valueToRocStr(source_value);
+        const source_bytes = self.readRocStr(source_value);
+        for (self.store.getStrMatchArms(str_match_set.arms)) |arm| {
+            if (try self.execStrMatchArm(frame, stmt_id, source_rs, source_bytes, arm)) {
+                return arm.on_match;
+            }
+        }
+        return str_match_set.on_miss;
+    }
+
+    fn execStrMatchArm(
+        self: *LirInterpreter,
+        frame: *Frame,
+        stmt_id: CFStmtId,
+        source_rs: RocStr,
+        source_bytes: []const u8,
+        arm: anytype,
+    ) Error!bool {
+        const prefix = self.store.getStringLiteral(arm.prefix);
+        if (!std.mem.startsWith(u8, source_bytes, prefix)) return false;
 
         var cursor: usize = prefix.len;
-        const steps = self.store.getStrMatchSteps(str_match.steps);
+        const steps = self.store.getStrMatchSteps(arm.steps);
         for (steps, 0..) |step, step_i| {
             const capture_start = cursor;
             const delimiter = self.store.getStringLiteral(step.delimiter);
-            const is_final_tail_capture = str_match.end == .tail and step_i + 1 == steps.len and delimiter.len == 0;
+            const is_final_tail_capture = arm.end == .tail and step_i + 1 == steps.len and delimiter.len == 0;
 
             const capture_end = if (is_final_tail_capture) blk: {
                 cursor = source_bytes.len;
                 break :blk source_bytes.len;
             } else blk: {
                 const found = if (delimiter.len == 0) cursor else found: {
-                    const candidate = std.mem.indexOfScalarPos(u8, source_bytes, cursor, delimiter[0]) orelse return str_match.on_miss;
-                    if (source_bytes.len - candidate < delimiter.len) return str_match.on_miss;
-                    if (!std.mem.eql(u8, source_bytes[candidate..][0..delimiter.len], delimiter)) return str_match.on_miss;
+                    const candidate = std.mem.indexOfScalarPos(u8, source_bytes, cursor, delimiter[0]) orelse return false;
+                    if (source_bytes.len - candidate < delimiter.len) return false;
+                    if (!std.mem.eql(u8, source_bytes[candidate..][0..delimiter.len], delimiter)) return false;
                     break :found candidate;
                 };
                 cursor = found + delimiter.len;
@@ -3267,12 +3313,12 @@ pub const Interpreter = struct {
             }
         }
 
-        switch (str_match.end) {
-            .exact => if (cursor != source_bytes.len) return str_match.on_miss,
+        switch (arm.end) {
+            .exact => if (cursor != source_bytes.len) return false,
             .tail => {},
         }
 
-        return str_match.on_match;
+        return true;
     }
 
     fn makeStrCaptureValue(

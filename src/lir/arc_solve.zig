@@ -586,6 +586,12 @@ fn retLenders(
                 try solver.stack.append(allocator, s.on_match);
                 try solver.stack.append(allocator, s.on_miss);
             },
+            .str_match_set => |s| {
+                for (store.getStrMatchArms(s.arms)) |arm| {
+                    try solver.stack.append(allocator, arm.on_match);
+                }
+                try solver.stack.append(allocator, s.on_miss);
+            },
             .join => |j| {
                 try solver.stack.append(allocator, j.body);
                 try solver.stack.append(allocator, j.remainder);
@@ -639,6 +645,12 @@ fn retAllUnique(
             },
             .str_match => |s| {
                 try solver.stack.append(allocator, s.on_match);
+                try solver.stack.append(allocator, s.on_miss);
+            },
+            .str_match_set => |s| {
+                for (store.getStrMatchArms(s.arms)) |arm| {
+                    try solver.stack.append(allocator, arm.on_match);
+                }
                 try solver.stack.append(allocator, s.on_miss);
             },
             .join => |j| {
@@ -883,6 +895,18 @@ fn collectStmt(
             try solver.stack.append(allocator, str_match.on_match);
             try solver.stack.append(allocator, str_match.on_miss);
         },
+        .str_match_set => |str_match_set| {
+            for (store.getStrMatchArms(str_match_set.arms)) |arm| {
+                for (store.getStrMatchSteps(arm.steps)) |step| {
+                    switch (step.capture) {
+                        .discard => {},
+                        .view => |local| noteDef(solver.defs, local, .{ .borrow_capable = @intFromEnum(str_match_set.source) }),
+                    }
+                }
+                try solver.stack.append(allocator, arm.on_match);
+            }
+            try solver.stack.append(allocator, str_match_set.on_miss);
+        },
         .join => |join_stmt| {
             // Join parameters are written at every jump; they stay owned.
             for (store.getLocalSpan(join_stmt.params)) |param| {
@@ -1044,6 +1068,12 @@ pub fn computeVisibility(
                     try stack.append(allocator, stmt.on_match);
                     try stack.append(allocator, stmt.on_miss);
                 },
+                .str_match_set => |stmt| {
+                    for (store.getStrMatchArms(stmt.arms)) |arm| {
+                        try stack.append(allocator, arm.on_match);
+                    }
+                    try stack.append(allocator, stmt.on_miss);
+                },
                 .join => |stmt| {
                     try stack.append(allocator, stmt.body);
                     try stack.append(allocator, stmt.remainder);
@@ -1142,6 +1172,16 @@ pub fn computeVisibility(
                     switch (step.capture) {
                         .discard => {},
                         .view => |local| try addEdge(&edges, allocator, rc_local, @intFromEnum(local), @intFromEnum(str_match.source)),
+                    }
+                }
+            },
+            .str_match_set => |str_match_set| {
+                for (store.getStrMatchArms(str_match_set.arms)) |arm| {
+                    for (store.getStrMatchSteps(arm.steps)) |step| {
+                        switch (step.capture) {
+                            .discard => {},
+                            .view => |local| try addEdge(&edges, allocator, rc_local, @intFromEnum(local), @intFromEnum(str_match_set.source)),
+                        }
                     }
                 }
             },
@@ -1516,6 +1556,20 @@ pub fn computeUniqueness(
                     }
                 }
             },
+            .str_match_set => |str_match_set| {
+                marks.noteUse(&borrow_used, str_match_set.source);
+                for (store.getStrMatchArms(str_match_set.arms)) |arm| {
+                    for (store.getStrMatchSteps(arm.steps)) |step| {
+                        switch (step.capture) {
+                            .discard => {},
+                            .view => |local| {
+                                marks.trackDef(&has_def, &multi_def, local);
+                                marks.destroy(&foreign_def, local);
+                            },
+                        }
+                    }
+                }
+            },
             .assign_low_level => |assign| {
                 marks.trackDef(&has_def, &multi_def, assign.target);
                 if (assign.rc_effect.result_unique) {
@@ -1678,6 +1732,12 @@ fn computeSccs(solver: *Solver) SolveError!void {
                 },
                 .str_match => |s| {
                     try solver.stack.append(allocator, s.on_match);
+                    try solver.stack.append(allocator, s.on_miss);
+                },
+                .str_match_set => |s| {
+                    for (store.getStrMatchArms(s.arms)) |arm| {
+                        try solver.stack.append(allocator, arm.on_match);
+                    }
                     try solver.stack.append(allocator, s.on_miss);
                 },
                 .join => |j| {

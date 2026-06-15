@@ -207,6 +207,12 @@ const Pass = struct {
                     try self.stack.append(self.allocator, s.on_match);
                     try self.stack.append(self.allocator, s.on_miss);
                 },
+                .str_match_set => |s| {
+                    for (self.store.getStrMatchArms(s.arms)) |arm| {
+                        try self.stack.append(self.allocator, arm.on_match);
+                    }
+                    try self.stack.append(self.allocator, s.on_miss);
+                },
                 inline .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .free => |s| {
                     try self.stack.append(self.allocator, s.next);
                 },
@@ -408,6 +414,19 @@ const Pass = struct {
                     try self.stack.append(self.allocator, s.on_match);
                     try self.stack.append(self.allocator, s.on_miss);
                 },
+                .str_match_set => |*s| {
+                    const arms = self.store.getStrMatchArms(s.arms);
+                    const rewritten_arms = try self.allocator.alloc(LIR.StrMatchArm, arms.len);
+                    defer self.allocator.free(rewritten_arms);
+                    for (arms, rewritten_arms) |arm, *rewritten| {
+                        rewritten.* = arm;
+                        rewritten.on_match = self.resolveRemoved(arm.on_match);
+                        try self.stack.append(self.allocator, rewritten.on_match);
+                    }
+                    s.arms = try self.store.addStrMatchArms(rewritten_arms);
+                    s.on_miss = self.resolveRemoved(s.on_miss);
+                    try self.stack.append(self.allocator, s.on_miss);
+                },
                 .join => |*j| {
                     j.body = self.resolveRemoved(j.body);
                     j.remainder = self.resolveRemoved(j.remainder);
@@ -459,6 +478,12 @@ const Pass = struct {
                 },
                 .str_match => |s| {
                     try self.stack.append(self.allocator, s.on_match);
+                    try self.stack.append(self.allocator, s.on_miss);
+                },
+                .str_match_set => |s| {
+                    for (self.store.getStrMatchArms(s.arms)) |arm| {
+                        try self.stack.append(self.allocator, arm.on_match);
+                    }
                     try self.stack.append(self.allocator, s.on_miss);
                 },
                 .join => |join_stmt| {
@@ -578,6 +603,19 @@ const Pass = struct {
                         }
                     }
                     try self.stack.append(self.allocator, s.on_match);
+                    try self.stack.append(self.allocator, s.on_miss);
+                },
+                .str_match_set => |s| {
+                    try self.noteUse(s.source);
+                    for (self.store.getStrMatchArms(s.arms)) |arm| {
+                        for (self.store.getStrMatchSteps(arm.steps)) |step| {
+                            switch (step.capture) {
+                                .discard => {},
+                                .view => |local| try self.noteWrite(local),
+                            }
+                        }
+                        try self.stack.append(self.allocator, arm.on_match);
+                    }
                     try self.stack.append(self.allocator, s.on_miss);
                 },
                 .join => |join_stmt| {

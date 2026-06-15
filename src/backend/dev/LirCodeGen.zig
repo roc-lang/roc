@@ -5454,6 +5454,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try stack.append(sa, str_match.on_match);
                         try stack.append(sa, str_match.on_miss);
                     },
+                    .str_match_set => |str_match_set| {
+                        try locals.put(localKey(str_match_set.source), str_match_set.source);
+                        for (self.store.getStrMatchArms(str_match_set.arms)) |arm| {
+                            try stack.append(sa, arm.on_match);
+                        }
+                        try stack.append(sa, str_match_set.on_miss);
+                    },
                     .join => |join| {
                         try stack.append(sa, join.body);
                         try stack.append(sa, join.remainder);
@@ -5586,6 +5593,19 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         }
                         try stack.append(sa, str_match.on_match);
                         try stack.append(sa, str_match.on_miss);
+                    },
+                    .str_match_set => |str_match_set| {
+                        try locals.put(localKey(str_match_set.source), str_match_set.source);
+                        for (self.store.getStrMatchArms(str_match_set.arms)) |arm| {
+                            for (self.store.getStrMatchSteps(arm.steps)) |step| {
+                                switch (step.capture) {
+                                    .discard => {},
+                                    .view => |local| try locals.put(localKey(local), local),
+                                }
+                            }
+                            try stack.append(sa, arm.on_match);
+                        }
+                        try stack.append(sa, str_match_set.on_miss);
                     },
                     .join => |join| {
                         for (self.store.getLocalSpan(join.params)) |param| {
@@ -13893,6 +13913,22 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             on_miss: CFStmtId,
             end_patch: usize,
         };
+        const StrMatchSourceRegs = struct {
+            bytes: GeneralReg,
+            len: GeneralReg,
+            is_small: GeneralReg,
+            allocation: GeneralReg,
+        };
+        const StrMatchSetState = struct {
+            owner: CFStmtId,
+            before_env: StmtEnvSnapshot,
+            source: StrMatchSourceRegs,
+            arms: []const LIR.StrMatchArm,
+            on_miss: CFStmtId,
+            index: usize,
+            miss_patches: std.ArrayList(usize),
+            end_patches: std.ArrayList(usize),
+        };
         // Work item for the explicit statement-generation stack. `node` generates
         // one statement; the remaining variants are continuations that emit the
         // glue code which originally lived after a recursive descent.
@@ -13908,6 +13944,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             switch1_end: *SwitchState1,
             str_match_after_match: *StrMatchState,
             str_match_end: *StrMatchState,
+            str_match_set_arm: *StrMatchSetState,
+            str_match_set_after_arm: *StrMatchSetState,
+            str_match_set_miss: *StrMatchSetState,
+            str_match_set_end: *StrMatchSetState,
         };
 
         /// Generate code for a control flow statement and everything reachable
@@ -14212,6 +14252,24 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             try work.append(wa, .{ .node = str_match.on_match });
                         },
 
+                        .str_match_set => |str_match_set| {
+                            const arms = self.store.getStrMatchArms(str_match_set.arms);
+                            const before_env = try self.captureStmtEnv();
+                            const source = try self.emitStrMatchSourceRegs(str_match_set.source);
+                            const state = try self.allocator.create(StrMatchSetState);
+                            state.* = .{
+                                .owner = stmt_id,
+                                .before_env = before_env,
+                                .source = source,
+                                .arms = arms,
+                                .on_miss = str_match_set.on_miss,
+                                .index = 0,
+                                .miss_patches = std.ArrayList(usize).empty,
+                                .end_patches = std.ArrayList(usize).empty,
+                            };
+                            try work.append(wa, .{ .str_match_set_arm = state });
+                        },
+
                         .incref => |inc| {
                             _ = try self.generateIncref(.{
                                 .value = inc.value,
@@ -14374,10 +14432,94 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     state.miss_patches.deinit(self.allocator);
                     self.allocator.destroy(state);
                 },
+
+                .str_match_set_arm => |state| {
+                    self.current_stmt_id = state.owner;
+                    try self.restoreStmtEnv(&state.before_env);
+                    if (builtin.mode == .Debug and state.index >= state.arms.len) {
+                        std.debug.panic("Dev/codegen invariant violated: string-match-set arm index exceeded arm count", .{});
+                    }
+                    state.miss_patches = try self.generateStrMatchWithSource(state.arms[state.index], state.source);
+                    try work.append(wa, .{ .str_match_set_after_arm = state });
+                    try work.append(wa, .{ .node = state.arms[state.index].on_match });
+                },
+
+                .str_match_set_after_arm => |state| {
+                    self.current_stmt_id = state.owner;
+                    try state.end_patches.append(self.allocator, try self.codegen.emitJump());
+                    const next_arm_offset = self.codegen.currentOffset();
+                    for (state.miss_patches.items) |patch| {
+                        self.codegen.patchJump(patch, next_arm_offset);
+                    }
+                    state.miss_patches.deinit(self.allocator);
+                    state.miss_patches = std.ArrayList(usize).empty;
+                    state.index += 1;
+                    try self.restoreStmtEnv(&state.before_env);
+                    if (state.index < state.arms.len) {
+                        try work.append(wa, .{ .str_match_set_arm = state });
+                    } else {
+                        try work.append(wa, .{ .str_match_set_miss = state });
+                    }
+                },
+
+                .str_match_set_miss => |state| {
+                    self.current_stmt_id = state.owner;
+                    try self.restoreStmtEnv(&state.before_env);
+                    try work.append(wa, .{ .str_match_set_end = state });
+                    try work.append(wa, .{ .node = state.on_miss });
+                },
+
+                .str_match_set_end => |state| {
+                    self.current_stmt_id = state.owner;
+                    const end_offset = self.codegen.currentOffset();
+                    for (state.end_patches.items) |patch| {
+                        self.codegen.patchJump(patch, end_offset);
+                    }
+                    try self.restoreStmtEnv(&state.before_env);
+                    state.before_env.deinit();
+                    state.miss_patches.deinit(self.allocator);
+                    state.end_patches.deinit(self.allocator);
+                    self.codegen.freeGeneral(state.source.allocation);
+                    self.codegen.freeGeneral(state.source.is_small);
+                    self.codegen.freeGeneral(state.source.len);
+                    self.codegen.freeGeneral(state.source.bytes);
+                    self.allocator.destroy(state);
+                },
             };
         }
 
         fn generateStrMatch(self: *Self, str_match: anytype) Allocator.Error!std.ArrayList(usize) {
+            const source = try self.emitStrMatchSourceRegs(str_match.source);
+            defer self.codegen.freeGeneral(source.allocation);
+            defer self.codegen.freeGeneral(source.is_small);
+            defer self.codegen.freeGeneral(source.len);
+            defer self.codegen.freeGeneral(source.bytes);
+
+            return try self.generateStrMatchWithSource(str_match, source);
+        }
+
+        fn emitStrMatchSourceRegs(self: *Self, source: LIR.LocalId) Allocator.Error!StrMatchSourceRegs {
+            const source_loc = try self.emitValueLocal(source);
+            const source_offset = switch (source_loc) {
+                .stack_str => |offset| offset,
+                else => std.debug.panic(
+                    "LIR/codegen invariant violated: str_match source local {d} did not lower to a RocStr stack value",
+                    .{@intFromEnum(source)},
+                ),
+            };
+
+            const regs = StrMatchSourceRegs{
+                .bytes = try self.allocTempGeneral(),
+                .len = try self.allocTempGeneral(),
+                .is_small = try self.allocTempGeneral(),
+                .allocation = try self.allocTempGeneral(),
+            };
+
+            try self.emitLoadStrSourceShape(source_offset, regs.bytes, regs.len, regs.is_small, regs.allocation);
+            return regs;
+        }
+
+        fn generateStrMatchWithSource(self: *Self, str_match: anytype, source: StrMatchSourceRegs) Allocator.Error!std.ArrayList(usize) {
             var miss_patches = std.ArrayList(usize).empty;
             errdefer miss_patches.deinit(self.allocator);
 
@@ -14392,33 +14534,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
             }
 
-            const source_loc = try self.emitValueLocal(str_match.source);
-            const source_offset = switch (source_loc) {
-                .stack_str => |offset| offset,
-                else => std.debug.panic(
-                    "LIR/codegen invariant violated: str_match source local {d} did not lower to a RocStr stack value",
-                    .{@intFromEnum(str_match.source)},
-                ),
-            };
-
-            const bytes_reg = try self.allocTempGeneral();
-            const len_reg = try self.allocTempGeneral();
             const cursor_reg = try self.allocTempGeneral();
-            const source_is_small_reg = try self.allocTempGeneral();
-            const source_alloc_reg = try self.allocTempGeneral();
-            defer self.codegen.freeGeneral(source_alloc_reg);
-            defer self.codegen.freeGeneral(source_is_small_reg);
             defer self.codegen.freeGeneral(cursor_reg);
-            defer self.codegen.freeGeneral(len_reg);
-            defer self.codegen.freeGeneral(bytes_reg);
-
-            try self.emitLoadStrSourceShape(source_offset, bytes_reg, len_reg, source_is_small_reg, source_alloc_reg);
             try self.codegen.emitLoadImm(cursor_reg, 0);
 
             const prefix = self.store.getStringLiteral(str_match.prefix);
             if (prefix.len > 0) {
-                try self.emitCheckBytesAvailable(cursor_reg, len_reg, prefix.len, &miss_patches);
-                try self.emitCompareLiteralAtPtr(bytes_reg, prefix, &miss_patches);
+                try self.emitCheckBytesAvailable(cursor_reg, source.len, prefix.len, &miss_patches);
+                try self.emitCompareLiteralAtPtr(source.bytes, prefix, &miss_patches);
                 try self.emitAddUsizeImm(cursor_reg, cursor_reg, prefix.len);
             }
 
@@ -14432,7 +14555,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                 if (is_final_tail_capture) {
                     if (capture_offsets.items[step_i]) |capture_offset| {
-                        try self.emitStoreStrCapture(capture_offset, bytes_reg, source_alloc_reg, source_is_small_reg, capture_start_reg, len_reg);
+                        try self.emitStoreStrCapture(capture_offset, source.bytes, source.allocation, source.is_small, capture_start_reg, source.len);
                         switch (step.capture) {
                             .discard => {},
                             .view => |local| {
@@ -14442,14 +14565,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             },
                         }
                     }
-                    try self.emitMovRegReg(cursor_reg, len_reg);
+                    try self.emitMovRegReg(cursor_reg, source.len);
                     continue;
                 }
 
-                try self.emitFindDelimiter(bytes_reg, len_reg, cursor_reg, delimiter, &miss_patches);
+                try self.emitFindDelimiter(source.bytes, source.len, cursor_reg, delimiter, &miss_patches);
 
                 if (capture_offsets.items[step_i]) |capture_offset| {
-                    try self.emitStoreStrCapture(capture_offset, bytes_reg, source_alloc_reg, source_is_small_reg, capture_start_reg, cursor_reg);
+                    try self.emitStoreStrCapture(capture_offset, source.bytes, source.allocation, source.is_small, capture_start_reg, cursor_reg);
                     switch (step.capture) {
                         .discard => {},
                         .view => |local| {
@@ -14467,7 +14590,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             switch (str_match.end) {
                 .exact => {
-                    try self.emitCmpReg(cursor_reg, len_reg);
+                    try self.emitCmpReg(cursor_reg, source.len);
                     try miss_patches.append(self.allocator, try self.codegen.emitCondJump(condNotEqual()));
                 },
                 .tail => {},

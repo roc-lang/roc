@@ -19,6 +19,8 @@ const LirProcSpecId = lir_defs.LirProcSpecId;
 const Local = lir_defs.Local;
 const LocalId = lir_defs.LocalId;
 const LocalSpan = lir_defs.LocalSpan;
+const StrMatchArm = lir_defs.StrMatchArm;
+const StrMatchArmSpan = lir_defs.StrMatchArmSpan;
 const StrMatchStep = lir_defs.StrMatchStep;
 const StrMatchStepSpan = lir_defs.StrMatchStepSpan;
 const Symbol = lir_defs.Symbol;
@@ -37,6 +39,7 @@ const Self = @This();
 cf_stmts: std.ArrayList(CFStmt),
 cf_switch_branches: std.ArrayList(CFSwitchBranch),
 str_match_steps: std.ArrayList(StrMatchStep),
+str_match_arms: std.ArrayList(StrMatchArm),
 join_points: std.ArrayList(JoinPoint),
 locals: std.ArrayList(Local),
 local_ids: std.ArrayList(LocalId),
@@ -71,6 +74,7 @@ pub fn init(allocator: Allocator) Self {
         .cf_stmts = std.ArrayList(CFStmt).empty,
         .cf_switch_branches = std.ArrayList(CFSwitchBranch).empty,
         .str_match_steps = std.ArrayList(StrMatchStep).empty,
+        .str_match_arms = std.ArrayList(StrMatchArm).empty,
         .join_points = std.ArrayList(JoinPoint).empty,
         .locals = std.ArrayList(Local).empty,
         .local_ids = std.ArrayList(LocalId).empty,
@@ -95,6 +99,7 @@ pub fn deinit(self: *Self) void {
     self.cf_stmts.deinit(self.allocator);
     self.cf_switch_branches.deinit(self.allocator);
     self.str_match_steps.deinit(self.allocator);
+    self.str_match_arms.deinit(self.allocator);
     self.join_points.deinit(self.allocator);
     self.locals.deinit(self.allocator);
     self.local_ids.deinit(self.allocator);
@@ -420,6 +425,30 @@ pub fn getStrMatchSteps(self: *const Self, span: StrMatchStepSpan) []const StrMa
         }
     }
     return self.str_match_steps.items[span.start..][0..span.len];
+}
+
+/// Appends string-match arms and returns the corresponding flat-storage span.
+pub fn addStrMatchArms(self: *Self, arms: []const StrMatchArm) Allocator.Error!StrMatchArmSpan {
+    if (arms.len == 0) return StrMatchArmSpan.empty();
+
+    const start = @as(u32, @intCast(self.str_match_arms.items.len));
+    try self.str_match_arms.appendSlice(self.allocator, arms);
+    return .{ .start = start, .len = @intCast(arms.len) };
+}
+
+/// Resolves a string-match-arm span to its stored slice.
+pub fn getStrMatchArms(self: *const Self, span: StrMatchArmSpan) []const StrMatchArm {
+    if (span.len == 0) return &.{};
+    if (builtin.mode == .Debug) {
+        const end = @as(u64, span.start) + @as(u64, span.len);
+        if (end > self.str_match_arms.items.len) {
+            std.debug.panic(
+                "LirStore invariant violated: string-match-arm span start={d} len={d} exceeds string-match-arm storage len={d}",
+                .{ span.start, span.len, self.str_match_arms.items.len },
+            );
+        }
+    }
+    return self.str_match_arms.items[span.start..][0..span.len];
 }
 
 /// Appends join-point entries and returns the corresponding flat-storage span.

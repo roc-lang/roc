@@ -255,6 +255,12 @@ fn collectAssignCallProcs(
                 try work.append(allocator, stmt.on_match);
                 try work.append(allocator, stmt.on_miss);
             },
+            .str_match_set => |stmt| {
+                for (lowered.lir_result.store.getStrMatchArms(stmt.arms)) |arm| {
+                    try work.append(allocator, arm.on_match);
+                }
+                try work.append(allocator, stmt.on_miss);
+            },
             .join => |stmt| {
                 try work.append(allocator, stmt.body);
                 try work.append(allocator, stmt.remainder);
@@ -282,6 +288,7 @@ const ProcShape = struct {
     str_count_utf8_bytes_count: usize = 0,
     self_call_count: usize = 0,
     switch_count: usize = 0,
+    str_match_set_count: usize = 0,
     join_count: usize = 0,
     max_join_param_count: usize = 0,
     jump_count: usize = 0,
@@ -356,6 +363,13 @@ fn collectProcShape(
             },
             .str_match => |stmt| {
                 try work.append(allocator, stmt.on_match);
+                try work.append(allocator, stmt.on_miss);
+            },
+            .str_match_set => |stmt| {
+                shape.str_match_set_count += 1;
+                for (lowered.lir_result.store.getStrMatchArms(stmt.arms)) |arm| {
+                    try work.append(allocator, arm.on_match);
+                }
                 try work.append(allocator, stmt.on_miss);
             },
             .join => |stmt| {
@@ -682,6 +696,10 @@ fn opaqueLetCallWorkerDuplicatesCall(shape: ProcShape) bool {
     return shape.arg_count == 1 and
         shape.direct_call_count > 2 and
         shape.struct_assign_count == 0;
+}
+
+fn hasGroupedStrMatchSet(shape: ProcShape) bool {
+    return shape.str_match_set_count == 1;
 }
 
 fn expectIterCollectWorkerSpecialized(source: []const u8) anyerror!void {
@@ -1563,6 +1581,30 @@ test "LIR statements carry source locations under optimizing inline mode" {
         if (loc.hasLocation()) located += 1;
     }
     try std.testing.expect(located > 0);
+}
+
+test "adjacent string interpolation patterns lower to grouped LIR match set" {
+    const allocator = std.testing.allocator;
+
+    const source =
+        \\module [main]
+        \\
+        \\classify : Str -> Str
+        \\classify = |s| match s {
+        \\    "a${x}z" => x
+        \\    "b${y}z" => y
+        \\    "${_}.txt" => "file"
+        \\    _ => "miss"
+        \\}
+        \\
+        \\main : Str
+        \\main = classify("bOKz")
+    ;
+
+    var lowered_source = try lowerModule(allocator, source, .none);
+    defer lowered_source.deinit(allocator);
+
+    try std.testing.expect(try reachableProcShape(allocator, &lowered_source.lowered, hasGroupedStrMatchSet));
 }
 
 test "LIR locals carry source-level names" {

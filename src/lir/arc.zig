@@ -339,6 +339,7 @@ const Inserter = struct {
         switch_after_continuation: *RewriteSwitchContinuationTask,
         switch_finish_continuation: *RewriteSwitchContinuationTask,
         str_match: *RewriteStrMatchTask,
+        str_match_set: *RewriteStrMatchSetTask,
     };
 
     const RewritePathTask = struct {
@@ -402,6 +403,16 @@ const Inserter = struct {
         result: *LIR.CFStmtId,
     };
 
+    const RewriteStrMatchSetTask = struct {
+        start: LIR.CFStmtId,
+        source: LIR.LocalId,
+        arms: LIR.StrMatchArmSpan,
+        on_matches: []LIR.CFStmtId,
+        on_miss: LIR.CFStmtId = undefined,
+        frames: std.ArrayList(LinearRewriteFrame),
+        result: *LIR.CFStmtId,
+    };
+
     const AnalysisTask = union(enum) {
         path: *AnalysisPathTask,
         resume_switch_continuation: *AnalysisSwitchContinuationTask,
@@ -440,6 +451,7 @@ const Inserter = struct {
                 .switch_after_continuation => |switch_| try self.processRewriteSwitchAfterContinuation(&tasks, switch_),
                 .switch_finish_continuation => |switch_| try self.finishRewriteSwitchContinuation(switch_),
                 .str_match => |str_match| try self.finishRewriteStrMatch(str_match),
+                .str_match_set => |str_match_set| try self.finishRewriteStrMatchSet(str_match_set),
             }
         }
         return result;
@@ -797,6 +809,11 @@ const Inserter = struct {
                     self.destroyRewritePath(path);
                     return;
                 },
+                .str_match_set => |str_match_set| {
+                    try self.scheduleRewriteStrMatchSet(tasks, path, path.cursor, str_match_set);
+                    self.destroyRewritePath(path);
+                    return;
+                },
                 .join => |join_stmt| {
                     try self.scheduleRewriteJoin(tasks, path, path.cursor, join_stmt);
                     self.destroyRewritePath(path);
@@ -1071,6 +1088,7 @@ const Inserter = struct {
             .comptime_exhaustiveness_failed,
             .switch_stmt,
             .str_match,
+            .str_match_set,
             .loop_continue,
             .loop_break,
             .join,
@@ -1422,6 +1440,72 @@ const Inserter = struct {
         self.destroyRewriteStrMatch(state);
     }
 
+    fn scheduleRewriteStrMatchSet(
+        self: *Inserter,
+        tasks: *std.ArrayList(RewriteTask),
+        path: *RewritePathTask,
+        start: LIR.CFStmtId,
+        str_match_set: anytype,
+    ) ResourceError!void {
+        const arms = self.store.getStrMatchArms(str_match_set.arms);
+        const state = try self.store.allocator.create(RewriteStrMatchSetTask);
+        var queued = false;
+        errdefer if (!queued) self.store.allocator.destroy(state);
+        const on_matches = try self.store.allocator.alloc(LIR.CFStmtId, arms.len);
+        errdefer if (!queued) self.store.allocator.free(on_matches);
+
+        state.* = .{
+            .start = start,
+            .source = str_match_set.source,
+            .arms = str_match_set.arms,
+            .on_matches = on_matches,
+            .frames = takeRewriteFrames(path),
+            .result = path.result,
+        };
+        errdefer if (!queued) state.frames.deinit(self.store.allocator);
+
+        try tasks.append(self.store.allocator, .{ .str_match_set = state });
+        queued = true;
+
+        try self.pushRewritePath(tasks, str_match_set.on_miss, &path.owned, path.options, &state.on_miss);
+        for (arms, 0..) |arm, arm_index| {
+            var match_owned = try path.owned.clone();
+            defer match_owned.deinit();
+            for (self.store.getStrMatchSteps(arm.steps)) |step| {
+                switch (step.capture) {
+                    .discard => {},
+                    .view => |local| self.addOwnedIfRc(&match_owned, local),
+                }
+            }
+            try self.pushRewritePath(tasks, arm.on_match, &match_owned, path.options, &state.on_matches[arm_index]);
+        }
+    }
+
+    fn finishRewriteStrMatchSet(self: *Inserter, state: *RewriteStrMatchSetTask) ResourceError!void {
+        errdefer self.destroyRewriteStrMatchSet(state);
+        const arms = self.store.getStrMatchArms(state.arms);
+        if (arms.len != state.on_matches.len) arcInvariant("ARC string-match-set arm count changed during rewrite");
+
+        const rewritten_arms = try self.store.allocator.alloc(LIR.StrMatchArm, arms.len);
+        defer self.store.allocator.free(rewritten_arms);
+        for (arms, state.on_matches, 0..) |arm, rewritten_on_match, index| {
+            rewritten_arms[index] = .{
+                .prefix = arm.prefix,
+                .steps = arm.steps,
+                .end = arm.end,
+                .on_match = try self.retainStrMatchSourceForCaptures(state.source, arm.steps, rewritten_on_match),
+            };
+        }
+
+        const str_match_set = try self.store.addCFStmt(.{ .str_match_set = .{
+            .source = state.source,
+            .arms = try self.store.addStrMatchArms(rewritten_arms),
+            .on_miss = state.on_miss,
+        } });
+        state.result.* = try self.finishLinearRewrite(&state.frames, str_match_set);
+        self.destroyRewriteStrMatchSet(state);
+    }
+
     fn analyzeUntil(
         self: *Inserter,
         start: LIR.CFStmtId,
@@ -1655,6 +1739,22 @@ const Inserter = struct {
                     self.destroyAnalysisPath(path);
                     return;
                 },
+                .str_match_set => |str_match_set| {
+                    for (self.store.getStrMatchArms(str_match_set.arms)) |arm| {
+                        var match_owned = try path.owned.clone();
+                        defer match_owned.deinit();
+                        for (self.store.getStrMatchSteps(arm.steps)) |step| {
+                            switch (step.capture) {
+                                .discard => {},
+                                .view => |local| self.addOwnedIfRc(&match_owned, local),
+                            }
+                        }
+                        try self.pushAnalysisPath(tasks, arm.on_match, path.stop, &match_owned, path.exits, path.loop_keep);
+                    }
+                    try self.pushAnalysisPath(tasks, str_match_set.on_miss, path.stop, &path.owned, path.exits, path.loop_keep);
+                    self.destroyAnalysisPath(path);
+                    return;
+                },
                 .join => {
                     // A join starts a separate loop/recursive ownership frame.
                     // Switch continuation analysis must not fold that frame into
@@ -1700,6 +1800,7 @@ const Inserter = struct {
             .switch_after_continuation => |switch_| self.destroyRewriteSwitchContinuation(switch_),
             .switch_finish_continuation => |switch_| self.destroyRewriteSwitchContinuation(switch_),
             .str_match => |str_match| self.destroyRewriteStrMatch(str_match),
+            .str_match_set => |str_match_set| self.destroyRewriteStrMatchSet(str_match_set),
         }
     }
 
@@ -1744,6 +1845,12 @@ const Inserter = struct {
 
     fn destroyRewriteStrMatch(self: *Inserter, state: *RewriteStrMatchTask) void {
         self.destroyFrames(&state.frames);
+        self.store.allocator.destroy(state);
+    }
+
+    fn destroyRewriteStrMatchSet(self: *Inserter, state: *RewriteStrMatchSetTask) void {
+        self.destroyFrames(&state.frames);
+        self.store.allocator.free(state.on_matches);
         self.store.allocator.destroy(state);
     }
 
@@ -2223,6 +2330,12 @@ const Inserter = struct {
                     try stack.append(self.store.allocator, str_match.on_match);
                     try stack.append(self.store.allocator, str_match.on_miss);
                 },
+                .str_match_set => |str_match_set| {
+                    for (self.store.getStrMatchArms(str_match_set.arms)) |arm| {
+                        try stack.append(self.store.allocator, arm.on_match);
+                    }
+                    try stack.append(self.store.allocator, str_match_set.on_miss);
+                },
                 .join => |join_stmt| {
                     const previous = try join_bodies.getOrPut(join_stmt.id);
                     if (previous.found_existing and previous.value_ptr.* != join_stmt.body) {
@@ -2311,6 +2424,12 @@ const Inserter = struct {
                 .str_match => |str_match| {
                     try stack.append(self.store.allocator, str_match.on_match);
                     try stack.append(self.store.allocator, str_match.on_miss);
+                },
+                .str_match_set => |str_match_set| {
+                    for (self.store.getStrMatchArms(str_match_set.arms)) |arm| {
+                        try stack.append(self.store.allocator, arm.on_match);
+                    }
+                    try stack.append(self.store.allocator, str_match_set.on_miss);
                 },
                 .join => |join_stmt| {
                     const entry = try joins.getOrPut(self.store.allocator, join_stmt.id);
@@ -2440,6 +2559,22 @@ const Inserter = struct {
                     }
                     if (!defines_needle_on_match) try stack.append(self.store.allocator, str_match.on_match);
                     try stack.append(self.store.allocator, str_match.on_miss);
+                },
+                .str_match_set => |str_match_set| {
+                    if (str_match_set.source == needle) return true;
+                    for (self.store.getStrMatchArms(str_match_set.arms)) |arm| {
+                        var defines_needle_on_match = false;
+                        for (self.store.getStrMatchSteps(arm.steps)) |step| {
+                            switch (step.capture) {
+                                .discard => {},
+                                .view => |local| {
+                                    if (local == needle) defines_needle_on_match = true;
+                                },
+                            }
+                        }
+                        if (!defines_needle_on_match) try stack.append(self.store.allocator, arm.on_match);
+                    }
+                    try stack.append(self.store.allocator, str_match_set.on_miss);
                 },
                 .join => |join_stmt| {
                     // A join body runs only via jumps to it, and the `.jump`
@@ -2590,6 +2725,13 @@ const Inserter = struct {
                     if (needles.contains(str_match.source)) return true;
                     try stack.append(self.store.allocator, str_match.on_match);
                     try stack.append(self.store.allocator, str_match.on_miss);
+                },
+                .str_match_set => |str_match_set| {
+                    if (needles.contains(str_match_set.source)) return true;
+                    for (self.store.getStrMatchArms(str_match_set.arms)) |arm| {
+                        try stack.append(self.store.allocator, arm.on_match);
+                    }
+                    try stack.append(self.store.allocator, str_match_set.on_miss);
                 },
                 .join => |join_stmt| {
                     // Bodies enter via the `.jump` case only, exactly as in
@@ -3209,6 +3351,12 @@ const ArcTest = struct {
                     try stack.append(self.allocator, s.on_match);
                     try stack.append(self.allocator, s.on_miss);
                 },
+                .str_match_set => |s| {
+                    for (self.store.getStrMatchArms(s.arms)) |arm| {
+                        try stack.append(self.allocator, arm.on_match);
+                    }
+                    try stack.append(self.allocator, s.on_miss);
+                },
                 .join => |j| {
                     try stack.append(self.allocator, j.body);
                     try stack.append(self.allocator, j.remainder);
@@ -3278,7 +3426,7 @@ const ArcTest = struct {
                     if (before == .crash) return error.ExpectedRcBeforeStop;
                     return;
                 },
-                .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .switch_stmt, .str_match, .loop_continue, .loop_break, .join, .jump => return error.NonLinearPath,
+                .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .switch_stmt, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump => return error.NonLinearPath,
             }
         }
         return error.CyclicPath;

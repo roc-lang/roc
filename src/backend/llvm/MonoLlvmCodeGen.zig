@@ -1848,6 +1848,7 @@ pub const MonoLlvmCodeGen = struct {
             },
             .switch_stmt => |sw| try self.emitSwitch(sw, wa, work),
             .str_match => |str_match| try self.emitStrMatch(str_match, wa, work),
+            .str_match_set => |str_match_set| try self.emitStrMatchSet(str_match_set, wa, work),
             .loop_continue => try self.emitLoopContinue(),
             .loop_break => try self.emitLoopBreak(),
             .join => |join_stmt| try self.emitJoin(join_stmt, wa, work),
@@ -2646,17 +2647,76 @@ pub const MonoLlvmCodeGen = struct {
     };
 
     fn emitStrMatch(self: *MonoLlvmCodeGen, str_match: anytype, wa: Allocator, work: *std.ArrayList(StmtWork)) Error!void {
-        const builder = self.builder orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
-        const usize_ty = self.ptrSizedIntType();
-        const usize_alignment = self.targetPointerAlignment();
 
         try self.materializeAllDeferredStrCaptures();
         try self.materializeLocalIfDeferred(str_match.source);
 
-        const on_match_block = wip.block(0, "str_match_success") catch return error.OutOfMemory;
         const on_miss_block = wip.block(0, "str_match_miss") catch return error.OutOfMemory;
-        const steps = self.store.getStrMatchSteps(str_match.steps);
+        const source = try self.emitStrMatchSourceShape(self.slot(str_match.source).ptr);
+        const match_body = try self.emitStrMatchArmTest(str_match.source, source, str_match, on_miss_block);
+        try work.append(wa, .{ .str_match_body = .{ .block = on_miss_block, .stmt = str_match.on_miss } });
+        try work.append(wa, .{ .str_match_body = match_body });
+    }
+
+    fn emitStrMatchSet(self: *MonoLlvmCodeGen, str_match_set: anytype, wa: Allocator, work: *std.ArrayList(StmtWork)) Error!void {
+        const wip = self.wip orelse return error.CompilationFailed;
+
+        try self.materializeAllDeferredStrCaptures();
+        try self.materializeLocalIfDeferred(str_match_set.source);
+
+        const arms = self.store.getStrMatchArms(str_match_set.arms);
+        const final_miss_block = wip.block(0, "str_match_set_miss") catch return error.OutOfMemory;
+        const source = try self.emitStrMatchSourceShape(self.slot(str_match_set.source).ptr);
+
+        var match_bodies = std.ArrayList(StrMatchBody).empty;
+        errdefer {
+            for (match_bodies.items) |body| {
+                if (body.captures.len > 0) self.allocator.free(body.captures);
+            }
+            match_bodies.deinit(self.allocator);
+        }
+
+        for (arms, 0..) |arm, index| {
+            const next_miss_block = if (index + 1 == arms.len)
+                final_miss_block
+            else
+                wip.block(0, "str_match_set_next") catch return error.OutOfMemory;
+            try match_bodies.append(self.allocator, try self.emitStrMatchArmTest(str_match_set.source, source, arm, next_miss_block));
+            if (index + 1 < arms.len) {
+                wip.cursor = .{ .block = next_miss_block };
+            }
+        }
+
+        try work.append(wa, .{ .str_match_body = .{ .block = final_miss_block, .stmt = str_match_set.on_miss } });
+        const owned_bodies = try match_bodies.toOwnedSlice(self.allocator);
+        var handed_off = false;
+        errdefer if (!handed_off) {
+            for (owned_bodies) |body| {
+                if (body.captures.len > 0) self.allocator.free(body.captures);
+            }
+            self.allocator.free(owned_bodies);
+        };
+        for (owned_bodies) |body| {
+            try work.append(wa, .{ .str_match_body = body });
+        }
+        handed_off = true;
+        self.allocator.free(owned_bodies);
+    }
+
+    fn emitStrMatchArmTest(
+        self: *MonoLlvmCodeGen,
+        source_local: LocalId,
+        source: StrMatchSource,
+        arm: anytype,
+        miss_block: LlvmBuilder.Function.Block.Index,
+    ) Error!StrMatchBody {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const usize_ty = self.ptrSizedIntType();
+        const usize_alignment = self.targetPointerAlignment();
+        const on_match_block = wip.block(0, "str_match_success") catch return error.OutOfMemory;
+        const steps = self.store.getStrMatchSteps(arm.steps);
 
         const capture_slots = try self.allocator.alloc(?StrMatchCaptureSlots, steps.len);
         defer self.allocator.free(capture_slots);
@@ -2670,7 +2730,6 @@ pub const MonoLlvmCodeGen = struct {
             };
         }
 
-        const source = try self.emitStrMatchSourceShape(self.slot(str_match.source).ptr);
         const cursor_ptr = wip.alloca(.normal, usize_ty, .@"1", usize_alignment, .default, "str_match_cursor") catch return error.OutOfMemory;
         const zero = builder.intValue(usize_ty, 0) catch return error.OutOfMemory;
         try self.storeUsize(cursor_ptr, zero);
@@ -2678,23 +2737,23 @@ pub const MonoLlvmCodeGen = struct {
         var captures = std.ArrayList(DeferredStrCaptureBinding).empty;
         errdefer captures.deinit(self.allocator);
 
-        const prefix = self.store.getStringLiteral(str_match.prefix);
+        const prefix = self.store.getStringLiteral(arm.prefix);
         if (prefix.len > 0) {
-            try self.emitStrMatchCheckAvailable(cursor_ptr, source.len, prefix.len, on_miss_block);
-            try self.emitStrMatchCompareLiteral(source.bytes, prefix, on_miss_block);
+            try self.emitStrMatchCheckAvailable(cursor_ptr, source.len, prefix.len, miss_block);
+            try self.emitStrMatchCompareLiteral(source.bytes, prefix, miss_block);
             try self.storeUsize(cursor_ptr, builder.intValue(usize_ty, prefix.len) catch return error.OutOfMemory);
         }
 
         for (steps, 0..) |step, step_i| {
             const capture_start = try self.loadUsize(cursor_ptr);
             const delimiter = self.store.getStringLiteral(step.delimiter);
-            const is_final_tail_capture = str_match.end == .tail and step_i + 1 == steps.len and delimiter.len == 0;
+            const is_final_tail_capture = arm.end == .tail and step_i + 1 == steps.len and delimiter.len == 0;
 
             const capture_end = if (is_final_tail_capture) blk: {
                 try self.storeUsize(cursor_ptr, source.len);
                 break :blk source.len;
             } else blk: {
-                try self.emitStrMatchFindDelimiter(source.bytes, source.len, cursor_ptr, delimiter, on_miss_block);
+                try self.emitStrMatchFindDelimiter(source.bytes, source.len, cursor_ptr, delimiter, miss_block);
                 break :blk try self.loadUsize(cursor_ptr);
             };
 
@@ -2707,7 +2766,7 @@ pub const MonoLlvmCodeGen = struct {
                     try captures.append(self.allocator, .{
                         .local = local,
                         .capture = .{
-                            .source_local = str_match.source,
+                            .source_local = source_local,
                             .source = source,
                             .start_ptr = slots.start_ptr,
                             .end_ptr = slots.end_ptr,
@@ -2724,18 +2783,17 @@ pub const MonoLlvmCodeGen = struct {
             }
         }
 
-        switch (str_match.end) {
+        switch (arm.end) {
             .exact => {
                 const at_end = wip.icmp(.eq, try self.loadUsize(cursor_ptr), source.len, "") catch return error.OutOfMemory;
-                _ = wip.brCond(at_end, on_match_block, on_miss_block, .then_likely) catch return error.OutOfMemory;
+                _ = wip.brCond(at_end, on_match_block, miss_block, .then_likely) catch return error.OutOfMemory;
             },
             .tail => _ = wip.br(on_match_block) catch return error.OutOfMemory,
         }
 
         const match_captures = try captures.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(match_captures);
-        try work.append(wa, .{ .str_match_body = .{ .block = on_miss_block, .stmt = str_match.on_miss } });
-        try work.append(wa, .{ .str_match_body = .{ .block = on_match_block, .stmt = str_match.on_match, .captures = match_captures } });
+        return .{ .block = on_match_block, .stmt = arm.on_match, .captures = match_captures };
     }
 
     fn emitStrMatchSourceShape(self: *MonoLlvmCodeGen, source_ptr: LlvmBuilder.Value) Error!StrMatchSource {

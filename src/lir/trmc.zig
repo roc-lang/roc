@@ -425,6 +425,15 @@ const Detection = struct {
                     try work.append(gpa, .{ .stmt = s.on_miss, .edge = .{ .switch_default = item.stmt } });
                     try work.append(gpa, .{ .stmt = s.on_match, .edge = .{ .switch_branch = .{ .stmt = item.stmt, .index = 0 } } });
                 },
+                .str_match_set => |s| {
+                    try work.append(gpa, .{ .stmt = s.on_miss, .edge = .{ .switch_default = item.stmt } });
+                    const arms = self.store.getStrMatchArms(s.arms);
+                    var i = arms.len;
+                    while (i > 0) {
+                        i -= 1;
+                        try work.append(gpa, .{ .stmt = arms[i].on_match, .edge = .{ .switch_branch = .{ .stmt = item.stmt, .index = @intCast(i) } } });
+                    }
+                },
                 .jump, .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
                 inline .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .free => |s| {
                     try work.append(gpa, .{ .stmt = s.next, .edge = .{ .stmt_next = item.stmt } });
@@ -481,6 +490,12 @@ const Detection = struct {
             },
             .str_match => |s| {
                 try self.appendSharedSuccessor(work, s.on_match);
+                try self.appendSharedSuccessor(work, s.on_miss);
+            },
+            .str_match_set => |s| {
+                for (self.store.getStrMatchArms(s.arms)) |arm| {
+                    try self.appendSharedSuccessor(work, arm.on_match);
+                }
                 try self.appendSharedSuccessor(work, s.on_miss);
             },
             .jump, .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
@@ -689,6 +704,7 @@ const Detection = struct {
             .free => |s| c.chainContains(s.value),
             .switch_stmt => |s| c.chainContains(s.cond),
             .str_match => true,
+            .str_match_set => true,
             .ret => |s| c.chainContains(s.value),
             .expect_err => |s| c.chainContains(s.message),
             .jump, .crash, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .loop_continue, .loop_break, .join => false,

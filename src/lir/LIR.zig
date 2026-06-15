@@ -158,6 +158,31 @@ pub const StrMatchStepSpan = extern struct {
     }
 };
 
+/// One ordered arm in a grouped runtime string-pattern match.
+///
+/// Arms are tried in storage order. On the first successful arm, only that
+/// arm's captured locals are initialized, and control jumps to `on_match`.
+pub const StrMatchArm = struct {
+    prefix: StrLiteral,
+    steps: StrMatchStepSpan,
+    end: StrPatternEnd,
+    on_match: CFStmtId,
+};
+
+/// Span into flat string-match-arm storage.
+pub const StrMatchArmSpan = extern struct {
+    start: u32,
+    len: u16,
+
+    pub fn empty() StrMatchArmSpan {
+        return .{ .start = 0, .len = 0 };
+    }
+
+    pub fn isEmpty(self: StrMatchArmSpan) bool {
+        return self.len == 0;
+    }
+};
+
 /// Literal RHS values supported by `assign_literal`.
 pub const LiteralValue = union(enum) {
     i64_literal: struct {
@@ -429,6 +454,15 @@ pub const CFStmt = union(enum) {
         steps: StrMatchStepSpan,
         end: StrPatternEnd,
         on_match: CFStmtId,
+        on_miss: CFStmtId,
+    },
+    /// Ordered runtime string-pattern match set over one source. This is the
+    /// multi-arm form of `str_match`: arms are attempted in order, the first
+    /// successful arm takes its `on_match` edge, and if every arm misses the
+    /// common `on_miss` edge is taken.
+    str_match_set: struct {
+        source: LocalId,
+        arms: StrMatchArmSpan,
         on_miss: CFStmtId,
     },
     loop_continue: void,

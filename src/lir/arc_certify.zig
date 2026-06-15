@@ -214,6 +214,12 @@ fn certifyUniqueArgs(
                     try stack.append(allocator, s.on_match);
                     try stack.append(allocator, s.on_miss);
                 },
+                .str_match_set => |s| {
+                    for (store.getStrMatchArms(s.arms)) |arm| {
+                        try stack.append(allocator, arm.on_match);
+                    }
+                    try stack.append(allocator, s.on_miss);
+                },
                 .join => |j| {
                     try stack.append(allocator, j.body);
                     try stack.append(allocator, j.remainder);
@@ -333,6 +339,12 @@ fn writeFailureContext(context: *FailureContext, store: *const LirStore, proc_id
                     walk.append(store.allocator, s.on_match) catch return;
                     walk.append(store.allocator, s.on_miss) catch return;
                 },
+                .str_match_set => |s| {
+                    for (store.getStrMatchArms(s.arms)) |arm| {
+                        walk.append(store.allocator, arm.on_match) catch return;
+                    }
+                    walk.append(store.allocator, s.on_miss) catch return;
+                },
                 .join => |j| {
                     walk.append(store.allocator, j.body) catch return;
                     walk.append(store.allocator, j.remainder) catch return;
@@ -381,6 +393,9 @@ fn writeFailureContext(context: *FailureContext, store: *const LirStore, proc_id
             .str_match => |a| context.append(" source={d} match={d} miss={d}", .{
                 @intFromEnum(a.source), @intFromEnum(a.on_match), @intFromEnum(a.on_miss),
             }),
+            .str_match_set => |a| context.append(" source={d} arms={d} miss={d}", .{
+                @intFromEnum(a.source), a.arms.len, @intFromEnum(a.on_miss),
+            }),
             .ret => |r| context.append(" value={d}", .{@intFromEnum(r.value)}),
             inline .assign_literal, .assign_list, .assign_struct, .assign_tag, .assign_call_erased, .assign_packed_erased_fn => |a| context.append(" target={d} next={d}", .{ @intFromEnum(a.target), @intFromEnum(a.next) }),
             else => {},
@@ -414,6 +429,18 @@ fn stmtMentionsLocal(store: *const LirStore, stmt: LIR.CFStmt, needle: LIR.Local
                 switch (step.capture) {
                     .discard => {},
                     .view => |local| if (local == needle) break :blk true,
+                }
+            }
+            break :blk false;
+        },
+        .str_match_set => |s| blk: {
+            if (s.source == needle) break :blk true;
+            for (store.getStrMatchArms(s.arms)) |arm| {
+                for (store.getStrMatchSteps(arm.steps)) |step| {
+                    switch (step.capture) {
+                        .discard => {},
+                        .view => |local| if (local == needle) break :blk true,
+                    }
                 }
             }
             break :blk false;
@@ -1048,6 +1075,19 @@ const Certifier = struct {
                     try stack.append(self.allocator, str_match.on_match);
                     try stack.append(self.allocator, str_match.on_miss);
                 },
+                .str_match_set => |str_match_set| {
+                    try self.noteProcLocal(str_match_set.source);
+                    for (self.store.getStrMatchArms(str_match_set.arms)) |arm| {
+                        for (self.store.getStrMatchSteps(arm.steps)) |step| {
+                            switch (step.capture) {
+                                .discard => {},
+                                .view => |local| try self.noteProcLocal(local),
+                            }
+                        }
+                        try stack.append(self.allocator, arm.on_match);
+                    }
+                    try stack.append(self.allocator, str_match_set.on_miss);
+                },
                 .join => |join_stmt| {
                     try self.noteProcLocalSpan(join_stmt.params);
                     try self.join_bodies.put(join_stmt.id, join_stmt.body);
@@ -1169,6 +1209,22 @@ const Certifier = struct {
                     }
                     if (!defines_needle_on_match) try self.scan_stack.append(self.allocator, str_match.on_match);
                     try self.scan_stack.append(self.allocator, str_match.on_miss);
+                },
+                .str_match_set => |str_match_set| {
+                    if (str_match_set.source == needle) return true;
+                    for (self.store.getStrMatchArms(str_match_set.arms)) |arm| {
+                        var defines_needle_on_match = false;
+                        for (self.store.getStrMatchSteps(arm.steps)) |step| {
+                            switch (step.capture) {
+                                .discard => {},
+                                .view => |local| {
+                                    if (local == needle) defines_needle_on_match = true;
+                                },
+                            }
+                        }
+                        if (!defines_needle_on_match) try self.scan_stack.append(self.allocator, arm.on_match);
+                    }
+                    try self.scan_stack.append(self.allocator, str_match_set.on_miss);
                 },
                 .join => |join_stmt| {
                     try self.scan_stack.append(self.allocator, join_stmt.remainder);
@@ -1578,6 +1634,27 @@ const Certifier = struct {
                     var miss_state = try state.clone();
                     errdefer miss_state.deinit();
                     try work.append(self.allocator, .{ .segment = .{ .cursor = str_match.on_miss, .state = miss_state, .origin_join = segment.origin_join } });
+                    return;
+                },
+                .str_match_set => |str_match_set| {
+                    const source_value = try self.requireLive(&state, str_match_set.source);
+                    for (self.store.getStrMatchArms(str_match_set.arms)) |arm| {
+                        var match_state = try state.clone();
+                        errdefer match_state.deinit();
+                        for (self.store.getStrMatchSteps(arm.steps)) |step| {
+                            switch (step.capture) {
+                                .discard => {},
+                                .view => |local| if (self.isRc(local)) {
+                                    match_state.bindValue(local, source_value);
+                                },
+                            }
+                        }
+                        try work.append(self.allocator, .{ .segment = .{ .cursor = arm.on_match, .state = match_state, .origin_join = segment.origin_join } });
+                    }
+
+                    var miss_state = try state.clone();
+                    errdefer miss_state.deinit();
+                    try work.append(self.allocator, .{ .segment = .{ .cursor = str_match_set.on_miss, .state = miss_state, .origin_join = segment.origin_join } });
                     return;
                 },
                 .join => |join_stmt| {

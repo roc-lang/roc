@@ -2617,6 +2617,22 @@ const Lowerer = struct {
             try self.result.store.addCFStmt(.{ .runtime_error = {} });
         var i = branches.len;
         while (i > 0) {
+            const group_end = i;
+            const group_start = self.strPatternBranchGroupStart(branches, group_end);
+            if (group_end - group_start >= 2) {
+                const next_branch = current;
+                const miss = PatternMiss{ .join_id = self.freshJoinPointId() };
+                const branch_start = try self.lowerStrPatternBranchGroup(branches[group_start..group_end], scrutinee, target, done, miss);
+                current = try self.result.store.addCFStmt(.{ .join = .{
+                    .id = miss.join_id,
+                    .params = LIR.LocalSpan.empty(),
+                    .body = next_branch,
+                    .remainder = branch_start,
+                } });
+                i = group_start;
+                continue;
+            }
+
             i -= 1;
             const next_branch = current;
             const needs_miss_join = branches[i].guard != null or self.patternCanMiss(branches[i].pat);
@@ -2643,6 +2659,52 @@ const Lowerer = struct {
                 branch_start;
         }
         return current;
+    }
+
+    fn strPatternBranchGroupStart(self: *Lowerer, branches: []const Lifted.Branch, end: usize) usize {
+        var start = end;
+        while (start > 0 and self.directStrPattern(branches[start - 1].pat) != null) {
+            start -= 1;
+        }
+        return start;
+    }
+
+    fn directStrPattern(self: *Lowerer, pat_id: Lifted.PatId) ?Lifted.StrPattern {
+        const pat_data = self.pat(pat_id);
+        return switch (pat_data.data) {
+            .str_pattern => |str| str,
+            else => null,
+        };
+    }
+
+    fn lowerStrPatternBranchGroup(
+        self: *Lowerer,
+        branches: []const Lifted.Branch,
+        source: LIR.LocalId,
+        target: LIR.LocalId,
+        done: LIR.JoinPointId,
+        miss: PatternMiss,
+    ) Common.LowerError!LIR.CFStmtId {
+        const arms = try self.allocator.alloc(LIR.StrMatchArm, branches.len);
+        defer self.allocator.free(arms);
+
+        for (branches, arms) |branch, *arm| {
+            const str = self.directStrPattern(branch.pat) orelse Common.invariant("string-pattern branch group contained a non-string-pattern branch");
+            const branch_done = try self.joinJump(done);
+            const branch_body = try self.lowerExprInto(target, branch.body, branch_done);
+            const guarded = if (branch.guard) |guard| blk: {
+                const guard_local = try self.addTemp(try self.lowerExprTy(guard));
+                const guard_switch = try self.boolSwitchNoContinuation(guard_local, branch_body, try self.patternMissJump(miss));
+                break :blk try self.lowerExprInto(guard_local, guard, guard_switch);
+            } else branch_body;
+            arm.* = try self.lowerStrPatternArm(str, guarded);
+        }
+
+        return try self.result.store.addCFStmt(.{ .str_match_set = .{
+            .source = source,
+            .arms = try self.result.store.addStrMatchArms(arms),
+            .on_miss = try self.patternMissJump(miss),
+        } });
     }
 
     fn joinJump(self: *Lowerer, join_id: LIR.JoinPointId) Common.LowerError!LIR.CFStmtId {
@@ -2852,6 +2914,22 @@ const Lowerer = struct {
         on_match: LIR.CFStmtId,
         miss: ?PatternMiss,
     ) Common.LowerError!LIR.CFStmtId {
+        const arm = try self.lowerStrPatternArm(str, on_match);
+        return try self.result.store.addCFStmt(.{ .str_match = .{
+            .source = source,
+            .prefix = arm.prefix,
+            .steps = arm.steps,
+            .end = arm.end,
+            .on_match = arm.on_match,
+            .on_miss = try self.patternMissJump(miss),
+        } });
+    }
+
+    fn lowerStrPatternArm(
+        self: *Lowerer,
+        str: Lifted.StrPattern,
+        on_match: LIR.CFStmtId,
+    ) Common.LowerError!LIR.StrMatchArm {
         const input_steps = self.solved.lifted.strPatternStepSpan(str.steps);
         const lir_steps = try self.allocator.alloc(LIR.StrMatchStep, input_steps.len);
         defer self.allocator.free(lir_steps);
@@ -2879,8 +2957,7 @@ const Lowerer = struct {
             }
         }
 
-        return try self.result.store.addCFStmt(.{ .str_match = .{
-            .source = source,
+        return .{
             .prefix = try self.lirStrLiteral(str.prefix),
             .steps = try self.result.store.addStrMatchSteps(lir_steps),
             .end = switch (str.end) {
@@ -2888,8 +2965,7 @@ const Lowerer = struct {
                 .tail => .tail,
             },
             .on_match = match_body,
-            .on_miss = try self.patternMissJump(miss),
-        } });
+        };
     }
 
     fn bindPatternOrCrash(
