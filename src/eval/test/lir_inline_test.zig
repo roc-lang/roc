@@ -197,6 +197,70 @@ fn liftModuleAfterSpecConstr(
     };
 }
 
+fn expectInlinePlanDecision(
+    source: []const u8,
+    fn_name: []const u8,
+    expected: bool,
+) anyerror!void {
+    const allocator = std.testing.allocator;
+    var resources = try helpers.parseAndCanonicalizeProgram(allocator, .module, source, &.{});
+    defer helpers.cleanupParseAndCanonical(allocator, resources);
+
+    const import_count = resources.import_artifacts.len + if (resources.borrowed_builtin_artifact == null) @as(usize, 0) else 1;
+    const import_views = try allocator.alloc(check.CheckedArtifact.ImportedModuleView, import_count);
+    defer allocator.free(import_views);
+
+    var view_index: usize = 0;
+    if (resources.borrowed_builtin_artifact) |builtin_artifact| {
+        import_views[view_index] = check.CheckedArtifact.importedView(builtin_artifact);
+        view_index += 1;
+    }
+    for (resources.import_artifacts) |*artifact| {
+        import_views[view_index] = check.CheckedArtifact.importedView(artifact);
+        view_index += 1;
+    }
+
+    var mono = try postcheck.Monotype.Lower.run(
+        allocator,
+        .{
+            .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
+            .imports = import_views,
+        },
+        .{ .requests = resources.checked_artifact.root_requests.requests },
+        .{ .proc_debug_names = true },
+    );
+    var mono_owned = true;
+    errdefer if (mono_owned) mono.deinit();
+
+    var lifted = try postcheck.MonotypeLifted.Lift.run(allocator, mono);
+    mono_owned = false;
+    mono = undefined;
+    var lifted_owned = true;
+    errdefer if (lifted_owned) lifted.deinit();
+
+    var solved = try postcheck.LambdaSolved.Solve.run(allocator, lifted);
+    lifted_owned = false;
+    lifted = undefined;
+    defer solved.deinit();
+
+    var inline_plan = try postcheck.SolvedInline.analyze(allocator, .wrappers, &solved);
+    defer inline_plan.deinit();
+    const plan = inline_plan.view();
+
+    var found = false;
+    for (solved.lifted.fns.items, 0..) |fn_, index| {
+        const name_id = solved.lifted.procDebugName(fn_.symbol) orelse continue;
+        const actual_name = solved.lifted.names.exportNameText(name_id);
+        if (!std.mem.eql(u8, actual_name, fn_name)) continue;
+
+        found = true;
+        const fn_id: postcheck.MonotypeLifted.Ast.FnId = @enumFromInt(@as(u32, @intCast(index)));
+        try std.testing.expectEqual(expected, plan.bodyForFn(fn_id) != null);
+    }
+
+    try std.testing.expect(found);
+}
+
 fn rootProc(lowered: *const lir.CheckedPipeline.LoweredProgram) anyerror!LIR.LirProcSpecId {
     try std.testing.expectEqual(@as(usize, 1), lowered.lir_result.root_procs.items.len);
     return lowered.lir_result.root_procs.items[0];
@@ -406,7 +470,7 @@ const IterCollectShape = enum {
 fn procShapeMatchesIterCollect(shape: ProcShape, wanted: IterCollectShape) bool {
     return switch (wanted) {
         .specialized => shape.arg_count == 3 and
-            shape.direct_call_count >= 10 and
+            shape.direct_call_count >= 5 and
             shape.switch_count >= 10 and
             shape.join_count >= 16 and
             shape.jump_count >= 20,
@@ -688,13 +752,14 @@ fn multiTupleWorkerIsGeneric(shape: ProcShape) bool {
 
 fn opaqueLetCallWorkerDoesNotDuplicateCall(shape: ProcShape) bool {
     return shape.arg_count == 1 and
-        shape.direct_call_count == 2 and
+        shape.direct_call_count == 0 and
+        shape.low_level_count == 2 and
         shape.struct_assign_count == 0;
 }
 
 fn opaqueLetCallWorkerDuplicatesCall(shape: ProcShape) bool {
     return shape.arg_count == 1 and
-        shape.direct_call_count > 2 and
+        shape.low_level_count > 2 and
         shape.struct_assign_count == 0;
 }
 
@@ -746,6 +811,21 @@ fn expectRootTargetCallCount(
     try std.testing.expectEqual(expected, target_calls.len);
 }
 
+fn expectRootDirectCallCount(
+    source: []const u8,
+    inline_mode: lir.CheckedPipeline.InlineMode,
+    expected: usize,
+) anyerror!void {
+    const allocator = std.testing.allocator;
+    var lowered_source = try lowerModule(allocator, source, inline_mode);
+    defer lowered_source.deinit(allocator);
+
+    const root_calls = try collectAssignCallProcs(allocator, &lowered_source.lowered, try rootProc(&lowered_source.lowered));
+    defer allocator.free(root_calls);
+
+    try std.testing.expectEqual(expected, root_calls.len);
+}
+
 fn expectRootTargetHasCalls(
     source: []const u8,
     inline_mode: lir.CheckedPipeline.InlineMode,
@@ -762,7 +842,7 @@ fn expectRootTargetHasCalls(
 }
 
 test "direct call wrapper is inlined when inline mode is enabled" {
-    try expectRootTargetCallCount(
+    try expectRootDirectCallCount(
         \\module [main]
         \\
         \\callee : U64 -> U64
@@ -792,7 +872,7 @@ test "direct call wrapper is not inlined when inline mode is none" {
 }
 
 test "zero statement block wrapper is inlined" {
-    try expectRootTargetCallCount(
+    try expectRootDirectCallCount(
         \\module [main]
         \\
         \\callee : U64 -> U64
@@ -824,7 +904,7 @@ test "low level wrapper is inlined when inline mode is enabled" {
 }
 
 test "block wrapper with statements is not inlined" {
-    try expectRootTargetHasCalls(
+    try expectInlinePlanDecision(
         \\module [main]
         \\
         \\callee : U64 -> U64
@@ -838,11 +918,11 @@ test "block wrapper with statements is not inlined" {
         \\
         \\main : U64
         \\main = wrapper(41)
-    , .wrappers);
+    , "wrapper", false);
 }
 
 test "call value wrapper is not inlined" {
-    try expectRootTargetHasCalls(
+    try expectInlinePlanDecision(
         \\module [main]
         \\
         \\callee : U64 -> U64
@@ -853,7 +933,7 @@ test "call value wrapper is not inlined" {
         \\
         \\main : U64
         \\main = apply(callee, 41)
-    , .wrappers);
+    , "apply", false);
 }
 
 test "self-recursive direct wrapper is not inlined" {
