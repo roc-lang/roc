@@ -5,6 +5,7 @@
 //! hardcoded names here.
 
 const std = @import("std");
+const BuiltinSurface = @import("BuiltinSurface.zig");
 const FuzzReader = @import("FuzzReader.zig");
 
 const Self = @This();
@@ -37,6 +38,37 @@ const Symbol = struct {
     kind: SymbolKind,
     id: u32,
 };
+
+comptime {
+    requireBuiltins("Bool", &.{ "is_eq", "to_hash" });
+    requireBuiltins("Box", &.{ "box", "unbox" });
+    requireBuiltins("Dec", &.{ "abs", "abs_diff", "add_checked", "from_dec_digits", "from_int_digits", "from_str", "is_gt", "is_zero", "max", "min", "minus", "plus", "plus_saturated", "sub_checked", "times", "to_f64", "to_hash", "to_i64_try", "to_str", "to_u64_try" });
+    requireBuiltins("Dict", &.{ "capacity", "clear", "contains", "drop_if", "fold", "from_list", "get", "insert", "insert_all", "is_empty", "keep_if", "keep_shared", "keys", "len", "map", "release_excess_capacity", "remove", "remove_all", "reserve", "single", "to_list", "update", "values", "with_capacity" });
+    requireBuiltins("F32", &.{ "abs", "abs_diff", "from_dec_digits", "from_int_digits", "from_str", "is_gt", "is_zero", "max", "min", "minus", "negate", "plus", "times", "to_f64", "to_hash", "to_i64_try", "to_str", "to_u64_try" });
+    requireBuiltins("F64", &.{ "abs", "abs_diff", "from_dec_digits", "from_int_digits", "from_str", "is_gt", "is_zero", "max", "min", "minus", "negate", "plus", "times", "to_hash", "to_i64_try", "to_str", "to_u64_try" });
+    requireBuiltins("Hasher", &.{ "write_bool", "write_bytes", "write_dec", "write_f32", "write_f64", "write_i8", "write_i16", "write_i32", "write_i64", "write_i128", "write_str", "write_u8", "write_u16", "write_u32", "write_u64", "write_u128" });
+    requireBuiltins("I8", &.{"to_hash"});
+    requireBuiltins("I16", &.{"to_hash"});
+    requireBuiltins("I32", &.{"to_hash"});
+    requireBuiltins("I64", &.{ "abs_diff", "add_checked", "bitwise_not", "bitwise_xor", "from_str", "is_eq", "mul_checked", "shift_right_by", "sub_checked", "to_f32", "to_f64", "to_hash", "to_str", "to_u64_wrap" });
+    requireBuiltins("I128", &.{"to_hash"});
+    requireBuiltins("Iter", &.{ "collect", "custom", "drop_first", "drop_last", "exclusive_range", "fold", "inclusive_range", "keep_if", "map", "next", "prepended", "size_hint", "take_first", "take_last" });
+    requireBuiltins("List", &.{ "all", "append", "contains", "concat", "count_if", "drop_at", "drop_first", "drop_if", "drop_last", "ends_with", "find_first_index", "find_last", "find_last_index", "first", "fold", "fold_rev", "fold_until", "fold_with_index", "fold_with_index_until", "from_iter", "is_empty", "keep_if", "last", "len", "map", "map2", "map_with_index", "prepend", "release_excess_capacity", "repeat", "replace", "reserve", "set", "single", "sort_with", "split_at", "split_first", "split_if", "split_last", "split_on_list", "starts_with", "sublist", "subscript", "swap", "take_first", "take_last", "to_hash", "update", "with_capacity" });
+    requireBuiltins("Set", &.{ "contains", "difference", "drop_if", "from_list", "insert", "intersection", "is_empty", "keep_if", "len", "map", "remove", "single", "to_list", "union" });
+    requireBuiltins("Str", &.{ "caseless_ascii_equals", "concat", "contains", "count_utf8_bytes", "drop_prefix", "drop_suffix", "ends_with", "from_interpolation", "from_quote", "from_utf8", "from_utf8_lossy", "inspect", "is_empty", "join_with", "release_excess_capacity", "repeat", "reserve", "split_on", "starts_with", "to_hash", "to_utf8", "trim", "trim_end", "trim_start", "with_ascii_lowercased", "with_ascii_uppercased", "with_capacity", "with_prefix" });
+    requireBuiltins("Try", &.{ "err_or", "is_err", "is_ok", "map_err", "map_ok", "ok_or", "to_hash" });
+    requireBuiltins("U8", &.{ "bitwise_not", "bitwise_xor", "from_str", "is_eq", "shift_left_by", "to_f32", "to_f64", "to_hash", "to_str", "to_u64" });
+    requireBuiltins("U16", &.{"to_hash"});
+    requireBuiltins("U32", &.{"to_hash"});
+    requireBuiltins("U64", &.{ "abs_diff", "add_checked", "bitwise_and", "bitwise_not", "bitwise_or", "bitwise_xor", "div_checked", "from_int_digits", "from_str", "is_eq", "mul_checked", "shift_left_by", "shift_right_by", "sub_checked", "to_dec", "to_f32", "to_f64", "to_hash", "to_i8_wrap", "to_i16_wrap", "to_i32_wrap", "to_i64_wrap", "to_i128", "to_str", "to_u8_try", "to_u8_wrap", "to_u16_wrap", "to_u32_wrap", "to_u128" });
+    requireBuiltins("U128", &.{"to_hash"});
+}
+
+fn requireBuiltins(comptime owner: []const u8, comptime names: []const []const u8) void {
+    inline for (names) |name| {
+        BuiltinSurface.require(owner, name);
+    }
+}
 
 const Symbols = struct {
     app_entry: Symbol,
@@ -119,6 +151,7 @@ const Symbols = struct {
     score_set_ops: Symbol,
     score_num_ops: Symbol,
     score_hash_ops: Symbol,
+    score_float_dec_ops: Symbol,
     score_patterns: Symbol,
     score_structural_keys: Symbol,
     score_dict_combinators: Symbol,
@@ -265,6 +298,7 @@ pub fn generate(self: *Self) std.mem.Allocator.Error!void {
         .score_set_ops = self.fresh(.function),
         .score_num_ops = self.fresh(.function),
         .score_hash_ops = self.fresh(.function),
+        .score_float_dec_ops = self.fresh(.function),
         .score_patterns = self.fresh(.function),
         .score_structural_keys = self.fresh(.function),
         .score_dict_combinators = self.fresh(.function),
@@ -1080,6 +1114,7 @@ fn writeTopLevelFunctions(self: *Self) std.mem.Allocator.Error!void {
     try self.writeTryOpsScoring();
     try self.writeSetOpsScoring();
     try self.writeNumOpsScoring();
+    try self.writeFloatDecOpsScoring();
     try self.writeHasherScoring();
     try self.writePatternScoring();
     try self.writeStructuralKeyScoring();
@@ -5355,7 +5390,7 @@ fn writeNumOpsScoring(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppText(" : U64\n");
     try self.writeIndent(1);
     try self.writeAppSymbol(range_score);
-    try self.writeAppText(" = Iter.fold(U64.until(0, ");
+    try self.writeAppText(" = Iter.fold(Iter.exclusive_range(0, ");
     try self.writeAppSymbol(seed);
     try self.writeAppText(" % 4), 0, |");
     try self.writeAppSymbol(range_acc);
@@ -5372,7 +5407,7 @@ fn writeNumOpsScoring(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppText(" : U64\n");
     try self.writeIndent(1);
     try self.writeAppSymbol(u8_range_score);
-    try self.writeAppText(" = Iter.fold(U8.to(0, U64.to_u8_wrap(");
+    try self.writeAppText(" = Iter.fold(Iter.inclusive_range(0, U64.to_u8_wrap(");
     try self.writeAppSymbol(seed);
     try self.writeAppText(" % 3)), 0, |");
     try self.writeAppSymbol(u8_range_acc);
@@ -5426,6 +5461,583 @@ fn writeNumOpsScoring(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppText(", ");
     try self.writeAppSymbol(parsed_i64);
     try self.writeAppText(")\n}\n\n");
+}
+
+fn writeFloatDecOpsScoring(self: *Self) std.mem.Allocator.Error!void {
+    const seed = self.fresh(.value);
+    const text = self.fresh(.value);
+    const text_bytes = self.fresh(.value);
+    const text_len = self.fresh(.value);
+    const digit_a = self.fresh(.value);
+    const digit_b = self.fresh(.value);
+    const digit_c = self.fresh(.value);
+    const digits = self.fresh(.value);
+    const frac_digits = self.fresh(.value);
+    const digit_pair = self.fresh(.value);
+    const dec_base = self.fresh(.value);
+    const dec_other = self.fresh(.value);
+    const dec_sum = self.fresh(.value);
+    const dec_delta = self.fresh(.value);
+    const dec_product = self.fresh(.value);
+    const dec_checked_score = self.fresh(.value);
+    const dec_checked = self.fresh(.value);
+    const dec_sub_score = self.fresh(.value);
+    const dec_sub = self.fresh(.value);
+    const dec_digits_score = self.fresh(.value);
+    const dec_digits_value = self.fresh(.value);
+    const dec_frac_score = self.fresh(.value);
+    const dec_frac_value = self.fresh(.value);
+    const dec_text_score = self.fresh(.value);
+    const dec_text_value = self.fresh(.value);
+    const dec_u64_score = self.fresh(.value);
+    const dec_u64 = self.fresh(.value);
+    const dec_i64_score = self.fresh(.value);
+    const dec_i64 = self.fresh(.value);
+    const f32_base = self.fresh(.value);
+    const f32_other = self.fresh(.value);
+    const f32_sum = self.fresh(.value);
+    const f32_mix = self.fresh(.value);
+    const f32_digits_score = self.fresh(.value);
+    const f32_digits_value = self.fresh(.value);
+    const f32_frac_score = self.fresh(.value);
+    const f32_frac_value = self.fresh(.value);
+    const f32_text_score = self.fresh(.value);
+    const f32_text_value = self.fresh(.value);
+    const f32_u64_score = self.fresh(.value);
+    const f32_u64 = self.fresh(.value);
+    const f32_i64_score = self.fresh(.value);
+    const f32_i64 = self.fresh(.value);
+    const f64_base = self.fresh(.value);
+    const f64_other = self.fresh(.value);
+    const f64_sum = self.fresh(.value);
+    const f64_mix = self.fresh(.value);
+    const f64_digits_score = self.fresh(.value);
+    const f64_digits_value = self.fresh(.value);
+    const f64_frac_score = self.fresh(.value);
+    const f64_frac_value = self.fresh(.value);
+    const f64_text_score = self.fresh(.value);
+    const f64_text_value = self.fresh(.value);
+    const f64_u64_score = self.fresh(.value);
+    const f64_u64 = self.fresh(.value);
+    const f64_i64_score = self.fresh(.value);
+    const f64_i64 = self.fresh(.value);
+    const bool_score = self.fresh(.value);
+    const text_score = self.fresh(.value);
+
+    try self.writeAppSymbol(self.symbols.score_float_dec_ops);
+    try self.writeAppText(" : U64, Str -> U64\n");
+    try self.writeAppSymbol(self.symbols.score_float_dec_ops);
+    try self.writeAppText(" = |");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(text);
+    try self.writeAppText("| {\n");
+
+    try self.writeBuiltinLocalHeader(text_bytes, "List(U8)");
+    try self.writeAppText("Str.to_utf8(");
+    try self.writeAppSymbol(text);
+    try self.writeAppText(")\n");
+
+    try self.writeBuiltinLocalHeader(text_len, "U64");
+    try self.writeAppText("List.len(");
+    try self.writeAppSymbol(text_bytes);
+    try self.writeAppText(")\n");
+
+    try self.writeBuiltinLocalHeader(digit_a, "U8");
+    try self.writeAppText("U64.to_u8_wrap(");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText(" % 10)\n");
+
+    try self.writeBuiltinLocalHeader(digit_b, "U8");
+    try self.writeAppText("U64.to_u8_wrap((");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(text_len);
+    try self.writeAppText(") % 10)\n");
+
+    try self.writeBuiltinLocalHeader(digit_c, "U8");
+    try self.writeAppText("U64.to_u8_wrap((");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText(" + 7) % 10)\n");
+
+    try self.writeBuiltinLocalHeader(digits, "List(U8)");
+    try self.writeAppText("[");
+    try self.writeAppSymbol(digit_a);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(digit_b);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(digit_c);
+    try self.writeAppText("]\n");
+
+    try self.writeBuiltinLocalHeader(frac_digits, "List(U8)");
+    try self.writeAppText("[");
+    try self.writeAppSymbol(digit_c);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(digit_b);
+    try self.writeAppText("]\n");
+
+    try self.writeBuiltinLocalHeader(digit_pair, "(List(U8), List(U8))");
+    try self.writeAppText("(");
+    try self.writeAppSymbol(digits);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(frac_digits);
+    try self.writeAppText(")\n");
+
+    try self.writeBuiltinLocalHeader(dec_base, "Dec");
+    try self.writeAppText("Dec.plus(U64.to_dec(");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText(" % 1000), U64.to_dec(");
+    try self.writeAppSymbol(text_len);
+    try self.writeAppText(" % 100))\n");
+
+    try self.writeBuiltinLocalHeader(dec_other, "Dec");
+    try self.writeAppText("U64.to_dec((");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText(" % 17) + 1)\n");
+
+    try self.writeBuiltinLocalHeader(dec_sum, "Dec");
+    try self.writeAppText("Dec.plus_saturated(Dec.plus(");
+    try self.writeAppSymbol(dec_base);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(dec_other);
+    try self.writeAppText("), Dec.negate(Dec.min(");
+    try self.writeAppSymbol(dec_base);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(dec_other);
+    try self.writeAppText(")))\n");
+
+    try self.writeBuiltinLocalHeader(dec_delta, "Dec");
+    try self.writeAppText("Dec.abs_diff(");
+    try self.writeAppSymbol(dec_sum);
+    try self.writeAppText(", Dec.max(");
+    try self.writeAppSymbol(dec_base);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(dec_other);
+    try self.writeAppText("))\n");
+
+    try self.writeBuiltinLocalHeader(dec_product, "Dec");
+    try self.writeAppText("Dec.times(Dec.abs(");
+    try self.writeAppSymbol(dec_delta);
+    try self.writeAppText("), U64.to_dec((");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText(" % 3) + 1))\n");
+
+    try self.writeBuiltinLocalHeader(dec_checked_score, "U64");
+    try self.writeAppText("match Dec.add_checked(");
+    try self.writeAppSymbol(dec_sum);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(dec_product);
+    try self.writeAppText(") {\n");
+    try self.writeIndent(2);
+    try self.writeAppText("Ok(");
+    try self.writeAppSymbol(dec_checked);
+    try self.writeAppText(") => List.len(Str.to_utf8(Dec.to_str(");
+    try self.writeAppSymbol(dec_checked);
+    try self.writeAppText(")))\n");
+    try self.writeIndent(2);
+    try self.writeAppText("Err(_) => ");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText("\n");
+    try self.writeIndent(1);
+    try self.writeAppText("}\n");
+
+    try self.writeBuiltinLocalHeader(dec_sub_score, "U64");
+    try self.writeAppText("match Dec.sub_checked(");
+    try self.writeAppSymbol(dec_product);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(dec_sum);
+    try self.writeAppText(") {\n");
+    try self.writeIndent(2);
+    try self.writeAppText("Ok(");
+    try self.writeAppSymbol(dec_sub);
+    try self.writeAppText(") => List.len(Str.to_utf8(Dec.to_str(");
+    try self.writeAppSymbol(dec_sub);
+    try self.writeAppText(")))\n");
+    try self.writeIndent(2);
+    try self.writeAppText("Err(_) => ");
+    try self.writeAppSymbol(dec_checked_score);
+    try self.writeAppText("\n");
+    try self.writeIndent(1);
+    try self.writeAppText("}\n");
+
+    try self.writeBuiltinLocalHeader(dec_digits_score, "U64");
+    try self.writeAppText("match Dec.from_int_digits(");
+    try self.writeAppSymbol(digits);
+    try self.writeAppText(") {\n");
+    try self.writeIndent(2);
+    try self.writeAppText("Ok(");
+    try self.writeAppSymbol(dec_digits_value);
+    try self.writeAppText(") => List.len(Str.to_utf8(Dec.to_str(");
+    try self.writeAppSymbol(dec_digits_value);
+    try self.writeAppText(")))\n");
+    try self.writeIndent(2);
+    try self.writeAppText("Err(_) => ");
+    try self.writeAppSymbol(dec_sub_score);
+    try self.writeAppText("\n");
+    try self.writeIndent(1);
+    try self.writeAppText("}\n");
+
+    try self.writeBuiltinLocalHeader(dec_frac_score, "U64");
+    try self.writeAppText("match Dec.from_dec_digits(");
+    try self.writeAppSymbol(digit_pair);
+    try self.writeAppText(") {\n");
+    try self.writeIndent(2);
+    try self.writeAppText("Ok(");
+    try self.writeAppSymbol(dec_frac_value);
+    try self.writeAppText(") => List.len(Str.to_utf8(Dec.to_str(");
+    try self.writeAppSymbol(dec_frac_value);
+    try self.writeAppText(")))\n");
+    try self.writeIndent(2);
+    try self.writeAppText("Err(_) => ");
+    try self.writeAppSymbol(dec_digits_score);
+    try self.writeAppText("\n");
+    try self.writeIndent(1);
+    try self.writeAppText("}\n");
+
+    try self.writeBuiltinLocalHeader(dec_text_score, "U64");
+    try self.writeAppText("match Dec.from_str(Str.concat(U64.to_str(");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText(" % 1000), \".25\")) {\n");
+    try self.writeIndent(2);
+    try self.writeAppText("Ok(");
+    try self.writeAppSymbol(dec_text_value);
+    try self.writeAppText(") => List.len(Str.to_utf8(Dec.to_str(");
+    try self.writeAppSymbol(dec_text_value);
+    try self.writeAppText(")))\n");
+    try self.writeIndent(2);
+    try self.writeAppText("Err(_) => ");
+    try self.writeAppSymbol(dec_frac_score);
+    try self.writeAppText("\n");
+    try self.writeIndent(1);
+    try self.writeAppText("}\n");
+
+    try self.writeBuiltinLocalHeader(dec_u64_score, "U64");
+    try self.writeAppText("match Dec.to_u64_try(");
+    try self.writeAppSymbol(dec_product);
+    try self.writeAppText(") {\n");
+    try self.writeIndent(2);
+    try self.writeAppText("Ok(");
+    try self.writeAppSymbol(dec_u64);
+    try self.writeAppText(") => ");
+    try self.writeAppSymbol(dec_u64);
+    try self.writeAppText("\n");
+    try self.writeIndent(2);
+    try self.writeAppText("Err(_) => ");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText("\n");
+    try self.writeIndent(1);
+    try self.writeAppText("}\n");
+
+    try self.writeBuiltinLocalHeader(dec_i64_score, "U64");
+    try self.writeAppText("match Dec.to_i64_try(Dec.negate(");
+    try self.writeAppSymbol(dec_delta);
+    try self.writeAppText(")) {\n");
+    try self.writeIndent(2);
+    try self.writeAppText("Ok(");
+    try self.writeAppSymbol(dec_i64);
+    try self.writeAppText(") => I64.to_u64_wrap(");
+    try self.writeAppSymbol(dec_i64);
+    try self.writeAppText(")\n");
+    try self.writeIndent(2);
+    try self.writeAppText("Err(_) => ");
+    try self.writeAppSymbol(dec_u64_score);
+    try self.writeAppText("\n");
+    try self.writeIndent(1);
+    try self.writeAppText("}\n");
+
+    try self.writeBuiltinLocalHeader(f32_base, "F32");
+    try self.writeAppText("U64.to_f32(");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText(" % 2048)\n");
+
+    try self.writeBuiltinLocalHeader(f32_other, "F32");
+    try self.writeAppText("U8.to_f32(");
+    try self.writeAppSymbol(digit_b);
+    try self.writeAppText(")\n");
+
+    try self.writeBuiltinLocalHeader(f32_sum, "F32");
+    try self.writeAppText("F32.plus(F32.max(");
+    try self.writeAppSymbol(f32_base);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(f32_other);
+    try self.writeAppText("), F32.abs(F32.negate(");
+    try self.writeAppSymbol(f32_other);
+    try self.writeAppText(")))\n");
+
+    try self.writeBuiltinLocalHeader(f32_mix, "F32");
+    try self.writeAppText("F32.times(F32.abs_diff(");
+    try self.writeAppSymbol(f32_sum);
+    try self.writeAppText(", F32.min(");
+    try self.writeAppSymbol(f32_base);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(f32_other);
+    try self.writeAppText(")), U64.to_f32((");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText(" % 5) + 1))\n");
+
+    try self.writeBuiltinLocalHeader(f32_digits_score, "U64");
+    try self.writeAppText("match F32.from_int_digits(");
+    try self.writeAppSymbol(digits);
+    try self.writeAppText(") {\n");
+    try self.writeIndent(2);
+    try self.writeAppText("Ok(");
+    try self.writeAppSymbol(f32_digits_value);
+    try self.writeAppText(") => List.len(Str.to_utf8(F32.to_str(");
+    try self.writeAppSymbol(f32_digits_value);
+    try self.writeAppText(")))\n");
+    try self.writeIndent(2);
+    try self.writeAppText("Err(_) => ");
+    try self.writeAppSymbol(dec_i64_score);
+    try self.writeAppText("\n");
+    try self.writeIndent(1);
+    try self.writeAppText("}\n");
+
+    try self.writeBuiltinLocalHeader(f32_frac_score, "U64");
+    try self.writeAppText("match F32.from_dec_digits(");
+    try self.writeAppSymbol(digit_pair);
+    try self.writeAppText(") {\n");
+    try self.writeIndent(2);
+    try self.writeAppText("Ok(");
+    try self.writeAppSymbol(f32_frac_value);
+    try self.writeAppText(") => List.len(Str.to_utf8(F32.to_str(");
+    try self.writeAppSymbol(f32_frac_value);
+    try self.writeAppText(")))\n");
+    try self.writeIndent(2);
+    try self.writeAppText("Err(_) => ");
+    try self.writeAppSymbol(f32_digits_score);
+    try self.writeAppText("\n");
+    try self.writeIndent(1);
+    try self.writeAppText("}\n");
+
+    try self.writeBuiltinLocalHeader(f32_text_score, "U64");
+    try self.writeAppText("match F32.from_str(Str.concat(U64.to_str(");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText(" % 1000), \".5\")) {\n");
+    try self.writeIndent(2);
+    try self.writeAppText("Ok(");
+    try self.writeAppSymbol(f32_text_value);
+    try self.writeAppText(") => List.len(Str.to_utf8(F32.to_str(");
+    try self.writeAppSymbol(f32_text_value);
+    try self.writeAppText(")))\n");
+    try self.writeIndent(2);
+    try self.writeAppText("Err(_) => ");
+    try self.writeAppSymbol(f32_frac_score);
+    try self.writeAppText("\n");
+    try self.writeIndent(1);
+    try self.writeAppText("}\n");
+
+    try self.writeBuiltinLocalHeader(f32_u64_score, "U64");
+    try self.writeAppText("match F32.to_u64_try(");
+    try self.writeAppSymbol(f32_mix);
+    try self.writeAppText(") {\n");
+    try self.writeIndent(2);
+    try self.writeAppText("Ok(");
+    try self.writeAppSymbol(f32_u64);
+    try self.writeAppText(") => ");
+    try self.writeAppSymbol(f32_u64);
+    try self.writeAppText("\n");
+    try self.writeIndent(2);
+    try self.writeAppText("Err(_) => ");
+    try self.writeAppSymbol(f32_text_score);
+    try self.writeAppText("\n");
+    try self.writeIndent(1);
+    try self.writeAppText("}\n");
+
+    try self.writeBuiltinLocalHeader(f32_i64_score, "U64");
+    try self.writeAppText("match F32.to_i64_try(F32.negate(");
+    try self.writeAppSymbol(f32_mix);
+    try self.writeAppText(")) {\n");
+    try self.writeIndent(2);
+    try self.writeAppText("Ok(");
+    try self.writeAppSymbol(f32_i64);
+    try self.writeAppText(") => I64.to_u64_wrap(");
+    try self.writeAppSymbol(f32_i64);
+    try self.writeAppText(")\n");
+    try self.writeIndent(2);
+    try self.writeAppText("Err(_) => ");
+    try self.writeAppSymbol(f32_u64_score);
+    try self.writeAppText("\n");
+    try self.writeIndent(1);
+    try self.writeAppText("}\n");
+
+    try self.writeBuiltinLocalHeader(f64_base, "F64");
+    try self.writeAppText("F32.to_f64(");
+    try self.writeAppSymbol(f32_mix);
+    try self.writeAppText(")\n");
+
+    try self.writeBuiltinLocalHeader(f64_other, "F64");
+    try self.writeAppText("Dec.to_f64(");
+    try self.writeAppSymbol(dec_delta);
+    try self.writeAppText(")\n");
+
+    try self.writeBuiltinLocalHeader(f64_sum, "F64");
+    try self.writeAppText("F64.plus(F64.max(");
+    try self.writeAppSymbol(f64_base);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(f64_other);
+    try self.writeAppText("), F64.abs(F64.negate(");
+    try self.writeAppSymbol(f64_other);
+    try self.writeAppText(")))\n");
+
+    try self.writeBuiltinLocalHeader(f64_mix, "F64");
+    try self.writeAppText("F64.times(F64.abs_diff(");
+    try self.writeAppSymbol(f64_sum);
+    try self.writeAppText(", F64.min(");
+    try self.writeAppSymbol(f64_base);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(f64_other);
+    try self.writeAppText(")), U64.to_f64((");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText(" % 7) + 1))\n");
+
+    try self.writeBuiltinLocalHeader(f64_digits_score, "U64");
+    try self.writeAppText("match F64.from_int_digits(");
+    try self.writeAppSymbol(digits);
+    try self.writeAppText(") {\n");
+    try self.writeIndent(2);
+    try self.writeAppText("Ok(");
+    try self.writeAppSymbol(f64_digits_value);
+    try self.writeAppText(") => List.len(Str.to_utf8(F64.to_str(");
+    try self.writeAppSymbol(f64_digits_value);
+    try self.writeAppText(")))\n");
+    try self.writeIndent(2);
+    try self.writeAppText("Err(_) => ");
+    try self.writeAppSymbol(f32_i64_score);
+    try self.writeAppText("\n");
+    try self.writeIndent(1);
+    try self.writeAppText("}\n");
+
+    try self.writeBuiltinLocalHeader(f64_frac_score, "U64");
+    try self.writeAppText("match F64.from_dec_digits(");
+    try self.writeAppSymbol(digit_pair);
+    try self.writeAppText(") {\n");
+    try self.writeIndent(2);
+    try self.writeAppText("Ok(");
+    try self.writeAppSymbol(f64_frac_value);
+    try self.writeAppText(") => List.len(Str.to_utf8(F64.to_str(");
+    try self.writeAppSymbol(f64_frac_value);
+    try self.writeAppText(")))\n");
+    try self.writeIndent(2);
+    try self.writeAppText("Err(_) => ");
+    try self.writeAppSymbol(f64_digits_score);
+    try self.writeAppText("\n");
+    try self.writeIndent(1);
+    try self.writeAppText("}\n");
+
+    try self.writeBuiltinLocalHeader(f64_text_score, "U64");
+    try self.writeAppText("match F64.from_str(Str.concat(U64.to_str(");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText(" % 1000), \".125\")) {\n");
+    try self.writeIndent(2);
+    try self.writeAppText("Ok(");
+    try self.writeAppSymbol(f64_text_value);
+    try self.writeAppText(") => List.len(Str.to_utf8(F64.to_str(");
+    try self.writeAppSymbol(f64_text_value);
+    try self.writeAppText(")))\n");
+    try self.writeIndent(2);
+    try self.writeAppText("Err(_) => ");
+    try self.writeAppSymbol(f64_frac_score);
+    try self.writeAppText("\n");
+    try self.writeIndent(1);
+    try self.writeAppText("}\n");
+
+    try self.writeBuiltinLocalHeader(f64_u64_score, "U64");
+    try self.writeAppText("match F64.to_u64_try(");
+    try self.writeAppSymbol(f64_mix);
+    try self.writeAppText(") {\n");
+    try self.writeIndent(2);
+    try self.writeAppText("Ok(");
+    try self.writeAppSymbol(f64_u64);
+    try self.writeAppText(") => ");
+    try self.writeAppSymbol(f64_u64);
+    try self.writeAppText("\n");
+    try self.writeIndent(2);
+    try self.writeAppText("Err(_) => ");
+    try self.writeAppSymbol(f64_text_score);
+    try self.writeAppText("\n");
+    try self.writeIndent(1);
+    try self.writeAppText("}\n");
+
+    try self.writeBuiltinLocalHeader(f64_i64_score, "U64");
+    try self.writeAppText("match F64.to_i64_try(F64.negate(");
+    try self.writeAppSymbol(f64_mix);
+    try self.writeAppText(")) {\n");
+    try self.writeIndent(2);
+    try self.writeAppText("Ok(");
+    try self.writeAppSymbol(f64_i64);
+    try self.writeAppText(") => I64.to_u64_wrap(");
+    try self.writeAppSymbol(f64_i64);
+    try self.writeAppText(")\n");
+    try self.writeIndent(2);
+    try self.writeAppText("Err(_) => ");
+    try self.writeAppSymbol(f64_u64_score);
+    try self.writeAppText("\n");
+    try self.writeIndent(1);
+    try self.writeAppText("}\n");
+
+    try self.writeBuiltinLocalHeader(bool_score, "U64");
+    try self.writeAppText("(if Dec.is_gt(");
+    try self.writeAppSymbol(dec_sum);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(dec_delta);
+    try self.writeAppText(") 1 else 0) + (if F32.is_zero(F32.minus(");
+    try self.writeAppSymbol(f32_sum);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(f32_sum);
+    try self.writeAppText(")) 2 else 0) + (if F64.is_gt(");
+    try self.writeAppSymbol(f64_mix);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(f64_base);
+    try self.writeAppText(") 4 else 0)\n");
+
+    try self.writeBuiltinLocalHeader(text_score, "U64");
+    try self.writeAppText("List.len(Str.to_utf8(Dec.to_str(");
+    try self.writeAppSymbol(dec_product);
+    try self.writeAppText("))) + List.len(Str.to_utf8(F32.to_str(");
+    try self.writeAppSymbol(f32_mix);
+    try self.writeAppText("))) + List.len(Str.to_utf8(F64.to_str(");
+    try self.writeAppSymbol(f64_mix);
+    try self.writeAppText(")))\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(dec_checked_score);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(dec_sub_score);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(dec_digits_score);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(dec_frac_score);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(dec_text_score);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(dec_u64_score);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(dec_i64_score);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(f32_digits_score);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(f32_frac_score);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(f32_text_score);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(f32_u64_score);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(f32_i64_score);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(f64_digits_score);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(f64_frac_score);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(f64_text_score);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(f64_u64_score);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(f64_i64_score);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(bool_score);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(text_score);
+    try self.writeAppText("\n}\n\n");
 }
 
 fn writeHasherScoring(self: *Self) std.mem.Allocator.Error!void {
@@ -7279,6 +7891,7 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     const try_ops_score = self.fresh(.value);
     const set_ops_score = self.fresh(.value);
     const num_ops_score = self.fresh(.value);
+    const float_dec_score = self.fresh(.value);
     const hash_score = self.fresh(.value);
     const imported_record = self.fresh(.value);
     const alternate_imported = self.fresh(.value);
@@ -7615,6 +8228,19 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppText(")\n");
 
     try self.writeIndent(1);
+    try self.writeAppSymbol(float_dec_score);
+    try self.writeAppText(" : U64\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(float_dec_score);
+    try self.writeAppText(" = ");
+    try self.writeAppSymbol(self.symbols.score_float_dec_ops);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(num_ops_score);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(generic_text);
+    try self.writeAppText(")\n");
+
+    try self.writeIndent(1);
     try self.writeAppSymbol(hash_score);
     try self.writeAppText(" : U64\n");
     try self.writeIndent(1);
@@ -7627,6 +8253,8 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppSymbol(generic_text);
     try self.writeAppText(", ");
     try self.writeAppSymbol(num_ops_score);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(float_dec_score);
     try self.writeAppText(")\n");
 
     try self.writeLocalHeader(imported_record, self.symbols.imported_type);
@@ -7657,6 +8285,8 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppSymbol(set_ops_score);
     try self.writeAppText(" + ");
     try self.writeAppSymbol(num_ops_score);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(float_dec_score);
     try self.writeAppText(" + ");
     try self.writeAppSymbol(hash_score);
     try self.writeAppText(", ");
@@ -7994,6 +8624,8 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppText(" + ");
     try self.writeAppSymbol(num_ops_score);
     try self.writeAppText(" + ");
+    try self.writeAppSymbol(float_dec_score);
+    try self.writeAppText(" + ");
     try self.writeAppSymbol(hash_score);
     try self.writeAppText(" + ");
     try self.writeAppSymbol(imported_score);
@@ -8056,6 +8688,8 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppSymbol(set_ops_score);
     try self.writeAppText(" + ");
     try self.writeAppSymbol(num_ops_score);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(float_dec_score);
     try self.writeAppText(" + ");
     try self.writeAppSymbol(hash_score);
     try self.writeAppText(" + ");
@@ -8325,6 +8959,17 @@ fn writeLocalHeader(self: *Self, local: Symbol, typ: Symbol) std.mem.Allocator.E
     try self.writeAppSymbol(local);
     try self.writeAppText(" : ");
     try self.writeAppSymbol(typ);
+    try self.writeAppText("\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(local);
+    try self.writeAppText(" = ");
+}
+
+fn writeBuiltinLocalHeader(self: *Self, local: Symbol, type_text: []const u8) std.mem.Allocator.Error!void {
+    try self.writeIndent(1);
+    try self.writeAppSymbol(local);
+    try self.writeAppText(" : ");
+    try self.writeAppText(type_text);
     try self.writeAppText("\n");
     try self.writeIndent(1);
     try self.writeAppSymbol(local);
