@@ -877,7 +877,7 @@ fn collectStmt(
             for (store.getStrMatchSteps(str_match.steps)) |step| {
                 switch (step.capture) {
                     .discard => {},
-                    .local => |local| noteDef(solver.defs, local, .fresh),
+                    .local => |local| noteDef(solver.defs, local, .{ .borrow_capable = @intFromEnum(str_match.source) }),
                 }
             }
             try solver.stack.append(allocator, str_match.on_match);

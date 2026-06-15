@@ -166,6 +166,7 @@ pub const MonoLlvmCodeGen = struct {
     loop_continue_blocks: std.ArrayList(LlvmBuilder.Function.Block.Index),
     loop_break_blocks: std.ArrayList(LlvmBuilder.Function.Block.Index),
     local_slots: []LocalSlot = &.{},
+    deferred_str_captures: []?DeferredStrCapture = &.{},
     string_counter: u32 = 0,
     /// When true the module is built with DWARF debug info: a compile unit,
     /// one subprogram per proc, and per-statement line locations from the
@@ -1106,6 +1107,7 @@ pub const MonoLlvmCodeGen = struct {
         const outer_capture = self.capture_ptr_arg;
         const outer_ret_layout = self.current_ret_layout;
         const outer_slots = self.local_slots;
+        const outer_deferred_str_captures = self.deferred_str_captures;
         defer {
             self.wip = outer_wip;
             self.roc_ops_arg = outer_roc_ops;
@@ -1114,6 +1116,7 @@ pub const MonoLlvmCodeGen = struct {
             self.capture_ptr_arg = outer_capture;
             self.current_ret_layout = outer_ret_layout;
             self.local_slots = outer_slots;
+            self.deferred_str_captures = outer_deferred_str_captures;
         }
 
         self.join_points.clearRetainingCapacity();
@@ -1187,6 +1190,9 @@ pub const MonoLlvmCodeGen = struct {
 
         self.local_slots = try self.allocator.alloc(LocalSlot, self.store.locals.items.len);
         defer self.allocator.free(self.local_slots);
+        self.deferred_str_captures = try self.allocator.alloc(?DeferredStrCapture, self.store.locals.items.len);
+        defer self.allocator.free(self.deferred_str_captures);
+        self.clearDeferredStrCaptures();
         try self.allocLocalSlots();
         try self.unpackProcArgs(proc);
         if (!builder.strip and self.emit_local_debug_info) {
@@ -1621,6 +1627,7 @@ pub const MonoLlvmCodeGen = struct {
     const StrMatchBody = struct {
         block: LlvmBuilder.Function.Block.Index,
         stmt: CFStmtId,
+        captures: []const DeferredStrCaptureBinding = &.{},
     };
 
     /// Drives statement-LIR emission with an explicit heap-backed work stack so
@@ -1690,6 +1697,13 @@ pub const MonoLlvmCodeGen = struct {
                 .str_match_body => |body| {
                     const wip = self.wip orelse return error.CompilationFailed;
                     wip.cursor = .{ .block = body.block };
+                    self.clearDeferredStrCaptures();
+                    for (body.captures) |capture| {
+                        try self.installDeferredStrCapture(capture.local, capture.capture);
+                    }
+                    if (body.captures.len > 0) {
+                        self.allocator.free(body.captures);
+                    }
                     try work.append(wa, .{ .node = body.stmt });
                 },
             }
@@ -1803,6 +1817,7 @@ pub const MonoLlvmCodeGen = struct {
                 try work.append(wa, .{ .node = assign.next });
             },
             .debug => |debug_stmt| {
+                try self.materializeLocalIfDeferred(debug_stmt.message);
                 try self.callBuiltinVoid("roc_builtins_dbg_str", &.{ try self.ptrType(), try self.ptrType() }, &.{ self.slot(debug_stmt.message).ptr, self.rocOps() });
                 try work.append(wa, .{ .node = debug_stmt.next });
             },
@@ -1840,6 +1855,7 @@ pub const MonoLlvmCodeGen = struct {
             .ret => |ret_stmt| try self.emitReturn(ret_stmt.value),
             .crash => |crash_stmt| try self.emitCrashBytes(self.store.getString(crash_stmt.msg)),
             .expect_err => |expect_err_stmt| {
+                try self.materializeLocalIfDeferred(expect_err_stmt.message);
                 const wip = self.wip orelse return error.CompilationFailed;
                 const builder = self.builder orelse return error.CompilationFailed;
                 const region_start = builder.intValue(.i32, expect_err_stmt.region.start.offset) catch return error.OutOfMemory;
@@ -1880,11 +1896,15 @@ pub const MonoLlvmCodeGen = struct {
             .list_reinterpret => |ref| try self.copyLocal(target, ref.backing_ref),
             .nominal => |ref| try self.copyLocal(target, ref.backing_ref),
             .discriminant => |ref| {
+                try self.prepareLocalWrite(target);
+                try self.materializeLocalIfDeferred(ref.source);
                 const base = try self.resolveTagBase(ref.source);
                 const discrim = try self.readTagDiscriminant(base.ptr, base.layout_idx);
                 try self.storeIntToLayout(target_slot.ptr, discrim, target_slot.layout_idx);
             },
             .field => |ref| {
+                try self.prepareLocalWrite(target);
+                try self.materializeLocalIfDeferred(ref.source);
                 const base = try self.resolveStructBase(ref.source);
                 const base_layout = self.layoutValue(base.layout_idx);
                 if (base_layout.tag != .struct_) return error.CompilationFailed;
@@ -1894,6 +1914,8 @@ pub const MonoLlvmCodeGen = struct {
                 try self.copyBytes(target_slot.ptr, src, self.layoutByteSize(field_layout), self.alignmentForLayout(field_layout));
             },
             .tag_payload => |ref| {
+                try self.prepareLocalWrite(target);
+                try self.materializeLocalIfDeferred(ref.source);
                 const base = try self.resolveTagBase(ref.source);
                 const payload_layout = self.tagPayloadLayout(base.layout_idx, ref.tag_discriminant);
                 const payload_layout_val = self.layoutValue(payload_layout);
@@ -1907,6 +1929,8 @@ pub const MonoLlvmCodeGen = struct {
                 try self.copyBytes(target_slot.ptr, src, self.layoutByteSize(copy_layout), self.alignmentForLayout(copy_layout));
             },
             .tag_payload_struct => |ref| {
+                try self.prepareLocalWrite(target);
+                try self.materializeLocalIfDeferred(ref.source);
                 const base = try self.resolveTagBase(ref.source);
                 const payload_layout = self.tagPayloadLayout(base.layout_idx, ref.tag_discriminant);
                 try self.copyBytes(target_slot.ptr, base.ptr, self.layoutByteSize(payload_layout), self.alignmentForLayout(payload_layout));
@@ -1915,6 +1939,7 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn emitLiteral(self: *MonoLlvmCodeGen, target: LocalId, value: lir.LIR.LiteralValue) Error!void {
+        try self.prepareLocalWrite(target);
         const slot_v = self.slot(target);
         switch (value) {
             .i64_literal => |lit| try self.storeIntLiteral(slot_v.ptr, slot_v.layout_idx, lit.value),
@@ -1934,8 +1959,10 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn emitDirectCall(self: *MonoLlvmCodeGen, target: LocalId, proc_id: LirProcSpecId, args: LocalSpan) Error!void {
+        try self.prepareLocalWrite(target);
         const proc = self.store.getProcSpec(proc_id);
         const arg_locals = self.store.getLocalSpan(args);
+        try self.materializeLocalSpanIfDeferred(arg_locals);
         const param_locals = self.store.getLocalSpan(proc.args);
         if (arg_locals.len != param_locals.len) return error.CompilationFailed;
         if (proc.hosted) |hosted| {
@@ -1963,6 +1990,8 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn emitErasedCall(self: *MonoLlvmCodeGen, target: LocalId, closure: LocalId, args: LocalSpan) Error!void {
+        try self.prepareLocalWrite(target);
+        try self.materializeLocalIfDeferred(closure);
         const builder = self.builder orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
         const ptr_ty = try self.ptrType();
@@ -1970,6 +1999,7 @@ pub const MonoLlvmCodeGen = struct {
         const fn_ptr = try self.loadPointer(closure_ptr);
         const capture_ptr = try self.offsetPtr(closure_ptr, builtins.erased_callable.capture_offset);
         const arg_locals = self.store.getLocalSpan(args);
+        try self.materializeLocalSpanIfDeferred(arg_locals);
         const arg_layouts = try self.allocator.alloc(layout.Idx, arg_locals.len);
         defer self.allocator.free(arg_layouts);
         for (arg_locals, arg_layouts) |local, *slot_layout| slot_layout.* = self.localLayout(local);
@@ -1996,6 +2026,8 @@ pub const MonoLlvmCodeGen = struct {
         capture_layout: ?layout.Idx,
         on_drop: lir.LIR.ErasedCallableOnDrop,
     ) Error!void {
+        try self.prepareLocalWrite(target);
+        if (capture) |capture_local| try self.materializeLocalIfDeferred(capture_local);
         const builder = self.builder orelse return error.CompilationFailed;
         const capture_size = if (capture_layout) |idx| self.layoutByteSize(idx) else 0;
         const payload_size: u64 = builtins.erased_callable.payloadSize(capture_size);
@@ -2037,8 +2069,10 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn emitListLiteral(self: *MonoLlvmCodeGen, target: LocalId, elems: LocalSpan) Error!void {
+        try self.prepareLocalWrite(target);
         const builder = self.builder orelse return error.CompilationFailed;
         const elem_locals = self.store.getLocalSpan(elems);
+        try self.materializeLocalSpanIfDeferred(elem_locals);
         const target_layout = self.localLayout(target);
         const abi = self.layouts().builtinListAbi(target_layout);
         const target_ptr = self.slot(target).ptr;
@@ -2071,7 +2105,9 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn emitStructLiteral(self: *MonoLlvmCodeGen, target: LocalId, fields: LocalSpan) Error!void {
+        try self.prepareLocalWrite(target);
         const field_locals = self.store.getLocalSpan(fields);
+        try self.materializeLocalSpanIfDeferred(field_locals);
         const allocated = try self.allocAggregateTarget(target);
         const base_layout = self.layoutValue(allocated.layout_idx);
         if (base_layout.tag != .struct_) return;
@@ -2086,6 +2122,8 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn emitTagLiteral(self: *MonoLlvmCodeGen, target: LocalId, discriminant: u16, payload: ?LocalId) Error!void {
+        try self.prepareLocalWrite(target);
+        if (payload) |payload_local| try self.materializeLocalIfDeferred(payload_local);
         const allocated = try self.allocAggregateTarget(target);
         if (self.layoutByteSize(allocated.layout_idx) > 0) {
             try self.writeTagDiscriminant(allocated.ptr, allocated.layout_idx, discriminant);
@@ -2134,7 +2172,11 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn emitLowLevel(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LowLevel, args: LocalSpan, unique_args: u64) Error!void {
+        try self.prepareLocalWrite(target);
         const arg_locals = self.store.getLocalSpan(args);
+        if (op != .str_count_utf8_bytes) {
+            try self.materializeLocalSpanIfDeferred(arg_locals);
+        }
         switch (op) {
             .bool_not => {
                 const value = try self.loadBool(self.slot(arg_locals[0]).ptr);
@@ -2538,6 +2580,8 @@ pub const MonoLlvmCodeGen = struct {
     /// default body) as work items. The case blocks and branch slice are carried
     /// to the continuations via a heap `SwitchState` freed by `.switch_free`.
     fn emitSwitch(self: *MonoLlvmCodeGen, sw: anytype, wa: Allocator, work: *std.ArrayList(StmtWork)) Error!void {
+        try self.materializeLocalIfDeferred(sw.cond);
+        try self.materializeAllDeferredStrCaptures();
         const builder = self.builder orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
         const branches = self.store.getCFSwitchBranches(sw.branches);
@@ -2572,19 +2616,57 @@ pub const MonoLlvmCodeGen = struct {
         alloc: LlvmBuilder.Value,
     };
 
+    const DeferredStrCapture = struct {
+        source_local: LocalId,
+        source: StrMatchSource,
+        start_ptr: LlvmBuilder.Value,
+        end_ptr: LlvmBuilder.Value,
+        pending_rc_count: u16,
+        pending_rc_atomicity: RcAtomicity,
+    };
+
+    const DeferredStrCaptureBinding = struct {
+        local: LocalId,
+        capture: DeferredStrCapture,
+    };
+
+    const StrMatchCaptureSlots = struct {
+        start_ptr: LlvmBuilder.Value,
+        end_ptr: LlvmBuilder.Value,
+    };
+
     fn emitStrMatch(self: *MonoLlvmCodeGen, str_match: anytype, wa: Allocator, work: *std.ArrayList(StmtWork)) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
         const usize_ty = self.ptrSizedIntType();
         const usize_alignment = self.targetPointerAlignment();
 
+        try self.materializeAllDeferredStrCaptures();
+        try self.materializeLocalIfDeferred(str_match.source);
+
         const on_match_block = wip.block(0, "str_match_success") catch return error.OutOfMemory;
         const on_miss_block = wip.block(0, "str_match_miss") catch return error.OutOfMemory;
+        const steps = self.store.getStrMatchSteps(str_match.steps);
+
+        const capture_slots = try self.allocator.alloc(?StrMatchCaptureSlots, steps.len);
+        defer self.allocator.free(capture_slots);
+        for (steps, capture_slots) |step, *slots| {
+            slots.* = switch (step.capture) {
+                .discard => null,
+                .local => .{
+                    .start_ptr = wip.alloca(.normal, usize_ty, .@"1", usize_alignment, .default, "str_match_capture_start") catch return error.OutOfMemory,
+                    .end_ptr = wip.alloca(.normal, usize_ty, .@"1", usize_alignment, .default, "str_match_capture_end") catch return error.OutOfMemory,
+                },
+            };
+        }
 
         const source = try self.emitStrMatchSourceShape(self.slot(str_match.source).ptr);
         const cursor_ptr = wip.alloca(.normal, usize_ty, .@"1", usize_alignment, .default, "str_match_cursor") catch return error.OutOfMemory;
         const zero = builder.intValue(usize_ty, 0) catch return error.OutOfMemory;
         try self.storeUsize(cursor_ptr, zero);
+
+        var captures = std.ArrayList(DeferredStrCaptureBinding).empty;
+        errdefer captures.deinit(self.allocator);
 
         const prefix = self.store.getStringLiteral(str_match.prefix);
         if (prefix.len > 0) {
@@ -2593,7 +2675,6 @@ pub const MonoLlvmCodeGen = struct {
             try self.storeUsize(cursor_ptr, builder.intValue(usize_ty, prefix.len) catch return error.OutOfMemory);
         }
 
-        const steps = self.store.getStrMatchSteps(str_match.steps);
         for (steps, 0..) |step, step_i| {
             const capture_start = try self.loadUsize(cursor_ptr);
             const delimiter = self.store.getStringLiteral(step.delimiter);
@@ -2609,7 +2690,22 @@ pub const MonoLlvmCodeGen = struct {
 
             switch (step.capture) {
                 .discard => {},
-                .local => |local| try self.emitStoreStrMatchCapture(self.slot(local).ptr, source, capture_start, capture_end),
+                .local => |local| {
+                    const slots = capture_slots[step_i] orelse return error.CompilationFailed;
+                    try self.storeUsize(slots.start_ptr, capture_start);
+                    try self.storeUsize(slots.end_ptr, capture_end);
+                    try captures.append(self.allocator, .{
+                        .local = local,
+                        .capture = .{
+                            .source_local = str_match.source,
+                            .source = source,
+                            .start_ptr = slots.start_ptr,
+                            .end_ptr = slots.end_ptr,
+                            .pending_rc_count = 0,
+                            .pending_rc_atomicity = .atomic,
+                        },
+                    });
+                },
             }
 
             if (!is_final_tail_capture and delimiter.len > 0) {
@@ -2626,8 +2722,10 @@ pub const MonoLlvmCodeGen = struct {
             .tail => _ = wip.br(on_match_block) catch return error.OutOfMemory,
         }
 
+        const match_captures = try captures.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(match_captures);
         try work.append(wa, .{ .str_match_body = .{ .block = on_miss_block, .stmt = str_match.on_miss } });
-        try work.append(wa, .{ .str_match_body = .{ .block = on_match_block, .stmt = str_match.on_match } });
+        try work.append(wa, .{ .str_match_body = .{ .block = on_match_block, .stmt = str_match.on_match, .captures = match_captures } });
     }
 
     fn emitStrMatchSourceShape(self: *MonoLlvmCodeGen, source_ptr: LlvmBuilder.Value) Error!StrMatchSource {
@@ -2762,6 +2860,30 @@ pub const MonoLlvmCodeGen = struct {
         }
     }
 
+    fn emitStrMatchProbeDelimiter(
+        self: *MonoLlvmCodeGen,
+        bytes: LlvmBuilder.Value,
+        cursor: LlvmBuilder.Value,
+        cursor_ptr: LlvmBuilder.Value,
+        delimiter: []const u8,
+        found_block: LlvmBuilder.Function.Block.Index,
+        fail_block: LlvmBuilder.Function.Block.Index,
+    ) Error!void {
+        if (delimiter.len == 0) return error.CompilationFailed;
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+
+        const candidate = try self.offsetPtrValue(bytes, cursor);
+        const first_byte = wip.load(.normal, .i8, candidate, LlvmBuilder.Alignment.fromByteUnits(1), "") catch return error.OutOfMemory;
+        const first_matches = wip.icmp(.eq, first_byte, builder.intValue(.i8, delimiter[0]) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const matched_block = wip.block(0, "str_match_scan_match") catch return error.OutOfMemory;
+        _ = wip.brCond(first_matches, matched_block, fail_block, .none) catch return error.OutOfMemory;
+
+        wip.cursor = .{ .block = matched_block };
+        try self.storeUsize(cursor_ptr, cursor);
+        _ = wip.br(found_block) catch return error.OutOfMemory;
+    }
+
     fn emitStrMatchFindDelimiter(
         self: *MonoLlvmCodeGen,
         bytes: LlvmBuilder.Value,
@@ -2778,51 +2900,108 @@ pub const MonoLlvmCodeGen = struct {
         try self.emitStrMatchFailIf(wip.icmp(.ult, len, delimiter_len, "") catch return error.OutOfMemory, miss_block);
         const limit = wip.bin(.sub, len, delimiter_len, "") catch return error.OutOfMemory;
 
-        const loop_block = wip.block(0, "str_match_scan") catch return error.OutOfMemory;
         const found_block = wip.block(0, "str_match_scan_found") catch return error.OutOfMemory;
-        var probe_blocks: [4]LlvmBuilder.Function.Block.Index = undefined;
-        var compare_blocks: [4]LlvmBuilder.Function.Block.Index = undefined;
-        var tail_blocks: [4]LlvmBuilder.Function.Block.Index = undefined;
-        var advance_blocks: [4]LlvmBuilder.Function.Block.Index = undefined;
+        const decide_block = wip.block(0, "str_match_scan_decide") catch return error.OutOfMemory;
+        const group_loop_block = wip.block(2, "str_match_scan_group") catch return error.OutOfMemory;
+        const group_after_block = wip.block(0, "str_match_scan_group_after") catch return error.OutOfMemory;
+        const tail_block = wip.block(2, "str_match_scan_tail") catch return error.OutOfMemory;
+
+        _ = wip.br(decide_block) catch return error.OutOfMemory;
+
+        wip.cursor = .{ .block = decide_block };
+        const initial_cursor = try self.loadUsize(cursor_ptr);
+        const initial_over_limit = wip.icmp(.ugt, initial_cursor, limit, "") catch return error.OutOfMemory;
+        const initial_in_range_block = wip.block(0, "str_match_scan_initial_in_range") catch return error.OutOfMemory;
+        _ = wip.brCond(initial_over_limit, miss_block, initial_in_range_block, .none) catch return error.OutOfMemory;
+
+        wip.cursor = .{ .block = initial_in_range_block };
+        const initial_remaining = wip.bin(.sub, limit, initial_cursor, "") catch return error.OutOfMemory;
+        const has_initial_group = wip.icmp(.uge, initial_remaining, builder.intValue(usize_ty, 3) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        _ = wip.brCond(has_initial_group, group_loop_block, tail_block, .then_likely) catch return error.OutOfMemory;
+
+        wip.cursor = .{ .block = group_loop_block };
+        const group_cursor_phi = wip.phi(usize_ty, "str_match_scan_group_cursor") catch return error.OutOfMemory;
+        const group_cursor = group_cursor_phi.toValue();
+        var group_probe_blocks: [4]LlvmBuilder.Function.Block.Index = undefined;
         for (0..4) |probe_i| {
-            probe_blocks[probe_i] = wip.block(0, "str_match_scan_probe") catch return error.OutOfMemory;
-            compare_blocks[probe_i] = wip.block(0, "str_match_scan_compare") catch return error.OutOfMemory;
-            tail_blocks[probe_i] = wip.block(0, "str_match_scan_tail") catch return error.OutOfMemory;
-            advance_blocks[probe_i] = wip.block(0, "str_match_scan_advance") catch return error.OutOfMemory;
+            group_probe_blocks[probe_i] = wip.block(0, "str_match_scan_group_probe") catch return error.OutOfMemory;
+        }
+        _ = wip.br(group_probe_blocks[0]) catch return error.OutOfMemory;
+
+        for (0..4) |probe_i| {
+            wip.cursor = .{ .block = group_probe_blocks[probe_i] };
+            const cursor = if (probe_i == 0)
+                group_cursor
+            else
+                wip.bin(.add, group_cursor, builder.intValue(usize_ty, probe_i) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+            try self.emitStrMatchProbeDelimiter(
+                bytes,
+                cursor,
+                cursor_ptr,
+                delimiter,
+                found_block,
+                if (probe_i == 3) group_after_block else group_probe_blocks[probe_i + 1],
+            );
         }
 
-        _ = wip.br(loop_block) catch return error.OutOfMemory;
-        wip.cursor = .{ .block = loop_block };
-        _ = wip.br(probe_blocks[0]) catch return error.OutOfMemory;
+        wip.cursor = .{ .block = group_after_block };
+        const group_remaining = wip.bin(.sub, limit, group_cursor, "") catch return error.OutOfMemory;
+        const next_group_cursor = wip.bin(.add, group_cursor, builder.intValue(usize_ty, 4) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const has_next_group = wip.icmp(.uge, group_remaining, builder.intValue(usize_ty, 7) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const maybe_tail_block = wip.block(0, "str_match_scan_maybe_tail") catch return error.OutOfMemory;
+        _ = wip.brCond(has_next_group, group_loop_block, maybe_tail_block, .then_likely) catch return error.OutOfMemory;
 
-        for (0..4) |probe_i| {
-            wip.cursor = .{ .block = probe_blocks[probe_i] };
-            const cursor = try self.loadUsize(cursor_ptr);
-            const over_limit = wip.icmp(.ugt, cursor, limit, "") catch return error.OutOfMemory;
-            _ = wip.brCond(over_limit, miss_block, compare_blocks[probe_i], .none) catch return error.OutOfMemory;
+        wip.cursor = .{ .block = maybe_tail_block };
+        const has_tail = wip.icmp(.uge, group_remaining, builder.intValue(usize_ty, 4) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        _ = wip.brCond(has_tail, tail_block, miss_block, .none) catch return error.OutOfMemory;
 
-            wip.cursor = .{ .block = compare_blocks[probe_i] };
-            const candidate = try self.offsetPtrValue(bytes, try self.loadUsize(cursor_ptr));
-            const first_byte = wip.load(.normal, .i8, candidate, LlvmBuilder.Alignment.fromByteUnits(1), "") catch return error.OutOfMemory;
-            const first_matches = wip.icmp(.eq, first_byte, builder.intValue(.i8, delimiter[0]) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
-            if (delimiter.len == 1) {
-                _ = wip.brCond(first_matches, found_block, advance_blocks[probe_i], .none) catch return error.OutOfMemory;
-            } else {
-                _ = wip.brCond(first_matches, tail_blocks[probe_i], advance_blocks[probe_i], .none) catch return error.OutOfMemory;
-
-                wip.cursor = .{ .block = tail_blocks[probe_i] };
-                const tail_ptr = try self.offsetPtrValue(candidate, builder.intValue(usize_ty, 1) catch return error.OutOfMemory);
-                try self.emitStrMatchCompareLiteral(tail_ptr, delimiter[1..], advance_blocks[probe_i]);
-                _ = wip.br(found_block) catch return error.OutOfMemory;
-            }
-
-            wip.cursor = .{ .block = advance_blocks[probe_i] };
-            const next = wip.bin(.add, try self.loadUsize(cursor_ptr), builder.intValue(usize_ty, 1) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
-            try self.storeUsize(cursor_ptr, next);
-            _ = wip.br(if (probe_i == 3) loop_block else probe_blocks[probe_i + 1]) catch return error.OutOfMemory;
+        wip.cursor = .{ .block = tail_block };
+        const tail_cursor_phi = wip.phi(usize_ty, "str_match_scan_tail_cursor") catch return error.OutOfMemory;
+        const tail_cursor = tail_cursor_phi.toValue();
+        const tail_cursor_1 = wip.bin(.add, tail_cursor, builder.intValue(usize_ty, 1) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const tail_cursor_2 = wip.bin(.add, tail_cursor, builder.intValue(usize_ty, 2) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const tail_cursors = [3]LlvmBuilder.Value{ tail_cursor, tail_cursor_1, tail_cursor_2 };
+        var tail_probe_blocks: [3]LlvmBuilder.Function.Block.Index = undefined;
+        var tail_next_blocks: [2]LlvmBuilder.Function.Block.Index = undefined;
+        for (0..3) |probe_i| {
+            tail_probe_blocks[probe_i] = wip.block(0, "str_match_scan_tail_probe") catch return error.OutOfMemory;
         }
+        for (0..2) |probe_i| {
+            tail_next_blocks[probe_i] = wip.block(0, "str_match_scan_tail_next") catch return error.OutOfMemory;
+        }
+        _ = wip.br(tail_probe_blocks[0]) catch return error.OutOfMemory;
+
+        wip.cursor = .{ .block = tail_probe_blocks[0] };
+        try self.emitStrMatchProbeDelimiter(bytes, tail_cursor, cursor_ptr, delimiter, found_block, tail_next_blocks[0]);
+
+        for (1..3) |probe_i| {
+            const previous_cursor = tail_cursors[probe_i - 1];
+
+            wip.cursor = .{ .block = tail_next_blocks[probe_i - 1] };
+            const has_next_tail = wip.icmp(.ult, previous_cursor, limit, "") catch return error.OutOfMemory;
+            _ = wip.brCond(has_next_tail, tail_probe_blocks[probe_i], miss_block, .none) catch return error.OutOfMemory;
+
+            wip.cursor = .{ .block = tail_probe_blocks[probe_i] };
+            try self.emitStrMatchProbeDelimiter(
+                bytes,
+                tail_cursors[probe_i],
+                cursor_ptr,
+                delimiter,
+                found_block,
+                if (probe_i == 2) miss_block else tail_next_blocks[probe_i],
+            );
+        }
+
+        group_cursor_phi.finish(&.{ initial_cursor, next_group_cursor }, &.{ initial_in_range_block, group_after_block }, wip);
+        tail_cursor_phi.finish(&.{ initial_cursor, next_group_cursor }, &.{ initial_in_range_block, maybe_tail_block }, wip);
 
         wip.cursor = .{ .block = found_block };
+        if (delimiter.len > 1) {
+            const found_cursor = try self.loadUsize(cursor_ptr);
+            const found_candidate = try self.offsetPtrValue(bytes, found_cursor);
+            const tail_ptr = try self.offsetPtrValue(found_candidate, builder.intValue(usize_ty, 1) catch return error.OutOfMemory);
+            try self.emitStrMatchCompareLiteral(tail_ptr, delimiter[1..], miss_block);
+        }
     }
 
     fn emitStoreStrMatchCapture(
@@ -2870,6 +3049,105 @@ pub const MonoLlvmCodeGen = struct {
         _ = usize_ty;
     }
 
+    fn clearDeferredStrCaptures(self: *MonoLlvmCodeGen) void {
+        for (self.deferred_str_captures) |*capture| {
+            capture.* = null;
+        }
+    }
+
+    fn installDeferredStrCapture(self: *MonoLlvmCodeGen, local: LocalId, capture: DeferredStrCapture) Error!void {
+        if (!self.isStrLocal(local)) return error.CompilationFailed;
+        try self.prepareLocalWrite(local);
+        self.deferred_str_captures[@intFromEnum(local)] = capture;
+    }
+
+    fn deferredStrCapture(self: *MonoLlvmCodeGen, local: LocalId) ?DeferredStrCapture {
+        if (self.deferred_str_captures.len == 0) return null;
+        return self.deferred_str_captures[@intFromEnum(local)];
+    }
+
+    fn clearDeferredStrCapture(self: *MonoLlvmCodeGen, local: LocalId) void {
+        if (self.deferred_str_captures.len == 0) return;
+        self.deferred_str_captures[@intFromEnum(local)] = null;
+    }
+
+    fn materializeLocalIfDeferred(self: *MonoLlvmCodeGen, local: LocalId) Error!void {
+        const capture = self.deferredStrCapture(local) orelse return;
+        try self.emitStoreStrMatchCapture(
+            self.slot(local).ptr,
+            capture.source,
+            try self.loadUsize(capture.start_ptr),
+            try self.loadUsize(capture.end_ptr),
+        );
+        self.clearDeferredStrCapture(local);
+        if (capture.pending_rc_count != 0) {
+            try self.emitRcForLocal(.incref, capture.source_local, capture.pending_rc_count, capture.pending_rc_atomicity);
+        }
+    }
+
+    fn materializeLocalSpanIfDeferred(self: *MonoLlvmCodeGen, locals: []const LocalId) Error!void {
+        for (locals) |local| {
+            try self.materializeLocalIfDeferred(local);
+        }
+    }
+
+    fn materializeAllDeferredStrCaptures(self: *MonoLlvmCodeGen) Error!void {
+        var index: usize = 0;
+        while (index < self.deferred_str_captures.len) : (index += 1) {
+            if (self.deferred_str_captures[index] != null) {
+                try self.materializeLocalIfDeferred(@enumFromInt(@as(u32, @intCast(index))));
+            }
+        }
+    }
+
+    fn materializeDeferredStrCaptureParams(self: *MonoLlvmCodeGen, params: LocalSpan) Error!void {
+        for (self.store.getLocalSpan(params)) |param| {
+            try self.materializeLocalIfDeferred(param);
+        }
+        self.clearDeferredStrCaptures();
+    }
+
+    fn materializeDeferredCapturesUsingSource(self: *MonoLlvmCodeGen, source: LocalId) Error!void {
+        var index: usize = 0;
+        while (index < self.deferred_str_captures.len) : (index += 1) {
+            const capture = self.deferred_str_captures[index] orelse continue;
+            if (capture.source_local == source and index != @intFromEnum(source)) {
+                try self.materializeLocalIfDeferred(@enumFromInt(@as(u32, @intCast(index))));
+            }
+        }
+    }
+
+    fn prepareLocalWrite(self: *MonoLlvmCodeGen, local: LocalId) Error!void {
+        try self.materializeDeferredCapturesUsingSource(local);
+        self.clearDeferredStrCapture(local);
+    }
+
+    fn propagateDeferredStrCapture(self: *MonoLlvmCodeGen, target: LocalId, source: LocalId) Error!bool {
+        const capture = self.deferredStrCapture(source) orelse return false;
+        if (!self.isStrLocal(target)) return error.CompilationFailed;
+        if (target != source) {
+            try self.prepareLocalWrite(target);
+            self.deferred_str_captures[@intFromEnum(target)] = capture;
+        }
+        return true;
+    }
+
+    fn deferredStrCaptureLen(self: *MonoLlvmCodeGen, capture: DeferredStrCapture) Error!LlvmBuilder.Value {
+        const wip = self.wip orelse return error.CompilationFailed;
+        return wip.bin(.sub, try self.loadUsize(capture.end_ptr), try self.loadUsize(capture.start_ptr), "") catch return error.OutOfMemory;
+    }
+
+    fn noteDeferredStrCaptureIncref(self: *MonoLlvmCodeGen, local: LocalId, count: u16, atomicity: RcAtomicity) Error!void {
+        var capture = self.deferredStrCapture(local) orelse return error.CompilationFailed;
+        if (count == 0) return;
+        if (capture.pending_rc_count != 0 and capture.pending_rc_atomicity != atomicity) return error.CompilationFailed;
+        const total: u32 = @as(u32, capture.pending_rc_count) + count;
+        if (total > std.math.maxInt(u16)) return error.CompilationFailed;
+        capture.pending_rc_count = @intCast(total);
+        capture.pending_rc_atomicity = atomicity;
+        self.deferred_str_captures[@intFromEnum(local)] = capture;
+    }
+
     fn offsetPtrValue(self: *MonoLlvmCodeGen, ptr: LlvmBuilder.Value, offset: LlvmBuilder.Value) Error!LlvmBuilder.Value {
         const wip = self.wip orelse return error.CompilationFailed;
         return wip.gep(.inbounds, .i8, ptr, &.{offset}, "") catch return error.OutOfMemory;
@@ -2899,22 +3177,26 @@ pub const MonoLlvmCodeGen = struct {
     fn emitJump(self: *MonoLlvmCodeGen, jump_stmt: anytype) Error!void {
         const wip = self.wip orelse return error.CompilationFailed;
         const info = self.join_points.get(@intFromEnum(jump_stmt.target)) orelse return error.CompilationFailed;
+        try self.materializeDeferredStrCaptureParams(info.params);
         _ = wip.br(info.block) catch return error.OutOfMemory;
     }
 
     fn emitLoopContinue(self: *MonoLlvmCodeGen) Error!void {
+        try self.materializeAllDeferredStrCaptures();
         const wip = self.wip orelse return error.CompilationFailed;
         const dest = self.loop_continue_blocks.items[self.loop_continue_blocks.items.len - 1];
         _ = wip.br(dest) catch return error.OutOfMemory;
     }
 
     fn emitLoopBreak(self: *MonoLlvmCodeGen) Error!void {
+        try self.materializeAllDeferredStrCaptures();
         const wip = self.wip orelse return error.CompilationFailed;
         const dest = self.loop_break_blocks.items[self.loop_break_blocks.items.len - 1];
         _ = wip.br(dest) catch return error.OutOfMemory;
     }
 
     fn emitReturn(self: *MonoLlvmCodeGen, value: LocalId) Error!void {
+        try self.materializeLocalIfDeferred(value);
         const ret_ptr = self.ret_ptr_arg orelse return error.CompilationFailed;
         const size = self.layoutByteSize(self.current_ret_layout);
         if (size > 0) {
@@ -2925,6 +3207,7 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn emitExpect(self: *MonoLlvmCodeGen, condition: LocalId) Error!void {
+        try self.materializeLocalIfDeferred(condition);
         const wip = self.wip orelse return error.CompilationFailed;
         const ok_block = wip.block(0, "expect_ok") catch return error.OutOfMemory;
         const fail_block = wip.block(0, "expect_fail") catch return error.OutOfMemory;
@@ -2997,6 +3280,9 @@ pub const MonoLlvmCodeGen = struct {
     fn copyLocal(self: *MonoLlvmCodeGen, target: LocalId, source: LocalId) Error!void {
         const target_slot = self.slot(target);
         if (target_slot.size == 0) return;
+        if (try self.propagateDeferredStrCapture(target, source)) return;
+        try self.materializeLocalIfDeferred(source);
+        try self.prepareLocalWrite(target);
         try self.copyBytes(target_slot.ptr, self.slot(source).ptr, target_slot.size, target_slot.alignment);
     }
 
@@ -3077,7 +3363,10 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn emitStrCountUtf8Bytes(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
-        const result = try self.emitRocStrLen(self.slot(arg).ptr);
+        const result = if (self.deferredStrCapture(arg)) |capture|
+            try self.deferredStrCaptureLen(capture)
+        else
+            try self.emitRocStrLen(self.slot(arg).ptr);
         try self.storeIntToLayout(self.slot(target).ptr, result, self.localLayout(target));
     }
 
@@ -3286,6 +3575,7 @@ pub const MonoLlvmCodeGen = struct {
     };
 
     fn rocStrArgs1(self: *MonoLlvmCodeGen, arg: LocalId) Error!CallArgs {
+        try self.materializeLocalIfDeferred(arg);
         var result = CallArgs.init();
         const ptr = self.slot(arg).ptr;
         try result.append(self.allocator, try self.ptrType(), try self.loadPointer(ptr));
@@ -4082,6 +4372,16 @@ pub const MonoLlvmCodeGen = struct {
 
         const layout_val = self.layoutValue(slot_v.layout_idx);
         if (!self.layouts().layoutContainsRefcounted(layout_val)) return;
+        if (self.deferredStrCapture(local) != null) {
+            switch (op) {
+                .incref => try self.noteDeferredStrCaptureIncref(local, count, atomicity),
+                .decref,
+                .free,
+                => self.clearDeferredStrCapture(local),
+            }
+            return;
+        }
+        const rc_ptr = slot_v.ptr;
 
         const helper_key: layout.RcHelperKey = if (layout_val.tag == .closure)
             .{
@@ -4096,7 +4396,7 @@ pub const MonoLlvmCodeGen = struct {
             builder.intValue(self.ptrSizedIntType(), count) catch return error.OutOfMemory
         else
             null;
-        try self.emitRcHelperCall(helper_key, atomicity, slot_v.ptr, count_value);
+        try self.emitRcHelperCall(helper_key, atomicity, rc_ptr, count_value);
     }
 
     /// Backend cache key for one generated RC helper. `HelperKey.encode` packs
@@ -4580,6 +4880,11 @@ pub const MonoLlvmCodeGen = struct {
         return self.store.getLocal(local).layout_idx;
     }
 
+    fn isStrLocal(self: *MonoLlvmCodeGen, local: LocalId) bool {
+        const layout_val = self.layoutValue(self.localLayout(local));
+        return layout_val.tag == .scalar and layout_val.getScalar().tag == .str;
+    }
+
     fn slot(self: *MonoLlvmCodeGen, local: LocalId) LocalSlot {
         return self.local_slots[@intFromEnum(local)];
     }
@@ -5032,6 +5337,7 @@ pub const MonoLlvmCodeGen = struct {
         const offsets = try self.computeArgOffsets(arg_layouts, true);
         defer self.allocator.free(offsets);
         for (arg_locals, arg_layouts, offsets) |arg, arg_layout, offset| {
+            try self.materializeLocalIfDeferred(arg);
             const size = self.layoutByteSize(arg_layout);
             if (size == 0) continue;
             try self.copyBytes(try self.offsetPtr(dst_args, offset), self.slot(arg).ptr, size, self.alignmentForLayout(arg_layout));
@@ -5041,6 +5347,7 @@ pub const MonoLlvmCodeGen = struct {
     fn packSequentialArgsFromLocals(self: *MonoLlvmCodeGen, dst_args: LlvmBuilder.Value, arg_locals: []const LocalId, arg_layouts: []const layout.Idx) Error!void {
         var offset: u32 = 0;
         for (arg_locals, arg_layouts) |arg, arg_layout| {
+            try self.materializeLocalIfDeferred(arg);
             const sa = self.sizeAlignOf(arg_layout);
             offset = std.mem.alignForward(u32, offset, @intCast(@max(sa.alignment.toByteUnits(), 1)));
             if (sa.size > 0) {

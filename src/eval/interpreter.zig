@@ -3244,10 +3244,12 @@ pub const Interpreter = struct {
                 cursor = source_bytes.len;
                 break :blk source_bytes.len;
             } else blk: {
-                const found = if (delimiter.len == 0)
-                    cursor
-                else
-                    std.mem.indexOfPos(u8, source_bytes, cursor, delimiter) orelse return str_match.on_miss;
+                const found = if (delimiter.len == 0) cursor else found: {
+                    const candidate = std.mem.indexOfScalarPos(u8, source_bytes, cursor, delimiter[0]) orelse return str_match.on_miss;
+                    if (source_bytes.len - candidate < delimiter.len) return str_match.on_miss;
+                    if (!std.mem.eql(u8, source_bytes[candidate..][0..delimiter.len], delimiter)) return str_match.on_miss;
+                    break :found candidate;
+                };
                 cursor = found + delimiter.len;
                 break :blk found;
             };

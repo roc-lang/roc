@@ -2683,7 +2683,7 @@ const Inserter = struct {
             switch (step.capture) {
                 .discard => {},
                 .local => |local| {
-                    if (self.localContainsRefcounted(local)) {
+                    if (self.localContainsRefcounted(local) and !self.isBindingBorrowed(local)) {
                         count +|= 1;
                     }
                 },

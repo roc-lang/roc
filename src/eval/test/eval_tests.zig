@@ -735,6 +735,20 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "\"miss\"" },
     },
     .{
+        .name = "inspect: string interpolation pattern stops at first delimiter byte",
+        .source_kind = .module,
+        .source =
+        \\describe : Str -> Str
+        \\describe = |s| match s {
+        \\    "foo${bar}baz" => bar
+        \\    _ => "miss"
+        \\}
+        \\
+        \\main = (describe("fooALPHAbaz"), describe("fooALPHAbzzbaz"))
+        ,
+        .expected = .{ .inspect_str = "(\"ALPHA\", \"miss\")" },
+    },
+    .{
         .name = "inspect: string interpolation pattern discard matches suffix",
         .source_kind = .module,
         .source =

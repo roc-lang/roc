@@ -5093,6 +5093,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
         .{ .requests = root_artifact.root_requests.runtime_requests },
         .{
             .target_usize = target_usize,
+            .inline_mode = postCheckInlineModeForOpt(args.opt),
             .list_in_place_map = listInPlaceMapForOpt(args.opt),
             .proc_debug_names = args.synthetic_default_platform,
         },
@@ -6262,7 +6263,7 @@ fn cliTestExecutionMode(opt: cli_args.OptLevel) CliTestExecutionMode {
 
 fn postCheckInlineModeForOpt(opt: cli_args.OptLevel) lir.CheckedPipeline.InlineMode {
     return switch (opt) {
-        .size, .speed => .direct_call_wrappers,
+        .size, .speed => .wrappers,
         .dev, .interpreter => .none,
     };
 }

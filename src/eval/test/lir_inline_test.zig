@@ -135,7 +135,7 @@ fn runLoweredWithHostEvents(
 fn expectOptimizedDbgEvents(source: []const u8, expected: []const []const u8) anyerror!void {
     const allocator = std.testing.allocator;
 
-    var optimized = try lowerModule(allocator, source, .direct_call_wrappers);
+    var optimized = try lowerModule(allocator, source, .wrappers);
     defer optimized.deinit(allocator);
 
     var run = try runLoweredWithHostEvents(allocator, &optimized.lowered);
@@ -251,6 +251,10 @@ fn collectAssignCallProcs(
                     try work.append(allocator, branch.body);
                 }
             },
+            .str_match => |stmt| {
+                try work.append(allocator, stmt.on_match);
+                try work.append(allocator, stmt.on_miss);
+            },
             .join => |stmt| {
                 try work.append(allocator, stmt.body);
                 try work.append(allocator, stmt.remainder);
@@ -274,6 +278,8 @@ const ProcShape = struct {
     arg_count: usize,
     direct_call_count: usize = 0,
     erased_call_count: usize = 0,
+    low_level_count: usize = 0,
+    str_count_utf8_bytes_count: usize = 0,
     self_call_count: usize = 0,
     switch_count: usize = 0,
     join_count: usize = 0,
@@ -319,7 +325,11 @@ fn collectProcShape(
                 try work.append(allocator, stmt.next);
             },
             .assign_packed_erased_fn => |stmt| try work.append(allocator, stmt.next),
-            .assign_low_level => |stmt| try work.append(allocator, stmt.next),
+            .assign_low_level => |stmt| {
+                shape.low_level_count += 1;
+                if (stmt.op == .str_count_utf8_bytes) shape.str_count_utf8_bytes_count += 1;
+                try work.append(allocator, stmt.next);
+            },
             .assign_list => |stmt| try work.append(allocator, stmt.next),
             .assign_struct => |stmt| {
                 shape.struct_assign_count += 1;
@@ -343,6 +353,10 @@ fn collectProcShape(
                 for (lowered.lir_result.store.getCFSwitchBranches(stmt.branches)) |branch| {
                     try work.append(allocator, branch.body);
                 }
+            },
+            .str_match => |stmt| {
+                try work.append(allocator, stmt.on_match);
+                try work.append(allocator, stmt.on_miss);
             },
             .join => |stmt| {
                 shape.join_count += 1;
@@ -673,7 +687,7 @@ fn opaqueLetCallWorkerDuplicatesCall(shape: ProcShape) bool {
 fn expectIterCollectWorkerSpecialized(source: []const u8) anyerror!void {
     const allocator = std.testing.allocator;
 
-    var optimized = try lowerModule(allocator, source, .direct_call_wrappers);
+    var optimized = try lowerModule(allocator, source, .wrappers);
     defer optimized.deinit(allocator);
 
     var unoptimized = try lowerModule(allocator, source, .none);
@@ -741,7 +755,7 @@ test "direct call wrapper is inlined when inline mode is enabled" {
         \\
         \\main : U64
         \\main = wrapper(41)
-    , .direct_call_wrappers, 0);
+    , .wrappers, 0);
 }
 
 test "direct call wrapper is not inlined when inline mode is none" {
@@ -773,7 +787,22 @@ test "zero statement block wrapper is inlined" {
         \\
         \\main : U64
         \\main = wrapper(41)
-    , .direct_call_wrappers, 0);
+    , .wrappers, 0);
+}
+
+test "low level wrapper is inlined when inline mode is enabled" {
+    const allocator = std.testing.allocator;
+    var lowered_source = try lowerModule(allocator,
+        \\module [main]
+        \\
+        \\main : Str -> U64
+        \\main = |str| Str.count_utf8_bytes(str)
+    , .wrappers);
+    defer lowered_source.deinit(allocator);
+
+    const shape = try collectProcShape(allocator, &lowered_source.lowered, try rootProc(&lowered_source.lowered));
+    try std.testing.expectEqual(@as(usize, 0), shape.direct_call_count);
+    try std.testing.expectEqual(@as(usize, 1), shape.str_count_utf8_bytes_count);
 }
 
 test "block wrapper with statements is not inlined" {
@@ -791,7 +820,7 @@ test "block wrapper with statements is not inlined" {
         \\
         \\main : U64
         \\main = wrapper(41)
-    , .direct_call_wrappers);
+    , .wrappers);
 }
 
 test "call value wrapper is not inlined" {
@@ -806,7 +835,7 @@ test "call value wrapper is not inlined" {
         \\
         \\main : U64
         \\main = apply(callee, 41)
-    , .direct_call_wrappers);
+    , .wrappers);
 }
 
 test "self-recursive direct wrapper is not inlined" {
@@ -819,7 +848,7 @@ test "self-recursive direct wrapper is not inlined" {
         \\
         \\main : U64 -> U64
         \\main = |x| wrapper(x)
-    , .direct_call_wrappers);
+    , .wrappers);
     defer lowered_source.deinit(allocator);
 
     // The root still calls the wrapper as a separate proc (not inlined). The
@@ -847,23 +876,31 @@ test "mutually recursive direct wrappers are not inlined" {
         \\
         \\main : U64 -> U64
         \\main = |x| a(x)
-    , .direct_call_wrappers);
+    , .wrappers);
 }
 
 test "capturing direct wrapper is not inlined" {
-    try expectRootTargetHasCalls(
+    const allocator = std.testing.allocator;
+    var lowered_source = try lowerModule(allocator,
         \\module [main]
         \\
         \\callee : U64 -> U64
         \\callee = |x| x + 1
         \\
-        \\main : U64
-        \\main = {
-        \\    offset = 1
+        \\main : U64 -> U64
+        \\main = |offset| {
         \\    wrapper = |x| callee(x + offset)
         \\    wrapper(41)
         \\}
-    , .direct_call_wrappers);
+    , .wrappers);
+    defer lowered_source.deinit(allocator);
+
+    const root_calls = try collectAssignCallProcs(allocator, &lowered_source.lowered, try rootProc(&lowered_source.lowered));
+    defer allocator.free(root_calls);
+
+    try std.testing.expectEqual(@as(usize, 1), root_calls.len);
+    const target_shape = try collectProcShape(allocator, &lowered_source.lowered, root_calls[0]);
+    try std.testing.expectEqual(@as(usize, 2), target_shape.arg_count);
 }
 // ─── TRMC pass outcomes through the full pipeline ───
 
@@ -986,7 +1023,7 @@ test "spec constr does not duplicate opaque let-bound direct calls" {
         \\main = read_twice({ n: 1 })
     ;
 
-    var optimized = try lowerModule(allocator, source, .direct_call_wrappers);
+    var optimized = try lowerModule(allocator, source, .wrappers);
     defer optimized.deinit(allocator);
 
     try std.testing.expect(try reachableProcShape(allocator, &optimized.lowered, opaqueLetCallWorkerDoesNotDuplicateCall));
@@ -1014,7 +1051,7 @@ test "spec constr does not duplicate opaque known-match payloads" {
         \\main = read_twice({ n: 1 })
     ;
 
-    var optimized = try lowerModule(allocator, source, .direct_call_wrappers);
+    var optimized = try lowerModule(allocator, source, .wrappers);
     defer optimized.deinit(allocator);
 
     try std.testing.expect(try reachableProcShape(allocator, &optimized.lowered, opaqueLetCallWorkerDoesNotDuplicateCall));
@@ -1250,7 +1287,7 @@ test "spec constr specializes recursive record state" {
         \\main = sum_record({ n: 4, acc: 0 })
     ;
 
-    var optimized = try lowerModule(allocator, source, .direct_call_wrappers);
+    var optimized = try lowerModule(allocator, source, .wrappers);
     defer optimized.deinit(allocator);
 
     var unoptimized = try lowerModule(allocator, source, .none);
@@ -1287,7 +1324,7 @@ test "spec constr specializes record state carried by while loop" {
         \\main = sum_from({ n: 4 })
     ;
 
-    var optimized = try lowerModule(allocator, source, .direct_call_wrappers);
+    var optimized = try lowerModule(allocator, source, .wrappers);
     defer optimized.deinit(allocator);
 
     var unoptimized = try lowerModule(allocator, source, .none);
@@ -1320,7 +1357,7 @@ test "spec constr specializes recursive tuple state" {
         \\main = sum_tuple((4, 0))
     ;
 
-    var optimized = try lowerModule(allocator, source, .direct_call_wrappers);
+    var optimized = try lowerModule(allocator, source, .wrappers);
     defer optimized.deinit(allocator);
 
     var unoptimized = try lowerModule(allocator, source, .none);
@@ -1351,7 +1388,7 @@ test "spec constr leaves uninspected constructor arguments generic" {
         \\main = unused_state({ n: 0 }, 3)
     ;
 
-    var optimized = try lowerModule(allocator, source, .direct_call_wrappers);
+    var optimized = try lowerModule(allocator, source, .wrappers);
     defer optimized.deinit(allocator);
 
     var unoptimized = try lowerModule(allocator, source, .none);
@@ -1388,7 +1425,7 @@ test "spec constr specializes tagged recursive state" {
         \\main = count_down(More(4), 0)
     ;
 
-    var optimized = try lowerModule(allocator, source, .direct_call_wrappers);
+    var optimized = try lowerModule(allocator, source, .wrappers);
     defer optimized.deinit(allocator);
 
     var unoptimized = try lowerModule(allocator, source, .none);
@@ -1421,7 +1458,7 @@ test "spec constr uses fully known entry shape for multiple tuple states" {
         \\main = roman(4, (1, 2), (3, 4))
     ;
 
-    var optimized = try lowerModule(allocator, source, .direct_call_wrappers);
+    var optimized = try lowerModule(allocator, source, .wrappers);
     defer optimized.deinit(allocator);
 
     var unoptimized = try lowerModule(allocator, source, .none);
@@ -1517,7 +1554,7 @@ test "LIR statements carry source locations under optimizing inline mode" {
         \\}
     ;
 
-    var lowered_source = try lowerModule(allocator, source, .direct_call_wrappers);
+    var lowered_source = try lowerModule(allocator, source, .wrappers);
     defer lowered_source.deinit(allocator);
 
     const store = &lowered_source.lowered.lir_result.store;
