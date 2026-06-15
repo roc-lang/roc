@@ -90,6 +90,7 @@ const Symbols = struct {
     score_tree_list: Symbol,
     generic_id: Symbol,
     generic_choose: Symbol,
+    score_iter: Symbol,
 };
 
 pub fn init(allocator: std.mem.Allocator, reader: *FuzzReader) Self {
@@ -201,6 +202,7 @@ pub fn generate(self: *Self) std.mem.Allocator.Error!void {
         .score_tree_list = self.fresh(.function),
         .generic_id = self.fresh(.function),
         .generic_choose = self.fresh(.function),
+        .score_iter = self.fresh(.function),
     };
 
     try self.setFileNames(app_file, platform_file, module_file);
@@ -579,6 +581,7 @@ fn writeTopLevelFunctions(self: *Self) std.mem.Allocator.Error!void {
     try self.writeDescribeTry();
     try self.writeTreeScoring();
     try self.writeGenericHelpers();
+    try self.writeIteratorScoring();
 }
 
 fn writeMakeItem(self: *Self) std.mem.Allocator.Error!void {
@@ -1356,6 +1359,89 @@ fn writeGenericHelpers(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppText("\n\n");
 }
 
+fn writeIteratorScoring(self: *Self) std.mem.Allocator.Error!void {
+    const items = self.fresh(.value);
+    const seed = self.fresh(.value);
+    const ids = self.fresh(.value);
+    const map_item = self.fresh(.value);
+    const base = self.fresh(.value);
+    const any_id = self.fresh(.value);
+    const keep_id = self.fresh(.value);
+    const map_id = self.fresh(.value);
+    const acc = self.fresh(.value);
+    const folded_id = self.fresh(.value);
+
+    try self.writeAppSymbol(self.symbols.score_iter);
+    try self.writeAppText(" : List(");
+    try self.writeAppSymbol(self.symbols.item_type);
+    try self.writeAppText("), U64 -> U64\n");
+    try self.writeAppSymbol(self.symbols.score_iter);
+    try self.writeAppText(" = |");
+    try self.writeAppSymbol(items);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText("| {\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(ids);
+    try self.writeAppText(" : List(U64)\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(ids);
+    try self.writeAppText(" = List.map(");
+    try self.writeAppSymbol(items);
+    try self.writeAppText(", |");
+    try self.writeAppSymbol(map_item);
+    try self.writeAppText("| ");
+    try self.writeAppSymbol(map_item);
+    try self.writeAppText(".");
+    try self.writeAppSymbol(self.symbols.item_id);
+    try self.writeAppText(")\n");
+
+    try self.writeIndent(1);
+    try self.writeAppSymbol(base);
+    try self.writeAppText(" : U64\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(base);
+    try self.writeAppText(" = if List.any(");
+    try self.writeAppSymbol(ids);
+    try self.writeAppText(", |");
+    try self.writeAppSymbol(any_id);
+    try self.writeAppText("| ");
+    try self.writeAppSymbol(any_id);
+    try self.writeAppText(" == ");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText(") ");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText(" else 0\n");
+
+    try self.writeIndent(1);
+    try self.writeAppText("Iter.fold(Iter.map(Iter.keep_if(");
+    try self.writeAppSymbol(ids);
+    try self.writeAppText(".iter(), |");
+    try self.writeAppSymbol(keep_id);
+    try self.writeAppText("| ");
+    try self.writeAppSymbol(self.symbols.is_even);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(keep_id);
+    try self.writeAppText(")), |");
+    try self.writeAppSymbol(map_id);
+    try self.writeAppText("| ");
+    try self.writeAppSymbol(map_id);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(seed);
+    try self.writeAppText("), ");
+    try self.writeAppSymbol(base);
+    try self.writeAppText(", |");
+    try self.writeAppSymbol(acc);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(folded_id);
+    try self.writeAppText("| ");
+    try self.writeAppSymbol(acc);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(folded_id);
+    try self.writeAppText(")\n}\n\n");
+}
+
 fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     const input = self.fresh(.value);
     const first = self.fresh(.value);
@@ -1372,6 +1458,7 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     const generic_text = self.fresh(.value);
     const generic_item = self.fresh(.value);
     const generic_items = self.fresh(.value);
+    const iter_score = self.fresh(.value);
     const imported_record = self.fresh(.value);
     const alternate_imported = self.fresh(.value);
     const generic_imported = self.fresh(.value);
@@ -1566,6 +1653,19 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppSymbol(transformed);
     try self.writeAppText(")\n");
 
+    try self.writeIndent(1);
+    try self.writeAppSymbol(iter_score);
+    try self.writeAppText(" : U64\n");
+    try self.writeIndent(1);
+    try self.writeAppSymbol(iter_score);
+    try self.writeAppText(" = ");
+    try self.writeAppSymbol(self.symbols.score_iter);
+    try self.writeAppText("(");
+    try self.writeAppSymbol(generic_items);
+    try self.writeAppText(", ");
+    try self.writeAppSymbol(generic_num);
+    try self.writeAppText(")\n");
+
     try self.writeLocalHeader(imported_record, self.symbols.imported_type);
     try self.writeAppSymbol(self.symbols.imported_type);
     try self.writeAppText(".");
@@ -1576,6 +1676,8 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppSymbol(pair_score);
     try self.writeAppText(" + ");
     try self.writeAppSymbol(generic_num);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(iter_score);
     try self.writeAppText(", ");
     try self.writeAppSymbol(generic_text);
     try self.writeAppText(")\n");
@@ -1683,6 +1785,8 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppText(" + ");
     try self.writeAppSymbol(try_score);
     try self.writeAppText(" + ");
+    try self.writeAppSymbol(iter_score);
+    try self.writeAppText(" + ");
     try self.writeAppSymbol(imported_score);
     try self.writeAppText(" + ");
     try self.writeAppSymbol(tree_score);
@@ -1705,6 +1809,8 @@ fn writeEntryPoint(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppSymbol(pair_score);
     try self.writeAppText(" + ");
     try self.writeAppSymbol(try_score);
+    try self.writeAppText(" + ");
+    try self.writeAppSymbol(iter_score);
     try self.writeAppText(" + ");
     try self.writeAppSymbol(imported_score);
     try self.writeAppText(" + ");
