@@ -55,7 +55,6 @@ x = {
 ~~~
 # EXPECTED
 MISSING METHOD - multiline_string_complex.md:40:5:40:8
-MISSING METHOD - multiline_string_complex.md:37:3:37:9
 TYPE MISMATCH - multiline_string_complex.md:37:3:37:4
 # PROBLEMS
 **MISSING METHOD**
@@ -72,38 +71,21 @@ The value's type, which does not have a method named **not**, is:
 
 **Hint:** For this to work, the type would need to have a method named **not** associated with it in the type's declaration.
 
-**MISSING METHOD**
-The value before this **-** operator has a type that doesn't have a **minus** method:
-**multiline_string_complex.md:37:3:37:9:**
-```roc
-		0 - \\
-```
-		^^^^^^
-
-The value's type, which does not have a method named **minus**, is:
-
-    Str
-
-**Hint:** This numeric literal was given the type **Dec** because it was never used as any concrete number type. To use a different numeric type, add a suffix or a type annotation.
-
 **TYPE MISMATCH**
-This number is being used where a non-number type is needed:
+The `minus` method on `Dec` has an incompatible type:
 **multiline_string_complex.md:37:3:37:4:**
 ```roc
 		0 - \\
 ```
 		^
 
-The type was determined to be non-numeric here:
-**multiline_string_complex.md:1:1:1:1:**
-```roc
-package
-```
-^
+The method `minus` has the type:
 
-Other code expects this to have the type:
+    Dec, Dec -> Dec
 
-    Error
+But I need it to have the type:
+
+    Dec, Str -> Dec
 
 # TOKENS
 ~~~zig

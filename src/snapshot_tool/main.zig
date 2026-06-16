@@ -2649,15 +2649,11 @@ fn getDefaultedTypeStringWithSeen(
     defer _ = seen.pop();
 
     switch (resolved.desc.content) {
-        .flex => |flex| {
-            // Check if this flex var has a from_numeral constraint
-            const constraints = can_ir.types.sliceStaticDispatchConstraints(flex.constraints);
-            for (constraints) |constraint| {
-                if (constraint.origin == .from_numeral) {
-                    return allocator.dupe(u8, "Dec");
-                }
-            }
-            // No numeral constraint - fall through to TypeWriter
+        .flex => {
+            // Fall through to TypeWriter. `finalizeLiteralDefaults` already
+            // committed concrete `Dec` to the store for any defaulted numeral
+            // before MONO renders, so the live store is the source of truth —
+            // no display-time `Dec` substitution is needed here.
         },
         .structure => |flat_type| {
             switch (flat_type) {
@@ -2763,13 +2759,9 @@ fn getDefaultedTypeStringWithSeen(
         else => {},
     }
 
-    // Use TypeWriter for all other cases - it has proper cycle detection
+    // Use TypeWriter for all other cases - it has proper cycle detection.
     var type_writer = try can_ir.initTypeWriter();
     defer type_writer.deinit();
-
-    // Enable numeral defaulting for MONO output - flex vars with from_numeral
-    // constraint should display as "Dec" instead of showing the constraint
-    type_writer.setDefaultNumeralsToDec(true);
 
     if (is_top_level) {
         try type_writer.write(type_var, .one_line);

@@ -199,10 +199,10 @@ DECLARATION HAS NO VALUE - fuzz_crash_020.md:74:1:74:22
 MISSING METHOD - fuzz_crash_020.md:86:11:86:17
 TYPE MISMATCH - fuzz_crash_020.md:98:4:104:3
 TYPE MISMATCH - fuzz_crash_020.md:105:2:105:54
+TYPE MISMATCH - fuzz_crash_020.md:93:22:93:24
 DECLARATION HAS NO VALUE - fuzz_crash_020.md:113:1:113:7
 DECLARATION HAS NO VALUE - fuzz_crash_020.md:116:1:116:13
 TYPE MISMATCH - fuzz_crash_020.md:119:2:119:10
-TYPE MISMATCH - fuzz_crash_020.md:77:11:77:14
 MISSING METHOD - fuzz_crash_020.md:105:55:105:66
 MISSING METHOD - fuzz_crash_020.md:105:55:105:72
 # PROBLEMS
@@ -1056,6 +1056,22 @@ It has the type:
 Since this expression is used as a statement, it must evaluate to `{}`.
 If you don't need the value, you can ignore it with `_ =`.
 
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**fuzz_crash_020.md:93:22:93:24:**
+```roc
+	line!("Ag ${n} to ${er}")
+```
+	                    ^^
+
+It has the type:
+
+    Dec
+
+But you are trying to use it as:
+
+    Str
+
 **DECLARATION HAS NO VALUE**
 This declaration has a type annotation but no implementation.
 **fuzz_crash_020.md:113:1:113:7:**
@@ -1092,25 +1108,6 @@ It has the type:
 
 Since this expression is used as a statement, it must evaluate to `{}`.
 If you don't need the value, you can ignore it with `_ =`.
-
-**TYPE MISMATCH**
-This number is being used where a non-number type is needed:
-**fuzz_crash_020.md:77:11:77:14:**
-```roc
-	var er = 123
-```
-	         ^^^
-
-The type was determined to be non-numeric here:
-**fuzz_crash_020.md:93:22:93:24:**
-```roc
-	line!("Ag ${n} to ${er}")
-```
-	                    ^^
-
-Other code expects this to have the type:
-
-    Str
 
 **MISSING METHOD**
 This is trying to dispatch a method named `od` on an unresolved type variable, but unresolved type variables have no methods.
@@ -1912,7 +1909,7 @@ expect {
 				(s-expr
 					(e-not-implemented))
 				(s-expr
-					(e-call (constraint-fn-var 1439)
+					(e-call (constraint-fn-var 2219)
 						(e-lookup-local
 							(p-assign (ident "me")))
 						(e-not-implemented)))
@@ -1960,7 +1957,7 @@ expect {
 										(p-assign (ident "#interp_2"))
 										(e-lookup-local
 											(p-assign (ident "er"))))
-									(e-interpolation (constraint-fn-var 1714)
+									(e-interpolation (constraint-fn-var 2494)
 										(first
 											(e-literal (string "Ag ")))
 										(parts
@@ -1970,7 +1967,7 @@ expect {
 											(e-lookup-local
 												(p-assign (ident "#interp_2")))
 											(e-literal (string "")))))))
-						(e-dispatch-call (method "plus") (constraint-fn-var 1717)
+						(e-dispatch-call (method "plus") (constraint-fn-var 2497)
 							(receiver
 								(e-runtime-error (tag "ident_not_in_scope")))
 							(args
@@ -2034,7 +2031,7 @@ expect {
 					(e-if
 						(if-branches
 							(if-branch
-								(e-dispatch-call (method "is_gt") (constraint-fn-var 2121)
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 2901)
 									(receiver
 										(e-match
 											(match
@@ -2068,18 +2065,18 @@ expect {
 										(e-if
 											(if-branches
 												(if-branch
-													(e-dispatch-call (method "is_lt") (constraint-fn-var 2229)
+													(e-dispatch-call (method "is_lt") (constraint-fn-var 3009)
 														(receiver
-															(e-dispatch-call (method "plus") (constraint-fn-var 2194)
+															(e-dispatch-call (method "plus") (constraint-fn-var 2974)
 																(receiver
 																	(e-num (value "13")))
 																(args
 																	(e-num (value "2")))))
 														(args
 															(e-num (value "5"))))
-													(e-dispatch-call (method "is_gte") (constraint-fn-var 2329)
+													(e-dispatch-call (method "is_gte") (constraint-fn-var 3109)
 														(receiver
-															(e-dispatch-call (method "minus") (constraint-fn-var 2294)
+															(e-dispatch-call (method "minus") (constraint-fn-var 3074)
 																(receiver
 																	(e-num (value "10")))
 																(args
@@ -2094,7 +2091,7 @@ expect {
 											(builtin)
 											(e-tag (name "True")))))
 								(if-else
-									(e-dispatch-call (method "is_lte") (constraint-fn-var 2407)
+									(e-dispatch-call (method "is_lte") (constraint-fn-var 3187)
 										(receiver
 											(e-num (value "12")))
 										(args
@@ -2108,12 +2105,12 @@ expect {
 										(e-match
 											(match
 												(cond
-													(e-dispatch-call (method "ned") (constraint-fn-var 2474)
+													(e-dispatch-call (method "ned") (constraint-fn-var 3254)
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dispatch-call (method "od") (constraint-fn-var 2441)
+																		(e-dispatch-call (method "od") (constraint-fn-var 3221)
 																			(receiver
 																				(e-match
 																					(match

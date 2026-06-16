@@ -15,7 +15,7 @@ result = func(42)
 # MONO
 ~~~roc
 func = |x| {
-	add_x = |y| x.plus(y)
+	add_x = |y| x + y
 	add_x(10)
 }
 
@@ -98,7 +98,7 @@ EndOfFile,
 					(e-num (value "10"))))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-call (constraint-fn-var 97)
+		(e-call (constraint-fn-var 170)
 			(e-lookup-local
 				(p-assign (ident "func")))
 			(e-num (value "42")))))

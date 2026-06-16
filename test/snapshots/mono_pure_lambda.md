@@ -16,7 +16,7 @@ result = add_one(5)
 one : Dec
 one = 1
 
-add_one = |x| x.plus(one)
+add_one = |x| x + one
 
 result : Dec
 result = add_one(5)

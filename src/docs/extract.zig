@@ -1664,22 +1664,29 @@ fn extractDocTypeInner(
 
     switch (resolved.desc.content) {
         .flex => |flex| {
-            // Check for from_numeral constraint -> default to Dec
+            // Check for a from_literal constraint -> default to the literal
+            // kind's default type (numeral -> Dec, quote -> Str)
             const constraints = types.sliceStaticDispatchConstraints(flex.constraints);
-            var has_numeral = false;
+            var literal_kind: ?types_mod.StaticDispatchConstraint.LiteralKind = null;
             for (constraints) |constraint| {
-                if (constraint.origin == .from_numeral) {
-                    has_numeral = true;
+                if (constraint.origin.literalKind()) |kind| {
+                    literal_kind = kind;
                     break;
                 }
             }
 
-            if (has_numeral) {
-                // Default numeral types to Dec for display
-                return try allocDocType(gpa, .{ .type_ref = .{
-                    .module_path = try gpa.dupe(u8, "Num"),
-                    .type_name = try gpa.dupe(u8, "Dec"),
-                } });
+            if (literal_kind) |kind| {
+                // Default open literal types for display
+                return switch (kind) {
+                    .numeral => try allocDocType(gpa, .{ .type_ref = .{
+                        .module_path = try gpa.dupe(u8, "Num"),
+                        .type_name = try gpa.dupe(u8, "Dec"),
+                    } }),
+                    .quote, .interpolation => try allocDocType(gpa, .{ .type_ref = .{
+                        .module_path = try gpa.dupe(u8, ""),
+                        .type_name = try gpa.dupe(u8, "Str"),
+                    } }),
+                };
             }
 
             // Get the variable name
@@ -1690,7 +1697,7 @@ fn extractDocTypeInner(
 
             // Collect non-numeral constraints for where clause
             for (constraints) |constraint| {
-                if (constraint.origin != .from_numeral) {
+                if (constraint.origin != .from_literal) {
                     const dispatcher_name = if (flex.name) |ident_idx| idents.getText(ident_idx) else var_name;
                     try ctx.constraints_list.append(gpa, .{
                         .dispatcher_name = dispatcher_name,
@@ -1922,7 +1929,7 @@ fn extractRecord(
                 if (constraints.len > 0) {
                     const dispatcher_name = if (ident_text) |t| t else try ctx.getFlexVarName(ext_resolved.var_);
                     for (constraints) |constraint| {
-                        if (constraint.origin != .from_numeral) {
+                        if (constraint.origin != .from_literal) {
                             try ctx.constraints_list.append(gpa, .{
                                 .dispatcher_name = dispatcher_name,
                                 .fn_name_text = idents.getText(constraint.fn_name),

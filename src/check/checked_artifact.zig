@@ -2543,8 +2543,8 @@ pub const CheckedTypeStore = struct {
                 .fn_name = constraint.fn_name,
                 .fn_ty = try self.cloneCheckedTypeRootSubstituting(allocator, names, constraint.fn_ty, formals, actuals, active),
                 .origin = constraint.origin,
-                .binop_negated = constraint.binop_negated,
-                .num_literal = constraint.num_literal,
+                .binop_negated = constraint.origin.binopNegated(),
+                .num_literal = constraint.origin.numeralInfo(),
             };
         }
         return out;
@@ -4191,8 +4191,13 @@ fn numericDefaultPhaseForConstraints(
     const constraints = module.typeStoreConst().sliceStaticDispatchConstraints(constraints_range);
     var has_str_defaultable_literal = false;
     for (constraints) |constraint| {
-        if (constraint.origin == .from_numeral) return .mono_specialization;
-        if (constraint.origin == .from_quote or constraint.origin == .from_interpolation) has_str_defaultable_literal = true;
+        switch (constraint.origin) {
+            .from_literal => |lit| switch (lit) {
+                .numeral => return .mono_specialization,
+                .quote, .interpolation => has_str_defaultable_literal = true,
+            },
+            else => {},
+        }
         if (isDefaultableArithmeticConstraint(module, constraint)) return .mono_specialization;
     }
     if (has_str_defaultable_literal) return .mono_specialization_str;
@@ -4212,9 +4217,7 @@ fn isDefaultableArithmeticConstraint(
             constraint.fn_name.eql(idents.div_trunc_by) or
             constraint.fn_name.eql(idents.rem_by),
         .desugared_unaryop => constraint.fn_name.eql(idents.negate),
-        .from_numeral,
-        .from_quote,
-        .from_interpolation,
+        .from_literal,
         .method_call,
         .where_clause,
         => false,
@@ -4381,8 +4384,8 @@ fn copyCheckedStaticDispatchConstraints(
             .fn_name = try names.internMethodIdent(module.identStoreConst(), constraint.fn_name),
             .fn_ty = try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, constraint.fn_var),
             .origin = constraint.origin,
-            .binop_negated = constraint.binop_negated,
-            .num_literal = constraint.num_literal,
+            .binop_negated = constraint.origin.binopNegated(),
+            .num_literal = constraint.origin.numeralInfo(),
         };
     }
     return out;
@@ -16534,8 +16537,8 @@ pub const CheckedTypeProjector = struct {
                 .fn_name = try self.remapViewMethodName(source_names, constraint.fn_name),
                 .fn_ty = try self.projectCheckedTypeViewRootInner(source, source_names, constraint.fn_ty, active),
                 .origin = constraint.origin,
-                .binop_negated = constraint.binop_negated,
-                .num_literal = constraint.num_literal,
+                .binop_negated = constraint.origin.binopNegated(),
+                .num_literal = constraint.origin.numeralInfo(),
             };
         }
         return out;
@@ -16786,8 +16789,8 @@ pub const CheckedTypeProjector = struct {
                 .fn_name = try self.remapMethodName(imported, constraint.fn_name),
                 .fn_ty = try self.projectImportedCheckedType(imported, constraint.fn_ty),
                 .origin = constraint.origin,
-                .binop_negated = constraint.binop_negated,
-                .num_literal = constraint.num_literal,
+                .binop_negated = constraint.origin.binopNegated(),
+                .num_literal = constraint.origin.numeralInfo(),
             };
         }
         return out;
@@ -17089,8 +17092,8 @@ const CheckedTypeStoreImportProjector = struct {
                 .fn_name = try self.remapMethodName(constraint.fn_name),
                 .fn_ty = try self.project(constraint.fn_ty),
                 .origin = constraint.origin,
-                .binop_negated = constraint.binop_negated,
-                .num_literal = constraint.num_literal,
+                .binop_negated = constraint.origin.binopNegated(),
+                .num_literal = constraint.origin.numeralInfo(),
             };
         }
         return out;
