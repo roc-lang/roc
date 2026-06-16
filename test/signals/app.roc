@@ -1,4 +1,4 @@
-app [Shim, program] { pf: platform "./platform/main.roc" }
+app [BoundaryPayload, program] { pf: platform "./platform/main.roc" }
 
 import pf.Elem
 import pf.NodeValue exposing [NodeValue]
@@ -318,17 +318,17 @@ main! = || {
 	Elem.run_component!(App.init({}), App.render!)
 }
 
-Shim : { model : App, item : Item, items : List(Item) }
+BoundaryPayload : { model : App, item : Item, items : List(Item) }
 
 program = {
 	main!,
-	init_shim: |_| {
+	init_boundary_payload: |_| {
 		model: App.init({}),
 		item: Item.make("a", "Alpha changed"),
 		items: [Item.make("a", "Alpha"), Item.make("b", "Beta")],
 	},
-	shim_total: |payload| payload.model.left.count + payload.model.right.count,
-	shim_item_key: |payload| payload.item.id,
-	shim_item_label: |payload| payload.item.label,
-	shim_items_len: |payload| List.len(payload.items),
+	boundary_payload_total: |payload| payload.model.left.count + payload.model.right.count,
+	boundary_payload_item_key: |payload| payload.item.id,
+	boundary_payload_item_label: |payload| payload.item.label,
+	boundary_payload_items_len: |payload| List.len(payload.items),
 }

@@ -1,12 +1,12 @@
 platform ""
 	requires {
-		[Shim : shim] for program : {
+		[BoundaryPayload : boundary_payload] for program : {
 			main! : () => {},
-			init_shim : {} -> shim,
-			shim_total : shim -> I64,
-			shim_item_key : shim -> Str,
-			shim_item_label : shim -> Str,
-			shim_items_len : shim -> U64,
+			init_boundary_payload : {} -> boundary_payload,
+			boundary_payload_total : boundary_payload -> I64,
+			boundary_payload_item_key : boundary_payload -> Str,
+			boundary_payload_item_label : boundary_payload -> Str,
+			boundary_payload_items_len : boundary_payload -> U64,
 		}
 	}
 	exposes [Reactive, Elem, NodeValue, Graph]
@@ -16,11 +16,12 @@ platform ""
 		"roc_call_transform": call_transform,
 		"roc_call_step": call_step,
 		"roc_call_predicate": call_predicate,
-		"roc_shim_payload_init": shim_payload_init,
-		"roc_shim_payload_total": shim_payload_total,
-		"roc_shim_payload_item_key": shim_payload_item_key,
-		"roc_shim_payload_item_label": shim_payload_item_label,
-		"roc_shim_payload_items_len": shim_payload_items_len,
+		"roc_boundary_payload_init": boundary_payload_init,
+		"roc_boundary_payload_total": boundary_payload_total,
+		"roc_boundary_payload_item_key": boundary_payload_item_key,
+		"roc_boundary_payload_item_label": boundary_payload_item_label,
+		"roc_boundary_payload_items_len": boundary_payload_items_len,
+		"roc_boundary_payload_drop": boundary_payload_drop,
 	}
 	hosted {
 		"roc_host_append_child": Host.append_child!,
@@ -94,29 +95,35 @@ call_predicate = |boxed_pred, input| {
 	pred(input)
 }
 
-shim_payload_init : {} -> Box(Shim)
-shim_payload_init = |_| Box.box((program.init_shim)({}))
+boundary_payload_init : {} -> Box(BoundaryPayload)
+boundary_payload_init = |_| Box.box((program.init_boundary_payload)({}))
 
-shim_payload_total : Box(Shim) -> I64
-shim_payload_total = |boxed_payload| {
+boundary_payload_total : Box(BoundaryPayload) -> I64
+boundary_payload_total = |boxed_payload| {
 	payload = Box.unbox(boxed_payload)
-	(program.shim_total)(payload)
+	(program.boundary_payload_total)(payload)
 }
 
-shim_payload_item_key : Box(Shim) -> Str
-shim_payload_item_key = |boxed_payload| {
+boundary_payload_item_key : Box(BoundaryPayload) -> Str
+boundary_payload_item_key = |boxed_payload| {
 	payload = Box.unbox(boxed_payload)
-	(program.shim_item_key)(payload)
+	(program.boundary_payload_item_key)(payload)
 }
 
-shim_payload_item_label : Box(Shim) -> Str
-shim_payload_item_label = |boxed_payload| {
+boundary_payload_item_label : Box(BoundaryPayload) -> Str
+boundary_payload_item_label = |boxed_payload| {
 	payload = Box.unbox(boxed_payload)
-	(program.shim_item_label)(payload)
+	(program.boundary_payload_item_label)(payload)
 }
 
-shim_payload_items_len : Box(Shim) -> U64
-shim_payload_items_len = |boxed_payload| {
+boundary_payload_items_len : Box(BoundaryPayload) -> U64
+boundary_payload_items_len = |boxed_payload| {
 	payload = Box.unbox(boxed_payload)
-	(program.shim_items_len)(payload)
+	(program.boundary_payload_items_len)(payload)
+}
+
+boundary_payload_drop : Box(BoundaryPayload) -> {}
+boundary_payload_drop = |boxed_payload| {
+	_ = Box.unbox(boxed_payload)
+	{}
 }

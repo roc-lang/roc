@@ -540,8 +540,8 @@ pub const RocEnv = struct {
 
 /// Element type for __AnonStruct4
 pub const __AnonStruct4 = extern struct {
-    @"_0": NodeValue,
-    @"_1": u64,
+    _0: NodeValue,
+    _1: u64,
 };
 
 comptime {
@@ -553,8 +553,8 @@ comptime {
 
 /// Element type for __AnonStruct27
 pub const __AnonStruct27 = extern struct {
-    @"_0": NodeValue,
-    @"_1": NodeValue,
+    _0: NodeValue,
+    _1: NodeValue,
 };
 
 comptime {
@@ -566,8 +566,8 @@ comptime {
 
 /// Element type for __AnonStruct30
 pub const __AnonStruct30 = extern struct {
-    @"_0": i64,
-    @"_1": i64,
+    _0: i64,
+    _1: i64,
 };
 
 comptime {
@@ -579,18 +579,18 @@ comptime {
 
 /// Element type for __AnonStruct37
 pub const __AnonStruct37 = extern struct {
-    @"init_shim": *anyopaque,
+    boundary_payload_item_key: *anyopaque,
+    boundary_payload_item_label: *anyopaque,
+    boundary_payload_items_len: *anyopaque,
+    boundary_payload_total: *anyopaque,
+    init_boundary_payload: *anyopaque,
     @"main!": *anyopaque,
-    @"shim_item_key": *anyopaque,
-    @"shim_item_label": *anyopaque,
-    @"shim_items_len": *anyopaque,
-    @"shim_total": *anyopaque,
 };
 
 /// Element type for __AnonStruct59
 pub const __AnonStruct59 = extern struct {
-    @"_0": NodeValue,
-    @"_1": NodeValue,
+    _0: NodeValue,
+    _1: NodeValue,
 };
 
 comptime {
@@ -893,12 +893,12 @@ pub const HostSet_textArgs = extern struct {
 
 /// Recursively decrement Roc-owned fields in __AnonStruct4.
 pub fn decref__AnonStruct4(value: __AnonStruct4, roc_ops: *RocOps) void {
-    decrefNodeValue(value.@"_0", roc_ops);
+    decrefNodeValue(value._0, roc_ops);
 }
 
 /// Increment Roc-owned fields in __AnonStruct4.
 pub fn incref__AnonStruct4(value: __AnonStruct4, amount: isize) void {
-    increfNodeValue(value.@"_0", amount);
+    increfNodeValue(value._0, amount);
 }
 
 /// Recursively decrement Roc-owned payloads in NodeValue.
@@ -908,18 +908,18 @@ pub fn decrefNodeValue(value: NodeValue, roc_ops: *RocOps) void {
         .NvF64 => {},
         .NvI64 => {},
         .NvList => {
-        {
-            const list = value.payload.nv_list;
-            if (list.isUnique()) {
-                for (list.items()) |item| {
+            {
+                const list = value.payload.nv_list;
+                if (list.isUnique()) {
+                    for (list.items()) |item| {
                         decrefNodeValue(item, roc_ops);
+                    }
                 }
+                list.decref(roc_ops);
             }
-            list.decref(roc_ops);
-        }
         },
         .NvStr => {
-        value.payload.nv_str.decref(roc_ops);
+            value.payload.nv_str.decref(roc_ops);
         },
         .NvUnit => {},
     }
@@ -932,10 +932,10 @@ pub fn increfNodeValue(value: NodeValue, amount: isize) void {
         .NvF64 => {},
         .NvI64 => {},
         .NvList => {
-        value.payload.nv_list.incref(amount);
+            value.payload.nv_list.incref(amount);
         },
         .NvStr => {
-        value.payload.nv_str.incref(amount);
+            value.payload.nv_str.incref(amount);
         },
         .NvUnit => {},
     }
@@ -943,14 +943,14 @@ pub fn increfNodeValue(value: NodeValue, amount: isize) void {
 
 /// Recursively decrement Roc-owned fields in __AnonStruct27.
 pub fn decref__AnonStruct27(value: __AnonStruct27, roc_ops: *RocOps) void {
-    decrefNodeValue(value.@"_0", roc_ops);
-    decrefNodeValue(value.@"_1", roc_ops);
+    decrefNodeValue(value._0, roc_ops);
+    decrefNodeValue(value._1, roc_ops);
 }
 
 /// Increment Roc-owned fields in __AnonStruct27.
 pub fn incref__AnonStruct27(value: __AnonStruct27, amount: isize) void {
-    increfNodeValue(value.@"_0", amount);
-    increfNodeValue(value.@"_1", amount);
+    increfNodeValue(value._0, amount);
+    increfNodeValue(value._1, amount);
 }
 
 /// Recursively decrement Roc-owned fields in __AnonStruct37.
@@ -967,14 +967,14 @@ pub fn incref__AnonStruct37(value: __AnonStruct37, amount: isize) void {
 
 /// Recursively decrement Roc-owned fields in __AnonStruct59.
 pub fn decref__AnonStruct59(value: __AnonStruct59, roc_ops: *RocOps) void {
-    decrefNodeValue(value.@"_0", roc_ops);
-    decrefNodeValue(value.@"_1", roc_ops);
+    decrefNodeValue(value._0, roc_ops);
+    decrefNodeValue(value._1, roc_ops);
 }
 
 /// Increment Roc-owned fields in __AnonStruct59.
 pub fn incref__AnonStruct59(value: __AnonStruct59, amount: isize) void {
-    increfNodeValue(value.@"_0", amount);
-    increfNodeValue(value.@"_1", amount);
+    increfNodeValue(value._0, amount);
+    increfNodeValue(value._1, amount);
 }
 
 /// Implement this struct with your hosted function implementations.
@@ -1218,18 +1218,20 @@ pub extern fn roc_call_step(arg0: RocErasedCallable, arg1: NodeValue, arg2: Node
 /// Entrypoint: call_predicate
 pub extern fn roc_call_predicate(arg0: RocErasedCallable, arg1: NodeValue) callconv(.c) bool;
 
-/// Entrypoint: shim_payload_init
-pub extern fn roc_shim_payload_init() callconv(.c) *anyopaque;
+/// Entrypoint: boundary_payload_init
+pub extern fn roc_boundary_payload_init() callconv(.c) *anyopaque;
 
-/// Entrypoint: shim_payload_total
-pub extern fn roc_shim_payload_total(arg0: *anyopaque) callconv(.c) i64;
+/// Entrypoint: boundary_payload_total
+pub extern fn roc_boundary_payload_total(arg0: *anyopaque) callconv(.c) i64;
 
-/// Entrypoint: shim_payload_item_key
-pub extern fn roc_shim_payload_item_key(arg0: *anyopaque) callconv(.c) RocStr;
+/// Entrypoint: boundary_payload_item_key
+pub extern fn roc_boundary_payload_item_key(arg0: *anyopaque) callconv(.c) RocStr;
 
-/// Entrypoint: shim_payload_item_label
-pub extern fn roc_shim_payload_item_label(arg0: *anyopaque) callconv(.c) RocStr;
+/// Entrypoint: boundary_payload_item_label
+pub extern fn roc_boundary_payload_item_label(arg0: *anyopaque) callconv(.c) RocStr;
 
-/// Entrypoint: shim_payload_items_len
-pub extern fn roc_shim_payload_items_len(arg0: *anyopaque) callconv(.c) u64;
+/// Entrypoint: boundary_payload_items_len
+pub extern fn roc_boundary_payload_items_len(arg0: *anyopaque) callconv(.c) u64;
 
+/// Entrypoint: boundary_payload_drop
+pub extern fn roc_boundary_payload_drop(arg0: *anyopaque) callconv(.c) void;

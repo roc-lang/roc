@@ -3,7 +3,7 @@
 This report summarizes the boundary-focused prototype pass for the signals
 platform. The control remains the generic 32-byte `NodeValue` representation,
 but the prototype now includes scoped cleanup, scalar host paths, generated
-refcount helpers from `ZigGlue.roc`, and one app-model generated-shim spike.
+refcount helpers from `ZigGlue.roc`, and one generated boundary payload spike.
 
 ## Commands
 
@@ -28,7 +28,7 @@ samples. Values are median elapsed time unless noted.
 | A. Baseline `NodeValue` | Current typed Roc API | 32-byte tagged union | Host stores owned `NodeValue` copies | Boxed callbacks receive `NodeValue` | Recursive generated/host equality | Supported |
 | B. Scalar fast paths | Adds explicit scalar API helpers for hot paths | Typed primitive hosted paths | Scalars copied directly; complex values stay `NodeValue` | Primitive callbacks use scalar args/results | Direct scalar equality | Dynamic/list paths still use `NodeValue` |
 | C. Host value handles | Would require handle/view APIs | Host-owned handles/views | Host owns value storage | Callbacks receive handles/views | Explicit value/view equality | Needs lifetime rules |
-| D. Generated boundary shims | Typed Roc API can stay | Per-type shim entrypoints | Generated type-specific ownership helpers | App-model callbacks receive typed payloads | Generated/type-specific equality | Spike covers app model/list item payloads |
+| D. Generated boundary | Typed Roc API can stay | Per-type boundary entrypoints | Generated type-specific ownership helpers | App-model callbacks receive typed payloads | Generated/type-specific equality | Spike covers app model/list item payloads |
 
 ## ReleaseFast Synthetic Measurements
 
@@ -40,24 +40,30 @@ samples. Values are median elapsed time unless noted.
 | callback shape | 12.4 us | 1.8 us, 7.1x | 8.8 us, 1.4x | 20.2 us, 0.6x |
 | deep map chain | 643.5 us | 341.6 us, 1.9x | 198.9 us, 3.2x | 643.2 us, 1.0x |
 | wide fanout | 2.55 ms | 2.51 ms, 1.0x | 2.49 ms, 1.0x | 2.58 ms, 1.0x |
-| generated app shim | n/a | n/a | n/a | 63.4 ms |
+| generated boundary payload, fresh box | n/a | n/a | n/a | 53.8 ms |
+| generated boundary payload, reused box | n/a | n/a | n/a | 91.7 us |
 
 Important interpretation details:
 
 - B now measures real scalar paths for `I64`, `Bool`, and `Str` in the host.
 - The list/record rows for C and D are still synthetic lower bounds, not full
   `Elem.dynamic` or `Elem.each` replacements.
-- The D app shim is real Roc-generated boundary glue, but it currently allocates
-  a fresh boxed shim payload per call. At 5,000 iterations it performs 40,000
-  allocations and 40,000 deallocations, so it proves correctness more than speed.
+- The fresh D boundary payload row is real Roc-generated boundary glue, but it
+  allocates a fresh boxed boundary payload per call. At 5,000 iterations it
+  performs 40,000 allocations and 40,000 deallocations, so it proves correctness
+  more than speed.
+- The reused D boundary payload row keeps one boxed payload owner, retains it
+  before each consuming Roc entrypoint, and consumes the owner with an explicit
+  drop entrypoint after the batch. It performs 2 allocations and 2 deallocations
+  with zero retained allocation delta.
 - ReleaseFast can optimize pure synthetic loops aggressively. The harness now
   puts per-iteration barriers on benchmark values to keep rows loop-bound.
 
 ## Current-App Scenarios
 
-These rows run the compiled demo. They still report as A because the current app
-uses the production signal graph, but the implementation includes scalar host
-paths and generated cleanup helpers.
+These rows run the compiled demo. They report as the production
+scalar/`NodeValue` hybrid because the current app uses the production signal
+graph with scalar host paths and generated cleanup helpers.
 
 | Scenario | Median time | Key counters |
 | --- | ---: | --- |
@@ -74,7 +80,7 @@ recursively released. `ZigGlue.roc` now emits type-specific helpers such as
 
 ## Glue Findings
 
-`ZigGlue.roc` had two boundary bugs surfaced by the shim spike:
+`ZigGlue.roc` had two boundary bugs surfaced by the generated boundary payload spike:
 
 1. Provided entrypoints were generated as an obsolete universal
    `ops, ret_ptr, arg_ptr` shape. The compiled Roc object exports natural C ABI
@@ -101,12 +107,13 @@ allocation is uniquely owned, immediately before the list allocation is decrefed
    helpers improve safety and make nested list/record/tag cleanup auditable from
    the same type data used for ABI generation.
 
-3. Generated shims need a better payload lifetime strategy before performance
-   conclusions.
+3. Reused generated boundary payloads are the next D baseline.
 
-   The shim spike validates natural entrypoint ABI and app-model calls, but the
-   current boxed-payload-per-call shape is dominated by allocation. The next D
-   spike should reuse or borrow a shim payload across related calls.
+   The fresh payload spike validates natural entrypoint ABI and app-model calls,
+   but boxed-payload-per-call shape is dominated by allocation. The reused
+   payload path removes that allocation churn while keeping ownership explicit:
+   host-owned payload, per-call retain, consuming Roc entrypoint, final explicit
+   drop.
 
 4. Host handles remain promising but risky.
 
@@ -120,7 +127,7 @@ Use a hybrid migration path:
 1. Keep the scalar fast paths for common signal families.
 2. Keep recursive retain/release in generated Zig glue and remove hand-written
    host cleanup for Roc layouts as helpers become available.
-3. Iterate on generated shims with borrowed/reused app-model payloads before
-   making D a production path.
+3. Use the reused generated boundary payload row as the next D baseline, then
+   compare it against borrowed payload and typed generated-payload variants.
 4. Leave generic `NodeValue` in place for heterogeneous dynamic boundaries until
    a generated or handle-based design proves ownership and equality semantics.

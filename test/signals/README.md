@@ -44,11 +44,14 @@ The built demo binary can also be run directly:
 ```
 
 Benchmark output is CSV. Each row records the prototype, case name, iteration
-sample number, iteration count, wall time, operation count, Roc allocations/deallocations, retained
-allocation delta, `NodeValue` incref/decref/equality counts, synthetic
-boundary encode/decode counts, callback count, event count, evaluated graph
-nodes, signal writes/changes/suppressed writes, text updates, and active graph
-nodes.
+sample number, iteration count, wall time, operation count, Roc
+allocations/deallocations, retained allocation delta, `NodeValue`
+incref/decref/equality counts, synthetic boundary encode/decode counts,
+callback count, event count, evaluated graph nodes, signal
+writes/changes/suppressed writes, text updates, active graph nodes, and
+scheduler counters for affected collection, readiness scans, node evaluation,
+dynamic rendering, keyed rendering, text binding updates, and changed-signal
+lookups.
 
 The prototype rows are:
 
@@ -57,15 +60,17 @@ The prototype rows are:
 | A. Baseline `NodeValue` | Current typed Roc API | Current 32-byte tagged union | Host stores owned `NodeValue` copies | Boxed callbacks receive `NodeValue` | Recursive `NodeValue` equality | Supported today |
 | B. Scalar fast paths | Typed Roc API can stay, but scalar nodes need explicit host paths | Adds typed primitive node/callback paths | Scalars are copied directly; generic values stay `NodeValue` | Primitive callbacks can use scalar arguments | Direct scalar equality; recursive fallback for lists | Dynamic/list paths still need generic `NodeValue` |
 | C. Host value handles | Roc API may need handles or borrowed views at dynamic boundaries | Replaces hot values with host-owned handles | Host owns value storage and passes handles/views | Callbacks receive handles or borrowed views | Handle/version equality where valid | Needs explicit view support for dynamic and keyed list items |
-| D. Generated boundary shims | Roc API can stay typed, with generated per-type glue | Adds per-type encode/decode/equality/callback glue | Ownership follows generated type-specific code | Callbacks receive generated app-model shapes | Generated per-type equality | Needs generated glue for dynamic/list item types |
+| D. Generated boundary | Roc API can stay typed, with generated per-type glue | Adds per-type encode/decode/equality/callback glue | Ownership follows generated type-specific code | Callbacks receive generated app-model shapes | Generated per-type equality | Needs generated glue for dynamic/list item types |
 
 Synthetic rows compare the four prototypes against identical microbenchmarks
 and signal-graph shapes. Current-app scenario rows use the existing compiled
-demo and therefore report only the A/Baseline implementation as the control
-case. The benchmark mode first runs `test_counter.txt` and a focused
+demo and report the production scalar/`NodeValue` hybrid rather than a pure
+baseline. The generated boundary prototype includes separate fresh and reused
+`BoundaryPayload` rows so allocation-dominated and retained-payload costs stay
+visible. The benchmark mode first runs `test_counter.txt` and a focused
 unchanged-value suppression check before printing measurements.
 
-See [nodevalue_boundary_research.md](nodevalue_boundary_research.md) for the latest matrix and interpretation. The current implementation includes real scalar host paths for `I64`, `Bool`, and `Str`, a generated app-model shim spike, and generated Zig refcount helpers such as `decrefNodeValue`.
+See [nodevalue_boundary_research.md](nodevalue_boundary_research.md) for the latest matrix and interpretation. The current implementation includes real scalar host paths for `I64`, `Bool`, and `Str`, generated boundary payload experiments, and generated Zig refcount helpers such as `decrefNodeValue`.
 
 ## Demo Coverage
 
