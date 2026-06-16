@@ -249,7 +249,7 @@ x = {
 			(s-let
 				(p-assign (ident "#interp_0"))
 				(e-runtime-error (tag "erroneous_value_use")))
-			(e-interpolation (constraint-fn-var 102)
+			(e-interpolation (constraint-fn-var 142)
 				(first
 					(e-literal (string "This is a string
 With multiple lines
@@ -263,7 +263,7 @@ With multiple lines
 			(s-let
 				(p-assign (ident "#interp_1"))
 				(e-runtime-error (tag "erroneous_value_use")))
-			(e-interpolation (constraint-fn-var 110)
+			(e-interpolation (constraint-fn-var 198)
 				(first
 					(e-literal (string "This is a string
 With multiple lines
@@ -291,13 +291,13 @@ With multiple lines
 							(e-string
 								(e-literal (string "multiline"))))))
 				(field (name "d")
-					(e-dispatch-call (method "minus") (constraint-fn-var 206)
+					(e-dispatch-call (method "minus") (constraint-fn-var 294)
 						(receiver
 							(e-num (value "0")))
 						(args
 							(e-string))))
 				(field (name "e")
-					(e-dispatch-call (method "not") (constraint-fn-var 218)
+					(e-dispatch-call (method "not") (constraint-fn-var 306)
 						(receiver
 							(e-string))
 						(args))))))

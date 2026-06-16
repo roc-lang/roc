@@ -16,6 +16,7 @@ const JobKind = enum {
 const Job = struct {
     name: []const u8,
     kind: JobKind = .single,
+    args: []const []const u8 = &.{},
     skip_reason: ?[]const u8 = null,
 };
 
@@ -72,7 +73,7 @@ const jobs = [_]Job{
     .{ .name = "run-test-zig-cli-main" },
     .{ .name = "run-test-zig-watch-cli" },
     .{ .name = "run-test-zig-fx-platform" },
-    .{ .name = "run-test-eval", .kind = .harness },
+    .{ .name = "run-test-eval", .kind = .harness, .args = &.{ "--timeout", "120000" } },
     .{ .name = "run-test-eval-host-effects", .kind = .harness },
     .{ .name = "run-test-playground", .kind = .harness },
     .{ .name = "run-test-cli", .kind = .harness },
@@ -137,7 +138,27 @@ fn runStatusText(result: CommandResult) []const u8 {
 
 fn printRerunHint(result: CommandResult) void {
     const step_name = if (result.command.len > 2) result.command[2] else "build-ci";
-    std.debug.print("  Re-run failed step: `zig build {s} --summary all --color off`\n", .{step_name});
+    std.debug.print("  Re-run failed step: `zig build {s} --summary all --color off", .{step_name});
+    var i: usize = 0;
+    while (i < result.command.len) : (i += 1) {
+        if (!std.mem.eql(u8, result.command[i], "--")) continue;
+
+        i += 1;
+        var printed_separator = false;
+        while (i < result.command.len) : (i += 1) {
+            if (std.mem.eql(u8, result.command[i], "--stats-json") and i + 1 < result.command.len) {
+                i += 1;
+                continue;
+            }
+            if (!printed_separator) {
+                std.debug.print(" --", .{});
+                printed_separator = true;
+            }
+            std.debug.print(" {s}", .{result.command[i]});
+        }
+        break;
+    }
+    std.debug.print("`\n", .{});
     std.debug.print("  Log: `{s}`\n", .{result.log_path});
 }
 
@@ -313,6 +334,7 @@ fn buildCommand(
     zig_exe: []const u8,
     step: []const u8,
     stats_path: ?[]const u8,
+    run_args: []const []const u8,
 ) ![]const []const u8 {
     var argv = std.ArrayList([]const u8).empty;
     try argv.append(allocator, zig_exe);
@@ -322,10 +344,15 @@ fn buildCommand(
     try argv.append(allocator, "all");
     try argv.append(allocator, "--color");
     try argv.append(allocator, "off");
-    if (stats_path) |path| {
+    if (stats_path != null or run_args.len != 0) {
         try argv.append(allocator, "--");
+    }
+    if (stats_path) |path| {
         try argv.append(allocator, "--stats-json");
         try argv.append(allocator, path);
+    }
+    for (run_args) |arg| {
+        try argv.append(allocator, arg);
     }
     return try argv.toOwnedSlice(allocator);
 }
@@ -760,7 +787,7 @@ pub fn main(init: std.process.Init) !void {
     const run_started_ns = nowNs(io);
     const run_started_unix_ms = unixMs(io);
 
-    const build_argv = try buildCommand(allocator, zig_exe, "build-ci", null);
+    const build_argv = try buildCommand(allocator, zig_exe, "build-ci", null, &.{});
     const build_log = logs_dir ++ "/build-ci.txt";
     std.debug.print("Building CI steps ... ", .{});
     const build_result = try runCommand(allocator, io, build_argv, build_log, heartbeat_interval_ms, run_started_ns);
@@ -783,7 +810,7 @@ pub fn main(init: std.process.Init) !void {
             try std.fmt.allocPrint(allocator, "{s}/{s}.json", .{ raw_dir, job.name })
         else
             null;
-        const argv = try buildCommand(allocator, zig_exe, job.name, stats_path);
+        const argv = try buildCommand(allocator, zig_exe, job.name, stats_path, job.args);
         std.debug.print("Running `{s}` ... ", .{job.name});
         var result = if (job.skip_reason) |reason|
             try skipCommand(io, argv, log_path, reason, run_started_ns)

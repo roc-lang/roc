@@ -140,7 +140,7 @@ match ... {
 							(p-assign (ident "#interp_2"))
 							(e-lookup-local
 								(p-assign (ident "country"))))
-						(e-interpolation (constraint-fn-var 140)
+						(e-interpolation (constraint-fn-var 164)
 							(first
 								(e-literal (string "")))
 							(parts
@@ -183,7 +183,7 @@ match ... {
 								(p-assign (ident "name"))))
 						(s-let
 							(p-assign (ident "#interp_4"))
-							(e-dispatch-call (method "to_str") (constraint-fn-var 142)
+							(e-dispatch-call (method "to_str") (constraint-fn-var 166)
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "age"))))
@@ -192,7 +192,7 @@ match ... {
 							(p-assign (ident "#interp_5"))
 							(e-lookup-local
 								(p-assign (ident "city"))))
-						(e-interpolation (constraint-fn-var 156)
+						(e-interpolation (constraint-fn-var 228)
 							(first
 								(e-literal (string "")))
 							(parts
@@ -227,7 +227,7 @@ match ... {
 							(p-assign (ident "#interp_6"))
 							(e-lookup-local
 								(p-assign (ident "value"))))
-						(e-interpolation (constraint-fn-var 164)
+						(e-interpolation (constraint-fn-var 284)
 							(first
 								(e-literal (string "Deep nested: ")))
 							(parts
@@ -248,7 +248,7 @@ match ... {
 							(p-assign (ident "#interp_7"))
 							(e-lookup-local
 								(p-assign (ident "simple"))))
-						(e-interpolation (constraint-fn-var 172)
+						(e-interpolation (constraint-fn-var 340)
 							(first
 								(e-literal (string "Simple: ")))
 							(parts

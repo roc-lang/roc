@@ -548,6 +548,14 @@ pub const InstGraph = struct {
                         try self.union_(left, right);
                         return;
                     }
+                    if (left_named.kind == .alias) {
+                        try self.unifyThroughBacking(left, left_content, right, pending);
+                        return;
+                    }
+                    if (right_named.kind == .alias) {
+                        try self.unifyThroughBacking(right, right_content, left, pending);
+                        return;
+                    }
                     try self.unifyThroughBacking(left, left_content, right, pending);
                 },
                 else => try self.unifyThroughBacking(left, left_content, right, pending),
@@ -1720,4 +1728,54 @@ test "issue 9647: recursive nominal backing cycle is not chased as structural ba
 
     try std.testing.expectEqual(before_nodes, graph.nodes.items.len);
     try std.testing.expectEqual(graph.find(nominal), graph.find(structural));
+}
+
+test "recursive nominal backing can meet an alias to that nominal" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    var unsolved_monos = std.AutoHashMap(Type.TypeId, void).init(gpa);
+    defer unsolved_monos.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store, &unsolved_monos);
+    defer graph.destroy();
+
+    const module_name = try name_store.internModuleName("Main");
+    const nominal_name = try name_store.internTypeName("Role");
+    const alias_name = try name_store.internTypeName("Wrapper.Role");
+    const nominal_type: Type.NamedType = .{ .module = .{}, .ty = @enumFromInt(3) };
+    const alias_type: Type.NamedType = .{ .module = .{}, .ty = @enumFromInt(4) };
+    const nominal_def: Type.TypeDef = .{ .module_name = module_name, .type_name = nominal_name };
+    const alias_def: Type.TypeDef = .{ .module_name = module_name, .type_name = alias_name };
+
+    const nominal = try graph.newNode(.{ .unresolved = .{} });
+    try graph.setContent(nominal, .{ .named = .{
+        .named_type = nominal_type,
+        .def = nominal_def,
+        .kind = .nominal,
+        .builtin_owner = null,
+        .args = try graph.arena().alloc(NodeId, 0),
+        .backing = .{ .node = nominal, .use = .inspectable },
+    } });
+
+    const alias = try graph.newNode(.{ .named = .{
+        .named_type = alias_type,
+        .def = alias_def,
+        .kind = .alias,
+        .builtin_owner = null,
+        .args = try graph.arena().alloc(NodeId, 0),
+        .backing = .{ .node = nominal, .use = .inspectable },
+    } });
+
+    const before_nodes = graph.nodes.items.len;
+    try graph.unify(nominal, alias);
+
+    try std.testing.expectEqual(before_nodes, graph.nodes.items.len);
+    try std.testing.expectEqual(nominal, graph.find(nominal));
+    try std.testing.expectEqual(alias, graph.find(alias));
 }

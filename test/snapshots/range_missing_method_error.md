@@ -69,6 +69,62 @@ The value's type, which does not have a method named **steps_between**, is:
 
 **Hint:** For this to work, the type would need to have a method named **steps_between** associated with it in the type's declaration.
 
+**MISSING METHOD**
+This **add_try** method is being called on a value whose type doesn't have that method:
+**range_missing_method_error.md:1:5:1:14:**
+```roc
+r = "a"..<"z"
+```
+    ^^^^^^^^^
+
+The value's type, which does not have a method named **add_try**, is:
+
+    Str
+
+**Hint:** This numeric literal was given the type **Dec** because it was never used as any concrete number type. To use a different numeric type, add a suffix or a type annotation.
+
+**MISSING METHOD**
+This **from_numeral** method is being called on a value whose type doesn't have that method:
+**range_missing_method_error.md:1:5:1:14:**
+```roc
+r = "a"..<"z"
+```
+    ^^^^^^^^^
+
+The value's type, which does not have a method named **from_numeral**, is:
+
+    Str
+
+**Hint:** This numeric literal was given the type **Dec** because it was never used as any concrete number type. To use a different numeric type, add a suffix or a type annotation.
+
+**MISSING METHOD**
+This **is_lt** method is being called on a value whose type doesn't have that method:
+**range_missing_method_error.md:1:5:1:14:**
+```roc
+r = "a"..<"z"
+```
+    ^^^^^^^^^
+
+The value's type, which does not have a method named **is_lt**, is:
+
+    Str
+
+**Hint:** This numeric literal was given the type **Dec** because it was never used as any concrete number type. To use a different numeric type, add a suffix or a type annotation.
+
+**MISSING METHOD**
+This **steps_between** method is being called on a value whose type doesn't have that method:
+**range_missing_method_error.md:1:5:1:14:**
+```roc
+r = "a"..<"z"
+```
+    ^^^^^^^^^
+
+The value's type, which does not have a method named **steps_between**, is:
+
+    Str
+
+**Hint:** This numeric literal was given the type **Dec** because it was never used as any concrete number type. To use a different numeric type, add a suffix or a type annotation.
+
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,StringStart,StringPart,StringEnd,OpDoubleDotLessThan,StringStart,StringPart,StringEnd,

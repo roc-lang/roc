@@ -41,6 +41,7 @@ pub const TargetConfig = struct {
     target_usize: base.target.TargetUsize = base.target.TargetUsize.native,
     checked_module_state: CheckedModuleState = .complete,
     inline_mode: InlineMode = .none,
+    debug_effects: DebugEffectMode = .run,
     /// Allow `List.map` to reuse a unique input list's allocation when the
     /// input and output element layouts are interchangeable. Optimized builds
     /// enable this; dev builds and compile-time evaluation leave it off so
@@ -61,6 +62,7 @@ pub const RuntimeRecordSchema = postcheck.SolvedLirLower.RuntimeRecordSchema;
 pub const RuntimeTagSchema = postcheck.SolvedLirLower.RuntimeTagSchema;
 pub const RuntimeTagUnionSchema = postcheck.SolvedLirLower.RuntimeTagUnionSchema;
 pub const InlineMode = postcheck.SolvedInline.Mode;
+pub const DebugEffectMode = postcheck.SolvedLirLower.DebugEffectMode;
 
 /// Runtime record and tag-union schemas needed by dev tooling.
 pub const RuntimeValueSchemaStore = struct {
@@ -222,6 +224,7 @@ pub fn lowerCheckedModulesToLir(
 
     var lowered = try postcheck.SolvedLirLower.run(allocator, target.target_usize, solved, .{
         .inline_plan = inline_plan.view(),
+        .debug_effects = target.debug_effects,
         .list_in_place_map = target.list_in_place_map,
         .proc_debug_names = target.proc_debug_names,
     });

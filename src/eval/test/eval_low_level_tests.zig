@@ -2268,6 +2268,116 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "\"123.0\"" },
     },
     .{
+        .name = "low_level - F32.to_i8_try truncates fractional part",
+        .source =
+        \\{
+        \\x = F32.to_i8_try(42.7)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Ok(42)" },
+    },
+    .{
+        .name = "low_level - F64.to_u64_try truncates fractional part",
+        .source =
+        \\{
+        \\x = F64.to_u64_try(42.5)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Ok(42)" },
+    },
+    .{
+        .name = "low_level - F64.to_u32_try accepts values above I32 max",
+        .source =
+        \\{
+        \\x = F64.to_u32_try(3000000000.0)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Ok(3000000000)" },
+    },
+    .{
+        .name = "low_level - F64.to_i64_try rejects exclusive upper bound",
+        .source =
+        \\{
+        \\x = F64.to_i64_try(9223372036854775808.0)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Err(OutOfRange)" },
+    },
+    .{
+        .name = "low_level - F64.to_i64_try accepts inclusive lower bound",
+        .source =
+        \\{
+        \\x = F64.to_i64_try(-9223372036854775808.0)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Ok(-9223372036854775808)" },
+    },
+    .{
+        .name = "low_level - F64.to_i128_try truncates negative fractional part",
+        .source =
+        \\{
+        \\x = F64.to_i128_try(-42.5)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Ok(-42)" },
+    },
+    .{
+        .name = "low_level - F64.to_u64_try rejects out-of-range without trapping",
+        .source =
+        \\{
+        \\x = F64.to_u64_try(F64.highest)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Err(OutOfRange)" },
+    },
+    .{
+        .name = "low_level - F64.to_u128_try rejects out-of-range without trapping",
+        .source =
+        \\{
+        \\x = F64.to_u128_try(F64.highest)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Err(OutOfRange)" },
+    },
+    .{
+        .name = "low_level - Dec.to_i8_try truncates fractional part",
+        .source =
+        \\{
+        \\x = Dec.to_i8_try(42.7)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Ok(42)" },
+    },
+    .{
+        .name = "low_level - Dec.to_u64_try accepts full U64 range after truncation",
+        .source =
+        \\{
+        \\x = Dec.to_u64_try(18446744073709551615.9)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Ok(18446744073709551615)" },
+    },
+    .{
+        .name = "low_level - Dec.to_u64_try rejects exclusive upper bound",
+        .source =
+        \\{
+        \\x = Dec.to_u64_try(18446744073709551616.0)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Err(OutOfRange)" },
+    },
+    .{
         .name = "low_level - I8.to_i16 safe widening positive",
         .source =
         \\{
