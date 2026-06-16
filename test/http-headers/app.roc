@@ -4,12 +4,15 @@ import pf.Headers
 
 main! : Str => U64
 main! = |headers| {
-	decoded_result : Try({
-		explicit_optional : Try(Str, [Missing]),
-		foo : Str,
-		question_optional : Try(Str, [Missing]),
-		wildcard_optional : Try(Str, _),
-	}, Headers.DecodeErr)
+	decoded_result : Try(
+		{
+			explicit_optional : Try(Str, [Missing]),
+			foo : Str,
+			question_optional : Try(Str, [Missing]),
+			wildcard_optional : Try(Str, _),
+		},
+		Headers.DecodeErr,
+	)
 	decoded_result = Headers.parse(headers)
 
 	match decoded_result {

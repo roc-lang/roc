@@ -28,6 +28,9 @@ main! = |json| {
 	invalid_empty_result : Try({}, _)
 	invalid_empty_result = Json.parse("not-json")
 
+	trailing_empty_result : Try({}, _)
+	trailing_empty_result = Json.parse("{} trailing")
+
 	match decoded_result {
 		Ok(decoded) => {
 			explicit_optional_length = match decoded.explicit_optional {
@@ -73,6 +76,7 @@ main! = |json| {
 				+ Json.Token.count_utf8_bytes(decoded.token)
 				+ empty_record_score(empty_result)
 				+ invalid_empty_record_score(invalid_empty_result)
+				+ trailing_empty_record_score(trailing_empty_result)
 				+ explicit_optional_length
 				+ wildcard_optional_length
 				+ question_optional_length
@@ -102,4 +106,11 @@ invalid_empty_record_score = |invalid_empty_result|
 	match invalid_empty_result {
 		Ok(_) => 999999
 		Err(_) => 37
+	}
+
+trailing_empty_record_score : Try({}, _) -> U64
+trailing_empty_record_score = |trailing_empty_result|
+	match trailing_empty_result {
+		Ok(_) => 999999
+		Err(_) => 41
 	}

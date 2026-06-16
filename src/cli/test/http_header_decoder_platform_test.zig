@@ -26,6 +26,13 @@ const invalid_utf8_request =
     "Content-Length: 0\r\n" ++
     "\r\n";
 
+const too_large_content_length_request =
+    "POST /too-large HTTP/1.1\r\n" ++
+    "Host: localhost\r\n" ++
+    "Foo: abcdefghijklmnopqrstuvwxyz\r\n" ++
+    "Content-Length: 8193\r\n" ++
+    "\r\n";
+
 test "HTTP header parsing platform derives structural parser without runtime allocations" {
     const target_name = nativeRunnableTargetName() orelse return error.SkipZigTest;
 
@@ -108,6 +115,7 @@ test "HTTP header parsing platform derives structural parser without runtime all
     try runServerAndCheckResponse(allocator, output_path, bad_header_request, bad_header_response);
 
     try runServerAndCheckInvalidUtf8(allocator, output_path);
+    try runServerAndCheckRequestFailure(allocator, output_path, too_large_content_length_request, "RequestTooLarge");
 }
 
 fn buildRequest(allocator: std.mem.Allocator, optional_mask: u8) anyerror![]u8 {
@@ -271,6 +279,10 @@ fn runServerAndCheckResponse(allocator: std.mem.Allocator, exe_path: []const u8,
 }
 
 fn runServerAndCheckInvalidUtf8(allocator: std.mem.Allocator, exe_path: []const u8) anyerror!void {
+    try runServerAndCheckRequestFailure(allocator, exe_path, invalid_utf8_request, "InvalidUtf8");
+}
+
+fn runServerAndCheckRequestFailure(allocator: std.mem.Allocator, exe_path: []const u8, request: []const u8, expected_error: []const u8) anyerror!void {
     var child = try std.process.spawn(io, .{
         .argv = &.{exe_path},
         .stdin = .ignore,
@@ -300,7 +312,7 @@ fn runServerAndCheckInvalidUtf8(allocator: std.mem.Allocator, exe_path: []const 
     }
 
     const port = try readPortLine(child.stdout.?);
-    try sendHttpRequestWithoutReading(port, invalid_utf8_request);
+    try sendHttpRequestWithoutReading(port, request);
 
     const stderr = try readRemaining(allocator, child.stderr.?);
     defer allocator.free(stderr);
@@ -309,24 +321,24 @@ fn runServerAndCheckInvalidUtf8(allocator: std.mem.Allocator, exe_path: []const 
     child_running = false;
 
     if (watch.timed_out.load(.acquire)) {
-        std.debug.print("HTTP header parser invalid UTF-8 server timed out\nSTDERR:\n{s}\n", .{stderr});
+        std.debug.print("HTTP header parser failure case timed out\nSTDERR:\n{s}\n", .{stderr});
         return error.ServerTimedOut;
     }
 
     switch (term) {
         .exited => |code| {
             if (code == 0) {
-                std.debug.print("server accepted invalid UTF-8 request\nSTDERR:\n{s}\n", .{stderr});
+                std.debug.print("server accepted invalid request\nSTDERR:\n{s}\n", .{stderr});
                 return error.ServerFailed;
             }
         },
         else => {
-            std.debug.print("server terminated unexpectedly for invalid UTF-8 request: {}\nSTDERR:\n{s}\n", .{ term, stderr });
+            std.debug.print("server terminated unexpectedly for invalid request: {}\nSTDERR:\n{s}\n", .{ term, stderr });
             return error.ServerFailed;
         },
     }
 
-    try testing.expect(std.mem.find(u8, stderr, "InvalidUtf8") != null);
+    try testing.expect(std.mem.find(u8, stderr, expected_error) != null);
     try expectNoRuntimeAllocation(stderr);
 }
 

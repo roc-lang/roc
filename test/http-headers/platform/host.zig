@@ -8,6 +8,7 @@ pub const std_options: std.Options = .{
 pub const panic = std.debug.FullPanic(panicImpl);
 
 const request_buffer_size = 16 * 1024;
+const max_content_length = 8 * 1024;
 const listen_backlog = 16;
 const stdout_fd: c_int = 1;
 const stderr_fd: c_int = 2;
@@ -276,8 +277,10 @@ fn receiveRequest(fd: Socket, buffer: *[request_buffer_size]u8) ServerError!Pars
             else => |e| return e,
         };
 
+        if (head.content_length > max_content_length) return error.RequestTooLarge;
+        if (head.content_length > buffer.len - head.header_bytes) return error.RequestTooLarge;
+
         const required_total = head.header_bytes + head.content_length;
-        if (required_total > buffer.len) return error.RequestTooLarge;
         if (total < required_total) continue;
 
         return .{

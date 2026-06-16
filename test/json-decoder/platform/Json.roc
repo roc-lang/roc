@@ -5,18 +5,22 @@ JsonFormat :: [Present(Str), Missing].{
 	parse_str = |spec, slot|
 		match slot {
 			Present(raw) => {
-				split = Str.find_first(raw, ",")
+				trimmed = Str.trim_start(raw)
+				string_value = if Str.starts_with(trimmed, "\"") {
+					string_parts = split_json_string_tail(Str.drop_prefix(trimmed, "\""))?
+					rest = Str.trim_start(string_parts.after)
 
-				match split {
-					Ok(parts) => {
-						value = ParseStrSpec.parse(spec, JsonFormat.Present(parts.before), DecodeErr.MissingRequired)?
-						Ok({ value, rest: JsonFormat.Present(parts.after) })
+					if !Str.is_empty(rest) {
+						return Err(invalid_json)
 					}
-					Err(NotFound) => {
-						value = ParseStrSpec.parse(spec, slot, DecodeErr.MissingRequired)?
-						Ok({ value, rest: JsonFormat.Missing })
-					}
+
+					string_parts.value
+				} else {
+					raw
 				}
+
+				value = ParseStrSpec.parse(spec, JsonFormat.Present(string_value), DecodeErr.MissingRequired)?
+				Ok({ value, rest: JsonFormat.Missing })
 			}
 			Missing => Err(DecodeErr.MissingRequired)
 		}
@@ -25,8 +29,16 @@ JsonFormat :: [Present(Str), Missing].{
 	parse_record = |spec, slot|
 		match slot {
 			Present(raw) => {
+				record_end = find_object_end(Str.trim_start(raw))?
 				value = parse_record_from_json(raw, spec)?
-				Ok({ value, rest: Missing })
+				after_record = Str.trim_start(record_end.after)
+				rest = if Str.is_empty(after_record) {
+					JsonFormat.Missing
+				} else {
+					JsonFormat.Present(after_record)
+				}
+
+				Ok({ value, rest })
 			}
 			Missing => Err(DecodeErr.MissingRequired)
 		}
@@ -36,7 +48,7 @@ JsonFormat :: [Present(Str), Missing].{
 		match slot {
 			Present(value) => {
 				parsed = parse_tag_union_from_json(value, spec)?
-				Ok({ value: parsed, rest: Missing })
+				Ok(parsed)
 			}
 			Missing => Err(DecodeErr.MissingRequired)
 		}
@@ -62,7 +74,16 @@ Json :: [].{
 	parse = |json| {
 		Shape : a
 		parsed = Shape.parse_from(JsonFormat.Present(json))?
-		Ok(parsed.value)
+
+		match parsed.rest {
+			Missing => Ok(parsed.value)
+			Present(rest) =>
+				if Str.is_empty(Str.trim_start(rest)) {
+					Ok(parsed.value)
+				} else {
+					Err(invalid_json)
+				}
+			}
 	}
 }
 
@@ -85,25 +106,25 @@ parse_record_from_json = |raw, spec| {
 		if Str.starts_with($remaining, "}") {
 			$keep_scanning = False
 		} else if Str.starts_with($remaining, "\"") {
-			key_split = Str.find_first(Str.drop_prefix($remaining, "\""), "\"")
+			key_split = split_json_string_tail(Str.drop_prefix($remaining, "\""))
 
 			match key_split {
 				Ok(key_parts) => {
-					key = key_parts.before
+					key = key_parts.value
 					after_key = Str.trim_start(key_parts.after)
 
 					if Str.starts_with(after_key, ":") {
 						after_colon = Str.trim_start(Str.drop_prefix(after_key, ":"))
 
 						after_value = if Str.starts_with(after_colon, "\"") {
-							value_split = Str.find_first(Str.drop_prefix(after_colon, "\""), "\"")
+							value_split = split_json_string_tail(Str.drop_prefix(after_colon, "\""))
 
 							match value_split {
 								Ok(value_parts) => {
-									$state = ParseRecordSpec.put(spec, $state, key, JsonFormat.Present(value_parts.before), Str.is_eq)
+									$state = ParseRecordSpec.put(spec, $state, key, JsonFormat.Present(value_parts.value), Str.is_eq)
 									Str.trim_start(value_parts.after)
 								}
-								Err(NotFound) => {
+								Err(_) => {
 									return Err(invalid_json)
 								}
 							}
@@ -115,7 +136,7 @@ parse_record_from_json = |raw, spec| {
 									$state = ParseRecordSpec.put(spec, $state, key, JsonFormat.Present(after_colon), Str.is_eq)
 									Str.trim_start(end_parts.after)
 								}
-								Err(NotFound) => {
+								Err(_) => {
 									return Err(invalid_json)
 								}
 							}
@@ -134,7 +155,7 @@ parse_record_from_json = |raw, spec| {
 						return Err(invalid_json)
 					}
 				}
-				Err(NotFound) => {
+				Err(_) => {
 					return Err(invalid_json)
 				}
 			}
@@ -146,7 +167,7 @@ parse_record_from_json = |raw, spec| {
 	ParseRecordSpec.finish(spec, $state, DecodeErr.MissingRequired)
 }
 
-parse_tag_union_from_json : Str, ParseTagUnionSpec(a) -> Try(a, DecodeErr)
+parse_tag_union_from_json : Str, ParseTagUnionSpec(a) -> Try({ value : a, rest : JsonFormat }, DecodeErr)
 parse_tag_union_from_json = |raw, spec| {
 	remaining = Str.trim_start(raw)
 
@@ -160,11 +181,11 @@ parse_tag_union_from_json = |raw, spec| {
 		return Err(invalid_json)
 	}
 
-	key_split = Str.find_first(Str.drop_prefix(after_open, "\""), "\"")
+	key_split = split_json_string_tail(Str.drop_prefix(after_open, "\""))
 
 	match key_split {
 		Ok(key_parts) => {
-			tag_name = key_parts.before
+			tag_name = key_parts.value
 			after_key = Str.trim_start(key_parts.after)
 
 			if !Str.starts_with(after_key, ":") {
@@ -178,14 +199,14 @@ parse_tag_union_from_json = |raw, spec| {
 
 				match object_end {
 					Ok(end_parts) => Str.trim_start(end_parts.after)
-					Err(NotFound) => return Err(invalid_json)
+					Err(_) => return Err(invalid_json)
 				}
 			} else if Str.starts_with(payload, "\"") {
-				value_split = Str.find_first(Str.drop_prefix(payload, "\""), "\"")
+				value_split = split_json_string_tail(Str.drop_prefix(payload, "\""))
 
 				match value_split {
 					Ok(value_parts) => Str.trim_start(value_parts.after)
-					Err(NotFound) => return Err(invalid_json)
+					Err(_) => return Err(invalid_json)
 				}
 			} else {
 				return Err(invalid_json)
@@ -195,31 +216,107 @@ parse_tag_union_from_json = |raw, spec| {
 				return Err(invalid_json)
 			}
 
-			ParseTagUnionSpec.parse(spec, tag_name, JsonFormat.Present(payload), Str.is_eq, DecodeErr.MissingRequired)
+			parsed = ParseTagUnionSpec.parse(spec, tag_name, JsonFormat.Present(payload), Str.is_eq, DecodeErr.MissingRequired)?
+			after_close = Str.trim_start(Str.drop_prefix(after_payload, "}"))
+			rest = if Str.is_empty(after_close) {
+				JsonFormat.Missing
+			} else {
+				JsonFormat.Present(after_close)
+			}
+
+			Ok({ value: parsed, rest })
+		}
+		Err(_) => Err(invalid_json)
+	}
+}
+
+split_json_string_tail : Str -> Try({ value : Str, after : Str }, DecodeErr)
+split_json_string_tail = |tail| {
+	quote_split = Str.find_first(tail, "\"")
+
+	match quote_split {
+		Ok(quote_parts) => {
+			slash_split = Str.find_first(tail, "\\")
+
+			match slash_split {
+				Ok(slash_parts) =>
+					if Str.count_utf8_bytes(slash_parts.before) < Str.count_utf8_bytes(quote_parts.before) {
+						Err(invalid_json)
+					} else {
+						Ok({ value: quote_parts.before, after: quote_parts.after })
+					}
+				Err(NotFound) => Ok({ value: quote_parts.before, after: quote_parts.after })
+			}
 		}
 		Err(NotFound) => Err(invalid_json)
 	}
 }
 
-find_object_end : Str -> Try({ after : Str }, [NotFound])
+split_before : Try({ before : Str, after : Str }, [NotFound]), U64 -> Bool
+split_before = |split, offset|
+	match split {
+		Ok(parts) => Str.count_utf8_bytes(parts.before) < offset
+		Err(NotFound) => False
+	}
+
+find_object_end : Str -> Try({ after : Str }, DecodeErr)
 find_object_end = |object_text| {
 	var $remaining = object_text
 	var $depth = 0
 
 	while True {
+		quote_split = Str.find_first($remaining, "\"")
 		open_split = Str.find_first($remaining, "{")
 		close_split = Str.find_first($remaining, "}")
+		var $skipped_string = False
 
-		match open_split {
-			Ok(open_parts) => {
-				match close_split {
-					Ok(close_parts) => {
-						if Str.count_utf8_bytes(open_parts.before) < Str.count_utf8_bytes(close_parts.before) {
+		match quote_split {
+			Ok(quote_parts) => {
+				quote_offset = Str.count_utf8_bytes(quote_parts.before)
+
+				if !split_before(open_split, quote_offset) {
+					if !split_before(close_split, quote_offset) {
+						string_parts = split_json_string_tail(quote_parts.after)?
+						$remaining = string_parts.after
+						$skipped_string = True
+					}
+				}
+			}
+			Err(NotFound) => {}
+		}
+
+		if $skipped_string == False {
+			match open_split {
+				Ok(open_parts) => {
+					match close_split {
+						Ok(close_parts) => {
+							if Str.count_utf8_bytes(open_parts.before) < Str.count_utf8_bytes(close_parts.before) {
+								$depth = $depth + 1
+								$remaining = open_parts.after
+							} else {
+								if $depth == 0 {
+									return Err(invalid_json)
+								}
+
+								$depth = $depth - 1
+								$remaining = close_parts.after
+
+								if $depth == 0 {
+									return Ok({ after: $remaining })
+								}
+							}
+						}
+						Err(NotFound) => {
 							$depth = $depth + 1
 							$remaining = open_parts.after
-						} else {
+						}
+					}
+				}
+				Err(NotFound) => {
+					match close_split {
+						Ok(close_parts) => {
 							if $depth == 0 {
-								return Err(NotFound)
+								return Err(invalid_json)
 							}
 
 							$depth = $depth - 1
@@ -229,25 +326,8 @@ find_object_end = |object_text| {
 								return Ok({ after: $remaining })
 							}
 						}
+						Err(NotFound) => return Err(invalid_json)
 					}
-					Err(NotFound) => return Err(NotFound)
-				}
-			}
-			Err(NotFound) => {
-				match close_split {
-					Ok(close_parts) => {
-						if $depth == 0 {
-							return Err(NotFound)
-						}
-
-						$depth = $depth - 1
-						$remaining = close_parts.after
-
-						if $depth == 0 {
-							return Ok({ after: $remaining })
-						}
-					}
-					Err(NotFound) => return Err(NotFound)
 				}
 			}
 		}
