@@ -224,14 +224,14 @@ test "optimized debug effect lowering erases inline dbg and expect" {
         \\}
     ;
 
-    var run_effects = try lowerModuleWithDebugEffects(allocator, source, .direct_call_wrappers, .run);
+    var run_effects = try lowerModuleWithDebugEffects(allocator, source, .wrappers, .run);
     defer run_effects.deinit(allocator);
 
     const run_counts = countDebugEffectStmts(&run_effects.lowered);
     try std.testing.expect(run_counts.debug > 0);
     try std.testing.expect(run_counts.expect > 0);
 
-    var erased_effects = try lowerModuleWithDebugEffects(allocator, source, .direct_call_wrappers, .erase);
+    var erased_effects = try lowerModuleWithDebugEffects(allocator, source, .wrappers, .erase);
     defer erased_effects.deinit(allocator);
 
     const erased_counts = countDebugEffectStmts(&erased_effects.lowered);
@@ -1181,7 +1181,7 @@ test "known-length List.iter collect specializes without unbound locals" {
         \\    Iter.collect(
         \\        Iter.map(List.iter([1.I64, 2, 3]), |i| i * 12),
         \\    )
-    , .direct_call_wrappers);
+    , .wrappers);
     defer optimized.deinit(allocator);
 }
 
