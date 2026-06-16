@@ -1,13 +1,15 @@
 Headers :: [].{
 	DecodeErr := [MissingRequired, BadHeader].{}
 
-	parse : Str -> Try(a, DecodeErr) where [
-		a.parse_from : HeaderFormat -> Try({ value : a, rest : HeaderFormat }, DecodeErr),
+	parse : Str -> Try(output, DecodeErr) where [
+		output.parse_from : HeaderFormat -> Try({ value : output, rest : HeaderFormat }, DecodeErr),
 	]
 	parse = |headers| {
-		Shape : a
-		parsed = Shape.parse_from(HeaderFormat.Present(headers))?
-		Ok(parsed.value)
+		Output : output
+
+		{ value, rest: _ } = Output.parse_from(HeaderFormat.Present(headers))?
+
+		Ok(value)
 	}
 }
 

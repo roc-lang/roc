@@ -3858,6 +3858,10 @@ const BodyContext = struct {
         slot_ty: Type.TypeId,
         ret_ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprId {
+        if (self.builder.shapeContent(shape_ty) == .zst) {
+            return try self.lowerEmptyRecordParseFromSlot(shape_ty, slot_expr, slot_ty, ret_ty);
+        }
+
         const selected = self.parseShapeSelection(shape_ty);
         const method_name: []const u8 = if (Ident.textEql(selected.tag_text, "Str"))
             "parse_str"
@@ -3889,6 +3893,21 @@ const BodyContext = struct {
         });
     }
 
+    fn lowerEmptyRecordParseFromSlot(
+        self: *BodyContext,
+        shape_ty: Type.TypeId,
+        slot_expr: Ast.ExprId,
+        slot_ty: Type.TypeId,
+        ret_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        if (self.builder.shapeContent(shape_ty) != .zst) Common.invariant("empty record parse requested for a non-empty-record type");
+        const value_expr = try self.builder.program.addExpr(.{
+            .ty = shape_ty,
+            .data = .unit,
+        });
+        return try self.parseResultOk(ret_ty, value_expr, slot_expr, slot_ty);
+    }
+
     fn lowerParseValueFromSlot(
         self: *BodyContext,
         shape_ty: Type.TypeId,
@@ -3901,7 +3920,10 @@ const BodyContext = struct {
 
         const parse_ok_ty = try self.parseResultOkType(shape_ty, slot_ty);
         const parse_ret_ty = try self.tryTypeLike(ret_ty, parse_ok_ty, ret_info.err_ty);
-        const parse_expr = try self.lowerParseShapeFromSlot(shape_ty, slot_expr, slot_ty, parse_ret_ty);
+        const parse_expr = if (self.customParseFromLookup(shape_ty)) |lookup|
+            try self.lowerCustomParseFromSlot(lookup, shape_ty, slot_expr, slot_ty, parse_ret_ty)
+        else
+            try self.lowerParseShapeFromSlot(shape_ty, slot_expr, slot_ty, parse_ret_ty);
 
         const parsed_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), parse_ok_ty);
         const value_name = try self.builder.program.names.internRecordFieldLabel("value");
@@ -3916,6 +3938,44 @@ const BodyContext = struct {
         return try self.sequenceTry(parse_expr, parse_ret_ty, parsed_local, ok_body, ret_ty);
     }
 
+    fn lowerCustomParseFromSlot(
+        self: *BodyContext,
+        lookup: MethodLookup,
+        shape_ty: Type.TypeId,
+        slot_expr: Ast.ExprId,
+        slot_ty: Type.TypeId,
+        ret_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const callable_mono_ty = try self.methodTargetMonoTypeFromArgs(lookup, &.{slot_ty}, ret_ty);
+        const parse_fn = self.builder.functionShape(callable_mono_ty, "custom parse_from target was not a function");
+        const parse_arg_tys = self.builder.program.types.span(parse_fn.args);
+        if (parse_arg_tys.len != 1) Common.invariant("custom parse_from target had an unexpected arity");
+        if (!self.sameType(parse_arg_tys[0], slot_ty)) Common.invariant("custom parse_from slot type differed from input slot type");
+
+        const ret_info = self.tryInfo(ret_ty);
+        const parse_ok_fields = switch (self.builder.shapeContent(ret_info.ok_ty)) {
+            .record => |span| self.builder.program.types.fieldSpan(span),
+            else => Common.invariant("custom parse_from result Ok type was not a parse result record"),
+        };
+        var found_value = false;
+        for (parse_ok_fields) |field| {
+            const field_text = self.builder.program.names.recordFieldLabelText(field.name);
+            if (Ident.textEql(field_text, "value")) {
+                found_value = true;
+                if (!self.sameType(field.ty, shape_ty)) Common.invariant("custom parse_from value type differed from parsed shape");
+            }
+        }
+        if (!found_value) Common.invariant("custom parse_from result was missing value field");
+
+        return try self.builder.program.addExpr(.{
+            .ty = ret_ty,
+            .data = .{ .call_proc = .{
+                .callee = .{ .func = try self.methodTargetCalleeWithMono(lookup, callable_mono_ty) },
+                .args = try self.builder.program.addExprSpan(&[_]Ast.ExprId{slot_expr}),
+            } },
+        });
+    }
+
     fn parseResultOkType(
         self: *BodyContext,
         value_ty: Type.TypeId,
@@ -3928,6 +3988,30 @@ const BodyContext = struct {
             .{ .name = value_name, .ty = value_ty },
         };
         return try self.builder.program.types.add(.{ .record = try self.builder.program.types.addFields(&fields) });
+    }
+
+    fn parseResultOk(
+        self: *BodyContext,
+        try_ty: Type.TypeId,
+        value_expr: Ast.ExprId,
+        rest_expr: Ast.ExprId,
+        rest_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const try_info = self.tryInfo(try_ty);
+        const value_ty = self.builder.program.exprs.items[@intFromEnum(value_expr)].ty;
+        const rest_name = try self.builder.program.names.internRecordFieldLabel("rest");
+        const value_name = try self.builder.program.names.internRecordFieldLabel("value");
+        const fields = [_]Ast.FieldExpr{
+            .{ .name = rest_name, .value = rest_expr },
+            .{ .name = value_name, .value = value_expr },
+        };
+        const record_expr = try self.builder.program.addExpr(.{
+            .ty = try_info.ok_ty,
+            .data = .{ .record = try self.builder.program.addFieldExprSpan(&fields) },
+        });
+        const parse_ok_ty = try self.parseResultOkType(value_ty, rest_ty);
+        if (!self.sameType(try_info.ok_ty, parse_ok_ty)) Common.invariant("parse result Ok type differed from generated parse result record");
+        return try self.tryOk(try_ty, record_expr);
     }
 
     fn lowerDecoderStrDecode(
@@ -6195,13 +6279,16 @@ const BodyContext = struct {
                 break :blk;
             },
             .tag_union => |tags_span| blk: {
-                for (self.builder.program.types.tagSpan(tags_span)) |tag| {
+                const tags = self.builder.program.types.tagSpan(tags_span);
+                if (tags.len == 0) Common.invariant("structural parse_from empty tag union reached postcheck lowering");
+                for (tags) |tag| {
                     for (self.builder.program.types.span(tag.payloads)) |payload_ty| {
                         if (!self.decoderFieldTypeIsSupported(payload_ty)) Common.invariant("structural parse_from tag-union payload type was not supported");
                     }
                 }
                 break :blk;
             },
+            .zst => {},
             else => Common.invariant("structural parse_from dispatcher was not a supported structural type"),
         }
 
@@ -6389,6 +6476,7 @@ const BodyContext = struct {
     fn decoderFieldTypeIsSupported(self: *BodyContext, ty: Type.TypeId) bool {
         if (self.typeHasBuiltinOwner(ty, .str)) return true;
         if (self.tryStrOptionalInfo(ty) != null) return true;
+        if (self.customParseFromLookup(ty) != null) return true;
         return switch (self.builder.shapeContent(ty)) {
             .record => |fields_span| blk: {
                 for (self.builder.program.types.fieldSpan(fields_span)) |field| {
@@ -6397,7 +6485,9 @@ const BodyContext = struct {
                 break :blk true;
             },
             .tag_union => |tags_span| blk: {
-                for (self.builder.program.types.tagSpan(tags_span)) |tag| {
+                const tags = self.builder.program.types.tagSpan(tags_span);
+                if (tags.len == 0) break :blk false;
+                for (tags) |tag| {
                     for (self.builder.program.types.span(tag.payloads)) |payload_ty| {
                         if (!self.decoderFieldTypeIsSupported(payload_ty)) break :blk false;
                     }
@@ -6407,6 +6497,22 @@ const BodyContext = struct {
             .zst => true,
             else => false,
         };
+    }
+
+    fn customParseFromLookup(self: *BodyContext, ty: Type.TypeId) ?MethodLookup {
+        const named = switch (self.builder.program.types.get(ty)) {
+            .named => |named| named,
+            else => return null,
+        };
+        if (named.builtin_owner != null) return null;
+        switch (named.kind) {
+            .nominal, .@"opaque" => {},
+            .alias => return null,
+        }
+        const owner = methodOwnerFromType(&self.builder.program.types, ty) orelse
+            Common.invariant("custom named parse_from type had no method owner");
+        return self.builder.lookupMethodTargetByName(owner, "parse_from") orelse
+            Common.invariant("checked method registry is missing custom parse_from target");
     }
 
     fn decoderFieldValueInfo(self: *BodyContext, slot_ty: Type.TypeId) DecoderFieldValueInfo {

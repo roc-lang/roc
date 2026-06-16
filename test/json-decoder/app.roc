@@ -13,9 +13,13 @@ main! = |json| {
 		},
 		question_optional : Try(Str, [Missing]),
 		status : [Active, Paused],
+		token : Json.Token,
 		wildcard_optional : Try(Str, _),
 	}, _)
 	decoded_result = Json.parse(json)
+
+	empty_result : Try({}, _)
+	empty_result = Json.parse("{}")
 
 	match decoded_result {
 		Ok(decoded) => {
@@ -46,6 +50,8 @@ main! = |json| {
 
 			Str.count_utf8_bytes(decoded.foo)
 				+ Str.count_utf8_bytes(decoded.nested.bar)
+				+ Json.Token.count_utf8_bytes(decoded.token)
+				+ empty_record_score(empty_result)
 				+ explicit_optional_length
 				+ wildcard_optional_length
 				+ question_optional_length
@@ -61,3 +67,10 @@ question_length = |maybe| {
 	value = maybe?
 	Ok(Str.count_utf8_bytes(value))
 }
+
+empty_record_score : Try({}, _) -> U64
+empty_record_score = |empty_result|
+	match empty_result {
+		Ok(_) => 29
+		Err(_) => 999999
+	}

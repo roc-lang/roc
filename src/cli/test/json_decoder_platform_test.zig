@@ -9,10 +9,13 @@ const io = std.testing.io;
 
 const required_foo_value = "abcdefghijklmnopqrstuvwxyz";
 const nested_bar_value = "nested-bar-value";
+const token_input_value = "original-token-value";
+const custom_token_value = "custom-token";
 const status_values = [_][]const u8{ "Active", "Paused" };
 const status_scores = [_]u64{ 11, 17 };
 const mode_values = [_][]const u8{ "Warm", "Cold" };
 const mode_scores = [_]u64{ 19, 23 };
+const empty_record_score: u64 = 29;
 
 const optional_fields = [_]OptionalField{
     .{ .name = "explicit_optional", .value = "abc" },
@@ -117,6 +120,9 @@ fn buildJson(
     try json.appendSlice(allocator, "{\n  \"foo\" : \"");
     try json.appendSlice(allocator, required_foo_value);
     try json.appendSlice(allocator, "\"");
+    try json.appendSlice(allocator, ",\n  \"token\" : \"");
+    try json.appendSlice(allocator, token_input_value);
+    try json.appendSlice(allocator, "\"");
     try json.appendSlice(allocator, ",\n  \"status\" : \"");
     try json.appendSlice(allocator, status_values[status_index]);
     try json.appendSlice(allocator, "\"");
@@ -162,6 +168,8 @@ fn buildMissingRequiredJson(allocator: std.mem.Allocator) ![]u8 {
 fn expectedJsonLength(optional_mask: u8, status_index: usize, mode_index: usize) u64 {
     var total: u64 = required_foo_value.len +
         nested_bar_value.len +
+        custom_token_value.len +
+        empty_record_score +
         status_scores[status_index] +
         mode_scores[mode_index];
     for (optional_fields, 0..) |field, index| {

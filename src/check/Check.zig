@@ -10755,6 +10755,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         const region = self.getRegionAt(deferred_constraint.var_);
                         if (try self.typeSupportsDerivedParse(dispatcher_content.structure, env, region)) {
                             try self.satisfyImplicitParseFromConstraint(
+                                deferred_constraint.var_,
                                 constraint,
                                 constraint.fn_var,
                                 env,
@@ -11242,6 +11243,7 @@ fn typeSupportsDerivedParse(
             break :blk true;
         },
         .tag_union => |tag_union| blk: {
+            if (!try self.derivedParseTagUnionHasAnyTag(tag_union)) break :blk false;
             const tags_slice = self.types.getTagsSlice(tag_union.tags);
             for (tags_slice.items(.args)) |tag_args_range| {
                 const tag_args = self.types.sliceVars(tag_args_range);
@@ -11251,10 +11253,27 @@ fn typeSupportsDerivedParse(
             }
             break :blk try self.varSupportsDerivedParseTagExt(tag_union.ext, env, region);
         },
-        .empty_record,
-        .empty_tag_union,
-        => true,
+        .empty_record => true,
+        .empty_tag_union => false,
         else => false,
+    };
+}
+
+fn derivedParseTagUnionHasAnyTag(self: *Self, tag_union: types_mod.TagUnion) Allocator.Error!bool {
+    if (self.types.getTagsSlice(tag_union.tags).items(.name).len > 0) return true;
+    return try self.derivedParseExtHasAnyTag(tag_union.ext);
+}
+
+fn derivedParseExtHasAnyTag(self: *Self, ext_var: Var) Allocator.Error!bool {
+    return switch (self.types.resolveVar(ext_var).desc.content) {
+        .structure => |structure| switch (structure) {
+            .empty_tag_union => false,
+            .tag_union => |tag_union| try self.derivedParseTagUnionHasAnyTag(tag_union),
+            else => false,
+        },
+        .alias => |alias| try self.derivedParseExtHasAnyTag(self.types.getAliasBackingVar(alias)),
+        .err => true,
+        .flex, .rigid => false,
     };
 }
 
@@ -11287,9 +11306,8 @@ fn varSupportsDerivedParseField(
             .nominal_type => |nominal| try self.nominalSupportsDerivedParseField(nominal, env, region),
             .record => |record| try self.typeSupportsDerivedParse(.{ .record = record }, env, region),
             .tag_union => |tag_union| try self.typeSupportsDerivedParse(.{ .tag_union = tag_union }, env, region),
-            .empty_record,
-            .empty_tag_union,
-            => true,
+            .empty_record => true,
+            .empty_tag_union => false,
             else => false,
         },
         .alias => |alias| try self.varSupportsDerivedParseField(self.types.getAliasBackingVar(alias), env, region),
@@ -11306,7 +11324,7 @@ fn nominalSupportsDerivedParseField(
 ) Allocator.Error!bool {
     if (self.nominalIsBuiltinStrType(nominal)) return true;
     if (!self.nominalIsBuiltinTryType(nominal)) {
-        return try self.varSupportsDerivedParseField(self.types.getNominalBackingVar(nominal), env, region);
+        return true;
     }
 
     const args = self.types.sliceNominalArgs(nominal);
@@ -11564,12 +11582,12 @@ fn satisfyImplicitEqualityConstraint(
 
 fn satisfyImplicitParseFromConstraint(
     self: *Self,
+    dispatcher_var: Var,
     constraint: StaticDispatchConstraint,
     constraint_fn_var: Var,
     env: *Env,
     region: Region,
 ) Allocator.Error!void {
-    _ = constraint;
     const resolved_constraint = self.types.resolveVar(constraint_fn_var);
     const resolved_func = resolved_constraint.desc.content.unwrapFunc() orelse {
         try self.unifyWith(constraint_fn_var, .err, env);
@@ -11581,7 +11599,199 @@ fn satisfyImplicitParseFromConstraint(
         try self.unifyWith(constraint_fn_var, .err, env);
         return;
     }
-    _ = region;
+
+    // Copy the slot arg before adding fresh vars; the args slice may dangle.
+    const slot_var = args[0];
+    const err_var = try self.fresh(env, region);
+    const parse_result_var = try self.freshParseResultTryVar(dispatcher_var, slot_var, err_var, env, region);
+    const ret_result = try self.unifyInContext(parse_result_var, resolved_func.ret, env, .none);
+    if (ret_result.isProblem()) {
+        try self.markConstraintFunctionAsError(constraint, env);
+        return;
+    }
+
+    self.var_set.clearRetainingCapacity();
+    if (!try self.validateDerivedParseVar(dispatcher_var, slot_var, err_var, constraint, env, region, &self.var_set)) {
+        try self.reportConstraintError(dispatcher_var, constraint, .not_nominal, env, false);
+    }
+}
+
+fn freshParseResultTryVar(
+    self: *Self,
+    value_var: Var,
+    rest_var: Var,
+    err_var: Var,
+    env: *Env,
+    region: Region,
+) Allocator.Error!Var {
+    const ok_var = try self.freshParseResultOkVar(value_var, rest_var, env, region);
+    return try self.freshFromContent(try self.mkTryContent(ok_var, err_var, env), env, region);
+}
+
+fn freshParseResultOkVar(
+    self: *Self,
+    value_var: Var,
+    rest_var: Var,
+    env: *Env,
+    region: Region,
+) Allocator.Error!Var {
+    const rest_name = try @constCast(self.cir).insertIdent(base.Ident.for_text("rest"));
+    const value_name = try @constCast(self.cir).insertIdent(base.Ident.for_text("value"));
+    const fields = [_]types_mod.RecordField{
+        .{ .name = rest_name, .var_ = rest_var },
+        .{ .name = value_name, .var_ = value_var },
+    };
+    const fields_range = try self.types.appendRecordFields(&fields);
+    const ext_var = try self.freshFromContent(.{ .structure = .empty_record }, env, region);
+    return try self.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = fields_range,
+        .ext = ext_var,
+    } } }, env, region);
+}
+
+fn validateDerivedParseVar(
+    self: *Self,
+    var_: Var,
+    slot_var: Var,
+    err_var: Var,
+    constraint: StaticDispatchConstraint,
+    env: *Env,
+    region: Region,
+    visited: *std.AutoHashMap(Var, void),
+) Allocator.Error!bool {
+    const resolved = self.types.resolveVar(var_);
+    if (visited.contains(resolved.var_)) return true;
+    try visited.put(resolved.var_, {});
+
+    return switch (resolved.desc.content) {
+        .structure => |structure| switch (structure) {
+            .nominal_type => |nominal| try self.validateDerivedParseNominal(var_, nominal, slot_var, err_var, constraint, env, region, visited),
+            .record => |record| try self.validateDerivedParseRecord(record.fields, slot_var, err_var, constraint, env, region, visited),
+            .tag_union => |tag_union| try self.validateDerivedParseTagUnion(tag_union, slot_var, err_var, constraint, env, region, visited),
+            .empty_record => true,
+            .empty_tag_union => false,
+            else => false,
+        },
+        .alias => |alias| try self.validateDerivedParseVar(self.types.getAliasBackingVar(alias), slot_var, err_var, constraint, env, region, visited),
+        .err => true,
+        .flex, .rigid => false,
+    };
+}
+
+fn validateDerivedParseRecord(
+    self: *Self,
+    fields_range: types_mod.RecordField.SafeMultiList.Range,
+    slot_var: Var,
+    err_var: Var,
+    constraint: StaticDispatchConstraint,
+    env: *Env,
+    region: Region,
+    visited: *std.AutoHashMap(Var, void),
+) Allocator.Error!bool {
+    const fields = self.types.getRecordFieldsSlice(fields_range);
+    for (fields.items(.var_)) |field_var| {
+        if (!try self.validateDerivedParseVar(field_var, slot_var, err_var, constraint, env, region, visited)) return false;
+    }
+    return true;
+}
+
+fn validateDerivedParseTagUnion(
+    self: *Self,
+    tag_union: types_mod.TagUnion,
+    slot_var: Var,
+    err_var: Var,
+    constraint: StaticDispatchConstraint,
+    env: *Env,
+    region: Region,
+    visited: *std.AutoHashMap(Var, void),
+) Allocator.Error!bool {
+    if (!try self.derivedParseTagUnionHasAnyTag(tag_union)) return false;
+
+    const tags = self.types.getTagsSlice(tag_union.tags);
+    for (tags.items(.args)) |tag_args_range| {
+        const tag_args = self.types.sliceVars(tag_args_range);
+        for (tag_args) |tag_arg| {
+            if (!try self.validateDerivedParseVar(tag_arg, slot_var, err_var, constraint, env, region, visited)) return false;
+        }
+    }
+    return try self.validateDerivedParseTagExt(tag_union.ext, slot_var, err_var, constraint, env, region, visited);
+}
+
+fn validateDerivedParseTagExt(
+    self: *Self,
+    ext_var: Var,
+    slot_var: Var,
+    err_var: Var,
+    constraint: StaticDispatchConstraint,
+    env: *Env,
+    region: Region,
+    visited: *std.AutoHashMap(Var, void),
+) Allocator.Error!bool {
+    return switch (self.types.resolveVar(ext_var).desc.content) {
+        .structure => |structure| switch (structure) {
+            .empty_tag_union => true,
+            .tag_union => |tag_union| try self.validateDerivedParseTagUnion(tag_union, slot_var, err_var, constraint, env, region, visited),
+            else => false,
+        },
+        .alias => |alias| try self.validateDerivedParseTagExt(self.types.getAliasBackingVar(alias), slot_var, err_var, constraint, env, region, visited),
+        .err => true,
+        .flex, .rigid => false,
+    };
+}
+
+fn validateDerivedParseNominal(
+    self: *Self,
+    nominal_var: Var,
+    nominal: types_mod.NominalType,
+    slot_var: Var,
+    err_var: Var,
+    constraint: StaticDispatchConstraint,
+    env: *Env,
+    region: Region,
+    visited: *std.AutoHashMap(Var, void),
+) Allocator.Error!bool {
+    _ = visited;
+    if (self.nominalIsBuiltinStrType(nominal)) return true;
+    if (self.nominalIsBuiltinTryType(nominal)) {
+        const args = self.types.sliceNominalArgs(nominal);
+        if (args.len != 2) return false;
+        if (!try self.varIsBuiltinStr(args[0])) return false;
+        return try self.varCanParseMissingError(args[1], env, region);
+    }
+
+    const original_env, const is_this_module = self.ownerEnvForOriginModule(
+        nominal.origin_module,
+        nominal.sourceDeclOptional(),
+        nominal.originIsBuiltin(),
+        "parse_from nominal field",
+    );
+    const method_binding = original_env.lookupMethodBindingFromEnvAndDeclConst(
+        self.cir,
+        nominal.sourceDeclOptional(),
+        self.cir.idents.parse_from,
+    ) orelse return false;
+
+    const method_type_var: Var = ModuleEnv.varFrom(method_binding.type_node_idx);
+    const method_var = if (is_this_module) blk: {
+        if (self.types.resolveVar(method_type_var).desc.rank == .generalized) {
+            break :blk try self.instantiateVar(method_type_var, env, .use_last_var);
+        }
+        break :blk method_type_var;
+    } else blk: {
+        const copied_var = try self.copyVar(method_type_var, original_env, region);
+        break :blk try self.instantiateVar(copied_var, env, .{ .explicit = region });
+    };
+
+    const expected_ret = try self.freshParseResultTryVar(nominal_var, slot_var, err_var, env, region);
+    const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{slot_var}, expected_ret), env, region);
+    const result = try self.unifyInContext(method_var, expected_fn, env, .{
+        .method_type = .{
+            .constraint_var = nominal_var,
+            .dispatcher_name = nominal.ident.ident_idx,
+            .method_name = constraint.fn_name,
+        },
+    });
+    return result.isOk();
 }
 
 /// Check if a type variable supports is_eq by resolving it and checking its content

@@ -192,6 +192,7 @@ pub fn runWasmStrWithStats(
         }) |entry| {
             env_imports.addHostFunction(entry[0], &[_]bytebox.ValType{ .I32, .I32, .I32 }, &[_]bytebox.ValType{}, entry[1], null) catch return error.WasmExecFailed;
         }
+        env_imports.addHostFunction("roc_str_find_first", &[_]bytebox.ValType{ .I32, .I32, .I32, .I32, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostStrFindFirst, null) catch return error.WasmExecFailed;
 
         env_imports.addHostFunction("roc_str_caseless_ascii_equals", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{.I32}, hostStrCaselessAsciiEquals, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_int_from_str", &[_]bytebox.ValType{ .I32, .I32, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostIntFromStr, null) catch return error.WasmExecFailed;
@@ -1055,6 +1056,32 @@ fn hostStrDropSuffix(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*
         writeWasmStrViewFromStr(buffer, @intCast(params[2].I32), str, 0, str.len - suffix.len);
     } else {
         writeWasmStrViewFromStr(buffer, @intCast(params[2].I32), str, 0, str.len);
+    }
+}
+
+fn hostStrFindFirst(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    const buffer = module.store.getMemory(0).buffer();
+    const str = readWasmStr(buffer, @intCast(params[0].I32));
+    const delimiter = readWasmStr(buffer, @intCast(params[1].I32));
+    const result_ptr: usize = @intCast(params[2].I32);
+    const after_offset: usize = @intCast(params[3].I32);
+    const before_offset: usize = @intCast(params[4].I32);
+    const found_offset: usize = @intCast(params[5].I32);
+    const matched_offset: usize = @intCast(params[6].I32);
+
+    const str_slice = str.data[0..str.len];
+    const delimiter_slice = delimiter.data[0..delimiter.len];
+    const maybe_index: ?usize = if (delimiter.len == 0) 0 else std.mem.indexOf(u8, str_slice, delimiter_slice);
+    if (maybe_index) |index| {
+        writeWasmStrViewFromStr(buffer, result_ptr + before_offset, str, 0, index);
+        writeWasmStrViewFromStr(buffer, result_ptr + matched_offset, str, index, delimiter.len);
+        writeWasmStrViewFromStr(buffer, result_ptr + after_offset, str, index + delimiter.len, str.len - index - delimiter.len);
+        buffer[result_ptr + found_offset] = 1;
+    } else {
+        writeWasmEmptyStr(buffer, result_ptr + before_offset);
+        writeWasmEmptyStr(buffer, result_ptr + matched_offset);
+        writeWasmEmptyStr(buffer, result_ptr + after_offset);
+        buffer[result_ptr + found_offset] = 0;
     }
 }
 

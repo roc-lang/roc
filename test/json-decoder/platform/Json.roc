@@ -29,6 +29,18 @@ JsonFormat :: [Present(Str), Missing].{
 }
 
 Json :: [].{
+	Token := { raw : Str }.{
+		parse_from : JsonFormat -> Try({ value : Token, rest : JsonFormat }, DecodeErr)
+		parse_from = |slot|
+			match slot {
+				Present(_) => Ok({ value: { raw: "custom-token" }, rest: Missing })
+				Missing => Err(DecodeErr.MissingRequired)
+			}
+
+		count_utf8_bytes : Token -> U64
+		count_utf8_bytes = |token| Str.count_utf8_bytes(token.raw)
+	}
+
 	parse : Str -> Try(a, DecodeErr) where [
 		a.parse_from : JsonFormat -> Try({ value : a, rest : JsonFormat }, DecodeErr),
 	]
