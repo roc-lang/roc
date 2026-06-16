@@ -15517,30 +15517,16 @@ fn literalSourceRegion(self: *Self, var_: Var) ?Region {
 /// never type-check, but the kind reported here picks which head default is
 /// attempted (Dec vs Str) and hence which literal-kind diagnostic fires — so it
 /// must not depend on constraint storage order (which unify side each literal
-/// arrived on), or mirror-image programs would get different diagnostics. We scan
-/// all literal-origin constraints and prefer `.numeral` over `.quote`, agreeing
-/// with the two other sites that encode this choice:
-/// `numericDefaultPhaseForConstraints` in src/check/checked_artifact.zig (any
-/// numeral selects the Dec mono phase before quote is considered) and
-/// `flexLiteralDefaultKind` in src/check/canonical_type_keys.zig (numeral if any,
-/// else quote).
+/// arrived on), or mirror-image programs would get different diagnostics.
+/// Delegates to `StaticDispatchConstraint.dominantLiteralKind`, the single
+/// source of truth for the numeral > quote > interpolation tie-break shared
+/// with `flexLiteralDefaultKind` (canonical_type_keys.zig) and
+/// `numericDefaultPhaseForConstraints` (checked_artifact.zig).
 fn varLiteralKind(self: *Self, var_: Var) ?StaticDispatchConstraint.LiteralKind {
     const resolved = self.types.resolveVar(var_);
     if (resolved.desc.content != .flex) return null;
     const constraints = self.types.sliceStaticDispatchConstraints(resolved.desc.content.flex.constraints);
-    var has_quote = false;
-    var has_interpolation = false;
-    for (constraints) |constraint| {
-        switch (constraint.origin) {
-            .from_literal => |lit| switch (lit) {
-                .numeral => return .numeral,
-                .quote => has_quote = true,
-                .interpolation => has_interpolation = true,
-            },
-            else => {},
-        }
-    }
-    return if (has_quote) .quote else if (has_interpolation) .interpolation else null;
+    return StaticDispatchConstraint.dominantLiteralKind(constraints);
 }
 
 // --- Per-kind literal facts, each an exhaustive `switch (LiteralKind)` ---------
