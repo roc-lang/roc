@@ -42,7 +42,7 @@ const Symbol = struct {
 comptime {
     requireBuiltins("Bool", &.{ "is_eq", "to_hash" });
     requireBuiltins("Box", &.{ "box", "unbox" });
-    requireBuiltins("Dec", &.{ "abs", "abs_diff", "add_checked", "from_dec_digits", "from_int_digits", "from_str", "is_gt", "is_zero", "max", "min", "minus", "plus", "plus_saturated", "sub_checked", "times", "to_f64", "to_hash", "to_i64_try", "to_str", "to_u64_try" });
+    requireBuiltins("Dec", &.{ "abs", "abs_diff", "add_try", "from_dec_digits", "from_int_digits", "from_str", "is_gt", "is_zero", "max", "min", "minus", "plus", "plus_saturated", "sub_try", "times", "to_f64", "to_hash", "to_i64_try", "to_str", "to_u64_try" });
     requireBuiltins("Dict", &.{ "capacity", "clear", "contains", "drop_if", "fold", "from_list", "get", "insert", "insert_all", "is_empty", "keep_if", "keep_shared", "keys", "len", "map", "release_excess_capacity", "remove", "remove_all", "reserve", "single", "to_list", "update", "values", "with_capacity" });
     requireBuiltins("F32", &.{ "abs", "abs_diff", "from_dec_digits", "from_int_digits", "from_str", "is_gt", "is_zero", "max", "min", "minus", "negate", "plus", "times", "to_f64", "to_hash", "to_i64_try", "to_str", "to_u64_try" });
     requireBuiltins("F64", &.{ "abs", "abs_diff", "from_dec_digits", "from_int_digits", "from_str", "is_gt", "is_zero", "max", "min", "minus", "negate", "plus", "times", "to_hash", "to_i64_try", "to_str", "to_u64_try" });
@@ -50,7 +50,7 @@ comptime {
     requireBuiltins("I8", &.{"to_hash"});
     requireBuiltins("I16", &.{"to_hash"});
     requireBuiltins("I32", &.{"to_hash"});
-    requireBuiltins("I64", &.{ "abs_diff", "add_checked", "bitwise_not", "bitwise_xor", "from_str", "is_eq", "mul_checked", "shift_right_by", "sub_checked", "to_f32", "to_f64", "to_hash", "to_str", "to_u64_wrap" });
+    requireBuiltins("I64", &.{ "abs_diff", "add_try", "bitwise_not", "bitwise_xor", "from_str", "is_eq", "mul_try", "shift_right_by", "sub_try", "to_f32", "to_f64", "to_hash", "to_str", "to_u64_wrap" });
     requireBuiltins("I128", &.{"to_hash"});
     requireBuiltins("Iter", &.{ "collect", "custom", "drop_first", "drop_last", "exclusive_range", "fold", "inclusive_range", "keep_if", "map", "next", "prepended", "size_hint", "take_first", "take_last" });
     requireBuiltins("List", &.{ "all", "append", "contains", "concat", "count_if", "drop_at", "drop_first", "drop_if", "drop_last", "ends_with", "find_first_index", "find_last", "find_last_index", "first", "fold", "fold_rev", "fold_until", "fold_with_index", "fold_with_index_until", "from_iter", "is_empty", "keep_if", "last", "len", "map", "map2", "map_with_index", "prepend", "release_excess_capacity", "repeat", "replace", "reserve", "set", "single", "sort_with", "split_at", "split_first", "split_if", "split_last", "split_on_list", "starts_with", "sublist", "subscript", "swap", "take_first", "take_last", "to_hash", "update", "with_capacity" });
@@ -60,7 +60,7 @@ comptime {
     requireBuiltins("U8", &.{ "bitwise_not", "bitwise_xor", "from_str", "is_eq", "shift_left_by", "to_f32", "to_f64", "to_hash", "to_str", "to_u64" });
     requireBuiltins("U16", &.{"to_hash"});
     requireBuiltins("U32", &.{"to_hash"});
-    requireBuiltins("U64", &.{ "abs_diff", "add_checked", "bitwise_and", "bitwise_not", "bitwise_or", "bitwise_xor", "div_checked", "from_int_digits", "from_str", "is_eq", "mul_checked", "shift_left_by", "shift_right_by", "sub_checked", "to_dec", "to_f32", "to_f64", "to_hash", "to_i8_wrap", "to_i16_wrap", "to_i32_wrap", "to_i64_wrap", "to_i128", "to_str", "to_u8_try", "to_u8_wrap", "to_u16_wrap", "to_u32_wrap", "to_u128" });
+    requireBuiltins("U64", &.{ "abs_diff", "add_try", "bitwise_and", "bitwise_not", "bitwise_or", "bitwise_xor", "div_try", "from_int_digits", "from_str", "is_eq", "mul_try", "shift_left_by", "shift_right_by", "sub_try", "to_dec", "to_f32", "to_f64", "to_hash", "to_i8_wrap", "to_i16_wrap", "to_i32_wrap", "to_i64_wrap", "to_i128", "to_str", "to_u8_try", "to_u8_wrap", "to_u16_wrap", "to_u32_wrap", "to_u128" });
     requireBuiltins("U128", &.{"to_hash"});
 }
 
@@ -6107,7 +6107,7 @@ fn writeNumOpsScoring(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppText(" : U64\n");
     try self.writeIndent(1);
     try self.writeAppSymbol(checked_add);
-    try self.writeAppText(" = match U64.add_checked(");
+    try self.writeAppText(" = match U64.add_try(");
     try self.writeAppSymbol(seed);
     try self.writeAppText(", ");
     try self.writeAppSymbol(parsed_u64);
@@ -6128,7 +6128,7 @@ fn writeNumOpsScoring(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppText(" : U64\n");
     try self.writeIndent(1);
     try self.writeAppSymbol(checked_sub);
-    try self.writeAppText(" = match U64.sub_checked(");
+    try self.writeAppText(" = match U64.sub_try(");
     try self.writeAppSymbol(seed);
     try self.writeAppText(", ");
     try self.writeAppSymbol(parsed_u64);
@@ -6149,7 +6149,7 @@ fn writeNumOpsScoring(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppText(" : U64\n");
     try self.writeIndent(1);
     try self.writeAppSymbol(checked_mul);
-    try self.writeAppText(" = match U64.mul_checked(");
+    try self.writeAppText(" = match U64.mul_try(");
     try self.writeAppSymbol(seed);
     try self.writeAppText(" % 16, ");
     try self.writeAppSymbol(parsed_u64);
@@ -6170,7 +6170,7 @@ fn writeNumOpsScoring(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppText(" : U64\n");
     try self.writeIndent(1);
     try self.writeAppSymbol(checked_div);
-    try self.writeAppText(" = match U64.div_checked(");
+    try self.writeAppText(" = match U64.div_try(");
     try self.writeAppSymbol(seed);
     try self.writeAppText(", (");
     try self.writeAppSymbol(parsed_u64);
@@ -6191,7 +6191,7 @@ fn writeNumOpsScoring(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppText(" : U64\n");
     try self.writeIndent(1);
     try self.writeAppSymbol(overflow_add);
-    try self.writeAppText(" = match U64.add_checked(U64.highest, ");
+    try self.writeAppText(" = match U64.add_try(U64.highest, ");
     try self.writeAppSymbol(seed);
     try self.writeAppText(") {\n");
     try self.writeIndent(2);
@@ -6212,7 +6212,7 @@ fn writeNumOpsScoring(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppText(" : I64\n");
     try self.writeIndent(1);
     try self.writeAppSymbol(signed_add);
-    try self.writeAppText(" = match I64.add_checked(");
+    try self.writeAppText(" = match I64.add_try(");
     try self.writeAppSymbol(parsed_i64);
     try self.writeAppText(", U64.to_i64_wrap(");
     try self.writeAppSymbol(seed);
@@ -6531,7 +6531,7 @@ fn writeFloatDecOpsScoring(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppText(" % 3) + 1))\n");
 
     try self.writeBuiltinLocalHeader(dec_checked_score, "U64");
-    try self.writeAppText("match Dec.add_checked(");
+    try self.writeAppText("match Dec.add_try(");
     try self.writeAppSymbol(dec_sum);
     try self.writeAppText(", ");
     try self.writeAppSymbol(dec_product);
@@ -6550,7 +6550,7 @@ fn writeFloatDecOpsScoring(self: *Self) std.mem.Allocator.Error!void {
     try self.writeAppText("}\n");
 
     try self.writeBuiltinLocalHeader(dec_sub_score, "U64");
-    try self.writeAppText("match Dec.sub_checked(");
+    try self.writeAppText("match Dec.sub_try(");
     try self.writeAppSymbol(dec_product);
     try self.writeAppText(", ");
     try self.writeAppSymbol(dec_sum);
