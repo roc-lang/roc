@@ -13129,13 +13129,13 @@ numeral_to_str = |numeral|
 			int_digits = base256_to_decimal_digits(digits_before_pt)
 			int_bytes = decimal_digits_to_bytes(int_digits)
 
-			frac_bytes = 
+			frac_bytes =
 				if digits_after_pt_count == 0 {
 					u8_list_with_capacity(0)
 				} else {
 					frac_digits = base256_to_decimal_digits(digits_after_pt)
 					frac_len = u8_list_len(frac_digits)
-					padded_frac_digits = 
+					padded_frac_digits =
 						if frac_len < digits_after_pt_count {
 							u8_concat(u8_repeat(0, digits_after_pt_count - frac_len), frac_digits)
 						} else {
@@ -13145,7 +13145,7 @@ numeral_to_str = |numeral|
 					u8_concat(u8_single(46), decimal_digits_to_bytes(padded_frac_digits))
 				}
 
-			sign_bytes = 
+			sign_bytes =
 				if is_negative {
 					u8_single(45)
 				} else {
