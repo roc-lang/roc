@@ -609,9 +609,9 @@ const Pass = struct {
             => {},
             .list,
             .tuple,
-            => |items| for (self.program.exprSpan(items)) |child| try self.collectCallPatternsInExpr(owner, child),
-            .record => |fields| for (self.program.fieldExprSpan(fields)) |field| try self.collectCallPatternsInExpr(owner, field.value),
-            .tag => |tag| for (self.program.exprSpan(tag.payloads)) |payload| try self.collectCallPatternsInExpr(owner, payload),
+            => |items| try self.collectCallPatternsInExprSpan(owner, items),
+            .record => |fields| try self.collectCallPatternsInFieldExprSpan(owner, fields),
+            .tag => |tag| try self.collectCallPatternsInExprSpan(owner, tag.payloads),
             .nominal,
             .return_,
             .dbg,
@@ -629,15 +629,15 @@ const Pass = struct {
             => Common.invariant("pre-lift function expression reached call-pattern specialization"),
             .call_value => |call| {
                 try self.collectCallPatternsInExpr(owner, call.callee);
-                for (self.program.exprSpan(call.args)) |arg| try self.collectCallPatternsInExpr(owner, arg);
+                try self.collectCallPatternsInExprSpan(owner, call.args);
             },
             .call_proc => |call| {
-                for (self.program.exprSpan(call.args)) |arg| try self.collectCallPatternsInExpr(owner, arg);
+                try self.collectCallPatternsInExprSpan(owner, call.args);
                 const callee = Ast.callProcCallee(call);
                 if (@intFromEnum(callee) < self.plans.len) try self.recordCallPattern(callee, call.args);
             },
             .low_level => |call| {
-                for (self.program.exprSpan(call.args)) |arg| try self.collectCallPatternsInExpr(owner, arg);
+                try self.collectCallPatternsInExprSpan(owner, call.args);
             },
             .field_access => |field| try self.collectCallPatternsInExpr(owner, field.receiver),
             .tuple_access => |access| try self.collectCallPatternsInExpr(owner, access.tuple),
@@ -647,29 +647,59 @@ const Pass = struct {
             },
             .match_ => |match| {
                 try self.collectCallPatternsInExpr(owner, match.scrutinee);
-                for (self.program.branchSpan(match.branches)) |branch| {
-                    if (branch.guard) |guard| try self.collectCallPatternsInExpr(owner, guard);
-                    try self.collectCallPatternsInExpr(owner, branch.body);
-                }
+                try self.collectCallPatternsInBranchSpan(owner, match.branches);
             },
             .if_ => |if_| {
-                for (self.program.ifBranchSpan(if_.branches)) |branch| {
-                    try self.collectCallPatternsInExpr(owner, branch.cond);
-                    try self.collectCallPatternsInExpr(owner, branch.body);
-                }
+                try self.collectCallPatternsInIfBranchSpan(owner, if_.branches);
                 try self.collectCallPatternsInExpr(owner, if_.final_else);
             },
             .block => |block| {
-                for (self.program.stmtSpan(block.statements)) |stmt| try self.collectCallPatternsInStmt(owner, stmt);
+                try self.collectCallPatternsInStmtSpan(owner, block.statements);
                 try self.collectCallPatternsInExpr(owner, block.final_expr);
             },
             .loop_ => |loop| {
-                for (self.program.exprSpan(loop.initial_values)) |initial| try self.collectCallPatternsInExpr(owner, initial);
+                try self.collectCallPatternsInExprSpan(owner, loop.initial_values);
                 try self.collectCallPatternsInExpr(owner, loop.body);
             },
             .break_ => |maybe| if (maybe) |value| try self.collectCallPatternsInExpr(owner, value),
-            .continue_ => |continue_| for (self.program.exprSpan(continue_.values)) |value| try self.collectCallPatternsInExpr(owner, value),
+            .continue_ => |continue_| try self.collectCallPatternsInExprSpan(owner, continue_.values),
         }
+    }
+
+    fn collectCallPatternsInExprSpan(self: *Pass, owner: Ast.FnId, span: Ast.Span(Ast.ExprId)) Allocator.Error!void {
+        const source = try self.allocator.dupe(Ast.ExprId, self.program.exprSpan(span));
+        defer self.allocator.free(source);
+        for (source) |expr| try self.collectCallPatternsInExpr(owner, expr);
+    }
+
+    fn collectCallPatternsInFieldExprSpan(self: *Pass, owner: Ast.FnId, span: Ast.Span(Ast.FieldExpr)) Allocator.Error!void {
+        const source = try self.allocator.dupe(Ast.FieldExpr, self.program.fieldExprSpan(span));
+        defer self.allocator.free(source);
+        for (source) |field| try self.collectCallPatternsInExpr(owner, field.value);
+    }
+
+    fn collectCallPatternsInBranchSpan(self: *Pass, owner: Ast.FnId, span: Ast.Span(Ast.Branch)) Allocator.Error!void {
+        const source = try self.allocator.dupe(Ast.Branch, self.program.branchSpan(span));
+        defer self.allocator.free(source);
+        for (source) |branch| {
+            if (branch.guard) |guard| try self.collectCallPatternsInExpr(owner, guard);
+            try self.collectCallPatternsInExpr(owner, branch.body);
+        }
+    }
+
+    fn collectCallPatternsInIfBranchSpan(self: *Pass, owner: Ast.FnId, span: Ast.Span(Ast.IfBranch)) Allocator.Error!void {
+        const source = try self.allocator.dupe(Ast.IfBranch, self.program.ifBranchSpan(span));
+        defer self.allocator.free(source);
+        for (source) |branch| {
+            try self.collectCallPatternsInExpr(owner, branch.cond);
+            try self.collectCallPatternsInExpr(owner, branch.body);
+        }
+    }
+
+    fn collectCallPatternsInStmtSpan(self: *Pass, owner: Ast.FnId, span: Ast.Span(Ast.StmtId)) Allocator.Error!void {
+        const source = try self.allocator.dupe(Ast.StmtId, self.program.stmtSpan(span));
+        defer self.allocator.free(source);
+        for (source) |stmt| try self.collectCallPatternsInStmt(owner, stmt);
     }
 
     fn collectCallPatternsInStmt(self: *Pass, owner: Ast.FnId, stmt_id: Ast.StmtId) Allocator.Error!void {

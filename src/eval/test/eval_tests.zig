@@ -716,9 +716,9 @@ const core_tests = [_]TestCase{
         \\    _ => ("miss", "miss")
         \\}
         \\
-        \\main = describe("fooALPHAbazOMEGAetc")
+        \\main = describe("fooleftbazrightetc")
         ,
-        .expected = .{ .inspect_str = "(\"ALPHA\", \"OMEGA\")" },
+        .expected = .{ .inspect_str = "(\"left\", \"right\")" },
     },
     .{
         .name = "inspect: string interpolation pattern falls through when delimiter is missing",
@@ -730,7 +730,7 @@ const core_tests = [_]TestCase{
         \\    _ => "miss"
         \\}
         \\
-        \\main = describe("fooALPHAbuxOMEGA")
+        \\main = describe("fooleftbuxright")
         ,
         .expected = .{ .inspect_str = "\"miss\"" },
     },
@@ -744,9 +744,9 @@ const core_tests = [_]TestCase{
         \\    _ => "miss"
         \\}
         \\
-        \\main = (describe("fooALPHAbaz"), describe("fooALPHAbzzbaz"))
+        \\main = (describe("fooleftbaz"), describe("fooleftbzzbaz"))
         ,
-        .expected = .{ .inspect_str = "(\"ALPHA\", \"miss\")" },
+        .expected = .{ .inspect_str = "(\"left\", \"miss\")" },
     },
     .{
         .name = "inspect: string interpolation pattern discard matches suffix",
@@ -826,11 +826,11 @@ const core_tests = [_]TestCase{
         .source =
         \\describe : Str -> (Bool, Bool, Bool, Bool, Bool)
         \\describe = |s| match s {
-        \\    "foo${name}bar" => (name == "ALPHA", Str.starts_with(name, "AL"), Str.ends_with(name, "HA"), Str.contains(name, "PH"), Str.caseless_ascii_equals(name, "alpha"))
+        \\    "foo${name}bar" => (name == "token", Str.starts_with(name, "to"), Str.ends_with(name, "en"), Str.contains(name, "ke"), Str.caseless_ascii_equals(name, "TOKEN"))
         \\    _ => (False, False, False, False, False)
         \\}
         \\
-        \\main = (describe("fooALPHAbar"), describe("fooOMEGAbar"))
+        \\main = (describe("footokenbar"), describe("foomissbar"))
         ,
         .expected = .{ .inspect_str = "((True, True, True, True, True), (False, False, False, False, False))" },
     },

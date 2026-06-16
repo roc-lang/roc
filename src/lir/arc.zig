@@ -576,17 +576,17 @@ const Inserter = struct {
                         current_start = try self.releaseOldTargetIfNeeded(assign.target, &path.owned, current_start);
                     }
                     self.unsetArgs(&path.owned, arg_ownership.transfer_args.items);
-                    self.addOwnedIfRc(&path.owned, assign.target);
+                    self.addCallResultOwnedIfRc(&path.owned, assign.target, arg_ownership.demanded.ret_mode);
                     current_start = try self.retainArgs(arg_ownership.retain_args.items, current_start);
                     // A borrowed-return result that must be owned here pays
                     // one retain right after the call.
-                    const retain_call_result = callee_sig.ret_mode == .borrowed and
+                    const retain_call_result = arg_ownership.demanded.ret_mode == .borrowed and
                         self.localContainsRefcounted(assign.target) and
                         !self.isBindingBorrowed(assign.target);
                     var deaths: std.ArrayList(LIR.LocalId) = .empty;
                     errdefer deaths.deinit(self.store.allocator);
-                    const singles = [_]LIR.LocalId{assign.target};
-                    try self.postStmtDeaths(&path.owned, &singles, assign.args, assign.next, path.options.loop_keep, &deaths);
+                    try self.noteCallResultDeathIfUnused(&path.owned, assign.target, arg_ownership.demanded.ret_mode, assign.next, path.options.loop_keep, &deaths);
+                    try self.postStmtDeaths(&path.owned, &.{}, assign.args, assign.next, path.options.loop_keep, &deaths);
                     try path.frames.append(self.store.allocator, .{
                         .stmt = path.cursor,
                         .head = current_start,
@@ -603,12 +603,13 @@ const Inserter = struct {
                         current_start = try self.releaseOldTargetIfNeeded(assign.target, &path.owned, current_start);
                     }
                     self.unsetArgs(&path.owned, arg_ownership.transfer_args.items);
-                    self.addOwnedIfRc(&path.owned, assign.target);
+                    self.addCallResultOwnedIfRc(&path.owned, assign.target, .owned);
                     current_start = try self.retainLocalIfRc(assign.closure, current_start);
                     current_start = try self.retainArgs(arg_ownership.retain_args.items, current_start);
                     var deaths: std.ArrayList(LIR.LocalId) = .empty;
                     errdefer deaths.deinit(self.store.allocator);
-                    const singles = [_]LIR.LocalId{ assign.closure, assign.target };
+                    try self.noteCallResultDeathIfUnused(&path.owned, assign.target, .owned, assign.next, path.options.loop_keep, &deaths);
+                    const singles = [_]LIR.LocalId{assign.closure};
                     try self.postStmtDeaths(&path.owned, &singles, assign.args, assign.next, path.options.loop_keep, &deaths);
                     try path.frames.append(self.store.allocator, .{
                         .stmt = path.cursor,
@@ -1599,17 +1600,18 @@ const Inserter = struct {
                     var arg_ownership = try self.callArgOwnership(&path.owned, self.solution.sigOf(assign.proc), false, assign.args, assign.next, assign.target, path.loop_keep);
                     defer arg_ownership.deinit(self.store.allocator);
                     self.unsetArgs(&path.owned, arg_ownership.transfer_args.items);
-                    self.addOwnedIfRc(&path.owned, assign.target);
-                    const singles = [_]LIR.LocalId{assign.target};
-                    try self.postStmtDeaths(&path.owned, &singles, assign.args, assign.next, path.loop_keep, null);
+                    self.addCallResultOwnedIfRc(&path.owned, assign.target, arg_ownership.demanded.ret_mode);
+                    try self.noteCallResultDeathIfUnused(&path.owned, assign.target, arg_ownership.demanded.ret_mode, assign.next, path.loop_keep, null);
+                    try self.postStmtDeaths(&path.owned, &.{}, assign.args, assign.next, path.loop_keep, null);
                     path.cursor = assign.next;
                 },
                 .assign_call_erased => |assign| {
                     var arg_ownership = try self.callArgOwnership(&path.owned, arc_sig.RcSig.all_owned, false, assign.args, assign.next, assign.target, path.loop_keep);
                     defer arg_ownership.deinit(self.store.allocator);
                     self.unsetArgs(&path.owned, arg_ownership.transfer_args.items);
-                    self.addOwnedIfRc(&path.owned, assign.target);
-                    const singles = [_]LIR.LocalId{ assign.closure, assign.target };
+                    self.addCallResultOwnedIfRc(&path.owned, assign.target, .owned);
+                    try self.noteCallResultDeathIfUnused(&path.owned, assign.target, .owned, assign.next, path.loop_keep, null);
+                    const singles = [_]LIR.LocalId{assign.closure};
                     try self.postStmtDeaths(&path.owned, &singles, assign.args, assign.next, path.loop_keep, null);
                     path.cursor = assign.next;
                 },
@@ -1890,6 +1892,20 @@ const Inserter = struct {
         owned.set(local);
     }
 
+    fn addCallResultOwnedIfRc(
+        self: *Inserter,
+        owned: *OwnedSet,
+        local: LIR.LocalId,
+        ret_mode: arc_sig.Mode,
+    ) void {
+        if (!self.localContainsRefcounted(local)) return;
+        if (ret_mode == .owned) {
+            owned.set(local);
+        } else if (!self.isBindingBorrowed(local)) {
+            owned.set(local);
+        }
+    }
+
     fn joinBodyOwnedSet(
         self: *Inserter,
         entry_owned: *const OwnedSet,
@@ -2019,6 +2035,39 @@ const Inserter = struct {
         owned.unset(owner);
         if (collected) |list| {
             try list.append(self.store.allocator, owner);
+        }
+    }
+
+    fn noteCallResultDeathIfUnused(
+        self: *Inserter,
+        owned: *OwnedSet,
+        local: LIR.LocalId,
+        ret_mode: arc_sig.Mode,
+        next: LIR.CFStmtId,
+        loop_keep: ?*const OwnedSet,
+        collected: ?*std.ArrayList(LIR.LocalId),
+    ) ResourceError!void {
+        if (ret_mode == .owned and self.solution.isBorrowed(local)) {
+            try self.noteOwnedLocalDeathIfUnused(owned, local, next, loop_keep, collected);
+        } else {
+            try self.noteDeathIfUnused(owned, local, next, loop_keep, collected);
+        }
+    }
+
+    fn noteOwnedLocalDeathIfUnused(
+        self: *Inserter,
+        owned: *OwnedSet,
+        local: LIR.LocalId,
+        next: LIR.CFStmtId,
+        loop_keep: ?*const OwnedSet,
+        collected: ?*std.ArrayList(LIR.LocalId),
+    ) ResourceError!void {
+        if (!owned.contains(local)) return;
+        if (self.solution.isJoinParam(local)) return;
+        if (try self.localValueUsedInPath(next, local, loop_keep)) return;
+        owned.unset(local);
+        if (collected) |list| {
+            try list.append(self.store.allocator, local);
         }
     }
 
@@ -2188,11 +2237,16 @@ const Inserter = struct {
                 const used_after_call = local != target and try self.groupUsedInPath(next, local, loop_keep);
                 const can_transfer = owned.contains(local) and !used_after_call and !transferred.contains(local);
                 if (!can_transfer) continue;
-                result.demanded.borrowed_params &= ~(@as(u64, 1) << @as(u6, @intCast(position)));
+                const bit = @as(u64, 1) << @as(u6, @intCast(position));
+                result.demanded.borrowed_params &= ~bit;
+                if (callee_sig.ret_mode == .borrowed and (callee_sig.ret_lenders & bit) != 0) {
+                    result.demanded.ret_mode = .owned;
+                    result.demanded.ret_lenders = 0;
+                }
                 if (unique_demand and self.isLocalUniqueHere(local) and
                     !self.groupSharesOtherOperand(locals, position, local))
                 {
-                    result.demanded.unique_params |= @as(u64, 1) << @as(u6, @intCast(position));
+                    result.demanded.unique_params |= bit;
                 }
                 try result.transfer_args.append(self.store.allocator, local);
                 transferred.set(local);
@@ -2231,7 +2285,12 @@ const Inserter = struct {
         demanded: arc_sig.RcSig,
     ) ResourceError!?LIR.LirProcSpecId {
         const solved = self.solution.sigOf(callee);
-        if (demanded.borrowed_params == solved.borrowed_params and demanded.unique_params == 0) return null;
+        if (demanded.borrowed_params == solved.borrowed_params and
+            demanded.ret_mode == solved.ret_mode and
+            demanded.unique_params == 0)
+        {
+            return null;
+        }
         const selector = VariantSelector{
             .source = callee,
             .borrowed_params = demanded.borrowed_params,
