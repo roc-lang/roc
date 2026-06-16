@@ -13,6 +13,7 @@ const LIR = core.LIR;
 const LirProgram = core.Program;
 const LirStore = core.LirStore;
 
+/// Errors that can occur while compacting reachable LIR procs.
 pub const Error = Allocator.Error;
 
 /// Remove proc specs unreachable from `root_procs` and explicit constant
