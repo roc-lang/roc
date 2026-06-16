@@ -15172,14 +15172,7 @@ fn commitLiteralGroupDefault(self: *Self, drivers: []const Var, env: *Env) Alloc
         // accepts by definition, so they have nothing to precheck.
         for (constraint_ranges.items, kinds.items) |range, kind| {
             if (kind != .numeral) continue;
-            for (self.types.sliceStaticDispatchConstraints(range)) |constraint| {
-                switch (constraint.origin) {
-                    .from_literal => |lit| {
-                        if (!literalInfoAcceptsBuiltinNumKind(lit, candidate_kind)) continue :candidate;
-                    },
-                    else => {},
-                }
-            }
+            if (!self.rangeNumeralDigitsFit(range, candidate_kind)) continue :candidate;
         }
 
         var commit_probe = try self.beginCommitProbe(env);
@@ -15208,26 +15201,13 @@ fn commitLiteralGroupDefault(self: *Self, drivers: []const Var, env: *Env) Alloc
         }
 
         // Phase 2: verify every driver's every non-literal constraint.
-        // Store-backed iterator, not a held slice: the verification appends to
-        // the constraint store, which can reallocate and dangle a slice.
-        for (drivers, 0..) |_, driver_idx| {
-            var constraints_iter = self.types.iterStaticDispatchConstraints(constraint_ranges.items[driver_idx]);
-            while (constraints_iter.next()) |constraint| {
-                switch (constraint.origin) {
-                    // Validated digit-fit above, before the probe began.
-                    .from_literal => {},
-                    else => {
-                        if (!try self.staticDispatchConstraintAcceptsCandidate(
-                            &commit_probe,
-                            constraint,
-                            candidate_vars.items[driver_idx],
-                            env,
-                        )) {
-                            continue :candidate;
-                        }
-                    },
-                }
-            }
+        for (0..drivers.len) |driver_idx| {
+            if (!try self.candidateSatisfiesRangeConstraints(
+                &commit_probe,
+                constraint_ranges.items[driver_idx],
+                candidate_vars.items[driver_idx],
+                env,
+            )) continue :candidate;
         }
 
         committed = true;
@@ -15796,14 +15776,7 @@ fn tryCommitNumeralCandidate(
     // numerals: the digits fit `candidate_kind`). Pure arithmetic on the
     // constraint payloads, checked before any store mutation so refuting a
     // candidate on digits alone costs no speculation at all.
-    for (self.types.sliceStaticDispatchConstraints(constraint_range)) |constraint| {
-        switch (constraint.origin) {
-            .from_literal => |lit| {
-                if (!literalInfoAcceptsBuiltinNumKind(lit, candidate_kind)) return null;
-            },
-            else => {},
-        }
-    }
+    if (!self.rangeNumeralDigitsFit(constraint_range, candidate_kind)) return null;
 
     var commit_probe = try self.beginCommitProbe(env);
     var committed = false;
@@ -15826,20 +15799,7 @@ fn tryCommitNumeralCandidate(
     const unify_result = try self.unify(literal_var, candidate_var, env);
     if (!unify_result.isOk()) return null;
 
-    // Store-backed iterator, not a held slice: the probe below appends to the
-    // constraint store, which can reallocate and dangle a slice.
-    var constraints_iter = self.types.iterStaticDispatchConstraints(constraint_range);
-    while (constraints_iter.next()) |constraint| {
-        switch (constraint.origin) {
-            // Validated digit-fit above, before the probe began.
-            .from_literal => {},
-            else => {
-                if (!try self.staticDispatchConstraintAcceptsCandidate(&commit_probe, constraint, candidate_var, env)) {
-                    return null;
-                }
-            },
-        }
-    }
+    if (!try self.candidateSatisfiesRangeConstraints(&commit_probe, constraint_range, candidate_var, env)) return null;
 
     committed = true;
     commit_probe.commit();
@@ -15904,6 +15864,52 @@ fn staticDispatchConstraintAcceptsCandidate(
     // commit-probe rollback rewinds.
     const result = try self.unify(method_var, constraint.fn_var, env);
     return result.isOk();
+}
+
+/// Whether the builtin numeric candidate `candidate_kind` can represent every
+/// `from_literal` numeral payload in `range` (digit fit). Pure arithmetic on the
+/// constraint payloads — no speculation. Shared digit-fit precheck for the
+/// single-literal and group numeral probes.
+fn rangeNumeralDigitsFit(
+    self: *Self,
+    range: StaticDispatchConstraint.SafeList.Range,
+    candidate_kind: CIR.NumKind,
+) bool {
+    for (self.types.sliceStaticDispatchConstraints(range)) |constraint| {
+        switch (constraint.origin) {
+            .from_literal => |lit| {
+                if (!literalInfoAcceptsBuiltinNumKind(lit, candidate_kind)) return false;
+            },
+            else => {},
+        }
+    }
+    return true;
+}
+
+/// Whether `candidate_var` satisfies every non-`from_literal` dispatch constraint
+/// in `range`, under the open `probe` scope. Uses the store-backed iterator (not a
+/// held slice) because verification appends to the constraint store, which can
+/// reallocate. Shared phase-2 verify for the single-literal and group numeral
+/// probes.
+fn candidateSatisfiesRangeConstraints(
+    self: *Self,
+    probe: *CommitProbe,
+    range: StaticDispatchConstraint.SafeList.Range,
+    candidate_var: Var,
+    env: *Env,
+) Allocator.Error!bool {
+    var constraints_iter = self.types.iterStaticDispatchConstraints(range);
+    while (constraints_iter.next()) |constraint| {
+        switch (constraint.origin) {
+            .from_literal => {},
+            else => {
+                if (!try self.staticDispatchConstraintAcceptsCandidate(probe, constraint, candidate_var, env)) {
+                    return false;
+                }
+            },
+        }
+    }
+    return true;
 }
 
 fn isBuiltinNumericNominal(self: *Self, var_: Var) bool {
