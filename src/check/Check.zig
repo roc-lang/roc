@@ -8557,7 +8557,8 @@ fn validateRecordRow(
     region: Region,
     visited: *std.AutoHashMap(Var, void),
 ) Allocator.Error!bool {
-    var names = std.AutoHashMap(Ident.Idx, void).init(self.gpa);
+    var names_sfa = std.heap.stackFallback(32 * @sizeOf(Ident.Idx), self.gpa);
+    var names = std.AutoHashMap(Ident.Idx, void).init(names_sfa.get());
     defer names.deinit();
 
     const field_slice = self.types.getRecordFieldsSlice(fields);
@@ -8638,7 +8639,8 @@ fn validateTagUnionRow(
     region: Region,
     visited: *std.AutoHashMap(Var, void),
 ) Allocator.Error!bool {
-    var names = std.AutoHashMap(Ident.Idx, void).init(self.gpa);
+    var names_sfa = std.heap.stackFallback(32 * @sizeOf(Ident.Idx), self.gpa);
+    var names = std.AutoHashMap(Ident.Idx, void).init(names_sfa.get());
     defer names.deinit();
 
     const tag_slice = self.types.getTagsSlice(tags);
