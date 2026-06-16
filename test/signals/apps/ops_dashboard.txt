@@ -1,27 +1,35 @@
 # Ops dashboard smoke scenario
 
-expect_text span:0 "Ops dashboard"
-expect_text span:1 "requests: 1200"
-expect_text span:2 "failures: 4"
-expect_text span:3 "queue: 17"
-expect_text span:5 "score: 1160 / queue: 17"
-expect_text span:6 "All services nominal"
-expect_text span:7 "No escalation"
-expect_text span:9 "mounted: 1"
-expect_text span:10 "unmounted: 0"
-expect_text span:11 "Database warmup"
-expect_text span:12 "acks: 0"
+expect_visible role:heading name:"Ops dashboard"
+expect_visible role:region name:"Traffic"
+expect_visible role:region name:"Queue"
+expect_visible role:region name:"Incident"
+expect_visible role:region name:"Alerts"
+expect_text text:"Requests: 1200" "Requests: 1200"
+expect_text text:"Failures: 4" "Failures: 4"
+expect_text text:"Queue: 17" "Queue: 17"
+expect_text text:"Health score: 1160 / queue: 17" "Health score: 1160 / queue: 17"
+expect_text text:"All services nominal" "All services nominal"
+expect_visible text:"No active incident"
+expect_visible role:region name:"Database warmup"
+expect_text text:"Database warmup acknowledgements: 0" "Database warmup acknowledgements: 0"
 
-click button:0
-expect_text span:1 "requests: 1275"
-expect_text span:5 "score: 1235 / queue: 17"
+click role:button name:"Add traffic sample"
+expect_text text:"Requests: 1275" "Requests: 1275"
+expect_text text:"Health score: 1235 / queue: 17" "Health score: 1235 / queue: 17"
 
-click button:5
-expect_text span:6 "Incident active"
-expect_text span:7 "Escalation channel open"
-expect_text span:11 "API latency"
-expect_text span:13 "Job backlog"
+fill label:"Runbook search" "latency"
+expect_value label:"Runbook search" "latency"
+expect_text text:"Runbook search: latency" "Runbook search: latency"
 
-click button:6
-expect_text span:9 "mounted: 3"
-expect_text span:10 "unmounted: 3"
+click role:button name:"Toggle incident"
+expect_text text:"Incident active" "Incident active"
+expect_visible text:"Incident room open"
+expect_visible role:region name:"API latency"
+expect_visible role:region name:"Job backlog"
+
+click role:button name:"Acknowledge API latency"
+expect_text text:"API latency acknowledgements: 1" "API latency acknowledgements: 1"
+
+click role:button name:"Clear alerts"
+expect_visible role:heading name:"Ops dashboard"

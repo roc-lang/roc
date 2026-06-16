@@ -16,7 +16,7 @@ Reactive := [].{
 		decode : NodeValue, NodeValue -> (Try(Unit, [TypeMismatch]), NodeValue)
 		decode = |nv, fmt| {
 			(result, rest) = NodeValue.decode_unit(fmt, nv)
-			unit_result =
+			unit_result = 
 				match result {
 					Ok(_) => Ok(Unit.value)
 					Err(err) => Err(err)
@@ -76,7 +76,7 @@ Reactive := [].{
 			wrapped = |input_nv| {
 				A : a
 				typed_input : a
-				typed_input =
+				typed_input = 
 					match A.decode(input_nv, NodeValue.format) {
 						(Ok(value), _) => value
 						(Err(_), _) => ...
@@ -111,14 +111,14 @@ Reactive := [].{
 			wrapped = |(event_nv, signal_nv)| {
 				E : e
 				typed_event : e
-				typed_event =
+				typed_event = 
 					match E.decode(event_nv, NodeValue.format) {
 						(Ok(value), _) => value
 						(Err(_), _) => ...
 					}
 				S : s
 				typed_signal : s
-				typed_signal =
+				typed_signal = 
 					match S.decode(signal_nv, NodeValue.format) {
 						(Ok(value), _) => value
 						(Err(_), _) => ...
@@ -148,7 +148,7 @@ Reactive := [].{
 			wrapped = |(_event_nv, signal_nv)| {
 				S : s
 				typed_signal : s
-				typed_signal =
+				typed_signal = 
 					match S.decode(signal_nv, NodeValue.format) {
 						(Ok(value), _) => value
 						(Err(_), _) => ...
@@ -179,6 +179,14 @@ Reactive := [].{
 		state! = |value| {
 			nv = Reactive.encode(value)
 			host_id = Host.create_signal_state!(nv)
+			{ node: Graph.SignalNode.make_prebuilt_signal(host_id) }
+		}
+
+		hold! : a, Event(a) => Signal(a) where [a.encode : a, NodeValue -> Try(NodeValue, [])]
+		hold! = |initial, event| {
+			initial_nv = Reactive.encode(initial)
+			event_id = Graph.EventNode.walk!(Event.to_node(event))
+			host_id = Host.create_signal_hold!(initial_nv, event_id)
 			{ node: Graph.SignalNode.make_prebuilt_signal(host_id) }
 		}
 
@@ -215,7 +223,7 @@ Reactive := [].{
 			wrapped = |input_nv| {
 				A : a
 				typed_input : a
-				typed_input =
+				typed_input = 
 					match A.decode(input_nv, NodeValue.format) {
 						(Ok(value), _) => value
 						(Err(_), _) => ...
@@ -250,14 +258,14 @@ Reactive := [].{
 			wrapped = |(left_nv, right_nv)| {
 				A : a
 				left : a
-				left =
+				left = 
 					match A.decode(left_nv, NodeValue.format) {
 						(Ok(value), _) => value
 						(Err(_), _) => ...
 					}
 				B : b
 				right : b
-				right =
+				right = 
 					match B.decode(right_nv, NodeValue.format) {
 						(Ok(value), _) => value
 						(Err(_), _) => ...
@@ -292,28 +300,28 @@ Reactive := [].{
 			{ node: Graph.SignalNode.make_map2_i64_i64_str(left_signal.node, right_signal.node, Box.box(wrapped)) }
 		}
 
-		fold :
-			a, Event(e), (a, e -> a) -> Signal(a)
+		fold! :
+			a, Event(e), (a, e -> a) => Signal(a)
 				where [
 					a.encode : a, NodeValue -> Try(NodeValue, []),
 					a.decode : NodeValue, NodeValue -> (Try(a, [TypeMismatch]), NodeValue),
 					e.decode : NodeValue, NodeValue -> (Try(e, [TypeMismatch]), NodeValue),
 				]
-		fold = |initial, event, step_fn| {
+		fold! = |initial, event, step_fn| {
 			initial_nv = Reactive.encode(initial)
-			event_node = Event.to_node(event)
+			event_id = Graph.EventNode.walk!(Event.to_node(event))
 			wrapped : (NodeValue, NodeValue) -> NodeValue
 			wrapped = |(acc_nv, evt_nv)| {
 				A : a
 				acc : a
-				acc =
+				acc = 
 					match A.decode(acc_nv, NodeValue.format) {
 						(Ok(value), _) => value
 						(Err(_), _) => ...
 					}
 				E : e
 				evt : e
-				evt =
+				evt = 
 					match E.decode(evt_nv, NodeValue.format) {
 						(Ok(value), _) => value
 						(Err(_), _) => ...
@@ -323,59 +331,47 @@ Reactive := [].{
 				Reactive.encode(new_acc)
 			}
 
-			{
-				node: Graph.SignalNode.make_fold(
-					initial_nv,
-					event_node,
-					Box.box(wrapped),
-				),
-			}
+			host_id = Host.create_signal_fold!(initial_nv, event_id, Box.box(wrapped))
+			{ node: Graph.SignalNode.make_prebuilt_signal(host_id) }
 		}
 
-		fold_i64 : I64, Event(I64), (I64, I64 -> I64) -> Signal(I64)
-		fold_i64 = |initial, event, step_fn| {
+		fold_i64! : I64, Event(I64), (I64, I64 -> I64) => Signal(I64)
+		fold_i64! = |initial, event, step_fn| {
 			wrapped : (I64, I64) -> I64
 			wrapped = |(current, delta)| step_fn(current, delta)
 
-			{
-				node: Graph.SignalNode.make_fold_i64(
-					initial,
-					Event.to_node(event),
-					Box.box(wrapped),
-				),
-			}
+			event_id = Graph.EventNode.walk!(Event.to_node(event))
+			host_id = Host.create_signal_fold_i64!(initial, event_id, Box.box(wrapped))
+			{ node: Graph.SignalNode.make_prebuilt_signal(host_id) }
 		}
 
-		fold_bool_toggle : Bool, Event(Unit) -> Signal(Bool)
-		fold_bool_toggle = |initial, event| {
-			{
-				node: Graph.SignalNode.make_fold_bool_toggle(
-					initial,
-					Event.to_node(event),
-				),
-			}
+		fold_bool_toggle! : Bool, Event(Unit) => Signal(Bool)
+		fold_bool_toggle! = |initial, event| {
+			event_id = Graph.EventNode.walk!(Event.to_node(event))
+			host_id = Host.create_signal_fold_bool_toggle!(initial, event_id)
+			{ node: Graph.SignalNode.make_prebuilt_signal(host_id) }
 		}
 
-		zip_with :
-			Signal(a), Event(e), (a, e -> a) -> Signal(a)
+		zip_with! :
+			Signal(a), Event(e), (a, e -> a) => Signal(a)
 				where [
 					a.encode : a, NodeValue -> Try(NodeValue, []),
 					a.decode : NodeValue, NodeValue -> (Try(a, [TypeMismatch]), NodeValue),
 					e.decode : NodeValue, NodeValue -> (Try(e, [TypeMismatch]), NodeValue),
 				]
-		zip_with = |signal, event, combine| {
+		zip_with! = |signal, event, combine| {
 			wrapped : (NodeValue, NodeValue) -> NodeValue
 			wrapped = |(signal_nv, event_nv)| {
 				A : a
 				typed_signal : a
-				typed_signal =
+				typed_signal = 
 					match A.decode(signal_nv, NodeValue.format) {
 						(Ok(value), _) => value
 						(Err(_), _) => ...
 					}
 				E : e
 				typed_event : e
-				typed_event =
+				typed_event = 
 					match E.decode(event_nv, NodeValue.format) {
 						(Ok(value), _) => value
 						(Err(_), _) => ...
@@ -385,13 +381,10 @@ Reactive := [].{
 				Reactive.encode(output)
 			}
 
-			{
-				node: Graph.SignalNode.make_zip_with(
-					signal.node,
-					Event.to_node(event),
-					Box.box(wrapped),
-				),
-			}
+			source_id = Graph.SignalNode.walk!(signal.node)
+			event_id = Graph.EventNode.walk!(Event.to_node(event))
+			host_id = Host.create_signal_zip_with!(source_id, event_id, Box.box(wrapped))
+			{ node: Graph.SignalNode.make_prebuilt_signal(host_id) }
 		}
 	}
 }

@@ -2555,37 +2555,69 @@ pub fn build(b: *std.Build) void {
     run_builtin_format.step.dependOn(build_roc_step);
     run_check_builtin_format_step.dependOn(&run_builtin_format.step);
 
-    const check_signals_app = b.addRunArtifact(roc_exe);
-    check_signals_app.addArgs(&.{ "check", "test/signals/app.roc" });
-    check_signals_app.step.dependOn(build_roc_step);
+    const signals_apps = [_]struct {
+        exe_name: []const u8,
+        source: []const u8,
+        spec: []const u8,
+    }{
+        .{
+            .exe_name = "signals-ops-dashboard",
+            .source = "test/signals/apps/ops_dashboard.roc",
+            .spec = "test/signals/apps/ops_dashboard.txt",
+        },
+        .{
+            .exe_name = "signals-checkout-wizard",
+            .source = "test/signals/apps/checkout_wizard.roc",
+            .spec = "test/signals/apps/checkout_wizard.txt",
+        },
+        .{
+            .exe_name = "signals-kanban-board",
+            .source = "test/signals/apps/kanban_board.roc",
+            .spec = "test/signals/apps/kanban_board.txt",
+        },
+    };
 
-    const signals_demo_path = b.pathJoin(&.{ "zig-out", "bin", "signals-demo" });
-    const build_signals_app = b.addRunArtifact(roc_exe);
-    build_signals_app.addArgs(&.{
-        "build",
-        "--opt=speed",
-        "--debug",
-        "--no-cache",
-        b.fmt("--output={s}", .{signals_demo_path}),
-        "test/signals/app.roc",
-    });
-    build_signals_app.step.dependOn(&check_signals_app.step);
-    build_signals_app.step.dependOn(build_test_hosts_step);
+    var signals_bench_path: []const u8 = undefined;
+    var signals_bench_build_step: ?*Step = null;
 
-    const run_signals_demo = b.addSystemCommand(&.{
-        signals_demo_path,
-        "test/signals/test_counter.txt",
-    });
-    run_signals_demo.step.dependOn(&build_signals_app.step);
-    run_test_signals_step.dependOn(&run_signals_demo.step);
+    for (signals_apps) |signals_app| {
+        const check_signals_app = b.addRunArtifact(roc_exe);
+        check_signals_app.addArgs(&.{ "check", signals_app.source });
+        check_signals_app.step.dependOn(build_roc_step);
+
+        const signals_app_path = b.pathJoin(&.{ "zig-out", "bin", signals_app.exe_name });
+        const build_signals_app = b.addRunArtifact(roc_exe);
+        build_signals_app.addArgs(&.{
+            "build",
+            "--opt=speed",
+            "--debug",
+            "--no-cache",
+            b.fmt("--output={s}", .{signals_app_path}),
+            signals_app.source,
+        });
+        build_signals_app.step.dependOn(&check_signals_app.step);
+        build_signals_app.step.dependOn(build_test_hosts_step);
+
+        const run_signals_app = b.addSystemCommand(&.{
+            signals_app_path,
+            signals_app.spec,
+        });
+        run_signals_app.step.dependOn(&build_signals_app.step);
+        run_test_signals_step.dependOn(&run_signals_app.step);
+
+        if (std.mem.eql(u8, signals_app.exe_name, "signals-ops-dashboard")) {
+            signals_bench_path = signals_app_path;
+            signals_bench_build_step = &build_signals_app.step;
+        }
+    }
 
     const run_signals_bench = b.addSystemCommand(&.{
-        signals_demo_path,
+        signals_bench_path,
         "--bench",
         "--bench-iterations",
         "200",
     });
-    run_signals_bench.step.dependOn(&build_signals_app.step);
+    run_signals_bench.step.dependOn(signals_bench_build_step.?);
     run_signals_bench_step.dependOn(&run_signals_bench.step);
 
     var release_exe_for_llvm_embedded: ?*Step.Compile = null;

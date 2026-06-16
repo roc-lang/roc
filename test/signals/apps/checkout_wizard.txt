@@ -1,29 +1,38 @@
 # Checkout wizard smoke scenario
 
-expect_text span:0 "Checkout wizard"
-expect_text span:1 "Step 1 Cart"
-expect_text span:2 "Cart editor active"
-expect_text span:3 "Cart lines"
-expect_text span:4 "3 seats"
-expect_text span:5 "qty: 1"
-expect_text span:6 "Priority support"
-expect_text span:7 "qty: 1"
+expect_visible role:heading name:"Checkout wizard"
+expect_visible role:region name:"Cart"
+expect_text text:"Step 1 Cart" "Step 1 Cart"
+expect_visible role:region name:"3 seats"
+expect_visible role:region name:"Priority support"
+expect_text text:"3 seats quantity: 1" "3 seats quantity: 1"
 
-click button:5
-expect_text span:5 "qty: 2"
+click role:button name:"Increase 3 seats"
+expect_text text:"3 seats quantity: 2" "3 seats quantity: 2"
 
-click button:1
-expect_text span:1 "Step 2 Delivery"
-expect_text span:2 "Delivery preferences"
-expect_text span:3 "Terms pending"
+click role:button name:"Next"
+expect_visible role:region name:"Delivery"
+expect_value label:"Email" ""
+fill label:"Email" "team@example.com"
+expect_value label:"Email" "team@example.com"
+fill label:"Address" "42 Signal Way"
+expect_value label:"Address" "42 Signal Way"
+expect_checked label:"Accept terms" false
 
-click button:2
-expect_text span:3 "Terms accepted"
+click role:button name:"Next"
+expect_visible role:region name:"Review"
+expect_text text:"Email: team@example.com" "Email: team@example.com"
+expect_text text:"Address: 42 Signal Way" "Address: 42 Signal Way"
+expect_disabled role:button name:"Place order" true
 
-click button:1
-expect_text span:1 "Step 3 Review"
-expect_text span:2 "Review"
-expect_text span:3 "submits: 0"
+click role:button name:"Back"
+expect_visible role:region name:"Delivery"
+check label:"Accept terms"
+expect_checked label:"Accept terms" true
+expect_text text:"Terms accepted" "Terms accepted"
 
-click button:2
-expect_text span:3 "submits: 1"
+click role:button name:"Next"
+expect_visible role:region name:"Review"
+expect_disabled role:button name:"Place order" false
+click role:button name:"Place order"
+expect_text text:"Orders submitted: 1" "Orders submitted: 1"

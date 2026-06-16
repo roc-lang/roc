@@ -18,6 +18,20 @@ Host := [].{
 	## Set element text content
 	set_text! : U64, Str => {}
 
+	## Set semantic/test metadata
+	set_role! : U64, Str => {}
+
+	set_label! : U64, Str => {}
+
+	set_test_id! : U64, Str => {}
+
+	## Set element form state
+	set_value! : U64, Str => {}
+
+	set_checked! : U64, Bool => {}
+
+	set_disabled! : U64, Bool => {}
+
 	## Append child to parent element
 	append_child! : U64, U64 => {}
 
@@ -84,8 +98,20 @@ Host := [].{
 	## Bind a signal to an element's text content
 	bind_text! : U64, U64 => {}
 
+	## Bind signals to form element state
+	bind_value! : U64, U64 => {}
+
+	bind_checked! : U64, U64 => {}
+
+	bind_disabled! : U64, U64 => {}
+
 	## Bind click events from element to event node
 	bind_click! : U64, U64 => {}
+
+	## Bind form input events from element to event node
+	bind_input! : U64, U64 => {}
+
+	bind_check! : U64, U64 => {}
 
 	## Fire an event source from Roc code
 	send_event! : U64, NodeValue => {}

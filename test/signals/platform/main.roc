@@ -1,33 +1,24 @@
 platform ""
-	requires {
-		[BoundaryPayload : boundary_payload] for program : {
-			main! : () => {},
-			init_boundary_payload : {} -> boundary_payload,
-			boundary_payload_total : boundary_payload -> I64,
-			boundary_payload_item_key : boundary_payload -> Str,
-			boundary_payload_item_label : boundary_payload -> Str,
-			boundary_payload_items_len : boundary_payload -> U64,
-		}
-	}
-	exposes [Reactive, Elem, NodeValue, Graph]
+	requires {} { main! : () => {} }
+	exposes [Reactive, Elem, NodeValue]
 	packages {}
 	provides {
 		"roc_main": main_for_host!,
 		"roc_call_transform": call_transform,
 		"roc_call_step": call_step,
 		"roc_call_predicate": call_predicate,
-		"roc_boundary_payload_init": boundary_payload_init,
-		"roc_boundary_payload_total": boundary_payload_total,
-		"roc_boundary_payload_item_key": boundary_payload_item_key,
-		"roc_boundary_payload_item_label": boundary_payload_item_label,
-		"roc_boundary_payload_items_len": boundary_payload_items_len,
-		"roc_boundary_payload_drop": boundary_payload_drop,
 	}
 	hosted {
 		"roc_host_append_child": Host.append_child!,
+		"roc_host_bind_check": Host.bind_check!,
 		"roc_host_bind_click": Host.bind_click!,
+		"roc_host_bind_checked": Host.bind_checked!,
+		"roc_host_bind_disabled": Host.bind_disabled!,
+		"roc_host_bind_input": Host.bind_input!,
 		"roc_host_bind_text": Host.bind_text!,
+		"roc_host_bind_value": Host.bind_value!,
 		"roc_host_create_dynamic": Elem.create_dynamic!,
+		"roc_host_create_dynamic_keyed": Elem.create_dynamic_keyed!,
 		"roc_host_create_element": Host.create_element!,
 		"roc_host_create_each": Elem.create_each!,
 		"roc_host_create_event_filter": Host.create_event_filter!,
@@ -55,7 +46,13 @@ platform ""
 		"roc_host_create_signal_zip_with": Host.create_signal_zip_with!,
 		"roc_host_register_lifecycle": Elem.register_lifecycle!,
 		"roc_host_send_event": Host.send_event!,
+		"roc_host_set_checked": Host.set_checked!,
+		"roc_host_set_disabled": Host.set_disabled!,
+		"roc_host_set_label": Host.set_label!,
+		"roc_host_set_role": Host.set_role!,
+		"roc_host_set_test_id": Host.set_test_id!,
 		"roc_host_set_text": Host.set_text!,
+		"roc_host_set_value": Host.set_value!,
 		"roc_host_bind_signal_update": Host.bind_signal_update!,
 	}
 	targets: {
@@ -72,7 +69,7 @@ import Host
 
 ## Called by host at startup to build the UI
 main_for_host! : () => {}
-main_for_host! = || (program.main!)()
+main_for_host! = || main!()
 
 ## Called by host to evaluate a transform closure (for map operations)
 call_transform : Box((NodeValue -> NodeValue)), NodeValue -> NodeValue
@@ -93,37 +90,4 @@ call_predicate : Box((NodeValue -> Bool)), NodeValue -> Bool
 call_predicate = |boxed_pred, input| {
 	pred = Box.unbox(boxed_pred)
 	pred(input)
-}
-
-boundary_payload_init : {} -> Box(BoundaryPayload)
-boundary_payload_init = |_| Box.box((program.init_boundary_payload)({}))
-
-boundary_payload_total : Box(BoundaryPayload) -> I64
-boundary_payload_total = |boxed_payload| {
-	payload = Box.unbox(boxed_payload)
-	(program.boundary_payload_total)(payload)
-}
-
-boundary_payload_item_key : Box(BoundaryPayload) -> Str
-boundary_payload_item_key = |boxed_payload| {
-	payload = Box.unbox(boxed_payload)
-	(program.boundary_payload_item_key)(payload)
-}
-
-boundary_payload_item_label : Box(BoundaryPayload) -> Str
-boundary_payload_item_label = |boxed_payload| {
-	payload = Box.unbox(boxed_payload)
-	(program.boundary_payload_item_label)(payload)
-}
-
-boundary_payload_items_len : Box(BoundaryPayload) -> U64
-boundary_payload_items_len = |boxed_payload| {
-	payload = Box.unbox(boxed_payload)
-	(program.boundary_payload_items_len)(payload)
-}
-
-boundary_payload_drop : Box(BoundaryPayload) -> {}
-boundary_payload_drop = |boxed_payload| {
-	_ = Box.unbox(boxed_payload)
-	{}
 }

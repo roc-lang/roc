@@ -1,9 +1,9 @@
 # Signals NodeValue Boundary Research
 
-This report summarizes the boundary-focused prototype pass for the signals
-platform. The control remains the generic 32-byte `NodeValue` representation,
-but the prototype now includes scoped cleanup, scalar host paths, generated
-refcount helpers from `ZigGlue.roc`, and one generated boundary payload spike.
+This report summarizes the current boundary-focused prototype pass for the
+signals platform. The app-facing platform no longer exposes benchmark payloads:
+representative apps use ordinary Roc UI code, and benchmark instrumentation
+lives in the Zig host.
 
 ## Commands
 
@@ -14,12 +14,12 @@ zig build run-test-cli -- --suite glue
 zig build run-test-signals -Dplatform=signals
 zig build run-signals-bench -Dplatform=signals
 zig build build-test-hosts -Dplatform=signals -Doptimize=ReleaseFast
-./zig-out/bin/roc build --opt=speed --debug --no-cache --output=zig-out/bin/signals-demo test/signals/app.roc
-./zig-out/bin/signals-demo --bench --bench-iterations 5000 --bench-samples 3
+./zig-out/bin/signals-ops-dashboard --bench --bench-iterations 5000 --bench-samples 3
 ```
 
-The final matrix below is a ReleaseFast host build with three 5,000-iteration
-samples. Values are median elapsed time unless noted.
+The matrix below comes from the previous ReleaseFast host run with three
+5,000-iteration samples. Values are median elapsed time unless noted. Re-run the
+commands above after platform changes before drawing fresh numeric conclusions.
 
 ## Prototype Matrix
 
@@ -28,7 +28,7 @@ samples. Values are median elapsed time unless noted.
 | A. Baseline `NodeValue` | Current typed Roc API | 32-byte tagged union | Host stores owned `NodeValue` copies | Boxed callbacks receive `NodeValue` | Recursive generated/host equality | Supported |
 | B. Scalar fast paths | Adds explicit scalar API helpers for hot paths | Typed primitive hosted paths | Scalars copied directly; complex values stay `NodeValue` | Primitive callbacks use scalar args/results | Direct scalar equality | Dynamic/list paths still use `NodeValue` |
 | C. Host value handles | Would require handle/view APIs | Host-owned handles/views | Host owns value storage | Callbacks receive handles/views | Explicit value/view equality | Needs lifetime rules |
-| D. Generated boundary | Typed Roc API can stay | Per-type boundary entrypoints | Generated type-specific ownership helpers | App-model callbacks receive typed payloads | Generated/type-specific equality | Spike covers app model/list item payloads |
+| D. Generated boundary | Typed Roc API can stay | Per-type boundary entrypoints | Generated type-specific ownership helpers | App-model callbacks receive typed payloads | Generated/type-specific equality | Needs generated glue for dynamic/list item types |
 
 ## ReleaseFast Synthetic Measurements
 
@@ -40,47 +40,21 @@ samples. Values are median elapsed time unless noted.
 | callback shape | 12.4 us | 1.8 us, 7.1x | 8.8 us, 1.4x | 20.2 us, 0.6x |
 | deep map chain | 643.5 us | 341.6 us, 1.9x | 198.9 us, 3.2x | 643.2 us, 1.0x |
 | wide fanout | 2.55 ms | 2.51 ms, 1.0x | 2.49 ms, 1.0x | 2.58 ms, 1.0x |
-| generated boundary payload, fresh box | n/a | n/a | n/a | 53.8 ms |
-| generated boundary payload, reused box | n/a | n/a | n/a | 91.7 us |
 
 Important interpretation details:
 
-- B now measures real scalar paths for `I64`, `Bool`, and `Str` in the host.
+- B measures real scalar paths for `I64`, `Bool`, and `Str` in the host.
 - The list/record rows for C and D are still synthetic lower bounds, not full
   `Elem.dynamic` or `Elem.each` replacements.
-- The fresh D boundary payload row is real Roc-generated boundary glue, but it
-  allocates a fresh boxed boundary payload per call. At 5,000 iterations it
-  performs 40,000 allocations and 40,000 deallocations, so it proves correctness
-  more than speed.
-- The reused D boundary payload row keeps one boxed payload owner, retains it
-  before each consuming Roc entrypoint, and consumes the owner with an explicit
-  drop entrypoint after the batch. It performs 2 allocations and 2 deallocations
-  with zero retained allocation delta.
-- ReleaseFast can optimize pure synthetic loops aggressively. The harness now
-  puts per-iteration barriers on benchmark values to keep rows loop-bound.
-
-## Current-App Scenarios
-
-These rows run the compiled demo. They report as the production
-scalar/`NodeValue` hybrid because the current app uses the production signal
-graph with scalar host paths and generated cleanup helpers.
-
-| Scenario | Median time | Key counters |
-| --- | ---: | --- |
-| counter updates, 5,000 clicks | 184.1 ms | 95,000 allocs/deallocs, 60,000 callbacks |
-| diamond updates, 5,000 clicks | 33.7 ms | 0 allocs, 60,000 callbacks, 100,000 evaluated nodes |
-| event merge, 5,000 clicks | 31.6 ms | 0 allocs, 15,000 callbacks |
-| dynamic toggle, 5,000 clicks | 118.9 ms | 10,000 events, 15,000 callbacks |
-| keyed reorder/remove, 10,000 clicks | 1.06 s | 289,995 allocs, 289,998 deallocs, retained delta -3 |
-
-The keyed churn retention issue is fixed. The earlier baseline retained tens of
-thousands of Roc allocations because nested `NodeValue` list elements were not
-recursively released. `ZigGlue.roc` now emits type-specific helpers such as
-`decrefNodeValue`, and the host delegates recursive cleanup to generated glue.
+- ReleaseFast can optimize pure synthetic loops aggressively. The harness keeps
+  per-iteration barriers on benchmark values to keep rows loop-bound.
+- The old generated payload spike proved natural provided-entrypoint ABI and
+  generated ownership helpers, but it was app-specific benchmark scaffolding.
+  That path has been removed from the maintained app/platform contract.
 
 ## Glue Findings
 
-`ZigGlue.roc` had two boundary bugs surfaced by the generated boundary payload spike:
+`ZigGlue.roc` had two boundary bugs surfaced by the generated boundary spike:
 
 1. Provided entrypoints were generated as an obsolete universal
    `ops, ret_ptr, arg_ptr` shape. The compiled Roc object exports natural C ABI
@@ -107,27 +81,31 @@ allocation is uniquely owned, immediately before the list allocation is decrefed
    helpers improve safety and make nested list/record/tag cleanup auditable from
    the same type data used for ABI generation.
 
-3. Reused generated boundary payloads are the next D baseline.
+3. Generic list/record boundaries are the major cost center.
 
-   The fresh payload spike validates natural entrypoint ABI and app-model calls,
-   but boxed-payload-per-call shape is dominated by allocation. The reused
-   payload path removes that allocation churn while keeping ownership explicit:
-   host-owned payload, per-call retain, consuming Roc entrypoint, final explicit
-   drop.
+   The generic `NodeValue` path is adequate for correctness and simplicity, but
+   the synthetic list/record row shows the cost center clearly. Real UI apps need
+   dynamic render payloads, keyed list items, and app model fragments, so the next
+   round should compare alternatives that preserve typed Roc ergonomics.
 
 4. Host handles remain promising but risky.
 
    Handles/views are fast in synthetic list/record rows, but correctness depends
-   on explicit lifetime, versioning, and equality semantics.
+   on explicit lifetime, versioning, equality, and renderer-scope ownership
+   semantics.
 
 ## Recommendation
 
 Use a hybrid migration path:
 
-1. Keep the scalar fast paths for common signal families.
+1. Keep scalar fast paths for common signal families.
 2. Keep recursive retain/release in generated Zig glue and remove hand-written
    host cleanup for Roc layouts as helpers become available.
-3. Use the reused generated boundary payload row as the next D baseline, then
-   compare it against borrowed payload and typed generated-payload variants.
-4. Leave generic `NodeValue` in place for heterogeneous dynamic boundaries until
+3. Leave generic `NodeValue` in place for heterogeneous dynamic boundaries until
    a generated or handle-based design proves ownership and equality semantics.
+4. Research three concrete alternatives for dynamic/list payloads next:
+   generated type-specific dynamic/list glue, host-owned value handles with
+   explicit lifetime/version rules, and borrowed read-only views for render-only
+   paths.
+5. Keep benchmarking and stats in the host. Representative app Roc code should
+   stay focused on real UI behavior.

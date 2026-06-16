@@ -19,15 +19,27 @@
 //!
 //! ```
 //! # Comment (ignored)
-//! expect_text button:0 "-"
-//! expect_text span:0 "0"
-//! click button:1
-//! expect_text span:0 "1"
+//! expect_visible role:heading name:"Checkout wizard"
+//! fill label:"Email" "team@example.com"
+//! check label:"Accept terms"
+//! click role:button name:"Place order"
 //! ```
 //!
 //! Commands:
-//! - `click <tag>:<index>` - Simulate click on element
-//! - `expect_text <tag>:<index> "<text>"` - Verify element text content
+//! - `click <locator>` - Simulate click on an element
+//! - `fill <locator> "<text>"` - Simulate text input
+//! - `check <locator>` / `uncheck <locator>` - Simulate checkbox input
+//! - `expect_visible <locator>` - Verify a visible element exists
+//! - `expect_text <locator> "<text>"` - Verify element text content
+//! - `expect_value <locator> "<text>"` - Verify form value
+//! - `expect_checked <locator> true|false` - Verify checkbox state
+//! - `expect_disabled <locator> true|false` - Verify disabled state
+//!
+//! Locators:
+//! - `role:<role> name:"<accessible name>"`
+//! - `label:"<label>"`
+//! - `text:"<exact text>"`
+//! - `test_id:"<id>"`
 //!
 //! Exit codes:
 //! - 0: All expectations matched
@@ -198,39 +210,93 @@ fn nodeValueUnit() NodeValue {
     };
 }
 
+fn nodeValueBool(value: bool) NodeValue {
+    return .{
+        .payload = .{ .nv_bool = value },
+        .tag = .NvBool,
+    };
+}
+
+fn nodeValueStr(ops: *abi.RocOps, value: []const u8) NodeValue {
+    return .{
+        .payload = .{ .nv_str = RocStr.fromSlice(value, ops) },
+        .tag = .NvStr,
+    };
+}
+
 // Simulated DOM
 
 const DomElement = struct {
     id: u64,
     tag: []const u8,
+    role: ?[]const u8,
+    label: ?[]const u8,
+    test_id: ?[]const u8,
     text: ?[]const u8,
+    value: ?[]const u8,
+    checked: bool,
+    disabled: bool,
     parent_id: ?u64,
     children: std.ArrayListUnmanaged(u64),
     bound_text_signal: ?u64, // NodeId of signal bound to text
+    bound_value_signal: ?u64,
+    bound_checked_signal: ?u64,
+    bound_disabled_signal: ?u64,
     bound_click_event: ?u64, // NodeId of event bound to click
+    bound_input_event: ?u64,
+    bound_check_event: ?u64,
     scope_id: u64,
     active: bool,
     text_update_count: u64,
+    value_update_count: u64,
+    checked_update_count: u64,
+    disabled_update_count: u64,
 
     fn init(id: u64, tag: []const u8, scope_id: u64) DomElement {
         return .{
             .id = id,
             .tag = tag,
+            .role = null,
+            .label = null,
+            .test_id = null,
             .text = null,
+            .value = null,
+            .checked = false,
+            .disabled = false,
             .parent_id = null,
             .children = .empty,
             .bound_text_signal = null,
+            .bound_value_signal = null,
+            .bound_checked_signal = null,
+            .bound_disabled_signal = null,
             .bound_click_event = null,
+            .bound_input_event = null,
+            .bound_check_event = null,
             .scope_id = scope_id,
             .active = true,
             .text_update_count = 0,
+            .value_update_count = 0,
+            .checked_update_count = 0,
+            .disabled_update_count = 0,
         };
     }
 
     fn deinit(self: *DomElement, allocator: std.mem.Allocator) void {
         allocator.free(self.tag);
+        if (self.role) |role| {
+            allocator.free(role);
+        }
+        if (self.label) |label| {
+            allocator.free(label);
+        }
+        if (self.test_id) |test_id| {
+            allocator.free(test_id);
+        }
         if (self.text) |text| {
             allocator.free(text);
+        }
+        if (self.value) |value| {
+            allocator.free(value);
         }
         self.children.deinit(allocator);
     }
@@ -293,6 +359,7 @@ const NodeKind = union(enum) {
     signal_fold_bool_toggle: struct { event: u64 },
     signal_zip_with: struct { source: u64, event: u64, combine: RocBox },
     dynamic: struct { parent: u64, signal: u64, render: RocBox, child_scope: ?u64 },
+    dynamic_keyed: struct { parent: u64, signal: u64, key: RocBox, render: RocBox, entries: std.ArrayListUnmanaged(KeyedScope), current_scope: ?u64 },
     each: struct { parent: u64, signal: u64, key: RocBox, render: RocBox, entries: std.ArrayListUnmanaged(KeyedScope) },
 };
 
@@ -346,6 +413,15 @@ const GraphNode = struct {
             .signal_fold_i64 => |*data| decrefErasedCallable(data.step, ops),
             .signal_zip_with => |*data| decrefErasedCallable(data.combine, ops),
             .dynamic => |*data| decrefErasedCallable(data.render, ops),
+            .dynamic_keyed => |*data| {
+                decrefErasedCallable(data.key, ops);
+                decrefErasedCallable(data.render, ops);
+                for (data.entries.items) |entry| {
+                    allocator.free(entry.key);
+                }
+                data.entries.deinit(allocator);
+                data.entries = .empty;
+            },
             .each => |*data| {
                 decrefErasedCallable(data.key, ops);
                 decrefErasedCallable(data.render, ops);
@@ -395,16 +471,47 @@ const Scope = struct {
 
 const SpecCommandType = enum {
     click,
+    fill,
+    check,
+    uncheck,
     expect_text,
+    expect_visible,
+    expect_value,
+    expect_checked,
+    expect_disabled,
     expect_updates,
+};
+
+const LocatorKind = enum {
+    role_name,
+    label,
+    text,
+    test_id,
+};
+
+const Locator = struct {
+    kind: LocatorKind,
+    role: ?[]const u8 = null,
+    name: ?[]const u8 = null,
+    label: ?[]const u8 = null,
+    text: ?[]const u8 = null,
+    test_id: ?[]const u8 = null,
+
+    fn deinit(self: Locator, allocator: std.mem.Allocator) void {
+        if (self.role) |value| allocator.free(value);
+        if (self.name) |value| allocator.free(value);
+        if (self.label) |value| allocator.free(value);
+        if (self.text) |value| allocator.free(value);
+        if (self.test_id) |value| allocator.free(value);
+    }
 };
 
 const SpecCommand = struct {
     cmd_type: SpecCommandType,
-    tag: []const u8,
-    index: usize,
+    locator: Locator,
     expected_text: ?[]const u8, // For expect_text
     expected_count: ?u64,
+    expected_bool: ?bool,
     line_num: usize, // For error reporting
 };
 
@@ -481,6 +588,72 @@ fn parseTestSpecFile(allocator: std.mem.Allocator, file_path: []const u8) ParseE
     return parseTestSpec(allocator, content);
 }
 
+const SplitTrailingQuoted = struct {
+    head: []const u8,
+    quoted: []const u8,
+};
+
+fn splitTrailingQuoted(input: []const u8) ParseError!SplitTrailingQuoted {
+    const end_quote = std.mem.lastIndexOfScalar(u8, input, '"') orelse return ParseError.InvalidFormat;
+    if (end_quote == 0) return ParseError.InvalidFormat;
+    const before_end = input[0..end_quote];
+    const start_quote = std.mem.lastIndexOfScalar(u8, before_end, '"') orelse return ParseError.InvalidFormat;
+    const tail = std.mem.trim(u8, input[end_quote + 1 ..], " \t");
+    if (tail.len != 0) return ParseError.InvalidFormat;
+    return .{
+        .head = std.mem.trim(u8, input[0..start_quote], " \t"),
+        .quoted = input[start_quote + 1 .. end_quote],
+    };
+}
+
+fn splitTrailingToken(input: []const u8) ParseError!struct { head: []const u8, token: []const u8 } {
+    const trimmed = std.mem.trim(u8, input, " \t");
+    const space_idx = std.mem.lastIndexOfAny(u8, trimmed, " \t") orelse return ParseError.InvalidFormat;
+    return .{
+        .head = std.mem.trim(u8, trimmed[0..space_idx], " \t"),
+        .token = std.mem.trim(u8, trimmed[space_idx + 1 ..], " \t"),
+    };
+}
+
+fn parseQuotedValue(allocator: std.mem.Allocator, prefix: []const u8, input: []const u8) ParseError!?[]const u8 {
+    if (!std.mem.startsWith(u8, input, prefix)) return null;
+    const rest = std.mem.trim(u8, input[prefix.len..], " \t");
+    if (rest.len < 2 or rest[0] != '"' or rest[rest.len - 1] != '"') return ParseError.InvalidFormat;
+    const value = rest[1 .. rest.len - 1];
+    return allocator.dupe(u8, value) catch ParseError.OutOfMemory;
+}
+
+fn parseLocator(allocator: std.mem.Allocator, input: []const u8) ParseError!Locator {
+    const trimmed = std.mem.trim(u8, input, " \t");
+    if (trimmed.len == 0) return ParseError.InvalidFormat;
+
+    if (std.mem.startsWith(u8, trimmed, "role:")) {
+        const rest = trimmed["role:".len..];
+        const space_idx = std.mem.indexOfAny(u8, rest, " \t") orelse return ParseError.InvalidFormat;
+        const role = rest[0..space_idx];
+        const name_part = std.mem.trim(u8, rest[space_idx + 1 ..], " \t");
+        const name = (try parseQuotedValue(allocator, "name:", name_part)) orelse return ParseError.InvalidFormat;
+        const role_copy = allocator.dupe(u8, role) catch return ParseError.OutOfMemory;
+        return .{
+            .kind = .role_name,
+            .role = role_copy,
+            .name = name,
+        };
+    }
+
+    if ((try parseQuotedValue(allocator, "label:", trimmed))) |value| {
+        return .{ .kind = .label, .label = value };
+    }
+    if ((try parseQuotedValue(allocator, "text:", trimmed))) |value| {
+        return .{ .kind = .text, .text = value };
+    }
+    if ((try parseQuotedValue(allocator, "test_id:", trimmed))) |value| {
+        return .{ .kind = .test_id, .test_id = value };
+    }
+
+    return ParseError.InvalidFormat;
+}
+
 /// Parse test spec content
 fn parseTestSpec(allocator: std.mem.Allocator, content: []const u8) ParseError![]SpecCommand {
     var commands: std.ArrayListUnmanaged(SpecCommand) = .empty;
@@ -498,62 +671,119 @@ fn parseTestSpec(allocator: std.mem.Allocator, content: []const u8) ParseError![
         // Skip empty lines and comments
         if (trimmed.len == 0 or trimmed[0] == '#') continue;
 
-        // Parse command
         if (std.mem.startsWith(u8, trimmed, "click ")) {
             const rest = trimmed[6..];
-            const elem_id = parseElemId(rest) catch return ParseError.InvalidFormat;
-            const tag_copy = allocator.dupe(u8, elem_id.tag) catch return ParseError.OutOfMemory;
+            const locator = try parseLocator(allocator, rest);
             commands.append(allocator, .{
                 .cmd_type = .click,
-                .tag = tag_copy,
-                .index = elem_id.index,
+                .locator = locator,
                 .expected_text = null,
                 .expected_count = null,
+                .expected_bool = null,
+                .line_num = line_num,
+            }) catch return ParseError.OutOfMemory;
+        } else if (std.mem.startsWith(u8, trimmed, "fill ")) {
+            const split = try splitTrailingQuoted(trimmed[5..]);
+            const locator = try parseLocator(allocator, split.head);
+            const value_copy = allocator.dupe(u8, split.quoted) catch return ParseError.OutOfMemory;
+            commands.append(allocator, .{
+                .cmd_type = .fill,
+                .locator = locator,
+                .expected_text = value_copy,
+                .expected_count = null,
+                .expected_bool = null,
+                .line_num = line_num,
+            }) catch return ParseError.OutOfMemory;
+        } else if (std.mem.startsWith(u8, trimmed, "check ")) {
+            const locator = try parseLocator(allocator, trimmed[6..]);
+            commands.append(allocator, .{
+                .cmd_type = .check,
+                .locator = locator,
+                .expected_text = null,
+                .expected_count = null,
+                .expected_bool = null,
+                .line_num = line_num,
+            }) catch return ParseError.OutOfMemory;
+        } else if (std.mem.startsWith(u8, trimmed, "uncheck ")) {
+            const locator = try parseLocator(allocator, trimmed[8..]);
+            commands.append(allocator, .{
+                .cmd_type = .uncheck,
+                .locator = locator,
+                .expected_text = null,
+                .expected_count = null,
+                .expected_bool = null,
                 .line_num = line_num,
             }) catch return ParseError.OutOfMemory;
         } else if (std.mem.startsWith(u8, trimmed, "expect_text ")) {
-            const rest = trimmed[12..];
-            // Parse: tag:index "text"
-            const space_idx = std.mem.indexOfScalar(u8, rest, ' ') orelse return ParseError.InvalidFormat;
-            const elem_part = rest[0..space_idx];
-            const text_part = std.mem.trim(u8, rest[space_idx + 1 ..], " \t");
-
-            // Text must be quoted
-            if (text_part.len < 2 or text_part[0] != '"' or text_part[text_part.len - 1] != '"') {
-                return ParseError.InvalidFormat;
-            }
-            const text = text_part[1 .. text_part.len - 1];
-
-            const elem_id = parseElemId(elem_part) catch return ParseError.InvalidFormat;
-
-            // Duplicate strings so they outlive the content buffer
-            const tag_copy = allocator.dupe(u8, elem_id.tag) catch return ParseError.OutOfMemory;
-            const text_copy = allocator.dupe(u8, text) catch return ParseError.OutOfMemory;
+            const split = try splitTrailingQuoted(trimmed[12..]);
+            const locator = try parseLocator(allocator, split.head);
+            const text_copy = allocator.dupe(u8, split.quoted) catch return ParseError.OutOfMemory;
 
             commands.append(allocator, .{
                 .cmd_type = .expect_text,
-                .tag = tag_copy,
-                .index = elem_id.index,
+                .locator = locator,
                 .expected_text = text_copy,
                 .expected_count = null,
+                .expected_bool = null,
+                .line_num = line_num,
+            }) catch return ParseError.OutOfMemory;
+        } else if (std.mem.startsWith(u8, trimmed, "expect_visible ")) {
+            const locator = try parseLocator(allocator, trimmed[15..]);
+            commands.append(allocator, .{
+                .cmd_type = .expect_visible,
+                .locator = locator,
+                .expected_text = null,
+                .expected_count = null,
+                .expected_bool = null,
+                .line_num = line_num,
+            }) catch return ParseError.OutOfMemory;
+        } else if (std.mem.startsWith(u8, trimmed, "expect_value ")) {
+            const split = try splitTrailingQuoted(trimmed[13..]);
+            const locator = try parseLocator(allocator, split.head);
+            const value_copy = allocator.dupe(u8, split.quoted) catch return ParseError.OutOfMemory;
+            commands.append(allocator, .{
+                .cmd_type = .expect_value,
+                .locator = locator,
+                .expected_text = value_copy,
+                .expected_count = null,
+                .expected_bool = null,
+                .line_num = line_num,
+            }) catch return ParseError.OutOfMemory;
+        } else if (std.mem.startsWith(u8, trimmed, "expect_checked ")) {
+            const split = try splitTrailingToken(trimmed[15..]);
+            const locator = try parseLocator(allocator, split.head);
+            const expected = if (std.mem.eql(u8, split.token, "true")) true else if (std.mem.eql(u8, split.token, "false")) false else return ParseError.InvalidFormat;
+            commands.append(allocator, .{
+                .cmd_type = .expect_checked,
+                .locator = locator,
+                .expected_text = null,
+                .expected_count = null,
+                .expected_bool = expected,
+                .line_num = line_num,
+            }) catch return ParseError.OutOfMemory;
+        } else if (std.mem.startsWith(u8, trimmed, "expect_disabled ")) {
+            const split = try splitTrailingToken(trimmed[16..]);
+            const locator = try parseLocator(allocator, split.head);
+            const expected = if (std.mem.eql(u8, split.token, "true")) true else if (std.mem.eql(u8, split.token, "false")) false else return ParseError.InvalidFormat;
+            commands.append(allocator, .{
+                .cmd_type = .expect_disabled,
+                .locator = locator,
+                .expected_text = null,
+                .expected_count = null,
+                .expected_bool = expected,
                 .line_num = line_num,
             }) catch return ParseError.OutOfMemory;
         } else if (std.mem.startsWith(u8, trimmed, "expect_updates ")) {
-            const rest = trimmed[15..];
-            const space_idx = std.mem.indexOfScalar(u8, rest, ' ') orelse return ParseError.InvalidFormat;
-            const elem_part = rest[0..space_idx];
-            const count_part = std.mem.trim(u8, rest[space_idx + 1 ..], " \t");
-
-            const elem_id = parseElemId(elem_part) catch return ParseError.InvalidFormat;
-            const expected_count = std.fmt.parseInt(u64, count_part, 10) catch return ParseError.InvalidFormat;
-            const tag_copy = allocator.dupe(u8, elem_id.tag) catch return ParseError.OutOfMemory;
+            const split = try splitTrailingToken(trimmed[15..]);
+            const locator = try parseLocator(allocator, split.head);
+            const expected_count = std.fmt.parseInt(u64, split.token, 10) catch return ParseError.InvalidFormat;
 
             commands.append(allocator, .{
                 .cmd_type = .expect_updates,
-                .tag = tag_copy,
-                .index = elem_id.index,
+                .locator = locator,
                 .expected_text = null,
                 .expected_count = expected_count,
+                .expected_bool = null,
                 .line_num = line_num,
             }) catch return ParseError.OutOfMemory;
         } else {
@@ -562,18 +792,6 @@ fn parseTestSpec(allocator: std.mem.Allocator, content: []const u8) ParseError![
     }
 
     return commands.toOwnedSlice(allocator) catch ParseError.OutOfMemory;
-}
-
-const ElemId = struct { tag: []const u8, index: usize };
-
-fn parseElemId(s: []const u8) !ElemId {
-    const colon_idx = std.mem.indexOfScalar(u8, s, ':') orelse return error.InvalidFormat;
-    const tag = s[0..colon_idx];
-    const index_str = s[colon_idx + 1 ..];
-    const index = std.fmt.parseInt(usize, index_str, 10) catch return error.InvalidFormat;
-    // Note: tag is a slice into the caller's buffer.
-    // The caller (parseTestSpec) must dupe it if the buffer is transient.
-    return .{ .tag = tag, .index = index };
 }
 
 // Host Environment
@@ -595,7 +813,6 @@ const HostEnv = struct {
     // Simulated DOM
     dom_elements: std.ArrayListUnmanaged(DomElement) = .empty,
     next_elem_id: u64 = 0,
-    tag_counts: std.StringHashMapUnmanaged(usize) = .empty, // Track count per tag for indexing
 
     // Reactive graph
     graph_nodes: std.ArrayListUnmanaged(GraphNode) = .empty,
@@ -649,7 +866,6 @@ const HostEnv = struct {
             elem.deinit(allocator);
         }
         self.dom_elements.deinit(allocator);
-        self.tag_counts.deinit(allocator);
 
         for (self.graph_nodes.items) |*node| {
             node.deinit(allocator, self.roc_ops);
@@ -670,7 +886,7 @@ const HostEnv = struct {
 
         // Free test command strings
         for (self.test_state.commands) |cmd| {
-            allocator.free(cmd.tag);
+            cmd.locator.deinit(allocator);
             if (cmd.expected_text) |text| {
                 allocator.free(text);
             }
@@ -687,30 +903,70 @@ const HostEnv = struct {
         self.roc_allocations.deinit(allocator);
     }
 
-    fn findElementByTagIndex(self: *HostEnv, tag: []const u8, index: usize) ?*DomElement {
-        var count: usize = 0;
-        if (self.dom_elements.items.len == 0) return null;
-        return self.findElementByTagIndexFrom(0, tag, index, &count);
+    fn implicitRole(elem: *const DomElement) ?[]const u8 {
+        if (elem.role) |role| return role;
+        if (std.mem.eql(u8, elem.tag, "button")) return "button";
+        if (std.mem.eql(u8, elem.tag, "h1") or
+            std.mem.eql(u8, elem.tag, "h2") or
+            std.mem.eql(u8, elem.tag, "h3") or
+            std.mem.eql(u8, elem.tag, "h4") or
+            std.mem.eql(u8, elem.tag, "h5") or
+            std.mem.eql(u8, elem.tag, "h6")) return "heading";
+        if (std.mem.eql(u8, elem.tag, "section")) return "region";
+        return null;
     }
 
-    fn findElementByTagIndexFrom(self: *HostEnv, elem_id: u64, tag: []const u8, target_index: usize, count: *usize) ?*DomElement {
-        if (elem_id >= self.dom_elements.items.len) return null;
-        const elem = &self.dom_elements.items[elem_id];
-        if (!elem.active) return null;
+    fn accessibleName(elem: *const DomElement) []const u8 {
+        if (elem.label) |label| return label;
+        if (elem.text) |text| return text;
+        if (elem.value) |value| return value;
+        return "";
+    }
 
-        if (std.mem.eql(u8, elem.tag, tag)) {
-            if (count.* == target_index) {
-                return elem;
-            }
-            count.* += 1;
+    fn locatorMatches(self: *HostEnv, elem: *const DomElement, locator: Locator) bool {
+        _ = self;
+        return switch (locator.kind) {
+            .role_name => blk: {
+                const role = HostEnv.implicitRole(elem) orelse break :blk false;
+                const expected_role = locator.role orelse break :blk false;
+                const expected_name = locator.name orelse break :blk false;
+                break :blk std.mem.eql(u8, role, expected_role) and std.mem.eql(u8, HostEnv.accessibleName(elem), expected_name);
+            },
+            .label => blk: {
+                const expected = locator.label orelse break :blk false;
+                const label = elem.label orelse break :blk false;
+                break :blk std.mem.eql(u8, label, expected);
+            },
+            .text => blk: {
+                const expected = locator.text orelse break :blk false;
+                const text = elem.text orelse break :blk false;
+                break :blk std.mem.eql(u8, text, expected);
+            },
+            .test_id => blk: {
+                const expected = locator.test_id orelse break :blk false;
+                const test_id = elem.test_id orelse break :blk false;
+                break :blk std.mem.eql(u8, test_id, expected);
+            },
+        };
+    }
+
+    fn findElementByLocator(self: *HostEnv, locator: Locator, line_num: usize) ?*DomElement {
+        var found: ?*DomElement = null;
+        var match_count: usize = 0;
+        for (self.dom_elements.items) |*elem| {
+            if (!elem.active) continue;
+            if (!self.locatorMatches(elem, locator)) continue;
+            match_count += 1;
+            if (found == null) found = elem;
         }
 
-        for (elem.children.items) |child_id| {
-            if (self.findElementByTagIndexFrom(child_id, tag, target_index, count)) |found| {
-                return found;
-            }
+        if (match_count > 1) {
+            var buf: [256]u8 = undefined;
+            const msg = std.fmt.bufPrint(&buf, "TEST FAILED at line {d}: locator matched {d} elements\n", .{ line_num, match_count }) catch "TEST FAILED: ambiguous locator\n";
+            writeStderr(msg);
+            return null;
         }
-        return null;
+        return found;
     }
 
     fn addDependency(self: *HostEnv, source_id: u64, dependent_id: u64) void {
@@ -936,6 +1192,54 @@ fn hostedBindText(elem_id: u64, signal_node_id: u64) callconv(.c) void {
     }
 }
 
+/// Host.bind_value!
+fn hostedBindValue(elem_id: u64, signal_node_id: u64) callconv(.c) void {
+    const host = currentHost();
+
+    if (elem_id < host.dom_elements.items.len and host.dom_elements.items[elem_id].active) {
+        host.dom_elements.items[elem_id].bound_value_signal = signal_node_id;
+        updateElementValue(host, elem_id);
+    }
+}
+
+/// Host.bind_checked!
+fn hostedBindChecked(elem_id: u64, signal_node_id: u64) callconv(.c) void {
+    const host = currentHost();
+
+    if (elem_id < host.dom_elements.items.len and host.dom_elements.items[elem_id].active) {
+        host.dom_elements.items[elem_id].bound_checked_signal = signal_node_id;
+        updateElementChecked(host, elem_id);
+    }
+}
+
+/// Host.bind_disabled!
+fn hostedBindDisabled(elem_id: u64, signal_node_id: u64) callconv(.c) void {
+    const host = currentHost();
+
+    if (elem_id < host.dom_elements.items.len and host.dom_elements.items[elem_id].active) {
+        host.dom_elements.items[elem_id].bound_disabled_signal = signal_node_id;
+        updateElementDisabled(host, elem_id);
+    }
+}
+
+/// Host.bind_input!
+fn hostedBindInput(elem_id: u64, event_node_id: u64) callconv(.c) void {
+    const host = currentHost();
+
+    if (elem_id < host.dom_elements.items.len and host.dom_elements.items[elem_id].active) {
+        host.dom_elements.items[elem_id].bound_input_event = event_node_id;
+    }
+}
+
+/// Host.bind_check!
+fn hostedBindCheck(elem_id: u64, event_node_id: u64) callconv(.c) void {
+    const host = currentHost();
+
+    if (elem_id < host.dom_elements.items.len and host.dom_elements.items[elem_id].active) {
+        host.dom_elements.items[elem_id].bound_check_event = event_node_id;
+    }
+}
+
 /// Host.bind_signal_update!
 fn hostedBindSignalUpdate(state_node_id: u64, event_node_id: u64) callconv(.c) void {
     const host = currentHost();
@@ -995,6 +1299,28 @@ fn hostedCreateDynamic(parent_id: u64, signal_id: u64, render: RocBox) callconv(
 
     host.graph_nodes.append(host.gpa.allocator(), node) catch std.process.exit(1);
     host.addDependency(signal_id, node_id);
+}
+
+/// Elem.create_dynamic_keyed!
+fn hostedCreateDynamicKeyed(parent_id: u64, signal_id: u64, keyer: RocBox, render: RocBox) callconv(.c) void {
+    const host = currentHost();
+    traceStderr("[HOST] create_dynamic_keyed!\n");
+
+    const node_id = host.next_node_id;
+    host.next_node_id += 1;
+
+    const node = GraphNode.init(node_id, host.current_scope_id, .{ .dynamic_keyed = .{
+        .parent = parent_id,
+        .signal = signal_id,
+        .key = keyer,
+        .render = render,
+        .entries = .empty,
+        .current_scope = null,
+    } });
+
+    host.graph_nodes.append(host.gpa.allocator(), node) catch std.process.exit(1);
+    host.addDependency(signal_id, node_id);
+    renderDynamicKeyedNode(host, node_id);
 }
 
 /// Elem.create_each!
@@ -1540,6 +1866,33 @@ fn hostedCreateSignalZipWith(ops: *abi.RocOps, source_id: u64, event_id: u64, co
     return node_id;
 }
 
+fn replaceOwnedString(allocator: std.mem.Allocator, field: *?[]const u8, value: []const u8) bool {
+    if (field.*) |old_value| {
+        if (std.mem.eql(u8, old_value, value)) return false;
+    }
+    const value_copy = allocator.dupe(u8, value) catch std.process.exit(1);
+    if (field.*) |old_value| {
+        allocator.free(old_value);
+    }
+    field.* = value_copy;
+    return true;
+}
+
+const StringField = enum { role, label, test_id };
+
+fn hostedSetStringField(ops: *abi.RocOps, elem_id: u64, value: RocStr, field_name: StringField) void {
+    const host = hostFromOps(ops);
+    defer value.decref(ops);
+    if (elem_id >= host.dom_elements.items.len or !host.dom_elements.items[elem_id].active) return;
+    const elem = &host.dom_elements.items[elem_id];
+    const allocator = host.gpa.allocator();
+    switch (field_name) {
+        .role => _ = replaceOwnedString(allocator, &elem.role, value.asSlice()),
+        .label => _ = replaceOwnedString(allocator, &elem.label, value.asSlice()),
+        .test_id => _ = replaceOwnedString(allocator, &elem.test_id, value.asSlice()),
+    }
+}
+
 /// Host.set_text!
 fn hostedSetText(ops: *abi.RocOps, elem_id: u64, text: RocStr) callconv(.c) void {
     const host = hostFromOps(ops);
@@ -1549,32 +1902,63 @@ fn hostedSetText(ops: *abi.RocOps, elem_id: u64, text: RocStr) callconv(.c) void
         traceStderr(msg);
     }
 
+    defer text.decref(ops);
     if (elem_id < host.dom_elements.items.len and host.dom_elements.items[elem_id].active) {
-        const allocator = host.gpa.allocator();
-        const text_slice = text.asSlice();
         const elem = &host.dom_elements.items[elem_id];
-
-        if (elem.text) |old_text| {
-            if (std.mem.eql(u8, old_text, text_slice)) {
-                text.decref(ops);
-                return;
-            }
+        if (replaceOwnedString(host.gpa.allocator(), &elem.text, text.asSlice())) {
+            elem.text_update_count += 1;
         }
+    }
+}
 
-        const text_copy = allocator.dupe(u8, text_slice) catch {
-            text.decref(ops);
-            std.process.exit(1);
-        };
-        text.decref(ops);
+/// Host.set_role!
+fn hostedSetRole(ops: *abi.RocOps, elem_id: u64, role: RocStr) callconv(.c) void {
+    hostedSetStringField(ops, elem_id, role, .role);
+}
 
-        if (elem.text) |old_text| {
-            allocator.free(old_text);
+/// Host.set_label!
+fn hostedSetLabel(ops: *abi.RocOps, elem_id: u64, label: RocStr) callconv(.c) void {
+    hostedSetStringField(ops, elem_id, label, .label);
+}
+
+/// Host.set_test_id!
+fn hostedSetTestId(ops: *abi.RocOps, elem_id: u64, test_id: RocStr) callconv(.c) void {
+    hostedSetStringField(ops, elem_id, test_id, .test_id);
+}
+
+/// Host.set_value!
+fn hostedSetValue(ops: *abi.RocOps, elem_id: u64, value: RocStr) callconv(.c) void {
+    const host = hostFromOps(ops);
+    defer value.decref(ops);
+    if (elem_id < host.dom_elements.items.len and host.dom_elements.items[elem_id].active) {
+        const elem = &host.dom_elements.items[elem_id];
+        if (replaceOwnedString(host.gpa.allocator(), &elem.value, value.asSlice())) {
+            elem.value_update_count += 1;
         }
+    }
+}
 
-        elem.text = text_copy;
-        elem.text_update_count += 1;
-    } else {
-        text.decref(ops);
+/// Host.set_checked!
+fn hostedSetChecked(elem_id: u64, checked: bool) callconv(.c) void {
+    const host = currentHost();
+    if (elem_id < host.dom_elements.items.len and host.dom_elements.items[elem_id].active) {
+        const elem = &host.dom_elements.items[elem_id];
+        if (elem.checked != checked) {
+            elem.checked = checked;
+            elem.checked_update_count += 1;
+        }
+    }
+}
+
+/// Host.set_disabled!
+fn hostedSetDisabled(elem_id: u64, disabled: bool) callconv(.c) void {
+    const host = currentHost();
+    if (elem_id < host.dom_elements.items.len and host.dom_elements.items[elem_id].active) {
+        const elem = &host.dom_elements.items[elem_id];
+        if (elem.disabled != disabled) {
+            elem.disabled = disabled;
+            elem.disabled_update_count += 1;
+        }
     }
 }
 
@@ -1664,6 +2048,22 @@ fn hostCreateSignalZipWith(source_id: u64, event_id: u64, combine: RocBox) callc
 
 fn hostSetText(elem_id: u64, text: RocStr) callconv(.c) void {
     hostedSetText(currentRocOps(), elem_id, text);
+}
+
+fn hostSetRole(elem_id: u64, role: RocStr) callconv(.c) void {
+    hostedSetRole(currentRocOps(), elem_id, role);
+}
+
+fn hostSetLabel(elem_id: u64, label: RocStr) callconv(.c) void {
+    hostedSetLabel(currentRocOps(), elem_id, label);
+}
+
+fn hostSetTestId(elem_id: u64, test_id: RocStr) callconv(.c) void {
+    hostedSetTestId(currentRocOps(), elem_id, test_id);
+}
+
+fn hostSetValue(elem_id: u64, value: RocStr) callconv(.c) void {
+    hostedSetValue(currentRocOps(), elem_id, value);
 }
 
 // Reactive Graph Propagation
@@ -1988,7 +2388,12 @@ fn unmountScope(host: *HostEnv, scope_id: u64) void {
         if (elem.scope_id == scope_id) {
             elem.active = false;
             elem.bound_click_event = null;
+            elem.bound_input_event = null;
+            elem.bound_check_event = null;
             elem.bound_text_signal = null;
+            elem.bound_value_signal = null;
+            elem.bound_checked_signal = null;
+            elem.bound_disabled_signal = null;
         }
     }
 
@@ -2001,6 +2406,52 @@ fn unmountScope(host: *HostEnv, scope_id: u64) void {
     }
 
     host.scopes.items[scope_id].active = false;
+}
+
+fn setScopeDomActive(host: *HostEnv, scope_id: u64, active: bool) void {
+    if (scope_id >= host.scopes.items.len) return;
+    if (!host.scopes.items[scope_id].active) return;
+
+    for (host.dom_elements.items) |*elem| {
+        if (elem.scope_id == scope_id) {
+            elem.active = active;
+        }
+    }
+
+    for (host.scopes.items, 0..) |scope, child_scope_id| {
+        if (scope.active and scope.parent == scope_id) {
+            setScopeDomActive(host, @intCast(child_scope_id), active);
+        }
+    }
+}
+
+fn parkScope(host: *HostEnv, scope_id: u64) void {
+    setScopeDomActive(host, scope_id, false);
+}
+
+fn updateScopeBindings(host: *HostEnv, scope_id: u64) void {
+    if (scope_id >= host.scopes.items.len) return;
+    if (!host.scopes.items[scope_id].active) return;
+
+    for (host.dom_elements.items, 0..) |elem, elem_id| {
+        if (elem.active and elem.scope_id == scope_id) {
+            updateElementText(host, @intCast(elem_id));
+            updateElementValue(host, @intCast(elem_id));
+            updateElementChecked(host, @intCast(elem_id));
+            updateElementDisabled(host, @intCast(elem_id));
+        }
+    }
+
+    for (host.scopes.items, 0..) |scope, child_scope_id| {
+        if (scope.active and scope.parent == scope_id) {
+            updateScopeBindings(host, @intCast(child_scope_id));
+        }
+    }
+}
+
+fn activateScope(host: *HostEnv, scope_id: u64) void {
+    setScopeDomActive(host, scope_id, true);
+    updateScopeBindings(host, scope_id);
 }
 
 fn keyedScopeIndex(entries: []const KeyedScope, key: []const u8) ?usize {
@@ -2067,6 +2518,81 @@ fn renderDynamicNode(host: *HostEnv, node_id: u64) void {
             .dynamic => |*dynamic| dynamic.child_scope = new_scope,
             else => {},
         }
+    }
+}
+
+fn renderDynamicKeyedNode(host: *HostEnv, node_id: u64) void {
+    const start_ns = benchmarkNowNs();
+    defer host.bench_counters.dynamic_render_ns += benchmarkNowNs() - start_ns;
+
+    if (node_id >= host.graph_nodes.items.len) return;
+    if (!host.graph_nodes.items[node_id].active) return;
+
+    const copied = switch (host.graph_nodes.items[node_id].kind) {
+        .dynamic_keyed => |*data| blk: {
+            const entries = data.entries;
+            data.entries = .empty;
+            break :blk .{
+                .parent = data.parent,
+                .signal = data.signal,
+                .key = data.key,
+                .render = data.render,
+                .entries = entries,
+                .current_scope = data.current_scope,
+                .scope_id = host.graph_nodes.items[node_id].scope_id,
+            };
+        },
+        else => return,
+    };
+
+    const allocator = host.gpa.allocator();
+    var entries = copied.entries;
+    errdefer {
+        for (entries.items) |entry| allocator.free(entry.key);
+        entries.deinit(allocator);
+    }
+
+    var next_scope: ?u64 = null;
+    if (copied.signal < host.graph_nodes.items.len) {
+        if (host.graph_nodes.items[copied.signal].current_value) |value| {
+            const key = callRocKey(host, copied.key, value);
+            const key_slice = key.asSlice();
+            if (keyedScopeIndex(entries.items, key_slice)) |existing_index| {
+                next_scope = entries.items[existing_index].scope_id;
+                key.decref(host.roc_ops orelse @panic("RocOps unavailable while handling dynamic key"));
+            } else {
+                const key_copy = allocator.dupe(u8, key_slice) catch std.process.exit(1);
+                key.decref(host.roc_ops orelse @panic("RocOps unavailable while handling dynamic key"));
+                const scope_id = mountRenderScope(host, copied.parent, copied.scope_id, copied.render, value);
+                entries.append(allocator, .{ .key = key_copy, .scope_id = scope_id }) catch std.process.exit(1);
+                next_scope = scope_id;
+            }
+        }
+    }
+
+    if (copied.current_scope) |scope_id| {
+        if (next_scope == null or next_scope.? != scope_id) {
+            parkScope(host, scope_id);
+        }
+    }
+    if (next_scope) |scope_id| {
+        activateScope(host, scope_id);
+    }
+
+    if (node_id < host.graph_nodes.items.len and host.graph_nodes.items[node_id].active) {
+        switch (host.graph_nodes.items[node_id].kind) {
+            .dynamic_keyed => |*data| {
+                data.entries = entries;
+                data.current_scope = next_scope;
+            },
+            else => {
+                for (entries.items) |entry| allocator.free(entry.key);
+                entries.deinit(allocator);
+            },
+        }
+    } else {
+        for (entries.items) |entry| allocator.free(entry.key);
+        entries.deinit(allocator);
     }
 }
 
@@ -2301,6 +2827,7 @@ fn inputsReady(host: *HostEnv, node_id: u64, affected: []const bool, scheduled: 
         .signal_fold_bool_toggle => |data| inputReady(data.event, affected, scheduled),
         .signal_zip_with => |data| inputReady(data.event, affected, scheduled) and inputReady(data.source, affected, scheduled),
         .dynamic => |data| inputReady(data.signal, affected, scheduled),
+        .dynamic_keyed => |data| inputReady(data.signal, affected, scheduled),
         .each => |data| inputReady(data.signal, affected, scheduled),
     };
 }
@@ -2495,6 +3022,10 @@ fn evaluateNode(host: *HostEnv, node_id: u64, changed_signals: *std.ArrayListUnm
             renderDynamicNode(host, node_id);
         },
 
+        .dynamic_keyed => {
+            renderDynamicKeyedNode(host, node_id);
+        },
+
         .each => {
             renderEachNode(host, node_id);
         },
@@ -2502,17 +3033,52 @@ fn evaluateNode(host: *HostEnv, node_id: u64, changed_signals: *std.ArrayListUnm
 }
 
 fn setElementTextIfChanged(host: *HostEnv, elem: *DomElement, text: []const u8) void {
-    if (elem.text) |old_text| {
-        if (std.mem.eql(u8, old_text, text)) return;
+    if (replaceOwnedString(host.gpa.allocator(), &elem.text, text)) {
+        elem.text_update_count += 1;
     }
+}
 
-    const allocator = host.gpa.allocator();
-    const text_copy = allocator.dupe(u8, text) catch std.process.exit(1);
-    if (elem.text) |old_text| {
-        allocator.free(old_text);
+fn setElementValueIfChanged(host: *HostEnv, elem: *DomElement, value: []const u8) void {
+    if (replaceOwnedString(host.gpa.allocator(), &elem.value, value)) {
+        elem.value_update_count += 1;
     }
-    elem.text = text_copy;
-    elem.text_update_count += 1;
+}
+
+fn setElementCheckedIfChanged(elem: *DomElement, checked: bool) void {
+    if (elem.checked != checked) {
+        elem.checked = checked;
+        elem.checked_update_count += 1;
+    }
+}
+
+fn setElementDisabledIfChanged(elem: *DomElement, disabled: bool) void {
+    if (elem.disabled != disabled) {
+        elem.disabled = disabled;
+        elem.disabled_update_count += 1;
+    }
+}
+
+fn storedValueText(value: *const StoredValue, buf: []u8) ?[]const u8 {
+    return switch (value.*) {
+        .str => |*str| str.asSlice(),
+        .i64 => |i| std.fmt.bufPrint(buf, "{d}", .{i}) catch null,
+        .bool => |b| if (b) "true" else "false",
+        .node_value => |*node_value| switch (node_value.tag) {
+            .NvStr => (&node_value.payload.nv_str).asSlice(),
+            .NvI64 => std.fmt.bufPrint(buf, "{d}", .{node_value.payload.nv_i64}) catch null,
+            .NvBool => if (node_value.payload.nv_bool) "true" else "false",
+            else => null,
+        },
+        else => null,
+    };
+}
+
+fn storedValueBool(value: StoredValue) ?bool {
+    return switch (value) {
+        .bool => |b| b,
+        .node_value => |node_value| if (node_value.tag == .NvBool) node_value.payload.nv_bool else null,
+        else => null,
+    };
 }
 
 fn updateElementText(host: *HostEnv, elem_id: u64) void {
@@ -2523,33 +3089,74 @@ fn updateElementText(host: *HostEnv, elem_id: u64) void {
     if (elem.bound_text_signal) |signal_id| {
         if (signal_id < host.graph_nodes.items.len) {
             if (!host.graph_nodes.items[signal_id].active) return;
-            if (host.graph_nodes.items[signal_id].current_value) |stored_value| {
-                switch (stored_value) {
-                    .str => |str| setElementTextIfChanged(host, elem, str.asSlice()),
-                    .i64 => |value| {
-                        var buf: [32]u8 = undefined;
-                        const text = std.fmt.bufPrint(&buf, "{d}", .{value}) catch std.process.exit(1);
-                        setElementTextIfChanged(host, elem, text);
-                    },
-                    .node_value => |node_value| switch (node_value.tag) {
-                        .NvStr => setElementTextIfChanged(host, elem, node_value.payload.nv_str.asSlice()),
-                        .NvI64 => {
-                            var buf: [32]u8 = undefined;
-                            const text = std.fmt.bufPrint(&buf, "{d}", .{node_value.payload.nv_i64}) catch std.process.exit(1);
-                            setElementTextIfChanged(host, elem, text);
-                        },
-                        else => {},
-                    },
-                    else => {},
+            if (host.graph_nodes.items[signal_id].current_value) |*stored_value| {
+                var buf: [32]u8 = undefined;
+                if (storedValueText(stored_value, &buf)) |text| {
+                    setElementTextIfChanged(host, elem, text);
                 }
             }
         }
     }
 }
 
-fn updateAllTextBindings(host: *HostEnv) void {
+fn updateElementValue(host: *HostEnv, elem_id: u64) void {
+    if (elem_id >= host.dom_elements.items.len) return;
+
+    const elem = &host.dom_elements.items[elem_id];
+    if (!elem.active) return;
+    if (elem.bound_value_signal) |signal_id| {
+        if (signal_id < host.graph_nodes.items.len) {
+            if (!host.graph_nodes.items[signal_id].active) return;
+            if (host.graph_nodes.items[signal_id].current_value) |*stored_value| {
+                var buf: [32]u8 = undefined;
+                if (storedValueText(stored_value, &buf)) |value| {
+                    setElementValueIfChanged(host, elem, value);
+                }
+            }
+        }
+    }
+}
+
+fn updateElementChecked(host: *HostEnv, elem_id: u64) void {
+    if (elem_id >= host.dom_elements.items.len) return;
+
+    const elem = &host.dom_elements.items[elem_id];
+    if (!elem.active) return;
+    if (elem.bound_checked_signal) |signal_id| {
+        if (signal_id < host.graph_nodes.items.len) {
+            if (!host.graph_nodes.items[signal_id].active) return;
+            if (host.graph_nodes.items[signal_id].current_value) |stored_value| {
+                if (storedValueBool(stored_value)) |checked| {
+                    setElementCheckedIfChanged(elem, checked);
+                }
+            }
+        }
+    }
+}
+
+fn updateElementDisabled(host: *HostEnv, elem_id: u64) void {
+    if (elem_id >= host.dom_elements.items.len) return;
+
+    const elem = &host.dom_elements.items[elem_id];
+    if (!elem.active) return;
+    if (elem.bound_disabled_signal) |signal_id| {
+        if (signal_id < host.graph_nodes.items.len) {
+            if (!host.graph_nodes.items[signal_id].active) return;
+            if (host.graph_nodes.items[signal_id].current_value) |stored_value| {
+                if (storedValueBool(stored_value)) |disabled| {
+                    setElementDisabledIfChanged(elem, disabled);
+                }
+            }
+        }
+    }
+}
+
+fn updateAllBindings(host: *HostEnv) void {
     for (host.dom_elements.items, 0..) |_, i| {
         updateElementText(host, @intCast(i));
+        updateElementValue(host, @intCast(i));
+        updateElementChecked(host, @intCast(i));
+        updateElementDisabled(host, @intCast(i));
     }
 }
 
@@ -2559,6 +3166,21 @@ fn updateDirtyTextBindings(host: *HostEnv, changed_signals: []const u64) void {
         if (elem.bound_text_signal) |signal_id| {
             if (signalChanged(changed_signals, signal_id)) {
                 updateElementText(host, @intCast(i));
+            }
+        }
+        if (elem.bound_value_signal) |signal_id| {
+            if (signalChanged(changed_signals, signal_id)) {
+                updateElementValue(host, @intCast(i));
+            }
+        }
+        if (elem.bound_checked_signal) |signal_id| {
+            if (signalChanged(changed_signals, signal_id)) {
+                updateElementChecked(host, @intCast(i));
+            }
+        }
+        if (elem.bound_disabled_signal) |signal_id| {
+            if (signalChanged(changed_signals, signal_id)) {
+                updateElementDisabled(host, @intCast(i));
             }
         }
     }
@@ -2587,10 +3209,6 @@ fn prototypeName(prototype: Prototype) []const u8 {
         .host_value_handles => "C.host_value_handles",
         .generated_boundary => "D.generated_boundary",
     };
-}
-
-fn productionPrototypeName() []const u8 {
-    return "production.scalar_node_value_hybrid";
 }
 
 fn parsePrototypeFilter(arg: []const u8) ?Prototype {
@@ -2700,38 +3318,6 @@ const AppPayload = extern struct {
     left: CounterPayload,
     right: CounterPayload,
 };
-
-const OpaqueBoundaryPayloadBox = *anyopaque;
-
-fn callBoundaryPayloadInit(ops: *abi.RocOps) OpaqueBoundaryPayloadBox {
-    _ = ops;
-    return abi.roc_boundary_payload_init();
-}
-
-fn callBoundaryPayloadTotal(ops: *abi.RocOps, payload: OpaqueBoundaryPayloadBox) i64 {
-    _ = ops;
-    return abi.roc_boundary_payload_total(payload);
-}
-
-fn callBoundaryPayloadItemKey(ops: *abi.RocOps, payload: OpaqueBoundaryPayloadBox) RocStr {
-    _ = ops;
-    return abi.roc_boundary_payload_item_key(payload);
-}
-
-fn callBoundaryPayloadItemLabel(ops: *abi.RocOps, payload: OpaqueBoundaryPayloadBox) RocStr {
-    _ = ops;
-    return abi.roc_boundary_payload_item_label(payload);
-}
-
-fn callBoundaryPayloadItemsLen(ops: *abi.RocOps, payload: OpaqueBoundaryPayloadBox) u64 {
-    _ = ops;
-    return abi.roc_boundary_payload_items_len(payload);
-}
-
-fn callBoundaryPayloadDrop(ops: *abi.RocOps, payload: OpaqueBoundaryPayloadBox) void {
-    _ = ops;
-    abi.roc_boundary_payload_drop(payload);
-}
 
 const HandleStore = struct {
     scalars: []i64,
@@ -2878,77 +3464,6 @@ fn benchMicroListRecord(host: *HostEnv, ops: *abi.RocOps, prototype: Prototype, 
             }
         },
     }
-    std.mem.doNotOptimizeAway(checksum);
-    return @intCast(iterations * 4);
-}
-
-fn benchMicroGeneratedBoundaryFresh(host: *HostEnv, ops: *abi.RocOps, prototype: Prototype, iterations: usize) u64 {
-    if (prototype != .generated_boundary) failHost("generated boundary payload benchmark requires prototype D");
-
-    var checksum: i64 = 0;
-    for (0..iterations) |_| {
-        host.bench_counters.callback_transform_count += 8;
-        host.bench_counters.boundary_encode_count += 4;
-        host.bench_counters.boundary_decode_count += 4;
-
-        const total_payload = callBoundaryPayloadInit(ops);
-        checksum += callBoundaryPayloadTotal(ops, total_payload);
-        std.mem.doNotOptimizeAway(checksum);
-
-        const key_payload = callBoundaryPayloadInit(ops);
-        const key = callBoundaryPayloadItemKey(ops, key_payload);
-        checksum += @intCast(key.asSlice().len);
-        std.mem.doNotOptimizeAway(checksum);
-        key.decref(ops);
-
-        const label_payload = callBoundaryPayloadInit(ops);
-        const label = callBoundaryPayloadItemLabel(ops, label_payload);
-        checksum += @intCast(label.asSlice().len);
-        std.mem.doNotOptimizeAway(checksum);
-        label.decref(ops);
-
-        const items_payload = callBoundaryPayloadInit(ops);
-        checksum += @intCast(callBoundaryPayloadItemsLen(ops, items_payload));
-        std.mem.doNotOptimizeAway(checksum);
-    }
-    std.mem.doNotOptimizeAway(checksum);
-    return @intCast(iterations * 8);
-}
-
-fn benchMicroGeneratedBoundaryReused(host: *HostEnv, ops: *abi.RocOps, prototype: Prototype, iterations: usize) u64 {
-    if (prototype != .generated_boundary) failHost("generated boundary payload reuse benchmark requires prototype D");
-
-    var checksum: i64 = 0;
-    host.bench_counters.callback_transform_count += 1;
-    const payload = callBoundaryPayloadInit(ops);
-    defer callBoundaryPayloadDrop(ops, payload);
-
-    for (0..iterations) |_| {
-        host.bench_counters.callback_transform_count += 4;
-        host.bench_counters.boundary_encode_count += 4;
-        host.bench_counters.boundary_decode_count += 4;
-
-        abi.increfBox(payload, 1);
-        checksum += callBoundaryPayloadTotal(ops, payload);
-        std.mem.doNotOptimizeAway(checksum);
-
-        abi.increfBox(payload, 1);
-        const key = callBoundaryPayloadItemKey(ops, payload);
-        checksum += @intCast(key.asSlice().len);
-        std.mem.doNotOptimizeAway(checksum);
-        key.decref(ops);
-
-        abi.increfBox(payload, 1);
-        const label = callBoundaryPayloadItemLabel(ops, payload);
-        checksum += @intCast(label.asSlice().len);
-        std.mem.doNotOptimizeAway(checksum);
-        label.decref(ops);
-
-        abi.increfBox(payload, 1);
-        checksum += @intCast(callBoundaryPayloadItemsLen(ops, payload));
-        std.mem.doNotOptimizeAway(checksum);
-    }
-
     std.mem.doNotOptimizeAway(checksum);
     return @intCast(iterations * 4);
 }
@@ -3265,10 +3780,6 @@ fn runSyntheticBenchmarks(host: *HostEnv, ops: *abi.RocOps, iterations: usize, s
             }
             runSyntheticBenchmarkCase(host, ops, prototype, "micro.scalar_boundary", sample, iterations, benchMicroScalar);
             runSyntheticBenchmarkCase(host, ops, prototype, "micro.list_record_boundary", sample, iterations, benchMicroListRecord);
-            if (prototype == .generated_boundary) {
-                runSyntheticBenchmarkCase(host, ops, prototype, "micro.generated_boundary_payload_fresh", sample, iterations, benchMicroGeneratedBoundaryFresh);
-                runSyntheticBenchmarkCase(host, ops, prototype, "micro.generated_boundary_payload_reused", sample, iterations, benchMicroGeneratedBoundaryReused);
-            }
             runSyntheticBenchmarkCase(host, ops, prototype, "micro.equality", sample, iterations, benchMicroEquality);
             runSyntheticBenchmarkCase(host, ops, prototype, "micro.callback_shape", sample, iterations, benchMicroCallback);
             runSyntheticBenchmarkCase(host, ops, prototype, "scenario.deep_map_chain.synthetic", sample, iterations, benchSyntheticDeepMap);
@@ -3277,42 +3788,21 @@ fn runSyntheticBenchmarks(host: *HostEnv, ops: *abi.RocOps, iterations: usize, s
     }
 }
 
-const ScenarioClick = struct {
-    tag: []const u8,
-    index: usize,
-};
-
-const Scenario = struct {
-    name: []const u8,
-    clicks: []const ScenarioClick,
-};
-
-const scenario_counter_updates = [_]ScenarioClick{.{ .tag = "button", .index = 1 }};
-const scenario_diamond_updates = [_]ScenarioClick{.{ .tag = "button", .index = 5 }};
-const scenario_event_merge = [_]ScenarioClick{.{ .tag = "button", .index = 8 }};
-const scenario_dynamic_toggle = [_]ScenarioClick{.{ .tag = "button", .index = 9 }};
-const scenario_keyed_churn = [_]ScenarioClick{
-    .{ .tag = "button", .index = 10 },
-    .{ .tag = "button", .index = 11 },
-};
-
-const current_app_scenarios = [_]Scenario{
-    .{ .name = "scenario.counter_updates.current_app", .clicks = &scenario_counter_updates },
-    .{ .name = "scenario.diamond_updates.current_app", .clicks = &scenario_diamond_updates },
-    .{ .name = "scenario.event_merge_fanout.current_app", .clicks = &scenario_event_merge },
-    .{ .name = "scenario.dynamic_toggle_churn.current_app", .clicks = &scenario_dynamic_toggle },
-    .{ .name = "scenario.keyed_reorder_remove.current_app", .clicks = &scenario_keyed_churn },
-};
-
 fn signalsHostedFunctions() abi.HostedFunctions {
     return abi.hostedFunctions(.{
         .elem_create_dynamic = @ptrCast(&hostedCreateDynamic),
+        .elem_create_dynamic_keyed = @ptrCast(&hostedCreateDynamicKeyed),
         .elem_create_each = @ptrCast(&hostedCreateEach),
         .elem_register_lifecycle = &hostedRegisterLifecycle,
         .host_append_child = &hostedAppendChild,
+        .host_bind_check = &hostedBindCheck,
         .host_bind_click = &hostedBindClick,
+        .host_bind_checked = &hostedBindChecked,
+        .host_bind_disabled = &hostedBindDisabled,
+        .host_bind_input = &hostedBindInput,
         .host_bind_signal_update = &hostedBindSignalUpdate,
         .host_bind_text = &hostedBindText,
+        .host_bind_value = &hostedBindValue,
         .host_create_element = &hostedCreateElement,
         .host_create_event_filter = &hostedCreateEventFilter,
         .host_create_event_map = &hostedCreateEventMap,
@@ -3338,7 +3828,13 @@ fn signalsHostedFunctions() abi.HostedFunctions {
         .host_create_signal_state = &hostedCreateSignalState,
         .host_create_signal_zip_with = &hostedCreateSignalZipWith,
         .host_send_event = &hostedSendEvent,
+        .host_set_checked = &hostedSetChecked,
+        .host_set_disabled = &hostedSetDisabled,
+        .host_set_label = &hostedSetLabel,
+        .host_set_role = &hostedSetRole,
+        .host_set_test_id = &hostedSetTestId,
         .host_set_text = &hostedSetText,
+        .host_set_value = &hostedSetValue,
     });
 }
 
@@ -3355,72 +3851,6 @@ fn makeSignalsRocOps(host: *HostEnv) abi.RocOps {
     };
 }
 
-fn clickBoundElement(host: *HostEnv, tag: []const u8, index: usize) void {
-    if (host.findElementByTagIndex(tag, index)) |elem| {
-        if (elem.bound_click_event) |event_id| {
-            fireEvent(host, event_id, nodeValueUnit());
-            return;
-        }
-        failHost("benchmark click target has no click binding");
-    }
-    failHost("benchmark click target not found");
-}
-
-fn runCurrentAppScenarioBenchmark(scenario: Scenario, sample: usize, iterations: usize, verbose: bool) !void {
-    var host_env = HostEnv.init();
-
-    host_env.test_state.verbose = verbose;
-    _ = host_env.createScope(null);
-    host_env.current_scope_id = 0;
-
-    var roc_ops = makeSignalsRocOps(&host_env);
-    host_env.roc_ops = &roc_ops;
-    current_host = &host_env;
-    current_roc_ops = &roc_ops;
-    defer current_host = null;
-    defer current_roc_ops = null;
-    defer host_env.deinit();
-
-    abi.roc_main();
-
-    host_env.resetRunMetrics();
-    const text_updates_before = host_env.textUpdateCount();
-    const retained_before = host_env.roc_allocations.items.len;
-    const start_ns = benchmarkNowNs();
-
-    for (0..iterations) |_| {
-        for (scenario.clicks) |click| {
-            clickBoundElement(&host_env, click.tag, click.index);
-        }
-    }
-
-    const elapsed = benchmarkNowNs() - start_ns;
-    const retained_after = host_env.roc_allocations.items.len;
-    printBenchmarkResult(.{
-        .prototype = productionPrototypeName(),
-        .case_name = scenario.name,
-        .sample = sample,
-        .iterations = iterations,
-        .elapsed_ns = elapsed,
-        .operations = @intCast(iterations * scenario.clicks.len),
-        .allocs = host_env.alloc_count,
-        .deallocs = host_env.dealloc_count,
-        .retained_alloc_delta = @as(isize, @intCast(retained_after)) - @as(isize, @intCast(retained_before)),
-        .counters = host_env.bench_counters,
-        .text_updates = host_env.textUpdateCount() - text_updates_before,
-        .active_graph_nodes = host_env.activeGraphNodeCount(),
-    });
-}
-
-fn runCurrentAppScenarioBenchmarks(iterations: usize, samples: usize, verbose: bool) !void {
-    for (0..samples) |sample_index| {
-        const sample = sample_index + 1;
-        for (current_app_scenarios) |scenario| {
-            try runCurrentAppScenarioBenchmark(scenario, sample, iterations, verbose);
-        }
-    }
-}
-
 fn runSyntheticCorrectnessChecks(host: *HostEnv, ops: *abi.RocOps) void {
     host.resetRunMetrics();
     const node_id = hostedCreateSignalState(ops, encodeI64NodeValue(host, 7));
@@ -3435,9 +3865,6 @@ fn runSyntheticCorrectnessChecks(host: *HostEnv, ops: *abi.RocOps) void {
 }
 
 fn runBoundaryBenchmarks(iterations: usize, samples: usize, prototype_filter: ?Prototype, verbose: bool) !c_int {
-    const acceptance = try platform_main("test/signals/test_counter.txt", false);
-    if (acceptance != 0) return acceptance;
-
     var host_env = HostEnv.init();
 
     host_env.test_state.verbose = verbose;
@@ -3457,11 +3884,6 @@ fn runBoundaryBenchmarks(iterations: usize, samples: usize, prototype_filter: ?P
     printBenchmarkHeader();
     runSyntheticBenchmarks(&host_env, &roc_ops, iterations, samples, prototype_filter);
 
-    const should_run_current_app = if (prototype_filter) |filter| filter == .baseline_node_value else true;
-    if (should_run_current_app) {
-        try runCurrentAppScenarioBenchmarks(iterations, samples, verbose);
-    }
-
     return 0;
 }
 
@@ -3476,12 +3898,18 @@ comptime {
     @export(&hostCrashed, .{ .name = "roc_crashed", .visibility = .hidden });
 
     @export(&hostedCreateDynamic, .{ .name = "roc_host_create_dynamic", .visibility = .hidden });
+    @export(&hostedCreateDynamicKeyed, .{ .name = "roc_host_create_dynamic_keyed", .visibility = .hidden });
     @export(&hostedCreateEach, .{ .name = "roc_host_create_each", .visibility = .hidden });
     @export(&hostedRegisterLifecycle, .{ .name = "roc_host_register_lifecycle", .visibility = .hidden });
     @export(&hostedAppendChild, .{ .name = "roc_host_append_child", .visibility = .hidden });
+    @export(&hostedBindCheck, .{ .name = "roc_host_bind_check", .visibility = .hidden });
     @export(&hostedBindClick, .{ .name = "roc_host_bind_click", .visibility = .hidden });
+    @export(&hostedBindChecked, .{ .name = "roc_host_bind_checked", .visibility = .hidden });
+    @export(&hostedBindDisabled, .{ .name = "roc_host_bind_disabled", .visibility = .hidden });
+    @export(&hostedBindInput, .{ .name = "roc_host_bind_input", .visibility = .hidden });
     @export(&hostedBindSignalUpdate, .{ .name = "roc_host_bind_signal_update", .visibility = .hidden });
     @export(&hostedBindText, .{ .name = "roc_host_bind_text", .visibility = .hidden });
+    @export(&hostedBindValue, .{ .name = "roc_host_bind_value", .visibility = .hidden });
     @export(&hostCreateElement, .{ .name = "roc_host_create_element", .visibility = .hidden });
     @export(&hostCreateEventFilter, .{ .name = "roc_host_create_event_filter", .visibility = .hidden });
     @export(&hostCreateEventMap, .{ .name = "roc_host_create_event_map", .visibility = .hidden });
@@ -3507,7 +3935,13 @@ comptime {
     @export(&hostCreateSignalState, .{ .name = "roc_host_create_signal_state", .visibility = .hidden });
     @export(&hostCreateSignalZipWith, .{ .name = "roc_host_create_signal_zip_with", .visibility = .hidden });
     @export(&hostedSendEvent, .{ .name = "roc_host_send_event", .visibility = .hidden });
+    @export(&hostedSetChecked, .{ .name = "roc_host_set_checked", .visibility = .hidden });
+    @export(&hostedSetDisabled, .{ .name = "roc_host_set_disabled", .visibility = .hidden });
+    @export(&hostSetLabel, .{ .name = "roc_host_set_label", .visibility = .hidden });
+    @export(&hostSetRole, .{ .name = "roc_host_set_role", .visibility = .hidden });
+    @export(&hostSetTestId, .{ .name = "roc_host_set_test_id", .visibility = .hidden });
     @export(&hostSetText, .{ .name = "roc_host_set_text", .visibility = .hidden });
+    @export(&hostSetValue, .{ .name = "roc_host_set_value", .visibility = .hidden });
 
     @export(&main, .{ .name = "main" });
     if (@import("builtin").os.tag == .windows) {
@@ -3659,50 +4093,137 @@ fn platform_main(spec_file: []const u8, verbose: bool) !c_int {
     for (host_env.test_state.commands) |cmd| {
         switch (cmd.cmd_type) {
             .click => {
-                if (verbose) {
+                const elem = host_env.findElementByLocator(cmd.locator, cmd.line_num) orelse {
                     var buf: [256]u8 = undefined;
-                    const msg = std.fmt.bufPrint(&buf, "[CMD] click {s}:{d}\n", .{ cmd.tag, cmd.index }) catch "";
+                    const msg = std.fmt.bufPrint(&buf, "TEST FAILED at line {d}: locator did not resolve to one element\n", .{cmd.line_num}) catch "TEST FAILED\n";
                     writeStderr(msg);
-                }
-
-                if (host_env.findElementByTagIndex(cmd.tag, cmd.index)) |elem| {
-                    if (elem.bound_click_event) |event_id| {
-                        fireEvent(&host_env, event_id, nodeValueUnit());
-                    } else {
-                        var buf: [256]u8 = undefined;
-                        const msg = std.fmt.bufPrint(&buf, "TEST FAILED at line {d}: Element {s}:{d} has no click binding\n", .{ cmd.line_num, cmd.tag, cmd.index }) catch "TEST FAILED\n";
-                        writeStderr(msg);
-                        return 1;
-                    }
-                } else {
+                    return 1;
+                };
+                if (elem.disabled) {
                     var buf: [256]u8 = undefined;
-                    const msg = std.fmt.bufPrint(&buf, "TEST FAILED at line {d}: Element {s}:{d} not found\n", .{ cmd.line_num, cmd.tag, cmd.index }) catch "TEST FAILED\n";
+                    const msg = std.fmt.bufPrint(&buf, "TEST FAILED at line {d}: target is disabled\n", .{cmd.line_num}) catch "TEST FAILED\n";
+                    writeStderr(msg);
+                    return 1;
+                }
+                const event_id = elem.bound_click_event orelse {
+                    var buf: [256]u8 = undefined;
+                    const msg = std.fmt.bufPrint(&buf, "TEST FAILED at line {d}: target has no click binding\n", .{cmd.line_num}) catch "TEST FAILED\n";
+                    writeStderr(msg);
+                    return 1;
+                };
+                fireEvent(&host_env, event_id, nodeValueUnit());
+            },
+
+            .fill => {
+                const value = cmd.expected_text orelse "";
+                const elem = host_env.findElementByLocator(cmd.locator, cmd.line_num) orelse {
+                    var buf: [256]u8 = undefined;
+                    const msg = std.fmt.bufPrint(&buf, "TEST FAILED at line {d}: locator did not resolve to one element\n", .{cmd.line_num}) catch "TEST FAILED\n";
+                    writeStderr(msg);
+                    return 1;
+                };
+                if (elem.disabled) {
+                    var buf: [256]u8 = undefined;
+                    const msg = std.fmt.bufPrint(&buf, "TEST FAILED at line {d}: target is disabled\n", .{cmd.line_num}) catch "TEST FAILED\n";
+                    writeStderr(msg);
+                    return 1;
+                }
+                setElementValueIfChanged(&host_env, elem, value);
+                if (elem.bound_input_event) |event_id| {
+                    fireEvent(&host_env, event_id, nodeValueStr(&roc_ops, value));
+                }
+            },
+
+            .check, .uncheck => {
+                const checked = cmd.cmd_type == .check;
+                const elem = host_env.findElementByLocator(cmd.locator, cmd.line_num) orelse {
+                    var buf: [256]u8 = undefined;
+                    const msg = std.fmt.bufPrint(&buf, "TEST FAILED at line {d}: locator did not resolve to one element\n", .{cmd.line_num}) catch "TEST FAILED\n";
+                    writeStderr(msg);
+                    return 1;
+                };
+                if (elem.disabled) {
+                    var buf: [256]u8 = undefined;
+                    const msg = std.fmt.bufPrint(&buf, "TEST FAILED at line {d}: target is disabled\n", .{cmd.line_num}) catch "TEST FAILED\n";
+                    writeStderr(msg);
+                    return 1;
+                }
+                setElementCheckedIfChanged(elem, checked);
+                if (elem.bound_check_event) |event_id| {
+                    fireEvent(&host_env, event_id, nodeValueBool(checked));
+                }
+            },
+
+            .expect_visible => {
+                _ = host_env.findElementByLocator(cmd.locator, cmd.line_num) orelse {
+                    var buf: [256]u8 = undefined;
+                    const msg = std.fmt.bufPrint(&buf, "TEST FAILED at line {d}: locator did not resolve to one visible element\n", .{cmd.line_num}) catch "TEST FAILED\n";
+                    writeStderr(msg);
+                    return 1;
+                };
+            },
+
+            .expect_text => {
+                const expected = cmd.expected_text orelse "";
+                const elem = host_env.findElementByLocator(cmd.locator, cmd.line_num) orelse {
+                    var buf: [256]u8 = undefined;
+                    const msg = std.fmt.bufPrint(&buf, "TEST FAILED at line {d}: locator did not resolve to one element\n", .{cmd.line_num}) catch "TEST FAILED\n";
+                    writeStderr(msg);
+                    return 1;
+                };
+                const actual = elem.text orelse "";
+                if (!std.mem.eql(u8, actual, expected)) {
+                    var buf: [512]u8 = undefined;
+                    const msg = std.fmt.bufPrint(&buf, "TEST FAILED at line {d}:\n  Expected text: \"{s}\"\n  Got text:      \"{s}\"\n", .{ cmd.line_num, expected, actual }) catch "TEST FAILED\n";
                     writeStderr(msg);
                     return 1;
                 }
             },
 
-            .expect_text => {
+            .expect_value => {
                 const expected = cmd.expected_text orelse "";
-
-                if (host_env.findElementByTagIndex(cmd.tag, cmd.index)) |elem| {
-                    const actual = elem.text orelse "";
-
-                    if (std.mem.eql(u8, actual, expected)) {
-                        if (verbose) {
-                            var buf: [256]u8 = undefined;
-                            const msg = std.fmt.bufPrint(&buf, "[OK] expect_text {s}:{d} = \"{s}\"\n", .{ cmd.tag, cmd.index, expected }) catch "";
-                            writeStderr(msg);
-                        }
-                    } else {
-                        var buf: [512]u8 = undefined;
-                        const msg = std.fmt.bufPrint(&buf, "TEST FAILED at line {d}:\n  Expected: {s}:{d} = \"{s}\"\n  Got:      {s}:{d} = \"{s}\"\n", .{ cmd.line_num, cmd.tag, cmd.index, expected, cmd.tag, cmd.index, actual }) catch "TEST FAILED\n";
-                        writeStderr(msg);
-                        return 1;
-                    }
-                } else {
+                const elem = host_env.findElementByLocator(cmd.locator, cmd.line_num) orelse {
                     var buf: [256]u8 = undefined;
-                    const msg = std.fmt.bufPrint(&buf, "TEST FAILED at line {d}: Element {s}:{d} not found\n", .{ cmd.line_num, cmd.tag, cmd.index }) catch "TEST FAILED\n";
+                    const msg = std.fmt.bufPrint(&buf, "TEST FAILED at line {d}: locator did not resolve to one element\n", .{cmd.line_num}) catch "TEST FAILED\n";
+                    writeStderr(msg);
+                    return 1;
+                };
+                const actual = elem.value orelse "";
+                if (!std.mem.eql(u8, actual, expected)) {
+                    var buf: [512]u8 = undefined;
+                    const msg = std.fmt.bufPrint(&buf, "TEST FAILED at line {d}:\n  Expected value: \"{s}\"\n  Got value:      \"{s}\"\n", .{ cmd.line_num, expected, actual }) catch "TEST FAILED\n";
+                    writeStderr(msg);
+                    return 1;
+                }
+            },
+
+            .expect_checked => {
+                const expected = cmd.expected_bool orelse false;
+                const elem = host_env.findElementByLocator(cmd.locator, cmd.line_num) orelse {
+                    var buf: [256]u8 = undefined;
+                    const msg = std.fmt.bufPrint(&buf, "TEST FAILED at line {d}: locator did not resolve to one element\n", .{cmd.line_num}) catch "TEST FAILED\n";
+                    writeStderr(msg);
+                    return 1;
+                };
+                if (elem.checked != expected) {
+                    var buf: [512]u8 = undefined;
+                    const msg = std.fmt.bufPrint(&buf, "TEST FAILED at line {d}:\n  Expected checked: {}\n  Got checked:      {}\n", .{ cmd.line_num, expected, elem.checked }) catch "TEST FAILED\n";
+                    writeStderr(msg);
+                    return 1;
+                }
+            },
+
+            .expect_disabled => {
+                const expected = cmd.expected_bool orelse false;
+                const elem = host_env.findElementByLocator(cmd.locator, cmd.line_num) orelse {
+                    var buf: [256]u8 = undefined;
+                    const msg = std.fmt.bufPrint(&buf, "TEST FAILED at line {d}: locator did not resolve to one element\n", .{cmd.line_num}) catch "TEST FAILED\n";
+                    writeStderr(msg);
+                    return 1;
+                };
+                if (elem.disabled != expected) {
+                    var buf: [512]u8 = undefined;
+                    const msg = std.fmt.bufPrint(&buf, "TEST FAILED at line {d}:\n  Expected disabled: {}\n  Got disabled:      {}\n", .{ cmd.line_num, expected, elem.disabled }) catch "TEST FAILED\n";
                     writeStderr(msg);
                     return 1;
                 }
@@ -3710,24 +4231,16 @@ fn platform_main(spec_file: []const u8, verbose: bool) !c_int {
 
             .expect_updates => {
                 const expected = cmd.expected_count orelse 0;
-
-                if (host_env.findElementByTagIndex(cmd.tag, cmd.index)) |elem| {
-                    const actual = elem.text_update_count;
-                    if (actual == expected) {
-                        if (verbose) {
-                            var buf: [256]u8 = undefined;
-                            const msg = std.fmt.bufPrint(&buf, "[OK] expect_updates {s}:{d} = {d}\n", .{ cmd.tag, cmd.index, expected }) catch "";
-                            writeStderr(msg);
-                        }
-                    } else {
-                        var buf: [512]u8 = undefined;
-                        const msg = std.fmt.bufPrint(&buf, "TEST FAILED at line {d}:\n  Expected updates: {s}:{d} = {d}\n  Got updates:      {s}:{d} = {d}\n", .{ cmd.line_num, cmd.tag, cmd.index, expected, cmd.tag, cmd.index, actual }) catch "TEST FAILED\n";
-                        writeStderr(msg);
-                        return 1;
-                    }
-                } else {
+                const elem = host_env.findElementByLocator(cmd.locator, cmd.line_num) orelse {
                     var buf: [256]u8 = undefined;
-                    const msg = std.fmt.bufPrint(&buf, "TEST FAILED at line {d}: Element {s}:{d} not found\n", .{ cmd.line_num, cmd.tag, cmd.index }) catch "TEST FAILED\n";
+                    const msg = std.fmt.bufPrint(&buf, "TEST FAILED at line {d}: locator did not resolve to one element\n", .{cmd.line_num}) catch "TEST FAILED\n";
+                    writeStderr(msg);
+                    return 1;
+                };
+                const actual = elem.text_update_count + elem.value_update_count + elem.checked_update_count + elem.disabled_update_count;
+                if (actual != expected) {
+                    var buf: [512]u8 = undefined;
+                    const msg = std.fmt.bufPrint(&buf, "TEST FAILED at line {d}:\n  Expected updates: {d}\n  Got updates:      {d}\n", .{ cmd.line_num, expected, actual }) catch "TEST FAILED\n";
                     writeStderr(msg);
                     return 1;
                 }

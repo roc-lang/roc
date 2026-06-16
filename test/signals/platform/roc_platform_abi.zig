@@ -577,26 +577,16 @@ comptime {
     }
 }
 
-/// Element type for __AnonStruct37
-pub const __AnonStruct37 = extern struct {
-    boundary_payload_item_key: *anyopaque,
-    boundary_payload_item_label: *anyopaque,
-    boundary_payload_items_len: *anyopaque,
-    boundary_payload_total: *anyopaque,
-    init_boundary_payload: *anyopaque,
-    @"main!": *anyopaque,
-};
-
-/// Element type for __AnonStruct59
-pub const __AnonStruct59 = extern struct {
+/// Element type for __AnonStruct51
+pub const __AnonStruct51 = extern struct {
     _0: NodeValue,
     _1: NodeValue,
 };
 
 comptime {
     if (@sizeOf(usize) == 8) {
-        if (@sizeOf(__AnonStruct59) != 64) @compileError("__AnonStruct59 size mismatch");
-        if (@alignOf(__AnonStruct59) != 8) @compileError("__AnonStruct59 alignment mismatch");
+        if (@sizeOf(__AnonStruct51) != 64) @compileError("__AnonStruct51 size mismatch");
+        if (@alignOf(__AnonStruct51) != 8) @compileError("__AnonStruct51 alignment mismatch");
     }
 }
 
@@ -639,6 +629,16 @@ pub const ElemCreate_dynamicArgs = extern struct {
     arg2: RocErasedCallable,
 };
 
+/// Arguments for Elem.create_dynamic_keyed!
+/// Roc signature: U64, U64, Box(NodeValue -> Str), Box((NodeValue, U64) => {}) => {}
+/// Refcounted fields are owned by the hosted function.
+pub const ElemCreate_dynamic_keyedArgs = extern struct {
+    arg0: u64,
+    arg1: u64,
+    arg2: RocErasedCallable,
+    arg3: RocErasedCallable,
+};
+
 /// Arguments for Elem.create_each!
 /// Roc signature: U64, U64, Box(NodeValue -> Str), Box((NodeValue, U64) => {}) => {}
 /// Refcounted fields are owned by the hosted function.
@@ -665,10 +665,42 @@ pub const HostAppend_childArgs = extern struct {
     arg1: u64,
 };
 
+/// Arguments for Host.bind_check!
+/// Roc signature: U64, U64 => {}
+/// Refcounted fields are owned by the hosted function.
+pub const HostBind_checkArgs = extern struct {
+    arg0: u64,
+    arg1: u64,
+};
+
+/// Arguments for Host.bind_checked!
+/// Roc signature: U64, U64 => {}
+/// Refcounted fields are owned by the hosted function.
+pub const HostBind_checkedArgs = extern struct {
+    arg0: u64,
+    arg1: u64,
+};
+
 /// Arguments for Host.bind_click!
 /// Roc signature: U64, U64 => {}
 /// Refcounted fields are owned by the hosted function.
 pub const HostBind_clickArgs = extern struct {
+    arg0: u64,
+    arg1: u64,
+};
+
+/// Arguments for Host.bind_disabled!
+/// Roc signature: U64, U64 => {}
+/// Refcounted fields are owned by the hosted function.
+pub const HostBind_disabledArgs = extern struct {
+    arg0: u64,
+    arg1: u64,
+};
+
+/// Arguments for Host.bind_input!
+/// Roc signature: U64, U64 => {}
+/// Refcounted fields are owned by the hosted function.
+pub const HostBind_inputArgs = extern struct {
     arg0: u64,
     arg1: u64,
 };
@@ -685,6 +717,14 @@ pub const HostBind_signal_updateArgs = extern struct {
 /// Roc signature: U64, U64 => {}
 /// Refcounted fields are owned by the hosted function.
 pub const HostBind_textArgs = extern struct {
+    arg0: u64,
+    arg1: u64,
+};
+
+/// Arguments for Host.bind_value!
+/// Roc signature: U64, U64 => {}
+/// Refcounted fields are owned by the hosted function.
+pub const HostBind_valueArgs = extern struct {
     arg0: u64,
     arg1: u64,
 };
@@ -874,10 +914,58 @@ pub const HostSend_eventArgs = extern struct {
     arg1: NodeValue,
 };
 
+/// Arguments for Host.set_checked!
+/// Roc signature: U64, Bool => {}
+/// Refcounted fields are owned by the hosted function.
+pub const HostSet_checkedArgs = extern struct {
+    arg0: u64,
+    arg1: bool,
+};
+
+/// Arguments for Host.set_disabled!
+/// Roc signature: U64, Bool => {}
+/// Refcounted fields are owned by the hosted function.
+pub const HostSet_disabledArgs = extern struct {
+    arg0: u64,
+    arg1: bool,
+};
+
+/// Arguments for Host.set_label!
+/// Roc signature: U64, Str => {}
+/// Refcounted fields are owned by the hosted function.
+pub const HostSet_labelArgs = extern struct {
+    arg0: u64,
+    arg1: RocStr,
+};
+
+/// Arguments for Host.set_role!
+/// Roc signature: U64, Str => {}
+/// Refcounted fields are owned by the hosted function.
+pub const HostSet_roleArgs = extern struct {
+    arg0: u64,
+    arg1: RocStr,
+};
+
+/// Arguments for Host.set_test_id!
+/// Roc signature: U64, Str => {}
+/// Refcounted fields are owned by the hosted function.
+pub const HostSet_test_idArgs = extern struct {
+    arg0: u64,
+    arg1: RocStr,
+};
+
 /// Arguments for Host.set_text!
 /// Roc signature: U64, Str => {}
 /// Refcounted fields are owned by the hosted function.
 pub const HostSet_textArgs = extern struct {
+    arg0: u64,
+    arg1: RocStr,
+};
+
+/// Arguments for Host.set_value!
+/// Roc signature: U64, Str => {}
+/// Refcounted fields are owned by the hosted function.
+pub const HostSet_valueArgs = extern struct {
     arg0: u64,
     arg1: RocStr,
 };
@@ -953,26 +1041,14 @@ pub fn incref__AnonStruct27(value: __AnonStruct27, amount: isize) void {
     increfNodeValue(value._1, amount);
 }
 
-/// Recursively decrement Roc-owned fields in __AnonStruct37.
-pub fn decref__AnonStruct37(value: __AnonStruct37, roc_ops: *RocOps) void {
-    _ = value;
-    _ = roc_ops;
-}
-
-/// Increment Roc-owned fields in __AnonStruct37.
-pub fn incref__AnonStruct37(value: __AnonStruct37, amount: isize) void {
-    _ = value;
-    _ = amount;
-}
-
-/// Recursively decrement Roc-owned fields in __AnonStruct59.
-pub fn decref__AnonStruct59(value: __AnonStruct59, roc_ops: *RocOps) void {
+/// Recursively decrement Roc-owned fields in __AnonStruct51.
+pub fn decref__AnonStruct51(value: __AnonStruct51, roc_ops: *RocOps) void {
     decrefNodeValue(value._0, roc_ops);
     decrefNodeValue(value._1, roc_ops);
 }
 
-/// Increment Roc-owned fields in __AnonStruct59.
-pub fn incref__AnonStruct59(value: __AnonStruct59, amount: isize) void {
+/// Increment Roc-owned fields in __AnonStruct51.
+pub fn incref__AnonStruct51(value: __AnonStruct51, amount: isize) void {
     increfNodeValue(value._0, amount);
     increfNodeValue(value._1, amount);
 }
@@ -982,12 +1058,18 @@ pub fn incref__AnonStruct59(value: __AnonStruct59, amount: isize) void {
 /// Pass it to hostedFunctions() to create the dispatch table.
 pub const PlatformHostedFns = struct {
     elem_create_dynamic: *const fn (roc_ops: *RocOps, arg0: u64, arg1: u64, arg2: RocErasedCallable) callconv(.c) void, // Elem.create_dynamic!
+    elem_create_dynamic_keyed: *const fn (roc_ops: *RocOps, arg0: u64, arg1: u64, arg2: RocErasedCallable, arg3: RocErasedCallable) callconv(.c) void, // Elem.create_dynamic_keyed!
     elem_create_each: *const fn (roc_ops: *RocOps, arg0: u64, arg1: u64, arg2: RocErasedCallable, arg3: RocErasedCallable) callconv(.c) void, // Elem.create_each!
     elem_register_lifecycle: *const fn (arg0: u64, arg1: u64) callconv(.c) void, // Elem.register_lifecycle!
     host_append_child: *const fn (arg0: u64, arg1: u64) callconv(.c) void, // Host.append_child!
+    host_bind_check: *const fn (arg0: u64, arg1: u64) callconv(.c) void, // Host.bind_check!
+    host_bind_checked: *const fn (arg0: u64, arg1: u64) callconv(.c) void, // Host.bind_checked!
     host_bind_click: *const fn (arg0: u64, arg1: u64) callconv(.c) void, // Host.bind_click!
+    host_bind_disabled: *const fn (arg0: u64, arg1: u64) callconv(.c) void, // Host.bind_disabled!
+    host_bind_input: *const fn (arg0: u64, arg1: u64) callconv(.c) void, // Host.bind_input!
     host_bind_signal_update: *const fn (arg0: u64, arg1: u64) callconv(.c) void, // Host.bind_signal_update!
     host_bind_text: *const fn (arg0: u64, arg1: u64) callconv(.c) void, // Host.bind_text!
+    host_bind_value: *const fn (arg0: u64, arg1: u64) callconv(.c) void, // Host.bind_value!
     host_create_element: *const fn (roc_ops: *RocOps, arg0: RocStr) callconv(.c) u64, // Host.create_element!
     host_create_event_filter: *const fn (roc_ops: *RocOps, arg0: u64, arg1: RocErasedCallable) callconv(.c) u64, // Host.create_event_filter!
     host_create_event_map: *const fn (roc_ops: *RocOps, arg0: u64, arg1: RocErasedCallable) callconv(.c) u64, // Host.create_event_map!
@@ -1013,7 +1095,13 @@ pub const PlatformHostedFns = struct {
     host_create_signal_state: *const fn (roc_ops: *RocOps, arg0: NodeValue) callconv(.c) u64, // Host.create_signal_state!
     host_create_signal_zip_with: *const fn (roc_ops: *RocOps, arg0: u64, arg1: u64, arg2: RocErasedCallable) callconv(.c) u64, // Host.create_signal_zip_with!
     host_send_event: *const fn (roc_ops: *RocOps, arg0: u64, arg1: NodeValue) callconv(.c) void, // Host.send_event!
+    host_set_checked: *const fn (arg0: u64, arg1: bool) callconv(.c) void, // Host.set_checked!
+    host_set_disabled: *const fn (arg0: u64, arg1: bool) callconv(.c) void, // Host.set_disabled!
+    host_set_label: *const fn (roc_ops: *RocOps, arg0: u64, arg1: RocStr) callconv(.c) void, // Host.set_label!
+    host_set_role: *const fn (roc_ops: *RocOps, arg0: u64, arg1: RocStr) callconv(.c) void, // Host.set_role!
+    host_set_test_id: *const fn (roc_ops: *RocOps, arg0: u64, arg1: RocStr) callconv(.c) void, // Host.set_test_id!
     host_set_text: *const fn (roc_ops: *RocOps, arg0: u64, arg1: RocStr) callconv(.c) void, // Host.set_text!
+    host_set_value: *const fn (roc_ops: *RocOps, arg0: u64, arg1: RocStr) callconv(.c) void, // Host.set_value!
 };
 
 /// Create a HostedFunctions dispatch table from your implementations.
@@ -1023,38 +1111,50 @@ pub fn hostedFunctions(comptime fns: PlatformHostedFns) HostedFunctions {
     const Static = struct {
         const ptrs = [_]HostedFn{
             hostedFn(fns.elem_create_dynamic), // Elem.create_dynamic! (index 0)
-            hostedFn(fns.elem_create_each), // Elem.create_each! (index 1)
-            hostedFn(fns.elem_register_lifecycle), // Elem.register_lifecycle! (index 2)
-            hostedFn(fns.host_append_child), // Host.append_child! (index 3)
-            hostedFn(fns.host_bind_click), // Host.bind_click! (index 4)
-            hostedFn(fns.host_bind_signal_update), // Host.bind_signal_update! (index 5)
-            hostedFn(fns.host_bind_text), // Host.bind_text! (index 6)
-            hostedFn(fns.host_create_element), // Host.create_element! (index 7)
-            hostedFn(fns.host_create_event_filter), // Host.create_event_filter! (index 8)
-            hostedFn(fns.host_create_event_map), // Host.create_event_map! (index 9)
-            hostedFn(fns.host_create_event_map_unit_i64_const), // Host.create_event_map_unit_i64_const! (index 10)
-            hostedFn(fns.host_create_event_merge), // Host.create_event_merge! (index 11)
-            hostedFn(fns.host_create_event_source), // Host.create_event_source! (index 12)
-            hostedFn(fns.host_create_event_with_latest), // Host.create_event_with_latest! (index 13)
-            hostedFn(fns.host_create_root), // Host.create_root! (index 14)
-            hostedFn(fns.host_create_signal_const), // Host.create_signal_const! (index 15)
-            hostedFn(fns.host_create_signal_const_bool), // Host.create_signal_const_bool! (index 16)
-            hostedFn(fns.host_create_signal_const_i64), // Host.create_signal_const_i64! (index 17)
-            hostedFn(fns.host_create_signal_const_str), // Host.create_signal_const_str! (index 18)
-            hostedFn(fns.host_create_signal_fold), // Host.create_signal_fold! (index 19)
-            hostedFn(fns.host_create_signal_fold_bool_toggle), // Host.create_signal_fold_bool_toggle! (index 20)
-            hostedFn(fns.host_create_signal_fold_i64), // Host.create_signal_fold_i64! (index 21)
-            hostedFn(fns.host_create_signal_hold), // Host.create_signal_hold! (index 22)
-            hostedFn(fns.host_create_signal_map), // Host.create_signal_map! (index 23)
-            hostedFn(fns.host_create_signal_map2), // Host.create_signal_map2! (index 24)
-            hostedFn(fns.host_create_signal_map2_i64_i64), // Host.create_signal_map2_i64_i64! (index 25)
-            hostedFn(fns.host_create_signal_map2_i64_i64_str), // Host.create_signal_map2_i64_i64_str! (index 26)
-            hostedFn(fns.host_create_signal_map_i64_i64), // Host.create_signal_map_i64_i64! (index 27)
-            hostedFn(fns.host_create_signal_map_i64_str), // Host.create_signal_map_i64_str! (index 28)
-            hostedFn(fns.host_create_signal_state), // Host.create_signal_state! (index 29)
-            hostedFn(fns.host_create_signal_zip_with), // Host.create_signal_zip_with! (index 30)
-            hostedFn(fns.host_send_event), // Host.send_event! (index 31)
-            hostedFn(fns.host_set_text), // Host.set_text! (index 32)
+            hostedFn(fns.elem_create_dynamic_keyed), // Elem.create_dynamic_keyed! (index 1)
+            hostedFn(fns.elem_create_each), // Elem.create_each! (index 2)
+            hostedFn(fns.elem_register_lifecycle), // Elem.register_lifecycle! (index 3)
+            hostedFn(fns.host_append_child), // Host.append_child! (index 4)
+            hostedFn(fns.host_bind_check), // Host.bind_check! (index 5)
+            hostedFn(fns.host_bind_checked), // Host.bind_checked! (index 6)
+            hostedFn(fns.host_bind_click), // Host.bind_click! (index 7)
+            hostedFn(fns.host_bind_disabled), // Host.bind_disabled! (index 8)
+            hostedFn(fns.host_bind_input), // Host.bind_input! (index 9)
+            hostedFn(fns.host_bind_signal_update), // Host.bind_signal_update! (index 10)
+            hostedFn(fns.host_bind_text), // Host.bind_text! (index 11)
+            hostedFn(fns.host_bind_value), // Host.bind_value! (index 12)
+            hostedFn(fns.host_create_element), // Host.create_element! (index 13)
+            hostedFn(fns.host_create_event_filter), // Host.create_event_filter! (index 14)
+            hostedFn(fns.host_create_event_map), // Host.create_event_map! (index 15)
+            hostedFn(fns.host_create_event_map_unit_i64_const), // Host.create_event_map_unit_i64_const! (index 16)
+            hostedFn(fns.host_create_event_merge), // Host.create_event_merge! (index 17)
+            hostedFn(fns.host_create_event_source), // Host.create_event_source! (index 18)
+            hostedFn(fns.host_create_event_with_latest), // Host.create_event_with_latest! (index 19)
+            hostedFn(fns.host_create_root), // Host.create_root! (index 20)
+            hostedFn(fns.host_create_signal_const), // Host.create_signal_const! (index 21)
+            hostedFn(fns.host_create_signal_const_bool), // Host.create_signal_const_bool! (index 22)
+            hostedFn(fns.host_create_signal_const_i64), // Host.create_signal_const_i64! (index 23)
+            hostedFn(fns.host_create_signal_const_str), // Host.create_signal_const_str! (index 24)
+            hostedFn(fns.host_create_signal_fold), // Host.create_signal_fold! (index 25)
+            hostedFn(fns.host_create_signal_fold_bool_toggle), // Host.create_signal_fold_bool_toggle! (index 26)
+            hostedFn(fns.host_create_signal_fold_i64), // Host.create_signal_fold_i64! (index 27)
+            hostedFn(fns.host_create_signal_hold), // Host.create_signal_hold! (index 28)
+            hostedFn(fns.host_create_signal_map), // Host.create_signal_map! (index 29)
+            hostedFn(fns.host_create_signal_map2), // Host.create_signal_map2! (index 30)
+            hostedFn(fns.host_create_signal_map2_i64_i64), // Host.create_signal_map2_i64_i64! (index 31)
+            hostedFn(fns.host_create_signal_map2_i64_i64_str), // Host.create_signal_map2_i64_i64_str! (index 32)
+            hostedFn(fns.host_create_signal_map_i64_i64), // Host.create_signal_map_i64_i64! (index 33)
+            hostedFn(fns.host_create_signal_map_i64_str), // Host.create_signal_map_i64_str! (index 34)
+            hostedFn(fns.host_create_signal_state), // Host.create_signal_state! (index 35)
+            hostedFn(fns.host_create_signal_zip_with), // Host.create_signal_zip_with! (index 36)
+            hostedFn(fns.host_send_event), // Host.send_event! (index 37)
+            hostedFn(fns.host_set_checked), // Host.set_checked! (index 38)
+            hostedFn(fns.host_set_disabled), // Host.set_disabled! (index 39)
+            hostedFn(fns.host_set_label), // Host.set_label! (index 40)
+            hostedFn(fns.host_set_role), // Host.set_role! (index 41)
+            hostedFn(fns.host_set_test_id), // Host.set_test_id! (index 42)
+            hostedFn(fns.host_set_text), // Host.set_text! (index 43)
+            hostedFn(fns.host_set_value), // Host.set_value! (index 44)
         };
     };
     return .{
@@ -1217,21 +1317,3 @@ pub extern fn roc_call_step(arg0: RocErasedCallable, arg1: NodeValue, arg2: Node
 
 /// Entrypoint: call_predicate
 pub extern fn roc_call_predicate(arg0: RocErasedCallable, arg1: NodeValue) callconv(.c) bool;
-
-/// Entrypoint: boundary_payload_init
-pub extern fn roc_boundary_payload_init() callconv(.c) *anyopaque;
-
-/// Entrypoint: boundary_payload_total
-pub extern fn roc_boundary_payload_total(arg0: *anyopaque) callconv(.c) i64;
-
-/// Entrypoint: boundary_payload_item_key
-pub extern fn roc_boundary_payload_item_key(arg0: *anyopaque) callconv(.c) RocStr;
-
-/// Entrypoint: boundary_payload_item_label
-pub extern fn roc_boundary_payload_item_label(arg0: *anyopaque) callconv(.c) RocStr;
-
-/// Entrypoint: boundary_payload_items_len
-pub extern fn roc_boundary_payload_items_len(arg0: *anyopaque) callconv(.c) u64;
-
-/// Entrypoint: boundary_payload_drop
-pub extern fn roc_boundary_payload_drop(arg0: *anyopaque) callconv(.c) void;

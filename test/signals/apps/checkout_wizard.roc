@@ -1,4 +1,4 @@
-app [BoundaryPayload, program] { pf: platform "../platform/main.roc" }
+app [main!] { pf: platform "../platform/main.roc" }
 
 import pf.Elem
 import pf.NodeValue exposing [NodeValue]
@@ -14,7 +14,7 @@ Line := { id : Str, label : Str }.{
 	decode : NodeValue, NodeValue -> (Try(Line, [TypeMismatch]), NodeValue)
 	decode = |nv, fmt| {
 		(result, rest) = NodeValue.decode_list(fmt, nv, |source, f| Str.decode(source, f))
-		line_result =
+		line_result = 
 			match result {
 				Ok(fields) =>
 					match (List.get(fields, 0), List.get(fields, 1)) {
@@ -29,8 +29,11 @@ Line := { id : Str, label : Str }.{
 	}
 }
 
+concat3 : Str, Str, Str -> Str
+concat3 = |a, b, c| Str.concat(Str.concat(a, b), c)
+
 label_i64 : Str, I64 -> Str
-label_i64 = |name, value| Str.concat(Str.concat(name, ": "), value.to_str())
+label_i64 = |name, value| concat3(name, ": ", value.to_str())
 
 step_label : I64 -> Str
 step_label = |step| {
@@ -53,15 +56,43 @@ render_line = |line| {
 	removes = Reactive.Event.map_unit_i64_const(remove_clicks, -1)
 	quantity_events = Reactive.Event.merge(adds, removes)
 	quantity : Reactive.Signal(I64)
-	quantity = Reactive.Signal.fold_i64(1, quantity_events, |current, delta| current + delta)
-	quantity_label = Reactive.Signal.map_i64_str(quantity, |n| label_i64("qty", n))
+	quantity = Reactive.Signal.fold_i64!(
+		1,
+		quantity_events,
+		|current, delta| {
+			next = current + delta
+			if next < 0 {
+				0
+			} else {
+				next
+			}
+		},
+	)
+	quantity_label = 
+		Reactive.Signal.map_i64_str(
+			quantity,
+			|n| concat3(line.label, " quantity: ", n.to_str()),
+		)
 
-	Elem.div(
+	Elem.section(
+		line.label,
 		[
-			Elem.text(line.label),
-			Elem.button({ on_click: remove_send, label: Reactive.Signal.const_str("-") }),
+			Elem.paragraph(line.label),
+			Elem.action_button(
+				{
+					on_click: remove_send,
+					label: Reactive.Signal.const_str(Str.concat("Decrease ", line.label)),
+					disabled: Reactive.Signal.const_bool(False),
+				},
+			),
 			Elem.label(quantity_label),
-			Elem.button({ on_click: add_send, label: Reactive.Signal.const_str("+") }),
+			Elem.action_button(
+				{
+					on_click: add_send,
+					label: Reactive.Signal.const_str(Str.concat("Increase ", line.label)),
+					disabled: Reactive.Signal.const_bool(False),
+				},
+			),
 		],
 	)
 }
@@ -76,8 +107,8 @@ main! = || {
 	backs = Reactive.Event.map_unit_i64_const(back_clicks, -1)
 	step_events = Reactive.Event.merge(nexts, backs)
 	step : Reactive.Signal(I64)
-	step =
-		Reactive.Signal.fold_i64(
+	step = 
+		Reactive.Signal.fold_i64!(
 			0,
 			step_events,
 			|current, delta| {
@@ -93,10 +124,16 @@ main! = || {
 		)
 	step_text = Reactive.Signal.map_i64_str(step, step_label)
 
-	{ sender: terms_send, receiver: terms_clicks } = Reactive.Event.unit_channel!()
+	{ sender: email_send, receiver: email_changes } = Reactive.Event.channel!()
+	email : Reactive.Signal(Str)
+	email = Reactive.Signal.hold!("", email_changes)
+	{ sender: address_send, receiver: address_changes } = Reactive.Event.channel!()
+	address : Reactive.Signal(Str)
+	address = Reactive.Signal.hold!("", address_changes)
+	{ sender: terms_send, receiver: terms_changes } = Reactive.Event.channel!()
 	terms : Reactive.Signal(Bool)
-	terms = Reactive.Signal.fold_bool_toggle(False, terms_clicks)
-	terms_text =
+	terms = Reactive.Signal.hold!(False, terms_changes)
+	terms_text = 
 		Reactive.Signal.map(
 			terms,
 			|accepted| if accepted {
@@ -105,11 +142,21 @@ main! = || {
 				"Terms pending"
 			},
 		)
+	submit_disabled : Reactive.Signal(Bool)
+	submit_disabled = 
+		Reactive.Signal.map(
+			terms,
+			|accepted| if accepted {
+				False
+			} else {
+				True
+			},
+		)
 
 	{ sender: add_support_send, receiver: add_support_clicks } = Reactive.Event.unit_channel!()
 	{ sender: basic_cart_send, receiver: basic_cart_clicks } = Reactive.Event.unit_channel!()
 	support_cart : Reactive.Event(List(Line))
-	support_cart =
+	support_cart = 
 		Reactive.Event.map(
 			add_support_clicks,
 			|_| [Line.make("seats", "3 seats"), Line.make("support", "Priority support"), Line.make("audit", "Audit log export")],
@@ -118,8 +165,8 @@ main! = || {
 	basic_cart = Reactive.Event.map(basic_cart_clicks, |_| [Line.make("seats", "3 seats")])
 	cart_commands = Reactive.Event.merge(support_cart, basic_cart)
 	lines : Reactive.Signal(List(Line))
-	lines =
-		Reactive.Signal.fold(
+	lines = 
+		Reactive.Signal.fold!(
 			[Line.make("seats", "3 seats"), Line.make("support", "Priority support")],
 			cart_commands,
 			|_current, next| next,
@@ -129,28 +176,82 @@ main! = || {
 	submit_deltas : Reactive.Event(I64)
 	submit_deltas = Reactive.Event.map_unit_i64_const(submit_clicks, 1)
 	submit_count : Reactive.Signal(I64)
-	submit_count = Reactive.Signal.fold_i64(0, submit_deltas, |current, delta| current + delta)
-	review_label = Reactive.Signal.map_i64_str(submit_count, |attempts| Str.concat("submits: ", attempts.to_str()))
+	submit_count = Reactive.Signal.fold_i64!(0, submit_deltas, |current, delta| current + delta)
+	review_label = Reactive.Signal.map_i64_str(submit_count, |attempts| label_i64("Orders submitted", attempts))
+	email_review = Reactive.Signal.map(email, |value| Str.concat("Email: ", value))
+	address_review = Reactive.Signal.map(address, |value| Str.concat("Address: ", value))
 
-	step_panel =
-		Elem.dynamic(
+	step_panel = 
+		Elem.dynamic_keyed(
 			step,
+			|current_step| current_step.to_str(),
 			|current_step| if current_step == 0 {
-				Elem.div([Elem.text("Cart editor active")])
-			} else if current_step == 1 {
-				Elem.div(
+				Elem.section(
+					"Cart",
 					[
-						Elem.text("Delivery preferences"),
-						Elem.button({ on_click: terms_send, label: Reactive.Signal.const_str("toggle terms") }),
+						Elem.paragraph("Cart editor"),
+						Elem.action_button(
+							{
+								on_click: add_support_send,
+								label: Reactive.Signal.const_str("Use team plan"),
+								disabled: Reactive.Signal.const_bool(False),
+							},
+						),
+						Elem.action_button(
+							{
+								on_click: basic_cart_send,
+								label: Reactive.Signal.const_str("Use basic plan"),
+								disabled: Reactive.Signal.const_bool(False),
+							},
+						),
+						Elem.each(lines, |line| line.id, render_line),
+					],
+				)
+			} else if current_step == 1 {
+				Elem.section(
+					"Delivery",
+					[
+						Elem.text_input(
+							{
+								label: "Email",
+								value: email,
+								on_input: email_send,
+								disabled: Reactive.Signal.const_bool(False),
+							},
+						),
+						Elem.text_input(
+							{
+								label: "Address",
+								value: address,
+								on_input: address_send,
+								disabled: Reactive.Signal.const_bool(False),
+							},
+						),
+						Elem.checkbox(
+							{
+								label: "Accept terms",
+								checked: terms,
+								on_check: terms_send,
+								disabled: Reactive.Signal.const_bool(False),
+							},
+						),
 						Elem.label(terms_text),
 					],
 				)
 			} else {
-				Elem.div(
+				Elem.section(
+					"Review",
 					[
-						Elem.text("Review"),
+						Elem.label(email_review),
+						Elem.label(address_review),
 						Elem.label(review_label),
-						Elem.button({ on_click: submit_send, label: Reactive.Signal.const_str("submit") }),
+						Elem.action_button(
+							{
+								on_click: submit_send,
+								label: Reactive.Signal.const_str("Place order"),
+								disabled: submit_disabled,
+							},
+						),
 					],
 				)
 			},
@@ -159,31 +260,24 @@ main! = || {
 	Elem.run!(
 		Elem.div(
 			[
-				Elem.text("Checkout wizard"),
-				Elem.button({ on_click: back_send, label: Reactive.Signal.const_str("back") }),
-				Elem.button({ on_click: next_send, label: Reactive.Signal.const_str("next") }),
+				Elem.heading("Checkout wizard"),
+				Elem.action_button(
+					{
+						on_click: back_send,
+						label: Reactive.Signal.const_str("Back"),
+						disabled: Reactive.Signal.const_bool(False),
+					},
+				),
+				Elem.action_button(
+					{
+						on_click: next_send,
+						label: Reactive.Signal.const_str("Next"),
+						disabled: Reactive.Signal.const_bool(False),
+					},
+				),
 				Elem.label(step_text),
 				step_panel,
-				Elem.text("Cart lines"),
-				Elem.button({ on_click: add_support_send, label: Reactive.Signal.const_str("add plan") }),
-				Elem.button({ on_click: basic_cart_send, label: Reactive.Signal.const_str("basic") }),
-				Elem.each(lines, |line| line.id, render_line),
 			],
 		),
 	)
-}
-
-BoundaryPayload : { total : I64, item : Line, items : List(Line) }
-
-program = {
-	main!,
-	init_boundary_payload: |_| {
-		total: 3,
-		item: Line.make("support", "Priority support"),
-		items: [Line.make("seats", "3 seats"), Line.make("support", "Priority support")],
-	},
-	boundary_payload_total: |payload| payload.total,
-	boundary_payload_item_key: |payload| payload.item.id,
-	boundary_payload_item_label: |payload| payload.item.label,
-	boundary_payload_items_len: |payload| List.len(payload.items),
 }
