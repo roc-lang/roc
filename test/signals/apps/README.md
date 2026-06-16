@@ -30,6 +30,14 @@ Useful checks from the repository root:
 ./zig-out/bin/signals-kanban-board test/signals/apps/kanban_board.txt
 ```
 
+The same binaries can replay their spec actions as benchmark traces:
+
+```sh
+zig build run-signals-bench
+
+./zig-out/bin/signals-ops-dashboard --bench-app --bench-name signals-ops-dashboard --bench-iterations 100 --bench-samples 3 test/signals/apps/ops_dashboard.txt
+```
+
 Specs use semantic locators:
 
 ```txt

@@ -37,6 +37,16 @@ The host can also be rebuilt directly:
 zig build build-test-hosts -Dplatform=signals
 ```
 
+Run the representative app benchmark suite:
+
+```sh
+zig build run-signals-bench
+```
+
+The benchmark replays each app's semantic spec as a user-event trace and prints
+CSV rows with Roc dispatch time, host command-apply time, allocation counts,
+emitted command counts, and Roc runtime counters.
+
 Regenerate glue after changing exposed platform types or provided entrypoints:
 
 ```sh
@@ -105,3 +115,16 @@ commands.
 
 The host does not create graph nodes, store callbacks, or evaluate signals.
 Those responsibilities live in `UiRuntime.roc`.
+
+## Benchmark Mode
+
+Each built app binary accepts a benchmark mode:
+
+```sh
+./zig-out/bin/signals-ops-dashboard --bench-app --bench-name signals-ops-dashboard --bench-iterations 100 --bench-samples 3 test/signals/apps/ops_dashboard.txt
+```
+
+The host initializes a fresh app per iteration, applies the initial command
+batch, then replays only action commands (`click`, `fill`, `check`, `uncheck`).
+Expectation commands remain the semantic correctness suite used by
+`zig build run-test-signals`.

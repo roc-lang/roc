@@ -16,18 +16,17 @@ UiRuntime := [].{
 		keyed_removes : U64,
 		node_value_equality_checks : U64,
 		graph_nodes : U64,
+		commands_emitted : U64,
+		full_render_batches : U64,
+		incremental_batches : U64,
+		structural_resets : U64,
+		state_lookups : U64,
+		event_lookups : U64,
 	}
 
 	EventId : { key : Str, id : U64 }
 
 	StateEntry : { key : Str, value : NodeValue }
-
-	Runtime : {
-		states : List(StateEntry),
-		event_ids : List(EventId),
-		next_event_id : U64,
-		metrics : RuntimeMetrics,
-	}
 
 	HostEvent := [
 		Click(U64),
@@ -50,6 +49,22 @@ UiRuntime := [].{
 		BindInput({ id : U64, event : U64 }),
 		BindCheck({ id : U64, event : U64 }),
 	]
+
+	CommandSnapshot : {
+		kind : U64,
+		a : U64,
+		b : U64,
+		value_bool : Bool,
+		value_bytes : List(U8),
+	}
+
+	Runtime : {
+		states : List(StateEntry),
+		event_ids : List(EventId),
+		next_event_id : U64,
+		previous_commands : List(CommandSnapshot),
+		metrics : RuntimeMetrics,
+	}
 
 	DispatchResult : {
 		runtime : Box(Runtime),
@@ -78,6 +93,11 @@ UiRuntime := [].{
 		next_elem_id : U64,
 	}
 
+	RenderResult : {
+		runtime : Runtime,
+		emit_commands : List(Command),
+	}
+
 	StateLookup : { found : Bool, value : NodeValue }
 
 	EventLookup : { runtime : Runtime, id : U64 }
@@ -98,6 +118,12 @@ UiRuntime := [].{
 		keyed_removes: 0,
 		node_value_equality_checks: 0,
 		graph_nodes: 0,
+		commands_emitted: 0,
+		full_render_batches: 0,
+		incremental_batches: 0,
+		structural_resets: 0,
+		state_lookups: 0,
+		event_lookups: 0,
 	}
 
 	init : Elem -> DispatchResult
@@ -106,13 +132,14 @@ UiRuntime := [].{
 			states: [],
 			event_ids: [],
 			next_event_id: 1,
+			previous_commands: [],
 			metrics: zero_metrics,
 		}
-		rendered = render_runtime(runtime, root, NoEvent)
+		rendered = render_runtime(runtime, root, NoEvent, True)
 		runtime_box = Box.box(rendered.runtime)
 		result = {
 			runtime: runtime_box,
-			commands: rendered.commands,
+			commands: rendered.emit_commands,
 			metrics: rendered.runtime.metrics,
 		}
 		result
@@ -125,10 +152,10 @@ UiRuntime := [].{
 		metrics = runtime0.metrics
 		runtime1 = { ..runtime0, metrics: { ..metrics, events_processed: metrics.events_processed + 1 }
 		}
-		rendered = render_runtime(runtime1, root, active_event)
+		rendered = render_runtime(runtime1, root, active_event, False)
 		{
 			runtime: Box.box(rendered.runtime),
-			commands: rendered.commands,
+			commands: rendered.emit_commands,
 			metrics: rendered.runtime.metrics,
 		}
 	}
@@ -148,8 +175,8 @@ UiRuntime := [].{
 		}
 	}
 
-	render_runtime : Runtime, Elem, ActiveEvent -> { runtime : Runtime, commands : List(Command) }
-	render_runtime = |runtime, root, active_event| {
+	render_runtime : Runtime, Elem, ActiveEvent, Bool -> RenderResult
+	render_runtime = |runtime, root, active_event, force_full| {
 		state = { runtime, active_event, updated_keys: [] }
 		render_state = {
 			state,
@@ -157,9 +184,113 @@ UiRuntime := [].{
 			next_elem_id: 1,
 		}
 		rendered = render_elem(render_state, root, 0)
+		full_commands = rendered.commands
+		previous_snapshots = rendered.state.runtime.previous_commands
+		next_snapshots = command_snapshots(full_commands)
+		full_batch = force_full or !(same_structure(previous_snapshots, next_snapshots))
+		emit_commands =
+			if full_batch {
+				full_commands
+			} else {
+				diff_non_structural(previous_snapshots, full_commands)
+			}
+		metrics0 = rendered.state.runtime.metrics
+		metrics1 =
+			if full_batch {
+				{ ..metrics0,
+					commands_emitted: metrics0.commands_emitted + List.len(emit_commands),
+					full_render_batches: metrics0.full_render_batches + 1,
+					structural_resets: metrics0.structural_resets + 1,
+				}
+			} else {
+				{ ..metrics0,
+					commands_emitted: metrics0.commands_emitted + List.len(emit_commands),
+					incremental_batches: metrics0.incremental_batches + 1,
+				}
+		}
 		{
-			runtime: rendered.state.runtime,
-			commands: rendered.commands,
+			runtime: { ..rendered.state.runtime, previous_commands: next_snapshots, metrics: metrics1 },
+			emit_commands,
+		}
+	}
+
+	command_snapshots : List(Command) -> List(CommandSnapshot)
+	command_snapshots = |commands| {
+		List.map(commands, command_snapshot)
+	}
+
+	command_snapshot : Command -> CommandSnapshot
+	command_snapshot = |command| {
+		match command {
+			ResetDom => { kind: 0, a: 0, b: 0, value_bool: False, value_bytes: [] }
+			CreateElement(payload) => { kind: 1, a: payload.id, b: 0, value_bool: False, value_bytes: Str.to_utf8(payload.tag) }
+			AppendChild(payload) => { kind: 2, a: payload.parent, b: payload.child, value_bool: False, value_bytes: [] }
+			SetText(payload) => { kind: 3, a: payload.id, b: 0, value_bool: False, value_bytes: Str.to_utf8(payload.value) }
+			SetRole(payload) => { kind: 4, a: payload.id, b: 0, value_bool: False, value_bytes: Str.to_utf8(payload.value) }
+			SetLabel(payload) => { kind: 5, a: payload.id, b: 0, value_bool: False, value_bytes: Str.to_utf8(payload.value) }
+			SetTestId(payload) => { kind: 6, a: payload.id, b: 0, value_bool: False, value_bytes: Str.to_utf8(payload.value) }
+			SetValue(payload) => { kind: 7, a: payload.id, b: 0, value_bool: False, value_bytes: Str.to_utf8(payload.value) }
+			SetChecked(payload) => { kind: 8, a: payload.id, b: 0, value_bool: payload.value, value_bytes: [] }
+			SetDisabled(payload) => { kind: 9, a: payload.id, b: 0, value_bool: payload.value, value_bytes: [] }
+			BindClick(payload) => { kind: 10, a: payload.id, b: payload.event, value_bool: False, value_bytes: [] }
+			BindInput(payload) => { kind: 11, a: payload.id, b: payload.event, value_bool: False, value_bytes: [] }
+			BindCheck(payload) => { kind: 12, a: payload.id, b: payload.event, value_bool: False, value_bytes: [] }
+		}
+	}
+
+	same_structure : List(CommandSnapshot), List(CommandSnapshot) -> Bool
+	same_structure = |previous, next| {
+		previous_structure = structural_snapshots(previous)
+		next_structure = structural_snapshots(next)
+		if List.len(previous_structure) != List.len(next_structure) {
+			False
+		} else {
+			pairs = List.map2(previous_structure, next_structure, |a, b| (a, b))
+			!List.any(pairs, |(a, b)| !snapshot_equal(a, b))
+		}
+	}
+
+	structural_snapshots : List(CommandSnapshot) -> List(CommandSnapshot)
+	structural_snapshots = |snapshots| {
+		List.keep_if(snapshots, snapshot_is_structural)
+	}
+
+	snapshot_is_structural : CommandSnapshot -> Bool
+	snapshot_is_structural = |snapshot| {
+		snapshot.kind == 0 or snapshot.kind == 1 or snapshot.kind == 2
+	}
+
+	command_is_structural : Command -> Bool
+	command_is_structural = |command| {
+		snapshot_is_structural(command_snapshot(command))
+	}
+
+	diff_non_structural : List(CommandSnapshot), List(Command) -> List(Command)
+	diff_non_structural = |previous, next| {
+		List.keep_if(next, |command| if command_is_structural(command) {
+			False
+		} else {
+			snapshot = command_snapshot(command)
+			!List.any(previous, |old| snapshot_equal(old, snapshot))
+		})
+	}
+
+	snapshot_equal : CommandSnapshot, CommandSnapshot -> Bool
+	snapshot_equal = |left, right| {
+		left.kind == right.kind
+			and left.a == right.a
+			and left.b == right.b
+			and left.value_bool == right.value_bool
+			and u8_list_equal(left.value_bytes, right.value_bytes)
+	}
+
+	u8_list_equal : List(U8), List(U8) -> Bool
+	u8_list_equal = |left, right| {
+		if List.len(left) != List.len(right) {
+			False
+		} else {
+			pairs = List.map2(left, right, |a, b| (a, b))
+			!List.any(pairs, |(a, b)| a != b)
 		}
 	}
 
@@ -331,8 +462,10 @@ UiRuntime := [].{
 
 	event_id_for_key : Runtime, Str -> EventLookup
 	event_id_for_key = |runtime, key| {
+		metrics0 = runtime.metrics
+		runtime_with_count = { ..runtime, metrics: { ..metrics0, event_lookups: metrics0.event_lookups + 1 } }
 		found = List.fold(
-			runtime.event_ids,
+			runtime_with_count.event_ids,
 			{ found: False, id: 0 },
 			|acc, entry| if acc.found {
 				acc
@@ -343,12 +476,12 @@ UiRuntime := [].{
 			},
 		)
 		if found.found {
-			{ runtime, id: found.id }
+			{ runtime: runtime_with_count, id: found.id }
 		} else {
-			id = runtime.next_event_id
+			id = runtime_with_count.next_event_id
 			entry = { key, id }
 			{
-				runtime: { ..runtime, event_ids: List.append(runtime.event_ids, entry), next_event_id: id + 1
+				runtime: { ..runtime_with_count, event_ids: List.append(runtime_with_count.event_ids, entry), next_event_id: id + 1
 				},
 				id,
 			}
@@ -537,8 +670,10 @@ UiRuntime := [].{
 
 	state_value : Runtime, Str, NodeValue -> { runtime : Runtime, value : NodeValue }
 	state_value = |runtime, key, initial| {
+		metrics0 = runtime.metrics
+		runtime_with_count = { ..runtime, metrics: { ..metrics0, state_lookups: metrics0.state_lookups + 1 } }
 		lookup = List.fold(
-			runtime.states,
+			runtime_with_count.states,
 			{ found: False, value: initial },
 			|acc, entry| if acc.found {
 				acc
@@ -549,10 +684,10 @@ UiRuntime := [].{
 			},
 		)
 		if lookup.found {
-			{ runtime, value: lookup.value }
+			{ runtime: runtime_with_count, value: lookup.value }
 		} else {
 			{
-				runtime: { ..runtime, states: List.append(runtime.states, { key, value: initial }) },
+				runtime: { ..runtime_with_count, states: List.append(runtime_with_count.states, { key, value: initial }) },
 				value: initial,
 			}
 		}

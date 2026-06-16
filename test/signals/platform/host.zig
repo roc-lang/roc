@@ -33,6 +33,27 @@ fn writeStderr(bytes: []const u8) void {
     std.Io.File.stderr().writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), bytes) catch {};
 }
 
+fn printStderr(comptime fmt: []const u8, args: anytype) void {
+    var buf: [2048]u8 = undefined;
+    const out = std.fmt.bufPrint(&buf, fmt, args) catch return;
+    writeStderr(out);
+}
+
+fn writeStdout(bytes: []const u8) void {
+    std.Io.File.stdout().writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), bytes) catch {};
+}
+
+fn printStdout(comptime fmt: []const u8, args: anytype) void {
+    var buf: [2048]u8 = undefined;
+    const out = std.fmt.bufPrint(&buf, fmt, args) catch return;
+    writeStdout(out);
+}
+
+fn benchmarkNowNs() u64 {
+    const ns = std.Io.Clock.awake.now(std.Io.Threaded.global_single_threaded.io()).nanoseconds;
+    return @intCast(@max(ns, 0));
+}
+
 fn traceEnabled() bool {
     if (current_host) |host| {
         return host.test_state.verbose;
@@ -244,6 +265,16 @@ const SpecCommand = struct {
     line_num: usize,
 };
 
+fn freeSpecCommands(allocator: std.mem.Allocator, commands: []SpecCommand) void {
+    for (commands) |cmd| {
+        cmd.locator.deinit(allocator);
+        if (cmd.expected_text) |text| allocator.free(text);
+    }
+    if (commands.len > 0) {
+        allocator.free(commands);
+    }
+}
+
 const TestState = struct {
     verbose: bool,
     commands: []SpecCommand,
@@ -447,13 +478,7 @@ const HostEnv = struct {
         }
         self.dom_elements.deinit(allocator);
 
-        for (self.test_state.commands) |cmd| {
-            cmd.locator.deinit(allocator);
-            if (cmd.expected_text) |text| allocator.free(text);
-        }
-        if (self.test_state.commands.len > 0) {
-            allocator.free(self.test_state.commands);
-        }
+        freeSpecCommands(allocator, self.test_state.commands);
 
         for (self.roc_allocations.items) |alloc| {
             allocator.rawFree(alloc.ptr[0..alloc.total_size], alloc.alignment, @returnAddress());
@@ -561,6 +586,12 @@ fn zeroRuntimeMetrics() RuntimeMetrics {
         .signal_changes = 0,
         .signal_suppressed = 0,
         .signal_writes = 0,
+        .commands_emitted = 0,
+        .event_lookups = 0,
+        .full_render_batches = 0,
+        .incremental_batches = 0,
+        .state_lookups = 0,
+        .structural_resets = 0,
     };
 }
 
@@ -719,6 +750,83 @@ fn replaceOwnedString(allocator: std.mem.Allocator, field: *?[]const u8, value: 
 
 const StringField = enum { role, label, test_id };
 
+const CommandCounts = struct {
+    total: u64 = 0,
+    reset_dom: u64 = 0,
+    create_element: u64 = 0,
+    append_child: u64 = 0,
+    set_text: u64 = 0,
+    set_value: u64 = 0,
+    set_checked: u64 = 0,
+    set_disabled: u64 = 0,
+    set_metadata: u64 = 0,
+    bind_event: u64 = 0,
+
+    fn add(self: *CommandCounts, command: abi.UiRuntimeCommand) void {
+        self.total += 1;
+        switch (command.tag) {
+            .ResetDom => self.reset_dom += 1,
+            .CreateElement => self.create_element += 1,
+            .AppendChild => self.append_child += 1,
+            .SetText => self.set_text += 1,
+            .SetValue => self.set_value += 1,
+            .SetChecked => self.set_checked += 1,
+            .SetDisabled => self.set_disabled += 1,
+            .SetRole, .SetLabel, .SetTestId => self.set_metadata += 1,
+            .BindClick, .BindInput, .BindCheck => self.bind_event += 1,
+        }
+    }
+
+    fn addAll(self: *CommandCounts, other: CommandCounts) void {
+        self.total += other.total;
+        self.reset_dom += other.reset_dom;
+        self.create_element += other.create_element;
+        self.append_child += other.append_child;
+        self.set_text += other.set_text;
+        self.set_value += other.set_value;
+        self.set_checked += other.set_checked;
+        self.set_disabled += other.set_disabled;
+        self.set_metadata += other.set_metadata;
+        self.bind_event += other.bind_event;
+    }
+};
+
+const BenchmarkStats = struct {
+    init_roc_ns: u64 = 0,
+    init_apply_ns: u64 = 0,
+    dispatch_roc_ns: u64 = 0,
+    dispatch_apply_ns: u64 = 0,
+    actions: u64 = 0,
+    allocs: u64 = 0,
+    deallocs: u64 = 0,
+    retained_alloc_delta: i64 = 0,
+    commands: CommandCounts = .{},
+    metrics: RuntimeMetrics = zeroRuntimeMetrics(),
+};
+
+fn addRuntimeMetrics(left: RuntimeMetrics, right: RuntimeMetrics) RuntimeMetrics {
+    return .{
+        .callbacks = left.callbacks + right.callbacks,
+        .commands_emitted = left.commands_emitted + right.commands_emitted,
+        .dynamic_renders = left.dynamic_renders + right.dynamic_renders,
+        .evaluated_nodes = left.evaluated_nodes + right.evaluated_nodes,
+        .event_lookups = left.event_lookups + right.event_lookups,
+        .events_processed = left.events_processed + right.events_processed,
+        .full_render_batches = left.full_render_batches + right.full_render_batches,
+        .graph_nodes = left.graph_nodes + right.graph_nodes,
+        .incremental_batches = left.incremental_batches + right.incremental_batches,
+        .keyed_creates = left.keyed_creates + right.keyed_creates,
+        .keyed_removes = left.keyed_removes + right.keyed_removes,
+        .keyed_reuses = left.keyed_reuses + right.keyed_reuses,
+        .node_value_equality_checks = left.node_value_equality_checks + right.node_value_equality_checks,
+        .signal_changes = left.signal_changes + right.signal_changes,
+        .signal_suppressed = left.signal_suppressed + right.signal_suppressed,
+        .signal_writes = left.signal_writes + right.signal_writes,
+        .state_lookups = left.state_lookups + right.state_lookups,
+        .structural_resets = left.structural_resets + right.structural_resets,
+    };
+}
+
 fn setElementTextIfChanged(host: *HostEnv, elem: *DomElement, text: []const u8) void {
     if (replaceOwnedString(host.gpa.allocator(), &elem.text, text)) {
         elem.text_update_count += 1;
@@ -836,10 +944,69 @@ fn applyCommand(host: *HostEnv, command: abi.UiRuntimeCommand) void {
     }
 }
 
-fn applyCommandList(host: *HostEnv, commands: abi.RocList(abi.UiRuntimeCommand)) void {
+fn traceCommand(command: abi.UiRuntimeCommand) void {
+    if (!traceEnabled()) return;
+    switch (command.tag) {
+        .ResetDom => writeStderr("[HOST CMD] ResetDom\n"),
+        .CreateElement => {
+            const payload = command.payload.create_element;
+            printStderr("[HOST CMD] CreateElement id={d} tag=\"{s}\"\n", .{ payload.id, payload.tag.asSlice() });
+        },
+        .AppendChild => {
+            const payload = command.payload.append_child;
+            printStderr("[HOST CMD] AppendChild parent={d} child={d}\n", .{ payload.parent, payload.child });
+        },
+        .SetText => {
+            const payload = command.payload.set_text;
+            printStderr("[HOST CMD] SetText id={d} value=\"{s}\"\n", .{ payload.id, payload.value.asSlice() });
+        },
+        .SetRole => {
+            const payload = command.payload.set_role;
+            printStderr("[HOST CMD] SetRole id={d} value=\"{s}\"\n", .{ payload.id, payload.value.asSlice() });
+        },
+        .SetLabel => {
+            const payload = command.payload.set_label;
+            printStderr("[HOST CMD] SetLabel id={d} value=\"{s}\"\n", .{ payload.id, payload.value.asSlice() });
+        },
+        .SetTestId => {
+            const payload = command.payload.set_test_id;
+            printStderr("[HOST CMD] SetTestId id={d} value=\"{s}\"\n", .{ payload.id, payload.value.asSlice() });
+        },
+        .SetValue => {
+            const payload = command.payload.set_value;
+            printStderr("[HOST CMD] SetValue id={d} value=\"{s}\"\n", .{ payload.id, payload.value.asSlice() });
+        },
+        .SetChecked => {
+            const payload = command.payload.set_checked;
+            printStderr("[HOST CMD] SetChecked id={d} value={}\n", .{ payload.id, payload.value });
+        },
+        .SetDisabled => {
+            const payload = command.payload.set_disabled;
+            printStderr("[HOST CMD] SetDisabled id={d} value={}\n", .{ payload.id, payload.value });
+        },
+        .BindClick => {
+            const payload = command.payload.bind_click;
+            printStderr("[HOST CMD] BindClick id={d} event={d}\n", .{ payload.id, payload.event });
+        },
+        .BindInput => {
+            const payload = command.payload.bind_input;
+            printStderr("[HOST CMD] BindInput id={d} event={d}\n", .{ payload.id, payload.event });
+        },
+        .BindCheck => {
+            const payload = command.payload.bind_check;
+            printStderr("[HOST CMD] BindCheck id={d} event={d}\n", .{ payload.id, payload.event });
+        },
+    }
+}
+
+fn applyCommandList(host: *HostEnv, commands: abi.RocList(abi.UiRuntimeCommand)) CommandCounts {
+    var counts: CommandCounts = .{};
     for (commands.items()) |command| {
+        counts.add(command);
+        traceCommand(command);
         applyCommand(host, command);
     }
+    return counts;
 }
 
 fn releaseCommandList(commands: abi.RocList(abi.UiRuntimeCommand), ops: *abi.RocOps) void {
@@ -853,14 +1020,22 @@ fn releaseCommandList(commands: abi.RocList(abi.UiRuntimeCommand), ops: *abi.Roc
 
 fn dropMovedDispatchResultPayload(_: ?*anyopaque, _: *abi.RocOps) callconv(.c) void {}
 
-fn acceptDispatchResult(host: *HostEnv, ops: *abi.RocOps, result_box: DispatchResultBox) void {
+fn acceptDispatchResultMeasured(host: *HostEnv, ops: *abi.RocOps, result_box: DispatchResultBox, apply_ns: ?*u64, command_counts: ?*CommandCounts) void {
     const result = result_box.*;
     if (host.runtime_box != null) failHost("Roc runtime box was overwritten before being consumed");
     host.runtime_box = result.runtime;
     host.last_runtime_metrics = result.metrics;
-    applyCommandList(host, result.commands);
+    const start_ns = benchmarkNowNs();
+    const counts = applyCommandList(host, result.commands);
+    const elapsed = benchmarkNowNs() - start_ns;
+    if (apply_ns) |ns| ns.* += elapsed;
+    if (command_counts) |total| total.addAll(counts);
     releaseCommandList(result.commands, ops);
     abi.decrefBoxWith(@ptrCast(result_box), @alignOf(DispatchResult), &dropMovedDispatchResultPayload, ops);
+}
+
+fn acceptDispatchResult(host: *HostEnv, ops: *abi.RocOps, result_box: DispatchResultBox) void {
+    acceptDispatchResultMeasured(host, ops, result_box, null, null);
 }
 
 fn boxHostEvent(ops: *abi.RocOps, event: HostEvent) HostEventBox {
@@ -874,6 +1049,17 @@ fn dispatchRocEvent(host: *HostEnv, ops: *abi.RocOps, event: HostEvent) void {
     const runtime = host.runtime_box orelse failHost("Roc runtime not initialized");
     host.runtime_box = null;
     acceptDispatchResult(host, ops, abi.roc_ui_dispatch(runtime, boxHostEvent(ops, event)));
+}
+
+fn dispatchRocEventMeasured(host: *HostEnv, ops: *abi.RocOps, event: HostEvent, stats: *BenchmarkStats) void {
+    const runtime = host.runtime_box orelse failHost("Roc runtime not initialized");
+    host.runtime_box = null;
+    const event_box = boxHostEvent(ops, event);
+    const start_ns = benchmarkNowNs();
+    const result_box = abi.roc_ui_dispatch(runtime, event_box);
+    stats.dispatch_roc_ns += benchmarkNowNs() - start_ns;
+    acceptDispatchResultMeasured(host, ops, result_box, &stats.dispatch_apply_ns, &stats.commands);
+    stats.actions += 1;
 }
 
 fn signalsHostedFunctions() abi.HostedFunctions {
@@ -891,6 +1077,183 @@ fn makeSignalsRocOps(host: *HostEnv) abi.RocOps {
         .roc_crashed = &rocCrashedFn,
         .hosted_fns = signalsHostedFunctions(),
     };
+}
+
+fn commandIsAction(cmd: SpecCommand) bool {
+    return switch (cmd.cmd_type) {
+        .click, .fill, .check, .uncheck => true,
+        else => false,
+    };
+}
+
+fn runActionCommandMeasured(host: *HostEnv, ops: *abi.RocOps, cmd: SpecCommand, stats: *BenchmarkStats) void {
+    switch (cmd.cmd_type) {
+        .click => {
+            const elem = host.findElementByLocator(cmd.locator, cmd.line_num) orelse failHost("benchmark click locator did not resolve");
+            if (elem.disabled) failHost("benchmark click target is disabled");
+            const event_id = elem.bound_click_event orelse failHost("benchmark click target has no binding");
+            dispatchRocEventMeasured(host, ops, .{
+                .payload = .{ .click = event_id },
+                .tag = .Click,
+            }, stats);
+        },
+
+        .fill => {
+            const value = cmd.expected_text orelse "";
+            const elem = host.findElementByLocator(cmd.locator, cmd.line_num) orelse failHost("benchmark fill locator did not resolve");
+            if (elem.disabled) failHost("benchmark fill target is disabled");
+            if (elem.bound_input_event) |event_id| {
+                dispatchRocEventMeasured(host, ops, .{
+                    .payload = .{
+                        .input = .{
+                            .event = event_id,
+                            .value = RocStr.fromSlice(value, ops),
+                        },
+                    },
+                    .tag = .Input,
+                }, stats);
+            } else {
+                setElementValueIfChanged(host, elem, value);
+            }
+        },
+
+        .check, .uncheck => {
+            const checked = cmd.cmd_type == .check;
+            const elem = host.findElementByLocator(cmd.locator, cmd.line_num) orelse failHost("benchmark check locator did not resolve");
+            if (elem.disabled) failHost("benchmark check target is disabled");
+            if (elem.bound_check_event) |event_id| {
+                dispatchRocEventMeasured(host, ops, .{
+                    .payload = .{
+                        .check = .{
+                            .event = event_id,
+                            .checked = checked,
+                        },
+                    },
+                    .tag = .Check,
+                }, stats);
+            } else {
+                setElementCheckedIfChanged(elem, checked);
+            }
+        },
+
+        else => {},
+    }
+}
+
+fn runBenchmarkIteration(commands: []const SpecCommand, verbose: bool, stats: *BenchmarkStats) void {
+    var host_env = HostEnv.init();
+    host_env.test_state.verbose = verbose;
+
+    var roc_ops = makeSignalsRocOps(&host_env);
+    host_env.roc_ops = &roc_ops;
+    current_host = &host_env;
+    current_roc_ops = &roc_ops;
+
+    const init_start_ns = benchmarkNowNs();
+    const init_result = abi.roc_ui_init();
+    stats.init_roc_ns += benchmarkNowNs() - init_start_ns;
+    acceptDispatchResultMeasured(&host_env, &roc_ops, init_result, &stats.init_apply_ns, &stats.commands);
+
+    for (commands) |cmd| {
+        if (commandIsAction(cmd)) {
+            runActionCommandMeasured(&host_env, &roc_ops, cmd, stats);
+        }
+    }
+
+    stats.metrics = addRuntimeMetrics(stats.metrics, host_env.last_runtime_metrics);
+    stats.allocs += @intCast(host_env.alloc_count);
+    stats.deallocs += @intCast(host_env.dealloc_count);
+    stats.retained_alloc_delta += @as(i64, @intCast(host_env.alloc_count)) - @as(i64, @intCast(host_env.dealloc_count));
+
+    host_env.deinit();
+    current_host = null;
+    current_roc_ops = null;
+}
+
+fn printBenchmarkHeader() void {
+    writeStdout("case,sample,iterations,actions,init_roc_ns,init_apply_ns,dispatch_roc_ns,dispatch_apply_ns,total_ns,allocs,deallocs,retained_alloc_delta,commands,reset_dom,create_element,append_child,set_text,set_value,set_checked,set_disabled,set_metadata,bind_event,events_processed,evaluated_nodes,callbacks,dynamic_renders,graph_nodes,commands_emitted,full_render_batches,incremental_batches,structural_resets,state_lookups,event_lookups,signal_writes,signal_changes,signal_suppressed,node_value_equality_checks\n");
+}
+
+fn printBenchmarkRow(case_name: []const u8, sample: usize, iterations: usize, stats: BenchmarkStats) void {
+    const total_ns = stats.init_roc_ns + stats.init_apply_ns + stats.dispatch_roc_ns + stats.dispatch_apply_ns;
+    printStdout(
+        "{s},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},",
+        .{
+            case_name,
+            sample,
+            iterations,
+            stats.actions,
+            stats.init_roc_ns,
+            stats.init_apply_ns,
+            stats.dispatch_roc_ns,
+            stats.dispatch_apply_ns,
+            total_ns,
+            stats.allocs,
+            stats.deallocs,
+            stats.retained_alloc_delta,
+        },
+    );
+    printStdout(
+        "{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},",
+        .{
+            stats.commands.total,
+            stats.commands.reset_dom,
+            stats.commands.create_element,
+            stats.commands.append_child,
+            stats.commands.set_text,
+            stats.commands.set_value,
+            stats.commands.set_checked,
+            stats.commands.set_disabled,
+            stats.commands.set_metadata,
+            stats.commands.bind_event,
+        },
+    );
+    printStdout(
+        "{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d}\n",
+        .{
+            stats.metrics.events_processed,
+            stats.metrics.evaluated_nodes,
+            stats.metrics.callbacks,
+            stats.metrics.dynamic_renders,
+            stats.metrics.graph_nodes,
+            stats.metrics.commands_emitted,
+            stats.metrics.full_render_batches,
+            stats.metrics.incremental_batches,
+            stats.metrics.structural_resets,
+            stats.metrics.state_lookups,
+            stats.metrics.event_lookups,
+            stats.metrics.signal_writes,
+            stats.metrics.signal_changes,
+            stats.metrics.signal_suppressed,
+            stats.metrics.node_value_equality_checks,
+        },
+    );
+}
+
+fn runAppBenchmarks(spec_file: []const u8, case_name: []const u8, iterations: usize, samples: usize, verbose: bool) !c_int {
+    var bench_gpa = std.heap.DebugAllocator(.{ .safety = true }){};
+    defer _ = bench_gpa.deinit();
+    const allocator = bench_gpa.allocator();
+    const commands = parseTestSpecFile(allocator, spec_file) catch |err| {
+        switch (err) {
+            ParseError.FileNotFound => writeStderr("Error: Test spec file not found\n"),
+            ParseError.InvalidFormat => writeStderr("Error: Invalid test spec format\n"),
+            else => writeStderr("Error: Failed to parse test spec\n"),
+        }
+        return 1;
+    };
+    defer freeSpecCommands(allocator, commands);
+
+    printBenchmarkHeader();
+    for (0..samples) |sample| {
+        var stats: BenchmarkStats = .{};
+        for (0..iterations) |_| {
+            runBenchmarkIteration(commands, verbose, &stats);
+        }
+        printBenchmarkRow(case_name, sample, iterations, stats);
+    }
+
+    return 0;
 }
 
 comptime {
@@ -911,6 +1274,10 @@ fn __main() callconv(.c) void {}
 
 fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
     var verbose = false;
+    var bench_app = false;
+    var bench_name: []const u8 = "app_dispatch";
+    var bench_iterations: usize = 100;
+    var bench_samples: usize = 3;
     var spec_file: ?[]const u8 = null;
 
     var i: usize = 1;
@@ -919,17 +1286,63 @@ fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
         const arg = std.mem.span(argv[i]);
         if (std.mem.eql(u8, arg, "--verbose") or std.mem.eql(u8, arg, "-v")) {
             verbose = true;
+        } else if (std.mem.eql(u8, arg, "--bench-app")) {
+            bench_app = true;
+        } else if (std.mem.eql(u8, arg, "--bench-name")) {
+            i += 1;
+            if (i >= arg_count) {
+                writeStderr("Usage: ./app [--verbose] <test_spec.txt>\n       ./app --bench-app [--bench-name NAME] [--bench-iterations N] [--bench-samples N] <test_spec.txt>\n");
+                return 1;
+            }
+            bench_name = std.mem.span(argv[i]);
+        } else if (std.mem.eql(u8, arg, "--bench-iterations")) {
+            i += 1;
+            if (i >= arg_count) {
+                writeStderr("Usage: ./app [--verbose] <test_spec.txt>\n       ./app --bench-app [--bench-name NAME] [--bench-iterations N] [--bench-samples N] <test_spec.txt>\n");
+                return 1;
+            }
+            bench_iterations = std.fmt.parseInt(usize, std.mem.span(argv[i]), 10) catch {
+                writeStderr("Error: Invalid --bench-iterations value\n");
+                return 1;
+            };
+            if (bench_iterations == 0) {
+                writeStderr("Error: --bench-iterations must be greater than zero\n");
+                return 1;
+            }
+        } else if (std.mem.eql(u8, arg, "--bench-samples")) {
+            i += 1;
+            if (i >= arg_count) {
+                writeStderr("Usage: ./app [--verbose] <test_spec.txt>\n       ./app --bench-app [--bench-name NAME] [--bench-iterations N] [--bench-samples N] <test_spec.txt>\n");
+                return 1;
+            }
+            bench_samples = std.fmt.parseInt(usize, std.mem.span(argv[i]), 10) catch {
+                writeStderr("Error: Invalid --bench-samples value\n");
+                return 1;
+            };
+            if (bench_samples == 0) {
+                writeStderr("Error: --bench-samples must be greater than zero\n");
+                return 1;
+            }
         } else if (arg.len > 0 and arg[0] != '-') {
             spec_file = arg;
         } else {
-            writeStderr("Usage: ./app [--verbose] <test_spec.txt>\n");
+            writeStderr("Usage: ./app [--verbose] <test_spec.txt>\n       ./app --bench-app [--bench-name NAME] [--bench-iterations N] [--bench-samples N] <test_spec.txt>\n");
             return 1;
         }
     }
 
     if (spec_file == null) {
-        writeStderr("Usage: ./app [--verbose] <test_spec.txt>\n");
+        writeStderr("Usage: ./app [--verbose] <test_spec.txt>\n       ./app --bench-app [--bench-name NAME] [--bench-iterations N] [--bench-samples N] <test_spec.txt>\n");
         return 1;
+    }
+
+    if (bench_app) {
+        return runAppBenchmarks(spec_file.?, bench_name, bench_iterations, bench_samples, verbose) catch |err| {
+            writeStderr("HOST ERROR: ");
+            writeStderr(@errorName(err));
+            writeStderr("\n");
+            return 1;
+        };
     }
 
     return platform_main(spec_file.?, verbose) catch |err| {
