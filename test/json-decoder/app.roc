@@ -4,18 +4,22 @@ import pf.Json
 
 main! : Str => U64
 main! = |json| {
-	decoded_result : Try({
-		explicit_optional : Try(Str, [Missing]),
-		foo : Str,
-		nested : {
-			bar : Str,
-			mode : [Warm, Cold],
+	decoded_result : Try(
+		{
+			explicit_optional : Try(Str, [Missing]),
+			foo : Str,
+			nested : {
+				bar : Str,
+				mode : [Warm, Cold],
+			},
+			pair : [Pair(Str, Str)],
+			question_optional : Try(Str, [Missing]),
+			status : [Active, Paused],
+			token : Json.Token,
+			wildcard_optional : Try(Str, _),
 		},
-		question_optional : Try(Str, [Missing]),
-		status : [Active, Paused],
-		token : Json.Token,
-		wildcard_optional : Try(Str, _),
-	}, _)
+		_,
+	)
 	decoded_result = Json.parse(json)
 
 	empty_result : Try({}, _)
@@ -48,6 +52,19 @@ main! = |json| {
 				Cold => 23
 			}
 
+			pair_score = match decoded.pair {
+				Pair(first, second) =>
+					if Str.is_eq(first, "left") {
+						if Str.is_eq(second, "right") {
+							31
+						} else {
+							999999
+						}
+					} else {
+						999999
+					}
+				}
+
 			Str.count_utf8_bytes(decoded.foo)
 				+ Str.count_utf8_bytes(decoded.nested.bar)
 				+ Json.Token.count_utf8_bytes(decoded.token)
@@ -57,6 +74,7 @@ main! = |json| {
 				+ question_optional_length
 				+ status_score
 				+ mode_score
+				+ pair_score
 		}
 		Err(_) => 999999
 	}

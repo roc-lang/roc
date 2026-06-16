@@ -3920,10 +3920,7 @@ const BodyContext = struct {
 
         const parse_ok_ty = try self.parseResultOkType(shape_ty, slot_ty);
         const parse_ret_ty = try self.tryTypeLike(ret_ty, parse_ok_ty, ret_info.err_ty);
-        const parse_expr = if (self.customParseFromLookup(shape_ty)) |lookup|
-            try self.lowerCustomParseFromSlot(lookup, shape_ty, slot_expr, slot_ty, parse_ret_ty)
-        else
-            try self.lowerParseShapeFromSlot(shape_ty, slot_expr, slot_ty, parse_ret_ty);
+        const parse_expr = try self.lowerParseResultFromSlot(shape_ty, slot_expr, slot_ty, parse_ret_ty);
 
         const parsed_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), parse_ok_ty);
         const value_name = try self.builder.program.names.internRecordFieldLabel("value");
@@ -3936,6 +3933,19 @@ const BodyContext = struct {
         });
         const ok_body = try self.tryOk(ret_ty, value_expr);
         return try self.sequenceTry(parse_expr, parse_ret_ty, parsed_local, ok_body, ret_ty);
+    }
+
+    fn lowerParseResultFromSlot(
+        self: *BodyContext,
+        shape_ty: Type.TypeId,
+        slot_expr: Ast.ExprId,
+        slot_ty: Type.TypeId,
+        ret_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        return if (self.customParseFromLookup(shape_ty)) |lookup|
+            try self.lowerCustomParseFromSlot(lookup, shape_ty, slot_expr, slot_ty, ret_ty)
+        else
+            try self.lowerParseShapeFromSlot(shape_ty, slot_expr, slot_ty, ret_ty);
     }
 
     fn lowerCustomParseFromSlot(
@@ -4317,26 +4327,43 @@ const BodyContext = struct {
         const payload_tys = self.builder.program.types.span(tag.payloads);
         const payloads = try self.allocator.alloc(Ast.ExprId, payload_tys.len);
         defer self.allocator.free(payloads);
-        const payload_tries = try self.allocator.alloc(Ast.ExprId, payload_tys.len);
-        defer self.allocator.free(payload_tries);
-        const payload_try_tys = try self.allocator.alloc(Type.TypeId, payload_tys.len);
-        defer self.allocator.free(payload_try_tys);
-        const payload_locals = try self.allocator.alloc(Ast.LocalId, payload_tys.len);
-        defer self.allocator.free(payload_locals);
+        const payload_parse_ok_tys = try self.allocator.alloc(Type.TypeId, payload_tys.len);
+        defer self.allocator.free(payload_parse_ok_tys);
+        const payload_parse_ret_tys = try self.allocator.alloc(Type.TypeId, payload_tys.len);
+        defer self.allocator.free(payload_parse_ret_tys);
+        const payload_parse_locals = try self.allocator.alloc(Ast.LocalId, payload_tys.len);
+        defer self.allocator.free(payload_parse_locals);
+        const value_name = try self.builder.program.names.internRecordFieldLabel("value");
+        const rest_name = try self.builder.program.names.internRecordFieldLabel("rest");
         for (payload_tys, 0..) |payload_ty, index| {
-            const slot_expr = try self.builder.localExpr(slot_local, slot_ty);
-            const payload_try_ty = try self.tryTypeLike(ret_ty, payload_ty, ret_info.err_ty);
-            payload_try_tys[index] = payload_try_ty;
-            payload_locals[index] = try self.builder.program.addLocal(self.builder.symbols.fresh(), payload_ty);
-            payload_tries[index] = try self.lowerParseValueFromSlot(payload_ty, slot_expr, slot_ty, payload_try_ty);
-            payloads[index] = try self.builder.localExpr(payload_locals[index], payload_ty);
+            payload_parse_ok_tys[index] = try self.parseResultOkType(payload_ty, slot_ty);
+            payload_parse_ret_tys[index] = try self.tryTypeLike(ret_ty, payload_parse_ok_tys[index], ret_info.err_ty);
+            payload_parse_locals[index] = try self.builder.program.addLocal(self.builder.symbols.fresh(), payload_parse_ok_tys[index]);
+            payloads[index] = try self.builder.program.addExpr(.{
+                .ty = payload_ty,
+                .data = .{ .field_access = .{
+                    .receiver = try self.builder.localExpr(payload_parse_locals[index], payload_parse_ok_tys[index]),
+                    .field = value_name,
+                } },
+            });
         }
         const tag_expr = try self.tagUnionValue(union_ty, tag, payloads);
         var body = try self.tryOk(ret_ty, tag_expr);
         var index = payload_tys.len;
         while (index > 0) {
             index -= 1;
-            body = try self.sequenceTry(payload_tries[index], payload_try_tys[index], payload_locals[index], body, ret_ty);
+            const slot_expr = if (index == 0)
+                try self.builder.localExpr(slot_local, slot_ty)
+            else
+                try self.builder.program.addExpr(.{
+                    .ty = slot_ty,
+                    .data = .{ .field_access = .{
+                        .receiver = try self.builder.localExpr(payload_parse_locals[index - 1], payload_parse_ok_tys[index - 1]),
+                        .field = rest_name,
+                    } },
+                });
+            const payload_parse = try self.lowerParseResultFromSlot(payload_tys[index], slot_expr, slot_ty, payload_parse_ret_tys[index]);
+            body = try self.sequenceTry(payload_parse, payload_parse_ret_tys[index], payload_parse_locals[index], body, ret_ty);
         }
         return body;
     }

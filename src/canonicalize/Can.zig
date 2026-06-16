@@ -7649,9 +7649,10 @@ fn canonicalizeStandaloneBlockStatement(
         .@"break" => |break_stmt| {
             const region = self.parse_ir.tokenizedRegionToRegion(break_stmt.region);
             if (self.loop_depth == 0) {
-                _ = try self.env.pushMalformed(Statement.Idx, Diagnostic{ .break_outside_loop = .{
+                const stmt_idx = try self.env.pushMalformed(Statement.Idx, Diagnostic{ .break_outside_loop = .{
                     .region = region,
                 } });
+                return CanonicalizedStatement{ .idx = stmt_idx, .free_vars = DataSpan.empty() };
             }
 
             const stmt_idx = try self.env.addStatement(Statement{ .s_break = .{} }, region);
@@ -8546,6 +8547,9 @@ fn runExprKernel(
                     const saved_in_expect = self.in_expect;
                     self.in_expect = false;
 
+                    const saved_loop_depth = self.loop_depth;
+                    self.loop_depth = 0;
+
                     const saved_defining_patterns_start = self.defining_patterns_start;
                     const saved_defining_pattern = self.defining_pattern;
                     self.defining_patterns_start = null;
@@ -8560,6 +8564,7 @@ fn runExprKernel(
                         .captures_top = self.scratch_captures.top(),
                         .saved_enclosing_lambda = saved_enclosing_lambda,
                         .saved_in_expect = saved_in_expect,
+                        .saved_loop_depth = saved_loop_depth,
                         .saved_defining_patterns_start = saved_defining_patterns_start,
                         .saved_defining_pattern = saved_defining_pattern,
                     });
@@ -9476,9 +9481,12 @@ fn runExprKernel(
                 .@"break" => |break_stmt| {
                     const region = self.parse_ir.tokenizedRegionToRegion(break_stmt.region);
                     if (self.loop_depth == 0) {
-                        _ = try self.env.pushMalformed(Statement.Idx, Diagnostic{ .break_outside_loop = .{
+                        const stmt_idx = try self.env.pushMalformed(Statement.Idx, Diagnostic{ .break_outside_loop = .{
                             .region = region,
                         } });
+                        try self.addBlockStatement(blockContextFromState(work), CanonicalizedStatement{ .idx = stmt_idx, .free_vars = DataSpan.empty() });
+                        try stacks.pushBlockNext(frame_allocator, .{ .block = work, .next = next });
+                        continue :expr_kernel_loop .dispatch;
                     }
 
                     const stmt_idx = try self.env.addStatement(Statement{
@@ -10687,6 +10695,7 @@ fn runExprKernel(
             defer self.scopeExit(self.env.gpa) catch |err| self.recordScopeExitError(err);
             defer self.enclosing_lambda = state.saved_enclosing_lambda;
             defer self.in_expect = state.saved_in_expect;
+            defer self.loop_depth = state.saved_loop_depth;
             defer self.defining_patterns_start = state.saved_defining_patterns_start;
             defer self.defining_pattern = state.saved_defining_pattern;
             defer self.scratch_captures.clearFrom(state.captures_top);
@@ -13404,6 +13413,7 @@ const ExprFinishLambdaWork = struct {
     captures_top: u32,
     saved_enclosing_lambda: ?Expr.Idx,
     saved_in_expect: bool,
+    saved_loop_depth: u32,
     saved_defining_patterns_start: ?u32,
     saved_defining_pattern: ?Pattern.Idx,
 };

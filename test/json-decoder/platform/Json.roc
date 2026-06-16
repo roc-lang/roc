@@ -2,10 +2,24 @@ DecodeErr := [MissingRequired, InvalidJson].{}
 
 JsonFormat :: [Present(Str), Missing].{
 	parse_str : ParseStrSpec(a), JsonFormat -> Try({ value : a, rest : JsonFormat }, DecodeErr)
-	parse_str = |spec, slot| {
-		value = ParseStrSpec.parse(spec, slot, DecodeErr.MissingRequired)?
-		Ok({ value, rest: Missing })
-	}
+	parse_str = |spec, slot|
+		match slot {
+			Present(raw) => {
+				split = Str.find_first(raw, ",")
+
+				match split {
+					Ok(parts) => {
+						value = ParseStrSpec.parse(spec, JsonFormat.Present(parts.before), DecodeErr.MissingRequired)?
+						Ok({ value, rest: JsonFormat.Present(parts.after) })
+					}
+					Err(NotFound) => {
+						value = ParseStrSpec.parse(spec, slot, DecodeErr.MissingRequired)?
+						Ok({ value, rest: JsonFormat.Missing })
+					}
+				}
+			}
+			Missing => Err(DecodeErr.MissingRequired)
+		}
 
 	parse_record : ParseRecordSpec(a), JsonFormat -> Try({ value : a, rest : JsonFormat }, DecodeErr)
 	parse_record = |spec, slot|
@@ -41,9 +55,10 @@ Json :: [].{
 		count_utf8_bytes = |token| Str.count_utf8_bytes(token.raw)
 	}
 
-	parse : Str -> Try(a, DecodeErr) where [
-		a.parse_from : JsonFormat -> Try({ value : a, rest : JsonFormat }, DecodeErr),
-	]
+	parse : Str -> Try(a, DecodeErr)
+		where [
+			a.parse_from : JsonFormat -> Try({ value : a, rest : JsonFormat }, DecodeErr),
+		]
 	parse = |json| {
 		Shape : a
 		parsed = Shape.parse_from(JsonFormat.Present(json))?
@@ -132,8 +147,14 @@ parse_record_from_json = |raw, spec| {
 }
 
 parse_tag_union_from_json : Str, ParseTagUnionSpec(a) -> Try(a, DecodeErr)
-parse_tag_union_from_json = |tag_name, spec|
-	ParseTagUnionSpec.parse(spec, tag_name, JsonFormat.Present(tag_name), Str.is_eq, DecodeErr.MissingRequired)
+parse_tag_union_from_json = |raw, spec| {
+	tag_split = Str.find_first(raw, ":")
+
+	match tag_split {
+		Ok(parts) => ParseTagUnionSpec.parse(spec, parts.before, JsonFormat.Present(parts.after), Str.is_eq, DecodeErr.MissingRequired)
+		Err(NotFound) => ParseTagUnionSpec.parse(spec, raw, JsonFormat.Present(raw), Str.is_eq, DecodeErr.MissingRequired)
+	}
+}
 
 find_object_end : Str -> Try({ before : Str, after : Str }, [NotFound])
 find_object_end = |object_text| {

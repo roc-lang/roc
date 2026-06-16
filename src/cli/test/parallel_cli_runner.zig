@@ -485,6 +485,11 @@ const type_error_needles = [_]OutputNeedle{
     .{ .stream = .stderr, .text = "Found" },
 };
 
+const break_outside_loop_needles = [_]OutputNeedle{
+    .{ .stream = .stderr, .text = "BREAK OUTSIDE LOOP" },
+    .{ .stream = .stderr, .text = "break" },
+};
+
 const plus_type_error_needles = [_]OutputNeedle{
     .{ .stream = .stderr, .text = "MISSING METHOD" },
     .{ .stream = .stderr, .text = "TYPE MISMATCH" },
@@ -560,8 +565,14 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc fmt --stdin does not change well-formatted input", .body = .{ .custom = .fmt_stdin_does_not_change } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check reports type error - annotation mismatch", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/has_type_error_annotation.roc", .exit = .failure, .stderr_min_len = 1, .contains_any = &.{.{ .needles = &type_error_needles }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check reports type error - plus operator with incompatible types", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/has_type_error_plus_operator.roc", .exit = .failure, .stderr_min_len = 1, .contains_any = &.{.{ .needles = &plus_type_error_needles }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc check rejects expression break across lambda boundary", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/BreakAcrossLambdaExpression.roc", .exit = .failure, .stderr_min_len = 1, .contains_any = &.{.{ .needles = &break_outside_loop_needles }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc check rejects statement break across lambda boundary", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/BreakAcrossLambdaStatement.roc", .exit = .failure, .stderr_min_len = 1, .contains_any = &.{.{ .needles = &break_outside_loop_needles }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc check accepts expression break inside loop", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/BreakExpressionInLoop.roc", .exit = .success, .not_contains = &.{.{ .stream = .stderr, .text = "BREAK OUTSIDE LOOP" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check rejects parse_from without Try record result", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/ParseFromInvalidReturn.roc", .exit = .failure, .stderr_min_len = 1, .contains_any = &.{.{ .needles = &type_error_needles }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check rejects derived parse_from for empty tag union", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/ParseFromEmptyTagUnion.roc", .exit = .failure, .stderr_min_len = 1, .contains_any = &.{.{ .needles = &type_error_needles }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc check rejects derived parse_from when format lacks parse_record", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/ParseFromMissingRecordMethod.roc", .exit = .failure, .stderr_min_len = 1, .contains_any = &.{.{ .needles = &type_error_needles }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc check rejects derived parse_from when format lacks parse_str", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/ParseFromMissingStrMethod.roc", .exit = .failure, .stderr_min_len = 1, .contains_any = &.{.{ .needles = &type_error_needles }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc check rejects derived parse_from when format lacks parse_tag_union", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/ParseFromMissingTagUnionMethod.roc", .exit = .failure, .stderr_min_len = 1, .contains_any = &.{.{ .needles = &type_error_needles }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check test/int/app.roc does not panic", .skip = .{ .windows = "test/int platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/int/app.roc", .exit = .not_panic, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test/int/app.roc runs successfully (interpreter)", .backend = .interpreter, .skip = .{ .windows = "test/int platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/int/app.roc" } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test/int/app.roc runs successfully (dev)", .backend = .dev, .skip = .{ .always = "TODO: dev backend compilation fails for test/int/app.roc" }, .body = .{ .custom = .noop } },

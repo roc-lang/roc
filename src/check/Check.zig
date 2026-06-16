@@ -1070,6 +1070,12 @@ const BuiltinNominalDecl = union(enum) {
     num: CIR.NumKind,
 };
 
+const BuiltinParseSpecDecl = enum {
+    str,
+    record,
+    tag_union,
+};
+
 fn builtinOriginModule(self: *const Self) Ident.Idx {
     return if (self.builtin_ctx.builtin_module) |_|
         self.cir.idents.builtin_module
@@ -1209,6 +1215,41 @@ fn sourceDeclForBuiltinNominal(self: *const Self, decl: BuiltinNominalDecl) u32 
     const stmt_idx = self.findLocalTypeDeclByName(self.builtinNominalIdent(decl)) orelse {
         if (builtin.mode == .Debug) {
             std.debug.panic("type checker invariant violated: Builtin.{s} declaration not found while checking Builtin", .{builtinNominalLabel(decl)});
+        }
+        unreachable;
+    };
+    self.debugAssertSourceDeclKind(@intFromEnum(stmt_idx), .nominal);
+    return @intFromEnum(stmt_idx);
+}
+
+fn sourceDeclForBuiltinParseSpec(self: *const Self, decl: BuiltinParseSpecDecl) u32 {
+    if (!self.isCheckingBuiltinModuleDirectly() and self.builtin_ctx.builtin_indices != null) {
+        const indices = self.builtin_ctx.builtin_indices.?;
+        const stmt_idx = switch (decl) {
+            .str => indices.parse_str_spec_type,
+            .record => indices.parse_record_spec_type,
+            .tag_union => indices.parse_tag_union_spec_type,
+        };
+        const owner_env = self.builtin_ctx.builtin_module orelse self.cir;
+        debugAssertSourceDeclKindInEnv(owner_env, @intFromEnum(stmt_idx), .nominal);
+        return @intFromEnum(stmt_idx);
+    }
+
+    if (!self.isCheckingBuiltinModuleDirectly() and self.builtin_ctx.builtin_module != null) {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("type checker invariant violated: builtin module env present without builtin indices", .{});
+        }
+        unreachable;
+    }
+
+    const ident = switch (decl) {
+        .str => self.cir.idents.builtin_parse_str_spec,
+        .record => self.cir.idents.builtin_parse_record_spec,
+        .tag_union => self.cir.idents.builtin_parse_tag_union_spec,
+    };
+    const stmt_idx = self.findLocalTypeDeclByName(ident) orelse {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("type checker invariant violated: Builtin parse spec declaration not found while checking Builtin", .{});
         }
         unreachable;
     };
@@ -1876,6 +1917,30 @@ fn mkTryContent(self: *Self, ok_var: Var, err_var: Var, env: *Env) Allocator.Err
         false, // Try is nominal (not opaque)
         true,
     );
+}
+
+fn mkParseSpecVar(
+    self: *Self,
+    decl: BuiltinParseSpecDecl,
+    shape_var: Var,
+    env: *Env,
+    region: Region,
+) Allocator.Error!Var {
+    const ident_idx = switch (decl) {
+        .str => self.cir.idents.builtin_parse_str_spec,
+        .record => self.cir.idents.builtin_parse_record_spec,
+        .tag_union => self.cir.idents.builtin_parse_tag_union_spec,
+    };
+    const backing_var = try self.freshFromContent(.{ .structure = .empty_record }, env, region);
+    return try self.freshFromContent(try self.types.mkNominalWithSourceDeclAndBuiltinOrigin(
+        .{ .ident_idx = ident_idx },
+        backing_var,
+        &.{shape_var},
+        self.builtinOriginModule(),
+        self.sourceDeclForBuiltinParseSpec(decl),
+        true,
+        true,
+    ), env, region);
 }
 
 /// Create the transparent builtin Numeral type used by from_numeral.
@@ -7608,6 +7673,7 @@ fn exprAlwaysCrashes(self: *const Self, expr_idx: CIR.Expr.Idx) bool {
         .e_crash,
         .e_ellipsis,
         .e_expect_err,
+        .e_break,
         => true,
         .e_block => |block| self.exprAlwaysCrashes(block.final_expr),
         else => false,
@@ -8094,8 +8160,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 try self.unifyWith(stmt_var, .err, env);
             },
             .s_break => {
-                // Nothing to do for break
-                // try self.unifyWith(stmt_var, .{ .structure = .empty_record }, env);
+                diverges = true;
             },
         }
     }
@@ -11132,101 +11197,6 @@ fn nominalIsBuiltinStrType(self: *const Self, nominal_type: types_mod.NominalTyp
     return ident.eql(self.cir.idents.str) or ident.eql(self.cir.idents.builtin_str);
 }
 
-fn derivedParseRecordArity(self: *Self, flat_type: types_mod.FlatType) ?usize {
-    return switch (flat_type) {
-        .record => |record| self.types.getRecordFieldsSlice(record.fields).items(.var_).len,
-        else => null,
-    };
-}
-
-fn derivedParseMatchesRecordArity(self: *Self, constraint_fn_var: Var, record_arity: usize) Allocator.Error!bool {
-    const resolved_constraint = self.types.resolveVar(constraint_fn_var);
-    const resolved_func = resolved_constraint.desc.content.unwrapFunc() orelse return false;
-
-    const args = self.types.sliceVars(resolved_func.args);
-    if (args.len != 0) return false;
-
-    return try self.parseMatchesRecordArityFromDecoderVar(resolved_func.ret, record_arity);
-}
-
-fn parseMatchesRecordArityFromDecoderVar(self: *Self, var_: Var, record_arity: usize) Allocator.Error!bool {
-    return switch (self.types.resolveVar(var_).desc.content) {
-        .structure => |structure| switch (structure) {
-            .nominal_type => |nominal| try self.parseMatchesRecordArityFromDecoderVar(self.types.getNominalBackingVar(nominal), record_arity),
-            .tag_union => |tag_union| try self.parseMatchesRecordArityFromDecoderTagUnion(tag_union, record_arity),
-            else => false,
-        },
-        .alias => |alias| try self.parseMatchesRecordArityFromDecoderVar(self.types.getAliasBackingVar(alias), record_arity),
-        .err => true,
-        .flex, .rigid => false,
-    };
-}
-
-fn parseMatchesRecordArityFromDecoderTagUnion(self: *Self, tag_union: types_mod.TagUnion, record_arity: usize) Allocator.Error!bool {
-    const tags = self.types.getTagsSlice(tag_union.tags);
-    for (tags.items(.name), tags.items(.args)) |name, payload_range| {
-        if (!Ident.textEql(self.cir.getIdentStoreConst().getText(name), "Record")) continue;
-
-        const payloads = self.types.sliceVars(payload_range);
-        if (payloads.len != 1) return false;
-        return try self.parseRecordSpecMatchesRecordArity(payloads[0], record_arity);
-    }
-
-    return false;
-}
-
-fn parseRecordSpecMatchesRecordArity(self: *Self, var_: Var, record_arity: usize) Allocator.Error!bool {
-    return switch (self.types.resolveVar(var_).desc.content) {
-        .structure => |structure| switch (structure) {
-            .nominal_type => |nominal| blk: {
-                if (!self.nominalIsBuiltinParseRecordSpec(nominal)) return false;
-                const args = self.types.sliceNominalArgs(nominal);
-                if (args.len != 1) return false;
-                break :blk try self.parseShapeHasRecordArity(args[0], record_arity);
-            },
-            else => false,
-        },
-        .alias => |alias| try self.parseRecordSpecMatchesRecordArity(self.types.getAliasBackingVar(alias), record_arity),
-        .err => true,
-        .flex, .rigid => false,
-    };
-}
-
-fn parseShapeHasRecordArity(self: *Self, var_: Var, record_arity: usize) Allocator.Error!bool {
-    return switch (self.types.resolveVar(var_).desc.content) {
-        .structure => |structure| switch (structure) {
-            .record => |record| self.types.getRecordFieldsSlice(record.fields).items(.var_).len == record_arity,
-            else => false,
-        },
-        .alias => |alias| try self.parseShapeHasRecordArity(self.types.getAliasBackingVar(alias), record_arity),
-        .err => true,
-        .flex, .rigid => false,
-    };
-}
-
-fn identTextEql(self: *Self, lhs: Ident.Idx, rhs: Ident.Idx) bool {
-    const store = self.cir.getIdentStoreConst();
-    return Ident.textEql(store.getText(lhs), store.getText(rhs));
-}
-
-fn funcFromVar(self: *Self, var_: Var) Allocator.Error!?types_mod.Func {
-    const resolved = self.types.resolveVar(var_);
-    return switch (resolved.desc.content) {
-        .structure, .flex, .rigid, .err => resolved.desc.content.unwrapFunc(),
-        .alias => |alias| try self.funcFromVar(self.types.getAliasBackingVar(alias)),
-    };
-}
-
-fn nominalIsBuiltinParseRecordSpec(self: *const Self, nominal_type: types_mod.NominalType) bool {
-    if (!nominal_type.originIsBuiltin()) return false;
-    if (nominal_type.sourceDeclOptional()) |source_decl| {
-        if (self.builtin_ctx.builtin_indices) |indices| {
-            if (source_decl == @intFromEnum(indices.parse_record_spec_type)) return true;
-        }
-    }
-    return nominal_type.ident.ident_idx.eql(self.cir.idents.builtin_parse_record_spec);
-}
-
 fn typeSupportsDerivedParse(
     self: *Self,
     flat_type: types_mod.FlatType,
@@ -11611,7 +11581,7 @@ fn satisfyImplicitParseFromConstraint(
     }
 
     self.var_set.clearRetainingCapacity();
-    if (!try self.validateDerivedParseVar(dispatcher_var, slot_var, err_var, constraint, env, region, &self.var_set)) {
+    if (!try self.validateDerivedParseVar(dispatcher_var, slot_var, err_var, constraint, env, region, &self.var_set, .shape)) {
         try self.reportConstraintError(dispatcher_var, constraint, .not_nominal, env, false);
     }
 }
@@ -11649,6 +11619,114 @@ fn freshParseResultOkVar(
     } } }, env, region);
 }
 
+const DerivedParseContext = enum {
+    shape,
+    record_field,
+};
+
+const ParseFormatMethodVar = struct {
+    var_: Var,
+    dispatcher_name: Ident.Idx,
+};
+
+fn parseFormatMethodName(self: *Self, decl: BuiltinParseSpecDecl) Allocator.Error!Ident.Idx {
+    const text = switch (decl) {
+        .str => "parse_str",
+        .record => "parse_record",
+        .tag_union => "parse_tag_union",
+    };
+    return try @constCast(self.cir).insertIdent(base.Ident.for_text(text));
+}
+
+fn parseFormatMethodVarForSlot(
+    self: *Self,
+    slot_var: Var,
+    method_name: Ident.Idx,
+    env: *Env,
+    region: Region,
+) Allocator.Error!?ParseFormatMethodVar {
+    const resolved = self.types.resolveVar(slot_var);
+    return switch (resolved.desc.content) {
+        .structure => |structure| switch (structure) {
+            .nominal_type => |nominal| blk: {
+                const original_env, const is_this_module = self.ownerEnvForOriginModule(
+                    nominal.origin_module,
+                    nominal.sourceDeclOptional(),
+                    nominal.originIsBuiltin(),
+                    "parse_from format method",
+                );
+                const binding = original_env.lookupMethodBindingFromEnvAndDeclConst(
+                    self.cir,
+                    nominal.sourceDeclOptional(),
+                    method_name,
+                ) orelse break :blk null;
+                break :blk .{
+                    .var_ = (try self.methodVarFromOriginalEnv(
+                        original_env,
+                        is_this_module,
+                        binding.type_node_idx,
+                        nominal.ident.ident_idx,
+                        env,
+                        region,
+                    )).var_,
+                    .dispatcher_name = nominal.ident.ident_idx,
+                };
+            },
+            else => null,
+        },
+        .alias => |alias| blk: {
+            const original_env, const is_this_module = self.ownerEnvForOriginModule(
+                alias.origin_module,
+                alias.source_decl.toOptional(),
+                alias.source_decl.originIsBuiltin(),
+                "parse_from format method",
+            );
+            const binding = original_env.lookupMethodBindingFromTwoEnvsAndDeclConst(
+                alias.source_decl.toOptional(),
+                self.cir,
+                method_name,
+            ) orelse break :blk null;
+            break :blk .{
+                .var_ = (try self.methodVarFromOriginalEnv(
+                    original_env,
+                    is_this_module,
+                    binding.type_node_idx,
+                    alias.ident.ident_idx,
+                    env,
+                    region,
+                )).var_,
+                .dispatcher_name = alias.ident.ident_idx,
+            };
+        },
+        .err => null,
+        .flex, .rigid => null,
+    };
+}
+
+fn validateParseFormatMethod(
+    self: *Self,
+    slot_var: Var,
+    shape_var: Var,
+    spec_decl: BuiltinParseSpecDecl,
+    err_var: Var,
+    env: *Env,
+    region: Region,
+) Allocator.Error!bool {
+    const method_name = try self.parseFormatMethodName(spec_decl);
+    const method = try self.parseFormatMethodVarForSlot(slot_var, method_name, env, region) orelse return false;
+    const spec_var = try self.mkParseSpecVar(spec_decl, shape_var, env, region);
+    const expected_ret = try self.freshParseResultTryVar(shape_var, slot_var, err_var, env, region);
+    const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{ spec_var, slot_var }, expected_ret), env, region);
+    const result = try self.unifyInContext(method.var_, expected_fn, env, .{
+        .method_type = .{
+            .constraint_var = slot_var,
+            .dispatcher_name = method.dispatcher_name,
+            .method_name = method_name,
+        },
+    });
+    return result.isOk();
+}
+
 fn validateDerivedParseVar(
     self: *Self,
     var_: Var,
@@ -11658,21 +11736,27 @@ fn validateDerivedParseVar(
     env: *Env,
     region: Region,
     visited: *std.AutoHashMap(Var, void),
+    context: DerivedParseContext,
 ) Allocator.Error!bool {
     const resolved = self.types.resolveVar(var_);
-    if (visited.contains(resolved.var_)) return true;
-    try visited.put(resolved.var_, {});
-
     return switch (resolved.desc.content) {
         .structure => |structure| switch (structure) {
-            .nominal_type => |nominal| try self.validateDerivedParseNominal(var_, nominal, slot_var, err_var, constraint, env, region, visited),
-            .record => |record| try self.validateDerivedParseRecord(record.fields, slot_var, err_var, constraint, env, region, visited),
-            .tag_union => |tag_union| try self.validateDerivedParseTagUnion(tag_union, slot_var, err_var, constraint, env, region, visited),
+            .nominal_type => |nominal| try self.validateDerivedParseNominal(var_, nominal, slot_var, err_var, constraint, env, region, visited, context),
+            .record => |record| blk: {
+                if (visited.contains(resolved.var_)) break :blk true;
+                try visited.put(resolved.var_, {});
+                break :blk try self.validateDerivedParseRecord(var_, record.fields, slot_var, err_var, constraint, env, region, visited);
+            },
+            .tag_union => |tag_union| blk: {
+                if (visited.contains(resolved.var_)) break :blk true;
+                try visited.put(resolved.var_, {});
+                break :blk try self.validateDerivedParseTagUnion(var_, tag_union, slot_var, err_var, constraint, env, region, visited);
+            },
             .empty_record => true,
             .empty_tag_union => false,
             else => false,
         },
-        .alias => |alias| try self.validateDerivedParseVar(self.types.getAliasBackingVar(alias), slot_var, err_var, constraint, env, region, visited),
+        .alias => |alias| try self.validateDerivedParseVar(self.types.getAliasBackingVar(alias), slot_var, err_var, constraint, env, region, visited, context),
         .err => true,
         .flex, .rigid => false,
     };
@@ -11680,6 +11764,7 @@ fn validateDerivedParseVar(
 
 fn validateDerivedParseRecord(
     self: *Self,
+    record_var: Var,
     fields_range: types_mod.RecordField.SafeMultiList.Range,
     slot_var: Var,
     err_var: Var,
@@ -11689,14 +11774,20 @@ fn validateDerivedParseRecord(
     visited: *std.AutoHashMap(Var, void),
 ) Allocator.Error!bool {
     const fields = self.types.getRecordFieldsSlice(fields_range);
+    if (fields.items(.var_).len != 0 and
+        !try self.validateParseFormatMethod(slot_var, record_var, .record, err_var, env, region))
+    {
+        return false;
+    }
     for (fields.items(.var_)) |field_var| {
-        if (!try self.validateDerivedParseVar(field_var, slot_var, err_var, constraint, env, region, visited)) return false;
+        if (!try self.validateDerivedParseVar(field_var, slot_var, err_var, constraint, env, region, visited, .record_field)) return false;
     }
     return true;
 }
 
 fn validateDerivedParseTagUnion(
     self: *Self,
+    tag_union_var: Var,
     tag_union: types_mod.TagUnion,
     slot_var: Var,
     err_var: Var,
@@ -11706,12 +11797,13 @@ fn validateDerivedParseTagUnion(
     visited: *std.AutoHashMap(Var, void),
 ) Allocator.Error!bool {
     if (!try self.derivedParseTagUnionHasAnyTag(tag_union)) return false;
+    if (!try self.validateParseFormatMethod(slot_var, tag_union_var, .tag_union, err_var, env, region)) return false;
 
     const tags = self.types.getTagsSlice(tag_union.tags);
     for (tags.items(.args)) |tag_args_range| {
         const tag_args = self.types.sliceVars(tag_args_range);
         for (tag_args) |tag_arg| {
-            if (!try self.validateDerivedParseVar(tag_arg, slot_var, err_var, constraint, env, region, visited)) return false;
+            if (!try self.validateDerivedParseVar(tag_arg, slot_var, err_var, constraint, env, region, visited, .shape)) return false;
         }
     }
     return try self.validateDerivedParseTagExt(tag_union.ext, slot_var, err_var, constraint, env, region, visited);
@@ -11730,7 +11822,7 @@ fn validateDerivedParseTagExt(
     return switch (self.types.resolveVar(ext_var).desc.content) {
         .structure => |structure| switch (structure) {
             .empty_tag_union => true,
-            .tag_union => |tag_union| try self.validateDerivedParseTagUnion(tag_union, slot_var, err_var, constraint, env, region, visited),
+            .tag_union => |tag_union| try self.validateDerivedParseTagUnion(ext_var, tag_union, slot_var, err_var, constraint, env, region, visited),
             else => false,
         },
         .alias => |alias| try self.validateDerivedParseTagExt(self.types.getAliasBackingVar(alias), slot_var, err_var, constraint, env, region, visited),
@@ -11749,10 +11841,15 @@ fn validateDerivedParseNominal(
     env: *Env,
     region: Region,
     visited: *std.AutoHashMap(Var, void),
+    context: DerivedParseContext,
 ) Allocator.Error!bool {
     _ = visited;
-    if (self.nominalIsBuiltinStrType(nominal)) return true;
+    if (self.nominalIsBuiltinStrType(nominal)) {
+        return context == .record_field or
+            try self.validateParseFormatMethod(slot_var, nominal_var, .str, err_var, env, region);
+    }
     if (self.nominalIsBuiltinTryType(nominal)) {
+        if (context != .record_field) return false;
         const args = self.types.sliceNominalArgs(nominal);
         if (args.len != 2) return false;
         if (!try self.varIsBuiltinStr(args[0])) return false;
