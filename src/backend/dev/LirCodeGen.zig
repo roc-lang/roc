@@ -4343,25 +4343,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return .{ .general_reg = result_reg };
         }
 
-        /// Call a C wrapper: fn(str_f0, str_f1, str_f2, u64_val) -> scalar.
-        fn callStr1U64ToScalar(self: *Self, str_off: i32, u64_off: i32, fn_addr: usize, builtin_fn: BuiltinFn) Allocator.Error!ValueLocation {
-            const base_ptr = frame_ptr;
-            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-            try builder.addMemArg(base_ptr, str_off);
-            try builder.addMemArg(base_ptr, str_off + 16);
-            try builder.addMemArg(base_ptr, str_off + 8);
-            try builder.addMemArg(base_ptr, u64_off);
-            try self.callBuiltin(&builder, fn_addr, builtin_fn);
-
-            const result_reg = try self.allocTempGeneral();
-            if (comptime target.toCpuArch() == .aarch64) {
-                try self.codegen.emit.movRegReg(.w64, result_reg, .X0);
-            } else {
-                try self.codegen.emit.movRegReg(.w64, result_reg, .RAX);
-            }
-            return .{ .general_reg = result_reg };
-        }
-
         /// Call a C wrapper: fn(a_f0, a_f1, a_f2, b_f0, b_f1, b_f2) -> bool
         /// Used for (str, str) -> bool comparison ops (equal, contains, starts_with, etc.)
         fn callStr2ToScalar(self: *Self, a_off: i32, b_off: i32, fn_addr: usize, builtin_fn: BuiltinFn) Allocator.Error!ValueLocation {
@@ -4440,25 +4421,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try builder.addMemArg(base_ptr, str_off + 8);
             try builder.addMemArg(base_ptr, u64_off);
             if (update_mode_imm) |imm| try builder.addImmArg(imm);
-            try builder.addRegArg(roc_ops_reg);
-            try self.callBuiltin(&builder, fn_addr, builtin_fn);
-
-            return .{ .stack_str = result_offset };
-        }
-
-        /// Call: fn(out, str_f0, str_f1, str_f2, u64_val, u64_val, roc_ops) -> void.
-        fn callStr1U64U64RocOpsToStr(self: *Self, str_off: i32, first_u64_off: i32, second_u64_off: i32, fn_addr: usize, builtin_fn: BuiltinFn) Allocator.Error!ValueLocation {
-            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
-            const result_offset = self.codegen.allocStackSlot(roc_str_size);
-
-            const base_ptr = frame_ptr;
-            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-            try builder.addLeaArg(base_ptr, result_offset);
-            try builder.addMemArg(base_ptr, str_off);
-            try builder.addMemArg(base_ptr, str_off + 16);
-            try builder.addMemArg(base_ptr, str_off + 8);
-            try builder.addMemArg(base_ptr, first_u64_off);
-            try builder.addMemArg(base_ptr, second_u64_off);
             try builder.addRegArg(roc_ops_reg);
             try self.callBuiltin(&builder, fn_addr, builtin_fn);
 

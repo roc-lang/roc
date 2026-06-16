@@ -114,7 +114,7 @@ fn buildJson(
     optional_mask: u8,
     status_index: usize,
     mode_index: usize,
-) ![]u8 {
+) anyerror![]u8 {
     var json: std.ArrayList(u8) = .empty;
     errdefer json.deinit(allocator);
 
@@ -150,7 +150,7 @@ fn buildJson(
     return json.toOwnedSlice(allocator);
 }
 
-fn buildMissingRequiredJson(allocator: std.mem.Allocator) ![]u8 {
+fn buildMissingRequiredJson(allocator: std.mem.Allocator) anyerror![]u8 {
     var json: std.ArrayList(u8) = .empty;
     errdefer json.deinit(allocator);
 
@@ -185,7 +185,7 @@ fn expectedJsonLength(optional_mask: u8, status_index: usize, mode_index: usize)
     return total;
 }
 
-fn buildExpectedStdout(allocator: std.mem.Allocator, value: u64) ![]u8 {
+fn buildExpectedStdout(allocator: std.mem.Allocator, value: u64) anyerror![]u8 {
     return std.fmt.allocPrint(allocator, "{d}\n", .{value});
 }
 
@@ -210,7 +210,7 @@ fn nativeRunnableTargetName() ?[]const u8 {
     };
 }
 
-fn runJsonDecoderAndCheckOutput(allocator: std.mem.Allocator, exe_path: []const u8, input: []const u8, expected_stdout: []const u8) !void {
+fn runJsonDecoderAndCheckOutput(allocator: std.mem.Allocator, exe_path: []const u8, input: []const u8, expected_stdout: []const u8) anyerror!void {
     const result = try util.runChildWithTimeout(io, allocator, &.{exe_path}, .{
         .stdin = input,
         .max_output_bytes = 16 * 1024,
@@ -243,7 +243,7 @@ fn runJsonDecoderAndCheckOutput(allocator: std.mem.Allocator, exe_path: []const 
     try expectNoRuntimeAllocation(result.stderr);
 }
 
-fn runJsonDecoderAndCheckInvalidUtf8(allocator: std.mem.Allocator, exe_path: []const u8) !void {
+fn runJsonDecoderAndCheckInvalidUtf8(allocator: std.mem.Allocator, exe_path: []const u8) anyerror!void {
     const invalid_utf8_json = "{\"foo\":\"bad\xff\"}";
     const result = try util.runChildWithTimeout(io, allocator, &.{exe_path}, .{
         .stdin = invalid_utf8_json,
@@ -276,7 +276,7 @@ fn runJsonDecoderAndCheckInvalidUtf8(allocator: std.mem.Allocator, exe_path: []c
     try expectNoRuntimeAllocation(result.stderr);
 }
 
-fn expectNoRuntimeAllocation(stderr: []const u8) !void {
+fn expectNoRuntimeAllocation(stderr: []const u8) anyerror!void {
     try testing.expect(std.mem.find(u8, stderr, "roc_alloc called") == null);
     try testing.expect(std.mem.find(u8, stderr, "roc_realloc called") == null);
     try testing.expect(std.mem.find(u8, stderr, "roc_dealloc called") == null);

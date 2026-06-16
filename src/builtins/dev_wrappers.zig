@@ -24,6 +24,7 @@ const FromUtf8Try = str.FromUtf8Try;
 // which has a tracy dependency. The actual struct layout is handled by utils.zig.
 const RocOps = utils.RocOps;
 
+/// Field offsets for the dev backend's `Str.find_first` result copy.
 pub const StrFindFirstLayout = extern struct {
     after_offset: u32,
     before_offset: u32,

@@ -6872,6 +6872,9 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         .e_closure => |closure| {
             // Here, we must forward the expected valued to the inner lambda, so
             // the annotation type is created at the same rank as the expr
+            const saved_checking_call_arg = self.checking_call_arg;
+            self.checking_call_arg = is_call_arg;
+            defer self.checking_call_arg = saved_checking_call_arg;
             does_fx = try self.checkExpr(closure.lambda_idx, env, expected) or does_fx;
             const lambda_var = ModuleEnv.varFrom(closure.lambda_idx);
 
@@ -13252,7 +13255,7 @@ fn validateDerivedParseVar(
     const resolved = self.types.resolveVar(var_);
     return switch (resolved.desc.content) {
         .structure => |structure| switch (structure) {
-            .nominal_type => |nominal| try self.validateDerivedParseNominal(var_, nominal, slot_var, err_var, constraint, env, region, visited, context),
+            .nominal_type => |nominal| try self.validateDerivedParseNominal(var_, nominal, slot_var, err_var, constraint, env, region, context),
             .record => |record| blk: {
                 if (visited.contains(resolved.var_)) break :blk true;
                 try visited.put(resolved.var_, {});
@@ -13351,10 +13354,8 @@ fn validateDerivedParseNominal(
     constraint: StaticDispatchConstraint,
     env: *Env,
     region: Region,
-    visited: *std.AutoHashMap(Var, void),
     context: DerivedParseContext,
 ) Allocator.Error!bool {
-    _ = visited;
     if (self.nominalIsBuiltinStrType(nominal)) {
         return context == .record_field or
             try self.validateParseFormatMethod(slot_var, nominal_var, .str, err_var, env, region);

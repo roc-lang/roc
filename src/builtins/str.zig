@@ -768,6 +768,7 @@ pub fn substringUnsafeC(
     return substringUnsafe(string, start, length, roc_ops);
 }
 
+/// Result layout for `Str.find_first`.
 pub const FindFirstResult = struct {
     before: RocStr,
     found: bool,
@@ -782,6 +783,7 @@ fn retainedSlice(source: RocStr, start: usize, length: usize, roc_ops: *RocOps) 
     return substringUnsafe(source, start, length, roc_ops);
 }
 
+/// Find the first delimiter occurrence and return seamless slices around it.
 pub fn findFirst(source: RocStr, delimiter: RocStr, roc_ops: *RocOps) FindFirstResult {
     const source_bytes = source.asSlice();
     const delimiter_bytes = delimiter.asSlice();
@@ -795,7 +797,7 @@ pub fn findFirst(source: RocStr, delimiter: RocStr, roc_ops: *RocOps) FindFirstR
         };
     }
 
-    const index = std.mem.indexOf(u8, source_bytes, delimiter_bytes) orelse {
+    const index = std.mem.find(u8, source_bytes, delimiter_bytes) orelse {
         source.incref(1, roc_ops);
         return .{
             .before = source,

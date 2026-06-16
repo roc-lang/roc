@@ -582,26 +582,6 @@ fn findNestedTypeDeclaration(
     return findTypeDeclarationByQualifiedName(env, qualified_name);
 }
 
-fn findDeepNestedTypeDeclaration(
-    gpa: Allocator,
-    env: *const ModuleEnv,
-    parent_names: []const []const u8,
-    type_name: []const u8,
-) !CIR.Statement.Idx {
-    var qualified_name = std.ArrayList(u8).empty;
-    defer qualified_name.deinit(gpa);
-
-    try qualified_name.appendSlice(gpa, env.module_name);
-    for (parent_names) |parent_name| {
-        try qualified_name.append(gpa, '.');
-        try qualified_name.appendSlice(gpa, parent_name);
-    }
-    try qualified_name.append(gpa, '.');
-    try qualified_name.appendSlice(gpa, type_name);
-
-    return findTypeDeclarationByQualifiedName(env, qualified_name.items);
-}
-
 fn findTypeDeclarationByQualifiedName(env: *const ModuleEnv, qualified_name: []const u8) !CIR.Statement.Idx {
     // Search in all_statements (where Builtin.roc's own types are stored)
     const all_stmts = env.store.sliceStatements(env.all_statements);

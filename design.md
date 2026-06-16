@@ -949,8 +949,8 @@ format for exactly the methods needed by that shape:
 
 If a format does not support a shape, checking reports the missing method as a
 static-dispatch error. Unsupported shapes are not represented as runtime parse
-or encode failures. Runtime failures are reserved for input/output facts the
-format can only know while processing bytes or values, such as a malformed
+or encode failures. Runtime failures are reserved for input/output conditions
+the format can only know while processing bytes or values, such as a malformed
 header line, invalid JSON syntax, invalid UTF-8 in a byte input, or a
 user-defined nominal method returning an error.
 

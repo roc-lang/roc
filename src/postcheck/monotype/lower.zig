@@ -3909,10 +3909,6 @@ const BodyContext = struct {
         return self.decoderIntrinsicForBuiltinDef(view, imported.def);
     }
 
-    fn decoderIntrinsicForMethodLookup(self: *BodyContext, lookup: MethodLookup) ?DecoderIntrinsic {
-        return self.decoderIntrinsicForBuiltinDef(lookup.view, lookup.target.def_idx);
-    }
-
     fn decoderIntrinsicForBuiltinDef(_: *BodyContext, view: ModuleView, def_idx: can.CIR.Def.Idx) ?DecoderIntrinsic {
         if (view.module_env.module_role != .builtin) return null;
 
@@ -4268,20 +4264,6 @@ const BodyContext = struct {
         };
     }
 
-    fn checkedParseStrSpecShape(self: *BodyContext, spec_expr: checked.CheckedExprId) checked.CheckedTypeId {
-        const expr = self.view.bodies.exprs[@intFromEnum(spec_expr)];
-        return switch (resolvedPayload(self.view, expr.ty).payload) {
-            .nominal => |nominal| blk: {
-                if ((nominal.builtin orelse Common.invariant("ParseStrSpec.parse intrinsic spec argument was not a builtin nominal")) != .parse_str_spec) {
-                    Common.invariant("ParseStrSpec.parse intrinsic spec argument was not ParseStrSpec");
-                }
-                if (nominal.args.len != 1) Common.invariant("ParseStrSpec had an unexpected type argument count");
-                break :blk nominal.args[0];
-            },
-            else => Common.invariant("ParseStrSpec.parse intrinsic spec argument was not nominal"),
-        };
-    }
-
     fn checkedParseRecordSpecShape(self: *BodyContext, spec_expr: checked.CheckedExprId) checked.CheckedTypeId {
         const expr = self.view.bodies.exprs[@intFromEnum(spec_expr)];
         return switch (resolvedPayload(self.view, expr.ty).payload) {
@@ -4293,20 +4275,6 @@ const BodyContext = struct {
                 break :blk nominal.args[0];
             },
             else => Common.invariant("ParseRecordSpec intrinsic spec argument was not nominal"),
-        };
-    }
-
-    fn checkedParseTagUnionSpecShape(self: *BodyContext, spec_expr: checked.CheckedExprId) checked.CheckedTypeId {
-        const expr = self.view.bodies.exprs[@intFromEnum(spec_expr)];
-        return switch (resolvedPayload(self.view, expr.ty).payload) {
-            .nominal => |nominal| blk: {
-                if ((nominal.builtin orelse Common.invariant("ParseTagUnionSpec intrinsic spec argument was not a builtin nominal")) != .parse_tag_union_spec) {
-                    Common.invariant("ParseTagUnionSpec intrinsic spec argument was not ParseTagUnionSpec");
-                }
-                if (nominal.args.len != 1) Common.invariant("ParseTagUnionSpec had an unexpected type argument count");
-                break :blk nominal.args[0];
-            },
-            else => Common.invariant("ParseTagUnionSpec intrinsic spec argument was not nominal"),
         };
     }
 
@@ -4833,23 +4801,6 @@ const BodyContext = struct {
         const fn_node = try self.instNode(source_fn_ty);
         try self.graph.unify(try self.instNode(function.args[arg_index]), try self.graph.importMono(arg_ty));
         try self.graph.unify(try self.instNode(function.ret), try self.graph.importMono(ret_ty));
-        try self.graph.drainDirty();
-        return try self.graph.monoFor(fn_node);
-    }
-
-    fn instantiateTargetCallTypeFromMonoArgsInferRet(
-        self: *BodyContext,
-        source_fn_ty: checked.CheckedTypeId,
-        arg_tys: []const Type.TypeId,
-    ) Allocator.Error!Type.TypeId {
-        const function = self.checkedFunctionType(source_fn_ty);
-        if (function.args.len != arg_tys.len) {
-            Common.invariant("checked synthetic dispatch target arity differs from its function type");
-        }
-        const fn_node = try self.instNode(source_fn_ty);
-        for (function.args, arg_tys) |formal_ty, arg_ty| {
-            try self.graph.unify(try self.instNode(formal_ty), try self.graph.importMono(arg_ty));
-        }
         try self.graph.drainDirty();
         return try self.graph.monoFor(fn_node);
     }
@@ -5505,20 +5456,6 @@ const BodyContext = struct {
             .generated_numeral => |literal| try self.lowerNumeralValue(literal, ty),
             .generated_quote => |literal| try self.lowerQuoteValue(literal, ty),
         };
-    }
-
-    fn lowerDispatchOperandAtIndexAtType(
-        self: *BodyContext,
-        plan: static_dispatch.StaticDispatchCallPlan,
-        index: usize,
-        ty: Type.TypeId,
-        pre_lowered: ?PreLoweredOperand,
-    ) Allocator.Error!Ast.ExprId {
-        if (index >= plan.args.len) Common.invariant("dispatch operand index was outside the argument span");
-        if (pre_lowered) |pre| {
-            if (pre.index == index) return pre.expr;
-        }
-        return try self.lowerDispatchOperandAtType(plan.args[index], ty);
     }
 
     fn lowerGeneratedInterpolationIter(
@@ -6561,16 +6498,6 @@ const BodyContext = struct {
         return try target_ctx.instantiateTargetCallTypeFromMonoArgAtIndexAndRet(lookup.target.callable_ty, arg_index, arg_ty, ret_ty);
     }
 
-    fn methodTargetMonoTypeFromArgsInferRet(
-        self: *BodyContext,
-        lookup: MethodLookup,
-        arg_tys: []const Type.TypeId,
-    ) Allocator.Error!Type.TypeId {
-        var target_ctx = try self.methodTargetContext(lookup);
-        defer target_ctx.deinit();
-        return try target_ctx.instantiateTargetCallTypeFromMonoArgsInferRet(lookup.target.callable_ty, arg_tys);
-    }
-
     fn methodLookupForTypeName(
         self: *BodyContext,
         owner_ty: Type.TypeId,
@@ -6987,107 +6914,6 @@ const BodyContext = struct {
         return tag;
     }
 
-    fn monoTagByNameOptional(self: *BodyContext, ty: Type.TypeId, name: names.TagNameId) ?Type.Tag {
-        const text = self.builder.program.names.tagLabelText(name);
-        return switch (self.builder.shapeContent(ty)) {
-            .tag_union => |span| {
-                for (self.builder.program.types.tagSpan(span)) |tag| {
-                    if (Ident.textEql(self.builder.program.names.tagLabelText(tag.name), text)) return tag;
-                }
-                return null;
-            },
-            else => null,
-        };
-    }
-
-    fn structuralDecoderRecordBuilder(
-        self: *BodyContext,
-        record_ty: Type.TypeId,
-        record_fields: []const Type.Field,
-        builder_fn_ty: Type.TypeId,
-        builder_arg_tys: []const Type.TypeId,
-        source_fn_ty: checked.CheckedTypeId,
-    ) Allocator.Error!Ast.ExprId {
-        const args = try self.allocator.alloc(Ast.TypedLocal, builder_arg_tys.len);
-        defer self.allocator.free(args);
-        const fields = try self.allocator.alloc(Ast.FieldExpr, record_fields.len);
-        defer self.allocator.free(fields);
-
-        for (builder_arg_tys, 0..) |arg_ty, i| {
-            const local = try self.builder.program.addLocal(self.builder.symbols.fresh(), arg_ty);
-            args[i] = .{ .local = local, .ty = arg_ty };
-            const arg_expr = try self.builder.localExpr(local, arg_ty);
-            fields[i] = .{
-                .name = record_fields[i].name,
-                .value = try self.structuralDecoderFieldFromSlot(arg_expr, arg_ty, record_fields[i].ty),
-            };
-        }
-
-        const body = try self.builder.program.addExpr(.{
-            .ty = record_ty,
-            .data = .{ .record = try self.builder.program.addFieldExprSpan(fields) },
-        });
-
-        const fn_id = try self.builder.program.addFn(.{
-            .fn_def = .{ .checked_generated = self.owner_template },
-            .source_fn_ty = source_fn_ty,
-            .source_fn_key = self.view.types.rootKey(source_fn_ty),
-            .mono_fn_ty = builder_fn_ty,
-        });
-
-        return try self.builder.program.addExpr(.{
-            .ty = builder_fn_ty,
-            .data = .{ .lambda = .{
-                .fn_id = fn_id,
-                .args = try self.builder.program.addTypedLocalSpan(args),
-                .body = body,
-            } },
-        });
-    }
-
-    fn structuralDecoderFieldFromSlot(
-        self: *BodyContext,
-        slot_expr: Ast.ExprId,
-        slot_ty: Type.TypeId,
-        field_ty: Type.TypeId,
-    ) Allocator.Error!Ast.ExprId {
-        const slot_info = self.decoderFieldValueInfo(slot_ty);
-
-        const value_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), slot_info.present_payload_ty);
-        const value_pat = try self.builder.bindPat(value_local, slot_info.present_payload_ty);
-        const present_pat = try self.builder.program.addPat(.{ .ty = slot_ty, .data = .{ .tag = .{
-            .name = slot_info.present_tag.name,
-            .payloads = try self.builder.program.addPatSpan(&[_]Ast.PatId{value_pat}),
-        } } });
-        const missing_pat = try self.builder.program.addPat(.{ .ty = slot_ty, .data = .{ .tag = .{
-            .name = slot_info.missing_tag.name,
-            .payloads = try self.builder.program.addPatSpan(&[_]Ast.PatId{}),
-        } } });
-
-        const present_body = if (self.typeHasBuiltinOwner(field_ty, .str))
-            try self.builder.localExpr(value_local, field_ty)
-        else if (self.tryStrOptionalInfo(field_ty)) |info|
-            try self.tryOkFromFieldValue(value_local, info, field_ty)
-        else
-            Common.invariant("unsupported structural decoder field type reached slot lowering");
-
-        const absent_body = if (self.typeHasBuiltinOwner(field_ty, .str))
-            try self.requiredFieldMissingCrash(field_ty)
-        else if (self.tryStrOptionalInfo(field_ty)) |info|
-            try self.tryErrMissing(info, field_ty)
-        else
-            Common.invariant("unsupported structural decoder field type reached slot lowering");
-
-        const branches = [_]Ast.Branch{
-            .{ .pat = present_pat, .body = present_body },
-            .{ .pat = missing_pat, .body = absent_body },
-        };
-        return try self.builder.program.addExpr(.{ .ty = field_ty, .data = .{ .match_ = .{
-            .scrutinee = slot_expr,
-            .branches = try self.builder.program.addBranchSpan(&branches),
-        } } });
-    }
-
     fn structuralDecoderFieldFromSlotTry(
         self: *BodyContext,
         slot_expr: Ast.ExprId,
@@ -7141,11 +6967,6 @@ const BodyContext = struct {
         } } });
     }
 
-    fn requiredFieldMissingCrash(self: *BodyContext, field_ty: Type.TypeId) Allocator.Error!Ast.ExprId {
-        const msg = try self.builder.program.addStringLiteral("missing required decoded field");
-        return try self.builder.program.addExpr(.{ .ty = field_ty, .data = .{ .crash = msg } });
-    }
-
     fn tryOkFromFieldValue(
         self: *BodyContext,
         value_local: Ast.LocalId,
@@ -7191,38 +7012,6 @@ const BodyContext = struct {
             .ty = try_ty,
             .data = .{ .nominal = backing_expr },
         });
-    }
-
-    fn wrapDispatchArgumentEvaluation(
-        self: *BodyContext,
-        plan: static_dispatch.StaticDispatchCallPlan,
-        callable_mono_ty: Type.TypeId,
-        arg_ctx: *BodyContext,
-        pre_lowered: ?PreLoweredOperand,
-        result: Ast.ExprId,
-    ) Allocator.Error!Ast.ExprId {
-        if (plan.args.len == 0) return result;
-
-        const fn_data = self.builder.functionShape(callable_mono_ty, "checked structural decoder target had a non-function type");
-        const arg_tys = try self.allocator.dupe(Type.TypeId, self.builder.program.types.span(fn_data.args));
-        defer self.allocator.free(arg_tys);
-        const lowered_span = try arg_ctx.lowerDispatchOperandsAtTypes(plan.args, arg_tys, pre_lowered);
-        const lowered = self.builder.program.exprSpan(lowered_span);
-
-        var rest = result;
-        var i = lowered.len;
-        while (i > 0) {
-            i -= 1;
-            rest = try self.builder.program.addExpr(.{
-                .ty = self.builder.program.exprs.items[@intFromEnum(rest)].ty,
-                .data = .{ .let_ = .{
-                    .bind = try self.builder.program.addPat(.{ .ty = arg_tys[i], .data = .wildcard }),
-                    .value = lowered[i],
-                    .rest = rest,
-                } },
-            });
-        }
-        return rest;
     }
 
     fn lowerDirectStructuralEq(

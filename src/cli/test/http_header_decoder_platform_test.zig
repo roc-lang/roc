@@ -110,7 +110,7 @@ test "HTTP header parsing platform derives structural parser without runtime all
     try runServerAndCheckInvalidUtf8(allocator, output_path);
 }
 
-fn buildRequest(allocator: std.mem.Allocator, optional_mask: u8) ![]u8 {
+fn buildRequest(allocator: std.mem.Allocator, optional_mask: u8) anyerror![]u8 {
     var request: std.ArrayList(u8) = .empty;
     errdefer request.deinit(allocator);
 
@@ -136,7 +136,7 @@ fn buildRequest(allocator: std.mem.Allocator, optional_mask: u8) ![]u8 {
     return request.toOwnedSlice(allocator);
 }
 
-fn buildMissingRequiredRequest(allocator: std.mem.Allocator) ![]u8 {
+fn buildMissingRequiredRequest(allocator: std.mem.Allocator) anyerror![]u8 {
     var request: std.ArrayList(u8) = .empty;
     errdefer request.deinit(allocator);
 
@@ -148,7 +148,7 @@ fn buildMissingRequiredRequest(allocator: std.mem.Allocator) ![]u8 {
     return request.toOwnedSlice(allocator);
 }
 
-fn buildBadHeaderRequest(allocator: std.mem.Allocator) ![]u8 {
+fn buildBadHeaderRequest(allocator: std.mem.Allocator) anyerror![]u8 {
     var request: std.ArrayList(u8) = .empty;
     errdefer request.deinit(allocator);
 
@@ -175,7 +175,7 @@ fn expectedHeaderLength(optional_mask: u8) u64 {
     return total;
 }
 
-fn buildExpectedResponse(allocator: std.mem.Allocator, value: u64) ![]u8 {
+fn buildExpectedResponse(allocator: std.mem.Allocator, value: u64) anyerror![]u8 {
     return std.fmt.allocPrint(
         allocator,
         "HTTP/1.1 200 OK\r\n" ++
@@ -209,7 +209,7 @@ fn nativeRunnableTargetName() ?[]const u8 {
     };
 }
 
-fn runServerAndCheckResponse(allocator: std.mem.Allocator, exe_path: []const u8, request: []const u8, expected_response: []const u8) !void {
+fn runServerAndCheckResponse(allocator: std.mem.Allocator, exe_path: []const u8, request: []const u8, expected_response: []const u8) anyerror!void {
     var child = try std.process.spawn(io, .{
         .argv = &.{exe_path},
         .stdin = .ignore,
@@ -270,7 +270,7 @@ fn runServerAndCheckResponse(allocator: std.mem.Allocator, exe_path: []const u8,
     try expectNoRuntimeAllocation(stderr);
 }
 
-fn runServerAndCheckInvalidUtf8(allocator: std.mem.Allocator, exe_path: []const u8) !void {
+fn runServerAndCheckInvalidUtf8(allocator: std.mem.Allocator, exe_path: []const u8) anyerror!void {
     var child = try std.process.spawn(io, .{
         .argv = &.{exe_path},
         .stdin = .ignore,
@@ -330,13 +330,13 @@ fn runServerAndCheckInvalidUtf8(allocator: std.mem.Allocator, exe_path: []const 
     try expectNoRuntimeAllocation(stderr);
 }
 
-fn expectNoRuntimeAllocation(stderr: []const u8) !void {
+fn expectNoRuntimeAllocation(stderr: []const u8) anyerror!void {
     try testing.expect(std.mem.find(u8, stderr, "roc_alloc called") == null);
     try testing.expect(std.mem.find(u8, stderr, "roc_realloc called") == null);
     try testing.expect(std.mem.find(u8, stderr, "roc_dealloc called") == null);
 }
 
-fn readPortLine(stdout: std.Io.File) !u16 {
+fn readPortLine(stdout: std.Io.File) anyerror!u16 {
     var line: [32]u8 = undefined;
     var line_len: usize = 0;
 
@@ -368,7 +368,7 @@ fn readPortLine(stdout: std.Io.File) !u16 {
     return @intCast(port);
 }
 
-fn sendHttpRequest(allocator: std.mem.Allocator, port: u16, bytes: []const u8) ![]u8 {
+fn sendHttpRequest(allocator: std.mem.Allocator, port: u16, bytes: []const u8) anyerror![]u8 {
     const net = std.Io.net;
     var address: net.IpAddress = .{ .ip4 = net.Ip4Address.loopback(port) };
     const stream = try net.IpAddress.connect(&address, io, .{ .mode = .stream });
@@ -400,7 +400,7 @@ fn sendHttpRequest(allocator: std.mem.Allocator, port: u16, bytes: []const u8) !
     return response.toOwnedSlice(allocator);
 }
 
-fn sendHttpRequestWithoutReading(port: u16, bytes: []const u8) !void {
+fn sendHttpRequestWithoutReading(port: u16, bytes: []const u8) anyerror!void {
     const net = std.Io.net;
     var address: net.IpAddress = .{ .ip4 = net.Ip4Address.loopback(port) };
     const stream = try net.IpAddress.connect(&address, io, .{ .mode = .stream });
@@ -412,7 +412,7 @@ fn sendHttpRequestWithoutReading(port: u16, bytes: []const u8) !void {
     try writer.interface.flush();
 }
 
-fn readRemaining(allocator: std.mem.Allocator, file: std.Io.File) ![]u8 {
+fn readRemaining(allocator: std.mem.Allocator, file: std.Io.File) anyerror![]u8 {
     var output: std.ArrayList(u8) = .empty;
     errdefer output.deinit(allocator);
 
