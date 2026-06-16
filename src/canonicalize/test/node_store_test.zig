@@ -1043,6 +1043,12 @@ test "NodeStore round trip - Diagnostics" {
     });
 
     try diagnostics.append(gpa, CIR.Diagnostic{
+        .infinite_loop_never_exits = .{
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
         .return_outside_fn = .{
             .region = rand_region(),
             .context = .return_statement,

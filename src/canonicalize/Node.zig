@@ -259,6 +259,7 @@ pub const Tag = enum {
     diag_redundant_exposed,
     diag_if_expr_without_else,
     diag_break_outside_loop,
+    diag_infinite_loop_never_exits,
     diag_return_outside_fn,
     diag_mutually_recursive_type_aliases,
     diag_deprecated_number_suffix,
