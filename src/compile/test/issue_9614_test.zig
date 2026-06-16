@@ -125,13 +125,16 @@ test "issue 9614: default app list fold_until result tag narrowing lowers to LIR
     const imports = try coord.collectImportedArtifactViews(arena, root);
     const relations = try coord.collectRelationArtifactViews(arena, root);
 
+    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
+    defer gpa.free(lir_roots);
+
     var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
         gpa,
         .{
             .root = check.CheckedArtifact.loweringViewWithRelations(root, relations),
             .imports = imports,
         },
-        .{ .requests = root.root_requests.runtime_requests },
+        .{ .requests = lir_roots },
         .{ .target_usize = base.target.TargetUsize.native },
     );
     defer lowered.deinit();
