@@ -3960,9 +3960,9 @@ fn verifyHostInputSymbols(
     }
 }
 
-fn writeDefaultPlatformRuntimeObject(ctx: *CliCtx, build_cache_dir: []const u8, target: RocTarget) anyerror!?[]const u8 {
+fn writeDefaultPlatformRuntimeObject(ctx: *CliCtx, artifact_dir: []const u8, target: RocTarget) anyerror!?[]const u8 {
     const bytes = DefaultPlatformRuntimeObjects.forTarget(target) orelse return null;
-    const runtime_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, DefaultPlatformRuntimeObjects.filename() });
+    const runtime_path = try std.fs.path.join(ctx.arena, &.{ artifact_dir, DefaultPlatformRuntimeObjects.filename() });
     backend.writeFileWindowsAvSafe(ctx.io.std_io, runtime_path, bytes) catch |err| {
         std.log.err("Failed to write default platform runtime object {s}: {}", .{ runtime_path, err });
         return err;
@@ -4565,6 +4565,7 @@ fn rocBuildWasmSurgical(
 }
 
 const LlvmObjectPaths = struct {
+    artifact_dir: []const u8,
     bitcode_path: []const u8,
     object_path: []const u8,
 };
@@ -4713,7 +4714,6 @@ fn llvmFeatureStringForTarget(allocator: Allocator, std_target: std.Target) Allo
 fn compileLlvmAppObject(
     ctx: *CliCtx,
     args: cli_args.BuildArgs,
-    build_cache_dir: []const u8,
     target: RocTarget,
     link_type: roc_target.OutputKind,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
@@ -4756,7 +4756,7 @@ fn compileLlvmAppObject(
     const target_name = @tagName(target);
     const opt_name = @tagName(args.opt);
     // Shared libraries need position-independent code; keep their objects
-    // separate from exe objects in the build cache.
+    // separate from exe objects in the artifact directory.
     const pic = link_type == .shared;
     const kind_suffix: []const u8 = if (pic) "_pic" else "";
     const debug_suffix: []const u8 = if (emit_debug_info) "_debug" else "";
@@ -4767,10 +4767,11 @@ fn compileLlvmAppObject(
     const tuning_hash_value = tuning_hash.final();
     const bitcode_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_llvm_{s}_{s}_{x}{s}{s}.bc", .{ target_name, opt_name, tuning_hash_value, kind_suffix, debug_suffix });
     const object_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_llvm_{s}_{s}_{x}{s}{s}.o", .{ target_name, opt_name, tuning_hash_value, kind_suffix, debug_suffix });
-    const bitcode_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, bitcode_filename });
-    const object_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, object_filename });
+    const artifact_dir = try createUniqueTempDir(ctx);
+    errdefer std.Io.Dir.cwd().deleteTree(ctx.io.std_io, artifact_dir) catch {};
+    const bitcode_path = try std.fs.path.join(ctx.arena, &.{ artifact_dir, bitcode_filename });
+    const object_path = try std.fs.path.join(ctx.arena, &.{ artifact_dir, object_filename });
 
-    try std.Io.Dir.cwd().createDirPath(ctx.io.std_io, build_cache_dir);
     backend.writeFileWindowsAvSafe(ctx.io.std_io, bitcode_path, std.mem.sliceAsBytes(bitcode.bitcode)) catch |err| {
         std.log.err("Failed to write LLVM bitcode {s}: {}", .{ bitcode_path, err });
         return err;
@@ -4799,6 +4800,7 @@ fn compileLlvmAppObject(
     }
 
     return .{
+        .artifact_dir = artifact_dir,
         .bitcode_path = bitcode_path,
         .object_path = object_path,
     };
@@ -4838,7 +4840,7 @@ fn mergeLlvmStaticDataWasmModule(
 
 fn writeCombinedLlvmWasmObject(
     ctx: *CliCtx,
-    build_cache_dir: []const u8,
+    artifact_dir: []const u8,
     app_object_path: []const u8,
     static_data_exports: []const backend.StaticDataExport,
     opt: cli_args.OptLevel,
@@ -4863,7 +4865,7 @@ fn writeCombinedLlvmWasmObject(
     defer ctx.gpa.free(wasm_bytes);
 
     const obj_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_llvm_wasm32_{s}.o", .{@tagName(opt)});
-    const obj_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, obj_filename });
+    const obj_path = try std.fs.path.join(ctx.arena, &.{ artifact_dir, obj_filename });
     backend.writeFileWindowsAvSafe(ctx.io.std_io, obj_path, wasm_bytes) catch |err| {
         std.log.err("Failed to write wasm object output: {}", .{err});
         return error.WasmOutputWriteFailed;
@@ -4877,7 +4879,6 @@ fn rocBuildWasmLlvm(
     args: cli_args.BuildArgs,
     link_type: roc_target.OutputKind,
     final_output_path: []const u8,
-    build_cache_dir: []const u8,
     platform_dir: []const u8,
     targets_config: roc_target.TargetsConfig,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
@@ -4891,7 +4892,8 @@ fn rocBuildWasmLlvm(
         unreachable;
     }
 
-    const app_object = try compileLlvmAppObject(ctx, args, build_cache_dir, .wasm32, link_type, lowered, entrypoints, false, false);
+    const app_object = try compileLlvmAppObject(ctx, args, .wasm32, link_type, lowered, entrypoints, false, false);
+    defer std.Io.Dir.cwd().deleteTree(ctx.io.std_io, app_object.artifact_dir) catch {};
 
     var owned_inputs: std.ArrayList([]u8) = .empty;
     defer freeOwnedWasmInputs(ctx, &owned_inputs);
@@ -4900,7 +4902,7 @@ fn rocBuildWasmLlvm(
     if (link_type == .archive) {
         // Archives package whatever inputs the platform declared (possibly
         // just the app); no platform wasm file is required.
-        const combined_obj = try writeCombinedLlvmWasmObject(ctx, build_cache_dir, app_object.object_path, static_data_exports, args.opt, &owned_inputs);
+        const combined_obj = try writeCombinedLlvmWasmObject(ctx, app_object.artifact_dir, app_object.object_path, static_data_exports, args.opt, &owned_inputs);
         try writeArchiveOutput(ctx, .wasm32, final_output_path, link_inputs, &.{combined_obj});
         return;
     }
@@ -4911,7 +4913,7 @@ fn rocBuildWasmLlvm(
     }
 
     if (link_inputs.wasm != null) {
-        const combined_obj = try writeCombinedLlvmWasmObject(ctx, build_cache_dir, app_object.object_path, static_data_exports, args.opt, &owned_inputs);
+        const combined_obj = try writeCombinedLlvmWasmObject(ctx, app_object.artifact_dir, app_object.object_path, static_data_exports, args.opt, &owned_inputs);
         const object_files = try ctx.arena.alloc([]const u8, 1);
         object_files[0] = combined_obj;
         const wasm_exports = try collectWasmPlatformExports(ctx, link_inputs, &owned_inputs);
@@ -4935,7 +4937,7 @@ fn rocBuildWasmLlvm(
             .wasm_global_base = if (link_inputs.wasm) |wasm| wasm.global_base else null,
             .wasm_exports = wasm_exports,
             .platform_files_dir = link_inputs.platform_files_dir,
-            .scratch_dir = build_cache_dir,
+            .scratch_dir = app_object.artifact_dir,
         };
 
         if (args.z_dump_linker) {
@@ -5018,19 +5020,6 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
         try ctx.arena.dupe(u8, output)
     else
         try base.module_path.getModuleNameAlloc(ctx.arena, args.path);
-
-    const cache_config = CacheConfig{
-        .enabled = true,
-        .verbose = false,
-        .roc_ctx = ctx.coreCtx(),
-    };
-    var cache_manager = CacheManager.init(ctx.gpa, cache_config, ctx.coreCtx());
-    const cache_dir = try cache_manager.config.getCacheEntriesDir(ctx.arena);
-    const build_cache_dir = try std.fs.path.join(ctx.arena, &.{ cache_dir, "roc_build" });
-    ensureCompilerCacheDirExists(ctx.io.std_io, build_cache_dir) catch |err| switch (err) {
-        error.PathAlreadyExists => {},
-        else => return err,
-    };
 
     const thread_count: usize = args.max_threads orelse (std.Thread.getCpuCount() catch 1);
     const mode: Mode = if (thread_count <= 1) .single_threaded else .multi_threaded;
@@ -5192,7 +5181,6 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
             args,
             link_type,
             final_output_path,
-            build_cache_dir,
             platform_dir,
             resolved_targets_config,
             &lowered,
@@ -5209,7 +5197,6 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
         const app_object = try compileLlvmAppObject(
             ctx,
             args,
-            build_cache_dir,
             target,
             link_type,
             &lowered,
@@ -5217,12 +5204,13 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
             enable_default_platform_runtime,
             args.synthetic_default_platform,
         );
+        defer std.Io.Dir.cwd().deleteTree(ctx.io.std_io, app_object.artifact_dir) catch {};
 
         var static_data_obj_path: ?[]const u8 = null;
         if (static_data_exports.len > 0) {
             var object_compiler = backend.ObjectFileCompiler.init(ctx.gpa);
             const static_obj_filename = try std.fmt.allocPrint(ctx.arena, "roc_static_data_{s}.o", .{@tagName(target)});
-            const static_obj_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, static_obj_filename });
+            const static_obj_path = try std.fs.path.join(ctx.arena, &.{ app_object.artifact_dir, static_obj_filename });
             try object_compiler.compileStaticDataObjectAndWrite(
                 static_data_exports,
                 target,
@@ -5240,7 +5228,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
             try object_files.append(path);
         }
         if (enable_default_platform_runtime) {
-            if (try writeDefaultPlatformRuntimeObject(ctx, build_cache_dir, target)) |runtime_path| {
+            if (try writeDefaultPlatformRuntimeObject(ctx, app_object.artifact_dir, target)) |runtime_path| {
                 try object_files.append(runtime_path);
             } else {
                 return error.UnsupportedTarget;
@@ -5281,7 +5269,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
                 .can_exit_early = false,
                 .disable_output = false,
                 .platform_files_dir = link_inputs.platform_files_dir,
-                .scratch_dir = build_cache_dir,
+                .scratch_dir = app_object.artifact_dir,
                 .macho_dwarf_object = if (target_os == .macos and link_type != .archive)
                     app_object.object_path
                 else
