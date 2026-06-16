@@ -11536,8 +11536,10 @@ const PlatformAppRelationTypeResolver = struct {
             };
         }
         if (self.finalizing.get(root)) |existing| return existing;
+        try self.finalizing.put(root, root);
+        errdefer _ = self.finalizing.remove(root);
 
-        return switch (root_payload) {
+        const finalized = switch (root_payload) {
             .pending => checkedArtifactInvariant("platform/app relation finalization reached pending payload", .{}),
             .flex, .rigid => unreachable,
             .empty_record,
@@ -11615,6 +11617,8 @@ const PlatformAppRelationTypeResolver = struct {
                 } });
             },
         };
+        self.finalizing.getPtr(root).?.* = finalized;
+        return finalized;
     }
 
     fn mergeAlias(
