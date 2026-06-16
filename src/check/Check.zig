@@ -15009,34 +15009,7 @@ fn runLiteralDefaultingRounds(self: *Self, env: *Env, universe: LiteralDefaultUn
                 const kind = self.varLiteralKind(driver_root) orelse unreachable;
                 try self.commitGatheredLiteral(driver_root, kind, universe, env);
             } else {
-                // Several drivers, possibly of mixed literal kinds: quote drivers
-                // take their single candidate (Str) on every attempt while the
-                // numeral candidate scan iterates its list.
-                //
-                // BOUNDARY WARNING SEMANTICS FOR GROUPS: the leak check is per
-                // literal (it walks one literal's constraint signatures), so it
-                // runs for EVERY group member pre-commit — while all drivers are
-                // still flex — and each leaking member gets its own LITERAL
-                // DEFAULTED warning post-commit, exactly as if it had committed
-                // alone. Non-leaking members default silently (def-local), and the
-                // component's passives are never committed here, matching the
-                // single-commit paths: a passive carries only literal-conversion
-                // constraints, so its leak set is empty and it could never warn.
-                group_warnings.clearRetainingCapacity();
-                if (universe == .boundary) {
-                    for (group_drivers.items) |driver| {
-                        try group_warnings.append(self.gpa, try self.boundaryWarningBeforeCommit(driver));
-                    }
-                }
-                try self.commitLiteralGroupDefault(group_drivers.items, env);
-                if (universe == .boundary) {
-                    // The group commit unified each driver with its committed var,
-                    // so the driver root itself renders the committed type for the
-                    // snapshot.
-                    for (group_drivers.items, group_warnings.items) |driver, pending| {
-                        try self.emitBoundaryWarningAfterCommit(pending, driver, driver);
-                    }
-                }
+                try self.commitGatheredGroup(group_drivers.items, &group_warnings, universe, env);
             }
         }
 
@@ -15065,6 +15038,41 @@ fn commitGatheredLiteral(
             const pending = try self.boundaryWarningBeforeCommit(root);
             const default_var = try self.commitLiteralDefault(root, kind, env);
             try self.emitBoundaryWarningAfterCommit(pending, root, default_var);
+        },
+    }
+}
+
+/// Commit a multi-driver literal component via the shared group probe — plus, at
+/// a generalization boundary, a per-driver LITERAL DEFAULTED leak warning
+/// bracketing the commit, exactly as `commitGatheredLiteral` does for the single
+/// case. `warnings_scratch` is a caller-owned reused buffer (cleared here).
+///
+/// BOUNDARY WARNING SEMANTICS FOR GROUPS: the leak check is per literal (it walks
+/// one literal's constraint signatures), so it runs for EVERY group member
+/// pre-commit — while all drivers are still flex — and each leaking member gets
+/// its own LITERAL DEFAULTED warning post-commit, exactly as if it had committed
+/// alone. Non-leaking members default silently (def-local), and the component's
+/// passives are never committed here, matching the single-commit paths.
+fn commitGatheredGroup(
+    self: *Self,
+    drivers: []const Var,
+    warnings_scratch: *std.ArrayListUnmanaged(PendingBoundaryWarning),
+    universe: LiteralDefaultUniverse,
+    env: *Env,
+) std.mem.Allocator.Error!void {
+    switch (universe) {
+        .finalize => try self.commitLiteralGroupDefault(drivers, env),
+        .boundary => {
+            warnings_scratch.clearRetainingCapacity();
+            for (drivers) |driver| {
+                try warnings_scratch.append(self.gpa, try self.boundaryWarningBeforeCommit(driver));
+            }
+            try self.commitLiteralGroupDefault(drivers, env);
+            // The group commit unified each driver with its committed var, so the
+            // driver root itself renders the committed type for the snapshot.
+            for (drivers, warnings_scratch.items) |driver, pending| {
+                try self.emitBoundaryWarningAfterCommit(pending, driver, driver);
+            }
         },
     }
 }
