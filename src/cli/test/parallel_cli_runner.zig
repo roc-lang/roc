@@ -559,6 +559,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc licenses contains =====", .body = .{ .command = .{ .args = &.{"licenses"}, .contains = &.{.{ .stream = .stdout, .text = "=====" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc fmt --check fails on unformatted file", .body = .{ .command = .{ .args = &.{ "fmt", "--check" }, .roc_file = "test/cli/needs_formatting.roc", .exit = .failure, .contains_any = &.{.{ .needles = &format_needles }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc fmt --check succeeds on well-formatted file", .body = .{ .command = .{ .args = &.{ "fmt", "--check" }, .roc_file = "test/cli/well_formatted.roc" } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc fmt --check succeeds on expression break", .body = .{ .command = .{ .args = &.{ "fmt", "--check" }, .roc_file = "test/cli/BreakExpressionInLoop.roc" } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc fmt reformats file in place", .body = .{ .custom = .fmt_reformats_file } },
     .{ .id = 0, .suite = .subcommands, .name = "roc fmt does not change well-formatted file", .body = .{ .custom = .fmt_does_not_change_file } },
     .{ .id = 0, .suite = .subcommands, .name = "roc fmt --stdin formats unformatted input", .body = .{ .custom = .fmt_stdin_formats } },

@@ -58,6 +58,18 @@ fn bytesEqual(a: []const u8, b: []const u8) bool {
     return true;
 }
 
+fn bytesIndexOf(haystack: []const u8, needle: []const u8) ?usize {
+    if (needle.len == 0) return 0;
+    if (needle.len > haystack.len) return null;
+
+    var i: usize = 0;
+    while (i + needle.len <= haystack.len) : (i += 1) {
+        if (bytesEqual(haystack[i..][0..needle.len], needle)) return i;
+    }
+
+    return null;
+}
+
 const WasmStr = struct {
     data: [*]const u8,
     data_offset: usize,
@@ -1071,7 +1083,7 @@ fn hostStrFindFirst(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]
 
     const str_slice = str.data[0..str.len];
     const delimiter_slice = delimiter.data[0..delimiter.len];
-    const maybe_index: ?usize = if (delimiter.len == 0) 0 else std.mem.indexOf(u8, str_slice, delimiter_slice);
+    const maybe_index = bytesIndexOf(str_slice, delimiter_slice);
     if (maybe_index) |index| {
         writeWasmStrViewFromStr(buffer, result_ptr + before_offset, str, 0, index);
         writeWasmStrViewFromStr(buffer, result_ptr + matched_offset, str, index, delimiter.len);

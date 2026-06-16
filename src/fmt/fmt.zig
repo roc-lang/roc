@@ -1709,6 +1709,20 @@ const Formatter = struct {
             .ellipsis => {
                 try fmt.pushAll("...");
             },
+            .@"return" => |r| {
+                try fmt.pushAll("return");
+                const body_region = fmt.nodeRegion(@intFromEnum(r.expr));
+                if (multiline and try fmt.flushCommentsBefore(body_region.start)) {
+                    fmt.curr_indent += 1;
+                    try fmt.pushIndent();
+                } else {
+                    try fmt.push(' ');
+                }
+                try fmt.formatExprDiscard(r.expr);
+            },
+            .@"break" => {
+                try fmt.pushAll("break");
+            },
             .record_builder => |rb| {
                 // Format record builder: { field: value, ... }.TypeName
                 const fields = fmt.ast.store.recordFieldSlice(rb.fields);
