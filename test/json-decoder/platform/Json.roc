@@ -148,16 +148,108 @@ parse_record_from_json = |raw, spec| {
 
 parse_tag_union_from_json : Str, ParseTagUnionSpec(a) -> Try(a, DecodeErr)
 parse_tag_union_from_json = |raw, spec| {
-	tag_split = Str.find_first(raw, ":")
+	remaining = Str.trim_start(raw)
 
-	match tag_split {
-		Ok(parts) => ParseTagUnionSpec.parse(spec, parts.before, JsonFormat.Present(parts.after), Str.is_eq, DecodeErr.MissingRequired)
-		Err(NotFound) => ParseTagUnionSpec.parse(spec, raw, JsonFormat.Present(raw), Str.is_eq, DecodeErr.MissingRequired)
+	if !Str.starts_with(remaining, "{") {
+		return Err(invalid_json)
+	}
+
+	after_open = Str.trim_start(Str.drop_prefix(remaining, "{"))
+
+	if !Str.starts_with(after_open, "\"") {
+		return Err(invalid_json)
+	}
+
+	key_split = Str.find_first(Str.drop_prefix(after_open, "\""), "\"")
+
+	match key_split {
+		Ok(key_parts) => {
+			tag_name = key_parts.before
+			after_key = Str.trim_start(key_parts.after)
+
+			if !Str.starts_with(after_key, ":") {
+				return Err(invalid_json)
+			}
+
+			payload = Str.trim_start(Str.drop_prefix(after_key, ":"))
+
+			after_payload = if Str.starts_with(payload, "{") {
+				object_end = find_object_end(payload)
+
+				match object_end {
+					Ok(end_parts) => Str.trim_start(end_parts.after)
+					Err(NotFound) => return Err(invalid_json)
+				}
+			} else if Str.starts_with(payload, "\"") {
+				value_split = Str.find_first(Str.drop_prefix(payload, "\""), "\"")
+
+				match value_split {
+					Ok(value_parts) => Str.trim_start(value_parts.after)
+					Err(NotFound) => return Err(invalid_json)
+				}
+			} else {
+				return Err(invalid_json)
+			}
+
+			if !Str.starts_with(after_payload, "}") {
+				return Err(invalid_json)
+			}
+
+			ParseTagUnionSpec.parse(spec, tag_name, JsonFormat.Present(payload), Str.is_eq, DecodeErr.MissingRequired)
+		}
+		Err(NotFound) => Err(invalid_json)
 	}
 }
 
-find_object_end : Str -> Try({ before : Str, after : Str }, [NotFound])
+find_object_end : Str -> Try({ after : Str }, [NotFound])
 find_object_end = |object_text| {
-	close_split = Str.find_first(Str.drop_prefix(object_text, "{"), "}")
-	close_split
+	var $remaining = object_text
+	var $depth = 0
+
+	while True {
+		open_split = Str.find_first($remaining, "{")
+		close_split = Str.find_first($remaining, "}")
+
+		match open_split {
+			Ok(open_parts) => {
+				match close_split {
+					Ok(close_parts) => {
+						if Str.count_utf8_bytes(open_parts.before) < Str.count_utf8_bytes(close_parts.before) {
+							$depth = $depth + 1
+							$remaining = open_parts.after
+						} else {
+							if $depth == 0 {
+								return Err(NotFound)
+							}
+
+							$depth = $depth - 1
+							$remaining = close_parts.after
+
+							if $depth == 0 {
+								return Ok({ after: $remaining })
+							}
+						}
+					}
+					Err(NotFound) => return Err(NotFound)
+				}
+			}
+			Err(NotFound) => {
+				match close_split {
+					Ok(close_parts) => {
+						if $depth == 0 {
+							return Err(NotFound)
+						}
+
+						$depth = $depth - 1
+						$remaining = close_parts.after
+
+						if $depth == 0 {
+							return Ok({ after: $remaining })
+						}
+					}
+					Err(NotFound) => return Err(NotFound)
+				}
+			}
+		}
+	}
 }

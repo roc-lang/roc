@@ -29,7 +29,6 @@ pub const StrFindFirstLayout = extern struct {
     after_offset: u32,
     before_offset: u32,
     found_offset: u32,
-    matched_offset: u32,
 };
 
 // Re-export commonly used functions
@@ -178,7 +177,7 @@ pub fn roc_builtins_str_count_utf8_bytes(str_bytes: ?[*]u8, str_len: usize, str_
     return countUtf8Bytes(s);
 }
 
-/// Wrapper: findFirst(RocStr, RocStr, *RocOps) -> { before, found, matched, after }
+/// Wrapper: findFirst(RocStr, RocStr, *RocOps) -> { before, found, after }
 pub fn roc_builtins_str_find_first(out: *anyopaque, a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize, layout: *const StrFindFirstLayout, roc_ops: *RocOps) callconv(.c) void {
     const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
     const b = RocStr{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
@@ -188,7 +187,6 @@ pub fn roc_builtins_str_find_first(out: *anyopaque, a_bytes: ?[*]u8, a_len: usiz
     @as(*RocStr, @ptrCast(@alignCast(out_bytes + layout.after_offset))).* = result.after;
     @as(*RocStr, @ptrCast(@alignCast(out_bytes + layout.before_offset))).* = result.before;
     @as(*u8, @ptrCast(@alignCast(out_bytes + layout.found_offset))).* = if (result.found) 1 else 0;
-    @as(*RocStr, @ptrCast(@alignCast(out_bytes + layout.matched_offset))).* = result.matched;
 }
 
 /// Wrapper: strCaselessAsciiEquals(RocStr, RocStr) -> bool

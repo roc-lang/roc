@@ -772,7 +772,6 @@ pub fn substringUnsafeC(
 pub const FindFirstResult = struct {
     before: RocStr,
     found: bool,
-    matched: RocStr,
     after: RocStr,
 };
 
@@ -792,17 +791,14 @@ pub fn findFirst(source: RocStr, delimiter: RocStr, roc_ops: *RocOps) FindFirstR
         return .{
             .before = RocStr.empty(),
             .found = true,
-            .matched = RocStr.empty(),
             .after = retainedSlice(source, 0, source_bytes.len, roc_ops),
         };
     }
 
     const index = std.mem.find(u8, source_bytes, delimiter_bytes) orelse {
-        source.incref(1, roc_ops);
         return .{
-            .before = source,
+            .before = RocStr.empty(),
             .found = false,
-            .matched = RocStr.empty(),
             .after = RocStr.empty(),
         };
     };
@@ -810,7 +806,6 @@ pub fn findFirst(source: RocStr, delimiter: RocStr, roc_ops: *RocOps) FindFirstR
     return .{
         .before = retainedSlice(source, 0, index, roc_ops),
         .found = true,
-        .matched = retainedSlice(source, index, delimiter_bytes.len, roc_ops),
         .after = retainedSlice(source, index + delimiter_bytes.len, source_bytes.len - index - delimiter_bytes.len, roc_ops),
     };
 }

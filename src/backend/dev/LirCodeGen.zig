@@ -492,7 +492,6 @@ fn wrapStrFindFirst(out: *anyopaque, a_bytes: ?[*]u8, a_len: usize, a_cap: usize
     @as(*RocStr, @ptrCast(@alignCast(out_bytes + find_layout.after_offset))).* = result.after;
     @as(*RocStr, @ptrCast(@alignCast(out_bytes + find_layout.before_offset))).* = result.before;
     @as(*u8, @ptrCast(@alignCast(out_bytes + find_layout.found_offset))).* = if (result.found) 1 else 0;
-    @as(*RocStr, @ptrCast(@alignCast(out_bytes + find_layout.matched_offset))).* = result.matched;
 }
 
 /// Wrapper: strCaselessAsciiEquals(RocStr, RocStr) -> bool
@@ -2818,13 +2817,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const record_idx = ret_layout_val.getStruct().idx;
                     const record_data = ls.getStructData(record_idx);
                     const fields = ls.struct_fields.sliceRange(record_data.getFields());
-                    if (fields.len != 4 or
+                    if (fields.len != 3 or
                         ls.getStructFieldLayoutByOriginalIndex(record_idx, 0) != .str or
                         ls.getStructFieldLayoutByOriginalIndex(record_idx, 1) != .str or
-                        ls.getStructFieldLayoutByOriginalIndex(record_idx, 2) != .bool or
-                        ls.getStructFieldLayoutByOriginalIndex(record_idx, 3) != .str)
+                        ls.getStructFieldLayoutByOriginalIndex(record_idx, 2) != .bool)
                     {
-                        std.debug.panic("LIR/codegen invariant violated: str_find_first expected fields after Str, before Str, found Bool, matched Str", .{});
+                        std.debug.panic("LIR/codegen invariant violated: str_find_first expected fields after Str, before Str, found Bool", .{});
                     }
 
                     const result_offset = self.codegen.allocStackSlot(record_data.size);
@@ -2838,8 +2836,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.emitStore(.w32, frame_ptr, layout_slot + 4, layout_reg);
                     try self.codegen.emitLoadImm(layout_reg, @intCast(ls.getStructFieldOffsetByOriginalIndex(record_idx, 2)));
                     try self.emitStore(.w32, frame_ptr, layout_slot + 8, layout_reg);
-                    try self.codegen.emitLoadImm(layout_reg, @intCast(ls.getStructFieldOffsetByOriginalIndex(record_idx, 3)));
-                    try self.emitStore(.w32, frame_ptr, layout_slot + 12, layout_reg);
                     self.codegen.freeGeneral(layout_reg);
 
                     var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);

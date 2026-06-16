@@ -13290,7 +13290,7 @@ fn validateDerivedParseVar(
                 try visited.put(resolved.var_, {});
                 break :blk try self.validateDerivedParseTagUnion(var_, tag_union, slot_var, err_var, constraint, env, region, visited);
             },
-            .empty_record => true,
+            .empty_record => try self.validateParseFormatMethod(slot_var, var_, .record, err_var, env, region),
             .empty_tag_union => false,
             else => false,
         },
@@ -13312,9 +13312,7 @@ fn validateDerivedParseRecord(
     visited: *std.AutoHashMap(Var, void),
 ) Allocator.Error!bool {
     const fields = self.types.getRecordFieldsSlice(fields_range);
-    if (fields.items(.var_).len != 0 and
-        !try self.validateParseFormatMethod(slot_var, record_var, .record, err_var, env, region))
-    {
+    if (!try self.validateParseFormatMethod(slot_var, record_var, .record, err_var, env, region)) {
         return false;
     }
     for (fields.items(.var_)) |field_var| {

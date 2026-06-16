@@ -4151,20 +4151,18 @@ pub const Interpreter = struct {
                 }
                 const record_idx = layout_val.getStruct().idx;
                 const fields = self.layout_store.struct_fields.sliceRange(self.layout_store.getStructData(record_idx).getFields());
-                if (fields.len != 4 or
+                if (fields.len != 3 or
                     self.layout_store.getStructFieldLayoutByOriginalIndex(record_idx, 0) != .str or
                     self.layout_store.getStructFieldLayoutByOriginalIndex(record_idx, 1) != .str or
-                    self.layout_store.getStructFieldLayoutByOriginalIndex(record_idx, 2) != .bool or
-                    self.layout_store.getStructFieldLayoutByOriginalIndex(record_idx, 3) != .str)
+                    self.layout_store.getStructFieldLayoutByOriginalIndex(record_idx, 2) != .bool)
                 {
-                    return self.runtimeError("str_find_first expected fields after Str, before Str, found Bool, matched Str");
+                    return self.runtimeError("str_find_first expected fields after Str, before Str, found Bool");
                 }
 
                 const val = try self.alloc(ll.ret_layout);
                 @memcpy(val.offset(self.layout_store.getStructFieldOffsetByOriginalIndex(record_idx, 0)).ptr[0..@sizeOf(RocStr)], std.mem.asBytes(&result.after));
                 @memcpy(val.offset(self.layout_store.getStructFieldOffsetByOriginalIndex(record_idx, 1)).ptr[0..@sizeOf(RocStr)], std.mem.asBytes(&result.before));
                 val.offset(self.layout_store.getStructFieldOffsetByOriginalIndex(record_idx, 2)).write(u8, if (result.found) 1 else 0);
-                @memcpy(val.offset(self.layout_store.getStructFieldOffsetByOriginalIndex(record_idx, 3)).ptr[0..@sizeOf(RocStr)], std.mem.asBytes(&result.matched));
                 break :blk val;
             },
             .str_count_utf8_bytes => blk: {

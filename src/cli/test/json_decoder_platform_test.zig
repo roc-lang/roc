@@ -16,6 +16,7 @@ const status_scores = [_]u64{ 11, 17 };
 const mode_values = [_][]const u8{ "Warm", "Cold" };
 const mode_scores = [_]u64{ 19, 23 };
 const empty_record_score: u64 = 29;
+const invalid_empty_record_score: u64 = 37;
 const pair_score: u64 = 31;
 
 const optional_fields = [_]OptionalField{
@@ -124,15 +125,15 @@ fn buildJson(
     try json.appendSlice(allocator, ",\n  \"token\" : \"");
     try json.appendSlice(allocator, token_input_value);
     try json.appendSlice(allocator, "\"");
-    try json.appendSlice(allocator, ",\n  \"status\" : \"");
+    try json.appendSlice(allocator, ",\n  \"status\" : { \"");
     try json.appendSlice(allocator, status_values[status_index]);
-    try json.appendSlice(allocator, "\"");
-    try json.appendSlice(allocator, ",\n  \"pair\" : \"Pair:left,right\"");
+    try json.appendSlice(allocator, "\" : {} }");
+    try json.appendSlice(allocator, ",\n  \"pair\" : { \"Pair\" : { \"first\" : \"left\", \"second\" : \"right\" } }");
     try json.appendSlice(allocator, ",\n  \"nested\" : {\n    \"bar\" : \"");
     try json.appendSlice(allocator, nested_bar_value);
-    try json.appendSlice(allocator, "\",\n    \"mode\" : \"");
+    try json.appendSlice(allocator, "\",\n    \"mode\" : { \"");
     try json.appendSlice(allocator, mode_values[mode_index]);
-    try json.appendSlice(allocator, "\"\n  }");
+    try json.appendSlice(allocator, "\" : {} }\n  }");
 
     for (optional_fields, 0..) |field, index| {
         const bit = @as(u8, 1) << @intCast(index);
@@ -155,13 +156,13 @@ fn buildMissingRequiredJson(allocator: std.mem.Allocator) anyerror![]u8 {
     errdefer json.deinit(allocator);
 
     try json.appendSlice(allocator, "{\n");
-    try json.appendSlice(allocator, "  \"status\" : \"Active\",\n");
-    try json.appendSlice(allocator, "  \"pair\" : \"Pair:left,right\",\n");
+    try json.appendSlice(allocator, "  \"status\" : { \"Active\" : {} },\n");
+    try json.appendSlice(allocator, "  \"pair\" : { \"Pair\" : { \"first\" : \"left\", \"second\" : \"right\" } },\n");
     try json.appendSlice(allocator, "  \"nested\" : {\n");
     try json.appendSlice(allocator, "    \"bar\" : \"");
     try json.appendSlice(allocator, nested_bar_value);
     try json.appendSlice(allocator, "\",\n");
-    try json.appendSlice(allocator, "    \"mode\" : \"Warm\"\n");
+    try json.appendSlice(allocator, "    \"mode\" : { \"Warm\" : {} }\n");
     try json.appendSlice(allocator, "  }\n");
     try json.appendSlice(allocator, "}\n");
 
@@ -173,6 +174,7 @@ fn expectedJsonLength(optional_mask: u8, status_index: usize, mode_index: usize)
         nested_bar_value.len +
         custom_token_value.len +
         empty_record_score +
+        invalid_empty_record_score +
         pair_score +
         status_scores[status_index] +
         mode_scores[mode_index];

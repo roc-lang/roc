@@ -12,7 +12,7 @@ main! = |json| {
 				bar : Str,
 				mode : [Warm, Cold],
 			},
-			pair : [Pair(Str, Str)],
+			pair : [Pair({ first : Str, second : Str })],
 			question_optional : Try(Str, [Missing]),
 			status : [Active, Paused],
 			token : Json.Token,
@@ -24,6 +24,9 @@ main! = |json| {
 
 	empty_result : Try({}, _)
 	empty_result = Json.parse("{}")
+
+	invalid_empty_result : Try({}, _)
+	invalid_empty_result = Json.parse("not-json")
 
 	match decoded_result {
 		Ok(decoded) => {
@@ -53,9 +56,9 @@ main! = |json| {
 			}
 
 			pair_score = match decoded.pair {
-				Pair(first, second) =>
-					if Str.is_eq(first, "left") {
-						if Str.is_eq(second, "right") {
+				Pair(payload) =>
+					if Str.is_eq(payload.first, "left") {
+						if Str.is_eq(payload.second, "right") {
 							31
 						} else {
 							999999
@@ -69,6 +72,7 @@ main! = |json| {
 				+ Str.count_utf8_bytes(decoded.nested.bar)
 				+ Json.Token.count_utf8_bytes(decoded.token)
 				+ empty_record_score(empty_result)
+				+ invalid_empty_record_score(invalid_empty_result)
 				+ explicit_optional_length
 				+ wildcard_optional_length
 				+ question_optional_length
@@ -91,4 +95,11 @@ empty_record_score = |empty_result|
 	match empty_result {
 		Ok(_) => 29
 		Err(_) => 999999
+	}
+
+invalid_empty_record_score : Try({}, _) -> U64
+invalid_empty_record_score = |invalid_empty_result|
+	match invalid_empty_result {
+		Ok(_) => 999999
+		Err(_) => 37
 	}

@@ -8201,6 +8201,12 @@ fn scanLoopExitFacts(self: *Self, body: Expr.Idx) std.mem.Allocator.Error!LoopEx
                         }
                         try pending.append(stack_allocator, .{ .expr = .{ .idx = ret.expr, .loop_depth = expr_frame.loop_depth } });
                     },
+                    .e_break => {
+                        if (expr_frame.loop_depth == 0) {
+                            facts.has_loop_owned_break = true;
+                            return facts;
+                        }
+                    },
                     .e_crash => {
                         facts.has_exit = true;
                     },

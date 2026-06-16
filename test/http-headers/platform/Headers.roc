@@ -1,9 +1,10 @@
 Headers :: [].{
 	DecodeErr := [MissingRequired, BadHeader].{}
 
-	parse : Str -> Try(output, DecodeErr) where [
-		output.parse_from : HeaderFormat -> Try({ value : output, rest : HeaderFormat }, DecodeErr),
-	]
+	parse : Str -> Try(output, DecodeErr)
+		where [
+			output.parse_from : HeaderFormat -> Try({ value : output, rest : HeaderFormat }, DecodeErr),
+		]
 	parse = |headers| {
 		Output : output
 
@@ -64,11 +65,9 @@ parse_record_from_headers = |headers, spec| {
 
 				$remaining = after
 			}
-			Err(NotFound) | Ok(_) => break
+			Err(NotFound) | Ok(_) => return ParseRecordSpec.finish(spec, $state, MissingRequired)
 		}
 	}
-
-	ParseRecordSpec.finish(spec, $state, MissingRequired)
 }
 
 parse_tag_union_from_header : Str, ParseTagUnionSpec(a) -> Try(a, Headers.DecodeErr)
@@ -96,12 +95,12 @@ header_name_matches_field = |header_name, field_name| {
 							$header_remaining = header_after
 							$field_remaining = field_after
 						} else {
-							break
+							return False
 						}
 					}
 					Err(NotFound) => {
 						# Field had a separator left but header didn't; they don't match.
-						break
+						return False
 					}
 				}
 			}
@@ -114,12 +113,10 @@ header_name_matches_field = |header_name, field_name| {
 					}
 					Ok(_) => {
 						# Header had a separator left but field didn't; they don't match.
-						break
+						return False
 					}
 				}
 			}
 		}
 	}
-
-	False
 }

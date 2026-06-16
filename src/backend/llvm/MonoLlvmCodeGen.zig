@@ -263,7 +263,6 @@ pub const MonoLlvmCodeGen = struct {
         after_offset: u32,
         before_offset: u32,
         found_offset: u32,
-        matched_offset: u32,
     };
 
     const RcHelperEntry = struct {
@@ -3001,7 +3000,6 @@ pub const MonoLlvmCodeGen = struct {
         try self.storeRawInt(layout_ptr, 0, .i32, info.after_offset, 4);
         try self.storeRawInt(layout_ptr, 4, .i32, info.before_offset, 4);
         try self.storeRawInt(layout_ptr, 8, .i32, info.found_offset, 4);
-        try self.storeRawInt(layout_ptr, 12, .i32, info.matched_offset, 4);
 
         var call_args = try self.rocStrArgs2(args[0], args[1], false);
         defer call_args.deinit(self.allocator);
@@ -4849,18 +4847,16 @@ pub const MonoLlvmCodeGen = struct {
         const record_idx = ret_layout_val.getStruct().idx;
         const record_data = self.layouts().getStructData(record_idx);
         const fields = self.layouts().struct_fields.sliceRange(record_data.getFields());
-        if (fields.len != 4) return error.CompilationFailed;
+        if (fields.len != 3) return error.CompilationFailed;
 
         if (self.layouts().getStructFieldLayoutByOriginalIndex(record_idx, 0) != .str) return error.CompilationFailed;
         if (self.layouts().getStructFieldLayoutByOriginalIndex(record_idx, 1) != .str) return error.CompilationFailed;
         if (self.layouts().getStructFieldLayoutByOriginalIndex(record_idx, 2) != .bool) return error.CompilationFailed;
-        if (self.layouts().getStructFieldLayoutByOriginalIndex(record_idx, 3) != .str) return error.CompilationFailed;
 
         return .{
             .after_offset = self.layouts().getStructFieldOffsetByOriginalIndex(record_idx, 0),
             .before_offset = self.layouts().getStructFieldOffsetByOriginalIndex(record_idx, 1),
             .found_offset = self.layouts().getStructFieldOffsetByOriginalIndex(record_idx, 2),
-            .matched_offset = self.layouts().getStructFieldOffsetByOriginalIndex(record_idx, 3),
         };
     }
 

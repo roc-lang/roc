@@ -9658,7 +9658,7 @@ list_replace_unsafe : List(item), U64, item -> { list : List(item), prev : item 
 list_swap_unsafe : List(item), U64, U64 -> List(item)
 
 # Implemented by the compiler. Returns string slices into the source string.
-str_find_first_raw : Str, Str -> { before : Str, found : Bool, matched : Str, after : Str }
+str_find_first_raw : Str, Str -> { before : Str, found : Bool, after : Str }
 
 # Implemented by the compiler. Returns 1 (otherwise 0) when List.map may reuse
 # the input list's allocation for its output: the input and output element

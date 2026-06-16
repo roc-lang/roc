@@ -1384,6 +1384,7 @@ const Builder = struct {
                             const slot_ty = try self.lowerType(view, nominal.args[1]);
                             const fields_span = switch (self.shapeContent(shape_ty)) {
                                 .record => |fields| fields,
+                                .zst => Type.Span.empty(),
                                 else => Common.invariant("checked ParseRecordState shape argument was not a record type"),
                             };
                             const fields = self.program.types.fieldSpan(fields_span);
@@ -3128,6 +3129,7 @@ const BodyContext = struct {
                     const slot_node = try self.instNode(nominal.args[1]);
                     const fields = switch (self.graph.nodes.items[@intFromEnum(shape_node)]) {
                         .record => |record| record.fields,
+                        .empty_record => &.{},
                         else => Common.invariant("checked ParseRecordState shape argument was not a record type"),
                     };
                     const slots = try self.graph.arena().alloc(NodeId, fields.len);
@@ -3934,10 +3936,6 @@ const BodyContext = struct {
         slot_ty: Type.TypeId,
         ret_ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprId {
-        if (self.builder.shapeContent(shape_ty) == .zst) {
-            return try self.lowerEmptyRecordParseFromSlot(shape_ty, slot_expr, slot_ty, ret_ty);
-        }
-
         const selected = self.parseShapeSelection(shape_ty);
         const method_name: []const u8 = if (Ident.textEql(selected.tag_text, "Str"))
             "parse_str"
@@ -3967,21 +3965,6 @@ const BodyContext = struct {
                 .args = try self.builder.program.addExprSpan(&parse_args),
             } },
         });
-    }
-
-    fn lowerEmptyRecordParseFromSlot(
-        self: *BodyContext,
-        shape_ty: Type.TypeId,
-        slot_expr: Ast.ExprId,
-        slot_ty: Type.TypeId,
-        ret_ty: Type.TypeId,
-    ) Allocator.Error!Ast.ExprId {
-        if (self.builder.shapeContent(shape_ty) != .zst) Common.invariant("empty record parse requested for a non-empty-record type");
-        const value_expr = try self.builder.program.addExpr(.{
-            .ty = shape_ty,
-            .data = .unit,
-        });
-        return try self.parseResultOk(ret_ty, value_expr, slot_expr, slot_ty);
     }
 
     fn lowerParseValueFromSlot(
@@ -4201,6 +4184,7 @@ const BodyContext = struct {
         defer self.allocator.free(state_items);
         const record_fields = try self.allocator.dupe(Type.Field, switch (self.builder.shapeContent(ret_info.ok_ty)) {
             .record => |span| self.builder.program.types.fieldSpan(span),
+            .zst => &.{},
             else => Common.invariant("ParseRecordSpec.finish Ok type was not a record"),
         });
         defer self.allocator.free(record_fields);
@@ -4260,6 +4244,7 @@ const BodyContext = struct {
         const shape_ty = try self.lowerType(self.checkedParseRecordSpecShape(spec_expr));
         return switch (self.builder.shapeContent(shape_ty)) {
             .record => |span| self.builder.program.types.fieldSpan(span),
+            .zst => &.{},
             else => Common.invariant("ParseRecordSpec shape argument was not a record type"),
         };
     }
@@ -4286,6 +4271,7 @@ const BodyContext = struct {
         if (self.typeHasBuiltinOwner(shape_ty, .str)) return .{ .tag_text = "Str" };
         return switch (self.builder.shapeContent(shape_ty)) {
             .record => .{ .tag_text = "Record" },
+            .zst => .{ .tag_text = "Record" },
             .tag_union => .{ .tag_text = "TagUnion" },
             else => Common.invariant("parse_from shape was not supported"),
         };
