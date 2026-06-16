@@ -1110,6 +1110,19 @@ test "fx platform check warns for adjacent string pattern captures" {
     try testing.expect(std.mem.find(u8, run_result.stderr, "0 error") != null);
 }
 
+test "fx platform run warns for adjacent string pattern captures without crashing" {
+    const allocator = testing.allocator;
+
+    const run_result = try util.runRoc(std.testing.io, allocator, &.{"--no-cache"}, "test/fx/string_pattern_adjacent_capture_warning.roc");
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    try util.checkFailure(run_result);
+    try testing.expect(std.mem.find(u8, run_result.stderr, "UNREACHABLE PATTERN CAPTURE") != null);
+    try testing.expect(std.mem.find(u8, run_result.stderr, "panic") == null);
+    try testing.expect(std.mem.find(u8, run_result.stderr, "Segmentation fault") == null);
+}
+
 test "fx platform method inspect on string" {
     // Tests that Str.inspect works correctly on a string value
     const allocator = testing.allocator;

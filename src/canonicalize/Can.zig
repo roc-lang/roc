@@ -12627,6 +12627,7 @@ fn canonicalizeStringPattern(
                         try self.env.pushDiagnostic(Diagnostic{ .unreachable_string_pattern_capture = .{
                             .region = self.parse_ir.tokenizedRegionToRegion(capture.region),
                         } });
+                        continue;
                     }
                     const delimiter = try self.env.insertString(current_text.items);
                     current_text.clearRetainingCapacity();

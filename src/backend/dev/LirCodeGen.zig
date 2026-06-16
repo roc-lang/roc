@@ -14652,23 +14652,22 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         ) Allocator.Error!void {
             if (delimiter.len == 0) return;
 
-            const needed_reg = try self.allocTempGeneral();
             const limit_reg = try self.allocTempGeneral();
             const candidate_reg = try self.allocTempGeneral();
-            const loaded_reg = try self.allocTempGeneral();
-            const expected_reg = try self.allocTempGeneral();
-            defer self.codegen.freeGeneral(expected_reg);
-            defer self.codegen.freeGeneral(loaded_reg);
             defer self.codegen.freeGeneral(candidate_reg);
             defer self.codegen.freeGeneral(limit_reg);
-            defer self.codegen.freeGeneral(needed_reg);
 
-            try self.codegen.emitLoadImm(needed_reg, @bitCast(@as(u64, @intCast(delimiter.len))));
-            try self.emitCmpReg(len_reg, needed_reg);
-            try miss_patches.append(self.allocator, try self.codegen.emitCondJump(condBelow()));
+            {
+                const needed_reg = try self.allocTempGeneral();
+                defer self.codegen.freeGeneral(needed_reg);
 
-            try self.emitMovRegReg(limit_reg, len_reg);
-            try self.emitSubRegs(.w64, limit_reg, limit_reg, needed_reg);
+                try self.codegen.emitLoadImm(needed_reg, @bitCast(@as(u64, @intCast(delimiter.len))));
+                try self.emitCmpReg(len_reg, needed_reg);
+                try miss_patches.append(self.allocator, try self.codegen.emitCondJump(condBelow()));
+
+                try self.emitMovRegReg(limit_reg, len_reg);
+                try self.emitSubRegs(.w64, limit_reg, limit_reg, needed_reg);
+            }
 
             const loop_start = self.codegen.currentOffset();
             try self.emitCmpReg(cursor_reg, limit_reg);
@@ -14677,20 +14676,29 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitMovRegReg(candidate_reg, bytes_reg);
             try self.emitAddRegs(.w64, candidate_reg, candidate_reg, cursor_reg);
 
-            try self.emitLoadW8(loaded_reg, candidate_reg, 0);
-            try self.codegen.emitLoadImm(expected_reg, @bitCast(@as(u64, delimiter[0])));
-            try self.emitCmpReg(loaded_reg, expected_reg);
-            const found_patch = try self.codegen.emitCondJump(condEqual());
+            const retry_patch = blk: {
+                const loaded_reg = try self.allocTempGeneral();
+                defer self.codegen.freeGeneral(loaded_reg);
 
+                try self.emitLoadW8(loaded_reg, candidate_reg, 0);
+                try self.emitCmpImm(loaded_reg, delimiter[0]);
+                break :blk try self.codegen.emitCondJump(condNotEqual());
+            };
+
+            if (delimiter.len > 1) {
+                try self.emitCompareLiteralAtPtr(candidate_reg, delimiter, miss_patches);
+            }
+
+            const found_patch = try self.codegen.emitJump();
+
+            const retry_offset = self.codegen.currentOffset();
+            self.codegen.patchJump(retry_patch, retry_offset);
             try self.emitAddUsizeImm(cursor_reg, cursor_reg, 1);
             const back_patch = try self.codegen.emitJump();
             self.codegen.patchJump(back_patch, loop_start);
 
             const found_offset = self.codegen.currentOffset();
             self.codegen.patchJump(found_patch, found_offset);
-            if (delimiter.len > 1) {
-                try self.emitCompareLiteralAtPtr(candidate_reg, delimiter, miss_patches);
-            }
         }
 
         fn emitCompareLiteralAtPtr(
