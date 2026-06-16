@@ -115,7 +115,7 @@ const listWithCapacity = list.listWithCapacity;
 const listAppendUnsafe = list.listAppendUnsafe;
 const listDecref = list.listDecref;
 const RcDropFn = *const fn (?[*]u8, *RocOps) callconv(.c) void;
-const RcIncFn = *const fn (?[*]u8, u64, *RocOps) callconv(.c) void;
+const RcIncFn = *const fn (?[*]u8, isize, *RocOps) callconv(.c) void;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // String Wrappers
