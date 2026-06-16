@@ -3537,6 +3537,16 @@ pub fn build(b: *std.Build) void {
         build_wasm_app.step.dependOn(build_test_hosts_step);
         build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_app.step);
 
+        const build_wasm_list_builtin_app = b.addRunArtifact(roc_exe);
+        build_wasm_list_builtin_app.addArgs(&.{
+            "build",
+            "test/wasm/list_builtin_static_lib_app.roc",
+            "--target=wasm32",
+            "--output=test/wasm/list_builtin_static_lib_app.wasm",
+        });
+        build_wasm_list_builtin_app.step.dependOn(build_test_hosts_step);
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_list_builtin_app.step);
+
         const build_wasm_rc_cleanup_app = b.addRunArtifact(roc_exe);
         build_wasm_rc_cleanup_app.addArgs(&.{
             "build",
@@ -3602,6 +3612,16 @@ pub fn build(b: *std.Build) void {
         if (run_args.len != 0) {
             run_wasm_test.addArgs(run_args);
         } else {
+            const run_wasm_list_builtin_test = b.addRunArtifact(wasm_test_exe);
+            run_wasm_list_builtin_test.addArgs(&.{
+                "--wasm-path",
+                "test/wasm/list_builtin_static_lib_app.wasm",
+                "--expected",
+                "ok",
+            });
+            run_wasm_list_builtin_test.step.dependOn(build_test_wasm_static_lib_runner_step);
+            run_test_wasm_static_lib_step.dependOn(&run_wasm_list_builtin_test.step);
+
             const run_wasm_rc_cleanup_test = b.addRunArtifact(wasm_test_exe);
             run_wasm_rc_cleanup_test.addArgs(&.{
                 "--wasm-path",
