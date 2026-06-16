@@ -1600,6 +1600,34 @@ test "LIR statements and procs carry resolved source locations" {
     try std.testing.expect(found_mul3);
 }
 
+test "referenced but uncalled function does not materialize a proc" {
+    const allocator = std.testing.allocator;
+
+    const source =
+        \\module [main]
+        \\
+        \\unused : U64 -> U64
+        \\unused = |n| n + 1
+        \\
+        \\main : U64
+        \\main = {
+        \\    _fn = unused
+        \\    0
+        \\}
+    ;
+
+    var lowered_source = try lowerModuleWithProcDebugNames(allocator, source, .none, true);
+    defer lowered_source.deinit(allocator);
+
+    const store = &lowered_source.lowered.lir_result.store;
+    var found_unused = false;
+    for (0..store.proc_specs.items.len) |i| {
+        const name = store.procDebugName(@enumFromInt(i)) orelse continue;
+        if (std.mem.eql(u8, name, "unused")) found_unused = true;
+    }
+    try std.testing.expect(!found_unused);
+}
+
 test "LIR statements carry source locations under optimizing inline mode" {
     const allocator = std.testing.allocator;
 

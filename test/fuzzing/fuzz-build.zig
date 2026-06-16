@@ -115,13 +115,18 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
     };
     defer gpa.free(relations);
 
+    const lir_roots = lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root_checked.root_requests.runtime_requests) catch |err| switch (err) {
+        error.OutOfMemory => @panic("OOM while selecting LIR roots"),
+    };
+    defer gpa.free(lir_roots);
+
     var lowered = lir.CheckedPipeline.lowerCheckedModulesToLir(
         gpa,
         .{
             .root = check.CheckedArtifact.loweringViewWithRelations(root_checked, relations),
             .imports = imported,
         },
-        .{ .requests = root_checked.root_requests.runtime_requests },
+        .{ .requests = lir_roots },
         .{
             .target_usize = base.target.TargetUsize.native,
             .inline_mode = .none,

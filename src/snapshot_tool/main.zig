@@ -4117,13 +4117,16 @@ fn processDevObjectSnapshot(
                     break :target_snapshot;
                 },
             };
+            const build_roots = try lir.CheckedPipeline.selectPlatformExportRoots(allocator, root_artifact.root_requests.runtime_requests);
+            defer allocator.free(build_roots);
+
             var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
                 allocator,
                 .{
                     .root = check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
                     .imports = imported_artifacts,
                 },
-                .{ .requests = root_artifact.root_requests.runtime_requests },
+                .{ .requests = build_roots, .include_static_data_exports = true },
                 .{
                     .target_usize = target_usize,
                 },
