@@ -116,6 +116,14 @@ pub const ScopeMap = struct {
                 try self.traverseExpr(module_env, while_stmt.cond, scope_end, depth + 1);
                 try self.traverseExpr(module_env, while_stmt.body, scope_end, depth + 1);
             },
+            .s_infinite_loop => |while_stmt| {
+                try self.traverseExpr(module_env, while_stmt.cond, scope_end, depth + 1);
+                try self.traverseExpr(module_env, while_stmt.body, scope_end, depth + 1);
+            },
+            .s_breakable_loop => |while_stmt| {
+                try self.traverseExpr(module_env, while_stmt.cond, scope_end, depth + 1);
+                try self.traverseExpr(module_env, while_stmt.body, scope_end, depth + 1);
+            },
             .s_expr => |expr_stmt| {
                 try self.traverseExpr(module_env, expr_stmt.expr, scope_end, depth + 1);
             },

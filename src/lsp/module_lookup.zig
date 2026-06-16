@@ -336,6 +336,16 @@ pub fn getStatementParts(stmt: CIR.Statement) StatementParts {
             .expr = w.cond,
             .expr2 = w.body,
         },
+        .s_infinite_loop => |w| .{
+            .pattern = null,
+            .expr = w.cond,
+            .expr2 = w.body,
+        },
+        .s_breakable_loop => |w| .{
+            .pattern = null,
+            .expr = w.cond,
+            .expr2 = w.body,
+        },
         .s_dbg => |d| .{
             .pattern = null,
             .expr = d.expr,
