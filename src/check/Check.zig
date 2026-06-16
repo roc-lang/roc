@@ -354,6 +354,12 @@ boundary_reachable_vars: std.AutoHashMap(Var, void),
 /// literal's constraint signatures, intersected with
 /// `boundary_reachable_vars` to detect interface leaks.
 boundary_leak_vars: std.AutoHashMap(Var, void),
+/// Debug-only literal-defaulting probe instrumentation, asserted by the
+/// refuted-count guard test. Only written under `comptime std.debug.runtime_safety`,
+/// so release builds compile the bookkeeping out entirely (no global state, no
+/// hot-path cost). Per-instance, so no cross-test synchronization concern.
+bench_probe_attempts: usize = 0,
+bench_probe_refuted: usize = 0,
 /// Param-pattern spans of every checked `e_lambda` / `e_hosted_lambda`; the
 /// pinnable collection consumes this instead of re-walking the NodeStore.
 /// Union-find roots resolve at consumption time (eager roots would go stale).
@@ -15543,17 +15549,6 @@ fn varLiteralKind(self: *Self, var_: Var) ?StaticDispatchConstraint.LiteralKind 
 // until the new kind is handled: the exhaustiveness *is* the checklist for the
 // next literal kind (e.g. strings).
 
-// Literal-defaulting probe test-support counters (PERMANENT):
-// `bench_probe_attempts` and `bench_probe_refuted` are reset and asserted by the
-// refuted-count guard test in src/check/test/type_checking_integration.zig, which
-// detects `numeralCandidateStructurallyRefuted` silently going dead (refuting
-// nothing). Zig's default test runner executes a binary's tests sequentially
-// in-process, so the reset-check-assert pattern needs no synchronization.
-/// Number of default-candidate probes attempted by literal-defaulting tests.
-pub var bench_probe_attempts: usize = 0;
-/// Number of default-candidate probes skipped by structural refutation tests.
-pub var bench_probe_refuted: usize = 0;
-
 /// Default a still-open literal var and COMMIT the result, returning the var the
 /// literal was resolved against (for the boundary warning's snapshot).
 /// Haskell-style: commit the FIRST candidate in the kind's canonical order that
@@ -15591,15 +15586,17 @@ fn commitLiteralDefault(self: *Self, literal_var: Var, kind: StaticDispatchConst
                         // counted as such below via `bench_probe_refuted`), so
                         // counting the safety-only re-probe as an attempt would make
                         // the refuted-count guard test's attempt/refuted bookkeeping
-                        // diverge between safety and release builds.
+                        // diverge between safety and release builds. Both counters are
+                        // per-instance debug-only fields, compiled out entirely in
+                        // release builds (no global state, no hot-path cost).
                         if (comptime std.debug.runtime_safety) {
                             const witness = try self.tryCommitNumeralCandidate(literal_var, candidate_kind, constraint_range, env);
                             std.debug.assert(witness == null);
+                            self.bench_probe_refuted += 1;
                         }
-                        bench_probe_refuted += 1;
                         continue;
                     }
-                    bench_probe_attempts += 1;
+                    if (comptime std.debug.runtime_safety) self.bench_probe_attempts += 1;
                     if (try self.tryCommitNumeralCandidate(literal_var, candidate_kind, constraint_range, env)) |committed_var| {
                         return committed_var;
                     }
