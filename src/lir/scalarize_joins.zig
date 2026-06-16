@@ -18,6 +18,13 @@
 //! alias chains that borrow inference turns into moves, and the wrapper
 //! disappears entirely.
 //!
+//! A join parameter that is also one of the proc's arguments (the loop header
+//! a plain tail-call elimination builds, where the proc enters the loop with a
+//! bare jump and the argument values are already in the parameter locals) is
+//! still scalarizable: its per-field parameters are seeded once on the join's
+//! remainder by reading the argument struct's fields, since that entry path
+//! carries no `initialize_join_param` write to rewrite.
+//!
 //! The pass iterates to a fixpoint so nested wrappers dissolve layer by
 //! layer. Parameters with any whole-value use, any non-literal initializer,
 //! or a shared initializer keep their shape.
@@ -186,7 +193,7 @@ const Pass = struct {
             switch (self.store.getCFStmt(current)) {
                 .join => |join_stmt| {
                     for (self.store.getLocalSpan(join_stmt.params), 0..) |param, position| {
-                        if (try self.tryScalarize(current, join_stmt, param, position)) {
+                        if (try self.tryScalarize(proc_id, current, join_stmt, param, position)) {
                             changed = true;
                             break :outer;
                         }
@@ -231,6 +238,7 @@ const Pass = struct {
 
     fn tryScalarize(
         self: *Pass,
+        proc_id: LIR.LirProcSpecId,
         join_id: LIR.CFStmtId,
         join_stmt: anytype,
         param: LIR.LocalId,
@@ -238,6 +246,17 @@ const Pass = struct {
     ) ScalarizeError!bool {
         const param_layout = self.layouts.getLayout(self.store.getLocal(param).layout_idx);
         if (param_layout.tag != .struct_) return false;
+
+        // When the parameter is also a proc argument, the proc-entry path
+        // feeds its value through the argument rather than an
+        // `initialize_join_param` write, so there is no per-field write to
+        // rewrite there. Such a parameter is still scalarizable, but the
+        // field parameters must then be seeded at entry by reading the
+        // argument struct's fields (see the seed below).
+        const param_is_proc_arg = blk: {
+            const args = self.store.getLocalSpan(self.store.getProcSpec(proc_id).args);
+            break :blk std.mem.findScalar(LIR.LocalId, args, param) != null;
+        };
         const info = self.layouts.getStructInfo(param_layout);
         var field_count: usize = 0;
         for (0..info.fields.len) |i| {
@@ -338,7 +357,45 @@ const Pass = struct {
             try self.writeFields(site.stmt, build_next, field_locals, operands);
         }
 
+        // The proc-entry path supplies a proc-argument parameter through the
+        // argument itself, not an `initialize_join_param` write, so the field
+        // parameters would otherwise be unbound on first entry. Seed them by
+        // reading the argument struct's fields in the join's remainder, which
+        // runs once before the loop body.
+        if (param_is_proc_arg) try self.seedFieldsFromArgStruct(join_id, param, field_locals);
+
         return true;
+    }
+
+    /// Prepend, to the join's remainder, one `ref.field arg[k]` read plus an
+    /// `initialize_join_param` write into the corresponding field parameter,
+    /// so the field parameters carry the argument struct's fields on the
+    /// proc-entry path. The read temporaries join the proc's frame locals.
+    fn seedFieldsFromArgStruct(
+        self: *Pass,
+        join_id: LIR.CFStmtId,
+        arg_struct: LIR.LocalId,
+        field_locals: []const LIR.LocalId,
+    ) ScalarizeError!void {
+        var next = self.store.getCFStmtPtr(join_id).join.remainder;
+        var k: usize = field_locals.len;
+        while (k > 0) {
+            k -= 1;
+            const tmp = try self.store.addLocal(.{ .layout_idx = self.store.getLocal(field_locals[k]).layout_idx });
+            try self.new_locals.append(self.allocator, tmp);
+            const set_stmt = try self.store.addCFStmt(.{ .set_local = .{
+                .target = field_locals[k],
+                .value = tmp,
+                .mode = .initialize_join_param,
+                .next = next,
+            } });
+            next = try self.store.addCFStmt(.{ .assign_ref = .{
+                .target = tmp,
+                .op = .{ .field = .{ .source = arg_struct, .field_idx = @intCast(k) } },
+                .next = set_stmt,
+            } });
+        }
+        self.store.getCFStmtPtr(join_id).join.remainder = next;
     }
 
     /// Replaces `stmt` with an `initialize_join_param` write of field 0 and
