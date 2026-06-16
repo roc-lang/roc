@@ -2842,6 +2842,32 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
+        .infinite_loop_never_exits => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "INFINITE LOOP NEVER EXITS", .warning);
+            try report.document.addReflowingText("This infinite loop has no ");
+            try report.document.addAnnotated("return", .inline_code);
+            try report.document.addReflowingText(", ");
+            try report.document.addAnnotated("?", .inline_code);
+            try report.document.addReflowingText(", ");
+            try report.document.addAnnotated("crash", .inline_code);
+            try report.document.addReflowingText(", or ");
+            try report.document.addAnnotated("break", .inline_code);
+            try report.document.addReflowingText(" that exits this loop, so it will run forever and hang the program.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
         .return_outside_fn => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 
