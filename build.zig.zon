@@ -49,7 +49,8 @@
             .lazy = true,
         },
         .bytebox = .{
-            .path = "vendor/bytebox",
+            .url = "git+https://github.com/lukewilliamboswell/bytebox.git?ref=zig-0.16.0#88a4b79230eece88030e6779f69ed9683906c02a",
+            .hash = "bytebox-0.0.1-SXc2saRyDwDEw8AkDhp4Hfmd9ZhRmMnIzS7FfzDCmc8r",
         },
         .zstd = .{
             .url = "git+https://github.com/allyourcodebase/zstd?ref=1.5.7-1#e1a501be57f42c541e8a5597e4b59a074dfd09a3", // 1.5.7-1

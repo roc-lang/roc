@@ -165,9 +165,14 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
             }
         }
         const rewritten_body = try inserter.rewritePath(body, &owned, .{});
-        const proc = store.getProcSpecPtr(emit_proc);
-        proc.body = rewritten_body;
-        try inserter.writeProcJoinPoints(proc);
+        // `rewritePath` may append mode-specialized proc variants via
+        // `addProcSpec`, which can reallocate `store.proc_specs` and invalidate
+        // the `proc` pointer captured above. Re-fetch the slot before writing
+        // the rewritten body and join points so they land in the live backing
+        // storage rather than a freed buffer.
+        const proc_after = store.getProcSpecPtr(emit_proc);
+        proc_after.body = rewritten_body;
+        try inserter.writeProcJoinPoints(proc_after);
     }
 
     if (builtin.mode == .Debug) {

@@ -88,6 +88,10 @@ pub const Diagnostic = union(enum) {
     expr_not_canonicalized: struct {
         region: Region,
     },
+    /// Range operators are non-associative: `a..<b..<c` is not allowed.
+    range_op_chained: struct {
+        region: Region,
+    },
     invalid_string_interpolation: struct {
         region: Region,
     },
@@ -437,6 +441,7 @@ pub const Diagnostic = union(enum) {
             .return_outside_fn => |d| d.region,
             .mutually_recursive_type_aliases => |d| d.region,
             .deprecated_number_suffix => |d| d.region,
+            .range_op_chained => |d| d.region,
         };
     }
 

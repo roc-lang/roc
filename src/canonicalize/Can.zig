@@ -516,6 +516,40 @@ fn insertQualifiedIdent(self: *Self, parent: []const u8, child: []const u8) std.
     return try self.env.insertIdent(Ident.for_text(qualified));
 }
 
+/// Synthesize the `e_lookup_external` func node for an associated function on the
+/// auto-imported `Iter` type (`Iter.exclusive_range` / `Iter.inclusive_range`).
+///
+/// Mirrors the auto-imported-type resolution path in `prepareModuleQualifiedLookup`,
+/// but is driven by interned text rather than a parsed qualified-ident token chain —
+/// which lets range desugaring build the same func node a written `Iter.member(...)`
+/// call would produce. Returns null only if the member can't be resolved, which would
+/// indicate the builtin constructor is missing.
+fn synthesizeIterMemberLookup(
+    self: *Self,
+    member_text: []const u8,
+    region: Region,
+) std.mem.Allocator.Error!?Expr.Idx {
+    const info = self.lookupAvailableModuleEnv(self.env.idents.iter) orelse return null;
+    if (info.statement_idx == null) return null;
+
+    const module_env = info.env;
+    const import_idx = try self.getOrCreateAutoImportedTypeImport(info, self.env.idents.iter);
+
+    const qualified_type_text = self.env.getIdent(info.qualified_type_ident);
+    const qualified_method_name = try self.insertQualifiedIdent(qualified_type_text, member_text);
+    const qualified_text = self.env.getIdent(qualified_method_name);
+
+    const method_ident_idx = module_env.common.findIdent(qualified_text) orelse return null;
+    const method_node_idx = module_env.getExposedValueNodeIndexById(method_ident_idx) orelse return null;
+
+    return try self.env.addExpr(CIR.Expr{ .e_lookup_external = .{
+        .module_idx = import_idx,
+        .target_node_idx = method_node_idx,
+        .ident_idx = qualified_method_name,
+        .region = region,
+    } }, region);
+}
+
 /// Deinitialize canonicalizer resources
 pub fn deinit(
     self: *Self,
@@ -10102,6 +10136,51 @@ fn runExprKernel(
                 .OpDoubleSlash => .div_trunc,
                 .OpAnd => .@"and",
                 .OpOr => .@"or",
+                .OpDoubleDotLessThan, .OpDoubleDotEquals => {
+                    // Range syntax desugars to a plain call of the generic
+                    // `Iter` constructor — the same func node a written
+                    // `Iter.exclusive_range(start, end)` would canonicalize to.
+
+                    // Reject chained ranges (`a..<b..<c`) by inspecting the AST
+                    // lhs before desugaring loses the operator structure.
+                    const ast_lhs = self.parse_ir.store.getExpr(state.bin_op.left);
+                    if (ast_lhs == .bin_op) {
+                        const lhs_op_tag = self.parse_ir.tokens.tokens.get(ast_lhs.bin_op.operator).tag;
+                        if (lhs_op_tag == .OpDoubleDotLessThan or lhs_op_tag == .OpDoubleDotEquals) {
+                            const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .range_op_chained = .{
+                                .region = state.region,
+                            } });
+                            child_slots.shrinkRetainingCapacity(result_start);
+                            try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() });
+                            continue :expr_kernel_loop .dispatch;
+                        }
+                    }
+
+                    const member_text: []const u8 = if (op_token.tag == .OpDoubleDotLessThan)
+                        "exclusive_range"
+                    else
+                        "inclusive_range";
+
+                    const range_expr_idx = if (try self.synthesizeIterMemberLookup(member_text, state.region)) |func_expr_idx| blk: {
+                        const scratch_top = self.env.store.scratchExprTop();
+                        try self.env.store.addScratchExpr(can_lhs.idx);
+                        try self.env.store.addScratchExpr(can_rhs.idx);
+                        const args_span = try self.env.store.exprSpanFrom(scratch_top);
+
+                        break :blk try self.env.addExpr(Expr{ .e_call = .{
+                            .func = func_expr_idx,
+                            .args = args_span,
+                            .called_via = .range,
+                        } }, state.region);
+                    } else try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
+                        .region = state.region,
+                    } });
+
+                    const range_free_vars = self.scratch_free_vars.spanFrom(state.free_vars_start);
+                    child_slots.shrinkRetainingCapacity(result_start);
+                    try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = range_expr_idx, .free_vars = range_free_vars });
+                    continue :expr_kernel_loop .dispatch;
+                },
                 .OpCaret, .OpPizza => {
                     const feature = try self.env.insertString("unsupported operator");
                     const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
@@ -12611,13 +12690,13 @@ fn canonicalizeStringPattern(
 /// {
 ///     #interp_0 = x
 ///     #interp_1 = y
-///     <interpolation first="a" rest=[].iter().prepended((#interp_1, "c")).prepended((#interp_0, "b"))>
+///     <interpolation first="a" parts=[#interp_0, "b", #interp_1, "c"]>
 /// }
 /// ```
 /// The interpolated expressions bind to locals first so they evaluate in
-/// source order; the iterator yields each interpolated value paired with the
-/// literal `Str` segment that follows it. With a type suffix, the final
-/// expression is a direct call to `Suffix.from_interpolation(first, rest)`.
+/// source order. The checker turns `parts` into the generated `Iter` argument
+/// for custom interpolation dispatch. With a type suffix, the same
+/// interpolation node is recorded with an explicit suffix target.
 fn desugarInterpolatedString(
     self: *Self,
     span: CIR.Expr.Span,
@@ -12696,85 +12775,38 @@ fn desugarInterpolatedString(
         seg_exprs[i] = segment_idx;
     }
 
-    const iter_method = try self.env.insertIdent(Ident.for_text("iter"));
-    const prepended_method = try self.env.insertIdent(Ident.for_text("prepended"));
-    const from_interpolation_method = try self.env.insertIdent(Ident.for_text("from_interpolation"));
-
-    // [].iter()
-    const empty_list_idx = try self.env.addExpr(CIR.Expr{ .e_empty_list = .{} }, region);
-    var chain_idx = try self.addSyntheticMethodCall(empty_list_idx, iter_method, &.{}, region);
     const part_exprs = try gpa.alloc(Expr.Idx, interps.items.len * 2);
     defer gpa.free(part_exprs);
 
-    // Prepend (interpolation, following-segment) pairs back to front so the
-    // iterator yields them in source order.
-    var pair_i = interps.items.len;
-    while (pair_i > 0) {
-        pair_i -= 1;
+    for (interps.items, 0..) |_, pair_i| {
         const interp_region = self.env.store.getNodeRegion(ModuleEnv.nodeIdxFrom(interps.items[pair_i]));
         const tmp_lookup_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{
             .pattern_idx = tmp_patterns[pair_i],
         } }, interp_region);
         part_exprs[pair_i * 2] = tmp_lookup_idx;
         part_exprs[pair_i * 2 + 1] = seg_exprs[pair_i + 1];
-        const elems_top = self.env.store.scratchExprTop();
-        try self.env.store.addScratchExpr(tmp_lookup_idx);
-        try self.env.store.addScratchExpr(seg_exprs[pair_i + 1]);
-        const elems_span = try self.env.store.exprSpanFrom(elems_top);
-        const pair_idx = try self.env.addExpr(CIR.Expr{ .e_tuple = .{
-            .elems = elems_span,
-        } }, interp_region);
-        chain_idx = try self.addSyntheticMethodCall(chain_idx, prepended_method, &.{pair_idx}, interp_region);
     }
     const parts_span = try self.env.store.appendExprSpan(part_exprs);
 
-    const final_idx = if (type_ident) |suffix_ident| suffix_blk: {
-        const fn_expr = try self.canonicalizeTypeAssociatedLookup(suffix_ident, from_interpolation_method, region) orelse
-            try self.canonicalizedMalformedExpr(Diagnostic{ .undeclared_type = .{
+    const final_idx = try self.env.addExpr(CIR.Expr{ .e_interpolation = .{
+        .first = seg_exprs[0],
+        .parts = parts_span,
+        .method_name_region = region,
+    } }, region);
+
+    if (type_ident) |suffix_ident| {
+        if ((try self.scopeLookupOrPrepareTypeBinding(suffix_ident)) == null) {
+            return try self.env.pushMalformed(Expr.Idx, Diagnostic{ .undeclared_type = .{
                 .name = suffix_ident,
                 .region = region,
             } });
-
-        const args_top = self.env.store.scratchExprTop();
-        try self.env.store.addScratchExpr(seg_exprs[0]);
-        try self.env.store.addScratchExpr(chain_idx);
-        const args_span = try self.env.store.exprSpanFrom(args_top);
-
-        break :suffix_blk try self.env.addExpr(CIR.Expr{ .e_call = .{
-            .func = fn_expr.idx,
-            .args = args_span,
-            .called_via = CalledVia.apply,
-        } }, region);
-    } else try self.env.addExpr(CIR.Expr{ .e_interpolation = .{
-        .first = seg_exprs[0],
-        .parts = parts_span,
-        .rest = chain_idx,
-        .method_name_region = region,
-    } }, region);
+        }
+        try self.recordTypedNumericSuffix(final_idx, suffix_ident);
+    }
 
     return try self.env.addExpr(CIR.Expr{ .e_block = .{
         .stmts = stmts_span,
         .final_expr = final_idx,
-    } }, region);
-}
-
-fn addSyntheticMethodCall(
-    self: *Self,
-    receiver: Expr.Idx,
-    method_name: Ident.Idx,
-    args: []const Expr.Idx,
-    region: Region,
-) std.mem.Allocator.Error!Expr.Idx {
-    const args_top = self.env.store.scratchExprTop();
-    for (args) |arg| {
-        try self.env.store.addScratchExpr(arg);
-    }
-    const args_span = try self.env.store.exprSpanFrom(args_top);
-    return try self.env.addExpr(CIR.Expr{ .e_method_call = .{
-        .receiver = receiver,
-        .method_name = method_name,
-        .method_name_region = region,
-        .args = args_span,
     } }, region);
 }
 

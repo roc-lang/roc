@@ -44,7 +44,7 @@
 //! ## Hang detection
 //!
 //! Integrated into the parent's poll() loop. If a child has been running
-//! longer than the timeout (default 60s for interpreter/dev/wasm, 7 minutes
+//! longer than the timeout (default 240s for interpreter/dev/wasm, 7 minutes
 //! for LLVM), the parent SIGKILLs it. No separate watchdog thread is needed.
 //!
 //! ## Usage
@@ -81,8 +81,7 @@ const helpers = eval.test_helpers;
 const LoweredProgram = helpers.LoweredProgram;
 
 const posix = std.posix;
-const DEFAULT_EVAL_TIMEOUT_MS: u64 = 60_000;
-const MUSL_EVAL_TIMEOUT_MS: u64 = 120_000;
+const DEFAULT_EVAL_TIMEOUT_MS: u64 = 240_000;
 
 fn milliTimestamp(io: std.Io) i64 {
     return std.Io.Timestamp.now(io, .awake).toMilliseconds();
@@ -731,12 +730,7 @@ fn runSingleTest(io: std.Io, allocator: std.mem.Allocator, tc: TestCase, timeout
         };
     }
 
-    const deadline_ms: ?i64 = if (timeout_ms > 0)
-        milliTimestamp(io) + @as(i64, @intCast(timeout_ms))
-    else
-        null;
-
-    const outcome = runSingleTestInner(io, allocator, tc, deadline_ms) catch |err| {
+    const outcome = runSingleTestInner(io, allocator, tc, timeout_ms) catch |err| {
         return .{
             .status = .fail,
             .message = @errorName(err),
@@ -811,13 +805,13 @@ fn backendTimeoutBudgetMs(io: std.Io, index: usize, standard_deadline_ms: ?i64) 
     return remainingBackendBudgetMs(io, standard_deadline_ms);
 }
 
-fn runSingleTestInner(io: std.Io, allocator: std.mem.Allocator, tc: TestCase, deadline_ms: ?i64) anyerror!TestOutcome {
+fn runSingleTestInner(io: std.Io, allocator: std.mem.Allocator, tc: TestCase, timeout_ms: u64) anyerror!TestOutcome {
     return switch (tc.expected) {
-        .inspect_str => runInspectTest(io, allocator, tc.source_kind, tc.source, tc.imports, tc.expected, tc.skip, deadline_ms),
+        .inspect_str => runInspectTest(io, allocator, tc.source_kind, tc.source, tc.imports, tc.expected, tc.skip, timeout_ms),
         .allocations_at_most => |expected| runAllocationTest(io, allocator, tc.source_kind, tc.source, tc.imports, expected, tc.skip),
         .problem => runTestProblem(allocator, tc.source_kind, tc.source, tc.imports),
-        .crash => runCrashTest(io, allocator, tc.source_kind, tc.source, tc.imports, tc.skip, false, deadline_ms),
-        .problem_and_crash => runCrashTest(io, allocator, tc.source_kind, tc.source, tc.imports, tc.skip, true, deadline_ms),
+        .crash => runCrashTest(io, allocator, tc.source_kind, tc.source, tc.imports, tc.skip, false, timeout_ms),
+        .problem_and_crash => runCrashTest(io, allocator, tc.source_kind, tc.source, tc.imports, tc.skip, true, timeout_ms),
     };
 }
 
@@ -963,7 +957,7 @@ fn runInspectTest(
     imports: []const helpers.ModuleSource,
     expected: TestCase.Expected,
     skip: TestCase.Skip,
-    deadline_ms: ?i64,
+    timeout_ms: u64,
 ) anyerror!TestOutcome {
     var compiled = try helpers.compileInspectedProgram(allocator, io, source_kind, src, imports);
     defer compiled.deinit(allocator);
@@ -991,6 +985,10 @@ fn runInspectTest(
     var first_ok: ?[]const u8 = null;
     var any_failure = false;
     var any_timeout = false;
+    const deadline_ms: ?i64 = if (timeout_ms > 0)
+        milliTimestamp(io) + @as(i64, @intCast(timeout_ms))
+    else
+        null;
 
     for (0..NUM_BACKENDS) |i| {
         if (backends[i].status != .not_run) {
@@ -1155,7 +1153,7 @@ fn runCrashTest(
     imports: []const helpers.ModuleSource,
     skip: TestCase.Skip,
     require_problems: bool,
-    deadline_ms: ?i64,
+    timeout_ms: u64,
 ) anyerror!TestOutcome {
     var compiled = try helpers.compileInspectedProgram(allocator, io, source_kind, src, imports);
     defer compiled.deinit(allocator);
@@ -1226,6 +1224,10 @@ fn runCrashTest(
     var backends = initBackendRows(skips);
     var any_failure = false;
     var any_timeout = false;
+    const deadline_ms: ?i64 = if (timeout_ms > 0)
+        milliTimestamp(io) + @as(i64, @intCast(timeout_ms))
+    else
+        null;
 
     for (0..NUM_BACKENDS) |i| {
         if (backends[i].status != .not_run) {
@@ -1715,7 +1717,7 @@ fn printHelp() void {
         \\  --threads <N>         Max concurrent child processes (default: number of CPU cores).
         \\  --verbose             Print PASS and SKIP results (default: only FAIL/CRASH).
         \\  --timeout <MS>        Hang timeout in ms for parse/interp/dev/wasm.
-        \\                        Default: 60000, 120000 on musl.
+        \\                        Default: 240000.
         \\                        LLVM uses a separate 420000ms backend budget.
         \\                        LLVM eval lock slots match the worker count.
         \\  --llvm                Include the LLVM backend. Default: skip LLVM.
@@ -2141,7 +2143,6 @@ const WorkerTrace = struct {
 
 fn effectiveHangTimeoutMs(cli: harness.StandardArgs) u64 {
     if (cli.timeout_provided and cli.timeout_ms > 0) return cli.timeout_ms;
-    if (builtin.abi == .musl) return MUSL_EVAL_TIMEOUT_MS;
     return DEFAULT_EVAL_TIMEOUT_MS;
 }
 

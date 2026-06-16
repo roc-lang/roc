@@ -3385,6 +3385,11 @@ fn runExprStatementKernel(
                     .region = .{ .start = expr_finish_state.start, .end = self.pos },
                 } });
                 continue :expr_kernel .suffix;
+            } else if (tok == .DoubleDot) {
+                self.advance();
+                const expr_idx = try self.pushMalformed(AST.Expr.Idx, .expr_double_dot_is_not_range, self.pos);
+                expr_finish_state = .{ .start = expr_finish_state.start, .min_bp = expr_finish_state.min_bp, .expr = expr_idx };
+                continue :expr_kernel .suffix;
             } else if (tok_int < @intFromEnum(Token.Tag.OpArrow)) {
                 // Not an expression suffix.
             } else if (tok_int <= @intFromEnum(Token.Tag.OpFatArrow)) {
@@ -6209,21 +6214,30 @@ const bin_op_bp_table = blk: {
     const start = @intFromEnum(Token.Tag.OpPlus);
     const len = @intFromEnum(Token.Tag.OpEquals) - start + 1;
     var table = [_]BinOpBp{no_bin_op_bp} ** len;
-    table[@intFromEnum(Token.Tag.OpStar) - start] = .{ .left = 30, .right = 31 };
-    table[@intFromEnum(Token.Tag.OpSlash) - start] = .{ .left = 28, .right = 29 };
-    table[@intFromEnum(Token.Tag.OpDoubleSlash) - start] = .{ .left = 26, .right = 27 };
-    table[@intFromEnum(Token.Tag.OpPercent) - start] = .{ .left = 24, .right = 25 };
-    table[@intFromEnum(Token.Tag.OpPlus) - start] = .{ .left = 20, .right = 21 };
-    table[@intFromEnum(Token.Tag.OpBinaryMinus) - start] = .{ .left = 20, .right = 21 };
-    table[@intFromEnum(Token.Tag.OpDoubleQuestion) - start] = .{ .left = 18, .right = 19 };
-    table[@intFromEnum(Token.Tag.OpEquals) - start] = .{ .left = 15, .right = 15 };
-    table[@intFromEnum(Token.Tag.OpNotEquals) - start] = .{ .left = 13, .right = 13 };
-    table[@intFromEnum(Token.Tag.OpLessThan) - start] = .{ .left = 11, .right = 11 };
-    table[@intFromEnum(Token.Tag.OpGreaterThan) - start] = .{ .left = 9, .right = 9 };
-    table[@intFromEnum(Token.Tag.OpLessThanOrEq) - start] = .{ .left = 7, .right = 7 };
-    table[@intFromEnum(Token.Tag.OpGreaterThanOrEq) - start] = .{ .left = 5, .right = 5 };
-    table[@intFromEnum(Token.Tag.OpAnd) - start] = .{ .left = 4, .right = 3 };
-    table[@intFromEnum(Token.Tag.OpOr) - start] = .{ .left = 2, .right = 1 };
+    table[@intFromEnum(Token.Tag.OpStar) - start] = .{ .left = 32, .right = 33 };
+    table[@intFromEnum(Token.Tag.OpSlash) - start] = .{ .left = 30, .right = 31 };
+    table[@intFromEnum(Token.Tag.OpDoubleSlash) - start] = .{ .left = 28, .right = 29 };
+    table[@intFromEnum(Token.Tag.OpPercent) - start] = .{ .left = 26, .right = 27 };
+    table[@intFromEnum(Token.Tag.OpPlus) - start] = .{ .left = 22, .right = 23 };
+    table[@intFromEnum(Token.Tag.OpBinaryMinus) - start] = .{ .left = 22, .right = 23 };
+    table[@intFromEnum(Token.Tag.OpDoubleQuestion) - start] = .{ .left = 20, .right = 21 };
+    table[@intFromEnum(Token.Tag.OpEquals) - start] = .{ .left = 17, .right = 17 };
+    table[@intFromEnum(Token.Tag.OpNotEquals) - start] = .{ .left = 15, .right = 15 };
+    table[@intFromEnum(Token.Tag.OpLessThan) - start] = .{ .left = 13, .right = 13 };
+    table[@intFromEnum(Token.Tag.OpGreaterThan) - start] = .{ .left = 11, .right = 11 };
+    table[@intFromEnum(Token.Tag.OpLessThanOrEq) - start] = .{ .left = 9, .right = 9 };
+    table[@intFromEnum(Token.Tag.OpGreaterThanOrEq) - start] = .{ .left = 7, .right = 7 };
+    table[@intFromEnum(Token.Tag.OpAnd) - start] = .{ .left = 6, .right = 5 };
+    table[@intFromEnum(Token.Tag.OpOr) - start] = .{ .left = 4, .right = 3 };
+    // Ranges are the loosest binary operators. left < right makes them
+    // non-associative (a range cannot nest into its own right operand, so
+    // `a..<b..<c` parses left-associatively for canonicalization to reject).
+    // right = 3 also means a range cannot be the unparenthesized right operand
+    // of `or` (left = 4, right = 3): the expected form is `(a or b)..<c`, not
+    // `a or (1..<5)`. Conversely a range DOES swallow `or` on its own right
+    // side, so `a..<b or c` parses as `a..<(b or c)` (range is the loosest op).
+    table[@intFromEnum(Token.Tag.OpDoubleDotLessThan) - start] = .{ .left = 2, .right = 3 };
+    table[@intFromEnum(Token.Tag.OpDoubleDotEquals) - start] = .{ .left = 2, .right = 3 };
     break :blk table;
 };
 

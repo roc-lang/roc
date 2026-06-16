@@ -90,7 +90,7 @@ comptime {
         std.testing.refAllDecls(platform_validation);
         std.testing.refAllDecls(cli_context);
         std.testing.refAllDecls(cli_problem);
-        std.testing.refAllDecls(@import("stack_probe.zig"));
+        std.testing.refAllDecls(@import("embedded_lld").stack_probe);
         std.testing.refAllDecls(@import("ReplLine.zig"));
     }
 }
@@ -1642,7 +1642,7 @@ fn rocRun(ctx: *CliCtx, args: cli_args.RunArgs) anyerror!void {
     // host executable. The same lowered root metadata supplies the platform
     // entrypoint names used by the shim, so `roc run` does not rediscover roots
     // from platform source syntax after checking.
-    const shm_result = try buildLirImageWithCoordinator(ctx, args.path, null, args.max_threads, resolutionConfigFromLimits(args.resolve_limits));
+    const shm_result = try buildLirImageWithCoordinator(ctx, args.path, null, args.max_threads, debugEffectsForOpt(args.opt), resolutionConfigFromLimits(args.resolve_limits));
     const shm_handle = shm_result.handle;
     defer closeSharedMemoryHandle(shm_handle);
 
@@ -2018,7 +2018,7 @@ fn rocRunDefaultApp(ctx: *CliCtx, args: cli_args.RunArgs, original_source: []con
     };
 
     const original_source_dir = std.fs.path.dirname(args.path) orelse ".";
-    const shm_result = try buildLirImageWithCoordinator(ctx, app_path, original_source_dir, args.max_threads, resolutionConfigFromLimits(args.resolve_limits));
+    const shm_result = try buildLirImageWithCoordinator(ctx, app_path, original_source_dir, args.max_threads, debugEffectsForOpt(args.opt), resolutionConfigFromLimits(args.resolve_limits));
     defer closeSharedMemoryHandle(shm_result.handle);
 
     if (shm_result.error_count > 0) {
@@ -2538,6 +2538,7 @@ pub fn buildLirImageWithCoordinator(
     roc_file_path: []const u8,
     source_dir_override: ?[]const u8,
     max_threads: ?usize,
+    debug_effects: lir.CheckedPipeline.DebugEffectMode,
     resolution_config: compile.package_resolution.Config,
 ) anyerror!SharedMemoryResult {
     // Create shared memory with SharedMemoryAllocator, trying progressively smaller
@@ -2707,6 +2708,7 @@ pub fn buildLirImageWithCoordinator(
         .{ .requests = root_artifact.root_requests.runtime_requests },
         .{
             .target_usize = base.target.TargetUsize.native,
+            .debug_effects = debug_effects,
         },
     );
 
@@ -2737,7 +2739,7 @@ pub fn buildLirImageWithCoordinator(
 /// Wrapper around buildLirImageWithCoordinator for callers that pass allow_errors.
 /// The allow_errors flag is handled by the caller; this function ignores it.
 pub fn setupSharedMemoryWithCoordinator(ctx: *CliCtx, roc_file_path: []const u8, _: bool) anyerror!SharedMemoryResult {
-    return buildLirImageWithCoordinator(ctx, roc_file_path, null, null, .{});
+    return buildLirImageWithCoordinator(ctx, roc_file_path, null, null, .run, .{});
 }
 
 /// Platform resolution result containing the platform source path
@@ -4579,6 +4581,66 @@ fn staticDataLinkRootSymbols(
     return symbols.items;
 }
 
+fn sharedLibraryAppExports(
+    ctx: *CliCtx,
+    entrypoints: []const backend.Entrypoint,
+    static_data_exports: []const backend.StaticDataExport,
+) Allocator.Error![]const []const u8 {
+    var symbols = try std.array_list.Managed([]const u8).initCapacity(
+        ctx.arena,
+        entrypoints.len + static_data_exports.len,
+    );
+
+    for (entrypoints) |entrypoint| {
+        try symbols.append(entrypoint.symbol_name);
+    }
+    for (static_data_exports) |data_export| {
+        if (!data_export.is_global) continue;
+        try symbols.append(data_export.symbol_name);
+    }
+
+    return symbols.items;
+}
+
+fn appendUniqueSharedLibraryExport(
+    seen: *std.StringHashMap(void),
+    symbols: *std.array_list.Managed([]const u8),
+    symbol: []const u8,
+) Allocator.Error!void {
+    if (symbol.len == 0) return;
+    const gop = try seen.getOrPut(symbol);
+    if (gop.found_existing) return;
+    try symbols.append(symbol);
+}
+
+/// Symbols a shared-library link must export: app-provided symbols plus host
+/// input exports, so the final library exposes its explicit public ABI on every
+/// target. Empty for non-shared output.
+fn sharedLibraryExports(
+    ctx: *CliCtx,
+    link_type: roc_target.OutputKind,
+    link_inputs: PlatformLinkInputs,
+    app_export_symbols: []const []const u8,
+) Allocator.Error![]const []const u8 {
+    if (link_type != .shared) return &.{};
+
+    const host_export_symbols = try host_symbols.collectHostExports(ctx.arena, ctx.io.std_io, try hostInputPaths(ctx, link_inputs));
+    var seen = std.StringHashMap(void).init(ctx.arena);
+    var symbols = try std.array_list.Managed([]const u8).initCapacity(
+        ctx.arena,
+        app_export_symbols.len + host_export_symbols.len,
+    );
+
+    for (app_export_symbols) |symbol| {
+        try appendUniqueSharedLibraryExport(&seen, &symbols, symbol);
+    }
+    for (host_export_symbols) |symbol| {
+        try appendUniqueSharedLibraryExport(&seen, &symbols, symbol);
+    }
+
+    return symbols.items;
+}
+
 fn llvmOptimizationLevel(opt: cli_args.OptLevel) builder.OptimizationLevel {
     return switch (opt) {
         .size => .size,
@@ -4669,11 +4731,12 @@ fn compileLlvmAppObject(
         std_target,
     );
     codegen.layout_store = &lowered.lir_result.layouts;
-    codegen.emit_debug_info = true;
-    codegen.emit_local_debug_info = args.debug;
+    const emit_debug_info = args.debug;
+    codegen.emit_debug_info = emit_debug_info;
+    codegen.emit_local_debug_info = emit_debug_info;
     codegen.enable_default_platform_runtime = enable_default_platform_runtime;
     codegen.enable_default_platform_hosted_calls = enable_default_platform_hosted_calls;
-    codegen.enable_default_platform_diagnostics = enable_default_platform_hosted_calls and args.debug;
+    codegen.enable_default_platform_diagnostics = enable_default_platform_hosted_calls and emit_debug_info;
     codegen.debug_producer = "roc " ++ build_options.compiler_version;
     defer codegen.deinit();
 
@@ -4696,13 +4759,14 @@ fn compileLlvmAppObject(
     // separate from exe objects in the build cache.
     const pic = link_type == .shared;
     const kind_suffix: []const u8 = if (pic) "_pic" else "";
+    const debug_suffix: []const u8 = if (emit_debug_info) "_debug" else "";
     var tuning_hash = std.hash.Crc32.init();
     tuning_hash.update(llvm_cpu);
     tuning_hash.update(&[_]u8{0});
     tuning_hash.update(llvm_features);
     const tuning_hash_value = tuning_hash.final();
-    const bitcode_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_llvm_{s}_{s}_{x}{s}.bc", .{ target_name, opt_name, tuning_hash_value, kind_suffix });
-    const object_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_llvm_{s}_{s}_{x}{s}.o", .{ target_name, opt_name, tuning_hash_value, kind_suffix });
+    const bitcode_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_llvm_{s}_{s}_{x}{s}{s}.bc", .{ target_name, opt_name, tuning_hash_value, kind_suffix, debug_suffix });
+    const object_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_llvm_{s}_{s}_{x}{s}{s}.o", .{ target_name, opt_name, tuning_hash_value, kind_suffix, debug_suffix });
     const bitcode_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, bitcode_filename });
     const object_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, object_filename });
 
@@ -5094,6 +5158,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
         .{
             .target_usize = target_usize,
             .inline_mode = postCheckInlineModeForOpt(args.opt),
+            .debug_effects = debugEffectsForOpt(args.opt),
             .list_in_place_map = listInPlaceMapForOpt(args.opt),
             .proc_debug_names = args.synthetic_default_platform,
         },
@@ -5194,6 +5259,8 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
             );
 
             const force_undefined_symbols = try staticDataLinkRootSymbols(ctx, static_data_exports);
+            const app_export_symbols = try sharedLibraryAppExports(ctx, entrypoints, static_data_exports);
+            const export_symbols = try sharedLibraryExports(ctx, link_type, link_inputs, app_export_symbols);
 
             const link_config = linker.LinkConfig{
                 .target_format = linker.TargetFormat.detectFromOs(target_os),
@@ -5210,6 +5277,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
                 .platform_files_post = link_inputs.platform_files_post,
                 .extra_args = &.{},
                 .force_undefined_symbols = force_undefined_symbols,
+                .export_symbols = export_symbols,
                 .can_exit_early = false,
                 .disable_output = false,
                 .platform_files_dir = link_inputs.platform_files_dir,
@@ -5409,6 +5477,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
         .{
             .target_usize = target_usize,
             .inline_mode = postCheckInlineModeForOpt(args.opt),
+            .debug_effects = debugEffectsForOpt(args.opt),
             .list_in_place_map = listInPlaceMapForOpt(args.opt),
             .proc_debug_names = args.synthetic_default_platform,
         },
@@ -5528,6 +5597,8 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
         );
 
         const force_undefined_symbols = try staticDataLinkRootSymbols(ctx, static_data_exports);
+        const app_export_symbols = try sharedLibraryAppExports(ctx, entrypoints, static_data_exports);
+        const export_symbols = try sharedLibraryExports(ctx, link_type, link_inputs, app_export_symbols);
 
         const link_config = linker.LinkConfig{
             .target_format = linker.TargetFormat.detectFromOs(target_os),
@@ -5544,6 +5615,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
             .platform_files_post = link_inputs.platform_files_post,
             .extra_args = &.{},
             .force_undefined_symbols = force_undefined_symbols,
+            .export_symbols = export_symbols,
             .can_exit_early = false,
             .disable_output = false,
             .platform_files_dir = link_inputs.platform_files_dir,
@@ -5796,6 +5868,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
             .platform_files_pre = link_inputs.platform_files_pre,
             .platform_files_post = link_inputs.platform_files_post,
             .extra_args = extra_args.items,
+            .export_symbols = try sharedLibraryExports(ctx, link_type, link_inputs, entrypoint_names),
             .can_exit_early = false,
             .disable_output = false,
             .wasm_initial_memory = configuredWasmMinimumMemory(args, link_inputs.wasm),
@@ -6272,6 +6345,13 @@ fn listInPlaceMapForOpt(opt: cli_args.OptLevel) bool {
     return switch (opt) {
         .size, .speed => true,
         .dev, .interpreter => false,
+    };
+}
+
+fn debugEffectsForOpt(opt: cli_args.OptLevel) lir.CheckedPipeline.DebugEffectMode {
+    return switch (opt) {
+        .size, .speed => .erase,
+        .dev, .interpreter => .run,
     };
 }
 

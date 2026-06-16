@@ -127,7 +127,7 @@ main = "${y}"
 				(p-assign (ident "thing"))
 				(p-assign (ident "f")))
 			(e-block
-				(e-call (constraint-fn-var 53)
+				(e-call (constraint-fn-var 49)
 					(e-lookup-local
 						(p-assign (ident "f")))
 					(e-lookup-local
@@ -142,7 +142,7 @@ main = "${y}"
 				(ty-rigid-var-lookup (ty-rigid-var (name "b"))))))
 	(d-let
 		(p-assign (ident "y"))
-		(e-call (constraint-fn-var 120)
+		(e-call (constraint-fn-var 116)
 			(e-lookup-local
 				(p-assign (ident "call")))
 			(e-num (value "5"))
@@ -150,7 +150,7 @@ main = "${y}"
 				(args
 					(p-assign (ident "i")))
 				(e-block
-					(e-dispatch-call (method "plus") (constraint-fn-var 118)
+					(e-dispatch-call (method "plus") (constraint-fn-var 114)
 						(receiver
 							(e-runtime-error (tag "erroneous_value_use")))
 						(args
@@ -161,7 +161,7 @@ main = "${y}"
 			(s-let
 				(p-assign (ident "#interp_0"))
 				(e-runtime-error (tag "erroneous_value_use")))
-			(e-interpolation (constraint-fn-var 127)
+			(e-interpolation (constraint-fn-var 171)
 				(first
 					(e-literal (string "")))
 				(parts

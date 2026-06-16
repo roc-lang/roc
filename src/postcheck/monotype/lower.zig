@@ -2821,7 +2821,10 @@ const BodyContext = struct {
     }
 
     fn nestedInstantiationContext(self: *BodyContext, current_fn_key: names.TypeDigest) Allocator.Error!BodyContext {
-        return try self.childContextWithTypeCells(current_fn_key, false);
+        var child = try self.childContextWithTypeCells(current_fn_key, false);
+        errdefer child.deinit();
+        try child.constrainCopiedBinderTypes();
+        return child;
     }
 
     fn childContextWithTypeCells(
@@ -2855,6 +2858,15 @@ const BodyContext = struct {
         try child.loop_contexts.appendSlice(child.allocator, self.loop_contexts.items);
 
         return child;
+    }
+
+    fn constrainCopiedBinderTypes(self: *BodyContext) Allocator.Error!void {
+        var binder_iter = self.binders.iterator();
+        while (binder_iter.next()) |entry| {
+            const local = entry.value_ptr.*;
+            const local_ty = self.builder.program.locals.items[@intFromEnum(local)].ty;
+            try self.constrainTypeToMono(checkedBinderType(self.view, entry.key_ptr.*), local_ty);
+        }
     }
 
     /// Constrain a checked type to a Monotype: instantiate the checked type
@@ -3343,7 +3355,7 @@ const BodyContext = struct {
         return switch (expr.data) {
             .call => |call| (try self.callResultMonoType(expr.ty, call, null)) orelse try self.lowerType(expr.ty),
             .dispatch_call => |plan| (try self.dispatchResultMonoType(expr.ty, plan, null)) orelse try self.lowerType(expr.ty),
-            .interpolation => |plan| (try self.dispatchResultMonoType(expr.ty, plan, null)) orelse try self.lowerType(expr.ty),
+            .interpolation => |interpolation| (try self.dispatchResultMonoType(expr.ty, interpolation.plan, null)) orelse try self.lowerType(expr.ty),
             .type_dispatch_call => |plan| (try self.dispatchResultMonoType(expr.ty, plan, null)) orelse try self.lowerType(expr.ty),
             .method_eq => |plan| (try self.dispatchResultMonoType(expr.ty, plan, null)) orelse try self.lowerType(expr.ty),
             .lookup_local => |lookup| try self.lookupExprMonoType(expr.ty, lookup.resolved),
@@ -3380,7 +3392,7 @@ const BodyContext = struct {
         switch (expr.data) {
             .call => |call| return try self.lowerCallExpr(expr.ty, call),
             .dispatch_call => |plan| return try self.lowerDispatchExpr(expr.ty, plan),
-            .interpolation => |plan| return try self.lowerDispatchExpr(expr.ty, plan),
+            .interpolation => |interpolation| return try self.lowerDispatchExpr(expr.ty, interpolation.plan),
             .type_dispatch_call => |plan| return try self.lowerDispatchExpr(expr.ty, plan),
             .method_eq => |plan| return try self.lowerDispatchExpr(expr.ty, plan),
             .structural_eq => |eq| return try self.lowerDirectStructuralEq(expr.ty, eq),
@@ -3436,12 +3448,12 @@ const BodyContext = struct {
             .dec_small => Common.invariant("small decimal literal reached Monotype after numeric finalization"),
             .num_from_numeral => |plan| {
                 if (try self.restoredNumeralConst(expr_id, ty)) |restored| return restored;
-                return try self.lowerNumeralCall(expr.ty, plan, ty);
+                return try self.lowerNumeralFold(expr.ty, plan, ty);
             },
             .typed_frac => Common.invariant("typed fractional integer literal reached Monotype after numeric finalization"),
             .typed_num_from_numeral => |plan| {
                 if (try self.restoredNumeralConst(expr_id, ty)) |restored| return restored;
-                return try self.lowerNumeralCall(expr.ty, plan, ty);
+                return try self.lowerNumeralFold(expr.ty, plan, ty);
             },
             .str_from_quote => |quote| {
                 if (try self.restoredNumeralConst(expr_id, ty)) |restored| return restored;
@@ -3782,7 +3794,10 @@ const BodyContext = struct {
                     try self.graph.unify(formal_node, try self.graph.importMono(evidence_ty));
                 }
             },
-            .generated_numeral, .generated_quote => {},
+            .generated_interpolation_iter,
+            .generated_numeral,
+            .generated_quote,
+            => {},
         }
     }
 
@@ -3859,7 +3874,7 @@ const BodyContext = struct {
         switch (expr.data) {
             .call => |call| return try self.callResultMonoType(expr.ty, call, expected_ty),
             .dispatch_call => |plan| return try self.dispatchResultMonoType(expr.ty, plan, expected_ty),
-            .interpolation => |plan| return try self.dispatchResultMonoType(expr.ty, plan, expected_ty),
+            .interpolation => |interpolation| return try self.dispatchResultMonoType(expr.ty, interpolation.plan, expected_ty),
             .type_dispatch_call => |plan| return try self.dispatchResultMonoType(expr.ty, plan, expected_ty),
             .method_eq => |plan| return try self.dispatchResultMonoType(expr.ty, plan, expected_ty),
             .field_access => |field| return try self.fieldAccessMonoType(field.receiver, field.field_name),
@@ -4497,8 +4512,260 @@ const BodyContext = struct {
     ) Allocator.Error!Ast.ExprId {
         return switch (operand) {
             .checked_expr => |expr| try self.lowerExprAtType(expr, ty),
+            .generated_interpolation_iter => |expr| try self.lowerGeneratedInterpolationIter(expr, ty),
             .generated_numeral => |literal| try self.lowerNumeralValue(literal, ty),
             .generated_quote => |literal| try self.lowerQuoteValue(literal, ty),
+        };
+    }
+
+    fn lowerGeneratedInterpolationIter(
+        self: *BodyContext,
+        expr_id: checked.CheckedExprId,
+        ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const expr = self.view.bodies.exprs[@intFromEnum(expr_id)];
+        const interpolation = switch (expr.data) {
+            .interpolation => |interpolation| interpolation,
+            else => Common.invariant("generated interpolation iterator operand pointed at non-interpolation expression"),
+        };
+
+        const backing_ty = self.builder.namedBackingType(ty) orelse
+            Common.invariant("generated interpolation iterator expected Iter nominal type");
+        const len_field = self.recordFieldByText(backing_ty, "len_if_known");
+        const step_field = self.recordFieldByText(backing_ty, "step");
+        const step_fn_ty = step_field.ty;
+        const step_shape = self.builder.functionShape(step_fn_ty, "generated interpolation iterator step field was not a function");
+        if (self.builder.program.types.span(step_shape.args).len != 0) {
+            Common.invariant("generated interpolation iterator step function was not zero-argument");
+        }
+
+        return try self.lowerInterpolationIterFromIndex(
+            interpolation,
+            0,
+            expr_id,
+            ty,
+            backing_ty,
+            len_field.ty,
+            step_fn_ty,
+            step_shape.ret,
+        );
+    }
+
+    fn lowerInterpolationIterFromIndex(
+        self: *BodyContext,
+        interpolation: checked.CheckedInterpolation,
+        index: usize,
+        source_expr_id: checked.CheckedExprId,
+        iter_ty: Type.TypeId,
+        backing_ty: Type.TypeId,
+        len_ty: Type.TypeId,
+        step_fn_ty: Type.TypeId,
+        step_ret_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const remaining = interpolation.parts.len - index;
+        const len_expr = try self.lowerInterpolationLenIfKnown(remaining, len_ty);
+
+        if (index == interpolation.parts.len) {
+            const step_expr = try self.lowerInterpolationDoneStep(interpolation.step_fn_ty, source_expr_id, index, step_fn_ty, step_ret_ty);
+            return try self.lowerInterpolationIterRecord(iter_ty, backing_ty, len_expr, step_expr);
+        }
+
+        const rest_expr = try self.lowerInterpolationIterFromIndex(
+            interpolation,
+            index + 1,
+            source_expr_id,
+            iter_ty,
+            backing_ty,
+            len_ty,
+            step_fn_ty,
+            step_ret_ty,
+        );
+        const rest_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), iter_ty);
+        const rest_pat = try self.builder.bindPat(rest_local, iter_ty);
+        const rest_ref = try self.builder.localExpr(rest_local, iter_ty);
+        const step_expr = try self.lowerInterpolationOneStep(
+            interpolation,
+            index,
+            source_expr_id,
+            rest_ref,
+            iter_ty,
+            interpolation.step_fn_ty,
+            step_fn_ty,
+            step_ret_ty,
+        );
+        const iter_expr = try self.lowerInterpolationIterRecord(iter_ty, backing_ty, len_expr, step_expr);
+        return try self.builder.program.addExpr(.{ .ty = iter_ty, .data = .{ .let_ = .{
+            .bind = rest_pat,
+            .value = rest_expr,
+            .rest = iter_expr,
+        } } });
+    }
+
+    fn lowerInterpolationIterRecord(
+        self: *BodyContext,
+        iter_ty: Type.TypeId,
+        backing_ty: Type.TypeId,
+        len_expr: Ast.ExprId,
+        step_expr: Ast.ExprId,
+    ) Allocator.Error!Ast.ExprId {
+        const fields = self.builder.program.types.fieldSpan(self.builder.recordFieldsSpan(backing_ty));
+        const lowered = try self.allocator.alloc(Ast.FieldExpr, fields.len);
+        defer self.allocator.free(lowered);
+
+        for (fields, 0..) |field, i| {
+            const label = self.builder.program.names.recordFieldLabelText(field.name);
+            lowered[i] = .{
+                .name = field.name,
+                .value = if (Ident.textEql(label, "len_if_known"))
+                    len_expr
+                else if (Ident.textEql(label, "step"))
+                    step_expr
+                else
+                    Common.invariant("Iter backing record contained an unexpected field"),
+            };
+        }
+
+        const record_expr = try self.builder.program.addExpr(.{
+            .ty = backing_ty,
+            .data = .{ .record = try self.builder.program.addFieldExprSpan(lowered) },
+        });
+        return try self.builder.program.addExpr(.{
+            .ty = iter_ty,
+            .data = .{ .nominal = record_expr },
+        });
+    }
+
+    fn lowerInterpolationLenIfKnown(
+        self: *BodyContext,
+        remaining: usize,
+        ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const known_tag = self.monoTagByText(ty, "Known");
+        const payloads = self.builder.program.types.span(known_tag.payloads);
+        if (payloads.len != 1) Common.invariant("Iter.len_if_known Known tag did not have one payload");
+        const count = try self.builder.intLiteralExpr(@intCast(remaining), payloads[0]);
+        return try self.builder.program.addExpr(.{ .ty = ty, .data = .{ .tag = .{
+            .name = known_tag.name,
+            .payloads = try self.builder.program.addExprSpan(&[_]Ast.ExprId{count}),
+        } } });
+    }
+
+    fn lowerInterpolationDoneStep(
+        self: *BodyContext,
+        source_fn_ty: checked.CheckedTypeId,
+        source_expr_id: checked.CheckedExprId,
+        index: usize,
+        step_fn_ty: Type.TypeId,
+        step_ret_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const done_tag = self.monoTagByText(step_ret_ty, "Done");
+        const body = try self.builder.program.addExpr(.{ .ty = step_ret_ty, .data = .{ .tag = .{
+            .name = done_tag.name,
+            .payloads = .empty(),
+        } } });
+        return try self.lowerInterpolationStepLambda(source_fn_ty, source_expr_id, index, step_fn_ty, body);
+    }
+
+    fn lowerInterpolationOneStep(
+        self: *BodyContext,
+        interpolation: checked.CheckedInterpolation,
+        index: usize,
+        source_expr_id: checked.CheckedExprId,
+        rest_expr: Ast.ExprId,
+        rest_ty: Type.TypeId,
+        source_fn_ty: checked.CheckedTypeId,
+        step_fn_ty: Type.TypeId,
+        step_ret_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const item_ty = self.iterItemType(rest_ty);
+        const item_fields = self.builder.tupleItemTypes(item_ty);
+        if (item_fields.len != 2) Common.invariant("generated interpolation iterator item was not a pair");
+
+        const part = interpolation.parts[index];
+        const value_expr = try self.lowerExprAtType(part.value, item_fields[0]);
+        const segment_expr = try self.lowerExprAtType(part.following_segment, item_fields[1]);
+        const item_expr = try self.builder.program.addExpr(.{ .ty = item_ty, .data = .{
+            .tuple = try self.builder.program.addExprSpan(&[_]Ast.ExprId{ value_expr, segment_expr }),
+        } });
+
+        const one_tag = self.monoTagByText(step_ret_ty, "One");
+        const payloads = self.builder.program.types.span(one_tag.payloads);
+        if (payloads.len != 1) Common.invariant("Iter step One tag did not have one record payload");
+        const payload_ty = payloads[0];
+        const payload_expr = try self.lowerInterpolationOnePayload(payload_ty, item_expr, rest_expr);
+
+        const body = try self.builder.program.addExpr(.{ .ty = step_ret_ty, .data = .{ .tag = .{
+            .name = one_tag.name,
+            .payloads = try self.builder.program.addExprSpan(&[_]Ast.ExprId{payload_expr}),
+        } } });
+        return try self.lowerInterpolationStepLambda(source_fn_ty, source_expr_id, index, step_fn_ty, body);
+    }
+
+    fn lowerInterpolationOnePayload(
+        self: *BodyContext,
+        ty: Type.TypeId,
+        item_expr: Ast.ExprId,
+        rest_expr: Ast.ExprId,
+    ) Allocator.Error!Ast.ExprId {
+        const fields = self.builder.program.types.fieldSpan(self.builder.recordFieldsSpan(ty));
+        const lowered = try self.allocator.alloc(Ast.FieldExpr, fields.len);
+        defer self.allocator.free(lowered);
+
+        for (fields, 0..) |field, i| {
+            const label = self.builder.program.names.recordFieldLabelText(field.name);
+            lowered[i] = .{
+                .name = field.name,
+                .value = if (Ident.textEql(label, "item"))
+                    item_expr
+                else if (Ident.textEql(label, "rest"))
+                    rest_expr
+                else
+                    Common.invariant("Iter step One payload contained an unexpected field"),
+            };
+        }
+
+        return try self.builder.program.addExpr(.{
+            .ty = ty,
+            .data = .{ .record = try self.builder.program.addFieldExprSpan(lowered) },
+        });
+    }
+
+    fn lowerInterpolationStepLambda(
+        self: *BodyContext,
+        source_fn_ty: checked.CheckedTypeId,
+        source_expr_id: checked.CheckedExprId,
+        index: usize,
+        step_fn_ty: Type.TypeId,
+        body: Ast.ExprId,
+    ) Allocator.Error!Ast.ExprId {
+        const fn_id = try self.builder.program.addFn(.{
+            .fn_def = .{ .checked_generated = self.owner_template },
+            .source_fn_ty = source_fn_ty,
+            .source_fn_key = generatedInterpolationStepKey(self.current_fn_key, source_expr_id, index),
+            .mono_fn_ty = step_fn_ty,
+        });
+        return try self.builder.program.addExpr(.{ .ty = step_fn_ty, .data = .{ .lambda = .{
+            .fn_id = fn_id,
+            .args = try self.builder.program.addTypedLocalSpan(&.{}),
+            .body = body,
+        } } });
+    }
+
+    fn recordFieldByText(self: *BodyContext, ty: Type.TypeId, text: []const u8) Type.Field {
+        for (self.builder.program.types.fieldSpan(self.builder.recordFieldsSpan(ty))) |field| {
+            if (Ident.textEql(self.builder.program.names.recordFieldLabelText(field.name), text)) return field;
+        }
+        Common.invariant("expected record field was absent from monotype type");
+    }
+
+    fn iterItemType(self: *BodyContext, ty: Type.TypeId) Type.TypeId {
+        return switch (self.builder.program.types.get(ty)) {
+            .named => |named| blk: {
+                const args = self.builder.program.types.span(named.args);
+                if (args.len != 1) Common.invariant("Iter nominal did not have one type argument");
+                break :blk args[0];
+            },
+            else => Common.invariant("generated interpolation iterator expected named Iter type"),
         };
     }
 
@@ -4524,7 +4791,7 @@ const BodyContext = struct {
                 });
             },
             .dispatch_call => |plan| return try self.lowerDispatchExprAtType(expr.ty, plan, ty),
-            .interpolation => |plan| return try self.lowerDispatchExprAtType(expr.ty, plan, ty),
+            .interpolation => |interpolation| return try self.lowerDispatchExprAtType(expr.ty, interpolation.plan, ty),
             .type_dispatch_call => |plan| return try self.lowerDispatchExprAtType(expr.ty, plan, ty),
             .method_eq => |plan| return try self.lowerDispatchExprAtType(expr.ty, plan, ty),
             .lookup_local => |lookup| return try self.lowerLookupExprAtType(expr.ty, lookup.resolved, ty),
@@ -4942,6 +5209,55 @@ const BodyContext = struct {
         };
     }
 
+    /// Fold a `from_numeral` conversion into a constant at its concrete target
+    /// type. Compile-time finalization only registers a constant for literals
+    /// whose type is already concrete at Check time; a literal inside a generic
+    /// body (e.g. the `1` in `Iter.exclusive_range`'s `start.add_checked(1)`) is
+    /// typed by the abstract `num` var and only gains a concrete type here, after
+    /// monomorphization. Rather than emit a runtime `num_from_numeral` low-level
+    /// op — which the compiled backends deliberately reject — we evaluate the
+    /// conversion at the stage that owns monomorphic types, reusing the exact
+    /// decimal-text + parse behavior the finalization/interpreter path uses so
+    /// the constant is identical regardless of where the literal is monomorphized.
+    fn lowerNumeralFold(
+        self: *BodyContext,
+        checked_ret_ty: checked.CheckedTypeId,
+        maybe_plan: ?static_dispatch.StaticDispatchPlanId,
+        target_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        // Only the builtin numeric types implement `from_numeral` as the
+        // `num_from_numeral` low-level op that compiled backends reject. A custom
+        // numeric type carries a user-defined `from_numeral` body that lowers to
+        // an ordinary call the backends handle, so it must keep going through the
+        // real dispatch rather than being folded.
+        const primitive = switch (self.builder.shapeContent(target_ty)) {
+            .primitive => |p| p,
+            else => return try self.lowerNumeralCall(checked_ret_ty, maybe_plan, target_ty),
+        };
+
+        const plan_id = maybe_plan orelse Common.invariant("checked from_numeral expression reached Monotype without a dispatch plan");
+        const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
+        if (plan.args.len != 1) Common.invariant("from_numeral plan did not carry exactly one operand");
+        const literal = switch (plan.args[0]) {
+            .generated_numeral => |lit| lit,
+            else => Common.invariant("from_numeral plan operand was not a generated numeral"),
+        };
+
+        const text = try checked.numeralLiteralDecimalText(self.allocator, self.view.module_env, literal);
+        defer self.allocator.free(text);
+
+        const folded = foldNumeralPrimitive(primitive, text);
+
+        // A value that does not fit its concrete target (e.g. a literal forced to
+        // a too-narrow type after monomorphization) matches the existing generic
+        // from_numeral behavior: a runtime crash on the conversion's Err branch.
+        const data = folded orelse blk: {
+            const msg = try self.builder.program.addStringLiteral("invalid numeric literal");
+            break :blk Ast.ExprData{ .crash = msg };
+        };
+        return try self.builder.program.addExpr(.{ .ty = target_ty, .data = data });
+    }
+
     /// Materialize a string literal as the `Str` argument of a `from_quote`
     /// dispatch call.
     fn lowerQuoteValue(
@@ -5353,7 +5669,7 @@ const BodyContext = struct {
         return switch (expr.data) {
             .call => |call| try self.callResultMonoType(expr.ty, call, expected_ty),
             .dispatch_call => |plan| try self.dispatchResultMonoType(expr.ty, plan, expected_ty),
-            .interpolation => |plan| try self.dispatchResultMonoType(expr.ty, plan, expected_ty),
+            .interpolation => |interpolation| try self.dispatchResultMonoType(expr.ty, interpolation.plan, expected_ty),
             .type_dispatch_call => |plan| try self.dispatchResultMonoType(expr.ty, plan, expected_ty),
             .method_eq => |plan| try self.dispatchResultMonoType(expr.ty, plan, expected_ty),
             .lookup_local => |lookup| try self.lookupExprMonoType(expr.ty, lookup.resolved),
@@ -8718,6 +9034,40 @@ fn restoreScalar(scalar: checked.ConstScalar) Ast.ExprData {
     };
 }
 
+/// Parse a numeral's decimal text into a constant literal of the
+/// concrete numeric `primitive`, mirroring the interpreter's `parseNumeralPayload`
+/// (`std.fmt.parseInt`/`parseFloat`/`RocDec.fromNonemptySlice`). Returns null
+/// when the value does not fit the target representation (out of range, or a
+/// fractional text parsed as an integer), so the caller can lower the Err branch.
+fn foldNumeralPrimitive(primitive: Type.Primitive, text: []const u8) ?Ast.ExprData {
+    return switch (primitive) {
+        .u8 => foldUnsignedNumeral(u8, text),
+        .u16 => foldUnsignedNumeral(u16, text),
+        .u32 => foldUnsignedNumeral(u32, text),
+        .u64 => foldUnsignedNumeral(u64, text),
+        .u128 => foldUnsignedNumeral(u128, text),
+        .i8 => foldSignedNumeral(i8, text),
+        .i16 => foldSignedNumeral(i16, text),
+        .i32 => foldSignedNumeral(i32, text),
+        .i64 => foldSignedNumeral(i64, text),
+        .i128 => foldSignedNumeral(i128, text),
+        .f32 => if (std.fmt.parseFloat(f32, text)) |v| .{ .frac_f32_lit = v } else |_| null,
+        .f64 => if (std.fmt.parseFloat(f64, text)) |v| .{ .frac_f64_lit = v } else |_| null,
+        .dec => if (builtins.dec.RocDec.fromNonemptySlice(text)) |d| .{ .dec_lit = .{ .num = d.num } } else null,
+        .bool, .str => Common.invariant("from_numeral target was a non-numeric primitive"),
+    };
+}
+
+fn foldUnsignedNumeral(comptime T: type, text: []const u8) ?Ast.ExprData {
+    const value = std.fmt.parseInt(T, text, 10) catch return null;
+    return .{ .int_lit = unsignedIntLiteral(value) };
+}
+
+fn foldSignedNumeral(comptime T: type, text: []const u8) ?Ast.ExprData {
+    const value = std.fmt.parseInt(T, text, 10) catch return null;
+    return .{ .int_lit = signedIntLiteral(value) };
+}
+
 fn signedIntLiteral(value: anytype) can.CIR.IntValue {
     const widened: i128 = @intCast(value);
     return .{ .bytes = @bitCast(widened), .kind = .i128 };
@@ -8726,6 +9076,21 @@ fn signedIntLiteral(value: anytype) can.CIR.IntValue {
 fn unsignedIntLiteral(value: anytype) can.CIR.IntValue {
     const widened: u128 = @intCast(value);
     return .{ .bytes = @bitCast(widened), .kind = .u128 };
+}
+
+fn generatedInterpolationStepKey(
+    current_fn_key: names.TypeDigest,
+    source_expr_id: checked.CheckedExprId,
+    index: usize,
+) names.TypeDigest {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hasher.update("roc.generated_interpolation_step");
+    hasher.update(&current_fn_key.bytes);
+    var source_expr_bytes = std.mem.nativeToLittle(u32, @intFromEnum(source_expr_id));
+    hasher.update(std.mem.asBytes(&source_expr_bytes));
+    var index_bytes = std.mem.nativeToLittle(u64, @intCast(index));
+    hasher.update(std.mem.asBytes(&index_bytes));
+    return .{ .bytes = hasher.finalResult() };
 }
 
 fn checkedPayload(view: ModuleView, checked_ty: checked.CheckedTypeId) checked.CheckedTypePayload {

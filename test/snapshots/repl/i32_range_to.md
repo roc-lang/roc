@@ -5,9 +5,9 @@ type=repl
 ~~~
 # SOURCE
 ~~~roc
-» Iter.fold(-2.I32.to(2.I32), [], |acc, item| acc.append(item))
-» Iter.fold(0.I32.to(0.I32), [], |acc, item| acc.append(item))
-» Iter.fold(3.I32.to(1.I32), [], |acc, item| acc.append(item))
+» Iter.fold(-2.I32..=2.I32, [], |acc, item| acc.append(item))
+» Iter.fold(0.I32..=0.I32, [], |acc, item| acc.append(item))
+» Iter.fold(3.I32..=1.I32, [], |acc, item| acc.append(item))
 ~~~
 # OUTPUT
 [-2, -1, 0, 1, 2]

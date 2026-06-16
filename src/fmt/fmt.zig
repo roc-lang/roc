@@ -1525,6 +1525,8 @@ const Formatter = struct {
                 try fmt.formatExprDiscard(op.expr);
             },
             .bin_op => |op| {
+                const op_tag = fmt.ast.tokens.tokens.items(.tag)[op.operator];
+                const is_range_op = op_tag == .OpDoubleDotLessThan or op_tag == .OpDoubleDotEquals;
                 if (fmt.flags == .debug_binop) {
                     try fmt.push('(');
                     if (multiline) {
@@ -1539,7 +1541,7 @@ const Formatter = struct {
                     fmt.curr_indent += 1;
                     try fmt.pushIndent();
                     pushed = true;
-                } else {
+                } else if (!is_range_op) {
                     try fmt.push(' ');
                 }
                 try fmt.pushTokenText(op.operator);
@@ -1547,7 +1549,7 @@ const Formatter = struct {
                 if (multiline and try fmt.flushCommentsBefore(right_region.start)) {
                     fmt.curr_indent += if (pushed) 0 else 1;
                     try fmt.pushIndent();
-                } else {
+                } else if (!is_range_op) {
                     try fmt.push(' ');
                 }
                 try fmt.formatExprDiscard(op.right);

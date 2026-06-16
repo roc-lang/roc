@@ -257,9 +257,9 @@ test "NodeStore round trip - Expressions" {
         .e_interpolation = .{
             .first = rand_idx(CIR.Expr.Idx),
             .parts = CIR.Expr.Span{ .span = rand_span() },
-            .rest = rand_idx(CIR.Expr.Idx),
             .method_name_region = rand_region(),
             .constraint_fn_var = rand_idx(types.Var),
+            .step_fn_var = rand_idx(types.Var),
         },
     });
     try expressions.append(gpa, CIR.Expr{
@@ -1083,6 +1083,12 @@ test "NodeStore round trip - Diagnostics" {
     try diagnostics.append(gpa, CIR.Diagnostic{
         .file_import_not_utf8 = .{
             .path = rand_idx(StringLiteral.Idx),
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
+        .range_op_chained = .{
             .region = rand_region(),
         },
     });
