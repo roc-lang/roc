@@ -182,6 +182,12 @@ const Pass = struct {
         self.resetProc();
         try self.collect(body);
 
+        // The proc's argument span is invariant for this pass, and stays valid
+        // through the walk below: a failed `tryScalarize` adds no locals, and
+        // the first success returns immediately, so nothing reallocates the
+        // span store while we hold this slice.
+        const proc_args = self.store.getLocalSpan(self.store.getProcSpec(proc_id).args);
+
         // Find one scalarizable parameter; the fixpoint loop picks up the
         // rest on later rounds.
         var changed = false;
@@ -195,7 +201,7 @@ const Pass = struct {
             switch (self.store.getCFStmt(current)) {
                 .join => |join_stmt| {
                     for (self.store.getLocalSpan(join_stmt.params), 0..) |param, position| {
-                        if (try self.tryScalarize(proc_id, current, join_stmt, param, position)) {
+                        if (try self.tryScalarize(proc_args, current, join_stmt, param, position)) {
                             changed = true;
                             break :outer;
                         }
@@ -240,7 +246,7 @@ const Pass = struct {
 
     fn tryScalarize(
         self: *Pass,
-        proc_id: LIR.LirProcSpecId,
+        proc_args: []const LIR.LocalId,
         join_id: LIR.CFStmtId,
         join_stmt: anytype,
         param: LIR.LocalId,
@@ -260,10 +266,7 @@ const Pass = struct {
         // on entry. (Any future shape that entered a parameter without a write
         // and without a seed would surface as an unbound local in the ARC
         // borrow certifier, never as a silent miscompile.)
-        const param_is_proc_arg = blk: {
-            const args = self.store.getLocalSpan(self.store.getProcSpec(proc_id).args);
-            break :blk std.mem.findScalar(LIR.LocalId, args, param) != null;
-        };
+        const param_is_proc_arg = std.mem.findScalar(LIR.LocalId, proc_args, param) != null;
         const info = self.layouts.getStructInfo(param_layout);
         var field_count: usize = 0;
         for (0..info.fields.len) |i| {
