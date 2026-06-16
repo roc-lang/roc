@@ -7321,22 +7321,21 @@ const DefiniteInitAnalyzer = struct {
         defer state.trimTo(local_start);
 
         const break_start = breaks.items.len;
-        errdefer self.trimBreakStates(breaks, break_start, local_start);
+        errdefer trimBreakStates(breaks, break_start, local_start);
 
         for (self.can.env.store.sliceStatements(stmts)) |stmt_idx| {
             if (!try self.analyzeStatement(stmt_idx, state, breaks, track_new_vars)) {
-                self.trimBreakStates(breaks, break_start, local_start);
+                trimBreakStates(breaks, break_start, local_start);
                 return false;
             }
         }
 
         const continues = try self.analyzeExpr(final_expr, state, breaks);
-        self.trimBreakStates(breaks, break_start, local_start);
+        trimBreakStates(breaks, break_start, local_start);
         return continues;
     }
 
-    fn trimBreakStates(self: *@This(), breaks: *std.ArrayList(InitState), start: usize, len: usize) void {
-        _ = self;
+    fn trimBreakStates(breaks: *std.ArrayList(InitState), start: usize, len: usize) void {
         for (breaks.items[start..]) |*break_state| break_state.trimTo(len);
     }
 
