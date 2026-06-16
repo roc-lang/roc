@@ -2732,6 +2732,154 @@ test "check type - var reassignment" {
     );
 }
 
+test "check type - uninitialized var - all if branches assign before final read" {
+    const source =
+        \\main = |condition| {
+        \\  var $value : Dec
+        \\
+        \\  if condition {
+        \\    $value = 1
+        \\  } else {
+        \\    $value = 2
+        \\  }
+        \\
+        \\  $value
+        \\}
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .last_def },
+        "Bool -> Dec",
+    );
+}
+
+test "check can - uninitialized var - branch-local read before assignment" {
+    const source =
+        \\main = |condition| {
+        \\  var $value
+        \\
+        \\  if condition {
+        \\    $value = 1
+        \\  } else {
+        \\    $value
+        \\  }
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneCanError("READING UNINITIALIZED VAR");
+}
+
+test "check can - uninitialized var - missing branch assignment before final read" {
+    const source =
+        \\main = |condition| {
+        \\  var $value
+        \\
+        \\  if condition {
+        \\    $value = 1
+        \\  } else {
+        \\    {}
+        \\  }
+        \\
+        \\  $value
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneCanError("READING UNINITIALIZED VAR");
+}
+
+test "check type - uninitialized var - terminal branches do not need assignment" {
+    const source =
+        \\fallible : {} -> Try({}, Str)
+        \\fallible = |_| Try.Err("no value")
+        \\
+        \\main = |mode| {
+        \\  var $value : Dec
+        \\
+        \\  match mode {
+        \\    Return => {
+        \\      return Ok(0)
+        \\    }
+        \\    Crash => {
+        \\      crash "no value"
+        \\    }
+        \\    Try => {
+        \\      _ignored = fallible({})?
+        \\      $value = 1
+        \\    }
+        \\    Assign => {
+        \\      $value = 1
+        \\    }
+        \\  }
+        \\
+        \\  Ok($value)
+        \\}
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "main" } },
+        "[Assign, Crash, Return, Try] -> Try(Dec, Str)",
+    );
+}
+
+test "check type - uninitialized var - breakable loop assignment counts" {
+    const source =
+        \\main = {
+        \\  var $value : Dec
+        \\
+        \\  while True {
+        \\    $value = 1
+        \\    break
+        \\  }
+        \\
+        \\  $value
+        \\}
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .last_def },
+        "Dec",
+    );
+}
+
+test "check can - uninitialized var - ordinary loop assignment does not guarantee initialization" {
+    const source =
+        \\main = |condition| {
+        \\  var $value
+        \\
+        \\  while condition {
+        \\    $value = 1
+        \\    break
+        \\  }
+        \\
+        \\  $value
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneCanError("READING UNINITIALIZED VAR");
+}
+
+test "check can - uninitialized var - reports each bad read" {
+    const source =
+        \\main = {
+        \\  var $first
+        \\  var $second
+        \\
+        \\  _ = $first
+        \\  $second
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try expectReadUninitializedVarDiagnostics(&test_env, 2);
+}
+
 // expect //
 
 test "check type - expect" {
@@ -4075,6 +4223,27 @@ const DefExpectation = union(enum) {
     last_def,
     def: []const u8,
 };
+
+fn expectReadUninitializedVarDiagnostics(test_env: *TestEnv, expected_count: usize) !void {
+    try testing.expect(!test_env.parse_ast.hasErrors());
+
+    const diagnostics = try test_env.module_env.getDiagnostics();
+    defer test_env.gpa.free(diagnostics);
+
+    try testing.expectEqual(expected_count, diagnostics.len);
+
+    for (diagnostics) |diagnostic| {
+        switch (diagnostic) {
+            .read_uninitialized_var => {},
+            else => return error.TestUnexpectedResult,
+        }
+
+        var report = try test_env.module_env.diagnosticToReport(diagnostic, test_env.gpa, test_env.module_env.module_name);
+        defer report.deinit();
+
+        try testing.expectEqualStrings("READING UNINITIALIZED VAR", report.title);
+    }
+}
 
 /// A unified helper to run the full pipeline: parse, canonicalize, and type-check source code.
 ///

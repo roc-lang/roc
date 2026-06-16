@@ -5355,6 +5355,29 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.local_locations.put(key, stable_loc);
         }
 
+        fn stableLocationStackOffset(stable_loc: ValueLocation) i32 {
+            return switch (stable_loc) {
+                .stack => |stack_loc| stack_loc.offset,
+                .stack_i128 => |offset| offset,
+                .stack_str => |offset| offset,
+                .list_stack => |list_loc| list_loc.struct_offset,
+                else => std.debug.panic(
+                    "LirCodeGen invariant violated: uninitialized local used non-stack stable location {s}",
+                    .{@tagName(stable_loc)},
+                ),
+            };
+        }
+
+        fn poisonUninitializedLocal(self: *Self, local: LocalId) Allocator.Error!void {
+            const layout_idx = self.localLayout(local);
+            const size = self.getLayoutSize(layout_idx);
+            if (size == 0) return;
+
+            try self.ensureStableLocationForLocal(local);
+            const stable_loc = self.local_locations.get(localKey(local)) orelse unreachable;
+            try self.poisonStackArea(stableLocationStackOffset(stable_loc), size);
+        }
+
         fn collectStmtReadLocals(
             self: *Self,
             root_stmt_id: CFStmtId,
@@ -5377,6 +5400,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try stack.append(sa, assign.next);
                     },
                     .assign_literal => |assign| try stack.append(sa, assign.next),
+                    .init_uninitialized => |uninit| try stack.append(sa, uninit.next),
                     .assign_call => |assign| {
                         for (self.store.getLocalSpan(assign.args)) |arg| {
                             try locals.put(localKey(arg), arg);
@@ -5493,6 +5517,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .assign_literal => |assign| {
                         try locals.put(localKey(assign.target), assign.target);
                         try stack.append(sa, assign.next);
+                    },
+                    .init_uninitialized => |uninit| {
+                        try locals.put(localKey(uninit.target), uninit.target);
+                        try stack.append(sa, uninit.next);
                     },
                     .assign_call => |assign| {
                         try locals.put(localKey(assign.target), assign.target);
@@ -12135,6 +12163,33 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
+        fn poisonStackArea(self: *Self, offset: i32, size: u32) Allocator.Error!void {
+            const reg = try self.allocTempGeneral();
+            defer self.codegen.freeGeneral(reg);
+            try self.codegen.emitLoadImm(reg, @as(i64, @bitCast(@as(u64, 0xAAAAAAAAAAAAAAAA))));
+
+            var remaining = size;
+            var current_offset = offset;
+            while (remaining >= 8) {
+                try self.codegen.emitStoreStack(.w64, current_offset, reg);
+                current_offset += 8;
+                remaining -= 8;
+            }
+            if (remaining >= 4) {
+                try self.codegen.emitStoreStack(.w32, current_offset, reg);
+                current_offset += 4;
+                remaining -= 4;
+            }
+            if (remaining >= 2) {
+                try self.emitStoreStackW16(current_offset, reg);
+                current_offset += 2;
+                remaining -= 2;
+            }
+            if (remaining >= 1) {
+                try self.emitStoreStackW8(current_offset, reg);
+            }
+        }
+
         /// Zero-fill `size` bytes through a base register (heap memory),
         /// mirroring zeroStackArea's chunking.
         fn zeroMemAt(self: *Self, base_reg: GeneralReg, size: u32) Allocator.Error!void {
@@ -13903,6 +13958,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             try work.append(wa, .{ .node = assign.next });
                         },
 
+                        .init_uninitialized => |uninit| {
+                            try self.poisonUninitializedLocal(uninit.target);
+                            try work.append(wa, .{ .node = uninit.next });
+                        },
+
                         .assign_call => |assign| {
                             const value_loc = try self.generateCall(.{
                                 .proc = assign.proc,
@@ -15611,6 +15671,25 @@ fn runRootU8(store: *LirStore, layout_store: *layout.Store, root_proc: lir.LIR.L
     const func: *const fn (*anyopaque, *anyopaque) callconv(.c) void = @ptrCast(@alignCast(executable.entryPtr()));
     func(@ptrCast(&out), @ptrCast(test_ops.getOps()));
     return out;
+}
+
+test "dev lowering: init_uninitialized writes poison pattern" {
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+
+    var test_state = try TestLayoutState.init(allocator);
+    defer test_state.deinit();
+
+    const value = try addLocal(&store, .u64);
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = value } });
+    const init_stmt = try store.addCFStmt(.{ .init_uninitialized = .{
+        .target = value,
+        .next = ret,
+    } });
+    const root_proc = try addNoArgProc(&store, init_stmt, .u64);
+
+    try std.testing.expectEqual(@as(u64, 0xAAAAAAAAAAAAAAAA), try runRootU64(&store, &test_state.layout_store, root_proc, .u64));
 }
 
 fn stackOffsetOfTestLocation(loc: anytype) i32 {

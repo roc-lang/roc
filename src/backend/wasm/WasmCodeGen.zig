@@ -3069,6 +3069,10 @@ fn collectProcLocals(
                 try recordProcLocal(locals, assign.target);
                 try work.append(wa, assign.next);
             },
+            .init_uninitialized => |uninit| {
+                try recordProcLocal(locals, uninit.target);
+                try work.append(wa, uninit.next);
+            },
             .assign_call => |assign| {
                 try recordProcLocal(locals, assign.target);
                 for (self.store.getLocalSpan(assign.args)) |arg| try recordProcLocal(locals, arg);
@@ -7160,6 +7164,9 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
             try self.generateLiteral(assign.value);
             try self.bindAssignedLocal(assign.target);
             try work.append(wa, .{ .node = .{ .stmt_id = assign.next, .stop = stop } });
+        },
+        .init_uninitialized => |uninit| {
+            try work.append(wa, .{ .node = .{ .stmt_id = uninit.next, .stop = stop } });
         },
         .assign_call => |assign| {
             try self.generateCall(.{

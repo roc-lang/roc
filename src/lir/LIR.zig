@@ -256,6 +256,10 @@ pub const TailTransform = enum(u8) {
 
 /// Single statement/control-flow language for all lowered code.
 pub const CFStmt = union(enum) {
+    init_uninitialized: struct {
+        target: LocalId,
+        next: CFStmtId,
+    },
     assign_ref: struct {
         target: LocalId,
         op: RefOp,

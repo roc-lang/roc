@@ -286,7 +286,9 @@ fn collectContainingRegionsFromStatement(
             try collectContainingRegionsFromExpr(allocator, ast, d.body, target_offset, regions);
         },
         .@"var" => |v| {
-            try collectContainingRegionsFromExpr(allocator, ast, v.body, target_offset, regions);
+            if (v.body) |body| {
+                try collectContainingRegionsFromExpr(allocator, ast, body, target_offset, regions);
+            }
         },
         .expr => |e| {
             try collectContainingRegionsFromExpr(allocator, ast, e.expr, target_offset, regions);

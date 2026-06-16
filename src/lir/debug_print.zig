@@ -97,6 +97,11 @@ const Printer = struct {
                     try writer.writeAll("\n");
                     current = s.next;
                 },
+                .init_uninitialized => |s| {
+                    try writeIndent(indent, writer);
+                    try writer.print("init_uninitialized l{d}\n", .{@intFromEnum(s.target)});
+                    current = s.next;
+                },
                 .assign_call => |s| {
                     try self.writeTarget(s.target, indent, writer);
                     try writer.print("call p{d}(", .{@intFromEnum(s.proc)});
