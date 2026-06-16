@@ -55,6 +55,10 @@ x = {
 ~~~
 # EXPECTED
 MISSING METHOD - multiline_string_complex.md:40:5:40:8
+<<<<<<< HEAD
+=======
+TYPE MISMATCH - multiline_string_complex.md:37:3:37:4
+>>>>>>> de6c9c175920bc0c7179218a8f9002a271228c0a
 # PROBLEMS
 **MISSING METHOD**
 This **not** method is being called on a value whose type doesn't have that method:
@@ -314,15 +318,15 @@ With multiple lines
 	(defs
 		(patt (type "Error"))
 		(patt (type "Error"))
-		(patt (type "Str"))
-		(patt (type "Str"))
+		(patt (type "Error"))
+		(patt (type "Error"))
 		(patt (type "{ a: Error, b: (Error, Error), c: List(Error), d: Error, e: Error }"))
 		(patt (type "Error")))
 	(expressions
 		(expr (type "Error"))
 		(expr (type "Error"))
-		(expr (type "Str"))
-		(expr (type "Str"))
+		(expr (type "Error"))
+		(expr (type "Error"))
 		(expr (type "{ a: Error, b: (Error, Error), c: List(Error), d: Error, e: Error }"))
 		(expr (type "Error"))))
 ~~~

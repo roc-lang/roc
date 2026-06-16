@@ -16,7 +16,16 @@ get_greeting = |{}| {
 # EXPECTED
 NIL
 # PROBLEMS
-NIL
+**LITERAL DEFAULTED**
+Nothing in this definition's type determines the type of this number literal, so it was given the default type **Dec** instead:
+**try_match_type_bug.md:4:9:4:10:**
+```roc
+        0 => Try.Ok(List.first(["hello"])?),
+```
+        ^
+
+**Hint:** To use a different numeric type here, add a suffix or a type annotation.
+
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,OpenCurly,CloseCurly,OpArrow,UpperIdent,NoSpaceOpenRound,UpperIdent,Comma,Underscore,CloseRound,

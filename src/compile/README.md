@@ -67,6 +67,7 @@ if (coord.hasUserErrors()) return error.CompilationFailed;
 const root = coord.executableRootCheckedArtifact();
 const imports = try coord.collectImportedArtifactViews(arena, root);
 const relations = try coord.collectRelationArtifactViews(arena, root);
+const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(arena, root.root_requests.runtime_requests);
 
 const lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
     runtime_alloc,
@@ -74,7 +75,7 @@ const lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
         .root = check.CheckedArtifact.loweringViewWithRelations(root, relations),
         .imports = imports,
     },
-    .{ .requests = root.root_requests.runtime_requests },
+    .{ .requests = lir_roots },
     .{ .target_usize = base.target.TargetUsize.native },
 );
 

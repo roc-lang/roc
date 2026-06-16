@@ -16,7 +16,7 @@ result = add_five(10.I64)
 ~~~
 # MONO
 ~~~roc
-make_adder = |x| |y| x.plus(y)
+make_adder = |x| |y| x + y
 
 add_five : I64 -> I64
 add_five = make_adder(5.I64)

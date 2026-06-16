@@ -288,11 +288,28 @@ const InspectDefAddress = struct {
     str_ty: u32,
 };
 
+const EqualityDefAddress = struct {
+    value_ty: u32,
+    bool_ty: u32,
+};
+
 const InspectDefEntry = union(enum) {
     reserved: Ast.DefId,
     ready: Ast.DefId,
 
     fn id(self: InspectDefEntry) Ast.DefId {
+        return switch (self) {
+            .reserved => |def_id| def_id,
+            .ready => |def_id| def_id,
+        };
+    }
+};
+
+const EqualityDefEntry = union(enum) {
+    reserved: Ast.DefId,
+    ready: Ast.DefId,
+
+    fn id(self: EqualityDefEntry) Ast.DefId {
         return switch (self) {
             .reserved => |def_id| def_id,
             .ready => |def_id| def_id,
@@ -317,6 +334,7 @@ const Builder = struct {
     nested_site_cache: std.AutoHashMap(NestedSiteAddress, names.ProcSiteId),
     const_expr_cache: std.AutoHashMap(ConstExprAddress, Ast.ExprId),
     inspect_defs: std.AutoHashMap(InspectDefAddress, InspectDefEntry),
+    equality_defs: std.AutoHashMap(EqualityDefAddress, EqualityDefEntry),
     hosted_catalog: []HostedCatalogEntry = &.{},
     method_lookup_index: []MethodLookupIndexEntry = &.{},
     u64_ty: ?Type.TypeId = null,
@@ -342,6 +360,7 @@ const Builder = struct {
             .nested_site_cache = std.AutoHashMap(NestedSiteAddress, names.ProcSiteId).init(allocator),
             .const_expr_cache = std.AutoHashMap(ConstExprAddress, Ast.ExprId).init(allocator),
             .inspect_defs = std.AutoHashMap(InspectDefAddress, InspectDefEntry).init(allocator),
+            .equality_defs = std.AutoHashMap(EqualityDefAddress, EqualityDefEntry).init(allocator),
             .source_file_ids = std.AutoHashMap(u32, u32).init(allocator),
         };
     }
@@ -360,6 +379,7 @@ const Builder = struct {
         self.source_file_ids.deinit();
         self.allocator.free(self.method_lookup_index);
         self.allocator.free(self.hosted_catalog);
+        self.equality_defs.deinit();
         self.inspect_defs.deinit();
         self.const_expr_cache.deinit();
         self.nested_site_cache.deinit();
@@ -2645,6 +2665,14 @@ const Builder = struct {
         } });
     }
 
+    fn twoArgFnType(self: *Builder, arg_ty: Type.TypeId, ret_ty: Type.TypeId) Allocator.Error!Type.TypeId {
+        const args = [_]Type.TypeId{ arg_ty, arg_ty };
+        return try self.program.types.add(.{ .func = .{
+            .args = try self.program.types.addSpan(&args),
+            .ret = ret_ty,
+        } });
+    }
+
     fn singleTypeArg(self: *Builder, span: Type.Span, comptime owner: []const u8) Type.TypeId {
         const args = self.program.types.span(span);
         if (args.len != 1) Common.invariant(owner ++ " type reached Monotype inspect lowering without one type argument");
@@ -2744,6 +2772,10 @@ const BodyContext = struct {
     /// on the branch comparing the bound value against the literal's
     /// `from_numeral`-converted constant.
     pattern_literal_guards: std.ArrayList(PatternLiteralGuard),
+    /// Structural equality types currently being expanded in this context.
+    /// Seeing the same type again is a real recursive edge, which lowers to a
+    /// reserved generated equality helper instead of recursively expanding AST.
+    equality_expansion_stack: std.AutoHashMap(Type.TypeId, void),
 
     const PatternLiteralGuard = struct {
         local: Ast.LocalId,
@@ -2803,10 +2835,12 @@ const BodyContext = struct {
             .string_literals = string_literals,
             .loop_contexts = .empty,
             .pattern_literal_guards = .empty,
+            .equality_expansion_stack = std.AutoHashMap(Type.TypeId, void).init(allocator),
         };
     }
 
     fn deinit(self: *BodyContext) void {
+        self.equality_expansion_stack.deinit();
         self.pattern_literal_guards.deinit(self.allocator);
         self.loop_contexts.deinit(self.allocator);
         self.allocator.free(self.string_literals);
@@ -5708,7 +5742,25 @@ const BodyContext = struct {
         method_name: []const u8,
         bool_ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprId {
-        return switch (self.builder.program.types.get(ty)) {
+        const shape = self.builder.program.types.get(ty);
+        const expands_structurally = switch (shape) {
+            .record, .tuple, .tag_union => true,
+            .named => |named| named.backing != null,
+            else => false,
+        };
+        var remove_active_expansion = false;
+        defer if (remove_active_expansion) {
+            _ = self.equality_expansion_stack.remove(ty);
+        };
+        if (expands_structurally) {
+            if (self.equality_expansion_stack.contains(ty)) {
+                return try self.equalityCall(ty, lhs, rhs, method_name, bool_ty);
+            }
+            try self.equality_expansion_stack.put(ty, {});
+            remove_active_expansion = true;
+        }
+
+        return switch (shape) {
             .list => try self.lowerOwnedEqualityCall(ty, lhs, rhs, method_name, bool_ty),
             .record => |fields| try self.lowerRecordEqualityExpr(self.builder.program.types.fieldSpan(fields), lhs, rhs, method_name, bool_ty),
             .tuple => |items| try self.lowerTupleEqualityExpr(self.builder.program.types.span(items), lhs, rhs, method_name, bool_ty),
@@ -5732,6 +5784,79 @@ const BodyContext = struct {
                 .negated = false,
             } } }),
         };
+    }
+
+    fn equalityCall(
+        self: *BodyContext,
+        value_ty: Type.TypeId,
+        lhs: Ast.ExprId,
+        rhs: Ast.ExprId,
+        method_name: []const u8,
+        bool_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        if (!std.mem.eql(u8, method_name, "is_eq")) {
+            Common.invariant("recursive structural equality helper requested for a non-is_eq method");
+        }
+
+        const def_id = try self.equalityDefForType(value_ty, method_name, bool_ty);
+        const fn_ty = try self.builder.twoArgFnType(value_ty, bool_ty);
+        const callee = try self.builder.program.addExpr(.{
+            .ty = fn_ty,
+            .data = .{ .def_ref = def_id },
+        });
+        const args = [_]Ast.ExprId{ lhs, rhs };
+        return try self.builder.program.addExpr(.{
+            .ty = bool_ty,
+            .data = .{ .call_value = .{
+                .callee = callee,
+                .args = try self.builder.program.addExprSpan(&args),
+            } },
+        });
+    }
+
+    fn equalityDefForType(
+        self: *BodyContext,
+        value_ty: Type.TypeId,
+        method_name: []const u8,
+        bool_ty: Type.TypeId,
+    ) Allocator.Error!Ast.DefId {
+        const address = EqualityDefAddress{
+            .value_ty = @intFromEnum(value_ty),
+            .bool_ty = @intFromEnum(bool_ty),
+        };
+        if (self.builder.equality_defs.get(address)) |entry| return entry.id();
+
+        const def_id: Ast.DefId = @enumFromInt(@as(u32, @intCast(self.builder.program.defs.items.len)));
+        try self.builder.program.defs.append(self.allocator, undefined);
+        try self.builder.equality_defs.put(address, .{ .reserved = def_id });
+
+        const lhs_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), value_ty);
+        const rhs_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), value_ty);
+        const lhs_expr = try self.builder.localExpr(lhs_local, value_ty);
+        const rhs_expr = try self.builder.localExpr(rhs_local, value_ty);
+
+        // The helper body is the structural expansion for this type. Temporarily
+        // remove the caller's active mark so the body expands one layer and only
+        // recursive edges inside that layer call back to the reserved helper.
+        if (!self.equality_expansion_stack.remove(value_ty)) {
+            Common.invariant("recursive structural equality helper requested outside an active equality expansion");
+        }
+        defer self.equality_expansion_stack.putAssumeCapacity(value_ty, {});
+
+        const body = try self.lowerEqualityExpr(value_ty, lhs_expr, rhs_expr, method_name, bool_ty);
+        const args = try self.builder.program.addTypedLocalSpan(&.{
+            .{ .local = lhs_local, .ty = value_ty },
+            .{ .local = rhs_local, .ty = value_ty },
+        });
+        self.builder.program.defs.items[@intFromEnum(def_id)] = .{
+            .symbol = self.builder.symbols.fresh(),
+            .fn_def = null,
+            .args = args,
+            .body = .{ .roc = body },
+            .ret = bool_ty,
+        };
+        try self.builder.equality_defs.put(address, .{ .ready = def_id });
+        return def_id;
     }
 
     /// Decomposes structural equality on a nominal type by unwrapping both operands to

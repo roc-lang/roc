@@ -882,11 +882,11 @@ const StaticDispatchConstraintIndex = struct {
                             entry.value_ptr.*,
                             module.identStoreConst().getText(existing.fn_name),
                             @tagName(existing.origin),
-                            existing.binop_negated,
+                            existing.origin.binopNegated(),
                             i,
                             module.identStoreConst().getText(constraint.fn_name),
                             @tagName(constraint.origin),
-                            constraint.binop_negated,
+                            constraint.origin.binopNegated(),
                         },
                     );
                 }
@@ -910,11 +910,11 @@ const StaticDispatchConstraintIndex = struct {
 };
 
 fn staticDispatchConstraintsEquivalent(a: types.StaticDispatchConstraint, b: types.StaticDispatchConstraint) bool {
+    // origin now carries the binop-negation and literal payloads, so structural
+    // equality of origin subsumes the former separate field comparisons.
     return a.fn_name == b.fn_name and
         a.fn_var == b.fn_var and
-        a.origin == b.origin and
-        a.binop_negated == b.binop_negated and
-        std.meta.eql(a.num_literal, b.num_literal);
+        std.meta.eql(a.origin, b.origin);
 }
 
 fn staticDispatchResultModeForCheckedValueCall(
@@ -932,7 +932,7 @@ fn staticDispatchResultModeForCheckedValueCall(
         if (constraint.origin == .desugared_binop) {
             return .{ .equality = .{
                 .structural_allowed = true,
-                .negated = constraint.binop_negated,
+                .negated = constraint.origin.binopNegated(),
             } };
         }
     }

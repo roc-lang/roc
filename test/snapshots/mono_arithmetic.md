@@ -10,7 +10,7 @@ sum = 1 + 2
 # MONO
 ~~~roc
 sum : Dec
-sum = 1.plus(2)
+sum = 1 + 2
 ~~~
 # FORMATTED
 ~~~roc

@@ -352,7 +352,7 @@ pub const Module = struct {
             .flex => |flex| blk: {
                 const constraints = self.typeStoreConst().sliceStaticDispatchConstraints(flex.constraints);
                 for (constraints) |constraint| {
-                    if (constraint.origin == .from_numeral) break :blk true;
+                    if (constraint.origin == .from_literal) break :blk true;
                 }
                 break :blk false;
             },

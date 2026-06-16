@@ -189,6 +189,24 @@ pub const Store = struct {
     pub fn len(self: *Self) usize {
         return self.problems.items.len;
     }
+
+    /// Discard every problem appended after `new_len` — the rollback of a
+    /// speculative probe that recorded against this store. Problem entries
+    /// reference other stores by index (snapshots, extra strings) and own no
+    /// memory themselves, so truncation is a plain length rewind; the caller
+    /// rewinds the referenced stores in tandem.
+    ///
+    /// `extra_strings_backing` / `missing_patterns_backing` are deliberately
+    /// NOT rewound here: no probe path writes them — they are appended to
+    /// only by exhaustiveness checking (Check.zig, checkMatchExpr's
+    /// non-exhaustive-match reporting), which never runs inside a probe. The
+    /// probe rollback site asserts that their lengths are unchanged; if a
+    /// probe path ever starts writing them, this rewind must learn to
+    /// truncate them too.
+    pub fn truncate(self: *Self, new_len: usize) void {
+        std.debug.assert(new_len <= self.problems.items.len);
+        self.problems.shrinkRetainingCapacity(new_len);
+    }
 };
 
 fn regionsEqual(a: base.Region, b: base.Region) bool {

@@ -678,8 +678,14 @@ pub const Resolver = struct {
 
         for (self.getTypesStore(module_idx).sliceStaticDispatchConstraints(constraints)) |constraint| {
             switch (constraint.origin) {
-                .from_numeral, .desugared_binop, .desugared_unaryop => return true,
-                .from_quote, .from_interpolation, .method_call, .where_clause => {},
+                .from_literal => |lit| switch (lit) {
+                    // Numeric literals default to a number layout; string and
+                    // interpolation literals are not numerals (they default to Str).
+                    .numeral => return true,
+                    .quote, .interpolation => {},
+                },
+                .desugared_binop, .desugared_unaryop => return true,
+                .method_call, .where_clause => {},
             }
         }
 

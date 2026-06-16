@@ -15,7 +15,7 @@ result = func(1, 2)
 # MONO
 ~~~roc
 func = |a, b| {
-	add_ab = |x| a.plus(b).plus(x)
+	add_ab = |x| a + b + x
 	add_ab(10)
 }
 

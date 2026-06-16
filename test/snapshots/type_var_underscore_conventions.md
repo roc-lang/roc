@@ -298,12 +298,12 @@ NO CHANGE
 		(patt (type "List($bad) -> Str"))
 		(patt (type "List(_elem) -> Str"))
 		(patt (type "elem -> List(elem)"))
-		(patt (type "_arg -> Str")))
+		(patt (type "_arg -> a where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]")))
 	(expressions
 		(expr (type "List(elem) -> Str"))
 		(expr (type "List($elem) -> $elem"))
 		(expr (type "List($bad) -> Str"))
 		(expr (type "List(_elem) -> Str"))
 		(expr (type "elem -> List(elem)"))
-		(expr (type "_arg -> Str"))))
+		(expr (type "_arg -> a where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]"))))
 ~~~

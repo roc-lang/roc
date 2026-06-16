@@ -85,7 +85,7 @@ The value's type, which does not have a method named **add_try**, is:
 
     Str
 
-**Hint:** This numeric literal was given the type **Dec** because it was never used as any concrete number type. To use a different numeric type, add a suffix or a type annotation.
+**Hint:** For this to work, the type would need to have a method named **add_try** associated with it in the type's declaration.
 
 **MISSING METHOD**
 This **from_numeral** method is being called on a value whose type doesn't have that method:
@@ -99,7 +99,7 @@ The value's type, which does not have a method named **from_numeral**, is:
 
     Str
 
-**Hint:** This numeric literal was given the type **Dec** because it was never used as any concrete number type. To use a different numeric type, add a suffix or a type annotation.
+**Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
 **MISSING METHOD**
 This **is_lt** method is being called on a value whose type doesn't have that method:
@@ -113,7 +113,7 @@ The value's type, which does not have a method named **is_lt**, is:
 
     Str
 
-**Hint:** This numeric literal was given the type **Dec** because it was never used as any concrete number type. To use a different numeric type, add a suffix or a type annotation.
+**Hint:** For this to work, the type would need to have a method named **is_lt** associated with it in the type's declaration.
 
 **MISSING METHOD**
 This **steps_between** method is being called on a value whose type doesn't have that method:
@@ -127,7 +127,7 @@ The value's type, which does not have a method named **steps_between**, is:
 
     Str
 
-**Hint:** This numeric literal was given the type **Dec** because it was never used as any concrete number type. To use a different numeric type, add a suffix or a type annotation.
+**Hint:** For this to work, the type would need to have a method named **steps_between** associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig

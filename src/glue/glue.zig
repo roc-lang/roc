@@ -303,13 +303,18 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
     };
     defer gpa.free(relation_artifacts);
 
+    const lir_roots = lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root_artifact.root_requests.runtime_requests) catch {
+        return error.OutOfMemory;
+    };
+    defer gpa.free(lir_roots);
+
     var lowered = lir.CheckedPipeline.lowerCheckedModulesToLir(
         gpa,
         .{
             .root = CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
             .imports = imported_artifacts,
         },
-        .{ .requests = root_artifact.root_requests.runtime_requests },
+        .{ .requests = lir_roots },
         .{
             .target_usize = target_usize,
         },
