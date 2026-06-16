@@ -46,6 +46,8 @@ pub const Tag = enum {
     statement_expect,
     statement_for,
     statement_while,
+    statement_infinite_loop,
+    statement_breakable_loop,
     statement_break,
     statement_return,
     statement_import,
@@ -262,6 +264,7 @@ pub const Tag = enum {
     diag_mutually_recursive_type_aliases,
     diag_deprecated_number_suffix,
     diag_range_op_chained,
+    diag_infinite_loop_never_exits,
 };
 
 /// Typed payload union for accessing node data in a type-safe manner.

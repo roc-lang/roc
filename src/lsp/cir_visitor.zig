@@ -403,6 +403,16 @@ pub fn CirVisitor(comptime Context: type) type {
                     if (self.stopped) return;
                     self.walkExpr(store, w.body);
                 },
+                .s_infinite_loop => |w| {
+                    self.walkExpr(store, w.cond);
+                    if (self.stopped) return;
+                    self.walkExpr(store, w.body);
+                },
+                .s_breakable_loop => |w| {
+                    self.walkExpr(store, w.cond);
+                    if (self.stopped) return;
+                    self.walkExpr(store, w.body);
+                },
                 .s_expr => |e| {
                     self.walkExpr(store, e.expr);
                 },

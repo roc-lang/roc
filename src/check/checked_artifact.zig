@@ -1112,6 +1112,10 @@ fn statementDependsOnUnboundPlatformRequirement(
             exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, for_.body, relation_blocked_exprs),
         .while_ => |while_| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, while_.cond, relation_blocked_exprs) or
             exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, while_.body, relation_blocked_exprs),
+        .infinite_loop => |loop| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, loop.cond, relation_blocked_exprs) or
+            exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, loop.body, relation_blocked_exprs),
+        .breakable_loop => |loop| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, loop.cond, relation_blocked_exprs) or
+            exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, loop.body, relation_blocked_exprs),
         .return_ => |ret| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, ret.expr, relation_blocked_exprs),
         .pending,
         .crash,
@@ -4898,6 +4902,8 @@ pub const CheckedStatementData = union(enum) {
         plan: ?static_dispatch.IteratorForPlanId,
     },
     while_: struct { cond: CheckedExprId, body: CheckedExprId },
+    infinite_loop: struct { cond: CheckedExprId, body: CheckedExprId },
+    breakable_loop: struct { cond: CheckedExprId, body: CheckedExprId },
     break_,
     return_: struct { expr: CheckedExprId, lambda: CheckedExprId },
     import_,
@@ -5587,6 +5593,14 @@ const CheckedSourceNodes = struct {
             .s_while => |while_| {
                 try self.markExpr(while_.cond, work);
                 try self.markExpr(while_.body, work);
+            },
+            .s_infinite_loop => |loop| {
+                try self.markExpr(loop.cond, work);
+                try self.markExpr(loop.body, work);
+            },
+            .s_breakable_loop => |loop| {
+                try self.markExpr(loop.cond, work);
+                try self.markExpr(loop.body, work);
             },
             .s_return => |ret| {
                 try self.markExpr(ret.expr, work);
@@ -6349,6 +6363,8 @@ fn checkedStatementDataDiverges(
         => |expr| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, expr, expr_states, statement_states),
         .for_ => |for_| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, for_.expr, expr_states, statement_states),
         .while_ => |while_| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, while_.cond, expr_states, statement_states),
+        .infinite_loop => true,
+        .breakable_loop => |loop| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, loop.cond, expr_states, statement_states),
         .pending,
         .import_,
         .alias_decl,
@@ -7121,6 +7137,14 @@ const CheckedBodyPayloadCopier = struct {
             .s_while => |while_| .{ .while_ = .{
                 .cond = self.checkedExpr(while_.cond),
                 .body = self.checkedExpr(while_.body),
+            } },
+            .s_infinite_loop => |loop| .{ .infinite_loop = .{
+                .cond = self.checkedExpr(loop.cond),
+                .body = self.checkedExpr(loop.body),
+            } },
+            .s_breakable_loop => |loop| .{ .breakable_loop = .{
+                .cond = self.checkedExpr(loop.cond),
+                .body = self.checkedExpr(loop.body),
             } },
             .s_break => .break_,
             .s_return => |ret| .{ .return_ = .{
@@ -9393,6 +9417,14 @@ const CheckedTemplateRefCollector = struct {
                 try self.collectExpr(while_.cond);
                 try self.collectExpr(while_.body);
             },
+            .infinite_loop => |loop| {
+                try self.collectExpr(loop.cond);
+                try self.collectExpr(loop.body);
+            },
+            .breakable_loop => |loop| {
+                try self.collectExpr(loop.cond);
+                try self.collectExpr(loop.body);
+            },
             .pending,
             .crash,
             .break_,
@@ -10051,6 +10083,14 @@ const NestedProcSiteBuilder = struct {
             .while_ => |while_| {
                 try self.scanExpr(while_.cond, owner, false);
                 try self.scanExpr(while_.body, owner, false);
+            },
+            .infinite_loop => |loop| {
+                try self.scanExpr(loop.cond, owner, false);
+                try self.scanExpr(loop.body, owner, false);
+            },
+            .breakable_loop => |loop| {
+                try self.scanExpr(loop.cond, owner, false);
+                try self.scanExpr(loop.body, owner, false);
             },
             .pending,
             .crash,

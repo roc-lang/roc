@@ -9130,6 +9130,8 @@ const BodyContext = struct {
             .expect,
             .for_,
             .while_,
+            .infinite_loop,
+            .breakable_loop,
             .break_,
             .return_,
             => true,
@@ -9930,6 +9932,14 @@ const BodyContext = struct {
                 try self.collectReassignedBindersInExpr(while_.cond, out);
                 try self.collectReassignedBindersInExpr(while_.body, out);
             },
+            .infinite_loop => |loop| {
+                try self.collectReassignedBindersInExpr(loop.cond, out);
+                try self.collectReassignedBindersInExpr(loop.body, out);
+            },
+            .breakable_loop => |loop| {
+                try self.collectReassignedBindersInExpr(loop.cond, out);
+                try self.collectReassignedBindersInExpr(loop.body, out);
+            },
             .return_ => |ret| try self.collectReassignedBindersInExpr(ret.expr, out),
             .pending,
             .crash,
@@ -10101,6 +10111,44 @@ const BodyContext = struct {
                 const unit_ty = try self.unitType();
                 const loop_ty = try self.loopStateType(unit_ty, carries);
                 const expr = try self.builder.program.addExpr(.{ .ty = loop_ty, .data = try self.lowerWhile(while_, loop_ty, carries) });
+                if (carries.len == 0) break :blk .{ .expr = expr };
+
+                break :blk .{ .let_ = .{
+                    .pat = try self.finalCarryPattern(carries, loop_ty),
+                    .value = expr,
+                } };
+            },
+            .infinite_loop => |loop| blk: {
+                var reassigned = std.ArrayList(checked.PatternBinderId).empty;
+                defer reassigned.deinit(self.allocator);
+                try self.collectReassignedBindersInExpr(loop.cond, &reassigned);
+                try self.collectReassignedBindersInExpr(loop.body, &reassigned);
+
+                const carries = try self.prepareLoopCarries(reassigned.items);
+                defer self.allocator.free(carries);
+
+                const unit_ty = try self.unitType();
+                const loop_ty = try self.loopStateType(unit_ty, carries);
+                const expr = try self.builder.program.addExpr(.{ .ty = loop_ty, .data = try self.lowerWhile(loop, loop_ty, carries) });
+                if (carries.len == 0) break :blk .{ .expr = expr };
+
+                break :blk .{ .let_ = .{
+                    .pat = try self.finalCarryPattern(carries, loop_ty),
+                    .value = expr,
+                } };
+            },
+            .breakable_loop => |loop| blk: {
+                var reassigned = std.ArrayList(checked.PatternBinderId).empty;
+                defer reassigned.deinit(self.allocator);
+                try self.collectReassignedBindersInExpr(loop.cond, &reassigned);
+                try self.collectReassignedBindersInExpr(loop.body, &reassigned);
+
+                const carries = try self.prepareLoopCarries(reassigned.items);
+                defer self.allocator.free(carries);
+
+                const unit_ty = try self.unitType();
+                const loop_ty = try self.loopStateType(unit_ty, carries);
+                const expr = try self.builder.program.addExpr(.{ .ty = loop_ty, .data = try self.lowerWhile(loop, loop_ty, carries) });
                 if (carries.len == 0) break :blk .{ .expr = expr };
 
                 break :blk .{ .let_ = .{
