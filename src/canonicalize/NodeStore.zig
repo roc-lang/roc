@@ -415,7 +415,7 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 77;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 78;
 /// Count of the expression nodes in the ModuleEnv
 pub const MODULEENV_EXPR_NODE_COUNT = 53;
 /// Count of the statement nodes in the ModuleEnv
@@ -3853,6 +3853,10 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
             node.tag = .diag_invalid_string_interpolation;
             region = r.region;
         },
+        .unreachable_string_pattern_capture => |r| {
+            node.tag = .diag_unreachable_string_pattern_capture;
+            region = r.region;
+        },
         .pattern_arg_invalid => |r| {
             node.tag = .diag_pattern_arg_invalid;
             region = r.region;
@@ -4263,6 +4267,9 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             .region = store.getRegionAt(node_idx),
         } },
         .diag_invalid_string_interpolation => return CIR.Diagnostic{ .invalid_string_interpolation = .{
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_unreachable_string_pattern_capture => return CIR.Diagnostic{ .unreachable_string_pattern_capture = .{
             .region = store.getRegionAt(node_idx),
         } },
         .diag_pattern_arg_invalid => return CIR.Diagnostic{ .pattern_arg_invalid = .{

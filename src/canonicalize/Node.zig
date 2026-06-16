@@ -199,6 +199,7 @@ pub const Tag = enum {
     diag_invalid_top_level_statement,
     diag_expr_not_canonicalized,
     diag_invalid_string_interpolation,
+    diag_unreachable_string_pattern_capture,
     diag_pattern_arg_invalid,
     diag_pattern_not_canonicalized,
     diag_can_lambda_not_implemented,

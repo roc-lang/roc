@@ -91,6 +91,9 @@ pub const Diagnostic = union(enum) {
     invalid_string_interpolation: struct {
         region: Region,
     },
+    unreachable_string_pattern_capture: struct {
+        region: Region,
+    },
     pattern_arg_invalid: struct {
         region: Region,
     },
@@ -374,6 +377,7 @@ pub const Diagnostic = union(enum) {
             .invalid_top_level_statement => |d| d.region,
             .expr_not_canonicalized => |d| d.region,
             .invalid_string_interpolation => |d| d.region,
+            .unreachable_string_pattern_capture => |d| d.region,
             .pattern_arg_invalid => |d| d.region,
             .pattern_not_canonicalized => |d| d.region,
             .can_lambda_not_implemented => |d| d.region,

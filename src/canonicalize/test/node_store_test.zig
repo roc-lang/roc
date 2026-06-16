@@ -640,6 +640,12 @@ test "NodeStore round trip - Diagnostics" {
     });
 
     try diagnostics.append(gpa, CIR.Diagnostic{
+        .unreachable_string_pattern_capture = .{
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
         .pattern_arg_invalid = .{
             .region = rand_region(),
         },

@@ -778,6 +778,49 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "((\"BAR\", \"tail\"), (\"VALUE\", \"rest\"))" },
     },
     .{
+        .name = "inspect: string interpolation pattern allows empty captures with exact suffix",
+        .source_kind = .module,
+        .source =
+        \\piece : Str -> Str
+        \\piece = |s| match s {
+        \\    "a${mid}b" => mid
+        \\    _ => "miss"
+        \\}
+        \\
+        \\main = (piece("ab"), piece("acb"), piece("acbd"), piece("a"))
+        ,
+        .expected = .{ .inspect_str = "(\"\", \"c\", \"miss\", \"miss\")" },
+    },
+    .{
+        .name = "inspect: string interpolation pattern discards at start middle and end",
+        .source_kind = .module,
+        .source =
+        \\classify : Str -> Str
+        \\classify = |s| match s {
+        \\    "${_}user/${id}/posts/${_}" => id
+        \\    _ => "miss"
+        \\}
+        \\
+        \\main = (classify("/api/user/42/posts/latest"), classify("prefixuser//posts/"), classify("/api/user/42/comments/latest"))
+        ,
+        .expected = .{ .inspect_str = "(\"42\", \"\", \"miss\")" },
+    },
+    .{
+        .name = "inspect: string interpolation pattern overlapping suffix branches",
+        .source_kind = .module,
+        .source =
+        \\route : Str -> (Str, Str)
+        \\route = |s| match s {
+        \\    "file:${name}.txt" => ("txt", name)
+        \\    "file:${name}.json" => ("json", name)
+        \\    _ => ("miss", "")
+        \\}
+        \\
+        \\main = (route("file:notes.txt"), route("file:data.json"), route("file:data.md"))
+        ,
+        .expected = .{ .inspect_str = "((\"txt\", \"notes\"), (\"json\", \"data\"), (\"miss\", \"\"))" },
+    },
+    .{
         .name = "inspect: string interpolation pattern capture feeds read-only str builtins",
         .source_kind = .module,
         .source =
@@ -832,6 +875,24 @@ const core_tests = [_]TestCase{
         .expected = .{ .allocations_at_most = .{
             .output = "abcdefghijklmnopqrstuvwxyz0123456789",
             .max_allocations = 2,
+        } },
+    },
+    .{
+        .name = "allocation - string interpolation pattern middle capture remains heap slice",
+        .source =
+        \\{
+        \\    payload = Str.repeat("abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ", 1)
+        \\    source = Str.concat(Str.concat("prefix/user/", payload), "/posts/tail")
+        \\
+        \\    match source {
+        \\        "${_}/user/${id}/posts/${_}" => id
+        \\        _ => ""
+        \\    }
+        \\}
+        ,
+        .expected = .{ .allocations_at_most = .{
+            .output = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+            .max_allocations = 3,
         } },
     },
     .{

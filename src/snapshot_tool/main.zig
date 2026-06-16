@@ -2959,11 +2959,13 @@ fn validateMonoOutput(allocator: Allocator, mono_source: []const u8, source_path
     };
     defer allocator.free(can_diagnostics);
 
-    // Count only actual errors, not warnings (shadowing_warning is just a warning)
+    // Count only actual errors, not warnings
     var error_count: usize = 0;
     for (can_diagnostics) |diagnostic| {
         switch (diagnostic) {
-            .shadowing_warning => {}, // Skip warnings
+            .shadowing_warning,
+            .unreachable_string_pattern_capture,
+            => {}, // Skip warnings
             else => error_count += 1,
         }
     }
@@ -2972,7 +2974,9 @@ fn validateMonoOutput(allocator: Allocator, mono_source: []const u8, source_path
         std.log.err("MONO CANONICALIZATION ERROR in {s}: {d} error(s) in generated MONO output:", .{ source_path, error_count });
         for (can_diagnostics) |diagnostic| {
             switch (diagnostic) {
-                .shadowing_warning => {}, // Skip warnings in output too
+                .shadowing_warning,
+                .unreachable_string_pattern_capture,
+                => {}, // Skip warnings in output too
                 else => {
                     const tag_name = @tagName(diagnostic);
                     std.log.err("  - {s}", .{tag_name});

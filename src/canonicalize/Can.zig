@@ -12544,6 +12544,11 @@ fn canonicalizeStringPattern(
             },
             .capture => |capture| {
                 if (pending_capture) |pending| {
+                    if (current_text.items.len == 0) {
+                        try self.env.pushDiagnostic(Diagnostic{ .unreachable_string_pattern_capture = .{
+                            .region = self.parse_ir.tokenizedRegionToRegion(capture.region),
+                        } });
+                    }
                     const delimiter = try self.env.insertString(current_text.items);
                     current_text.clearRetainingCapacity();
                     try steps.append(self.env.gpa, .{
