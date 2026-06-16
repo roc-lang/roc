@@ -1,4 +1,4 @@
-//! Typed Roc source generator for the typecheck fuzzer.
+//! Typed Roc type-module generator for fuzzers.
 //!
 //! Userspace Roc identifiers emitted by this generator must come from `fresh`.
 //! Builtin type, tag, and function names are the only hardcoded Roc names here.
@@ -9,7 +9,7 @@ const FuzzReader = @import("FuzzReader.zig");
 const Self = @This();
 
 const max_methods = 256;
-const max_method_arity = 2;
+pub const max_method_arity = 2;
 const max_local_bindings = 4;
 const max_context_values = 32;
 
@@ -22,7 +22,10 @@ symbols: RootSymbols,
 methods: [max_methods]Method,
 method_count: usize,
 
-const SymbolKind = enum {
+pub const SymbolKind = enum {
+    app_file,
+    platform_file,
+    package,
     type,
     tag,
     field,
@@ -30,12 +33,12 @@ const SymbolKind = enum {
     function,
 };
 
-const Symbol = struct {
+pub const Symbol = struct {
     kind: SymbolKind,
     id: u32,
 };
 
-const RootSymbols = struct {
+pub const RootSymbols = struct {
     typ: Symbol,
     tag0: Symbol,
     tag1: Symbol,
@@ -46,7 +49,7 @@ const RootSymbols = struct {
     field2: Symbol,
 };
 
-const Type = enum {
+pub const Type = enum {
     root,
     bool,
     str,
@@ -57,7 +60,7 @@ const Type = enum {
     tuple_bool_u64,
 };
 
-const Method = struct {
+pub const Method = struct {
     symbol: Symbol,
     param_types: [max_method_arity]Type,
     arity: u8,
@@ -105,6 +108,43 @@ pub fn getOutput(self: *const Self) []const u8 {
 
 pub fn getRootFileName(self: *const Self) []const u8 {
     return self.root_file_name orelse @panic("typecheck fuzzer root file name requested before generation");
+}
+
+pub fn getRootSymbols(self: *const Self) RootSymbols {
+    return self.symbols;
+}
+
+pub fn getMethods(self: *const Self) []const Method {
+    return self.methods[0..self.method_count];
+}
+
+pub fn freshSymbol(self: *Self, kind: SymbolKind) Symbol {
+    return self.fresh(kind);
+}
+
+pub fn writeSymbolTo(output: *std.ArrayList(u8), allocator: std.mem.Allocator, symbol: Symbol) std.mem.Allocator.Error!void {
+    try output.print(allocator, "{c}{d}", .{ symbolPrefix(symbol.kind), symbol.id });
+}
+
+pub fn writeTypeTo(self: *const Self, output: *std.ArrayList(u8), allocator: std.mem.Allocator, typ: Type) std.mem.Allocator.Error!void {
+    switch (typ) {
+        .root => try writeSymbolTo(output, allocator, self.symbols.typ),
+        .bool => try output.appendSlice(allocator, "Bool"),
+        .str => try output.appendSlice(allocator, "Str"),
+        .u64 => try output.appendSlice(allocator, "U64"),
+        .record => {
+            try output.appendSlice(allocator, "{ ");
+            try writeSymbolTo(output, allocator, self.symbols.field0);
+            try output.appendSlice(allocator, " : Bool, ");
+            try writeSymbolTo(output, allocator, self.symbols.field1);
+            try output.appendSlice(allocator, " : U64, ");
+            try writeSymbolTo(output, allocator, self.symbols.field2);
+            try output.appendSlice(allocator, " : Str }");
+        },
+        .list_u64 => try output.appendSlice(allocator, "List(U64)"),
+        .try_u64_str => try output.appendSlice(allocator, "Try(U64, Str)"),
+        .tuple_bool_u64 => try output.appendSlice(allocator, "(Bool, U64)"),
+    }
 }
 
 pub fn generateModule(self: *Self) std.mem.Allocator.Error!void {
@@ -1037,24 +1077,7 @@ fn writeTupleLiteral(self: *Self, context: ExprContext, depth: u8, visible_metho
 }
 
 fn writeType(self: *Self, typ: Type) std.mem.Allocator.Error!void {
-    switch (typ) {
-        .root => try self.writeSymbol(self.symbols.typ),
-        .bool => try self.write("Bool"),
-        .str => try self.write("Str"),
-        .u64 => try self.write("U64"),
-        .record => {
-            try self.write("{ ");
-            try self.writeSymbol(self.symbols.field0);
-            try self.write(" : Bool, ");
-            try self.writeSymbol(self.symbols.field1);
-            try self.write(" : U64, ");
-            try self.writeSymbol(self.symbols.field2);
-            try self.write(" : Str }");
-        },
-        .list_u64 => try self.write("List(U64)"),
-        .try_u64_str => try self.write("Try(U64, Str)"),
-        .tuple_bool_u64 => try self.write("(Bool, U64)"),
-    }
+    try self.writeTypeTo(&self.output, self.allocator, typ);
 }
 
 fn chooseType(self: *Self) Type {
@@ -1091,11 +1114,14 @@ fn fresh(self: *Self, kind: SymbolKind) Symbol {
 }
 
 fn writeSymbol(self: *Self, symbol: Symbol) std.mem.Allocator.Error!void {
-    try self.output.print(self.allocator, "{c}{d}", .{ symbolPrefix(symbol.kind), symbol.id });
+    try writeSymbolTo(&self.output, self.allocator, symbol);
 }
 
-fn symbolPrefix(kind: SymbolKind) u8 {
+pub fn symbolPrefix(kind: SymbolKind) u8 {
     return switch (kind) {
+        .app_file => 'B',
+        .platform_file => 'P',
+        .package => 'p',
         .type => 'T',
         .tag => 'A',
         .field => 'r',
