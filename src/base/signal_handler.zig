@@ -539,8 +539,7 @@ test "installForCurrentThread records current stack bounds" {
             }
         }.callback,
         .access_violation = struct {
-            fn callback(_: usize, context: AccessViolationContext) noreturn {
-                _ = context;
+            fn callback(_: usize, _: AccessViolationContext) noreturn {
                 std.process.exit(139);
             }
         }.callback,
