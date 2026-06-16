@@ -1,12 +1,12 @@
 platform "http-headers"
 	requires {
-		main! : Headers => U64
+		main! : Str => U64
 	}
 	exposes [Headers]
 	packages {}
 	provides { "roc_main": main_for_host! }
 	targets: {
-		inputs: "targets/",
+		inputs_dir: "targets/",
 		x64mac: { inputs: ["libhost.a", app], output: Exe },
 		arm64mac: { inputs: ["libhost.a", app], output: Exe },
 		x64musl: { inputs: ["libhost.a", app], output: Exe },
@@ -17,5 +17,5 @@ platform "http-headers"
 
 import Headers
 
-main_for_host! : Headers => U64
+main_for_host! : Str => U64
 main_for_host! = |headers| main!(headers)

@@ -8,7 +8,7 @@ platform ""
         "roc_stdout_unused_niche_feature": Stdout.unused_niche_feature!,
     }
     targets: {
-        inputs: "targets/",
+        inputs_dir: "targets/",
         wasm32: { inputs: ["host.wasm", app] },
     }
 

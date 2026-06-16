@@ -75,7 +75,7 @@ platform ""
         "roc_tree": tree_for_host,
     }
     targets: {
-        inputs: "targets/",
+        inputs_dir: "targets/",
         x64glibc: { inputs: [app] },
     }
 

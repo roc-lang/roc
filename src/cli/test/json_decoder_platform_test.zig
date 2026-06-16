@@ -96,6 +96,12 @@ test "JSON Decoder platform derives record decoder without runtime allocations" 
         try runJsonDecoderAndCheckOutput(allocator, output_path, json, expected_stdout);
     }
 
+    const missing_required_json = try buildMissingRequiredJson(allocator);
+    defer allocator.free(missing_required_json);
+    const missing_required_stdout = try buildExpectedStdout(allocator, 999999);
+    defer allocator.free(missing_required_stdout);
+    try runJsonDecoderAndCheckOutput(allocator, output_path, missing_required_json, missing_required_stdout);
+
     try runJsonDecoderAndCheckInvalidUtf8(allocator, output_path);
 }
 
@@ -132,6 +138,23 @@ fn buildJson(
     }
 
     try json.appendSlice(allocator, "\n}\n");
+
+    return json.toOwnedSlice(allocator);
+}
+
+fn buildMissingRequiredJson(allocator: std.mem.Allocator) ![]u8 {
+    var json: std.ArrayList(u8) = .empty;
+    errdefer json.deinit(allocator);
+
+    try json.appendSlice(allocator, "{\n");
+    try json.appendSlice(allocator, "  \"status\" : \"Active\",\n");
+    try json.appendSlice(allocator, "  \"nested\" : {\n");
+    try json.appendSlice(allocator, "    \"bar\" : \"");
+    try json.appendSlice(allocator, nested_bar_value);
+    try json.appendSlice(allocator, "\",\n");
+    try json.appendSlice(allocator, "    \"mode\" : \"Warm\"\n");
+    try json.appendSlice(allocator, "  }\n");
+    try json.appendSlice(allocator, "}\n");
 
     return json.toOwnedSlice(allocator);
 }

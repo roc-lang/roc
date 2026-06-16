@@ -1933,7 +1933,7 @@ fn customListBuiltinInlined(
         \\    packages {}
         \\    provides { "roc_main": main_for_host! }
         \\    targets: {
-        \\        inputs: "targets/",
+        \\        inputs_dir: "targets/",
         \\        arm64mac: { inputs: [app], output: Archive },
         \\        x64mac: { inputs: [app], output: Archive },
         \\        arm64musl: { inputs: [app], output: Archive },

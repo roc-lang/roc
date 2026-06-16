@@ -53,10 +53,6 @@ const RocStr = extern struct {
     }
 };
 
-const RocJson = extern struct {
-    raw: RocStr,
-};
-
 const StaticBorrowedData = extern struct {
     refcount: isize,
     data: u8,
@@ -71,7 +67,7 @@ fn staticBorrowedDataPtr() [*]u8 {
     return @as([*]u8, @ptrCast(&static_borrowed_data.data));
 }
 
-extern fn roc_main(json: RocJson) callconv(.c) u64;
+extern fn roc_main(json: RocStr) callconv(.c) u64;
 
 comptime {
     @export(&hostAlloc, .{ .name = "roc_alloc", .visibility = .hidden });
@@ -206,7 +202,7 @@ fn hostMain() c_int {
 
     if (!std.unicode.utf8ValidateSlice(input)) return fail(error.InvalidUtf8);
 
-    const result = roc_main(.{ .raw = RocStr.borrowed(input) });
+    const result = roc_main(RocStr.borrowed(input));
 
     var result_buf: [32]u8 = undefined;
     rawWriteStdout(formatU64(result, &result_buf));

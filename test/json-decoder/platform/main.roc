@@ -1,12 +1,12 @@
 platform "json-decoder"
 	requires {
-		main! : Json => U64
+		main! : Str => U64
 	}
 	exposes [Json]
 	packages {}
 	provides { "roc_main": main_for_host! }
 	targets: {
-		inputs: "targets/",
+		inputs_dir: "targets/",
 		x64mac: { inputs: ["libhost.a", app], output: Exe },
 		arm64mac: { inputs: ["libhost.a", app], output: Exe },
 		x64musl: { inputs: ["libhost.a", app], output: Exe },
@@ -17,5 +17,5 @@ platform "json-decoder"
 
 import Json
 
-main_for_host! : Json => U64
+main_for_host! : Str => U64
 main_for_host! = |json| main!(json)

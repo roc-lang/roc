@@ -11,48 +11,24 @@ Builtin :: [].{
 	].{
 		Record :: [ProvidedByCompiler].{
 			init : DecoderRecordSpec(_shape), _slot -> DecoderRecordState(_shape, _slot)
-			init = |_, _| {
-				crash "Decoder.Record.init is compiler-generated"
-			}
 
 			put : DecoderRecordSpec(_shape), DecoderRecordState(_shape, _slot), Str, _slot, (Str, Str -> Bool) -> DecoderRecordState(_shape, _slot)
-			put = |_, _, _, _, _| {
-				crash "Decoder.Record.put is compiler-generated"
-			}
 
-			finish : DecoderRecordSpec(_shape), DecoderRecordState(_shape, _slot), (_slot, Decoder(_field) -> _field) -> _shape
-			finish = |_, _, _| {
-				crash "Decoder.Record.finish is compiler-generated"
-			}
+			finish : DecoderRecordSpec(_shape), DecoderRecordState(_shape, _slot), _err -> Try(_shape, _err)
 		}
 
 		TagUnion :: [ProvidedByCompiler].{
-			decode : DecoderTagUnionSpec(_shape), Str, _slot, (Str, Str -> Bool), (_slot, Decoder(_field) -> _field) -> _shape
-			decode = |_, _, _, _, _| {
-				crash "Decoder.TagUnion.decode is compiler-generated"
-			}
+			decode : DecoderTagUnionSpec(_shape), Str, _slot, (Str, Str -> Bool), _err -> Try(_shape, _err)
 		}
 
-		dispatch : Decoder(_shape), _slot, (DecoderStrSpec(_shape), _slot -> _shape), (DecoderRecordSpec(_shape), _slot -> _shape), (DecoderTagUnionSpec(_shape), _slot -> _shape) -> _shape
-		dispatch = |_, _, _, _, _| {
-			crash "Decoder.dispatch is compiler-generated"
-		}
-
-		decode : Decoder(shape), source, fmt -> shape
+		decode : Decoder(shape), input -> Try(shape, err)
 			where [
-				fmt.init : fmt, source -> input,
-				fmt.decode_str : DecoderStrSpec(shape), input -> shape,
-				fmt.decode_record : DecoderRecordSpec(shape), input -> shape,
-				fmt.decode_tag_union : DecoderTagUnionSpec(shape), input -> shape,
+				input.decode_str : DecoderStrSpec(shape), input -> Try(shape, err),
+				input.decode_record : DecoderRecordSpec(shape), input -> Try(shape, err),
+				input.decode_tag_union : DecoderTagUnionSpec(shape), input -> Try(shape, err),
 			]
-		decode = |_decoder, _source, _format| {
-			crash "Decoder.decode is compiler-generated"
-		}
 
-		decode_str : DecoderStrSpec(_shape), _slot -> _shape
-		decode_str = |_, _| {
-			crash "Decoder.decode_str is compiler-generated"
-		}
+		decode_str : DecoderStrSpec(_shape), _slot, _err -> Try(_shape, _err)
 	}
 
 	Str :: [ProvidedByCompiler].{
@@ -241,15 +217,22 @@ Builtin :: [].{
 
 		## Finds the first occurrence of a delimiter in a string.
 		##
-		## The returned strings are slices of the original string. If the delimiter is
-		## not found, `found` is `Bool.False`, `before` is the original string, and
-		## `matched` and `after` are empty.
+		## The returned strings are slices of the original string.
 		##
 		## ```roc
-		## expect "foo: bar".find_first(":") == { before: "foo", found: Bool.True, matched: ":", after: " bar" }
-		## expect "foo".find_first(":").found == Bool.False
+		## expect "foo: bar".find_first(":") == Ok({ before: "foo", after: " bar" })
+		## expect "foo".find_first(":") == Err(NotFound)
 		## ```
-		find_first : Str, Str -> { before : Str, found : Bool, matched : Str, after : Str }
+		find_first : Str, Str -> Try({ before : Str, after : Str }, [NotFound])
+		find_first = |source, delimiter| {
+			split = str_find_first_raw(source, delimiter)
+
+			if split.found {
+				Ok({ before: split.before, after: split.after })
+			} else {
+				Err(NotFound)
+			}
+		}
 
 		## Gives the number of bytes in a [Str] value.
 		## ```roc
@@ -10127,6 +10110,9 @@ list_replace_unsafe : List(item), U64, item -> { list : List(item), prev : item 
 
 # Implemented by the compiler, does not perform bounds checks
 list_swap_unsafe : List(item), U64, U64 -> List(item)
+
+# Implemented by the compiler. Returns string slices into the source string.
+str_find_first_raw : Str, Str -> { before : Str, found : Bool, matched : Str, after : Str }
 
 # Implemented by the compiler. Returns 1 (otherwise 0) when List.map may reuse
 # the input list's allocation for its output: the input and output element

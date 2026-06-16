@@ -2194,7 +2194,7 @@ pub const ExposedItem = union(enum) {
 
 /// A targets section in a platform header
 pub const TargetsSection = struct {
-    inputs_path: ?Token.Idx, // "inputs:" directive string literal
+    inputs_dir: ?Token.Idx, // "inputs_dir:" directive string literal
     entries: TargetEntry.Span, // per-target entries
     region: TokenizedRegion,
 

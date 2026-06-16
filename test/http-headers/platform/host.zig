@@ -50,6 +50,7 @@ const ParsedHead = struct {
     path: []const u8,
     protocol: []const u8,
     content_length: usize,
+    header_start: usize,
     header_bytes: usize,
 };
 
@@ -86,10 +87,6 @@ const RocStr = extern struct {
     }
 };
 
-const RocHeaders = extern struct {
-    raw: RocStr,
-};
-
 const StaticBorrowedData = extern struct {
     refcount: isize,
     data: u8,
@@ -106,7 +103,7 @@ fn staticBorrowedDataPtr() [*]u8 {
     return @as([*]u8, @ptrCast(&static_borrowed_data.data));
 }
 
-extern fn roc_main(headers: RocHeaders) callconv(.c) u64;
+extern fn roc_main(headers: RocStr) callconv(.c) u64;
 
 comptime {
     @export(&hostAlloc, .{ .name = "roc_alloc", .visibility = .hidden });
@@ -253,8 +250,7 @@ fn serverMain() c_int {
     var request_buffer: [request_buffer_size]u8 = undefined;
     const request = receiveRequest(client, &request_buffer) catch |err| return fail(err);
 
-    const headers = RocHeaders{ .raw = RocStr.borrowed(request.header_block) };
-    const result = roc_main(headers);
+    const result = roc_main(RocStr.borrowed(request.header_block));
 
     sendResponse(client, result) catch |err| return fail(err);
     return 0;
@@ -290,7 +286,7 @@ fn receiveRequest(fd: Socket, buffer: *[request_buffer_size]u8) ServerError!Pars
             .content_length = head.content_length,
             .header_bytes = head.header_bytes,
             .total_bytes = required_total,
-            .header_block = buffer[0..head.header_bytes],
+            .header_block = buffer[head.header_start..head.header_bytes],
         };
     }
 
@@ -320,12 +316,13 @@ fn parseHead(bytes: []const u8) ParseError!ParsedHead {
         const line = bytes[line_start..line_end];
 
         if (line.len != 0) {
-            const colon = findByte(line, ':') orelse return error.BadHeader;
-            const name = line[0..colon];
-            if (asciiEqualIgnoreCase(name, "Content-Length")) {
-                if (saw_content_length) return error.DuplicateContentLength;
-                content_length = try parseContentLength(line[colon + 1 ..]);
-                saw_content_length = true;
+            if (findByte(line, ':')) |colon| {
+                const name = line[0..colon];
+                if (asciiEqualIgnoreCase(name, "Content-Length")) {
+                    if (saw_content_length) return error.DuplicateContentLength;
+                    content_length = try parseContentLength(line[colon + 1 ..]);
+                    saw_content_length = true;
+                }
             }
         }
 
@@ -336,6 +333,7 @@ fn parseHead(bytes: []const u8) ParseError!ParsedHead {
         .path = path,
         .protocol = protocol,
         .content_length = content_length,
+        .header_start = request_line_end + 2,
         .header_bytes = header_bytes,
     };
 }

@@ -95,6 +95,18 @@ test "HTTP header Decoder platform derives record decoder without runtime alloca
         try runServerAndCheckResponse(allocator, output_path, request, expected_response);
     }
 
+    const missing_required_request = try buildMissingRequiredRequest(allocator);
+    defer allocator.free(missing_required_request);
+    const missing_required_response = try buildExpectedResponse(allocator, 999999);
+    defer allocator.free(missing_required_response);
+    try runServerAndCheckResponse(allocator, output_path, missing_required_request, missing_required_response);
+
+    const bad_header_request = try buildBadHeaderRequest(allocator);
+    defer allocator.free(bad_header_request);
+    const bad_header_response = try buildExpectedResponse(allocator, 999999);
+    defer allocator.free(bad_header_response);
+    try runServerAndCheckResponse(allocator, output_path, bad_header_request, bad_header_response);
+
     try runServerAndCheckInvalidUtf8(allocator, output_path);
 }
 
@@ -118,6 +130,34 @@ fn buildRequest(allocator: std.mem.Allocator, optional_mask: u8) ![]u8 {
         try request.appendSlice(allocator, "\r\n");
     }
 
+    try request.appendSlice(allocator, "Content-Length: 0\r\n");
+    try request.appendSlice(allocator, "\r\n");
+
+    return request.toOwnedSlice(allocator);
+}
+
+fn buildMissingRequiredRequest(allocator: std.mem.Allocator) ![]u8 {
+    var request: std.ArrayList(u8) = .empty;
+    errdefer request.deinit(allocator);
+
+    try request.appendSlice(allocator, "GET /missing-required HTTP/1.1\r\n");
+    try request.appendSlice(allocator, "Host: localhost\r\n");
+    try request.appendSlice(allocator, "Content-Length: 0\r\n");
+    try request.appendSlice(allocator, "\r\n");
+
+    return request.toOwnedSlice(allocator);
+}
+
+fn buildBadHeaderRequest(allocator: std.mem.Allocator) ![]u8 {
+    var request: std.ArrayList(u8) = .empty;
+    errdefer request.deinit(allocator);
+
+    try request.appendSlice(allocator, "GET /bad-header HTTP/1.1\r\n");
+    try request.appendSlice(allocator, "Host: localhost\r\n");
+    try request.appendSlice(allocator, "Foo: ");
+    try request.appendSlice(allocator, required_foo_value);
+    try request.appendSlice(allocator, "\r\n");
+    try request.appendSlice(allocator, "BrokenHeaderLine\r\n");
     try request.appendSlice(allocator, "Content-Length: 0\r\n");
     try request.appendSlice(allocator, "\r\n");
 

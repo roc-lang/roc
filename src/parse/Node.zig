@@ -529,7 +529,7 @@ pub const Tag = enum {
     // Target section nodes
 
     /// A targets section in a platform header
-    /// * main_token - inputs string token (or 0 if no inputs directive)
+    /// * main_token - inputs_dir string token (or 0 if no inputs_dir directive)
     /// * lhs - start of TargetEntry span
     /// * rhs - length of TargetEntry span
     targets_section,

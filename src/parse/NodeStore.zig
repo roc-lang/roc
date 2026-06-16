@@ -2826,7 +2826,7 @@ pub fn whereClauseSlice(store: *const NodeStore, span: AST.WhereClause.Span) []A
 pub fn addTargetsSection(store: *NodeStore, section: AST.TargetsSection) std.mem.Allocator.Error!AST.TargetsSection.Idx {
     const node = Node{
         .tag = .targets_section,
-        .main_token = section.inputs_path orelse 0,
+        .main_token = section.inputs_dir orelse 0,
         .data = .{
             .lhs = section.entries.span.start,
             .rhs = section.entries.span.len,
@@ -3147,10 +3147,10 @@ pub fn getTargetsSection(store: *const NodeStore, idx: AST.TargetsSection.Idx) A
     const node = store.nodes.get(@enumFromInt(@intFromEnum(idx)));
     std.debug.assert(node.tag == .targets_section);
 
-    const inputs_path: ?Token.Idx = if (node.main_token == 0) null else node.main_token;
+    const inputs_dir: ?Token.Idx = if (node.main_token == 0) null else node.main_token;
 
     return .{
-        .inputs_path = inputs_path,
+        .inputs_dir = inputs_dir,
         .entries = .{ .span = .{ .start = node.data.lhs, .len = node.data.rhs } },
         .region = node.region,
     };

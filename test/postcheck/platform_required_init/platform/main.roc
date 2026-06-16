@@ -13,7 +13,7 @@ platform ""
     }
     hosted { "roc_host_read_env": Host.read_env! }
     targets: {
-        inputs: "targets/",
+        inputs_dir: "targets/",
         x64mac: { inputs: [app], output: Archive },
         arm64mac: { inputs: [app], output: Archive },
         x64musl: { inputs: [app], output: Archive },

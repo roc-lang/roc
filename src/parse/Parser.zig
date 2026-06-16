@@ -1561,7 +1561,7 @@ fn parseTargetsSectionTokens(self: *Parser) Error!AST.TargetsSection.Idx {
         return try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_open_curly, start);
     };
 
-    var inputs_path: ?TokenIdx = null;
+    var inputs_dir: ?TokenIdx = null;
     const entries_top = self.store.scratchTargetEntryTop();
 
     while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
@@ -1578,10 +1578,14 @@ fn parseTargetsSectionTokens(self: *Parser) Error!AST.TargetsSection.Idx {
 
         switch (self.peek()) {
             .StringStart => {
-                // inputs: "targets/" directory directive
+                if (!std.mem.eql(u8, self.tokenText(field_name_tok), "inputs_dir")) {
+                    self.store.clearScratchTargetEntriesFrom(entries_top);
+                    return try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_field_name, start);
+                }
+                // inputs_dir: "targets/" directory directive
                 self.advance();
                 if (self.peek() == .StringPart) {
-                    inputs_path = self.pos;
+                    inputs_dir = self.pos;
                     self.advance();
                 }
                 while (self.peek() != .StringEnd and self.peek() != .EndOfFile) {
@@ -1614,7 +1618,7 @@ fn parseTargetsSectionTokens(self: *Parser) Error!AST.TargetsSection.Idx {
         return try self.pushMalformed(AST.TargetsSection.Idx, .expected_targets_close_curly, start);
     };
     return try self.store.addTargetsSection(.{
-        .inputs_path = inputs_path,
+        .inputs_dir = inputs_dir,
         .entries = try self.store.targetEntrySpanFrom(entries_top),
         .region = .{ .start = start, .end = self.pos },
     });

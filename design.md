@@ -2954,7 +2954,7 @@ the selected target, and there is no `--no-link` style flag. `--target` and
 
 ```text
 targets: {
-    inputs: "targets/",
+    inputs_dir: "targets/",
     arm64mac: { inputs: ["libhost.a", app], output: Shared },
     x64glibc: { inputs: ["libhost.a", app], output: Exe },
     wasm32: { inputs: ["host.wasm", app], output: Shared },

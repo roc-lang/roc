@@ -2009,13 +2009,13 @@ const Formatter = struct {
 
         var has_content = false;
 
-        // Format inputs: directory directive if present
-        if (targets.inputs_path) |inputs_token| {
+        // Format inputs_dir: directory directive if present
+        if (targets.inputs_dir) |inputs_token| {
             has_content = true;
             try fmt.ensureNewline();
             fmt.curr_indent = start_indent + 1;
             try fmt.pushIndent();
-            try fmt.pushAll("inputs: ");
+            try fmt.pushAll("inputs_dir: ");
             try fmt.push('"');
             try fmt.pushTokenText(inputs_token);
             try fmt.push('"');
@@ -3434,7 +3434,7 @@ test "issue 8989: platform header targets section is preserved" {
         \\    packages {}
         \\    provides {}
         \\    targets: {
-        \\        inputs: "build/",
+        \\        inputs_dir: "build/",
         \\        x64linux: { inputs: ["host.o", app] },
         \\        arm64linux: { inputs: ["host.o", app], output: Shared },
         \\    }
