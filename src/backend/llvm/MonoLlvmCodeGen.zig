@@ -163,6 +163,8 @@ pub const MonoLlvmCodeGen = struct {
     rc_helpers: std.AutoHashMap(u64, RcHelperEntry),
     join_points: std.AutoHashMap(u32, JoinInfo),
     compiled_joins: std.AutoHashMap(u32, void),
+    stmt_incoming_counts: std.AutoHashMap(u32, u32),
+    stmt_entry_blocks: std.AutoHashMap(u32, LlvmBuilder.Function.Block.Index),
     loop_continue_blocks: std.ArrayList(LlvmBuilder.Function.Block.Index),
     loop_break_blocks: std.ArrayList(LlvmBuilder.Function.Block.Index),
     local_slots: []LocalSlot = &.{},
@@ -293,6 +295,8 @@ pub const MonoLlvmCodeGen = struct {
             .rc_helpers = std.AutoHashMap(u64, RcHelperEntry).init(allocator),
             .join_points = std.AutoHashMap(u32, JoinInfo).init(allocator),
             .compiled_joins = std.AutoHashMap(u32, void).init(allocator),
+            .stmt_incoming_counts = std.AutoHashMap(u32, u32).init(allocator),
+            .stmt_entry_blocks = std.AutoHashMap(u32, LlvmBuilder.Function.Block.Index).init(allocator),
             .loop_continue_blocks = .empty,
             .loop_break_blocks = .empty,
             .debug_types = std.AutoHashMap(u32, LlvmBuilder.Metadata).init(allocator),
@@ -327,6 +331,8 @@ pub const MonoLlvmCodeGen = struct {
         self.rc_helpers.deinit();
         self.join_points.deinit();
         self.compiled_joins.deinit();
+        self.stmt_incoming_counts.deinit();
+        self.stmt_entry_blocks.deinit();
         self.loop_continue_blocks.deinit(self.allocator);
         self.loop_break_blocks.deinit(self.allocator);
     }
@@ -338,6 +344,8 @@ pub const MonoLlvmCodeGen = struct {
         self.rc_helpers.clearRetainingCapacity();
         self.join_points.clearRetainingCapacity();
         self.compiled_joins.clearRetainingCapacity();
+        self.stmt_incoming_counts.clearRetainingCapacity();
+        self.stmt_entry_blocks.clearRetainingCapacity();
         self.loop_continue_blocks.clearRetainingCapacity();
         self.loop_break_blocks.clearRetainingCapacity();
         self.string_counter = 0;
@@ -1125,6 +1133,8 @@ pub const MonoLlvmCodeGen = struct {
 
         self.join_points.clearRetainingCapacity();
         self.compiled_joins.clearRetainingCapacity();
+        self.stmt_incoming_counts.clearRetainingCapacity();
+        self.stmt_entry_blocks.clearRetainingCapacity();
         self.loop_continue_blocks.clearRetainingCapacity();
         self.loop_break_blocks.clearRetainingCapacity();
 
@@ -1202,6 +1212,7 @@ pub const MonoLlvmCodeGen = struct {
             try self.emitHostedProcBody(hosted, proc);
         } else {
             const body = proc.body orelse return error.CompilationFailed;
+            try self.collectStmtIncomingCounts(body);
             const compiled_direct_tce_loop = try self.compileDirectEntryTceLoop(proc, body);
             if (!compiled_direct_tce_loop) {
                 try self.compileStmt(body);
@@ -1690,6 +1701,95 @@ pub const MonoLlvmCodeGen = struct {
         }
     }
 
+    fn collectStmtIncomingCounts(self: *MonoLlvmCodeGen, entry: CFStmtId) Error!void {
+        self.stmt_incoming_counts.clearRetainingCapacity();
+        self.stmt_entry_blocks.clearRetainingCapacity();
+
+        var visited = std.AutoHashMap(u32, void).init(self.allocator);
+        defer visited.deinit();
+
+        var stack = std.ArrayList(CFStmtId).empty;
+        defer stack.deinit(self.allocator);
+        try self.noteStmtIncoming(&stack, entry);
+
+        while (stack.pop()) |stmt_id| {
+            const key = @intFromEnum(stmt_id);
+            if (visited.contains(key)) continue;
+            try visited.put(key, {});
+
+            switch (self.store.getCFStmt(stmt_id)) {
+                inline .assign_ref,
+                .assign_literal,
+                .assign_call,
+                .assign_call_erased,
+                .assign_packed_erased_fn,
+                .assign_low_level,
+                .assign_list,
+                .assign_struct,
+                .assign_tag,
+                .set_local,
+                .debug,
+                .expect,
+                .incref,
+                .decref,
+                .free,
+                => |stmt| try self.noteStmtIncoming(&stack, stmt.next),
+                .switch_stmt => |switch_stmt| {
+                    for (self.store.getCFSwitchBranches(switch_stmt.branches)) |branch| {
+                        try self.noteStmtIncoming(&stack, branch.body);
+                    }
+                    try self.noteStmtIncoming(&stack, switch_stmt.default_branch);
+                    if (switch_stmt.continuation) |continuation| {
+                        try self.noteStmtIncoming(&stack, continuation);
+                    }
+                },
+                .join => |join_stmt| {
+                    try self.noteStmtIncoming(&stack, join_stmt.remainder);
+                    try self.noteStmtIncoming(&stack, join_stmt.body);
+                },
+                .runtime_error,
+                .loop_continue,
+                .loop_break,
+                .jump,
+                .ret,
+                .crash,
+                .expect_err,
+                => {},
+            }
+        }
+    }
+
+    fn noteStmtIncoming(self: *MonoLlvmCodeGen, stack: *std.ArrayList(CFStmtId), stmt_id: CFStmtId) Error!void {
+        const key = @intFromEnum(stmt_id);
+        const gop = try self.stmt_incoming_counts.getOrPut(key);
+        if (gop.found_existing) {
+            gop.value_ptr.* += 1;
+        } else {
+            gop.value_ptr.* = 1;
+        }
+        try stack.append(self.allocator, stmt_id);
+    }
+
+    fn enterSharedStmtBlock(self: *MonoLlvmCodeGen, stmt_id: CFStmtId) Error!bool {
+        const key = @intFromEnum(stmt_id);
+        const count = self.stmt_incoming_counts.get(key) orelse 0;
+        if (count <= 1) return false;
+
+        const wip = self.wip orelse return error.CompilationFailed;
+        if (self.stmt_entry_blocks.get(key)) |block| {
+            if (wip.cursor.block != block) {
+                _ = wip.br(block) catch return error.OutOfMemory;
+            }
+            return true;
+        }
+
+        const block = wip.block(0, "shared_stmt") catch return error.OutOfMemory;
+        try self.stmt_entry_blocks.put(key, block);
+        _ = wip.br(block) catch return error.OutOfMemory;
+        wip.cursor = .{ .block = block };
+        return false;
+    }
+
     /// Plain TCE installs the proc body as `join J { remainder: jump J, body: old_body }`.
     /// That shape does not need the generic join continuation block: proc entry
     /// branches directly to the loop body, and recursive sites jump back there
@@ -1753,6 +1853,7 @@ pub const MonoLlvmCodeGen = struct {
         work: *std.ArrayList(StmtWork),
     ) Error!void {
         if (self.currentBlockHasTerminator()) return;
+        if (try self.enterSharedStmtBlock(stmt_id)) return;
         const stmt = self.store.getCFStmt(stmt_id);
         self.setStmtDebugLocation(stmt_id);
         switch (stmt) {

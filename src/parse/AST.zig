@@ -2826,6 +2826,13 @@ pub const Expr = union(enum) {
     ellipsis: struct {
         region: TokenizedRegion,
     },
+    @"break": struct {
+        region: TokenizedRegion,
+    },
+    @"return": struct {
+        expr: Expr.Idx,
+        region: TokenizedRegion,
+    },
     block: Block,
     for_expr: struct {
         patt: Pattern.Idx,
@@ -2895,6 +2902,8 @@ pub const Expr = union(enum) {
             .block => |e| e.region,
             .record_builder => |e| e.region,
             .ellipsis => |e| e.region,
+            .@"break" => |e| e.region,
+            .@"return" => |e| e.region,
             .for_expr => |e| e.region,
             .malformed => |e| e.region,
             .string_part => |e| e.region,
@@ -3229,6 +3238,21 @@ pub const Expr = union(enum) {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("e-ellipsis");
                 const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
+            .@"break" => |b| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-break");
+                try ast.appendRegionInfoToSexprTree(env, tree, b.region);
+                const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
+            .@"return" => |ret| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-return");
+                try ast.appendRegionInfoToSexprTree(env, tree, ret.region);
+                const attrs = tree.beginNode();
+                try ast.store.getExpr(ret.expr).pushToSExprTree(gpa, env, ast, tree);
                 try tree.endNode(begin, attrs);
             },
             .block => |block| {

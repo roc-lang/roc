@@ -3516,6 +3516,7 @@ const BodyContext = struct {
                 .region = expr.source_region,
             } },
             .expect => |child| .{ .expect = try self.lowerExpr(child) },
+            .break_ => try self.breakCurrentLoopExprData(),
             .return_ => |ret| .{ .return_ = try self.lowerExpr(ret.expr) },
             .for_ => |for_| try self.lowerIteratorFor(for_, ty, &.{}),
             .hosted_lambda => Common.invariant("hosted lambda expression reached ordinary Monotype expression lowering"),
@@ -7172,7 +7173,7 @@ const BodyContext = struct {
         output: MatchOutput,
     ) Allocator.Error!Ast.ExprId {
         return switch (output) {
-            .value => |result_ty| try self.lowerExprAtType(body, result_ty),
+            .value => |result_ty| try self.lowerBranchValueAtType(body, result_ty),
             .state_result => |state| try self.lowerBodyThenStateResult(
                 body,
                 state.result_ty,
@@ -7185,6 +7186,17 @@ const BodyContext = struct {
                 state.merge_binders,
             ),
         };
+    }
+
+    fn lowerBranchValueAtType(
+        self: *BodyContext,
+        body: checked.CheckedExprId,
+        result_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        if (self.checkedExprDiverges(body)) {
+            return try self.lowerDivergentExprAtType(body, result_ty);
+        }
+        return try self.lowerExprAtType(body, result_ty);
     }
 
     fn lowerMatchExpr(self: *BodyContext, expr_id: checked.CheckedExprId, match: anytype, result_ty: Type.TypeId) Allocator.Error!Ast.ExprId {
@@ -8305,7 +8317,7 @@ const BodyContext = struct {
         branch_ty: Type.TypeId,
         merge_binders: []const MergeBinder,
     ) Allocator.Error!Ast.ExprId {
-        if (merge_binders.len == 0) return try self.lowerExprAtType(body, result_ty);
+        if (merge_binders.len == 0) return try self.lowerBranchValueAtType(body, result_ty);
 
         return try self.lowerBodyThenStateResult(body, result_ty, branch_ty, merge_binders);
     }
@@ -8640,10 +8652,24 @@ const BodyContext = struct {
         checked_expr_id: checked.CheckedExprId,
         ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprId {
+        const checked_expr = self.view.bodies.exprs[@intFromEnum(checked_expr_id)];
+        switch (checked_expr.data) {
+            .match_ => |match| return try self.lowerMatchExpr(checked_expr_id, match, ty),
+            .if_ => |if_| return try self.lowerIfExpr(checked_expr_id, if_, ty),
+            else => {},
+        }
+
         return try self.builder.program.addExpr(.{
             .ty = ty,
             .data = try self.lowerDivergentExprDataAtType(checked_expr_id, ty),
         });
+    }
+
+    fn exprIdAsDivergentData(self: *BodyContext, expr: Ast.ExprId) Allocator.Error!Ast.ExprData {
+        return .{ .block = .{
+            .statements = try self.builder.program.addStmtSpan(&[_]Ast.StmtId{}),
+            .final_expr = expr,
+        } };
     }
 
     fn lowerDivergentExprDataAtType(
@@ -8654,8 +8680,15 @@ const BodyContext = struct {
         const checked_expr = self.view.bodies.exprs[@intFromEnum(checked_expr_id)];
         return switch (checked_expr.data) {
             .block => |block| try self.lowerBlock(block, ty),
+            .match_ => |match| try self.exprIdAsDivergentData(try self.lowerMatchExpr(checked_expr_id, match, ty)),
+            .if_ => |if_| try self.exprIdAsDivergentData(try self.lowerIfExpr(checked_expr_id, if_, ty)),
             .ellipsis => .{ .crash = try self.builder.program.addStringLiteral("not implemented") },
             .crash => |msg| .{ .crash = try self.lowerStringLiteral(msg) },
+            .expect_err => |expect_err| .{ .expect_err = .{
+                .msg = try self.lowerExpectErrMessage(expect_err.expr, expect_err.snippet),
+                .region = checked_expr.source_region,
+            } },
+            .break_ => try self.breakCurrentLoopExprData(),
             .return_ => |ret| .{ .return_ = try self.lowerExpr(ret.expr) },
             else => Common.invariant("checked expression was marked divergent but has no divergent lowering path"),
         };
@@ -9163,11 +9196,16 @@ const BodyContext = struct {
 
     fn breakCurrentLoopExpr(self: *BodyContext) Allocator.Error!Ast.ExprId {
         const loop = self.currentLoopContext();
-        const data: Ast.ExprData = if (loop.carries.len == 0)
+        const data = try self.breakCurrentLoopExprData();
+        return try self.builder.program.addExpr(.{ .ty = loop.result_ty, .data = data });
+    }
+
+    fn breakCurrentLoopExprData(self: *BodyContext) Allocator.Error!Ast.ExprData {
+        const loop = self.currentLoopContext();
+        return if (loop.carries.len == 0)
             .{ .break_ = null }
         else
             .{ .break_ = try self.loopStateExpr(loop.result_ty, loop.carries) };
-        return try self.builder.program.addExpr(.{ .ty = loop.result_ty, .data = data });
     }
 
     fn continueWith(self: *BodyContext, ty: Type.TypeId, values: []const Ast.ExprId) Allocator.Error!Ast.ExprId {
@@ -9364,6 +9402,7 @@ const BodyContext = struct {
             .crash,
             .ellipsis,
             .anno_only,
+            .break_,
             => {},
         }
     }

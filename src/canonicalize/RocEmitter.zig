@@ -437,6 +437,7 @@ fn emitExprFrame(
             try frames.append(allocator, .{ .expr = ret.expr });
             try frames.append(allocator, .{ .write = "return " });
         },
+        .e_break => try self.write("break"),
         .e_match => |match| {
             try self.write("match ");
             try frames.append(allocator, .{ .write = "}" });

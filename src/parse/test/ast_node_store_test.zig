@@ -846,6 +846,15 @@ test "NodeStore round trip - Expr" {
             .region = rand_region(random),
         },
     });
+    try expressions.append(gpa, AST.Expr{
+        .@"break" = .{ .region = rand_region(random) },
+    });
+    try expressions.append(gpa, AST.Expr{
+        .@"return" = .{
+            .expr = rand_idx(random, AST.Expr.Idx),
+            .region = rand_region(random),
+        },
+    });
 
     // We don't include .malformed variant
     expected_test_count -= 1;

@@ -498,6 +498,14 @@ pub const Tag = enum {
     /// * lhs - node index for loop initializing expression
     /// * rhs - node index for loop body expression
     for_expr,
+    /// A break expression.
+    /// * lhs - ignored
+    /// * rhs - ignored
+    break_expr,
+    /// A return expression.
+    /// * lhs - node index for expr
+    /// * rhs - ignored
+    return_expr,
     /// DESCRIPTION
     /// Example: EXAMPLE
     /// * lhs - LHS DESCRIPTION

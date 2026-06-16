@@ -524,6 +524,9 @@ pub const Expr = union(enum) {
         };
     },
 
+    /// Break expression that exits the enclosing loop.
+    e_break: struct {},
+
     /// For expression that iterates over a list and executes a body for each element.
     /// The for expression evaluates to the empty record `{}`.
     /// This is the expression form of a for loop, allowing it to be used in expression contexts.
@@ -1531,6 +1534,14 @@ pub const Expr = union(enum) {
                 // Add inner expression
                 try ir.store.getExpr(ret.expr).pushToSExprTree(ir, tree, ret.expr);
 
+                try tree.endNode(begin, attrs);
+            },
+            .e_break => {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-break");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },
             .e_for => |for_expr| {

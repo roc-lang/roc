@@ -114,6 +114,7 @@ pub const Tag = enum {
     expr_for,
     expr_record_builder,
     expr_return,
+    expr_break,
     match_branch,
     match_branch_pattern,
     type_header,

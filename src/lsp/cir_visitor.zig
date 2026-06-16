@@ -336,6 +336,7 @@ pub fn CirVisitor(comptime Context: type) type {
                 .e_crash,
                 .e_ellipsis,
                 .e_anno_only,
+                .e_break,
                 .e_bytes_literal,
                 => {},
             }

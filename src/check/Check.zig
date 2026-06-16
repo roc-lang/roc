@@ -7057,6 +7057,10 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             // Note that we DO NOT unify the return type with the expr here.
             // This is so this expr can unify with anything (like {} in the an implicit `else` branch)
         },
+        .e_break => {
+            // Nothing to do. `break` diverges, so this expression can unify with
+            // any surrounding expected type.
+        },
         .e_hosted_lambda => {
             // For hosted lambda expressions, the type comes from the annotation.
             // This is similar to e_anno_only - the implementation is provided by the host.

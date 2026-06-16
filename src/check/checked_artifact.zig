@@ -1047,6 +1047,7 @@ fn exprDependsOnUnboundPlatformRequirement(
         .structural_eq => |eq| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, eq.lhs, relation_blocked_exprs) or
             exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, eq.rhs, relation_blocked_exprs),
         .tuple_access => |access| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, access.tuple, relation_blocked_exprs),
+        .break_ => false,
         .return_ => |ret| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, ret.expr, relation_blocked_exprs),
         .for_ => |for_| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, for_.expr, relation_blocked_exprs) or
             exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, for_.body, relation_blocked_exprs),
@@ -5080,6 +5081,7 @@ pub const CheckedExprData = union(enum) {
     expect: CheckedExprId,
     ellipsis,
     anno_only,
+    break_,
     return_: struct {
         expr: CheckedExprId,
         lambda: CheckedExprId,
@@ -5490,6 +5492,7 @@ const CheckedSourceNodes = struct {
             .e_crash,
             .e_ellipsis,
             .e_anno_only,
+            .e_break,
             => {},
         }
     }
@@ -6203,6 +6206,7 @@ fn checkedExprDataDiverges(
     return switch (data) {
         .crash,
         .ellipsis,
+        .break_,
         .return_,
         => true,
         .str => |items| checkedAnyExprDiverges(exprs, statements, expr_diverges, statement_diverges, items, expr_states, statement_states),
@@ -6673,6 +6677,7 @@ const CheckedBodyPayloadCopier = struct {
             .e_expect => |expect| .{ .expect = self.checkedExpr(expect.body) },
             .e_ellipsis => .ellipsis,
             .e_anno_only => .anno_only,
+            .e_break => .break_,
             .e_return => |ret| .{ .return_ = .{
                 .expr = self.checkedExpr(ret.expr),
                 .lambda = self.checkedExpr(ret.lambda),
@@ -7741,6 +7746,7 @@ fn deinitCheckedExprData(allocator: Allocator, data: *CheckedExprData) void {
         .expect,
         .ellipsis,
         .anno_only,
+        .break_,
         .return_,
         .for_,
         => {},
@@ -9154,6 +9160,7 @@ const CheckedTemplateRefCollector = struct {
             .dbg => |child| try self.collectExpr(child),
             .expect_err => |expect_err| try self.collectExpr(expect_err.expr),
             .expect => |child| try self.collectExpr(child),
+            .break_ => {},
             .return_ => |ret| {
                 try self.collectExpr(ret.expr);
                 // `ret.lambda` is the enclosing lambda context for early-return
@@ -9792,6 +9799,7 @@ const NestedProcSiteBuilder = struct {
             .dbg => |child| try self.scanExpr(child, owner, false),
             .expect_err => |expect_err| try self.scanExpr(expect_err.expr, owner, false),
             .expect => |child| try self.scanExpr(child, owner, false),
+            .break_ => {},
             .return_ => |ret| {
                 try self.scanExpr(ret.expr, owner, false);
                 // `ret.lambda` is the enclosing lambda context for early-return

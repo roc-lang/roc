@@ -8293,6 +8293,16 @@ fn runExprKernel(
                     const ellipsis_expr = try self.env.addExpr(Expr{ .e_ellipsis = .{} }, region);
                     try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = ellipsis_expr, .free_vars = DataSpan.empty() });
                 },
+                .@"break" => |b| {
+                    const region = self.parse_ir.tokenizedRegionToRegion(b.region);
+                    const break_expr = if (self.loop_depth == 0)
+                        try self.env.pushMalformed(Expr.Idx, Diagnostic{ .break_outside_loop = .{
+                            .region = region,
+                        } })
+                    else
+                        try self.env.addExpr(Expr{ .e_break = .{} }, region);
+                    try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = break_expr, .free_vars = DataSpan.empty() });
+                },
                 .list => |e| {
                     const region = self.parse_ir.tokenizedRegionToRegion(e.region);
                     const items_slice = self.parse_ir.store.exprSlice(e.items);
@@ -8703,6 +8713,12 @@ fn runExprKernel(
                 },
                 .dbg => |e| {
                     try stacks.pushFinishDbg(frame_allocator, .{
+                        .region = self.parse_ir.tokenizedRegionToRegion(e.region),
+                    });
+                    try stacks.pushParse(frame_allocator, .{ .idx = e.expr, .target = .scratch });
+                },
+                .@"return" => |e| {
+                    try stacks.pushFinishReturn(frame_allocator, .{
                         .region = self.parse_ir.tokenizedRegionToRegion(e.region),
                     });
                     try stacks.pushParse(frame_allocator, .{ .idx = e.expr, .target = .scratch });
@@ -9983,6 +9999,32 @@ fn runExprKernel(
 
             child_slots.shrinkRetainingCapacity(result_start);
             try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = dbg_expr, .free_vars = can_inner.free_vars });
+
+            continue :expr_kernel_loop .dispatch;
+        },
+        .finish_return => {
+            const state = stacks.takeFinishReturn();
+            const result_start = child_slots.items.len - 1;
+            const can_inner = child_slots.items[result_start].expr orelse {
+                child_slots.shrinkRetainingCapacity(result_start);
+                try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, null);
+                continue :expr_kernel_loop .dispatch;
+            };
+
+            const return_expr = if (self.enclosing_lambda) |lambda_idx|
+                try self.env.addExpr(Expr{ .e_return = .{
+                    .expr = can_inner.idx,
+                    .lambda = lambda_idx,
+                    .context = .return_expr,
+                } }, state.region)
+            else
+                try self.env.pushMalformed(Expr.Idx, Diagnostic{ .return_outside_fn = .{
+                    .region = state.region,
+                    .context = .return_expr,
+                } });
+
+            child_slots.shrinkRetainingCapacity(result_start);
+            try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = return_expr, .free_vars = can_inner.free_vars });
 
             continue :expr_kernel_loop .dispatch;
         },
@@ -13037,6 +13079,7 @@ const ExprKernelLabel = enum {
     finish_list,
     finish_tuple,
     finish_dbg,
+    finish_return,
     finish_tuple_access,
     finish_unary,
     finish_suffix_single_question,
@@ -13251,6 +13294,10 @@ const ExprFinishTupleWork = struct {
 };
 
 const ExprFinishDbgWork = struct {
+    region: Region,
+};
+
+const ExprFinishReturnWork = struct {
     region: Region,
 };
 
@@ -13491,6 +13538,7 @@ const ExprKernelWork = struct {
     finish_list: std.ArrayList(ExprFinishListWork) = .empty,
     finish_tuple: std.ArrayList(ExprFinishTupleWork) = .empty,
     finish_dbg: std.ArrayList(ExprFinishDbgWork) = .empty,
+    finish_return: std.ArrayList(ExprFinishReturnWork) = .empty,
     finish_tuple_access: std.ArrayList(ExprFinishTupleAccessWork) = .empty,
     finish_unary: std.ArrayList(ExprFinishUnaryWork) = .empty,
     finish_suffix_single_question: std.ArrayList(ExprFinishSuffixSingleQuestionWork) = .empty,
@@ -13543,6 +13591,7 @@ const ExprKernelWork = struct {
             .finish_list => _ = self.takeFinishList(),
             .finish_tuple => _ = self.takeFinishTuple(),
             .finish_dbg => _ = self.takeFinishDbg(),
+            .finish_return => _ = self.takeFinishReturn(),
             .finish_tuple_access => _ = self.takeFinishTupleAccess(),
             .finish_unary => _ = self.takeFinishUnary(),
             .finish_suffix_single_question => _ = self.takeFinishSuffixSingleQuestion(),
@@ -13624,6 +13673,7 @@ const ExprKernelWork = struct {
         self.finish_list.deinit(allocator);
         self.finish_tuple.deinit(allocator);
         self.finish_dbg.deinit(allocator);
+        self.finish_return.deinit(allocator);
         self.finish_tuple_access.deinit(allocator);
         self.finish_unary.deinit(allocator);
         self.finish_suffix_single_question.deinit(allocator);
@@ -13678,6 +13728,7 @@ const ExprKernelWork = struct {
         self.finish_list.clearRetainingCapacity();
         self.finish_tuple.clearRetainingCapacity();
         self.finish_dbg.clearRetainingCapacity();
+        self.finish_return.clearRetainingCapacity();
         self.finish_tuple_access.clearRetainingCapacity();
         self.finish_unary.clearRetainingCapacity();
         self.finish_suffix_single_question.clearRetainingCapacity();
@@ -13847,6 +13898,12 @@ const ExprKernelWork = struct {
         try self.finish_dbg.append(allocator, item);
         errdefer _ = self.finish_dbg.pop();
         try self.pushLabel(allocator, .finish_dbg, self.current_target);
+    }
+
+    inline fn pushFinishReturn(self: *ExprKernelWork, allocator: std.mem.Allocator, item: ExprFinishReturnWork) std.mem.Allocator.Error!void {
+        try self.finish_return.append(allocator, item);
+        errdefer _ = self.finish_return.pop();
+        try self.pushLabel(allocator, .finish_return, self.current_target);
     }
 
     inline fn pushFinishTupleAccess(self: *ExprKernelWork, allocator: std.mem.Allocator, item: ExprFinishTupleAccessWork) std.mem.Allocator.Error!void {
@@ -14095,6 +14152,10 @@ const ExprKernelWork = struct {
 
     inline fn takeFinishDbg(self: *ExprKernelWork) ExprFinishDbgWork {
         return self.finish_dbg.pop() orelse unreachable;
+    }
+
+    inline fn takeFinishReturn(self: *ExprKernelWork) ExprFinishReturnWork {
+        return self.finish_return.pop() orelse unreachable;
     }
 
     inline fn takeFinishTupleAccess(self: *ExprKernelWork) ExprFinishTupleAccessWork {

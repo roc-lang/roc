@@ -500,6 +500,9 @@ test "NodeStore round trip - Expressions" {
         },
     });
     try expressions.append(gpa, CIR.Expr{
+        .e_break = .{},
+    });
+    try expressions.append(gpa, CIR.Expr{
         .e_for = .{
             .patt = rand_idx(CIR.Pattern.Idx),
             .expr = rand_idx(CIR.Expr.Idx),
