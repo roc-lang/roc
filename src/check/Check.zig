@@ -14964,14 +14964,7 @@ fn runLiteralDefaultingRounds(self: *Self, env: *Env, universe: LiteralDefaultUn
             try is_driver.append(self.gpa, drives);
             if (!drives) continue;
 
-            // collectReachableVars only reads the store, so holding the
-            // constraint slice across it is safe (same fence as
-            // `boundaryDefaultLeaksIntoSignature`). It stores RESOLVED roots.
-            footprint.clearRetainingCapacity();
-            for (self.types.sliceStaticDispatchConstraints(constraint_range)) |constraint| {
-                if (constraint.origin == .from_literal) continue;
-                try self.collectReachableVars(constraint.fn_var, &footprint);
-            }
+            try self.collectConstraintSignatureReachable(constraint_range, &footprint);
             var fp_iter = footprint.keyIterator();
             while (fp_iter.next()) |fp_var| {
                 // Only still-flex roots interfere; everything else is immune to
@@ -15281,18 +15274,30 @@ fn commitLiteralGroupDefault(self: *Self, drivers: []const Var, env: *Env) Alloc
 ///
 /// Must run while `literal_var` is still flex (before the default unify) and after
 /// `boundary_reachable_vars` is populated for the current boundary.
+/// Clear `out`, then collect every var reachable from the var's non-`from_literal`
+/// dispatch constraints into it. Single source of truth for the "signature
+/// footprint" used by both interference partitioning (runLiteralDefaultingRounds)
+/// and boundary-leak detection (boundaryDefaultLeaksIntoSignature) — they MUST
+/// agree, or a literal could be partitioned non-interfering yet warned.
+/// collectReachableVars only reads the store, so holding the constraint slice
+/// across it is safe.
+fn collectConstraintSignatureReachable(
+    self: *Self,
+    constraint_range: StaticDispatchConstraint.SafeList.Range,
+    out: *std.AutoHashMap(Var, void),
+) std.mem.Allocator.Error!void {
+    out.clearRetainingCapacity();
+    for (self.types.sliceStaticDispatchConstraints(constraint_range)) |constraint| {
+        if (constraint.origin == .from_literal) continue;
+        try self.collectReachableVars(constraint.fn_var, out);
+    }
+}
+
 fn boundaryDefaultLeaksIntoSignature(self: *Self, literal_var: Var) std.mem.Allocator.Error!bool {
     const resolved = self.types.resolveVar(literal_var);
     if (resolved.desc.content != .flex) return false;
 
-    // collectReachableVars only reads the store and inserts into the map (no
-    // unify/instantiate), so holding the constraint slice across it is safe.
-    self.boundary_leak_vars.clearRetainingCapacity();
-    const constraints = self.types.sliceStaticDispatchConstraints(resolved.desc.content.flex.constraints);
-    for (constraints) |constraint| {
-        if (constraint.origin == .from_literal) continue;
-        try self.collectReachableVars(constraint.fn_var, &self.boundary_leak_vars);
-    }
+    try self.collectConstraintSignatureReachable(resolved.desc.content.flex.constraints, &self.boundary_leak_vars);
 
     var leak_iter = self.boundary_leak_vars.keyIterator();
     while (leak_iter.next()) |leak_var| {
