@@ -14,6 +14,7 @@ const TestEnv = @import("utils.zig").TestEnv;
 
 const utils = @import("utils.zig");
 const compiler_rt_128 = @import("compiler_rt_128.zig");
+const parse_float = @import("parse_float.zig");
 const ascii = std.ascii;
 const mem = std.mem;
 const unicode = std.unicode;
@@ -654,7 +655,7 @@ pub fn floatToStrBytes(buf: []u8, val_bits: u64, is_f32: bool) []const u8 {
     };
 }
 
-fn expectFloatToStr(comptime T: type, value: T, expected: []const u8) !void {
+fn expectFloatToStr(comptime T: type, value: T, expected: []const u8) anyerror!void {
     var buf: [400]u8 = undefined;
     const val_bits: u64 = if (T == f32)
         @as(u64, @as(u32, @bitCast(value)))
@@ -664,7 +665,7 @@ fn expectFloatToStr(comptime T: type, value: T, expected: []const u8) !void {
     try testing.expectEqualStrings(expected, actual);
 
     if (std.math.isFinite(value)) {
-        const parsed = try std.fmt.parseFloat(T, actual);
+        const parsed = try parse_float.parseFloat(T, actual);
         const Bits = std.meta.Int(.unsigned, @bitSizeOf(T));
         try testing.expectEqual(@as(Bits, @bitCast(value)), @as(Bits, @bitCast(parsed)));
     }

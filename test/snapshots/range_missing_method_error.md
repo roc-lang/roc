@@ -12,6 +12,10 @@ MISSING METHOD - range_missing_method_error.md:1:5:1:14
 MISSING METHOD - range_missing_method_error.md:1:5:1:14
 MISSING METHOD - range_missing_method_error.md:1:5:1:14
 MISSING METHOD - range_missing_method_error.md:1:5:1:14
+MISSING METHOD - range_missing_method_error.md:1:5:1:14
+MISSING METHOD - range_missing_method_error.md:1:5:1:14
+MISSING METHOD - range_missing_method_error.md:1:5:1:14
+MISSING METHOD - range_missing_method_error.md:1:5:1:14
 # PROBLEMS
 **MISSING METHOD**
 This **add_try** method is being called on a value whose type doesn't have that method:

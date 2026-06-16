@@ -13129,28 +13129,25 @@ numeral_to_str = |numeral|
 			int_digits = base256_to_decimal_digits(digits_before_pt)
 			int_bytes = decimal_digits_to_bytes(int_digits)
 
-			frac_bytes =
-				if digits_after_pt_count == 0 {
-					u8_list_with_capacity(0)
+			frac_bytes = if digits_after_pt_count == 0 {
+				u8_list_with_capacity(0)
+			} else {
+				frac_digits = base256_to_decimal_digits(digits_after_pt)
+				frac_len = u8_list_len(frac_digits)
+				padded_frac_digits = if frac_len < digits_after_pt_count {
+					u8_concat(u8_repeat(0, digits_after_pt_count - frac_len), frac_digits)
 				} else {
-					frac_digits = base256_to_decimal_digits(digits_after_pt)
-					frac_len = u8_list_len(frac_digits)
-					padded_frac_digits =
-						if frac_len < digits_after_pt_count {
-							u8_concat(u8_repeat(0, digits_after_pt_count - frac_len), frac_digits)
-						} else {
-							frac_digits
-						}
-
-					u8_concat(u8_single(46), decimal_digits_to_bytes(padded_frac_digits))
+					frac_digits
 				}
 
-			sign_bytes =
-				if is_negative {
-					u8_single(45)
-				} else {
-					u8_list_with_capacity(0)
-				}
+				u8_concat(u8_single(46), decimal_digits_to_bytes(padded_frac_digits))
+			}
+
+			sign_bytes = if is_negative {
+				u8_single(45)
+			} else {
+				u8_list_with_capacity(0)
+			}
 
 			bytes = u8_concat(sign_bytes, u8_concat(int_bytes, frac_bytes))
 			match bytes_to_str(bytes) {

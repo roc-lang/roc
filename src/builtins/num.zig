@@ -1152,6 +1152,28 @@ pub fn i128FromBits(bits: u128) callconv(.c) i128 {
     return @as(i128, @bitCast(bits));
 }
 
+fn signedMinText(comptime T: type) []const u8 {
+    return switch (T) {
+        i8 => "-128",
+        i16 => "-32768",
+        i32 => "-2147483648",
+        i64 => "-9223372036854775808",
+        i128 => "-170141183460469231731687303715884105728",
+        else => @compileError("unsupported signed integer type"),
+    };
+}
+
+fn signedMaxText(comptime T: type) []const u8 {
+    return switch (T) {
+        i8 => "127",
+        i16 => "32767",
+        i32 => "2147483647",
+        i64 => "9223372036854775807",
+        i128 => "170141183460469231731687303715884105727",
+        else => @compileError("unsupported signed integer type"),
+    };
+}
+
 fn signedMaxPlusOneText(comptime T: type) []const u8 {
     return switch (T) {
         i8 => "128",
@@ -1174,6 +1196,17 @@ fn signedMinMinusOneText(comptime T: type) []const u8 {
     };
 }
 
+fn unsignedMaxText(comptime T: type) []const u8 {
+    return switch (T) {
+        u8 => "255",
+        u16 => "65535",
+        u32 => "4294967295",
+        u64 => "18446744073709551615",
+        u128 => "340282366920938463463374607431768211455",
+        else => @compileError("unsupported unsigned integer type"),
+    };
+}
+
 fn unsignedMaxPlusOneText(comptime T: type) []const u8 {
     return switch (T) {
         u8 => "256",
@@ -1185,7 +1218,7 @@ fn unsignedMaxPlusOneText(comptime T: type) []const u8 {
     };
 }
 
-fn expectParseIntText(comptime T: type, text: []const u8, expected: T, roc_ops: *RocOps) !void {
+fn expectParseIntText(comptime T: type, text: []const u8, expected: T, roc_ops: *RocOps) anyerror!void {
     const roc_str = @import("str.zig").RocStr.fromSlice(text, roc_ops);
     defer roc_str.decref(roc_ops);
 
@@ -1194,7 +1227,7 @@ fn expectParseIntText(comptime T: type, text: []const u8, expected: T, roc_ops: 
     try std.testing.expectEqual(expected, result.value);
 }
 
-fn expectParseIntReject(comptime T: type, text: []const u8, roc_ops: *RocOps) !void {
+fn expectParseIntReject(comptime T: type, text: []const u8, roc_ops: *RocOps) anyerror!void {
     const roc_str = @import("str.zig").RocStr.fromSlice(text, roc_ops);
     defer roc_str.decref(roc_ops);
 
@@ -1203,35 +1236,28 @@ fn expectParseIntReject(comptime T: type, text: []const u8, roc_ops: *RocOps) !v
     try std.testing.expectEqual(@as(T, 0), result.value);
 }
 
-fn expectParseIntFormatted(comptime T: type, value: T, roc_ops: *RocOps) !void {
-    var buf: [64]u8 = undefined;
-    const text = try std.fmt.bufPrint(&buf, "{d}", .{value});
-    try expectParseIntText(T, text, value, roc_ops);
-}
-
-fn expectAddWithOverflowOracle(comptime T: type, lhs: T, rhs: T) !void {
+fn expectAddWithOverflowOracle(comptime T: type, lhs: T, rhs: T) anyerror!void {
     const expected = @addWithOverflow(lhs, rhs);
     const actual = addWithOverflow(T, lhs, rhs);
     try std.testing.expectEqual(expected[0], actual.value);
     try std.testing.expectEqual(expected[1] == 1, actual.has_overflowed);
 }
 
-fn expectSubWithOverflowOracle(comptime T: type, lhs: T, rhs: T) !void {
+fn expectSubWithOverflowOracle(comptime T: type, lhs: T, rhs: T) anyerror!void {
     const expected = @subWithOverflow(lhs, rhs);
     const actual = subWithOverflow(T, lhs, rhs);
     try std.testing.expectEqual(expected[0], actual.value);
     try std.testing.expectEqual(expected[1] == 1, actual.has_overflowed);
 }
 
-fn expectMulWithOverflowOracle(comptime T: type, lhs: T, rhs: T) !void {
+fn expectMulWithOverflowOracle(comptime T: type, lhs: T, rhs: T) anyerror!void {
     const expected = @mulWithOverflow(lhs, rhs);
     const actual = mulWithOverflow(T, lhs, rhs);
     try std.testing.expectEqual(expected[0], actual.value);
     try std.testing.expectEqual(expected[1] == 1, actual.has_overflowed);
 }
 
-fn expectParseFloatBits(comptime T: type, text: []const u8, roc_ops: *RocOps) !void {
-    const expected = try std.fmt.parseFloat(T, text);
+fn expectParseFloatBits(comptime T: type, text: []const u8, expected_bits: std.meta.Int(.unsigned, @bitSizeOf(T)), roc_ops: *RocOps) anyerror!void {
     const roc_str = @import("str.zig").RocStr.fromSlice(text, roc_ops);
     defer roc_str.decref(roc_ops);
 
@@ -1239,7 +1265,7 @@ fn expectParseFloatBits(comptime T: type, text: []const u8, roc_ops: *RocOps) !v
     try std.testing.expectEqual(@as(u8, 0), result.errorcode);
 
     const Bits = std.meta.Int(.unsigned, @bitSizeOf(T));
-    try std.testing.expectEqual(@as(Bits, @bitCast(expected)), @as(Bits, @bitCast(result.value)));
+    try std.testing.expectEqual(@as(Bits, expected_bits), @as(Bits, @bitCast(result.value)));
 }
 
 test "parseIntFromStr accepts and rejects exact integer width boundaries" {
@@ -1247,15 +1273,15 @@ test "parseIntFromStr accepts and rejects exact integer width boundaries" {
     defer test_env.deinit();
 
     inline for (.{ i8, i16, i32, i64, i128 }) |T| {
-        try expectParseIntFormatted(T, std.math.minInt(T), test_env.getOps());
-        try expectParseIntFormatted(T, std.math.maxInt(T), test_env.getOps());
+        try expectParseIntText(T, signedMinText(T), std.math.minInt(T), test_env.getOps());
+        try expectParseIntText(T, signedMaxText(T), std.math.maxInt(T), test_env.getOps());
         try expectParseIntReject(T, signedMinMinusOneText(T), test_env.getOps());
         try expectParseIntReject(T, signedMaxPlusOneText(T), test_env.getOps());
     }
 
     inline for (.{ u8, u16, u32, u64, u128 }) |T| {
-        try expectParseIntFormatted(T, 0, test_env.getOps());
-        try expectParseIntFormatted(T, std.math.maxInt(T), test_env.getOps());
+        try expectParseIntText(T, "0", 0, test_env.getOps());
+        try expectParseIntText(T, unsignedMaxText(T), std.math.maxInt(T), test_env.getOps());
         try expectParseIntText(T, "-0", 0, test_env.getOps());
         try expectParseIntReject(T, "-1", test_env.getOps());
         try expectParseIntReject(T, unsignedMaxPlusOneText(T), test_env.getOps());
@@ -1341,32 +1367,32 @@ test "powi128 handles signed magnitude and overflow boundaries" {
     try std.testing.expectError(error.Overflow, powi128(u128, std.math.maxInt(u128), 2));
 }
 
-test "parseFloatFromStr matches Zig parseFloat bit patterns for finite edge cases" {
+test "parseFloatFromStr matches IEEE bit fixtures for finite edge cases" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
 
-    inline for (&[_][]const u8{
-        "0",
-        "-0",
-        "0.1",
-        "1.40129846e-45",
-        "1.17549435e-38",
-        "3.4028235e38",
-        "0x1.8p+1",
+    inline for (&[_]struct { text: []const u8, bits: u32 }{
+        .{ .text = "0", .bits = 0x00000000 },
+        .{ .text = "-0", .bits = 0x80000000 },
+        .{ .text = "0.1", .bits = 0x3dcccccd },
+        .{ .text = "1.40129846e-45", .bits = 0x00000001 },
+        .{ .text = "1.17549435e-38", .bits = 0x00800000 },
+        .{ .text = "3.4028235e38", .bits = 0x7f7fffff },
+        .{ .text = "0x1.8p+1", .bits = 0x40400000 },
     }) |text| {
-        try expectParseFloatBits(f32, text, test_env.getOps());
+        try expectParseFloatBits(f32, text.text, text.bits, test_env.getOps());
     }
 
-    inline for (&[_][]const u8{
-        "0",
-        "-0",
-        "0.1",
-        "5e-324",
-        "2.2250738585072014e-308",
-        "1.7976931348623157e308",
-        "0x1.921fb54442d18p+1",
+    inline for (&[_]struct { text: []const u8, bits: u64 }{
+        .{ .text = "0", .bits = 0x0000000000000000 },
+        .{ .text = "-0", .bits = 0x8000000000000000 },
+        .{ .text = "0.1", .bits = 0x3fb999999999999a },
+        .{ .text = "5e-324", .bits = 0x0000000000000001 },
+        .{ .text = "2.2250738585072014e-308", .bits = 0x0010000000000000 },
+        .{ .text = "1.7976931348623157e308", .bits = 0x7fefffffffffffff },
+        .{ .text = "0x1.921fb54442d18p+1", .bits = 0x400921fb54442d18 },
     }) |text| {
-        try expectParseFloatBits(f64, text, test_env.getOps());
+        try expectParseFloatBits(f64, text.text, text.bits, test_env.getOps());
     }
 }
 

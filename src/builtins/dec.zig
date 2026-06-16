@@ -2627,7 +2627,7 @@ fn buildBinaryOracleCases(
     return cases;
 }
 
-fn expectDecWithin(expected: RocDec, actual: RocDec, max_error_raw: u128) !void {
+fn expectDecWithin(expected: RocDec, actual: RocDec, max_error_raw: u128) error{TestUnexpectedResult}!void {
     const diff: u128 = @abs(expected.num - actual.num);
     if (diff > max_error_raw) {
         std.debug.print(
