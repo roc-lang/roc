@@ -354,6 +354,11 @@ boundary_reachable_vars: std.AutoHashMap(Var, void),
 /// literal's constraint signatures, intersected with
 /// `boundary_reachable_vars` to detect interface leaks.
 boundary_leak_vars: std.AutoHashMap(Var, void),
+/// Reusable per-call buffer of the module's `.eql` constraint edges, so the
+/// generalization-boundary fixpoint iterates just the edges instead of
+/// re-scanning the whole constraint list each round. Front-loaded; cleared and
+/// refilled per call.
+boundary_eql_edges: std.ArrayListUnmanaged(@FieldType(Constraint, "eql")),
 /// Debug-only literal-defaulting probe instrumentation, asserted by the
 /// refuted-count guard test. Only written under `comptime std.debug.runtime_safety`,
 /// so release builds compile the bookkeeping out entirely (no global state, no
@@ -1154,6 +1159,7 @@ fn initAssumePrepared(
         .pinnable_spine_visited = std.AutoHashMap(Var, void).init(gpa),
         .boundary_reachable_vars = std.AutoHashMap(Var, void).init(gpa),
         .boundary_leak_vars = std.AutoHashMap(Var, void).init(gpa),
+        .boundary_eql_edges = .empty,
         .checked_lambda_params = .empty,
         .probe_var_pool_lens = .empty,
     };
@@ -1277,6 +1283,7 @@ pub fn deinit(self: *Self) void {
     self.pinnable_spine_visited.deinit();
     self.boundary_reachable_vars.deinit();
     self.boundary_leak_vars.deinit();
+    self.boundary_eql_edges.deinit(self.gpa);
     self.checked_lambda_params.deinit(self.gpa);
     self.probe_var_pool_lens.deinit(self.gpa);
 }
@@ -15376,6 +15383,20 @@ fn defaultLiteralsAtGeneralizationBoundary(self: *Self, def_root_var: Var, env: 
     }
     if (!has_candidate) return;
 
+    // Collect the module's `.eql` edges once so the recursive-def pass and the
+    // fixpoint below iterate just the edges, not the whole constraint list.
+    // Safe to snapshot here: nothing between this point and the fixpoint adds an
+    // `.eql` constraint (the passes only collect reachable vars).
+    self.boundary_eql_edges.clearRetainingCapacity();
+    {
+        var edge_iter = self.constraints.iterIndices();
+        while (edge_iter.next()) |constraint_idx| {
+            switch (self.constraints.get(constraint_idx).*) {
+                .eql => |eql| try self.boundary_eql_edges.append(self.gpa, eql),
+            }
+        }
+    }
+
     // The def root's reachable closure (recursing into `where`-constraint
     // signatures). A cycle root generalizes its whole group at once, so also seed
     // from every deferred cycle participant's def vars; at a non-cycle boundary
@@ -15414,36 +15435,31 @@ fn defaultLiteralsAtGeneralizationBoundary(self: *Self, def_root_var: Var, env: 
     // carries a `Str`, not an open numeral, so seeding its var changes no defaulting
     // and the real clash still surfaces. Purely conservative throughout: only ever
     // keeps more literals open, defaults none.
-    {
-        var rec_iter = self.constraints.iterIndices();
-        while (rec_iter.next()) |constraint_idx| {
-            switch (self.constraints.get(constraint_idx).*) {
-                .eql => |eql| switch (eql.ctx) {
-                    .recursive_def => {
-                        const ref_resolved = self.types.resolveVar(eql.actual);
-                        const ref_func = ref_resolved.desc.content.unwrapFunc() orelse continue;
-                        try self.collectReachableVars(ref_func.ret, &self.boundary_reachable_vars);
+    for (self.boundary_eql_edges.items) |eql| {
+        switch (eql.ctx) {
+            .recursive_def => {
+                const ref_resolved = self.types.resolveVar(eql.actual);
+                const ref_func = ref_resolved.desc.content.unwrapFunc() orelse continue;
+                try self.collectReachableVars(ref_func.ret, &self.boundary_reachable_vars);
 
-                        // The referenced def's annotated body var supplies the
-                        // parameter types: `expected` (a self-reference's pattern
-                        // var) is not yet unified with the annotation here, but the
-                        // body var has carried it since the body was checked.
-                        const annotated_fn_var = eql.recursive_annotated_fn_var orelse continue;
-                        const annotated_func = self.types.resolveVar(annotated_fn_var).desc.content.unwrapFunc() orelse continue;
-                        const call_args = self.types.sliceVars(ref_func.args);
-                        const param_vars = self.types.sliceVars(annotated_func.args);
-                        const arg_count = @min(call_args.len, param_vars.len);
-                        for (call_args[0..arg_count], param_vars[0..arg_count]) |call_arg, param_var| {
-                            const param_content = self.types.resolveVar(param_var).desc.content;
-                            switch (param_content) {
-                                .flex, .rigid => {},
-                                .structure, .alias, .err => try self.collectReachableVars(call_arg, &self.boundary_reachable_vars),
-                            }
-                        }
-                    },
-                    else => {},
-                },
-            }
+                // The referenced def's annotated body var supplies the
+                // parameter types: `expected` (a self-reference's pattern
+                // var) is not yet unified with the annotation here, but the
+                // body var has carried it since the body was checked.
+                const annotated_fn_var = eql.recursive_annotated_fn_var orelse continue;
+                const annotated_func = self.types.resolveVar(annotated_fn_var).desc.content.unwrapFunc() orelse continue;
+                const call_args = self.types.sliceVars(ref_func.args);
+                const param_vars = self.types.sliceVars(annotated_func.args);
+                const arg_count = @min(call_args.len, param_vars.len);
+                for (call_args[0..arg_count], param_vars[0..arg_count]) |call_arg, param_var| {
+                    const param_content = self.types.resolveVar(param_var).desc.content;
+                    switch (param_content) {
+                        .flex, .rigid => {},
+                        .structure, .alias, .err => try self.collectReachableVars(call_arg, &self.boundary_reachable_vars),
+                    }
+                }
+            },
+            else => {},
         }
     }
 
@@ -15455,18 +15471,13 @@ fn defaultLiteralsAtGeneralizationBoundary(self: *Self, def_root_var: Var, env: 
     var changed = true;
     while (changed) {
         changed = false;
-        var constraint_iter = self.constraints.iterIndices();
-        while (constraint_iter.next()) |constraint_idx| {
-            switch (self.constraints.get(constraint_idx).*) {
-                .eql => |eql| {
-                    const expected_in = self.boundary_reachable_vars.contains(self.types.resolveVar(eql.expected).var_);
-                    const actual_in = self.boundary_reachable_vars.contains(self.types.resolveVar(eql.actual).var_);
-                    if (expected_in == actual_in) continue;
-                    try self.collectReachableVars(eql.expected, &self.boundary_reachable_vars);
-                    try self.collectReachableVars(eql.actual, &self.boundary_reachable_vars);
-                    changed = true;
-                },
-            }
+        for (self.boundary_eql_edges.items) |eql| {
+            const expected_in = self.boundary_reachable_vars.contains(self.types.resolveVar(eql.expected).var_);
+            const actual_in = self.boundary_reachable_vars.contains(self.types.resolveVar(eql.actual).var_);
+            if (expected_in == actual_in) continue;
+            try self.collectReachableVars(eql.expected, &self.boundary_reachable_vars);
+            try self.collectReachableVars(eql.actual, &self.boundary_reachable_vars);
+            changed = true;
         }
     }
 
