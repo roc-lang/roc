@@ -15674,6 +15674,10 @@ fn runRootU8(store: *LirStore, layout_store: *layout.Store, root_proc: lir.LIR.L
 }
 
 test "dev lowering: init_uninitialized writes poison pattern" {
+    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) {
+        return error.SkipZigTest;
+    }
+
     const allocator = std.testing.allocator;
     var store = LirStore.init(allocator);
     defer store.deinit();
