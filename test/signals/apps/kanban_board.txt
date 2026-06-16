@@ -1,0 +1,27 @@
+# Kanban board smoke scenario
+
+expect_text span:0 "Kanban board"
+expect_text span:1 "Focus filter off"
+expect_text span:2 "mounted: 3"
+expect_text span:3 "unmounted: 0"
+expect_text span:4 "Design signal graph"
+expect_text span:5 "progress: 0 / notes: 0"
+expect_text span:6 "Write platform glue"
+expect_text span:7 "progress: 0 / notes: 0"
+expect_text span:8 "Tune keyed diff"
+expect_text span:9 "progress: 0 / notes: 0"
+
+click button:4
+expect_text span:5 "progress: 1 / notes: 0"
+
+click button:0
+expect_text span:4 "Tune keyed diff"
+expect_text span:5 "progress: 0 / notes: 0"
+expect_text span:6 "Design signal graph"
+expect_text span:7 "progress: 1 / notes: 0"
+
+click button:3
+expect_text span:1 "Focus filter on"
+expect_text span:3 "unmounted: 2"
+expect_text span:4 "Tune keyed diff"
+expect_text span:5 "progress: 0 / notes: 0"

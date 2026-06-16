@@ -1,0 +1,27 @@
+# Ops dashboard smoke scenario
+
+expect_text span:0 "Ops dashboard"
+expect_text span:1 "requests: 1200"
+expect_text span:2 "failures: 4"
+expect_text span:3 "queue: 17"
+expect_text span:5 "score: 1160 / queue: 17"
+expect_text span:6 "All services nominal"
+expect_text span:7 "No escalation"
+expect_text span:9 "mounted: 1"
+expect_text span:10 "unmounted: 0"
+expect_text span:11 "Database warmup"
+expect_text span:12 "acks: 0"
+
+click button:0
+expect_text span:1 "requests: 1275"
+expect_text span:5 "score: 1235 / queue: 17"
+
+click button:5
+expect_text span:6 "Incident active"
+expect_text span:7 "Escalation channel open"
+expect_text span:11 "API latency"
+expect_text span:13 "Job backlog"
+
+click button:6
+expect_text span:9 "mounted: 3"
+expect_text span:10 "unmounted: 3"
