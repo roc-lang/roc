@@ -25,15 +25,14 @@ pub fn isIntrinsicAnnotation(env: *const ModuleEnv, ident: base.Ident.Idx) bool 
         if (ident.eql(utf8_problem_eq)) return true;
     }
 
-    const decoder_intrinsics = [_][]const u8{
-        "Builtin.Decoder.decode",
-        "Builtin.Decoder.decode_str",
-        "Builtin.Decoder.Record.init",
-        "Builtin.Decoder.Record.put",
-        "Builtin.Decoder.Record.finish",
-        "Builtin.Decoder.TagUnion.decode",
+    const parse_intrinsics = [_][]const u8{
+        "Builtin.ParseStrSpec.parse",
+        "Builtin.ParseRecordSpec.init",
+        "Builtin.ParseRecordSpec.put",
+        "Builtin.ParseRecordSpec.finish",
+        "Builtin.ParseTagUnionSpec.parse",
     };
-    for (decoder_intrinsics) |name| {
+    for (parse_intrinsics) |name| {
         if (env.common.findIdent(name)) |intrinsic| {
             if (ident.eql(intrinsic)) return true;
         }

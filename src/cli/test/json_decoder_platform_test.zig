@@ -1,4 +1,4 @@
-//! Regression test for a zero-allocation JSON Decoder platform.
+//! Regression test for a zero-allocation JSON parsing platform.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -25,7 +25,7 @@ const OptionalField = struct {
     value: []const u8,
 };
 
-test "JSON Decoder platform derives record decoder without runtime allocations" {
+test "JSON parsing platform derives structural parser without runtime allocations" {
     const target_name = nativeRunnableTargetName() orelse return error.SkipZigTest;
 
     const allocator = testing.allocator;
@@ -209,7 +209,7 @@ fn runJsonDecoderAndCheckOutput(allocator: std.mem.Allocator, exe_path: []const 
     switch (result.term) {
         .exited => |code| {
             if (code != 0) {
-                std.debug.print("json decoder exited with code {}\nSTDOUT:\n{s}\nSTDERR:\n{s}\n", .{
+                std.debug.print("json parser exited with code {}\nSTDOUT:\n{s}\nSTDERR:\n{s}\n", .{
                     code,
                     result.stdout,
                     result.stderr,
@@ -218,7 +218,7 @@ fn runJsonDecoderAndCheckOutput(allocator: std.mem.Allocator, exe_path: []const 
             }
         },
         else => {
-            std.debug.print("json decoder terminated unexpectedly: {}\nSTDOUT:\n{s}\nSTDERR:\n{s}\n", .{
+            std.debug.print("json parser terminated unexpectedly: {}\nSTDOUT:\n{s}\nSTDERR:\n{s}\n", .{
                 result.term,
                 result.stdout,
                 result.stderr,
@@ -243,7 +243,7 @@ fn runJsonDecoderAndCheckInvalidUtf8(allocator: std.mem.Allocator, exe_path: []c
     switch (result.term) {
         .exited => |code| {
             if (code == 0) {
-                std.debug.print("json decoder accepted invalid UTF-8\nSTDOUT:\n{s}\nSTDERR:\n{s}\n", .{
+                std.debug.print("json parser accepted invalid UTF-8\nSTDOUT:\n{s}\nSTDERR:\n{s}\n", .{
                     result.stdout,
                     result.stderr,
                 });
@@ -251,7 +251,7 @@ fn runJsonDecoderAndCheckInvalidUtf8(allocator: std.mem.Allocator, exe_path: []c
             }
         },
         else => {
-            std.debug.print("json decoder terminated unexpectedly for invalid UTF-8: {}\nSTDOUT:\n{s}\nSTDERR:\n{s}\n", .{
+            std.debug.print("json parser terminated unexpectedly for invalid UTF-8: {}\nSTDOUT:\n{s}\nSTDERR:\n{s}\n", .{
                 result.term,
                 result.stdout,
                 result.stderr,

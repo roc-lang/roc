@@ -2575,10 +2575,10 @@ const Lowerer = struct {
             .dec => .dec,
             .list,
             .box,
-            .decoder_str_spec,
-            .decoder_record_spec,
-            .decoder_record_state,
-            .decoder_tag_union_spec,
+            .parse_str_spec,
+            .parse_record_spec,
+            .parse_record_state,
+            .parse_tag_union_spec,
             => null,
         };
     }

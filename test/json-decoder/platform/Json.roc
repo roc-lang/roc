@@ -1,41 +1,51 @@
 DecodeErr := [MissingRequired, InvalidJson].{}
 
 JsonFormat :: [Present(Str), Missing].{
-	decode_str : DecoderStrSpec(a), JsonFormat -> Try(a, DecodeErr)
-	decode_str = |spec, slot|
-		Decoder.decode_str(spec, slot, DecodeErr.MissingRequired)
+	parse_str : ParseStrSpec(a), JsonFormat -> Try({ value : a, rest : JsonFormat }, DecodeErr)
+	parse_str = |spec, slot| {
+		value = ParseStrSpec.parse(spec, slot, DecodeErr.MissingRequired)?
+		Ok({ value, rest: Missing })
+	}
 
-	decode_record : DecoderRecordSpec(a), JsonFormat -> Try(a, DecodeErr)
-	decode_record = |spec, slot|
+	parse_record : ParseRecordSpec(a), JsonFormat -> Try({ value : a, rest : JsonFormat }, DecodeErr)
+	parse_record = |spec, slot|
 		match slot {
-			Present(value) => decode_record_from_json(value, spec)
+			Present(raw) => {
+				value = parse_record_from_json(raw, spec)?
+				Ok({ value, rest: Missing })
+			}
 			Missing => Err(DecodeErr.MissingRequired)
 		}
 
-	decode_tag_union : DecoderTagUnionSpec(a), JsonFormat -> Try(a, DecodeErr)
-	decode_tag_union = |spec, slot|
+	parse_tag_union : ParseTagUnionSpec(a), JsonFormat -> Try({ value : a, rest : JsonFormat }, DecodeErr)
+	parse_tag_union = |spec, slot|
 		match slot {
-			Present(value) =>
-				decode_tag_union_from_json(value, spec)
+			Present(value) => {
+				parsed = parse_tag_union_from_json(value, spec)?
+				Ok({ value: parsed, rest: Missing })
+			}
 			Missing => Err(DecodeErr.MissingRequired)
 		}
 }
 
 Json :: [].{
-	decode : Str -> Try(a, DecodeErr) where [a.decoder : () -> Decoder(a)]
-	decode = |json| {
+	parse : Str -> Try(a, DecodeErr) where [
+		a.parse_from : JsonFormat -> Try({ value : a, rest : JsonFormat }, DecodeErr),
+	]
+	parse = |json| {
 		Shape : a
-		Shape.decoder().decode(JsonFormat.Present(json))
+		parsed = Shape.parse_from(JsonFormat.Present(json))?
+		Ok(parsed.value)
 	}
 }
 
 invalid_json : DecodeErr
 invalid_json = DecodeErr.InvalidJson
 
-decode_record_from_json : Str, DecoderRecordSpec(a) -> Try(a, DecodeErr)
-decode_record_from_json = |raw, spec| {
+parse_record_from_json : Str, ParseRecordSpec(a) -> Try(a, DecodeErr)
+parse_record_from_json = |raw, spec| {
 	var $remaining = Str.trim_start(raw)
-	var $state = Decoder.Record.init(spec, JsonFormat.Missing)
+	var $state = ParseRecordSpec.init(spec, JsonFormat.Missing)
 	var $keep_scanning = True
 
 	if Str.starts_with($remaining, "{") {
@@ -63,7 +73,7 @@ decode_record_from_json = |raw, spec| {
 
 							match value_split {
 								Ok(value_parts) => {
-									$state = Decoder.Record.put(spec, $state, key, JsonFormat.Present(value_parts.before), Str.is_eq)
+									$state = ParseRecordSpec.put(spec, $state, key, JsonFormat.Present(value_parts.before), Str.is_eq)
 									Str.trim_start(value_parts.after)
 								}
 								Err(NotFound) => {
@@ -75,7 +85,7 @@ decode_record_from_json = |raw, spec| {
 
 							match object_end {
 								Ok(end_parts) => {
-									$state = Decoder.Record.put(spec, $state, key, JsonFormat.Present(after_colon), Str.is_eq)
+									$state = ParseRecordSpec.put(spec, $state, key, JsonFormat.Present(after_colon), Str.is_eq)
 									Str.trim_start(end_parts.after)
 								}
 								Err(NotFound) => {
@@ -106,12 +116,12 @@ decode_record_from_json = |raw, spec| {
 		}
 	}
 
-	Decoder.Record.finish(spec, $state, DecodeErr.MissingRequired)
+	ParseRecordSpec.finish(spec, $state, DecodeErr.MissingRequired)
 }
 
-decode_tag_union_from_json : Str, DecoderTagUnionSpec(a) -> Try(a, DecodeErr)
-decode_tag_union_from_json = |tag_name, spec|
-	Decoder.TagUnion.decode(spec, tag_name, JsonFormat.Present(tag_name), Str.is_eq, DecodeErr.MissingRequired)
+parse_tag_union_from_json : Str, ParseTagUnionSpec(a) -> Try(a, DecodeErr)
+parse_tag_union_from_json = |tag_name, spec|
+	ParseTagUnionSpec.parse(spec, tag_name, JsonFormat.Present(tag_name), Str.is_eq, DecodeErr.MissingRequired)
 
 find_object_end : Str -> Try({ before : Str, after : Str }, [NotFound])
 find_object_end = |object_text| {

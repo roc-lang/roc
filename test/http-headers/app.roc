@@ -10,7 +10,7 @@ main! = |headers| {
 		question_optional : Try(Str, [Missing]),
 		wildcard_optional : Try(Str, _),
 	}, Headers.DecodeErr)
-	decoded_result = Headers.decode(headers)
+	decoded_result = Headers.parse(headers)
 
 	match decoded_result {
 		Ok(decoded) => {

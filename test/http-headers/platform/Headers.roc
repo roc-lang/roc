@@ -1,36 +1,47 @@
 Headers :: [].{
 	DecodeErr := [MissingRequired, BadHeader].{}
 
-	decode : Str -> Try(a, DecodeErr) where [a.decoder : () -> Decoder(a)]
-	decode = |headers| {
+	parse : Str -> Try(a, DecodeErr) where [
+		a.parse_from : HeaderFormat -> Try({ value : a, rest : HeaderFormat }, DecodeErr),
+	]
+	parse = |headers| {
 		Shape : a
-		Shape.decoder().decode(HeaderFormat.Present(headers))
+		parsed = Shape.parse_from(HeaderFormat.Present(headers))?
+		Ok(parsed.value)
 	}
 }
 
 HeaderFormat :: [Present(Str), Missing].{
-	decode_str : DecoderStrSpec(a), HeaderFormat -> Try(a, Headers.DecodeErr)
-	decode_str = |spec, slot|
-		Decoder.decode_str(spec, slot, Headers.DecodeErr.MissingRequired)
+	parse_str : ParseStrSpec(a), HeaderFormat -> Try({ value : a, rest : HeaderFormat }, Headers.DecodeErr)
+	parse_str = |spec, slot| {
+		value = ParseStrSpec.parse(spec, slot, Headers.DecodeErr.MissingRequired)?
+		Ok({ value, rest: Missing })
+	}
 
-	decode_record : DecoderRecordSpec(a), HeaderFormat -> Try(a, Headers.DecodeErr)
-	decode_record = |spec, slot|
+	parse_record : ParseRecordSpec(a), HeaderFormat -> Try({ value : a, rest : HeaderFormat }, Headers.DecodeErr)
+	parse_record = |spec, slot|
 		match slot {
-			Present(value) => decode_record_from_headers(value, spec)
+			Present(headers) => {
+				value = parse_record_from_headers(headers, spec)?
+				Ok({ value, rest: Missing })
+			}
 			Missing => Err(Headers.DecodeErr.MissingRequired)
 		}
 
-	decode_tag_union : DecoderTagUnionSpec(a), HeaderFormat -> Try(a, Headers.DecodeErr)
-	decode_tag_union = |spec, slot|
+	parse_tag_union : ParseTagUnionSpec(a), HeaderFormat -> Try({ value : a, rest : HeaderFormat }, Headers.DecodeErr)
+	parse_tag_union = |spec, slot|
 		match slot {
-			Present(value) => decode_tag_union_from_header(value, spec)
+			Present(tag_name) => {
+				value = parse_tag_union_from_header(tag_name, spec)?
+				Ok({ value, rest: Missing })
+			}
 			Missing => Err(Headers.DecodeErr.MissingRequired)
 		}
 }
 
-decode_record_from_headers : Str, DecoderRecordSpec(a) -> Try(a, Headers.DecodeErr)
-decode_record_from_headers = |headers, spec| {
-	var $state = Decoder.Record.init(spec, Missing)
+parse_record_from_headers : Str, ParseRecordSpec(a) -> Try(a, Headers.DecodeErr)
+parse_record_from_headers = |headers, spec| {
+	var $state = ParseRecordSpec.init(spec, Missing)
 	var $remaining = headers
 
 	while True {
@@ -38,7 +49,7 @@ decode_record_from_headers = |headers, spec| {
 			Ok({ before, after }) if !before.is_empty() => {
 				match before.find_first(":") {
 					Ok({ before: name, after: value }) => {
-						$state = Decoder.Record.put(
+						$state = ParseRecordSpec.put(
 							spec,
 							$state,
 							name,
@@ -55,12 +66,12 @@ decode_record_from_headers = |headers, spec| {
 		}
 	}
 
-	Decoder.Record.finish(spec, $state, MissingRequired)
+	ParseRecordSpec.finish(spec, $state, MissingRequired)
 }
 
-decode_tag_union_from_header : Str, DecoderTagUnionSpec(a) -> Try(a, Headers.DecodeErr)
-decode_tag_union_from_header = |tag_name, spec|
-	Decoder.TagUnion.decode(spec, tag_name, HeaderFormat.Present(tag_name), Str.is_eq, Headers.DecodeErr.MissingRequired)
+parse_tag_union_from_header : Str, ParseTagUnionSpec(a) -> Try(a, Headers.DecodeErr)
+parse_tag_union_from_header = |tag_name, spec|
+	ParseTagUnionSpec.parse(spec, tag_name, HeaderFormat.Present(tag_name), Str.is_eq, Headers.DecodeErr.MissingRequired)
 
 header_name_matches_field : Str, Str -> Bool
 header_name_matches_field = |header_name, field_name| {

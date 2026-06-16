@@ -1,4 +1,4 @@
-//! Regression test for a zero-allocation HTTP header Decoder platform.
+//! Regression test for a zero-allocation HTTP header parsing platform.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -26,7 +26,7 @@ const invalid_utf8_request =
     "Content-Length: 0\r\n" ++
     "\r\n";
 
-test "HTTP header Decoder platform derives record decoder without runtime allocations" {
+test "HTTP header parsing platform derives structural parser without runtime allocations" {
     const target_name = nativeRunnableTargetName() orelse return error.SkipZigTest;
 
     const allocator = testing.allocator;
@@ -249,7 +249,7 @@ fn runServerAndCheckResponse(allocator: std.mem.Allocator, exe_path: []const u8,
     child_running = false;
 
     if (watch.timed_out.load(.acquire)) {
-        std.debug.print("HTTP header decoder server timed out\nSTDERR:\n{s}\n", .{stderr});
+        std.debug.print("HTTP header parser server timed out\nSTDERR:\n{s}\n", .{stderr});
         return error.ServerTimedOut;
     }
 
@@ -309,7 +309,7 @@ fn runServerAndCheckInvalidUtf8(allocator: std.mem.Allocator, exe_path: []const 
     child_running = false;
 
     if (watch.timed_out.load(.acquire)) {
-        std.debug.print("HTTP header decoder invalid UTF-8 server timed out\nSTDERR:\n{s}\n", .{stderr});
+        std.debug.print("HTTP header parser invalid UTF-8 server timed out\nSTDERR:\n{s}\n", .{stderr});
         return error.ServerTimedOut;
     }
 

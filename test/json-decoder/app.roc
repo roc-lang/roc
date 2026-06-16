@@ -15,7 +15,7 @@ main! = |json| {
 		status : [Active, Paused],
 		wildcard_optional : Try(Str, _),
 	}, _)
-	decoded_result = Json.decode(json)
+	decoded_result = Json.parse(json)
 
 	match decoded_result {
 		Ok(decoded) => {

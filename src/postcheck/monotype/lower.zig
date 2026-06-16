@@ -277,12 +277,11 @@ const LoweredCall = struct {
 };
 
 const DecoderIntrinsic = enum {
-    decode,
-    str_decode,
+    str_parse,
     record_init,
     record_put,
     record_finish,
-    tag_union_decode,
+    tag_union_parse,
 };
 
 const ConstExprAddress = struct {
@@ -1355,17 +1354,17 @@ const Builder = struct {
                             if (nominal.args.len != 1) Common.invariant("checked Box nominal must have exactly one type argument");
                             break :blk .{ .box = try self.lowerType(view, nominal.args[0]) };
                         },
-                        .decoder_str_spec,
-                        .decoder_record_spec,
-                        .decoder_tag_union_spec,
+                        .parse_str_spec,
+                        .parse_record_spec,
+                        .parse_tag_union_spec,
                         => {},
-                        .decoder_record_state => {
-                            if (nominal.args.len != 2) Common.invariant("checked Decoder.Record.State nominal must have exactly two type arguments");
+                        .parse_record_state => {
+                            if (nominal.args.len != 2) Common.invariant("checked ParseRecordState nominal must have exactly two type arguments");
                             const shape_ty = try self.lowerType(view, nominal.args[0]);
                             const slot_ty = try self.lowerType(view, nominal.args[1]);
                             const fields_span = switch (self.shapeContent(shape_ty)) {
                                 .record => |fields| fields,
-                                else => Common.invariant("checked Decoder.Record.State shape argument was not a record type"),
+                                else => Common.invariant("checked ParseRecordState shape argument was not a record type"),
                             };
                             const fields = self.program.types.fieldSpan(fields_span);
                             const slots = try self.allocator.alloc(Type.TypeId, fields.len);
@@ -3070,17 +3069,17 @@ const BodyContext = struct {
                     if (nominal.args.len != 1) Common.invariant("checked Box nominal must have exactly one type argument");
                     return try self.graph.newNode(.{ .box = try self.instNode(nominal.args[0]) });
                 },
-                .decoder_str_spec,
-                .decoder_record_spec,
-                .decoder_tag_union_spec,
+                .parse_str_spec,
+                .parse_record_spec,
+                .parse_tag_union_spec,
                 => {},
-                .decoder_record_state => {
-                    if (nominal.args.len != 2) Common.invariant("checked Decoder.Record.State nominal must have exactly two type arguments");
+                .parse_record_state => {
+                    if (nominal.args.len != 2) Common.invariant("checked ParseRecordState nominal must have exactly two type arguments");
                     const shape_node = try self.instNode(nominal.args[0]);
                     const slot_node = try self.instNode(nominal.args[1]);
                     const fields = switch (self.graph.nodes.items[@intFromEnum(shape_node)]) {
                         .record => |record| record.fields,
-                        else => Common.invariant("checked Decoder.Record.State shape argument was not a record type"),
+                        else => Common.invariant("checked ParseRecordState shape argument was not a record type"),
                     };
                     const slots = try self.graph.arena().alloc(NodeId, fields.len);
                     @memset(slots, slot_node);
@@ -3628,12 +3627,11 @@ const BodyContext = struct {
         }
 
         return switch (intrinsic) {
-            .decode => try self.lowerDecoderDecode(call.args, arg_tys, ret_ty),
-            .str_decode => try self.lowerDecoderStrDecode(call.args, arg_tys, ret_ty),
+            .str_parse => try self.lowerDecoderStrDecode(call.args, arg_tys, ret_ty),
             .record_init => try self.lowerDecoderRecordInit(call.args, arg_tys, ret_ty),
             .record_put => try self.lowerDecoderRecordPut(call.args, arg_tys, ret_ty),
             .record_finish => try self.lowerDecoderRecordFinish(call.args, arg_tys, ret_ty),
-            .tag_union_decode => try self.lowerDecoderTagUnionDecode(call.args, arg_tys, ret_ty),
+            .tag_union_parse => try self.lowerDecoderTagUnionDecode(call.args, arg_tys, ret_ty),
         };
     }
 
@@ -3649,7 +3647,7 @@ const BodyContext = struct {
 
         const source_fn_ty = self.directCallInstantiationSourceFnType(target, call.source_fn_ty_payload);
         const function = call_ctx.checkedFunctionType(source_fn_ty);
-        if (function.args.len != 2 or call.args.len != 2) Common.invariant("Decoder.Record.init source arity differed from call arity");
+        if (function.args.len != 2 or call.args.len != 2) Common.invariant("ParseRecordSpec.init source arity differed from call arity");
 
         const formal_node = try call_ctx.instNode(function.args[1]);
         const arg_ty = self.view.bodies.exprs[@intFromEnum(call.args[1])].ty;
@@ -3670,18 +3668,13 @@ const BodyContext = struct {
         expected_ret_ty: ?Type.TypeId,
     ) Allocator.Error!Type.TypeId {
         const derived = switch (intrinsic) {
-            .str_decode => blk: {
-                if (args.len != 3 or arg_tys.len != 3) Common.invariant("Decoder.decode_str reached Monotype with an unexpected arity");
-                if (expected_ret_ty) |expected| break :blk expected;
-                break :blk try self.lowerType(checked_ret_ty);
-            },
-            .decode => blk: {
-                if (args.len != 2 or arg_tys.len != 2) Common.invariant("Decoder.decode reached Monotype with an unexpected arity");
+            .str_parse => blk: {
+                if (args.len != 3 or arg_tys.len != 3) Common.invariant("ParseStrSpec.parse reached Monotype with an unexpected arity");
                 if (expected_ret_ty) |expected| break :blk expected;
                 break :blk try self.lowerType(checked_ret_ty);
             },
             .record_init => blk: {
-                if (args.len != 2 or arg_tys.len != 2) Common.invariant("Decoder.Record.init reached Monotype with an unexpected arity");
+                if (args.len != 2 or arg_tys.len != 2) Common.invariant("ParseRecordSpec.init reached Monotype with an unexpected arity");
                 const fields = try self.decoderRecordFieldsFromSpecExpr(args[0]);
                 const slots = try self.allocator.alloc(Type.TypeId, fields.len);
                 defer self.allocator.free(slots);
@@ -3689,16 +3682,16 @@ const BodyContext = struct {
                 break :blk try self.builder.program.types.add(.{ .tuple = try self.builder.program.types.addSpan(slots) });
             },
             .record_put => blk: {
-                if (args.len != 5 or arg_tys.len != 5) Common.invariant("Decoder.Record.put reached Monotype with an unexpected arity");
+                if (args.len != 5 or arg_tys.len != 5) Common.invariant("ParseRecordSpec.put reached Monotype with an unexpected arity");
                 break :blk arg_tys[1];
             },
             .record_finish => blk: {
-                if (args.len != 3 or arg_tys.len != 3) Common.invariant("Decoder.Record.finish reached Monotype with an unexpected arity");
+                if (args.len != 3 or arg_tys.len != 3) Common.invariant("ParseRecordSpec.finish reached Monotype with an unexpected arity");
                 if (expected_ret_ty) |expected| break :blk expected;
                 break :blk try self.lowerType(checked_ret_ty);
             },
-            .tag_union_decode => blk: {
-                if (args.len != 5 or arg_tys.len != 5) Common.invariant("Decoder.TagUnion.decode reached Monotype with an unexpected arity");
+            .tag_union_parse => blk: {
+                if (args.len != 5 or arg_tys.len != 5) Common.invariant("ParseTagUnionSpec.parse reached Monotype with an unexpected arity");
                 if (expected_ret_ty) |expected| break :blk expected;
                 break :blk try self.lowerType(checked_ret_ty);
             },
@@ -3850,94 +3843,91 @@ const BodyContext = struct {
             else => return null,
         };
         const text = view.module_env.getIdentText(ident);
-        if (Ident.textEql(text, "Builtin.Decoder.decode")) return .decode;
-        if (Ident.textEql(text, "Builtin.Decoder.decode_str")) return .str_decode;
-        if (Ident.textEql(text, "Builtin.Decoder.Record.init")) return .record_init;
-        if (Ident.textEql(text, "Builtin.Decoder.Record.put")) return .record_put;
-        if (Ident.textEql(text, "Builtin.Decoder.Record.finish")) return .record_finish;
-        if (Ident.textEql(text, "Builtin.Decoder.TagUnion.decode")) return .tag_union_decode;
+        if (Ident.textEql(text, "Builtin.ParseStrSpec.parse")) return .str_parse;
+        if (Ident.textEql(text, "Builtin.ParseRecordSpec.init")) return .record_init;
+        if (Ident.textEql(text, "Builtin.ParseRecordSpec.put")) return .record_put;
+        if (Ident.textEql(text, "Builtin.ParseRecordSpec.finish")) return .record_finish;
+        if (Ident.textEql(text, "Builtin.ParseTagUnionSpec.parse")) return .tag_union_parse;
         return null;
     }
 
-    fn lowerDecoderDecode(
-        self: *BodyContext,
-        args: []const checked.CheckedExprId,
-        arg_tys: []const Type.TypeId,
-        ret_ty: Type.TypeId,
-    ) Allocator.Error!Ast.ExprId {
-        if (args.len != 2 or arg_tys.len != 2) Common.invariant("Decoder.decode reached Monotype with an unexpected arity");
-
-        const decoder_ty = arg_tys[0];
-        const input_ty = arg_tys[1];
-        const decoder_args = self.decoderNamedArgs(decoder_ty);
-        const ret_info = self.tryInfo(ret_ty);
-        if (!self.sameType(ret_info.ok_ty, decoder_args.shape)) Common.invariant("Decoder.decode Ok type differed from decoder shape");
-
-        const decoder_value = try self.lowerDecoderIntrinsicArgAtType(args[0], decoder_ty);
-        const input_value = try self.lowerDecoderIntrinsicArgAtType(args[1], input_ty);
-
-        return try self.lowerDecoderDecodeFromValues(decoder_ty, input_ty, ret_ty, decoder_value, input_value);
-    }
-
-    fn lowerDecoderDecodeFromValues(
-        self: *BodyContext,
-        decoder_ty: Type.TypeId,
-        input_ty: Type.TypeId,
-        ret_ty: Type.TypeId,
-        decoder_value: Ast.ExprId,
-        input_value: Ast.ExprId,
-    ) Allocator.Error!Ast.ExprId {
-        const decoder_args = self.decoderNamedArgs(decoder_ty);
-        const ret_info = self.tryInfo(ret_ty);
-        if (!self.sameType(ret_info.ok_ty, decoder_args.shape)) Common.invariant("Decoder.decode Ok type differed from decoder shape");
-
-        const input_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), input_ty);
-        const decode_expr = try self.lowerDecoderDecodeShapeFromSlot(
-            ret_info.ok_ty,
-            try self.builder.localExpr(input_local, input_ty),
-            input_ty,
-            ret_ty,
-        );
-        const body = try self.wrapLet(input_local, input_ty, input_value, decode_expr, ret_ty);
-        return try self.wrapWildcardLet(decoder_ty, decoder_value, body, ret_ty);
-    }
-
-    fn lowerDecoderDecodeShapeFromSlot(
+    fn lowerParseShapeFromSlot(
         self: *BodyContext,
         shape_ty: Type.TypeId,
         slot_expr: Ast.ExprId,
         slot_ty: Type.TypeId,
         ret_ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprId {
-        const selected = self.decoderDecodeSelection(shape_ty);
+        const selected = self.parseShapeSelection(shape_ty);
         const method_name: []const u8 = if (Ident.textEql(selected.tag_text, "Str"))
-            "decode_str"
+            "parse_str"
         else if (Ident.textEql(selected.tag_text, "Record"))
-            "decode_record"
+            "parse_record"
         else if (Ident.textEql(selected.tag_text, "TagUnion"))
-            "decode_tag_union"
+            "parse_tag_union"
         else
-            Common.invariant("Decoder.decode selected an unsupported shape");
+            Common.invariant("parse_from selected an unsupported shape");
 
-        const decode_lookup = self.methodLookupForTypeName(slot_ty, method_name);
-        const decode_mono_ty = try self.methodTargetMonoTypeFromArgAtIndexAndRet(decode_lookup, 1, slot_ty, ret_ty);
-        const decode_fn = self.builder.functionShape(decode_mono_ty, "Decoder.decode target method was not a function");
-        const decode_arg_tys = self.builder.program.types.span(decode_fn.args);
-        if (decode_arg_tys.len != 2) Common.invariant("Decoder.decode target method had an unexpected arity");
-        if (!self.sameType(decode_arg_tys[1], slot_ty)) Common.invariant("Decoder.decode target slot type differed from input slot type");
+        const parse_lookup = self.methodLookupForTypeName(slot_ty, method_name);
+        const parse_mono_ty = try self.methodTargetMonoTypeFromArgAtIndexAndRet(parse_lookup, 1, slot_ty, ret_ty);
+        const parse_fn = self.builder.functionShape(parse_mono_ty, "parse_from target method was not a function");
+        const parse_arg_tys = self.builder.program.types.span(parse_fn.args);
+        if (parse_arg_tys.len != 2) Common.invariant("parse_from target method had an unexpected arity");
+        if (!self.sameType(parse_arg_tys[1], slot_ty)) Common.invariant("parse_from target slot type differed from input slot type");
 
         const spec_expr = try self.builder.program.addExpr(.{
-            .ty = decode_arg_tys[0],
+            .ty = parse_arg_tys[0],
             .data = .unit,
         });
-        const decode_args = [_]Ast.ExprId{ spec_expr, slot_expr };
+        const parse_args = [_]Ast.ExprId{ spec_expr, slot_expr };
         return try self.builder.program.addExpr(.{
             .ty = ret_ty,
             .data = .{ .call_proc = .{
-                .callee = .{ .func = try self.methodTargetCalleeWithMono(decode_lookup, decode_mono_ty) },
-                .args = try self.builder.program.addExprSpan(&decode_args),
+                .callee = .{ .func = try self.methodTargetCalleeWithMono(parse_lookup, parse_mono_ty) },
+                .args = try self.builder.program.addExprSpan(&parse_args),
             } },
         });
+    }
+
+    fn lowerParseValueFromSlot(
+        self: *BodyContext,
+        shape_ty: Type.TypeId,
+        slot_expr: Ast.ExprId,
+        slot_ty: Type.TypeId,
+        ret_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const ret_info = self.tryInfo(ret_ty);
+        if (!self.sameType(ret_info.ok_ty, shape_ty)) Common.invariant("parse value wrapper Ok type differed from parsed shape");
+
+        const parse_ok_ty = try self.parseResultOkType(shape_ty, slot_ty);
+        const parse_ret_ty = try self.tryTypeLike(ret_ty, parse_ok_ty, ret_info.err_ty);
+        const parse_expr = try self.lowerParseShapeFromSlot(shape_ty, slot_expr, slot_ty, parse_ret_ty);
+
+        const parsed_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), parse_ok_ty);
+        const value_name = try self.builder.program.names.internRecordFieldLabel("value");
+        const value_expr = try self.builder.program.addExpr(.{
+            .ty = shape_ty,
+            .data = .{ .field_access = .{
+                .receiver = try self.builder.localExpr(parsed_local, parse_ok_ty),
+                .field = value_name,
+            } },
+        });
+        const ok_body = try self.tryOk(ret_ty, value_expr);
+        return try self.sequenceTry(parse_expr, parse_ret_ty, parsed_local, ok_body, ret_ty);
+    }
+
+    fn parseResultOkType(
+        self: *BodyContext,
+        value_ty: Type.TypeId,
+        rest_ty: Type.TypeId,
+    ) Allocator.Error!Type.TypeId {
+        const rest_name = try self.builder.program.names.internRecordFieldLabel("rest");
+        const value_name = try self.builder.program.names.internRecordFieldLabel("value");
+        const fields = [_]Type.Field{
+            .{ .name = rest_name, .ty = rest_ty },
+            .{ .name = value_name, .ty = value_ty },
+        };
+        return try self.builder.program.types.add(.{ .record = try self.builder.program.types.addFields(&fields) });
     }
 
     fn lowerDecoderStrDecode(
@@ -3946,9 +3936,9 @@ const BodyContext = struct {
         arg_tys: []const Type.TypeId,
         ret_ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprId {
-        if (args.len != 3 or arg_tys.len != 3) Common.invariant("Decoder.decode_str reached Monotype with an unexpected arity");
+        if (args.len != 3 or arg_tys.len != 3) Common.invariant("ParseStrSpec.parse reached Monotype with an unexpected arity");
         const ret_info = self.tryInfo(ret_ty);
-        if (!self.typeHasBuiltinOwner(ret_info.ok_ty, .str)) Common.invariant("Decoder.decode_str shape argument was not Str");
+        if (!self.typeHasBuiltinOwner(ret_info.ok_ty, .str)) Common.invariant("ParseStrSpec.parse shape argument was not Str");
 
         const spec_value = try self.lowerDecoderIntrinsicArgAtType(args[0], arg_tys[0]);
         const slot_value = try self.lowerDecoderIntrinsicArgAtType(args[1], arg_tys[1]);
@@ -3965,7 +3955,7 @@ const BodyContext = struct {
         arg_tys: []const Type.TypeId,
         ret_ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprId {
-        if (args.len != 2 or arg_tys.len != 2) Common.invariant("Decoder.Record.init reached Monotype with an unexpected arity");
+        if (args.len != 2 or arg_tys.len != 2) Common.invariant("ParseRecordSpec.init reached Monotype with an unexpected arity");
         const item_tys = try self.allocator.dupe(Type.TypeId, self.builder.tupleItemTypes(ret_ty));
         defer self.allocator.free(item_tys);
 
@@ -3976,7 +3966,7 @@ const BodyContext = struct {
         const items = try self.allocator.alloc(Ast.ExprId, item_tys.len);
         defer self.allocator.free(items);
         for (item_tys, 0..) |item_ty, index| {
-            if (!self.sameType(item_ty, arg_tys[1])) Common.invariant("Decoder.Record.State slot type did not match init default type");
+            if (!self.sameType(item_ty, arg_tys[1])) Common.invariant("ParseRecordState slot type did not match init default type");
             items[index] = try self.builder.localExpr(default_local, item_ty);
         }
         const body = try self.builder.program.addExpr(.{
@@ -3993,13 +3983,13 @@ const BodyContext = struct {
         arg_tys: []const Type.TypeId,
         ret_ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprId {
-        if (args.len != 5 or arg_tys.len != 5) Common.invariant("Decoder.Record.put reached Monotype with an unexpected arity");
+        if (args.len != 5 or arg_tys.len != 5) Common.invariant("ParseRecordSpec.put reached Monotype with an unexpected arity");
 
         const fields = try self.allocator.dupe(Type.Field, try self.decoderRecordFieldsFromSpecExpr(args[0]));
         defer self.allocator.free(fields);
         const item_tys = try self.allocator.dupe(Type.TypeId, self.builder.tupleItemTypes(ret_ty));
         defer self.allocator.free(item_tys);
-        if (fields.len != item_tys.len) Common.invariant("Decoder.Record.State arity did not match derived record field count");
+        if (fields.len != item_tys.len) Common.invariant("ParseRecordState arity did not match derived record field count");
 
         const spec_value = try self.lowerDecoderIntrinsicArgAtType(args[0], arg_tys[0]);
         const state_value = try self.lowerDecoderIntrinsicArgAtType(args[1], arg_tys[1]);
@@ -4034,17 +4024,17 @@ const BodyContext = struct {
         arg_tys: []const Type.TypeId,
         ret_ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprId {
-        if (args.len != 3 or arg_tys.len != 3) Common.invariant("Decoder.Record.finish reached Monotype with an unexpected arity");
+        if (args.len != 3 or arg_tys.len != 3) Common.invariant("ParseRecordSpec.finish reached Monotype with an unexpected arity");
         const ret_info = self.tryInfo(ret_ty);
 
         const state_items = try self.allocator.dupe(Type.TypeId, self.builder.tupleItemTypes(arg_tys[1]));
         defer self.allocator.free(state_items);
         const record_fields = try self.allocator.dupe(Type.Field, switch (self.builder.shapeContent(ret_info.ok_ty)) {
             .record => |span| self.builder.program.types.fieldSpan(span),
-            else => Common.invariant("Decoder.Record.finish Ok type was not a record"),
+            else => Common.invariant("ParseRecordSpec.finish Ok type was not a record"),
         });
         defer self.allocator.free(record_fields);
-        if (record_fields.len != state_items.len) Common.invariant("Decoder.Record.State arity did not match finish record field count");
+        if (record_fields.len != state_items.len) Common.invariant("ParseRecordState arity did not match finish record field count");
 
         const spec_value = try self.lowerDecoderIntrinsicArgAtType(args[0], arg_tys[0]);
         const state_value = try self.lowerDecoderIntrinsicArgAtType(args[1], arg_tys[1]);
@@ -4074,7 +4064,7 @@ const BodyContext = struct {
             field_tries[index] = if (self.typeHasBuiltinOwner(field.ty, .str) or self.tryStrOptionalInfo(field.ty) != null)
                 try self.structuralDecoderFieldFromSlotTry(slot_expr, state_items[index], field.ty, field_try_ty, missing_local, arg_tys[2])
             else
-                try self.lowerDecoderDecodeShapeFromSlot(field.ty, slot_expr, state_items[index], field_try_ty);
+                try self.lowerParseValueFromSlot(field.ty, slot_expr, state_items[index], field_try_ty);
             out_fields[index] = .{
                 .name = field.name,
                 .value = try self.builder.localExpr(field_locals[index], field.ty),
@@ -4097,65 +4087,65 @@ const BodyContext = struct {
     }
 
     fn decoderRecordFieldsFromSpecExpr(self: *BodyContext, spec_expr: checked.CheckedExprId) Allocator.Error![]const Type.Field {
-        const shape_ty = try self.lowerType(self.checkedDecoderRecordSpecShape(spec_expr));
+        const shape_ty = try self.lowerType(self.checkedParseRecordSpecShape(spec_expr));
         return switch (self.builder.shapeContent(shape_ty)) {
             .record => |span| self.builder.program.types.fieldSpan(span),
-            else => Common.invariant("Decoder.Record.Spec shape argument was not a record type"),
+            else => Common.invariant("ParseRecordSpec shape argument was not a record type"),
         };
     }
 
-    fn checkedDecoderStrSpecShape(self: *BodyContext, spec_expr: checked.CheckedExprId) checked.CheckedTypeId {
+    fn checkedParseStrSpecShape(self: *BodyContext, spec_expr: checked.CheckedExprId) checked.CheckedTypeId {
         const expr = self.view.bodies.exprs[@intFromEnum(spec_expr)];
         return switch (resolvedPayload(self.view, expr.ty).payload) {
             .nominal => |nominal| blk: {
-                if ((nominal.builtin orelse Common.invariant("Decoder.decode_str intrinsic spec argument was not a builtin nominal")) != .decoder_str_spec) {
-                    Common.invariant("Decoder.decode_str intrinsic spec argument was not DecoderStrSpec");
+                if ((nominal.builtin orelse Common.invariant("ParseStrSpec.parse intrinsic spec argument was not a builtin nominal")) != .parse_str_spec) {
+                    Common.invariant("ParseStrSpec.parse intrinsic spec argument was not ParseStrSpec");
                 }
-                if (nominal.args.len != 1) Common.invariant("DecoderStrSpec had an unexpected type argument count");
+                if (nominal.args.len != 1) Common.invariant("ParseStrSpec had an unexpected type argument count");
                 break :blk nominal.args[0];
             },
-            else => Common.invariant("Decoder.decode_str intrinsic spec argument was not nominal"),
+            else => Common.invariant("ParseStrSpec.parse intrinsic spec argument was not nominal"),
         };
     }
 
-    fn checkedDecoderRecordSpecShape(self: *BodyContext, spec_expr: checked.CheckedExprId) checked.CheckedTypeId {
+    fn checkedParseRecordSpecShape(self: *BodyContext, spec_expr: checked.CheckedExprId) checked.CheckedTypeId {
         const expr = self.view.bodies.exprs[@intFromEnum(spec_expr)];
         return switch (resolvedPayload(self.view, expr.ty).payload) {
             .nominal => |nominal| blk: {
-                if ((nominal.builtin orelse Common.invariant("Decoder.Record intrinsic spec argument was not a builtin nominal")) != .decoder_record_spec) {
-                    Common.invariant("Decoder.Record intrinsic spec argument was not Decoder.Record.Spec");
+                if ((nominal.builtin orelse Common.invariant("ParseRecordSpec intrinsic spec argument was not a builtin nominal")) != .parse_record_spec) {
+                    Common.invariant("ParseRecordSpec intrinsic spec argument was not ParseRecordSpec");
                 }
-                if (nominal.args.len != 1) Common.invariant("Decoder.Record.Spec had an unexpected type argument count");
+                if (nominal.args.len != 1) Common.invariant("ParseRecordSpec had an unexpected type argument count");
                 break :blk nominal.args[0];
             },
-            else => Common.invariant("Decoder.Record intrinsic spec argument was not nominal"),
+            else => Common.invariant("ParseRecordSpec intrinsic spec argument was not nominal"),
         };
     }
 
-    fn checkedDecoderTagUnionSpecShape(self: *BodyContext, spec_expr: checked.CheckedExprId) checked.CheckedTypeId {
+    fn checkedParseTagUnionSpecShape(self: *BodyContext, spec_expr: checked.CheckedExprId) checked.CheckedTypeId {
         const expr = self.view.bodies.exprs[@intFromEnum(spec_expr)];
         return switch (resolvedPayload(self.view, expr.ty).payload) {
             .nominal => |nominal| blk: {
-                if ((nominal.builtin orelse Common.invariant("Decoder.TagUnion intrinsic spec argument was not a builtin nominal")) != .decoder_tag_union_spec) {
-                    Common.invariant("Decoder.TagUnion intrinsic spec argument was not Decoder.TagUnion.Spec");
+                if ((nominal.builtin orelse Common.invariant("ParseTagUnionSpec intrinsic spec argument was not a builtin nominal")) != .parse_tag_union_spec) {
+                    Common.invariant("ParseTagUnionSpec intrinsic spec argument was not ParseTagUnionSpec");
                 }
-                if (nominal.args.len != 1) Common.invariant("Decoder.TagUnion.Spec had an unexpected type argument count");
+                if (nominal.args.len != 1) Common.invariant("ParseTagUnionSpec had an unexpected type argument count");
                 break :blk nominal.args[0];
             },
-            else => Common.invariant("Decoder.TagUnion intrinsic spec argument was not nominal"),
+            else => Common.invariant("ParseTagUnionSpec intrinsic spec argument was not nominal"),
         };
     }
 
-    const DecoderDecodeSelection = struct {
+    const ParseShapeSelection = struct {
         tag_text: []const u8,
     };
 
-    fn decoderDecodeSelection(self: *BodyContext, shape_ty: Type.TypeId) DecoderDecodeSelection {
+    fn parseShapeSelection(self: *BodyContext, shape_ty: Type.TypeId) ParseShapeSelection {
         if (self.typeHasBuiltinOwner(shape_ty, .str)) return .{ .tag_text = "Str" };
         return switch (self.builder.shapeContent(shape_ty)) {
             .record => .{ .tag_text = "Record" },
             .tag_union => .{ .tag_text = "TagUnion" },
-            else => Common.invariant("Decoder.decode shape was not supported"),
+            else => Common.invariant("parse_from shape was not supported"),
         };
     }
 
@@ -4165,12 +4155,12 @@ const BodyContext = struct {
         arg_tys: []const Type.TypeId,
         ret_ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprId {
-        if (args.len != 5 or arg_tys.len != 5) Common.invariant("Decoder.TagUnion.decode reached Monotype with an unexpected arity");
+        if (args.len != 5 or arg_tys.len != 5) Common.invariant("ParseTagUnionSpec.parse reached Monotype with an unexpected arity");
         const ret_info = self.tryInfo(ret_ty);
 
         const tag_span = switch (self.builder.shapeContent(ret_info.ok_ty)) {
             .tag_union => |span| span,
-            else => Common.invariant("Decoder.TagUnion.decode Ok type was not a tag union"),
+            else => Common.invariant("ParseTagUnionSpec.parse Ok type was not a tag union"),
         };
         const spec_value = try self.lowerDecoderIntrinsicArgAtType(args[0], arg_tys[0]);
         const key_value = try self.lowerDecoderIntrinsicArgAtType(args[1], arg_tys[1]);
@@ -4213,7 +4203,7 @@ const BodyContext = struct {
         const items = try self.allocator.alloc(Ast.ExprId, item_tys.len);
         defer self.allocator.free(items);
         for (item_tys, 0..) |item_ty, index| {
-            if (!self.sameType(item_ty, slot_ty)) Common.invariant("Decoder.Record.State slot type did not match put slot type");
+            if (!self.sameType(item_ty, slot_ty)) Common.invariant("ParseRecordState slot type did not match put slot type");
             items[index] = if (index == replace_index)
                 try self.builder.localExpr(slot_local, item_ty)
             else
@@ -4254,7 +4244,7 @@ const BodyContext = struct {
             const payload_try_ty = try self.tryTypeLike(ret_ty, payload_ty, ret_info.err_ty);
             payload_try_tys[index] = payload_try_ty;
             payload_locals[index] = try self.builder.program.addLocal(self.builder.symbols.fresh(), payload_ty);
-            payload_tries[index] = try self.lowerDecoderDecodeShapeFromSlot(payload_ty, slot_expr, slot_ty, payload_try_ty);
+            payload_tries[index] = try self.lowerParseValueFromSlot(payload_ty, slot_expr, slot_ty, payload_try_ty);
             payloads[index] = try self.builder.localExpr(payload_locals[index], payload_ty);
         }
         const tag_expr = try self.tagUnionValue(union_ty, tag, payloads);
@@ -4306,16 +4296,16 @@ const BodyContext = struct {
         matcher_ty: Type.TypeId,
         tag: Type.Tag,
     ) Allocator.Error!Ast.ExprId {
-        const matcher_args = self.builder.program.types.span(self.builder.functionShape(matcher_ty, "Decoder.TagUnion.decode matcher was not a function").args);
-        if (matcher_args.len != 2) Common.invariant("Decoder.TagUnion.decode matcher had an unexpected arity");
-        if (!self.sameType(matcher_args[0], key_ty)) Common.invariant("Decoder.TagUnion.decode matcher key type differed from provided key type");
+        const matcher_args = self.builder.program.types.span(self.builder.functionShape(matcher_ty, "ParseTagUnionSpec.parse matcher was not a function").args);
+        if (matcher_args.len != 2) Common.invariant("ParseTagUnionSpec.parse matcher had an unexpected arity");
+        if (!self.sameType(matcher_args[0], key_ty)) Common.invariant("ParseTagUnionSpec.parse matcher key type differed from provided key type");
         const tag_text = self.builder.program.names.tagLabelText(tag.name);
         const tag_expr = try self.builder.stringExpr(tag_text, matcher_args[1]);
         const key_expr = try self.builder.localExpr(key_local, key_ty);
         const matcher_expr = try self.builder.localExpr(matcher_local, matcher_ty);
         const call_args = [_]Ast.ExprId{ key_expr, tag_expr };
         return try self.builder.program.addExpr(.{
-            .ty = self.builder.functionShape(matcher_ty, "Decoder.TagUnion.decode matcher was not a function").ret,
+            .ty = self.builder.functionShape(matcher_ty, "ParseTagUnionSpec.parse matcher was not a function").ret,
             .data = .{ .call_value = .{
                 .callee = matcher_expr,
                 .args = try self.builder.program.addExprSpan(&call_args),
@@ -4331,10 +4321,10 @@ const BodyContext = struct {
         matcher_ty: Type.TypeId,
         field: Type.Field,
     ) Allocator.Error!Ast.ExprId {
-        const matcher_fn = self.builder.functionShape(matcher_ty, "Decoder.Record.put matcher was not a function");
+        const matcher_fn = self.builder.functionShape(matcher_ty, "ParseRecordSpec.put matcher was not a function");
         const matcher_args = self.builder.program.types.span(matcher_fn.args);
-        if (matcher_args.len != 2) Common.invariant("Decoder.Record.put matcher did not have two arguments");
-        if (!self.sameType(matcher_args[0], key_ty)) Common.invariant("Decoder.Record.put matcher key type differed from provided key type");
+        if (matcher_args.len != 2) Common.invariant("ParseRecordSpec.put matcher did not have two arguments");
+        if (!self.sameType(matcher_args[0], key_ty)) Common.invariant("ParseRecordSpec.put matcher key type differed from provided key type");
 
         const key_expr = try self.builder.localExpr(key_local, matcher_args[0]);
         const field_expr = try self.builder.stringExpr(self.builder.program.names.recordFieldLabelText(field.name), matcher_args[1]);
@@ -5656,7 +5646,7 @@ const BodyContext = struct {
         if (lookup == null) {
             return switch (plan.result_mode) {
                 .equality => try self.lowerStructuralEquality(plan, callable_mono_ty, plan_ret_ty, self, pre_lowered),
-                .decoder => try self.lowerStructuralDecoder(plan, callable_mono_ty, plan_ret_ty, self, pre_lowered),
+                .parse_from => try self.lowerStructuralParseFrom(plan, callable_mono_ty, plan_ret_ty, self, pre_lowered),
                 .value => Common.invariant("value dispatch plan had no resolved dispatch target"),
             };
         }
@@ -5670,22 +5660,6 @@ const BodyContext = struct {
         try self.constrainTypeToMono(checked_ret_ty, fn_data.ret);
         if (expected_ret_ty) |expected| {
             if (!self.sameType(expected, fn_data.ret)) Common.invariant("checked dispatch expression lowered at a type different from its call operand type");
-        }
-        if (self.decoderIntrinsicForMethodLookup(resolved)) |intrinsic| {
-            if (intrinsic == .decode) {
-                const arg_tys = self.builder.program.types.span(fn_data.args);
-                if (arg_tys.len != 2 or plan.args.len != 2) Common.invariant("Decoder.decode static dispatch reached Monotype with an unexpected arity");
-                const decoder_value = try self.lowerDispatchOperandAtIndexAtType(plan, 0, arg_tys[0], pre_lowered);
-                const input_value = try self.lowerDispatchOperandAtIndexAtType(plan, 1, arg_tys[1], pre_lowered);
-                const lowered = try self.lowerDecoderDecodeFromValues(
-                    arg_tys[0],
-                    arg_tys[1],
-                    fn_data.ret,
-                    decoder_value,
-                    input_value,
-                );
-                return try self.applyDispatchResultMode(plan.result_mode, lowered, fn_data.ret);
-            }
         }
         const call_expr = try self.builder.program.addExpr(.{
             .ty = fn_data.ret,
@@ -5702,7 +5676,7 @@ const BodyContext = struct {
     ) Allocator.Error!Ast.ExprId {
         return switch (mode) {
             .value => expr,
-            .decoder => expr,
+            .parse_from => expr,
             .equality => |eq| if (eq.negated) blk: {
                 if (!self.typeHasBuiltinOwner(expr_ty, .bool)) Common.invariant("checked equality dispatch returned a non-Bool value");
                 break :blk try self.builder.lowLevelExpr(.bool_not, &.{expr}, expr_ty);
@@ -6025,13 +5999,13 @@ const BodyContext = struct {
     ) ?MethodLookup {
         const owner = methodOwnerFromType(&self.builder.program.types, dispatcher_ty) orelse {
             if (plan.result_mode == .equality and plan.result_mode.equality.structural_allowed) return null;
-            if (plan.result_mode == .decoder and plan.result_mode.decoder.structural_allowed) return null;
+            if (plan.result_mode == .parse_from and plan.result_mode.parse_from.structural_allowed) return null;
             Common.invariant("dispatch plan had no method owner and no structural equality permission");
         };
 
         const lookup = self.builder.lookupMethodTarget(owner, self.view, plan.method) orelse {
             if (plan.result_mode == .equality and plan.result_mode.equality.structural_allowed) return null;
-            if (plan.result_mode == .decoder and plan.result_mode.decoder.structural_allowed) return null;
+            if (plan.result_mode == .parse_from and plan.result_mode.parse_from.structural_allowed) return null;
             Common.invariant("checked method registry is missing resolved dispatch target");
         };
         return lookup;
@@ -6108,9 +6082,9 @@ const BodyContext = struct {
         method_name: []const u8,
     ) MethodLookup {
         const owner = methodOwnerFromType(&self.builder.program.types, owner_ty) orelse
-            Common.invariant("Decoder.decode format type did not have a method owner");
+            Common.invariant("parse_from format type did not have a method owner");
         return self.builder.lookupMethodTargetByName(owner, method_name) orelse
-            Common.invariant("checked method registry is missing Decoder.decode format method");
+            Common.invariant("checked method registry is missing parse_from format method");
     }
 
     fn methodTargetCalleeWithMono(
@@ -6189,11 +6163,11 @@ const BodyContext = struct {
                 break :blk result;
             } else Common.invariant("structural equality dispatch plan did not permit structural equality"),
             .value => Common.invariant("value dispatch plan reached structural equality lowering"),
-            .decoder => Common.invariant("decoder dispatch plan reached structural equality lowering"),
+            .parse_from => Common.invariant("parse_from dispatch plan reached structural equality lowering"),
         };
     }
 
-    fn lowerStructuralDecoder(
+    fn lowerStructuralParseFrom(
         self: *BodyContext,
         plan: static_dispatch.StaticDispatchCallPlan,
         callable_mono_ty: Type.TypeId,
@@ -6201,89 +6175,48 @@ const BodyContext = struct {
         arg_ctx: *BodyContext,
         pre_lowered: ?PreLoweredOperand,
     ) Allocator.Error!Ast.ExprId {
-        const decoder = switch (plan.result_mode) {
-            .decoder => |decoder| decoder,
-            else => Common.invariant("non-decoder dispatch plan reached structural decoder lowering"),
+        const parse_from = switch (plan.result_mode) {
+            .parse_from => |parse_from| parse_from,
+            else => Common.invariant("non-parse_from dispatch plan reached structural parse lowering"),
         };
-        if (!decoder.structural_allowed) Common.invariant("structural decoder dispatch plan did not permit structural decoder lowering");
+        if (!parse_from.structural_allowed) Common.invariant("structural parse_from dispatch plan did not permit structural parse lowering");
 
-        const backing_ty = self.builder.namedBackingType(ret_ty) orelse
-            Common.invariant("structural decoder return type was not a named Decoder type");
-        const decoder_args = self.decoderNamedArgs(ret_ty);
+        const fn_data = self.builder.functionShape(callable_mono_ty, "checked structural parse_from target had a non-function type");
+        const arg_tys = try self.allocator.dupe(Type.TypeId, self.builder.program.types.span(fn_data.args));
+        defer self.allocator.free(arg_tys);
+        if (arg_tys.len != 1 or plan.args.len != 1) Common.invariant("structural parse_from callable type must have one format argument");
+
         const shape_ty = try self.lowerType(plan.dispatcher_ty);
-        if (!self.sameType(decoder_args.shape, shape_ty)) Common.invariant("Decoder shape argument did not match structural decoder dispatcher");
-
-        const tag_text: []const u8 = if (self.typeHasBuiltinOwner(shape_ty, .str))
-            "Str"
-        else switch (self.builder.shapeContent(shape_ty)) {
+        switch (self.builder.shapeContent(shape_ty)) {
             .record => |fields_span| blk: {
                 for (self.builder.program.types.fieldSpan(fields_span)) |field| {
-                    if (!self.decoderFieldTypeIsSupported(field.ty)) Common.invariant("structural decoder record field type was not supported");
+                    if (!self.decoderFieldTypeIsSupported(field.ty)) Common.invariant("structural parse_from record field type was not supported");
                 }
-                break :blk "Record";
+                break :blk;
             },
             .tag_union => |tags_span| blk: {
                 for (self.builder.program.types.tagSpan(tags_span)) |tag| {
                     for (self.builder.program.types.span(tag.payloads)) |payload_ty| {
-                        if (!self.decoderFieldTypeIsSupported(payload_ty)) Common.invariant("structural decoder tag-union payload type was not supported");
+                        if (!self.decoderFieldTypeIsSupported(payload_ty)) Common.invariant("structural parse_from tag-union payload type was not supported");
                     }
                 }
-                break :blk "TagUnion";
+                break :blk;
             },
-            else => Common.invariant("structural decoder dispatcher was not a supported structural type"),
-        };
+            else => Common.invariant("structural parse_from dispatcher was not a supported structural type"),
+        }
 
-        const payload_tys = self.decoderPayloadTypes(backing_ty, tag_text);
-        if (payload_tys.len != 1) Common.invariant("Decoder structural constructor had an unexpected payload count");
-        const spec_expr = try self.builder.program.addExpr(.{
-            .ty = payload_tys[0],
-            .data = .unit,
-        });
-        const payloads = [_]Ast.ExprId{spec_expr};
-
-        const tag_name = try self.builder.program.names.internTagLabel(tag_text);
-        const backing_expr = try self.builder.program.addExpr(.{
-            .ty = backing_ty,
-            .data = .{ .tag = .{
-                .name = tag_name,
-                .payloads = try self.builder.program.addExprSpan(&payloads),
-            } },
-        });
-        const decoder_expr = try self.builder.program.addExpr(.{
-            .ty = ret_ty,
-            .data = .{ .nominal = backing_expr },
-        });
-
-        return try self.wrapDispatchArgumentEvaluation(plan, callable_mono_ty, arg_ctx, pre_lowered, decoder_expr);
-    }
-
-    const DecoderArgs = struct {
-        shape: Type.TypeId,
-    };
-
-    fn decoderNamedArgs(self: *BodyContext, decoder_ty: Type.TypeId) DecoderArgs {
-        return switch (self.builder.program.types.get(decoder_ty)) {
-            .named => |named| blk: {
-                const args = self.builder.program.types.span(named.args);
-                if (args.len != 1) Common.invariant("Decoder type had an unexpected argument count");
-                break :blk .{ .shape = args[0] };
-            },
-            else => Common.invariant("structural decoder return type was not named"),
-        };
-    }
-
-    fn decoderPayloadTypes(self: *BodyContext, backing_ty: Type.TypeId, tag_text: []const u8) []const Type.TypeId {
-        return switch (self.builder.shapeContent(backing_ty)) {
-            .tag_union => |tags| {
-                for (self.builder.program.types.tagSpan(tags)) |tag| {
-                    if (Ident.textEql(self.builder.program.names.tagLabelText(tag.name), tag_text)) {
-                        return self.builder.program.types.span(tag.payloads);
-                    }
-                }
-                Common.invariant("Decoder backing type did not contain requested constructor");
-            },
-            else => Common.invariant("Decoder backing type was not a tag union"),
-        };
+        const input_value = if (pre_lowered != null and pre_lowered.?.index == 0)
+            pre_lowered.?.expr
+        else
+            try arg_ctx.lowerDispatchOperandAtType(plan.args[0], arg_tys[0]);
+        const input_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), arg_tys[0]);
+        const parsed = try self.lowerParseShapeFromSlot(
+            shape_ty,
+            try self.builder.localExpr(input_local, arg_tys[0]),
+            arg_tys[0],
+            ret_ty,
+        );
+        return try self.wrapLet(input_local, arg_tys[0], input_value, parsed, ret_ty);
     }
 
     fn cloneNamedTypeWithArgs(
@@ -6294,7 +6227,7 @@ const BodyContext = struct {
     ) Allocator.Error!Type.TypeId {
         const template = switch (self.builder.program.types.get(template_ty)) {
             .named => |named| named,
-            else => Common.invariant("Decoder compiler helper expected a named template type"),
+            else => Common.invariant("Parse compiler helper expected a named template type"),
         };
         return try self.builder.program.types.add(.{ .named = .{
             .named_type = template.named_type,
@@ -6479,10 +6412,10 @@ const BodyContext = struct {
     fn decoderFieldValueInfo(self: *BodyContext, slot_ty: Type.TypeId) DecoderFieldValueInfo {
         const tags_span = switch (self.builder.shapeContent(slot_ty)) {
             .tag_union => |tags| tags,
-            else => Common.invariant("Decoder record builder argument was not a field-value tag union"),
+            else => Common.invariant("Parse record builder argument was not a field-value tag union"),
         };
         const tags = self.builder.program.types.tagSpan(tags_span);
-        if (tags.len != 2) Common.invariant("Decoder field-value type must have exactly one present and one missing tag");
+        if (tags.len != 2) Common.invariant("Parse field-value type must have exactly one present and one missing tag");
 
         var present_tag: ?Type.Tag = null;
         var missing_tag: ?Type.Tag = null;
@@ -6490,22 +6423,22 @@ const BodyContext = struct {
         for (tags) |tag| {
             const payloads = self.builder.program.types.span(tag.payloads);
             if (payloads.len == 1) {
-                if (!self.typeHasBuiltinOwner(payloads[0], .str)) Common.invariant("Decoder Present field value payload must be Str");
-                if (present_tag != null) Common.invariant("Decoder field-value type had multiple present tags");
+                if (!self.typeHasBuiltinOwner(payloads[0], .str)) Common.invariant("Parse Present field value payload must be Str");
+                if (present_tag != null) Common.invariant("Parse field-value type had multiple present tags");
                 present_tag = tag;
                 present_payload_ty = payloads[0];
             } else if (payloads.len == 0) {
-                if (missing_tag != null) Common.invariant("Decoder field-value type had multiple missing tags");
+                if (missing_tag != null) Common.invariant("Parse field-value type had multiple missing tags");
                 missing_tag = tag;
             } else {
-                Common.invariant("Decoder field-value type had an unsupported tag shape");
+                Common.invariant("Parse field-value type had an unsupported tag shape");
             }
         }
 
         return .{
-            .present_tag = present_tag orelse Common.invariant("Decoder field-value type was missing a present tag"),
-            .missing_tag = missing_tag orelse Common.invariant("Decoder field-value type was missing a missing tag"),
-            .present_payload_ty = present_payload_ty orelse Common.invariant("Decoder field-value present tag was missing its payload"),
+            .present_tag = present_tag orelse Common.invariant("Parse field-value type was missing a present tag"),
+            .missing_tag = missing_tag orelse Common.invariant("Parse field-value type was missing a missing tag"),
+            .present_payload_ty = present_payload_ty orelse Common.invariant("Parse field-value present tag was missing its payload"),
         };
     }
 
@@ -6664,7 +6597,7 @@ const BodyContext = struct {
         } } });
 
         const present_field = if (self.typeHasBuiltinOwner(field_ty, .str)) blk: {
-            if (!self.sameType(slot_info.present_payload_ty, field_ty)) Common.invariant("Decoder Present payload type differed from required Str field type");
+            if (!self.sameType(slot_info.present_payload_ty, field_ty)) Common.invariant("Parse Present payload type differed from required Str field type");
             break :blk try self.builder.localExpr(value_local, field_ty);
         } else if (self.tryStrOptionalInfo(field_ty)) |info|
             try self.tryOkFromFieldValue(value_local, info, field_ty)
@@ -10098,10 +10031,10 @@ fn builtinOwner(builtin: ?checked.CheckedBuiltinNominal) ?static_dispatch.Builti
         .dec => .dec,
         .list => .list,
         .box => .box,
-        .decoder_str_spec => .decoder_str_spec,
-        .decoder_record_spec => .decoder_record_spec,
-        .decoder_record_state => .decoder_record_state,
-        .decoder_tag_union_spec => .decoder_tag_union_spec,
+        .parse_str_spec => .parse_str_spec,
+        .parse_record_spec => .parse_record_spec,
+        .parse_record_state => .parse_record_state,
+        .parse_tag_union_spec => .parse_tag_union_spec,
     };
 }
 

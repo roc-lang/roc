@@ -854,11 +854,10 @@ fn populateBuiltinAutoImportedTypes(
     // Ident.Idx values are not transferable between stores.
     const builtin_types = .{
         .{ "Bool", builtin_indices.bool_type, builtin_indices.bool_ident },
-        .{ "Decoder", builtin_indices.decoder_type, builtin_indices.decoder_ident },
-        .{ "DecoderStrSpec", builtin_indices.decoder_str_spec_type, builtin_indices.decoder_str_spec_ident },
-        .{ "DecoderRecordSpec", builtin_indices.decoder_record_spec_type, builtin_indices.decoder_record_spec_ident },
-        .{ "DecoderRecordState", builtin_indices.decoder_record_state_type, builtin_indices.decoder_record_state_ident },
-        .{ "DecoderTagUnionSpec", builtin_indices.decoder_tag_union_spec_type, builtin_indices.decoder_tag_union_spec_ident },
+        .{ "ParseStrSpec", builtin_indices.parse_str_spec_type, builtin_indices.parse_str_spec_ident },
+        .{ "ParseRecordSpec", builtin_indices.parse_record_spec_type, builtin_indices.parse_record_spec_ident },
+        .{ "ParseRecordState", builtin_indices.parse_record_state_type, builtin_indices.parse_record_state_ident },
+        .{ "ParseTagUnionSpec", builtin_indices.parse_tag_union_spec_type, builtin_indices.parse_tag_union_spec_ident },
         .{ "Try", builtin_indices.try_type, builtin_indices.try_ident },
         .{ "Dict", builtin_indices.dict_type, builtin_indices.dict_ident },
         .{ "Set", builtin_indices.set_type, builtin_indices.set_ident },
@@ -913,11 +912,10 @@ pub fn populateModuleEnvs(
 ) Allocator.Error!void {
     const builtin_types = .{
         .{ "Bool", builtin_indices.bool_type, builtin_indices.bool_ident },
-        .{ "Decoder", builtin_indices.decoder_type, builtin_indices.decoder_ident },
-        .{ "DecoderStrSpec", builtin_indices.decoder_str_spec_type, builtin_indices.decoder_str_spec_ident },
-        .{ "DecoderRecordSpec", builtin_indices.decoder_record_spec_type, builtin_indices.decoder_record_spec_ident },
-        .{ "DecoderRecordState", builtin_indices.decoder_record_state_type, builtin_indices.decoder_record_state_ident },
-        .{ "DecoderTagUnionSpec", builtin_indices.decoder_tag_union_spec_type, builtin_indices.decoder_tag_union_spec_ident },
+        .{ "ParseStrSpec", builtin_indices.parse_str_spec_type, builtin_indices.parse_str_spec_ident },
+        .{ "ParseRecordSpec", builtin_indices.parse_record_spec_type, builtin_indices.parse_record_spec_ident },
+        .{ "ParseRecordState", builtin_indices.parse_record_state_type, builtin_indices.parse_record_state_ident },
+        .{ "ParseTagUnionSpec", builtin_indices.parse_tag_union_spec_type, builtin_indices.parse_tag_union_spec_ident },
         .{ "Try", builtin_indices.try_type, builtin_indices.try_ident },
         .{ "Dict", builtin_indices.dict_type, builtin_indices.dict_ident },
         .{ "Set", builtin_indices.set_type, builtin_indices.set_ident },
@@ -984,7 +982,7 @@ pub fn setupAutoImportedBuiltinTypes(
         builtin_ident,
     );
 
-    const builtin_types = [_][]const u8{ "Bool", "Decoder", "DecoderStrSpec", "DecoderRecordSpec", "DecoderRecordState", "DecoderTagUnionSpec", "Try", "Dict", "Set", "Str", "Iter", "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec", "F32", "F64", "Numeral" };
+    const builtin_types = [_][]const u8{ "Bool", "ParseStrSpec", "ParseRecordSpec", "ParseRecordState", "ParseTagUnionSpec", "Try", "Dict", "Set", "Str", "Iter", "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec", "F32", "F64", "Numeral" };
     for (builtin_types) |type_name_text| {
         const type_ident = try env.insertIdent(base.Ident.for_text(type_name_text));
         if (self.builtin_auto_imported_types.get(type_ident)) |type_entry| {
@@ -17936,7 +17934,7 @@ fn canonicalizeWhereClause(self: *Self, ast_where_idx: AST.WhereClause.Idx, type
     }
 }
 
-/// Handle module-qualified types like Json.Decoder
+/// Handle module-qualified types like Json.CustomType
 /// Create an annotation from a type annotation
 fn createAnnotationFromTypeAnno(
     self: *Self,

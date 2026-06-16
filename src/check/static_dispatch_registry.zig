@@ -84,10 +84,10 @@ pub const BuiltinOwner = enum {
     f32,
     f64,
     dec,
-    decoder_str_spec,
-    decoder_record_spec,
-    decoder_record_state,
-    decoder_tag_union_spec,
+    parse_str_spec,
+    parse_record_spec,
+    parse_record_state,
+    parse_tag_union_spec,
 };
 
 /// Public `MethodKey` declaration.
@@ -345,10 +345,10 @@ fn builtinOwnerForRegistryEntry(
 
     if (type_ident.eql(common.list) or type_ident.eql(common.builtin_list)) return .list;
     if (type_ident.eql(common.box) or type_ident.eql(common.builtin_box)) return .box;
-    if (type_ident.eql(common.builtin_decoder_str_spec)) return .decoder_str_spec;
-    if (type_ident.eql(common.builtin_decoder_record_spec)) return .decoder_record_spec;
-    if (type_ident.eql(common.builtin_decoder_record_state)) return .decoder_record_state;
-    if (type_ident.eql(common.builtin_decoder_tag_union_spec)) return .decoder_tag_union_spec;
+    if (type_ident.eql(common.builtin_parse_str_spec)) return .parse_str_spec;
+    if (type_ident.eql(common.builtin_parse_record_spec)) return .parse_record_spec;
+    if (type_ident.eql(common.builtin_parse_record_state)) return .parse_record_state;
+    if (type_ident.eql(common.builtin_parse_tag_union_spec)) return .parse_tag_union_spec;
     return null;
 }
 
@@ -441,7 +441,7 @@ pub const StaticDispatchResultMode = union(enum) {
         structural_allowed: bool,
         negated: bool,
     },
-    decoder: struct {
+    parse_from: struct {
         structural_allowed: bool,
     },
 };
@@ -931,8 +931,8 @@ fn staticDispatchResultModeForCheckedValueCall(
     constraint_fn_var: Var,
 ) Allocator.Error!StaticDispatchResultMode {
     const common = module.commonIdents();
-    if (method_name.eql(common.decoder)) {
-        return .{ .decoder = .{
+    if (method_name.eql(common.parse_from)) {
+        return .{ .parse_from = .{
             .structural_allowed = true,
         } };
     }

@@ -127,11 +127,10 @@ pub fn main(process_init: std.process.Init) !void {
 
 fn buildBuiltinIndices(gpa: Allocator, env: *const ModuleEnv) !BuiltinIndices {
     const bool_type_idx = try findTypeDeclaration(gpa, env, "Bool");
-    const decoder_str_spec_type_idx = try findTypeDeclaration(gpa, env, "DecoderStrSpec");
-    const decoder_record_spec_type_idx = try findTypeDeclaration(gpa, env, "DecoderRecordSpec");
-    const decoder_record_state_type_idx = try findTypeDeclaration(gpa, env, "DecoderRecordState");
-    const decoder_tag_union_spec_type_idx = try findTypeDeclaration(gpa, env, "DecoderTagUnionSpec");
-    const decoder_type_idx = try findTypeDeclaration(gpa, env, "Decoder");
+    const parse_str_spec_type_idx = try findTypeDeclaration(gpa, env, "ParseStrSpec");
+    const parse_record_spec_type_idx = try findTypeDeclaration(gpa, env, "ParseRecordSpec");
+    const parse_record_state_type_idx = try findTypeDeclaration(gpa, env, "ParseRecordState");
+    const parse_tag_union_spec_type_idx = try findTypeDeclaration(gpa, env, "ParseTagUnionSpec");
     const try_type_idx = try findTypeDeclaration(gpa, env, "Try");
     const dict_type_idx = try findTypeDeclaration(gpa, env, "Dict");
     const set_type_idx = try findTypeDeclaration(gpa, env, "Set");
@@ -142,8 +141,6 @@ fn buildBuiltinIndices(gpa: Allocator, env: *const ModuleEnv) !BuiltinIndices {
     const list_type_idx = try findTypeDeclaration(gpa, env, "List");
     const box_type_idx = try findTypeDeclaration(gpa, env, "Box");
 
-    const decoder_record_type_idx = try findNestedTypeDeclaration(gpa, env, "Decoder", "Record");
-    const decoder_tag_union_type_idx = try findNestedTypeDeclaration(gpa, env, "Decoder", "TagUnion");
     const utf8_problem_type_idx = try findNestedTypeDeclaration(gpa, env, "Str", "Utf8Problem");
 
     const u8_type_idx = try findNestedTypeDeclaration(gpa, env, "Num", "U8");
@@ -163,7 +160,6 @@ fn buildBuiltinIndices(gpa: Allocator, env: *const ModuleEnv) !BuiltinIndices {
 
     return .{
         .bool_type = bool_type_idx,
-        .decoder_type = decoder_type_idx,
         .try_type = try_type_idx,
         .dict_type = dict_type_idx,
         .set_type = set_type_idx,
@@ -173,12 +169,10 @@ fn buildBuiltinIndices(gpa: Allocator, env: *const ModuleEnv) !BuiltinIndices {
         .stream_type = stream_type_idx,
         .list_type = list_type_idx,
         .box_type = box_type_idx,
-        .decoder_str_spec_type = decoder_str_spec_type_idx,
-        .decoder_record_type = decoder_record_type_idx,
-        .decoder_record_spec_type = decoder_record_spec_type_idx,
-        .decoder_record_state_type = decoder_record_state_type_idx,
-        .decoder_tag_union_type = decoder_tag_union_type_idx,
-        .decoder_tag_union_spec_type = decoder_tag_union_spec_type_idx,
+        .parse_str_spec_type = parse_str_spec_type_idx,
+        .parse_record_spec_type = parse_record_spec_type_idx,
+        .parse_record_state_type = parse_record_state_type_idx,
+        .parse_tag_union_spec_type = parse_tag_union_spec_type_idx,
         .utf8_problem_type = utf8_problem_type_idx,
         .u8_type = u8_type_idx,
         .i8_type = i8_type_idx,
@@ -195,10 +189,9 @@ fn buildBuiltinIndices(gpa: Allocator, env: *const ModuleEnv) !BuiltinIndices {
         .f64_type = f64_type_idx,
         .numeral_type = numeral_type_idx,
         .bool_ident = expectBuiltinIdent(env, "Builtin.Bool"),
-        .decoder_record_spec_ident = expectBuiltinIdent(env, "Builtin.DecoderRecordSpec"),
-        .decoder_record_state_ident = expectBuiltinIdent(env, "Builtin.DecoderRecordState"),
-        .decoder_tag_union_spec_ident = expectBuiltinIdent(env, "Builtin.DecoderTagUnionSpec"),
-        .decoder_ident = expectBuiltinIdent(env, "Builtin.Decoder"),
+        .parse_record_spec_ident = expectBuiltinIdent(env, "Builtin.ParseRecordSpec"),
+        .parse_record_state_ident = expectBuiltinIdent(env, "Builtin.ParseRecordState"),
+        .parse_tag_union_spec_ident = expectBuiltinIdent(env, "Builtin.ParseTagUnionSpec"),
         .try_ident = expectBuiltinIdent(env, "Builtin.Try"),
         .dict_ident = expectBuiltinIdent(env, "Builtin.Dict"),
         .set_ident = expectBuiltinIdent(env, "Builtin.Set"),
@@ -208,9 +201,7 @@ fn buildBuiltinIndices(gpa: Allocator, env: *const ModuleEnv) !BuiltinIndices {
         .stream_ident = expectBuiltinIdent(env, "Builtin.Stream"),
         .list_ident = expectBuiltinIdent(env, "Builtin.List"),
         .box_ident = expectBuiltinIdent(env, "Builtin.Box"),
-        .decoder_str_spec_ident = expectBuiltinIdent(env, "Builtin.DecoderStrSpec"),
-        .decoder_record_ident = expectBuiltinIdent(env, "Builtin.Decoder.Record"),
-        .decoder_tag_union_ident = expectBuiltinIdent(env, "Builtin.Decoder.TagUnion"),
+        .parse_str_spec_ident = expectBuiltinIdent(env, "Builtin.ParseStrSpec"),
         .utf8_problem_ident = expectBuiltinIdent(env, "Builtin.Str.Utf8Problem"),
         .u8_ident = expectBuiltinIdent(env, "Builtin.Num.U8"),
         .i8_ident = expectBuiltinIdent(env, "Builtin.Num.I8"),
@@ -237,7 +228,6 @@ fn expectBuiltinIdent(env: *const ModuleEnv, text: []const u8) base.Ident.Idx {
 
 fn installBuiltinNodeIndices(gpa: Allocator, env: *ModuleEnv, indices: BuiltinIndices) !void {
     try env.common.setTypeNodeIndexById(gpa, indices.bool_ident, @intCast(@intFromEnum(indices.bool_type)));
-    try env.common.setTypeNodeIndexById(gpa, indices.decoder_ident, @intCast(@intFromEnum(indices.decoder_type)));
     try env.common.setTypeNodeIndexById(gpa, indices.try_ident, @intCast(@intFromEnum(indices.try_type)));
     try env.common.setTypeNodeIndexById(gpa, indices.dict_ident, @intCast(@intFromEnum(indices.dict_type)));
     try env.common.setTypeNodeIndexById(gpa, indices.set_ident, @intCast(@intFromEnum(indices.set_type)));
@@ -247,12 +237,10 @@ fn installBuiltinNodeIndices(gpa: Allocator, env: *ModuleEnv, indices: BuiltinIn
     try env.common.setTypeNodeIndexById(gpa, indices.stream_ident, @intCast(@intFromEnum(indices.stream_type)));
     try env.common.setTypeNodeIndexById(gpa, indices.list_ident, @intCast(@intFromEnum(indices.list_type)));
     try env.common.setTypeNodeIndexById(gpa, indices.box_ident, @intCast(@intFromEnum(indices.box_type)));
-    try env.common.setTypeNodeIndexById(gpa, indices.decoder_str_spec_ident, @intCast(@intFromEnum(indices.decoder_str_spec_type)));
-    try env.common.setTypeNodeIndexById(gpa, indices.decoder_record_ident, @intCast(@intFromEnum(indices.decoder_record_type)));
-    try env.common.setTypeNodeIndexById(gpa, indices.decoder_record_spec_ident, @intCast(@intFromEnum(indices.decoder_record_spec_type)));
-    try env.common.setTypeNodeIndexById(gpa, indices.decoder_record_state_ident, @intCast(@intFromEnum(indices.decoder_record_state_type)));
-    try env.common.setTypeNodeIndexById(gpa, indices.decoder_tag_union_ident, @intCast(@intFromEnum(indices.decoder_tag_union_type)));
-    try env.common.setTypeNodeIndexById(gpa, indices.decoder_tag_union_spec_ident, @intCast(@intFromEnum(indices.decoder_tag_union_spec_type)));
+    try env.common.setTypeNodeIndexById(gpa, indices.parse_str_spec_ident, @intCast(@intFromEnum(indices.parse_str_spec_type)));
+    try env.common.setTypeNodeIndexById(gpa, indices.parse_record_spec_ident, @intCast(@intFromEnum(indices.parse_record_spec_type)));
+    try env.common.setTypeNodeIndexById(gpa, indices.parse_record_state_ident, @intCast(@intFromEnum(indices.parse_record_state_type)));
+    try env.common.setTypeNodeIndexById(gpa, indices.parse_tag_union_spec_ident, @intCast(@intFromEnum(indices.parse_tag_union_spec_type)));
     try env.common.setTypeNodeIndexById(gpa, indices.utf8_problem_ident, @intCast(@intFromEnum(indices.utf8_problem_type)));
     try env.common.setTypeNodeIndexById(gpa, indices.u8_ident, @intCast(@intFromEnum(indices.u8_type)));
     try env.common.setTypeNodeIndexById(gpa, indices.i8_ident, @intCast(@intFromEnum(indices.i8_type)));

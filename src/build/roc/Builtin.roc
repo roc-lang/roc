@@ -1,34 +1,22 @@
 Builtin :: [].{
-	DecoderStrSpec(_shape) :: {}.{}
-	DecoderRecordSpec(_shape) :: {}.{}
-	DecoderRecordState(_shape, _slot) :: {}.{}
-	DecoderTagUnionSpec(_shape) :: {}.{}
+	# Compiler-generated structural parsing specs. These are opaque handles used
+	# by derived `parse_from` methods; users should not construct them directly.
+	ParseStrSpec(_shape) :: {}.{
+		parse : ParseStrSpec(_shape), _slot, _err -> Try(_shape, _err)
+	}
 
-	Decoder(shape) :: [
-		Str(DecoderStrSpec(shape)),
-		Record(DecoderRecordSpec(shape)),
-		TagUnion(DecoderTagUnionSpec(shape)),
-	].{
-		Record :: [ProvidedByCompiler].{
-			init : DecoderRecordSpec(_shape), _slot -> DecoderRecordState(_shape, _slot)
+	ParseRecordSpec(_shape) :: {}.{
+		init : ParseRecordSpec(_shape), _slot -> ParseRecordState(_shape, _slot)
 
-			put : DecoderRecordSpec(_shape), DecoderRecordState(_shape, _slot), Str, _slot, (Str, Str -> Bool) -> DecoderRecordState(_shape, _slot)
+		put : ParseRecordSpec(_shape), ParseRecordState(_shape, _slot), Str, _slot, (Str, Str -> Bool) -> ParseRecordState(_shape, _slot)
 
-			finish : DecoderRecordSpec(_shape), DecoderRecordState(_shape, _slot), _err -> Try(_shape, _err)
-		}
+		finish : ParseRecordSpec(_shape), ParseRecordState(_shape, _slot), _err -> Try(_shape, _err)
+	}
 
-		TagUnion :: [ProvidedByCompiler].{
-			decode : DecoderTagUnionSpec(_shape), Str, _slot, (Str, Str -> Bool), _err -> Try(_shape, _err)
-		}
+	ParseRecordState(_shape, _slot) :: {}.{}
 
-		decode : Decoder(shape), input -> Try(shape, err)
-			where [
-				input.decode_str : DecoderStrSpec(shape), input -> Try(shape, err),
-				input.decode_record : DecoderRecordSpec(shape), input -> Try(shape, err),
-				input.decode_tag_union : DecoderTagUnionSpec(shape), input -> Try(shape, err),
-			]
-
-		decode_str : DecoderStrSpec(_shape), _slot, _err -> Try(_shape, _err)
+	ParseTagUnionSpec(_shape) :: {}.{
+		parse : ParseTagUnionSpec(_shape), Str, _slot, (Str, Str -> Bool), _err -> Try(_shape, _err)
 	}
 
 	Str :: [ProvidedByCompiler].{

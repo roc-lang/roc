@@ -167,7 +167,7 @@ data, ARC data, LirImage data, and test reporting. If code uses a sentinel
 as a placeholder for data that must be produced, stop and redesign the producer
 ownership and presence model.
 
-## Parser Boundary
+## Source Parsing Boundary
 
 Parsing is a token-first stage. Tokenization produces the only cursor input for
 the parser, and the parser walks that token buffer directly. The parser does not
@@ -203,14 +203,14 @@ Using a wide parser-context switch is not accepted for hot expression, pattern,
 statement, or type parsing unless ReleaseFast assembly proves that exact slice
 has no central indirect branch and is faster than the lexical-kernel shape.
 
-Parser chunks are not considered structurally done until ReleaseFast assembly
+Parsing chunks are not considered structurally done until ReleaseFast assembly
 has been checked for this shape: no recursive parser calls for the converted
 grammar, no instruction-driver loop, no broad parser-context dispatch ladder,
 and no unexpected indirect branch in the hot transition path. The expression
 prefix/suffix/binary-operator kernel is the first required audit target because
 it is the parse-heavy hot path.
 
-Parser conversion proceeds by grammar slices that can be assembly-audited.
+Parsing conversion proceeds by grammar slices that can be assembly-audited.
 Before expanding a slice, build a tiny Zig proof of the intended dispatch shape
 and compare it with the analogous simdjson stage-2 parser shape: local token
 tests, direct branches between parser states, and explicit syntax state only
@@ -220,7 +220,7 @@ directly, for example:
 
 ```sh
 zig build roc -Doptimize=ReleaseFast -Dstrip=false
-xcrun llvm-objdump --macho --disassemble --dis-symname _Parser.parseExposedCollectionTokens zig-out/bin/roc
+xcrun llvm-objdump --macho --disassemble --dis-symname <source-parsing-symbol> zig-out/bin/roc
 ```
 
 The audit result must be recorded before moving to the next slice. If the
@@ -868,6 +868,168 @@ The method registry is an exact table keyed by `(MethodOwner, MethodNameId)`.
 It is not an owner-discovery mechanism. Post-check code may use it only after a
 concrete monomorphic dispatcher type has already determined the owner.
 
+### Structural Serialization Methods
+
+Parsing and encoding are ordinary static-dispatch methods. Roc does not expose a
+builtin serialization interface type, nor builtin serialization type names such
+as `Parser` or `Decoder`; the public model is method-based.
+
+The performance target is the same shape as hand-written systems parsers:
+formats keep input state as cursors and slices, avoid runtime allocation during
+parsing, receive the whole requested structural shape before scanning, and lower
+to direct calls rather than callback tables, shape interpreters, or temporary
+maps built for convenience.
+
+A format is a normal Roc value. Its type owns the methods that describe how that
+format reads or writes each shape. Public modules normally expose small
+convenience functions:
+
+```roc
+thing = Json.parse(json_str)?
+thing = Json.Utf8.parse(json_bytes)?
+
+json_str = Json.encode(thing)?
+json_bytes = Json.Utf8.encode(thing)?
+
+headers = Headers.parse(raw_headers)?
+```
+
+The convenience functions initialize a format state, call the value or type's
+ordinary method, finish the state, and return the final `Try`. The underlying
+methods are public and callable:
+
+```roc
+parsed = Shape.parse_from(format_state)?
+next_state = value.encode_to(output_state)?
+```
+
+`parse_from` is a method on the value type being produced. `encode_to` is a
+method on the value being serialized. Structural types get these methods from
+the compiler. Nominal types may define them explicitly, and structural
+derivation uses those explicit nominal methods when a field, payload, list
+element, or nested value has that nominal type.
+
+The core method shapes are:
+
+```roc
+a.parse_from : fmt -> Try({ value : a, rest : fmt }, err)
+a.encode_to : a, fmt -> Try(fmt, err)
+```
+
+The `fmt` value is the pure state of the format. It may contain an input cursor,
+an output buffer, record-field state, selected tag state, or any other ordinary
+Roc data needed by the format. Methods do not mutate it; every parse or encode
+step returns the next state. Public functions such as `Json.parse` and
+`Json.encode` hide this state threading by calling the format's init and finish
+methods around the structural method call.
+
+The error type is inferred from the format methods. All `Try` errors in one
+parse or encode operation unify with the public function's returned error type.
+When a concrete operation cannot fail, its error type is empty, so an exhaustive
+`Ok(value) = Json.encode(thing)` binding is accepted.
+
+Checking derives structural methods by emitting ordinary static-dispatch
+constraints. For example, deriving `a.parse_from` for a concrete shape asks the
+format for exactly the methods needed by that shape:
+
+- `Str` calls the format's string method;
+- records call the format's record method with a compiler-generated record
+  spec;
+- tag unions call the format's tag-union method with a compiler-generated
+  tag-union spec;
+- lists, numbers, booleans, tuples, and other structural forms call the
+  corresponding format methods;
+- type aliases use their expanded structural shape;
+- named nominal values call that nominal type's explicit method. If the method
+  is missing, checking reports the missing static-dispatch requirement.
+
+If a format does not support a shape, checking reports the missing method as a
+static-dispatch error. Unsupported shapes are not represented as runtime parse
+or encode failures. Runtime failures are reserved for input/output facts the
+format can only know while processing bytes or values, such as a malformed
+header line, invalid JSON syntax, invalid UTF-8 in a byte input, or a
+user-defined nominal method returning an error.
+
+Record and tag-union specs are opaque compiler values. They describe the
+concrete structural shape being derived: field names, field slots, tag names,
+payload shapes, and the concrete field/payload result positions. They are not
+arity-specific user APIs. There are no `Record4`-style variants, and no
+userspace code constructs or pattern matches on these specs. The compiler
+specializes every use with the concrete record or tag-union type, so opaque spec
+operations lower to direct field and tag code.
+
+Userspace format code operates through safe Roc values, opaque specs, and
+slice-returning string/list APIs. The compiler does not expose raw field-slot
+indices, unsafe byte indexing, or unchecked memory primitives as part of the
+serialization method surface.
+
+Record parsing lets a format perform one scan when that is the best
+implementation. A format's record method receives the complete record spec
+before inspecting the input. It initializes a compiler-generated record state,
+scans the input once, and writes each matched value state into the appropriate
+slot. After the scan, it finishes the record state. Required fields that were
+not filled produce the format's required-field error. Optional fields are
+expressed by their field type, for example `Try(Str, [Missing])`; `Missing` is
+an ordinary userspace tag carried by the format's absence state and field type,
+not a compiler-known concept.
+
+Tag-union parsing follows the same rule. The format's tag-union method receives
+the complete tag spec, identifies the input tag according to that format's own
+rules, and uses opaque spec operations to parse and assemble the selected
+payload. Recursive tag unions are ordinary recursive method calls through the
+selected payload type. The compiler knows the Roc shape and the static-dispatch
+requirements; it does not know any format-specific tag representation.
+
+The generated code uses direct static calls. It does not pass user callbacks,
+does not build a runtime interpretation plan, and does not route shape handling
+through a central dispatch function. Generic userspace format code calls opaque
+record and tag spec operations, but those operations are compiler primitives
+specialized for the concrete shape and lower to direct code.
+
+Input formats return seamless slices whenever the value being produced is a
+slice of the original input. Parsing a `Str` from a larger `Str` or validated
+byte buffer returns a slice into that buffer when the format can do so. The
+format must validate bytes before producing `Str`; `Json.Utf8.parse` validates
+string bytes from `List(U8)`, while `Json.parse` starts from an already-valid
+`Str`. Hosts that pass request memory to Roc as `Str` must validate that memory
+first and keep it alive for the duration of the request.
+
+The HTTP header format receives only the raw header section, starting at the
+first header line and ending before the blank line. Its record method scans
+CRLF-delimited lines once. Each non-empty line must contain `:`; otherwise the
+method returns the header format's bad-header error. Header names are matched to
+record field names in userspace by case-insensitive ASCII segment comparison,
+with `-` in header names corresponding to `_` in Roc field names. Header values
+are trimmed and passed to field parsing as seamless `Str` slices. The format
+does not allocate a header map.
+
+The JSON `Str` format receives valid UTF-8 text. The JSON `Utf8` format receives
+bytes and validates UTF-8 before producing any `Str`. JSON record parsing scans
+an object once and routes fields through the record spec, so object key order
+does not affect performance beyond normal key matching. JSON tag unions use the
+externally tagged object representation:
+
+```json
+{ "Admin": { "name": "Sam" } }
+```
+
+This representation avoids collisions between tag names and ordinary record
+field names. Other JSON conventions are represented by different JSON format
+values with different methods; the compiler does not know any JSON-specific
+syntax, null value, missing-field rule, or tag-union convention.
+
+Parsing a Roc `Str` from JSON succeeds only for JSON string values. JSON `null`
+and missing object fields are separate format conditions. They are surfaced only
+through field or value types that request them, such as `Try(Str, [Null])` or
+`Try(Str, [Missing])`; the plain `Str` method does not accept either condition.
+
+Encoding is symmetric. Structural `encode_to` methods call the format's output
+methods for strings, records, tag unions, lists, and other shapes. A format's
+output state owns whatever builder it needs. JSON encoding to `Str` allocates
+the final string in the ordinary way, and JSON UTF-8 encoding produces
+`List(U8)`. Formats whose serialization can fail express that through the same
+inferred `Try` error type as parsing.
+
 ### Compile-Time Literal Conversions
 
 A numeric literal whose target type is a non-builtin nominal type converts
@@ -1181,7 +1343,7 @@ explicit declaration template:
   parameter must point at the same checked root as that header formal.
 
 This root identity is the long-term ideal because it makes nominal
-instantiation dataflow explicit. `Parser(input, value)` does not require
+instantiation dataflow explicit. `Codec(input, value)` does not require
 Monotype, layout lowering, or a backend to rediscover that the `input` in
 `run : input -> ...` is the first nominal parameter by reading source text or
 matching display names. CheckedModule data stores that relation once, as

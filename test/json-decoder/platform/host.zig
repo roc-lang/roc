@@ -211,7 +211,7 @@ fn hostMain() c_int {
 }
 
 fn fail(err: anyerror) c_int {
-    rawWriteStderr("json decoder host failed: ");
+    rawWriteStderr("json parser host failed: ");
     rawWriteStderr(@errorName(err));
     rawWriteStderr("\n");
     return 1;

@@ -257,7 +257,7 @@ fn serverMain() c_int {
 }
 
 fn fail(err: anyerror) c_int {
-    rawWriteStderr("http header decoder host failed: ");
+    rawWriteStderr("http header parser host failed: ");
     rawWriteStderr(@errorName(err));
     rawWriteStderr("\n");
     return 1;
