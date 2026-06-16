@@ -359,6 +359,21 @@ boundary_leak_vars: std.AutoHashMap(Var, void),
 /// re-scanning the whole constraint list each round. Front-loaded; cleared and
 /// refilled per call.
 boundary_eql_edges: std.ArrayListUnmanaged(@FieldType(Constraint, "eql")),
+// Literal-defaulting scratch (front-loaded; cleared per round/use). Reused across
+// the per-def/finalize defaulting passes — see runLiteralDefaultingRounds. Safe as
+// shared fields despite that function's cascade reentrancy: every buffer is cleared
+// at the start of its step and never read across the step-4 cascade.
+literal_defaulting_open_roots: std.ArrayListUnmanaged(Var),
+literal_defaulting_seen_roots: std.AutoHashMap(Var, void),
+literal_defaulting_component_parent: std.ArrayListUnmanaged(usize),
+literal_defaulting_is_driver: std.ArrayListUnmanaged(bool),
+literal_defaulting_footprint_owner: std.AutoHashMap(Var, usize),
+literal_defaulting_footprint: std.AutoHashMap(Var, void),
+literal_defaulting_group_drivers: std.ArrayListUnmanaged(Var),
+literal_defaulting_group_warnings: std.ArrayListUnmanaged(PendingBoundaryWarning),
+literal_defaulting_constraint_ranges: std.ArrayListUnmanaged(StaticDispatchConstraint.SafeList.Range),
+literal_defaulting_kinds: std.ArrayListUnmanaged(StaticDispatchConstraint.LiteralKind),
+literal_defaulting_candidate_vars: std.ArrayListUnmanaged(Var),
 /// Debug-only literal-defaulting probe instrumentation, asserted by the
 /// refuted-count guard test. Only written under `comptime std.debug.runtime_safety`,
 /// so release builds compile the bookkeeping out entirely (no global state, no
@@ -1160,6 +1175,17 @@ fn initAssumePrepared(
         .boundary_reachable_vars = std.AutoHashMap(Var, void).init(gpa),
         .boundary_leak_vars = std.AutoHashMap(Var, void).init(gpa),
         .boundary_eql_edges = .empty,
+        .literal_defaulting_open_roots = .empty,
+        .literal_defaulting_seen_roots = std.AutoHashMap(Var, void).init(gpa),
+        .literal_defaulting_component_parent = .empty,
+        .literal_defaulting_is_driver = .empty,
+        .literal_defaulting_footprint_owner = std.AutoHashMap(Var, usize).init(gpa),
+        .literal_defaulting_footprint = std.AutoHashMap(Var, void).init(gpa),
+        .literal_defaulting_group_drivers = .empty,
+        .literal_defaulting_group_warnings = .empty,
+        .literal_defaulting_constraint_ranges = .empty,
+        .literal_defaulting_kinds = .empty,
+        .literal_defaulting_candidate_vars = .empty,
         .checked_lambda_params = .empty,
         .probe_var_pool_lens = .empty,
     };
@@ -1284,6 +1310,17 @@ pub fn deinit(self: *Self) void {
     self.boundary_reachable_vars.deinit();
     self.boundary_leak_vars.deinit();
     self.boundary_eql_edges.deinit(self.gpa);
+    self.literal_defaulting_open_roots.deinit(self.gpa);
+    self.literal_defaulting_seen_roots.deinit();
+    self.literal_defaulting_component_parent.deinit(self.gpa);
+    self.literal_defaulting_is_driver.deinit(self.gpa);
+    self.literal_defaulting_footprint_owner.deinit();
+    self.literal_defaulting_footprint.deinit();
+    self.literal_defaulting_group_drivers.deinit(self.gpa);
+    self.literal_defaulting_group_warnings.deinit(self.gpa);
+    self.literal_defaulting_constraint_ranges.deinit(self.gpa);
+    self.literal_defaulting_kinds.deinit(self.gpa);
+    self.literal_defaulting_candidate_vars.deinit(self.gpa);
     self.checked_lambda_params.deinit(self.gpa);
     self.probe_var_pool_lens.deinit(self.gpa);
 }
@@ -14861,29 +14898,14 @@ const LiteralDefaultUniverse = union(enum) {
 /// `anyDeferredDispatchReceiverResolved`), with runaway recursion capped by
 /// `max_deferred_dispatch_iterations`.
 fn runLiteralDefaultingRounds(self: *Self, env: *Env, universe: LiteralDefaultUniverse) std.mem.Allocator.Error!void {
-    // Round-scoped scratch. Components are tiny in practice (most literals are
-    // lone passives or single drivers), so plain local containers suffice.
-    var open_roots: std.ArrayListUnmanaged(Var) = .empty;
-    defer open_roots.deinit(self.gpa);
-    var seen_roots = std.AutoHashMap(Var, void).init(self.gpa);
-    defer seen_roots.deinit();
-    var component_parent: std.ArrayListUnmanaged(usize) = .empty;
-    defer component_parent.deinit(self.gpa);
-    var is_driver: std.ArrayListUnmanaged(bool) = .empty;
-    defer is_driver.deinit(self.gpa);
-    var footprint_owner = std.AutoHashMap(Var, usize).init(self.gpa);
-    defer footprint_owner.deinit();
-    var footprint = std.AutoHashMap(Var, void).init(self.gpa);
-    defer footprint.deinit();
-    var group_drivers: std.ArrayListUnmanaged(Var) = .empty;
-    defer group_drivers.deinit(self.gpa);
-    var group_warnings: std.ArrayListUnmanaged(PendingBoundaryWarning) = .empty;
-    defer group_warnings.deinit(self.gpa);
+    // Round-scoped scratch. Front-loaded as Check fields; cleared at the start
+    // of each step. Safe despite cascade reentrancy: every buffer is cleared
+    // before use and never read across the step-4 cascade.
 
     while (true) {
         // --- 1. Gather the still-open literal roots (deduped). ---
-        open_roots.clearRetainingCapacity();
-        seen_roots.clearRetainingCapacity();
+        self.literal_defaulting_open_roots.clearRetainingCapacity();
+        self.literal_defaulting_seen_roots.clearRetainingCapacity();
         switch (universe) {
             .finalize => |finalize| {
                 for (self.open_literal_vars.items[0..finalize.literal_count]) |literal_var| {
@@ -14891,9 +14913,9 @@ fn runLiteralDefaultingRounds(self: *Self, env: *Env, universe: LiteralDefaultUn
                     if (resolved.desc.content != .flex) continue;
                     if (resolved.desc.rank == .generalized) continue;
                     if (self.varLiteralKind(resolved.var_) == null) continue;
-                    const gop = try seen_roots.getOrPut(resolved.var_);
+                    const gop = try self.literal_defaulting_seen_roots.getOrPut(resolved.var_);
                     if (gop.found_existing) continue;
-                    try open_roots.append(self.gpa, resolved.var_);
+                    try self.literal_defaulting_open_roots.append(self.gpa, resolved.var_);
                 }
             },
             .boundary => |boundary| {
@@ -14914,13 +14936,13 @@ fn runLiteralDefaultingRounds(self: *Self, env: *Env, universe: LiteralDefaultUn
                     // thunk simply generalizes as a polymorphic function (see
                     // `reportPolymorphicTopLevelValues`).
                     if (self.boundary_reachable_vars.contains(resolved.var_)) continue;
-                    const gop = try seen_roots.getOrPut(resolved.var_);
+                    const gop = try self.literal_defaulting_seen_roots.getOrPut(resolved.var_);
                     if (gop.found_existing) continue;
-                    try open_roots.append(self.gpa, resolved.var_);
+                    try self.literal_defaulting_open_roots.append(self.gpa, resolved.var_);
                 }
             },
         }
-        if (open_roots.items.len == 0) return;
+        if (self.literal_defaulting_open_roots.items.len == 0) return;
 
         // --- 1b. Default unambiguous quote literals before ambiguous numerals. ---
         // A quote literal has exactly one possible type (Str), so committing it is
@@ -14943,7 +14965,7 @@ fn runLiteralDefaultingRounds(self: *Self, env: *Env, universe: LiteralDefaultUn
         // quote if any is open, else a numeral).
         {
             var any_quote = false;
-            for (open_roots.items) |root| {
+            for (self.literal_defaulting_open_roots.items) |root| {
                 if (self.varLiteralKind(root) == .quote) {
                     any_quote = true;
                     break;
@@ -14951,42 +14973,42 @@ fn runLiteralDefaultingRounds(self: *Self, env: *Env, universe: LiteralDefaultUn
             }
             if (any_quote) {
                 var write_idx: usize = 0;
-                for (open_roots.items) |root| {
+                for (self.literal_defaulting_open_roots.items) |root| {
                     if (self.varLiteralKind(root) != .quote) continue;
-                    open_roots.items[write_idx] = root;
+                    self.literal_defaulting_open_roots.items[write_idx] = root;
                     write_idx += 1;
                 }
-                open_roots.shrinkRetainingCapacity(write_idx);
+                self.literal_defaulting_open_roots.shrinkRetainingCapacity(write_idx);
             }
         }
 
         // --- 2. Partition into interference components. ---
-        component_parent.clearRetainingCapacity();
-        is_driver.clearRetainingCapacity();
-        footprint_owner.clearRetainingCapacity();
-        for (open_roots.items, 0..) |root, idx| {
-            try component_parent.append(self.gpa, idx);
+        self.literal_defaulting_component_parent.clearRetainingCapacity();
+        self.literal_defaulting_is_driver.clearRetainingCapacity();
+        self.literal_defaulting_footprint_owner.clearRetainingCapacity();
+        for (self.literal_defaulting_open_roots.items, 0..) |root, idx| {
+            try self.literal_defaulting_component_parent.append(self.gpa, idx);
             // Seed each literal's own root so any driver whose footprint reaches
             // it is merged into its component. Roots are deduped, so no collision
             // is possible here.
-            try footprint_owner.putNoClobber(root, idx);
+            try self.literal_defaulting_footprint_owner.putNoClobber(root, idx);
         }
-        for (open_roots.items, 0..) |root, idx| {
+        for (self.literal_defaulting_open_roots.items, 0..) |root, idx| {
             const constraint_range = self.types.resolveVar(root).desc.content.flex.constraints;
             const drives = self.rangeHasNonLiteralConstraint(constraint_range);
-            try is_driver.append(self.gpa, drives);
+            try self.literal_defaulting_is_driver.append(self.gpa, drives);
             if (!drives) continue;
 
-            try self.collectConstraintSignatureReachable(constraint_range, &footprint);
-            var fp_iter = footprint.keyIterator();
+            try self.collectConstraintSignatureReachable(constraint_range, &self.literal_defaulting_footprint);
+            var fp_iter = self.literal_defaulting_footprint.keyIterator();
             while (fp_iter.next()) |fp_var| {
                 // Only still-flex roots interfere; everything else is immune to
                 // pinning. (Union order is irrelevant: unions commute, so the
                 // partition is independent of hash-map iteration order.)
                 if (self.types.resolveVar(fp_var.*).desc.content != .flex) continue;
-                const gop = try footprint_owner.getOrPut(fp_var.*);
+                const gop = try self.literal_defaulting_footprint_owner.getOrPut(fp_var.*);
                 if (gop.found_existing) {
-                    componentUnion(component_parent.items, idx, gop.value_ptr.*);
+                    componentUnion(self.literal_defaulting_component_parent.items, idx, gop.value_ptr.*);
                 } else {
                     gop.value_ptr.* = idx;
                 }
@@ -14994,15 +15016,15 @@ fn runLiteralDefaultingRounds(self: *Self, env: *Env, universe: LiteralDefaultUn
         }
 
         // --- 3. Commit every component (disjoint, so order is unobservable). ---
-        for (0..open_roots.items.len) |leader| {
-            if (componentFind(component_parent.items, leader) != leader) continue;
-            group_drivers.clearRetainingCapacity();
+        for (0..self.literal_defaulting_open_roots.items.len) |leader| {
+            if (componentFind(self.literal_defaulting_component_parent.items, leader) != leader) continue;
+            self.literal_defaulting_group_drivers.clearRetainingCapacity();
             var member_count: usize = 0;
-            for (open_roots.items, 0..) |member_root, member_idx| {
-                if (componentFind(component_parent.items, member_idx) != leader) continue;
+            for (self.literal_defaulting_open_roots.items, 0..) |member_root, member_idx| {
+                if (componentFind(self.literal_defaulting_component_parent.items, member_idx) != leader) continue;
                 member_count += 1;
-                if (is_driver.items[member_idx]) {
-                    try group_drivers.append(self.gpa, member_root);
+                if (self.literal_defaulting_is_driver.items[member_idx]) {
+                    try self.literal_defaulting_group_drivers.append(self.gpa, member_root);
                 }
             }
             // Within a round, every gathered root is still flex with its
@@ -15010,19 +15032,19 @@ fn runLiteralDefaultingRounds(self: *Self, env: *Env, universe: LiteralDefaultUn
             // of OTHER components only touch their own (disjoint) footprints, and
             // this component commits exactly once. So the kind lookups below
             // cannot fail — gather guaranteed them non-null.
-            if (group_drivers.items.len == 0) {
+            if (self.literal_defaulting_group_drivers.items.len == 0) {
                 // A component without drivers is a lone passive (a passive's
                 // footprint is just itself, so only a driver can merge it).
                 std.debug.assert(member_count == 1);
-                const passive_root = open_roots.items[leader];
+                const passive_root = self.literal_defaulting_open_roots.items[leader];
                 const kind = self.varLiteralKind(passive_root) orelse unreachable;
                 try self.commitGatheredLiteral(passive_root, kind, universe, env);
-            } else if (group_drivers.items.len == 1) {
-                const driver_root = group_drivers.items[0];
+            } else if (self.literal_defaulting_group_drivers.items.len == 1) {
+                const driver_root = self.literal_defaulting_group_drivers.items[0];
                 const kind = self.varLiteralKind(driver_root) orelse unreachable;
                 try self.commitGatheredLiteral(driver_root, kind, universe, env);
             } else {
-                try self.commitGatheredGroup(group_drivers.items, &group_warnings, universe, env);
+                try self.commitGatheredGroup(self.literal_defaulting_group_drivers.items, &self.literal_defaulting_group_warnings, universe, env);
             }
         }
 
@@ -15161,22 +15183,17 @@ fn commitLiteralGroupDefault(self: *Self, drivers: []const Var, env: *Env) Alloc
     // Constraint ranges and literal kinds captured while the drivers are still
     // flex; the ranges index the constraint store, whose entries outlive the
     // unifications below.
-    var constraint_ranges: std.ArrayListUnmanaged(StaticDispatchConstraint.SafeList.Range) = .empty;
-    defer constraint_ranges.deinit(self.gpa);
-    var kinds: std.ArrayListUnmanaged(StaticDispatchConstraint.LiteralKind) = .empty;
-    defer kinds.deinit(self.gpa);
+    self.literal_defaulting_constraint_ranges.clearRetainingCapacity();
+    self.literal_defaulting_kinds.clearRetainingCapacity();
     var has_numeral_driver = false;
     for (drivers) |driver| {
-        try constraint_ranges.append(self.gpa, self.types.resolveVar(driver).desc.content.flex.constraints);
+        try self.literal_defaulting_constraint_ranges.append(self.gpa, self.types.resolveVar(driver).desc.content.flex.constraints);
         // Every group driver is an open literal (the component gather keyed
         // on `varLiteralKind`), so the kind always exists.
         const kind = self.varLiteralKind(driver).?;
-        try kinds.append(self.gpa, kind);
+        try self.literal_defaulting_kinds.append(self.gpa, kind);
         if (kind == .numeral) has_numeral_driver = true;
     }
-
-    var candidate_vars: std.ArrayListUnmanaged(Var) = .empty;
-    defer candidate_vars.deinit(self.gpa);
 
     // Quote drivers have exactly one candidate (Str) and are assigned it on
     // every attempt; only numeral drivers consume the candidate scan, so an
@@ -15191,7 +15208,7 @@ fn commitLiteralGroupDefault(self: *Self, drivers: []const Var, env: *Env) Alloc
         // arithmetic on the constraint payloads, before any speculation. Quote
         // drivers are assigned Str, which their own literal-conversion provenance
         // accepts by definition, so they have nothing to precheck.
-        for (constraint_ranges.items, kinds.items) |range, kind| {
+        for (self.literal_defaulting_constraint_ranges.items, self.literal_defaulting_kinds.items) |range, kind| {
             if (kind != .numeral) continue;
             if (!self.rangeNumeralDigitsFit(range, candidate_kind)) continue :candidate;
         }
@@ -15206,8 +15223,8 @@ fn commitLiteralGroupDefault(self: *Self, drivers: []const Var, env: *Env) Alloc
         // distinct and still flex, so these unifications are independent of each
         // other; flex-vs-concrete cannot mismatch (the drivers' dispatch
         // constraints defer onto the candidate as usual).
-        candidate_vars.clearRetainingCapacity();
-        for (drivers, kinds.items) |driver, kind| {
+        self.literal_defaulting_candidate_vars.clearRetainingCapacity();
+        for (drivers, self.literal_defaulting_kinds.items) |driver, kind| {
             const candidate_var = switch (kind) {
                 .numeral => try self.freshFromContent(
                     try self.mkBuiltinNumberTypeContentFromKind(candidate_kind, env),
@@ -15216,7 +15233,7 @@ fn commitLiteralGroupDefault(self: *Self, drivers: []const Var, env: *Env) Alloc
                 ),
                 .quote, .interpolation => try self.freshStr(env, self.getRegionAt(driver)),
             };
-            try candidate_vars.append(self.gpa, candidate_var);
+            try self.literal_defaulting_candidate_vars.append(self.gpa, candidate_var);
             const unify_result = try self.unify(driver, candidate_var, env);
             if (!unify_result.isOk()) continue :candidate;
         }
@@ -15225,8 +15242,8 @@ fn commitLiteralGroupDefault(self: *Self, drivers: []const Var, env: *Env) Alloc
         for (0..drivers.len) |driver_idx| {
             if (!try self.candidateSatisfiesRangeConstraints(
                 &commit_probe,
-                constraint_ranges.items[driver_idx],
-                candidate_vars.items[driver_idx],
+                self.literal_defaulting_constraint_ranges.items[driver_idx],
+                self.literal_defaulting_candidate_vars.items[driver_idx],
                 env,
             )) continue :candidate;
         }
@@ -15240,7 +15257,7 @@ fn commitLiteralGroupDefault(self: *Self, drivers: []const Var, env: *Env) Alloc
     // default (Dec for numerals, Str for quotes) so the dispatch pass reports the
     // conflicts. (All drivers are flex again — every failed probe rolled back —
     // but re-check defensively.)
-    for (drivers, kinds.items) |driver, kind| {
+    for (drivers, self.literal_defaulting_kinds.items) |driver, kind| {
         if (self.types.resolveVar(driver).desc.content != .flex) continue;
         switch (kind) {
             .numeral => _ = try self.commitLiteralDefaultHead(driver, env),
