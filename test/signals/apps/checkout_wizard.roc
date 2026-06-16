@@ -1,4 +1,4 @@
-app [main!] { pf: platform "../platform/main.roc" }
+app [main] { pf: platform "../platform/main.roc" }
 
 import pf.Elem
 import pf.NodeValue exposing [NodeValue]
@@ -46,17 +46,18 @@ step_label = |step| {
 	}
 }
 
-render_line : Line => Elem.Elem
+render_line : Line -> Elem.Elem
 render_line = |line| {
-	{ sender: add_send, receiver: add_clicks } = Reactive.Event.unit_channel!()
-	{ sender: remove_send, receiver: remove_clicks } = Reactive.Event.unit_channel!()
+	{ sender: add_send, receiver: add_clicks } = Reactive.Event.unit_channel(Str.concat("line_add_click:", line.id))
+	{ sender: remove_send, receiver: remove_clicks } = Reactive.Event.unit_channel(Str.concat("line_remove_click:", line.id))
 	adds : Reactive.Event(I64)
 	adds = Reactive.Event.map_unit_i64_const(add_clicks, 1)
 	removes : Reactive.Event(I64)
 	removes = Reactive.Event.map_unit_i64_const(remove_clicks, -1)
 	quantity_events = Reactive.Event.merge(adds, removes)
 	quantity : Reactive.Signal(I64)
-	quantity = Reactive.Signal.fold_i64!(
+	quantity = Reactive.Signal.fold_i64(
+		Str.concat("line_quantity:", line.id),
 		1,
 		quantity_events,
 		|current, delta| {
@@ -97,10 +98,10 @@ render_line = |line| {
 	)
 }
 
-main! : () => {}
-main! = || {
-	{ sender: next_send, receiver: next_clicks } = Reactive.Event.unit_channel!()
-	{ sender: back_send, receiver: back_clicks } = Reactive.Event.unit_channel!()
+main : {} -> Elem.Elem
+main = |_| {
+	{ sender: next_send, receiver: next_clicks } = Reactive.Event.unit_channel("next_click")
+	{ sender: back_send, receiver: back_clicks } = Reactive.Event.unit_channel("back_click")
 	nexts : Reactive.Event(I64)
 	nexts = Reactive.Event.map_unit_i64_const(next_clicks, 1)
 	backs : Reactive.Event(I64)
@@ -108,7 +109,8 @@ main! = || {
 	step_events = Reactive.Event.merge(nexts, backs)
 	step : Reactive.Signal(I64)
 	step = 
-		Reactive.Signal.fold_i64!(
+		Reactive.Signal.fold_i64(
+			"step",
 			0,
 			step_events,
 			|current, delta| {
@@ -124,15 +126,15 @@ main! = || {
 		)
 	step_text = Reactive.Signal.map_i64_str(step, step_label)
 
-	{ sender: email_send, receiver: email_changes } = Reactive.Event.channel!()
+	{ sender: email_send, receiver: email_changes } = Reactive.Event.channel("email_change")
 	email : Reactive.Signal(Str)
-	email = Reactive.Signal.hold!("", email_changes)
-	{ sender: address_send, receiver: address_changes } = Reactive.Event.channel!()
+	email = Reactive.Signal.hold("email", "", email_changes)
+	{ sender: address_send, receiver: address_changes } = Reactive.Event.channel("address_change")
 	address : Reactive.Signal(Str)
-	address = Reactive.Signal.hold!("", address_changes)
-	{ sender: terms_send, receiver: terms_changes } = Reactive.Event.channel!()
+	address = Reactive.Signal.hold("address", "", address_changes)
+	{ sender: terms_send, receiver: terms_changes } = Reactive.Event.channel("terms_change")
 	terms : Reactive.Signal(Bool)
-	terms = Reactive.Signal.hold!(False, terms_changes)
+	terms = Reactive.Signal.hold("terms", False, terms_changes)
 	terms_text = 
 		Reactive.Signal.map(
 			terms,
@@ -153,8 +155,8 @@ main! = || {
 			},
 		)
 
-	{ sender: add_support_send, receiver: add_support_clicks } = Reactive.Event.unit_channel!()
-	{ sender: basic_cart_send, receiver: basic_cart_clicks } = Reactive.Event.unit_channel!()
+	{ sender: add_support_send, receiver: add_support_clicks } = Reactive.Event.unit_channel("add_support_click")
+	{ sender: basic_cart_send, receiver: basic_cart_clicks } = Reactive.Event.unit_channel("basic_cart_click")
 	support_cart : Reactive.Event(List(Line))
 	support_cart = 
 		Reactive.Event.map(
@@ -166,17 +168,18 @@ main! = || {
 	cart_commands = Reactive.Event.merge(support_cart, basic_cart)
 	lines : Reactive.Signal(List(Line))
 	lines = 
-		Reactive.Signal.fold!(
+		Reactive.Signal.fold(
+			"lines",
 			[Line.make("seats", "3 seats"), Line.make("support", "Priority support")],
 			cart_commands,
 			|_current, next| next,
 		)
 
-	{ sender: submit_send, receiver: submit_clicks } = Reactive.Event.unit_channel!()
+	{ sender: submit_send, receiver: submit_clicks } = Reactive.Event.unit_channel("submit_click")
 	submit_deltas : Reactive.Event(I64)
 	submit_deltas = Reactive.Event.map_unit_i64_const(submit_clicks, 1)
 	submit_count : Reactive.Signal(I64)
-	submit_count = Reactive.Signal.fold_i64!(0, submit_deltas, |current, delta| current + delta)
+	submit_count = Reactive.Signal.fold_i64("submit_count", 0, submit_deltas, |current, delta| current + delta)
 	review_label = Reactive.Signal.map_i64_str(submit_count, |attempts| label_i64("Orders submitted", attempts))
 	email_review = Reactive.Signal.map(email, |value| Str.concat("Email: ", value))
 	address_review = Reactive.Signal.map(address, |value| Str.concat("Address: ", value))
@@ -257,27 +260,25 @@ main! = || {
 			},
 		)
 
-	Elem.run!(
-		Elem.div(
-			[
-				Elem.heading("Checkout wizard"),
-				Elem.action_button(
-					{
-						on_click: back_send,
-						label: Reactive.Signal.const_str("Back"),
-						disabled: Reactive.Signal.const_bool(False),
-					},
-				),
-				Elem.action_button(
-					{
-						on_click: next_send,
-						label: Reactive.Signal.const_str("Next"),
-						disabled: Reactive.Signal.const_bool(False),
-					},
-				),
-				Elem.label(step_text),
-				step_panel,
-			],
-		),
+	Elem.div(
+		[
+			Elem.heading("Checkout wizard"),
+			Elem.action_button(
+				{
+					on_click: back_send,
+					label: Reactive.Signal.const_str("Back"),
+					disabled: Reactive.Signal.const_bool(False),
+				},
+			),
+			Elem.action_button(
+				{
+					on_click: next_send,
+					label: Reactive.Signal.const_str("Next"),
+					disabled: Reactive.Signal.const_bool(False),
+				},
+			),
+			Elem.label(step_text),
+			step_panel,
+		],
 	)
 }

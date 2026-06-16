@@ -11445,6 +11445,9 @@ const PlatformAppRelationTypeResolver = struct {
         if (checkedTypePayloadIsIdentity(app_payload)) {
             return try self.mergeIdentityWith(app_root, platform_root, platform_payload, context);
         }
+        if (platform_root == app_root) {
+            return platform_root;
+        }
 
         switch (platform_payload) {
             .alias => {},

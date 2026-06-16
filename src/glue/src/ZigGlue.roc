@@ -391,6 +391,85 @@ generate_roc_env =
 	\\};
 	\\
 
+align_forward_u64 : U64, U64 -> U64
+align_forward_u64 = |offset, alignment| {
+	if alignment == 0 {
+		offset
+	} else {
+		remainder = U64.rem_by(offset, alignment)
+		if remainder == 0 {
+			offset
+		} else {
+			offset + alignment - remainder
+		}
+	}
+}
+
+type_layout_64 : List(TypeRepr), U64 -> { size : U64, alignment : U64 }
+type_layout_64 = |type_table, type_id| {
+	match List.get(type_table, type_id) {
+		Ok(type_repr) => repr_layout_64(type_table, type_repr)
+		Err(_) => { size: 8, alignment: 8 }
+	}
+}
+
+repr_layout_64 : List(TypeRepr), TypeRepr -> { size : U64, alignment : U64 }
+repr_layout_64 = |type_table, type_repr| {
+	match type_repr {
+		RocBool => { size: 1, alignment: 1 }
+		RocBox(_) => { size: 8, alignment: 8 }
+		RocDec => { size: 8, alignment: 8 }
+		RocF32 => { size: 4, alignment: 4 }
+		RocF64 => { size: 8, alignment: 8 }
+		RocFunction(_) => { size: 8, alignment: 8 }
+		RocI128 => { size: 16, alignment: 16 }
+		RocI16 => { size: 2, alignment: 2 }
+		RocI32 => { size: 4, alignment: 4 }
+		RocI64 => { size: 8, alignment: 8 }
+		RocI8 => { size: 1, alignment: 1 }
+		RocList(_) => { size: 24, alignment: 8 }
+		RocRecord(rec) => record_layout_from_fields(type_table, rec.fields)
+		RocStr => { size: 24, alignment: 8 }
+		RocTagUnion(tu) =>
+			if List.len(tu.tags) == 1 {
+				match List.first(tu.tags) {
+					Ok(tag) =>
+						match List.first(tag.payload) {
+							Ok(payload_id) => type_layout_64(type_table, payload_id)
+							_ => { size: 0, alignment: 1 }
+						}
+					_ => { size: 0, alignment: 1 }
+				}
+			} else {
+				{ size: tu.size, alignment: tu.alignment }
+			}
+		RocU128 => { size: 16, alignment: 16 }
+		RocU16 => { size: 2, alignment: 2 }
+		RocU32 => { size: 4, alignment: 4 }
+		RocU64 => { size: 8, alignment: 8 }
+		RocU8 => { size: 1, alignment: 1 }
+		RocUnit => { size: 0, alignment: 1 }
+		RocUnknown(_) => { size: 8, alignment: 8 }
+	}
+}
+
+record_layout_from_fields : List(TypeRepr), List(RecordField) -> { size : U64, alignment : U64 }
+record_layout_from_fields = |type_table, fields| {
+	var $offset = 0
+	var $alignment = 1
+
+	for field in fields {
+		field_layout = type_layout_64(type_table, field.type_id)
+		if field_layout.alignment > $alignment {
+			$alignment = field_layout.alignment
+		}
+		$offset = align_forward_u64($offset, field_layout.alignment)
+		$offset = $offset + field_layout.size
+	}
+
+	{ size: align_forward_u64($offset, $alignment), alignment: $alignment }
+}
+
 ## Generate extern structs for element types found in the type table.
 ## Scans for Record types and generates Zig extern structs for them.
 ## Fields arrive pre-sorted by alignment descending from the compiler.
@@ -417,8 +496,9 @@ generate_element_type_structs = |type_table| {
 					}
 
 					# Comptime size/alignment assertions (guarded by pointer width)
-					assertions = if rec.size > 0 {
-						"comptime {\n    if (@sizeOf(usize) == 8) {\n        if (@sizeOf(${struct_name}) != ${U64.to_str(rec.size)}) @compileError(\"${struct_name} size mismatch\");\n        if (@alignOf(${struct_name}) != ${U64.to_str(rec.alignment)}) @compileError(\"${struct_name} alignment mismatch\");\n    }\n}\n\n"
+					layout = record_layout_from_fields(type_table, rec.fields)
+					assertions = if layout.size > 0 {
+						"comptime {\n    if (@sizeOf(usize) == 8) {\n        if (@sizeOf(${struct_name}) != ${U64.to_str(layout.size)}) @compileError(\"${struct_name} size mismatch\");\n        if (@alignOf(${struct_name}) != ${U64.to_str(layout.alignment)}) @compileError(\"${struct_name} alignment mismatch\");\n    }\n}\n\n"
 					} else {
 						""
 					}
@@ -1273,6 +1353,24 @@ generate_roc_box_helpers =
 	\\    _ = @atomicRmw(isize, rc, .Add, amount, .monotonic);
 	\\}
 	\\
+	\\/// Allocate a Roc box and return a pointer to its payload data.
+	\\pub fn allocateBox(
+	\\    payload_size: usize,
+	\\    payload_alignment: usize,
+	\\    payload_contains_refcounted: bool,
+	\\    roc_ops: *RocOps,
+	\\) *anyopaque {
+	\\    const ptr_width = @sizeOf(usize);
+	\\    const required_space: usize = if (payload_contains_refcounted) (2 * ptr_width) else ptr_width;
+	\\    const header_bytes = @max(required_space, payload_alignment);
+	\\    const alloc_alignment = @max(ptr_width, payload_alignment);
+	\\    const base: [*]u8 = @ptrCast(roc_ops.roc_alloc(roc_ops, header_bytes + payload_size, alloc_alignment));
+	\\    const data = base + header_bytes;
+	\\    const rc: *isize = @ptrFromInt(@intFromPtr(data) - @sizeOf(isize));
+	\\    rc.* = 1;
+	\\    return @ptrCast(data);
+	\\}
+	\\
 	\\/// Decrement a pointer-aligned boxed payload with no Roc refcounted values.
 	\\pub fn decrefBox(data_ptr: ?*anyopaque, roc_ops: *RocOps) void {
 	\\    decrefBoxWith(data_ptr, @alignOf(usize), null, roc_ops);
@@ -1516,8 +1614,9 @@ generate_all_record_structs = |hosted_functions, type_table| {
 				)
 			}
 
-			assertions = if type_table_result.size > 0 {
-				"comptime {\n    if (@sizeOf(usize) == 8) {\n        if (@sizeOf(${struct_name}RetRecord) != ${U64.to_str(type_table_result.size)}) @compileError(\"${struct_name}RetRecord size mismatch\");\n        if (@alignOf(${struct_name}RetRecord) != ${U64.to_str(type_table_result.alignment)}) @compileError(\"${struct_name}RetRecord alignment mismatch\");\n    }\n}\n\n"
+			layout = record_layout_from_fields(type_table, type_table_result.fields)
+			assertions = if layout.size > 0 {
+				"comptime {\n    if (@sizeOf(usize) == 8) {\n        if (@sizeOf(${struct_name}RetRecord) != ${U64.to_str(layout.size)}) @compileError(\"${struct_name}RetRecord size mismatch\");\n        if (@alignOf(${struct_name}RetRecord) != ${U64.to_str(layout.alignment)}) @compileError(\"${struct_name}RetRecord alignment mismatch\");\n    }\n}\n\n"
 			} else {
 				""
 			}
@@ -1572,11 +1671,12 @@ generate_args_struct = |func, type_table| {
 			)
 		}
 
-		assertions = if type_table_result.size > 0 {
-			"comptime {\n    if (@sizeOf(usize) == 8) {\n        if (@sizeOf(${struct_name}Args) != ${U64.to_str(type_table_result.size)}) @compileError(\"${struct_name}Args size mismatch\");\n        if (@alignOf(${struct_name}Args) != ${U64.to_str(type_table_result.alignment)}) @compileError(\"${struct_name}Args alignment mismatch\");\n    }\n}\n\n"
-		} else {
-			""
-		}
+	layout = record_layout_from_fields(type_table, type_table_result.fields)
+	assertions = if layout.size > 0 {
+		"comptime {\n    if (@sizeOf(usize) == 8) {\n        if (@sizeOf(${struct_name}Args) != ${U64.to_str(layout.size)}) @compileError(\"${struct_name}Args size mismatch\");\n        if (@alignOf(${struct_name}Args) != ${U64.to_str(layout.alignment)}) @compileError(\"${struct_name}Args alignment mismatch\");\n    }\n}\n\n"
+	} else {
+		""
+	}
 
 		doc = "/// Arguments for ${func.name}\n/// Roc signature: ${func.type_str}\n/// Refcounted fields are owned by the hosted function.\n"
 		return "${doc}pub const ${struct_name}Args = extern struct {\n${$fields}};\n\n${assertions}"
@@ -1601,6 +1701,10 @@ generate_args_struct = |func, type_table| {
 
 ## Generate the PlatformHostedFns struct type
 generate_platform_fns_struct = |hosted_functions, type_table| {
+	if List.is_empty(hosted_functions) {
+		return "/// Implement this struct with your hosted function implementations.\n/// Refcounted hosted arguments are owned by the hosted function.\n/// Pass it to hostedFunctions() to create the dispatch table.\npub const PlatformHostedFns = struct {};\n"
+	}
+
 	var $fields = ""
 
 	for func in hosted_functions {
@@ -1660,6 +1764,10 @@ hosted_fn_type = |func, type_table| {
 
 ## Generate the hostedFunctions() helper that builds the dispatch table
 generate_hosted_functions_helper = |hosted_functions| {
+	if List.is_empty(hosted_functions) {
+		return "/// Create a HostedFunctions dispatch table from your implementations.\n/// The comptime parameter + nested struct ensures the function pointer array\n/// lives in static memory, not on the stack.\npub fn hostedFunctions(comptime fns: PlatformHostedFns) HostedFunctions {\n    _ = fns;\n    const Static = struct {\n        const ptrs = [_]HostedFn{};\n    };\n    return .{\n        .count = Static.ptrs.len,\n        .fns = @constCast(&Static.ptrs),\n    };\n}\n"
+	}
+
 	var $entries = ""
 
 	for func in hosted_functions {
@@ -1911,15 +2019,24 @@ generate_entrypoint_externs = |provides_list, type_table| {
 	}
 
 	var $result = "// =============================================================================\n// Entrypoint Declarations\n//\n// Extern declarations for Roc entrypoints. Call these from your platform host\n// to invoke Roc application functions.\n// =============================================================================\n\n"
+	entry_count = List.len(provides_list)
+	var $idx = 0
 
 	for entry in provides_list {
 		params = entrypoint_params_from_id(type_table, entry.type_id)
 		ret_type = entrypoint_ret_type_from_id(type_table, entry.type_id)
+		suffix =
+			if $idx + 1 == entry_count {
+				"\n"
+			} else {
+				"\n\n"
+			}
 
 		$result = Str.concat(
 			$result,
-			"/// Entrypoint: ${entry.name}\npub extern fn ${entry.ffi_symbol}(${params}) callconv(.c) ${ret_type};\n\n",
+			"/// Entrypoint: ${entry.name}\npub extern fn ${entry.ffi_symbol}(${params}) callconv(.c) ${ret_type};${suffix}",
 		)
+		$idx = $idx + 1
 	}
 
 	$result

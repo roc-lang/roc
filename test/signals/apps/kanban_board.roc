@@ -1,4 +1,4 @@
-app [main!] { pf: platform "../platform/main.roc" }
+app [main] { pf: platform "../platform/main.roc" }
 
 import pf.Elem
 import pf.NodeValue exposing [NodeValue]
@@ -35,18 +35,18 @@ concat3 = |a, b, c| Str.concat(Str.concat(a, b), c)
 count_label : Str, I64 -> Str
 count_label = |name, value| concat3(name, ": ", value.to_str())
 
-render_task : Task => Elem.Elem
+render_task : Task -> Elem.Elem
 render_task = |task| {
-	{ sender: progress_send, receiver: progress_clicks } = Reactive.Event.unit_channel!()
-	{ sender: note_send, receiver: note_clicks } = Reactive.Event.unit_channel!()
+	{ sender: progress_send, receiver: progress_clicks } = Reactive.Event.unit_channel(Str.concat("task_progress_click:", task.label))
+	{ sender: note_send, receiver: note_clicks } = Reactive.Event.unit_channel(Str.concat("task_note_click:", task.label))
 	progress_deltas : Reactive.Event(I64)
 	progress_deltas = Reactive.Event.map_unit_i64_const(progress_clicks, 1)
 	note_deltas : Reactive.Event(I64)
 	note_deltas = Reactive.Event.map_unit_i64_const(note_clicks, 1)
 	progress : Reactive.Signal(I64)
-	progress = Reactive.Signal.fold_i64!(0, progress_deltas, |current, delta| current + delta)
+	progress = Reactive.Signal.fold_i64(Str.concat("task_progress:", task.label), 0, progress_deltas, |current, delta| current + delta)
 	notes : Reactive.Signal(I64)
-	notes = Reactive.Signal.fold_i64!(0, note_deltas, |current, delta| current + delta)
+	notes = Reactive.Signal.fold_i64(Str.concat("task_notes:", task.label), 0, note_deltas, |current, delta| current + delta)
 	status = 
 		Reactive.Signal.map2_i64_i64_str(
 			progress,
@@ -81,13 +81,13 @@ render_task = |task| {
 	)
 }
 
-main! : () => {}
-main! = || {
+main : {} -> Elem.Elem
+main = |_| {
 	initial_tasks = [Task.make("a", "Design signal graph"), Task.make("b", "Write platform glue"), Task.make("c", "Tune keyed diff")]
 
-	{ sender: reorder_send, receiver: reorder_clicks } = Reactive.Event.unit_channel!()
-	{ sender: archive_send, receiver: archive_clicks } = Reactive.Event.unit_channel!()
-	{ sender: reset_send, receiver: reset_clicks } = Reactive.Event.unit_channel!()
+	{ sender: reorder_send, receiver: reorder_clicks } = Reactive.Event.unit_channel("reorder_click")
+	{ sender: archive_send, receiver: archive_clicks } = Reactive.Event.unit_channel("archive_click")
+	{ sender: reset_send, receiver: reset_clicks } = Reactive.Event.unit_channel("reset_click")
 	reordered : Reactive.Event(List(Task))
 	reordered = 
 		Reactive.Event.map(
@@ -100,15 +100,16 @@ main! = || {
 	reset = Reactive.Event.map(reset_clicks, |_| initial_tasks)
 	list_commands = Reactive.Event.merge(Reactive.Event.merge(reordered, archived), reset)
 	tasks : Reactive.Signal(List(Task))
-	tasks = Reactive.Signal.fold!(
+	tasks = Reactive.Signal.fold(
+		"tasks",
 		initial_tasks,
 		list_commands,
 		|_current, next| next,
 	)
 
-	{ sender: filter_send, receiver: filter_clicks } = Reactive.Event.unit_channel!()
+	{ sender: filter_send, receiver: filter_clicks } = Reactive.Event.unit_channel("filter_click")
 	filter_active : Reactive.Signal(Bool)
-	filter_active = Reactive.Signal.fold_bool_toggle!(False, filter_clicks)
+	filter_active = Reactive.Signal.fold_bool_toggle("filter_active", False, filter_clicks)
 	filter_label = 
 		Reactive.Signal.map(
 			filter_active,
@@ -130,65 +131,63 @@ main! = || {
 			},
 		)
 
-	{ sender: reviewer_send, receiver: reviewer_changes } = Reactive.Event.channel!()
+	{ sender: reviewer_send, receiver: reviewer_changes } = Reactive.Event.channel("reviewer_change")
 	reviewer : Reactive.Signal(Str)
-	reviewer = Reactive.Signal.hold!("", reviewer_changes)
+	reviewer = Reactive.Signal.hold("reviewer", "", reviewer_changes)
 	reviewer_label = Reactive.Signal.map(reviewer, |value| Str.concat("Reviewer: ", value))
 
-	Elem.run!(
-		Elem.div(
-			[
-				Elem.heading("Kanban board"),
-				Elem.section(
-					"Board controls",
-					[
-						Elem.action_button(
-							{
-								on_click: reorder_send,
-								label: Reactive.Signal.const_str("Reorder cards"),
-								disabled: Reactive.Signal.const_bool(False),
-							},
-						),
-						Elem.action_button(
-							{
-								on_click: archive_send,
-								label: Reactive.Signal.const_str("Archive platform glue"),
-								disabled: Reactive.Signal.const_bool(False),
-							},
-						),
-						Elem.action_button(
-							{
-								on_click: reset_send,
-								label: Reactive.Signal.const_str("Reset board"),
-								disabled: Reactive.Signal.const_bool(False),
-							},
-						),
-						Elem.action_button(
-							{
-								on_click: filter_send,
-								label: Reactive.Signal.const_str("Toggle focus filter"),
-								disabled: Reactive.Signal.const_bool(False),
-							},
-						),
-						Elem.label(filter_label),
-						Elem.text_input(
-							{
-								label: "Reviewer",
-								value: reviewer,
-								on_input: reviewer_send,
-								disabled: Reactive.Signal.const_bool(False),
-							},
-						),
-						Elem.label(reviewer_label),
-					],
-				),
-				Elem.section(
-					"Doing",
-					[
-						Elem.each(visible_tasks, |task| task.id, render_task),
-					],
-				),
-			],
-		),
+	Elem.div(
+		[
+			Elem.heading("Kanban board"),
+			Elem.section(
+				"Board controls",
+				[
+					Elem.action_button(
+						{
+							on_click: reorder_send,
+							label: Reactive.Signal.const_str("Reorder cards"),
+							disabled: Reactive.Signal.const_bool(False),
+						},
+					),
+					Elem.action_button(
+						{
+							on_click: archive_send,
+							label: Reactive.Signal.const_str("Archive platform glue"),
+							disabled: Reactive.Signal.const_bool(False),
+						},
+					),
+					Elem.action_button(
+						{
+							on_click: reset_send,
+							label: Reactive.Signal.const_str("Reset board"),
+							disabled: Reactive.Signal.const_bool(False),
+						},
+					),
+					Elem.action_button(
+						{
+							on_click: filter_send,
+							label: Reactive.Signal.const_str("Toggle focus filter"),
+							disabled: Reactive.Signal.const_bool(False),
+						},
+					),
+					Elem.label(filter_label),
+					Elem.text_input(
+						{
+							label: "Reviewer",
+							value: reviewer,
+							on_input: reviewer_send,
+							disabled: Reactive.Signal.const_bool(False),
+						},
+					),
+					Elem.label(reviewer_label),
+				],
+			),
+			Elem.section(
+				"Doing",
+				[
+					Elem.each(visible_tasks, |task| task.label, render_task),
+				],
+			),
+		],
 	)
 }

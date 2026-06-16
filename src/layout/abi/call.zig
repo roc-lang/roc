@@ -141,6 +141,9 @@ fn placementAarch64(arena: std.mem.Allocator, store: *const Store, idx: Idx) std
         .byval => {
             // A true scalar: a float goes in one SIMD register, an integer/pointer in one or
             // two general-purpose registers (i128/Dec are 16 bytes).
+            if (lay.tag != .scalar) {
+                return integerPieces(arena, size);
+            }
             const scalar = lay.getScalar();
             if (scalar.tag == .frac) {
                 return switch (scalar.getFrac()) {
@@ -256,6 +259,20 @@ test "lower aarch64: HFA and large aggregates" {
     const c2 = try lower(arena, &store, .aarch64, &.{.str}, .i32, true);
     try testing.expect(c2.leading_ops);
     try testing.expectEqual(Placement.indirect, c2.args[0]);
+}
+
+test "lower aarch64: boxes are integer pointer registers" {
+    var store = try Store.init(testing.allocator, .u64);
+    defer store.deinit();
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const box_idx = try store.insertLayout(layout.Layout.box(.u8));
+    const call = try lower(arena, &store, .aarch64, &.{box_idx}, box_idx, false);
+
+    try expectRegisters(&.{.{ .class = .integer, .offset = 0, .size = 8 }}, call.args[0]);
+    try expectRegisters(&.{.{ .class = .integer, .offset = 0, .size = 8 }}, call.ret);
 }
 
 test "lower x86_64 sysv: Plant in one int eightbyte, mixed struct splits" {

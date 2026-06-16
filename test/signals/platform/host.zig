@@ -49,6 +49,16 @@ const std = @import("std");
 const builtin = @import("builtin");
 const base = @import("base");
 const abi = @import("roc_platform_abi.zig");
+const DispatchResultBox = @typeInfo(@TypeOf(abi.roc_ui_init)).@"fn".return_type.?;
+const DispatchResult = std.meta.Child(DispatchResultBox);
+const RuntimeBox = @typeInfo(@TypeOf(abi.roc_ui_drop)).@"fn".params[0].type.?;
+const RuntimeMetrics = @FieldType(DispatchResult, "metrics");
+const HostEventBox = @typeInfo(@TypeOf(abi.roc_ui_dispatch)).@"fn".params[1].type.?;
+const HostEvent = std.meta.Child(HostEventBox);
+const CommandPayload = @FieldType(abi.UiRuntimeCommand, "payload");
+const AppendChildPayload = @FieldType(CommandPayload, "append_child");
+const CreateElementPayload = @FieldType(CommandPayload, "create_element");
+const StringCommandPayload = @FieldType(CommandPayload, "set_text");
 
 pub const std_options: std.Options = .{
     .logFn = std.log.defaultLog,
@@ -828,6 +838,8 @@ const HostEnv = struct {
 
     // RocOps pointer for closure evaluation
     roc_ops: ?*abi.RocOps = null,
+    runtime_box: ?RuntimeBox = null,
+    last_runtime_metrics: RuntimeMetrics = zeroRuntimeMetrics(),
 
     fn init() HostEnv {
         return HostEnv{
@@ -860,6 +872,11 @@ const HostEnv = struct {
 
     fn deinit(self: *HostEnv) void {
         const allocator = self.gpa.allocator();
+
+        if (self.runtime_box) |runtime| {
+            abi.roc_ui_drop(runtime);
+            self.runtime_box = null;
+        }
 
         // Free DOM elements
         for (self.dom_elements.items) |*elem| {
@@ -964,9 +981,28 @@ const HostEnv = struct {
             var buf: [256]u8 = undefined;
             const msg = std.fmt.bufPrint(&buf, "TEST FAILED at line {d}: locator matched {d} elements\n", .{ line_num, match_count }) catch "TEST FAILED: ambiguous locator\n";
             writeStderr(msg);
+            if (self.test_state.verbose) self.dumpDom();
             return null;
         }
+        if (found == null and self.test_state.verbose) self.dumpDom();
         return found;
+    }
+
+    fn dumpDom(self: *HostEnv) void {
+        for (self.dom_elements.items, 0..) |elem, idx| {
+            var dbg_buf: [512]u8 = undefined;
+            const dbg_msg = std.fmt.bufPrint(&dbg_buf, "[DEBUG] elem[{d}] tag=\"{s}\" text=\"{s}\" parent={?d} children={d} scope={d} active={} updates={d}\n", .{
+                idx,
+                elem.tag,
+                elem.text orelse "(null)",
+                elem.parent_id,
+                elem.children.items.len,
+                elem.scope_id,
+                elem.active,
+                elem.text_update_count,
+            }) catch "";
+            writeStderr(dbg_msg);
+        }
     }
 
     fn addDependency(self: *HostEnv, source_id: u64, dependent_id: u64) void {
@@ -992,6 +1028,23 @@ const HostEnv = struct {
         self.current_scope_id = previous;
     }
 };
+
+fn zeroRuntimeMetrics() RuntimeMetrics {
+    return .{
+        .@"callbacks" = 0,
+        .@"dynamic_renders" = 0,
+        .@"evaluated_nodes" = 0,
+        .@"events_processed" = 0,
+        .@"graph_nodes" = 0,
+        .@"keyed_creates" = 0,
+        .@"keyed_removes" = 0,
+        .@"keyed_reuses" = 0,
+        .@"node_value_equality_checks" = 0,
+        .@"signal_changes" = 0,
+        .@"signal_suppressed" = 0,
+        .@"signal_writes" = 0,
+    };
+}
 
 // Current Host Access
 
@@ -3058,6 +3111,140 @@ fn setElementDisabledIfChanged(elem: *DomElement, disabled: bool) void {
     }
 }
 
+fn resetSimulatedDom(host: *HostEnv) void {
+    const allocator = host.gpa.allocator();
+    for (host.dom_elements.items) |*elem| {
+        elem.deinit(allocator);
+    }
+    host.dom_elements.items.len = 0;
+    host.next_elem_id = 1;
+
+    const root_tag = allocator.dupe(u8, "root") catch std.process.exit(1);
+    const root = DomElement.init(0, root_tag, host.current_scope_id);
+    host.dom_elements.append(allocator, root) catch {
+        allocator.free(root_tag);
+        std.process.exit(1);
+    };
+}
+
+fn domElementById(host: *HostEnv, id: u64) *DomElement {
+    if (id >= host.dom_elements.items.len) failHost("DOM command referenced missing element");
+    const elem = &host.dom_elements.items[@intCast(id)];
+    if (!elem.active) failHost("DOM command referenced inactive element");
+    return elem;
+}
+
+fn applyCreateElementCommand(host: *HostEnv, payload: CreateElementPayload) void {
+    const id = payload.@"id";
+    if (id != host.dom_elements.items.len) failHost("DOM CreateElement command ids must be sequential");
+
+    const allocator = host.gpa.allocator();
+    const tag = payload.@"tag".asSlice();
+    const tag_copy = allocator.dupe(u8, tag) catch std.process.exit(1);
+    const elem = DomElement.init(id, tag_copy, host.current_scope_id);
+    host.dom_elements.append(allocator, elem) catch {
+        allocator.free(tag_copy);
+        std.process.exit(1);
+    };
+    host.next_elem_id = id + 1;
+}
+
+fn applyAppendChildCommand(host: *HostEnv, payload: AppendChildPayload) void {
+    const parent = domElementById(host, payload.@"parent");
+    const child = domElementById(host, payload.@"child");
+    child.parent_id = parent.id;
+    parent.children.append(host.gpa.allocator(), child.id) catch std.process.exit(1);
+}
+
+fn applyStringCommand(host: *HostEnv, payload: StringCommandPayload, field: StringField) void {
+    const elem = domElementById(host, payload.@"id");
+    const value = payload.@"value".asSlice();
+    switch (field) {
+        .role => _ = replaceOwnedString(host.gpa.allocator(), &elem.role, value),
+        .label => _ = replaceOwnedString(host.gpa.allocator(), &elem.label, value),
+        .test_id => _ = replaceOwnedString(host.gpa.allocator(), &elem.test_id, value),
+    }
+}
+
+fn applyCommand(host: *HostEnv, command: abi.UiRuntimeCommand) void {
+    switch (command.tag) {
+        .ResetDom => resetSimulatedDom(host),
+        .CreateElement => applyCreateElementCommand(host, command.payload.create_element),
+        .AppendChild => applyAppendChildCommand(host, command.payload.append_child),
+        .SetText => {
+            const payload = command.payload.set_text;
+            setElementTextIfChanged(host, domElementById(host, payload.@"id"), payload.@"value".asSlice());
+        },
+        .SetRole => applyStringCommand(host, command.payload.set_role, .role),
+        .SetLabel => applyStringCommand(host, command.payload.set_label, .label),
+        .SetTestId => applyStringCommand(host, command.payload.set_test_id, .test_id),
+        .SetValue => {
+            const payload = command.payload.set_value;
+            setElementValueIfChanged(host, domElementById(host, payload.@"id"), payload.@"value".asSlice());
+        },
+        .SetChecked => {
+            const payload = command.payload.set_checked;
+            setElementCheckedIfChanged(domElementById(host, payload.@"id"), payload.@"value");
+        },
+        .SetDisabled => {
+            const payload = command.payload.set_disabled;
+            setElementDisabledIfChanged(domElementById(host, payload.@"id"), payload.@"value");
+        },
+        .BindClick => {
+            const payload = command.payload.bind_click;
+            domElementById(host, payload.@"id").bound_click_event = payload.@"event";
+        },
+        .BindInput => {
+            const payload = command.payload.bind_input;
+            domElementById(host, payload.@"id").bound_input_event = payload.@"event";
+        },
+        .BindCheck => {
+            const payload = command.payload.bind_check;
+            domElementById(host, payload.@"id").bound_check_event = payload.@"event";
+        },
+    }
+}
+
+fn applyCommandList(host: *HostEnv, commands: abi.RocList(abi.UiRuntimeCommand)) void {
+    for (commands.items()) |command| {
+        applyCommand(host, command);
+    }
+}
+
+fn releaseCommandList(commands: abi.RocList(abi.UiRuntimeCommand), ops: *abi.RocOps) void {
+    if (commands.isUnique()) {
+        for (commands.items()) |command| {
+            abi.decrefUiRuntimeCommand(command, ops);
+        }
+    }
+    commands.decref(ops);
+}
+
+fn dropMovedDispatchResultPayload(_: ?*anyopaque, _: *abi.RocOps) callconv(.c) void {}
+
+fn acceptDispatchResult(host: *HostEnv, ops: *abi.RocOps, result_box: DispatchResultBox) void {
+    const result = result_box.*;
+    if (host.runtime_box != null) failHost("Roc runtime box was overwritten before being consumed");
+    host.runtime_box = result.@"runtime";
+    host.last_runtime_metrics = result.@"metrics";
+    applyCommandList(host, result.@"commands");
+    releaseCommandList(result.@"commands", ops);
+    abi.decrefBoxWith(@ptrCast(result_box), @alignOf(DispatchResult), &dropMovedDispatchResultPayload, ops);
+}
+
+fn boxHostEvent(ops: *abi.RocOps, event: HostEvent) HostEventBox {
+    const raw = abi.allocateBox(@sizeOf(HostEvent), @alignOf(HostEvent), true, ops);
+    const event_box: HostEventBox = @ptrCast(@alignCast(raw));
+    event_box.* = event;
+    return event_box;
+}
+
+fn dispatchRocEvent(host: *HostEnv, ops: *abi.RocOps, event: HostEvent) void {
+    const runtime = host.runtime_box orelse failHost("Roc runtime not initialized");
+    host.runtime_box = null;
+    acceptDispatchResult(host, ops, abi.roc_ui_dispatch(runtime, boxHostEvent(ops, event)));
+}
+
 fn storedValueText(value: *const StoredValue, buf: []u8) ?[]const u8 {
     return switch (value.*) {
         .str => |*str| str.asSlice(),
@@ -3789,53 +3976,7 @@ fn runSyntheticBenchmarks(host: *HostEnv, ops: *abi.RocOps, iterations: usize, s
 }
 
 fn signalsHostedFunctions() abi.HostedFunctions {
-    return abi.hostedFunctions(.{
-        .elem_create_dynamic = @ptrCast(&hostedCreateDynamic),
-        .elem_create_dynamic_keyed = @ptrCast(&hostedCreateDynamicKeyed),
-        .elem_create_each = @ptrCast(&hostedCreateEach),
-        .elem_register_lifecycle = &hostedRegisterLifecycle,
-        .host_append_child = &hostedAppendChild,
-        .host_bind_check = &hostedBindCheck,
-        .host_bind_click = &hostedBindClick,
-        .host_bind_checked = &hostedBindChecked,
-        .host_bind_disabled = &hostedBindDisabled,
-        .host_bind_input = &hostedBindInput,
-        .host_bind_signal_update = &hostedBindSignalUpdate,
-        .host_bind_text = &hostedBindText,
-        .host_bind_value = &hostedBindValue,
-        .host_create_element = &hostedCreateElement,
-        .host_create_event_filter = &hostedCreateEventFilter,
-        .host_create_event_map = &hostedCreateEventMap,
-        .host_create_event_map_unit_i64_const = &hostedCreateEventMapUnitI64Const,
-        .host_create_event_merge = &hostedCreateEventMerge,
-        .host_create_event_source = &hostedCreateEventSource,
-        .host_create_event_with_latest = &hostedCreateEventWithLatest,
-        .host_create_root = &hostedCreateRoot,
-        .host_create_signal_const_bool = &hostedCreateSignalConstBool,
-        .host_create_signal_const = &hostedCreateSignalConst,
-        .host_create_signal_const_i64 = &hostedCreateSignalConstI64,
-        .host_create_signal_const_str = &hostedCreateSignalConstStr,
-        .host_create_signal_fold_bool_toggle = &hostedCreateSignalFoldBoolToggle,
-        .host_create_signal_fold = &hostedCreateSignalFold,
-        .host_create_signal_fold_i64 = &hostedCreateSignalFoldI64,
-        .host_create_signal_hold = &hostedCreateSignalHold,
-        .host_create_signal_map = &hostedCreateSignalMap,
-        .host_create_signal_map_i64_i64 = &hostedCreateSignalMapI64I64,
-        .host_create_signal_map_i64_str = &hostedCreateSignalMapI64Str,
-        .host_create_signal_map2 = &hostedCreateSignalMap2,
-        .host_create_signal_map2_i64_i64 = &hostedCreateSignalMap2I64I64,
-        .host_create_signal_map2_i64_i64_str = &hostedCreateSignalMap2I64I64Str,
-        .host_create_signal_state = &hostedCreateSignalState,
-        .host_create_signal_zip_with = &hostedCreateSignalZipWith,
-        .host_send_event = &hostedSendEvent,
-        .host_set_checked = &hostedSetChecked,
-        .host_set_disabled = &hostedSetDisabled,
-        .host_set_label = &hostedSetLabel,
-        .host_set_role = &hostedSetRole,
-        .host_set_test_id = &hostedSetTestId,
-        .host_set_text = &hostedSetText,
-        .host_set_value = &hostedSetValue,
-    });
+    return abi.hostedFunctions(.{});
 }
 
 fn makeSignalsRocOps(host: *HostEnv) abi.RocOps {
@@ -3896,52 +4037,6 @@ comptime {
     @export(&hostDbg, .{ .name = "roc_dbg", .visibility = .hidden });
     @export(&hostExpectFailed, .{ .name = "roc_expect_failed", .visibility = .hidden });
     @export(&hostCrashed, .{ .name = "roc_crashed", .visibility = .hidden });
-
-    @export(&hostedCreateDynamic, .{ .name = "roc_host_create_dynamic", .visibility = .hidden });
-    @export(&hostedCreateDynamicKeyed, .{ .name = "roc_host_create_dynamic_keyed", .visibility = .hidden });
-    @export(&hostedCreateEach, .{ .name = "roc_host_create_each", .visibility = .hidden });
-    @export(&hostedRegisterLifecycle, .{ .name = "roc_host_register_lifecycle", .visibility = .hidden });
-    @export(&hostedAppendChild, .{ .name = "roc_host_append_child", .visibility = .hidden });
-    @export(&hostedBindCheck, .{ .name = "roc_host_bind_check", .visibility = .hidden });
-    @export(&hostedBindClick, .{ .name = "roc_host_bind_click", .visibility = .hidden });
-    @export(&hostedBindChecked, .{ .name = "roc_host_bind_checked", .visibility = .hidden });
-    @export(&hostedBindDisabled, .{ .name = "roc_host_bind_disabled", .visibility = .hidden });
-    @export(&hostedBindInput, .{ .name = "roc_host_bind_input", .visibility = .hidden });
-    @export(&hostedBindSignalUpdate, .{ .name = "roc_host_bind_signal_update", .visibility = .hidden });
-    @export(&hostedBindText, .{ .name = "roc_host_bind_text", .visibility = .hidden });
-    @export(&hostedBindValue, .{ .name = "roc_host_bind_value", .visibility = .hidden });
-    @export(&hostCreateElement, .{ .name = "roc_host_create_element", .visibility = .hidden });
-    @export(&hostCreateEventFilter, .{ .name = "roc_host_create_event_filter", .visibility = .hidden });
-    @export(&hostCreateEventMap, .{ .name = "roc_host_create_event_map", .visibility = .hidden });
-    @export(&hostCreateEventMapUnitI64Const, .{ .name = "roc_host_create_event_map_unit_i64_const", .visibility = .hidden });
-    @export(&hostedCreateEventMerge, .{ .name = "roc_host_create_event_merge", .visibility = .hidden });
-    @export(&hostedCreateEventSource, .{ .name = "roc_host_create_event_source", .visibility = .hidden });
-    @export(&hostCreateEventWithLatest, .{ .name = "roc_host_create_event_with_latest", .visibility = .hidden });
-    @export(&hostedCreateRoot, .{ .name = "roc_host_create_root", .visibility = .hidden });
-    @export(&hostCreateSignalConstBool, .{ .name = "roc_host_create_signal_const_bool", .visibility = .hidden });
-    @export(&hostCreateSignalConst, .{ .name = "roc_host_create_signal_const", .visibility = .hidden });
-    @export(&hostCreateSignalConstI64, .{ .name = "roc_host_create_signal_const_i64", .visibility = .hidden });
-    @export(&hostCreateSignalConstStr, .{ .name = "roc_host_create_signal_const_str", .visibility = .hidden });
-    @export(&hostCreateSignalFoldBoolToggle, .{ .name = "roc_host_create_signal_fold_bool_toggle", .visibility = .hidden });
-    @export(&hostCreateSignalFold, .{ .name = "roc_host_create_signal_fold", .visibility = .hidden });
-    @export(&hostCreateSignalFoldI64, .{ .name = "roc_host_create_signal_fold_i64", .visibility = .hidden });
-    @export(&hostCreateSignalHold, .{ .name = "roc_host_create_signal_hold", .visibility = .hidden });
-    @export(&hostCreateSignalMap, .{ .name = "roc_host_create_signal_map", .visibility = .hidden });
-    @export(&hostCreateSignalMapI64I64, .{ .name = "roc_host_create_signal_map_i64_i64", .visibility = .hidden });
-    @export(&hostCreateSignalMapI64Str, .{ .name = "roc_host_create_signal_map_i64_str", .visibility = .hidden });
-    @export(&hostCreateSignalMap2, .{ .name = "roc_host_create_signal_map2", .visibility = .hidden });
-    @export(&hostCreateSignalMap2I64I64, .{ .name = "roc_host_create_signal_map2_i64_i64", .visibility = .hidden });
-    @export(&hostCreateSignalMap2I64I64Str, .{ .name = "roc_host_create_signal_map2_i64_i64_str", .visibility = .hidden });
-    @export(&hostCreateSignalState, .{ .name = "roc_host_create_signal_state", .visibility = .hidden });
-    @export(&hostCreateSignalZipWith, .{ .name = "roc_host_create_signal_zip_with", .visibility = .hidden });
-    @export(&hostedSendEvent, .{ .name = "roc_host_send_event", .visibility = .hidden });
-    @export(&hostedSetChecked, .{ .name = "roc_host_set_checked", .visibility = .hidden });
-    @export(&hostedSetDisabled, .{ .name = "roc_host_set_disabled", .visibility = .hidden });
-    @export(&hostSetLabel, .{ .name = "roc_host_set_label", .visibility = .hidden });
-    @export(&hostSetRole, .{ .name = "roc_host_set_role", .visibility = .hidden });
-    @export(&hostSetTestId, .{ .name = "roc_host_set_test_id", .visibility = .hidden });
-    @export(&hostSetText, .{ .name = "roc_host_set_text", .visibility = .hidden });
-    @export(&hostSetValue, .{ .name = "roc_host_set_value", .visibility = .hidden });
 
     @export(&main, .{ .name = "main" });
     if (@import("builtin").os.tag == .windows) {
@@ -4062,31 +4157,17 @@ fn platform_main(spec_file: []const u8, verbose: bool) !c_int {
     defer current_roc_ops = null;
     defer host_env.deinit();
 
-    // Call Roc main to build the UI
-    traceStderr("[HOST] calling roc_main\n");
-    abi.roc_main();
-    traceStderr("[HOST] roc_main returned\n");
+    // Call Roc to build and render the UI.
+    traceStderr("[HOST] calling roc_ui_init\n");
+    acceptDispatchResult(&host_env, &roc_ops, abi.roc_ui_init());
+    traceStderr("[HOST] roc_ui_init returned\n");
 
     if (verbose) {
         var buf: [256]u8 = undefined;
-        const msg = std.fmt.bufPrint(&buf, "[INFO] UI built: {d} DOM elements, {d} graph nodes\n", .{ host_env.dom_elements.items.len, host_env.graph_nodes.items.len }) catch "";
+        const msg = std.fmt.bufPrint(&buf, "[INFO] UI built: {d} DOM elements, {d} graph nodes\n", .{ host_env.dom_elements.items.len, host_env.last_runtime_metrics.@"graph_nodes" }) catch "";
         writeStderr(msg);
 
-        // Debug: dump all DOM elements
-        for (host_env.dom_elements.items, 0..) |elem, idx| {
-            var dbg_buf: [512]u8 = undefined;
-            const dbg_msg = std.fmt.bufPrint(&dbg_buf, "[DEBUG] elem[{d}] tag=\"{s}\" text=\"{s}\" parent={?d} children={d} scope={d} active={} updates={d}\n", .{
-                idx,
-                elem.tag,
-                elem.text orelse "(null)",
-                elem.parent_id,
-                elem.children.items.len,
-                elem.scope_id,
-                elem.active,
-                elem.text_update_count,
-            }) catch "";
-            writeStderr(dbg_msg);
-        }
+        host_env.dumpDom();
     }
 
     // Execute test commands
@@ -4111,7 +4192,10 @@ fn platform_main(spec_file: []const u8, verbose: bool) !c_int {
                     writeStderr(msg);
                     return 1;
                 };
-                fireEvent(&host_env, event_id, nodeValueUnit());
+                dispatchRocEvent(&host_env, &roc_ops, .{
+                    .payload = .{ .click = event_id },
+                    .tag = .Click,
+                });
             },
 
             .fill => {
@@ -4128,9 +4212,18 @@ fn platform_main(spec_file: []const u8, verbose: bool) !c_int {
                     writeStderr(msg);
                     return 1;
                 }
-                setElementValueIfChanged(&host_env, elem, value);
                 if (elem.bound_input_event) |event_id| {
-                    fireEvent(&host_env, event_id, nodeValueStr(&roc_ops, value));
+                    dispatchRocEvent(&host_env, &roc_ops, .{
+                        .payload = .{
+                            .input = .{
+                                .@"event" = event_id,
+                                .@"value" = RocStr.fromSlice(value, &roc_ops),
+                            },
+                        },
+                        .tag = .Input,
+                    });
+                } else {
+                    setElementValueIfChanged(&host_env, elem, value);
                 }
             },
 
@@ -4148,9 +4241,18 @@ fn platform_main(spec_file: []const u8, verbose: bool) !c_int {
                     writeStderr(msg);
                     return 1;
                 }
-                setElementCheckedIfChanged(elem, checked);
                 if (elem.bound_check_event) |event_id| {
-                    fireEvent(&host_env, event_id, nodeValueBool(checked));
+                    dispatchRocEvent(&host_env, &roc_ops, .{
+                        .payload = .{
+                            .check = .{
+                                .@"event" = event_id,
+                                .@"checked" = checked,
+                            },
+                        },
+                        .tag = .Check,
+                    });
+                } else {
+                    setElementCheckedIfChanged(elem, checked);
                 }
             },
 
