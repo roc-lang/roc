@@ -98,7 +98,8 @@ fn handleRocStackOverflow() noreturn {
 }
 
 /// Callback for access violation in a Roc program
-fn handleRocAccessViolation(fault_addr: usize) noreturn {
+fn handleRocAccessViolation(fault_addr: usize, context: base.signal_handler.AccessViolationContext) noreturn {
+    _ = context;
     if (comptime builtin.os.tag == .windows) {
         const DWORD = u32;
         const HANDLE = ?*anyopaque;
