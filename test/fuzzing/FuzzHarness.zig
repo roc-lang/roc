@@ -22,7 +22,7 @@ pub fn writeGeneratedFiles(
     fuzz_io: std.Io,
     tmp_root: []const u8,
     files: []const GeneratedFile,
-) ![][:0]u8 {
+) anyerror![][:0]u8 {
     std.Io.Dir.createDirAbsolute(fuzz_io, tmp_root, .default_dir) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return err,
