@@ -35,8 +35,8 @@ main_for_host = main
 main_for_host = <required>
 
 # app
-main = add(3, 4).times(2)
-add = |a, b| a.plus(b)
+main = add(3, 4) * 2
+add = |a, b| a + b
 
 ~~~
 # DEV OUTPUT

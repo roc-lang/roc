@@ -110,7 +110,9 @@ test "ModuleEnv.Serialized roundtrip" {
     // Plus 1 fully qualified Bool type name: Builtin.Bool
     // Count reflects the merged builtin set after the zig-16 / origin/main merge,
     // Str.find_first for allocation-free slicing searches, and the builtin
-    // Decoder API/spec/state identifiers.
+    // parse_from/spec/state identifiers. Ranges desugar to the generic
+    // Iter.exclusive_range / inclusive_range constructors, so no per-type range
+    // method identifiers are interned.
     try testing.expectEqual(@as(u32, 100), original.common.idents.interner.entry_count);
     try testing.expectEqualStrings("hello", original.getIdent(hello_idx));
     try testing.expectEqualStrings("world", original.getIdent(world_idx));
@@ -120,7 +122,7 @@ test "ModuleEnv.Serialized roundtrip" {
     try testing.expectEqual(@as(usize, 2), original.imports.imports.len()); // Should have 2 unique imports
 
     // First verify that the CommonEnv data was preserved after deserialization
-    // Should have same identifiers as original, including the builtin Decoder API/spec/state identifiers.
+    // Should have same identifiers as original, including the builtin parse_from/spec/state identifiers.
     // (Note: "Try" is now shared with well-known identifiers, reducing total by 1)
     try testing.expectEqual(@as(u32, 100), env.common.idents.interner.entry_count);
 

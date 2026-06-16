@@ -3427,7 +3427,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
 
                 // ── Float/Dec try_unsafe conversions ──
-                // Returns a record { is_int: Bool, in_range: Bool, val_or_memory_garbage: To }.
+                // Returns a record { success: U8, val_or_memory_garbage: To }.
                 .f32_to_i8_try_unsafe,
                 .f32_to_i16_try_unsafe,
                 .f32_to_i32_try_unsafe,
@@ -3788,6 +3788,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     };
                 },
 
+                // Resolved before backend codegen: builtin `from_numeral` is
+                // folded to a constant during Monotype lowering, so the op must
+                // never reach a backend. Reaching here is an invariant failure,
+                // not a missing feature.
+                .num_from_numeral => {
+                    std.debug.panic("num_from_numeral reached the dev backend; it must be folded to a constant during Monotype lowering", .{});
+                },
                 // Unimplemented ops
                 .num_pow,
                 .num_sqrt,
@@ -3795,7 +3802,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .num_round,
                 .num_floor,
                 .num_ceiling,
-                .num_from_numeral,
                 .compare,
                 => {
                     std.debug.panic("UNIMPLEMENTED low-level op: {s}", .{@tagName(ll.op)});
@@ -5535,7 +5541,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try locals.put(localKey(expect_stmt.condition), expect_stmt.condition);
                         try stack.append(sa, expect_stmt.next);
                     },
-                    .runtime_error => {},
+                    .comptime_branch_taken => |marker| try stack.append(sa, marker.next),
+                    .runtime_error, .comptime_exhaustiveness_failed => {},
                     .incref => |inc| {
                         try locals.put(localKey(inc.value), inc.value);
                         try stack.append(sa, inc.next);
@@ -5656,7 +5663,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try locals.put(localKey(expect_stmt.condition), expect_stmt.condition);
                         try stack.append(sa, expect_stmt.next);
                     },
-                    .runtime_error => {},
+                    .comptime_branch_taken => |marker| try stack.append(sa, marker.next),
+                    .runtime_error, .comptime_exhaustiveness_failed => {},
                     .incref => |inc| {
                         try locals.put(localKey(inc.value), inc.value);
                         try stack.append(sa, inc.next);
@@ -6262,32 +6270,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const stack_offset = self.codegen.allocStackSlot(16);
             const base_reg = frame_ptr;
 
-            // Move f64 to the float arg position before CallBuilder setup.
-            // CallBuilder handles int args; float args need manual placement.
-            if (comptime target.toCpuArch() == .aarch64) {
-                if (freg != .V0) {
-                    try self.codegen.emit.fmovRegReg(.double, .V0, freg);
-                }
-            } else {
-                if (self.cc.is_windows) {
-                    // Windows: float at position 2 (after 2 int args) goes in XMM2
-                    if (freg != .XMM2) {
-                        try self.codegen.emit.movsdRegReg(.XMM2, freg);
-                    }
-                } else {
-                    // System V: floats use separate pool, first float arg is XMM0
-                    if (freg != .XMM0) {
-                        try self.codegen.emit.movsdRegReg(.XMM0, freg);
-                    }
-                }
-            }
-            self.codegen.freeFloat(freg);
-
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             try builder.addLeaArg(base_reg, stack_offset); // out_low
             try builder.addLeaArg(base_reg, stack_offset + 8); // out_high
-            // Float arg already positioned above; CallBuilder only tracks int args
+            try builder.addF64RegArg(freg);
             try self.callBuiltin(&builder, fn_addr, builtin_fn);
+            self.codegen.freeFloat(freg);
 
             return .{ .stack_i128 = stack_offset };
         }
@@ -6659,16 +6647,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_f64_to_int_try_unsafe);
                         const base_reg = frame_ptr;
 
-                        // Position float arg before CallBuilder setup
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            if (freg != .V0) try self.codegen.emit.fmovRegReg(.double, .V0, freg);
-                        } else {
-                            if (freg != .XMM0) try self.codegen.emit.movsdRegReg(.XMM0, freg);
-                        }
-
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                         try builder.addLeaArg(base_reg, result_offset);
-                        // Float arg already in position; int args follow
+                        try builder.addF64RegArg(freg);
                         try builder.addImmArg(@intCast(target_bits));
                         try builder.addImmArg(@intCast(target_is_signed));
                         try builder.addImmArg(@intCast(val_size));
@@ -6702,16 +6683,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_f64_to_f32_try_unsafe);
                         const base_reg = frame_ptr;
 
-                        // Position float arg before CallBuilder
-                        if (comptime target.toCpuArch() == .aarch64) {
-                            if (freg != .V0) try self.codegen.emit.fmovRegReg(.double, .V0, freg);
-                        } else {
-                            if (freg != .XMM0) try self.codegen.emit.movsdRegReg(.XMM0, freg);
-                        }
-
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                         try builder.addLeaArg(base_reg, result_offset);
-                        // Float arg already in position
+                        try builder.addF64RegArg(freg);
                         try builder.addImmArg(@intCast(offsets.success));
                         try builder.addImmArg(@intCast(offsets.value));
                         try self.callBuiltin(&builder, fn_addr, .f64_to_f32_try_unsafe);
@@ -6720,7 +6694,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
                 },
                 .dec => {
-                    // Integer to Dec: result is {val: Dec(i128), is_int: Bool}
+                    // Integer to Dec: result is { success: U8, val_or_memory_garbage: Dec }
                     const parts = try self.getI128Parts(src_loc, if (info.tgt_signed) .signed else .unsigned);
                     const builtin_fn: BuiltinFn = if (info.tgt_signed) .i128_to_dec_try_unsafe else .u128_to_dec_try_unsafe;
                     const fn_addr: usize = if (info.tgt_signed)
@@ -14153,6 +14127,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .runtime_error => {
                             try self.emitRocCrash("hit a runtime error");
                             try self.emitTrap();
+                        },
+
+                        .comptime_exhaustiveness_failed => {
+                            try self.emitRocCrash("compile-time exhaustiveness failure reached runtime code");
+                            try self.emitTrap();
+                        },
+
+                        .comptime_branch_taken => |marker| {
+                            try work.append(wa, .{ .node = marker.next });
                         },
 
                         .join => |j| {

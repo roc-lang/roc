@@ -1363,6 +1363,79 @@ test "fx platform fold_rev static dispatch regression" {
     try testing.expect(std.mem.find(u8, run_result.stdout, "Done") != null);
 }
 
+test "fx platform invalid nested where-clause static dispatch fails in check" {
+    // Regression test for #9657: the original repro's top-level decode_i64 and
+    // encode_i64 declarations are not I64.decode/I64.encode methods, so check
+    // must reject the where-clause contract before post-check lowering.
+    const allocator = testing.allocator;
+
+    var env_map = try util.buildIsolatedTestEnvMap(std.testing.io, allocator, null);
+    defer env_map.deinit();
+
+    const check_result = try util.runChildWithTimeout(std.testing.io, allocator, &[_][]const u8{
+        util.roc_binary_path,
+        "check",
+        "--no-cache",
+        "test/fx/nested_static_dispatch_where_repro.roc",
+    }, .{
+        .env_map = &env_map,
+        .max_output_bytes = 10 * 1024 * 1024,
+    });
+    defer allocator.free(check_result.stdout);
+    defer allocator.free(check_result.stderr);
+
+    try util.checkFailure(.{
+        .stdout = check_result.stdout,
+        .stderr = check_result.stderr,
+        .term = check_result.term,
+    });
+    try testing.expect(std.mem.find(u8, check_result.stderr, "MISSING METHOD") != null);
+    try testing.expect(std.mem.find(u8, check_result.stderr, "postcheck invariant violated") == null);
+}
+
+test "fx platform valid nested where-clause static dispatch builds" {
+    // A generic function returning a nested local function must carry enough
+    // checked where-clause dispatch evidence to build when the contract is valid.
+    const allocator = testing.allocator;
+
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const tmp_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    defer allocator.free(tmp_path);
+
+    const output_path = try std.fs.path.join(allocator, &.{ tmp_path, "nested-static-dispatch" });
+    defer allocator.free(output_path);
+
+    const output_arg = try std.fmt.allocPrint(allocator, "--output={s}", .{output_path});
+    defer allocator.free(output_arg);
+
+    var env_map = try util.buildIsolatedTestEnvMap(std.testing.io, allocator, null);
+    defer env_map.deinit();
+
+    const build_result = try util.runChildWithTimeout(std.testing.io, allocator, &[_][]const u8{
+        util.roc_binary_path,
+        "build",
+        "--opt=dev",
+        "--debug",
+        "--no-cache",
+        output_arg,
+        "test/fx/nested_static_dispatch_where_valid.roc",
+    }, .{
+        .env_map = &env_map,
+        .max_output_bytes = 10 * 1024 * 1024,
+    });
+    defer allocator.free(build_result.stdout);
+    defer allocator.free(build_result.stderr);
+
+    try util.checkSuccess(.{
+        .stdout = build_result.stdout,
+        .stderr = build_result.stderr,
+        .term = build_result.term,
+    });
+    try testing.expect(std.mem.find(u8, build_result.stderr, "postcheck invariant violated") == null);
+}
+
 test "external platform memory alignment regression" {
     // SKIPPED: aoc_day2.roc crashes at runtime due to a dev backend bug with
     // mutable variables + for loops + closures (.contains/.append).

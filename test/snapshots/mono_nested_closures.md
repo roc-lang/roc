@@ -19,7 +19,7 @@ x : Dec
 x = 10
 
 make_adder : Dec -> (Dec -> Dec)
-make_adder = |y| |z| x.plus(y).plus(z)
+make_adder = |y| |z| x + y + z
 
 add_five : Dec -> Dec
 add_five = make_adder(5)

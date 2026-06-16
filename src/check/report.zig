@@ -54,6 +54,7 @@ const NonExhaustiveMatch = problem_mod.NonExhaustiveMatch;
 const NonExhaustiveDestructure = problem_mod.NonExhaustiveDestructure;
 const RedundantPattern = problem_mod.RedundantPattern;
 const UnmatchablePattern = problem_mod.UnmatchablePattern;
+const ComptimeUnusedBranch = problem_mod.ComptimeUnusedBranch;
 
 // Type declaration errors
 const TypeApplyArityMismatch = problem_mod.TypeApplyArityMismatch;
@@ -82,6 +83,7 @@ const ComptimeEvalError = problem_mod.ComptimeEvalError;
 
 // Number errors
 const InvalidNumericLiteral = problem_mod.InvalidNumericLiteral;
+const LiteralDefaulted = problem_mod.LiteralDefaulted;
 
 // Generic errors
 const VarWithSnapshot = problem_mod.VarWithSnapshot;
@@ -292,6 +294,7 @@ pub const ReportBuilder = struct {
             bytes: []const u8,
             link: []const u8,
             ident: Ident.Idx,
+            type_ident: Ident.Idx,
             num_ord: u32,
             num: u32,
         },
@@ -322,6 +325,18 @@ pub const ReportBuilder = struct {
         fn ident(b: Ident.Idx) Doc {
             return Doc{
                 .type_ = .{ .ident = b },
+                .preceding_space = true,
+                .annotation = null,
+            };
+        }
+
+        /// Create a Doc rendering a TYPE identifier's display name: import-mapped
+        /// when available, else the ident text with the implementation-detail
+        /// `Builtin.` / `Num.` qualification stripped (users see `Dec`, never
+        /// `Builtin.Num.Dec`).
+        fn typeIdent(b: Ident.Idx) Doc {
+            return Doc{
+                .type_ = .{ .type_ident = b },
                 .preceding_space = true,
                 .annotation = null,
             };
@@ -374,6 +389,16 @@ pub const ReportBuilder = struct {
                 },
                 .ident => |i| {
                     const ident_bytes = try report.addOwnedString(builder.can_ir.getIdent(i));
+                    if (doc.annotation) |annotation| {
+                        try report.document.addAnnotated(ident_bytes, annotation);
+                    } else {
+                        try report.document.addReflowingText(ident_bytes);
+                    }
+                },
+                .type_ident => |i| {
+                    const mapped = builder.import_mapping.get(i) orelse i;
+                    const display = types_mod.TypeWriter.stripBuiltinQualification(builder.can_ir.getIdent(mapped));
+                    const ident_bytes = try report.addOwnedString(display);
                     if (doc.annotation) |annotation| {
                         try report.document.addAnnotated(ident_bytes, annotation);
                     } else {
@@ -827,10 +852,12 @@ pub const ReportBuilder = struct {
             .comptime_expect_failed => |data| return self.buildComptimeExpectFailedReport(data),
             .comptime_eval_error => |data| return self.buildComptimeEvalErrorReport(data),
             .invalid_numeric_literal => |data| return self.buildInvalidNumericLiteralReport(data),
+            .literal_defaulted => |data| return self.buildLiteralDefaultedReport(data),
             .non_exhaustive_match => |data| return self.buildNonExhaustiveMatchReport(data),
             .non_exhaustive_destructure => |data| return self.buildNonExhaustiveDestructureReport(data),
             .redundant_pattern => |data| return self.buildRedundantPatternReport(data),
             .unmatchable_pattern => |data| return self.buildUnmatchablePatternReport(data),
+            .comptime_unused_branch => |data| return self.buildComptimeUnusedBranchReport(data),
         }
     }
 
@@ -1866,13 +1893,15 @@ pub const ReportBuilder = struct {
         self: *Self,
         data: DispatcherDoesNotImplMethod,
     ) Allocator.Error!Report {
-        // Special case: number literal being used where a non-number type is expected
-        if (data.origin == .from_numeral) {
-            return self.buildNumberUsedAsNonNumber(data);
-        }
-        // Special case: string literal being used where a non-string type is expected
-        if (data.origin == .from_quote) {
-            return self.buildStringUsedAsNonString(data);
+        // Special case: a literal used where a type lacking its `from_*`
+        // conversion method is expected.
+        if (data.origin.literalKind()) |kind| {
+            return switch (kind) {
+                // number literal used where a non-number type is expected
+                .numeral => self.buildNumberUsedAsNonNumber(data),
+                // string/interpolation literal used where a non-string type is expected
+                .quote, .interpolation => self.buildStringUsedAsNonString(data),
+            };
         }
 
         var report = Report.init(self.gpa, "MISSING METHOD", .runtime_error);
@@ -2277,6 +2306,55 @@ pub const ReportBuilder = struct {
         return report;
     }
 
+    /// Build a warning report for a literal (number or string) defaulted at a
+    /// generalization boundary (the `-Wtype-defaults` analogue): nothing reachable
+    /// from the definition's type constrains the literal, so the checker committed
+    /// a default and tells the user how to override it.
+    fn buildLiteralDefaultedReport(
+        self: *Self,
+        data: LiteralDefaulted,
+    ) Allocator.Error!Report {
+        var report = Report.init(self.gpa, "LITERAL DEFAULTED", .warning);
+        errdefer report.deinit();
+
+        const default_type = try report.addOwnedString(self.getFormattedString(data.default_snapshot));
+
+        // Exhaustive over literal kinds: adding a kind forces a wording decision here.
+        const intro: []const u8 = switch (data.kind) {
+            .numeral => "Nothing in this definition's type determines the type of this number literal, so it was given the default type",
+            .quote, .interpolation => "Nothing in this definition's type determines the type of this string literal, so it was given the default type",
+        };
+
+        try D.renderSlice(&.{
+            D.bytes(intro),
+            D.bytes(default_type).withAnnotation(.emphasized),
+            D.bytes("instead:"),
+        }, self, &report);
+        try report.document.addLineBreak();
+
+        const region_info = self.module_env.calcRegionInfo(data.region);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        const hint: []const u8 = switch (data.kind) {
+            .numeral => "To use a different numeric type here, add a suffix or a type annotation.",
+            .quote, .interpolation => "To use a different string type here, add a type annotation.",
+        };
+
+        try D.renderSlice(&.{
+            D.bytes("Hint:").withAnnotation(.emphasized),
+            D.bytes(hint),
+        }, self, &report);
+
+        return report;
+    }
+
     /// Build a report for when an anonymous type doesn't support equality
     fn buildTypeDoesNotSupportEquality(
         self: *Self,
@@ -2345,12 +2423,6 @@ pub const ReportBuilder = struct {
         types: TypePair,
         ctx: Context.MethodTypeContext,
     ) Allocator.Error!Report {
-        // Auto-imported builtin types display unqualified (e.g. "Str", not "Builtin.Str").
-        const dispatcher_display = if (self.import_mapping.get(ctx.dispatcher_name)) |display_ident|
-            display_ident
-        else
-            ctx.dispatcher_name;
-
         // Note: The unifier's actual/expected are opposite to display order.
         // We want to show "type has X" (from expected_snapshot) then "expected Y" (from actual_snapshot)
         return try self.makeMismatchReport(
@@ -2359,7 +2431,7 @@ pub const ReportBuilder = struct {
                 D.bytes("The"),
                 D.ident(ctx.method_name).withAnnotation(.inline_code),
                 D.bytes("method on"),
-                D.ident(dispatcher_display).withAnnotation(.inline_code),
+                D.typeIdent(ctx.dispatcher_name).withAnnotation(.inline_code),
                 D.bytes("has an incompatible type:"),
             },
             &.{
@@ -3564,10 +3636,11 @@ pub const ReportBuilder = struct {
 
     /// Build a report for compile-time expect failure
     fn buildComptimeExpectFailedReport(self: *Self, data: ComptimeExpectFailed) Allocator.Error!Report {
-        // Note: data.message contains raw source bytes which we don't display separately
-        // since the source region highlighting already shows the expect expression
         var report = Report.init(self.gpa, "COMPTIME EXPECT FAILED", .runtime_error);
         errdefer report.deinit();
+        const owned_message = try report.addOwnedString(
+            self.problems.getExtraString(data.message),
+        );
 
         try D.renderSlice(&.{
             D.bytes("This"),
@@ -3585,6 +3658,16 @@ pub const ReportBuilder = struct {
             self.source,
             self.module_env.getLineStarts(),
         );
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try D.renderSlice(&.{
+            D.bytes("The"),
+            D.bytes("expect").withAnnotation(.keyword),
+            D.bytes("failed with this message:"),
+        }, self, &report);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(owned_message);
 
         return report;
     }
@@ -3678,6 +3761,13 @@ pub const ReportBuilder = struct {
             D.bytes("_").withAnnotation(.keyword),
             D.bytes("to match anything."),
         }, self, &report);
+        if (data.empirical) {
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try D.renderSlice(&.{
+                D.bytes("Note: This non-exhaustive match was discovered empirically during compile-time evaluation."),
+            }, self, &report);
+        }
 
         return report;
     }
@@ -3716,6 +3806,13 @@ pub const ReportBuilder = struct {
             try report.document.addText("    ");
             try report.document.addCodeBlock(owned_pattern);
             try report.document.addLineBreak();
+        }
+
+        if (data.empirical) {
+            try report.document.addLineBreak();
+            try D.renderSlice(&.{
+                D.bytes("Note: This non-exhaustive destructure was discovered empirically during compile-time evaluation."),
+            }, self, &report);
         }
 
         return report;
@@ -3764,6 +3861,38 @@ pub const ReportBuilder = struct {
 
         try D.renderSlice(&.{
             D.bytes("This pattern matches a type that has no possible values (an uninhabited type), so no value can ever match it."),
+        }, self, &report);
+
+        return report;
+    }
+
+    fn buildComptimeUnusedBranchReport(self: *Self, data: ComptimeUnusedBranch) Allocator.Error!Report {
+        var report = Report.init(self.gpa, "UNUSED BRANCH", .warning);
+        errdefer report.deinit();
+
+        const noun = switch (data.kind) {
+            .match => "match alternative",
+            .if_ => "if branch",
+        };
+        try D.renderSlice(&.{
+            D.bytes("This"),
+            D.bytes(noun),
+            D.bytes("was not taken during compile-time evaluation:"),
+        }, self, &report);
+        try report.document.addLineBreak();
+
+        const region_info = self.module_env.calcRegionInfo(data.branch_region);
+        try report.document.addSourceRegion(
+            region_info,
+            .warning_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        try D.renderSlice(&.{
+            D.bytes("Note: This warning is empirical; it only describes the compile-time evaluation that ran for this definition."),
         }, self, &report);
 
         return report;

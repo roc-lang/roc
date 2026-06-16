@@ -376,6 +376,7 @@ const Solver = struct {
             .dec_lit,
             .str_lit,
             .crash,
+            .comptime_exhaustiveness_failed,
             => {},
             .list => |items| {
                 const elem_ty = try self.listElem(expected);
@@ -520,6 +521,7 @@ const Solver = struct {
             .expect,
             => |child| _ = try self.inferExpr(child),
             .expect_err => |expect_err| _ = try self.inferExpr(expect_err.msg),
+            .comptime_branch_taken => |taken| _ = try self.expectExpr(taken.body, expected),
         }
         return self.program.types.root(expected);
     }

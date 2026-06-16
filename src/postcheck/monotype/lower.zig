@@ -296,11 +296,28 @@ const InspectDefAddress = struct {
     str_ty: u32,
 };
 
+const EqualityDefAddress = struct {
+    value_ty: u32,
+    bool_ty: u32,
+};
+
 const InspectDefEntry = union(enum) {
     reserved: Ast.DefId,
     ready: Ast.DefId,
 
     fn id(self: InspectDefEntry) Ast.DefId {
+        return switch (self) {
+            .reserved => |def_id| def_id,
+            .ready => |def_id| def_id,
+        };
+    }
+};
+
+const EqualityDefEntry = union(enum) {
+    reserved: Ast.DefId,
+    ready: Ast.DefId,
+
+    fn id(self: EqualityDefEntry) Ast.DefId {
         return switch (self) {
             .reserved => |def_id| def_id,
             .ready => |def_id| def_id,
@@ -325,6 +342,7 @@ const Builder = struct {
     nested_site_cache: std.AutoHashMap(NestedSiteAddress, names.ProcSiteId),
     const_expr_cache: std.AutoHashMap(ConstExprAddress, Ast.ExprId),
     inspect_defs: std.AutoHashMap(InspectDefAddress, InspectDefEntry),
+    equality_defs: std.AutoHashMap(EqualityDefAddress, EqualityDefEntry),
     hosted_catalog: []HostedCatalogEntry = &.{},
     method_lookup_index: []MethodLookupIndexEntry = &.{},
     u64_ty: ?Type.TypeId = null,
@@ -350,6 +368,7 @@ const Builder = struct {
             .nested_site_cache = std.AutoHashMap(NestedSiteAddress, names.ProcSiteId).init(allocator),
             .const_expr_cache = std.AutoHashMap(ConstExprAddress, Ast.ExprId).init(allocator),
             .inspect_defs = std.AutoHashMap(InspectDefAddress, InspectDefEntry).init(allocator),
+            .equality_defs = std.AutoHashMap(EqualityDefAddress, EqualityDefEntry).init(allocator),
             .source_file_ids = std.AutoHashMap(u32, u32).init(allocator),
         };
     }
@@ -368,6 +387,7 @@ const Builder = struct {
         self.source_file_ids.deinit();
         self.allocator.free(self.method_lookup_index);
         self.allocator.free(self.hosted_catalog);
+        self.equality_defs.deinit();
         self.inspect_defs.deinit();
         self.const_expr_cache.deinit();
         self.nested_site_cache.deinit();
@@ -926,7 +946,7 @@ const Builder = struct {
         try body_ctx.constrainTypeToMono(template.checked_fn_root, mono_fn_ty);
         try body_ctx.constrainKnownType(root.checked_type, mono_fn_ty);
 
-        const lowered = try body_ctx.lowerExprAtType(wrapper.body_expr, mono_fn_ty);
+        const lowered = try body_ctx.lowerComptimeRootExprAtType(wrapper.body_expr, mono_fn_ty);
         try self.drainSpecRequests(graph);
         return lowered;
     }
@@ -2671,6 +2691,14 @@ const Builder = struct {
         } });
     }
 
+    fn twoArgFnType(self: *Builder, arg_ty: Type.TypeId, ret_ty: Type.TypeId) Allocator.Error!Type.TypeId {
+        const args = [_]Type.TypeId{ arg_ty, arg_ty };
+        return try self.program.types.add(.{ .func = .{
+            .args = try self.program.types.addSpan(&args),
+            .ret = ret_ty,
+        } });
+    }
+
     fn singleTypeArg(self: *Builder, span: Type.Span, comptime owner: []const u8) Type.TypeId {
         const args = self.program.types.span(span);
         if (args.len != 1) Common.invariant(owner ++ " type reached Monotype inspect lowering without one type argument");
@@ -2750,6 +2778,7 @@ const BodyContext = struct {
     owner_template: names.ProcTemplate,
     owner_context_fn_key: names.TypeDigest,
     current_fn_key: names.TypeDigest,
+    comptime_exhaustiveness_depth: u32,
     binders: BinderMap,
     local_proc_contexts: std.AutoHashMap(checked.PatternBinderId, names.TypeDigest),
     /// This specialization's type solver, shared by every instantiation
@@ -2769,6 +2798,10 @@ const BodyContext = struct {
     /// on the branch comparing the bound value against the literal's
     /// `from_numeral`-converted constant.
     pattern_literal_guards: std.ArrayList(PatternLiteralGuard),
+    /// Structural equality types currently being expanded in this context.
+    /// Seeing the same type again is a real recursive edge, which lowers to a
+    /// reserved generated equality helper instead of recursively expanding AST.
+    equality_expansion_stack: std.AutoHashMap(Type.TypeId, void),
 
     const PatternLiteralGuard = struct {
         local: Ast.LocalId,
@@ -2820,6 +2853,7 @@ const BodyContext = struct {
             .owner_template = owner_template,
             .owner_context_fn_key = .{},
             .current_fn_key = .{},
+            .comptime_exhaustiveness_depth = 0,
             .binders = BinderMap.init(allocator),
             .local_proc_contexts = std.AutoHashMap(checked.PatternBinderId, names.TypeDigest).init(allocator),
             .graph = graph,
@@ -2827,10 +2861,12 @@ const BodyContext = struct {
             .string_literals = string_literals,
             .loop_contexts = .empty,
             .pattern_literal_guards = .empty,
+            .equality_expansion_stack = std.AutoHashMap(Type.TypeId, void).init(allocator),
         };
     }
 
     fn deinit(self: *BodyContext) void {
+        self.equality_expansion_stack.deinit();
         self.pattern_literal_guards.deinit(self.allocator);
         self.loop_contexts.deinit(self.allocator);
         self.allocator.free(self.string_literals);
@@ -2845,7 +2881,10 @@ const BodyContext = struct {
     }
 
     fn nestedInstantiationContext(self: *BodyContext, current_fn_key: names.TypeDigest) Allocator.Error!BodyContext {
-        return try self.childContextWithTypeCells(current_fn_key, false);
+        var child = try self.childContextWithTypeCells(current_fn_key, false);
+        errdefer child.deinit();
+        try child.constrainCopiedBinderTypes();
+        return child;
     }
 
     fn childContextWithTypeCells(
@@ -2857,6 +2896,7 @@ const BodyContext = struct {
         errdefer child.deinit();
         child.owner_context_fn_key = self.owner_context_fn_key;
         child.current_fn_key = current_fn_key;
+        child.comptime_exhaustiveness_depth = self.comptime_exhaustiveness_depth;
 
         var binder_iter = self.binders.iterator();
         while (binder_iter.next()) |entry| {
@@ -2878,6 +2918,15 @@ const BodyContext = struct {
         try child.loop_contexts.appendSlice(child.allocator, self.loop_contexts.items);
 
         return child;
+    }
+
+    fn constrainCopiedBinderTypes(self: *BodyContext) Allocator.Error!void {
+        var binder_iter = self.binders.iterator();
+        while (binder_iter.next()) |entry| {
+            const local = entry.value_ptr.*;
+            const local_ty = self.builder.program.locals.items[@intFromEnum(local)].ty;
+            try self.constrainTypeToMono(checkedBinderType(self.view, entry.key_ptr.*), local_ty);
+        }
     }
 
     /// Constrain a checked type to a Monotype: instantiate the checked type
@@ -3235,7 +3284,7 @@ const BodyContext = struct {
                 }
                 return .{
                     .args = .empty(),
-                    .body = try self.lowerExprAtType(wrapper.body_expr, ret_ty),
+                    .body = try self.lowerComptimeRootExprAtType(wrapper.body_expr, ret_ty),
                     .ret = ret_ty,
                 };
             },
@@ -3288,6 +3337,13 @@ const BodyContext = struct {
         ret_ty: Type.TypeId,
     ) Allocator.Error!LoweredLambdaArgs {
         if (arg_tys.len != checked_args.len) Common.invariant("lambda arity differs from concrete function type");
+        const saved_loc = self.builder.program.current_loc;
+        defer self.builder.program.current_loc = saved_loc;
+        const body_expr = self.view.bodies.exprs[@intFromEnum(checked_body)];
+        self.builder.program.current_loc = try self.sourceLocFor(body_expr.source_region);
+
+        const saved_comptime_depth = self.resetComptimeExhaustivenessDepth();
+        defer self.restoreComptimeExhaustivenessDepth(saved_comptime_depth);
 
         const args = try self.allocator.alloc(Ast.TypedLocal, checked_args.len);
         defer self.allocator.free(args);
@@ -3327,8 +3383,8 @@ const BodyContext = struct {
             .body = checked_body,
         } }, ret_ty);
         const body_loc = self.builder.program.exprLoc(body);
-        const saved_loc = self.builder.program.current_loc;
-        defer self.builder.program.current_loc = saved_loc;
+        const saved_body_loc = self.builder.program.current_loc;
+        defer self.builder.program.current_loc = saved_body_loc;
         self.builder.program.current_loc = body_loc;
         var remaining = arg_lets.items.len;
         while (remaining > 0) {
@@ -3375,7 +3431,7 @@ const BodyContext = struct {
         return switch (expr.data) {
             .call => |call| (try self.callResultMonoType(expr.ty, call, null)) orelse try self.lowerType(expr.ty),
             .dispatch_call => |plan| (try self.dispatchResultMonoType(expr.ty, plan, null)) orelse try self.lowerType(expr.ty),
-            .interpolation => |plan| (try self.dispatchResultMonoType(expr.ty, plan, null)) orelse try self.lowerType(expr.ty),
+            .interpolation => |interpolation| (try self.dispatchResultMonoType(expr.ty, interpolation.plan, null)) orelse try self.lowerType(expr.ty),
             .type_dispatch_call => |plan| (try self.dispatchResultMonoType(expr.ty, plan, null)) orelse try self.lowerType(expr.ty),
             .method_eq => |plan| (try self.dispatchResultMonoType(expr.ty, plan, null)) orelse try self.lowerType(expr.ty),
             .lookup_local => |lookup| try self.lookupExprMonoType(expr.ty, lookup.resolved),
@@ -3412,7 +3468,7 @@ const BodyContext = struct {
         switch (expr.data) {
             .call => |call| return try self.lowerCallExpr(expr.ty, call),
             .dispatch_call => |plan| return try self.lowerDispatchExpr(expr.ty, plan),
-            .interpolation => |plan| return try self.lowerDispatchExpr(expr.ty, plan),
+            .interpolation => |interpolation| return try self.lowerDispatchExpr(expr.ty, interpolation.plan),
             .type_dispatch_call => |plan| return try self.lowerDispatchExpr(expr.ty, plan),
             .method_eq => |plan| return try self.lowerDispatchExpr(expr.ty, plan),
             .structural_eq => |eq| return try self.lowerDirectStructuralEq(expr.ty, eq),
@@ -3420,6 +3476,30 @@ const BodyContext = struct {
         }
         const ty = try self.lowerExprType(expr_id);
         return try self.lowerExprWithType(expr_id, ty);
+    }
+
+    fn lowerComptimeRootExprAtType(
+        self: *BodyContext,
+        expr_id: checked.CheckedExprId,
+        ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        self.comptime_exhaustiveness_depth += 1;
+        defer self.comptime_exhaustiveness_depth -= 1;
+        return try self.lowerExprAtType(expr_id, ty);
+    }
+
+    fn resetComptimeExhaustivenessDepth(self: *BodyContext) u32 {
+        const saved = self.comptime_exhaustiveness_depth;
+        self.comptime_exhaustiveness_depth = 0;
+        return saved;
+    }
+
+    fn restoreComptimeExhaustivenessDepth(self: *BodyContext, saved: u32) void {
+        self.comptime_exhaustiveness_depth = saved;
+    }
+
+    fn inComptimeExhaustivenessContext(self: *const BodyContext) bool {
+        return self.comptime_exhaustiveness_depth != 0;
     }
 
     fn lowerExprWithType(
@@ -3444,12 +3524,12 @@ const BodyContext = struct {
             .dec_small => Common.invariant("small decimal literal reached Monotype after numeric finalization"),
             .num_from_numeral => |plan| {
                 if (try self.restoredNumeralConst(expr_id, ty)) |restored| return restored;
-                return try self.lowerNumeralCall(expr.ty, plan, ty);
+                return try self.lowerNumeralFold(expr.ty, plan, ty);
             },
             .typed_frac => Common.invariant("typed fractional integer literal reached Monotype after numeric finalization"),
             .typed_num_from_numeral => |plan| {
                 if (try self.restoredNumeralConst(expr_id, ty)) |restored| return restored;
-                return try self.lowerNumeralCall(expr.ty, plan, ty);
+                return try self.lowerNumeralFold(expr.ty, plan, ty);
             },
             .str_from_quote => |quote| {
                 if (try self.restoredNumeralConst(expr_id, ty)) |restored| return restored;
@@ -4668,7 +4748,10 @@ const BodyContext = struct {
                     try self.graph.unify(formal_node, try self.graph.importMono(evidence_ty));
                 }
             },
-            .generated_numeral, .generated_quote => {},
+            .generated_interpolation_iter,
+            .generated_numeral,
+            .generated_quote,
+            => {},
         }
     }
 
@@ -4780,7 +4863,7 @@ const BodyContext = struct {
         switch (expr.data) {
             .call => |call| return try self.callResultMonoType(expr.ty, call, expected_ty),
             .dispatch_call => |plan| return try self.dispatchResultMonoType(expr.ty, plan, expected_ty),
-            .interpolation => |plan| return try self.dispatchResultMonoType(expr.ty, plan, expected_ty),
+            .interpolation => |interpolation| return try self.dispatchResultMonoType(expr.ty, interpolation.plan, expected_ty),
             .type_dispatch_call => |plan| return try self.dispatchResultMonoType(expr.ty, plan, expected_ty),
             .method_eq => |plan| return try self.dispatchResultMonoType(expr.ty, plan, expected_ty),
             .field_access => |field| return try self.fieldAccessMonoType(field.receiver, field.field_name),
@@ -5155,7 +5238,7 @@ const BodyContext = struct {
             try graph.addMonoView(result_node, ty);
         }
         const live_ty = try graph.monoFor(result_node);
-        const lowered = try body_ctx.lowerExprAtType(body.body_expr, live_ty);
+        const lowered = try body_ctx.lowerComptimeRootExprAtType(body.body_expr, live_ty);
         try self.builder.drainSpecRequests(graph);
         return lowered;
     }
@@ -5418,6 +5501,7 @@ const BodyContext = struct {
     ) Allocator.Error!Ast.ExprId {
         return switch (operand) {
             .checked_expr => |expr| try self.lowerExprAtType(expr, ty),
+            .generated_interpolation_iter => |expr| try self.lowerGeneratedInterpolationIter(expr, ty),
             .generated_numeral => |literal| try self.lowerNumeralValue(literal, ty),
             .generated_quote => |literal| try self.lowerQuoteValue(literal, ty),
         };
@@ -5435,6 +5519,257 @@ const BodyContext = struct {
             if (pre.index == index) return pre.expr;
         }
         return try self.lowerDispatchOperandAtType(plan.args[index], ty);
+    }
+
+    fn lowerGeneratedInterpolationIter(
+        self: *BodyContext,
+        expr_id: checked.CheckedExprId,
+        ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const expr = self.view.bodies.exprs[@intFromEnum(expr_id)];
+        const interpolation = switch (expr.data) {
+            .interpolation => |interpolation| interpolation,
+            else => Common.invariant("generated interpolation iterator operand pointed at non-interpolation expression"),
+        };
+
+        const backing_ty = self.builder.namedBackingType(ty) orelse
+            Common.invariant("generated interpolation iterator expected Iter nominal type");
+        const len_field = self.recordFieldByText(backing_ty, "len_if_known");
+        const step_field = self.recordFieldByText(backing_ty, "step");
+        const step_fn_ty = step_field.ty;
+        const step_shape = self.builder.functionShape(step_fn_ty, "generated interpolation iterator step field was not a function");
+        if (self.builder.program.types.span(step_shape.args).len != 0) {
+            Common.invariant("generated interpolation iterator step function was not zero-argument");
+        }
+
+        return try self.lowerInterpolationIterFromIndex(
+            interpolation,
+            0,
+            expr_id,
+            ty,
+            backing_ty,
+            len_field.ty,
+            step_fn_ty,
+            step_shape.ret,
+        );
+    }
+
+    fn lowerInterpolationIterFromIndex(
+        self: *BodyContext,
+        interpolation: checked.CheckedInterpolation,
+        index: usize,
+        source_expr_id: checked.CheckedExprId,
+        iter_ty: Type.TypeId,
+        backing_ty: Type.TypeId,
+        len_ty: Type.TypeId,
+        step_fn_ty: Type.TypeId,
+        step_ret_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const remaining = interpolation.parts.len - index;
+        const len_expr = try self.lowerInterpolationLenIfKnown(remaining, len_ty);
+
+        if (index == interpolation.parts.len) {
+            const step_expr = try self.lowerInterpolationDoneStep(interpolation.step_fn_ty, source_expr_id, index, step_fn_ty, step_ret_ty);
+            return try self.lowerInterpolationIterRecord(iter_ty, backing_ty, len_expr, step_expr);
+        }
+
+        const rest_expr = try self.lowerInterpolationIterFromIndex(
+            interpolation,
+            index + 1,
+            source_expr_id,
+            iter_ty,
+            backing_ty,
+            len_ty,
+            step_fn_ty,
+            step_ret_ty,
+        );
+        const rest_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), iter_ty);
+        const rest_pat = try self.builder.bindPat(rest_local, iter_ty);
+        const rest_ref = try self.builder.localExpr(rest_local, iter_ty);
+        const step_expr = try self.lowerInterpolationOneStep(
+            interpolation,
+            index,
+            source_expr_id,
+            rest_ref,
+            iter_ty,
+            interpolation.step_fn_ty,
+            step_fn_ty,
+            step_ret_ty,
+        );
+        const iter_expr = try self.lowerInterpolationIterRecord(iter_ty, backing_ty, len_expr, step_expr);
+        return try self.builder.program.addExpr(.{ .ty = iter_ty, .data = .{ .let_ = .{
+            .bind = rest_pat,
+            .value = rest_expr,
+            .rest = iter_expr,
+        } } });
+    }
+
+    fn lowerInterpolationIterRecord(
+        self: *BodyContext,
+        iter_ty: Type.TypeId,
+        backing_ty: Type.TypeId,
+        len_expr: Ast.ExprId,
+        step_expr: Ast.ExprId,
+    ) Allocator.Error!Ast.ExprId {
+        const fields = self.builder.program.types.fieldSpan(self.builder.recordFieldsSpan(backing_ty));
+        const lowered = try self.allocator.alloc(Ast.FieldExpr, fields.len);
+        defer self.allocator.free(lowered);
+
+        for (fields, 0..) |field, i| {
+            const label = self.builder.program.names.recordFieldLabelText(field.name);
+            lowered[i] = .{
+                .name = field.name,
+                .value = if (Ident.textEql(label, "len_if_known"))
+                    len_expr
+                else if (Ident.textEql(label, "step"))
+                    step_expr
+                else
+                    Common.invariant("Iter backing record contained an unexpected field"),
+            };
+        }
+
+        const record_expr = try self.builder.program.addExpr(.{
+            .ty = backing_ty,
+            .data = .{ .record = try self.builder.program.addFieldExprSpan(lowered) },
+        });
+        return try self.builder.program.addExpr(.{
+            .ty = iter_ty,
+            .data = .{ .nominal = record_expr },
+        });
+    }
+
+    fn lowerInterpolationLenIfKnown(
+        self: *BodyContext,
+        remaining: usize,
+        ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const known_tag = self.monoTagByText(ty, "Known");
+        const payloads = self.builder.program.types.span(known_tag.payloads);
+        if (payloads.len != 1) Common.invariant("Iter.len_if_known Known tag did not have one payload");
+        const count = try self.builder.intLiteralExpr(@intCast(remaining), payloads[0]);
+        return try self.builder.program.addExpr(.{ .ty = ty, .data = .{ .tag = .{
+            .name = known_tag.name,
+            .payloads = try self.builder.program.addExprSpan(&[_]Ast.ExprId{count}),
+        } } });
+    }
+
+    fn lowerInterpolationDoneStep(
+        self: *BodyContext,
+        source_fn_ty: checked.CheckedTypeId,
+        source_expr_id: checked.CheckedExprId,
+        index: usize,
+        step_fn_ty: Type.TypeId,
+        step_ret_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const done_tag = self.monoTagByText(step_ret_ty, "Done");
+        const body = try self.builder.program.addExpr(.{ .ty = step_ret_ty, .data = .{ .tag = .{
+            .name = done_tag.name,
+            .payloads = .empty(),
+        } } });
+        return try self.lowerInterpolationStepLambda(source_fn_ty, source_expr_id, index, step_fn_ty, body);
+    }
+
+    fn lowerInterpolationOneStep(
+        self: *BodyContext,
+        interpolation: checked.CheckedInterpolation,
+        index: usize,
+        source_expr_id: checked.CheckedExprId,
+        rest_expr: Ast.ExprId,
+        rest_ty: Type.TypeId,
+        source_fn_ty: checked.CheckedTypeId,
+        step_fn_ty: Type.TypeId,
+        step_ret_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const item_ty = self.iterItemType(rest_ty);
+        const item_fields = self.builder.tupleItemTypes(item_ty);
+        if (item_fields.len != 2) Common.invariant("generated interpolation iterator item was not a pair");
+
+        const part = interpolation.parts[index];
+        const value_expr = try self.lowerExprAtType(part.value, item_fields[0]);
+        const segment_expr = try self.lowerExprAtType(part.following_segment, item_fields[1]);
+        const item_expr = try self.builder.program.addExpr(.{ .ty = item_ty, .data = .{
+            .tuple = try self.builder.program.addExprSpan(&[_]Ast.ExprId{ value_expr, segment_expr }),
+        } });
+
+        const one_tag = self.monoTagByText(step_ret_ty, "One");
+        const payloads = self.builder.program.types.span(one_tag.payloads);
+        if (payloads.len != 1) Common.invariant("Iter step One tag did not have one record payload");
+        const payload_ty = payloads[0];
+        const payload_expr = try self.lowerInterpolationOnePayload(payload_ty, item_expr, rest_expr);
+
+        const body = try self.builder.program.addExpr(.{ .ty = step_ret_ty, .data = .{ .tag = .{
+            .name = one_tag.name,
+            .payloads = try self.builder.program.addExprSpan(&[_]Ast.ExprId{payload_expr}),
+        } } });
+        return try self.lowerInterpolationStepLambda(source_fn_ty, source_expr_id, index, step_fn_ty, body);
+    }
+
+    fn lowerInterpolationOnePayload(
+        self: *BodyContext,
+        ty: Type.TypeId,
+        item_expr: Ast.ExprId,
+        rest_expr: Ast.ExprId,
+    ) Allocator.Error!Ast.ExprId {
+        const fields = self.builder.program.types.fieldSpan(self.builder.recordFieldsSpan(ty));
+        const lowered = try self.allocator.alloc(Ast.FieldExpr, fields.len);
+        defer self.allocator.free(lowered);
+
+        for (fields, 0..) |field, i| {
+            const label = self.builder.program.names.recordFieldLabelText(field.name);
+            lowered[i] = .{
+                .name = field.name,
+                .value = if (Ident.textEql(label, "item"))
+                    item_expr
+                else if (Ident.textEql(label, "rest"))
+                    rest_expr
+                else
+                    Common.invariant("Iter step One payload contained an unexpected field"),
+            };
+        }
+
+        return try self.builder.program.addExpr(.{
+            .ty = ty,
+            .data = .{ .record = try self.builder.program.addFieldExprSpan(lowered) },
+        });
+    }
+
+    fn lowerInterpolationStepLambda(
+        self: *BodyContext,
+        source_fn_ty: checked.CheckedTypeId,
+        source_expr_id: checked.CheckedExprId,
+        index: usize,
+        step_fn_ty: Type.TypeId,
+        body: Ast.ExprId,
+    ) Allocator.Error!Ast.ExprId {
+        const fn_id = try self.builder.program.addFn(.{
+            .fn_def = .{ .checked_generated = self.owner_template },
+            .source_fn_ty = source_fn_ty,
+            .source_fn_key = generatedInterpolationStepKey(self.current_fn_key, source_expr_id, index),
+            .mono_fn_ty = step_fn_ty,
+        });
+        return try self.builder.program.addExpr(.{ .ty = step_fn_ty, .data = .{ .lambda = .{
+            .fn_id = fn_id,
+            .args = try self.builder.program.addTypedLocalSpan(&.{}),
+            .body = body,
+        } } });
+    }
+
+    fn recordFieldByText(self: *BodyContext, ty: Type.TypeId, text: []const u8) Type.Field {
+        for (self.builder.program.types.fieldSpan(self.builder.recordFieldsSpan(ty))) |field| {
+            if (Ident.textEql(self.builder.program.names.recordFieldLabelText(field.name), text)) return field;
+        }
+        Common.invariant("expected record field was absent from monotype type");
+    }
+
+    fn iterItemType(self: *BodyContext, ty: Type.TypeId) Type.TypeId {
+        return switch (self.builder.program.types.get(ty)) {
+            .named => |named| blk: {
+                const args = self.builder.program.types.span(named.args);
+                if (args.len != 1) Common.invariant("Iter nominal did not have one type argument");
+                break :blk args[0];
+            },
+            else => Common.invariant("generated interpolation iterator expected named Iter type"),
+        };
     }
 
     fn lowerExprAtType(
@@ -5460,7 +5795,7 @@ const BodyContext = struct {
                 });
             },
             .dispatch_call => |plan| return try self.lowerDispatchExprAtType(expr.ty, plan, ty),
-            .interpolation => |plan| return try self.lowerDispatchExprAtType(expr.ty, plan, ty),
+            .interpolation => |interpolation| return try self.lowerDispatchExprAtType(expr.ty, interpolation.plan, ty),
             .type_dispatch_call => |plan| return try self.lowerDispatchExprAtType(expr.ty, plan, ty),
             .method_eq => |plan| return try self.lowerDispatchExprAtType(expr.ty, plan, ty),
             .lookup_local => |lookup| return try self.lowerLookupExprAtType(expr.ty, lookup.resolved, ty),
@@ -5881,6 +6216,55 @@ const BodyContext = struct {
             .pending => null,
             else => Common.invariant("numeral conversion root stored a non-constant payload"),
         };
+    }
+
+    /// Fold a `from_numeral` conversion into a constant at its concrete target
+    /// type. Compile-time finalization only registers a constant for literals
+    /// whose type is already concrete at Check time; a literal inside a generic
+    /// body (e.g. the `1` in `Iter.exclusive_range`'s `start.add_checked(1)`) is
+    /// typed by the abstract `num` var and only gains a concrete type here, after
+    /// monomorphization. Rather than emit a runtime `num_from_numeral` low-level
+    /// op — which the compiled backends deliberately reject — we evaluate the
+    /// conversion at the stage that owns monomorphic types, reusing the exact
+    /// decimal-text + parse behavior the finalization/interpreter path uses so
+    /// the constant is identical regardless of where the literal is monomorphized.
+    fn lowerNumeralFold(
+        self: *BodyContext,
+        checked_ret_ty: checked.CheckedTypeId,
+        maybe_plan: ?static_dispatch.StaticDispatchPlanId,
+        target_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        // Only the builtin numeric types implement `from_numeral` as the
+        // `num_from_numeral` low-level op that compiled backends reject. A custom
+        // numeric type carries a user-defined `from_numeral` body that lowers to
+        // an ordinary call the backends handle, so it must keep going through the
+        // real dispatch rather than being folded.
+        const primitive = switch (self.builder.shapeContent(target_ty)) {
+            .primitive => |p| p,
+            else => return try self.lowerNumeralCall(checked_ret_ty, maybe_plan, target_ty),
+        };
+
+        const plan_id = maybe_plan orelse Common.invariant("checked from_numeral expression reached Monotype without a dispatch plan");
+        const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
+        if (plan.args.len != 1) Common.invariant("from_numeral plan did not carry exactly one operand");
+        const literal = switch (plan.args[0]) {
+            .generated_numeral => |lit| lit,
+            else => Common.invariant("from_numeral plan operand was not a generated numeral"),
+        };
+
+        const text = try checked.numeralLiteralDecimalText(self.allocator, self.view.module_env, literal);
+        defer self.allocator.free(text);
+
+        const folded = foldNumeralPrimitive(primitive, text);
+
+        // A value that does not fit its concrete target (e.g. a literal forced to
+        // a too-narrow type after monomorphization) matches the existing generic
+        // from_numeral behavior: a runtime crash on the conversion's Err branch.
+        const data = folded orelse blk: {
+            const msg = try self.builder.program.addStringLiteral("invalid numeric literal");
+            break :blk Ast.ExprData{ .crash = msg };
+        };
+        return try self.builder.program.addExpr(.{ .ty = target_ty, .data = data });
     }
 
     /// Materialize a string literal as the `Str` argument of a `from_quote`
@@ -6897,7 +7281,7 @@ const BodyContext = struct {
         return switch (expr.data) {
             .call => |call| try self.callResultMonoType(expr.ty, call, expected_ty),
             .dispatch_call => |plan| try self.dispatchResultMonoType(expr.ty, plan, expected_ty),
-            .interpolation => |plan| try self.dispatchResultMonoType(expr.ty, plan, expected_ty),
+            .interpolation => |interpolation| try self.dispatchResultMonoType(expr.ty, interpolation.plan, expected_ty),
             .type_dispatch_call => |plan| try self.dispatchResultMonoType(expr.ty, plan, expected_ty),
             .method_eq => |plan| try self.dispatchResultMonoType(expr.ty, plan, expected_ty),
             .lookup_local => |lookup| try self.lookupExprMonoType(expr.ty, lookup.resolved),
@@ -6936,7 +7320,25 @@ const BodyContext = struct {
         method_name: []const u8,
         bool_ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprId {
-        return switch (self.builder.program.types.get(ty)) {
+        const shape = self.builder.program.types.get(ty);
+        const expands_structurally = switch (shape) {
+            .record, .tuple, .tag_union => true,
+            .named => |named| named.backing != null,
+            else => false,
+        };
+        var remove_active_expansion = false;
+        defer if (remove_active_expansion) {
+            _ = self.equality_expansion_stack.remove(ty);
+        };
+        if (expands_structurally) {
+            if (self.equality_expansion_stack.contains(ty)) {
+                return try self.equalityCall(ty, lhs, rhs, method_name, bool_ty);
+            }
+            try self.equality_expansion_stack.put(ty, {});
+            remove_active_expansion = true;
+        }
+
+        return switch (shape) {
             .list => try self.lowerOwnedEqualityCall(ty, lhs, rhs, method_name, bool_ty),
             .record => |fields| try self.lowerRecordEqualityExpr(self.builder.program.types.fieldSpan(fields), lhs, rhs, method_name, bool_ty),
             .tuple => |items| try self.lowerTupleEqualityExpr(self.builder.program.types.span(items), lhs, rhs, method_name, bool_ty),
@@ -6960,6 +7362,79 @@ const BodyContext = struct {
                 .negated = false,
             } } }),
         };
+    }
+
+    fn equalityCall(
+        self: *BodyContext,
+        value_ty: Type.TypeId,
+        lhs: Ast.ExprId,
+        rhs: Ast.ExprId,
+        method_name: []const u8,
+        bool_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        if (!std.mem.eql(u8, method_name, "is_eq")) {
+            Common.invariant("recursive structural equality helper requested for a non-is_eq method");
+        }
+
+        const def_id = try self.equalityDefForType(value_ty, method_name, bool_ty);
+        const fn_ty = try self.builder.twoArgFnType(value_ty, bool_ty);
+        const callee = try self.builder.program.addExpr(.{
+            .ty = fn_ty,
+            .data = .{ .def_ref = def_id },
+        });
+        const args = [_]Ast.ExprId{ lhs, rhs };
+        return try self.builder.program.addExpr(.{
+            .ty = bool_ty,
+            .data = .{ .call_value = .{
+                .callee = callee,
+                .args = try self.builder.program.addExprSpan(&args),
+            } },
+        });
+    }
+
+    fn equalityDefForType(
+        self: *BodyContext,
+        value_ty: Type.TypeId,
+        method_name: []const u8,
+        bool_ty: Type.TypeId,
+    ) Allocator.Error!Ast.DefId {
+        const address = EqualityDefAddress{
+            .value_ty = @intFromEnum(value_ty),
+            .bool_ty = @intFromEnum(bool_ty),
+        };
+        if (self.builder.equality_defs.get(address)) |entry| return entry.id();
+
+        const def_id: Ast.DefId = @enumFromInt(@as(u32, @intCast(self.builder.program.defs.items.len)));
+        try self.builder.program.defs.append(self.allocator, undefined);
+        try self.builder.equality_defs.put(address, .{ .reserved = def_id });
+
+        const lhs_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), value_ty);
+        const rhs_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), value_ty);
+        const lhs_expr = try self.builder.localExpr(lhs_local, value_ty);
+        const rhs_expr = try self.builder.localExpr(rhs_local, value_ty);
+
+        // The helper body is the structural expansion for this type. Temporarily
+        // remove the caller's active mark so the body expands one layer and only
+        // recursive edges inside that layer call back to the reserved helper.
+        if (!self.equality_expansion_stack.remove(value_ty)) {
+            Common.invariant("recursive structural equality helper requested outside an active equality expansion");
+        }
+        defer self.equality_expansion_stack.putAssumeCapacity(value_ty, {});
+
+        const body = try self.lowerEqualityExpr(value_ty, lhs_expr, rhs_expr, method_name, bool_ty);
+        const args = try self.builder.program.addTypedLocalSpan(&.{
+            .{ .local = lhs_local, .ty = value_ty },
+            .{ .local = rhs_local, .ty = value_ty },
+        });
+        self.builder.program.defs.items[@intFromEnum(def_id)] = .{
+            .symbol = self.builder.symbols.fresh(),
+            .fn_def = null,
+            .args = args,
+            .body = .{ .roc = body },
+            .ret = bool_ty,
+        };
+        try self.builder.equality_defs.put(address, .{ .ready = def_id });
+        return def_id;
     }
 
     /// Decomposes structural equality on a nominal type by unwrapping both operands to
@@ -7266,10 +7741,11 @@ const BodyContext = struct {
     }
 
     fn lowerMatchExpr(self: *BodyContext, expr_id: checked.CheckedExprId, match: anytype, result_ty: Type.TypeId) Allocator.Error!Ast.ExprId {
+        const comptime_site = try self.matchComptimeSite(expr_id, match);
         const merge_binders = try self.stateMergeBinders(expr_id);
         defer self.allocator.free(merge_binders);
         if (merge_binders.len == 0) {
-            return try self.lowerMatchExprWithOutput(match, .{ .value = result_ty });
+            return try self.lowerMatchExprWithOutput(match, .{ .value = result_ty }, comptime_site);
         }
 
         const state_ty = try self.stateResultType(merge_binders, result_ty);
@@ -7277,7 +7753,7 @@ const BodyContext = struct {
             .result_ty = result_ty,
             .state_ty = state_ty,
             .merge_binders = merge_binders,
-        } });
+        } }, comptime_site);
 
         const pattern_items = try self.allocator.alloc(Ast.PatId, merge_binders.len + 1);
         defer self.allocator.free(pattern_items);
@@ -7300,12 +7776,17 @@ const BodyContext = struct {
         } } });
     }
 
-    fn lowerMatchExprWithOutput(self: *BodyContext, match: anytype, output: MatchOutput) Allocator.Error!Ast.ExprId {
+    fn lowerMatchExprWithOutput(
+        self: *BodyContext,
+        match: anytype,
+        output: MatchOutput,
+        comptime_site: ?Ast.ComptimeSiteId,
+    ) Allocator.Error!Ast.ExprId {
         const output_ty = self.matchOutputType(output);
         if (!self.matchContainsListPattern(match)) {
             return try self.builder.program.addExpr(.{
                 .ty = output_ty,
-                .data = try self.lowerMatch(match, output),
+                .data = try self.lowerMatch(match, output, comptime_site),
             });
         }
 
@@ -7313,7 +7794,7 @@ const BodyContext = struct {
         const scrutinee_ty = self.builder.program.exprs.items[@intFromEnum(scrutinee)].ty;
         const scrutinee_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), scrutinee_ty);
         const scrutinee_expr = try self.builder.localExpr(scrutinee_local, scrutinee_ty);
-        const rest = try self.lowerListPatternMatchAlternatives(scrutinee_expr, scrutinee_ty, match.branches, output);
+        const rest = try self.lowerListPatternMatchAlternatives(scrutinee_expr, scrutinee_ty, match.branches, output, comptime_site);
         return try self.builder.program.addExpr(.{ .ty = output_ty, .data = .{ .let_ = .{
             .bind = try self.builder.bindPat(scrutinee_local, scrutinee_ty),
             .value = scrutinee,
@@ -7382,6 +7863,44 @@ const BodyContext = struct {
         };
     }
 
+    fn patternCanMiss(self: *BodyContext, pattern_id: checked.CheckedPatternId) bool {
+        const pattern = self.view.bodies.patterns[@intFromEnum(pattern_id)];
+        return switch (pattern.data) {
+            .assign,
+            .underscore,
+            => false,
+            .as => |as| self.patternCanMiss(as.pattern),
+            .nominal => |nominal| self.patternCanMiss(nominal.backing_pattern),
+            .tuple => |items| blk: {
+                for (items) |child| {
+                    if (self.patternCanMiss(child)) break :blk true;
+                }
+                break :blk false;
+            },
+            .record_destructure => |destructs| blk: {
+                for (destructs) |destruct| {
+                    const child = switch (destruct.kind) {
+                        .required, .sub_pattern, .rest => |child_pattern| child_pattern,
+                    };
+                    if (self.patternCanMiss(child)) break :blk true;
+                }
+                break :blk false;
+            },
+            .applied_tag,
+            .list,
+            .num_literal,
+            .small_dec_literal,
+            .dec_literal,
+            .frac_f32_literal,
+            .frac_f64_literal,
+            .str_literal,
+            => true,
+            .pending,
+            .runtime_error,
+            => false,
+        };
+    }
+
     fn recordDestructsNeedExplicitRest(self: *BodyContext, destructs: []const checked.CheckedRecordDestruct) bool {
         for (destructs) |destruct| {
             switch (destruct.kind) {
@@ -7398,18 +7917,25 @@ const BodyContext = struct {
         scrutinee_ty: Type.TypeId,
         branches: []const checked.CheckedMatchBranch,
         output: MatchOutput,
+        comptime_site: ?Ast.ComptimeSiteId,
     ) Allocator.Error!Ast.ExprId {
         const output_ty = self.matchOutputType(output);
-        const msg = try self.builder.program.addStringLiteral("non-exhaustive checked match reached Monotype");
-        var fallback = try self.builder.program.addExpr(.{ .ty = output_ty, .data = .{ .crash = msg } });
+        var fallback = if (comptime_site) |site|
+            try self.comptimeExhaustivenessFailedExpr(output_ty, site)
+        else blk: {
+            const msg = try self.builder.program.addStringLiteral("non-exhaustive checked match reached Monotype");
+            break :blk try self.builder.program.addExpr(.{ .ty = output_ty, .data = .{ .crash = msg } });
+        };
 
         var branch_index = branches.len;
+        var alternative_index = branchCount(branches);
         while (branch_index > 0) {
             branch_index -= 1;
             const branch = branches[branch_index];
             var pattern_index = branch.patterns.len;
             while (pattern_index > 0) {
                 pattern_index -= 1;
+                alternative_index -= 1;
                 fallback = try self.lowerListPatternMatchAlternative(
                     scrutinee,
                     scrutinee_ty,
@@ -7418,6 +7944,8 @@ const BodyContext = struct {
                     branch.value,
                     fallback,
                     output,
+                    comptime_site,
+                    alternative_index,
                 );
             }
         }
@@ -7434,6 +7962,8 @@ const BodyContext = struct {
         body: checked.CheckedExprId,
         fallback: Ast.ExprId,
         output: MatchOutput,
+        comptime_site: ?Ast.ComptimeSiteId,
+        alternative_index: usize,
     ) Allocator.Error!Ast.ExprId {
         const output_ty = self.matchOutputType(output);
         const checked_pattern = self.view.bodies.patterns[@intFromEnum(pattern.pattern)];
@@ -7449,7 +7979,11 @@ const BodyContext = struct {
                 try branch_ctx.preRegisterPatternBinders(pattern.pattern, scrutinee_ty);
                 try branch_ctx.applyAlternativeBinderRemaps(pattern.binder_remaps);
 
-                var body_lowered = try branch_ctx.lowerMatchBranchBody(body, output);
+                var body_lowered = try branch_ctx.wrapComptimeBranch(
+                    comptime_site,
+                    alternative_index,
+                    try branch_ctx.lowerMatchBranchBody(body, output),
+                );
                 if (guard) |guard_expr| {
                     const guard_cond = try branch_ctx.lowerExpr(guard_expr);
                     body_lowered = try branch_ctx.builder.ifExpr(guard_cond, body_lowered, fallback, output_ty);
@@ -7465,7 +7999,11 @@ const BodyContext = struct {
                 try branch_ctx.saveMatchPatternBinders(pattern, &saved);
                 defer branch_ctx.restoreBinders(saved.items);
                 try branch_ctx.applyAlternativeBinderRemaps(pattern.binder_remaps);
-                const branch_body = try branch_ctx.lowerMatchBranchBody(body, output);
+                const branch_body = try branch_ctx.wrapComptimeBranch(
+                    comptime_site,
+                    alternative_index,
+                    try branch_ctx.lowerMatchBranchBody(body, output),
+                );
                 if (guard) |guard_expr| {
                     const guard_cond = try branch_ctx.lowerExpr(guard_expr);
                     return try branch_ctx.builder.ifExpr(guard_cond, branch_body, fallback, output_ty);
@@ -7491,7 +8029,11 @@ const BodyContext = struct {
 
                 try branch_ctx.applyAlternativeBinderRemaps(pattern.binder_remaps);
 
-                var body_lowered = try branch_ctx.lowerMatchBranchBody(body, output);
+                var body_lowered = try branch_ctx.wrapComptimeBranch(
+                    comptime_site,
+                    alternative_index,
+                    try branch_ctx.lowerMatchBranchBody(body, output),
+                );
                 if (guard) |guard_expr| {
                     const guard_cond = try branch_ctx.lowerExpr(guard_expr);
                     body_lowered = try branch_ctx.builder.ifExpr(guard_cond, body_lowered, fallback, output_ty);
@@ -8132,7 +8674,77 @@ const BodyContext = struct {
         });
     }
 
-    fn lowerMatch(self: *BodyContext, match: anytype, output: MatchOutput) Allocator.Error!Ast.ExprData {
+    fn comptimeExhaustivenessFailedExpr(self: *BodyContext, ty: Type.TypeId, site: Ast.ComptimeSiteId) Allocator.Error!Ast.ExprId {
+        return try self.builder.program.addExpr(.{
+            .ty = ty,
+            .data = .{ .comptime_exhaustiveness_failed = site },
+        });
+    }
+
+    fn addComptimeSite(
+        self: *BodyContext,
+        kind: Ast.ComptimeSiteKind,
+        region: base.Region,
+        branch_regions: []const base.Region,
+    ) Allocator.Error!Ast.ComptimeSiteId {
+        return try self.builder.program.addComptimeSite(kind, region, branch_regions);
+    }
+
+    fn wrapComptimeBranch(
+        self: *BodyContext,
+        site: ?Ast.ComptimeSiteId,
+        branch_index: usize,
+        body: Ast.ExprId,
+    ) Allocator.Error!Ast.ExprId {
+        const actual_site = site orelse return body;
+        const ty = self.builder.program.exprs.items[@intFromEnum(body)].ty;
+        return try self.builder.program.addExpr(.{ .ty = ty, .data = .{ .comptime_branch_taken = .{
+            .site = actual_site,
+            .branch_index = @intCast(branch_index),
+            .body = body,
+        } } });
+    }
+
+    fn matchComptimeSite(self: *BodyContext, expr_id: checked.CheckedExprId, match: anytype) Allocator.Error!?Ast.ComptimeSiteId {
+        if (!self.inComptimeExhaustivenessContext()) return null;
+        if (match.skip_exhaustiveness) return null;
+        const branch_regions = try self.matchBranchRegions(match.branches);
+        defer self.allocator.free(branch_regions);
+        const expr = self.view.bodies.exprs[@intFromEnum(expr_id)];
+        return try self.addComptimeSite(.match, expr.source_region, branch_regions);
+    }
+
+    fn matchBranchRegions(self: *BodyContext, branches: []const checked.CheckedMatchBranch) Allocator.Error![]base.Region {
+        const regions = try self.allocator.alloc(base.Region, branchCount(branches));
+        var index: usize = 0;
+        for (branches) |branch| {
+            for (branch.patterns) |pattern| {
+                regions[index] = self.view.bodies.patterns[@intFromEnum(pattern.pattern)].source_region;
+                index += 1;
+            }
+        }
+        return regions;
+    }
+
+    fn ifComptimeSite(self: *BodyContext, expr_id: checked.CheckedExprId, if_: anytype) Allocator.Error!?Ast.ComptimeSiteId {
+        if (!self.inComptimeExhaustivenessContext()) return null;
+        if (!if_.warn_unused_branches) return null;
+        const branch_regions = try self.ifBranchRegions(if_);
+        defer self.allocator.free(branch_regions);
+        const expr = self.view.bodies.exprs[@intFromEnum(expr_id)];
+        return try self.addComptimeSite(.if_, expr.source_region, branch_regions);
+    }
+
+    fn ifBranchRegions(self: *BodyContext, if_: anytype) Allocator.Error![]base.Region {
+        const regions = try self.allocator.alloc(base.Region, if_.branches.len + 1);
+        for (if_.branches, 0..) |branch, index| {
+            regions[index] = self.view.bodies.exprs[@intFromEnum(branch.cond)].source_region;
+        }
+        regions[if_.branches.len] = self.view.bodies.exprs[@intFromEnum(if_.final_else)].source_region;
+        return regions;
+    }
+
+    fn lowerMatch(self: *BodyContext, match: anytype, output: MatchOutput, comptime_site: ?Ast.ComptimeSiteId) Allocator.Error!Ast.ExprData {
         const scrutinee_ty = try self.matchScrutineeType(match);
         const scrutinee = try self.lowerExprAtType(match.cond, scrutinee_ty);
         const branches = try self.allocator.alloc(Ast.Branch, branchCount(match.branches));
@@ -8151,7 +8763,11 @@ const BodyContext = struct {
                 try branch_ctx.applyAlternativeBinderRemaps(pattern.binder_remaps);
                 const user_guard = if (branch.guard) |guard_expr| try branch_ctx.lowerExpr(guard_expr) else null;
                 const guard = try branch_ctx.conjoinPatternLiteralGuards(user_guard);
-                const body = try branch_ctx.lowerMatchBranchBody(branch.value, output);
+                const body = try branch_ctx.wrapComptimeBranch(
+                    comptime_site,
+                    index,
+                    try branch_ctx.lowerMatchBranchBody(branch.value, output),
+                );
                 branches[index] = .{
                     .pat = pat,
                     .guard = guard,
@@ -8163,6 +8779,7 @@ const BodyContext = struct {
         return .{ .match_ = .{
             .scrutinee = scrutinee,
             .branches = try self.builder.program.addBranchSpan(branches),
+            .comptime_site = comptime_site,
         } };
     }
 
@@ -8269,20 +8886,21 @@ const BodyContext = struct {
         if_: anytype,
         result_ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprId {
+        const comptime_site = try self.ifComptimeSite(expr_id, if_);
         const merge_binders = try self.stateMergeBinders(expr_id);
         defer self.allocator.free(merge_binders);
 
         if (merge_binders.len == 0) {
             return try self.builder.program.addExpr(.{
                 .ty = result_ty,
-                .data = try self.lowerIf(if_, result_ty, result_ty, &.{}),
+                .data = try self.lowerIf(if_, result_ty, result_ty, &.{}, comptime_site),
             });
         }
 
         const state_ty = try self.stateResultType(merge_binders, result_ty);
         const state_expr = try self.builder.program.addExpr(.{
             .ty = state_ty,
-            .data = try self.lowerIf(if_, result_ty, state_ty, merge_binders),
+            .data = try self.lowerIf(if_, result_ty, state_ty, merge_binders, comptime_site),
         });
 
         const pattern_items = try self.allocator.alloc(Ast.PatId, merge_binders.len + 1);
@@ -8356,6 +8974,7 @@ const BodyContext = struct {
         result_ty: Type.TypeId,
         branch_ty: Type.TypeId,
         merge_binders: []const MergeBinder,
+        comptime_site: ?Ast.ComptimeSiteId,
     ) Allocator.Error!Ast.ExprData {
         const branches = try self.allocator.alloc(Ast.IfBranch, if_.branches.len);
         defer self.allocator.free(branches);
@@ -8365,14 +8984,22 @@ const BodyContext = struct {
             defer branch_ctx.deinit();
             branches[i] = .{
                 .cond = cond,
-                .body = try branch_ctx.lowerIfBranchBody(branch.body, result_ty, branch_ty, merge_binders),
+                .body = try branch_ctx.wrapComptimeBranch(
+                    comptime_site,
+                    i,
+                    try branch_ctx.lowerIfBranchBody(branch.body, result_ty, branch_ty, merge_binders),
+                ),
             };
         }
         var else_ctx = try self.childContext(self.current_fn_key);
         defer else_ctx.deinit();
         return .{ .if_ = .{
             .branches = try self.builder.program.addIfBranchSpan(branches),
-            .final_else = try else_ctx.lowerIfBranchBody(if_.final_else, result_ty, branch_ty, merge_binders),
+            .final_else = try else_ctx.wrapComptimeBranch(
+                comptime_site,
+                if_.branches.len,
+                try else_ctx.lowerIfBranchBody(if_.final_else, result_ty, branch_ty, merge_binders),
+            ),
         } };
     }
 
@@ -8393,6 +9020,7 @@ const BodyContext = struct {
         if_: anytype,
         state_ty: Type.TypeId,
         merge_binders: []const MergeBinder,
+        comptime_site: ?Ast.ComptimeSiteId,
     ) Allocator.Error!Ast.ExprData {
         const branches = try self.allocator.alloc(Ast.IfBranch, if_.branches.len);
         defer self.allocator.free(branches);
@@ -8402,14 +9030,22 @@ const BodyContext = struct {
             defer branch_ctx.deinit();
             branches[i] = .{
                 .cond = cond,
-                .body = try branch_ctx.lowerBodyThenStateOnly(branch.body, state_ty, merge_binders),
+                .body = try branch_ctx.wrapComptimeBranch(
+                    comptime_site,
+                    i,
+                    try branch_ctx.lowerBodyThenStateOnly(branch.body, state_ty, merge_binders),
+                ),
             };
         }
         var else_ctx = try self.childContext(self.current_fn_key);
         defer else_ctx.deinit();
         return .{ .if_ = .{
             .branches = try self.builder.program.addIfBranchSpan(branches),
-            .final_else = try else_ctx.lowerBodyThenStateOnly(if_.final_else, state_ty, merge_binders),
+            .final_else = try else_ctx.wrapComptimeBranch(
+                comptime_site,
+                if_.branches.len,
+                try else_ctx.lowerBodyThenStateOnly(if_.final_else, state_ty, merge_binders),
+            ),
         } };
     }
 
@@ -8642,7 +9278,11 @@ const BodyContext = struct {
         } }));
 
         const source_expr = try self.builder.localExpr(source_local, value_ty);
-        try self.appendRecordRestPatternStatements(source_expr, value_ty, destructs, lowered);
+        const comptime_site = if (self.inComptimeExhaustivenessContext() and self.patternCanMiss(pattern))
+            try self.addComptimeSite(.destructure, statement.source_region, &.{})
+        else
+            null;
+        try self.appendRecordRestPatternStatements(source_expr, value_ty, destructs, lowered, comptime_site);
         return true;
     }
 
@@ -8652,6 +9292,7 @@ const BodyContext = struct {
         value_ty: Type.TypeId,
         destructs: []const checked.CheckedRecordDestruct,
         lowered: *LoweredStatements,
+        comptime_site: ?Ast.ComptimeSiteId,
     ) Allocator.Error!void {
         for (destructs) |destruct| {
             switch (destruct.kind) {
@@ -8668,6 +9309,7 @@ const BodyContext = struct {
                     try lowered.append(self.allocator, try self.builder.program.addStmt(.{ .let_ = .{
                         .pat = try self.lowerPatternAtType(child, field_ty),
                         .value = field_value,
+                        .comptime_site = if (self.patternCanMiss(child)) comptime_site else null,
                     } }));
                 },
                 .rest => |child| {
@@ -8677,6 +9319,7 @@ const BodyContext = struct {
                     try lowered.append(self.allocator, try self.builder.program.addStmt(.{ .let_ = .{
                         .pat = try self.lowerPatternAtType(child, rest_ty),
                         .value = rest_value,
+                        .comptime_site = if (self.patternCanMiss(child)) comptime_site else null,
                     } }));
                 },
             }
@@ -9631,10 +10274,10 @@ const BodyContext = struct {
                     const unit_ty = try self.unitType();
                     break :blk .{ .expr = try self.builder.program.addExpr(.{ .ty = unit_ty, .data = .unit }) };
                 }
-                break :blk try self.lowerPatternStatement(decl.pattern, decl.expr);
+                break :blk try self.lowerPatternStatement(decl.pattern, decl.expr, statement.source_region);
             },
-            .var_ => |decl| try self.lowerPatternStatement(decl.pattern, decl.expr),
-            .reassign => |decl| try self.lowerPatternStatement(decl.pattern, decl.expr),
+            .var_ => |decl| try self.lowerPatternStatement(decl.pattern, decl.expr, statement.source_region),
+            .reassign => |decl| try self.lowerPatternStatement(decl.pattern, decl.expr, statement.source_region),
             .crash => |msg| .{ .crash = try self.lowerStringLiteral(msg) },
             .dbg => |child| .{ .dbg = try self.lowerDbgMessage(child) },
             .expr => |child| try self.lowerExprStatement(child),
@@ -9686,19 +10329,29 @@ const BodyContext = struct {
         self: *BodyContext,
         pattern: checked.CheckedPatternId,
         expr: checked.CheckedExprId,
+        source_region: base.Region,
     ) Allocator.Error!Ast.Stmt {
         const value = try self.lowerExpr(expr);
         const value_ty = self.builder.program.exprs.items[@intFromEnum(value)].ty;
+        const comptime_site = if (self.inComptimeExhaustivenessContext() and self.patternCanMiss(pattern))
+            try self.addComptimeSite(.destructure, source_region, &.{})
+        else
+            null;
         if (!self.patternNeedsExplicitBinding(pattern)) {
             return .{ .let_ = .{
                 .pat = try self.lowerPatternAtType(pattern, value_ty),
                 .value = value,
+                .comptime_site = comptime_site,
             } };
         }
 
         const unit_ty = try self.unitType();
-        const unit = try self.builder.program.addExpr(.{ .ty = unit_ty, .data = .unit });
-        const miss = try self.runtimeCrashExpr(unit_ty, "pattern match failed");
+        var unit = try self.builder.program.addExpr(.{ .ty = unit_ty, .data = .unit });
+        unit = try self.wrapComptimeBranch(comptime_site, 0, unit);
+        const miss = if (comptime_site) |site|
+            try self.comptimeExhaustivenessFailedExpr(unit_ty, site)
+        else
+            try self.runtimeCrashExpr(unit_ty, "pattern match failed");
         return .{ .expr = try self.lowerMaterializedPatternValueThen(
             pattern,
             value,
@@ -9738,12 +10391,12 @@ const BodyContext = struct {
         const state_expr = switch (checked_expr.data) {
             .if_ => |if_| try self.builder.program.addExpr(.{
                 .ty = state_ty,
-                .data = try self.lowerIfStateOnly(if_, state_ty, merge_binders),
+                .data = try self.lowerIfStateOnly(if_, state_ty, merge_binders, try self.ifComptimeSite(expr_id, if_)),
             }),
             .match_ => |match| try self.lowerMatchExprWithOutput(match, .{ .state_only = .{
                 .state_ty = state_ty,
                 .merge_binders = merge_binders,
-            } }),
+            } }, try self.matchComptimeSite(expr_id, match)),
             else => try self.lowerBodyThenStateOnly(expr_id, state_ty, merge_binders),
         };
         return .{ .let_ = .{
@@ -10051,6 +10704,40 @@ fn restoreScalar(scalar: checked.ConstScalar) Ast.ExprData {
     };
 }
 
+/// Parse a numeral's decimal text into a constant literal of the
+/// concrete numeric `primitive`, mirroring the interpreter's `parseNumeralPayload`
+/// (`std.fmt.parseInt`/`parseFloat`/`RocDec.fromNonemptySlice`). Returns null
+/// when the value does not fit the target representation (out of range, or a
+/// fractional text parsed as an integer), so the caller can lower the Err branch.
+fn foldNumeralPrimitive(primitive: Type.Primitive, text: []const u8) ?Ast.ExprData {
+    return switch (primitive) {
+        .u8 => foldUnsignedNumeral(u8, text),
+        .u16 => foldUnsignedNumeral(u16, text),
+        .u32 => foldUnsignedNumeral(u32, text),
+        .u64 => foldUnsignedNumeral(u64, text),
+        .u128 => foldUnsignedNumeral(u128, text),
+        .i8 => foldSignedNumeral(i8, text),
+        .i16 => foldSignedNumeral(i16, text),
+        .i32 => foldSignedNumeral(i32, text),
+        .i64 => foldSignedNumeral(i64, text),
+        .i128 => foldSignedNumeral(i128, text),
+        .f32 => if (std.fmt.parseFloat(f32, text)) |v| .{ .frac_f32_lit = v } else |_| null,
+        .f64 => if (std.fmt.parseFloat(f64, text)) |v| .{ .frac_f64_lit = v } else |_| null,
+        .dec => if (builtins.dec.RocDec.fromNonemptySlice(text)) |d| .{ .dec_lit = .{ .num = d.num } } else null,
+        .bool, .str => Common.invariant("from_numeral target was a non-numeric primitive"),
+    };
+}
+
+fn foldUnsignedNumeral(comptime T: type, text: []const u8) ?Ast.ExprData {
+    const value = std.fmt.parseInt(T, text, 10) catch return null;
+    return .{ .int_lit = unsignedIntLiteral(value) };
+}
+
+fn foldSignedNumeral(comptime T: type, text: []const u8) ?Ast.ExprData {
+    const value = std.fmt.parseInt(T, text, 10) catch return null;
+    return .{ .int_lit = signedIntLiteral(value) };
+}
+
 fn signedIntLiteral(value: anytype) can.CIR.IntValue {
     const widened: i128 = @intCast(value);
     return .{ .bytes = @bitCast(widened), .kind = .i128 };
@@ -10059,6 +10746,21 @@ fn signedIntLiteral(value: anytype) can.CIR.IntValue {
 fn unsignedIntLiteral(value: anytype) can.CIR.IntValue {
     const widened: u128 = @intCast(value);
     return .{ .bytes = @bitCast(widened), .kind = .u128 };
+}
+
+fn generatedInterpolationStepKey(
+    current_fn_key: names.TypeDigest,
+    source_expr_id: checked.CheckedExprId,
+    index: usize,
+) names.TypeDigest {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hasher.update("roc.generated_interpolation_step");
+    hasher.update(&current_fn_key.bytes);
+    var source_expr_bytes = std.mem.nativeToLittle(u32, @intFromEnum(source_expr_id));
+    hasher.update(std.mem.asBytes(&source_expr_bytes));
+    var index_bytes = std.mem.nativeToLittle(u64, @intCast(index));
+    hasher.update(std.mem.asBytes(&index_bytes));
+    return .{ .bytes = hasher.finalResult() };
 }
 
 fn checkedPayload(view: ModuleView, checked_ty: checked.CheckedTypeId) checked.CheckedTypePayload {

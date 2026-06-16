@@ -90,6 +90,38 @@ jobs:
           # Just the do super fast check step for now.
           zig build -Dno-bin -Dfuzz -Dtracy=./tracy
 
+      - name: Run fuzz seed reproducers
+        env:
+          ROC_FUZZ_SEED: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+
+          for target in tokenize parse canonicalize typecheck; do
+            export ROC_FUZZ_TARGET="$target"
+            export ROC_FUZZ_INPUT="/tmp/roc-${target}-fuzz-input"
+
+            python3 - <<'PY'
+          import base64
+          import hashlib
+          import os
+          import pathlib
+
+          seed = os.environ["ROC_FUZZ_SEED"]
+          target = os.environ["ROC_FUZZ_TARGET"]
+          data = bytearray()
+          for index in range(8):
+              data.extend(hashlib.sha256(f"{seed}:{target}:{index}".encode()).digest())
+
+          path = pathlib.Path(os.environ["ROC_FUZZ_INPUT"])
+          path.write_bytes(data)
+
+          print(f"{target} fuzz seed: {seed}")
+          print(f"{target} fuzz input base64: {base64.b64encode(data).decode()}")
+          PY
+
+            zig build "run-repro-${target}" -- "$ROC_FUZZ_INPUT"
+          done
+
   exec-bench-checks:
     needs: check-once
     runs-on: ubuntu-24.04
@@ -118,9 +150,18 @@ jobs:
           roc check CONTRIBUTING/profiling/exec_bench.roc
           roc test CONTRIBUTING/profiling/exec_bench.roc
 
+  # All LLVM-backend end-to-end coverage lives here, on every OS: eval parity
+  # tests, the platforms suite built with roc build --opt=size/speed (linked by
+  # the embedded lld and executed, with the fx host's leak detection), and the
+  # dylib/archive build-and-run fixtures. The strJoinWithC &strDecref leak was
+  # an lld-COFF misresolution that only this pipeline can catch.
   eval-llvm:
     needs: check-once
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2025]
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
@@ -129,9 +170,50 @@ jobs:
           version: 0.16.0
           use-cache: true
 
+      # The embedded lld-link resolves /defaultlib via the LIB env and roc's
+      # linker locates the Windows SDK/MSVC libpaths at runtime.
+      - name: Setup MSVC (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # ratchet:ilammy/msvc-dev-cmd@v1.13.0
+        with:
+          arch: x64
+
       - name: Run eval tests with LLVM backend
+        if: runner.os != 'Windows'
         run: |
           zig build run-test-eval -- --llvm
+
+      # Windows has no fork(), so the runner spawns a fresh worker process per
+      # test that compiles the whole program (front-end + LIR lowering) before
+      # running any backend. The TRMC/TCE "stack gate" stress tests have a
+      # multi-second lowering cost (measured ~9-17s locally; backend eval itself
+      # is sub-millisecond) that, on the slower hosted Windows runner under
+      # full-suite concurrency, overruns the 30s default per-test timeout and is
+      # killed as a HANG. POSIX uses fork-based per-backend isolation on faster
+      # runners where 30s is plenty. Give Windows a larger hang budget.
+      - name: Run eval tests with LLVM backend (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          zig build run-test-eval -- --llvm --timeout 120000
+
+      - name: Run CLI platform tests (LLVM size/speed backends)
+        if: runner.os != 'Windows'
+        uses: ./.github/actions/flaky-retry
+        with:
+          command: zig build run-test-cli -- --include-llvm --filter "[size]" --filter "[speed]"
+          error_string_contains: "build.zig.zon"
+          retry_count: 3
+
+      - name: Run CLI platform tests (LLVM size/speed backends, Windows)
+        if: runner.os == 'Windows'
+        run: |
+          zig build run-test-cli -- --include-llvm --filter "[size]" --filter "[speed]"
+
+      - name: Shared-library build-and-run test (roc build --opt=size)
+        run: zig build run-test-dylib
+
+      - name: Static-archive build-and-run test
+        run: zig build run-test-archive
 
   zig-tests:
     needs: check-once
@@ -144,32 +226,26 @@ jobs:
             cpu_flag: -Dcpu=x86_64_v3
             target_flag: ''
             release_jobs_flag: ''
-            cli_test_llvm_flag: ''
           - os: macos-15
             cpu_flag: ''
             target_flag: ''
             release_jobs_flag: ''
-            cli_test_llvm_flag: -Dcli-test-llvm=true
           - os: ubuntu-24.04
             cpu_flag: ""
             target_flag: -Dtarget=x86_64-linux-musl
             release_jobs_flag: ''
-            cli_test_llvm_flag: ''
           - os: ubuntu-24.04-arm
             cpu_flag: ''
             target_flag: ''  # Native build for kcov (Zig 0.15.2 x86_64 has DWARF bug) # TODO ZIG 16: re-check if DWARF bug is fixed in 0.16
             release_jobs_flag: -j4  # Avoid hosted ARM runner disconnects under full ReleaseFast parallelism.
-            cli_test_llvm_flag: ''
           - os: windows-2022
             cpu_flag: -Dcpu=x86_64_v3
             target_flag: ''
             release_jobs_flag: ''
-            cli_test_llvm_flag: ''
           - os: windows-2025
             cpu_flag: -Dcpu=x86_64_v3
             target_flag: ''
             release_jobs_flag: ''
-            cli_test_llvm_flag: ''
 
     steps:
       - name: Checkout
@@ -195,7 +271,7 @@ jobs:
         if: runner.os != 'Windows'
         uses: ./.github/actions/flaky-retry
         with:
-          command: "zig build run-test-cli ${{ matrix.target_flag }} ${{ matrix.cli_test_llvm_flag }}"
+          command: "zig build run-test-cli ${{ matrix.target_flag }}"
           error_string_contains: "unhandled file type|build executable runs correctly|undefined symbol"
           retry_count: 3
 

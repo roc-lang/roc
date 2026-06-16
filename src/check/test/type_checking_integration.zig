@@ -251,6 +251,146 @@ test "check type - binop operands same type works - unbound plus unbound" {
     );
 }
 
+// BOUNDARY DEFAULTING: a literal flowing through method-call dispatch
+// (`add_x(5)` with `add_x : a -> r where [a.plus : (a, x) -> r]`) lives on a
+// var unreachable from the enclosing def's signature. Instantiation copies only
+// signature-reachable vars, so that literal var would be shared by every caller
+// and can never adapt per call site. At the generalization boundary it is
+// defaulted (first-satisfier order), the deferred dispatches cascade into the
+// signature (pinning `x`, `y`, and the return to Dec), and a LITERAL DEFAULTED
+// warning fires per literal — the Haskell §4.3.4 / `-Wtype-defaults` analogue.
+// A signature-reachable literal (binop form `|x| 5 + x`) stays open instead —
+// see the guard test below. Full design:
+// CONTRIBUTING/design/open-literal-defaulting.md.
+test "check type - numeric literal through method-call dispatch resolves" {
+    const source =
+        \\func = |x, y| {
+        \\  add_x = |a| a.plus(x)
+        \\  add_y = |b| b.plus(y)
+        \\  add_x(5).plus(add_y(5))
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass_with_warnings = .{
+        .def = .last_def,
+        .warnings = &.{ "LITERAL DEFAULTED", "LITERAL DEFAULTED" },
+    } }, "Dec, Dec -> Dec");
+}
+
+test "check type - literal receiver of method call defaults at generalization boundary" {
+    // The literal `5` is the dispatch receiver. The def's signature reaches
+    // only `x` and the dispatch return, not the receiver var, so the literal is
+    // boundary-defaulted (warning) and the fired `Dec.plus` signature pins the
+    // rest of the def to `Dec -> Dec`.
+    const source =
+        \\five_plus = |x| (5).plus(x)
+    ;
+    try checkTypesModule(source, .{ .pass_with_warnings = .{
+        .def = .last_def,
+        .warnings = &.{"LITERAL DEFAULTED"},
+    } }, "Dec -> Dec");
+}
+
+test "check type - literal binop receiver stays polymorphic (no boundary defaulting)" {
+    // Guard against over-eager boundary defaulting: the binop form collapses
+    // literal, receiver, and result into the signature's return var
+    // (`ret = lhs`), so the literal IS reachable from the def's type via its
+    // constraint chain and must stay open and polymorphic — no warning.
+    const source =
+        \\five_plus_binop = |x| 5 + x
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .last_def },
+        "a -> b\n" ++
+            "  where [\n" ++
+            "    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),\n" ++
+            "    b.plus : b, a -> b,\n" ++
+            "  ]",
+    );
+}
+
+// SURVIVOR-MATRIX GUARD for `numeralCandidateStructurallyRefuted`
+// (src/check/Check.zig): each of the 13 defaulting candidates (canonical order
+// `numeral_default_candidates`) becomes the FIRST satisfier exactly once. `f`
+// stays polymorphic (its literal is signature-reachable, see the binop guard
+// test above), so `y = f(my_val)` probes the literal's candidates against the
+// concrete T pinned by `my_val` — only T survives. A wrong refutation
+// (soundness drift in the pre-filter) flips `y`'s inferred type here;
+// safety-checked builds also crash on the witness probe in
+// `commitLiteralDefault`. Asserts `y` only; every shape type-checks with zero
+// problems (the literal resolves via the pinned argument — like the existing u8
+// shape, which produced no LITERAL DEFAULTED warning).
+test "check type - numeral defaulting survivor matrix - every candidate as first satisfier" {
+    // Same order as `numeral_default_candidates` in src/check/Check.zig.
+    const candidate_type_names = [_][]const u8{
+        "Dec", "I64", "U64", "I128", "U128", "I32", "U32", "I16", "U16", "I8", "U8", "F64", "F32",
+    };
+    inline for (candidate_type_names) |type_name| {
+        const source =
+            "my_val : " ++ type_name ++ "\n" ++
+            "my_val = 7\n" ++
+            "f = |x| 5 + x\n" ++
+            "y = f(my_val)";
+        var test_env = try TestEnv.init("Test", source);
+        defer test_env.deinit();
+        try test_env.assertDefType("y", type_name);
+    }
+}
+
+// REFUTED-COUNT GUARD (completeness direction) for
+// `numeralCandidateStructurallyRefuted` (src/check/Check.zig): the survivor
+// matrix above catches UNSOUND refutations, but a pre-filter that refutes
+// NOTHING (e.g. an early `return false` regression) is observably identical
+// except for probe cost. So pin the counts: a U8-pinned method-call receiver
+// must refute the 10 candidates before `u8` structurally (dispatcher-position
+// mismatch against the concrete U8 argument) and attempt exactly one probe (the
+// `u8` commit; `f64`/`f32` are never reached). The count is mechanical: 10 =
+// candidates before `u8` in `numeral_default_candidates` (src/check/Check.zig:
+// dec, i64, u64, i128, u128, i32, u32, i16, u16, i8 — then u8). Editing that
+// list must update this count to u8's new index.
+// `bench_probe_attempts`/`bench_probe_refuted` are permanent test-support
+// counters in Check.zig; zig's default test runner runs this binary's tests
+// sequentially in-process, so resetting them here cannot race.
+test "check type - numeral defaulting pre-filter refutes provably-failing candidates" {
+    const Check = @import("../Check.zig");
+    Check.bench_probe_attempts = 0;
+    Check.bench_probe_refuted = 0;
+
+    const source =
+        \\my_u8 : U8
+        \\my_u8 = 7
+        \\h = (5).plus(my_u8)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    // The pinned U8 argument admits exactly one candidate, so the literal
+    // receiver resolves to U8 with zero problems (no LITERAL DEFAULTED warning —
+    // unlike the open `(5).plus(x)` shape above, nothing here falls back to the
+    // canonical default).
+    try test_env.assertDefType("h", "U8");
+
+    try testing.expectEqual(@as(usize, 1), Check.bench_probe_attempts);
+    try testing.expectEqual(@as(usize, 10), Check.bench_probe_refuted);
+}
+
+// CANDIDATE-ORDER PIN for `numeral_default_candidates` (src/check/Check.zig):
+// `bitwise_and` exists on all 10 builtin integer types but NOT on Dec/F64/F32,
+// and neither argument pins a width — so the boundary-defaulted receiver
+// literal has MULTIPLE surviving candidates and must commit the FIRST integer
+// in canonical order, I64 (Dec is refuted by the method-lookup miss). Compare
+// the `(5).plus(x)` shape above, which commits Dec. Inferring some other integer
+// type here means the candidate order (or the pre-filter's interaction with it)
+// changed.
+test "check type - numeral defaulting candidate order - integer-only method commits I64" {
+    const source =
+        \\g = |x| (5).bitwise_and(x)
+    ;
+    try checkTypesModule(source, .{ .pass_with_warnings = .{
+        .def = .last_def,
+        .warnings = &.{"LITERAL DEFAULTED"},
+    } }, "I64 -> I64");
+}
+
 test "check type - is_eq operands must have same type - I64 eq I32 should fail" {
     const source =
         \\a : I64
@@ -1758,6 +1898,63 @@ test "check type - if else - different branch types 3" {
     ;
     // Number literal 10 used where Str is expected
     try checkTypesModule(source, .fail, "TYPE MISMATCH");
+}
+
+// Dual-kind literal var (flex/flex merge): both branches are OPEN literals, so
+// unification merges a `from_literal: numeral` and a `from_literal: quote`
+// constraint onto one var. No type satisfies both, so the program is always
+// rejected — but the diagnostic must not depend on which unify side each literal
+// arrived on. `varLiteralKind` tie-breaks dual-kind vars to `.numeral` (matching
+// `numericDefaultPhaseForConstraints` and `flexLiteralDefaultKind`), so BOTH
+// orders default the var toward the numeral head (Dec) and report the quote
+// constraint against it: mirror-image programs get the SAME diagnostic (same
+// title, same prose; only the source region differs).
+test "check type - if else - dual-kind literal branches (number first) - stable diagnostic" {
+    const source =
+        \\x = if True 1 else "s"
+    ;
+    try checkTypesModule(
+        source,
+        .fail_with,
+        \\**TYPE MISMATCH**
+        \\This string literal is being used where a non-string type is needed:
+        \\**test:1:20:1:23:**
+        \\```roc
+        \\x = if True 1 else "s"
+        \\```
+        \\                   ^^^
+        \\
+        \\The type was determined to be:
+        \\
+        \\    Dec
+        \\
+        \\
+        ,
+    );
+}
+
+test "check type - if else - dual-kind literal branches (string first) - stable diagnostic" {
+    const source =
+        \\x = if True "s" else 1
+    ;
+    try checkTypesModule(
+        source,
+        .fail_with,
+        \\**TYPE MISMATCH**
+        \\This string literal is being used where a non-string type is needed:
+        \\**test:1:13:1:16:**
+        \\```roc
+        \\x = if True "s" else 1
+        \\```
+        \\            ^^^
+        \\
+        \\The type was determined to be:
+        \\
+        \\    Dec
+        \\
+        \\
+        ,
+    );
 }
 
 test "check type - negative zero is valid for unsigned type" {
@@ -3856,9 +4053,22 @@ test "check type - structural tag - if True True else False is open tag union" {
 
 const ModuleExpectation = union(enum) {
     pass: DefExpectation,
+    /// Pass type checking, but expect warning-severity problems — and ONLY
+    /// warnings — whose titles must match exactly, in order. Plain `pass` fails
+    /// on ANY problem, warnings included, so warning-producing programs must
+    /// declare their warnings explicitly here.
+    pass_with_warnings: PassWithWarnings,
     fail,
     fail_first, // Allows multiple errors, checks first error title
     fail_with,
+    /// Expect exactly these problems (errors AND warnings), in order, each
+    /// matching its full rendered message.
+    fail_with_all: []const []const u8,
+};
+
+const PassWithWarnings = struct {
+    def: DefExpectation,
+    warnings: []const []const u8,
 };
 
 const DefExpectation = union(enum) {
@@ -3890,11 +4100,25 @@ fn checkTypesModule(
                 },
             }
         },
+        .pass_with_warnings => |pass_expectation| {
+            switch (pass_expectation.def) {
+                .last_def => {
+                    return test_env.assertLastDefTypeWithWarnings(expected, pass_expectation.warnings);
+                },
+                .def => {
+                    // Not needed yet; add when a warning test targets a named def.
+                    return error.TestUnexpectedResult;
+                },
+            }
+        },
         .fail => {
             return test_env.assertOneTypeError(expected);
         },
         .fail_with => {
             return test_env.assertOneTypeErrorMsg(expected);
+        },
+        .fail_with_all => |expected_msgs| {
+            return test_env.assertTypeErrorMsgs(expected_msgs);
         },
         .fail_first => {
             return test_env.assertFirstTypeError(expected);
@@ -4050,7 +4274,11 @@ test "check type - try return with match and error propagation should type-check
         \\    }
         \\}
     ;
-    // Expected: should pass type-checking with combined error type (open tag union)
+    // Passes with a combined error type (open tag union). The scrutinee literal
+    // `0` is unreachable from the annotated signature `{} -> Try(Str, _)` and is
+    // boundary-defaulted to Dec — but SILENTLY: its dispatch constraints touch
+    // nothing signature-reachable, so the def's interface is identical either
+    // way and no LITERAL DEFAULTED warning is emitted.
     try checkTypesModule(source, .{ .pass = .last_def }, "{} -> Try(Str, [Impossible, ListWasEmpty, ..])");
 }
 
@@ -4150,13 +4378,19 @@ test "check type - record ext - arg inferred as open" {
         \\    use_record(rec)
         \\}
         \\create_record = || {
-        \\    {foo: "bar"}
+        \\    foo_val : Str
+        \\    foo_val = "bar"
+        \\    {foo: foo_val}
         \\}
         \\use_record = |rec| {
         \\    Str.is_empty(rec.blah)
         \\}
     ;
-    try checkTypesModule(source, .fail_with,
+    // The `Str` annotation on `foo_val` pins `create_record`'s return to the
+    // concrete `{ foo: Str }`, so the zero-arg thunk is no longer polymorphic
+    // (thunks are allowed to generalize, but here nothing is left open). Only the
+    // argument mismatch — `rec` lacks the `blah` field `use_record` needs — fires.
+    try checkTypesModule(source, .{ .fail_with_all = &.{
         \\**TYPE MISMATCH**
         \\The first argument being passed to this function has the wrong type:
         \\**test:3:5:**
@@ -4167,7 +4401,7 @@ test "check type - record ext - arg inferred as open" {
         \\
         \\This argument has the type:
         \\
-        \\    { foo: a } where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]
+        \\    { foo: Str }
         \\
         \\But `use_record` needs the first argument to be:
         \\
@@ -4176,7 +4410,7 @@ test "check type - record ext - arg inferred as open" {
         \\**Hint:** This record is missing the field: `blah`
         \\
         \\
-    );
+    } }, "");
 }
 
 // List method syntax tests
@@ -4486,20 +4720,38 @@ test "check type - self recursive function - fibonacci - fail" {
         source,
         .fail_with,
         \\**TYPE MISMATCH**
-        \\This string literal is being used where a non-string type is needed:
-        \\**test:5:9:5:18:**
+        \\The recursive definition `fib` is used in an unexpected way:
+        \\**test:5:5:5:8:**
         \\```roc
         \\    fib("bad arg") + fib(n - 2.U8)
         \\```
-        \\        ^^^^^^^^^
+        \\    ^^^
         \\
-        \\The type was determined to be:
+        \\It has the type:
         \\
-        \\    U8
+        \\    Str -> U8
+        \\
+        \\But other places expect it to be:
+        \\
+        \\    U8 -> U8
         \\
         \\
         ,
     );
+}
+
+// A numeral whose type is fixed only through a recursive call's return must not
+// default before the recursion resolves. Here `1`'s `plus` receiver is the inner
+// `fc(...)` call, whose return is a flex placeholder during cycle checking; the
+// boundary must keep `1` open (reachable through the recursive return) so it pins
+// to `I64` once the cycle resolves, instead of defaulting to `Dec` and reporting
+// a spurious `I64, Dec -> I64` mismatch on `plus`.
+test "check type - self recursive function - numeral pinned through recursive return" {
+    const source =
+        \\fc : I64, I64 -> I64
+        \\fc = |n, b| if n == 0 b else fc(n - 1, fc(n - 1, b) + 1)
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "fc" } }, "I64, I64 -> I64");
 }
 
 test "check type - mutually recursive functions - is_even and is_odd" {
@@ -4549,6 +4801,21 @@ test "check type - self recursive function - multiple args" {
         \\}
     ;
     try checkTypesModule(source, .{ .pass = .{ .def = "power" } }, "U64, U64 -> U64");
+}
+
+// A binop whose lhs is a literal and whose rhs is pinned to a concrete type only
+// LATER, through a builtin signature (`index : U64` from
+// `List.map_with_index`'s callback) — the real-world pattern speculative peer
+// resolution used to serve. First-satisfier defaulting keeps it passing: at
+// finalize, the literal's own `plus : (a, U64) -> a` constraint refutes `Dec`
+// and `U64` is the first candidate that satisfies it. (Unconditionally unifying
+// lhs == rhs was tried and refuted — it breaks heterogeneous methods like
+// `times : Duration, I64 -> Duration`; see the custom Num type tests.)
+test "check type - binop literal lhs with signature-pinned rhs - U64 index" {
+    const source =
+        \\result = List.map_with_index([10, 20, 30], |num, index| num + index)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "List(U64)");
 }
 
 test "check type - self recursive function - with accumulator" {
@@ -5308,13 +5575,19 @@ test "check type - zulip repro" {
         \\    use_record(rec)
         \\}
         \\create_record = || {
-        \\    {foo: "bar"}
+        \\    foo_val : Str
+        \\    foo_val = "bar"
+        \\    {foo: foo_val}
         \\}
         \\use_record = |rec| {
         \\    Str.is_empty(rec.blah)
         \\}
     ;
-    try checkTypesModule(source, .fail_with,
+    // The `Str` annotation on `foo_val` pins `create_record`'s return to the
+    // concrete `{ foo: Str }`, so the zero-arg thunk is no longer polymorphic
+    // (thunks are allowed to generalize, but here nothing is left open). Only the
+    // argument mismatch — `rec` lacks the `blah` field `use_record` needs — fires.
+    try checkTypesModule(source, .{ .fail_with_all = &.{
         \\**TYPE MISMATCH**
         \\The first argument being passed to this function has the wrong type:
         \\**test:3:5:**
@@ -5325,7 +5598,7 @@ test "check type - zulip repro" {
         \\
         \\This argument has the type:
         \\
-        \\    { foo: a } where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]
+        \\    { foo: Str }
         \\
         \\But `use_record` needs the first argument to be:
         \\
@@ -5334,7 +5607,7 @@ test "check type - zulip repro" {
         \\**Hint:** This record is missing the field: `blah`
         \\
         \\
-    );
+    } }, "");
 }
 
 // polarity //
@@ -5375,7 +5648,7 @@ test "check type - wildcard match is inferred as open" {
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "[Red, ..a] -> Try([Red, ..a], Str)" },
+            .{ .def = "test", .expected = "[Red, ..a] -> Try([Red, ..a], err)\n  where [err.from_quote : Str -> Try(err, [BadQuotedBytes(Str)])]" },
         },
     );
 }
@@ -5481,7 +5754,7 @@ test "check type - exhaustive match with multiple tags is inferred as closed" {
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "[Blue, Green, Red] -> Str" },
+            .{ .def = "test", .expected = "[Blue, Green, Red] -> a\n  where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]" },
         },
     );
 }
@@ -5498,7 +5771,7 @@ test "check type - match with underscore binding is inferred as open" {
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "[Red, ..] -> Str" },
+            .{ .def = "test", .expected = "[Red, ..] -> a where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]" },
         },
     );
 }
@@ -5515,7 +5788,7 @@ test "check type - exhaustive match with deeply nested tags is inferred as close
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "[Outer([Inner([Leaf, Node])])] -> Str" },
+            .{ .def = "test", .expected = "[Outer([Inner([Leaf, Node])])] -> a\n  where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]" },
         },
     );
 }
@@ -5554,7 +5827,7 @@ test "check type - exhaustive match with multi-arg tag mixed open closed" {
         &.{
             // First arg: Red, Blue (no wildcard -> closed)
             // Second arg: _y, _y (variable bindings -> open)
-            .{ .def = "test", .expected = "[Pair([Blue, Red], _a)] -> Str" },
+            .{ .def = "test", .expected = "[Pair([Blue, Red], _a)] -> b\n  where [b.from_quote : Str -> Try(b, [BadQuotedBytes(Str)])]" },
         },
     );
 }
@@ -5572,7 +5845,7 @@ test "check type - exhaustive match nested wildcard keeps inner open" {
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "[Wrapper([Red, ..])] -> Str" },
+            .{ .def = "test", .expected = "[Wrapper([Red, ..])] -> a\n  where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]" },
         },
     );
 }
@@ -5588,7 +5861,7 @@ test "check type - exhaustive match single tag no payload is closed" {
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "[Done] -> Str" },
+            .{ .def = "test", .expected = "[Done] -> a where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]" },
         },
     );
 }
@@ -5626,7 +5899,7 @@ test "check type - exhaustive match closes tag union inside tuple element" {
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "([Blue, Red], _field) -> Str" },
+            .{ .def = "test", .expected = "([Blue, Red], _field) -> a\n  where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]" },
         },
     );
 }
@@ -5645,7 +5918,7 @@ test "check type - exhaustive match closes tag union inside record field" {
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "{ status: [Active, Inactive], .. } -> Str" },
+            .{ .def = "test", .expected = "{ status: [Active, Inactive], .. } -> a\n  where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]" },
         },
     );
 }
@@ -5664,7 +5937,7 @@ test "check type - wildcard in record field keeps nested tag union open" {
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "{ status: [Active, ..], .. } -> Str" },
+            .{ .def = "test", .expected = "{ status: [Active, ..], .. } -> a\n  where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]" },
         },
     );
 }
@@ -5684,7 +5957,7 @@ test "check type - exhaustive match closes tag union through tag then tuple" {
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "[Err(_a), Ok(([Blue, Red], _field))] -> Str" },
+            .{ .def = "test", .expected = "[Err(_a), Ok(([Blue, Red], _field))] -> b\n  where [b.from_quote : Str -> Try(b, [BadQuotedBytes(Str)])]" },
         },
     );
 }
@@ -5704,7 +5977,7 @@ test "check type - exhaustive match closes tag union through tag then record" {
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "[Err(_a), Ok({ status: [Off, On], .. })] -> Str" },
+            .{ .def = "test", .expected = "[Err(_a), Ok({ status: [Off, On], .. })] -> b\n  where [b.from_quote : Str -> Try(b, [BadQuotedBytes(Str)])]" },
         },
     );
 }
@@ -5725,7 +5998,7 @@ test "check type - exhaustive match opens and closes tag unions through tag then
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "[Err(_a), Ok({ mode: ([Big], [Fast, ..]), status: [Off, On], .. })] -> Str" },
+            .{ .def = "test", .expected = "[Err(_a), Ok({ mode: ([Big], [Fast, ..]), status: [Off, On], .. })] -> b\n  where [b.from_quote : Str -> Try(b, [BadQuotedBytes(Str)])]" },
         },
     );
 }
@@ -5744,7 +6017,7 @@ test "check type - exhaustive match closes tag union through tuple then record" 
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "({ color: [Blue, Red], .. }, _field) -> Str" },
+            .{ .def = "test", .expected = "({ color: [Blue, Red], .. }, _field) -> a\n  where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]" },
         },
     );
 }
@@ -5764,7 +6037,7 @@ test "check type - exhaustive match closes tag union through record then tuple" 
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "{ pair: ([Off, On], _field), .. } -> Str" },
+            .{ .def = "test", .expected = "{ pair: ([Off, On], _field), .. } -> a\n  where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]" },
         },
     );
 }
@@ -5786,7 +6059,7 @@ test "check type - exhaustive match with different payload structures per tag" {
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "[Err([Critical, Warning]), Ok({ level: [High, Low], .. })] -> Str" },
+            .{ .def = "test", .expected = "[Err([Critical, Warning]), Ok({ level: [High, Low], .. })] -> a\n  where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]" },
         },
     );
 }
@@ -5808,7 +6081,7 @@ test "check type - exhaustive match with different payload structures per tag, m
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "[Err([Critical, ..]), Ok({ level: [High, ..], .. })] -> Str" },
+            .{ .def = "test", .expected = "[Err([Critical, ..]), Ok({ level: [High, ..], .. })] -> a\n  where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]" },
         },
     );
 }
@@ -5828,7 +6101,7 @@ test "check type - exhaustive match with different payload structures per tag, m
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "[Err([Critical, ..]), Ok({ level: [High, ..], .. })] -> Str" },
+            .{ .def = "test", .expected = "[Err([Critical, ..]), Ok({ level: [High, ..], .. })] -> a\n  where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]" },
         },
     );
 }
@@ -5852,7 +6125,7 @@ test "check type - exhaustive match deeply nested 3 levels mixed open closed" {
             // Middle [L2a, L2b]: closed
             // L2a's payload [L3a, L3b]: closed (both listed)
             // L2b's payload _y: open (variable binding)
-            .{ .def = "test", .expected = "[L1a([L2a([L3a, L3b]), L2b(_a)]), L1b] -> Str" },
+            .{ .def = "test", .expected = "[L1a([L2a([L3a, L3b]), L2b(_a)]), L1b] -> b\n  where [b.from_quote : Str -> Try(b, [BadQuotedBytes(Str)])]" },
         },
     );
 }
@@ -5868,7 +6141,7 @@ test "check type - exhaustive match 4 levels deep all closed" {
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "[W([X([Y([Z])])])] -> Str" },
+            .{ .def = "test", .expected = "[W([X([Y([Z])])])] -> a\n  where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]" },
         },
     );
 }
@@ -5884,7 +6157,7 @@ test "check type - exhaustive match 4 levels deep all but top closed" {
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "[W([A, X([Y([Z])])])] -> Str" },
+            .{ .def = "test", .expected = "[W([A, X([Y([Z])])])] -> a\n  where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]" },
         },
     );
 }
@@ -5915,7 +6188,7 @@ test "check type - exhaustive match same tag name at multiple nesting levels" {
             // Err's payload [Ok, Err]: closed
             // Err>Ok payload [E]: closed (only one tag but exhaustive)
             // Err>Err payload _: open (catch-all)
-            .{ .def = "test", .expected = "[Err([Err(_a), Ok([E])]), Ok([Err([C, D]), Ok([A, B])])] -> Str" },
+            .{ .def = "test", .expected = "[Err([Err(_a), Ok([E])]), Ok([Err([C, D]), Ok([A, B])])] -> b\n  where [b.from_quote : Str -> Try(b, [BadQuotedBytes(Str)])]" },
         },
     );
 }
@@ -5935,7 +6208,7 @@ test "check type - exhaustive match same record field at multiple nesting levels
         source,
         &.{
             // Inner "a" field's tag union [Red, Blue]: closed
-            .{ .def = "test", .expected = "{ a: { a: [Blue, Red], .. }, .. } -> Str" },
+            .{ .def = "test", .expected = "{ a: { a: [Blue, Red], .. }, .. } -> b\n  where [b.from_quote : Str -> Try(b, [BadQuotedBytes(Str)])]" },
         },
     );
 }
@@ -5959,7 +6232,7 @@ test "check type - exhaustive match same tuple position at multiple nesting leve
         &.{
             // Inner tuple pos 0: [Red, Blue] closed, pos 1: [On, Off] closed
             // Outer tuple pos 1: single-element tuple with [A] closed
-            .{ .def = "test", .expected = "(([Blue, Red], [Off, On]), ([A], [B])) -> Str" },
+            .{ .def = "test", .expected = "(([Blue, Red], [Off, On]), ([A], [B])) -> a\n  where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]" },
         },
     );
 }
@@ -6362,4 +6635,243 @@ test "check type - tag union - ext hints 2" {
         \\
         \\
     );
+}
+
+// Userland reproduction of a recursive-constraint static-dispatch method that
+// cannot self-nest.
+//
+// A method like `join : Vec(a), a -> a where [a.join : Vec(a), a -> a]` has a
+// recursive constraint. For a nested `Vec(Vec(_))` the element `Vec(_)` cannot
+// satisfy it with the right shape, and static dispatch has no general overload
+// resolution, so there is no second binding to resolve to: the base case
+// (element implements the method) type-checks, but the self-nested case has no
+// candidate and is a type error.
+test "static dispatch - userland recursive-constraint method cannot self-nest (no general overload)" {
+    const source =
+        \\Leaf := [L].{
+        \\  join : Vec(Leaf), Leaf -> Leaf
+        \\  join = |_v, sep| sep
+        \\}
+        \\
+        \\Vec(a) := [V(List(a))].{
+        \\  join : Vec(a), a -> a where [a.join : Vec(a), a -> a]
+        \\  join = |_v, sep| sep
+        \\}
+        \\
+        \\leaves : Vec(Leaf)
+        \\leaves = Vec.V([Leaf.L])
+        \\
+        \\ok : Leaf
+        \\ok = leaves.join(Leaf.L)
+        \\
+        \\nested : Vec(Vec(Leaf))
+        \\nested = Vec.V([leaves])
+        \\
+        \\bad : Vec(Leaf)
+        \\bad = nested.join(leaves)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    // Base case: element type `Leaf` implements `join`, so regular static
+    // dispatch resolves it. (Tolerate the nested error elsewhere in the module.)
+    try test_env.assertDefTypeOptions("ok", "Leaf", .{ .allow_type_errors = true });
+
+    // Self-nested case: element type `Vec(Leaf)` would need a `join` of shape
+    // `Vec(Vec(Leaf)), Vec(Leaf) -> Vec(Leaf)`, but the only `Vec.join` has shape
+    // `Vec(a), a -> a`. No overload to select, no userland reroute -> type error.
+    try testing.expect(test_env.checker.problems.problems.items.len >= 1);
+}
+
+// DEF-ORDER INDEPENDENCE PINS for `finalizeLiteralDefaults` (src/check/Check.zig).
+// Hard requirement: top-level def order must NEVER affect whether a program
+// type-checks or which types are inferred. The open-literal worklist is
+// registered in def order, so these tests pin the interference-component
+// machinery that makes defaulting commit the same types regardless of that
+// order. Before it, the first-registered literal's probe could "satisfy" a
+// constraint by speculatively pinning a still-open peer literal while ignoring
+// the peer's own constraints, so exactly one of each pair below type-checked.
+
+// Repro A: `a` and `b` are mutually constrained open literals (`d = b.plus(a)`
+// links them; `c = a.plus(u8val)` pins the group to U8). Both def orders must
+// accept with identical types. Before the fix, the `b`/`d`-first order committed
+// `b` (and transitively `a`) to Dec before `a`'s U8 constraint was consulted,
+// rejecting the program.
+test "check type - def order independence - cross-literal constraint group (pinning def first)" {
+    const source =
+        \\id = |x| x
+        \\u8val : U8
+        \\u8val = 7
+        \\a = id(1)
+        \\c = a.plus(u8val)
+        \\b = id(5)
+        \\d = b.plus(a)
+    ;
+    try checkTypesModuleDefs(source, &.{
+        .{ .def = "a", .expected = "U8" },
+        .{ .def = "b", .expected = "U8" },
+        .{ .def = "c", .expected = "U8" },
+        .{ .def = "d", .expected = "U8" },
+    });
+}
+
+test "check type - def order independence - cross-literal constraint group (pinning def last)" {
+    const source =
+        \\id = |x| x
+        \\u8val : U8
+        \\u8val = 7
+        \\b = id(5)
+        \\d = b.plus(a)
+        \\a = id(1)
+        \\c = a.plus(u8val)
+    ;
+    try checkTypesModuleDefs(source, &.{
+        .{ .def = "a", .expected = "U8" },
+        .{ .def = "b", .expected = "U8" },
+        .{ .def = "c", .expected = "U8" },
+        .{ .def = "d", .expected = "U8" },
+    });
+}
+
+// Repro B: the annotation pins the dispatch return to U8, which must flow
+// through the receiver literal's first-satisfier probe into the ARGUMENT
+// literal — the argument must not be finalized to Dec while the dispatch that
+// would pin it is still in flight.
+test "check type - annotated method-call return pins both receiver and argument literals" {
+    const source =
+        \\r : U8
+        \\r = (5).plus(1)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "U8");
+}
+
+// Repro B's def-order spelling: the argument literal lives in its own def, so
+// its worklist registration moves with def order. Both placements must accept
+// with `one : U8`. Before the fix, the `one`-first order head-committed `one` to
+// Dec before `r`'s receiver probe (which needs a U8 argument) ran.
+test "check type - def order independence - passive literal def before its constraining dispatch" {
+    const source =
+        \\one = 1
+        \\r : U8
+        \\r = (5).plus(one)
+    ;
+    try checkTypesModuleDefs(source, &.{
+        .{ .def = "one", .expected = "U8" },
+        .{ .def = "r", .expected = "U8" },
+    });
+}
+
+test "check type - def order independence - passive literal def after its constraining dispatch" {
+    const source =
+        \\r : U8
+        \\r = (5).plus(one)
+        \\one = 1
+    ;
+    try checkTypesModuleDefs(source, &.{
+        .{ .def = "one", .expected = "U8" },
+        .{ .def = "r", .expected = "U8" },
+    });
+}
+
+// Heterogeneous multi-driver group: two open literals constrained through
+// DIFFERENT integer-only methods share a component (`a`'s `bitwise_and` mentions
+// `b`). The group policy must (1) pick one candidate for the whole group — Dec
+// is refuted by the method-lookup miss, so the first surviving integer, I64,
+// wins — and (2) exempt passives from the forced assignment: `shift_left_by : T,
+// U8 -> T` pins the shift-amount literal `3` to U8 via the method signature;
+// force-assigning it the group candidate (I64) would fail every candidate and
+// head-default the drivers to Dec, erroring. Both def orders must accept with
+// identical types.
+test "check type - def order independence - heterogeneous multi-driver group (linking def first)" {
+    const source =
+        \\a = (1).bitwise_and(b)
+        \\b = (2).shift_left_by(3)
+    ;
+    try checkTypesModuleDefs(source, &.{
+        .{ .def = "a", .expected = "I64" },
+        .{ .def = "b", .expected = "I64" },
+    });
+}
+
+test "check type - def order independence - heterogeneous multi-driver group (linking def last)" {
+    const source =
+        \\b = (2).shift_left_by(3)
+        \\a = (1).bitwise_and(b)
+    ;
+    try checkTypesModuleDefs(source, &.{
+        .{ .def = "a", .expected = "I64" },
+        .{ .def = "b", .expected = "I64" },
+    });
+}
+
+// MIXED-KIND multi-driver group: a quote driver and a numeral driver share a
+// component. `"x"`'s `concat` signature mentions `b` (the still-flex result of
+// `(1).to_str()`), and `1`'s `to_str` signature mentions `b` too, so the two
+// drivers interfere. The group policy assigns the quote driver its single
+// candidate (Str) on every attempt while the numeral scan iterates — the head
+// candidate Dec already satisfies the group (`Str.concat` pins `b` to Str;
+// `Dec.to_str : Dec -> Str` agrees), so the group commits on the first attempt.
+// Both def orders must accept with identical types.
+test "check type - def order independence - mixed quote+numeral multi-driver group (quote def first)" {
+    const source =
+        \\a = "x".concat(b)
+        \\b = (1).to_str()
+    ;
+    try checkTypesModuleDefs(source, &.{
+        .{ .def = "a", .expected = "Str" },
+        .{ .def = "b", .expected = "Str" },
+    });
+}
+
+test "check type - def order independence - mixed quote+numeral multi-driver group (quote def last)" {
+    const source =
+        \\b = (1).to_str()
+        \\a = "x".concat(b)
+    ;
+    try checkTypesModuleDefs(source, &.{
+        .{ .def = "a", .expected = "Str" },
+        .{ .def = "b", .expected = "Str" },
+    });
+}
+
+// BOUNDARY GROUP DEFAULTING: the same interference-component machinery must run
+// at a def's generalization boundary, not just at module finalize.
+// `(5).plus((2).shift_left_by(3))` puts two DRIVER literals in one component
+// (`5`'s `plus` signature reaches the inner dispatch's return — `2`'s constraint
+// signature's return). At top level this resolves via `finalizeLiteralDefaults`'
+// group policy (Dec refuted by the `shift_left_by` lookup miss; first surviving
+// integer, I64, wins). Wrapped in a function, the literals are NOT
+// signature-reachable, so the BOUNDARY must default them — using the same group
+// policy. Before the boundary shared this machinery, it committed literals
+// one-by-one in var-pool order: `5`'s Dec probe speculatively pinned the inner
+// dispatch's return before `2`'s integer-only constraint was consulted, so the
+// def erred (MISSING METHOD `shift_left_by` on Dec) while the identical
+// top-level expression type-checked. Exactly one LITERAL DEFAULTED warning:
+// `5`'s `plus` signature reaches the def's return type (the leak), while `2`'s
+// `shift_left_by` signature touches nothing signature-reachable (def-local
+// default, silent) and `3` is a passive pinned to U8 by the fired signature
+// (never warned).
+//
+// (No within-def STATEMENT-order pair exists for this shape: block locals cannot
+// forward-reference, so "linking def first" is not expressible inside a body,
+// and each local def generalizes at its own per-statement boundary anyway — a
+// literal group never spans local statements.)
+test "check type - boundary defaulting - heterogeneous multi-driver group inside a function" {
+    const source =
+        \\g = |_x| (5).plus((2).shift_left_by(3))
+    ;
+    try checkTypesModule(source, .{ .pass_with_warnings = .{
+        .def = .last_def,
+        .warnings = &.{"LITERAL DEFAULTED"},
+    } }, "_arg -> I64");
+}
+
+// Top-level analogue of the boundary group test above, pinned here so the pair
+// stays in lockstep: wrapping working code in a function must not change its
+// outcome (modulo the boundary's leak warning).
+test "check type - finalize defaulting - heterogeneous multi-driver group at top level" {
+    const source =
+        \\top = (5).plus((2).shift_left_by(3))
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "I64");
 }

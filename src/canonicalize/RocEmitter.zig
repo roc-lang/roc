@@ -107,7 +107,7 @@ const EmitFrame = union(enum) {
     expr: Expr.Idx,
     pattern: CIR.Pattern.Idx,
     statement: CIR.Statement.Idx,
-    binop_operand: struct { expr_idx: Expr.Idx, outer_op: Expr.Binop.Op },
+    binop_operand: struct { expr_idx: Expr.Idx, outer_op: Expr.Binop.Op, side: BinopSide },
     write: []const u8,
     indent,
     inc_indent,
@@ -131,7 +131,7 @@ fn emitFromFrame(self: *Self, first: EmitFrame) EmitError!void {
             .expr => |idx| try self.emitExprFrame(idx, &frames, stack_allocator),
             .pattern => |idx| try self.emitPatternFrame(idx, &frames, stack_allocator),
             .statement => |idx| try self.emitStatementFrame(idx, &frames, stack_allocator),
-            .binop_operand => |operand| try self.emitBinopOperandFrame(operand.expr_idx, operand.outer_op, &frames, stack_allocator),
+            .binop_operand => |operand| try self.emitBinopOperandFrame(operand.expr_idx, operand.outer_op, operand.side, &frames, stack_allocator),
             .pattern_record_field => |field| try self.emitPatternRecordFieldFrame(field.destruct_idx, field.index, &frames, stack_allocator),
         }
     }
@@ -169,20 +169,102 @@ fn pushPatternList(
     }
 }
 
+/// The binary operator this expression prints as, if any: a still-sugared
+/// `e_binop`, a checked `e_dispatch_call` desugared from one, or a checked
+/// equality node (printed as `==`/`!=`).
+fn surfaceBinopOp(expr: Expr) ?Expr.Binop.Op {
+    return switch (expr) {
+        .e_binop => |binop| binop.op,
+        .e_dispatch_call => |method_call| switch (method_call.surface_origin) {
+            .binop => |op| op,
+            else => null,
+        },
+        .e_structural_eq => |eq| if (eq.negated) .ne else .eq,
+        .e_method_eq => |eq| if (eq.negated) .ne else .eq,
+        else => null,
+    };
+}
+
+/// Which side of a binary operator an operand sits on. The two sides have
+/// different parenthesization rules: e.g. left-associative operators need
+/// parens around an equal-precedence RIGHT operand (`1 - (2 - 3)`) but not
+/// around an equal-precedence left one (`(1 - 2) - 3` reparses unchanged).
+const BinopSide = enum { left, right };
+
 fn emitBinopOperandFrame(
     self: *Self,
     expr_idx: Expr.Idx,
     outer_op: Expr.Binop.Op,
+    side: BinopSide,
     frames: *std.ArrayList(EmitFrame),
     allocator: std.mem.Allocator,
 ) EmitError!void {
     const expr = self.module_env.store.getExpr(expr_idx);
-    if (expr == .e_binop and binopPrecedence(expr.e_binop.op) < binopPrecedence(outer_op)) {
+    const needs_parens = if (surfaceBinopOp(expr)) |inner_op| switch (side) {
+        // The left operand's text is parsed first; the inner expression then
+        // keeps its operands iff the outer operator does NOT bind into the
+        // inner operator's right operand, i.e. the outer operator's left
+        // binding power is below the inner operator's right binding power.
+        .left => binopBp(outer_op).left >= binopBp(inner_op).right,
+        // The right operand's text is parsed with the outer operator's right
+        // binding power as the minimum; the inner operator only binds its
+        // operands together if its left binding power reaches that minimum.
+        .right => binopBp(inner_op).left < binopBp(outer_op).right,
+    } else false;
+    if (needs_parens) {
         try frames.append(allocator, .{ .write = ")" });
         try frames.append(allocator, .{ .expr = expr_idx });
         try frames.append(allocator, .{ .write = "(" });
     } else {
         try frames.append(allocator, .{ .expr = expr_idx });
+    }
+}
+
+/// Whether a unary operator's receiver must be parenthesized to reparse as
+/// written: operator expressions (unary binds tighter than any binop), other
+/// unary applications, and negative literals. The latter two print a leading
+/// `-` or `!`, which would fuse with the unary operator into different
+/// tokens: `--x` tokenizes as binary minus, not as two negations.
+fn unaryReceiverNeedsParens(self: *Self, receiver_idx: Expr.Idx) bool {
+    const receiver = self.module_env.store.getExpr(receiver_idx);
+    if (surfaceBinopOp(receiver) != null) return true;
+    return switch (receiver) {
+        .e_unary_minus, .e_unary_not => true,
+        .e_dispatch_call => |method_call| switch (method_call.surface_origin) {
+            .unary_minus, .unary_not => true,
+            else => false,
+        },
+        .e_num => |num| num.value.kind == .i128 and num.value.toI128() < 0,
+        .e_frac_f32 => |frac| std.math.signbit(frac.value),
+        .e_frac_f64 => |frac| std.math.signbit(frac.value),
+        .e_dec => |dec| dec.value.num < 0,
+        .e_dec_small => |small| small.value.numerator < 0,
+        .e_num_from_numeral => blk: {
+            const literal = self.module_env.numeralLiteralForNode(ModuleEnv.nodeIdxFrom(receiver_idx)) orelse {
+                std.debug.panic("missing recorded numeral for expression {}", .{@intFromEnum(receiver_idx)});
+            };
+            break :blk literal.isNegative();
+        },
+        .e_typed_int => |typed| typed.value.kind == .i128 and typed.value.toI128() < 0,
+        .e_typed_frac => |typed| typed.value.toI128() < 0,
+        else => false,
+    };
+}
+
+/// Push frames emitting a unary operator's receiver, parenthesized when
+/// required to reparse as the same expression.
+fn pushUnaryReceiverFrames(
+    self: *Self,
+    receiver_idx: Expr.Idx,
+    frames: *std.ArrayList(EmitFrame),
+    allocator: std.mem.Allocator,
+) EmitError!void {
+    if (self.unaryReceiverNeedsParens(receiver_idx)) {
+        try frames.append(allocator, .{ .write = ")" });
+        try frames.append(allocator, .{ .expr = receiver_idx });
+        try frames.append(allocator, .{ .write = "(" });
+    } else {
+        try frames.append(allocator, .{ .expr = receiver_idx });
     }
 }
 
@@ -354,18 +436,18 @@ fn emitExprFrame(
             }
         },
         .e_binop => |binop| {
-            try frames.append(allocator, .{ .binop_operand = .{ .expr_idx = binop.rhs, .outer_op = binop.op } });
+            try frames.append(allocator, .{ .binop_operand = .{ .expr_idx = binop.rhs, .outer_op = binop.op, .side = .right } });
             try frames.append(allocator, .{ .write = " " });
             try frames.append(allocator, .{ .write = binopToStr(binop.op) });
             try frames.append(allocator, .{ .write = " " });
-            try frames.append(allocator, .{ .binop_operand = .{ .expr_idx = binop.lhs, .outer_op = binop.op } });
+            try frames.append(allocator, .{ .binop_operand = .{ .expr_idx = binop.lhs, .outer_op = binop.op, .side = .left } });
         },
         .e_unary_minus => |unary| {
-            try frames.append(allocator, .{ .expr = unary.expr });
+            try self.pushUnaryReceiverFrames(unary.expr, frames, allocator);
             try frames.append(allocator, .{ .write = "-" });
         },
         .e_unary_not => |unary| {
-            try frames.append(allocator, .{ .expr = unary.expr });
+            try self.pushUnaryReceiverFrames(unary.expr, frames, allocator);
             try frames.append(allocator, .{ .write = "!" });
         },
         .e_field_access => |field_access| {
@@ -381,11 +463,31 @@ fn emitExprFrame(
             try frames.append(allocator, .{ .expr = method_call.receiver });
         },
         .e_dispatch_call => |method_call| {
-            try pushExprList(frames, allocator, self.module_env.store.sliceExpr(method_call.args), ")", ", ");
-            try frames.append(allocator, .{ .write = "(" });
-            try frames.append(allocator, .{ .write = self.module_env.getIdent(method_call.method_name) });
-            try frames.append(allocator, .{ .write = "." });
-            try frames.append(allocator, .{ .expr = method_call.receiver });
+            // Re-emit in the surface form the dispatch was desugared from
+            // (see `SurfaceOrigin`): printing a desugared `+` back as
+            // `.plus()` would weaken the re-checked program.
+            switch (method_call.surface_origin) {
+                .binop => |op| {
+                    const args = self.module_env.store.sliceExpr(method_call.args);
+                    std.debug.assert(args.len == 1);
+                    try frames.append(allocator, .{ .binop_operand = .{ .expr_idx = args[0], .outer_op = op, .side = .right } });
+                    try frames.append(allocator, .{ .write = " " });
+                    try frames.append(allocator, .{ .write = binopToStr(op) });
+                    try frames.append(allocator, .{ .write = " " });
+                    try frames.append(allocator, .{ .binop_operand = .{ .expr_idx = method_call.receiver, .outer_op = op, .side = .left } });
+                },
+                .unary_minus, .unary_not => {
+                    try self.pushUnaryReceiverFrames(method_call.receiver, frames, allocator);
+                    try frames.append(allocator, .{ .write = if (method_call.surface_origin == .unary_minus) "-" else "!" });
+                },
+                .method_call => {
+                    try pushExprList(frames, allocator, self.module_env.store.sliceExpr(method_call.args), ")", ", ");
+                    try frames.append(allocator, .{ .write = "(" });
+                    try frames.append(allocator, .{ .write = self.module_env.getIdent(method_call.method_name) });
+                    try frames.append(allocator, .{ .write = "." });
+                    try frames.append(allocator, .{ .expr = method_call.receiver });
+                },
+            }
         },
         .e_interpolation => |interpolation| {
             try frames.append(allocator, .{ .write = ")" });
@@ -395,14 +497,16 @@ fn emitExprFrame(
             try frames.append(allocator, .{ .write = "<interpolation>(" });
         },
         .e_structural_eq => |eq| {
-            try frames.append(allocator, .{ .expr = eq.rhs });
+            const op: Expr.Binop.Op = if (eq.negated) .ne else .eq;
+            try frames.append(allocator, .{ .binop_operand = .{ .expr_idx = eq.rhs, .outer_op = op, .side = .right } });
             try frames.append(allocator, .{ .write = if (eq.negated) " != " else " == " });
-            try frames.append(allocator, .{ .expr = eq.lhs });
+            try frames.append(allocator, .{ .binop_operand = .{ .expr_idx = eq.lhs, .outer_op = op, .side = .left } });
         },
         .e_method_eq => |eq| {
-            try frames.append(allocator, .{ .expr = eq.rhs });
+            const op: Expr.Binop.Op = if (eq.negated) .ne else .eq;
+            try frames.append(allocator, .{ .binop_operand = .{ .expr_idx = eq.rhs, .outer_op = op, .side = .right } });
             try frames.append(allocator, .{ .write = if (eq.negated) " != " else " == " });
-            try frames.append(allocator, .{ .expr = eq.lhs });
+            try frames.append(allocator, .{ .binop_operand = .{ .expr_idx = eq.lhs, .outer_op = op, .side = .left } });
         },
         .e_type_method_call => |method_call| {
             try pushExprList(frames, allocator, self.module_env.store.sliceExpr(method_call.args), ")", ", ");
@@ -638,15 +742,30 @@ fn emitStatementFrame(
     }
 }
 
-/// Returns precedence level for a binary operator (higher = binds tighter)
-fn binopPrecedence(op: Expr.Binop.Op) u8 {
+/// Binding power of the lhs and rhs of a binary operator (higher binds
+/// tighter). Left < right is left-associative; left >= right makes the
+/// operator bind into its own kind on the right (right-associative).
+const BinopBp = struct { left: u8, right: u8 };
+
+/// Binding powers for each binary operator. These must mirror the parser's
+/// `bin_op_bp_table` (src/parse/Parser.zig) exactly: re-emitted operator
+/// expressions only omit parentheses where the parser's binding powers
+/// reproduce the same tree.
+fn binopBp(op: Expr.Binop.Op) BinopBp {
     return switch (op) {
-        .@"or" => 1,
-        .@"and" => 2,
-        .eq, .ne => 3,
-        .lt, .gt, .le, .ge => 4,
-        .add, .sub => 5,
-        .mul, .div, .div_trunc, .rem => 6,
+        .mul => .{ .left = 30, .right = 31 },
+        .div => .{ .left = 28, .right = 29 },
+        .div_trunc => .{ .left = 26, .right = 27 },
+        .rem => .{ .left = 24, .right = 25 },
+        .add, .sub => .{ .left = 20, .right = 21 },
+        .eq => .{ .left = 15, .right = 15 },
+        .ne => .{ .left = 13, .right = 13 },
+        .lt => .{ .left = 11, .right = 11 },
+        .gt => .{ .left = 9, .right = 9 },
+        .le => .{ .left = 7, .right = 7 },
+        .ge => .{ .left = 5, .right = 5 },
+        .@"and" => .{ .left = 4, .right = 3 },
+        .@"or" => .{ .left = 2, .right = 1 },
     };
 }
 

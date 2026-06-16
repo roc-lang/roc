@@ -46,8 +46,20 @@ fn mustUseLlvm(target: ResolvedTarget) bool {
     return target.result.os.tag == .macos and target.result.cpu.arch == .x86_64;
 }
 
+fn isGlibcTestHost(target: ResolvedTarget) bool {
+    return target.result.os.tag == .linux and target.result.abi == .gnu;
+}
+
+fn testHostNeedsLlvm(target: ResolvedTarget) bool {
+    // macOS x86_64 must use the LLVM backend. All Linux test hosts use it too:
+    // the symbol-ABI tests need the ELF @export visibility metadata Zig's LLVM
+    // backend emits, and glibc hosts additionally rely on LLVM for DCE.
+    return mustUseLlvm(target) or target.result.os.tag == .linux;
+}
+
 fn testHostNeedsCompilerRt(target: ResolvedTarget) bool {
-    return mustUseLlvm(target) or
+    return target.result.os.tag == .linux or
+        mustUseLlvm(target) or
         (target.result.os.tag == .windows and target.result.cpu.arch == .aarch64);
 }
 
@@ -1652,12 +1664,22 @@ fn createTestPlatformHostLib(
             .optimize = optimize,
             .strip = strip,
             .omit_frame_pointer = omit_frame_pointer,
+            // These archives are linked into Roc-produced ELF outputs without
+            // a Zig runtime; keep safe-mode stack probes out of that ABI.
+            .stack_check = if (isGlibcTestHost(target)) false else null,
             .pic = true, // Enable Position Independent Code for PIE compatibility
             // Only linked so host code can set up stack overflow handling.
             .link_libc = testHostNeedsLibc(options, target),
         }),
     });
     configureBackend(lib, target);
+    if (testHostNeedsLlvm(target)) {
+        // The symbol-ABI platform tests depend on the visibility declared in
+        // @export options: default-visibility host functions are public shared
+        // library exports, while hidden runtime and hosted symbols are internal
+        // link inputs. Zig's LLVM backend emits that ELF visibility metadata.
+        lib.use_llvm = true;
+    }
     if (options.uses_stack_handler) {
         lib.root_module.addImport("base", roc_modules.base);
     }
@@ -1666,10 +1688,10 @@ fn createTestPlatformHostLib(
     lib.root_module.addImport("shim_io", b.addModule("shim_io", .{
         .root_source_file = b.path("src/shim_io.zig"),
     }));
-    // Bundle compiler_rt when the generated host object may call compiler_rt
-    // routines that are not supplied by the OS libraries. ARM64 Windows Zig code
-    // can emit stack-protector calls to __stack_chk_fail; x86_64 macOS (LLVM)
-    // needs symbols like __zig_probe_stack.
+    // Bundle compiler_rt when generated host object code may call compiler_rt
+    // routines that are not supplied by the OS libraries. Linux and x86_64
+    // macOS LLVM builds can emit symbols like __zig_probe_stack; ARM64 Windows
+    // Zig code can emit stack-protector calls to __stack_chk_fail.
     lib.bundle_compiler_rt = testHostNeedsCompilerRt(target);
     // Per-function/data sections so symbol-ABI links can strip unused host code.
     lib.link_function_sections = true;
@@ -2013,8 +2035,10 @@ fn setupTestPlatforms(
         clear_cache_step.dependOn(copy_step);
     }
 
-    // Cross-compile for musl targets (glibc is not needed for native CLI platform tests)
-    for (musl_cross_targets) |cross_target| {
+    // Cross-compile for all Linux targets. `roc build` selects the host
+    // platform's native target by default, which is commonly x64glibc even
+    // when this Zig build compiles the `roc` binary as native-musl.
+    for (linux_cross_targets) |cross_target| {
         const cross_resolved_target = b.resolveTargetQuery(cross_target.query);
 
         for (all_test_platform_dirs) |platform_dir| {
@@ -3475,9 +3499,13 @@ pub fn build(b: *std.Build) void {
         run_dylib_test.step.dependOn(&build_dylib_app.step);
         run_test_dylib_step.dependOn(&run_dylib_test.step);
 
-        // Unused host code (the canary function and its constant) must be
-        // dead-code-eliminated from the linked library, while the used hosted
-        // function survives.
+        // Dead host code must be dead-code-eliminated while live host code
+        // survives, checked by byte-scanning for marker data blobs (data works
+        // on every object format, unlike symbol names — PE retains no internal
+        // symbol names): the dead-hosted and dead-only-helper blobs must be
+        // absent, and the blob shared with the live Host.double! path must be
+        // present. (That roc_run_app/roc_main are exported and the hidden
+        // roc_host_double is not is checked separately by the loader.)
         const dylib_dce_check_exe = b.addExecutable(.{
             .name = "dylib_dce_check",
             .root_module = b.createModule(.{
@@ -3495,7 +3523,6 @@ pub fn build(b: *std.Build) void {
             "--absent",
             "ROC_DCE_DEAD_HELPER_BLOB_28d0aa",
             "ROC_DCE_SHARED_BLOB_93e2c1",
-            "roc_host_double",
         });
         run_dylib_dce_check.step.dependOn(&build_dylib_app.step);
         run_test_dylib_step.dependOn(&run_dylib_dce_check.step);
@@ -3526,6 +3553,10 @@ pub fn build(b: *std.Build) void {
                 .target = output_target.resolved,
                 .optimize = optimize,
                 .link_libc = true,
+                // A COFF /DEBUG link disables lld-link's /OPT:REF default, so
+                // an unstripped Windows Debug build would keep the DCE canary
+                // sections this test asserts are eliminated.
+                .strip = true,
             }),
         });
         configureBackend(archive_consumer_exe, output_target.resolved);
@@ -4657,6 +4688,8 @@ pub fn build(b: *std.Build) void {
         "tokenize",
         "parse",
         "canonicalize",
+        "typecheck",
+        "build",
     };
     for (names) |name| {
         add_fuzz_target(
@@ -4669,6 +4702,8 @@ pub fn build(b: *std.Build) void {
             target,
             optimize,
             roc_modules,
+            compiled_builtins_module,
+            write_compiled_builtins,
             flag_enable_tracy,
             name,
         );
@@ -4705,6 +4740,8 @@ fn add_fuzz_target(
     target: ResolvedTarget,
     optimize: OptimizeMode,
     roc_modules: modules.RocModules,
+    compiled_builtins_module: *std.Build.Module,
+    write_compiled_builtins: *Step.WriteFile,
     tracy: ?[]const u8,
     name: []const u8,
 ) void {
@@ -4730,6 +4767,8 @@ fn add_fuzz_target(
     }
 
     roc_modules.addAll(fuzz_obj);
+    fuzz_obj.root_module.addImport("compiled_builtins", compiled_builtins_module);
+    fuzz_obj.step.dependOn(&write_compiled_builtins.step);
     add_tracy(b, roc_modules.build_options, fuzz_obj, target, false, tracy);
 
     const name_exe = b.fmt("fuzz-{s}", .{name});
@@ -4754,12 +4793,56 @@ fn add_fuzz_target(
         const fuzz_step = b.step(b.fmt("build-fuzz-{s}", .{name}), b.fmt("Build fuzz executable for {s}", .{name}));
         b.default_step.dependOn(fuzz_step);
 
-        const afl = b.lazyImport(@This(), "afl_kit") orelse return;
-        const fuzz_exe = afl.addInstrumentedExe(b, target, .ReleaseSafe, &.{}, use_system_afl, fuzz_obj, &.{"-lm"}) orelse return;
+        const fuzz_exe = if (target.result.os.tag == .macos)
+            addMacosAflFuzzExe(b, target, .ReleaseSafe, use_system_afl, fuzz_obj) orelse return
+        else blk: {
+            const afl = b.lazyImport(@This(), "afl_kit") orelse return;
+            break :blk afl.addInstrumentedExe(b, target, .ReleaseSafe, &.{}, use_system_afl, fuzz_obj, &.{"-lm"}) orelse return;
+        };
         const install_fuzz = b.addInstallBinFile(fuzz_exe, name_exe);
         fuzz_step.dependOn(&install_fuzz.step);
         b.getInstallStep().dependOn(&install_fuzz.step);
     }
+}
+
+fn addMacosAflFuzzExe(
+    b: *std.Build,
+    target: ResolvedTarget,
+    optimize: OptimizeMode,
+    use_system_afl: bool,
+    fuzz_obj: *Step.Compile,
+) ?std.Build.LazyPath {
+    if (!use_system_afl) {
+        std.log.warn("Vendored AFL++ does not currently support macOS fuzz executable linking; use system AFL++", .{});
+        return null;
+    }
+
+    const afl_kit = b.lazyDependency("afl_kit", .{}) orelse return null;
+    const afl_cc = b.findProgram(&.{"afl-cc"}, &.{}) catch @panic("Could not find 'afl-cc', which is required to build");
+    const afl_bin_dir = std.fs.path.dirname(afl_cc) orelse @panic("Could not determine afl-cc directory");
+    const afl_compiler_rt = std.Build.LazyPath{ .cwd_relative = b.pathJoin(&.{ afl_bin_dir, "..", "lib", "afl", "afl-compiler-rt.o" }) };
+
+    fuzz_obj.root_module.fuzz = true;
+    fuzz_obj.root_module.link_libc = true;
+    fuzz_obj.sanitize_coverage_trace_pc_guard = true;
+
+    const exe = b.addExecutable(.{
+        .name = fuzz_obj.name,
+        .root_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+    });
+    configureBackend(exe, target);
+    exe.root_module.addCSourceFile(.{
+        .file = afl_kit.path("afl.c"),
+        .flags = &.{},
+    });
+    exe.root_module.addObject(fuzz_obj);
+    exe.root_module.addObjectFile(afl_compiler_rt);
+
+    return exe.getEmittedBin();
 }
 
 fn addMainExe(
@@ -5619,7 +5702,10 @@ fn getCompilerArtifactHash(b: *std.Build, compiler_version: []const u8) [32]u8 {
     hasher.update("roc-checked-artifact-v1");
     hasher.update(compiler_version);
 
-    const builtin_source = std.Io.Dir.cwd().readFileAlloc(
+    // Resolve against the build root rather than cwd so the hash works both for
+    // standalone builds and when roc is consumed as a dependency (cwd is then the
+    // consumer's directory, not roc's).
+    const builtin_source = b.build_root.handle.readFileAlloc(
         b.graph.io,
         "src/build/roc/Builtin.roc",
         b.allocator,

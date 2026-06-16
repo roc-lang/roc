@@ -28,6 +28,7 @@ span2_data: collections.SafeList(Span2), // Typed storage for (start, len) span 
 span_with_node_data: collections.SafeList(SpanWithNode), // Typed storage for (start, len, node) triples
 method_call_data: collections.SafeList(MethodCallData), // Typed storage for method args plus method-token source region
 match_data: collections.SafeList(MatchData), // Typed storage for match expression data
+if_data: collections.SafeList(IfData), // Typed storage for if expression data
 match_branch_data: collections.SafeList(MatchBranchData), // Typed storage for match branch data
 closure_data: collections.SafeList(ClosureData), // Typed storage for closure expressions
 zero_arg_tag_data: collections.SafeList(ZeroArgTagData), // Typed storage for zero-argument tags
@@ -54,12 +55,14 @@ pub const SpanWithNode = extern struct {
 };
 
 /// Method-call side data.
-/// Stores argument span plus the exact method-token source region.
+/// Stores argument span, the exact method-token source region, and the
+/// surface origin (encoded via `encodeSurfaceOrigin`/`decodeSurfaceOrigin`).
 pub const MethodCallData = extern struct {
     args_start: u32,
     args_len: u32,
     method_region_start: u32,
     method_region_end: u32,
+    surface_origin: u32,
 };
 
 /// Match expression data.
@@ -71,6 +74,15 @@ pub const MatchData = extern struct {
     exhaustive: u32,
     is_try_suffix: u32,
     skip_exhaustiveness: u32,
+};
+
+/// If expression data.
+/// Stores branches span, final else, and whether to warn for untaken compile-time branches.
+pub const IfData = extern struct {
+    branches_start: u32,
+    branches_len: u32,
+    final_else: u32,
+    warn_unused_branches: u32,
 };
 
 /// Match branch data.
@@ -257,6 +269,8 @@ pub fn initCapacity(gpa: Allocator, capacity: usize) Allocator.Error!NodeStore {
     errdefer method_call_data.deinit(gpa);
     var match_data = try collections.SafeList(MatchData).initCapacity(gpa, capacity / 8);
     errdefer match_data.deinit(gpa);
+    var if_data = try collections.SafeList(IfData).initCapacity(gpa, capacity / 8);
+    errdefer if_data.deinit(gpa);
     var match_branch_data = try collections.SafeList(MatchBranchData).initCapacity(gpa, capacity / 8);
     errdefer match_branch_data.deinit(gpa);
     var closure_data = try collections.SafeList(ClosureData).initCapacity(gpa, capacity / 16);
@@ -285,6 +299,7 @@ pub fn initCapacity(gpa: Allocator, capacity: usize) Allocator.Error!NodeStore {
         .span_with_node_data = span_with_node_data,
         .method_call_data = method_call_data,
         .match_data = match_data,
+        .if_data = if_data,
         .match_branch_data = match_branch_data,
         .closure_data = closure_data,
         .zero_arg_tag_data = zero_arg_tag_data,
@@ -308,6 +323,7 @@ pub fn clone(self: *const NodeStore, gpa: Allocator) Allocator.Error!NodeStore {
         .span_with_node_data = try self.span_with_node_data.clone(gpa),
         .method_call_data = try self.method_call_data.clone(gpa),
         .match_data = try self.match_data.clone(gpa),
+        .if_data = try self.if_data.clone(gpa),
         .match_branch_data = try self.match_branch_data.clone(gpa),
         .closure_data = try self.closure_data.clone(gpa),
         .zero_arg_tag_data = try self.zero_arg_tag_data.clone(gpa),
@@ -331,6 +347,7 @@ pub fn deinit(store: *NodeStore) void {
     store.span_with_node_data.deinit(store.gpa);
     store.method_call_data.deinit(store.gpa);
     store.match_data.deinit(store.gpa);
+    store.if_data.deinit(store.gpa);
     store.match_branch_data.deinit(store.gpa);
     store.closure_data.deinit(store.gpa);
     store.zero_arg_tag_data.deinit(store.gpa);
@@ -354,6 +371,7 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
     store.span_with_node_data.relocate(offset);
     store.method_call_data.relocate(offset);
     store.match_data.relocate(offset);
+    store.if_data.relocate(offset);
     store.match_branch_data.relocate(offset);
     store.closure_data.relocate(offset);
     store.zero_arg_tag_data.relocate(offset);
@@ -369,7 +387,7 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 77;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 78;
 /// Count of the expression nodes in the ModuleEnv
 pub const MODULEENV_EXPR_NODE_COUNT = 54;
 /// Count of the statement nodes in the ModuleEnv
@@ -450,15 +468,43 @@ pub fn getNodeRegion(store: *const NodeStore, node_idx: Node.Idx) Region {
     return store.getRegionAt(node_idx);
 }
 
-fn addMethodCallData(store: *NodeStore, args: CIR.Expr.Span, method_name_region: Region) Allocator.Error!u32 {
+fn addMethodCallData(store: *NodeStore, args: CIR.Expr.Span, method_name_region: Region, surface_origin: CIR.Expr.SurfaceOrigin) Allocator.Error!u32 {
     const data_idx: u32 = @intCast(store.method_call_data.len());
     _ = try store.method_call_data.append(store.gpa, .{
         .args_start = args.span.start,
         .args_len = args.span.len,
         .method_region_start = method_name_region.start.offset,
         .method_region_end = method_name_region.end.offset,
+        .surface_origin = encodeSurfaceOrigin(surface_origin),
     });
     return data_idx;
+}
+
+// Bidirectional u32 encoding for `CIR.Expr.SurfaceOrigin` in `MethodCallData`.
+// Binop ops are offset past the three unit tags so every `Binop.Op` value has
+// a distinct slot.
+const surface_origin_binop_offset: u32 = 3;
+
+fn encodeSurfaceOrigin(origin: CIR.Expr.SurfaceOrigin) u32 {
+    return switch (origin) {
+        .method_call => 0,
+        .unary_minus => 1,
+        .unary_not => 2,
+        .binop => |op| surface_origin_binop_offset + @as(u32, @intFromEnum(op)),
+    };
+}
+
+fn decodeSurfaceOrigin(encoded: u32) CIR.Expr.SurfaceOrigin {
+    return switch (encoded) {
+        0 => .method_call,
+        1 => .unary_minus,
+        2 => .unary_not,
+        else => .{ .binop = @enumFromInt(encoded - surface_origin_binop_offset) },
+    };
+}
+
+fn getMethodCallSurfaceOrigin(store: *const NodeStore, data_idx: u32) CIR.Expr.SurfaceOrigin {
+    return decodeSurfaceOrigin(store.method_call_data.items.items[data_idx].surface_origin);
 }
 
 fn getMethodCallArgs(store: *const NodeStore, data_idx: u32) CIR.Expr.Span {
@@ -1037,12 +1083,12 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         },
         .expr_if_then_else => {
             const p = payload.expr_if_then_else;
-            // Retrieve branches span and final_else from span_with_node_data
-            const branches_else = store.span_with_node_data.items.items[p.branches_else_idx];
+            const if_data = store.if_data.items.items[p.branches_else_idx];
 
             return CIR.Expr{ .e_if = .{
-                .branches = .{ .span = .{ .start = branches_else.start, .len = branches_else.len } },
-                .final_else = @enumFromInt(branches_else.node),
+                .branches = .{ .span = .{ .start = if_data.branches_start, .len = if_data.branches_len } },
+                .final_else = @enumFromInt(if_data.final_else),
+                .warn_unused_branches = if_data.warn_unused_branches != 0,
             } };
         },
         .expr_field_access => {
@@ -1075,19 +1121,19 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                 .method_name_region = store.getMethodNameRegion(p.method_call_data_idx),
                 .args = store.getMethodCallArgs(p.method_call_data_idx),
                 .constraint_fn_var = @enumFromInt(p.constraint_fn_var),
+                .surface_origin = store.getMethodCallSurfaceOrigin(p.method_call_data_idx),
             } };
         },
         .expr_interpolation => {
             const p = payload.expr_interpolation;
             const region_span = store.span2_data.items.items[p.method_name_region_span2_idx];
-            const parts_rest = store.span_with_node_data.items.items[p.parts_rest_idx];
+            const parts_step = store.span_with_node_data.items.items[p.parts_step_fn_idx];
             return CIR.Expr{ .e_interpolation = .{
                 .first = @enumFromInt(p.first),
                 .parts = .{ .span = .{
-                    .start = parts_rest.start,
-                    .len = parts_rest.len,
+                    .start = parts_step.start,
+                    .len = parts_step.len,
                 } },
-                .rest = @enumFromInt(parts_rest.node),
                 .method_name_region = base.Region{
                     .start = .{ .offset = region_span.start },
                     .end = .{ .offset = region_span.len },
@@ -1096,6 +1142,10 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                     null
                 else
                     @enumFromInt(p.constraint_fn_var_plus_one - 1),
+                .step_fn_var = if (parts_step.node == 0)
+                    null
+                else
+                    @enumFromInt(parts_step.node - 1),
             } };
         },
         .expr_structural_eq => {
@@ -1280,9 +1330,10 @@ pub fn replaceExprWithDispatchCall(
     method_name_region: Region,
     args: CIR.Expr.Span,
     constraint_fn_var: types.Var,
+    surface_origin: CIR.Expr.SurfaceOrigin,
 ) Allocator.Error!void {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
-    const method_call_data_idx = try store.addMethodCallData(args, method_name_region);
+    const method_call_data_idx = try store.addMethodCallData(args, method_name_region, surface_origin);
     var node = Node.init(.expr_dispatch_call);
     node.setPayload(.{ .expr_dispatch_call = .{
         .receiver = @intFromEnum(receiver),
@@ -1299,16 +1350,16 @@ pub fn replaceExprWithInterpolationConstraint(
     expr_idx: CIR.Expr.Idx,
     first: CIR.Expr.Idx,
     parts: CIR.Expr.Span,
-    rest: CIR.Expr.Idx,
     method_name_region: Region,
     constraint_fn_var: types.Var,
+    step_fn_var: types.Var,
 ) Allocator.Error!void {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
-    const parts_rest_idx: u32 = @intCast(store.span_with_node_data.len());
+    const parts_step_fn_idx: u32 = @intCast(store.span_with_node_data.len());
     _ = try store.span_with_node_data.append(store.gpa, .{
         .start = parts.span.start,
         .len = parts.span.len,
-        .node = @intFromEnum(rest),
+        .node = @intFromEnum(step_fn_var) + 1,
     });
     const region_span2_idx: u32 = @intCast(store.span2_data.len());
     _ = try store.span2_data.append(store.gpa, .{
@@ -1318,7 +1369,7 @@ pub fn replaceExprWithInterpolationConstraint(
     var node = Node.init(.expr_interpolation);
     node.setPayload(.{ .expr_interpolation = .{
         .first = @intFromEnum(first),
-        .parts_rest_idx = parts_rest_idx,
+        .parts_step_fn_idx = parts_step_fn_idx,
         .method_name_region_span2_idx = region_span2_idx,
         .constraint_fn_var_plus_one = @intFromEnum(constraint_fn_var) + 1,
     } });
@@ -1336,7 +1387,7 @@ pub fn replaceExprWithTypeDispatchCall(
     constraint_fn_var: types.Var,
 ) Allocator.Error!void {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
-    const method_call_data_idx = try store.addMethodCallData(args, method_name_region);
+    const method_call_data_idx = try store.addMethodCallData(args, method_name_region, .method_call);
     var node = Node.init(.expr_type_dispatch_call);
     node.setPayload(.{ .expr_type_dispatch_call = .{
         .type_var_alias_stmt = @intFromEnum(type_var_alias_stmt),
@@ -2298,7 +2349,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         },
         .e_method_call => |e| {
             node.tag = .expr_method_call;
-            const method_call_data_idx = try store.addMethodCallData(e.args, e.method_name_region);
+            const method_call_data_idx = try store.addMethodCallData(e.args, e.method_name_region, .method_call);
             node.setPayload(.{ .expr_method_call = .{
                 .receiver = @intFromEnum(e.receiver),
                 .method_name = @bitCast(e.method_name),
@@ -2307,7 +2358,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         },
         .e_dispatch_call => |e| {
             node.tag = .expr_dispatch_call;
-            const method_call_data_idx = try store.addMethodCallData(e.args, e.method_name_region);
+            const method_call_data_idx = try store.addMethodCallData(e.args, e.method_name_region, e.surface_origin);
             node.setPayload(.{ .expr_dispatch_call = .{
                 .receiver = @intFromEnum(e.receiver),
                 .method_name = @bitCast(e.method_name),
@@ -2317,11 +2368,11 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         },
         .e_interpolation => |e| {
             node.tag = .expr_interpolation;
-            const parts_rest_idx: u32 = @intCast(store.span_with_node_data.len());
+            const parts_step_fn_idx: u32 = @intCast(store.span_with_node_data.len());
             _ = try store.span_with_node_data.append(store.gpa, .{
                 .start = e.parts.span.start,
                 .len = e.parts.span.len,
-                .node = @intFromEnum(e.rest),
+                .node = if (e.step_fn_var) |var_| @intFromEnum(var_) + 1 else 0,
             });
             const region_span2_idx: u32 = @intCast(store.span2_data.len());
             _ = try store.span2_data.append(store.gpa, .{
@@ -2330,7 +2381,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             });
             node.setPayload(.{ .expr_interpolation = .{
                 .first = @intFromEnum(e.first),
-                .parts_rest_idx = parts_rest_idx,
+                .parts_step_fn_idx = parts_step_fn_idx,
                 .method_name_region_span2_idx = region_span2_idx,
                 .constraint_fn_var_plus_one = if (e.constraint_fn_var) |var_|
                     @intFromEnum(var_) + 1
@@ -2357,7 +2408,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         },
         .e_type_method_call => |e| {
             node.tag = .expr_type_method_call;
-            const method_call_data_idx = try store.addMethodCallData(e.args, e.method_name_region);
+            const method_call_data_idx = try store.addMethodCallData(e.args, e.method_name_region, .method_call);
             node.setPayload(.{ .expr_type_method_call = .{
                 .type_var_alias_stmt = @intFromEnum(e.type_var_alias_stmt),
                 .method_name = @bitCast(e.method_name),
@@ -2366,7 +2417,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         },
         .e_type_dispatch_call => |e| {
             node.tag = .expr_type_dispatch_call;
-            const method_call_data_idx = try store.addMethodCallData(e.args, e.method_name_region);
+            const method_call_data_idx = try store.addMethodCallData(e.args, e.method_name_region, .method_call);
             node.setPayload(.{ .expr_type_dispatch_call = .{
                 .type_var_alias_stmt = @intFromEnum(e.type_var_alias_stmt),
                 .method_name = @bitCast(e.method_name),
@@ -2460,15 +2511,16 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         },
         .e_if => |e| {
             node.tag = .expr_if_then_else;
-            const branches_else_idx: u32 = @intCast(store.span_with_node_data.len());
-            _ = try store.span_with_node_data.append(store.gpa, .{
-                .start = e.branches.span.start,
-                .len = e.branches.span.len,
-                .node = @intFromEnum(e.final_else),
+            const if_data_idx: u32 = @intCast(store.if_data.len());
+            _ = try store.if_data.append(store.gpa, .{
+                .branches_start = e.branches.span.start,
+                .branches_len = e.branches.span.len,
+                .final_else = @intFromEnum(e.final_else),
+                .warn_unused_branches = @intFromBool(e.warn_unused_branches),
             });
 
             node.setPayload(.{ .expr_if_then_else = .{
-                .branches_else_idx = branches_else_idx,
+                .branches_else_idx = if_data_idx,
             } });
         },
         .e_call => |e| {
@@ -4056,6 +4108,10 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
             region = r.region;
             node.setPayload(.{ .diag_two_enums = .{ .enum1 = @intFromEnum(r.suffix), .enum2 = @intFromEnum(r.suggested) } });
         },
+        .range_op_chained => |r| {
+            node.tag = .diag_range_op_chained;
+            region = r.region;
+        },
     }
 
     const nid = @intFromEnum(try store.nodes.append(store.gpa, node));
@@ -4515,6 +4571,9 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
                 .region = store.getRegionAt(node_idx),
             } };
         },
+        .diag_range_op_chained => return CIR.Diagnostic{ .range_op_chained = .{
+            .region = store.getRegionAt(node_idx),
+        } },
         else => {
             @panic("getDiagnostic called with non-diagnostic node - this indicates a compiler bug");
         },
@@ -4609,6 +4668,7 @@ pub const Serialized = extern struct {
     span_with_node_data: collections.SafeList(SpanWithNode).Serialized,
     method_call_data: collections.SafeList(MethodCallData).Serialized,
     match_data: collections.SafeList(MatchData).Serialized,
+    if_data: collections.SafeList(IfData).Serialized,
     match_branch_data: collections.SafeList(MatchBranchData).Serialized,
     closure_data: collections.SafeList(ClosureData).Serialized,
     zero_arg_tag_data: collections.SafeList(ZeroArgTagData).Serialized,
@@ -4640,6 +4700,8 @@ pub const Serialized = extern struct {
         try self.method_call_data.serialize(&store.method_call_data, allocator, writer);
         // Serialize match_data
         try self.match_data.serialize(&store.match_data, allocator, writer);
+        // Serialize if_data
+        try self.if_data.serialize(&store.if_data, allocator, writer);
         // Serialize match_branch_data
         try self.match_branch_data.serialize(&store.match_branch_data, allocator, writer);
         // Serialize closure_data
@@ -4672,6 +4734,7 @@ pub const Serialized = extern struct {
             .span_with_node_data = self.span_with_node_data.deserializeInto(base_addr),
             .method_call_data = self.method_call_data.deserializeInto(base_addr),
             .match_data = self.match_data.deserializeInto(base_addr),
+            .if_data = self.if_data.deserializeInto(base_addr),
             .match_branch_data = self.match_branch_data.deserializeInto(base_addr),
             .closure_data = self.closure_data.deserializeInto(base_addr),
             .zero_arg_tag_data = self.zero_arg_tag_data.deserializeInto(base_addr),
@@ -4697,6 +4760,7 @@ pub const Serialized = extern struct {
             .span_with_node_data = self.span_with_node_data.deserializeInto(base_addr),
             .method_call_data = self.method_call_data.deserializeInto(base_addr),
             .match_data = self.match_data.deserializeInto(base_addr),
+            .if_data = self.if_data.deserializeInto(base_addr),
             .match_branch_data = self.match_branch_data.deserializeInto(base_addr),
             .closure_data = self.closure_data.deserializeInto(base_addr),
             .zero_arg_tag_data = self.zero_arg_tag_data.deserializeInto(base_addr),

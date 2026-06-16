@@ -329,7 +329,7 @@ pub const ArtifactPublicationInputs = struct {
 
 fn problemBlocksCheckedArtifact(problem: check.problem.Problem) bool {
     return switch (problem) {
-        .redundant_pattern, .unmatchable_pattern => false,
+        .redundant_pattern, .unmatchable_pattern, .comptime_unused_branch, .literal_defaulted => false,
         else => true,
     };
 }
@@ -1468,6 +1468,8 @@ pub const PackageEnv = struct {
 
         try checker.checkFile();
 
+        _ = try checker.problems.flushAllPendingStaticExhaustiveness(gpa);
+
         return checker;
     }
 
@@ -1702,6 +1704,7 @@ pub const PackageEnv = struct {
             checkerHasArtifactBlockingProblems(&checker) or
             !importedArtifactsCoverImportedEnvs(imported_envs, imported_artifacts))
         {
+            _ = try checker.problems.flushPendingStaticExhaustiveness(check_alloc);
             return .{
                 .checker = checker,
                 .checked_artifact = null,
@@ -1721,9 +1724,12 @@ pub const PackageEnv = struct {
                 .problem_store = &checker.problems,
             },
         ) catch |err| switch (err) {
-            error.CompileTimeProblem => return .{
-                .checker = checker,
-                .checked_artifact = null,
+            error.CompileTimeProblem => {
+                _ = try checker.problems.flushPendingStaticExhaustiveness(check_alloc);
+                return .{
+                    .checker = checker,
+                    .checked_artifact = null,
+                };
             },
             else => |other| return other,
         };

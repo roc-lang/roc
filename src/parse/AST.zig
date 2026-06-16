@@ -280,6 +280,7 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
         .type_alias_cannot_have_associated => "TYPE ALIAS WITH ASSOCIATED ITEMS",
         .nominal_associated_cannot_have_final_expression => "EXPRESSION IN ASSOCIATED ITEMS",
         .deprecated_number_suffix => "DEPRECATED NUMBER SUFFIX",
+        .expr_double_dot_is_not_range => "NOT A RANGE OPERATOR",
         else => "PARSE ERROR",
     };
 
@@ -605,6 +606,14 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
             try report.document.addReflowingText(" instead.");
             return report;
         },
+        .expr_double_dot_is_not_range => {
+            try report.document.addInlineCode("..");
+            try report.document.addText(" is not an operator. For an exclusive range use ");
+            try report.document.addInlineCode("..<");
+            try report.document.addText("; for an inclusive range use ");
+            try report.document.addInlineCode("..=");
+            try report.document.addText(".");
+        },
         else => {
             const tag_name = @tagName(diagnostic.tag);
             const owned_tag = try report.addOwnedString(tag_name);
@@ -724,6 +733,8 @@ pub const Diagnostic = struct {
         import_must_be_top_level,
         invalid_type_arg,
         expr_arrow_expects_ident,
+        /// `a..b` is not range syntax — ranges are `a..<b` (exclusive) or `a..=b` (inclusive)
+        expr_double_dot_is_not_range,
         var_only_allowed_in_a_body,
         var_must_have_ident,
         var_expected_equals,

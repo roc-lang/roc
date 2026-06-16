@@ -805,6 +805,10 @@ symbols and are not `FnDef` values.
 Checking reports all user-facing static-dispatch errors. This includes missing
 methods, ambiguous constraints, illegal equality use, invalid iterator `for`
 constraints, and any other error that should be shown to the programmer.
+Checked diagnostics include warning severity: a literal (number or string)
+defaulted at a generalization boundary that narrows the definition's inferred
+type reports `LITERAL DEFAULTED` as a warning, not an error, worded per
+literal kind.
 
 The checked module outputs normalized dispatch plans. A dispatch plan is a
 checked record, not lowered code:
@@ -1277,8 +1281,12 @@ or layout slot. Runtime tag discriminants, payload layout, and field offsets are
 not chosen until direct LIR lowering commits layouts.
 
 Monotype IR does not need a separate row-finalization stage. Row closure,
-numeric defaulting, nominal backing instantiation, and structural child ordering
-are completed while constructing Monotype types from checked types.
+nominal backing instantiation, and structural child ordering are completed
+while constructing Monotype types from checked types. Numeric defaulting is
+split by the checked `numeric_default_phase` data: checking defaults open
+literals (the first candidate in the numeric default candidate order, `Dec` first, that
+satisfies the literal's dispatch constraints), and Monotype commits only the
+per-specialization residue of generalized literals.
 
 ### Monotype Instantiation
 

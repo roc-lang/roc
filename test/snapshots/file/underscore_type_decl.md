@@ -12,67 +12,9 @@ Pair2(_, y) = Pair(0, 1)
 Pair3(_, _) = Pair(0, 1)
 ~~~
 # EXPECTED
-NON-EXHAUSTIVE DESTRUCTURE - underscore_type_decl.md:3:1:3:12
-NON-EXHAUSTIVE DESTRUCTURE - underscore_type_decl.md:4:1:4:12
-NON-EXHAUSTIVE DESTRUCTURE - underscore_type_decl.md:5:1:5:12
+NIL
 # PROBLEMS
-**NON-EXHAUSTIVE DESTRUCTURE**
-This destructuring pattern doesn't cover all possible cases:
-**underscore_type_decl.md:3:1:3:12:**
-```roc
-Pair1(x, _) = Pair(0, 1)
-```
-^^^^^^^^^^^
-
-The value being destructured has type:
-        _[Pair(a, b), Pair1([], []), ..]
-  where [
-    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
-  ]_
-
-Missing patterns:
-        _
-
-
-**NON-EXHAUSTIVE DESTRUCTURE**
-This destructuring pattern doesn't cover all possible cases:
-**underscore_type_decl.md:4:1:4:12:**
-```roc
-Pair2(_, y) = Pair(0, 1)
-```
-^^^^^^^^^^^
-
-The value being destructured has type:
-        _[Pair(a, b), Pair2([], []), ..]
-  where [
-    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
-  ]_
-
-Missing patterns:
-        _
-
-
-**NON-EXHAUSTIVE DESTRUCTURE**
-This destructuring pattern doesn't cover all possible cases:
-**underscore_type_decl.md:5:1:5:12:**
-```roc
-Pair3(_, _) = Pair(0, 1)
-```
-^^^^^^^^^^^
-
-The value being destructured has type:
-        _[Pair(a, b), Pair3([], []), ..]
-  where [
-    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
-  ]_
-
-Missing patterns:
-        _
-
-
+NIL
 # TOKENS
 ~~~zig
 KwImport,UpperIdent,KwExposing,OpenSquare,UpperIdent,CloseSquare,

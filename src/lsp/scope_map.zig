@@ -269,7 +269,9 @@ pub const ScopeMap = struct {
             },
             .e_interpolation => |interpolation| {
                 try self.traverseExpr(module_env, interpolation.first, scope_end, depth + 1);
-                try self.traverseExpr(module_env, interpolation.rest, scope_end, depth + 1);
+                for (module_env.store.sliceExpr(interpolation.parts)) |part_idx| {
+                    try self.traverseExpr(module_env, part_idx, scope_end, depth + 1);
+                }
             },
             .e_structural_eq => |eq| {
                 try self.traverseExpr(module_env, eq.lhs, scope_end, depth + 1);

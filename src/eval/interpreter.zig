@@ -78,6 +78,12 @@ const JmpBuf = sljmp.JmpBuf;
 const setjmp = sljmp.setjmp;
 const longjmp = sljmp.longjmp;
 
+/// Failed inline `expect` observed during one interpreter evaluation.
+pub const ExpectFailure = struct {
+    message: []const u8,
+    loc: base.SourceLoc,
+};
+
 /// Environment for interpreter-managed RocOps forwarding.
 ///
 /// The interpreter always evaluates with the RocOps it was initialized with.
@@ -90,6 +96,7 @@ const InterpreterRocEnv = struct {
     crash_message: ?[]const u8 = null,
     runtime_error_message: ?[]const u8 = null,
     expect_message: ?[]const u8 = null,
+    expect_failures: std.ArrayList(ExpectFailure) = .empty,
     expect_err_message: ?[]const u8 = null,
     expect_err_region: ?base.Region = null,
     jmp_buf: JmpBuf = undefined,
@@ -106,6 +113,8 @@ const InterpreterRocEnv = struct {
     fn deinit(self: *InterpreterRocEnv) void {
         if (self.crash_message) |msg| self.allocator.free(msg);
         if (self.expect_message) |msg| self.allocator.free(msg);
+        self.clearExpectFailures();
+        self.expect_failures.deinit(self.allocator);
         if (self.expect_err_message) |msg| self.allocator.free(msg);
     }
 
@@ -117,6 +126,7 @@ const InterpreterRocEnv = struct {
         self.runtime_error_message = null;
         if (self.expect_message) |msg| self.allocator.free(msg);
         self.expect_message = null;
+        self.clearExpectFailures();
         if (self.expect_err_message) |msg| self.allocator.free(msg);
         self.expect_err_message = null;
         self.expect_err_region = null;
@@ -145,6 +155,22 @@ const InterpreterRocEnv = struct {
         self.crashed = true;
         if (self.crash_message) |old| self.allocator.free(old);
         self.crash_message = self.allocator.dupe(u8, msg) catch null;
+    }
+
+    fn clearExpectFailures(self: *InterpreterRocEnv) void {
+        for (self.expect_failures.items) |failure| {
+            self.allocator.free(failure.message);
+        }
+        self.expect_failures.clearRetainingCapacity();
+    }
+
+    fn recordExpectFailure(self: *InterpreterRocEnv, msg: []const u8, loc: base.SourceLoc) Allocator.Error!void {
+        const owned_msg = try self.allocator.dupe(u8, msg);
+        errdefer self.allocator.free(owned_msg);
+        try self.expect_failures.append(self.allocator, .{
+            .message = owned_msg,
+            .loc = loc,
+        });
     }
 
     fn reportCrash(self: *InterpreterRocEnv, msg: []const u8) void {
@@ -281,6 +307,8 @@ pub const Interpreter = struct {
     call_stack: std.ArrayList(LirProcSpecId),
     /// Call stack captured at the first failed exit in the current evaluation.
     failed_call_stack: std.ArrayList(LirProcSpecId),
+    comptime_branch_hits: std.ArrayList(ComptimeBranchHit),
+    comptime_failed_site: ?LIR.ComptimeSiteId = null,
 
     const RcPresence = enum(u2) {
         unknown,
@@ -292,9 +320,15 @@ pub const Interpreter = struct {
     pub const Error = error{
         OutOfMemory,
         RuntimeError,
+        ComptimeExhaustiveness,
         DivisionByZero,
         Crash,
         ExpectErr,
+    };
+
+    pub const ComptimeBranchHit = struct {
+        site: LIR.ComptimeSiteId,
+        branch_index: u32,
     };
 
     const CrashBoundary = struct {
@@ -490,10 +524,12 @@ pub const Interpreter = struct {
             .tag_variant_plans = tag_variant_plans,
             .call_stack = .empty,
             .failed_call_stack = .empty,
+            .comptime_branch_hits = .empty,
         };
     }
 
     pub fn deinit(self: *LirInterpreter) void {
+        self.comptime_branch_hits.deinit(self.evalAllocator());
         self.failed_call_stack.deinit(self.evalAllocator());
         self.call_stack.deinit(self.evalAllocator());
         self.roc_env.deinit();
@@ -593,6 +629,10 @@ pub const Interpreter = struct {
         return self.roc_env.expect_message;
     }
 
+    pub fn getExpectFailures(self: *const LirInterpreter) []const ExpectFailure {
+        return self.roc_env.expect_failures.items;
+    }
+
     /// The failure message from a `?` operator that evaluated an Err inside a
     /// top-level expect, if the last evaluation failed that way.
     /// Owned by the interpreter and valid until the next eval or deinit.
@@ -607,6 +647,14 @@ pub const Interpreter = struct {
 
     pub fn getFailedCallStack(self: *const LirInterpreter) []const LirProcSpecId {
         return self.failed_call_stack.items;
+    }
+
+    pub fn getComptimeFailedSite(self: *const LirInterpreter) ?LIR.ComptimeSiteId {
+        return self.comptime_failed_site;
+    }
+
+    pub fn getComptimeBranchHits(self: *const LirInterpreter) []const ComptimeBranchHit {
+        return self.comptime_branch_hits.items;
     }
 
     fn recordFailedCallStackIfUnset(self: *LirInterpreter) Allocator.Error!void {
@@ -624,6 +672,11 @@ pub const Interpreter = struct {
     fn runtimeError(self: *LirInterpreter, message: []const u8) Error {
         self.roc_env.runtime_error_message = message;
         return error.RuntimeError;
+    }
+
+    fn comptimeExhaustivenessFailed(self: *LirInterpreter, site: LIR.ComptimeSiteId) Error {
+        self.comptime_failed_site = site;
+        return error.ComptimeExhaustiveness;
     }
 
     fn divisionByZeroMessageForLayout(self: *const LirInterpreter, layout_idx: layout_mod.Idx) []const u8 {
@@ -811,6 +864,8 @@ pub const Interpreter = struct {
         self.roc_env.resetForEval();
         self.call_stack.clearRetainingCapacity();
         self.failed_call_stack.clearRetainingCapacity();
+        self.comptime_branch_hits.clearRetainingCapacity();
+        self.comptime_failed_site = null;
 
         if (sljmp.supported) {
             var eval_jmp_buf: JmpBuf = undefined;
@@ -1394,12 +1449,14 @@ pub const Interpreter = struct {
                 .set_local => |assign| assign.next,
                 .debug => |stmt_next| stmt_next.next,
                 .expect => |stmt_next| stmt_next.next,
+                .comptime_branch_taken => |marker| marker.next,
                 .incref => |stmt_next| stmt_next.next,
                 .decref => |stmt_next| stmt_next.next,
                 .free => |stmt_next| stmt_next.next,
                 .join => |join_stmt| join_stmt.body,
                 .switch_stmt,
                 .runtime_error,
+                .comptime_exhaustiveness_failed,
                 .jump,
                 .ret,
                 .crash,
@@ -1767,12 +1824,23 @@ pub const Interpreter = struct {
                         self.store.getLocal(cond_local).layout_idx,
                     );
                     if (cond_value == 0) {
+                        try self.roc_env.recordExpectFailure("expect failed", self.store.stmtLoc(current));
                         self.roc_ops.expectFailed("expect failed");
                     }
                     current = expect_stmt.next;
                 },
                 .runtime_error => {
                     return self.runtimeError("RuntimeError");
+                },
+                .comptime_exhaustiveness_failed => |failed| {
+                    return self.comptimeExhaustivenessFailed(failed.site);
+                },
+                .comptime_branch_taken => |marker| {
+                    try self.comptime_branch_hits.append(self.evalAllocator(), .{
+                        .site = marker.site,
+                        .branch_index = marker.branch_index,
+                    });
+                    current = marker.next;
                 },
                 .incref => |inc| {
                     if (builtin.mode == .Debug and !frame.isAssigned(inc.value)) {
@@ -2077,6 +2145,21 @@ pub const Interpreter = struct {
                 },
                 .runtime_error => {
                     debugPrint("    {d}: runtime_error\n", .{@intFromEnum(stmt_id)});
+                },
+                .comptime_exhaustiveness_failed => |failed| {
+                    debugPrint("    {d}: comptime_exhaustiveness_failed site={d}\n", .{
+                        @intFromEnum(stmt_id),
+                        @intFromEnum(failed.site),
+                    });
+                },
+                .comptime_branch_taken => |marker| {
+                    debugPrint("    {d}: comptime_branch_taken site={d} branch={d} next={d}\n", .{
+                        @intFromEnum(stmt_id),
+                        @intFromEnum(marker.site),
+                        marker.branch_index,
+                        @intFromEnum(marker.next),
+                    });
+                    stack.append(self.evalAllocator(), marker.next) catch return;
                 },
                 .incref => |inc| {
                     debugPrint("    {d}: incref value={d} next={d}\n", .{
@@ -2475,6 +2558,7 @@ pub const Interpreter = struct {
         context.interpreter.callInterpreterErasedCallable(context, ops, ret, args) catch |err| switch (err) {
             error.OutOfMemory => ops.crash("LIR/interpreter erased callable trampoline ran out of memory"),
             error.RuntimeError => ops.crash("LIR/interpreter erased callable trampoline hit runtime error"),
+            error.ComptimeExhaustiveness => ops.crash("LIR/interpreter erased callable trampoline hit compile-time exhaustiveness marker"),
             error.DivisionByZero => ops.crash("LIR/interpreter erased callable trampoline hit division by zero"),
             error.Crash => ops.crash("LIR/interpreter erased callable trampoline hit Roc crash"),
             // expect_err statements only occur in top-level expect test
@@ -6295,13 +6379,8 @@ pub const Interpreter = struct {
 
     fn floatToIntTry(self: *LirInterpreter, comptime Src: type, comptime Dst: type, arg: Value, ret_layout: layout_mod.Idx) Error!Value {
         const sv = arg.read(Src);
-        const min_val = comptime @as(Src, @floatFromInt(std.math.minInt(Dst)));
-        const max_val = comptime @as(Src, @floatFromInt(std.math.maxInt(Dst)));
-        if (!std.math.isNan(sv) and !std.math.isInf(sv)) {
-            const truncated: Src = @trunc(sv);
-            if (truncated >= min_val and truncated <= max_val) {
-                return self.writeLowLevelTryRecord(Dst, ret_layout, @intFromFloat(truncated));
-            }
+        if (builtins.numeric_conversions.floatToIntTry(Src, Dst, sv)) |value| {
+            return self.writeLowLevelTryRecord(Dst, ret_layout, value);
         }
         return self.writeLowLevelTryRecord(Dst, ret_layout, null);
     }

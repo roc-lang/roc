@@ -15,6 +15,7 @@ const erased_callable = @import("erased_callable.zig");
 const dec = @import("dec.zig");
 const hash = @import("hash.zig");
 const i128h = @import("compiler_rt_128.zig");
+const numeric_conversions = @import("numeric_conversions.zig");
 
 const RocStr = str.RocStr;
 const RocList = list.RocList;
@@ -1239,35 +1240,11 @@ pub fn roc_builtins_f64_to_u128_trunc(out_low: *u64, out_high: *u64, val: f64) c
 // ── Try-conversion wrappers ──
 
 fn i128InTargetRange(val: i128, target_bits: u32, target_signed: bool) bool {
-    if (target_bits >= 128) {
-        return if (target_signed) true else val >= 0;
-    }
-    if (target_signed) {
-        const shift: u7 = @intCast(target_bits - 1);
-        const min_val: i128 = -@as(i128, @bitCast(i128h.shl(1, shift)));
-        const max_val: i128 = @as(i128, @bitCast(i128h.shl(1, shift))) - 1;
-        return val >= min_val and val <= max_val;
-    } else {
-        if (val < 0) return false;
-        const shift: u7 = @intCast(target_bits);
-        const max_val: i128 = @as(i128, @bitCast(i128h.shl(1, shift))) - 1;
-        return val <= max_val;
-    }
+    return numeric_conversions.i128FitsTarget(val, target_bits, target_signed);
 }
 
 fn u128InTargetRange(val: u128, target_bits: u32, target_signed: bool) bool {
-    if (target_bits >= 128) {
-        return if (target_signed) val <= @as(u128, @bitCast(@as(i128, std.math.maxInt(i128)))) else true;
-    }
-    if (target_signed) {
-        const shift: u7 = @intCast(target_bits - 1);
-        const max_val: u128 = i128h.shl(1, shift) - 1;
-        return val <= max_val;
-    } else {
-        const shift: u7 = @intCast(target_bits);
-        const max_val: u128 = i128h.shl(1, shift) - 1;
-        return val <= max_val;
-    }
+    return numeric_conversions.u128FitsTarget(val, target_bits, target_signed);
 }
 
 /// i128 try convert
@@ -1324,85 +1301,26 @@ pub fn roc_builtins_int_try_unsigned(out: [*]u8, val: u64, max_val: u64, payload
 /// Dec → integer try unsafe
 pub fn roc_builtins_dec_to_int_try_unsafe(out: [*]u8, dec_low: u64, dec_high: u64, target_bits: u32, target_is_signed: u32, val_size: u32, success_offset: u32, value_offset: u32) callconv(.c) void {
     const dec_val: i128 = @bitCast(i128h.from_u64_pair(dec_low, dec_high));
-    const one = dec.RocDec.one_point_zero_i128;
+    const bits = numeric_conversions.decToIntTryBits(dec_val, target_bits, target_is_signed != 0);
 
-    const remainder = i128h.rem_i128(dec_val, one);
-    const is_int: bool = remainder == 0;
-    const int_val: i128 = i128h.divTrunc_i128(dec_val, one);
-
-    const in_range: bool = blk: {
-        if (target_is_signed != 0) {
-            break :blk i128InTargetRange(int_val, target_bits, true);
-        } else {
-            if (int_val < 0) break :blk false;
-            break :blk u128InTargetRange(@as(u128, @bitCast(int_val)), target_bits, false);
-        }
-    };
-
-    if (is_int and in_range) {
-        const v_bytes: [16]u8 = @bitCast(@as(u128, @bitCast(int_val)));
+    if (bits) |int_bits| {
+        const v_bytes: [16]u8 = @bitCast(int_bits);
         @memcpy(out[value_offset..][0..val_size], v_bytes[0..val_size]);
     }
 
-    out[success_offset] = @intFromBool(is_int and in_range);
+    out[success_offset] = @intFromBool(bits != null);
 }
 
 /// f64 → integer try unsafe
 pub fn roc_builtins_f64_to_int_try_unsafe(out: [*]u8, val: f64, target_bits: u32, target_is_signed: u32, val_size: u32, success_offset: u32, value_offset: u32) callconv(.c) void {
-    const is_int: bool = !std.math.isNan(val) and !std.math.isInf(val) and @trunc(val) == val;
+    const bits = numeric_conversions.f64ToIntTryBits(val, target_bits, target_is_signed != 0);
 
-    const in_range: bool = blk: {
-        if (target_is_signed != 0) {
-            if (target_bits >= 128) {
-                const min_f: f64 = comptime i128h.i128_to_f64(std.math.minInt(i128));
-                const max_f: f64 = comptime i128h.i128_to_f64(std.math.maxInt(i128));
-                break :blk val >= min_f and val <= max_f;
-            }
-            const shift: u6 = @intCast(target_bits - 1);
-            const min_i: i64 = -(@as(i64, 1) << shift);
-            const max_i: i64 = (@as(i64, 1) << shift) - 1;
-            break :blk val >= @as(f64, @floatFromInt(min_i)) and val <= @as(f64, @floatFromInt(max_i));
-        } else {
-            if (val < 0) break :blk false;
-            if (target_bits >= 128) {
-                const max_f: f64 = comptime i128h.u128_to_f64(std.math.maxInt(u128));
-                break :blk val <= max_f;
-            }
-            if (target_bits >= 64) {
-                const max_f: f64 = @floatFromInt(@as(u64, std.math.maxInt(u64)));
-                break :blk val <= max_f;
-            }
-            const shift: u6 = @intCast(target_bits);
-            const max_u: u64 = (@as(u64, 1) << shift) - 1;
-            break :blk val <= @as(f64, @floatFromInt(max_u));
-        }
-    };
-
-    if (is_int and in_range) {
-        if (target_is_signed != 0) {
-            if (val_size <= 8) {
-                const v: i64 = @intFromFloat(val);
-                const v_bytes: [8]u8 = @bitCast(v);
-                @memcpy(out[value_offset..][0..val_size], v_bytes[0..val_size]);
-            } else {
-                const v: i128 = i128h.f64_to_i128(val);
-                const v_bytes: [16]u8 = @bitCast(@as(u128, @bitCast(v)));
-                @memcpy(out[value_offset..][0..val_size], v_bytes[0..val_size]);
-            }
-        } else {
-            if (val_size <= 8) {
-                const v: u64 = @intFromFloat(val);
-                const v_bytes: [8]u8 = @bitCast(v);
-                @memcpy(out[value_offset..][0..val_size], v_bytes[0..val_size]);
-            } else {
-                const v: u128 = i128h.f64_to_u128(val);
-                const v_bytes: [16]u8 = @bitCast(v);
-                @memcpy(out[value_offset..][0..val_size], v_bytes[0..val_size]);
-            }
-        }
+    if (bits) |int_bits| {
+        const v_bytes: [16]u8 = @bitCast(int_bits);
+        @memcpy(out[value_offset..][0..val_size], v_bytes[0..val_size]);
     }
 
-    out[success_offset] = @intFromBool(is_int and in_range);
+    out[success_offset] = @intFromBool(bits != null);
 }
 
 /// Dec → f32 try unsafe

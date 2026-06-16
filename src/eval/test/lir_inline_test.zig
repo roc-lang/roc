@@ -37,14 +37,19 @@ fn lowerModule(
     source: []const u8,
     inline_mode: lir.CheckedPipeline.InlineMode,
 ) anyerror!LoweredSource {
-    return lowerModuleWithProcDebugNames(allocator, source, inline_mode, false);
+    return lowerModuleWithOptions(allocator, source, inline_mode, .{});
 }
 
-fn lowerModuleWithProcDebugNames(
+const LowerModuleOptions = struct {
+    debug_effects: lir.CheckedPipeline.DebugEffectMode = .run,
+    proc_debug_names: bool = false,
+};
+
+fn lowerModuleWithOptions(
     allocator: Allocator,
     source: []const u8,
     inline_mode: lir.CheckedPipeline.InlineMode,
-    proc_debug_names: bool,
+    options: LowerModuleOptions,
 ) anyerror!LoweredSource {
     var resources = try helpers.parseAndCanonicalizeProgram(allocator, .module, source, &.{});
     errdefer helpers.cleanupParseAndCanonical(allocator, resources);
@@ -73,7 +78,8 @@ fn lowerModuleWithProcDebugNames(
         .{
             .target_usize = base.target.TargetUsize.native,
             .inline_mode = inline_mode,
-            .proc_debug_names = proc_debug_names,
+            .debug_effects = options.debug_effects,
+            .proc_debug_names = options.proc_debug_names,
         },
     );
     errdefer lowered.deinit();
@@ -82,6 +88,24 @@ fn lowerModuleWithProcDebugNames(
         .resources = resources,
         .lowered = lowered,
     };
+}
+
+fn lowerModuleWithDebugEffects(
+    allocator: Allocator,
+    source: []const u8,
+    inline_mode: lir.CheckedPipeline.InlineMode,
+    debug_effects: lir.CheckedPipeline.DebugEffectMode,
+) anyerror!LoweredSource {
+    return lowerModuleWithOptions(allocator, source, inline_mode, .{ .debug_effects = debug_effects });
+}
+
+fn lowerModuleWithProcDebugNames(
+    allocator: Allocator,
+    source: []const u8,
+    inline_mode: lir.CheckedPipeline.InlineMode,
+    proc_debug_names: bool,
+) anyerror!LoweredSource {
+    return lowerModuleWithOptions(allocator, source, inline_mode, .{ .proc_debug_names = proc_debug_names });
 }
 
 fn mainProcArgLayouts(
@@ -149,6 +173,52 @@ fn expectOptimizedDbgEvents(source: []const u8, expected: []const []const u8) an
             else => return error.TestUnexpectedResult,
         }
     }
+}
+
+const DebugEffectCounts = struct {
+    debug: usize = 0,
+    expect: usize = 0,
+};
+
+fn countDebugEffectStmts(lowered: *const lir.CheckedPipeline.LoweredProgram) DebugEffectCounts {
+    var counts = DebugEffectCounts{};
+    for (lowered.lir_result.store.cf_stmts.items) |stmt| {
+        switch (stmt) {
+            .debug => counts.debug += 1,
+            .expect => counts.expect += 1,
+            else => {},
+        }
+    }
+    return counts;
+}
+
+test "optimized debug effect lowering erases inline dbg and expect" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\module [main]
+        \\
+        \\main : I64
+        \\main = {
+        \\    dbg 1
+        \\    expect False
+        \\    expect 1 == 1
+        \\    2
+        \\}
+    ;
+
+    var run_effects = try lowerModuleWithDebugEffects(allocator, source, .direct_call_wrappers, .run);
+    defer run_effects.deinit(allocator);
+
+    const run_counts = countDebugEffectStmts(&run_effects.lowered);
+    try std.testing.expect(run_counts.debug > 0);
+    try std.testing.expect(run_counts.expect > 0);
+
+    var erased_effects = try lowerModuleWithDebugEffects(allocator, source, .direct_call_wrappers, .erase);
+    defer erased_effects.deinit(allocator);
+
+    const erased_counts = countDebugEffectStmts(&erased_effects.lowered);
+    try std.testing.expectEqual(@as(usize, 0), erased_counts.debug);
+    try std.testing.expectEqual(@as(usize, 0), erased_counts.expect);
 }
 
 fn liftModuleAfterSpecConstr(
@@ -240,6 +310,7 @@ fn collectAssignCallProcs(
             .set_local => |stmt| try work.append(allocator, stmt.next),
             .debug => |stmt| try work.append(allocator, stmt.next),
             .expect => |stmt| try work.append(allocator, stmt.next),
+            .comptime_branch_taken => |stmt| try work.append(allocator, stmt.next),
             .incref => |stmt| try work.append(allocator, stmt.next),
             .decref => |stmt| try work.append(allocator, stmt.next),
             .free => |stmt| try work.append(allocator, stmt.next),
@@ -255,6 +326,7 @@ fn collectAssignCallProcs(
                 try work.append(allocator, stmt.remainder);
             },
             .runtime_error,
+            .comptime_exhaustiveness_failed,
             .loop_continue,
             .loop_break,
             .jump,
@@ -330,6 +402,7 @@ fn collectProcShape(
             .set_local => |stmt| try work.append(allocator, stmt.next),
             .debug => |stmt| try work.append(allocator, stmt.next),
             .expect => |stmt| try work.append(allocator, stmt.next),
+            .comptime_branch_taken => |stmt| try work.append(allocator, stmt.next),
             .incref => |stmt| try work.append(allocator, stmt.next),
             .decref => |stmt| try work.append(allocator, stmt.next),
             .free => |stmt| try work.append(allocator, stmt.next),
@@ -354,6 +427,7 @@ fn collectProcShape(
                 shape.jump_count += 1;
             },
             .runtime_error,
+            .comptime_exhaustiveness_failed,
             .loop_continue,
             .loop_break,
             .ret,
@@ -372,6 +446,15 @@ const IterCollectShape = enum {
 };
 
 fn procShapeMatchesIterCollect(shape: ProcShape, wanted: IterCollectShape) bool {
+    // Fingerprints of the `Iter.collect` -> `List.from_iter` worker over a range.
+    // `from_iter` branches on the iterator's length: a Known length reserves the
+    // whole allocation up front and writes each item with the unchecked append,
+    // while an Unknown length grows with the reserving append. That per-element
+    // branch (the inner `match length`) is the extra switch/join/jump over the
+    // earlier single-append loop. Spec constr specializes the worker for the
+    // concrete element type, and because ranges carry a Known length (via each
+    // numeric type's `steps_between`) the specialized worker threads that count
+    // as a third arg (`with_capacity` preallocation).
     return switch (wanted) {
         .specialized => shape.arg_count == 3 and
             shape.direct_call_count >= 10 and
@@ -380,9 +463,9 @@ fn procShapeMatchesIterCollect(shape: ProcShape, wanted: IterCollectShape) bool 
             shape.jump_count >= 20,
         .generic => shape.arg_count == 1 and
             shape.direct_call_count == 4 and
-            shape.switch_count == 6 and
-            shape.join_count == 9 and
-            shape.jump_count == 11 and
+            shape.switch_count == 8 and
+            shape.join_count == 12 and
+            shape.jump_count == 15 and
             shape.struct_assign_count >= 8,
     };
 }
@@ -467,6 +550,7 @@ fn markReachableLiftedExpr(
         .str_lit,
         .fn_ref,
         .crash,
+        .comptime_exhaustiveness_failed,
         => {},
         .list,
         .tuple,
@@ -479,6 +563,7 @@ fn markReachableLiftedExpr(
         .expect,
         => |child| markReachableLiftedExpr(program, child, reachable),
         .expect_err => |expect_err| markReachableLiftedExpr(program, expect_err.msg, reachable),
+        .comptime_branch_taken => |taken| markReachableLiftedExpr(program, taken.body, reachable),
         .let_ => |let_| {
             markReachableLiftedExpr(program, let_.value, reachable);
             markReachableLiftedExpr(program, let_.rest, reachable);
@@ -933,7 +1018,7 @@ test "plant iter pipeline specializes collect worker after inlining" {
         \\
         \\starting_plants : () -> List(Plant)
         \\starting_plants = || {
-        \\    0.I64.to(15)
+        \\    (0.I64..=15)
         \\        .map(|i| random_plant(i * 12))
         \\        .collect()
         \\}
@@ -941,6 +1026,26 @@ test "plant iter pipeline specializes collect worker after inlining" {
         \\main : List(Plant)
         \\main = starting_plants()
     );
+}
+
+test "known-length List.iter collect specializes without unbound locals" {
+    // Regression: collecting a Known-length iterator (List.iter) under
+    // optimization specializes a recursive capturing worker (List.iter's `make`
+    // step). The specializer must reuse the source capture local ids; otherwise
+    // a leftover direct call to the un-specialized worker references an unbound
+    // capture local, which the ARC borrow certifier rejects. (Also exercises the
+    // ARC use-after-realloc fix, since main's rewrite emits an owned variant.)
+    const allocator = std.testing.allocator;
+    var optimized = try lowerModule(allocator,
+        \\module [main]
+        \\
+        \\main : List(I64)
+        \\main =
+        \\    Iter.collect(
+        \\        Iter.map(List.iter([1.I64, 2, 3]), |i| i * 12),
+        \\    )
+    , .direct_call_wrappers);
+    defer optimized.deinit(allocator);
 }
 
 test "direct iter collect worker specializes constructor recursive call" {
@@ -955,7 +1060,7 @@ test "direct iter collect worker specializes constructor recursive call" {
         \\main : List(Plant)
         \\main =
         \\    Iter.collect(
-        \\        Iter.map(0.I64.to(15), |i| random_plant(i * 12)),
+        \\        Iter.map(0.I64..=15, |i| random_plant(i * 12)),
         \\    )
     );
 }
@@ -1493,6 +1598,34 @@ test "LIR statements and procs carry resolved source locations" {
     }
     try std.testing.expect(found_add2);
     try std.testing.expect(found_mul3);
+}
+
+test "referenced but uncalled function does not materialize a proc" {
+    const allocator = std.testing.allocator;
+
+    const source =
+        \\module [main]
+        \\
+        \\unused : U64 -> U64
+        \\unused = |n| n + 1
+        \\
+        \\main : U64
+        \\main = {
+        \\    _fn = unused
+        \\    0
+        \\}
+    ;
+
+    var lowered_source = try lowerModuleWithProcDebugNames(allocator, source, .none, true);
+    defer lowered_source.deinit(allocator);
+
+    const store = &lowered_source.lowered.lir_result.store;
+    var found_unused = false;
+    for (0..store.proc_specs.items.len) |i| {
+        const name = store.procDebugName(@enumFromInt(i)) orelse continue;
+        if (std.mem.eql(u8, name, "unused")) found_unused = true;
+    }
+    try std.testing.expect(!found_unused);
 }
 
 test "LIR statements carry source locations under optimizing inline mode" {

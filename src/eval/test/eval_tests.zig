@@ -3401,6 +3401,176 @@ const core_tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "[0, 1, 1, 2, 3]" },
     },
+    .{
+        .name = "inspect: Iter.step_by yields first then every nth",
+        .source =
+        \\{
+        \\    iter = [1.I64, 2, 3, 4, 5].iter().step_by(2)
+        \\    Iter.fold(iter, [], |acc, item| acc.append(item))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[1, 3, 5]" },
+    },
+    .{
+        .name = "inspect: Iter.step_by even length stops within bounds",
+        .source =
+        \\{
+        \\    iter = [1.I64, 2, 3, 4, 5, 6].iter().step_by(2)
+        \\    Iter.fold(iter, [], |acc, item| acc.append(item))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[1, 3, 5]" },
+    },
+    .{
+        .name = "inspect: Iter.step_by of 1 is identity",
+        .source =
+        \\{
+        \\    iter = [1.I64, 2, 3].iter().step_by(1)
+        \\    Iter.fold(iter, [], |acc, item| acc.append(item))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3]" },
+    },
+    .{
+        .name = "inspect: Iter.step_by of 0 is empty",
+        .source =
+        \\{
+        \\    iter = [1.I64, 2, 3].iter().step_by(0)
+        \\    Iter.fold(iter, [], |acc, item| acc.append(item))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[]" },
+    },
+    .{
+        .name = "inspect: Iter.step_by on empty source is empty",
+        .source =
+        \\{
+        \\    iter = [].iter().step_by(3)
+        \\    Iter.fold(iter, [], |acc, item| acc.append(item))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[]" },
+    },
+    .{
+        .name = "inspect: Iter.step_by larger than length yields first only",
+        .source =
+        \\{
+        \\    iter = [1.I64, 2, 3].iter().step_by(10)
+        \\    Iter.fold(iter, [], |acc, item| acc.append(item))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[1]" },
+    },
+    .{
+        .name = "inspect: Iter.step_by on a range",
+        .source =
+        \\{
+        \\    iter = (1.U64..=10).step_by(3)
+        \\    Iter.fold(iter, [], |acc, item| acc.append(item))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[1, 4, 7, 10]" },
+    },
+    .{
+        .name = "inspect: Iter.step_by counts values across skips from keep_if",
+        .source =
+        \\{
+        \\    evens = [1.I64, 2, 3, 4, 5, 6].iter().keep_if(|x| I64.rem_by(x, 2) == 0)
+        \\    Iter.fold(evens.step_by(2), [], |acc, item| acc.append(item))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[2, 6]" },
+    },
+    .{
+        .name = "inspect: Iter.step_by preserves known length as ceil",
+        .source = "Iter.size_hint([1.I64, 2, 3, 4, 5].iter().step_by(2))",
+        .expected = .{ .inspect_str = "Known(3)" },
+    },
+    .{
+        .name = "inspect: Iter.step_by known length on a range",
+        .source = "Iter.size_hint((1.U64..=10).step_by(3))",
+        .expected = .{ .inspect_str = "Known(4)" },
+    },
+    .{
+        .name = "inspect: Iter.step_by of 0 has known length zero",
+        .source = "Iter.size_hint([1.I64, 2, 3].iter().step_by(0))",
+        .expected = .{ .inspect_str = "Known(0)" },
+    },
+    .{
+        .name = "inspect: Iter.step_by reports unknown length for unknown source",
+        .source = "Iter.size_hint([1.I64, 2, 3, 4].iter().keep_if(|x| x > 1).step_by(2))",
+        .expected = .{ .inspect_str = "Unknown" },
+    },
+    .{
+        .name = "inspect: Iter.rev reverses items",
+        .source =
+        \\{
+        \\    iter = [1.I64, 2, 3].iter().rev()
+        \\    Iter.fold(iter, [], |acc, item| acc.append(item))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[3, 2, 1]" },
+    },
+    .{
+        .name = "inspect: Iter.rev on empty source is empty",
+        .source =
+        \\{
+        \\    iter = [].iter().rev()
+        \\    Iter.fold(iter, [], |acc, item| acc.append(item))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[]" },
+    },
+    .{
+        .name = "inspect: Iter.rev on a singleton",
+        .source =
+        \\{
+        \\    iter = [1.I64].iter().rev()
+        \\    Iter.fold(iter, [], |acc, item| acc.append(item))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[1]" },
+    },
+    .{
+        .name = "inspect: Iter.rev on a range",
+        .source =
+        \\{
+        \\    iter = (1.U64..=5).rev()
+        \\    Iter.fold(iter, [], |acc, item| acc.append(item))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[5, 4, 3, 2, 1]" },
+    },
+    .{
+        .name = "inspect: Iter.rev of unknown-length source upgrades to known",
+        .source =
+        \\{
+        \\    odds = [1.I64, 2, 3, 4, 5].iter().keep_if(|x| I64.rem_by(x, 2) == 1)
+        \\    Iter.fold(odds.rev(), [], |acc, item| acc.append(item))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[5, 3, 1]" },
+    },
+    .{
+        .name = "inspect: Iter.rev composed with step_by",
+        .source =
+        \\{
+        \\    iter = [1.I64, 2, 3, 4, 5].iter().step_by(2).rev()
+        \\    Iter.fold(iter, [], |acc, item| acc.append(item))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[5, 3, 1]" },
+    },
+    .{
+        .name = "inspect: Iter.rev reports known length",
+        .source = "Iter.size_hint([1.I64, 2, 3].iter().rev())",
+        .expected = .{ .inspect_str = "Known(3)" },
+    },
+    .{
+        .name = "inspect: Iter.rev upgrades unknown length to known",
+        .source = "Iter.size_hint([1.I64, 2, 3, 4, 5].iter().keep_if(|x| I64.rem_by(x, 2) == 1).rev())",
+        .expected = .{ .inspect_str = "Known(3)" },
+    },
     .{ .name = "inspect: List.any true on integers", .source = "List.any([1, 0, 1, 0, -1], |x| x > 0)", .expected = .{ .inspect_str = "True" } },
     .{ .name = "inspect: List.any false on positive integers with negative predicate", .source = "List.any([9, 8, 7, 6, 5], |x| x < 0)", .expected = .{ .inspect_str = "False" } },
     .{ .name = "inspect: List.any false on empty list", .source = "List.any([], |x| x < 0)", .expected = .{ .inspect_str = "False" } },
@@ -3503,34 +3673,34 @@ const core_tests = [_]TestCase{
     },
     .{
         .name = "inspect: U32.to builds inclusive range iterator",
-        .source = "Iter.fold(1.U32.to(5.U32), [], |acc, item| acc.append(item))",
+        .source = "Iter.fold(1.U32..=5.U32, [], |acc, item| acc.append(item))",
         .expected = .{ .inspect_str = "[1, 2, 3, 4, 5]" },
     },
     .{
         .name = "inspect: U32.until builds exclusive range iterator",
-        .source = "Iter.fold(0.U32.until(3.U32), [], |acc, item| acc.append(item))",
+        .source = "Iter.fold(0.U32..<3.U32, [], |acc, item| acc.append(item))",
         .expected = .{ .inspect_str = "[0, 1, 2]" },
     },
     .{
         .name = "inspect: I64.until builds exclusive range iterator",
-        .source = "Iter.fold((-2.I64).until(2.I64), [], |acc, item| acc.append(item))",
+        .source = "Iter.fold((-2.I64)..<2.I64, [], |acc, item| acc.append(item))",
         .expected = .{ .inspect_str = "[-2, -1, 0, 1]" },
     },
     .{
         .name = "inspect: numeric to methods all return iterators",
         .source =
         \\{
-        \\    u8 = Iter.fold(1.U8.to(3.U8), 0.U8, |acc, item| acc + item)
-        \\    i8 = Iter.fold((-1.I8).to(1.I8), 0.I8, |acc, item| acc + item)
-        \\    u16 = Iter.fold(1.U16.to(3.U16), 0.U16, |acc, item| acc + item)
-        \\    i16 = Iter.fold((-1.I16).to(1.I16), 0.I16, |acc, item| acc + item)
-        \\    u32 = Iter.fold(1.U32.to(3.U32), 0.U32, |acc, item| acc + item)
-        \\    i32 = Iter.fold((-1.I32).to(1.I32), 0.I32, |acc, item| acc + item)
-        \\    u64 = Iter.fold(1.U64.to(3.U64), 0.U64, |acc, item| acc + item)
-        \\    i64 = Iter.fold((-1.I64).to(1.I64), 0.I64, |acc, item| acc + item)
-        \\    u128 = Iter.fold(1.U128.to(3.U128), 0.U128, |acc, item| acc + item)
-        \\    i128 = Iter.fold((-1.I128).to(1.I128), 0.I128, |acc, item| acc + item)
-        \\    dec = Iter.fold(Dec.to(1.0, 3.0), 0.0.Dec, |acc, item| acc + item)
+        \\    u8 = Iter.fold(1.U8..=3.U8, 0.U8, |acc, item| acc + item)
+        \\    i8 = Iter.fold((-1.I8)..=1.I8, 0.I8, |acc, item| acc + item)
+        \\    u16 = Iter.fold(1.U16..=3.U16, 0.U16, |acc, item| acc + item)
+        \\    i16 = Iter.fold((-1.I16)..=1.I16, 0.I16, |acc, item| acc + item)
+        \\    u32 = Iter.fold(1.U32..=3.U32, 0.U32, |acc, item| acc + item)
+        \\    i32 = Iter.fold((-1.I32)..=1.I32, 0.I32, |acc, item| acc + item)
+        \\    u64 = Iter.fold(1.U64..=3.U64, 0.U64, |acc, item| acc + item)
+        \\    i64 = Iter.fold((-1.I64)..=1.I64, 0.I64, |acc, item| acc + item)
+        \\    u128 = Iter.fold(1.U128..=3.U128, 0.U128, |acc, item| acc + item)
+        \\    i128 = Iter.fold((-1.I128)..=1.I128, 0.I128, |acc, item| acc + item)
+        \\    dec = Iter.fold(1.0..=3.0, 0.0.Dec, |acc, item| acc + item)
         \\    (u8, i8, u16, i16, u32, i32, u64, i64, u128, i128, dec)
         \\}
         ,
@@ -3540,17 +3710,17 @@ const core_tests = [_]TestCase{
         .name = "inspect: numeric until methods all return iterators",
         .source =
         \\{
-        \\    u8 = Iter.fold(1.U8.until(3.U8), 0.U64, |acc, _| acc + 1)
-        \\    i8 = Iter.fold((-1.I8).until(1.I8), 0.U64, |acc, _| acc + 1)
-        \\    u16 = Iter.fold(1.U16.until(3.U16), 0.U64, |acc, _| acc + 1)
-        \\    i16 = Iter.fold((-1.I16).until(1.I16), 0.U64, |acc, _| acc + 1)
-        \\    u32 = Iter.fold(1.U32.until(3.U32), 0.U64, |acc, _| acc + 1)
-        \\    i32 = Iter.fold((-1.I32).until(1.I32), 0.U64, |acc, _| acc + 1)
-        \\    u64 = Iter.fold(1.U64.until(3.U64), 0.U64, |acc, _| acc + 1)
-        \\    i64 = Iter.fold((-1.I64).until(1.I64), 0.U64, |acc, _| acc + 1)
-        \\    u128 = Iter.fold(1.U128.until(3.U128), 0.U64, |acc, _| acc + 1)
-        \\    i128 = Iter.fold((-1.I128).until(1.I128), 0.U64, |acc, _| acc + 1)
-        \\    dec = Iter.fold(Dec.until(1.0, 3.0), 0.U64, |acc, _| acc + 1)
+        \\    u8 = Iter.fold(1.U8..<3.U8, 0.U64, |acc, _| acc + 1)
+        \\    i8 = Iter.fold((-1.I8)..<1.I8, 0.U64, |acc, _| acc + 1)
+        \\    u16 = Iter.fold(1.U16..<3.U16, 0.U64, |acc, _| acc + 1)
+        \\    i16 = Iter.fold((-1.I16)..<1.I16, 0.U64, |acc, _| acc + 1)
+        \\    u32 = Iter.fold(1.U32..<3.U32, 0.U64, |acc, _| acc + 1)
+        \\    i32 = Iter.fold((-1.I32)..<1.I32, 0.U64, |acc, _| acc + 1)
+        \\    u64 = Iter.fold(1.U64..<3.U64, 0.U64, |acc, _| acc + 1)
+        \\    i64 = Iter.fold((-1.I64)..<1.I64, 0.U64, |acc, _| acc + 1)
+        \\    u128 = Iter.fold(1.U128..<3.U128, 0.U64, |acc, _| acc + 1)
+        \\    i128 = Iter.fold((-1.I128)..<1.I128, 0.U64, |acc, _| acc + 1)
+        \\    dec = Iter.fold(1.0..<3.0, 0.U64, |acc, _| acc + 1)
         \\    (u8, i8, u16, i16, u32, i32, u64, i64, u128, i128, dec)
         \\}
         ,
@@ -3590,19 +3760,19 @@ const core_tests = [_]TestCase{
         \\{
         \\    count = |iter| Iter.fold(iter, 0.U64, |acc, _| acc + 1)
         \\    (
-        \\        count(U8.to(U8.highest, U8.highest)),
-        \\        count(I8.to(I8.highest, I8.highest)),
-        \\        count(U16.to(U16.highest, U16.highest)),
-        \\        count(I16.to(I16.highest, I16.highest)),
-        \\        count(U32.to(U32.highest, U32.highest)),
-        \\        count(I32.to(I32.highest, I32.highest)),
-        \\        count(U64.to(U64.highest, U64.highest)),
-        \\        count(I64.to(I64.highest, I64.highest)),
-        \\        count(U128.to(U128.highest, U128.highest)),
-        \\        count(I128.to(I128.highest, I128.highest)),
-        \\        count(Dec.to(Dec.highest, Dec.highest)),
-        \\        count(Dec.to(Dec.highest - 0.5, Dec.highest)),
-        \\        count(Dec.to(Dec.highest - 1.0, Dec.highest)),
+        \\        count(U8.highest..=U8.highest),
+        \\        count(I8.highest..=I8.highest),
+        \\        count(U16.highest..=U16.highest),
+        \\        count(I16.highest..=I16.highest),
+        \\        count(U32.highest..=U32.highest),
+        \\        count(I32.highest..=I32.highest),
+        \\        count(U64.highest..=U64.highest),
+        \\        count(I64.highest..=I64.highest),
+        \\        count(U128.highest..=U128.highest),
+        \\        count(I128.highest..=I128.highest),
+        \\        count(Dec.highest..=Dec.highest),
+        \\        count((Dec.highest - 0.5)..=Dec.highest),
+        \\        count((Dec.highest - 1.0)..=Dec.highest),
         \\    )
         \\}
         ,
@@ -3614,19 +3784,19 @@ const core_tests = [_]TestCase{
         \\{
         \\    count = |iter| Iter.fold(iter, 0.U64, |acc, _| acc + 1)
         \\    (
-        \\        count(U8.until(U8.highest, U8.highest)),
-        \\        count(I8.until(I8.highest, I8.highest)),
-        \\        count(U16.until(U16.highest, U16.highest)),
-        \\        count(I16.until(I16.highest, I16.highest)),
-        \\        count(U32.until(U32.highest, U32.highest)),
-        \\        count(I32.until(I32.highest, I32.highest)),
-        \\        count(U64.until(U64.highest, U64.highest)),
-        \\        count(I64.until(I64.highest, I64.highest)),
-        \\        count(U128.until(U128.highest, U128.highest)),
-        \\        count(I128.until(I128.highest, I128.highest)),
-        \\        count(Dec.until(Dec.highest, Dec.highest)),
-        \\        count(Dec.until(Dec.highest - 0.5, Dec.highest)),
-        \\        count(Dec.until(Dec.highest - 1.0, Dec.highest)),
+        \\        count(U8.highest..<U8.highest),
+        \\        count(I8.highest..<I8.highest),
+        \\        count(U16.highest..<U16.highest),
+        \\        count(I16.highest..<I16.highest),
+        \\        count(U32.highest..<U32.highest),
+        \\        count(I32.highest..<I32.highest),
+        \\        count(U64.highest..<U64.highest),
+        \\        count(I64.highest..<I64.highest),
+        \\        count(U128.highest..<U128.highest),
+        \\        count(I128.highest..<I128.highest),
+        \\        count(Dec.highest..<Dec.highest),
+        \\        count((Dec.highest - 0.5)..<Dec.highest),
+        \\        count((Dec.highest - 1.0)..<Dec.highest),
         \\    )
         \\}
         ,
@@ -3638,20 +3808,58 @@ const core_tests = [_]TestCase{
         \\{
         \\    count = |iter| Iter.fold(iter, 0.U64, |acc, _| acc + 1)
         \\    (
-        \\        count(U8.until(U8.highest - 1, U8.highest)),
-        \\        count(I8.until(I8.highest - 1, I8.highest)),
-        \\        count(U16.until(U16.highest - 1, U16.highest)),
-        \\        count(I16.until(I16.highest - 1, I16.highest)),
-        \\        count(U32.until(U32.highest - 1, U32.highest)),
-        \\        count(I32.until(I32.highest - 1, I32.highest)),
-        \\        count(U64.until(U64.highest - 1, U64.highest)),
-        \\        count(I64.until(I64.highest - 1, I64.highest)),
-        \\        count(U128.until(U128.highest - 1, U128.highest)),
-        \\        count(I128.until(I128.highest - 1, I128.highest)),
+        \\        count((U8.highest - 1)..<U8.highest),
+        \\        count((I8.highest - 1)..<I8.highest),
+        \\        count((U16.highest - 1)..<U16.highest),
+        \\        count((I16.highest - 1)..<I16.highest),
+        \\        count((U32.highest - 1)..<U32.highest),
+        \\        count((I32.highest - 1)..<I32.highest),
+        \\        count((U64.highest - 1)..<U64.highest),
+        \\        count((I64.highest - 1)..<I64.highest),
+        \\        count((U128.highest - 1)..<U128.highest),
+        \\        count((I128.highest - 1)..<I128.highest),
         \\    )
         \\}
         ,
         .expected = .{ .inspect_str = "(1, 1, 1, 1, 1, 1, 1, 1, 1, 1)" },
+    },
+    .{
+        // Directly exercises the steps_between length primitive: ascending ->
+        // Known(count); descending and equal -> Known(0) (the lower guard
+        // branch the range boundary tests never hit); and the U128/I128
+        // over-U64-width + Dec cases -> Unknown (the fallback that feeds the
+        // from_iter grow path).
+        .name = "inspect: steps_between reports Known counts, Known(0) descending, Unknown on overflow",
+        .source =
+        \\{
+        \\    (
+        \\        U8.steps_between(5, 10),
+        \\        U8.steps_between(10, 5),
+        \\        U8.steps_between(5, 5),
+        \\        I8.steps_between(-3, 2),
+        \\        I8.steps_between(2, -3),
+        \\        U128.steps_between(0, 100),
+        \\        U128.steps_between(0, U128.highest),
+        \\        I128.steps_between(0, I128.highest),
+        \\        Dec.steps_between(1.0, 5.0),
+        \\    )
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(Known(5), Known(0), Known(0), Known(5), Known(0), Known(100), Unknown, Unknown, Unknown)" },
+    },
+    .{
+        // Collecting a range whose length is Unknown (Dec ranges always report
+        // Unknown) must route through from_iter's grow path rather than exact
+        // preallocation. It also exercises the generic from_numeral fold: the
+        // range constructor's literal `1` is monomorphized to Dec here, so this
+        // must compile (not just interpret) on every backend.
+        .name = "inspect: collect over Unknown-length (Dec) range grows correctly",
+        .source_kind = .module,
+        .source =
+        \\main : List(Dec)
+        \\main = Iter.collect(1.0..<4.0)
+        ,
+        .expected = .{ .inspect_str = "[1.0, 2.0, 3.0]" },
     },
     .{
         .name = "inspect: generic local attached method specialization on nominal",

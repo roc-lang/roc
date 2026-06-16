@@ -38,6 +38,7 @@ pub const RecursiveDispatch = types.RecursiveDispatch;
 pub const NumberDoesNotFit = types.NumberDoesNotFit;
 pub const NegativeUnsignedInt = types.NegativeUnsignedInt;
 pub const InvalidNumericLiteral = types.InvalidNumericLiteral;
+pub const LiteralDefaulted = types.LiteralDefaulted;
 pub const UnusedValue = types.UnusedValue;
 
 // Match/exhaustiveness errors
@@ -45,6 +46,7 @@ pub const NonExhaustiveMatch = types.NonExhaustiveMatch;
 pub const NonExhaustiveDestructure = types.NonExhaustiveDestructure;
 pub const RedundantPattern = types.RedundantPattern;
 pub const UnmatchablePattern = types.UnmatchablePattern;
+pub const ComptimeUnusedBranch = types.ComptimeUnusedBranch;
 
 // Type declaration errors
 pub const TypeApplyArityMismatch = types.TypeApplyArityMismatch;
