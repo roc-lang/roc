@@ -82,6 +82,8 @@ generalizer: Generalizer,
 constraints: Constraint.SafeList,
 /// A map from one var to another. Used in instantiation and var copying
 var_map: std.AutoHashMap(Var, Var),
+/// Static-dispatch constraint function vars copied during instantiation.
+constraint_fn_var_map: std.AutoHashMap(Var, Var),
 /// A map from one var to another. Used in instantiation and var copying
 var_set: std.AutoHashMap(Var, void),
 /// A map from one var to another. Used to apply type arguments in instantiation
@@ -238,6 +240,8 @@ const DefProcessed = struct {
 const InstantiationDispatcher = struct {
     /// The freshly instantiated receiver (dispatcher) var.
     dispatcher_var: Var,
+    /// The static-dispatch constraints copied from the generalized scheme.
+    constraints: StaticDispatchConstraint.SafeList.Range,
 };
 
 fn isLiteralStaticDispatchOrigin(origin: StaticDispatchConstraint.Origin) bool {
@@ -253,6 +257,11 @@ fn isLiteralStaticDispatchOrigin(origin: StaticDispatchConstraint.Origin) bool {
         => false,
     };
 }
+
+const StaticDispatchUse = struct {
+    expr_idx: CIR.Expr.Idx,
+    region: Region,
+};
 
 /// Indicates if something has been processed or not
 const HasProcessed = enum { processed, processing, not_processed };
@@ -454,6 +463,7 @@ fn initAssumePrepared(
         .env_pool = try EnvPool.init(gpa),
         .generalizer = try Generalizer.init(gpa, types),
         .var_map = std.AutoHashMap(Var, Var).init(gpa),
+        .constraint_fn_var_map = std.AutoHashMap(Var, Var).init(gpa),
         .constraints = try Constraint.SafeList.initCapacity(gpa, 32),
         .var_set = std.AutoHashMap(Var, void).init(gpa),
         .rigid_var_substitutions = std.AutoHashMapUnmanaged(Ident.Idx, Var){},
@@ -552,6 +562,7 @@ pub fn deinit(self: *Self) void {
     self.env_pool.deinit();
     self.generalizer.deinit(self.gpa);
     self.var_map.deinit();
+    self.constraint_fn_var_map.deinit();
     self.constraints.deinit(self.gpa);
     self.var_set.deinit();
     self.rigid_var_substitutions.deinit(self.gpa);
@@ -916,9 +927,21 @@ fn instantiateVarHelp(
 
     // First, reset state
     instantiator.var_map.clearRetainingCapacity();
+    self.constraint_fn_var_map.clearRetainingCapacity();
+
+    const copy_constraint_metadata = self.hasConstraintMetadata();
+    instantiator.constraint_fn_var_map = if (copy_constraint_metadata) &self.constraint_fn_var_map else null;
 
     // Then, instantiate the variable with the provided context
     const instantiated_var = try instantiator.instantiateVar(var_to_instantiate);
+    instantiator.constraint_fn_var_map = null;
+
+    if (copy_constraint_metadata and self.constraint_fn_var_map.count() > 0) {
+        var constraint_iterator = self.constraint_fn_var_map.iterator();
+        while (constraint_iterator.next()) |x| {
+            try self.copyConstraintMetadata(x.key_ptr.*, x.value_ptr.*);
+        }
+    }
 
     // If we had to insert any new type variables, ensure that we have
     // corresponding regions for them. This is essential for error reporting.
@@ -961,6 +984,7 @@ fn instantiateVarHelp(
                     if (has_non_from_numeral) {
                         try self.instantiation_dispatchers.append(self.gpa, .{
                             .dispatcher_var = fresh_var,
+                            .constraints = flex.constraints,
                         });
                     }
                 }
@@ -2281,6 +2305,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
 
     try self.validateToInspectMethodTypes(&env);
     try self.checkAllFromNumeralFlexConstraintCompatibility(&env, true);
+    try self.checkInstantiatedStaticDispatchConstraints(&env, true);
 
     // After solving all deferred constraints, check for infinite types
     for (0..self.cir.all_defs.span.len) |def_offset| {
@@ -2306,25 +2331,32 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     var reported_dispatch_vars = std.AutoHashMap(Var, void).init(self.gpa);
     defer reported_dispatch_vars.deinit();
 
-    // The pinnable set: every resolved var that some instantiation can supply a
-    // concrete value for — reachable through a function ARGUMENT position of a
-    // top-level def, or reachable from any lambda parameter (nested lambdas
-    // included). A dispatch receiver that resolves INTO this set is pinnable
-    // (a caller, at some level, can pin it), so neither sweep reports it.
+    // The external pinnable set: every resolved var reachable through a function
+    // ARGUMENT position of a top-level def, including argument positions of
+    // function values returned by that def. These are the vars an outside caller
+    // can still pin after this module is checked.
+    var external_pinnable = std.AutoHashMap(Var, void).init(self.gpa);
+    defer external_pinnable.deinit();
+    try self.collectExternalPinnableVars(&external_pinnable);
+
+    // The full pinnable set additionally includes direct lambda parameters. That
+    // remains correct for direct dispatch expressions on uncalled function values:
+    // a future call can pin such a parameter. Instantiated where-clause contracts
+    // use only `external_pinnable`, because the call that instantiated the
+    // contract must satisfy it now.
     var pinnable = std.AutoHashMap(Var, void).init(self.gpa);
     defer pinnable.deinit();
-    try self.collectPinnableVars(&pinnable);
+    try self.collectPinnableVars(&pinnable, &external_pinnable);
 
-    try self.reportAmbiguousStaticDispatchPerInstantiation(&reported_dispatch_vars, &pinnable);
+    try self.reportAmbiguousStaticDispatchPerInstantiation(&reported_dispatch_vars, &pinnable, &external_pinnable);
     try self.reportAmbiguousStaticDispatch(&reported_dispatch_vars, &pinnable);
 }
 
-/// Populate `pinnable` with every resolved var that some instantiation can pin:
-/// (a) every var reachable through an ARGUMENT position of a top-level def's
-/// generalized type, and (b) every var reachable from a lambda parameter pattern
-/// (local/nested lambdas included). A static-dispatch receiver that resolves into
-/// this set can be pinned by a caller at some level, so it is not ambiguous.
-fn collectPinnableVars(self: *Self, pinnable: *std.AutoHashMap(Var, void)) std.mem.Allocator.Error!void {
+/// Populate `pinnable` with every resolved var that an outside caller can still
+/// pin through a top-level def's function argument positions. Curried/returned
+/// function arguments count too, because calling the returned function supplies
+/// those arguments later.
+fn collectExternalPinnableVars(self: *Self, pinnable: *std.AutoHashMap(Var, void)) std.mem.Allocator.Error!void {
     // Shared across all defs in this one-shot, end-of-check pass (not per
     // expression), so it bounds memory by the largest type spine walked rather
     // than growing as more of the program is checked. Guards the function-ret /
@@ -2336,6 +2368,21 @@ fn collectPinnableVars(self: *Self, pinnable: *std.AutoHashMap(Var, void)) std.m
     for (0..self.cir.all_defs.span.len) |def_offset| {
         const def_idx = self.cir.store.defAt(self.cir.all_defs, def_offset);
         try self.collectArgPositionVars(ModuleEnv.varFrom(def_idx), pinnable, &spine_visited);
+    }
+}
+
+/// Populate the broader direct-dispatch pinnable set. It starts with external
+/// pinnable vars, then adds every var reachable from lambda parameters because a
+/// direct dispatch hidden inside an uncalled function value can still be pinned
+/// when that function is called.
+fn collectPinnableVars(
+    self: *Self,
+    pinnable: *std.AutoHashMap(Var, void),
+    external_pinnable: *std.AutoHashMap(Var, void),
+) std.mem.Allocator.Error!void {
+    var external_iter = external_pinnable.keyIterator();
+    while (external_iter.next()) |var_| {
+        try pinnable.put(var_.*, {});
     }
 
     var raw_node_idx: u32 = 0;
@@ -2355,6 +2402,142 @@ fn collectPinnableVars(self: *Self, pinnable: *std.AutoHashMap(Var, void)) std.m
             }
         }
     }
+}
+
+fn constraintExprForFnVar(self: *Self, fn_var: Var) ?CIR.Expr.Idx {
+    if (self.constraint_expr_by_fn_var.count() == 0) return null;
+
+    if (self.constraint_expr_by_fn_var.get(fn_var)) |expr_idx| return expr_idx;
+
+    const resolved = self.types.resolveVar(fn_var).var_;
+    if (resolved != fn_var) {
+        if (self.constraint_expr_by_fn_var.get(resolved)) |expr_idx| return expr_idx;
+    }
+
+    return null;
+}
+
+fn expectRegionForFnVar(self: *Self, fn_var: Var) ?Region {
+    if (self.expect_region_by_constraint_fn_var.count() == 0) return null;
+
+    if (self.expect_region_by_constraint_fn_var.get(fn_var)) |region| return region;
+
+    const resolved = self.types.resolveVar(fn_var).var_;
+    if (resolved != fn_var) {
+        if (self.expect_region_by_constraint_fn_var.get(resolved)) |region| return region;
+    }
+
+    return null;
+}
+
+fn recordConstraintExprForFnVar(
+    self: *Self,
+    fn_var: Var,
+    expr_idx: CIR.Expr.Idx,
+) std.mem.Allocator.Error!void {
+    try self.constraint_expr_by_fn_var.put(fn_var, expr_idx);
+
+    const resolved = self.types.resolveVar(fn_var).var_;
+    if (resolved != fn_var) {
+        try self.constraint_expr_by_fn_var.put(resolved, expr_idx);
+    }
+}
+
+fn recordExpectRegionForFnVar(
+    self: *Self,
+    fn_var: Var,
+    region: Region,
+) std.mem.Allocator.Error!void {
+    try self.expect_region_by_constraint_fn_var.put(fn_var, region);
+
+    const resolved = self.types.resolveVar(fn_var).var_;
+    if (resolved != fn_var) {
+        try self.expect_region_by_constraint_fn_var.put(resolved, region);
+    }
+}
+
+fn linkConstraintMetadata(
+    self: *Self,
+    left: Var,
+    right: Var,
+) std.mem.Allocator.Error!void {
+    if (self.constraintExprForFnVar(left) orelse self.constraintExprForFnVar(right)) |expr_idx| {
+        try self.recordConstraintExprForFnVar(left, expr_idx);
+        try self.recordConstraintExprForFnVar(right, expr_idx);
+    }
+
+    if (self.expectRegionForFnVar(left) orelse self.expectRegionForFnVar(right)) |region| {
+        try self.recordExpectRegionForFnVar(left, region);
+        try self.recordExpectRegionForFnVar(right, region);
+    }
+}
+
+fn hasConstraintMetadata(self: *Self) bool {
+    return self.constraint_expr_by_fn_var.count() > 0 or self.expect_region_by_constraint_fn_var.count() > 0;
+}
+
+fn copyConstraintMetadata(
+    self: *Self,
+    old_var: Var,
+    fresh_var: Var,
+) std.mem.Allocator.Error!void {
+    std.debug.assert(self.hasConstraintMetadata());
+
+    var maybe_expr_idx = self.constraint_expr_by_fn_var.get(old_var);
+    var maybe_region = self.expect_region_by_constraint_fn_var.get(old_var);
+
+    if (maybe_expr_idx == null or maybe_region == null) {
+        const resolved_old = self.types.resolveVar(old_var).var_;
+        if (resolved_old != old_var) {
+            if (maybe_expr_idx == null) {
+                maybe_expr_idx = self.constraint_expr_by_fn_var.get(resolved_old);
+            }
+            if (maybe_region == null) {
+                maybe_region = self.expect_region_by_constraint_fn_var.get(resolved_old);
+            }
+        }
+    }
+
+    if (maybe_expr_idx == null and maybe_region == null) return;
+
+    const resolved_fresh = self.types.resolveVar(fresh_var).var_;
+    if (maybe_expr_idx) |expr_idx| {
+        try self.constraint_expr_by_fn_var.put(fresh_var, expr_idx);
+        if (resolved_fresh != fresh_var) {
+            try self.constraint_expr_by_fn_var.put(resolved_fresh, expr_idx);
+        }
+    }
+
+    if (maybe_region) |region| {
+        try self.expect_region_by_constraint_fn_var.put(fresh_var, region);
+        if (resolved_fresh != fresh_var) {
+            try self.expect_region_by_constraint_fn_var.put(resolved_fresh, region);
+        }
+    }
+}
+
+fn findStaticDispatchUseForConstraint(
+    self: *Self,
+    method_name: Ident.Idx,
+    constraint_fn_var: Var,
+) Allocator.Error!?StaticDispatchUse {
+    const expr_idx = self.constraintExprForFnVar(constraint_fn_var) orelse return null;
+    if (self.cir.store.getExpr(expr_idx) == .e_runtime_error) return null;
+
+    switch (self.cir.store.getExpr(expr_idx)) {
+        .e_dispatch_call => |dispatch_call| {
+            if (!dispatch_call.method_name.eql(method_name)) return null;
+        },
+        .e_type_dispatch_call => |dispatch_call| {
+            if (!dispatch_call.method_name.eql(method_name)) return null;
+        },
+        else => return null,
+    }
+
+    return .{
+        .expr_idx = expr_idx,
+        .region = self.cir.store.getExprRegion(expr_idx),
+    };
 }
 
 /// Detect ambiguous static dispatch on a per-INSTANTIATION basis. Every time a
@@ -2379,6 +2562,7 @@ fn reportAmbiguousStaticDispatchPerInstantiation(
     self: *Self,
     reported: *std.AutoHashMap(Var, void),
     pinnable: *std.AutoHashMap(Var, void),
+    external_pinnable: *std.AutoHashMap(Var, void),
 ) std.mem.Allocator.Error!void {
     if (self.instantiation_dispatchers.items.len == 0) return;
 
@@ -2392,16 +2576,18 @@ fn reportAmbiguousStaticDispatchPerInstantiation(
         if (constraints_range.len() == 0) continue;
         if (reported.contains(resolved.var_)) continue;
 
-        // Pick the constraint to report, skipping constraints that monomorphization
-        // can resolve WITHOUT a nominal owner — those are never an ambiguous dead
-        // end and would produce false positives on valid code:
+        // Pick the constraint to report. Instantiated where-clause contracts get
+        // priority because they are explicit obligations copied from a signature:
+        // once the signature has been instantiated, the current call must either
+        // pin the owner or leave it externally pinnable. Literal-only constraints
+        // are skipped as before because numeric/string defaulting owns them.
         //
         //  - `from_numeral`: a numeric literal. Numeric defaulting and
         //    `checkAllFromNumeralFlexConstraintCompatibility` own it; it is resolved
         //    (e.g. defaulted to `Dec`) at monomorphization. A receiver carrying ANY
-        //    `from_numeral` constraint is skipped entirely, matching the def-site
-        //    sweep. Essential for numeric helpers like `|x| x + y` whose receiver
-        //    carries `desugared_binop` (`+`) plus `from_numeral`.
+        //    `from_numeral` constraint is skipped entirely unless it also carries
+        //    an instantiated where-clause obligation. This preserves numeric
+        //    helper behavior while still reporting unresolved copied contracts.
         //  - `is_eq`: structural equality. Lowering compares records/tuples/tag
         //    unions/lists structurally with no owner needed, so a flex `is_eq`
         //    receiver placeholder (left at check time by valid code such as
@@ -2411,27 +2597,41 @@ fn reportAmbiguousStaticDispatchPerInstantiation(
         //    on an expression whose OWN type is the bare-flex receiver.
         //
         // What remains — and is reported — is a real method dispatch
-        // (`method_call`/`desugared_unaryop`, or a non-equality
-        // `desugared_binop`) that requires a nominal owner the instantiation never
-        // supplied. `where_clause` records an explicit polymorphic signature
-        // contract; if the instantiated body actually uses that contract, the use
-        // contributes a normal dispatch constraint that is reported here.
+        // (`method_call`/`desugared_unaryop`, a non-equality `desugared_binop`,
+        // or an instantiated `where_clause` contract) that requires a nominal
+        // owner the instantiation never supplied. Def-site where clauses remain
+        // valid polymorphic contracts; a per-instantiation where-clause receiver
+        // has already been copied into a concrete use of that contract, so if it
+        // is not pinnable here, no later caller can supply the missing owner.
         const constraints = self.types.sliceStaticDispatchConstraints(constraints_range);
-        var first_constraint: ?StaticDispatchConstraint = null;
-        var skip_receiver = false;
+        var first_where_constraint: ?StaticDispatchConstraint = null;
+        var first_nonliteral_constraint: ?StaticDispatchConstraint = null;
+        var has_literal_constraint = false;
         for (constraints) |c| {
+            if (self.types.resolveVar(c.fn_var).desc.content == .err) continue;
             if (isLiteralStaticDispatchOrigin(c.origin)) {
-                skip_receiver = true;
+                has_literal_constraint = true;
             } else if (c.fn_name.eql(self.cir.idents.is_eq)) {
                 continue;
             } else if (c.origin == .where_clause) {
-                continue;
-            } else if (first_constraint == null) {
-                first_constraint = c;
+                if (first_where_constraint == null) first_where_constraint = c;
+            } else if (first_nonliteral_constraint == null) {
+                first_nonliteral_constraint = c;
             }
         }
-        if (skip_receiver) continue;
-        const constraint = first_constraint orelse continue;
+        const constraint = first_where_constraint orelse blk: {
+            if (has_literal_constraint) continue;
+            break :blk first_nonliteral_constraint orelse continue;
+        };
+        if (has_literal_constraint) continue;
+        const is_instantiated_where_clause = constraint.origin == .where_clause;
+        const where_dispatch_use = if (is_instantiated_where_clause)
+            try self.findStaticDispatchUseForConstraint(constraint.fn_name, constraint.fn_var)
+        else
+            null;
+        if (is_instantiated_where_clause) {
+            if (where_dispatch_use == null) continue;
+        }
 
         // If the receiver resolves INTO the pinnable set, some caller — at this
         // call's level or an enclosing one — can pin it, so it is not a dead end.
@@ -2439,67 +2639,93 @@ fn reportAmbiguousStaticDispatchPerInstantiation(
         // with a lambda parameter (e.g. `outer`'s `x` in `outer = |x| inner(x)`,
         // pinned at `outer(10)`); the receiver of a genuine hole (`get(none({}))`)
         // is a fresh instantiated var that unifies with nothing concrete, so it is
-        // absent from the set and reported. This is the same pinnability test the
-        // def-site sweep uses, applied to the instantiated receiver.
-        if (pinnable.contains(resolved.var_)) continue;
+        // absent from the set and reported. Instantiated where-clause contracts
+        // are stricter: lambda parameters inside the already-instantiated call do
+        // not count, because that call is exactly what must satisfy the copied
+        // contract. Only external function arguments can still pin it later.
+        const active_pinnable = if (is_instantiated_where_clause) external_pinnable else pinnable;
+        if (active_pinnable.contains(resolved.var_)) continue;
 
-        // Locate the call site that left this receiver undetermined. The receiver
-        // var is internal to the instantiated callee type, so no expression's own
-        // type IS the receiver — instead it flows into one of a call's ARGUMENTS,
-        // whose type structurally CONTAINS it in a DATA position (a tag payload,
-        // record field, tuple element, or nominal argument) — never inside a
-        // function type. The data-position requirement is what distinguishes a
-        // genuine hole from a polymorphic function passed as a value: in
-        // `get(none({}))` the receiver is the tag payload of the `FfiOption`
-        // argument (data) and is genuinely undetermined; in `Str.inspect(f)` where
-        // `f = |x| x + 1`, the receiver is `f`'s parameter — an uncalled function
-        // value whose parameter a future call would pin, which is not ambiguous.
-        // (Such a higher-order constraint that IS applied, like the `e_higher_order`
-        // corpus case, is caught by the def-site sweep instead.) The call expression
-        // is the dispatch use (primary region, marked a runtime error so lowering
-        // never reaches the `dispatchTarget` invariant); the argument is what left
-        // the type undetermined (secondary region). Marking the specific call — not
-        // the helper's shared body — leaves the helper's concrete call sites
-        // untouched.
+        // Locate the call site that left this receiver undetermined. Instantiated
+        // where-clause contracts carry exact dispatch-expression metadata, so
+        // they can report directly at that call. Ordinary hidden dispatches need
+        // the structural scan: the receiver var is internal to the instantiated
+        // callee type, so no expression's own type IS the receiver. Instead it
+        // flows into one of a call's ARGUMENTS, whose type structurally CONTAINS
+        // it in a DATA position (a tag payload, record field, tuple element, or
+        // nominal argument), never inside a function type. That data-position
+        // requirement distinguishes a genuine hole from a polymorphic function
+        // passed as a value: in `get(none({}))` the receiver is the tag payload
+        // of the `FfiOption` argument and is genuinely undetermined; in
+        // `Str.inspect(f)` where `f = |x| x + 1`, the receiver is `f`'s parameter,
+        // an uncalled function value whose parameter a future call would pin. A
+        // higher-order constraint that IS applied, like the `e_higher_order`
+        // corpus case, is caught by the def-site sweep instead.
         var primary: ?Region = null;
         var secondary: ?Region = null;
-        var raw_node_idx: u32 = 0;
-        while (raw_node_idx < self.cir.store.nodes.len()) : (raw_node_idx += 1) {
-            const node_idx: CIR.Node.Idx = @enumFromInt(raw_node_idx);
-            if (!isExprNodeTag(self.cir.store.nodes.get(node_idx).tag)) continue;
+        if (is_instantiated_where_clause) {
+            const dispatch_use = where_dispatch_use.?;
+            primary = dispatch_use.region;
 
-            const expr_idx: CIR.Expr.Idx = @enumFromInt(raw_node_idx);
-            if (self.cir.store.getExpr(expr_idx) == .e_runtime_error) continue;
-            const call = switch (self.cir.store.getExpr(expr_idx)) {
-                .e_call => |c| c,
-                else => continue,
-            };
+            if (self.cir.store.getExpr(dispatch_use.expr_idx) != .e_runtime_error) {
+                const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
+                    .region = dispatch_use.region,
+                } });
+                self.cir.store.replaceExprWithRuntimeError(dispatch_use.expr_idx, diagnostic_idx);
+            }
+        } else {
+            var raw_node_idx: u32 = 0;
+            while (raw_node_idx < self.cir.store.nodes.len()) : (raw_node_idx += 1) {
+                const node_idx: CIR.Node.Idx = @enumFromInt(raw_node_idx);
+                if (!isExprNodeTag(self.cir.store.nodes.get(node_idx).tag)) continue;
 
-            var arg_region: ?Region = null;
-            for (self.cir.store.sliceExpr(call.args)) |arg_idx| {
-                self.var_set.clearRetainingCapacity();
-                try self.collectDataReachableVars(ModuleEnv.varFrom(arg_idx), &self.var_set);
-                if (self.var_set.contains(resolved.var_)) {
-                    arg_region = self.cir.store.getExprRegion(arg_idx);
-                    break;
+                const expr_idx: CIR.Expr.Idx = @enumFromInt(raw_node_idx);
+                if (self.cir.store.getExpr(expr_idx) == .e_runtime_error) continue;
+                const call = switch (self.cir.store.getExpr(expr_idx)) {
+                    .e_call => |c| c,
+                    else => continue,
+                };
+
+                var arg_region: ?Region = null;
+                for (self.cir.store.sliceExpr(call.args)) |arg_idx| {
+                    self.var_set.clearRetainingCapacity();
+                    try self.collectDataReachableVars(ModuleEnv.varFrom(arg_idx), &self.var_set);
+                    if (self.var_set.contains(resolved.var_)) {
+                        arg_region = self.cir.store.getExprRegion(arg_idx);
+                        break;
+                    }
                 }
-            }
-            if (arg_region == null) continue;
+                if (arg_region == null) continue;
 
-            if (primary == null) {
-                primary = self.cir.store.getExprRegion(expr_idx);
-                secondary = arg_region;
-            }
+                if (primary == null) {
+                    primary = self.cir.store.getExprRegion(expr_idx);
+                    secondary = arg_region;
+                }
 
-            const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
-                .region = self.cir.store.getExprRegion(expr_idx),
-            } });
-            self.cir.store.replaceExprWithRuntimeError(expr_idx, diagnostic_idx);
+                const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
+                    .region = self.cir.store.getExprRegion(expr_idx),
+                } });
+                self.cir.store.replaceExprWithRuntimeError(expr_idx, diagnostic_idx);
+            }
         }
 
-        // No call passes the receiver as data: it is a polymorphic function value's
-        // own parameter (or otherwise not a real dispatch dead end) — not ambiguous.
-        if (primary == null) continue;
+        // No call passes the receiver in the relevant position. For ordinary
+        // hidden dispatch this means it is a polymorphic function value's own
+        // parameter (or otherwise not a real dispatch dead end). For a copied
+        // where-clause contract, report at the instantiation region because the
+        // unresolved obligation itself is the error.
+        if (primary == null) {
+            if (!is_instantiated_where_clause) continue;
+            const dispatch_use = where_dispatch_use.?;
+            primary = dispatch_use.region;
+
+            if (self.cir.store.getExpr(dispatch_use.expr_idx) != .e_runtime_error) {
+                const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
+                    .region = dispatch_use.region,
+                } });
+                self.cir.store.replaceExprWithRuntimeError(dispatch_use.expr_idx, diagnostic_idx);
+            }
+        }
 
         try reported.put(resolved.var_, {});
 
@@ -2516,6 +2742,43 @@ fn reportAmbiguousStaticDispatchPerInstantiation(
             .binop_negated = constraint.binop_negated,
         } } });
     }
+}
+
+/// Validate the static-dispatch contracts copied out of generalized schemes
+/// after an instantiation's caller has had a chance to pin them. Ordinary
+/// unification records deferred checks while a constrained flex unifies with a
+/// concrete type, but instantiating a polymorphic where-clause starts with a
+/// fresh constrained flex that may only resolve after later call-site evidence.
+/// Re-checking the recorded range here makes that concrete owner validation
+/// explicit and leaves unresolved cases to the ambiguity sweep below.
+fn checkInstantiatedStaticDispatchConstraints(
+    self: *Self,
+    env: *Env,
+    is_numeric_default_pass: bool,
+) std.mem.Allocator.Error!void {
+    if (self.instantiation_dispatchers.items.len == 0) return;
+
+    const deferred_top = env.deferred_static_dispatch_constraints.items.items.len;
+    for (self.instantiation_dispatchers.items) |dispatcher| {
+        if (dispatcher.constraints.len() == 0) continue;
+        var has_where_constraint = false;
+        for (self.types.sliceStaticDispatchConstraints(dispatcher.constraints)) |constraint| {
+            if (constraint.origin == .where_clause) {
+                has_where_constraint = true;
+                break;
+            }
+        }
+        if (!has_where_constraint) continue;
+
+        _ = try env.deferred_static_dispatch_constraints.append(self.gpa, .{
+            .var_ = dispatcher.dispatcher_var,
+            .constraints = dispatcher.constraints,
+        });
+    }
+    if (env.deferred_static_dispatch_constraints.items.items.len == deferred_top) return;
+
+    try self.checkStaticDispatchConstraints(env, is_numeric_default_pass);
+    try self.checkAllConstraints(env);
 }
 
 /// Detect ambiguous static dispatch: a static-dispatch-constrained type variable
@@ -10126,6 +10389,8 @@ fn finalizeQuoteDefaults(self: *Self, env: *Env) Allocator.Error!void {
     // enough for the method chains hanging off it to resolve during checking.
     var pinnable = std.AutoHashMap(Var, void).init(self.gpa);
     defer pinnable.deinit();
+    var external_pinnable = std.AutoHashMap(Var, void).init(self.gpa);
+    defer external_pinnable.deinit();
     var collected_pinnable = false;
 
     const num_vars: u32 = @intCast(self.types.len());
@@ -10153,7 +10418,8 @@ fn finalizeQuoteDefaults(self: *Self, env: *Env) Allocator.Error!void {
 
         if (resolved.desc.rank == .generalized) {
             if (!collected_pinnable) {
-                try self.collectPinnableVars(&pinnable);
+                try self.collectExternalPinnableVars(&external_pinnable);
+                try self.collectPinnableVars(&pinnable, &external_pinnable);
                 collected_pinnable = true;
             }
             if (pinnable.contains(resolved.var_)) continue;
@@ -10369,6 +10635,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                             try self.unifyWith(deferred_constraint.var_, .err, env);
                             try self.unifyWith(resolved_func.ret, .err, env);
                         } else {
+                            try self.linkConstraintMetadata(rigid_var, constraint.fn_var);
                             try self.reportEffectfulDispatchInExpect(constraint);
                         }
                     } else {
@@ -11803,6 +12070,7 @@ fn reportRecursiveStaticDispatchIfNeeded(
                 },
             } });
 
+            try self.unifyWith(dispatcher_var, .err, env);
             try self.markConstraintFunctionAsError(constraint, env);
             try self.markConstraintFunctionAsError(new_constraint, env);
             return true;
