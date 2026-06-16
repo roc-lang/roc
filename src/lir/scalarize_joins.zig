@@ -182,10 +182,11 @@ const Pass = struct {
         self.resetProc();
         try self.collect(body);
 
-        // The proc's argument span is invariant for this pass, and stays valid
-        // through the walk below: a failed `tryScalarize` adds no locals, and
-        // the first success returns immediately, so nothing reallocates the
-        // span store while we hold this slice.
+        // Resolve proc-argument membership here, where the argument span is
+        // freshly valid, and pass a plain bool into `tryScalarize`. The span is
+        // a view into the store's local-id buffer, which `tryScalarize`
+        // reallocates when it scalarizes, so it must not be read across that
+        // call.
         const proc_args = self.store.getLocalSpan(self.store.getProcSpec(proc_id).args);
 
         // Find one scalarizable parameter; the fixpoint loop picks up the
@@ -201,7 +202,8 @@ const Pass = struct {
             switch (self.store.getCFStmt(current)) {
                 .join => |join_stmt| {
                     for (self.store.getLocalSpan(join_stmt.params), 0..) |param, position| {
-                        if (try self.tryScalarize(proc_args, current, join_stmt, param, position)) {
+                        const param_is_proc_arg = std.mem.findScalar(LIR.LocalId, proc_args, param) != null;
+                        if (try self.tryScalarize(param_is_proc_arg, current, join_stmt, param, position)) {
                             changed = true;
                             break :outer;
                         }
@@ -244,9 +246,21 @@ const Pass = struct {
         proc.frame_locals = try self.store.addLocalSpan(combined.items);
     }
 
+    /// `param_is_proc_arg` records whether this join parameter is also one of
+    /// the proc's argument locals. Every jump that targets the join carries
+    /// `initialize_join_param` writes for its parameters, which the rewrite
+    /// below turns into per-field writes. The one entry that carries no such
+    /// write is a plain-TCE loop header: it reuses the proc's own argument
+    /// locals as the join parameters and enters with a bare jump, so the
+    /// parameter's initial value arrives through the argument. That is the only
+    /// shape in which a join parameter is also a proc argument, and it is
+    /// exactly the shape whose field parameters must be seeded from the
+    /// argument struct on entry. (Any future shape that entered a parameter
+    /// without a write and without a seed would surface as an unbound local in
+    /// the ARC borrow certifier, never as a silent miscompile.)
     fn tryScalarize(
         self: *Pass,
-        proc_args: []const LIR.LocalId,
+        param_is_proc_arg: bool,
         join_id: LIR.CFStmtId,
         join_stmt: anytype,
         param: LIR.LocalId,
@@ -255,18 +269,6 @@ const Pass = struct {
         const param_layout = self.layouts.getLayout(self.store.getLocal(param).layout_idx);
         if (param_layout.tag != .struct_) return false;
 
-        // Every jump that targets the join carries `initialize_join_param`
-        // writes for its parameters, which the rewrite below turns into
-        // per-field writes. The one entry that carries no such write is a
-        // plain-TCE loop header: it reuses the proc's own argument locals as
-        // the join parameters and enters with a bare jump, so the parameter's
-        // initial value arrives through the argument. That is the only shape in
-        // which a join parameter is also a proc argument, and it is exactly the
-        // shape whose field parameters must be seeded from the argument struct
-        // on entry. (Any future shape that entered a parameter without a write
-        // and without a seed would surface as an unbound local in the ARC
-        // borrow certifier, never as a silent miscompile.)
-        const param_is_proc_arg = std.mem.findScalar(LIR.LocalId, proc_args, param) != null;
         const info = self.layouts.getStructInfo(param_layout);
         var field_count: usize = 0;
         for (0..info.fields.len) |i| {
