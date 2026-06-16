@@ -130,7 +130,8 @@ pub fn cosq(x: f128, y: f128) f128 {
 /// kernel sin function on ~[-pi/4, pi/4] (except on -0), pi/4 ~ 0.7854
 /// Input x is assumed to be bounded by ~pi/4 in magnitude.
 /// Input y is the tail of x.
-/// Input iy indicates whether y is 0. (if iy=0, y assume to be 0).
+/// Input y_is_zero_flag indicates whether y is 0.
+/// If y_is_zero_flag=0, y is assumed to be 0.
 ///
 /// Algorithm
 ///      1. Since sin(-x) = -sin(x), we need only to consider positive x.
@@ -154,7 +155,7 @@ pub fn cosq(x: f128, y: f128) f128 {
 ///              r = x *(S2+x *(S3+x *(S4+x *(S5+x *S6))))
 ///         then                   3    2
 ///              sin(x) = x + (S1*x + (x *(r-y/2)+y))
-pub fn sin(x: f64, y: f64, iy: i32) f64 {
+pub fn sin(x: f64, y: f64, y_is_zero_flag: i32) f64 {
     const S1 = -1.66666666666666324348e-01; // 0xBFC55555, 0x55555549
     const S2 = 8.33333333332248946124e-03; // 0x3F811111, 0x1110F8A6
     const S3 = -1.98412698298579493134e-04; // 0xBF2A01A0, 0x19C161D5
@@ -166,7 +167,7 @@ pub fn sin(x: f64, y: f64, iy: i32) f64 {
     const w = z * z;
     const r = S2 + z * (S3 + z * S4) + z * w * (S5 + z * S6);
     const v = z * x;
-    if (iy == 0) {
+    if (y_is_zero_flag == 0) {
         return x + v * (S1 + z * r);
     } else {
         return x - ((z * (0.5 * y - v * r) - y) - v * S1);
@@ -190,7 +191,7 @@ pub fn sindf(x: f64) f32 {
 }
 
 /// Kernel sine approximation for an extended-precision reduced argument.
-pub fn sinx(x: f80, y: f80, iy: i32) f80 {
+pub fn sinx(x: f80, y: f80, y_is_zero_flag: i32) f80 {
     const S1: f80 = -0.166666666666666666671;
     const S2: f64 = 0.0083333333333333332;
     const S3: f64 = -0.00019841269841269427;
@@ -205,14 +206,14 @@ pub fn sinx(x: f80, y: f80, iy: i32) f80 {
     const r = S2 + z * (S3 + z * (S4 + z * (S5 +
         z * (S6 + z * (S7 + z * S8)))));
 
-    if (iy == 0)
+    if (y_is_zero_flag == 0)
         return x + v * (S1 + z * r);
 
     return x - ((z * (0.5 * y - v * r) - y) - v * S1);
 }
 
 /// Kernel sine approximation for a quad-precision reduced argument.
-pub fn sinq(x: f128, y: f128, iy: i32) f128 {
+pub fn sinq(x: f128, y: f128, y_is_zero_flag: i32) f128 {
     const S1: f128 = -0.16666666666666666666666666666666666606732416116558;
     const S2: f128 = 0.0083333333333333333333333333333331135404851288270047;
     const S3: f128 = -0.00019841269841269841269841269839935785325638310428717;
@@ -231,7 +232,7 @@ pub fn sinq(x: f128, y: f128, iy: i32) f128 {
     const r = S2 + z * (S3 + z * (S4 + z * (S5 + z * (S6 + z * (S7 + z * (S8 +
         z * (S9 + z * (S10 + z * (S11 + z * S12)))))))));
 
-    if (iy == 0)
+    if (y_is_zero_flag == 0)
         return x + v * (S1 + z * r);
 
     return x - ((z * (0.5 * y - v * r) - y) - v * S1);

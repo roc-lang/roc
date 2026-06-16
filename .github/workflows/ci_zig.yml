@@ -148,8 +148,11 @@ jobs:
 
       - name: Run eval tests with LLVM backend
         if: runner.os != 'Windows'
-        run: |
-          zig build run-test-eval -- --llvm
+        uses: ./.github/actions/flaky-retry
+        with:
+          command: zig build run-test-eval -- --llvm
+          error_string_contains: "build.zig.zon|HttpConnectionClosing|TemporaryNameServerFailure|error: cannot download|503|Timeout"
+          retry_count: 3
 
       # Windows has no fork(), so the runner spawns a fresh worker process per
       # test that compiles the whole program (front-end + LIR lowering) before
@@ -161,8 +164,11 @@ jobs:
       # runners where 30s is plenty. Give Windows a larger hang budget.
       - name: Run eval tests with LLVM backend (Windows)
         if: runner.os == 'Windows'
-        run: |
-          zig build run-test-eval -- --llvm --timeout 120000
+        uses: ./.github/actions/flaky-retry
+        with:
+          command: zig build run-test-eval -- --llvm --timeout 120000
+          error_string_contains: "build.zig.zon|HttpConnectionClosing|TemporaryNameServerFailure|error: cannot download|503|Timeout"
+          retry_count: 3
 
       - name: Run CLI platform tests (LLVM size/speed backends)
         if: runner.os != 'Windows'
