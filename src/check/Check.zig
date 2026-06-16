@@ -15537,7 +15537,6 @@ fn varLiteralKind(self: *Self, var_: Var) ?StaticDispatchConstraint.LiteralKind 
     return if (has_quote) .quote else if (has_interpolation) .interpolation else null;
 }
 
-/// Whether this flex var carries any interpolation literal-origin constraint.
 // --- Per-kind literal facts, each an exhaustive `switch (LiteralKind)` ---------
 //
 // Adding a `LiteralKind` variant turns each switch below into a compile error
