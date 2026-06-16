@@ -10073,6 +10073,39 @@ fn poisonRecursiveNonFunctionProcessingDef(
     }
 }
 
+fn freshRecursiveMethodPlaceholder(
+    self: *Self,
+    processing_def: DefProcessed,
+    def: CIR.Def,
+    env: *Env,
+    region: Region,
+) Allocator.Error!Var {
+    const method_var = try self.fresh(env, region);
+
+    // Match e_lookup_local recursion semantics: a different annotated def in the
+    // same recursive group is instantiated per use-site at cycle validation time,
+    // while self references and unannotated group members stay monomorphic.
+    const is_cross_reference = (def.annotation != null) and
+        if (self.current_processing_def) |current_def|
+            current_def != processing_def.def_idx
+        else
+            false;
+
+    const constraint_expected = if (is_cross_reference)
+        ModuleEnv.varFrom(def.expr)
+    else
+        ModuleEnv.varFrom(def.pattern);
+
+    _ = try self.constraints.append(self.gpa, Constraint{ .eql = .{
+        .expected = constraint_expected,
+        .actual = method_var,
+        .ctx = .{ .recursive_def = .{ .def_name = processing_def.def_name } },
+        .is_cross_reference = is_cross_reference,
+    } });
+
+    return method_var;
+}
+
 fn poisonErroneousValueUses(self: *Self) Allocator.Error!void {
     for (self.value_lookup_tracking.items) |entry| {
         const pattern_var = ModuleEnv.varFrom(entry.pattern_idx);
@@ -10746,7 +10779,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                     const def_idx = method_binding.def_idx;
                     const method_type_var: Var = ModuleEnv.varFrom(method_binding.type_node_idx);
                     const def = original_env.store.getDef(def_idx);
-                    // Track whether we just processed a cycle participant
+                    // Track whether we just processed or referenced a cycle participant.
                     var cycle_method_expr_var: ?Var = null;
 
                     if (is_this_module) {
@@ -10773,8 +10806,12 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                         // as e_lookup_local .not_processed). After checkDef,
                                         // e_closure rank elevation has already run, so the
                                         // closure var is at rank 2 — safe for unification.
-                                        const def_expr_var = ModuleEnv.varFrom(def.expr);
-                                        cycle_method_expr_var = def_expr_var;
+                                        if (def.annotation != null) {
+                                            cycle_method_expr_var = try self.freshRecursiveMethodPlaceholder(processing_def, def, env, region);
+                                        } else {
+                                            const def_expr_var = ModuleEnv.varFrom(def.expr);
+                                            cycle_method_expr_var = def_expr_var;
+                                        }
                                     } else {
                                         std.debug.assert(sub_env.rank() == .outermost);
                                         self.env_pool.release(sub_env);
@@ -10788,10 +10825,11 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                     }
 
                                     // Create a fresh flex var at the current rank for
-                                    // the method type. Using def_var directly (rank
-                                    // outermost) would pull body vars to a lower rank
-                                    // and prevent generalization.
-                                    cycle_method_expr_var = try self.fresh(env, region);
+                                    // the method type, and validate it against the
+                                    // binding at the recursion boundary. Using the
+                                    // binding var directly here would pull body vars
+                                    // to a lower rank and prevent generalization.
+                                    cycle_method_expr_var = try self.freshRecursiveMethodPlaceholder(processing_def, def, env, region);
 
                                     // Check if this is mutual recursion through dispatch.
                                     if (self.current_processing_def) |current_def| {
@@ -10975,8 +11013,12 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                         std.debug.assert(self.cycle_root_def != null);
 
                                         try self.deferred_cycle_envs.append(self.gpa, sub_env);
-                                        const def_expr_var = ModuleEnv.varFrom(def.expr);
-                                        cycle_method_expr_var = def_expr_var;
+                                        if (def.annotation != null) {
+                                            cycle_method_expr_var = try self.freshRecursiveMethodPlaceholder(processing_def, def, env, region);
+                                        } else {
+                                            const def_expr_var = ModuleEnv.varFrom(def.expr);
+                                            cycle_method_expr_var = def_expr_var;
+                                        }
                                     } else {
                                         std.debug.assert(sub_env.rank() == .outermost);
                                         self.env_pool.release(sub_env);
@@ -10989,7 +11031,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                                         continue;
                                     }
 
-                                    cycle_method_expr_var = try self.fresh(env, region);
+                                    cycle_method_expr_var = try self.freshRecursiveMethodPlaceholder(processing_def, def, env, region);
 
                                     if (self.current_processing_def) |current_def| {
                                         if (current_def != processing_def.def_idx) {
