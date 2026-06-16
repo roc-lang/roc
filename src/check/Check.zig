@@ -374,6 +374,15 @@ literal_defaulting_group_warnings: std.ArrayListUnmanaged(PendingBoundaryWarning
 literal_defaulting_constraint_ranges: std.ArrayListUnmanaged(StaticDispatchConstraint.SafeList.Range),
 literal_defaulting_kinds: std.ArrayListUnmanaged(StaticDispatchConstraint.LiteralKind),
 literal_defaulting_candidate_vars: std.ArrayListUnmanaged(Var),
+// Match alternative-pattern binding scratch (front-loaded; cleared per call/branch).
+alt_pattern_baseline: std.AutoHashMap(u32, MatchAltBaselineEntry),
+alt_pattern_bindings: std.ArrayList(PatternBinding),
+alt_pattern_current: std.AutoHashMap(u32, CIR.Pattern.Idx),
+// Payload-emptiness scratch (front-loaded; cleared at each use).
+collected_constructed_tags: std.ArrayList(Ident.Idx),
+payload_vars_to_close: std.ArrayList(Var),
+known_empty_payload_vars_destructure: std.ArrayList(Var),
+known_empty_payload_vars_match: std.ArrayList(Var),
 /// Debug-only literal-defaulting probe instrumentation, asserted by the
 /// refuted-count guard test. Only written under `comptime std.debug.runtime_safety`,
 /// so release builds compile the bookkeeping out entirely (no global state, no
@@ -1186,6 +1195,13 @@ fn initAssumePrepared(
         .literal_defaulting_constraint_ranges = .empty,
         .literal_defaulting_kinds = .empty,
         .literal_defaulting_candidate_vars = .empty,
+        .alt_pattern_baseline = std.AutoHashMap(u32, MatchAltBaselineEntry).init(gpa),
+        .alt_pattern_bindings = .empty,
+        .alt_pattern_current = std.AutoHashMap(u32, CIR.Pattern.Idx).init(gpa),
+        .collected_constructed_tags = .empty,
+        .payload_vars_to_close = .empty,
+        .known_empty_payload_vars_destructure = .empty,
+        .known_empty_payload_vars_match = .empty,
         .checked_lambda_params = .empty,
         .probe_var_pool_lens = .empty,
     };
@@ -1321,6 +1337,13 @@ pub fn deinit(self: *Self) void {
     self.literal_defaulting_constraint_ranges.deinit(self.gpa);
     self.literal_defaulting_kinds.deinit(self.gpa);
     self.literal_defaulting_candidate_vars.deinit(self.gpa);
+    self.alt_pattern_baseline.deinit();
+    self.alt_pattern_bindings.deinit(self.gpa);
+    self.alt_pattern_current.deinit();
+    self.collected_constructed_tags.deinit(self.gpa);
+    self.payload_vars_to_close.deinit(self.gpa);
+    self.known_empty_payload_vars_destructure.deinit(self.gpa);
+    self.known_empty_payload_vars_match.deinit(self.gpa);
     self.checked_lambda_params.deinit(self.gpa);
     self.probe_var_pool_lens.deinit(self.gpa);
 }
@@ -9326,6 +9349,8 @@ const PatternBinding = struct {
     pattern_idx: CIR.Pattern.Idx,
 };
 
+const MatchAltBaselineEntry = struct { pattern_idx: CIR.Pattern.Idx, pattern_index: u32 };
+
 fn reportMatchAltBinderProblem(
     self: *Self,
     expected_pattern_idx: CIR.Pattern.Idx,
@@ -9437,20 +9462,14 @@ fn unifyMatchAltPatternBindings(
 ) std.mem.Allocator.Error!bool {
     if (branch_ptrn_idxs.len <= 1) return false;
 
-    var baseline = std.AutoHashMap(u32, struct {
-        pattern_idx: CIR.Pattern.Idx,
-        pattern_index: u32,
-    }).init(self.gpa);
-    defer baseline.deinit();
-
-    var bindings: std.ArrayList(PatternBinding) = .empty;
-    defer bindings.deinit(self.gpa);
+    self.alt_pattern_baseline.clearRetainingCapacity();
+    self.alt_pattern_bindings.clearRetainingCapacity();
 
     {
         const first_branch_pattern = self.cir.store.getMatchBranchPattern(branch_ptrn_idxs[0]);
-        try self.collectPatternBindings(first_branch_pattern.pattern, &bindings);
-        for (bindings.items) |binding| {
-            try baseline.put(@as(u32, @bitCast(binding.ident)), .{
+        try self.collectPatternBindings(first_branch_pattern.pattern, &self.alt_pattern_bindings);
+        for (self.alt_pattern_bindings.items) |binding| {
+            try self.alt_pattern_baseline.put(@as(u32, @bitCast(binding.ident)), .{
                 .pattern_idx = binding.pattern_idx,
                 .pattern_index = 0,
             });
@@ -9460,17 +9479,16 @@ fn unifyMatchAltPatternBindings(
     var had_type_error = false;
 
     for (branch_ptrn_idxs[1..], 1..) |branch_ptrn_idx, pattern_index| {
-        bindings.clearRetainingCapacity();
+        self.alt_pattern_bindings.clearRetainingCapacity();
         const branch_pattern = self.cir.store.getMatchBranchPattern(branch_ptrn_idx);
-        try self.collectPatternBindings(branch_pattern.pattern, &bindings);
+        try self.collectPatternBindings(branch_pattern.pattern, &self.alt_pattern_bindings);
 
-        var current = std.AutoHashMap(u32, CIR.Pattern.Idx).init(self.gpa);
-        defer current.deinit();
+        self.alt_pattern_current.clearRetainingCapacity();
 
-        for (bindings.items) |binding| {
+        for (self.alt_pattern_bindings.items) |binding| {
             const key: u32 = @bitCast(binding.ident);
-            try current.put(key, binding.pattern_idx);
-            const first = baseline.get(key) orelse {
+            try self.alt_pattern_current.put(key, binding.pattern_idx);
+            const first = self.alt_pattern_baseline.get(key) orelse {
                 const first_branch_pattern = self.cir.store.getMatchBranchPattern(branch_ptrn_idxs[0]);
                 try self.reportMatchAltBinderProblem(
                     first_branch_pattern.pattern,
@@ -9503,9 +9521,9 @@ fn unifyMatchAltPatternBindings(
             if (!result.isOk()) had_type_error = true;
         }
 
-        var baseline_iter = baseline.iterator();
+        var baseline_iter = self.alt_pattern_baseline.iterator();
         while (baseline_iter.next()) |entry| {
-            if (current.contains(entry.key_ptr.*)) continue;
+            if (self.alt_pattern_current.contains(entry.key_ptr.*)) continue;
 
             const ident: Ident.Idx = @bitCast(entry.key_ptr.*);
             try self.reportMatchAltBinderProblem(
@@ -12085,14 +12103,13 @@ fn collectKnownEmptyPayloadVarsForExpr(
     target_var: Var,
     out: *std.ArrayList(Var),
 ) Allocator.Error!bool {
-    var constructed_tags: std.ArrayList(Ident.Idx) = .empty;
-    defer constructed_tags.deinit(self.gpa);
+    self.collected_constructed_tags.clearRetainingCapacity();
 
-    const known = try self.collectConstructedTagsForExpr(expr_idx, &constructed_tags);
+    const known = try self.collectConstructedTagsForExpr(expr_idx, &self.collected_constructed_tags);
     if (!known) return false;
-    if (constructed_tags.items.len == 0) return true;
+    if (self.collected_constructed_tags.items.len == 0) return true;
 
-    try self.collectAbsentCtorPayloadBlockers(target_var, constructed_tags.items, out);
+    try self.collectAbsentCtorPayloadBlockers(target_var, self.collected_constructed_tags.items, out);
     return true;
 }
 
@@ -12101,12 +12118,11 @@ fn closeAbsentConstructedPayloadVars(
     expr_idx: CIR.Expr.Idx,
     target_var: Var,
 ) Allocator.Error!void {
-    var payload_vars_to_close: std.ArrayList(Var) = .empty;
-    defer payload_vars_to_close.deinit(self.gpa);
+    self.payload_vars_to_close.clearRetainingCapacity();
 
-    _ = try self.collectKnownEmptyPayloadVarsForExpr(expr_idx, target_var, &payload_vars_to_close);
+    _ = try self.collectKnownEmptyPayloadVarsForExpr(expr_idx, target_var, &self.payload_vars_to_close);
 
-    for (payload_vars_to_close.items) |payload_var| {
+    for (self.payload_vars_to_close.items) |payload_var| {
         try self.closePayloadVarToEmpty(payload_var);
     }
 }
@@ -12125,9 +12141,8 @@ fn checkDestructureExhaustiveness(
 ) std.mem.Allocator.Error!void {
     if (!self.patternNeedsExhaustiveness(pattern_idx)) return;
 
-    var known_empty_payload_vars: std.ArrayList(Var) = .empty;
-    defer known_empty_payload_vars.deinit(self.gpa);
-    const value_constructors_known = try self.collectKnownEmptyPayloadVarsForExpr(value_expr_idx, value_var, &known_empty_payload_vars);
+    self.known_empty_payload_vars_destructure.clearRetainingCapacity();
+    const value_constructors_known = try self.collectKnownEmptyPayloadVarsForExpr(value_expr_idx, value_var, &self.known_empty_payload_vars_destructure);
 
     const result = exhaustive.checkDestructure(
         self.cir.gpa,
@@ -12136,7 +12151,7 @@ fn checkDestructureExhaustiveness(
         self.exhaustiveBuiltinIdents(),
         pattern_idx,
         value_var,
-        known_empty_payload_vars.items,
+        self.known_empty_payload_vars_destructure.items,
         value_constructors_known,
     ) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
@@ -13282,9 +13297,8 @@ fn checkMatchExpr(
     if (!match.skip_exhaustiveness and !had_type_error and !cond_is_error and !has_invalid_try and !cond_always_crashes) {
         const match_region = self.getRegionAt(@enumFromInt(@intFromEnum(expr_idx)));
 
-        var known_empty_payload_vars: std.ArrayList(Var) = .empty;
-        defer known_empty_payload_vars.deinit(self.gpa);
-        const cond_constructors_known = try self.collectKnownEmptyPayloadVarsForExpr(match.cond, cond_var, &known_empty_payload_vars);
+        self.known_empty_payload_vars_match.clearRetainingCapacity();
+        const cond_constructors_known = try self.collectKnownEmptyPayloadVarsForExpr(match.cond, cond_var, &self.known_empty_payload_vars_match);
 
         const result = exhaustive.checkMatch(
             self.cir.gpa,
@@ -13294,7 +13308,7 @@ fn checkMatchExpr(
             match.branches,
             cond_var,
             match_region,
-            known_empty_payload_vars.items,
+            self.known_empty_payload_vars_match.items,
             cond_constructors_known,
         ) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
