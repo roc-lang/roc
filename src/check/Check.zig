@@ -346,6 +346,9 @@ reported_dispatch_vars: std.AutoHashMap(Var, void),
 /// Scratch for `collectArgPositionVars`: guards its function-ret / alias
 /// spine walk against unbounded recursion.
 pinnable_spine_visited: std.AutoHashMap(Var, void),
+/// Scratch for the ambiguity sweep: vars an outside caller can pin through a
+/// top-level def's argument positions (computed once per `checkFile`).
+external_pinnable: std.AutoHashMap(Var, void),
 /// Scratch for `defaultLiteralsAtGeneralizationBoundary`: reachable-var
 /// closure of the def root(s) being generalized (constraint-signature edges
 /// included).
@@ -1181,6 +1184,7 @@ fn initAssumePrepared(
         .pinnable_vars = std.AutoHashMap(Var, void).init(gpa),
         .reported_dispatch_vars = std.AutoHashMap(Var, void).init(gpa),
         .pinnable_spine_visited = std.AutoHashMap(Var, void).init(gpa),
+        .external_pinnable = std.AutoHashMap(Var, void).init(gpa),
         .boundary_reachable_vars = std.AutoHashMap(Var, void).init(gpa),
         .boundary_leak_vars = std.AutoHashMap(Var, void).init(gpa),
         .boundary_eql_edges = .empty,
@@ -1323,6 +1327,7 @@ pub fn deinit(self: *Self) void {
     self.pinnable_vars.deinit();
     self.reported_dispatch_vars.deinit();
     self.pinnable_spine_visited.deinit();
+    self.external_pinnable.deinit();
     self.boundary_reachable_vars.deinit();
     self.boundary_leak_vars.deinit();
     self.boundary_eql_edges.deinit(self.gpa);
@@ -4747,9 +4752,8 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     // ARGUMENT position of a top-level def, including argument positions of
     // function values returned by that def. These are the vars an outside caller
     // can still pin after this module is checked.
-    var external_pinnable = std.AutoHashMap(Var, void).init(self.gpa);
-    defer external_pinnable.deinit();
-    try self.collectExternalPinnableVars(&external_pinnable);
+    self.external_pinnable.clearRetainingCapacity();
+    try self.collectExternalPinnableVars(&self.external_pinnable);
 
     // The full pinnable set additionally includes direct lambda parameters. That
     // remains correct for direct dispatch expressions on uncalled function values:
@@ -4757,9 +4761,9 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     // use only `external_pinnable`, because the call that instantiated the
     // contract must satisfy it now.
     self.pinnable_vars.clearRetainingCapacity();
-    try self.collectPinnableVars(&self.pinnable_vars, &external_pinnable);
+    try self.collectPinnableVars(&self.pinnable_vars, &self.external_pinnable);
 
-    try self.reportAmbiguousStaticDispatchPerInstantiation(&self.reported_dispatch_vars, &self.pinnable_vars, &external_pinnable);
+    try self.reportAmbiguousStaticDispatchPerInstantiation(&self.reported_dispatch_vars, &self.pinnable_vars, &self.external_pinnable);
     try self.reportAmbiguousStaticDispatch(&self.reported_dispatch_vars, &self.pinnable_vars);
 
     try self.reportNonExhaustiveLambdaParams(&env);
