@@ -239,7 +239,7 @@ fn unaryReceiverNeedsParens(self: *Self, receiver_idx: Expr.Idx) bool {
         .e_frac_f64 => |frac| std.math.signbit(frac.value),
         .e_dec => |dec| dec.value.num < 0,
         .e_dec_small => |small| small.value.numerator < 0,
-        .e_num_from_numeral => blk: {
+        .e_num_from_numeral, .e_typed_num_from_numeral => blk: {
             const literal = self.module_env.numeralLiteralForNode(ModuleEnv.nodeIdxFrom(receiver_idx)) orelse {
                 std.debug.panic("missing recorded numeral for expression {}", .{@intFromEnum(receiver_idx)});
             };
