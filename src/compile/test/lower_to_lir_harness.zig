@@ -18,14 +18,14 @@ const CoreCtx = @import("ctx").CoreCtx;
 /// Lower an app whose body is `app_body` (everything after the platform header
 /// and the echo wiring) to LIR. Reaching the end without a panic means the
 /// program checked cleanly and passed ARC certification.
-pub fn expectLowersToLir(app_body: []const u8) !void {
+pub fn expectLowersToLir(app_body: []const u8) anyerror!void {
     try runToLir(app_body, null);
 }
 
 /// Lower `app_body` twice and assert the two LIR dumps are byte-identical, so
 /// a regression that made lowering (e.g. capture order) depend on iteration or
 /// scheduling order would fail here rather than silently.
-pub fn expectDeterministicLir(app_body: []const u8) !void {
+pub fn expectDeterministicLir(app_body: []const u8) anyerror!void {
     const gpa = std.testing.allocator;
     const cap = 1 << 22;
     const buf_a = try gpa.alloc(u8, cap);
@@ -39,7 +39,7 @@ pub fn expectDeterministicLir(app_body: []const u8) !void {
     try std.testing.expectEqualStrings(writer_a.buffered(), writer_b.buffered());
 }
 
-fn runToLir(app_body: []const u8, dump: ?*std.Io.Writer) !void {
+fn runToLir(app_body: []const u8, dump: ?*std.Io.Writer) anyerror!void {
     const gpa = std.testing.allocator;
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();

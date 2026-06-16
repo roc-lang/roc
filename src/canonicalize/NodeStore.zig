@@ -387,11 +387,11 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 78;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 79;
 /// Count of the expression nodes in the ModuleEnv
 pub const MODULEENV_EXPR_NODE_COUNT = 53;
 /// Count of the statement nodes in the ModuleEnv
-pub const MODULEENV_STATEMENT_NODE_COUNT = 17;
+pub const MODULEENV_STATEMENT_NODE_COUNT = 19;
 /// Count of the type annotation nodes in the ModuleEnv
 pub const MODULEENV_TYPE_ANNO_NODE_COUNT = 12;
 /// Count of the pattern nodes in the ModuleEnv
@@ -602,6 +602,20 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
         .statement_while => {
             const p = payload.statement_while;
             return CIR.Statement{ .s_while = .{
+                .cond = @enumFromInt(p.cond),
+                .body = @enumFromInt(p.body),
+            } };
+        },
+        .statement_infinite_loop => {
+            const p = payload.statement_while;
+            return CIR.Statement{ .s_infinite_loop = .{
+                .cond = @enumFromInt(p.cond),
+                .body = @enumFromInt(p.body),
+            } };
+        },
+        .statement_breakable_loop => {
+            const p = payload.statement_while;
+            return CIR.Statement{ .s_breakable_loop = .{
                 .cond = @enumFromInt(p.cond),
                 .body = @enumFromInt(p.body),
             } };
@@ -2064,6 +2078,20 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
         },
         .s_while => |s| {
             node.tag = .statement_while;
+            node.setPayload(.{ .statement_while = .{
+                .cond = @intFromEnum(s.cond),
+                .body = @intFromEnum(s.body),
+            } });
+        },
+        .s_infinite_loop => |s| {
+            node.tag = .statement_infinite_loop;
+            node.setPayload(.{ .statement_while = .{
+                .cond = @intFromEnum(s.cond),
+                .body = @intFromEnum(s.body),
+            } });
+        },
+        .s_breakable_loop => |s| {
+            node.tag = .statement_breakable_loop;
             node.setPayload(.{ .statement_while = .{
                 .cond = @intFromEnum(s.cond),
                 .body = @intFromEnum(s.body),
@@ -4082,6 +4110,10 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
             node.tag = .diag_break_outside_loop;
             region = r.region;
         },
+        .infinite_loop_never_exits => |r| {
+            node.tag = .diag_infinite_loop_never_exits;
+            region = r.region;
+        },
         .return_outside_fn => |r| {
             node.tag = .diag_return_outside_fn;
             region = r.region;
@@ -4535,6 +4567,9 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             .region = store.getRegionAt(node_idx),
         } },
         .diag_break_outside_loop => return CIR.Diagnostic{ .break_outside_loop = .{
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_infinite_loop_never_exits => return CIR.Diagnostic{ .infinite_loop_never_exits = .{
             .region = store.getRegionAt(node_idx),
         } },
         .diag_return_outside_fn => {

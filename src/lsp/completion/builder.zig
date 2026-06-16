@@ -1693,6 +1693,8 @@ fn getStatementParts(stmt: CIR.Statement) StatementParts {
         .s_reassign => |reassign| .{ .pattern = null, .expr = reassign.expr, .expr2 = null },
         .s_for => |for_stmt| .{ .pattern = for_stmt.patt, .expr = for_stmt.expr, .expr2 = for_stmt.body },
         .s_while => |while_stmt| .{ .pattern = null, .expr = while_stmt.cond, .expr2 = while_stmt.body },
+        .s_infinite_loop => |while_stmt| .{ .pattern = null, .expr = while_stmt.cond, .expr2 = while_stmt.body },
+        .s_breakable_loop => |while_stmt| .{ .pattern = null, .expr = while_stmt.cond, .expr2 = while_stmt.body },
         .s_expr => |expr_stmt| .{ .pattern = null, .expr = expr_stmt.expr, .expr2 = null },
         .s_expect => |expect_stmt| .{ .pattern = null, .expr = expect_stmt.body, .expr2 = null },
         .s_dbg => |dbg_stmt| .{ .pattern = null, .expr = dbg_stmt.expr, .expr2 = null },

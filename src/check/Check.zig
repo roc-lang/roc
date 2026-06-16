@@ -8401,6 +8401,30 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 const empty_rec = try self.freshFromContent(.{ .structure = .empty_record }, env, cond_region);
                 _ = try self.unify(stmt_var, empty_rec, env);
             },
+            .s_breakable_loop => |while_stmt| {
+                does_fx = try self.checkExpr(while_stmt.cond, env, Expected.none()) or does_fx;
+                const cond_var: Var = ModuleEnv.varFrom(while_stmt.cond);
+                const cond_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(while_stmt.cond));
+
+                const bool_var = try self.freshBool(env, cond_region);
+                _ = try self.unify(bool_var, cond_var, env);
+
+                does_fx = try self.checkExpr(while_stmt.body, env, Expected.none()) or does_fx;
+                const empty_rec = try self.freshFromContent(.{ .structure = .empty_record }, env, cond_region);
+                _ = try self.unify(stmt_var, empty_rec, env);
+            },
+            .s_infinite_loop => |while_stmt| {
+                does_fx = try self.checkExpr(while_stmt.cond, env, Expected.none()) or does_fx;
+                const cond_var: Var = ModuleEnv.varFrom(while_stmt.cond);
+                const cond_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(while_stmt.cond));
+
+                const bool_var = try self.freshBool(env, cond_region);
+                _ = try self.unify(bool_var, cond_var, env);
+
+                does_fx = try self.checkExpr(while_stmt.body, env, Expected.none()) or does_fx;
+                try self.unifyWith(stmt_var, .{ .flex = Flex.init() }, env);
+                diverges = true;
+            },
             .s_expr => |expr| {
                 does_fx = try self.checkExpr(expr.expr, env, Expected.none()) or does_fx;
                 const expr_var: Var = ModuleEnv.varFrom(expr.expr);

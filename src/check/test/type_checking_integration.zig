@@ -4620,6 +4620,94 @@ test "check type - early return - pass" {
     try checkTypesExpr(source, .pass, "Bool -> List(_a)");
 }
 
+test "check type - final infinite loop can satisfy annotated return type" {
+    const source =
+        \\looping : Bool -> Str
+        \\looping = |bool| {
+        \\  while True {
+        \\    if bool {
+        \\      return "yes"
+        \\    }
+        \\    crash "no"
+        \\  }
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "looping" } }, "Bool -> Str");
+}
+
+test "check type - final Bool.True infinite loop can satisfy annotated return type" {
+    const source =
+        \\looping : Bool -> Str
+        \\looping = |bool| {
+        \\  while Bool.True {
+        \\    if bool {
+        \\      return "yes"
+        \\    }
+        \\    crash "no"
+        \\  }
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "looping" } }, "Bool -> Str");
+}
+
+test "check type - final block True infinite loop can satisfy annotated return type" {
+    const source =
+        \\looping : Bool -> Str
+        \\looping = |bool| {
+        \\  while { True } {
+        \\    if bool {
+        \\      return "yes"
+        \\    }
+        \\    crash "no"
+        \\  }
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "looping" } }, "Bool -> Str");
+}
+
+test "check type - final breakable loop remains empty record" {
+    const source =
+        \\looping : Bool -> Str
+        \\looping = |_| {
+        \\  while True {
+        \\    break
+        \\  }
+        \\}
+    ;
+    try checkTypesModule(source, .fail_first, "TYPE MISMATCH");
+}
+
+test "check type - final loop with break and return remains empty record" {
+    const source =
+        \\looping : Bool -> Str
+        \\looping = |bool| {
+        \\  while True {
+        \\    if bool {
+        \\      break
+        \\    }
+        \\    return "yes"
+        \\  }
+        \\}
+    ;
+    try checkTypesModule(source, .fail_first, "TYPE MISMATCH");
+}
+
+test "check type - infinite loop branch unifies with sibling branch" {
+    const source =
+        \\looping : Bool -> Str
+        \\looping = |bool| {
+        \\  if bool {
+        \\    while True {
+        \\      return "yes"
+        \\    }
+        \\  } else {
+        \\    "ok"
+        \\  }
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "looping" } }, "Bool -> Str");
+}
+
 test "check type - early return - fail" {
     const source =
         \\|bool| {
