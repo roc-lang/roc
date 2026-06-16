@@ -10,7 +10,9 @@
 //! reports a "release of unbound local" for the never-initialized field on the
 //! first loop iteration.
 
-const expectLowersToLir = @import("lower_to_lir_harness.zig").expectLowersToLir;
+const harness = @import("lower_to_lir_harness.zig");
+const expectLowersToLir = harness.expectLowersToLir;
+const expectDeterministicLir = harness.expectDeterministicLir;
 
 test "tce capture: tail-recursive closure capturing a Dict lowers to LIR" {
     try expectLowersToLir(
@@ -112,6 +114,52 @@ test "tce capture: nested lambda inside a tail-recursive capturing closure lower
         \\
         \\main! = |_args| {
         \\    _ = N2.run([1, 2])
+        \\    Ok({})
+        \\}
+    );
+}
+
+test "tce capture: capture-fixpoint lowering is deterministic" {
+    // Lambda lifting solves capture sets with an edge-driven worklist and no
+    // separate normalizing pass; this guards that the resulting LIR (capture
+    // order included) does not depend on scheduling or iteration order.
+    try expectDeterministicLir(
+        \\Solver :: {}.{
+        \\    solve : List(U8) -> Try(List((U8, U8)), [Bad])
+        \\    solve = |vars| {
+        \\        equation : Dict(U8, I64)
+        \\        equation = Dict.from_list([(1, 1), (2, -1)])
+        \\        find_match : List((U8, U8)), List(U8), Set(U8) -> Try(List((U8, U8)), [Bad])
+        \\        find_match = |assignments, remaining_vars, remaining_digits| {
+        \\            match remaining_vars {
+        \\                [] => {
+        \\                    total : I64
+        \\                    total = assignments.fold(0, |acc, (letter, value)| (equation.get(letter) ?? 0) * value.to_i64() + acc)
+        \\                    if total != 0 { Err(Bad) } else { Ok(assignments) }
+        \\                }
+        \\                [letter, .. as rest] => {
+        \\                    first_ok(remaining_digits, |digit| {
+        \\                        find_match(assignments.append((letter, digit)), rest, remaining_digits)
+        \\                    })
+        \\                }
+        \\            }
+        \\        }
+        \\        find_match([], vars, Set.from_list([0, 1, 2, 3]))
+        \\    }
+        \\}
+        \\
+        \\first_ok : Set(a), (a -> Try(b, err)) -> Try(b, [Bad])
+        \\first_ok = |set, func| {
+        \\    set.to_list().fold_until(Err(Bad), |state, elem| {
+        \\        match func(elem) {
+        \\            Err(_) => Continue(state)
+        \\            Ok(val) => Break(Ok(val))
+        \\        }
+        \\    })
+        \\}
+        \\
+        \\main! = |_args| {
+        \\    _ = Solver.solve([1, 2])
         \\    Ok({})
         \\}
     );

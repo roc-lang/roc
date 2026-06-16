@@ -175,3 +175,35 @@ test "issue 9634: multi-hop transitive capture through sibling closures lowers t
         \\}
     );
 }
+
+test "issue 9634: captured Dict used in string interpolation inside a recursive closure lowers to LIR" {
+    // String interpolation desugars to an inline lambda (the one IR shape that
+    // stays an inline `.lambda` rather than a nested def). Exercising it inside
+    // a recursive capturing closure covers lambda lifting's inline-descent path
+    // for captures, which is separate from the def/nested-def fixpoint.
+    try expectLowersToLir(
+        \\IC :: {}.{
+        \\    run : List(U8) -> Str
+        \\    run = |vars| {
+        \\        labels : Dict(U8, Str)
+        \\        labels = Dict.from_list([(1, "one"), (2, "two")])
+        \\        recur : List(U8), Str -> Str
+        \\        recur = |xs, acc| {
+        \\            match xs {
+        \\                [] => acc
+        \\                [x, .. as rest] => {
+        \\                    name = labels.get(x) ?? "?"
+        \\                    recur(rest, "${acc}${name},")
+        \\                }
+        \\            }
+        \\        }
+        \\        recur(vars, "")
+        \\    }
+        \\}
+        \\
+        \\main! = |_args| {
+        \\    _ = IC.run([1, 2, 1])
+        \\    Ok({})
+        \\}
+    );
+}

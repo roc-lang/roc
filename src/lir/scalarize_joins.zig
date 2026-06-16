@@ -18,12 +18,14 @@
 //! alias chains that borrow inference turns into moves, and the wrapper
 //! disappears entirely.
 //!
-//! A join parameter that is also one of the proc's arguments (the loop header
-//! a plain tail-call elimination builds, where the proc enters the loop with a
-//! bare jump and the argument values are already in the parameter locals) is
-//! still scalarizable: its per-field parameters are seeded once on the join's
-//! remainder by reading the argument struct's fields, since that entry path
-//! carries no `initialize_join_param` write to rewrite.
+//! A join's remainder (its run-once entry path) may enter the join without an
+//! `initialize_join_param` write for a parameter — a plain tail-call
+//! elimination loop header does this, entering with a bare jump because the
+//! parameters are the proc's own argument locals. Such a parameter is still
+//! scalarizable: its per-field parameters are seeded once on the remainder by
+//! reading the incoming struct's fields. That read is sound only because the
+//! sole write-less entry shape supplies the value through a proc argument, an
+//! invariant the pass enforces.
 //!
 //! The pass iterates to a fixpoint so nested wrappers dissolve layer by
 //! layer. Parameters with any whole-value use, any non-literal initializer,
@@ -247,12 +249,17 @@ const Pass = struct {
         const param_layout = self.layouts.getLayout(self.store.getLocal(param).layout_idx);
         if (param_layout.tag != .struct_) return false;
 
-        // When the parameter is also a proc argument, the proc-entry path
-        // feeds its value through the argument rather than an
-        // `initialize_join_param` write, so there is no per-field write to
-        // rewrite there. Such a parameter is still scalarizable, but the
-        // field parameters must then be seeded at entry by reading the
-        // argument struct's fields (see the seed below).
+        // Every jump that targets the join carries `initialize_join_param`
+        // writes for its parameters, which the rewrite below turns into
+        // per-field writes. The one entry that carries no such write is a
+        // plain-TCE loop header: it reuses the proc's own argument locals as
+        // the join parameters and enters with a bare jump, so the parameter's
+        // initial value arrives through the argument. That is the only shape in
+        // which a join parameter is also a proc argument, and it is exactly the
+        // shape whose field parameters must be seeded from the argument struct
+        // on entry. (Any future shape that entered a parameter without a write
+        // and without a seed would surface as an unbound local in the ARC
+        // borrow certifier, never as a silent miscompile.)
         const param_is_proc_arg = blk: {
             const args = self.store.getLocalSpan(self.store.getProcSpec(proc_id).args);
             break :blk std.mem.findScalar(LIR.LocalId, args, param) != null;
@@ -357,11 +364,9 @@ const Pass = struct {
             try self.writeFields(site.stmt, build_next, field_locals, operands);
         }
 
-        // The proc-entry path supplies a proc-argument parameter through the
-        // argument itself, not an `initialize_join_param` write, so the field
-        // parameters would otherwise be unbound on first entry. Seed them by
-        // reading the argument struct's fields in the join's remainder, which
-        // runs once before the loop body.
+        // Seed the field parameters on the write-less proc-entry path (see the
+        // comment at param_is_proc_arg above): reading the argument struct's
+        // fields in the join's remainder, which runs once before the loop body.
         if (param_is_proc_arg) try self.seedFieldsFromArgStruct(join_id, param, field_locals);
 
         return true;

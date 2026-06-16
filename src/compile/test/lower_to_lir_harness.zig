@@ -19,6 +19,27 @@ const CoreCtx = @import("ctx").CoreCtx;
 /// and the echo wiring) to LIR. Reaching the end without a panic means the
 /// program checked cleanly and passed ARC certification.
 pub fn expectLowersToLir(app_body: []const u8) !void {
+    try runToLir(app_body, null);
+}
+
+/// Lower `app_body` twice and assert the two LIR dumps are byte-identical, so
+/// a regression that made lowering (e.g. capture order) depend on iteration or
+/// scheduling order would fail here rather than silently.
+pub fn expectDeterministicLir(app_body: []const u8) !void {
+    const gpa = std.testing.allocator;
+    const cap = 1 << 22;
+    const buf_a = try gpa.alloc(u8, cap);
+    defer gpa.free(buf_a);
+    const buf_b = try gpa.alloc(u8, cap);
+    defer gpa.free(buf_b);
+    var writer_a = std.Io.Writer.fixed(buf_a);
+    var writer_b = std.Io.Writer.fixed(buf_b);
+    try runToLir(app_body, &writer_a);
+    try runToLir(app_body, &writer_b);
+    try std.testing.expectEqualStrings(writer_a.buffered(), writer_b.buffered());
+}
+
+fn runToLir(app_body: []const u8, dump: ?*std.Io.Writer) !void {
     const gpa = std.testing.allocator;
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
@@ -117,4 +138,12 @@ pub fn expectLowersToLir(app_body: []const u8) !void {
         .{ .target_usize = base.target.TargetUsize.native },
     );
     defer lowered.deinit();
+
+    if (dump) |writer| {
+        const store = &lowered.lir_result.store;
+        const layouts = &lowered.lir_result.layouts;
+        for (0..store.proc_specs.items.len) |index| {
+            try lir.DebugPrint.writeProc(gpa, store, layouts, @enumFromInt(@as(u32, @intCast(index))), writer);
+        }
+    }
 }
