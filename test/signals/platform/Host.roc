@@ -27,6 +27,9 @@ Host := [].{
 	## Create an event map node (host stores the transform closure)
 	create_event_map! : U64, Box((NodeValue -> NodeValue)) => U64
 
+	## Create a scalar event map node from Unit events to a fixed I64 value
+	create_event_map_unit_i64_const! : U64, I64 => U64
+
 	## Create an event filter node (host stores the predicate closure)
 	create_event_filter! : U64, Box((NodeValue -> Bool)) => U64
 
@@ -38,6 +41,13 @@ Host := [].{
 
 	## Create a constant signal node
 	create_signal_const! : NodeValue => U64
+
+	## Create typed constant signal nodes
+	create_signal_const_i64! : I64 => U64
+
+	create_signal_const_bool! : Bool => U64
+
+	create_signal_const_str! : Str => U64
 
 	## Create a mutable root state signal node
 	create_signal_state! : NodeValue => U64
@@ -54,8 +64,22 @@ Host := [].{
 	## Create a signal fold node (host stores the step closure)
 	create_signal_fold! : NodeValue, U64, Box(((NodeValue, NodeValue) -> NodeValue)) => U64
 
+	## Create typed scalar signal fold nodes
+	create_signal_fold_i64! : I64, U64, Box(((I64, I64) -> I64)) => U64
+
+	create_signal_fold_bool_toggle! : Bool, U64 => U64
+
 	## Create a signal zip_with node (host stores the combine closure)
 	create_signal_zip_with! : U64, U64, Box(((NodeValue, NodeValue) -> NodeValue)) => U64
+
+	## Create typed scalar signal map nodes
+	create_signal_map_i64_i64! : U64, Box((I64 -> I64)) => U64
+
+	create_signal_map_i64_str! : U64, Box((I64 -> Str)) => U64
+
+	create_signal_map2_i64_i64! : U64, U64, Box(((I64, I64) -> I64)) => U64
+
+	create_signal_map2_i64_i64_str! : U64, U64, Box(((I64, I64) -> Str)) => U64
 
 	## Bind a signal to an element's text content
 	bind_text! : U64, U64 => {}

@@ -39,11 +39,12 @@ The built demo binary can also be run directly:
 
 ```sh
 ./zig-out/bin/signals-demo --bench --bench-iterations 1000
+./zig-out/bin/signals-demo --bench --bench-iterations 5000 --bench-samples 3
 ./zig-out/bin/signals-demo --bench --bench-prototype A
 ```
 
 Benchmark output is CSV. Each row records the prototype, case name, iteration
-count, wall time, operation count, Roc allocations/deallocations, retained
+sample number, iteration count, wall time, operation count, Roc allocations/deallocations, retained
 allocation delta, `NodeValue` incref/decref/equality counts, synthetic
 boundary encode/decode counts, callback count, event count, evaluated graph
 nodes, signal writes/changes/suppressed writes, text updates, and active graph
@@ -63,6 +64,8 @@ and signal-graph shapes. Current-app scenario rows use the existing compiled
 demo and therefore report only the A/Baseline implementation as the control
 case. The benchmark mode first runs `test_counter.txt` and a focused
 unchanged-value suppression check before printing measurements.
+
+See [nodevalue_boundary_research.md](nodevalue_boundary_research.md) for the latest matrix and interpretation. The current implementation includes real scalar host paths for `I64`, `Bool`, and `Str`, a generated app-model shim spike, and generated Zig refcount helpers such as `decrefNodeValue`.
 
 ## Demo Coverage
 
@@ -118,6 +121,8 @@ Counter := { count : I64 }.{
     }
 }
 ```
+
+The generated Zig ABI also provides recursive retain/release helpers for host-facing Roc layouts. Hosts should prefer those helpers over hand-written layout cleanup; for example, nested `NvList(List(NodeValue))` values are released by generated `decrefNodeValue`.
 
 ## Components
 

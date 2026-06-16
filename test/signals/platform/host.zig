@@ -248,18 +248,33 @@ const PendingEvent = struct {
     value: NodeValue,
 };
 
+const StoredValue = union(enum) {
+    node_value: NodeValue,
+    i64: i64,
+    bool: bool,
+    str: RocStr,
+    unit,
+};
+
 const NodeKind = union(enum) {
     event_source,
     event_map: struct { source: u64, transform: RocBox },
+    event_map_unit_i64_const: struct { source: u64, value: i64 },
     event_filter: struct { source: u64, predicate: RocBox },
     event_merge: struct { left: u64, right: u64 },
     event_with_latest: struct { event: u64, signal: u64, combine: RocBox },
     signal_const,
     signal_state: struct { update_event: ?u64 },
     signal_map: struct { source: u64, transform: RocBox },
+    signal_map_i64_i64: struct { source: u64, transform: RocBox },
+    signal_map_i64_str: struct { source: u64, transform: RocBox },
     signal_map2: struct { left: u64, right: u64, transform: RocBox },
+    signal_map2_i64_i64: struct { left: u64, right: u64, transform: RocBox },
+    signal_map2_i64_i64_str: struct { left: u64, right: u64, transform: RocBox },
     signal_hold: struct { event: u64 },
     signal_fold: struct { event: u64, step: RocBox },
+    signal_fold_i64: struct { event: u64, step: RocBox },
+    signal_fold_bool_toggle: struct { event: u64 },
     signal_zip_with: struct { source: u64, event: u64, combine: RocBox },
     dynamic: struct { parent: u64, signal: u64, render: RocBox, child_scope: ?u64 },
     each: struct { parent: u64, signal: u64, key: RocBox, render: RocBox, entries: std.ArrayListUnmanaged(KeyedScope) },
@@ -268,11 +283,12 @@ const NodeKind = union(enum) {
 const GraphNode = struct {
     id: u64,
     kind: NodeKind,
-    current_value: ?NodeValue,
-    event_values: std.ArrayListUnmanaged(NodeValue),
+    current_value: ?StoredValue,
+    event_values: std.ArrayListUnmanaged(StoredValue),
     dependents: std.ArrayListUnmanaged(u64),
     scope_id: u64,
     active: bool,
+    released: bool,
 
     fn init(id: u64, scope_id: u64, kind: NodeKind) GraphNode {
         return .{
@@ -283,26 +299,53 @@ const GraphNode = struct {
             .dependents = .empty,
             .scope_id = scope_id,
             .active = true,
+            .released = false,
         };
     }
 
-    fn deinit(self: *GraphNode, allocator: std.mem.Allocator, ops: ?*abi.RocOps) void {
-        if (ops) |roc_ops| {
-            if (self.current_value) |value| {
-                decrefNodeValue(value, roc_ops);
-            }
-            for (self.event_values.items) |value| {
-                decrefNodeValue(value, roc_ops);
-            }
+    fn releaseResources(self: *GraphNode, allocator: std.mem.Allocator, ops: *abi.RocOps) void {
+        if (self.released) return;
+        self.released = true;
+
+        if (self.current_value) |value| {
+            decrefStoredValue(value, ops);
+            self.current_value = null;
         }
+        for (self.event_values.items) |value| {
+            decrefStoredValue(value, ops);
+        }
+        self.event_values.clearRetainingCapacity();
+
         switch (self.kind) {
+            .event_map => |*data| decrefErasedCallable(data.transform, ops),
+            .event_filter => |*data| decrefErasedCallable(data.predicate, ops),
+            .event_with_latest => |*data| decrefErasedCallable(data.combine, ops),
+            .signal_map => |*data| decrefErasedCallable(data.transform, ops),
+            .signal_map_i64_i64 => |*data| decrefErasedCallable(data.transform, ops),
+            .signal_map_i64_str => |*data| decrefErasedCallable(data.transform, ops),
+            .signal_map2 => |*data| decrefErasedCallable(data.transform, ops),
+            .signal_map2_i64_i64 => |*data| decrefErasedCallable(data.transform, ops),
+            .signal_map2_i64_i64_str => |*data| decrefErasedCallable(data.transform, ops),
+            .signal_fold => |*data| decrefErasedCallable(data.step, ops),
+            .signal_fold_i64 => |*data| decrefErasedCallable(data.step, ops),
+            .signal_zip_with => |*data| decrefErasedCallable(data.combine, ops),
+            .dynamic => |*data| decrefErasedCallable(data.render, ops),
             .each => |*data| {
+                decrefErasedCallable(data.key, ops);
+                decrefErasedCallable(data.render, ops);
                 for (data.entries.items) |entry| {
                     allocator.free(entry.key);
                 }
                 data.entries.deinit(allocator);
+                data.entries = .empty;
             },
             else => {},
+        }
+    }
+
+    fn deinit(self: *GraphNode, allocator: std.mem.Allocator, ops: ?*abi.RocOps) void {
+        if (ops) |roc_ops| {
+            self.releaseResources(allocator, roc_ops);
         }
         self.event_values.deinit(allocator);
         self.dependents.deinit(allocator);
@@ -687,6 +730,10 @@ fn currentRocOps() *abi.RocOps {
     return current_roc_ops orelse @panic("signals RocOps is not initialized");
 }
 
+fn decrefErasedCallable(callable: RocBox, ops: *abi.RocOps) void {
+    abi.decrefErasedCallable(callable, ops);
+}
+
 // Memory Management
 
 fn rocAllocFn(ops: *abi.RocOps, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
@@ -1018,6 +1065,24 @@ fn hostedCreateEventMap(ops: *abi.RocOps, source_id: u64, transform: RocBox) cal
     return node_id;
 }
 
+/// Host.create_event_map_unit_i64_const!
+fn hostedCreateEventMapUnitI64Const(source_id: u64, value: i64) callconv(.c) u64 {
+    const host = currentHost();
+    traceStderr("[HOST] create_event_map_unit_i64_const!\n");
+
+    const node_id = host.next_node_id;
+    host.next_node_id += 1;
+
+    const node = GraphNode.init(node_id, host.current_scope_id, .{ .event_map_unit_i64_const = .{
+        .source = source_id,
+        .value = value,
+    } });
+    host.graph_nodes.append(host.gpa.allocator(), node) catch std.process.exit(1);
+
+    host.addDependency(source_id, node_id);
+    return node_id;
+}
+
 /// Host.create_event_merge!
 fn hostedCreateEventMerge(left_id: u64, right_id: u64) callconv(.c) u64 {
     const host = currentHost();
@@ -1107,10 +1172,55 @@ fn hostedCreateSignalConst(ops: *abi.RocOps, value: NodeValue) callconv(.c) u64 
     host.next_node_id += 1;
 
     var node = GraphNode.init(node_id, host.current_scope_id, .signal_const);
-    node.current_value = value;
+    node.current_value = .{ .node_value = value };
     host.graph_nodes.append(host.gpa.allocator(), node) catch {
         std.process.exit(1);
     };
+
+    return node_id;
+}
+
+/// Host.create_signal_const_i64!
+fn hostedCreateSignalConstI64(value: i64) callconv(.c) u64 {
+    const host = currentHost();
+    traceStderr("[HOST] create_signal_const_i64!\n");
+
+    const node_id = host.next_node_id;
+    host.next_node_id += 1;
+
+    var node = GraphNode.init(node_id, host.current_scope_id, .signal_const);
+    node.current_value = .{ .i64 = value };
+    host.graph_nodes.append(host.gpa.allocator(), node) catch std.process.exit(1);
+
+    return node_id;
+}
+
+/// Host.create_signal_const_bool!
+fn hostedCreateSignalConstBool(value: bool) callconv(.c) u64 {
+    const host = currentHost();
+    traceStderr("[HOST] create_signal_const_bool!\n");
+
+    const node_id = host.next_node_id;
+    host.next_node_id += 1;
+
+    var node = GraphNode.init(node_id, host.current_scope_id, .signal_const);
+    node.current_value = .{ .bool = value };
+    host.graph_nodes.append(host.gpa.allocator(), node) catch std.process.exit(1);
+
+    return node_id;
+}
+
+/// Host.create_signal_const_str!
+fn hostedCreateSignalConstStr(ops: *abi.RocOps, value: RocStr) callconv(.c) u64 {
+    const host = hostFromOps(ops);
+    traceStderr("[HOST] create_signal_const_str!\n");
+
+    const node_id = host.next_node_id;
+    host.next_node_id += 1;
+
+    var node = GraphNode.init(node_id, host.current_scope_id, .signal_const);
+    node.current_value = .{ .str = value };
+    host.graph_nodes.append(host.gpa.allocator(), node) catch std.process.exit(1);
 
     return node_id;
 }
@@ -1126,7 +1236,7 @@ fn hostedCreateSignalState(ops: *abi.RocOps, initial: NodeValue) callconv(.c) u6
     var node = GraphNode.init(node_id, host.current_scope_id, .{ .signal_state = .{
         .update_event = null,
     } });
-    node.current_value = initial;
+    node.current_value = .{ .node_value = initial };
     host.graph_nodes.append(host.gpa.allocator(), node) catch {
         std.process.exit(1);
     };
@@ -1146,10 +1256,47 @@ fn hostedCreateSignalFold(ops: *abi.RocOps, initial: NodeValue, event_id: u64, s
         .event = event_id,
         .step = step,
     } });
-    node.current_value = initial;
+    node.current_value = .{ .node_value = initial };
     host.graph_nodes.append(host.gpa.allocator(), node) catch {
         std.process.exit(1);
     };
+
+    host.addDependency(event_id, node_id);
+    return node_id;
+}
+
+/// Host.create_signal_fold_i64!
+fn hostedCreateSignalFoldI64(ops: *abi.RocOps, initial: i64, event_id: u64, step: RocBox) callconv(.c) u64 {
+    const host = hostFromOps(ops);
+    traceStderr("[HOST] create_signal_fold_i64!\n");
+
+    const node_id = host.next_node_id;
+    host.next_node_id += 1;
+
+    var node = GraphNode.init(node_id, host.current_scope_id, .{ .signal_fold_i64 = .{
+        .event = event_id,
+        .step = step,
+    } });
+    node.current_value = .{ .i64 = initial };
+    host.graph_nodes.append(host.gpa.allocator(), node) catch std.process.exit(1);
+
+    host.addDependency(event_id, node_id);
+    return node_id;
+}
+
+/// Host.create_signal_fold_bool_toggle!
+fn hostedCreateSignalFoldBoolToggle(initial: bool, event_id: u64) callconv(.c) u64 {
+    const host = currentHost();
+    traceStderr("[HOST] create_signal_fold_bool_toggle!\n");
+
+    const node_id = host.next_node_id;
+    host.next_node_id += 1;
+
+    var node = GraphNode.init(node_id, host.current_scope_id, .{ .signal_fold_bool_toggle = .{
+        .event = event_id,
+    } });
+    node.current_value = .{ .bool = initial };
+    host.graph_nodes.append(host.gpa.allocator(), node) catch std.process.exit(1);
 
     host.addDependency(event_id, node_id);
     return node_id;
@@ -1166,7 +1313,7 @@ fn hostedCreateSignalHold(ops: *abi.RocOps, initial: NodeValue, event_id: u64) c
     var node = GraphNode.init(node_id, host.current_scope_id, .{ .signal_hold = .{
         .event = event_id,
     } });
-    node.current_value = initial;
+    node.current_value = .{ .node_value = initial };
     host.graph_nodes.append(host.gpa.allocator(), node) catch {
         std.process.exit(1);
     };
@@ -1206,6 +1353,54 @@ fn hostedCreateSignalMap(ops: *abi.RocOps, source_id: u64, transform: RocBox) ca
     return node_id;
 }
 
+/// Host.create_signal_map_i64_i64!
+fn hostedCreateSignalMapI64I64(ops: *abi.RocOps, source_id: u64, transform: RocBox) callconv(.c) u64 {
+    const host = hostFromOps(ops);
+    traceStderr("[HOST] create_signal_map_i64_i64!\n");
+
+    const node_id = host.next_node_id;
+    host.next_node_id += 1;
+
+    var node = GraphNode.init(node_id, host.current_scope_id, .{ .signal_map_i64_i64 = .{
+        .source = source_id,
+        .transform = transform,
+    } });
+
+    if (source_id < host.graph_nodes.items.len) {
+        if (host.graph_nodes.items[source_id].current_value) |source_val| {
+            node.current_value = .{ .i64 = callRocI64ToI64(host, transform, storedValueAsI64(source_val)) };
+        }
+    }
+
+    host.graph_nodes.append(host.gpa.allocator(), node) catch std.process.exit(1);
+    host.addDependency(source_id, node_id);
+    return node_id;
+}
+
+/// Host.create_signal_map_i64_str!
+fn hostedCreateSignalMapI64Str(ops: *abi.RocOps, source_id: u64, transform: RocBox) callconv(.c) u64 {
+    const host = hostFromOps(ops);
+    traceStderr("[HOST] create_signal_map_i64_str!\n");
+
+    const node_id = host.next_node_id;
+    host.next_node_id += 1;
+
+    var node = GraphNode.init(node_id, host.current_scope_id, .{ .signal_map_i64_str = .{
+        .source = source_id,
+        .transform = transform,
+    } });
+
+    if (source_id < host.graph_nodes.items.len) {
+        if (host.graph_nodes.items[source_id].current_value) |source_val| {
+            node.current_value = .{ .str = callRocI64ToStr(host, transform, storedValueAsI64(source_val)) };
+        }
+    }
+
+    host.graph_nodes.append(host.gpa.allocator(), node) catch std.process.exit(1);
+    host.addDependency(source_id, node_id);
+    return node_id;
+}
+
 /// Host.create_signal_map2!
 fn hostedCreateSignalMap2(ops: *abi.RocOps, left_id: u64, right_id: u64, transform: RocBox) callconv(.c) u64 {
     const host = hostFromOps(ops);
@@ -1234,6 +1429,62 @@ fn hostedCreateSignalMap2(ops: *abi.RocOps, left_id: u64, right_id: u64, transfo
     return node_id;
 }
 
+/// Host.create_signal_map2_i64_i64!
+fn hostedCreateSignalMap2I64I64(ops: *abi.RocOps, left_id: u64, right_id: u64, transform: RocBox) callconv(.c) u64 {
+    const host = hostFromOps(ops);
+    traceStderr("[HOST] create_signal_map2_i64_i64!\n");
+
+    const node_id = host.next_node_id;
+    host.next_node_id += 1;
+
+    var node = GraphNode.init(node_id, host.current_scope_id, .{ .signal_map2_i64_i64 = .{
+        .left = left_id,
+        .right = right_id,
+        .transform = transform,
+    } });
+
+    if (left_id < host.graph_nodes.items.len and right_id < host.graph_nodes.items.len) {
+        if (host.graph_nodes.items[left_id].current_value) |left_value| {
+            if (host.graph_nodes.items[right_id].current_value) |right_value| {
+                node.current_value = .{ .i64 = callRocI64I64ToI64(host, transform, storedValueAsI64(left_value), storedValueAsI64(right_value)) };
+            }
+        }
+    }
+
+    host.graph_nodes.append(host.gpa.allocator(), node) catch std.process.exit(1);
+    host.addDependency(left_id, node_id);
+    host.addDependency(right_id, node_id);
+    return node_id;
+}
+
+/// Host.create_signal_map2_i64_i64_str!
+fn hostedCreateSignalMap2I64I64Str(ops: *abi.RocOps, left_id: u64, right_id: u64, transform: RocBox) callconv(.c) u64 {
+    const host = hostFromOps(ops);
+    traceStderr("[HOST] create_signal_map2_i64_i64_str!\n");
+
+    const node_id = host.next_node_id;
+    host.next_node_id += 1;
+
+    var node = GraphNode.init(node_id, host.current_scope_id, .{ .signal_map2_i64_i64_str = .{
+        .left = left_id,
+        .right = right_id,
+        .transform = transform,
+    } });
+
+    if (left_id < host.graph_nodes.items.len and right_id < host.graph_nodes.items.len) {
+        if (host.graph_nodes.items[left_id].current_value) |left_value| {
+            if (host.graph_nodes.items[right_id].current_value) |right_value| {
+                node.current_value = .{ .str = callRocI64I64ToStr(host, transform, storedValueAsI64(left_value), storedValueAsI64(right_value)) };
+            }
+        }
+    }
+
+    host.graph_nodes.append(host.gpa.allocator(), node) catch std.process.exit(1);
+    host.addDependency(left_id, node_id);
+    host.addDependency(right_id, node_id);
+    return node_id;
+}
+
 /// Host.create_signal_zip_with!
 fn hostedCreateSignalZipWith(ops: *abi.RocOps, source_id: u64, event_id: u64, combine: RocBox) callconv(.c) u64 {
     const host = hostFromOps(ops);
@@ -1251,7 +1502,7 @@ fn hostedCreateSignalZipWith(ops: *abi.RocOps, source_id: u64, event_id: u64, co
     // Use source signal's initial value
     if (source_id < host.graph_nodes.items.len) {
         if (host.graph_nodes.items[source_id].current_value) |value| {
-            increfNodeValue(value);
+            increfStoredValue(value);
             node.current_value = value;
         }
     }
@@ -1315,12 +1566,28 @@ fn hostCreateEventMap(source_id: u64, transform: RocBox) callconv(.c) u64 {
     return hostedCreateEventMap(currentRocOps(), source_id, transform);
 }
 
+fn hostCreateEventMapUnitI64Const(source_id: u64, value: i64) callconv(.c) u64 {
+    return hostedCreateEventMapUnitI64Const(source_id, value);
+}
+
 fn hostCreateEventWithLatest(event_id: u64, signal_id: u64, combine: RocBox) callconv(.c) u64 {
     return hostedCreateEventWithLatest(currentRocOps(), event_id, signal_id, combine);
 }
 
 fn hostCreateSignalConst(value: NodeValue) callconv(.c) u64 {
     return hostedCreateSignalConst(currentRocOps(), value);
+}
+
+fn hostCreateSignalConstI64(value: i64) callconv(.c) u64 {
+    return hostedCreateSignalConstI64(value);
+}
+
+fn hostCreateSignalConstBool(value: bool) callconv(.c) u64 {
+    return hostedCreateSignalConstBool(value);
+}
+
+fn hostCreateSignalConstStr(value: RocStr) callconv(.c) u64 {
+    return hostedCreateSignalConstStr(currentRocOps(), value);
 }
 
 fn hostCreateSignalState(initial: NodeValue) callconv(.c) u64 {
@@ -1331,6 +1598,14 @@ fn hostCreateSignalFold(initial: NodeValue, event_id: u64, step: RocBox) callcon
     return hostedCreateSignalFold(currentRocOps(), initial, event_id, step);
 }
 
+fn hostCreateSignalFoldI64(initial: i64, event_id: u64, step: RocBox) callconv(.c) u64 {
+    return hostedCreateSignalFoldI64(currentRocOps(), initial, event_id, step);
+}
+
+fn hostCreateSignalFoldBoolToggle(initial: bool, event_id: u64) callconv(.c) u64 {
+    return hostedCreateSignalFoldBoolToggle(initial, event_id);
+}
+
 fn hostCreateSignalHold(initial: NodeValue, event_id: u64) callconv(.c) u64 {
     return hostedCreateSignalHold(currentRocOps(), initial, event_id);
 }
@@ -1339,8 +1614,24 @@ fn hostCreateSignalMap(source_id: u64, transform: RocBox) callconv(.c) u64 {
     return hostedCreateSignalMap(currentRocOps(), source_id, transform);
 }
 
+fn hostCreateSignalMapI64I64(source_id: u64, transform: RocBox) callconv(.c) u64 {
+    return hostedCreateSignalMapI64I64(currentRocOps(), source_id, transform);
+}
+
+fn hostCreateSignalMapI64Str(source_id: u64, transform: RocBox) callconv(.c) u64 {
+    return hostedCreateSignalMapI64Str(currentRocOps(), source_id, transform);
+}
+
 fn hostCreateSignalMap2(left_id: u64, right_id: u64, transform: RocBox) callconv(.c) u64 {
     return hostedCreateSignalMap2(currentRocOps(), left_id, right_id, transform);
+}
+
+fn hostCreateSignalMap2I64I64(left_id: u64, right_id: u64, transform: RocBox) callconv(.c) u64 {
+    return hostedCreateSignalMap2I64I64(currentRocOps(), left_id, right_id, transform);
+}
+
+fn hostCreateSignalMap2I64I64Str(left_id: u64, right_id: u64, transform: RocBox) callconv(.c) u64 {
+    return hostedCreateSignalMap2I64I64Str(currentRocOps(), left_id, right_id, transform);
 }
 
 fn hostCreateSignalZipWith(source_id: u64, event_id: u64, combine: RocBox) callconv(.c) u64 {
@@ -1357,20 +1648,62 @@ fn increfNodeValue(value: NodeValue) void {
     if (current_host) |host| {
         host.bench_counters.node_value_incref_count += 1;
     }
-    switch (value.tag) {
-        .NvStr => value.payload.nv_str.incref(1),
-        .NvList => value.payload.nv_list.incref(1),
-        else => {},
-    }
+    abi.increfNodeValue(value, 1);
 }
 
 fn decrefNodeValue(value: NodeValue, ops: *abi.RocOps) void {
     hostFromOps(ops).bench_counters.node_value_decref_count += 1;
-    switch (value.tag) {
-        .NvStr => value.payload.nv_str.decref(ops),
-        .NvList => value.payload.nv_list.decref(ops),
+    abi.decrefNodeValue(value, ops);
+}
+
+fn increfStoredValue(value: StoredValue) void {
+    switch (value) {
+        .node_value => |node_value| increfNodeValue(node_value),
+        .str => |str| str.incref(1),
         else => {},
     }
+}
+
+fn decrefStoredValue(value: StoredValue, ops: *abi.RocOps) void {
+    switch (value) {
+        .node_value => |node_value| decrefNodeValue(node_value, ops),
+        .str => |str| str.decref(ops),
+        else => {},
+    }
+}
+
+fn storedValueAsNodeValue(value: StoredValue) NodeValue {
+    return switch (value) {
+        .node_value => |node_value| node_value,
+        .i64 => |i| .{ .payload = .{ .nv_i64 = i }, .tag = .NvI64 },
+        .bool => |b| .{ .payload = .{ .nv_bool = b }, .tag = .NvBool },
+        .str => |str| .{ .payload = .{ .nv_str = str }, .tag = .NvStr },
+        .unit => nodeValueUnit(),
+    };
+}
+
+fn storedValueAsI64(value: StoredValue) i64 {
+    return switch (value) {
+        .i64 => |i| i,
+        .node_value => |node_value| if (node_value.tag == .NvI64) node_value.payload.nv_i64 else failHost("scalar I64 node received non-I64 NodeValue"),
+        else => failHost("scalar I64 node received non-I64 value"),
+    };
+}
+
+fn storedValueAsBool(value: StoredValue) bool {
+    return switch (value) {
+        .bool => |b| b,
+        .node_value => |node_value| if (node_value.tag == .NvBool) node_value.payload.nv_bool else failHost("scalar Bool node received non-Bool NodeValue"),
+        else => failHost("scalar Bool node received non-Bool value"),
+    };
+}
+
+fn storedValueAsStr(value: StoredValue) RocStr {
+    return switch (value) {
+        .str => |str| str,
+        .node_value => |node_value| if (node_value.tag == .NvStr) node_value.payload.nv_str else failHost("scalar Str node received non-Str NodeValue"),
+        else => failHost("scalar Str node received non-Str value"),
+    };
 }
 
 fn nodeValueEqual(left: NodeValue, right: NodeValue) bool {
@@ -1396,7 +1729,39 @@ fn nodeValueEqual(left: NodeValue, right: NodeValue) bool {
     };
 }
 
-fn setSignalValue(host: *HostEnv, node_id: u64, value: NodeValue, changed: ?*std.ArrayListUnmanaged(u64)) bool {
+fn storedValueEqual(left: StoredValue, right: StoredValue) bool {
+    return switch (left) {
+        .node_value => |left_node| switch (right) {
+            .node_value => |right_node| nodeValueEqual(left_node, right_node),
+            .i64 => |right_i64| left_node.tag == .NvI64 and left_node.payload.nv_i64 == right_i64,
+            .bool => |right_bool| left_node.tag == .NvBool and left_node.payload.nv_bool == right_bool,
+            .str => |right_str| left_node.tag == .NvStr and std.mem.eql(u8, left_node.payload.nv_str.asSlice(), right_str.asSlice()),
+            .unit => left_node.tag == .NvUnit,
+        },
+        .i64 => |left_i64| switch (right) {
+            .node_value => |right_node| right_node.tag == .NvI64 and right_node.payload.nv_i64 == left_i64,
+            .i64 => |right_i64| left_i64 == right_i64,
+            else => false,
+        },
+        .bool => |left_bool| switch (right) {
+            .node_value => |right_node| right_node.tag == .NvBool and right_node.payload.nv_bool == left_bool,
+            .bool => |right_bool| left_bool == right_bool,
+            else => false,
+        },
+        .str => |left_str| switch (right) {
+            .node_value => |right_node| right_node.tag == .NvStr and std.mem.eql(u8, left_str.asSlice(), right_node.payload.nv_str.asSlice()),
+            .str => |right_str| std.mem.eql(u8, left_str.asSlice(), right_str.asSlice()),
+            else => false,
+        },
+        .unit => switch (right) {
+            .node_value => |right_node| right_node.tag == .NvUnit,
+            .unit => true,
+            else => false,
+        },
+    };
+}
+
+fn setSignalValue(host: *HostEnv, node_id: u64, value: StoredValue, changed: ?*std.ArrayListUnmanaged(u64)) bool {
     if (node_id >= host.graph_nodes.items.len) return false;
     if (!host.graph_nodes.items[node_id].active) return false;
     const ops = host.roc_ops orelse @panic("RocOps unavailable while updating signals");
@@ -1404,12 +1769,12 @@ fn setSignalValue(host: *HostEnv, node_id: u64, value: NodeValue, changed: ?*std
     host.bench_counters.signal_write_count += 1;
 
     if (node.current_value) |old_value| {
-        if (nodeValueEqual(old_value, value)) {
+        if (storedValueEqual(old_value, value)) {
             host.bench_counters.signal_unchanged_count += 1;
-            decrefNodeValue(value, ops);
+            decrefStoredValue(value, ops);
             return false;
         }
-        decrefNodeValue(old_value, ops);
+        decrefStoredValue(old_value, ops);
     }
     node.current_value = value;
     host.bench_counters.signal_changed_count += 1;
@@ -1424,87 +1789,139 @@ fn clearEventOccurrences(host: *HostEnv, node_id: u64) void {
     const ops = host.roc_ops orelse @panic("RocOps unavailable while clearing events");
     const node = &host.graph_nodes.items[node_id];
     for (node.event_values.items) |value| {
-        decrefNodeValue(value, ops);
+        decrefStoredValue(value, ops);
     }
     node.event_values.clearRetainingCapacity();
 }
 
-fn appendEventOccurrence(host: *HostEnv, node_id: u64, value: NodeValue) void {
+fn appendEventOccurrence(host: *HostEnv, node_id: u64, value: StoredValue) void {
     if (node_id >= host.graph_nodes.items.len) {
         const ops = host.roc_ops orelse @panic("RocOps unavailable while dropping event");
-        decrefNodeValue(value, ops);
+        decrefStoredValue(value, ops);
         return;
     }
     if (!host.graph_nodes.items[node_id].active) {
         const ops = host.roc_ops orelse @panic("RocOps unavailable while dropping inactive event");
-        decrefNodeValue(value, ops);
+        decrefStoredValue(value, ops);
         return;
     }
     host.graph_nodes.items[node_id].event_values.append(host.gpa.allocator(), value) catch std.process.exit(1);
 }
 
-fn callRocTransform(host: *HostEnv, transform: RocBox, input: NodeValue) NodeValue {
+fn callRocTransform(host: *HostEnv, transform: RocBox, input: StoredValue) StoredValue {
     const ops = host.roc_ops orelse @panic("RocOps unavailable while evaluating transform");
     host.bench_counters.callback_transform_count += 1;
     var result: NodeValue = undefined;
-    increfNodeValue(input);
-    var input_arg = input;
+    const input_node_value = storedValueAsNodeValue(input);
+    increfNodeValue(input_node_value);
+    var input_arg = input_node_value;
     const payload = abi.rocErasedCallablePayloadPtr(transform);
     payload.callable_fn_ptr(ops, @ptrCast(&result), @ptrCast(&input_arg), abi.rocErasedCallableCapturePtr(transform));
-    return result;
+    return .{ .node_value = result };
 }
 
-fn callRocStep(host: *HostEnv, step: RocBox, acc: NodeValue, event_val: NodeValue) NodeValue {
+fn callRocStep(host: *HostEnv, step: RocBox, acc: StoredValue, event_val: StoredValue) StoredValue {
     const ops = host.roc_ops orelse @panic("RocOps unavailable while evaluating step");
     host.bench_counters.callback_step_count += 1;
-    increfNodeValue(acc);
-    increfNodeValue(event_val);
+    const acc_node_value = storedValueAsNodeValue(acc);
+    const event_node_value = storedValueAsNodeValue(event_val);
+    increfNodeValue(acc_node_value);
+    increfNodeValue(event_node_value);
     var args = extern struct {
         _0: NodeValue,
         _1: NodeValue,
-    }{ ._0 = acc, ._1 = event_val };
+    }{ ._0 = acc_node_value, ._1 = event_node_value };
     var result: NodeValue = undefined;
     const payload = abi.rocErasedCallablePayloadPtr(step);
     payload.callable_fn_ptr(ops, @ptrCast(&result), @ptrCast(&args), abi.rocErasedCallableCapturePtr(step));
-    return result;
+    return .{ .node_value = result };
 }
 
-fn callRocPredicate(host: *HostEnv, predicate: RocBox, input: NodeValue) bool {
+fn callRocPredicate(host: *HostEnv, predicate: RocBox, input: StoredValue) bool {
     const ops = host.roc_ops orelse @panic("RocOps unavailable while evaluating predicate");
     host.bench_counters.callback_predicate_count += 1;
-    increfNodeValue(input);
-    var input_arg = input;
+    const input_node_value = storedValueAsNodeValue(input);
+    increfNodeValue(input_node_value);
+    var input_arg = input_node_value;
     var result: bool = undefined;
     const payload = abi.rocErasedCallablePayloadPtr(predicate);
     payload.callable_fn_ptr(ops, @ptrCast(&result), @ptrCast(&input_arg), abi.rocErasedCallableCapturePtr(predicate));
     return result;
 }
 
-fn callRocKey(host: *HostEnv, keyer: RocBox, input: NodeValue) RocStr {
+fn callRocKey(host: *HostEnv, keyer: RocBox, input: StoredValue) RocStr {
     const ops = host.roc_ops orelse @panic("RocOps unavailable while evaluating key");
     host.bench_counters.callback_key_count += 1;
-    increfNodeValue(input);
-    var input_arg = input;
+    const input_node_value = storedValueAsNodeValue(input);
+    increfNodeValue(input_node_value);
+    var input_arg = input_node_value;
     var result: RocStr = undefined;
     const payload = abi.rocErasedCallablePayloadPtr(keyer);
     payload.callable_fn_ptr(ops, @ptrCast(&result), @ptrCast(&input_arg), abi.rocErasedCallableCapturePtr(keyer));
     return result;
 }
 
-fn callRocMountDynamic(host: *HostEnv, render: RocBox, value: NodeValue, parent_id: u64) void {
+fn callRocMountDynamic(host: *HostEnv, render: RocBox, value: StoredValue, parent_id: u64) void {
     const ops = host.roc_ops orelse @panic("RocOps unavailable while mounting dynamic subtree");
     host.bench_counters.callback_render_count += 1;
-    increfNodeValue(value);
+    const node_value = storedValueAsNodeValue(value);
+    increfNodeValue(node_value);
     var args = extern struct {
         _0: NodeValue,
         _1: u64,
-    }{ ._0 = value, ._1 = parent_id };
+    }{ ._0 = node_value, ._1 = parent_id };
     var ret: [0]u8 = .{};
     const payload = abi.rocErasedCallablePayloadPtr(render);
     payload.callable_fn_ptr(ops, @ptrCast(&ret), @ptrCast(&args), abi.rocErasedCallableCapturePtr(render));
 }
 
-fn mountRenderScope(host: *HostEnv, parent_elem_id: u64, parent_scope_id: u64, render: RocBox, value: NodeValue) u64 {
+fn callRocI64ToI64(host: *HostEnv, transform: RocBox, input: i64) i64 {
+    const ops = host.roc_ops orelse @panic("RocOps unavailable while evaluating I64 transform");
+    host.bench_counters.callback_transform_count += 1;
+    var input_arg = input;
+    var result: i64 = undefined;
+    const payload = abi.rocErasedCallablePayloadPtr(transform);
+    payload.callable_fn_ptr(ops, @ptrCast(&result), @ptrCast(&input_arg), abi.rocErasedCallableCapturePtr(transform));
+    return result;
+}
+
+fn callRocI64ToStr(host: *HostEnv, transform: RocBox, input: i64) RocStr {
+    const ops = host.roc_ops orelse @panic("RocOps unavailable while evaluating I64 to Str transform");
+    host.bench_counters.callback_transform_count += 1;
+    var input_arg = input;
+    var result: RocStr = undefined;
+    const payload = abi.rocErasedCallablePayloadPtr(transform);
+    payload.callable_fn_ptr(ops, @ptrCast(&result), @ptrCast(&input_arg), abi.rocErasedCallableCapturePtr(transform));
+    return result;
+}
+
+fn callRocI64I64ToI64(host: *HostEnv, step: RocBox, left: i64, right: i64) i64 {
+    const ops = host.roc_ops orelse @panic("RocOps unavailable while evaluating I64 step");
+    host.bench_counters.callback_step_count += 1;
+    var args = extern struct {
+        _0: i64,
+        _1: i64,
+    }{ ._0 = left, ._1 = right };
+    var result: i64 = undefined;
+    const payload = abi.rocErasedCallablePayloadPtr(step);
+    payload.callable_fn_ptr(ops, @ptrCast(&result), @ptrCast(&args), abi.rocErasedCallableCapturePtr(step));
+    return result;
+}
+
+fn callRocI64I64ToStr(host: *HostEnv, transform: RocBox, left: i64, right: i64) RocStr {
+    const ops = host.roc_ops orelse @panic("RocOps unavailable while evaluating I64 pair to Str transform");
+    host.bench_counters.callback_step_count += 1;
+    var args = extern struct {
+        _0: i64,
+        _1: i64,
+    }{ ._0 = left, ._1 = right };
+    var result: RocStr = undefined;
+    const payload = abi.rocErasedCallablePayloadPtr(transform);
+    payload.callable_fn_ptr(ops, @ptrCast(&result), @ptrCast(&args), abi.rocErasedCallableCapturePtr(transform));
+    return result;
+}
+
+fn mountRenderScope(host: *HostEnv, parent_elem_id: u64, parent_scope_id: u64, render: RocBox, value: StoredValue) u64 {
     const scope_id = host.createScope(parent_scope_id);
     const previous_scope = host.pushScope(scope_id);
     callRocMountDynamic(host, render, value, parent_elem_id);
@@ -1516,12 +1933,13 @@ fn clearNodeValues(host: *HostEnv, node_id: u64) void {
     if (node_id >= host.graph_nodes.items.len) return;
     const ops = host.roc_ops orelse @panic("RocOps unavailable while clearing node");
     const node = &host.graph_nodes.items[node_id];
+    if (node.released) return;
     if (node.current_value) |value| {
-        decrefNodeValue(value, ops);
+        decrefStoredValue(value, ops);
         node.current_value = null;
     }
     for (node.event_values.items) |value| {
-        decrefNodeValue(value, ops);
+        decrefStoredValue(value, ops);
     }
     node.event_values.clearRetainingCapacity();
 }
@@ -1529,6 +1947,7 @@ fn clearNodeValues(host: *HostEnv, node_id: u64) void {
 fn unmountScope(host: *HostEnv, scope_id: u64) void {
     if (scope_id >= host.scopes.items.len) return;
     if (!host.scopes.items[scope_id].active) return;
+    const ops = host.roc_ops orelse @panic("RocOps unavailable while unmounting scope");
 
     const unmount_events = host.scopes.items[scope_id].on_unmount_events.items;
     for (unmount_events) |event_id| {
@@ -1551,8 +1970,9 @@ fn unmountScope(host: *HostEnv, scope_id: u64) void {
 
     for (host.graph_nodes.items, 0..) |*node, node_id| {
         if (node.scope_id == scope_id) {
+            _ = node_id;
             node.active = false;
-            clearNodeValues(host, @intCast(node_id));
+            node.releaseResources(host.gpa.allocator(), ops);
         }
     }
 
@@ -1656,11 +2076,15 @@ fn renderEachNode(host: *HostEnv, node_id: u64) void {
     }
 
     if (copied.signal < host.graph_nodes.items.len) {
-        if (host.graph_nodes.items[copied.signal].current_value) |list_value| {
+        if (host.graph_nodes.items[copied.signal].current_value) |stored_list_value| {
+            const list_value = switch (stored_list_value) {
+                .node_value => |node_value| node_value,
+                else => failHost("Elem.each expected an NvList signal value"),
+            };
             if (list_value.tag != .NvList) failHost("Elem.each expected an NvList signal value");
             const items = list_value.payload.nv_list.items();
             for (items) |item| {
-                const key = callRocKey(host, copied.key, item);
+                const key = callRocKey(host, copied.key, .{ .node_value = item });
                 const key_slice = key.asSlice();
                 if (keyedScopeIndex(new_entries.items, key_slice) != null) {
                     key.decref(host.roc_ops orelse @panic("RocOps unavailable while handling key"));
@@ -1673,7 +2097,7 @@ fn renderEachNode(host: *HostEnv, node_id: u64) void {
                 const scope_id = if (keyedScopeIndex(old_entries.items, key_copy)) |old_index| blk: {
                     used_old[old_index] = true;
                     break :blk old_entries.items[old_index].scope_id;
-                } else mountRenderScope(host, copied.parent, copied.scope_id, copied.render, item);
+                } else mountRenderScope(host, copied.parent, copied.scope_id, copied.render, .{ .node_value = item });
 
                 new_entries.append(allocator, .{ .key = key_copy, .scope_id = scope_id }) catch std.process.exit(1);
             }
@@ -1735,7 +2159,7 @@ fn processEvent(host: *HostEnv, node_id: u64, value: NodeValue) void {
         if (isEventNode(n.kind)) clearEventOccurrences(host, @intCast(i));
     }
 
-    appendEventOccurrence(host, node_id, value);
+    appendEventOccurrence(host, node_id, .{ .node_value = value });
 
     const affected = allocator.alloc(bool, host.graph_nodes.items.len) catch std.process.exit(1);
     defer allocator.free(affected);
@@ -1770,7 +2194,7 @@ fn processEvent(host: *HostEnv, node_id: u64, value: NodeValue) void {
 
 fn isEventNode(kind: NodeKind) bool {
     return switch (kind) {
-        .event_source, .event_map, .event_filter, .event_merge, .event_with_latest => true,
+        .event_source, .event_map, .event_map_unit_i64_const, .event_filter, .event_merge, .event_with_latest => true,
         else => false,
     };
 }
@@ -1808,14 +2232,21 @@ fn inputsReady(host: *HostEnv, node_id: u64, affected: []const bool, scheduled: 
     return switch (node.kind) {
         .event_source, .signal_const => true,
         .event_map => |data| inputReady(data.source, affected, scheduled),
+        .event_map_unit_i64_const => |data| inputReady(data.source, affected, scheduled),
         .event_filter => |data| inputReady(data.source, affected, scheduled),
         .event_merge => |data| inputReady(data.left, affected, scheduled) and inputReady(data.right, affected, scheduled),
         .event_with_latest => |data| inputReady(data.event, affected, scheduled),
         .signal_state => |data| if (data.update_event) |event_id| inputReady(event_id, affected, scheduled) else true,
         .signal_map => |data| inputReady(data.source, affected, scheduled),
+        .signal_map_i64_i64 => |data| inputReady(data.source, affected, scheduled),
+        .signal_map_i64_str => |data| inputReady(data.source, affected, scheduled),
         .signal_map2 => |data| inputReady(data.left, affected, scheduled) and inputReady(data.right, affected, scheduled),
+        .signal_map2_i64_i64 => |data| inputReady(data.left, affected, scheduled) and inputReady(data.right, affected, scheduled),
+        .signal_map2_i64_i64_str => |data| inputReady(data.left, affected, scheduled) and inputReady(data.right, affected, scheduled),
         .signal_hold => |data| inputReady(data.event, affected, scheduled),
         .signal_fold => |data| inputReady(data.event, affected, scheduled),
+        .signal_fold_i64 => |data| inputReady(data.event, affected, scheduled),
+        .signal_fold_bool_toggle => |data| inputReady(data.event, affected, scheduled),
         .signal_zip_with => |data| inputReady(data.event, affected, scheduled) and inputReady(data.source, affected, scheduled),
         .dynamic => |data| inputReady(data.signal, affected, scheduled),
         .each => |data| inputReady(data.signal, affected, scheduled),
@@ -1840,7 +2271,7 @@ fn evaluateNode(host: *HostEnv, node_id: u64, changed_signals: *std.ArrayListUnm
             if (data.update_event) |event_id| {
                 if (event_id < host.graph_nodes.items.len) {
                     for (host.graph_nodes.items[event_id].event_values.items) |val| {
-                        increfNodeValue(val);
+                        increfStoredValue(val);
                         _ = setSignalValue(host, node_id, val, changed_signals);
                     }
                 }
@@ -1855,16 +2286,24 @@ fn evaluateNode(host: *HostEnv, node_id: u64, changed_signals: *std.ArrayListUnm
             }
         },
 
+        .event_map_unit_i64_const => |data| {
+            if (data.source < host.graph_nodes.items.len) {
+                for (host.graph_nodes.items[data.source].event_values.items) |_| {
+                    appendEventOccurrence(host, node_id, .{ .i64 = data.value });
+                }
+            }
+        },
+
         .event_merge => |data| {
             if (data.left < host.graph_nodes.items.len) {
                 for (host.graph_nodes.items[data.left].event_values.items) |val| {
-                    increfNodeValue(val);
+                    increfStoredValue(val);
                     appendEventOccurrence(host, node_id, val);
                 }
             }
             if (data.right < host.graph_nodes.items.len) {
                 for (host.graph_nodes.items[data.right].event_values.items) |val| {
-                    increfNodeValue(val);
+                    increfStoredValue(val);
                     appendEventOccurrence(host, node_id, val);
                 }
             }
@@ -1874,7 +2313,7 @@ fn evaluateNode(host: *HostEnv, node_id: u64, changed_signals: *std.ArrayListUnm
             if (data.source < host.graph_nodes.items.len) {
                 for (host.graph_nodes.items[data.source].event_values.items) |input| {
                     if (callRocPredicate(host, data.predicate, input)) {
-                        increfNodeValue(input);
+                        increfStoredValue(input);
                         appendEventOccurrence(host, node_id, input);
                     }
                 }
@@ -1899,6 +2338,22 @@ fn evaluateNode(host: *HostEnv, node_id: u64, changed_signals: *std.ArrayListUnm
             }
         },
 
+        .signal_map_i64_i64 => |data| {
+            if (data.source < host.graph_nodes.items.len and signalChanged(changed_signals.items, data.source)) {
+                if (host.graph_nodes.items[data.source].current_value) |input| {
+                    _ = setSignalValue(host, node_id, .{ .i64 = callRocI64ToI64(host, data.transform, storedValueAsI64(input)) }, changed_signals);
+                }
+            }
+        },
+
+        .signal_map_i64_str => |data| {
+            if (data.source < host.graph_nodes.items.len and signalChanged(changed_signals.items, data.source)) {
+                if (host.graph_nodes.items[data.source].current_value) |input| {
+                    _ = setSignalValue(host, node_id, .{ .str = callRocI64ToStr(host, data.transform, storedValueAsI64(input)) }, changed_signals);
+                }
+            }
+        },
+
         .signal_map2 => |data| {
             if ((signalChanged(changed_signals.items, data.left) or signalChanged(changed_signals.items, data.right)) and
                 data.left < host.graph_nodes.items.len and data.right < host.graph_nodes.items.len)
@@ -1911,10 +2366,34 @@ fn evaluateNode(host: *HostEnv, node_id: u64, changed_signals: *std.ArrayListUnm
             }
         },
 
+        .signal_map2_i64_i64 => |data| {
+            if ((signalChanged(changed_signals.items, data.left) or signalChanged(changed_signals.items, data.right)) and
+                data.left < host.graph_nodes.items.len and data.right < host.graph_nodes.items.len)
+            {
+                if (host.graph_nodes.items[data.left].current_value) |left_value| {
+                    if (host.graph_nodes.items[data.right].current_value) |right_value| {
+                        _ = setSignalValue(host, node_id, .{ .i64 = callRocI64I64ToI64(host, data.transform, storedValueAsI64(left_value), storedValueAsI64(right_value)) }, changed_signals);
+                    }
+                }
+            }
+        },
+
+        .signal_map2_i64_i64_str => |data| {
+            if ((signalChanged(changed_signals.items, data.left) or signalChanged(changed_signals.items, data.right)) and
+                data.left < host.graph_nodes.items.len and data.right < host.graph_nodes.items.len)
+            {
+                if (host.graph_nodes.items[data.left].current_value) |left_value| {
+                    if (host.graph_nodes.items[data.right].current_value) |right_value| {
+                        _ = setSignalValue(host, node_id, .{ .str = callRocI64I64ToStr(host, data.transform, storedValueAsI64(left_value), storedValueAsI64(right_value)) }, changed_signals);
+                    }
+                }
+            }
+        },
+
         .signal_hold => |data| {
             if (data.event < host.graph_nodes.items.len) {
                 for (host.graph_nodes.items[data.event].event_values.items) |val| {
-                    increfNodeValue(val);
+                    increfStoredValue(val);
                     _ = setSignalValue(host, node_id, val, changed_signals);
                 }
             }
@@ -1925,6 +2404,26 @@ fn evaluateNode(host: *HostEnv, node_id: u64, changed_signals: *std.ArrayListUnm
                 for (host.graph_nodes.items[data.event].event_values.items) |event_val| {
                     if (node.current_value) |acc| {
                         _ = setSignalValue(host, node_id, callRocStep(host, data.step, acc, event_val), changed_signals);
+                    }
+                }
+            }
+        },
+
+        .signal_fold_i64 => |data| {
+            if (data.event < host.graph_nodes.items.len) {
+                for (host.graph_nodes.items[data.event].event_values.items) |event_val| {
+                    if (node.current_value) |acc| {
+                        _ = setSignalValue(host, node_id, .{ .i64 = callRocI64I64ToI64(host, data.step, storedValueAsI64(acc), storedValueAsI64(event_val)) }, changed_signals);
+                    }
+                }
+            }
+        },
+
+        .signal_fold_bool_toggle => |data| {
+            if (data.event < host.graph_nodes.items.len) {
+                for (host.graph_nodes.items[data.event].event_values.items) |_| {
+                    if (node.current_value) |current| {
+                        _ = setSignalValue(host, node_id, .{ .bool = !storedValueAsBool(current) }, changed_signals);
                     }
                 }
             }
@@ -1958,8 +2457,9 @@ fn updateElementText(host: *HostEnv, elem_id: u64) void {
     if (elem.bound_text_signal) |signal_id| {
         if (signal_id < host.graph_nodes.items.len) {
             if (!host.graph_nodes.items[signal_id].active) return;
-            if (host.graph_nodes.items[signal_id].current_value) |val| {
+            if (host.graph_nodes.items[signal_id].current_value) |stored_value| {
                 const allocator = host.gpa.allocator();
+                const val = storedValueAsNodeValue(stored_value);
 
                 switch (val.tag) {
                     .NvStr => {
@@ -2048,6 +2548,7 @@ fn parsePrototypeFilter(arg: []const u8) ?Prototype {
 const BenchmarkResult = struct {
     prototype: []const u8,
     case_name: []const u8,
+    sample: usize,
     iterations: usize,
     elapsed_ns: u64,
     operations: u64,
@@ -2060,15 +2561,16 @@ const BenchmarkResult = struct {
 };
 
 fn printBenchmarkHeader() void {
-    writeStdout("prototype,case,iterations,elapsed_ns,operations,allocs,deallocs,retained_alloc_delta,node_value_increfs,node_value_decrefs,node_value_equality_checks,boundary_encodes,boundary_decodes,callbacks,events,evaluated_nodes,signal_writes,signal_changes,signal_suppressed,text_updates,active_graph_nodes\n");
+    writeStdout("prototype,case,sample,iterations,elapsed_ns,operations,allocs,deallocs,retained_alloc_delta,node_value_increfs,node_value_decrefs,node_value_equality_checks,boundary_encodes,boundary_decodes,callbacks,events,evaluated_nodes,signal_writes,signal_changes,signal_suppressed,text_updates,active_graph_nodes\n");
 }
 
 fn printBenchmarkResult(result: BenchmarkResult) void {
     printStdout(
-        "{s},{s},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d}\n",
+        "{s},{s},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d}\n",
         .{
             result.prototype,
             result.case_name,
+            result.sample,
             result.iterations,
             result.elapsed_ns,
             result.operations,
@@ -2134,6 +2636,33 @@ const AppShim = extern struct {
     right: CounterShim,
 };
 
+const OpaqueShimBox = *anyopaque;
+
+fn callShimPayloadInit(ops: *abi.RocOps) OpaqueShimBox {
+    _ = ops;
+    return abi.roc_shim_payload_init();
+}
+
+fn callShimPayloadTotal(ops: *abi.RocOps, payload: OpaqueShimBox) i64 {
+    _ = ops;
+    return abi.roc_shim_payload_total(payload);
+}
+
+fn callShimPayloadItemKey(ops: *abi.RocOps, payload: OpaqueShimBox) RocStr {
+    _ = ops;
+    return abi.roc_shim_payload_item_key(payload);
+}
+
+fn callShimPayloadItemLabel(ops: *abi.RocOps, payload: OpaqueShimBox) RocStr {
+    _ = ops;
+    return abi.roc_shim_payload_item_label(payload);
+}
+
+fn callShimPayloadItemsLen(ops: *abi.RocOps, payload: OpaqueShimBox) u64 {
+    _ = ops;
+    return abi.roc_shim_payload_items_len(payload);
+}
+
 const HandleStore = struct {
     scalars: []i64,
     lists: [][]i64,
@@ -2182,6 +2711,7 @@ fn benchMicroScalar(host: *HostEnv, ops: *abi.RocOps, prototype: Prototype, iter
                 const input = encodeI64NodeValue(host, @as(i64, @intCast(i)));
                 const decoded = decodeI64NodeValue(host, input);
                 const output = encodeI64NodeValue(host, decoded + 1);
+                std.mem.doNotOptimizeAway(output);
                 if (!nodeValueEqual(previous, output)) {
                     checksum += decodeI64NodeValue(host, output);
                 }
@@ -2192,6 +2722,7 @@ fn benchMicroScalar(host: *HostEnv, ops: *abi.RocOps, prototype: Prototype, iter
             var previous: i64 = 0;
             for (0..iterations) |i| {
                 const output = @as(i64, @intCast(i)) + 1;
+                std.mem.doNotOptimizeAway(output);
                 if (previous != output) checksum += output;
                 previous = output;
             }
@@ -2204,6 +2735,7 @@ fn benchMicroScalar(host: *HostEnv, ops: *abi.RocOps, prototype: Prototype, iter
                 const output = @as(i64, @intCast(i)) + 1;
                 const next = store.putScalar(1, output);
                 const next_value = store.getScalar(next);
+                std.mem.doNotOptimizeAway(next_value);
                 if (previous_value != next_value) checksum += next_value;
                 previous_value = next_value;
             }
@@ -2215,12 +2747,13 @@ fn benchMicroScalar(host: *HostEnv, ops: *abi.RocOps, prototype: Prototype, iter
                 const input = CounterShim{ .count = @as(i64, @intCast(i)) };
                 const output = CounterShim{ .count = input.count + 1 };
                 host.bench_counters.boundary_encode_count += 1;
+                std.mem.doNotOptimizeAway(output);
                 if (previous.count != output.count) checksum += output.count;
                 previous = output;
             }
         },
     }
-    std.mem.doNotOptimizeAway(&checksum);
+    std.mem.doNotOptimizeAway(checksum);
     return @intCast(iterations);
 }
 
@@ -2237,7 +2770,9 @@ fn benchMicroListRecord(host: *HostEnv, ops: *abi.RocOps, prototype: Prototype, 
                     encodeI64NodeValue(host, base_value + 3),
                 };
                 const list = encodeI64ListNodeValue(host, ops, &items);
-                checksum += decodeI64ListSum(host, list);
+                const sum = decodeI64ListSum(host, list);
+                std.mem.doNotOptimizeAway(sum);
+                checksum += sum;
                 decrefNodeValue(list, ops);
             }
         },
@@ -2253,7 +2788,9 @@ fn benchMicroListRecord(host: *HostEnv, ops: *abi.RocOps, prototype: Prototype, 
                 values[3] = base_value + 3;
                 const handle = store.putList(0, &values);
                 const borrowed = store.list(handle);
-                checksum += borrowed[0] + borrowed[1] + borrowed[2] + borrowed[3];
+                const sum = borrowed[0] + borrowed[1] + borrowed[2] + borrowed[3];
+                std.mem.doNotOptimizeAway(sum);
+                checksum += sum;
             }
         },
         .generated_boundary_shims => {
@@ -2265,12 +2802,47 @@ fn benchMicroListRecord(host: *HostEnv, ops: *abi.RocOps, prototype: Prototype, 
                     .right = .{ .count = base_value + 1 },
                 };
                 host.bench_counters.boundary_encode_count += 1;
-                checksum += app.left.count + app.right.count;
+                const sum = app.left.count + app.right.count;
+                std.mem.doNotOptimizeAway(sum);
+                checksum += sum;
             }
         },
     }
-    std.mem.doNotOptimizeAway(&checksum);
+    std.mem.doNotOptimizeAway(checksum);
     return @intCast(iterations * 4);
+}
+
+fn benchMicroGeneratedAppShim(host: *HostEnv, ops: *abi.RocOps, prototype: Prototype, iterations: usize) u64 {
+    if (prototype != .generated_boundary_shims) failHost("generated app shim benchmark requires prototype D");
+
+    var checksum: i64 = 0;
+    for (0..iterations) |_| {
+        host.bench_counters.callback_transform_count += 8;
+        host.bench_counters.boundary_encode_count += 4;
+        host.bench_counters.boundary_decode_count += 4;
+
+        const total_payload = callShimPayloadInit(ops);
+        checksum += callShimPayloadTotal(ops, total_payload);
+        std.mem.doNotOptimizeAway(checksum);
+
+        const key_payload = callShimPayloadInit(ops);
+        const key = callShimPayloadItemKey(ops, key_payload);
+        checksum += @intCast(key.asSlice().len);
+        std.mem.doNotOptimizeAway(checksum);
+        key.decref(ops);
+
+        const label_payload = callShimPayloadInit(ops);
+        const label = callShimPayloadItemLabel(ops, label_payload);
+        checksum += @intCast(label.asSlice().len);
+        std.mem.doNotOptimizeAway(checksum);
+        label.decref(ops);
+
+        const items_payload = callShimPayloadInit(ops);
+        checksum += @intCast(callShimPayloadItemsLen(ops, items_payload));
+        std.mem.doNotOptimizeAway(checksum);
+    }
+    std.mem.doNotOptimizeAway(checksum);
+    return @intCast(iterations * 8);
 }
 
 fn benchMicroEquality(host: *HostEnv, ops: *abi.RocOps, prototype: Prototype, iterations: usize) u64 {
@@ -2287,7 +2859,9 @@ fn benchMicroEquality(host: *HostEnv, ops: *abi.RocOps, prototype: Prototype, it
             defer decrefNodeValue(right, ops);
 
             for (0..iterations) |_| {
-                if (nodeValueEqual(left, right)) checksum += 1;
+                const equal = nodeValueEqual(left, right);
+                std.mem.doNotOptimizeAway(equal);
+                if (equal) checksum += 1;
             }
         },
         .host_value_handles => {
@@ -2298,7 +2872,9 @@ fn benchMicroEquality(host: *HostEnv, ops: *abi.RocOps, prototype: Prototype, it
             const left = store.putList(0, &values);
             const right = store.putList(1, &values);
             for (0..iterations) |_| {
-                if (std.mem.eql(i64, store.list(left), store.list(right))) checksum += 1;
+                const equal = std.mem.eql(i64, store.list(left), store.list(right));
+                std.mem.doNotOptimizeAway(equal);
+                if (equal) checksum += 1;
             }
         },
         .generated_boundary_shims => {
@@ -2307,11 +2883,13 @@ fn benchMicroEquality(host: *HostEnv, ops: *abi.RocOps, prototype: Prototype, it
             for (&left, 0..) |*item, i| item.* = @intCast(i);
             for (&right, 0..) |*item, i| item.* = @intCast(i);
             for (0..iterations) |_| {
-                if (std.mem.eql(i64, left[0..], right[0..])) checksum += 1;
+                const equal = std.mem.eql(i64, left[0..], right[0..]);
+                std.mem.doNotOptimizeAway(equal);
+                if (equal) checksum += 1;
             }
         },
     }
-    std.mem.doNotOptimizeAway(&checksum);
+    std.mem.doNotOptimizeAway(checksum);
     return @intCast(iterations);
 }
 
@@ -2346,12 +2924,14 @@ fn benchMicroCallback(host: *HostEnv, ops: *abi.RocOps, prototype: Prototype, it
             for (0..iterations) |i| {
                 const input = encodeI64NodeValue(host, @intCast(i));
                 const output = syntheticNodeValueCallback(host, input);
+                std.mem.doNotOptimizeAway(output);
                 checksum += decodeI64NodeValue(host, output);
             }
         },
         .scalar_fast_paths => {
             for (0..iterations) |i| {
                 const output = syntheticScalarCallback(@intCast(i));
+                std.mem.doNotOptimizeAway(output);
                 checksum += output;
             }
         },
@@ -2361,17 +2941,20 @@ fn benchMicroCallback(host: *HostEnv, ops: *abi.RocOps, prototype: Prototype, it
             for (0..iterations) |i| {
                 const input = store.putScalar(0, @intCast(i));
                 const output = syntheticHandleCallback(&store, input);
-                checksum += store.getScalar(output);
+                const output_value = store.getScalar(output);
+                std.mem.doNotOptimizeAway(output_value);
+                checksum += output_value;
             }
         },
         .generated_boundary_shims => {
             for (0..iterations) |i| {
                 const output = syntheticGeneratedCallback(host, .{ .count = @intCast(i) });
+                std.mem.doNotOptimizeAway(output);
                 checksum += output.count;
             }
         },
     }
-    std.mem.doNotOptimizeAway(&checksum);
+    std.mem.doNotOptimizeAway(checksum);
     return @intCast(iterations);
 }
 
@@ -2387,6 +2970,7 @@ fn benchSyntheticDeepMap(host: *HostEnv, ops: *abi.RocOps, prototype: Prototype,
                 for (0..depth) |_| {
                     host.bench_counters.evaluated_node_count += 1;
                     value = syntheticNodeValueCallback(host, value);
+                    std.mem.doNotOptimizeAway(value);
                 }
                 host.bench_counters.signal_write_count += 1;
                 if (!nodeValueEqual(previous, value)) {
@@ -2405,6 +2989,7 @@ fn benchSyntheticDeepMap(host: *HostEnv, ops: *abi.RocOps, prototype: Prototype,
                 for (0..depth) |_| {
                     host.bench_counters.evaluated_node_count += 1;
                     value += 1;
+                    std.mem.doNotOptimizeAway(value);
                 }
                 host.bench_counters.signal_write_count += 1;
                 if (previous != value) {
@@ -2425,6 +3010,7 @@ fn benchSyntheticDeepMap(host: *HostEnv, ops: *abi.RocOps, prototype: Prototype,
                 for (0..depth) |_| {
                     host.bench_counters.evaluated_node_count += 1;
                     value = syntheticHandleCallback(&store, value);
+                    std.mem.doNotOptimizeAway(value);
                 }
                 host.bench_counters.signal_write_count += 1;
                 const next_value = store.getScalar(value);
@@ -2444,6 +3030,7 @@ fn benchSyntheticDeepMap(host: *HostEnv, ops: *abi.RocOps, prototype: Prototype,
                 for (0..depth) |_| {
                     host.bench_counters.evaluated_node_count += 1;
                     value = syntheticGeneratedCallback(host, value);
+                    std.mem.doNotOptimizeAway(value);
                 }
                 host.bench_counters.signal_write_count += 1;
                 if (previous.count != value.count) {
@@ -2456,7 +3043,7 @@ fn benchSyntheticDeepMap(host: *HostEnv, ops: *abi.RocOps, prototype: Prototype,
             }
         },
     }
-    std.mem.doNotOptimizeAway(&checksum);
+    std.mem.doNotOptimizeAway(checksum);
     return @intCast(iterations * depth);
 }
 
@@ -2472,6 +3059,7 @@ fn benchSyntheticWideFanout(host: *HostEnv, ops: *abi.RocOps, prototype: Prototy
                     host.bench_counters.evaluated_node_count += 1;
                     const decoded = decodeI64NodeValue(host, source);
                     const label_value = encodeI64NodeValue(host, decoded + @as(i64, @intCast(label_index)));
+                    std.mem.doNotOptimizeAway(label_value);
                     if (nodeValueEqual(label_value, source)) {
                         host.bench_counters.signal_unchanged_count += 1;
                     } else {
@@ -2488,6 +3076,7 @@ fn benchSyntheticWideFanout(host: *HostEnv, ops: *abi.RocOps, prototype: Prototy
                 for (0..width) |label_index| {
                     host.bench_counters.evaluated_node_count += 1;
                     const label_value = source + @as(i64, @intCast(label_index));
+                    std.mem.doNotOptimizeAway(label_value);
                     host.bench_counters.signal_write_count += 1;
                     host.bench_counters.signal_changed_count += 1;
                     checksum += label_value;
@@ -2503,6 +3092,7 @@ fn benchSyntheticWideFanout(host: *HostEnv, ops: *abi.RocOps, prototype: Prototy
                     host.bench_counters.evaluated_node_count += 1;
                     const label_value = store.getScalar(source) + @as(i64, @intCast(label_index));
                     _ = store.putScalar(1, label_value);
+                    std.mem.doNotOptimizeAway(label_value);
                     host.bench_counters.signal_write_count += 1;
                     host.bench_counters.signal_changed_count += 1;
                     checksum += label_value;
@@ -2515,6 +3105,7 @@ fn benchSyntheticWideFanout(host: *HostEnv, ops: *abi.RocOps, prototype: Prototy
                 for (0..width) |label_index| {
                     host.bench_counters.evaluated_node_count += 1;
                     const label_value = CounterShim{ .count = source.count + @as(i64, @intCast(label_index)) };
+                    std.mem.doNotOptimizeAway(label_value);
                     host.bench_counters.signal_write_count += 1;
                     host.bench_counters.signal_changed_count += 1;
                     checksum += label_value.count;
@@ -2522,7 +3113,7 @@ fn benchSyntheticWideFanout(host: *HostEnv, ops: *abi.RocOps, prototype: Prototy
             }
         },
     }
-    std.mem.doNotOptimizeAway(&checksum);
+    std.mem.doNotOptimizeAway(checksum);
     return @intCast(iterations * width);
 }
 
@@ -2531,6 +3122,7 @@ fn runSyntheticBenchmarkCase(
     ops: *abi.RocOps,
     prototype: Prototype,
     case_name: []const u8,
+    sample: usize,
     iterations: usize,
     benchFn: *const fn (*HostEnv, *abi.RocOps, Prototype, usize) u64,
 ) void {
@@ -2543,6 +3135,7 @@ fn runSyntheticBenchmarkCase(
     printBenchmarkResult(.{
         .prototype = prototypeName(prototype),
         .case_name = case_name,
+        .sample = sample,
         .iterations = iterations,
         .elapsed_ns = elapsed,
         .operations = operations,
@@ -2555,17 +3148,23 @@ fn runSyntheticBenchmarkCase(
     });
 }
 
-fn runSyntheticBenchmarks(host: *HostEnv, ops: *abi.RocOps, iterations: usize, prototype_filter: ?Prototype) void {
-    for (prototype_list) |prototype| {
-        if (prototype_filter) |filter| {
-            if (prototype != filter) continue;
+fn runSyntheticBenchmarks(host: *HostEnv, ops: *abi.RocOps, iterations: usize, samples: usize, prototype_filter: ?Prototype) void {
+    for (0..samples) |sample_index| {
+        const sample = sample_index + 1;
+        for (prototype_list) |prototype| {
+            if (prototype_filter) |filter| {
+                if (prototype != filter) continue;
+            }
+            runSyntheticBenchmarkCase(host, ops, prototype, "micro.scalar_boundary", sample, iterations, benchMicroScalar);
+            runSyntheticBenchmarkCase(host, ops, prototype, "micro.list_record_boundary", sample, iterations, benchMicroListRecord);
+            if (prototype == .generated_boundary_shims) {
+                runSyntheticBenchmarkCase(host, ops, prototype, "micro.generated_app_shim", sample, iterations, benchMicroGeneratedAppShim);
+            }
+            runSyntheticBenchmarkCase(host, ops, prototype, "micro.equality", sample, iterations, benchMicroEquality);
+            runSyntheticBenchmarkCase(host, ops, prototype, "micro.callback_shape", sample, iterations, benchMicroCallback);
+            runSyntheticBenchmarkCase(host, ops, prototype, "scenario.deep_map_chain.synthetic", sample, iterations, benchSyntheticDeepMap);
+            runSyntheticBenchmarkCase(host, ops, prototype, "scenario.wide_fanout.synthetic", sample, iterations, benchSyntheticWideFanout);
         }
-        runSyntheticBenchmarkCase(host, ops, prototype, "micro.scalar_boundary", iterations, benchMicroScalar);
-        runSyntheticBenchmarkCase(host, ops, prototype, "micro.list_record_boundary", iterations, benchMicroListRecord);
-        runSyntheticBenchmarkCase(host, ops, prototype, "micro.equality", iterations, benchMicroEquality);
-        runSyntheticBenchmarkCase(host, ops, prototype, "micro.callback_shape", iterations, benchMicroCallback);
-        runSyntheticBenchmarkCase(host, ops, prototype, "scenario.deep_map_chain.synthetic", iterations, benchSyntheticDeepMap);
-        runSyntheticBenchmarkCase(host, ops, prototype, "scenario.wide_fanout.synthetic", iterations, benchSyntheticWideFanout);
     }
 }
 
@@ -2608,15 +3207,25 @@ fn signalsHostedFunctions() abi.HostedFunctions {
         .host_create_element = &hostedCreateElement,
         .host_create_event_filter = &hostedCreateEventFilter,
         .host_create_event_map = &hostedCreateEventMap,
+        .host_create_event_map_unit_i64_const = &hostedCreateEventMapUnitI64Const,
         .host_create_event_merge = &hostedCreateEventMerge,
         .host_create_event_source = &hostedCreateEventSource,
         .host_create_event_with_latest = &hostedCreateEventWithLatest,
         .host_create_root = &hostedCreateRoot,
+        .host_create_signal_const_bool = &hostedCreateSignalConstBool,
         .host_create_signal_const = &hostedCreateSignalConst,
+        .host_create_signal_const_i64 = &hostedCreateSignalConstI64,
+        .host_create_signal_const_str = &hostedCreateSignalConstStr,
+        .host_create_signal_fold_bool_toggle = &hostedCreateSignalFoldBoolToggle,
         .host_create_signal_fold = &hostedCreateSignalFold,
+        .host_create_signal_fold_i64 = &hostedCreateSignalFoldI64,
         .host_create_signal_hold = &hostedCreateSignalHold,
         .host_create_signal_map = &hostedCreateSignalMap,
+        .host_create_signal_map_i64_i64 = &hostedCreateSignalMapI64I64,
+        .host_create_signal_map_i64_str = &hostedCreateSignalMapI64Str,
         .host_create_signal_map2 = &hostedCreateSignalMap2,
+        .host_create_signal_map2_i64_i64 = &hostedCreateSignalMap2I64I64,
+        .host_create_signal_map2_i64_i64_str = &hostedCreateSignalMap2I64I64Str,
         .host_create_signal_state = &hostedCreateSignalState,
         .host_create_signal_zip_with = &hostedCreateSignalZipWith,
         .host_send_event = &hostedSendEvent,
@@ -2648,9 +3257,8 @@ fn clickBoundElement(host: *HostEnv, tag: []const u8, index: usize) void {
     failHost("benchmark click target not found");
 }
 
-fn runCurrentAppScenarioBenchmark(scenario: Scenario, iterations: usize, verbose: bool) !void {
+fn runCurrentAppScenarioBenchmark(scenario: Scenario, sample: usize, iterations: usize, verbose: bool) !void {
     var host_env = HostEnv.init();
-    defer host_env.deinit();
 
     host_env.test_state.verbose = verbose;
     _ = host_env.createScope(null);
@@ -2662,9 +3270,9 @@ fn runCurrentAppScenarioBenchmark(scenario: Scenario, iterations: usize, verbose
     current_roc_ops = &roc_ops;
     defer current_host = null;
     defer current_roc_ops = null;
+    defer host_env.deinit();
 
-    var ret: [0]u8 = .{};
-    abi.roc_main(&roc_ops, @ptrCast(&ret), null);
+    abi.roc_main();
 
     host_env.resetRunMetrics();
     const text_updates_before = host_env.textUpdateCount();
@@ -2682,6 +3290,7 @@ fn runCurrentAppScenarioBenchmark(scenario: Scenario, iterations: usize, verbose
     printBenchmarkResult(.{
         .prototype = prototypeName(.baseline_node_value),
         .case_name = scenario.name,
+        .sample = sample,
         .iterations = iterations,
         .elapsed_ns = elapsed,
         .operations = @intCast(iterations * scenario.clicks.len),
@@ -2694,9 +3303,12 @@ fn runCurrentAppScenarioBenchmark(scenario: Scenario, iterations: usize, verbose
     });
 }
 
-fn runCurrentAppScenarioBenchmarks(iterations: usize, verbose: bool) !void {
-    for (current_app_scenarios) |scenario| {
-        try runCurrentAppScenarioBenchmark(scenario, iterations, verbose);
+fn runCurrentAppScenarioBenchmarks(iterations: usize, samples: usize, verbose: bool) !void {
+    for (0..samples) |sample_index| {
+        const sample = sample_index + 1;
+        for (current_app_scenarios) |scenario| {
+            try runCurrentAppScenarioBenchmark(scenario, sample, iterations, verbose);
+        }
     }
 }
 
@@ -2705,7 +3317,7 @@ fn runSyntheticCorrectnessChecks(host: *HostEnv, ops: *abi.RocOps) void {
     const node_id = hostedCreateSignalState(ops, encodeI64NodeValue(host, 7));
     var changed: std.ArrayListUnmanaged(u64) = .empty;
     defer changed.deinit(host.gpa.allocator());
-    const changed_same_value = setSignalValue(host, node_id, encodeI64NodeValue(host, 7), &changed);
+    const changed_same_value = setSignalValue(host, node_id, .{ .node_value = encodeI64NodeValue(host, 7) }, &changed);
     if (changed_same_value) failHost("unchanged-value suppression correctness check failed");
     if (changed.items.len != 0) failHost("unchanged-value suppression recorded a changed signal");
     clearNodeValues(host, node_id);
@@ -2713,12 +3325,11 @@ fn runSyntheticCorrectnessChecks(host: *HostEnv, ops: *abi.RocOps) void {
     host.resetRunMetrics();
 }
 
-fn runBoundaryBenchmarks(iterations: usize, prototype_filter: ?Prototype, verbose: bool) !c_int {
+fn runBoundaryBenchmarks(iterations: usize, samples: usize, prototype_filter: ?Prototype, verbose: bool) !c_int {
     const acceptance = try platform_main("test/signals/test_counter.txt", false);
     if (acceptance != 0) return acceptance;
 
     var host_env = HostEnv.init();
-    defer host_env.deinit();
 
     host_env.test_state.verbose = verbose;
     _ = host_env.createScope(null);
@@ -2730,15 +3341,16 @@ fn runBoundaryBenchmarks(iterations: usize, prototype_filter: ?Prototype, verbos
     current_roc_ops = &roc_ops;
     defer current_host = null;
     defer current_roc_ops = null;
+    defer host_env.deinit();
 
     runSyntheticCorrectnessChecks(&host_env, &roc_ops);
 
     printBenchmarkHeader();
-    runSyntheticBenchmarks(&host_env, &roc_ops, iterations, prototype_filter);
+    runSyntheticBenchmarks(&host_env, &roc_ops, iterations, samples, prototype_filter);
 
     const should_run_current_app = if (prototype_filter) |filter| filter == .baseline_node_value else true;
     if (should_run_current_app) {
-        try runCurrentAppScenarioBenchmarks(iterations, verbose);
+        try runCurrentAppScenarioBenchmarks(iterations, samples, verbose);
     }
 
     return 0;
@@ -2764,15 +3376,25 @@ comptime {
     @export(&hostCreateElement, .{ .name = "roc_host_create_element", .visibility = .hidden });
     @export(&hostCreateEventFilter, .{ .name = "roc_host_create_event_filter", .visibility = .hidden });
     @export(&hostCreateEventMap, .{ .name = "roc_host_create_event_map", .visibility = .hidden });
+    @export(&hostCreateEventMapUnitI64Const, .{ .name = "roc_host_create_event_map_unit_i64_const", .visibility = .hidden });
     @export(&hostedCreateEventMerge, .{ .name = "roc_host_create_event_merge", .visibility = .hidden });
     @export(&hostedCreateEventSource, .{ .name = "roc_host_create_event_source", .visibility = .hidden });
     @export(&hostCreateEventWithLatest, .{ .name = "roc_host_create_event_with_latest", .visibility = .hidden });
     @export(&hostedCreateRoot, .{ .name = "roc_host_create_root", .visibility = .hidden });
+    @export(&hostCreateSignalConstBool, .{ .name = "roc_host_create_signal_const_bool", .visibility = .hidden });
     @export(&hostCreateSignalConst, .{ .name = "roc_host_create_signal_const", .visibility = .hidden });
+    @export(&hostCreateSignalConstI64, .{ .name = "roc_host_create_signal_const_i64", .visibility = .hidden });
+    @export(&hostCreateSignalConstStr, .{ .name = "roc_host_create_signal_const_str", .visibility = .hidden });
+    @export(&hostCreateSignalFoldBoolToggle, .{ .name = "roc_host_create_signal_fold_bool_toggle", .visibility = .hidden });
     @export(&hostCreateSignalFold, .{ .name = "roc_host_create_signal_fold", .visibility = .hidden });
+    @export(&hostCreateSignalFoldI64, .{ .name = "roc_host_create_signal_fold_i64", .visibility = .hidden });
     @export(&hostCreateSignalHold, .{ .name = "roc_host_create_signal_hold", .visibility = .hidden });
     @export(&hostCreateSignalMap, .{ .name = "roc_host_create_signal_map", .visibility = .hidden });
+    @export(&hostCreateSignalMapI64I64, .{ .name = "roc_host_create_signal_map_i64_i64", .visibility = .hidden });
+    @export(&hostCreateSignalMapI64Str, .{ .name = "roc_host_create_signal_map_i64_str", .visibility = .hidden });
     @export(&hostCreateSignalMap2, .{ .name = "roc_host_create_signal_map2", .visibility = .hidden });
+    @export(&hostCreateSignalMap2I64I64, .{ .name = "roc_host_create_signal_map2_i64_i64", .visibility = .hidden });
+    @export(&hostCreateSignalMap2I64I64Str, .{ .name = "roc_host_create_signal_map2_i64_i64_str", .visibility = .hidden });
     @export(&hostCreateSignalState, .{ .name = "roc_host_create_signal_state", .visibility = .hidden });
     @export(&hostCreateSignalZipWith, .{ .name = "roc_host_create_signal_zip_with", .visibility = .hidden });
     @export(&hostedSendEvent, .{ .name = "roc_host_send_event", .visibility = .hidden });
@@ -2790,6 +3412,7 @@ fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
     var verbose: bool = false;
     var bench: bool = false;
     var bench_iterations: usize = 1000;
+    var bench_samples: usize = 1;
     var prototype_filter: ?Prototype = null;
     var spec_file: ?[]const u8 = null;
 
@@ -2805,17 +3428,31 @@ fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
         } else if (std.mem.eql(u8, arg, "--bench-iterations")) {
             i += 1;
             if (i >= arg_count) {
-                writeStderr("Usage: ./app --bench [--bench-iterations N] [--bench-prototype A|B|C|D|all]\n");
+                writeStderr("Usage: ./app --bench [--bench-iterations N] [--bench-samples N] [--bench-prototype A|B|C|D|all]\n");
                 return 1;
             }
             bench_iterations = std.fmt.parseInt(usize, std.mem.span(argv[i]), 10) catch {
                 writeStderr("Error: Invalid --bench-iterations value\n");
                 return 1;
             };
+        } else if (std.mem.eql(u8, arg, "--bench-samples")) {
+            i += 1;
+            if (i >= arg_count) {
+                writeStderr("Usage: ./app --bench [--bench-iterations N] [--bench-samples N] [--bench-prototype A|B|C|D|all]\n");
+                return 1;
+            }
+            bench_samples = std.fmt.parseInt(usize, std.mem.span(argv[i]), 10) catch {
+                writeStderr("Error: Invalid --bench-samples value\n");
+                return 1;
+            };
+            if (bench_samples == 0) {
+                writeStderr("Error: --bench-samples must be greater than zero\n");
+                return 1;
+            }
         } else if (std.mem.eql(u8, arg, "--bench-prototype")) {
             i += 1;
             if (i >= arg_count) {
-                writeStderr("Usage: ./app --bench [--bench-iterations N] [--bench-prototype A|B|C|D|all]\n");
+                writeStderr("Usage: ./app --bench [--bench-iterations N] [--bench-samples N] [--bench-prototype A|B|C|D|all]\n");
                 return 1;
             }
             prototype_filter = parsePrototypeFilter(std.mem.span(argv[i]));
@@ -2825,7 +3462,7 @@ fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
     }
 
     if (bench) {
-        const exit_code = runBoundaryBenchmarks(bench_iterations, prototype_filter, verbose) catch |err| {
+        const exit_code = runBoundaryBenchmarks(bench_iterations, bench_samples, prototype_filter, verbose) catch |err| {
             writeStderr("HOST ERROR: ");
             writeStderr(@errorName(err));
             writeStderr("\n");
@@ -2835,7 +3472,7 @@ fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
     }
 
     if (spec_file == null) {
-        writeStderr("Usage: ./app [--verbose] <test_spec.txt>\n       ./app --bench [--bench-iterations N] [--bench-prototype A|B|C|D|all]\n");
+        writeStderr("Usage: ./app [--verbose] <test_spec.txt>\n       ./app --bench [--bench-iterations N] [--bench-samples N] [--bench-prototype A|B|C|D|all]\n");
         return 1;
     }
 
@@ -2857,7 +3494,6 @@ fn platform_main(spec_file: []const u8, verbose: bool) !c_int {
     });
 
     var host_env = HostEnv.init();
-    defer host_env.deinit();
 
     const allocator = host_env.gpa.allocator();
 
@@ -2881,11 +3517,11 @@ fn platform_main(spec_file: []const u8, verbose: bool) !c_int {
     current_roc_ops = &roc_ops;
     defer current_host = null;
     defer current_roc_ops = null;
+    defer host_env.deinit();
 
     // Call Roc main to build the UI
     traceStderr("[HOST] calling roc_main\n");
-    var ret: [0]u8 = .{};
-    abi.roc_main(&roc_ops, @ptrCast(&ret), null);
+    abi.roc_main();
     traceStderr("[HOST] roc_main returned\n");
 
     if (verbose) {

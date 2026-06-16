@@ -128,6 +128,27 @@ pub fn decrefBox(data_ptr: ?*anyopaque, roc_ops: *RocOps) void {
     decrefBoxWith(data_ptr, @alignOf(usize), null, roc_ops);
 }
 
+/// Increment a boxed function closure.
+pub fn increfErasedCallable(callable: RocErasedCallable, amount: isize) void {
+    const data = callable orelse return;
+    increfBox(@ptrCast(data), amount);
+}
+
+/// Decrement a boxed function closure and run its capture drop callback on final release.
+pub fn decrefErasedCallable(callable: RocErasedCallable, roc_ops: *RocOps) void {
+    const data = callable orelse return;
+    decrefBoxWith(@ptrCast(data), roc_erased_callable_payload_alignment, &dropErasedCallablePayload, roc_ops);
+}
+
+fn dropErasedCallablePayload(data_ptr: ?*anyopaque, roc_ops: *RocOps) callconv(.c) void {
+    const data = data_ptr orelse return;
+    const callable: RocErasedCallable = @ptrCast(data);
+    const payload = rocErasedCallablePayloadPtr(callable);
+    if (payload.on_drop) |on_drop| {
+        on_drop(rocErasedCallableCapturePtr(callable), roc_ops);
+    }
+}
+
 /// Decrement a boxed payload and run payload teardown when this is the final ref.
 pub fn decrefBoxWith(
     data_ptr: ?*anyopaque,
@@ -543,16 +564,39 @@ comptime {
     }
 }
 
-/// Element type for __AnonStruct42
-pub const __AnonStruct42 = extern struct {
+/// Element type for __AnonStruct30
+pub const __AnonStruct30 = extern struct {
+    @"_0": i64,
+    @"_1": i64,
+};
+
+comptime {
+    if (@sizeOf(usize) == 8) {
+        if (@sizeOf(__AnonStruct30) != 16) @compileError("__AnonStruct30 size mismatch");
+        if (@alignOf(__AnonStruct30) != 8) @compileError("__AnonStruct30 alignment mismatch");
+    }
+}
+
+/// Element type for __AnonStruct37
+pub const __AnonStruct37 = extern struct {
+    @"init_shim": *anyopaque,
+    @"main!": *anyopaque,
+    @"shim_item_key": *anyopaque,
+    @"shim_item_label": *anyopaque,
+    @"shim_items_len": *anyopaque,
+    @"shim_total": *anyopaque,
+};
+
+/// Element type for __AnonStruct59
+pub const __AnonStruct59 = extern struct {
     @"_0": NodeValue,
     @"_1": NodeValue,
 };
 
 comptime {
     if (@sizeOf(usize) == 8) {
-        if (@sizeOf(__AnonStruct42) != 64) @compileError("__AnonStruct42 size mismatch");
-        if (@alignOf(__AnonStruct42) != 8) @compileError("__AnonStruct42 alignment mismatch");
+        if (@sizeOf(__AnonStruct59) != 64) @compileError("__AnonStruct59 size mismatch");
+        if (@alignOf(__AnonStruct59) != 8) @compileError("__AnonStruct59 alignment mismatch");
     }
 }
 
@@ -668,6 +712,14 @@ pub const HostCreate_event_mapArgs = extern struct {
     arg1: RocErasedCallable,
 };
 
+/// Arguments for Host.create_event_map_unit_i64_const!
+/// Roc signature: U64, I64 => U64
+/// Refcounted fields are owned by the hosted function.
+pub const HostCreate_event_map_unit_i64_constArgs = extern struct {
+    arg0: u64,
+    arg1: i64,
+};
+
 /// Arguments for Host.create_event_merge!
 /// Roc signature: U64, U64 => U64
 /// Refcounted fields are owned by the hosted function.
@@ -692,11 +744,49 @@ pub const HostCreate_signal_constArgs = extern struct {
     arg0: NodeValue,
 };
 
+/// Arguments for Host.create_signal_const_bool!
+/// Roc signature: Bool => U64
+/// Refcounted fields are owned by the hosted function.
+pub const HostCreate_signal_const_boolArgs = extern struct {
+    arg0: bool,
+};
+
+/// Arguments for Host.create_signal_const_i64!
+/// Roc signature: I64 => U64
+/// Refcounted fields are owned by the hosted function.
+pub const HostCreate_signal_const_i64Args = extern struct {
+    arg0: i64,
+};
+
+/// Arguments for Host.create_signal_const_str!
+/// Roc signature: Str => U64
+/// Refcounted fields are owned by the hosted function.
+pub const HostCreate_signal_const_strArgs = extern struct {
+    arg0: RocStr,
+};
+
 /// Arguments for Host.create_signal_fold!
 /// Roc signature: NodeValue, U64, Box((NodeValue, NodeValue) -> NodeValue) => U64
 /// Refcounted fields are owned by the hosted function.
 pub const HostCreate_signal_foldArgs = extern struct {
     arg0: NodeValue,
+    arg1: u64,
+    arg2: RocErasedCallable,
+};
+
+/// Arguments for Host.create_signal_fold_bool_toggle!
+/// Roc signature: Bool, U64 => U64
+/// Refcounted fields are owned by the hosted function.
+pub const HostCreate_signal_fold_bool_toggleArgs = extern struct {
+    arg0: bool,
+    arg1: u64,
+};
+
+/// Arguments for Host.create_signal_fold_i64!
+/// Roc signature: I64, U64, Box((I64, I64) -> I64) => U64
+/// Refcounted fields are owned by the hosted function.
+pub const HostCreate_signal_fold_i64Args = extern struct {
+    arg0: i64,
     arg1: u64,
     arg2: RocErasedCallable,
 };
@@ -724,6 +814,40 @@ pub const HostCreate_signal_map2Args = extern struct {
     arg0: u64,
     arg1: u64,
     arg2: RocErasedCallable,
+};
+
+/// Arguments for Host.create_signal_map2_i64_i64!
+/// Roc signature: U64, U64, Box((I64, I64) -> I64) => U64
+/// Refcounted fields are owned by the hosted function.
+pub const HostCreate_signal_map2_i64_i64Args = extern struct {
+    arg0: u64,
+    arg1: u64,
+    arg2: RocErasedCallable,
+};
+
+/// Arguments for Host.create_signal_map2_i64_i64_str!
+/// Roc signature: U64, U64, Box((I64, I64) -> Str) => U64
+/// Refcounted fields are owned by the hosted function.
+pub const HostCreate_signal_map2_i64_i64_strArgs = extern struct {
+    arg0: u64,
+    arg1: u64,
+    arg2: RocErasedCallable,
+};
+
+/// Arguments for Host.create_signal_map_i64_i64!
+/// Roc signature: U64, Box(I64 -> I64) => U64
+/// Refcounted fields are owned by the hosted function.
+pub const HostCreate_signal_map_i64_i64Args = extern struct {
+    arg0: u64,
+    arg1: RocErasedCallable,
+};
+
+/// Arguments for Host.create_signal_map_i64_str!
+/// Roc signature: U64, Box(I64 -> Str) => U64
+/// Refcounted fields are owned by the hosted function.
+pub const HostCreate_signal_map_i64_strArgs = extern struct {
+    arg0: u64,
+    arg1: RocErasedCallable,
 };
 
 /// Arguments for Host.create_signal_state!
@@ -758,6 +882,101 @@ pub const HostSet_textArgs = extern struct {
     arg1: RocStr,
 };
 
+// =============================================================================
+// Generated Refcount Helpers
+//
+// These helpers recursively retain or release Roc-owned fields using the explicit
+// TypeRepr layout supplied to glue generation. For RocList(T), element release
+// only runs when the list allocation is uniquely owned, immediately before the
+// outer list allocation is decremented and potentially freed.
+// =============================================================================
+
+/// Recursively decrement Roc-owned fields in __AnonStruct4.
+pub fn decref__AnonStruct4(value: __AnonStruct4, roc_ops: *RocOps) void {
+    decrefNodeValue(value.@"_0", roc_ops);
+}
+
+/// Increment Roc-owned fields in __AnonStruct4.
+pub fn incref__AnonStruct4(value: __AnonStruct4, amount: isize) void {
+    increfNodeValue(value.@"_0", amount);
+}
+
+/// Recursively decrement Roc-owned payloads in NodeValue.
+pub fn decrefNodeValue(value: NodeValue, roc_ops: *RocOps) void {
+    switch (value.tag) {
+        .NvBool => {},
+        .NvF64 => {},
+        .NvI64 => {},
+        .NvList => {
+        {
+            const list = value.payload.nv_list;
+            if (list.isUnique()) {
+                for (list.items()) |item| {
+                        decrefNodeValue(item, roc_ops);
+                }
+            }
+            list.decref(roc_ops);
+        }
+        },
+        .NvStr => {
+        value.payload.nv_str.decref(roc_ops);
+        },
+        .NvUnit => {},
+    }
+}
+
+/// Increment Roc-owned payloads in NodeValue.
+pub fn increfNodeValue(value: NodeValue, amount: isize) void {
+    switch (value.tag) {
+        .NvBool => {},
+        .NvF64 => {},
+        .NvI64 => {},
+        .NvList => {
+        value.payload.nv_list.incref(amount);
+        },
+        .NvStr => {
+        value.payload.nv_str.incref(amount);
+        },
+        .NvUnit => {},
+    }
+}
+
+/// Recursively decrement Roc-owned fields in __AnonStruct27.
+pub fn decref__AnonStruct27(value: __AnonStruct27, roc_ops: *RocOps) void {
+    decrefNodeValue(value.@"_0", roc_ops);
+    decrefNodeValue(value.@"_1", roc_ops);
+}
+
+/// Increment Roc-owned fields in __AnonStruct27.
+pub fn incref__AnonStruct27(value: __AnonStruct27, amount: isize) void {
+    increfNodeValue(value.@"_0", amount);
+    increfNodeValue(value.@"_1", amount);
+}
+
+/// Recursively decrement Roc-owned fields in __AnonStruct37.
+pub fn decref__AnonStruct37(value: __AnonStruct37, roc_ops: *RocOps) void {
+    _ = value;
+    _ = roc_ops;
+}
+
+/// Increment Roc-owned fields in __AnonStruct37.
+pub fn incref__AnonStruct37(value: __AnonStruct37, amount: isize) void {
+    _ = value;
+    _ = amount;
+}
+
+/// Recursively decrement Roc-owned fields in __AnonStruct59.
+pub fn decref__AnonStruct59(value: __AnonStruct59, roc_ops: *RocOps) void {
+    decrefNodeValue(value.@"_0", roc_ops);
+    decrefNodeValue(value.@"_1", roc_ops);
+}
+
+/// Increment Roc-owned fields in __AnonStruct59.
+pub fn incref__AnonStruct59(value: __AnonStruct59, amount: isize) void {
+    increfNodeValue(value.@"_0", amount);
+    increfNodeValue(value.@"_1", amount);
+}
+
 /// Implement this struct with your hosted function implementations.
 /// Refcounted hosted arguments are owned by the hosted function.
 /// Pass it to hostedFunctions() to create the dispatch table.
@@ -772,15 +991,25 @@ pub const PlatformHostedFns = struct {
     host_create_element: *const fn (roc_ops: *RocOps, arg0: RocStr) callconv(.c) u64, // Host.create_element!
     host_create_event_filter: *const fn (roc_ops: *RocOps, arg0: u64, arg1: RocErasedCallable) callconv(.c) u64, // Host.create_event_filter!
     host_create_event_map: *const fn (roc_ops: *RocOps, arg0: u64, arg1: RocErasedCallable) callconv(.c) u64, // Host.create_event_map!
+    host_create_event_map_unit_i64_const: *const fn (arg0: u64, arg1: i64) callconv(.c) u64, // Host.create_event_map_unit_i64_const!
     host_create_event_merge: *const fn (arg0: u64, arg1: u64) callconv(.c) u64, // Host.create_event_merge!
     host_create_event_source: *const fn () callconv(.c) u64, // Host.create_event_source!
     host_create_event_with_latest: *const fn (roc_ops: *RocOps, arg0: u64, arg1: u64, arg2: RocErasedCallable) callconv(.c) u64, // Host.create_event_with_latest!
     host_create_root: *const fn () callconv(.c) u64, // Host.create_root!
     host_create_signal_const: *const fn (roc_ops: *RocOps, arg0: NodeValue) callconv(.c) u64, // Host.create_signal_const!
+    host_create_signal_const_bool: *const fn (arg0: bool) callconv(.c) u64, // Host.create_signal_const_bool!
+    host_create_signal_const_i64: *const fn (arg0: i64) callconv(.c) u64, // Host.create_signal_const_i64!
+    host_create_signal_const_str: *const fn (roc_ops: *RocOps, arg0: RocStr) callconv(.c) u64, // Host.create_signal_const_str!
     host_create_signal_fold: *const fn (roc_ops: *RocOps, arg0: NodeValue, arg1: u64, arg2: RocErasedCallable) callconv(.c) u64, // Host.create_signal_fold!
+    host_create_signal_fold_bool_toggle: *const fn (arg0: bool, arg1: u64) callconv(.c) u64, // Host.create_signal_fold_bool_toggle!
+    host_create_signal_fold_i64: *const fn (roc_ops: *RocOps, arg0: i64, arg1: u64, arg2: RocErasedCallable) callconv(.c) u64, // Host.create_signal_fold_i64!
     host_create_signal_hold: *const fn (roc_ops: *RocOps, arg0: NodeValue, arg1: u64) callconv(.c) u64, // Host.create_signal_hold!
     host_create_signal_map: *const fn (roc_ops: *RocOps, arg0: u64, arg1: RocErasedCallable) callconv(.c) u64, // Host.create_signal_map!
     host_create_signal_map2: *const fn (roc_ops: *RocOps, arg0: u64, arg1: u64, arg2: RocErasedCallable) callconv(.c) u64, // Host.create_signal_map2!
+    host_create_signal_map2_i64_i64: *const fn (roc_ops: *RocOps, arg0: u64, arg1: u64, arg2: RocErasedCallable) callconv(.c) u64, // Host.create_signal_map2_i64_i64!
+    host_create_signal_map2_i64_i64_str: *const fn (roc_ops: *RocOps, arg0: u64, arg1: u64, arg2: RocErasedCallable) callconv(.c) u64, // Host.create_signal_map2_i64_i64_str!
+    host_create_signal_map_i64_i64: *const fn (roc_ops: *RocOps, arg0: u64, arg1: RocErasedCallable) callconv(.c) u64, // Host.create_signal_map_i64_i64!
+    host_create_signal_map_i64_str: *const fn (roc_ops: *RocOps, arg0: u64, arg1: RocErasedCallable) callconv(.c) u64, // Host.create_signal_map_i64_str!
     host_create_signal_state: *const fn (roc_ops: *RocOps, arg0: NodeValue) callconv(.c) u64, // Host.create_signal_state!
     host_create_signal_zip_with: *const fn (roc_ops: *RocOps, arg0: u64, arg1: u64, arg2: RocErasedCallable) callconv(.c) u64, // Host.create_signal_zip_with!
     host_send_event: *const fn (roc_ops: *RocOps, arg0: u64, arg1: NodeValue) callconv(.c) void, // Host.send_event!
@@ -803,19 +1032,29 @@ pub fn hostedFunctions(comptime fns: PlatformHostedFns) HostedFunctions {
             hostedFn(fns.host_create_element), // Host.create_element! (index 7)
             hostedFn(fns.host_create_event_filter), // Host.create_event_filter! (index 8)
             hostedFn(fns.host_create_event_map), // Host.create_event_map! (index 9)
-            hostedFn(fns.host_create_event_merge), // Host.create_event_merge! (index 10)
-            hostedFn(fns.host_create_event_source), // Host.create_event_source! (index 11)
-            hostedFn(fns.host_create_event_with_latest), // Host.create_event_with_latest! (index 12)
-            hostedFn(fns.host_create_root), // Host.create_root! (index 13)
-            hostedFn(fns.host_create_signal_const), // Host.create_signal_const! (index 14)
-            hostedFn(fns.host_create_signal_fold), // Host.create_signal_fold! (index 15)
-            hostedFn(fns.host_create_signal_hold), // Host.create_signal_hold! (index 16)
-            hostedFn(fns.host_create_signal_map), // Host.create_signal_map! (index 17)
-            hostedFn(fns.host_create_signal_map2), // Host.create_signal_map2! (index 18)
-            hostedFn(fns.host_create_signal_state), // Host.create_signal_state! (index 19)
-            hostedFn(fns.host_create_signal_zip_with), // Host.create_signal_zip_with! (index 20)
-            hostedFn(fns.host_send_event), // Host.send_event! (index 21)
-            hostedFn(fns.host_set_text), // Host.set_text! (index 22)
+            hostedFn(fns.host_create_event_map_unit_i64_const), // Host.create_event_map_unit_i64_const! (index 10)
+            hostedFn(fns.host_create_event_merge), // Host.create_event_merge! (index 11)
+            hostedFn(fns.host_create_event_source), // Host.create_event_source! (index 12)
+            hostedFn(fns.host_create_event_with_latest), // Host.create_event_with_latest! (index 13)
+            hostedFn(fns.host_create_root), // Host.create_root! (index 14)
+            hostedFn(fns.host_create_signal_const), // Host.create_signal_const! (index 15)
+            hostedFn(fns.host_create_signal_const_bool), // Host.create_signal_const_bool! (index 16)
+            hostedFn(fns.host_create_signal_const_i64), // Host.create_signal_const_i64! (index 17)
+            hostedFn(fns.host_create_signal_const_str), // Host.create_signal_const_str! (index 18)
+            hostedFn(fns.host_create_signal_fold), // Host.create_signal_fold! (index 19)
+            hostedFn(fns.host_create_signal_fold_bool_toggle), // Host.create_signal_fold_bool_toggle! (index 20)
+            hostedFn(fns.host_create_signal_fold_i64), // Host.create_signal_fold_i64! (index 21)
+            hostedFn(fns.host_create_signal_hold), // Host.create_signal_hold! (index 22)
+            hostedFn(fns.host_create_signal_map), // Host.create_signal_map! (index 23)
+            hostedFn(fns.host_create_signal_map2), // Host.create_signal_map2! (index 24)
+            hostedFn(fns.host_create_signal_map2_i64_i64), // Host.create_signal_map2_i64_i64! (index 25)
+            hostedFn(fns.host_create_signal_map2_i64_i64_str), // Host.create_signal_map2_i64_i64_str! (index 26)
+            hostedFn(fns.host_create_signal_map_i64_i64), // Host.create_signal_map_i64_i64! (index 27)
+            hostedFn(fns.host_create_signal_map_i64_str), // Host.create_signal_map_i64_str! (index 28)
+            hostedFn(fns.host_create_signal_state), // Host.create_signal_state! (index 29)
+            hostedFn(fns.host_create_signal_zip_with), // Host.create_signal_zip_with! (index 30)
+            hostedFn(fns.host_send_event), // Host.send_event! (index 31)
+            hostedFn(fns.host_set_text), // Host.set_text! (index 32)
         };
     };
     return .{
@@ -967,34 +1206,30 @@ pub fn makeRocOps(env: *RocEnv, hosted_fns: HostedFunctions) RocOps {
 // to invoke Roc application functions.
 // =============================================================================
 
-/// Arguments for entrypoint: call_transform
-pub const Roc_call_transformArgs = extern struct {
-    arg0: RocErasedCallable,
-    arg1: NodeValue,
-};
-
-/// Arguments for entrypoint: call_step
-pub const Roc_call_stepArgs = extern struct {
-    arg0: RocErasedCallable,
-    arg1: NodeValue,
-    arg2: NodeValue,
-};
-
-/// Arguments for entrypoint: call_predicate
-pub const Roc_call_predicateArgs = extern struct {
-    arg0: RocErasedCallable,
-    arg1: NodeValue,
-};
-
 /// Entrypoint: main_for_host!
-pub extern fn roc_main(ops: *RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
+pub extern fn roc_main() callconv(.c) void;
 
 /// Entrypoint: call_transform
-pub extern fn roc_call_transform(ops: *RocOps, ret_ptr: *NodeValue, arg_ptr: ?*const Roc_call_transformArgs) callconv(.c) void;
+pub extern fn roc_call_transform(arg0: RocErasedCallable, arg1: NodeValue) callconv(.c) NodeValue;
 
 /// Entrypoint: call_step
-pub extern fn roc_call_step(ops: *RocOps, ret_ptr: *NodeValue, arg_ptr: ?*const Roc_call_stepArgs) callconv(.c) void;
+pub extern fn roc_call_step(arg0: RocErasedCallable, arg1: NodeValue, arg2: NodeValue) callconv(.c) NodeValue;
 
 /// Entrypoint: call_predicate
-pub extern fn roc_call_predicate(ops: *RocOps, ret_ptr: *bool, arg_ptr: ?*const Roc_call_predicateArgs) callconv(.c) void;
+pub extern fn roc_call_predicate(arg0: RocErasedCallable, arg1: NodeValue) callconv(.c) bool;
+
+/// Entrypoint: shim_payload_init
+pub extern fn roc_shim_payload_init() callconv(.c) *anyopaque;
+
+/// Entrypoint: shim_payload_total
+pub extern fn roc_shim_payload_total(arg0: *anyopaque) callconv(.c) i64;
+
+/// Entrypoint: shim_payload_item_key
+pub extern fn roc_shim_payload_item_key(arg0: *anyopaque) callconv(.c) RocStr;
+
+/// Entrypoint: shim_payload_item_label
+pub extern fn roc_shim_payload_item_label(arg0: *anyopaque) callconv(.c) RocStr;
+
+/// Entrypoint: shim_payload_items_len
+pub extern fn roc_shim_payload_items_len(arg0: *anyopaque) callconv(.c) u64;
 

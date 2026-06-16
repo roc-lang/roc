@@ -1,140 +1,126 @@
 # Signals NodeValue Boundary Research
 
-This report summarizes the first boundary-focused benchmark pass for the
-signals platform. It measures the current 32-byte `NodeValue` boundary as the
-control case and compares three synthetic host-side prototype shapes.
+This report summarizes the boundary-focused prototype pass for the signals
+platform. The control remains the generic 32-byte `NodeValue` representation,
+but the prototype now includes scoped cleanup, scalar host paths, generated
+refcount helpers from `ZigGlue.roc`, and one app-model generated-shim spike.
 
 ## Commands
 
 ```sh
+./zig-out/bin/roc check src/glue/src/ZigGlue.roc
+./zig-out/bin/roc glue src/glue/src/ZigGlue.roc test/signals/platform test/signals/platform/main.roc
+zig build run-test-cli -- --suite glue
 zig build run-test-signals -Dplatform=signals
 zig build run-signals-bench -Dplatform=signals
-./zig-out/bin/signals-demo --bench --bench-iterations 5000
+zig build build-test-hosts -Dplatform=signals -Doptimize=ReleaseFast
+./zig-out/bin/roc build --opt=speed --debug --no-cache --output=zig-out/bin/signals-demo test/signals/app.roc
+./zig-out/bin/signals-demo --bench --bench-iterations 5000 --bench-samples 3
 ```
 
-The 5,000-iteration run below used the existing `signals-demo` binary after
-`zig build run-signals-bench -Dplatform=signals`. The Roc app is built with
-`--opt=speed --debug`; the test host is built with the build's default Zig
-optimization mode. Treat the timings as directional until repeated ReleaseFast
-host runs are added.
+The final matrix below is a ReleaseFast host build with three 5,000-iteration
+samples. Values are median elapsed time unless noted.
 
 ## Prototype Matrix
 
 | Prototype | API impact | ABI impact | Ownership model | Callback shape | Equality strategy | Dynamic/list support |
 | --- | --- | --- | --- | --- | --- | --- |
-| A. Baseline `NodeValue` | Current typed Roc API | Current 32-byte tagged union | Host stores owned `NodeValue` copies | Boxed callbacks receive `NodeValue` | Recursive `NodeValue` equality | Supported today |
-| B. Scalar fast paths | Roc API can stay typed for common scalars | Adds typed primitive node/callback paths | Scalars copied directly; complex values stay `NodeValue` | Primitive callbacks use scalar args/results | Direct scalar equality | `Elem.dynamic` and `Elem.each` still use `NodeValue` |
-| C. Host value handles | May require handles or borrowed views at dynamic boundaries | Replaces hot values with host-owned handles/views | Host owns storage; Roc receives handles/views | Callbacks receive handles or borrowed views | Explicit value/view equality, not raw handle identity | Needs explicit view lifetime rules |
-| D. Generated boundary shims | Roc API can stay typed with generated glue | Adds per-type encode/decode/equality/callback glue | Generated code owns per-type copies/borrows | Callbacks receive app-model shapes | Generated per-type equality | Needs generated item/render glue |
+| A. Baseline `NodeValue` | Current typed Roc API | 32-byte tagged union | Host stores owned `NodeValue` copies | Boxed callbacks receive `NodeValue` | Recursive generated/host equality | Supported |
+| B. Scalar fast paths | Adds explicit scalar API helpers for hot paths | Typed primitive hosted paths | Scalars copied directly; complex values stay `NodeValue` | Primitive callbacks use scalar args/results | Direct scalar equality | Dynamic/list paths still use `NodeValue` |
+| C. Host value handles | Would require handle/view APIs | Host-owned handles/views | Host owns value storage | Callbacks receive handles/views | Explicit value/view equality | Needs lifetime rules |
+| D. Generated boundary shims | Typed Roc API can stay | Per-type shim entrypoints | Generated type-specific ownership helpers | App-model callbacks receive typed payloads | Generated/type-specific equality | Spike covers app model/list item payloads |
 
-## Synthetic Measurements
-
-Elapsed time is total nanoseconds for 5,000 iterations. Speedup is relative to
-A for the same case.
+## ReleaseFast Synthetic Measurements
 
 | Case | A baseline | B scalar | C handles/views | D generated |
 | --- | ---: | ---: | ---: | ---: |
-| scalar boundary | 157,916 ns | 26,292 ns, 6.0x | 50,250 ns, 3.1x | 31,667 ns, 5.0x |
-| list/record boundary | 26,814,000 ns | 22,669,250 ns, 1.2x | 107,209 ns, 250x | 33,250 ns, 806x |
-| equality | 724,750 ns | 751,958 ns, 1.0x | 326,041 ns, 2.2x | 300,084 ns, 2.4x |
-| callback shape | 106,791 ns | 23,833 ns, 4.5x | 66,000 ns, 1.6x | 40,666 ns, 2.6x |
-| deep map chain | 2,738,875 ns | 590,791 ns, 4.6x | 973,292 ns, 2.8x | 1,145,875 ns, 2.4x |
-| wide fanout | 10,901,209 ns | 2,560,208 ns, 4.3x | 4,372,375 ns, 2.5x | 2,742,417 ns, 4.0x |
+| scalar boundary | 30.7 us | 1.7 us, 18x | 8.2 us, 3.8x | 19.6 us, 1.6x |
+| list/record boundary | 15.7 ms | 16.0 ms, 1.0x | 12.5 us, 1259x | 19.5 us, 802x |
+| equality | 265.9 us | 255.3 us, 1.0x | 20.5 us, 12.9x | 1.8 us, 152x |
+| callback shape | 12.4 us | 1.8 us, 7.1x | 8.8 us, 1.4x | 20.2 us, 0.6x |
+| deep map chain | 643.5 us | 341.6 us, 1.9x | 198.9 us, 3.2x | 643.2 us, 1.0x |
+| wide fanout | 2.55 ms | 2.51 ms, 1.0x | 2.49 ms, 1.0x | 2.58 ms, 1.0x |
+| generated app shim | n/a | n/a | n/a | 63.4 ms |
 
 Important interpretation details:
 
-- B intentionally does not improve list/record paths. Those still use
-  `NodeValue`, so the list/record row stays near baseline.
-- C and D list/record rows are lower-bound synthetic numbers because they do
-  not yet pay for real generated Roc glue at `Elem.dynamic` or `Elem.each`.
-- C must not use raw handle identity for unchanged-value suppression. The
-  benchmark row uses value/view equality. A handle design needs explicit
-  versioning or immutable value handles to be correct.
+- B now measures real scalar paths for `I64`, `Bool`, and `Str` in the host.
+- The list/record rows for C and D are still synthetic lower bounds, not full
+  `Elem.dynamic` or `Elem.each` replacements.
+- The D app shim is real Roc-generated boundary glue, but it currently allocates
+  a fresh boxed shim payload per call. At 5,000 iterations it performs 40,000
+  allocations and 40,000 deallocations, so it proves correctness more than speed.
+- ReleaseFast can optimize pure synthetic loops aggressively. The harness now
+  puts per-iteration barriers on benchmark values to keep rows loop-bound.
 
-## Current-App Baseline Scenarios
+## Current-App Scenarios
 
-These rows run the existing compiled demo, so they are only A/Baseline control
-measurements.
+These rows run the compiled demo. They still report as A because the current app
+uses the production signal graph, but the implementation includes scalar host
+paths and generated cleanup helpers.
 
-| Scenario | Time | Key counters |
+| Scenario | Median time | Key counters |
 | --- | ---: | --- |
-| counter updates, 5,000 clicks | 316,814,917 ns | 95,000 allocs, 60,000 callbacks, 85,000 evaluated nodes |
-| diamond updates, 5,000 clicks | 89,465,666 ns | 0 allocs, 80,000 callbacks, 100,000 evaluated nodes |
-| event merge, 5,000 clicks | 72,289,375 ns | 0 allocs, 25,000 callbacks, 25,000 evaluated nodes |
-| dynamic toggle, 5,000 clicks | 643,723,917 ns | 10,000 events, 25,000 callbacks, 10,000 text updates |
-| keyed reorder/remove, 10,000 clicks | 24,142,952,250 ns | 294,994 allocs, 249,997 deallocs, retained allocation delta +44,997 |
+| counter updates, 5,000 clicks | 184.1 ms | 95,000 allocs/deallocs, 60,000 callbacks |
+| diamond updates, 5,000 clicks | 33.7 ms | 0 allocs, 60,000 callbacks, 100,000 evaluated nodes |
+| event merge, 5,000 clicks | 31.6 ms | 0 allocs, 15,000 callbacks |
+| dynamic toggle, 5,000 clicks | 118.9 ms | 10,000 events, 15,000 callbacks |
+| keyed reorder/remove, 10,000 clicks | 1.06 s | 289,995 allocs, 289,998 deallocs, retained delta -3 |
 
-The keyed churn row is the most serious non-boundary finding. Repeated
-mount/unmount deactivates scopes and nodes, but the host keeps inactive graph
-and DOM storage until host teardown. It also retains Roc allocations across the
-scenario. This should be fixed before using keyed-list benchmark results to
-choose a boundary representation, because retained callbacks/nodes can dominate
-UI-scale behavior.
+The keyed churn retention issue is fixed. The earlier baseline retained tens of
+thousands of Roc allocations because nested `NodeValue` list elements were not
+recursively released. `ZigGlue.roc` now emits type-specific helpers such as
+`decrefNodeValue`, and the host delegates recursive cleanup to generated glue.
+
+## Glue Findings
+
+`ZigGlue.roc` had two boundary bugs surfaced by the shim spike:
+
+1. Provided entrypoints were generated as an obsolete universal
+   `ops, ret_ptr, arg_ptr` shape. The compiled Roc object exports natural C ABI
+   entrypoints, so generated Zig now declares `pub extern fn roc_main() ...` and
+   typed parameters/returns for other provided functions.
+2. `Box(opaque)` generated `**anyopaque`. It now stays `*anyopaque`.
+
+The generator also now emits recursive retain/release helpers from explicit
+`TypeRepr` layout data. For lists, element release only runs when the outer list
+allocation is uniquely owned, immediately before the list allocation is decrefed.
 
 ## Findings
 
-1. The current `NodeValue` boundary is expensive on scalar hot paths.
+1. Scalar hot paths are worth keeping.
 
-   In synthetic scalar propagation, eliminating generic tag/decode/equality
-   work gives a 4x to 6x improvement. The wide-fanout baseline performs
-   645,000 synthetic encodes, 1,280,000 decodes, and 640,000 equality checks
-   for 640,000 label operations; the scalar path removes that boundary work
-   and is 4.3x faster.
+   Real scalar paths remove `NodeValue` encode/decode/equality work for common
+   `I64`, `Bool`, and `Str` graph nodes. The scalar microbench and callback rows
+   improve materially, and the app can use them without changing the typed Roc
+   programming model.
 
-2. Representation and allocation are separate costs.
+2. Recursive ownership cleanup belongs in generated glue.
 
-   Primitive rows are dominated by tag/decode/equality and callback shape.
-   List/record rows are dominated by allocation and recursive traversal.
-   B helps the primitive rows but not list/record rows; C and D help
-   list/record rows only because they change the representation shape.
+   Platform host code should not know how to walk every Roc layout. Generated
+   helpers improve safety and make nested list/record/tag cleanup auditable from
+   the same type data used for ABI generation.
 
-3. Boxed callback crossing is visible even without list allocation.
+3. Generated shims need a better payload lifetime strategy before performance
+   conclusions.
 
-   The synthetic callback row improves from 106,791 ns to 23,833 ns with a
-   scalar call shape and to 40,666 ns with generated typed shims. That supports
-   the hypothesis that avoiding `NodeValue` at callbacks matters independently
-   from scheduling.
+   The shim spike validates natural entrypoint ABI and app-model calls, but the
+   current boxed-payload-per-call shape is dominated by allocation. The next D
+   spike should reuse or borrow a shim payload across related calls.
 
-4. Host handles are promising but have the highest correctness risk.
+4. Host handles remain promising but risky.
 
-   Handles/views are good for list and record data because they avoid copying
-   and allocation, but equality, lifetime, and dynamic render semantics must be
-   explicit. A raw mutable-slot handle is not enough: unchanged-value
-   suppression needs either immutable value handles, versioned handles, or
-   value/view equality.
-
-5. Generated shims are the strongest general boundary candidate so far.
-
-   D is near scalar-fast-path performance for primitive rows and the best
-   synthetic result for record/list rows. It preserves typed Roc APIs better
-   than C, but it requires real glue generation for app model types, list item
-   types, equality, and dynamic render callbacks before the current app can be
-   measured end to end.
-
-6. Current keyed list churn has a cleanup/retention issue.
-
-   The retained allocation delta of +44,997 after 10,000 keyed clicks means
-   benchmark results for dynamic/keyed UI scale are currently confounded by
-   retained host state. This is not a boundary representation issue, but it is
-   a production UI scale issue.
+   Handles/views are fast in synthetic list/record rows, but correctness depends
+   on explicit lifetime, versioning, and equality semantics.
 
 ## Recommendation
 
-Do not rewrite the runtime around handles yet.
+Use a hybrid migration path:
 
-The next implementation step should be a narrow hybrid prototype:
-
-1. Fix scoped cleanup for inactive keyed/dynamic graph nodes and boxed
-   callbacks, then rerun the current-app scenario rows.
-2. Add real scalar fast paths for `I64`, `Bool`, and `Str` signal/callback
-   nodes while preserving the current typed Roc API and generic `NodeValue`
-   fallback for dynamic/list boundaries.
-3. Add one generated-shim spike for concrete app model types used here:
-   `Counter`, `App`, `Item`, and `List(Item)`.
-4. Rerun the same matrix in a ReleaseFast host build with at least three
-   samples per row.
-
-If B plus the cleanup fix materially improves current-app scenarios, keep B as
-the first production migration. If D also improves list/keyed scenarios after
-real generated glue exists, use D for app-model and list-item boundaries while
-keeping generic `NodeValue` only for heterogeneous dynamic APIs.
+1. Keep the scalar fast paths for common signal families.
+2. Keep recursive retain/release in generated Zig glue and remove hand-written
+   host cleanup for Roc layouts as helpers become available.
+3. Iterate on generated shims with borrowed/reused app-model payloads before
+   making D a production path.
+4. Leave generic `NodeValue` in place for heterogeneous dynamic boundaries until
+   a generated or handle-based design proves ownership and equality semantics.

@@ -81,7 +81,14 @@ type_repr_to_zig = |type_table, type_repr| {
 		RocBox(inner_id) =>
 			match List.get(type_table, inner_id) {
 				Ok(RocFunction(_)) => "RocErasedCallable"
-				_ => "*${type_id_to_zig(type_table, inner_id)}"
+				_ => {
+					inner_zig = type_id_to_zig(type_table, inner_id)
+					if inner_zig == "*anyopaque" {
+						"*anyopaque"
+					} else {
+						"*${inner_zig}"
+					}
+				}
 			}
 		RocStr => "RocStr"
 		RocUnit => "void"
@@ -577,6 +584,300 @@ disc_type_for_count = |count| {
 }
 
 # =============================================================================
+# Generated Refcount Helpers
+# =============================================================================
+
+indent_lines = |text, prefix| {
+	if text == "" {
+		return ""
+	}
+
+	lines = Str.split_on(text, "\n")
+	var $result = ""
+	for line in lines {
+		if line != "" {
+			$result = Str.concat($result, "${prefix}${line}\n")
+		}
+	}
+
+	$result
+}
+
+box_payload_decref_name = |inner_id| "decrefBoxPayloadType${U64.to_str(inner_id)}"
+
+decref_helper_name_from_repr = |type_repr| {
+	match type_repr {
+		RocRecord(rec) =>
+			if rec.name == "" {
+				""
+			} else {
+				"decref${name_to_struct_name(rec.name)}"
+			}
+		RocTagUnion(tu) =>
+			if List.len(tu.tags) >= 2 and tu.name != "" {
+				"decref${name_to_struct_name(tu.name)}"
+			} else {
+				""
+			}
+		_ => ""
+	}
+}
+
+incref_helper_name_from_repr = |type_repr| {
+	match type_repr {
+		RocRecord(rec) =>
+			if rec.name == "" {
+				""
+			} else {
+				"incref${name_to_struct_name(rec.name)}"
+			}
+		RocTagUnion(tu) =>
+			if List.len(tu.tags) >= 2 and tu.name != "" {
+				"incref${name_to_struct_name(tu.name)}"
+			} else {
+				""
+			}
+		_ => ""
+	}
+}
+
+decref_stmt_for_type_id = |type_table, type_id, expr| {
+	match List.get(type_table, type_id) {
+		Ok(type_repr) => decref_stmt_for_repr(type_table, type_repr, expr)
+		Err(_) => ""
+	}
+}
+
+decref_stmt_for_repr = |type_table, type_repr, expr| {
+	match type_repr {
+		RocStr => "    ${expr}.decref(roc_ops);\n"
+		RocList(elem_id) => {
+			elem_stmt = decref_stmt_for_type_id(type_table, elem_id, "item")
+			if elem_stmt == "" {
+				"    ${expr}.decref(roc_ops);\n"
+			} else {
+				"    {\n        const list = ${expr};\n        if (list.isUnique()) {\n            for (list.items()) |item| {\n${indent_lines(elem_stmt, "                ")}            }\n        }\n        list.decref(roc_ops);\n    }\n"
+			}
+		}
+		RocBox(inner_id) =>
+			match List.get(type_table, inner_id) {
+				Ok(RocFunction(_)) => "    decrefErasedCallable(${expr}, roc_ops);\n"
+				_ => {
+					inner_zig = type_id_to_zig(type_table, inner_id)
+					if inner_zig == "*anyopaque" {
+						"    decrefBox(@ptrCast(${expr}), roc_ops);\n"
+					} else if is_type_refcounted(type_table, inner_id) {
+						"    decrefBoxWith(@ptrCast(${expr}), @alignOf(${inner_zig}), &${box_payload_decref_name(inner_id)}, roc_ops);\n"
+					} else {
+						"    decrefBox(@ptrCast(${expr}), roc_ops);\n"
+					}
+				}
+			}
+		RocRecord(_) => {
+			helper = decref_helper_name_from_repr(type_repr)
+			if helper == "" or !(is_repr_refcounted(type_table, type_repr)) {
+				""
+			} else {
+				"    ${helper}(${expr}, roc_ops);\n"
+			}
+		}
+		RocTagUnion(tu) =>
+			if List.len(tu.tags) == 1 {
+				match List.first(tu.tags) {
+					Ok(tag) =>
+						match List.first(tag.payload) {
+							Ok(payload_id) => decref_stmt_for_type_id(type_table, payload_id, expr)
+							_ => ""
+						}
+					_ => ""
+				}
+			} else {
+				helper = decref_helper_name_from_repr(type_repr)
+				if helper == "" or !(is_repr_refcounted(type_table, type_repr)) {
+					""
+				} else {
+					"    ${helper}(${expr}, roc_ops);\n"
+				}
+			}
+		_ => ""
+	}
+}
+
+incref_stmt_for_type_id = |type_table, type_id, expr| {
+	match List.get(type_table, type_id) {
+		Ok(type_repr) => incref_stmt_for_repr(type_table, type_repr, expr)
+		Err(_) => ""
+	}
+}
+
+incref_stmt_for_repr = |type_table, type_repr, expr| {
+	match type_repr {
+		RocStr => "    ${expr}.incref(amount);\n"
+		RocList(_) => "    ${expr}.incref(amount);\n"
+		RocBox(inner_id) =>
+			match List.get(type_table, inner_id) {
+				Ok(RocFunction(_)) => "    increfErasedCallable(${expr}, amount);\n"
+				_ => "    increfBox(@ptrCast(${expr}), amount);\n"
+			}
+		RocRecord(_) => {
+			helper = incref_helper_name_from_repr(type_repr)
+			if helper == "" or !(is_repr_refcounted(type_table, type_repr)) {
+				""
+			} else {
+				"    ${helper}(${expr}, amount);\n"
+			}
+		}
+		RocTagUnion(tu) =>
+			if List.len(tu.tags) == 1 {
+				match List.first(tu.tags) {
+					Ok(tag) =>
+						match List.first(tag.payload) {
+							Ok(payload_id) => incref_stmt_for_type_id(type_table, payload_id, expr)
+							_ => ""
+						}
+					_ => ""
+				}
+			} else {
+				helper = incref_helper_name_from_repr(type_repr)
+				if helper == "" or !(is_repr_refcounted(type_table, type_repr)) {
+					""
+				} else {
+					"    ${helper}(${expr}, amount);\n"
+				}
+			}
+		_ => ""
+	}
+}
+
+generate_record_refcount_helpers = |type_table, rec| {
+	struct_name = name_to_struct_name(rec.name)
+	var $decref_body = ""
+	var $incref_body = ""
+
+	for field in rec.fields {
+		field_expr = "value.${name_to_zig_quoted_ident(field.name)}"
+		$decref_body = Str.concat($decref_body, decref_stmt_for_type_id(type_table, field.type_id, field_expr))
+		$incref_body = Str.concat($incref_body, incref_stmt_for_type_id(type_table, field.type_id, field_expr))
+	}
+
+	if $decref_body == "" {
+		$decref_body = "    _ = value;\n    _ = roc_ops;\n"
+	}
+	if $incref_body == "" {
+		$incref_body = "    _ = value;\n    _ = amount;\n"
+	}
+
+	"/// Recursively decrement Roc-owned fields in ${struct_name}.\npub fn decref${struct_name}(value: ${struct_name}, roc_ops: *RocOps) void {\n${$decref_body}}\n\n/// Increment Roc-owned fields in ${struct_name}.\npub fn incref${struct_name}(value: ${struct_name}, amount: isize) void {\n${$incref_body}}\n\n"
+}
+
+generate_tag_payload_refcount_branch = |type_table, tag, mode| {
+	snake = to_lower_snake_case(tag.name)
+	if List.is_empty(tag.payload) {
+		return "        .${tag.name} => {},\n"
+	}
+
+	if List.len(tag.payload) == 1 {
+		body =
+			match List.first(tag.payload) {
+				Ok(payload_id) =>
+					if mode == "decref" {
+						decref_stmt_for_type_id(type_table, payload_id, "value.payload.${snake}")
+					} else {
+						incref_stmt_for_type_id(type_table, payload_id, "value.payload.${snake}")
+					}
+				_ => ""
+			}
+
+		if body == "" {
+			"        .${tag.name} => {},\n"
+		} else {
+			"        .${tag.name} => {\n${indent_lines(body, "    ")}        },\n"
+		}
+	} else {
+		var $body = "        const payload = value.payload.${snake};\n"
+		var $idx = 0
+		for payload_id in tag.payload {
+			field_expr = "payload._${U64.to_str($idx)}"
+			stmt = if mode == "decref" {
+				decref_stmt_for_type_id(type_table, payload_id, field_expr)
+			} else {
+				incref_stmt_for_type_id(type_table, payload_id, field_expr)
+			}
+			$body = Str.concat($body, indent_lines(stmt, "    "))
+			$idx = $idx + 1
+		}
+
+		"        .${tag.name} => {\n${$body}        },\n"
+	}
+}
+
+generate_tag_union_refcount_helpers = |type_table, tu| {
+	struct_name = name_to_struct_name(tu.name)
+	var $decref_branches = ""
+	var $incref_branches = ""
+	for tag in tu.tags {
+		$decref_branches = Str.concat($decref_branches, generate_tag_payload_refcount_branch(type_table, tag, "decref"))
+		$incref_branches = Str.concat($incref_branches, generate_tag_payload_refcount_branch(type_table, tag, "incref"))
+	}
+
+	"/// Recursively decrement Roc-owned payloads in ${struct_name}.\npub fn decref${struct_name}(value: ${struct_name}, roc_ops: *RocOps) void {\n    switch (value.tag) {\n${$decref_branches}    }\n}\n\n/// Increment Roc-owned payloads in ${struct_name}.\npub fn incref${struct_name}(value: ${struct_name}, amount: isize) void {\n    switch (value.tag) {\n${$incref_branches}    }\n}\n\n"
+}
+
+generate_box_payload_decref_helpers = |type_table| {
+	var $helpers = ""
+	var $seen_inner_ids = []
+
+	for type_repr in type_table {
+		match type_repr {
+			RocBox(inner_id) => {
+				if !(List.contains($seen_inner_ids, inner_id)) {
+					$seen_inner_ids = $seen_inner_ids.append(inner_id)
+					match List.get(type_table, inner_id) {
+						Ok(RocFunction(_)) => {}
+						_ => {
+							inner_zig = type_id_to_zig(type_table, inner_id)
+							if inner_zig != "*anyopaque" and is_type_refcounted(type_table, inner_id) {
+								stmt = decref_stmt_for_type_id(type_table, inner_id, "payload.*")
+								$helpers = Str.concat(
+									$helpers,
+									"fn ${box_payload_decref_name(inner_id)}(data_ptr: ?*anyopaque, roc_ops: *RocOps) callconv(.c) void {\n    const payload: *${inner_zig} = @ptrCast(@alignCast(data_ptr orelse return));\n${stmt}}\n\n",
+								)
+							}
+						}
+					}
+				}
+			}
+			_ => {}
+		}
+	}
+
+	$helpers
+}
+
+generate_refcount_helpers = |type_table| {
+	var $helpers = "// =============================================================================\n// Generated Refcount Helpers\n//\n// These helpers recursively retain or release Roc-owned fields using the explicit\n// TypeRepr layout supplied to glue generation. For RocList(T), element release\n// only runs when the list allocation is uniquely owned, immediately before the\n// outer list allocation is decremented and potentially freed.\n// =============================================================================\n\n"
+	var $seen_names = []
+
+	for type_repr in type_table {
+		match type_repr {
+			RocRecord(rec) =>
+				if rec.name != "" and is_repr_refcounted(type_table, type_repr) and !(List.contains($seen_names, rec.name)) {
+					$seen_names = $seen_names.append(rec.name)
+					$helpers = Str.concat($helpers, generate_record_refcount_helpers(type_table, rec))
+				}
+			RocTagUnion(tu) =>
+				if List.len(tu.tags) >= 2 and tu.name != "" and is_repr_refcounted(type_table, type_repr) and !(List.contains($seen_names, tu.name)) {
+					$seen_names = $seen_names.append(tu.name)
+					$helpers = Str.concat($helpers, generate_tag_union_refcount_helpers(type_table, tu))
+				}
+			_ => {}
+		}
+	}
+
+	$helpers.concat(generate_box_payload_decref_helpers(type_table))
+}
+
+# =============================================================================
 # String Utilities
 # =============================================================================
 
@@ -838,6 +1139,7 @@ generate_zig_file = |hosted_functions, type_table, provides_list| {
 		.concat(generate_tag_union_structs(type_table))
 		.concat(generate_all_record_structs(hosted_functions, type_table))
 		.concat(generate_all_args_structs(hosted_functions, type_table))
+		.concat(generate_refcount_helpers(type_table))
 		.concat(generate_platform_fns_struct(hosted_functions, type_table))
 		.concat("\n")
 		.concat(generate_hosted_functions_helper(hosted_functions))
@@ -974,6 +1276,27 @@ generate_roc_box_helpers =
 	\\/// Decrement a pointer-aligned boxed payload with no Roc refcounted values.
 	\\pub fn decrefBox(data_ptr: ?*anyopaque, roc_ops: *RocOps) void {
 	\\    decrefBoxWith(data_ptr, @alignOf(usize), null, roc_ops);
+	\\}
+	\\
+	\\/// Increment a boxed function closure.
+	\\pub fn increfErasedCallable(callable: RocErasedCallable, amount: isize) void {
+	\\    const data = callable orelse return;
+	\\    increfBox(@ptrCast(data), amount);
+	\\}
+	\\
+	\\/// Decrement a boxed function closure and run its capture drop callback on final release.
+	\\pub fn decrefErasedCallable(callable: RocErasedCallable, roc_ops: *RocOps) void {
+	\\    const data = callable orelse return;
+	\\    decrefBoxWith(@ptrCast(data), roc_erased_callable_payload_alignment, &dropErasedCallablePayload, roc_ops);
+	\\}
+	\\
+	\\fn dropErasedCallablePayload(data_ptr: ?*anyopaque, roc_ops: *RocOps) callconv(.c) void {
+	\\    const data = data_ptr orelse return;
+	\\    const callable: RocErasedCallable = @ptrCast(data);
+	\\    const payload = rocErasedCallablePayloadPtr(callable);
+	\\    if (payload.on_drop) |on_drop| {
+	\\        on_drop(rocErasedCallableCapturePtr(callable), roc_ops);
+	\\    }
 	\\}
 	\\
 	\\/// Decrement a boxed payload and run payload teardown when this is the final ref.
@@ -1538,28 +1861,7 @@ has_meaningful_args = |func, type_table| {
 # Entrypoint Declarations
 # =============================================================================
 
-## Get the return pointer type from a function TypeRepr
-ret_type_from_repr = |type_table, type_repr| {
-	match type_repr {
-		RocFunction(func) =>
-			if type_id_to_zig(type_table, func.ret) == "void" {
-				"*anyopaque"
-			} else {
-				"*${type_id_to_zig(type_table, func.ret)}"
-			}
-		_ => "*anyopaque"
-	}
-}
-
-## Get the return pointer type from a type_id
-ret_type_from_id = |type_table, type_id| {
-	match List.get(type_table, type_id) {
-		Ok(type_repr) => ret_type_from_repr(type_table, type_repr)
-		_ => "*anyopaque"
-	}
-}
-
-## Get the non-void args from a function TypeRepr
+## Get the non-void args from a function TypeRepr.
 meaningful_args_from_repr = |type_table, type_repr| {
 	match type_repr {
 		RocFunction(func) =>
@@ -1570,7 +1872,7 @@ meaningful_args_from_repr = |type_table, type_repr| {
 	}
 }
 
-## Get the non-void args from a type_id
+## Get the non-void args from a type_id.
 meaningful_args_from_id = |type_table, type_id| {
 	match List.get(type_table, type_id) {
 		Ok(type_repr) => meaningful_args_from_repr(type_table, type_repr)
@@ -1578,46 +1880,28 @@ meaningful_args_from_id = |type_table, type_id| {
 	}
 }
 
-## Get the argument pointer type from a type_id
-arg_type_from_id = |type_table, type_id, ffi_symbol| {
-	meaningful_args = meaningful_args_from_id(type_table, type_id)
-	if List.len(meaningful_args) == 0 {
-		"?*anyopaque"
-	} else if List.len(meaningful_args) == 1 {
-		match List.first(meaningful_args) {
-			Ok(arg_id) => "?*const ${type_id_to_zig(type_table, arg_id)}"
-			_ => "?*anyopaque"
-		}
-	} else {
-		"?*const ${name_to_struct_name(ffi_symbol)}Args"
+entrypoint_ret_type_from_id = |type_table, type_id| {
+	match List.get(type_table, type_id) {
+		Ok(RocFunction(func)) => type_id_to_zig(type_table, func.ret)
+		_ => "void"
 	}
 }
 
-## Generate arg structs for multi-arg entrypoint functions
-generate_entrypoint_arg_structs = |provides_list, type_table| {
-	if List.is_empty(provides_list) {
-		return ""
-	}
-
-	var $result = ""
-
-	for entry in provides_list {
-		meaningful = meaningful_args_from_id(type_table, entry.type_id)
-		if List.len(meaningful) > 1 {
-			struct_name = name_to_struct_name(entry.ffi_symbol)
-			var $fields = ""
-			var $idx = 0
-			for arg_id in meaningful {
-				zig_type = type_id_to_zig(type_table, arg_id)
-				$fields = Str.concat($fields, "    arg${U64.to_str($idx)}: ${zig_type},\n")
-				$idx = $idx + 1
-			}
-			$result = Str.concat($result,
-				"/// Arguments for entrypoint: ${entry.name}\npub const ${struct_name}Args = extern struct {\n${$fields}};\n\n")
+entrypoint_params_from_id = |type_table, type_id| {
+	meaningful_args = meaningful_args_from_id(type_table, type_id)
+	var $params = ""
+	var $idx = 0
+	for arg_id in meaningful_args {
+		zig_type = type_id_to_zig(type_table, arg_id)
+		sep = if $params == "" {
+			""
+		} else {
+			", "
 		}
+		$params = "${$params}${sep}arg${U64.to_str($idx)}: ${zig_type}"
+		$idx = $idx + 1
 	}
-
-	$result
+	$params
 }
 
 ## Generate extern declarations for entrypoints from the provides clause.
@@ -1628,15 +1912,13 @@ generate_entrypoint_externs = |provides_list, type_table| {
 
 	var $result = "// =============================================================================\n// Entrypoint Declarations\n//\n// Extern declarations for Roc entrypoints. Call these from your platform host\n// to invoke Roc application functions.\n// =============================================================================\n\n"
 
-	$result = Str.concat($result, generate_entrypoint_arg_structs(provides_list, type_table))
-
 	for entry in provides_list {
-		ret_type = ret_type_from_id(type_table, entry.type_id)
-		arg_type = arg_type_from_id(type_table, entry.type_id, entry.ffi_symbol)
+		params = entrypoint_params_from_id(type_table, entry.type_id)
+		ret_type = entrypoint_ret_type_from_id(type_table, entry.type_id)
 
 		$result = Str.concat(
 			$result,
-			"/// Entrypoint: ${entry.name}\npub extern fn ${entry.ffi_symbol}(ops: *RocOps, ret_ptr: ${ret_type}, arg_ptr: ${arg_type}) callconv(.c) void;\n\n",
+			"/// Entrypoint: ${entry.name}\npub extern fn ${entry.ffi_symbol}(${params}) callconv(.c) ${ret_type};\n\n",
 		)
 	}
 

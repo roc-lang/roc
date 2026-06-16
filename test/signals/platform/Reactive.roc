@@ -89,6 +89,11 @@ Reactive := [].{
 			{ node: Graph.EventNode.make_map_event(source, Box.box(wrapped)) }
 		}
 
+		map_unit_i64_const : Event(Unit), I64 -> Event(I64)
+		map_unit_i64_const = |event, value| {
+			{ node: Graph.EventNode.make_map_unit_i64_const(event.node, value) }
+		}
+
 		merge : Event(a), Event(a) -> Event(a)
 		merge = |left, right| {
 			{ node: Graph.EventNode.make_merge(left.node, right.node) }
@@ -183,6 +188,21 @@ Reactive := [].{
 			{ node: Graph.SignalNode.make_const(nv) }
 		}
 
+		const_i64 : I64 -> Signal(I64)
+		const_i64 = |value| {
+			{ node: Graph.SignalNode.make_const_i64(value) }
+		}
+
+		const_bool : Bool -> Signal(Bool)
+		const_bool = |value| {
+			{ node: Graph.SignalNode.make_const_bool(value) }
+		}
+
+		const_str : Str -> Signal(Str)
+		const_str = |value| {
+			{ node: Graph.SignalNode.make_const_str(value) }
+		}
+
 		map :
 			Signal(a), (a -> b) -> Signal(b)
 				where [
@@ -206,6 +226,16 @@ Reactive := [].{
 			}
 
 			{ node: Graph.SignalNode.make_map_signal(source, Box.box(wrapped)) }
+		}
+
+		map_i64_i64 : Signal(I64), (I64 -> I64) -> Signal(I64)
+		map_i64_i64 = |signal, f| {
+			{ node: Graph.SignalNode.make_map_i64_i64(signal.node, Box.box(f)) }
+		}
+
+		map_i64_str : Signal(I64), (I64 -> Str) -> Signal(Str)
+		map_i64_str = |signal, f| {
+			{ node: Graph.SignalNode.make_map_i64_str(signal.node, Box.box(f)) }
 		}
 
 		map2 :
@@ -246,6 +276,22 @@ Reactive := [].{
 			}
 		}
 
+		map2_i64_i64 : Signal(I64), Signal(I64), (I64, I64 -> I64) -> Signal(I64)
+		map2_i64_i64 = |left_signal, right_signal, f| {
+			wrapped : (I64, I64) -> I64
+			wrapped = |(left, right)| f(left, right)
+
+			{ node: Graph.SignalNode.make_map2_i64_i64(left_signal.node, right_signal.node, Box.box(wrapped)) }
+		}
+
+		map2_i64_i64_str : Signal(I64), Signal(I64), (I64, I64 -> Str) -> Signal(Str)
+		map2_i64_i64_str = |left_signal, right_signal, f| {
+			wrapped : (I64, I64) -> Str
+			wrapped = |(left, right)| f(left, right)
+
+			{ node: Graph.SignalNode.make_map2_i64_i64_str(left_signal.node, right_signal.node, Box.box(wrapped)) }
+		}
+
 		fold :
 			a, Event(e), (a, e -> a) -> Signal(a)
 				where [
@@ -282,6 +328,30 @@ Reactive := [].{
 					initial_nv,
 					event_node,
 					Box.box(wrapped),
+				),
+			}
+		}
+
+		fold_i64 : I64, Event(I64), (I64, I64 -> I64) -> Signal(I64)
+		fold_i64 = |initial, event, step_fn| {
+			wrapped : (I64, I64) -> I64
+			wrapped = |(current, delta)| step_fn(current, delta)
+
+			{
+				node: Graph.SignalNode.make_fold_i64(
+					initial,
+					Event.to_node(event),
+					Box.box(wrapped),
+				),
+			}
+		}
+
+		fold_bool_toggle : Bool, Event(Unit) -> Signal(Bool)
+		fold_bool_toggle = |initial, event| {
+			{
+				node: Graph.SignalNode.make_fold_bool_toggle(
+					initial,
+					Event.to_node(event),
 				),
 			}
 		}

@@ -2633,10 +2633,13 @@ fn customGlueZigCompiles(io: std.Io, allocator: Allocator, env: *const CaseEnv, 
         \\    var str: abi.RocStr = undefined;
         \\    var funcs: abi.HostedFunctions = undefined;
         \\    var hosted: abi.PlatformHostedFns = undefined;
+        \\    const tree: abi.HostTree = undefined;
         \\    _ = &ops;
         \\    _ = &str;
         \\    _ = &funcs;
         \\    _ = &hosted;
+        \\    abi.increfHostTree(tree, 1);
+        \\    abi.decrefHostTree(tree, &ops);
         \\}}
     , .{"roc_platform_abi.zig"}) catch |err|
         return customInfraFailure(allocator, timer, "failed to render test Zig source: {}", .{err});
@@ -2693,10 +2696,19 @@ fn customGlueZig(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *
         "pub fn increfBox",
         "pub fn decrefBox",
         "pub fn decrefBoxWith",
+        "pub fn decrefErasedCallable",
+        "pub fn decrefHostTree(value: HostTree, roc_ops: *RocOps) void",
+        "fn decrefBoxPayloadType",
         "Entrypoint",
+        "pub extern fn roc_main() callconv(.c) void;",
     }) |needle| {
         if (std.mem.find(u8, generated, needle) == null) {
             return customFailure(allocator, timer, "generated Zig file missing {s}", .{needle});
+        }
+    }
+    for ([_][]const u8{ "ret_ptr:", "arg_ptr:" }) |needle| {
+        if (std.mem.find(u8, generated, needle) != null) {
+            return customFailure(allocator, timer, "generated Zig entrypoint file still contains obsolete universal ABI field {s}", .{needle});
         }
     }
     if (customGlueZigBoxHelperTest(io, allocator, env, timer, timeout_ms, output_dir, generated_path)) |failure| return failure;
@@ -2859,6 +2871,19 @@ fn customGlueZigBangRecordFields(io: std.Io, allocator: Allocator, env: *const C
     for ([_][]const u8{ "@\"init!\": *anyopaque", "@\"render!\": *anyopaque" }) |needle| {
         if (std.mem.find(u8, generated, needle) == null) {
             return customFailure(allocator, timer, "generated Zig file missing {s}", .{needle});
+        }
+    }
+    for ([_][]const u8{
+        "pub extern fn roc_init_for_host(arg0:",
+        "pub extern fn roc_render_for_host(arg0: *anyopaque",
+    }) |needle| {
+        if (std.mem.find(u8, generated, needle) == null) {
+            return customFailure(allocator, timer, "generated Zig file missing natural entrypoint declaration {s}", .{needle});
+        }
+    }
+    for ([_][]const u8{ "arg0: **anyopaque", "ret_ptr:", "arg_ptr:" }) |needle| {
+        if (std.mem.find(u8, generated, needle) != null) {
+            return customFailure(allocator, timer, "generated Zig file contained obsolete entrypoint ABI text {s}", .{needle});
         }
     }
     for ([_][]const u8{ "    init!:", "    render!:" }) |needle| {
