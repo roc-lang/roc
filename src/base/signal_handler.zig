@@ -89,10 +89,12 @@ var arithmetic_error_callback: ?ArithmeticErrorCallback = null;
 /// Called when the handler identifies a stack overflow.
 pub const StackOverflowCallback = *const fn () noreturn;
 /// Called when the handler identifies a non-stack memory access violation.
+/// Targets with debug unwind support receive the interrupted CPU context.
 pub const AccessViolationContext = if (std.debug.cpu_context.Native == noreturn)
     void
 else
     ?std.debug.CpuContextPtr;
+/// Called with the fault address and optional interrupted CPU context.
 pub const AccessViolationCallback = *const fn (fault_addr: usize, context: AccessViolationContext) noreturn;
 /// Called when the handler identifies an arithmetic exception.
 pub const ArithmeticErrorCallback = *const fn () noreturn;
