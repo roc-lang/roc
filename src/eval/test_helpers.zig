@@ -880,7 +880,7 @@ const ComptimeProblemReporting = enum {
 
 fn problemBlocksCheckedArtifact(problem: check.problem.Problem) bool {
     return switch (problem) {
-        .redundant_pattern, .unmatchable_pattern, .comptime_unused_branch => false,
+        .redundant_pattern, .unmatchable_pattern, .comptime_unused_branch, .literal_defaulted => false,
         else => true,
     };
 }

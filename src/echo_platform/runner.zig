@@ -193,13 +193,19 @@ pub fn runEcho(opts: RunOptions) anyerror!u8 {
     };
     defer allocator.free(relation_views);
 
+    const lir_roots = lir.CheckedPipeline.selectPlatformEntrypointRoots(allocator, root_artifact.root_requests.runtime_requests) catch |err| {
+        diag.step("selectPlatformEntrypointRoots", err);
+        return err;
+    };
+    defer allocator.free(lir_roots);
+
     var lowered = lir.CheckedPipeline.lowerCheckedModulesToLir(
         allocator,
         .{
             .root = check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_views),
             .imports = import_views,
         },
-        .{ .requests = root_artifact.root_requests.runtime_requests },
+        .{ .requests = lir_roots },
         .{ .target_usize = opts.target_usize },
     ) catch |err| {
         diag.step("lowerCheckedModulesToLir", err);

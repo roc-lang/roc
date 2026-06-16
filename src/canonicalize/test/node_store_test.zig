@@ -125,6 +125,20 @@ test "NodeStore round trip - Statements" {
     });
 
     try statements.append(gpa, CIR.Statement{
+        .s_infinite_loop = .{
+            .cond = rand_idx(CIR.Expr.Idx),
+            .body = rand_idx(CIR.Expr.Idx),
+        },
+    });
+
+    try statements.append(gpa, CIR.Statement{
+        .s_breakable_loop = .{
+            .cond = rand_idx(CIR.Expr.Idx),
+            .body = rand_idx(CIR.Expr.Idx),
+        },
+    });
+
+    try statements.append(gpa, CIR.Statement{
         .s_return = .{
             .expr = rand_idx(CIR.Expr.Idx),
             .lambda = rand_idx(CIR.Expr.Idx),
@@ -408,6 +422,7 @@ test "NodeStore round trip - Expressions" {
             .method_name_region = rand_region(),
             .args = CIR.Expr.Span{ .span = rand_span() },
             .constraint_fn_var = rand_idx(types.Var),
+            .surface_origin = .{ .binop = .add },
         },
     });
     try expressions.append(gpa, CIR.Expr{

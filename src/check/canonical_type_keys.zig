@@ -15,6 +15,7 @@ const Allocator = std.mem.Allocator;
 const Ident = base.Ident;
 const TypeStore = types.Store;
 const Var = types.Var;
+const LiteralKind = types.StaticDispatchConstraint.LiteralKind;
 
 /// Public `TypeKeyInfo` declaration.
 pub const TypeKeyInfo = struct {
@@ -126,11 +127,11 @@ const Builder = struct {
 
         switch (resolved.desc.content) {
             .flex => |flex| {
-                if (self.require_concrete and self.flexDefaultsToDec(flex)) {
-                    self.writeDefaultDec();
-                    return;
-                }
                 if (self.require_concrete) {
+                    if (self.flexLiteralDefaultKind(flex)) |kind| {
+                        self.writeLiteralDefault(kind);
+                        return;
+                    }
                     invariantViolation("concrete canonical type key requested for unsolved flex type variable");
                 }
                 try self.writeIdentityVariable(root, "flex", flex.name, flex.constraints);
@@ -191,11 +192,11 @@ const Builder = struct {
         switch (content) {
             .err => invariantViolation("canonical type key requested for erroneous checked type"),
             .flex => |flex| {
-                if (self.require_concrete and self.flexDefaultsToDec(flex)) {
-                    self.writeDefaultDec();
-                    return;
-                }
                 if (self.require_concrete) {
+                    if (self.flexLiteralDefaultKind(flex)) |kind| {
+                        self.writeLiteralDefault(kind);
+                        return;
+                    }
                     invariantViolation("concrete canonical type key requested for unsolved flex type variable");
                 }
                 invariantViolation("canonical type key reached an unsolved flex without its root identity");
@@ -220,17 +221,56 @@ const Builder = struct {
         }
     }
 
-    fn flexDefaultsToDec(self: *Builder, flex: types.Flex) bool {
+    /// INVARIANT: a still-open flex may be keyed as the canonical literal
+    /// default (Dec for numerals, Str for quotes) ONLY when every constraint
+    /// on it is `from_literal` — a pure, otherwise-unconstrained literal is
+    /// exactly what the checker's defaulting commits to the kind's default.
+    /// Any OTHER constraint origin (binop/method/where-clause usage) feeds the
+    /// checker's candidate probing, which may commit a non-default candidate
+    /// (e.g. an integer-only method commits I64); such a var must already be
+    /// concrete when a concrete key is requested, so finding one still open
+    /// here means an upstream defaulting step was skipped — keying it as the
+    /// default would be a guess, so we raise an invariant violation instead.
+    ///
+    /// A mixed-kind set (both numeral and quote `from_literal` constraints,
+    /// reachable only via a flex/flex merge the checker reports as a type
+    /// error, so it never survives to key generation) deterministically picks
+    /// `numeral`. This MUST agree with the mono layer's scan in
+    /// checked_artifact.zig `numericDefaultPhaseForConstraints`, where any
+    /// numeral constraint wins (-> Dec) before quote is considered (-> Str);
+    /// if the two sites disagreed, the key would silently name a different
+    /// nominal than mono specializes the variable to.
+    fn flexLiteralDefaultKind(self: *Builder, flex: types.Flex) ?LiteralKind {
         const constraints = self.store.sliceStaticDispatchConstraints(flex.constraints);
+        var has_numeral = false;
+        var has_quote = false;
+        var has_interpolation = false;
+        var has_other = false;
         for (constraints) |constraint| {
-            if (constraint.origin == .from_numeral) return true;
+            switch (constraint.origin) {
+                .from_literal => |lit| switch (lit) {
+                    .numeral => has_numeral = true,
+                    .quote => has_quote = true,
+                    .interpolation => has_interpolation = true,
+                },
+                else => has_other = true,
+            }
         }
-        return false;
+        if ((has_numeral or has_quote or has_interpolation) and has_other) {
+            invariantViolation("concrete canonical type key requested for an open literal with non-literal constraints (defaulting was skipped)");
+        }
+        if (has_numeral) return .numeral;
+        if (has_quote) return .quote;
+        if (has_interpolation) return .interpolation;
+        return null;
     }
 
-    fn writeDefaultDec(self: *Builder) void {
+    fn writeLiteralDefault(self: *Builder, kind: LiteralKind) void {
         self.writeTag("nominal");
-        self.writeIdent(builtinDecTypeIdent(self.idents));
+        switch (kind) {
+            .numeral => self.writeIdent(builtinDecTypeIdent(self.idents)),
+            .quote, .interpolation => self.writeIdent(builtinStrTypeIdent(self.idents)),
+        }
         self.writeIdent(builtinModuleIdent(self.idents));
         self.writeOptionalU32(null);
         self.writeBool(true);
@@ -513,9 +553,10 @@ const Builder = struct {
             self.writeIdent(constraint.fn_name);
             try self.writeVar(constraint.fn_var);
             self.writeTag(@tagName(constraint.origin));
-            self.writeBool(constraint.binop_negated);
-            self.writeBool(constraint.num_literal != null);
-            if (constraint.num_literal) |num_literal| {
+            self.writeBool(constraint.origin.binopNegated());
+            const maybe_num_literal = constraint.origin.numeralInfo();
+            self.writeBool(maybe_num_literal != null);
+            if (maybe_num_literal) |num_literal| {
                 self.hasher.update(&num_literal.bytes);
                 self.writeBool(num_literal.is_u128);
                 self.writeBool(num_literal.is_negative);
@@ -578,6 +619,10 @@ fn builtinDecTypeIdent(idents: *const Ident.Store) Ident.Idx {
     return idents.builtinDecTypeIdent();
 }
 
+fn builtinStrTypeIdent(idents: *const Ident.Store) Ident.Idx {
+    return idents.builtinStrTypeIdent();
+}
+
 fn builtinModuleIdent(idents: *const Ident.Store) Ident.Idx {
     return idents.builtinModuleIdent();
 }
@@ -614,6 +659,52 @@ fn invariantViolation(comptime message: []const u8) noreturn {
 
 test "canonical type key declarations are referenced" {
     std.testing.refAllDecls(@This());
+}
+
+test "concrete keys default open literal flex vars per kind (numeral -> Dec, quote -> Str)" {
+    const allocator = std.testing.allocator;
+
+    var idents = try Ident.Store.initCapacity(allocator, 8);
+    defer idents.deinit(allocator);
+    _ = try idents.insert(allocator, Ident.for_text("Builtin"));
+    _ = try idents.insert(allocator, Ident.for_text("Builtin.Num.Dec"));
+    _ = try idents.insert(allocator, Ident.for_text("Builtin.Str"));
+    const from_numeral_ident = try idents.insert(allocator, Ident.for_text("from_numeral"));
+    const from_quote_ident = try idents.insert(allocator, Ident.for_text("from_quote"));
+
+    var store = try TypeStore.initCapacity(allocator, 16, 8);
+    defer store.deinit();
+
+    const numeral_fn_var = try store.freshFromContent(.{ .flex = types.Flex.init() });
+    const numeral_constraints = try store.appendStaticDispatchConstraints(&.{.{
+        .fn_name = from_numeral_ident,
+        .fn_var = numeral_fn_var,
+        .origin = .{ .from_literal = .{ .numeral = types.NumeralInfo.fromI128(1, false, false, base.Region.zero()) } },
+    }});
+    const numeral_var = try store.freshFromContent(.{
+        .flex = types.Flex.init().withConstraints(numeral_constraints),
+    });
+
+    const quote_fn_var = try store.freshFromContent(.{ .flex = types.Flex.init() });
+    const quote_constraints = try store.appendStaticDispatchConstraints(&.{.{
+        .fn_name = from_quote_ident,
+        .fn_var = quote_fn_var,
+        .origin = .{ .from_literal = .quote },
+    }});
+    const quote_var = try store.freshFromContent(.{
+        .flex = types.Flex.init().withConstraints(quote_constraints),
+    });
+
+    const numeral_key = try fromConcreteVar(allocator, &store, &idents, numeral_var);
+    const quote_key = try fromConcreteVar(allocator, &store, &idents, quote_var);
+
+    // The two defaults must key as different nominals (Dec vs Str); before
+    // per-kind defaulting, a quote-only flex var keyed identically to Dec.
+    try std.testing.expect(!std.meta.eql(numeral_key, quote_key));
+
+    // Keying is deterministic per kind.
+    const quote_key_again = try fromConcreteVar(allocator, &store, &idents, quote_var);
+    try std.testing.expect(std.meta.eql(quote_key, quote_key_again));
 }
 
 test "source type keys normalize closed empty records to empty record" {

@@ -1888,7 +1888,7 @@ main! = |_| { # Yeah Ie
 				(s-expr
 					(e-not-implemented))
 				(s-expr
-					(e-call (constraint-fn-var 1920)
+					(e-call (constraint-fn-var 3452)
 						(e-lookup-local
 							(p-assign (ident "match_time")))
 						(e-not-implemented)))
@@ -1911,7 +1911,7 @@ main! = |_| { # Yeah Ie
 							(p-assign (ident "#interp_0"))
 							(e-lookup-local
 								(p-assign (ident "world"))))
-						(e-interpolation (constraint-fn-var 2008)
+						(e-interpolation (constraint-fn-var 3540)
 							(first
 								(e-literal (string "Hello, ")))
 							(parts

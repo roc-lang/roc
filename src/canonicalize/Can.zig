@@ -7980,11 +7980,330 @@ fn canonicalizeStandaloneWhileStatement(
     }
     const free_vars = self.scratch_free_vars.spanFrom(free_vars_start);
 
-    const stmt_idx = try self.env.addStatement(Statement{ .s_while = .{
-        .cond = cond.idx,
-        .body = body.idx,
-    } }, region);
+    const stmt_idx = try self.addClassifiedWhileStatement(cond.idx, body.idx, region);
     return CanonicalizedStatement{ .idx = stmt_idx, .free_vars = free_vars };
+}
+
+const LoopExitFacts = struct {
+    has_loop_owned_break: bool = false,
+    has_exit: bool = false,
+};
+
+const LoopScanFrame = union(enum) {
+    expr: struct {
+        idx: Expr.Idx,
+        loop_depth: u32,
+    },
+    stmt: struct {
+        idx: Statement.Idx,
+        loop_depth: u32,
+    },
+};
+
+fn addClassifiedWhileStatement(
+    self: *Self,
+    cond: Expr.Idx,
+    body: Expr.Idx,
+    region: Region,
+) std.mem.Allocator.Error!Statement.Idx {
+    const stmt = try self.classifyWhileStatement(cond, body, region);
+    return try self.env.addStatement(stmt, region);
+}
+
+fn classifyWhileStatement(
+    self: *Self,
+    cond: Expr.Idx,
+    body: Expr.Idx,
+    region: Region,
+) std.mem.Allocator.Error!Statement {
+    if (!self.isInfiniteLoopCondition(cond)) {
+        return Statement{ .s_while = .{ .cond = cond, .body = body } };
+    }
+
+    const facts = try self.scanLoopExitFacts(body);
+    if (facts.has_loop_owned_break) {
+        return Statement{ .s_breakable_loop = .{ .cond = cond, .body = body } };
+    }
+
+    if (!facts.has_exit) {
+        try self.env.pushDiagnostic(.{ .infinite_loop_never_exits = .{ .region = region } });
+    }
+
+    return Statement{ .s_infinite_loop = .{ .cond = cond, .body = body } };
+}
+
+fn isInfiniteLoopCondition(self: *const Self, expr_idx: Expr.Idx) bool {
+    return switch (self.env.store.getExpr(expr_idx)) {
+        .e_block => |block| blk: {
+            if (self.env.store.sliceStatements(block.stmts).len != 0) break :blk false;
+            break :blk self.isInfiniteLoopCondition(block.final_expr);
+        },
+        .e_tag => self.exprIsBareTrueTag(expr_idx),
+        .e_nominal => |nominal| nominal.backing_type == .tag and
+            self.isBuiltinBoolLocalNominal(nominal.nominal_type_decl) and
+            self.exprIsBareTrueTag(nominal.backing_expr),
+        .e_nominal_external => |nominal| nominal.backing_type == .tag and
+            self.isBuiltinBoolExternalNominal(nominal.module_idx, nominal.target_node_idx) and
+            self.exprIsBareTrueTag(nominal.backing_expr),
+        else => false,
+    };
+}
+
+fn exprIsBareTrueTag(self: *const Self, expr_idx: Expr.Idx) bool {
+    return switch (self.env.store.getExpr(expr_idx)) {
+        .e_tag => |tag| tag.name.eql(self.env.idents.true_tag) and tag.args.span.len == 0,
+        else => false,
+    };
+}
+
+fn isBuiltinBoolLocalNominal(self: *const Self, nominal_type_decl: Statement.Idx) bool {
+    if (self.env.module_role != .builtin) return false;
+
+    return switch (self.env.store.getStatement(nominal_type_decl)) {
+        .s_nominal_decl => |decl| self.env.store.getTypeHeader(decl.header).name.eql(self.env.idents.bool),
+        else => false,
+    };
+}
+
+fn isBuiltinBoolExternalNominal(self: *const Self, module_idx: Import.Idx, target_node_idx: u32) bool {
+    const bool_info = self.builtin_auto_imported_types.get(self.env.idents.bool) orelse return false;
+    const bool_stmt_idx = bool_info.statement_idx orelse return false;
+    const bool_target_node_idx = bool_info.env.getExposedNodeIndexByStatementIdx(bool_stmt_idx) orelse return false;
+    if (target_node_idx != bool_target_node_idx) return false;
+
+    const module_idx_int = @intFromEnum(module_idx);
+    if (module_idx_int >= self.env.imports.imports.items.items.len) return false;
+
+    const string_lit_idx = self.env.imports.imports.items.items[module_idx_int];
+    const module_name = self.env.common.strings.get(string_lit_idx);
+    if (bool_info.env.module_role == .builtin) {
+        return std.mem.eql(u8, module_name, "Builtin") or CIR.Import.isCompilerBuiltinImportName(module_name);
+    }
+
+    return std.mem.eql(u8, module_name, bool_info.env.module_name);
+}
+
+fn scanLoopExitFacts(self: *Self, body: Expr.Idx) std.mem.Allocator.Error!LoopExitFacts {
+    var stack_allocator_state = std.heap.stackFallback(4096, self.env.gpa);
+    const stack_allocator = stack_allocator_state.get();
+    var pending: std.ArrayList(LoopScanFrame) = .empty;
+    defer pending.deinit(stack_allocator);
+
+    var facts = LoopExitFacts{};
+    try pending.append(stack_allocator, .{ .expr = .{ .idx = body, .loop_depth = 0 } });
+
+    while (pending.pop()) |frame| {
+        switch (frame) {
+            .expr => |expr_frame| {
+                const expr = self.env.store.getExpr(expr_frame.idx);
+                switch (expr) {
+                    .e_block => |block| {
+                        try pending.append(stack_allocator, .{ .expr = .{ .idx = block.final_expr, .loop_depth = expr_frame.loop_depth } });
+                        for (self.env.store.sliceStatements(block.stmts)) |stmt_idx| {
+                            try pending.append(stack_allocator, .{ .stmt = .{ .idx = stmt_idx, .loop_depth = expr_frame.loop_depth } });
+                        }
+                    },
+                    .e_if => |if_expr| {
+                        try pending.append(stack_allocator, .{ .expr = .{ .idx = if_expr.final_else, .loop_depth = expr_frame.loop_depth } });
+                        for (self.env.store.sliceIfBranches(if_expr.branches)) |branch_idx| {
+                            const branch = self.env.store.getIfBranch(branch_idx);
+                            try pending.append(stack_allocator, .{ .expr = .{ .idx = branch.body, .loop_depth = expr_frame.loop_depth } });
+                            try pending.append(stack_allocator, .{ .expr = .{ .idx = branch.cond, .loop_depth = expr_frame.loop_depth } });
+                        }
+                    },
+                    .e_match => |match_expr| {
+                        try pending.append(stack_allocator, .{ .expr = .{ .idx = match_expr.cond, .loop_depth = expr_frame.loop_depth } });
+                        for (self.env.store.sliceMatchBranches(match_expr.branches)) |branch_idx| {
+                            const branch = self.env.store.getMatchBranch(branch_idx);
+                            if (branch.guard) |guard| {
+                                try pending.append(stack_allocator, .{ .expr = .{ .idx = guard, .loop_depth = expr_frame.loop_depth } });
+                            }
+                            try pending.append(stack_allocator, .{ .expr = .{ .idx = branch.value, .loop_depth = expr_frame.loop_depth } });
+                        }
+                    },
+                    .e_call => |call| {
+                        try pending.append(stack_allocator, .{ .expr = .{ .idx = call.func, .loop_depth = expr_frame.loop_depth } });
+                        for (self.env.store.sliceExpr(call.args)) |arg| {
+                            try pending.append(stack_allocator, .{ .expr = .{ .idx = arg, .loop_depth = expr_frame.loop_depth } });
+                        }
+                    },
+                    .e_binop => |binop| {
+                        try pending.append(stack_allocator, .{ .expr = .{ .idx = binop.lhs, .loop_depth = expr_frame.loop_depth } });
+                        try pending.append(stack_allocator, .{ .expr = .{ .idx = binop.rhs, .loop_depth = expr_frame.loop_depth } });
+                    },
+                    .e_unary_minus => |unary| try pending.append(stack_allocator, .{ .expr = .{ .idx = unary.expr, .loop_depth = expr_frame.loop_depth } }),
+                    .e_unary_not => |unary| try pending.append(stack_allocator, .{ .expr = .{ .idx = unary.expr, .loop_depth = expr_frame.loop_depth } }),
+                    .e_field_access => |field| try pending.append(stack_allocator, .{ .expr = .{ .idx = field.receiver, .loop_depth = expr_frame.loop_depth } }),
+                    .e_method_call => |call| {
+                        try pending.append(stack_allocator, .{ .expr = .{ .idx = call.receiver, .loop_depth = expr_frame.loop_depth } });
+                        for (self.env.store.sliceExpr(call.args)) |arg| {
+                            try pending.append(stack_allocator, .{ .expr = .{ .idx = arg, .loop_depth = expr_frame.loop_depth } });
+                        }
+                    },
+                    .e_dispatch_call => |call| {
+                        try pending.append(stack_allocator, .{ .expr = .{ .idx = call.receiver, .loop_depth = expr_frame.loop_depth } });
+                        for (self.env.store.sliceExpr(call.args)) |arg| {
+                            try pending.append(stack_allocator, .{ .expr = .{ .idx = arg, .loop_depth = expr_frame.loop_depth } });
+                        }
+                    },
+                    .e_interpolation => |interpolation| {
+                        try pending.append(stack_allocator, .{ .expr = .{ .idx = interpolation.first, .loop_depth = expr_frame.loop_depth } });
+                        for (self.env.store.sliceExpr(interpolation.parts)) |part| {
+                            try pending.append(stack_allocator, .{ .expr = .{ .idx = part, .loop_depth = expr_frame.loop_depth } });
+                        }
+                    },
+                    .e_structural_eq => |eq| {
+                        try pending.append(stack_allocator, .{ .expr = .{ .idx = eq.lhs, .loop_depth = expr_frame.loop_depth } });
+                        try pending.append(stack_allocator, .{ .expr = .{ .idx = eq.rhs, .loop_depth = expr_frame.loop_depth } });
+                    },
+                    .e_method_eq => |eq| {
+                        try pending.append(stack_allocator, .{ .expr = .{ .idx = eq.lhs, .loop_depth = expr_frame.loop_depth } });
+                        try pending.append(stack_allocator, .{ .expr = .{ .idx = eq.rhs, .loop_depth = expr_frame.loop_depth } });
+                    },
+                    .e_type_method_call => |call| {
+                        for (self.env.store.sliceExpr(call.args)) |arg| {
+                            try pending.append(stack_allocator, .{ .expr = .{ .idx = arg, .loop_depth = expr_frame.loop_depth } });
+                        }
+                    },
+                    .e_type_dispatch_call => |call| {
+                        for (self.env.store.sliceExpr(call.args)) |arg| {
+                            try pending.append(stack_allocator, .{ .expr = .{ .idx = arg, .loop_depth = expr_frame.loop_depth } });
+                        }
+                    },
+                    .e_tuple_access => |access| try pending.append(stack_allocator, .{ .expr = .{ .idx = access.tuple, .loop_depth = expr_frame.loop_depth } }),
+                    .e_list => |list| {
+                        for (self.env.store.sliceExpr(list.elems)) |elem| {
+                            try pending.append(stack_allocator, .{ .expr = .{ .idx = elem, .loop_depth = expr_frame.loop_depth } });
+                        }
+                    },
+                    .e_tuple => |tuple| {
+                        for (self.env.store.sliceExpr(tuple.elems)) |elem| {
+                            try pending.append(stack_allocator, .{ .expr = .{ .idx = elem, .loop_depth = expr_frame.loop_depth } });
+                        }
+                    },
+                    .e_record => |record| {
+                        if (record.ext) |ext| {
+                            try pending.append(stack_allocator, .{ .expr = .{ .idx = ext, .loop_depth = expr_frame.loop_depth } });
+                        }
+                        for (self.env.store.sliceRecordFields(record.fields)) |field_idx| {
+                            const field = self.env.store.getRecordField(field_idx);
+                            try pending.append(stack_allocator, .{ .expr = .{ .idx = field.value, .loop_depth = expr_frame.loop_depth } });
+                        }
+                    },
+                    .e_str => |str| {
+                        for (self.env.store.sliceExpr(str.span)) |segment| {
+                            try pending.append(stack_allocator, .{ .expr = .{ .idx = segment, .loop_depth = expr_frame.loop_depth } });
+                        }
+                    },
+                    .e_tag => |tag| {
+                        for (self.env.store.sliceExpr(tag.args)) |arg| {
+                            try pending.append(stack_allocator, .{ .expr = .{ .idx = arg, .loop_depth = expr_frame.loop_depth } });
+                        }
+                    },
+                    .e_nominal => |nominal| try pending.append(stack_allocator, .{ .expr = .{ .idx = nominal.backing_expr, .loop_depth = expr_frame.loop_depth } }),
+                    .e_nominal_external => |nominal| try pending.append(stack_allocator, .{ .expr = .{ .idx = nominal.backing_expr, .loop_depth = expr_frame.loop_depth } }),
+                    .e_dbg => |dbg| try pending.append(stack_allocator, .{ .expr = .{ .idx = dbg.expr, .loop_depth = expr_frame.loop_depth } }),
+                    .e_expect => |expect| try pending.append(stack_allocator, .{ .expr = .{ .idx = expect.body, .loop_depth = expr_frame.loop_depth } }),
+                    .e_expect_err => |expect_err| {
+                        try pending.append(stack_allocator, .{ .expr = .{ .idx = expect_err.expr, .loop_depth = expr_frame.loop_depth } });
+                    },
+                    .e_return => |ret| {
+                        if (self.enclosing_lambda == null or ret.lambda == self.enclosing_lambda.?) {
+                            facts.has_exit = true;
+                        }
+                        try pending.append(stack_allocator, .{ .expr = .{ .idx = ret.expr, .loop_depth = expr_frame.loop_depth } });
+                    },
+                    .e_crash => {
+                        facts.has_exit = true;
+                    },
+                    .e_for => |for_expr| {
+                        try pending.append(stack_allocator, .{ .expr = .{ .idx = for_expr.expr, .loop_depth = expr_frame.loop_depth } });
+                        try pending.append(stack_allocator, .{ .expr = .{ .idx = for_expr.body, .loop_depth = expr_frame.loop_depth + 1 } });
+                    },
+                    .e_run_low_level => |run_low_level| {
+                        for (self.env.store.sliceExpr(run_low_level.args)) |arg| {
+                            try pending.append(stack_allocator, .{ .expr = .{ .idx = arg, .loop_depth = expr_frame.loop_depth } });
+                        }
+                    },
+                    .e_lambda,
+                    .e_closure,
+                    .e_hosted_lambda,
+                    .e_num,
+                    .e_frac_f32,
+                    .e_frac_f64,
+                    .e_dec,
+                    .e_dec_small,
+                    .e_num_from_numeral,
+                    .e_typed_int,
+                    .e_typed_frac,
+                    .e_typed_num_from_numeral,
+                    .e_str_segment,
+                    .e_bytes_literal,
+                    .e_lookup_local,
+                    .e_lookup_external,
+                    .e_lookup_required,
+                    .e_empty_list,
+                    .e_empty_record,
+                    .e_zero_argument_tag,
+                    .e_runtime_error,
+                    .e_ellipsis,
+                    .e_anno_only,
+                    => {},
+                }
+            },
+            .stmt => |stmt_frame| {
+                const stmt = self.env.store.getStatement(stmt_frame.idx);
+                switch (stmt) {
+                    .s_decl => |decl| try pending.append(stack_allocator, .{ .expr = .{ .idx = decl.expr, .loop_depth = stmt_frame.loop_depth } }),
+                    .s_var => |var_stmt| try pending.append(stack_allocator, .{ .expr = .{ .idx = var_stmt.expr, .loop_depth = stmt_frame.loop_depth } }),
+                    .s_reassign => |reassign| try pending.append(stack_allocator, .{ .expr = .{ .idx = reassign.expr, .loop_depth = stmt_frame.loop_depth } }),
+                    .s_dbg => |dbg| try pending.append(stack_allocator, .{ .expr = .{ .idx = dbg.expr, .loop_depth = stmt_frame.loop_depth } }),
+                    .s_expr => |expr_stmt| try pending.append(stack_allocator, .{ .expr = .{ .idx = expr_stmt.expr, .loop_depth = stmt_frame.loop_depth } }),
+                    .s_expect => |expect| try pending.append(stack_allocator, .{ .expr = .{ .idx = expect.body, .loop_depth = stmt_frame.loop_depth } }),
+                    .s_for => |for_stmt| {
+                        try pending.append(stack_allocator, .{ .expr = .{ .idx = for_stmt.expr, .loop_depth = stmt_frame.loop_depth } });
+                        try pending.append(stack_allocator, .{ .expr = .{ .idx = for_stmt.body, .loop_depth = stmt_frame.loop_depth + 1 } });
+                    },
+                    .s_while => |while_stmt| {
+                        try pending.append(stack_allocator, .{ .expr = .{ .idx = while_stmt.cond, .loop_depth = stmt_frame.loop_depth } });
+                        try pending.append(stack_allocator, .{ .expr = .{ .idx = while_stmt.body, .loop_depth = stmt_frame.loop_depth + 1 } });
+                    },
+                    .s_infinite_loop => |loop_stmt| {
+                        try pending.append(stack_allocator, .{ .expr = .{ .idx = loop_stmt.cond, .loop_depth = stmt_frame.loop_depth } });
+                        try pending.append(stack_allocator, .{ .expr = .{ .idx = loop_stmt.body, .loop_depth = stmt_frame.loop_depth + 1 } });
+                    },
+                    .s_breakable_loop => |loop_stmt| {
+                        try pending.append(stack_allocator, .{ .expr = .{ .idx = loop_stmt.cond, .loop_depth = stmt_frame.loop_depth } });
+                        try pending.append(stack_allocator, .{ .expr = .{ .idx = loop_stmt.body, .loop_depth = stmt_frame.loop_depth + 1 } });
+                    },
+                    .s_crash => {
+                        facts.has_exit = true;
+                    },
+                    .s_return => |ret| {
+                        if (self.enclosing_lambda == null or ret.lambda == self.enclosing_lambda.?) {
+                            facts.has_exit = true;
+                        }
+                        try pending.append(stack_allocator, .{ .expr = .{ .idx = ret.expr, .loop_depth = stmt_frame.loop_depth } });
+                    },
+                    .s_break => {
+                        if (stmt_frame.loop_depth == 0) {
+                            facts.has_loop_owned_break = true;
+                            return facts;
+                        }
+                    },
+                    .s_import,
+                    .s_alias_decl,
+                    .s_nominal_decl,
+                    .s_type_anno,
+                    .s_type_var_alias,
+                    .s_runtime_error,
+                    => {},
+                }
+            },
+        }
+    }
+
+    return facts;
 }
 
 fn canonicalizeStandaloneForStatement(
@@ -9742,12 +10061,7 @@ fn runExprKernel(
             }
             const free_vars = self.scratch_free_vars.spanFrom(free_vars_start);
 
-            const stmt_idx = try self.env.addStatement(Statement{
-                .s_while = .{
-                    .cond = state.cond.idx,
-                    .body = body.idx,
-                },
-            }, state.region);
+            const stmt_idx = try self.addClassifiedWhileStatement(state.cond.idx, body.idx, state.region);
             try self.addBlockStatement(blockContextFromState(state.block), CanonicalizedStatement{ .idx = stmt_idx, .free_vars = free_vars });
             child_slots.shrinkRetainingCapacity(state.block.result_start);
             try stacks.pushBlockNext(frame_allocator, .{ .block = state.block, .next = state.next });

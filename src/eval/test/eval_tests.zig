@@ -3590,6 +3590,176 @@ const core_tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "[0, 1, 1, 2, 3]" },
     },
+    .{
+        .name = "inspect: Iter.step_by yields first then every nth",
+        .source =
+        \\{
+        \\    iter = [1.I64, 2, 3, 4, 5].iter().step_by(2)
+        \\    Iter.fold(iter, [], |acc, item| acc.append(item))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[1, 3, 5]" },
+    },
+    .{
+        .name = "inspect: Iter.step_by even length stops within bounds",
+        .source =
+        \\{
+        \\    iter = [1.I64, 2, 3, 4, 5, 6].iter().step_by(2)
+        \\    Iter.fold(iter, [], |acc, item| acc.append(item))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[1, 3, 5]" },
+    },
+    .{
+        .name = "inspect: Iter.step_by of 1 is identity",
+        .source =
+        \\{
+        \\    iter = [1.I64, 2, 3].iter().step_by(1)
+        \\    Iter.fold(iter, [], |acc, item| acc.append(item))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3]" },
+    },
+    .{
+        .name = "inspect: Iter.step_by of 0 is empty",
+        .source =
+        \\{
+        \\    iter = [1.I64, 2, 3].iter().step_by(0)
+        \\    Iter.fold(iter, [], |acc, item| acc.append(item))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[]" },
+    },
+    .{
+        .name = "inspect: Iter.step_by on empty source is empty",
+        .source =
+        \\{
+        \\    iter = [].iter().step_by(3)
+        \\    Iter.fold(iter, [], |acc, item| acc.append(item))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[]" },
+    },
+    .{
+        .name = "inspect: Iter.step_by larger than length yields first only",
+        .source =
+        \\{
+        \\    iter = [1.I64, 2, 3].iter().step_by(10)
+        \\    Iter.fold(iter, [], |acc, item| acc.append(item))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[1]" },
+    },
+    .{
+        .name = "inspect: Iter.step_by on a range",
+        .source =
+        \\{
+        \\    iter = (1.U64..=10).step_by(3)
+        \\    Iter.fold(iter, [], |acc, item| acc.append(item))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[1, 4, 7, 10]" },
+    },
+    .{
+        .name = "inspect: Iter.step_by counts values across skips from keep_if",
+        .source =
+        \\{
+        \\    evens = [1.I64, 2, 3, 4, 5, 6].iter().keep_if(|x| I64.rem_by(x, 2) == 0)
+        \\    Iter.fold(evens.step_by(2), [], |acc, item| acc.append(item))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[2, 6]" },
+    },
+    .{
+        .name = "inspect: Iter.step_by preserves known length as ceil",
+        .source = "Iter.size_hint([1.I64, 2, 3, 4, 5].iter().step_by(2))",
+        .expected = .{ .inspect_str = "Known(3)" },
+    },
+    .{
+        .name = "inspect: Iter.step_by known length on a range",
+        .source = "Iter.size_hint((1.U64..=10).step_by(3))",
+        .expected = .{ .inspect_str = "Known(4)" },
+    },
+    .{
+        .name = "inspect: Iter.step_by of 0 has known length zero",
+        .source = "Iter.size_hint([1.I64, 2, 3].iter().step_by(0))",
+        .expected = .{ .inspect_str = "Known(0)" },
+    },
+    .{
+        .name = "inspect: Iter.step_by reports unknown length for unknown source",
+        .source = "Iter.size_hint([1.I64, 2, 3, 4].iter().keep_if(|x| x > 1).step_by(2))",
+        .expected = .{ .inspect_str = "Unknown" },
+    },
+    .{
+        .name = "inspect: Iter.rev reverses items",
+        .source =
+        \\{
+        \\    iter = [1.I64, 2, 3].iter().rev()
+        \\    Iter.fold(iter, [], |acc, item| acc.append(item))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[3, 2, 1]" },
+    },
+    .{
+        .name = "inspect: Iter.rev on empty source is empty",
+        .source =
+        \\{
+        \\    iter = [].iter().rev()
+        \\    Iter.fold(iter, [], |acc, item| acc.append(item))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[]" },
+    },
+    .{
+        .name = "inspect: Iter.rev on a singleton",
+        .source =
+        \\{
+        \\    iter = [1.I64].iter().rev()
+        \\    Iter.fold(iter, [], |acc, item| acc.append(item))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[1]" },
+    },
+    .{
+        .name = "inspect: Iter.rev on a range",
+        .source =
+        \\{
+        \\    iter = (1.U64..=5).rev()
+        \\    Iter.fold(iter, [], |acc, item| acc.append(item))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[5, 4, 3, 2, 1]" },
+    },
+    .{
+        .name = "inspect: Iter.rev of unknown-length source upgrades to known",
+        .source =
+        \\{
+        \\    odds = [1.I64, 2, 3, 4, 5].iter().keep_if(|x| I64.rem_by(x, 2) == 1)
+        \\    Iter.fold(odds.rev(), [], |acc, item| acc.append(item))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[5, 3, 1]" },
+    },
+    .{
+        .name = "inspect: Iter.rev composed with step_by",
+        .source =
+        \\{
+        \\    iter = [1.I64, 2, 3, 4, 5].iter().step_by(2).rev()
+        \\    Iter.fold(iter, [], |acc, item| acc.append(item))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[5, 3, 1]" },
+    },
+    .{
+        .name = "inspect: Iter.rev reports known length",
+        .source = "Iter.size_hint([1.I64, 2, 3].iter().rev())",
+        .expected = .{ .inspect_str = "Known(3)" },
+    },
+    .{
+        .name = "inspect: Iter.rev upgrades unknown length to known",
+        .source = "Iter.size_hint([1.I64, 2, 3, 4, 5].iter().keep_if(|x| I64.rem_by(x, 2) == 1).rev())",
+        .expected = .{ .inspect_str = "Known(3)" },
+    },
     .{ .name = "inspect: List.any true on integers", .source = "List.any([1, 0, 1, 0, -1], |x| x > 0)", .expected = .{ .inspect_str = "True" } },
     .{ .name = "inspect: List.any false on positive integers with negative predicate", .source = "List.any([9, 8, 7, 6, 5], |x| x < 0)", .expected = .{ .inspect_str = "False" } },
     .{ .name = "inspect: List.any false on empty list", .source = "List.any([], |x| x < 0)", .expected = .{ .inspect_str = "False" } },

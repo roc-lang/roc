@@ -35,6 +35,7 @@ pub const CheckedModuleSet = struct {
 pub const RootRequestSet = struct {
     requests: []const checked.RootRequest = &.{},
     layout_requests: []const checked.CheckedTypeId = &.{},
+    include_static_data_exports: bool = false,
 };
 
 /// Target settings and checked module state for the checked-to-LIR pipeline.
@@ -187,10 +188,13 @@ pub fn lowerCheckedModulesToLir(
 ) LowerResourceError!LoweredProgram {
     try verifyCheckedBoundary(modules, target);
 
-    const layout_requests = try collectLayoutRequests(allocator, modules.root.module, roots.layout_requests);
+    const layout_requests = try collectLayoutRequests(allocator, modules.root.module, roots.layout_requests, roots.include_static_data_exports);
     defer allocator.free(layout_requests);
     const static_data_requests = switch (target.checked_module_state) {
-        .complete => try collectStaticDataRequests(allocator, modules.root.module),
+        .complete => if (roots.include_static_data_exports)
+            try collectStaticDataRequests(allocator, modules.root.module)
+        else
+            try allocator.alloc(postcheck.Common.StaticDataRequest, 0),
         .checking_finalization => try allocator.alloc(postcheck.Common.StaticDataRequest, 0),
     };
     defer allocator.free(static_data_requests);
@@ -299,11 +303,14 @@ fn collectLayoutRequests(
     allocator: Allocator,
     root: *const checked.Module,
     explicit: []const checked.CheckedTypeId,
+    include_static_data_exports: bool,
 ) Allocator.Error![]checked.CheckedTypeId {
     var requests = std.ArrayList(checked.CheckedTypeId).empty;
     errdefer requests.deinit(allocator);
 
     try requests.appendSlice(allocator, explicit);
+    if (!include_static_data_exports) return try requests.toOwnedSlice(allocator);
+
     const types = root.checked_types.view();
     for (root.provided_exports.exports) |provided| {
         switch (provided) {
@@ -316,6 +323,42 @@ fn collectLayoutRequests(
         }
     }
     return try requests.toOwnedSlice(allocator);
+}
+
+/// Select ABI roots for native object/archive/shared-library outputs.
+pub fn selectPlatformExportRoots(
+    allocator: Allocator,
+    requests: []const checked.RootRequest,
+) Allocator.Error![]checked.RootRequest {
+    var selected = std.ArrayList(checked.RootRequest).empty;
+    errdefer selected.deinit(allocator);
+
+    for (requests) |request| {
+        if (request.kind != .provided_export) continue;
+        try selected.append(allocator, request);
+    }
+
+    return try selected.toOwnedSlice(allocator);
+}
+
+/// Select platform roots for LIR images consumed by host shims/interpreters.
+pub fn selectPlatformEntrypointRoots(
+    allocator: Allocator,
+    requests: []const checked.RootRequest,
+) Allocator.Error![]checked.RootRequest {
+    var selected = std.ArrayList(checked.RootRequest).empty;
+    errdefer selected.deinit(allocator);
+
+    for (requests) |request| {
+        switch (request.kind) {
+            .provided_export,
+            .platform_required_binding,
+            => try selected.append(allocator, request),
+            else => {},
+        }
+    }
+
+    return try selected.toOwnedSlice(allocator);
 }
 
 fn collectStaticDataRequests(

@@ -153,9 +153,9 @@ outerFunc = |_| {
 	(defs
 		(patt (type "Dec"))
 		(patt (type "Dec"))
-		(patt (type "_arg -> Dec")))
+		(patt (type "_arg -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, Dec -> a]")))
 	(expressions
 		(expr (type "Dec"))
 		(expr (type "Dec"))
-		(expr (type "_arg -> Dec"))))
+		(expr (type "_arg -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, Dec -> a]"))))
 ~~~

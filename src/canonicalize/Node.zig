@@ -46,6 +46,8 @@ pub const Tag = enum {
     statement_expect,
     statement_for,
     statement_while,
+    statement_infinite_loop,
+    statement_breakable_loop,
     statement_break,
     statement_return,
     statement_import,

@@ -86,7 +86,7 @@ expect result == True
 			(s-var
 				(p-assign (ident "$foo"))
 				(e-tag (name "True")))
-			(s-while
+			(s-breakable-loop
 				(e-tag (name "True"))
 				(e-block
 					(s-break)

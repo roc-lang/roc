@@ -2649,15 +2649,11 @@ fn getDefaultedTypeStringWithSeen(
     defer _ = seen.pop();
 
     switch (resolved.desc.content) {
-        .flex => |flex| {
-            // Check if this flex var has a from_numeral constraint
-            const constraints = can_ir.types.sliceStaticDispatchConstraints(flex.constraints);
-            for (constraints) |constraint| {
-                if (constraint.origin == .from_numeral) {
-                    return allocator.dupe(u8, "Dec");
-                }
-            }
-            // No numeral constraint - fall through to TypeWriter
+        .flex => {
+            // Fall through to TypeWriter. `finalizeLiteralDefaults` already
+            // committed concrete `Dec` to the store for any defaulted numeral
+            // before MONO renders, so the live store is the source of truth —
+            // no display-time `Dec` substitution is needed here.
         },
         .structure => |flat_type| {
             switch (flat_type) {
@@ -2763,13 +2759,9 @@ fn getDefaultedTypeStringWithSeen(
         else => {},
     }
 
-    // Use TypeWriter for all other cases - it has proper cycle detection
+    // Use TypeWriter for all other cases - it has proper cycle detection.
     var type_writer = try can_ir.initTypeWriter();
     defer type_writer.deinit();
-
-    // Enable numeral defaulting for MONO output - flex vars with from_numeral
-    // constraint should display as "Dec" instead of showing the constraint
-    type_writer.setDefaultNumeralsToDec(true);
 
     if (is_top_level) {
         try type_writer.write(type_var, .one_line);
@@ -4121,13 +4113,16 @@ fn processDevObjectSnapshot(
                     break :target_snapshot;
                 },
             };
+            const build_roots = try lir.CheckedPipeline.selectPlatformExportRoots(allocator, root_artifact.root_requests.runtime_requests);
+            defer allocator.free(build_roots);
+
             var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
                 allocator,
                 .{
                     .root = check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
                     .imports = imported_artifacts,
                 },
-                .{ .requests = root_artifact.root_requests.runtime_requests },
+                .{ .requests = build_roots, .include_static_data_exports = true },
                 .{
                     .target_usize = target_usize,
                 },

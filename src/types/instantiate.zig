@@ -27,6 +27,15 @@ const Tuple = types_mod.Tuple;
 const Rank = types_mod.Rank;
 const Ident = base.Ident;
 
+/// Hard ceiling on instantiation recursion depth. Finite types never approach
+/// this; a self-referential static-dispatch `where` constraint (e.g.
+/// `Vec(a) ... where [a.join : Vec(a), a -> a]` used nested) would otherwise
+/// recurse forever, minting fresh constrained vars at each level that the
+/// `var_map` memo cannot dedup. On hitting this ceiling the instantiator stops
+/// and flags `recursion_overflow`; the caller turns that into an infinite-type
+/// error rather than hanging.
+pub const max_instantiation_depth: u32 = 8192;
+
 /// Type to manage instantiation.
 ///
 /// Entry point is `instantiateVar`
@@ -43,6 +52,13 @@ pub const Instantiator = struct {
     current_rank: Rank,
     rigid_behavior: RigidBehavior,
     rank_behavior: RankBehavior = .respect_rank,
+
+    /// Live recursion depth, guarded against non-terminating instantiation.
+    depth: u32 = 0,
+    /// Set once `depth` exceeds `max_instantiation_depth`. The entry point
+    /// (`Check.instantiateVarHelp`) turns this into an infinite-type error
+    /// instead of using the (partial, err-filled) result.
+    recursion_overflow: bool = false,
 
     /// Controls whether to respect rank when deciding what to instantiate
     pub const RankBehavior = enum {
@@ -85,6 +101,16 @@ pub const Instantiator = struct {
     ) std.mem.Allocator.Error!Var {
         const resolved = self.store.resolveVar(initial_var);
         const resolved_var = resolved.var_;
+
+        // Guard against non-terminating instantiation (e.g. a self-referential
+        // static-dispatch `where` constraint). Stop recursing and flag overflow;
+        // the caller reports an infinite-type error.
+        self.depth += 1;
+        defer self.depth -= 1;
+        if (self.depth > max_instantiation_depth) {
+            self.recursion_overflow = true;
+            return try self.store.freshFromContentWithRank(.err, self.current_rank);
+        }
 
         // Non-generalized variables should _not_ be instantiated (unless configured to ignore rank)
         if (self.rank_behavior == .respect_rank and resolved.desc.rank != .generalized) {
@@ -148,17 +174,12 @@ pub const Instantiator = struct {
                     .rigid => Content{ .rigid = Rigid{ .name = rigid.name, .constraints = fresh_constraints } },
                 };
 
-                const from_numeral_origin = switch (resolved.desc.content) {
-                    .flex => resolved.desc.from_numeral_origin,
-                    else => false,
-                };
                 // Update the placeholder fresh var with the real content
                 try self.store.dangerousSetVarDesc(
                     fresh_var,
                     .{
                         .content = fresh_content,
                         .rank = self.current_rank,
-                        .from_numeral_origin = from_numeral_origin,
                     },
                 );
 
@@ -174,17 +195,12 @@ pub const Instantiator = struct {
 
                 const fresh_content = try self.instantiateContent(resolved.desc.content);
 
-                const from_numeral_origin = switch (resolved.desc.content) {
-                    .flex => resolved.desc.from_numeral_origin,
-                    else => false,
-                };
                 // Update the placeholder fresh var with the real content
                 try self.store.dangerousSetVarDesc(
                     fresh_var,
                     .{
                         .content = fresh_content,
                         .rank = self.current_rank,
-                        .from_numeral_origin = from_numeral_origin,
                     },
                 );
 

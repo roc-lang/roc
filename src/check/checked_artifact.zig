@@ -1107,6 +1107,10 @@ fn statementDependsOnUnboundPlatformRequirement(
             exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, for_.body, relation_blocked_exprs),
         .while_ => |while_| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, while_.cond, relation_blocked_exprs) or
             exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, while_.body, relation_blocked_exprs),
+        .infinite_loop => |loop| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, loop.cond, relation_blocked_exprs) or
+            exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, loop.body, relation_blocked_exprs),
+        .breakable_loop => |loop| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, loop.cond, relation_blocked_exprs) or
+            exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, loop.body, relation_blocked_exprs),
         .return_ => |ret| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, ret.expr, relation_blocked_exprs),
         .pending,
         .crash,
@@ -2543,8 +2547,8 @@ pub const CheckedTypeStore = struct {
                 .fn_name = constraint.fn_name,
                 .fn_ty = try self.cloneCheckedTypeRootSubstituting(allocator, names, constraint.fn_ty, formals, actuals, active),
                 .origin = constraint.origin,
-                .binop_negated = constraint.binop_negated,
-                .num_literal = constraint.num_literal,
+                .binop_negated = constraint.origin.binopNegated(),
+                .num_literal = constraint.origin.numeralInfo(),
             };
         }
         return out;
@@ -4191,8 +4195,13 @@ fn numericDefaultPhaseForConstraints(
     const constraints = module.typeStoreConst().sliceStaticDispatchConstraints(constraints_range);
     var has_str_defaultable_literal = false;
     for (constraints) |constraint| {
-        if (constraint.origin == .from_numeral) return .mono_specialization;
-        if (constraint.origin == .from_quote or constraint.origin == .from_interpolation) has_str_defaultable_literal = true;
+        switch (constraint.origin) {
+            .from_literal => |lit| switch (lit) {
+                .numeral => return .mono_specialization,
+                .quote, .interpolation => has_str_defaultable_literal = true,
+            },
+            else => {},
+        }
         if (isDefaultableArithmeticConstraint(module, constraint)) return .mono_specialization;
     }
     if (has_str_defaultable_literal) return .mono_specialization_str;
@@ -4212,9 +4221,7 @@ fn isDefaultableArithmeticConstraint(
             constraint.fn_name.eql(idents.div_trunc_by) or
             constraint.fn_name.eql(idents.rem_by),
         .desugared_unaryop => constraint.fn_name.eql(idents.negate),
-        .from_numeral,
-        .from_quote,
-        .from_interpolation,
+        .from_literal,
         .method_call,
         .where_clause,
         => false,
@@ -4381,8 +4388,8 @@ fn copyCheckedStaticDispatchConstraints(
             .fn_name = try names.internMethodIdent(module.identStoreConst(), constraint.fn_name),
             .fn_ty = try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, constraint.fn_var),
             .origin = constraint.origin,
-            .binop_negated = constraint.binop_negated,
-            .num_literal = constraint.num_literal,
+            .binop_negated = constraint.origin.binopNegated(),
+            .num_literal = constraint.origin.numeralInfo(),
         };
     }
     return out;
@@ -4886,6 +4893,8 @@ pub const CheckedStatementData = union(enum) {
         plan: ?static_dispatch.IteratorForPlanId,
     },
     while_: struct { cond: CheckedExprId, body: CheckedExprId },
+    infinite_loop: struct { cond: CheckedExprId, body: CheckedExprId },
+    breakable_loop: struct { cond: CheckedExprId, body: CheckedExprId },
     break_,
     return_: struct { expr: CheckedExprId, lambda: CheckedExprId },
     import_,
@@ -5587,6 +5596,14 @@ const CheckedSourceNodes = struct {
             .s_while => |while_| {
                 try self.markExpr(while_.cond, work);
                 try self.markExpr(while_.body, work);
+            },
+            .s_infinite_loop => |loop| {
+                try self.markExpr(loop.cond, work);
+                try self.markExpr(loop.body, work);
+            },
+            .s_breakable_loop => |loop| {
+                try self.markExpr(loop.cond, work);
+                try self.markExpr(loop.body, work);
             },
             .s_return => |ret| {
                 try self.markExpr(ret.expr, work);
@@ -6348,6 +6365,8 @@ fn checkedStatementDataDiverges(
         => |expr| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, expr, expr_states, statement_states),
         .for_ => |for_| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, for_.expr, expr_states, statement_states),
         .while_ => |while_| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, while_.cond, expr_states, statement_states),
+        .infinite_loop => true,
+        .breakable_loop => |loop| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, loop.cond, expr_states, statement_states),
         .pending,
         .import_,
         .alias_decl,
@@ -7127,6 +7146,14 @@ const CheckedBodyPayloadCopier = struct {
             .s_while => |while_| .{ .while_ = .{
                 .cond = self.checkedExpr(while_.cond),
                 .body = self.checkedExpr(while_.body),
+            } },
+            .s_infinite_loop => |loop| .{ .infinite_loop = .{
+                .cond = self.checkedExpr(loop.cond),
+                .body = self.checkedExpr(loop.body),
+            } },
+            .s_breakable_loop => |loop| .{ .breakable_loop = .{
+                .cond = self.checkedExpr(loop.cond),
+                .body = self.checkedExpr(loop.body),
             } },
             .s_break => .break_,
             .s_return => |ret| .{ .return_ = .{
@@ -9440,6 +9467,14 @@ const CheckedTemplateRefCollector = struct {
                 try self.collectExpr(while_.cond);
                 try self.collectExpr(while_.body);
             },
+            .infinite_loop => |loop| {
+                try self.collectExpr(loop.cond);
+                try self.collectExpr(loop.body);
+            },
+            .breakable_loop => |loop| {
+                try self.collectExpr(loop.cond);
+                try self.collectExpr(loop.body);
+            },
             .pending,
             .crash,
             .break_,
@@ -10102,6 +10137,14 @@ const NestedProcSiteBuilder = struct {
             .while_ => |while_| {
                 try self.scanExpr(while_.cond, owner, false);
                 try self.scanExpr(while_.body, owner, false);
+            },
+            .infinite_loop => |loop| {
+                try self.scanExpr(loop.cond, owner, false);
+                try self.scanExpr(loop.body, owner, false);
+            },
+            .breakable_loop => |loop| {
+                try self.scanExpr(loop.cond, owner, false);
+                try self.scanExpr(loop.body, owner, false);
             },
             .pending,
             .crash,
@@ -16616,8 +16659,8 @@ pub const CheckedTypeProjector = struct {
                 .fn_name = try self.remapViewMethodName(source_names, constraint.fn_name),
                 .fn_ty = try self.projectCheckedTypeViewRootInner(source, source_names, constraint.fn_ty, active),
                 .origin = constraint.origin,
-                .binop_negated = constraint.binop_negated,
-                .num_literal = constraint.num_literal,
+                .binop_negated = constraint.origin.binopNegated(),
+                .num_literal = constraint.origin.numeralInfo(),
             };
         }
         return out;
@@ -16868,8 +16911,8 @@ pub const CheckedTypeProjector = struct {
                 .fn_name = try self.remapMethodName(imported, constraint.fn_name),
                 .fn_ty = try self.projectImportedCheckedType(imported, constraint.fn_ty),
                 .origin = constraint.origin,
-                .binop_negated = constraint.binop_negated,
-                .num_literal = constraint.num_literal,
+                .binop_negated = constraint.origin.binopNegated(),
+                .num_literal = constraint.origin.numeralInfo(),
             };
         }
         return out;
@@ -17171,8 +17214,8 @@ const CheckedTypeStoreImportProjector = struct {
                 .fn_name = try self.remapMethodName(constraint.fn_name),
                 .fn_ty = try self.project(constraint.fn_ty),
                 .origin = constraint.origin,
-                .binop_negated = constraint.binop_negated,
-                .num_literal = constraint.num_literal,
+                .binop_negated = constraint.origin.binopNegated(),
+                .num_literal = constraint.origin.numeralInfo(),
             };
         }
         return out;
