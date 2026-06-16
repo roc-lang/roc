@@ -654,6 +654,44 @@ pub fn floatToStrBytes(buf: []u8, val_bits: u64, is_f32: bool) []const u8 {
     };
 }
 
+fn expectFloatToStr(comptime T: type, value: T, expected: []const u8) !void {
+    var buf: [400]u8 = undefined;
+    const val_bits: u64 = if (T == f32)
+        @as(u64, @as(u32, @bitCast(value)))
+    else
+        @bitCast(value);
+    const actual = floatToStrBytes(&buf, val_bits, T == f32);
+    try testing.expectEqualStrings(expected, actual);
+
+    if (std.math.isFinite(value)) {
+        const parsed = try std.fmt.parseFloat(T, actual);
+        const Bits = std.meta.Int(.unsigned, @bitSizeOf(T));
+        try testing.expectEqual(@as(Bits, @bitCast(value)), @as(Bits, @bitCast(parsed)));
+    }
+}
+
+test "floatToStrBytes emits stable shortest representations" {
+    try expectFloatToStr(f32, @as(f32, 0.0), "0");
+    try expectFloatToStr(f32, @as(f32, -0.0), "-0");
+    try expectFloatToStr(f32, @as(f32, 1.5), "1.5");
+    try expectFloatToStr(f32, @as(f32, 0.1), "0.1");
+    try expectFloatToStr(f32, @as(f32, @bitCast(@as(u32, 0x00000001))), "1e-45");
+    try expectFloatToStr(f32, std.math.floatMax(f32), "3.4028235e38");
+    try expectFloatToStr(f32, std.math.inf(f32), "inf");
+    try expectFloatToStr(f32, -std.math.inf(f32), "-inf");
+    try expectFloatToStr(f32, std.math.nan(f32), "nan");
+
+    try expectFloatToStr(f64, @as(f64, 0.0), "0");
+    try expectFloatToStr(f64, @as(f64, -0.0), "-0");
+    try expectFloatToStr(f64, @as(f64, 1.5), "1.5");
+    try expectFloatToStr(f64, @as(f64, 0.1), "0.1");
+    try expectFloatToStr(f64, @as(f64, @bitCast(@as(u64, 0x0000000000000001))), "5e-324");
+    try expectFloatToStr(f64, std.math.floatMax(f64), "1.7976931348623157e308");
+    try expectFloatToStr(f64, std.math.inf(f64), "inf");
+    try expectFloatToStr(f64, -std.math.inf(f64), "-inf");
+    try expectFloatToStr(f64, std.math.nan(f64), "nan");
+}
+
 /// Format a Roc float into a RocStr using the same implementation used by
 /// generated builtin calls.
 pub fn floatToStrFromBits(val_bits: u64, is_f32: bool, roc_ops: *RocOps) RocStr {

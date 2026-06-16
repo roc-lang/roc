@@ -335,36 +335,59 @@ fn powi128(comptime T: type, base: T, exp: T) error{ Overflow, Underflow }!T {
         return 0;
     }
 
-    var b: u128 = @bitCast(if (info.signedness == .signed) @as(i128, base) else @as(u128, base));
-    var e: u128 = @bitCast(if (info.signedness == .signed) @as(i128, exp) else @as(u128, exp));
+    if (info.signedness == .signed) {
+        const is_negative_result = base < 0 and (@as(u1, @truncate(@as(u128, @bitCast(@as(i128, exp))))) != 0);
+        const magnitude_limit = if (is_negative_result)
+            @as(u128, 1) << 127
+        else
+            @as(u128, @intCast(std.math.maxInt(i128)));
+        var b: u128 = @abs(base);
+        var e: u128 = @intCast(exp);
+        var result: u128 = 1;
+
+        while (e > 0) {
+            if (e & 1 != 0) {
+                result = mul_u128_with_limit(result, b, magnitude_limit) orelse return error.Overflow;
+            }
+            e = i128h.shr(e, 1);
+            if (e > 0) {
+                b = mul_u128_with_limit(b, b, magnitude_limit) orelse return error.Overflow;
+            }
+        }
+
+        if (is_negative_result) {
+            if (result == (@as(u128, 1) << 127)) return std.math.minInt(i128);
+            return -@as(T, @intCast(result));
+        }
+        return @intCast(result);
+    }
+
+    var b: u128 = base;
+    var e: u128 = exp;
     var result: u128 = 1;
 
     while (e > 0) {
         if (e & 1 != 0) {
-            // Check overflow: result * b
-            const prev = result;
-            result = i128h.mul_u128_lo(result, b);
-            if (b != 0 and i128h.divTrunc_u128(result, b) != prev) return error.Overflow;
+            result = mul_u128_checked(result, b) orelse return error.Overflow;
         }
         e = i128h.shr(e, 1);
         if (e > 0) {
-            const prev = b;
-            b = i128h.mul_u128_lo(b, b);
-            if (prev != 0 and i128h.divTrunc_u128(b, prev) != prev) return error.Overflow;
+            b = mul_u128_checked(b, b) orelse return error.Overflow;
         }
     }
 
-    if (info.signedness == .signed) {
-        const signed_result: i128 = @bitCast(result);
-        if (signed_result < 0 and result != @as(u128, @bitCast(@as(i128, std.math.minInt(i128))))) return error.Overflow;
-        // Negate if base was negative and exponent is odd
-        if (base < 0 and @as(u1, @truncate(@as(u128, @bitCast(@as(i128, exp))))) != 0) {
-            return -@as(T, @bitCast(result));
-        }
-        return @bitCast(result);
-    } else {
-        return result;
-    }
+    return result;
+}
+
+fn mul_u128_checked(lhs: u128, rhs: u128) ?u128 {
+    const product = mul_u128(lhs, rhs);
+    return if (product.hi == 0) product.lo else null;
+}
+
+fn mul_u128_with_limit(lhs: u128, rhs: u128, limit: u128) ?u128 {
+    const product = mul_u128(lhs, rhs);
+    if (product.hi != 0 or product.lo > limit) return null;
+    return product.lo;
 }
 
 /// Check if a value is NaN.
@@ -1127,6 +1150,224 @@ pub fn f64FromBits(bits: u64) callconv(.c) f64 {
 /// Constructs an i128 from its bit pattern.
 pub fn i128FromBits(bits: u128) callconv(.c) i128 {
     return @as(i128, @bitCast(bits));
+}
+
+fn signedMaxPlusOneText(comptime T: type) []const u8 {
+    return switch (T) {
+        i8 => "128",
+        i16 => "32768",
+        i32 => "2147483648",
+        i64 => "9223372036854775808",
+        i128 => "170141183460469231731687303715884105728",
+        else => @compileError("unsupported signed integer type"),
+    };
+}
+
+fn signedMinMinusOneText(comptime T: type) []const u8 {
+    return switch (T) {
+        i8 => "-129",
+        i16 => "-32769",
+        i32 => "-2147483649",
+        i64 => "-9223372036854775809",
+        i128 => "-170141183460469231731687303715884105729",
+        else => @compileError("unsupported signed integer type"),
+    };
+}
+
+fn unsignedMaxPlusOneText(comptime T: type) []const u8 {
+    return switch (T) {
+        u8 => "256",
+        u16 => "65536",
+        u32 => "4294967296",
+        u64 => "18446744073709551616",
+        u128 => "340282366920938463463374607431768211456",
+        else => @compileError("unsupported unsigned integer type"),
+    };
+}
+
+fn expectParseIntText(comptime T: type, text: []const u8, expected: T, roc_ops: *RocOps) !void {
+    const roc_str = @import("str.zig").RocStr.fromSlice(text, roc_ops);
+    defer roc_str.decref(roc_ops);
+
+    const result = parseIntFromStr(T, roc_str);
+    try std.testing.expectEqual(@as(u8, 0), result.errorcode);
+    try std.testing.expectEqual(expected, result.value);
+}
+
+fn expectParseIntReject(comptime T: type, text: []const u8, roc_ops: *RocOps) !void {
+    const roc_str = @import("str.zig").RocStr.fromSlice(text, roc_ops);
+    defer roc_str.decref(roc_ops);
+
+    const result = parseIntFromStr(T, roc_str);
+    try std.testing.expectEqual(@as(u8, 1), result.errorcode);
+    try std.testing.expectEqual(@as(T, 0), result.value);
+}
+
+fn expectParseIntFormatted(comptime T: type, value: T, roc_ops: *RocOps) !void {
+    var buf: [64]u8 = undefined;
+    const text = try std.fmt.bufPrint(&buf, "{d}", .{value});
+    try expectParseIntText(T, text, value, roc_ops);
+}
+
+fn expectAddWithOverflowOracle(comptime T: type, lhs: T, rhs: T) !void {
+    const expected = @addWithOverflow(lhs, rhs);
+    const actual = addWithOverflow(T, lhs, rhs);
+    try std.testing.expectEqual(expected[0], actual.value);
+    try std.testing.expectEqual(expected[1] == 1, actual.has_overflowed);
+}
+
+fn expectSubWithOverflowOracle(comptime T: type, lhs: T, rhs: T) !void {
+    const expected = @subWithOverflow(lhs, rhs);
+    const actual = subWithOverflow(T, lhs, rhs);
+    try std.testing.expectEqual(expected[0], actual.value);
+    try std.testing.expectEqual(expected[1] == 1, actual.has_overflowed);
+}
+
+fn expectMulWithOverflowOracle(comptime T: type, lhs: T, rhs: T) !void {
+    const expected = @mulWithOverflow(lhs, rhs);
+    const actual = mulWithOverflow(T, lhs, rhs);
+    try std.testing.expectEqual(expected[0], actual.value);
+    try std.testing.expectEqual(expected[1] == 1, actual.has_overflowed);
+}
+
+fn expectParseFloatBits(comptime T: type, text: []const u8, roc_ops: *RocOps) !void {
+    const expected = try std.fmt.parseFloat(T, text);
+    const roc_str = @import("str.zig").RocStr.fromSlice(text, roc_ops);
+    defer roc_str.decref(roc_ops);
+
+    const result = parseFloatFromStr(T, roc_str);
+    try std.testing.expectEqual(@as(u8, 0), result.errorcode);
+
+    const Bits = std.meta.Int(.unsigned, @bitSizeOf(T));
+    try std.testing.expectEqual(@as(Bits, @bitCast(expected)), @as(Bits, @bitCast(result.value)));
+}
+
+test "parseIntFromStr accepts and rejects exact integer width boundaries" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    inline for (.{ i8, i16, i32, i64, i128 }) |T| {
+        try expectParseIntFormatted(T, std.math.minInt(T), test_env.getOps());
+        try expectParseIntFormatted(T, std.math.maxInt(T), test_env.getOps());
+        try expectParseIntReject(T, signedMinMinusOneText(T), test_env.getOps());
+        try expectParseIntReject(T, signedMaxPlusOneText(T), test_env.getOps());
+    }
+
+    inline for (.{ u8, u16, u32, u64, u128 }) |T| {
+        try expectParseIntFormatted(T, 0, test_env.getOps());
+        try expectParseIntFormatted(T, std.math.maxInt(T), test_env.getOps());
+        try expectParseIntText(T, "-0", 0, test_env.getOps());
+        try expectParseIntReject(T, "-1", test_env.getOps());
+        try expectParseIntReject(T, unsignedMaxPlusOneText(T), test_env.getOps());
+    }
+}
+
+test "parseIntFromStr validates radix prefixes and underscores at boundaries" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    try expectParseIntText(u8, "0xff", 255, test_env.getOps());
+    try expectParseIntReject(u8, "0x100", test_env.getOps());
+    try expectParseIntText(i8, "-0b10000000", -128, test_env.getOps());
+    try expectParseIntReject(i8, "0b10000000", test_env.getOps());
+    try expectParseIntText(u16, "0o17_7777", 65535, test_env.getOps());
+    try expectParseIntReject(u16, "0o20_0000", test_env.getOps());
+    try expectParseIntText(i32, "2_147_483_647", std.math.maxInt(i32), test_env.getOps());
+    try expectParseIntReject(i32, "_1", test_env.getOps());
+    try expectParseIntReject(i32, "1__0", test_env.getOps());
+    try expectParseIntReject(i32, "10_", test_env.getOps());
+}
+
+test "integer overflow helpers match Zig overflow intrinsics across widths" {
+    inline for (.{ i8, i16, i32, i64, i128 }) |T| {
+        try expectAddWithOverflowOracle(T, std.math.maxInt(T), 1);
+        try expectAddWithOverflowOracle(T, std.math.minInt(T), -1);
+        try expectAddWithOverflowOracle(T, std.math.maxInt(T) - 1, 1);
+        try expectSubWithOverflowOracle(T, std.math.minInt(T), 1);
+        try expectSubWithOverflowOracle(T, std.math.maxInt(T), -1);
+        try expectSubWithOverflowOracle(T, std.math.minInt(T) + 1, 1);
+    }
+
+    inline for (.{ i8, i16, i32, i64 }) |T| {
+        try expectMulWithOverflowOracle(T, std.math.maxInt(T), 2);
+        try expectMulWithOverflowOracle(T, std.math.minInt(T), -1);
+        try expectMulWithOverflowOracle(T, std.math.maxInt(T), 1);
+    }
+
+    inline for (.{ u8, u16, u32, u64, u128 }) |T| {
+        try expectAddWithOverflowOracle(T, std.math.maxInt(T), 1);
+        try expectAddWithOverflowOracle(T, std.math.maxInt(T) - 1, 1);
+        try expectSubWithOverflowOracle(T, 0, 1);
+        try expectSubWithOverflowOracle(T, 1, 1);
+    }
+
+    inline for (.{ u8, u16, u32, u64 }) |T| {
+        try expectMulWithOverflowOracle(T, std.math.maxInt(T), 2);
+        try expectMulWithOverflowOracle(T, std.math.maxInt(T), 1);
+    }
+
+    const i128_positive_overflow = mulWithOverflow(i128, std.math.maxInt(i128), 2);
+    try std.testing.expectEqual(std.math.maxInt(i128), i128_positive_overflow.value);
+    try std.testing.expect(i128_positive_overflow.has_overflowed);
+
+    const i128_negative_overflow = mulWithOverflow(i128, std.math.minInt(i128), -1);
+    try std.testing.expectEqual(std.math.maxInt(i128), i128_negative_overflow.value);
+    try std.testing.expect(i128_negative_overflow.has_overflowed);
+
+    const i128_no_overflow = mulWithOverflow(i128, std.math.maxInt(i128), 1);
+    try std.testing.expectEqual(std.math.maxInt(i128), i128_no_overflow.value);
+    try std.testing.expect(!i128_no_overflow.has_overflowed);
+
+    const u128_overflow = mulWithOverflow(u128, std.math.maxInt(u128), 2);
+    try std.testing.expectEqual(std.math.maxInt(u128), u128_overflow.value);
+    try std.testing.expect(u128_overflow.has_overflowed);
+
+    const u128_no_overflow = mulWithOverflow(u128, std.math.maxInt(u128), 1);
+    try std.testing.expectEqual(std.math.maxInt(u128), u128_no_overflow.value);
+    try std.testing.expect(!u128_no_overflow.has_overflowed);
+}
+
+test "powi128 handles signed magnitude and overflow boundaries" {
+    try std.testing.expectEqual(@as(i128, -128), try powi128(i128, -2, 7));
+    try std.testing.expectEqual(@as(i128, 256), try powi128(i128, -2, 8));
+    try std.testing.expectEqual(@as(i128, -1), try powi128(i128, -1, 3));
+    try std.testing.expectEqual(@as(i128, 1), try powi128(i128, -1, 4));
+    try std.testing.expectEqual(@as(i128, std.math.minInt(i128)), try powi128(i128, std.math.minInt(i128), 1));
+    try std.testing.expectError(error.Overflow, powi128(i128, std.math.minInt(i128), 2));
+    try std.testing.expectError(error.Overflow, powi128(i128, std.math.maxInt(i128), 2));
+    try std.testing.expectError(error.Underflow, powi128(i128, 2, -1));
+
+    try std.testing.expectEqual(@as(u128, 1024), try powi128(u128, 2, 10));
+    try std.testing.expectError(error.Overflow, powi128(u128, std.math.maxInt(u128), 2));
+}
+
+test "parseFloatFromStr matches Zig parseFloat bit patterns for finite edge cases" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    inline for (&[_][]const u8{
+        "0",
+        "-0",
+        "0.1",
+        "1.40129846e-45",
+        "1.17549435e-38",
+        "3.4028235e38",
+        "0x1.8p+1",
+    }) |text| {
+        try expectParseFloatBits(f32, text, test_env.getOps());
+    }
+
+    inline for (&[_][]const u8{
+        "0",
+        "-0",
+        "0.1",
+        "5e-324",
+        "2.2250738585072014e-308",
+        "1.7976931348623157e308",
+        "0x1.921fb54442d18p+1",
+    }) |text| {
+        try expectParseFloatBits(f64, text, test_env.getOps());
+    }
 }
 
 test "parseIntFromStr decimal parsing" {
