@@ -6,11 +6,11 @@ const testing = std.testing;
 const CIR = @import("../CIR.zig");
 const TestEnv = @import("TestEnv.zig").TestEnv;
 
-fn firstBlockStatement(test_env: *TestEnv, expr_idx: CIR.Expr.Idx) !CIR.Statement {
+fn firstBlockStatement(test_env: *TestEnv, expr_idx: CIR.Expr.Idx) anyerror!CIR.Statement {
     return try blockStatementAt(test_env, expr_idx, 0);
 }
 
-fn blockStatementAt(test_env: *TestEnv, expr_idx: CIR.Expr.Idx, index: usize) !CIR.Statement {
+fn blockStatementAt(test_env: *TestEnv, expr_idx: CIR.Expr.Idx, index: usize) anyerror!CIR.Statement {
     const expr = test_env.getCanonicalExpr(expr_idx);
     try testing.expectEqual(.e_block, std.meta.activeTag(expr));
 
@@ -20,7 +20,7 @@ fn blockStatementAt(test_env: *TestEnv, expr_idx: CIR.Expr.Idx, index: usize) !C
     return test_env.module_env.store.getStatement(statements[index]);
 }
 
-fn firstLambdaBodyStatement(test_env: *TestEnv, expr_idx: CIR.Expr.Idx) !CIR.Statement {
+fn firstLambdaBodyStatement(test_env: *TestEnv, expr_idx: CIR.Expr.Idx) anyerror!CIR.Statement {
     const expr = test_env.getCanonicalExpr(expr_idx);
     const lambda_idx = switch (expr) {
         .e_lambda => expr_idx,
@@ -34,7 +34,7 @@ fn firstLambdaBodyStatement(test_env: *TestEnv, expr_idx: CIR.Expr.Idx) !CIR.Sta
     return try firstBlockStatement(test_env, lambda.e_lambda.body);
 }
 
-fn expectDiagnosticTag(test_env: *TestEnv, expected: std.meta.Tag(CIR.Diagnostic)) !void {
+fn expectDiagnosticTag(test_env: *TestEnv, expected: std.meta.Tag(CIR.Diagnostic)) anyerror!void {
     const diagnostics = try test_env.getDiagnostics();
     defer testing.allocator.free(diagnostics);
 
@@ -45,7 +45,7 @@ fn expectDiagnosticTag(test_env: *TestEnv, expected: std.meta.Tag(CIR.Diagnostic
     return error.ExpectedDiagnosticNotFound;
 }
 
-fn expectNoDiagnosticTag(test_env: *TestEnv, unexpected: std.meta.Tag(CIR.Diagnostic)) !void {
+fn expectNoDiagnosticTag(test_env: *TestEnv, unexpected: std.meta.Tag(CIR.Diagnostic)) anyerror!void {
     const diagnostics = try test_env.getDiagnostics();
     defer testing.allocator.free(diagnostics);
 

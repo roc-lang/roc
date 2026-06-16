@@ -4224,7 +4224,7 @@ const DefExpectation = union(enum) {
     def: []const u8,
 };
 
-fn expectReadUninitializedVarDiagnostics(test_env: *TestEnv, expected_count: usize) !void {
+fn expectReadUninitializedVarDiagnostics(test_env: *TestEnv, expected_count: usize) anyerror!void {
     try testing.expect(!test_env.parse_ast.hasErrors());
 
     const diagnostics = try test_env.module_env.getDiagnostics();
