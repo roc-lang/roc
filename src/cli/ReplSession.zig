@@ -109,6 +109,7 @@ pub fn stepWithConfig(self: *ReplSession, input: []const u8, report_config: repo
     if (line.len == 0) return .none;
 
     if (std.mem.eql(u8, line, ":help")) return .{ .output = try self.helpText() };
+    if (std.mem.eql(u8, line, ":defs")) return .{ .output = try self.printDefs() };
     if (std.mem.eql(u8, line, ":exit") or
         std.mem.eql(u8, line, ":quit") or
         std.mem.eql(u8, line, ":q") or
@@ -265,6 +266,27 @@ fn helpText(self: *ReplSession) Allocator.Error![]u8 {
         \\  :quit, :q, :exit    Exit the REPL
         \\
     );
+}
+
+fn printDefs(self: *ReplSession) Allocator.Error![]u8 {
+    var output = std.ArrayList(u8).empty;
+    errdefer output.deinit(self.allocator);
+
+    for (self.definitions.items.items) |item| {
+        const desc = switch (item.kind) {
+            .value => "value",
+            .annotation => "annotation",
+            .type_decl => "type",
+            .import => "import",
+        };
+        try output.print(
+            self.allocator,
+            "\x1b[90m{s}: {s}\x1b[0m\n",
+            .{ item.name, desc },
+        );
+        try output.print(self.allocator, "{s}\n", .{ item.source });
+    }
+    return try output.toOwnedSlice(self.allocator);
 }
 
 const DefinitionValidation = struct {
