@@ -39,6 +39,6 @@ check label:"Accept terms"
 click role:button name:"Place order"
 ```
 
-The apps use eager stateful signal constructors (`hold!`, `fold!`,
-`fold_i64!`, `fold_bool_toggle!`, and `zip_with!`) so host node identity is
-created when the app builds the graph, not during a later dynamic render.
+The apps expose pure `main : {} -> Elem.Elem`. Signal state is retained by
+explicit keys in Roc's boxed `UiRuntime.Runtime`, while the host only applies
+render commands and sends user events back into Roc.
