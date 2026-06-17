@@ -109,7 +109,9 @@ Elem := [
 			value =
 				match A.decode(nv, NodeValue.format) {
 					(Ok(val), _) => val
-					(Err(_), _) => ...
+					(Err(_), _) => {
+						crash "Elem.dynamic received a value that does not match the dynamic render type"
+					}
 				}
 
 			render(value)
@@ -146,7 +148,9 @@ Elem := [
 			value =
 				match A.decode(nv, NodeValue.format) {
 					(Ok(val), _) => val
-					(Err(_), _) => ...
+					(Err(_), _) => {
+						crash "Elem.dynamic_keyed received a value that does not match the key type"
+					}
 				}
 
 			key_fn(value)
@@ -159,7 +163,9 @@ Elem := [
 			value =
 				match A.decode(nv, NodeValue.format) {
 					(Ok(val), _) => val
-					(Err(_), _) => ...
+					(Err(_), _) => {
+						crash "Elem.dynamic_keyed received a value that does not match the render type"
+					}
 				}
 
 			render(value)
@@ -185,7 +191,9 @@ Elem := [
 			value =
 				match A.decode(nv, NodeValue.format) {
 					(Ok(val), _) => val
-					(Err(_), _) => ...
+					(Err(_), _) => {
+						crash "Elem.each received an item value that does not match the key type"
+					}
 				}
 
 			key_fn(value)
@@ -198,7 +206,9 @@ Elem := [
 			value =
 				match A.decode(nv, NodeValue.format) {
 					(Ok(val), _) => val
-					(Err(_), _) => ...
+					(Err(_), _) => {
+						crash "Elem.each received an item value that does not match the render type"
+					}
 				}
 
 			render(value)

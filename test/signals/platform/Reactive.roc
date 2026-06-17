@@ -65,7 +65,9 @@ Reactive := [].{
 				typed_input =
 					match A.decode(input_nv, NodeValue.format) {
 						(Ok(value), _) => value
-						(Err(_), _) => ...
+						(Err(_), _) => {
+							crash "Reactive.Event.map received a value that does not match the source event type"
+						}
 					}
 				typed_output : b
 				typed_output = f(typed_input)
@@ -132,7 +134,9 @@ Reactive := [].{
 				typed_input =
 					match A.decode(input_nv, NodeValue.format) {
 						(Ok(value), _) => value
-						(Err(_), _) => ...
+						(Err(_), _) => {
+							crash "Reactive.Signal.map received a value that does not match the source signal type"
+						}
 					}
 				typed_output : b
 				typed_output = f(typed_input)
@@ -157,7 +161,9 @@ Reactive := [].{
 				typed_input =
 					match A.decode(input_nv, NodeValue.format) {
 						(Ok(value), _) => value
-						(Err(_), _) => ...
+						(Err(_), _) => {
+							crash "Reactive.Signal.map_keyed received a value that does not match the source signal type"
+						}
 					}
 				typed_output : b
 				typed_output = f(typed_input)
@@ -202,14 +208,18 @@ Reactive := [].{
 				left =
 					match A.decode(left_nv, NodeValue.format) {
 						(Ok(value), _) => value
-						(Err(_), _) => ...
+						(Err(_), _) => {
+							crash "Reactive.Signal.map2 received a value that does not match the left source signal type"
+						}
 					}
 				B : b
 				right : b
 				right =
 					match B.decode(right_nv, NodeValue.format) {
 						(Ok(value), _) => value
-						(Err(_), _) => ...
+						(Err(_), _) => {
+							crash "Reactive.Signal.map2 received a value that does not match the right source signal type"
+						}
 					}
 				output : c
 				output = f(left, right)
@@ -240,14 +250,18 @@ Reactive := [].{
 				left =
 					match A.decode(left_nv, NodeValue.format) {
 						(Ok(value), _) => value
-						(Err(_), _) => ...
+						(Err(_), _) => {
+							crash "Reactive.Signal.map2_keyed received a value that does not match the left source signal type"
+						}
 					}
 				B : b
 				right : b
 				right =
 					match B.decode(right_nv, NodeValue.format) {
 						(Ok(value), _) => value
-						(Err(_), _) => ...
+						(Err(_), _) => {
+							crash "Reactive.Signal.map2_keyed received a value that does not match the right source signal type"
+						}
 					}
 				output : c
 				output = f(left, right)
@@ -312,14 +326,18 @@ Reactive := [].{
 				acc =
 					match A.decode(acc_nv, NodeValue.format) {
 						(Ok(value), _) => value
-						(Err(_), _) => ...
+						(Err(_), _) => {
+							crash "Reactive.Signal.fold received an accumulator value that does not match the signal type"
+						}
 					}
 				E : e
 				evt : e
 				evt =
 					match E.decode(evt_nv, NodeValue.format) {
 						(Ok(value), _) => value
-						(Err(_), _) => ...
+						(Err(_), _) => {
+							crash "Reactive.Signal.fold received an event value that does not match the event type"
+						}
 					}
 				new_acc : a
 				new_acc = step_fn(acc, evt)

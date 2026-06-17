@@ -34,11 +34,11 @@ UiRuntime := [].{
 
 	StateSlot : { key : Str, value : NodeValue, version : U64 }
 
-	StateVersionEntry : { key : Str, version : U64 }
+	StateVersionEntry : { state_index : U64, version : U64 }
 
 	SignalCacheEntry : { key : Str, value : NodeValue, deps : List(StateVersionEntry) }
 
-	EventStateDeps : { event_key : Str, state_keys : List(Str) }
+	EventStateDeps : { event_id : U64, state_indexes : List(U64) }
 
 	HostEvent := [
 		Click(U64),
@@ -98,16 +98,11 @@ UiRuntime := [].{
 		Occurrence({ id : U64, value : NodeValue }),
 	]
 
-	ActiveEventKey := [
-		NoActiveEventKey,
-		ActiveEventKey(Str),
-	]
-
 	EvalState : {
 		runtime : Runtime,
 		active_event : ActiveEvent,
-		dirty_state_keys : List(Str),
-		updated_keys : List(Str),
+		dirty_state_indexes : List(U64),
+		updated_state_indexes : List(U64),
 	}
 
 	EvalResult : { state : EvalState, value : NodeValue }
@@ -137,10 +132,7 @@ UiRuntime := [].{
 		EventIdMissing,
 	]
 
-	EventStateDepsLookup := [
-		EventStateDepsFound({ index : U64, state_keys : List(Str) }),
-		EventStateDepsMissing,
-	]
+	DirtyStates : { indexes : List(U64) }
 
 	SignalCacheEntryLookup := [
 		SignalCacheEntryFound({ index : U64, entry : SignalCacheEntry }),
@@ -157,6 +149,18 @@ UiRuntime := [].{
 		VersionFound(U64),
 		VersionMissing,
 	]
+
+	StateValue : { runtime : Runtime, value : NodeValue, index : U64 }
+
+	RegisteredElem : { runtime : Runtime, elem : Elem }
+
+	RegisteredChildren : { runtime : Runtime, children : List(Elem) }
+
+	RegisteredSignal : { runtime : Runtime, signal : Graph.SignalNode }
+
+	RegisteredEvent : { runtime : Runtime, event : Graph.EventNode }
+
+	RegisteredState : { runtime : Runtime, index : U64 }
 
 	zero_metrics : RuntimeMetrics
 	zero_metrics = {
@@ -188,7 +192,7 @@ UiRuntime := [].{
 
 	init : Elem -> DispatchResult
 	init = |root| {
-		runtime = {
+		runtime0 = {
 			root,
 			states: [],
 			event_ids: [],
@@ -199,7 +203,9 @@ UiRuntime := [].{
 			event_state_deps: [],
 			metrics: zero_metrics,
 		}
-		rendered = render_runtime(runtime, NoEvent, [], True)
+		registered = register_elem(runtime0, root)
+		runtime = { ..registered.runtime, root: registered.elem }
+		rendered = render_runtime(runtime, NoEvent, { indexes: [] }, True)
 		runtime_box = Box.box(rendered.runtime)
 		result = {
 			runtime: runtime_box,
@@ -213,15 +219,14 @@ UiRuntime := [].{
 	dispatch = |boxed_runtime, host_event| {
 		runtime0 = Box.unbox(boxed_runtime)
 		active_event = host_event_to_active(host_event)
-		active_event_key = active_event_key_for_runtime(runtime0, active_event)
-		dirty_state_keys = dirty_state_keys_for_active_event(runtime0.event_state_deps, active_event_key)
+		dirty_states = dirty_states_for_active_event(runtime0, active_event)
 		metrics = runtime0.metrics
 		runtime1 = { ..runtime0, metrics: { ..metrics,
 				events_processed: metrics.events_processed + 1,
 				retained_graph_dispatches: metrics.retained_graph_dispatches + 1,
 			}
 		}
-		rendered = render_runtime(runtime1, active_event, dirty_state_keys, False)
+		rendered = render_runtime(runtime1, active_event, dirty_states, False)
 		{
 			runtime: Box.box(rendered.runtime),
 			commands: rendered.emit_commands,
@@ -229,35 +234,326 @@ UiRuntime := [].{
 		}
 	}
 
-	active_event_key_for_runtime : Runtime, ActiveEvent -> ActiveEventKey
-	active_event_key_for_runtime = |runtime, active_event| {
+	dirty_states_for_active_event : Runtime, ActiveEvent -> DirtyStates
+	dirty_states_for_active_event = |runtime, active_event| {
 		match active_event {
-			NoEvent => NoActiveEventKey
-			Occurrence({ id }) => event_key_for_id(runtime.event_keys_by_id, id)
+			NoEvent => { indexes: [] }
+			Occurrence({ id }) =>
+				if id == 0 {
+					{
+						crash "Signals runtime invariant violated: event id 0 is not registered"
+					}
+				} else {
+					match List.get(runtime.event_state_deps, id - 1) {
+						Ok(entry) => { indexes: entry.state_indexes }
+						Err(_) => {
+							crash "Signals runtime invariant violated: event dependency slot missing"
+						}
+					}
+				}
 		}
 	}
 
-	event_key_for_id : List(Str), U64 -> ActiveEventKey
-	event_key_for_id = |event_keys_by_id, id| {
-		if id == 0 {
-			NoActiveEventKey
-		} else {
-			match List.get(event_keys_by_id, id - 1) {
-				Ok(key) => ActiveEventKey(key)
-				Err(_) => NoActiveEventKey
+	register_elem : Runtime, Elem -> RegisteredElem
+	register_elem = |runtime, elem| {
+		match elem {
+			Div(children) => {
+				registered = register_children(runtime, children)
+				{ runtime: registered.runtime, elem: Div(registered.children) }
+			}
+
+			Button({ on_click, label }) => {
+				registered_event = register_event(runtime, on_click)
+				registered_label = register_signal(registered_event.runtime, label)
+				{
+					runtime: registered_label.runtime,
+					elem: Button({ on_click: registered_event.event, label: registered_label.signal }),
+				}
+			}
+
+			ActionButton({ on_click, label, disabled }) => {
+				registered_event = register_event(runtime, on_click)
+				registered_label = register_signal(registered_event.runtime, label)
+				registered_disabled = register_signal(registered_label.runtime, disabled)
+				{
+					runtime: registered_disabled.runtime,
+					elem: ActionButton({ on_click: registered_event.event, label: registered_label.signal, disabled: registered_disabled.signal }),
+				}
+			}
+
+			Label({ signal }) => {
+				registered_signal = register_signal(runtime, signal)
+				{ runtime: registered_signal.runtime, elem: Label({ signal: registered_signal.signal }) }
+			}
+
+			Text(_) => { runtime, elem }
+
+			Heading(_) => { runtime, elem }
+
+			Paragraph(_) => { runtime, elem }
+
+			Section({ label, children }) => {
+				registered = register_children(runtime, children)
+				{ runtime: registered.runtime, elem: Section({ label, children: registered.children }) }
+			}
+
+			TextInput({ label, value, on_input, disabled }) => {
+				registered_event = register_event(runtime, on_input)
+				registered_value = register_signal(registered_event.runtime, value)
+				registered_disabled = register_signal(registered_value.runtime, disabled)
+				{
+					runtime: registered_disabled.runtime,
+					elem: TextInput({ label, value: registered_value.signal, on_input: registered_event.event, disabled: registered_disabled.signal }),
+				}
+			}
+
+			Checkbox({ label, checked, on_check, disabled }) => {
+				registered_event = register_event(runtime, on_check)
+				registered_checked = register_signal(registered_event.runtime, checked)
+				registered_disabled = register_signal(registered_checked.runtime, disabled)
+				{
+					runtime: registered_disabled.runtime,
+					elem: Checkbox({ label, checked: registered_checked.signal, on_check: registered_event.event, disabled: registered_disabled.signal }),
+				}
+			}
+
+			Dynamic({ signal, render }) => {
+				registered_signal = register_signal(runtime, signal)
+				{ runtime: registered_signal.runtime, elem: Dynamic({ signal: registered_signal.signal, render }) }
+			}
+
+			DynamicKeyed({ signal, key, render }) => {
+				registered_signal = register_signal(runtime, signal)
+				{ runtime: registered_signal.runtime, elem: DynamicKeyed({ signal: registered_signal.signal, key, render }) }
+			}
+
+			Each({ signal, key, render }) => {
+				registered_signal = register_signal(runtime, signal)
+				{ runtime: registered_signal.runtime, elem: Each({ signal: registered_signal.signal, key, render }) }
 			}
 		}
 	}
 
-	dirty_state_keys_for_active_event : List(EventStateDeps), ActiveEventKey -> List(Str)
-	dirty_state_keys_for_active_event = |deps, active_event_key| {
-		match active_event_key {
-			NoActiveEventKey => []
-			ActiveEventKey(event_key) =>
-				match event_state_deps_lookup(deps, event_key) {
-					EventStateDepsFound(found) => found.state_keys
-					EventStateDepsMissing => []
+	register_children : Runtime, List(Elem) -> RegisteredChildren
+	register_children = |runtime, children| {
+		List.fold(
+			children,
+			{ runtime, children: [] },
+			|acc, child| {
+				registered = register_elem(acc.runtime, child)
+				{ runtime: registered.runtime, children: List.append(acc.children, registered.elem) }
+			},
+		)
+	}
+
+	register_signal : Runtime, Graph.SignalNode -> RegisteredSignal
+	register_signal = |runtime, signal| {
+		match signal.expr {
+			Graph.SignalExpr.ConstSignal(_) => { runtime, signal: { ..signal, dep_indexes: [] } }
+			Graph.SignalExpr.ConstI64(_) => { runtime, signal: { ..signal, dep_indexes: [] } }
+			Graph.SignalExpr.ConstBool(_) => { runtime, signal: { ..signal, dep_indexes: [] } }
+			Graph.SignalExpr.ConstStr(_) => { runtime, signal: { ..signal, dep_indexes: [] } }
+
+			Graph.SignalExpr.MapSignal({ source, transform }) => {
+				registered_source = register_signal(runtime, Box.unbox(source))
+				registered_signal = { ..signal,
+					dep_indexes: registered_source.signal.dep_indexes,
+					expr: Graph.SignalExpr.MapSignal({ source: Box.box(registered_source.signal), transform }),
 				}
+				{ runtime: registered_source.runtime, signal: registered_signal }
+			}
+
+			Graph.SignalExpr.MapI64I64({ source, transform }) => {
+				registered_source = register_signal(runtime, Box.unbox(source))
+				registered_signal = { ..signal,
+					dep_indexes: registered_source.signal.dep_indexes,
+					expr: Graph.SignalExpr.MapI64I64({ source: Box.box(registered_source.signal), transform }),
+				}
+				{ runtime: registered_source.runtime, signal: registered_signal }
+			}
+
+			Graph.SignalExpr.MapI64Str({ source, transform }) => {
+				registered_source = register_signal(runtime, Box.unbox(source))
+				registered_signal = { ..signal,
+					dep_indexes: registered_source.signal.dep_indexes,
+					expr: Graph.SignalExpr.MapI64Str({ source: Box.box(registered_source.signal), transform }),
+				}
+				{ runtime: registered_source.runtime, signal: registered_signal }
+			}
+
+			Graph.SignalExpr.Map2Signal({ left, right, transform }) => {
+				registered_left = register_signal(runtime, Box.unbox(left))
+				registered_right = register_signal(registered_left.runtime, Box.unbox(right))
+				registered_signal = { ..signal,
+					dep_indexes: merge_u64_deps(registered_left.signal.dep_indexes, registered_right.signal.dep_indexes),
+					expr: Graph.SignalExpr.Map2Signal({ left: Box.box(registered_left.signal), right: Box.box(registered_right.signal), transform }),
+				}
+				{ runtime: registered_right.runtime, signal: registered_signal }
+			}
+
+			Graph.SignalExpr.Map2I64I64({ left, right, transform }) => {
+				registered_left = register_signal(runtime, Box.unbox(left))
+				registered_right = register_signal(registered_left.runtime, Box.unbox(right))
+				registered_signal = { ..signal,
+					dep_indexes: merge_u64_deps(registered_left.signal.dep_indexes, registered_right.signal.dep_indexes),
+					expr: Graph.SignalExpr.Map2I64I64({ left: Box.box(registered_left.signal), right: Box.box(registered_right.signal), transform }),
+				}
+				{ runtime: registered_right.runtime, signal: registered_signal }
+			}
+
+			Graph.SignalExpr.Map2I64I64Str({ left, right, transform }) => {
+				registered_left = register_signal(runtime, Box.unbox(left))
+				registered_right = register_signal(registered_left.runtime, Box.unbox(right))
+				registered_signal = { ..signal,
+					dep_indexes: merge_u64_deps(registered_left.signal.dep_indexes, registered_right.signal.dep_indexes),
+					expr: Graph.SignalExpr.Map2I64I64Str({ left: Box.box(registered_left.signal), right: Box.box(registered_right.signal), transform }),
+				}
+				{ runtime: registered_right.runtime, signal: registered_signal }
+			}
+
+			Graph.SignalExpr.Hold({ key, initial, event }) => {
+				registered_event = register_event(runtime, Box.unbox(event))
+				registered_state = register_state_key(registered_event.runtime, key, initial)
+				runtime1 = register_state_event_indexes(registered_state.runtime, registered_state.index, registered_event.event.source_ids)
+				registered_signal = { ..signal,
+					dep_indexes: [registered_state.index],
+					expr: Graph.SignalExpr.Hold({ key, initial, event: Box.box(registered_event.event) }),
+				}
+				{ runtime: runtime1, signal: registered_signal }
+			}
+
+			Graph.SignalExpr.Fold({ key, initial, event, step }) => {
+				registered_event = register_event(runtime, Box.unbox(event))
+				registered_state = register_state_key(registered_event.runtime, key, initial)
+				runtime1 = register_state_event_indexes(registered_state.runtime, registered_state.index, registered_event.event.source_ids)
+				registered_signal = { ..signal,
+					dep_indexes: [registered_state.index],
+					expr: Graph.SignalExpr.Fold({ key, initial, event: Box.box(registered_event.event), step }),
+				}
+				{ runtime: runtime1, signal: registered_signal }
+			}
+
+			Graph.SignalExpr.FoldI64({ key, initial, event, step }) => {
+				registered_event = register_event(runtime, Box.unbox(event))
+				registered_state = register_state_key(registered_event.runtime, key, NodeValue.from_i64(initial))
+				runtime1 = register_state_event_indexes(registered_state.runtime, registered_state.index, registered_event.event.source_ids)
+				registered_signal = { ..signal,
+					dep_indexes: [registered_state.index],
+					expr: Graph.SignalExpr.FoldI64({ key, initial, event: Box.box(registered_event.event), step }),
+				}
+				{ runtime: runtime1, signal: registered_signal }
+			}
+
+			Graph.SignalExpr.FoldBoolToggle({ key, initial, event }) => {
+				registered_event = register_event(runtime, Box.unbox(event))
+				registered_state = register_state_key(registered_event.runtime, key, NodeValue.from_bool(initial))
+				runtime1 = register_state_event_indexes(registered_state.runtime, registered_state.index, registered_event.event.source_ids)
+				registered_signal = { ..signal,
+					dep_indexes: [registered_state.index],
+					expr: Graph.SignalExpr.FoldBoolToggle({ key, initial, event: Box.box(registered_event.event) }),
+				}
+				{ runtime: runtime1, signal: registered_signal }
+			}
+		}
+	}
+
+	register_event : Runtime, Graph.EventNode -> RegisteredEvent
+	register_event = |runtime, event| {
+		match event.expr {
+			Graph.EventExpr.Source(key) => {
+				registered_event = register_event_key(runtime, key)
+				{
+					runtime: registered_event.runtime,
+					event: { ..event, source_ids: [registered_event.id] },
+				}
+			}
+
+			Graph.EventExpr.MapEvent({ source, transform }) => {
+				registered_source = register_event(runtime, Box.unbox(source))
+				registered_event = { ..event,
+					source_ids: registered_source.event.source_ids,
+					expr: Graph.EventExpr.MapEvent({ source: Box.box(registered_source.event), transform }),
+				}
+				{ runtime: registered_source.runtime, event: registered_event }
+			}
+
+			Graph.EventExpr.MapUnitI64Const({ source, value }) => {
+				registered_source = register_event(runtime, Box.unbox(source))
+				registered_event = { ..event,
+					source_ids: registered_source.event.source_ids,
+					expr: Graph.EventExpr.MapUnitI64Const({ source: Box.box(registered_source.event), value }),
+				}
+				{ runtime: registered_source.runtime, event: registered_event }
+			}
+
+			Graph.EventExpr.Merge({ left, right }) => {
+				registered_left = register_event(runtime, Box.unbox(left))
+				registered_right = register_event(registered_left.runtime, Box.unbox(right))
+				registered_event = { ..event,
+					source_ids: merge_u64_deps(registered_left.event.source_ids, registered_right.event.source_ids),
+					expr: Graph.EventExpr.Merge({ left: Box.box(registered_left.event), right: Box.box(registered_right.event) }),
+				}
+				{ runtime: registered_right.runtime, event: registered_event }
+			}
+		}
+	}
+
+	register_state_key : Runtime, Str, NodeValue -> RegisteredState
+	register_state_key = |runtime, key, initial| {
+		match state_slot_lookup(runtime.states, key) {
+			StateSlotFound(found) => { runtime, index: found.index }
+			StateSlotMissing => {
+				index = List.len(runtime.states)
+				{
+					runtime: { ..runtime, states: List.append(runtime.states, { key, value: initial, version: 0 }) },
+					index,
+				}
+			}
+		}
+	}
+
+	register_event_key : Runtime, Str -> EventLookup
+	register_event_key = |runtime, key| {
+		match event_id_lookup(runtime.event_ids, key) {
+			EventIdFound(id) => { runtime, id }
+			EventIdMissing => {
+				id = runtime.next_event_id
+				{
+					runtime: { ..runtime,
+						event_ids: List.append(runtime.event_ids, { key, id }),
+						event_keys_by_id: List.append(runtime.event_keys_by_id, key),
+						event_state_deps: List.append(runtime.event_state_deps, { event_id: id, state_indexes: [] }),
+						next_event_id: id + 1,
+					},
+					id,
+				}
+			}
+		}
+	}
+
+	register_state_event_indexes : Runtime, U64, List(U64) -> Runtime
+	register_state_event_indexes = |runtime, state_index, event_ids| {
+		List.fold(
+			event_ids,
+			runtime,
+			|acc, event_id| register_state_event_index(acc, event_id, state_index),
+		)
+	}
+
+	register_state_event_index : Runtime, U64, U64 -> Runtime
+	register_state_event_index = |runtime, event_id, state_index| {
+		match List.get(runtime.event_state_deps, event_id - 1) {
+			Ok(entry) =>
+				if u64_list_contains(entry.state_indexes, state_index) {
+					runtime
+				} else {
+					next = { event_id, state_indexes: List.append(entry.state_indexes, state_index) }
+					{ ..runtime, event_state_deps: replace_event_state_deps(runtime.event_state_deps, event_id - 1, next) }
+				}
+
+			Err(_) => {
+				crash "Signals runtime invariant violated: event dependency slot missing"
+			}
 		}
 	}
 
@@ -276,9 +572,14 @@ UiRuntime := [].{
 		}
 	}
 
-	render_runtime : Runtime, ActiveEvent, List(Str), Bool -> RenderResult
-	render_runtime = |runtime, active_event, dirty_state_keys, force_full| {
-		state = { runtime, active_event, dirty_state_keys, updated_keys: [] }
+	render_runtime : Runtime, ActiveEvent, DirtyStates, Bool -> RenderResult
+	render_runtime = |runtime, active_event, dirty_states, force_full| {
+		state = {
+			runtime,
+			active_event,
+			dirty_state_indexes: dirty_states.indexes,
+			updated_state_indexes: [],
+		}
 		render_state = {
 			state,
 			commands: [ResetDom],
@@ -576,12 +877,13 @@ UiRuntime := [].{
 				result = eval_signal(created.render_state.state, signal)
 				fn = Box.unbox(render)
 				child = fn(result.value)
-				metrics = result.state.runtime.metrics
-				state1 = { ..result.state, runtime: { ..result.state.runtime, metrics: { ..metrics, dynamic_renders: metrics.dynamic_renders + 1 }
+				registered_child = register_elem(result.state.runtime, child)
+				metrics = registered_child.runtime.metrics
+				state1 = { ..result.state, runtime: { ..registered_child.runtime, metrics: { ..metrics, dynamic_renders: metrics.dynamic_renders + 1 }
 					}
 				}
 				render_child = { ..created.render_state, state: state1 }
-				render_elem(render_child, child, created.id)
+				render_elem(render_child, registered_child.elem, created.id)
 			}
 
 			DynamicKeyed({ signal, key, render }) => {
@@ -591,12 +893,13 @@ UiRuntime := [].{
 				_ = key_fn(result.value)
 				fn = Box.unbox(render)
 				child = fn(result.value)
-				metrics = result.state.runtime.metrics
-				state1 = { ..result.state, runtime: { ..result.state.runtime, metrics: { ..metrics, dynamic_renders: metrics.dynamic_renders + 1, keyed_creates: metrics.keyed_creates + 1 }
+				registered_child = register_elem(result.state.runtime, child)
+				metrics = registered_child.runtime.metrics
+				state1 = { ..result.state, runtime: { ..registered_child.runtime, metrics: { ..metrics, dynamic_renders: metrics.dynamic_renders + 1, keyed_creates: metrics.keyed_creates + 1 }
 					}
 				}
 				render_child = { ..created.render_state, state: state1 }
-				render_elem(render_child, child, created.id)
+				render_elem(render_child, registered_child.elem, created.id)
 			}
 
 			Each({ signal, key, render }) => {
@@ -615,7 +918,10 @@ UiRuntime := [].{
 					start,
 					|acc, item| {
 						_ = key_fn(item)
-						render_elem(acc, render_fn(item), created.id)
+						child = render_fn(item)
+						registered_child = register_elem(acc.state.runtime, child)
+						acc_with_registered = { ..acc, state: { ..acc.state, runtime: registered_child.runtime } }
+						render_elem(acc_with_registered, registered_child.elem, created.id)
 					},
 				)
 			}
@@ -624,28 +930,18 @@ UiRuntime := [].{
 
 	event_id_for_node : Runtime, Graph.EventNode -> EventLookup
 	event_id_for_node = |runtime, event| {
-		match event.expr {
-			Graph.EventExpr.Source(key) => event_id_for_key(runtime, key)
-			_ => ...
-		}
-	}
-
-	event_id_for_key : Runtime, Str -> EventLookup
-	event_id_for_key = |runtime, key| {
 		metrics0 = runtime.metrics
 		runtime_with_count = { ..runtime, metrics: { ..metrics0, event_lookups: metrics0.event_lookups + 1 } }
-		match event_id_lookup(runtime_with_count.event_ids, key) {
-			EventIdFound(id) => { runtime: runtime_with_count, id }
-			EventIdMissing => {
-				id = runtime_with_count.next_event_id
-				{
-					runtime: { ..runtime_with_count,
-						event_ids: List.append(runtime_with_count.event_ids, { key, id }),
-						event_keys_by_id: List.append(runtime_with_count.event_keys_by_id, key),
-						next_event_id: id + 1,
-					},
-					id,
+		match event.expr {
+			Graph.EventExpr.Source(_) =>
+				match List.get(event.source_ids, 0) {
+					Ok(id) => { runtime: runtime_with_count, id }
+					Err(_) => {
+						crash "Signals runtime invariant violated: event source id was not registered"
+					}
 				}
+			_ => {
+				crash "Signals runtime invariant violated: UI binding must use an event source"
 			}
 		}
 	}
@@ -653,8 +949,8 @@ UiRuntime := [].{
 	eval_event : EvalState, Graph.EventNode -> EventResult
 	eval_event = |state, event| {
 		match event.expr {
-			Graph.EventExpr.Source(key) => {
-				lookup = event_id_for_key(state.runtime, key)
+			Graph.EventExpr.Source(_) => {
+				lookup = event_id_for_node(state.runtime, event)
 				state1 = { ..state, runtime: lookup.runtime }
 				match state.active_event {
 					Occurrence({ id, value }) =>
@@ -698,12 +994,12 @@ UiRuntime := [].{
 		match signal.cache_key {
 			Graph.SignalCacheKey.NoSignalCacheKey => eval_signal_uncached(state, signal)
 			Graph.SignalCacheKey.SignalCacheKey(key) =>
-				if signal_depends_on_dirty_state(signal, state.dirty_state_keys) {
+				if signal_depends_on_dirty_state(signal, state.dirty_state_indexes) {
 					metrics0 = state.runtime.metrics
 					state1 = { ..state, runtime: { ..state.runtime, metrics: { ..metrics0, signal_cache_misses: metrics0.signal_cache_misses + 1 } } }
 					eval_signal_uncached(state1, signal)
 				} else {
-					match signal_cache_lookup(state.runtime, signal.deps, key) {
+					match signal_cache_lookup(state.runtime, signal.dep_indexes, key) {
 						CacheHit(value) => {
 							metrics0 = state.runtime.metrics
 							metrics1 = { ..metrics0,
@@ -809,26 +1105,26 @@ UiRuntime := [].{
 					{ state: state1, value: NodeValue.from_str(fn((NodeValue.to_i64(left_result.value), NodeValue.to_i64(right_result.value)))) }
 				}
 
-				Graph.SignalExpr.Hold({ key, initial, event }) => {
+				Graph.SignalExpr.Hold({ event }) => {
 					event_node = Box.unbox(event)
-					runtime_with_deps = register_state_event_deps(state_with_count.runtime, key, event_node.sources)
-					current = state_value(runtime_with_deps, key, initial)
+					state_index = state_index_for_signal(signal)
+					current = state_value_by_index(state_with_count.runtime, state_index)
 					state1 = { ..state_with_count, runtime: current.runtime }
-					if str_list_contains(state1.updated_keys, key) {
+					if u64_list_contains(state1.updated_state_indexes, current.index) {
 						{ state: state1, value: current.value }
 					} else {
 						event_result = eval_event(state1, event_node)
 						next_value = List.fold(event_result.values, current.value, |_acc, value| value)
-						finish_state_update(event_result.state, key, current.value, next_value, !List.is_empty(event_result.values))
+						finish_state_update(event_result.state, current.index, current.value, next_value, !List.is_empty(event_result.values))
 					}
 				}
 
-				Graph.SignalExpr.Fold({ key, initial, event, step }) => {
+				Graph.SignalExpr.Fold({ event, step }) => {
 					event_node = Box.unbox(event)
-					runtime_with_deps = register_state_event_deps(state_with_count.runtime, key, event_node.sources)
-					current = state_value(runtime_with_deps, key, initial)
+					state_index = state_index_for_signal(signal)
+					current = state_value_by_index(state_with_count.runtime, state_index)
 					state1 = { ..state_with_count, runtime: current.runtime }
-					if str_list_contains(state1.updated_keys, key) {
+					if u64_list_contains(state1.updated_state_indexes, current.index) {
 						{ state: state1, value: current.value }
 					} else {
 						event_result = eval_event(state1, event_node)
@@ -838,17 +1134,16 @@ UiRuntime := [].{
 							}
 						}
 						next_value = List.fold(event_result.values, current.value, |acc, evt| fn((acc, evt)))
-						finish_state_update(state2, key, current.value, next_value, !List.is_empty(event_result.values))
+						finish_state_update(state2, current.index, current.value, next_value, !List.is_empty(event_result.values))
 					}
 				}
 
-				Graph.SignalExpr.FoldI64({ key, initial, event, step }) => {
+				Graph.SignalExpr.FoldI64({ event, step }) => {
 					event_node = Box.unbox(event)
-					runtime_with_deps = register_state_event_deps(state_with_count.runtime, key, event_node.sources)
-					initial_nv = NodeValue.from_i64(initial)
-					current = state_value(runtime_with_deps, key, initial_nv)
+					state_index = state_index_for_signal(signal)
+					current = state_value_by_index(state_with_count.runtime, state_index)
 					state1 = { ..state_with_count, runtime: current.runtime }
-					if str_list_contains(state1.updated_keys, key) {
+					if u64_list_contains(state1.updated_state_indexes, current.index) {
 						{ state: state1, value: current.value }
 					} else {
 						event_result = eval_event(state1, event_node)
@@ -858,29 +1153,28 @@ UiRuntime := [].{
 							}
 						}
 						next_i64 = List.fold(event_result.values, NodeValue.to_i64(current.value), |acc, evt| fn((acc, NodeValue.to_i64(evt))))
-						finish_state_update(state2, key, current.value, NodeValue.from_i64(next_i64), !List.is_empty(event_result.values))
+						finish_state_update(state2, current.index, current.value, NodeValue.from_i64(next_i64), !List.is_empty(event_result.values))
 					}
 				}
 
-				Graph.SignalExpr.FoldBoolToggle({ key, initial, event }) => {
+				Graph.SignalExpr.FoldBoolToggle({ event }) => {
 					event_node = Box.unbox(event)
-					runtime_with_deps = register_state_event_deps(state_with_count.runtime, key, event_node.sources)
-					initial_nv = NodeValue.from_bool(initial)
-					current = state_value(runtime_with_deps, key, initial_nv)
+					state_index = state_index_for_signal(signal)
+					current = state_value_by_index(state_with_count.runtime, state_index)
 					state1 = { ..state_with_count, runtime: current.runtime }
-					if str_list_contains(state1.updated_keys, key) {
+					if u64_list_contains(state1.updated_state_indexes, current.index) {
 						{ state: state1, value: current.value }
 					} else {
 						event_result = eval_event(state1, event_node)
 						next_bool = List.fold(event_result.values, node_bool(current.value), |acc, _evt| !acc)
-						finish_state_update(event_result.state, key, current.value, NodeValue.from_bool(next_bool), !List.is_empty(event_result.values))
+						finish_state_update(event_result.state, current.index, current.value, NodeValue.from_bool(next_bool), !List.is_empty(event_result.values))
 					}
 				}
 			}
-		cache_signal_result(signal.cache_key, signal.deps, result)
+		cache_signal_result(signal.cache_key, signal.dep_indexes, result)
 	}
 
-	cache_signal_result : Graph.SignalCacheKey, List(Str), EvalResult -> EvalResult
+	cache_signal_result : Graph.SignalCacheKey, List(U64), EvalResult -> EvalResult
 	cache_signal_result = |cache_key, deps, result| {
 		match cache_key {
 			Graph.SignalCacheKey.NoSignalCacheKey => result
@@ -891,9 +1185,9 @@ UiRuntime := [].{
 		}
 	}
 
-	signal_depends_on_dirty_state : Graph.SignalNode, List(Str) -> Bool
-	signal_depends_on_dirty_state = |signal, dirty_state_keys| {
-		List.any(signal.deps, |dep| str_list_contains(dirty_state_keys, dep))
+	signal_depends_on_dirty_state : Graph.SignalNode, List(U64) -> Bool
+	signal_depends_on_dirty_state = |signal, dirty_state_indexes| {
+		List.any(signal.dep_indexes, |dep_index| u64_list_contains(dirty_state_indexes, dep_index))
 	}
 
 	event_id_lookup : List(EventId), Str -> EventIdLookup
@@ -907,30 +1201,6 @@ UiRuntime := [].{
 				Ok(entry) =>
 					if entry.key == key {
 						$result = EventIdFound(entry.id)
-						$done = True
-					} else {
-						$index = $index + 1
-					}
-				Err(_) => {
-					$done = True
-				}
-			}
-		}
-
-		$result
-	}
-
-	event_state_deps_lookup : List(EventStateDeps), Str -> EventStateDepsLookup
-	event_state_deps_lookup = |deps, event_key| {
-		var $index = 0
-		var $result = EventStateDepsMissing
-		var $done = False
-
-		while $done == False and $index < List.len(deps) {
-			match List.get(deps, $index) {
-				Ok(entry) =>
-					if entry.event_key == event_key {
-						$result = EventStateDepsFound({ index: $index, state_keys: entry.state_keys })
 						$done = True
 					} else {
 						$index = $index + 1
@@ -992,7 +1262,7 @@ UiRuntime := [].{
 		$result
 	}
 
-	signal_cache_lookup : Runtime, List(Str), Str -> CacheLookup
+	signal_cache_lookup : Runtime, List(U64), Str -> CacheLookup
 	signal_cache_lookup = |runtime, signal_deps, key| {
 		match signal_cache_entry_lookup(runtime.signal_cache, key) {
 			SignalCacheEntryFound(found) =>
@@ -1005,38 +1275,45 @@ UiRuntime := [].{
 		}
 	}
 
-	signal_cache_entry_valid : Runtime, List(Str), List(StateVersionEntry) -> Bool
+	signal_cache_entry_valid : Runtime, List(U64), List(StateVersionEntry) -> Bool
 	signal_cache_entry_valid = |runtime, signal_deps, cached_deps| {
 		current_deps_present = List.all(
 			signal_deps,
-			|dep|
-				match state_version_lookup(cached_deps, dep) {
-					VersionFound(version) => current_state_version(runtime, dep) == version
+			|state_index|
+				match state_version_lookup(cached_deps, state_index) {
+					VersionFound(version) => current_state_version_by_index(runtime, state_index) == version
 					VersionMissing => False
 				},
 		)
 		no_stale_cached_deps = List.all(
 			cached_deps,
-			|dep| str_list_contains(signal_deps, dep.key) and current_state_version(runtime, dep.key) == dep.version,
+			|dep| u64_list_contains(signal_deps, dep.state_index) and current_state_version_by_index(runtime, dep.state_index) == dep.version,
 		)
 		current_deps_present and no_stale_cached_deps
 	}
 
-	state_versions_for_deps : Runtime, List(Str) -> List(StateVersionEntry)
+	state_versions_for_deps : Runtime, List(U64) -> List(StateVersionEntry)
 	state_versions_for_deps = |runtime, deps| {
-		List.map(deps, |dep| { key: dep, version: current_state_version(runtime, dep) })
+		List.map(
+			deps,
+			|state_index| {
+				{ state_index, version: current_state_version_by_index(runtime, state_index) }
+			},
+		)
 	}
 
-	current_state_version : Runtime, Str -> U64
-	current_state_version = |runtime, key| {
-		match state_slot_lookup(runtime.states, key) {
-			StateSlotFound(found) => found.slot.version
-			StateSlotMissing => 0
+	current_state_version_by_index : Runtime, U64 -> U64
+	current_state_version_by_index = |runtime, state_index| {
+		match List.get(runtime.states, state_index) {
+			Ok(slot) => slot.version
+			Err(_) => {
+				crash "Signals runtime invariant violated: state version index was not registered"
+			}
 		}
 	}
 
-	state_version_lookup : List(StateVersionEntry), Str -> VersionLookup
-	state_version_lookup = |entries, key| {
+	state_version_lookup : List(StateVersionEntry), U64 -> VersionLookup
+	state_version_lookup = |entries, state_index| {
 		var $index = 0
 		var $result = VersionMissing
 		var $done = False
@@ -1044,7 +1321,7 @@ UiRuntime := [].{
 		while $done == False and $index < List.len(entries) {
 			match List.get(entries, $index) {
 				Ok(entry) =>
-					if entry.key == key {
+					if entry.state_index == state_index {
 						$result = VersionFound(entry.version)
 						$done = True
 					} else {
@@ -1110,7 +1387,7 @@ UiRuntime := [].{
 		$next
 	}
 
-	set_signal_cache : Runtime, Str, List(Str), NodeValue -> Runtime
+	set_signal_cache : Runtime, Str, List(U64), NodeValue -> Runtime
 	set_signal_cache = |runtime, key, signal_deps, value| {
 		deps = state_versions_for_deps(runtime, signal_deps)
 		entry = { key, value, deps }
@@ -1121,28 +1398,23 @@ UiRuntime := [].{
 		}
 	}
 
-	register_state_event_deps : Runtime, Str, List(Str) -> Runtime
-	register_state_event_deps = |runtime, state_key, event_keys| {
-		List.fold(event_keys, runtime, |acc, event_key| register_state_event_dep(acc, event_key, state_key))
-	}
+	merge_u64_deps : List(U64), List(U64) -> List(U64)
+	merge_u64_deps = |left, right| {
+		var $deps = left
 
-	register_state_event_dep : Runtime, Str, Str -> Runtime
-	register_state_event_dep = |runtime, event_key, state_key| {
-		match event_state_deps_lookup(runtime.event_state_deps, event_key) {
-			EventStateDepsFound(found) =>
-				if str_list_contains(found.state_keys, state_key) {
-					runtime
-				} else {
-					next = { event_key, state_keys: List.append(found.state_keys, state_key) }
-					{ ..runtime, event_state_deps: replace_event_state_deps(runtime.event_state_deps, found.index, next) }
-				}
-
-			EventStateDepsMissing => { ..runtime, event_state_deps: List.append(runtime.event_state_deps, { event_key, state_keys: [state_key] }) }
+		for dep in right {
+			if u64_list_contains($deps, dep) {
+				{}
+			} else {
+				$deps = List.append($deps, dep)
+			}
 		}
+
+		$deps
 	}
 
-	str_list_contains : List(Str), Str -> Bool
-	str_list_contains = |items, item| {
+	u64_list_contains : List(U64), U64 -> Bool
+	u64_list_contains = |items, item| {
 		var $index = 0
 		var $found = False
 
@@ -1163,23 +1435,30 @@ UiRuntime := [].{
 		$found
 	}
 
-	state_value : Runtime, Str, NodeValue -> { runtime : Runtime, value : NodeValue }
-	state_value = |runtime, key, initial| {
-		metrics0 = runtime.metrics
-		runtime_with_count = { ..runtime, metrics: { ..metrics0, state_lookups: metrics0.state_lookups + 1 } }
-		match state_slot_lookup(runtime_with_count.states, key) {
-			StateSlotFound(found) => { runtime: runtime_with_count, value: found.slot.value }
-			StateSlotMissing => {
-				{
-					runtime: { ..runtime_with_count, states: List.append(runtime_with_count.states, { key, value: initial, version: 0 }) },
-					value: initial,
-				}
+	state_index_for_signal : Graph.SignalNode -> U64
+	state_index_for_signal = |signal| {
+		match List.get(signal.dep_indexes, 0) {
+			Ok(index) => index
+			Err(_) => {
+				crash "Signals runtime invariant violated: signal state index was not registered"
 			}
 		}
 	}
 
-	finish_state_update : EvalState, Str, NodeValue, NodeValue, Bool -> EvalResult
-	finish_state_update = |state, key, previous, next, had_event| {
+	state_value_by_index : Runtime, U64 -> StateValue
+	state_value_by_index = |runtime, state_index| {
+		metrics0 = runtime.metrics
+		runtime_with_count = { ..runtime, metrics: { ..metrics0, state_lookups: metrics0.state_lookups + 1 } }
+		match List.get(runtime_with_count.states, state_index) {
+			Ok(slot) => { runtime: runtime_with_count, value: slot.value, index: state_index }
+			Err(_) => {
+				crash "Signals runtime invariant violated: state index was not registered"
+			}
+		}
+	}
+
+	finish_state_update : EvalState, U64, NodeValue, NodeValue, Bool -> EvalResult
+	finish_state_update = |state, state_index, previous, next, had_event| {
 		if had_event {
 			metrics0 = state.runtime.metrics
 			changed = !node_value_equal(previous, next)
@@ -1195,23 +1474,23 @@ UiRuntime := [].{
 						node_value_equality_checks: metrics0.node_value_equality_checks + 1,
 					}
 				}
-			runtime2 = set_state({ ..state.runtime, metrics: metrics1 }, key, next, changed)
-			state1 = { ..state, runtime: runtime2, updated_keys: List.append(state.updated_keys, key) }
+			runtime2 = set_state_by_index({ ..state.runtime, metrics: metrics1 }, state_index, next, changed)
+			state1 = { ..state, runtime: runtime2, updated_state_indexes: List.append(state.updated_state_indexes, state_index) }
 			{ state: state1, value: next }
 		} else {
 			{ state, value: previous }
 		}
 	}
 
-	set_state : Runtime, Str, NodeValue, Bool -> Runtime
-	set_state = |runtime, key, value, bump_version| {
-		match state_slot_lookup(runtime.states, key) {
-			StateSlotFound(found) => {
+	set_state_by_index : Runtime, U64, NodeValue, Bool -> Runtime
+	set_state_by_index = |runtime, state_index, value, bump_version| {
+		match List.get(runtime.states, state_index) {
+			Ok(slot) => {
 				next_version =
 					if bump_version {
-						found.slot.version + 1
+						slot.version + 1
 					} else {
-						found.slot.version
+						slot.version
 					}
 				metrics0 = runtime.metrics
 				metrics1 =
@@ -1220,24 +1499,11 @@ UiRuntime := [].{
 					} else {
 						metrics0
 					}
-				next_slot = { key, value, version: next_version }
-				{ ..runtime, states: replace_state_slot(runtime.states, found.index, next_slot), metrics: metrics1 }
+				next_slot = { key: slot.key, value, version: next_version }
+				{ ..runtime, states: replace_state_slot(runtime.states, state_index, next_slot), metrics: metrics1 }
 			}
-			StateSlotMissing => {
-				version =
-					if bump_version {
-						1
-					} else {
-						0
-					}
-				metrics0 = runtime.metrics
-				metrics1 =
-					if bump_version {
-						{ ..metrics0, state_version_bumps: metrics0.state_version_bumps + 1 }
-					} else {
-						metrics0
-					}
-				{ ..runtime, states: List.append(runtime.states, { key, value, version }), metrics: metrics1 }
+			Err(_) => {
+				crash "Signals runtime invariant violated: state update index was not registered"
 			}
 		}
 	}
@@ -1263,7 +1529,9 @@ UiRuntime := [].{
 	node_bool = |value| {
 		match value {
 			NvBool(bool) => bool
-			_ => ...
+			_ => {
+				crash "Signals runtime invariant violated: expected Bool NodeValue"
+			}
 		}
 	}
 
