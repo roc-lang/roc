@@ -812,6 +812,7 @@ const Lowerer = struct {
         defer self.program.current_loc = saved_loc;
         self.program.current_loc = self.solved.lifted.stmtLoc(stmt_id);
         const lowered_stmt: Ast.Stmt = switch (self.solved.lifted.stmts.items[index]) {
+            .uninitialized => |pat| .{ .uninitialized = try self.lowerPat(pat) },
             .let_ => |let_| .{ .let_ = .{
                 .pat = try self.lowerPat(let_.pat),
                 .value = try self.lowerExpr(let_.value),

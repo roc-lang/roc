@@ -1098,6 +1098,7 @@ fn statementDependsOnUnboundPlatformRequirement(
     return switch (checked_bodies.statements[@intFromEnum(statement_id)].data) {
         .decl => |statement| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, statement.expr, relation_blocked_exprs),
         .var_ => |statement| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, statement.expr, relation_blocked_exprs),
+        .var_uninitialized => false,
         .reassign => |statement| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, statement.expr, relation_blocked_exprs),
         .dbg,
         .expr,
@@ -4881,6 +4882,7 @@ pub const CheckedStatementData = union(enum) {
     pending,
     decl: struct { pattern: CheckedPatternId, expr: CheckedExprId },
     var_: struct { pattern: CheckedPatternId, expr: CheckedExprId },
+    var_uninitialized: struct { pattern: CheckedPatternId },
     reassign: struct { pattern: CheckedPatternId, expr: CheckedExprId, reassigned_binders: []const PatternBinderId },
     crash: CheckedStringLiteralId,
     dbg: CheckedExprId,
@@ -5580,6 +5582,9 @@ const CheckedSourceNodes = struct {
             .s_var => |var_| {
                 try self.markPattern(var_.pattern_idx, work);
                 try self.markExpr(var_.expr, work);
+            },
+            .s_var_uninitialized => |var_| {
+                try self.markPattern(var_.pattern_idx, work);
             },
             .s_reassign => |reassign| {
                 try self.markPattern(reassign.pattern_idx, work);
@@ -6358,6 +6363,7 @@ fn checkedStatementDataDiverges(
         => true,
         .decl => |decl| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, decl.expr, expr_states, statement_states),
         .var_ => |var_| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, var_.expr, expr_states, statement_states),
+        .var_uninitialized => false,
         .reassign => |reassign| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, reassign.expr, expr_states, statement_states),
         .dbg,
         .expr,
@@ -7127,6 +7133,10 @@ const CheckedBodyPayloadCopier = struct {
             .s_var => |var_| blk: {
                 try self.markSourcePatternBindersReassignable(var_.pattern_idx);
                 break :blk .{ .var_ = .{ .pattern = self.checkedPattern(var_.pattern_idx), .expr = self.checkedExpr(var_.expr) } };
+            },
+            .s_var_uninitialized => |var_| blk: {
+                try self.markSourcePatternBindersReassignable(var_.pattern_idx);
+                break :blk .{ .var_uninitialized = .{ .pattern = self.checkedPattern(var_.pattern_idx) } };
             },
             .s_reassign => |reassign| .{ .reassign = .{
                 .pattern = self.checkedPattern(reassign.pattern_idx),
@@ -8961,6 +8971,15 @@ const LocalPatternRoleIndex = struct {
                     };
                     putStatementRole(statement_roles, node_count, var_.pattern_idx, .mutable_version);
                 },
+                .statement_var_uninitialized => {
+                    const statement: CIR.Statement.Idx = @enumFromInt(node_idx);
+                    if (checked_bodies.source_node_map.statement(statement) == null) continue;
+                    const var_ = switch (module.getStatement(statement)) {
+                        .s_var_uninitialized => |var_| var_,
+                        else => unreachable,
+                    };
+                    putStatementRole(statement_roles, node_count, var_.pattern_idx, .mutable_version);
+                },
                 .expr_lambda => {
                     const expr_idx: CIR.Expr.Idx = @enumFromInt(node_idx);
                     if (checked_bodies.exprIdForSource(expr_idx) == null) continue;
@@ -9443,6 +9462,9 @@ const CheckedTemplateRefCollector = struct {
             .var_ => |var_| {
                 try self.collectPattern(var_.pattern);
                 try self.collectExpr(var_.expr);
+            },
+            .var_uninitialized => |var_| {
+                try self.collectPattern(var_.pattern);
             },
             .reassign => |reassign| {
                 try self.collectPattern(reassign.pattern);
@@ -10116,6 +10138,9 @@ const NestedProcSiteBuilder = struct {
             .var_ => |var_| {
                 try self.scanPattern(var_.pattern, owner);
                 try self.scanExpr(var_.expr, owner, false);
+            },
+            .var_uninitialized => |var_| {
+                try self.scanPattern(var_.pattern, owner);
             },
             .reassign => |reassign| {
                 try self.scanPattern(reassign.pattern, owner);

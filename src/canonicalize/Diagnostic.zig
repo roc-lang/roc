@@ -40,6 +40,10 @@ pub const Diagnostic = union(enum) {
         ident: Ident.Idx,
         region: Region,
     },
+    read_uninitialized_var: struct {
+        ident: Ident.Idx,
+        region: Region,
+    },
     /// A non-function value is defined in terms of itself, which would cause an infinite loop.
     /// For example: `a = a` or `a = [a, b]`. Only functions can reference themselves (for recursion).
     self_referential_definition: struct {

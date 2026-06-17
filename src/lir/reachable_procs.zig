@@ -151,6 +151,7 @@ const Pass = struct {
 
             const stmt = self.store.getCFStmt(stmt_id);
             switch (stmt) {
+                .init_uninitialized => |s| try self.pushStmt(s.next),
                 .assign_ref => |s| try self.pushStmt(s.next),
                 .assign_literal => |s| {
                     if (s.value == .proc_ref) try self.markProc(s.value.proc_ref);
@@ -350,7 +351,8 @@ const Pass = struct {
                     try self.pushStmt(body_stmt);
                     try self.pushStmt(remainder);
                 },
-                inline .assign_ref,
+                inline .init_uninitialized,
+                .assign_ref,
                 .assign_call_erased,
                 .assign_low_level,
                 .assign_list,
@@ -541,7 +543,8 @@ const Pass = struct {
                 self.verifyProcRef(s.proc, proc_count);
                 self.verifyStmtRef(s.next, stmt_count);
             },
-            inline .assign_ref,
+            inline .init_uninitialized,
+            .assign_ref,
             .assign_call_erased,
             .assign_low_level,
             .assign_list,

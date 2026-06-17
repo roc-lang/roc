@@ -563,7 +563,7 @@ pub fn addStatement(store: *NodeStore, statement: AST.Statement) std.mem.Allocat
         .@"var" => |v| {
             node.tag = .@"var";
             node.main_token = v.name;
-            node.data.lhs = @intFromEnum(v.body);
+            node.data.lhs = try packOptionalIndex(v.body);
             node.region = v.region;
         },
         .expr => |expr| {
@@ -1540,7 +1540,7 @@ pub fn getStatement(store: *const NodeStore, statement_idx: AST.Statement.Idx) A
         .@"var" => {
             return .{ .@"var" = .{
                 .name = node.main_token,
-                .body = @enumFromInt(node.data.lhs),
+                .body = unpackOptionalIndex(AST.Expr.Idx, node.data.lhs),
                 .region = node.region,
             } };
         },

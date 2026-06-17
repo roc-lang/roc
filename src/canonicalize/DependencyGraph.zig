@@ -242,6 +242,7 @@ fn collectExprDependencies(
                     switch (stmt) {
                         .s_decl => |decl| try pending.append(stack_allocator, decl.expr),
                         .s_var => |var_stmt| try pending.append(stack_allocator, var_stmt.expr),
+                        .s_var_uninitialized => {},
                         .s_reassign => |reassign| try pending.append(stack_allocator, reassign.expr),
                         .s_dbg => |dbg| try pending.append(stack_allocator, dbg.expr),
                         .s_expr => |expr_stmt| try pending.append(stack_allocator, expr_stmt.expr),

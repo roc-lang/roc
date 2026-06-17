@@ -967,7 +967,7 @@ pub const Statement = union(enum) {
     decl: Decl,
     @"var": struct {
         name: Token.Idx,
-        body: Expr.Idx,
+        body: ?Expr.Idx,
         region: TokenizedRegion,
     },
     expr: struct {
@@ -1082,7 +1082,9 @@ pub const Statement = union(enum) {
                 try tree.pushStringPair("name", name_str);
                 const attrs = tree.beginNode();
 
-                try ast.store.getExpr(v.body).pushToSExprTree(gpa, env, ast, tree);
+                if (v.body) |body| {
+                    try ast.store.getExpr(body).pushToSExprTree(gpa, env, ast, tree);
+                }
 
                 try tree.endNode(begin, attrs);
             },

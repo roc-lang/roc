@@ -1784,6 +1784,9 @@ pub const MonoLlvmCodeGen = struct {
                 try self.emitLiteral(assign.target, assign.value);
                 try work.append(wa, .{ .node = assign.next });
             },
+            .init_uninitialized => |uninit| {
+                try work.append(wa, .{ .node = uninit.next });
+            },
             .assign_call => |assign| {
                 try self.emitDirectCall(assign.target, assign.proc, assign.args);
                 try work.append(wa, .{ .node = assign.next });

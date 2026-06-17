@@ -417,6 +417,7 @@ pub const StmtId = enum(u32) { _ };
 
 /// Monotype statement forms.
 pub const Stmt = union(enum) {
+    uninitialized: PatId,
     let_: struct {
         pat: PatId,
         value: ExprId,

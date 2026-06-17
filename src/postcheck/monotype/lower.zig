@@ -7804,6 +7804,7 @@ const BodyContext = struct {
         return switch (self.view.bodies.statements[raw].data) {
             .decl,
             .var_,
+            .var_uninitialized,
             .reassign,
             .crash,
             .dbg,
@@ -8570,6 +8571,7 @@ const BodyContext = struct {
         switch (statement.data) {
             .decl => |decl| try self.collectReassignedBindersInExpr(decl.expr, out),
             .var_ => |var_| try self.collectReassignedBindersInExpr(var_.expr, out),
+            .var_uninitialized => {},
             .reassign => |reassign| {
                 for (reassign.reassigned_binders) |binder| try self.appendUniqueBinder(out, binder);
                 try self.collectReassignedBindersInExpr(reassign.expr, out);
@@ -8730,6 +8732,7 @@ const BodyContext = struct {
                 break :blk try self.lowerPatternStatement(decl.pattern, decl.expr, statement.source_region);
             },
             .var_ => |decl| try self.lowerPatternStatement(decl.pattern, decl.expr, statement.source_region),
+            .var_uninitialized => |decl| .{ .uninitialized = try self.lowerUninitializedPatternStatement(decl.pattern) },
             .reassign => |decl| try self.lowerPatternStatement(decl.pattern, decl.expr, statement.source_region),
             .crash => |msg| .{ .crash = try self.lowerStringLiteral(msg) },
             .dbg => |child| .{ .dbg = try self.lowerDbgMessage(child) },
@@ -8814,6 +8817,14 @@ const BodyContext = struct {
             .return_ => |ret| .{ .return_ = try self.lowerExpr(ret.expr) },
         };
         return try self.builder.program.addStmt(stmt);
+    }
+
+    fn lowerUninitializedPatternStatement(
+        self: *BodyContext,
+        pattern: checked.CheckedPatternId,
+    ) Allocator.Error!Ast.PatId {
+        const checked_pattern = self.view.bodies.patterns[@intFromEnum(pattern)];
+        return try self.lowerPatternAtType(pattern, try self.lowerType(checked_pattern.ty));
     }
 
     fn lowerPatternStatement(

@@ -449,21 +449,23 @@ const Formatter = struct {
                     try fmt.push(' ');
                 }
                 try fmt.pushTokenText(v.name);
-                if (multiline and try fmt.flushCommentsAfter(v.name)) {
-                    fmt.curr_indent += 1;
-                    try fmt.pushIndent();
-                } else {
-                    try fmt.push(' ');
+                if (v.body) |body| {
+                    if (multiline and try fmt.flushCommentsAfter(v.name)) {
+                        fmt.curr_indent += 1;
+                        try fmt.pushIndent();
+                    } else {
+                        try fmt.push(' ');
+                    }
+                    try fmt.push('=');
+                    const body_region = fmt.nodeRegion(@intFromEnum(body));
+                    if (multiline and try fmt.flushCommentsBefore(body_region.start)) {
+                        fmt.curr_indent += 1;
+                        try fmt.pushIndent();
+                    } else {
+                        try fmt.push(' ');
+                    }
+                    try fmt.formatExprDiscard(body);
                 }
-                try fmt.push('=');
-                const body_region = fmt.nodeRegion(@intFromEnum(v.body));
-                if (multiline and try fmt.flushCommentsBefore(body_region.start)) {
-                    fmt.curr_indent += 1;
-                    try fmt.pushIndent();
-                } else {
-                    try fmt.push(' ');
-                }
-                try fmt.formatExprDiscard(v.body);
             },
             .expr => |e| {
                 try fmt.formatExprDiscard(e.expr);

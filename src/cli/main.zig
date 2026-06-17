@@ -6968,6 +6968,17 @@ const ReplMode = enum {
     batch,
 };
 
+// The colorful "rockin' roc repl" greeting and prompts. The colored variants
+// embed ANSI cyan (`\x1b[1;36m`) reset (`\x1b[0m`) sequences; the plain variants
+// are used when color is disabled (e.g. NO_COLOR or `--no-color`).
+const REPL_WELCOME_COLOR = "\n  The rockin' \x1b[1;36mroc repl\n────────────────────────\x1b[0m\n\n";
+const REPL_WELCOME_PLAIN = "\n  The rockin' roc repl\n────────────────────────\n\n";
+const REPL_SHORT_INSTRUCTIONS = "Enter an expression, or :help, or :q to quit.\n\n";
+const REPL_PROMPT_COLOR = "\x1b[1;36m»\x1b[0m ";
+const REPL_PROMPT_PLAIN = "» ";
+const REPL_CONT_PROMPT_COLOR = "\x1b[1;36m…\x1b[0m ";
+const REPL_CONT_PROMPT_PLAIN = "… ";
+
 fn rocRepl(ctx: *CliCtx, repl_args: cli_args.ReplArgs) anyerror!void {
     const stdout = ctx.io.stdout();
     const backend_kind = repl_args.opt.toBackend();
@@ -6977,16 +6988,37 @@ fn rocRepl(ctx: *CliCtx, repl_args: cli_args.ReplArgs) anyerror!void {
     const mode: ReplMode = if (stdin_is_tty and stdout_is_tty) .interactive else .batch;
     const report_config = try replReportingConfig(ctx, repl_args, mode);
 
-    if (mode == .interactive) {
-        try stdout.writeAll("Roc REPL\nType :help for commands.\n");
-        ctx.io.flush();
+    const no_color_env = try envVarNonEmpty(ctx.gpa, "NO_COLOR");
+    const use_color = mode == .interactive and !repl_args.no_color and !no_color_env;
+
+    // The line editor handles Ctrl-C itself (press twice in a row to quit).
+    // Ignore SIGINT at the process level so a Ctrl-C while the terminal is
+    // momentarily in cooked mode — during startup or while evaluating — can't
+    // hard-kill the REPL instead of going through that flow.
+    if (mode == .interactive and builtin.os.tag != .windows) {
+        const ignore_sigint = std.posix.Sigaction{
+            .handler = .{ .handler = std.posix.SIG.IGN },
+            .mask = std.posix.sigemptyset(),
+            .flags = 0,
+        };
+        std.posix.sigaction(std.posix.SIG.INT, &ignore_sigint, null);
     }
 
     var reader = ReplLine.init(ctx.gpa);
     defer reader.deinit();
 
+    // Publishing the Builtin module here is the dominant startup cost (~1s). Do
+    // it before printing the greeting so the greeting and the first prompt appear
+    // together and the REPL is immediately interactive — otherwise the greeting
+    // shows with no prompt until this finishes.
     var session = try ReplSession.init(ctx.gpa, ctx.io.std_io, backend_kind);
     defer session.deinit();
+
+    if (mode == .interactive) {
+        try stdout.writeAll(if (use_color) REPL_WELCOME_COLOR else REPL_WELCOME_PLAIN);
+        try stdout.writeAll(REPL_SHORT_INSTRUCTIONS);
+        ctx.io.flush();
+    }
 
     var pending = std.ArrayList(u8).empty;
     defer pending.deinit(ctx.gpa);
@@ -6995,7 +7027,10 @@ fn rocRepl(ctx: *CliCtx, repl_args: cli_args.ReplArgs) anyerror!void {
     var had_diagnostics = false;
     while (!should_exit) {
         const prompt: []const u8 = if (mode == .interactive)
-            if (pending.items.len == 0) "> " else "| "
+            if (pending.items.len == 0)
+                (if (use_color) REPL_PROMPT_COLOR else REPL_PROMPT_PLAIN)
+            else
+                (if (use_color) REPL_CONT_PROMPT_COLOR else REPL_CONT_PROMPT_PLAIN)
         else
             "";
 
@@ -7003,10 +7038,8 @@ fn rocRepl(ctx: *CliCtx, repl_args: cli_args.ReplArgs) anyerror!void {
         switch (read_result) {
             .eof => {
                 if (pending.items.len > 0) {
-                    should_exit = try processReplInput(ctx, &session, pending.items, report_config, mode, &had_diagnostics);
+                    should_exit = try processReplInput(ctx, &session, pending.items, report_config, &had_diagnostics);
                     pending.clearRetainingCapacity();
-                } else if (mode == .interactive) {
-                    try stdout.writeAll("Goodbye!\n");
                 }
                 break;
             },
@@ -7018,7 +7051,7 @@ fn rocRepl(ctx: *CliCtx, repl_args: cli_args.ReplArgs) anyerror!void {
                 }
 
                 if (pending.items.len == 0 and std.mem.findAny(u8, raw_line, "\n\r") != null) {
-                    should_exit = try processReplInput(ctx, &session, raw_line, report_config, mode, &had_diagnostics);
+                    should_exit = try processReplInput(ctx, &session, raw_line, report_config, &had_diagnostics);
                     continue;
                 }
 
@@ -7028,7 +7061,7 @@ fn rocRepl(ctx: *CliCtx, repl_args: cli_args.ReplArgs) anyerror!void {
                 switch (try session.inputStatus(pending.items)) {
                     .incomplete => {},
                     .complete, .invalid => {
-                        should_exit = try processReplInput(ctx, &session, pending.items, report_config, mode, &had_diagnostics);
+                        should_exit = try processReplInput(ctx, &session, pending.items, report_config, &had_diagnostics);
                         pending.clearRetainingCapacity();
                     },
                 }
@@ -7047,7 +7080,6 @@ fn processReplInput(
     session: *ReplSession,
     input: []const u8,
     report_config: reporting.ReportingConfig,
-    mode: ReplMode,
     had_diagnostics: *bool,
 ) anyerror!bool {
     const stdout = ctx.io.stdout();
@@ -7073,12 +7105,7 @@ fn processReplInput(
                 }
             },
             .none => {},
-            .exit => {
-                if (mode == .interactive) {
-                    try stdout.writeAll("Goodbye!\n");
-                }
-                return true;
-            },
+            .exit => return true,
         }
     }
 

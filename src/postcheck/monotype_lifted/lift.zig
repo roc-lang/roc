@@ -319,6 +319,7 @@ const Lifter = struct {
         self.stmt_done[index] = true;
 
         switch (self.output.stmts.items[index]) {
+            .uninitialized => {},
             .let_ => |let_| try self.rewriteExpr(let_.value),
             .expr,
             .expect,
@@ -717,6 +718,7 @@ const CaptureSet = struct {
 
     fn collectStmt(self: *CaptureSet, input: *const Ast.Program, stmt_id: Mono.StmtId, bound: *BoundSet, added: *std.ArrayList(Mono.LocalId)) Allocator.Error!void {
         switch (input.stmts.items[@intFromEnum(stmt_id)]) {
+            .uninitialized => |pat| try bindPat(self.allocator, input, pat, bound, added),
             .let_ => |let_| {
                 if (let_.recursive) {
                     try bindPat(self.allocator, input, let_.pat, bound, added);

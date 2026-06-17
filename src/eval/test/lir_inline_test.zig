@@ -379,6 +379,7 @@ fn collectAssignCallProcs(
         switch (lowered.lir_result.store.getCFStmt(stmt_id)) {
             .assign_ref => |stmt| try work.append(allocator, stmt.next),
             .assign_literal => |stmt| try work.append(allocator, stmt.next),
+            .init_uninitialized => |stmt| try work.append(allocator, stmt.next),
             .assign_call => |stmt| {
                 try calls.append(allocator, stmt.proc);
                 try work.append(allocator, stmt.next);
@@ -474,6 +475,7 @@ fn collectProcShape(
         switch (lowered.lir_result.store.getCFStmt(stmt_id)) {
             .assign_ref => |stmt| try work.append(allocator, stmt.next),
             .assign_literal => |stmt| try work.append(allocator, stmt.next),
+            .init_uninitialized => |stmt| try work.append(allocator, stmt.next),
             .assign_call => |stmt| {
                 shape.direct_call_count += 1;
                 if (stmt.proc == proc_id) shape.self_call_count += 1;
@@ -736,6 +738,7 @@ fn markReachableLiftedStmt(
         .return_,
         => |expr| markReachableLiftedExpr(program, expr, reachable),
         .crash => {},
+        .uninitialized => {},
     }
 }
 

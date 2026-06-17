@@ -5207,10 +5207,15 @@ fn runExprStatementKernel(
                         type_args = .not_looking_for_args;
                         continue :expr_kernel .type_prefix;
                     }
-                    self.expect(.OpAssign) catch {
-                        last_statement = try self.pushMalformed(AST.Statement.Idx, .var_expected_equals, self.pos);
+                    if (self.peek() != .OpAssign) {
+                        last_statement = try self.addStatement(.{ .@"var" = .{
+                            .name = name,
+                            .body = null,
+                            .region = .{ .start = start, .end = self.pos },
+                        } });
                         continue :expr_kernel .statement_complete;
-                    };
+                    }
+                    self.advance();
                     try open_syntax.pushExpr(open_allocator, .statement_var_body, StatementVarBodyState, .{
                         .start = start,
                         .name = name,
