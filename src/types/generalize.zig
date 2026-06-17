@@ -315,10 +315,17 @@ pub const Generalizer = struct {
                 //    - A concrete type (adjustRankContent would resolve to outermost)
                 // So traversing the backing var would be redundant.
                 //
-                // We use outermost as a default, as the type container itself
-                // does not contribute to the rank calculation.
-                var next_rank = Rank.outermost;
+                // The container itself does not contribute to the rank, so its rank
+                // is just the highest rank among its args. We start the search from
+                // the lowest rank and let the args raise it. Starting from outermost
+                // instead would force the result to be at least outermost even when
+                // every arg is already generalized, which makes the type that uses
+                // this alias look like it depends on an outer scope and stops it from
+                // being generalized. With no args there is nothing to generalize, so
+                // keep outermost.
                 var args_iter = self.store.iterAliasArgs(alias);
+                if (args_iter.count() == 0) return Rank.outermost;
+                var next_rank = Rank.generalized;
                 while (args_iter.next()) |arg_var| {
                     next_rank = next_rank.max(try self.adjustRank(arg_var, group_rank, vars_to_generalize));
                 }
@@ -351,10 +358,16 @@ pub const Generalizer = struct {
                         //    - A concrete type (adjustRankContent would resolve to outermost)
                         // So traversing the backing var would be redundant.
                         //
-                        // We use outermost as a default, as the type container itself
-                        // does not contribute to the rank calculation.
-                        var next_rank = Rank.outermost;
+                        // As with the alias case above, the container does not
+                        // contribute to the rank, so we start the search from the
+                        // lowest rank and let the args raise it. Starting from
+                        // outermost would force the result to be at least outermost
+                        // even when every arg is already generalized, which stops the
+                        // type that uses this nominal from being generalized. With no
+                        // args there is nothing to generalize, so keep outermost.
                         var args_iter = self.store.iterNominalArgs(nominal);
+                        if (args_iter.count() == 0) return Rank.outermost;
+                        var next_rank = Rank.generalized;
                         while (args_iter.next()) |arg_var| {
                             next_rank = next_rank.max(try self.adjustRank(arg_var, group_rank, vars_to_generalize));
                         }
