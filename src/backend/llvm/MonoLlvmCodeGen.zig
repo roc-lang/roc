@@ -3402,7 +3402,13 @@ pub const MonoLlvmCodeGen = struct {
 
     fn emitListSet(self: *MonoLlvmCodeGen, target: LocalId, args: []const LocalId, unique_args: u64) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
         const abi = self.layouts().builtinListAbi(self.localLayout(args[0]));
+        // listReplace copies the displaced element into out_element before
+        // overwriting it, dereferencing the pointer unconditionally. list_set
+        // discards that value, but the builtin still needs a real slot to write.
+        const out_element_len = builder.intValue(.i32, @max(abi.elem_size, 1)) catch return error.OutOfMemory;
+        const out_element = wip.alloca(.normal, .i8, out_element_len, LlvmBuilder.Alignment.fromByteUnits(@max(abi.elem_alignment, 1)), .default, "list_set_old") catch return error.OutOfMemory;
         var call_args = try self.rocListArgs1(args[0]);
         defer call_args.deinit(self.allocator);
         try call_args.prepend(self.allocator, try self.ptrType(), self.slot(target).ptr);
@@ -3410,7 +3416,7 @@ pub const MonoLlvmCodeGen = struct {
         try call_args.append(self.allocator, .i64, try self.coerceScalar(try self.loadScalar(self.slot(args[1]).ptr, self.localLayout(args[1])), .i64, false));
         try call_args.append(self.allocator, try self.ptrType(), self.slot(args[2]).ptr);
         try call_args.append(self.allocator, self.ptrSizedIntType(), builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory);
-        try call_args.append(self.allocator, try self.ptrType(), builder.nullValue(try self.ptrType()) catch return error.OutOfMemory);
+        try call_args.append(self.allocator, try self.ptrType(), out_element);
         try self.appendListElementRcArgs(&call_args, abi, true, true);
         try self.appendUpdateModeArg(&call_args, unique_args);
         try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
