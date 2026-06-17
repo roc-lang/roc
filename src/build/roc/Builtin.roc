@@ -771,6 +771,56 @@ Builtin :: [].{
 				Unknown =>
 					List.iter(List.drop_last(Iter.fold(iterator, [], |acc, item| acc.append(item)), n))
 				}
+
+		## Returns an iterator that yields the first item and then every `n`th item
+		## after it, skipping the `n - 1` items in between. A step of `0` yields an
+		## empty iterator.
+		## ```roc
+		## expect Iter.fold(Iter.step_by(List.iter([1, 2, 3, 4, 5]), 2), [], |acc, item| acc.append(item)) == [1, 3, 5]
+		##
+		## expect Iter.fold(Iter.step_by(List.iter([1, 2, 3]), 0), [], |acc, item| acc.append(item)) == []
+		## ```
+		step_by : Iter(item), U64 -> Iter(item)
+		step_by = |iterator, n|
+			if n == 0 {
+				range_done()
+			} else {
+				match iterator {
+					{ len_if_known, step } => {
+						len_if_known: match len_if_known {
+							Known(len) => Known(
+								if len == 0 {
+									0
+								} else {
+									(len - 1) / n + 1
+								},
+							)
+							Unknown => Unknown
+						},
+						step: ||
+							match step() {
+								Done => Done
+								Skip({ rest }) => Skip({ rest: Iter.step_by(rest, n) })
+								One({ item, rest }) => One({ item, rest: Iter.step_by(Iter.drop_first(rest, n - 1), n) })
+							},
+					}
+				}
+			}
+
+		## Returns an iterator that yields this iterator's items in reverse order.
+		##
+		## Because an [Iter] only moves forward, this materializes the source into a
+		## list to reverse it. The result always has a known length, so collecting it
+		## is efficient. Avoid calling this on iterators whose length is unknown and
+		## might be huge.
+		## ```roc
+		## expect Iter.fold(Iter.rev(List.iter([1, 2, 3])), [], |acc, item| acc.append(item)) == [3, 2, 1]
+		##
+		## expect Iter.fold(Iter.rev(List.iter([])), [], |acc, item| acc.append(item)) == []
+		## ```
+		rev : Iter(item) -> Iter(item)
+		rev = |iterator|
+			List.iter(List.rev(Iter.fold(iterator, [], |acc, item| acc.append(item))))
 	}
 
 	## An effectful iterator: identical to [Iter] except that its `step!` thunk is

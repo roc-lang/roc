@@ -111,6 +111,7 @@ pub fn stepWithConfig(self: *ReplSession, input: []const u8, report_config: repo
     if (std.mem.eql(u8, line, ":help")) return .{ .output = try self.helpText() };
     if (std.mem.eql(u8, line, ":exit") or
         std.mem.eql(u8, line, ":quit") or
+        std.mem.eql(u8, line, ":q") or
         std.mem.eql(u8, line, "exit"))
     {
         return .exit;
@@ -260,9 +261,8 @@ fn helpText(self: *ReplSession) Allocator.Error![]u8 {
         \\Enter an expression or definition.
         \\
         \\Commands:
-        \\  :help    Show this help
-        \\  :exit    Exit the REPL
-        \\  :quit    Exit the REPL
+        \\  :help               Show this help
+        \\  :quit, :q, :exit    Exit the REPL
         \\
     );
 }

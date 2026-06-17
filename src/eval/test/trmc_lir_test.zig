@@ -393,7 +393,7 @@ fn hasSelfCall(allocator: Allocator, store: *const LirStore, proc_id: LIR.LirPro
                 if (s.continuation) |continuation| try work.append(allocator, continuation);
             },
             .jump, .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
-            inline .assign_ref, .assign_literal, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .free => |s| {
+            inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .free => |s| {
                 try work.append(allocator, s.next);
             },
         }

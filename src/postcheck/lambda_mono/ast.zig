@@ -260,6 +260,7 @@ pub const IfBranch = struct {
 
 /// Lambda Mono statement forms.
 pub const Stmt = union(enum) {
+    uninitialized: PatId,
     let_: struct {
         pat: PatId,
         value: ExprId,

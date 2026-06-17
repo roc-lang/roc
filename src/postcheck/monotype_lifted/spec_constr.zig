@@ -574,7 +574,7 @@ const Pass = struct {
             .dbg,
             .return_,
             => |expr| try self.markArgUsesInExpr(fn_id, expr, changed),
-            .crash => {},
+            .uninitialized, .crash => {},
         }
     }
 
@@ -680,7 +680,7 @@ const Pass = struct {
             .dbg,
             .return_,
             => |expr| try self.collectCallPatternsInExpr(owner, expr),
-            .crash => {},
+            .uninitialized, .crash => {},
         }
     }
 
@@ -930,7 +930,7 @@ const Pass = struct {
             .dbg,
             .return_,
             => |expr| try self.rewriteCallsInExpr(expr, done),
-            .crash => {},
+            .uninitialized, .crash => {},
         }
     }
 
@@ -2623,6 +2623,7 @@ const Cloner = struct {
 
         const stmt = self.pass.program.stmts.items[@intFromEnum(stmt_id)];
         return try self.addStmt(switch (stmt) {
+            .uninitialized => |pat| .{ .uninitialized = try self.clonePat(pat) },
             .let_ => |let_| blk: {
                 const value = try self.cloneExprValue(let_.value);
                 const value_expr = try self.materialize(value);
@@ -3107,6 +3108,7 @@ fn localUseCountInExprSpan(program: *const Ast.Program, local: Ast.LocalId, span
 
 fn localUseCountInStmt(program: *const Ast.Program, local: Ast.LocalId, stmt_id: Ast.StmtId) usize {
     return switch (program.stmts.items[@intFromEnum(stmt_id)]) {
+        .uninitialized => 0,
         .let_ => |let_| localUseCountInExpr(program, local, let_.value),
         .expr,
         .expect,
@@ -3253,6 +3255,7 @@ fn scanLocalUseInExprSpan(
 
 fn scanLocalUseInStmt(program: *const Ast.Program, local: Ast.LocalId, stmt_id: Ast.StmtId, scan: *LocalUseScan) void {
     switch (program.stmts.items[@intFromEnum(stmt_id)]) {
+        .uninitialized => {},
         .let_ => |let_| scanLocalUseInExpr(program, local, let_.value, scan),
         .expr => |expr| scanLocalUseInExpr(program, local, expr, scan),
         .expect,

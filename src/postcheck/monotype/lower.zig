@@ -7745,6 +7745,7 @@ const BodyContext = struct {
         return switch (self.view.bodies.statements[raw].data) {
             .decl,
             .var_,
+            .var_uninitialized,
             .reassign,
             .crash,
             .dbg,
@@ -7752,6 +7753,8 @@ const BodyContext = struct {
             .expect,
             .for_,
             .while_,
+            .infinite_loop,
+            .breakable_loop,
             .break_,
             .return_,
             => true,
@@ -8509,6 +8512,7 @@ const BodyContext = struct {
         switch (statement.data) {
             .decl => |decl| try self.collectReassignedBindersInExpr(decl.expr, out),
             .var_ => |var_| try self.collectReassignedBindersInExpr(var_.expr, out),
+            .var_uninitialized => {},
             .reassign => |reassign| {
                 for (reassign.reassigned_binders) |binder| try self.appendUniqueBinder(out, binder);
                 try self.collectReassignedBindersInExpr(reassign.expr, out);
@@ -8524,6 +8528,14 @@ const BodyContext = struct {
             .while_ => |while_| {
                 try self.collectReassignedBindersInExpr(while_.cond, out);
                 try self.collectReassignedBindersInExpr(while_.body, out);
+            },
+            .infinite_loop => |loop| {
+                try self.collectReassignedBindersInExpr(loop.cond, out);
+                try self.collectReassignedBindersInExpr(loop.body, out);
+            },
+            .breakable_loop => |loop| {
+                try self.collectReassignedBindersInExpr(loop.cond, out);
+                try self.collectReassignedBindersInExpr(loop.body, out);
             },
             .return_ => |ret| try self.collectReassignedBindersInExpr(ret.expr, out),
             .pending,
@@ -8661,6 +8673,7 @@ const BodyContext = struct {
                 break :blk try self.lowerPatternStatement(decl.pattern, decl.expr, statement.source_region);
             },
             .var_ => |decl| try self.lowerPatternStatement(decl.pattern, decl.expr, statement.source_region),
+            .var_uninitialized => |decl| .{ .uninitialized = try self.lowerUninitializedPatternStatement(decl.pattern) },
             .reassign => |decl| try self.lowerPatternStatement(decl.pattern, decl.expr, statement.source_region),
             .crash => |msg| .{ .crash = try self.lowerStringLiteral(msg) },
             .dbg => |child| .{ .dbg = try self.lowerDbgMessage(child) },
@@ -8703,10 +8716,56 @@ const BodyContext = struct {
                     .value = expr,
                 } };
             },
+            .infinite_loop => |loop| blk: {
+                var reassigned = std.ArrayList(checked.PatternBinderId).empty;
+                defer reassigned.deinit(self.allocator);
+                try self.collectReassignedBindersInExpr(loop.cond, &reassigned);
+                try self.collectReassignedBindersInExpr(loop.body, &reassigned);
+
+                const carries = try self.prepareLoopCarries(reassigned.items);
+                defer self.allocator.free(carries);
+
+                const unit_ty = try self.unitType();
+                const loop_ty = try self.loopStateType(unit_ty, carries);
+                const expr = try self.builder.program.addExpr(.{ .ty = loop_ty, .data = try self.lowerWhile(loop, loop_ty, carries) });
+                if (carries.len == 0) break :blk .{ .expr = expr };
+
+                break :blk .{ .let_ = .{
+                    .pat = try self.finalCarryPattern(carries, loop_ty),
+                    .value = expr,
+                } };
+            },
+            .breakable_loop => |loop| blk: {
+                var reassigned = std.ArrayList(checked.PatternBinderId).empty;
+                defer reassigned.deinit(self.allocator);
+                try self.collectReassignedBindersInExpr(loop.cond, &reassigned);
+                try self.collectReassignedBindersInExpr(loop.body, &reassigned);
+
+                const carries = try self.prepareLoopCarries(reassigned.items);
+                defer self.allocator.free(carries);
+
+                const unit_ty = try self.unitType();
+                const loop_ty = try self.loopStateType(unit_ty, carries);
+                const expr = try self.builder.program.addExpr(.{ .ty = loop_ty, .data = try self.lowerWhile(loop, loop_ty, carries) });
+                if (carries.len == 0) break :blk .{ .expr = expr };
+
+                break :blk .{ .let_ = .{
+                    .pat = try self.finalCarryPattern(carries, loop_ty),
+                    .value = expr,
+                } };
+            },
             .break_ => .{ .expr = try self.breakCurrentLoopExpr() },
             .return_ => |ret| .{ .return_ = try self.lowerExpr(ret.expr) },
         };
         return try self.builder.program.addStmt(stmt);
+    }
+
+    fn lowerUninitializedPatternStatement(
+        self: *BodyContext,
+        pattern: checked.CheckedPatternId,
+    ) Allocator.Error!Ast.PatId {
+        const checked_pattern = self.view.bodies.patterns[@intFromEnum(pattern)];
+        return try self.lowerPatternAtType(pattern, try self.lowerType(checked_pattern.ty));
     }
 
     fn lowerPatternStatement(
