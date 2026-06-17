@@ -244,6 +244,9 @@ const LineState = struct {
     in_buffer: [8]u8,
     history: *History,
     history_index: ?usize,
+    /// Set after a Ctrl-C so that a second consecutive Ctrl-C quits. Any other
+    /// input event clears it, so the two presses must be back-to-back.
+    ctrl_c_armed: bool,
 };
 
 fn printChar(state: *LineState) CommandError!void {
@@ -283,15 +286,21 @@ fn acceptLine(_: *LineState) CommandError!void {
     return error.NewLine;
 }
 
-fn cancelLine(state: *LineState) CommandError!void {
-    // Clear the buffer and reset cursor position
+fn handleCtrlC(state: *LineState) CommandError!void {
+    // Discard whatever was on the current line.
     state.line_buffer.clearAndFree(state.temp);
     state.col_offset = 0;
+    state.history_index = null;
 
-    // Move cursor to start of line, print prompt, clear rest of line
-    try ansi_term.setCursorColumn(state.out, 0);
+    // A second consecutive Ctrl-C (with no other input in between) quits.
+    if (state.ctrl_c_armed) return error.ExitRepl;
+    state.ctrl_c_armed = true;
+
+    // Move to a fresh line, show the hint, and redraw the prompt.
+    try state.out.writeAll(NEW_LINE);
+    try state.out.writeAll("Ctrl-C again to quit (or enter :quit, :q, or :exit)");
+    try state.out.writeAll(NEW_LINE);
     try state.out.writeAll(state.prompt);
-    try ansi_term.clearFromCursorToLineEnd(state.out);
     try ansi_term.setCursorColumn(state.out, state.prompt_width);
 }
 
@@ -367,7 +376,7 @@ fn findCommandFn(state: *LineState) CommandFn {
         ansi_term.BACKSPACE => deleteBefore,
         ansi_term.ctrlKey('D') => exitRepl,
         ansi_term.ctrlKey('L') => clearScreen,
-        ansi_term.ctrlKey('C') => cancelLine,
+        ansi_term.ctrlKey('C') => handleCtrlC,
         control_code.lf, control_code.cr => acceptLine,
         control_code.esc => {
             if (state.bytes_read >= 3 and state.in_buffer[1] == '[') {
@@ -485,6 +494,7 @@ fn helper(self: *ReplLine, outlive: Allocator, std_io: std.Io, prompt: []const u
         .in_buffer = undefined,
         .history = &self.history,
         .history_index = null,
+        .ctrl_c_armed = false,
     };
 
     const old = switch (SUPPORTED_OS) {
@@ -527,6 +537,14 @@ fn helper(self: *ReplLine, outlive: Allocator, std_io: std.Io, prompt: []const u
 
         var done = false;
         for (events.items) |event| {
+            // The Ctrl-C "press again to quit" arming only survives consecutive
+            // Ctrl-C presses; any other input event disarms it.
+            const is_ctrl_c = switch (event) {
+                .byte => |b| b == ansi_term.ctrlKey('C'),
+                else => false,
+            };
+            if (!is_ctrl_c) state.ctrl_c_armed = false;
+
             switch (event) {
                 .byte => |b| {
                     state.in_buffer[0] = b;
