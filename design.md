@@ -971,22 +971,33 @@ method. The format exposes a method that parses the next record field event from
 its current state:
 
 ```roc
-fmt.parse_record_field : fmt -> Try(
+fmt.parse_record_field : U64, fmt -> Try(
     [
         Field({ name : Str, value : fmt, rest : fmt }),
-        End({ rest : fmt, missing : err }),
+        Continue({ rest : fmt }),
+        Done({ rest : fmt }),
     ],
     err,
 )
+
+fmt.missing_record_field : Str, fmt -> err
 ```
+
+The first argument is the longest target record field name in bytes. Formats may
+use it to prove that an input key cannot possibly match before doing
+allocation-prone conversion to record-field-name form. The value is metadata
+about the concrete target record; it does not encode any format-specific rule.
 
 `Field.name` is the input key after conversion to Roc record-field-name form,
 such as `cache_control` for an HTTP `Cache-Control` header. `Field.value` is the
 format state used to parse that field's value if the generated record dispatcher
 matches the name to a field in the target record. `Field.rest` is the state from
-which the next record field event should be parsed. `End.rest` is the state
-remaining after the record ends, and `End.missing` is the format-defined error
-value used if a required field was not present.
+which the next record field event should be parsed. `Continue.rest` advances the
+record loop after the format has consumed an input field that it knows cannot
+match any target field. `Done.rest` is the state remaining after the record ends.
+If the generated finisher sees that a required field was never filled, it calls
+`fmt.missing_record_field(field_name, rest)` to produce the format's concrete
+error value.
 
 The compiler owns the record loop, the field-name dispatch, the per-field
 missing/present state, and final record construction. Unknown fields are ignored
@@ -1012,23 +1023,23 @@ not know those policies. The format returns the converted key in each `Field`
 event, and the compiler-generated record dispatcher performs exact matching
 against the concrete record field names. Allocation-free formats must avoid heap
 allocation while converting keys. For the common small-key case this means
-producing an SSO `Str`. If record metadata proves a key cannot possibly match
-any field in this target record, the format may skip constructing a transformed
-heap string for that key and still return an ignored `Field` event or otherwise
-advance according to the format's rules. This is not a parse failure: for
-formats such as HTTP headers and JSON objects, unknown keys remain ordinary
-input according to that format's rules. If the target record actually contains a
-long field name, the long input key remains matchable. A general `Str -> Str`
-transformation is allowed to allocate when its result does not fit in SSO, so it
-is not the fallback for allocation-free long-key handling. Formats that promise
-zero allocation must either prove the transformed key fits in SSO before
-materializing it, or use a non-materializing comparison/hash path for long
-possible keys.
+producing an SSO `Str`. If `longest_field_len` and the format's own conversion
+rules prove a key cannot possibly match any field in this target record, the
+format may return `Continue` after consuming that field and avoid constructing a
+converted heap string. This is not a parse failure: for formats such as HTTP
+headers and JSON objects, unknown keys remain ordinary input according to that
+format's rules. If the target record actually contains a long field name, the
+long input key remains matchable. A general `Str -> Str` conversion to record
+field name form is allowed to allocate when its result does not fit in SSO, so
+it is not the fallback for allocation-free long-key handling. Formats that
+promise zero allocation must either prove the transformed key fits in SSO before
+materializing it, return `Continue` for impossible keys, or use a
+non-materializing comparison/hash path for long possible keys.
 
 For SSO converted keys, generated record dispatch compares the packed small
 string representation directly. Roc zeroes unused SSO bytes, so equality can use
 fixed-width word comparisons without masking garbage tail bytes. On 64-bit
-targets, the generated dispatcher groups fields into 1-8, 9-16, and 17-24 byte
+targets, the generated dispatcher groups fields into 1-8, 9-16, and 17-23 byte
 size classes; on 32-bit targets, the groups are scaled to that target's smaller
 SSO capacity. The group selection can be implemented with a branchless or
 near-branchless table lookup instead of a source-level length switch.
@@ -1046,7 +1057,7 @@ verification.
 This keeps the performance center on the common case: no heap allocation, no
 runtime field map, no interpretation of a record plan, and no byte-by-byte
 string comparison unless the selected format's field-name conversion itself
-requires it. Long-key paths must preserve the same public semantics and memory
+requires it. Long-key paths must preserve the same public behavior and memory
 invariants. If a format must handle long transformed keys without allocation,
 that path must avoid constructing a transformed heap `Str`; it is not allowed to
 make the SSO path slower for the sake of generality.
@@ -1058,7 +1069,9 @@ payload. Recursive tag unions are ordinary recursive method calls through the
 selected payload type. The compiler knows the Roc shape and the static-dispatch
 requirements; it does not know any format-specific tag representation.
 
-The generated code uses direct static calls. It does not pass user callbacks,
+The generated code uses direct static calls. Tag spec matching is compiler-
+generated exact matching over the concrete tag labels; userspace does not pass a
+matcher function to spec operations. It does not pass user callbacks,
 does not build a runtime interpretation plan, and does not route shape handling
 through a central dispatch function. Generic userspace format code produces
 record field events and calls opaque tag spec operations. The record loop and

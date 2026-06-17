@@ -8,6 +8,7 @@ const testing = std.testing;
 const io = std.testing.io;
 
 const required_foo_value = "abcdefghijklmnopqrstuvwxyz";
+const long_unknown_header_name = "X-Super-Long-Unknown-Header-Name-That-Would-Allocate-If-Converted";
 
 const optional_headers = [_]OptionalHeader{
     .{ .name = "Explicit-Optional", .value = "abc" },
@@ -124,24 +125,41 @@ fn buildRequest(allocator: std.mem.Allocator, optional_mask: u8) anyerror![]u8 {
 
     try request.appendSlice(allocator, "GET /header-lengths HTTP/1.1\r\n");
     try request.appendSlice(allocator, "Host: localhost\r\n");
-    try request.appendSlice(allocator, "fOo: ");
-    try request.appendSlice(allocator, required_foo_value);
-    try request.appendSlice(allocator, "\r\n");
+    try appendHeader(&request, allocator, long_unknown_header_name, "ignored");
 
-    for (optional_headers, 0..) |header, index| {
-        const bit = @as(u8, 1) << @intCast(index);
-        if ((optional_mask & bit) == 0) continue;
+    if ((optional_mask & 1) == 0) {
+        try appendHeader(&request, allocator, "fOo", required_foo_value);
 
-        try request.appendSlice(allocator, header.name);
-        try request.appendSlice(allocator, ": ");
-        try request.appendSlice(allocator, header.value);
-        try request.appendSlice(allocator, "\r\n");
+        for (optional_headers, 0..) |header, index| {
+            const bit = @as(u8, 1) << @intCast(index);
+            if ((optional_mask & bit) == 0) continue;
+
+            try appendHeader(&request, allocator, header.name, header.value);
+        }
+    } else {
+        var index = optional_headers.len;
+        while (index > 0) {
+            index -= 1;
+            const bit = @as(u8, 1) << @intCast(index);
+            if ((optional_mask & bit) == 0) continue;
+
+            try appendHeader(&request, allocator, optional_headers[index].name, optional_headers[index].value);
+        }
+
+        try appendHeader(&request, allocator, "fOo", required_foo_value);
     }
 
     try request.appendSlice(allocator, "Content-Length: 0\r\n");
     try request.appendSlice(allocator, "\r\n");
 
     return request.toOwnedSlice(allocator);
+}
+
+fn appendHeader(request: *std.ArrayList(u8), allocator: std.mem.Allocator, name: []const u8, value: []const u8) anyerror!void {
+    try request.appendSlice(allocator, name);
+    try request.appendSlice(allocator, ": ");
+    try request.appendSlice(allocator, value);
+    try request.appendSlice(allocator, "\r\n");
 }
 
 fn buildMissingRequiredRequest(allocator: std.mem.Allocator) anyerror![]u8 {

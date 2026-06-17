@@ -9,6 +9,7 @@ const io = std.testing.io;
 
 const required_foo_value = "abcdefghijklmnopqrstuvwxyz,with-comma";
 const nested_bar_value = "nested-}-bar,value";
+const long_unknown_key = "this_unknown_key_is_far_too_long_for_the_target_record";
 const token_input_value = "original-token-value";
 const custom_token_value = "custom-token";
 const status_values = [_][]const u8{ "Active", "Paused" };
@@ -104,6 +105,12 @@ test "JSON parsing platform derives structural parser without runtime allocation
         try runJsonDecoderAndCheckOutput(allocator, output_path, json, expected_stdout);
     }
 
+    const reordered_json = try buildReorderedJson(allocator);
+    defer allocator.free(reordered_json);
+    const reordered_expected_stdout = try buildExpectedStdout(allocator, expectedJsonLength(7, 1, 1));
+    defer allocator.free(reordered_expected_stdout);
+    try runJsonDecoderAndCheckOutput(allocator, output_path, reordered_json, reordered_expected_stdout);
+
     const missing_required_json = try buildMissingRequiredJson(allocator);
     defer allocator.free(missing_required_json);
     const missing_required_stdout = try buildExpectedStdout(allocator, 999999);
@@ -122,7 +129,10 @@ fn buildJson(
     var json: std.ArrayList(u8) = .empty;
     errdefer json.deinit(allocator);
 
-    try json.appendSlice(allocator, "{\n  \"foo\" : \"");
+    try json.appendSlice(allocator, "{\n  \"");
+    try json.appendSlice(allocator, long_unknown_key);
+    try json.appendSlice(allocator, "\" : \"ignored\"");
+    try json.appendSlice(allocator, ",\n  \"foo\" : \"");
     try json.appendSlice(allocator, required_foo_value);
     try json.appendSlice(allocator, "\"");
     try json.appendSlice(allocator, ",\n  \"token\" : \"");
@@ -149,6 +159,44 @@ fn buildJson(
         try json.appendSlice(allocator, "\"");
     }
 
+    try json.appendSlice(allocator, "\n}\n");
+
+    return json.toOwnedSlice(allocator);
+}
+
+fn buildReorderedJson(allocator: std.mem.Allocator) anyerror![]u8 {
+    var json: std.ArrayList(u8) = .empty;
+    errdefer json.deinit(allocator);
+
+    try json.appendSlice(allocator, "{\n  \"wildcard_optional\" : \"");
+    try json.appendSlice(allocator, optional_fields[1].value);
+    try json.appendSlice(allocator, "\"");
+    try json.appendSlice(allocator, ",\n  \"token\" : \"");
+    try json.appendSlice(allocator, token_input_value);
+    try json.appendSlice(allocator, "\"");
+    try json.appendSlice(allocator, ",\n  \"status\" : { \"");
+    try json.appendSlice(allocator, status_values[1]);
+    try json.appendSlice(allocator, "\" : {} }");
+    try json.appendSlice(allocator, ",\n  \"question_optional\" : \"");
+    try json.appendSlice(allocator, optional_fields[2].value);
+    try json.appendSlice(allocator, "\"");
+    try json.appendSlice(allocator, ",\n  \"pair\" : { \"Pair\" : { \"second\" : \"right\", \"first\" : \"left\" } }");
+    try json.appendSlice(allocator, ",\n  \"nested\" : {\n    \"mode\" : { \"");
+    try json.appendSlice(allocator, mode_values[1]);
+    try json.appendSlice(allocator, "\" : {} },\n    \"");
+    try json.appendSlice(allocator, long_unknown_key);
+    try json.appendSlice(allocator, "\" : \"ignored\",\n    \"bar\" : \"");
+    try json.appendSlice(allocator, nested_bar_value);
+    try json.appendSlice(allocator, "\"\n  }");
+    try json.appendSlice(allocator, ",\n  \"foo\" : \"");
+    try json.appendSlice(allocator, required_foo_value);
+    try json.appendSlice(allocator, "\"");
+    try json.appendSlice(allocator, ",\n  \"explicit_optional\" : \"");
+    try json.appendSlice(allocator, optional_fields[0].value);
+    try json.appendSlice(allocator, "\"");
+    try json.appendSlice(allocator, ",\n  \"");
+    try json.appendSlice(allocator, long_unknown_key);
+    try json.appendSlice(allocator, "\" : { \"nested\" : \"ignored\" }");
     try json.appendSlice(allocator, "\n}\n");
 
     return json.toOwnedSlice(allocator);

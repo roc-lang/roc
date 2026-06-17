@@ -1,6 +1,6 @@
 Builtin :: [].{
 	ParseTagUnionSpec(_shape) :: {}.{
-		parse : ParseTagUnionSpec(_shape), Str, _fmt, (Str, Str -> Bool), _err -> Try(_shape, _err)
+		parse : ParseTagUnionSpec(_shape), Str, _fmt, _err -> Try(_shape, _err)
 	}
 
 	Str :: [ProvidedByCompiler].{

@@ -18,26 +18,30 @@ JsonFormat :: [Input(Str), Object(Str), Value(Str)].{
 			Value(value) => Ok({ value, rest: Value("") })
 		}
 
-	parse_record_field : JsonFormat -> Try(
+	parse_record_field : U64, JsonFormat -> Try(
 		[
 			Field({ name : Str, value : JsonFormat, rest : JsonFormat }),
-			End({ rest : JsonFormat, missing : DecodeErr }),
+			Continue({ rest : JsonFormat }),
+			Done({ rest : JsonFormat }),
 		],
 		DecodeErr,
 	)
-	parse_record_field = |slot|
+	parse_record_field = |longest_field_len, slot|
 		match slot {
 			Input(raw) => {
 				trimmed = Str.trim_start(raw)
 				if Str.starts_with(trimmed, "{") {
-					parse_record_field_from_object(Str.trim_start(Str.drop_prefix(trimmed, "{")))
+					parse_record_field_from_object(longest_field_len, Str.trim_start(Str.drop_prefix(trimmed, "{")))
 				} else {
 					Err(invalid_json)
 				}
 			}
-			Object(raw) => parse_record_field_from_object(raw)
+			Object(raw) => parse_record_field_from_object(longest_field_len, raw)
 			Value(_) => Err(invalid_json)
 		}
+
+	missing_record_field : Str, JsonFormat -> DecodeErr
+	missing_record_field = |_, _| DecodeErr.MissingRequired
 
 	parse_tag_union : ParseTagUnionSpec(a), JsonFormat -> Try({ value : a, rest : JsonFormat }, DecodeErr)
 	parse_tag_union = |spec, slot|
@@ -87,19 +91,20 @@ Json :: [].{
 invalid_json : DecodeErr
 invalid_json = DecodeErr.InvalidJson
 
-parse_record_field_from_object : Str -> Try(
+parse_record_field_from_object : U64, Str -> Try(
 	[
 		Field({ name : Str, value : JsonFormat, rest : JsonFormat }),
-		End({ rest : JsonFormat, missing : DecodeErr }),
+		Continue({ rest : JsonFormat }),
+		Done({ rest : JsonFormat }),
 	],
 	DecodeErr,
 )
-parse_record_field_from_object = |raw| {
+parse_record_field_from_object = |longest_field_len, raw| {
 	var $remaining = Str.trim_start(raw)
 
 	if Str.starts_with($remaining, "}") {
 		after_record = Str.trim_start(Str.drop_prefix($remaining, "}"))
-		return Ok(End({ rest: JsonFormat.Input(after_record), missing: DecodeErr.MissingRequired }))
+		return Ok(Done({ rest: JsonFormat.Input(after_record) }))
 	}
 
 	if !Str.starts_with($remaining, "\"") {
@@ -135,11 +140,15 @@ parse_record_field_from_object = |raw| {
 			return Err(invalid_json)
 		}
 
-	Ok(Field({
-		name: key,
-		value: value_and_after.value,
-		rest: JsonFormat.Object(next_remaining),
-	}))
+	if Str.count_utf8_bytes(key) > longest_field_len {
+		Ok(Continue({ rest: JsonFormat.Object(next_remaining) }))
+	} else {
+		Ok(Field({
+			name: key,
+			value: value_and_after.value,
+			rest: JsonFormat.Object(next_remaining),
+		}))
+	}
 }
 
 parse_tag_union_from_json : Str, ParseTagUnionSpec(a) -> Try({ value : a, rest : JsonFormat }, DecodeErr)
@@ -191,7 +200,7 @@ parse_tag_union_from_json = |raw, spec| {
 				return Err(invalid_json)
 			}
 
-			parsed = ParseTagUnionSpec.parse(spec, tag_name, JsonFormat.Input(payload), Str.is_eq, DecodeErr.MissingRequired)?
+			parsed = ParseTagUnionSpec.parse(spec, tag_name, JsonFormat.Input(payload), DecodeErr.MissingRequired)?
 			after_close = Str.trim_start(Str.drop_prefix(after_payload, "}"))
 
 			Ok({ value: parsed, rest: JsonFormat.Input(after_close) })

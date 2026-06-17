@@ -12835,7 +12835,7 @@ fn varSupportsDerivedParseField(
 ) Allocator.Error!bool {
     return switch (self.types.resolveVar(var_).desc.content) {
         .structure => |structure| switch (structure) {
-            .nominal_type => |nominal| try self.nominalSupportsDerivedParseField(nominal, env, region),
+            .nominal_type => |nominal| try self.nominalSupportsDerivedParseField(nominal),
             .record => |record| try self.typeSupportsDerivedParse(.{ .record = record }, env, region),
             .tag_union => |tag_union| try self.typeSupportsDerivedParse(.{ .tag_union = tag_union }, env, region),
             .empty_record => true,
@@ -12851,8 +12851,6 @@ fn varSupportsDerivedParseField(
 fn nominalSupportsDerivedParseField(
     self: *Self,
     nominal: types_mod.NominalType,
-    env: *Env,
-    region: Region,
 ) Allocator.Error!bool {
     if (self.nominalIsBuiltinStrType(nominal)) return true;
     if (!self.nominalIsBuiltinTryType(nominal)) {
@@ -12862,7 +12860,51 @@ fn nominalSupportsDerivedParseField(
     const args = self.types.sliceNominalArgs(nominal);
     if (args.len != 2) return false;
     if (!try self.varIsBuiltinStr(args[0])) return false;
-    return try self.varCanParseMissingError(args[1], env, region);
+    return try self.varLooksLikeParseMissingError(args[1]);
+}
+
+fn varLooksLikeParseMissingError(
+    self: *Self,
+    var_: Var,
+) Allocator.Error!bool {
+    return switch (self.types.resolveVar(var_).desc.content) {
+        .structure => |structure| switch (structure) {
+            .tag_union => |tag_union| try self.tagUnionLooksLikeParseMissingError(tag_union),
+            else => false,
+        },
+        .alias => |alias| try self.varLooksLikeParseMissingError(self.types.getAliasBackingVar(alias)),
+        .err, .flex, .rigid => true,
+    };
+}
+
+fn tagUnionLooksLikeParseMissingError(
+    self: *Self,
+    tag_union: types_mod.TagUnion,
+) Allocator.Error!bool {
+    const tags_slice = self.types.getTagsSlice(tag_union.tags);
+    const names = tags_slice.items(.name);
+    const args_ranges = tags_slice.items(.args);
+    if (names.len != 1) return false;
+
+    const missing_tag_name = try @constCast(self.cir).insertIdent(base.Ident.for_text("Missing"));
+    if (!names[0].eql(missing_tag_name)) return false;
+    if (self.types.sliceVars(args_ranges[0]).len != 0) return false;
+
+    return try self.tagExtLooksEmptyOrUnconstrained(tag_union.ext);
+}
+
+fn tagExtLooksEmptyOrUnconstrained(
+    self: *Self,
+    ext_var: Var,
+) Allocator.Error!bool {
+    return switch (self.types.resolveVar(ext_var).desc.content) {
+        .structure => |structure| switch (structure) {
+            .empty_tag_union => true,
+            else => false,
+        },
+        .alias => |alias| try self.tagExtLooksEmptyOrUnconstrained(self.types.getAliasBackingVar(alias)),
+        .err, .flex, .rigid => true,
+    };
 }
 
 fn varIsBuiltinStr(self: *Self, var_: Var) std.mem.Allocator.Error!bool {
@@ -13184,11 +13226,9 @@ fn freshParseResultOkVar(
 fn freshParseRecordFieldEventVar(
     self: *Self,
     slot_var: Var,
-    err_var: Var,
     env: *Env,
     region: Region,
 ) Allocator.Error!Var {
-    const missing_name = try @constCast(self.cir).insertIdent(base.Ident.for_text("missing"));
     const name_name = try @constCast(self.cir).insertIdent(base.Ident.for_text("name"));
     const rest_name = try @constCast(self.cir).insertIdent(base.Ident.for_text("rest"));
     const value_name = try @constCast(self.cir).insertIdent(base.Ident.for_text("value"));
@@ -13205,20 +13245,21 @@ fn freshParseRecordFieldEventVar(
         .ext = field_record_ext,
     } } }, env, region);
 
-    const end_record_ext = try self.freshFromContent(.{ .structure = .empty_record }, env, region);
-    const end_record_fields = [_]types_mod.RecordField{
-        .{ .name = missing_name, .var_ = err_var },
+    const rest_record_ext = try self.freshFromContent(.{ .structure = .empty_record }, env, region);
+    const rest_record_fields = [_]types_mod.RecordField{
         .{ .name = rest_name, .var_ = slot_var },
     };
-    const end_record = try self.freshFromContent(.{ .structure = .{ .record = .{
-        .fields = try self.types.appendRecordFields(&end_record_fields),
-        .ext = end_record_ext,
+    const rest_record = try self.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = try self.types.appendRecordFields(&rest_record_fields),
+        .ext = rest_record_ext,
     } } }, env, region);
 
-    const end_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text("End"));
+    const continue_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text("Continue"));
+    const done_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text("Done"));
     const field_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text("Field"));
     const tags = [_]types_mod.Tag{
-        try self.types.mkTag(end_ident, &.{end_record}),
+        try self.types.mkTag(continue_ident, &.{rest_record}),
+        try self.types.mkTag(done_ident, &.{rest_record}),
         try self.types.mkTag(field_ident, &.{field_record}),
     };
     const ext_var = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, region);
@@ -13232,7 +13273,7 @@ fn freshParseRecordFieldTryVar(
     env: *Env,
     region: Region,
 ) Allocator.Error!Var {
-    const event_var = try self.freshParseRecordFieldEventVar(slot_var, err_var, env, region);
+    const event_var = try self.freshParseRecordFieldEventVar(slot_var, env, region);
     return try self.freshFromContent(try self.mkTryContent(event_var, err_var, env), env, region);
 }
 
@@ -13253,6 +13294,10 @@ fn parseFormatMethodName(self: *Self, decl: BuiltinParseSpecDecl) Allocator.Erro
         .tag_union => "parse_tag_union",
     };
     return try @constCast(self.cir).insertIdent(base.Ident.for_text(text));
+}
+
+fn missingRecordFieldMethodName(self: *Self) Allocator.Error!Ident.Idx {
+    return try @constCast(self.cir).insertIdent(base.Ident.for_text("missing_record_field"));
 }
 
 fn parseFormatMethodVarForSlot(
@@ -13336,12 +13381,37 @@ fn validateParseFormatMethod(
         .record_field => try self.freshParseRecordFieldTryVar(slot_var, err_var, env, region),
     };
     const expected_fn = switch (spec_decl) {
-        .str, .record_field => try self.freshFromContent(try self.types.mkFuncUnbound(&.{slot_var}, expected_ret), env, region),
+        .str => try self.freshFromContent(try self.types.mkFuncUnbound(&.{slot_var}, expected_ret), env, region),
+        .record_field => blk: {
+            const u64_var = try self.freshFromContent(try self.mkNumberTypeContent(.u64, env), env, region);
+            break :blk try self.freshFromContent(try self.types.mkFuncUnbound(&.{ u64_var, slot_var }, expected_ret), env, region);
+        },
         .tag_union => blk: {
             const spec_var = try self.mkParseSpecVar(spec_decl, shape_var, env, region);
             break :blk try self.freshFromContent(try self.types.mkFuncUnbound(&.{ spec_var, slot_var }, expected_ret), env, region);
         },
     };
+    const result = try self.unifyInContext(method.var_, expected_fn, env, .{
+        .method_type = .{
+            .constraint_var = slot_var,
+            .dispatcher_name = method.dispatcher_name,
+            .method_name = method_name,
+        },
+    });
+    return result.isOk();
+}
+
+fn validateMissingRecordFieldMethod(
+    self: *Self,
+    slot_var: Var,
+    err_var: Var,
+    env: *Env,
+    region: Region,
+) Allocator.Error!bool {
+    const method_name = try self.missingRecordFieldMethodName();
+    const method = try self.parseFormatMethodVarForSlot(slot_var, method_name, env, region) orelse return false;
+    const str_var = try self.freshStr(env, region);
+    const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{ str_var, slot_var }, err_var), env, region);
     const result = try self.unifyInContext(method.var_, expected_fn, env, .{
         .method_type = .{
             .constraint_var = slot_var,
@@ -13402,10 +13472,50 @@ fn validateDerivedParseRecord(
     if (!try self.validateParseFormatMethod(slot_var, record_var, .record_field, err_var, env, region)) {
         return false;
     }
+    if (try self.recordParseNeedsMissingRecordField(fields_range)) {
+        if (!try self.validateMissingRecordFieldMethod(slot_var, err_var, env, region)) return false;
+    }
     for (fields.items(.var_)) |field_var| {
         if (!try self.validateDerivedParseVar(field_var, slot_var, err_var, constraint, env, region, visited, .record_field)) return false;
     }
     return true;
+}
+
+fn recordParseNeedsMissingRecordField(
+    self: *Self,
+    fields_range: types_mod.RecordField.SafeMultiList.Range,
+) Allocator.Error!bool {
+    const fields = self.types.getRecordFieldsSlice(fields_range);
+    for (fields.items(.var_)) |field_var| {
+        if (!try self.varIsOptionalMissingStrField(field_var)) return true;
+    }
+    return false;
+}
+
+fn varIsOptionalMissingStrField(
+    self: *Self,
+    var_: Var,
+) Allocator.Error!bool {
+    return switch (self.types.resolveVar(var_).desc.content) {
+        .structure => |structure| switch (structure) {
+            .nominal_type => |nominal| try self.nominalIsOptionalMissingStrField(nominal),
+            else => false,
+        },
+        .alias => |alias| try self.varIsOptionalMissingStrField(self.types.getAliasBackingVar(alias)),
+        .err => true,
+        .flex, .rigid => false,
+    };
+}
+
+fn nominalIsOptionalMissingStrField(
+    self: *Self,
+    nominal: types_mod.NominalType,
+) Allocator.Error!bool {
+    if (!self.nominalIsBuiltinTryType(nominal)) return false;
+    const args = self.types.sliceNominalArgs(nominal);
+    if (args.len != 2) return false;
+    if (!try self.varIsBuiltinStr(args[0])) return false;
+    return try self.varLooksLikeParseMissingError(args[1]);
 }
 
 fn validateDerivedParseTagUnion(
