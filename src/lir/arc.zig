@@ -537,6 +537,11 @@ const Inserter = struct {
                     });
                     path.cursor = assign.next;
                 },
+                .init_uninitialized => |uninit| {
+                    current_start = try self.releaseOldTargetIfNeeded(uninit.target, &path.owned, current_start);
+                    try path.frames.append(self.store.allocator, .{ .stmt = path.cursor, .head = current_start });
+                    path.cursor = uninit.next;
+                },
                 .assign_call => |assign| {
                     const callee_sig = self.solution.sigOf(assign.proc);
                     // Unique demands clone variants, so they exist only when
@@ -916,6 +921,12 @@ const Inserter = struct {
                 cloned = try self.store.addCFStmt(.{ .assign_literal = .{
                     .target = assign.target,
                     .value = assign.value,
+                    .next = next,
+                } });
+            },
+            .init_uninitialized => |uninit| {
+                cloned = try self.store.addCFStmt(.{ .init_uninitialized = .{
+                    .target = uninit.target,
                     .next = next,
                 } });
             },
@@ -1430,6 +1441,10 @@ const Inserter = struct {
                     const singles = [_]LIR.LocalId{ refOpSource(assign.op), assign.target };
                     try self.postStmtDeaths(&path.owned, &singles, null, assign.next, path.loop_keep, null);
                     path.cursor = assign.next;
+                },
+                .init_uninitialized => |uninit| {
+                    path.owned.unset(uninit.target);
+                    path.cursor = uninit.next;
                 },
                 .assign_literal => |assign| {
                     self.addOwnedIfRc(&path.owned, assign.target);
@@ -2114,6 +2129,7 @@ const Inserter = struct {
             switch (stmt) {
                 .assign_ref => |assign| try stack.append(self.store.allocator, assign.next),
                 .assign_literal => |assign| try stack.append(self.store.allocator, assign.next),
+                .init_uninitialized => |uninit| try stack.append(self.store.allocator, uninit.next),
                 .assign_call => |assign| try stack.append(self.store.allocator, assign.next),
                 .assign_call_erased => |assign| try stack.append(self.store.allocator, assign.next),
                 .assign_packed_erased_fn => |assign| try stack.append(self.store.allocator, assign.next),
@@ -2196,6 +2212,7 @@ const Inserter = struct {
             switch (stmt) {
                 .assign_ref => |assign| try stack.append(self.store.allocator, assign.next),
                 .assign_literal => |assign| try stack.append(self.store.allocator, assign.next),
+                .init_uninitialized => |uninit| try stack.append(self.store.allocator, uninit.next),
                 .assign_call => |assign| try stack.append(self.store.allocator, assign.next),
                 .assign_call_erased => |assign| try stack.append(self.store.allocator, assign.next),
                 .assign_packed_erased_fn => |assign| try stack.append(self.store.allocator, assign.next),
@@ -2272,6 +2289,10 @@ const Inserter = struct {
                 .assign_literal => |assign| {
                     if (assign.target == needle) continue;
                     try stack.append(self.store.allocator, assign.next);
+                },
+                .init_uninitialized => |uninit| {
+                    if (uninit.target == needle) continue;
+                    try stack.append(self.store.allocator, uninit.next);
                 },
                 .assign_call => |assign| {
                     if (self.spanUsesLocal(assign.args, needle)) return true;
@@ -2425,6 +2446,9 @@ const Inserter = struct {
                 },
                 .assign_literal => |assign| {
                     try stack.append(self.store.allocator, assign.next);
+                },
+                .init_uninitialized => |uninit| {
+                    try stack.append(self.store.allocator, uninit.next);
                 },
                 .assign_call => |assign| {
                     if (self.spanUsesAny(assign.args, needles)) return true;
@@ -3053,7 +3077,7 @@ const ArcTest = struct {
                     try stack.append(self.allocator, j.body);
                     try stack.append(self.allocator, j.remainder);
                 },
-                inline .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .free => |s| {
+                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .free => |s| {
                     try stack.append(self.allocator, s.next);
                 },
                 .ret, .jump, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
@@ -3099,6 +3123,7 @@ const ArcTest = struct {
                 },
                 .assign_ref => |assign| cursor = assign.next,
                 .assign_literal => |assign| cursor = assign.next,
+                .init_uninitialized => |uninit| cursor = uninit.next,
                 .assign_call => |assign| cursor = assign.next,
                 .assign_call_erased => |assign| cursor = assign.next,
                 .assign_packed_erased_fn => |assign| cursor = assign.next,
@@ -4504,6 +4529,7 @@ fn expectDecrefBeforeStmt(f: *const ArcTest, start: LIR.CFStmtId, local: LIR.Loc
             .free => |rc| cursor = rc.next,
             .assign_ref => |a| cursor = a.next,
             .assign_literal => |a| cursor = a.next,
+            .init_uninitialized => |a| cursor = a.next,
             .assign_call => |a| cursor = a.next,
             .assign_call_erased => |a| cursor = a.next,
             .assign_packed_erased_fn => |a| cursor = a.next,

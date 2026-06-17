@@ -8340,6 +8340,20 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                     try self.checkDestructureExhaustiveness(var_stmt.pattern_idx, var_stmt.expr, var_expr, env, stmt_region);
                 }
             },
+            .s_var_uninitialized => |var_stmt| {
+                const var_pattern_ctx: PatternCtx = if (self.patternNeedsExhaustiveness(var_stmt.pattern_idx)) .match_branch else .bound;
+
+                try self.checkPattern(var_stmt.pattern_idx, var_pattern_ctx, env);
+                const var_pattern_var: Var = ModuleEnv.varFrom(var_stmt.pattern_idx);
+
+                if (var_stmt.anno) |annotation_idx| {
+                    try self.generateAnnotationType(annotation_idx, env);
+                    _ = try self.unifyInContext(ModuleEnv.varFrom(annotation_idx), var_pattern_var, env, .type_annotation);
+                }
+
+                const empty_rec = try self.freshFromContent(.{ .structure = .empty_record }, env, stmt_region);
+                _ = try self.unify(stmt_var, empty_rec, env);
+            },
             .s_reassign => |reassign| {
                 // Reassignment patterns can mix existing mutable binders with
                 // fresh local binders, e.g. `(word, $index) = pair`.

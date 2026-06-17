@@ -162,6 +162,7 @@ const FindTypeContext = struct {
         const anno_idx: ?CIR.Annotation.Idx = switch (stmt) {
             .s_decl => |d| d.anno,
             .s_var => |v| v.anno,
+            .s_var_uninitialized => |v| v.anno,
             else => null,
         };
 
@@ -173,6 +174,7 @@ const FindTypeContext = struct {
                 const pattern_idx: ?CIR.Pattern.Idx = switch (stmt) {
                     .s_decl => |d| d.pattern,
                     .s_var => |v| v.pattern_idx,
+                    .s_var_uninitialized => |v| v.pattern_idx,
                     else => null,
                 };
                 if (pattern_idx) |pat| {
@@ -189,6 +191,7 @@ const FindTypeContext = struct {
                 const pattern_idx: ?CIR.Pattern.Idx = switch (stmt) {
                     .s_decl => |d| d.pattern,
                     .s_var => |v| v.pattern_idx,
+                    .s_var_uninitialized => |v| v.pattern_idx,
                     else => null,
                 };
                 if (pattern_idx) |pat| {
