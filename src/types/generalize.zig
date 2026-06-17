@@ -515,6 +515,15 @@ pub const VarPool = struct {
         try self.ranks.items[@intFromEnum(rank)].appendSlice(variables);
     }
 
+    /// Shrink the vars recorded for `rank` back to `new_len`, discarding
+    /// entries appended after a speculative probe captured the length —
+    /// the rollback counterpart to the `addVarToRank` calls the probe made.
+    pub fn shrinkRank(self: *Self, rank: Rank, new_len: usize) void {
+        std.debug.assert(@intFromEnum(rank) <= @intFromEnum(self.current_rank));
+        std.debug.assert(new_len <= self.ranks.items[@intFromEnum(rank)].items.len);
+        self.ranks.items[@intFromEnum(rank)].shrinkRetainingCapacity(new_len);
+    }
+
     pub fn getVarsForRank(self: *Self, rank: Rank) []Var {
         if (builtin.mode == .Debug) {
             if (@intFromEnum(rank) > @intFromEnum(self.current_rank)) {

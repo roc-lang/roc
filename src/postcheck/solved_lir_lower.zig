@@ -105,8 +105,18 @@ pub const Output = struct {
 };
 
 /// Options used by solved-to-LIR lowering.
+pub const DebugEffectMode = enum {
+    run,
+    erase,
+};
+
+/// Configuration for direct solved-to-LIR lowering.
 pub const Options = struct {
     inline_plan: SolvedInline.Plan = .{},
+    /// Whether inline `dbg` and `expect` are lowered into runtime statements.
+    /// Compile-time finalization and tests leave this enabled; optimized
+    /// runtime builds erase these effects before LIR reaches any backend.
+    debug_effects: DebugEffectMode = .run,
     /// Allow `List.map` to reuse a unique input list's allocation for its
     /// output when the input and output element layouts are interchangeable.
     /// When disabled, `list_map_can_reuse` lowers to a constant 0 and the
@@ -132,6 +142,7 @@ pub fn run(
     try lowerer.result.store.setSourceFiles(owned.lifted.source_files.items);
     try lowerer.lower();
     try lowerer.bindRoots();
+    try lowerer.lowerReachableFns();
     try lowerer.writeRuntimeSchemas();
     if (builtin.mode == .Debug) {
         try lowerer.verifyMaterializedDecisions();
@@ -250,7 +261,10 @@ const Lowerer = struct {
     fn_entries: std.ArrayList(FnEntry),
     fn_spec_map: std.HashMap(FnSpec, Type.FnId, FnSpecContext, std.hash_map.default_max_load_percentage),
     fn_written: std.ArrayList(bool),
+    fn_reachable: std.ArrayList(bool),
+    fn_reach_queue: std.ArrayList(Type.FnId),
     inline_plan: SolvedInline.Plan,
+    debug_effects: DebugEffectMode,
     list_in_place_map: bool,
     proc_debug_names: bool,
     /// Match sites statically resolved by `foldListMapCanReuseMatch`,
@@ -309,7 +323,10 @@ const Lowerer = struct {
             .fn_entries = .empty,
             .fn_spec_map = std.HashMap(FnSpec, Type.FnId, FnSpecContext, std.hash_map.default_max_load_percentage).initContext(allocator, .{}),
             .fn_written = .empty,
+            .fn_reachable = .empty,
+            .fn_reach_queue = .empty,
             .inline_plan = options.inline_plan,
+            .debug_effects = options.debug_effects,
             .list_in_place_map = options.list_in_place_map,
             .proc_debug_names = options.proc_debug_names,
             .folded_map_matches = .empty,
@@ -341,6 +358,8 @@ const Lowerer = struct {
         self.captures.deinit();
         self.capture_types.deinit();
         self.source_symbols.deinit();
+        self.fn_reach_queue.deinit(self.allocator);
+        self.fn_reachable.deinit(self.allocator);
         self.fn_written.deinit(self.allocator);
         self.fn_spec_map.deinit();
         self.fn_entries.deinit(self.allocator);
@@ -368,6 +387,8 @@ const Lowerer = struct {
         self.captures.deinit();
         self.capture_types.deinit();
         self.source_symbols.deinit();
+        self.fn_reach_queue.deinit(self.allocator);
+        self.fn_reachable.deinit(self.allocator);
         self.fn_written.deinit(self.allocator);
         self.fn_spec_map.deinit();
         self.fn_entries.deinit(self.allocator);
@@ -388,10 +409,12 @@ const Lowerer = struct {
 
         try self.roots.ensureTotalCapacity(self.allocator, self.solved.lifted.roots.items.len);
         for (self.solved.lifted.roots.items) |root| {
+            const fn_id = try self.ensureOwnFnSpec(root.fn_id, .finite);
             try self.roots.append(self.allocator, .{
-                .fn_id = try self.ensureOwnFnSpec(root.fn_id, .finite),
+                .fn_id = fn_id,
                 .request = root.request,
             });
+            _ = try self.markReachableFn(fn_id);
         }
 
         try self.layout_requests.ensureTotalCapacity(self.allocator, self.solved.layout_requests.items.len);
@@ -410,7 +433,7 @@ const Lowerer = struct {
             });
         }
 
-        try self.lowerQueuedFns();
+        try self.lowerReachableFns();
     }
 
     fn indexSourceFns(self: *Lowerer) Common.LowerError!void {
@@ -422,17 +445,18 @@ const Lowerer = struct {
         }
     }
 
-    fn lowerQueuedFns(self: *Lowerer) Common.LowerError!void {
+    fn lowerReachableFns(self: *Lowerer) Common.LowerError!void {
         var index: usize = 0;
-        while (index < self.fn_specs.items.len) : (index += 1) {
-            if (self.fn_written.items[index]) continue;
-            const fn_id: Type.FnId = @enumFromInt(@as(u32, @intCast(index)));
-            try self.lowerFnSpec(fn_id, self.fn_specs.items[index]);
+        while (index < self.fn_reach_queue.items.len) : (index += 1) {
+            const fn_id = self.fn_reach_queue.items[index];
+            const fn_index = @intFromEnum(fn_id);
+            if (self.fn_written.items[fn_index]) continue;
+            try self.lowerFnSpec(fn_id, self.fn_specs.items[fn_index]);
         }
     }
 
     fn lowerFnSpec(self: *Lowerer, fn_id: Type.FnId, spec: FnSpec) Common.LowerError!void {
-        const proc_id = try self.fnProc(fn_id);
+        const proc_id = try self.procPlaceholder(fn_id);
         const entry = self.fn_entries.items[@intFromEnum(fn_id)];
         const source_fn = self.solved.lifted.fns.items[@intFromEnum(spec.source)];
 
@@ -577,6 +601,7 @@ const Lowerer = struct {
         result.value_ptr.* = fn_id;
         try self.fn_specs.append(self.allocator, spec);
         try self.fn_written.append(self.allocator, false);
+        try self.fn_reachable.append(self.allocator, false);
         try self.fn_entries.append(self.allocator, undefined);
         const source_fn = self.solved.lifted.fns.items[@intFromEnum(source)];
         const symbol = self.symbols.fresh();
@@ -596,7 +621,18 @@ const Lowerer = struct {
         return fn_id;
     }
 
-    fn fnProc(self: *Lowerer, fn_id: Type.FnId) Common.LowerError!LIR.LirProcSpecId {
+    fn markReachableFn(self: *Lowerer, fn_id: Type.FnId) Common.LowerError!LIR.LirProcSpecId {
+        const index = @intFromEnum(fn_id);
+        if (index >= self.fn_entries.items.len) Common.invariant("direct LIR reachability referenced a missing function spec");
+        const proc = try self.procPlaceholder(fn_id);
+        if (!self.fn_reachable.items[index]) {
+            self.fn_reachable.items[index] = true;
+            try self.fn_reach_queue.append(self.allocator, fn_id);
+        }
+        return proc;
+    }
+
+    fn procPlaceholder(self: *Lowerer, fn_id: Type.FnId) Common.LowerError!LIR.LirProcSpecId {
         const index = @intFromEnum(fn_id);
         if (self.fn_entries.items[index].proc) |existing| return existing;
         return try self.finalizeFnProc(fn_id);
@@ -956,7 +992,7 @@ const Lowerer = struct {
     fn bindRoots(self: *Lowerer) Common.LowerError!void {
         for (self.roots.items) |root| {
             const entry = self.fn_entries.items[@intFromEnum(root.fn_id)];
-            const proc = try self.fnProc(root.fn_id);
+            const proc = try self.markReachableFn(root.fn_id);
             try self.result.root_procs.append(self.allocator, proc);
             try self.result.root_metadata.append(self.allocator, RootMetadata.fromCheckedRoot(root.request));
             if (root.request.abi == .compile_time) {
@@ -1146,7 +1182,7 @@ const Lowerer = struct {
             errdefer if (captures_owned) self.allocator.free(captures);
 
             entries[index] = .{
-                .entry = try self.fnProc(member.target),
+                .entry = try self.markReachableFn(member.target),
                 .capture_layout = if (member.capture_ty) |capture_ty| try self.layoutOfType(capture_ty) else .zst,
                 .template = constFnTemplateFromMono(self.fnTemplateForFn(member.target)),
                 .captures = captures,
@@ -1305,7 +1341,12 @@ const Lowerer = struct {
         var clone_owned = true;
         errdefer if (clone_owned) solved_clone.deinit();
 
-        var materialized = try LambdaMonoLower.run(self.allocator, solved_clone, self.folded_map_matches.items);
+        var materialized = try LambdaMonoLower.run(self.allocator, solved_clone, self.folded_map_matches.items, .{
+            .debug_effects = switch (self.debug_effects) {
+                .run => .run,
+                .erase => .erase,
+            },
+        });
         clone_owned = false;
         defer materialized.deinit();
 
@@ -1319,8 +1360,8 @@ const Lowerer = struct {
     }
 
     fn verifyFnEntriesMatch(self: *Lowerer, materialized: *const LambdaMono.Program) Common.LowerError!void {
-        if (self.fn_entries.items.len != materialized.fns.items.len) {
-            Common.invariant("debug Lambda Mono verifier saw a function count mismatch");
+        if (self.fn_entries.items.len > materialized.fns.items.len) {
+            Common.invariant("debug Lambda Mono verifier saw too many direct function specs");
         }
         const used = try self.allocator.alloc(bool, materialized.fns.items.len);
         defer self.allocator.free(used);
@@ -1387,7 +1428,11 @@ const Lowerer = struct {
             Common.invariant("debug Lambda Mono verifier saw a root count mismatch");
         }
         for (self.roots.items, materialized.roots.items) |direct, expected| {
-            if (direct.fn_id != expected.fn_id or !std.meta.eql(direct.request, expected.request)) {
+            if (!std.meta.eql(direct.request, expected.request)) {
+                Common.invariant("debug Lambda Mono verifier saw a root mismatch");
+            }
+            const expected_fn = materialized.fns.items[@intFromEnum(expected.fn_id)];
+            if (!try self.fnEntryMatchesMaterialized(self.fn_entries.items[@intFromEnum(direct.fn_id)], expected_fn, materialized)) {
                 Common.invariant("debug Lambda Mono verifier saw a root mismatch");
             }
         }
@@ -1502,6 +1547,7 @@ const Lowerer = struct {
                 .site = try self.lowerComptimeSite(site),
             } }),
             .dbg => |child| blk: {
+                if (self.debug_effects == .erase) break :blk try self.assignZst(target, next);
                 const after_dbg = try self.assignZst(target, next);
                 const message = try self.addTemp(try self.lowerExprTy(child));
                 const debug_stmt = try self.result.store.addCFStmt(.{ .debug = .{ .message = message, .next = after_dbg } });
@@ -1515,7 +1561,10 @@ const Lowerer = struct {
                 } });
                 break :blk try self.lowerExprInto(message, expect_err.msg, expect_err_stmt);
             },
-            .expect => |child| try self.lowerExpectExprInto(target, child, next),
+            .expect => |child| if (self.debug_effects == .erase)
+                try self.assignZst(target, next)
+            else
+                try self.lowerExpectExprInto(target, child, next),
         };
     }
 
@@ -1968,7 +2017,7 @@ const Lowerer = struct {
 
         const assign = try self.result.store.addCFStmt(.{ .assign_packed_erased_fn = .{
             .target = target,
-            .proc = try self.fnProc(fn_id),
+            .proc = try self.markReachableFn(fn_id),
             .capture = capture,
             .capture_layout = capture_layout,
             .on_drop = on_drop,
@@ -2025,7 +2074,7 @@ const Lowerer = struct {
         defer if (capture_arg != null) self.allocator.free(call_args);
         var current = try self.result.store.addCFStmt(.{ .assign_call = .{
             .target = target,
-            .proc = try self.fnProc(callee),
+            .proc = try self.markReachableFn(callee),
             .args = try self.result.store.addLocalSpan(call_args),
             .next = next,
         } });
@@ -2503,8 +2552,9 @@ const Lowerer = struct {
                 const temp = try self.addTemp(try self.lowerExprTy(expr_id));
                 break :blk try self.lowerExprInto(temp, expr_id, next);
             },
-            .expect => |expr_id| try self.lowerExpectStmt(expr_id, next),
+            .expect => |expr_id| if (self.debug_effects == .erase) next else try self.lowerExpectStmt(expr_id, next),
             .dbg => |expr_id| blk: {
+                if (self.debug_effects == .erase) break :blk next;
                 const temp = try self.addTemp(try self.lowerExprTy(expr_id));
                 const debug_stmt = try self.result.store.addCFStmt(.{ .debug = .{ .message = temp, .next = next } });
                 break :blk try self.lowerExprInto(temp, expr_id, debug_stmt);

@@ -193,6 +193,10 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
         for (hosted_indices) |index| gpa.free(index.sort_key);
         gpa.free(hosted_indices);
     }
+    var hosted_symbols = collectHostedSymbols(gpa, modules) catch {
+        return error.OutOfMemory;
+    };
+    defer deinitHostedSymbols(gpa, &hosted_symbols);
 
     // 3. Collect platform module type information from checked artifacts.
     var collected_modules = std.ArrayList(CollectedModuleTypeInfo).empty;
@@ -203,14 +207,16 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
         collected_modules.deinit(gpa);
     }
 
-    var type_table = TypeTable.init(gpa);
+    const target_usize = base.target.TargetUsize.native;
+
+    var type_table = TypeTable.init(gpa, target_usize);
     defer type_table.deinit();
 
     for (modules) |mod| {
         if (mod.is_platform_sibling or mod.is_platform_main) {
             const artifact = mod.semantic.checked_artifact orelse continue;
             type_table.clearVarMap();
-            if (try collectModuleTypeInfo(gpa, artifact, mod.name, hosted_indices, &type_table)) |mod_info| {
+            if (try collectModuleTypeInfo(gpa, artifact, mod.name, hosted_indices, &hosted_symbols, &type_table)) |mod_info| {
                 var owned_mod_info = mod_info;
                 errdefer owned_mod_info.deinit(gpa);
                 try collected_modules.append(gpa, owned_mod_info);
@@ -297,15 +303,20 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
     };
     defer gpa.free(relation_artifacts);
 
+    const lir_roots = lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root_artifact.root_requests.runtime_requests) catch {
+        return error.OutOfMemory;
+    };
+    defer gpa.free(lir_roots);
+
     var lowered = lir.CheckedPipeline.lowerCheckedModulesToLir(
         gpa,
         .{
             .root = CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
             .imports = imported_artifacts,
         },
-        .{ .requests = root_artifact.root_requests.runtime_requests },
+        .{ .requests = lir_roots },
         .{
-            .target_usize = base.target.TargetUsize.native,
+            .target_usize = target_usize,
         },
     ) catch {
         return error.OutOfMemory;
@@ -508,6 +519,58 @@ fn hostedGlobalIndexForDef(
         std.debug.panic("glue invariant violated: hosted proc has no global index", .{});
     }
     unreachable;
+}
+
+fn stripTrailingBang(name: []const u8) []const u8 {
+    if (std.mem.endsWith(u8, name, "!")) return name[0 .. name.len - 1];
+    return name;
+}
+
+fn hostedKeyAlloc(allocator: Allocator, module_name: []const u8, local_name: []const u8) Allocator.Error![]const u8 {
+    const stripped = stripTrailingBang(local_name);
+    if (module_name.len == 0) return try allocator.dupe(u8, stripped);
+    return try std.fmt.allocPrint(allocator, "{s}.{s}", .{ module_name, stripped });
+}
+
+fn deinitHostedSymbols(allocator: Allocator, hosted_symbols: *std.StringHashMap([]const u8)) void {
+    var it = hosted_symbols.iterator();
+    while (it.next()) |entry| {
+        allocator.free(entry.key_ptr.*);
+        allocator.free(entry.value_ptr.*);
+    }
+    hosted_symbols.deinit();
+}
+
+fn collectHostedSymbols(
+    allocator: Allocator,
+    modules: []const BuildEnv.CompiledModuleInfo,
+) Allocator.Error!std.StringHashMap([]const u8) {
+    var hosted_symbols = std.StringHashMap([]const u8).init(allocator);
+    errdefer deinitHostedSymbols(allocator, &hosted_symbols);
+
+    for (modules) |mod| {
+        if (!mod.is_platform_main) continue;
+        const artifact = mod.semantic.checked_artifact orelse continue;
+        const env = artifact.moduleEnvConst();
+
+        for (env.hosted_entries.items.items) |entry| {
+            const module_name = if (entry.module_ident) |module_ident| env.getIdent(module_ident) else "";
+            const local_name = env.getIdent(entry.func_ident);
+            const key = try hostedKeyAlloc(allocator, module_name, local_name);
+            errdefer allocator.free(key);
+            const symbol = try allocator.dupe(u8, env.getString(entry.symbol));
+            errdefer allocator.free(symbol);
+            const gop = try hosted_symbols.getOrPut(key);
+            if (gop.found_existing) {
+                allocator.free(key);
+                allocator.free(symbol);
+            } else {
+                gop.value_ptr.* = symbol;
+            }
+        }
+    }
+
+    return hosted_symbols;
 }
 
 fn findTopLevelDefByName(
@@ -766,6 +829,7 @@ const CollectedModuleTypeInfo = struct {
 
     const CollectedHostedFunctionInfo = struct {
         index: usize,
+        ffi_symbol: []const u8,
         name: []const u8,
         type_str: []const u8,
         arg_fields: []const CollectedRecordFieldInfo,
@@ -783,6 +847,7 @@ const CollectedModuleTypeInfo = struct {
         }
         self.functions.deinit(gpa);
         for (self.hosted_functions.items) |h| {
+            gpa.free(h.ffi_symbol);
             gpa.free(h.name);
             gpa.free(h.type_str);
             for (h.arg_fields) |field| {
@@ -822,7 +887,7 @@ const CollectedTypeRepr = union(enum) {
     unit,
     list: u64,
     function: struct { arg_ids: []const u64, ret_id: u64 },
-    record: struct { name: []const u8, fields: []const CollectedRecordField, size: u64, alignment: u64 },
+    record: struct { name: []const u8, anonymous: bool, fields: []const CollectedRecordField, size: u64, alignment: u64 },
     tag_union: struct { name: []const u8, tags: []const CollectedTagInfo, size: u64, alignment: u64 },
     unknown: []const u8,
 };
@@ -845,12 +910,14 @@ const CollectedTagInfo = struct {
 const TypeTable = struct {
     entries: std.ArrayList(CollectedTypeRepr),
     var_map: std.AutoHashMap(CheckedArtifact.CheckedTypeId, u64),
+    target_usize: base.target.TargetUsize,
     gpa: std.mem.Allocator,
 
-    fn init(gpa: std.mem.Allocator) TypeTable {
+    fn init(gpa: std.mem.Allocator, target_usize: base.target.TargetUsize) TypeTable {
         return .{
             .entries = std.ArrayList(CollectedTypeRepr).empty,
             .var_map = std.AutoHashMap(CheckedArtifact.CheckedTypeId, u64).init(gpa),
+            .target_usize = target_usize,
             .gpa = gpa,
         };
     }
@@ -945,6 +1012,7 @@ const TypeTable = struct {
                 if (rec.name.len == 0) {
                     self.entries.items[@intCast(idx)] = .{ .record = .{
                         .name = try std.fmt.allocPrint(self.gpa, "__AnonStruct{d}", .{idx}),
+                        .anonymous = true,
                         .fields = rec.fields,
                         .size = rec.size,
                         .alignment = rec.alignment,
@@ -969,24 +1037,26 @@ const TypeTable = struct {
     /// Get the size and alignment for a type table entry by index.
     fn getSizeAlign(self: *const TypeTable, type_id: u64) SizeAlign {
         if (type_id >= self.entries.items.len) return .{ .size = 0, .alignment = 1 };
-        return getSizeAlignForRepr(self.entries.items[@intCast(type_id)]);
+        return self.getSizeAlignForRepr(self.entries.items[@intCast(type_id)]);
     }
 
     /// Get the size and alignment for a CollectedTypeRepr.
-    fn getSizeAlignForRepr(repr: CollectedTypeRepr) SizeAlign {
+    fn getSizeAlignForRepr(self: *const TypeTable, repr: CollectedTypeRepr) SizeAlign {
+        const ptr_size = self.target_usize.size();
+        const ptr_alignment = self.target_usize.alignment().toByteUnits();
         return switch (repr) {
             .bool_ => .{ .size = 1, .alignment = 1 },
-            .box => .{ .size = 8, .alignment = 8 },
+            .box => .{ .size = ptr_size, .alignment = ptr_alignment },
             .u8_, .i8_ => .{ .size = 1, .alignment = 1 },
             .u16_, .i16_ => .{ .size = 2, .alignment = 2 },
             .u32_, .i32_, .f32_ => .{ .size = 4, .alignment = 4 },
             .u64_, .i64_, .f64_, .dec => .{ .size = 8, .alignment = 8 },
             .u128_, .i128_ => .{ .size = 16, .alignment = 16 },
-            .str_ => .{ .size = 24, .alignment = 8 },
-            .list => .{ .size = 24, .alignment = 8 },
+            .str_ => .{ .size = ptr_size * 3, .alignment = ptr_alignment },
+            .list => .{ .size = ptr_size * 3, .alignment = ptr_alignment },
             .unit => .{ .size = 0, .alignment = 0 },
             .record => |rec| .{ .size = rec.size, .alignment = rec.alignment },
-            .function => .{ .size = 0, .alignment = 1 },
+            .function => .{ .size = ptr_size, .alignment = ptr_alignment },
             .tag_union => |tu| .{ .size = tu.size, .alignment = tu.alignment },
             .unknown => .{ .size = 0, .alignment = 1 },
         };
@@ -1060,6 +1130,7 @@ const TypeTable = struct {
         return switch (backing_repr) {
             .record => |rec| .{ .record = .{
                 .name = try self.gpa.dupe(u8, display_name),
+                .anonymous = false,
                 .fields = rec.fields,
                 .size = rec.size,
                 .alignment = rec.alignment,
@@ -1157,6 +1228,7 @@ const TypeTable = struct {
 
         return .{ .record = .{
             .name = "",
+            .anonymous = true,
             .fields = collected_fields,
             .size = record_size,
             .alignment = max_alignment,
@@ -1243,6 +1315,7 @@ const TypeTable = struct {
 
         return .{ .record = .{
             .name = "",
+            .anonymous = true,
             .fields = collected_fields,
             .size = record_size,
             .alignment = max_alignment,
@@ -1750,6 +1823,7 @@ fn writeTypeRepr(
             writer.zeroValue(value_base, payload_layout);
             const fields_slot = writer.recordField(value_base, payload_layout, "RecordRepr", "fields");
             writer.writeField(value_base, payload_layout, "RecordRepr", "alignment", u64, rec.alignment);
+            writer.writeField(value_base, payload_layout, "RecordRepr", "anonymous", bool, rec.anonymous);
             writer.writeField(value_base, payload_layout, "RecordRepr", "fields", RocList, buildRecordFieldTypeReprList(writer, rec.fields, fields_slot.layout_idx));
             writer.writeField(value_base, payload_layout, "RecordRepr", "name", RocStr, createBigRocStr(rec.name, writer.roc_ops));
             writer.writeField(value_base, payload_layout, "RecordRepr", "size", u64, rec.size);
@@ -1828,6 +1902,7 @@ fn buildHostedFunctionInfoList(
 
         writer.writeField(elem_base, allocated.elem_layout, "HostedFunctionInfo", "arg_fields", RocList, buildRecordFieldsRocList(writer, hosted.arg_fields, arg_fields_slot.layout_idx));
         writer.writeField(elem_base, allocated.elem_layout, "HostedFunctionInfo", "arg_type_ids", RocList, buildU64RocList(writer, hosted.arg_type_ids, arg_type_ids_slot.layout_idx));
+        writer.writeField(elem_base, allocated.elem_layout, "HostedFunctionInfo", "ffi_symbol", RocStr, createBigRocStr(hosted.ffi_symbol, writer.roc_ops));
         writer.writeField(elem_base, allocated.elem_layout, "HostedFunctionInfo", "index", u64, hosted.index);
         writer.writeField(elem_base, allocated.elem_layout, "HostedFunctionInfo", "name", RocStr, createBigRocStr(hosted.name, writer.roc_ops));
         writer.writeField(elem_base, allocated.elem_layout, "HostedFunctionInfo", "ret_fields", RocList, buildRecordFieldsRocList(writer, hosted.ret_fields, ret_fields_slot.layout_idx));
@@ -2342,6 +2417,7 @@ fn collectModuleTypeInfo(
     artifact: *const CheckedArtifact.CheckedModuleArtifact,
     module_name: []const u8,
     hosted_indices: []const HostedProcGlobalIndex,
+    hosted_symbols: *const std.StringHashMap([]const u8),
     type_table: *TypeTable,
 ) Allocator.Error!?CollectedModuleTypeInfo {
     var main_type_str: []const u8 = try gpa.dupe(u8, "");
@@ -2367,6 +2443,7 @@ fn collectModuleTypeInfo(
     var hosted_functions = std.ArrayList(CollectedModuleTypeInfo.CollectedHostedFunctionInfo).empty;
     errdefer {
         for (hosted_functions.items) |h| {
+            gpa.free(h.ffi_symbol);
             gpa.free(h.name);
             gpa.free(h.type_str);
             for (h.arg_fields) |field| {
@@ -2442,10 +2519,17 @@ fn collectModuleTypeInfo(
                 ret_type_id = try type_table.insertUnit();
             }
 
+            const hosted_key = try hostedKeyAlloc(gpa, module_name, local_name);
+            defer gpa.free(hosted_key);
+            const hosted_symbol = hosted_symbols.get(hosted_key) orelse
+                glueInvariant("hosted function '{s}' has no platform hosted symbol", .{hosted_key});
+            const ffi_symbol = try gpa.dupe(u8, hosted_symbol);
+            errdefer gpa.free(ffi_symbol);
             const name = try gpa.dupe(u8, local_name);
             errdefer gpa.free(name);
             try hosted_functions.append(gpa, .{
                 .index = hostedGlobalIndexForDef(hosted_indices, artifact.key, def_idx),
+                .ffi_symbol = ffi_symbol,
                 .name = name,
                 .type_str = type_str,
                 .arg_fields = arg_fields,

@@ -2144,7 +2144,9 @@ pub const MonoLlvmCodeGen = struct {
             .list_prepend => try self.emitListPrepend(target, arg_locals, unique_args),
             .list_sublist, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last => try self.emitListSublist(target, op, arg_locals, unique_args),
             .list_drop_at => try self.emitListDropAt(target, arg_locals, unique_args),
+            .list_swap => try self.emitListSwap(target, arg_locals, unique_args),
             .list_set => try self.emitListSet(target, arg_locals, unique_args),
+            .list_replace_unsafe => try self.emitListReplaceUnsafe(target, arg_locals, unique_args),
             .list_map_can_reuse => try self.emitListMapCanReuse(target, arg_locals),
             .list_map_cast_unsafe => try self.copyBytes(self.slot(target).ptr, self.slot(arg_locals[0]).ptr, self.slot(target).size, self.slot(target).alignment),
             .list_map_extract_unsafe => try self.emitListMapExtractUnsafe(target, arg_locals),
@@ -2470,6 +2472,12 @@ pub const MonoLlvmCodeGen = struct {
             try self.emitIntTryConversion(target, args[0]);
             return;
         }
+        if (args.len >= 1) {
+            if (floatDecIntTryUnsafeInfo(op)) |info| {
+                try self.emitFloatDecIntTryUnsafeConversion(target, args[0], info);
+                return;
+            }
+        }
         if (std.mem.find(u8, name, "_to_") != null and args.len >= 1 and
             std.mem.find(u8, name, "_try") == null and
             std.mem.find(u8, name, "_str") == null)
@@ -2480,6 +2488,108 @@ pub const MonoLlvmCodeGen = struct {
             return;
         }
         try self.emitCrashBytes(name);
+    }
+
+    const FloatDecIntTryUnsafeInfo = struct {
+        src_kind: enum { f32, f64, dec },
+        target_bits: u8,
+        target_signed: bool,
+    };
+
+    const TryUnsafeOffsets = struct {
+        success: u32,
+        value: u32,
+    };
+
+    fn floatDecIntTryUnsafeInfo(op: lir.LowLevel) ?FloatDecIntTryUnsafeInfo {
+        return switch (op) {
+            .f32_to_i8_try_unsafe => .{ .src_kind = .f32, .target_bits = 8, .target_signed = true },
+            .f32_to_i16_try_unsafe => .{ .src_kind = .f32, .target_bits = 16, .target_signed = true },
+            .f32_to_i32_try_unsafe => .{ .src_kind = .f32, .target_bits = 32, .target_signed = true },
+            .f32_to_i64_try_unsafe => .{ .src_kind = .f32, .target_bits = 64, .target_signed = true },
+            .f32_to_i128_try_unsafe => .{ .src_kind = .f32, .target_bits = 128, .target_signed = true },
+            .f32_to_u8_try_unsafe => .{ .src_kind = .f32, .target_bits = 8, .target_signed = false },
+            .f32_to_u16_try_unsafe => .{ .src_kind = .f32, .target_bits = 16, .target_signed = false },
+            .f32_to_u32_try_unsafe => .{ .src_kind = .f32, .target_bits = 32, .target_signed = false },
+            .f32_to_u64_try_unsafe => .{ .src_kind = .f32, .target_bits = 64, .target_signed = false },
+            .f32_to_u128_try_unsafe => .{ .src_kind = .f32, .target_bits = 128, .target_signed = false },
+            .f64_to_i8_try_unsafe => .{ .src_kind = .f64, .target_bits = 8, .target_signed = true },
+            .f64_to_i16_try_unsafe => .{ .src_kind = .f64, .target_bits = 16, .target_signed = true },
+            .f64_to_i32_try_unsafe => .{ .src_kind = .f64, .target_bits = 32, .target_signed = true },
+            .f64_to_i64_try_unsafe => .{ .src_kind = .f64, .target_bits = 64, .target_signed = true },
+            .f64_to_i128_try_unsafe => .{ .src_kind = .f64, .target_bits = 128, .target_signed = true },
+            .f64_to_u8_try_unsafe => .{ .src_kind = .f64, .target_bits = 8, .target_signed = false },
+            .f64_to_u16_try_unsafe => .{ .src_kind = .f64, .target_bits = 16, .target_signed = false },
+            .f64_to_u32_try_unsafe => .{ .src_kind = .f64, .target_bits = 32, .target_signed = false },
+            .f64_to_u64_try_unsafe => .{ .src_kind = .f64, .target_bits = 64, .target_signed = false },
+            .f64_to_u128_try_unsafe => .{ .src_kind = .f64, .target_bits = 128, .target_signed = false },
+            .dec_to_i8_try_unsafe => .{ .src_kind = .dec, .target_bits = 8, .target_signed = true },
+            .dec_to_i16_try_unsafe => .{ .src_kind = .dec, .target_bits = 16, .target_signed = true },
+            .dec_to_i32_try_unsafe => .{ .src_kind = .dec, .target_bits = 32, .target_signed = true },
+            .dec_to_i64_try_unsafe => .{ .src_kind = .dec, .target_bits = 64, .target_signed = true },
+            .dec_to_i128_try_unsafe => .{ .src_kind = .dec, .target_bits = 128, .target_signed = true },
+            .dec_to_u8_try_unsafe => .{ .src_kind = .dec, .target_bits = 8, .target_signed = false },
+            .dec_to_u16_try_unsafe => .{ .src_kind = .dec, .target_bits = 16, .target_signed = false },
+            .dec_to_u32_try_unsafe => .{ .src_kind = .dec, .target_bits = 32, .target_signed = false },
+            .dec_to_u64_try_unsafe => .{ .src_kind = .dec, .target_bits = 64, .target_signed = false },
+            .dec_to_u128_try_unsafe => .{ .src_kind = .dec, .target_bits = 128, .target_signed = false },
+            else => null,
+        };
+    }
+
+    fn tryUnsafeOffsets(self: *MonoLlvmCodeGen, ret_layout: layout.Idx) Error!TryUnsafeOffsets {
+        const ret_layout_val = self.layoutValue(ret_layout);
+        if (ret_layout_val.tag != .struct_) return error.CompilationFailed;
+        const struct_idx = ret_layout_val.getStruct().idx;
+        return .{
+            .success = self.layouts().getStructFieldOffsetByOriginalIndex(struct_idx, 0),
+            .value = self.layouts().getStructFieldOffsetByOriginalIndex(struct_idx, 1),
+        };
+    }
+
+    fn emitFloatDecIntTryUnsafeConversion(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId, info: FloatDecIntTryUnsafeInfo) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const allocated = try self.allocAggregateTarget(target);
+        const offsets = try self.tryUnsafeOffsets(allocated.layout_idx);
+        const val_size: u32 = @as(u32, info.target_bits) / 8;
+
+        switch (info.src_kind) {
+            .f32, .f64 => {
+                var value = try self.loadScalar(self.slot(arg).ptr, self.localLayout(arg));
+                value = try self.coerceScalar(value, .double, false);
+                try self.callBuiltinVoid(
+                    "roc_builtins_f64_to_int_try_unsafe",
+                    &.{ try self.ptrType(), .double, .i32, .i32, .i32, .i32, .i32 },
+                    &.{
+                        allocated.ptr,
+                        value,
+                        builder.intValue(.i32, info.target_bits) catch return error.OutOfMemory,
+                        builder.intValue(.i32, @intFromBool(info.target_signed)) catch return error.OutOfMemory,
+                        builder.intValue(.i32, val_size) catch return error.OutOfMemory,
+                        builder.intValue(.i32, offsets.success) catch return error.OutOfMemory,
+                        builder.intValue(.i32, offsets.value) catch return error.OutOfMemory,
+                    },
+                );
+            },
+            .dec => {
+                const dec_value = try self.loadScalar(self.slot(arg).ptr, .dec);
+                const parts = try self.splitI128Value(dec_value);
+                try self.callBuiltinVoid(
+                    "roc_builtins_dec_to_int_try_unsafe",
+                    &.{ try self.ptrType(), .i64, .i64, .i32, .i32, .i32, .i32, .i32 },
+                    &.{
+                        allocated.ptr,
+                        parts.low,
+                        parts.high,
+                        builder.intValue(.i32, info.target_bits) catch return error.OutOfMemory,
+                        builder.intValue(.i32, @intFromBool(info.target_signed)) catch return error.OutOfMemory,
+                        builder.intValue(.i32, val_size) catch return error.OutOfMemory,
+                        builder.intValue(.i32, offsets.success) catch return error.OutOfMemory,
+                        builder.intValue(.i32, offsets.value) catch return error.OutOfMemory,
+                    },
+                );
+            },
+        }
     }
 
     fn emitIntToDec(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
@@ -3274,6 +3384,22 @@ pub const MonoLlvmCodeGen = struct {
         try self.callBuiltinVoid("roc_builtins_list_drop_at", call_args.types.items, call_args.values.items);
     }
 
+    fn emitListSwap(self: *MonoLlvmCodeGen, target: LocalId, args: []const LocalId, unique_args: u64) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const abi = self.layouts().builtinListAbi(self.localLayout(args[0]));
+        var call_args = try self.rocListArgs1(args[0]);
+        defer call_args.deinit(self.allocator);
+        try call_args.prepend(self.allocator, try self.ptrType(), self.slot(target).ptr);
+        try call_args.append(self.allocator, .i32, builder.intValue(.i32, abi.elem_alignment) catch return error.OutOfMemory);
+        try call_args.append(self.allocator, self.ptrSizedIntType(), builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory);
+        try call_args.append(self.allocator, .i64, try self.coerceScalar(try self.loadScalar(self.slot(args[1]).ptr, self.localLayout(args[1])), .i64, false));
+        try call_args.append(self.allocator, .i64, try self.coerceScalar(try self.loadScalar(self.slot(args[2]).ptr, self.localLayout(args[2])), .i64, false));
+        try self.appendListElementRcArgs(&call_args, abi, true, true);
+        try self.appendUpdateModeArg(&call_args, unique_args);
+        try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
+        try self.callBuiltinVoid("roc_builtins_list_swap", call_args.types.items, call_args.values.items);
+    }
+
     fn emitListSet(self: *MonoLlvmCodeGen, target: LocalId, args: []const LocalId, unique_args: u64) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const abi = self.layouts().builtinListAbi(self.localLayout(args[0]));
@@ -3285,6 +3411,44 @@ pub const MonoLlvmCodeGen = struct {
         try call_args.append(self.allocator, try self.ptrType(), self.slot(args[2]).ptr);
         try call_args.append(self.allocator, self.ptrSizedIntType(), builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory);
         try call_args.append(self.allocator, try self.ptrType(), builder.nullValue(try self.ptrType()) catch return error.OutOfMemory);
+        try self.appendListElementRcArgs(&call_args, abi, true, true);
+        try self.appendUpdateModeArg(&call_args, unique_args);
+        try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
+        try self.callBuiltinVoid("roc_builtins_list_replace", call_args.types.items, call_args.values.items);
+    }
+
+    fn emitListReplaceUnsafe(self: *MonoLlvmCodeGen, target: LocalId, args: []const LocalId, unique_args: u64) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        // The result is a { list, prev } record. Reuse roc_builtins_list_replace
+        // and aim its (out_list, out_element) outputs directly at the record's
+        // fields, disambiguated by layout tag like the dev backend does.
+        const record_layout_val = self.layoutValue(self.localLayout(target));
+        if (record_layout_val.tag != .struct_) return error.CompilationFailed;
+        const rec_idx = record_layout_val.getStruct().idx;
+        const f0_layout = self.layoutValue(self.layouts().getStructFieldLayoutByOriginalIndex(rec_idx, 0));
+        const f0_offset = self.layouts().getStructFieldOffsetByOriginalIndex(rec_idx, 0);
+        const f1_offset = self.layouts().getStructFieldOffsetByOriginalIndex(rec_idx, 1);
+        const f0_is_list = f0_layout.tag == .list or f0_layout.tag == .list_of_zst;
+        const list_out_ptr = try self.offsetPtr(self.slot(target).ptr, if (f0_is_list) f0_offset else f1_offset);
+        const value_out_ptr = try self.offsetPtr(self.slot(target).ptr, if (f0_is_list) f1_offset else f0_offset);
+
+        const abi = self.layouts().builtinListAbi(self.localLayout(args[0]));
+        if (abi.elem_size == 0) {
+            // listReplace would dereference a NULL element pointer for ZST
+            // elements; the result list is the input unchanged and the prev
+            // field is zero-sized.
+            try self.copyBytes(list_out_ptr, self.slot(args[0]).ptr, self.slot(args[0]).size, self.slot(args[0]).alignment);
+            return;
+        }
+
+        var call_args = try self.rocListArgs1(args[0]);
+        defer call_args.deinit(self.allocator);
+        try call_args.prepend(self.allocator, try self.ptrType(), list_out_ptr);
+        try call_args.append(self.allocator, .i32, builder.intValue(.i32, abi.elem_alignment) catch return error.OutOfMemory);
+        try call_args.append(self.allocator, .i64, try self.coerceScalar(try self.loadScalar(self.slot(args[1]).ptr, self.localLayout(args[1])), .i64, false));
+        try call_args.append(self.allocator, try self.ptrType(), self.slot(args[2]).ptr);
+        try call_args.append(self.allocator, self.ptrSizedIntType(), builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory);
+        try call_args.append(self.allocator, try self.ptrType(), value_out_ptr);
         try self.appendListElementRcArgs(&call_args, abi, true, true);
         try self.appendUpdateModeArg(&call_args, unique_args);
         try call_args.append(self.allocator, try self.ptrType(), self.rocOps());

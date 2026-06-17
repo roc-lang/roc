@@ -575,6 +575,56 @@ pub fn assertLastDefType(self: *TestEnv, expected: []const u8) anyerror!void {
     try testing.expectEqualStrings(expected, self.type_writer.get());
 }
 
+/// Like `assertLastDefType`, but the module must also produce warning-severity
+/// type problems — and ONLY warnings — whose report titles match
+/// `expected_warning_titles` exactly, in order. (Plain pass-mode fails on ANY
+/// problem, warnings included, so warning-producing tests must declare their
+/// warnings here rather than silently tolerate them.)
+pub fn assertLastDefTypeWithWarnings(
+    self: *TestEnv,
+    expected: []const u8,
+    expected_warning_titles: []const []const u8,
+) anyerror!void {
+    try self.assertNoParseProblems();
+    try self.assertNoCanProblems();
+    try self.assertOnlyTypeWarnings(expected_warning_titles);
+
+    try testing.expect(self.module_env.all_defs.span.len > 0);
+    const defs_slice = self.module_env.store.sliceDefs(self.module_env.all_defs);
+    const last_def_idx = defs_slice[defs_slice.len - 1];
+    const last_def_var = ModuleEnv.varFrom(last_def_idx);
+
+    try self.type_writer.write(last_def_var, .wrap);
+    try testing.expectEqualStrings(expected, self.type_writer.get());
+}
+
+/// Assert that every type problem is warning-severity and that the rendered
+/// titles match `expected_titles` exactly, in order. Any error-severity
+/// problem (or a count/title mismatch) fails the assertion.
+fn assertOnlyTypeWarnings(self: *TestEnv, expected_titles: []const []const u8) anyerror!void {
+    var report_builder = try report_mod.ReportBuilder.init(
+        self.gpa,
+        self.module_env,
+        self.module_env,
+        &self.checker.snapshots,
+        &self.checker.problems,
+        "test",
+        &.{},
+        &self.checker.import_mapping,
+        &self.checker.regions,
+    );
+    defer report_builder.deinit();
+
+    try testing.expectEqual(expected_titles.len, self.checker.problems.problems.items.len);
+    for (self.checker.problems.problems.items, 0..) |problem, i| {
+        var report = try report_builder.build(problem);
+        defer report.deinit();
+
+        try testing.expectEqualStrings(expected_titles[i], report.title);
+        try testing.expectEqual(.warning, report.severity);
+    }
+}
+
 /// Assert that the last definition's type contains the given substring
 pub fn assertLastDefTypeContains(self: *TestEnv, expected_substring: []const u8) anyerror!void {
     try self.assertNoErrors();
@@ -677,6 +727,39 @@ pub fn assertOneTypeErrorMsg(self: *TestEnv, expected: []const u8) anyerror!void
     try renderReportToMarkdownBuffer(&report_buf, &report);
 
     try testing.expectEqualStrings(expected, report_buf.items);
+}
+
+/// Assert that checking produced exactly the expected problems (errors AND
+/// warnings), in order, each matching its expected rendered message exactly.
+pub fn assertTypeErrorMsgs(self: *TestEnv, expected: []const []const u8) anyerror!void {
+    try self.assertNoParseProblems();
+
+    try testing.expectEqual(expected.len, self.checker.problems.problems.items.len);
+
+    for (expected, self.checker.problems.problems.items) |expected_msg, problem| {
+        var report_builder = try report_mod.ReportBuilder.init(
+            self.gpa,
+            self.module_env,
+            self.module_env,
+            &self.checker.snapshots,
+            &self.checker.problems,
+            "test",
+            &.{},
+            &self.checker.import_mapping,
+            &self.checker.regions,
+        );
+        defer report_builder.deinit();
+
+        var report = try report_builder.build(problem);
+        defer report.deinit();
+
+        var report_buf = try std.array_list.Managed(u8).initCapacity(self.gpa, 256);
+        defer report_buf.deinit();
+
+        try renderReportToMarkdownBuffer(&report_buf, &report);
+
+        try testing.expectEqualStrings(expected_msg, report_buf.items);
+    }
 }
 
 /// Assert that canonicalization produced exactly one diagnostic with the expected title.

@@ -138,21 +138,20 @@ fn placementAarch64(arena: std.mem.Allocator, store: *const Store, idx: Idx) std
             }
             return .{ .registers = pieces };
         },
-        .byval => {
-            // A true scalar: a float goes in one SIMD register, an integer/pointer in one or
-            // two general-purpose registers (i128/Dec are 16 bytes).
-            if (lay.tag != .scalar) {
+        .byval => switch (lay.tag) {
+            .scalar => {
+                const scalar = lay.getScalar();
+                if (scalar.tag == .frac) {
+                    return switch (scalar.getFrac()) {
+                        .f32 => onePiece(arena, .float, 0, 4),
+                        .f64 => onePiece(arena, .float, 0, 8),
+                        .dec => integerPieces(arena, size),
+                    };
+                }
                 return integerPieces(arena, size);
-            }
-            const scalar = lay.getScalar();
-            if (scalar.tag == .frac) {
-                return switch (scalar.getFrac()) {
-                    .f32 => onePiece(arena, .float, 0, 4),
-                    .f64 => onePiece(arena, .float, 0, 8),
-                    .dec => integerPieces(arena, size),
-                };
-            }
-            return integerPieces(arena, size);
+            },
+            .box, .box_of_zst, .ptr => return integerPieces(arena, size),
+            else => unreachable,
         },
     }
 }
@@ -261,17 +260,30 @@ test "lower aarch64: HFA and large aggregates" {
     try testing.expectEqual(Placement.indirect, c2.args[0]);
 }
 
-test "lower aarch64: boxes are integer pointer registers" {
+test "lower aarch64: pointer-shaped byval layouts use integer registers" {
     var store = try Store.init(testing.allocator, .u64);
     defer store.deinit();
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    const box_idx = try store.insertLayout(layout.Layout.box(.u8));
-    const call = try lower(arena, &store, .aarch64, &.{box_idx}, box_idx, false);
+    // Idx 32 has the bit pattern that makes a box/ptr layout's raw data
+    // decode as ScalarTag.frac with invalid precision if treated as scalar.
+    const target_elem_idx_int: u32 = 32;
+    var elem_idx_opt: ?Idx = null;
+    var i: u32 = 0;
+    while (store.layouts.len() <= target_elem_idx_int) : (i += 1) {
+        const idx = try store.insertLayout(layout.Layout.list(@enumFromInt(i)));
+        if (@intFromEnum(idx) == target_elem_idx_int) elem_idx_opt = idx;
+    }
+    const elem_idx = elem_idx_opt.?;
+
+    const box_idx = try store.insertLayout(layout.Layout.box(elem_idx));
+    const ptr_idx = try store.insertLayout(layout.Layout.ptr(elem_idx));
+    const call = try lower(arena, &store, .aarch64, &.{ box_idx, ptr_idx }, box_idx, false);
 
     try expectRegisters(&.{.{ .class = .integer, .offset = 0, .size = 8 }}, call.args[0]);
+    try expectRegisters(&.{.{ .class = .integer, .offset = 0, .size = 8 }}, call.args[1]);
     try expectRegisters(&.{.{ .class = .integer, .offset = 0, .size = 8 }}, call.ret);
 }
 

@@ -46,6 +46,8 @@ pub const Tag = enum {
     statement_expect,
     statement_for,
     statement_while,
+    statement_infinite_loop,
+    statement_breakable_loop,
     statement_break,
     statement_return,
     statement_import,
@@ -261,6 +263,7 @@ pub const Tag = enum {
     diag_mutually_recursive_type_aliases,
     diag_deprecated_number_suffix,
     diag_range_op_chained,
+    diag_infinite_loop_never_exits,
 };
 
 /// Typed payload union for accessing node data in a type-safe manner.
@@ -643,7 +646,7 @@ pub const Payload = extern union {
 
     pub const ExprInterpolation = extern struct {
         first: u32,
-        parts_rest_idx: u32, // Index into span_with_node_data: (parts.start, parts.len, rest)
+        parts_step_fn_idx: u32, // Index into span_with_node_data: (parts.start, parts.len, step_fn_var_plus_one)
         method_name_region_span2_idx: u32,
         constraint_fn_var_plus_one: u32,
     };

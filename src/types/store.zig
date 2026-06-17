@@ -110,10 +110,6 @@ pub const Store = struct {
     tags: TagSafeMultiList,
     static_dispatch_constraints: StaticDispatchConstraint.SafeList,
 
-    /// Count of flex vars that currently have a from_numeral constraint.
-    /// Used to skip the finalization walk when no numeral constraints need resolving.
-    from_numeral_flex_count: u32,
-
     /// Undo trail for speculative unification. While a probe is active
     /// (`savepoint_active`), every in-place write to a slot or descriptor that
     /// existed before the probe began (index < `spec_baseline_*`) is journaled
@@ -160,7 +156,6 @@ pub const Store = struct {
             .record_fields = try RecordFieldSafeMultiList.initCapacity(gpa, child_capacity),
             .tags = try TagSafeMultiList.initCapacity(gpa, child_capacity),
             .static_dispatch_constraints = try StaticDispatchConstraint.SafeList.initCapacity(gpa, child_capacity),
-            .from_numeral_flex_count = 0,
         };
     }
 
@@ -205,7 +200,6 @@ pub const Store = struct {
             .record_fields = try self.record_fields.clone(gpa),
             .tags = try self.tags.clone(gpa),
             .static_dispatch_constraints = try self.static_dispatch_constraints.clone(gpa),
-            .from_numeral_flex_count = self.from_numeral_flex_count,
         };
     }
 
@@ -250,7 +244,6 @@ pub const Store = struct {
         record_fields_len: usize,
         tags_len: usize,
         static_dispatch_constraints_len: usize,
-        from_numeral_flex_count: u32,
         verify_clone: SavepointVerifyClone = savepoint_verify_clone_init,
     };
 
@@ -304,7 +297,6 @@ pub const Store = struct {
             .record_fields_len = self.record_fields.items.len,
             .tags_len = self.tags.items.len,
             .static_dispatch_constraints_len = self.static_dispatch_constraints.items.items.len,
-            .from_numeral_flex_count = self.from_numeral_flex_count,
             .verify_clone = verify_clone,
         };
 
@@ -315,6 +307,26 @@ pub const Store = struct {
         self.savepoint_baseline_descs = @intCast(self.descs.backing.items.len);
 
         return savepoint;
+    }
+
+    /// Close a savepoint KEEPING everything done since it was created — the
+    /// counterpart to `rollbackToSavepoint` for a speculation that succeeded
+    /// and is committed in place. The journaled undo entries are dead weight
+    /// once nothing will replay them, so the trails shrink back to their
+    /// savepoint lengths; the baselines deactivate so in-place writes stop
+    /// journaling.
+    pub fn commitSavepoint(self: *Self, savepoint: *Savepoint) void {
+        std.debug.assert(self.savepoint_active);
+        self.desc_trail.shrinkRetainingCapacity(savepoint.desc_trail_len);
+        self.slot_trail.shrinkRetainingCapacity(savepoint.slot_trail_len);
+        self.savepoint_active = false;
+
+        if (savepoint_verification == .clone_crosscheck) {
+            if (savepoint.verify_clone) |*vclone| {
+                vclone.deinit(self.gpa);
+                savepoint.verify_clone = null;
+            }
+        }
     }
 
     /// Undo everything done since `savepoint` was created.
@@ -346,7 +358,6 @@ pub const Store = struct {
         self.record_fields.items.shrinkRetainingCapacity(savepoint.record_fields_len);
         self.tags.items.shrinkRetainingCapacity(savepoint.tags_len);
         self.static_dispatch_constraints.items.shrinkRetainingCapacity(savepoint.static_dispatch_constraints_len);
-        self.from_numeral_flex_count = savepoint.from_numeral_flex_count;
 
         // Back to not speculating; savepoint_baseline_* are dead until the next create.
         self.savepoint_active = false;
@@ -418,7 +429,6 @@ pub const Store = struct {
         const desc_idx = try self.descs.insert(self.gpa, .{
             .content = content,
             .rank = Rank.outermost,
-            .from_numeral_origin = false,
         });
         const slot_idx = try self.slots.insert(self.gpa, .{ .root = desc_idx });
         return Self.slotIdxToVar(slot_idx);
@@ -429,7 +439,6 @@ pub const Store = struct {
         const desc_idx = try self.descs.insert(self.gpa, .{
             .content = content,
             .rank = rank,
-            .from_numeral_origin = false,
         });
         const slot_idx = try self.slots.insert(self.gpa, .{ .root = desc_idx });
         return Self.slotIdxToVar(slot_idx);
@@ -449,19 +458,11 @@ pub const Store = struct {
         return Self.slotIdxToVar(slot_idx);
     }
 
-    pub fn markFromNumeralOrigin(self: *Self, var_: Var) Allocator.Error!void {
-        const resolved = self.resolveVar(var_);
-        var desc = self.descs.get(resolved.desc_idx);
-        desc.from_numeral_origin = true;
-        try self.setDesc(resolved.desc_idx, desc);
-    }
-
     /// Create a new variable with the provided content assuming there is capacity
     pub fn appendFromContentAssumeCapacity(self: *Self, content: Content, rank: Rank) Var {
         const desc_idx = self.descs.appendAssumeCapacity(.{
             .content = content,
             .rank = rank,
-            .from_numeral_origin = false,
         });
         const slot_idx = self.slots.appendAssumeCapacity(.{ .root = desc_idx });
         return Self.slotIdxToVar(slot_idx);
@@ -911,6 +912,14 @@ pub const Store = struct {
         return self.static_dispatch_constraints.sliceRange(range);
     }
 
+    /// Get an iterator over static-dispatch constraints for the given range.
+    /// Use this instead of sliceStaticDispatchConstraints when the iteration
+    /// may append to the constraint store (e.g., instantiation/copy during a
+    /// candidate probe) — a held slice would dangle on reallocation.
+    pub fn iterStaticDispatchConstraints(self: *const Self, range: StaticDispatchConstraint.SafeList.Range) StaticDispatchConstraint.SafeList.Iterator {
+        return self.static_dispatch_constraints.iterRange(range);
+    }
+
     pub fn getStaticDispatchConstraintAt(self: *const Self, idx: usize) StaticDispatchConstraint {
         return self.static_dispatch_constraints.items.items[idx];
     }
@@ -1195,7 +1204,6 @@ pub const Store = struct {
                 .record_fields = self.record_fields.deserializeInto(base_addr),
                 .tags = self.tags.deserializeInto(base_addr),
                 .static_dispatch_constraints = self.static_dispatch_constraints.deserializeInto(base_addr),
-                .from_numeral_flex_count = 0,
             };
         }
 
@@ -1210,7 +1218,6 @@ pub const Store = struct {
                 .record_fields = try self.record_fields.deserializeWithCopy(base_addr, gpa),
                 .tags = try self.tags.deserializeWithCopy(base_addr, gpa),
                 .static_dispatch_constraints = try self.static_dispatch_constraints.deserializeWithCopy(base_addr, gpa),
-                .from_numeral_flex_count = 0,
             };
         }
     };
@@ -1233,7 +1240,6 @@ pub const Store = struct {
             .record_fields = (try self.record_fields.serialize(allocator, writer)).*,
             .tags = (try self.tags.serialize(allocator, writer)).*,
             .static_dispatch_constraints = (try self.static_dispatch_constraints.serialize(allocator, writer)).*,
-            .from_numeral_flex_count = 0,
         };
 
         return @constCast(offset_self);
@@ -1348,7 +1354,6 @@ pub const Store = struct {
             .tags = tags,
             .vars = vars,
             .static_dispatch_constraints = static_dispatch_constraints,
-            .from_numeral_flex_count = 0,
         };
     }
 };

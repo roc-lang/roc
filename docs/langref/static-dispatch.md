@@ -163,3 +163,57 @@ v2 = { x: 4, y: 5 }
 
 # v1 * v2 calls Vec.times(v1, v2), returns { x: 8, y: 15 }
 ```
+### Other Operators
+
+The remaining operators desugar to method calls the same way:
+
+| Operator | Method |
+| --- | --- |
+| `/` | `div_by` |
+| `//` | `div_trunc_by` |
+| `%` | `rem_by` |
+| `<` | `is_lt` |
+| `<=` | `is_lte` |
+| `>` | `is_gt` |
+| `>=` | `is_gte` |
+| `-x` (unary) | `negate` |
+| `!x` | `not` |
+
+Comparison operators return `Bool` and require both operands to have the same
+type. Arithmetic operators are homogeneous in their return type only: `a + b`
+has the type of `a`, but the second argument is the method's to choose — so a
+heterogeneous method like `times : Duration, I64 -> Duration` works with `*`.
+
+### `from_numeral`
+
+Number literals dispatch the `from_numeral` method, so a nominal type that
+defines it can be written as a plain literal:
+
+```roc
+Celsius := { degrees: I64 }.{
+    from_numeral : Numeral -> Try(Celsius, [InvalidNumeral(Str), ..])
+    from_numeral = |n| match I64.from_numeral(n) {
+        Ok(degrees) => Ok({ degrees })
+        Err(err) => Err(err)
+    }
+}
+
+temp : Celsius
+temp = 21  # calls Celsius.from_numeral
+```
+
+`Numeral` carries the literal's exact digits, so a custom type can accept
+literals of any size its representation supports, and reject the rest with
+`InvalidNumeral`.
+
+### Number Literal Defaulting
+
+When nothing in the program pins a literal's type, the compiler commits the
+first type in `Dec, I64, U64, I128, U128, I32, U32, I16, U16, I8, U8, F64,
+F32` that satisfies all of the literal's constraints. A plain `5` defaults to
+`Dec`; a `5` whose surrounding code demands an integer gets the first integer
+type that fits.
+
+If committing a default narrows a function's inferred type, the compiler
+emits a `LITERAL DEFAULTED` warning. To pick a different type, add a type
+annotation or a suffix (`5.U64`).

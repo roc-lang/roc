@@ -288,11 +288,28 @@ const InspectDefAddress = struct {
     str_ty: u32,
 };
 
+const EqualityDefAddress = struct {
+    value_ty: u32,
+    bool_ty: u32,
+};
+
 const InspectDefEntry = union(enum) {
     reserved: Ast.DefId,
     ready: Ast.DefId,
 
     fn id(self: InspectDefEntry) Ast.DefId {
+        return switch (self) {
+            .reserved => |def_id| def_id,
+            .ready => |def_id| def_id,
+        };
+    }
+};
+
+const EqualityDefEntry = union(enum) {
+    reserved: Ast.DefId,
+    ready: Ast.DefId,
+
+    fn id(self: EqualityDefEntry) Ast.DefId {
         return switch (self) {
             .reserved => |def_id| def_id,
             .ready => |def_id| def_id,
@@ -317,6 +334,7 @@ const Builder = struct {
     nested_site_cache: std.AutoHashMap(NestedSiteAddress, names.ProcSiteId),
     const_expr_cache: std.AutoHashMap(ConstExprAddress, Ast.ExprId),
     inspect_defs: std.AutoHashMap(InspectDefAddress, InspectDefEntry),
+    equality_defs: std.AutoHashMap(EqualityDefAddress, EqualityDefEntry),
     hosted_catalog: []HostedCatalogEntry = &.{},
     method_lookup_index: []MethodLookupIndexEntry = &.{},
     u64_ty: ?Type.TypeId = null,
@@ -342,6 +360,7 @@ const Builder = struct {
             .nested_site_cache = std.AutoHashMap(NestedSiteAddress, names.ProcSiteId).init(allocator),
             .const_expr_cache = std.AutoHashMap(ConstExprAddress, Ast.ExprId).init(allocator),
             .inspect_defs = std.AutoHashMap(InspectDefAddress, InspectDefEntry).init(allocator),
+            .equality_defs = std.AutoHashMap(EqualityDefAddress, EqualityDefEntry).init(allocator),
             .source_file_ids = std.AutoHashMap(u32, u32).init(allocator),
         };
     }
@@ -360,6 +379,7 @@ const Builder = struct {
         self.source_file_ids.deinit();
         self.allocator.free(self.method_lookup_index);
         self.allocator.free(self.hosted_catalog);
+        self.equality_defs.deinit();
         self.inspect_defs.deinit();
         self.const_expr_cache.deinit();
         self.nested_site_cache.deinit();
@@ -2645,6 +2665,14 @@ const Builder = struct {
         } });
     }
 
+    fn twoArgFnType(self: *Builder, arg_ty: Type.TypeId, ret_ty: Type.TypeId) Allocator.Error!Type.TypeId {
+        const args = [_]Type.TypeId{ arg_ty, arg_ty };
+        return try self.program.types.add(.{ .func = .{
+            .args = try self.program.types.addSpan(&args),
+            .ret = ret_ty,
+        } });
+    }
+
     fn singleTypeArg(self: *Builder, span: Type.Span, comptime owner: []const u8) Type.TypeId {
         const args = self.program.types.span(span);
         if (args.len != 1) Common.invariant(owner ++ " type reached Monotype inspect lowering without one type argument");
@@ -2744,6 +2772,10 @@ const BodyContext = struct {
     /// on the branch comparing the bound value against the literal's
     /// `from_numeral`-converted constant.
     pattern_literal_guards: std.ArrayList(PatternLiteralGuard),
+    /// Structural equality types currently being expanded in this context.
+    /// Seeing the same type again is a real recursive edge, which lowers to a
+    /// reserved generated equality helper instead of recursively expanding AST.
+    equality_expansion_stack: std.AutoHashMap(Type.TypeId, void),
 
     const PatternLiteralGuard = struct {
         local: Ast.LocalId,
@@ -2803,10 +2835,12 @@ const BodyContext = struct {
             .string_literals = string_literals,
             .loop_contexts = .empty,
             .pattern_literal_guards = .empty,
+            .equality_expansion_stack = std.AutoHashMap(Type.TypeId, void).init(allocator),
         };
     }
 
     fn deinit(self: *BodyContext) void {
+        self.equality_expansion_stack.deinit();
         self.pattern_literal_guards.deinit(self.allocator);
         self.loop_contexts.deinit(self.allocator);
         self.allocator.free(self.string_literals);
@@ -3355,7 +3389,7 @@ const BodyContext = struct {
         return switch (expr.data) {
             .call => |call| (try self.callResultMonoType(expr.ty, call, null)) orelse try self.lowerType(expr.ty),
             .dispatch_call => |plan| (try self.dispatchResultMonoType(expr.ty, plan, null)) orelse try self.lowerType(expr.ty),
-            .interpolation => |plan| (try self.dispatchResultMonoType(expr.ty, plan, null)) orelse try self.lowerType(expr.ty),
+            .interpolation => |interpolation| (try self.dispatchResultMonoType(expr.ty, interpolation.plan, null)) orelse try self.lowerType(expr.ty),
             .type_dispatch_call => |plan| (try self.dispatchResultMonoType(expr.ty, plan, null)) orelse try self.lowerType(expr.ty),
             .method_eq => |plan| (try self.dispatchResultMonoType(expr.ty, plan, null)) orelse try self.lowerType(expr.ty),
             .lookup_local => |lookup| try self.lookupExprMonoType(expr.ty, lookup.resolved),
@@ -3392,7 +3426,7 @@ const BodyContext = struct {
         switch (expr.data) {
             .call => |call| return try self.lowerCallExpr(expr.ty, call),
             .dispatch_call => |plan| return try self.lowerDispatchExpr(expr.ty, plan),
-            .interpolation => |plan| return try self.lowerDispatchExpr(expr.ty, plan),
+            .interpolation => |interpolation| return try self.lowerDispatchExpr(expr.ty, interpolation.plan),
             .type_dispatch_call => |plan| return try self.lowerDispatchExpr(expr.ty, plan),
             .method_eq => |plan| return try self.lowerDispatchExpr(expr.ty, plan),
             .structural_eq => |eq| return try self.lowerDirectStructuralEq(expr.ty, eq),
@@ -3794,7 +3828,10 @@ const BodyContext = struct {
                     try self.graph.unify(formal_node, try self.graph.importMono(evidence_ty));
                 }
             },
-            .generated_numeral, .generated_quote => {},
+            .generated_interpolation_iter,
+            .generated_numeral,
+            .generated_quote,
+            => {},
         }
     }
 
@@ -3871,7 +3908,7 @@ const BodyContext = struct {
         switch (expr.data) {
             .call => |call| return try self.callResultMonoType(expr.ty, call, expected_ty),
             .dispatch_call => |plan| return try self.dispatchResultMonoType(expr.ty, plan, expected_ty),
-            .interpolation => |plan| return try self.dispatchResultMonoType(expr.ty, plan, expected_ty),
+            .interpolation => |interpolation| return try self.dispatchResultMonoType(expr.ty, interpolation.plan, expected_ty),
             .type_dispatch_call => |plan| return try self.dispatchResultMonoType(expr.ty, plan, expected_ty),
             .method_eq => |plan| return try self.dispatchResultMonoType(expr.ty, plan, expected_ty),
             .field_access => |field| return try self.fieldAccessMonoType(field.receiver, field.field_name),
@@ -4509,8 +4546,260 @@ const BodyContext = struct {
     ) Allocator.Error!Ast.ExprId {
         return switch (operand) {
             .checked_expr => |expr| try self.lowerExprAtType(expr, ty),
+            .generated_interpolation_iter => |expr| try self.lowerGeneratedInterpolationIter(expr, ty),
             .generated_numeral => |literal| try self.lowerNumeralValue(literal, ty),
             .generated_quote => |literal| try self.lowerQuoteValue(literal, ty),
+        };
+    }
+
+    fn lowerGeneratedInterpolationIter(
+        self: *BodyContext,
+        expr_id: checked.CheckedExprId,
+        ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const expr = self.view.bodies.exprs[@intFromEnum(expr_id)];
+        const interpolation = switch (expr.data) {
+            .interpolation => |interpolation| interpolation,
+            else => Common.invariant("generated interpolation iterator operand pointed at non-interpolation expression"),
+        };
+
+        const backing_ty = self.builder.namedBackingType(ty) orelse
+            Common.invariant("generated interpolation iterator expected Iter nominal type");
+        const len_field = self.recordFieldByText(backing_ty, "len_if_known");
+        const step_field = self.recordFieldByText(backing_ty, "step");
+        const step_fn_ty = step_field.ty;
+        const step_shape = self.builder.functionShape(step_fn_ty, "generated interpolation iterator step field was not a function");
+        if (self.builder.program.types.span(step_shape.args).len != 0) {
+            Common.invariant("generated interpolation iterator step function was not zero-argument");
+        }
+
+        return try self.lowerInterpolationIterFromIndex(
+            interpolation,
+            0,
+            expr_id,
+            ty,
+            backing_ty,
+            len_field.ty,
+            step_fn_ty,
+            step_shape.ret,
+        );
+    }
+
+    fn lowerInterpolationIterFromIndex(
+        self: *BodyContext,
+        interpolation: checked.CheckedInterpolation,
+        index: usize,
+        source_expr_id: checked.CheckedExprId,
+        iter_ty: Type.TypeId,
+        backing_ty: Type.TypeId,
+        len_ty: Type.TypeId,
+        step_fn_ty: Type.TypeId,
+        step_ret_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const remaining = interpolation.parts.len - index;
+        const len_expr = try self.lowerInterpolationLenIfKnown(remaining, len_ty);
+
+        if (index == interpolation.parts.len) {
+            const step_expr = try self.lowerInterpolationDoneStep(interpolation.step_fn_ty, source_expr_id, index, step_fn_ty, step_ret_ty);
+            return try self.lowerInterpolationIterRecord(iter_ty, backing_ty, len_expr, step_expr);
+        }
+
+        const rest_expr = try self.lowerInterpolationIterFromIndex(
+            interpolation,
+            index + 1,
+            source_expr_id,
+            iter_ty,
+            backing_ty,
+            len_ty,
+            step_fn_ty,
+            step_ret_ty,
+        );
+        const rest_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), iter_ty);
+        const rest_pat = try self.builder.bindPat(rest_local, iter_ty);
+        const rest_ref = try self.builder.localExpr(rest_local, iter_ty);
+        const step_expr = try self.lowerInterpolationOneStep(
+            interpolation,
+            index,
+            source_expr_id,
+            rest_ref,
+            iter_ty,
+            interpolation.step_fn_ty,
+            step_fn_ty,
+            step_ret_ty,
+        );
+        const iter_expr = try self.lowerInterpolationIterRecord(iter_ty, backing_ty, len_expr, step_expr);
+        return try self.builder.program.addExpr(.{ .ty = iter_ty, .data = .{ .let_ = .{
+            .bind = rest_pat,
+            .value = rest_expr,
+            .rest = iter_expr,
+        } } });
+    }
+
+    fn lowerInterpolationIterRecord(
+        self: *BodyContext,
+        iter_ty: Type.TypeId,
+        backing_ty: Type.TypeId,
+        len_expr: Ast.ExprId,
+        step_expr: Ast.ExprId,
+    ) Allocator.Error!Ast.ExprId {
+        const fields = self.builder.program.types.fieldSpan(self.builder.recordFieldsSpan(backing_ty));
+        const lowered = try self.allocator.alloc(Ast.FieldExpr, fields.len);
+        defer self.allocator.free(lowered);
+
+        for (fields, 0..) |field, i| {
+            const label = self.builder.program.names.recordFieldLabelText(field.name);
+            lowered[i] = .{
+                .name = field.name,
+                .value = if (Ident.textEql(label, "len_if_known"))
+                    len_expr
+                else if (Ident.textEql(label, "step"))
+                    step_expr
+                else
+                    Common.invariant("Iter backing record contained an unexpected field"),
+            };
+        }
+
+        const record_expr = try self.builder.program.addExpr(.{
+            .ty = backing_ty,
+            .data = .{ .record = try self.builder.program.addFieldExprSpan(lowered) },
+        });
+        return try self.builder.program.addExpr(.{
+            .ty = iter_ty,
+            .data = .{ .nominal = record_expr },
+        });
+    }
+
+    fn lowerInterpolationLenIfKnown(
+        self: *BodyContext,
+        remaining: usize,
+        ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const known_tag = self.monoTagByText(ty, "Known");
+        const payloads = self.builder.program.types.span(known_tag.payloads);
+        if (payloads.len != 1) Common.invariant("Iter.len_if_known Known tag did not have one payload");
+        const count = try self.builder.intLiteralExpr(@intCast(remaining), payloads[0]);
+        return try self.builder.program.addExpr(.{ .ty = ty, .data = .{ .tag = .{
+            .name = known_tag.name,
+            .payloads = try self.builder.program.addExprSpan(&[_]Ast.ExprId{count}),
+        } } });
+    }
+
+    fn lowerInterpolationDoneStep(
+        self: *BodyContext,
+        source_fn_ty: checked.CheckedTypeId,
+        source_expr_id: checked.CheckedExprId,
+        index: usize,
+        step_fn_ty: Type.TypeId,
+        step_ret_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const done_tag = self.monoTagByText(step_ret_ty, "Done");
+        const body = try self.builder.program.addExpr(.{ .ty = step_ret_ty, .data = .{ .tag = .{
+            .name = done_tag.name,
+            .payloads = .empty(),
+        } } });
+        return try self.lowerInterpolationStepLambda(source_fn_ty, source_expr_id, index, step_fn_ty, body);
+    }
+
+    fn lowerInterpolationOneStep(
+        self: *BodyContext,
+        interpolation: checked.CheckedInterpolation,
+        index: usize,
+        source_expr_id: checked.CheckedExprId,
+        rest_expr: Ast.ExprId,
+        rest_ty: Type.TypeId,
+        source_fn_ty: checked.CheckedTypeId,
+        step_fn_ty: Type.TypeId,
+        step_ret_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const item_ty = self.iterItemType(rest_ty);
+        const item_fields = self.builder.tupleItemTypes(item_ty);
+        if (item_fields.len != 2) Common.invariant("generated interpolation iterator item was not a pair");
+
+        const part = interpolation.parts[index];
+        const value_expr = try self.lowerExprAtType(part.value, item_fields[0]);
+        const segment_expr = try self.lowerExprAtType(part.following_segment, item_fields[1]);
+        const item_expr = try self.builder.program.addExpr(.{ .ty = item_ty, .data = .{
+            .tuple = try self.builder.program.addExprSpan(&[_]Ast.ExprId{ value_expr, segment_expr }),
+        } });
+
+        const one_tag = self.monoTagByText(step_ret_ty, "One");
+        const payloads = self.builder.program.types.span(one_tag.payloads);
+        if (payloads.len != 1) Common.invariant("Iter step One tag did not have one record payload");
+        const payload_ty = payloads[0];
+        const payload_expr = try self.lowerInterpolationOnePayload(payload_ty, item_expr, rest_expr);
+
+        const body = try self.builder.program.addExpr(.{ .ty = step_ret_ty, .data = .{ .tag = .{
+            .name = one_tag.name,
+            .payloads = try self.builder.program.addExprSpan(&[_]Ast.ExprId{payload_expr}),
+        } } });
+        return try self.lowerInterpolationStepLambda(source_fn_ty, source_expr_id, index, step_fn_ty, body);
+    }
+
+    fn lowerInterpolationOnePayload(
+        self: *BodyContext,
+        ty: Type.TypeId,
+        item_expr: Ast.ExprId,
+        rest_expr: Ast.ExprId,
+    ) Allocator.Error!Ast.ExprId {
+        const fields = self.builder.program.types.fieldSpan(self.builder.recordFieldsSpan(ty));
+        const lowered = try self.allocator.alloc(Ast.FieldExpr, fields.len);
+        defer self.allocator.free(lowered);
+
+        for (fields, 0..) |field, i| {
+            const label = self.builder.program.names.recordFieldLabelText(field.name);
+            lowered[i] = .{
+                .name = field.name,
+                .value = if (Ident.textEql(label, "item"))
+                    item_expr
+                else if (Ident.textEql(label, "rest"))
+                    rest_expr
+                else
+                    Common.invariant("Iter step One payload contained an unexpected field"),
+            };
+        }
+
+        return try self.builder.program.addExpr(.{
+            .ty = ty,
+            .data = .{ .record = try self.builder.program.addFieldExprSpan(lowered) },
+        });
+    }
+
+    fn lowerInterpolationStepLambda(
+        self: *BodyContext,
+        source_fn_ty: checked.CheckedTypeId,
+        source_expr_id: checked.CheckedExprId,
+        index: usize,
+        step_fn_ty: Type.TypeId,
+        body: Ast.ExprId,
+    ) Allocator.Error!Ast.ExprId {
+        const fn_id = try self.builder.program.addFn(.{
+            .fn_def = .{ .checked_generated = self.owner_template },
+            .source_fn_ty = source_fn_ty,
+            .source_fn_key = generatedInterpolationStepKey(self.current_fn_key, source_expr_id, index),
+            .mono_fn_ty = step_fn_ty,
+        });
+        return try self.builder.program.addExpr(.{ .ty = step_fn_ty, .data = .{ .lambda = .{
+            .fn_id = fn_id,
+            .args = try self.builder.program.addTypedLocalSpan(&.{}),
+            .body = body,
+        } } });
+    }
+
+    fn recordFieldByText(self: *BodyContext, ty: Type.TypeId, text: []const u8) Type.Field {
+        for (self.builder.program.types.fieldSpan(self.builder.recordFieldsSpan(ty))) |field| {
+            if (Ident.textEql(self.builder.program.names.recordFieldLabelText(field.name), text)) return field;
+        }
+        Common.invariant("expected record field was absent from monotype type");
+    }
+
+    fn iterItemType(self: *BodyContext, ty: Type.TypeId) Type.TypeId {
+        return switch (self.builder.program.types.get(ty)) {
+            .named => |named| blk: {
+                const args = self.builder.program.types.span(named.args);
+                if (args.len != 1) Common.invariant("Iter nominal did not have one type argument");
+                break :blk args[0];
+            },
+            else => Common.invariant("generated interpolation iterator expected named Iter type"),
         };
     }
 
@@ -4536,7 +4825,7 @@ const BodyContext = struct {
                 });
             },
             .dispatch_call => |plan| return try self.lowerDispatchExprAtType(expr.ty, plan, ty),
-            .interpolation => |plan| return try self.lowerDispatchExprAtType(expr.ty, plan, ty),
+            .interpolation => |interpolation| return try self.lowerDispatchExprAtType(expr.ty, interpolation.plan, ty),
             .type_dispatch_call => |plan| return try self.lowerDispatchExprAtType(expr.ty, plan, ty),
             .method_eq => |plan| return try self.lowerDispatchExprAtType(expr.ty, plan, ty),
             .lookup_local => |lookup| return try self.lowerLookupExprAtType(expr.ty, lookup.resolved, ty),
@@ -5414,7 +5703,7 @@ const BodyContext = struct {
         return switch (expr.data) {
             .call => |call| try self.callResultMonoType(expr.ty, call, expected_ty),
             .dispatch_call => |plan| try self.dispatchResultMonoType(expr.ty, plan, expected_ty),
-            .interpolation => |plan| try self.dispatchResultMonoType(expr.ty, plan, expected_ty),
+            .interpolation => |interpolation| try self.dispatchResultMonoType(expr.ty, interpolation.plan, expected_ty),
             .type_dispatch_call => |plan| try self.dispatchResultMonoType(expr.ty, plan, expected_ty),
             .method_eq => |plan| try self.dispatchResultMonoType(expr.ty, plan, expected_ty),
             .lookup_local => |lookup| try self.lookupExprMonoType(expr.ty, lookup.resolved),
@@ -5453,7 +5742,25 @@ const BodyContext = struct {
         method_name: []const u8,
         bool_ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprId {
-        return switch (self.builder.program.types.get(ty)) {
+        const shape = self.builder.program.types.get(ty);
+        const expands_structurally = switch (shape) {
+            .record, .tuple, .tag_union => true,
+            .named => |named| named.backing != null,
+            else => false,
+        };
+        var remove_active_expansion = false;
+        defer if (remove_active_expansion) {
+            _ = self.equality_expansion_stack.remove(ty);
+        };
+        if (expands_structurally) {
+            if (self.equality_expansion_stack.contains(ty)) {
+                return try self.equalityCall(ty, lhs, rhs, method_name, bool_ty);
+            }
+            try self.equality_expansion_stack.put(ty, {});
+            remove_active_expansion = true;
+        }
+
+        return switch (shape) {
             .list => try self.lowerOwnedEqualityCall(ty, lhs, rhs, method_name, bool_ty),
             .record => |fields| try self.lowerRecordEqualityExpr(self.builder.program.types.fieldSpan(fields), lhs, rhs, method_name, bool_ty),
             .tuple => |items| try self.lowerTupleEqualityExpr(self.builder.program.types.span(items), lhs, rhs, method_name, bool_ty),
@@ -5477,6 +5784,79 @@ const BodyContext = struct {
                 .negated = false,
             } } }),
         };
+    }
+
+    fn equalityCall(
+        self: *BodyContext,
+        value_ty: Type.TypeId,
+        lhs: Ast.ExprId,
+        rhs: Ast.ExprId,
+        method_name: []const u8,
+        bool_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        if (!std.mem.eql(u8, method_name, "is_eq")) {
+            Common.invariant("recursive structural equality helper requested for a non-is_eq method");
+        }
+
+        const def_id = try self.equalityDefForType(value_ty, method_name, bool_ty);
+        const fn_ty = try self.builder.twoArgFnType(value_ty, bool_ty);
+        const callee = try self.builder.program.addExpr(.{
+            .ty = fn_ty,
+            .data = .{ .def_ref = def_id },
+        });
+        const args = [_]Ast.ExprId{ lhs, rhs };
+        return try self.builder.program.addExpr(.{
+            .ty = bool_ty,
+            .data = .{ .call_value = .{
+                .callee = callee,
+                .args = try self.builder.program.addExprSpan(&args),
+            } },
+        });
+    }
+
+    fn equalityDefForType(
+        self: *BodyContext,
+        value_ty: Type.TypeId,
+        method_name: []const u8,
+        bool_ty: Type.TypeId,
+    ) Allocator.Error!Ast.DefId {
+        const address = EqualityDefAddress{
+            .value_ty = @intFromEnum(value_ty),
+            .bool_ty = @intFromEnum(bool_ty),
+        };
+        if (self.builder.equality_defs.get(address)) |entry| return entry.id();
+
+        const def_id: Ast.DefId = @enumFromInt(@as(u32, @intCast(self.builder.program.defs.items.len)));
+        try self.builder.program.defs.append(self.allocator, undefined);
+        try self.builder.equality_defs.put(address, .{ .reserved = def_id });
+
+        const lhs_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), value_ty);
+        const rhs_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), value_ty);
+        const lhs_expr = try self.builder.localExpr(lhs_local, value_ty);
+        const rhs_expr = try self.builder.localExpr(rhs_local, value_ty);
+
+        // The helper body is the structural expansion for this type. Temporarily
+        // remove the caller's active mark so the body expands one layer and only
+        // recursive edges inside that layer call back to the reserved helper.
+        if (!self.equality_expansion_stack.remove(value_ty)) {
+            Common.invariant("recursive structural equality helper requested outside an active equality expansion");
+        }
+        defer self.equality_expansion_stack.putAssumeCapacity(value_ty, {});
+
+        const body = try self.lowerEqualityExpr(value_ty, lhs_expr, rhs_expr, method_name, bool_ty);
+        const args = try self.builder.program.addTypedLocalSpan(&.{
+            .{ .local = lhs_local, .ty = value_ty },
+            .{ .local = rhs_local, .ty = value_ty },
+        });
+        self.builder.program.defs.items[@intFromEnum(def_id)] = .{
+            .symbol = self.builder.symbols.fresh(),
+            .fn_def = null,
+            .args = args,
+            .body = .{ .roc = body },
+            .ret = bool_ty,
+        };
+        try self.builder.equality_defs.put(address, .{ .ready = def_id });
+        return def_id;
     }
 
     /// Decomposes structural equality on a nominal type by unwrapping both operands to
@@ -7372,6 +7752,8 @@ const BodyContext = struct {
             .expect,
             .for_,
             .while_,
+            .infinite_loop,
+            .breakable_loop,
             .break_,
             .return_,
             => true,
@@ -8145,6 +8527,14 @@ const BodyContext = struct {
                 try self.collectReassignedBindersInExpr(while_.cond, out);
                 try self.collectReassignedBindersInExpr(while_.body, out);
             },
+            .infinite_loop => |loop| {
+                try self.collectReassignedBindersInExpr(loop.cond, out);
+                try self.collectReassignedBindersInExpr(loop.body, out);
+            },
+            .breakable_loop => |loop| {
+                try self.collectReassignedBindersInExpr(loop.cond, out);
+                try self.collectReassignedBindersInExpr(loop.body, out);
+            },
             .return_ => |ret| try self.collectReassignedBindersInExpr(ret.expr, out),
             .pending,
             .crash,
@@ -8316,6 +8706,44 @@ const BodyContext = struct {
                 const unit_ty = try self.unitType();
                 const loop_ty = try self.loopStateType(unit_ty, carries);
                 const expr = try self.builder.program.addExpr(.{ .ty = loop_ty, .data = try self.lowerWhile(while_, loop_ty, carries) });
+                if (carries.len == 0) break :blk .{ .expr = expr };
+
+                break :blk .{ .let_ = .{
+                    .pat = try self.finalCarryPattern(carries, loop_ty),
+                    .value = expr,
+                } };
+            },
+            .infinite_loop => |loop| blk: {
+                var reassigned = std.ArrayList(checked.PatternBinderId).empty;
+                defer reassigned.deinit(self.allocator);
+                try self.collectReassignedBindersInExpr(loop.cond, &reassigned);
+                try self.collectReassignedBindersInExpr(loop.body, &reassigned);
+
+                const carries = try self.prepareLoopCarries(reassigned.items);
+                defer self.allocator.free(carries);
+
+                const unit_ty = try self.unitType();
+                const loop_ty = try self.loopStateType(unit_ty, carries);
+                const expr = try self.builder.program.addExpr(.{ .ty = loop_ty, .data = try self.lowerWhile(loop, loop_ty, carries) });
+                if (carries.len == 0) break :blk .{ .expr = expr };
+
+                break :blk .{ .let_ = .{
+                    .pat = try self.finalCarryPattern(carries, loop_ty),
+                    .value = expr,
+                } };
+            },
+            .breakable_loop => |loop| blk: {
+                var reassigned = std.ArrayList(checked.PatternBinderId).empty;
+                defer reassigned.deinit(self.allocator);
+                try self.collectReassignedBindersInExpr(loop.cond, &reassigned);
+                try self.collectReassignedBindersInExpr(loop.body, &reassigned);
+
+                const carries = try self.prepareLoopCarries(reassigned.items);
+                defer self.allocator.free(carries);
+
+                const unit_ty = try self.unitType();
+                const loop_ty = try self.loopStateType(unit_ty, carries);
+                const expr = try self.builder.program.addExpr(.{ .ty = loop_ty, .data = try self.lowerWhile(loop, loop_ty, carries) });
                 if (carries.len == 0) break :blk .{ .expr = expr };
 
                 break :blk .{ .let_ = .{
@@ -8747,6 +9175,21 @@ fn signedIntLiteral(value: anytype) can.CIR.IntValue {
 fn unsignedIntLiteral(value: anytype) can.CIR.IntValue {
     const widened: u128 = @intCast(value);
     return .{ .bytes = @bitCast(widened), .kind = .u128 };
+}
+
+fn generatedInterpolationStepKey(
+    current_fn_key: names.TypeDigest,
+    source_expr_id: checked.CheckedExprId,
+    index: usize,
+) names.TypeDigest {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hasher.update("roc.generated_interpolation_step");
+    hasher.update(&current_fn_key.bytes);
+    var source_expr_bytes = std.mem.nativeToLittle(u32, @intFromEnum(source_expr_id));
+    hasher.update(std.mem.asBytes(&source_expr_bytes));
+    var index_bytes = std.mem.nativeToLittle(u64, @intCast(index));
+    hasher.update(std.mem.asBytes(&index_bytes));
+    return .{ .bytes = hasher.finalResult() };
 }
 
 fn checkedPayload(view: ModuleView, checked_ty: checked.CheckedTypeId) checked.CheckedTypePayload {

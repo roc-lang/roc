@@ -214,8 +214,10 @@ pub fn CirVisitor(comptime Context: type) type {
                 .e_interpolation => |interpolation| {
                     self.walkExpr(store, interpolation.first);
                     if (self.stopped) return;
-                    self.walkExpr(store, interpolation.rest);
-                    if (self.stopped) return;
+                    for (store.sliceExpr(interpolation.parts)) |part| {
+                        self.walkExpr(store, part);
+                        if (self.stopped) return;
+                    }
                 },
                 .e_structural_eq => |eq| {
                     self.walkExpr(store, eq.lhs);
@@ -396,6 +398,16 @@ pub fn CirVisitor(comptime Context: type) type {
                     self.walkExpr(store, f.body);
                 },
                 .s_while => |w| {
+                    self.walkExpr(store, w.cond);
+                    if (self.stopped) return;
+                    self.walkExpr(store, w.body);
+                },
+                .s_infinite_loop => |w| {
+                    self.walkExpr(store, w.cond);
+                    if (self.stopped) return;
+                    self.walkExpr(store, w.body);
+                },
+                .s_breakable_loop => |w| {
                     self.walkExpr(store, w.cond);
                     if (self.stopped) return;
                     self.walkExpr(store, w.body);

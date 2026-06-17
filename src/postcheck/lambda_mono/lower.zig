@@ -11,6 +11,17 @@ const Type = @import("type.zig");
 
 const Allocator = std.mem.Allocator;
 
+/// Whether inline debug effects should materialize during lowering.
+pub const DebugEffectMode = enum {
+    run,
+    erase,
+};
+
+/// Options used by Lambda Mono lowering.
+pub const Options = struct {
+    debug_effects: DebugEffectMode = .run,
+};
+
 /// Lower Lambda Solved IR into Lambda Mono IR.
 pub fn run(
     allocator: Allocator,
@@ -18,6 +29,7 @@ pub fn run(
     /// Match sites the direct lowerer statically resolved; replayed here so
     /// both derivations demand the same set of functions.
     folded_matches: []const Lifted.Program.FoldedMatch,
+    options: Options,
 ) Common.LowerError!Ast.Program {
     var owned = solved;
     errdefer owned.deinit();
@@ -33,7 +45,7 @@ pub fn run(
     owned.lifted.source_files = .empty;
     errdefer program.deinit();
 
-    var lowerer = try Lowerer.init(allocator, &owned, &program);
+    var lowerer = try Lowerer.init(allocator, &owned, &program, options);
     defer lowerer.folded_matches.deinit(allocator);
     for (folded_matches) |folded| {
         try lowerer.folded_matches.put(allocator, folded.scrutinee, folded.body);
@@ -133,12 +145,19 @@ const Lowerer = struct {
     captures: std.AutoHashMap(Lifted.LocalId, CaptureBinding),
     symbols: Common.SymbolGen,
     erased_capture_ptr_ty: ?Type.TypeId = null,
+    unit_ty: ?Type.TypeId = null,
+    debug_effects: DebugEffectMode,
     /// Replays the match resolutions direct LIR lowering recorded, so the
     /// debug verifier sees the same set of demanded functions. Keyed by the
     /// match's scrutinee expression.
     folded_matches: std.AutoHashMapUnmanaged(Lifted.ExprId, Lifted.ExprId) = .empty,
 
-    fn init(allocator: Allocator, solved: *const Solved.Program, program: *Ast.Program) Allocator.Error!Lowerer {
+    fn init(
+        allocator: Allocator,
+        solved: *const Solved.Program,
+        program: *Ast.Program,
+        options: Options,
+    ) Allocator.Error!Lowerer {
         const local_map = try allocator.alloc(?Ast.LocalId, solved.lifted.locals.items.len);
         errdefer allocator.free(local_map);
         @memset(local_map, null);
@@ -176,6 +195,7 @@ const Lowerer = struct {
             .capture_types = CaptureTypeMap.initContext(allocator, .{}),
             .captures = std.AutoHashMap(Lifted.LocalId, CaptureBinding).init(allocator),
             .symbols = .{ .next = solved.lifted.next_symbol },
+            .debug_effects = options.debug_effects,
         };
     }
 
@@ -539,12 +559,18 @@ const Lowerer = struct {
                 .body = try self.lowerExpr(taken.body),
             } },
             .comptime_exhaustiveness_failed => |site| .{ .comptime_exhaustiveness_failed = try self.lowerComptimeSite(site) },
-            .dbg => |child| .{ .dbg = try self.lowerExpr(child) },
+            .dbg => |child| if (self.debug_effects == .erase)
+                .unit
+            else
+                .{ .dbg = try self.lowerExpr(child) },
             .expect_err => |expect_err| .{ .expect_err = .{
                 .msg = try self.lowerExpr(expect_err.msg),
                 .region = expect_err.region,
             } },
-            .expect => |child| .{ .expect = try self.lowerExpr(child) },
+            .expect => |child| if (self.debug_effects == .erase)
+                .unit
+            else
+                .{ .expect = try self.lowerExpr(child) },
         };
 
         const lowered = try self.program.addExpr(.{ .ty = ty, .data = data });
@@ -773,14 +799,34 @@ const Lowerer = struct {
                 .comptime_site = if (let_.comptime_site) |site| try self.lowerComptimeSite(site) else null,
             } },
             .expr => |expr| .{ .expr = try self.lowerExpr(expr) },
-            .expect => |expr| .{ .expect = try self.lowerExpr(expr) },
-            .dbg => |expr| .{ .dbg = try self.lowerExpr(expr) },
+            .expect => |expr| if (self.debug_effects == .erase)
+                .{ .expr = try self.unitExpr() }
+            else
+                .{ .expect = try self.lowerExpr(expr) },
+            .dbg => |expr| if (self.debug_effects == .erase)
+                .{ .expr = try self.unitExpr() }
+            else
+                .{ .dbg = try self.lowerExpr(expr) },
             .return_ => |expr| .{ .return_ = try self.lowerExpr(expr) },
             .crash => |msg| .{ .crash = msg },
         };
         const lowered = try self.program.addStmt(lowered_stmt);
         self.stmt_map[index] = lowered;
         return lowered;
+    }
+
+    fn unitExpr(self: *Lowerer) Allocator.Error!Ast.ExprId {
+        return try self.program.addExpr(.{
+            .ty = try self.unitType(),
+            .data = .unit,
+        });
+    }
+
+    fn unitType(self: *Lowerer) Allocator.Error!Type.TypeId {
+        if (self.unit_ty) |ty| return ty;
+        const ty = try self.program.types.add(.zst);
+        self.unit_ty = ty;
+        return ty;
     }
 
     fn lowerExprTy(self: *Lowerer, expr_id: Lifted.ExprId) Allocator.Error!Type.TypeId {

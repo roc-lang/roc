@@ -59,7 +59,7 @@ NO CHANGE
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "rest"))))))
-		(e-interpolation (constraint-fn-var 44)
+		(e-interpolation (constraint-fn-var 86)
 			(first
 				(e-literal (string "Hello ")))
 			(parts
@@ -72,5 +72,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "{ first_name: Str, last_name: Str, .. } -> Str"))
+(expr (type "{ first_name: _field, last_name: _field2, .. } -> a where [a.from_interpolation : Str, Iter((_field, Str)) -> a]"))
 ~~~

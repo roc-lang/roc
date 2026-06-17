@@ -13,42 +13,23 @@ y = 5 -> call(|i| {i + 1})
 main = "${y}"
 ~~~
 # EXPECTED
-TYPE MISMATCH - issue_9075.md:4:5:4:6
-MISSING METHOD - issue_9075.md:4:20:4:25
-+ - :0:0:0:0
+TYPE MISMATCH - issue_9075.md:6:11:6:12
 # PROBLEMS
 **TYPE MISMATCH**
-This number is being used where a non-number type is needed:
-**issue_9075.md:4:5:4:6:**
-```roc
-y = 5 -> call(|i| {i + 1})
-```
-    ^
-
-The type was determined to be non-numeric here:
+This expression is used in an unexpected way:
 **issue_9075.md:6:11:6:12:**
 ```roc
 main = "${y}"
 ```
           ^
 
-Other code expects this to have the type:
+It has the type:
+
+    Dec
+
+But you are trying to use it as:
 
     Str
-
-**MISSING METHOD**
-The value before this **+** operator has a type that doesn't have a **plus** method:
-**issue_9075.md:4:20:4:25:**
-```roc
-y = 5 -> call(|i| {i + 1})
-```
-                   ^^^^^
-
-The value's type, which does not have a method named **plus**, is:
-
-    Str
-
-**Hint:** The **+** operator calls a method named **plus** on the value preceding it, passing the value after the operator as the one argument.
 
 # TOKENS
 ~~~zig
@@ -127,7 +108,7 @@ main = "${y}"
 				(p-assign (ident "thing"))
 				(p-assign (ident "f")))
 			(e-block
-				(e-call (constraint-fn-var 53)
+				(e-call (constraint-fn-var 49)
 					(e-lookup-local
 						(p-assign (ident "f")))
 					(e-lookup-local
@@ -142,7 +123,7 @@ main = "${y}"
 				(ty-rigid-var-lookup (ty-rigid-var (name "b"))))))
 	(d-let
 		(p-assign (ident "y"))
-		(e-call (constraint-fn-var 120)
+		(e-call (constraint-fn-var 116)
 			(e-lookup-local
 				(p-assign (ident "call")))
 			(e-num (value "5"))
@@ -150,9 +131,10 @@ main = "${y}"
 				(args
 					(p-assign (ident "i")))
 				(e-block
-					(e-dispatch-call (method "plus") (constraint-fn-var 118)
+					(e-dispatch-call (method "plus") (constraint-fn-var 114)
 						(receiver
-							(e-runtime-error (tag "erroneous_value_use")))
+							(e-lookup-local
+								(p-assign (ident "i"))))
 						(args
 							(e-num (value "1"))))))))
 	(d-let
@@ -160,12 +142,14 @@ main = "${y}"
 		(e-block
 			(s-let
 				(p-assign (ident "#interp_0"))
-				(e-runtime-error (tag "erroneous_value_use")))
-			(e-interpolation (constraint-fn-var 127)
+				(e-lookup-local
+					(p-assign (ident "y"))))
+			(e-interpolation (constraint-fn-var 171)
 				(first
 					(e-literal (string "")))
 				(parts
-					(e-runtime-error (tag "erroneous_value_use"))
+					(e-lookup-local
+						(p-assign (ident "#interp_0")))
 					(e-literal (string "")))))))
 ~~~
 # TYPES
@@ -173,10 +157,10 @@ main = "${y}"
 (inferred-types
 	(defs
 		(patt (type "a, (a -> b) -> b"))
-		(patt (type "Error"))
-		(patt (type "Str")))
+		(patt (type "Dec"))
+		(patt (type "Error")))
 	(expressions
 		(expr (type "a, (a -> b) -> b"))
-		(expr (type "Error"))
-		(expr (type "Str"))))
+		(expr (type "Dec"))
+		(expr (type "Error"))))
 ~~~

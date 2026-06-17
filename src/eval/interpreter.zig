@@ -78,6 +78,12 @@ const JmpBuf = sljmp.JmpBuf;
 const setjmp = sljmp.setjmp;
 const longjmp = sljmp.longjmp;
 
+/// Failed inline `expect` observed during one interpreter evaluation.
+pub const ExpectFailure = struct {
+    message: []const u8,
+    loc: base.SourceLoc,
+};
+
 /// Environment for interpreter-managed RocOps forwarding.
 ///
 /// The interpreter always evaluates with the RocOps it was initialized with.
@@ -90,6 +96,7 @@ const InterpreterRocEnv = struct {
     crash_message: ?[]const u8 = null,
     runtime_error_message: ?[]const u8 = null,
     expect_message: ?[]const u8 = null,
+    expect_failures: std.ArrayList(ExpectFailure) = .empty,
     expect_err_message: ?[]const u8 = null,
     expect_err_region: ?base.Region = null,
     jmp_buf: JmpBuf = undefined,
@@ -106,6 +113,8 @@ const InterpreterRocEnv = struct {
     fn deinit(self: *InterpreterRocEnv) void {
         if (self.crash_message) |msg| self.allocator.free(msg);
         if (self.expect_message) |msg| self.allocator.free(msg);
+        self.clearExpectFailures();
+        self.expect_failures.deinit(self.allocator);
         if (self.expect_err_message) |msg| self.allocator.free(msg);
     }
 
@@ -117,6 +126,7 @@ const InterpreterRocEnv = struct {
         self.runtime_error_message = null;
         if (self.expect_message) |msg| self.allocator.free(msg);
         self.expect_message = null;
+        self.clearExpectFailures();
         if (self.expect_err_message) |msg| self.allocator.free(msg);
         self.expect_err_message = null;
         self.expect_err_region = null;
@@ -145,6 +155,22 @@ const InterpreterRocEnv = struct {
         self.crashed = true;
         if (self.crash_message) |old| self.allocator.free(old);
         self.crash_message = self.allocator.dupe(u8, msg) catch null;
+    }
+
+    fn clearExpectFailures(self: *InterpreterRocEnv) void {
+        for (self.expect_failures.items) |failure| {
+            self.allocator.free(failure.message);
+        }
+        self.expect_failures.clearRetainingCapacity();
+    }
+
+    fn recordExpectFailure(self: *InterpreterRocEnv, msg: []const u8, loc: base.SourceLoc) Allocator.Error!void {
+        const owned_msg = try self.allocator.dupe(u8, msg);
+        errdefer self.allocator.free(owned_msg);
+        try self.expect_failures.append(self.allocator, .{
+            .message = owned_msg,
+            .loc = loc,
+        });
     }
 
     fn reportCrash(self: *InterpreterRocEnv, msg: []const u8) void {
@@ -601,6 +627,10 @@ pub const Interpreter = struct {
 
     pub fn getExpectMessage(self: *const LirInterpreter) ?[]const u8 {
         return self.roc_env.expect_message;
+    }
+
+    pub fn getExpectFailures(self: *const LirInterpreter) []const ExpectFailure {
+        return self.roc_env.expect_failures.items;
     }
 
     /// The failure message from a `?` operator that evaluated an Err inside a
@@ -1794,6 +1824,7 @@ pub const Interpreter = struct {
                         self.store.getLocal(cond_local).layout_idx,
                     );
                     if (cond_value == 0) {
+                        try self.roc_env.recordExpectFailure("expect failed", self.store.stmtLoc(current));
                         self.roc_ops.expectFailed("expect failed");
                     }
                     current = expect_stmt.next;
@@ -6319,13 +6350,8 @@ pub const Interpreter = struct {
 
     fn floatToIntTry(self: *LirInterpreter, comptime Src: type, comptime Dst: type, arg: Value, ret_layout: layout_mod.Idx) Error!Value {
         const sv = arg.read(Src);
-        const min_val = comptime @as(Src, @floatFromInt(std.math.minInt(Dst)));
-        const max_val = comptime @as(Src, @floatFromInt(std.math.maxInt(Dst)));
-        if (!std.math.isNan(sv) and !std.math.isInf(sv)) {
-            const truncated: Src = @trunc(sv);
-            if (truncated >= min_val and truncated <= max_val) {
-                return self.writeLowLevelTryRecord(Dst, ret_layout, @intFromFloat(truncated));
-            }
+        if (builtins.numeric_conversions.floatToIntTry(Src, Dst, sv)) |value| {
+            return self.writeLowLevelTryRecord(Dst, ret_layout, value);
         }
         return self.writeLowLevelTryRecord(Dst, ret_layout, null);
     }
