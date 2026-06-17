@@ -32,13 +32,13 @@ UiRuntime := [].{
 
 	EventId : { key : Str, id : U64 }
 
-	StateEntry : { key : Str, value : NodeValue }
+	StateSlot : { key : Str, value : NodeValue, version : U64 }
 
 	StateVersionEntry : { key : Str, version : U64 }
 
 	SignalCacheEntry : { key : Str, value : NodeValue, deps : List(StateVersionEntry) }
 
-	EventStateDep : { event_key : Str, state_key : Str }
+	EventStateDeps : { event_key : Str, state_keys : List(Str) }
 
 	HostEvent := [
 		Click(U64),
@@ -70,15 +70,20 @@ UiRuntime := [].{
 		value_bytes : List(U8),
 	}
 
+	StructuralLookup := [
+		FoundStructural({ index : U64, snapshot : CommandSnapshot }),
+		NoStructuralSnapshot,
+	]
+
 	Runtime : {
 		root : Elem,
-		states : List(StateEntry),
+		states : List(StateSlot),
 		event_ids : List(EventId),
+		event_keys_by_id : List(Str),
 		next_event_id : U64,
 		previous_commands : List(CommandSnapshot),
 		signal_cache : List(SignalCacheEntry),
-		state_versions : List(StateVersionEntry),
-		event_state_deps : List(EventStateDep),
+		event_state_deps : List(EventStateDeps),
 		metrics : RuntimeMetrics,
 	}
 
@@ -120,15 +125,27 @@ UiRuntime := [].{
 		emit_commands : List(Command),
 	}
 
-	StateLookup : { found : Bool, value : NodeValue }
-
 	EventLookup : { runtime : Runtime, id : U64 }
 
-	UpsertState : { entries : List(StateEntry), found : Bool }
+	StateSlotLookup := [
+		StateSlotFound({ index : U64, slot : StateSlot }),
+		StateSlotMissing,
+	]
 
-	UpsertStateVersion : { entries : List(StateVersionEntry), found : Bool }
+	EventIdLookup := [
+		EventIdFound(U64),
+		EventIdMissing,
+	]
 
-	UpsertSignalCache : { entries : List(SignalCacheEntry), found : Bool }
+	EventStateDepsLookup := [
+		EventStateDepsFound({ index : U64, state_keys : List(Str) }),
+		EventStateDepsMissing,
+	]
+
+	SignalCacheEntryLookup := [
+		SignalCacheEntryFound({ index : U64, entry : SignalCacheEntry }),
+		SignalCacheEntryMissing,
+	]
 
 	CacheLookup := [
 		CacheHit(NodeValue),
@@ -175,10 +192,10 @@ UiRuntime := [].{
 			root,
 			states: [],
 			event_ids: [],
+			event_keys_by_id: [],
 			next_event_id: 1,
 			previous_commands: [],
 			signal_cache: [],
-			state_versions: [],
 			event_state_deps: [],
 			metrics: zero_metrics,
 		}
@@ -216,41 +233,31 @@ UiRuntime := [].{
 	active_event_key_for_runtime = |runtime, active_event| {
 		match active_event {
 			NoEvent => NoActiveEventKey
-			Occurrence({ id }) => event_key_for_id(runtime.event_ids, id)
+			Occurrence({ id }) => event_key_for_id(runtime.event_keys_by_id, id)
 		}
 	}
 
-	event_key_for_id : List(EventId), U64 -> ActiveEventKey
-	event_key_for_id = |event_ids, id| {
-		List.fold(
-			event_ids,
-			NoActiveEventKey,
-			|acc, entry| match acc {
-				ActiveEventKey(_) => acc
-				NoActiveEventKey =>
-					if entry.id == id {
-						ActiveEventKey(entry.key)
-					} else {
-						NoActiveEventKey
-					}
-			},
-		)
+	event_key_for_id : List(Str), U64 -> ActiveEventKey
+	event_key_for_id = |event_keys_by_id, id| {
+		if id == 0 {
+			NoActiveEventKey
+		} else {
+			match List.get(event_keys_by_id, id - 1) {
+				Ok(key) => ActiveEventKey(key)
+				Err(_) => NoActiveEventKey
+			}
+		}
 	}
 
-	dirty_state_keys_for_active_event : List(EventStateDep), ActiveEventKey -> List(Str)
+	dirty_state_keys_for_active_event : List(EventStateDeps), ActiveEventKey -> List(Str)
 	dirty_state_keys_for_active_event = |deps, active_event_key| {
 		match active_event_key {
 			NoActiveEventKey => []
 			ActiveEventKey(event_key) =>
-				List.fold(
-					deps,
-					[],
-					|acc, dep| if dep.event_key == event_key {
-						append_unique_str(acc, dep.state_key)
-					} else {
-						acc
-					},
-				)
+				match event_state_deps_lookup(deps, event_key) {
+					EventStateDepsFound(found) => found.state_keys
+					EventStateDepsMissing => []
+				}
 		}
 	}
 
@@ -334,19 +341,60 @@ UiRuntime := [].{
 
 	same_structure : List(CommandSnapshot), List(CommandSnapshot) -> Bool
 	same_structure = |previous, next| {
-		previous_structure = structural_snapshots(previous)
-		next_structure = structural_snapshots(next)
-		if List.len(previous_structure) != List.len(next_structure) {
-			False
-		} else {
-			pairs = List.map2(previous_structure, next_structure, |a, b| (a, b))
-			!List.any(pairs, |(a, b)| !snapshot_equal(a, b))
+		var $previous_index = 0
+		var $next_index = 0
+		var $same = True
+		var $done = False
+
+		while $done == False {
+			previous_lookup = find_structural_snapshot(previous, $previous_index)
+			next_lookup = find_structural_snapshot(next, $next_index)
+
+			match (previous_lookup, next_lookup) {
+				(NoStructuralSnapshot, NoStructuralSnapshot) => {
+					$done = True
+				}
+				(FoundStructural(prev), FoundStructural(next_structural)) =>
+					if snapshot_equal(prev.snapshot, next_structural.snapshot) {
+						$previous_index = prev.index + 1
+						$next_index = next_structural.index + 1
+					} else {
+						$same = False
+						$done = True
+					}
+				_ => {
+					$same = False
+					$done = True
+				}
+			}
 		}
+
+		$same
 	}
 
-	structural_snapshots : List(CommandSnapshot) -> List(CommandSnapshot)
-	structural_snapshots = |snapshots| {
-		List.keep_if(snapshots, snapshot_is_structural)
+	find_structural_snapshot : List(CommandSnapshot), U64 -> StructuralLookup
+	find_structural_snapshot = |snapshots, start_index| {
+		var $index = start_index
+		var $result = NoStructuralSnapshot
+		var $done = False
+
+		while $done == False and $index < List.len(snapshots) {
+			match List.get(snapshots, $index) {
+				Ok(snapshot) =>
+					if snapshot_is_structural(snapshot) {
+						$result = FoundStructural({ index: $index, snapshot })
+						$done = True
+					} else {
+						$index = $index + 1
+					}
+
+				Err(_) => {
+					$done = True
+				}
+			}
+		}
+
+		$result
 	}
 
 	snapshot_is_structural : CommandSnapshot -> Bool
@@ -354,19 +402,31 @@ UiRuntime := [].{
 		snapshot.kind == 0 or snapshot.kind == 1 or snapshot.kind == 2
 	}
 
-	command_is_structural : Command -> Bool
-	command_is_structural = |command| {
-		snapshot_is_structural(command_snapshot(command))
-	}
-
 	diff_non_structural : List(CommandSnapshot), List(Command) -> List(Command)
 	diff_non_structural = |previous, next| {
-		List.keep_if(next, |command| if command_is_structural(command) {
-			False
-		} else {
+		var $index = 0
+		var $commands = List.with_capacity(List.len(next))
+
+		for command in next {
 			snapshot = command_snapshot(command)
-			!List.any(previous, |old| snapshot_equal(old, snapshot))
-		})
+			changed =
+				if snapshot_is_structural(snapshot) {
+					False
+				} else {
+					match List.get(previous, $index) {
+						Ok(old) => !snapshot_equal(old, snapshot)
+						Err(_) => True
+					}
+				}
+
+			if changed {
+				$commands = List.append($commands, command)
+			}
+
+			$index = $index + 1
+		}
+
+		$commands
 	}
 
 	snapshot_equal : CommandSnapshot, CommandSnapshot -> Bool
@@ -383,8 +443,24 @@ UiRuntime := [].{
 		if List.len(left) != List.len(right) {
 			False
 		} else {
-			pairs = List.map2(left, right, |a, b| (a, b))
-			!List.any(pairs, |(a, b)| a != b)
+			var $index = 0
+			var $same = True
+
+			while $same and $index < List.len(left) {
+				match (List.get(left, $index), List.get(right, $index)) {
+					(Ok(a), Ok(b)) =>
+						if a == b {
+							$index = $index + 1
+						} else {
+							$same = False
+						}
+					_ => {
+						$same = False
+					}
+				}
+			}
+
+			$same
 		}
 	}
 
@@ -558,26 +634,18 @@ UiRuntime := [].{
 	event_id_for_key = |runtime, key| {
 		metrics0 = runtime.metrics
 		runtime_with_count = { ..runtime, metrics: { ..metrics0, event_lookups: metrics0.event_lookups + 1 } }
-		found = List.fold(
-			runtime_with_count.event_ids,
-			{ found: False, id: 0 },
-			|acc, entry| if acc.found {
-				acc
-			} else if entry.key == key {
-				{ found: True, id: entry.id }
-			} else {
-				acc
-			},
-		)
-		if found.found {
-			{ runtime: runtime_with_count, id: found.id }
-		} else {
-			id = runtime_with_count.next_event_id
-			entry = { key, id }
-			{
-				runtime: { ..runtime_with_count, event_ids: List.append(runtime_with_count.event_ids, entry), next_event_id: id + 1
-				},
-				id,
+		match event_id_lookup(runtime_with_count.event_ids, key) {
+			EventIdFound(id) => { runtime: runtime_with_count, id }
+			EventIdMissing => {
+				id = runtime_with_count.next_event_id
+				{
+					runtime: { ..runtime_with_count,
+						event_ids: List.append(runtime_with_count.event_ids, { key, id }),
+						event_keys_by_id: List.append(runtime_with_count.event_keys_by_id, key),
+						next_event_id: id + 1,
+					},
+					id,
+				}
 			}
 		}
 	}
@@ -746,7 +814,7 @@ UiRuntime := [].{
 					runtime_with_deps = register_state_event_deps(state_with_count.runtime, key, event_node.sources)
 					current = state_value(runtime_with_deps, key, initial)
 					state1 = { ..state_with_count, runtime: current.runtime }
-					if List.contains(state1.updated_keys, key) {
+					if str_list_contains(state1.updated_keys, key) {
 						{ state: state1, value: current.value }
 					} else {
 						event_result = eval_event(state1, event_node)
@@ -760,7 +828,7 @@ UiRuntime := [].{
 					runtime_with_deps = register_state_event_deps(state_with_count.runtime, key, event_node.sources)
 					current = state_value(runtime_with_deps, key, initial)
 					state1 = { ..state_with_count, runtime: current.runtime }
-					if List.contains(state1.updated_keys, key) {
+					if str_list_contains(state1.updated_keys, key) {
 						{ state: state1, value: current.value }
 					} else {
 						event_result = eval_event(state1, event_node)
@@ -780,7 +848,7 @@ UiRuntime := [].{
 					initial_nv = NodeValue.from_i64(initial)
 					current = state_value(runtime_with_deps, key, initial_nv)
 					state1 = { ..state_with_count, runtime: current.runtime }
-					if List.contains(state1.updated_keys, key) {
+					if str_list_contains(state1.updated_keys, key) {
 						{ state: state1, value: current.value }
 					} else {
 						event_result = eval_event(state1, event_node)
@@ -800,7 +868,7 @@ UiRuntime := [].{
 					initial_nv = NodeValue.from_bool(initial)
 					current = state_value(runtime_with_deps, key, initial_nv)
 					state1 = { ..state_with_count, runtime: current.runtime }
-					if List.contains(state1.updated_keys, key) {
+					if str_list_contains(state1.updated_keys, key) {
 						{ state: state1, value: current.value }
 					} else {
 						event_result = eval_event(state1, event_node)
@@ -828,26 +896,113 @@ UiRuntime := [].{
 		List.any(signal.deps, |dep| str_list_contains(dirty_state_keys, dep))
 	}
 
+	event_id_lookup : List(EventId), Str -> EventIdLookup
+	event_id_lookup = |event_ids, key| {
+		var $index = 0
+		var $result = EventIdMissing
+		var $done = False
+
+		while $done == False and $index < List.len(event_ids) {
+			match List.get(event_ids, $index) {
+				Ok(entry) =>
+					if entry.key == key {
+						$result = EventIdFound(entry.id)
+						$done = True
+					} else {
+						$index = $index + 1
+					}
+				Err(_) => {
+					$done = True
+				}
+			}
+		}
+
+		$result
+	}
+
+	event_state_deps_lookup : List(EventStateDeps), Str -> EventStateDepsLookup
+	event_state_deps_lookup = |deps, event_key| {
+		var $index = 0
+		var $result = EventStateDepsMissing
+		var $done = False
+
+		while $done == False and $index < List.len(deps) {
+			match List.get(deps, $index) {
+				Ok(entry) =>
+					if entry.event_key == event_key {
+						$result = EventStateDepsFound({ index: $index, state_keys: entry.state_keys })
+						$done = True
+					} else {
+						$index = $index + 1
+					}
+				Err(_) => {
+					$done = True
+				}
+			}
+		}
+
+		$result
+	}
+
+	signal_cache_entry_lookup : List(SignalCacheEntry), Str -> SignalCacheEntryLookup
+	signal_cache_entry_lookup = |entries, key| {
+		var $index = 0
+		var $result = SignalCacheEntryMissing
+		var $done = False
+
+		while $done == False and $index < List.len(entries) {
+			match List.get(entries, $index) {
+				Ok(entry) =>
+					if entry.key == key {
+						$result = SignalCacheEntryFound({ index: $index, entry })
+						$done = True
+					} else {
+						$index = $index + 1
+					}
+				Err(_) => {
+					$done = True
+				}
+			}
+		}
+
+		$result
+	}
+
+	state_slot_lookup : List(StateSlot), Str -> StateSlotLookup
+	state_slot_lookup = |slots, key| {
+		var $index = 0
+		var $result = StateSlotMissing
+		var $done = False
+
+		while $done == False and $index < List.len(slots) {
+			match List.get(slots, $index) {
+				Ok(slot) =>
+					if slot.key == key {
+						$result = StateSlotFound({ index: $index, slot })
+						$done = True
+					} else {
+						$index = $index + 1
+					}
+				Err(_) => {
+					$done = True
+				}
+			}
+		}
+
+		$result
+	}
+
 	signal_cache_lookup : Runtime, List(Str), Str -> CacheLookup
 	signal_cache_lookup = |runtime, signal_deps, key| {
-		List.fold(
-			runtime.signal_cache,
-			CacheMiss,
-			|acc, entry| match acc {
-				CacheHit(_) => acc
-				StaleCacheMiss => acc
-				CacheMiss =>
-					if entry.key == key {
-						if signal_cache_entry_valid(runtime, signal_deps, entry.deps) {
-							CacheHit(entry.value)
-						} else {
-							StaleCacheMiss
-						}
-					} else {
-						CacheMiss
-					}
-			},
-		)
+		match signal_cache_entry_lookup(runtime.signal_cache, key) {
+			SignalCacheEntryFound(found) =>
+				if signal_cache_entry_valid(runtime, signal_deps, found.entry.deps) {
+					CacheHit(found.entry.value)
+				} else {
+					StaleCacheMiss
+				}
+			SignalCacheEntryMissing => CacheMiss
+		}
 	}
 
 	signal_cache_entry_valid : Runtime, List(Str), List(StateVersionEntry) -> Bool
@@ -874,47 +1029,95 @@ UiRuntime := [].{
 
 	current_state_version : Runtime, Str -> U64
 	current_state_version = |runtime, key| {
-		match state_version_lookup(runtime.state_versions, key) {
-			VersionFound(version) => version
-			VersionMissing => 0
+		match state_slot_lookup(runtime.states, key) {
+			StateSlotFound(found) => found.slot.version
+			StateSlotMissing => 0
 		}
 	}
 
 	state_version_lookup : List(StateVersionEntry), Str -> VersionLookup
 	state_version_lookup = |entries, key| {
-		List.fold(
-			entries,
-			VersionMissing,
-			|acc, entry| match acc {
-				VersionFound(_) => acc
-				VersionMissing =>
+		var $index = 0
+		var $result = VersionMissing
+		var $done = False
+
+		while $done == False and $index < List.len(entries) {
+			match List.get(entries, $index) {
+				Ok(entry) =>
 					if entry.key == key {
-						VersionFound(entry.version)
+						$result = VersionFound(entry.version)
+						$done = True
 					} else {
-						VersionMissing
+						$index = $index + 1
 					}
-			},
-		)
+				Err(_) => {
+					$done = True
+				}
+			}
+		}
+
+		$result
+	}
+
+	replace_signal_cache_entry : List(SignalCacheEntry), U64, SignalCacheEntry -> List(SignalCacheEntry)
+	replace_signal_cache_entry = |entries, target_index, replacement| {
+		var $index = 0
+		var $next = List.with_capacity(List.len(entries))
+
+		for entry in entries {
+			if $index == target_index {
+				$next = List.append($next, replacement)
+			} else {
+				$next = List.append($next, entry)
+			}
+			$index = $index + 1
+		}
+
+		$next
+	}
+
+	replace_event_state_deps : List(EventStateDeps), U64, EventStateDeps -> List(EventStateDeps)
+	replace_event_state_deps = |entries, target_index, replacement| {
+		var $index = 0
+		var $next = List.with_capacity(List.len(entries))
+
+		for entry in entries {
+			if $index == target_index {
+				$next = List.append($next, replacement)
+			} else {
+				$next = List.append($next, entry)
+			}
+			$index = $index + 1
+		}
+
+		$next
+	}
+
+	replace_state_slot : List(StateSlot), U64, StateSlot -> List(StateSlot)
+	replace_state_slot = |entries, target_index, replacement| {
+		var $index = 0
+		var $next = List.with_capacity(List.len(entries))
+
+		for entry in entries {
+			if $index == target_index {
+				$next = List.append($next, replacement)
+			} else {
+				$next = List.append($next, entry)
+			}
+			$index = $index + 1
+		}
+
+		$next
 	}
 
 	set_signal_cache : Runtime, Str, List(Str), NodeValue -> Runtime
 	set_signal_cache = |runtime, key, signal_deps, value| {
 		deps = state_versions_for_deps(runtime, signal_deps)
-		initial : UpsertSignalCache
-		initial = { entries: [], found: False }
-		upsert = List.fold(
-			runtime.signal_cache,
-			initial,
-			|acc, entry| if entry.key == key {
-				{ entries: List.append(acc.entries, { key, value, deps }), found: True }
-			} else {
-				{ ..acc, entries: List.append(acc.entries, entry) }
-			},
-		)
-		if upsert.found {
-			{ ..runtime, signal_cache: upsert.entries }
-		} else {
-			{ ..runtime, signal_cache: List.append(upsert.entries, { key, value, deps }) }
+		entry = { key, value, deps }
+		match signal_cache_entry_lookup(runtime.signal_cache, key) {
+			SignalCacheEntryFound(found) => { ..runtime, signal_cache: replace_signal_cache_entry(runtime.signal_cache, found.index, entry) }
+
+			SignalCacheEntryMissing => { ..runtime, signal_cache: List.append(runtime.signal_cache, entry) }
 		}
 	}
 
@@ -925,77 +1128,53 @@ UiRuntime := [].{
 
 	register_state_event_dep : Runtime, Str, Str -> Runtime
 	register_state_event_dep = |runtime, event_key, state_key| {
-		if event_state_dep_exists(runtime.event_state_deps, event_key, state_key) {
-			runtime
-		} else {
-			{ ..runtime, event_state_deps: List.append(runtime.event_state_deps, { event_key, state_key }) }
-		}
-	}
+		match event_state_deps_lookup(runtime.event_state_deps, event_key) {
+			EventStateDepsFound(found) =>
+				if str_list_contains(found.state_keys, state_key) {
+					runtime
+				} else {
+					next = { event_key, state_keys: List.append(found.state_keys, state_key) }
+					{ ..runtime, event_state_deps: replace_event_state_deps(runtime.event_state_deps, found.index, next) }
+				}
 
-	event_state_dep_exists : List(EventStateDep), Str, Str -> Bool
-	event_state_dep_exists = |deps, event_key, state_key| {
-		List.any(deps, |dep| dep.event_key == event_key and dep.state_key == state_key)
-	}
-
-	append_unique_str : List(Str), Str -> List(Str)
-	append_unique_str = |items, item| {
-		if str_list_contains(items, item) {
-			items
-		} else {
-			List.append(items, item)
+			EventStateDepsMissing => { ..runtime, event_state_deps: List.append(runtime.event_state_deps, { event_key, state_keys: [state_key] }) }
 		}
 	}
 
 	str_list_contains : List(Str), Str -> Bool
 	str_list_contains = |items, item| {
-		List.any(items, |existing| existing == item)
+		var $index = 0
+		var $found = False
+
+		while $found == False and $index < List.len(items) {
+			match List.get(items, $index) {
+				Ok(existing) =>
+					if existing == item {
+						$found = True
+					} else {
+						$index = $index + 1
+					}
+				Err(_) => {
+					$index = List.len(items)
+				}
+			}
+		}
+
+		$found
 	}
 
 	state_value : Runtime, Str, NodeValue -> { runtime : Runtime, value : NodeValue }
 	state_value = |runtime, key, initial| {
 		metrics0 = runtime.metrics
 		runtime_with_count = { ..runtime, metrics: { ..metrics0, state_lookups: metrics0.state_lookups + 1 } }
-		lookup = List.fold(
-			runtime_with_count.states,
-			{ found: False, value: initial },
-			|acc, entry| if acc.found {
-				acc
-			} else if entry.key == key {
-				{ found: True, value: entry.value }
-			} else {
-				acc
-			},
-		)
-		if lookup.found {
-			{ runtime: runtime_with_count, value: lookup.value }
-		} else {
-			{
-				runtime: { ..runtime_with_count, states: List.append(runtime_with_count.states, { key, value: initial }) },
-				value: initial,
+		match state_slot_lookup(runtime_with_count.states, key) {
+			StateSlotFound(found) => { runtime: runtime_with_count, value: found.slot.value }
+			StateSlotMissing => {
+				{
+					runtime: { ..runtime_with_count, states: List.append(runtime_with_count.states, { key, value: initial, version: 0 }) },
+					value: initial,
+				}
 			}
-		}
-	}
-
-	bump_state_version : Runtime, Str -> Runtime
-	bump_state_version = |runtime, key| {
-		next_version = current_state_version(runtime, key) + 1
-		metrics0 = runtime.metrics
-		runtime_with_count = { ..runtime, metrics: { ..metrics0, state_version_bumps: metrics0.state_version_bumps + 1 } }
-		initial : UpsertStateVersion
-		initial = { entries: [], found: False }
-		upsert = List.fold(
-			runtime_with_count.state_versions,
-			initial,
-			|acc, entry| if entry.key == key {
-				{ entries: List.append(acc.entries, { key, version: next_version }), found: True }
-			} else {
-				{ ..acc, entries: List.append(acc.entries, entry) }
-			},
-		)
-		if upsert.found {
-			{ ..runtime_with_count, state_versions: upsert.entries }
-		} else {
-			{ ..runtime_with_count, state_versions: List.append(upsert.entries, { key, version: next_version }) }
 		}
 	}
 
@@ -1016,13 +1195,7 @@ UiRuntime := [].{
 						node_value_equality_checks: metrics0.node_value_equality_checks + 1,
 					}
 				}
-			runtime1 = set_state({ ..state.runtime, metrics: metrics1 }, key, next)
-			runtime2 =
-				if changed {
-					bump_state_version(runtime1, key)
-				} else {
-					runtime1
-				}
+			runtime2 = set_state({ ..state.runtime, metrics: metrics1 }, key, next, changed)
 			state1 = { ..state, runtime: runtime2, updated_keys: List.append(state.updated_keys, key) }
 			{ state: state1, value: next }
 		} else {
@@ -1030,23 +1203,42 @@ UiRuntime := [].{
 		}
 	}
 
-	set_state : Runtime, Str, NodeValue -> Runtime
-	set_state = |runtime, key, value| {
-		initial : UpsertState
-		initial = { entries: [], found: False }
-		upsert = List.fold(
-			runtime.states,
-			initial,
-			|acc, entry| if entry.key == key {
-				{ entries: List.append(acc.entries, { key, value }), found: True }
-			} else {
-				{ ..acc, entries: List.append(acc.entries, entry) }
-			},
-		)
-		if upsert.found {
-			{ ..runtime, states: upsert.entries }
-		} else {
-			{ ..runtime, states: List.append(upsert.entries, { key, value }) }
+	set_state : Runtime, Str, NodeValue, Bool -> Runtime
+	set_state = |runtime, key, value, bump_version| {
+		match state_slot_lookup(runtime.states, key) {
+			StateSlotFound(found) => {
+				next_version =
+					if bump_version {
+						found.slot.version + 1
+					} else {
+						found.slot.version
+					}
+				metrics0 = runtime.metrics
+				metrics1 =
+					if bump_version {
+						{ ..metrics0, state_version_bumps: metrics0.state_version_bumps + 1 }
+					} else {
+						metrics0
+					}
+				next_slot = { key, value, version: next_version }
+				{ ..runtime, states: replace_state_slot(runtime.states, found.index, next_slot), metrics: metrics1 }
+			}
+			StateSlotMissing => {
+				version =
+					if bump_version {
+						1
+					} else {
+						0
+					}
+				metrics0 = runtime.metrics
+				metrics1 =
+					if bump_version {
+						{ ..metrics0, state_version_bumps: metrics0.state_version_bumps + 1 }
+					} else {
+						metrics0
+					}
+				{ ..runtime, states: List.append(runtime.states, { key, value, version }), metrics: metrics1 }
+			}
 		}
 	}
 
@@ -1092,8 +1284,24 @@ UiRuntime := [].{
 		if List.len(left) != List.len(right) {
 			False
 		} else {
-			pairs = List.map2(left, right, |a, b| (a, b))
-			!List.any(pairs, |(a, b)| !node_value_equal(a, b))
+			var $index = 0
+			var $same = True
+
+			while $same and $index < List.len(left) {
+				match (List.get(left, $index), List.get(right, $index)) {
+					(Ok(a), Ok(b)) =>
+						if node_value_equal(a, b) {
+							$index = $index + 1
+						} else {
+							$same = False
+						}
+					_ => {
+						$same = False
+					}
+				}
+			}
+
+			$same
 		}
 	}
 }

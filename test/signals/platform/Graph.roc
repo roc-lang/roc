@@ -10,6 +10,43 @@ Graph := [].{
 		Merge({ left : Box(EventNode), right : Box(EventNode) }),
 	]
 
+	str_list_contains : List(Str), Str -> Bool
+	str_list_contains = |items, item| {
+		var $index = 0
+		var $found = False
+
+		while $found == False and $index < List.len(items) {
+			match List.get(items, $index) {
+				Ok(existing) =>
+					if existing == item {
+						$found = True
+					} else {
+						$index = $index + 1
+					}
+				Err(_) => {
+					$index = List.len(items)
+				}
+			}
+		}
+
+		$found
+	}
+
+	merge_deps : List(Str), List(Str) -> List(Str)
+	merge_deps = |left, right| {
+		var $deps = left
+
+		for dep in right {
+			if str_list_contains($deps, dep) {
+				{}
+			} else {
+				$deps = List.append($deps, dep)
+			}
+		}
+
+		$deps
+	}
+
 	EventNode := {
 		sources : List(Str),
 		expr : EventExpr,
@@ -24,7 +61,7 @@ Graph := [].{
 		make_map_unit_i64_const = |source, value| { sources: source.sources, expr: MapUnitI64Const({ source: Box.box(source), value }) }
 
 		make_merge : EventNode, EventNode -> EventNode
-		make_merge = |left, right| { sources: List.concat(left.sources, right.sources), expr: Merge({ left: Box.box(left), right: Box.box(right) }) }
+		make_merge = |left, right| { sources: merge_deps(left.sources, right.sources), expr: Merge({ left: Box.box(left), right: Box.box(right) }) }
 	}
 
 	SignalCacheKey := [
@@ -85,22 +122,22 @@ Graph := [].{
 		make_keyed_map_i64_str = |key, source, transform| { cache_key: SignalCacheKey(key), deps: source.deps, expr: MapI64Str({ source: Box.box(source), transform }) }
 
 		make_map2_signal : SignalNode, SignalNode, Box(((NodeValue, NodeValue) -> NodeValue)) -> SignalNode
-		make_map2_signal = |left, right, transform| { cache_key: NoSignalCacheKey, deps: List.concat(left.deps, right.deps), expr: Map2Signal({ left: Box.box(left), right: Box.box(right), transform }) }
+		make_map2_signal = |left, right, transform| { cache_key: NoSignalCacheKey, deps: merge_deps(left.deps, right.deps), expr: Map2Signal({ left: Box.box(left), right: Box.box(right), transform }) }
 
 		make_keyed_map2_signal : Str, SignalNode, SignalNode, Box(((NodeValue, NodeValue) -> NodeValue)) -> SignalNode
-		make_keyed_map2_signal = |key, left, right, transform| { cache_key: SignalCacheKey(key), deps: List.concat(left.deps, right.deps), expr: Map2Signal({ left: Box.box(left), right: Box.box(right), transform }) }
+		make_keyed_map2_signal = |key, left, right, transform| { cache_key: SignalCacheKey(key), deps: merge_deps(left.deps, right.deps), expr: Map2Signal({ left: Box.box(left), right: Box.box(right), transform }) }
 
 		make_map2_i64_i64 : SignalNode, SignalNode, Box(((I64, I64) -> I64)) -> SignalNode
-		make_map2_i64_i64 = |left, right, transform| { cache_key: NoSignalCacheKey, deps: List.concat(left.deps, right.deps), expr: Map2I64I64({ left: Box.box(left), right: Box.box(right), transform }) }
+		make_map2_i64_i64 = |left, right, transform| { cache_key: NoSignalCacheKey, deps: merge_deps(left.deps, right.deps), expr: Map2I64I64({ left: Box.box(left), right: Box.box(right), transform }) }
 
 		make_keyed_map2_i64_i64 : Str, SignalNode, SignalNode, Box(((I64, I64) -> I64)) -> SignalNode
-		make_keyed_map2_i64_i64 = |key, left, right, transform| { cache_key: SignalCacheKey(key), deps: List.concat(left.deps, right.deps), expr: Map2I64I64({ left: Box.box(left), right: Box.box(right), transform }) }
+		make_keyed_map2_i64_i64 = |key, left, right, transform| { cache_key: SignalCacheKey(key), deps: merge_deps(left.deps, right.deps), expr: Map2I64I64({ left: Box.box(left), right: Box.box(right), transform }) }
 
 		make_map2_i64_i64_str : SignalNode, SignalNode, Box(((I64, I64) -> Str)) -> SignalNode
-		make_map2_i64_i64_str = |left, right, transform| { cache_key: NoSignalCacheKey, deps: List.concat(left.deps, right.deps), expr: Map2I64I64Str({ left: Box.box(left), right: Box.box(right), transform }) }
+		make_map2_i64_i64_str = |left, right, transform| { cache_key: NoSignalCacheKey, deps: merge_deps(left.deps, right.deps), expr: Map2I64I64Str({ left: Box.box(left), right: Box.box(right), transform }) }
 
 		make_keyed_map2_i64_i64_str : Str, SignalNode, SignalNode, Box(((I64, I64) -> Str)) -> SignalNode
-		make_keyed_map2_i64_i64_str = |key, left, right, transform| { cache_key: SignalCacheKey(key), deps: List.concat(left.deps, right.deps), expr: Map2I64I64Str({ left: Box.box(left), right: Box.box(right), transform }) }
+		make_keyed_map2_i64_i64_str = |key, left, right, transform| { cache_key: SignalCacheKey(key), deps: merge_deps(left.deps, right.deps), expr: Map2I64I64Str({ left: Box.box(left), right: Box.box(right), transform }) }
 
 		make_hold : Str, NodeValue, EventNode -> SignalNode
 		make_hold = |key, initial, event| { cache_key: SignalCacheKey(key), deps: [key], expr: Hold({ key, initial, event: Box.box(event) }) }

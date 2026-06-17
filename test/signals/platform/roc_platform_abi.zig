@@ -987,13 +987,13 @@ comptime {
 /// Element type for __AnonStruct70
 pub const __AnonStruct70 = extern struct {
     @"event_ids": RocList(__AnonStruct72),
+    @"event_keys_by_id": RocList(RocStr),
     @"event_state_deps": RocList(__AnonStruct74),
     @"metrics": __AnonStruct68,
     @"next_event_id": u64,
     @"previous_commands": RocList(__AnonStruct76),
     @"root": Elem,
     @"signal_cache": RocList(__AnonStruct80),
-    @"state_versions": RocList(__AnonStruct82),
     @"states": RocList(__AnonStruct84),
 };
 
@@ -1020,7 +1020,7 @@ comptime {
 /// Element type for __AnonStruct74
 pub const __AnonStruct74 = extern struct {
     @"event_key": RocStr,
-    @"state_key": RocStr,
+    @"state_keys": RocList(RocStr),
 };
 
 comptime {
@@ -1077,11 +1077,12 @@ comptime {
 pub const __AnonStruct84 = extern struct {
     @"key": RocStr,
     @"value": NodeValue,
+    @"version": u64,
 };
 
 comptime {
     if (@sizeOf(usize) == 8) {
-        if (@sizeOf(__AnonStruct84) != 56) @compileError("__AnonStruct84 size mismatch");
+        if (@sizeOf(__AnonStruct84) != 64) @compileError("__AnonStruct84 size mismatch");
         if (@alignOf(__AnonStruct84) != 8) @compileError("__AnonStruct84 alignment mismatch");
     }
 }
@@ -2089,6 +2090,15 @@ pub fn decref__AnonStruct70(value: __AnonStruct70, roc_host: *RocHost) void {
         list.decref(roc_host);
     }
     {
+        const list = value.@"event_keys_by_id";
+        if (list.isUnique()) {
+            for (list.items()) |item| {
+                    item.decref(roc_host);
+            }
+        }
+        list.decref(roc_host);
+    }
+    {
         const list = value.@"event_state_deps";
         if (list.isUnique()) {
             for (list.items()) |item| {
@@ -2117,15 +2127,6 @@ pub fn decref__AnonStruct70(value: __AnonStruct70, roc_host: *RocHost) void {
         list.decref(roc_host);
     }
     {
-        const list = value.@"state_versions";
-        if (list.isUnique()) {
-            for (list.items()) |item| {
-                    decref__AnonStruct82(item, roc_host);
-            }
-        }
-        list.decref(roc_host);
-    }
-    {
         const list = value.@"states";
         if (list.isUnique()) {
             for (list.items()) |item| {
@@ -2139,11 +2140,11 @@ pub fn decref__AnonStruct70(value: __AnonStruct70, roc_host: *RocHost) void {
 /// Increment Roc-owned fields in __AnonStruct70.
 pub fn incref__AnonStruct70(value: __AnonStruct70, amount: isize) void {
     value.@"event_ids".incref(amount);
+    value.@"event_keys_by_id".incref(amount);
     value.@"event_state_deps".incref(amount);
     value.@"previous_commands".incref(amount);
     increfElem(value.@"root", amount);
     value.@"signal_cache".incref(amount);
-    value.@"state_versions".incref(amount);
     value.@"states".incref(amount);
 }
 
@@ -2160,13 +2161,21 @@ pub fn incref__AnonStruct72(value: __AnonStruct72, amount: isize) void {
 /// Recursively decrement Roc-owned fields in __AnonStruct74.
 pub fn decref__AnonStruct74(value: __AnonStruct74, roc_host: *RocHost) void {
     value.@"event_key".decref(roc_host);
-    value.@"state_key".decref(roc_host);
+    {
+        const list = value.@"state_keys";
+        if (list.isUnique()) {
+            for (list.items()) |item| {
+                    item.decref(roc_host);
+            }
+        }
+        list.decref(roc_host);
+    }
 }
 
 /// Increment Roc-owned fields in __AnonStruct74.
 pub fn incref__AnonStruct74(value: __AnonStruct74, amount: isize) void {
     value.@"event_key".incref(amount);
-    value.@"state_key".incref(amount);
+    value.@"state_keys".incref(amount);
 }
 
 /// Recursively decrement Roc-owned fields in __AnonStruct76.
