@@ -945,16 +945,16 @@ pub const ReportBuilder = struct {
         // Collect the value's fields that the pattern doesn't bind.
         var unmatched_buf: [16]Ident.Idx = undefined;
         var unmatched_len: usize = 0;
-        for (value_names) |vn| {
+        for (value_names) |value_name| {
             var found = false;
-            for (pattern_names) |pn| {
-                if (vn.eql(pn)) {
+            for (pattern_names) |pattern_name| {
+                if (value_name.eql(pattern_name)) {
                     found = true;
                     break;
                 }
             }
             if (!found and unmatched_len < unmatched_buf.len) {
-                unmatched_buf[unmatched_len] = vn;
+                unmatched_buf[unmatched_len] = value_name;
                 unmatched_len += 1;
             }
         }
