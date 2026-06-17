@@ -3125,15 +3125,6 @@ fn reportPolymorphicTopLevelValues(self: *Self) std.mem.Allocator.Error!void {
         // `requires` type unifies it to a concrete type anyway.)
         if (self.varIsFunctionType(def_var)) continue;
 
-        // A generalized annotated value is a scheme, not an unresolved
-        // polymorphic value: its free variable is quantified and any
-        // static-dispatch constraint rides along as a scheme constraint (like a
-        // function `where` clause), so skip the POLYMORPHIC VALUE error. Sound at
-        // top level because after generalization every def var is generalized or
-        // concrete — none can escape to an outer rank. Uses the same predicate as
-        // the generalization decision (checkExpr) so the two never diverge.
-        if (self.isGeneralizableValueBinding(def.annotation, true)) continue;
-
         self.var_set.clearRetainingCapacity();
         if (!try self.varHasUnresolvedStaticDispatchConstraints(def_var, &self.var_set)) continue;
 
