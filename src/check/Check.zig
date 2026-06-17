@@ -5798,12 +5798,12 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
     // generalized scheme (e.g. `shorthand = FooBar.myfunc`). Such a reference is
     // non-expansive: it performs no work and can hide no `dbg`/`expect`, so it
     // raises none of the duplicate-work or duplicate-effect concerns that motivate
-    // restricting generalization to syntactic functions. In practice the only
-    // generalized schemes are functions (numeric literals use the separate
-    // defaulting path), so this never re-generalizes numbers or tag unions. We
-    // restrict this to binding-RHS position so that bare lookups appearing as
-    // arbitrary subexpressions don't pay generalization cost or get generalized
-    // out from under their surrounding context.
+    // restricting generalization to syntactic functions. The referenced scheme is
+    // a generalized function or annotated value (numeric literals use the separate
+    // defaulting path), never a bare number or tag union. We restrict this to
+    // binding-RHS position so that bare lookups appearing as arbitrary
+    // subexpressions don't pay generalization cost or get generalized out from
+    // under their surrounding context.
     const is_value_alias = is_binding_rhs and
         (expr == .e_lookup_local or expr == .e_lookup_external);
     // An annotated value binding generalizes to its scheme; the polymorphic
