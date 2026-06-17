@@ -194,9 +194,6 @@ pub const TypoSuggestion = struct {
     pub const ArrayList = std.array_list.Managed(Self);
 };
 
-/// Find the best typo suggestions from a slice of identifier indices.
-///
-/// This clobbers `suggestions` and writes suggestions sorted by rank
 /// Like `findBestTypoSuggestion`, but ignores any candidate that also appears in
 /// `exclude` (e.g. fields already matched between the two records). Such fields
 /// are real and present, so they should never be proposed as the typo source.
@@ -228,6 +225,9 @@ fn findBestTypoSuggestionExcluding(
     return best;
 }
 
+/// Find the best typo suggestions from a slice of identifier indices.
+///
+/// This clobbers `suggestions` and writes suggestions sorted by rank
 pub fn findBestTypoSuggestions(
     typo: Ident.Idx,
     candidates: []const Ident.Idx,
