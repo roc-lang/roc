@@ -1,19 +1,137 @@
 # Types
 
+Roc is statically typed, and types are inferred — you rarely have to write them,
+but you can, and any annotation you write is checked.
+
 ## Roc's Type System
 
-- no hkp
-- rank-1
+Roc uses Hindley–Milner type inference with a few deliberate restrictions:
+
+- **Rank-1.** Quantification happens once per definition, at the outermost
+  level. A definition can be polymorphic (`identity : a -> a`), but a function
+  argument is used at a single type. I.E. you can't take an `(a -> a)` argument
+  and apply it at several element types within one call (that needs rank-2).
+- **No higher-kinded polymorphism.** Type variables range over types
+  (`Str`, `List(U64)`), never over type constructors — you can't abstract over
+  `List` itself, as in `f : m(a) -> m(b)`.
+- **No subtyping.** Types relate by unification, not a sub/supertype lattice.
+  The width flexibility of records and tag unions is expressed with extension
+  variables (see [Structural Types](#structural-types)), not subtyping.
+
+### Generalization
+
+A definition is *generalized* — made reusable at many types — only in these
+cases:
+
+- **Functions** are always generalized; each call site is checked at its own
+  types.
+- **Number literals** default rather than generalize: an unsuffixed literal
+  resolves to a concrete type, ultimately falling back to `Dec`. See
+  [numbers](numbers.md).
+- **An explicitly annotated value** is generalized to its annotated scheme.
+  Annotating a value with a free type variable opts into a type scheme, so
+  the binding is generalized to it (`empty : List(a)` is then reusable at any
+  `a`). Note that we report an error for top-level values with free vars, so in
+  practice the only only applies to let-defs.
+- **A value alias** — a binding whose right-hand side is a bare reference to an
+  already-generalized binding (`shorthand = Foo.my_func`) — stays generalized,
+  since copying a reference does no work and so is safe to reuse at many types.
+
+Every other value is monomorphic: one type, fixed by its definition and uses.
+This is what stops a value (or its `dbg`/`expect`) from being silently
+recomputed at each type it might otherwise take.
+
+A mutable variable (`var`) is never generalized, even with an annotation: it has
+a single type, fixed by its first use. This is the value restriction in its
+original, soundness role — a polymorphic mutable cell could be written at one
+type and read back at another, so a `var` is always monomorphic.
 
 ## Type Annotations
 
+Annotate a definition by writing `name : Type` above it. Lowercase names in a
+type are type variables; repeating a name means the same type.
+
+```roc
+greeting : Str
+greeting = "hello"
+
+identity : a -> a
+identity = |x| x
+```
+
+Capitalized declarations introduce *types* rather than values — see
+[Nominal Types](#nominal-types) (`:=`) and [Type Aliases](#type-aliases) (`:`).
+
 ### Where Clauses
+
+A `where` clause lists the [methods](static-dispatch.md) a type variable must
+provide. Each constraint has the form `var.method : signature`:
+
+```roc
+join : List(a) -> Str where [a.to_str : a -> Str]
+```
+
+A `where` clause can appear on any annotation, including a value's:
+
+```roc
+items : List(a) where [a.to_str : a -> Str]
+items = []
+```
 
 ## Structural Types
 
+Structural types are defined by their shape: two of them are the same type when
+their shapes match, with no declaration required.
+
+- **Records** — `{ name : Str, age : U64 }`. See [records](records.md).
+- **Tag unions** — `[Ok(a), Err(e)]`. See [tag unions](tag-unions.md).
+- **Tuples** — `(Str, U64)`. See [tuples](tuples.md).
+
+Records and tag unions are either **closed** (exactly the listed fields or tags)
+or **open**, ending in an extension variable that stands for "and possibly
+more":
+
+```roc
+{ name : Str, .. }     # any record with at least a `name : Str` field
+{ name : Str, ..r }    # the same, naming the rest `r`
+[Red, Green, ..]       # this union, or any wider one
+[Red, Green, ..u]      # the same, naming the rest `u`
+```
+
+An anonymous extension (`..`) is a fresh variable each time; a named one (`..r`)
+lets you refer to the same "rest" in more than one place.
+
 ## Nominal Types
 
+A nominal type is a distinct type with its own identity, declared with `:=`:
+
+```roc
+UserId := U64
+```
+
+`UserId` and `U64` share a representation but are different types — unification
+will not silently mix them. Nominal types may take parameters (`Tree(a) := …`)
+and define associated methods in a trailing `.{ }` block.
+
 ### Constructing Nominal Types
+
+You construct a nominal value by writing its backing value where the nominal
+type is expected; the annotation (or surrounding context) supplies the identity.
+
+```roc
+Color := [Red, Green, Blue]
+Point := { x : F64, y : F64 }
+UserId := U64
+
+c : Color
+c = Red               # or `Color.Red`; tags with payloads use `Color.Tag(payload)`
+
+p : Point
+p = { x: 1, y: 2 }    # a bare record literal becomes a Point here
+
+uid : UserId
+uid = 0               # a bare U64 becomes a UserId here
+```
 
 ### Destructuring Nominal Types
 
@@ -42,6 +160,17 @@ get_x = |{ x }| x
 ```
 
 ### Opaque Nominal Types
+
+Declaring with `::` instead of `:=` makes a nominal type *opaque*: outside its
+defining module the backing representation is hidden, so the type can only be
+created and inspected through the methods that module exposes.
+
+```roc
+Token :: Str         # other modules see `Token`, never the `Str` inside
+```
+
+Inside the defining module an opaque type is constructed and destructured just
+like any nominal type; the restriction applies only to other modules.
 
 ### Nested Nominal Types
 
@@ -73,3 +202,16 @@ rect = Geometry.Rectangle.{ top_left: Geometry.Point.origin, bottom_right: { x: 
 This is useful for grouping related types under a common namespace.
 
 ## Type Aliases
+
+A type alias names an existing type with `:` (not `:=`). Aliases are transparent
+— substituted away during compilation — so an alias and its definition are the
+*same* type and interchange freely:
+
+```roc
+Bytes : List(U8)
+Pair : (U64, U64)
+```
+
+Reach for an alias when you only want a shorter or clearer name; reach for a
+[nominal type](#nominal-types) when you want a genuinely distinct type the
+compiler keeps separate.
