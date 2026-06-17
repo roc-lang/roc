@@ -954,30 +954,104 @@ the format can only know while processing bytes or values, such as a malformed
 header line, invalid JSON syntax, invalid UTF-8 in a byte input, or a
 user-defined nominal method returning an error.
 
-Record and tag-union specs are opaque compiler values. They describe the
-concrete structural shape being derived: field names, field slots, tag names,
-payload shapes, and the concrete field/payload result positions. They are not
-arity-specific user APIs. There are no `Record4`-style variants, and no
-userspace code constructs or pattern matches on these specs. The compiler
-specializes every use with the concrete record or tag-union type, so opaque spec
-operations lower to direct field and tag code.
+Tag-union specs are opaque compiler values. They describe the concrete
+structural shape being derived: tag names, payload shapes, and the concrete
+payload result positions. They are not arity-specific user APIs, and userspace
+code does not construct or pattern match on them. The compiler specializes every
+use with the concrete tag-union type, so opaque spec operations lower to direct
+tag code.
 
 Userspace format code operates through safe Roc values, opaque specs, and
 slice-returning string/list APIs. The compiler does not expose raw field-slot
 indices, unsafe byte indexing, or unchecked memory primitives as part of the
 serialization method surface.
 
-Record parsing lets a format perform one scan when that is the best
-implementation. A format's record method receives the complete record spec
-before inspecting the input. It initializes a compiler-generated record state,
-scans the input once, and writes each matched value state into the appropriate
-slot. After the scan, it finishes the record state. Required fields that were
-not filled produce the format's required-field error. Optional fields are
-expressed by their field type, for example `Try(Str, [Missing])`; `Missing` is
-an ordinary userspace tag carried by the format's absence state and field type,
-not a compiler-known concept.
+Record parsing is driven by the compiler-generated structural `parse_from`
+method. The format exposes a method that parses the next record field event from
+its current state:
 
-Tag-union parsing follows the same rule. The format's tag-union method receives
+```roc
+fmt.parse_record_field : fmt -> Try(
+    [
+        Field({ name : Str, value : fmt, rest : fmt }),
+        End({ rest : fmt, missing : err }),
+    ],
+    err,
+)
+```
+
+`Field.name` is the input key after conversion to Roc record-field-name form,
+such as `cache_control` for an HTTP `Cache-Control` header. `Field.value` is the
+format state used to parse that field's value if the generated record dispatcher
+matches the name to a field in the target record. `Field.rest` is the state from
+which the next record field event should be parsed. `End.rest` is the state
+remaining after the record ends, and `End.missing` is the format-defined error
+value used if a required field was not present.
+
+The compiler owns the record loop, the field-name dispatch, the per-field
+missing/present state, and final record construction. Unknown fields are ignored
+by the generated dispatcher after the format has consumed enough input to return
+`Field.rest`. Required fields that were not filled produce the format's
+required-field error. Optional fields are expressed by their field type, for
+example `Try(Str, [Missing])`; `Missing` is an ordinary userspace tag carried by
+the format's absence state and field type, not a compiler-known concept.
+
+Record-key dispatch is optimized around the assumption that serialized record
+field names are overwhelmingly small. JSON object keys, HTTP headers, CSV
+column names, XML attributes, environment variables, and similar schema fields
+are expected to land in Roc's small-string representation almost all the time on
+64-bit targets, and still most of the time on 32-bit targets. The optimization
+strategy treats this as the hot path, not as a correctness requirement: long
+keys remain supported, but generated code is arranged so that small keys take
+the shortest route.
+
+Formats own conversion from input keys to record field names. HTTP header
+parsing may lowercase ASCII and map `-` to `_`; a JSON format may later choose
+to map `camelCase` input keys to `snake_case` record fields; the compiler does
+not know those policies. The format returns the converted key in each `Field`
+event, and the compiler-generated record dispatcher performs exact matching
+against the concrete record field names. Allocation-free formats must avoid heap
+allocation while converting keys. For the common small-key case this means
+producing an SSO `Str`. If record metadata proves a key cannot possibly match
+any field in this target record, the format may skip constructing a transformed
+heap string for that key and still return an ignored `Field` event or otherwise
+advance according to the format's rules. This is not a parse failure: for
+formats such as HTTP headers and JSON objects, unknown keys remain ordinary
+input according to that format's rules. If the target record actually contains a
+long field name, the long input key remains matchable. A general `Str -> Str`
+transformation is allowed to allocate when its result does not fit in SSO, so it
+is not the fallback for allocation-free long-key handling. Formats that promise
+zero allocation must either prove the transformed key fits in SSO before
+materializing it, or use a non-materializing comparison/hash path for long
+possible keys.
+
+For SSO converted keys, generated record dispatch compares the packed small
+string representation directly. Roc zeroes unused SSO bytes, so equality can use
+fixed-width word comparisons without masking garbage tail bytes. On 64-bit
+targets, the generated dispatcher groups fields into 1-8, 9-16, and 17-24 byte
+size classes; on 32-bit targets, the groups are scaled to that target's smaller
+SSO capacity. The group selection can be implemented with a branchless or
+near-branchless table lookup instead of a source-level length switch.
+
+Within each size class, the compiler chooses the most discriminating word lane
+for the concrete field set. For example, if several fields share the same first
+eight bytes, the generated code can use the second or third word as the first
+comparison instead. The hot miss path compares one machine word per candidate in
+that class. Only after a discriminator hit does the code verify the full SSO key
+with one, two, or three word comparisons and write the matched value state into
+the corresponding slot. Collision-heavy classes may use another discriminating
+lane or a generated perfect hash over the packed SSO words before final
+verification.
+
+This keeps the performance center on the common case: no heap allocation, no
+runtime field map, no interpretation of a record plan, and no byte-by-byte
+string comparison unless the selected format's field-name conversion itself
+requires it. Long-key paths must preserve the same public semantics and memory
+invariants. If a format must handle long transformed keys without allocation,
+that path must avoid constructing a transformed heap `Str`; it is not allowed to
+make the SSO path slower for the sake of generality.
+
+Tag-union parsing follows the same separation. The format's tag-union method receives
 the complete tag spec, identifies the input tag according to that format's own
 rules, and uses opaque spec operations to parse and assemble the selected
 payload. Recursive tag unions are ordinary recursive method calls through the
@@ -986,9 +1060,11 @@ requirements; it does not know any format-specific tag representation.
 
 The generated code uses direct static calls. It does not pass user callbacks,
 does not build a runtime interpretation plan, and does not route shape handling
-through a central dispatch function. Generic userspace format code calls opaque
-record and tag spec operations, but those operations are compiler primitives
-specialized for the concrete shape and lower to direct code.
+through a central dispatch function. Generic userspace format code produces
+record field events and calls opaque tag spec operations. The record loop and
+field dispatch are compiler-generated for the concrete shape; tag spec
+operations are compiler primitives specialized for the concrete tag-union shape
+and lower to direct code.
 
 Input formats return seamless slices whenever the value being produced is a
 slice of the original input. Parsing a `Str` from a larger `Str` or validated
@@ -999,19 +1075,20 @@ string bytes from `List(U8)`, while `Json.parse` starts from an already-valid
 first and keep it alive for the duration of the request.
 
 The HTTP header format receives only the raw header section, starting at the
-first header line and ending before the blank line. Its record method scans
-CRLF-delimited lines once. Each non-empty line must contain `:`; otherwise the
-method returns the header format's bad-header error. Header names are matched to
-record field names in userspace by case-insensitive ASCII segment comparison,
-with `-` in header names corresponding to `_` in Roc field names. Header values
-are trimmed and passed to field parsing as seamless `Str` slices. The format
-does not allocate a header map.
+first header line and ending before the blank line. Its record-field method
+parses one CRLF-delimited line at a time. Each non-empty line must contain `:`;
+otherwise the method returns the header format's bad-header error. Header names
+are converted to record-field-name form in userspace by ASCII lowercasing and
+mapping `-` to `_`; the compiler-generated record dispatcher then exact-matches
+that converted name against the target record fields. Header values are trimmed
+and passed to field parsing as seamless `Str` slices. The format does not
+allocate a header map.
 
 The JSON `Str` format receives valid UTF-8 text. The JSON `Utf8` format receives
 bytes and validates UTF-8 before producing any `Str`. JSON record parsing scans
-an object once and routes fields through the record spec, so object key order
-does not affect performance beyond normal key matching. JSON tag unions use the
-externally tagged object representation:
+an object one field event at a time through the compiler-generated record loop,
+so object key order does not affect performance beyond normal key matching.
+JSON tag unions use the externally tagged object representation:
 
 ```json
 { "Admin": { "name": "Sam" } }

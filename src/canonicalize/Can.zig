@@ -888,8 +888,6 @@ fn populateBuiltinAutoImportedTypes(
     // Ident.Idx values are not transferable between stores.
     const builtin_types = .{
         .{ "Bool", builtin_indices.bool_type, builtin_indices.bool_ident },
-        .{ "ParseRecordSpec", builtin_indices.parse_record_spec_type, builtin_indices.parse_record_spec_ident },
-        .{ "ParseRecordState", builtin_indices.parse_record_state_type, builtin_indices.parse_record_state_ident },
         .{ "ParseTagUnionSpec", builtin_indices.parse_tag_union_spec_type, builtin_indices.parse_tag_union_spec_ident },
         .{ "Try", builtin_indices.try_type, builtin_indices.try_ident },
         .{ "Dict", builtin_indices.dict_type, builtin_indices.dict_ident },
@@ -945,8 +943,6 @@ pub fn populateModuleEnvs(
 ) Allocator.Error!void {
     const builtin_types = .{
         .{ "Bool", builtin_indices.bool_type, builtin_indices.bool_ident },
-        .{ "ParseRecordSpec", builtin_indices.parse_record_spec_type, builtin_indices.parse_record_spec_ident },
-        .{ "ParseRecordState", builtin_indices.parse_record_state_type, builtin_indices.parse_record_state_ident },
         .{ "ParseTagUnionSpec", builtin_indices.parse_tag_union_spec_type, builtin_indices.parse_tag_union_spec_ident },
         .{ "Try", builtin_indices.try_type, builtin_indices.try_ident },
         .{ "Dict", builtin_indices.dict_type, builtin_indices.dict_ident },
@@ -1014,7 +1010,7 @@ pub fn setupAutoImportedBuiltinTypes(
         builtin_ident,
     );
 
-    const builtin_types = [_][]const u8{ "Bool", "ParseRecordSpec", "ParseRecordState", "ParseTagUnionSpec", "Try", "Dict", "Set", "Str", "Iter", "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec", "F32", "F64", "Numeral" };
+    const builtin_types = [_][]const u8{ "Bool", "ParseTagUnionSpec", "Try", "Dict", "Set", "Str", "Iter", "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec", "F32", "F64", "Numeral" };
     for (builtin_types) |type_name_text| {
         const type_ident = try env.insertIdent(base.Ident.for_text(type_name_text));
         if (self.builtin_auto_imported_types.get(type_ident)) |type_entry| {

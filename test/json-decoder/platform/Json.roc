@@ -1,6 +1,6 @@
 DecodeErr := [MissingRequired, InvalidJson].{}
 
-JsonFormat :: [Input(Str), Value(Str)].{
+JsonFormat :: [Input(Str), Object(Str), Value(Str)].{
 	parse_str : JsonFormat -> Try({ value : Str, rest : JsonFormat }, DecodeErr)
 	parse_str = |slot|
 		match slot {
@@ -14,19 +14,28 @@ JsonFormat :: [Input(Str), Value(Str)].{
 					Err(invalid_json)
 				}
 			}
+			Object(_) => Err(invalid_json)
 			Value(value) => Ok({ value, rest: Value("") })
 		}
 
-	parse_record : ParseRecordSpec(a), JsonFormat -> Try({ value : a, rest : JsonFormat }, DecodeErr)
-	parse_record = |spec, slot|
+	parse_record_field : JsonFormat -> Try(
+		[
+			Field({ name : Str, value : JsonFormat, rest : JsonFormat }),
+			End({ rest : JsonFormat, missing : DecodeErr }),
+		],
+		DecodeErr,
+	)
+	parse_record_field = |slot|
 		match slot {
 			Input(raw) => {
-				record_end = find_object_end(Str.trim_start(raw))?
-				value = parse_record_from_json(raw, spec, slot)?
-				after_record = Str.trim_start(record_end.after)
-
-				Ok({ value, rest: Input(after_record) })
+				trimmed = Str.trim_start(raw)
+				if Str.starts_with(trimmed, "{") {
+					parse_record_field_from_object(Str.trim_start(Str.drop_prefix(trimmed, "{")))
+				} else {
+					Err(invalid_json)
+				}
 			}
+			Object(raw) => parse_record_field_from_object(raw)
 			Value(_) => Err(invalid_json)
 		}
 
@@ -37,6 +46,7 @@ JsonFormat :: [Input(Str), Value(Str)].{
 				parsed = parse_tag_union_from_json(value, spec)?
 				Ok(parsed)
 			}
+			Object(_) => Err(invalid_json)
 			Value(_) => Err(invalid_json)
 		}
 }
@@ -46,7 +56,7 @@ Json :: [].{
 		parse_from : JsonFormat -> Try({ value : Token, rest : JsonFormat }, DecodeErr)
 		parse_from = |slot|
 			match slot {
-				Input(_) | Value(_) => Ok({ value: { raw: "custom-token" }, rest: Value("") })
+				Input(_) | Object(_) | Value(_) => Ok({ value: { raw: "custom-token" }, rest: Value("") })
 			}
 
 		count_utf8_bytes : Token -> U64
@@ -63,6 +73,7 @@ Json :: [].{
 
 		match parsed.rest {
 			Value(_) => Ok(parsed.value)
+			Object(_) => Err(invalid_json)
 			Input(rest) =>
 				if Str.is_empty(Str.trim_start(rest)) {
 					Ok(parsed.value)
@@ -76,81 +87,59 @@ Json :: [].{
 invalid_json : DecodeErr
 invalid_json = DecodeErr.InvalidJson
 
-parse_record_from_json : Str, ParseRecordSpec(a), JsonFormat -> Try(a, DecodeErr)
-parse_record_from_json = |raw, spec, slot| {
+parse_record_field_from_object : Str -> Try(
+	[
+		Field({ name : Str, value : JsonFormat, rest : JsonFormat }),
+		End({ rest : JsonFormat, missing : DecodeErr }),
+	],
+	DecodeErr,
+)
+parse_record_field_from_object = |raw| {
 	var $remaining = Str.trim_start(raw)
-	var $state = ParseRecordSpec.init(spec, slot)
-	var $keep_scanning = True
 
-	if Str.starts_with($remaining, "{") {
-		$remaining = Str.trim_start(Str.drop_prefix($remaining, "{"))
+	if Str.starts_with($remaining, "}") {
+		after_record = Str.trim_start(Str.drop_prefix($remaining, "}"))
+		return Ok(End({ rest: JsonFormat.Input(after_record), missing: DecodeErr.MissingRequired }))
+	}
+
+	if !Str.starts_with($remaining, "\"") {
+		return Err(invalid_json)
+	}
+
+	key_parts = split_json_string_tail(Str.drop_prefix($remaining, "\""))?
+	key = key_parts.value
+	after_key = Str.trim_start(key_parts.after)
+
+	if !Str.starts_with(after_key, ":") {
+		return Err(invalid_json)
+	}
+
+	after_colon = Str.trim_start(Str.drop_prefix(after_key, ":"))
+
+	value_and_after = if Str.starts_with(after_colon, "\"") {
+		value_parts = split_json_string_tail(Str.drop_prefix(after_colon, "\""))?
+		{ value: JsonFormat.Value(value_parts.value), after: Str.trim_start(value_parts.after) }
+	} else if Str.starts_with(after_colon, "{") {
+		end_parts = find_object_end(after_colon)?
+		{ value: JsonFormat.Input(after_colon), after: Str.trim_start(end_parts.after) }
 	} else {
 		return Err(invalid_json)
 	}
 
-	while $keep_scanning {
-		if Str.starts_with($remaining, "}") {
-			$keep_scanning = False
-		} else if Str.starts_with($remaining, "\"") {
-			key_split = split_json_string_tail(Str.drop_prefix($remaining, "\""))
-
-			match key_split {
-				Ok(key_parts) => {
-					key = key_parts.value
-					after_key = Str.trim_start(key_parts.after)
-
-					if Str.starts_with(after_key, ":") {
-						after_colon = Str.trim_start(Str.drop_prefix(after_key, ":"))
-
-						after_value = if Str.starts_with(after_colon, "\"") {
-							value_split = split_json_string_tail(Str.drop_prefix(after_colon, "\""))
-
-							match value_split {
-								Ok(value_parts) => {
-									$state = ParseRecordSpec.put(spec, $state, key, JsonFormat.Value(value_parts.value), Str.is_eq)
-									Str.trim_start(value_parts.after)
-								}
-								Err(_) => {
-									return Err(invalid_json)
-								}
-							}
-						} else if Str.starts_with(after_colon, "{") {
-							object_end = find_object_end(after_colon)
-
-							match object_end {
-								Ok(end_parts) => {
-									$state = ParseRecordSpec.put(spec, $state, key, JsonFormat.Input(after_colon), Str.is_eq)
-									Str.trim_start(end_parts.after)
-								}
-								Err(_) => {
-									return Err(invalid_json)
-								}
-							}
-						} else {
-							return Err(invalid_json)
-						}
-
-						if Str.starts_with(after_value, ",") {
-							$remaining = Str.trim_start(Str.drop_prefix(after_value, ","))
-						} else if Str.starts_with(after_value, "}") {
-							$keep_scanning = False
-						} else {
-							return Err(invalid_json)
-						}
-					} else {
-						return Err(invalid_json)
-					}
-				}
-				Err(_) => {
-					return Err(invalid_json)
-				}
-			}
+	next_remaining =
+		if Str.starts_with(value_and_after.after, ",") {
+			Str.trim_start(Str.drop_prefix(value_and_after.after, ","))
+		} else if Str.starts_with(value_and_after.after, "}") {
+			value_and_after.after
 		} else {
 			return Err(invalid_json)
 		}
-	}
 
-	ParseRecordSpec.finish(spec, $state, DecodeErr.MissingRequired)
+	Ok(Field({
+		name: key,
+		value: value_and_after.value,
+		rest: JsonFormat.Object(next_remaining),
+	}))
 }
 
 parse_tag_union_from_json : Str, ParseTagUnionSpec(a) -> Try({ value : a, rest : JsonFormat }, DecodeErr)

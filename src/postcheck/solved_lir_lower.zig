@@ -3697,8 +3697,6 @@ const Lowerer = struct {
             .dec => .dec,
             .list,
             .box,
-            .parse_record_spec,
-            .parse_record_state,
             .parse_tag_union_spec,
             => null,
         };

@@ -26,9 +26,6 @@ pub fn isIntrinsicAnnotation(env: *const ModuleEnv, ident: base.Ident.Idx) bool 
     }
 
     const parse_intrinsics = [_][]const u8{
-        "Builtin.ParseRecordSpec.init",
-        "Builtin.ParseRecordSpec.put",
-        "Builtin.ParseRecordSpec.finish",
         "Builtin.ParseTagUnionSpec.parse",
     };
     for (parse_intrinsics) |name| {

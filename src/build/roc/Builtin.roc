@@ -1,16 +1,4 @@
 Builtin :: [].{
-	# Compiler-generated structural parsing specs. These are opaque handles used
-	# by derived `parse_from` methods; users should not construct them directly.
-	ParseRecordSpec(_shape) :: {}.{
-		init : ParseRecordSpec(_shape), _fmt -> ParseRecordState(_shape, _fmt)
-
-		put : ParseRecordSpec(_shape), ParseRecordState(_shape, _fmt), Str, _fmt, (Str, Str -> Bool) -> ParseRecordState(_shape, _fmt)
-
-		finish : ParseRecordSpec(_shape), ParseRecordState(_shape, _fmt), _err -> Try(_shape, _err)
-	}
-
-	ParseRecordState(_shape, _fmt) :: {}.{}
-
 	ParseTagUnionSpec(_shape) :: {}.{
 		parse : ParseTagUnionSpec(_shape), Str, _fmt, (Str, Str -> Bool), _err -> Try(_shape, _err)
 	}

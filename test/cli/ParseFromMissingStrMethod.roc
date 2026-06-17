@@ -1,8 +1,14 @@
 ParseFromMissingStrMethod :: [].{}
 
 Format := [Present(Str)].{
-	parse_record : ParseRecordSpec(a), Format -> Try({ value : a, rest : Format }, [MissingRequired])
-	parse_record = |_, _| Err(MissingRequired)
+	parse_record_field : Format -> Try(
+		[
+			Field({ name : Str, value : Format, rest : Format }),
+			End({ rest : Format, missing : [MissingRequired] }),
+		],
+		[MissingRequired],
+	)
+	parse_record_field = |_| Err(MissingRequired)
 
 	parse_tag_union : ParseTagUnionSpec(a), Format -> Try({ value : a, rest : Format }, [MissingRequired])
 	parse_tag_union = |_, _| Err(MissingRequired)

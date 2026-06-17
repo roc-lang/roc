@@ -1165,7 +1165,7 @@ const BuiltinNominalDecl = union(enum) {
 
 const BuiltinParseSpecDecl = enum {
     str,
-    record,
+    record_field,
     tag_union,
 };
 
@@ -1319,11 +1319,10 @@ fn sourceDeclForBuiltinParseSpec(self: *const Self, decl: BuiltinParseSpecDecl) 
     if (!self.isCheckingBuiltinModuleDirectly() and self.builtin_ctx.builtin_indices != null) {
         const indices = self.builtin_ctx.builtin_indices.?;
         const stmt_idx = switch (decl) {
-            .record => indices.parse_record_spec_type,
             .tag_union => indices.parse_tag_union_spec_type,
-            .str => {
+            .str, .record_field => {
                 if (builtin.mode == .Debug) {
-                    std.debug.panic("type checker invariant violated: Str parsing does not have a builtin parse spec declaration", .{});
+                    std.debug.panic("type checker invariant violated: this parse method does not have a builtin parse spec declaration", .{});
                 }
                 unreachable;
             },
@@ -1341,11 +1340,10 @@ fn sourceDeclForBuiltinParseSpec(self: *const Self, decl: BuiltinParseSpecDecl) 
     }
 
     const ident = switch (decl) {
-        .record => self.cir.idents.builtin_parse_record_spec,
         .tag_union => self.cir.idents.builtin_parse_tag_union_spec,
-        .str => {
+        .str, .record_field => {
             if (builtin.mode == .Debug) {
-                std.debug.panic("type checker invariant violated: Str parsing does not have a builtin parse spec declaration", .{});
+                std.debug.panic("type checker invariant violated: this parse method does not have a builtin parse spec declaration", .{});
             }
             unreachable;
         },
@@ -2067,11 +2065,10 @@ fn mkParseSpecVar(
     region: Region,
 ) Allocator.Error!Var {
     const ident_idx = switch (decl) {
-        .record => self.cir.idents.builtin_parse_record_spec,
         .tag_union => self.cir.idents.builtin_parse_tag_union_spec,
-        .str => {
+        .str, .record_field => {
             if (builtin.mode == .Debug) {
-                std.debug.panic("type checker invariant violated: Str parsing does not have a builtin parse spec declaration", .{});
+                std.debug.panic("type checker invariant violated: this parse method does not have a builtin parse spec declaration", .{});
             }
             unreachable;
         },
@@ -13184,6 +13181,61 @@ fn freshParseResultOkVar(
     } } }, env, region);
 }
 
+fn freshParseRecordFieldEventVar(
+    self: *Self,
+    slot_var: Var,
+    err_var: Var,
+    env: *Env,
+    region: Region,
+) Allocator.Error!Var {
+    const missing_name = try @constCast(self.cir).insertIdent(base.Ident.for_text("missing"));
+    const name_name = try @constCast(self.cir).insertIdent(base.Ident.for_text("name"));
+    const rest_name = try @constCast(self.cir).insertIdent(base.Ident.for_text("rest"));
+    const value_name = try @constCast(self.cir).insertIdent(base.Ident.for_text("value"));
+
+    const str_var = try self.freshStr(env, region);
+    const field_record_ext = try self.freshFromContent(.{ .structure = .empty_record }, env, region);
+    const field_record_fields = [_]types_mod.RecordField{
+        .{ .name = name_name, .var_ = str_var },
+        .{ .name = rest_name, .var_ = slot_var },
+        .{ .name = value_name, .var_ = slot_var },
+    };
+    const field_record = try self.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = try self.types.appendRecordFields(&field_record_fields),
+        .ext = field_record_ext,
+    } } }, env, region);
+
+    const end_record_ext = try self.freshFromContent(.{ .structure = .empty_record }, env, region);
+    const end_record_fields = [_]types_mod.RecordField{
+        .{ .name = missing_name, .var_ = err_var },
+        .{ .name = rest_name, .var_ = slot_var },
+    };
+    const end_record = try self.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = try self.types.appendRecordFields(&end_record_fields),
+        .ext = end_record_ext,
+    } } }, env, region);
+
+    const end_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text("End"));
+    const field_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text("Field"));
+    const tags = [_]types_mod.Tag{
+        try self.types.mkTag(end_ident, &.{end_record}),
+        try self.types.mkTag(field_ident, &.{field_record}),
+    };
+    const ext_var = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, region);
+    return try self.freshFromContent(try self.types.mkTagUnion(&tags, ext_var), env, region);
+}
+
+fn freshParseRecordFieldTryVar(
+    self: *Self,
+    slot_var: Var,
+    err_var: Var,
+    env: *Env,
+    region: Region,
+) Allocator.Error!Var {
+    const event_var = try self.freshParseRecordFieldEventVar(slot_var, err_var, env, region);
+    return try self.freshFromContent(try self.mkTryContent(event_var, err_var, env), env, region);
+}
+
 const DerivedParseContext = enum {
     shape,
     record_field,
@@ -13197,7 +13249,7 @@ const ParseFormatMethodVar = struct {
 fn parseFormatMethodName(self: *Self, decl: BuiltinParseSpecDecl) Allocator.Error!Ident.Idx {
     const text = switch (decl) {
         .str => "parse_str",
-        .record => "parse_record",
+        .record_field => "parse_record_field",
         .tag_union => "parse_tag_union",
     };
     return try @constCast(self.cir).insertIdent(base.Ident.for_text(text));
@@ -13279,12 +13331,16 @@ fn validateParseFormatMethod(
 ) Allocator.Error!bool {
     const method_name = try self.parseFormatMethodName(spec_decl);
     const method = try self.parseFormatMethodVarForSlot(slot_var, method_name, env, region) orelse return false;
-    const expected_ret = try self.freshParseResultTryVar(shape_var, slot_var, err_var, env, region);
-    const expected_fn = if (spec_decl == .str) blk: {
-        break :blk try self.freshFromContent(try self.types.mkFuncUnbound(&.{slot_var}, expected_ret), env, region);
-    } else blk: {
-        const spec_var = try self.mkParseSpecVar(spec_decl, shape_var, env, region);
-        break :blk try self.freshFromContent(try self.types.mkFuncUnbound(&.{ spec_var, slot_var }, expected_ret), env, region);
+    const expected_ret = switch (spec_decl) {
+        .str, .tag_union => try self.freshParseResultTryVar(shape_var, slot_var, err_var, env, region),
+        .record_field => try self.freshParseRecordFieldTryVar(slot_var, err_var, env, region),
+    };
+    const expected_fn = switch (spec_decl) {
+        .str, .record_field => try self.freshFromContent(try self.types.mkFuncUnbound(&.{slot_var}, expected_ret), env, region),
+        .tag_union => blk: {
+            const spec_var = try self.mkParseSpecVar(spec_decl, shape_var, env, region);
+            break :blk try self.freshFromContent(try self.types.mkFuncUnbound(&.{ spec_var, slot_var }, expected_ret), env, region);
+        },
     };
     const result = try self.unifyInContext(method.var_, expected_fn, env, .{
         .method_type = .{
@@ -13321,7 +13377,7 @@ fn validateDerivedParseVar(
                 try visited.put(resolved.var_, {});
                 break :blk try self.validateDerivedParseTagUnion(var_, tag_union, slot_var, err_var, constraint, env, region, visited);
             },
-            .empty_record => try self.validateParseFormatMethod(slot_var, var_, .record, err_var, env, region),
+            .empty_record => try self.validateParseFormatMethod(slot_var, var_, .record_field, err_var, env, region),
             .empty_tag_union => false,
             else => false,
         },
@@ -13343,7 +13399,7 @@ fn validateDerivedParseRecord(
     visited: *std.AutoHashMap(Var, void),
 ) Allocator.Error!bool {
     const fields = self.types.getRecordFieldsSlice(fields_range);
-    if (!try self.validateParseFormatMethod(slot_var, record_var, .record, err_var, env, region)) {
+    if (!try self.validateParseFormatMethod(slot_var, record_var, .record_field, err_var, env, region)) {
         return false;
     }
     for (fields.items(.var_)) |field_var| {
