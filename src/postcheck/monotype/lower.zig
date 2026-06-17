@@ -277,7 +277,6 @@ const LoweredCall = struct {
 };
 
 const DecoderIntrinsic = enum {
-    str_parse,
     record_init,
     record_put,
     record_finish,
@@ -1374,14 +1373,12 @@ const Builder = struct {
                             if (nominal.args.len != 1) Common.invariant("checked Box nominal must have exactly one type argument");
                             break :blk .{ .box = try self.lowerType(view, nominal.args[0]) };
                         },
-                        .parse_str_spec,
                         .parse_record_spec,
                         .parse_tag_union_spec,
                         => {},
                         .parse_record_state => {
                             if (nominal.args.len != 2) Common.invariant("checked ParseRecordState nominal must have exactly two type arguments");
                             const shape_ty = try self.lowerType(view, nominal.args[0]);
-                            const slot_ty = try self.lowerType(view, nominal.args[1]);
                             const fields_span = switch (self.shapeContent(shape_ty)) {
                                 .record => |fields| fields,
                                 .zst => Type.Span.empty(),
@@ -1390,7 +1387,11 @@ const Builder = struct {
                             const fields = self.program.types.fieldSpan(fields_span);
                             const slots = try self.allocator.alloc(Type.TypeId, fields.len);
                             defer self.allocator.free(slots);
-                            @memset(slots, slot_ty);
+                            if (fields.len > 0) {
+                                const fmt_ty = try self.lowerType(view, nominal.args[1]);
+                                const state_slot_ty = try self.parseRecordStateSlotType(fmt_ty);
+                                @memset(slots, state_slot_ty);
+                            }
                             break :blk .{ .tuple = try self.program.types.addSpan(slots) };
                         },
                     },
@@ -1469,6 +1470,25 @@ const Builder = struct {
             .func => |func| .{ .args = func.args, .ret = func.ret },
             else => Common.invariant(message),
         };
+    }
+
+    fn parseRecordStateSlotType(self: *Builder, fmt_ty: Type.TypeId) Allocator.Error!Type.TypeId {
+        const missing_name = try self.program.names.internTagLabel("Missing");
+        const present_name = try self.program.names.internTagLabel("Present");
+        const present_payloads = try self.program.types.addSpan(&.{fmt_ty});
+        const tags = [_]Type.Tag{
+            .{
+                .name = missing_name,
+                .checked_name = missing_name,
+                .payloads = Type.Span.empty(),
+            },
+            .{
+                .name = present_name,
+                .checked_name = present_name,
+                .payloads = present_payloads,
+            },
+        };
+        return try self.program.types.add(.{ .tag_union = try self.program.types.addTags(&tags) });
     }
 
     fn tupleItemSpan(self: *Builder, ty: Type.TypeId) Type.Span {
@@ -3102,6 +3122,45 @@ const BodyContext = struct {
         return out;
     }
 
+    fn instParseRecordStateSlotNode(self: *BodyContext, fmt_node: NodeId) Allocator.Error!NodeId {
+        const missing_name = try self.builder.program.names.internTagLabel("Missing");
+        const present_name = try self.builder.program.names.internTagLabel("Present");
+        const present_payloads = try self.graph.arena().alloc(NodeId, 1);
+        present_payloads[0] = fmt_node;
+
+        const tags = try self.graph.arena().alloc(InstTag, 2);
+        tags[0] = .{
+            .name = missing_name,
+            .checked_name = missing_name,
+            .payloads = &.{},
+        };
+        tags[1] = .{
+            .name = present_name,
+            .checked_name = present_name,
+            .payloads = present_payloads,
+        };
+
+        return try self.graph.newNode(.{ .tag_union = .{
+            .tags = tags,
+            .ext = try self.graph.newNode(.empty_tag_union),
+        } });
+    }
+
+    fn instParseRecordStateFields(self: *BodyContext, shape_node: NodeId) []const InstField {
+        var current = shape_node;
+        while (true) {
+            switch (self.graph.content(current)) {
+                .record => |record| return record.fields,
+                .empty_record => return &.{},
+                .named => |named| {
+                    const backing = named.backing orelse Common.invariant("checked ParseRecordState shape argument was an opaque named type");
+                    current = backing.node;
+                },
+                else => Common.invariant("checked ParseRecordState shape argument was not a record type"),
+            }
+        }
+    }
+
     fn instNominalNode(
         self: *BodyContext,
         checked_ty: checked.CheckedTypeId,
@@ -3119,21 +3178,19 @@ const BodyContext = struct {
                     if (nominal.args.len != 1) Common.invariant("checked Box nominal must have exactly one type argument");
                     return try self.graph.newNode(.{ .box = try self.instNode(nominal.args[0]) });
                 },
-                .parse_str_spec,
                 .parse_record_spec,
                 .parse_tag_union_spec,
                 => {},
                 .parse_record_state => {
                     if (nominal.args.len != 2) Common.invariant("checked ParseRecordState nominal must have exactly two type arguments");
                     const shape_node = try self.instNode(nominal.args[0]);
-                    const slot_node = try self.instNode(nominal.args[1]);
-                    const fields = switch (self.graph.nodes.items[@intFromEnum(shape_node)]) {
-                        .record => |record| record.fields,
-                        .empty_record => &.{},
-                        else => Common.invariant("checked ParseRecordState shape argument was not a record type"),
-                    };
+                    const fields = self.instParseRecordStateFields(shape_node);
                     const slots = try self.graph.arena().alloc(NodeId, fields.len);
-                    @memset(slots, slot_node);
+                    if (fields.len > 0) {
+                        const fmt_node = try self.instNode(nominal.args[1]);
+                        const state_slot_node = try self.instParseRecordStateSlotNode(fmt_node);
+                        @memset(slots, state_slot_node);
+                    }
                     return try self.graph.newNode(.{ .tuple = slots });
                 },
             },
@@ -3709,7 +3766,6 @@ const BodyContext = struct {
         }
 
         return switch (intrinsic) {
-            .str_parse => try self.lowerDecoderStrDecode(call.args, arg_tys, ret_ty),
             .record_init => try self.lowerDecoderRecordInit(call.args, arg_tys, ret_ty),
             .record_put => try self.lowerDecoderRecordPut(call.args, arg_tys, ret_ty),
             .record_finish => try self.lowerDecoderRecordFinish(call.args, arg_tys, ret_ty),
@@ -3750,18 +3806,10 @@ const BodyContext = struct {
         expected_ret_ty: ?Type.TypeId,
     ) Allocator.Error!Type.TypeId {
         const derived = switch (intrinsic) {
-            .str_parse => blk: {
-                if (args.len != 3 or arg_tys.len != 3) Common.invariant("ParseStrSpec.parse reached Monotype with an unexpected arity");
-                if (expected_ret_ty) |expected| break :blk expected;
-                break :blk try self.lowerType(checked_ret_ty);
-            },
             .record_init => blk: {
                 if (args.len != 2 or arg_tys.len != 2) Common.invariant("ParseRecordSpec.init reached Monotype with an unexpected arity");
-                const fields = try self.decoderRecordFieldsFromSpecExpr(args[0]);
-                const slots = try self.allocator.alloc(Type.TypeId, fields.len);
-                defer self.allocator.free(slots);
-                @memset(slots, arg_tys[1]);
-                break :blk try self.builder.program.types.add(.{ .tuple = try self.builder.program.types.addSpan(slots) });
+                if (expected_ret_ty) |expected| break :blk expected;
+                break :blk try self.lowerType(checked_ret_ty);
             },
             .record_put => blk: {
                 if (args.len != 5 or arg_tys.len != 5) Common.invariant("ParseRecordSpec.put reached Monotype with an unexpected arity");
@@ -3921,7 +3969,6 @@ const BodyContext = struct {
             else => return null,
         };
         const text = view.module_env.getIdentText(ident);
-        if (Ident.textEql(text, "Builtin.ParseStrSpec.parse")) return .str_parse;
         if (Ident.textEql(text, "Builtin.ParseRecordSpec.init")) return .record_init;
         if (Ident.textEql(text, "Builtin.ParseRecordSpec.put")) return .record_put;
         if (Ident.textEql(text, "Builtin.ParseRecordSpec.finish")) return .record_finish;
@@ -3947,11 +3994,25 @@ const BodyContext = struct {
             Common.invariant("parse_from selected an unsupported shape");
 
         const parse_lookup = self.methodLookupForTypeName(slot_ty, method_name);
-        const parse_mono_ty = try self.methodTargetMonoTypeFromArgAtIndexAndRet(parse_lookup, 1, slot_ty, ret_ty);
+        const slot_arg_index: usize = if (Ident.textEql(selected.tag_text, "Str")) 0 else 1;
+        const parse_mono_ty = try self.methodTargetMonoTypeFromArgAtIndexAndRet(parse_lookup, slot_arg_index, slot_ty, ret_ty);
         const parse_fn = self.builder.functionShape(parse_mono_ty, "parse_from target method was not a function");
         const parse_arg_tys = self.builder.program.types.span(parse_fn.args);
-        if (parse_arg_tys.len != 2) Common.invariant("parse_from target method had an unexpected arity");
-        if (!self.sameType(parse_arg_tys[1], slot_ty)) Common.invariant("parse_from target slot type differed from input slot type");
+        if (Ident.textEql(selected.tag_text, "Str")) {
+            if (parse_arg_tys.len != 1) Common.invariant("parse_from target Str method had an unexpected arity");
+            if (!self.sameType(parse_arg_tys[0], slot_ty)) Common.invariant("parse_from target Str slot type differed from input slot type");
+
+            const parse_args = [_]Ast.ExprId{slot_expr};
+            return try self.builder.program.addExpr(.{
+                .ty = ret_ty,
+                .data = .{ .call_proc = .{
+                    .callee = .{ .func = try self.methodTargetCalleeWithMono(parse_lookup, parse_mono_ty) },
+                    .args = try self.builder.program.addExprSpan(&parse_args),
+                } },
+            });
+        }
+        if (parse_arg_tys.len != 2) Common.invariant("parse_from target structural method had an unexpected arity");
+        if (!self.sameType(parse_arg_tys[1], slot_ty)) Common.invariant("parse_from target structural slot type differed from input slot type");
 
         const spec_expr = try self.builder.program.addExpr(.{
             .ty = parse_arg_tys[0],
@@ -4083,25 +4144,6 @@ const BodyContext = struct {
         return try self.tryOk(try_ty, record_expr);
     }
 
-    fn lowerDecoderStrDecode(
-        self: *BodyContext,
-        args: []const checked.CheckedExprId,
-        arg_tys: []const Type.TypeId,
-        ret_ty: Type.TypeId,
-    ) Allocator.Error!Ast.ExprId {
-        if (args.len != 3 or arg_tys.len != 3) Common.invariant("ParseStrSpec.parse reached Monotype with an unexpected arity");
-        const ret_info = self.tryInfo(ret_ty);
-        if (!self.typeHasBuiltinOwner(ret_info.ok_ty, .str)) Common.invariant("ParseStrSpec.parse shape argument was not Str");
-
-        const spec_value = try self.lowerDecoderIntrinsicArgAtType(args[0], arg_tys[0]);
-        const slot_value = try self.lowerDecoderIntrinsicArgAtType(args[1], arg_tys[1]);
-        const missing_value = try self.lowerDecoderIntrinsicArgAtType(args[2], arg_tys[2]);
-        const missing_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), arg_tys[2]);
-        var decoded = try self.structuralDecoderFieldFromSlotTry(slot_value, arg_tys[1], ret_info.ok_ty, ret_ty, missing_local, arg_tys[2]);
-        decoded = try self.wrapLet(missing_local, arg_tys[2], missing_value, decoded, ret_ty);
-        return try self.wrapWildcardLet(arg_tys[0], spec_value, decoded, ret_ty);
-    }
-
     fn lowerDecoderRecordInit(
         self: *BodyContext,
         args: []const checked.CheckedExprId,
@@ -4113,21 +4155,27 @@ const BodyContext = struct {
         defer self.allocator.free(item_tys);
 
         const spec_value = try self.lowerDecoderIntrinsicArgAtType(args[0], arg_tys[0]);
-        const default_value = try self.lowerDecoderIntrinsicArgAtType(args[1], arg_tys[1]);
-        const default_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), arg_tys[1]);
+        const witness_value = try self.lowerDecoderIntrinsicArgAtType(args[1], arg_tys[1]);
 
         const items = try self.allocator.alloc(Ast.ExprId, item_tys.len);
         defer self.allocator.free(items);
         for (item_tys, 0..) |item_ty, index| {
-            if (!self.sameType(item_ty, arg_tys[1])) Common.invariant("ParseRecordState slot type did not match init default type");
-            items[index] = try self.builder.localExpr(default_local, item_ty);
+            const slot_info = self.parseRecordStateSlotInfo(item_ty);
+            if (!self.sameType(slot_info.present_payload_ty, arg_tys[1])) Common.invariant("ParseRecordState slot type did not match init format witness type");
+            items[index] = try self.builder.program.addExpr(.{
+                .ty = item_ty,
+                .data = .{ .tag = .{
+                    .name = slot_info.missing_tag.name,
+                    .payloads = try self.builder.program.addExprSpan(&[_]Ast.ExprId{}),
+                } },
+            });
         }
         const body = try self.builder.program.addExpr(.{
             .ty = ret_ty,
             .data = .{ .tuple = try self.builder.program.addExprSpan(items) },
         });
-        const with_default = try self.wrapLet(default_local, arg_tys[1], default_value, body, ret_ty);
-        return try self.wrapWildcardLet(arg_tys[0], spec_value, with_default, ret_ty);
+        const with_witness = try self.wrapWildcardLet(arg_tys[1], witness_value, body, ret_ty);
+        return try self.wrapWildcardLet(arg_tys[0], spec_value, with_witness, ret_ty);
     }
 
     fn lowerDecoderRecordPut(
@@ -4215,10 +4263,7 @@ const BodyContext = struct {
             const field_try_ty = try self.tryTypeLike(ret_ty, field.ty, ret_info.err_ty);
             field_try_tys[index] = field_try_ty;
             field_locals[index] = try self.builder.program.addLocal(self.builder.symbols.fresh(), field.ty);
-            field_tries[index] = if (self.typeHasBuiltinOwner(field.ty, .str) or self.tryStrOptionalInfo(field.ty) != null)
-                try self.structuralDecoderFieldFromSlotTry(slot_expr, state_items[index], field.ty, field_try_ty, missing_local, arg_tys[2])
-            else
-                try self.lowerParseValueFromSlot(field.ty, slot_expr, state_items[index], field_try_ty);
+            field_tries[index] = try self.parseRecordFieldFromStateSlot(slot_expr, state_items[index], field.ty, field_try_ty, missing_local, arg_tys[2]);
             out_fields[index] = .{
                 .name = field.name,
                 .value = try self.builder.localExpr(field_locals[index], field.ty),
@@ -4324,16 +4369,15 @@ const BodyContext = struct {
         state_local: Ast.LocalId,
         state_ty: Type.TypeId,
         item_tys: []const Type.TypeId,
-        slot_local: Ast.LocalId,
-        slot_ty: Type.TypeId,
+        fmt_local: Ast.LocalId,
+        fmt_ty: Type.TypeId,
         replace_index: usize,
     ) Allocator.Error!Ast.ExprId {
         const items = try self.allocator.alloc(Ast.ExprId, item_tys.len);
         defer self.allocator.free(items);
         for (item_tys, 0..) |item_ty, index| {
-            if (!self.sameType(item_ty, slot_ty)) Common.invariant("ParseRecordState slot type did not match put slot type");
             items[index] = if (index == replace_index)
-                try self.builder.localExpr(slot_local, item_ty)
+                try self.parseRecordStatePresentExpr(fmt_local, fmt_ty, item_ty)
             else
                 try self.builder.program.addExpr(.{
                     .ty = item_ty,
@@ -6595,25 +6639,27 @@ const BodyContext = struct {
         if (arg_tys.len != 1 or plan.args.len != 1) Common.invariant("structural parse_from callable type must have one format argument");
 
         const shape_ty = try self.lowerType(plan.dispatcher_ty);
-        switch (self.builder.shapeContent(shape_ty)) {
-            .record => |fields_span| blk: {
-                for (self.builder.program.types.fieldSpan(fields_span)) |field| {
-                    if (!self.decoderFieldTypeIsSupported(field.ty)) Common.invariant("structural parse_from record field type was not supported");
-                }
-                break :blk;
-            },
-            .tag_union => |tags_span| blk: {
-                const tags = self.builder.program.types.tagSpan(tags_span);
-                if (tags.len == 0) Common.invariant("structural parse_from empty tag union reached postcheck lowering");
-                for (tags) |tag| {
-                    for (self.builder.program.types.span(tag.payloads)) |payload_ty| {
-                        if (!self.decoderFieldTypeIsSupported(payload_ty)) Common.invariant("structural parse_from tag-union payload type was not supported");
+        if (!self.typeHasBuiltinOwner(shape_ty, .str)) {
+            switch (self.builder.shapeContent(shape_ty)) {
+                .record => |fields_span| blk: {
+                    for (self.builder.program.types.fieldSpan(fields_span)) |field| {
+                        if (!self.decoderFieldTypeIsSupported(field.ty)) Common.invariant("structural parse_from record field type was not supported");
                     }
-                }
-                break :blk;
-            },
-            .zst => {},
-            else => Common.invariant("structural parse_from dispatcher was not a supported structural type"),
+                    break :blk;
+                },
+                .tag_union => |tags_span| blk: {
+                    const tags = self.builder.program.types.tagSpan(tags_span);
+                    if (tags.len == 0) Common.invariant("structural parse_from empty tag union reached postcheck lowering");
+                    for (tags) |tag| {
+                        for (self.builder.program.types.span(tag.payloads)) |payload_ty| {
+                            if (!self.decoderFieldTypeIsSupported(payload_ty)) Common.invariant("structural parse_from tag-union payload type was not supported");
+                        }
+                    }
+                    break :blk;
+                },
+                .zst => {},
+                else => Common.invariant("structural parse_from dispatcher was not a supported structural type"),
+            }
         }
 
         const input_value = if (pre_lowered != null and pre_lowered.?.index == 0)
@@ -6650,7 +6696,7 @@ const BodyContext = struct {
         } });
     }
 
-    const DecoderFieldValueInfo = struct {
+    const ParseRecordStateSlotInfo = struct {
         present_tag: Type.Tag,
         missing_tag: Type.Tag,
         present_payload_ty: Type.TypeId,
@@ -6839,13 +6885,13 @@ const BodyContext = struct {
             Common.invariant("checked method registry is missing custom parse_from target");
     }
 
-    fn decoderFieldValueInfo(self: *BodyContext, slot_ty: Type.TypeId) DecoderFieldValueInfo {
+    fn parseRecordStateSlotInfo(self: *BodyContext, slot_ty: Type.TypeId) ParseRecordStateSlotInfo {
         const tags_span = switch (self.builder.shapeContent(slot_ty)) {
             .tag_union => |tags| tags,
-            else => Common.invariant("Parse record builder argument was not a field-value tag union"),
+            else => Common.invariant("ParseRecordState field slot was not an internal tag union"),
         };
         const tags = self.builder.program.types.tagSpan(tags_span);
-        if (tags.len != 2) Common.invariant("Parse field-value type must have exactly one present and one missing tag");
+        if (tags.len != 2) Common.invariant("ParseRecordState field slot must have exactly one present and one missing tag");
 
         var present_tag: ?Type.Tag = null;
         var missing_tag: ?Type.Tag = null;
@@ -6853,7 +6899,6 @@ const BodyContext = struct {
         for (tags) |tag| {
             const payloads = self.builder.program.types.span(tag.payloads);
             if (payloads.len == 1) {
-                if (!self.typeHasBuiltinOwner(payloads[0], .str)) Common.invariant("Parse Present field value payload must be Str");
                 if (present_tag != null) Common.invariant("Parse field-value type had multiple present tags");
                 present_tag = tag;
                 present_payload_ty = payloads[0];
@@ -6861,14 +6906,14 @@ const BodyContext = struct {
                 if (missing_tag != null) Common.invariant("Parse field-value type had multiple missing tags");
                 missing_tag = tag;
             } else {
-                Common.invariant("Parse field-value type had an unsupported tag shape");
+                Common.invariant("ParseRecordState field slot had an unsupported tag shape");
             }
         }
 
         return .{
-            .present_tag = present_tag orelse Common.invariant("Parse field-value type was missing a present tag"),
-            .missing_tag = missing_tag orelse Common.invariant("Parse field-value type was missing a missing tag"),
-            .present_payload_ty = present_payload_ty orelse Common.invariant("Parse field-value present tag was missing its payload"),
+            .present_tag = present_tag orelse Common.invariant("ParseRecordState field slot was missing a present tag"),
+            .missing_tag = missing_tag orelse Common.invariant("ParseRecordState field slot was missing a missing tag"),
+            .present_payload_ty = present_payload_ty orelse Common.invariant("ParseRecordState field slot present tag was missing its payload"),
         };
     }
 
@@ -6900,10 +6945,28 @@ const BodyContext = struct {
         return tag;
     }
 
-    fn structuralDecoderFieldFromSlotTry(
+    fn parseRecordStatePresentExpr(
         self: *BodyContext,
-        slot_expr: Ast.ExprId,
-        slot_ty: Type.TypeId,
+        fmt_local: Ast.LocalId,
+        fmt_ty: Type.TypeId,
+        state_slot_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        const slot_info = self.parseRecordStateSlotInfo(state_slot_ty);
+        if (!self.sameType(slot_info.present_payload_ty, fmt_ty)) Common.invariant("ParseRecordState present payload type differed from put format type");
+        const fmt_expr = try self.builder.localExpr(fmt_local, fmt_ty);
+        return try self.builder.program.addExpr(.{
+            .ty = state_slot_ty,
+            .data = .{ .tag = .{
+                .name = slot_info.present_tag.name,
+                .payloads = try self.builder.program.addExprSpan(&[_]Ast.ExprId{fmt_expr}),
+            } },
+        });
+    }
+
+    fn parseRecordFieldFromStateSlot(
+        self: *BodyContext,
+        state_slot_expr: Ast.ExprId,
+        state_slot_ty: Type.TypeId,
         field_ty: Type.TypeId,
         field_try_ty: Type.TypeId,
         missing_local: Ast.LocalId,
@@ -6912,45 +6975,66 @@ const BodyContext = struct {
         const field_try_info = self.tryInfo(field_try_ty);
         if (!self.sameType(field_try_info.ok_ty, field_ty)) Common.invariant("structural decoder field Try Ok type differed from field type");
         if (!self.sameType(field_try_info.err_ty, missing_ty)) Common.invariant("structural decoder field Try Err type differed from missing-required error type");
-        const slot_info = self.decoderFieldValueInfo(slot_ty);
+        const slot_info = self.parseRecordStateSlotInfo(state_slot_ty);
 
         const value_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), slot_info.present_payload_ty);
         const value_pat = try self.builder.bindPat(value_local, slot_info.present_payload_ty);
-        const present_pat = try self.builder.program.addPat(.{ .ty = slot_ty, .data = .{ .tag = .{
+        const present_pat = try self.builder.program.addPat(.{ .ty = state_slot_ty, .data = .{ .tag = .{
             .name = slot_info.present_tag.name,
             .payloads = try self.builder.program.addPatSpan(&[_]Ast.PatId{value_pat}),
         } } });
-        const missing_pat = try self.builder.program.addPat(.{ .ty = slot_ty, .data = .{ .tag = .{
+        const missing_pat = try self.builder.program.addPat(.{ .ty = state_slot_ty, .data = .{ .tag = .{
             .name = slot_info.missing_tag.name,
             .payloads = try self.builder.program.addPatSpan(&[_]Ast.PatId{}),
         } } });
 
-        const present_field = if (self.typeHasBuiltinOwner(field_ty, .str)) blk: {
-            if (!self.sameType(slot_info.present_payload_ty, field_ty)) Common.invariant("Parse Present payload type differed from required Str field type");
-            break :blk try self.builder.localExpr(value_local, field_ty);
-        } else if (self.tryStrOptionalInfo(field_ty)) |info|
-            try self.tryOkFromFieldValue(value_local, info, field_ty)
-        else
-            Common.invariant("unsupported structural decoder field type reached Try slot lowering");
-        const present_body = try self.tryOk(field_try_ty, present_field);
+        const fmt_expr = try self.builder.localExpr(value_local, slot_info.present_payload_ty);
+        const present_body = try self.parsePresentRecordField(field_ty, fmt_expr, slot_info.present_payload_ty, field_try_ty);
 
         const absent_body = if (self.typeHasBuiltinOwner(field_ty, .str)) blk: {
             break :blk try self.tryErr(field_try_ty, try self.builder.localExpr(missing_local, missing_ty));
         } else if (self.tryStrOptionalInfo(field_ty)) |info| blk: {
             const missing_field = try self.tryErrMissing(info, field_ty);
             break :blk try self.tryOk(field_try_ty, missing_field);
-        } else {
-            Common.invariant("unsupported structural decoder field type reached Try slot lowering");
-        };
+        } else try self.tryErr(field_try_ty, try self.builder.localExpr(missing_local, missing_ty));
 
         const branches = [_]Ast.Branch{
             .{ .pat = present_pat, .body = present_body },
             .{ .pat = missing_pat, .body = absent_body },
         };
         return try self.builder.program.addExpr(.{ .ty = field_try_ty, .data = .{ .match_ = .{
-            .scrutinee = slot_expr,
+            .scrutinee = state_slot_expr,
             .branches = try self.builder.program.addBranchSpan(&branches),
         } } });
+    }
+
+    fn parsePresentRecordField(
+        self: *BodyContext,
+        field_ty: Type.TypeId,
+        fmt_expr: Ast.ExprId,
+        fmt_ty: Type.TypeId,
+        field_try_ty: Type.TypeId,
+    ) Allocator.Error!Ast.ExprId {
+        if (self.tryStrOptionalInfo(field_ty)) |info| {
+            const outer_info = self.tryInfo(field_try_ty);
+            const parse_ok_ty = try self.parseResultOkType(info.ok_payload_ty, fmt_ty);
+            const parse_ret_ty = try self.tryTypeLike(field_try_ty, parse_ok_ty, outer_info.err_ty);
+            const parse_expr = try self.lowerParseResultFromSlot(info.ok_payload_ty, fmt_expr, fmt_ty, parse_ret_ty);
+            const parsed_local = try self.builder.program.addLocal(self.builder.symbols.fresh(), parse_ok_ty);
+            const value_name = try self.builder.program.names.internRecordFieldLabel("value");
+            const value_expr = try self.builder.program.addExpr(.{
+                .ty = info.ok_payload_ty,
+                .data = .{ .field_access = .{
+                    .receiver = try self.builder.localExpr(parsed_local, parse_ok_ty),
+                    .field = value_name,
+                } },
+            });
+            const field_value = try self.tryOk(field_ty, value_expr);
+            const ok_body = try self.tryOk(field_try_ty, field_value);
+            return try self.sequenceTry(parse_expr, parse_ret_ty, parsed_local, ok_body, field_try_ty);
+        }
+
+        return try self.lowerParseValueFromSlot(field_ty, fmt_expr, fmt_ty, field_try_ty);
     }
 
     fn tryOkFromFieldValue(
@@ -10689,7 +10773,6 @@ fn builtinOwner(builtin: ?checked.CheckedBuiltinNominal) ?static_dispatch.Builti
         .dec => .dec,
         .list => .list,
         .box => .box,
-        .parse_str_spec => .parse_str_spec,
         .parse_record_spec => .parse_record_spec,
         .parse_record_state => .parse_record_state,
         .parse_tag_union_spec => .parse_tag_union_spec,

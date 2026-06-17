@@ -1,56 +1,43 @@
 DecodeErr := [MissingRequired, InvalidJson].{}
 
-JsonFormat :: [Present(Str), Missing].{
-	parse_str : ParseStrSpec(a), JsonFormat -> Try({ value : a, rest : JsonFormat }, DecodeErr)
-	parse_str = |spec, slot|
+JsonFormat :: [Input(Str), Value(Str)].{
+	parse_str : JsonFormat -> Try({ value : Str, rest : JsonFormat }, DecodeErr)
+	parse_str = |slot|
 		match slot {
-			Present(raw) => {
+			Input(raw) => {
 				trimmed = Str.trim_start(raw)
-				string_value = if Str.starts_with(trimmed, "\"") {
+				if Str.starts_with(trimmed, "\"") {
 					string_parts = split_json_string_tail(Str.drop_prefix(trimmed, "\""))?
 					rest = Str.trim_start(string_parts.after)
-
-					if !Str.is_empty(rest) {
-						return Err(invalid_json)
-					}
-
-					string_parts.value
+					Ok({ value: string_parts.value, rest: Input(rest) })
 				} else {
-					raw
+					Err(invalid_json)
 				}
-
-				value = ParseStrSpec.parse(spec, JsonFormat.Present(string_value), DecodeErr.MissingRequired)?
-				Ok({ value, rest: JsonFormat.Missing })
 			}
-			Missing => Err(DecodeErr.MissingRequired)
+			Value(value) => Ok({ value, rest: Value("") })
 		}
 
 	parse_record : ParseRecordSpec(a), JsonFormat -> Try({ value : a, rest : JsonFormat }, DecodeErr)
 	parse_record = |spec, slot|
 		match slot {
-			Present(raw) => {
+			Input(raw) => {
 				record_end = find_object_end(Str.trim_start(raw))?
-				value = parse_record_from_json(raw, spec)?
+				value = parse_record_from_json(raw, spec, slot)?
 				after_record = Str.trim_start(record_end.after)
-				rest = if Str.is_empty(after_record) {
-					JsonFormat.Missing
-				} else {
-					JsonFormat.Present(after_record)
-				}
 
-				Ok({ value, rest })
+				Ok({ value, rest: Input(after_record) })
 			}
-			Missing => Err(DecodeErr.MissingRequired)
+			Value(_) => Err(invalid_json)
 		}
 
 	parse_tag_union : ParseTagUnionSpec(a), JsonFormat -> Try({ value : a, rest : JsonFormat }, DecodeErr)
 	parse_tag_union = |spec, slot|
 		match slot {
-			Present(value) => {
+			Input(value) => {
 				parsed = parse_tag_union_from_json(value, spec)?
 				Ok(parsed)
 			}
-			Missing => Err(DecodeErr.MissingRequired)
+			Value(_) => Err(invalid_json)
 		}
 }
 
@@ -59,8 +46,7 @@ Json :: [].{
 		parse_from : JsonFormat -> Try({ value : Token, rest : JsonFormat }, DecodeErr)
 		parse_from = |slot|
 			match slot {
-				Present(_) => Ok({ value: { raw: "custom-token" }, rest: Missing })
-				Missing => Err(DecodeErr.MissingRequired)
+				Input(_) | Value(_) => Ok({ value: { raw: "custom-token" }, rest: Value("") })
 			}
 
 		count_utf8_bytes : Token -> U64
@@ -73,11 +59,11 @@ Json :: [].{
 		]
 	parse = |json| {
 		Shape : a
-		parsed = Shape.parse_from(JsonFormat.Present(json))?
+		parsed = Shape.parse_from(JsonFormat.Input(json))?
 
 		match parsed.rest {
-			Missing => Ok(parsed.value)
-			Present(rest) =>
+			Value(_) => Ok(parsed.value)
+			Input(rest) =>
 				if Str.is_empty(Str.trim_start(rest)) {
 					Ok(parsed.value)
 				} else {
@@ -90,10 +76,10 @@ Json :: [].{
 invalid_json : DecodeErr
 invalid_json = DecodeErr.InvalidJson
 
-parse_record_from_json : Str, ParseRecordSpec(a) -> Try(a, DecodeErr)
-parse_record_from_json = |raw, spec| {
+parse_record_from_json : Str, ParseRecordSpec(a), JsonFormat -> Try(a, DecodeErr)
+parse_record_from_json = |raw, spec, slot| {
 	var $remaining = Str.trim_start(raw)
-	var $state = ParseRecordSpec.init(spec, JsonFormat.Missing)
+	var $state = ParseRecordSpec.init(spec, slot)
 	var $keep_scanning = True
 
 	if Str.starts_with($remaining, "{") {
@@ -121,7 +107,7 @@ parse_record_from_json = |raw, spec| {
 
 							match value_split {
 								Ok(value_parts) => {
-									$state = ParseRecordSpec.put(spec, $state, key, JsonFormat.Present(value_parts.value), Str.is_eq)
+									$state = ParseRecordSpec.put(spec, $state, key, JsonFormat.Value(value_parts.value), Str.is_eq)
 									Str.trim_start(value_parts.after)
 								}
 								Err(_) => {
@@ -133,7 +119,7 @@ parse_record_from_json = |raw, spec| {
 
 							match object_end {
 								Ok(end_parts) => {
-									$state = ParseRecordSpec.put(spec, $state, key, JsonFormat.Present(after_colon), Str.is_eq)
+									$state = ParseRecordSpec.put(spec, $state, key, JsonFormat.Input(after_colon), Str.is_eq)
 									Str.trim_start(end_parts.after)
 								}
 								Err(_) => {
@@ -216,15 +202,10 @@ parse_tag_union_from_json = |raw, spec| {
 				return Err(invalid_json)
 			}
 
-			parsed = ParseTagUnionSpec.parse(spec, tag_name, JsonFormat.Present(payload), Str.is_eq, DecodeErr.MissingRequired)?
+			parsed = ParseTagUnionSpec.parse(spec, tag_name, JsonFormat.Input(payload), Str.is_eq, DecodeErr.MissingRequired)?
 			after_close = Str.trim_start(Str.drop_prefix(after_payload, "}"))
-			rest = if Str.is_empty(after_close) {
-				JsonFormat.Missing
-			} else {
-				JsonFormat.Present(after_close)
-			}
 
-			Ok({ value: parsed, rest })
+			Ok({ value: parsed, rest: JsonFormat.Input(after_close) })
 		}
 		Err(_) => Err(invalid_json)
 	}

@@ -1319,9 +1319,14 @@ fn sourceDeclForBuiltinParseSpec(self: *const Self, decl: BuiltinParseSpecDecl) 
     if (!self.isCheckingBuiltinModuleDirectly() and self.builtin_ctx.builtin_indices != null) {
         const indices = self.builtin_ctx.builtin_indices.?;
         const stmt_idx = switch (decl) {
-            .str => indices.parse_str_spec_type,
             .record => indices.parse_record_spec_type,
             .tag_union => indices.parse_tag_union_spec_type,
+            .str => {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic("type checker invariant violated: Str parsing does not have a builtin parse spec declaration", .{});
+                }
+                unreachable;
+            },
         };
         const owner_env = self.builtin_ctx.builtin_module orelse self.cir;
         debugAssertSourceDeclKindInEnv(owner_env, @intFromEnum(stmt_idx), .nominal);
@@ -1336,9 +1341,14 @@ fn sourceDeclForBuiltinParseSpec(self: *const Self, decl: BuiltinParseSpecDecl) 
     }
 
     const ident = switch (decl) {
-        .str => self.cir.idents.builtin_parse_str_spec,
         .record => self.cir.idents.builtin_parse_record_spec,
         .tag_union => self.cir.idents.builtin_parse_tag_union_spec,
+        .str => {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("type checker invariant violated: Str parsing does not have a builtin parse spec declaration", .{});
+            }
+            unreachable;
+        },
     };
     const stmt_idx = self.findLocalTypeDeclByName(ident) orelse {
         if (builtin.mode == .Debug) {
@@ -2057,9 +2067,14 @@ fn mkParseSpecVar(
     region: Region,
 ) Allocator.Error!Var {
     const ident_idx = switch (decl) {
-        .str => self.cir.idents.builtin_parse_str_spec,
         .record => self.cir.idents.builtin_parse_record_spec,
         .tag_union => self.cir.idents.builtin_parse_tag_union_spec,
+        .str => {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("type checker invariant violated: Str parsing does not have a builtin parse spec declaration", .{});
+            }
+            unreachable;
+        },
     };
     const backing_var = try self.freshFromContent(.{ .structure = .empty_record }, env, region);
     return try self.freshFromContent(try self.types.mkNominalWithSourceDeclAndBuiltinOrigin(
@@ -11937,6 +11952,18 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                             try self.ensureCustomInterpolationPartsChecked(constraint, env);
                         }
                     }
+                    if (constraint.fn_name.eql(self.cir.idents.parse_from) and
+                        self.nominalIsBuiltinStrType(nominal_type))
+                    {
+                        try self.satisfyImplicitParseFromConstraint(
+                            deferred_constraint.var_,
+                            constraint,
+                            constraint.fn_var,
+                            env,
+                            region,
+                        );
+                        continue;
+                    }
                     const method_binding = if (constraint.fn_name.eql(self.cir.idents.is_eq) and
                         try self.nominalSupportsImplicitIsEq(nominal_type))
                     blk: {
@@ -13252,9 +13279,13 @@ fn validateParseFormatMethod(
 ) Allocator.Error!bool {
     const method_name = try self.parseFormatMethodName(spec_decl);
     const method = try self.parseFormatMethodVarForSlot(slot_var, method_name, env, region) orelse return false;
-    const spec_var = try self.mkParseSpecVar(spec_decl, shape_var, env, region);
     const expected_ret = try self.freshParseResultTryVar(shape_var, slot_var, err_var, env, region);
-    const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{ spec_var, slot_var }, expected_ret), env, region);
+    const expected_fn = if (spec_decl == .str) blk: {
+        break :blk try self.freshFromContent(try self.types.mkFuncUnbound(&.{slot_var}, expected_ret), env, region);
+    } else blk: {
+        const spec_var = try self.mkParseSpecVar(spec_decl, shape_var, env, region);
+        break :blk try self.freshFromContent(try self.types.mkFuncUnbound(&.{ spec_var, slot_var }, expected_ret), env, region);
+    };
     const result = try self.unifyInContext(method.var_, expected_fn, env, .{
         .method_type = .{
             .constraint_var = slot_var,
@@ -13379,15 +13410,15 @@ fn validateDerivedParseNominal(
     context: DerivedParseContext,
 ) Allocator.Error!bool {
     if (self.nominalIsBuiltinStrType(nominal)) {
-        return context == .record_field or
-            try self.validateParseFormatMethod(slot_var, nominal_var, .str, err_var, env, region);
+        return try self.validateParseFormatMethod(slot_var, nominal_var, .str, err_var, env, region);
     }
     if (self.nominalIsBuiltinTryType(nominal)) {
         if (context != .record_field) return false;
         const args = self.types.sliceNominalArgs(nominal);
         if (args.len != 2) return false;
         if (!try self.varIsBuiltinStr(args[0])) return false;
-        return try self.varCanParseMissingError(args[1], env, region);
+        if (!try self.varCanParseMissingError(args[1], env, region)) return false;
+        return try self.validateParseFormatMethod(slot_var, args[0], .str, err_var, env, region);
     }
 
     const original_env, const is_this_module = self.ownerEnvForOriginModule(

@@ -15,10 +15,12 @@ const status_values = [_][]const u8{ "Active", "Paused" };
 const status_scores = [_]u64{ 11, 17 };
 const mode_values = [_][]const u8{ "Warm", "Cold" };
 const mode_scores = [_]u64{ 19, 23 };
+const top_level_string_value = "top-level-json";
 const empty_record_score: u64 = 29;
 const invalid_empty_record_score: u64 = 37;
 const pair_score: u64 = 31;
 const trailing_empty_record_score: u64 = 41;
+const invalid_string_score: u64 = 43;
 
 const optional_fields = [_]OptionalField{
     .{ .name = "explicit_optional", .value = "abc" },
@@ -174,10 +176,12 @@ fn expectedJsonLength(optional_mask: u8, status_index: usize, mode_index: usize)
     var total: u64 = required_foo_value.len +
         nested_bar_value.len +
         custom_token_value.len +
+        top_level_string_value.len +
         empty_record_score +
         invalid_empty_record_score +
         pair_score +
         trailing_empty_record_score +
+        invalid_string_score +
         status_scores[status_index] +
         mode_scores[mode_index];
     for (optional_fields, 0..) |field, index| {

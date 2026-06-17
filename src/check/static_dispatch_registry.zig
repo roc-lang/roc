@@ -84,7 +84,6 @@ pub const BuiltinOwner = enum {
     f32,
     f64,
     dec,
-    parse_str_spec,
     parse_record_spec,
     parse_record_state,
     parse_tag_union_spec,
@@ -345,7 +344,6 @@ fn builtinOwnerForRegistryEntry(
 
     if (type_ident.eql(common.list) or type_ident.eql(common.builtin_list)) return .list;
     if (type_ident.eql(common.box) or type_ident.eql(common.builtin_box)) return .box;
-    if (type_ident.eql(common.builtin_parse_str_spec)) return .parse_str_spec;
     if (type_ident.eql(common.builtin_parse_record_spec)) return .parse_record_spec;
     if (type_ident.eql(common.builtin_parse_record_state)) return .parse_record_state;
     if (type_ident.eql(common.builtin_parse_tag_union_spec)) return .parse_tag_union_spec;

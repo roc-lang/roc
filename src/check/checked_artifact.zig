@@ -824,7 +824,6 @@ fn checkedTypeIsConcreteCompileTimeRootInner(
                     .primitive,
                     .list,
                     .box,
-                    .parse_str_spec,
                     .parse_record_spec,
                     .parse_record_state,
                     .parse_tag_union_spec,
@@ -1546,7 +1545,6 @@ pub const CheckedBuiltinNominal = enum {
     dec,
     list,
     box,
-    parse_str_spec,
     parse_record_spec,
     parse_record_state,
     parse_tag_union_spec,
@@ -1577,7 +1575,6 @@ pub const CheckedBuiltinRuntimeEncoding = union(enum) {
     bool_tag_union,
     list,
     box,
-    parse_str_spec,
     parse_record_spec,
     parse_record_state,
     parse_tag_union_spec,
@@ -1603,7 +1600,6 @@ pub fn builtinRuntimeEncoding(builtin_nominal: CheckedBuiltinNominal) CheckedBui
         .dec => .{ .primitive = .dec },
         .list => .list,
         .box => .box,
-        .parse_str_spec => .parse_str_spec,
         .parse_record_spec => .parse_record_spec,
         .parse_record_state => .parse_record_state,
         .parse_tag_union_spec => .parse_tag_union_spec,
@@ -4515,7 +4511,6 @@ fn checkedBuiltinNominalForIdent(module_env: *const ModuleEnv, ident: base.Ident
     if (ident.eql(common.dec) or ident.eql(common.dec_type)) return .dec;
     if (ident.eql(common.list) or ident.eql(common.builtin_list)) return .list;
     if (ident.eql(common.box) or ident.eql(common.builtin_box)) return .box;
-    if (ident.eql(common.builtin_parse_str_spec)) return .parse_str_spec;
     if (ident.eql(common.builtin_parse_record_spec)) return .parse_record_spec;
     if (ident.eql(common.builtin_parse_record_state)) return .parse_record_state;
     if (ident.eql(common.builtin_parse_tag_union_spec)) return .parse_tag_union_spec;
@@ -12878,7 +12873,6 @@ fn checkedTypeHasNoReachableCallableSlotsInner(
                     .f64,
                     .dec,
                     .bool,
-                    .parse_str_spec,
                     .parse_record_spec,
                     .parse_tag_union_spec,
                     => break :blk true,

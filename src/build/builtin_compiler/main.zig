@@ -127,7 +127,6 @@ pub fn main(process_init: std.process.Init) !void {
 
 fn buildBuiltinIndices(gpa: Allocator, env: *const ModuleEnv) !BuiltinIndices {
     const bool_type_idx = try findTypeDeclaration(gpa, env, "Bool");
-    const parse_str_spec_type_idx = try findTypeDeclaration(gpa, env, "ParseStrSpec");
     const parse_record_spec_type_idx = try findTypeDeclaration(gpa, env, "ParseRecordSpec");
     const parse_record_state_type_idx = try findTypeDeclaration(gpa, env, "ParseRecordState");
     const parse_tag_union_spec_type_idx = try findTypeDeclaration(gpa, env, "ParseTagUnionSpec");
@@ -169,7 +168,6 @@ fn buildBuiltinIndices(gpa: Allocator, env: *const ModuleEnv) !BuiltinIndices {
         .stream_type = stream_type_idx,
         .list_type = list_type_idx,
         .box_type = box_type_idx,
-        .parse_str_spec_type = parse_str_spec_type_idx,
         .parse_record_spec_type = parse_record_spec_type_idx,
         .parse_record_state_type = parse_record_state_type_idx,
         .parse_tag_union_spec_type = parse_tag_union_spec_type_idx,
@@ -201,7 +199,6 @@ fn buildBuiltinIndices(gpa: Allocator, env: *const ModuleEnv) !BuiltinIndices {
         .stream_ident = expectBuiltinIdent(env, "Builtin.Stream"),
         .list_ident = expectBuiltinIdent(env, "Builtin.List"),
         .box_ident = expectBuiltinIdent(env, "Builtin.Box"),
-        .parse_str_spec_ident = expectBuiltinIdent(env, "Builtin.ParseStrSpec"),
         .utf8_problem_ident = expectBuiltinIdent(env, "Builtin.Str.Utf8Problem"),
         .u8_ident = expectBuiltinIdent(env, "Builtin.Num.U8"),
         .i8_ident = expectBuiltinIdent(env, "Builtin.Num.I8"),
@@ -237,7 +234,6 @@ fn installBuiltinNodeIndices(gpa: Allocator, env: *ModuleEnv, indices: BuiltinIn
     try env.common.setTypeNodeIndexById(gpa, indices.stream_ident, @intCast(@intFromEnum(indices.stream_type)));
     try env.common.setTypeNodeIndexById(gpa, indices.list_ident, @intCast(@intFromEnum(indices.list_type)));
     try env.common.setTypeNodeIndexById(gpa, indices.box_ident, @intCast(@intFromEnum(indices.box_type)));
-    try env.common.setTypeNodeIndexById(gpa, indices.parse_str_spec_ident, @intCast(@intFromEnum(indices.parse_str_spec_type)));
     try env.common.setTypeNodeIndexById(gpa, indices.parse_record_spec_ident, @intCast(@intFromEnum(indices.parse_record_spec_type)));
     try env.common.setTypeNodeIndexById(gpa, indices.parse_record_state_ident, @intCast(@intFromEnum(indices.parse_record_state_type)));
     try env.common.setTypeNodeIndexById(gpa, indices.parse_tag_union_spec_ident, @intCast(@intFromEnum(indices.parse_tag_union_spec_type)));

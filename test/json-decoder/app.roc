@@ -31,6 +31,12 @@ main! = |json| {
 	trailing_empty_result : Try({}, _)
 	trailing_empty_result = Json.parse("{} trailing")
 
+	top_level_string_result : Try(Str, _)
+	top_level_string_result = Json.parse("\"top-level-json\"")
+
+	invalid_string_result : Try(Str, _)
+	invalid_string_result = Json.parse("bare-json-string")
+
 	match decoded_result {
 		Ok(decoded) => {
 			explicit_optional_length = match decoded.explicit_optional {
@@ -77,6 +83,8 @@ main! = |json| {
 				+ empty_record_score(empty_result)
 				+ invalid_empty_record_score(invalid_empty_result)
 				+ trailing_empty_record_score(trailing_empty_result)
+				+ top_level_string_score(top_level_string_result)
+				+ invalid_string_score(invalid_string_result)
 				+ explicit_optional_length
 				+ wildcard_optional_length
 				+ question_optional_length
@@ -113,4 +121,18 @@ trailing_empty_record_score = |trailing_empty_result|
 	match trailing_empty_result {
 		Ok(_) => 999999
 		Err(_) => 41
+	}
+
+top_level_string_score : Try(Str, _) -> U64
+top_level_string_score = |string_result|
+	match string_result {
+		Ok(value) => Str.count_utf8_bytes(value)
+		Err(_) => 999999
+	}
+
+invalid_string_score : Try(Str, _) -> U64
+invalid_string_score = |string_result|
+	match string_result {
+		Ok(_) => 999999
+		Err(_) => 43
 	}
