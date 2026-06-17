@@ -3546,9 +3546,11 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
         try report.document.addLineBreak();
         try D.renderSlice(&.{
-            D.bytes("Give it a concrete type, or remove the"),
+            D.bytes("Give it a concrete type, or replace the type variable with"),
+            D.bytes("_").withAnnotation(.inline_code),
+            D.bytes("to let the type be inferred from how the"),
             D.bytes("var").withAnnotation(.inline_code),
-            D.bytes("keyword to make it an immutable binding, which can be polymorphic."),
+            D.bytes("is used."),
         }, self, &report);
         return report;
     }

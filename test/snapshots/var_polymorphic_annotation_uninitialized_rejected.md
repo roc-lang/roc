@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=A mutable var whose annotation introduces an unbound type variable is rejected (a var must have a concrete type)
+description=An uninitialized mutable var whose annotation introduces an unbound type variable is rejected, suggesting `_` to infer the type instead
 type=file
 ~~~
 # SOURCE
@@ -8,35 +8,33 @@ type=file
 app [main!] { pf: platform "../basic-cli/main.roc" }
 
 main! = |_| {
-    xs : List(a)
-    var xs = []
-    xs = [1]
+    var xs : List(a)
     {}
 }
 ~~~
 # EXPECTED
-UNUSED VARIABLE - var_polymorphic_annotation_rejected.md:5:5:5:16
-POLYMORPHIC VAR - var_polymorphic_annotation_rejected.md:4:5:4:17
+UNUSED VARIABLE - var_polymorphic_annotation_uninitialized_rejected.md:4:5:4:21
+POLYMORPHIC VAR - var_polymorphic_annotation_uninitialized_rejected.md:4:5:4:21
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable `xs` is not used anywhere in your code.
 
 If you don't need this variable, prefix it with an underscore like `_xs` to suppress this warning.
 The unused variable is declared here:
-**var_polymorphic_annotation_rejected.md:5:5:5:16:**
+**var_polymorphic_annotation_uninitialized_rejected.md:4:5:4:21:**
 ```roc
-    var xs = []
+    var xs : List(a)
 ```
-    ^^^^^^^^^^^
+    ^^^^^^^^^^^^^^^^
 
 
 **POLYMORPHIC VAR**
 This `var` is declared with a polymorphic type annotation, but a mutable variable must have a single concrete type:
-**var_polymorphic_annotation_rejected.md:4:5:4:17:**
+**var_polymorphic_annotation_uninitialized_rejected.md:4:5:4:21:**
 ```roc
-    xs : List(a)
+    var xs : List(a)
 ```
-    ^^^^^^^^^^^^
+    ^^^^^^^^^^^^^^^^
 
 
 Give it a concrete type, or replace the type variable with `_` to let the type be inferred from how the `var` is used.
@@ -45,9 +43,7 @@ Give it a concrete type, or replace the type variable with `_` to let the type b
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,
 LowerIdent,OpAssign,OpBar,Underscore,OpBar,OpenCurly,
-LowerIdent,OpColon,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,
-KwVar,LowerIdent,OpAssign,OpenSquare,CloseSquare,
-LowerIdent,OpAssign,OpenSquare,Int,CloseSquare,
+KwVar,LowerIdent,OpColon,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,
 OpenCurly,CloseCurly,
 CloseCurly,
 EndOfFile,
@@ -78,12 +74,6 @@ EndOfFile,
 							(ty-apply
 								(ty (name "List"))
 								(ty-var (raw "a"))))
-						(s-var (name "xs")
-							(e-list))
-						(s-decl
-							(p-ident (raw "xs"))
-							(e-list
-								(e-int (raw "1"))))
 						(e-record)))))))
 ~~~
 # FORMATTED
@@ -91,9 +81,7 @@ EndOfFile,
 app [main!] { pf: platform "../basic-cli/main.roc" }
 
 main! = |_| {
-	xs : List(a)
-	var xs = []
-	xs = [1]
+	var xs : List(a)
 	{}
 }
 ~~~
@@ -106,14 +94,8 @@ main! = |_| {
 			(args
 				(p-underscore))
 			(e-block
-				(s-var
-					(p-assign (ident "xs"))
-					(e-empty_list))
-				(s-reassign
-					(p-assign (ident "xs"))
-					(e-list
-						(elems
-							(e-num (value "1")))))
+				(s-var-uninitialized
+					(p-assign (ident "xs")))
 				(e-empty_record)))))
 ~~~
 # TYPES

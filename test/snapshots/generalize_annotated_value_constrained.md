@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=An annotated, non-expansive value carrying a static-dispatch where-constraint generalizes to a constrained scheme rather than erroring as a polymorphic value (tier-2)
+description=A top-level annotated value carrying a static-dispatch where-constraint is rejected as a polymorphic value, since top-level values can't have free type variables (tier-2)
 type=file
 ~~~
 # SOURCE

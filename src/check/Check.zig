@@ -8386,9 +8386,18 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 try self.checkPattern(var_stmt.pattern_idx, var_pattern_ctx, env);
                 const var_pattern_var: Var = ModuleEnv.varFrom(var_stmt.pattern_idx);
 
+                // A mutable `var` never generalizes, so a type variable its
+                // annotation introduces can never be bound. With no initializer
+                // there is no body to infer from, so reject the annotation and
+                // leave the pattern var free to be inferred from later
+                // reassignments instead of cascading into confusing mismatches.
                 if (var_stmt.anno) |annotation_idx| {
-                    try self.generateAnnotationType(annotation_idx, env);
-                    _ = try self.unifyInContext(ModuleEnv.varFrom(annotation_idx), var_pattern_var, env, .type_annotation);
+                    if (self.cir.store.getAnnotation(annotation_idx).introduces_type_var) {
+                        _ = try self.problems.appendProblem(self.gpa, .{ .polymorphic_var_annotation = .{ .region = self.cir.store.getAnnotationRegion(annotation_idx) } });
+                    } else {
+                        try self.generateAnnotationType(annotation_idx, env);
+                        _ = try self.unifyInContext(ModuleEnv.varFrom(annotation_idx), var_pattern_var, env, .type_annotation);
+                    }
                 }
 
                 const empty_rec = try self.freshFromContent(.{ .structure = .empty_record }, env, stmt_region);

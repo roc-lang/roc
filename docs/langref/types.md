@@ -32,7 +32,7 @@ cases:
   Annotating a value with a free type variable opts into a type scheme, so
   the binding is generalized to it (`empty : List(a)` is then reusable at any
   `a`). Note that we report an error for top-level values with free vars, so in
-  practice the only only applies to let-defs.
+  practice this only applies to let-defs.
 - **A value alias** — a binding whose right-hand side is a bare reference to an
   already-generalized binding (`shorthand = Foo.my_func`) — stays generalized,
   since copying a reference does no work and so is safe to reuse at many types.
