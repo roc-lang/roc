@@ -42,7 +42,7 @@ const EvalDynLib = switch (builtin.target.os.tag) {
             extern "kernel32" fn FreeLibrary(hLibModule: std.os.windows.HMODULE) callconv(.winapi) c_int;
         };
 
-        fn open(allocator: Allocator, path: []const u8) anyerror!@This() {
+        fn open(allocator: Allocator, path: [:0]const u8) anyerror!@This() {
             const wide_path = try std.unicode.utf8ToUtf16LeAllocZ(allocator, path);
             defer allocator.free(wide_path);
             const handle = kernel32.LoadLibraryW(wide_path.ptr) orelse return error.LlvmBackendUnavailable;
@@ -59,10 +59,17 @@ const EvalDynLib = switch (builtin.target.os.tag) {
         }
     },
     else => struct {
-        inner: std.DynLib,
+        // On a static, no-libc roc binary `std.DynLib` falls back to Zig's
+        // `ElfDynLib`, which mis-loads writable segments and applies no dynamic
+        // relocations. Use a vendored loader that does both correctly. Every
+        // other configuration keeps `std.DynLib`, whose `DlDynLib` defers to the
+        // OS dynamic loader.
+        const Inner = if (base.eval_loader.active) base.eval_loader.ElfDynLib else std.DynLib;
 
-        fn open(_: Allocator, path: []const u8) anyerror!@This() {
-            return .{ .inner = try std.DynLib.open(path) };
+        inner: Inner,
+
+        fn open(_: Allocator, path: [:0]const u8) anyerror!@This() {
+            return .{ .inner = try Inner.open(path) };
         }
 
         fn close(self: *@This()) void {
