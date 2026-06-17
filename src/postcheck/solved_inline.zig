@@ -66,11 +66,6 @@ const Decision = union(enum) {
     inline_body: Lifted.ExprId,
 };
 
-const Candidate = struct {
-    body: Lifted.ExprId,
-    callee: ?Lifted.FnId,
-};
-
 const WrapperAnalyzer = struct {
     allocator: std.mem.Allocator,
     solved: *const Solved.Program,
@@ -138,14 +133,17 @@ const WrapperAnalyzer = struct {
             if (popped != fn_id) Common.invariant("inline analysis stack was corrupted");
         }
 
-        const wrapper = self.wrapperCandidate(fn_id) orelse {
+        const wrapper_body = self.wrapperCandidate(fn_id) orelse {
             self.decisions[index] = .never;
             return null;
         };
 
-        if (wrapper.callee) |callee| {
-            _ = try self.inlineBody(callee);
-        }
+        // Visit every proc called anywhere in the wrapper body, including calls
+        // nested inside low-level operands or other call arguments. A self-call
+        // re-enters this function while it is `.visiting`, so `markCycle` marks
+        // the whole cycle `.never` and keeps it out of the inline plan instead
+        // of inlining it without bound.
+        try self.visitBodyCallees(wrapper_body);
 
         switch (self.decisions[index]) {
             .never => return null,
@@ -155,11 +153,11 @@ const WrapperAnalyzer = struct {
             => Common.invariant("inline analysis decision changed unexpectedly while visiting a candidate"),
         }
 
-        self.decisions[index] = .{ .inline_body = wrapper.body };
-        return wrapper.body;
+        self.decisions[index] = .{ .inline_body = wrapper_body };
+        return wrapper_body;
     }
 
-    fn wrapperCandidate(self: *const WrapperAnalyzer, fn_id: Lifted.FnId) ?Candidate {
+    fn wrapperCandidate(self: *const WrapperAnalyzer, fn_id: Lifted.FnId) ?Lifted.ExprId {
         const source_fn = self.solved.lifted.fns.items[@intFromEnum(fn_id)];
         if (self.solved.lifted.typedLocalSpan(source_fn.captures).len != 0) return null;
         if (self.solvedCaptureCount(fn_id) != 0) return null;
@@ -170,9 +168,8 @@ const WrapperAnalyzer = struct {
         };
 
         if (!self.bodyReadsOnlyArgs(fn_id, body)) return null;
-
-        const candidate = self.inlineableWrapperBody(body) orelse return null;
-        return .{ .body = body, .callee = candidate.callee };
+        if (!self.isInlineableWrapperBody(body)) return null;
+        return body;
     }
 
     fn solvedCaptureCount(self: *const WrapperAnalyzer, fn_id: Lifted.FnId) usize {
@@ -267,18 +264,83 @@ const WrapperAnalyzer = struct {
         return false;
     }
 
-    fn inlineableWrapperBody(self: *const WrapperAnalyzer, expr_id: Lifted.ExprId) ?Candidate {
+    fn isInlineableWrapperBody(self: *const WrapperAnalyzer, expr_id: Lifted.ExprId) bool {
         const expr = self.solved.lifted.exprs.items[@intFromEnum(expr_id)];
         return switch (expr.data) {
-            .call_proc => |call| .{ .body = expr_id, .callee = Lifted.callProcCallee(call) },
-            .low_level => .{ .body = expr_id, .callee = null },
-            .block => |block| blk: {
-                if (self.solved.lifted.stmtSpan(block.statements).len != 0) return null;
-                const candidate = self.inlineableWrapperBody(block.final_expr) orelse return null;
-                break :blk .{ .body = expr_id, .callee = candidate.callee };
-            },
-            else => null,
+            .call_proc, .low_level => true,
+            .block => |block| self.solved.lifted.stmtSpan(block.statements).len == 0 and
+                self.isInlineableWrapperBody(block.final_expr),
+            else => false,
         };
+    }
+
+    /// Visit every proc called within a wrapper body so inline cycles are
+    /// detected even when the recursive call is nested inside low-level
+    /// operands or other call arguments, mirroring the shapes accepted by
+    /// `exprReadsOnlyArgs`.
+    fn visitBodyCallees(self: *WrapperAnalyzer, expr_id: Lifted.ExprId) std.mem.Allocator.Error!void {
+        const expr = self.solved.lifted.exprs.items[@intFromEnum(expr_id)];
+        switch (expr.data) {
+            .local,
+            .unit,
+            .int_lit,
+            .frac_f32_lit,
+            .frac_f64_lit,
+            .dec_lit,
+            .str_lit,
+            .def_ref,
+            .fn_ref,
+            => {},
+            .list,
+            .tuple,
+            => |items| try self.visitSpanCallees(items),
+            .record => |fields| {
+                for (self.solved.lifted.fieldExprSpan(fields)) |field| {
+                    try self.visitBodyCallees(field.value);
+                }
+            },
+            .tag => |tag| try self.visitSpanCallees(tag.payloads),
+            .nominal,
+            .dbg,
+            .expect,
+            .return_,
+            => |child| try self.visitBodyCallees(child),
+            .expect_err => |expect_err| try self.visitBodyCallees(expect_err.msg),
+            .comptime_branch_taken => |taken| try self.visitBodyCallees(taken.body),
+            .call_value => |call| {
+                try self.visitBodyCallees(call.callee);
+                try self.visitSpanCallees(call.args);
+            },
+            .call_proc => |call| {
+                _ = try self.inlineBody(Lifted.callProcCallee(call));
+                try self.visitSpanCallees(call.args);
+            },
+            .low_level => |call| try self.visitSpanCallees(call.args),
+            .field_access => |field| try self.visitBodyCallees(field.receiver),
+            .tuple_access => |access| try self.visitBodyCallees(access.tuple),
+            .structural_eq => |eq| {
+                try self.visitBodyCallees(eq.lhs);
+                try self.visitBodyCallees(eq.rhs);
+            },
+            .block => |block| try self.visitBodyCallees(block.final_expr),
+            .lambda,
+            .fn_def,
+            .let_,
+            .match_,
+            .if_,
+            .loop_,
+            .break_,
+            .continue_,
+            .crash,
+            .comptime_exhaustiveness_failed,
+            => {},
+        }
+    }
+
+    fn visitSpanCallees(self: *WrapperAnalyzer, span: Lifted.Span(Lifted.ExprId)) std.mem.Allocator.Error!void {
+        for (self.solved.lifted.exprSpan(span)) |child| {
+            try self.visitBodyCallees(child);
+        }
     }
 
     fn markCycle(self: *WrapperAnalyzer, repeated: Lifted.FnId) void {
