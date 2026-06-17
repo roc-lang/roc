@@ -1593,6 +1593,7 @@ const BuiltinCompilerRun = struct {
     run: *Step.Run,
     builtin_bin: std.Build.LazyPath,
     builtin_indices_bin: std.Build.LazyPath,
+    builtin_checked_bin: std.Build.LazyPath,
 };
 
 fn createAndRunBuiltinCompiler(
@@ -1640,11 +1641,13 @@ fn createAndRunBuiltinCompiler(
 
     const builtin_bin = run_builtin_compiler.addOutputFileArg("Builtin.bin");
     const builtin_indices_bin = run_builtin_compiler.addOutputFileArg("builtin_indices.bin");
+    const builtin_checked_bin = run_builtin_compiler.addOutputFileArg("Builtin.checked.bin");
 
     return .{
         .run = run_builtin_compiler,
         .builtin_bin = builtin_bin,
         .builtin_indices_bin = builtin_indices_bin,
+        .builtin_checked_bin = builtin_checked_bin,
     };
 }
 
@@ -2418,11 +2421,18 @@ pub fn build(b: *std.Build) void {
         "builtin_indices.bin",
     );
 
+    // Copy the cached pre-finalize CheckedArtifact
+    _ = write_compiled_builtins.addCopyFile(
+        builtin_compiler.builtin_checked_bin,
+        "Builtin.checked.bin",
+    );
+
     // Generate compiled_builtins.zig with hardcoded Builtin module
     const builtins_source_str =
         \\pub const builtin_bin = @embedFile("Builtin.bin");
         \\pub const builtin_source = @embedFile("Builtin.roc");
         \\pub const builtin_indices_bin = @embedFile("builtin_indices.bin");
+        \\pub const builtin_checked_bin = @embedFile("Builtin.checked.bin");
         \\
     ;
 

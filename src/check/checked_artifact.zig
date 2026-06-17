@@ -18,6 +18,7 @@ const canonical = @import("canonical_names.zig");
 const canonical_type_keys = @import("canonical_type_keys.zig");
 const const_store = @import("const_store.zig");
 const problem = @import("problem.zig");
+const serde = @import("artifact_serde.zig");
 
 const Allocator = std.mem.Allocator;
 const Ident = base.Ident;
@@ -78,6 +79,21 @@ pub const ModuleEnvStorage = union(enum) {
         }
         self.* = undefined;
     }
+
+    /// The module env is owned and serialized separately (it points at the
+    /// compiled `ModuleEnv` buffer), so the artifact cache stores nothing for
+    /// it. `CheckedModuleArtifact.deserialize` re-attaches the real storage
+    /// after the generic walk, overwriting this placeholder.
+    pub fn rocSerialize(_: *const ModuleEnvStorage, _: *serde.Writer) std.mem.Allocator.Error!void {}
+
+    pub fn rocDeserialize(_: *serde.Reader) serde.Reader.Error!ModuleEnvStorage {
+        return .{ .checked_source = undefined };
+    }
+
+    /// Free hook for the artifact deserializer: the module env is not owned by
+    /// the serialized data; `CheckedModuleArtifact.deinitDeserialized` frees it
+    /// explicitly via `deinit`.
+    pub fn rocFree(_: *ModuleEnvStorage, _: std.mem.Allocator) void {}
 };
 
 /// Public `CheckedModuleArtifactKey` declaration.
@@ -15580,6 +15596,43 @@ pub const CheckedModuleArtifact = struct {
         return self.module_env.envConst();
     }
 
+    /// Serialize this artifact to a freshly allocated byte buffer using the
+    /// layout-independent generic serializer. The `module_env` is not stored
+    /// (it references the separately-cached `ModuleEnv` buffer); the loader
+    /// re-attaches it. The caller owns the returned slice.
+    pub fn serialize(self: *const CheckedModuleArtifact, gpa: Allocator) Allocator.Error![]u8 {
+        var w = serde.Writer.init(gpa);
+        defer w.deinit();
+        try serde.serializeValue(CheckedModuleArtifact, &w, self);
+        return w.toOwnedSlice();
+    }
+
+    /// Restore an artifact from bytes produced by `serialize`. All tables are
+    /// deep-copied into `gpa`-owned memory; free the result with
+    /// `deinitDeserialized` (not `deinit`). `module_env_storage` supplies the
+    /// (separately loaded) `ModuleEnv`, overwriting the serialized placeholder.
+    pub fn deserialize(
+        bytes: []const u8,
+        gpa: Allocator,
+        module_env_storage: ModuleEnvStorage,
+    ) serde.Reader.Error!CheckedModuleArtifact {
+        var r = serde.Reader.init(bytes, gpa);
+        var artifact: CheckedModuleArtifact = undefined;
+        try serde.deserializeValue(CheckedModuleArtifact, &r, &artifact);
+        artifact.module_env = module_env_storage;
+        return artifact;
+    }
+
+    /// Free an artifact produced by `deserialize`. Deserialization deep-copies
+    /// into `gpa`-owned memory whose ownership does not match `deinit` (which
+    /// leaves some publish-time borrowed slices unfreed), so the generic
+    /// `freeValue` walk frees exactly what was allocated, then the module env is
+    /// released. Use this instead of `deinit` for deserialized artifacts.
+    pub fn deinitDeserialized(self: *CheckedModuleArtifact, gpa: Allocator) void {
+        serde.freeValue(CheckedModuleArtifact, gpa, self);
+        self.module_env.deinit();
+    }
+
     pub fn platformRequirementContextKey(self: *const CheckedModuleArtifact) PlatformRequirementContextKey {
         return PlatformRequirementContextKey.compute(
             self.module_identity,
@@ -17518,7 +17571,41 @@ pub fn checkedModuleKeyFromTypedModule(
 }
 
 /// Public `publishFromTypedModule` function.
+///
+/// Assembles the checked artifact (`assembleUnfinalizedArtifact`) and then runs
+/// compile-time finalization. The builtin module splits these two phases: the
+/// assembly (the expensive, deterministic ~95%) is cached at build time, while
+/// finalization runs at load time (see `eval/BuiltinModules.zig`).
 pub fn publishFromTypedModule(
+    allocator: Allocator,
+    modules: *const TypedCIR.Modules,
+    module_idx: u32,
+    inputs: PublishInputs,
+) anyerror!CheckedModuleArtifact {
+    var artifact = try assembleUnfinalizedArtifact(allocator, modules, module_idx, inputs);
+    // On a finalization error the caller still owns the module env (it is
+    // `inputs.module_env_storage`, not allocated here), so release only the
+    // artifact's own tables and leave the env for the caller to free. This
+    // matches the original per-table errdefer cleanup before this split.
+    errdefer artifact.deinitRetainingModuleEnv(allocator);
+    try inputs.compile_time_finalizer.run(
+        allocator,
+        &artifact,
+        inputs.imports,
+        inputs.available_artifacts,
+        inputs.relation_artifacts,
+        inputs.problem_store,
+    );
+    try artifact.verifyComplete();
+    return artifact;
+}
+
+/// Assemble the checked artifact WITHOUT running compile-time finalization.
+/// The returned artifact has its compile-time roots/const store left in the
+/// pre-finalize state; callers must run a `CompileTimeFinalizer` before treating
+/// it as complete. Used both by `publishFromTypedModule` and by the build-time
+/// builtin artifact cache.
+pub fn assembleUnfinalizedArtifact(
     allocator: Allocator,
     modules: *const TypedCIR.Modules,
     module_idx: u32,
@@ -17853,7 +17940,7 @@ pub fn publishFromTypedModule(
 
     checked_bodies.discardSourceNodeMap(allocator);
 
-    var artifact = CheckedModuleArtifact{
+    const artifact = CheckedModuleArtifact{
         .key = artifact_key,
         .canonical_names = canonical_names,
         .module_identity = module_identity,
@@ -17893,15 +17980,6 @@ pub fn publishFromTypedModule(
         .const_templates = const_templates,
         .const_store = checked_const_store,
     };
-    try inputs.compile_time_finalizer.run(
-        allocator,
-        &artifact,
-        inputs.imports,
-        inputs.available_artifacts,
-        inputs.relation_artifacts,
-        inputs.problem_store,
-    );
-    try artifact.verifyComplete();
     return artifact;
 }
 

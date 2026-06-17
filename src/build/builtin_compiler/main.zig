@@ -81,6 +81,7 @@ pub fn main(process_init: std.process.Init) !void {
     const builtin_src_path = if (args.len >= 2) args[1] else "src/build/roc/Builtin.roc";
     const builtin_bin_path = if (args.len >= 3) args[2] else "zig-out/builtins/Builtin.bin";
     const builtin_indices_path = if (args.len >= 4) args[3] else "zig-out/builtins/builtin_indices.bin";
+    const builtin_checked_bin_path = if (args.len >= 5) args[4] else "zig-out/builtins/Builtin.checked.bin";
 
     // Read the Builtin.roc source file at runtime
     // NOTE: We must free this source manually; CommonEnv.deinit() does not free the source.
@@ -114,6 +115,9 @@ pub fn main(process_init: std.process.Init) !void {
     if (std.fs.path.dirname(builtin_indices_path)) |dir| {
         try std.Io.Dir.cwd().createDirPath(io, dir);
     }
+    if (std.fs.path.dirname(builtin_checked_bin_path)) |dir| {
+        try std.Io.Dir.cwd().createDirPath(io, dir);
+    }
 
     // Serialize the single Builtin module
     try serializeModuleEnv(gpa, io, builtin_env, builtin_bin_path);
@@ -123,7 +127,56 @@ pub fn main(process_init: std.process.Init) !void {
     try validateBuiltinIndicesCompleteness(gpa, builtin_env, builtin_indices);
 
     try serializeBuiltinIndices(io, builtin_indices, builtin_indices_path);
+
+    // Assemble and cache the pre-finalize CheckedArtifact. The expensive,
+    // deterministic publish work runs here at build time; `roc` deserializes the
+    // result and runs only compile-time finalization at startup.
+    try serializeCheckedArtifact(gpa, io, builtin_env, builtin_checked_bin_path);
 }
+
+/// Build the pre-finalize checked artifact for the Builtin module and write it
+/// to `output_path` using the generic artifact serializer.
+fn serializeCheckedArtifact(
+    gpa: Allocator,
+    io: std.Io,
+    env: *ModuleEnv,
+    output_path: []const u8,
+) !void {
+    var typed_modules = try check.TypedCIR.Modules.init(gpa, &.{
+        .{ .precompiled = env },
+    });
+    defer typed_modules.deinit();
+
+    var artifact = try check.CheckedArtifact.assembleUnfinalizedArtifact(
+        gpa,
+        &typed_modules,
+        0,
+        .{
+            .module_env_storage = .{ .checked_source = env },
+            // Never invoked: assembly does not run finalization.
+            .compile_time_finalizer = .{ .finalize = noopFinalize },
+        },
+    );
+    // The module env is owned by `main`; do not free it through the artifact.
+    defer artifact.deinitRetainingModuleEnv(gpa);
+
+    const bytes = try artifact.serialize(gpa);
+    defer gpa.free(bytes);
+
+    const file = try std.Io.Dir.cwd().createFile(io, output_path, .{});
+    defer file.close(io);
+    try file.writePositionalAll(io, bytes, 0);
+}
+
+fn noopFinalize(
+    _: ?*anyopaque,
+    _: Allocator,
+    _: *check.CheckedArtifact.CheckedModuleArtifact,
+    _: []const check.CheckedArtifact.PublishImportArtifact,
+    _: []const check.CheckedArtifact.ImportedModuleView,
+    _: []const check.CheckedArtifact.ImportedModuleView,
+    _: ?*check.problem.Store,
+) anyerror!void {}
 
 fn buildBuiltinIndices(gpa: Allocator, env: *const ModuleEnv) !BuiltinIndices {
     const bool_type_idx = try findTypeDeclaration(gpa, env, "Bool");

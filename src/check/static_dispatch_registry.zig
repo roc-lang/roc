@@ -11,6 +11,7 @@ const types = @import("types");
 const TypedCIR = @import("typed_cir.zig");
 const canonical = @import("canonical_names.zig");
 const checked_ids = @import("checked_ids.zig");
+const serde = @import("artifact_serde.zig");
 
 const Allocator = std.mem.Allocator;
 const Ident = base.Ident;
@@ -832,6 +833,37 @@ pub const StaticDispatchPlanTable = struct {
         }
         allocator.free(self.iterator_for_plans);
         self.* = .{};
+    }
+
+    /// Serialize the plan slices generically (owned `args` slices are
+    /// deep-copied on deserialize) and the lookup maps as flat entry lists.
+    pub fn rocSerialize(self: *const StaticDispatchPlanTable, w: *serde.Writer) Allocator.Error!void {
+        try serde.serializeValue([]StaticDispatchCallPlan, w, &self.plans);
+        try serde.serializeValue([]IteratorForPlan, w, &self.iterator_for_plans);
+        try serde.serializeValue([]StaticDispatchPlanId, w, &self.template_refs);
+        try serde.serializeAutoHashMap(CIR.Expr.Idx, StaticDispatchPlanId, w, self.by_expr);
+        try serde.serializeAutoHashMap(CIR.Node.Idx, StaticDispatchPlanId, w, self.numeral_by_node);
+        try serde.serializeAutoHashMap(CIR.Node.Idx, StaticDispatchPlanId, w, self.quote_by_node);
+        try serde.serializeAutoHashMap(CIR.Node.Idx, IteratorForPlanId, w, self.iterator_for_by_node);
+    }
+
+    /// Free hook for the artifact deserializer: `deinit` frees the plan slices
+    /// (and their owned `args`) plus the restored lookup maps.
+    pub fn rocFree(self: *StaticDispatchPlanTable, gpa: Allocator) void {
+        self.deinit(gpa);
+    }
+
+    pub fn rocDeserialize(r: *serde.Reader) serde.Reader.Error!StaticDispatchPlanTable {
+        var table = StaticDispatchPlanTable{};
+        errdefer table.deinit(r.gpa);
+        try serde.deserializeValue([]StaticDispatchCallPlan, r, &table.plans);
+        try serde.deserializeValue([]IteratorForPlan, r, &table.iterator_for_plans);
+        try serde.deserializeValue([]StaticDispatchPlanId, r, &table.template_refs);
+        table.by_expr = try serde.deserializeAutoHashMap(CIR.Expr.Idx, StaticDispatchPlanId, r, r.gpa);
+        table.numeral_by_node = try serde.deserializeAutoHashMap(CIR.Node.Idx, StaticDispatchPlanId, r, r.gpa);
+        table.quote_by_node = try serde.deserializeAutoHashMap(CIR.Node.Idx, StaticDispatchPlanId, r, r.gpa);
+        table.iterator_for_by_node = try serde.deserializeAutoHashMap(CIR.Node.Idx, IteratorForPlanId, r, r.gpa);
+        return table;
     }
 };
 

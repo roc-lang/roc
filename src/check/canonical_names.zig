@@ -6,6 +6,7 @@
 
 const std = @import("std");
 const base = @import("base");
+const serde = @import("artifact_serde.zig");
 
 const Allocator = std.mem.Allocator;
 const Ident = base.Ident;
@@ -443,6 +444,53 @@ pub const CanonicalNameStore = struct {
         return self.proc_bases.items[@intFromEnum(id)];
     }
 
+    /// Serialize the source-of-truth data (interned text lists + procedure base
+    /// keys). The `*_by_text` / `proc_base_by_key` indices are derived data and
+    /// are restored by replaying interning in `rocDeserialize`.
+    pub fn rocSerialize(self: *const CanonicalNameStore, w: *serde.Writer) Allocator.Error!void {
+        try serializeTextList(w, self.module_names.items);
+        try serializeTextList(w, self.type_names.items);
+        try serializeTextList(w, self.method_names.items);
+        try serializeTextList(w, self.record_field_labels.items);
+        try serializeTextList(w, self.tag_labels.items);
+        try serializeTextList(w, self.export_names.items);
+        try serializeTextList(w, self.external_symbol_names.items);
+        try w.writeLen(self.proc_bases.items.len);
+        for (self.proc_bases.items) |key| {
+            var k = key;
+            try serde.serializeValue(ProcBaseKey, w, &k);
+        }
+    }
+
+    /// Restore a store by replaying interning in the original insertion order.
+    /// Because interning dedups, appends, and dupes exactly as during the
+    /// original build, this reproduces identical ids, ownership, and indices.
+    /// Free hook for the artifact deserializer: the store owns its text, keys,
+    /// and maps via `self.allocator`, so its normal `deinit` frees everything.
+    pub fn rocFree(self: *CanonicalNameStore, _: Allocator) void {
+        self.deinit();
+    }
+
+    pub fn rocDeserialize(r: *serde.Reader) serde.Reader.Error!CanonicalNameStore {
+        var store = CanonicalNameStore.init(r.gpa);
+        errdefer store.deinit();
+        try replayTextList(ModuleNameId, r, &store, internModuleName);
+        try replayTextList(TypeNameId, r, &store, internTypeName);
+        try replayTextList(MethodNameId, r, &store, internMethodName);
+        try replayTextList(RecordFieldLabelId, r, &store, internRecordFieldLabel);
+        try replayTextList(TagLabelId, r, &store, internTagLabel);
+        try replayTextList(ExportNameId, r, &store, internExportName);
+        try replayTextList(ExternalSymbolNameId, r, &store, internExternalSymbolName);
+        const proc_base_count = try r.readLen();
+        var i: usize = 0;
+        while (i < proc_base_count) : (i += 1) {
+            var key: ProcBaseKey = undefined;
+            try serde.deserializeValue(ProcBaseKey, r, &key);
+            _ = try store.internProcBase(key);
+        }
+        return store;
+    }
+
     pub fn exportNameText(self: *const CanonicalNameStore, id: ExportNameId) []const u8 {
         return self.export_names.items[@intFromEnum(id)];
     }
@@ -495,6 +543,25 @@ pub const CanonicalNameStore = struct {
         for (values) |value| self.allocator.free(value);
     }
 };
+
+fn serializeTextList(w: *serde.Writer, items: []const []const u8) Allocator.Error!void {
+    try w.writeLen(items.len);
+    for (items) |text| try w.writeStr(text);
+}
+
+fn replayTextList(
+    comptime Id: type,
+    r: *serde.Reader,
+    store: *CanonicalNameStore,
+    comptime internFn: fn (*CanonicalNameStore, []const u8) Allocator.Error!Id,
+) serde.Reader.Error!void {
+    const count = try r.readLen();
+    var i: usize = 0;
+    while (i < count) : (i += 1) {
+        const text = try r.readStr();
+        _ = try internFn(store, text);
+    }
+}
 
 fn internText(
     comptime Id: type,

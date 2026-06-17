@@ -4,6 +4,7 @@ const std = @import("std");
 
 const checked_ids = @import("checked_ids.zig");
 const names = @import("canonical_names.zig");
+const serde = @import("artifact_serde.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -152,6 +153,36 @@ pub const ConstStore = struct {
 
     pub fn get(self: *const ConstStore, id: ConstNodeId) ConstValue {
         return self.values.items[@intFromEnum(id)];
+    }
+
+    /// Serialize the three backing lists. Nested owned slices (list/tuple/record
+    /// payloads, fn captures, string bytes) are deep-copied on deserialize, so
+    /// the restored store frees exactly what `deinit` expects.
+    pub fn rocSerialize(self: *const ConstStore, w: *serde.Writer) Allocator.Error!void {
+        try serde.serializeValue([]const ConstValue, w, &self.values.items);
+        try serde.serializeValue([]const ConstFn, w, &self.fns.items);
+        try serde.serializeValue([]const []const u8, w, &self.str_data.items);
+    }
+
+    /// Free hook for the artifact deserializer: the store owns its lists and
+    /// their nested data via `self.allocator`, so `deinit` frees everything.
+    pub fn rocFree(self: *ConstStore, _: Allocator) void {
+        self.deinit();
+    }
+
+    pub fn rocDeserialize(r: *serde.Reader) serde.Reader.Error!ConstStore {
+        var store = ConstStore.init(r.gpa);
+        errdefer store.deinit();
+        var values: []ConstValue = undefined;
+        try serde.deserializeValue([]ConstValue, r, &values);
+        store.values = .{ .items = values, .capacity = values.len };
+        var fns: []ConstFn = undefined;
+        try serde.deserializeValue([]ConstFn, r, &fns);
+        store.fns = .{ .items = fns, .capacity = fns.len };
+        var str_data: [][]const u8 = undefined;
+        try serde.deserializeValue([][]const u8, r, &str_data);
+        store.str_data = .{ .items = str_data, .capacity = str_data.len };
+        return store;
     }
 
     pub fn strData(self: *const ConstStore, id: ConstStrDataId) []const u8 {

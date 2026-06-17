@@ -58,26 +58,48 @@ pub const BuiltinModules = struct {
 
         // Load the single Builtin module
         var builtin_module = try builtin_loading.loadCompiledModule(allocator, compiled_builtins.builtin_bin, "Builtin", compiled_builtins.builtin_source);
-        errdefer builtin_module.deinit();
+        // Ownership of the loaded env+buffer transfers to `checked_artifact`
+        // (via its `compiled_buffer` module env) once it is deserialized below.
+        var artifact_owns_env = false;
+        errdefer if (!artifact_owns_env) builtin_module.deinit();
 
+        // Prepare the builtin env for runtime use: enable interner inserts (so
+        // the finalization interpreter can intern new identifiers) and finalize
+        // method tables. This preparation previously happened as a side effect of
+        // `TypedCIR.Modules.init` inside `publishFromTypedModule`; it stays here so
+        // the env's lifecycle (and `compiled_buffer` deinit) is unchanged.
         var typed_modules = try check.TypedCIR.Modules.init(allocator, &.{
             .{ .precompiled = builtin_module.env },
         });
         defer typed_modules.deinit();
 
-        var checked_artifact = try check.CheckedArtifact.publishFromTypedModule(
+        // Deserialize the cached pre-finalize CheckedArtifact and re-attach the
+        // freshly loaded module env. This replaces the expensive, deterministic
+        // `publishFromTypedModule` assembly, which is now done at build time.
+        var checked_artifact = try check.CheckedArtifact.CheckedModuleArtifact.deserialize(
+            compiled_builtins.builtin_checked_bin,
             allocator,
-            &typed_modules,
-            0,
-            .{
-                .module_env_storage = .{ .compiled_buffer = .{
-                    .env = builtin_module.env,
-                    .buffer = builtin_module.buffer,
-                } },
-                .compile_time_finalizer = CompileTimeFinalization.finalizer(),
-            },
+            .{ .compiled_buffer = .{
+                .env = builtin_module.env,
+                .buffer = builtin_module.buffer,
+            } },
         );
-        errdefer checked_artifact.deinit(allocator);
+        artifact_owns_env = true;
+        errdefer checked_artifact.deinitDeserialized(allocator);
+
+        // Run compile-time finalization. This used to run as part of
+        // `publishFromTypedModule`; it stays at load time because it requires the
+        // interpreter (`eval`). The builtin has no imports, available, or relation
+        // artifacts, and reports no problems (matching the previous publish call).
+        try CompileTimeFinalization.finalizer().run(
+            allocator,
+            &checked_artifact,
+            &.{},
+            &.{},
+            &.{},
+            null,
+        );
+        try checked_artifact.verifyComplete();
 
         return BuiltinModules{
             .allocator = allocator,
@@ -89,6 +111,8 @@ pub const BuiltinModules = struct {
 
     /// Clean up all resources
     pub fn deinit(self: *BuiltinModules) void {
-        self.checked_artifact.deinit(self.allocator);
+        // The artifact was produced by `deserialize`, so free it via the
+        // matching deserializer free path (which also releases the module env).
+        self.checked_artifact.deinitDeserialized(self.allocator);
     }
 };
