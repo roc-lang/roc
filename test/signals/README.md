@@ -5,6 +5,9 @@ framework. The host is a simulated UI and spec runner: it does not draw pixels,
 but it exercises the same event, render, and command-application path a real
 renderer would need.
 
+For an introduction written for web developers, see
+[`GUIDE.md`](GUIDE.md).
+
 The current design keeps graph and render semantics on the Roc side of the
 boundary:
 
