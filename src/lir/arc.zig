@@ -75,8 +75,11 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         .queue = .empty,
         .enabled = options.specialize,
         .original_bodies = original_bodies,
+        .unique_seed_masks = try store.allocator.alloc(?u64, base_proc_count),
     };
+    @memset(variants.unique_seed_masks, null);
     defer {
+        store.allocator.free(variants.unique_seed_masks);
         variants.map.deinit();
         variants.sigs.deinit(store.allocator);
         variants.queue.deinit(store.allocator);
@@ -211,6 +214,9 @@ const VariantTable = struct {
     enabled: bool,
     /// Ownership-neutral bodies of the base procs, for variant re-emission.
     original_bodies: []const ?LIR.CFStmtId,
+    /// Lazily-computed parameter positions whose unique seed can eliminate a
+    /// runtime uniqueness check in the original body.
+    unique_seed_masks: []?u64,
 };
 
 const RewriteOptions = struct {
@@ -569,7 +575,7 @@ const Inserter = struct {
                     // specialization is on, and never for pinned callees,
                     // whose vectors are ABI contracts.
                     const unique_demand = self.variants.enabled and !self.solution.isPinnedProc(assign.proc);
-                    var arg_ownership = try self.callArgOwnership(&path.owned, callee_sig, unique_demand, assign.args, assign.next, assign.target, path.options.loop_keep);
+                    var arg_ownership = try self.callArgOwnership(assign.proc, &path.owned, callee_sig, unique_demand, assign.args, assign.next, assign.target, path.options.loop_keep);
                     defer arg_ownership.deinit(self.store.allocator);
                     const call_target = try self.variantForCall(assign.proc, arg_ownership.demanded);
                     if (!self.spanUsesLocal(assign.args, assign.target)) {
@@ -597,7 +603,7 @@ const Inserter = struct {
                     path.cursor = assign.next;
                 },
                 .assign_call_erased => |assign| {
-                    var arg_ownership = try self.callArgOwnership(&path.owned, arc_sig.RcSig.all_owned, false, assign.args, assign.next, assign.target, path.options.loop_keep);
+                    var arg_ownership = try self.callArgOwnership(null, &path.owned, arc_sig.RcSig.all_owned, false, assign.args, assign.next, assign.target, path.options.loop_keep);
                     defer arg_ownership.deinit(self.store.allocator);
                     if (!self.spanUsesLocal(assign.args, assign.target) and assign.closure != assign.target) {
                         current_start = try self.releaseOldTargetIfNeeded(assign.target, &path.owned, current_start);
@@ -1597,7 +1603,7 @@ const Inserter = struct {
                 .assign_call => |assign| {
                     // The demanded vector is unused on analysis paths, so
                     // skip the unique-demand scan.
-                    var arg_ownership = try self.callArgOwnership(&path.owned, self.solution.sigOf(assign.proc), false, assign.args, assign.next, assign.target, path.loop_keep);
+                    var arg_ownership = try self.callArgOwnership(null, &path.owned, self.solution.sigOf(assign.proc), false, assign.args, assign.next, assign.target, path.loop_keep);
                     defer arg_ownership.deinit(self.store.allocator);
                     self.unsetArgs(&path.owned, arg_ownership.transfer_args.items);
                     self.addCallResultOwnedIfRc(&path.owned, assign.target, arg_ownership.demanded.ret_mode);
@@ -1606,7 +1612,7 @@ const Inserter = struct {
                     path.cursor = assign.next;
                 },
                 .assign_call_erased => |assign| {
-                    var arg_ownership = try self.callArgOwnership(&path.owned, arc_sig.RcSig.all_owned, false, assign.args, assign.next, assign.target, path.loop_keep);
+                    var arg_ownership = try self.callArgOwnership(null, &path.owned, arc_sig.RcSig.all_owned, false, assign.args, assign.next, assign.target, path.loop_keep);
                     defer arg_ownership.deinit(self.store.allocator);
                     self.unsetArgs(&path.owned, arg_ownership.transfer_args.items);
                     self.addCallResultOwnedIfRc(&path.owned, assign.target, .owned);
@@ -2208,8 +2214,136 @@ const Inserter = struct {
         return false;
     }
 
+    fn procParamCanUseUniqueSeed(
+        self: *Inserter,
+        proc_id: LIR.LirProcSpecId,
+        position: usize,
+    ) ResourceError!bool {
+        if (position >= 64) return false;
+        const proc_index = @intFromEnum(proc_id);
+        if (proc_index >= self.variants.unique_seed_masks.len) return false;
+        if (self.variants.unique_seed_masks[proc_index]) |mask| {
+            return (mask & argMaskBit(position)) != 0;
+        }
+
+        const mask = try self.computeProcUniqueSeedMask(proc_id);
+        self.variants.unique_seed_masks[proc_index] = mask;
+        return (mask & argMaskBit(position)) != 0;
+    }
+
+    fn computeProcUniqueSeedMask(self: *Inserter, proc_id: LIR.LirProcSpecId) ResourceError!u64 {
+        const proc = self.store.getProcSpec(proc_id);
+        const params = self.store.getLocalSpan(proc.args);
+        if (params.len == 0) return 0;
+
+        var mask: u64 = 0;
+        var visited = try self.store.allocator.alloc(bool, self.store.cf_stmts.items.len);
+        defer self.store.allocator.free(visited);
+        @memset(visited, false);
+
+        var stack = std.ArrayList(LIR.CFStmtId).empty;
+        defer stack.deinit(self.store.allocator);
+
+        if (self.variants.original_bodies[@intFromEnum(proc_id)]) |body| {
+            try stack.append(self.store.allocator, body);
+        }
+        for (self.store.getJoinPointSpan(proc.join_points)) |join_point| {
+            try stack.append(self.store.allocator, join_point.body);
+        }
+
+        while (stack.pop()) |stmt_id| {
+            const stmt_index = @intFromEnum(stmt_id);
+            if (stmt_index >= visited.len) arcInvariant("ARC unique-seed scan saw stmt outside store");
+            if (visited[stmt_index]) continue;
+            visited[stmt_index] = true;
+
+            const stmt = self.store.getCFStmt(stmt_id);
+            switch (stmt) {
+                .assign_low_level => |assign| {
+                    mask |= self.uniqueSeedMaskForLowLevel(params, assign.args, assign.rc_effect);
+                    try stack.append(self.store.allocator, assign.next);
+                },
+                .switch_stmt => |switch_stmt| {
+                    for (self.store.getCFSwitchBranches(switch_stmt.branches)) |branch| {
+                        try stack.append(self.store.allocator, branch.body);
+                    }
+                    try stack.append(self.store.allocator, switch_stmt.default_branch);
+                    if (switch_stmt.continuation) |continuation| {
+                        try stack.append(self.store.allocator, continuation);
+                    }
+                },
+                .str_match => |str_match| {
+                    try stack.append(self.store.allocator, str_match.on_match);
+                    try stack.append(self.store.allocator, str_match.on_miss);
+                },
+                .str_match_set => |str_match_set| {
+                    for (self.store.getStrMatchArms(str_match_set.arms)) |arm| {
+                        try stack.append(self.store.allocator, arm.on_match);
+                    }
+                    try stack.append(self.store.allocator, str_match_set.on_miss);
+                },
+                .join => |join_stmt| {
+                    try stack.append(self.store.allocator, join_stmt.body);
+                    try stack.append(self.store.allocator, join_stmt.remainder);
+                },
+                inline .assign_ref,
+                .assign_literal,
+                .assign_call,
+                .assign_call_erased,
+                .assign_packed_erased_fn,
+                .assign_list,
+                .assign_struct,
+                .assign_tag,
+                .set_local,
+                .debug,
+                .expect,
+                .comptime_branch_taken,
+                .incref,
+                .decref,
+                .free,
+                => |linear| try stack.append(self.store.allocator, linear.next),
+                .ret,
+                .jump,
+                .crash,
+                .expect_err,
+                .runtime_error,
+                .comptime_exhaustiveness_failed,
+                .loop_continue,
+                .loop_break,
+                => {},
+            }
+        }
+
+        return mask;
+    }
+
+    fn uniqueSeedMaskForLowLevel(
+        self: *const Inserter,
+        params: []const LIR.LocalId,
+        args: LIR.LocalSpan,
+        rc_effect: LIR.LowLevel.RcEffect,
+    ) u64 {
+        const check_mask = rc_effect.may_runtime_uniqueness_check_args & rc_effect.consume_args;
+        if (check_mask == 0) return 0;
+
+        var mask: u64 = 0;
+        const locals = self.store.getLocalSpan(args);
+        for (locals, 0..) |arg, arg_position| {
+            if (arg_position >= 64) break;
+            if ((check_mask & argMaskBit(arg_position)) == 0) continue;
+            for (params[0..@min(params.len, 64)], 0..) |param, param_position| {
+                if (arg == param) {
+                    mask |= argMaskBit(param_position);
+                    break;
+                }
+            }
+        }
+        return mask;
+    }
+
     fn callArgOwnership(
         self: *Inserter,
+        callee: ?LIR.LirProcSpecId,
         owned: *const OwnedSet,
         callee_sig: arc_sig.RcSig,
         unique_demand: bool,
@@ -2229,23 +2363,28 @@ const Inserter = struct {
             if (!self.localContainsRefcounted(local)) continue;
             if (callee_sig.paramMode(position) == .borrowed) {
                 // Borrowed positions keep the caller's ownership untouched.
-                // With specialization enabled, an argument whose lifetime
-                // ends here moves into an owned-demanding variant instead of
-                // paying a post-call release.
+                // With specialization enabled, a final-use argument only
+                // moves into an owned-demanding variant when that changes
+                // runtime work inside the callee. Merely moving the caller's
+                // post-call release into a clone preserves the same RC work
+                // while growing live code.
                 if (!self.variants.enabled) continue;
                 if (position >= 64) continue;
                 const used_after_call = local != target and try self.groupUsedInPath(next, local, loop_keep);
                 const can_transfer = owned.contains(local) and !used_after_call and !transferred.contains(local);
                 if (!can_transfer) continue;
                 const bit = @as(u64, 1) << @as(u6, @intCast(position));
+                const return_borrows_param = callee_sig.ret_mode == .borrowed and (callee_sig.ret_lenders & bit) != 0;
+                const seed_can_reach_check = if (callee) |direct| try self.procParamCanUseUniqueSeed(direct, position) else false;
+                const seeds_unique_param = unique_demand and seed_can_reach_check and self.isLocalUniqueHere(local) and
+                    !self.groupSharesOtherOperand(locals, position, local);
+                if (!return_borrows_param and !seeds_unique_param) continue;
                 result.demanded.borrowed_params &= ~bit;
-                if (callee_sig.ret_mode == .borrowed and (callee_sig.ret_lenders & bit) != 0) {
+                if (return_borrows_param) {
                     result.demanded.ret_mode = .owned;
                     result.demanded.ret_lenders = 0;
                 }
-                if (unique_demand and self.isLocalUniqueHere(local) and
-                    !self.groupSharesOtherOperand(locals, position, local))
-                {
+                if (seeds_unique_param) {
                     result.demanded.unique_params |= bit;
                 }
                 try result.transfer_args.append(self.store.allocator, local);
@@ -2261,7 +2400,11 @@ const Inserter = struct {
                 // statically unique with no borrow live at the call demands
                 // a variant whose parameter is seeded born-unique, so
                 // checked ops it reaches in the body go check-free.
-                if (unique_demand and position < 64 and self.isLocalUniqueHere(local) and
+                const seed_can_reach_check = if (position < 64) blk: {
+                    const direct = callee orelse break :blk false;
+                    break :blk try self.procParamCanUseUniqueSeed(direct, position);
+                } else false;
+                if (unique_demand and seed_can_reach_check and self.isLocalUniqueHere(local) and
                     !self.groupSharesOtherOperand(locals, position, local))
                 {
                     result.demanded.unique_params |= @as(u64, 1) << @as(u6, @intCast(position));
@@ -5130,7 +5273,7 @@ test "RC borrow: string match view capture returned retains the view" {
     try f.expectRc(capture, 1, 0, 0);
 }
 
-test "RC specialization: owned final argument moves into a variant" {
+test "RC specialization: borrowed final argument does not clone for release-only moves" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
 
@@ -5159,52 +5302,43 @@ test "RC specialization: owned final argument moves into a variant" {
     const base_proc_count = f.store.proc_specs.items.len;
     try insert(&f.store, &f.layouts, .{ .specialize = true });
 
-    // One owned-demanding variant exists, the caller moves the argument
-    // (no RC statements on it in the caller), and the variant releases the
-    // parameter after its last use.
-    try testing.expectEqual(base_proc_count + 1, f.store.proc_specs.items.len);
-    try f.expectRc(value, 0, 0, 0);
-    try testing.expectEqual(@as(usize, 1), f.countRc(param, .decref));
+    // Moving this argument into a variant would only relocate the release
+    // from caller to callee. Keep the borrowed signature and avoid cloning
+    // live code for no runtime RC reduction.
+    try testing.expectEqual(base_proc_count, f.store.proc_specs.items.len);
+    try f.expectRc(value, 0, 1, 0);
+    try f.expectRc(param, 0, 0, 0);
 }
 
 test "RC specialization: caller body survives variant proc append" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
 
-    const one_str = try f.layouts.putStructFields(&[_]layout_mod.StructField{
-        .{ .index = 0, .layout = .str },
-    });
-
-    // Callee reads its aggregate parameter at position 1, so that parameter
-    // solves borrowed.
+    // Callee returns its string parameter at position 1, so that parameter
+    // and return solve borrowed.
     const callee_flag = try f.local(.i64);
-    const callee_param = try f.local(one_str);
-    const callee_result = try f.local(.i64);
-    const callee_ret = try f.ret(callee_result);
-    const callee_result_assign = try f.assignI64(callee_result, 1, callee_ret);
-    const callee_body = try f.expectStmt(callee_param, callee_result_assign);
-    const callee = try f.addProc(&.{ callee_flag, callee_param }, callee_body, .i64);
+    const callee_param = try f.local(.str);
+    const callee_ret = try f.ret(callee_param);
+    const callee = try f.addProc(&.{ callee_flag, callee_param }, callee_ret, .str);
 
-    // Caller builds an owned aggregate from a borrowed field and passes that
-    // aggregate as its final use. Specialization appends a proc while this
-    // caller is being rewritten, so the caller body must be written back only
-    // after reacquiring its proc-spec pointer.
+    // Caller builds an owned string and passes it as its final use. The
+    // variant turns the borrowed return into an owned return. It is appended
+    // while this caller is being rewritten, so the caller body must be written
+    // back only after reacquiring its proc-spec pointer.
     const source = try f.local(.str);
-    const field = try f.local(.str);
-    const pair = try f.local(one_str);
     const flag = try f.local(.i64);
-    const result = try f.local(.i64);
-    const caller_ret = try f.ret(result);
+    const result = try f.local(.str);
+    const done = try f.local(.i64);
+    const caller_ret = try f.ret(done);
+    const done_assign = try f.assignI64(done, 1, caller_ret);
     const call = try f.store.addCFStmt(.{ .assign_call = .{
         .target = result,
         .proc = callee,
-        .args = try f.span(&.{ flag, pair }),
-        .next = caller_ret,
+        .args = try f.span(&.{ flag, source }),
+        .next = done_assign,
     } });
     const flag_assign = try f.assignI64(flag, 0, call);
-    const pair_assign = try f.assignStruct(pair, &.{field}, flag_assign);
-    const field_assign = try f.assignRefLocal(field, source, pair_assign);
-    const caller_body = try f.assignStr(source, "arg", field_assign);
+    const caller_body = try f.assignStr(source, "arg", flag_assign);
     const caller = try f.addProc(&.{}, caller_body, .i64);
 
     const base_proc_count = f.store.proc_specs.items.len;
@@ -5272,22 +5406,22 @@ test "RC specialization: identical demand vectors share one variant" {
     defer f.deinit();
 
     const param = try f.local(.str);
-    const callee_result = try f.local(.i64);
-    const callee_ret = try f.ret(callee_result);
-    const callee_result_assign = try f.assignI64(callee_result, 1, callee_ret);
-    const callee_body = try f.expectStmt(param, callee_result_assign);
-    const callee = try f.addProc(&.{param}, callee_body, .i64);
+    const callee_ret = try f.ret(param);
+    const callee_body = try f.expectStmt(param, callee_ret);
+    const callee = try f.addProc(&.{param}, callee_body, .str);
 
     const value_a = try f.local(.str);
     const value_b = try f.local(.str);
-    const result_a = try f.local(.i64);
-    const result_b = try f.local(.i64);
-    const ret = try f.ret(result_b);
+    const result_a = try f.local(.str);
+    const result_b = try f.local(.str);
+    const done = try f.local(.i64);
+    const ret = try f.ret(done);
+    const done_assign = try f.assignI64(done, 1, ret);
     const call_b = try f.store.addCFStmt(.{ .assign_call = .{
         .target = result_b,
         .proc = callee,
         .args = try f.span(&.{value_b}),
-        .next = ret,
+        .next = done_assign,
     } });
     const assign_b = try f.assignStr(value_b, "b", call_b);
     const call_a = try f.store.addCFStmt(.{ .assign_call = .{
