@@ -1463,6 +1463,18 @@ const Lowerer = struct {
             .frac_f64_lit,
             .str_lit,
             => next,
+            .str_pattern => |str| blk: {
+                var current = next;
+                const steps = self.program.strPatternStepSpan(str.steps);
+                var i = steps.len;
+                while (i > 0) {
+                    i -= 1;
+                    if (steps[i].capture) |capture| {
+                        current = try self.initUninitializedPattern(capture, current);
+                    }
+                }
+                break :blk current;
+            },
             .as => |as| blk: {
                 const inner = try self.initUninitializedPattern(as.pattern, next);
                 break :blk try self.initUninitializedLocal(try self.localFor(as.local), inner);
