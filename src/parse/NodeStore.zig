@@ -1083,7 +1083,7 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) std.mem.Allocator.Error!AST.Ex
 pub fn addPatternRecordField(store: *NodeStore, field: AST.PatternRecordField) std.mem.Allocator.Error!AST.PatternRecordField.Idx {
     var node = Node{
         .tag = .record_field_patt,
-        .main_token = field.name,
+        .main_token = field.name orelse 0,
         .data = .{
             .lhs = @intFromBool(field.rest),
             .rhs = 0,
@@ -1101,7 +1101,7 @@ pub fn addPatternRecordField(store: *NodeStore, field: AST.PatternRecordField) s
 pub fn getPatternRecordField(store: *const NodeStore, field: AST.PatternRecordField.Idx) AST.PatternRecordField {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(field)));
     return .{
-        .name = node.main_token,
+        .name = if (node.main_token == 0) null else node.main_token,
         .value = if (node.data.rhs == 0) null else @enumFromInt(node.data.rhs),
         .rest = node.data.lhs == 1,
         .region = node.region,

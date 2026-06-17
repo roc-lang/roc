@@ -14678,7 +14678,7 @@ pub fn canonicalizePattern(
             const field = self.parse_ir.store.getPatternRecordField(field_idx);
             const field_region = self.parse_ir.tokenizedRegionToRegion(field.region);
 
-            if (field.rest and field.name == 0) {
+            if (field.rest and field.name == null) {
                 const underscore_pattern_idx = try self.env.addPattern(Pattern{ .underscore = {} }, field_region);
                 const record_destruct = CIR.Pattern.RecordDestruct{
                     .label = self.env.idents.open_ext,
@@ -14696,8 +14696,13 @@ pub fn canonicalizePattern(
                 continue :patternkernel_loop .dispatch;
             }
 
-            // Resolve the field name
-            const field_name_ident = self.parse_ir.tokens.resolveIdentifier(field.name) orelse {
+            // Resolve the field name. Only a bare rest (`..`) has no name, and that
+            // case is handled above, so any remaining field must carry a name token.
+            const mb_field_name_ident = if (field.name) |name_tok|
+                self.parse_ir.tokens.resolveIdentifier(name_tok)
+            else
+                null;
+            const field_name_ident = mb_field_name_ident orelse {
                 const feature = try self.env.insertString("report an error when unable to resolve field identifier");
                 last_pattern = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .not_implemented = .{
                     .feature = feature,

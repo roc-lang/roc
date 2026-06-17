@@ -785,7 +785,7 @@ pub const ReportBuilder = struct {
                         &.{D.bytes("This expression is used in an unexpected way:")},
                         &.{D.bytes("It has the type:")},
                         mismatch.types.actual_snapshot,
-                        &.{D.bytes("But the annotation say it should be:")},
+                        &.{D.bytes("But the annotation says it should be:")},
                         mismatch.types.expected_snapshot,
                         &.{},
                     ),
