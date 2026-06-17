@@ -186,6 +186,9 @@ pub const Generalizer = struct {
             const resolved = self.store.resolveVar(rank_var);
             if (resolved.is_root) {
                 const resolved_rank_int = @intFromEnum(resolved.desc.rank);
+                // Adjustment only lowers ranks; a rank above the one being
+                // generalized means a reducer broke the invariant (see line ~122).
+                std.debug.assert(resolved_rank_int <= rank_to_generalize_int);
                 if (resolved_rank_int < rank_to_generalize_int) {
                     // Escaped var, so move it to the right pool.
                     try var_pool.addVarToRank(resolved.var_, resolved.desc.rank);
@@ -287,6 +290,23 @@ pub const Generalizer = struct {
         return new_rank;
     }
 
+    /// Rank reduction shared by applied containers (aliases, nominal types,
+    /// tuples): the container contributes nothing itself, so its rank is the
+    /// max over its args. Seed at `generalized` (the max-identity) and let the
+    /// args raise it — seeding at `outermost` would floor the result there even
+    /// when every arg is already generalized, wrongly blocking generalization of
+    /// the type that uses the container. No args means a ground type, which sits
+    /// at `outermost`.
+    fn adjustRankOverArgs(self: *Self, args_iter: Var.SafeList.Iterator, group_rank: Rank, vars_to_generalize: []Var) std.mem.Allocator.Error!Rank {
+        var iter = args_iter;
+        if (iter.count() == 0) return Rank.outermost;
+        var next_rank = Rank.generalized;
+        while (iter.next()) |arg_var| {
+            next_rank = next_rank.max(try self.adjustRank(arg_var, group_rank, vars_to_generalize));
+        }
+        return next_rank;
+    }
+
     fn adjustRankContent(self: *Self, content: Content, group_rank: Rank, vars_to_generalize: []Var) std.mem.Allocator.Error!Rank {
         return switch (content) {
             .flex => {
@@ -308,28 +328,13 @@ pub const Generalizer = struct {
                 return next_rank;
             },
             .alias => |alias| {
-                // THEORY: Here, we don't need to recurse into the backing type because:
-                // 1. We visit the type arguments (args)
-                // 2. Anything in the RHS of the alias is either:
-                //    - A reference to an arg (already visited via args)
-                //    - A concrete type (adjustRankContent would resolve to outermost)
-                // So traversing the backing var would be redundant.
-                //
-                // The container itself does not contribute to the rank, so its rank
-                // is just the highest rank among its args. We start the search from
-                // the lowest rank and let the args raise it. Starting from outermost
-                // instead would force the result to be at least outermost even when
-                // every arg is already generalized, which makes the type that uses
-                // this alias look like it depends on an outer scope and stops it from
-                // being generalized. With no args there is nothing to generalize, so
-                // keep outermost.
-                var args_iter = self.store.iterAliasArgs(alias);
-                if (args_iter.count() == 0) return Rank.outermost;
-                var next_rank = Rank.generalized;
-                while (args_iter.next()) |arg_var| {
-                    next_rank = next_rank.max(try self.adjustRank(arg_var, group_rank, vars_to_generalize));
-                }
-                return next_rank;
+                // THEORY: we don't need to recurse into the backing type. Everything
+                // in the alias RHS is either a reference to an arg (already visited
+                // via the args below) or a concrete type (which resolves to
+                // `outermost` on its own, so it can't raise the rank). Traversing the
+                // backing var would therefore be redundant — the rank is just the max
+                // over the args.
+                return self.adjustRankOverArgs(self.store.iterAliasArgs(alias), group_rank, vars_to_generalize);
             },
             .structure => |flat_type| {
                 switch (flat_type) {
@@ -338,40 +343,12 @@ pub const Generalizer = struct {
                         return .outermost;
                     },
                     .tuple => |tuple| {
-                        if (tuple.elems.len() > 0) {
-                            const elems = self.store.sliceVars(tuple.elems);
-                            var next_rank = try self.adjustRank(elems[0], group_rank, vars_to_generalize);
-                            for (elems[1..]) |arg_var| {
-                                next_rank = next_rank.max(try self.adjustRank(arg_var, group_rank, vars_to_generalize));
-                            }
-                            return next_rank;
-                        } else {
-                            // THEORY: Empty tuples never need to be generalized
-                            return .outermost;
-                        }
+                        return self.adjustRankOverArgs(self.store.iterVars(tuple.elems), group_rank, vars_to_generalize);
                     },
                     .nominal_type => |nominal| {
-                        // THEORY: Here, we don't need to recurse into the backing type because:
-                        // 1. We visit the type arguments (args)
-                        // 2. Anything in the RHS of the nominal type is either:
-                        //    - A reference to an arg (already visited via args)
-                        //    - A concrete type (adjustRankContent would resolve to outermost)
-                        // So traversing the backing var would be redundant.
-                        //
-                        // As with the alias case above, the container does not
-                        // contribute to the rank, so we start the search from the
-                        // lowest rank and let the args raise it. Starting from
-                        // outermost would force the result to be at least outermost
-                        // even when every arg is already generalized, which stops the
-                        // type that uses this nominal from being generalized. With no
-                        // args there is nothing to generalize, so keep outermost.
-                        var args_iter = self.store.iterNominalArgs(nominal);
-                        if (args_iter.count() == 0) return Rank.outermost;
-                        var next_rank = Rank.generalized;
-                        while (args_iter.next()) |arg_var| {
-                            next_rank = next_rank.max(try self.adjustRank(arg_var, group_rank, vars_to_generalize));
-                        }
-                        return next_rank;
+                        // Same as .alias: don't recurse into the backing type, take
+                        // the max over the args.
+                        return self.adjustRankOverArgs(self.store.iterNominalArgs(nominal), group_rank, vars_to_generalize);
                     },
                     .fn_pure => |func| {
                         var next_rank = try self.adjustRank(func.ret, group_rank, vars_to_generalize);
