@@ -126,6 +126,9 @@ pub const Value = opaque {
     pub const setLinkage = LLVMSetLinkage;
     extern fn LLVMSetLinkage(Global: *Value, Linkage: c_int) void;
 
+    pub const setVisibility = LLVMSetVisibility;
+    extern fn LLVMSetVisibility(Global: *Value, Viz: c_int) void;
+
     pub const aliasGetAliasee = LLVMAliasGetAliasee;
     extern fn LLVMAliasGetAliasee(Alias: *Value) ?*Value;
 

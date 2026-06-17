@@ -314,6 +314,34 @@ fn cleanMergedBuiltinDefinitions(module: *bindings.Module, app_defs: *const std.
     }
 }
 
+/// `LLVMProtectedVisibility`: the symbol stays exported (so the harness can look
+/// up entry points and `roc_expect_err_region`) but is non-preemptible, so
+/// intra-image references compile to direct PC-relative accesses instead of
+/// GOT/PLT slots needing a runtime relocation.
+const llvm_protected_visibility: c_int = 2;
+
+/// Make every definition in the merged module non-preemptible so the in-process
+/// loader never has to resolve an intra-image GOT/PLT slot. Declarations
+/// (external references) are left untouched.
+fn markDefinitionsDsoLocal(module: *bindings.Module) void {
+    var func = module.getFirstFunction();
+    while (func) |value| : (func = value.getNextFunction()) {
+        if (value.isDeclaration().toBool()) continue;
+        value.setVisibility(llvm_protected_visibility);
+    }
+
+    var global = module.getFirstGlobal();
+    while (global) |value| : (global = value.getNextGlobal()) {
+        if (value.isDeclaration().toBool()) continue;
+        value.setVisibility(llvm_protected_visibility);
+    }
+
+    var alias = module.getFirstGlobalAlias();
+    while (alias) |value| : (alias = value.getNextGlobalAlias()) {
+        value.setVisibility(llvm_protected_visibility);
+    }
+}
+
 fn removeBuiltinUsedRoots(module: *bindings.Module) void {
     if (module.getNamedGlobal("llvm.used")) |used| {
         used.deleteGlobal();
@@ -484,6 +512,14 @@ fn emitMergedBitcodeToObjectFile(
         cleanMergedBuiltinDefinitions(module, &app_defs);
         bindings.runGlobalDCE(module);
     }
+
+    // This object is loaded in-process by a relocation-free loader (Zig's
+    // `ElfDynLib` in a static, no-libc roc binary applies no relocations; the
+    // dev backend's object reader handles only a fixed set). Every definition in
+    // the merged module lives in this same image, so mark them `dso_local` to
+    // make intra-image references direct (PC-relative) instead of routing through
+    // a GOT/PLT slot that would need a runtime relocation and otherwise stay null.
+    markDefinitionsDsoLocal(module);
 
     var verify_error: [*:0]const u8 = undefined;
     if (module.verify(.ReturnStatus, &verify_error).toBool()) {
