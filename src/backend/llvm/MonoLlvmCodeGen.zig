@@ -2236,6 +2236,25 @@ pub const MonoLlvmCodeGen = struct {
             .str_from_utf8_lossy => try self.emitStrFromUtf8Lossy(target, arg_locals[0]),
             .str_from_utf8 => try self.emitStrFromUtf8(target, arg_locals[0]),
             .str_inspect => try self.emitStrUnaryRetBuiltin(target, "roc_builtins_str_escape_and_quote", arg_locals[0], null),
+            .dict_pseudo_seed,
+            .hasher_finish,
+            .hasher_write_bool,
+            .hasher_write_u8,
+            .hasher_write_u16,
+            .hasher_write_u32,
+            .hasher_write_u64,
+            .hasher_write_u128,
+            .hasher_write_i8,
+            .hasher_write_i16,
+            .hasher_write_i32,
+            .hasher_write_i64,
+            .hasher_write_i128,
+            .hasher_write_f32,
+            .hasher_write_f64,
+            .hasher_write_dec,
+            .hasher_write_bytes,
+            .hasher_write_str,
+            => try self.emitHasherLowLevel(target, op, arg_locals),
             .u8_from_str => try self.emitIntFromStr(target, arg_locals[0], 1, false),
             .i8_from_str => try self.emitIntFromStr(target, arg_locals[0], 1, true),
             .u16_from_str => try self.emitIntFromStr(target, arg_locals[0], 2, false),
@@ -2264,6 +2283,178 @@ pub const MonoLlvmCodeGen = struct {
             .crash => try self.emitCrashBytes("Roc crashed"),
             else => try self.emitNumericConversionOrCrash(target, op, arg_locals),
         }
+    }
+
+    fn emitHasherLowLevel(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LowLevel, args: []const LocalId) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+
+        const result = switch (op) {
+            .dict_pseudo_seed => blk: {
+                if (args.len != 0) return error.CompilationFailed;
+                break :blk try self.callBuiltin("roc_builtins_dict_pseudo_seed", .i64, &.{}, &.{});
+            },
+            .hasher_finish => blk: {
+                if (args.len != 1) return error.CompilationFailed;
+                const seed = try self.loadHasherState(args[0]);
+                break :blk try self.callBuiltin("roc_builtins_hasher_finish", .i64, &.{.i64}, &.{seed});
+            },
+            .hasher_write_bool,
+            .hasher_write_u8,
+            .hasher_write_u16,
+            .hasher_write_u32,
+            .hasher_write_u64,
+            .hasher_write_i8,
+            .hasher_write_i16,
+            .hasher_write_i32,
+            .hasher_write_i64,
+            => blk: {
+                if (args.len != 2) return error.CompilationFailed;
+                const seed = try self.loadHasherState(args[0]);
+                const value_layout = self.localLayout(args[1]);
+                const value = try self.coerceScalar(try self.loadScalar(self.slot(args[1]).ptr, value_layout), .i64, value_layout.isSigned());
+                break :blk try self.callBuiltin(
+                    "roc_builtins_hasher_write_u64",
+                    .i64,
+                    &.{ .i64, .i8, .i64, .i8 },
+                    &.{
+                        seed,
+                        builder.intValue(.i8, hasherDomain(op)) catch return error.OutOfMemory,
+                        value,
+                        builder.intValue(.i8, hasherWidth(op)) catch return error.OutOfMemory,
+                    },
+                );
+            },
+            .hasher_write_f32 => blk: {
+                if (args.len != 2) return error.CompilationFailed;
+                const seed = try self.loadHasherState(args[0]);
+                const value = try self.loadScalar(self.slot(args[1]).ptr, self.localLayout(args[1]));
+                const bits32 = wip.cast(.bitcast, value, .i32, "") catch return error.OutOfMemory;
+                const bits64 = try self.coerceScalar(bits32, .i64, false);
+                break :blk try self.callBuiltin("roc_builtins_hasher_write_f32_bits", .i64, &.{ .i64, .i64 }, &.{ seed, bits64 });
+            },
+            .hasher_write_f64 => blk: {
+                if (args.len != 2) return error.CompilationFailed;
+                const seed = try self.loadHasherState(args[0]);
+                const value = try self.loadScalar(self.slot(args[1]).ptr, self.localLayout(args[1]));
+                const bits = wip.cast(.bitcast, value, .i64, "") catch return error.OutOfMemory;
+                break :blk try self.callBuiltin("roc_builtins_hasher_write_f64_bits", .i64, &.{ .i64, .i64 }, &.{ seed, bits });
+            },
+            .hasher_write_u128,
+            .hasher_write_i128,
+            .hasher_write_dec,
+            => blk: {
+                if (args.len != 2) return error.CompilationFailed;
+                const seed = try self.loadHasherState(args[0]);
+                const value = try self.loadScalar(self.slot(args[1]).ptr, self.localLayout(args[1]));
+                const parts = try self.splitI128Value(value);
+                break :blk try self.callBuiltin(
+                    "roc_builtins_hasher_write_u128",
+                    .i64,
+                    &.{ .i64, .i8, .i64, .i64 },
+                    &.{
+                        seed,
+                        builder.intValue(.i8, hasherDomain(op)) catch return error.OutOfMemory,
+                        parts.low,
+                        parts.high,
+                    },
+                );
+            },
+            .hasher_write_bytes => blk: {
+                if (args.len != 2) return error.CompilationFailed;
+                const seed = try self.loadHasherState(args[0]);
+                var list_args = try self.rocListArgs1(args[1]);
+                defer list_args.deinit(self.allocator);
+                break :blk try self.callBuiltin(
+                    "roc_builtins_hasher_write_bytes",
+                    .i64,
+                    &.{ .i64, .i8, try self.ptrType(), self.ptrSizedIntType() },
+                    &.{
+                        seed,
+                        builder.intValue(.i8, hasherDomain(op)) catch return error.OutOfMemory,
+                        list_args.values.items[0],
+                        list_args.values.items[1],
+                    },
+                );
+            },
+            .hasher_write_str => blk: {
+                if (args.len != 2) return error.CompilationFailed;
+                const seed = try self.loadHasherState(args[0]);
+                var str_args = try self.rocStrArgs1(args[1]);
+                defer str_args.deinit(self.allocator);
+                break :blk try self.callBuiltin(
+                    "roc_builtins_hasher_write_str",
+                    .i64,
+                    &.{ .i64, try self.ptrType(), self.ptrSizedIntType(), self.ptrSizedIntType() },
+                    &.{ seed, str_args.values.items[0], str_args.values.items[1], str_args.values.items[2] },
+                );
+            },
+            else => return error.UnsupportedLowLevel,
+        };
+
+        try self.storeHasherState(target, result);
+    }
+
+    fn hasherDomain(op: lir.LowLevel) u8 {
+        return @intFromEnum(switch (op) {
+            .hasher_write_bool => builtins.hash.HasherDomain.bool,
+            .hasher_write_u8 => builtins.hash.HasherDomain.u8,
+            .hasher_write_u16 => builtins.hash.HasherDomain.u16,
+            .hasher_write_u32 => builtins.hash.HasherDomain.u32,
+            .hasher_write_u64 => builtins.hash.HasherDomain.u64,
+            .hasher_write_u128 => builtins.hash.HasherDomain.u128,
+            .hasher_write_i8 => builtins.hash.HasherDomain.i8,
+            .hasher_write_i16 => builtins.hash.HasherDomain.i16,
+            .hasher_write_i32 => builtins.hash.HasherDomain.i32,
+            .hasher_write_i64 => builtins.hash.HasherDomain.i64,
+            .hasher_write_i128 => builtins.hash.HasherDomain.i128,
+            .hasher_write_dec => builtins.hash.HasherDomain.dec,
+            .hasher_write_bytes => builtins.hash.HasherDomain.bytes,
+            else => unreachable,
+        });
+    }
+
+    fn hasherWidth(op: lir.LowLevel) u8 {
+        return switch (op) {
+            .hasher_write_bool,
+            .hasher_write_u8,
+            .hasher_write_i8,
+            => 1,
+            .hasher_write_u16,
+            .hasher_write_i16,
+            => 2,
+            .hasher_write_u32,
+            .hasher_write_i32,
+            => 4,
+            .hasher_write_u64,
+            .hasher_write_i64,
+            => 8,
+            else => unreachable,
+        };
+    }
+
+    fn hasherStatePtr(self: *MonoLlvmCodeGen, local: LocalId) Error!LlvmBuilder.Value {
+        const local_layout = self.localLayout(local);
+        if (local_layout == .u64) return self.slot(local).ptr;
+
+        const base = try self.resolveStructBase(local);
+        const base_layout = self.layoutValue(base.layout_idx);
+        if (base_layout.tag != .struct_) return error.CompilationFailed;
+
+        const struct_idx = base_layout.getStruct().idx;
+        const state_layout = self.layouts().getStructFieldLayoutByOriginalIndex(struct_idx, 0);
+        if (state_layout != .u64) return error.CompilationFailed;
+
+        const state_offset = self.layouts().getStructFieldOffsetByOriginalIndex(struct_idx, 0);
+        return self.offsetPtr(base.ptr, state_offset);
+    }
+
+    fn loadHasherState(self: *MonoLlvmCodeGen, local: LocalId) Error!LlvmBuilder.Value {
+        return self.loadScalar(try self.hasherStatePtr(local), .u64);
+    }
+
+    fn storeHasherState(self: *MonoLlvmCodeGen, local: LocalId, value: LlvmBuilder.Value) Error!void {
+        try self.storeScalar(try self.hasherStatePtr(local), .u64, value);
     }
 
     fn emitNumericCompare(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LowLevel, args: []const LocalId) Error!void {
