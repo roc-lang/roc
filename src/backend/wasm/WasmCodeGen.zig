@@ -817,7 +817,7 @@ fn compileBuiltinInternalIncrefCallback(self: *Self, helper_key: RcHelperKey) Al
     // the op and makes no thread-confinement claim, so they always use the
     // atomic helper family.
     const helper_func_idx = try self.compileBuiltinInternalRcHelper(helper_key, .atomic);
-    const type_idx = try self.internFuncType(&.{ .i32, .i64, .i32 }, &.{});
+    const type_idx = try self.internFuncType(&.{ .i32, .i32, .i32 }, &.{});
     const defined = self.module.addDefinedFunction(type_idx) catch return error.OutOfMemory;
     const func_idx = defined.function.raw();
     _ = try self.addOwnedLocalFunctionSymbol(defined, "roc_rc_incref_callback", rcHelperCacheKey(helper_key, .atomic));
@@ -837,12 +837,11 @@ fn compileBuiltinInternalIncrefCallback(self: *Self, helper_key: RcHelperKey) Al
     self.current_proc_id = null;
 
     const value_ptr_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    const count_local = self.storage.allocAnonymousLocal(.i64) catch return error.OutOfMemory;
+    const count_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     self.roc_ops_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
 
     try self.emitLocalGet(value_ptr_local);
     try self.emitLocalGet(count_local);
-    self.currentCode().append(self.allocator, Op.i32_wrap_i64) catch return error.OutOfMemory;
     try self.emitLocalGet(self.roc_ops_local);
     try self.emitCall(helper_func_idx);
 
@@ -10223,23 +10222,59 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
             try self.emitLocalSet(total);
 
-            // Allocate buffer
-            try self.emitHeapAllocWithRefcount(total, 1, false);
-            const buf = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-            try self.emitLocalSet(buf);
+            const result_offset = try self.allocStackMemory(12, 4);
+            const result_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            try self.emitFpOffset(result_offset);
+            try self.emitLocalSet(result_ptr);
 
-            // Copy a bytes at offset 0
             const zero = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-            WasmModule.leb128WriteI32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
+            try self.emitI32Const(0);
             try self.emitLocalSet(zero);
-            try self.emitMemCopyLoop(buf, zero, a_ptr, a_len);
 
-            // Copy b bytes at offset a_len
-            try self.emitMemCopyLoop(buf, a_len, b_ptr, b_len);
+            try self.emitLocalGet(total);
+            try self.emitI32Const(12);
+            self.currentCode().append(self.allocator, Op.i32_lt_u) catch return error.OutOfMemory;
+            self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
+            self.currentCode().append(self.allocator, @intFromEnum(BlockType.void)) catch return error.OutOfMemory;
+            {
+                try self.emitZeroInit(result_ptr, 12);
+                try self.emitMemCopyLoop(result_ptr, zero, a_ptr, a_len);
+                try self.emitMemCopyLoop(result_ptr, a_len, b_ptr, b_len);
 
-            // Build heap RocStr
-            try self.buildHeapRocStr(buf, total);
+                try self.emitLocalGet(result_ptr);
+                try self.emitLocalGet(total);
+                try self.emitI32Const(0x80);
+                self.currentCode().append(self.allocator, Op.i32_or) catch return error.OutOfMemory;
+                self.currentCode().append(self.allocator, Op.i32_store8) catch return error.OutOfMemory;
+                WasmModule.leb128WriteU32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
+                WasmModule.leb128WriteU32(self.allocator, self.currentCode(), 11) catch return error.OutOfMemory;
+            }
+            self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
+            {
+                try self.emitHeapAllocWithRefcount(total, 1, false);
+                const buf = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+                try self.emitLocalSet(buf);
+
+                try self.emitMemCopyLoop(buf, zero, a_ptr, a_len);
+                try self.emitMemCopyLoop(buf, a_len, b_ptr, b_len);
+
+                try self.emitLocalGet(result_ptr);
+                try self.emitLocalGet(buf);
+                try self.emitStoreOp(.i32, 0);
+
+                try self.emitLocalGet(result_ptr);
+                try self.emitLocalGet(total);
+                try self.emitI32Const(1);
+                self.currentCode().append(self.allocator, Op.i32_shl) catch return error.OutOfMemory;
+                try self.emitStoreOp(.i32, 4);
+
+                try self.emitLocalGet(result_ptr);
+                try self.emitLocalGet(total);
+                try self.emitStoreOp(.i32, 8);
+            }
+            self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
+
+            try self.emitLocalGet(result_ptr);
         },
         .str_contains => {
             // Check if string a contains substring b
