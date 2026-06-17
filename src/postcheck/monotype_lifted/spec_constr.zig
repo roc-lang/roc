@@ -2950,12 +2950,15 @@ const Cloner = struct {
             try self.putSubst(source_arg.local, .{ .expr = arg_expr });
         }
 
+        // Build the body before writing the final function slot. The clone can
+        // re-enter callable materialization for this active specialization.
+        const cloned_body = try self.cloneExpr(source_body);
         self.pass.program.fns.items[@intFromEnum(fn_id)] = .{
             .symbol = symbol,
             .source = source_fn.source,
             .args = args_span,
             .captures = captures_span,
-            .body = .{ .roc = try self.cloneExpr(source_body) },
+            .body = .{ .roc = cloned_body },
             .ret = source_fn.ret,
         };
 

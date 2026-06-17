@@ -223,6 +223,12 @@ const Lifter = struct {
                 Common.invariant("Monotype nested definition was not reserved before lifting"), def);
         }
 
+        for (self.output.fns.items, 0..) |_, index| {
+            const fn_id: Ast.FnId = @enumFromInt(@as(u32, @intCast(index)));
+            if (self.initialized_fns.contains(fn_id)) continue;
+            Common.invariant("Monotype Lifted function was reserved but not initialized");
+        }
+
         for (self.source.roots.items) |root| {
             const raw = @intFromEnum(root.def);
             if (raw >= self.def_map.len) Common.invariant("Monotype root references a missing definition");
