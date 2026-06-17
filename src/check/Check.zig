@@ -8013,56 +8013,7 @@ fn isGeneralizableValueBinding(
 ) bool {
     if (!is_binding_rhs) return false;
     const annotation_idx = annotation orelse return false;
-    return self.annotationHasTypeVar(annotation_idx, .any);
-}
-
-/// Which type-variable occurrences to count when scanning an annotation.
-const TypeVarScan = enum {
-    /// Any type variable: a fresh introduction (`.rigid_var`) or a reference to
-    /// an enclosing-scope variable (`.rigid_var_lookup`).
-    any,
-    /// Only a type variable this annotation *introduces* (`.rigid_var`), not one
-    /// it references from an enclosing scope.
-    introduced_only,
-};
-
-/// Returns true if the annotation mentions a type variable (a user-written var
-/// like `a`, or an anonymous open-extension var from `..`). `.any` is the cheap,
-/// sound pre-filter for value generalization (over-triggering only costs a rank
-/// push the generalizer no-ops). `.introduced_only` detects a variable the
-/// annotation introduces but cannot bind — used to reject a polymorphic
-/// annotation on a mutable `var`.
-fn annotationHasTypeVar(self: *const Self, annotation_idx: CIR.Annotation.Idx, comptime scan: TypeVarScan) bool {
-    return self.typeAnnoHasTypeVar(self.cir.store.getAnnotation(annotation_idx).anno, scan);
-}
-
-fn typeAnnoHasTypeVar(self: *const Self, anno_idx: CIR.TypeAnno.Idx, comptime scan: TypeVarScan) bool {
-    const store = &self.cir.store;
-    return switch (store.getTypeAnno(anno_idx)) {
-        .rigid_var => true,
-        .rigid_var_lookup => scan == .any,
-        .underscore, .lookup, .malformed => false,
-        .apply => |a| self.anyTypeAnnoHasTypeVar(a.args, scan),
-        .tag_union => |tu| self.anyTypeAnnoHasTypeVar(tu.tags, scan) or
-            (if (tu.ext) |ext| self.typeAnnoHasTypeVar(ext, scan) else false),
-        .tag => |t| self.anyTypeAnnoHasTypeVar(t.args, scan),
-        .tuple => |t| self.anyTypeAnnoHasTypeVar(t.elems, scan),
-        .record => |r| blk: {
-            for (store.sliceAnnoRecordFields(r.fields)) |field_idx| {
-                if (self.typeAnnoHasTypeVar(store.getAnnoRecordField(field_idx).ty, scan)) break :blk true;
-            }
-            break :blk if (r.ext) |ext| self.typeAnnoHasTypeVar(ext, scan) else false;
-        },
-        .@"fn" => |f| self.anyTypeAnnoHasTypeVar(f.args, scan) or self.typeAnnoHasTypeVar(f.ret, scan),
-        .parens => |p| self.typeAnnoHasTypeVar(p.anno, scan),
-    };
-}
-
-fn anyTypeAnnoHasTypeVar(self: *const Self, annos: CIR.TypeAnno.Span, comptime scan: TypeVarScan) bool {
-    for (self.cir.store.sliceTypeAnnos(annos)) |anno_idx| {
-        if (self.typeAnnoHasTypeVar(anno_idx, scan)) return true;
-    }
-    return false;
+    return self.cir.store.getAnnotation(annotation_idx).mentions_type_var;
 }
 
 fn exprAlwaysCrashes(self: *const Self, expr_idx: CIR.Expr.Idx) bool {
@@ -8405,7 +8356,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 // body instead, so it doesn't cascade into confusing mismatches.
                 const expectation = blk: {
                     if (var_stmt.anno) |annotation_idx| {
-                        if (self.annotationHasTypeVar(annotation_idx, .introduced_only)) {
+                        if (self.cir.store.getAnnotation(annotation_idx).introduces_type_var) {
                             _ = try self.problems.appendProblem(self.gpa, .{ .polymorphic_var_annotation = .{ .region = self.cir.store.getAnnotationRegion(annotation_idx) } });
                             break :blk Expected.none();
                         }

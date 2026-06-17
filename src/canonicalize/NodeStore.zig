@@ -1960,7 +1960,7 @@ pub fn getAnnotation(store: *const NodeStore, annotation: CIR.Annotation.Idx) CI
     const p = payload.annotation;
     const anno: CIR.TypeAnno.Idx = @enumFromInt(p.anno);
 
-    const where_clause = if (p.has_where == 1) blk: {
+    const where_clause = if (p.has_where) blk: {
         const where_data = store.span2_data.items.items[p.where_span2_idx];
         break :blk CIR.WhereClause.Span{ .span = DataSpan.init(where_data.start, where_data.len) };
     } else null;
@@ -1968,6 +1968,8 @@ pub fn getAnnotation(store: *const NodeStore, annotation: CIR.Annotation.Idx) CI
     return CIR.Annotation{
         .anno = anno,
         .where = where_clause,
+        .mentions_type_var = p.mentions_type_var,
+        .introduces_type_var = p.introduces_type_var,
     };
 }
 
@@ -3194,6 +3196,11 @@ pub fn addAnnoRecordField(store: *NodeStore, annoRecordField: CIR.TypeAnno.Recor
 pub fn addAnnotation(store: *NodeStore, annotation: CIR.Annotation, region: base.Region) Allocator.Error!CIR.Annotation.Idx {
     var node = Node.init(.annotation);
 
+    // Derive the type-variable flags once, here, so the check phase can read them
+    // off the annotation rather than re-walking the type tree (see getAnnotation).
+    const mentions_type_var = store.typeAnnoHasTypeVar(annotation.anno, .any);
+    const introduces_type_var = store.typeAnnoHasTypeVar(annotation.anno, .introduced_only);
+
     if (annotation.where) |where_clause| {
         const where_span2_idx: u32 = @intCast(store.span2_data.len());
         _ = try store.span2_data.append(store.gpa, .{
@@ -3202,20 +3209,66 @@ pub fn addAnnotation(store: *NodeStore, annotation: CIR.Annotation, region: base
         });
         node.setPayload(.{ .annotation = .{
             .anno = @intFromEnum(annotation.anno),
-            .has_where = 1,
             .where_span2_idx = where_span2_idx,
+            .has_where = true,
+            .mentions_type_var = mentions_type_var,
+            .introduces_type_var = introduces_type_var,
         } });
     } else {
         node.setPayload(.{ .annotation = .{
             .anno = @intFromEnum(annotation.anno),
-            .has_where = 0,
             .where_span2_idx = 0,
+            .has_where = false,
+            .mentions_type_var = mentions_type_var,
+            .introduces_type_var = introduces_type_var,
         } });
     }
 
     const nid = try store.nodes.append(store.gpa, node);
     _ = try store.regions.append(store.gpa, region);
     return @enumFromInt(@intFromEnum(nid));
+}
+
+/// Which type-variable occurrences to count when scanning an annotation.
+pub const TypeVarScan = enum {
+    /// Any type variable: a fresh introduction (`.rigid_var`) or a reference to
+    /// an enclosing-scope variable (`.rigid_var_lookup`).
+    any,
+    /// Only a type variable this annotation *introduces* (`.rigid_var`), not one
+    /// it references from an enclosing scope.
+    introduced_only,
+};
+
+/// Returns true if the type annotation mentions a type variable (a user-written
+/// var like `a`, or an anonymous open-extension var from `..`). `.any` is the
+/// pre-filter for value generalization; `.introduced_only` detects a variable the
+/// annotation introduces but cannot bind (used to reject one on a mutable `var`).
+fn typeAnnoHasTypeVar(store: *const NodeStore, anno_idx: CIR.TypeAnno.Idx, comptime scan: TypeVarScan) bool {
+    return switch (store.getTypeAnno(anno_idx)) {
+        .rigid_var => true,
+        .rigid_var_lookup => scan == .any,
+        .underscore, .lookup, .malformed => false,
+        .apply => |a| store.anyTypeAnnoHasTypeVar(a.args, scan),
+        .tag_union => |tu| store.anyTypeAnnoHasTypeVar(tu.tags, scan) or
+            (if (tu.ext) |ext| store.typeAnnoHasTypeVar(ext, scan) else false),
+        .tag => |t| store.anyTypeAnnoHasTypeVar(t.args, scan),
+        .tuple => |t| store.anyTypeAnnoHasTypeVar(t.elems, scan),
+        .record => |r| blk: {
+            for (store.sliceAnnoRecordFields(r.fields)) |field_idx| {
+                if (store.typeAnnoHasTypeVar(store.getAnnoRecordField(field_idx).ty, scan)) break :blk true;
+            }
+            break :blk if (r.ext) |ext| store.typeAnnoHasTypeVar(ext, scan) else false;
+        },
+        .@"fn" => |f| store.anyTypeAnnoHasTypeVar(f.args, scan) or store.typeAnnoHasTypeVar(f.ret, scan),
+        .parens => |p| store.typeAnnoHasTypeVar(p.anno, scan),
+    };
+}
+
+fn anyTypeAnnoHasTypeVar(store: *const NodeStore, annos: CIR.TypeAnno.Span, comptime scan: TypeVarScan) bool {
+    for (store.sliceTypeAnnos(annos)) |anno_idx| {
+        if (store.typeAnnoHasTypeVar(anno_idx, scan)) return true;
+    }
+    return false;
 }
 
 /// Adds an exposed item to the store.
