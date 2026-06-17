@@ -3125,6 +3125,15 @@ fn reportPolymorphicTopLevelValues(self: *Self) std.mem.Allocator.Error!void {
         // `requires` type unifies it to a concrete type anyway.)
         if (self.varIsFunctionType(def_var)) continue;
 
+        // A generalized annotated value is a scheme, not an unresolved
+        // polymorphic value: its free variable is quantified and any
+        // static-dispatch constraint rides along as a scheme constraint (like a
+        // function `where` clause), so skip the POLYMORPHIC VALUE error. Sound at
+        // top level because after generalization every def var is generalized or
+        // concrete — none can escape to an outer rank. Uses the same predicate as
+        // the generalization decision (checkExpr) so the two never diverge.
+        if (self.isGeneralizableValueBinding(def.annotation, true)) continue;
+
         self.var_set.clearRetainingCapacity();
         if (!try self.varHasUnresolvedStaticDispatchConstraints(def_var, &self.var_set)) continue;
 
@@ -5797,7 +5806,15 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
     // out from under their surrounding context.
     const is_value_alias = is_binding_rhs and
         (expr == .e_lookup_local or expr == .e_lookup_external);
-    const should_generalize = (isFunctionDef(&self.cir.store, expr) and expr != .e_closure and !is_call_arg) or is_value_alias;
+    // An annotated value binding generalizes to its scheme; the polymorphic
+    // annotation is the opt-in. Pushing a rank lets the generalizer quantify
+    // exactly the generalizable variables — with none (e.g. a concrete
+    // annotation) the generalize call is a no-op and the value stays monomorphic.
+    // Evaluated last so `or` short-circuits past the annotation scan when this is
+    // already a generalizing function def or value alias.
+    const should_generalize = (isFunctionDef(&self.cir.store, expr) and expr != .e_closure and !is_call_arg) or
+        is_value_alias or
+        self.isGeneralizableValueBinding(expected.annotation, is_binding_rhs);
 
     // Push/pop ranks based on if we should generalize
     if (should_generalize) try env.var_pool.pushRank();
@@ -7980,6 +7997,73 @@ fn isFunctionDef(store: *const CIR.NodeStore, expr: CIR.Expr) bool {
         .e_hosted_lambda => true,
         else => false,
     };
+}
+
+/// True when a value binding generalizes to its annotated scheme: it sits in
+/// binding-RHS position (only a binding's own right-hand side qualifies; a call
+/// argument never generalizes on its own) and has an annotation introducing a
+/// type variable. The polymorphic annotation is the opt-in, honored regardless
+/// of whether the RHS does work (an expansive definition pays per-specialization
+/// — the cost the author chose by writing the scheme). Single source of truth
+/// for both the generalization decision and the top-level "POLYMORPHIC VALUE"
+/// skip, which must never diverge.
+fn isGeneralizableValueBinding(
+    self: *const Self,
+    annotation: ?CIR.Annotation.Idx,
+    is_binding_rhs: bool,
+) bool {
+    if (!is_binding_rhs) return false;
+    const annotation_idx = annotation orelse return false;
+    return self.annotationHasTypeVar(annotation_idx, .any);
+}
+
+/// Which type-variable occurrences to count when scanning an annotation.
+const TypeVarScan = enum {
+    /// Any type variable: a fresh introduction (`.rigid_var`) or a reference to
+    /// an enclosing-scope variable (`.rigid_var_lookup`).
+    any,
+    /// Only a type variable this annotation *introduces* (`.rigid_var`), not one
+    /// it references from an enclosing scope.
+    introduced_only,
+};
+
+/// Returns true if the annotation mentions a type variable (a user-written var
+/// like `a`, or an anonymous open-extension var from `..`). `.any` is the cheap,
+/// sound pre-filter for value generalization (over-triggering only costs a rank
+/// push the generalizer no-ops). `.introduced_only` detects a variable the
+/// annotation introduces but cannot bind — used to reject a polymorphic
+/// annotation on a mutable `var`.
+fn annotationHasTypeVar(self: *const Self, annotation_idx: CIR.Annotation.Idx, comptime scan: TypeVarScan) bool {
+    return self.typeAnnoHasTypeVar(self.cir.store.getAnnotation(annotation_idx).anno, scan);
+}
+
+fn typeAnnoHasTypeVar(self: *const Self, anno_idx: CIR.TypeAnno.Idx, comptime scan: TypeVarScan) bool {
+    const store = &self.cir.store;
+    return switch (store.getTypeAnno(anno_idx)) {
+        .rigid_var => true,
+        .rigid_var_lookup => scan == .any,
+        .underscore, .lookup, .malformed => false,
+        .apply => |a| self.anyTypeAnnoHasTypeVar(a.args, scan),
+        .tag_union => |tu| self.anyTypeAnnoHasTypeVar(tu.tags, scan) or
+            (if (tu.ext) |ext| self.typeAnnoHasTypeVar(ext, scan) else false),
+        .tag => |t| self.anyTypeAnnoHasTypeVar(t.args, scan),
+        .tuple => |t| self.anyTypeAnnoHasTypeVar(t.elems, scan),
+        .record => |r| blk: {
+            for (store.sliceAnnoRecordFields(r.fields)) |field_idx| {
+                if (self.typeAnnoHasTypeVar(store.getAnnoRecordField(field_idx).ty, scan)) break :blk true;
+            }
+            break :blk if (r.ext) |ext| self.typeAnnoHasTypeVar(ext, scan) else false;
+        },
+        .@"fn" => |f| self.anyTypeAnnoHasTypeVar(f.args, scan) or self.typeAnnoHasTypeVar(f.ret, scan),
+        .parens => |p| self.typeAnnoHasTypeVar(p.anno, scan),
+    };
+}
+
+fn anyTypeAnnoHasTypeVar(self: *const Self, annos: CIR.TypeAnno.Span, comptime scan: TypeVarScan) bool {
+    for (self.cir.store.sliceTypeAnnos(annos)) |anno_idx| {
+        if (self.typeAnnoHasTypeVar(anno_idx, scan)) return true;
+    }
+    return false;
 }
 
 fn exprAlwaysCrashes(self: *const Self, expr_idx: CIR.Expr.Idx) bool {
