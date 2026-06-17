@@ -8400,10 +8400,16 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 try self.checkPattern(var_stmt.pattern_idx, var_pattern_ctx, env);
                 const var_pattern_var: Var = ModuleEnv.varFrom(var_stmt.pattern_idx);
 
-                // Check the annotation, if it exists
+                // Check the annotation, if it exists. A mutable `var` never
+                // generalizes, so a type variable its annotation introduces can
+                // never be bound; reject such an annotation and infer from the
+                // body instead, so it doesn't cascade into confusing mismatches.
                 const expectation = blk: {
                     if (var_stmt.anno) |annotation_idx| {
-                        // Return the expectation
+                        if (self.annotationHasTypeVar(annotation_idx, .introduced_only)) {
+                            _ = try self.problems.appendProblem(self.gpa, .{ .polymorphic_var_annotation = .{ .region = self.cir.store.getAnnotationRegion(annotation_idx) } });
+                            break :blk Expected.none();
+                        }
                         break :blk Expected.fromAnnotation(annotation_idx);
                     } else {
                         break :blk Expected.none();
