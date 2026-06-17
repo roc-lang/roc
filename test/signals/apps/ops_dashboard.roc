@@ -52,7 +52,8 @@ render_alert = |alert| {
 	ack_count : Reactive.Signal(I64)
 	ack_count = Reactive.Signal.fold_i64(ack_count_key, 0, ack_deltas, |current, delta| current + delta)
 	ack_label = 
-		Reactive.Signal.map_i64_str(
+		Reactive.Signal.map_i64_str_keyed(
+			Str.concat("alert_ack_label:", alert.id),
 			ack_count,
 			|n| concat3(alert.label, " acknowledgements: ", n.to_str()),
 		)
@@ -80,7 +81,7 @@ main = |_| {
 	traffic_deltas = Reactive.Event.map_unit_i64_const(traffic_clicks, 75)
 	traffic : Reactive.Signal(I64)
 	traffic = Reactive.Signal.fold_i64("traffic", 1200, traffic_deltas, |current, delta| current + delta)
-	traffic_label = Reactive.Signal.map_i64_str(traffic, |n| metric_label("Requests", n))
+	traffic_label = Reactive.Signal.map_i64_str_keyed("traffic_label", traffic, |n| metric_label("Requests", n))
 
 	{ sender: fail_send, receiver: fail_clicks } = Reactive.Event.unit_channel("fail_click")
 	{ sender: recover_send, receiver: recover_clicks } = Reactive.Event.unit_channel("recover_click")
@@ -91,7 +92,7 @@ main = |_| {
 	failure_events = Reactive.Event.merge(fail_deltas, recover_deltas)
 	failures : Reactive.Signal(I64)
 	failures = Reactive.Signal.fold_i64("failures", 4, failure_events, |current, delta| current + delta)
-	failure_label = Reactive.Signal.map_i64_str(failures, |n| metric_label("Failures", n))
+	failure_label = Reactive.Signal.map_i64_str_keyed("failure_label", failures, |n| metric_label("Failures", n))
 
 	{ sender: queue_up_send, receiver: queue_up_clicks } = Reactive.Event.unit_channel("queue_up_click")
 	{ sender: queue_down_send, receiver: queue_down_clicks } = Reactive.Event.unit_channel("queue_down_click")
@@ -102,17 +103,19 @@ main = |_| {
 	queue_events = Reactive.Event.merge(queue_up, queue_down)
 	queue : Reactive.Signal(I64)
 	queue = Reactive.Signal.fold_i64("queue", 17, queue_events, |current, delta| current + delta)
-	queue_label = Reactive.Signal.map_i64_str(queue, |n| metric_label("Queue", n))
+	queue_label = Reactive.Signal.map_i64_str_keyed("queue_label", queue, |n| metric_label("Queue", n))
 
 	score : Reactive.Signal(I64)
 	score = 
-		Reactive.Signal.map2_i64_i64(
+		Reactive.Signal.map2_i64_i64_keyed(
+			"score",
 			traffic,
 			failures,
 			|requests, failing| requests - failing * 10,
 		)
 	score_label = 
-		Reactive.Signal.map2_i64_i64_str(
+		Reactive.Signal.map2_i64_i64_str_keyed(
+			"score_label",
 			score,
 			queue,
 			|value, queued| pair_label("Health score", value, "queue", queued),
@@ -122,7 +125,8 @@ main = |_| {
 	incident_active : Reactive.Signal(Bool)
 	incident_active = Reactive.Signal.fold_bool_toggle("incident_active", False, incident_clicks)
 	incident_label = 
-		Reactive.Signal.map(
+		Reactive.Signal.map_keyed(
+			"incident_label",
 			incident_active,
 			|active| if active {
 				"Incident active"
@@ -153,7 +157,7 @@ main = |_| {
 	{ sender: search_send, receiver: search_changes } = Reactive.Event.channel("search_change")
 	search : Reactive.Signal(Str)
 	search = Reactive.Signal.hold("search", "", search_changes)
-	search_label = Reactive.Signal.map(search, |value| Str.concat("Runbook search: ", value))
+	search_label = Reactive.Signal.map_keyed("search_label", search, |value| Str.concat("Runbook search: ", value))
 
 	Elem.div(
 		[

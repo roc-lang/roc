@@ -454,7 +454,7 @@ const HostEnv = struct {
     dealloc_count: usize = 0,
     dom_elements: std.ArrayListUnmanaged(DomElement) = .empty,
     next_elem_id: u64 = 0,
-    roc_ops: ?*abi.RocOps = null,
+    roc_host: ?*abi.RocHost = null,
     runtime_box: ?RuntimeBox = null,
     last_runtime_metrics: RuntimeMetrics = zeroRuntimeMetrics(),
 
@@ -590,24 +590,30 @@ fn zeroRuntimeMetrics() RuntimeMetrics {
         .event_lookups = 0,
         .full_render_batches = 0,
         .incremental_batches = 0,
+        .retained_graph_dispatches = 0,
         .state_lookups = 0,
         .structural_resets = 0,
+        .signal_cache_hits = 0,
+        .signal_cache_misses = 0,
+        .stale_signal_cache_misses = 0,
+        .clean_signal_skips = 0,
+        .state_version_bumps = 0,
     };
 }
 
 var current_host: ?*HostEnv = null;
-var current_roc_ops: ?*abi.RocOps = null;
+var current_roc_host: ?*abi.RocHost = null;
 
-fn hostFromOps(ops: *abi.RocOps) *HostEnv {
-    return @ptrCast(@alignCast(ops.env));
+fn hostFromRocHost(roc_host: *abi.RocHost) *HostEnv {
+    return @ptrCast(@alignCast(roc_host.env));
 }
 
-fn currentRocOps() *abi.RocOps {
-    return current_roc_ops orelse @panic("signals RocOps is not initialized");
+fn currentRocHost() *abi.RocHost {
+    return current_roc_host orelse @panic("signals RocHost is not initialized");
 }
 
-fn rocAllocFn(ops: *abi.RocOps, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
-    const host = hostFromOps(ops);
+fn rocAllocFn(roc_host: *abi.RocHost, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+    const host = hostFromRocHost(roc_host);
     const allocator = host.gpa.allocator();
     const min_alignment: usize = @max(alignment, @alignOf(usize));
     const align_enum = std.mem.Alignment.fromByteUnits(min_alignment);
@@ -628,8 +634,8 @@ fn rocAllocFn(ops: *abi.RocOps, length: usize, alignment: usize) callconv(.c) ?*
     return @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes);
 }
 
-fn rocDeallocFn(ops: *abi.RocOps, ptr: *anyopaque, alignment: usize) callconv(.c) void {
-    const host = hostFromOps(ops);
+fn rocDeallocFn(roc_host: *abi.RocHost, ptr: *anyopaque, alignment: usize) callconv(.c) void {
+    const host = hostFromRocHost(roc_host);
     const allocator = host.gpa.allocator();
     const min_alignment: usize = @max(alignment, @alignOf(usize));
     const align_enum = std.mem.Alignment.fromByteUnits(min_alignment);
@@ -649,8 +655,8 @@ fn rocDeallocFn(ops: *abi.RocOps, ptr: *anyopaque, alignment: usize) callconv(.c
     allocator.rawFree(base_ptr[0..total_size], align_enum, @returnAddress());
 }
 
-fn rocReallocFn(ops: *abi.RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
-    const host = hostFromOps(ops);
+fn rocReallocFn(roc_host: *abi.RocHost, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+    const host = hostFromRocHost(roc_host);
     const allocator = host.gpa.allocator();
     const min_alignment: usize = @max(alignment, @alignOf(usize));
     const align_enum = std.mem.Alignment.fromByteUnits(min_alignment);
@@ -686,21 +692,21 @@ fn rocReallocFn(ops: *abi.RocOps, ptr: *anyopaque, new_length: usize, alignment:
     return new_user_ptr;
 }
 
-fn rocDbgFn(ops: *abi.RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
-    _ = ops;
+fn rocDbgFn(roc_host: *abi.RocHost, bytes: [*]const u8, len: usize) callconv(.c) void {
+    _ = roc_host;
     const message = bytes[0..len];
     std.debug.print("ROC DBG: {s}\n", .{message});
 }
 
-fn rocExpectFailedFn(ops: *abi.RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
-    _ = ops;
+fn rocExpectFailedFn(roc_host: *abi.RocHost, bytes: [*]const u8, len: usize) callconv(.c) void {
+    _ = roc_host;
     const source_bytes = bytes[0..len];
     const trimmed = std.mem.trim(u8, source_bytes, " \t\n\r");
     std.debug.print("Expect failed: {s}\n", .{trimmed});
 }
 
-fn rocCrashedFn(ops: *abi.RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
-    _ = ops;
+fn rocCrashedFn(roc_host: *abi.RocHost, bytes: [*]const u8, len: usize) callconv(.c) void {
+    _ = roc_host;
     const message = bytes[0..len];
     writeStderr("\n\x1b[31mRoc crashed:\x1b[0m ");
     writeStderr(message);
@@ -709,27 +715,27 @@ fn rocCrashedFn(ops: *abi.RocOps, bytes: [*]const u8, len: usize) callconv(.c) v
 }
 
 fn hostAlloc(length: usize, alignment: usize) callconv(.c) ?*anyopaque {
-    return rocAllocFn(currentRocOps(), length, alignment);
+    return rocAllocFn(currentRocHost(), length, alignment);
 }
 
 fn hostDealloc(ptr: *anyopaque, alignment: usize) callconv(.c) void {
-    rocDeallocFn(currentRocOps(), ptr, alignment);
+    rocDeallocFn(currentRocHost(), ptr, alignment);
 }
 
 fn hostRealloc(ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
-    return rocReallocFn(currentRocOps(), ptr, new_length, alignment);
+    return rocReallocFn(currentRocHost(), ptr, new_length, alignment);
 }
 
 fn hostDbg(bytes: [*]const u8, len: usize) callconv(.c) void {
-    rocDbgFn(currentRocOps(), bytes, len);
+    rocDbgFn(currentRocHost(), bytes, len);
 }
 
 fn hostExpectFailed(bytes: [*]const u8, len: usize) callconv(.c) void {
-    rocExpectFailedFn(currentRocOps(), bytes, len);
+    rocExpectFailedFn(currentRocHost(), bytes, len);
 }
 
 fn hostCrashed(bytes: [*]const u8, len: usize) callconv(.c) void {
-    rocCrashedFn(currentRocOps(), bytes, len);
+    rocCrashedFn(currentRocHost(), bytes, len);
 }
 
 fn failHost(message: []const u8) noreturn {
@@ -819,11 +825,17 @@ fn addRuntimeMetrics(left: RuntimeMetrics, right: RuntimeMetrics) RuntimeMetrics
         .keyed_removes = left.keyed_removes + right.keyed_removes,
         .keyed_reuses = left.keyed_reuses + right.keyed_reuses,
         .node_value_equality_checks = left.node_value_equality_checks + right.node_value_equality_checks,
+        .retained_graph_dispatches = left.retained_graph_dispatches + right.retained_graph_dispatches,
         .signal_changes = left.signal_changes + right.signal_changes,
+        .signal_cache_hits = left.signal_cache_hits + right.signal_cache_hits,
+        .signal_cache_misses = left.signal_cache_misses + right.signal_cache_misses,
         .signal_suppressed = left.signal_suppressed + right.signal_suppressed,
         .signal_writes = left.signal_writes + right.signal_writes,
+        .stale_signal_cache_misses = left.stale_signal_cache_misses + right.stale_signal_cache_misses,
         .state_lookups = left.state_lookups + right.state_lookups,
+        .state_version_bumps = left.state_version_bumps + right.state_version_bumps,
         .structural_resets = left.structural_resets + right.structural_resets,
+        .clean_signal_skips = left.clean_signal_skips + right.clean_signal_skips,
     };
 }
 
@@ -1009,18 +1021,18 @@ fn applyCommandList(host: *HostEnv, commands: abi.RocList(abi.UiRuntimeCommand))
     return counts;
 }
 
-fn releaseCommandList(commands: abi.RocList(abi.UiRuntimeCommand), ops: *abi.RocOps) void {
+fn releaseCommandList(commands: abi.RocList(abi.UiRuntimeCommand), roc_host: *abi.RocHost) void {
     if (commands.isUnique()) {
         for (commands.items()) |command| {
-            abi.decrefUiRuntimeCommand(command, ops);
+            abi.decrefUiRuntimeCommand(command, roc_host);
         }
     }
-    commands.decref(ops);
+    commands.decref(roc_host);
 }
 
-fn dropMovedDispatchResultPayload(_: ?*anyopaque, _: *abi.RocOps) callconv(.c) void {}
+fn dropMovedDispatchResultPayload(_: ?*anyopaque, _: *abi.RocHost) callconv(.c) void {}
 
-fn acceptDispatchResultMeasured(host: *HostEnv, ops: *abi.RocOps, result_box: DispatchResultBox, apply_ns: ?*u64, command_counts: ?*CommandCounts) void {
+fn acceptDispatchResultMeasured(host: *HostEnv, roc_host: *abi.RocHost, result_box: DispatchResultBox, apply_ns: ?*u64, command_counts: ?*CommandCounts) void {
     const result = result_box.*;
     if (host.runtime_box != null) failHost("Roc runtime box was overwritten before being consumed");
     host.runtime_box = result.runtime;
@@ -1030,43 +1042,39 @@ fn acceptDispatchResultMeasured(host: *HostEnv, ops: *abi.RocOps, result_box: Di
     const elapsed = benchmarkNowNs() - start_ns;
     if (apply_ns) |ns| ns.* += elapsed;
     if (command_counts) |total| total.addAll(counts);
-    releaseCommandList(result.commands, ops);
-    abi.decrefBoxWith(@ptrCast(result_box), @alignOf(DispatchResult), &dropMovedDispatchResultPayload, ops);
+    releaseCommandList(result.commands, roc_host);
+    abi.decrefBoxWith(@ptrCast(result_box), @alignOf(DispatchResult), &dropMovedDispatchResultPayload, roc_host);
 }
 
-fn acceptDispatchResult(host: *HostEnv, ops: *abi.RocOps, result_box: DispatchResultBox) void {
-    acceptDispatchResultMeasured(host, ops, result_box, null, null);
+fn acceptDispatchResult(host: *HostEnv, roc_host: *abi.RocHost, result_box: DispatchResultBox) void {
+    acceptDispatchResultMeasured(host, roc_host, result_box, null, null);
 }
 
-fn boxHostEvent(ops: *abi.RocOps, event: HostEvent) HostEventBox {
-    const raw = abi.allocateBox(@sizeOf(HostEvent), @alignOf(HostEvent), true, ops);
+fn boxHostEvent(roc_host: *abi.RocHost, event: HostEvent) HostEventBox {
+    const raw = abi.allocateBox(@sizeOf(HostEvent), @alignOf(HostEvent), true, roc_host);
     const event_box: HostEventBox = @ptrCast(@alignCast(raw));
     event_box.* = event;
     return event_box;
 }
 
-fn dispatchRocEvent(host: *HostEnv, ops: *abi.RocOps, event: HostEvent) void {
+fn dispatchRocEvent(host: *HostEnv, roc_host: *abi.RocHost, event: HostEvent) void {
     const runtime = host.runtime_box orelse failHost("Roc runtime not initialized");
     host.runtime_box = null;
-    acceptDispatchResult(host, ops, abi.roc_ui_dispatch(runtime, boxHostEvent(ops, event)));
+    acceptDispatchResult(host, roc_host, abi.roc_ui_dispatch(runtime, boxHostEvent(roc_host, event)));
 }
 
-fn dispatchRocEventMeasured(host: *HostEnv, ops: *abi.RocOps, event: HostEvent, stats: *BenchmarkStats) void {
+fn dispatchRocEventMeasured(host: *HostEnv, roc_host: *abi.RocHost, event: HostEvent, stats: *BenchmarkStats) void {
     const runtime = host.runtime_box orelse failHost("Roc runtime not initialized");
     host.runtime_box = null;
-    const event_box = boxHostEvent(ops, event);
+    const event_box = boxHostEvent(roc_host, event);
     const start_ns = benchmarkNowNs();
     const result_box = abi.roc_ui_dispatch(runtime, event_box);
     stats.dispatch_roc_ns += benchmarkNowNs() - start_ns;
-    acceptDispatchResultMeasured(host, ops, result_box, &stats.dispatch_apply_ns, &stats.commands);
+    acceptDispatchResultMeasured(host, roc_host, result_box, &stats.dispatch_apply_ns, &stats.commands);
     stats.actions += 1;
 }
 
-fn signalsHostedFunctions() abi.HostedFunctions {
-    return abi.hostedFunctions(.{});
-}
-
-fn makeSignalsRocOps(host: *HostEnv) abi.RocOps {
+fn makeSignalsRocHost(host: *HostEnv) abi.RocHost {
     return .{
         .env = @ptrCast(host),
         .roc_alloc = &rocAllocFn,
@@ -1075,7 +1083,6 @@ fn makeSignalsRocOps(host: *HostEnv) abi.RocOps {
         .roc_dbg = &rocDbgFn,
         .roc_expect_failed = &rocExpectFailedFn,
         .roc_crashed = &rocCrashedFn,
-        .hosted_fns = signalsHostedFunctions(),
     };
 }
 
@@ -1086,13 +1093,13 @@ fn commandIsAction(cmd: SpecCommand) bool {
     };
 }
 
-fn runActionCommandMeasured(host: *HostEnv, ops: *abi.RocOps, cmd: SpecCommand, stats: *BenchmarkStats) void {
+fn runActionCommandMeasured(host: *HostEnv, roc_host: *abi.RocHost, cmd: SpecCommand, stats: *BenchmarkStats) void {
     switch (cmd.cmd_type) {
         .click => {
             const elem = host.findElementByLocator(cmd.locator, cmd.line_num) orelse failHost("benchmark click locator did not resolve");
             if (elem.disabled) failHost("benchmark click target is disabled");
             const event_id = elem.bound_click_event orelse failHost("benchmark click target has no binding");
-            dispatchRocEventMeasured(host, ops, .{
+            dispatchRocEventMeasured(host, roc_host, .{
                 .payload = .{ .click = event_id },
                 .tag = .Click,
             }, stats);
@@ -1103,11 +1110,11 @@ fn runActionCommandMeasured(host: *HostEnv, ops: *abi.RocOps, cmd: SpecCommand, 
             const elem = host.findElementByLocator(cmd.locator, cmd.line_num) orelse failHost("benchmark fill locator did not resolve");
             if (elem.disabled) failHost("benchmark fill target is disabled");
             if (elem.bound_input_event) |event_id| {
-                dispatchRocEventMeasured(host, ops, .{
+                dispatchRocEventMeasured(host, roc_host, .{
                     .payload = .{
                         .input = .{
                             .event = event_id,
-                            .value = RocStr.fromSlice(value, ops),
+                            .value = RocStr.fromSlice(value, roc_host),
                         },
                     },
                     .tag = .Input,
@@ -1122,7 +1129,7 @@ fn runActionCommandMeasured(host: *HostEnv, ops: *abi.RocOps, cmd: SpecCommand, 
             const elem = host.findElementByLocator(cmd.locator, cmd.line_num) orelse failHost("benchmark check locator did not resolve");
             if (elem.disabled) failHost("benchmark check target is disabled");
             if (elem.bound_check_event) |event_id| {
-                dispatchRocEventMeasured(host, ops, .{
+                dispatchRocEventMeasured(host, roc_host, .{
                     .payload = .{
                         .check = .{
                             .event = event_id,
@@ -1144,19 +1151,19 @@ fn runBenchmarkIteration(commands: []const SpecCommand, verbose: bool, stats: *B
     var host_env = HostEnv.init();
     host_env.test_state.verbose = verbose;
 
-    var roc_ops = makeSignalsRocOps(&host_env);
-    host_env.roc_ops = &roc_ops;
+    var roc_host = makeSignalsRocHost(&host_env);
+    host_env.roc_host = &roc_host;
     current_host = &host_env;
-    current_roc_ops = &roc_ops;
+    current_roc_host = &roc_host;
 
     const init_start_ns = benchmarkNowNs();
     const init_result = abi.roc_ui_init();
     stats.init_roc_ns += benchmarkNowNs() - init_start_ns;
-    acceptDispatchResultMeasured(&host_env, &roc_ops, init_result, &stats.init_apply_ns, &stats.commands);
+    acceptDispatchResultMeasured(&host_env, &roc_host, init_result, &stats.init_apply_ns, &stats.commands);
 
     for (commands) |cmd| {
         if (commandIsAction(cmd)) {
-            runActionCommandMeasured(&host_env, &roc_ops, cmd, stats);
+            runActionCommandMeasured(&host_env, &roc_host, cmd, stats);
         }
     }
 
@@ -1167,11 +1174,11 @@ fn runBenchmarkIteration(commands: []const SpecCommand, verbose: bool, stats: *B
 
     host_env.deinit();
     current_host = null;
-    current_roc_ops = null;
+    current_roc_host = null;
 }
 
 fn printBenchmarkHeader() void {
-    writeStdout("case,sample,iterations,actions,init_roc_ns,init_apply_ns,dispatch_roc_ns,dispatch_apply_ns,total_ns,allocs,deallocs,retained_alloc_delta,commands,reset_dom,create_element,append_child,set_text,set_value,set_checked,set_disabled,set_metadata,bind_event,events_processed,evaluated_nodes,callbacks,dynamic_renders,graph_nodes,commands_emitted,full_render_batches,incremental_batches,structural_resets,state_lookups,event_lookups,signal_writes,signal_changes,signal_suppressed,node_value_equality_checks\n");
+    writeStdout("case,sample,iterations,actions,init_roc_ns,init_apply_ns,dispatch_roc_ns,dispatch_apply_ns,total_ns,allocs,deallocs,retained_alloc_delta,commands,reset_dom,create_element,append_child,set_text,set_value,set_checked,set_disabled,set_metadata,bind_event,events_processed,evaluated_nodes,callbacks,dynamic_renders,graph_nodes,commands_emitted,full_render_batches,incremental_batches,structural_resets,state_lookups,event_lookups,retained_graph_dispatches,signal_cache_hits,signal_cache_misses,stale_signal_cache_misses,clean_signal_skips,state_version_bumps,signal_writes,signal_changes,signal_suppressed,node_value_equality_checks\n");
 }
 
 fn printBenchmarkRow(case_name: []const u8, sample: usize, iterations: usize, stats: BenchmarkStats) void {
@@ -1209,7 +1216,7 @@ fn printBenchmarkRow(case_name: []const u8, sample: usize, iterations: usize, st
         },
     );
     printStdout(
-        "{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d}\n",
+        "{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d},{d}\n",
         .{
             stats.metrics.events_processed,
             stats.metrics.evaluated_nodes,
@@ -1222,6 +1229,12 @@ fn printBenchmarkRow(case_name: []const u8, sample: usize, iterations: usize, st
             stats.metrics.structural_resets,
             stats.metrics.state_lookups,
             stats.metrics.event_lookups,
+            stats.metrics.retained_graph_dispatches,
+            stats.metrics.signal_cache_hits,
+            stats.metrics.signal_cache_misses,
+            stats.metrics.stale_signal_cache_misses,
+            stats.metrics.clean_signal_skips,
+            stats.metrics.state_version_bumps,
             stats.metrics.signal_writes,
             stats.metrics.signal_changes,
             stats.metrics.signal_suppressed,
@@ -1373,16 +1386,16 @@ fn platform_main(spec_file: []const u8, verbose: bool) !c_int {
     };
     host_env.test_state.verbose = verbose;
 
-    var roc_ops = makeSignalsRocOps(&host_env);
-    host_env.roc_ops = &roc_ops;
+    var roc_host = makeSignalsRocHost(&host_env);
+    host_env.roc_host = &roc_host;
     current_host = &host_env;
-    current_roc_ops = &roc_ops;
+    current_roc_host = &roc_host;
     defer current_host = null;
-    defer current_roc_ops = null;
+    defer current_roc_host = null;
     defer host_env.deinit();
 
     traceStderr("[HOST] calling roc_ui_init\n");
-    acceptDispatchResult(&host_env, &roc_ops, abi.roc_ui_init());
+    acceptDispatchResult(&host_env, &roc_host, abi.roc_ui_init());
     traceStderr("[HOST] roc_ui_init returned\n");
 
     if (verbose) {
@@ -1410,7 +1423,7 @@ fn platform_main(spec_file: []const u8, verbose: bool) !c_int {
                     writeLocatorFailure(cmd.line_num, "target has no click binding");
                     return 1;
                 };
-                dispatchRocEvent(&host_env, &roc_ops, .{
+                dispatchRocEvent(&host_env, &roc_host, .{
                     .payload = .{ .click = event_id },
                     .tag = .Click,
                 });
@@ -1427,11 +1440,11 @@ fn platform_main(spec_file: []const u8, verbose: bool) !c_int {
                     return 1;
                 }
                 if (elem.bound_input_event) |event_id| {
-                    dispatchRocEvent(&host_env, &roc_ops, .{
+                    dispatchRocEvent(&host_env, &roc_host, .{
                         .payload = .{
                             .input = .{
                                 .event = event_id,
-                                .value = RocStr.fromSlice(value, &roc_ops),
+                                .value = RocStr.fromSlice(value, &roc_host),
                             },
                         },
                         .tag = .Input,
@@ -1452,7 +1465,7 @@ fn platform_main(spec_file: []const u8, verbose: bool) !c_int {
                     return 1;
                 }
                 if (elem.bound_check_event) |event_id| {
-                    dispatchRocEvent(&host_env, &roc_ops, .{
+                    dispatchRocEvent(&host_env, &roc_host, .{
                         .payload = .{
                             .check = .{
                                 .event = event_id,

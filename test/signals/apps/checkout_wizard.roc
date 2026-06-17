@@ -70,7 +70,8 @@ render_line = |line| {
 		},
 	)
 	quantity_label = 
-		Reactive.Signal.map_i64_str(
+		Reactive.Signal.map_i64_str_keyed(
+			Str.concat("line_quantity_label:", line.id),
 			quantity,
 			|n| concat3(line.label, " quantity: ", n.to_str()),
 		)
@@ -124,7 +125,7 @@ main = |_| {
 				}
 			},
 		)
-	step_text = Reactive.Signal.map_i64_str(step, step_label)
+	step_text = Reactive.Signal.map_i64_str_keyed("step_text", step, step_label)
 
 	{ sender: email_send, receiver: email_changes } = Reactive.Event.channel("email_change")
 	email : Reactive.Signal(Str)
@@ -136,17 +137,19 @@ main = |_| {
 	terms : Reactive.Signal(Bool)
 	terms = Reactive.Signal.hold("terms", False, terms_changes)
 	terms_text = 
-		Reactive.Signal.map(
+		Reactive.Signal.map_keyed(
+			"terms_text",
 			terms,
 			|accepted| if accepted {
 				"Terms accepted"
 			} else {
 				"Terms pending"
 			},
-		)
+	)
 	submit_disabled : Reactive.Signal(Bool)
 	submit_disabled = 
-		Reactive.Signal.map(
+		Reactive.Signal.map_keyed(
+			"submit_disabled",
 			terms,
 			|accepted| if accepted {
 				False
@@ -180,9 +183,9 @@ main = |_| {
 	submit_deltas = Reactive.Event.map_unit_i64_const(submit_clicks, 1)
 	submit_count : Reactive.Signal(I64)
 	submit_count = Reactive.Signal.fold_i64("submit_count", 0, submit_deltas, |current, delta| current + delta)
-	review_label = Reactive.Signal.map_i64_str(submit_count, |attempts| label_i64("Orders submitted", attempts))
-	email_review = Reactive.Signal.map(email, |value| Str.concat("Email: ", value))
-	address_review = Reactive.Signal.map(address, |value| Str.concat("Address: ", value))
+	review_label = Reactive.Signal.map_i64_str_keyed("review_label", submit_count, |attempts| label_i64("Orders submitted", attempts))
+	email_review = Reactive.Signal.map_keyed("email_review", email, |value| Str.concat("Email: ", value))
+	address_review = Reactive.Signal.map_keyed("address_review", address, |value| Str.concat("Address: ", value))
 
 	step_panel = 
 		Elem.dynamic_keyed(

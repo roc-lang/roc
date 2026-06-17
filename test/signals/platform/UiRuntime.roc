@@ -22,11 +22,23 @@ UiRuntime := [].{
 		structural_resets : U64,
 		state_lookups : U64,
 		event_lookups : U64,
+		retained_graph_dispatches : U64,
+		signal_cache_hits : U64,
+		signal_cache_misses : U64,
+		stale_signal_cache_misses : U64,
+		clean_signal_skips : U64,
+		state_version_bumps : U64,
 	}
 
 	EventId : { key : Str, id : U64 }
 
 	StateEntry : { key : Str, value : NodeValue }
+
+	StateVersionEntry : { key : Str, version : U64 }
+
+	SignalCacheEntry : { key : Str, value : NodeValue, deps : List(StateVersionEntry) }
+
+	EventStateDep : { event_key : Str, state_key : Str }
 
 	HostEvent := [
 		Click(U64),
@@ -59,10 +71,14 @@ UiRuntime := [].{
 	}
 
 	Runtime : {
+		root : Elem,
 		states : List(StateEntry),
 		event_ids : List(EventId),
 		next_event_id : U64,
 		previous_commands : List(CommandSnapshot),
+		signal_cache : List(SignalCacheEntry),
+		state_versions : List(StateVersionEntry),
+		event_state_deps : List(EventStateDep),
 		metrics : RuntimeMetrics,
 	}
 
@@ -77,9 +93,15 @@ UiRuntime := [].{
 		Occurrence({ id : U64, value : NodeValue }),
 	]
 
+	ActiveEventKey := [
+		NoActiveEventKey,
+		ActiveEventKey(Str),
+	]
+
 	EvalState : {
 		runtime : Runtime,
 		active_event : ActiveEvent,
+		dirty_state_keys : List(Str),
 		updated_keys : List(Str),
 	}
 
@@ -104,6 +126,21 @@ UiRuntime := [].{
 
 	UpsertState : { entries : List(StateEntry), found : Bool }
 
+	UpsertStateVersion : { entries : List(StateVersionEntry), found : Bool }
+
+	UpsertSignalCache : { entries : List(SignalCacheEntry), found : Bool }
+
+	CacheLookup := [
+		CacheHit(NodeValue),
+		CacheMiss,
+		StaleCacheMiss,
+	]
+
+	VersionLookup := [
+		VersionFound(U64),
+		VersionMissing,
+	]
+
 	zero_metrics : RuntimeMetrics
 	zero_metrics = {
 		events_processed: 0,
@@ -124,18 +161,28 @@ UiRuntime := [].{
 		structural_resets: 0,
 		state_lookups: 0,
 		event_lookups: 0,
+		retained_graph_dispatches: 0,
+		signal_cache_hits: 0,
+		signal_cache_misses: 0,
+		stale_signal_cache_misses: 0,
+		clean_signal_skips: 0,
+		state_version_bumps: 0,
 	}
 
 	init : Elem -> DispatchResult
 	init = |root| {
 		runtime = {
+			root,
 			states: [],
 			event_ids: [],
 			next_event_id: 1,
 			previous_commands: [],
+			signal_cache: [],
+			state_versions: [],
+			event_state_deps: [],
 			metrics: zero_metrics,
 		}
-		rendered = render_runtime(runtime, root, NoEvent, True)
+		rendered = render_runtime(runtime, NoEvent, [], True)
 		runtime_box = Box.box(rendered.runtime)
 		result = {
 			runtime: runtime_box,
@@ -145,18 +192,65 @@ UiRuntime := [].{
 		result
 	}
 
-	dispatch : Box(Runtime), Elem, HostEvent -> DispatchResult
-	dispatch = |boxed_runtime, root, host_event| {
+	dispatch : Box(Runtime), HostEvent -> DispatchResult
+	dispatch = |boxed_runtime, host_event| {
 		runtime0 = Box.unbox(boxed_runtime)
 		active_event = host_event_to_active(host_event)
+		active_event_key = active_event_key_for_runtime(runtime0, active_event)
+		dirty_state_keys = dirty_state_keys_for_active_event(runtime0.event_state_deps, active_event_key)
 		metrics = runtime0.metrics
-		runtime1 = { ..runtime0, metrics: { ..metrics, events_processed: metrics.events_processed + 1 }
+		runtime1 = { ..runtime0, metrics: { ..metrics,
+				events_processed: metrics.events_processed + 1,
+				retained_graph_dispatches: metrics.retained_graph_dispatches + 1,
+			}
 		}
-		rendered = render_runtime(runtime1, root, active_event, False)
+		rendered = render_runtime(runtime1, active_event, dirty_state_keys, False)
 		{
 			runtime: Box.box(rendered.runtime),
 			commands: rendered.emit_commands,
 			metrics: rendered.runtime.metrics,
+		}
+	}
+
+	active_event_key_for_runtime : Runtime, ActiveEvent -> ActiveEventKey
+	active_event_key_for_runtime = |runtime, active_event| {
+		match active_event {
+			NoEvent => NoActiveEventKey
+			Occurrence({ id }) => event_key_for_id(runtime.event_ids, id)
+		}
+	}
+
+	event_key_for_id : List(EventId), U64 -> ActiveEventKey
+	event_key_for_id = |event_ids, id| {
+		List.fold(
+			event_ids,
+			NoActiveEventKey,
+			|acc, entry| match acc {
+				ActiveEventKey(_) => acc
+				NoActiveEventKey =>
+					if entry.id == id {
+						ActiveEventKey(entry.key)
+					} else {
+						NoActiveEventKey
+					}
+			},
+		)
+	}
+
+	dirty_state_keys_for_active_event : List(EventStateDep), ActiveEventKey -> List(Str)
+	dirty_state_keys_for_active_event = |deps, active_event_key| {
+		match active_event_key {
+			NoActiveEventKey => []
+			ActiveEventKey(event_key) =>
+				List.fold(
+					deps,
+					[],
+					|acc, dep| if dep.event_key == event_key {
+						append_unique_str(acc, dep.state_key)
+					} else {
+						acc
+					},
+				)
 		}
 	}
 
@@ -175,15 +269,15 @@ UiRuntime := [].{
 		}
 	}
 
-	render_runtime : Runtime, Elem, ActiveEvent, Bool -> RenderResult
-	render_runtime = |runtime, root, active_event, force_full| {
-		state = { runtime, active_event, updated_keys: [] }
+	render_runtime : Runtime, ActiveEvent, List(Str), Bool -> RenderResult
+	render_runtime = |runtime, active_event, dirty_state_keys, force_full| {
+		state = { runtime, active_event, dirty_state_keys, updated_keys: [] }
 		render_state = {
 			state,
 			commands: [ResetDom],
 			next_elem_id: 1,
 		}
-		rendered = render_elem(render_state, root, 0)
+		rendered = render_elem(render_state, runtime.root, 0)
 		full_commands = rendered.commands
 		previous_snapshots = rendered.state.runtime.previous_commands
 		next_snapshots = command_snapshots(full_commands)
@@ -454,8 +548,8 @@ UiRuntime := [].{
 
 	event_id_for_node : Runtime, Graph.EventNode -> EventLookup
 	event_id_for_node = |runtime, event| {
-		match event {
-			Graph.EventNode.Source(key) => event_id_for_key(runtime, key)
+		match event.expr {
+			Graph.EventExpr.Source(key) => event_id_for_key(runtime, key)
 			_ => ...
 		}
 	}
@@ -490,8 +584,8 @@ UiRuntime := [].{
 
 	eval_event : EvalState, Graph.EventNode -> EventResult
 	eval_event = |state, event| {
-		match event {
-			Graph.EventNode.Source(key) => {
+		match event.expr {
+			Graph.EventExpr.Source(key) => {
 				lookup = event_id_for_key(state.runtime, key)
 				state1 = { ..state, runtime: lookup.runtime }
 				match state.active_event {
@@ -506,7 +600,7 @@ UiRuntime := [].{
 				}
 			}
 
-			Graph.EventNode.MapEvent({ source, transform }) => {
+			Graph.EventExpr.MapEvent({ source, transform }) => {
 				source_result = eval_event(state, Box.unbox(source))
 				fn = Box.unbox(transform)
 				metrics = source_result.state.runtime.metrics
@@ -517,13 +611,13 @@ UiRuntime := [].{
 				{ state: state1, values }
 			}
 
-			Graph.EventNode.MapUnitI64Const({ source, value }) => {
+			Graph.EventExpr.MapUnitI64Const({ source, value }) => {
 				source_result = eval_event(state, Box.unbox(source))
 				values = List.map(source_result.values, |_| NodeValue.from_i64(value))
 				{ state: source_result.state, values }
 			}
 
-			Graph.EventNode.Merge({ left, right }) => {
+			Graph.EventExpr.Merge({ left, right }) => {
 				left_result = eval_event(state, Box.unbox(left))
 				right_result = eval_event(left_result.state, Box.unbox(right))
 				{ state: right_result.state, values: List.concat(left_result.values, right_result.values) }
@@ -533,139 +627,328 @@ UiRuntime := [].{
 
 	eval_signal : EvalState, Graph.SignalNode -> EvalResult
 	eval_signal = |state, signal| {
+		match signal.cache_key {
+			Graph.SignalCacheKey.NoSignalCacheKey => eval_signal_uncached(state, signal)
+			Graph.SignalCacheKey.SignalCacheKey(key) =>
+				if signal_depends_on_dirty_state(signal, state.dirty_state_keys) {
+					metrics0 = state.runtime.metrics
+					state1 = { ..state, runtime: { ..state.runtime, metrics: { ..metrics0, signal_cache_misses: metrics0.signal_cache_misses + 1 } } }
+					eval_signal_uncached(state1, signal)
+				} else {
+					match signal_cache_lookup(state.runtime, signal.deps, key) {
+						CacheHit(value) => {
+							metrics0 = state.runtime.metrics
+							metrics1 = { ..metrics0,
+								signal_cache_hits: metrics0.signal_cache_hits + 1,
+								clean_signal_skips: metrics0.clean_signal_skips + 1,
+							}
+							{ state: { ..state, runtime: { ..state.runtime, metrics: metrics1 } }, value }
+						}
+
+						CacheMiss => {
+							metrics0 = state.runtime.metrics
+							state1 = { ..state, runtime: { ..state.runtime, metrics: { ..metrics0, signal_cache_misses: metrics0.signal_cache_misses + 1 } } }
+							eval_signal_uncached(state1, signal)
+						}
+
+						StaleCacheMiss => {
+							metrics0 = state.runtime.metrics
+							metrics1 = { ..metrics0,
+								signal_cache_misses: metrics0.signal_cache_misses + 1,
+								stale_signal_cache_misses: metrics0.stale_signal_cache_misses + 1,
+							}
+							state1 = { ..state, runtime: { ..state.runtime, metrics: metrics1 } }
+							eval_signal_uncached(state1, signal)
+						}
+					}
+				}
+		}
+	}
+
+	eval_signal_uncached : EvalState, Graph.SignalNode -> EvalResult
+	eval_signal_uncached = |state, signal| {
 		metrics0 = state.runtime.metrics
 		state_with_count = { ..state, runtime: { ..state.runtime, metrics: { ..metrics0, evaluated_nodes: metrics0.evaluated_nodes + 1, graph_nodes: metrics0.graph_nodes + 1 }
 			}
 		}
-		match signal {
-			Graph.SignalNode.ConstSignal(value) => { state: state_with_count, value }
-			Graph.SignalNode.ConstI64(value) => { state: state_with_count, value: NodeValue.from_i64(value) }
-			Graph.SignalNode.ConstBool(value) => { state: state_with_count, value: NodeValue.from_bool(value) }
-			Graph.SignalNode.ConstStr(value) => { state: state_with_count, value: NodeValue.from_str(value) }
+		result =
+			match signal.expr {
+				Graph.SignalExpr.ConstSignal(value) => { state: state_with_count, value }
+				Graph.SignalExpr.ConstI64(value) => { state: state_with_count, value: NodeValue.from_i64(value) }
+				Graph.SignalExpr.ConstBool(value) => { state: state_with_count, value: NodeValue.from_bool(value) }
+				Graph.SignalExpr.ConstStr(value) => { state: state_with_count, value: NodeValue.from_str(value) }
 
-			Graph.SignalNode.MapSignal({ source, transform }) => {
-				source_result = eval_signal(state_with_count, Box.unbox(source))
-				fn = Box.unbox(transform)
-				metrics = source_result.state.runtime.metrics
-				state1 = { ..source_result.state, runtime: { ..source_result.state.runtime, metrics: { ..metrics, callbacks: metrics.callbacks + 1 }
-					}
-				}
-				{ state: state1, value: fn(source_result.value) }
-			}
-
-			Graph.SignalNode.MapI64I64({ source, transform }) => {
-				source_result = eval_signal(state_with_count, Box.unbox(source))
-				fn = Box.unbox(transform)
-				metrics = source_result.state.runtime.metrics
-				state1 = { ..source_result.state, runtime: { ..source_result.state.runtime, metrics: { ..metrics, callbacks: metrics.callbacks + 1 }
-					}
-				}
-				{ state: state1, value: NodeValue.from_i64(fn(NodeValue.to_i64(source_result.value))) }
-			}
-
-			Graph.SignalNode.MapI64Str({ source, transform }) => {
-				source_result = eval_signal(state_with_count, Box.unbox(source))
-				fn = Box.unbox(transform)
-				metrics = source_result.state.runtime.metrics
-				state1 = { ..source_result.state, runtime: { ..source_result.state.runtime, metrics: { ..metrics, callbacks: metrics.callbacks + 1 }
-					}
-				}
-				{ state: state1, value: NodeValue.from_str(fn(NodeValue.to_i64(source_result.value))) }
-			}
-
-			Graph.SignalNode.Map2Signal({ left, right, transform }) => {
-				left_result = eval_signal(state_with_count, Box.unbox(left))
-				right_result = eval_signal(left_result.state, Box.unbox(right))
-				fn = Box.unbox(transform)
-				metrics = right_result.state.runtime.metrics
-				state1 = { ..right_result.state, runtime: { ..right_result.state.runtime, metrics: { ..metrics, callbacks: metrics.callbacks + 1 }
-					}
-				}
-				{ state: state1, value: fn((left_result.value, right_result.value)) }
-			}
-
-			Graph.SignalNode.Map2I64I64({ left, right, transform }) => {
-				left_result = eval_signal(state_with_count, Box.unbox(left))
-				right_result = eval_signal(left_result.state, Box.unbox(right))
-				fn = Box.unbox(transform)
-				metrics = right_result.state.runtime.metrics
-				state1 = { ..right_result.state, runtime: { ..right_result.state.runtime, metrics: { ..metrics, callbacks: metrics.callbacks + 1 }
-					}
-				}
-				{ state: state1, value: NodeValue.from_i64(fn((NodeValue.to_i64(left_result.value), NodeValue.to_i64(right_result.value)))) }
-			}
-
-			Graph.SignalNode.Map2I64I64Str({ left, right, transform }) => {
-				left_result = eval_signal(state_with_count, Box.unbox(left))
-				right_result = eval_signal(left_result.state, Box.unbox(right))
-				fn = Box.unbox(transform)
-				metrics = right_result.state.runtime.metrics
-				state1 = { ..right_result.state, runtime: { ..right_result.state.runtime, metrics: { ..metrics, callbacks: metrics.callbacks + 1 }
-					}
-				}
-				{ state: state1, value: NodeValue.from_str(fn((NodeValue.to_i64(left_result.value), NodeValue.to_i64(right_result.value)))) }
-			}
-
-			Graph.SignalNode.Hold({ key, initial, event }) => {
-				current = state_value(state_with_count.runtime, key, initial)
-				state1 = { ..state_with_count, runtime: current.runtime }
-				if List.contains(state1.updated_keys, key) {
-					{ state: state1, value: current.value }
-				} else {
-					event_result = eval_event(state1, Box.unbox(event))
-					next_value = List.fold(event_result.values, current.value, |_acc, value| value)
-					finish_state_update(event_result.state, key, current.value, next_value, !List.is_empty(event_result.values))
-				}
-			}
-
-			Graph.SignalNode.Fold({ key, initial, event, step }) => {
-				current = state_value(state_with_count.runtime, key, initial)
-				state1 = { ..state_with_count, runtime: current.runtime }
-				if List.contains(state1.updated_keys, key) {
-					{ state: state1, value: current.value }
-				} else {
-					event_result = eval_event(state1, Box.unbox(event))
-					fn = Box.unbox(step)
-					metrics = event_result.state.runtime.metrics
-					state2 = { ..event_result.state, runtime: { ..event_result.state.runtime, metrics: { ..metrics, callbacks: metrics.callbacks + List.len(event_result.values) }
+				Graph.SignalExpr.MapSignal({ source, transform }) => {
+					source_result = eval_signal(state_with_count, Box.unbox(source))
+					fn = Box.unbox(transform)
+					metrics = source_result.state.runtime.metrics
+					state1 = { ..source_result.state, runtime: { ..source_result.state.runtime, metrics: { ..metrics, callbacks: metrics.callbacks + 1 }
 						}
 					}
-					next_value = List.fold(event_result.values, current.value, |acc, evt| fn((acc, evt)))
-					finish_state_update(state2, key, current.value, next_value, !List.is_empty(event_result.values))
+					{ state: state1, value: fn(source_result.value) }
 				}
-			}
 
-			Graph.SignalNode.FoldI64({ key, initial, event, step }) => {
-				initial_nv = NodeValue.from_i64(initial)
-				current = state_value(state_with_count.runtime, key, initial_nv)
-				state1 = { ..state_with_count, runtime: current.runtime }
-				if List.contains(state1.updated_keys, key) {
-					{ state: state1, value: current.value }
-				} else {
-					event_result = eval_event(state1, Box.unbox(event))
-					fn = Box.unbox(step)
-					metrics = event_result.state.runtime.metrics
-					state2 = { ..event_result.state, runtime: { ..event_result.state.runtime, metrics: { ..metrics, callbacks: metrics.callbacks + List.len(event_result.values) }
+				Graph.SignalExpr.MapI64I64({ source, transform }) => {
+					source_result = eval_signal(state_with_count, Box.unbox(source))
+					fn = Box.unbox(transform)
+					metrics = source_result.state.runtime.metrics
+					state1 = { ..source_result.state, runtime: { ..source_result.state.runtime, metrics: { ..metrics, callbacks: metrics.callbacks + 1 }
 						}
 					}
-					next_i64 = List.fold(event_result.values, NodeValue.to_i64(current.value), |acc, evt| fn((acc, NodeValue.to_i64(evt))))
-					finish_state_update(state2, key, current.value, NodeValue.from_i64(next_i64), !List.is_empty(event_result.values))
+					{ state: state1, value: NodeValue.from_i64(fn(NodeValue.to_i64(source_result.value))) }
+				}
+
+				Graph.SignalExpr.MapI64Str({ source, transform }) => {
+					source_result = eval_signal(state_with_count, Box.unbox(source))
+					fn = Box.unbox(transform)
+					metrics = source_result.state.runtime.metrics
+					state1 = { ..source_result.state, runtime: { ..source_result.state.runtime, metrics: { ..metrics, callbacks: metrics.callbacks + 1 }
+						}
+					}
+					{ state: state1, value: NodeValue.from_str(fn(NodeValue.to_i64(source_result.value))) }
+				}
+
+				Graph.SignalExpr.Map2Signal({ left, right, transform }) => {
+					left_result = eval_signal(state_with_count, Box.unbox(left))
+					right_result = eval_signal(left_result.state, Box.unbox(right))
+					fn = Box.unbox(transform)
+					metrics = right_result.state.runtime.metrics
+					state1 = { ..right_result.state, runtime: { ..right_result.state.runtime, metrics: { ..metrics, callbacks: metrics.callbacks + 1 }
+						}
+					}
+					{ state: state1, value: fn((left_result.value, right_result.value)) }
+				}
+
+				Graph.SignalExpr.Map2I64I64({ left, right, transform }) => {
+					left_result = eval_signal(state_with_count, Box.unbox(left))
+					right_result = eval_signal(left_result.state, Box.unbox(right))
+					fn = Box.unbox(transform)
+					metrics = right_result.state.runtime.metrics
+					state1 = { ..right_result.state, runtime: { ..right_result.state.runtime, metrics: { ..metrics, callbacks: metrics.callbacks + 1 }
+						}
+					}
+					{ state: state1, value: NodeValue.from_i64(fn((NodeValue.to_i64(left_result.value), NodeValue.to_i64(right_result.value)))) }
+				}
+
+				Graph.SignalExpr.Map2I64I64Str({ left, right, transform }) => {
+					left_result = eval_signal(state_with_count, Box.unbox(left))
+					right_result = eval_signal(left_result.state, Box.unbox(right))
+					fn = Box.unbox(transform)
+					metrics = right_result.state.runtime.metrics
+					state1 = { ..right_result.state, runtime: { ..right_result.state.runtime, metrics: { ..metrics, callbacks: metrics.callbacks + 1 }
+						}
+					}
+					{ state: state1, value: NodeValue.from_str(fn((NodeValue.to_i64(left_result.value), NodeValue.to_i64(right_result.value)))) }
+				}
+
+				Graph.SignalExpr.Hold({ key, initial, event }) => {
+					event_node = Box.unbox(event)
+					runtime_with_deps = register_state_event_deps(state_with_count.runtime, key, event_node.sources)
+					current = state_value(runtime_with_deps, key, initial)
+					state1 = { ..state_with_count, runtime: current.runtime }
+					if List.contains(state1.updated_keys, key) {
+						{ state: state1, value: current.value }
+					} else {
+						event_result = eval_event(state1, event_node)
+						next_value = List.fold(event_result.values, current.value, |_acc, value| value)
+						finish_state_update(event_result.state, key, current.value, next_value, !List.is_empty(event_result.values))
+					}
+				}
+
+				Graph.SignalExpr.Fold({ key, initial, event, step }) => {
+					event_node = Box.unbox(event)
+					runtime_with_deps = register_state_event_deps(state_with_count.runtime, key, event_node.sources)
+					current = state_value(runtime_with_deps, key, initial)
+					state1 = { ..state_with_count, runtime: current.runtime }
+					if List.contains(state1.updated_keys, key) {
+						{ state: state1, value: current.value }
+					} else {
+						event_result = eval_event(state1, event_node)
+						fn = Box.unbox(step)
+						metrics = event_result.state.runtime.metrics
+						state2 = { ..event_result.state, runtime: { ..event_result.state.runtime, metrics: { ..metrics, callbacks: metrics.callbacks + List.len(event_result.values) }
+							}
+						}
+						next_value = List.fold(event_result.values, current.value, |acc, evt| fn((acc, evt)))
+						finish_state_update(state2, key, current.value, next_value, !List.is_empty(event_result.values))
+					}
+				}
+
+				Graph.SignalExpr.FoldI64({ key, initial, event, step }) => {
+					event_node = Box.unbox(event)
+					runtime_with_deps = register_state_event_deps(state_with_count.runtime, key, event_node.sources)
+					initial_nv = NodeValue.from_i64(initial)
+					current = state_value(runtime_with_deps, key, initial_nv)
+					state1 = { ..state_with_count, runtime: current.runtime }
+					if List.contains(state1.updated_keys, key) {
+						{ state: state1, value: current.value }
+					} else {
+						event_result = eval_event(state1, event_node)
+						fn = Box.unbox(step)
+						metrics = event_result.state.runtime.metrics
+						state2 = { ..event_result.state, runtime: { ..event_result.state.runtime, metrics: { ..metrics, callbacks: metrics.callbacks + List.len(event_result.values) }
+							}
+						}
+						next_i64 = List.fold(event_result.values, NodeValue.to_i64(current.value), |acc, evt| fn((acc, NodeValue.to_i64(evt))))
+						finish_state_update(state2, key, current.value, NodeValue.from_i64(next_i64), !List.is_empty(event_result.values))
+					}
+				}
+
+				Graph.SignalExpr.FoldBoolToggle({ key, initial, event }) => {
+					event_node = Box.unbox(event)
+					runtime_with_deps = register_state_event_deps(state_with_count.runtime, key, event_node.sources)
+					initial_nv = NodeValue.from_bool(initial)
+					current = state_value(runtime_with_deps, key, initial_nv)
+					state1 = { ..state_with_count, runtime: current.runtime }
+					if List.contains(state1.updated_keys, key) {
+						{ state: state1, value: current.value }
+					} else {
+						event_result = eval_event(state1, event_node)
+						next_bool = List.fold(event_result.values, node_bool(current.value), |acc, _evt| !acc)
+						finish_state_update(event_result.state, key, current.value, NodeValue.from_bool(next_bool), !List.is_empty(event_result.values))
+					}
 				}
 			}
+		cache_signal_result(signal.cache_key, signal.deps, result)
+	}
 
-			Graph.SignalNode.FoldBoolToggle({ key, initial, event }) => {
-				initial_nv = NodeValue.from_bool(initial)
-				current = state_value(state_with_count.runtime, key, initial_nv)
-				state1 = { ..state_with_count, runtime: current.runtime }
-				if List.contains(state1.updated_keys, key) {
-					{ state: state1, value: current.value }
-				} else {
-					event_result = eval_event(state1, Box.unbox(event))
-					next_bool = List.fold(event_result.values, node_bool(current.value), |acc, _evt| !acc)
-					finish_state_update(event_result.state, key, current.value, NodeValue.from_bool(next_bool), !List.is_empty(event_result.values))
-				}
+	cache_signal_result : Graph.SignalCacheKey, List(Str), EvalResult -> EvalResult
+	cache_signal_result = |cache_key, deps, result| {
+		match cache_key {
+			Graph.SignalCacheKey.NoSignalCacheKey => result
+			Graph.SignalCacheKey.SignalCacheKey(key) => {
+				runtime1 = set_signal_cache(result.state.runtime, key, deps, result.value)
+				{ state: { ..result.state, runtime: runtime1 }, value: result.value }
 			}
 		}
+	}
+
+	signal_depends_on_dirty_state : Graph.SignalNode, List(Str) -> Bool
+	signal_depends_on_dirty_state = |signal, dirty_state_keys| {
+		List.any(signal.deps, |dep| str_list_contains(dirty_state_keys, dep))
+	}
+
+	signal_cache_lookup : Runtime, List(Str), Str -> CacheLookup
+	signal_cache_lookup = |runtime, signal_deps, key| {
+		List.fold(
+			runtime.signal_cache,
+			CacheMiss,
+			|acc, entry| match acc {
+				CacheHit(_) => acc
+				StaleCacheMiss => acc
+				CacheMiss =>
+					if entry.key == key {
+						if signal_cache_entry_valid(runtime, signal_deps, entry.deps) {
+							CacheHit(entry.value)
+						} else {
+							StaleCacheMiss
+						}
+					} else {
+						CacheMiss
+					}
+			},
+		)
+	}
+
+	signal_cache_entry_valid : Runtime, List(Str), List(StateVersionEntry) -> Bool
+	signal_cache_entry_valid = |runtime, signal_deps, cached_deps| {
+		current_deps_present = List.all(
+			signal_deps,
+			|dep|
+				match state_version_lookup(cached_deps, dep) {
+					VersionFound(version) => current_state_version(runtime, dep) == version
+					VersionMissing => False
+				},
+		)
+		no_stale_cached_deps = List.all(
+			cached_deps,
+			|dep| str_list_contains(signal_deps, dep.key) and current_state_version(runtime, dep.key) == dep.version,
+		)
+		current_deps_present and no_stale_cached_deps
+	}
+
+	state_versions_for_deps : Runtime, List(Str) -> List(StateVersionEntry)
+	state_versions_for_deps = |runtime, deps| {
+		List.map(deps, |dep| { key: dep, version: current_state_version(runtime, dep) })
+	}
+
+	current_state_version : Runtime, Str -> U64
+	current_state_version = |runtime, key| {
+		match state_version_lookup(runtime.state_versions, key) {
+			VersionFound(version) => version
+			VersionMissing => 0
+		}
+	}
+
+	state_version_lookup : List(StateVersionEntry), Str -> VersionLookup
+	state_version_lookup = |entries, key| {
+		List.fold(
+			entries,
+			VersionMissing,
+			|acc, entry| match acc {
+				VersionFound(_) => acc
+				VersionMissing =>
+					if entry.key == key {
+						VersionFound(entry.version)
+					} else {
+						VersionMissing
+					}
+			},
+		)
+	}
+
+	set_signal_cache : Runtime, Str, List(Str), NodeValue -> Runtime
+	set_signal_cache = |runtime, key, signal_deps, value| {
+		deps = state_versions_for_deps(runtime, signal_deps)
+		initial : UpsertSignalCache
+		initial = { entries: [], found: False }
+		upsert = List.fold(
+			runtime.signal_cache,
+			initial,
+			|acc, entry| if entry.key == key {
+				{ entries: List.append(acc.entries, { key, value, deps }), found: True }
+			} else {
+				{ ..acc, entries: List.append(acc.entries, entry) }
+			},
+		)
+		if upsert.found {
+			{ ..runtime, signal_cache: upsert.entries }
+		} else {
+			{ ..runtime, signal_cache: List.append(upsert.entries, { key, value, deps }) }
+		}
+	}
+
+	register_state_event_deps : Runtime, Str, List(Str) -> Runtime
+	register_state_event_deps = |runtime, state_key, event_keys| {
+		List.fold(event_keys, runtime, |acc, event_key| register_state_event_dep(acc, event_key, state_key))
+	}
+
+	register_state_event_dep : Runtime, Str, Str -> Runtime
+	register_state_event_dep = |runtime, event_key, state_key| {
+		if event_state_dep_exists(runtime.event_state_deps, event_key, state_key) {
+			runtime
+		} else {
+			{ ..runtime, event_state_deps: List.append(runtime.event_state_deps, { event_key, state_key }) }
+		}
+	}
+
+	event_state_dep_exists : List(EventStateDep), Str, Str -> Bool
+	event_state_dep_exists = |deps, event_key, state_key| {
+		List.any(deps, |dep| dep.event_key == event_key and dep.state_key == state_key)
+	}
+
+	append_unique_str : List(Str), Str -> List(Str)
+	append_unique_str = |items, item| {
+		if str_list_contains(items, item) {
+			items
+		} else {
+			List.append(items, item)
+		}
+	}
+
+	str_list_contains : List(Str), Str -> Bool
+	str_list_contains = |items, item| {
+		List.any(items, |existing| existing == item)
 	}
 
 	state_value : Runtime, Str, NodeValue -> { runtime : Runtime, value : NodeValue }
@@ -693,6 +976,29 @@ UiRuntime := [].{
 		}
 	}
 
+	bump_state_version : Runtime, Str -> Runtime
+	bump_state_version = |runtime, key| {
+		next_version = current_state_version(runtime, key) + 1
+		metrics0 = runtime.metrics
+		runtime_with_count = { ..runtime, metrics: { ..metrics0, state_version_bumps: metrics0.state_version_bumps + 1 } }
+		initial : UpsertStateVersion
+		initial = { entries: [], found: False }
+		upsert = List.fold(
+			runtime_with_count.state_versions,
+			initial,
+			|acc, entry| if entry.key == key {
+				{ entries: List.append(acc.entries, { key, version: next_version }), found: True }
+			} else {
+				{ ..acc, entries: List.append(acc.entries, entry) }
+			},
+		)
+		if upsert.found {
+			{ ..runtime_with_count, state_versions: upsert.entries }
+		} else {
+			{ ..runtime_with_count, state_versions: List.append(upsert.entries, { key, version: next_version }) }
+		}
+	}
+
 	finish_state_update : EvalState, Str, NodeValue, NodeValue, Bool -> EvalResult
 	finish_state_update = |state, key, previous, next, had_event| {
 		if had_event {
@@ -711,7 +1017,13 @@ UiRuntime := [].{
 					}
 				}
 			runtime1 = set_state({ ..state.runtime, metrics: metrics1 }, key, next)
-			state1 = { ..state, runtime: runtime1, updated_keys: List.append(state.updated_keys, key) }
+			runtime2 =
+				if changed {
+					bump_state_version(runtime1, key)
+				} else {
+					runtime1
+				}
+			state1 = { ..state, runtime: runtime2, updated_keys: List.append(state.updated_keys, key) }
 			{ state: state1, value: next }
 		} else {
 			{ state, value: previous }
@@ -720,9 +1032,11 @@ UiRuntime := [].{
 
 	set_state : Runtime, Str, NodeValue -> Runtime
 	set_state = |runtime, key, value| {
+		initial : UpsertState
+		initial = { entries: [], found: False }
 		upsert = List.fold(
 			runtime.states,
-			{ entries: [], found: False },
+			initial,
 			|acc, entry| if entry.key == key {
 				{ entries: List.append(acc.entries, { key, value }), found: True }
 			} else {

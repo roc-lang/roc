@@ -142,14 +142,49 @@ Reactive := [].{
 			{ node: Graph.SignalNode.make_map_signal(source, Box.box(wrapped)) }
 		}
 
+		map_keyed :
+			Str, Signal(a), (a -> b) -> Signal(b)
+				where [
+					a.decode : NodeValue, NodeValue -> (Try(a, [TypeMismatch]), NodeValue),
+					b.encode : b, NodeValue -> Try(NodeValue, []),
+				]
+		map_keyed = |key, signal, f| {
+			source = signal.node
+			wrapped : NodeValue -> NodeValue
+			wrapped = |input_nv| {
+				A : a
+				typed_input : a
+				typed_input =
+					match A.decode(input_nv, NodeValue.format) {
+						(Ok(value), _) => value
+						(Err(_), _) => ...
+					}
+				typed_output : b
+				typed_output = f(typed_input)
+				Reactive.encode(typed_output)
+			}
+
+			{ node: Graph.SignalNode.make_keyed_map_signal(key, source, Box.box(wrapped)) }
+		}
+
 		map_i64_i64 : Signal(I64), (I64 -> I64) -> Signal(I64)
 		map_i64_i64 = |signal, f| {
 			{ node: Graph.SignalNode.make_map_i64_i64(signal.node, Box.box(f)) }
 		}
 
+		map_i64_i64_keyed : Str, Signal(I64), (I64 -> I64) -> Signal(I64)
+		map_i64_i64_keyed = |key, signal, f| {
+			{ node: Graph.SignalNode.make_keyed_map_i64_i64(key, signal.node, Box.box(f)) }
+		}
+
 		map_i64_str : Signal(I64), (I64 -> Str) -> Signal(Str)
 		map_i64_str = |signal, f| {
 			{ node: Graph.SignalNode.make_map_i64_str(signal.node, Box.box(f)) }
+		}
+
+		map_i64_str_keyed : Str, Signal(I64), (I64 -> Str) -> Signal(Str)
+		map_i64_str_keyed = |key, signal, f| {
+			{ node: Graph.SignalNode.make_keyed_map_i64_str(key, signal.node, Box.box(f)) }
 		}
 
 		map2 :
@@ -190,6 +225,45 @@ Reactive := [].{
 			}
 		}
 
+		map2_keyed :
+			Str, Signal(a), Signal(b), (a, b -> c) -> Signal(c)
+				where [
+					a.decode : NodeValue, NodeValue -> (Try(a, [TypeMismatch]), NodeValue),
+					b.decode : NodeValue, NodeValue -> (Try(b, [TypeMismatch]), NodeValue),
+					c.encode : c, NodeValue -> Try(NodeValue, []),
+				]
+		map2_keyed = |key, left_signal, right_signal, f| {
+			wrapped : (NodeValue, NodeValue) -> NodeValue
+			wrapped = |(left_nv, right_nv)| {
+				A : a
+				left : a
+				left =
+					match A.decode(left_nv, NodeValue.format) {
+						(Ok(value), _) => value
+						(Err(_), _) => ...
+					}
+				B : b
+				right : b
+				right =
+					match B.decode(right_nv, NodeValue.format) {
+						(Ok(value), _) => value
+						(Err(_), _) => ...
+					}
+				output : c
+				output = f(left, right)
+				Reactive.encode(output)
+			}
+
+			{
+				node: Graph.SignalNode.make_keyed_map2_signal(
+					key,
+					left_signal.node,
+					right_signal.node,
+					Box.box(wrapped),
+				),
+			}
+		}
+
 		map2_i64_i64 : Signal(I64), Signal(I64), (I64, I64 -> I64) -> Signal(I64)
 		map2_i64_i64 = |left_signal, right_signal, f| {
 			wrapped : (I64, I64) -> I64
@@ -198,12 +272,28 @@ Reactive := [].{
 			{ node: Graph.SignalNode.make_map2_i64_i64(left_signal.node, right_signal.node, Box.box(wrapped)) }
 		}
 
+		map2_i64_i64_keyed : Str, Signal(I64), Signal(I64), (I64, I64 -> I64) -> Signal(I64)
+		map2_i64_i64_keyed = |key, left_signal, right_signal, f| {
+			wrapped : (I64, I64) -> I64
+			wrapped = |(left, right)| f(left, right)
+
+			{ node: Graph.SignalNode.make_keyed_map2_i64_i64(key, left_signal.node, right_signal.node, Box.box(wrapped)) }
+		}
+
 		map2_i64_i64_str : Signal(I64), Signal(I64), (I64, I64 -> Str) -> Signal(Str)
 		map2_i64_i64_str = |left_signal, right_signal, f| {
 			wrapped : (I64, I64) -> Str
 			wrapped = |(left, right)| f(left, right)
 
 			{ node: Graph.SignalNode.make_map2_i64_i64_str(left_signal.node, right_signal.node, Box.box(wrapped)) }
+		}
+
+		map2_i64_i64_str_keyed : Str, Signal(I64), Signal(I64), (I64, I64 -> Str) -> Signal(Str)
+		map2_i64_i64_str_keyed = |key, left_signal, right_signal, f| {
+			wrapped : (I64, I64) -> Str
+			wrapped = |(left, right)| f(left, right)
+
+			{ node: Graph.SignalNode.make_keyed_map2_i64_i64_str(key, left_signal.node, right_signal.node, Box.box(wrapped)) }
 		}
 
 		fold :

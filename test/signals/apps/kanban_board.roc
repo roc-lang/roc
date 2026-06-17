@@ -48,7 +48,8 @@ render_task = |task| {
 	notes : Reactive.Signal(I64)
 	notes = Reactive.Signal.fold_i64(Str.concat("task_notes:", task.label), 0, note_deltas, |current, delta| current + delta)
 	status = 
-		Reactive.Signal.map2_i64_i64_str(
+		Reactive.Signal.map2_i64_i64_str_keyed(
+			Str.concat("task_status:", task.label),
 			progress,
 			notes,
 			|done, note_count| {
@@ -111,17 +112,19 @@ main = |_| {
 	filter_active : Reactive.Signal(Bool)
 	filter_active = Reactive.Signal.fold_bool_toggle("filter_active", False, filter_clicks)
 	filter_label = 
-		Reactive.Signal.map(
+		Reactive.Signal.map_keyed(
+			"filter_label",
 			filter_active,
 			|active| if active {
 				"Focus filter on"
 			} else {
 				"Focus filter off"
 			},
-		)
+	)
 	visible_tasks : Reactive.Signal(List(Task))
 	visible_tasks = 
-		Reactive.Signal.map2(
+		Reactive.Signal.map2_keyed(
+			"visible_tasks",
 			filter_active,
 			tasks,
 			|active, all_tasks| if active {
@@ -134,7 +137,7 @@ main = |_| {
 	{ sender: reviewer_send, receiver: reviewer_changes } = Reactive.Event.channel("reviewer_change")
 	reviewer : Reactive.Signal(Str)
 	reviewer = Reactive.Signal.hold("reviewer", "", reviewer_changes)
-	reviewer_label = Reactive.Signal.map(reviewer, |value| Str.concat("Reviewer: ", value))
+	reviewer_label = Reactive.Signal.map_keyed("reviewer_label", reviewer, |value| Str.concat("Reviewer: ", value))
 
 	Elem.div(
 		[

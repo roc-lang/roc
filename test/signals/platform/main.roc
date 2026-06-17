@@ -26,7 +26,7 @@ ui_init = |_| {
 
 ui_dispatch : Box(UiRuntime.Runtime), Box(UiRuntime.HostEvent) -> Box(UiRuntime.DispatchResult)
 ui_dispatch = |runtime, event| {
-	Box.box(UiRuntime.dispatch(runtime, main({}), Box.unbox(event)))
+	Box.box(UiRuntime.dispatch(runtime, Box.unbox(event)))
 }
 
 ui_drop : Box(UiRuntime.Runtime) -> {}
