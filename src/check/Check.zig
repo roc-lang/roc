@@ -5779,33 +5779,9 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
     const is_binding_rhs = self.checking_binding_rhs;
     self.checking_binding_rhs = false;
 
-    // Value restriction: only generalize at the inner lambda level, not the
-    // outer e_closure wrapper (which delegates to e_lambda's own checkExpr).
-    // Direct call-argument lambdas are consumed immediately, so they must not
-    // generalize independently. Doing so lets their generalized vars escape
-    // into the enclosing value via unification.
-    //
-    // We also generalize a binding whose RHS is a bare reference to an already-
-    // generalized scheme (e.g. `shorthand = FooBar.myfunc`). Such a reference is
-    // non-expansive: it performs no work and can hide no `dbg`/`expect`, so it
-    // raises none of the duplicate-work or duplicate-effect concerns that motivate
-    // restricting generalization to syntactic functions. The referenced scheme is
-    // a generalized function or annotated value (numeric literals use the separate
-    // defaulting path), never a bare number or tag union. We restrict this to
-    // binding-RHS position so that bare lookups appearing as arbitrary
-    // subexpressions don't pay generalization cost or get generalized out from
-    // under their surrounding context.
-    const is_value_alias = is_binding_rhs and
-        (expr == .e_lookup_local or expr == .e_lookup_external);
-    // An annotated value binding generalizes to its scheme; the polymorphic
-    // annotation is the opt-in. Pushing a rank lets the generalizer quantify
-    // exactly the generalizable variables — with none (e.g. a concrete
-    // annotation) the generalize call is a no-op and the value stays monomorphic.
-    // Evaluated last so `or` short-circuits past the annotation scan when this is
-    // already a generalizing function def or value alias.
-    const should_generalize = (isFunctionDef(&self.cir.store, expr) and expr != .e_closure and !is_call_arg) or
-        is_value_alias or
-        self.isGeneralizableValueBinding(expected.annotation, is_binding_rhs);
+    // Decide whether this binding generalizes — see `shouldGeneralize` for the
+    // three qualifying paths and why each is sound.
+    const should_generalize = self.shouldGeneralize(expr, expected.annotation, is_binding_rhs, is_call_arg);
 
     // Push/pop ranks based on if we should generalize
     if (should_generalize) try env.var_pool.pushRank();
@@ -7990,14 +7966,46 @@ fn isFunctionDef(store: *const CIR.NodeStore, expr: CIR.Expr) bool {
     };
 }
 
+/// Should this expression generalize in its current binding context — i.e. push
+/// a rank so the generalizer can quantify its free vars? Three independent paths
+/// qualify; they are checked in order so the annotation scan runs only when the
+/// cheaper structural checks miss:
+///
+///   - **A function def.** Generalized at the inner lambda level only, not the
+///     outer `e_closure` wrapper (which delegates to `e_lambda`'s own checkExpr),
+///     and not a direct call argument — those are consumed immediately, and
+///     generalizing one lets its vars escape into the enclosing value.
+///   - **A value alias** — a binding whose RHS is a bare reference to an already-
+///     generalized scheme (e.g. `shorthand = FooBar.myfunc`). The reference is
+///     non-expansive: it does no work and can hide no `dbg`/`expect`, so it raises
+///     none of the duplicate-work/effect concerns that restrict generalization to
+///     syntactic functions. The referenced scheme is a generalized function or
+///     annotated value (numeric literals use the separate defaulting path), never
+///     a bare number or tag union. Restricted to binding-RHS position so bare
+///     lookups in arbitrary subexpressions aren't generalized out from under their
+///     surrounding context.
+///   - **An annotated value binding** whose annotation introduces a free type var
+///     (see `isGeneralizableValueBinding`). The rank push lets the generalizer
+///     quantify exactly the generalizable vars — with none (e.g. a concrete
+///     annotation) the generalize call is a no-op and the value stays monomorphic.
+fn shouldGeneralize(
+    self: *const Self,
+    expr: CIR.Expr,
+    annotation: ?CIR.Annotation.Idx,
+    is_binding_rhs: bool,
+    is_call_arg: bool,
+) bool {
+    if (isFunctionDef(&self.cir.store, expr) and expr != .e_closure and !is_call_arg) return true;
+    if (is_binding_rhs and (expr == .e_lookup_local or expr == .e_lookup_external)) return true;
+    return self.isGeneralizableValueBinding(annotation, is_binding_rhs);
+}
+
 /// True when a value binding generalizes to its annotated scheme: it sits in
 /// binding-RHS position (only a binding's own right-hand side qualifies; a call
 /// argument never generalizes on its own) and has an annotation introducing a
 /// type variable. The polymorphic annotation is the opt-in, honored regardless
 /// of whether the RHS does work (an expansive definition pays per-specialization
-/// — the cost the author chose by writing the scheme). Single source of truth
-/// for both the generalization decision and the top-level "POLYMORPHIC VALUE"
-/// skip, which must never diverge.
+/// — the cost the author chose by writing the scheme).
 fn isGeneralizableValueBinding(
     self: *const Self,
     annotation: ?CIR.Annotation.Idx,
