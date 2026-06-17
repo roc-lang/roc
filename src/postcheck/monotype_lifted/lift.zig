@@ -123,8 +123,6 @@ pub fn run(
     return program;
 }
 
-const FnActiveSet = std.AutoHashMap(Ast.FnId, void);
-
 const DefMap = []?Ast.FnId;
 const NestedDefMap = []?Ast.FnId;
 const FnMap = []?Ast.FnId;
@@ -148,6 +146,23 @@ const Lifter = struct {
     initialized_fns: std.AutoHashMap(Ast.FnId, void),
     symbols: Common.SymbolGen,
 
+    /// Solved, caller-independent free-local (capture) set for each lifted function.
+    /// Computed once per function and reused at every call site, so capture
+    /// collection scales with the number of function bodies and call edges
+    /// rather than the number of distinct call paths through the call graph.
+    free_sets: std.AutoHashMap(Ast.FnId, []Ast.TypedLocal),
+    /// Tarjan strongly-connected-component bookkeeping used while solving free
+    /// sets, so that mutually recursive capturing functions converge to the
+    /// least fixed point instead of caching a partially explored result.
+    tj_index: std.AutoHashMap(Ast.FnId, u32),
+    tj_lowlink: std.AutoHashMap(Ast.FnId, u32),
+    tj_on_stack: std.AutoHashMap(Ast.FnId, void),
+    tj_saw_back: std.AutoHashMap(Ast.FnId, void),
+    tj_partial: std.AutoHashMap(Ast.FnId, []Ast.TypedLocal),
+    tj_stack: std.ArrayList(Ast.FnId),
+    tj_next: u32,
+    tj_current: ?Ast.FnId,
+
     fn init(allocator: Allocator, source: *const Mono.Program, output: *Ast.Program) Allocator.Error!Lifter {
         const expr_done = try allocator.alloc(bool, output.exprCount());
         errdefer allocator.free(expr_done);
@@ -170,10 +185,34 @@ const Lifter = struct {
             .nested_fn_ids = std.AutoHashMap(Ast.FnId, void).init(allocator),
             .initialized_fns = std.AutoHashMap(Ast.FnId, void).init(allocator),
             .symbols = .{ .next = source.next_symbol },
+            .free_sets = std.AutoHashMap(Ast.FnId, []Ast.TypedLocal).init(allocator),
+            .tj_index = std.AutoHashMap(Ast.FnId, u32).init(allocator),
+            .tj_lowlink = std.AutoHashMap(Ast.FnId, u32).init(allocator),
+            .tj_on_stack = std.AutoHashMap(Ast.FnId, void).init(allocator),
+            .tj_saw_back = std.AutoHashMap(Ast.FnId, void).init(allocator),
+            .tj_partial = std.AutoHashMap(Ast.FnId, []Ast.TypedLocal).init(allocator),
+            .tj_stack = .empty,
+            .tj_next = 0,
+            .tj_current = null,
         };
     }
 
     fn deinit(self: *Lifter) void {
+        self.tj_stack.deinit(self.allocator);
+        {
+            var it = self.tj_partial.valueIterator();
+            while (it.next()) |slice| self.allocator.free(slice.*);
+        }
+        self.tj_partial.deinit();
+        self.tj_saw_back.deinit();
+        self.tj_on_stack.deinit();
+        self.tj_lowlink.deinit();
+        self.tj_index.deinit();
+        {
+            var it = self.free_sets.valueIterator();
+            while (it.next()) |slice| self.allocator.free(slice.*);
+        }
+        self.free_sets.deinit();
         self.initialized_fns.deinit();
         self.nested_fn_ids.deinit();
         self.fn_bodies.deinit(self.allocator);
@@ -247,19 +286,7 @@ const Lifter = struct {
     }
 
     fn lowerTopLevelDef(self: *Lifter, fn_id: Ast.FnId, def: Mono.Def) Allocator.Error!void {
-        var active = self.initFnActiveSet();
-        defer active.deinit();
-        var captures = CaptureSet.init(self, &active);
-        defer captures.deinit();
-        var bound = BoundSet.init(self.allocator);
-        defer bound.deinit();
-        try bindTypedLocals(self.output, &bound, self.output.typedLocalSpan(def.args));
-        switch (def.body) {
-            .roc => |body| try captures.collectExpr(body, &bound),
-            .hosted => {},
-        }
-
-        if (captures.items.items.len != 0) {
+        if ((try self.getFreeSet(fn_id)).len != 0) {
             Common.invariant("top-level Monotype definition has free locals after checked closure collection");
         }
 
@@ -282,17 +309,10 @@ const Lifter = struct {
     }
 
     fn lowerNestedDef(self: *Lifter, fn_id: Ast.FnId, def: Mono.NestedDef) Allocator.Error!void {
-        var active = self.initFnActiveSet();
-        defer active.deinit();
-        var captures = CaptureSet.init(self, &active);
-        defer captures.deinit();
-        var bound = BoundSet.init(self.allocator);
-        defer bound.deinit();
-        try bindTypedLocals(self.output, &bound, self.output.typedLocalSpan(def.args));
-        try captures.collectExpr(def.body, &bound);
+        const free = try self.getFreeSet(fn_id);
 
         try self.rewriteExpr(def.body);
-        const capture_span = try self.output.addTypedLocalSpan(captures.items.items);
+        const capture_span = try self.output.addTypedLocalSpan(free);
         self.output.fns.items[@intFromEnum(fn_id)] = .{
             .symbol = def.symbol,
             .source = self.nestedSource(def.fn_id, def.fn_def),
@@ -418,17 +438,10 @@ const Lifter = struct {
         if (self.initialized_fns.contains(fn_id)) return;
 
         try self.setFnBody(fn_id, .{ .args = lambda.args, .body = .{ .roc = lambda.body } });
-        var active = self.initFnActiveSet();
-        defer active.deinit();
-        var captures = CaptureSet.init(self, &active);
-        defer captures.deinit();
-        var bound = BoundSet.init(self.allocator);
-        defer bound.deinit();
-        try bindTypedLocals(self.output, &bound, self.output.typedLocalSpan(lambda.args));
-        try captures.collectExpr(lambda.body, &bound);
+        const free = try self.getFreeSet(fn_id);
 
         try self.rewriteExpr(lambda.body);
-        const capture_span = try self.output.addTypedLocalSpan(captures.items.items);
+        const capture_span = try self.output.addTypedLocalSpan(free);
         self.output.fns.items[@intFromEnum(fn_id)] = .{
             .symbol = self.symbols.fresh(),
             .source = self.source.fnSource(lambda.fn_id),
@@ -458,8 +471,128 @@ const Lifter = struct {
         self.fn_bodies.items[raw] = body;
     }
 
-    fn initFnActiveSet(self: *Lifter) FnActiveSet {
-        return FnActiveSet.init(self.allocator);
+    /// Return the solved free-local set for a lifted function, computing it once
+    /// and caching it. A function's free set is independent of any caller, so a
+    /// call site consumes this cached data instead of re-walking the callee body
+    /// at every reference. Mutually recursive functions are solved together as a
+    /// strongly connected component so each member reaches its least fixed point.
+    fn getFreeSet(self: *Lifter, fn_id: Ast.FnId) Allocator.Error![]const Ast.TypedLocal {
+        if (self.free_sets.get(fn_id)) |solved| return solved;
+
+        const raw = @intFromEnum(fn_id);
+        if (raw >= self.fn_bodies.items.len) Common.invariant("capture collection referenced a missing lifted function");
+        if (self.fn_bodies.items[raw] == null) return &.{};
+
+        if (self.tj_index.get(fn_id)) |existing_index| {
+            // The function is already being explored on the current Tarjan stack.
+            if (self.tj_current) |current| {
+                if (self.tj_on_stack.contains(fn_id)) {
+                    try self.tjLowerlink(current, existing_index);
+                    try self.tj_saw_back.put(current, {});
+                }
+            }
+            return self.tj_partial.get(fn_id) orelse &.{};
+        }
+
+        try self.strongconnect(fn_id);
+        if (self.tj_current) |current| {
+            try self.tjLowerlink(current, self.tj_lowlink.get(fn_id).?);
+        }
+        if (self.free_sets.get(fn_id)) |solved| return solved;
+        return self.tj_partial.get(fn_id) orelse &.{};
+    }
+
+    fn tjLowerlink(self: *Lifter, fn_id: Ast.FnId, candidate: u32) Allocator.Error!void {
+        const current = self.tj_lowlink.get(fn_id) orelse return;
+        if (candidate < current) try self.tj_lowlink.put(fn_id, candidate);
+    }
+
+    /// Tarjan strongconnect, specialized to compute free sets. Each function's
+    /// body is walked once to produce a provisional free set; back edges into
+    /// functions still on the stack contribute the partial set known so far and
+    /// are reconciled by a fixed-point pass once the whole component is known.
+    fn strongconnect(self: *Lifter, fn_id: Ast.FnId) Allocator.Error!void {
+        const index = self.tj_next;
+        self.tj_next += 1;
+        try self.tj_index.put(fn_id, index);
+        try self.tj_lowlink.put(fn_id, index);
+        try self.tj_stack.append(self.allocator, fn_id);
+        try self.tj_on_stack.put(fn_id, {});
+
+        const previous = self.tj_current;
+        self.tj_current = fn_id;
+        const provisional = try self.computeFreeSetWalk(fn_id);
+        self.tj_current = previous;
+
+        if (self.tj_lowlink.get(fn_id).? == index) {
+            // This node roots a strongly connected component; pop its members.
+            var members = std.ArrayList(Ast.FnId).empty;
+            defer members.deinit(self.allocator);
+            while (true) {
+                const member = self.tj_stack.pop() orelse Common.invariant("Tarjan stack underflowed while popping a component");
+                _ = self.tj_on_stack.remove(member);
+                try members.append(self.allocator, member);
+                if (member == fn_id) break;
+            }
+
+            try self.tj_partial.put(fn_id, provisional);
+            const cyclic = members.items.len > 1 or self.tj_saw_back.contains(fn_id);
+            if (cyclic) {
+                try self.solveComponentFixpoint(members.items);
+            } else {
+                const moved = self.tj_partial.fetchRemove(fn_id).?.value;
+                try self.free_sets.put(fn_id, moved);
+            }
+        } else {
+            // Not a component root; retain the provisional set for the root to use.
+            try self.tj_partial.put(fn_id, provisional);
+        }
+    }
+
+    /// Reconcile a strongly connected component to its least fixed point. Members
+    /// share the same reachable locals, so each member's free set grows until no
+    /// member gains a capture, then becomes the committed result.
+    fn solveComponentFixpoint(self: *Lifter, members: []const Ast.FnId) Allocator.Error!void {
+        // Seed each member's committed set with its provisional walk so the
+        // re-walks below observe sibling captures instead of recursing.
+        for (members) |member| {
+            const seed = self.tj_partial.fetchRemove(member) orelse Common.invariant("component member lacked a provisional free set");
+            try self.free_sets.put(member, seed.value);
+        }
+
+        var changed = true;
+        while (changed) {
+            changed = false;
+            for (members) |member| {
+                const updated = try self.computeFreeSetWalk(member);
+                const previous = self.free_sets.get(member).?;
+                if (updated.len > previous.len) {
+                    self.allocator.free(previous);
+                    try self.free_sets.put(member, updated);
+                    changed = true;
+                } else {
+                    self.allocator.free(updated);
+                }
+            }
+        }
+    }
+
+    /// Walk a function body once, gathering its free locals. Callee free sets are
+    /// pulled from `getFreeSet`, so no callee body is re-walked here.
+    fn computeFreeSetWalk(self: *Lifter, fn_id: Ast.FnId) Allocator.Error![]Ast.TypedLocal {
+        const raw = @intFromEnum(fn_id);
+        const body = self.fn_bodies.items[raw] orelse return self.allocator.alloc(Ast.TypedLocal, 0);
+
+        var captures = CaptureSet.init(self);
+        defer captures.deinit();
+        var bound = BoundSet.init(self.allocator);
+        defer bound.deinit();
+        try bindTypedLocals(self.output, &bound, self.output.typedLocalSpan(body.args));
+        switch (body.body) {
+            .roc => |expr| try captures.collectExpr(expr, &bound),
+            .hosted => {},
+        }
+        return self.allocator.dupe(Ast.TypedLocal, captures.items.items);
     }
 
     fn registerFn(self: *Lifter, mono_fn_id: Mono.FnId, fn_id: Ast.FnId) void {
@@ -555,15 +688,13 @@ const CaptureSet = struct {
     lifter: *Lifter,
     items: std.ArrayList(Ast.TypedLocal),
     seen: std.AutoHashMap(Mono.LocalId, void),
-    active: *FnActiveSet,
 
-    fn init(lifter: *Lifter, active: *FnActiveSet) CaptureSet {
+    fn init(lifter: *Lifter) CaptureSet {
         return .{
             .allocator = lifter.allocator,
             .lifter = lifter,
             .items = .empty,
             .seen = std.AutoHashMap(Mono.LocalId, void).init(lifter.allocator),
-            .active = active,
         };
     }
 
@@ -683,25 +814,8 @@ const CaptureSet = struct {
     }
 
     fn collectFnCaptures(self: *CaptureSet, fn_id: Ast.FnId, caller_bound: *BoundSet) Allocator.Error!void {
-        const raw = @intFromEnum(fn_id);
-        if (raw >= self.lifter.fn_bodies.items.len) Common.invariant("capture collection referenced a missing lifted function");
-        const body = self.lifter.fn_bodies.items[raw] orelse return;
-        const entry = try self.active.getOrPut(fn_id);
-        if (entry.found_existing) return;
-        defer _ = self.active.remove(fn_id);
-
-        var local_captures = CaptureSet.init(self.lifter, self.active);
-        defer local_captures.deinit();
-
-        var body_bound = BoundSet.init(self.allocator);
-        defer body_bound.deinit();
-        try bindTypedLocals(self.lifter.output, &body_bound, self.lifter.output.typedLocalSpan(body.args));
-        switch (body.body) {
-            .roc => |expr| try local_captures.collectExpr(expr, &body_bound),
-            .hosted => {},
-        }
-
-        for (local_captures.items.items) |capture| {
+        const callee_free = try self.lifter.getFreeSet(fn_id);
+        for (callee_free) |capture| {
             try self.addIfFree(capture.local, caller_bound);
         }
     }
