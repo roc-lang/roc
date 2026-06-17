@@ -27,7 +27,7 @@ But the annotation says it should be:
 
     { x: U64, y: U64, z: U64 }
 
-**Hint:** Maybe `x` should be `z`?
+**Hint:** This record is missing the field: `z`
 
 # TOKENS
 ~~~zig

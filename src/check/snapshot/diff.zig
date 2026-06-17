@@ -197,6 +197,37 @@ pub const TypoSuggestion = struct {
 /// Find the best typo suggestions from a slice of identifier indices.
 ///
 /// This clobbers `suggestions` and writes suggestions sorted by rank
+/// Like `findBestTypoSuggestion`, but ignores any candidate that also appears in
+/// `exclude` (e.g. fields already matched between the two records). Such fields
+/// are real and present, so they should never be proposed as the typo source.
+fn findBestTypoSuggestionExcluding(
+    typo: Ident.Idx,
+    candidates: []const Ident.Idx,
+    exclude: []const Ident.Idx,
+    ident_store: *const Ident.Store,
+) ?Ident.Idx {
+    var best: ?Ident.Idx = null;
+    var best_dist: u32 = 3; // Max typo distance + 1
+
+    const typo_text = ident_store.getText(typo);
+
+    for (candidates) |candidate| {
+        const is_excluded = for (exclude) |e| {
+            if (candidate.eql(e)) break true;
+        } else false;
+        if (is_excluded) continue;
+
+        const candidate_text = ident_store.getText(candidate);
+        const dist = editDistance(typo_text, candidate_text);
+        if (dist > 0 and dist < best_dist and isLikelyTypo(typo_text.len, candidate_text.len, dist)) {
+            best_dist = dist;
+            best = candidate;
+        }
+    }
+
+    return best;
+}
+
 pub fn findBestTypoSuggestions(
     typo: Ident.Idx,
     candidates: []const Ident.Idx,
@@ -501,8 +532,11 @@ fn compareFieldNames(
         }
 
         if (!found) {
-            // Check if there's a typo candidate in actual fields
-            if (findBestTypoSuggestion(exp_name_idx, act_names, ident_store)) |suggestion| {
+            // Check if there's a typo candidate among the actual fields that are
+            // themselves unmatched. A field present in both records is a real,
+            // matched field — never a typo source (otherwise an extra field like
+            // `z` gets misreported as a typo of a legitimate field like `x`).
+            if (findBestTypoSuggestionExcluding(exp_name_idx, act_names, exp_names, ident_store)) |suggestion| {
                 hints.append(.{ .field_typo = .{
                     .typo = suggestion,
                     .suggestion = exp_name_idx,

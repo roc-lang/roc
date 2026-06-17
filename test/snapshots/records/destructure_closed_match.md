@@ -32,7 +32,7 @@ But the expression between the `match` parenthesis has the type:
     { x: U64, y: U64, z: U64 }
 
 These can never match! Either the pattern or expression has a problem.
-**Hint:** Maybe `x` should be `z`?
+**Hint:** This pattern doesn't bind the `z` field. Match it explicitly with `z: _`, or add `..` to match all the remaining fields.
 
 # TOKENS
 ~~~zig

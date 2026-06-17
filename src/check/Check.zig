@@ -8294,7 +8294,13 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 }
                 try self.closeAbsentConstructedPayloadVars(decl_stmt.expr, decl_expr_var);
 
-                const decl_pattern_result = try self.unify(decl_pattern_var, decl_expr_var, env);
+                // A record-destructure binding gets a dedicated context so the
+                // report can suggest `field: _` or `..` when the pattern is too
+                // narrow for the value (the pattern is the first/expected arg).
+                const decl_pattern_result = switch (self.cir.store.getPattern(decl_stmt.pattern)) {
+                    .record_destructure => try self.unifyInContext(decl_pattern_var, decl_expr_var, env, .record_destructure),
+                    else => try self.unify(decl_pattern_var, decl_expr_var, env),
+                };
                 _ = try self.unify(stmt_var, decl_pattern_var, env);
 
                 if (decl_pattern_result.isOk()) {

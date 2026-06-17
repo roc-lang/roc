@@ -1,26 +1,26 @@
 # META
 ~~~ini
-description=Record destructure assignment without `..` is closed: an extra field in the value is a type mismatch
+description=A too-narrow record destructure lists every unbound field and suggests `field: _` or `..`
 type=snippet
 ~~~
 # SOURCE
 ~~~roc
 compute : U64
 compute = {
-    { x, y } = { x: 1, y: 2, z: 3 }
-    x + y
+    { x } = { x: 1, y: 2, z: 3 }
+    x
 }
 ~~~
 # EXPECTED
-TYPE MISMATCH - destructure_closed_assignment.md:3:16:3:36
+TYPE MISMATCH - destructure_closed_hint_multi.md:3:13:3:33
 # PROBLEMS
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
-**destructure_closed_assignment.md:3:16:3:36:**
+**destructure_closed_hint_multi.md:3:13:3:33:**
 ```roc
-    { x, y } = { x: 1, y: 2, z: 3 }
+    { x } = { x: 1, y: 2, z: 3 }
 ```
-               ^^^^^^^^^^^^^^^^^^^^
+            ^^^^^^^^^^^^^^^^^^^^
 
 It has the type:
 
@@ -33,15 +33,18 @@ It has the type:
 
 But you are trying to use it as:
 
-    { x: _field, y: _field2 }
-**Hint:** This pattern doesn't bind the `z` field. Match it explicitly with `z: _`, or add `..` to match all the remaining fields.
+    { x: _field }
+**Hint:** This pattern doesn't bind these fields:
+ - `y`
+ - `z`
+Match them explicitly with `y: _`, or add `..` to match all the remaining fields.
 
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,
 LowerIdent,OpAssign,OpenCurly,
-OpenCurly,LowerIdent,Comma,LowerIdent,CloseCurly,OpAssign,OpenCurly,LowerIdent,OpColon,Int,Comma,LowerIdent,OpColon,Int,Comma,LowerIdent,OpColon,Int,CloseCurly,
-LowerIdent,OpPlus,LowerIdent,
+OpenCurly,LowerIdent,CloseCurly,OpAssign,OpenCurly,LowerIdent,OpColon,Int,Comma,LowerIdent,OpColon,Int,Comma,LowerIdent,OpColon,Int,CloseCurly,
+LowerIdent,
 CloseCurly,
 EndOfFile,
 ~~~
@@ -58,8 +61,7 @@ EndOfFile,
 				(statements
 					(s-decl
 						(p-record
-							(field (name "x") (rest false))
-							(field (name "y") (rest false)))
+							(field (name "x") (rest false)))
 						(e-record
 							(field (field "x")
 								(e-int (raw "1")))
@@ -67,16 +69,14 @@ EndOfFile,
 								(e-int (raw "2")))
 							(field (field "z")
 								(e-int (raw "3")))))
-					(e-binop (op "+")
-						(e-ident (raw "x"))
-						(e-ident (raw "y"))))))))
+					(e-ident (raw "x")))))))
 ~~~
 # FORMATTED
 ~~~roc
 compute : U64
 compute = {
-	{ x, y } = { x: 1, y: 2, z: 3 }
-	x + y
+	{ x } = { x: 1, y: 2, z: 3 }
+	x
 }
 ~~~
 # CANONICALIZE
@@ -90,10 +90,7 @@ compute = {
 					(destructs
 						(record-destruct (label "x") (ident "x")
 							(required
-								(p-assign (ident "x"))))
-						(record-destruct (label "y") (ident "y")
-							(required
-								(p-assign (ident "y"))))))
+								(p-assign (ident "x"))))))
 				(e-record
 					(fields
 						(field (name "x")
@@ -102,13 +99,8 @@ compute = {
 							(e-num (value "2")))
 						(field (name "z")
 							(e-num (value "3"))))))
-			(e-dispatch-call (method "plus") (constraint-fn-var 133)
-				(receiver
-					(e-lookup-local
-						(p-assign (ident "x"))))
-				(args
-					(e-lookup-local
-						(p-assign (ident "y"))))))
+			(e-lookup-local
+				(p-assign (ident "x"))))
 		(annotation
 			(ty-lookup (name "U64") (builtin)))))
 ~~~
