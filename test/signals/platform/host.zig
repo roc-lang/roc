@@ -13,6 +13,7 @@ const DispatchResultBox = @typeInfo(@TypeOf(abi.roc_ui_init)).@"fn".return_type.
 const DispatchResult = std.meta.Child(DispatchResultBox);
 const RuntimeBox = @typeInfo(@TypeOf(abi.roc_ui_drop)).@"fn".params[0].type.?;
 const RuntimeMetrics = @FieldType(DispatchResult, "metrics");
+const EventRouteList = @FieldType(DispatchResult, "event_routes");
 const HostEventBox = @typeInfo(@TypeOf(abi.roc_ui_dispatch)).@"fn".params[1].type.?;
 const HostEvent = std.meta.Child(HostEventBox);
 const CommandPayload = @FieldType(abi.UiRuntimeCommand, "payload");
@@ -20,6 +21,11 @@ const AppendChildPayload = @FieldType(CommandPayload, "append_child");
 const CreateElementPayload = @FieldType(CommandPayload, "create_element");
 const StringCommandPayload = @FieldType(CommandPayload, "set_text");
 const RocStr = abi.RocStr;
+
+const HostEventRoute = struct {
+    event_id: u64,
+    state_indexes: []u64,
+};
 
 pub const std_options: std.Options = .{
     .logFn = std.log.defaultLog,
@@ -453,6 +459,7 @@ const HostEnv = struct {
     alloc_count: usize = 0,
     dealloc_count: usize = 0,
     dom_elements: std.ArrayListUnmanaged(DomElement) = .empty,
+    event_routes: std.ArrayListUnmanaged(HostEventRoute) = .empty,
     next_elem_id: u64 = 0,
     roc_host: ?*abi.RocHost = null,
     runtime_box: ?RuntimeBox = null,
@@ -463,6 +470,46 @@ const HostEnv = struct {
             .gpa = std.heap.DebugAllocator(.{ .safety = true }){},
             .test_state = TestState.init(),
         };
+    }
+
+    fn clearEventRoutes(self: *HostEnv) void {
+        const allocator = self.gpa.allocator();
+        for (self.event_routes.items) |route| {
+            allocator.free(route.state_indexes);
+        }
+        self.event_routes.items.len = 0;
+    }
+
+    fn setEventRoutes(self: *HostEnv, routes: EventRouteList) void {
+        const allocator = self.gpa.allocator();
+        self.clearEventRoutes();
+
+        for (routes.items()) |route| {
+            const expected_event_id: u64 = @intCast(self.event_routes.items.len + 1);
+            if (route.event_id != expected_event_id) {
+                failHost("Roc event route descriptors must be dense and ordered by event id");
+            }
+
+            const state_indexes = allocator.dupe(u64, route.state_indexes.items()) catch std.process.exit(1);
+            self.event_routes.append(allocator, .{
+                .event_id = route.event_id,
+                .state_indexes = state_indexes,
+            }) catch {
+                allocator.free(state_indexes);
+                std.process.exit(1);
+            };
+        }
+    }
+
+    fn stateIndexesForEvent(self: *HostEnv, event_id: u64) []const u64 {
+        if (event_id == 0) failHost("event id 0 is not registered");
+
+        const route_index = event_id - 1;
+        if (route_index >= self.event_routes.items.len) failHost("event id has no host route descriptor");
+
+        const route = self.event_routes.items[@intCast(route_index)];
+        if (route.event_id != event_id) failHost("host event route table is not indexed by event id");
+        return route.state_indexes;
     }
 
     fn deinit(self: *HostEnv) void {
@@ -477,6 +524,8 @@ const HostEnv = struct {
             elem.deinit(allocator);
         }
         self.dom_elements.deinit(allocator);
+        self.clearEventRoutes();
+        self.event_routes.deinit(allocator);
 
         freeSpecCommands(allocator, self.test_state.commands);
 
@@ -1030,6 +1079,15 @@ fn releaseCommandList(commands: abi.RocList(abi.UiRuntimeCommand), roc_host: *ab
     commands.decref(roc_host);
 }
 
+fn releaseEventRouteList(routes: EventRouteList, roc_host: *abi.RocHost) void {
+    if (routes.isUnique()) {
+        for (routes.items()) |route| {
+            route.state_indexes.decref(roc_host);
+        }
+    }
+    routes.decref(roc_host);
+}
+
 fn dropMovedDispatchResultPayload(_: ?*anyopaque, _: *abi.RocHost) callconv(.c) void {}
 
 fn acceptDispatchResultMeasured(host: *HostEnv, roc_host: *abi.RocHost, result_box: DispatchResultBox, apply_ns: ?*u64, command_counts: ?*CommandCounts) void {
@@ -1037,12 +1095,14 @@ fn acceptDispatchResultMeasured(host: *HostEnv, roc_host: *abi.RocHost, result_b
     if (host.runtime_box != null) failHost("Roc runtime box was overwritten before being consumed");
     host.runtime_box = result.runtime;
     host.last_runtime_metrics = result.metrics;
+    host.setEventRoutes(result.event_routes);
     const start_ns = benchmarkNowNs();
     const counts = applyCommandList(host, result.commands);
     const elapsed = benchmarkNowNs() - start_ns;
     if (apply_ns) |ns| ns.* += elapsed;
     if (command_counts) |total| total.addAll(counts);
     releaseCommandList(result.commands, roc_host);
+    releaseEventRouteList(result.event_routes, roc_host);
     abi.decrefBoxWith(@ptrCast(result_box), @alignOf(DispatchResult), &dropMovedDispatchResultPayload, roc_host);
 }
 
@@ -1055,6 +1115,48 @@ fn boxHostEvent(roc_host: *abi.RocHost, event: HostEvent) HostEventBox {
     const event_box: HostEventBox = @ptrCast(@alignCast(raw));
     event_box.* = event;
     return event_box;
+}
+
+fn dirtyStateIndexListForEvent(host: *HostEnv, roc_host: *abi.RocHost, event_id: u64) abi.RocListWith(u64, false) {
+    return abi.RocListWith(u64, false).fromSlice(host.stateIndexesForEvent(event_id), roc_host);
+}
+
+fn clickHostEvent(host: *HostEnv, roc_host: *abi.RocHost, event_id: u64) HostEvent {
+    return .{
+        .payload = .{
+            .click = .{
+                .dirty_state_indexes = dirtyStateIndexListForEvent(host, roc_host, event_id),
+                .event = event_id,
+            },
+        },
+        .tag = .Click,
+    };
+}
+
+fn inputHostEvent(host: *HostEnv, roc_host: *abi.RocHost, event_id: u64, value: []const u8) HostEvent {
+    return .{
+        .payload = .{
+            .input = .{
+                .dirty_state_indexes = dirtyStateIndexListForEvent(host, roc_host, event_id),
+                .event = event_id,
+                .value = RocStr.fromSlice(value, roc_host),
+            },
+        },
+        .tag = .Input,
+    };
+}
+
+fn checkHostEvent(host: *HostEnv, roc_host: *abi.RocHost, event_id: u64, checked: bool) HostEvent {
+    return .{
+        .payload = .{
+            .check = .{
+                .checked = checked,
+                .dirty_state_indexes = dirtyStateIndexListForEvent(host, roc_host, event_id),
+                .event = event_id,
+            },
+        },
+        .tag = .Check,
+    };
 }
 
 fn dispatchRocEvent(host: *HostEnv, roc_host: *abi.RocHost, event: HostEvent) void {
@@ -1099,10 +1201,7 @@ fn runActionCommandMeasured(host: *HostEnv, roc_host: *abi.RocHost, cmd: SpecCom
             const elem = host.findElementByLocator(cmd.locator, cmd.line_num) orelse failHost("benchmark click locator did not resolve");
             if (elem.disabled) failHost("benchmark click target is disabled");
             const event_id = elem.bound_click_event orelse failHost("benchmark click target has no binding");
-            dispatchRocEventMeasured(host, roc_host, .{
-                .payload = .{ .click = event_id },
-                .tag = .Click,
-            }, stats);
+            dispatchRocEventMeasured(host, roc_host, clickHostEvent(host, roc_host, event_id), stats);
         },
 
         .fill => {
@@ -1110,15 +1209,7 @@ fn runActionCommandMeasured(host: *HostEnv, roc_host: *abi.RocHost, cmd: SpecCom
             const elem = host.findElementByLocator(cmd.locator, cmd.line_num) orelse failHost("benchmark fill locator did not resolve");
             if (elem.disabled) failHost("benchmark fill target is disabled");
             if (elem.bound_input_event) |event_id| {
-                dispatchRocEventMeasured(host, roc_host, .{
-                    .payload = .{
-                        .input = .{
-                            .event = event_id,
-                            .value = RocStr.fromSlice(value, roc_host),
-                        },
-                    },
-                    .tag = .Input,
-                }, stats);
+                dispatchRocEventMeasured(host, roc_host, inputHostEvent(host, roc_host, event_id, value), stats);
             } else {
                 setElementValueIfChanged(host, elem, value);
             }
@@ -1129,15 +1220,7 @@ fn runActionCommandMeasured(host: *HostEnv, roc_host: *abi.RocHost, cmd: SpecCom
             const elem = host.findElementByLocator(cmd.locator, cmd.line_num) orelse failHost("benchmark check locator did not resolve");
             if (elem.disabled) failHost("benchmark check target is disabled");
             if (elem.bound_check_event) |event_id| {
-                dispatchRocEventMeasured(host, roc_host, .{
-                    .payload = .{
-                        .check = .{
-                            .event = event_id,
-                            .checked = checked,
-                        },
-                    },
-                    .tag = .Check,
-                }, stats);
+                dispatchRocEventMeasured(host, roc_host, checkHostEvent(host, roc_host, event_id, checked), stats);
             } else {
                 setElementCheckedIfChanged(elem, checked);
             }
@@ -1423,10 +1506,7 @@ fn platform_main(spec_file: []const u8, verbose: bool) !c_int {
                     writeLocatorFailure(cmd.line_num, "target has no click binding");
                     return 1;
                 };
-                dispatchRocEvent(&host_env, &roc_host, .{
-                    .payload = .{ .click = event_id },
-                    .tag = .Click,
-                });
+                dispatchRocEvent(&host_env, &roc_host, clickHostEvent(&host_env, &roc_host, event_id));
             },
 
             .fill => {
@@ -1440,15 +1520,7 @@ fn platform_main(spec_file: []const u8, verbose: bool) !c_int {
                     return 1;
                 }
                 if (elem.bound_input_event) |event_id| {
-                    dispatchRocEvent(&host_env, &roc_host, .{
-                        .payload = .{
-                            .input = .{
-                                .event = event_id,
-                                .value = RocStr.fromSlice(value, &roc_host),
-                            },
-                        },
-                        .tag = .Input,
-                    });
+                    dispatchRocEvent(&host_env, &roc_host, inputHostEvent(&host_env, &roc_host, event_id, value));
                 } else {
                     setElementValueIfChanged(&host_env, elem, value);
                 }
@@ -1465,15 +1537,7 @@ fn platform_main(spec_file: []const u8, verbose: bool) !c_int {
                     return 1;
                 }
                 if (elem.bound_check_event) |event_id| {
-                    dispatchRocEvent(&host_env, &roc_host, .{
-                        .payload = .{
-                            .check = .{
-                                .event = event_id,
-                                .checked = checked,
-                            },
-                        },
-                        .tag = .Check,
-                    });
+                    dispatchRocEvent(&host_env, &roc_host, checkHostEvent(&host_env, &roc_host, event_id, checked));
                 } else {
                     setElementCheckedIfChanged(elem, checked);
                 }

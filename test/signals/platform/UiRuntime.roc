@@ -41,9 +41,9 @@ UiRuntime := [].{
 	EventStateDeps : { event_id : U64, state_indexes : List(U64) }
 
 	HostEvent := [
-		Click(U64),
-		Input({ event : U64, value : Str }),
-		Check({ event : U64, checked : Bool }),
+		Click({ event : U64, dirty_state_indexes : List(U64) }),
+		Input({ event : U64, dirty_state_indexes : List(U64), value : Str }),
+		Check({ event : U64, dirty_state_indexes : List(U64), checked : Bool }),
 	]
 
 	Command := [
@@ -90,6 +90,7 @@ UiRuntime := [].{
 	DispatchResult : {
 		runtime : Box(Runtime),
 		commands : List(Command),
+		event_routes : List(EventStateDeps),
 		metrics : RuntimeMetrics,
 	}
 
@@ -210,6 +211,7 @@ UiRuntime := [].{
 		result = {
 			runtime: runtime_box,
 			commands: rendered.emit_commands,
+			event_routes: rendered.runtime.event_state_deps,
 			metrics: rendered.runtime.metrics,
 		}
 		result
@@ -219,7 +221,7 @@ UiRuntime := [].{
 	dispatch = |boxed_runtime, host_event| {
 		runtime0 = Box.unbox(boxed_runtime)
 		active_event = host_event_to_active(host_event)
-		dirty_states = dirty_states_for_active_event(runtime0, active_event)
+		dirty_states = { indexes: host_event_dirty_state_indexes(host_event) }
 		metrics = runtime0.metrics
 		runtime1 = { ..runtime0, metrics: { ..metrics,
 				events_processed: metrics.events_processed + 1,
@@ -230,27 +232,8 @@ UiRuntime := [].{
 		{
 			runtime: Box.box(rendered.runtime),
 			commands: rendered.emit_commands,
+			event_routes: rendered.runtime.event_state_deps,
 			metrics: rendered.runtime.metrics,
-		}
-	}
-
-	dirty_states_for_active_event : Runtime, ActiveEvent -> DirtyStates
-	dirty_states_for_active_event = |runtime, active_event| {
-		match active_event {
-			NoEvent => { indexes: [] }
-			Occurrence({ id }) =>
-				if id == 0 {
-					{
-						crash "Signals runtime invariant violated: event id 0 is not registered"
-					}
-				} else {
-					match List.get(runtime.event_state_deps, id - 1) {
-						Ok(entry) => { indexes: entry.state_indexes }
-						Err(_) => {
-							crash "Signals runtime invariant violated: event dependency slot missing"
-						}
-					}
-				}
 		}
 	}
 
@@ -566,9 +549,18 @@ UiRuntime := [].{
 	host_event_to_active : HostEvent -> ActiveEvent
 	host_event_to_active = |host_event| {
 		match host_event {
-			Click(event_id) => Occurrence({ id: event_id, value: NodeValue.unit })
+			Click({ event }) => Occurrence({ id: event, value: NodeValue.unit })
 			Input({ event, value }) => Occurrence({ id: event, value: NodeValue.from_str(value) })
 			Check({ event, checked }) => Occurrence({ id: event, value: NodeValue.from_bool(checked) })
+		}
+	}
+
+	host_event_dirty_state_indexes : HostEvent -> List(U64)
+	host_event_dirty_state_indexes = |host_event| {
+		match host_event {
+			Click({ dirty_state_indexes }) => dirty_state_indexes
+			Input({ dirty_state_indexes }) => dirty_state_indexes
+			Check({ dirty_state_indexes }) => dirty_state_indexes
 		}
 	}
 
