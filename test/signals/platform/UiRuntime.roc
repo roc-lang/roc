@@ -32,17 +32,15 @@ UiRuntime := [].{
 
 	EventId : { key : Str, id : U64, payload_kind : U64 }
 
-	StateSlot : { key : Str, value : NodeValue, version : U64 }
+	StateSlot : { key : Str, value : NodeValue, version : U64, event_ids : List(U64) }
 
-	StateDesc : { state_id : U64 }
+	StateDesc : { state_id : U64, value : NodeValue, event_ids : List(U64) }
 
-	StateChangeDesc : { state_id : U64 }
+	StateChangeDesc : { state_id : U64, value : NodeValue }
 
 	StateVersionEntry : { state_index : U64, version : U64 }
 
 	SignalCacheEntry : { key : Str, value : NodeValue, deps : List(StateVersionEntry) }
-
-	EventStateDeps : { event_id : U64, state_indexes : List(U64) }
 
 	EventDesc : { event_id : U64, payload_kind : U64 }
 
@@ -74,7 +72,6 @@ UiRuntime := [].{
 		event_ids : List(EventId),
 		next_event_id : U64,
 		signal_cache : List(SignalCacheEntry),
-		event_state_deps : List(EventStateDeps),
 		metrics : RuntimeMetrics,
 	}
 
@@ -82,7 +79,6 @@ UiRuntime := [].{
 		runtime : Box(Runtime),
 		commands : List(Command),
 		event_descriptors : List(EventDesc),
-		event_routes : List(EventStateDeps),
 		state_descriptors : List(StateDesc),
 		state_changes : List(StateChangeDesc),
 		metrics : RuntimeMetrics,
@@ -195,7 +191,6 @@ UiRuntime := [].{
 			event_ids: [],
 			next_event_id: 1,
 			signal_cache: [],
-			event_state_deps: [],
 			metrics: zero_metrics,
 		}
 		registered = register_elem(runtime0, root)
@@ -206,9 +201,8 @@ UiRuntime := [].{
 			runtime: runtime_box,
 			commands: rendered.emit_commands,
 			event_descriptors: event_descriptors_for_runtime(rendered.runtime),
-			event_routes: rendered.runtime.event_state_deps,
 			state_descriptors: state_descriptors_for_runtime(rendered.runtime),
-			state_changes: state_changes_for_indexes(rendered.changed_state_indexes),
+			state_changes: state_changes_for_indexes(rendered.runtime, rendered.changed_state_indexes),
 			metrics: rendered.runtime.metrics,
 		}
 		result
@@ -224,9 +218,8 @@ UiRuntime := [].{
 			runtime: Box.box(rendered.runtime),
 			commands: rendered.emit_commands,
 			event_descriptors: event_descriptors_for_runtime(rendered.runtime),
-			event_routes: rendered.runtime.event_state_deps,
 			state_descriptors: state_descriptors_for_runtime(rendered.runtime),
-			state_changes: state_changes_for_indexes(rendered.changed_state_indexes),
+			state_changes: state_changes_for_indexes(rendered.runtime, rendered.changed_state_indexes),
 			metrics: rendered.runtime.metrics,
 		}
 	}
@@ -482,7 +475,7 @@ UiRuntime := [].{
 			StateSlotMissing => {
 				index = List.len(runtime.states)
 				{
-					runtime: { ..runtime, states: List.append(runtime.states, { key, value: initial, version: 0 }) },
+					runtime: { ..runtime, states: List.append(runtime.states, { key, value: initial, version: 0, event_ids: [] }) },
 					index,
 				}
 			}
@@ -503,7 +496,6 @@ UiRuntime := [].{
 				{
 					runtime: { ..runtime,
 						event_ids: List.append(runtime.event_ids, { key, id, payload_kind }),
-						event_state_deps: List.append(runtime.event_state_deps, { event_id: id, state_indexes: [] }),
 						next_event_id: id + 1,
 					},
 					id,
@@ -523,17 +515,17 @@ UiRuntime := [].{
 
 	register_state_event_index : Runtime, U64, U64 -> Runtime
 	register_state_event_index = |runtime, event_id, state_index| {
-		match List.get(runtime.event_state_deps, event_id - 1) {
-			Ok(entry) =>
-				if u64_list_contains(entry.state_indexes, state_index) {
+		match List.get(runtime.states, state_index) {
+			Ok(slot) =>
+				if u64_list_contains(slot.event_ids, event_id) {
 					runtime
 				} else {
-					next = { event_id, state_indexes: List.append(entry.state_indexes, state_index) }
-					{ ..runtime, event_state_deps: replace_event_state_deps(runtime.event_state_deps, event_id - 1, next) }
+					next = { ..slot, event_ids: List.append(slot.event_ids, event_id) }
+					{ ..runtime, states: replace_state_slot(runtime.states, state_index, next) }
 				}
 
 			Err(_) => {
-				crash "Signals runtime invariant violated: event dependency slot missing"
+				crash "Signals runtime invariant violated: state dependency slot missing"
 			}
 		}
 	}
@@ -1127,20 +1119,24 @@ UiRuntime := [].{
 		var $descriptors = List.with_capacity(List.len(runtime.states))
 
 		for slot in runtime.states {
-			_ = slot
-			$descriptors = List.append($descriptors, { state_id: $state_id })
+			$descriptors = List.append($descriptors, { state_id: $state_id, value: slot.value, event_ids: slot.event_ids })
 			$state_id = $state_id + 1
 		}
 
 		$descriptors
 	}
 
-	state_changes_for_indexes : List(U64) -> List(StateChangeDesc)
-	state_changes_for_indexes = |state_indexes| {
+	state_changes_for_indexes : Runtime, List(U64) -> List(StateChangeDesc)
+	state_changes_for_indexes = |runtime, state_indexes| {
 		List.map(
 			state_indexes,
 			|state_id| {
-				{ state_id: state_id }
+				match List.get(runtime.states, state_id) {
+					Ok(slot) => { state_id, value: slot.value }
+					Err(_) => {
+						crash "Signals runtime invariant violated: changed state index was not registered"
+					}
+				}
 			},
 		)
 	}
@@ -1191,23 +1187,6 @@ UiRuntime := [].{
 
 	replace_signal_cache_entry : List(SignalCacheEntry), U64, SignalCacheEntry -> List(SignalCacheEntry)
 	replace_signal_cache_entry = |entries, target_index, replacement| {
-		var $index = 0
-		var $next = List.with_capacity(List.len(entries))
-
-		for entry in entries {
-			if $index == target_index {
-				$next = List.append($next, replacement)
-			} else {
-				$next = List.append($next, entry)
-			}
-			$index = $index + 1
-		}
-
-		$next
-	}
-
-	replace_event_state_deps : List(EventStateDeps), U64, EventStateDeps -> List(EventStateDeps)
-	replace_event_state_deps = |entries, target_index, replacement| {
 		var $index = 0
 		var $next = List.with_capacity(List.len(entries))
 
@@ -1356,7 +1335,7 @@ UiRuntime := [].{
 					} else {
 						slot.version
 					}
-				next_slot = { key: slot.key, value, version: next_version }
+				next_slot = { key: slot.key, value, version: next_version, event_ids: slot.event_ids }
 				{ ..runtime, states: replace_state_slot(runtime.states, state_index, next_slot) }
 			}
 			Err(_) => {
