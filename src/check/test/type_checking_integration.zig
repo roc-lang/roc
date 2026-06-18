@@ -522,7 +522,7 @@ test "check type - record - field typo" {
         \\
         \\    { helo: a } where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]
         \\
-        \\But the annotation say it should be:
+        \\But the annotation says it should be:
         \\
         \\    MyRecord
         \\
@@ -555,7 +555,7 @@ test "check type - record - field missing" {
         \\
         \\    { hello: a } where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]
         \\
-        \\But the annotation say it should be:
+        \\But the annotation says it should be:
         \\
         \\    MyRecord
         \\
@@ -587,7 +587,7 @@ test "check type - record - ext - field missing" {
         \\
         \\    { hello: a } where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]
         \\
-        \\But the annotation say it should be:
+        \\But the annotation says it should be:
         \\
         \\    MyRecord({ world: U8 })
         \\
@@ -826,7 +826,7 @@ test "check type - tag union - tag typo" {
         \\
         \\    [Greeen, ..]
         \\
-        \\But the annotation say it should be:
+        \\But the annotation says it should be:
         \\
         \\    Color
         \\
@@ -858,7 +858,7 @@ test "check type - tag - ext - typo" {
         \\
         \\    [Greeen, ..]
         \\
-        \\But the annotation say it should be:
+        \\But the annotation says it should be:
         \\
         \\    Color([Green])
         \\
@@ -2675,8 +2675,8 @@ test "check type - patterns record" {
         \\  val = { x: "hello", y: True }
         \\
         \\  match(val) {
-        \\    { y: False }  => "False",
-        \\    { x }  => x,
+        \\    { y: False, .. }  => "False",
+        \\    { x, .. }  => x,
         \\  }
         \\}
     ;
@@ -6175,7 +6175,7 @@ test "check type - exhaustive match closes tag union inside record field" {
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "{ status: [Active, Inactive], .. } -> a\n  where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]" },
+            .{ .def = "test", .expected = "{ status: [Active, Inactive] } -> a\n  where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]" },
         },
     );
 }
@@ -6194,7 +6194,7 @@ test "check type - wildcard in record field keeps nested tag union open" {
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "{ status: [Active, ..], .. } -> a\n  where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]" },
+            .{ .def = "test", .expected = "{ status: [Active, ..] } -> a\n  where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]" },
         },
     );
 }
@@ -6234,7 +6234,7 @@ test "check type - exhaustive match closes tag union through tag then record" {
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "[Err(_a), Ok({ status: [Off, On], .. })] -> b\n  where [b.from_quote : Str -> Try(b, [BadQuotedBytes(Str)])]" },
+            .{ .def = "test", .expected = "[Err(_a), Ok({ status: [Off, On] })] -> b\n  where [b.from_quote : Str -> Try(b, [BadQuotedBytes(Str)])]" },
         },
     );
 }
@@ -6255,7 +6255,7 @@ test "check type - exhaustive match opens and closes tag unions through tag then
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "[Err(_a), Ok({ mode: ([Big], [Fast, ..]), status: [Off, On], .. })] -> b\n  where [b.from_quote : Str -> Try(b, [BadQuotedBytes(Str)])]" },
+            .{ .def = "test", .expected = "[Err(_a), Ok({ mode: ([Big], [Fast, ..]), status: [Off, On] })] -> b\n  where [b.from_quote : Str -> Try(b, [BadQuotedBytes(Str)])]" },
         },
     );
 }
@@ -6274,7 +6274,7 @@ test "check type - exhaustive match closes tag union through tuple then record" 
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "({ color: [Blue, Red], .. }, _field) -> a\n  where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]" },
+            .{ .def = "test", .expected = "({ color: [Blue, Red] }, _field) -> a\n  where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]" },
         },
     );
 }
@@ -6294,7 +6294,7 @@ test "check type - exhaustive match closes tag union through record then tuple" 
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "{ pair: ([Off, On], _field), .. } -> a\n  where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]" },
+            .{ .def = "test", .expected = "{ pair: ([Off, On], _field) } -> a\n  where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]" },
         },
     );
 }
@@ -6316,7 +6316,7 @@ test "check type - exhaustive match with different payload structures per tag" {
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "[Err([Critical, Warning]), Ok({ level: [High, Low], .. })] -> a\n  where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]" },
+            .{ .def = "test", .expected = "[Err([Critical, Warning]), Ok({ level: [High, Low] })] -> a\n  where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]" },
         },
     );
 }
@@ -6338,7 +6338,7 @@ test "check type - exhaustive match with different payload structures per tag, m
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "[Err([Critical, ..]), Ok({ level: [High, ..], .. })] -> a\n  where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]" },
+            .{ .def = "test", .expected = "[Err([Critical, ..]), Ok({ level: [High, ..] })] -> a\n  where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]" },
         },
     );
 }
@@ -6358,7 +6358,7 @@ test "check type - exhaustive match with different payload structures per tag, m
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "test", .expected = "[Err([Critical, ..]), Ok({ level: [High, ..], .. })] -> a\n  where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]" },
+            .{ .def = "test", .expected = "[Err([Critical, ..]), Ok({ level: [High, ..] })] -> a\n  where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]" },
         },
     );
 }
@@ -6465,7 +6465,7 @@ test "check type - exhaustive match same record field at multiple nesting levels
         source,
         &.{
             // Inner "a" field's tag union [Red, Blue]: closed
-            .{ .def = "test", .expected = "{ a: { a: [Blue, Red], .. }, .. } -> b\n  where [b.from_quote : Str -> Try(b, [BadQuotedBytes(Str)])]" },
+            .{ .def = "test", .expected = "{ a: { a: [Blue, Red] } } -> b\n  where [b.from_quote : Str -> Try(b, [BadQuotedBytes(Str)])]" },
         },
     );
 }
@@ -6856,7 +6856,7 @@ test "check type - tag union - ext hints 1" {
         \\
         \\    [X, Y]
         \\
-        \\But the annotation say it should be:
+        \\But the annotation says it should be:
         \\
         \\    [X, Y, ..]
         \\
@@ -6884,7 +6884,7 @@ test "check type - tag union - ext hints 2" {
         \\
         \\    [A, B, ..]
         \\
-        \\But the annotation say it should be:
+        \\But the annotation says it should be:
         \\
         \\    [A, B]
         \\

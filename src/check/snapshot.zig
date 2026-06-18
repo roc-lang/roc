@@ -682,6 +682,23 @@ pub const Store = struct {
         }
     }
 
+    /// Whether `idx` is a closed record: one whose extension chain terminates in
+    /// `empty_record`. A too-narrow record-destructure pattern is always closed,
+    /// so this distinguishes it from an open (`..`) pattern or an unbound record.
+    pub fn isClosedRecord(self: *const Self, idx: SnapshotContentIdx) bool {
+        var cur = idx;
+        while (true) {
+            switch (self.getContentUnwrapAlias(cur)) {
+                .structure => |s| switch (s) {
+                    .empty_record => return true,
+                    .record => |record| cur = record.ext,
+                    else => return false,
+                },
+                else => return false,
+            }
+        }
+    }
+
     const RecordFieldSnapshot = union(enum) {
         not_a_record,
         empty_record,

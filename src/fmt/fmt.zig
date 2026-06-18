@@ -1808,17 +1808,18 @@ const Formatter = struct {
         }
         if (field.rest) {
             try fmt.pushAll("..");
-            if (multiline and try fmt.flushCommentsBefore(field.name)) {
-                fmt.curr_indent += 1;
-                try fmt.pushIndent();
-            }
-            if (field.name != 0) {
-                try fmt.pushTokenText(field.name);
+            if (field.name) |name_tok| {
+                if (multiline and try fmt.flushCommentsBefore(name_tok)) {
+                    fmt.curr_indent += 1;
+                    try fmt.pushIndent();
+                }
+                try fmt.pushTokenText(name_tok);
             }
         } else {
-            try fmt.pushTokenText(field.name);
+            const name_tok = field.name orelse unreachable;
+            try fmt.pushTokenText(name_tok);
             if (field.value) |v| {
-                if (multiline and try fmt.flushCommentsAfter(field.name)) {
+                if (multiline and try fmt.flushCommentsAfter(name_tok)) {
                     fmt.curr_indent += 1;
                     try fmt.pushIndent();
                 }

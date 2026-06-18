@@ -5844,7 +5844,7 @@ fn runExprStatementKernel(
             .DoubleDot => {
                 const field_start = self.pos;
                 self.advance();
-                var name: u32 = 0;
+                var name: ?Token.Idx = null;
                 if (self.peek() == .LowerIdent) {
                     name = self.pos;
                     self.advance();
