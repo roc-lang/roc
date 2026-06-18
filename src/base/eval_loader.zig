@@ -5,7 +5,7 @@
 //!
 //! Zig 0.16's `ElfDynLib` is not a complete loader for our use:
 //!
-//!  1. It mis-loads writable segments. For a writable `PT_LOAD` it does
+//!  1. It mishandles writable segments. For a writable `PT_LOAD` it does
 //!     `@memcpy(sect_mem[0..p_filesz], file_bytes[0..p_filesz])` — copying from
 //!     **file offset 0** (the ELF header) to the segment's page-aligned start,
 //!     ignoring both `p_offset` (the real source) and the page-alignment gap

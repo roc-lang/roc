@@ -60,7 +60,7 @@ const EvalDynLib = switch (builtin.target.os.tag) {
     },
     else => struct {
         // On a static, no-libc roc binary `std.DynLib` falls back to Zig's
-        // `ElfDynLib`, which mis-loads writable segments and applies no dynamic
+        // `ElfDynLib`, which mishandles writable segments and applies no dynamic
         // relocations. Use a vendored loader that does both correctly. Every
         // other configuration keeps `std.DynLib`, whose `DlDynLib` defers to the
         // OS dynamic loader.
