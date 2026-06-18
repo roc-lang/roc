@@ -119,6 +119,120 @@ pub const StrLiteral = struct {
     len: u32,
 };
 
+/// How a string interpolation pattern must finish after its last step.
+pub const StrPatternEnd = enum {
+    exact,
+    tail,
+};
+
+/// Whether a string-pattern step binds the captured bytes.
+pub const StrMatchCapture = union(enum) {
+    discard,
+    /// A borrowed `Str` view into the `str_match.source` bytes on the match
+    /// edge. This is not an eagerly materialized RocStr; consumers that need an
+    /// owned string must materialize the view at the use site.
+    view: LocalId,
+};
+
+/// One delimiter search in a string interpolation pattern.
+///
+/// The matcher captures the bytes from the current cursor up to the first
+/// occurrence of `delimiter`, optionally binds that slice as a borrowed view,
+/// and advances the cursor past the delimiter.
+pub const StrMatchStep = struct {
+    capture: StrMatchCapture,
+    delimiter: StrLiteral,
+};
+
+/// Result of executing one string-pattern delimiter step.
+pub const StrMatchStepResult = struct {
+    capture_start: usize,
+    capture_end: usize,
+    next_cursor: usize,
+};
+
+/// Reports whether string-pattern matching may start with this prefix.
+pub fn strMatchPrefixMatches(source: []const u8, prefix: []const u8) bool {
+    return std.mem.startsWith(u8, source, prefix);
+}
+
+/// Executes one string-pattern delimiter step over source bytes.
+pub fn strMatchStep(source: []const u8, cursor: usize, delimiter: []const u8, tail_capture: bool) ?StrMatchStepResult {
+    if (cursor > source.len) return null;
+
+    if (tail_capture) {
+        return .{
+            .capture_start = cursor,
+            .capture_end = source.len,
+            .next_cursor = source.len,
+        };
+    }
+
+    const found = strMatchDelimiter(source, cursor, delimiter) orelse return null;
+    return .{
+        .capture_start = cursor,
+        .capture_end = found,
+        .next_cursor = found + delimiter.len,
+    };
+}
+
+/// Reports whether a string-pattern arm accepts the current cursor as its end.
+pub fn strMatchEndMatches(source_len: usize, cursor: usize, end: StrPatternEnd) bool {
+    return switch (end) {
+        .exact => cursor == source_len,
+        .tail => cursor <= source_len,
+    };
+}
+
+fn strMatchDelimiter(source: []const u8, cursor: usize, delimiter: []const u8) ?usize {
+    if (delimiter.len == 0) return cursor;
+    if (delimiter.len > source.len - cursor) return null;
+
+    const candidate = std.mem.findScalarPos(u8, source, cursor, delimiter[0]) orelse return null;
+    if (delimiter.len > source.len - candidate) return null;
+    if (!std.mem.eql(u8, source[candidate..][0..delimiter.len], delimiter)) return null;
+    return candidate;
+}
+
+/// Span into flat string-match-step storage.
+pub const StrMatchStepSpan = extern struct {
+    start: u32,
+    len: u16,
+
+    pub fn empty() StrMatchStepSpan {
+        return .{ .start = 0, .len = 0 };
+    }
+
+    pub fn isEmpty(self: StrMatchStepSpan) bool {
+        return self.len == 0;
+    }
+};
+
+/// One ordered arm in a grouped runtime string-pattern match.
+///
+/// Arms are tried in storage order. On the first successful arm, only that
+/// arm's captured locals are initialized, and control jumps to `on_match`.
+pub const StrMatchArm = struct {
+    prefix: StrLiteral,
+    steps: StrMatchStepSpan,
+    end: StrPatternEnd,
+    on_match: CFStmtId,
+};
+
+/// Span into flat string-match-arm storage.
+pub const StrMatchArmSpan = extern struct {
+    start: u32,
+    len: u16,
+
+    pub fn empty() StrMatchArmSpan {
+        return .{ .start = 0, .len = 0 };
+    }
+
+    pub fn isEmpty(self: StrMatchArmSpan) bool {
+        return self.len == 0;
+    }
+};
+
 /// Literal RHS values supported by `assign_literal`.
 pub const LiteralValue = union(enum) {
     i64_literal: struct {
@@ -384,6 +498,26 @@ pub const CFStmt = union(enum) {
         /// the branch bodies flow back to a shared suffix. ARC insertion uses
         /// this to release branch-local owned values before the shared suffix.
         continuation: ?CFStmtId = null,
+    },
+    /// Runtime string-pattern match. On the match edge this initializes every
+    /// captured local in `steps` as a borrowed `Str` view into `source`; on the
+    /// miss edge no capture locals are initialized.
+    str_match: struct {
+        source: LocalId,
+        prefix: StrLiteral,
+        steps: StrMatchStepSpan,
+        end: StrPatternEnd,
+        on_match: CFStmtId,
+        on_miss: CFStmtId,
+    },
+    /// Ordered runtime string-pattern match set over one source. This is the
+    /// multi-arm form of `str_match`: arms are attempted in order, the first
+    /// successful arm takes its `on_match` edge, and if every arm misses the
+    /// common `on_miss` edge is taken.
+    str_match_set: struct {
+        source: LocalId,
+        arms: StrMatchArmSpan,
+        on_miss: CFStmtId,
     },
     loop_continue: void,
     loop_break: void,

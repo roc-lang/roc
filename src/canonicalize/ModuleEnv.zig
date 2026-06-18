@@ -1811,6 +1811,28 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText("Pattern arguments must be valid patterns like identifiers, literals, or destructuring patterns.");
             break :blk report;
         },
+        .unreachable_string_pattern_capture => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "UNREACHABLE PATTERN CAPTURE", .warning);
+            try report.document.addReflowingText("This string pattern capture is directly after another capture, so it is unreachable.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("String pattern captures need literal text between them. Add a delimiter between the captures, or remove this capture.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .warning_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
         .shadowing_warning => |data| blk: {
             const ident_name = self.getIdent(data.ident);
             const new_region_info = self.calcRegionInfo(data.region);

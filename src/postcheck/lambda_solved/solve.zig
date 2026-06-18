@@ -557,6 +557,13 @@ const Solver = struct {
             .frac_f64_lit,
             .str_lit,
             => {},
+            .str_pattern => |str| {
+                for (self.program.lifted.strPatternStepSpan(str.steps)) |step| {
+                    if (step.capture) |capture| {
+                        try self.bindPattern(capture, pat_ty);
+                    }
+                }
+            },
             .as => |as| {
                 try self.unify(self.localTy(as.local), pat_ty);
                 try self.bindPattern(as.pattern, pat_ty);

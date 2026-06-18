@@ -568,6 +568,15 @@ pub const LowLevel = enum {
             };
         }
 
+        pub fn retainsSharingArgs(mask: u64) RcEffect {
+            return .{
+                .may_retain_or_release = mask != 0,
+                .retain_args = mask,
+                .result_shares_args = mask,
+                .result_unique = true,
+            };
+        }
+
         pub fn allocatesSharingArgs(mask: u64) RcEffect {
             return .{
                 .may_allocate = true,
@@ -620,8 +629,9 @@ pub const LowLevel = enum {
 
             .str_drop_prefix,
             .str_drop_suffix,
-            .str_from_utf8,
-            => RcEffect.retainsOrReleasesSharingArgs(argMask(&.{0})),
+            => RcEffect.retainsSharingArgs(argMask(&.{0})),
+
+            .str_from_utf8 => RcEffect.retainsOrReleasesSharingArgs(argMask(&.{0})),
 
             .str_to_utf8 => RcEffect.allocatesAndRetainsOrReleasesSharingArgs(argMask(&.{0})),
 
@@ -1034,6 +1044,23 @@ pub const LowLevel = enum {
             .compare,
             .crash,
             => RcEffect.none(),
+        };
+    }
+
+    /// Whether this primitive can consume borrowed string views directly,
+    /// without first materializing them into RocStr values.
+    pub fn acceptsStrViewArgs(self: LowLevel) bool {
+        return switch (self) {
+            .str_count_utf8_bytes,
+            .str_is_eq,
+            .str_contains,
+            .str_starts_with,
+            .str_ends_with,
+            .str_caseless_ascii_equals,
+            .str_drop_prefix,
+            .str_drop_suffix,
+            => true,
+            else => false,
         };
     }
 

@@ -421,6 +421,26 @@ pub fn parseAndCanonicalizeProgram(
     return parseAndCanonicalizeProgramWrapped(allocator, source_kind, source, imports, false);
 }
 
+/// Same as `parseAndCanonicalizeProgram` but reuses a Builtin artifact the
+/// caller has already published.
+pub fn parseAndCanonicalizeProgramWithBuiltin(
+    allocator: Allocator,
+    source_kind: SourceKind,
+    source: []const u8,
+    imports: []const ModuleSource,
+    pre_published_builtin: PrePublishedBuiltin,
+) anyerror!ParsedResources {
+    return parseAndCanonicalizeProgramWithRootMode(
+        allocator,
+        source_kind,
+        source,
+        imports,
+        false,
+        .{ .eval_root = false },
+        pre_published_builtin,
+    );
+}
+
 /// Same as `parseAndCanonicalizeProgramPublishedRoots` but reuses a Builtin
 /// artifact the caller has already published.
 pub fn parseAndCanonicalizeProgramPublishedRootsWithBuiltin(

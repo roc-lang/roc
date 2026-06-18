@@ -42,6 +42,8 @@ pub fn run(
     owned.field_exprs = .empty;
     var record_destructs = owned.record_destructs;
     owned.record_destructs = .empty;
+    const str_pattern_steps = owned.str_pattern_steps;
+    owned.str_pattern_steps = .empty;
     var branches = owned.branches;
     owned.branches = .empty;
     var if_branches = owned.if_branches;
@@ -77,6 +79,7 @@ pub fn run(
         stmt_ids,
         field_exprs,
         record_destructs,
+        str_pattern_steps,
         branches,
         if_branches,
         string_literals,
@@ -227,6 +230,12 @@ const Lifter = struct {
         for (self.source.nested_defs.items, 0..) |def, index| {
             try self.lowerNestedDef(self.nested_def_map[index] orelse
                 Common.invariant("Monotype nested definition was not reserved before lifting"), def);
+        }
+
+        for (self.output.fns.items, 0..) |_, index| {
+            const fn_id: Ast.FnId = @enumFromInt(@as(u32, @intCast(index)));
+            if (self.initialized_fns.contains(fn_id)) continue;
+            Common.invariant("Monotype Lifted function was reserved but not initialized");
         }
 
         for (self.source.roots.items) |root| {
@@ -701,10 +710,10 @@ const CaptureSet = struct {
             .dec_lit,
             .str_lit,
             .def_ref,
-            .fn_ref,
             .crash,
             .comptime_exhaustiveness_failed,
             => {},
+            .fn_ref => |fn_id| try self.collectFnCaptures(fn_id, bound),
             .fn_def => |fn_id| try self.collectFnCaptures(self.lifter.liftedFn(fn_id), bound),
             .list,
             .tuple,
@@ -854,6 +863,13 @@ fn bindPat(allocator: Allocator, input: *const Ast.Program, pat_id: Mono.PatId, 
         .frac_f64_lit,
         .str_lit,
         => {},
+        .str_pattern => |str| {
+            for (input.strPatternStepSpan(str.steps)) |step| {
+                if (step.capture) |capture| {
+                    try bindPat(allocator, input, capture, bound, added);
+                }
+            }
+        },
         .as => |as| {
             try bindPat(allocator, input, as.pattern, bound, added);
             try bound.put(input, as.local);

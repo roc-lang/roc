@@ -1356,12 +1356,15 @@ EndOfFile,
 							(p-tag (raw "Blue"))
 							(e-int (raw "1")))
 						(branch
-							(p-string (raw """))
+							(p-string (raw """)
+								(p-string-text (raw "foo")))
 							(e-int (raw "00")))
 						(branch
 							(p-alternatives
-								(p-string (raw """))
-								(p-string (raw """)))
+								(p-string (raw """)
+									(p-string-text (raw "foo")))
+								(p-string (raw """)
+									(p-string-text (raw "bar"))))
 							(e-int (raw "20")))
 						(branch
 							(p-list
