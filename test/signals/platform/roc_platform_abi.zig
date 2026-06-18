@@ -1052,6 +1052,7 @@ comptime {
 
 /// Element type for __AnonStruct79
 pub const __AnonStruct79 = extern struct {
+    input_signal_ids: RocListWith(u64, false),
     key: RocStr,
     kind: u64,
     signal_id: u64,
@@ -1060,7 +1061,7 @@ pub const __AnonStruct79 = extern struct {
 
 comptime {
     if (@sizeOf(usize) == 8) {
-        if (@sizeOf(__AnonStruct79) != 64) @compileError("__AnonStruct79 size mismatch");
+        if (@sizeOf(__AnonStruct79) != 88) @compileError("__AnonStruct79 size mismatch");
         if (@alignOf(__AnonStruct79) != 8) @compileError("__AnonStruct79 alignment mismatch");
     }
 }
@@ -1094,6 +1095,7 @@ comptime {
 
 /// Element type for __AnonStruct85
 pub const __AnonStruct85 = extern struct {
+    input_signal_ids: RocListWith(u64, false),
     kind: u64,
     signal_id: u64,
     state_deps: RocListWith(u64, false),
@@ -1101,7 +1103,7 @@ pub const __AnonStruct85 = extern struct {
 
 comptime {
     if (@sizeOf(usize) == 8) {
-        if (@sizeOf(__AnonStruct85) != 40) @compileError("__AnonStruct85 size mismatch");
+        if (@sizeOf(__AnonStruct85) != 64) @compileError("__AnonStruct85 size mismatch");
         if (@alignOf(__AnonStruct85) != 8) @compileError("__AnonStruct85 alignment mismatch");
     }
 }
@@ -2275,12 +2277,14 @@ pub fn incref__AnonStruct77(value: __AnonStruct77, amount: isize) void {
 
 /// Recursively decrement Roc-owned fields in __AnonStruct79.
 pub fn decref__AnonStruct79(value: __AnonStruct79, roc_host: *RocHost) void {
+    value.input_signal_ids.decref(roc_host);
     value.key.decref(roc_host);
     value.state_deps.decref(roc_host);
 }
 
 /// Increment Roc-owned fields in __AnonStruct79.
 pub fn incref__AnonStruct79(value: __AnonStruct79, amount: isize) void {
+    value.input_signal_ids.incref(amount);
     value.key.incref(amount);
     value.state_deps.incref(amount);
 }
@@ -2311,11 +2315,13 @@ pub fn incref__AnonStruct83(value: __AnonStruct83, amount: isize) void {
 
 /// Recursively decrement Roc-owned fields in __AnonStruct85.
 pub fn decref__AnonStruct85(value: __AnonStruct85, roc_host: *RocHost) void {
+    value.input_signal_ids.decref(roc_host);
     value.state_deps.decref(roc_host);
 }
 
 /// Increment Roc-owned fields in __AnonStruct85.
 pub fn incref__AnonStruct85(value: __AnonStruct85, amount: isize) void {
+    value.input_signal_ids.incref(amount);
     value.state_deps.incref(amount);
 }
 
