@@ -126,8 +126,6 @@ pub fn run(
     return program;
 }
 
-const FnActiveSet = std.AutoHashMap(Ast.FnId, void);
-
 const DefMap = []?Ast.FnId;
 const NestedDefMap = []?Ast.FnId;
 const FnMap = []?Ast.FnId;
@@ -150,6 +148,12 @@ const Lifter = struct {
     nested_fn_ids: std.AutoHashMap(Ast.FnId, void),
     initialized_fns: std.AutoHashMap(Ast.FnId, void),
     symbols: Common.SymbolGen,
+    /// Solved capture set per lifted function, indexed by `Ast.FnId`. Computed
+    /// as a least fixed point over the function-reference graph before any body
+    /// is rewritten, so it never depends on lifting order or rewrite-collapsed
+    /// nodes. Every later stage reads this rather than re-deriving captures by
+    /// walking (possibly already-rewritten) bodies.
+    fn_captures: []std.ArrayList(Ast.TypedLocal),
 
     fn init(allocator: Allocator, source: *const Mono.Program, output: *Ast.Program) Allocator.Error!Lifter {
         const expr_done = try allocator.alloc(bool, output.exprCount());
@@ -173,10 +177,13 @@ const Lifter = struct {
             .nested_fn_ids = std.AutoHashMap(Ast.FnId, void).init(allocator),
             .initialized_fns = std.AutoHashMap(Ast.FnId, void).init(allocator),
             .symbols = .{ .next = source.next_symbol },
+            .fn_captures = &.{},
         };
     }
 
     fn deinit(self: *Lifter) void {
+        for (self.fn_captures) |*captures| captures.deinit(self.allocator);
+        if (self.fn_captures.len > 0) self.allocator.free(self.fn_captures);
         self.initialized_fns.deinit();
         self.nested_fn_ids.deinit();
         self.fn_bodies.deinit(self.allocator);
@@ -212,6 +219,8 @@ const Lifter = struct {
             try self.nested_fn_ids.put(fn_id, {});
             self.registerFn(def.fn_id, fn_id);
         }
+
+        try self.computeCaptureFixpoint();
 
         for (self.source.defs.items, 0..) |def, index| {
             try self.lowerTopLevelDef(self.def_map[index] orelse
@@ -256,19 +265,7 @@ const Lifter = struct {
     }
 
     fn lowerTopLevelDef(self: *Lifter, fn_id: Ast.FnId, def: Mono.Def) Allocator.Error!void {
-        var active = self.initFnActiveSet();
-        defer active.deinit();
-        var captures = CaptureSet.init(self, &active);
-        defer captures.deinit();
-        var bound = BoundSet.init(self.allocator);
-        defer bound.deinit();
-        try bindTypedLocals(self.output, &bound, self.output.typedLocalSpan(def.args));
-        switch (def.body) {
-            .roc => |body| try captures.collectExpr(body, &bound),
-            .hosted => {},
-        }
-
-        if (captures.items.items.len != 0) {
+        if (self.fn_captures[@intFromEnum(fn_id)].items.len != 0) {
             Common.invariant("top-level Monotype definition has free locals after checked closure collection");
         }
 
@@ -291,17 +288,8 @@ const Lifter = struct {
     }
 
     fn lowerNestedDef(self: *Lifter, fn_id: Ast.FnId, def: Mono.NestedDef) Allocator.Error!void {
-        var active = self.initFnActiveSet();
-        defer active.deinit();
-        var captures = CaptureSet.init(self, &active);
-        defer captures.deinit();
-        var bound = BoundSet.init(self.allocator);
-        defer bound.deinit();
-        try bindTypedLocals(self.output, &bound, self.output.typedLocalSpan(def.args));
-        try captures.collectExpr(def.body, &bound);
-
         try self.rewriteExpr(def.body);
-        const capture_span = try self.output.addTypedLocalSpan(captures.items.items);
+        const capture_span = try self.output.addTypedLocalSpan(self.fn_captures[@intFromEnum(fn_id)].items);
         self.output.fns.items[@intFromEnum(fn_id)] = .{
             .symbol = def.symbol,
             .source = self.nestedSource(def.fn_id, def.fn_def),
@@ -428,9 +416,13 @@ const Lifter = struct {
         if (self.initialized_fns.contains(fn_id)) return;
 
         try self.setFnBody(fn_id, .{ .args = lambda.args, .body = .{ .roc = lambda.body } });
-        var active = self.initFnActiveSet();
-        defer active.deinit();
-        var captures = CaptureSet.init(self, &active);
+
+        // Inline lambdas are never the target of a direct/devirtualized call
+        // (those resolve to defs or nested defs), so they need no fixpoint
+        // entry: their captures are computed here, reading the already-solved
+        // capture sets of any defs they reference and descending inline into
+        // their own nested lambdas.
+        var captures = CaptureSet.init(self);
         defer captures.deinit();
         var bound = BoundSet.init(self.allocator);
         defer bound.deinit();
@@ -468,8 +460,106 @@ const Lifter = struct {
         self.fn_bodies.items[raw] = body;
     }
 
-    fn initFnActiveSet(self: *Lifter) FnActiveSet {
-        return FnActiveSet.init(self.allocator);
+    /// Solve every function's capture set as a least fixed point over the
+    /// function-reference graph. Each function's captures are the free locals
+    /// of its body, where a reference to another function contributes that
+    /// callee's solved captures (filtered by the locals bound at the reference
+    /// site). The all-empty assignment is the bottom; `addIfFree` only ever
+    /// grows a set, so iteration is monotone and terminates.
+    ///
+    /// Propagation is edge-driven: re-solving a function only when one of its
+    /// callees grew, via the reverse-edge map, instead of re-walking every
+    /// function each round. A function's stored order is its body's discovery
+    /// order under the final callee sets — deterministic and self-consistent
+    /// (every consumer of a function reads that one span), which is all the
+    /// downstream positional capture handling requires.
+    fn computeCaptureFixpoint(self: *Lifter) Allocator.Error!void {
+        // `count` covers top-level defs and nested defs only; inline lambdas are
+        // reserved later, during `rewriteExpr`/`liftLambda`. Sizing here is what
+        // keeps inline lambdas out of the fixpoint, which is sound because they
+        // are never the target of a reference that reaches `collectFnCaptures`
+        // (only defs and nested defs are) — an invariant that function enforces.
+        const count = self.output.fns.items.len;
+        self.fn_captures = try self.allocator.alloc(std.ArrayList(Ast.TypedLocal), count);
+        for (self.fn_captures) |*captures| captures.* = .empty;
+
+        // Callers indexed by callee. Edges are structural — independent of the
+        // captures being solved — so the reverse map is built once, from each
+        // function's first solve, rather than re-derived on every re-solve.
+        const callers = try self.allocator.alloc(std.ArrayList(Ast.FnId), count);
+        defer {
+            for (callers) |*list| list.deinit(self.allocator);
+            self.allocator.free(callers);
+        }
+        for (callers) |*list| list.* = .empty;
+
+        var queued = try self.allocator.alloc(bool, count);
+        defer self.allocator.free(queued);
+        @memset(queued, true);
+
+        var recorded = try self.allocator.alloc(bool, count);
+        defer self.allocator.free(recorded);
+        @memset(recorded, false);
+
+        var worklist = std.ArrayList(Ast.FnId).empty;
+        defer worklist.deinit(self.allocator);
+        try worklist.ensureTotalCapacity(self.allocator, count);
+        for (0..count) |raw| worklist.appendAssumeCapacity(@enumFromInt(@as(u32, @intCast(raw))));
+
+        var scratch = CaptureSet.init(self);
+        defer scratch.deinit();
+        var bound = BoundSet.init(self.allocator);
+        defer bound.deinit();
+        var edge_buf = std.ArrayList(Ast.FnId).empty;
+        defer edge_buf.deinit(self.allocator);
+
+        while (worklist.pop()) |fn_id| {
+            const raw = @intFromEnum(fn_id);
+            queued[raw] = false;
+
+            // Collect edges only on the first solve of each function; the
+            // reverse map they build is complete because every function is
+            // solved at least once (all start queued).
+            if (recorded[raw]) {
+                try self.solveInto(fn_id, &scratch, &bound, null);
+            } else {
+                edge_buf.clearRetainingCapacity();
+                try self.solveInto(fn_id, &scratch, &bound, &edge_buf);
+                for (edge_buf.items) |callee| {
+                    try callers[@intFromEnum(callee)].append(self.allocator, fn_id);
+                }
+                recorded[raw] = true;
+            }
+
+            if (scratch.items.items.len > self.fn_captures[raw].items.len) {
+                self.fn_captures[raw].clearRetainingCapacity();
+                try self.fn_captures[raw].appendSlice(self.allocator, scratch.items.items);
+                for (callers[raw].items) |caller| {
+                    const craw = @intFromEnum(caller);
+                    if (!queued[craw]) {
+                        queued[craw] = true;
+                        try worklist.append(self.allocator, caller);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Solve one function's captures into the reusable `scratch`/`bound`,
+    /// reading the current solved sets of referenced functions. When
+    /// `edges_out` is non-null, the referenced functions are recorded there
+    /// (used to build the reverse-edge map on a function's first solve). Both
+    /// scratch buffers are cleared first.
+    fn solveInto(self: *Lifter, fn_id: Ast.FnId, scratch: *CaptureSet, bound: *BoundSet, edges_out: ?*std.ArrayList(Ast.FnId)) Allocator.Error!void {
+        scratch.clear();
+        scratch.edges = edges_out;
+        bound.clear();
+        const body = self.fn_bodies.items[@intFromEnum(fn_id)] orelse return;
+        try bindTypedLocals(self.output, bound, self.output.typedLocalSpan(body.args));
+        switch (body.body) {
+            .roc => |expr| try scratch.collectExpr(expr, bound),
+            .hosted => {},
+        }
     }
 
     fn registerFn(self: *Lifter, mono_fn_id: Mono.FnId, fn_id: Ast.FnId) void {
@@ -558,6 +648,12 @@ const BoundSet = struct {
             _ = self.binders.remove(binder);
         }
     }
+
+    /// Reset for reuse across fixpoint solves without freeing capacity.
+    fn clear(self: *BoundSet) void {
+        self.locals.clearRetainingCapacity();
+        self.binders.clearRetainingCapacity();
+    }
 };
 
 const CaptureSet = struct {
@@ -565,21 +661,31 @@ const CaptureSet = struct {
     lifter: *Lifter,
     items: std.ArrayList(Ast.TypedLocal),
     seen: std.AutoHashMap(Mono.LocalId, void),
-    active: *FnActiveSet,
+    /// Optional, caller-owned sink for the functions this body references (via
+    /// `fn_def`/`call_proc`). The capture fixpoint points it at a buffer on a
+    /// function's first solve to build its edge set; every other use leaves it
+    /// null and pays nothing.
+    edges: ?*std.ArrayList(Ast.FnId) = null,
 
-    fn init(lifter: *Lifter, active: *FnActiveSet) CaptureSet {
+    fn init(lifter: *Lifter) CaptureSet {
         return .{
             .allocator = lifter.allocator,
             .lifter = lifter,
             .items = .empty,
             .seen = std.AutoHashMap(Mono.LocalId, void).init(lifter.allocator),
-            .active = active,
         };
     }
 
     fn deinit(self: *CaptureSet) void {
         self.seen.deinit();
         self.items.deinit(self.allocator);
+    }
+
+    /// Reset for reuse across fixpoint solves without freeing capacity. The
+    /// edge sink is caller-owned and reassigned per solve, so it is not touched.
+    fn clear(self: *CaptureSet) void {
+        self.items.clearRetainingCapacity();
+        self.seen.clearRetainingCapacity();
     }
 
     fn addIfFree(self: *CaptureSet, local: Mono.LocalId, bound: *const BoundSet) Allocator.Error!void {
@@ -692,26 +798,21 @@ const CaptureSet = struct {
         }
     }
 
+    /// Contribute a referenced function's solved captures to the current set,
+    /// filtered by the locals bound at the reference site. Reads the solved
+    /// set rather than re-walking the callee's body, so it is correct even
+    /// after the callee's body has been rewritten and never under-approximates
+    /// recursive references. During the fixpoint the read set is the previous
+    /// round's value, which is exactly what makes recursion converge.
     fn collectFnCaptures(self: *CaptureSet, fn_id: Ast.FnId, caller_bound: *BoundSet) Allocator.Error!void {
         const raw = @intFromEnum(fn_id);
-        if (raw >= self.lifter.fn_bodies.items.len) Common.invariant("capture collection referenced a missing lifted function");
-        const body = self.lifter.fn_bodies.items[raw] orelse return;
-        const entry = try self.active.getOrPut(fn_id);
-        if (entry.found_existing) return;
-        defer _ = self.active.remove(fn_id);
-
-        var local_captures = CaptureSet.init(self.lifter, self.active);
-        defer local_captures.deinit();
-
-        var body_bound = BoundSet.init(self.allocator);
-        defer body_bound.deinit();
-        try bindTypedLocals(self.lifter.output, &body_bound, self.lifter.output.typedLocalSpan(body.args));
-        switch (body.body) {
-            .roc => |expr| try local_captures.collectExpr(expr, &body_bound),
-            .hosted => {},
-        }
-
-        for (local_captures.items.items) |capture| {
+        // Only defs and nested defs are reachable here (direct and
+        // devirtualized calls and `fn_def` references never target an inline
+        // lambda), and every one has a fixpoint entry. An out-of-range id
+        // means an earlier stage produced a call target the fixpoint never saw.
+        if (raw >= self.lifter.fn_captures.len) Common.invariant("capture collection referenced a function without a solved capture set");
+        if (self.edges) |sink| try sink.append(self.allocator, fn_id);
+        for (self.lifter.fn_captures[raw].items) |capture| {
             try self.addIfFree(capture.local, caller_bound);
         }
     }
