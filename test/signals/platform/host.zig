@@ -45,22 +45,22 @@ const HostEventDescriptor = struct {
     payload_kind: EventPayloadKind,
 };
 
-const HostEventRoute = struct {
+const HostSignalEventRoute = struct {
     event_id: u64,
-    state_indexes: []u64,
+    signal_ids: []u64,
 };
 
 const HostState = struct {
     state_id: u64,
     value: abi.NodeValue,
-    event_ids: []u64,
     version: u64,
 };
 
 const HostSignalDescriptor = struct {
     signal_id: u64,
     kind: SignalKind,
-    state_deps: []u64,
+    source_state_ids: []u64,
+    source_event_ids: []u64,
     input_signal_ids: []u64,
     rank: u64,
 };
@@ -557,7 +557,7 @@ const HostEnv = struct {
     dealloc_count: usize = 0,
     dom_elements: std.ArrayListUnmanaged(DomElement) = .empty,
     event_descriptors: std.ArrayListUnmanaged(HostEventDescriptor) = .empty,
-    event_routes: std.ArrayListUnmanaged(HostEventRoute) = .empty,
+    signal_event_routes: std.ArrayListUnmanaged(HostSignalEventRoute) = .empty,
     signal_descriptors: std.ArrayListUnmanaged(HostSignalDescriptor) = .empty,
     signal_routes: std.ArrayListUnmanaged(HostSignalRoute) = .empty,
     signal_dependents: std.ArrayListUnmanaged(HostSignalDependentsRoute) = .empty,
@@ -620,29 +620,15 @@ const HostEnv = struct {
         }
     }
 
-    fn clearEventRoutes(self: *HostEnv) void {
+    fn clearSignalEventRoutes(self: *HostEnv) void {
         const allocator = self.gpa.allocator();
-        for (self.event_routes.items) |route| {
-            allocator.free(route.state_indexes);
+        for (self.signal_event_routes.items) |route| {
+            allocator.free(route.signal_ids);
         }
-        self.event_routes.items.len = 0;
+        self.signal_event_routes.items.len = 0;
     }
 
-    fn validateStateEventIds(self: *HostEnv, event_ids: []const u64) void {
-        for (event_ids, 0..) |event_id, index| {
-            if (event_id == 0 or event_id > self.event_descriptors.items.len) {
-                failHost("Roc state descriptor referenced an unknown event id");
-            }
-
-            for (event_ids[0..index]) |previous| {
-                if (previous == event_id) {
-                    failHost("Roc state descriptor must not contain duplicate event ids");
-                }
-            }
-        }
-    }
-
-    fn rebuildEventRoutesFromStates(self: *HostEnv) void {
+    fn rebuildSignalEventRoutesFromSignals(self: *HostEnv) void {
         const allocator = self.gpa.allocator();
         var route_lists = allocator.alloc(std.ArrayListUnmanaged(u64), self.event_descriptors.items.len) catch std.process.exit(1);
         defer allocator.free(route_lists);
@@ -656,38 +642,39 @@ const HostEnv = struct {
             }
         }
 
-        for (self.states.items) |state| {
-            for (state.event_ids) |event_id| {
+        for (self.signal_descriptors.items) |signal| {
+            if (signal.kind != .source) continue;
+            for (signal.source_event_ids) |event_id| {
                 if (event_id == 0 or event_id > self.event_descriptors.items.len) {
-                    failHost("host state registry contains an unknown event id");
+                    failHost("host source signal registry contains an unknown event id");
                 }
-                route_lists[@intCast(event_id - 1)].append(allocator, state.state_id) catch std.process.exit(1);
+                route_lists[@intCast(event_id - 1)].append(allocator, signal.signal_id) catch std.process.exit(1);
             }
         }
 
-        self.clearEventRoutes();
+        self.clearSignalEventRoutes();
 
         for (route_lists, 0..) |*route_list, index| {
-            const state_indexes = route_list.toOwnedSlice(allocator) catch std.process.exit(1);
-            self.event_routes.append(allocator, .{
+            const signal_ids = route_list.toOwnedSlice(allocator) catch std.process.exit(1);
+            self.signal_event_routes.append(allocator, .{
                 .event_id = @intCast(index + 1),
-                .state_indexes = state_indexes,
+                .signal_ids = signal_ids,
             }) catch {
-                allocator.free(state_indexes);
+                allocator.free(signal_ids);
                 std.process.exit(1);
             };
         }
     }
 
-    fn stateIndexesForEvent(self: *HostEnv, event_id: u64) []const u64 {
+    fn sourceSignalIdsForEvent(self: *HostEnv, event_id: u64) []const u64 {
         if (event_id == 0) failHost("event id 0 is not registered");
 
         const route_index = event_id - 1;
-        if (route_index >= self.event_routes.items.len) failHost("event id has no host route descriptor");
+        if (route_index >= self.signal_event_routes.items.len) failHost("event id has no host source signal route descriptor");
 
-        const route = self.event_routes.items[@intCast(route_index)];
-        if (route.event_id != event_id) failHost("host event route table is not indexed by event id");
-        return route.state_indexes;
+        const route = self.signal_event_routes.items[@intCast(route_index)];
+        if (route.event_id != event_id) failHost("host signal event route table is not indexed by event id");
+        return route.signal_ids;
     }
 
     fn eventPayloadKind(self: *HostEnv, event_id: u64) EventPayloadKind {
@@ -702,7 +689,7 @@ const HostEnv = struct {
     }
 
     fn validateEventPayload(self: *HostEnv, event_id: u64, expected_payload_kind: EventPayloadKind) void {
-        _ = self.stateIndexesForEvent(event_id);
+        _ = self.sourceSignalIdsForEvent(event_id);
         if (self.eventPayloadKind(event_id) != expected_payload_kind) {
             failHost("DOM binding payload kind does not match Roc event descriptor");
         }
@@ -717,15 +704,28 @@ const HostEnv = struct {
         };
     }
 
-    fn validateSignalStateDeps(self: *HostEnv, state_deps: []const u64) void {
-        for (state_deps, 0..) |state_id, index| {
+    fn validateSignalSourceStateIds(self: *HostEnv, kind: SignalKind, source_state_ids: []const u64) void {
+        switch (kind) {
+            .source => {
+                if (source_state_ids.len != 1) {
+                    failHost("Roc source signal descriptor must have exactly one source state id");
+                }
+            },
+            .map, .map2 => {
+                if (source_state_ids.len != 0) {
+                    failHost("Roc derived signal descriptor must not have source state ids");
+                }
+            },
+        }
+
+        for (source_state_ids, 0..) |state_id, index| {
             if (state_id >= self.states.items.len) {
-                failHost("Roc signal descriptor referenced an unknown state id");
+                failHost("Roc signal descriptor referenced an unknown source state id");
             }
 
-            for (state_deps[0..index]) |previous| {
+            for (source_state_ids[0..index]) |previous| {
                 if (previous == state_id) {
-                    failHost("Roc signal descriptor must not contain duplicate state deps");
+                    failHost("Roc signal descriptor must not contain duplicate source state ids");
                 }
             }
         }
@@ -761,7 +761,8 @@ const HostEnv = struct {
     fn clearSignalDescriptors(self: *HostEnv) void {
         const allocator = self.gpa.allocator();
         for (self.signal_descriptors.items) |descriptor| {
-            allocator.free(descriptor.state_deps);
+            allocator.free(descriptor.source_state_ids);
+            allocator.free(descriptor.source_event_ids);
             allocator.free(descriptor.input_signal_ids);
         }
         self.signal_descriptors.items.len = 0;
@@ -809,7 +810,7 @@ const HostEnv = struct {
 
         for (self.signal_descriptors.items) |signal| {
             if (signal.kind != .source) continue;
-            for (signal.state_deps) |state_id| {
+            for (signal.source_state_ids) |state_id| {
                 if (state_id >= self.states.items.len) {
                     failHost("host signal registry contains an unknown state id");
                 }
@@ -828,6 +829,33 @@ const HostEnv = struct {
                 allocator.free(signal_ids);
                 std.process.exit(1);
             };
+        }
+    }
+
+    fn validateSignalSourceEventIds(self: *HostEnv, kind: SignalKind, source_event_ids: []const u64) void {
+        switch (kind) {
+            .source => {
+                if (source_event_ids.len == 0) {
+                    failHost("Roc source signal descriptor must have at least one source event id");
+                }
+            },
+            .map, .map2 => {
+                if (source_event_ids.len != 0) {
+                    failHost("Roc derived signal descriptor must not have source event ids");
+                }
+            },
+        }
+
+        for (source_event_ids, 0..) |event_id, index| {
+            if (event_id == 0 or event_id > self.event_descriptors.items.len) {
+                failHost("Roc signal descriptor referenced an unknown source event id");
+            }
+
+            for (source_event_ids[0..index]) |previous| {
+                if (previous == event_id) {
+                    failHost("Roc signal descriptor must not contain duplicate source event ids");
+                }
+            }
         }
     }
 
@@ -899,7 +927,8 @@ const HostEnv = struct {
                 failHost("Roc signal descriptors must be dense and ordered by signal id");
             }
             const kind = HostEnv.signalKindFromAbi(desc.kind);
-            self.validateSignalStateDeps(desc.state_deps.items());
+            self.validateSignalSourceStateIds(kind, desc.source_state_ids.items());
+            self.validateSignalSourceEventIds(kind, desc.source_event_ids.items());
             self.validateSignalInputIds(desc.signal_id, kind, desc.input_signal_ids.items());
 
             if (index < self.signal_descriptors.items.len) {
@@ -910,15 +939,23 @@ const HostEnv = struct {
                 if (existing.signal_id != desc.signal_id or existing.kind != kind) {
                     failHost("Roc signal descriptor changed after registration");
                 }
-                if (existing.state_deps.len != desc.state_deps.len()) {
-                    failHost("Roc signal descriptor state deps changed after registration");
+                if (existing.source_state_ids.len != desc.source_state_ids.len()) {
+                    failHost("Roc signal descriptor source state ids changed after registration");
+                }
+                if (existing.source_event_ids.len != desc.source_event_ids.len()) {
+                    failHost("Roc signal descriptor source event ids changed after registration");
                 }
                 if (existing.input_signal_ids.len != desc.input_signal_ids.len()) {
                     failHost("Roc signal descriptor input signal ids changed after registration");
                 }
-                for (desc.state_deps.items(), existing.state_deps) |next_state_id, existing_state_id| {
+                for (desc.source_state_ids.items(), existing.source_state_ids) |next_state_id, existing_state_id| {
                     if (next_state_id != existing_state_id) {
-                        failHost("Roc signal descriptor state deps changed after registration");
+                        failHost("Roc signal descriptor source state ids changed after registration");
+                    }
+                }
+                for (desc.source_event_ids.items(), existing.source_event_ids) |next_event_id, existing_event_id| {
+                    if (next_event_id != existing_event_id) {
+                        failHost("Roc signal descriptor source event ids changed after registration");
                     }
                 }
                 for (desc.input_signal_ids.items(), existing.input_signal_ids) |next_input_signal_id, existing_input_signal_id| {
@@ -929,19 +966,26 @@ const HostEnv = struct {
                 continue;
             }
 
-            const state_deps = allocator.dupe(u64, desc.state_deps.items()) catch std.process.exit(1);
+            const source_state_ids = allocator.dupe(u64, desc.source_state_ids.items()) catch std.process.exit(1);
+            const source_event_ids = allocator.dupe(u64, desc.source_event_ids.items()) catch {
+                allocator.free(source_state_ids);
+                std.process.exit(1);
+            };
             const input_signal_ids = allocator.dupe(u64, desc.input_signal_ids.items()) catch {
-                allocator.free(state_deps);
+                allocator.free(source_state_ids);
+                allocator.free(source_event_ids);
                 std.process.exit(1);
             };
             self.signal_descriptors.append(allocator, .{
                 .signal_id = desc.signal_id,
                 .kind = kind,
-                .state_deps = state_deps,
+                .source_state_ids = source_state_ids,
+                .source_event_ids = source_event_ids,
                 .input_signal_ids = input_signal_ids,
                 .rank = 0,
             }) catch {
-                allocator.free(state_deps);
+                allocator.free(source_state_ids);
+                allocator.free(source_event_ids);
                 allocator.free(input_signal_ids);
                 std.process.exit(1);
             };
@@ -950,6 +994,7 @@ const HostEnv = struct {
 
         self.rebuildSignalRoutesFromSignals();
         self.rebuildSignalTopologyFromSignals();
+        self.rebuildSignalEventRoutesFromSignals();
     }
 
     fn signalIdsForState(self: *HostEnv, state_id: u64) []const u64 {
@@ -984,17 +1029,42 @@ const HostEnv = struct {
         }
     }
 
+    fn signalRank(self: *HostEnv, signal_id: u64) u64 {
+        if (signal_id >= self.signal_descriptors.items.len) failHost("signal id has no host signal descriptor");
+
+        const descriptor = self.signal_descriptors.items[@intCast(signal_id)];
+        if (descriptor.signal_id != signal_id) failHost("host signal descriptor table is not indexed by signal id");
+        return descriptor.rank;
+    }
+
+    fn sortSignalIdsByRank(self: *HostEnv, signal_ids: []u64) void {
+        var index: usize = 1;
+        while (index < signal_ids.len) : (index += 1) {
+            const value = signal_ids[index];
+            const value_rank = self.signalRank(value);
+            var insert_index = index;
+            while (insert_index > 0) {
+                const previous = signal_ids[insert_index - 1];
+                const previous_rank = self.signalRank(previous);
+                if (previous_rank < value_rank or (previous_rank == value_rank and previous < value)) break;
+                signal_ids[insert_index] = previous;
+                insert_index -= 1;
+            }
+            signal_ids[insert_index] = value;
+        }
+    }
+
     fn dirtySignalIdsForEvent(self: *HostEnv, allocator: std.mem.Allocator, event_id: u64) []u64 {
         var dirty_signal_ids: std.ArrayListUnmanaged(u64) = .empty;
         errdefer dirty_signal_ids.deinit(allocator);
 
-        for (self.stateIndexesForEvent(event_id)) |state_id| {
-            for (self.signalIdsForState(state_id)) |signal_id| {
-                self.appendSignalAndDependents(allocator, &dirty_signal_ids, signal_id);
-            }
+        for (self.sourceSignalIdsForEvent(event_id)) |signal_id| {
+            self.appendSignalAndDependents(allocator, &dirty_signal_ids, signal_id);
         }
 
-        return dirty_signal_ids.toOwnedSlice(allocator) catch std.process.exit(1);
+        const signal_ids = dirty_signal_ids.toOwnedSlice(allocator) catch std.process.exit(1);
+        self.sortSignalIdsByRank(signal_ids);
+        return signal_ids;
     }
 
     fn recordDispatch(self: *HostEnv) void {
@@ -1003,10 +1073,8 @@ const HostEnv = struct {
     }
 
     fn clearStates(self: *HostEnv) void {
-        const allocator = self.gpa.allocator();
         for (self.states.items) |state| {
             abi.decrefNodeValue(state.value, self.roc_host.?);
-            allocator.free(state.event_ids);
         }
         self.states.items.len = 0;
     }
@@ -1022,39 +1090,25 @@ const HostEnv = struct {
             if (desc.state_id != expected_state_id) {
                 failHost("Roc state descriptors must be dense and ordered by state id");
             }
-            self.validateStateEventIds(desc.event_ids.items());
 
             if (index < self.states.items.len) {
                 const existing = self.states.items[index];
                 if (existing.state_id != desc.state_id) {
                     failHost("host state registry is not indexed by state id");
                 }
-                if (existing.event_ids.len != desc.event_ids.len()) {
-                    failHost("Roc state descriptor event ids changed after registration");
-                }
-                for (desc.event_ids.items(), existing.event_ids) |next_event_id, existing_event_id| {
-                    if (next_event_id != existing_event_id) {
-                        failHost("Roc state descriptor event ids changed after registration");
-                    }
-                }
                 continue;
             }
 
             abi.increfNodeValue(desc.value, 1);
-            const event_ids = allocator.dupe(u64, desc.event_ids.items()) catch std.process.exit(1);
             self.states.append(allocator, .{
                 .state_id = desc.state_id,
                 .value = desc.value,
-                .event_ids = event_ids,
                 .version = 0,
             }) catch {
                 abi.decrefNodeValue(desc.value, self.roc_host.?);
-                allocator.free(event_ids);
                 std.process.exit(1);
             };
         }
-
-        self.rebuildEventRoutesFromStates();
     }
 
     fn applyStateChanges(self: *HostEnv, changes: StateChangeList) void {
@@ -1187,8 +1241,8 @@ const HostEnv = struct {
         self.dom_elements.deinit(allocator);
         self.clearEventDescriptors();
         self.event_descriptors.deinit(allocator);
-        self.clearEventRoutes();
-        self.event_routes.deinit(allocator);
+        self.clearSignalEventRoutes();
+        self.signal_event_routes.deinit(allocator);
         self.clearSignalDescriptors();
         self.signal_descriptors.deinit(allocator);
         self.clearSignalRoutes();
@@ -1949,7 +2003,8 @@ fn releaseSignalDescriptorList(descriptors: SignalDescriptorList, roc_host: *abi
     if (descriptors.isUnique()) {
         for (descriptors.items()) |descriptor| {
             descriptor.input_signal_ids.decref(roc_host);
-            descriptor.state_deps.decref(roc_host);
+            descriptor.source_event_ids.decref(roc_host);
+            descriptor.source_state_ids.decref(roc_host);
         }
     }
     descriptors.decref(roc_host);
@@ -1967,7 +2022,6 @@ fn releaseSignalValueList(values: SignalValueList, roc_host: *abi.RocHost) void 
 fn releaseStateDescriptorList(descriptors: StateDescriptorList, roc_host: *abi.RocHost) void {
     if (descriptors.isUnique()) {
         for (descriptors.items()) |descriptor| {
-            descriptor.event_ids.decref(roc_host);
             abi.decrefNodeValue(descriptor.value, roc_host);
         }
     }

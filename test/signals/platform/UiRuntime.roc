@@ -32,17 +32,17 @@ UiRuntime := [].{
 
 	EventId : { key : Str, id : U64, payload_kind : U64 }
 
-	StateSlot : { key : Str, initial : NodeValue, event_ids : List(U64) }
+	StateSlot : { key : Str, initial : NodeValue }
 
-	StateDesc : { state_id : U64, value : NodeValue, event_ids : List(U64) }
+	StateDesc : { state_id : U64, value : NodeValue }
 
 	StateValueDesc : { state_id : U64, value : NodeValue }
 
-	SignalDesc : { signal_id : U64, kind : U64, state_deps : List(U64), input_signal_ids : List(U64) }
+	SignalDesc : { signal_id : U64, kind : U64, source_state_ids : List(U64), source_event_ids : List(U64), input_signal_ids : List(U64) }
 
 	SignalValueDesc : { signal_id : U64, value : NodeValue }
 
-	SignalRegistryEntry : { key : Str, signal_id : U64, kind : U64, state_deps : List(U64), input_signal_ids : List(U64) }
+	SignalRegistryEntry : { key : Str, signal_id : U64, kind : U64, source_state_ids : List(U64), source_event_ids : List(U64), input_signal_ids : List(U64) }
 
 	EventDesc : { event_id : U64, payload_kind : U64 }
 
@@ -354,7 +354,7 @@ UiRuntime := [].{
 					dep_indexes: registered_source.signal.dep_indexes,
 					expr: Graph.SignalExpr.MapSignal({ source: Box.box(registered_source.signal), transform }),
 				}
-				register_signal_descriptor(registered_source.runtime, registered_signal0, signal_kind_map, descriptor_input_ids_for_single(registered_signal0, registered_source.signal))
+				register_signal_descriptor(registered_source.runtime, registered_signal0, signal_kind_map, descriptor_input_ids_for_single(registered_signal0, registered_source.signal), [])
 			}
 
 			Graph.SignalExpr.MapI64I64({ source, transform }) => {
@@ -363,7 +363,7 @@ UiRuntime := [].{
 					dep_indexes: registered_source.signal.dep_indexes,
 					expr: Graph.SignalExpr.MapI64I64({ source: Box.box(registered_source.signal), transform }),
 				}
-				register_signal_descriptor(registered_source.runtime, registered_signal0, signal_kind_map, descriptor_input_ids_for_single(registered_signal0, registered_source.signal))
+				register_signal_descriptor(registered_source.runtime, registered_signal0, signal_kind_map, descriptor_input_ids_for_single(registered_signal0, registered_source.signal), [])
 			}
 
 			Graph.SignalExpr.MapI64Str({ source, transform }) => {
@@ -372,7 +372,7 @@ UiRuntime := [].{
 					dep_indexes: registered_source.signal.dep_indexes,
 					expr: Graph.SignalExpr.MapI64Str({ source: Box.box(registered_source.signal), transform }),
 				}
-				register_signal_descriptor(registered_source.runtime, registered_signal0, signal_kind_map, descriptor_input_ids_for_single(registered_signal0, registered_source.signal))
+				register_signal_descriptor(registered_source.runtime, registered_signal0, signal_kind_map, descriptor_input_ids_for_single(registered_signal0, registered_source.signal), [])
 			}
 
 			Graph.SignalExpr.Map2Signal({ left, right, transform }) => {
@@ -382,7 +382,7 @@ UiRuntime := [].{
 					dep_indexes: merge_u64_deps(registered_left.signal.dep_indexes, registered_right.signal.dep_indexes),
 					expr: Graph.SignalExpr.Map2Signal({ left: Box.box(registered_left.signal), right: Box.box(registered_right.signal), transform }),
 				}
-				register_signal_descriptor(registered_right.runtime, registered_signal0, signal_kind_map2, descriptor_input_ids_for_pair(registered_signal0, registered_left.signal, registered_right.signal))
+				register_signal_descriptor(registered_right.runtime, registered_signal0, signal_kind_map2, descriptor_input_ids_for_pair(registered_signal0, registered_left.signal, registered_right.signal), [])
 			}
 
 			Graph.SignalExpr.Map2I64I64({ left, right, transform }) => {
@@ -392,7 +392,7 @@ UiRuntime := [].{
 					dep_indexes: merge_u64_deps(registered_left.signal.dep_indexes, registered_right.signal.dep_indexes),
 					expr: Graph.SignalExpr.Map2I64I64({ left: Box.box(registered_left.signal), right: Box.box(registered_right.signal), transform }),
 				}
-				register_signal_descriptor(registered_right.runtime, registered_signal0, signal_kind_map2, descriptor_input_ids_for_pair(registered_signal0, registered_left.signal, registered_right.signal))
+				register_signal_descriptor(registered_right.runtime, registered_signal0, signal_kind_map2, descriptor_input_ids_for_pair(registered_signal0, registered_left.signal, registered_right.signal), [])
 			}
 
 			Graph.SignalExpr.Map2I64I64Str({ left, right, transform }) => {
@@ -402,51 +402,47 @@ UiRuntime := [].{
 					dep_indexes: merge_u64_deps(registered_left.signal.dep_indexes, registered_right.signal.dep_indexes),
 					expr: Graph.SignalExpr.Map2I64I64Str({ left: Box.box(registered_left.signal), right: Box.box(registered_right.signal), transform }),
 				}
-				register_signal_descriptor(registered_right.runtime, registered_signal0, signal_kind_map2, descriptor_input_ids_for_pair(registered_signal0, registered_left.signal, registered_right.signal))
+				register_signal_descriptor(registered_right.runtime, registered_signal0, signal_kind_map2, descriptor_input_ids_for_pair(registered_signal0, registered_left.signal, registered_right.signal), [])
 			}
 
 			Graph.SignalExpr.Hold({ key, initial, event }) => {
 				registered_event = register_event(runtime, Box.unbox(event))
 				registered_state = register_state_key(registered_event.runtime, key, initial)
-				runtime1 = register_state_event_indexes(registered_state.runtime, registered_state.index, registered_event.event.source_ids)
 				registered_signal0 = { ..signal,
 					dep_indexes: [registered_state.index],
 					expr: Graph.SignalExpr.Hold({ key, initial, event: Box.box(registered_event.event) }),
 				}
-				register_signal_descriptor(runtime1, registered_signal0, signal_kind_source, [])
+				register_signal_descriptor(registered_state.runtime, registered_signal0, signal_kind_source, [], registered_event.event.source_ids)
 			}
 
 			Graph.SignalExpr.Fold({ key, initial, event, step }) => {
 				registered_event = register_event(runtime, Box.unbox(event))
 				registered_state = register_state_key(registered_event.runtime, key, initial)
-				runtime1 = register_state_event_indexes(registered_state.runtime, registered_state.index, registered_event.event.source_ids)
 				registered_signal0 = { ..signal,
 					dep_indexes: [registered_state.index],
 					expr: Graph.SignalExpr.Fold({ key, initial, event: Box.box(registered_event.event), step }),
 				}
-				register_signal_descriptor(runtime1, registered_signal0, signal_kind_source, [])
+				register_signal_descriptor(registered_state.runtime, registered_signal0, signal_kind_source, [], registered_event.event.source_ids)
 			}
 
 			Graph.SignalExpr.FoldI64({ key, initial, event, step }) => {
 				registered_event = register_event(runtime, Box.unbox(event))
 				registered_state = register_state_key(registered_event.runtime, key, NodeValue.from_i64(initial))
-				runtime1 = register_state_event_indexes(registered_state.runtime, registered_state.index, registered_event.event.source_ids)
 				registered_signal0 = { ..signal,
 					dep_indexes: [registered_state.index],
 					expr: Graph.SignalExpr.FoldI64({ key, initial, event: Box.box(registered_event.event), step }),
 				}
-				register_signal_descriptor(runtime1, registered_signal0, signal_kind_source, [])
+				register_signal_descriptor(registered_state.runtime, registered_signal0, signal_kind_source, [], registered_event.event.source_ids)
 			}
 
 			Graph.SignalExpr.FoldBoolToggle({ key, initial, event }) => {
 				registered_event = register_event(runtime, Box.unbox(event))
 				registered_state = register_state_key(registered_event.runtime, key, NodeValue.from_bool(initial))
-				runtime1 = register_state_event_indexes(registered_state.runtime, registered_state.index, registered_event.event.source_ids)
 				registered_signal0 = { ..signal,
 					dep_indexes: [registered_state.index],
 					expr: Graph.SignalExpr.FoldBoolToggle({ key, initial, event: Box.box(registered_event.event) }),
 				}
-				register_signal_descriptor(runtime1, registered_signal0, signal_kind_source, [])
+				register_signal_descriptor(registered_state.runtime, registered_signal0, signal_kind_source, [], registered_event.event.source_ids)
 			}
 		}
 	}
@@ -467,12 +463,13 @@ UiRuntime := [].{
 		}
 	}
 
-	register_signal_descriptor : Runtime, Graph.SignalNode, U64, List(U64) -> RegisteredSignal
-	register_signal_descriptor = |runtime, signal, kind, input_signal_ids| {
+	register_signal_descriptor : Runtime, Graph.SignalNode, U64, List(U64), List(U64) -> RegisteredSignal
+	register_signal_descriptor = |runtime, signal, kind, input_signal_ids, source_event_ids| {
 		match signal.cache_key {
 			Graph.SignalCacheKey.NoSignalCacheKey => { runtime, signal }
-			Graph.SignalCacheKey.SignalCacheKey(key) =>
-				match signal_registry_lookup(runtime.signal_registry, key, kind, signal.dep_indexes, input_signal_ids) {
+			Graph.SignalCacheKey.SignalCacheKey(key) => {
+				source_state_ids = descriptor_source_state_ids(kind, signal)
+				match signal_registry_lookup(runtime.signal_registry, key, kind, source_state_ids, source_event_ids, input_signal_ids) {
 					SignalRegistryFound(entry) => {
 						{
 							runtime,
@@ -482,7 +479,7 @@ UiRuntime := [].{
 
 					SignalRegistryMissing => {
 						signal_id = runtime.next_signal_id
-						entry = { key, signal_id, kind, state_deps: signal.dep_indexes, input_signal_ids }
+						entry = { key, signal_id, kind, source_state_ids, source_event_ids, input_signal_ids }
 						{
 							runtime: { ..runtime,
 								next_signal_id: signal_id + 1,
@@ -492,6 +489,16 @@ UiRuntime := [].{
 						}
 					}
 				}
+			}
+		}
+	}
+
+	descriptor_source_state_ids : U64, Graph.SignalNode -> List(U64)
+	descriptor_source_state_ids = |kind, signal| {
+		if kind == signal_kind_source {
+			signal.dep_indexes
+		} else {
+			[]
 		}
 	}
 
@@ -543,7 +550,7 @@ UiRuntime := [].{
 			StateSlotMissing => {
 				index = List.len(runtime.states)
 				{
-					runtime: { ..runtime, states: List.append(runtime.states, { key, initial, event_ids: [] }) },
+					runtime: { ..runtime, states: List.append(runtime.states, { key, initial }) },
 					index,
 				}
 			}
@@ -568,32 +575,6 @@ UiRuntime := [].{
 					},
 					id,
 				}
-			}
-		}
-	}
-
-	register_state_event_indexes : Runtime, U64, List(U64) -> Runtime
-	register_state_event_indexes = |runtime, state_index, event_ids| {
-		List.fold(
-			event_ids,
-			runtime,
-			|acc, event_id| register_state_event_index(acc, event_id, state_index),
-		)
-	}
-
-	register_state_event_index : Runtime, U64, U64 -> Runtime
-	register_state_event_index = |runtime, event_id, state_index| {
-		match List.get(runtime.states, state_index) {
-			Ok(slot) =>
-				if u64_list_contains(slot.event_ids, event_id) {
-					runtime
-				} else {
-					next = { ..slot, event_ids: List.append(slot.event_ids, event_id) }
-					{ ..runtime, states: replace_state_slot(runtime.states, state_index, next) }
-				}
-
-			Err(_) => {
-				crash "Signals runtime invariant violated: state dependency slot missing"
 			}
 		}
 	}
@@ -1118,8 +1099,8 @@ UiRuntime := [].{
 		$result
 	}
 
-	signal_registry_lookup : List(SignalRegistryEntry), Str, U64, List(U64), List(U64) -> SignalRegistryLookup
-	signal_registry_lookup = |entries, key, kind, state_deps, input_signal_ids| {
+	signal_registry_lookup : List(SignalRegistryEntry), Str, U64, List(U64), List(U64), List(U64) -> SignalRegistryLookup
+	signal_registry_lookup = |entries, key, kind, source_state_ids, source_event_ids, input_signal_ids| {
 		var $index = 0
 		var $result = SignalRegistryMissing
 		var $done = False
@@ -1127,7 +1108,7 @@ UiRuntime := [].{
 		while $done == False and $index < List.len(entries) {
 			match List.get(entries, $index) {
 				Ok(entry) =>
-					if entry.key == key and entry.kind == kind and u64_list_equal(entry.state_deps, state_deps) and u64_list_equal(entry.input_signal_ids, input_signal_ids) {
+					if entry.key == key and entry.kind == kind and u64_list_equal(entry.source_state_ids, source_state_ids) and u64_list_equal(entry.source_event_ids, source_event_ids) and u64_list_equal(entry.input_signal_ids, input_signal_ids) {
 						$result = SignalRegistryFound(entry)
 						$done = True
 					} else {
@@ -1220,7 +1201,7 @@ UiRuntime := [].{
 		var $descriptors = List.with_capacity(List.len(runtime.states))
 
 		for slot in runtime.states {
-			$descriptors = List.append($descriptors, { state_id: $state_id, value: slot.initial, event_ids: slot.event_ids })
+			$descriptors = List.append($descriptors, { state_id: $state_id, value: slot.initial })
 			$state_id = $state_id + 1
 		}
 
@@ -1242,26 +1223,9 @@ UiRuntime := [].{
 		List.map(
 			runtime.signal_registry,
 			|entry| {
-				{ signal_id: entry.signal_id, kind: entry.kind, state_deps: entry.state_deps, input_signal_ids: entry.input_signal_ids }
+				{ signal_id: entry.signal_id, kind: entry.kind, source_state_ids: entry.source_state_ids, source_event_ids: entry.source_event_ids, input_signal_ids: entry.input_signal_ids }
 			},
 		)
-	}
-
-	replace_state_slot : List(StateSlot), U64, StateSlot -> List(StateSlot)
-	replace_state_slot = |entries, target_index, replacement| {
-		var $index = 0
-		var $next = List.with_capacity(List.len(entries))
-
-		for entry in entries {
-			if $index == target_index {
-				$next = List.append($next, replacement)
-			} else {
-				$next = List.append($next, entry)
-			}
-			$index = $index + 1
-		}
-
-		$next
 	}
 
 	replace_state_change : List(StateValueDesc), U64, NodeValue -> List(StateValueDesc)
