@@ -5347,10 +5347,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
         );
     } else {
         const hosted_symbols = try hostedSymbolsFromLir(ctx.arena, &lowered.lir_result.store);
-        const enable_default_platform_runtime = args.synthetic_default_platform and switch (target) {
-            .x64musl, .arm64musl => true,
-            else => false,
-        };
+        const enable_default_platform_runtime = args.synthetic_default_platform and DefaultPlatformRuntimeObjects.forTarget(target) != null;
 
         const app_object = try compileLlvmAppObject(
             ctx,
