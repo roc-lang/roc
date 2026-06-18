@@ -1685,6 +1685,7 @@ fn createTestPlatformHostLib(
     }
     lib.root_module.addImport("builtins", roc_modules.builtins);
     lib.root_module.addImport("build_options", roc_modules.build_options);
+    lib.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
     lib.root_module.addImport("shim_io", b.addModule("shim_io", .{
         .root_source_file = b.path("src/shim_io.zig"),
     }));
@@ -2522,6 +2523,7 @@ pub fn build(b: *std.Build) void {
     wasm32_builtins_obj.root_module.addImport("tracy", b.addModule("tracy_stub_wasm32_eval", .{
         .root_source_file = b.path("src/builtins/tracy_stub.zig"),
     }));
+    wasm32_builtins_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
     wasm32_builtins_obj.root_module.addImport("shim_io", b.addModule("shim_io_wasm32_eval", .{
         .root_source_file = b.path("src/shim_io.zig"),
     }));
@@ -2726,6 +2728,7 @@ pub fn build(b: *std.Build) void {
     builtins64_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub64_bc", .{
         .root_source_file = b.path("src/builtins/tracy_stub.zig"),
     }));
+    builtins64_bc_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
     builtins64_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io64_bc", .{
         .root_source_file = b.path("src/shim_io.zig"),
     }));
@@ -2751,6 +2754,7 @@ pub fn build(b: *std.Build) void {
     builtins64_core_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub64_core_bc", .{
         .root_source_file = b.path("src/builtins/tracy_stub.zig"),
     }));
+    builtins64_core_bc_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
     builtins64_core_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io64_core_bc", .{
         .root_source_file = b.path("src/shim_io.zig"),
     }));
@@ -2777,6 +2781,7 @@ pub fn build(b: *std.Build) void {
     builtins32_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub32_bc", .{
         .root_source_file = b.path("src/builtins/tracy_stub.zig"),
     }));
+    builtins32_bc_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
     builtins32_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io32_bc", .{
         .root_source_file = b.path("src/shim_io.zig"),
     }));
@@ -2801,6 +2806,7 @@ pub fn build(b: *std.Build) void {
     builtins32_core_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub32_core_bc", .{
         .root_source_file = b.path("src/builtins/tracy_stub.zig"),
     }));
+    builtins32_core_bc_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
     builtins32_core_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io32_core_bc", .{
         .root_source_file = b.path("src/shim_io.zig"),
     }));
@@ -2825,6 +2831,7 @@ pub fn build(b: *std.Build) void {
     builtins64_extern_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub64_extern_bc", .{
         .root_source_file = b.path("src/builtins/tracy_stub.zig"),
     }));
+    builtins64_extern_bc_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
     builtins64_extern_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io64_extern_bc", .{
         .root_source_file = b.path("src/shim_io.zig"),
     }));
@@ -2849,6 +2856,7 @@ pub fn build(b: *std.Build) void {
     builtins64_core_extern_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub64_core_extern_bc", .{
         .root_source_file = b.path("src/builtins/tracy_stub.zig"),
     }));
+    builtins64_core_extern_bc_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
     builtins64_core_extern_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io64_core_extern_bc", .{
         .root_source_file = b.path("src/shim_io.zig"),
     }));
@@ -2873,6 +2881,7 @@ pub fn build(b: *std.Build) void {
     builtins32_extern_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub32_extern_bc", .{
         .root_source_file = b.path("src/builtins/tracy_stub.zig"),
     }));
+    builtins32_extern_bc_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
     builtins32_extern_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io32_extern_bc", .{
         .root_source_file = b.path("src/shim_io.zig"),
     }));
@@ -2897,6 +2906,7 @@ pub fn build(b: *std.Build) void {
     builtins32_core_extern_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub32_core_extern_bc", .{
         .root_source_file = b.path("src/builtins/tracy_stub.zig"),
     }));
+    builtins32_core_extern_bc_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
     builtins32_core_extern_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io32_core_extern_bc", .{
         .root_source_file = b.path("src/shim_io.zig"),
     }));
@@ -4812,6 +4822,7 @@ fn addMainExe(
     builtins_obj.root_module.addImport("tracy", b.addModule("tracy_stub", .{
         .root_source_file = b.path("src/builtins/tracy_stub.zig"),
     }));
+    builtins_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
     builtins_obj.root_module.addImport("shim_io", b.addModule("shim_io", .{
         .root_source_file = b.path("src/shim_io.zig"),
     }));
@@ -4834,6 +4845,7 @@ fn addMainExe(
     builtins_extern_obj.root_module.addImport("tracy", b.addModule("tracy_stub_extern", .{
         .root_source_file = b.path("src/builtins/tracy_stub.zig"),
     }));
+    builtins_extern_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
     builtins_extern_obj.root_module.addImport("shim_io", b.addModule("shim_io_extern", .{
         .root_source_file = b.path("src/shim_io.zig"),
     }));
@@ -4858,6 +4870,7 @@ fn addMainExe(
     configureBackend(shim_lib, target);
     // Add all modules from roc_modules that the shim needs
     roc_modules.addAll(shim_lib);
+    shim_lib.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
     shim_lib.root_module.addImport("shim_io", b.addModule("shim_io", .{
         .root_source_file = b.path("src/shim_io.zig"),
     }));
@@ -4928,6 +4941,7 @@ fn addMainExe(
             b.fmt("tracy_stub_{s}", .{cross_target.name}),
             .{ .root_source_file = b.path("src/builtins/tracy_stub.zig") },
         ));
+        cross_builtins_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
         cross_builtins_obj.root_module.addImport("shim_io", b.addModule(
             b.fmt("shim_io_{s}", .{cross_target.name}),
             .{ .root_source_file = b.path("src/shim_io.zig") },
@@ -4961,6 +4975,7 @@ fn addMainExe(
             b.fmt("tracy_stub_extern_{s}", .{cross_target.name}),
             .{ .root_source_file = b.path("src/builtins/tracy_stub.zig") },
         ));
+        cross_builtins_extern_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
         cross_builtins_extern_obj.root_module.addImport("shim_io", b.addModule(
             b.fmt("shim_io_extern_{s}", .{cross_target.name}),
             .{ .root_source_file = b.path("src/shim_io.zig") },

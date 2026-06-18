@@ -409,6 +409,12 @@ pub const RocModules = struct {
     glue: *Module,
     embedded_lld: *Module,
 
+    // Vendored-from-Zig modules. Kept out of the `ModuleType` dependency graph
+    // (like `embedded_lld`) and wired into their specific consumers via
+    // `applyVendorImports`, so it stays clear which code comes from elsewhere.
+    // The sources live under `vendor/`.
+    vendor_parse_float: *Module,
+
     pub fn create(b: *Build, build_options_step: *Step.Options, zstd: ?*Dependency) RocModules {
         const self = RocModules{
             .collections = b.addModule(
@@ -455,6 +461,8 @@ pub const RocModules = struct {
             .docs = b.addModule("docs", .{ .root_source_file = b.path("src/docs/mod.zig") }),
             .glue = b.addModule("glue", .{ .root_source_file = b.path("src/glue/mod.zig") }),
             .embedded_lld = b.addModule("embedded_lld", .{ .root_source_file = b.path("src/build/embedded_lld.zig") }),
+
+            .vendor_parse_float = b.addModule("vendor_parse_float", .{ .root_source_file = b.path("vendor/parse_float/parse_float.zig") }),
         };
 
         // Link zstd to bundle module if available (it's unsupported on wasm32, so don't link it)
@@ -528,6 +536,21 @@ pub const RocModules = struct {
                 const dep_module = self.getModule(dep_type);
                 module.addImport(@tagName(dep_type), dep_module);
             }
+
+            self.applyVendorImports(module, module_type);
+        }
+    }
+
+    /// Wire vendored-from-Zig modules into the specific roc modules that use
+    /// them. Called for both the persistent modules and the per-module test
+    /// builds, so a `@import("vendor_x")` resolves in both. Vendored modules
+    /// are deliberately not part of the `ModuleType` dependency graph.
+    fn applyVendorImports(self: RocModules, module: *Module, module_type: ModuleType) void {
+        switch (module_type) {
+            .builtins => {
+                module.addImport("vendor_parse_float", self.vendor_parse_float);
+            },
+            else => {},
         }
     }
 
@@ -628,6 +651,7 @@ pub const RocModules = struct {
             const dep_module = self.getModule(dep_type);
             step.root_module.addImport(@tagName(dep_type), dep_module);
         }
+        self.applyVendorImports(step.root_module, module_type);
     }
 
     pub fn createModuleTests(
