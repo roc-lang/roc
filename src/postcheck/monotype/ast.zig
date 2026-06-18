@@ -361,6 +361,7 @@ pub const PatData = union(enum) {
     },
     record: Span(RecordDestruct),
     tuple: Span(PatId),
+    list: ListPattern,
     tag: struct {
         name: names.TagNameId,
         payloads: Span(PatId),
@@ -397,6 +398,22 @@ pub const StrPatternStep = struct {
 pub const RecordDestruct = struct {
     name: names.RecordFieldNameId,
     pattern: PatId,
+};
+
+/// List destructuring pattern: fixed element patterns plus an optional rest
+/// that captures the remaining slice. The element patterns before the rest
+/// match from the front; those at or after the rest's index match from the
+/// back.
+pub const ListPattern = struct {
+    patterns: Span(PatId),
+    rest: ?ListRestPattern,
+};
+
+/// The `..`/`.. as name` portion of a list pattern. `index` is how many fixed
+/// element patterns precede it; `pattern` binds the captured slice when present.
+pub const ListRestPattern = struct {
+    index: u32,
+    pattern: ?PatId,
 };
 
 /// Match branch.
