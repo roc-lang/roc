@@ -3487,9 +3487,9 @@ const BodyContext = struct {
             => Common.invariant("non-runtime checked expression reached Monotype lowering"),
             .num => |num| self.lowerIntLiteral(num.value, ty),
             .typed_int => |num| self.lowerIntLiteral(num.value, ty),
-            .frac_f32 => |frac| .{ .frac_f32_lit = frac.value },
-            .frac_f64 => |frac| .{ .frac_f64_lit = frac.value },
-            .dec => |dec| .{ .dec_lit = dec.value },
+            .frac_f32 => |frac| self.lowerFracLiteral(.{ .f32 = frac.value }, ty),
+            .frac_f64 => |frac| self.lowerFracLiteral(.{ .f64 = frac.value }, ty),
+            .dec => |dec| self.lowerFracLiteral(.{ .dec = dec.value }, ty),
             .dec_small => Common.invariant("small decimal literal reached Monotype after numeric finalization"),
             .num_from_numeral => |plan| {
                 if (try self.restoredNumeralConst(expr_id, ty)) |restored| return restored;
@@ -9152,6 +9152,60 @@ const BodyContext = struct {
                 else => .{ .int_lit = value },
             },
             else => .{ .int_lit = value },
+        };
+    }
+
+    /// Lower a fractional literal to the constant form its instantiated
+    /// monotype demands. The checked stage finalizes a fractional literal's
+    /// value to one numeric representation, but a generalized literal can be
+    /// instantiated at a different fractional primitive than its finalized
+    /// default (for example, a literal finalized to `Dec` that this
+    /// specialization unifies to `F64`). The constant kind must follow the
+    /// instantiated type so backends store bits the destination layout
+    /// expects, mirroring `lowerIntLiteral`.
+    fn lowerFracLiteral(self: *BodyContext, value: FracLiteralValue, ty: Type.TypeId) Ast.ExprData {
+        return switch (self.builder.shapeContent(ty)) {
+            .primitive => |primitive| switch (primitive) {
+                .f32 => .{ .frac_f32_lit = value.asF32() },
+                .f64 => .{ .frac_f64_lit = value.asF64() },
+                .dec => .{ .dec_lit = value.asDec() },
+                else => Common.invariant("fractional literal instantiated to a non-fractional Monotype primitive"),
+            },
+            else => Common.invariant("fractional literal instantiated to a non-primitive Monotype type"),
+        };
+    }
+};
+
+/// A fractional literal value in its checked-stage representation, used to
+/// re-derive the constant kind the instantiated Monotype primitive requires.
+const FracLiteralValue = union(enum) {
+    f32: f32,
+    f64: f64,
+    dec: builtins.dec.RocDec,
+
+    fn asF64(self: FracLiteralValue) f64 {
+        return switch (self) {
+            .f32 => |v| @floatCast(v),
+            .f64 => |v| v,
+            .dec => |v| v.toF64(),
+        };
+    }
+
+    fn asF32(self: FracLiteralValue) f32 {
+        return switch (self) {
+            .f32 => |v| v,
+            .f64 => |v| @floatCast(v),
+            .dec => |v| @floatCast(v.toF64()),
+        };
+    }
+
+    fn asDec(self: FracLiteralValue) builtins.dec.RocDec {
+        return switch (self) {
+            .f32 => |v| builtins.dec.RocDec.fromF64(@floatCast(v)) orelse
+                Common.invariant("f32 fractional literal could not be represented as Dec at its instantiated type"),
+            .f64 => |v| builtins.dec.RocDec.fromF64(v) orelse
+                Common.invariant("f64 fractional literal could not be represented as Dec at its instantiated type"),
+            .dec => |v| v,
         };
     }
 };
