@@ -2565,6 +2565,7 @@ pub fn build(b: *std.Build) void {
     llvm_codegen_module.addImport("ctx", roc_modules.ctx);
     llvm_codegen_module.addImport("builtins", roc_modules.builtins);
     llvm_codegen_module.addImport("build_options", roc_modules.build_options);
+    llvm_codegen_module.addImport("vendor_llvm_ir", roc_modules.vendor_llvm_ir);
 
     const roc_exe = addMainExe(b, roc_modules, target, optimize, strip, omit_frame_pointer, use_system_llvm, user_llvm_path, flag_enable_tracy, zstd, compiled_builtins_module, write_compiled_builtins, llvm_codegen_module, flag_enable_tracy) orelse return;
     roc_modules.addAll(roc_exe);

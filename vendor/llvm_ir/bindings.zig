@@ -65,6 +65,9 @@ pub const Context = opaque {
     extern fn LLVMIntTypeInContext(C: *Context, NumBits: c_uint) *Type;
 };
 
+/// LLVM Value - the base type of all values computed by a program.
+pub const Value = opaque {};
+
 /// LLVM Module - contains functions, global variables, and symbol table.
 pub const Module = opaque {
     pub const dispose = LLVMDisposeModule;
