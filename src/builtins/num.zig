@@ -7,7 +7,7 @@
 //! operations efficiently and safely.
 const std = @import("std");
 const i128h = @import("compiler_rt_128.zig");
-const parse_float = @import("parse_float.zig");
+const parse_float = @import("vendor_parse_float");
 
 const WithOverflow = @import("utils.zig").WithOverflow;
 const Ordering = @import("utils.zig").Ordering;

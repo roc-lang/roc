@@ -19,7 +19,7 @@ const layout = @import("layout");
 const lir = @import("lir");
 
 const CoreCtx = @import("ctx").CoreCtx;
-const LlvmBuilder = @import("Builder.zig");
+const LlvmBuilder = @import("vendor_llvm_ir").Builder;
 
 const Allocator = std.mem.Allocator;
 const CFStmtId = lir.CFStmtId;

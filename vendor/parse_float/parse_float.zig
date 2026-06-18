@@ -2,11 +2,11 @@
 //!
 //! Adapted from the Zig standard library at https://codeberg.org/ziglang/zig and licensed under the MIT license. Thanks, Zig team!
 
-const parse = @import("parse_float/parse.zig");
-const convertHex = @import("parse_float/convert_hex.zig").convertHex;
-const convertFast = @import("parse_float/convert_fast.zig").convertFast;
-const convertEiselLemire = @import("parse_float/convert_eisel_lemire.zig").convertEiselLemire;
-const convertSlow = @import("parse_float/convert_slow.zig").convertSlow;
+const parse = @import("parse.zig");
+const convertHex = @import("convert_hex.zig").convertHex;
+const convertFast = @import("convert_fast.zig").convertFast;
+const convertEiselLemire = @import("convert_eisel_lemire.zig").convertEiselLemire;
+const convertSlow = @import("convert_slow.zig").convertSlow;
 
 /// Errors returned by Roc builtin float parsing.
 pub const ParseFloatError = error{
