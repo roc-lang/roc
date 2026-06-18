@@ -53,7 +53,6 @@ UiRuntime := [].{
 	]
 
 	Command := [
-		ResetDom,
 		CreateElement({ id : U64, tag : Str }),
 		AppendChild({ parent : U64, child : U64 }),
 		SetText({ id : U64, value : Str }),
@@ -108,6 +107,13 @@ UiRuntime := [].{
 		NoEvent,
 		Occurrence({ id : U64, value : NodeValue }),
 	]
+
+	RecomputeInput : {
+		active_event : ActiveEvent,
+		dirty_signal_ids : List(U64),
+		cached_signals : List(SignalValueDesc),
+		cached_states : List(StateValueDesc),
+	}
 
 	EvalState : {
 		runtime : Runtime,
@@ -263,11 +269,11 @@ UiRuntime := [].{
 		}
 	}
 
-	recompute : Box(Runtime), HostEvent -> RecomputeResult
-	recompute = |boxed_runtime, host_event| {
+	recompute : Box(Runtime), RecomputeInput -> RecomputeResult
+	recompute = |boxed_runtime, input| {
 		runtime0 = Box.unbox(boxed_runtime)
-		state0 = eval_state_for_runtime(runtime0, host_event_to_active(host_event), { ids: host_event_dirty_signal_ids(host_event) }, host_event_cached_signals(host_event), host_event_cached_states(host_event))
-		state1 = eval_signal_plan(state0, host_event_dirty_signal_ids(host_event))
+		state0 = eval_state_for_runtime(runtime0, input.active_event, { ids: input.dirty_signal_ids }, input.cached_signals, input.cached_states)
+		state1 = eval_signal_plan(state0, input.dirty_signal_ids)
 		{
 			runtime: Box.box(state1.runtime),
 			event_descriptors: event_descriptors_for_runtime(state1.runtime),
@@ -675,7 +681,7 @@ UiRuntime := [].{
 		scheduled_state = eval_signal_plan(state, dirty_signals.ids)
 		render_state = {
 			state: scheduled_state,
-			commands: [ResetDom],
+			commands: [],
 			next_elem_id: 1,
 		}
 		rendered = render_elem(render_state, runtime.root, 0)

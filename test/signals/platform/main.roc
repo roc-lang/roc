@@ -31,9 +31,9 @@ ui_dispatch = |runtime, event| {
 	Box.box(UiRuntime.dispatch(runtime, Box.unbox(event)))
 }
 
-ui_recompute : Box(UiRuntime.Runtime), Box(UiRuntime.HostEvent) -> Box(UiRuntime.RecomputeResult)
-ui_recompute = |runtime, event| {
-	Box.box(UiRuntime.recompute(runtime, Box.unbox(event)))
+ui_recompute : Box(UiRuntime.Runtime), Box(UiRuntime.RecomputeInput) -> Box(UiRuntime.RecomputeResult)
+ui_recompute = |runtime, input| {
+	Box.box(UiRuntime.recompute(runtime, Box.unbox(input)))
 }
 
 ui_render : Box(UiRuntime.Runtime), Box(UiRuntime.RenderInput) -> Box(UiRuntime.DispatchResult)

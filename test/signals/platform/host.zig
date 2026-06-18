@@ -1,8 +1,8 @@
 //! Platform host for testing signal-based reactive UI applications.
 //!
-//! Roc owns the signal graph and renders command batches through the `roc_ui_*`
-//! entrypoints. The host owns only the simulated DOM, test runner, allocation
-//! hooks, and boxed runtime lifecycle.
+//! The host owns simulated DOM state, event routing, signal topology/cache, and
+//! render batching. Roc still runs retained app code and emits element commands
+//! through the `roc_ui_*` entrypoints during the migration.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -22,8 +22,9 @@ const StateDescriptorList = @FieldType(DispatchResult, "state_descriptors");
 const StateChangeList = @FieldType(DispatchResult, "state_changes");
 const SignalValueDesc = @typeInfo(@TypeOf(@as(SignalValueList, undefined).items())).pointer.child;
 const StateValueDesc = @typeInfo(@TypeOf(@as(StateChangeList, undefined).items())).pointer.child;
-const HostEventBox = @typeInfo(@TypeOf(abi.roc_ui_recompute)).@"fn".params[1].type.?;
-const HostEvent = std.meta.Child(HostEventBox);
+const RecomputeInputBox = @typeInfo(@TypeOf(abi.roc_ui_recompute)).@"fn".params[1].type.?;
+const RecomputeInput = std.meta.Child(RecomputeInputBox);
+const ActiveEvent = @FieldType(RecomputeInput, "active_event");
 const RenderInputBox = @typeInfo(@TypeOf(abi.roc_ui_render)).@"fn".params[1].type.?;
 const RenderInput = std.meta.Child(RenderInputBox);
 const CommandPayload = @FieldType(abi.UiRuntimeCommand, "payload");
@@ -568,6 +569,7 @@ const HostEnv = struct {
     signal_cache: std.ArrayListUnmanaged(HostSignalCacheSlot) = .empty,
     states: std.ArrayListUnmanaged(HostState) = .empty,
     previous_command_snapshots: std.ArrayListUnmanaged(HostCommandSnapshot) = .empty,
+    has_previous_render_snapshot: bool = false,
     render_metrics: HostRenderMetrics = .{},
     dispatch_metrics: HostDispatchMetrics = .{},
     state_metrics: HostStateMetrics = .{},
@@ -1218,6 +1220,7 @@ const HostEnv = struct {
         self.clearPreviousCommandSnapshots();
         self.previous_command_snapshots.deinit(self.gpa.allocator());
         self.previous_command_snapshots = next;
+        self.has_previous_render_snapshot = true;
     }
 
     fn metricsWithHostRender(self: *HostEnv, roc_metrics: RuntimeMetrics) RuntimeMetrics {
@@ -1551,10 +1554,14 @@ const CommandCounts = struct {
     set_metadata: u64 = 0,
     bind_event: u64 = 0,
 
+    fn addHostReset(self: *CommandCounts) void {
+        self.total += 1;
+        self.reset_dom += 1;
+    }
+
     fn add(self: *CommandCounts, command: abi.UiRuntimeCommand) void {
         self.total += 1;
         switch (command.tag) {
-            .ResetDom => self.reset_dom += 1,
             .CreateElement => self.create_element += 1,
             .AppendChild => self.append_child += 1,
             .SetText => self.set_text += 1,
@@ -1702,7 +1709,6 @@ fn applyStringCommand(host: *HostEnv, payload: StringCommandPayload, field: Stri
 
 fn applyCommand(host: *HostEnv, command: abi.UiRuntimeCommand) void {
     switch (command.tag) {
-        .ResetDom => resetSimulatedDom(host),
         .CreateElement => applyCreateElementCommand(host, command.payload.create_element),
         .AppendChild => applyAppendChildCommand(host, command.payload.append_child),
         .SetText => {
@@ -1745,7 +1751,6 @@ fn applyCommand(host: *HostEnv, command: abi.UiRuntimeCommand) void {
 fn traceCommand(command: abi.UiRuntimeCommand) void {
     if (!traceEnabled()) return;
     switch (command.tag) {
-        .ResetDom => writeStderr("[HOST CMD] ResetDom\n"),
         .CreateElement => {
             const payload = command.payload.create_element;
             printStderr("[HOST CMD] CreateElement id={d} tag=\"{s}\"\n", .{ payload.id, payload.tag.asSlice() });
@@ -1797,6 +1802,11 @@ fn traceCommand(command: abi.UiRuntimeCommand) void {
     }
 }
 
+fn traceHostDomReset() void {
+    if (!traceEnabled()) return;
+    writeStderr("[HOST CMD] ResetDom\n");
+}
+
 fn emptyCommandSnapshot(kind: u64, a: u64, b: u64, value_bool: bool) HostCommandSnapshot {
     return .{
         .kind = kind,
@@ -1822,7 +1832,6 @@ fn bytesCommandSnapshot(allocator: std.mem.Allocator, kind: u64, a: u64, b: u64,
 
 fn commandSnapshot(allocator: std.mem.Allocator, command: abi.UiRuntimeCommand) HostCommandSnapshot {
     return switch (command.tag) {
-        .ResetDom => emptyCommandSnapshot(0, 0, 0, false),
         .CreateElement => blk: {
             const payload = command.payload.create_element;
             break :blk bytesCommandSnapshot(allocator, 1, payload.id, 0, false, payload.tag.asSlice());
@@ -1899,7 +1908,7 @@ fn commandSnapshots(host: *HostEnv, commands: abi.RocList(abi.UiRuntimeCommand))
 }
 
 fn snapshotIsStructural(snapshot: HostCommandSnapshot) bool {
-    return snapshot.kind == 0 or snapshot.kind == 1 or snapshot.kind == 2;
+    return snapshot.kind == 1 or snapshot.kind == 2;
 }
 
 fn snapshotEqual(left: HostCommandSnapshot, right: HostCommandSnapshot) bool {
@@ -1940,6 +1949,9 @@ fn sameCommandStructure(previous: []const HostCommandSnapshot, next: []const Hos
 
 fn applyFullCommandList(host: *HostEnv, commands: abi.RocList(abi.UiRuntimeCommand)) CommandCounts {
     var counts: CommandCounts = .{};
+    counts.addHostReset();
+    traceHostDomReset();
+    resetSimulatedDom(host);
     for (commands.items()) |command| {
         counts.add(command);
         traceCommand(command);
@@ -1972,7 +1984,8 @@ fn applyIncrementalCommandList(host: *HostEnv, commands: abi.RocList(abi.UiRunti
 
 fn applyRenderCommandList(host: *HostEnv, commands: abi.RocList(abi.UiRuntimeCommand)) CommandCounts {
     const next_snapshots = commandSnapshots(host, commands);
-    const full_batch = !sameCommandStructure(host.previous_command_snapshots.items, next_snapshots.items);
+    const full_batch = !host.has_previous_render_snapshot or
+        !sameCommandStructure(host.previous_command_snapshots.items, next_snapshots.items);
 
     const counts = if (full_batch)
         applyFullCommandList(host, commands)
@@ -2101,16 +2114,16 @@ fn acceptDispatchResult(host: *HostEnv, roc_host: *abi.RocHost, result_box: Disp
     acceptDispatchResultMeasured(host, roc_host, result_box, null, null);
 }
 
-fn boxHostEvent(roc_host: *abi.RocHost, event: HostEvent) HostEventBox {
-    const raw = abi.allocateBox(@sizeOf(HostEvent), @alignOf(HostEvent), true, roc_host);
-    const event_box: HostEventBox = @ptrCast(@alignCast(raw));
-    event_box.* = event;
-    return event_box;
-}
-
 fn boxRenderInput(roc_host: *abi.RocHost, input: RenderInput) RenderInputBox {
     const raw = abi.allocateBox(@sizeOf(RenderInput), @alignOf(RenderInput), true, roc_host);
     const input_box: RenderInputBox = @ptrCast(@alignCast(raw));
+    input_box.* = input;
+    return input_box;
+}
+
+fn boxRecomputeInput(roc_host: *abi.RocHost, input: RecomputeInput) RecomputeInputBox {
+    const raw = abi.allocateBox(@sizeOf(RecomputeInput), @alignOf(RecomputeInput), true, roc_host);
+    const input_box: RecomputeInputBox = @ptrCast(@alignCast(raw));
     input_box.* = input;
     return input_box;
 }
@@ -2180,71 +2193,74 @@ fn signalEventPayloadForEvent(host: *HostEnv, roc_host: *abi.RocHost, event_id: 
     };
 }
 
-fn clickHostEvent(host: *HostEnv, roc_host: *abi.RocHost, event_id: u64) HostEvent {
-    const signal_payload = signalEventPayloadForEvent(host, roc_host, event_id);
+fn nodeValueUnit() abi.NodeValue {
     return .{
-        .payload = .{
-            .click = .{
-                .cached_signals = signal_payload.cached_signals,
-                .cached_states = signal_payload.cached_states,
-                .dirty_signal_ids = signal_payload.dirty_signal_ids,
-                .event = event_id,
-            },
-        },
-        .tag = .Click,
+        .payload = .{ .nv_unit = .{} },
+        .tag = .NvUnit,
     };
 }
 
-fn inputHostEvent(host: *HostEnv, roc_host: *abi.RocHost, event_id: u64, value: []const u8) HostEvent {
-    const signal_payload = signalEventPayloadForEvent(host, roc_host, event_id);
+fn nodeValueStr(roc_host: *abi.RocHost, value: []const u8) abi.NodeValue {
     return .{
-        .payload = .{
-            .input = .{
-                .cached_signals = signal_payload.cached_signals,
-                .cached_states = signal_payload.cached_states,
-                .dirty_signal_ids = signal_payload.dirty_signal_ids,
-                .event = event_id,
-                .value = RocStr.fromSlice(value, roc_host),
-            },
-        },
-        .tag = .Input,
+        .payload = .{ .nv_str = RocStr.fromSlice(value, roc_host) },
+        .tag = .NvStr,
     };
 }
 
-fn checkHostEvent(host: *HostEnv, roc_host: *abi.RocHost, event_id: u64, checked: bool) HostEvent {
-    const signal_payload = signalEventPayloadForEvent(host, roc_host, event_id);
+fn nodeValueBool(value: bool) abi.NodeValue {
     return .{
-        .payload = .{
-            .check = .{
-                .cached_signals = signal_payload.cached_signals,
-                .cached_states = signal_payload.cached_states,
-                .checked = checked,
-                .dirty_signal_ids = signal_payload.dirty_signal_ids,
-                .event = event_id,
-            },
-        },
-        .tag = .Check,
+        .payload = .{ .nv_bool = value },
+        .tag = .NvBool,
     };
 }
 
-fn dispatchRocEvent(host: *HostEnv, roc_host: *abi.RocHost, event: HostEvent) void {
+fn activeOccurrence(event_id: u64, value: abi.NodeValue) ActiveEvent {
+    return .{
+        .payload = .{ .occurrence = .{ .id = event_id, .value = value } },
+        .tag = .Occurrence,
+    };
+}
+
+fn recomputeInputForEvent(host: *HostEnv, roc_host: *abi.RocHost, event_id: u64, value: abi.NodeValue) RecomputeInput {
+    const signal_payload = signalEventPayloadForEvent(host, roc_host, event_id);
+    return .{
+        .active_event = activeOccurrence(event_id, value),
+        .cached_signals = signal_payload.cached_signals,
+        .cached_states = signal_payload.cached_states,
+        .dirty_signal_ids = signal_payload.dirty_signal_ids,
+    };
+}
+
+fn clickRecomputeInput(host: *HostEnv, roc_host: *abi.RocHost, event_id: u64) RecomputeInput {
+    return recomputeInputForEvent(host, roc_host, event_id, nodeValueUnit());
+}
+
+fn inputRecomputeInput(host: *HostEnv, roc_host: *abi.RocHost, event_id: u64, value: []const u8) RecomputeInput {
+    return recomputeInputForEvent(host, roc_host, event_id, nodeValueStr(roc_host, value));
+}
+
+fn checkRecomputeInput(host: *HostEnv, roc_host: *abi.RocHost, event_id: u64, checked: bool) RecomputeInput {
+    return recomputeInputForEvent(host, roc_host, event_id, nodeValueBool(checked));
+}
+
+fn dispatchRocEvent(host: *HostEnv, roc_host: *abi.RocHost, input: RecomputeInput) void {
     const runtime = host.runtime_box orelse failHost("Roc runtime not initialized");
     host.runtime_box = null;
     host.recordDispatch();
-    acceptRecomputeResult(host, roc_host, abi.roc_ui_recompute(runtime, boxHostEvent(roc_host, event)));
+    acceptRecomputeResult(host, roc_host, abi.roc_ui_recompute(runtime, boxRecomputeInput(roc_host, input)));
 
     const render_runtime = host.runtime_box orelse failHost("Roc runtime not initialized after recompute");
     host.runtime_box = null;
     acceptDispatchResult(host, roc_host, abi.roc_ui_render(render_runtime, boxRenderInput(roc_host, renderInputForHost(host, roc_host))));
 }
 
-fn dispatchRocEventMeasured(host: *HostEnv, roc_host: *abi.RocHost, event: HostEvent, stats: *BenchmarkStats) void {
+fn dispatchRocEventMeasured(host: *HostEnv, roc_host: *abi.RocHost, input: RecomputeInput, stats: *BenchmarkStats) void {
     const runtime = host.runtime_box orelse failHost("Roc runtime not initialized");
     host.runtime_box = null;
-    const event_box = boxHostEvent(roc_host, event);
+    const input_box = boxRecomputeInput(roc_host, input);
     host.recordDispatch();
     const start_ns = benchmarkNowNs();
-    const result_box = abi.roc_ui_recompute(runtime, event_box);
+    const result_box = abi.roc_ui_recompute(runtime, input_box);
     stats.dispatch_roc_ns += benchmarkNowNs() - start_ns;
     acceptRecomputeResultMeasured(host, roc_host, result_box, &stats.dispatch_apply_ns);
 
@@ -2283,7 +2299,7 @@ fn runActionCommandMeasured(host: *HostEnv, roc_host: *abi.RocHost, cmd: SpecCom
             const elem = host.findElementByLocator(cmd.locator, cmd.line_num) orelse failHost("benchmark click locator did not resolve");
             if (elem.disabled) failHost("benchmark click target is disabled");
             const event_id = elem.bound_click_event orelse failHost("benchmark click target has no binding");
-            dispatchRocEventMeasured(host, roc_host, clickHostEvent(host, roc_host, event_id), stats);
+            dispatchRocEventMeasured(host, roc_host, clickRecomputeInput(host, roc_host, event_id), stats);
         },
 
         .fill => {
@@ -2291,7 +2307,7 @@ fn runActionCommandMeasured(host: *HostEnv, roc_host: *abi.RocHost, cmd: SpecCom
             const elem = host.findElementByLocator(cmd.locator, cmd.line_num) orelse failHost("benchmark fill locator did not resolve");
             if (elem.disabled) failHost("benchmark fill target is disabled");
             if (elem.bound_input_event) |event_id| {
-                dispatchRocEventMeasured(host, roc_host, inputHostEvent(host, roc_host, event_id, value), stats);
+                dispatchRocEventMeasured(host, roc_host, inputRecomputeInput(host, roc_host, event_id, value), stats);
             } else {
                 setElementValueIfChanged(host, elem, value);
             }
@@ -2302,7 +2318,7 @@ fn runActionCommandMeasured(host: *HostEnv, roc_host: *abi.RocHost, cmd: SpecCom
             const elem = host.findElementByLocator(cmd.locator, cmd.line_num) orelse failHost("benchmark check locator did not resolve");
             if (elem.disabled) failHost("benchmark check target is disabled");
             if (elem.bound_check_event) |event_id| {
-                dispatchRocEventMeasured(host, roc_host, checkHostEvent(host, roc_host, event_id, checked), stats);
+                dispatchRocEventMeasured(host, roc_host, checkRecomputeInput(host, roc_host, event_id, checked), stats);
             } else {
                 setElementCheckedIfChanged(elem, checked);
             }
@@ -2588,7 +2604,7 @@ fn platform_main(spec_file: []const u8, verbose: bool) !c_int {
                     writeLocatorFailure(cmd.line_num, "target has no click binding");
                     return 1;
                 };
-                dispatchRocEvent(&host_env, &roc_host, clickHostEvent(&host_env, &roc_host, event_id));
+                dispatchRocEvent(&host_env, &roc_host, clickRecomputeInput(&host_env, &roc_host, event_id));
             },
 
             .fill => {
@@ -2602,7 +2618,7 @@ fn platform_main(spec_file: []const u8, verbose: bool) !c_int {
                     return 1;
                 }
                 if (elem.bound_input_event) |event_id| {
-                    dispatchRocEvent(&host_env, &roc_host, inputHostEvent(&host_env, &roc_host, event_id, value));
+                    dispatchRocEvent(&host_env, &roc_host, inputRecomputeInput(&host_env, &roc_host, event_id, value));
                 } else {
                     setElementValueIfChanged(&host_env, elem, value);
                 }
@@ -2619,7 +2635,7 @@ fn platform_main(spec_file: []const u8, verbose: bool) !c_int {
                     return 1;
                 }
                 if (elem.bound_check_event) |event_id| {
-                    dispatchRocEvent(&host_env, &roc_host, checkHostEvent(&host_env, &roc_host, event_id, checked));
+                    dispatchRocEvent(&host_env, &roc_host, checkRecomputeInput(&host_env, &roc_host, event_id, checked));
                 } else {
                     setElementCheckedIfChanged(elem, checked);
                 }
