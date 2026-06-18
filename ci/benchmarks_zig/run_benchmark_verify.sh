@@ -92,6 +92,20 @@ print_probe_log() {
     fi
 }
 
+print_lldb_backtrace() {
+    local -a cmd=("$@")
+
+    if ! command -v lldb >/dev/null 2>&1; then
+        return 0
+    fi
+
+    echo "  lldb backtrace:"
+    lldb --batch \
+        -o "run" \
+        -o "thread backtrace all" \
+        -- "${cmd[@]}" 2>&1 | tail -n 200 | sed 's/^/    /' || true
+}
+
 run_probe() {
     local fx_file="$1"
     local roc_subcommand="$2"
@@ -125,6 +139,7 @@ run_probe() {
         echo "ERROR: $display_name printed a segmentation fault"
         echo "  exit code: $exit_code"
         print_probe_log "$probe_log"
+        print_lldb_backtrace "${cmd[@]}"
         return 1
     fi
 

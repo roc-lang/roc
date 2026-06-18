@@ -201,6 +201,7 @@ pub const Expr = union(enum) {
     e_if: struct {
         branches: IfBranch.Span,
         final_else: Expr.Idx,
+        warn_unused_branches: bool,
     },
     /// This is *only* for calling functions, not for tag application.
     /// The Tag variant contains any applied values inside it.
@@ -356,6 +357,23 @@ pub const Expr = union(enum) {
         method_name_region: base.Region,
         args: Expr.Span,
         constraint_fn_var: TypeVar,
+        surface_origin: SurfaceOrigin,
+    },
+    /// Compiler-created interpolation dispatch.
+    ///
+    /// Unlike an ordinary method call, this dispatch is owned by the result
+    /// type of the whole interpolation expression. Runtime arguments are the
+    /// first `Str` segment and a compiler-generated `Iter` over interpolated
+    /// values paired with following `Str` segments.
+    e_interpolation: struct {
+        first: Expr.Idx,
+        /// Flat `(interpolated, following_segment)` pairs. The span length is
+        /// always even, with `following_segment` expressions already typed as
+        /// builtin `Str` segments.
+        parts: Expr.Span,
+        method_name_region: base.Region,
+        constraint_fn_var: ?TypeVar = null,
+        step_fn_var: ?TypeVar = null,
     },
     /// Structural equality chosen explicitly by the checker.
     ///
@@ -636,6 +654,22 @@ pub const Expr = union(enum) {
         pub fn init(op: Op, lhs: Expr.Idx, rhs: Expr.Idx) Binop {
             return Binop{ .op = op, .lhs = lhs, .rhs = rhs };
         }
+    };
+
+    /// The surface syntax a dispatch call was desugared from, recorded as
+    /// explicit CIR data so re-emission can reproduce the operator form.
+    /// Operator forms carry contracts the method-call form does not (e.g.
+    /// arithmetic binops: `ret = lhs`), so re-emitting them as `.method()`
+    /// calls would weaken the program.
+    pub const SurfaceOrigin = union(enum) {
+        /// Written as a method call (`a.plus(b)`) in the source.
+        method_call,
+        /// Desugared from a binary operator expression (`a + b`).
+        binop: Binop.Op,
+        /// Desugared from unary negation (`-a`).
+        unary_minus,
+        /// Desugared from unary logical not (`!a`).
+        unary_not,
     };
 
     /// Unary minus operation for numeric negation.
@@ -1258,6 +1292,36 @@ pub const Expr = union(enum) {
                     try ir.store.getExpr(arg_idx).pushToSExprTree(ir, tree, arg_idx);
                 }
                 try tree.endNode(args_begin, args_attrs);
+
+                try tree.endNode(begin, attrs);
+            },
+            .e_interpolation => |e| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-interpolation");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                if (e.constraint_fn_var) |constraint_fn_var| {
+                    try tree.pushU64Pair("constraint-fn-var", @intFromEnum(constraint_fn_var));
+                }
+                const attrs = tree.beginNode();
+
+                {
+                    const first_begin = tree.beginNode();
+                    try tree.pushStaticAtom("first");
+                    const first_attrs = tree.beginNode();
+                    try ir.store.getExpr(e.first).pushToSExprTree(ir, tree, e.first);
+                    try tree.endNode(first_begin, first_attrs);
+                }
+
+                {
+                    const parts_begin = tree.beginNode();
+                    try tree.pushStaticAtom("parts");
+                    const parts_attrs = tree.beginNode();
+                    for (ir.store.sliceExpr(e.parts)) |part_idx| {
+                        try ir.store.getExpr(part_idx).pushToSExprTree(ir, tree, part_idx);
+                    }
+                    try tree.endNode(parts_begin, parts_attrs);
+                }
 
                 try tree.endNode(begin, attrs);
             },

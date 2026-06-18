@@ -20,12 +20,18 @@ pub const ExprId = enum(u32) { _ };
 pub const PatId = enum(u32) { _ };
 /// Identifier for a definition in Monotype IR.
 pub const DefId = enum(u32) { _ };
+/// Identifier for a nested definition in Monotype IR.
+pub const NestedDefId = enum(u32) { _ };
+/// Identifier for a function specialization in Monotype IR.
+pub const FnId = enum(u32) { _ };
 /// Identifier for a local binding in Monotype IR.
 pub const LocalId = enum(u32) { _ };
 /// Identifier assigned by Monotype lifting when this storage is consumed.
 pub const LiftedFnId = enum(u32) { _ };
 /// Identifier for an owned string literal.
 pub const StringLiteralId = enum(u32) { _ };
+/// Identifier for a compile-time-observed control-flow site.
+pub const ComptimeSiteId = enum(u32) { _ };
 
 /// Owned string bytes plus the exact slice used by this literal.
 pub const StringLiteral = struct {
@@ -80,6 +86,11 @@ pub const FnTemplate = struct {
     source_fn_ty: checked.CheckedTypeId,
     source_fn_key: names.TypeDigest,
     mono_fn_ty: Type.TypeId,
+};
+
+/// Monotype function-specialization metadata.
+pub const Fn = struct {
+    source: FnTemplate,
 };
 
 /// Compare the fields that make two function templates identical for Monotype.
@@ -181,9 +192,9 @@ pub const TagExpr = struct {
 
 /// Lambda expression before lifting.
 pub const LambdaExpr = struct {
+    fn_id: FnId,
     args: Span(TypedLocal),
     body: ExprId,
-    source: FnTemplate,
 };
 
 /// Call through a function value before lambda solving.
@@ -194,7 +205,7 @@ pub const CallValue = struct {
 
 /// Direct call target before or after Monotype lifting.
 pub const ProcCallee = union(enum) {
-    template: FnTemplate,
+    func: FnId,
     lifted: LiftedFnId,
 };
 
@@ -214,6 +225,7 @@ pub const LowLevelCall = struct {
 pub const MatchExpr = struct {
     scrutinee: ExprId,
     branches: Span(Branch),
+    comptime_site: ?ComptimeSiteId = null,
 };
 
 /// If expression with one or more conditional branches.
@@ -240,6 +252,27 @@ pub const ContinueExpr = struct {
     values: Span(ExprId),
 };
 
+/// Source control-flow construct observed during compile-time finalization.
+pub const ComptimeSiteKind = enum {
+    match,
+    destructure,
+    if_,
+};
+
+/// Metadata for one compile-time-observed control-flow site.
+pub const ComptimeSite = struct {
+    kind: ComptimeSiteKind,
+    region: base.Region,
+    branch_regions: []const base.Region = &.{},
+};
+
+/// Expression wrapper that records a branch hit before evaluating `body`.
+pub const ComptimeBranchTaken = struct {
+    site: ComptimeSiteId,
+    branch_index: u32,
+    body: ExprId,
+};
+
 /// Typed Monotype expression.
 pub const Expr = struct {
     ty: Type.TypeId,
@@ -264,10 +297,11 @@ pub const ExprData = union(enum) {
         bind: PatId,
         value: ExprId,
         rest: ExprId,
+        comptime_site: ?ComptimeSiteId = null,
     },
     lambda: LambdaExpr,
     def_ref: DefId,
-    fn_def: FnTemplate,
+    fn_def: FnId,
     fn_ref: LiftedFnId,
     call_value: CallValue,
     call_proc: CallProc,
@@ -293,6 +327,8 @@ pub const ExprData = union(enum) {
     continue_: ContinueExpr,
     return_: ExprId,
     crash: StringLiteralId,
+    comptime_branch_taken: ComptimeBranchTaken,
+    comptime_exhaustiveness_failed: ComptimeSiteId,
     dbg: ExprId,
     expect_err: ExpectErrExpr,
     expect: ExprId,
@@ -335,6 +371,26 @@ pub const PatData = union(enum) {
     frac_f32_lit: f32,
     frac_f64_lit: f64,
     str_lit: StringLiteralId,
+    str_pattern: StrPattern,
+};
+
+/// End behavior for a Monotype string interpolation pattern.
+pub const StrPatternEnd = enum {
+    exact,
+    tail,
+};
+
+/// Monotype string interpolation pattern split into prefix and capture steps.
+pub const StrPattern = struct {
+    prefix: StringLiteralId,
+    steps: Span(StrPatternStep),
+    end: StrPatternEnd,
+};
+
+/// Delimited capture step inside a Monotype string interpolation pattern.
+pub const StrPatternStep = struct {
+    capture: ?PatId,
+    delimiter: StringLiteralId,
 };
 
 /// Record destructuring field pattern.
@@ -361,10 +417,12 @@ pub const StmtId = enum(u32) { _ };
 
 /// Monotype statement forms.
 pub const Stmt = union(enum) {
+    uninitialized: PatId,
     let_: struct {
         pat: PatId,
         value: ExprId,
         recursive: bool = false,
+        comptime_site: ?ComptimeSiteId = null,
     },
     expr: ExprId,
     expect: ExprId,
@@ -377,6 +435,7 @@ pub const Stmt = union(enum) {
 pub const Def = struct {
     symbol: Common.Symbol,
     fn_def: ?FnTemplate = null,
+    fn_id: ?FnId = null,
     args: Span(TypedLocal),
     body: FnBody,
     ret: Type.TypeId,
@@ -392,6 +451,7 @@ pub const FnBody = union(enum) {
 pub const NestedDef = struct {
     symbol: Common.Symbol,
     fn_def: FnTemplate,
+    fn_id: FnId,
     args: Span(TypedLocal),
     body: ExprId,
     ret: Type.TypeId,
@@ -425,6 +485,7 @@ pub const Program = struct {
     names: names.NameStore,
     next_symbol: u32,
     types: Type.Store,
+    fns: std.ArrayList(Fn),
     defs: std.ArrayList(Def),
     nested_defs: std.ArrayList(NestedDef),
     exprs: std.ArrayList(Expr),
@@ -437,6 +498,7 @@ pub const Program = struct {
     stmt_ids: std.ArrayList(StmtId),
     field_exprs: std.ArrayList(FieldExpr),
     record_destructs: std.ArrayList(RecordDestruct),
+    str_pattern_steps: std.ArrayList(StrPatternStep),
     branches: std.ArrayList(Branch),
     if_branches: std.ArrayList(IfBranch),
     string_literals: std.ArrayList(StringLiteral),
@@ -444,6 +506,7 @@ pub const Program = struct {
     roots: std.ArrayList(Root),
     layout_requests: std.ArrayList(LayoutRequest),
     runtime_schema_requests: std.ArrayList(RuntimeSchemaRequest),
+    comptime_sites: std.ArrayList(ComptimeSite),
     /// Source file table for `SourceLoc.file` indices (module display names,
     /// owned by this program).
     source_files: std.ArrayList([]const u8),
@@ -465,6 +528,7 @@ pub const Program = struct {
             .names = names.NameStore.init(allocator),
             .next_symbol = 0,
             .types = Type.Store.init(allocator),
+            .fns = .empty,
             .defs = .empty,
             .nested_defs = .empty,
             .exprs = .empty,
@@ -477,6 +541,7 @@ pub const Program = struct {
             .stmt_ids = .empty,
             .field_exprs = .empty,
             .record_destructs = .empty,
+            .str_pattern_steps = .empty,
             .branches = .empty,
             .if_branches = .empty,
             .string_literals = .empty,
@@ -484,6 +549,7 @@ pub const Program = struct {
             .roots = .empty,
             .layout_requests = .empty,
             .runtime_schema_requests = .empty,
+            .comptime_sites = .empty,
             .source_files = .empty,
             .expr_locs = .empty,
             .stmt_locs = .empty,
@@ -501,6 +567,10 @@ pub const Program = struct {
         self.expr_locs.deinit(self.allocator);
         for (self.source_files.items) |file| self.allocator.free(file);
         self.source_files.deinit(self.allocator);
+        for (self.comptime_sites.items) |site| {
+            self.allocator.free(site.branch_regions);
+        }
+        self.comptime_sites.deinit(self.allocator);
         self.runtime_schema_requests.deinit(self.allocator);
         self.layout_requests.deinit(self.allocator);
         self.roots.deinit(self.allocator);
@@ -509,6 +579,7 @@ pub const Program = struct {
         self.string_literals.deinit(self.allocator);
         self.if_branches.deinit(self.allocator);
         self.branches.deinit(self.allocator);
+        self.str_pattern_steps.deinit(self.allocator);
         self.record_destructs.deinit(self.allocator);
         self.field_exprs.deinit(self.allocator);
         self.stmt_ids.deinit(self.allocator);
@@ -521,8 +592,21 @@ pub const Program = struct {
         self.exprs.deinit(self.allocator);
         self.nested_defs.deinit(self.allocator);
         self.defs.deinit(self.allocator);
+        self.fns.deinit(self.allocator);
         self.types.deinit();
         self.names.deinit();
+    }
+
+    pub fn addFn(self: *Program, source: FnTemplate) std.mem.Allocator.Error!FnId {
+        const id: FnId = @enumFromInt(@as(u32, @intCast(self.fns.items.len)));
+        try self.fns.append(self.allocator, .{ .source = source });
+        return id;
+    }
+
+    pub fn fnSource(self: *const Program, id: FnId) FnTemplate {
+        const raw = @intFromEnum(id);
+        if (raw >= self.fns.items.len) Common.invariant("Monotype function id referenced a missing specialization");
+        return self.fns.items[raw].source;
     }
 
     pub fn addExpr(self: *Program, expr: Expr) std.mem.Allocator.Error!ExprId {
@@ -571,6 +655,27 @@ pub const Program = struct {
         try self.stmts.append(self.allocator, stmt);
         try self.stmt_locs.append(self.allocator, self.current_loc);
         return id;
+    }
+
+    pub fn addComptimeSite(
+        self: *Program,
+        kind: ComptimeSiteKind,
+        region: base.Region,
+        branch_regions: []const base.Region,
+    ) std.mem.Allocator.Error!ComptimeSiteId {
+        const owned_branch_regions = try self.allocator.dupe(base.Region, branch_regions);
+        errdefer self.allocator.free(owned_branch_regions);
+        const id: ComptimeSiteId = @enumFromInt(@as(u32, @intCast(self.comptime_sites.items.len)));
+        try self.comptime_sites.append(self.allocator, .{
+            .kind = kind,
+            .region = region,
+            .branch_regions = owned_branch_regions,
+        });
+        return id;
+    }
+
+    pub fn comptimeSite(self: *const Program, id: ComptimeSiteId) ComptimeSite {
+        return self.comptime_sites.items[@intFromEnum(id)];
     }
 
     pub fn addStringLiteral(self: *Program, text: []const u8) std.mem.Allocator.Error!StringLiteralId {
@@ -632,6 +737,15 @@ pub const Program = struct {
         return self.local_names.items[@intFromEnum(id)];
     }
 
+    pub fn setLocalType(self: *Program, id: LocalId, ty: Type.TypeId) void {
+        self.locals.items[@intFromEnum(id)].ty = ty;
+        for (self.typed_locals.items) |*typed_local| {
+            if (typed_local.local == id) {
+                typed_local.ty = ty;
+            }
+        }
+    }
+
     pub fn addExprSpan(self: *Program, ids: []const ExprId) std.mem.Allocator.Error!Span(ExprId) {
         const start: u32 = @intCast(self.expr_ids.items.len);
         try self.expr_ids.appendSlice(self.allocator, ids);
@@ -646,7 +760,11 @@ pub const Program = struct {
 
     pub fn addTypedLocalSpan(self: *Program, values: []const TypedLocal) std.mem.Allocator.Error!Span(TypedLocal) {
         const start: u32 = @intCast(self.typed_locals.items.len);
-        try self.typed_locals.appendSlice(self.allocator, values);
+        try self.typed_locals.ensureUnusedCapacity(self.allocator, values.len);
+        for (values) |value| {
+            const local_ty = self.locals.items[@intFromEnum(value.local)].ty;
+            self.typed_locals.appendAssumeCapacity(.{ .local = value.local, .ty = local_ty });
+        }
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
@@ -659,6 +777,12 @@ pub const Program = struct {
     pub fn addRecordDestructSpan(self: *Program, values: []const RecordDestruct) std.mem.Allocator.Error!Span(RecordDestruct) {
         const start: u32 = @intCast(self.record_destructs.items.len);
         try self.record_destructs.appendSlice(self.allocator, values);
+        return .{ .start = start, .len = @intCast(values.len) };
+    }
+
+    pub fn addStrPatternStepSpan(self: *Program, values: []const StrPatternStep) std.mem.Allocator.Error!Span(StrPatternStep) {
+        const start: u32 = @intCast(self.str_pattern_steps.items.len);
+        try self.str_pattern_steps.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
@@ -702,6 +826,10 @@ pub const Program = struct {
 
     pub fn recordDestructSpan(self: *const Program, span_: Span(RecordDestruct)) []const RecordDestruct {
         return self.record_destructs.items[span_.start..][0..span_.len];
+    }
+
+    pub fn strPatternStepSpan(self: *const Program, span_: Span(StrPatternStep)) []const StrPatternStep {
+        return self.str_pattern_steps.items[span_.start..][0..span_.len];
     }
 
     pub fn branchSpan(self: *const Program, span_: Span(Branch)) []const Branch {

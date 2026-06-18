@@ -73,38 +73,21 @@ match person {
 								(p-assign (ident "userName"))))
 						(s-let
 							(p-assign (ident "#interp_1"))
-							(e-dispatch-call (method "to_str") (constraint-fn-var 39)
+							(e-dispatch-call (method "to_str") (constraint-fn-var 31)
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "userAge"))))
 								(args)))
-						(e-dispatch-call (method "from_interpolation") (constraint-fn-var 224)
-							(receiver
-								(e-string
-									(e-literal (string "User "))))
-							(args
-								(e-dispatch-call (method "prepended") (constraint-fn-var 182)
-									(receiver
-										(e-dispatch-call (method "prepended") (constraint-fn-var 124)
-											(receiver
-												(e-dispatch-call (method "iter") (constraint-fn-var 60)
-													(receiver
-														(e-empty_list))
-													(args)))
-											(args
-												(e-tuple
-													(elems
-														(e-lookup-local
-															(p-assign (ident "#interp_1")))
-														(e-string
-															(e-literal (string " years old"))))))))
-									(args
-										(e-tuple
-											(elems
-												(e-lookup-local
-													(p-assign (ident "#interp_0")))
-												(e-string
-													(e-literal (string " is ")))))))))))))))
+						(e-interpolation (constraint-fn-var 90)
+							(first
+								(e-literal (string "User ")))
+							(parts
+								(e-lookup-local
+									(p-assign (ident "#interp_0")))
+								(e-literal (string " is "))
+								(e-lookup-local
+									(p-assign (ident "#interp_1")))
+								(e-literal (string " years old"))))))))))
 ~~~
 # TYPES
 ~~~clojure

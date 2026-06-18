@@ -29,8 +29,8 @@ The value's type, which does not have a method named **to_str**, is:
     { pair1: { first: a, second: b }, pair2: { first: c, second: d }, pair3: { first: [True, ..], second: [False, ..] } }
       where [
         a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-        b.from_quote : List(U8) -> Try(b, [BadQuotedBytes(Str)]),
-        c.from_quote : List(U8) -> Try(c, [BadQuotedBytes(Str)]),
+        b.from_quote : Str -> Try(b, [BadQuotedBytes(Str)]),
+        c.from_quote : Str -> Try(c, [BadQuotedBytes(Str)]),
         d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]),
       ]
 
@@ -117,7 +117,7 @@ EndOfFile,
 							(p-assign (ident "y"))))))))
 	(s-let
 		(p-assign (ident "pair1"))
-		(e-call (constraint-fn-var 96)
+		(e-call (constraint-fn-var 93)
 			(e-lookup-local
 				(p-assign (ident "make_pair")))
 			(e-num (value "1"))
@@ -125,7 +125,7 @@ EndOfFile,
 				(e-literal (string "a")))))
 	(s-let
 		(p-assign (ident "pair2"))
-		(e-call (constraint-fn-var 147)
+		(e-call (constraint-fn-var 141)
 			(e-lookup-local
 				(p-assign (ident "make_pair")))
 			(e-string
@@ -133,12 +133,12 @@ EndOfFile,
 			(e-num (value "42"))))
 	(s-let
 		(p-assign (ident "pair3"))
-		(e-call (constraint-fn-var 154)
+		(e-call (constraint-fn-var 148)
 			(e-lookup-local
 				(p-assign (ident "make_pair")))
 			(e-tag (name "True"))
 			(e-tag (name "False"))))
-	(e-dispatch-call (method "to_str") (constraint-fn-var 156)
+	(e-dispatch-call (method "to_str") (constraint-fn-var 150)
 		(receiver
 			(e-record
 				(fields

@@ -444,8 +444,11 @@ pub const StaticDispatchDispatcher = union(enum) {
 /// Public `StaticDispatchOperand` declaration.
 pub const StaticDispatchOperand = union(enum) {
     checked_expr: CheckedExprId,
+    /// Compiler-generated finite `Iter` for string interpolation. The checked
+    /// expression owns the first segment and flat interpolation parts.
+    generated_interpolation_iter: CheckedExprId,
     generated_numeral: ModuleEnv.NumeralLiteral,
-    /// A string literal's post-escape bytes, passed to `from_quote` as List(U8).
+    /// A string literal's post-escape contents, passed to `from_quote` as Str.
     generated_quote: CheckedStringLiteralId,
 };
 
@@ -538,6 +541,7 @@ pub const StaticDispatchPlanTable = struct {
             const tag = module.nodeTag(@enumFromInt(node_idx));
             switch (tag) {
                 .expr_dispatch_call,
+                .expr_interpolation,
                 .expr_type_dispatch_call,
                 .expr_method_eq,
                 => {},
@@ -545,12 +549,9 @@ pub const StaticDispatchPlanTable = struct {
             }
 
             const expr_idx: CIR.Expr.Idx = @enumFromInt(node_idx);
-            // Str-typed interpolation calls publish as plain segment lists,
-            // so they have no dispatch plan and their iterator-chain
-            // arguments never enter the checked body store.
-            if (module.moduleEnvConst().isStrInterpolationCall(expr_idx)) continue;
             const checked_expr = checked_bodies.exprIdForSource(expr_idx) orelse continue;
             const expr = module.expr(expr_idx);
+            const checked_expr_data = checked_bodies.exprs[@intFromEnum(checked_expr)].data;
             const idents = module.identStoreConst();
             const plan_id: StaticDispatchPlanId = @enumFromInt(@as(u32, @intCast(plans.items.len)));
             switch (expr.data) {
@@ -570,6 +571,28 @@ pub const StaticDispatchPlanTable = struct {
                         .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, dispatch_call.constraint_fn_var),
                         .args = args,
                         .result_mode = try staticDispatchResultModeForCheckedValueCall(allocator, module, checked_types, &constraint_index, dispatch_call.method_name, dispatch_call.constraint_fn_var),
+                    });
+                },
+                .e_interpolation => |interpolation| {
+                    const checked_interpolation = switch (checked_expr_data) {
+                        .interpolation => |checked_interpolation| checked_interpolation,
+                        else => continue,
+                    };
+                    const args = try allocator.alloc(StaticDispatchOperand, 2);
+                    errdefer allocator.free(args);
+                    args[0] = .{ .checked_expr = checked_interpolation.first };
+                    args[1] = .{ .generated_interpolation_iter = checked_expr };
+                    const from_interpolation = try names.internMethodName("from_interpolation");
+                    const constraint_fn_var = interpolation.constraint_fn_var orelse unreachable;
+
+                    try plans.append(allocator, .{
+                        .expr = checked_expr,
+                        .method = from_interpolation,
+                        .dispatcher = .type_only,
+                        .dispatcher_ty = try interpolationDispatcherTypeId(allocator, module, checked_types, expr_idx),
+                        .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, constraint_fn_var),
+                        .args = args,
+                        .result_mode = .value,
                     });
                 },
                 .e_type_dispatch_call => |dispatch_call| {
@@ -826,12 +849,15 @@ const StaticDispatchConstraintIndex = struct {
             const expr_idx: CIR.Expr.Idx = @enumFromInt(node_idx);
             const constraint_fn_var: ?Var = switch (module.nodeTag(@enumFromInt(node_idx))) {
                 .expr_dispatch_call => module.expr(expr_idx).data.e_dispatch_call.constraint_fn_var,
+                .expr_interpolation => module.expr(expr_idx).data.e_interpolation.constraint_fn_var,
                 .expr_type_dispatch_call => module.expr(expr_idx).data.e_type_dispatch_call.constraint_fn_var,
                 .expr_method_eq => module.expr(expr_idx).data.e_method_eq.constraint_fn_var,
                 else => null,
             };
             if (constraint_fn_var) |fn_var| {
-                if (checked_bodies.exprIdForSource(expr_idx) == null) continue;
+                const checked_expr = checked_bodies.exprIdForSource(expr_idx) orelse continue;
+                if (module.nodeTag(@enumFromInt(node_idx)) == .expr_interpolation and
+                    std.meta.activeTag(checked_bodies.exprs[@intFromEnum(checked_expr)].data) != .interpolation) continue;
                 try live_fn_vars.put(allocator, fn_var, {});
             }
         }
@@ -856,11 +882,11 @@ const StaticDispatchConstraintIndex = struct {
                             entry.value_ptr.*,
                             module.identStoreConst().getText(existing.fn_name),
                             @tagName(existing.origin),
-                            existing.binop_negated,
+                            existing.origin.binopNegated(),
                             i,
                             module.identStoreConst().getText(constraint.fn_name),
                             @tagName(constraint.origin),
-                            constraint.binop_negated,
+                            constraint.origin.binopNegated(),
                         },
                     );
                 }
@@ -884,11 +910,11 @@ const StaticDispatchConstraintIndex = struct {
 };
 
 fn staticDispatchConstraintsEquivalent(a: types.StaticDispatchConstraint, b: types.StaticDispatchConstraint) bool {
+    // origin now carries the binop-negation and literal payloads, so structural
+    // equality of origin subsumes the former separate field comparisons.
     return a.fn_name == b.fn_name and
         a.fn_var == b.fn_var and
-        a.origin == b.origin and
-        a.binop_negated == b.binop_negated and
-        std.meta.eql(a.num_literal, b.num_literal);
+        std.meta.eql(a.origin, b.origin);
 }
 
 fn staticDispatchResultModeForCheckedValueCall(
@@ -906,7 +932,7 @@ fn staticDispatchResultModeForCheckedValueCall(
         if (constraint.origin == .desugared_binop) {
             return .{ .equality = .{
                 .structural_allowed = true,
-                .negated = constraint.binop_negated,
+                .negated = constraint.origin.binopNegated(),
             } };
         }
     }
@@ -962,6 +988,23 @@ fn checkedTypeIdForVar(
             std.debug.panic("checked static dispatch invariant violated: dispatch type root was not published", .{});
         }
         unreachable;
+    };
+}
+
+fn interpolationDispatcherTypeId(
+    allocator: Allocator,
+    module: TypedCIR.Module,
+    checked_types: anytype,
+    expr_idx: CIR.Expr.Idx,
+) Allocator.Error!CheckedTypeId {
+    const suffix_type = module.moduleEnvConst().numericSuffixTypeForNode(ModuleEnv.nodeIdxFrom(expr_idx)) orelse
+        return checkedTypeIdForVar(allocator, module, checked_types, module.exprType(expr_idx));
+
+    return switch (suffix_type.target()) {
+        .local => |stmt_idx| checkedTypeIdForVar(allocator, module, checked_types, ModuleEnv.varFrom(stmt_idx)),
+        .builtin, .external => if (@import("builtin").mode == .Debug) {
+            std.debug.panic("checked static dispatch invariant violated: interpolation suffix target was not published as a local type", .{});
+        } else unreachable,
     };
 }
 

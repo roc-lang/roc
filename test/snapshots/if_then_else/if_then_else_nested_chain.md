@@ -113,7 +113,7 @@ NO CHANGE
 								(e-string
 									(e-literal (string "zero")))))
 						(if-branch
-							(e-dispatch-call (method "is_gt") (constraint-fn-var 177)
+							(e-dispatch-call (method "is_gt") (constraint-fn-var 171)
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "num"))))
@@ -131,7 +131,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a -> Str where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.is_eq : a, a -> Bool, a.is_gt : a, a -> Bool, a.is_lt : a, a -> Bool]")))
+		(patt (type "a -> b where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.is_eq : a, a -> Bool, a.is_gt : a, a -> Bool, a.is_lt : a, a -> Bool, b.from_quote : Str -> Try(b, [BadQuotedBytes(Str)])]")))
 	(expressions
-		(expr (type "a -> Str where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.is_eq : a, a -> Bool, a.is_gt : a, a -> Bool, a.is_lt : a, a -> Bool]"))))
+		(expr (type "a -> b where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.is_eq : a, a -> Bool, a.is_gt : a, a -> Bool, a.is_lt : a, a -> Bool, b.from_quote : Str -> Try(b, [BadQuotedBytes(Str)])]"))))
 ~~~

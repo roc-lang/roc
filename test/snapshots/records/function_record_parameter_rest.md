@@ -59,35 +59,18 @@ NO CHANGE
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "rest"))))))
-		(e-dispatch-call (method "from_interpolation") (constraint-fn-var 221)
-			(receiver
-				(e-string
-					(e-literal (string "Hello "))))
-			(args
-				(e-dispatch-call (method "prepended") (constraint-fn-var 179)
-					(receiver
-						(e-dispatch-call (method "prepended") (constraint-fn-var 121)
-							(receiver
-								(e-dispatch-call (method "iter") (constraint-fn-var 57)
-									(receiver
-										(e-empty_list))
-									(args)))
-							(args
-								(e-tuple
-									(elems
-										(e-lookup-local
-											(p-assign (ident "#interp_1")))
-										(e-string
-											(e-literal (string ""))))))))
-					(args
-						(e-tuple
-							(elems
-								(e-lookup-local
-									(p-assign (ident "#interp_0")))
-								(e-string
-									(e-literal (string " ")))))))))))
+		(e-interpolation (constraint-fn-var 86)
+			(first
+				(e-literal (string "Hello ")))
+			(parts
+				(e-lookup-local
+					(p-assign (ident "#interp_0")))
+				(e-literal (string " "))
+				(e-lookup-local
+					(p-assign (ident "#interp_1")))
+				(e-literal (string ""))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "{ first_name: Str, last_name: Str, .. } -> Str"))
+(expr (type "{ first_name: _field, last_name: _field2, .. } -> a where [a.from_interpolation : Str, Iter((_field, Str)) -> a]"))
 ~~~

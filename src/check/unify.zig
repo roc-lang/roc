@@ -242,27 +242,17 @@ const Unifier = struct {
     /// Link the variables & updated the content in the type_store
     /// In the old compiler, this function was called "merge"
     fn merge(self: *Self, vars: *const ResolvedVarDescs, new_content: Content) std.mem.Allocator.Error!void {
-        const is_flex = switch (new_content) {
-            .flex => true,
-            else => false,
-        };
         try self.types_store.union_(vars.a.var_, vars.b.var_, .{
             .content = new_content,
             .rank = Rank.min(vars.a.desc.rank, vars.b.desc.rank),
-            .from_numeral_origin = is_flex and (vars.a.desc.from_numeral_origin or vars.b.desc.from_numeral_origin),
         });
     }
 
     /// Create a new type variable *in this pool*
     fn fresh(self: *Self, vars: *const ResolvedVarDescs, new_content: Content) std.mem.Allocator.Error!Var {
-        const is_flex = switch (new_content) {
-            .flex => true,
-            else => false,
-        };
         const var_ = try self.types_store.register(.{
             .content = new_content,
             .rank = Rank.min(vars.a.desc.rank, vars.b.desc.rank),
-            .from_numeral_origin = is_flex and (vars.a.desc.from_numeral_origin or vars.b.desc.from_numeral_origin),
         });
         _ = try self.scratch.fresh_vars.append(self.scratch.gpa, var_);
         return var_;
@@ -273,6 +263,10 @@ const Unifier = struct {
     /// the "actual" type from the user's code, while a represents the "expected" type
     /// (e.g., from a function signature). When constraints aren't satisfied, we want
     /// to highlight where the user's code is, not the constraint's origin.
+    /// NOTE: if flex-side dispatch constraints ever start FIRING mid-unify
+    /// instead of deferring here, revisit `structurallyIncompatiblePair` (bottom
+    /// of this module) — the defaulting pre-filter's soundness fence relies on
+    /// this deferral.
     fn recordDeferredConstraint(
         self: *Self,
         vars: *const ResolvedVarDescs,
@@ -399,17 +393,6 @@ const Unifier = struct {
 
     // Unify flex //
 
-    /// Check if a flex var has a literal-origin (from_numeral or from_quote)
-    /// constraint, which is what `from_numeral_flex_count` tracks.
-    fn flexHasFromNumeral(self: *const Self, flex: Flex) bool {
-        if (flex.constraints.len() == 0) return false;
-        const constraints = self.types_store.sliceStaticDispatchConstraints(flex.constraints);
-        for (constraints) |c| {
-            if (c.origin == .from_numeral or c.origin == .from_quote) return true;
-        }
-        return false;
-    }
-
     /// Unify when `a` was a flex
     fn unifyFlex(self: *Self, vars: *const ResolvedVarDescs, a_flex: Flex, b_content: Content) Error!void {
         const trace = tracy.trace(@src());
@@ -417,11 +400,6 @@ const Unifier = struct {
 
         switch (b_content) {
             .flex => |b_flex| {
-                // If both have from_numeral, two vars merge into one — decrement
-                if (self.flexHasFromNumeral(a_flex) and self.flexHasFromNumeral(b_flex)) {
-                    self.types_store.from_numeral_flex_count -|= 1;
-                }
-
                 const mb_ident = blk: {
                     if (a_flex.name) |a_ident| {
                         break :blk a_ident;
@@ -437,9 +415,6 @@ const Unifier = struct {
                 } });
             },
             .rigid => |b_rigid| {
-                if (self.flexHasFromNumeral(a_flex)) {
-                    self.types_store.from_numeral_flex_count -|= 1;
-                }
                 try self.recordDeferredConstraint(vars, a_flex.constraints);
                 try self.merge(vars, .{ .rigid = b_rigid });
             },
@@ -453,9 +428,6 @@ const Unifier = struct {
                 }
             },
             .structure => {
-                if (self.flexHasFromNumeral(a_flex)) {
-                    self.types_store.from_numeral_flex_count -|= 1;
-                }
                 try self.recordDeferredConstraint(vars, a_flex.constraints);
                 try self.merge(vars, b_content);
             },
@@ -472,9 +444,6 @@ const Unifier = struct {
 
         switch (b_content) {
             .flex => |b_flex| {
-                if (self.flexHasFromNumeral(b_flex)) {
-                    self.types_store.from_numeral_flex_count -|= 1;
-                }
                 try self.recordDeferredConstraintOn(vars.a.var_, b_flex.constraints);
                 try self.merge(vars, .{ .rigid = a_rigid });
             },
@@ -640,6 +609,10 @@ const Unifier = struct {
                 }
             },
             .nominal_type => |a_type| {
+                // NOTE: this arm short-circuits err-backed nominals to a
+                // SUCCESSFUL `.err` merge; if that changes, revisit
+                // `structurallyIncompatiblePair` (bottom of this module) — the
+                // defaulting pre-filter's soundness fence encodes it.
                 const a_backing_var = self.types_store.getNominalBackingVar(a_type);
                 const a_backing_resolved = self.types_store.resolveVar(a_backing_var);
                 if (a_backing_resolved.desc.content == .err) {
@@ -1005,7 +978,11 @@ const Unifier = struct {
         const trace = tracy.trace(@src());
         defer trace.end();
 
-        // Check if either nominal type has an invalid backing variable
+        // Check if either nominal type has an invalid backing variable.
+        // NOTE: if you change this err short-circuit (a SUCCESSFUL merge to
+        // `.err`, not a mismatch), revisit `structurallyIncompatiblePair`
+        // (bottom of this module) — the defaulting pre-filter's soundness fence
+        // encodes it.
         const a_backing_var = self.types_store.getNominalBackingVar(a_type);
         const a_backing_resolved = self.types_store.resolveVar(a_backing_var);
         const b_backing_var = self.types_store.getNominalBackingVar(b_type);
@@ -1016,6 +993,10 @@ const Unifier = struct {
             return;
         }
 
+        // NOTE: if distinct nominal identities ever start unifying (e.g.
+        // implicit numeric coercion), revisit `structurallyIncompatiblePair`
+        // (bottom of this module) — its refutation theorem is exactly this
+        // check.
         if (!sameNominalIdentity(a_type, b_type)) {
             return error.TypeMismatch;
         }
@@ -1039,6 +1020,10 @@ const Unifier = struct {
         // unification time over-constrains row-polymorphic nominals like Try.
         // Lowering substitutes formal nominal params into backing types
         // explicitly when it strips nominal wrappers.
+        // NOTE: if nominal-vs-nominal unification ever starts WRITING to
+        // backing vars, revisit `structurallyIncompatiblePair` (bottom of this
+        // module) — its soundness fence relies on backings only being READ (for
+        // the err short-circuit above) during a probe.
         try self.merge(vars, vars.b.desc.content);
     }
 
@@ -2244,8 +2229,13 @@ const Unifier = struct {
 
         for (self.scratch.in_both_static_dispatch_constraints.sliceRange(partitioned.in_both)) |two_constraints| {
             var constraint = two_constraints.b;
-            if (two_constraints.a.origin == .from_numeral and two_constraints.b.origin == .from_numeral) {
-                constraint.num_literal = mergeFromNumeralLiteralInfo(two_constraints.a.num_literal, two_constraints.b.num_literal);
+            if (two_constraints.a.origin == .from_literal and two_constraints.b.origin == .from_literal) {
+                if (mergeFromNumeralLiteralInfo(
+                    two_constraints.a.origin.numeralInfo(),
+                    two_constraints.b.origin.numeralInfo(),
+                )) |merged| {
+                    constraint.origin = .{ .from_literal = .{ .numeral = merged } };
+                }
             }
             self.types_store.static_dispatch_constraints.items.appendAssumeCapacity(constraint);
         }
@@ -2813,5 +2803,137 @@ fn inPlaceMergeTags(items: []Tag, left_len: usize, ident_store: *const Ident.Sto
             j -= 1;
         }
         items[j] = key;
+    }
+}
+
+// Structural pre-filter pair classification (numeral defaulting) //
+//
+// This lives in THIS module because it is a theorem about this module's
+// behavior: any change to the err short-circuits, the `sameNominalIdentity`
+// requirement, the no-backing-unification rule, or flex-side constraint
+// deferral must land in the same review diff as this classifier. Each such
+// unify internal carries a pointer comment back here. Called from
+// `numeralCandidateStructurallyRefuted` in Check.zig.
+
+/// Classification of one (method position, constraint position) pair by
+/// `structurallyIncompatiblePair`.
+pub const StructuralPairInspection = enum {
+    /// This pair proves the probe's method unify must fail.
+    refuting,
+    /// This pair cannot soften another pair's refutation (it either fails —
+    /// which also fails the probe — or merges without spreading `.err`), but
+    /// proves nothing by itself.
+    safe,
+    /// Outside the closed world the soundness argument covers; the whole
+    /// candidate must fall through to the full probe.
+    uninspectable,
+};
+
+/// Classify one (method signature position, dispatch-constraint position)
+/// pair for the numeral-defaulting structural pre-filter. Pure and read-only:
+/// resolves vars in `method_types` and `constraint_types` respectively,
+/// mutating neither; no Check or Unifier state is consulted.
+///
+/// CONTRACT: returns `.refuting` only when `unify` on this pair MUST fail,
+/// given the fence conditions hold across the whole constraint range — see
+/// `numeralCandidateStructurallyRefuted` in Check.zig for the range-wide
+/// fence (it classifies every argument/return position of EVERY constraint in
+/// the range, requires matching arities, and abandons refutation for the
+/// whole candidate on any `.uninspectable`).
+///
+/// The refutation core is ONE theorem about this module: distinct zero-arg
+/// builtin nominal identities never unify (`unifyNominalType` requires
+/// `sameNominalIdentity`, and there is no implicit numeric coercion). A
+/// `.refuting` pair is a dispatcher position — the method side is the
+/// candidate's own concrete builtin nominal — whose constraint side is a
+/// CONCRETE builtin numeric nominal with a different source decl, so that
+/// position's unify must throw and the probe cannot succeed.
+///
+/// SOUNDNESS FENCE: the theorem is decisive only if no successful earlier
+/// unify in the probe can soften the mismatching pair by merging `.err` into
+/// either side (this module short-circuits err-backed nominals to a
+/// SUCCESSFUL err merge — see `unifyNominalType` and the `.nominal_type` arms
+/// of `unifyFlatType`). The method side is freshly instantiated per
+/// constraint, so its only err sources are its own positions; the constraint
+/// side shares vars across the range. Both are closed off by requiring, for
+/// every pair across the range, that
+///   - every method position is exactly a builtin numeric nominal: builtin
+///     origin, ZERO type args (so a same-identity merge unifies no argument
+///     pairs), and a backing whose root content is not `.err` (this closed
+///     world runs no lift path, and `unifyNominalType` never unifies
+///     backings, so backings are only ever READ for the err short-circuit —
+///     their root content cannot change mid-probe);
+///   - every constraint position resolves to a flex var, a rigid var, or a
+///     nominal whose backing root is not `.err` (terminal-or-failing shapes
+///     whose pairwise unifies either fail outright — which also fails the
+///     probe, consistent with refutation — or merge without creating or
+///     spreading err; flex-side dispatch constraints are deferred by
+///     `recordDeferredConstraint`, never fired mid-unify);
+///   - arities match (so every pair above is actually the pair `unifyFunc`
+///     visits) — enforced by the range-wide caller.
+/// Any deviation — aliases, records, tag unions, tuples, err content,
+/// polymorphic method positions, non-fn shapes — returns `.uninspectable`,
+/// making the whole candidate fall through to the probe rather than weakening
+/// soundness.
+pub fn structurallyIncompatiblePair(
+    method_types: *const types_mod.Store,
+    constraint_types: *const types_mod.Store,
+    candidate_source_decl: u32,
+    method_pos_var: Var,
+    constraint_pos_var: Var,
+) StructuralPairInspection {
+    // Method side: exactly a builtin numeric nominal (builtin origin, no type
+    // args, backing root not `.err`). The dispatcher-position check below is
+    // made per position, not assumed — but the pre-filter's EFFECTIVENESS
+    // comes from builtin numeric methods being homogeneous (`T, T -> T`, e.g.
+    // `Dec.plus : Dec, Dec -> Dec`): every position of such a method IS the
+    // dispatcher type, so a concrete mismatch at any position refutes the
+    // candidate.
+    const method_content = method_types.resolveVar(method_pos_var).desc.content;
+    const method_nominal = method_content.unwrapNominalType() orelse return .uninspectable;
+    if (!method_nominal.originIsBuiltin()) return .uninspectable;
+    const method_decl = method_nominal.sourceDeclOptional() orelse return .uninspectable;
+    if (method_types.sliceNominalArgs(method_nominal).len != 0) return .uninspectable;
+    const method_backing = method_types.resolveVar(method_types.getNominalBackingVar(method_nominal)).desc.content;
+    if (method_backing == .err) return .uninspectable;
+
+    // Whether this method position IS the dispatcher type C: source-decl
+    // equality alone, no origin-module comparison. Both sides are
+    // builtin-origin nominals (the method via the `originIsBuiltin` gate
+    // above, the candidate by construction in
+    // `numeralCandidateStructurallyRefuted`), there is exactly one builtin
+    // module, and every builtin-origin source decl is a statement index into
+    // that single module's store — so equal decls name the same declaration.
+    // `copyVar` and instantiation preserve the packed source bits verbatim,
+    // making this exactly the `source_decl.eql` the post-copy
+    // `sameNominalIdentity` evaluates for present decls. Soundness never
+    // rested on origin modules anyway: `.refuting` below also requires
+    // `constraint_decl != candidate_source_decl`, hence method_decl !=
+    // constraint_decl (both present, both builtin), which already forces
+    // `sameNominalIdentity` — and therefore `unifyNominalType` — to fail
+    // regardless of the origin idents.
+    const is_dispatcher_pos = method_decl == candidate_source_decl;
+
+    const constraint_content = constraint_types.resolveVar(constraint_pos_var).desc.content;
+    switch (constraint_content) {
+        // Flex merges with the concrete method position (its dispatch
+        // constraints are deferred, not fired mid-probe); rigid vs concrete
+        // fails the probe outright. Neither can spread `.err`.
+        .flex, .rigid => return .safe,
+        .structure => |flat| switch (flat) {
+            .nominal_type => |constraint_nominal| {
+                // An err-backed nominal unifies SUCCESSFULLY into `.err` and
+                // can contaminate shared vars — outside the closed world.
+                const constraint_backing = constraint_types.resolveVar(constraint_types.getNominalBackingVar(constraint_nominal)).desc.content;
+                if (constraint_backing == .err) return .uninspectable;
+                if (!is_dispatcher_pos) return .safe;
+                if (!constraint_nominal.originIsBuiltin()) return .safe;
+                const constraint_decl = constraint_nominal.sourceDeclOptional() orelse return .safe;
+                if (constraint_decl != candidate_source_decl) return .refuting;
+                return .safe;
+            },
+            else => return .uninspectable,
+        },
+        else => return .uninspectable,
     }
 }

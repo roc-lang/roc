@@ -421,6 +421,26 @@ pub fn parseAndCanonicalizeProgram(
     return parseAndCanonicalizeProgramWrapped(allocator, source_kind, source, imports, false);
 }
 
+/// Same as `parseAndCanonicalizeProgram` but reuses a Builtin artifact the
+/// caller has already published.
+pub fn parseAndCanonicalizeProgramWithBuiltin(
+    allocator: Allocator,
+    source_kind: SourceKind,
+    source: []const u8,
+    imports: []const ModuleSource,
+    pre_published_builtin: PrePublishedBuiltin,
+) anyerror!ParsedResources {
+    return parseAndCanonicalizeProgramWithRootMode(
+        allocator,
+        source_kind,
+        source,
+        imports,
+        false,
+        .{ .eval_root = false },
+        pre_published_builtin,
+    );
+}
+
 /// Same as `parseAndCanonicalizeProgramPublishedRoots` but reuses a Builtin
 /// artifact the caller has already published.
 pub fn parseAndCanonicalizeProgramPublishedRootsWithBuiltin(
@@ -840,8 +860,12 @@ pub fn publishProgramForComptimeProblems(
         error.CompileTimeProblem => return .comptime_problems,
         else => return err,
     };
-    cleanupParseAndCanonical(allocator, resources);
-    return .no_problems;
+    defer cleanupParseAndCanonical(allocator, resources);
+
+    return if (resources.checker.problems.problems.items.len == 0)
+        .no_problems
+    else
+        .comptime_problems;
 }
 
 const PublishedRootMode = union(enum) {
@@ -856,7 +880,7 @@ const ComptimeProblemReporting = enum {
 
 fn problemBlocksCheckedArtifact(problem: check.problem.Problem) bool {
     return switch (problem) {
-        .redundant_pattern, .unmatchable_pattern => false,
+        .redundant_pattern, .unmatchable_pattern, .comptime_unused_branch, .literal_defaulted => false,
         else => true,
     };
 }

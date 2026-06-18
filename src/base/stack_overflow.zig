@@ -69,7 +69,7 @@ fn handleArithmeticError() noreturn {
 }
 
 /// Callback for access violation in the compiler
-fn handleAccessViolation(fault_addr: usize) noreturn {
+fn handleAccessViolation(fault_addr: usize, context: signal_handler.AccessViolationContext) noreturn {
     if (comptime builtin.os.tag == .windows) {
         const DWORD = u32;
         const HANDLE = ?*anyopaque;
@@ -101,7 +101,23 @@ fn handleAccessViolation(fault_addr: usize) noreturn {
         var addr_buf: [18]u8 = undefined;
         const addr_str = signal_handler.formatHex(fault_addr, &addr_buf);
         _ = std.c.write(posix.STDERR_FILENO, addr_str.ptr, addr_str.len);
-        const report_msg = "\n\nPlease report this issue at: https://github.com/roc-lang/roc/issues\n\n";
+        const stack_msg = "\n\nStack trace:\n";
+        _ = std.c.write(posix.STDERR_FILENO, stack_msg.ptr, stack_msg.len);
+        if (comptime signal_handler.AccessViolationContext != void) {
+            if (context) |cpu_context| {
+                std.debug.dumpCurrentStackTrace(.{
+                    .context = cpu_context,
+                    .allow_unsafe_unwind = true,
+                });
+            } else {
+                const unavailable_msg = "(signal context unavailable)\n";
+                _ = std.c.write(posix.STDERR_FILENO, unavailable_msg.ptr, unavailable_msg.len);
+            }
+        } else {
+            const unavailable_msg = "(stack trace unavailable on this target)\n";
+            _ = std.c.write(posix.STDERR_FILENO, unavailable_msg.ptr, unavailable_msg.len);
+        }
+        const report_msg = "\nPlease report this issue at: https://github.com/roc-lang/roc/issues\n\n";
         _ = std.c.write(posix.STDERR_FILENO, report_msg.ptr, report_msg.len);
         std.process.exit(139);
     }

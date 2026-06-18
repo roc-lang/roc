@@ -36,6 +36,10 @@ test {
     try std.testing.expectEqual(24, @sizeOf(FlatType));
     try std.testing.expectEqual(12, @sizeOf(Record));
     try std.testing.expectEqual(20, @sizeOf(NominalType)); // Increased from 16 due to source identity and opacity bits
+    // Folding `binop_negated` and `num_literal` into the `origin` union is a
+    // semantic regrouping (kind-specific payloads now live inside their variant),
+    // not a size win: the `from_literal` variant still embeds a full ~32-byte
+    // `NumeralInfo`, so the `Origin` union dominates the struct at 48 bytes total.
     try std.testing.expectEqual(48, @sizeOf(StaticDispatchConstraint));
     try std.testing.expectEqual(16, @sizeOf(Func));
 }
@@ -115,7 +119,6 @@ pub const TypeScope = struct {
 pub const Descriptor = struct {
     content: Content,
     rank: Rank,
-    from_numeral_origin: bool = false,
 };
 
 /// In general, the rank tracks the number of let-bindings a variable is "under".
@@ -916,22 +919,71 @@ pub const StaticDispatchConstraint = struct {
     fn_name: Ident.Idx,
     /// the dispatch fn var, a function
     fn_var: Var,
-    /// the origin of this constraint (operator, method call, or where clause)
+    /// the origin of this constraint (operator, method call, where clause, or
+    /// literal). Kind-specific payloads (binop negation, literal info) live
+    /// *inside* the variant, so they can't exist without or apart from it.
     origin: Origin,
-    /// For `desugared_binop` equality constraints, whether the original source
-    /// operator was `!=` rather than `==`.
-    binop_negated: bool = false,
-    /// Optional numeric literal info for from_numeral constraints
-    num_literal: ?NumeralInfo = null,
+
+    /// The kinds of literal that desugar to an open `from_literal` constraint.
+    /// Adding a variant makes every kind-keyed `switch` fail to compile until
+    /// handled — the exhaustiveness *is* the checklist.
+    pub const LiteralKind = enum(u4) {
+        numeral, // numeric literal, dispatches `from_numeral`
+        quote, // string literal, dispatches `from_quote`
+        interpolation, // interpolated string literal, dispatches `from_interpolation`
+    };
+
+    /// The per-kind payload carried by a `from_literal` origin. The payload can't
+    /// exist without its kind, nor a literal-origin without its payload.
+    pub const LiteralInfo = union(LiteralKind) {
+        numeral: NumeralInfo,
+        /// No payload here; a string literal's bytes live in the dispatch plan,
+        /// not the type store.
+        quote,
+        /// Interpolated string literals carry no payload here either; like
+        /// quotes they default to Str.
+        interpolation,
+    };
 
     /// Tracks where a static dispatch constraint originated from
-    pub const Origin = enum(u4) {
-        desugared_binop, // From binary operator desugaring (e.g., +, -, *, etc.)
+    pub const Origin = union(enum) {
+        /// From binary operator desugaring (e.g., +, -, *). `negated` is true when
+        /// the source operator was `!=` rather than `==`.
+        desugared_binop: struct { negated: bool },
         desugared_unaryop, // From uniary operator desugaring (e.g., !)
         method_call, // From .method() syntax
         where_clause, // From where clause in type annotation
-        from_numeral, // From numeric literal conversion
-        from_quote, // From string literal conversion
+        from_literal: LiteralInfo, // From a literal conversion (e.g. from_numeral, from_quote, from_interpolation)
+
+        /// The numeral payload, if this origin is a `from_literal` of kind
+        /// `numeral`; null otherwise.
+        pub fn numeralInfo(self: Origin) ?NumeralInfo {
+            return switch (self) {
+                .from_literal => |lit| switch (lit) {
+                    .numeral => |info| info,
+                    .quote => null,
+                    .interpolation => null,
+                },
+                else => null,
+            };
+        }
+
+        /// The literal kind, if this origin is a `from_literal`; null otherwise.
+        pub fn literalKind(self: Origin) ?LiteralKind {
+            return switch (self) {
+                .from_literal => |lit| lit,
+                else => null,
+            };
+        }
+
+        /// Whether this is a `desugared_binop` whose source operator was `!=`
+        /// rather than `==`; false otherwise.
+        pub fn binopNegated(self: Origin) bool {
+            return switch (self) {
+                .desugared_binop => |binop| binop.negated,
+                else => false,
+            };
+        }
     };
 
     /// A safe list of static dispatch constraints

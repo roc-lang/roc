@@ -501,7 +501,7 @@ pub const ProvidedExportTable = struct {
         errdefer exports.deinit(allocator);
 
         for (source, published_provides) |provides_entry, published| {
-            const def_node_idx = module_env.getExposedNodeIndexById(provides_entry.ident) orelse {
+            const def_node_idx = module_env.getExposedValueNodeIndexById(provides_entry.ident) orelse {
                 if (builtin.mode == .Debug) {
                     std.debug.panic(
                         "checked artifact invariant violated: provided entry {s} has no top-level definition",
@@ -1022,6 +1022,14 @@ fn exprDependsOnUnboundPlatformRequirement(
         .nominal => |nominal| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, nominal.backing_expr, relation_blocked_exprs),
         .closure => |closure| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, closure.lambda, relation_blocked_exprs),
         .lambda => |lambda| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, lambda.body, relation_blocked_exprs),
+        .interpolation => |interpolation| blk: {
+            if (exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, interpolation.first, relation_blocked_exprs)) break :blk true;
+            for (interpolation.parts) |part| {
+                if (exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, part.value, relation_blocked_exprs)) break :blk true;
+                if (exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, part.following_segment, relation_blocked_exprs)) break :blk true;
+            }
+            break :blk false;
+        },
         .binop => |binop| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, binop.lhs, relation_blocked_exprs) or
             exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, binop.rhs, relation_blocked_exprs),
         .unary_minus,
@@ -1090,6 +1098,7 @@ fn statementDependsOnUnboundPlatformRequirement(
     return switch (checked_bodies.statements[@intFromEnum(statement_id)].data) {
         .decl => |statement| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, statement.expr, relation_blocked_exprs),
         .var_ => |statement| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, statement.expr, relation_blocked_exprs),
+        .var_uninitialized => false,
         .reassign => |statement| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, statement.expr, relation_blocked_exprs),
         .dbg,
         .expr,
@@ -1099,6 +1108,10 @@ fn statementDependsOnUnboundPlatformRequirement(
             exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, for_.body, relation_blocked_exprs),
         .while_ => |while_| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, while_.cond, relation_blocked_exprs) or
             exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, while_.body, relation_blocked_exprs),
+        .infinite_loop => |loop| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, loop.cond, relation_blocked_exprs) or
+            exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, loop.body, relation_blocked_exprs),
+        .breakable_loop => |loop| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, loop.cond, relation_blocked_exprs) or
+            exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, loop.body, relation_blocked_exprs),
         .return_ => |ret| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, ret.expr, relation_blocked_exprs),
         .pending,
         .crash,
@@ -1156,7 +1169,7 @@ fn appendPublishedEntrypointRoots(
     switch (module_env.module_kind) {
         .default_app => {
             const main_ident = module_env.idents.main_bang;
-            const main_node_idx = module_env.getExposedNodeIndexById(main_ident) orelse {
+            const main_node_idx = module_env.getExposedValueNodeIndexById(main_ident) orelse {
                 if (builtin.mode == .Debug) {
                     std.debug.panic(
                         "checked artifact invariant violated: default app main! has no published root definition",
@@ -1444,7 +1457,8 @@ pub const NumericDefaultPhase = enum {
     /// Defaults to Dec when still unresolved at monomorphic specialization.
     mono_specialization,
     /// Defaults to Str when still unresolved at monomorphic specialization
-    /// (string literals carrying a from_quote constraint).
+    /// (string literals carrying a from_quote constraint, and interpolated
+    /// string literals carrying a from_interpolation constraint).
     mono_specialization_str,
 };
 
@@ -2534,8 +2548,8 @@ pub const CheckedTypeStore = struct {
                 .fn_name = constraint.fn_name,
                 .fn_ty = try self.cloneCheckedTypeRootSubstituting(allocator, names, constraint.fn_ty, formals, actuals, active),
                 .origin = constraint.origin,
-                .binop_negated = constraint.binop_negated,
-                .num_literal = constraint.num_literal,
+                .binop_negated = constraint.origin.binopNegated(),
+                .num_literal = constraint.origin.numeralInfo(),
             };
         }
         return out;
@@ -3912,6 +3926,7 @@ fn appendStaticDispatchTypeRoots(
         const tag = module.nodeTag(@enumFromInt(node_idx));
         switch (tag) {
             .expr_dispatch_call,
+            .expr_interpolation,
             .expr_type_dispatch_call,
             .expr_method_eq,
             => {},
@@ -3925,6 +3940,29 @@ fn appendStaticDispatchTypeRoots(
             .e_dispatch_call => |dispatch_call| {
                 _ = try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, module.exprType(dispatch_call.receiver));
                 _ = try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, dispatch_call.constraint_fn_var);
+            },
+            .e_interpolation => |interpolation| {
+                _ = try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, module.exprType(expr_idx));
+                _ = try appendCheckedTypeRoot(
+                    allocator,
+                    module,
+                    names,
+                    imports,
+                    roots,
+                    payloads,
+                    active,
+                    interpolation.constraint_fn_var orelse checkedArtifactInvariant("checked interpolation expression had no static dispatch constraint type", .{}),
+                );
+                _ = try appendCheckedTypeRoot(
+                    allocator,
+                    module,
+                    names,
+                    imports,
+                    roots,
+                    payloads,
+                    active,
+                    interpolation.step_fn_var orelse checkedArtifactInvariant("checked interpolation expression had no generated step function type", .{}),
+                );
             },
             .e_type_dispatch_call => |dispatch_call| {
                 const alias_stmt = module.getStatement(dispatch_call.type_var_alias_stmt);
@@ -4156,13 +4194,18 @@ fn numericDefaultPhaseForConstraints(
     constraints_range: types.StaticDispatchConstraint.SafeList.Range,
 ) ?NumericDefaultPhase {
     const constraints = module.typeStoreConst().sliceStaticDispatchConstraints(constraints_range);
-    var has_from_quote = false;
+    var has_str_defaultable_literal = false;
     for (constraints) |constraint| {
-        if (constraint.origin == .from_numeral) return .mono_specialization;
-        if (constraint.origin == .from_quote) has_from_quote = true;
+        switch (constraint.origin) {
+            .from_literal => |lit| switch (lit) {
+                .numeral => return .mono_specialization,
+                .quote, .interpolation => has_str_defaultable_literal = true,
+            },
+            else => {},
+        }
         if (isDefaultableArithmeticConstraint(module, constraint)) return .mono_specialization;
     }
-    if (has_from_quote) return .mono_specialization_str;
+    if (has_str_defaultable_literal) return .mono_specialization_str;
     return null;
 }
 
@@ -4179,8 +4222,7 @@ fn isDefaultableArithmeticConstraint(
             constraint.fn_name.eql(idents.div_trunc_by) or
             constraint.fn_name.eql(idents.rem_by),
         .desugared_unaryop => constraint.fn_name.eql(idents.negate),
-        .from_numeral,
-        .from_quote,
+        .from_literal,
         .method_call,
         .where_clause,
         => false,
@@ -4347,8 +4389,8 @@ fn copyCheckedStaticDispatchConstraints(
             .fn_name = try names.internMethodIdent(module.identStoreConst(), constraint.fn_name),
             .fn_ty = try appendCheckedTypeRoot(allocator, module, names, imports, roots, payloads, active, constraint.fn_var),
             .origin = constraint.origin,
-            .binop_negated = constraint.binop_negated,
-            .num_literal = constraint.num_literal,
+            .binop_negated = constraint.origin.binopNegated(),
+            .num_literal = constraint.origin.numeralInfo(),
         };
     }
     return out;
@@ -4823,11 +4865,24 @@ pub const CheckedListRestPattern = struct {
     pattern: ?CheckedPatternId,
 };
 
+/// End behavior for a checked string interpolation pattern.
+pub const CheckedStrPatternEnd = enum {
+    exact,
+    tail,
+};
+
+/// Delimited capture step inside a checked string interpolation pattern.
+pub const CheckedStrPatternStep = struct {
+    capture: ?CheckedPatternId,
+    delimiter: CheckedStringLiteralId,
+};
+
 /// Public `CheckedStatementData` declaration.
 pub const CheckedStatementData = union(enum) {
     pending,
     decl: struct { pattern: CheckedPatternId, expr: CheckedExprId },
     var_: struct { pattern: CheckedPatternId, expr: CheckedExprId },
+    var_uninitialized: struct { pattern: CheckedPatternId },
     reassign: struct { pattern: CheckedPatternId, expr: CheckedExprId, reassigned_binders: []const PatternBinderId },
     crash: CheckedStringLiteralId,
     dbg: CheckedExprId,
@@ -4840,6 +4895,8 @@ pub const CheckedStatementData = union(enum) {
         plan: ?static_dispatch.IteratorForPlanId,
     },
     while_: struct { cond: CheckedExprId, body: CheckedExprId },
+    infinite_loop: struct { cond: CheckedExprId, body: CheckedExprId },
+    breakable_loop: struct { cond: CheckedExprId, body: CheckedExprId },
     break_,
     return_: struct { expr: CheckedExprId, lambda: CheckedExprId },
     import_,
@@ -4897,6 +4954,11 @@ pub const CheckedPatternData = union(enum) {
         /// literal against a non-builtin string type; null on the Str fast path.
         conversion: ?CheckedExprId = null,
     },
+    str_interpolation: struct {
+        prefix: CheckedStringLiteralId,
+        steps: []const CheckedStrPatternStep,
+        end: CheckedStrPatternEnd,
+    },
     underscore,
     runtime_error,
 };
@@ -4936,7 +4998,7 @@ pub const CheckedExprData = union(enum) {
     typed_num_from_numeral: ?StaticDispatchPlanId,
     /// A string literal whose target is a non-builtin nominal type, converted
     /// through the type's `from_quote` method. `literal` holds the complete
-    /// post-escape UTF-8 bytes.
+    /// post-escape string contents.
     str_from_quote: struct {
         plan: ?StaticDispatchPlanId,
         literal: CheckedStringLiteralId,
@@ -4962,6 +5024,7 @@ pub const CheckedExprData = union(enum) {
     if_: struct {
         branches: []const CheckedIfBranch,
         final_else: CheckedExprId,
+        warn_unused_branches: bool,
     },
     call: struct {
         func: CheckedExprId,
@@ -5012,6 +5075,7 @@ pub const CheckedExprData = union(enum) {
         field_name: canonical.RecordFieldLabelId,
     },
     dispatch_call: ?StaticDispatchPlanId,
+    interpolation: CheckedInterpolation,
     structural_eq: struct {
         lhs: CheckedExprId,
         rhs: CheckedExprId,
@@ -5053,6 +5117,20 @@ pub const CheckedExprData = union(enum) {
         op: CIR.Expr.LowLevel,
         args: []const CheckedExprId,
     },
+};
+
+/// One `(interpolated, following_segment)` entry in a checked interpolation iterator.
+pub const CheckedInterpolationPart = struct {
+    value: CheckedExprId,
+    following_segment: CheckedExprId,
+};
+
+/// Checked custom interpolation data used to generate the `Iter` argument after checking.
+pub const CheckedInterpolation = struct {
+    plan: ?StaticDispatchPlanId,
+    first: CheckedExprId,
+    parts: []const CheckedInterpolationPart,
+    step_fn_ty: CheckedTypeId,
 };
 
 /// Public `CheckedReturnContext` declaration.
@@ -5383,18 +5461,11 @@ const CheckedSourceNodes = struct {
             },
             .e_dispatch_call => |call| {
                 try self.markExpr(call.receiver, work);
-                if (module.moduleEnvConst().isStrInterpolationCall(expr_idx)) {
-                    // A Str-typed interpolation publishes as a plain segment
-                    // list; the synthetic iterator chain stays out of the
-                    // artifact, so only the pair payloads are reachable.
-                    var pairs = module.moduleEnvConst().interpolationPairs(expr_idx);
-                    while (pairs.next()) |pair| {
-                        try self.markExpr(pair.interpolation, work);
-                        try self.markExpr(pair.segment, work);
-                    }
-                } else {
-                    try self.markExprSpan(module, call.args, work);
-                }
+                try self.markExprSpan(module, call.args, work);
+            },
+            .e_interpolation => |interpolation| {
+                try self.markExpr(interpolation.first, work);
+                try self.markExprSpan(module, interpolation.parts, work);
             },
             .e_structural_eq => |eq| {
                 try self.markExpr(eq.lhs, work);
@@ -5475,6 +5546,15 @@ const CheckedSourceNodes = struct {
                 }
             },
             .tuple => |tuple| try self.markPatternSpan(module, tuple.patterns, work),
+            .str_interpolation => |str| {
+                var step_offset: u32 = 0;
+                while (step_offset < str.steps.span.len) : (step_offset += 1) {
+                    const step = module.moduleEnvConst().store.getStrPatternStep(str.steps, step_offset);
+                    if (step.capture) |capture| {
+                        try self.markPattern(capture, work);
+                    }
+                }
+            },
             .assign,
             .num_literal,
             .small_dec_literal,
@@ -5503,6 +5583,9 @@ const CheckedSourceNodes = struct {
                 try self.markPattern(var_.pattern_idx, work);
                 try self.markExpr(var_.expr, work);
             },
+            .s_var_uninitialized => |var_| {
+                try self.markPattern(var_.pattern_idx, work);
+            },
             .s_reassign => |reassign| {
                 try self.markPattern(reassign.pattern_idx, work);
                 try self.markExpr(reassign.expr, work);
@@ -5518,6 +5601,14 @@ const CheckedSourceNodes = struct {
             .s_while => |while_| {
                 try self.markExpr(while_.cond, work);
                 try self.markExpr(while_.body, work);
+            },
+            .s_infinite_loop => |loop| {
+                try self.markExpr(loop.cond, work);
+                try self.markExpr(loop.body, work);
+            },
+            .s_breakable_loop => |loop| {
+                try self.markExpr(loop.cond, work);
+                try self.markExpr(loop.body, work);
             },
             .s_return => |ret| {
                 try self.markExpr(ret.expr, work);
@@ -5855,6 +5946,12 @@ pub const CheckedBodyStore = struct {
             const data = &self.exprs[@intFromEnum(checked_expr)].data;
             switch (data.*) {
                 .dispatch_call => data.* = .{ .dispatch_call = entry.value_ptr.* },
+                .interpolation => |interpolation| data.* = .{ .interpolation = .{
+                    .plan = entry.value_ptr.*,
+                    .first = interpolation.first,
+                    .parts = interpolation.parts,
+                    .step_fn_ty = interpolation.step_fn_ty,
+                } },
                 .method_eq => data.* = .{ .method_eq = entry.value_ptr.* },
                 .type_dispatch_call => data.* = .{ .type_dispatch_call = entry.value_ptr.* },
                 else => {
@@ -6241,6 +6338,7 @@ fn checkedExprDataDiverges(
         .empty_record,
         .zero_argument_tag,
         .dispatch_call,
+        .interpolation,
         .method_eq,
         .type_dispatch_call,
         .runtime_error,
@@ -6265,6 +6363,7 @@ fn checkedStatementDataDiverges(
         => true,
         .decl => |decl| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, decl.expr, expr_states, statement_states),
         .var_ => |var_| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, var_.expr, expr_states, statement_states),
+        .var_uninitialized => false,
         .reassign => |reassign| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, reassign.expr, expr_states, statement_states),
         .dbg,
         .expr,
@@ -6272,6 +6371,8 @@ fn checkedStatementDataDiverges(
         => |expr| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, expr, expr_states, statement_states),
         .for_ => |for_| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, for_.expr, expr_states, statement_states),
         .while_ => |while_| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, while_.cond, expr_states, statement_states),
+        .infinite_loop => true,
+        .breakable_loop => |loop| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, loop.cond, expr_states, statement_states),
         .pending,
         .import_,
         .alias_decl,
@@ -6543,6 +6644,7 @@ const CheckedBodyPayloadCopier = struct {
             .e_if => |if_| .{ .if_ = .{
                 .branches = try self.copyIfBranches(if_.branches),
                 .final_else = self.checkedExpr(if_.final_else),
+                .warn_unused_branches = if_.warn_unused_branches,
             } },
             .e_call => |call| .{ .call = .{
                 .func = self.checkedExpr(call.func),
@@ -6602,12 +6704,8 @@ const CheckedBodyPayloadCopier = struct {
                 "ordinary method call reached artifact publication after checking; expected explicit static-dispatch plan",
                 .{},
             ),
-            .e_dispatch_call => blk: {
-                if (self.module.moduleEnvConst().isStrInterpolationCall(expr_idx)) {
-                    break :blk .{ .str = try self.copyStrInterpolationSegments(expr_idx) };
-                }
-                break :blk .{ .dispatch_call = null };
-            },
+            .e_dispatch_call => .{ .dispatch_call = null },
+            .e_interpolation => |interpolation| try self.copyInterpolationExpr(expr_idx, interpolation),
             .e_structural_eq => |eq| .{ .structural_eq = .{
                 .lhs = self.checkedExpr(eq.lhs),
                 .rhs = self.checkedExpr(eq.rhs),
@@ -6658,26 +6756,49 @@ const CheckedBodyPayloadCopier = struct {
         };
     }
 
-    /// Publish a Str-typed interpolation dispatch call as its ordered
-    /// segment list: the receiver literal, then each interpolation and the
-    /// literal segment that follows it. Lowering turns this into direct
-    /// string concatenation, so the synthetic iterator chain never reaches
-    /// code generation.
-    fn copyStrInterpolationSegments(self: *@This(), expr_idx: CIR.Expr.Idx) Allocator.Error![]const CheckedExprId {
-        const env = self.module.moduleEnvConst();
+    fn copyInterpolationExpr(self: *@This(), expr_idx: CIR.Expr.Idx, interpolation: anytype) Allocator.Error!CheckedExprData {
+        if (self.checkedBuiltinForExpr(expr_idx) == .str) {
+            return .{ .str = try self.copyStrInterpolationSegments(interpolation) };
+        }
+        return .{ .interpolation = .{
+            .plan = null,
+            .first = self.checkedExpr(interpolation.first),
+            .parts = try self.copyInterpolationParts(interpolation.parts),
+            .step_fn_ty = try self.checkedTypeForRequiredVar(
+                interpolation.step_fn_var orelse checkedArtifactInvariant("checked interpolation expression had no generated step function type", .{}),
+                "checked interpolation generated step function type root was not published",
+            ),
+        } };
+    }
+
+    fn copyInterpolationParts(self: *@This(), span: CIR.Expr.Span) Allocator.Error![]const CheckedInterpolationPart {
+        const parts = self.module.sliceExpr(span);
+        std.debug.assert(parts.len % 2 == 0);
+
+        const out = try self.allocator.alloc(CheckedInterpolationPart, parts.len / 2);
+        errdefer self.allocator.free(out);
+
+        var part_i: usize = 0;
+        while (part_i < parts.len) : (part_i += 2) {
+            out[part_i / 2] = .{
+                .value = self.checkedExpr(parts[part_i]),
+                .following_segment = self.checkedExpr(parts[part_i + 1]),
+            };
+        }
+        return out;
+    }
+
+    fn copyStrInterpolationSegments(self: *@This(), interpolation: anytype) Allocator.Error![]const CheckedExprId {
         var segments = std.ArrayList(CheckedExprId).empty;
         errdefer segments.deinit(self.allocator);
 
-        const call = switch (self.module.expr(expr_idx).data) {
-            .e_dispatch_call => |call| call,
-            else => checkedArtifactInvariant("interpolation segment publication reached a non-dispatch expression", .{}),
-        };
-        try segments.append(self.allocator, self.checkedExpr(call.receiver));
-        var pairs = env.interpolationPairs(expr_idx);
-        while (pairs.next()) |pair| {
-            try segments.append(self.allocator, self.checkedExpr(pair.interpolation));
-            try segments.append(self.allocator, self.checkedExpr(pair.segment));
+        try segments.append(self.allocator, self.checkedExpr(interpolation.first));
+        const parts = self.module.sliceExpr(interpolation.parts);
+        std.debug.assert(parts.len % 2 == 0);
+        for (parts) |part_idx| {
+            try segments.append(self.allocator, self.checkedExpr(part_idx));
         }
+
         return try segments.toOwnedSlice(self.allocator);
     }
 
@@ -6695,7 +6816,7 @@ const CheckedBodyPayloadCopier = struct {
         return .{ .str = try self.copyExprSpan(span) };
     }
 
-    /// Intern the complete post-escape bytes of a literal-only string,
+    /// Intern the complete post-escape contents of a literal-only string,
     /// concatenating its segments.
     fn internQuoteBytes(self: *@This(), span: CIR.Expr.Span) Allocator.Error!CheckedStringLiteralId {
         const segments = self.module.sliceExpr(span);
@@ -6992,6 +7113,14 @@ const CheckedBodyPayloadCopier = struct {
                 .literal = try self.string_builder.intern(str.literal),
                 .conversion = try self.quoteConversionExprForPattern(pattern_idx, str.literal),
             } },
+            .str_interpolation => |str| .{ .str_interpolation = .{
+                .prefix = try self.string_builder.intern(str.prefix),
+                .steps = try self.copyStrPatternSteps(str.steps),
+                .end = switch (str.end) {
+                    .exact => .exact,
+                    .tail => .tail,
+                },
+            } },
             .underscore => .underscore,
             .runtime_error => .runtime_error,
         };
@@ -7004,6 +7133,10 @@ const CheckedBodyPayloadCopier = struct {
             .s_var => |var_| blk: {
                 try self.markSourcePatternBindersReassignable(var_.pattern_idx);
                 break :blk .{ .var_ = .{ .pattern = self.checkedPattern(var_.pattern_idx), .expr = self.checkedExpr(var_.expr) } };
+            },
+            .s_var_uninitialized => |var_| blk: {
+                try self.markSourcePatternBindersReassignable(var_.pattern_idx);
+                break :blk .{ .var_uninitialized = .{ .pattern = self.checkedPattern(var_.pattern_idx) } };
             },
             .s_reassign => |reassign| .{ .reassign = .{
                 .pattern = self.checkedPattern(reassign.pattern_idx),
@@ -7023,6 +7156,14 @@ const CheckedBodyPayloadCopier = struct {
             .s_while => |while_| .{ .while_ = .{
                 .cond = self.checkedExpr(while_.cond),
                 .body = self.checkedExpr(while_.body),
+            } },
+            .s_infinite_loop => |loop| .{ .infinite_loop = .{
+                .cond = self.checkedExpr(loop.cond),
+                .body = self.checkedExpr(loop.body),
+            } },
+            .s_breakable_loop => |loop| .{ .breakable_loop = .{
+                .cond = self.checkedExpr(loop.cond),
+                .body = self.checkedExpr(loop.body),
             } },
             .s_break => .break_,
             .s_return => |ret| .{ .return_ = .{
@@ -7051,6 +7192,20 @@ const CheckedBodyPayloadCopier = struct {
         if (source.len == 0) return &.{};
         const out = try self.allocator.alloc(CheckedPatternId, source.len);
         for (source, 0..) |pattern, i| out[i] = self.checkedPattern(pattern);
+        return out;
+    }
+
+    fn copyStrPatternSteps(self: *@This(), span: CIR.Pattern.StrPatternStep.Span) Allocator.Error![]const CheckedStrPatternStep {
+        if (span.span.len == 0) return &.{};
+        const out = try self.allocator.alloc(CheckedStrPatternStep, span.span.len);
+        var step_offset: u32 = 0;
+        while (step_offset < span.span.len) : (step_offset += 1) {
+            const step = self.module.moduleEnvConst().store.getStrPatternStep(span, step_offset);
+            out[step_offset] = .{
+                .capture = if (step.capture) |capture| self.checkedPattern(capture) else null,
+                .delimiter = try self.string_builder.intern(step.delimiter),
+            };
+        }
         return out;
     }
 
@@ -7243,6 +7398,15 @@ const CheckedBodyPayloadCopier = struct {
                     try self.collectSourcePatternBinders(child, out);
                 }
             },
+            .str_interpolation => |str| {
+                var step_offset: u32 = 0;
+                while (step_offset < str.steps.span.len) : (step_offset += 1) {
+                    const step = self.module.moduleEnvConst().store.getStrPatternStep(str.steps, step_offset);
+                    if (step.capture) |capture| {
+                        try self.collectSourcePatternBinders(capture, out);
+                    }
+                }
+            },
             .num_literal,
             .small_dec_literal,
             .dec_literal,
@@ -7317,6 +7481,13 @@ const CheckedBodyPayloadCopier = struct {
             .tuple => |tuple| {
                 for (self.module.slicePatterns(tuple.patterns)) |child| try self.markSourcePatternBindersReassignable(child);
             },
+            .str_interpolation => |str| {
+                var step_offset: u32 = 0;
+                while (step_offset < str.steps.span.len) : (step_offset += 1) {
+                    const step = self.module.moduleEnvConst().store.getStrPatternStep(str.steps, step_offset);
+                    if (step.capture) |capture| try self.markSourcePatternBindersReassignable(capture);
+                }
+            },
             .num_literal,
             .small_dec_literal,
             .dec_literal,
@@ -7366,6 +7537,13 @@ const CheckedBodyPayloadCopier = struct {
             },
             .tuple => |tuple| {
                 for (self.module.slicePatterns(tuple.patterns)) |child| try self.collectReassignedBinders(child, out);
+            },
+            .str_interpolation => |str| {
+                var step_offset: u32 = 0;
+                while (step_offset < str.steps.span.len) : (step_offset += 1) {
+                    const step = self.module.moduleEnvConst().store.getStrPatternStep(str.steps, step_offset);
+                    if (step.capture) |capture| try self.collectReassignedBinders(capture, out);
+                }
             },
             .num_literal,
             .small_dec_literal,
@@ -7545,7 +7723,12 @@ fn checkedBuiltinForDefaultedNumericVariable(variable: CheckedTypeVariable) ?Che
     };
 }
 
-fn numeralLiteralDecimalText(
+/// Render a recorded numeral literal as its canonical decimal text (sign,
+/// integer digits, optional `.` and fractional digits). Monotype lowering reuses
+/// this to fold a monomorphized `from_numeral` literal into a constant at the
+/// concrete target type, so the produced text must stay byte-for-byte identical
+/// to what compile-time finalization feeds the interpreter.
+pub fn numeralLiteralDecimalText(
     allocator: Allocator,
     module_env: *const ModuleEnv,
     literal: ModuleEnv.NumeralLiteral,
@@ -7728,6 +7911,7 @@ fn deinitCheckedExprData(allocator: Allocator, data: *CheckedExprData) void {
         .unary_not,
         => {},
         .field_access => {},
+        .interpolation => |interpolation| allocator.free(interpolation.parts),
         .hosted_lambda => |hosted| allocator.free(hosted.args),
         .run_low_level => |run| allocator.free(run.args),
     }
@@ -7753,6 +7937,7 @@ fn deinitCheckedPatternData(allocator: Allocator, data: *CheckedPatternData) voi
         .record_destructure => |destructs| allocator.free(destructs),
         .list => |list| allocator.free(list.patterns),
         .tuple => |patterns| allocator.free(patterns),
+        .str_interpolation => |str| allocator.free(str.steps),
     }
     data.* = .pending;
 }
@@ -7772,6 +7957,7 @@ fn verifyCheckedExprDataComplete(data: CheckedExprData) void {
         .lookup_external => |ref| std.debug.assert(ref != null),
         .lookup_required => |ref| std.debug.assert(ref != null),
         .dispatch_call => |plan| std.debug.assert(plan != null),
+        .interpolation => |interpolation| std.debug.assert(interpolation.plan != null),
         .method_eq => |plan| std.debug.assert(plan != null),
         .type_dispatch_call => |plan| std.debug.assert(plan != null),
         .num_from_numeral => |plan| std.debug.assert(plan != null),
@@ -8615,9 +8801,7 @@ fn collectPublishedExportDefs(
 
     var exposed_iter = module_env.common.exposed_items.iterator();
     while (exposed_iter.next()) |entry| {
-        if (entry.node_idx == 0) continue;
-
-        const raw_node_idx: u32 = entry.node_idx;
+        const raw_node_idx: u32 = entry.target.valueDefNode() orelse continue;
         if (raw_node_idx >= node_count) {
             if (builtin.mode == .Debug) {
                 std.debug.panic(
@@ -8783,6 +8967,15 @@ const LocalPatternRoleIndex = struct {
                     if (checked_bodies.source_node_map.statement(statement) == null) continue;
                     const var_ = switch (module.getStatement(statement)) {
                         .s_var => |var_| var_,
+                        else => unreachable,
+                    };
+                    putStatementRole(statement_roles, node_count, var_.pattern_idx, .mutable_version);
+                },
+                .statement_var_uninitialized => {
+                    const statement: CIR.Statement.Idx = @enumFromInt(node_idx);
+                    if (checked_bodies.source_node_map.statement(statement) == null) continue;
+                    const var_ = switch (module.getStatement(statement)) {
+                        .s_var_uninitialized => |var_| var_,
                         else => unreachable,
                     };
                     putStatementRole(statement_roles, node_count, var_.pattern_idx, .mutable_version);
@@ -9045,6 +9238,11 @@ const CheckedTemplateRefCollector = struct {
                 try self.dispatch_refs.append(self.allocator, id);
                 try self.collectStaticDispatchPlanArgs(id);
             },
+            .interpolation => |interpolation| {
+                const id = interpolation.plan orelse checkedArtifactInvariant("checked interpolation expression reached template closure collection without a static-dispatch plan", .{});
+                try self.dispatch_refs.append(self.allocator, id);
+                try self.collectStaticDispatchPlanArgs(id);
+            },
             .num_from_numeral,
             .typed_num_from_numeral,
             => |plan_id| {
@@ -9165,8 +9363,21 @@ const CheckedTemplateRefCollector = struct {
         const plan = self.static_dispatch_plans.plans[raw];
         for (plan.args) |arg| switch (arg) {
             .checked_expr => |expr| try self.collectExpr(expr),
+            .generated_interpolation_iter => |expr| try self.collectGeneratedInterpolationIter(expr),
             .generated_numeral, .generated_quote => {},
         };
+    }
+
+    fn collectGeneratedInterpolationIter(self: *CheckedTemplateRefCollector, expr_id: CheckedExprId) Allocator.Error!void {
+        const expr = self.checked_bodies.expr(expr_id);
+        const interpolation = switch (expr.data) {
+            .interpolation => |interpolation| interpolation,
+            else => checkedArtifactInvariant("generated interpolation iterator operand pointed at non-interpolation expression", .{}),
+        };
+        for (interpolation.parts) |part| {
+            try self.collectExpr(part.value);
+            try self.collectExpr(part.following_segment);
+        }
     }
 
     fn collectIteratorForPlan(
@@ -9219,6 +9430,11 @@ const CheckedTemplateRefCollector = struct {
             .tuple => |items| {
                 for (items) |child| try self.collectPattern(child);
             },
+            .str_interpolation => |str| {
+                for (str.steps) |step| {
+                    if (step.capture) |capture| try self.collectPattern(capture);
+                }
+            },
             .pending,
             .assign,
             .num_literal,
@@ -9247,6 +9463,9 @@ const CheckedTemplateRefCollector = struct {
                 try self.collectPattern(var_.pattern);
                 try self.collectExpr(var_.expr);
             },
+            .var_uninitialized => |var_| {
+                try self.collectPattern(var_.pattern);
+            },
             .reassign => |reassign| {
                 try self.collectPattern(reassign.pattern);
                 try self.collectExpr(reassign.expr);
@@ -9269,6 +9488,14 @@ const CheckedTemplateRefCollector = struct {
             .while_ => |while_| {
                 try self.collectExpr(while_.cond);
                 try self.collectExpr(while_.body);
+            },
+            .infinite_loop => |loop| {
+                try self.collectExpr(loop.cond);
+                try self.collectExpr(loop.body);
+            },
+            .breakable_loop => |loop| {
+                try self.collectExpr(loop.cond);
+                try self.collectExpr(loop.body);
             },
             .pending,
             .crash,
@@ -9763,6 +9990,7 @@ const NestedProcSiteBuilder = struct {
             .method_eq,
             .type_dispatch_call,
             => |plan_id| try self.scanStaticDispatchPlanArgs(plan_id orelse checkedArtifactInvariant("checked dispatch expression reached nested procedure site collection without a static-dispatch plan", .{}), owner),
+            .interpolation => |interpolation| try self.scanStaticDispatchPlanArgs(interpolation.plan orelse checkedArtifactInvariant("checked interpolation expression reached nested procedure site collection without a static-dispatch plan", .{}), owner),
             .num_from_numeral,
             .typed_num_from_numeral,
             => |plan_id| try self.scanStaticDispatchPlanArgs(plan_id orelse checkedArtifactInvariant("checked from_numeral expression reached nested procedure site collection without a dispatch plan", .{}), owner),
@@ -9822,8 +10050,25 @@ const NestedProcSiteBuilder = struct {
         const plan = self.static_dispatch_plans.plans[raw];
         for (plan.args) |arg| switch (arg) {
             .checked_expr => |expr| try self.scanExpr(expr, owner, false),
+            .generated_interpolation_iter => |expr| try self.scanGeneratedInterpolationIter(expr, owner),
             .generated_numeral, .generated_quote => {},
         };
+    }
+
+    fn scanGeneratedInterpolationIter(
+        self: *NestedProcSiteBuilder,
+        expr_id: CheckedExprId,
+        owner: canonical.ProcedureTemplateRef,
+    ) Allocator.Error!void {
+        const expr = self.checked_bodies.exprs[@intFromEnum(expr_id)];
+        const interpolation = switch (expr.data) {
+            .interpolation => |interpolation| interpolation,
+            else => checkedArtifactInvariant("generated interpolation iterator operand pointed at non-interpolation expression", .{}),
+        };
+        for (interpolation.parts) |part| {
+            try self.scanExpr(part.value, owner, false);
+            try self.scanExpr(part.following_segment, owner, false);
+        }
     }
 
     fn scanPattern(
@@ -9857,6 +10102,11 @@ const NestedProcSiteBuilder = struct {
             .tuple => |items| {
                 for (items) |child| try self.scanPattern(child, owner);
             },
+            .str_interpolation => |str| {
+                for (str.steps) |step| {
+                    if (step.capture) |capture| try self.scanPattern(capture, owner);
+                }
+            },
             .pending,
             .assign,
             .num_literal,
@@ -9889,6 +10139,9 @@ const NestedProcSiteBuilder = struct {
                 try self.scanPattern(var_.pattern, owner);
                 try self.scanExpr(var_.expr, owner, false);
             },
+            .var_uninitialized => |var_| {
+                try self.scanPattern(var_.pattern, owner);
+            },
             .reassign => |reassign| {
                 try self.scanPattern(reassign.pattern, owner);
                 try self.scanExpr(reassign.expr, owner, false);
@@ -9909,6 +10162,14 @@ const NestedProcSiteBuilder = struct {
             .while_ => |while_| {
                 try self.scanExpr(while_.cond, owner, false);
                 try self.scanExpr(while_.body, owner, false);
+            },
+            .infinite_loop => |loop| {
+                try self.scanExpr(loop.cond, owner, false);
+                try self.scanExpr(loop.body, owner, false);
+            },
+            .breakable_loop => |loop| {
+                try self.scanExpr(loop.cond, owner, false);
+                try self.scanExpr(loop.body, owner, false);
             },
             .pending,
             .crash,
@@ -13602,8 +13863,7 @@ fn appendExposedTypeDeclarationPublicApiDependencies(
     const module_env = module.moduleEnvConst();
     var exposed_iter = module_env.common.exposed_items.iterator();
     while (exposed_iter.next()) |entry| {
-        if (entry.node_idx == 0) continue;
-        const raw_node_idx: u32 = entry.node_idx;
+        const raw_node_idx: u32 = entry.target.typeDeclNode() orelse continue;
         if (raw_node_idx >= module.nodeCount()) {
             checkedArtifactInvariant("exposed type item points at out-of-range node", .{});
         }
@@ -16424,8 +16684,8 @@ pub const CheckedTypeProjector = struct {
                 .fn_name = try self.remapViewMethodName(source_names, constraint.fn_name),
                 .fn_ty = try self.projectCheckedTypeViewRootInner(source, source_names, constraint.fn_ty, active),
                 .origin = constraint.origin,
-                .binop_negated = constraint.binop_negated,
-                .num_literal = constraint.num_literal,
+                .binop_negated = constraint.origin.binopNegated(),
+                .num_literal = constraint.origin.numeralInfo(),
             };
         }
         return out;
@@ -16676,8 +16936,8 @@ pub const CheckedTypeProjector = struct {
                 .fn_name = try self.remapMethodName(imported, constraint.fn_name),
                 .fn_ty = try self.projectImportedCheckedType(imported, constraint.fn_ty),
                 .origin = constraint.origin,
-                .binop_negated = constraint.binop_negated,
-                .num_literal = constraint.num_literal,
+                .binop_negated = constraint.origin.binopNegated(),
+                .num_literal = constraint.origin.numeralInfo(),
             };
         }
         return out;
@@ -16979,8 +17239,8 @@ const CheckedTypeStoreImportProjector = struct {
                 .fn_name = try self.remapMethodName(constraint.fn_name),
                 .fn_ty = try self.project(constraint.fn_ty),
                 .origin = constraint.origin,
-                .binop_negated = constraint.binop_negated,
-                .num_literal = constraint.num_literal,
+                .binop_negated = constraint.origin.binopNegated(),
+                .num_literal = constraint.origin.numeralInfo(),
             };
         }
         return out;

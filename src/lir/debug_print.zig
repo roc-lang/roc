@@ -97,6 +97,11 @@ const Printer = struct {
                     try writer.writeAll("\n");
                     current = s.next;
                 },
+                .init_uninitialized => |s| {
+                    try writeIndent(indent, writer);
+                    try writer.print("init_uninitialized l{d}\n", .{@intFromEnum(s.target)});
+                    current = s.next;
+                },
                 .assign_call => |s| {
                     try self.writeTarget(s.target, indent, writer);
                     try writer.print("call p{d}(", .{@intFromEnum(s.proc)});
@@ -159,6 +164,11 @@ const Printer = struct {
                     try writer.print("expect l{d}\n", .{@intFromEnum(s.condition)});
                     current = s.next;
                 },
+                .comptime_branch_taken => |s| {
+                    try writeIndent(indent, writer);
+                    try writer.print("comptime_branch_taken site={d} branch={d}\n", .{ @intFromEnum(s.site), s.branch_index });
+                    current = s.next;
+                },
                 .expect_err => |s| {
                     try writeIndent(indent, writer);
                     try writer.print("expect_err l{d}\n", .{@intFromEnum(s.message)});
@@ -197,6 +207,50 @@ const Printer = struct {
                     }
                     return;
                 },
+                .str_match => |s| {
+                    try writeIndent(indent, writer);
+                    try writer.print("str_match l{d} prefix_len={d} end={s}\n", .{ @intFromEnum(s.source), s.prefix.len, @tagName(s.end) });
+                    for (self.store.getStrMatchSteps(s.steps), 0..) |step, index| {
+                        try writeIndent(indent + 1, writer);
+                        try writer.print("step {d} capture=", .{index});
+                        switch (step.capture) {
+                            .discard => try writer.writeAll("_"),
+                            .view => |local| try writer.print("view l{d}", .{@intFromEnum(local)}),
+                        }
+                        try writer.print(" delimiter_len={d}\n", .{step.delimiter.len});
+                    }
+                    try writeIndent(indent + 1, writer);
+                    try writer.writeAll("match:\n");
+                    try self.writeChainInner(gpa, s.on_match, indent + 2, writer);
+                    try writeIndent(indent + 1, writer);
+                    try writer.writeAll("miss:\n");
+                    try self.writeChainInner(gpa, s.on_miss, indent + 2, writer);
+                    return;
+                },
+                .str_match_set => |s| {
+                    try writeIndent(indent, writer);
+                    try writer.print("str_match_set l{d} arms={d}\n", .{ @intFromEnum(s.source), s.arms.len });
+                    for (self.store.getStrMatchArms(s.arms), 0..) |arm, arm_index| {
+                        try writeIndent(indent + 1, writer);
+                        try writer.print("arm {d} prefix_len={d} end={s}\n", .{ arm_index, arm.prefix.len, @tagName(arm.end) });
+                        for (self.store.getStrMatchSteps(arm.steps), 0..) |step, step_index| {
+                            try writeIndent(indent + 2, writer);
+                            try writer.print("step {d} capture=", .{step_index});
+                            switch (step.capture) {
+                                .discard => try writer.writeAll("_"),
+                                .view => |local| try writer.print("view l{d}", .{@intFromEnum(local)}),
+                            }
+                            try writer.print(" delimiter_len={d}\n", .{step.delimiter.len});
+                        }
+                        try writeIndent(indent + 2, writer);
+                        try writer.writeAll("match:\n");
+                        try self.writeChainInner(gpa, arm.on_match, indent + 3, writer);
+                    }
+                    try writeIndent(indent + 1, writer);
+                    try writer.writeAll("miss:\n");
+                    try self.writeChainInner(gpa, s.on_miss, indent + 2, writer);
+                    return;
+                },
                 .join => |s| {
                     try writeIndent(indent, writer);
                     try writer.print("join j{d} params=[", .{@intFromEnum(s.id)});
@@ -228,6 +282,11 @@ const Printer = struct {
                 .runtime_error => {
                     try writeIndent(indent, writer);
                     try writer.writeAll("runtime_error\n");
+                    return;
+                },
+                .comptime_exhaustiveness_failed => |s| {
+                    try writeIndent(indent, writer);
+                    try writer.print("comptime_exhaustiveness_failed site={d}\n", .{@intFromEnum(s.site)});
                     return;
                 },
                 .loop_continue => {

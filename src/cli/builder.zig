@@ -681,8 +681,8 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
     coverage_options.CoverageType = .ZigLLVMCoverageType_None;
 
     const emit_options = ZigLLVMEmitOptions{
-        // Auto-enable debug when roc is built in debug mode, OR when explicitly requested via --debug
-        .is_debug = (builtin.mode == .Debug) or config.debug,
+        // App object debug output is controlled by the user's --debug flag.
+        .is_debug = config.debug,
         .ir_opt_level = config.optimization.toLLVMIRLevel(),
         .time_report_out = null,
         .tsan = false,

@@ -100,6 +100,9 @@ pub const ScopeMap = struct {
                 try self.extractBindingsFromPattern(module_env, var_decl.pattern_idx, stmt_region.start.offset, scope_end, false, depth + 1);
                 try self.traverseExpr(module_env, var_decl.expr, scope_end, depth + 1);
             },
+            .s_var_uninitialized => |var_decl| {
+                try self.extractBindingsFromPattern(module_env, var_decl.pattern_idx, stmt_region.start.offset, scope_end, false, depth + 1);
+            },
             .s_reassign => |reassign| {
                 // Reassignment doesn't introduce new bindings, but traverse the expr
                 try self.traverseExpr(module_env, reassign.expr, scope_end, depth + 1);
@@ -113,6 +116,14 @@ pub const ScopeMap = struct {
                 try self.traverseExpr(module_env, for_stmt.body, body_region.end.offset, depth + 1);
             },
             .s_while => |while_stmt| {
+                try self.traverseExpr(module_env, while_stmt.cond, scope_end, depth + 1);
+                try self.traverseExpr(module_env, while_stmt.body, scope_end, depth + 1);
+            },
+            .s_infinite_loop => |while_stmt| {
+                try self.traverseExpr(module_env, while_stmt.cond, scope_end, depth + 1);
+                try self.traverseExpr(module_env, while_stmt.body, scope_end, depth + 1);
+            },
+            .s_breakable_loop => |while_stmt| {
                 try self.traverseExpr(module_env, while_stmt.cond, scope_end, depth + 1);
                 try self.traverseExpr(module_env, while_stmt.body, scope_end, depth + 1);
             },
@@ -265,6 +276,12 @@ pub const ScopeMap = struct {
                 const args = module_env.store.sliceExpr(method_call.args);
                 for (args) |arg_idx| {
                     try self.traverseExpr(module_env, arg_idx, scope_end, depth + 1);
+                }
+            },
+            .e_interpolation => |interpolation| {
+                try self.traverseExpr(module_env, interpolation.first, scope_end, depth + 1);
+                for (module_env.store.sliceExpr(interpolation.parts)) |part_idx| {
+                    try self.traverseExpr(module_env, part_idx, scope_end, depth + 1);
                 }
             },
             .e_structural_eq => |eq| {
@@ -450,6 +467,15 @@ pub const ScopeMap = struct {
                 const patterns = module_env.store.slicePatterns(p.patterns);
                 for (patterns) |elem_pattern| {
                     try self.extractBindingsFromPattern(module_env, elem_pattern, visible_from, visible_to, is_parameter, depth + 1);
+                }
+            },
+            .str_interpolation => |p| {
+                var i: u32 = 0;
+                while (i < p.steps.span.len) : (i += 1) {
+                    const step = module_env.store.getStrPatternStep(p.steps, i);
+                    if (step.capture) |capture| {
+                        try self.extractBindingsFromPattern(module_env, capture, visible_from, visible_to, is_parameter, depth + 1);
+                    }
                 }
             },
             // Literal and other patterns don't introduce bindings

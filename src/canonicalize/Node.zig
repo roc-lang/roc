@@ -39,6 +39,7 @@ pub const Tag = enum {
     // Statements
     statement_decl,
     statement_var,
+    statement_var_uninitialized,
     statement_reassign,
     statement_crash,
     statement_dbg,
@@ -46,6 +47,8 @@ pub const Tag = enum {
     statement_expect,
     statement_for,
     statement_while,
+    statement_infinite_loop,
+    statement_breakable_loop,
     statement_break,
     statement_return,
     statement_import,
@@ -67,6 +70,7 @@ pub const Tag = enum {
     expr_field_access,
     expr_method_call,
     expr_dispatch_call,
+    expr_interpolation,
     expr_structural_eq,
     expr_method_eq,
     expr_type_method_call,
@@ -152,6 +156,7 @@ pub const Tag = enum {
     pattern_f64_literal,
     pattern_small_dec_literal,
     pattern_str_literal,
+    pattern_str_interpolation,
     pattern_underscore,
 
     // Lambda Capture
@@ -187,6 +192,7 @@ pub const Tag = enum {
     diag_empty_tuple,
     diag_ident_already_in_scope,
     diag_ident_not_in_scope,
+    diag_read_uninitialized_var,
     diag_self_referential_definition,
     diag_circular_value_definition,
     diag_local_reference_before_definition,
@@ -197,6 +203,7 @@ pub const Tag = enum {
     diag_invalid_top_level_statement,
     diag_expr_not_canonicalized,
     diag_invalid_string_interpolation,
+    diag_unreachable_string_pattern_capture,
     diag_pattern_arg_invalid,
     diag_pattern_not_canonicalized,
     diag_can_lambda_not_implemented,
@@ -256,9 +263,11 @@ pub const Tag = enum {
     diag_redundant_exposed,
     diag_if_expr_without_else,
     diag_break_outside_loop,
+    diag_infinite_loop_never_exits,
     diag_return_outside_fn,
     diag_mutually_recursive_type_aliases,
     diag_deprecated_number_suffix,
+    diag_range_op_chained,
 };
 
 /// Typed payload union for accessing node data in a type-safe manner.
@@ -271,6 +280,7 @@ pub const Payload = extern union {
     // === Statement payloads ===
     statement_decl: StatementDecl,
     statement_var: StatementVar,
+    statement_var_uninitialized: StatementVarUninitialized,
     statement_reassign: StatementReassign,
     statement_crash: StatementCrash,
     statement_single_expr: StatementSingleExpr,
@@ -310,6 +320,7 @@ pub const Payload = extern union {
     expr_field_access: ExprFieldAccess,
     expr_method_call: ExprMethodCall,
     expr_dispatch_call: ExprDispatchCall,
+    expr_interpolation: ExprInterpolation,
     expr_structural_eq: ExprStructuralEq,
     expr_method_eq: ExprMethodEq,
     expr_type_method_call: ExprTypeMethodCall,
@@ -344,6 +355,7 @@ pub const Payload = extern union {
     pattern_small_dec_literal: PatternSmallDecLiteral,
     pattern_dec_literal: PatternDecLiteral,
     pattern_str_literal: PatternStrLiteral,
+    pattern_str_interpolation: PatternStrInterpolation,
     pattern_frac_f32: PatternFracF32,
     pattern_frac_f64: PatternFracF64,
     pattern_malformed: PatternMalformed,
@@ -402,6 +414,13 @@ pub const Payload = extern union {
         pattern_idx: u32,
         expr: u32,
         anno_span2_idx: u32, // Index into span2_data: (has_anno, anno_idx_or_zero)
+    };
+
+    /// statement_var_uninitialized: pattern_idx + annotation info
+    pub const StatementVarUninitialized = extern struct {
+        pattern_idx: u32,
+        anno_span2_idx: u32, // Index into span2_data: (has_anno, anno_idx_or_zero)
+        _padding: [4]u8 = .{ 0, 0, 0, 0 },
     };
 
     /// statement_reassign: pattern_idx + expr
@@ -573,7 +592,7 @@ pub const Payload = extern union {
     };
 
     pub const ExprIfThenElse = extern struct {
-        branches_else_idx: u32, // Index into span_with_node_data: (branches.start, branches.len, final_else)
+        branches_else_idx: u32, // Index into if_data
         _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
     };
 
@@ -636,6 +655,13 @@ pub const Payload = extern union {
         method_name: u32,
         method_call_data_idx: u32,
         constraint_fn_var: u32,
+    };
+
+    pub const ExprInterpolation = extern struct {
+        first: u32,
+        parts_step_fn_idx: u32, // Index into span_with_node_data: (parts.start, parts.len, step_fn_var_plus_one)
+        method_name_region_span2_idx: u32,
+        constraint_fn_var_plus_one: u32,
     };
 
     pub const ExprStructuralEq = extern struct {
@@ -844,6 +870,11 @@ pub const Payload = extern union {
         _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
     };
 
+    pub const PatternStrInterpolation = extern struct {
+        data_idx: u32,
+        _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
+    };
+
     pub const PatternFracF32 = extern struct {
         value: u32,
         _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
@@ -981,8 +1012,18 @@ pub const Payload = extern union {
 
     pub const Annotation = extern struct {
         anno: u32,
-        has_where: u32,
-        where_span2_idx: u32, // Index into span2_data: (where_start, where_len) when has_where == 1
+        /// Index into span2_data: (where_start, where_len); meaningful only when
+        /// `has_where`.
+        where_span2_idx: u32,
+        /// Whether the annotation has a `where` clause.
+        has_where: bool,
+        /// Whether the annotation mentions any type variable — a fresh
+        /// `.rigid_var` or a `.rigid_var_lookup` reference to an enclosing one.
+        mentions_type_var: bool,
+        /// Whether the annotation *introduces* a type variable (`.rigid_var`), as
+        /// opposed to only referencing one from an enclosing scope.
+        introduces_type_var: bool,
+        _padding: [1]u8 = .{0},
     };
 
     // === Diagnostic payload structs ===
@@ -1087,5 +1128,9 @@ pub const Payload = extern union {
     // Compile-time size verification
     comptime {
         std.debug.assert(@sizeOf(Payload) == 16);
+        // anno + where_span2_idx (2 x u32) + 3 bool flags + 1 byte padding. The
+        // explicit `_padding` keeps the trailing byte defined for deterministic
+        // serialization; assert the size so a stray field can't silently grow it.
+        std.debug.assert(@sizeOf(Annotation) == 12);
     }
 };

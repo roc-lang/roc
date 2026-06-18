@@ -17,7 +17,7 @@ result = func(1)
 ~~~roc
 func = |offset| {
 	condition = True
-	f = if (condition) |x| x.plus(offset) else |x| x.times(2)
+	f = if (condition) |x| x + offset else |x| x * 2
 	f(10)
 }
 

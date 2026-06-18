@@ -89,7 +89,13 @@ var arithmetic_error_callback: ?ArithmeticErrorCallback = null;
 /// Called when the handler identifies a stack overflow.
 pub const StackOverflowCallback = *const fn () noreturn;
 /// Called when the handler identifies a non-stack memory access violation.
-pub const AccessViolationCallback = *const fn (fault_addr: usize) noreturn;
+/// Targets with debug unwind support receive the interrupted CPU context.
+pub const AccessViolationContext = if (std.debug.cpu_context.Native == noreturn)
+    void
+else
+    ?std.debug.CpuContextPtr;
+/// Called with the fault address and optional interrupted CPU context.
+pub const AccessViolationCallback = *const fn (fault_addr: usize, context: AccessViolationContext) noreturn;
 /// Called when the handler identifies an arithmetic exception.
 pub const ArithmeticErrorCallback = *const fn () noreturn;
 
@@ -341,7 +347,11 @@ fn handleExceptionWindows(exception_info: *EXCEPTION_POINTERS) callconv(.winapi)
 
     if (access_violation_callback) |callback| {
         const fault_addr = exception_info.ExceptionRecord.ExceptionInformation[1];
-        callback(fault_addr);
+        if (comptime AccessViolationContext == void) {
+            callback(fault_addr, {});
+        } else {
+            callback(fault_addr, null);
+        }
     }
     ExitProcess(139);
 }
@@ -356,7 +366,14 @@ fn handleSegvSignal(_: posix.SIG, info: *const posix.siginfo_t, context: ?*anyop
             std.process.exit(134);
         },
         .access_violation => {
-            if (access_violation_callback) |callback| callback(fault_addr);
+            if (access_violation_callback) |callback| {
+                if (comptime AccessViolationContext == void) {
+                    callback(fault_addr, {});
+                } else {
+                    var cpu_context = std.debug.cpu_context.fromPosixSignalContext(context);
+                    callback(fault_addr, if (cpu_context) |*ctx| ctx else null);
+                }
+            }
             std.process.exit(139);
         },
     }
@@ -522,7 +539,7 @@ test "installForCurrentThread records current stack bounds" {
             }
         }.callback,
         .access_violation = struct {
-            fn callback(_: usize) noreturn {
+            fn callback(_: usize, _: AccessViolationContext) noreturn {
                 std.process.exit(139);
             }
         }.callback,

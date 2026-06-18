@@ -11,23 +11,23 @@ x = 42
 y = "value: ${x}"
 ~~~
 # EXPECTED
-TYPE MISMATCH - string_interpolation_type_mismatch.md:1:1:1:1
+TYPE MISMATCH - string_interpolation_type_mismatch.md:4:15:4:16
 # PROBLEMS
 **TYPE MISMATCH**
-The `from_interpolation` method on `Str` has an incompatible type:
-**string_interpolation_type_mismatch.md:1:1:1:1:**
+This expression is used in an unexpected way:
+**string_interpolation_type_mismatch.md:4:15:4:16:**
 ```roc
-x : U8
+y = "value: ${x}"
 ```
-^
+              ^
 
-The method `from_interpolation` has the type:
+It has the type:
 
-    Str, Iter((Str, Str)) -> Str
+    U8
 
-But I need it to have the type:
+But you are trying to use it as:
 
-    Str, Iter((U8, Str)) -> Str
+    Str
 
 # TOKENS
 ~~~zig
@@ -72,24 +72,13 @@ NO CHANGE
 				(p-assign (ident "#interp_0"))
 				(e-lookup-local
 					(p-assign (ident "x"))))
-			(e-dispatch-call (method "from_interpolation") (constraint-fn-var 258)
-				(receiver
-					(e-string
-						(e-literal (string "value: "))))
-				(args
-					(e-dispatch-call (method "prepended") (constraint-fn-var 216)
-						(receiver
-							(e-dispatch-call (method "iter") (constraint-fn-var 152)
-								(receiver
-									(e-empty_list))
-								(args)))
-						(args
-							(e-tuple
-								(elems
-									(e-lookup-local
-										(p-assign (ident "#interp_0")))
-									(e-string
-										(e-literal (string ""))))))))))))
+			(e-interpolation (constraint-fn-var 181)
+				(first
+					(e-literal (string "value: ")))
+				(parts
+					(e-lookup-local
+						(p-assign (ident "#interp_0")))
+					(e-literal (string "")))))))
 ~~~
 # TYPES
 ~~~clojure

@@ -40,6 +40,10 @@ pub const Diagnostic = union(enum) {
         ident: Ident.Idx,
         region: Region,
     },
+    read_uninitialized_var: struct {
+        ident: Ident.Idx,
+        region: Region,
+    },
     /// A non-function value is defined in terms of itself, which would cause an infinite loop.
     /// For example: `a = a` or `a = [a, b]`. Only functions can reference themselves (for recursion).
     self_referential_definition: struct {
@@ -88,7 +92,14 @@ pub const Diagnostic = union(enum) {
     expr_not_canonicalized: struct {
         region: Region,
     },
+    /// Range operators are non-associative: `a..<b..<c` is not allowed.
+    range_op_chained: struct {
+        region: Region,
+    },
     invalid_string_interpolation: struct {
+        region: Region,
+    },
+    unreachable_string_pattern_capture: struct {
         region: Region,
     },
     pattern_arg_invalid: struct {
@@ -323,6 +334,9 @@ pub const Diagnostic = union(enum) {
     break_outside_loop: struct {
         region: Region,
     },
+    infinite_loop_never_exits: struct {
+        region: Region,
+    },
     return_outside_fn: struct {
         region: Region,
         context: ReturnContext,
@@ -374,6 +388,7 @@ pub const Diagnostic = union(enum) {
             .invalid_top_level_statement => |d| d.region,
             .expr_not_canonicalized => |d| d.region,
             .invalid_string_interpolation => |d| d.region,
+            .unreachable_string_pattern_capture => |d| d.region,
             .pattern_arg_invalid => |d| d.region,
             .pattern_not_canonicalized => |d| d.region,
             .can_lambda_not_implemented => |d| d.region,
@@ -430,9 +445,11 @@ pub const Diagnostic = union(enum) {
             .type_var_starting_with_dollar => |d| d.region,
             .underscore_in_type_declaration => |d| d.region,
             .break_outside_loop => |d| d.region,
+            .infinite_loop_never_exits => |d| d.region,
             .return_outside_fn => |d| d.region,
             .mutually_recursive_type_aliases => |d| d.region,
             .deprecated_number_suffix => |d| d.region,
+            .range_op_chained => |d| d.region,
         };
     }
 

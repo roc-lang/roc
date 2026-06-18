@@ -354,6 +354,11 @@ pub const Store = struct {
         return self.findByString("Builtin.Num.Dec") orelse unreachable;
     }
 
+    /// Return the already-interned Builtin.Str type identifier.
+    pub fn builtinStrTypeIdent(self: *const Store) Idx {
+        return self.findByString("Builtin.Str") orelse unreachable;
+    }
+
     /// Calculate the size needed to serialize this Ident.Store
     pub fn serializedSize(self: *const Store) usize {
         var size: usize = 0;

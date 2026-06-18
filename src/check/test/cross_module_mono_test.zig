@@ -111,7 +111,6 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
         .numeral_literals = serialized_ptr.numeral_literals.deserializeInto(base_ptr),
         .numeral_dispatch_plans = serialized_ptr.numeral_dispatch_plans.deserializeInto(base_ptr),
         .quote_dispatch_plans = serialized_ptr.quote_dispatch_plans.deserializeInto(base_ptr),
-        .interpolation_call_nodes = serialized_ptr.interpolation_call_nodes.deserializeInto(base_ptr),
         .numeric_suffix_types = serialized_ptr.numeric_suffix_types.deserializeInto(base_ptr),
     };
 
@@ -253,7 +252,7 @@ const MonoTestEnv = struct {
             if (other_env.module_env.module_kind == .type_module) {
                 const type_ident = other_env.module_env.common.findIdent(other_module_name);
                 if (type_ident) |ident| {
-                    if (other_env.module_env.getExposedNodeIndexById(ident)) |node_idx| {
+                    if (other_env.module_env.getExposedTypeNodeIndexById(ident)) |node_idx| {
                         break :blk @as(CIR.Statement.Idx, @enumFromInt(node_idx));
                     }
                 }
@@ -370,7 +369,7 @@ const MonoTestEnv = struct {
                 if (imp.env.module_env.module_kind == .type_module) {
                     const type_ident = imp.env.module_env.common.findIdent(imp.name);
                     if (type_ident) |ident| {
-                        if (imp.env.module_env.getExposedNodeIndexById(ident)) |node_idx| {
+                        if (imp.env.module_env.getExposedTypeNodeIndexById(ident)) |node_idx| {
                             break :blk @as(CIR.Statement.Idx, @enumFromInt(node_idx));
                         }
                     }

@@ -177,6 +177,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
     const is_x86_64 = roc_target.toCpuArch() == .x86_64;
     const is_aarch64 = roc_target.toCpuArch() == .aarch64 or roc_target.toCpuArch() == .aarch64_be;
     const is_windows = roc_target.isWindows();
+    const uses_position_based_float_args = is_x86_64 and is_windows;
 
     // Represents a deferred argument source (used for both stack and register args)
     const ArgSource = union(enum) {
@@ -372,10 +373,10 @@ pub fn CallBuilder(comptime EmitType: type) type {
         /// Add a float argument from a float register.
         /// Windows x64: Uses position-based registers (XMM0-3 mirror arg positions 0-3).
         ///              A float arg at position 1 goes in XMM1, consuming both int and float slots.
-        /// System V: Uses separate float register pool (XMM0-7 independent of integer regs).
+        /// System V / AAPCS64: Uses a separate float register pool.
         pub fn addFloatRegArg(self: *Self, src_reg: FloatReg, is_f64: bool) Allocator.Error!void {
-            if (comptime is_windows) {
-                // Windows: float args use same position as int args
+            if (comptime uses_position_based_float_args) {
+                // Windows x64: float args use same position as int args
                 // XMM0 for arg 0, XMM1 for arg 1, etc.
                 if (self.int_arg_index < CC_EMIT.FLOAT_PARAM_REGS.len) {
                     const dst = CC_EMIT.FLOAT_PARAM_REGS[self.int_arg_index];
@@ -430,10 +431,10 @@ pub fn CallBuilder(comptime EmitType: type) type {
 
         /// Add a float argument by loading from memory.
         /// Windows x64: Uses position-based registers (XMM0-3 mirror arg positions 0-3).
-        /// System V: Uses separate float register pool (XMM0-7).
+        /// System V / AAPCS64: Uses a separate float register pool.
         pub fn addFloatMemArg(self: *Self, base_reg: GeneralReg, offset: i32, is_f64: bool) Allocator.Error!void {
-            if (comptime is_windows) {
-                // Windows: float args use same position as int args
+            if (comptime uses_position_based_float_args) {
+                // Windows x64: float args use same position as int args
                 if (self.int_arg_index < CC_EMIT.FLOAT_PARAM_REGS.len) {
                     try self.emitFloatLoad(CC_EMIT.FLOAT_PARAM_REGS[self.int_arg_index], base_reg, offset, is_f64);
                     self.int_arg_index += 1;
@@ -455,7 +456,13 @@ pub fn CallBuilder(comptime EmitType: type) type {
 
         /// Load a float from memory into a float register, dispatching to the target's emit.
         fn emitFloatLoad(self: *Self, dst: FloatReg, base_reg: GeneralReg, offset: i32, is_f64: bool) Allocator.Error!void {
-            if (comptime @hasDecl(EmitType, "fldrRegMemUoff")) {
+            if (comptime @hasDecl(EmitType, "fldrRegMemSoff")) {
+                if (is_f64) {
+                    try self.emit.fldrRegMemSoff(.double, dst, base_reg, offset);
+                } else {
+                    try self.emit.fldrRegMemSoff(.single, dst, base_reg, offset);
+                }
+            } else if (comptime @hasDecl(EmitType, "fldrRegMemUoff")) {
                 if (is_f64) {
                     try self.emit.fldrRegMemUoff(.double, dst, base_reg, @intCast(offset));
                 } else {

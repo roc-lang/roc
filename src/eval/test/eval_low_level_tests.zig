@@ -1961,6 +1961,116 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "\"123.0\"" },
     },
     .{
+        .name = "low_level - F32.to_i8_try truncates fractional part",
+        .source =
+        \\{
+        \\x = F32.to_i8_try(42.7)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Ok(42)" },
+    },
+    .{
+        .name = "low_level - F64.to_u64_try truncates fractional part",
+        .source =
+        \\{
+        \\x = F64.to_u64_try(42.5)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Ok(42)" },
+    },
+    .{
+        .name = "low_level - F64.to_u32_try accepts values above I32 max",
+        .source =
+        \\{
+        \\x = F64.to_u32_try(3000000000.0)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Ok(3000000000)" },
+    },
+    .{
+        .name = "low_level - F64.to_i64_try rejects exclusive upper bound",
+        .source =
+        \\{
+        \\x = F64.to_i64_try(9223372036854775808.0)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Err(OutOfRange)" },
+    },
+    .{
+        .name = "low_level - F64.to_i64_try accepts inclusive lower bound",
+        .source =
+        \\{
+        \\x = F64.to_i64_try(-9223372036854775808.0)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Ok(-9223372036854775808)" },
+    },
+    .{
+        .name = "low_level - F64.to_i128_try truncates negative fractional part",
+        .source =
+        \\{
+        \\x = F64.to_i128_try(-42.5)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Ok(-42)" },
+    },
+    .{
+        .name = "low_level - F64.to_u64_try rejects out-of-range without trapping",
+        .source =
+        \\{
+        \\x = F64.to_u64_try(F64.highest)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Err(OutOfRange)" },
+    },
+    .{
+        .name = "low_level - F64.to_u128_try rejects out-of-range without trapping",
+        .source =
+        \\{
+        \\x = F64.to_u128_try(F64.highest)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Err(OutOfRange)" },
+    },
+    .{
+        .name = "low_level - Dec.to_i8_try truncates fractional part",
+        .source =
+        \\{
+        \\x = Dec.to_i8_try(42.7)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Ok(42)" },
+    },
+    .{
+        .name = "low_level - Dec.to_u64_try accepts full U64 range after truncation",
+        .source =
+        \\{
+        \\x = Dec.to_u64_try(18446744073709551615.9)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Ok(18446744073709551615)" },
+    },
+    .{
+        .name = "low_level - Dec.to_u64_try rejects exclusive upper bound",
+        .source =
+        \\{
+        \\x = Dec.to_u64_try(18446744073709551616.0)
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Err(OutOfRange)" },
+    },
+    .{
         .name = "low_level - I8.to_i16 safe widening positive",
         .source =
         \\{
@@ -4171,5 +4281,117 @@ pub const tests = [_]TestCase{
         \\}
         ,
         .expected = .{ .inspect_str = "6.0" },
+    },
+    .{
+        .name = "low_level - List.set replaces element at index",
+        .source =
+        \\{
+        \\list = Try.ok_or(List.set([1, 2, 3], 1, 9), [])
+        \\Try.ok_or(List.get(list, 1), 0)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "9.0" },
+    },
+    .{
+        .name = "low_level - List.set preserves untouched elements",
+        .source =
+        \\{
+        \\list = Try.ok_or(List.set([1, 2, 3], 1, 9), [])
+        \\Try.ok_or(List.get(list, 2), 0)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "3.0" },
+    },
+    .{
+        .name = "low_level - List.set on refcounted List(Str)",
+        .source =
+        \\{
+        \\list = Try.ok_or(List.set(["cat", "chases", "rat"], 1, "loves"), [])
+        \\Try.ok_or(List.get(list, 1), "")
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"loves\"" },
+    },
+    .{
+        .name = "low_level - List.set out of bounds returns Err",
+        .source =
+        \\{
+        \\match List.set([1, 2, 3], 9, 0) {
+        \\    Ok(_) => "ok"
+        \\    Err(_) => "err"
+        \\}
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"err\"" },
+    },
+    .{
+        .name = "low_level - List.replace returns updated list and prev",
+        .source =
+        \\{
+        \\result = Try.ok_or(List.replace([10, 20, 30], 1, 99), { list: [], prev: 0 })
+        \\result.prev
+        \\}
+        ,
+        .expected = .{ .inspect_str = "20.0" },
+    },
+    .{
+        .name = "low_level - List.replace updated list element",
+        .source =
+        \\{
+        \\result = Try.ok_or(List.replace([10, 20, 30], 1, 99), { list: [], prev: 0 })
+        \\Try.ok_or(List.get(result.list, 1), 0)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "99.0" },
+    },
+    .{
+        .name = "low_level - List.replace on refcounted List(Str)",
+        .source =
+        \\{
+        \\result = Try.ok_or(List.replace(["a", "b", "c"], 0, "z"), { list: [], prev: "" })
+        \\result.prev
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"a\"" },
+    },
+    .{
+        .name = "low_level - List.update applies function at index",
+        .source =
+        \\{
+        \\list = Try.ok_or(List.update([10, 20, 30], 1, |x| x + 5), [])
+        \\Try.ok_or(List.get(list, 1), 0)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "25.0" },
+    },
+    .{
+        .name = "low_level - List.swap exchanges two elements",
+        .source =
+        \\{
+        \\list = Try.ok_or(List.swap([1, 2, 3, 4], 0, 3), [])
+        \\Try.ok_or(List.get(list, 0), 0)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "4.0" },
+    },
+    .{
+        .name = "low_level - List.swap preserves the other swapped index",
+        .source =
+        \\{
+        \\list = Try.ok_or(List.swap([1, 2, 3, 4], 0, 3), [])
+        \\Try.ok_or(List.get(list, 3), 0)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "1.0" },
+    },
+    .{
+        .name = "low_level - List.swap on refcounted List(Str)",
+        .source =
+        \\{
+        \\list = Try.ok_or(List.swap(["cat", "chases", "rat"], 0, 2), [])
+        \\Try.ok_or(List.get(list, 0), "")
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"rat\"" },
     },
 };

@@ -1356,12 +1356,15 @@ EndOfFile,
 							(p-tag (raw "Blue"))
 							(e-int (raw "1")))
 						(branch
-							(p-string (raw """))
+							(p-string (raw """)
+								(p-string-text (raw "foo")))
 							(e-int (raw "00")))
 						(branch
 							(p-alternatives
-								(p-string (raw """))
-								(p-string (raw """)))
+								(p-string (raw """)
+									(p-string-text (raw "foo")))
+								(p-string (raw """)
+									(p-string-text (raw "bar"))))
 							(e-int (raw "20")))
 						(branch
 							(p-list
@@ -1423,7 +1426,7 @@ EndOfFile,
 									(p-int (raw "1")))
 								(field (name "bar") (rest false)
 									(p-int (raw "2")))
-								(field (name "app") (rest true)))
+								(field (rest true)))
 							(e-int (raw "12")))
 						(branch
 							(p-record
@@ -1885,7 +1888,7 @@ main! = |_| { # Yeah Ie
 				(s-expr
 					(e-not-implemented))
 				(s-expr
-					(e-call (constraint-fn-var 1938)
+					(e-call (constraint-fn-var 3454)
 						(e-lookup-local
 							(p-assign (ident "match_time")))
 						(e-not-implemented)))
@@ -1908,24 +1911,13 @@ main! = |_| { # Yeah Ie
 							(p-assign (ident "#interp_0"))
 							(e-lookup-local
 								(p-assign (ident "world"))))
-						(e-dispatch-call (method "from_interpolation") (constraint-fn-var 2097)
-							(receiver
-								(e-string
-									(e-literal (string "Hello, "))))
-							(args
-								(e-dispatch-call (method "prepended") (constraint-fn-var 2055)
-									(receiver
-										(e-dispatch-call (method "iter") (constraint-fn-var 1991)
-											(receiver
-												(e-empty_list))
-											(args)))
-									(args
-										(e-tuple
-											(elems
-												(e-lookup-local
-													(p-assign (ident "#interp_0")))
-												(e-string
-													(e-literal (string "")))))))))))
+						(e-interpolation (constraint-fn-var 3542)
+							(first
+								(e-literal (string "Hello, ")))
+							(parts
+								(e-lookup-local
+									(p-assign (ident "#interp_0")))
+								(e-literal (string ""))))))
 				(s-let
 					(p-assign (ident "list"))
 					(e-runtime-error (tag "expr_not_canonicalized")))

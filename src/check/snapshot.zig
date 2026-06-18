@@ -244,6 +244,65 @@ pub const Store = struct {
         return self.formatted_strings_backing.items[range.start..][0..range.count];
     }
 
+    /// Lengths of every persistent append-only sequence in this store,
+    /// captured by `mark` so a speculative probe can `truncateToMark` away
+    /// everything snapshotted since (the scratch fields are transient within a
+    /// single `snapshotVarForError` call and need no capture).
+    pub const Mark = struct {
+        contents_len: usize,
+        content_indexes_len: usize,
+        record_fields_len: usize,
+        tags_len: usize,
+        static_dispatch_constraints_len: usize,
+        formatted_strings_backing_len: usize,
+    };
+
+    /// Capture the current lengths for a later `truncateToMark`.
+    pub fn mark(self: *const Self) Mark {
+        return .{
+            .contents_len = @intCast(self.contents.len()),
+            .content_indexes_len = @intCast(self.content_indexes.len()),
+            .record_fields_len = self.record_fields.len(),
+            .tags_len = self.tags.len(),
+            .static_dispatch_constraints_len = @intCast(self.static_dispatch_constraints.len()),
+            .formatted_strings_backing_len = self.formatted_strings_backing.items.len,
+        };
+    }
+
+    /// Discard every snapshot recorded after `mark` was captured — the
+    /// rollback of a speculative probe that recorded against this store.
+    /// Owned memory is released exactly as `deinit` would: the `formatted`
+    /// string of each truncated tag is freed, and the `formatted_strings`
+    /// entries keyed by truncated content indexes (every content appended
+    /// after the mark gets its formatted entry when it is created, so the
+    /// keys to drop are exactly the truncated index range) are removed before
+    /// their backing bytes are truncated.
+    pub fn truncateToMark(self: *Self, m: Mark) void {
+        const tags_len = self.tags.len();
+        if (tags_len > m.tags_len) {
+            const removed_range = SnapshotTagSafeList.Range{
+                .start = @enumFromInt(m.tags_len),
+                .count = @intCast(tags_len - m.tags_len),
+            };
+            for (self.tags.sliceRange(removed_range).items(.formatted)) |formatted| {
+                self.gpa.free(formatted);
+            }
+        }
+
+        var content_idx = m.contents_len;
+        const contents_len: usize = @intCast(self.contents.len());
+        while (content_idx < contents_len) : (content_idx += 1) {
+            _ = self.formatted_strings.remove(@enumFromInt(content_idx));
+        }
+
+        self.contents.items.shrinkRetainingCapacity(m.contents_len);
+        self.content_indexes.items.shrinkRetainingCapacity(m.content_indexes_len);
+        self.record_fields.items.shrinkRetainingCapacity(m.record_fields_len);
+        self.tags.items.shrinkRetainingCapacity(m.tags_len);
+        self.static_dispatch_constraints.items.shrinkRetainingCapacity(m.static_dispatch_constraints_len);
+        self.formatted_strings_backing.shrinkRetainingCapacity(m.formatted_strings_backing_len);
+    }
+
     /// Deep copy a type variable for error reporting. This snapshots the type structure
     /// AND formats each nested type using TypeWriter before the types get overwritten with .err.
     /// ONLY use this in error paths - it allocates formatted strings for all nested types.
@@ -619,6 +678,23 @@ pub const Store = struct {
                     idx = alias.backing;
                 },
                 else => return content,
+            }
+        }
+    }
+
+    /// Whether `idx` is a closed record: one whose extension chain terminates in
+    /// `empty_record`. A too-narrow record-destructure pattern is always closed,
+    /// so this distinguishes it from an open (`..`) pattern or an unbound record.
+    pub fn isClosedRecord(self: *const Self, idx: SnapshotContentIdx) bool {
+        var cur = idx;
+        while (true) {
+            switch (self.getContentUnwrapAlias(cur)) {
+                .structure => |s| switch (s) {
+                    .empty_record => return true,
+                    .record => |record| cur = record.ext,
+                    else => return false,
+                },
+                else => return false,
             }
         }
     }

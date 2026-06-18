@@ -124,12 +124,14 @@ const Lowerer = struct {
     runtime_schemas: RuntimeSchemaStore,
     fn_map: []LIR.LirProcSpecId,
     local_map: []?LIR.LocalId,
+    comptime_site_map: []?LIR.ComptimeSiteId,
     type_layouts: []?layout.Idx,
     const_plan_map: []?LirProgram.ConstPlanId,
     next_join_point: u32 = 0,
     loop_stack: std.ArrayList(LoopContext),
     current_ret_ty: ?Type.TypeId = null,
     current_proc_locals: ?*ProcLocalSet = null,
+    current_proc: ?LIR.LirProcSpecId = null,
 
     const ProcLocalSet = std.AutoArrayHashMapUnmanaged(u32, void);
 
@@ -152,6 +154,10 @@ const Lowerer = struct {
         errdefer allocator.free(local_map);
         @memset(local_map, null);
 
+        const comptime_site_map = try allocator.alloc(?LIR.ComptimeSiteId, program.comptime_sites.items.len);
+        errdefer allocator.free(comptime_site_map);
+        @memset(comptime_site_map, null);
+
         const type_layouts = try allocator.alloc(?layout.Idx, program.types.types.items.len);
         errdefer allocator.free(type_layouts);
         @memset(type_layouts, null);
@@ -167,6 +173,7 @@ const Lowerer = struct {
             .runtime_schemas = RuntimeSchemaStore.init(allocator),
             .fn_map = fn_map,
             .local_map = local_map,
+            .comptime_site_map = comptime_site_map,
             .type_layouts = type_layouts,
             .const_plan_map = const_plan_map,
             .loop_stack = .empty,
@@ -177,6 +184,7 @@ const Lowerer = struct {
         self.loop_stack.deinit(self.allocator);
         self.allocator.free(self.const_plan_map);
         self.allocator.free(self.type_layouts);
+        self.allocator.free(self.comptime_site_map);
         self.allocator.free(self.local_map);
         self.allocator.free(self.fn_map);
         self.runtime_schemas.deinit();
@@ -269,6 +277,20 @@ const Lowerer = struct {
         }
     }
 
+    fn lowerComptimeSite(self: *Lowerer, site: LambdaMono.ComptimeSiteId) Common.LowerError!LIR.ComptimeSiteId {
+        const index = @intFromEnum(site);
+        if (self.comptime_site_map[index]) |existing| return existing;
+        const proc = self.current_proc orelse Common.invariant("compile-time site reached LIR lowering outside a proc");
+        const source = self.program.comptimeSite(site);
+        const lowered = try self.result.addComptimeSite(switch (source.kind) {
+            .match => .match,
+            .destructure => .destructure,
+            .if_ => .if_,
+        }, source.region, proc, source.branch_regions);
+        self.comptime_site_map[index] = lowered;
+        return lowered;
+    }
+
     fn writeFrameLocals(self: *Lowerer, locals: *ProcLocalSet) Common.LowerError!LIR.LocalSpan {
         const raw_ids = locals.keys();
         const sorted = try self.allocator.alloc(LIR.LocalId, raw_ids.len);
@@ -291,14 +313,17 @@ const Lowerer = struct {
                 .roc => |body_expr| {
                     const saved_ret_ty = self.current_ret_ty;
                     const saved_proc_locals = self.current_proc_locals;
+                    const saved_current_proc = self.current_proc;
                     var proc_locals: ProcLocalSet = .{};
                     defer proc_locals.deinit(self.allocator);
 
                     self.current_proc_locals = &proc_locals;
                     self.current_ret_ty = fn_.ret;
+                    self.current_proc = proc_id;
                     defer {
                         self.current_ret_ty = saved_ret_ty;
                         self.current_proc_locals = saved_proc_locals;
+                        self.current_proc = saved_current_proc;
                     }
 
                     try self.noteLocalSpan(self.result.store.getProcSpec(proc_id).args);
@@ -728,7 +753,7 @@ const Lowerer = struct {
             .capture_access => |slot| try self.lowerCaptureAccessInto(target, slot, next),
             .tuple_access => |access| try self.lowerTupleAccessInto(target, access.tuple, access.elem_index, next),
             .structural_eq => |eq| try self.lowerStructuralEqInto(target, eq.lhs, eq.rhs, eq.negated, next),
-            .match_ => |match_| try self.lowerMatchInto(target, match_.scrutinee, match_.branches, next),
+            .match_ => |match_| try self.lowerMatchInto(target, match_.scrutinee, match_.branches, match_.comptime_site, next),
             .if_ => |if_| try self.lowerIfInto(target, if_.branches, if_.final_else, next),
             .block => |block| try self.lowerBlockInto(target, block.statements, block.final_expr, next),
             .loop_ => |loop| try self.lowerLoopInto(target, loop, next),
@@ -737,6 +762,14 @@ const Lowerer = struct {
             .return_ => |value| try self.lowerReturn(value),
             .crash => |msg| try self.result.store.addCFStmt(.{ .crash = .{
                 .msg = try self.result.store.insertString(self.program.stringLiteralText(msg)),
+            } }),
+            .comptime_branch_taken => |taken| try self.result.store.addCFStmt(.{ .comptime_branch_taken = .{
+                .site = try self.lowerComptimeSite(taken.site),
+                .branch_index = taken.branch_index,
+                .next = try self.lowerExprInto(target, taken.body, next),
+            } }),
+            .comptime_exhaustiveness_failed => |site| try self.result.store.addCFStmt(.{ .comptime_exhaustiveness_failed = .{
+                .site = try self.lowerComptimeSite(site),
             } }),
             .dbg => |child| blk: {
                 const after_dbg = try self.assignZst(target, next);
@@ -1090,7 +1123,7 @@ const Lowerer = struct {
         const rest = try self.lowerExprInto(target, let_.rest, next);
         const value_expr = self.expr(let_.value);
         const value_local = try self.addTemp(value_expr.ty);
-        const bind = try self.bindPatternOrCrash(let_.bind, value_local, rest);
+        const bind = try self.bindPatternOrCrash(let_.bind, value_local, rest, let_.comptime_site);
         return try self.lowerExprInto(value_local, let_.value, bind);
     }
 
@@ -1340,12 +1373,13 @@ const Lowerer = struct {
         target: LIR.LocalId,
         scrutinee: LambdaMono.ExprId,
         branches_span: LambdaMono.Span(LambdaMono.Branch),
+        comptime_site: ?LambdaMono.ComptimeSiteId,
         next: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
         const scrutinee_local = try self.addTemp(self.expr(scrutinee).ty);
         const branches = self.program.branchSpan(branches_span);
         const done = self.freshJoinPointId();
-        const branch_chain = try self.lowerBranchChain(scrutinee_local, branches, target, done);
+        const branch_chain = try self.lowerBranchChain(scrutinee_local, branches, target, done, comptime_site);
         const remainder = try self.lowerExprInto(scrutinee_local, scrutinee, branch_chain);
         return try self.result.store.addCFStmt(.{ .join = .{
             .id = done,
@@ -1391,9 +1425,10 @@ const Lowerer = struct {
         defer self.result.store.current_loc = saved_loc;
         self.result.store.current_loc = self.program.stmtLoc(stmt_id);
         return switch (self.program.stmts.items[@intFromEnum(stmt_id)]) {
+            .uninitialized => |pat_id| try self.initUninitializedPattern(pat_id, next),
             .let_ => |let_| blk: {
                 const value = try self.addTemp(self.expr(let_.value).ty);
-                const bind = try self.bindPatternOrCrash(let_.pat, value, next);
+                const bind = try self.bindPatternOrCrash(let_.pat, value, next, let_.comptime_site);
                 break :blk try self.lowerExprInto(value, let_.value, bind);
             },
             .expr => |expr_id| blk: {
@@ -1411,6 +1446,84 @@ const Lowerer = struct {
                 .msg = try self.result.store.insertString(self.program.stringLiteralText(msg)),
             } }),
         };
+    }
+
+    fn initUninitializedPattern(
+        self: *Lowerer,
+        pat_id: LambdaMono.PatId,
+        next: LIR.CFStmtId,
+    ) Common.LowerError!LIR.CFStmtId {
+        const pat_data = self.pat(pat_id);
+        return switch (pat_data.data) {
+            .bind => |local| try self.initUninitializedLocal(try self.localFor(local), next),
+            .wildcard,
+            .int_lit,
+            .dec_lit,
+            .frac_f32_lit,
+            .frac_f64_lit,
+            .str_lit,
+            => next,
+            .str_pattern => |str| blk: {
+                var current = next;
+                const steps = self.program.strPatternStepSpan(str.steps);
+                var i = steps.len;
+                while (i > 0) {
+                    i -= 1;
+                    if (steps[i].capture) |capture| {
+                        current = try self.initUninitializedPattern(capture, current);
+                    }
+                }
+                break :blk current;
+            },
+            .as => |as| blk: {
+                const inner = try self.initUninitializedPattern(as.pattern, next);
+                break :blk try self.initUninitializedLocal(try self.localFor(as.local), inner);
+            },
+            .record => |fields| blk: {
+                var current = next;
+                const destructs = self.program.recordDestructSpan(fields);
+                var i = destructs.len;
+                while (i > 0) {
+                    i -= 1;
+                    current = try self.initUninitializedPattern(destructs[i].pattern, current);
+                }
+                break :blk current;
+            },
+            .tuple => |items| blk: {
+                var current = next;
+                const pats = self.program.patSpan(items);
+                var i = pats.len;
+                while (i > 0) {
+                    i -= 1;
+                    current = try self.initUninitializedPattern(pats[i], current);
+                }
+                break :blk current;
+            },
+            .tag => |tag| blk: {
+                var current = next;
+                const payloads = self.program.patSpan(tag.payloads);
+                var i = payloads.len;
+                while (i > 0) {
+                    i -= 1;
+                    current = try self.initUninitializedPattern(payloads[i], current);
+                }
+                break :blk current;
+            },
+            .callable => |callable| if (callable.payload) |payload| try self.initUninitializedPattern(payload, next) else next,
+            .nominal => |inner| try self.initUninitializedPattern(inner, next),
+        };
+    }
+
+    fn initUninitializedLocal(
+        self: *Lowerer,
+        target: LIR.LocalId,
+        next: LIR.CFStmtId,
+    ) Common.LowerError!LIR.CFStmtId {
+        if (self.isZstLocal(target)) return next;
+        return try self.result.store.addCFStmt(.{ .init_uninitialized = .{
+            .target = target,
+            .next = next,
+        } });
     }
 
     fn lowerLoopInto(self: *Lowerer, target: LIR.LocalId, loop: anytype, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
@@ -1495,10 +1608,36 @@ const Lowerer = struct {
         join_id: LIR.JoinPointId,
     };
 
-    fn lowerBranchChain(self: *Lowerer, scrutinee: LIR.LocalId, branches: []const LambdaMono.Branch, target: LIR.LocalId, done: LIR.JoinPointId) Common.LowerError!LIR.CFStmtId {
-        var current = try self.result.store.addCFStmt(.{ .runtime_error = {} });
+    fn lowerBranchChain(
+        self: *Lowerer,
+        scrutinee: LIR.LocalId,
+        branches: []const LambdaMono.Branch,
+        target: LIR.LocalId,
+        done: LIR.JoinPointId,
+        comptime_site: ?LambdaMono.ComptimeSiteId,
+    ) Common.LowerError!LIR.CFStmtId {
+        var current = if (comptime_site) |site|
+            try self.result.store.addCFStmt(.{ .comptime_exhaustiveness_failed = .{ .site = try self.lowerComptimeSite(site) } })
+        else
+            try self.result.store.addCFStmt(.{ .runtime_error = {} });
         var i = branches.len;
         while (i > 0) {
+            const group_end = i;
+            const group_start = self.strPatternBranchGroupStart(branches, group_end);
+            if (group_end - group_start >= 2) {
+                const next_branch = current;
+                const miss = PatternMiss{ .join_id = self.freshJoinPointId() };
+                const branch_start = try self.lowerStrPatternBranchGroup(branches[group_start..group_end], scrutinee, target, done, miss);
+                current = try self.result.store.addCFStmt(.{ .join = .{
+                    .id = miss.join_id,
+                    .params = LIR.LocalSpan.empty(),
+                    .body = next_branch,
+                    .remainder = branch_start,
+                } });
+                i = group_start;
+                continue;
+            }
+
             i -= 1;
             const next_branch = current;
             const needs_miss_join = branches[i].guard != null or self.patternCanMiss(branches[i].pat);
@@ -1525,6 +1664,52 @@ const Lowerer = struct {
                 branch_start;
         }
         return current;
+    }
+
+    fn strPatternBranchGroupStart(self: *Lowerer, branches: []const LambdaMono.Branch, end: usize) usize {
+        var start = end;
+        while (start > 0 and self.directStrPattern(branches[start - 1].pat) != null) {
+            start -= 1;
+        }
+        return start;
+    }
+
+    fn directStrPattern(self: *Lowerer, pat_id: LambdaMono.PatId) ?LambdaMono.StrPattern {
+        const pat_data = self.pat(pat_id);
+        return switch (pat_data.data) {
+            .str_pattern => |str| str,
+            else => null,
+        };
+    }
+
+    fn lowerStrPatternBranchGroup(
+        self: *Lowerer,
+        branches: []const LambdaMono.Branch,
+        source: LIR.LocalId,
+        target: LIR.LocalId,
+        done: LIR.JoinPointId,
+        miss: PatternMiss,
+    ) Common.LowerError!LIR.CFStmtId {
+        const arms = try self.allocator.alloc(LIR.StrMatchArm, branches.len);
+        defer self.allocator.free(arms);
+
+        for (branches, arms) |branch, *arm| {
+            const str = self.directStrPattern(branch.pat) orelse Common.invariant("string-pattern branch group contained a non-string-pattern branch");
+            const branch_done = try self.joinJump(done);
+            const branch_body = try self.lowerExprInto(target, branch.body, branch_done);
+            const guarded = if (branch.guard) |guard| blk: {
+                const guard_local = try self.addTemp(self.expr(guard).ty);
+                const guard_switch = try self.boolSwitchNoContinuation(guard_local, branch_body, try self.patternMissJump(miss));
+                break :blk try self.lowerExprInto(guard_local, guard, guard_switch);
+            } else branch_body;
+            arm.* = try self.lowerStrPatternArm(str, guarded);
+        }
+
+        return try self.result.store.addCFStmt(.{ .str_match_set = .{
+            .source = source,
+            .arms = try self.result.store.addStrMatchArms(arms),
+            .on_miss = try self.patternMissJump(miss),
+        } });
     }
 
     fn joinJump(self: *Lowerer, join_id: LIR.JoinPointId) Common.LowerError!LIR.CFStmtId {
@@ -1554,7 +1739,7 @@ const Lowerer = struct {
                 break :blk false;
             },
             .nominal => |inner| self.patternCanMiss(inner),
-            .tag, .callable, .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit => true,
+            .tag, .callable, .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit, .str_pattern => true,
         };
     }
 
@@ -1576,6 +1761,7 @@ const Lowerer = struct {
             .frac_f32_lit => |value| try self.lowerLiteralPatternThen(source, pat_data.ty, .{ .frac_f32_lit = value }, on_match, miss),
             .frac_f64_lit => |value| try self.lowerLiteralPatternThen(source, pat_data.ty, .{ .frac_f64_lit = value }, on_match, miss),
             .str_lit => |value| try self.lowerLiteralPatternThen(source, pat_data.ty, .{ .str_lit = value }, on_match, miss),
+            .str_pattern => |str| try self.lowerStrPatternThen(str, source, on_match, miss),
         };
     }
 
@@ -1769,16 +1955,94 @@ const Lowerer = struct {
                     } });
             } else next,
             .nominal => |inner| try self.bindPattern(inner, source, next),
-            .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit => next,
+            .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit, .str_pattern => next,
         };
     }
 
-    fn bindPatternOrCrash(self: *Lowerer, pat_id: LambdaMono.PatId, source: LIR.LocalId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+    fn lowerStrPatternThen(
+        self: *Lowerer,
+        str: LambdaMono.StrPattern,
+        source: LIR.LocalId,
+        on_match: LIR.CFStmtId,
+        miss: ?PatternMiss,
+    ) Common.LowerError!LIR.CFStmtId {
+        const arm = try self.lowerStrPatternArm(str, on_match);
+        return try self.result.store.addCFStmt(.{ .str_match = .{
+            .source = source,
+            .prefix = arm.prefix,
+            .steps = arm.steps,
+            .end = arm.end,
+            .on_match = arm.on_match,
+            .on_miss = try self.patternMissJump(miss),
+        } });
+    }
+
+    fn lowerStrPatternArm(
+        self: *Lowerer,
+        str: LambdaMono.StrPattern,
+        on_match: LIR.CFStmtId,
+    ) Common.LowerError!LIR.StrMatchArm {
+        const input_steps = self.program.strPatternStepSpan(str.steps);
+        const lir_steps = try self.allocator.alloc(LIR.StrMatchStep, input_steps.len);
+        defer self.allocator.free(lir_steps);
+
+        for (input_steps, lir_steps) |input_step, *lir_step| {
+            lir_step.* = .{
+                .capture = if (input_step.capture) |capture|
+                    .{ .view = try self.addTemp(self.pat(capture).ty) }
+                else
+                    .discard,
+                .delimiter = try self.lirStrLiteral(input_step.delimiter),
+            };
+        }
+
+        var match_body = on_match;
+        var index = input_steps.len;
+        while (index > 0) {
+            index -= 1;
+            if (input_steps[index].capture) |capture| {
+                const capture_local = switch (lir_steps[index].capture) {
+                    .view => |local| local,
+                    .discard => Common.invariant("string-pattern capture step lowered without a capture local"),
+                };
+                match_body = try self.bindPattern(capture, capture_local, match_body);
+            }
+        }
+
+        return .{
+            .prefix = try self.lirStrLiteral(str.prefix),
+            .steps = try self.result.store.addStrMatchSteps(lir_steps),
+            .end = switch (str.end) {
+                .exact => .exact,
+                .tail => .tail,
+            },
+            .on_match = match_body,
+        };
+    }
+
+    fn bindPatternOrCrash(
+        self: *Lowerer,
+        pat_id: LambdaMono.PatId,
+        source: LIR.LocalId,
+        next: LIR.CFStmtId,
+        comptime_site: ?LambdaMono.ComptimeSiteId,
+    ) Common.LowerError!LIR.CFStmtId {
         if (!self.patternCanMiss(pat_id)) return try self.bindPattern(pat_id, source, next);
 
         const miss = PatternMiss{ .join_id = self.freshJoinPointId() };
-        const crash = try self.result.store.addCFStmt(.{ .runtime_error = {} });
-        const matched = try self.lowerPatternThen(pat_id, source, next, miss, next);
+        const crash = if (comptime_site) |site|
+            try self.result.store.addCFStmt(.{ .comptime_exhaustiveness_failed = .{ .site = try self.lowerComptimeSite(site) } })
+        else
+            try self.result.store.addCFStmt(.{ .runtime_error = {} });
+        const on_match = if (comptime_site) |site|
+            try self.result.store.addCFStmt(.{ .comptime_branch_taken = .{
+                .site = try self.lowerComptimeSite(site),
+                .branch_index = 0,
+                .next = next,
+            } })
+        else
+            next;
+        const matched = try self.lowerPatternThen(pat_id, source, on_match, miss, on_match);
         return try self.result.store.addCFStmt(.{ .join = .{
             .id = miss.join_id,
             .params = LIR.LocalSpan.empty(),
@@ -2297,6 +2561,11 @@ const Lowerer = struct {
 
     fn addTemp(self: *Lowerer, ty: Type.TypeId) Common.LowerError!LIR.LocalId {
         return try self.addLocalForLayout(try self.layoutOfType(ty));
+    }
+
+    fn lirStrLiteral(self: *Lowerer, id: LambdaMono.StringLiteralId) Common.LowerError!LIR.StrLiteral {
+        const str_lit = self.program.stringLiteral(id);
+        return try self.result.store.insertStringView(str_lit.backing, str_lit.offset, str_lit.len);
     }
 
     fn addLocalForLayout(self: *Lowerer, layout_idx: layout.Idx) Common.LowerError!LIR.LocalId {

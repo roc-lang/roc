@@ -265,7 +265,6 @@ const ExprParentKind = enum(u16) {
     expr_for_list = 0xb739,
     expr_for_body = 0x247c,
     expr_lambda_body = 0xdca0,
-    pattern_string = 0x43ef,
 };
 
 const PatternParentKind = enum(u16) {
@@ -1381,6 +1380,96 @@ fn parseRequiresEntriesTokens(self: *Parser) Error!RequiresEntriesResult {
     return .{ .span = try self.store.requiresEntrySpanFrom(requires_entries_top) };
 }
 
+fn parsePatternString(self: *Parser) Error!AST.Pattern.Idx {
+    const start = self.pos;
+    std.debug.assert(self.peek() == .StringStart);
+    self.advance();
+
+    const scratch_top = self.store.scratchPatternStringPartTop();
+    errdefer self.store.clearScratchPatternStringPartsFrom(scratch_top);
+
+    while (true) {
+        switch (self.peek()) {
+            .StringPart => {
+                const part_start = self.pos;
+                self.advance();
+                const part = try self.store.addPatternStringPart(.{ .text = .{
+                    .token = part_start,
+                    .region = .{ .start = part_start, .end = self.pos },
+                } });
+                try self.store.addScratchPatternStringPart(part);
+            },
+            .MalformedStringPart, .MalformedInvalidUnicodeEscapeSequence, .MalformedInvalidEscapeSequence => {
+                self.advance();
+            },
+            .OpenStringInterpolation => {
+                const hole_start = self.pos;
+                self.advance();
+                const name: ?Token.Idx = switch (self.peek()) {
+                    .LowerIdent, .NamedUnderscore => blk: {
+                        const token = self.pos;
+                        self.advance();
+                        break :blk token;
+                    },
+                    .Underscore => blk: {
+                        self.advance();
+                        break :blk null;
+                    },
+                    else => {
+                        while (self.peek() != .CloseStringInterpolation and self.peek() != .StringEnd and self.peek() != .EndOfFile) {
+                            self.advance();
+                        }
+                        if (self.peek() == .CloseStringInterpolation) self.advance();
+                        while (self.peek() != .StringEnd and self.peek() != .EndOfFile) {
+                            self.advance();
+                        }
+                        if (self.peek() == .StringEnd) self.advance();
+                        self.store.clearScratchPatternStringPartsFrom(scratch_top);
+                        return try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, hole_start);
+                    },
+                };
+
+                if (self.peek() != .CloseStringInterpolation) {
+                    while (self.peek() != .StringEnd and self.peek() != .EndOfFile) {
+                        self.advance();
+                    }
+                    if (self.peek() == .StringEnd) self.advance();
+                    self.store.clearScratchPatternStringPartsFrom(scratch_top);
+                    return try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_token, hole_start);
+                }
+                self.advance();
+                const part = try self.store.addPatternStringPart(.{ .capture = .{
+                    .name = name,
+                    .region = .{ .start = hole_start, .end = self.pos },
+                } });
+                try self.store.addScratchPatternStringPart(part);
+            },
+            .StringEnd => {
+                self.advance();
+                const parts = try self.store.patternStringPartSpanFrom(scratch_top);
+                return try self.store.addPattern(.{ .string = .{
+                    .string_tok = start,
+                    .region = .{ .start = start, .end = self.pos },
+                    .parts = parts,
+                } });
+            },
+            .EndOfFile => {
+                self.store.clearScratchPatternStringPartsFrom(scratch_top);
+                return try self.pushMalformed(AST.Pattern.Idx, .pattern_unexpected_eof, start);
+            },
+            else => {
+                const bad = self.pos;
+                while (self.peek() != .StringEnd and self.peek() != .EndOfFile) {
+                    self.advance();
+                }
+                if (self.peek() == .StringEnd) self.advance();
+                self.store.clearScratchPatternStringPartsFrom(scratch_top);
+                return try self.pushMalformed(AST.Pattern.Idx, .string_unexpected_token, bad);
+            },
+        }
+    }
+}
+
 fn parseTargetFileTokens(self: *Parser) Error!AST.TargetFile.Idx {
     const start = self.pos;
     switch (self.peek()) {
@@ -1938,10 +2027,6 @@ const PatternTupleState = struct {
     scratch_top: u32,
 };
 
-const PatternStringState = struct {
-    start: Token.Idx,
-};
-
 const StatementForExprState = struct {
     start: Token.Idx,
     patt: AST.Pattern.Idx,
@@ -2269,7 +2354,6 @@ const OpenSyntaxStack = struct {
     where_statement_type_anno: std.ArrayList(StatementTypeAnnoAfterWhereState) = .empty,
     where_statement_type_decl: std.ArrayList(StatementTypeDeclAfterWhereState) = .empty,
     where_clause_type: std.ArrayList(WhereClauseTypeState) = .empty,
-    pattern_string: std.ArrayList(PatternStringState) = .empty,
     pattern_tag_args: std.ArrayList(PatternTagArgsState) = .empty,
     pattern_list: std.ArrayList(PatternListState) = .empty,
     pattern_tuple: std.ArrayList(PatternTupleState) = .empty,
@@ -2756,7 +2840,6 @@ fn runExprStatementKernel(
     var pattern_record_state: PatternRecordState = undefined;
     var pattern_tuple_state: PatternTupleState = undefined;
     var pattern_alternatives = if (root == .pattern) root_pattern_alternatives else Alternatives.alternatives_forbidden;
-    var pattern_string_state: PatternStringState = undefined;
     var last_pattern: ?AST.Pattern.Idx = null;
     var statement_type = switch (root) {
         .statement, .associated_block => root_statement_type,
@@ -3302,6 +3385,11 @@ fn runExprStatementKernel(
                     .region = .{ .start = expr_finish_state.start, .end = self.pos },
                 } });
                 continue :expr_kernel .suffix;
+            } else if (tok == .DoubleDot) {
+                self.advance();
+                const expr_idx = try self.pushMalformed(AST.Expr.Idx, .expr_double_dot_is_not_range, self.pos);
+                expr_finish_state = .{ .start = expr_finish_state.start, .min_bp = expr_finish_state.min_bp, .expr = expr_idx };
+                continue :expr_kernel .suffix;
             } else if (tok_int < @intFromEnum(Token.Tag.OpArrow)) {
                 // Not an expression suffix.
             } else if (tok_int <= @intFromEnum(Token.Tag.OpFatArrow)) {
@@ -3723,16 +3811,6 @@ fn runExprStatementKernel(
                             .region = .{ .start = start, .end = self.pos },
                         } });
                         continue :expr_kernel .statement_complete;
-                    },
-                    .pattern_string => {
-                        pattern_string_state = open_syntax.popExprPayload(.pattern_string, PatternStringState);
-                        last_expr = null;
-                        last_pattern = try self.store.addPattern(.{ .string = .{
-                            .string_tok = pattern_string_state.start,
-                            .region = .{ .start = pattern_string_state.start, .end = self.pos },
-                            .expr = completed,
-                        } });
-                        continue :expr_kernel .pattern_complete;
                     },
                 }
             }
@@ -5129,10 +5207,15 @@ fn runExprStatementKernel(
                         type_args = .not_looking_for_args;
                         continue :expr_kernel .type_prefix;
                     }
-                    self.expect(.OpAssign) catch {
-                        last_statement = try self.pushMalformed(AST.Statement.Idx, .var_expected_equals, self.pos);
+                    if (self.peek() != .OpAssign) {
+                        last_statement = try self.addStatement(.{ .@"var" = .{
+                            .name = name,
+                            .body = null,
+                            .region = .{ .start = start, .end = self.pos },
+                        } });
                         continue :expr_kernel .statement_complete;
-                    };
+                    }
+                    self.advance();
                     try open_syntax.pushExpr(open_allocator, .statement_var_body, StatementVarBodyState, .{
                         .start = start,
                         .name = name,
@@ -5360,16 +5443,8 @@ fn runExprStatementKernel(
                     continue :expr_kernel .pattern_complete;
                 }
                 if (tok == .StringStart) {
-                    const start = self.pos;
-                    self.advance();
-                    try open_syntax.pushExpr(open_allocator, .pattern_string, PatternStringState, .{ .start = start });
-                    expr_string_state = .{
-                        .start = start,
-                        .min_bp = null,
-                        .scratch_top = self.store.scratchExprTop(),
-                        .multiline = false,
-                    };
-                    continue :expr_kernel .string_next;
+                    last_pattern = try self.parsePatternString();
+                    continue :expr_kernel .pattern_complete;
                 }
                 if (tok == .SingleQuote) {
                     const start = self.pos;
@@ -5834,7 +5909,7 @@ fn runExprStatementKernel(
             .DoubleDot => {
                 const field_start = self.pos;
                 self.advance();
-                var name: u32 = 0;
+                var name: ?Token.Idx = null;
                 if (self.peek() == .LowerIdent) {
                     name = self.pos;
                     self.advance();
@@ -6144,21 +6219,30 @@ const bin_op_bp_table = blk: {
     const start = @intFromEnum(Token.Tag.OpPlus);
     const len = @intFromEnum(Token.Tag.OpEquals) - start + 1;
     var table = [_]BinOpBp{no_bin_op_bp} ** len;
-    table[@intFromEnum(Token.Tag.OpStar) - start] = .{ .left = 30, .right = 31 };
-    table[@intFromEnum(Token.Tag.OpSlash) - start] = .{ .left = 28, .right = 29 };
-    table[@intFromEnum(Token.Tag.OpDoubleSlash) - start] = .{ .left = 26, .right = 27 };
-    table[@intFromEnum(Token.Tag.OpPercent) - start] = .{ .left = 24, .right = 25 };
-    table[@intFromEnum(Token.Tag.OpPlus) - start] = .{ .left = 20, .right = 21 };
-    table[@intFromEnum(Token.Tag.OpBinaryMinus) - start] = .{ .left = 20, .right = 21 };
-    table[@intFromEnum(Token.Tag.OpDoubleQuestion) - start] = .{ .left = 18, .right = 19 };
-    table[@intFromEnum(Token.Tag.OpEquals) - start] = .{ .left = 15, .right = 15 };
-    table[@intFromEnum(Token.Tag.OpNotEquals) - start] = .{ .left = 13, .right = 13 };
-    table[@intFromEnum(Token.Tag.OpLessThan) - start] = .{ .left = 11, .right = 11 };
-    table[@intFromEnum(Token.Tag.OpGreaterThan) - start] = .{ .left = 9, .right = 9 };
-    table[@intFromEnum(Token.Tag.OpLessThanOrEq) - start] = .{ .left = 7, .right = 7 };
-    table[@intFromEnum(Token.Tag.OpGreaterThanOrEq) - start] = .{ .left = 5, .right = 5 };
-    table[@intFromEnum(Token.Tag.OpAnd) - start] = .{ .left = 4, .right = 3 };
-    table[@intFromEnum(Token.Tag.OpOr) - start] = .{ .left = 2, .right = 1 };
+    table[@intFromEnum(Token.Tag.OpStar) - start] = .{ .left = 32, .right = 33 };
+    table[@intFromEnum(Token.Tag.OpSlash) - start] = .{ .left = 30, .right = 31 };
+    table[@intFromEnum(Token.Tag.OpDoubleSlash) - start] = .{ .left = 28, .right = 29 };
+    table[@intFromEnum(Token.Tag.OpPercent) - start] = .{ .left = 26, .right = 27 };
+    table[@intFromEnum(Token.Tag.OpPlus) - start] = .{ .left = 22, .right = 23 };
+    table[@intFromEnum(Token.Tag.OpBinaryMinus) - start] = .{ .left = 22, .right = 23 };
+    table[@intFromEnum(Token.Tag.OpDoubleQuestion) - start] = .{ .left = 20, .right = 21 };
+    table[@intFromEnum(Token.Tag.OpEquals) - start] = .{ .left = 17, .right = 17 };
+    table[@intFromEnum(Token.Tag.OpNotEquals) - start] = .{ .left = 15, .right = 15 };
+    table[@intFromEnum(Token.Tag.OpLessThan) - start] = .{ .left = 13, .right = 13 };
+    table[@intFromEnum(Token.Tag.OpGreaterThan) - start] = .{ .left = 11, .right = 11 };
+    table[@intFromEnum(Token.Tag.OpLessThanOrEq) - start] = .{ .left = 9, .right = 9 };
+    table[@intFromEnum(Token.Tag.OpGreaterThanOrEq) - start] = .{ .left = 7, .right = 7 };
+    table[@intFromEnum(Token.Tag.OpAnd) - start] = .{ .left = 6, .right = 5 };
+    table[@intFromEnum(Token.Tag.OpOr) - start] = .{ .left = 4, .right = 3 };
+    // Ranges are the loosest binary operators. left < right makes them
+    // non-associative (a range cannot nest into its own right operand, so
+    // `a..<b..<c` parses left-associatively for canonicalization to reject).
+    // right = 3 also means a range cannot be the unparenthesized right operand
+    // of `or` (left = 4, right = 3): the expected form is `(a or b)..<c`, not
+    // `a or (1..<5)`. Conversely a range DOES swallow `or` on its own right
+    // side, so `a..<b or c` parses as `a..<(b or c)` (range is the loosest op).
+    table[@intFromEnum(Token.Tag.OpDoubleDotLessThan) - start] = .{ .left = 2, .right = 3 };
+    table[@intFromEnum(Token.Tag.OpDoubleDotEquals) - start] = .{ .left = 2, .right = 3 };
     break :blk table;
 };
 

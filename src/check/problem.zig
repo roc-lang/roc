@@ -32,11 +32,13 @@ pub const DispatcherNotNominal = types.DispatcherNotNominal;
 pub const DispatcherDoesNotImplMethod = types.DispatcherDoesNotImplMethod;
 pub const TypeDoesNotSupportEquality = types.TypeDoesNotSupportEquality;
 pub const UnresolvedDispatcher = types.UnresolvedDispatcher;
+pub const RecursiveDispatch = types.RecursiveDispatch;
 
 // Number errors
 pub const NumberDoesNotFit = types.NumberDoesNotFit;
 pub const NegativeUnsignedInt = types.NegativeUnsignedInt;
 pub const InvalidNumericLiteral = types.InvalidNumericLiteral;
+pub const LiteralDefaulted = types.LiteralDefaulted;
 pub const UnusedValue = types.UnusedValue;
 
 // Match/exhaustiveness errors
@@ -44,6 +46,7 @@ pub const NonExhaustiveMatch = types.NonExhaustiveMatch;
 pub const NonExhaustiveDestructure = types.NonExhaustiveDestructure;
 pub const RedundantPattern = types.RedundantPattern;
 pub const UnmatchablePattern = types.UnmatchablePattern;
+pub const ComptimeUnusedBranch = types.ComptimeUnusedBranch;
 
 // Type declaration errors
 pub const TypeApplyArityMismatch = types.TypeApplyArityMismatch;
@@ -60,6 +63,7 @@ pub const PlatformDefNotFound = types.PlatformDefNotFound;
 pub const PlatformHostedSection = types.PlatformHostedSection;
 pub const HostedUnboxedFunction = types.HostedUnboxedFunction;
 pub const AnnotationOnlyValue = types.AnnotationOnlyValue;
+pub const PolymorphicVarAnnotation = types.PolymorphicVarAnnotation;
 pub const EffectfulTopLevel = types.EffectfulTopLevel;
 pub const EffectfulExpect = types.EffectfulExpect;
 

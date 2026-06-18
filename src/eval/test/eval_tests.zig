@@ -643,12 +643,12 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "(\"other\", \"one byte\")" },
     },
     .{
-        .name = "inspect: custom from_quote receives literal bytes",
+        .name = "inspect: custom from_quote receives literal Str",
         .source_kind = .module,
         .source =
-        \\Tag := [Tag(List(U8))].{
-        \\    from_quote : List(U8) -> Try(Tag, [BadQuotedBytes(Str)])
-        \\    from_quote = |bytes| Ok(Tag(bytes))
+        \\Tag := [Tag(Str)].{
+        \\    from_quote : Str -> Try(Tag, [BadQuotedBytes(Str)])
+        \\    from_quote = |str| Ok(Tag(str))
         \\}
         \\
         \\force : Tag -> Tag
@@ -656,7 +656,7 @@ const core_tests = [_]TestCase{
         \\
         \\main = force("Roc")
         ,
-        .expected = .{ .inspect_str = "Tag([82, 111, 99])" },
+        .expected = .{ .inspect_str = "Tag(\"Roc\")" },
     },
     .{
         .name = "inspect: from_quote literal defaults to Str",
@@ -670,9 +670,9 @@ const core_tests = [_]TestCase{
         .name = "inspect: custom from_quote literal pattern dispatches through is_eq",
         .source_kind = .module,
         .source =
-        \\Tag := [Tag(List(U8))].{
-        \\    from_quote : List(U8) -> Try(Tag, [BadQuotedBytes(Str)])
-        \\    from_quote = |bytes| Ok(Tag(bytes))
+        \\Tag := [Tag(Str)].{
+        \\    from_quote : Str -> Try(Tag, [BadQuotedBytes(Str)])
+        \\    from_quote = |str| Ok(Tag(str))
         \\    is_eq : Tag, Tag -> Bool
         \\    is_eq = |a, b| match (a, b) {
         \\        (Tag(x), Tag(y)) => x == y
@@ -707,17 +707,206 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "(\"greeting\", \"other\")" },
     },
     .{
+        .name = "inspect: string interpolation pattern captures between delimiters",
+        .source_kind = .module,
+        .source =
+        \\describe : Str -> (Str, Str)
+        \\describe = |s| match s {
+        \\    "foo${bar}baz${qux}etc" => (bar, qux)
+        \\    _ => ("miss", "miss")
+        \\}
+        \\
+        \\main = describe("fooleftbazrightetc")
+        ,
+        .expected = .{ .inspect_str = "(\"left\", \"right\")" },
+    },
+    .{
+        .name = "inspect: string interpolation pattern falls through when delimiter is missing",
+        .source_kind = .module,
+        .source =
+        \\describe : Str -> Str
+        \\describe = |s| match s {
+        \\    "foo${bar}baz${_}" => bar
+        \\    _ => "miss"
+        \\}
+        \\
+        \\main = describe("fooleftbuxright")
+        ,
+        .expected = .{ .inspect_str = "\"miss\"" },
+    },
+    .{
+        .name = "inspect: string interpolation pattern stops at first delimiter byte",
+        .source_kind = .module,
+        .source =
+        \\describe : Str -> Str
+        \\describe = |s| match s {
+        \\    "foo${bar}baz" => bar
+        \\    _ => "miss"
+        \\}
+        \\
+        \\main = (describe("fooleftbaz"), describe("fooleftbzzbaz"))
+        ,
+        .expected = .{ .inspect_str = "(\"left\", \"miss\")" },
+    },
+    .{
+        .name = "inspect: string interpolation pattern discard matches suffix",
+        .source_kind = .module,
+        .source =
+        \\describe : Str -> Str
+        \\describe = |s| match s {
+        \\    "${_}.txt" => "text"
+        \\    _ => "other"
+        \\}
+        \\
+        \\main = (describe("notes.txt"), describe("notes.md"))
+        ,
+        .expected = .{ .inspect_str = "(\"text\", \"other\")" },
+    },
+    .{
+        .name = "inspect: string interpolation pattern tail capture and discard",
+        .source_kind = .module,
+        .source =
+        \\describe : Str -> (Str, Str)
+        \\describe = |s| match s {
+        \\    "foo${name}blah${_}" => (name, "tail")
+        \\    "prefix${rest}" => (rest, "rest")
+        \\    _ => ("miss", "miss")
+        \\}
+        \\
+        \\main = (describe("fooBARblahanything"), describe("prefixVALUE"))
+        ,
+        .expected = .{ .inspect_str = "((\"BAR\", \"tail\"), (\"VALUE\", \"rest\"))" },
+    },
+    .{
+        .name = "inspect: string interpolation pattern allows empty captures with exact suffix",
+        .source_kind = .module,
+        .source =
+        \\piece : Str -> Str
+        \\piece = |s| match s {
+        \\    "a${mid}b" => mid
+        \\    _ => "miss"
+        \\}
+        \\
+        \\main = (piece("ab"), piece("acb"), piece("acbd"), piece("a"))
+        ,
+        .expected = .{ .inspect_str = "(\"\", \"c\", \"miss\", \"miss\")" },
+    },
+    .{
+        .name = "inspect: string interpolation pattern discards at start middle and end",
+        .source_kind = .module,
+        .source =
+        \\classify : Str -> Str
+        \\classify = |s| match s {
+        \\    "${_}user/${id}/posts/${_}" => id
+        \\    _ => "miss"
+        \\}
+        \\
+        \\main = (classify("/api/user/42/posts/latest"), classify("prefixuser//posts/"), classify("/api/user/42/comments/latest"))
+        ,
+        .expected = .{ .inspect_str = "(\"42\", \"\", \"miss\")" },
+    },
+    .{
+        .name = "inspect: string interpolation pattern overlapping suffix branches",
+        .source_kind = .module,
+        .source =
+        \\route : Str -> (Str, Str)
+        \\route = |s| match s {
+        \\    "file:${name}.txt" => ("txt", name)
+        \\    "file:${name}.json" => ("json", name)
+        \\    _ => ("miss", "")
+        \\}
+        \\
+        \\main = (route("file:notes.txt"), route("file:data.json"), route("file:data.md"))
+        ,
+        .expected = .{ .inspect_str = "((\"txt\", \"notes\"), (\"json\", \"data\"), (\"miss\", \"\"))" },
+    },
+    .{
+        .name = "inspect: string interpolation pattern capture feeds read-only str builtins",
+        .source_kind = .module,
+        .source =
+        \\describe : Str -> (Bool, Bool, Bool, Bool, Bool)
+        \\describe = |s| match s {
+        \\    "foo${name}bar" => (name == "token", Str.starts_with(name, "to"), Str.ends_with(name, "en"), Str.contains(name, "ke"), Str.caseless_ascii_equals(name, "TOKEN"))
+        \\    _ => (False, False, False, False, False)
+        \\}
+        \\
+        \\main = (describe("footokenbar"), describe("foomissbar"))
+        ,
+        .expected = .{ .inspect_str = "((True, True, True, True, True), (False, False, False, False, False))" },
+    },
+    .{
+        .name = "allocation - string interpolation pattern capture returns seamless heap slice",
+        .source =
+        \\{
+        \\    prefix = "MATCH_PREFIX:"
+        \\    payload = Str.repeat("abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ", 1)
+        \\    source = Str.concat(prefix, payload)
+        \\
+        \\    match source {
+        \\        "MATCH_PREFIX:${rest}" =>
+        \\            if Str.contains(rest, "mnop") and Str.caseless_ascii_equals(rest, payload) {
+        \\                rest
+        \\            } else {
+        \\                ""
+        \\            }
+        \\        _ => ""
+        \\    }
+        \\}
+        ,
+        .expected = .{ .allocations_at_most = .{
+            .output = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+            .max_allocations = 2,
+        } },
+    },
+    .{
+        .name = "allocation - string interpolation pattern capture feeds drop prefix suffix without copy",
+        .source =
+        \\{
+        \\    prefix = "MATCH_PREFIX:"
+        \\    payload = Str.repeat("DROPabcdefghijklmnopqrstuvwxyz0123456789KEEP", 1)
+        \\    source = Str.concat(prefix, payload)
+        \\
+        \\    match source {
+        \\        "MATCH_PREFIX:${rest}" => Str.drop_suffix(Str.drop_prefix(rest, "DROP"), "KEEP")
+        \\        _ => ""
+        \\    }
+        \\}
+        ,
+        .expected = .{ .allocations_at_most = .{
+            .output = "abcdefghijklmnopqrstuvwxyz0123456789",
+            .max_allocations = 2,
+        } },
+    },
+    .{
+        .name = "allocation - string interpolation pattern middle capture remains heap slice",
+        .source =
+        \\{
+        \\    payload = Str.repeat("abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ", 1)
+        \\    source = Str.concat(Str.concat("prefix/user/", payload), "/posts/tail")
+        \\
+        \\    match source {
+        \\        "${_}/user/${id}/posts/${_}" => id
+        \\        _ => ""
+        \\    }
+        \\}
+        ,
+        .expected = .{ .allocations_at_most = .{
+            .output = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+            .max_allocations = 3,
+        } },
+    },
+    .{
         .name = "inspect: string literal type suffix pins custom from_quote target",
         .source_kind = .module,
         .source =
-        \\Tag := [Tag(List(U8))].{
-        \\    from_quote : List(U8) -> Try(Tag, [BadQuotedBytes(Str)])
-        \\    from_quote = |bytes| Ok(Tag(bytes))
+        \\Tag := [Tag(Str)].{
+        \\    from_quote : Str -> Try(Tag, [BadQuotedBytes(Str)])
+        \\    from_quote = |str| Ok(Tag(str))
         \\}
         \\
         \\main = "Roc".Tag
         ,
-        .expected = .{ .inspect_str = "Tag([82, 111, 99])" },
+        .expected = .{ .inspect_str = "Tag(\"Roc\")" },
     },
     .{
         .name = "inspect: string literal Str type suffix",
@@ -732,8 +921,8 @@ const core_tests = [_]TestCase{
         .source_kind = .module,
         .source =
         \\Tally := [Tally(U64)].{
-        \\    from_quote : List(U8) -> Try(Tally, [BadQuotedBytes(Str)])
-        \\    from_quote = |bytes| Ok(Tally(bytes.len()))
+        \\    from_quote : Str -> Try(Tally, [BadQuotedBytes(Str)])
+        \\    from_quote = |str| Ok(Tally(str.count_utf8_bytes()))
         \\}
         \\
         \\main = {
@@ -751,11 +940,11 @@ const core_tests = [_]TestCase{
         .source_kind = .module,
         .source =
         \\Url := [Url(Str)].{
-        \\    from_quote : List(U8) -> Try(Url, [BadQuotedBytes(Str)])
-        \\    from_quote = |bytes| Ok(Url(Str.from_utf8_lossy(bytes)))
-        \\    from_interpolation : Url, Iter((Str, Url)) -> Url
+        \\    from_quote : Str -> Try(Url, [BadQuotedBytes(Str)])
+        \\    from_quote = |str| Ok(Url(str))
+        \\    from_interpolation : Str, Iter((Str, Str)) -> Url
         \\    from_interpolation = |first, rest| {
-        \\        Url.Url(rest.fold(first.inner(), |acc, (interpolated, segment)| acc.concat(interpolated).concat(segment.inner())))
+        \\        Url.Url(rest.fold(first, |acc, (interpolated, segment)| acc.concat(interpolated).concat(segment)))
         \\    }
         \\    inner : Url -> Str
         \\    inner = |Url.Url(str)| str
@@ -769,6 +958,58 @@ const core_tests = [_]TestCase{
         \\}
         ,
         .expected = .{ .inspect_str = "Url(\"https://example.com\")" },
+    },
+    .{
+        .name = "inspect: Try interpolation forwards to custom result type",
+        .source_kind = .module,
+        .source =
+        \\Url := [Url(Str)].{
+        \\    from_interpolation : Str, Iter((Str, Str)) -> Try(Url, [InvalidUrl])
+        \\    from_interpolation = |first, rest| Ok(Url.Url(rest.fold(first, |acc, (interpolated, segment)| acc.concat(interpolated).concat(segment))))
+        \\}
+        \\
+        \\main = {
+        \\    domain = "example"
+        \\    url : Try(Url, [InvalidUrl])
+        \\    url = "https://${domain}.com"
+        \\    url
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Ok(Url(\"https://example.com\"))" },
+    },
+    .{
+        .name = "problem: nested Try interpolation does not recursively satisfy forwarding",
+        .source_kind = .module,
+        .source =
+        \\Url := [Url(Str)].{
+        \\    from_interpolation : Str, Iter((Str, Str)) -> Try(Url, [InvalidUrl])
+        \\    from_interpolation = |first, rest| Ok(Url.Url(rest.fold(first, |acc, (interpolated, segment)| acc.concat(interpolated).concat(segment))))
+        \\}
+        \\
+        \\main = {
+        \\    domain = "example"
+        \\    url : Try(Try(Url, [InvalidUrl]), [Outer])
+        \\    url = "https://${domain}.com"
+        \\    url
+        \\}
+        ,
+        .expected = .{ .problem = {} },
+    },
+    .{
+        .name = "inspect: suffixed interpolation accepts custom return type",
+        .source_kind = .module,
+        .source =
+        \\Url := [Url(Str)].{
+        \\    from_interpolation : Str, Iter((Str, Str)) -> Try(Url, [InvalidUrl])
+        \\    from_interpolation = |first, rest| Ok(Url.Url(rest.fold(first, |acc, (interpolated, segment)| acc.concat(interpolated).concat(segment))))
+        \\}
+        \\
+        \\main = {
+        \\    domain = "example"
+        \\    "https://${domain}.com".Url
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Ok(Url(\"https://example.com\"))" },
     },
     .{
         .name = "inspect: interpolation with adjacent and boundary interpolations",
@@ -787,8 +1028,8 @@ const core_tests = [_]TestCase{
         .source_kind = .module,
         .source =
         \\Strict := [Strict].{
-        \\    from_quote : List(U8) -> Try(Strict, [BadQuotedBytes(Str)])
-        \\    from_quote = |_bytes| Err(BadQuotedBytes("Strict rejects every string"))
+        \\    from_quote : Str -> Try(Strict, [BadQuotedBytes(Str)])
+        \\    from_quote = |_str| Err(BadQuotedBytes("Strict rejects every string"))
         \\}
         \\
         \\force : Strict -> Strict
@@ -3349,6 +3590,176 @@ const core_tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "[0, 1, 1, 2, 3]" },
     },
+    .{
+        .name = "inspect: Iter.step_by yields first then every nth",
+        .source =
+        \\{
+        \\    iter = [1.I64, 2, 3, 4, 5].iter().step_by(2)
+        \\    Iter.fold(iter, [], |acc, item| acc.append(item))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[1, 3, 5]" },
+    },
+    .{
+        .name = "inspect: Iter.step_by even length stops within bounds",
+        .source =
+        \\{
+        \\    iter = [1.I64, 2, 3, 4, 5, 6].iter().step_by(2)
+        \\    Iter.fold(iter, [], |acc, item| acc.append(item))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[1, 3, 5]" },
+    },
+    .{
+        .name = "inspect: Iter.step_by of 1 is identity",
+        .source =
+        \\{
+        \\    iter = [1.I64, 2, 3].iter().step_by(1)
+        \\    Iter.fold(iter, [], |acc, item| acc.append(item))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3]" },
+    },
+    .{
+        .name = "inspect: Iter.step_by of 0 is empty",
+        .source =
+        \\{
+        \\    iter = [1.I64, 2, 3].iter().step_by(0)
+        \\    Iter.fold(iter, [], |acc, item| acc.append(item))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[]" },
+    },
+    .{
+        .name = "inspect: Iter.step_by on empty source is empty",
+        .source =
+        \\{
+        \\    iter = [].iter().step_by(3)
+        \\    Iter.fold(iter, [], |acc, item| acc.append(item))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[]" },
+    },
+    .{
+        .name = "inspect: Iter.step_by larger than length yields first only",
+        .source =
+        \\{
+        \\    iter = [1.I64, 2, 3].iter().step_by(10)
+        \\    Iter.fold(iter, [], |acc, item| acc.append(item))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[1]" },
+    },
+    .{
+        .name = "inspect: Iter.step_by on a range",
+        .source =
+        \\{
+        \\    iter = (1.U64..=10).step_by(3)
+        \\    Iter.fold(iter, [], |acc, item| acc.append(item))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[1, 4, 7, 10]" },
+    },
+    .{
+        .name = "inspect: Iter.step_by counts values across skips from keep_if",
+        .source =
+        \\{
+        \\    evens = [1.I64, 2, 3, 4, 5, 6].iter().keep_if(|x| I64.rem_by(x, 2) == 0)
+        \\    Iter.fold(evens.step_by(2), [], |acc, item| acc.append(item))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[2, 6]" },
+    },
+    .{
+        .name = "inspect: Iter.step_by preserves known length as ceil",
+        .source = "Iter.size_hint([1.I64, 2, 3, 4, 5].iter().step_by(2))",
+        .expected = .{ .inspect_str = "Known(3)" },
+    },
+    .{
+        .name = "inspect: Iter.step_by known length on a range",
+        .source = "Iter.size_hint((1.U64..=10).step_by(3))",
+        .expected = .{ .inspect_str = "Known(4)" },
+    },
+    .{
+        .name = "inspect: Iter.step_by of 0 has known length zero",
+        .source = "Iter.size_hint([1.I64, 2, 3].iter().step_by(0))",
+        .expected = .{ .inspect_str = "Known(0)" },
+    },
+    .{
+        .name = "inspect: Iter.step_by reports unknown length for unknown source",
+        .source = "Iter.size_hint([1.I64, 2, 3, 4].iter().keep_if(|x| x > 1).step_by(2))",
+        .expected = .{ .inspect_str = "Unknown" },
+    },
+    .{
+        .name = "inspect: Iter.rev reverses items",
+        .source =
+        \\{
+        \\    iter = [1.I64, 2, 3].iter().rev()
+        \\    Iter.fold(iter, [], |acc, item| acc.append(item))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[3, 2, 1]" },
+    },
+    .{
+        .name = "inspect: Iter.rev on empty source is empty",
+        .source =
+        \\{
+        \\    iter = [].iter().rev()
+        \\    Iter.fold(iter, [], |acc, item| acc.append(item))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[]" },
+    },
+    .{
+        .name = "inspect: Iter.rev on a singleton",
+        .source =
+        \\{
+        \\    iter = [1.I64].iter().rev()
+        \\    Iter.fold(iter, [], |acc, item| acc.append(item))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[1]" },
+    },
+    .{
+        .name = "inspect: Iter.rev on a range",
+        .source =
+        \\{
+        \\    iter = (1.U64..=5).rev()
+        \\    Iter.fold(iter, [], |acc, item| acc.append(item))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[5, 4, 3, 2, 1]" },
+    },
+    .{
+        .name = "inspect: Iter.rev of unknown-length source upgrades to known",
+        .source =
+        \\{
+        \\    odds = [1.I64, 2, 3, 4, 5].iter().keep_if(|x| I64.rem_by(x, 2) == 1)
+        \\    Iter.fold(odds.rev(), [], |acc, item| acc.append(item))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[5, 3, 1]" },
+    },
+    .{
+        .name = "inspect: Iter.rev composed with step_by",
+        .source =
+        \\{
+        \\    iter = [1.I64, 2, 3, 4, 5].iter().step_by(2).rev()
+        \\    Iter.fold(iter, [], |acc, item| acc.append(item))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[5, 3, 1]" },
+    },
+    .{
+        .name = "inspect: Iter.rev reports known length",
+        .source = "Iter.size_hint([1.I64, 2, 3].iter().rev())",
+        .expected = .{ .inspect_str = "Known(3)" },
+    },
+    .{
+        .name = "inspect: Iter.rev upgrades unknown length to known",
+        .source = "Iter.size_hint([1.I64, 2, 3, 4, 5].iter().keep_if(|x| I64.rem_by(x, 2) == 1).rev())",
+        .expected = .{ .inspect_str = "Known(3)" },
+    },
     .{ .name = "inspect: List.any true on integers", .source = "List.any([1, 0, 1, 0, -1], |x| x > 0)", .expected = .{ .inspect_str = "True" } },
     .{ .name = "inspect: List.any false on positive integers with negative predicate", .source = "List.any([9, 8, 7, 6, 5], |x| x < 0)", .expected = .{ .inspect_str = "False" } },
     .{ .name = "inspect: List.any false on empty list", .source = "List.any([], |x| x < 0)", .expected = .{ .inspect_str = "False" } },
@@ -3451,34 +3862,34 @@ const core_tests = [_]TestCase{
     },
     .{
         .name = "inspect: U32.to builds inclusive range iterator",
-        .source = "Iter.fold(1.U32.to(5.U32), [], |acc, item| acc.append(item))",
+        .source = "Iter.fold(1.U32..=5.U32, [], |acc, item| acc.append(item))",
         .expected = .{ .inspect_str = "[1, 2, 3, 4, 5]" },
     },
     .{
         .name = "inspect: U32.until builds exclusive range iterator",
-        .source = "Iter.fold(0.U32.until(3.U32), [], |acc, item| acc.append(item))",
+        .source = "Iter.fold(0.U32..<3.U32, [], |acc, item| acc.append(item))",
         .expected = .{ .inspect_str = "[0, 1, 2]" },
     },
     .{
         .name = "inspect: I64.until builds exclusive range iterator",
-        .source = "Iter.fold((-2.I64).until(2.I64), [], |acc, item| acc.append(item))",
+        .source = "Iter.fold((-2.I64)..<2.I64, [], |acc, item| acc.append(item))",
         .expected = .{ .inspect_str = "[-2, -1, 0, 1]" },
     },
     .{
         .name = "inspect: numeric to methods all return iterators",
         .source =
         \\{
-        \\    u8 = Iter.fold(1.U8.to(3.U8), 0.U8, |acc, item| acc + item)
-        \\    i8 = Iter.fold((-1.I8).to(1.I8), 0.I8, |acc, item| acc + item)
-        \\    u16 = Iter.fold(1.U16.to(3.U16), 0.U16, |acc, item| acc + item)
-        \\    i16 = Iter.fold((-1.I16).to(1.I16), 0.I16, |acc, item| acc + item)
-        \\    u32 = Iter.fold(1.U32.to(3.U32), 0.U32, |acc, item| acc + item)
-        \\    i32 = Iter.fold((-1.I32).to(1.I32), 0.I32, |acc, item| acc + item)
-        \\    u64 = Iter.fold(1.U64.to(3.U64), 0.U64, |acc, item| acc + item)
-        \\    i64 = Iter.fold((-1.I64).to(1.I64), 0.I64, |acc, item| acc + item)
-        \\    u128 = Iter.fold(1.U128.to(3.U128), 0.U128, |acc, item| acc + item)
-        \\    i128 = Iter.fold((-1.I128).to(1.I128), 0.I128, |acc, item| acc + item)
-        \\    dec = Iter.fold(Dec.to(1.0, 3.0), 0.0.Dec, |acc, item| acc + item)
+        \\    u8 = Iter.fold(1.U8..=3.U8, 0.U8, |acc, item| acc + item)
+        \\    i8 = Iter.fold((-1.I8)..=1.I8, 0.I8, |acc, item| acc + item)
+        \\    u16 = Iter.fold(1.U16..=3.U16, 0.U16, |acc, item| acc + item)
+        \\    i16 = Iter.fold((-1.I16)..=1.I16, 0.I16, |acc, item| acc + item)
+        \\    u32 = Iter.fold(1.U32..=3.U32, 0.U32, |acc, item| acc + item)
+        \\    i32 = Iter.fold((-1.I32)..=1.I32, 0.I32, |acc, item| acc + item)
+        \\    u64 = Iter.fold(1.U64..=3.U64, 0.U64, |acc, item| acc + item)
+        \\    i64 = Iter.fold((-1.I64)..=1.I64, 0.I64, |acc, item| acc + item)
+        \\    u128 = Iter.fold(1.U128..=3.U128, 0.U128, |acc, item| acc + item)
+        \\    i128 = Iter.fold((-1.I128)..=1.I128, 0.I128, |acc, item| acc + item)
+        \\    dec = Iter.fold(1.0..=3.0, 0.0.Dec, |acc, item| acc + item)
         \\    (u8, i8, u16, i16, u32, i32, u64, i64, u128, i128, dec)
         \\}
         ,
@@ -3488,17 +3899,17 @@ const core_tests = [_]TestCase{
         .name = "inspect: numeric until methods all return iterators",
         .source =
         \\{
-        \\    u8 = Iter.fold(1.U8.until(3.U8), 0.U64, |acc, _| acc + 1)
-        \\    i8 = Iter.fold((-1.I8).until(1.I8), 0.U64, |acc, _| acc + 1)
-        \\    u16 = Iter.fold(1.U16.until(3.U16), 0.U64, |acc, _| acc + 1)
-        \\    i16 = Iter.fold((-1.I16).until(1.I16), 0.U64, |acc, _| acc + 1)
-        \\    u32 = Iter.fold(1.U32.until(3.U32), 0.U64, |acc, _| acc + 1)
-        \\    i32 = Iter.fold((-1.I32).until(1.I32), 0.U64, |acc, _| acc + 1)
-        \\    u64 = Iter.fold(1.U64.until(3.U64), 0.U64, |acc, _| acc + 1)
-        \\    i64 = Iter.fold((-1.I64).until(1.I64), 0.U64, |acc, _| acc + 1)
-        \\    u128 = Iter.fold(1.U128.until(3.U128), 0.U64, |acc, _| acc + 1)
-        \\    i128 = Iter.fold((-1.I128).until(1.I128), 0.U64, |acc, _| acc + 1)
-        \\    dec = Iter.fold(Dec.until(1.0, 3.0), 0.U64, |acc, _| acc + 1)
+        \\    u8 = Iter.fold(1.U8..<3.U8, 0.U64, |acc, _| acc + 1)
+        \\    i8 = Iter.fold((-1.I8)..<1.I8, 0.U64, |acc, _| acc + 1)
+        \\    u16 = Iter.fold(1.U16..<3.U16, 0.U64, |acc, _| acc + 1)
+        \\    i16 = Iter.fold((-1.I16)..<1.I16, 0.U64, |acc, _| acc + 1)
+        \\    u32 = Iter.fold(1.U32..<3.U32, 0.U64, |acc, _| acc + 1)
+        \\    i32 = Iter.fold((-1.I32)..<1.I32, 0.U64, |acc, _| acc + 1)
+        \\    u64 = Iter.fold(1.U64..<3.U64, 0.U64, |acc, _| acc + 1)
+        \\    i64 = Iter.fold((-1.I64)..<1.I64, 0.U64, |acc, _| acc + 1)
+        \\    u128 = Iter.fold(1.U128..<3.U128, 0.U64, |acc, _| acc + 1)
+        \\    i128 = Iter.fold((-1.I128)..<1.I128, 0.U64, |acc, _| acc + 1)
+        \\    dec = Iter.fold(1.0..<3.0, 0.U64, |acc, _| acc + 1)
         \\    (u8, i8, u16, i16, u32, i32, u64, i64, u128, i128, dec)
         \\}
         ,
@@ -3538,19 +3949,19 @@ const core_tests = [_]TestCase{
         \\{
         \\    count = |iter| Iter.fold(iter, 0.U64, |acc, _| acc + 1)
         \\    (
-        \\        count(U8.to(U8.highest, U8.highest)),
-        \\        count(I8.to(I8.highest, I8.highest)),
-        \\        count(U16.to(U16.highest, U16.highest)),
-        \\        count(I16.to(I16.highest, I16.highest)),
-        \\        count(U32.to(U32.highest, U32.highest)),
-        \\        count(I32.to(I32.highest, I32.highest)),
-        \\        count(U64.to(U64.highest, U64.highest)),
-        \\        count(I64.to(I64.highest, I64.highest)),
-        \\        count(U128.to(U128.highest, U128.highest)),
-        \\        count(I128.to(I128.highest, I128.highest)),
-        \\        count(Dec.to(Dec.highest, Dec.highest)),
-        \\        count(Dec.to(Dec.highest - 0.5, Dec.highest)),
-        \\        count(Dec.to(Dec.highest - 1.0, Dec.highest)),
+        \\        count(U8.highest..=U8.highest),
+        \\        count(I8.highest..=I8.highest),
+        \\        count(U16.highest..=U16.highest),
+        \\        count(I16.highest..=I16.highest),
+        \\        count(U32.highest..=U32.highest),
+        \\        count(I32.highest..=I32.highest),
+        \\        count(U64.highest..=U64.highest),
+        \\        count(I64.highest..=I64.highest),
+        \\        count(U128.highest..=U128.highest),
+        \\        count(I128.highest..=I128.highest),
+        \\        count(Dec.highest..=Dec.highest),
+        \\        count((Dec.highest - 0.5)..=Dec.highest),
+        \\        count((Dec.highest - 1.0)..=Dec.highest),
         \\    )
         \\}
         ,
@@ -3562,19 +3973,19 @@ const core_tests = [_]TestCase{
         \\{
         \\    count = |iter| Iter.fold(iter, 0.U64, |acc, _| acc + 1)
         \\    (
-        \\        count(U8.until(U8.highest, U8.highest)),
-        \\        count(I8.until(I8.highest, I8.highest)),
-        \\        count(U16.until(U16.highest, U16.highest)),
-        \\        count(I16.until(I16.highest, I16.highest)),
-        \\        count(U32.until(U32.highest, U32.highest)),
-        \\        count(I32.until(I32.highest, I32.highest)),
-        \\        count(U64.until(U64.highest, U64.highest)),
-        \\        count(I64.until(I64.highest, I64.highest)),
-        \\        count(U128.until(U128.highest, U128.highest)),
-        \\        count(I128.until(I128.highest, I128.highest)),
-        \\        count(Dec.until(Dec.highest, Dec.highest)),
-        \\        count(Dec.until(Dec.highest - 0.5, Dec.highest)),
-        \\        count(Dec.until(Dec.highest - 1.0, Dec.highest)),
+        \\        count(U8.highest..<U8.highest),
+        \\        count(I8.highest..<I8.highest),
+        \\        count(U16.highest..<U16.highest),
+        \\        count(I16.highest..<I16.highest),
+        \\        count(U32.highest..<U32.highest),
+        \\        count(I32.highest..<I32.highest),
+        \\        count(U64.highest..<U64.highest),
+        \\        count(I64.highest..<I64.highest),
+        \\        count(U128.highest..<U128.highest),
+        \\        count(I128.highest..<I128.highest),
+        \\        count(Dec.highest..<Dec.highest),
+        \\        count((Dec.highest - 0.5)..<Dec.highest),
+        \\        count((Dec.highest - 1.0)..<Dec.highest),
         \\    )
         \\}
         ,
@@ -3586,20 +3997,58 @@ const core_tests = [_]TestCase{
         \\{
         \\    count = |iter| Iter.fold(iter, 0.U64, |acc, _| acc + 1)
         \\    (
-        \\        count(U8.until(U8.highest - 1, U8.highest)),
-        \\        count(I8.until(I8.highest - 1, I8.highest)),
-        \\        count(U16.until(U16.highest - 1, U16.highest)),
-        \\        count(I16.until(I16.highest - 1, I16.highest)),
-        \\        count(U32.until(U32.highest - 1, U32.highest)),
-        \\        count(I32.until(I32.highest - 1, I32.highest)),
-        \\        count(U64.until(U64.highest - 1, U64.highest)),
-        \\        count(I64.until(I64.highest - 1, I64.highest)),
-        \\        count(U128.until(U128.highest - 1, U128.highest)),
-        \\        count(I128.until(I128.highest - 1, I128.highest)),
+        \\        count((U8.highest - 1)..<U8.highest),
+        \\        count((I8.highest - 1)..<I8.highest),
+        \\        count((U16.highest - 1)..<U16.highest),
+        \\        count((I16.highest - 1)..<I16.highest),
+        \\        count((U32.highest - 1)..<U32.highest),
+        \\        count((I32.highest - 1)..<I32.highest),
+        \\        count((U64.highest - 1)..<U64.highest),
+        \\        count((I64.highest - 1)..<I64.highest),
+        \\        count((U128.highest - 1)..<U128.highest),
+        \\        count((I128.highest - 1)..<I128.highest),
         \\    )
         \\}
         ,
         .expected = .{ .inspect_str = "(1, 1, 1, 1, 1, 1, 1, 1, 1, 1)" },
+    },
+    .{
+        // Directly exercises the steps_between length primitive: ascending ->
+        // Known(count); descending and equal -> Known(0) (the lower guard
+        // branch the range boundary tests never hit); and the U128/I128
+        // over-U64-width + Dec cases -> Unknown (the fallback that feeds the
+        // from_iter grow path).
+        .name = "inspect: steps_between reports Known counts, Known(0) descending, Unknown on overflow",
+        .source =
+        \\{
+        \\    (
+        \\        U8.steps_between(5, 10),
+        \\        U8.steps_between(10, 5),
+        \\        U8.steps_between(5, 5),
+        \\        I8.steps_between(-3, 2),
+        \\        I8.steps_between(2, -3),
+        \\        U128.steps_between(0, 100),
+        \\        U128.steps_between(0, U128.highest),
+        \\        I128.steps_between(0, I128.highest),
+        \\        Dec.steps_between(1.0, 5.0),
+        \\    )
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(Known(5), Known(0), Known(0), Known(5), Known(0), Known(100), Unknown, Unknown, Unknown)" },
+    },
+    .{
+        // Collecting a range whose length is Unknown (Dec ranges always report
+        // Unknown) must route through from_iter's grow path rather than exact
+        // preallocation. It also exercises the generic from_numeral fold: the
+        // range constructor's literal `1` is monomorphized to Dec here, so this
+        // must compile (not just interpret) on every backend.
+        .name = "inspect: collect over Unknown-length (Dec) range grows correctly",
+        .source_kind = .module,
+        .source =
+        \\main : List(Dec)
+        \\main = Iter.collect(1.0..<4.0)
+        ,
+        .expected = .{ .inspect_str = "[1.0, 2.0, 3.0]" },
     },
     .{
         .name = "inspect: generic local attached method specialization on nominal",

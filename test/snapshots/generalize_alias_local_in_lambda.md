@@ -90,7 +90,7 @@ main = |_y| {
 							(e-lookup-local
 								(p-assign (ident "alias")))
 							(e-num (value "1")))
-						(e-call (constraint-fn-var 80)
+						(e-call (constraint-fn-var 77)
 							(e-lookup-local
 								(p-assign (ident "alias")))
 							(e-string
@@ -101,8 +101,8 @@ main = |_y| {
 (inferred-types
 	(defs
 		(patt (type "a -> a"))
-		(patt (type "_arg -> (a, Str) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")))
+		(patt (type "_arg -> (a, b) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), b.from_quote : Str -> Try(b, [BadQuotedBytes(Str)])]")))
 	(expressions
 		(expr (type "a -> a"))
-		(expr (type "_arg -> (a, Str) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))))
+		(expr (type "_arg -> (a, b) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), b.from_quote : Str -> Try(b, [BadQuotedBytes(Str)])]"))))
 ~~~

@@ -20,23 +20,6 @@ const unicode = std.unicode;
 const testing = std.testing;
 const rcNone = @import("utils.zig").rcNone;
 
-/// Decref function for RocStr elements in a list.
-/// Used when decref-ing a List Str - each string element needs to be decreffed.
-/// The context parameter is expected to be a *RocOps.
-fn strDecref(context: ?*anyopaque, element: ?[*]u8) callconv(.c) void {
-    if (element) |elem_ptr| {
-        const str_ptr: *RocStr = utils.alignedPtrCast(*RocStr, elem_ptr, @src());
-        if (context) |ctx| {
-            const roc_ops: *RocOps = utils.alignedPtrCast(*RocOps, @as([*]u8, @ptrCast(ctx)), @src());
-            str_ptr.decref(roc_ops);
-        } else {
-            // Context should never be null - this is a programming error
-            // We cannot call roc_ops.crash() because we don't have roc_ops
-            unreachable;
-        }
-    }
-}
-
 const InPlace = enum(u8) {
     InPlace,
     Clone,
@@ -855,27 +838,23 @@ pub fn startsWith(string: RocStr, prefix: RocStr) callconv(.c) bool {
 /// ## Ownership
 /// - `string`: **borrows** - caller retains ownership
 /// - `prefix`: **borrows** - caller retains ownership
-/// - Returns: **seamless-slice** - shares data with input string (incref'd)
+/// - Returns: **seamless-slice** - shares data with input string
 ///
-/// If prefix doesn't match, returns the original string with refcount incremented.
+/// If prefix doesn't match, returns the original string.
 /// If prefix matches, returns a seamless slice of the remaining portion.
+/// The caller is responsible for retaining `string` when the result is owned.
 pub fn strDropPrefix(
     string: RocStr,
     prefix: RocStr,
     roc_ops: *RocOps,
 ) callconv(.c) RocStr {
     if (!startsWith(string, prefix)) {
-        // Prefix doesn't match, return original (with incref)
-        string.incref(1, roc_ops);
         return string;
     }
 
     const prefix_len = prefix.len();
     const new_len = string.len() - prefix_len;
 
-    // Increment refcount for the seamless slice we're about to create.
-    // This is safe even for small strings (incref is a no-op for them).
-    string.incref(1, roc_ops);
     return substringUnsafe(string, prefix_len, new_len, roc_ops);
 }
 
@@ -884,27 +863,23 @@ pub fn strDropPrefix(
 /// ## Ownership
 /// - `string`: **borrows** - caller retains ownership
 /// - `suffix`: **borrows** - caller retains ownership
-/// - Returns: **seamless-slice** - shares data with input string (incref'd)
+/// - Returns: **seamless-slice** - shares data with input string
 ///
-/// If suffix doesn't match, returns the original string with refcount incremented.
+/// If suffix doesn't match, returns the original string.
 /// If suffix matches, returns a seamless slice of the remaining portion.
+/// The caller is responsible for retaining `string` when the result is owned.
 pub fn strDropSuffix(
     string: RocStr,
     suffix: RocStr,
     roc_ops: *RocOps,
 ) callconv(.c) RocStr {
     if (!endsWith(string, suffix)) {
-        // Suffix doesn't match, return original (with incref)
-        string.incref(1, roc_ops);
         return string;
     }
 
     const suffix_len = suffix.len();
     const new_len = string.len() - suffix_len;
 
-    // Increment refcount for the seamless slice we're about to create.
-    // This is safe even for small strings (incref is a no-op for them).
-    string.incref(1, roc_ops);
     return substringUnsafe(string, 0, new_len, roc_ops);
 }
 
@@ -1053,9 +1028,37 @@ pub fn strJoinWithC(
 
     const result = @call(.always_inline, strJoinWith, .{ roc_list_str, separator, roc_ops });
 
-    // Decref the consumed list. Since elements are strings (refcounted), we pass
-    // elements_refcounted=true and provide strDecref to decref each element.
-    list.decref(@alignOf(RocStr), @sizeOf(RocStr), true, @ptrCast(roc_ops), &strDecref, roc_ops);
+    // Decref the consumed list. The list owns each element string, so when it is
+    // unique we decref the elements before freeing the backing allocation.
+    //
+    // We do this inline with direct `RocStr.decref` calls rather than handing a
+    // `&strDecref` callback to `RocList.decref`. Taking the address of that
+    // internal builtin and calling it through a pointer is misresolved by the
+    // COFF linker: the function pointer ends up aimed into `.rdata` instead of
+    // `.text`, so the element loop never runs and every heap element string
+    // leaks (verified on x64win). Direct calls relocate correctly, and this
+    // mirrors `RocList.decref`'s own element-teardown logic for `List Str`.
+    if (list.isUnique(roc_ops)) {
+        if (list.getAllocationDataPtr(roc_ops)) |source| {
+            const count = list.getAllocationElementCount(true, roc_ops);
+            const elems: [*]RocStr = utils.alignedPtrCast([*]RocStr, source, @src());
+            var i: usize = 0;
+            while (i < count) : (i += 1) {
+                elems[i].decref(roc_ops);
+            }
+        }
+    }
+    // Free the list's backing allocation. We pass elements_refcounted=true so the
+    // allocation header is located the same way it was at allocation time; the
+    // elements themselves were already decref'd above.
+    utils.decref(
+        list.getAllocationDataPtr(roc_ops),
+        list.capacity_or_alloc_ptr,
+        @alignOf(RocStr),
+        true,
+        .atomic,
+        roc_ops,
+    );
 
     return result;
 }
@@ -2812,6 +2815,42 @@ test "RocStr.joinWith: result is big" {
     defer result.decref(test_env.getOps());
 
     try std.testing.expect(roc_result.eql(result));
+}
+
+test "strJoinWithC: consuming a unique heap List(Str) frees its element strings" {
+    // Regression test: `strJoinWithC` consumes the list and must decref each
+    // (heap) element string. A previous implementation did this through a
+    // `&strDecref` function-pointer callback handed to `RocList.decref`; on
+    // x64win the COFF linker misresolved that pointer (into `.rdata`), so the
+    // element loop never ran and every heap element string leaked. The leak
+    // checker in `std.testing.allocator` (via TestEnv.deinit) catches a
+    // regression here.
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    // 33-char literals are longer than SMALL_STRING_SIZE, so they allocate on
+    // the heap rather than living inline in the RocStr.
+    const a = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const b = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const s1 = RocStr.init(a.ptr, a.len, test_env.getOps());
+    const s2 = RocStr.init(b.ptr, b.len, test_env.getOps());
+    try std.testing.expect(!s1.isSmallStr());
+    try std.testing.expect(!s2.isSmallStr());
+
+    // Build a unique heap List(Str) that takes ownership of the two element
+    // strings (fromSlice copies the RocStr structs without incref'ing).
+    const list = RocList.fromSlice(RocStr, &.{ s1, s2 }, true, test_env.getOps());
+
+    var sep_bytes: [2]u8 = ", ".*;
+    const sep = RocStr.init(&sep_bytes, sep_bytes.len, test_env.getOps());
+    defer sep.decref(test_env.getOps());
+
+    // Consumes `list`: frees both element strings and the backing allocation.
+    const result = strJoinWithC(list, sep, test_env.getOps());
+    defer result.decref(test_env.getOps());
+
+    const expected = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    try std.testing.expectEqualSlices(u8, expected, result.asSlice());
 }
 
 test "validateUtf8Bytes: ascii" {

@@ -32,6 +32,12 @@ pub const Local = Mono.Local;
 pub const TypedLocal = Mono.TypedLocal;
 /// Owned string literal id shared with Monotype IR.
 pub const StringLiteralId = Mono.StringLiteralId;
+/// Compile-time site id shared with Monotype IR.
+pub const ComptimeSiteId = Mono.ComptimeSiteId;
+/// Compile-time site kind shared with Monotype IR.
+pub const ComptimeSiteKind = Mono.ComptimeSiteKind;
+/// Compile-time site metadata shared with Monotype IR.
+pub const ComptimeSite = Mono.ComptimeSite;
 /// Record field expression entry.
 pub const FieldExpr = Mono.FieldExpr;
 /// Record destructuring field pattern.
@@ -48,6 +54,12 @@ pub const Pat = Mono.Pat;
 
 /// Monotype Lifted pattern forms.
 pub const PatData = Mono.PatData;
+/// Monotype Lifted string interpolation pattern.
+pub const StrPattern = Mono.StrPattern;
+/// Monotype Lifted delimited capture step inside a string interpolation pattern.
+pub const StrPatternStep = Mono.StrPatternStep;
+/// Monotype Lifted end behavior for a string interpolation pattern.
+pub const StrPatternEnd = Mono.StrPatternEnd;
 
 /// Match branch.
 pub const Branch = Mono.Branch;
@@ -97,7 +109,7 @@ pub const RuntimeSchemaRequest = Mono.RuntimeSchemaRequest;
 pub fn callProcCallee(call: Mono.CallProc) FnId {
     return switch (call.callee) {
         .lifted => |fn_id| fn_id,
-        .template => Common.invariant("Monotype Lifted direct call still referenced a Monotype function template"),
+        .func => Common.invariant("Monotype Lifted direct call still referenced a Monotype function id"),
     };
 }
 
@@ -118,6 +130,7 @@ pub const Program = struct {
     stmt_ids: std.ArrayList(StmtId),
     field_exprs: std.ArrayList(FieldExpr),
     record_destructs: std.ArrayList(RecordDestruct),
+    str_pattern_steps: std.ArrayList(Mono.StrPatternStep),
     branches: std.ArrayList(Branch),
     if_branches: std.ArrayList(IfBranch),
     string_literals: std.ArrayList(Mono.StringLiteral),
@@ -125,6 +138,7 @@ pub const Program = struct {
     roots: std.ArrayList(Root),
     layout_requests: std.ArrayList(LayoutRequest),
     runtime_schema_requests: std.ArrayList(RuntimeSchemaRequest),
+    comptime_sites: std.ArrayList(ComptimeSite),
     /// Source file table for `SourceLoc.file` indices (moved from Monotype).
     source_files: std.ArrayList([]const u8),
     /// Source location per expression, parallel to `exprs`.
@@ -152,6 +166,7 @@ pub const Program = struct {
         stmt_ids: std.ArrayList(StmtId),
         field_exprs: std.ArrayList(FieldExpr),
         record_destructs: std.ArrayList(RecordDestruct),
+        str_pattern_steps: std.ArrayList(Mono.StrPatternStep),
         branches: std.ArrayList(Branch),
         if_branches: std.ArrayList(IfBranch),
         string_literals: std.ArrayList(Mono.StringLiteral),
@@ -160,6 +175,7 @@ pub const Program = struct {
         expr_locs: std.ArrayList(base.SourceLoc),
         stmt_locs: std.ArrayList(base.SourceLoc),
         local_names: std.ArrayList([]const u8),
+        comptime_sites: std.ArrayList(ComptimeSite),
         next_symbol: u32,
     ) Program {
         return .{
@@ -178,6 +194,7 @@ pub const Program = struct {
             .stmt_ids = stmt_ids,
             .field_exprs = field_exprs,
             .record_destructs = record_destructs,
+            .str_pattern_steps = str_pattern_steps,
             .branches = branches,
             .if_branches = if_branches,
             .string_literals = string_literals,
@@ -185,6 +202,7 @@ pub const Program = struct {
             .roots = .empty,
             .layout_requests = .empty,
             .runtime_schema_requests = .empty,
+            .comptime_sites = comptime_sites,
             .source_files = source_files,
             .expr_locs = expr_locs,
             .stmt_locs = stmt_locs,
@@ -202,6 +220,10 @@ pub const Program = struct {
         self.expr_locs.deinit(self.allocator);
         for (self.source_files.items) |file| self.allocator.free(file);
         self.source_files.deinit(self.allocator);
+        for (self.comptime_sites.items) |site| {
+            self.allocator.free(site.branch_regions);
+        }
+        self.comptime_sites.deinit(self.allocator);
         self.runtime_schema_requests.deinit(self.allocator);
         self.layout_requests.deinit(self.allocator);
         self.roots.deinit(self.allocator);
@@ -210,6 +232,7 @@ pub const Program = struct {
         self.string_literals.deinit(self.allocator);
         self.if_branches.deinit(self.allocator);
         self.branches.deinit(self.allocator);
+        self.str_pattern_steps.deinit(self.allocator);
         self.record_destructs.deinit(self.allocator);
         self.field_exprs.deinit(self.allocator);
         self.stmt_ids.deinit(self.allocator);
@@ -269,6 +292,10 @@ pub const Program = struct {
         return id;
     }
 
+    pub fn comptimeSite(self: *const Program, id: ComptimeSiteId) ComptimeSite {
+        return self.comptime_sites.items[@intFromEnum(id)];
+    }
+
     pub fn addLocal(self: *Program, symbol: Common.Symbol, ty: Type.TypeId) std.mem.Allocator.Error!LocalId {
         return try self.addLocalWithBinder(symbol, ty, null);
     }
@@ -326,6 +353,12 @@ pub const Program = struct {
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
+    pub fn addStrPatternStepSpan(self: *Program, values: []const Mono.StrPatternStep) std.mem.Allocator.Error!Span(Mono.StrPatternStep) {
+        const start: u32 = @intCast(self.str_pattern_steps.items.len);
+        try self.str_pattern_steps.appendSlice(self.allocator, values);
+        return .{ .start = start, .len = @intCast(values.len) };
+    }
+
     pub fn addBranchSpan(self: *Program, values: []const Branch) std.mem.Allocator.Error!Span(Branch) {
         const start: u32 = @intCast(self.branches.items.len);
         try self.branches.appendSlice(self.allocator, values);
@@ -362,6 +395,10 @@ pub const Program = struct {
         return self.record_destructs.items[span_.start..][0..span_.len];
     }
 
+    pub fn strPatternStepSpan(self: *const Program, span_: Span(Mono.StrPatternStep)) []const Mono.StrPatternStep {
+        return self.str_pattern_steps.items[span_.start..][0..span_.len];
+    }
+
     pub fn branchSpan(self: *const Program, span_: Span(Branch)) []const Branch {
         return self.branches.items[span_.start..][0..span_.len];
     }
@@ -391,7 +428,7 @@ pub const Program = struct {
         };
         const callee = switch (call.callee) {
             .lifted => |fn_id| fn_id,
-            .template => return null,
+            .func => return null,
         };
         const callee_body = switch (self.fns.items[@intFromEnum(callee)].body) {
             .roc => |body| body,

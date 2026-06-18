@@ -193,13 +193,19 @@ pub fn runEcho(opts: RunOptions) anyerror!u8 {
     };
     defer allocator.free(relation_views);
 
+    const lir_roots = lir.CheckedPipeline.selectPlatformEntrypointRoots(allocator, root_artifact.root_requests.runtime_requests) catch |err| {
+        diag.step("selectPlatformEntrypointRoots", err);
+        return err;
+    };
+    defer allocator.free(lir_roots);
+
     var lowered = lir.CheckedPipeline.lowerCheckedModulesToLir(
         allocator,
         .{
             .root = check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_views),
             .imports = import_views,
         },
-        .{ .requests = root_artifact.root_requests.runtime_requests },
+        .{ .requests = lir_roots },
         .{ .target_usize = opts.target_usize },
     ) catch |err| {
         diag.step("lowerCheckedModulesToLir", err);
@@ -284,6 +290,10 @@ fn runEchoView(
             return error.EvaluationFailed;
         },
         error.Crash => {
+            diag.step("interpreter.runEntrypoint", err);
+            return error.EvaluationFailed;
+        },
+        error.ComptimeExhaustiveness => {
             diag.step("interpreter.runEntrypoint", err);
             return error.EvaluationFailed;
         },
@@ -419,8 +429,8 @@ fn echoRename(ctx_ptr: ?*anyopaque, _: std.Io, old: []const u8, new: []const u8)
 fn echoGetEnvVar(ctx_ptr: ?*anyopaque, _: std.Io, key: []const u8, gpa: Allocator) Io.GetEnvVarError![]u8 {
     return echoGetCtx(ctx_ptr).fallback.getEnvVar(key, gpa);
 }
-fn echoFetchUrl(ctx_ptr: ?*anyopaque, _: std.Io, gpa: Allocator, url: []const u8, dest: []const u8) Io.FetchUrlError!void {
-    return echoGetCtx(ctx_ptr).fallback.fetchUrl(gpa, url, dest);
+fn echoFetchUrl(ctx_ptr: ?*anyopaque, _: std.Io, gpa: Allocator, url: []const u8, dest: []const u8, max_expanded_bytes: ?u64) Io.FetchUrlError!u64 {
+    return echoGetCtx(ctx_ptr).fallback.fetchUrl(gpa, url, dest, max_expanded_bytes);
 }
 fn echoWriteStdout(ctx_ptr: ?*anyopaque, _: std.Io, data: []const u8) Io.StdioError!void {
     return echoGetCtx(ctx_ptr).fallback.writeStdout(data);

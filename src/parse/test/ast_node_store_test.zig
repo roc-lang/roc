@@ -401,7 +401,7 @@ test "NodeStore round trip - Pattern" {
     });
     try patterns.append(gpa, AST.Pattern{
         .string = .{
-            .expr = rand_idx(random, AST.Expr.Idx),
+            .parts = AST.PatternStringPart.Span{ .span = rand_span(random) },
             .region = rand_region(random),
             .string_tok = rand_token_idx(random),
         },

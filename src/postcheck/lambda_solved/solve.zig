@@ -376,6 +376,7 @@ const Solver = struct {
             .dec_lit,
             .str_lit,
             .crash,
+            .comptime_exhaustiveness_failed,
             => {},
             .list => |items| {
                 const elem_ty = try self.listElem(expected);
@@ -520,12 +521,17 @@ const Solver = struct {
             .expect,
             => |child| _ = try self.inferExpr(child),
             .expect_err => |expect_err| _ = try self.inferExpr(expect_err.msg),
+            .comptime_branch_taken => |taken| _ = try self.expectExpr(taken.body, expected),
         }
         return self.program.types.root(expected);
     }
 
     fn inferStmt(self: *Solver, stmt_id: Lifted.StmtId) Allocator.Error!void {
         switch (self.program.lifted.stmts.items[@intFromEnum(stmt_id)]) {
+            .uninitialized => |pat| {
+                const pat_ty = try self.lowerTypeFresh(self.program.lifted.pats.items[@intFromEnum(pat)].ty);
+                try self.bindPattern(pat, pat_ty);
+            },
             .let_ => |let_| {
                 const value_ty = try self.inferExpr(let_.value);
                 try self.bindPattern(let_.pat, value_ty);
@@ -551,6 +557,13 @@ const Solver = struct {
             .frac_f64_lit,
             .str_lit,
             => {},
+            .str_pattern => |str| {
+                for (self.program.lifted.strPatternStepSpan(str.steps)) |step| {
+                    if (step.capture) |capture| {
+                        try self.bindPattern(capture, pat_ty);
+                    }
+                }
+            },
             .as => |as| {
                 try self.unify(self.localTy(as.local), pat_ty);
                 try self.bindPattern(as.pattern, pat_ty);

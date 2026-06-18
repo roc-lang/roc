@@ -13,6 +13,8 @@ pub const module_discovery = @import("module_discovery.zig");
 pub const dependency_sort = @import("dependency_sort.zig");
 pub const threading = @import("threading.zig");
 pub const static_data_exports = @import("static_data_exports.zig");
+pub const package_source = @import("package_source.zig");
+pub const package_resolution = @import("package_resolution.zig");
 
 // Actor model components
 pub const messages = @import("messages.zig");
@@ -86,6 +88,8 @@ test "compile tests" {
     std.testing.refAllDecls(@import("module_discovery.zig"));
     std.testing.refAllDecls(@import("dependency_sort.zig"));
     std.testing.refAllDecls(@import("static_data_exports.zig"));
+    std.testing.refAllDecls(@import("package_source.zig"));
+    std.testing.refAllDecls(@import("package_resolution.zig"));
 
     // Actor model components
     std.testing.refAllDecls(@import("messages.zig"));
@@ -100,4 +104,7 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/type_printing_bug_test.zig"));
     std.testing.refAllDecls(@import("test/embedding_smoke.zig"));
     std.testing.refAllDecls(@import("test/issue_9614_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_9634_test.zig"));
+    std.testing.refAllDecls(@import("test/tce_capture_test.zig"));
+    std.testing.refAllDecls(@import("test/url_package_test.zig"));
 }
