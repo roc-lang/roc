@@ -19,6 +19,7 @@ const SignalDescriptorList = @FieldType(DispatchResult, "signal_descriptors");
 const StateDescriptorList = @FieldType(DispatchResult, "state_descriptors");
 const StateChangeList = @FieldType(DispatchResult, "state_changes");
 const SignalValueDesc = @typeInfo(@TypeOf(@as(SignalValueList, undefined).items())).pointer.child;
+const StateValueDesc = @typeInfo(@TypeOf(@as(StateChangeList, undefined).items())).pointer.child;
 const HostEventBox = @typeInfo(@TypeOf(abi.roc_ui_dispatch)).@"fn".params[1].type.?;
 const HostEvent = std.meta.Child(HostEventBox);
 const CommandPayload = @FieldType(abi.UiRuntimeCommand, "payload");
@@ -75,6 +76,7 @@ const HostSignalCacheSlot = union(enum) {
 const SignalEventPayload = struct {
     dirty_signal_ids: abi.RocListWith(u64, false),
     cached_signals: SignalValueList,
+    cached_states: StateChangeList,
 };
 
 const HostCommandSnapshot = struct {
@@ -1892,6 +1894,28 @@ fn cachedSignalValueListExcluding(host: *HostEnv, roc_host: *abi.RocHost, dirty_
     return list;
 }
 
+fn cachedStateValueList(host: *HostEnv, roc_host: *abi.RocHost) StateChangeList {
+    const allocator = host.gpa.allocator();
+    var cached_states: std.ArrayListUnmanaged(StateValueDesc) = .empty;
+    defer cached_states.deinit(allocator);
+
+    for (host.states.items, 0..) |state, state_index| {
+        if (state.state_id != state_index) {
+            failHost("host state registry is not indexed by state id");
+        }
+        cached_states.append(allocator, .{
+            .state_id = @intCast(state_index),
+            .value = state.value,
+        }) catch std.process.exit(1);
+    }
+
+    const list = StateChangeList.fromSlice(cached_states.items, roc_host);
+    for (cached_states.items) |entry| {
+        abi.increfNodeValue(entry.value, 1);
+    }
+    return list;
+}
+
 fn signalEventPayloadForEvent(host: *HostEnv, roc_host: *abi.RocHost, event_id: u64) SignalEventPayload {
     const allocator = host.gpa.allocator();
     const dirty_signal_ids = host.dirtySignalIdsForEvent(allocator, event_id);
@@ -1899,6 +1923,7 @@ fn signalEventPayloadForEvent(host: *HostEnv, roc_host: *abi.RocHost, event_id: 
     return .{
         .dirty_signal_ids = abi.RocListWith(u64, false).fromSlice(dirty_signal_ids, roc_host),
         .cached_signals = cachedSignalValueListExcluding(host, roc_host, dirty_signal_ids),
+        .cached_states = cachedStateValueList(host, roc_host),
     };
 }
 
@@ -1908,6 +1933,7 @@ fn clickHostEvent(host: *HostEnv, roc_host: *abi.RocHost, event_id: u64) HostEve
         .payload = .{
             .click = .{
                 .cached_signals = signal_payload.cached_signals,
+                .cached_states = signal_payload.cached_states,
                 .dirty_signal_ids = signal_payload.dirty_signal_ids,
                 .event = event_id,
             },
@@ -1922,6 +1948,7 @@ fn inputHostEvent(host: *HostEnv, roc_host: *abi.RocHost, event_id: u64, value: 
         .payload = .{
             .input = .{
                 .cached_signals = signal_payload.cached_signals,
+                .cached_states = signal_payload.cached_states,
                 .dirty_signal_ids = signal_payload.dirty_signal_ids,
                 .event = event_id,
                 .value = RocStr.fromSlice(value, roc_host),
@@ -1937,6 +1964,7 @@ fn checkHostEvent(host: *HostEnv, roc_host: *abi.RocHost, event_id: u64, checked
         .payload = .{
             .check = .{
                 .cached_signals = signal_payload.cached_signals,
+                .cached_states = signal_payload.cached_states,
                 .checked = checked,
                 .dirty_signal_ids = signal_payload.dirty_signal_ids,
                 .event = event_id,

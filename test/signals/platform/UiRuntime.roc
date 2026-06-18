@@ -32,11 +32,11 @@ UiRuntime := [].{
 
 	EventId : { key : Str, id : U64, payload_kind : U64 }
 
-	StateSlot : { key : Str, value : NodeValue, version : U64, event_ids : List(U64) }
+	StateSlot : { key : Str, initial : NodeValue, event_ids : List(U64) }
 
 	StateDesc : { state_id : U64, value : NodeValue, event_ids : List(U64) }
 
-	StateChangeDesc : { state_id : U64, value : NodeValue }
+	StateValueDesc : { state_id : U64, value : NodeValue }
 
 	SignalDesc : { signal_id : U64, kind : U64, state_deps : List(U64) }
 
@@ -47,9 +47,9 @@ UiRuntime := [].{
 	EventDesc : { event_id : U64, payload_kind : U64 }
 
 	HostEvent := [
-		Click({ event : U64, dirty_signal_ids : List(U64), cached_signals : List(SignalValueDesc) }),
-		Input({ event : U64, dirty_signal_ids : List(U64), cached_signals : List(SignalValueDesc), value : Str }),
-		Check({ event : U64, dirty_signal_ids : List(U64), cached_signals : List(SignalValueDesc), checked : Bool }),
+		Click({ event : U64, dirty_signal_ids : List(U64), cached_signals : List(SignalValueDesc), cached_states : List(StateValueDesc) }),
+		Input({ event : U64, dirty_signal_ids : List(U64), cached_signals : List(SignalValueDesc), cached_states : List(StateValueDesc), value : Str }),
+		Check({ event : U64, dirty_signal_ids : List(U64), cached_signals : List(SignalValueDesc), cached_states : List(StateValueDesc), checked : Bool }),
 	]
 
 	Command := [
@@ -84,7 +84,7 @@ UiRuntime := [].{
 		event_descriptors : List(EventDesc),
 		signal_descriptors : List(SignalDesc),
 		state_descriptors : List(StateDesc),
-		state_changes : List(StateChangeDesc),
+		state_changes : List(StateValueDesc),
 		signal_changes : List(SignalValueDesc),
 		metrics : RuntimeMetrics,
 	}
@@ -99,7 +99,9 @@ UiRuntime := [].{
 		active_event : ActiveEvent,
 		dirty_signal_ids : List(U64),
 		cached_signals : List(SignalValueDesc),
+		cached_states : List(StateValueDesc),
 		signal_changes : List(SignalValueDesc),
+		state_changes : List(StateValueDesc),
 		updated_state_indexes : List(U64),
 		changed_state_indexes : List(U64),
 	}
@@ -118,6 +120,7 @@ UiRuntime := [].{
 		runtime : Runtime,
 		emit_commands : List(Command),
 		changed_state_indexes : List(U64),
+		state_changes : List(StateValueDesc),
 		signal_changes : List(SignalValueDesc),
 	}
 
@@ -143,6 +146,11 @@ UiRuntime := [].{
 	CacheLookup := [
 		CacheHit(NodeValue),
 		CacheMiss,
+	]
+
+	StateChangeLookup := [
+		StateChangeFound(NodeValue),
+		StateChangeMissing,
 	]
 
 	StateValue : { runtime : Runtime, value : NodeValue, index : U64 }
@@ -207,7 +215,7 @@ UiRuntime := [].{
 		}
 		registered = register_elem(runtime0, root)
 		runtime = { ..registered.runtime, root: registered.elem }
-		rendered = render_runtime(runtime, NoEvent, { ids: [] }, [])
+		rendered = render_runtime(runtime, NoEvent, { ids: [] }, [], [])
 		runtime_box = Box.box(rendered.runtime)
 		result = {
 			runtime: runtime_box,
@@ -215,7 +223,7 @@ UiRuntime := [].{
 			event_descriptors: event_descriptors_for_runtime(rendered.runtime),
 			signal_descriptors: signal_descriptors_for_runtime(rendered.runtime),
 			state_descriptors: state_descriptors_for_runtime(rendered.runtime),
-			state_changes: state_changes_for_indexes(rendered.runtime, rendered.changed_state_indexes),
+			state_changes: rendered.state_changes,
 			signal_changes: rendered.signal_changes,
 			metrics: rendered.runtime.metrics,
 		}
@@ -227,14 +235,14 @@ UiRuntime := [].{
 		runtime0 = Box.unbox(boxed_runtime)
 		active_event = host_event_to_active(host_event)
 		dirty_signals = { ids: host_event_dirty_signal_ids(host_event) }
-		rendered = render_runtime(runtime0, active_event, dirty_signals, host_event_cached_signals(host_event))
+		rendered = render_runtime(runtime0, active_event, dirty_signals, host_event_cached_signals(host_event), host_event_cached_states(host_event))
 		{
 			runtime: Box.box(rendered.runtime),
 			commands: rendered.emit_commands,
 			event_descriptors: event_descriptors_for_runtime(rendered.runtime),
 			signal_descriptors: signal_descriptors_for_runtime(rendered.runtime),
 			state_descriptors: state_descriptors_for_runtime(rendered.runtime),
-			state_changes: state_changes_for_indexes(rendered.runtime, rendered.changed_state_indexes),
+			state_changes: rendered.state_changes,
 			signal_changes: rendered.signal_changes,
 			metrics: rendered.runtime.metrics,
 		}
@@ -519,7 +527,7 @@ UiRuntime := [].{
 			StateSlotMissing => {
 				index = List.len(runtime.states)
 				{
-					runtime: { ..runtime, states: List.append(runtime.states, { key, value: initial, version: 0, event_ids: [] }) },
+					runtime: { ..runtime, states: List.append(runtime.states, { key, initial, event_ids: [] }) },
 					index,
 				}
 			}
@@ -607,14 +615,25 @@ UiRuntime := [].{
 		}
 	}
 
-	render_runtime : Runtime, ActiveEvent, DirtySignals, List(SignalValueDesc) -> RenderResult
-	render_runtime = |runtime, active_event, dirty_signals, cached_signals| {
+	host_event_cached_states : HostEvent -> List(StateValueDesc)
+	host_event_cached_states = |host_event| {
+		match host_event {
+			Click({ cached_states }) => cached_states
+			Input({ cached_states }) => cached_states
+			Check({ cached_states }) => cached_states
+		}
+	}
+
+	render_runtime : Runtime, ActiveEvent, DirtySignals, List(SignalValueDesc), List(StateValueDesc) -> RenderResult
+	render_runtime = |runtime, active_event, dirty_signals, cached_signals, cached_states| {
 		state = {
 			runtime,
 			active_event,
 			dirty_signal_ids: dirty_signals.ids,
 			cached_signals,
+			cached_states,
 			signal_changes: [],
+			state_changes: [],
 			updated_state_indexes: [],
 			changed_state_indexes: [],
 		}
@@ -628,6 +647,7 @@ UiRuntime := [].{
 			runtime: rendered.state.runtime,
 			emit_commands: rendered.commands,
 			changed_state_indexes: rendered.state.changed_state_indexes,
+			state_changes: rendered.state.state_changes,
 			signal_changes: rendered.state.signal_changes,
 		}
 	}
@@ -965,7 +985,7 @@ UiRuntime := [].{
 				Graph.SignalExpr.Hold({ event }) => {
 					event_node = Box.unbox(event)
 					state_index = state_index_for_signal(signal)
-					current = state_value_by_index(state_with_count.runtime, state_index)
+					current = state_value_by_index(state_with_count, state_index)
 					state1 = { ..state_with_count, runtime: current.runtime }
 					if u64_list_contains(state1.updated_state_indexes, current.index) {
 						{ state: state1, value: current.value }
@@ -979,7 +999,7 @@ UiRuntime := [].{
 				Graph.SignalExpr.Fold({ event, step }) => {
 					event_node = Box.unbox(event)
 					state_index = state_index_for_signal(signal)
-					current = state_value_by_index(state_with_count.runtime, state_index)
+					current = state_value_by_index(state_with_count, state_index)
 					state1 = { ..state_with_count, runtime: current.runtime }
 					if u64_list_contains(state1.updated_state_indexes, current.index) {
 						{ state: state1, value: current.value }
@@ -998,7 +1018,7 @@ UiRuntime := [].{
 				Graph.SignalExpr.FoldI64({ event, step }) => {
 					event_node = Box.unbox(event)
 					state_index = state_index_for_signal(signal)
-					current = state_value_by_index(state_with_count.runtime, state_index)
+					current = state_value_by_index(state_with_count, state_index)
 					state1 = { ..state_with_count, runtime: current.runtime }
 					if u64_list_contains(state1.updated_state_indexes, current.index) {
 						{ state: state1, value: current.value }
@@ -1017,7 +1037,7 @@ UiRuntime := [].{
 				Graph.SignalExpr.FoldBoolToggle({ event }) => {
 					event_node = Box.unbox(event)
 					state_index = state_index_for_signal(signal)
-					current = state_value_by_index(state_with_count.runtime, state_index)
+					current = state_value_by_index(state_with_count, state_index)
 					state1 = { ..state_with_count, runtime: current.runtime }
 					if u64_list_contains(state1.updated_state_indexes, current.index) {
 						{ state: state1, value: current.value }
@@ -1106,6 +1126,30 @@ UiRuntime := [].{
 		$result
 	}
 
+	state_change_lookup : List(StateValueDesc), U64 -> StateChangeLookup
+	state_change_lookup = |entries, state_id| {
+		var $index = 0
+		var $result = StateChangeMissing
+		var $done = False
+
+		while $done == False and $index < List.len(entries) {
+			match List.get(entries, $index) {
+				Ok(entry) =>
+					if entry.state_id == state_id {
+						$result = StateChangeFound(entry.value)
+						$done = True
+					} else {
+						$index = $index + 1
+					}
+				Err(_) => {
+					$done = True
+				}
+			}
+		}
+
+		$result
+	}
+
 	signal_cache_lookup : List(SignalValueDesc), U64 -> CacheLookup
 	signal_cache_lookup = |entries, signal_id| {
 		var $index = 0
@@ -1160,26 +1204,11 @@ UiRuntime := [].{
 		var $descriptors = List.with_capacity(List.len(runtime.states))
 
 		for slot in runtime.states {
-			$descriptors = List.append($descriptors, { state_id: $state_id, value: slot.value, event_ids: slot.event_ids })
+			$descriptors = List.append($descriptors, { state_id: $state_id, value: slot.initial, event_ids: slot.event_ids })
 			$state_id = $state_id + 1
 		}
 
 		$descriptors
-	}
-
-	state_changes_for_indexes : Runtime, List(U64) -> List(StateChangeDesc)
-	state_changes_for_indexes = |runtime, state_indexes| {
-		List.map(
-			state_indexes,
-			|state_id| {
-				match List.get(runtime.states, state_id) {
-					Ok(slot) => { state_id, value: slot.value }
-					Err(_) => {
-						crash "Signals runtime invariant violated: changed state index was not registered"
-					}
-				}
-			},
-		)
 	}
 
 	event_descriptors_for_runtime : Runtime -> List(EventDesc)
@@ -1217,6 +1246,27 @@ UiRuntime := [].{
 		}
 
 		$next
+	}
+
+	replace_state_change : List(StateValueDesc), U64, NodeValue -> List(StateValueDesc)
+	replace_state_change = |entries, state_id, value| {
+		var $found = False
+		var $next = List.with_capacity(List.len(entries) + 1)
+
+		for entry in entries {
+			if entry.state_id == state_id {
+				$next = List.append($next, { state_id, value })
+				$found = True
+			} else {
+				$next = List.append($next, entry)
+			}
+		}
+
+		if $found {
+			$next
+		} else {
+			List.append($next, { state_id, value })
+		}
 	}
 
 	replace_signal_change : List(SignalValueDesc), U64, NodeValue -> List(SignalValueDesc)
@@ -1313,15 +1363,34 @@ UiRuntime := [].{
 		}
 	}
 
-	state_value_by_index : Runtime, U64 -> StateValue
-	state_value_by_index = |runtime, state_index| {
-		metrics0 = runtime.metrics
-		runtime_with_count = { ..runtime, metrics: { ..metrics0, state_lookups: metrics0.state_lookups + 1 } }
-		match List.get(runtime_with_count.states, state_index) {
-			Ok(slot) => { runtime: runtime_with_count, value: slot.value, index: state_index }
-			Err(_) => {
-				crash "Signals runtime invariant violated: state index was not registered"
-			}
+	state_value_by_index : EvalState, U64 -> StateValue
+	state_value_by_index = |state, state_index| {
+		metrics0 = state.runtime.metrics
+		runtime_with_count = { ..state.runtime, metrics: { ..metrics0, state_lookups: metrics0.state_lookups + 1 } }
+
+		match state_change_lookup(state.state_changes, state_index) {
+			StateChangeFound(value) => { runtime: runtime_with_count, value, index: state_index }
+			StateChangeMissing =>
+				if state_index < List.len(state.cached_states) {
+					match List.get(state.cached_states, state_index) {
+						Ok(entry) =>
+							if entry.state_id == state_index {
+								{ runtime: runtime_with_count, value: entry.value, index: state_index }
+							} else {
+								crash "Signals runtime invariant violated: host state values must be dense and ordered by state id"
+							}
+						Err(_) => {
+							crash "Signals runtime invariant violated: cached state index was not present"
+						}
+					}
+				} else {
+					match List.get(runtime_with_count.states, state_index) {
+						Ok(slot) => { runtime: runtime_with_count, value: slot.initial, index: state_index }
+						Err(_) => {
+							crash "Signals runtime invariant violated: state index was not registered"
+						}
+					}
+				}
 		}
 	}
 
@@ -1342,7 +1411,12 @@ UiRuntime := [].{
 						node_value_equality_checks: metrics0.node_value_equality_checks + 1,
 					}
 				}
-			runtime2 = set_state_by_index({ ..state.runtime, metrics: metrics1 }, state_index, next, changed)
+			next_state_changes =
+				if changed {
+					replace_state_change(state.state_changes, state_index, next)
+				} else {
+					state.state_changes
+				}
 			next_changed_state_indexes =
 				if changed {
 					List.append(state.changed_state_indexes, state_index)
@@ -1351,32 +1425,14 @@ UiRuntime := [].{
 				}
 			state1 = {
 				..state,
-				runtime: runtime2,
+				runtime: { ..state.runtime, metrics: metrics1 },
 				updated_state_indexes: List.append(state.updated_state_indexes, state_index),
 				changed_state_indexes: next_changed_state_indexes,
+				state_changes: next_state_changes,
 			}
 			{ state: state1, value: next }
 		} else {
 			{ state, value: previous }
-		}
-	}
-
-	set_state_by_index : Runtime, U64, NodeValue, Bool -> Runtime
-	set_state_by_index = |runtime, state_index, value, bump_version| {
-		match List.get(runtime.states, state_index) {
-			Ok(slot) => {
-				next_version =
-					if bump_version {
-						slot.version + 1
-					} else {
-						slot.version
-					}
-				next_slot = { key: slot.key, value, version: next_version, event_ids: slot.event_ids }
-				{ ..runtime, states: replace_state_slot(runtime.states, state_index, next_slot) }
-			}
-			Err(_) => {
-				crash "Signals runtime invariant violated: state update index was not registered"
-			}
 		}
 	}
 
