@@ -8,7 +8,7 @@
 //! This module requires LLVM to be linked. Executables that use this module
 //! must have `addStaticLlvmOptionsToModule` called on them in build.zig.
 
-pub const bindings = @import("bindings.zig");
+pub const bindings = @import("vendor_llvm_compile_bindings");
 pub const compile = @import("compile.zig");
 
 // Re-export commonly used functions for linking
