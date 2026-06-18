@@ -5779,25 +5779,9 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
     const is_binding_rhs = self.checking_binding_rhs;
     self.checking_binding_rhs = false;
 
-    // Value restriction: only generalize at the inner lambda level, not the
-    // outer e_closure wrapper (which delegates to e_lambda's own checkExpr).
-    // Direct call-argument lambdas are consumed immediately, so they must not
-    // generalize independently. Doing so lets their generalized vars escape
-    // into the enclosing value via unification.
-    //
-    // We also generalize a binding whose RHS is a bare reference to an already-
-    // generalized scheme (e.g. `shorthand = FooBar.myfunc`). Such a reference is
-    // non-expansive: it performs no work and can hide no `dbg`/`expect`, so it
-    // raises none of the duplicate-work or duplicate-effect concerns that motivate
-    // restricting generalization to syntactic functions. In practice the only
-    // generalized schemes are functions (numeric literals use the separate
-    // defaulting path), so this never re-generalizes numbers or tag unions. We
-    // restrict this to binding-RHS position so that bare lookups appearing as
-    // arbitrary subexpressions don't pay generalization cost or get generalized
-    // out from under their surrounding context.
-    const is_value_alias = is_binding_rhs and
-        (expr == .e_lookup_local or expr == .e_lookup_external);
-    const should_generalize = (isFunctionDef(&self.cir.store, expr) and expr != .e_closure and !is_call_arg) or is_value_alias;
+    // Decide whether this binding generalizes — see `shouldGeneralize` for the
+    // three qualifying paths and why each is sound.
+    const should_generalize = self.shouldGeneralize(expr, expected.annotation, is_binding_rhs, is_call_arg);
 
     // Push/pop ranks based on if we should generalize
     if (should_generalize) try env.var_pool.pushRank();
@@ -7982,6 +7966,56 @@ fn isFunctionDef(store: *const CIR.NodeStore, expr: CIR.Expr) bool {
     };
 }
 
+/// Should this expression generalize in its current binding context — i.e. push
+/// a rank so the generalizer can quantify its free vars? Three independent paths
+/// qualify; they are checked in order so the annotation scan runs only when the
+/// cheaper structural checks miss:
+///
+///   - **A function def.** Generalized at the inner lambda level only, not the
+///     outer `e_closure` wrapper (which delegates to `e_lambda`'s own checkExpr),
+///     and not a direct call argument — those are consumed immediately, and
+///     generalizing one lets its vars escape into the enclosing value.
+///   - **A value alias** — a binding whose RHS is a bare reference to an already-
+///     generalized scheme (e.g. `shorthand = FooBar.myfunc`). The reference is
+///     non-expansive: it does no work and can hide no `dbg`/`expect`, so it raises
+///     none of the duplicate-work/effect concerns that restrict generalization to
+///     syntactic functions. The referenced scheme is a generalized function or
+///     annotated value (numeric literals use the separate defaulting path), never
+///     a bare number or tag union. Restricted to binding-RHS position so bare
+///     lookups in arbitrary subexpressions aren't generalized out from under their
+///     surrounding context.
+///   - **An annotated value binding** whose annotation introduces a free type var
+///     (see `isGeneralizableValueBinding`). The rank push lets the generalizer
+///     quantify exactly the generalizable vars — with none (e.g. a concrete
+///     annotation) the generalize call is a no-op and the value stays monomorphic.
+fn shouldGeneralize(
+    self: *const Self,
+    expr: CIR.Expr,
+    annotation: ?CIR.Annotation.Idx,
+    is_binding_rhs: bool,
+    is_call_arg: bool,
+) bool {
+    if (isFunctionDef(&self.cir.store, expr) and expr != .e_closure and !is_call_arg) return true;
+    if (is_binding_rhs and (expr == .e_lookup_local or expr == .e_lookup_external)) return true;
+    return self.isGeneralizableValueBinding(annotation, is_binding_rhs);
+}
+
+/// True when a value binding generalizes to its annotated scheme: it sits in
+/// binding-RHS position (only a binding's own right-hand side qualifies; a call
+/// argument never generalizes on its own) and has an annotation introducing a
+/// type variable. The polymorphic annotation is the opt-in, honored regardless
+/// of whether the RHS does work (an expansive definition pays per-specialization
+/// — the cost the author chose by writing the scheme).
+fn isGeneralizableValueBinding(
+    self: *const Self,
+    annotation: ?CIR.Annotation.Idx,
+    is_binding_rhs: bool,
+) bool {
+    if (!is_binding_rhs) return false;
+    const annotation_idx = annotation orelse return false;
+    return self.cir.store.getAnnotation(annotation_idx).mentions_type_var;
+}
+
 fn exprAlwaysCrashes(self: *const Self, expr_idx: CIR.Expr.Idx) bool {
     return switch (self.cir.store.getExpr(expr_idx)) {
         .e_crash,
@@ -8316,10 +8350,16 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 try self.checkPattern(var_stmt.pattern_idx, var_pattern_ctx, env);
                 const var_pattern_var: Var = ModuleEnv.varFrom(var_stmt.pattern_idx);
 
-                // Check the annotation, if it exists
+                // Check the annotation, if it exists. A mutable `var` never
+                // generalizes, so a type variable its annotation introduces can
+                // never be bound; reject such an annotation and infer from the
+                // body instead, so it doesn't cascade into confusing mismatches.
                 const expectation = blk: {
                     if (var_stmt.anno) |annotation_idx| {
-                        // Return the expectation
+                        if (self.cir.store.getAnnotation(annotation_idx).introduces_type_var) {
+                            _ = try self.problems.appendProblem(self.gpa, .{ .polymorphic_var_annotation = .{ .region = self.cir.store.getAnnotationRegion(annotation_idx) } });
+                            break :blk Expected.none();
+                        }
                         break :blk Expected.fromAnnotation(annotation_idx);
                     } else {
                         break :blk Expected.none();
@@ -8346,9 +8386,18 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 try self.checkPattern(var_stmt.pattern_idx, var_pattern_ctx, env);
                 const var_pattern_var: Var = ModuleEnv.varFrom(var_stmt.pattern_idx);
 
+                // A mutable `var` never generalizes, so a type variable its
+                // annotation introduces can never be bound. With no initializer
+                // there is no body to infer from, so reject the annotation and
+                // leave the pattern var free to be inferred from later
+                // reassignments instead of cascading into confusing mismatches.
                 if (var_stmt.anno) |annotation_idx| {
-                    try self.generateAnnotationType(annotation_idx, env);
-                    _ = try self.unifyInContext(ModuleEnv.varFrom(annotation_idx), var_pattern_var, env, .type_annotation);
+                    if (self.cir.store.getAnnotation(annotation_idx).introduces_type_var) {
+                        _ = try self.problems.appendProblem(self.gpa, .{ .polymorphic_var_annotation = .{ .region = self.cir.store.getAnnotationRegion(annotation_idx) } });
+                    } else {
+                        try self.generateAnnotationType(annotation_idx, env);
+                        _ = try self.unifyInContext(ModuleEnv.varFrom(annotation_idx), var_pattern_var, env, .type_annotation);
+                    }
                 }
 
                 const empty_rec = try self.freshFromContent(.{ .structure = .empty_record }, env, stmt_region);

@@ -40,6 +40,7 @@ pub const Problem = union(enum) {
     infinite_recursion: VarWithSnapshot,
     anonymous_recursion: VarWithSnapshot,
     polymorphic_value: VarWithSnapshot,
+    polymorphic_var_annotation: PolymorphicVarAnnotation,
     effectful_top_level: EffectfulTopLevel,
     effectful_expect: EffectfulExpect,
     annotation_only_value: AnnotationOnlyValue,
@@ -106,6 +107,13 @@ pub const HostedUnboxedFunction = struct {
 
 /// A standalone type annotation without an implementation cannot be used as a runtime value.
 pub const AnnotationOnlyValue = struct {
+    region: base.Region,
+};
+
+/// A mutable `var` whose annotation introduces an unbound type variable. A `var`
+/// is never generalized, so a free type variable in its annotation can never be
+/// bound — the variable must have a concrete type.
+pub const PolymorphicVarAnnotation = struct {
     region: base.Region,
 };
 

@@ -7,6 +7,8 @@ const std = @import("std");
 const can = @import("can");
 const collections = @import("collections");
 
+const Constants = @import("cache_config.zig").Constants;
+
 const ModuleEnv = can.ModuleEnv;
 const Allocator = std.mem.Allocator;
 // Note: We use SHA256 instead of Blake3 because std.crypto.hash.Blake3 has a bug
@@ -19,8 +21,11 @@ const SERIALIZATION_ALIGNMENT = collections.SERIALIZATION_ALIGNMENT;
 const CACHE_MAGIC: u32 = 0x524F4343; // "ROCC" in ASCII
 
 /// Compute a version hash for a struct type using SHA256 at comptime.
-/// This hash changes when the struct layout changes, enabling automatic cache invalidation.
-fn computeVersionHash(comptime StructType: type) [32]u8 {
+/// This hash changes when the struct layout changes, enabling automatic cache
+/// invalidation. The walk only sees the top-level fields' names and type names,
+/// so changes nested inside a field's type (e.g. a node-payload layout edit)
+/// are invisible to it — bump `cache_version` to invalidate those by hand.
+fn computeVersionHash(comptime StructType: type, comptime cache_version: u32) [32]u8 {
     @setEvalBranchQuota(100000);
 
     const type_info = @typeInfo(StructType);
@@ -35,6 +40,7 @@ fn computeVersionHash(comptime StructType: type) [32]u8 {
     };
 
     var hasher = Sha256.init(.{});
+    hasher.update(std.fmt.comptimePrint("cache_v{d};", .{cache_version}));
     hasher.update(layout_str);
     var result: [32]u8 = undefined;
     hasher.final(&result);
@@ -42,7 +48,7 @@ fn computeVersionHash(comptime StructType: type) [32]u8 {
 }
 
 /// Version hash of ModuleEnv.Serialized computed at comptime
-const MODULE_ENV_VERSION_HASH: [32]u8 = computeVersionHash(ModuleEnv.Serialized);
+const MODULE_ENV_VERSION_HASH: [32]u8 = computeVersionHash(ModuleEnv.Serialized, Constants.CACHE_VERSION);
 
 /// Cache header that gets written to disk before the cached data
 pub const Header = struct {

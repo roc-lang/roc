@@ -1004,8 +1004,18 @@ pub const Payload = extern union {
 
     pub const Annotation = extern struct {
         anno: u32,
-        has_where: u32,
-        where_span2_idx: u32, // Index into span2_data: (where_start, where_len) when has_where == 1
+        /// Index into span2_data: (where_start, where_len); meaningful only when
+        /// `has_where`.
+        where_span2_idx: u32,
+        /// Whether the annotation has a `where` clause.
+        has_where: bool,
+        /// Whether the annotation mentions any type variable — a fresh
+        /// `.rigid_var` or a `.rigid_var_lookup` reference to an enclosing one.
+        mentions_type_var: bool,
+        /// Whether the annotation *introduces* a type variable (`.rigid_var`), as
+        /// opposed to only referencing one from an enclosing scope.
+        introduces_type_var: bool,
+        _padding: [1]u8 = .{0},
     };
 
     // === Diagnostic payload structs ===
@@ -1110,5 +1120,9 @@ pub const Payload = extern union {
     // Compile-time size verification
     comptime {
         std.debug.assert(@sizeOf(Payload) == 16);
+        // anno + where_span2_idx (2 x u32) + 3 bool flags + 1 byte padding. The
+        // explicit `_padding` keeps the trailing byte defined for deterministic
+        // serialization; assert the size so a stray field can't silently grow it.
+        std.debug.assert(@sizeOf(Annotation) == 12);
     }
 };

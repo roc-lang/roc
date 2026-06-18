@@ -71,6 +71,7 @@ const PlatformDefNotFound = problem_mod.PlatformDefNotFound;
 const PlatformHostedSection = problem_mod.PlatformHostedSection;
 const HostedUnboxedFunction = problem_mod.HostedUnboxedFunction;
 const AnnotationOnlyValue = problem_mod.AnnotationOnlyValue;
+const PolymorphicVarAnnotation = problem_mod.PolymorphicVarAnnotation;
 const EffectfulTopLevel = problem_mod.EffectfulTopLevel;
 const EffectfulExpect = problem_mod.EffectfulExpect;
 
@@ -824,6 +825,9 @@ pub const ReportBuilder = struct {
             },
             .polymorphic_value => |data| {
                 return self.buildPolymorphicValueReport(data);
+            },
+            .polymorphic_var_annotation => |data| {
+                return self.buildPolymorphicVarAnnotationReport(data);
             },
             .effectful_top_level => |data| {
                 return self.buildEffectfulTopLevelReport(data);
@@ -3521,6 +3525,32 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
         try D.renderSlice(&.{
             D.bytes("Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary."),
+        }, self, &report);
+        return report;
+    }
+
+    /// Build a report for a mutable `var` whose annotation introduces an unbound
+    /// type variable.
+    fn buildPolymorphicVarAnnotationReport(self: *Self, data: PolymorphicVarAnnotation) Allocator.Error!Report {
+        var report = Report.init(self.gpa, "POLYMORPHIC VAR", .runtime_error);
+        errdefer report.deinit();
+
+        try D.renderSlice(&.{
+            D.bytes("This"),
+            D.bytes("var").withAnnotation(.inline_code),
+            D.bytes("is declared with a polymorphic type annotation, but a mutable variable must have a single concrete type:"),
+        }, self, &report);
+        try report.document.addLineBreak();
+        try self.addSourceHighlightRegion(&report, data.region);
+
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try D.renderSlice(&.{
+            D.bytes("Give it a concrete type, or replace the type variable with"),
+            D.bytes("_").withAnnotation(.inline_code),
+            D.bytes("to let the type be inferred from how the"),
+            D.bytes("var").withAnnotation(.inline_code),
+            D.bytes("is used."),
         }, self, &report);
         return report;
     }
