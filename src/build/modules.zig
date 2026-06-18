@@ -414,6 +414,7 @@ pub const RocModules = struct {
     // `applyVendorImports`, so it stays clear which code comes from elsewhere.
     // The sources live under `vendor/`.
     vendor_parse_float: *Module,
+    vendor_ryu: *Module,
 
     pub fn create(b: *Build, build_options_step: *Step.Options, zstd: ?*Dependency) RocModules {
         const self = RocModules{
@@ -463,6 +464,7 @@ pub const RocModules = struct {
             .embedded_lld = b.addModule("embedded_lld", .{ .root_source_file = b.path("src/build/embedded_lld.zig") }),
 
             .vendor_parse_float = b.addModule("vendor_parse_float", .{ .root_source_file = b.path("vendor/parse_float/parse_float.zig") }),
+            .vendor_ryu = b.addModule("vendor_ryu", .{ .root_source_file = b.path("vendor/ryu.zig") }),
         };
 
         // Link zstd to bundle module if available (it's unsupported on wasm32, so don't link it)
@@ -549,6 +551,7 @@ pub const RocModules = struct {
         switch (module_type) {
             .builtins => {
                 module.addImport("vendor_parse_float", self.vendor_parse_float);
+                module.addImport("vendor_ryu", self.vendor_ryu);
             },
             else => {},
         }
