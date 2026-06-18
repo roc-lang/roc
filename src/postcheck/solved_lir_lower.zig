@@ -948,6 +948,11 @@ const Lowerer = struct {
         return self.solved.lifted.string_literals.items[@intFromEnum(id)];
     }
 
+    fn lirStrLiteral(self: *Lowerer, id: Lifted.StringLiteralId) Common.LowerError!LIR.StrLiteral {
+        const str_lit = self.stringLiteral(id);
+        return try self.result.store.insertStringView(str_lit.backing, str_lit.offset, str_lit.len);
+    }
+
     fn noteLocal(self: *Lowerer, local: LIR.LocalId) Common.LowerError!void {
         if (self.current_proc_locals) |locals| {
             try locals.put(self.allocator, @intFromEnum(local), {});
@@ -2583,6 +2588,18 @@ const Lowerer = struct {
             .frac_f64_lit,
             .str_lit,
             => next,
+            .str_pattern => |str| blk: {
+                var current = next;
+                const steps = self.solved.lifted.strPatternStepSpan(str.steps);
+                var i = steps.len;
+                while (i > 0) {
+                    i -= 1;
+                    if (steps[i].capture) |capture| {
+                        current = try self.initUninitializedPattern(capture, current);
+                    }
+                }
+                break :blk current;
+            },
             .as => |as| blk: {
                 const inner = try self.initUninitializedPattern(as.pattern, next);
                 break :blk try self.initUninitializedLocal(try self.localForTyped(as.local, pat_ty), inner);
@@ -2729,6 +2746,22 @@ const Lowerer = struct {
             try self.result.store.addCFStmt(.{ .runtime_error = {} });
         var i = branches.len;
         while (i > 0) {
+            const group_end = i;
+            const group_start = self.strPatternBranchGroupStart(branches, group_end);
+            if (group_end - group_start >= 2) {
+                const next_branch = current;
+                const miss = PatternMiss{ .join_id = self.freshJoinPointId() };
+                const branch_start = try self.lowerStrPatternBranchGroup(branches[group_start..group_end], scrutinee, target, done, miss);
+                current = try self.result.store.addCFStmt(.{ .join = .{
+                    .id = miss.join_id,
+                    .params = LIR.LocalSpan.empty(),
+                    .body = next_branch,
+                    .remainder = branch_start,
+                } });
+                i = group_start;
+                continue;
+            }
+
             i -= 1;
             const next_branch = current;
             const needs_miss_join = branches[i].guard != null or self.patternCanMiss(branches[i].pat);
@@ -2755,6 +2788,52 @@ const Lowerer = struct {
                 branch_start;
         }
         return current;
+    }
+
+    fn strPatternBranchGroupStart(self: *Lowerer, branches: []const Lifted.Branch, end: usize) usize {
+        var start = end;
+        while (start > 0 and self.directStrPattern(branches[start - 1].pat) != null) {
+            start -= 1;
+        }
+        return start;
+    }
+
+    fn directStrPattern(self: *Lowerer, pat_id: Lifted.PatId) ?Lifted.StrPattern {
+        const pat_data = self.pat(pat_id);
+        return switch (pat_data.data) {
+            .str_pattern => |str| str,
+            else => null,
+        };
+    }
+
+    fn lowerStrPatternBranchGroup(
+        self: *Lowerer,
+        branches: []const Lifted.Branch,
+        source: LIR.LocalId,
+        target: LIR.LocalId,
+        done: LIR.JoinPointId,
+        miss: PatternMiss,
+    ) Common.LowerError!LIR.CFStmtId {
+        const arms = try self.allocator.alloc(LIR.StrMatchArm, branches.len);
+        defer self.allocator.free(arms);
+
+        for (branches, arms) |branch, *arm| {
+            const str = self.directStrPattern(branch.pat) orelse Common.invariant("string-pattern branch group contained a non-string-pattern branch");
+            const branch_done = try self.joinJump(done);
+            const branch_body = try self.lowerExprInto(target, branch.body, branch_done);
+            const guarded = if (branch.guard) |guard| blk: {
+                const guard_local = try self.addTemp(try self.lowerExprTy(guard));
+                const guard_switch = try self.boolSwitchNoContinuation(guard_local, branch_body, try self.patternMissJump(miss));
+                break :blk try self.lowerExprInto(guard_local, guard, guard_switch);
+            } else branch_body;
+            arm.* = try self.lowerStrPatternArm(str, guarded);
+        }
+
+        return try self.result.store.addCFStmt(.{ .str_match_set = .{
+            .source = source,
+            .arms = try self.result.store.addStrMatchArms(arms),
+            .on_miss = try self.patternMissJump(miss),
+        } });
     }
 
     fn joinJump(self: *Lowerer, join_id: LIR.JoinPointId) Common.LowerError!LIR.CFStmtId {
@@ -2784,7 +2863,7 @@ const Lowerer = struct {
                 break :blk false;
             },
             .nominal => |inner| self.patternCanMiss(inner),
-            .tag, .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit => true,
+            .tag, .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit, .str_pattern => true,
         };
     }
 
@@ -2806,6 +2885,7 @@ const Lowerer = struct {
             .frac_f32_lit => |value| try self.lowerLiteralPatternThen(source, pat_ty, .{ .frac_f32_lit = value }, on_match, miss),
             .frac_f64_lit => |value| try self.lowerLiteralPatternThen(source, pat_ty, .{ .frac_f64_lit = value }, on_match, miss),
             .str_lit => |value| try self.lowerLiteralPatternThen(source, pat_ty, .{ .str_lit = value }, on_match, miss),
+            .str_pattern => |str| try self.lowerStrPatternThen(str, source, on_match, miss),
         };
     }
 
@@ -2952,7 +3032,68 @@ const Lowerer = struct {
             .tuple => |items| try self.bindTuplePattern(items, source, next),
             .tag => |tag| try self.bindTagPayloadPatterns(self.tagIndex(pat_ty, tag.name), tag.payloads, source, next),
             .nominal => |inner| try self.bindPattern(inner, source, next),
-            .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit => next,
+            .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit, .str_pattern => next,
+        };
+    }
+
+    fn lowerStrPatternThen(
+        self: *Lowerer,
+        str: Lifted.StrPattern,
+        source: LIR.LocalId,
+        on_match: LIR.CFStmtId,
+        miss: ?PatternMiss,
+    ) Common.LowerError!LIR.CFStmtId {
+        const arm = try self.lowerStrPatternArm(str, on_match);
+        return try self.result.store.addCFStmt(.{ .str_match = .{
+            .source = source,
+            .prefix = arm.prefix,
+            .steps = arm.steps,
+            .end = arm.end,
+            .on_match = arm.on_match,
+            .on_miss = try self.patternMissJump(miss),
+        } });
+    }
+
+    fn lowerStrPatternArm(
+        self: *Lowerer,
+        str: Lifted.StrPattern,
+        on_match: LIR.CFStmtId,
+    ) Common.LowerError!LIR.StrMatchArm {
+        const input_steps = self.solved.lifted.strPatternStepSpan(str.steps);
+        const lir_steps = try self.allocator.alloc(LIR.StrMatchStep, input_steps.len);
+        defer self.allocator.free(lir_steps);
+
+        for (input_steps, lir_steps) |input_step, *lir_step| {
+            lir_step.* = .{
+                .capture = if (input_step.capture) |capture|
+                    .{ .view = try self.addTemp(try self.lowerPatTy(capture)) }
+                else
+                    .discard,
+                .delimiter = try self.lirStrLiteral(input_step.delimiter),
+            };
+        }
+
+        var match_body = on_match;
+        var index = input_steps.len;
+        while (index > 0) {
+            index -= 1;
+            if (input_steps[index].capture) |capture| {
+                const capture_local = switch (lir_steps[index].capture) {
+                    .view => |local| local,
+                    .discard => Common.invariant("string-pattern capture step lowered without a capture local"),
+                };
+                match_body = try self.bindPattern(capture, capture_local, match_body);
+            }
+        }
+
+        return .{
+            .prefix = try self.lirStrLiteral(str.prefix),
+            .steps = try self.result.store.addStrMatchSteps(lir_steps),
+            .end = switch (str.end) {
+                .exact => .exact,
+                .tail => .tail,
+            },
+            .on_match = match_body,
         };
     }
 
@@ -4044,6 +4185,7 @@ fn cloneLiftedProgram(allocator: std.mem.Allocator, program: *const Lifted.Progr
         .stmt_ids = try cloneArrayList(Lifted.StmtId, allocator, &program.stmt_ids),
         .field_exprs = try cloneArrayList(Lifted.FieldExpr, allocator, &program.field_exprs),
         .record_destructs = try cloneArrayList(Lifted.RecordDestruct, allocator, &program.record_destructs),
+        .str_pattern_steps = try cloneArrayList(Lifted.StrPatternStep, allocator, &program.str_pattern_steps),
         .branches = try cloneArrayList(Lifted.Branch, allocator, &program.branches),
         .if_branches = try cloneArrayList(Lifted.IfBranch, allocator, &program.if_branches),
         .string_literals = string_literals,

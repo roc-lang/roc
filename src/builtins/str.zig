@@ -838,27 +838,23 @@ pub fn startsWith(string: RocStr, prefix: RocStr) callconv(.c) bool {
 /// ## Ownership
 /// - `string`: **borrows** - caller retains ownership
 /// - `prefix`: **borrows** - caller retains ownership
-/// - Returns: **seamless-slice** - shares data with input string (incref'd)
+/// - Returns: **seamless-slice** - shares data with input string
 ///
-/// If prefix doesn't match, returns the original string with refcount incremented.
+/// If prefix doesn't match, returns the original string.
 /// If prefix matches, returns a seamless slice of the remaining portion.
+/// The caller is responsible for retaining `string` when the result is owned.
 pub fn strDropPrefix(
     string: RocStr,
     prefix: RocStr,
     roc_ops: *RocOps,
 ) callconv(.c) RocStr {
     if (!startsWith(string, prefix)) {
-        // Prefix doesn't match, return original (with incref)
-        string.incref(1, roc_ops);
         return string;
     }
 
     const prefix_len = prefix.len();
     const new_len = string.len() - prefix_len;
 
-    // Increment refcount for the seamless slice we're about to create.
-    // This is safe even for small strings (incref is a no-op for them).
-    string.incref(1, roc_ops);
     return substringUnsafe(string, prefix_len, new_len, roc_ops);
 }
 
@@ -867,27 +863,23 @@ pub fn strDropPrefix(
 /// ## Ownership
 /// - `string`: **borrows** - caller retains ownership
 /// - `suffix`: **borrows** - caller retains ownership
-/// - Returns: **seamless-slice** - shares data with input string (incref'd)
+/// - Returns: **seamless-slice** - shares data with input string
 ///
-/// If suffix doesn't match, returns the original string with refcount incremented.
+/// If suffix doesn't match, returns the original string.
 /// If suffix matches, returns a seamless slice of the remaining portion.
+/// The caller is responsible for retaining `string` when the result is owned.
 pub fn strDropSuffix(
     string: RocStr,
     suffix: RocStr,
     roc_ops: *RocOps,
 ) callconv(.c) RocStr {
     if (!endsWith(string, suffix)) {
-        // Suffix doesn't match, return original (with incref)
-        string.incref(1, roc_ops);
         return string;
     }
 
     const suffix_len = suffix.len();
     const new_len = string.len() - suffix_len;
 
-    // Increment refcount for the seamless slice we're about to create.
-    // This is safe even for small strings (incref is a no-op for them).
-    string.incref(1, roc_ops);
     return substringUnsafe(string, 0, new_len, roc_ops);
 }
 

@@ -15,6 +15,7 @@ const lir = @import("lir");
 const reporting = @import("reporting");
 
 const builtin_loading = @import("builtin_loading.zig");
+const eval_loader = @import("vendor_eval_loader");
 const CompileTimeFinalization = @import("compile_time_finalization.zig");
 const Interpreter = @import("interpreter.zig").Interpreter;
 const RuntimeHostEnv = @import("test/RuntimeHostEnv.zig");
@@ -42,7 +43,7 @@ const EvalDynLib = switch (builtin.target.os.tag) {
             extern "kernel32" fn FreeLibrary(hLibModule: std.os.windows.HMODULE) callconv(.winapi) c_int;
         };
 
-        fn open(allocator: Allocator, path: []const u8) anyerror!@This() {
+        fn open(allocator: Allocator, path: [:0]const u8) anyerror!@This() {
             const wide_path = try std.unicode.utf8ToUtf16LeAllocZ(allocator, path);
             defer allocator.free(wide_path);
             const handle = kernel32.LoadLibraryW(wide_path.ptr) orelse return error.LlvmBackendUnavailable;
@@ -59,10 +60,17 @@ const EvalDynLib = switch (builtin.target.os.tag) {
         }
     },
     else => struct {
-        inner: std.DynLib,
+        // On a static, no-libc roc binary `std.DynLib` falls back to Zig's
+        // `ElfDynLib`, which mishandles writable segments and applies no dynamic
+        // relocations. Use a vendored loader that does both correctly. Every
+        // other configuration keeps `std.DynLib`, whose `DlDynLib` defers to the
+        // OS dynamic loader.
+        const Inner = if (eval_loader.active) eval_loader.ElfDynLib else std.DynLib;
 
-        fn open(_: Allocator, path: []const u8) anyerror!@This() {
-            return .{ .inner = try std.DynLib.open(path) };
+        inner: Inner,
+
+        fn open(_: Allocator, path: [:0]const u8) anyerror!@This() {
+            return .{ .inner = try Inner.open(path) };
         }
 
         fn close(self: *@This()) void {
@@ -419,6 +427,26 @@ pub fn parseAndCanonicalizeProgram(
     imports: []const ModuleSource,
 ) anyerror!ParsedResources {
     return parseAndCanonicalizeProgramWrapped(allocator, source_kind, source, imports, false);
+}
+
+/// Same as `parseAndCanonicalizeProgram` but reuses a Builtin artifact the
+/// caller has already published.
+pub fn parseAndCanonicalizeProgramWithBuiltin(
+    allocator: Allocator,
+    source_kind: SourceKind,
+    source: []const u8,
+    imports: []const ModuleSource,
+    pre_published_builtin: PrePublishedBuiltin,
+) anyerror!ParsedResources {
+    return parseAndCanonicalizeProgramWithRootMode(
+        allocator,
+        source_kind,
+        source,
+        imports,
+        false,
+        .{ .eval_root = false },
+        pre_published_builtin,
+    );
 }
 
 /// Same as `parseAndCanonicalizeProgramPublishedRoots` but reuses a Builtin

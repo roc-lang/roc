@@ -5185,6 +5185,21 @@ fn checkPatternHelp(
             _ = try self.unify(pattern_var, flex_var, env);
             try self.mkPatternLiteralEqConstraint(pattern_var, env, pattern_region);
         },
+        .str_interpolation => |str| {
+            const str_var = try self.freshStr(env, pattern_region);
+            _ = try self.unify(pattern_var, str_var, env);
+
+            var step_offset: u32 = 0;
+            while (step_offset < str.steps.span.len) : (step_offset += 1) {
+                const step = self.cir.store.getStrPatternStep(str.steps, step_offset);
+                if (step.capture) |capture_idx| {
+                    const capture_region = self.cir.store.getPatternRegion(capture_idx);
+                    const capture_var = try self.checkPatternHelp(capture_idx, ctx, env, .in_place);
+                    const capture_str_var = try self.freshStr(env, capture_region);
+                    _ = try self.unify(capture_var, capture_str_var, env);
+                }
+            }
+        },
         // as //
         .as => |p| {
             const var_ = try self.checkPatternHelp(p.pattern, ctx, env, out_var);
@@ -5420,19 +5435,19 @@ fn checkPatternHelp(
             }.less);
             const record_fields_range = try self.types.appendRecordFields(record_fields_scratch);
 
-            // Update the pattern var
-            if (mb_ext_var) |ext| {
-                try self.unifyWith(pattern_var, .{ .structure = .{
-                    .record = .{
-                        .fields = record_fields_range,
-                        .ext = ext,
-                    },
-                } }, env);
-            } else {
-                try self.unifyWith(pattern_var, .{ .structure = .{
-                    .record_unbound = record_fields_range,
-                } }, env);
-            }
+            // Update the pattern var. A `..` rest pattern makes the record open
+            // (its extension absorbs any remaining fields); without one, the
+            // pattern is closed, so destructuring a record that has extra fields
+            // is a type mismatch the user must resolve (e.g. by adding the field
+            // or a `..` rest).
+            const ext_var = mb_ext_var orelse
+                try self.freshFromContent(.{ .structure = .empty_record }, env, pattern_region);
+            try self.unifyWith(pattern_var, .{ .structure = .{
+                .record = .{
+                    .fields = record_fields_range,
+                    .ext = ext_var,
+                },
+            } }, env);
         },
         // nums //
         .num_literal => |num| {
@@ -5541,6 +5556,7 @@ fn patternNeedsExhaustiveness(self: *const Self, pattern_idx: CIR.Pattern.Idx) b
         .frac_f32_literal,
         .frac_f64_literal,
         .str_literal,
+        .str_interpolation,
         => true,
         .tuple => |tuple| {
             for (self.cir.store.slicePatterns(tuple.patterns)) |elem_pattern_idx| {
@@ -5650,6 +5666,15 @@ fn collectPatternBindings(
         },
         .nominal => |nom| try self.collectPatternBindings(nom.backing_pattern, out),
         .nominal_external => |nom| try self.collectPatternBindings(nom.backing_pattern, out),
+        .str_interpolation => |str| {
+            var step_offset: u32 = 0;
+            while (step_offset < str.steps.span.len) : (step_offset += 1) {
+                const step = self.cir.store.getStrPatternStep(str.steps, step_offset);
+                if (step.capture) |capture_idx| {
+                    try self.collectPatternBindings(capture_idx, out);
+                }
+            }
+        },
         .num_literal,
         .small_dec_literal,
         .dec_literal,
@@ -8331,7 +8356,13 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 }
                 try self.closeAbsentConstructedPayloadVars(decl_stmt.expr, decl_expr_var);
 
-                const decl_pattern_result = try self.unify(decl_pattern_var, decl_expr_var, env);
+                // A record-destructure binding gets a dedicated context so the
+                // report can suggest `field: _` or `..` when the pattern is too
+                // narrow for the value (the pattern is the first/expected arg).
+                const decl_pattern_result = switch (self.cir.store.getPattern(decl_stmt.pattern)) {
+                    .record_destructure => try self.unifyInContext(decl_pattern_var, decl_expr_var, env, .record_destructure),
+                    else => try self.unify(decl_pattern_var, decl_expr_var, env),
+                };
                 _ = try self.unify(stmt_var, decl_pattern_var, env);
 
                 if (decl_pattern_result.isOk()) {

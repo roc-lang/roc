@@ -51,7 +51,7 @@ NO CHANGE
 					(record-destruct (label "y") (ident "y")
 						(required
 							(p-assign (ident "y")))))))
-		(e-dispatch-call (method "times") (constraint-fn-var 21)
+		(e-dispatch-call (method "times") (constraint-fn-var 22)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "x"))))

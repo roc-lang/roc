@@ -8,11 +8,11 @@
 //!
 //! This backend generates LLVM IR that can be compiled to native code.
 
-pub const Builder = @import("Builder.zig");
-pub const ir = @import("ir.zig");
-pub const bindings = @import("bindings.zig");
-pub const bitcode_writer = @import("bitcode_writer.zig");
-pub const BitcodeReader = @import("BitcodeReader.zig");
+pub const Builder = @import("vendor_llvm_ir").Builder;
+pub const ir = @import("vendor_llvm_ir").ir;
+pub const bindings = @import("vendor_llvm_ir").bindings;
+pub const bitcode_writer = @import("vendor_llvm_ir").bitcode_writer;
+pub const BitcodeReader = @import("vendor_llvm_ir").BitcodeReader;
 pub const layout_types = @import("layout_types.zig");
 
 /// Mono IR to LLVM code generator (parallel to dev backend's MonoExprCodeGen)
