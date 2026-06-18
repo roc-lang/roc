@@ -209,13 +209,7 @@ UiRuntime := [].{
 		runtime0 = Box.unbox(boxed_runtime)
 		active_event = host_event_to_active(host_event)
 		dirty_states = { indexes: host_event_dirty_state_indexes(host_event) }
-		metrics = runtime0.metrics
-		runtime1 = { ..runtime0, metrics: { ..metrics,
-				events_processed: metrics.events_processed + 1,
-				retained_graph_dispatches: metrics.retained_graph_dispatches + 1,
-			}
-		}
-		rendered = render_runtime(runtime1, active_event, dirty_states)
+		rendered = render_runtime(runtime0, active_event, dirty_states)
 		{
 			runtime: Box.box(rendered.runtime),
 			commands: rendered.emit_commands,

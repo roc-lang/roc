@@ -55,6 +55,11 @@ const HostRenderMetrics = struct {
     structural_resets: u64 = 0,
 };
 
+const HostDispatchMetrics = struct {
+    events_processed: u64 = 0,
+    retained_graph_dispatches: u64 = 0,
+};
+
 pub const std_options: std.Options = .{
     .logFn = std.log.defaultLog,
     .log_level = .warn,
@@ -491,6 +496,7 @@ const HostEnv = struct {
     state_versions: std.ArrayListUnmanaged(HostStateVersion) = .empty,
     previous_command_snapshots: std.ArrayListUnmanaged(HostCommandSnapshot) = .empty,
     render_metrics: HostRenderMetrics = .{},
+    dispatch_metrics: HostDispatchMetrics = .{},
     next_elem_id: u64 = 0,
     roc_host: ?*abi.RocHost = null,
     runtime_box: ?RuntimeBox = null,
@@ -549,6 +555,15 @@ const HostEnv = struct {
         return route.state_indexes;
     }
 
+    fn validateEventId(self: *HostEnv, event_id: u64) void {
+        _ = self.stateIndexesForEvent(event_id);
+    }
+
+    fn recordDispatch(self: *HostEnv) void {
+        self.dispatch_metrics.events_processed += 1;
+        self.dispatch_metrics.retained_graph_dispatches += 1;
+    }
+
     fn clearStateVersions(self: *HostEnv) void {
         self.state_versions.items.len = 0;
     }
@@ -603,6 +618,8 @@ const HostEnv = struct {
         metrics.full_render_batches += self.render_metrics.full_render_batches;
         metrics.incremental_batches += self.render_metrics.incremental_batches;
         metrics.structural_resets += self.render_metrics.structural_resets;
+        metrics.events_processed += self.dispatch_metrics.events_processed;
+        metrics.retained_graph_dispatches += self.dispatch_metrics.retained_graph_dispatches;
         return metrics;
     }
 
@@ -1090,14 +1107,17 @@ fn applyCommand(host: *HostEnv, command: abi.UiRuntimeCommand) void {
         },
         .BindClick => {
             const payload = command.payload.bind_click;
+            host.validateEventId(payload.event);
             domElementById(host, payload.id).bound_click_event = payload.event;
         },
         .BindInput => {
             const payload = command.payload.bind_input;
+            host.validateEventId(payload.event);
             domElementById(host, payload.id).bound_input_event = payload.event;
         },
         .BindCheck => {
             const payload = command.payload.bind_check;
+            host.validateEventId(payload.event);
             domElementById(host, payload.id).bound_check_event = payload.event;
         },
     }
@@ -1451,6 +1471,7 @@ fn checkHostEvent(host: *HostEnv, roc_host: *abi.RocHost, event_id: u64, checked
 fn dispatchRocEvent(host: *HostEnv, roc_host: *abi.RocHost, event: HostEvent) void {
     const runtime = host.runtime_box orelse failHost("Roc runtime not initialized");
     host.runtime_box = null;
+    host.recordDispatch();
     acceptDispatchResult(host, roc_host, abi.roc_ui_dispatch(runtime, boxHostEvent(roc_host, event)));
 }
 
@@ -1458,6 +1479,7 @@ fn dispatchRocEventMeasured(host: *HostEnv, roc_host: *abi.RocHost, event: HostE
     const runtime = host.runtime_box orelse failHost("Roc runtime not initialized");
     host.runtime_box = null;
     const event_box = boxHostEvent(roc_host, event);
+    host.recordDispatch();
     const start_ns = benchmarkNowNs();
     const result_box = abi.roc_ui_dispatch(runtime, event_box);
     stats.dispatch_roc_ns += benchmarkNowNs() - start_ns;
