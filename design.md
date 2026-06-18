@@ -893,6 +893,11 @@ still-flex string receiver blocks the method chains that give numeric literals
 their context, and it also resolves generalized literal variables that no
 instantiation can pin, which is the same resolution monomorphic specialization
 would apply, made early enough for checking to resolve dependent dispatch.
+Generalized function signatures are different: a still-flex literal-origin or
+method-constrained argument in a polymorphic function is a valid contract, not a
+def-site error. Checking must not validate those generalized constraints against
+`Dec` or `Str` at the function definition. Each instantiated copy is defaulted
+and validated only after call-site evidence has had a chance to pin it.
 
 Literal patterns participate through the same machinery. A literal pattern on
 a non-builtin number or string type carries a synthesized checked conversion
