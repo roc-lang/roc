@@ -1053,6 +1053,7 @@ pub const __AnonStruct78 = extern struct {
     input_signal_ids: RocListWith(u64, false),
     key: RocStr,
     kind: u64,
+    signal: GraphSignalNode,
     signal_id: u64,
     source_event_ids: RocListWith(u64, false),
     source_state_ids: RocListWith(u64, false),
@@ -1060,7 +1061,7 @@ pub const __AnonStruct78 = extern struct {
 
 comptime {
     if (@sizeOf(usize) == 8) {
-        if (@sizeOf(__AnonStruct78) != 112) @compileError("__AnonStruct78 size mismatch");
+        if (@sizeOf(__AnonStruct78) != 264) @compileError("__AnonStruct78 size mismatch");
         if (@alignOf(__AnonStruct78) != 8) @compileError("__AnonStruct78 alignment mismatch");
     }
 }
@@ -2257,6 +2258,7 @@ pub fn incref__AnonStruct76(value: __AnonStruct76, amount: isize) void {
 pub fn decref__AnonStruct78(value: __AnonStruct78, roc_host: *RocHost) void {
     value.input_signal_ids.decref(roc_host);
     value.key.decref(roc_host);
+    decrefGraphSignalNode(value.signal, roc_host);
     value.source_event_ids.decref(roc_host);
     value.source_state_ids.decref(roc_host);
 }
@@ -2265,6 +2267,7 @@ pub fn decref__AnonStruct78(value: __AnonStruct78, roc_host: *RocHost) void {
 pub fn incref__AnonStruct78(value: __AnonStruct78, amount: isize) void {
     value.input_signal_ids.incref(amount);
     value.key.incref(amount);
+    increfGraphSignalNode(value.signal, amount);
     value.source_event_ids.incref(amount);
     value.source_state_ids.incref(amount);
 }

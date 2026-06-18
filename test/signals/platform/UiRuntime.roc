@@ -42,7 +42,7 @@ UiRuntime := [].{
 
 	SignalValueDesc : { signal_id : U64, value : NodeValue }
 
-	SignalRegistryEntry : { key : Str, signal_id : U64, kind : U64, source_state_ids : List(U64), source_event_ids : List(U64), input_signal_ids : List(U64) }
+	SignalRegistryEntry : { key : Str, signal_id : U64, signal : Graph.SignalNode, kind : U64, source_state_ids : List(U64), source_event_ids : List(U64), input_signal_ids : List(U64) }
 
 	EventDesc : { event_id : U64, payload_kind : U64 }
 
@@ -473,19 +473,20 @@ UiRuntime := [].{
 					SignalRegistryFound(entry) => {
 						{
 							runtime,
-							signal: { ..signal, signal_id: Graph.SignalIdentity.RegisteredSignal(entry.signal_id) },
+							signal: entry.signal,
 						}
 					}
 
 					SignalRegistryMissing => {
 						signal_id = runtime.next_signal_id
-						entry = { key, signal_id, kind, source_state_ids, source_event_ids, input_signal_ids }
+						registered_signal = { ..signal, signal_id: Graph.SignalIdentity.RegisteredSignal(signal_id) }
+						entry = { key, signal_id, signal: registered_signal, kind, source_state_ids, source_event_ids, input_signal_ids }
 						{
 							runtime: { ..runtime,
 								next_signal_id: signal_id + 1,
 								signal_registry: List.append(runtime.signal_registry, entry),
 							},
-							signal: { ..signal, signal_id: Graph.SignalIdentity.RegisteredSignal(signal_id) },
+							signal: registered_signal,
 						}
 					}
 				}
@@ -634,8 +635,9 @@ UiRuntime := [].{
 			updated_state_indexes: [],
 			changed_state_indexes: [],
 		}
+		scheduled_state = eval_signal_plan(state, dirty_signals.ids)
 		render_state = {
-			state,
+			state: scheduled_state,
 			commands: [ResetDom],
 			next_elem_id: 1,
 		}
@@ -647,6 +649,19 @@ UiRuntime := [].{
 			state_changes: rendered.state.state_changes,
 			signal_changes: rendered.state.signal_changes,
 		}
+	}
+
+	eval_signal_plan : EvalState, List(U64) -> EvalState
+	eval_signal_plan = |state, signal_ids| {
+		List.fold(
+			signal_ids,
+			state,
+			|acc, signal_id| {
+				signal = signal_node_for_registered_id(acc.runtime, signal_id)
+				result = eval_signal(acc, signal)
+				result.state
+			},
+		)
 	}
 
 	add_command : RenderState, Command -> RenderState
@@ -879,9 +894,15 @@ UiRuntime := [].{
 			Graph.SignalCacheKey.NoSignalCacheKey => eval_signal_uncached(state, signal)
 			Graph.SignalCacheKey.SignalCacheKey(_) =>
 				if signal_is_dirty(signal, state.dirty_signal_ids) {
-					metrics0 = state.runtime.metrics
-					state1 = { ..state, runtime: { ..state.runtime, metrics: { ..metrics0, signal_cache_misses: metrics0.signal_cache_misses + 1 } } }
-					eval_signal_uncached(state1, signal)
+					signal_id = registered_signal_id(signal)
+					match signal_cache_lookup(state.signal_changes, signal_id) {
+						CacheHit(value) => { state, value }
+						CacheMiss => {
+							metrics0 = state.runtime.metrics
+							state1 = { ..state, runtime: { ..state.runtime, metrics: { ..metrics0, signal_cache_misses: metrics0.signal_cache_misses + 1 } } }
+							eval_signal_uncached(state1, signal)
+						}
+					}
 				} else {
 					match signal_cache_lookup(state.cached_signals, registered_signal_id(signal)) {
 						CacheHit(value) => {
@@ -1071,6 +1092,21 @@ UiRuntime := [].{
 			Graph.SignalIdentity.RegisteredSignal(id) => id
 			Graph.SignalIdentity.UnregisteredSignal => {
 				crash "Signals runtime invariant violated: keyed signal was not registered"
+			}
+		}
+	}
+
+	signal_node_for_registered_id : Runtime, U64 -> Graph.SignalNode
+	signal_node_for_registered_id = |runtime, signal_id| {
+		match List.get(runtime.signal_registry, signal_id) {
+			Ok(entry) =>
+				if entry.signal_id == signal_id {
+					entry.signal
+				} else {
+					crash "Signals runtime invariant violated: signal registry is not indexed by signal id"
+				}
+			Err(_) => {
+				crash "Signals runtime invariant violated: host recompute plan referenced an unknown signal id"
 			}
 		}
 	}
