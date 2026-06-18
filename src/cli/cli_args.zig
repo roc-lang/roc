@@ -156,6 +156,7 @@ pub const BuildArgs = struct {
     suppress_build_status: bool = false, // suppress "Built..." output (used by roc run)
     resolve_limits: ResolveLimitArgs = .{}, // package download size limits
     synthetic_default_platform: bool = false, // internal: build rewrote a headerless app to the default platform
+    source_dir_override: ?[]const u8 = null, // internal: resolve root sibling imports from this directory
 };
 
 /// Arguments for `roc test`

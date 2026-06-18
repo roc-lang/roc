@@ -261,17 +261,29 @@ const BuiltinsObjects = struct {
 const DefaultPlatformRuntimeObjects = struct {
     const x64musl = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64musl/roc_default_platform.o");
     const arm64musl = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64musl/roc_default_platform.o");
+    const x64glibc = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64glibc/roc_default_platform.o");
+    const arm64glibc = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64glibc/roc_default_platform.o");
+    const x64mac = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64mac/roc_default_platform.o");
+    const arm64mac = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64mac/roc_default_platform.o");
+    const x64win = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64win/roc_default_platform.obj");
+    const arm64win = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64win/roc_default_platform.obj");
 
     pub fn forTarget(target: RocTarget) ?[]const u8 {
         return switch (target) {
             .x64musl => x64musl,
             .arm64musl => arm64musl,
+            .x64glibc, .x64linux => x64glibc,
+            .arm64glibc, .arm64linux => arm64glibc,
+            .x64mac => x64mac,
+            .arm64mac => arm64mac,
+            .x64win => x64win,
+            .arm64win => arm64win,
             else => null,
         };
     }
 
-    pub fn filename() []const u8 {
-        return "roc_default_platform.o";
+    pub fn filename(target: RocTarget) []const u8 {
+        return if (target.isWindows()) "roc_default_platform.obj" else "roc_default_platform.o";
     }
 };
 
@@ -1935,7 +1947,9 @@ fn rocRunBuildAndExec(ctx: *CliCtx, args: cli_args.RunArgs) anyerror!void {
         .require_executable_output = true,
         .require_host_runnable_output = true,
         .suppress_build_status = true,
+        .resolve_limits = args.resolve_limits,
         .synthetic_default_platform = false,
+        .source_dir_override = null,
     });
 
     const term = try runCompiledExecutable(ctx, exe_path, args.app_args);
@@ -3868,6 +3882,7 @@ fn rocBuildDefaultApp(ctx: *CliCtx, args: cli_args.BuildArgs, original_source: [
     var synthetic_args = args;
     synthetic_args.path = app_path;
     synthetic_args.synthetic_default_platform = true;
+    synthetic_args.source_dir_override = std.fs.path.dirname(args.path) orelse ".";
     if (synthetic_args.output == null) {
         synthetic_args.output = try base.module_path.getModuleNameAlloc(ctx.arena, args.path);
     }
@@ -4096,7 +4111,7 @@ fn verifyHostInputSymbols(
 
 fn writeDefaultPlatformRuntimeObject(ctx: *CliCtx, artifact_dir: []const u8, target: RocTarget) anyerror!?[]const u8 {
     const bytes = DefaultPlatformRuntimeObjects.forTarget(target) orelse return null;
-    const runtime_path = try std.fs.path.join(ctx.arena, &.{ artifact_dir, DefaultPlatformRuntimeObjects.filename() });
+    const runtime_path = try std.fs.path.join(ctx.arena, &.{ artifact_dir, DefaultPlatformRuntimeObjects.filename(target) });
     backend.writeFileWindowsAvSafe(ctx.io.std_io, runtime_path, bytes) catch |err| {
         std.log.err("Failed to write default platform runtime object {s}: {}", .{ runtime_path, err });
         return err;
@@ -5158,9 +5173,12 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
     const thread_count: usize = args.max_threads orelse (std.Thread.getCpuCount() catch 1);
     const mode: Mode = if (thread_count <= 1) .single_threaded else .multi_threaded;
 
-    const cwd = try std.Io.Dir.cwd().realPathFileAlloc(ctx.io.std_io, ".", ctx.gpa);
+    const cwd = try std.fs.path.resolve(ctx.gpa, &.{"."});
     defer ctx.gpa.free(cwd);
     var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd, ctx.io.std_io);
+    if (args.source_dir_override) |source_dir| {
+        build_env.setRootSourceDirOverride(source_dir);
+    }
     build_env.resolution_config = resolutionConfigFromLimits(args.resolve_limits);
     build_env.compiler_version = build_options.compiler_version;
     defer build_env.deinit();
@@ -5490,9 +5508,12 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
     const thread_count: usize = args.max_threads orelse (std.Thread.getCpuCount() catch 1);
     const mode: Mode = if (thread_count <= 1) .single_threaded else .multi_threaded;
 
-    const cwd = try std.Io.Dir.cwd().realPathFileAlloc(ctx.io.std_io, ".", ctx.gpa);
+    const cwd = try std.fs.path.resolve(ctx.gpa, &.{"."});
     defer ctx.gpa.free(cwd);
     var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd, ctx.io.std_io);
+    if (args.source_dir_override) |source_dir| {
+        build_env.setRootSourceDirOverride(source_dir);
+    }
     build_env.resolution_config = resolutionConfigFromLimits(args.resolve_limits);
     build_env.compiler_version = build_options.compiler_version;
     defer build_env.deinit();
@@ -5683,6 +5704,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
     }
 
     var object_compiler = backend.ObjectFileCompiler.init(ctx.gpa);
+    object_compiler.enable_default_platform_runtime = args.synthetic_default_platform;
 
     const build_scratch_dir = createUniqueTempDir(ctx) catch |err| {
         return ctx.fail(.{ .temp_dir_failed = .{ .err = err } });
@@ -5718,6 +5740,13 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
     var object_files = try std.array_list.Managed([]const u8).initCapacity(ctx.arena, 4);
     try object_files.append(obj_path);
     try object_files.append(builtins_path);
+    if (args.synthetic_default_platform) {
+        if (try writeDefaultPlatformRuntimeObject(ctx, build_scratch_dir, target)) |runtime_path| {
+            try object_files.append(runtime_path);
+        } else {
+            return error.UnsupportedTarget;
+        }
+    }
 
     if (link_type == .archive) {
         try writeArchiveOutput(ctx, target, final_output_path, link_inputs, object_files.items);
@@ -5727,7 +5756,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
             try hostInputPaths(ctx, link_inputs),
             try hostedSymbolsFromLir(ctx.arena, &lowered.lir_result.store),
             link_inputs.target_name,
-            false,
+            args.synthetic_default_platform,
         );
 
         const force_undefined_symbols = try staticDataLinkRootSymbols(ctx, static_data_exports);
@@ -5835,9 +5864,12 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
     const thread_count: usize = args.max_threads orelse (std.Thread.getCpuCount() catch 1);
     const mode: Mode = if (thread_count <= 1) .single_threaded else .multi_threaded;
 
-    const cwd = try std.Io.Dir.cwd().realPathFileAlloc(ctx.io.std_io, ".", ctx.gpa);
+    const cwd = try std.fs.path.resolve(ctx.gpa, &.{"."});
     defer ctx.gpa.free(cwd);
     var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd, ctx.io.std_io);
+    if (args.source_dir_override) |source_dir| {
+        build_env.setRootSourceDirOverride(source_dir);
+    }
     build_env.resolution_config = resolutionConfigFromLimits(args.resolve_limits);
     build_env.compiler_version = build_options.compiler_version;
     defer build_env.deinit();

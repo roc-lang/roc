@@ -9,6 +9,7 @@ const linux = std.os.linux;
 
 pub const panic = std.debug.no_panic;
 
+const stdout_fd: i32 = 1;
 const stderr_fd: i32 = 2;
 const ansi_function_name = "\x1b[94m";
 const ansi_reset = "\x1b[0m";
@@ -17,6 +18,7 @@ const allocation_header_words = 3;
 const allocation_header_size = allocation_header_words * @sizeOf(usize);
 const alt_signal_stack_size: usize = 64 * 1024;
 const max_backtrace_frames = 64;
+const seamless_slice_tag: usize = 1;
 
 const BacktraceEntry = extern struct {
     start: usize,
@@ -61,6 +63,18 @@ export fn roc_crashed(bytes: [*]const u8, len: usize) callconv(.c) noreturn {
     writeLiteral(stderr_fd, "\n\n");
     printBacktrace(@returnAddress(), @frameAddress());
     exitFailure();
+}
+
+export fn roc_default_echo_line(str: RocStr) callconv(.c) void {
+    var owned = str;
+    const message = owned.asSlice();
+    writeAll(stdout_fd, message);
+    writeLiteral(stdout_fd, "\n");
+    owned.decref();
+}
+
+export fn roc_default_exit(code: u8) callconv(.c) noreturn {
+    linux.exit_group(code);
 }
 
 export fn roc_alloc(length: usize, alignment: usize) callconv(.c) ?*anyopaque {
@@ -364,3 +378,53 @@ fn writeUnsigned(fd: i32, value: anytype) void {
 fn exitFailure() noreturn {
     linux.exit_group(1);
 }
+
+const RocStr = extern struct {
+    bytes: ?[*]u8,
+    capacity_or_alloc_ptr: usize,
+    length: usize,
+
+    fn isSmallStr(self: RocStr) bool {
+        return @as(isize, @bitCast(self.length)) < 0;
+    }
+
+    fn isSeamlessSlice(self: RocStr) bool {
+        return !self.isSmallStr() and (self.capacity_or_alloc_ptr & seamless_slice_tag) == seamless_slice_tag;
+    }
+
+    fn len(self: RocStr) usize {
+        if (self.isSmallStr()) {
+            const raw: *const [@sizeOf(RocStr)]u8 = @ptrCast(&self);
+            return raw.*[@sizeOf(RocStr) - 1] ^ 0b1000_0000;
+        }
+        return self.length;
+    }
+
+    fn allocationPtr(self: RocStr) ?[*]u8 {
+        if (self.isSmallStr()) return null;
+        if (self.isSeamlessSlice()) {
+            return @ptrFromInt(self.capacity_or_alloc_ptr & ~seamless_slice_tag);
+        }
+        return self.bytes;
+    }
+
+    fn asSlice(self: *const RocStr) []const u8 {
+        const ptr: [*]const u8 = if (self.isSmallStr())
+            @ptrCast(self)
+        else
+            @ptrCast(self.bytes.?);
+        return ptr[0..self.len()];
+    }
+
+    fn decref(self: *RocStr) void {
+        const data = self.allocationPtr() orelse return;
+        const refcount_ptr: *isize = @ptrCast(@alignCast(data - @sizeOf(usize)));
+        const refcount = refcount_ptr.*;
+        if (refcount == 0) return;
+
+        const last = @atomicRmw(isize, refcount_ptr, .Sub, 1, .monotonic);
+        if (last == 1) {
+            roc_dealloc(data - @sizeOf(usize), @alignOf(usize));
+        }
+    }
+};

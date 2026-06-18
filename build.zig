@@ -4976,11 +4976,16 @@ fn addMainExe(
         );
         exe.step.dependOn(&copy_cross_builtins_extern.step);
 
-        if (std.mem.eql(u8, cross_target.name, "x64musl") or std.mem.eql(u8, cross_target.name, "arm64musl")) {
+        if (!std.mem.eql(u8, cross_target.name, "wasm32")) {
+            const default_platform_runtime_source =
+                if (cross_target.query.os_tag == .linux)
+                    "src/default_platform/linux_runtime.zig"
+                else
+                    "src/default_platform/c_runtime.zig";
             const default_platform_runtime_obj = b.addObject(.{
                 .name = b.fmt("roc_default_platform_{s}", .{cross_target.name}),
                 .root_module = b.createModule(.{
-                    .root_source_file = b.path("src/default_platform/linux_runtime.zig"),
+                    .root_source_file = b.path(default_platform_runtime_source),
                     .target = cross_resolved_target,
                     .optimize = .ReleaseFast,
                     .strip = false,
@@ -4995,9 +5000,10 @@ fn addMainExe(
             configureBackend(default_platform_runtime_obj, cross_resolved_target);
 
             const copy_default_platform_runtime = b.addUpdateSourceFiles();
+            const default_platform_ext = if (cross_target.query.os_tag == .windows) "roc_default_platform.obj" else "roc_default_platform.o";
             copy_default_platform_runtime.addCopyFileToSource(
                 default_platform_runtime_obj.getEmittedBin(),
-                b.pathJoin(&.{ "src/cli/targets", cross_target.name, "roc_default_platform.o" }),
+                b.pathJoin(&.{ "src/cli/targets", cross_target.name, default_platform_ext }),
             );
             exe.step.dependOn(&copy_default_platform_runtime.step);
         }
