@@ -34,7 +34,9 @@ UiRuntime := [].{
 
 	StateSlot : { key : Str, value : NodeValue, version : U64 }
 
-	StateVersionDesc : { state_id : U64, version : U64 }
+	StateDesc : { state_id : U64 }
+
+	StateChangeDesc : { state_id : U64 }
 
 	StateVersionEntry : { state_index : U64, version : U64 }
 
@@ -78,7 +80,8 @@ UiRuntime := [].{
 		runtime : Box(Runtime),
 		commands : List(Command),
 		event_routes : List(EventStateDeps),
-		state_versions : List(StateVersionDesc),
+		state_descriptors : List(StateDesc),
+		state_changes : List(StateChangeDesc),
 		metrics : RuntimeMetrics,
 	}
 
@@ -92,6 +95,7 @@ UiRuntime := [].{
 		active_event : ActiveEvent,
 		dirty_state_indexes : List(U64),
 		updated_state_indexes : List(U64),
+		changed_state_indexes : List(U64),
 	}
 
 	EvalResult : { state : EvalState, value : NodeValue }
@@ -107,6 +111,7 @@ UiRuntime := [].{
 	RenderResult : {
 		runtime : Runtime,
 		emit_commands : List(Command),
+		changed_state_indexes : List(U64),
 	}
 
 	EventLookup : { runtime : Runtime, id : U64 }
@@ -198,7 +203,8 @@ UiRuntime := [].{
 			runtime: runtime_box,
 			commands: rendered.emit_commands,
 			event_routes: rendered.runtime.event_state_deps,
-			state_versions: state_versions_for_runtime(rendered.runtime),
+			state_descriptors: state_descriptors_for_runtime(rendered.runtime),
+			state_changes: state_changes_for_indexes(rendered.changed_state_indexes),
 			metrics: rendered.runtime.metrics,
 		}
 		result
@@ -214,7 +220,8 @@ UiRuntime := [].{
 			runtime: Box.box(rendered.runtime),
 			commands: rendered.emit_commands,
 			event_routes: rendered.runtime.event_state_deps,
-			state_versions: state_versions_for_runtime(rendered.runtime),
+			state_descriptors: state_descriptors_for_runtime(rendered.runtime),
+			state_changes: state_changes_for_indexes(rendered.changed_state_indexes),
 			metrics: rendered.runtime.metrics,
 		}
 	}
@@ -552,6 +559,7 @@ UiRuntime := [].{
 			active_event,
 			dirty_state_indexes: dirty_states.indexes,
 			updated_state_indexes: [],
+			changed_state_indexes: [],
 		}
 		render_state = {
 			state,
@@ -562,6 +570,7 @@ UiRuntime := [].{
 		{
 			runtime: rendered.state.runtime,
 			emit_commands: rendered.commands,
+			changed_state_indexes: rendered.state.changed_state_indexes,
 		}
 	}
 
@@ -1102,17 +1111,28 @@ UiRuntime := [].{
 		)
 	}
 
-	state_versions_for_runtime : Runtime -> List(StateVersionDesc)
-	state_versions_for_runtime = |runtime| {
+	state_descriptors_for_runtime : Runtime -> List(StateDesc)
+	state_descriptors_for_runtime = |runtime| {
 		var $state_id = 0
-		var $versions = List.with_capacity(List.len(runtime.states))
+		var $descriptors = List.with_capacity(List.len(runtime.states))
 
 		for slot in runtime.states {
-			$versions = List.append($versions, { state_id: $state_id, version: slot.version })
+			_ = slot
+			$descriptors = List.append($descriptors, { state_id: $state_id })
 			$state_id = $state_id + 1
 		}
 
-		$versions
+		$descriptors
+	}
+
+	state_changes_for_indexes : List(U64) -> List(StateChangeDesc)
+	state_changes_for_indexes = |state_indexes| {
+		List.map(
+			state_indexes,
+			|state_id| {
+				{ state_id: state_id }
+			},
+		)
 	}
 
 	current_state_version_by_index : Runtime, U64 -> U64
@@ -1288,7 +1308,18 @@ UiRuntime := [].{
 					}
 				}
 			runtime2 = set_state_by_index({ ..state.runtime, metrics: metrics1 }, state_index, next, changed)
-			state1 = { ..state, runtime: runtime2, updated_state_indexes: List.append(state.updated_state_indexes, state_index) }
+			next_changed_state_indexes =
+				if changed {
+					List.append(state.changed_state_indexes, state_index)
+				} else {
+					state.changed_state_indexes
+				}
+			state1 = {
+				..state,
+				runtime: runtime2,
+				updated_state_indexes: List.append(state.updated_state_indexes, state_index),
+				changed_state_indexes: next_changed_state_indexes,
+			}
 			{ state: state1, value: next }
 		} else {
 			{ state, value: previous }
@@ -1305,15 +1336,8 @@ UiRuntime := [].{
 					} else {
 						slot.version
 					}
-				metrics0 = runtime.metrics
-				metrics1 =
-					if bump_version {
-						{ ..metrics0, state_version_bumps: metrics0.state_version_bumps + 1 }
-					} else {
-						metrics0
-					}
 				next_slot = { key: slot.key, value, version: next_version }
-				{ ..runtime, states: replace_state_slot(runtime.states, state_index, next_slot), metrics: metrics1 }
+				{ ..runtime, states: replace_state_slot(runtime.states, state_index, next_slot) }
 			}
 			Err(_) => {
 				crash "Signals runtime invariant violated: state update index was not registered"

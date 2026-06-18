@@ -14,7 +14,8 @@ const DispatchResult = std.meta.Child(DispatchResultBox);
 const RuntimeBox = @typeInfo(@TypeOf(abi.roc_ui_drop)).@"fn".params[0].type.?;
 const RuntimeMetrics = @FieldType(DispatchResult, "metrics");
 const EventRouteList = @FieldType(DispatchResult, "event_routes");
-const StateVersionList = @FieldType(DispatchResult, "state_versions");
+const StateDescriptorList = @FieldType(DispatchResult, "state_descriptors");
+const StateChangeList = @FieldType(DispatchResult, "state_changes");
 const HostEventBox = @typeInfo(@TypeOf(abi.roc_ui_dispatch)).@"fn".params[1].type.?;
 const HostEvent = std.meta.Child(HostEventBox);
 const CommandPayload = @FieldType(abi.UiRuntimeCommand, "payload");
@@ -28,7 +29,7 @@ const HostEventRoute = struct {
     state_indexes: []u64,
 };
 
-const HostStateVersion = struct {
+const HostState = struct {
     state_id: u64,
     version: u64,
 };
@@ -58,6 +59,10 @@ const HostRenderMetrics = struct {
 const HostDispatchMetrics = struct {
     events_processed: u64 = 0,
     retained_graph_dispatches: u64 = 0,
+};
+
+const HostStateMetrics = struct {
+    state_version_bumps: u64 = 0,
 };
 
 pub const std_options: std.Options = .{
@@ -493,10 +498,11 @@ const HostEnv = struct {
     dealloc_count: usize = 0,
     dom_elements: std.ArrayListUnmanaged(DomElement) = .empty,
     event_routes: std.ArrayListUnmanaged(HostEventRoute) = .empty,
-    state_versions: std.ArrayListUnmanaged(HostStateVersion) = .empty,
+    states: std.ArrayListUnmanaged(HostState) = .empty,
     previous_command_snapshots: std.ArrayListUnmanaged(HostCommandSnapshot) = .empty,
     render_metrics: HostRenderMetrics = .{},
     dispatch_metrics: HostDispatchMetrics = .{},
+    state_metrics: HostStateMetrics = .{},
     next_elem_id: u64 = 0,
     roc_host: ?*abi.RocHost = null,
     runtime_box: ?RuntimeBox = null,
@@ -528,7 +534,7 @@ const HostEnv = struct {
             }
 
             for (route.state_indexes.items()) |state_id| {
-                if (state_id >= self.state_versions.items.len) {
+                if (state_id >= self.states.items.len) {
                     failHost("Roc event route descriptor referenced an unknown state id");
                 }
             }
@@ -564,38 +570,63 @@ const HostEnv = struct {
         self.dispatch_metrics.retained_graph_dispatches += 1;
     }
 
-    fn clearStateVersions(self: *HostEnv) void {
-        self.state_versions.items.len = 0;
+    fn clearStates(self: *HostEnv) void {
+        self.states.items.len = 0;
     }
 
-    fn setStateVersions(self: *HostEnv, versions: StateVersionList) void {
-        if (versions.len() < self.state_versions.items.len) {
-            failHost("Roc state version descriptors must not shrink");
+    fn setStateDescriptors(self: *HostEnv, descriptors: StateDescriptorList) void {
+        if (descriptors.len() < self.states.items.len) {
+            failHost("Roc state descriptors must not shrink");
         }
 
         const allocator = self.gpa.allocator();
-        var next: std.ArrayListUnmanaged(HostStateVersion) = .empty;
-        errdefer next.deinit(allocator);
-
-        for (versions.items(), 0..) |desc, index| {
+        for (descriptors.items(), 0..) |desc, index| {
             const expected_state_id: u64 = @intCast(index);
             if (desc.state_id != expected_state_id) {
-                failHost("Roc state version descriptors must be dense and ordered by state id");
+                failHost("Roc state descriptors must be dense and ordered by state id");
             }
 
-            if (index < self.state_versions.items.len and desc.version < self.state_versions.items[index].version) {
-                failHost("Roc state version descriptor moved backward");
+            if (index < self.states.items.len) {
+                if (self.states.items[index].state_id != desc.state_id) {
+                    failHost("host state registry is not indexed by state id");
+                }
+                continue;
             }
 
-            next.append(allocator, .{
+            self.states.append(allocator, .{
                 .state_id = desc.state_id,
-                .version = desc.version,
+                .version = 0,
             }) catch std.process.exit(1);
         }
+    }
 
-        self.clearStateVersions();
-        self.state_versions.deinit(allocator);
-        self.state_versions = next;
+    fn applyStateChanges(self: *HostEnv, changes: StateChangeList) void {
+        if (changes.len() == 0) return;
+
+        const allocator = self.gpa.allocator();
+        const seen = allocator.alloc(bool, self.states.items.len) catch std.process.exit(1);
+        defer allocator.free(seen);
+        @memset(seen, false);
+
+        for (changes.items()) |change| {
+            if (change.state_id >= self.states.items.len) {
+                failHost("Roc state change descriptor referenced an unknown state id");
+            }
+
+            const state_index: usize = @intCast(change.state_id);
+            if (seen[state_index]) {
+                failHost("Roc state change descriptors must not contain duplicate state ids");
+            }
+            seen[state_index] = true;
+
+            const state = &self.states.items[state_index];
+            if (state.state_id != change.state_id) {
+                failHost("host state registry is not indexed by state id");
+            }
+
+            state.version += 1;
+            self.state_metrics.state_version_bumps += 1;
+        }
     }
 
     fn clearPreviousCommandSnapshots(self: *HostEnv) void {
@@ -620,6 +651,7 @@ const HostEnv = struct {
         metrics.structural_resets += self.render_metrics.structural_resets;
         metrics.events_processed += self.dispatch_metrics.events_processed;
         metrics.retained_graph_dispatches += self.dispatch_metrics.retained_graph_dispatches;
+        metrics.state_version_bumps += self.state_metrics.state_version_bumps;
         return metrics;
     }
 
@@ -637,8 +669,8 @@ const HostEnv = struct {
         self.dom_elements.deinit(allocator);
         self.clearEventRoutes();
         self.event_routes.deinit(allocator);
-        self.clearStateVersions();
-        self.state_versions.deinit(allocator);
+        self.clearStates();
+        self.states.deinit(allocator);
         self.clearPreviousCommandSnapshots();
         self.previous_command_snapshots.deinit(allocator);
 
@@ -1390,8 +1422,12 @@ fn releaseEventRouteList(routes: EventRouteList, roc_host: *abi.RocHost) void {
     routes.decref(roc_host);
 }
 
-fn releaseStateVersionList(versions: StateVersionList, roc_host: *abi.RocHost) void {
-    versions.decref(roc_host);
+fn releaseStateDescriptorList(descriptors: StateDescriptorList, roc_host: *abi.RocHost) void {
+    descriptors.decref(roc_host);
+}
+
+fn releaseStateChangeList(changes: StateChangeList, roc_host: *abi.RocHost) void {
+    changes.decref(roc_host);
 }
 
 fn dropMovedDispatchResultPayload(_: ?*anyopaque, _: *abi.RocHost) callconv(.c) void {}
@@ -1401,7 +1437,8 @@ fn acceptDispatchResultMeasured(host: *HostEnv, roc_host: *abi.RocHost, result_b
     if (host.runtime_box != null) failHost("Roc runtime box was overwritten before being consumed");
     host.runtime_box = result.runtime;
     const roc_metrics = result.metrics;
-    host.setStateVersions(result.state_versions);
+    host.setStateDescriptors(result.state_descriptors);
+    host.applyStateChanges(result.state_changes);
     host.setEventRoutes(result.event_routes);
     const start_ns = benchmarkNowNs();
     const counts = applyRenderCommandList(host, result.commands);
@@ -1411,7 +1448,8 @@ fn acceptDispatchResultMeasured(host: *HostEnv, roc_host: *abi.RocHost, result_b
     if (command_counts) |total| total.addAll(counts);
     releaseCommandList(result.commands, roc_host);
     releaseEventRouteList(result.event_routes, roc_host);
-    releaseStateVersionList(result.state_versions, roc_host);
+    releaseStateDescriptorList(result.state_descriptors, roc_host);
+    releaseStateChangeList(result.state_changes, roc_host);
     abi.decrefBoxWith(@ptrCast(result_box), @alignOf(DispatchResult), &dropMovedDispatchResultPayload, roc_host);
 }
 
