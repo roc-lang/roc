@@ -46,12 +46,6 @@ UiRuntime := [].{
 
 	EventDesc : { event_id : U64, payload_kind : U64 }
 
-	HostEvent := [
-		Click({ event : U64, dirty_signal_ids : List(U64), cached_signals : List(SignalValueDesc), cached_states : List(StateValueDesc) }),
-		Input({ event : U64, dirty_signal_ids : List(U64), cached_signals : List(SignalValueDesc), cached_states : List(StateValueDesc), value : Str }),
-		Check({ event : U64, dirty_signal_ids : List(U64), cached_signals : List(SignalValueDesc), cached_states : List(StateValueDesc), checked : Bool }),
-	]
-
 	Command := [
 		CreateElement({ id : U64, tag : Str }),
 		AppendChild({ parent : U64, child : U64 }),
@@ -249,24 +243,6 @@ UiRuntime := [].{
 			metrics: rendered.runtime.metrics,
 		}
 		result
-	}
-
-	dispatch : Box(Runtime), HostEvent -> DispatchResult
-	dispatch = |boxed_runtime, host_event| {
-		runtime0 = Box.unbox(boxed_runtime)
-		active_event = host_event_to_active(host_event)
-		dirty_signals = { ids: host_event_dirty_signal_ids(host_event) }
-		rendered = render_runtime(runtime0, active_event, dirty_signals, host_event_cached_signals(host_event), host_event_cached_states(host_event))
-		{
-			runtime: Box.box(rendered.runtime),
-			commands: rendered.emit_commands,
-			event_descriptors: event_descriptors_for_runtime(rendered.runtime),
-			signal_descriptors: signal_descriptors_for_runtime(rendered.runtime),
-			state_descriptors: state_descriptors_for_runtime(rendered.runtime),
-			state_changes: rendered.state_changes,
-			signal_changes: rendered.signal_changes,
-			metrics: rendered.runtime.metrics,
-		}
 	}
 
 	recompute : Box(Runtime), RecomputeInput -> RecomputeResult
@@ -637,42 +613,6 @@ UiRuntime := [].{
 	drop = |boxed_runtime| {
 		_ = Box.unbox(boxed_runtime)
 		{}
-	}
-
-	host_event_to_active : HostEvent -> ActiveEvent
-	host_event_to_active = |host_event| {
-		match host_event {
-			Click({ event }) => Occurrence({ id: event, value: NodeValue.unit })
-			Input({ event, value }) => Occurrence({ id: event, value: NodeValue.from_str(value) })
-			Check({ event, checked }) => Occurrence({ id: event, value: NodeValue.from_bool(checked) })
-		}
-	}
-
-	host_event_dirty_signal_ids : HostEvent -> List(U64)
-	host_event_dirty_signal_ids = |host_event| {
-		match host_event {
-			Click({ dirty_signal_ids }) => dirty_signal_ids
-			Input({ dirty_signal_ids }) => dirty_signal_ids
-			Check({ dirty_signal_ids }) => dirty_signal_ids
-		}
-	}
-
-	host_event_cached_signals : HostEvent -> List(SignalValueDesc)
-	host_event_cached_signals = |host_event| {
-		match host_event {
-			Click({ cached_signals }) => cached_signals
-			Input({ cached_signals }) => cached_signals
-			Check({ cached_signals }) => cached_signals
-		}
-	}
-
-	host_event_cached_states : HostEvent -> List(StateValueDesc)
-	host_event_cached_states = |host_event| {
-		match host_event {
-			Click({ cached_states }) => cached_states
-			Input({ cached_states }) => cached_states
-			Check({ cached_states }) => cached_states
-		}
 	}
 
 	render_runtime : Runtime, ActiveEvent, DirtySignals, List(SignalValueDesc), List(StateValueDesc) -> RenderResult
