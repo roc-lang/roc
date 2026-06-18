@@ -134,7 +134,7 @@ main = |_| {
 			},
 		)
 
-	{ sender: reviewer_send, receiver: reviewer_changes } = Reactive.Event.channel("reviewer_change")
+	{ sender: reviewer_send, receiver: reviewer_changes } = Reactive.Event.str_channel("reviewer_change")
 	reviewer : Reactive.Signal(Str)
 	reviewer = Reactive.Signal.hold("reviewer", "", reviewer_changes)
 	reviewer_label = Reactive.Signal.map_keyed("reviewer_label", reviewer, |value| Str.concat("Reviewer: ", value))

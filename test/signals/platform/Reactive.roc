@@ -38,9 +38,9 @@ Reactive := [].{
 		to_node : Event(a) -> Graph.EventNode
 		to_node = |event| event.node
 
-		channel : Str -> { sender : EventSender(a), receiver : Event(a) }
-		channel = |key| {
-			event_node = Graph.EventNode.make_source(key)
+		channel : Str, U64 -> { sender : EventSender(a), receiver : Event(a) }
+		channel = |key, payload_kind| {
+			event_node = Graph.EventNode.make_source(key, payload_kind)
 			{
 				sender: { node: event_node },
 				receiver: { node: event_node },
@@ -48,7 +48,13 @@ Reactive := [].{
 		}
 
 		unit_channel : Str -> { sender : EventSender(Unit), receiver : Event(Unit) }
-		unit_channel = |key| Event.channel(key)
+		unit_channel = |key| Event.channel(key, Graph.unit_payload_kind)
+
+		str_channel : Str -> { sender : EventSender(Str), receiver : Event(Str) }
+		str_channel = |key| Event.channel(key, Graph.str_payload_kind)
+
+		bool_channel : Str -> { sender : EventSender(Bool), receiver : Event(Bool) }
+		bool_channel = |key| Event.channel(key, Graph.bool_payload_kind)
 
 		map :
 			Event(a), (a -> b) -> Event(b)

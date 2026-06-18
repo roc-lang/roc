@@ -127,13 +127,13 @@ main = |_| {
 		)
 	step_text = Reactive.Signal.map_i64_str_keyed("step_text", step, step_label)
 
-	{ sender: email_send, receiver: email_changes } = Reactive.Event.channel("email_change")
+	{ sender: email_send, receiver: email_changes } = Reactive.Event.str_channel("email_change")
 	email : Reactive.Signal(Str)
 	email = Reactive.Signal.hold("email", "", email_changes)
-	{ sender: address_send, receiver: address_changes } = Reactive.Event.channel("address_change")
+	{ sender: address_send, receiver: address_changes } = Reactive.Event.str_channel("address_change")
 	address : Reactive.Signal(Str)
 	address = Reactive.Signal.hold("address", "", address_changes)
-	{ sender: terms_send, receiver: terms_changes } = Reactive.Event.channel("terms_change")
+	{ sender: terms_send, receiver: terms_changes } = Reactive.Event.bool_channel("terms_change")
 	terms : Reactive.Signal(Bool)
 	terms = Reactive.Signal.hold("terms", False, terms_changes)
 	terms_text = 

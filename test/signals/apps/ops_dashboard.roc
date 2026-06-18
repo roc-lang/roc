@@ -154,7 +154,7 @@ main = |_| {
 			|_current, next| next,
 		)
 
-	{ sender: search_send, receiver: search_changes } = Reactive.Event.channel("search_change")
+	{ sender: search_send, receiver: search_changes } = Reactive.Event.str_channel("search_change")
 	search : Reactive.Signal(Str)
 	search = Reactive.Signal.hold("search", "", search_changes)
 	search_label = Reactive.Signal.map_keyed("search_label", search, |value| Str.concat("Runbook search: ", value))

@@ -3,8 +3,17 @@ import NodeValue exposing [NodeValue]
 ## Pure graph descriptions. Constructors attach explicit dependency metadata so
 ## the Roc runtime can make dirty-propagation decisions from graph data.
 Graph := [].{
+	unit_payload_kind : U64
+	unit_payload_kind = 1
+
+	str_payload_kind : U64
+	str_payload_kind = 2
+
+	bool_payload_kind : U64
+	bool_payload_kind = 3
+
 	EventExpr := [
-		Source(Str),
+		Source({ key : Str, payload_kind : U64 }),
 		MapEvent({ source : Box(EventNode), transform : Box((NodeValue -> NodeValue)) }),
 		MapUnitI64Const({ source : Box(EventNode), value : I64 }),
 		Merge({ left : Box(EventNode), right : Box(EventNode) }),
@@ -52,8 +61,8 @@ Graph := [].{
 		source_ids : List(U64),
 		expr : EventExpr,
 	}.{
-		make_source : Str -> EventNode
-		make_source = |key| { sources: [key], source_ids: [], expr: Source(key) }
+		make_source : Str, U64 -> EventNode
+		make_source = |key, payload_kind| { sources: [key], source_ids: [], expr: Source({ key, payload_kind }) }
 
 		make_map_event : EventNode, Box((NodeValue -> NodeValue)) -> EventNode
 		make_map_event = |source, transform| { sources: source.sources, source_ids: [], expr: MapEvent({ source: Box.box(source), transform }) }

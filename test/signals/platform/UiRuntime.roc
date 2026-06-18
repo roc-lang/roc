@@ -30,7 +30,7 @@ UiRuntime := [].{
 		state_version_bumps : U64,
 	}
 
-	EventId : { key : Str, id : U64 }
+	EventId : { key : Str, id : U64, payload_kind : U64 }
 
 	StateSlot : { key : Str, value : NodeValue, version : U64 }
 
@@ -43,6 +43,8 @@ UiRuntime := [].{
 	SignalCacheEntry : { key : Str, value : NodeValue, deps : List(StateVersionEntry) }
 
 	EventStateDeps : { event_id : U64, state_indexes : List(U64) }
+
+	EventDesc : { event_id : U64, payload_kind : U64 }
 
 	HostEvent := [
 		Click({ event : U64, dirty_state_indexes : List(U64) }),
@@ -79,6 +81,7 @@ UiRuntime := [].{
 	DispatchResult : {
 		runtime : Box(Runtime),
 		commands : List(Command),
+		event_descriptors : List(EventDesc),
 		event_routes : List(EventStateDeps),
 		state_descriptors : List(StateDesc),
 		state_changes : List(StateChangeDesc),
@@ -122,7 +125,7 @@ UiRuntime := [].{
 	]
 
 	EventIdLookup := [
-		EventIdFound(U64),
+		EventIdFound(EventId),
 		EventIdMissing,
 	]
 
@@ -202,6 +205,7 @@ UiRuntime := [].{
 		result = {
 			runtime: runtime_box,
 			commands: rendered.emit_commands,
+			event_descriptors: event_descriptors_for_runtime(rendered.runtime),
 			event_routes: rendered.runtime.event_state_deps,
 			state_descriptors: state_descriptors_for_runtime(rendered.runtime),
 			state_changes: state_changes_for_indexes(rendered.changed_state_indexes),
@@ -219,6 +223,7 @@ UiRuntime := [].{
 		{
 			runtime: Box.box(rendered.runtime),
 			commands: rendered.emit_commands,
+			event_descriptors: event_descriptors_for_runtime(rendered.runtime),
 			event_routes: rendered.runtime.event_state_deps,
 			state_descriptors: state_descriptors_for_runtime(rendered.runtime),
 			state_changes: state_changes_for_indexes(rendered.changed_state_indexes),
@@ -432,8 +437,8 @@ UiRuntime := [].{
 	register_event : Runtime, Graph.EventNode -> RegisteredEvent
 	register_event = |runtime, event| {
 		match event.expr {
-			Graph.EventExpr.Source(key) => {
-				registered_event = register_event_key(runtime, key)
+			Graph.EventExpr.Source({ key, payload_kind }) => {
+				registered_event = register_event_key(runtime, key, payload_kind)
 				{
 					runtime: registered_event.runtime,
 					event: { ..event, source_ids: [registered_event.id] },
@@ -484,15 +489,20 @@ UiRuntime := [].{
 		}
 	}
 
-	register_event_key : Runtime, Str -> EventLookup
-	register_event_key = |runtime, key| {
+	register_event_key : Runtime, Str, U64 -> EventLookup
+	register_event_key = |runtime, key, payload_kind| {
 		match event_id_lookup(runtime.event_ids, key) {
-			EventIdFound(id) => { runtime, id }
+			EventIdFound(existing) =>
+				if existing.payload_kind == payload_kind {
+					{ runtime, id: existing.id }
+				} else {
+					crash "Signals runtime invariant violated: event key was registered with conflicting payload kind"
+				}
 			EventIdMissing => {
 				id = runtime.next_event_id
 				{
 					runtime: { ..runtime,
-						event_ids: List.append(runtime.event_ids, { key, id }),
+						event_ids: List.append(runtime.event_ids, { key, id, payload_kind }),
 						event_state_deps: List.append(runtime.event_state_deps, { event_id: id, state_indexes: [] }),
 						next_event_id: id + 1,
 					},
@@ -1009,7 +1019,7 @@ UiRuntime := [].{
 			match List.get(event_ids, $index) {
 				Ok(entry) =>
 					if entry.key == key {
-						$result = EventIdFound(entry.id)
+						$result = EventIdFound(entry)
 						$done = True
 					} else {
 						$index = $index + 1
@@ -1131,6 +1141,16 @@ UiRuntime := [].{
 			state_indexes,
 			|state_id| {
 				{ state_id: state_id }
+			},
+		)
+	}
+
+	event_descriptors_for_runtime : Runtime -> List(EventDesc)
+	event_descriptors_for_runtime = |runtime| {
+		List.map(
+			runtime.event_ids,
+			|event| {
+				{ event_id: event.id, payload_kind: event.payload_kind }
 			},
 		)
 	}

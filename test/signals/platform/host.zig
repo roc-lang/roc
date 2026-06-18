@@ -13,6 +13,7 @@ const DispatchResultBox = @typeInfo(@TypeOf(abi.roc_ui_init)).@"fn".return_type.
 const DispatchResult = std.meta.Child(DispatchResultBox);
 const RuntimeBox = @typeInfo(@TypeOf(abi.roc_ui_drop)).@"fn".params[0].type.?;
 const RuntimeMetrics = @FieldType(DispatchResult, "metrics");
+const EventDescriptorList = @FieldType(DispatchResult, "event_descriptors");
 const EventRouteList = @FieldType(DispatchResult, "event_routes");
 const StateDescriptorList = @FieldType(DispatchResult, "state_descriptors");
 const StateChangeList = @FieldType(DispatchResult, "state_changes");
@@ -23,6 +24,15 @@ const AppendChildPayload = @FieldType(CommandPayload, "append_child");
 const CreateElementPayload = @FieldType(CommandPayload, "create_element");
 const StringCommandPayload = @FieldType(CommandPayload, "set_text");
 const RocStr = abi.RocStr;
+
+const event_payload_unit: u64 = 1;
+const event_payload_str: u64 = 2;
+const event_payload_bool: u64 = 3;
+
+const HostEventDescriptor = struct {
+    event_id: u64,
+    payload_kind: u64,
+};
 
 const HostEventRoute = struct {
     event_id: u64,
@@ -497,6 +507,7 @@ const HostEnv = struct {
     alloc_count: usize = 0,
     dealloc_count: usize = 0,
     dom_elements: std.ArrayListUnmanaged(DomElement) = .empty,
+    event_descriptors: std.ArrayListUnmanaged(HostEventDescriptor) = .empty,
     event_routes: std.ArrayListUnmanaged(HostEventRoute) = .empty,
     states: std.ArrayListUnmanaged(HostState) = .empty,
     previous_command_snapshots: std.ArrayListUnmanaged(HostCommandSnapshot) = .empty,
@@ -515,6 +526,45 @@ const HostEnv = struct {
         };
     }
 
+    fn validateEventPayloadKind(payload_kind: u64) void {
+        switch (payload_kind) {
+            event_payload_unit, event_payload_str, event_payload_bool => {},
+            else => failHost("Roc event descriptor used an unknown payload kind"),
+        }
+    }
+
+    fn clearEventDescriptors(self: *HostEnv) void {
+        self.event_descriptors.items.len = 0;
+    }
+
+    fn setEventDescriptors(self: *HostEnv, descriptors: EventDescriptorList) void {
+        if (descriptors.len() < self.event_descriptors.items.len) {
+            failHost("Roc event descriptors must not shrink");
+        }
+
+        const allocator = self.gpa.allocator();
+        for (descriptors.items(), 0..) |desc, index| {
+            const expected_event_id: u64 = @intCast(index + 1);
+            if (desc.event_id != expected_event_id) {
+                failHost("Roc event descriptors must be dense and ordered by event id");
+            }
+            HostEnv.validateEventPayloadKind(desc.payload_kind);
+
+            if (index < self.event_descriptors.items.len) {
+                const existing = self.event_descriptors.items[index];
+                if (existing.event_id != desc.event_id or existing.payload_kind != desc.payload_kind) {
+                    failHost("Roc event descriptor changed after registration");
+                }
+                continue;
+            }
+
+            self.event_descriptors.append(allocator, .{
+                .event_id = desc.event_id,
+                .payload_kind = desc.payload_kind,
+            }) catch std.process.exit(1);
+        }
+    }
+
     fn clearEventRoutes(self: *HostEnv) void {
         const allocator = self.gpa.allocator();
         for (self.event_routes.items) |route| {
@@ -531,6 +581,9 @@ const HostEnv = struct {
             const expected_event_id: u64 = @intCast(self.event_routes.items.len + 1);
             if (route.event_id != expected_event_id) {
                 failHost("Roc event route descriptors must be dense and ordered by event id");
+            }
+            if (route.event_id > self.event_descriptors.items.len) {
+                failHost("Roc event route descriptor referenced an unknown event id");
             }
 
             for (route.state_indexes.items()) |state_id| {
@@ -561,8 +614,22 @@ const HostEnv = struct {
         return route.state_indexes;
     }
 
-    fn validateEventId(self: *HostEnv, event_id: u64) void {
+    fn eventPayloadKind(self: *HostEnv, event_id: u64) u64 {
+        if (event_id == 0) failHost("event id 0 is not registered");
+
+        const event_index = event_id - 1;
+        if (event_index >= self.event_descriptors.items.len) failHost("event id has no host event descriptor");
+
+        const descriptor = self.event_descriptors.items[@intCast(event_index)];
+        if (descriptor.event_id != event_id) failHost("host event descriptor table is not indexed by event id");
+        return descriptor.payload_kind;
+    }
+
+    fn validateEventPayload(self: *HostEnv, event_id: u64, expected_payload_kind: u64) void {
         _ = self.stateIndexesForEvent(event_id);
+        if (self.eventPayloadKind(event_id) != expected_payload_kind) {
+            failHost("DOM binding payload kind does not match Roc event descriptor");
+        }
     }
 
     fn recordDispatch(self: *HostEnv) void {
@@ -667,6 +734,8 @@ const HostEnv = struct {
             elem.deinit(allocator);
         }
         self.dom_elements.deinit(allocator);
+        self.clearEventDescriptors();
+        self.event_descriptors.deinit(allocator);
         self.clearEventRoutes();
         self.event_routes.deinit(allocator);
         self.clearStates();
@@ -1139,17 +1208,17 @@ fn applyCommand(host: *HostEnv, command: abi.UiRuntimeCommand) void {
         },
         .BindClick => {
             const payload = command.payload.bind_click;
-            host.validateEventId(payload.event);
+            host.validateEventPayload(payload.event, event_payload_unit);
             domElementById(host, payload.id).bound_click_event = payload.event;
         },
         .BindInput => {
             const payload = command.payload.bind_input;
-            host.validateEventId(payload.event);
+            host.validateEventPayload(payload.event, event_payload_str);
             domElementById(host, payload.id).bound_input_event = payload.event;
         },
         .BindCheck => {
             const payload = command.payload.bind_check;
-            host.validateEventId(payload.event);
+            host.validateEventPayload(payload.event, event_payload_bool);
             domElementById(host, payload.id).bound_check_event = payload.event;
         },
     }
@@ -1422,6 +1491,10 @@ fn releaseEventRouteList(routes: EventRouteList, roc_host: *abi.RocHost) void {
     routes.decref(roc_host);
 }
 
+fn releaseEventDescriptorList(descriptors: EventDescriptorList, roc_host: *abi.RocHost) void {
+    descriptors.decref(roc_host);
+}
+
 fn releaseStateDescriptorList(descriptors: StateDescriptorList, roc_host: *abi.RocHost) void {
     descriptors.decref(roc_host);
 }
@@ -1439,6 +1512,7 @@ fn acceptDispatchResultMeasured(host: *HostEnv, roc_host: *abi.RocHost, result_b
     const roc_metrics = result.metrics;
     host.setStateDescriptors(result.state_descriptors);
     host.applyStateChanges(result.state_changes);
+    host.setEventDescriptors(result.event_descriptors);
     host.setEventRoutes(result.event_routes);
     const start_ns = benchmarkNowNs();
     const counts = applyRenderCommandList(host, result.commands);
@@ -1447,6 +1521,7 @@ fn acceptDispatchResultMeasured(host: *HostEnv, roc_host: *abi.RocHost, result_b
     if (apply_ns) |ns| ns.* += elapsed;
     if (command_counts) |total| total.addAll(counts);
     releaseCommandList(result.commands, roc_host);
+    releaseEventDescriptorList(result.event_descriptors, roc_host);
     releaseEventRouteList(result.event_routes, roc_host);
     releaseStateDescriptorList(result.state_descriptors, roc_host);
     releaseStateChangeList(result.state_changes, roc_host);
