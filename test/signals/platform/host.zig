@@ -14,6 +14,7 @@ const DispatchResult = std.meta.Child(DispatchResultBox);
 const RuntimeBox = @typeInfo(@TypeOf(abi.roc_ui_drop)).@"fn".params[0].type.?;
 const RuntimeMetrics = @FieldType(DispatchResult, "metrics");
 const EventDescriptorList = @FieldType(DispatchResult, "event_descriptors");
+const SignalDescriptorList = @FieldType(DispatchResult, "signal_descriptors");
 const StateDescriptorList = @FieldType(DispatchResult, "state_descriptors");
 const StateChangeList = @FieldType(DispatchResult, "state_changes");
 const HostEventBox = @typeInfo(@TypeOf(abi.roc_ui_dispatch)).@"fn".params[1].type.?;
@@ -24,13 +25,21 @@ const CreateElementPayload = @FieldType(CommandPayload, "create_element");
 const StringCommandPayload = @FieldType(CommandPayload, "set_text");
 const RocStr = abi.RocStr;
 
-const event_payload_unit: u64 = 1;
-const event_payload_str: u64 = 2;
-const event_payload_bool: u64 = 3;
+const EventPayloadKind = enum(u64) {
+    unit = 1,
+    str = 2,
+    bool = 3,
+};
+
+const SignalKind = enum(u64) {
+    source = 1,
+    map = 2,
+    map2 = 3,
+};
 
 const HostEventDescriptor = struct {
     event_id: u64,
-    payload_kind: u64,
+    payload_kind: EventPayloadKind,
 };
 
 const HostEventRoute = struct {
@@ -43,6 +52,17 @@ const HostState = struct {
     value: abi.NodeValue,
     event_ids: []u64,
     version: u64,
+};
+
+const HostSignalDescriptor = struct {
+    signal_id: u64,
+    kind: SignalKind,
+    state_deps: []u64,
+};
+
+const HostSignalRoute = struct {
+    state_id: u64,
+    signal_ids: []u64,
 };
 
 const HostCommandSnapshot = struct {
@@ -495,6 +515,13 @@ fn parseTestSpec(allocator: std.mem.Allocator, content: []const u8) ParseError![
     return commands.toOwnedSlice(allocator) catch ParseError.OutOfMemory;
 }
 
+fn u64SliceContains(items: []const u64, target: u64) bool {
+    for (items) |item| {
+        if (item == target) return true;
+    }
+    return false;
+}
+
 const RocAllocation = struct {
     ptr: [*]u8,
     total_size: usize,
@@ -510,6 +537,8 @@ const HostEnv = struct {
     dom_elements: std.ArrayListUnmanaged(DomElement) = .empty,
     event_descriptors: std.ArrayListUnmanaged(HostEventDescriptor) = .empty,
     event_routes: std.ArrayListUnmanaged(HostEventRoute) = .empty,
+    signal_descriptors: std.ArrayListUnmanaged(HostSignalDescriptor) = .empty,
+    signal_routes: std.ArrayListUnmanaged(HostSignalRoute) = .empty,
     states: std.ArrayListUnmanaged(HostState) = .empty,
     previous_command_snapshots: std.ArrayListUnmanaged(HostCommandSnapshot) = .empty,
     render_metrics: HostRenderMetrics = .{},
@@ -527,11 +556,13 @@ const HostEnv = struct {
         };
     }
 
-    fn validateEventPayloadKind(payload_kind: u64) void {
-        switch (payload_kind) {
-            event_payload_unit, event_payload_str, event_payload_bool => {},
+    fn eventPayloadKindFromAbi(payload_kind: u64) EventPayloadKind {
+        return switch (payload_kind) {
+            @intFromEnum(EventPayloadKind.unit) => .unit,
+            @intFromEnum(EventPayloadKind.str) => .str,
+            @intFromEnum(EventPayloadKind.bool) => .bool,
             else => failHost("Roc event descriptor used an unknown payload kind"),
-        }
+        };
     }
 
     fn clearEventDescriptors(self: *HostEnv) void {
@@ -549,11 +580,11 @@ const HostEnv = struct {
             if (desc.event_id != expected_event_id) {
                 failHost("Roc event descriptors must be dense and ordered by event id");
             }
-            HostEnv.validateEventPayloadKind(desc.payload_kind);
+            const payload_kind = HostEnv.eventPayloadKindFromAbi(desc.payload_kind);
 
             if (index < self.event_descriptors.items.len) {
                 const existing = self.event_descriptors.items[index];
-                if (existing.event_id != desc.event_id or existing.payload_kind != desc.payload_kind) {
+                if (existing.event_id != desc.event_id or existing.payload_kind != payload_kind) {
                     failHost("Roc event descriptor changed after registration");
                 }
                 continue;
@@ -561,7 +592,7 @@ const HostEnv = struct {
 
             self.event_descriptors.append(allocator, .{
                 .event_id = desc.event_id,
-                .payload_kind = desc.payload_kind,
+                .payload_kind = payload_kind,
             }) catch std.process.exit(1);
         }
     }
@@ -636,7 +667,7 @@ const HostEnv = struct {
         return route.state_indexes;
     }
 
-    fn eventPayloadKind(self: *HostEnv, event_id: u64) u64 {
+    fn eventPayloadKind(self: *HostEnv, event_id: u64) EventPayloadKind {
         if (event_id == 0) failHost("event id 0 is not registered");
 
         const event_index = event_id - 1;
@@ -647,11 +678,153 @@ const HostEnv = struct {
         return descriptor.payload_kind;
     }
 
-    fn validateEventPayload(self: *HostEnv, event_id: u64, expected_payload_kind: u64) void {
+    fn validateEventPayload(self: *HostEnv, event_id: u64, expected_payload_kind: EventPayloadKind) void {
         _ = self.stateIndexesForEvent(event_id);
         if (self.eventPayloadKind(event_id) != expected_payload_kind) {
             failHost("DOM binding payload kind does not match Roc event descriptor");
         }
+    }
+
+    fn signalKindFromAbi(kind: u64) SignalKind {
+        return switch (kind) {
+            @intFromEnum(SignalKind.source) => .source,
+            @intFromEnum(SignalKind.map) => .map,
+            @intFromEnum(SignalKind.map2) => .map2,
+            else => failHost("Roc signal descriptor used an unknown signal kind"),
+        };
+    }
+
+    fn validateSignalStateDeps(self: *HostEnv, state_deps: []const u64) void {
+        for (state_deps, 0..) |state_id, index| {
+            if (state_id >= self.states.items.len) {
+                failHost("Roc signal descriptor referenced an unknown state id");
+            }
+
+            for (state_deps[0..index]) |previous| {
+                if (previous == state_id) {
+                    failHost("Roc signal descriptor must not contain duplicate state deps");
+                }
+            }
+        }
+    }
+
+    fn clearSignalDescriptors(self: *HostEnv) void {
+        const allocator = self.gpa.allocator();
+        for (self.signal_descriptors.items) |descriptor| {
+            allocator.free(descriptor.state_deps);
+        }
+        self.signal_descriptors.items.len = 0;
+    }
+
+    fn clearSignalRoutes(self: *HostEnv) void {
+        const allocator = self.gpa.allocator();
+        for (self.signal_routes.items) |route| {
+            allocator.free(route.signal_ids);
+        }
+        self.signal_routes.items.len = 0;
+    }
+
+    fn rebuildSignalRoutesFromSignals(self: *HostEnv) void {
+        const allocator = self.gpa.allocator();
+        var route_lists = allocator.alloc(std.ArrayListUnmanaged(u64), self.states.items.len) catch std.process.exit(1);
+        defer allocator.free(route_lists);
+
+        for (route_lists) |*list| {
+            list.* = .empty;
+        }
+        errdefer {
+            for (route_lists) |*list| {
+                list.deinit(allocator);
+            }
+        }
+
+        for (self.signal_descriptors.items) |signal| {
+            for (signal.state_deps) |state_id| {
+                if (state_id >= self.states.items.len) {
+                    failHost("host signal registry contains an unknown state id");
+                }
+                route_lists[@intCast(state_id)].append(allocator, signal.signal_id) catch std.process.exit(1);
+            }
+        }
+
+        self.clearSignalRoutes();
+
+        for (route_lists, 0..) |*route_list, index| {
+            const signal_ids = route_list.toOwnedSlice(allocator) catch std.process.exit(1);
+            self.signal_routes.append(allocator, .{
+                .state_id = @intCast(index),
+                .signal_ids = signal_ids,
+            }) catch {
+                allocator.free(signal_ids);
+                std.process.exit(1);
+            };
+        }
+    }
+
+    fn setSignalDescriptors(self: *HostEnv, descriptors: SignalDescriptorList) void {
+        if (descriptors.len() < self.signal_descriptors.items.len) {
+            failHost("Roc signal descriptors must not shrink");
+        }
+
+        const allocator = self.gpa.allocator();
+        for (descriptors.items(), 0..) |desc, index| {
+            const expected_signal_id: u64 = @intCast(index);
+            if (desc.signal_id != expected_signal_id) {
+                failHost("Roc signal descriptors must be dense and ordered by signal id");
+            }
+            const kind = HostEnv.signalKindFromAbi(desc.kind);
+            self.validateSignalStateDeps(desc.state_deps.items());
+
+            if (index < self.signal_descriptors.items.len) {
+                const existing = self.signal_descriptors.items[index];
+                if (existing.signal_id != desc.signal_id or existing.kind != kind) {
+                    failHost("Roc signal descriptor changed after registration");
+                }
+                if (existing.state_deps.len != desc.state_deps.len()) {
+                    failHost("Roc signal descriptor state deps changed after registration");
+                }
+                for (desc.state_deps.items(), existing.state_deps) |next_state_id, existing_state_id| {
+                    if (next_state_id != existing_state_id) {
+                        failHost("Roc signal descriptor state deps changed after registration");
+                    }
+                }
+                continue;
+            }
+
+            const state_deps = allocator.dupe(u64, desc.state_deps.items()) catch std.process.exit(1);
+            self.signal_descriptors.append(allocator, .{
+                .signal_id = desc.signal_id,
+                .kind = kind,
+                .state_deps = state_deps,
+            }) catch {
+                allocator.free(state_deps);
+                std.process.exit(1);
+            };
+        }
+
+        self.rebuildSignalRoutesFromSignals();
+    }
+
+    fn signalIdsForState(self: *HostEnv, state_id: u64) []const u64 {
+        if (state_id >= self.signal_routes.items.len) failHost("state id has no host signal route descriptor");
+
+        const route = self.signal_routes.items[@intCast(state_id)];
+        if (route.state_id != state_id) failHost("host signal route table is not indexed by state id");
+        return route.signal_ids;
+    }
+
+    fn dirtySignalIdsForEvent(self: *HostEnv, allocator: std.mem.Allocator, event_id: u64) []u64 {
+        var dirty_signal_ids: std.ArrayListUnmanaged(u64) = .empty;
+        errdefer dirty_signal_ids.deinit(allocator);
+
+        for (self.stateIndexesForEvent(event_id)) |state_id| {
+            for (self.signalIdsForState(state_id)) |signal_id| {
+                if (u64SliceContains(dirty_signal_ids.items, signal_id)) continue;
+                dirty_signal_ids.append(allocator, signal_id) catch std.process.exit(1);
+            }
+        }
+
+        return dirty_signal_ids.toOwnedSlice(allocator) catch std.process.exit(1);
     }
 
     fn recordDispatch(self: *HostEnv) void {
@@ -788,6 +961,10 @@ const HostEnv = struct {
         self.event_descriptors.deinit(allocator);
         self.clearEventRoutes();
         self.event_routes.deinit(allocator);
+        self.clearSignalDescriptors();
+        self.signal_descriptors.deinit(allocator);
+        self.clearSignalRoutes();
+        self.signal_routes.deinit(allocator);
         self.clearStates();
         self.states.deinit(allocator);
         self.clearPreviousCommandSnapshots();
@@ -1258,17 +1435,17 @@ fn applyCommand(host: *HostEnv, command: abi.UiRuntimeCommand) void {
         },
         .BindClick => {
             const payload = command.payload.bind_click;
-            host.validateEventPayload(payload.event, event_payload_unit);
+            host.validateEventPayload(payload.event, .unit);
             domElementById(host, payload.id).bound_click_event = payload.event;
         },
         .BindInput => {
             const payload = command.payload.bind_input;
-            host.validateEventPayload(payload.event, event_payload_str);
+            host.validateEventPayload(payload.event, .str);
             domElementById(host, payload.id).bound_input_event = payload.event;
         },
         .BindCheck => {
             const payload = command.payload.bind_check;
-            host.validateEventPayload(payload.event, event_payload_bool);
+            host.validateEventPayload(payload.event, .bool);
             domElementById(host, payload.id).bound_check_event = payload.event;
         },
     }
@@ -1536,6 +1713,15 @@ fn releaseEventDescriptorList(descriptors: EventDescriptorList, roc_host: *abi.R
     descriptors.decref(roc_host);
 }
 
+fn releaseSignalDescriptorList(descriptors: SignalDescriptorList, roc_host: *abi.RocHost) void {
+    if (descriptors.isUnique()) {
+        for (descriptors.items()) |descriptor| {
+            descriptor.state_deps.decref(roc_host);
+        }
+    }
+    descriptors.decref(roc_host);
+}
+
 fn releaseStateDescriptorList(descriptors: StateDescriptorList, roc_host: *abi.RocHost) void {
     if (descriptors.isUnique()) {
         for (descriptors.items()) |descriptor| {
@@ -1564,6 +1750,7 @@ fn acceptDispatchResultMeasured(host: *HostEnv, roc_host: *abi.RocHost, result_b
     const roc_metrics = result.metrics;
     host.setEventDescriptors(result.event_descriptors);
     host.setStateDescriptors(result.state_descriptors);
+    host.setSignalDescriptors(result.signal_descriptors);
     host.applyStateChanges(result.state_changes);
     const start_ns = benchmarkNowNs();
     const counts = applyRenderCommandList(host, result.commands);
@@ -1573,6 +1760,7 @@ fn acceptDispatchResultMeasured(host: *HostEnv, roc_host: *abi.RocHost, result_b
     if (command_counts) |total| total.addAll(counts);
     releaseCommandList(result.commands, roc_host);
     releaseEventDescriptorList(result.event_descriptors, roc_host);
+    releaseSignalDescriptorList(result.signal_descriptors, roc_host);
     releaseStateDescriptorList(result.state_descriptors, roc_host);
     releaseStateChangeList(result.state_changes, roc_host);
     abi.decrefBoxWith(@ptrCast(result_box), @alignOf(DispatchResult), &dropMovedDispatchResultPayload, roc_host);
@@ -1589,15 +1777,18 @@ fn boxHostEvent(roc_host: *abi.RocHost, event: HostEvent) HostEventBox {
     return event_box;
 }
 
-fn dirtyStateIndexListForEvent(host: *HostEnv, roc_host: *abi.RocHost, event_id: u64) abi.RocListWith(u64, false) {
-    return abi.RocListWith(u64, false).fromSlice(host.stateIndexesForEvent(event_id), roc_host);
+fn dirtySignalIdListForEvent(host: *HostEnv, roc_host: *abi.RocHost, event_id: u64) abi.RocListWith(u64, false) {
+    const allocator = host.gpa.allocator();
+    const dirty_signal_ids = host.dirtySignalIdsForEvent(allocator, event_id);
+    defer allocator.free(dirty_signal_ids);
+    return abi.RocListWith(u64, false).fromSlice(dirty_signal_ids, roc_host);
 }
 
 fn clickHostEvent(host: *HostEnv, roc_host: *abi.RocHost, event_id: u64) HostEvent {
     return .{
         .payload = .{
             .click = .{
-                .dirty_state_indexes = dirtyStateIndexListForEvent(host, roc_host, event_id),
+                .dirty_signal_ids = dirtySignalIdListForEvent(host, roc_host, event_id),
                 .event = event_id,
             },
         },
@@ -1609,7 +1800,7 @@ fn inputHostEvent(host: *HostEnv, roc_host: *abi.RocHost, event_id: u64, value: 
     return .{
         .payload = .{
             .input = .{
-                .dirty_state_indexes = dirtyStateIndexListForEvent(host, roc_host, event_id),
+                .dirty_signal_ids = dirtySignalIdListForEvent(host, roc_host, event_id),
                 .event = event_id,
                 .value = RocStr.fromSlice(value, roc_host),
             },
@@ -1623,7 +1814,7 @@ fn checkHostEvent(host: *HostEnv, roc_host: *abi.RocHost, event_id: u64, checked
         .payload = .{
             .check = .{
                 .checked = checked,
-                .dirty_state_indexes = dirtyStateIndexListForEvent(host, roc_host, event_id),
+                .dirty_signal_ids = dirtySignalIdListForEvent(host, roc_host, event_id),
                 .event = event_id,
             },
         },

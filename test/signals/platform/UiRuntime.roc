@@ -38,6 +38,10 @@ UiRuntime := [].{
 
 	StateChangeDesc : { state_id : U64, value : NodeValue }
 
+	SignalDesc : { signal_id : U64, kind : U64, state_deps : List(U64) }
+
+	SignalRegistryEntry : { key : Str, signal_id : U64, kind : U64, state_deps : List(U64) }
+
 	StateVersionEntry : { state_index : U64, version : U64 }
 
 	SignalCacheEntry : { key : Str, value : NodeValue, deps : List(StateVersionEntry) }
@@ -45,9 +49,9 @@ UiRuntime := [].{
 	EventDesc : { event_id : U64, payload_kind : U64 }
 
 	HostEvent := [
-		Click({ event : U64, dirty_state_indexes : List(U64) }),
-		Input({ event : U64, dirty_state_indexes : List(U64), value : Str }),
-		Check({ event : U64, dirty_state_indexes : List(U64), checked : Bool }),
+		Click({ event : U64, dirty_signal_ids : List(U64) }),
+		Input({ event : U64, dirty_signal_ids : List(U64), value : Str }),
+		Check({ event : U64, dirty_signal_ids : List(U64), checked : Bool }),
 	]
 
 	Command := [
@@ -71,6 +75,8 @@ UiRuntime := [].{
 		states : List(StateSlot),
 		event_ids : List(EventId),
 		next_event_id : U64,
+		next_signal_id : U64,
+		signal_registry : List(SignalRegistryEntry),
 		signal_cache : List(SignalCacheEntry),
 		metrics : RuntimeMetrics,
 	}
@@ -79,6 +85,7 @@ UiRuntime := [].{
 		runtime : Box(Runtime),
 		commands : List(Command),
 		event_descriptors : List(EventDesc),
+		signal_descriptors : List(SignalDesc),
 		state_descriptors : List(StateDesc),
 		state_changes : List(StateChangeDesc),
 		metrics : RuntimeMetrics,
@@ -92,7 +99,7 @@ UiRuntime := [].{
 	EvalState : {
 		runtime : Runtime,
 		active_event : ActiveEvent,
-		dirty_state_indexes : List(U64),
+		dirty_signal_ids : List(U64),
 		updated_state_indexes : List(U64),
 		changed_state_indexes : List(U64),
 	}
@@ -125,7 +132,12 @@ UiRuntime := [].{
 		EventIdMissing,
 	]
 
-	DirtyStates : { indexes : List(U64) }
+	DirtySignals : { ids : List(U64) }
+
+	SignalRegistryLookup := [
+		SignalRegistryFound(SignalRegistryEntry),
+		SignalRegistryMissing,
+	]
 
 	SignalCacheEntryLookup := [
 		SignalCacheEntryFound({ index : U64, entry : SignalCacheEntry }),
@@ -154,6 +166,15 @@ UiRuntime := [].{
 	RegisteredEvent : { runtime : Runtime, event : Graph.EventNode }
 
 	RegisteredState : { runtime : Runtime, index : U64 }
+
+	signal_kind_source : U64
+	signal_kind_source = 1
+
+	signal_kind_map : U64
+	signal_kind_map = 2
+
+	signal_kind_map2 : U64
+	signal_kind_map2 = 3
 
 	zero_metrics : RuntimeMetrics
 	zero_metrics = {
@@ -190,17 +211,20 @@ UiRuntime := [].{
 			states: [],
 			event_ids: [],
 			next_event_id: 1,
+			next_signal_id: 0,
+			signal_registry: [],
 			signal_cache: [],
 			metrics: zero_metrics,
 		}
 		registered = register_elem(runtime0, root)
 		runtime = { ..registered.runtime, root: registered.elem }
-		rendered = render_runtime(runtime, NoEvent, { indexes: [] })
+		rendered = render_runtime(runtime, NoEvent, { ids: [] })
 		runtime_box = Box.box(rendered.runtime)
 		result = {
 			runtime: runtime_box,
 			commands: rendered.emit_commands,
 			event_descriptors: event_descriptors_for_runtime(rendered.runtime),
+			signal_descriptors: signal_descriptors_for_runtime(rendered.runtime),
 			state_descriptors: state_descriptors_for_runtime(rendered.runtime),
 			state_changes: state_changes_for_indexes(rendered.runtime, rendered.changed_state_indexes),
 			metrics: rendered.runtime.metrics,
@@ -212,12 +236,13 @@ UiRuntime := [].{
 	dispatch = |boxed_runtime, host_event| {
 		runtime0 = Box.unbox(boxed_runtime)
 		active_event = host_event_to_active(host_event)
-		dirty_states = { indexes: host_event_dirty_state_indexes(host_event) }
-		rendered = render_runtime(runtime0, active_event, dirty_states)
+		dirty_signals = { ids: host_event_dirty_signal_ids(host_event) }
+		rendered = render_runtime(runtime0, active_event, dirty_signals)
 		{
 			runtime: Box.box(rendered.runtime),
 			commands: rendered.emit_commands,
 			event_descriptors: event_descriptors_for_runtime(rendered.runtime),
+			signal_descriptors: signal_descriptors_for_runtime(rendered.runtime),
 			state_descriptors: state_descriptors_for_runtime(rendered.runtime),
 			state_changes: state_changes_for_indexes(rendered.runtime, rendered.changed_state_indexes),
 			metrics: rendered.runtime.metrics,
@@ -326,104 +351,132 @@ UiRuntime := [].{
 
 			Graph.SignalExpr.MapSignal({ source, transform }) => {
 				registered_source = register_signal(runtime, Box.unbox(source))
-				registered_signal = { ..signal,
+				registered_signal0 = { ..signal,
 					dep_indexes: registered_source.signal.dep_indexes,
 					expr: Graph.SignalExpr.MapSignal({ source: Box.box(registered_source.signal), transform }),
 				}
-				{ runtime: registered_source.runtime, signal: registered_signal }
+				register_signal_descriptor(registered_source.runtime, registered_signal0, signal_kind_map)
 			}
 
 			Graph.SignalExpr.MapI64I64({ source, transform }) => {
 				registered_source = register_signal(runtime, Box.unbox(source))
-				registered_signal = { ..signal,
+				registered_signal0 = { ..signal,
 					dep_indexes: registered_source.signal.dep_indexes,
 					expr: Graph.SignalExpr.MapI64I64({ source: Box.box(registered_source.signal), transform }),
 				}
-				{ runtime: registered_source.runtime, signal: registered_signal }
+				register_signal_descriptor(registered_source.runtime, registered_signal0, signal_kind_map)
 			}
 
 			Graph.SignalExpr.MapI64Str({ source, transform }) => {
 				registered_source = register_signal(runtime, Box.unbox(source))
-				registered_signal = { ..signal,
+				registered_signal0 = { ..signal,
 					dep_indexes: registered_source.signal.dep_indexes,
 					expr: Graph.SignalExpr.MapI64Str({ source: Box.box(registered_source.signal), transform }),
 				}
-				{ runtime: registered_source.runtime, signal: registered_signal }
+				register_signal_descriptor(registered_source.runtime, registered_signal0, signal_kind_map)
 			}
 
 			Graph.SignalExpr.Map2Signal({ left, right, transform }) => {
 				registered_left = register_signal(runtime, Box.unbox(left))
 				registered_right = register_signal(registered_left.runtime, Box.unbox(right))
-				registered_signal = { ..signal,
+				registered_signal0 = { ..signal,
 					dep_indexes: merge_u64_deps(registered_left.signal.dep_indexes, registered_right.signal.dep_indexes),
 					expr: Graph.SignalExpr.Map2Signal({ left: Box.box(registered_left.signal), right: Box.box(registered_right.signal), transform }),
 				}
-				{ runtime: registered_right.runtime, signal: registered_signal }
+				register_signal_descriptor(registered_right.runtime, registered_signal0, signal_kind_map2)
 			}
 
 			Graph.SignalExpr.Map2I64I64({ left, right, transform }) => {
 				registered_left = register_signal(runtime, Box.unbox(left))
 				registered_right = register_signal(registered_left.runtime, Box.unbox(right))
-				registered_signal = { ..signal,
+				registered_signal0 = { ..signal,
 					dep_indexes: merge_u64_deps(registered_left.signal.dep_indexes, registered_right.signal.dep_indexes),
 					expr: Graph.SignalExpr.Map2I64I64({ left: Box.box(registered_left.signal), right: Box.box(registered_right.signal), transform }),
 				}
-				{ runtime: registered_right.runtime, signal: registered_signal }
+				register_signal_descriptor(registered_right.runtime, registered_signal0, signal_kind_map2)
 			}
 
 			Graph.SignalExpr.Map2I64I64Str({ left, right, transform }) => {
 				registered_left = register_signal(runtime, Box.unbox(left))
 				registered_right = register_signal(registered_left.runtime, Box.unbox(right))
-				registered_signal = { ..signal,
+				registered_signal0 = { ..signal,
 					dep_indexes: merge_u64_deps(registered_left.signal.dep_indexes, registered_right.signal.dep_indexes),
 					expr: Graph.SignalExpr.Map2I64I64Str({ left: Box.box(registered_left.signal), right: Box.box(registered_right.signal), transform }),
 				}
-				{ runtime: registered_right.runtime, signal: registered_signal }
+				register_signal_descriptor(registered_right.runtime, registered_signal0, signal_kind_map2)
 			}
 
 			Graph.SignalExpr.Hold({ key, initial, event }) => {
 				registered_event = register_event(runtime, Box.unbox(event))
 				registered_state = register_state_key(registered_event.runtime, key, initial)
 				runtime1 = register_state_event_indexes(registered_state.runtime, registered_state.index, registered_event.event.source_ids)
-				registered_signal = { ..signal,
+				registered_signal0 = { ..signal,
 					dep_indexes: [registered_state.index],
 					expr: Graph.SignalExpr.Hold({ key, initial, event: Box.box(registered_event.event) }),
 				}
-				{ runtime: runtime1, signal: registered_signal }
+				register_signal_descriptor(runtime1, registered_signal0, signal_kind_source)
 			}
 
 			Graph.SignalExpr.Fold({ key, initial, event, step }) => {
 				registered_event = register_event(runtime, Box.unbox(event))
 				registered_state = register_state_key(registered_event.runtime, key, initial)
 				runtime1 = register_state_event_indexes(registered_state.runtime, registered_state.index, registered_event.event.source_ids)
-				registered_signal = { ..signal,
+				registered_signal0 = { ..signal,
 					dep_indexes: [registered_state.index],
 					expr: Graph.SignalExpr.Fold({ key, initial, event: Box.box(registered_event.event), step }),
 				}
-				{ runtime: runtime1, signal: registered_signal }
+				register_signal_descriptor(runtime1, registered_signal0, signal_kind_source)
 			}
 
 			Graph.SignalExpr.FoldI64({ key, initial, event, step }) => {
 				registered_event = register_event(runtime, Box.unbox(event))
 				registered_state = register_state_key(registered_event.runtime, key, NodeValue.from_i64(initial))
 				runtime1 = register_state_event_indexes(registered_state.runtime, registered_state.index, registered_event.event.source_ids)
-				registered_signal = { ..signal,
+				registered_signal0 = { ..signal,
 					dep_indexes: [registered_state.index],
 					expr: Graph.SignalExpr.FoldI64({ key, initial, event: Box.box(registered_event.event), step }),
 				}
-				{ runtime: runtime1, signal: registered_signal }
+				register_signal_descriptor(runtime1, registered_signal0, signal_kind_source)
 			}
 
 			Graph.SignalExpr.FoldBoolToggle({ key, initial, event }) => {
 				registered_event = register_event(runtime, Box.unbox(event))
 				registered_state = register_state_key(registered_event.runtime, key, NodeValue.from_bool(initial))
 				runtime1 = register_state_event_indexes(registered_state.runtime, registered_state.index, registered_event.event.source_ids)
-				registered_signal = { ..signal,
+				registered_signal0 = { ..signal,
 					dep_indexes: [registered_state.index],
 					expr: Graph.SignalExpr.FoldBoolToggle({ key, initial, event: Box.box(registered_event.event) }),
 				}
-				{ runtime: runtime1, signal: registered_signal }
+				register_signal_descriptor(runtime1, registered_signal0, signal_kind_source)
 			}
+		}
+	}
+
+	register_signal_descriptor : Runtime, Graph.SignalNode, U64 -> RegisteredSignal
+	register_signal_descriptor = |runtime, signal, kind| {
+		match signal.cache_key {
+			Graph.SignalCacheKey.NoSignalCacheKey => { runtime, signal }
+			Graph.SignalCacheKey.SignalCacheKey(key) =>
+				match signal_registry_lookup(runtime.signal_registry, key, kind, signal.dep_indexes) {
+					SignalRegistryFound(entry) => {
+						{
+							runtime,
+							signal: { ..signal, signal_id: Graph.SignalIdentity.RegisteredSignal(entry.signal_id) },
+						}
+					}
+
+					SignalRegistryMissing => {
+						signal_id = runtime.next_signal_id
+						entry = { key, signal_id, kind, state_deps: signal.dep_indexes }
+						{
+							runtime: { ..runtime,
+								next_signal_id: signal_id + 1,
+								signal_registry: List.append(runtime.signal_registry, entry),
+							},
+							signal: { ..signal, signal_id: Graph.SignalIdentity.RegisteredSignal(signal_id) },
+						}
+					}
+				}
 		}
 	}
 
@@ -545,21 +598,21 @@ UiRuntime := [].{
 		}
 	}
 
-	host_event_dirty_state_indexes : HostEvent -> List(U64)
-	host_event_dirty_state_indexes = |host_event| {
+	host_event_dirty_signal_ids : HostEvent -> List(U64)
+	host_event_dirty_signal_ids = |host_event| {
 		match host_event {
-			Click({ dirty_state_indexes }) => dirty_state_indexes
-			Input({ dirty_state_indexes }) => dirty_state_indexes
-			Check({ dirty_state_indexes }) => dirty_state_indexes
+			Click({ dirty_signal_ids }) => dirty_signal_ids
+			Input({ dirty_signal_ids }) => dirty_signal_ids
+			Check({ dirty_signal_ids }) => dirty_signal_ids
 		}
 	}
 
-	render_runtime : Runtime, ActiveEvent, DirtyStates -> RenderResult
-	render_runtime = |runtime, active_event, dirty_states| {
+	render_runtime : Runtime, ActiveEvent, DirtySignals -> RenderResult
+	render_runtime = |runtime, active_event, dirty_signals| {
 		state = {
 			runtime,
 			active_event,
-			dirty_state_indexes: dirty_states.indexes,
+			dirty_signal_ids: dirty_signals.ids,
 			updated_state_indexes: [],
 			changed_state_indexes: [],
 		}
@@ -805,7 +858,7 @@ UiRuntime := [].{
 		match signal.cache_key {
 			Graph.SignalCacheKey.NoSignalCacheKey => eval_signal_uncached(state, signal)
 			Graph.SignalCacheKey.SignalCacheKey(key) =>
-				if signal_depends_on_dirty_state(signal, state.dirty_state_indexes) {
+				if signal_is_dirty(signal, state.dirty_signal_ids) {
 					metrics0 = state.runtime.metrics
 					state1 = { ..state, runtime: { ..state.runtime, metrics: { ..metrics0, signal_cache_misses: metrics0.signal_cache_misses + 1 } } }
 					eval_signal_uncached(state1, signal)
@@ -996,9 +1049,19 @@ UiRuntime := [].{
 		}
 	}
 
-	signal_depends_on_dirty_state : Graph.SignalNode, List(U64) -> Bool
-	signal_depends_on_dirty_state = |signal, dirty_state_indexes| {
-		List.any(signal.dep_indexes, |dep_index| u64_list_contains(dirty_state_indexes, dep_index))
+	signal_is_dirty : Graph.SignalNode, List(U64) -> Bool
+	signal_is_dirty = |signal, dirty_signal_ids| {
+		u64_list_contains(dirty_signal_ids, registered_signal_id(signal))
+	}
+
+	registered_signal_id : Graph.SignalNode -> U64
+	registered_signal_id = |signal| {
+		match signal.signal_id {
+			Graph.SignalIdentity.RegisteredSignal(id) => id
+			Graph.SignalIdentity.UnregisteredSignal => {
+				crash "Signals runtime invariant violated: keyed signal was not registered"
+			}
+		}
 	}
 
 	event_id_lookup : List(EventId), Str -> EventIdLookup
@@ -1012,6 +1075,30 @@ UiRuntime := [].{
 				Ok(entry) =>
 					if entry.key == key {
 						$result = EventIdFound(entry)
+						$done = True
+					} else {
+						$index = $index + 1
+					}
+				Err(_) => {
+					$done = True
+				}
+			}
+		}
+
+		$result
+	}
+
+	signal_registry_lookup : List(SignalRegistryEntry), Str, U64, List(U64) -> SignalRegistryLookup
+	signal_registry_lookup = |entries, key, kind, state_deps| {
+		var $index = 0
+		var $result = SignalRegistryMissing
+		var $done = False
+
+		while $done == False and $index < List.len(entries) {
+			match List.get(entries, $index) {
+				Ok(entry) =>
+					if entry.key == key and entry.kind == kind and u64_list_equal(entry.state_deps, state_deps) {
+						$result = SignalRegistryFound(entry)
 						$done = True
 					} else {
 						$index = $index + 1
@@ -1151,6 +1238,16 @@ UiRuntime := [].{
 		)
 	}
 
+	signal_descriptors_for_runtime : Runtime -> List(SignalDesc)
+	signal_descriptors_for_runtime = |runtime| {
+		List.map(
+			runtime.signal_registry,
+			|entry| {
+				{ signal_id: entry.signal_id, kind: entry.kind, state_deps: entry.state_deps }
+			},
+		)
+	}
+
 	current_state_version_by_index : Runtime, U64 -> U64
 	current_state_version_by_index = |runtime, state_index| {
 		match List.get(runtime.states, state_index) {
@@ -1243,6 +1340,32 @@ UiRuntime := [].{
 		}
 
 		$deps
+	}
+
+	u64_list_equal : List(U64), List(U64) -> Bool
+	u64_list_equal = |left, right| {
+		if List.len(left) != List.len(right) {
+			False
+		} else {
+			var $index = 0
+			var $same = True
+
+			while $same and $index < List.len(left) {
+				match (List.get(left, $index), List.get(right, $index)) {
+					(Ok(left_item), Ok(right_item)) =>
+						if left_item == right_item {
+							$index = $index + 1
+						} else {
+							$same = False
+						}
+					_ => {
+						$same = False
+					}
+				}
+			}
+
+			$same
+		}
 	}
 
 	u64_list_contains : List(U64), U64 -> Bool
