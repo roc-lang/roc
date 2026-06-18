@@ -6,11 +6,11 @@
 //!
 //! The CLI supports two modes for passing compiled Roc programs to the interpreter:
 //!
-//! ### IPC Mode (`roc path/to/app.roc`)
+//! ### IPC Interpreter Mode (`roc --opt=interpreter path/to/app.roc`)
 //! - Compiles Roc source through ARC-inserted LIR and publishes a viewable LIR image in shared memory
 //! - Spawns interpreter host as child process that maps the shared memory
 //! - Fast startup, same-architecture only
-//! - See: `buildLirImageWithCoordinator`, `rocRun`
+//! - See: `buildLirImageWithCoordinator`, `rocRunInterpreter`
 //!
 //! ### Embedded Interpreter Mode (`roc build --opt=interpreter path/to/app.roc`)
 //! - Compiles Roc source through the same checked-artifact to LIR path as IPC mode
@@ -1522,6 +1522,13 @@ fn rejectRunTargetNotExecutable(ctx: *CliCtx, target: RocTarget) error{ WriteFai
 }
 
 fn rocRun(ctx: *CliCtx, args: cli_args.RunArgs) anyerror!void {
+    return switch (args.opt) {
+        .interpreter => rocRunInterpreter(ctx, args),
+        .dev, .size, .speed => rocRunBuildAndExec(ctx, args),
+    };
+}
+
+fn rocRunInterpreter(ctx: *CliCtx, args: cli_args.RunArgs) anyerror!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -1891,6 +1898,94 @@ fn rocRun(ctx: *CliCtx, args: cli_args.RunArgs) anyerror!void {
     }
 }
 
+fn rocRunBuildAndExec(ctx: *CliCtx, args: cli_args.RunArgs) anyerror!void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    const temp_dir = createUniqueTempDir(ctx) catch |err| {
+        return ctx.fail(.{ .temp_dir_failed = .{ .err = err } });
+    };
+    var cleanup_temp_dir = true;
+    defer if (cleanup_temp_dir) {
+        compile.CacheCleanup.deleteTempDir(ctx.io.std_io, temp_dir);
+    };
+
+    const output_filename = try compiledRunOutputFilename(ctx, args.path);
+    const exe_path = try std.fs.path.join(ctx.arena, &.{ temp_dir, output_filename });
+
+    var warning_count: usize = 0;
+    try rocBuild(ctx, .{
+        .path = args.path,
+        .opt = args.opt,
+        .target = args.target,
+        .output = exe_path,
+        .debug = false,
+        .allow_errors = args.allow_errors,
+        .verbose = false,
+        .no_cache = args.no_cache,
+        .max_threads = args.max_threads,
+        .wasm_memory = null,
+        .wasm_stack_size = null,
+        .z_bench_tokenize = null,
+        .z_bench_parse = null,
+        .z_dump_linker = false,
+        .exit_on_warnings = false,
+        .warning_count_out = &warning_count,
+        .require_executable_output = true,
+        .require_host_runnable_output = true,
+        .suppress_build_status = true,
+        .synthetic_default_platform = false,
+    });
+
+    const term = try runCompiledExecutable(ctx, exe_path, args.app_args);
+
+    compile.CacheCleanup.deleteTempDir(ctx.io.std_io, temp_dir);
+    cleanup_temp_dir = false;
+
+    try finishCompiledRun(ctx, exe_path, term, warning_count);
+}
+
+fn compiledRunOutputFilename(ctx: *CliCtx, roc_path: []const u8) Allocator.Error![]const u8 {
+    const module_name = try base.module_path.getModuleNameAlloc(ctx.arena, roc_path);
+    if (builtin.target.os.tag == .windows) {
+        return try std.fmt.allocPrint(ctx.arena, "{s}.exe", .{module_name});
+    }
+    return module_name;
+}
+
+fn runCompiledExecutable(
+    ctx: *CliCtx,
+    exe_path: []const u8,
+    app_args: []const []const u8,
+) (CliError || error{OutOfMemory})!std.process.Child.Term {
+    const argv = ctx.arena.alloc([]const u8, 1 + app_args.len) catch {
+        return error.OutOfMemory;
+    };
+    argv[0] = exe_path;
+    for (app_args, 0..) |arg, i| {
+        argv[1 + i] = arg;
+    }
+
+    var child = std.process.spawn(ctx.io.std_io, .{
+        .argv = argv,
+        .cwd = .inherit,
+        .stdout = .inherit,
+        .stderr = .inherit,
+    }) catch |err| {
+        return ctx.fail(.{ .child_process_spawn_failed = .{
+            .command = exe_path,
+            .err = err,
+        } });
+    };
+
+    return child.wait(ctx.io.std_io) catch |err| {
+        return ctx.fail(.{ .child_process_wait_failed = .{
+            .command = exe_path,
+            .err = err,
+        } });
+    };
+}
+
 const NativeRunTermination = union(enum) {
     success,
     exit_code: u8,
@@ -1911,6 +2006,42 @@ fn classifyNativeRunTermination(term: std.process.Child.Term, warning_count: usi
         .stopped => |signal| .{ .stopped = signal },
         .unknown => |status| .{ .unknown = status },
     };
+}
+
+fn finishCompiledRun(
+    ctx: *CliCtx,
+    exe_path: []const u8,
+    term: std.process.Child.Term,
+    warning_count: usize,
+) (CliError || error{WriteFailed})!void {
+    switch (classifyNativeRunTermination(term, warning_count)) {
+        .success => return,
+        .exit_code => |code| {
+            ctx.io.flush();
+            std.process.exit(code);
+        },
+        .signal => |signal| {
+            const sig_num = @intFromEnum(signal);
+            const result = platform_validation.targets_validator.ValidationResult{
+                .process_signaled = .{ .signal = sig_num },
+            };
+            renderValidationError(ctx.gpa, result, ctx.io.stderr());
+            ctx.io.flush();
+            std.process.exit(128 +| @as(u8, @truncate(sig_num)));
+        },
+        .stopped => |signal| {
+            return ctx.fail(.{ .child_process_signaled = .{
+                .command = exe_path,
+                .signal = @intFromEnum(signal),
+            } });
+        },
+        .unknown => |status| {
+            return ctx.fail(.{ .child_process_failed = .{
+                .command = exe_path,
+                .exit_code = status,
+            } });
+        },
+    }
 }
 
 /// Check if a file is a default_app (headerless file with a main! function).
@@ -4889,7 +5020,10 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
     const platform_source = build_env.getPlatformRootFile();
     const platform_dir = if (platform_source) |path| std.fs.path.dirname(path) orelse "." else ".";
 
-    const selected = try selectBuildPlatformTarget(ctx, targets_config, platform_source, args.target);
+    const selected = if (args.require_host_runnable_output)
+        try selectRunPlatformTarget(ctx, targets_config, platform_source, args.target)
+    else
+        try selectBuildPlatformTarget(ctx, targets_config, platform_source, args.target);
     const target = selected.target;
     const link_type = selected.output;
 
@@ -5207,7 +5341,10 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
     const platform_source = build_env.getPlatformRootFile();
     const platform_dir = if (platform_source) |path| std.fs.path.dirname(path) orelse "." else ".";
 
-    const selected = try selectBuildPlatformTarget(ctx, targets_config, platform_source, args.target);
+    const selected = if (args.require_host_runnable_output)
+        try selectRunPlatformTarget(ctx, targets_config, platform_source, args.target)
+    else
+        try selectBuildPlatformTarget(ctx, targets_config, platform_source, args.target);
     const target = selected.target;
     const link_type = selected.output;
 
@@ -5541,7 +5678,10 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
     const platform_source = build_env.getPlatformRootFile();
     const platform_dir = if (platform_source) |path| std.fs.path.dirname(path) orelse "." else ".";
 
-    const selected = try selectBuildPlatformTarget(ctx, targets_config, platform_source, args.target);
+    const selected = if (args.require_host_runnable_output)
+        try selectRunPlatformTarget(ctx, targets_config, platform_source, args.target)
+    else
+        try selectBuildPlatformTarget(ctx, targets_config, platform_source, args.target);
     const target = selected.target;
     const link_type = selected.output;
 
