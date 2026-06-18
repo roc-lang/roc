@@ -4,7 +4,7 @@
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .afl_kit = .{
-            .url = "git+https://github.com/bhansconnect/zig-afl-kit.git#c1f7353e006cf326ffab0a35b6e454cb5d8a5d7b",
+            .url = "https://github.com/bhansconnect/zig-afl-kit/archive/c1f7353e006cf326ffab0a35b6e454cb5d8a5d7b.tar.gz",
             .hash = "afl_kit-0.1.0-NdJ3csgfAABGuiQ4P99kFuaVSy4DHMilISiGF_VKX3xl",
             .lazy = true,
         },
@@ -49,15 +49,15 @@
             .lazy = true,
         },
         .bytebox = .{
-            .url = "git+https://github.com/lukewilliamboswell/bytebox.git?ref=zig-0.16.0#88a4b79230eece88030e6779f69ed9683906c02a",
+            .url = "https://github.com/lukewilliamboswell/bytebox/archive/88a4b79230eece88030e6779f69ed9683906c02a.tar.gz",
             .hash = "bytebox-0.0.1-SXc2saRyDwDEw8AkDhp4Hfmd9ZhRmMnIzS7FfzDCmc8r",
         },
         .zstd = .{
-            .url = "git+https://github.com/allyourcodebase/zstd?ref=1.5.7-1#e1a501be57f42c541e8a5597e4b59a074dfd09a3", // 1.5.7-1
+            .url = "https://github.com/allyourcodebase/zstd/archive/e1a501be57f42c541e8a5597e4b59a074dfd09a3.tar.gz", // 1.5.7-1
             .hash = "zstd-1.5.7-1-KEItkAMwAAD6OKY3m0OOmXG7aL-aLUfrDqbP5J5oYapU",
         },
         .kcov = .{
-            .url = "git+https://github.com/roc-lang/zig-kcov.git?ref=zig-0.16.0#5e1954e53ce775a6ecf65abd03ae67deee64ac3c",
+            .url = "https://github.com/roc-lang/zig-kcov/archive/5e1954e53ce775a6ecf65abd03ae67deee64ac3c.tar.gz",
             .hash = "kcov-42.0.1-EuAG4XacCwBu0G8YHvv6sFHfbMPZuwyBuZGqcRMi8IXq",
             .lazy = true,
         },

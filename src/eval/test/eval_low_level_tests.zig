@@ -4282,4 +4282,116 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "6.0" },
     },
+    .{
+        .name = "low_level - List.set replaces element at index",
+        .source =
+        \\{
+        \\list = Try.ok_or(List.set([1, 2, 3], 1, 9), [])
+        \\Try.ok_or(List.get(list, 1), 0)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "9.0" },
+    },
+    .{
+        .name = "low_level - List.set preserves untouched elements",
+        .source =
+        \\{
+        \\list = Try.ok_or(List.set([1, 2, 3], 1, 9), [])
+        \\Try.ok_or(List.get(list, 2), 0)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "3.0" },
+    },
+    .{
+        .name = "low_level - List.set on refcounted List(Str)",
+        .source =
+        \\{
+        \\list = Try.ok_or(List.set(["cat", "chases", "rat"], 1, "loves"), [])
+        \\Try.ok_or(List.get(list, 1), "")
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"loves\"" },
+    },
+    .{
+        .name = "low_level - List.set out of bounds returns Err",
+        .source =
+        \\{
+        \\match List.set([1, 2, 3], 9, 0) {
+        \\    Ok(_) => "ok"
+        \\    Err(_) => "err"
+        \\}
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"err\"" },
+    },
+    .{
+        .name = "low_level - List.replace returns updated list and prev",
+        .source =
+        \\{
+        \\result = Try.ok_or(List.replace([10, 20, 30], 1, 99), { list: [], prev: 0 })
+        \\result.prev
+        \\}
+        ,
+        .expected = .{ .inspect_str = "20.0" },
+    },
+    .{
+        .name = "low_level - List.replace updated list element",
+        .source =
+        \\{
+        \\result = Try.ok_or(List.replace([10, 20, 30], 1, 99), { list: [], prev: 0 })
+        \\Try.ok_or(List.get(result.list, 1), 0)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "99.0" },
+    },
+    .{
+        .name = "low_level - List.replace on refcounted List(Str)",
+        .source =
+        \\{
+        \\result = Try.ok_or(List.replace(["a", "b", "c"], 0, "z"), { list: [], prev: "" })
+        \\result.prev
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"a\"" },
+    },
+    .{
+        .name = "low_level - List.update applies function at index",
+        .source =
+        \\{
+        \\list = Try.ok_or(List.update([10, 20, 30], 1, |x| x + 5), [])
+        \\Try.ok_or(List.get(list, 1), 0)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "25.0" },
+    },
+    .{
+        .name = "low_level - List.swap exchanges two elements",
+        .source =
+        \\{
+        \\list = Try.ok_or(List.swap([1, 2, 3, 4], 0, 3), [])
+        \\Try.ok_or(List.get(list, 0), 0)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "4.0" },
+    },
+    .{
+        .name = "low_level - List.swap preserves the other swapped index",
+        .source =
+        \\{
+        \\list = Try.ok_or(List.swap([1, 2, 3, 4], 0, 3), [])
+        \\Try.ok_or(List.get(list, 3), 0)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "1.0" },
+    },
+    .{
+        .name = "low_level - List.swap on refcounted List(Str)",
+        .source =
+        \\{
+        \\list = Try.ok_or(List.swap(["cat", "chases", "rat"], 0, 2), [])
+        \\Try.ok_or(List.get(list, 0), "")
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"rat\"" },
+    },
 };

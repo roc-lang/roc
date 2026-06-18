@@ -240,6 +240,18 @@ const Errors = struct {
         );
     }
 
+    pub fn addGitDependency(errors: *Errors, file: SourceFile, offset: usize) void {
+        errors.emit(
+            "{s}:{d}: error: 'git+https://' dependency URLs are banned; use a GitHub archive " ++
+                "tarball instead, e.g. 'https://github.com/OWNER/REPO/archive/<commit>.tar.gz'. " ++
+                "'git+https' makes Zig fetch over the git smart-HTTP protocol, whose ref-discovery " ++
+                "handshake intermittently fails in CI with 'HttpConnectionClosing'; a plain tarball " ++
+                "URL is a reliable HTTP GET and, because Zig hashes the unpacked tree, produces the " ++
+                "exact same package hash.\n",
+            .{ file.path, file.lineNumber(offset) },
+        );
+    }
+
     pub fn addFileUntracked(errors: *Errors, file: []const u8) void {
         errors.emit(
             "{s}: error: imported file untracked by git\n",
@@ -302,6 +314,31 @@ fn tidyFile(
     }
     if (file.hasExtension(".md")) {
         tidyMarkdownTitle(file, errors);
+    }
+    if (file.hasExtension(".zon")) {
+        tidyBannedGitDependency(file, errors);
+    }
+}
+
+/// Ban `git+https://` dependency URLs in build.zig.zon. They make Zig fetch over
+/// the git smart-HTTP protocol, whose ref-discovery handshake intermittently
+/// fails in CI with `HttpConnectionClosing`. GitHub archive tarball URLs hit a
+/// reliable plain HTTP GET and resolve to the same package hash.
+fn tidyBannedGitDependency(file: SourceFile, errors: *Errors) void {
+    const banned = "git+https://";
+
+    var line_start: usize = 0;
+    while (line_start <= file.text.len) {
+        const line_end = std.mem.findScalarPos(u8, file.text, line_start, '\n') orelse file.text.len;
+        const line = file.text[line_start..line_end];
+        const trimmed = std.mem.trim(u8, line, " \t");
+        if (!std.mem.startsWith(u8, trimmed, "//")) {
+            if (std.mem.find(u8, line, banned)) |index| {
+                errors.addGitDependency(file, line_start + index);
+            }
+        }
+        if (line_end == file.text.len) break;
+        line_start = line_end + 1;
     }
 }
 
