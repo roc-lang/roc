@@ -40,18 +40,16 @@ UiRuntime := [].{
 
 	SignalDesc : { signal_id : U64, kind : U64, state_deps : List(U64) }
 
+	SignalValueDesc : { signal_id : U64, value : NodeValue }
+
 	SignalRegistryEntry : { key : Str, signal_id : U64, kind : U64, state_deps : List(U64) }
-
-	StateVersionEntry : { state_index : U64, version : U64 }
-
-	SignalCacheEntry : { key : Str, value : NodeValue, deps : List(StateVersionEntry) }
 
 	EventDesc : { event_id : U64, payload_kind : U64 }
 
 	HostEvent := [
-		Click({ event : U64, dirty_signal_ids : List(U64) }),
-		Input({ event : U64, dirty_signal_ids : List(U64), value : Str }),
-		Check({ event : U64, dirty_signal_ids : List(U64), checked : Bool }),
+		Click({ event : U64, dirty_signal_ids : List(U64), cached_signals : List(SignalValueDesc) }),
+		Input({ event : U64, dirty_signal_ids : List(U64), cached_signals : List(SignalValueDesc), value : Str }),
+		Check({ event : U64, dirty_signal_ids : List(U64), cached_signals : List(SignalValueDesc), checked : Bool }),
 	]
 
 	Command := [
@@ -77,7 +75,6 @@ UiRuntime := [].{
 		next_event_id : U64,
 		next_signal_id : U64,
 		signal_registry : List(SignalRegistryEntry),
-		signal_cache : List(SignalCacheEntry),
 		metrics : RuntimeMetrics,
 	}
 
@@ -88,6 +85,7 @@ UiRuntime := [].{
 		signal_descriptors : List(SignalDesc),
 		state_descriptors : List(StateDesc),
 		state_changes : List(StateChangeDesc),
+		signal_changes : List(SignalValueDesc),
 		metrics : RuntimeMetrics,
 	}
 
@@ -100,6 +98,8 @@ UiRuntime := [].{
 		runtime : Runtime,
 		active_event : ActiveEvent,
 		dirty_signal_ids : List(U64),
+		cached_signals : List(SignalValueDesc),
+		signal_changes : List(SignalValueDesc),
 		updated_state_indexes : List(U64),
 		changed_state_indexes : List(U64),
 	}
@@ -118,6 +118,7 @@ UiRuntime := [].{
 		runtime : Runtime,
 		emit_commands : List(Command),
 		changed_state_indexes : List(U64),
+		signal_changes : List(SignalValueDesc),
 	}
 
 	EventLookup : { runtime : Runtime, id : U64 }
@@ -139,20 +140,9 @@ UiRuntime := [].{
 		SignalRegistryMissing,
 	]
 
-	SignalCacheEntryLookup := [
-		SignalCacheEntryFound({ index : U64, entry : SignalCacheEntry }),
-		SignalCacheEntryMissing,
-	]
-
 	CacheLookup := [
 		CacheHit(NodeValue),
 		CacheMiss,
-		StaleCacheMiss,
-	]
-
-	VersionLookup := [
-		VersionFound(U64),
-		VersionMissing,
 	]
 
 	StateValue : { runtime : Runtime, value : NodeValue, index : U64 }
@@ -213,12 +203,11 @@ UiRuntime := [].{
 			next_event_id: 1,
 			next_signal_id: 0,
 			signal_registry: [],
-			signal_cache: [],
 			metrics: zero_metrics,
 		}
 		registered = register_elem(runtime0, root)
 		runtime = { ..registered.runtime, root: registered.elem }
-		rendered = render_runtime(runtime, NoEvent, { ids: [] })
+		rendered = render_runtime(runtime, NoEvent, { ids: [] }, [])
 		runtime_box = Box.box(rendered.runtime)
 		result = {
 			runtime: runtime_box,
@@ -227,6 +216,7 @@ UiRuntime := [].{
 			signal_descriptors: signal_descriptors_for_runtime(rendered.runtime),
 			state_descriptors: state_descriptors_for_runtime(rendered.runtime),
 			state_changes: state_changes_for_indexes(rendered.runtime, rendered.changed_state_indexes),
+			signal_changes: rendered.signal_changes,
 			metrics: rendered.runtime.metrics,
 		}
 		result
@@ -237,7 +227,7 @@ UiRuntime := [].{
 		runtime0 = Box.unbox(boxed_runtime)
 		active_event = host_event_to_active(host_event)
 		dirty_signals = { ids: host_event_dirty_signal_ids(host_event) }
-		rendered = render_runtime(runtime0, active_event, dirty_signals)
+		rendered = render_runtime(runtime0, active_event, dirty_signals, host_event_cached_signals(host_event))
 		{
 			runtime: Box.box(rendered.runtime),
 			commands: rendered.emit_commands,
@@ -245,6 +235,7 @@ UiRuntime := [].{
 			signal_descriptors: signal_descriptors_for_runtime(rendered.runtime),
 			state_descriptors: state_descriptors_for_runtime(rendered.runtime),
 			state_changes: state_changes_for_indexes(rendered.runtime, rendered.changed_state_indexes),
+			signal_changes: rendered.signal_changes,
 			metrics: rendered.runtime.metrics,
 		}
 	}
@@ -607,12 +598,23 @@ UiRuntime := [].{
 		}
 	}
 
-	render_runtime : Runtime, ActiveEvent, DirtySignals -> RenderResult
-	render_runtime = |runtime, active_event, dirty_signals| {
+	host_event_cached_signals : HostEvent -> List(SignalValueDesc)
+	host_event_cached_signals = |host_event| {
+		match host_event {
+			Click({ cached_signals }) => cached_signals
+			Input({ cached_signals }) => cached_signals
+			Check({ cached_signals }) => cached_signals
+		}
+	}
+
+	render_runtime : Runtime, ActiveEvent, DirtySignals, List(SignalValueDesc) -> RenderResult
+	render_runtime = |runtime, active_event, dirty_signals, cached_signals| {
 		state = {
 			runtime,
 			active_event,
 			dirty_signal_ids: dirty_signals.ids,
+			cached_signals,
+			signal_changes: [],
 			updated_state_indexes: [],
 			changed_state_indexes: [],
 		}
@@ -626,6 +628,7 @@ UiRuntime := [].{
 			runtime: rendered.state.runtime,
 			emit_commands: rendered.commands,
 			changed_state_indexes: rendered.state.changed_state_indexes,
+			signal_changes: rendered.state.signal_changes,
 		}
 	}
 
@@ -857,13 +860,13 @@ UiRuntime := [].{
 	eval_signal = |state, signal| {
 		match signal.cache_key {
 			Graph.SignalCacheKey.NoSignalCacheKey => eval_signal_uncached(state, signal)
-			Graph.SignalCacheKey.SignalCacheKey(key) =>
+			Graph.SignalCacheKey.SignalCacheKey(_) =>
 				if signal_is_dirty(signal, state.dirty_signal_ids) {
 					metrics0 = state.runtime.metrics
 					state1 = { ..state, runtime: { ..state.runtime, metrics: { ..metrics0, signal_cache_misses: metrics0.signal_cache_misses + 1 } } }
 					eval_signal_uncached(state1, signal)
 				} else {
-					match signal_cache_lookup(state.runtime, signal.dep_indexes, key) {
+					match signal_cache_lookup(state.cached_signals, registered_signal_id(signal)) {
 						CacheHit(value) => {
 							metrics0 = state.runtime.metrics
 							metrics1 = { ..metrics0,
@@ -876,16 +879,6 @@ UiRuntime := [].{
 						CacheMiss => {
 							metrics0 = state.runtime.metrics
 							state1 = { ..state, runtime: { ..state.runtime, metrics: { ..metrics0, signal_cache_misses: metrics0.signal_cache_misses + 1 } } }
-							eval_signal_uncached(state1, signal)
-						}
-
-						StaleCacheMiss => {
-							metrics0 = state.runtime.metrics
-							metrics1 = { ..metrics0,
-								signal_cache_misses: metrics0.signal_cache_misses + 1,
-								stale_signal_cache_misses: metrics0.stale_signal_cache_misses + 1,
-							}
-							state1 = { ..state, runtime: { ..state.runtime, metrics: metrics1 } }
 							eval_signal_uncached(state1, signal)
 						}
 					}
@@ -1035,16 +1028,17 @@ UiRuntime := [].{
 					}
 				}
 			}
-		cache_signal_result(signal.cache_key, signal.dep_indexes, result)
+		cache_signal_result(signal, result)
 	}
 
-	cache_signal_result : Graph.SignalCacheKey, List(U64), EvalResult -> EvalResult
-	cache_signal_result = |cache_key, deps, result| {
-		match cache_key {
+	cache_signal_result : Graph.SignalNode, EvalResult -> EvalResult
+	cache_signal_result = |signal, result| {
+		match signal.cache_key {
 			Graph.SignalCacheKey.NoSignalCacheKey => result
-			Graph.SignalCacheKey.SignalCacheKey(key) => {
-				runtime1 = set_signal_cache(result.state.runtime, key, deps, result.value)
-				{ state: { ..result.state, runtime: runtime1 }, value: result.value }
+			Graph.SignalCacheKey.SignalCacheKey(_) => {
+				signal_id = registered_signal_id(signal)
+				next_changes = replace_signal_change(result.state.signal_changes, signal_id, result.value)
+				{ state: { ..result.state, signal_changes: next_changes }, value: result.value }
 			}
 		}
 	}
@@ -1112,17 +1106,17 @@ UiRuntime := [].{
 		$result
 	}
 
-	signal_cache_entry_lookup : List(SignalCacheEntry), Str -> SignalCacheEntryLookup
-	signal_cache_entry_lookup = |entries, key| {
+	signal_cache_lookup : List(SignalValueDesc), U64 -> CacheLookup
+	signal_cache_lookup = |entries, signal_id| {
 		var $index = 0
-		var $result = SignalCacheEntryMissing
+		var $result = CacheMiss
 		var $done = False
 
 		while $done == False and $index < List.len(entries) {
 			match List.get(entries, $index) {
 				Ok(entry) =>
-					if entry.key == key {
-						$result = SignalCacheEntryFound({ index: $index, entry })
+					if entry.signal_id == signal_id {
+						$result = CacheHit(entry.value)
 						$done = True
 					} else {
 						$index = $index + 1
@@ -1158,46 +1152,6 @@ UiRuntime := [].{
 		}
 
 		$result
-	}
-
-	signal_cache_lookup : Runtime, List(U64), Str -> CacheLookup
-	signal_cache_lookup = |runtime, signal_deps, key| {
-		match signal_cache_entry_lookup(runtime.signal_cache, key) {
-			SignalCacheEntryFound(found) =>
-				if signal_cache_entry_valid(runtime, signal_deps, found.entry.deps) {
-					CacheHit(found.entry.value)
-				} else {
-					StaleCacheMiss
-				}
-			SignalCacheEntryMissing => CacheMiss
-		}
-	}
-
-	signal_cache_entry_valid : Runtime, List(U64), List(StateVersionEntry) -> Bool
-	signal_cache_entry_valid = |runtime, signal_deps, cached_deps| {
-		current_deps_present = List.all(
-			signal_deps,
-			|state_index|
-				match state_version_lookup(cached_deps, state_index) {
-					VersionFound(version) => current_state_version_by_index(runtime, state_index) == version
-					VersionMissing => False
-				},
-		)
-		no_stale_cached_deps = List.all(
-			cached_deps,
-			|dep| u64_list_contains(signal_deps, dep.state_index) and current_state_version_by_index(runtime, dep.state_index) == dep.version,
-		)
-		current_deps_present and no_stale_cached_deps
-	}
-
-	state_versions_for_deps : Runtime, List(U64) -> List(StateVersionEntry)
-	state_versions_for_deps = |runtime, deps| {
-		List.map(
-			deps,
-			|state_index| {
-				{ state_index, version: current_state_version_by_index(runtime, state_index) }
-			},
-		)
 	}
 
 	state_descriptors_for_runtime : Runtime -> List(StateDesc)
@@ -1248,57 +1202,6 @@ UiRuntime := [].{
 		)
 	}
 
-	current_state_version_by_index : Runtime, U64 -> U64
-	current_state_version_by_index = |runtime, state_index| {
-		match List.get(runtime.states, state_index) {
-			Ok(slot) => slot.version
-			Err(_) => {
-				crash "Signals runtime invariant violated: state version index was not registered"
-			}
-		}
-	}
-
-	state_version_lookup : List(StateVersionEntry), U64 -> VersionLookup
-	state_version_lookup = |entries, state_index| {
-		var $index = 0
-		var $result = VersionMissing
-		var $done = False
-
-		while $done == False and $index < List.len(entries) {
-			match List.get(entries, $index) {
-				Ok(entry) =>
-					if entry.state_index == state_index {
-						$result = VersionFound(entry.version)
-						$done = True
-					} else {
-						$index = $index + 1
-					}
-				Err(_) => {
-					$done = True
-				}
-			}
-		}
-
-		$result
-	}
-
-	replace_signal_cache_entry : List(SignalCacheEntry), U64, SignalCacheEntry -> List(SignalCacheEntry)
-	replace_signal_cache_entry = |entries, target_index, replacement| {
-		var $index = 0
-		var $next = List.with_capacity(List.len(entries))
-
-		for entry in entries {
-			if $index == target_index {
-				$next = List.append($next, replacement)
-			} else {
-				$next = List.append($next, entry)
-			}
-			$index = $index + 1
-		}
-
-		$next
-	}
-
 	replace_state_slot : List(StateSlot), U64, StateSlot -> List(StateSlot)
 	replace_state_slot = |entries, target_index, replacement| {
 		var $index = 0
@@ -1316,14 +1219,24 @@ UiRuntime := [].{
 		$next
 	}
 
-	set_signal_cache : Runtime, Str, List(U64), NodeValue -> Runtime
-	set_signal_cache = |runtime, key, signal_deps, value| {
-		deps = state_versions_for_deps(runtime, signal_deps)
-		entry = { key, value, deps }
-		match signal_cache_entry_lookup(runtime.signal_cache, key) {
-			SignalCacheEntryFound(found) => { ..runtime, signal_cache: replace_signal_cache_entry(runtime.signal_cache, found.index, entry) }
+	replace_signal_change : List(SignalValueDesc), U64, NodeValue -> List(SignalValueDesc)
+	replace_signal_change = |entries, signal_id, value| {
+		var $found = False
+		var $next = List.with_capacity(List.len(entries) + 1)
 
-			SignalCacheEntryMissing => { ..runtime, signal_cache: List.append(runtime.signal_cache, entry) }
+		for entry in entries {
+			if entry.signal_id == signal_id {
+				$next = List.append($next, { signal_id, value })
+				$found = True
+			} else {
+				$next = List.append($next, entry)
+			}
+		}
+
+		if $found {
+			$next
+		} else {
+			List.append($next, { signal_id, value })
 		}
 	}
 

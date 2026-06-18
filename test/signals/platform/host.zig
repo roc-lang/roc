@@ -14,9 +14,11 @@ const DispatchResult = std.meta.Child(DispatchResultBox);
 const RuntimeBox = @typeInfo(@TypeOf(abi.roc_ui_drop)).@"fn".params[0].type.?;
 const RuntimeMetrics = @FieldType(DispatchResult, "metrics");
 const EventDescriptorList = @FieldType(DispatchResult, "event_descriptors");
+const SignalValueList = @FieldType(DispatchResult, "signal_changes");
 const SignalDescriptorList = @FieldType(DispatchResult, "signal_descriptors");
 const StateDescriptorList = @FieldType(DispatchResult, "state_descriptors");
 const StateChangeList = @FieldType(DispatchResult, "state_changes");
+const SignalValueDesc = @typeInfo(@TypeOf(@as(SignalValueList, undefined).items())).pointer.child;
 const HostEventBox = @typeInfo(@TypeOf(abi.roc_ui_dispatch)).@"fn".params[1].type.?;
 const HostEvent = std.meta.Child(HostEventBox);
 const CommandPayload = @FieldType(abi.UiRuntimeCommand, "payload");
@@ -63,6 +65,16 @@ const HostSignalDescriptor = struct {
 const HostSignalRoute = struct {
     state_id: u64,
     signal_ids: []u64,
+};
+
+const HostSignalCacheSlot = union(enum) {
+    absent,
+    present: abi.NodeValue,
+};
+
+const SignalEventPayload = struct {
+    dirty_signal_ids: abi.RocListWith(u64, false),
+    cached_signals: SignalValueList,
 };
 
 const HostCommandSnapshot = struct {
@@ -539,6 +551,7 @@ const HostEnv = struct {
     event_routes: std.ArrayListUnmanaged(HostEventRoute) = .empty,
     signal_descriptors: std.ArrayListUnmanaged(HostSignalDescriptor) = .empty,
     signal_routes: std.ArrayListUnmanaged(HostSignalRoute) = .empty,
+    signal_cache: std.ArrayListUnmanaged(HostSignalCacheSlot) = .empty,
     states: std.ArrayListUnmanaged(HostState) = .empty,
     previous_command_snapshots: std.ArrayListUnmanaged(HostCommandSnapshot) = .empty,
     render_metrics: HostRenderMetrics = .{},
@@ -724,6 +737,16 @@ const HostEnv = struct {
         self.signal_routes.items.len = 0;
     }
 
+    fn clearSignalCache(self: *HostEnv) void {
+        for (self.signal_cache.items) |slot| {
+            switch (slot) {
+                .absent => {},
+                .present => |value| abi.decrefNodeValue(value, self.roc_host.?),
+            }
+        }
+        self.signal_cache.items.len = 0;
+    }
+
     fn rebuildSignalRoutesFromSignals(self: *HostEnv) void {
         const allocator = self.gpa.allocator();
         var route_lists = allocator.alloc(std.ArrayListUnmanaged(u64), self.states.items.len) catch std.process.exit(1);
@@ -776,6 +799,9 @@ const HostEnv = struct {
             self.validateSignalStateDeps(desc.state_deps.items());
 
             if (index < self.signal_descriptors.items.len) {
+                if (index >= self.signal_cache.items.len) {
+                    failHost("host signal cache is not indexed by signal id");
+                }
                 const existing = self.signal_descriptors.items[index];
                 if (existing.signal_id != desc.signal_id or existing.kind != kind) {
                     failHost("Roc signal descriptor changed after registration");
@@ -800,6 +826,7 @@ const HostEnv = struct {
                 allocator.free(state_deps);
                 std.process.exit(1);
             };
+            self.signal_cache.append(allocator, .absent) catch std.process.exit(1);
         }
 
         self.rebuildSignalRoutesFromSignals();
@@ -916,6 +943,56 @@ const HostEnv = struct {
             state.value = change.value;
             state.version += 1;
             self.state_metrics.state_version_bumps += 1;
+            self.invalidateSignalCacheForState(change.state_id);
+        }
+    }
+
+    fn invalidateSignalCacheForState(self: *HostEnv, state_id: u64) void {
+        for (self.signalIdsForState(state_id)) |signal_id| {
+            if (signal_id >= self.signal_cache.items.len) {
+                failHost("host signal route referenced an unknown signal id");
+            }
+
+            const signal_index: usize = @intCast(signal_id);
+            switch (self.signal_cache.items[signal_index]) {
+                .absent => {},
+                .present => |value| {
+                    abi.decrefNodeValue(value, self.roc_host.?);
+                    self.signal_cache.items[signal_index] = .absent;
+                },
+            }
+        }
+    }
+
+    fn applySignalChanges(self: *HostEnv, changes: SignalValueList) void {
+        if (changes.len() == 0) return;
+
+        const allocator = self.gpa.allocator();
+        const seen = allocator.alloc(bool, self.signal_cache.items.len) catch std.process.exit(1);
+        defer allocator.free(seen);
+        @memset(seen, false);
+
+        for (changes.items()) |change| {
+            if (change.signal_id >= self.signal_cache.items.len) {
+                failHost("Roc signal change descriptor referenced an unknown signal id");
+            }
+
+            const signal_index: usize = @intCast(change.signal_id);
+            if (seen[signal_index]) {
+                failHost("Roc signal change descriptors must not contain duplicate signal ids");
+            }
+            seen[signal_index] = true;
+
+            if (self.signal_descriptors.items[signal_index].signal_id != change.signal_id) {
+                failHost("host signal registry is not indexed by signal id");
+            }
+
+            abi.increfNodeValue(change.value, 1);
+            switch (self.signal_cache.items[signal_index]) {
+                .absent => {},
+                .present => |previous| abi.decrefNodeValue(previous, self.roc_host.?),
+            }
+            self.signal_cache.items[signal_index] = .{ .present = change.value };
         }
     }
 
@@ -965,6 +1042,8 @@ const HostEnv = struct {
         self.signal_descriptors.deinit(allocator);
         self.clearSignalRoutes();
         self.signal_routes.deinit(allocator);
+        self.clearSignalCache();
+        self.signal_cache.deinit(allocator);
         self.clearStates();
         self.states.deinit(allocator);
         self.clearPreviousCommandSnapshots();
@@ -1722,6 +1801,15 @@ fn releaseSignalDescriptorList(descriptors: SignalDescriptorList, roc_host: *abi
     descriptors.decref(roc_host);
 }
 
+fn releaseSignalValueList(values: SignalValueList, roc_host: *abi.RocHost) void {
+    if (values.isUnique()) {
+        for (values.items()) |value| {
+            abi.decrefNodeValue(value.value, roc_host);
+        }
+    }
+    values.decref(roc_host);
+}
+
 fn releaseStateDescriptorList(descriptors: StateDescriptorList, roc_host: *abi.RocHost) void {
     if (descriptors.isUnique()) {
         for (descriptors.items()) |descriptor| {
@@ -1752,6 +1840,7 @@ fn acceptDispatchResultMeasured(host: *HostEnv, roc_host: *abi.RocHost, result_b
     host.setStateDescriptors(result.state_descriptors);
     host.setSignalDescriptors(result.signal_descriptors);
     host.applyStateChanges(result.state_changes);
+    host.applySignalChanges(result.signal_changes);
     const start_ns = benchmarkNowNs();
     const counts = applyRenderCommandList(host, result.commands);
     const elapsed = benchmarkNowNs() - start_ns;
@@ -1760,6 +1849,7 @@ fn acceptDispatchResultMeasured(host: *HostEnv, roc_host: *abi.RocHost, result_b
     if (command_counts) |total| total.addAll(counts);
     releaseCommandList(result.commands, roc_host);
     releaseEventDescriptorList(result.event_descriptors, roc_host);
+    releaseSignalValueList(result.signal_changes, roc_host);
     releaseSignalDescriptorList(result.signal_descriptors, roc_host);
     releaseStateDescriptorList(result.state_descriptors, roc_host);
     releaseStateChangeList(result.state_changes, roc_host);
@@ -1777,18 +1867,48 @@ fn boxHostEvent(roc_host: *abi.RocHost, event: HostEvent) HostEventBox {
     return event_box;
 }
 
-fn dirtySignalIdListForEvent(host: *HostEnv, roc_host: *abi.RocHost, event_id: u64) abi.RocListWith(u64, false) {
+fn cachedSignalValueListExcluding(host: *HostEnv, roc_host: *abi.RocHost, dirty_signal_ids: []const u64) SignalValueList {
+    const allocator = host.gpa.allocator();
+    var cached_signals: std.ArrayListUnmanaged(SignalValueDesc) = .empty;
+    defer cached_signals.deinit(allocator);
+
+    for (host.signal_cache.items, 0..) |slot, signal_index| {
+        if (u64SliceContains(dirty_signal_ids, @intCast(signal_index))) continue;
+        switch (slot) {
+            .absent => {},
+            .present => |value| {
+                cached_signals.append(allocator, .{
+                    .signal_id = @intCast(signal_index),
+                    .value = value,
+                }) catch std.process.exit(1);
+            },
+        }
+    }
+
+    const list = SignalValueList.fromSlice(cached_signals.items, roc_host);
+    for (cached_signals.items) |entry| {
+        abi.increfNodeValue(entry.value, 1);
+    }
+    return list;
+}
+
+fn signalEventPayloadForEvent(host: *HostEnv, roc_host: *abi.RocHost, event_id: u64) SignalEventPayload {
     const allocator = host.gpa.allocator();
     const dirty_signal_ids = host.dirtySignalIdsForEvent(allocator, event_id);
     defer allocator.free(dirty_signal_ids);
-    return abi.RocListWith(u64, false).fromSlice(dirty_signal_ids, roc_host);
+    return .{
+        .dirty_signal_ids = abi.RocListWith(u64, false).fromSlice(dirty_signal_ids, roc_host),
+        .cached_signals = cachedSignalValueListExcluding(host, roc_host, dirty_signal_ids),
+    };
 }
 
 fn clickHostEvent(host: *HostEnv, roc_host: *abi.RocHost, event_id: u64) HostEvent {
+    const signal_payload = signalEventPayloadForEvent(host, roc_host, event_id);
     return .{
         .payload = .{
             .click = .{
-                .dirty_signal_ids = dirtySignalIdListForEvent(host, roc_host, event_id),
+                .cached_signals = signal_payload.cached_signals,
+                .dirty_signal_ids = signal_payload.dirty_signal_ids,
                 .event = event_id,
             },
         },
@@ -1797,10 +1917,12 @@ fn clickHostEvent(host: *HostEnv, roc_host: *abi.RocHost, event_id: u64) HostEve
 }
 
 fn inputHostEvent(host: *HostEnv, roc_host: *abi.RocHost, event_id: u64, value: []const u8) HostEvent {
+    const signal_payload = signalEventPayloadForEvent(host, roc_host, event_id);
     return .{
         .payload = .{
             .input = .{
-                .dirty_signal_ids = dirtySignalIdListForEvent(host, roc_host, event_id),
+                .cached_signals = signal_payload.cached_signals,
+                .dirty_signal_ids = signal_payload.dirty_signal_ids,
                 .event = event_id,
                 .value = RocStr.fromSlice(value, roc_host),
             },
@@ -1810,11 +1932,13 @@ fn inputHostEvent(host: *HostEnv, roc_host: *abi.RocHost, event_id: u64, value: 
 }
 
 fn checkHostEvent(host: *HostEnv, roc_host: *abi.RocHost, event_id: u64, checked: bool) HostEvent {
+    const signal_payload = signalEventPayloadForEvent(host, roc_host, event_id);
     return .{
         .payload = .{
             .check = .{
+                .cached_signals = signal_payload.cached_signals,
                 .checked = checked,
-                .dirty_signal_ids = dirtySignalIdListForEvent(host, roc_host, event_id),
+                .dirty_signal_ids = signal_payload.dirty_signal_ids,
                 .event = event_id,
             },
         },
