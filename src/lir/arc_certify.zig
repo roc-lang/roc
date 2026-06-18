@@ -214,7 +214,7 @@ fn certifyUniqueArgs(
                     try stack.append(allocator, j.body);
                     try stack.append(allocator, j.remainder);
                 },
-                inline .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .free => |s| {
+                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .free => |s| {
                     try stack.append(allocator, s.next);
                 },
                 .ret, .jump, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
@@ -326,7 +326,7 @@ fn writeFailureContext(context: *FailureContext, store: *const LirStore, proc_id
                     walk.append(store.allocator, j.body) catch return;
                     walk.append(store.allocator, j.remainder) catch return;
                 },
-                inline .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .free => |s| {
+                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .free => |s| {
                     walk.append(store.allocator, s.next) catch return;
                 },
             }
@@ -360,6 +360,7 @@ fn writeFailureContext(context: *FailureContext, store: *const LirStore, proc_id
             .set_local => |a| context.append(" target={d} value={d} mode={s} next={d}", .{
                 @intFromEnum(a.target), @intFromEnum(a.value), @tagName(a.mode), @intFromEnum(a.next),
             }),
+            .init_uninitialized => |a| context.append(" target={d} next={d}", .{ @intFromEnum(a.target), @intFromEnum(a.next) }),
             .incref => |rc| context.append(" value={d} next={d}", .{ @intFromEnum(rc.value), @intFromEnum(rc.next) }),
             .decref => |rc| context.append(" value={d} next={d}", .{ @intFromEnum(rc.value), @intFromEnum(rc.next) }),
             .free => |rc| context.append(" value={d} next={d}", .{ @intFromEnum(rc.value), @intFromEnum(rc.next) }),
@@ -387,6 +388,7 @@ fn stmtMentionsLocal(store: *const LirStore, stmt: LIR.CFStmt, needle: LIR.Local
         .assign_struct => |a| a.target == needle or spanHasLocal(store, a.fields, needle),
         .assign_tag => |a| a.target == needle or (a.payload != null and a.payload.? == needle),
         .set_local => |a| a.target == needle or a.value == needle,
+        .init_uninitialized => |a| a.target == needle,
         .debug => |d| d.message == needle,
         .expect_err => |e| e.message == needle,
         .expect => |e| e.condition == needle,
@@ -941,6 +943,10 @@ const Certifier = struct {
                     try self.noteProcLocal(assign.target);
                     try stack.append(self.allocator, assign.next);
                 },
+                .init_uninitialized => |init| {
+                    try self.noteProcLocal(init.target);
+                    try stack.append(self.allocator, init.next);
+                },
                 .assign_call => |assign| {
                     try self.noteProcLocal(assign.target);
                     try self.noteProcLocalSpan(assign.args);
@@ -1047,6 +1053,10 @@ const Certifier = struct {
                 .assign_literal => |assign| {
                     if (assign.target == needle) continue;
                     try self.scan_stack.append(self.allocator, assign.next);
+                },
+                .init_uninitialized => |init| {
+                    if (init.target == needle) continue;
+                    try self.scan_stack.append(self.allocator, init.next);
                 },
                 .assign_call => |assign| {
                     if (self.spanReadsLocal(assign.args, needle)) return true;
@@ -1419,6 +1429,12 @@ const Certifier = struct {
                         _ = try self.bindFresh(&state, assign.target, 1, &.{});
                     }
                     cursor = assign.next;
+                },
+                .init_uninitialized => |init| {
+                    if (self.isRc(init.target)) {
+                        state.bindValue(init.target, no_value);
+                    }
+                    cursor = init.next;
                 },
                 .assign_call => |assign| {
                     try self.applyCall(&state, assign.target, self.sigs.get(assign.proc), assign.args);

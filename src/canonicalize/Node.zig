@@ -39,6 +39,7 @@ pub const Tag = enum {
     // Statements
     statement_decl,
     statement_var,
+    statement_var_uninitialized,
     statement_reassign,
     statement_crash,
     statement_dbg,
@@ -46,6 +47,8 @@ pub const Tag = enum {
     statement_expect,
     statement_for,
     statement_while,
+    statement_infinite_loop,
+    statement_breakable_loop,
     statement_break,
     statement_return,
     statement_import,
@@ -188,6 +191,7 @@ pub const Tag = enum {
     diag_empty_tuple,
     diag_ident_already_in_scope,
     diag_ident_not_in_scope,
+    diag_read_uninitialized_var,
     diag_self_referential_definition,
     diag_circular_value_definition,
     diag_local_reference_before_definition,
@@ -261,6 +265,7 @@ pub const Tag = enum {
     diag_mutually_recursive_type_aliases,
     diag_deprecated_number_suffix,
     diag_range_op_chained,
+    diag_infinite_loop_never_exits,
 };
 
 /// Typed payload union for accessing node data in a type-safe manner.
@@ -273,6 +278,7 @@ pub const Payload = extern union {
     // === Statement payloads ===
     statement_decl: StatementDecl,
     statement_var: StatementVar,
+    statement_var_uninitialized: StatementVarUninitialized,
     statement_reassign: StatementReassign,
     statement_crash: StatementCrash,
     statement_single_expr: StatementSingleExpr,
@@ -405,6 +411,13 @@ pub const Payload = extern union {
         pattern_idx: u32,
         expr: u32,
         anno_span2_idx: u32, // Index into span2_data: (has_anno, anno_idx_or_zero)
+    };
+
+    /// statement_var_uninitialized: pattern_idx + annotation info
+    pub const StatementVarUninitialized = extern struct {
+        pattern_idx: u32,
+        anno_span2_idx: u32, // Index into span2_data: (has_anno, anno_idx_or_zero)
+        _padding: [4]u8 = .{ 0, 0, 0, 0 },
     };
 
     /// statement_reassign: pattern_idx + expr

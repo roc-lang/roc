@@ -449,21 +449,23 @@ const Formatter = struct {
                     try fmt.push(' ');
                 }
                 try fmt.pushTokenText(v.name);
-                if (multiline and try fmt.flushCommentsAfter(v.name)) {
-                    fmt.curr_indent += 1;
-                    try fmt.pushIndent();
-                } else {
-                    try fmt.push(' ');
+                if (v.body) |body| {
+                    if (multiline and try fmt.flushCommentsAfter(v.name)) {
+                        fmt.curr_indent += 1;
+                        try fmt.pushIndent();
+                    } else {
+                        try fmt.push(' ');
+                    }
+                    try fmt.push('=');
+                    const body_region = fmt.nodeRegion(@intFromEnum(body));
+                    if (multiline and try fmt.flushCommentsBefore(body_region.start)) {
+                        fmt.curr_indent += 1;
+                        try fmt.pushIndent();
+                    } else {
+                        try fmt.push(' ');
+                    }
+                    try fmt.formatExprDiscard(body);
                 }
-                try fmt.push('=');
-                const body_region = fmt.nodeRegion(@intFromEnum(v.body));
-                if (multiline and try fmt.flushCommentsBefore(body_region.start)) {
-                    fmt.curr_indent += 1;
-                    try fmt.pushIndent();
-                } else {
-                    try fmt.push(' ');
-                }
-                try fmt.formatExprDiscard(v.body);
             },
             .expr => |e| {
                 try fmt.formatExprDiscard(e.expr);
@@ -1314,7 +1316,12 @@ const Formatter = struct {
                 }
                 try fmt.push('.');
                 try fmt.pushTokenText(mc.method_token);
-                try fmt.formatCollection(mc.region, .round, AST.Expr.Idx, fmt.ast.store.exprSlice(mc.args), Formatter.formatExpr);
+                // Only the argument list (from the method token onwards) should
+                // determine whether the call is multiline. Using the full
+                // `mc.region` would include newlines from the receiver chain and
+                // wrongly expand short, inline arguments. (See issue #9646)
+                const args_region = AST.TokenizedRegion{ .start = mc.method_token + 1, .end = mc.region.end };
+                try fmt.formatCollection(args_region, .round, AST.Expr.Idx, fmt.ast.store.exprSlice(mc.args), Formatter.formatExpr);
             },
             .arrow_call => |ld| {
                 try fmt.formatExprDiscard(ld.left);
@@ -3426,6 +3433,30 @@ test "issue 8894: typed frac literal formats correctly" {
     const result = try moduleFmtsStable(std.testing.allocator, "x = 3.14.F64", false);
     defer std.testing.allocator.free(result);
     try std.testing.expectEqualStrings("x = 3.14.F64\n", result);
+}
+
+test "issue 9646: multiline method chain keeps short args inline without trailing comma" {
+    // In a multiline method chain, each method-call argument that fits on one
+    // line and has no input trailing comma should stay inline, not get expanded
+    // into a multiline call with a trailing comma.
+    const result = try moduleFmtsStable(std.testing.allocator,
+        \\sprite = Sprite.from_texture(texture)
+        \\    .source(Math.rect(1, 2, 3, 4))
+        \\    .pos({ x: 5, y: 6 })
+        \\    .scale(2)
+        \\    .centered()
+        \\    .rotation(90)
+    , false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings(
+        "sprite = Sprite.from_texture(texture)\n" ++
+            "\t.source(Math.rect(1, 2, 3, 4))\n" ++
+            "\t.pos({ x: 5, y: 6 })\n" ++
+            "\t.scale(2)\n" ++
+            "\t.centered()\n" ++
+            "\t.rotation(90)\n",
+        result,
+    );
 }
 
 test "issue 8989: platform header targets section is preserved" {

@@ -100,6 +100,9 @@ pub const ScopeMap = struct {
                 try self.extractBindingsFromPattern(module_env, var_decl.pattern_idx, stmt_region.start.offset, scope_end, false, depth + 1);
                 try self.traverseExpr(module_env, var_decl.expr, scope_end, depth + 1);
             },
+            .s_var_uninitialized => |var_decl| {
+                try self.extractBindingsFromPattern(module_env, var_decl.pattern_idx, stmt_region.start.offset, scope_end, false, depth + 1);
+            },
             .s_reassign => |reassign| {
                 // Reassignment doesn't introduce new bindings, but traverse the expr
                 try self.traverseExpr(module_env, reassign.expr, scope_end, depth + 1);
@@ -113,6 +116,14 @@ pub const ScopeMap = struct {
                 try self.traverseExpr(module_env, for_stmt.body, body_region.end.offset, depth + 1);
             },
             .s_while => |while_stmt| {
+                try self.traverseExpr(module_env, while_stmt.cond, scope_end, depth + 1);
+                try self.traverseExpr(module_env, while_stmt.body, scope_end, depth + 1);
+            },
+            .s_infinite_loop => |while_stmt| {
+                try self.traverseExpr(module_env, while_stmt.cond, scope_end, depth + 1);
+                try self.traverseExpr(module_env, while_stmt.body, scope_end, depth + 1);
+            },
+            .s_breakable_loop => |while_stmt| {
                 try self.traverseExpr(module_env, while_stmt.cond, scope_end, depth + 1);
                 try self.traverseExpr(module_env, while_stmt.body, scope_end, depth + 1);
             },

@@ -1230,6 +1230,7 @@ pub const SyntaxChecker = struct {
             const pattern_idx = switch (stmt) {
                 .s_decl => |decl| decl.pattern,
                 .s_var => |var_stmt| var_stmt.pattern_idx,
+                .s_var_uninitialized => |var_stmt| var_stmt.pattern_idx,
                 else => continue,
             };
 
@@ -1485,6 +1486,7 @@ pub const SyntaxChecker = struct {
             const maybe_type_anno: ?CIR.TypeAnno.Idx = switch (stmt) {
                 .s_decl => |d| if (d.anno) |anno_idx| module_env.store.getAnnotation(anno_idx).anno else null,
                 .s_var => |d| if (d.anno) |anno_idx| module_env.store.getAnnotation(anno_idx).anno else null,
+                .s_var_uninitialized => |d| if (d.anno) |anno_idx| module_env.store.getAnnotation(anno_idx).anno else null,
                 .s_type_anno => |t| t.anno,
                 .s_alias_decl => |a| a.anno,
                 .s_nominal_decl => |n| n.anno,
@@ -1900,6 +1902,7 @@ pub const SyntaxChecker = struct {
                     const maybe_type_anno: ?CIR.TypeAnno.Idx = switch (stmt) {
                         .s_decl => |d| if (d.anno) |anno_idx| module_env.store.getAnnotation(anno_idx).anno else null,
                         .s_var => |d| if (d.anno) |anno_idx| module_env.store.getAnnotation(anno_idx).anno else null,
+                        .s_var_uninitialized => |d| if (d.anno) |anno_idx| module_env.store.getAnnotation(anno_idx).anno else null,
                         .s_type_anno => |t| t.anno,
                         .s_alias_decl => |a| a.anno,
                         .s_nominal_decl => |n| n.anno,

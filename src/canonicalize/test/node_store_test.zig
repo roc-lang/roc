@@ -79,6 +79,13 @@ test "NodeStore round trip - Statements" {
     });
 
     try statements.append(gpa, CIR.Statement{
+        .s_var_uninitialized = .{
+            .pattern_idx = rand_idx(CIR.Pattern.Idx),
+            .anno = rand_idx(CIR.Annotation.Idx),
+        },
+    });
+
+    try statements.append(gpa, CIR.Statement{
         .s_reassign = .{
             .pattern_idx = rand_idx(CIR.Pattern.Idx),
             .expr = rand_idx(CIR.Expr.Idx),
@@ -119,6 +126,20 @@ test "NodeStore round trip - Statements" {
 
     try statements.append(gpa, CIR.Statement{
         .s_while = .{
+            .cond = rand_idx(CIR.Expr.Idx),
+            .body = rand_idx(CIR.Expr.Idx),
+        },
+    });
+
+    try statements.append(gpa, CIR.Statement{
+        .s_infinite_loop = .{
+            .cond = rand_idx(CIR.Expr.Idx),
+            .body = rand_idx(CIR.Expr.Idx),
+        },
+    });
+
+    try statements.append(gpa, CIR.Statement{
+        .s_breakable_loop = .{
             .cond = rand_idx(CIR.Expr.Idx),
             .body = rand_idx(CIR.Expr.Idx),
         },
@@ -567,6 +588,13 @@ test "NodeStore round trip - Diagnostics" {
 
     try diagnostics.append(gpa, CIR.Diagnostic{
         .ident_not_in_scope = .{
+            .ident = rand_ident_idx(),
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
+        .read_uninitialized_var = .{
             .ident = rand_ident_idx(),
             .region = rand_region(),
         },
@@ -1033,6 +1061,12 @@ test "NodeStore round trip - Diagnostics" {
 
     try diagnostics.append(gpa, CIR.Diagnostic{
         .break_outside_loop = .{
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
+        .infinite_loop_never_exits = .{
             .region = rand_region(),
         },
     });

@@ -1425,6 +1425,7 @@ const Lowerer = struct {
         defer self.result.store.current_loc = saved_loc;
         self.result.store.current_loc = self.program.stmtLoc(stmt_id);
         return switch (self.program.stmts.items[@intFromEnum(stmt_id)]) {
+            .uninitialized => |pat_id| try self.initUninitializedPattern(pat_id, next),
             .let_ => |let_| blk: {
                 const value = try self.addTemp(self.expr(let_.value).ty);
                 const bind = try self.bindPatternOrCrash(let_.pat, value, next, let_.comptime_site);
@@ -1445,6 +1446,72 @@ const Lowerer = struct {
                 .msg = try self.result.store.insertString(self.program.stringLiteralText(msg)),
             } }),
         };
+    }
+
+    fn initUninitializedPattern(
+        self: *Lowerer,
+        pat_id: LambdaMono.PatId,
+        next: LIR.CFStmtId,
+    ) Common.LowerError!LIR.CFStmtId {
+        const pat_data = self.pat(pat_id);
+        return switch (pat_data.data) {
+            .bind => |local| try self.initUninitializedLocal(try self.localFor(local), next),
+            .wildcard,
+            .int_lit,
+            .dec_lit,
+            .frac_f32_lit,
+            .frac_f64_lit,
+            .str_lit,
+            => next,
+            .as => |as| blk: {
+                const inner = try self.initUninitializedPattern(as.pattern, next);
+                break :blk try self.initUninitializedLocal(try self.localFor(as.local), inner);
+            },
+            .record => |fields| blk: {
+                var current = next;
+                const destructs = self.program.recordDestructSpan(fields);
+                var i = destructs.len;
+                while (i > 0) {
+                    i -= 1;
+                    current = try self.initUninitializedPattern(destructs[i].pattern, current);
+                }
+                break :blk current;
+            },
+            .tuple => |items| blk: {
+                var current = next;
+                const pats = self.program.patSpan(items);
+                var i = pats.len;
+                while (i > 0) {
+                    i -= 1;
+                    current = try self.initUninitializedPattern(pats[i], current);
+                }
+                break :blk current;
+            },
+            .tag => |tag| blk: {
+                var current = next;
+                const payloads = self.program.patSpan(tag.payloads);
+                var i = payloads.len;
+                while (i > 0) {
+                    i -= 1;
+                    current = try self.initUninitializedPattern(payloads[i], current);
+                }
+                break :blk current;
+            },
+            .callable => |callable| if (callable.payload) |payload| try self.initUninitializedPattern(payload, next) else next,
+            .nominal => |inner| try self.initUninitializedPattern(inner, next),
+        };
+    }
+
+    fn initUninitializedLocal(
+        self: *Lowerer,
+        target: LIR.LocalId,
+        next: LIR.CFStmtId,
+    ) Common.LowerError!LIR.CFStmtId {
+        if (self.isZstLocal(target)) return next;
+        return try self.result.store.addCFStmt(.{ .init_uninitialized = .{
+            .target = target,
+            .next = next,
+        } });
     }
 
     fn lowerLoopInto(self: *Lowerer, target: LIR.LocalId, loop: anytype, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {

@@ -1098,6 +1098,7 @@ fn statementDependsOnUnboundPlatformRequirement(
     return switch (checked_bodies.statements[@intFromEnum(statement_id)].data) {
         .decl => |statement| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, statement.expr, relation_blocked_exprs),
         .var_ => |statement| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, statement.expr, relation_blocked_exprs),
+        .var_uninitialized => false,
         .reassign => |statement| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, statement.expr, relation_blocked_exprs),
         .dbg,
         .expr,
@@ -1107,6 +1108,10 @@ fn statementDependsOnUnboundPlatformRequirement(
             exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, for_.body, relation_blocked_exprs),
         .while_ => |while_| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, while_.cond, relation_blocked_exprs) or
             exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, while_.body, relation_blocked_exprs),
+        .infinite_loop => |loop| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, loop.cond, relation_blocked_exprs) or
+            exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, loop.body, relation_blocked_exprs),
+        .breakable_loop => |loop| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, loop.cond, relation_blocked_exprs) or
+            exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, loop.body, relation_blocked_exprs),
         .return_ => |ret| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, ret.expr, relation_blocked_exprs),
         .pending,
         .crash,
@@ -4865,6 +4870,7 @@ pub const CheckedStatementData = union(enum) {
     pending,
     decl: struct { pattern: CheckedPatternId, expr: CheckedExprId },
     var_: struct { pattern: CheckedPatternId, expr: CheckedExprId },
+    var_uninitialized: struct { pattern: CheckedPatternId },
     reassign: struct { pattern: CheckedPatternId, expr: CheckedExprId, reassigned_binders: []const PatternBinderId },
     crash: CheckedStringLiteralId,
     dbg: CheckedExprId,
@@ -4877,6 +4883,8 @@ pub const CheckedStatementData = union(enum) {
         plan: ?static_dispatch.IteratorForPlanId,
     },
     while_: struct { cond: CheckedExprId, body: CheckedExprId },
+    infinite_loop: struct { cond: CheckedExprId, body: CheckedExprId },
+    breakable_loop: struct { cond: CheckedExprId, body: CheckedExprId },
     break_,
     return_: struct { expr: CheckedExprId, lambda: CheckedExprId },
     import_,
@@ -5549,6 +5557,9 @@ const CheckedSourceNodes = struct {
                 try self.markPattern(var_.pattern_idx, work);
                 try self.markExpr(var_.expr, work);
             },
+            .s_var_uninitialized => |var_| {
+                try self.markPattern(var_.pattern_idx, work);
+            },
             .s_reassign => |reassign| {
                 try self.markPattern(reassign.pattern_idx, work);
                 try self.markExpr(reassign.expr, work);
@@ -5564,6 +5575,14 @@ const CheckedSourceNodes = struct {
             .s_while => |while_| {
                 try self.markExpr(while_.cond, work);
                 try self.markExpr(while_.body, work);
+            },
+            .s_infinite_loop => |loop| {
+                try self.markExpr(loop.cond, work);
+                try self.markExpr(loop.body, work);
+            },
+            .s_breakable_loop => |loop| {
+                try self.markExpr(loop.cond, work);
+                try self.markExpr(loop.body, work);
             },
             .s_return => |ret| {
                 try self.markExpr(ret.expr, work);
@@ -6318,6 +6337,7 @@ fn checkedStatementDataDiverges(
         => true,
         .decl => |decl| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, decl.expr, expr_states, statement_states),
         .var_ => |var_| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, var_.expr, expr_states, statement_states),
+        .var_uninitialized => false,
         .reassign => |reassign| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, reassign.expr, expr_states, statement_states),
         .dbg,
         .expr,
@@ -6325,6 +6345,8 @@ fn checkedStatementDataDiverges(
         => |expr| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, expr, expr_states, statement_states),
         .for_ => |for_| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, for_.expr, expr_states, statement_states),
         .while_ => |while_| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, while_.cond, expr_states, statement_states),
+        .infinite_loop => true,
+        .breakable_loop => |loop| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, loop.cond, expr_states, statement_states),
         .pending,
         .import_,
         .alias_decl,
@@ -7078,6 +7100,10 @@ const CheckedBodyPayloadCopier = struct {
                 try self.markSourcePatternBindersReassignable(var_.pattern_idx);
                 break :blk .{ .var_ = .{ .pattern = self.checkedPattern(var_.pattern_idx), .expr = self.checkedExpr(var_.expr) } };
             },
+            .s_var_uninitialized => |var_| blk: {
+                try self.markSourcePatternBindersReassignable(var_.pattern_idx);
+                break :blk .{ .var_uninitialized = .{ .pattern = self.checkedPattern(var_.pattern_idx) } };
+            },
             .s_reassign => |reassign| .{ .reassign = .{
                 .pattern = self.checkedPattern(reassign.pattern_idx),
                 .expr = self.checkedExpr(reassign.expr),
@@ -7096,6 +7122,14 @@ const CheckedBodyPayloadCopier = struct {
             .s_while => |while_| .{ .while_ = .{
                 .cond = self.checkedExpr(while_.cond),
                 .body = self.checkedExpr(while_.body),
+            } },
+            .s_infinite_loop => |loop| .{ .infinite_loop = .{
+                .cond = self.checkedExpr(loop.cond),
+                .body = self.checkedExpr(loop.body),
+            } },
+            .s_breakable_loop => |loop| .{ .breakable_loop = .{
+                .cond = self.checkedExpr(loop.cond),
+                .body = self.checkedExpr(loop.body),
             } },
             .s_break => .break_,
             .s_return => |ret| .{ .return_ = .{
@@ -8865,6 +8899,15 @@ const LocalPatternRoleIndex = struct {
                     };
                     putStatementRole(statement_roles, node_count, var_.pattern_idx, .mutable_version);
                 },
+                .statement_var_uninitialized => {
+                    const statement: CIR.Statement.Idx = @enumFromInt(node_idx);
+                    if (checked_bodies.source_node_map.statement(statement) == null) continue;
+                    const var_ = switch (module.getStatement(statement)) {
+                        .s_var_uninitialized => |var_| var_,
+                        else => unreachable,
+                    };
+                    putStatementRole(statement_roles, node_count, var_.pattern_idx, .mutable_version);
+                },
                 .expr_lambda => {
                     const expr_idx: CIR.Expr.Idx = @enumFromInt(node_idx);
                     if (checked_bodies.exprIdForSource(expr_idx) == null) continue;
@@ -9343,6 +9386,9 @@ const CheckedTemplateRefCollector = struct {
                 try self.collectPattern(var_.pattern);
                 try self.collectExpr(var_.expr);
             },
+            .var_uninitialized => |var_| {
+                try self.collectPattern(var_.pattern);
+            },
             .reassign => |reassign| {
                 try self.collectPattern(reassign.pattern);
                 try self.collectExpr(reassign.expr);
@@ -9365,6 +9411,14 @@ const CheckedTemplateRefCollector = struct {
             .while_ => |while_| {
                 try self.collectExpr(while_.cond);
                 try self.collectExpr(while_.body);
+            },
+            .infinite_loop => |loop| {
+                try self.collectExpr(loop.cond);
+                try self.collectExpr(loop.body);
+            },
+            .breakable_loop => |loop| {
+                try self.collectExpr(loop.cond);
+                try self.collectExpr(loop.body);
             },
             .pending,
             .crash,
@@ -10003,6 +10057,9 @@ const NestedProcSiteBuilder = struct {
                 try self.scanPattern(var_.pattern, owner);
                 try self.scanExpr(var_.expr, owner, false);
             },
+            .var_uninitialized => |var_| {
+                try self.scanPattern(var_.pattern, owner);
+            },
             .reassign => |reassign| {
                 try self.scanPattern(reassign.pattern, owner);
                 try self.scanExpr(reassign.expr, owner, false);
@@ -10023,6 +10080,14 @@ const NestedProcSiteBuilder = struct {
             .while_ => |while_| {
                 try self.scanExpr(while_.cond, owner, false);
                 try self.scanExpr(while_.body, owner, false);
+            },
+            .infinite_loop => |loop| {
+                try self.scanExpr(loop.cond, owner, false);
+                try self.scanExpr(loop.body, owner, false);
+            },
+            .breakable_loop => |loop| {
+                try self.scanExpr(loop.cond, owner, false);
+                try self.scanExpr(loop.body, owner, false);
             },
             .pending,
             .crash,

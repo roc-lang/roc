@@ -751,6 +751,14 @@ pub const Interpreter = struct {
         return slice;
     }
 
+    fn poisonUninitializedValue(self: *LirInterpreter, layout_idx: layout_mod.Idx) Error!Value {
+        const sa = self.helper.sizeAlignOf(layout_idx);
+        if (sa.size == 0) return Value.zst;
+        const slice = try self.allocAlignedByteSlice(sa.size, sa.alignment);
+        @memset(slice, 0xAA);
+        return Value.fromSlice(slice);
+    }
+
     fn maxRocAlignment(a: layout_mod.RocAlignment, b: layout_mod.RocAlignment) layout_mod.RocAlignment {
         return if (@intFromEnum(a) >= @intFromEnum(b)) a else b;
     }
@@ -1439,6 +1447,7 @@ pub const Interpreter = struct {
             current = switch (stmt) {
                 .assign_ref => |assign| assign.next,
                 .assign_literal => |assign| assign.next,
+                .init_uninitialized => |uninit| uninit.next,
                 .assign_call => |assign| assign.next,
                 .assign_call_erased => |assign| assign.next,
                 .assign_packed_erased_fn => |assign| assign.next,
@@ -1717,6 +1726,13 @@ pub const Interpreter = struct {
                 .assign_literal => |assign| {
                     self.setLocalChecked(frame, current, assign.target, try self.evalLiteral(assign.value));
                     current = assign.next;
+                },
+                .init_uninitialized => |uninit| {
+                    frame.setLocal(
+                        uninit.target,
+                        try self.poisonUninitializedValue(self.store.getLocal(uninit.target).layout_idx),
+                    );
+                    current = uninit.next;
                 },
                 .assign_call => |assign| {
                     const arg_locals = self.store.getLocalSpan(assign.args);
@@ -2047,6 +2063,14 @@ pub const Interpreter = struct {
                         @intFromEnum(assign.next),
                     });
                     stack.append(self.evalAllocator(), assign.next) catch return;
+                },
+                .init_uninitialized => |uninit| {
+                    debugPrint("    {d}: init_uninitialized target={d} next={d}\n", .{
+                        @intFromEnum(stmt_id),
+                        @intFromEnum(uninit.target),
+                        @intFromEnum(uninit.next),
+                    });
+                    stack.append(self.evalAllocator(), uninit.next) catch return;
                 },
                 .assign_call => |assign| {
                     debugPrint("    {d}: assign_call proc={d} target={d} args=", .{

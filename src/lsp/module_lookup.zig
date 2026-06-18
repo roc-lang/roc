@@ -177,6 +177,7 @@ pub fn findStatementOwningPattern(module_env: *ModuleEnv, target_pattern: CIR.Pa
         const pattern_idx_opt: ?CIR.Pattern.Idx = switch (stmt) {
             .s_decl => |decl| decl.pattern,
             .s_var => |var_stmt| var_stmt.pattern_idx,
+            .s_var_uninitialized => |var_stmt| var_stmt.pattern_idx,
             else => null,
         };
         if (pattern_idx_opt) |pat_idx| {
@@ -316,6 +317,11 @@ pub fn getStatementParts(stmt: CIR.Statement) StatementParts {
             .expr = d.expr,
             .expr2 = null,
         },
+        .s_var_uninitialized => |d| .{
+            .pattern = d.pattern_idx,
+            .expr = null,
+            .expr2 = null,
+        },
         .s_reassign => |d| .{
             .pattern = d.pattern_idx,
             .expr = d.expr,
@@ -332,6 +338,16 @@ pub fn getStatementParts(stmt: CIR.Statement) StatementParts {
             .expr2 = f.body,
         },
         .s_while => |w| .{
+            .pattern = null,
+            .expr = w.cond,
+            .expr2 = w.body,
+        },
+        .s_infinite_loop => |w| .{
+            .pattern = null,
+            .expr = w.cond,
+            .expr2 = w.body,
+        },
+        .s_breakable_loop => |w| .{
             .pattern = null,
             .expr = w.cond,
             .expr2 = w.body,

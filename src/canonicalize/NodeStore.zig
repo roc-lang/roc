@@ -387,11 +387,11 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 78;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 80;
 /// Count of the expression nodes in the ModuleEnv
 pub const MODULEENV_EXPR_NODE_COUNT = 53;
 /// Count of the statement nodes in the ModuleEnv
-pub const MODULEENV_STATEMENT_NODE_COUNT = 17;
+pub const MODULEENV_STATEMENT_NODE_COUNT = 20;
 /// Count of the type annotation nodes in the ModuleEnv
 pub const MODULEENV_TYPE_ANNO_NODE_COUNT = 12;
 /// Count of the pattern nodes in the ModuleEnv
@@ -560,6 +560,20 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
                 },
             } };
         },
+        .statement_var_uninitialized => {
+            const p = payload.statement_var_uninitialized;
+            return CIR.Statement{ .s_var_uninitialized = .{
+                .pattern_idx = @enumFromInt(p.pattern_idx),
+                .anno = blk: {
+                    const anno_data = store.span2_data.items.items[p.anno_span2_idx];
+                    if (anno_data.start != 0) {
+                        break :blk @enumFromInt(anno_data.len);
+                    } else {
+                        break :blk null;
+                    }
+                },
+            } };
+        },
         .statement_reassign => {
             const p = payload.statement_reassign;
             return CIR.Statement{ .s_reassign = .{
@@ -602,6 +616,20 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
         .statement_while => {
             const p = payload.statement_while;
             return CIR.Statement{ .s_while = .{
+                .cond = @enumFromInt(p.cond),
+                .body = @enumFromInt(p.body),
+            } };
+        },
+        .statement_infinite_loop => {
+            const p = payload.statement_while;
+            return CIR.Statement{ .s_infinite_loop = .{
+                .cond = @enumFromInt(p.cond),
+                .body = @enumFromInt(p.body),
+            } };
+        },
+        .statement_breakable_loop => {
+            const p = payload.statement_while;
+            return CIR.Statement{ .s_breakable_loop = .{
                 .cond = @enumFromInt(p.cond),
                 .body = @enumFromInt(p.body),
             } };
@@ -1985,6 +2013,15 @@ pub fn setStatementNode(store: *NodeStore, stmt_idx: CIR.Statement.Idx, statemen
     store.nodes.set(@enumFromInt(@intFromEnum(stmt_idx)), node);
 }
 
+/// Replaces an existing expression node with a runtime error expression.
+pub fn setExprRuntimeError(store: *NodeStore, expr_idx: CIR.Expr.Idx, diagnostic_idx: CIR.Diagnostic.Idx) void {
+    var node = Node.init(.malformed);
+    node.setPayload(.{ .diag_single_value = .{
+        .value = @intFromEnum(diagnostic_idx),
+    } });
+    store.nodes.set(@enumFromInt(@intFromEnum(expr_idx)), node);
+}
+
 /// Creates a statement node, but does not append to the store.
 /// IMPORTANT: It *does* append to typed data lists (span2_data, import_data, etc.)
 ///
@@ -2020,6 +2057,20 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
             node.setPayload(.{ .statement_var = .{
                 .pattern_idx = @intFromEnum(s.pattern_idx),
                 .expr = @intFromEnum(s.expr),
+                .anno_span2_idx = anno_span2_idx,
+            } });
+        },
+        .s_var_uninitialized => |s| {
+            const anno_span2_idx: u32 = @intCast(store.span2_data.len());
+            const anno_data: Span2 = if (s.anno) |anno| .{
+                .start = 1,
+                .len = @intFromEnum(anno),
+            } else .{ .start = 0, .len = 0 };
+            _ = try store.span2_data.append(store.gpa, anno_data);
+
+            node.tag = .statement_var_uninitialized;
+            node.setPayload(.{ .statement_var_uninitialized = .{
+                .pattern_idx = @intFromEnum(s.pattern_idx),
                 .anno_span2_idx = anno_span2_idx,
             } });
         },
@@ -2064,6 +2115,20 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
         },
         .s_while => |s| {
             node.tag = .statement_while;
+            node.setPayload(.{ .statement_while = .{
+                .cond = @intFromEnum(s.cond),
+                .body = @intFromEnum(s.body),
+            } });
+        },
+        .s_infinite_loop => |s| {
+            node.tag = .statement_infinite_loop;
+            node.setPayload(.{ .statement_while = .{
+                .cond = @intFromEnum(s.cond),
+                .body = @intFromEnum(s.body),
+            } });
+        },
+        .s_breakable_loop => |s| {
+            node.tag = .statement_breakable_loop;
             node.setPayload(.{ .statement_while = .{
                 .cond = @intFromEnum(s.cond),
                 .body = @intFromEnum(s.body),
@@ -3759,6 +3824,11 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
             region = r.region;
             node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.ident) } });
         },
+        .read_uninitialized_var => |r| {
+            node.tag = .diag_read_uninitialized_var;
+            region = r.region;
+            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.ident) } });
+        },
         .self_referential_definition => |r| {
             node.tag = .diag_self_referential_definition;
             region = r.region;
@@ -4082,6 +4152,10 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
             node.tag = .diag_break_outside_loop;
             region = r.region;
         },
+        .infinite_loop_never_exits => |r| {
+            node.tag = .diag_infinite_loop_never_exits;
+            region = r.region;
+        },
         .return_outside_fn => |r| {
             node.tag = .diag_return_outside_fn;
             region = r.region;
@@ -4181,6 +4255,10 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             } };
         },
         .diag_ident_not_in_scope => return CIR.Diagnostic{ .ident_not_in_scope = .{
+            .ident = @bitCast(payload.diag_single_ident.ident),
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_read_uninitialized_var => return CIR.Diagnostic{ .read_uninitialized_var = .{
             .ident = @bitCast(payload.diag_single_ident.ident),
             .region = store.getRegionAt(node_idx),
         } },
@@ -4535,6 +4613,9 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             .region = store.getRegionAt(node_idx),
         } },
         .diag_break_outside_loop => return CIR.Diagnostic{ .break_outside_loop = .{
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_infinite_loop_never_exits => return CIR.Diagnostic{ .infinite_loop_never_exits = .{
             .region = store.getRegionAt(node_idx),
         } },
         .diag_return_outside_fn => {

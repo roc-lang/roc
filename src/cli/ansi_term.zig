@@ -1,6 +1,7 @@
 //! ANSI terminal escape sequence utilities for cursor control and screen manipulation.
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const control_code = std.ascii.control_code;
 
 const CSI = "\x1B[";
 
@@ -65,13 +66,45 @@ pub fn queryCursorPosition(out: *std.Io.Writer) Allocator.Error!void {
     try out.writeAll(CSI ++ "6n");
 }
 
-/// Computes the display width of a UTF-8 string by counting codepoints.
+/// Computes the display width of a UTF-8 string by counting codepoints, skipping
+/// ANSI CSI escape sequences (e.g. color codes) since they occupy no columns.
 pub fn computeDisplayWidth(prompt: []const u8) (Allocator.Error || error{InvalidUtf8})!usize {
     var utf8 = try std.unicode.Utf8View.init(prompt);
     var it = utf8.iterator();
     var width: usize = 0;
-    while (it.nextCodepointSlice()) |_| {
+    while (it.nextCodepointSlice()) |slice| {
+        if (slice.len == 1 and slice[0] == control_code.esc) {
+            // Skip a CSI sequence: ESC '[' params... final-byte (0x40-0x7E).
+            if (it.nextCodepointSlice()) |bracket| {
+                if (bracket.len == 1 and bracket[0] == '[') {
+                    while (it.nextCodepointSlice()) |seq| {
+                        if (seq.len == 1 and seq[0] >= 0x40 and seq[0] <= 0x7E) break;
+                    }
+                    continue;
+                }
+                // Not a CSI sequence; count the consumed codepoint normally.
+                width += 1;
+                continue;
+            }
+            continue;
+        }
         width += 1;
     }
     return width;
+}
+
+const testing = std.testing;
+
+test "computeDisplayWidth: plain ascii" {
+    try testing.expectEqual(@as(usize, 2), try computeDisplayWidth("» "));
+}
+
+test "computeDisplayWidth: skips ANSI color codes" {
+    // The cyan REPL prompt: ESC[1;36m » ESC[0m space — visible width is 2.
+    try testing.expectEqual(@as(usize, 2), try computeDisplayWidth("\x1b[1;36m»\x1b[0m "));
+    try testing.expectEqual(@as(usize, 2), try computeDisplayWidth("\x1b[1;36m…\x1b[0m "));
+}
+
+test "computeDisplayWidth: lone ESC not followed by bracket counts following codepoint" {
+    try testing.expectEqual(@as(usize, 1), try computeDisplayWidth("\x1bx"));
 }

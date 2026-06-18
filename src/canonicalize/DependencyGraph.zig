@@ -242,6 +242,7 @@ fn collectExprDependencies(
                     switch (stmt) {
                         .s_decl => |decl| try pending.append(stack_allocator, decl.expr),
                         .s_var => |var_stmt| try pending.append(stack_allocator, var_stmt.expr),
+                        .s_var_uninitialized => {},
                         .s_reassign => |reassign| try pending.append(stack_allocator, reassign.expr),
                         .s_dbg => |dbg| try pending.append(stack_allocator, dbg.expr),
                         .s_expr => |expr_stmt| try pending.append(stack_allocator, expr_stmt.expr),
@@ -250,6 +251,14 @@ fn collectExprDependencies(
                         .s_while => |while_stmt| {
                             try pending.append(stack_allocator, while_stmt.body);
                             try pending.append(stack_allocator, while_stmt.cond);
+                        },
+                        .s_infinite_loop => |loop_stmt| {
+                            try pending.append(stack_allocator, loop_stmt.body);
+                            try pending.append(stack_allocator, loop_stmt.cond);
+                        },
+                        .s_breakable_loop => |loop_stmt| {
+                            try pending.append(stack_allocator, loop_stmt.body);
+                            try pending.append(stack_allocator, loop_stmt.cond);
                         },
                         .s_return => |ret| try pending.append(stack_allocator, ret.expr),
                         .s_import, .s_alias_decl, .s_nominal_decl, .s_type_anno, .s_type_var_alias, .s_crash, .s_runtime_error, .s_break => {},

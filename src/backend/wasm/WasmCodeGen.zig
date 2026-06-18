@@ -389,6 +389,8 @@ list_concat_import: ?u32 = null,
 list_drop_at_import: ?u32 = null,
 list_reserve_import: ?u32 = null,
 list_reverse_import: ?u32 = null,
+list_replace_import: ?u32 = null,
+list_swap_import: ?u32 = null,
 /// Configurable wasm stack size in bytes (default 1MB).
 wasm_stack_bytes: u32 = 1024 * 1024,
 /// Configurable wasm memory pages (0 = auto-compute from stack size).
@@ -1314,6 +1316,14 @@ fn registerHostImports(self: *Self) Allocator.Error!void {
 
     const list_reverse_type = try self.module.addFuncType(&.{ .i32, .i32, .i32, .i32 }, &.{});
     self.list_reverse_import = try self.module.addImport("env", "roc_list_reverse", list_reverse_type);
+
+    // roc_list_replace(list_ptr, elem_width, alignment, index, element_ptr, out_element_ptr, result_ptr)
+    const list_replace_type = try self.module.addFuncType(&.{ .i32, .i32, .i32, .i64, .i32, .i32, .i32 }, &.{});
+    self.list_replace_import = try self.module.addImport("env", "roc_list_replace", list_replace_type);
+
+    // roc_list_swap(list_ptr, elem_width, alignment, index_1, index_2, result_ptr)
+    const list_swap_type = try self.module.addFuncType(&.{ .i32, .i32, .i32, .i64, .i64, .i32 }, &.{});
+    self.list_swap_import = try self.module.addImport("env", "roc_list_swap", list_swap_type);
 
     // String ops: (arg1, arg2, result_ptr) -> void
     const str_binary_type = try self.module.addFuncType(&.{ .i32, .i32, .i32 }, &.{});
@@ -3068,6 +3078,10 @@ fn collectProcLocals(
             .assign_literal => |assign| {
                 try recordProcLocal(locals, assign.target);
                 try work.append(wa, assign.next);
+            },
+            .init_uninitialized => |uninit| {
+                try recordProcLocal(locals, uninit.target);
+                try work.append(wa, uninit.next);
             },
             .assign_call => |assign| {
                 try recordProcLocal(locals, assign.target);
@@ -7043,8 +7057,9 @@ const StmtWork = union(enum) {
     switch_close: *SwitchEqState,
     /// Join glue: emit the `else` between join body and remainder.
     join_else: void,
-    /// Join glue: emit the three closing `end`s of a join (cf_depth bookkeeping).
-    join_close: void,
+    /// Join glue: emit the three closing `end`s of a join (cf_depth bookkeeping)
+    /// and retire the join's bookkeeping now that its lexical scope has ended.
+    join_close: u32,
 };
 
 /// Heap-allocated state shared across a switch node's branch continuations.
@@ -7103,7 +7118,7 @@ fn generateCFStmtUntil(self: *Self, stmt_id: CFStmtId, stop: ?CFStmtId) Allocato
             .join_else => {
                 self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
             },
-            .join_close => {
+            .join_close => |jp_key| {
                 self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
                 self.cf_depth -= 1;
 
@@ -7111,6 +7126,16 @@ fn generateCFStmtUntil(self: *Self, stmt_id: CFStmtId, stop: ?CFStmtId) Allocato
                 self.cf_depth -= 1;
                 self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
                 self.cf_depth -= 1;
+
+                // The join's lexical scope has ended: retire its bookkeeping so a
+                // later jump can only ever resolve a join that is still in scope,
+                // and so the locals/depths (which index only this proc) cannot be
+                // read by an unrelated proc. join_point_param_locals owns its array.
+                if (self.join_point_param_locals.fetchRemove(jp_key)) |entry| {
+                    self.allocator.free(entry.value);
+                }
+                _ = self.join_point_depths.remove(jp_key);
+                _ = self.join_point_state_locals.remove(jp_key);
             },
             .node => |n| try self.generateCFStmtNode(&work, wa, n.stmt_id, n.stop),
         }
@@ -7160,6 +7185,9 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
             try self.generateLiteral(assign.value);
             try self.bindAssignedLocal(assign.target);
             try work.append(wa, .{ .node = .{ .stmt_id = assign.next, .stop = stop } });
+        },
+        .init_uninitialized => |uninit| {
+            try work.append(wa, .{ .node = .{ .stmt_id = uninit.next, .stop = stop } });
         },
         .assign_call => |assign| {
             try self.generateCall(.{
@@ -7347,7 +7375,7 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
 
             // Source emission order: [body subtree] [else] [remainder subtree]
             // [three closing ends]. Push in reverse so popping reproduces it.
-            try work.append(wa, .join_close);
+            try work.append(wa, .{ .join_close = jp_key });
             try work.append(wa, .{ .node = .{ .stmt_id = j.remainder, .stop = stop } });
             try work.append(wa, .join_else);
             try work.append(wa, .{ .node = .{ .stmt_id = j.body, .stop = stop } });
@@ -9490,18 +9518,11 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         },
 
         .list_replace_unsafe => {
-            // TODO: implement list_replace_unsafe for wasm.
-            // For now emit a WASM trap so the compiler still produces a module —
-            // only calls that actually exercise List.replace at runtime will fail
-            // (with `unreachable executed`), instead of crashing the compiler.
-            self.currentCode().append(self.allocator, Op.@"unreachable") catch return error.OutOfMemory;
+            try self.generateLLListReplaceUnsafe(args, ll.ret_layout, ll.unique_args);
         },
 
         .list_swap => {
-            // TODO: implement list_swap for wasm.
-            // Same approach as list_replace_unsafe: emit a runtime trap so compilation
-            // succeeds for programs that don't actually call List.swap.
-            self.currentCode().append(self.allocator, Op.@"unreachable") catch return error.OutOfMemory;
+            try self.generateLLListSwap(args, ll.ret_layout, ll.unique_args);
         },
 
         // List element access operations (no heap allocation needed)
@@ -9863,7 +9884,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         },
         // list_set(list, index, value) -> list with value at index
         .list_set => {
-            try self.generateLLListSet(args, ll.ret_layout);
+            try self.generateLLListSet(args, ll.ret_layout, ll.unique_args);
         },
         // list_reserve(list, capacity) -> list with at least that capacity
         .list_reserve => {
@@ -14252,84 +14273,227 @@ fn generateLLListWithCapacity(self: *Self, args: anytype, ret_layout: layout.Idx
     try self.buildRocListWithCap(new_data, len, cap);
 }
 
-/// Generate list_set: set element at index, creating a new list
-fn generateLLListSet(self: *Self, args: anytype, ret_layout: layout.Idx) Allocator.Error!void {
+/// Materialize an element value (`elem_arg`) into stack memory and return a
+/// local holding its pointer. Caller guarantees `elem_size > 0`.
+fn materializeElementPtr(self: *Self, elem_arg: anytype, elem_layout_idx: layout.Idx, elem_size: u32, elem_align: u32) Allocator.Error!u32 {
+    const elem_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    if (try self.isCompositeLayout(elem_layout_idx)) {
+        try self.emitProcLocal(elem_arg);
+        const src_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+        try self.emitLocalSet(src_local);
+        const dst_offset = try self.allocStackMemory(elem_size, elem_align);
+        try self.emitFpOffset(dst_offset);
+        try self.emitLocalSet(elem_ptr);
+        try self.emitMemCopy(elem_ptr, 0, src_local, elem_size);
+    } else {
+        const elem_vt = try self.resolveValType(elem_layout_idx);
+        try self.emitProcLocal(elem_arg);
+        try self.emitConversion(try self.procLocalValType(elem_arg), elem_vt);
+        const elem_val = self.storage.allocAnonymousLocal(elem_vt) catch return error.OutOfMemory;
+        try self.emitLocalSet(elem_val);
+
+        const elem_offset = try self.allocStackMemory(elem_size, elem_align);
+        try self.emitFpOffset(elem_offset);
+        try self.emitLocalSet(elem_ptr);
+
+        try self.emitLocalGet(elem_ptr);
+        try self.emitLocalGet(elem_val);
+        try self.emitStoreOpSized(elem_vt, elem_size, 0);
+    }
+    return elem_ptr;
+}
+
+/// Materialize a list-index argument (widened to i64 for the builtin ABI).
+fn materializeListIndex(self: *Self, index_arg: anytype) Allocator.Error!u32 {
+    try self.emitProcLocal(index_arg);
+    try self.emitConversion(try self.procLocalValType(index_arg), .i64);
+    const index_local = self.storage.allocAnonymousLocal(.i64) catch return error.OutOfMemory;
+    try self.emitLocalSet(index_local);
+    return index_local;
+}
+
+/// Emit the `roc_builtins_list_replace` call (used by both `list_set` and
+/// `list_replace_unsafe`). The new list is written to `out_list_offset` and the
+/// displaced element to `out_element_offset` (both frame-pointer offsets).
+fn emitListReplaceCall(
+    self: *Self,
+    list_abi: BuiltinListAbi,
+    list_ptr: u32,
+    index_local: u32,
+    elem_ptr: u32,
+    out_element_offset: u32,
+    out_list_offset: u32,
+    unique_args: u64,
+) Allocator.Error!void {
+    const elem_size = list_abi.elem_size;
+    const elem_align = list_abi.elem_align;
+    switch (self.external_calls) {
+        .host_imports => {
+            const import_idx = self.list_replace_import orelse unreachable;
+            try self.emitLocalGet(list_ptr);
+            try self.emitI32Const(@intCast(elem_size));
+            try self.emitI32Const(@intCast(elem_align));
+            try self.emitLocalGet(index_local);
+            try self.emitLocalGet(elem_ptr);
+            try self.emitFpOffset(out_element_offset);
+            try self.emitFpOffset(out_list_offset);
+            try self.emitCall(import_idx);
+        },
+        .builtin_relocs => {
+            const fields = try self.loadRocListFields(list_ptr);
+            const callbacks = try self.listElementCallbacks(list_abi);
+            try self.emitFpOffset(out_list_offset);
+            try self.emitRocListFields(fields);
+            try self.emitI32Const(@intCast(elem_align));
+            try self.emitLocalGet(index_local);
+            try self.emitLocalGet(elem_ptr);
+            try self.emitI32Const(@intCast(elem_size));
+            try self.emitFpOffset(out_element_offset);
+            try self.emitI32Const(@intCast(callbacks.elements_refcounted));
+            try self.emitI32Const(@intCast(callbacks.incref_table_idx));
+            try self.emitI32Const(@intCast(callbacks.decref_table_idx));
+            try self.emitI32Const(updateModeImmForArg(unique_args, 0));
+            try self.emitLocalGet(self.roc_ops_local);
+            try self.emitBuiltinCall(.list_replace, null);
+        },
+        .unconfigured => wasmInvariantFmt("WASM/codegen invariant violated: external calls not configured before list_replace", .{}),
+    }
+}
+
+/// Generate list_set: replace the element at `index`, mutating in place when the
+/// list is statically unique and copy-on-writing otherwise. Routes through the
+/// shared `roc_builtins_list_replace`, so refcounted elements and allocation
+/// ownership are handled identically to the other backends.
+fn generateLLListSet(self: *Self, args: anytype, ret_layout: layout.Idx, unique_args: u64) Allocator.Error!void {
     const list_abi = self.builtinInternalListAbi("wasm.generateLLListSet.builtin_list_abi", ret_layout);
     const elem_size = list_abi.elem_size;
     const elem_align = list_abi.elem_align;
 
-    // Generate list arg
     try self.emitProcLocal(args[0]);
     const list_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitLocalSet(list_ptr);
 
-    // Generate index arg (may be i64 from MonoIR; convert to i32 for wasm32)
-    try self.emitProcLocal(args[1]);
-    try self.emitConversion(try self.procLocalValType(args[1]), .i32);
-    const index = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitLocalSet(index);
+    const result_offset = try self.allocStackMemory(12, 4);
 
-    // Generate element arg
-    try self.emitProcLocal(args[2]);
-    const set_elem_vt: ValType = if (elem_size <= 4) .i32 else if (elem_size <= 8) .i64 else .i32;
-    const elem_val = self.storage.allocAnonymousLocal(set_elem_vt) catch return error.OutOfMemory;
-    try self.emitLocalSet(elem_val);
+    // ZST elements: the element write is a no-op, so list_set returns the input
+    // list unchanged. (listReplace would dereference a null element pointer.)
+    if (elem_size == 0) {
+        const result_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+        try self.emitFpOffset(result_offset);
+        try self.emitLocalSet(result_ptr);
+        try self.emitMemCopy(result_ptr, 0, list_ptr, 12);
+        try self.emitFpOffset(result_offset);
+        return;
+    }
 
-    // Load list fields
-    const old_data = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitLocalGet(list_ptr);
-    self.currentCode().append(self.allocator, Op.i32_load) catch return error.OutOfMemory;
-    WasmModule.leb128WriteU32(self.allocator, self.currentCode(), 2) catch return error.OutOfMemory;
-    WasmModule.leb128WriteU32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
-    try self.emitLocalSet(old_data);
+    const elem_layout_idx = list_abi.elem_layout_idx orelse unreachable;
+    const index_local = try self.materializeListIndex(args[1]);
+    const elem_ptr = try self.materializeElementPtr(args[2], elem_layout_idx, elem_size, elem_align);
+    // list_set discards the displaced element; the builtin still needs a slot.
+    const out_element_offset = try self.allocStackMemory(elem_size, elem_align);
 
-    const old_len = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitLocalGet(list_ptr);
-    self.currentCode().append(self.allocator, Op.i32_load) catch return error.OutOfMemory;
-    WasmModule.leb128WriteU32(self.allocator, self.currentCode(), 2) catch return error.OutOfMemory;
-    WasmModule.leb128WriteU32(self.allocator, self.currentCode(), 4) catch return error.OutOfMemory;
-    try self.emitLocalSet(old_len);
+    try self.emitListReplaceCall(list_abi, list_ptr, index_local, elem_ptr, out_element_offset, result_offset, unique_args);
+    try self.emitFpOffset(result_offset);
+}
 
-    // Allocate new data buffer (same size as old)
-    const total_size = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitLocalGet(old_len);
-    self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-    WasmModule.leb128WriteI32(self.allocator, self.currentCode(), @intCast(elem_size)) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.i32_mul) catch return error.OutOfMemory;
-    try self.emitLocalSet(total_size);
+/// Generate list_replace_unsafe: like list_set, but returns a `{ list, prev }`
+/// record. The builtin writes the new list and displaced element straight into
+/// the record's fields.
+fn generateLLListReplaceUnsafe(self: *Self, args: anytype, ret_layout: layout.Idx, unique_args: u64) Allocator.Error!void {
+    const pair = self.resolveListElementPairLayout(ret_layout);
+    const list_abi = self.builtinInternalListAbi("wasm.generateLLListReplaceUnsafe.builtin_list_abi", pair.list_layout);
+    const elem_size = list_abi.elem_size;
+    const elem_align = list_abi.elem_align;
 
-    try self.emitHeapAllocWithRefcount(total_size, elem_align, list_abi.elements_refcounted);
-    const new_data = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitLocalSet(new_data);
+    try self.emitProcLocal(args[0]);
+    const list_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitLocalSet(list_ptr);
 
-    // Copy all old data
-    const zero2 = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-    WasmModule.leb128WriteI32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
-    try self.emitLocalSet(zero2);
-    try self.emitMemCopyLoop(new_data, zero2, old_data, total_size);
+    const result_offset = try self.allocStackMemory(pair.result_size, pair.result_align);
 
-    // Overwrite element at index
-    const dst = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitLocalGet(new_data);
-    try self.emitLocalGet(index);
-    self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-    WasmModule.leb128WriteI32(self.allocator, self.currentCode(), @intCast(elem_size)) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.i32_mul) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
-    try self.emitLocalSet(dst);
+    // ZST elements: the result list equals the input and the prev field is
+    // zero-sized, so just copy the input list into the record's list field.
+    if (elem_size == 0) {
+        const list_field_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+        try self.emitFpOffset(result_offset + pair.list_offset);
+        try self.emitLocalSet(list_field_ptr);
+        try self.emitMemCopy(list_field_ptr, 0, list_ptr, 12);
+        try self.emitFpOffset(result_offset);
+        return;
+    }
 
-    const bytes_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-    WasmModule.leb128WriteI32(self.allocator, self.currentCode(), @intCast(elem_size)) catch return error.OutOfMemory;
-    try self.emitLocalSet(bytes_local);
-    const zero3 = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-    WasmModule.leb128WriteI32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
-    try self.emitLocalSet(zero3);
-    try self.emitMemCopyLoop(dst, zero3, elem_val, bytes_local);
+    const elem_layout_idx = list_abi.elem_layout_idx orelse unreachable;
+    const index_local = try self.materializeListIndex(args[1]);
+    const elem_ptr = try self.materializeElementPtr(args[2], elem_layout_idx, elem_size, elem_align);
 
-    try self.buildRocList(new_data, old_len);
+    try self.emitListReplaceCall(
+        list_abi,
+        list_ptr,
+        index_local,
+        elem_ptr,
+        result_offset + pair.elem_offset,
+        result_offset + pair.list_offset,
+        unique_args,
+    );
+    try self.emitFpOffset(result_offset);
+}
+
+/// Generate list_swap: swap the elements at two indices, mutating in place when
+/// the list is statically unique. Routes through `roc_builtins_list_swap`.
+fn generateLLListSwap(self: *Self, args: anytype, ret_layout: layout.Idx, unique_args: u64) Allocator.Error!void {
+    const list_abi = self.builtinInternalListAbi("wasm.generateLLListSwap.builtin_list_abi", ret_layout);
+    const elem_size = list_abi.elem_size;
+    const elem_align = list_abi.elem_align;
+
+    try self.emitProcLocal(args[0]);
+    const list_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitLocalSet(list_ptr);
+
+    const result_offset = try self.allocStackMemory(12, 4);
+
+    // ZST elements: swapping is a no-op on the payload.
+    if (elem_size == 0) {
+        const result_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+        try self.emitFpOffset(result_offset);
+        try self.emitLocalSet(result_ptr);
+        try self.emitMemCopy(result_ptr, 0, list_ptr, 12);
+        try self.emitFpOffset(result_offset);
+        return;
+    }
+
+    const index_1_local = try self.materializeListIndex(args[1]);
+    const index_2_local = try self.materializeListIndex(args[2]);
+
+    switch (self.external_calls) {
+        .host_imports => {
+            const import_idx = self.list_swap_import orelse unreachable;
+            try self.emitLocalGet(list_ptr);
+            try self.emitI32Const(@intCast(elem_size));
+            try self.emitI32Const(@intCast(elem_align));
+            try self.emitLocalGet(index_1_local);
+            try self.emitLocalGet(index_2_local);
+            try self.emitFpOffset(result_offset);
+            try self.emitCall(import_idx);
+        },
+        .builtin_relocs => {
+            const fields = try self.loadRocListFields(list_ptr);
+            const callbacks = try self.listElementCallbacks(list_abi);
+            try self.emitFpOffset(result_offset);
+            try self.emitRocListFields(fields);
+            try self.emitI32Const(@intCast(elem_align));
+            try self.emitI32Const(@intCast(elem_size));
+            try self.emitLocalGet(index_1_local);
+            try self.emitLocalGet(index_2_local);
+            try self.emitI32Const(@intCast(callbacks.elements_refcounted));
+            try self.emitI32Const(@intCast(callbacks.incref_table_idx));
+            try self.emitI32Const(@intCast(callbacks.decref_table_idx));
+            try self.emitI32Const(updateModeImmForArg(unique_args, 0));
+            try self.emitLocalGet(self.roc_ops_local);
+            try self.emitBuiltinCall(.list_swap, null);
+        },
+        .unconfigured => wasmInvariantFmt("WASM/codegen invariant violated: external calls not configured before list_swap", .{}),
+    }
+    try self.emitFpOffset(result_offset);
 }
 
 /// Generate list_reserve: ensure list has at least given capacity

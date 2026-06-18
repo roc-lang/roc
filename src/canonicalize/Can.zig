@@ -7219,6 +7219,11 @@ fn finishBlockState(
     const block_free_vars = self.scratch_free_vars.spanFrom(block_captures_start);
 
     const stmt_span = try self.env.store.statementSpanFrom(block.stmt_start);
+    if (self.blockHasUninitializedVar(stmt_span)) {
+        var analyzer = DefiniteInitAnalyzer.init(self, self.env.gpa);
+        try analyzer.analyzeRootBlock(stmt_span, final_expr.idx);
+    }
+
     const block_idx = try self.env.addExpr(CIR.Expr{
         .e_block = .{
             .stmts = stmt_span,
@@ -7228,6 +7233,516 @@ fn finishBlockState(
 
     return CanonicalizedExpr{ .idx = block_idx, .free_vars = block_free_vars };
 }
+
+fn blockHasUninitializedVar(self: *Self, stmts: Statement.Span) bool {
+    for (self.env.store.sliceStatements(stmts)) |stmt_idx| {
+        if (self.env.store.getStatement(stmt_idx) == .s_var_uninitialized) return true;
+    }
+    return false;
+}
+
+const DefiniteInitAnalyzer = struct {
+    can: *Self,
+    allocator: Allocator,
+
+    const VarState = struct {
+        pattern: Pattern.Idx,
+        initialized: bool,
+    };
+
+    const InitState = struct {
+        vars: std.ArrayList(VarState) = .empty,
+
+        fn deinit(self: *@This(), allocator: Allocator) void {
+            self.vars.deinit(allocator);
+        }
+
+        fn clone(self: *const @This(), allocator: Allocator) Allocator.Error!@This() {
+            var copy = @This(){};
+            errdefer copy.deinit(allocator);
+            try copy.vars.appendSlice(allocator, self.vars.items);
+            return copy;
+        }
+
+        fn indexOf(self: *const @This(), pattern: Pattern.Idx) ?usize {
+            for (self.vars.items, 0..) |entry, i| {
+                if (entry.pattern == pattern) return i;
+            }
+            return null;
+        }
+
+        fn isTrackedUninitialized(self: *const @This(), pattern: Pattern.Idx) bool {
+            const idx = self.indexOf(pattern) orelse return false;
+            return !self.vars.items[idx].initialized;
+        }
+
+        fn addUninitialized(self: *@This(), allocator: Allocator, pattern: Pattern.Idx) Allocator.Error!void {
+            if (self.indexOf(pattern) != null) return;
+            try self.vars.append(allocator, .{ .pattern = pattern, .initialized = false });
+        }
+
+        fn markInitialized(self: *@This(), pattern: Pattern.Idx) void {
+            if (self.indexOf(pattern)) |idx| {
+                self.vars.items[idx].initialized = true;
+            }
+        }
+
+        fn trimTo(self: *@This(), len: usize) void {
+            self.vars.items.len = len;
+        }
+    };
+
+    fn init(can: *Self, allocator: Allocator) @This() {
+        return .{ .can = can, .allocator = allocator };
+    }
+
+    fn analyzeRootBlock(self: *@This(), stmts: Statement.Span, final_expr: Expr.Idx) Allocator.Error!void {
+        var state = InitState{};
+        defer state.deinit(self.allocator);
+        var breaks = std.ArrayList(InitState).empty;
+        defer self.deinitStates(&breaks);
+        _ = try self.analyzeBlock(stmts, final_expr, &state, &breaks, true);
+    }
+
+    fn deinitStates(self: *@This(), states: *std.ArrayList(InitState)) void {
+        for (states.items) |*state| state.deinit(self.allocator);
+        states.deinit(self.allocator);
+    }
+
+    fn analyzeBlock(
+        self: *@This(),
+        stmts: Statement.Span,
+        final_expr: Expr.Idx,
+        state: *InitState,
+        breaks: *std.ArrayList(InitState),
+        track_new_vars: bool,
+    ) Allocator.Error!bool {
+        const local_start = state.vars.items.len;
+        defer state.trimTo(local_start);
+
+        const break_start = breaks.items.len;
+        errdefer trimBreakStates(breaks, break_start, local_start);
+
+        for (self.can.env.store.sliceStatements(stmts)) |stmt_idx| {
+            if (!try self.analyzeStatement(stmt_idx, state, breaks, track_new_vars)) {
+                trimBreakStates(breaks, break_start, local_start);
+                return false;
+            }
+        }
+
+        const continues = try self.analyzeExpr(final_expr, state, breaks);
+        trimBreakStates(breaks, break_start, local_start);
+        return continues;
+    }
+
+    fn trimBreakStates(breaks: *std.ArrayList(InitState), start: usize, len: usize) void {
+        for (breaks.items[start..]) |*break_state| break_state.trimTo(len);
+    }
+
+    fn analyzeStatement(
+        self: *@This(),
+        stmt_idx: Statement.Idx,
+        state: *InitState,
+        breaks: *std.ArrayList(InitState),
+        track_new_vars: bool,
+    ) Allocator.Error!bool {
+        return switch (self.can.env.store.getStatement(stmt_idx)) {
+            .s_decl => |decl| try self.analyzeExpr(decl.expr, state, breaks),
+            .s_var => |var_| try self.analyzeExpr(var_.expr, state, breaks),
+            .s_var_uninitialized => |var_| blk: {
+                if (track_new_vars) try state.addUninitialized(self.allocator, var_.pattern_idx);
+                break :blk true;
+            },
+            .s_reassign => |reassign| blk: {
+                if (!try self.analyzeExpr(reassign.expr, state, breaks)) break :blk false;
+                try self.markAssignedPattern(state, reassign.pattern_idx);
+                break :blk true;
+            },
+            .s_dbg => |dbg| try self.analyzeExpr(dbg.expr, state, breaks),
+            .s_expr => |expr| try self.analyzeExpr(expr.expr, state, breaks),
+            .s_expect => |expect| try self.analyzeExpr(expect.body, state, breaks),
+            .s_for => |for_| try self.analyzeForLike(for_.expr, for_.body, state, breaks),
+            .s_while => |while_| try self.analyzeWhile(while_.cond, while_.body, state, breaks, .ordinary),
+            .s_infinite_loop => |loop| try self.analyzeWhile(loop.cond, loop.body, state, breaks, .infinite),
+            .s_breakable_loop => |loop| try self.analyzeWhile(loop.cond, loop.body, state, breaks, .breakable),
+            .s_return => |ret| blk: {
+                _ = try self.analyzeExpr(ret.expr, state, breaks);
+                break :blk false;
+            },
+            .s_break => blk: {
+                try breaks.append(self.allocator, try state.clone(self.allocator));
+                break :blk false;
+            },
+            .s_crash,
+            .s_runtime_error,
+            => false,
+            .s_import,
+            .s_alias_decl,
+            .s_nominal_decl,
+            .s_type_anno,
+            .s_type_var_alias,
+            => true,
+        };
+    }
+
+    const LoopKind = enum { ordinary, infinite, breakable };
+
+    fn analyzeWhile(
+        self: *@This(),
+        cond: Expr.Idx,
+        body: Expr.Idx,
+        state: *InitState,
+        breaks: *std.ArrayList(InitState),
+        kind: LoopKind,
+    ) Allocator.Error!bool {
+        const break_start = breaks.items.len;
+        if (!try self.analyzeExpr(cond, state, breaks)) {
+            self.consumeLoopBreaks(breaks, break_start);
+            return breaks.items.len > break_start;
+        }
+
+        var body_state = try state.clone(self.allocator);
+        defer body_state.deinit(self.allocator);
+        _ = try self.analyzeExpr(body, &body_state, breaks);
+
+        return switch (kind) {
+            .ordinary => blk: {
+                _ = try self.mergeLoopBreaksIntoState(state, breaks, break_start, true);
+                break :blk true;
+            },
+            .infinite => blk: {
+                self.consumeLoopBreaks(breaks, break_start);
+                break :blk false;
+            },
+            .breakable => blk: {
+                break :blk try self.mergeLoopBreaksIntoState(state, breaks, break_start, false);
+            },
+        };
+    }
+
+    fn analyzeForLike(
+        self: *@This(),
+        iter_expr: Expr.Idx,
+        body: Expr.Idx,
+        state: *InitState,
+        breaks: *std.ArrayList(InitState),
+    ) Allocator.Error!bool {
+        const break_start = breaks.items.len;
+        if (!try self.analyzeExpr(iter_expr, state, breaks)) {
+            self.consumeLoopBreaks(breaks, break_start);
+            return breaks.items.len > break_start;
+        }
+
+        var body_state = try state.clone(self.allocator);
+        defer body_state.deinit(self.allocator);
+        _ = try self.analyzeExpr(body, &body_state, breaks);
+        _ = try self.mergeLoopBreaksIntoState(state, breaks, break_start, true);
+        return true;
+    }
+
+    fn consumeLoopBreaks(self: *@This(), breaks: *std.ArrayList(InitState), start: usize) void {
+        for (breaks.items[start..]) |*break_state| break_state.deinit(self.allocator);
+        breaks.items.len = start;
+    }
+
+    fn mergeLoopBreaksIntoState(
+        self: *@This(),
+        state: *InitState,
+        breaks: *std.ArrayList(InitState),
+        start: usize,
+        include_current_state: bool,
+    ) Allocator.Error!bool {
+        var normal_states = std.ArrayList(InitState).empty;
+        defer self.deinitStates(&normal_states);
+
+        if (include_current_state) {
+            try normal_states.append(self.allocator, try state.clone(self.allocator));
+        }
+        for (breaks.items[start..]) |*break_state| {
+            try normal_states.append(self.allocator, try break_state.clone(self.allocator));
+        }
+        self.deinitBreakRange(breaks, start);
+
+        if (normal_states.items.len == 0) return false;
+        try self.mergeStatesInto(state, normal_states.items);
+        return true;
+    }
+
+    fn deinitBreakRange(self: *@This(), breaks: *std.ArrayList(InitState), start: usize) void {
+        for (breaks.items[start..]) |*break_state| break_state.deinit(self.allocator);
+        breaks.items.len = start;
+    }
+
+    fn analyzeExpr(
+        self: *@This(),
+        expr_idx: Expr.Idx,
+        state: *InitState,
+        breaks: *std.ArrayList(InitState),
+    ) Allocator.Error!bool {
+        return switch (self.can.env.store.getExpr(expr_idx)) {
+            .e_lookup_local => |lookup| blk: {
+                if (state.isTrackedUninitialized(lookup.pattern_idx)) {
+                    try self.reportUninitializedRead(expr_idx, lookup.pattern_idx);
+                }
+                break :blk true;
+            },
+            .e_lookup_external,
+            .e_lookup_required,
+            .e_num,
+            .e_frac_f32,
+            .e_frac_f64,
+            .e_dec,
+            .e_dec_small,
+            .e_num_from_numeral,
+            .e_typed_int,
+            .e_typed_frac,
+            .e_typed_num_from_numeral,
+            .e_str_segment,
+            .e_bytes_literal,
+            .e_empty_list,
+            .e_empty_record,
+            .e_zero_argument_tag,
+            .e_runtime_error,
+            .e_ellipsis,
+            .e_anno_only,
+            => true,
+            .e_str => |str| try self.analyzeExprSpan(str.span, state, breaks),
+            .e_list => |list| try self.analyzeExprSpan(list.elems, state, breaks),
+            .e_tuple => |tuple| try self.analyzeExprSpan(tuple.elems, state, breaks),
+            .e_tag => |tag| try self.analyzeExprSpan(tag.args, state, breaks),
+            .e_nominal => |nominal| try self.analyzeExpr(nominal.backing_expr, state, breaks),
+            .e_nominal_external => |nominal| try self.analyzeExpr(nominal.backing_expr, state, breaks),
+            .e_record => |record| blk: {
+                for (self.can.env.store.sliceRecordFields(record.fields)) |field_idx| {
+                    const field = self.can.env.store.getRecordField(field_idx);
+                    if (!try self.analyzeExpr(field.value, state, breaks)) break :blk false;
+                }
+                if (record.ext) |ext| {
+                    if (!try self.analyzeExpr(ext, state, breaks)) break :blk false;
+                }
+                break :blk true;
+            },
+            .e_call => |call| blk: {
+                if (!try self.analyzeExpr(call.func, state, breaks)) break :blk false;
+                break :blk try self.analyzeExprSpan(call.args, state, breaks);
+            },
+            .e_closure,
+            .e_lambda,
+            .e_hosted_lambda,
+            => true,
+            .e_binop => |binop| blk: {
+                if (binop.op == .@"and" or binop.op == .@"or") {
+                    if (!try self.analyzeExpr(binop.lhs, state, breaks)) break :blk false;
+                    var skipped_state = try state.clone(self.allocator);
+                    defer skipped_state.deinit(self.allocator);
+                    var rhs_state = try state.clone(self.allocator);
+                    defer rhs_state.deinit(self.allocator);
+                    const rhs_continues = try self.analyzeExpr(binop.rhs, &rhs_state, breaks);
+                    if (rhs_continues) {
+                        const states = [_]InitState{ skipped_state, rhs_state };
+                        try self.mergeStatesInto(state, &states);
+                    }
+                    break :blk true;
+                }
+                if (!try self.analyzeExpr(binop.lhs, state, breaks)) break :blk false;
+                break :blk try self.analyzeExpr(binop.rhs, state, breaks);
+            },
+            .e_unary_minus => |unary| try self.analyzeExpr(unary.expr, state, breaks),
+            .e_unary_not => |unary| try self.analyzeExpr(unary.expr, state, breaks),
+            .e_field_access => |field| try self.analyzeExpr(field.receiver, state, breaks),
+            .e_method_call => |call| blk: {
+                if (!try self.analyzeExpr(call.receiver, state, breaks)) break :blk false;
+                break :blk try self.analyzeExprSpan(call.args, state, breaks);
+            },
+            .e_dispatch_call => |call| blk: {
+                if (!try self.analyzeExpr(call.receiver, state, breaks)) break :blk false;
+                break :blk try self.analyzeExprSpan(call.args, state, breaks);
+            },
+            .e_interpolation => |interpolation| blk: {
+                if (!try self.analyzeExpr(interpolation.first, state, breaks)) break :blk false;
+                break :blk try self.analyzeExprSpan(interpolation.parts, state, breaks);
+            },
+            .e_structural_eq => |eq| blk: {
+                if (!try self.analyzeExpr(eq.lhs, state, breaks)) break :blk false;
+                break :blk try self.analyzeExpr(eq.rhs, state, breaks);
+            },
+            .e_method_eq => |eq| blk: {
+                if (!try self.analyzeExpr(eq.lhs, state, breaks)) break :blk false;
+                break :blk try self.analyzeExpr(eq.rhs, state, breaks);
+            },
+            .e_type_method_call => |call| try self.analyzeExprSpan(call.args, state, breaks),
+            .e_type_dispatch_call => |call| try self.analyzeExprSpan(call.args, state, breaks),
+            .e_tuple_access => |access| try self.analyzeExpr(access.tuple, state, breaks),
+            .e_block => |block| try self.analyzeBlock(block.stmts, block.final_expr, state, breaks, false),
+            .e_if => |if_| try self.analyzeIf(if_, state, breaks),
+            .e_match => |match| try self.analyzeMatch(match, state, breaks),
+            .e_crash => false,
+            .e_dbg => |dbg| try self.analyzeExpr(dbg.expr, state, breaks),
+            .e_expect_err => |expect_err| try self.analyzeExpr(expect_err.expr, state, breaks),
+            .e_expect => |expect| try self.analyzeExpr(expect.body, state, breaks),
+            .e_return => |ret| blk: {
+                _ = try self.analyzeExpr(ret.expr, state, breaks);
+                break :blk false;
+            },
+            .e_for => |for_| try self.analyzeForLike(for_.expr, for_.body, state, breaks),
+            .e_run_low_level => |run| try self.analyzeExprSpan(run.args, state, breaks),
+        };
+    }
+
+    fn analyzeExprSpan(self: *@This(), span: Expr.Span, state: *InitState, breaks: *std.ArrayList(InitState)) Allocator.Error!bool {
+        for (self.can.env.store.sliceExpr(span)) |child| {
+            if (!try self.analyzeExpr(child, state, breaks)) return false;
+        }
+        return true;
+    }
+
+    fn analyzeIf(
+        self: *@This(),
+        if_: std.meta.fieldInfo(Expr, .e_if).type,
+        state: *InitState,
+        breaks: *std.ArrayList(InitState),
+    ) Allocator.Error!bool {
+        var normal_states = std.ArrayList(InitState).empty;
+        defer self.deinitStates(&normal_states);
+
+        for (self.can.env.store.sliceIfBranches(if_.branches)) |branch_idx| {
+            const branch = self.can.env.store.getIfBranch(branch_idx);
+            var branch_state = try state.clone(self.allocator);
+            errdefer branch_state.deinit(self.allocator);
+            if (try self.analyzeExpr(branch.cond, &branch_state, breaks)) {
+                if (try self.analyzeExpr(branch.body, &branch_state, breaks)) {
+                    try normal_states.append(self.allocator, branch_state);
+                    continue;
+                }
+            }
+            branch_state.deinit(self.allocator);
+        }
+
+        var else_state = try state.clone(self.allocator);
+        errdefer else_state.deinit(self.allocator);
+        if (try self.analyzeExpr(if_.final_else, &else_state, breaks)) {
+            try normal_states.append(self.allocator, else_state);
+        } else {
+            else_state.deinit(self.allocator);
+        }
+
+        if (normal_states.items.len == 0) return false;
+        try self.mergeStatesInto(state, normal_states.items);
+        return true;
+    }
+
+    fn analyzeMatch(
+        self: *@This(),
+        match: Expr.Match,
+        state: *InitState,
+        breaks: *std.ArrayList(InitState),
+    ) Allocator.Error!bool {
+        if (!try self.analyzeExpr(match.cond, state, breaks)) return false;
+
+        var normal_states = std.ArrayList(InitState).empty;
+        defer self.deinitStates(&normal_states);
+
+        for (self.can.env.store.sliceMatchBranches(match.branches)) |branch_idx| {
+            const branch = self.can.env.store.getMatchBranch(branch_idx);
+            var branch_state = try state.clone(self.allocator);
+            errdefer branch_state.deinit(self.allocator);
+            if (branch.guard) |guard| {
+                if (!try self.analyzeExpr(guard, &branch_state, breaks)) {
+                    branch_state.deinit(self.allocator);
+                    continue;
+                }
+            }
+            if (try self.analyzeExpr(branch.value, &branch_state, breaks)) {
+                try normal_states.append(self.allocator, branch_state);
+            } else {
+                branch_state.deinit(self.allocator);
+            }
+        }
+
+        if (normal_states.items.len == 0) return false;
+        try self.mergeStatesInto(state, normal_states.items);
+        return true;
+    }
+
+    fn mergeStatesInto(self: *@This(), state: *InitState, states: []const InitState) Allocator.Error!void {
+        const merged = try self.mergeStateCopies(states);
+        state.deinit(self.allocator);
+        state.* = merged;
+    }
+
+    fn mergeStateCopies(self: *@This(), states: []const InitState) Allocator.Error!InitState {
+        std.debug.assert(states.len > 0);
+        var result = try states[0].clone(self.allocator);
+        errdefer result.deinit(self.allocator);
+
+        for (result.vars.items) |*entry| {
+            for (states[1..]) |*other| {
+                const other_idx = other.indexOf(entry.pattern) orelse {
+                    entry.initialized = false;
+                    continue;
+                };
+                entry.initialized = entry.initialized and other.vars.items[other_idx].initialized;
+            }
+        }
+
+        return result;
+    }
+
+    fn markAssignedPattern(self: *@This(), state: *InitState, pattern_idx: Pattern.Idx) Allocator.Error!void {
+        var stack_allocator_state = std.heap.stackFallback(1024, self.allocator);
+        const stack_allocator = stack_allocator_state.get();
+        var pending: std.ArrayList(Pattern.Idx) = .empty;
+        defer pending.deinit(stack_allocator);
+
+        try pending.append(stack_allocator, pattern_idx);
+        while (pending.pop()) |current_idx| {
+            const pattern = self.can.env.store.getPattern(current_idx);
+            switch (pattern) {
+                .assign => state.markInitialized(current_idx),
+                .as => |as| {
+                    state.markInitialized(current_idx);
+                    try pending.append(stack_allocator, as.pattern);
+                },
+                .applied_tag => |tag| {
+                    for (self.can.env.store.slicePatterns(tag.args)) |child| try pending.append(stack_allocator, child);
+                },
+                .nominal => |nominal| try pending.append(stack_allocator, nominal.backing_pattern),
+                .nominal_external => |nominal| try pending.append(stack_allocator, nominal.backing_pattern),
+                .record_destructure => |record| {
+                    for (self.can.env.store.sliceRecordDestructs(record.destructs)) |destruct_idx| {
+                        const destruct = self.can.env.store.getRecordDestruct(destruct_idx);
+                        try pending.append(stack_allocator, destruct.kind.toPatternIdx());
+                    }
+                },
+                .list => |list| {
+                    for (self.can.env.store.slicePatterns(list.patterns)) |child| try pending.append(stack_allocator, child);
+                    if (list.rest_info) |rest| if (rest.pattern) |child| try pending.append(stack_allocator, child);
+                },
+                .tuple => |tuple| {
+                    for (self.can.env.store.slicePatterns(tuple.patterns)) |child| try pending.append(stack_allocator, child);
+                },
+                .num_literal,
+                .small_dec_literal,
+                .dec_literal,
+                .frac_f32_literal,
+                .frac_f64_literal,
+                .str_literal,
+                .underscore,
+                .runtime_error,
+                => {},
+            }
+        }
+    }
+
+    fn reportUninitializedRead(self: *@This(), expr_idx: Expr.Idx, pattern_idx: Pattern.Idx) Allocator.Error!void {
+        const ident = self.can.boundPatternIdent(pattern_idx) orelse return;
+        const region = self.can.env.store.getExprRegion(expr_idx);
+        try self.can.env.replaceExprWithRuntimeError(expr_idx, Diagnostic{ .read_uninitialized_var = .{
+            .ident = ident,
+            .region = region,
+        } });
+    }
+};
 
 fn createBlockAnnoOnlyStatement(
     self: *Self,
@@ -7839,7 +8354,8 @@ fn canonicalizeStandaloneVarStatement(
         };
     };
 
-    const expr = try self.canonicalizeExprOrMalformed(var_stmt.body);
+    const body = var_stmt.body orelse return try self.createUninitializedVarStatement(var_name, annotation, region);
+    const expr = try self.canonicalizeExprOrMalformed(body);
     const pattern_idx = try self.env.addPattern(Pattern{ .assign = .{ .ident = var_name } }, region);
     _ = try self.scopeIntroduceVar(var_name, pattern_idx, region, true, Pattern.Idx);
     const stmt_idx = try self.env.addStatement(Statement{ .s_var = .{
@@ -7848,6 +8364,21 @@ fn canonicalizeStandaloneVarStatement(
         .anno = annotation,
     } }, region);
     return CanonicalizedStatement{ .idx = stmt_idx, .free_vars = expr.free_vars };
+}
+
+fn createUninitializedVarStatement(
+    self: *Self,
+    var_name: Ident.Idx,
+    annotation: ?Annotation.Idx,
+    region: Region,
+) std.mem.Allocator.Error!CanonicalizedStatement {
+    const pattern_idx = try self.env.addPattern(Pattern{ .assign = .{ .ident = var_name } }, region);
+    _ = try self.scopeIntroduceVar(var_name, pattern_idx, region, true, Pattern.Idx);
+    const stmt_idx = try self.env.addStatement(Statement{ .s_var_uninitialized = .{
+        .pattern_idx = pattern_idx,
+        .anno = annotation,
+    } }, region);
+    return CanonicalizedStatement{ .idx = stmt_idx, .free_vars = DataSpan.empty() };
 }
 
 fn canonicalizeStandaloneCrashStatement(
@@ -7922,6 +8453,14 @@ fn canonicalizeStandaloneTypeAnnoStatement(
         break :inner_blk try self.env.store.whereClauseSpanFrom(where_start);
     } else null;
 
+    if (type_anno.is_var) {
+        const annotation_idx = try self.env.addAnnotation(CIR.Annotation{
+            .anno = type_anno_idx,
+            .where = where_clauses,
+        }, region);
+        return try self.createUninitializedVarStatement(name_ident, annotation_idx, region);
+    }
+
     return try self.createBlockAnnoOnlyStatement(name_ident, type_anno_idx, where_clauses, region);
 }
 
@@ -7959,11 +8498,331 @@ fn canonicalizeStandaloneWhileStatement(
     }
     const free_vars = self.scratch_free_vars.spanFrom(free_vars_start);
 
-    const stmt_idx = try self.env.addStatement(Statement{ .s_while = .{
-        .cond = cond.idx,
-        .body = body.idx,
-    } }, region);
+    const stmt_idx = try self.addClassifiedWhileStatement(cond.idx, body.idx, region);
     return CanonicalizedStatement{ .idx = stmt_idx, .free_vars = free_vars };
+}
+
+const LoopExitFacts = struct {
+    has_loop_owned_break: bool = false,
+    has_exit: bool = false,
+};
+
+const LoopScanFrame = union(enum) {
+    expr: struct {
+        idx: Expr.Idx,
+        loop_depth: u32,
+    },
+    stmt: struct {
+        idx: Statement.Idx,
+        loop_depth: u32,
+    },
+};
+
+fn addClassifiedWhileStatement(
+    self: *Self,
+    cond: Expr.Idx,
+    body: Expr.Idx,
+    region: Region,
+) std.mem.Allocator.Error!Statement.Idx {
+    const stmt = try self.classifyWhileStatement(cond, body, region);
+    return try self.env.addStatement(stmt, region);
+}
+
+fn classifyWhileStatement(
+    self: *Self,
+    cond: Expr.Idx,
+    body: Expr.Idx,
+    region: Region,
+) std.mem.Allocator.Error!Statement {
+    if (!self.isInfiniteLoopCondition(cond)) {
+        return Statement{ .s_while = .{ .cond = cond, .body = body } };
+    }
+
+    const facts = try self.scanLoopExitFacts(body);
+    if (facts.has_loop_owned_break) {
+        return Statement{ .s_breakable_loop = .{ .cond = cond, .body = body } };
+    }
+
+    if (!facts.has_exit) {
+        try self.env.pushDiagnostic(.{ .infinite_loop_never_exits = .{ .region = region } });
+    }
+
+    return Statement{ .s_infinite_loop = .{ .cond = cond, .body = body } };
+}
+
+fn isInfiniteLoopCondition(self: *const Self, expr_idx: Expr.Idx) bool {
+    return switch (self.env.store.getExpr(expr_idx)) {
+        .e_block => |block| blk: {
+            if (self.env.store.sliceStatements(block.stmts).len != 0) break :blk false;
+            break :blk self.isInfiniteLoopCondition(block.final_expr);
+        },
+        .e_tag => self.exprIsBareTrueTag(expr_idx),
+        .e_nominal => |nominal| nominal.backing_type == .tag and
+            self.isBuiltinBoolLocalNominal(nominal.nominal_type_decl) and
+            self.exprIsBareTrueTag(nominal.backing_expr),
+        .e_nominal_external => |nominal| nominal.backing_type == .tag and
+            self.isBuiltinBoolExternalNominal(nominal.module_idx, nominal.target_node_idx) and
+            self.exprIsBareTrueTag(nominal.backing_expr),
+        else => false,
+    };
+}
+
+fn exprIsBareTrueTag(self: *const Self, expr_idx: Expr.Idx) bool {
+    return switch (self.env.store.getExpr(expr_idx)) {
+        .e_tag => |tag| tag.name.eql(self.env.idents.true_tag) and tag.args.span.len == 0,
+        else => false,
+    };
+}
+
+fn isBuiltinBoolLocalNominal(self: *const Self, nominal_type_decl: Statement.Idx) bool {
+    if (self.env.module_role != .builtin) return false;
+
+    return switch (self.env.store.getStatement(nominal_type_decl)) {
+        .s_nominal_decl => |decl| self.env.store.getTypeHeader(decl.header).name.eql(self.env.idents.bool),
+        else => false,
+    };
+}
+
+fn isBuiltinBoolExternalNominal(self: *const Self, module_idx: Import.Idx, target_node_idx: u32) bool {
+    const bool_info = self.builtin_auto_imported_types.get(self.env.idents.bool) orelse return false;
+    const bool_stmt_idx = bool_info.statement_idx orelse return false;
+    const bool_target_node_idx = bool_info.env.getExposedNodeIndexByStatementIdx(bool_stmt_idx) orelse return false;
+    if (target_node_idx != bool_target_node_idx) return false;
+
+    const module_idx_int = @intFromEnum(module_idx);
+    if (module_idx_int >= self.env.imports.imports.items.items.len) return false;
+
+    const string_lit_idx = self.env.imports.imports.items.items[module_idx_int];
+    const module_name = self.env.common.strings.get(string_lit_idx);
+    if (bool_info.env.module_role == .builtin) {
+        return std.mem.eql(u8, module_name, "Builtin") or CIR.Import.isCompilerBuiltinImportName(module_name);
+    }
+
+    return std.mem.eql(u8, module_name, bool_info.env.module_name);
+}
+
+fn scanLoopExitFacts(self: *Self, body: Expr.Idx) std.mem.Allocator.Error!LoopExitFacts {
+    var stack_allocator_state = std.heap.stackFallback(4096, self.env.gpa);
+    const stack_allocator = stack_allocator_state.get();
+    var pending: std.ArrayList(LoopScanFrame) = .empty;
+    defer pending.deinit(stack_allocator);
+
+    var facts = LoopExitFacts{};
+    try pending.append(stack_allocator, .{ .expr = .{ .idx = body, .loop_depth = 0 } });
+
+    while (pending.pop()) |frame| {
+        switch (frame) {
+            .expr => |expr_frame| {
+                const expr = self.env.store.getExpr(expr_frame.idx);
+                switch (expr) {
+                    .e_block => |block| {
+                        try pending.append(stack_allocator, .{ .expr = .{ .idx = block.final_expr, .loop_depth = expr_frame.loop_depth } });
+                        for (self.env.store.sliceStatements(block.stmts)) |stmt_idx| {
+                            try pending.append(stack_allocator, .{ .stmt = .{ .idx = stmt_idx, .loop_depth = expr_frame.loop_depth } });
+                        }
+                    },
+                    .e_if => |if_expr| {
+                        try pending.append(stack_allocator, .{ .expr = .{ .idx = if_expr.final_else, .loop_depth = expr_frame.loop_depth } });
+                        for (self.env.store.sliceIfBranches(if_expr.branches)) |branch_idx| {
+                            const branch = self.env.store.getIfBranch(branch_idx);
+                            try pending.append(stack_allocator, .{ .expr = .{ .idx = branch.body, .loop_depth = expr_frame.loop_depth } });
+                            try pending.append(stack_allocator, .{ .expr = .{ .idx = branch.cond, .loop_depth = expr_frame.loop_depth } });
+                        }
+                    },
+                    .e_match => |match_expr| {
+                        try pending.append(stack_allocator, .{ .expr = .{ .idx = match_expr.cond, .loop_depth = expr_frame.loop_depth } });
+                        for (self.env.store.sliceMatchBranches(match_expr.branches)) |branch_idx| {
+                            const branch = self.env.store.getMatchBranch(branch_idx);
+                            if (branch.guard) |guard| {
+                                try pending.append(stack_allocator, .{ .expr = .{ .idx = guard, .loop_depth = expr_frame.loop_depth } });
+                            }
+                            try pending.append(stack_allocator, .{ .expr = .{ .idx = branch.value, .loop_depth = expr_frame.loop_depth } });
+                        }
+                    },
+                    .e_call => |call| {
+                        try pending.append(stack_allocator, .{ .expr = .{ .idx = call.func, .loop_depth = expr_frame.loop_depth } });
+                        for (self.env.store.sliceExpr(call.args)) |arg| {
+                            try pending.append(stack_allocator, .{ .expr = .{ .idx = arg, .loop_depth = expr_frame.loop_depth } });
+                        }
+                    },
+                    .e_binop => |binop| {
+                        try pending.append(stack_allocator, .{ .expr = .{ .idx = binop.lhs, .loop_depth = expr_frame.loop_depth } });
+                        try pending.append(stack_allocator, .{ .expr = .{ .idx = binop.rhs, .loop_depth = expr_frame.loop_depth } });
+                    },
+                    .e_unary_minus => |unary| try pending.append(stack_allocator, .{ .expr = .{ .idx = unary.expr, .loop_depth = expr_frame.loop_depth } }),
+                    .e_unary_not => |unary| try pending.append(stack_allocator, .{ .expr = .{ .idx = unary.expr, .loop_depth = expr_frame.loop_depth } }),
+                    .e_field_access => |field| try pending.append(stack_allocator, .{ .expr = .{ .idx = field.receiver, .loop_depth = expr_frame.loop_depth } }),
+                    .e_method_call => |call| {
+                        try pending.append(stack_allocator, .{ .expr = .{ .idx = call.receiver, .loop_depth = expr_frame.loop_depth } });
+                        for (self.env.store.sliceExpr(call.args)) |arg| {
+                            try pending.append(stack_allocator, .{ .expr = .{ .idx = arg, .loop_depth = expr_frame.loop_depth } });
+                        }
+                    },
+                    .e_dispatch_call => |call| {
+                        try pending.append(stack_allocator, .{ .expr = .{ .idx = call.receiver, .loop_depth = expr_frame.loop_depth } });
+                        for (self.env.store.sliceExpr(call.args)) |arg| {
+                            try pending.append(stack_allocator, .{ .expr = .{ .idx = arg, .loop_depth = expr_frame.loop_depth } });
+                        }
+                    },
+                    .e_interpolation => |interpolation| {
+                        try pending.append(stack_allocator, .{ .expr = .{ .idx = interpolation.first, .loop_depth = expr_frame.loop_depth } });
+                        for (self.env.store.sliceExpr(interpolation.parts)) |part| {
+                            try pending.append(stack_allocator, .{ .expr = .{ .idx = part, .loop_depth = expr_frame.loop_depth } });
+                        }
+                    },
+                    .e_structural_eq => |eq| {
+                        try pending.append(stack_allocator, .{ .expr = .{ .idx = eq.lhs, .loop_depth = expr_frame.loop_depth } });
+                        try pending.append(stack_allocator, .{ .expr = .{ .idx = eq.rhs, .loop_depth = expr_frame.loop_depth } });
+                    },
+                    .e_method_eq => |eq| {
+                        try pending.append(stack_allocator, .{ .expr = .{ .idx = eq.lhs, .loop_depth = expr_frame.loop_depth } });
+                        try pending.append(stack_allocator, .{ .expr = .{ .idx = eq.rhs, .loop_depth = expr_frame.loop_depth } });
+                    },
+                    .e_type_method_call => |call| {
+                        for (self.env.store.sliceExpr(call.args)) |arg| {
+                            try pending.append(stack_allocator, .{ .expr = .{ .idx = arg, .loop_depth = expr_frame.loop_depth } });
+                        }
+                    },
+                    .e_type_dispatch_call => |call| {
+                        for (self.env.store.sliceExpr(call.args)) |arg| {
+                            try pending.append(stack_allocator, .{ .expr = .{ .idx = arg, .loop_depth = expr_frame.loop_depth } });
+                        }
+                    },
+                    .e_tuple_access => |access| try pending.append(stack_allocator, .{ .expr = .{ .idx = access.tuple, .loop_depth = expr_frame.loop_depth } }),
+                    .e_list => |list| {
+                        for (self.env.store.sliceExpr(list.elems)) |elem| {
+                            try pending.append(stack_allocator, .{ .expr = .{ .idx = elem, .loop_depth = expr_frame.loop_depth } });
+                        }
+                    },
+                    .e_tuple => |tuple| {
+                        for (self.env.store.sliceExpr(tuple.elems)) |elem| {
+                            try pending.append(stack_allocator, .{ .expr = .{ .idx = elem, .loop_depth = expr_frame.loop_depth } });
+                        }
+                    },
+                    .e_record => |record| {
+                        if (record.ext) |ext| {
+                            try pending.append(stack_allocator, .{ .expr = .{ .idx = ext, .loop_depth = expr_frame.loop_depth } });
+                        }
+                        for (self.env.store.sliceRecordFields(record.fields)) |field_idx| {
+                            const field = self.env.store.getRecordField(field_idx);
+                            try pending.append(stack_allocator, .{ .expr = .{ .idx = field.value, .loop_depth = expr_frame.loop_depth } });
+                        }
+                    },
+                    .e_str => |str| {
+                        for (self.env.store.sliceExpr(str.span)) |segment| {
+                            try pending.append(stack_allocator, .{ .expr = .{ .idx = segment, .loop_depth = expr_frame.loop_depth } });
+                        }
+                    },
+                    .e_tag => |tag| {
+                        for (self.env.store.sliceExpr(tag.args)) |arg| {
+                            try pending.append(stack_allocator, .{ .expr = .{ .idx = arg, .loop_depth = expr_frame.loop_depth } });
+                        }
+                    },
+                    .e_nominal => |nominal| try pending.append(stack_allocator, .{ .expr = .{ .idx = nominal.backing_expr, .loop_depth = expr_frame.loop_depth } }),
+                    .e_nominal_external => |nominal| try pending.append(stack_allocator, .{ .expr = .{ .idx = nominal.backing_expr, .loop_depth = expr_frame.loop_depth } }),
+                    .e_dbg => |dbg| try pending.append(stack_allocator, .{ .expr = .{ .idx = dbg.expr, .loop_depth = expr_frame.loop_depth } }),
+                    .e_expect => |expect| try pending.append(stack_allocator, .{ .expr = .{ .idx = expect.body, .loop_depth = expr_frame.loop_depth } }),
+                    .e_expect_err => |expect_err| {
+                        try pending.append(stack_allocator, .{ .expr = .{ .idx = expect_err.expr, .loop_depth = expr_frame.loop_depth } });
+                    },
+                    .e_return => |ret| {
+                        if (self.enclosing_lambda == null or ret.lambda == self.enclosing_lambda.?) {
+                            facts.has_exit = true;
+                        }
+                        try pending.append(stack_allocator, .{ .expr = .{ .idx = ret.expr, .loop_depth = expr_frame.loop_depth } });
+                    },
+                    .e_crash => {
+                        facts.has_exit = true;
+                    },
+                    .e_for => |for_expr| {
+                        try pending.append(stack_allocator, .{ .expr = .{ .idx = for_expr.expr, .loop_depth = expr_frame.loop_depth } });
+                        try pending.append(stack_allocator, .{ .expr = .{ .idx = for_expr.body, .loop_depth = expr_frame.loop_depth + 1 } });
+                    },
+                    .e_run_low_level => |run_low_level| {
+                        for (self.env.store.sliceExpr(run_low_level.args)) |arg| {
+                            try pending.append(stack_allocator, .{ .expr = .{ .idx = arg, .loop_depth = expr_frame.loop_depth } });
+                        }
+                    },
+                    .e_lambda,
+                    .e_closure,
+                    .e_hosted_lambda,
+                    .e_num,
+                    .e_frac_f32,
+                    .e_frac_f64,
+                    .e_dec,
+                    .e_dec_small,
+                    .e_num_from_numeral,
+                    .e_typed_int,
+                    .e_typed_frac,
+                    .e_typed_num_from_numeral,
+                    .e_str_segment,
+                    .e_bytes_literal,
+                    .e_lookup_local,
+                    .e_lookup_external,
+                    .e_lookup_required,
+                    .e_empty_list,
+                    .e_empty_record,
+                    .e_zero_argument_tag,
+                    .e_runtime_error,
+                    .e_ellipsis,
+                    .e_anno_only,
+                    => {},
+                }
+            },
+            .stmt => |stmt_frame| {
+                const stmt = self.env.store.getStatement(stmt_frame.idx);
+                switch (stmt) {
+                    .s_decl => |decl| try pending.append(stack_allocator, .{ .expr = .{ .idx = decl.expr, .loop_depth = stmt_frame.loop_depth } }),
+                    .s_var => |var_stmt| try pending.append(stack_allocator, .{ .expr = .{ .idx = var_stmt.expr, .loop_depth = stmt_frame.loop_depth } }),
+                    .s_var_uninitialized => {},
+                    .s_reassign => |reassign| try pending.append(stack_allocator, .{ .expr = .{ .idx = reassign.expr, .loop_depth = stmt_frame.loop_depth } }),
+                    .s_dbg => |dbg| try pending.append(stack_allocator, .{ .expr = .{ .idx = dbg.expr, .loop_depth = stmt_frame.loop_depth } }),
+                    .s_expr => |expr_stmt| try pending.append(stack_allocator, .{ .expr = .{ .idx = expr_stmt.expr, .loop_depth = stmt_frame.loop_depth } }),
+                    .s_expect => |expect| try pending.append(stack_allocator, .{ .expr = .{ .idx = expect.body, .loop_depth = stmt_frame.loop_depth } }),
+                    .s_for => |for_stmt| {
+                        try pending.append(stack_allocator, .{ .expr = .{ .idx = for_stmt.expr, .loop_depth = stmt_frame.loop_depth } });
+                        try pending.append(stack_allocator, .{ .expr = .{ .idx = for_stmt.body, .loop_depth = stmt_frame.loop_depth + 1 } });
+                    },
+                    .s_while => |while_stmt| {
+                        try pending.append(stack_allocator, .{ .expr = .{ .idx = while_stmt.cond, .loop_depth = stmt_frame.loop_depth } });
+                        try pending.append(stack_allocator, .{ .expr = .{ .idx = while_stmt.body, .loop_depth = stmt_frame.loop_depth + 1 } });
+                    },
+                    .s_infinite_loop => |loop_stmt| {
+                        try pending.append(stack_allocator, .{ .expr = .{ .idx = loop_stmt.cond, .loop_depth = stmt_frame.loop_depth } });
+                        try pending.append(stack_allocator, .{ .expr = .{ .idx = loop_stmt.body, .loop_depth = stmt_frame.loop_depth + 1 } });
+                    },
+                    .s_breakable_loop => |loop_stmt| {
+                        try pending.append(stack_allocator, .{ .expr = .{ .idx = loop_stmt.cond, .loop_depth = stmt_frame.loop_depth } });
+                        try pending.append(stack_allocator, .{ .expr = .{ .idx = loop_stmt.body, .loop_depth = stmt_frame.loop_depth + 1 } });
+                    },
+                    .s_crash => {
+                        facts.has_exit = true;
+                    },
+                    .s_return => |ret| {
+                        if (self.enclosing_lambda == null or ret.lambda == self.enclosing_lambda.?) {
+                            facts.has_exit = true;
+                        }
+                        try pending.append(stack_allocator, .{ .expr = .{ .idx = ret.expr, .loop_depth = stmt_frame.loop_depth } });
+                    },
+                    .s_break => {
+                        if (stmt_frame.loop_depth == 0) {
+                            facts.has_loop_owned_break = true;
+                            return facts;
+                        }
+                    },
+                    .s_import,
+                    .s_alias_decl,
+                    .s_nominal_decl,
+                    .s_type_anno,
+                    .s_type_var_alias,
+                    .s_runtime_error,
+                    => {},
+                }
+            },
+        }
+    }
+
+    return facts;
 }
 
 fn canonicalizeStandaloneForStatement(
@@ -9247,16 +10106,23 @@ fn runExprKernel(
                         break :blk;
                     };
 
+                    const ast_expr = v.body orelse {
+                        const stmt = try self.createUninitializedVarStatement(var_name, null, region);
+                        try self.addBlockStatement(blockContextFromState(work), stmt);
+                        try stacks.pushBlockNext(frame_allocator, .{ .block = work, .next = next });
+                        break :blk;
+                    };
+
                     try stacks.pushFinishBlockVarStmt(frame_allocator, .{
                         .block = work,
                         .next = next,
                         .region = region,
                         .var_name = var_name,
                         .annotation = null,
-                        .ast_expr = v.body,
+                        .ast_expr = ast_expr,
                         .type_var_scope = null,
                     });
-                    try stacks.pushParse(frame_allocator, .{ .idx = v.body, .target = .scratch });
+                    try stacks.pushParse(frame_allocator, .{ .idx = ast_expr, .target = .scratch });
                 },
                 .expr => |expr_stmt| {
                     try stacks.pushFinishBlockExprStmt(frame_allocator, .{
@@ -9415,16 +10281,23 @@ fn runExprKernel(
                                     }, region);
 
                                     keep_type_var_scope_for_body = true;
+                                    const ast_expr = var_stmt.body orelse {
+                                        defer self.scopeExitTypeVar(type_var_scope);
+                                        const stmt = try self.createUninitializedVarStatement(name_ident, annotation_idx, var_region);
+                                        try self.addBlockStatement(blockContextFromState(work), stmt);
+                                        try stacks.pushBlockNext(frame_allocator, .{ .block = work, .next = next_i + 1 });
+                                        break :type_anno_blk;
+                                    };
                                     try stacks.pushFinishBlockVarStmt(frame_allocator, .{
                                         .block = work,
                                         .next = next_i + 1,
                                         .region = var_region,
                                         .var_name = name_ident,
                                         .annotation = annotation_idx,
-                                        .ast_expr = var_stmt.body,
+                                        .ast_expr = ast_expr,
                                         .type_var_scope = type_var_scope,
                                     });
-                                    try stacks.pushParse(frame_allocator, .{ .idx = var_stmt.body, .target = .scratch });
+                                    try stacks.pushParse(frame_allocator, .{ .idx = ast_expr, .target = .scratch });
                                     break :type_anno_blk;
                                 }
                             },
@@ -9432,7 +10305,13 @@ fn runExprKernel(
                         }
                     }
 
-                    const stmt = try self.createBlockAnnoOnlyStatement(name_ident, type_anno_idx, where_clauses, region);
+                    const stmt = if (ta.is_var) blk: {
+                        const annotation_idx = try self.env.addAnnotation(CIR.Annotation{
+                            .anno = type_anno_idx,
+                            .where = where_clauses,
+                        }, region);
+                        break :blk try self.createUninitializedVarStatement(name_ident, annotation_idx, region);
+                    } else try self.createBlockAnnoOnlyStatement(name_ident, type_anno_idx, where_clauses, region);
                     try self.addBlockStatement(blockContextFromState(work), stmt);
                     try stacks.pushBlockNext(frame_allocator, .{ .block = work, .next = next });
                 },
@@ -9721,12 +10600,7 @@ fn runExprKernel(
             }
             const free_vars = self.scratch_free_vars.spanFrom(free_vars_start);
 
-            const stmt_idx = try self.env.addStatement(Statement{
-                .s_while = .{
-                    .cond = state.cond.idx,
-                    .body = body.idx,
-                },
-            }, state.region);
+            const stmt_idx = try self.addClassifiedWhileStatement(state.cond.idx, body.idx, state.region);
             try self.addBlockStatement(blockContextFromState(state.block), CanonicalizedStatement{ .idx = stmt_idx, .free_vars = free_vars });
             child_slots.shrinkRetainingCapacity(state.block.result_start);
             try stacks.pushBlockNext(frame_allocator, .{ .block = state.block, .next = state.next });
@@ -16715,6 +17589,7 @@ fn addBlockStatement(
     switch (cir_stmt) {
         .s_decl => |decl| try self.collectBoundVarsToScratch(decl.pattern),
         .s_var => |var_stmt| try self.collectBoundVarsToScratch(var_stmt.pattern_idx),
+        .s_var_uninitialized => |var_stmt| try self.collectBoundVarsToScratch(var_stmt.pattern_idx),
         .s_reassign => |reassign| try self.collectReassignBoundVarsToScratch(reassign.pattern_idx),
         else => {},
     }

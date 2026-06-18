@@ -40,6 +40,10 @@ pub const Diagnostic = union(enum) {
         ident: Ident.Idx,
         region: Region,
     },
+    read_uninitialized_var: struct {
+        ident: Ident.Idx,
+        region: Region,
+    },
     /// A non-function value is defined in terms of itself, which would cause an infinite loop.
     /// For example: `a = a` or `a = [a, b]`. Only functions can reference themselves (for recursion).
     self_referential_definition: struct {
@@ -327,6 +331,9 @@ pub const Diagnostic = union(enum) {
     break_outside_loop: struct {
         region: Region,
     },
+    infinite_loop_never_exits: struct {
+        region: Region,
+    },
     return_outside_fn: struct {
         region: Region,
         context: ReturnContext,
@@ -434,6 +441,7 @@ pub const Diagnostic = union(enum) {
             .type_var_starting_with_dollar => |d| d.region,
             .underscore_in_type_declaration => |d| d.region,
             .break_outside_loop => |d| d.region,
+            .infinite_loop_never_exits => |d| d.region,
             .return_outside_fn => |d| d.region,
             .mutually_recursive_type_aliases => |d| d.region,
             .deprecated_number_suffix => |d| d.region,
