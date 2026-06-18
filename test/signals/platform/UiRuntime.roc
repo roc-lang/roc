@@ -62,26 +62,12 @@ UiRuntime := [].{
 		BindCheck({ id : U64, event : U64 }),
 	]
 
-	CommandSnapshot : {
-		kind : U64,
-		a : U64,
-		b : U64,
-		value_bool : Bool,
-		value_bytes : List(U8),
-	}
-
-	StructuralLookup := [
-		FoundStructural({ index : U64, snapshot : CommandSnapshot }),
-		NoStructuralSnapshot,
-	]
-
 	Runtime : {
 		root : Elem,
 		states : List(StateSlot),
 		event_ids : List(EventId),
 		event_keys_by_id : List(Str),
 		next_event_id : U64,
-		previous_commands : List(CommandSnapshot),
 		signal_cache : List(SignalCacheEntry),
 		event_state_deps : List(EventStateDeps),
 		metrics : RuntimeMetrics,
@@ -199,14 +185,13 @@ UiRuntime := [].{
 			event_ids: [],
 			event_keys_by_id: [],
 			next_event_id: 1,
-			previous_commands: [],
 			signal_cache: [],
 			event_state_deps: [],
 			metrics: zero_metrics,
 		}
 		registered = register_elem(runtime0, root)
 		runtime = { ..registered.runtime, root: registered.elem }
-		rendered = render_runtime(runtime, NoEvent, { indexes: [] }, True)
+		rendered = render_runtime(runtime, NoEvent, { indexes: [] })
 		runtime_box = Box.box(rendered.runtime)
 		result = {
 			runtime: runtime_box,
@@ -228,7 +213,7 @@ UiRuntime := [].{
 				retained_graph_dispatches: metrics.retained_graph_dispatches + 1,
 			}
 		}
-		rendered = render_runtime(runtime1, active_event, dirty_states, False)
+		rendered = render_runtime(runtime1, active_event, dirty_states)
 		{
 			runtime: Box.box(rendered.runtime),
 			commands: rendered.emit_commands,
@@ -564,8 +549,8 @@ UiRuntime := [].{
 		}
 	}
 
-	render_runtime : Runtime, ActiveEvent, DirtyStates, Bool -> RenderResult
-	render_runtime = |runtime, active_event, dirty_states, force_full| {
+	render_runtime : Runtime, ActiveEvent, DirtyStates -> RenderResult
+	render_runtime = |runtime, active_event, dirty_states| {
 		state = {
 			runtime,
 			active_event,
@@ -578,182 +563,9 @@ UiRuntime := [].{
 			next_elem_id: 1,
 		}
 		rendered = render_elem(render_state, runtime.root, 0)
-		full_commands = rendered.commands
-		previous_snapshots = rendered.state.runtime.previous_commands
-		next_snapshots = command_snapshots(full_commands)
-		full_batch = force_full or !(same_structure(previous_snapshots, next_snapshots))
-		emit_commands =
-			if full_batch {
-				full_commands
-			} else {
-				diff_non_structural(previous_snapshots, full_commands)
-			}
-		metrics0 = rendered.state.runtime.metrics
-		metrics1 =
-			if full_batch {
-				{ ..metrics0,
-					commands_emitted: metrics0.commands_emitted + List.len(emit_commands),
-					full_render_batches: metrics0.full_render_batches + 1,
-					structural_resets: metrics0.structural_resets + 1,
-				}
-			} else {
-				{ ..metrics0,
-					commands_emitted: metrics0.commands_emitted + List.len(emit_commands),
-					incremental_batches: metrics0.incremental_batches + 1,
-				}
-		}
 		{
-			runtime: { ..rendered.state.runtime, previous_commands: next_snapshots, metrics: metrics1 },
-			emit_commands,
-		}
-	}
-
-	command_snapshots : List(Command) -> List(CommandSnapshot)
-	command_snapshots = |commands| {
-		List.map(commands, command_snapshot)
-	}
-
-	command_snapshot : Command -> CommandSnapshot
-	command_snapshot = |command| {
-		match command {
-			ResetDom => { kind: 0, a: 0, b: 0, value_bool: False, value_bytes: [] }
-			CreateElement(payload) => { kind: 1, a: payload.id, b: 0, value_bool: False, value_bytes: Str.to_utf8(payload.tag) }
-			AppendChild(payload) => { kind: 2, a: payload.parent, b: payload.child, value_bool: False, value_bytes: [] }
-			SetText(payload) => { kind: 3, a: payload.id, b: 0, value_bool: False, value_bytes: Str.to_utf8(payload.value) }
-			SetRole(payload) => { kind: 4, a: payload.id, b: 0, value_bool: False, value_bytes: Str.to_utf8(payload.value) }
-			SetLabel(payload) => { kind: 5, a: payload.id, b: 0, value_bool: False, value_bytes: Str.to_utf8(payload.value) }
-			SetTestId(payload) => { kind: 6, a: payload.id, b: 0, value_bool: False, value_bytes: Str.to_utf8(payload.value) }
-			SetValue(payload) => { kind: 7, a: payload.id, b: 0, value_bool: False, value_bytes: Str.to_utf8(payload.value) }
-			SetChecked(payload) => { kind: 8, a: payload.id, b: 0, value_bool: payload.value, value_bytes: [] }
-			SetDisabled(payload) => { kind: 9, a: payload.id, b: 0, value_bool: payload.value, value_bytes: [] }
-			BindClick(payload) => { kind: 10, a: payload.id, b: payload.event, value_bool: False, value_bytes: [] }
-			BindInput(payload) => { kind: 11, a: payload.id, b: payload.event, value_bool: False, value_bytes: [] }
-			BindCheck(payload) => { kind: 12, a: payload.id, b: payload.event, value_bool: False, value_bytes: [] }
-		}
-	}
-
-	same_structure : List(CommandSnapshot), List(CommandSnapshot) -> Bool
-	same_structure = |previous, next| {
-		var $previous_index = 0
-		var $next_index = 0
-		var $same = True
-		var $done = False
-
-		while $done == False {
-			previous_lookup = find_structural_snapshot(previous, $previous_index)
-			next_lookup = find_structural_snapshot(next, $next_index)
-
-			match (previous_lookup, next_lookup) {
-				(NoStructuralSnapshot, NoStructuralSnapshot) => {
-					$done = True
-				}
-				(FoundStructural(prev), FoundStructural(next_structural)) =>
-					if snapshot_equal(prev.snapshot, next_structural.snapshot) {
-						$previous_index = prev.index + 1
-						$next_index = next_structural.index + 1
-					} else {
-						$same = False
-						$done = True
-					}
-				_ => {
-					$same = False
-					$done = True
-				}
-			}
-		}
-
-		$same
-	}
-
-	find_structural_snapshot : List(CommandSnapshot), U64 -> StructuralLookup
-	find_structural_snapshot = |snapshots, start_index| {
-		var $index = start_index
-		var $result = NoStructuralSnapshot
-		var $done = False
-
-		while $done == False and $index < List.len(snapshots) {
-			match List.get(snapshots, $index) {
-				Ok(snapshot) =>
-					if snapshot_is_structural(snapshot) {
-						$result = FoundStructural({ index: $index, snapshot })
-						$done = True
-					} else {
-						$index = $index + 1
-					}
-
-				Err(_) => {
-					$done = True
-				}
-			}
-		}
-
-		$result
-	}
-
-	snapshot_is_structural : CommandSnapshot -> Bool
-	snapshot_is_structural = |snapshot| {
-		snapshot.kind == 0 or snapshot.kind == 1 or snapshot.kind == 2
-	}
-
-	diff_non_structural : List(CommandSnapshot), List(Command) -> List(Command)
-	diff_non_structural = |previous, next| {
-		var $index = 0
-		var $commands = List.with_capacity(List.len(next))
-
-		for command in next {
-			snapshot = command_snapshot(command)
-			changed =
-				if snapshot_is_structural(snapshot) {
-					False
-				} else {
-					match List.get(previous, $index) {
-						Ok(old) => !snapshot_equal(old, snapshot)
-						Err(_) => True
-					}
-				}
-
-			if changed {
-				$commands = List.append($commands, command)
-			}
-
-			$index = $index + 1
-		}
-
-		$commands
-	}
-
-	snapshot_equal : CommandSnapshot, CommandSnapshot -> Bool
-	snapshot_equal = |left, right| {
-		left.kind == right.kind
-			and left.a == right.a
-			and left.b == right.b
-			and left.value_bool == right.value_bool
-			and u8_list_equal(left.value_bytes, right.value_bytes)
-	}
-
-	u8_list_equal : List(U8), List(U8) -> Bool
-	u8_list_equal = |left, right| {
-		if List.len(left) != List.len(right) {
-			False
-		} else {
-			var $index = 0
-			var $same = True
-
-			while $same and $index < List.len(left) {
-				match (List.get(left, $index), List.get(right, $index)) {
-					(Ok(a), Ok(b)) =>
-						if a == b {
-							$index = $index + 1
-						} else {
-							$same = False
-						}
-					_ => {
-						$same = False
-					}
-				}
-			}
-
-			$same
+			runtime: rendered.state.runtime,
+			emit_commands: rendered.commands,
 		}
 	}
 

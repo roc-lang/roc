@@ -27,6 +27,28 @@ const HostEventRoute = struct {
     state_indexes: []u64,
 };
 
+const HostCommandSnapshot = struct {
+    kind: u64,
+    a: u64,
+    b: u64,
+    value_bool: bool,
+    value_bytes: []const u8,
+    value_bytes_owned: bool,
+
+    fn deinit(self: HostCommandSnapshot, allocator: std.mem.Allocator) void {
+        if (self.value_bytes_owned) {
+            allocator.free(self.value_bytes);
+        }
+    }
+};
+
+const HostRenderMetrics = struct {
+    commands_emitted: u64 = 0,
+    full_render_batches: u64 = 0,
+    incremental_batches: u64 = 0,
+    structural_resets: u64 = 0,
+};
+
 pub const std_options: std.Options = .{
     .logFn = std.log.defaultLog,
     .log_level = .warn,
@@ -460,6 +482,8 @@ const HostEnv = struct {
     dealloc_count: usize = 0,
     dom_elements: std.ArrayListUnmanaged(DomElement) = .empty,
     event_routes: std.ArrayListUnmanaged(HostEventRoute) = .empty,
+    previous_command_snapshots: std.ArrayListUnmanaged(HostCommandSnapshot) = .empty,
+    render_metrics: HostRenderMetrics = .{},
     next_elem_id: u64 = 0,
     roc_host: ?*abi.RocHost = null,
     runtime_box: ?RuntimeBox = null,
@@ -512,6 +536,29 @@ const HostEnv = struct {
         return route.state_indexes;
     }
 
+    fn clearPreviousCommandSnapshots(self: *HostEnv) void {
+        const allocator = self.gpa.allocator();
+        for (self.previous_command_snapshots.items) |snapshot| {
+            snapshot.deinit(allocator);
+        }
+        self.previous_command_snapshots.items.len = 0;
+    }
+
+    fn setPreviousCommandSnapshots(self: *HostEnv, next: std.ArrayListUnmanaged(HostCommandSnapshot)) void {
+        self.clearPreviousCommandSnapshots();
+        self.previous_command_snapshots.deinit(self.gpa.allocator());
+        self.previous_command_snapshots = next;
+    }
+
+    fn metricsWithHostRender(self: *HostEnv, roc_metrics: RuntimeMetrics) RuntimeMetrics {
+        var metrics = roc_metrics;
+        metrics.commands_emitted += self.render_metrics.commands_emitted;
+        metrics.full_render_batches += self.render_metrics.full_render_batches;
+        metrics.incremental_batches += self.render_metrics.incremental_batches;
+        metrics.structural_resets += self.render_metrics.structural_resets;
+        return metrics;
+    }
+
     fn deinit(self: *HostEnv) void {
         const allocator = self.gpa.allocator();
 
@@ -526,6 +573,8 @@ const HostEnv = struct {
         self.dom_elements.deinit(allocator);
         self.clearEventRoutes();
         self.event_routes.deinit(allocator);
+        self.clearPreviousCommandSnapshots();
+        self.previous_command_snapshots.deinit(allocator);
 
         freeSpecCommands(allocator, self.test_state.commands);
 
@@ -1060,13 +1109,197 @@ fn traceCommand(command: abi.UiRuntimeCommand) void {
     }
 }
 
-fn applyCommandList(host: *HostEnv, commands: abi.RocList(abi.UiRuntimeCommand)) CommandCounts {
+fn emptyCommandSnapshot(kind: u64, a: u64, b: u64, value_bool: bool) HostCommandSnapshot {
+    return .{
+        .kind = kind,
+        .a = a,
+        .b = b,
+        .value_bool = value_bool,
+        .value_bytes = &.{},
+        .value_bytes_owned = false,
+    };
+}
+
+fn bytesCommandSnapshot(allocator: std.mem.Allocator, kind: u64, a: u64, b: u64, value_bool: bool, value: []const u8) HostCommandSnapshot {
+    if (value.len == 0) return emptyCommandSnapshot(kind, a, b, value_bool);
+    return .{
+        .kind = kind,
+        .a = a,
+        .b = b,
+        .value_bool = value_bool,
+        .value_bytes = allocator.dupe(u8, value) catch std.process.exit(1),
+        .value_bytes_owned = true,
+    };
+}
+
+fn commandSnapshot(allocator: std.mem.Allocator, command: abi.UiRuntimeCommand) HostCommandSnapshot {
+    return switch (command.tag) {
+        .ResetDom => emptyCommandSnapshot(0, 0, 0, false),
+        .CreateElement => blk: {
+            const payload = command.payload.create_element;
+            break :blk bytesCommandSnapshot(allocator, 1, payload.id, 0, false, payload.tag.asSlice());
+        },
+        .AppendChild => blk: {
+            const payload = command.payload.append_child;
+            break :blk emptyCommandSnapshot(2, payload.parent, payload.child, false);
+        },
+        .SetText => blk: {
+            const payload = command.payload.set_text;
+            break :blk bytesCommandSnapshot(allocator, 3, payload.id, 0, false, payload.value.asSlice());
+        },
+        .SetRole => blk: {
+            const payload = command.payload.set_role;
+            break :blk bytesCommandSnapshot(allocator, 4, payload.id, 0, false, payload.value.asSlice());
+        },
+        .SetLabel => blk: {
+            const payload = command.payload.set_label;
+            break :blk bytesCommandSnapshot(allocator, 5, payload.id, 0, false, payload.value.asSlice());
+        },
+        .SetTestId => blk: {
+            const payload = command.payload.set_test_id;
+            break :blk bytesCommandSnapshot(allocator, 6, payload.id, 0, false, payload.value.asSlice());
+        },
+        .SetValue => blk: {
+            const payload = command.payload.set_value;
+            break :blk bytesCommandSnapshot(allocator, 7, payload.id, 0, false, payload.value.asSlice());
+        },
+        .SetChecked => blk: {
+            const payload = command.payload.set_checked;
+            break :blk emptyCommandSnapshot(8, payload.id, 0, payload.value);
+        },
+        .SetDisabled => blk: {
+            const payload = command.payload.set_disabled;
+            break :blk emptyCommandSnapshot(9, payload.id, 0, payload.value);
+        },
+        .BindClick => blk: {
+            const payload = command.payload.bind_click;
+            break :blk emptyCommandSnapshot(10, payload.id, payload.event, false);
+        },
+        .BindInput => blk: {
+            const payload = command.payload.bind_input;
+            break :blk emptyCommandSnapshot(11, payload.id, payload.event, false);
+        },
+        .BindCheck => blk: {
+            const payload = command.payload.bind_check;
+            break :blk emptyCommandSnapshot(12, payload.id, payload.event, false);
+        },
+    };
+}
+
+fn clearCommandSnapshots(allocator: std.mem.Allocator, snapshots: *std.ArrayListUnmanaged(HostCommandSnapshot)) void {
+    for (snapshots.items) |snapshot| {
+        snapshot.deinit(allocator);
+    }
+    snapshots.items.len = 0;
+}
+
+fn commandSnapshots(host: *HostEnv, commands: abi.RocList(abi.UiRuntimeCommand)) std.ArrayListUnmanaged(HostCommandSnapshot) {
+    const allocator = host.gpa.allocator();
+    var snapshots: std.ArrayListUnmanaged(HostCommandSnapshot) = .empty;
+
+    for (commands.items()) |command| {
+        const snapshot = commandSnapshot(allocator, command);
+        snapshots.append(allocator, snapshot) catch {
+            snapshot.deinit(allocator);
+            clearCommandSnapshots(allocator, &snapshots);
+            snapshots.deinit(allocator);
+            std.process.exit(1);
+        };
+    }
+
+    return snapshots;
+}
+
+fn snapshotIsStructural(snapshot: HostCommandSnapshot) bool {
+    return snapshot.kind == 0 or snapshot.kind == 1 or snapshot.kind == 2;
+}
+
+fn snapshotEqual(left: HostCommandSnapshot, right: HostCommandSnapshot) bool {
+    return left.kind == right.kind and
+        left.a == right.a and
+        left.b == right.b and
+        left.value_bool == right.value_bool and
+        std.mem.eql(u8, left.value_bytes, right.value_bytes);
+}
+
+fn findStructuralSnapshot(snapshots: []const HostCommandSnapshot, start_index: usize) ?usize {
+    var index = start_index;
+    while (index < snapshots.len) : (index += 1) {
+        if (snapshotIsStructural(snapshots[index])) return index;
+    }
+    return null;
+}
+
+fn sameCommandStructure(previous: []const HostCommandSnapshot, next: []const HostCommandSnapshot) bool {
+    var previous_index: usize = 0;
+    var next_index: usize = 0;
+
+    while (true) {
+        const previous_structural = findStructuralSnapshot(previous, previous_index);
+        const next_structural = findStructuralSnapshot(next, next_index);
+
+        if (previous_structural == null and next_structural == null) return true;
+        if (previous_structural == null or next_structural == null) return false;
+
+        const previous_found = previous_structural.?;
+        const next_found = next_structural.?;
+        if (!snapshotEqual(previous[previous_found], next[next_found])) return false;
+
+        previous_index = previous_found + 1;
+        next_index = next_found + 1;
+    }
+}
+
+fn applyFullCommandList(host: *HostEnv, commands: abi.RocList(abi.UiRuntimeCommand)) CommandCounts {
     var counts: CommandCounts = .{};
     for (commands.items()) |command| {
         counts.add(command);
         traceCommand(command);
         applyCommand(host, command);
     }
+    return counts;
+}
+
+fn applyIncrementalCommandList(host: *HostEnv, commands: abi.RocList(abi.UiRuntimeCommand), next_snapshots: []const HostCommandSnapshot) CommandCounts {
+    var counts: CommandCounts = .{};
+
+    for (commands.items(), 0..) |command, index| {
+        const snapshot = next_snapshots[index];
+        if (snapshotIsStructural(snapshot)) continue;
+
+        const changed = if (index < host.previous_command_snapshots.items.len)
+            !snapshotEqual(host.previous_command_snapshots.items[index], snapshot)
+        else
+            true;
+
+        if (changed) {
+            counts.add(command);
+            traceCommand(command);
+            applyCommand(host, command);
+        }
+    }
+
+    return counts;
+}
+
+fn applyRenderCommandList(host: *HostEnv, commands: abi.RocList(abi.UiRuntimeCommand)) CommandCounts {
+    const next_snapshots = commandSnapshots(host, commands);
+    const full_batch = !sameCommandStructure(host.previous_command_snapshots.items, next_snapshots.items);
+
+    const counts = if (full_batch)
+        applyFullCommandList(host, commands)
+    else
+        applyIncrementalCommandList(host, commands, next_snapshots.items);
+
+    host.render_metrics.commands_emitted += counts.total;
+    if (full_batch) {
+        host.render_metrics.full_render_batches += 1;
+        host.render_metrics.structural_resets += 1;
+    } else {
+        host.render_metrics.incremental_batches += 1;
+    }
+
+    host.setPreviousCommandSnapshots(next_snapshots);
     return counts;
 }
 
@@ -1094,11 +1327,12 @@ fn acceptDispatchResultMeasured(host: *HostEnv, roc_host: *abi.RocHost, result_b
     const result = result_box.*;
     if (host.runtime_box != null) failHost("Roc runtime box was overwritten before being consumed");
     host.runtime_box = result.runtime;
-    host.last_runtime_metrics = result.metrics;
+    const roc_metrics = result.metrics;
     host.setEventRoutes(result.event_routes);
     const start_ns = benchmarkNowNs();
-    const counts = applyCommandList(host, result.commands);
+    const counts = applyRenderCommandList(host, result.commands);
     const elapsed = benchmarkNowNs() - start_ns;
+    host.last_runtime_metrics = host.metricsWithHostRender(roc_metrics);
     if (apply_ns) |ns| ns.* += elapsed;
     if (command_counts) |total| total.addAll(counts);
     releaseCommandList(result.commands, roc_host);
