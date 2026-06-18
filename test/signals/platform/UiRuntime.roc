@@ -34,6 +34,8 @@ UiRuntime := [].{
 
 	StateSlot : { key : Str, value : NodeValue, version : U64 }
 
+	StateVersionDesc : { state_id : U64, version : U64 }
+
 	StateVersionEntry : { state_index : U64, version : U64 }
 
 	SignalCacheEntry : { key : Str, value : NodeValue, deps : List(StateVersionEntry) }
@@ -66,7 +68,6 @@ UiRuntime := [].{
 		root : Elem,
 		states : List(StateSlot),
 		event_ids : List(EventId),
-		event_keys_by_id : List(Str),
 		next_event_id : U64,
 		signal_cache : List(SignalCacheEntry),
 		event_state_deps : List(EventStateDeps),
@@ -77,6 +78,7 @@ UiRuntime := [].{
 		runtime : Box(Runtime),
 		commands : List(Command),
 		event_routes : List(EventStateDeps),
+		state_versions : List(StateVersionDesc),
 		metrics : RuntimeMetrics,
 	}
 
@@ -183,7 +185,6 @@ UiRuntime := [].{
 			root,
 			states: [],
 			event_ids: [],
-			event_keys_by_id: [],
 			next_event_id: 1,
 			signal_cache: [],
 			event_state_deps: [],
@@ -197,6 +198,7 @@ UiRuntime := [].{
 			runtime: runtime_box,
 			commands: rendered.emit_commands,
 			event_routes: rendered.runtime.event_state_deps,
+			state_versions: state_versions_for_runtime(rendered.runtime),
 			metrics: rendered.runtime.metrics,
 		}
 		result
@@ -218,6 +220,7 @@ UiRuntime := [].{
 			runtime: Box.box(rendered.runtime),
 			commands: rendered.emit_commands,
 			event_routes: rendered.runtime.event_state_deps,
+			state_versions: state_versions_for_runtime(rendered.runtime),
 			metrics: rendered.runtime.metrics,
 		}
 	}
@@ -489,7 +492,6 @@ UiRuntime := [].{
 				{
 					runtime: { ..runtime,
 						event_ids: List.append(runtime.event_ids, { key, id }),
-						event_keys_by_id: List.append(runtime.event_keys_by_id, key),
 						event_state_deps: List.append(runtime.event_state_deps, { event_id: id, state_indexes: [] }),
 						next_event_id: id + 1,
 					},
@@ -1104,6 +1106,19 @@ UiRuntime := [].{
 				{ state_index, version: current_state_version_by_index(runtime, state_index) }
 			},
 		)
+	}
+
+	state_versions_for_runtime : Runtime -> List(StateVersionDesc)
+	state_versions_for_runtime = |runtime| {
+		var $state_id = 0
+		var $versions = List.with_capacity(List.len(runtime.states))
+
+		for slot in runtime.states {
+			$versions = List.append($versions, { state_id: $state_id, version: slot.version })
+			$state_id = $state_id + 1
+		}
+
+		$versions
 	}
 
 	current_state_version_by_index : Runtime, U64 -> U64

@@ -14,6 +14,7 @@ const DispatchResult = std.meta.Child(DispatchResultBox);
 const RuntimeBox = @typeInfo(@TypeOf(abi.roc_ui_drop)).@"fn".params[0].type.?;
 const RuntimeMetrics = @FieldType(DispatchResult, "metrics");
 const EventRouteList = @FieldType(DispatchResult, "event_routes");
+const StateVersionList = @FieldType(DispatchResult, "state_versions");
 const HostEventBox = @typeInfo(@TypeOf(abi.roc_ui_dispatch)).@"fn".params[1].type.?;
 const HostEvent = std.meta.Child(HostEventBox);
 const CommandPayload = @FieldType(abi.UiRuntimeCommand, "payload");
@@ -25,6 +26,11 @@ const RocStr = abi.RocStr;
 const HostEventRoute = struct {
     event_id: u64,
     state_indexes: []u64,
+};
+
+const HostStateVersion = struct {
+    state_id: u64,
+    version: u64,
 };
 
 const HostCommandSnapshot = struct {
@@ -482,6 +488,7 @@ const HostEnv = struct {
     dealloc_count: usize = 0,
     dom_elements: std.ArrayListUnmanaged(DomElement) = .empty,
     event_routes: std.ArrayListUnmanaged(HostEventRoute) = .empty,
+    state_versions: std.ArrayListUnmanaged(HostStateVersion) = .empty,
     previous_command_snapshots: std.ArrayListUnmanaged(HostCommandSnapshot) = .empty,
     render_metrics: HostRenderMetrics = .{},
     next_elem_id: u64 = 0,
@@ -514,6 +521,12 @@ const HostEnv = struct {
                 failHost("Roc event route descriptors must be dense and ordered by event id");
             }
 
+            for (route.state_indexes.items()) |state_id| {
+                if (state_id >= self.state_versions.items.len) {
+                    failHost("Roc event route descriptor referenced an unknown state id");
+                }
+            }
+
             const state_indexes = allocator.dupe(u64, route.state_indexes.items()) catch std.process.exit(1);
             self.event_routes.append(allocator, .{
                 .event_id = route.event_id,
@@ -534,6 +547,40 @@ const HostEnv = struct {
         const route = self.event_routes.items[@intCast(route_index)];
         if (route.event_id != event_id) failHost("host event route table is not indexed by event id");
         return route.state_indexes;
+    }
+
+    fn clearStateVersions(self: *HostEnv) void {
+        self.state_versions.items.len = 0;
+    }
+
+    fn setStateVersions(self: *HostEnv, versions: StateVersionList) void {
+        if (versions.len() < self.state_versions.items.len) {
+            failHost("Roc state version descriptors must not shrink");
+        }
+
+        const allocator = self.gpa.allocator();
+        var next: std.ArrayListUnmanaged(HostStateVersion) = .empty;
+        errdefer next.deinit(allocator);
+
+        for (versions.items(), 0..) |desc, index| {
+            const expected_state_id: u64 = @intCast(index);
+            if (desc.state_id != expected_state_id) {
+                failHost("Roc state version descriptors must be dense and ordered by state id");
+            }
+
+            if (index < self.state_versions.items.len and desc.version < self.state_versions.items[index].version) {
+                failHost("Roc state version descriptor moved backward");
+            }
+
+            next.append(allocator, .{
+                .state_id = desc.state_id,
+                .version = desc.version,
+            }) catch std.process.exit(1);
+        }
+
+        self.clearStateVersions();
+        self.state_versions.deinit(allocator);
+        self.state_versions = next;
     }
 
     fn clearPreviousCommandSnapshots(self: *HostEnv) void {
@@ -573,6 +620,8 @@ const HostEnv = struct {
         self.dom_elements.deinit(allocator);
         self.clearEventRoutes();
         self.event_routes.deinit(allocator);
+        self.clearStateVersions();
+        self.state_versions.deinit(allocator);
         self.clearPreviousCommandSnapshots();
         self.previous_command_snapshots.deinit(allocator);
 
@@ -1321,6 +1370,10 @@ fn releaseEventRouteList(routes: EventRouteList, roc_host: *abi.RocHost) void {
     routes.decref(roc_host);
 }
 
+fn releaseStateVersionList(versions: StateVersionList, roc_host: *abi.RocHost) void {
+    versions.decref(roc_host);
+}
+
 fn dropMovedDispatchResultPayload(_: ?*anyopaque, _: *abi.RocHost) callconv(.c) void {}
 
 fn acceptDispatchResultMeasured(host: *HostEnv, roc_host: *abi.RocHost, result_box: DispatchResultBox, apply_ns: ?*u64, command_counts: ?*CommandCounts) void {
@@ -1328,6 +1381,7 @@ fn acceptDispatchResultMeasured(host: *HostEnv, roc_host: *abi.RocHost, result_b
     if (host.runtime_box != null) failHost("Roc runtime box was overwritten before being consumed");
     host.runtime_box = result.runtime;
     const roc_metrics = result.metrics;
+    host.setStateVersions(result.state_versions);
     host.setEventRoutes(result.event_routes);
     const start_ns = benchmarkNowNs();
     const counts = applyRenderCommandList(host, result.commands);
@@ -1337,6 +1391,7 @@ fn acceptDispatchResultMeasured(host: *HostEnv, roc_host: *abi.RocHost, result_b
     if (command_counts) |total| total.addAll(counts);
     releaseCommandList(result.commands, roc_host);
     releaseEventRouteList(result.event_routes, roc_host);
+    releaseStateVersionList(result.state_versions, roc_host);
     abi.decrefBoxWith(@ptrCast(result_box), @alignOf(DispatchResult), &dropMovedDispatchResultPayload, roc_host);
 }
 
