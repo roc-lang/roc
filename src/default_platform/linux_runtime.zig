@@ -34,10 +34,21 @@ const BacktraceEntry = extern struct {
 extern const roc_default_backtrace_table: [*]const BacktraceEntry;
 extern const roc_default_backtrace_count: usize;
 
+const empty_backtrace_table: [0]BacktraceEntry = .{};
+const fallback_backtrace_table: [*]const BacktraceEntry = empty_backtrace_table[0..].ptr;
+const fallback_backtrace_count: usize = 0;
+
 comptime {
     if (builtin.os.tag != .linux) {
         @compileError("default platform Linux runtime must be built for Linux");
     }
+
+    @export(&fallback_backtrace_table, .{ .name = "roc_default_backtrace_table", .linkage = .weak });
+    @export(&fallback_backtrace_count, .{ .name = "roc_default_backtrace_count", .linkage = .weak });
+    @export(&defaultMemcpy, .{ .name = "memcpy", .linkage = .weak });
+    @export(&defaultMemmove, .{ .name = "memmove", .linkage = .weak });
+    @export(&defaultMemset, .{ .name = "memset", .linkage = .weak });
+    @export(&defaultTrunc, .{ .name = "trunc", .linkage = .weak });
 }
 
 export fn roc_default_runtime_init() callconv(.c) void {
@@ -377,6 +388,52 @@ fn writeUnsigned(fd: i32, value: anytype) void {
 
 fn exitFailure() noreturn {
     linux.exit_group(1);
+}
+
+fn defaultMemcpy(dest: [*]u8, src: [*]const u8, len: usize) callconv(.c) [*]u8 {
+    var i: usize = 0;
+    while (i < len) : (i += 1) {
+        dest[i] = src[i];
+    }
+    return dest;
+}
+
+fn defaultMemmove(dest: [*]u8, src: [*]const u8, len: usize) callconv(.c) [*]u8 {
+    if (@intFromPtr(dest) <= @intFromPtr(src)) {
+        var i: usize = 0;
+        while (i < len) : (i += 1) {
+            dest[i] = src[i];
+        }
+    } else {
+        var i = len;
+        while (i != 0) {
+            i -= 1;
+            dest[i] = src[i];
+        }
+    }
+    return dest;
+}
+
+fn defaultMemset(dest: [*]u8, value: c_int, len: usize) callconv(.c) [*]u8 {
+    const byte: u8 = @bitCast(@as(i8, @truncate(value)));
+    var i: usize = 0;
+    while (i < len) : (i += 1) {
+        dest[i] = byte;
+    }
+    return dest;
+}
+
+fn defaultTrunc(value: f64) callconv(.c) f64 {
+    const bits: u64 = @bitCast(value);
+    const exponent_bits = (bits >> 52) & 0x7ff;
+    const exponent: i32 = @as(i32, @intCast(exponent_bits)) - 1023;
+
+    if (exponent >= 52) return value;
+    if (exponent < 0) return @bitCast(bits & (@as(u64, 1) << 63));
+
+    const fraction_bits: u6 = @intCast(52 - exponent);
+    const fraction_mask = (@as(u64, 1) << fraction_bits) - 1;
+    return @bitCast(bits & ~fraction_mask);
 }
 
 const RocStr = extern struct {
