@@ -46,6 +46,18 @@ UiRuntime := [].{
 
 	EventDesc : { event_id : U64, payload_kind : U64 }
 
+	RenderElementDesc : { elem_id : U64, parent_id : U64, tag : Str }
+
+	RenderTextDesc : { elem_id : U64, field : U64, value : Str }
+
+	RenderSignalTextDesc : { elem_id : U64, field : U64, signal_id : U64, value : Str }
+
+	RenderBoolDesc : { elem_id : U64, field : U64, value : Bool }
+
+	RenderSignalBoolDesc : { elem_id : U64, field : U64, signal_id : U64, value : Bool }
+
+	RenderEventDesc : { elem_id : U64, event_kind : U64, event_id : U64 }
+
 	Command := [
 		CreateElement({ id : U64, tag : Str }),
 		AppendChild({ parent : U64, child : U64 }),
@@ -74,6 +86,12 @@ UiRuntime := [].{
 	DispatchResult : {
 		runtime : Box(Runtime),
 		commands : List(Command),
+		render_elements : List(RenderElementDesc),
+		render_texts : List(RenderTextDesc),
+		render_signal_texts : List(RenderSignalTextDesc),
+		render_bools : List(RenderBoolDesc),
+		render_signal_bools : List(RenderSignalBoolDesc),
+		render_events : List(RenderEventDesc),
 		event_descriptors : List(EventDesc),
 		signal_descriptors : List(SignalDesc),
 		state_descriptors : List(StateDesc),
@@ -128,12 +146,24 @@ UiRuntime := [].{
 	RenderState : {
 		state : EvalState,
 		commands : List(Command),
+		render_elements : List(RenderElementDesc),
+		render_texts : List(RenderTextDesc),
+		render_signal_texts : List(RenderSignalTextDesc),
+		render_bools : List(RenderBoolDesc),
+		render_signal_bools : List(RenderSignalBoolDesc),
+		render_events : List(RenderEventDesc),
 		next_elem_id : U64,
 	}
 
 	RenderResult : {
 		runtime : Runtime,
 		emit_commands : List(Command),
+		render_elements : List(RenderElementDesc),
+		render_texts : List(RenderTextDesc),
+		render_signal_texts : List(RenderSignalTextDesc),
+		render_bools : List(RenderBoolDesc),
+		render_signal_bools : List(RenderSignalBoolDesc),
+		render_events : List(RenderEventDesc),
 		changed_state_indexes : List(U64),
 		state_changes : List(StateValueDesc),
 		signal_changes : List(SignalValueDesc),
@@ -170,6 +200,11 @@ UiRuntime := [].{
 
 	StateValue : { runtime : Runtime, value : NodeValue, index : U64 }
 
+	RenderSignalLookup := [
+		RenderSignalFound(U64),
+		RenderSignalMissing,
+	]
+
 	RegisteredElem : { runtime : Runtime, elem : Elem }
 
 	RegisteredChildren : { runtime : Runtime, children : List(Elem) }
@@ -188,6 +223,36 @@ UiRuntime := [].{
 
 	signal_kind_map2 : U64
 	signal_kind_map2 = 3
+
+	render_text_field_text : U64
+	render_text_field_text = 1
+
+	render_text_field_role : U64
+	render_text_field_role = 2
+
+	render_text_field_label : U64
+	render_text_field_label = 3
+
+	render_text_field_test_id : U64
+	render_text_field_test_id = 4
+
+	render_text_field_value : U64
+	render_text_field_value = 5
+
+	render_bool_field_checked : U64
+	render_bool_field_checked = 1
+
+	render_bool_field_disabled : U64
+	render_bool_field_disabled = 2
+
+	render_event_kind_click : U64
+	render_event_kind_click = 1
+
+	render_event_kind_input : U64
+	render_event_kind_input = 2
+
+	render_event_kind_check : U64
+	render_event_kind_check = 3
 
 	zero_metrics : RuntimeMetrics
 	zero_metrics = {
@@ -235,6 +300,12 @@ UiRuntime := [].{
 		result = {
 			runtime: runtime_box,
 			commands: rendered.emit_commands,
+			render_elements: rendered.render_elements,
+			render_texts: rendered.render_texts,
+			render_signal_texts: rendered.render_signal_texts,
+			render_bools: rendered.render_bools,
+			render_signal_bools: rendered.render_signal_bools,
+			render_events: rendered.render_events,
 			event_descriptors: event_descriptors_for_runtime(rendered.runtime),
 			signal_descriptors: signal_descriptors_for_runtime(rendered.runtime),
 			state_descriptors: state_descriptors_for_runtime(rendered.runtime),
@@ -268,6 +339,12 @@ UiRuntime := [].{
 		{
 			runtime: Box.box(rendered.runtime),
 			commands: rendered.emit_commands,
+			render_elements: rendered.render_elements,
+			render_texts: rendered.render_texts,
+			render_signal_texts: rendered.render_signal_texts,
+			render_bools: rendered.render_bools,
+			render_signal_bools: rendered.render_signal_bools,
+			render_events: rendered.render_events,
 			event_descriptors: event_descriptors_for_runtime(rendered.runtime),
 			signal_descriptors: signal_descriptors_for_runtime(rendered.runtime),
 			state_descriptors: state_descriptors_for_runtime(rendered.runtime),
@@ -622,12 +699,24 @@ UiRuntime := [].{
 		render_state = {
 			state: scheduled_state,
 			commands: [],
+			render_elements: [],
+			render_texts: [],
+			render_signal_texts: [],
+			render_bools: [],
+			render_signal_bools: [],
+			render_events: [],
 			next_elem_id: 1,
 		}
 		rendered = render_elem(render_state, runtime.root, 0)
 		{
 			runtime: rendered.state.runtime,
 			emit_commands: rendered.commands,
+			render_elements: rendered.render_elements,
+			render_texts: rendered.render_texts,
+			render_signal_texts: rendered.render_signal_texts,
+			render_bools: rendered.render_bools,
+			render_signal_bools: rendered.render_signal_bools,
+			render_events: rendered.render_events,
 			changed_state_indexes: rendered.state.changed_state_indexes,
 			state_changes: rendered.state.state_changes,
 			signal_changes: rendered.state.signal_changes,
@@ -667,10 +756,64 @@ UiRuntime := [].{
 		{ ..render_state, commands: List.append(render_state.commands, command) }
 	}
 
+	add_render_element : RenderState, U64, U64, Str -> RenderState
+	add_render_element = |render_state, elem_id, parent_id, tag| {
+		{ ..render_state, render_elements: List.append(render_state.render_elements, { elem_id, parent_id, tag }) }
+	}
+
+	add_static_text_desc : RenderState, U64, U64, Str -> RenderState
+	add_static_text_desc = |render_state, elem_id, field, value| {
+		{ ..render_state, render_texts: List.append(render_state.render_texts, { elem_id, field, value }) }
+	}
+
+	add_signal_text_desc : RenderState, U64, U64, U64, Str -> RenderState
+	add_signal_text_desc = |render_state, elem_id, field, signal_id, value| {
+		{ ..render_state, render_signal_texts: List.append(render_state.render_signal_texts, { elem_id, field, signal_id, value }) }
+	}
+
+	add_static_bool_desc : RenderState, U64, U64, Bool -> RenderState
+	add_static_bool_desc = |render_state, elem_id, field, value| {
+		{ ..render_state, render_bools: List.append(render_state.render_bools, { elem_id, field, value }) }
+	}
+
+	add_signal_bool_desc : RenderState, U64, U64, U64, Bool -> RenderState
+	add_signal_bool_desc = |render_state, elem_id, field, signal_id, value| {
+		{ ..render_state, render_signal_bools: List.append(render_state.render_signal_bools, { elem_id, field, signal_id, value }) }
+	}
+
+	add_event_desc : RenderState, U64, U64, U64 -> RenderState
+	add_event_desc = |render_state, elem_id, event_kind, event_id| {
+		{ ..render_state, render_events: List.append(render_state.render_events, { elem_id, event_kind, event_id }) }
+	}
+
+	render_signal_id : Graph.SignalNode -> RenderSignalLookup
+	render_signal_id = |signal| {
+		match signal.cache_key {
+			Graph.SignalCacheKey.NoSignalCacheKey => RenderSignalMissing
+			Graph.SignalCacheKey.SignalCacheKey(_) => RenderSignalFound(registered_signal_id(signal))
+		}
+	}
+
+	add_text_sink_desc : RenderState, U64, U64, Graph.SignalNode, Str -> RenderState
+	add_text_sink_desc = |render_state, elem_id, field, signal, value| {
+		match render_signal_id(signal) {
+			RenderSignalFound(signal_id) => add_signal_text_desc(render_state, elem_id, field, signal_id, value)
+			RenderSignalMissing => add_static_text_desc(render_state, elem_id, field, value)
+		}
+	}
+
+	add_bool_sink_desc : RenderState, U64, U64, Graph.SignalNode, Bool -> RenderState
+	add_bool_sink_desc = |render_state, elem_id, field, signal, value| {
+		match render_signal_id(signal) {
+			RenderSignalFound(signal_id) => add_signal_bool_desc(render_state, elem_id, field, signal_id, value)
+			RenderSignalMissing => add_static_bool_desc(render_state, elem_id, field, value)
+		}
+	}
+
 	create_child : RenderState, U64, Str -> { render_state : RenderState, id : U64 }
 	create_child = |render_state, parent_id, tag| {
 		id = render_state.next_elem_id
-		next_state = { ..render_state, next_elem_id: id + 1 }
+		next_state = add_render_element({ ..render_state, next_elem_id: id + 1 }, id, parent_id, tag)
 		with_create = add_command(next_state, CreateElement({ id, tag }))
 		with_append = add_command(with_create, AppendChild({ parent: parent_id, child: id }))
 		{ render_state: with_append, id }
@@ -695,8 +838,11 @@ UiRuntime := [].{
 				event_lookup = event_id_for_node(label_result.state.runtime, on_click)
 				state1 = { ..label_result.state, runtime: event_lookup.runtime }
 				with_state = { ..created.render_state, state: state1 }
-				with_text = add_command(with_state, SetText({ id: created.id, value: node_text(label_result.value) }))
-				add_command(with_text, BindClick({ id: created.id, event: event_lookup.id }))
+				label_text = node_text(label_result.value)
+				with_text_desc = add_text_sink_desc(with_state, created.id, render_text_field_text, label, label_text)
+				with_text = add_command(with_text_desc, SetText({ id: created.id, value: label_text }))
+				with_event_desc = add_event_desc(with_text, created.id, render_event_kind_click, event_lookup.id)
+				add_command(with_event_desc, BindClick({ id: created.id, event: event_lookup.id }))
 			}
 
 			ActionButton({ on_click, label, disabled }) => {
@@ -706,37 +852,50 @@ UiRuntime := [].{
 				event_lookup = event_id_for_node(disabled_result.state.runtime, on_click)
 				state1 = { ..disabled_result.state, runtime: event_lookup.runtime }
 				with_state = { ..created.render_state, state: state1 }
-				with_text = add_command(with_state, SetText({ id: created.id, value: node_text(label_result.value) }))
-				with_disabled = add_command(with_text, SetDisabled({ id: created.id, value: node_bool(disabled_result.value) }))
-				add_command(with_disabled, BindClick({ id: created.id, event: event_lookup.id }))
+				label_text = node_text(label_result.value)
+				disabled_value = node_bool(disabled_result.value)
+				with_text_desc = add_text_sink_desc(with_state, created.id, render_text_field_text, label, label_text)
+				with_bool_desc = add_bool_sink_desc(with_text_desc, created.id, render_bool_field_disabled, disabled, disabled_value)
+				with_text = add_command(with_bool_desc, SetText({ id: created.id, value: label_text }))
+				with_disabled = add_command(with_text, SetDisabled({ id: created.id, value: disabled_value }))
+				with_event_desc = add_event_desc(with_disabled, created.id, render_event_kind_click, event_lookup.id)
+				add_command(with_event_desc, BindClick({ id: created.id, event: event_lookup.id }))
 			}
 
 			Label({ signal }) => {
 				created = create_child(render_state, parent_id, "span")
 				result = eval_signal(created.render_state.state, signal)
 				with_state = { ..created.render_state, state: result.state }
-				add_command(with_state, SetText({ id: created.id, value: node_text(result.value) }))
+				text = node_text(result.value)
+				with_desc = add_text_sink_desc(with_state, created.id, render_text_field_text, signal, text)
+				add_command(with_desc, SetText({ id: created.id, value: text }))
 			}
 
 			Text(text) => {
 				created = create_child(render_state, parent_id, "span")
-				add_command(created.render_state, SetText({ id: created.id, value: text }))
+				with_desc = add_static_text_desc(created.render_state, created.id, render_text_field_text, text)
+				add_command(with_desc, SetText({ id: created.id, value: text }))
 			}
 
 			Heading(text) => {
 				created = create_child(render_state, parent_id, "h2")
-				with_role = add_command(created.render_state, SetRole({ id: created.id, value: "heading" }))
+				with_role_desc = add_static_text_desc(created.render_state, created.id, render_text_field_role, "heading")
+				with_text_desc = add_static_text_desc(with_role_desc, created.id, render_text_field_text, text)
+				with_role = add_command(with_text_desc, SetRole({ id: created.id, value: "heading" }))
 				add_command(with_role, SetText({ id: created.id, value: text }))
 			}
 
 			Paragraph(text) => {
 				created = create_child(render_state, parent_id, "p")
-				add_command(created.render_state, SetText({ id: created.id, value: text }))
+				with_desc = add_static_text_desc(created.render_state, created.id, render_text_field_text, text)
+				add_command(with_desc, SetText({ id: created.id, value: text }))
 			}
 
 			Section({ label, children }) => {
 				created = create_child(render_state, parent_id, "section")
-				with_role = add_command(created.render_state, SetRole({ id: created.id, value: "region" }))
+				with_role_desc = add_static_text_desc(created.render_state, created.id, render_text_field_role, "region")
+				with_label_desc = add_static_text_desc(with_role_desc, created.id, render_text_field_label, label)
+				with_role = add_command(with_label_desc, SetRole({ id: created.id, value: "region" }))
 				with_label = add_command(with_role, SetLabel({ id: created.id, value: label }))
 				render_children(with_label, children, created.id)
 			}
@@ -748,11 +907,18 @@ UiRuntime := [].{
 				event_lookup = event_id_for_node(disabled_result.state.runtime, on_input)
 				state1 = { ..disabled_result.state, runtime: event_lookup.runtime }
 				with_state = { ..created.render_state, state: state1 }
-				with_role = add_command(with_state, SetRole({ id: created.id, value: "textbox" }))
+				value_text = node_text(value_result.value)
+				disabled_value = node_bool(disabled_result.value)
+				with_role_desc = add_static_text_desc(with_state, created.id, render_text_field_role, "textbox")
+				with_label_desc = add_static_text_desc(with_role_desc, created.id, render_text_field_label, label)
+				with_value_desc = add_text_sink_desc(with_label_desc, created.id, render_text_field_value, value, value_text)
+				with_bool_desc = add_bool_sink_desc(with_value_desc, created.id, render_bool_field_disabled, disabled, disabled_value)
+				with_role = add_command(with_bool_desc, SetRole({ id: created.id, value: "textbox" }))
 				with_label = add_command(with_role, SetLabel({ id: created.id, value: label }))
-				with_value = add_command(with_label, SetValue({ id: created.id, value: node_text(value_result.value) }))
-				with_disabled = add_command(with_value, SetDisabled({ id: created.id, value: node_bool(disabled_result.value) }))
-				add_command(with_disabled, BindInput({ id: created.id, event: event_lookup.id }))
+				with_value = add_command(with_label, SetValue({ id: created.id, value: value_text }))
+				with_disabled = add_command(with_value, SetDisabled({ id: created.id, value: disabled_value }))
+				with_event_desc = add_event_desc(with_disabled, created.id, render_event_kind_input, event_lookup.id)
+				add_command(with_event_desc, BindInput({ id: created.id, event: event_lookup.id }))
 			}
 
 			Checkbox({ label, checked, on_check, disabled }) => {
@@ -762,11 +928,18 @@ UiRuntime := [].{
 				event_lookup = event_id_for_node(disabled_result.state.runtime, on_check)
 				state1 = { ..disabled_result.state, runtime: event_lookup.runtime }
 				with_state = { ..created.render_state, state: state1 }
-				with_role = add_command(with_state, SetRole({ id: created.id, value: "checkbox" }))
+				checked_value = node_bool(checked_result.value)
+				disabled_value = node_bool(disabled_result.value)
+				with_role_desc = add_static_text_desc(with_state, created.id, render_text_field_role, "checkbox")
+				with_label_desc = add_static_text_desc(with_role_desc, created.id, render_text_field_label, label)
+				with_checked_desc = add_bool_sink_desc(with_label_desc, created.id, render_bool_field_checked, checked, checked_value)
+				with_disabled_desc = add_bool_sink_desc(with_checked_desc, created.id, render_bool_field_disabled, disabled, disabled_value)
+				with_role = add_command(with_disabled_desc, SetRole({ id: created.id, value: "checkbox" }))
 				with_label = add_command(with_role, SetLabel({ id: created.id, value: label }))
-				with_checked = add_command(with_label, SetChecked({ id: created.id, value: node_bool(checked_result.value) }))
-				with_disabled = add_command(with_checked, SetDisabled({ id: created.id, value: node_bool(disabled_result.value) }))
-				add_command(with_disabled, BindCheck({ id: created.id, event: event_lookup.id }))
+				with_checked = add_command(with_label, SetChecked({ id: created.id, value: checked_value }))
+				with_disabled = add_command(with_checked, SetDisabled({ id: created.id, value: disabled_value }))
+				with_event_desc = add_event_desc(with_disabled, created.id, render_event_kind_check, event_lookup.id)
+				add_command(with_event_desc, BindCheck({ id: created.id, event: event_lookup.id }))
 			}
 
 			Dynamic({ signal, render }) => {

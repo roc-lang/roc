@@ -22,6 +22,18 @@ const StateDescriptorList = @FieldType(DispatchResult, "state_descriptors");
 const StateChangeList = @FieldType(DispatchResult, "state_changes");
 const SignalValueDesc = @typeInfo(@TypeOf(@as(SignalValueList, undefined).items())).pointer.child;
 const StateValueDesc = @typeInfo(@TypeOf(@as(StateChangeList, undefined).items())).pointer.child;
+const RenderElementDescList = @FieldType(DispatchResult, "render_elements");
+const RenderTextDescList = @FieldType(DispatchResult, "render_texts");
+const RenderSignalTextDescList = @FieldType(DispatchResult, "render_signal_texts");
+const RenderBoolDescList = @FieldType(DispatchResult, "render_bools");
+const RenderSignalBoolDescList = @FieldType(DispatchResult, "render_signal_bools");
+const RenderEventDescList = @FieldType(DispatchResult, "render_events");
+const RenderElementDesc = @typeInfo(@TypeOf(@as(RenderElementDescList, undefined).items())).pointer.child;
+const RenderTextDesc = @typeInfo(@TypeOf(@as(RenderTextDescList, undefined).items())).pointer.child;
+const RenderSignalTextDesc = @typeInfo(@TypeOf(@as(RenderSignalTextDescList, undefined).items())).pointer.child;
+const RenderBoolDesc = @typeInfo(@TypeOf(@as(RenderBoolDescList, undefined).items())).pointer.child;
+const RenderSignalBoolDesc = @typeInfo(@TypeOf(@as(RenderSignalBoolDescList, undefined).items())).pointer.child;
+const RenderEventDesc = @typeInfo(@TypeOf(@as(RenderEventDescList, undefined).items())).pointer.child;
 const RecomputeInputBox = @typeInfo(@TypeOf(abi.roc_ui_recompute)).@"fn".params[1].type.?;
 const RecomputeInput = std.meta.Child(RecomputeInputBox);
 const ActiveEvent = @FieldType(RecomputeInput, "active_event");
@@ -43,6 +55,25 @@ const SignalKind = enum(u64) {
     source = 1,
     map = 2,
     map2 = 3,
+};
+
+const RenderTextField = enum(u64) {
+    text = 1,
+    role = 2,
+    label = 3,
+    test_id = 4,
+    value = 5,
+};
+
+const RenderBoolField = enum(u64) {
+    checked = 1,
+    disabled = 2,
+};
+
+const RenderEventKind = enum(u64) {
+    click = 1,
+    input = 2,
+    check = 3,
 };
 
 const HostEventDescriptor = struct {
@@ -708,6 +739,34 @@ const HostEnv = struct {
             @intFromEnum(SignalKind.map) => .map,
             @intFromEnum(SignalKind.map2) => .map2,
             else => failHost("Roc signal descriptor used an unknown signal kind"),
+        };
+    }
+
+    fn renderTextFieldFromAbi(field: u64) RenderTextField {
+        return switch (field) {
+            @intFromEnum(RenderTextField.text) => .text,
+            @intFromEnum(RenderTextField.role) => .role,
+            @intFromEnum(RenderTextField.label) => .label,
+            @intFromEnum(RenderTextField.test_id) => .test_id,
+            @intFromEnum(RenderTextField.value) => .value,
+            else => failHost("Roc render text descriptor used an unknown field"),
+        };
+    }
+
+    fn renderBoolFieldFromAbi(field: u64) RenderBoolField {
+        return switch (field) {
+            @intFromEnum(RenderBoolField.checked) => .checked,
+            @intFromEnum(RenderBoolField.disabled) => .disabled,
+            else => failHost("Roc render bool descriptor used an unknown field"),
+        };
+    }
+
+    fn renderEventKindFromAbi(kind: u64) RenderEventKind {
+        return switch (kind) {
+            @intFromEnum(RenderEventKind.click) => .click,
+            @intFromEnum(RenderEventKind.input) => .input,
+            @intFromEnum(RenderEventKind.check) => .check,
+            else => failHost("Roc render event descriptor used an unknown event kind"),
         };
     }
 
@@ -1559,6 +1618,38 @@ const CommandCounts = struct {
         self.reset_dom += 1;
     }
 
+    fn addCreateElement(self: *CommandCounts) void {
+        self.total += 1;
+        self.create_element += 1;
+    }
+
+    fn addAppendChild(self: *CommandCounts) void {
+        self.total += 1;
+        self.append_child += 1;
+    }
+
+    fn addTextField(self: *CommandCounts, field: RenderTextField) void {
+        self.total += 1;
+        switch (field) {
+            .text => self.set_text += 1,
+            .value => self.set_value += 1,
+            .role, .label, .test_id => self.set_metadata += 1,
+        }
+    }
+
+    fn addBoolField(self: *CommandCounts, field: RenderBoolField) void {
+        self.total += 1;
+        switch (field) {
+            .checked => self.set_checked += 1,
+            .disabled => self.set_disabled += 1,
+        }
+    }
+
+    fn addEventBinding(self: *CommandCounts) void {
+        self.total += 1;
+        self.bind_event += 1;
+    }
+
     fn add(self: *CommandCounts, command: abi.UiRuntimeCommand) void {
         self.total += 1;
         switch (command.tag) {
@@ -1695,6 +1786,71 @@ fn applyAppendChildCommand(host: *HostEnv, payload: AppendChildPayload) void {
     const child = domElementById(host, payload.child);
     child.parent_id = parent.id;
     parent.children.append(host.gpa.allocator(), child.id) catch std.process.exit(1);
+}
+
+fn applyRenderElementDesc(host: *HostEnv, desc: RenderElementDesc) void {
+    if (desc.elem_id != host.dom_elements.items.len) failHost("Roc render element descriptors must be dense and ordered by element id");
+
+    const allocator = host.gpa.allocator();
+    const tag_copy = allocator.dupe(u8, desc.tag.asSlice()) catch std.process.exit(1);
+    host.dom_elements.append(allocator, DomElement.init(desc.elem_id, tag_copy)) catch {
+        allocator.free(tag_copy);
+        std.process.exit(1);
+    };
+    host.next_elem_id = desc.elem_id + 1;
+
+    const parent = domElementById(host, desc.parent_id);
+    const child = domElementById(host, desc.elem_id);
+    child.parent_id = parent.id;
+    parent.children.append(allocator, child.id) catch std.process.exit(1);
+}
+
+fn applyRenderTextField(host: *HostEnv, elem_id: u64, field: RenderTextField, value: []const u8) void {
+    const elem = domElementById(host, elem_id);
+    switch (field) {
+        .text => setElementTextIfChanged(host, elem, value),
+        .role => _ = replaceOwnedString(host.gpa.allocator(), &elem.role, value),
+        .label => _ = replaceOwnedString(host.gpa.allocator(), &elem.label, value),
+        .test_id => _ = replaceOwnedString(host.gpa.allocator(), &elem.test_id, value),
+        .value => setElementValueIfChanged(host, elem, value),
+    }
+}
+
+fn applyRenderBoolField(host: *HostEnv, elem_id: u64, field: RenderBoolField, value: bool) void {
+    const elem = domElementById(host, elem_id);
+    switch (field) {
+        .checked => setElementCheckedIfChanged(elem, value),
+        .disabled => setElementDisabledIfChanged(elem, value),
+    }
+}
+
+fn validateRenderSinkSignal(host: *HostEnv, signal_id: u64) void {
+    if (signal_id >= host.signal_descriptors.items.len) {
+        failHost("Roc render sink descriptor referenced an unknown signal id");
+    }
+    const signal = host.signal_descriptors.items[@intCast(signal_id)];
+    if (signal.signal_id != signal_id) {
+        failHost("host signal registry is not indexed by signal id");
+    }
+}
+
+fn applyRenderEventDesc(host: *HostEnv, desc: RenderEventDesc) void {
+    const elem = domElementById(host, desc.elem_id);
+    const kind = HostEnv.renderEventKindFromAbi(desc.event_kind);
+    switch (kind) {
+        .click => {
+            host.validateEventPayload(desc.event_id, .unit);
+            elem.bound_click_event = desc.event_id;
+        },
+        .input => {
+            host.validateEventPayload(desc.event_id, .str);
+            elem.bound_input_event = desc.event_id;
+        },
+        .check => {
+            host.validateEventPayload(desc.event_id, .bool);
+            elem.bound_check_event = desc.event_id;
+        },
+    }
 }
 
 fn applyStringCommand(host: *HostEnv, payload: StringCommandPayload, field: StringField) void {
@@ -2004,6 +2160,56 @@ fn applyRenderCommandList(host: *HostEnv, commands: abi.RocList(abi.UiRuntimeCom
     return counts;
 }
 
+fn applyInitialRenderDescriptors(host: *HostEnv, result: DispatchResult) CommandCounts {
+    var counts: CommandCounts = .{};
+    counts.addHostReset();
+    traceHostDomReset();
+    resetSimulatedDom(host);
+
+    for (result.render_elements.items()) |desc| {
+        applyRenderElementDesc(host, desc);
+        counts.addCreateElement();
+        counts.addAppendChild();
+    }
+
+    for (result.render_texts.items()) |desc| {
+        const field = HostEnv.renderTextFieldFromAbi(desc.field);
+        applyRenderTextField(host, desc.elem_id, field, desc.value.asSlice());
+        counts.addTextField(field);
+    }
+
+    for (result.render_signal_texts.items()) |desc| {
+        validateRenderSinkSignal(host, desc.signal_id);
+        const field = HostEnv.renderTextFieldFromAbi(desc.field);
+        applyRenderTextField(host, desc.elem_id, field, desc.value.asSlice());
+        counts.addTextField(field);
+    }
+
+    for (result.render_bools.items()) |desc| {
+        const field = HostEnv.renderBoolFieldFromAbi(desc.field);
+        applyRenderBoolField(host, desc.elem_id, field, desc.value);
+        counts.addBoolField(field);
+    }
+
+    for (result.render_signal_bools.items()) |desc| {
+        validateRenderSinkSignal(host, desc.signal_id);
+        const field = HostEnv.renderBoolFieldFromAbi(desc.field);
+        applyRenderBoolField(host, desc.elem_id, field, desc.value);
+        counts.addBoolField(field);
+    }
+
+    for (result.render_events.items()) |desc| {
+        applyRenderEventDesc(host, desc);
+        counts.addEventBinding();
+    }
+
+    host.render_metrics.commands_emitted += counts.total;
+    host.render_metrics.full_render_batches += 1;
+    host.render_metrics.structural_resets += 1;
+
+    return counts;
+}
+
 fn releaseCommandList(commands: abi.RocList(abi.UiRuntimeCommand), roc_host: *abi.RocHost) void {
     if (commands.isUnique()) {
         for (commands.items()) |command| {
@@ -2011,6 +2217,54 @@ fn releaseCommandList(commands: abi.RocList(abi.UiRuntimeCommand), roc_host: *ab
         }
     }
     commands.decref(roc_host);
+}
+
+fn releaseRenderElementList(elements: RenderElementDescList, roc_host: *abi.RocHost) void {
+    if (elements.isUnique()) {
+        for (elements.items()) |desc| {
+            desc.tag.decref(roc_host);
+        }
+    }
+    elements.decref(roc_host);
+}
+
+fn releaseRenderTextList(texts: RenderTextDescList, roc_host: *abi.RocHost) void {
+    if (texts.isUnique()) {
+        for (texts.items()) |desc| {
+            desc.value.decref(roc_host);
+        }
+    }
+    texts.decref(roc_host);
+}
+
+fn releaseRenderSignalTextList(texts: RenderSignalTextDescList, roc_host: *abi.RocHost) void {
+    if (texts.isUnique()) {
+        for (texts.items()) |desc| {
+            desc.value.decref(roc_host);
+        }
+    }
+    texts.decref(roc_host);
+}
+
+fn releaseRenderBoolList(bools: RenderBoolDescList, roc_host: *abi.RocHost) void {
+    bools.decref(roc_host);
+}
+
+fn releaseRenderSignalBoolList(bools: RenderSignalBoolDescList, roc_host: *abi.RocHost) void {
+    bools.decref(roc_host);
+}
+
+fn releaseRenderEventList(events: RenderEventDescList, roc_host: *abi.RocHost) void {
+    events.decref(roc_host);
+}
+
+fn releaseDispatchRenderDescriptors(result: DispatchResult, roc_host: *abi.RocHost) void {
+    releaseRenderElementList(result.render_elements, roc_host);
+    releaseRenderTextList(result.render_texts, roc_host);
+    releaseRenderSignalTextList(result.render_signal_texts, roc_host);
+    releaseRenderBoolList(result.render_bools, roc_host);
+    releaseRenderSignalBoolList(result.render_signal_bools, roc_host);
+    releaseRenderEventList(result.render_events, roc_host);
 }
 
 fn releaseEventDescriptorList(descriptors: EventDescriptorList, roc_host: *abi.RocHost) void {
@@ -2084,6 +2338,37 @@ fn acceptRecomputeResult(host: *HostEnv, roc_host: *abi.RocHost, result_box: Rec
     acceptRecomputeResultMeasured(host, roc_host, result_box, null);
 }
 
+fn acceptInitResultMeasured(host: *HostEnv, roc_host: *abi.RocHost, result_box: DispatchResultBox, apply_ns: ?*u64, command_counts: ?*CommandCounts) void {
+    const result = result_box.*;
+    if (host.runtime_box != null) failHost("Roc runtime box was overwritten before being consumed");
+    host.runtime_box = result.runtime;
+    const roc_metrics = addRuntimeMetrics(host.pending_roc_metrics, result.metrics);
+    host.pending_roc_metrics = zeroRuntimeMetrics();
+    host.setEventDescriptors(result.event_descriptors);
+    host.setStateDescriptors(result.state_descriptors);
+    host.setSignalDescriptors(result.signal_descriptors);
+    host.applyStateChanges(result.state_changes);
+    host.applySignalChanges(result.signal_changes);
+    const start_ns = benchmarkNowNs();
+    const counts = applyInitialRenderDescriptors(host, result);
+    const elapsed = benchmarkNowNs() - start_ns;
+    host.last_runtime_metrics = host.metricsWithHostRender(roc_metrics);
+    if (apply_ns) |ns| ns.* += elapsed;
+    if (command_counts) |total| total.addAll(counts);
+    releaseCommandList(result.commands, roc_host);
+    releaseDispatchRenderDescriptors(result, roc_host);
+    releaseEventDescriptorList(result.event_descriptors, roc_host);
+    releaseSignalValueList(result.signal_changes, roc_host);
+    releaseSignalDescriptorList(result.signal_descriptors, roc_host);
+    releaseStateDescriptorList(result.state_descriptors, roc_host);
+    releaseStateChangeList(result.state_changes, roc_host);
+    abi.decrefBoxWith(@ptrCast(result_box), @alignOf(DispatchResult), &dropMovedDispatchResultPayload, roc_host);
+}
+
+fn acceptInitResult(host: *HostEnv, roc_host: *abi.RocHost, result_box: DispatchResultBox) void {
+    acceptInitResultMeasured(host, roc_host, result_box, null, null);
+}
+
 fn acceptDispatchResultMeasured(host: *HostEnv, roc_host: *abi.RocHost, result_box: DispatchResultBox, apply_ns: ?*u64, command_counts: ?*CommandCounts) void {
     const result = result_box.*;
     if (host.runtime_box != null) failHost("Roc runtime box was overwritten before being consumed");
@@ -2102,6 +2387,7 @@ fn acceptDispatchResultMeasured(host: *HostEnv, roc_host: *abi.RocHost, result_b
     if (apply_ns) |ns| ns.* += elapsed;
     if (command_counts) |total| total.addAll(counts);
     releaseCommandList(result.commands, roc_host);
+    releaseDispatchRenderDescriptors(result, roc_host);
     releaseEventDescriptorList(result.event_descriptors, roc_host);
     releaseSignalValueList(result.signal_changes, roc_host);
     releaseSignalDescriptorList(result.signal_descriptors, roc_host);
@@ -2340,7 +2626,7 @@ fn runBenchmarkIteration(commands: []const SpecCommand, verbose: bool, stats: *B
     const init_start_ns = benchmarkNowNs();
     const init_result = abi.roc_ui_init();
     stats.init_roc_ns += benchmarkNowNs() - init_start_ns;
-    acceptDispatchResultMeasured(&host_env, &roc_host, init_result, &stats.init_apply_ns, &stats.commands);
+    acceptInitResultMeasured(&host_env, &roc_host, init_result, &stats.init_apply_ns, &stats.commands);
 
     for (commands) |cmd| {
         if (commandIsAction(cmd)) {
@@ -2576,7 +2862,7 @@ fn platform_main(spec_file: []const u8, verbose: bool) !c_int {
     defer host_env.deinit();
 
     traceStderr("[HOST] calling roc_ui_init\n");
-    acceptDispatchResult(&host_env, &roc_host, abi.roc_ui_init());
+    acceptInitResult(&host_env, &roc_host, abi.roc_ui_init());
     traceStderr("[HOST] roc_ui_init returned\n");
 
     if (verbose) {
