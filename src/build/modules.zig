@@ -418,6 +418,7 @@ pub const RocModules = struct {
     vendor_eval_loader: *Module,
     vendor_macho: *Module,
     vendor_llvm_ir: *Module,
+    vendor_llvm_compile_bindings: *Module,
 
     pub fn create(b: *Build, build_options_step: *Step.Options, zstd: ?*Dependency) RocModules {
         const self = RocModules{
@@ -471,6 +472,7 @@ pub const RocModules = struct {
             .vendor_eval_loader = b.addModule("vendor_eval_loader", .{ .root_source_file = b.path("vendor/eval_loader.zig") }),
             .vendor_macho = b.addModule("vendor_macho", .{ .root_source_file = b.path("vendor/macho/mod.zig") }),
             .vendor_llvm_ir = b.addModule("vendor_llvm_ir", .{ .root_source_file = b.path("vendor/llvm_ir/mod.zig") }),
+            .vendor_llvm_compile_bindings = b.addModule("vendor_llvm_compile_bindings", .{ .root_source_file = b.path("vendor/llvm_compile_bindings.zig") }),
         };
 
         // Link zstd to bundle module if available (it's unsupported on wasm32, so don't link it)
