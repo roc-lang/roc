@@ -4722,11 +4722,19 @@ const LlvmObjectPaths = struct {
 fn staticDataLinkRootSymbols(
     ctx: *CliCtx,
     static_data_exports: []const backend.StaticDataExport,
+    root_default_platform_backtrace: bool,
 ) Allocator.Error![]const []const u8 {
-    var symbols = try std.array_list.Managed([]const u8).initCapacity(ctx.arena, static_data_exports.len);
+    var symbols = try std.array_list.Managed([]const u8).initCapacity(
+        ctx.arena,
+        static_data_exports.len + @as(usize, if (root_default_platform_backtrace) 2 else 0),
+    );
     for (static_data_exports) |data_export| {
         if (!data_export.is_global) continue;
         try symbols.append(data_export.symbol_name);
+    }
+    if (root_default_platform_backtrace) {
+        try symbols.append("roc_default_backtrace_table");
+        try symbols.append("roc_default_backtrace_count");
     }
     return symbols.items;
 }
@@ -5401,7 +5409,11 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
                 args.synthetic_default_platform,
             );
 
-            const force_undefined_symbols = try staticDataLinkRootSymbols(ctx, static_data_exports);
+            const force_undefined_symbols = try staticDataLinkRootSymbols(
+                ctx,
+                static_data_exports,
+                enable_default_platform_runtime and args.debug,
+            );
             const app_export_symbols = try sharedLibraryAppExports(ctx, entrypoints, static_data_exports);
             const export_symbols = try sharedLibraryExports(ctx, link_type, link_inputs, app_export_symbols);
 
@@ -5756,7 +5768,11 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) anyerror!void {
             args.synthetic_default_platform,
         );
 
-        const force_undefined_symbols = try staticDataLinkRootSymbols(ctx, static_data_exports);
+        const force_undefined_symbols = try staticDataLinkRootSymbols(
+            ctx,
+            static_data_exports,
+            false,
+        );
         const app_export_symbols = try sharedLibraryAppExports(ctx, entrypoints, static_data_exports);
         const export_symbols = try sharedLibraryExports(ctx, link_type, link_inputs, app_export_symbols);
 
