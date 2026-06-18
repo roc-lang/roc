@@ -4,6 +4,8 @@ platform ""
 	packages {}
 	provides {
 		"roc_ui_init": ui_init,
+		"roc_ui_recompute": ui_recompute,
+		"roc_ui_render": ui_render,
 		"roc_ui_dispatch": ui_dispatch,
 		"roc_ui_drop": ui_drop,
 	}
@@ -27,6 +29,16 @@ ui_init = |_| {
 ui_dispatch : Box(UiRuntime.Runtime), Box(UiRuntime.HostEvent) -> Box(UiRuntime.DispatchResult)
 ui_dispatch = |runtime, event| {
 	Box.box(UiRuntime.dispatch(runtime, Box.unbox(event)))
+}
+
+ui_recompute : Box(UiRuntime.Runtime), Box(UiRuntime.HostEvent) -> Box(UiRuntime.RecomputeResult)
+ui_recompute = |runtime, event| {
+	Box.box(UiRuntime.recompute(runtime, Box.unbox(event)))
+}
+
+ui_render : Box(UiRuntime.Runtime), Box(UiRuntime.RenderInput) -> Box(UiRuntime.DispatchResult)
+ui_render = |runtime, input| {
+	Box.box(UiRuntime.render_only(runtime, Box.unbox(input)))
 }
 
 ui_drop : Box(UiRuntime.Runtime) -> {}

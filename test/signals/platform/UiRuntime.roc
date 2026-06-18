@@ -89,6 +89,21 @@ UiRuntime := [].{
 		metrics : RuntimeMetrics,
 	}
 
+	RecomputeResult : {
+		runtime : Box(Runtime),
+		event_descriptors : List(EventDesc),
+		signal_descriptors : List(SignalDesc),
+		state_descriptors : List(StateDesc),
+		state_changes : List(StateValueDesc),
+		signal_changes : List(SignalValueDesc),
+		metrics : RuntimeMetrics,
+	}
+
+	RenderInput : {
+		cached_signals : List(SignalValueDesc),
+		cached_states : List(StateValueDesc),
+	}
+
 	ActiveEvent := [
 		NoEvent,
 		Occurrence({ id : U64, value : NodeValue }),
@@ -236,6 +251,38 @@ UiRuntime := [].{
 		active_event = host_event_to_active(host_event)
 		dirty_signals = { ids: host_event_dirty_signal_ids(host_event) }
 		rendered = render_runtime(runtime0, active_event, dirty_signals, host_event_cached_signals(host_event), host_event_cached_states(host_event))
+		{
+			runtime: Box.box(rendered.runtime),
+			commands: rendered.emit_commands,
+			event_descriptors: event_descriptors_for_runtime(rendered.runtime),
+			signal_descriptors: signal_descriptors_for_runtime(rendered.runtime),
+			state_descriptors: state_descriptors_for_runtime(rendered.runtime),
+			state_changes: rendered.state_changes,
+			signal_changes: rendered.signal_changes,
+			metrics: rendered.runtime.metrics,
+		}
+	}
+
+	recompute : Box(Runtime), HostEvent -> RecomputeResult
+	recompute = |boxed_runtime, host_event| {
+		runtime0 = Box.unbox(boxed_runtime)
+		state0 = eval_state_for_runtime(runtime0, host_event_to_active(host_event), { ids: host_event_dirty_signal_ids(host_event) }, host_event_cached_signals(host_event), host_event_cached_states(host_event))
+		state1 = eval_signal_plan(state0, host_event_dirty_signal_ids(host_event))
+		{
+			runtime: Box.box(state1.runtime),
+			event_descriptors: event_descriptors_for_runtime(state1.runtime),
+			signal_descriptors: signal_descriptors_for_runtime(state1.runtime),
+			state_descriptors: state_descriptors_for_runtime(state1.runtime),
+			state_changes: state1.state_changes,
+			signal_changes: state1.signal_changes,
+			metrics: state1.runtime.metrics,
+		}
+	}
+
+	render_only : Box(Runtime), RenderInput -> DispatchResult
+	render_only = |boxed_runtime, input| {
+		runtime0 = Box.unbox(boxed_runtime)
+		rendered = render_runtime(runtime0, NoEvent, { ids: [] }, input.cached_signals, input.cached_states)
 		{
 			runtime: Box.box(rendered.runtime),
 			commands: rendered.emit_commands,
@@ -624,17 +671,7 @@ UiRuntime := [].{
 
 	render_runtime : Runtime, ActiveEvent, DirtySignals, List(SignalValueDesc), List(StateValueDesc) -> RenderResult
 	render_runtime = |runtime, active_event, dirty_signals, cached_signals, cached_states| {
-		state = {
-			runtime,
-			active_event,
-			dirty_signal_ids: dirty_signals.ids,
-			cached_signals,
-			cached_states,
-			signal_changes: [],
-			state_changes: [],
-			updated_state_indexes: [],
-			changed_state_indexes: [],
-		}
+		state = eval_state_for_runtime(runtime, active_event, dirty_signals, cached_signals, cached_states)
 		scheduled_state = eval_signal_plan(state, dirty_signals.ids)
 		render_state = {
 			state: scheduled_state,
@@ -648,6 +685,21 @@ UiRuntime := [].{
 			changed_state_indexes: rendered.state.changed_state_indexes,
 			state_changes: rendered.state.state_changes,
 			signal_changes: rendered.state.signal_changes,
+		}
+	}
+
+	eval_state_for_runtime : Runtime, ActiveEvent, DirtySignals, List(SignalValueDesc), List(StateValueDesc) -> EvalState
+	eval_state_for_runtime = |runtime, active_event, dirty_signals, cached_signals, cached_states| {
+		{
+			runtime,
+			active_event,
+			dirty_signal_ids: dirty_signals.ids,
+			cached_signals,
+			cached_states,
+			signal_changes: [],
+			state_changes: [],
+			updated_state_indexes: [],
+			changed_state_indexes: [],
 		}
 	}
 

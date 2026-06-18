@@ -11,6 +11,8 @@ const abi = @import("roc_platform_abi.zig");
 
 const DispatchResultBox = @typeInfo(@TypeOf(abi.roc_ui_init)).@"fn".return_type.?;
 const DispatchResult = std.meta.Child(DispatchResultBox);
+const RecomputeResultBox = @typeInfo(@TypeOf(abi.roc_ui_recompute)).@"fn".return_type.?;
+const RecomputeResult = std.meta.Child(RecomputeResultBox);
 const RuntimeBox = @typeInfo(@TypeOf(abi.roc_ui_drop)).@"fn".params[0].type.?;
 const RuntimeMetrics = @FieldType(DispatchResult, "metrics");
 const EventDescriptorList = @FieldType(DispatchResult, "event_descriptors");
@@ -20,8 +22,10 @@ const StateDescriptorList = @FieldType(DispatchResult, "state_descriptors");
 const StateChangeList = @FieldType(DispatchResult, "state_changes");
 const SignalValueDesc = @typeInfo(@TypeOf(@as(SignalValueList, undefined).items())).pointer.child;
 const StateValueDesc = @typeInfo(@TypeOf(@as(StateChangeList, undefined).items())).pointer.child;
-const HostEventBox = @typeInfo(@TypeOf(abi.roc_ui_dispatch)).@"fn".params[1].type.?;
+const HostEventBox = @typeInfo(@TypeOf(abi.roc_ui_recompute)).@"fn".params[1].type.?;
 const HostEvent = std.meta.Child(HostEventBox);
+const RenderInputBox = @typeInfo(@TypeOf(abi.roc_ui_render)).@"fn".params[1].type.?;
+const RenderInput = std.meta.Child(RenderInputBox);
 const CommandPayload = @FieldType(abi.UiRuntimeCommand, "payload");
 const AppendChildPayload = @FieldType(CommandPayload, "append_child");
 const CreateElementPayload = @FieldType(CommandPayload, "create_element");
@@ -571,6 +575,7 @@ const HostEnv = struct {
     roc_host: ?*abi.RocHost = null,
     runtime_box: ?RuntimeBox = null,
     last_runtime_metrics: RuntimeMetrics = zeroRuntimeMetrics(),
+    pending_roc_metrics: RuntimeMetrics = zeroRuntimeMetrics(),
 
     fn init() HostEnv {
         return .{
@@ -2039,11 +2044,39 @@ fn releaseStateChangeList(changes: StateChangeList, roc_host: *abi.RocHost) void
 
 fn dropMovedDispatchResultPayload(_: ?*anyopaque, _: *abi.RocHost) callconv(.c) void {}
 
+fn dropMovedRecomputeResultPayload(_: ?*anyopaque, _: *abi.RocHost) callconv(.c) void {}
+
+fn acceptRecomputeResultMeasured(host: *HostEnv, roc_host: *abi.RocHost, result_box: RecomputeResultBox, apply_ns: ?*u64) void {
+    const result = result_box.*;
+    if (host.runtime_box != null) failHost("Roc runtime box was overwritten before being consumed");
+    host.runtime_box = result.runtime;
+    host.pending_roc_metrics = addRuntimeMetrics(host.pending_roc_metrics, result.metrics);
+    const start_ns = benchmarkNowNs();
+    host.setEventDescriptors(result.event_descriptors);
+    host.setStateDescriptors(result.state_descriptors);
+    host.setSignalDescriptors(result.signal_descriptors);
+    host.applyStateChanges(result.state_changes);
+    host.applySignalChanges(result.signal_changes);
+    const elapsed = benchmarkNowNs() - start_ns;
+    if (apply_ns) |ns| ns.* += elapsed;
+    releaseEventDescriptorList(result.event_descriptors, roc_host);
+    releaseSignalValueList(result.signal_changes, roc_host);
+    releaseSignalDescriptorList(result.signal_descriptors, roc_host);
+    releaseStateDescriptorList(result.state_descriptors, roc_host);
+    releaseStateChangeList(result.state_changes, roc_host);
+    abi.decrefBoxWith(@ptrCast(result_box), @alignOf(RecomputeResult), &dropMovedRecomputeResultPayload, roc_host);
+}
+
+fn acceptRecomputeResult(host: *HostEnv, roc_host: *abi.RocHost, result_box: RecomputeResultBox) void {
+    acceptRecomputeResultMeasured(host, roc_host, result_box, null);
+}
+
 fn acceptDispatchResultMeasured(host: *HostEnv, roc_host: *abi.RocHost, result_box: DispatchResultBox, apply_ns: ?*u64, command_counts: ?*CommandCounts) void {
     const result = result_box.*;
     if (host.runtime_box != null) failHost("Roc runtime box was overwritten before being consumed");
     host.runtime_box = result.runtime;
-    const roc_metrics = result.metrics;
+    const roc_metrics = addRuntimeMetrics(host.pending_roc_metrics, result.metrics);
+    host.pending_roc_metrics = zeroRuntimeMetrics();
     host.setEventDescriptors(result.event_descriptors);
     host.setStateDescriptors(result.state_descriptors);
     host.setSignalDescriptors(result.signal_descriptors);
@@ -2073,6 +2106,13 @@ fn boxHostEvent(roc_host: *abi.RocHost, event: HostEvent) HostEventBox {
     const event_box: HostEventBox = @ptrCast(@alignCast(raw));
     event_box.* = event;
     return event_box;
+}
+
+fn boxRenderInput(roc_host: *abi.RocHost, input: RenderInput) RenderInputBox {
+    const raw = abi.allocateBox(@sizeOf(RenderInput), @alignOf(RenderInput), true, roc_host);
+    const input_box: RenderInputBox = @ptrCast(@alignCast(raw));
+    input_box.* = input;
+    return input_box;
 }
 
 fn cachedSignalValueListExcluding(host: *HostEnv, roc_host: *abi.RocHost, dirty_signal_ids: []const u64) SignalValueList {
@@ -2120,6 +2160,13 @@ fn cachedStateValueList(host: *HostEnv, roc_host: *abi.RocHost) StateChangeList 
         abi.increfNodeValue(entry.value, 1);
     }
     return list;
+}
+
+fn renderInputForHost(host: *HostEnv, roc_host: *abi.RocHost) RenderInput {
+    return .{
+        .cached_signals = cachedSignalValueListExcluding(host, roc_host, &.{}),
+        .cached_states = cachedStateValueList(host, roc_host),
+    };
 }
 
 fn signalEventPayloadForEvent(host: *HostEnv, roc_host: *abi.RocHost, event_id: u64) SignalEventPayload {
@@ -2184,7 +2231,11 @@ fn dispatchRocEvent(host: *HostEnv, roc_host: *abi.RocHost, event: HostEvent) vo
     const runtime = host.runtime_box orelse failHost("Roc runtime not initialized");
     host.runtime_box = null;
     host.recordDispatch();
-    acceptDispatchResult(host, roc_host, abi.roc_ui_dispatch(runtime, boxHostEvent(roc_host, event)));
+    acceptRecomputeResult(host, roc_host, abi.roc_ui_recompute(runtime, boxHostEvent(roc_host, event)));
+
+    const render_runtime = host.runtime_box orelse failHost("Roc runtime not initialized after recompute");
+    host.runtime_box = null;
+    acceptDispatchResult(host, roc_host, abi.roc_ui_render(render_runtime, boxRenderInput(roc_host, renderInputForHost(host, roc_host))));
 }
 
 fn dispatchRocEventMeasured(host: *HostEnv, roc_host: *abi.RocHost, event: HostEvent, stats: *BenchmarkStats) void {
@@ -2193,9 +2244,17 @@ fn dispatchRocEventMeasured(host: *HostEnv, roc_host: *abi.RocHost, event: HostE
     const event_box = boxHostEvent(roc_host, event);
     host.recordDispatch();
     const start_ns = benchmarkNowNs();
-    const result_box = abi.roc_ui_dispatch(runtime, event_box);
+    const result_box = abi.roc_ui_recompute(runtime, event_box);
     stats.dispatch_roc_ns += benchmarkNowNs() - start_ns;
-    acceptDispatchResultMeasured(host, roc_host, result_box, &stats.dispatch_apply_ns, &stats.commands);
+    acceptRecomputeResultMeasured(host, roc_host, result_box, &stats.dispatch_apply_ns);
+
+    const render_runtime = host.runtime_box orelse failHost("Roc runtime not initialized after recompute");
+    host.runtime_box = null;
+    const render_input_box = boxRenderInput(roc_host, renderInputForHost(host, roc_host));
+    const render_start_ns = benchmarkNowNs();
+    const render_result_box = abi.roc_ui_render(render_runtime, render_input_box);
+    stats.dispatch_roc_ns += benchmarkNowNs() - render_start_ns;
+    acceptDispatchResultMeasured(host, roc_host, render_result_box, &stats.dispatch_apply_ns, &stats.commands);
     stats.actions += 1;
 }
 
