@@ -415,6 +415,7 @@ pub const RocModules = struct {
     // The sources live under `vendor/`.
     vendor_parse_float: *Module,
     vendor_ryu: *Module,
+    vendor_eval_loader: *Module,
 
     pub fn create(b: *Build, build_options_step: *Step.Options, zstd: ?*Dependency) RocModules {
         const self = RocModules{
@@ -465,6 +466,7 @@ pub const RocModules = struct {
 
             .vendor_parse_float = b.addModule("vendor_parse_float", .{ .root_source_file = b.path("vendor/parse_float/parse_float.zig") }),
             .vendor_ryu = b.addModule("vendor_ryu", .{ .root_source_file = b.path("vendor/ryu.zig") }),
+            .vendor_eval_loader = b.addModule("vendor_eval_loader", .{ .root_source_file = b.path("vendor/eval_loader.zig") }),
         };
 
         // Link zstd to bundle module if available (it's unsupported on wasm32, so don't link it)
@@ -485,6 +487,10 @@ pub const RocModules = struct {
         // `embedded_lld` is created outside the dependency table above; it only
         // needs `collections` for the single-threaded arena.
         self.embedded_lld.addImport("collections", self.collections);
+
+        // The vendored ELF loader reaches one roc helper (`elf_self_relocate`)
+        // through the `base` module.
+        self.vendor_eval_loader.addImport("base", self.base);
 
         return self;
     }
@@ -552,6 +558,9 @@ pub const RocModules = struct {
             .builtins => {
                 module.addImport("vendor_parse_float", self.vendor_parse_float);
                 module.addImport("vendor_ryu", self.vendor_ryu);
+            },
+            .eval => {
+                module.addImport("vendor_eval_loader", self.vendor_eval_loader);
             },
             else => {},
         }
