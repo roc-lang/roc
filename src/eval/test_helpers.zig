@@ -15,6 +15,7 @@ const lir = @import("lir");
 const reporting = @import("reporting");
 
 const builtin_loading = @import("builtin_loading.zig");
+const eval_loader = @import("vendor_eval_loader");
 const CompileTimeFinalization = @import("compile_time_finalization.zig");
 const Interpreter = @import("interpreter.zig").Interpreter;
 const RuntimeHostEnv = @import("test/RuntimeHostEnv.zig");
@@ -64,7 +65,7 @@ const EvalDynLib = switch (builtin.target.os.tag) {
         // relocations. Use a vendored loader that does both correctly. Every
         // other configuration keeps `std.DynLib`, whose `DlDynLib` defers to the
         // OS dynamic loader.
-        const Inner = if (base.eval_loader.active) base.eval_loader.ElfDynLib else std.DynLib;
+        const Inner = if (eval_loader.active) eval_loader.ElfDynLib else std.DynLib;
 
         inner: Inner,
 

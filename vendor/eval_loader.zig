@@ -34,7 +34,7 @@ const builtin = @import("builtin");
 const elf = std.elf;
 const posix = std.posix;
 const mem = std.mem;
-const self_relocate = @import("elf_self_relocate.zig");
+const self_relocate = @import("base").elf_self_relocate;
 
 /// True when `std.DynLib` resolves to the relocation-free, incomplete
 /// `ElfDynLib` (a static, no-libc — i.e. static-musl — linux binary) and we
