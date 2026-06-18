@@ -416,6 +416,7 @@ pub const RocModules = struct {
     vendor_parse_float: *Module,
     vendor_ryu: *Module,
     vendor_eval_loader: *Module,
+    vendor_macho: *Module,
 
     pub fn create(b: *Build, build_options_step: *Step.Options, zstd: ?*Dependency) RocModules {
         const self = RocModules{
@@ -467,6 +468,7 @@ pub const RocModules = struct {
             .vendor_parse_float = b.addModule("vendor_parse_float", .{ .root_source_file = b.path("vendor/parse_float/parse_float.zig") }),
             .vendor_ryu = b.addModule("vendor_ryu", .{ .root_source_file = b.path("vendor/ryu.zig") }),
             .vendor_eval_loader = b.addModule("vendor_eval_loader", .{ .root_source_file = b.path("vendor/eval_loader.zig") }),
+            .vendor_macho = b.addModule("vendor_macho", .{ .root_source_file = b.path("vendor/macho/mod.zig") }),
         };
 
         // Link zstd to bundle module if available (it's unsupported on wasm32, so don't link it)
@@ -491,6 +493,10 @@ pub const RocModules = struct {
         // The vendored ELF loader reaches one roc helper (`elf_self_relocate`)
         // through the `base` module.
         self.vendor_eval_loader.addImport("base", self.base);
+
+        // The vendored Mach-O code-signing helpers use the build-time `tracy`
+        // tracing shim.
+        self.vendor_macho.addImport("tracy", self.tracy);
 
         return self;
     }
@@ -598,6 +604,10 @@ pub const RocModules = struct {
         step.root_module.addImport("glue", self.glue);
         step.root_module.addImport("compile", self.compile);
         step.root_module.addImport("embedded_lld", self.embedded_lld);
+
+        // Vendored, used by the CLI linker (Mach-O code signing). Harmless where
+        // unused (it is only @import-ed from CLI code, never from wasm).
+        step.root_module.addImport("vendor_macho", self.vendor_macho);
 
         // Don't add thread-dependent or native-only modules for WASM targets
         if (!is_wasm) {
