@@ -65,13 +65,14 @@ Ordered roughly by how much of the design they block.
    carries the design counter names (`nodes_recomputed`,
    `propagation_prunes`, `derived_calls_into_roc`, `patches_emitted`, row/scope
    and closure counters). Scope and keyed-row counters are real for active
-   branch/row churn; closure counters remain zero until closure lifecycle data is
-   retained explicitly. Leaf sink patch counts now track changed fields on
-   non-structural updates, while structural updates count actual creates, child
-   moves, changed fields, and event bindings rather than a full reset/recreate.
-   Source-level equal-output pruning suppresses downstream work; full per-edge
-   `is_eq` thunk pruning is still pending until confined erasure moves typed edge
-   thunks into the runtime.
+   branch/row churn, and closure counters now track descriptor-stream ownership
+   of retained event transforms, state equality thunks, each key/row thunks, and
+   direct map/map2 signal thunks. Leaf sink patch counts now track changed fields
+   on non-structural updates, while structural updates count actual creates,
+   child moves, changed fields, and event bindings rather than a full
+   reset/recreate. Source-level equal-output pruning suppresses downstream work;
+   full per-edge `is_eq` thunk pruning is still pending until confined erasure
+   moves typed edge thunks into the runtime.
 
 4. **No effects/subscriptions.** `Signal.from_task`, `Signal.interval`,
    `Ui.on_change`, `Ui.on_cleanup` are unimplemented. (Lowest priority; the
@@ -358,13 +359,14 @@ passing. Do not advance until the current phase's section passes (per the
 
 Goal: make the scaling claim measurable before changing semantics.
 
-Status as of 2026-06-19: the metrics surface has been replaced and
+Status as of 2026-06-20: the metrics surface has been replaced and
 `zig build run-signals-bench` records baseline rows with the new counter names.
 The host has a Zig diamond dirty-plan test wired into `run-test-zig`, and the
 ops dashboard script has a high-fan-out no-op source A/B that proves equal
-source output prunes downstream work and patches. The remaining pruning work is
-the fuller design target: per-edge `is_eq` thunk pruning once confined erasure
-provides typed edge thunks.
+source output prunes downstream work and patches. Descriptor-stream closure
+retain/release counters are live for the host-retained thunk fields. The
+remaining pruning work is the fuller design target: per-edge `is_eq` thunk
+pruning once confined erasure provides typed edge thunks.
 
 - Replace the old-model `RuntimeMetrics` fields with the design's counters:
   `nodes_recomputed`, `propagation_prunes`, `derived_calls_into_roc`,
